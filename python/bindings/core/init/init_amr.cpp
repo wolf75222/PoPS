@@ -294,6 +294,11 @@ void init_amr(py::module_& m) {
       // IR hash of the installed compiled Program (the .so's pops_program_hash), or "" if none. Parity
       // System::installed_program_hash (the checkpoint guard).
       .def("installed_program_hash", &AmrSystem::installed_program_hash)
+      // ADC-592: runtime freeze lifecycle (parity with System). mark_bound() (called LAST by the
+      // Python bind flow) freezes the composition; lifecycle_state() reports assembling / bound /
+      // running (running derived from macro_step()).
+      .def("mark_bound", &AmrSystem::mark_bound)
+      .def("lifecycle_state", &AmrSystem::lifecycle_state)
       .def("n_blocks", &AmrSystem::n_blocks)
       .def("block_names", &AmrSystem::block_names)
       .def("effective_options_report",

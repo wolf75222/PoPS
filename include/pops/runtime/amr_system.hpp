@@ -627,6 +627,23 @@ class AmrSystem {
   /// IR hash of the installed compiled Program (the string returned by the .so's pops_program_hash), or
   /// "" if no program is installed. Parity with System::installed_program_hash (checkpoint guard).
   POPS_EXPORT std::string installed_program_hash() const;
+
+  /// @name Runtime freeze lifecycle (ADC-592, parity with System)
+  /// Assembly mutable BEFORE bind, composition FROZEN once pops.bind completes. mark_bound() is
+  /// called LAST by the Python bind flow (after every install call), so the install sequence itself
+  /// never trips the structural-setter guards. NOTE: 'bound' (bind completed) is DISTINCT from the
+  /// lazy 'built' materialization (bind runs BEFORE the first step/mass/density triggers ensure_built),
+  /// so the existing 'already built' messages of the lazy path are untouched; the structural guards
+  /// now also refuse a call once bound_ is set, with the bind-vocabulary message.
+  /// @{
+  /// Mark the composition as bound (frozen): every structural setter then rejects with a precise
+  /// error. Runtime-data setters (set_density / set_conservative_state on the base level BEFORE a step
+  /// / set_program_params / set_clock) that DATA-write stay allowed. A second mark_bound() throws.
+  void mark_bound();
+  /// The runtime lifecycle state: "assembling" (not bound), "bound" (mark_bound() ran, no macro-step),
+  /// "running" (bound AND macro_step() > 0). Parity with System::lifecycle_state.
+  std::string lifecycle_state() const;
+  /// @}
   /// @name Compiled-Program RUNTIME parameters on AMR (epic ADC-511 / ADC-508, parity with ADC-510)
   /// Per-PROGRAM-block RuntimeParams of a compiled time Program whose physics reads a
   /// dsl.Param(..., kind="runtime"), owned HERE so set_program_params changes it at run time WITHOUT

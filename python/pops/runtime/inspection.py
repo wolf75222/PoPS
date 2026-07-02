@@ -22,7 +22,7 @@ class RuntimeInspectionReport:
 
     def __init__(self, *, runtime, blocks, clock, runtime_environment, capabilities, program,
                  profile, history, cache, diagnostics, options=None, amr=None, limitations=None,
-                 routes=None):
+                 routes=None, lifecycle=None, bound_snapshot=None):
         self.runtime = runtime
         self.blocks = list(blocks)
         self.clock = dict(clock)
@@ -37,6 +37,11 @@ class RuntimeInspectionReport:
         self.amr = dict(amr) if amr is not None else None
         self.limitations = list(limitations or [])
         self.routes = dict(routes) if routes is not None else {}
+        # RUNTIME FREEZE LIFECYCLE (ADC-592): the lifecycle state ("assembling"/"bound"/"running") and,
+        # once bound, the BoundSnapshot manifest of WHAT was bound (as a plain dict + its stable hash).
+        # An engine never bound reports "assembling" and no snapshot (bound_snapshot is None).
+        self.lifecycle = lifecycle if lifecycle is not None else "assembling"
+        self.bound_snapshot = dict(bound_snapshot) if bound_snapshot is not None else None
 
     def to_dict(self):
         return {
@@ -56,6 +61,8 @@ class RuntimeInspectionReport:
             "amr": dict(self.amr) if self.amr is not None else None,
             "limitations": [dict(row) for row in self.limitations],
             "routes": dict(self.routes),
+            "lifecycle": self.lifecycle,
+            "bound_snapshot": dict(self.bound_snapshot) if self.bound_snapshot is not None else None,
         }
 
     def to_json(self, path=None, *, indent=2):
@@ -82,6 +89,15 @@ class RuntimeInspectionReport:
                         rt.get("precision"), rt.get("communicator")))
         lines.append("  program     : installed=%s hash=%s"
                      % (self.program.get("installed"), self.program.get("hash") or "(none)"))
+        # RUNTIME FREEZE LIFECYCLE (ADC-592): the state, and once bound the snapshot hash + a one-line
+        # block / solver summary of what was frozen.
+        lines.append("  lifecycle   : %s" % self.lifecycle)
+        snap = self.bound_snapshot
+        if snap is not None:
+            snap_blocks = ", ".join(str(b.get("name")) for b in snap.get("blocks", [])) or "(none)"
+            snap_solvers = ", ".join(sorted(snap.get("solvers", {}))) or "(none)"
+            lines.append("  bound       : snapshot=%s blocks=[%s] solvers=[%s]"
+                         % (snap.get("snapshot_hash", "(none)"), snap_blocks, snap_solvers))
         lines.append("  profile     : source=%s scopes=%d counters=%d"
                      % (prof.get("source"), len(prof.get("scopes", {})),
                         len(prof.get("counters", {}))))
@@ -132,7 +148,9 @@ def build_runtime_inspection(sim, *, runtime):
         options=options,
         amr=_amr(sim) if runtime == "amr_system" else None,
         limitations=limitations,
-        routes=_routes(options))
+        routes=_routes(options),
+        lifecycle=_lifecycle(sim),
+        bound_snapshot=_bound_snapshot(sim))
 
 
 def _call(obj, name, default=None, *args):
@@ -166,6 +184,31 @@ def _profile_payload(sim):
 def _program(sim):
     h = _call(sim, "installed_program_hash", "") or ""
     return {"installed": bool(h), "hash": h}
+
+
+def _lifecycle(sim):
+    """The runtime lifecycle state (ADC-592): "assembling" for an engine never bound, else the
+    engine's own ``lifecycle_state()`` ("bound"/"running"). Graceful default keeps a pre-bind or
+    low-level engine describable rather than raising."""
+    state = _call(sim, "lifecycle_state", None)
+    return str(state) if state is not None else "assembling"
+
+
+def _bound_snapshot(sim):
+    """The BoundSnapshot manifest of what pops.bind froze, as a plain dict + its hash (ADC-592).
+
+    Reads the engine's ``bound_snapshot`` (None before bind); serialises it via ``to_dict()`` and
+    folds in the stable ``snapshot_hash`` so inspection carries the frozen identity. Returns None when
+    the engine was never bound (an engine driven by the low-level seam without pops.bind)."""
+    snap = getattr(sim, "bound_snapshot", None)
+    if snap is None:
+        return None
+    to_dict = getattr(snap, "to_dict", None)
+    payload = dict(to_dict()) if callable(to_dict) else {}
+    snapshot_hash = getattr(snap, "snapshot_hash", None)
+    if snapshot_hash is not None:
+        payload["snapshot_hash"] = snapshot_hash
+    return payload
 
 
 def _history(sim):

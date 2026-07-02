@@ -31,13 +31,16 @@ _MUTATIONS = frozenset({
     "set_aux_field", "set_block_params", "set_program_params", "set_clock", "restart",
 })
 
-# Read diagnostics / runtime data (inert reads; no structural change).
+# Read diagnostics / runtime data (inert reads; no structural change). Includes the ADC-592 runtime
+# lifecycle handles: lifecycle_state() (assembling/bound/running) and bound_snapshot (the frozen
+# BoundSnapshot manifest) so a bound simulation can state its identity.
 _DIAGNOSTICS = frozenset({
     "get_state", "get_primitive_state", "density", "mass", "potential", "aux_field", "disc_mask",
     "eval_rhs", "time", "macro_step", "nx", "ny", "n_vars", "variable_names", "variable_roles",
     "block_names", "inspect", "explain_bind", "check_model", "profile", "field",
     "patch_rectangles", "patch_boxes", "n_patches", "coarse_local_boxes", "coarse_total_boxes",
     "by_amr_mpi", "newton_report", "program_diagnostic", "program_diagnostics", "abi_key", "amr",
+    "lifecycle_state", "bound_snapshot",
 })
 
 # Write outputs / checkpoints.

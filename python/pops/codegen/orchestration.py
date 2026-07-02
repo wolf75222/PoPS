@@ -101,6 +101,16 @@ def compile(problem, backend="production", time=None, **kwargs):
     compiled._problem = problem
     compiled._target = target
     compiled._block_models = block_models
+    # COMPILE-TIME SNAPSHOT AUTHORITY (ADC-592): freeze WHAT the compile saw so bind() lowers from the
+    # compile-time truth, not a LIVE re-read of a possibly-mutated Case. Without this, bind() re-resolves
+    # problem._blocks / problem._fields / problem._outputs from the live object, so mutating the Case
+    # between compile and bind would silently change what gets bound (the proven vulnerability). We snap
+    # the per-block model + spatial, the field solvers and the output policies at COMPILE time; bind()
+    # uses them as the authority and raises a loud drift error if the live block-name set diverges.
+    compiled._block_specs = {name: {"model": block_models[name], "spatial": spec["spatial"]}
+                             for name, spec in problem._blocks.items()}
+    compiled._field_solvers = _problem_field_solvers(problem)
+    compiled._outputs = list(problem._outputs or [])
     # Carry the AMR layout so bind() can rebuild the AmrSystemConfig (n / L / periodic / regrid /
     # patch settings) and flow the typed refinement + field problem onto the AmrSystem. None for a
     # Uniform layout (System bind reads no layout); set only on the AMR route.
@@ -137,6 +147,14 @@ def _compile_amr(problem, backend, target, **kwargs):
     compiled._problem = problem
     compiled._target = target
     compiled._block_compiled_models = block_compiled
+    # COMPILE-TIME SNAPSHOT AUTHORITY (ADC-592, parity with the Uniform route): the AMR route is already
+    # snapshot-safe for the per-block models (_block_compiled_models table), but the field solvers /
+    # output policies / spatial are still re-read live at bind. Freeze them at compile so a Case mutated
+    # between compile and bind is caught by bind()'s drift check rather than silently rebound.
+    compiled._block_specs = {name: {"model": block_compiled[name], "spatial": spec["spatial"]}
+                             for name, spec in problem._blocks.items()}
+    compiled._field_solvers = _problem_field_solvers(problem)
+    compiled._outputs = list(problem._outputs or [])
     # Carry the AMR layout so bind() can rebuild the AmrSystemConfig (n / L / periodic / regrid /
     # patch settings) and flow the typed refinement + field problem onto the AmrSystem.
     compiled._layout = problem.layout
@@ -207,24 +225,40 @@ def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
     target = getattr(compiled, "_target", "system")
     layout = getattr(compiled, "_layout", None)
 
-    field_solvers = _problem_field_solvers(problem)
+    # COMPILE-TIME SNAPSHOT AUTHORITY (ADC-592): drift-check the LIVE Case against what compile froze,
+    # then lower from the compile-time snapshot -- not a fresh live re-read -- so a Case mutated between
+    # compile and bind cannot silently change what gets bound. A block-name divergence is a loud error;
+    # an explicit solvers= kwarg is a documented override, not drift.
+    block_specs = getattr(compiled, "_block_specs", None)
+    _check_case_not_mutated(problem, block_specs)
+
+    # Field solvers from the COMPILE-TIME snapshot (compiled._field_solvers), NOT a live re-read; an
+    # explicit @p solvers still overrides (documented user input).
+    field_solvers = dict(getattr(compiled, "_field_solvers", None)
+                         if getattr(compiled, "_field_solvers", None) is not None
+                         else _problem_field_solvers(problem))
     field_solvers.update(solvers or {})
 
-    # OUTPUT / CHECKPOINT policies (C4 / ADC-509): flow the Case's stored output policies onto the
-    # install seam so the bound sim's run() fires them at each policy cadence (the existing
-    # write()/checkpoint writers). Empty for a Case with no .output(...) -- the install is unchanged.
-    outputs = list(getattr(problem, "_outputs", []) or [])
+    # OUTPUT / CHECKPOINT policies (C4 / ADC-509) from the COMPILE-TIME snapshot (compiled._outputs),
+    # so the bound sim's run() fires exactly the policies the compile saw. Empty for a Case with no
+    # .output(...) -- the install is unchanged.
+    outputs = list(getattr(compiled, "_outputs", None)
+                   if getattr(compiled, "_outputs", None) is not None
+                   else (getattr(problem, "_outputs", []) or []))
 
     # The AMR install goes through the NATIVE per-block path (each instance carries its OWN
     # target='amr_system' CompiledModel from compile()'s _block_compiled_models); the Uniform install
     # carries the whole-system compiled time Program (@p compiled). _assemble_instances builds the
-    # right per-block model table for either route.
-    n_blocks = len(problem._blocks) if problem is not None else 1
-    if target == "amr_system":
-        instances = _assemble_instances(problem, initial or {},
-                                        models=getattr(compiled, "_block_compiled_models", None))
-    else:
-        instances = _assemble_instances(problem, initial or {})
+    # right per-block model table from the COMPILE-TIME block specs (models + spatial), so it is immune
+    # to a post-compile Case mutation (the Uniform route used to re-resolve spec["physics"] live). A
+    # legacy handle with no _block_specs falls back to the historical live-read path (AMR then routes
+    # via _block_compiled_models, byte-identical to before).
+    n_blocks = len(block_specs) if block_specs is not None else (
+        len(problem._blocks) if problem is not None else 1)
+    amr_models = (getattr(compiled, "_block_compiled_models", None)
+                  if target == "amr_system" else None)
+    instances = _assemble_instances(problem, initial or {}, block_specs=block_specs,
+                                    models=amr_models)
 
     # Delegate to the internal runtime adapter (lazy import: runtime edge, kept in-function so the
     # codegen module-scope import graph stays clean). adapter_for selects Uniform vs AMR from the
@@ -253,27 +287,40 @@ def _resolve_problem_model(physics):
     return physics
 
 
-def _assemble_instances(problem, initial, models=None):
-    """Build the ``sim.install`` instances mapping from the problem's blocks + initial state.
+def _assemble_instances(problem, initial, block_specs=None, models=None):
+    """Build the ``sim.install`` instances mapping from the COMPILE-TIME block specs + initial state.
 
     Each block becomes ``{name: {"model": <model>, "spatial": spatial, "initial": state}}`` -- the
-    shape the unified install consumes. The per-block initial state comes from @p initial (keyed by
-    block name); an unknown key raises so a typo is not silently dropped.
+    shape the unified install consumes. The per-block model + spatial come from @p block_specs, the
+    COMPILE-TIME snapshot (``compiled._block_specs``, ADC-592): the model is the resolved engine model
+    (Uniform, handed to the compiled time Program) OR the block's own ``target='amr_system'``
+    CompiledModel (AMR), captured at compile so a post-compile Case mutation cannot change it. The
+    per-block initial state comes from @p initial (keyed by block name); an unknown key raises so a
+    typo is not silently dropped.
 
-    @p models, when given (the AMR route), is the ``{block: CompiledModel}`` table from
-    ``compile()``'s ``_block_compiled_models``: each block's model becomes its OWN
-    ``target='amr_system'`` ``CompiledModel`` (installed via ``add_equation`` -> ``add_native_block``)
-    instead of the resolved engine model the System route hands to a compiled time Program. A block
-    missing from the table is a compile/bind mismatch and raises.
+    @p block_specs of ``None`` is a legacy/degraded handle (produced without the ADC-592 snapshot):
+    fall back to a LIVE re-read of ``problem._blocks`` (byte-identical to before for a non-mutated
+    Case). On that fallback path, @p models -- when given (the AMR route's
+    ``compiled._block_compiled_models`` table) -- supplies each block's own ``target='amr_system'``
+    CompiledModel (installed via ``add_native_block``) instead of the resolved engine model.
     """
-    if problem is None:
+    if problem is None and block_specs is None:
         raise TypeError("pops.bind: the compiled handle carries no problem assembly "
                         "(was it produced by pops.compile?)")
-    unknown = sorted(set(initial) - set(problem._blocks))
+    declared = set(block_specs) if block_specs is not None else set(problem._blocks)
+    unknown = sorted(set(initial) - declared)
     if unknown:
         raise ValueError("pops.bind: initial state for unknown block(s) %s; declared blocks: %s"
-                         % (unknown, sorted(problem._blocks)))
+                         % (unknown, sorted(declared)))
     instances = {}
+    if block_specs is not None:
+        for name, snap in block_specs.items():
+            entry = {"model": snap["model"], "spatial": snap["spatial"]}
+            if name in initial:
+                entry["initial"] = initial[name]
+            instances[name] = entry
+        return instances
+    # Legacy fallback (no compile-time snapshot on the handle): live re-read of the problem blocks.
     for name, spec in problem._blocks.items():
         if models is not None:
             if name not in models:
@@ -288,6 +335,28 @@ def _assemble_instances(problem, initial, models=None):
             entry["initial"] = initial[name]
         instances[name] = entry
     return instances
+
+
+def _check_case_not_mutated(problem, block_specs):
+    """Raise a LOUD error when the LIVE Case's blocks diverge from the compile-time snapshot (ADC-592).
+
+    ``compiled._block_specs`` is the block-name set the compile FROZE; if the live ``problem._blocks``
+    no longer matches (a block added / removed after ``pops.compile``), bind would silently bind a
+    stale composition. We refuse it, naming the drift, and point at a recompile. A degraded handle
+    (no snapshot, ``block_specs is None``) or a handle with no live problem is skipped (nothing to
+    compare -- the legacy live-read path stays byte-identical for a non-mutated Case)."""
+    if block_specs is None or problem is None:
+        return
+    live = set(getattr(problem, "_blocks", {}) or {})
+    frozen = set(block_specs)
+    if live != frozen:
+        added = sorted(live - frozen)
+        removed = sorted(frozen - live)
+        raise ValueError(
+            "pops.bind: the Case was mutated after pops.compile (blocks changed: added=%s removed=%s);"
+            " a compiled artifact is frozen at compile time and is not affected by a later Case "
+            "mutation -- recompile the Case (pops.compile(...)) before pops.bind(...)."
+            % (added, removed))
 
 
 def _problem_field_solvers(problem):

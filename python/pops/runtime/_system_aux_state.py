@@ -97,6 +97,8 @@ class _SystemAuxState:
 
         The mode is honored under Lie AND Strang (cf. Split / Strang). R > 0; Cartesian only (the
         polar one already bounds the ring by its radial walls -> explicit error)."""
+        from pops.runtime._lifecycle import guard_assembling
+        guard_assembling(self, "set_disc_domain")  # frozen once pops.bind completes (ADC-592)
         from pops.mesh.geometry import DiscDomain
         from pops.mesh.masks import lower_disc_mode
         if isinstance(cx, DiscDomain):
@@ -123,6 +125,8 @@ class _SystemAuxState:
 
         ``mode`` accepts the legacy string OR a typed :mod:`pops.mesh.masks` descriptor
         (``NoMask`` / ``Staircase`` / ``CutCell``); both lower to the same native token."""
+        from pops.runtime._lifecycle import guard_assembling
+        guard_assembling(self, "set_geometry_mode")  # frozen once pops.bind completes (ADC-592)
         from pops.mesh.masks import lower_disc_mode
         self._s.set_geometry_mode(lower_disc_mode(mode))
 

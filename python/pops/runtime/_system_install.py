@@ -7,6 +7,7 @@ inheritance; methods operate on ``self._s`` (the compiled facade) and ``self._au
 """
 
 from pops._bootstrap import ModelSpec
+from pops.runtime._lifecycle import guard_assembling as _guard_assembling
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
     NEWTON_DEFAULT_DAMPING,
@@ -95,6 +96,7 @@ class _SystemInstall:
         @throws TypeError if time is an pops.Split / pops.Strang (Schur-condensed source stage),
             not wired here: go through add_equation(..., time=pops.Split(...)).
         """
+        _guard_assembling(self, "add_block")  # frozen once pops.bind completes (ADC-592)
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
         # pops.Split (condensed source stage) is only wired by add_equation (which plugs
@@ -147,6 +149,7 @@ class _SystemInstall:
         'production' -> add_native_block). On backend 'prototype'/'aot' (the .so ABI does not carry
         evolve) an evolve=False is REJECTED explicitly -> use a native block (add_background).
         """
+        _guard_assembling(self, "add_equation")  # frozen once pops.bind completes (ADC-592)
         # Late imports (the codegen/physics modules import this package: avoid the cycle).
         from pops.codegen.abi import check_compiled_matches_module
         from pops.codegen.loader import CompiledModel
@@ -254,16 +257,11 @@ class _SystemInstall:
         if spatial.flux == RIEMANN_HLL and getattr(spatial, "waves_provider", None) is not None:
             from pops.numerics.riemann.waves import check_hll_waves
             check_hll_waves(spatial.waves_provider, compiled, "add_equation")
-        # HLL: the generated brick emits wave_speeds either from the EXPLICIT pair
-        # m.wave_speeds(x=, y=) (WITHOUT primitive 'p': moments, isothermal..., cf. has_wave_speeds),
-        # or as soon as a primitive 'p' is DECLARED (m.primitive('p', ...)), even OUTSIDE the
-        # primitive_vars layout (isothermal 3-var Hoffart case: prim_names = rho/u/v without 'p'). EARLY
-        # guard here: the C++ requires-gate of make_block only triggers at the FIRST use
-        # (eval_rhs / step, lazy construction of the closures) -- we diagnose at
-        # installation, like hllc/roe. getattr default True = belt-and-suspenders: CompiledModel
-        # ALWAYS sets has_wave_speeds (Model.compile from 'p'/pair; HybridModel from the
-        # transport brick, True for a native brick = unknown) -- the default only applies to
-        # a foreign object without the flag, which then falls back on the C++ gate (history).
+        # HLL emits wave_speeds from the EXPLICIT pair m.wave_speeds(x=, y=) (without primitive 'p':
+        # moments / isothermal, cf. has_wave_speeds) OR as soon as a primitive 'p' is declared. EARLY
+        # guard (like hllc/roe): the C++ requires-gate of make_block only triggers at the first use, so
+        # we diagnose at install. getattr default True = belt-and-suspenders (CompiledModel ALWAYS sets
+        # has_wave_speeds; the default only applies to a foreign object, which falls back on the C++ gate).
         if spatial.flux == RIEMANN_HLL and not getattr(compiled, "has_wave_speeds", True):
             raise ValueError(
                 "add_equation: riemann 'hll' requires signed wave speeds: declare "
@@ -391,13 +389,14 @@ class _SystemInstall:
         coupling. The krylov_* / field descriptors / bz_aux_component defaults reproduce the
         historical bit-identical behavior. Prerequisite: B_z set via set_magnetic_field beforehand.
         """
+        _guard_assembling(self, "set_source_stage")  # frozen once pops.bind completes (ADC-592)
         self._s.set_source_stage(name, kind, theta, alpha, krylov_tol, krylov_max_iters,
                                  density, momentum_x, momentum_y, energy, bz_aux_component)
 
     def add_background(self, name, model, density, spatial=None):
         """FROZEN species (not advanced): a fixed background that contributes to the system Poisson (and,
         in the future, to coupled sources). density: n*n array. Equivalent to add_block(evolve=False)
-        followed by set_density."""
+        followed by set_density (freeze ADC-592 enforced by the delegated, guarded add_block)."""
         self.add_block(name, model, spatial=spatial, evolve=False)
         self.set_density(name, density)
 
@@ -427,6 +426,7 @@ class _SystemInstall:
         passed through unchanged (byte-identical native call). All the other arguments mirror the
         native ``set_poisson`` defaults verbatim.
         """
+        _guard_assembling(self, "set_poisson")  # frozen once pops.bind completes (ADC-592)
         bc = _lower_bc(bc)
         lowered = _lower_wall(wall)
         if lowered is not None:
@@ -452,7 +452,7 @@ class _SystemInstall:
         of the elliptic bricks carried by the blocks (charge q n, background alpha (n-n0), gravity
         coupling sign 4piG (rho-rho0)); charge_density() is its usual case. Diffusion / projection (other
         operator) would require a variable-coefficient solver (refinement not available)."""
-        if not isinstance(model.operator, DivEpsGrad):
+        if not isinstance(model.operator, DivEpsGrad):  # freeze ADC-592: the delegated set_poisson guards
             raise NotImplementedError("add_elliptic_model: only the div_eps_grad operator (Poisson) "
                                       "is supported; diffusion / projection -> refinement (solver)")
         if not isinstance(model.rhs, CompositeRhs):
@@ -474,6 +474,7 @@ class _SystemInstall:
         - CompiledCoupledSource (pops.dsl.CoupledSource(...).compile(...)) -> GENERIC source described in
           formulas, carried as bytecode and interpreted on the C++ side (System.add_coupled_source; no
           per-cell Python callback, MPI-safe)."""
+        _guard_assembling(self, "add_coupling")  # frozen once pops.bind completes (ADC-592)
         # Late import (the multispecies module imports this package: avoid the cycle).
         from pops.physics.multispecies import CompiledCoupledSource
 
