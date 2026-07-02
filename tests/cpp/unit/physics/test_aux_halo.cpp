@@ -6,7 +6,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
@@ -17,20 +16,13 @@
 #include <pops/parallel/comm.hpp>
 
 #include <cmath>
-#include <cstdio>
 #include <vector>
 
 using namespace pops;
 
-static int pops_run_test_aux_halo() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+// (1)+(2) : fill_physical_bc partage vs surcharge PAR CHAMP -- pipeline unique (l'etape (2)
+// verifie que la composante 0 reste inchangee par la surcharge appliquee en (1)).
+TEST(AuxHalo, PerFieldOverrideLeavesOtherComponentsUnchanged) {
   const int n = 8;
   const Box2D dom = Box2D::from_extents(n, n);  // {{0,0},{n-1,n-1}}
   const BoxArray ba(std::vector<Box2D>{dom});
@@ -62,12 +54,12 @@ static int pops_run_test_aux_halo() {
   {
     const ConstArray4 a = mf.fab(0).const_array();
     // x-low ghost at (lo-1, j) with foextrap -> a(lo, j, c) = c*100 + 0.
-    chk(std::fabs(a(-1, 0, 0) - Real(0)) < 1e-12, "foextrap comp0 xlo ghost == interior");
-    chk(std::fabs(a(-1, 0, 5) - Real(500)) < 1e-12, "foextrap comp5 xlo ghost == interior");
+    EXPECT_TRUE(std::fabs(a(-1, 0, 0) - Real(0)) < 1e-12) << "foextrap comp0 xlo ghost == interior";
+    EXPECT_TRUE(std::fabs(a(-1, 0, 5) - Real(500)) < 1e-12)
+        << "foextrap comp5 xlo ghost == interior";
   }
 
   // (2) per-field override: ONLY component 5 gets a Dirichlet value V (ghost = 2 V - interior).
-  // RED before ADC-369: the component-scoped fill_physical_bc overload does not exist.
   const Real V = 7.0;
   BCRec bc_dir;
   bc_dir.xlo = bc_dir.xhi = bc_dir.ylo = bc_dir.yhi = BCType::Dirichlet;
@@ -77,34 +69,28 @@ static int pops_run_test_aux_halo() {
   {
     const ConstArray4 a = mf.fab(0).const_array();
     // comp 5 xlo ghost: dirichlet mirror at 2*lo - i - 1 = 0 -> 2 V - a(0, j, 5) = 14 - 500 = -486.
-    chk(std::fabs(a(-1, 0, 5) - (2 * V - Real(500))) < 1e-12,
-        "dirichlet comp5 xlo ghost == 2V - interior");
+    EXPECT_TRUE(std::fabs(a(-1, 0, 5) - (2 * V - Real(500))) < 1e-12)
+        << "dirichlet comp5 xlo ghost == 2V - interior";
     // comp 0 must be UNCHANGED by the comp-5 override (still foextrap from step 1).
-    chk(std::fabs(a(-1, 0, 0) - Real(0)) < 1e-12, "comp0 unchanged by comp-5 override");
+    EXPECT_TRUE(std::fabs(a(-1, 0, 0) - Real(0)) < 1e-12) << "comp0 unchanged by comp-5 override";
     // and the named field's halo now genuinely differs from the shared one.
-    chk(std::fabs(a(-1, 0, 5) - a(-1, 0, 0)) > 1e-9, "comp5 halo differs from comp0");
+    EXPECT_TRUE(std::fabs(a(-1, 0, 5) - a(-1, 0, 0)) > 1e-9) << "comp5 halo differs from comp0";
   }
-
-  // (3) aux_halo_override keeps PERIODIC faces periodic (polar theta / periodic domain), and replaces
-  // only the NON-PERIODIC faces with the field policy. This is what makes a per-field policy safe on
-  // polar (radial physical, theta periodic) and on a periodic Cartesian domain.
-  {
-    BCRec shared;  // polar-like: radial physical (Foextrap), theta periodic
-    shared.xlo = shared.xhi = BCType::Foextrap;
-    shared.ylo = shared.yhi = BCType::Periodic;
-    const BCRec ov = aux_halo_override(shared, AuxHaloPolicy{BCType::Dirichlet, Real(3)});
-    chk(ov.xlo == BCType::Dirichlet && std::fabs(ov.xlo_val - Real(3)) < 1e-12,
-        "override: xlo -> dirichlet(3)");
-    chk(ov.xhi == BCType::Dirichlet && std::fabs(ov.xhi_val - Real(3)) < 1e-12,
-        "override: xhi -> dirichlet(3)");
-    chk(ov.ylo == BCType::Periodic && ov.yhi == BCType::Periodic, "override: theta stays periodic");
-  }
-
-  if (fails == 0)
-    std::printf("OK test_aux_halo\n");
-  return fails == 0 ? 0 : 1;
 }
 
-TEST(test_aux_halo, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_aux_halo, "test_aux_halo"), 0);
+// (3) aux_halo_override keeps PERIODIC faces periodic (polar theta / periodic domain), and replaces
+// only the NON-PERIODIC faces with the field policy. This is what makes a per-field policy safe on
+// polar (radial physical, theta periodic) and on a periodic Cartesian domain. Independante de (1)/(2)
+// (fonction pure, aucun etat de MultiFab partage).
+TEST(AuxHalo, OverrideKeepsPeriodicFacesPeriodic) {
+  BCRec shared;  // polar-like: radial physical (Foextrap), theta periodic
+  shared.xlo = shared.xhi = BCType::Foextrap;
+  shared.ylo = shared.yhi = BCType::Periodic;
+  const BCRec ov = aux_halo_override(shared, AuxHaloPolicy{BCType::Dirichlet, Real(3)});
+  EXPECT_TRUE(ov.xlo == BCType::Dirichlet && std::fabs(ov.xlo_val - Real(3)) < 1e-12)
+      << "override: xlo -> dirichlet(3)";
+  EXPECT_TRUE(ov.xhi == BCType::Dirichlet && std::fabs(ov.xhi_val - Real(3)) < 1e-12)
+      << "override: xhi -> dirichlet(3)";
+  EXPECT_TRUE(ov.ylo == BCType::Periodic && ov.yhi == BCType::Periodic)
+      << "override: theta stays periodic";
 }

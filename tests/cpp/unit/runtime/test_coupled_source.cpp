@@ -8,7 +8,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/source/coupled_source.hpp>
@@ -67,15 +66,7 @@ using BlockB = EquationBlock<Inert, FirstOrder, ExplicitTime<SSPRK2, 1>>;
 static_assert(CoupledSourceFor<LinearExchange, CoupledSystem<BlockA, BlockB>>);
 static_assert(CoupledSourceFor<NoCoupledSource, CoupledSystem<BlockA, BlockB>>);
 
-static int pops_run_test_coupled_source() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+TEST(CoupledSource, LinearExchangeConservesTotalMassBetweenBlocks) {
   const Box2D dom = Box2D::from_extents(4, 4);
   const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
   const BoxArray ba = BoxArray::from_domain(dom, 4);
@@ -98,22 +89,14 @@ static int pops_run_test_coupled_source() {
   sim.coupled_source_step(LinearExchange{Real(0.5)}, dt);
 
   // Echange : flux = 0.5*0.1*(3-1) = 0.1 par cellule. n0 -> 1.1, n1 -> 2.9.
-  chk(std::fabs(sum(U0) - Real(1.1) * ncell) < Real(1e-12), "block0_gained");
-  chk(std::fabs(sum(U1) - Real(2.9) * ncell) < Real(1e-12), "block1_lost");
+  EXPECT_TRUE(std::fabs(sum(U0) - Real(1.1) * ncell) < Real(1e-12)) << "block0_gained";
+  EXPECT_TRUE(std::fabs(sum(U1) - Real(2.9) * ncell) < Real(1e-12)) << "block1_lost";
   // Conservation : la source de couplage ne cree ni ne detruit de masse totale.
-  chk(std::fabs((sum(U0) + sum(U1)) - total0) < Real(1e-12), "total_conserved");
+  EXPECT_TRUE(std::fabs((sum(U0) + sum(U1)) - total0) < Real(1e-12)) << "total_conserved";
 
   // NoCoupledSource : no-op, etat inchange.
   const Real s0 = sum(U0), s1 = sum(U1);
   sim.coupled_source_step(NoCoupledSource{}, dt);
-  chk(std::fabs(sum(U0) - s0) < Real(1e-14) && std::fabs(sum(U1) - s1) < Real(1e-14),
-      "no_coupled_source_noop");
-
-  if (fails == 0)
-    std::printf("OK test_coupled_source\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_coupled_source, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_coupled_source, "test_coupled_source"), 0);
+  EXPECT_TRUE(std::fabs(sum(U0) - s0) < Real(1e-14) && std::fabs(sum(U1) - s1) < Real(1e-14))
+      << "no_coupled_source_noop";
 }

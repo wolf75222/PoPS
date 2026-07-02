@@ -5,7 +5,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/system/system_coupler.hpp>
@@ -16,7 +15,6 @@
 #include <pops/mesh/storage/multifab.hpp>
 
 #include <cmath>
-#include <cstdio>
 
 using namespace pops;
 
@@ -55,15 +53,7 @@ static_assert(TimeStepper<UserForwardEuler>, "l'integrateur utilisateur doit mod
 using UserBlock = EquationBlock<Production, FirstOrder, ExplicitTime<UserForwardEuler, 1>>;
 static_assert(UserBlock::Time::treatment == TimeTreatment::Explicit);
 
-static int pops_run_test_user_time_integrator() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+TEST(test_user_time_integrator, UserForwardEulerAdvancesConstantSource) {
   const Box2D dom = Box2D::from_extents(4, 4);
   const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
   const BoxArray ba(std::vector<Box2D>{dom});
@@ -81,13 +71,6 @@ static int pops_run_test_user_time_integrator() {
   sim.step(dt);  // tout explicite : le coupleur appelle UserForwardEuler::take_step
 
   // Euler avant sur une source constante : n = dt * rate, exact.
-  chk(std::fabs(sum(U, 0) - dt * Real(3) * ncell) < Real(1e-12), "user_integrator_advances");
-
-  if (fails == 0)
-    std::printf("OK test_user_time_integrator\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_user_time_integrator, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_user_time_integrator, "test_user_time_integrator"), 0);
+  EXPECT_TRUE(std::fabs(sum(U, 0) - dt * Real(3) * ncell) < Real(1e-12))
+      << "user_integrator_advances";
 }

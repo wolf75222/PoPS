@@ -18,14 +18,12 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/storage/fab2d.hpp>
 #include <pops/numerics/spatial_operator.hpp>
 
-#include <cstdio>
 #include <vector>
 
 using namespace pops;
@@ -59,19 +57,11 @@ static Real aux_member(const Aux& a, int idx) {
   return v;
 }
 
-static int pops_run_test_aux_single_source() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
-  std::printf("  table POPS_AUX_FIELDS : %d champ(s) extra, largeur pleine = %d\n", kNExtra,
-              kFullWidth);
-  chk(kNExtra >= 1, "table_non_vide");
-  chk(kFullWidth >= kAuxBaseComps + 1, "largeur_pleine_coherente");
+// (A)+(B) : chemin device (load_aux) et chemin marshaling host, tous deux lus sur LE MEME etat
+// seede (100+c) -- (B) compare au chemin (A), donc pipeline unique.
+TEST(AuxSingleSource, DeviceAndHostMarshalingAgree) {
+  ASSERT_TRUE(kNExtra >= 1) << "table_non_vide";
+  ASSERT_TRUE(kFullWidth >= kAuxBaseComps + 1) << "largeur_pleine_coherente";
 
   // Fab mono-box 1x1, kFullWidth composantes : canal aux complet pour une cellule.
   const Box2D b = Box2D::from_extents(1, 1);
@@ -86,9 +76,10 @@ static int pops_run_test_aux_single_source() {
     w(0, 0, c) = Real(100 + c);  // 100,101,... distincts
   {
     const Aux x = load_aux<kFullWidth>(a, 0, 0);
-    chk(x.phi == Real(100) && x.grad_x == Real(101) && x.grad_y == Real(102), "base_phi_grad_lus");
+    EXPECT_TRUE(x.phi == Real(100) && x.grad_x == Real(101) && x.grad_y == Real(102))
+        << "base_phi_grad_lus";
 #define POPS_AUX_CHECK_READ(name, idx) \
-  chk(aux_member(x, idx) == Real(100 + (idx)), "device_lit_" #name "_au_bon_indice");
+  EXPECT_TRUE(aux_member(x, idx) == Real(100 + (idx))) << "device_lit_" #name "_au_bon_indice";
     POPS_AUX_FIELDS(POPS_AUX_CHECK_READ)
 #undef POPS_AUX_CHECK_READ
   }
@@ -111,29 +102,31 @@ static int pops_run_test_aux_single_source() {
     POPS_AUX_FIELDS(POPS_AUX_MARSHAL)
 #undef POPS_AUX_MARSHAL
     const Aux dev = load_aux<kFullWidth>(a, 0, 0);
-    chk(host.phi == dev.phi && host.grad_x == dev.grad_x && host.grad_y == dev.grad_y,
-        "host_base_egal_device");
-#define POPS_AUX_CHECK_EQ(name, idx) chk(host.name == dev.name, "host_egal_device_" #name);
+    EXPECT_TRUE(host.phi == dev.phi && host.grad_x == dev.grad_x && host.grad_y == dev.grad_y)
+        << "host_base_egal_device";
+#define POPS_AUX_CHECK_EQ(name, idx) EXPECT_TRUE(host.name == dev.name) << "host_egal_device_" #name;
     POPS_AUX_FIELDS(POPS_AUX_CHECK_EQ)
 #undef POPS_AUX_CHECK_EQ
   }
+}
 
-  // --- (C) retro-compat : largeur de base n'ecrit aucun champ extra ---
+// (C) retro-compat : largeur de base n'ecrit aucun champ extra. Independant de (A)/(B) : etat
+// reseede a 999 (tout parasite) sur un Fab2D dedie.
+TEST(AuxSingleSource, BaseWidthIgnoresExtraFields) {
+  const Box2D b = Box2D::from_extents(1, 1);
+  Fab2D fab(b, kFullWidth, 0);
+  const Array4 w = fab.array();
+  const ConstArray4 a = fab.const_array();
+
   for (int c = 0; c < kFullWidth; ++c)
     w(0, 0, c) = Real(999);  // tout parasite
   {
     const Aux x = load_aux<kAuxBaseComps>(a, 0, 0);
-    chk(x.phi == Real(999) && x.grad_x == Real(999) && x.grad_y == Real(999), "base_lit_phi_grad");
-#define POPS_AUX_CHECK_ZERO(name, idx) chk(aux_member(x, idx) == Real(0), "base_ignore_" #name);
+    EXPECT_TRUE(x.phi == Real(999) && x.grad_x == Real(999) && x.grad_y == Real(999))
+        << "base_lit_phi_grad";
+#define POPS_AUX_CHECK_ZERO(name, idx) \
+  EXPECT_TRUE(aux_member(x, idx) == Real(0)) << "base_ignore_" #name;
     POPS_AUX_FIELDS(POPS_AUX_CHECK_ZERO)
 #undef POPS_AUX_CHECK_ZERO
   }
-
-  if (fails == 0)
-    std::printf("OK test_aux_single_source\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_aux_single_source, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_aux_single_source, "test_aux_single_source"), 0);
 }

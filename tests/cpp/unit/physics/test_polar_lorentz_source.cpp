@@ -33,7 +33,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/state/state.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
@@ -49,7 +48,6 @@
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel + briques source/hyperbolique/elliptique
 
 #include <cmath>
-#include <cstdio>
 #include <vector>
 
 using namespace pops;
@@ -62,23 +60,18 @@ static constexpr double kCs2 = 0.7;
 // =====================================================================================
 // (A) ALGEBRE PONCTUELLE de la brique + composition + propagation du canal aux.
 // =====================================================================================
-static bool test_algebra() {
-  std::printf("\n--- (A) Algebre ponctuelle de MagneticLorentzForce + CompositeSource ---\n");
-  bool ok = true;
+using CSrc = CompositeSource<PotentialForce, MagneticLorentzForce>;
+using CModel = CompositeModel<IsothermalFluxPolar, CSrc, ChargeDensity>;
 
-  // n_aux de la brique magnetisee : lit B_z (canal extra, indice 3) -> 4.
-  static_assert(MagneticLorentzForce::n_aux == 4,
-                "MagneticLorentzForce doit declarer n_aux = 4 (lit B_z)");
-  // CompositeSource propage le canal aux : max(3 electrostatique, 4 Lorentz) = 4.
-  using CSrc = CompositeSource<PotentialForce, MagneticLorentzForce>;
-  static_assert(CSrc::n_aux == 4,
-                "CompositeSource doit propager n_aux = 4 (sous-brique magnetisee)");
-  // CompositeModel remonte n_aux au systeme (canal B_z dimensionne).
-  using CModel = CompositeModel<IsothermalFluxPolar, CSrc, ChargeDensity>;
-  static_assert(CModel::n_aux == 4, "CompositeModel doit remonter n_aux = 4 (source magnetisee)");
-  std::printf(
-      "    n_aux : MagneticLorentzForce=4, CompositeSource=4, CompositeModel=4 (OK static)\n");
+// n_aux de la brique magnetisee : lit B_z (canal extra, indice 3) -> 4. CompositeSource propage
+// le canal aux : max(3 electrostatique, 4 Lorentz) = 4. CompositeModel remonte n_aux au systeme
+// (canal B_z dimensionne).
+static_assert(MagneticLorentzForce::n_aux == 4,
+              "MagneticLorentzForce doit declarer n_aux = 4 (lit B_z)");
+static_assert(CSrc::n_aux == 4, "CompositeSource doit propager n_aux = 4 (sous-brique magnetisee)");
+static_assert(CModel::n_aux == 4, "CompositeModel doit remonter n_aux = 4 (source magnetisee)");
 
+TEST(test_polar_lorentz_source, MagneticLorentzForceFormulaIsExact) {
   // Formule exacte : (0, +qom B_z m_theta, -qom B_z m_r), energie nulle.
   const Real qom = Real(-1.5), Bz = Real(2.0);
   StateVec<3> u{};
@@ -94,25 +87,38 @@ static bool test_algebra() {
   const double e0 = std::fabs(s[0]);
   const double e1 = std::fabs(s[1] - ex1);
   const double e2 = std::fabs(s[2] - ex2);
-  std::printf("    Lorentz: s=(%.3e, %.6e, %.6e) attendu (0, %.6e, %.6e)\n", s[0], s[1], s[2], ex1,
-              ex2);
-  if (e0 > 1e-14 || e1 > 1e-14 || e2 > 1e-14) {
-    std::printf("    ECHEC : formule Lorentz incorrecte\n");
-    ok = false;
-  }
+  EXPECT_TRUE(e0 <= 1e-14 && e1 <= 1e-14 && e2 <= 1e-14)
+      << "formule Lorentz incorrecte : s=(" << s[0] << ", " << s[1] << ", " << s[2]
+      << ") attendu (0, " << ex1 << ", " << ex2 << ")";
+}
 
+TEST(test_polar_lorentz_source, MagneticLorentzForceDoesNoWork) {
   // Travail nul : F . v = s[1] v_r + s[2] v_theta = 0 (perpendiculaire).
+  const Real qom = Real(-1.5), Bz = Real(2.0);
+  StateVec<3> u{};
+  u[0] = Real(1.3);
+  u[1] = Real(0.7);
+  u[2] = Real(-0.4);
+  Aux a{};
+  a.B_z = Bz;
+  const MagneticLorentzForce lor{qom};
+  const StateVec<3> s = lor.apply(u, a);
   const Real vr = u[1] / u[0], vth = u[2] / u[0];
   const double work = std::fabs(s[1] * vr + s[2] * vth);
-  std::printf("    travail F.v = %.3e (doit etre ~0 : rotation pure)\n", work);
-  if (work > 1e-14) {
-    std::printf("    ECHEC : la force de Lorentz fait un travail non nul\n");
-    ok = false;
-  }
+  EXPECT_TRUE(work <= 1e-14) << "la force de Lorentz fait un travail non nul : " << work;
+}
 
-  // Composition : CompositeSource = PotentialForce + MagneticLorentzForce (somme exacte).
+TEST(test_polar_lorentz_source, CompositeSourceSumsElectrostaticAndLorentz) {
+  const Real qom = Real(-1.5), Bz = Real(2.0);
+  StateVec<3> u{};
+  u[0] = Real(1.3);
+  u[1] = Real(0.7);
+  u[2] = Real(-0.4);
+  Aux a{};
+  a.B_z = Bz;
   a.grad_x = Real(0.9);
   a.grad_y = Real(-0.2);
+  const MagneticLorentzForce lor{qom};
   const PotentialForce es{qom};
   const StateVec<3> s_es = es.apply(u, a);
   const StateVec<3> s_lor = lor.apply(u, a);
@@ -121,22 +127,16 @@ static bool test_algebra() {
   double ecomp = 0.0;
   for (int c = 0; c < 3; ++c)
     ecomp = std::max(ecomp, std::fabs(s_comp[c] - (s_es[c] + s_lor[c])));
-  std::printf("    CompositeSource = electrostatique + Lorentz : ecart max = %.3e\n", ecomp);
-  if (ecomp > 1e-14) {
-    std::printf("    ECHEC : CompositeSource ne somme pas les deux forces\n");
-    ok = false;
-  }
-
-  if (ok)
-    std::printf("    OK : formule + travail nul + composition + propagation aux corrects\n");
-  return ok;
+  EXPECT_TRUE(ecomp <= 1e-14) << "CompositeSource ne somme pas les deux forces : ecart max="
+                              << ecomp;
 }
 
 // =====================================================================================
 // (B) GIRATION CYCLOTRON SANS TRAVAIL : dm/dt = (omega_c m_theta, -omega_c m_r), |m| constant.
 // =====================================================================================
-static bool test_gyration() {
-  std::printf("\n--- (B) Giration cyclotron sous la SEULE force de Lorentz (|m| constant) ---\n");
+// Pipeline avec etat (integration RK4 pas a pas) : un seul TEST natif, assertions inline aux 2
+// points de verification (norme conservee, sens de rotation).
+TEST(test_polar_lorentz_source, GyrationConservesMomentumNorm) {
   const Real qom = Real(1.0), Bz = Real(3.0);
   const Real omega_c = qom * Bz;
   const MagneticLorentzForce lor{qom};
@@ -164,23 +164,11 @@ static bool test_gyration() {
   const double m1 = std::sqrt(double(u[1]) * u[1] + double(u[2]) * u[2]);
   const double dmag = std::fabs(m1 - m0) / m0;
   // Apres un demi-tour : m doit avoir tourne de -omega_c T = -pi (rotation horaire si omega_c>0) :
-  // m_r -> -1, m_theta -> 0. On verifie surtout |m| conserve + le sens de rotation.
-  std::printf("    |m| initial=%.12e final=%.12e ecart relatif=%.3e\n", m0, m1, dmag);
-  std::printf("    m initial=(%.4f, %.4f) final=(%.6f, %.6f) (demi-tour cyclotron)\n", 1.0, 0.0,
-              double(u[1]), double(u[2]));
-  bool ok = true;
-  if (dmag > 1e-8) {
-    std::printf("    ECHEC : |m| non conserve (la force devrait etre une rotation pure)\n");
-    ok = false;
-  }
-  if (!(double(u[1]) < -0.99)) {
-    std::printf("    ECHEC : m_r n'a pas tourne de ~pi\n");
-    ok = false;
-  }
-  if (ok)
-    std::printf(
-        "    OK : rotation cyclotron a |m| constant (travail nul confirme dynamiquement)\n");
-  return ok;
+  // m_r -> -1, m_theta -> 0. On verifie |m| conserve + le sens de rotation.
+  EXPECT_TRUE(dmag <= 1e-8) << "|m| non conserve (la force devrait etre une rotation pure) : m0="
+                            << m0 << " m1=" << m1 << " ecart_relatif=" << dmag;
+  EXPECT_TRUE(double(u[1]) < -0.99)
+      << "m_r n'a pas tourne de ~pi : m_final=(" << double(u[1]) << ", " << double(u[2]) << ")";
 }
 
 // =====================================================================================
@@ -345,69 +333,54 @@ static DiocoResult run_diocotron(double Bz) {
   return res;
 }
 
-static bool test_diocotron() {
-  std::printf("\n--- (C) Diocotron polaire NATIF (source composee potential_magnetic) ---\n");
-  bool ok = true;
-
-  const DiocoResult on = run_diocotron(/*Bz=*/2.5);
-  std::printf("    [B_z=2.5] NaN=%s masse(ecart rel)=%.3e amp_mode(t0)=%.6e amp_mode(tf)=%.6e\n",
-              on.nan ? "OUI" : "non", on.mass_rel, on.amp0, on.amp1);
-
-  // (C1) pas de NaN
-  if (on.nan) {
-    std::printf("    ECHEC : NaN dans le run avec Lorentz natif\n");
-    ok = false;
+// =====================================================================================
+// (C) DIOCOTRON POLAIRE NATIF : les checks C1/C2/C3 portent sur le MEME run "on" (B_z=2.5), le
+// controle C' compare aux run "off" (B_z=0). Les deux runs sont couteux (60 pas SSPRK3 chacun) :
+// une fixture avec SetUpTestSuite les calcule UNE fois pour toute la suite de tests (C).
+// =====================================================================================
+class PolarDiocotronNative : public ::testing::Test {
+ protected:
+  static void SetUpTestSuite() {
+    on_ = new DiocoResult(run_diocotron(/*Bz=*/2.5));
+    off_ = new DiocoResult(run_diocotron(/*Bz=*/0.0));
   }
-  // (C2) masse conservee a ~machine (paroi radiale)
-  if (on.mass_rel > 1e-12) {
-    std::printf("    ECHEC : masse non conservee (%.3e > 1e-12)\n", on.mass_rel);
-    ok = false;
-  }
-  // (C3) le mode croit (la force magnetique native met le fluide en mouvement et l'amplifie)
-  if (!(on.amp1 > on.amp0) || !(on.amp1 > 1e-6)) {
-    std::printf("    ECHEC : le mode azimutal ne croit pas avec la force de Lorentz native\n");
-    ok = false;
+  static void TearDownTestSuite() {
+    delete on_;
+    delete off_;
+    on_ = nullptr;
+    off_ = nullptr;
   }
 
-  // (C') controle : B_z = 0 -> la force de Lorentz est INACTIVE. La reponse magnetique disparait :
-  // l'amplitude finale du mode m_r doit etre NETTEMENT plus faible (la giration cyclotron, seule
-  // capable de convertir grad phi azimutal en mouvement RADIAL coherent du mode, est absente).
-  const DiocoResult off = run_diocotron(/*Bz=*/0.0);
-  std::printf(
-      "    [B_z=0  ] NaN=%s masse(ecart rel)=%.3e amp_mode(tf)=%.6e (controle Lorentz inactif)\n",
-      off.nan ? "OUI" : "non", off.mass_rel, off.amp1);
-  if (off.nan) {
-    std::printf("    ECHEC : NaN dans le run controle\n");
-    ok = false;
-  }
-  if (!(on.amp1 > 1.5 * off.amp1)) {
-    std::printf(
-        "    ECHEC : la croissance du mode n'est pas portee par la force magnetique\n"
-        "            (amp avec B_z=2.5 doit dominer amp avec B_z=0)\n");
-    ok = false;
-  }
+  static DiocoResult* on_;
+  static DiocoResult* off_;
+};
+DiocoResult* PolarDiocotronNative::on_ = nullptr;
+DiocoResult* PolarDiocotronNative::off_ = nullptr;
 
-  if (ok)
-    std::printf(
-        "    OK : diocotron polaire NATIF (Lorentz q v x B_z) -- pas de NaN, masse conservee,\n"
-        "         mode croissant porte par la VRAIE force magnetique (pas le contournement)\n");
-  return ok;
+// (C1) pas de NaN dans le run avec Lorentz natif.
+TEST_F(PolarDiocotronNative, NativeRunHasNoNan) {
+  EXPECT_TRUE(!on_->nan) << "NaN dans le run avec Lorentz natif";
 }
 
-static int pops_run_test_polar_lorentz_source() {
-  std::printf("=== FORCE DE LORENTZ MAGNETIQUE v x B_z NATIVE (fluide isotherme polaire) ===\n");
-  std::printf("Anneau r in [%.2f, %.2f], theta in [0, 2pi), cs2=%.2f, mode azimutal m=%d\n", kRmin,
-              kRmax, kCs2, kModeC);
-  bool ok = true;
-  ok &= test_algebra();
-  ok &= test_gyration();
-  ok &= test_diocotron();
-  std::printf("\n=== VERDICT : %s ===\n", ok ? "SUCCESS" : "ECHEC");
-  if (ok)
-    std::printf("OK test_polar_lorentz_source\n");
-  return ok ? 0 : 1;
+// (C2) masse conservee a ~machine (paroi radiale) dans le run avec Lorentz natif.
+TEST_F(PolarDiocotronNative, NativeRunConservesMass) {
+  EXPECT_TRUE(on_->mass_rel <= 1e-12)
+      << "masse non conservee : " << on_->mass_rel << " > 1e-12";
 }
 
-TEST(test_polar_lorentz_source, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_polar_lorentz_source, "test_polar_lorentz_source"), 0);
+// (C3) le mode croit (la force magnetique native met le fluide en mouvement et l'amplifie).
+TEST_F(PolarDiocotronNative, NativeRunGrowsAzimuthalMode) {
+  EXPECT_TRUE(on_->amp1 > on_->amp0 && on_->amp1 > 1e-6)
+      << "le mode azimutal ne croit pas avec la force de Lorentz native : amp0=" << on_->amp0
+      << " amp1=" << on_->amp1;
+}
+
+// (C') controle : B_z = 0 -> la force de Lorentz est INACTIVE. La reponse magnetique disparait :
+// l'amplitude finale du mode m_r doit etre NETTEMENT plus faible (la giration cyclotron, seule
+// capable de convertir grad phi azimutal en mouvement RADIAL coherent du mode, est absente).
+TEST_F(PolarDiocotronNative, ControlRunWithoutLorentzHasNoNanAndWeakerGrowth) {
+  EXPECT_TRUE(!off_->nan) << "NaN dans le run controle";
+  EXPECT_TRUE(on_->amp1 > 1.5 * off_->amp1)
+      << "la croissance du mode n'est pas portee par la force magnetique : amp(B_z=2.5)="
+      << on_->amp1 << " amp(B_z=0)=" << off_->amp1;
 }
