@@ -16,7 +16,10 @@ ADC-591 adds a versioned native report above the route rows:
   `patches` (the live patch census), `regrid` (cadence + union-tag criteria), and `limitations`
   (the non-available rows of the same native report, filtered to `status != "available"`).
 - Compiled artifacts: `compiled.inspect().to_dict()["capabilities"]` carries the same route IDs and
-  statuses, projected from the artifact manifest without loading or recompiling the `.so`.
+  statuses, projected from the artifact manifest without loading or recompiling the `.so`. On the
+  AMR route, `CompiledModel.inspect_amr()` (ADC-555) reports the layout `pops.compile` actually
+  attached (`compiled._layout`, with its refine/regrid/... tags) by default; an explicit `layout=`
+  argument still overrides, and a handle with no carried layout falls back to the native envelope.
 
 Pretty strings are views of these objects only. Tests should assert on `to_dict()` fields such as
 `schema_version`, `abi_version`, `runtime`, `capabilities`, `routes[*].route_id`, `status`, and
