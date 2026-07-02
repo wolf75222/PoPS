@@ -251,10 +251,11 @@ def test_full_bind_flow_uniform_gated():
     from pops.mesh.layouts import Uniform
 
     # Authoring valide, hors du try : une regression d'ecriture FAIT ECHOUER le test.
-    # NB : la route Uniform de bind construit le System sur la config PAR DEFAUT (n=64 ; compile
-    # pose _layout=None sur Uniform, comportement historique), donc le maillage de la Case et
-    # l'etat initial sont declares a n=64 pour correspondre a la grille du moteur.
-    n = 64
+    # NB : la route Uniform de bind derive desormais la SystemConfig (n / L / periodic) du maillage
+    # de la Case (compile pose _layout=problem.layout sur Uniform), donc un n NON par defaut circule
+    # jusqu'au moteur. On declare n=16 pour VERROUILLER le fix : avant, bind construisait un System a
+    # n=64 par defaut et un etat 16x16 echouait a l'install ('taille != ncomp*n*n').
+    n = 16
     m = _dsl_isothermal_model()
     prog = _lie_program(block="ne")
     case = (pops.Case(layout=Uniform(CartesianMesh(n=n, L=1.0, periodic=True)))
