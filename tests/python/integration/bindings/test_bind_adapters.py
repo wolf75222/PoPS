@@ -45,9 +45,7 @@ except Exception as exc:  # noqa: BLE001
     sys.exit(0)
 
 
-def _check(cond, msg):
-    if not cond:
-        raise AssertionError(msg)
+from tests.python.support.assertions import _check
 
 
 # Noms d'assemblage que la vue DOIT cacher (ceux qui existent sur au moins un moteur + le seam).
@@ -73,10 +71,7 @@ def _compressible_model():
                       elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0))
 
 
-def _bubble(n):
-    xs = (np.arange(n) + 0.5) / n
-    X, Y = np.meshgrid(xs, xs, indexing="xy")
-    return (1.0 + 0.4 * np.exp(-50.0 * ((X - 0.4) ** 2 + (Y - 0.5) ** 2))).reshape(-1)
+from tests.python.support.initial_states import bubble_offset as _bubble
 
 
 # --- 1. Sélection d'adaptateur ---------------------------------------------------------------

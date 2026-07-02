@@ -87,9 +87,7 @@ def _poisson_problem():
                         solver=_StubSolver())
 
 
-def _check(cond, msg):
-    if not cond:
-        raise AssertionError(msg)
+from tests.python.support.assertions import _check
 
 
 # --- assembly + chaining + inspect -----------------------------------------

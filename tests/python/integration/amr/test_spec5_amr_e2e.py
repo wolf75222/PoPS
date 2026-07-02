@@ -48,9 +48,7 @@ except Exception as exc:  # noqa: BLE001
     sys.exit(0)
 
 
-def _check(cond, msg):
-    if not cond:
-        raise AssertionError(msg)
+from tests.python.support.assertions import _check
 
 
 class _StubCompiledModel:
@@ -207,10 +205,7 @@ def _native_compressible_model():
                       elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0))
 
 
-def _bubble(n):
-    xs = (np.arange(n) + 0.5) / n
-    X, Y = np.meshgrid(xs, xs)
-    return (1.0 + 0.5 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / 0.02)).reshape(-1)
+from tests.python.support.initial_states import bubble_amr as _bubble
 
 
 def test_native_amr_from_layout_runs():

@@ -19,9 +19,7 @@ compiler / a visible Kokkos -- never fakes the engine.
 import sys
 
 
-def _check(cond, msg):
-    if not cond:
-        raise AssertionError(msg)
+from tests.python.support.assertions import _check
 
 
 def _raises(exc_types, fn):
