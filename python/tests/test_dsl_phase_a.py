@@ -52,6 +52,8 @@ def build_euler(name="euler_pa"):
     prho, pu, pv, pp = m.primitive_vars(rho=rho, u=u, v=v, p=p)
     m.conservative_from([prho, prho * pu, prho * pv,
                          pp / (g - 1.0) + 0.5 * prho * (pu * pu + pv * pv)])
+    # ADC-590 : riemann='hllc' generique exige la capability EMISE (plus de fallback Euler implicite).
+    m.enable_hllc()
     return m
 
 
@@ -76,6 +78,7 @@ def build_euler_predef(name="euler_predef"):
     prho, pu, pv, pp = m.primitive_vars(rho=rho, u=u, v=v, p=p)   # u=u : Var primitive self-ref
     m.conservative_from([prho, prho * pu, prho * pv,
                          pp / (g - 1.0) + 0.5 * prho * (pu * pu + pv * pv)])
+    m.enable_hllc()  # ADC-590 : meme capability que build_euler (les deux formes restent le MEME modele)
     return m
 
 

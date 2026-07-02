@@ -81,9 +81,15 @@ _TABLES = {
         ("hll", "pops::HLLFlux", "physical_flux,wave_speeds", ""),
         ("hllc", "pops::HLLCFlux",
          "physical_flux,pressure,wave_speeds,contact_speed,hllc_star_state",
-         "polar geometry not wired; canonical path assumes 2D Euler unless HasHLLCStructure"),
+         "polar geometry not wired; generic-only (ADC-590), requires HasHLLCStructure"),
         ("roe", "pops::RoeFlux", "physical_flux,roe_average",
-         "polar geometry not wired; canonical path assumes 2D Euler unless HasRoeDissipation"),
+         "polar geometry not wired; generic-only (ADC-590), requires HasRoeDissipation"),
+        ("euler_hllc", "pops::EulerHLLCFlux2D", "physical_flux,pressure,euler_2d_layout",
+         "4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; "
+         "polar not wired"),
+        ("euler_roe", "pops::EulerRoeFlux2D", "physical_flux,pressure,euler_2d_layout",
+         "4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; "
+         "polar not wired"),
     ),
     "limiter": (
         ("none", "pops::NoSlope", "", ""),
@@ -257,6 +263,8 @@ RIEMANN_RUSANOV = _REGISTRY["riemann"]["rusanov"]
 RIEMANN_HLL = _REGISTRY["riemann"]["hll"]
 RIEMANN_HLLC = _REGISTRY["riemann"]["hllc"]
 RIEMANN_ROE = _REGISTRY["riemann"]["roe"]
+RIEMANN_EULER_HLLC = _REGISTRY["riemann"]["euler_hllc"]
+RIEMANN_EULER_ROE = _REGISTRY["riemann"]["euler_roe"]
 
 LIMITER_NONE = _REGISTRY["limiter"]["none"]
 LIMITER_MINMOD = _REGISTRY["limiter"]["minmod"]
@@ -310,4 +318,49 @@ POISSON_RHS_COMPOSITE = _REGISTRY["poisson_rhs"]["composite"]
 WALL_NONE = _REGISTRY["wall"]["none"]
 WALL_CIRCLE = _REGISTRY["wall"]["circle"]
 
-__all__ = ["Route", "resolve", "routes_of", "route_manifest"]
+def euler_layout_ok(compiled, flux):
+    """True when @p compiled is a canonical 4-variable Euler transport (n_vars == 4 + primitive 'p')
+    that did NOT emit the generic capability for @p flux -- the acceptance test for the explicit
+    euler_hllc / euler_roe routes (ADC-590). Shared by the System and unified install guards."""
+    emitted = getattr(compiled, "has_hllc" if flux in ("euler_hllc", "hllc") else "has_roe", False)
+    return (getattr(compiled, "n_vars", 0) == 4
+            and "p" in getattr(compiled, "prim_names", []) and not emitted)
+
+
+def check_riemann_capability(flux, compiled, ctx):
+    """Gate the selected Riemann flux against the model's emitted capabilities (ADC-590).
+
+    Shared by System.add_equation and AmrSystem.add_equation (@p flux is a Route or a bare wire
+    token; both compare equal to the token string). Generic hllc/roe are GENERIC-ONLY now: the
+    model MUST carry the capability (``has_hllc`` / ``has_roe``). The canonical 4-variable Euler
+    layout is served by the EXPLICIT euler_hllc / euler_roe routes, which require n_vars == 4 +
+    primitive 'p' and REFUSE a model that emitted the generic capability (no ambiguity). Raises
+    ``ValueError`` with a @p ctx-prefixed message that names the missing capability and both
+    remedies. HLL keeps its own wave-speeds guard at the call-site.
+    """
+    def _tail():
+        return ("[requested route %s -> %s; requires: %s]"
+                % (getattr(flux, "id", flux), getattr(flux, "native_entry", "?"),
+                   ", ".join(getattr(flux, "requirements", ()))))
+    if ((flux == "hllc" and not getattr(compiled, "has_hllc", False))
+            or (flux == "roe" and not getattr(compiled, "has_roe", False))):
+        cap = "hllc_star_state" if flux == "hllc" else "roe_dissipation"
+        enable = "m.enable_hllc()" if flux == "hllc" else "m.enable_roe()"
+        euler = "EulerHLLC2D()" if flux == "hllc" else "EulerRoe2D()"
+        raise ValueError(
+            "%s: riemann '%s' requires the model capability '%s': call %s on a generic model "
+            "(roles + primitive 'p'), or select the explicit canonical Euler route riemann=%s for "
+            "a 4-variable Euler (rho,rho_u,rho_v,E) transport; otherwise use riemann='rusanov' %s"
+            % (ctx, flux, cap, enable, euler, _tail()))
+    if flux in ("euler_hllc", "euler_roe") and not euler_layout_ok(compiled, flux):
+        generic = "hllc" if flux == "euler_hllc" else "roe"
+        raise ValueError(
+            "%s: riemann '%s' requires a canonical 4-variable Euler transport (n_vars == 4, "
+            "primitive 'p', layout rho/rho_u/rho_v/E) and NO emitted generic capability; for a "
+            "generic model that called m.enable_hllc()/m.enable_roe() use riemann='%s' instead; "
+            "for a non-Euler model use riemann='rusanov'/'hll' %s"
+            % (ctx, flux, generic, _tail()))
+
+
+__all__ = ["Route", "resolve", "routes_of", "route_manifest", "check_riemann_capability",
+           "euler_layout_ok"]

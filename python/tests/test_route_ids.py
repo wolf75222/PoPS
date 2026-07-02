@@ -79,7 +79,7 @@ def test_unknown_route_is_refused_never_defaulted():
         routes.resolve("riemann", "upwind")
     message = str(exc.value)
     assert "upwind" in message
-    for valid in ("rusanov", "hll", "hllc", "roe"):
+    for valid in ("rusanov", "hll", "hllc", "roe", "euler_hllc", "euler_roe"):
         assert valid in message, "valid route %r not listed: %r" % (valid, message)
 
 

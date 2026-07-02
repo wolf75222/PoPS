@@ -119,7 +119,8 @@ int main() {
   std::printf("== refus d'un token inconnu : famille + token + set valide + no-default ==\n");
   {
     const std::string m = throw_message([] { parse_riemann_route("upwind"); });
-    chk(contains(m, "riemann") && contains(m, "upwind") && contains(m, "rusanov|hll|hllc|roe") &&
+    chk(contains(m, "riemann") && contains(m, "upwind") &&
+            contains(m, "rusanov|hll|hllc|roe|euler_hllc|euler_roe") &&
             contains(m, "never fall back to a default"),
         "riemann 'upwind' refuse (famille, token, set valide, no-default)");
   }
@@ -169,6 +170,16 @@ int main() {
   chk(std::string(route_info(RiemannRouteId::kHllc).native_entry) == "pops::HLLCFlux" &&
           contains(route_info(RiemannRouteId::kHllc).requirements, "pressure"),
       "route_info(kHllc) : native 'pops::HLLCFlux', requirements contient 'pressure'");
+  // ADC-590 explicit canonical Euler routes: round-trip + native entry + euler_2d_layout marker.
+  chk(parse_riemann_route("euler_hllc") == RiemannRouteId::kEulerHllc &&
+          std::string(route_token(RiemannRouteId::kEulerHllc)) == "euler_hllc" &&
+          std::string(route_info(RiemannRouteId::kEulerHllc).native_entry) ==
+              "pops::EulerHLLCFlux2D" &&
+          contains(route_info(RiemannRouteId::kEulerHllc).requirements, "euler_2d_layout"),
+      "route euler_hllc : round-trip + native 'pops::EulerHLLCFlux2D' + euler_2d_layout");
+  chk(parse_riemann_route("euler_roe") == RiemannRouteId::kEulerRoe &&
+          std::string(route_info(RiemannRouteId::kEulerRoe).native_entry) == "pops::EulerRoeFlux2D",
+      "route euler_roe : round-trip + native 'pops::EulerRoeFlux2D'");
   chk(std::string(route_info(TimeRouteId::kSsprk3).limitations).size() > 0 &&
           contains(route_info(TimeRouteId::kSsprk3).limitations, "aot"),
       "route_info(kSsprk3) : limitations non vide (mentionne 'aot')");

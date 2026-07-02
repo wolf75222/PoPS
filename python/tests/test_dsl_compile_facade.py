@@ -34,7 +34,9 @@ def build_meta_euler():
     """Euler aux roles canoniques + gamma 5/3 : fournit des metadonnees UTILES (roles non 'Custom',
     gamma explicite). Sert a prouver que la facade les transporte et que require_metadata passe."""
     e = HyperbolicModel("euler_facade")
-    rho, rhou, rhov, E = e.conservative_vars("rho", "rho_u", "rho_v", "E")
+    rho, rhou, rhov, E = e.conservative_vars(
+        "rho", "rho_u", "rho_v", "E",
+        roles=["Density", "MomentumX", "MomentumY", "Energy"])
     u = e.primitive("u", rhou / rho)
     v = e.primitive("v", rhov / rho)
     p = e.primitive("p", (GAMMA - 1.0) * (E - 0.5 * rho * (u * u + v * v)))
@@ -46,6 +48,7 @@ def build_meta_euler():
     e.set_primitive_state(rho, u, v, p)
     e.set_conservative_from([rho, rho * u, rho * v, p / (GAMMA - 1.0) + 0.5 * rho * (u * u + v * v)])
     e.set_gamma(GAMMA)  # gamma explicite -> transporte via pops_compiled_gamma
+    e.enable_hllc()  # ADC-590 : riemann='hllc' generique exige la capability emise
     return e
 
 

@@ -334,18 +334,16 @@ class Model(_MultiSpeciesMixin):
         """Select a Riemann solver and validate the model's capabilities for it.
 
         The native solvers are C++ (``pops::RusanovFlux`` / ``HLLFlux`` / ``HLLCFlux`` /
-        ``RoeFlux``). HLLC/Roe need model capabilities: a pressure primitive and the fluid
-        roles Density/MomentumX/MomentumY (the dsl ``enable_hllc`` / ``enable_roe`` then
-        generate the ``POPS_HD`` ``contact_speed`` / ``hllc_star_state`` / ``roe_dissipation``
-        hooks from those roles). Missing capabilities are rejected here with a clear message
-        (Spec 3 criterion 10).
+        ``RoeFlux``). HLLC/Roe need model capabilities: a pressure primitive and the fluid roles
+        Density/MomentumX/MomentumY (the dsl ``enable_hllc`` / ``enable_roe`` then generate the
+        ``contact_speed`` / ``hllc_star_state`` / ``roe_dissipation`` hooks). ``euler_hllc`` /
+        ``euler_roe`` (ADC-590) are the EXPLICIT canonical Euler 2D routes (no generic hook). Missing
+        capabilities are rejected here (Spec 3 criterion 10).
 
-        ADC-456: passing an explicit board formula for a capability quantity (e.g.
-        ``pressure=<pops.math expr>``) overrides the role-derived hook with that formula's codegen
-        (lowered via :meth:`pops.dsl.Model.set_riemann_hooks`). A capability hook DESCRIPTOR
-        (``pops.numerics.riemann.hllc.contact_speed.euler()``) or ``None`` keeps the role-derived default.
-        A formula referencing a quantity the model cannot provide still raises the clear capability
-        error at codegen.
+        ADC-456: an explicit board formula for a capability quantity (e.g. ``pressure=<expr>``)
+        overrides the role-derived hook via :meth:`pops.dsl.Model.set_riemann_hooks`; a hook
+        DESCRIPTOR or ``None`` keeps the default. A formula for a quantity the model cannot provide
+        still raises the clear capability error at codegen.
         """
         self._riemann = name
         self._riemann_hooks = {
@@ -355,6 +353,8 @@ class Model(_MultiSpeciesMixin):
         }
         kind = str(name).lower()
         self._validate_riemann_capabilities(kind, pressure, wave_speeds)
+        # Only generic hllc/roe emit the capability; euler_hllc/euler_roe (ADC-590) pin the explicit
+        # EulerHLLCFlux2D / EulerRoeFlux2D on C++ and do NOT emit the generic hook.
         if kind == "hllc":
             self._dsl.enable_hllc()
         elif kind == "roe":
@@ -371,14 +371,14 @@ class Model(_MultiSpeciesMixin):
         return name
 
     def _validate_riemann_capabilities(self, kind, pressure, wave_speeds):
-        """Reject a model that lacks the capabilities the chosen Riemann solver needs
-        (Spec 3 criterion 10). Rusanov needs only a max wave speed (always available from the
-        flux/eigenvalues); HLL needs wave speeds; HLLC/Roe need a pressure and fluid roles."""
+        """Reject a model that lacks the capabilities the chosen Riemann solver needs (Spec 3
+        criterion 10): rusanov = max wave speed only; hll = wave speeds; hllc/roe/euler_* = pressure
+        + fluid roles (euler_hllc/euler_roe also require the 4-variable Euler layout, ADC-590)."""
         hyp = self._dsl._m
         roles = set(_roles_for(hyp))
         has_pressure = ("p" in hyp.prim_defs) or (pressure is not None)
         fluid = {"Density", "MomentumX", "MomentumY"}
-        if kind in ("hllc", "roe"):
+        if kind in ("hllc", "roe", "euler_hllc", "euler_roe"):
             if not has_pressure:
                 raise ValueError(
                     "riemann %s requires model capability 'pressure' for state %r: declare a "
@@ -389,8 +389,12 @@ class Model(_MultiSpeciesMixin):
                 raise ValueError(
                     "riemann %s requires model capability 'hllc_star_state' for state %r: the "
                     "fluid roles %s are needed (declare m.state(..., roles={...})); missing %s"
-                    % (kind.upper(), self._state_name(),
-                       sorted(fluid), sorted(missing)))
+                    % (kind.upper(), self._state_name(), sorted(fluid), sorted(missing)))
+            if kind in ("euler_hllc", "euler_roe") and len(hyp.cons_names) != 4:
+                raise ValueError(
+                    "riemann %s requires a canonical 4-variable Euler layout (rho, rho_u, rho_v, E) "
+                    "for state %r; use riemann='hllc'/'roe' for a generic model"
+                    % (kind.upper(), self._state_name()))
         elif kind == "hll":
             if (wave_speeds is None and not hyp._eig and hyp._wave_speeds is None
                     and hyp._ws_jacobian is None):

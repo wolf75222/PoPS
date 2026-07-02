@@ -658,13 +658,12 @@ POPS_COLD_FN BlockClosures make_block_hllc(const Model& m, const std::string& li
                                           const std::vector<int>& implicit_components,
                                           const NewtonOptions& newton_opts,
                                           NewtonReport* newton_report, Real pos_floor) {
-  // HLLC PATHS: (a) HasHLLCStructure capability (the model provides contact_speed +
-  // hllc_star_state -> GENERIC contact-resolving algorithm, no assumed layout), OR
-  // (b) the CANONICAL Euler 2D path (n_vars == 4 + pressure, bit-identical historical
-  // implementation). Without either, explicit rejection with the capability remedy.
-  if constexpr (HasHLLCStructure<Model> ||
-                (Model::n_vars == 4 &&
-                 requires(const Model mm, typename Model::State s) { mm.pressure(s); })) {
+  // HLLC (generic, ADC-590): GENERIC-ONLY -- the model MUST supply HasHLLCStructure (contact_speed +
+  // hllc_star_state). The native Euler brick now provides the capability, so the canonical Euler 2D
+  // transport still reaches this path (bit-identical). A 4-var-pressure model WITHOUT the capability
+  // is refused here (no more implicit fallback): the canonical Euler layout is served by the explicit
+  // euler_hllc route (make_block_euler_hllc / EulerHLLCFlux2D).
+  if constexpr (HasHLLCStructure<Model>) {
     if (lim == "none")
       return build_block<NoSlope, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components,
                                             newton_opts, newton_report, pos_floor);
@@ -680,10 +679,47 @@ POPS_COLD_FN BlockClosures make_block_hllc(const Model& m, const std::string& li
     throw_registry_dispatch_mismatch("System", "limiteur", lim);
   } else {
     throw std::runtime_error(
-        "System: flux 'hllc' requires a compressible Euler 2D transport "
-        "(4 variables + pressure) OR the model's HLLC capability "
-        "(pressure + wave_speeds + contact_speed + hllc_star_state, cf. "
-        "HasHLLCStructure); this transport -> 'hll'/'rusanov'");
+        "System: flux 'hllc' requires the model's HLLC capability "
+        "(HasHLLCStructure: pressure + wave_speeds + contact_speed + hllc_star_state); "
+        "for a canonical Euler 2D layout (4 variables + pressure) use riemann='euler_hllc', "
+        "for a generic model call m.enable_hllc(); this transport -> 'hll'/'rusanov'");
+  }
+}
+
+template <class Model>
+POPS_COLD_FN BlockClosures make_block_euler_hllc(const Model& m, const std::string& lim,
+                                                 const GridContext& ctx, bool imex, bool recon_prim,
+                                                 const std::string& method,
+                                                 const std::vector<int>& implicit_components,
+                                                 const NewtonOptions& newton_opts,
+                                                 NewtonReport* newton_report, Real pos_floor) {
+  // EXPLICIT canonical Euler 2D HLLC (ADC-590): the euler_hllc route pins EulerHLLCFlux2D directly.
+  // Gated on the canonical layout (n_vars == 4 + pressure); never a fallback. On the true Euler brick
+  // this is the SAME arithmetic as the generic hllc path (HLLCFlux via HasHLLCStructure).
+  if constexpr (Model::n_vars == 4 &&
+                requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
+    if (lim == "none")
+      return build_block<NoSlope, EulerHLLCFlux2D>(m, ctx, imex, recon_prim, method,
+                                                   implicit_components, newton_opts, newton_report,
+                                                   pos_floor);
+    if (lim == "minmod")
+      return build_block<Minmod, EulerHLLCFlux2D>(m, ctx, imex, recon_prim, method,
+                                                  implicit_components, newton_opts, newton_report,
+                                                  pos_floor);
+    if (lim == "vanleer")
+      return build_block<VanLeer, EulerHLLCFlux2D>(m, ctx, imex, recon_prim, method,
+                                                   implicit_components, newton_opts, newton_report,
+                                                   pos_floor);
+    if (lim == "weno5")
+      return build_block<Weno5, EulerHLLCFlux2D>(m, ctx, imex, recon_prim, method,
+                                                 implicit_components, newton_opts, newton_report,
+                                                 pos_floor);
+    throw_registry_dispatch_mismatch("System", "limiteur", lim);
+  } else {
+    throw std::runtime_error(
+        "System: flux 'euler_hllc' requires a canonical compressible Euler 2D transport "
+        "(4 variables + pressure, rho/rho_u/rho_v/E); for a generic model with an HLLC "
+        "capability use riemann='hllc' (m.enable_hllc()); this transport -> 'hll'/'rusanov'");
   }
 }
 
@@ -694,12 +730,12 @@ POPS_COLD_FN BlockClosures make_block_roe(const Model& m, const std::string& lim
                                          const std::vector<int>& implicit_components,
                                          const NewtonOptions& newton_opts,
                                          NewtonReport* newton_report, Real pos_floor) {
-  // ROE PATHS: (a) HasRoeDissipation capability (the model provides its full Roe dissipation
-  // d = |A_roe| dU -> GENERIC Roe-like solver), OR (b) the CANONICAL ideal-gas Euler 2D path
-  // (bit-identical historical). Without either, explicit rejection.
-  if constexpr (HasRoeDissipation<Model> ||
-                (Model::n_vars == 4 &&
-                 requires(const Model mm, typename Model::State s) { mm.pressure(s); })) {
+  // ROE (generic, ADC-590): GENERIC-ONLY -- the model MUST supply HasRoeDissipation (full
+  // d = |A_roe| dU). The native Euler brick now provides the capability, so the canonical Euler 2D
+  // transport still reaches this path (bit-identical). A 4-var-pressure model WITHOUT the capability
+  // is refused here: the canonical Euler layout is served by the explicit euler_roe route
+  // (make_block_euler_roe / EulerRoeFlux2D).
+  if constexpr (HasRoeDissipation<Model>) {
     if (lim == "none")
       return build_block<NoSlope, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components,
                                            newton_opts, newton_report, pos_floor);
@@ -715,10 +751,47 @@ POPS_COLD_FN BlockClosures make_block_roe(const Model& m, const std::string& lim
     throw_registry_dispatch_mismatch("System", "limiteur", lim);
   } else {
     throw std::runtime_error(
-        "System: flux 'roe' requires a compressible Euler 2D transport "
-        "(4 variables + pressure) OR the model's Roe capability "
-        "(roe_dissipation, cf. HasRoeDissipation); this transport -> "
-        "'hll'/'rusanov'");
+        "System: flux 'roe' requires the model's Roe capability "
+        "(HasRoeDissipation: roe_dissipation d = |A_roe| dU); for a canonical Euler 2D layout "
+        "(4 variables + pressure) use riemann='euler_roe', for a generic model call "
+        "m.enable_roe(); this transport -> 'hll'/'rusanov'");
+  }
+}
+
+template <class Model>
+POPS_COLD_FN BlockClosures make_block_euler_roe(const Model& m, const std::string& lim,
+                                                const GridContext& ctx, bool imex, bool recon_prim,
+                                                const std::string& method,
+                                                const std::vector<int>& implicit_components,
+                                                const NewtonOptions& newton_opts,
+                                                NewtonReport* newton_report, Real pos_floor) {
+  // EXPLICIT canonical ideal-gas Euler 2D Roe (ADC-590): the euler_roe route pins EulerRoeFlux2D
+  // directly. Gated on the canonical layout (n_vars == 4 + pressure); never a fallback. On the true
+  // Euler brick this is the SAME arithmetic as the generic roe path (RoeFlux via HasRoeDissipation).
+  if constexpr (Model::n_vars == 4 &&
+                requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
+    if (lim == "none")
+      return build_block<NoSlope, EulerRoeFlux2D>(m, ctx, imex, recon_prim, method,
+                                                  implicit_components, newton_opts, newton_report,
+                                                  pos_floor);
+    if (lim == "minmod")
+      return build_block<Minmod, EulerRoeFlux2D>(m, ctx, imex, recon_prim, method,
+                                                 implicit_components, newton_opts, newton_report,
+                                                 pos_floor);
+    if (lim == "vanleer")
+      return build_block<VanLeer, EulerRoeFlux2D>(m, ctx, imex, recon_prim, method,
+                                                  implicit_components, newton_opts, newton_report,
+                                                  pos_floor);
+    if (lim == "weno5")
+      return build_block<Weno5, EulerRoeFlux2D>(m, ctx, imex, recon_prim, method,
+                                                implicit_components, newton_opts, newton_report,
+                                                pos_floor);
+    throw_registry_dispatch_mismatch("System", "limiteur", lim);
+  } else {
+    throw std::runtime_error(
+        "System: flux 'euler_roe' requires a canonical compressible Euler 2D transport "
+        "(4 variables + pressure, rho/rho_u/rho_v/E); for a generic model with a Roe "
+        "capability use riemann='roe' (m.enable_roe()); this transport -> 'hll'/'rusanov'");
   }
 }
 
@@ -749,6 +822,12 @@ POPS_COLD_FN BlockClosures make_block(const Model& m, const std::string& lim,
   if (riem == "roe")
     return make_block_roe(m, lim, ctx, imex, recon_prim, method, implicit_components, newton_opts,
                           newton_report, pos_floor);
+  if (riem == "euler_hllc")
+    return make_block_euler_hllc(m, lim, ctx, imex, recon_prim, method, implicit_components,
+                                 newton_opts, newton_report, pos_floor);
+  if (riem == "euler_roe")
+    return make_block_euler_roe(m, lim, ctx, imex, recon_prim, method, implicit_components,
+                                newton_opts, newton_report, pos_floor);
   throw_registry_dispatch_mismatch("System", "flux", riem);
 }
 

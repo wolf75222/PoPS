@@ -100,15 +100,21 @@ struct RouteInfo {
 };
 
 // --- Riemann flux routes (mirror of kRiemanns, dispatch_tags.hpp) ---------------------------
-enum class RiemannRouteId { kRusanov, kHll, kHllc, kRoe };
+enum class RiemannRouteId { kRusanov, kHll, kHllc, kRoe, kEulerHllc, kEulerRoe };
 inline constexpr RouteInfo kRiemannRoutes[] = {
     {0, "rusanov", "pops::RusanovFlux", "max_wave_speed", ""},
     {1, "hll", "pops::HLLFlux", "physical_flux,wave_speeds", ""},
     {2, "hllc", "pops::HLLCFlux",
      "physical_flux,pressure,wave_speeds,contact_speed,hllc_star_state",
-     "polar geometry not wired; canonical path assumes 2D Euler unless HasHLLCStructure"},
+     "polar geometry not wired; generic-only (ADC-590), requires HasHLLCStructure"},
     {3, "roe", "pops::RoeFlux", "physical_flux,roe_average",
-     "polar geometry not wired; canonical path assumes 2D Euler unless HasRoeDissipation"},
+     "polar geometry not wired; generic-only (ADC-590), requires HasRoeDissipation"},
+    {4, "euler_hllc", "pops::EulerHLLCFlux2D", "physical_flux,pressure,euler_2d_layout",
+     "4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; polar not "
+     "wired"},
+    {5, "euler_roe", "pops::EulerRoeFlux2D", "physical_flux,pressure,euler_2d_layout",
+     "4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; polar not "
+     "wired"},
 };
 
 // --- Reconstruction limiter routes (mirror of kLimiters, dispatch_tags.hpp) ------------------
@@ -587,7 +593,9 @@ constexpr bool route_tokens_match(const RouteInfo* routes, std::size_t n_routes,
   return true;
 }
 }  // namespace detail
-static_assert(detail::route_tokens_match(kRiemannRoutes, 4, kRiemanns),
+static_assert(detail::route_tokens_match(kRiemannRoutes,
+                                         sizeof(kRiemannRoutes) / sizeof(kRiemannRoutes[0]),
+                                         kRiemanns),
               "route/registry drift: riemann tokens");
 static_assert(detail::route_tokens_match(kLimiterRoutes, 4, kLimiters),
               "route/registry drift: limiter tokens");

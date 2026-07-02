@@ -52,11 +52,14 @@ struct RiemannTag {
   bool polar_ok;
 };
 
-/// SINGLE SOURCE of the wired Riemann fluxes (order = message "(rusanov|hll|hllc|roe)").
-inline constexpr RiemannTag kRiemanns[] = {{"rusanov", false, false, false, true},
-                                           {"hll", true, false, false, true},
-                                           {"hllc", false, true, false, false},
-                                           {"roe", false, false, true, false}};
+/// SINGLE SOURCE of the wired Riemann fluxes (order = message
+/// "(rusanov|hll|hllc|roe|euler_hllc|euler_roe)"). euler_hllc / euler_roe are the EXPLICIT canonical
+/// Euler 2D routes (ADC-590): they carry no capability need of their own (the 4-var + pressure layout
+/// is checked at the call-site `if constexpr`), and are not wired in polar geometry.
+inline constexpr RiemannTag kRiemanns[] = {
+    {"rusanov", false, false, false, true},     {"hll", true, false, false, true},
+    {"hllc", false, true, false, false},        {"roe", false, false, true, false},
+    {"euler_hllc", false, false, false, false}, {"euler_roe", false, false, false, false}};
 
 /// Halo width required by the limiter @p lim (source: kLimiters). Default 2 (MUSCL) for an unknown
 /// limiter: this is the HISTORICAL allocation of block_n_ghost -> bit-identical (the make_block
@@ -127,7 +130,7 @@ inline void validate_riemann(const std::string& riem, bool polar = false,
     if (riem == t.name)
       return;
   throw std::runtime_error(std::string(ctx) + ": unknown Riemann flux '" + riem +
-                           "' (rusanov|hll|hllc|roe)");
+                           "' (rusanov|hll|hllc|roe|euler_hllc|euler_roe)");
 }
 
 /// DEFENSE-IN-DEPTH guard: reached only if a VALID tag (already accepted by validate_*) is routed

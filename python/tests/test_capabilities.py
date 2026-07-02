@@ -48,13 +48,17 @@ def test_top_level_keys_present():
 
 
 def test_riemann_surface_matches_dispatch():
+    # ADC-590: the explicit canonical Euler routes euler_hllc/euler_roe join the cartesian and AMR
+    # surfaces (generic hllc/roe stay, now capability-gated); polar stays rusanov + hll.
     riemann = pops.capabilities()["riemann"]
-    assert riemann["system_cartesian"] == ["rusanov", "hll", "hllc", "roe"], riemann["system_cartesian"]
-    assert riemann["amr"] == ["rusanov", "hll", "hllc", "roe"], riemann["amr"]
-    # Polar has no energy-flux brick: hllc/roe are rejected by make_block_polar, only
-    # rusanov (any model) + hll (isothermal fluid, declares wave_speeds) are wired.
+    expected = ["rusanov", "hll", "hllc", "roe", "euler_hllc", "euler_roe"]
+    assert riemann["system_cartesian"] == expected, riemann["system_cartesian"]
+    assert riemann["amr"] == expected, riemann["amr"]
+    # Polar has no energy-flux brick: hllc/roe (and the euler_* routes) are rejected by
+    # make_block_polar; only rusanov (any model) + hll (isothermal fluid, declares wave_speeds).
     assert riemann["system_polar"] == ["rusanov", "hll"], riemann["system_polar"]
     assert "hllc" not in riemann["system_polar"] and "roe" not in riemann["system_polar"]
+    assert "euler_hllc" not in riemann["system_polar"], riemann["system_polar"]
 
 
 def test_backends_dsl_flags_match_backend_caps():

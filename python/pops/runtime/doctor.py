@@ -12,7 +12,7 @@ from pops.runtime.threading import has_kokkos
 # Canonical token orders for the matrix the doctor prints. The token SET is derived from the
 # descriptor catalogs (see _descriptor_tokens); this only pins the display order so the audit
 # table reads the same every run (and the test_capabilities contract keeps its ordered lists).
-_RIEMANN_ORDER = ("rusanov", "hll", "hllc", "roe")
+_RIEMANN_ORDER = ("rusanov", "hll", "hllc", "roe", "euler_hllc", "euler_roe")
 _LIMITER_ORDER = ("none", "minmod", "vanleer", "weno5")
 # Riemann fluxes wired on the polar geometry: rusanov (any model) + hll (isothermal fluid declares
 # wave_speeds). hllc/roe have no polar energy-flux brick (make_block_polar rejects them), so the
@@ -278,16 +278,24 @@ def capabilities():
                        "explicit WITHOUT primitive 'p', or historical path eigenvalues + 'p') ; "
                        "polar : eligible for the isothermal fluid (IsothermalFluxPolar), not for "
                        "scalar ExB (no wave_speeds) -- same gate as the cartesian one",
-                "hllc": "canonical 2D Euler (4 var + pressure) OR model capability "
-                        "HasHLLCStructure -- emitted by the DSL via m.enable_hllc() (roles + 'p', "
-                        "including 3-var non Euler, passive advected scalars)",
-                "roe": "canonical 2D perfect-gas Euler OR model capability HasRoeDissipation "
+                "hllc": "GENERIC-ONLY (ADC-590) : model capability HasHLLCStructure required -- "
+                        "emitted by the DSL via m.enable_hllc() (roles + 'p', including 3-var non "
+                        "Euler, passive advected scalars) ; the native Euler brick provides it. "
+                        "Canonical 4-var Euler without the capability -> riemann='euler_hllc'",
+                "roe": "GENERIC-ONLY (ADC-590) : model capability HasRoeDissipation required "
                        "-- TWO DSL paths : (a) m.enable_roe() generated from the roles (roles + "
                        "'p' : with Energy = transcribed canonical algebra, without Energy = "
                        "c=sqrt(p/rho) Roe average, passive scalars on the entropy wave) ; (b) "
                        "m.roe_dissipation(x=, y=) PROVIDED by the user (own eigenstructure, "
                        "left()/right() of the two states, helper m.flux_jacobian auto-derived). Paths "
-                       "exclusive (a single provider of the hook). has_roe covers both",
+                       "exclusive (a single provider of the hook). has_roe covers both ; the native "
+                       "Euler brick provides the hook. Canonical Euler without it -> 'euler_roe'",
+                "euler_hllc": "EXPLICIT canonical 2D Euler HLLC (EulerHLLCFlux2D, ADC-590) : "
+                              "n_vars == 4 + primitive 'p' (rho/mx/my/E), never a fallback ; "
+                              "refuses a model that emitted the generic capability",
+                "euler_roe": "EXPLICIT canonical ideal-gas 2D Euler Roe (EulerRoeFlux2D, ADC-590) : "
+                             "n_vars == 4 + primitive 'p', Harten eps = 0.1c, never a fallback ; "
+                             "refuses a model that emitted the generic capability",
             },
         },
         "time": {
