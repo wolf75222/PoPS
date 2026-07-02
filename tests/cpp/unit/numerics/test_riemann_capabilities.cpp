@@ -18,15 +18,15 @@
 //      intermediaire, prouvee hors Euler.
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/physics/fluids/euler.hpp>
 
 #include <cmath>
-#include <cstdio>
 
 using pops::Aux;
 using pops::Real;
+
+namespace {
 
 // ---------------------------------------------------------------------------------------------
 // HookedEuler : pops::Euler + capabilities HLLC/Roe reproduisant EXACTEMENT les formules du chemin
@@ -154,7 +154,7 @@ struct IsoHLLC {
 using State4 = pops::StateVec<4>;
 using State3 = pops::StateVec<3>;
 
-static State4 cons(double rho, double u, double v, double p, double gamma) {
+State4 cons(double rho, double u, double v, double p, double gamma) {
   State4 U{};
   U[0] = rho;
   U[1] = rho * u;
@@ -164,14 +164,16 @@ static State4 cons(double rho, double u, double v, double p, double gamma) {
 }
 
 template <int N>
-static double maxdiff(const pops::StateVec<N>& a, const pops::StateVec<N>& b) {
+double maxdiff(const pops::StateVec<N>& a, const pops::StateVec<N>& b) {
   double m = 0;
   for (int c = 0; c < N; ++c)
     m = std::fmax(m, std::fabs(a[c] - b[c]));
   return m;
 }
 
-static int pops_run_test_riemann_capabilities() {
+}  // namespace
+
+TEST(test_riemann_capabilities, compile_time_detection) {
   // (1) DETECTION compile-time des capabilities. ADC-590 : pops::Euler PORTE desormais les hooks.
   static_assert(pops::HasHLLCStructure<pops::Euler>,
                 "Euler doit satisfaire HasHLLCStructure (ADC-590 : brique a-capabilites)");
@@ -181,15 +183,16 @@ static int pops_run_test_riemann_capabilities() {
   static_assert(pops::HasRoeDissipation<HookedEuler>,
                 "HookedEuler doit satisfaire HasRoeDissipation");
   static_assert(pops::HasHLLCStructure<IsoHLLC>, "IsoHLLC doit satisfaire HasHLLCStructure");
-  std::printf("OK  detection des capabilities (Euler a-capabilites, Hooked/Iso capability)\n");
+  SUCCEED() << "detection des capabilities (Euler a-capabilites, Hooked/Iso capability)";
+}
 
+TEST(test_riemann_capabilities, generic_path_bit_identical_to_explicit_euler_path) {
   pops::Euler e;
   e.gamma = 1.4;
   pops::HLLCFlux hllc;
   pops::RoeFlux roe;
   pops::EulerHLLCFlux2D ehllc;  // route EXPLICITE : ancienne branche canonique deplacee (ADC-590)
   pops::EulerRoeFlux2D eroe;
-  pops::HLLFlux hll;
   Aux a{};
 
   // (2) EQUIVALENCE BIT-IDENTIQUE (ADC-590) : sur pops::Euler, le chemin GENERIQUE (HLLCFlux / RoeFlux
@@ -203,68 +206,43 @@ static int pops_run_test_riemann_capabilities() {
     for (int dir = 0; dir < 2; ++dir) {
       const double dh =
           maxdiff(hllc(e, pr[0], a, pr[1], a, dir), ehllc(e, pr[0], a, pr[1], a, dir));
-      if (dh != 0.0) {
-        std::printf("FAIL HLLC generique != EulerHLLCFlux2D explicite (dir %d) : %.3e\n", dir, dh);
-        return 1;
-      }
+      EXPECT_EQ(dh, 0.0) << "HLLC generique != EulerHLLCFlux2D explicite (dir " << dir << ")";
       const double dr = maxdiff(roe(e, pr[0], a, pr[1], a, dir), eroe(e, pr[0], a, pr[1], a, dir));
-      if (dr != 0.0) {
-        std::printf("FAIL Roe generique != EulerRoeFlux2D explicite (dir %d) : %.3e\n", dir, dr);
-        return 1;
-      }
+      EXPECT_EQ(dr, 0.0) << "Roe generique != EulerRoeFlux2D explicite (dir " << dir << ")";
     }
-  std::printf(
-      "OK  HLLC/Roe generiques == EulerHLLCFlux2D/EulerRoeFlux2D (bit-identique, ADC-590)\n");
-
-  // (3) NON-EULER : HLLC capability sur l'isotherme 3 variables.
-  IsoHLLC iso;
-  // (3a) consistance : F*(U, U) == flux(U).
-  {
-    State3 U{};
-    U[0] = 1.3;
-    U[1] = 0.4;
-    U[2] = -0.7;
-    for (int dir = 0; dir < 2; ++dir) {
-      const double d = maxdiff(hllc(iso, U, a, U, a, dir), iso.flux(U, a, dir));
-      if (d > 1e-13) {
-        std::printf("FAIL consistance HLLC isotherme (dir %d) : %.3e\n", dir, d);
-        return 1;
-      }
-    }
-  }
-  std::printf("OK  HLLC isotherme consistant : F*(U,U) == flux(U)\n");
-  // (3b) cisaillement stationnaire (un = 0, rho egal, saut tangentiel) : l'onde intermediaire est
-  // resolue -> flux tangentiel EXACTEMENT nul (HLLC), la ou HLL le diffuse (terme sL sR dU != 0).
-  {
-    State3 UL{}, UR{};
-    UL[0] = 1.0;
-    UL[1] = 0.0;
-    UL[2] = 2.0;  // u_t = +2
-    UR[0] = 1.0;
-    UR[1] = 0.0;
-    UR[2] = -3.0;  // u_t = -3
-    const State3 Fc = hllc(iso, UL, a, UR, a, 0);
-    const State3 Fh = hll(iso, UL, a, UR, a, 0);
-    if (std::fabs(Fc[2]) > 1e-14) {
-      std::printf("FAIL HLLC isotherme : cisaillement stationnaire diffuse (F_t = %.3e)\n",
-                  static_cast<double>(Fc[2]));
-      return 1;
-    }
-    if (std::fabs(Fh[2]) < 1e-2) {
-      std::printf("FAIL temoin HLL : le cisaillement devrait etre diffuse (F_t = %.3e)\n",
-                  static_cast<double>(Fh[2]));
-      return 1;
-    }
-    std::printf(
-        "OK  HLLC isotherme preserve le cisaillement stationnaire (F_t = 0 ; "
-        "HLL temoin F_t = %.3e)\n",
-        static_cast<double>(Fh[2]));
-  }
-
-  std::printf("OK  test_riemann_capabilities : tout est vert\n");
-  return 0;
 }
 
-TEST(test_riemann_capabilities, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_riemann_capabilities, "test_riemann_capabilities"), 0);
+TEST(test_riemann_capabilities, non_euler_isothermal_hllc_consistency) {
+  // (3a) consistance : F*(U, U) == flux(U).
+  IsoHLLC iso;
+  pops::HLLCFlux hllc;
+  Aux a{};
+  State3 U{};
+  U[0] = 1.3;
+  U[1] = 0.4;
+  U[2] = -0.7;
+  for (int dir = 0; dir < 2; ++dir) {
+    const double d = maxdiff(hllc(iso, U, a, U, a, dir), iso.flux(U, a, dir));
+    EXPECT_LE(d, 1e-13) << "consistance HLLC isotherme (dir " << dir << ")";
+  }
+}
+
+TEST(test_riemann_capabilities, non_euler_isothermal_preserves_stationary_shear) {
+  // (3b) cisaillement stationnaire (un = 0, rho egal, saut tangentiel) : l'onde intermediaire est
+  // resolue -> flux tangentiel EXACTEMENT nul (HLLC), la ou HLL le diffuse (terme sL sR dU != 0).
+  IsoHLLC iso;
+  pops::HLLCFlux hllc;
+  pops::HLLFlux hll;
+  Aux a{};
+  State3 UL{}, UR{};
+  UL[0] = 1.0;
+  UL[1] = 0.0;
+  UL[2] = 2.0;  // u_t = +2
+  UR[0] = 1.0;
+  UR[1] = 0.0;
+  UR[2] = -3.0;  // u_t = -3
+  const State3 Fc = hllc(iso, UL, a, UR, a, 0);
+  const State3 Fh = hll(iso, UL, a, UR, a, 0);
+  EXPECT_LE(std::fabs(Fc[2]), 1e-14) << "HLLC isotherme : cisaillement stationnaire diffuse";
+  EXPECT_GE(std::fabs(Fh[2]), 1e-2) << "temoin HLL : le cisaillement devrait etre diffuse";
 }

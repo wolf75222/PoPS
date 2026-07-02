@@ -8,7 +8,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/system/system_coupler.hpp>
@@ -19,9 +18,9 @@
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 
-#include <cstdio>
-
 using namespace pops;
+
+namespace {
 
 struct AdvectX {
   using State = StateVec<1>;
@@ -43,7 +42,7 @@ struct ZeroSystemRhs {
   }
 };
 
-static void fill_ramp(MultiFab& mf) {
+void fill_ramp(MultiFab& mf) {
   for (int li = 0; li < mf.local_size(); ++li) {
     Array4 a = mf.fab(li).array();
     const Box2D b = mf.box(li);
@@ -55,15 +54,9 @@ using ImexBlk = EquationBlock<AdvectX, FirstOrder, IMEXTime<UserTimeIntegrator, 
 using ExplBlk = EquationBlock<AdvectX, FirstOrder, ExplicitTime<SSPRK2, 1>>;
 static_assert(ImexBlk::Time::treatment == TimeTreatment::IMEX);
 
-static int pops_run_test_imex_transport() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
+}  // namespace
 
+TEST(test_imex_transport, imex_block_transport_is_advanced_by_the_core) {
   const Box2D dom = Box2D::from_extents(8, 8);
   const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
   const BoxArray ba(std::vector<Box2D>{dom});
@@ -85,16 +78,8 @@ static int pops_run_test_imex_transport() {
   MultiFab d(ba, dm, 1, 0);
   lincomb(d, Real(1), Ui, Real(-1), Ui0);
   // 9.1 : le bloc IMEX a bien ete TRANSPORTE (avant le correctif : champ fige -> 0).
-  chk(norm_inf(d) > Real(1e-3), "imex_block_transported");
+  EXPECT_GT(norm_inf(d), Real(1e-3)) << "imex_block_transported";
   // sanity : le bloc explicite a transporte aussi.
   lincomb(d, Real(1), Ue, Real(-1), Ui0);
-  chk(norm_inf(d) > Real(1e-3), "explicit_block_transported");
-
-  if (fails == 0)
-    std::printf("OK test_imex_transport\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_imex_transport, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_imex_transport, "test_imex_transport"), 0);
+  EXPECT_GT(norm_inf(d), Real(1e-3)) << "explicit_block_transported";
 }

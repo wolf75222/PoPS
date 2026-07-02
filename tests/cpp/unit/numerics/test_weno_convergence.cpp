@@ -5,30 +5,31 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/fv/reconstruction.hpp>
 
 #include <cmath>
 #include <cstdio>
-#include <initializer_list>
 
 using namespace pops;
-static constexpr double kPi = 3.14159265358979323846;
+
+namespace {
+constexpr double kPi = 3.14159265358979323846;
 
 // moyenne de cellule de f(x) = sin(2 pi x) sur [a, b] (primitive exacte).
-static double favg(double a, double b) {
+double favg(double a, double b) {
   return (std::cos(2 * kPi * a) - std::cos(2 * kPi * b)) / (2 * kPi * (b - a));
 }
+}  // namespace
 
-static int pops_run_test_weno_convergence() {
-  // 1. preservation des constantes : weno5z(c,c,c,c,c) == c (poids sommes a 1).
+TEST(test_weno_convergence, preserves_constants) {
+  // weno5z(c,c,c,c,c) == c (poids sommes a 1).
   const double c = 3.14;
-  if (std::fabs(weno5z(c, c, c, c, c) - c) > 1e-13) {
-    std::printf("FAIL constante : %.3e\n", std::fabs(weno5z(c, c, c, c, c) - c));
-    return 1;
-  }
+  EXPECT_LE(std::fabs(weno5z(c, c, c, c, c) - c), 1e-13) << "constante";
+}
 
-  // 2. ordre 5 sur une fonction lisse (erreur de face ~ dx^5).
+// Pipeline stateful : la pente d'ordre est mesuree PROGRESSIVEMENT (log2 du ratio d'erreurs
+// successives), donc les resolutions N successives restent dans le meme test.
+TEST(test_weno_convergence, fifth_order_on_smooth_function) {
   double prev = 0, last_order = 0;
   for (int N : {32, 64, 128, 256, 512}) {
     const double dx = 1.0 / N;
@@ -46,14 +47,5 @@ static int pops_run_test_weno_convergence() {
     std::printf("N=%4d  err_inf=%.3e  ordre=%.2f\n", N, emax, last_order);
     prev = emax;
   }
-  if (last_order < 4.5) {
-    std::printf("FAIL : ordre WENO5 mesure %.2f < 4.5\n", last_order);
-    return 1;
-  }
-  std::printf("OK test_weno_convergence (ordre %.2f, constantes preservees)\n", last_order);
-  return 0;
-}
-
-TEST(test_weno_convergence, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_weno_convergence, "test_weno_convergence"), 0);
+  EXPECT_GE(last_order, 4.5) << "ordre WENO5 mesure < 4.5";
 }
