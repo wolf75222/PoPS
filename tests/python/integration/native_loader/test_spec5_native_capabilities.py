@@ -127,7 +127,9 @@ def test_inspect_capabilities_appends_native_rows_and_source():
     matrix = pops.inspect_capabilities()
     by_source = {}
     for entry in matrix:
-        assert entry.source in ("descriptor", "native")
+        # ADC-611 added "external" for registered external-brick .so rows; a sibling test in the
+        # same session that registers one leaks the row into this matrix, so accept it here.
+        assert entry.source in ("descriptor", "native", "external")
         by_source.setdefault(entry.source, []).append(entry)
     # The cross-check appended the authoritative native transport rows.
     assert by_source.get("native"), "inspect_capabilities should append source='native' rows"

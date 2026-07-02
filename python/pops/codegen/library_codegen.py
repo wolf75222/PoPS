@@ -88,10 +88,14 @@ def _register_brick_lines(bricks):
 
 
 def _brick_manifest_json(name, bricks):
-    """The JSON ``pops_brick_manifest()`` returns -- the SAME contract
-    :func:`pops.lib.load_cpp_library` parses. ``{"library", "bricks": [{"id", "category",
-    "requirements" CSV, "capabilities" CSV}, ...]}``. The ``library`` key is informational;
-    the reader keys on ``bricks``."""
+    """The JSON ``pops_brick_manifest()`` returns -- the SAME STRICT versioned contract
+    :func:`pops.lib.load_cpp_library` -> :func:`pops.descriptors.parse_brick_manifest` parses
+    (ADC-611): ``{"schema_version", "bricks": [{"id", "category", "requirements" CSV,
+    "capabilities" CSV}, ...]}``. The strict parser rejects any unknown top-level field, so the
+    former informational ``library`` name key is dropped (the reader keys on ``bricks``); the
+    library identity is exported separately via ``pops_library_name()``."""
+    from ..descriptors import BRICK_MANIFEST_SCHEMA_VERSION
+    del name  # library identity is carried by pops_library_name(), not the strict brick manifest
     entries = []
     for b in bricks:
         entries.append({
@@ -100,7 +104,8 @@ def _brick_manifest_json(name, bricks):
             "requirements": _manifest_csv(b.get("requirements", {}), "capabilities"),
             "capabilities": _manifest_csv(b.get("capabilities", {}), "provides"),
         })
-    return json.dumps({"library": name, "bricks": entries}, sort_keys=True)
+    return json.dumps({"schema_version": BRICK_MANIFEST_SCHEMA_VERSION, "bricks": entries},
+                      sort_keys=True)
 
 
 def emit_library_cpp(manifest):
