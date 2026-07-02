@@ -50,7 +50,9 @@ INCLUDE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "i
 def _euler_formulas(m):
     """Pose les formules Euler compressible (flux + valeurs propres + conversions + gamma) sur la
     FACADE Model @p m (dont compile(...) rend un CompiledModel). Renvoie (rho, rho_u, rho_v, E)."""
-    rho, rhou, rhov, E = m.conservative_vars("rho", "rho_u", "rho_v", "E")
+    rho, rhou, rhov, E = m.conservative_vars(
+        "rho", "rho_u", "rho_v", "E",
+        roles=["Density", "MomentumX", "MomentumY", "Energy"])
     u = rhou / rho
     v = rhov / rho
     p = (GAMMA - 1.0) * (E - 0.5 * rho * (u * u + v * v))
@@ -63,6 +65,10 @@ def _euler_formulas(m):
     m.primitive_vars(rho, pu, pv, pp)
     m.conservative_from([rho, rho * pu, rho * pv, pp / (GAMMA - 1.0) + 0.5 * rho * (pu * pu + pv * pv)])
     m.gamma(GAMMA)
+    # ADC-590 : hllc/roe generiques exigent la capability EMISE (plus de fallback Euler implicite) ;
+    # parity_riemann exerce riemann=HLLC()/Roe() sur cm_t (bit-identite prouvee vs briques natives).
+    m.enable_hllc()
+    m.enable_roe()
     return rho, rhou, rhov, E, pu, pv
 
 

@@ -57,6 +57,8 @@ def build_euler(name="euler_cache", gamma=GAMMA):
     prho, pu, pv, pp = m.primitive_vars(rho=rho, u=u, v=v, p=p)
     m.conservative_from([prho, prho * pu, prho * pv,
                          pp / (g - 1.0) + 0.5 * prho * (pu * pu + pv * pv)])
+    # ADC-590 : riemann='hllc' generique exige la capability EMISE (plus de fallback Euler implicite).
+    m.enable_hllc()
     return m
 
 
