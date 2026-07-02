@@ -113,8 +113,9 @@ sim2.add_block("ions",
                          elliptic=pops.ChargeDensity(charge=1.0)),
                spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                time=pops.Explicit())
-sim2.set_poisson(rhs="charge_density", solver="dct", bc="periodic")
-msg = err_msg(sim2.solve_fields)
+# ADC-599/584: an unknown solver token is now refused PRE-BIND by set_poisson itself (typed
+# route validation), before any solve; the refusal still lists the valid set incl. fft_spectral.
+msg = err_msg(lambda: sim2.set_poisson(rhs="charge_density", solver="dct", bc="periodic"))
 chk("fft_spectral" in msg, f"solver inconnu : la liste inclut fft_spectral ({msg[:60]}...)")
 
 print("== (5) ghosts de phi : le chemin source complet fft == MG ==")
