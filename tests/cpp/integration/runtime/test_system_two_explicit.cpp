@@ -9,7 +9,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/system/system_coupler.hpp>
@@ -21,7 +20,6 @@
 #include <pops/mesh/storage/multifab.hpp>
 
 #include <cmath>
-#include <cstdio>
 #include <type_traits>
 
 using namespace pops;
@@ -77,15 +75,9 @@ static_assert(std::is_same_v<ProdSSP3::Time::Method, SSPRK3>);
 static_assert(ProdSSP2::Time::substeps == 1);
 static_assert(ProdSSP3::Time::substeps == 4);
 
-static int pops_run_test_system_two_explicit() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+// Partie A : deux schemas explicites differents (SSPRK2 1 sous-pas vs SSPRK3 4 sous-pas), memes
+// equations -- chacun avance selon SA politique.
+TEST(SystemTwoExplicit, TwoExplicitSchemesAdvanceIndependently) {
   const Box2D dom = Box2D::from_extents(4, 4);
   const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
   const BoxArray ba = BoxArray::from_domain(dom, 4);
@@ -93,61 +85,63 @@ static int pops_run_test_system_two_explicit() {
   const int ncell = 16;
   const Real dt = Real(0.05);
 
-  // --- Partie A : deux schemas explicites differents, memes equations ---
-  {
-    MultiFab Ua(ba, dm, 1, 2), Ub(ba, dm, 1, 2);
-    Ua.set_val(Real(0));
-    Ub.set_val(Real(0));
-    ProdSSP2 a{"ssp2", Production{Real(2)}, Ua, BCRec{}};
-    ProdSSP3 b{"ssp3", Production{Real(5)}, Ub, BCRec{}};
-    CoupledSystem system{a, b};
-    auto sim = make_system_coupler(system, geom, ba, BCRec{}, ZeroSystemRhs{});
-    sim.step(dt);  // tout explicite : pas de callback
-    chk(std::fabs(sum(Ua) - dt * Real(2) * ncell) < Real(1e-12), "ssp2_block");
-    chk(std::fabs(sum(Ub) - dt * Real(5) * ncell) < Real(1e-12), "ssp3_block");
-  }
-
-  // --- Partie B : meme equation, BC differentes par bloc ---
-  // Controle : deux blocs periodiques identiques -> resultat identique.
-  {
-    BCRec per;  // periodique partout
-    MultiFab Up1(ba, dm, 1, 2), Up2(ba, dm, 1, 2);
-    fill_ramp_x(Up1);
-    fill_ramp_x(Up2);
-    AdvBlock b1{"p1", AdvectX{}, Up1, per};
-    AdvBlock b2{"p2", AdvectX{}, Up2, per};
-    CoupledSystem system{b1, b2};
-    auto sim = make_system_coupler(system, geom, ba, per, ZeroSystemRhs{});
-    sim.step(dt);
-    MultiFab d(ba, dm, 1, 0);
-    lincomb(d, Real(1), Up1, Real(-1), Up2);
-    chk(norm_inf(d) < Real(1e-12), "same_bc_identical");
-  }
-
-  // Test : periodique vs outflow (foextrap), meme donnee initiale -> divergent.
-  {
-    BCRec per;
-    BCRec out;
-    out.xlo = out.xhi = BCType::Foextrap;
-    out.ylo = out.yhi = BCType::Foextrap;
-    MultiFab Uper(ba, dm, 1, 2), Uout(ba, dm, 1, 2);
-    fill_ramp_x(Uper);
-    fill_ramp_x(Uout);
-    AdvBlock bp{"per", AdvectX{}, Uper, per};
-    AdvBlock bo{"out", AdvectX{}, Uout, out};
-    CoupledSystem system{bp, bo};
-    auto sim = make_system_coupler(system, geom, ba, per, ZeroSystemRhs{});
-    sim.step(dt);
-    MultiFab d(ba, dm, 1, 0);
-    lincomb(d, Real(1), Uper, Real(-1), Uout);
-    chk(norm_inf(d) > Real(1e-3), "per_block_bc_differs");
-  }
-
-  if (fails == 0)
-    std::printf("OK test_system_two_explicit\n");
-  return fails == 0 ? 0 : 1;
+  MultiFab Ua(ba, dm, 1, 2), Ub(ba, dm, 1, 2);
+  Ua.set_val(Real(0));
+  Ub.set_val(Real(0));
+  ProdSSP2 a{"ssp2", Production{Real(2)}, Ua, BCRec{}};
+  ProdSSP3 b{"ssp3", Production{Real(5)}, Ub, BCRec{}};
+  CoupledSystem system{a, b};
+  auto sim = make_system_coupler(system, geom, ba, BCRec{}, ZeroSystemRhs{});
+  sim.step(dt);  // tout explicite : pas de callback
+  EXPECT_TRUE(std::fabs(sum(Ua) - dt * Real(2) * ncell) < Real(1e-12)) << "ssp2_block";
+  EXPECT_TRUE(std::fabs(sum(Ub) - dt * Real(5) * ncell) < Real(1e-12)) << "ssp3_block";
 }
 
-TEST(test_system_two_explicit, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_system_two_explicit, "test_system_two_explicit"), 0);
+// Partie B controle : deux blocs identiques au seul detail de la BC (periodique/periodique)
+// -> resultat identique.
+TEST(SystemTwoExplicit, IdenticalPerBlockBcsProduceIdenticalResult) {
+  const Box2D dom = Box2D::from_extents(4, 4);
+  const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray ba = BoxArray::from_domain(dom, 4);
+  const DistributionMapping dm(ba.size(), n_ranks());
+  const Real dt = Real(0.05);
+
+  BCRec per;  // periodique partout
+  MultiFab Up1(ba, dm, 1, 2), Up2(ba, dm, 1, 2);
+  fill_ramp_x(Up1);
+  fill_ramp_x(Up2);
+  AdvBlock b1{"p1", AdvectX{}, Up1, per};
+  AdvBlock b2{"p2", AdvectX{}, Up2, per};
+  CoupledSystem system{b1, b2};
+  auto sim = make_system_coupler(system, geom, ba, per, ZeroSystemRhs{});
+  sim.step(dt);
+  MultiFab d(ba, dm, 1, 0);
+  lincomb(d, Real(1), Up1, Real(-1), Up2);
+  EXPECT_TRUE(norm_inf(d) < Real(1e-12)) << "same_bc_identical";
+}
+
+// Partie B test : deux blocs identiques au seul detail de la BC (periodique vs outflow) divergent
+// apres un pas -> le coeur remplit les halos avec block.bc, pas une BC globale unique.
+TEST(SystemTwoExplicit, DifferingPerBlockBcsDiverge) {
+  const Box2D dom = Box2D::from_extents(4, 4);
+  const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray ba = BoxArray::from_domain(dom, 4);
+  const DistributionMapping dm(ba.size(), n_ranks());
+  const Real dt = Real(0.05);
+
+  BCRec per;
+  BCRec out;
+  out.xlo = out.xhi = BCType::Foextrap;
+  out.ylo = out.yhi = BCType::Foextrap;
+  MultiFab Uper(ba, dm, 1, 2), Uout(ba, dm, 1, 2);
+  fill_ramp_x(Uper);
+  fill_ramp_x(Uout);
+  AdvBlock bp{"per", AdvectX{}, Uper, per};
+  AdvBlock bo{"out", AdvectX{}, Uout, out};
+  CoupledSystem system{bp, bo};
+  auto sim = make_system_coupler(system, geom, ba, per, ZeroSystemRhs{});
+  sim.step(dt);
+  MultiFab d(ba, dm, 1, 0);
+  lincomb(d, Real(1), Uper, Real(-1), Uout);
+  EXPECT_TRUE(norm_inf(d) > Real(1e-3)) << "per_block_bc_differs";
 }

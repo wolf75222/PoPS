@@ -8,14 +8,12 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/physics/composition/composite.hpp>
 #include <pops/physics/bricks/hyperbolic.hpp>  // ExBVelocity
 #include <pops/runtime/builders/compiled/dsl_block.hpp>   // add_compiled_model
 #include <pops/runtime/system.hpp>
 
 #include <cmath>
-#include <cstdio>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -44,20 +42,10 @@ struct NoEll {
 using MagModel = CompositeModel<ExBVelocity, BzSource, NoEll>;
 static_assert(MagModel::n_aux == 4, "le compose lit B_z");
 
-static int pops_run_test_aux_runtime_bz(int argc, char** argv) {
+TEST(AuxRuntimeBz, RuntimeSystemReadsSharedBzChannelAndClearsWithZero) {
 #if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard(argc, argv);  // Kokkos init AVANT la 1ere allocation (ctor System)
-#else
-  (void)argc;
-  (void)argv;
+  static Kokkos::ScopeGuard guard;  // Kokkos init AVANT la 1ere allocation (ctor System)
 #endif
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
 
   const int n = 32;
   const double c = 0.7;
@@ -82,9 +70,8 @@ static int pops_run_test_aux_runtime_bz(int argc, char** argv) {
   double maxerr = 0;
   for (double r : R)
     maxerr = std::fmax(maxerr, std::fabs(r - c));
-  std::printf("  runtime System : eval_rhs, max|R - B_z| = %.2e (n_aux=%d)\n", maxerr,
-              MagModel::n_aux);
-  chk(maxerr < 1e-12, "runtime_system_reads_Bz");
+  EXPECT_TRUE(maxerr < 1e-12) << "runtime_system_reads_Bz (max|R - B_z| = " << maxerr
+                              << ", n_aux=" << MagModel::n_aux << ")";
 
   // Controle : B_z = 0 -> residu nul (la source ne contribue plus).
   std::vector<double> zero(static_cast<std::size_t>(n) * n, 0.0);
@@ -94,14 +81,5 @@ static int pops_run_test_aux_runtime_bz(int argc, char** argv) {
   double maxabs = 0;
   for (double r : R0)
     maxabs = std::fmax(maxabs, std::fabs(r));
-  std::printf("  controle B_z=0 : ||R||_inf = %.2e\n", maxabs);
-  chk(maxabs < 1e-12, "runtime_system_Bz_zero");
-
-  if (fails == 0)
-    std::printf("OK test_aux_runtime_bz\n");
-  return fails ? 1 : 0;
-}
-
-TEST(test_aux_runtime_bz, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_aux_runtime_bz, "test_aux_runtime_bz"), 0);
+  EXPECT_TRUE(maxabs < 1e-12) << "runtime_system_Bz_zero (||R||_inf = " << maxabs << ")";
 }

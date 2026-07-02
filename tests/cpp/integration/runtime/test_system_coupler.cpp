@@ -3,7 +3,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/system/system_coupler.hpp>
@@ -14,7 +13,6 @@
 #include <pops/mesh/storage/multifab.hpp>
 
 #include <cmath>
-#include <cstdio>
 #include <type_traits>
 
 using namespace pops;
@@ -69,15 +67,7 @@ static_assert(EquationBlockLike<IonBlock>);
 static_assert(ElectronBlock::Time::treatment == TimeTreatment::Implicit);
 static_assert(IonBlock::Time::treatment == TimeTreatment::Explicit);
 
-static int pops_run_test_system_coupler() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+TEST(SystemCoupler, ImplicitElectronBlockAndExplicitIonBlockAdvanceUnderZeroSystemRhs) {
   const Box2D dom = Box2D::from_extents(4, 4);
   const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
   const BoxArray ba = BoxArray::from_domain(dom, 4);
@@ -102,15 +92,7 @@ static int pops_run_test_system_coupler() {
     }
   });
 
-  chk(implicit_calls == 2, "implicit_substeps");
-  chk(std::fabs(sum(Ue) - Real(2 * 0.1 * 16)) < Real(1e-12), "electron_implicit_update");
-  chk(std::fabs(sum(Ui) - Real(3 * 0.1 * 16)) < Real(1e-12), "ion_explicit_update");
-
-  if (fails == 0)
-    std::printf("OK test_system_coupler\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_system_coupler, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_system_coupler, "test_system_coupler"), 0);
+  EXPECT_TRUE(implicit_calls == 2) << "implicit_substeps";
+  EXPECT_TRUE(std::fabs(sum(Ue) - Real(2 * 0.1 * 16)) < Real(1e-12)) << "electron_implicit_update";
+  EXPECT_TRUE(std::fabs(sum(Ui) - Real(3 * 0.1 * 16)) < Real(1e-12)) << "ion_explicit_update";
 }

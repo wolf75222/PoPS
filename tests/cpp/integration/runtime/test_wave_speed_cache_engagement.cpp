@@ -11,7 +11,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/execution/for_each.hpp>
@@ -25,7 +24,6 @@
 
 #include <chrono>
 #include <cmath>
-#include <cstdio>
 #include <cstring>
 
 using namespace pops;
@@ -112,14 +110,8 @@ static long long read_counter(const Counter& c) {
   return h();
 }
 
-static int pops_run_test_wave_speed_cache_engagement() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    std::printf("%s %s\n", c ? "[OK]  " : "[FAIL]", w);
-    if (!c)
-      ++fails;
-  };
-
+// (1) bit-exactitude + (2) engagement (comptage), wave_speeds bon marche.
+TEST(WaveSpeedCacheEngagement, CacheIsBitExactAndCallsWaveSpeedsFewerTimes) {
   const int n = 48;
   const double L = 1.0;
   Box2D dom = Box2D::from_extents(n, n);
@@ -132,85 +124,83 @@ static int pops_run_test_wave_speed_cache_engagement() {
   aux.set_val(0.0);
   const GridContext ctx{dom, bc, geom, &aux};
 
-  // ----- (1) bit-exactitude + (2) engagement (comptage), wave_speeds bon marche -----
-  {
-    Counter calls("ws_calls");
-    CountingIsothermal model{Real(1), /*busy=*/0, calls};
-    BlockClosures off = make_block(model, "none", "hll", ctx, false, false, "ssprk2", {}, {},
-                                   nullptr, Real(0), /*wave_speed_cache=*/false);
-    BlockClosures on = make_block(model, "none", "hll", ctx, false, false, "ssprk2", {}, {},
-                                  nullptr, Real(0), /*wave_speed_cache=*/true);
+  Counter calls("ws_calls");
+  CountingIsothermal model{Real(1), /*busy=*/0, calls};
+  BlockClosures off = make_block(model, "none", "hll", ctx, false, false, "ssprk2", {}, {},
+                                 nullptr, Real(0), /*wave_speed_cache=*/false);
+  BlockClosures on = make_block(model, "none", "hll", ctx, false, false, "ssprk2", {}, {},
+                                nullptr, Real(0), /*wave_speed_cache=*/true);
 
-    MultiFab Uoff(ba, dm, 3, 1), Uon(ba, dm, 3, 1), U0(ba, dm, 3, 1);
-    init_state(Uoff, geom, dom);
-    init_state(Uon, geom, dom);
-    init_state(U0, geom, dom);
+  MultiFab Uoff(ba, dm, 3, 1), Uon(ba, dm, 3, 1), U0(ba, dm, 3, 1);
+  init_state(Uoff, geom, dom);
+  init_state(Uon, geom, dom);
+  init_state(U0, geom, dom);
 
-    const double dt = 0.2 * (L / n) / 2.0;  // CFL prudente (max |v|+c ~ 1.4)
-    const int nsteps = 25;
+  const double dt = 0.2 * (L / n) / 2.0;  // CFL prudente (max |v|+c ~ 1.4)
+  const int nsteps = 25;
 
-    Kokkos::deep_copy(calls, 0LL);
-    for (int s = 0; s < nsteps; ++s)
-      off.advance(Uoff, dt, 1);
-    const long long calls_off = read_counter(calls);
+  Kokkos::deep_copy(calls, 0LL);
+  for (int s = 0; s < nsteps; ++s)
+    off.advance(Uoff, dt, 1);
+  const long long calls_off = read_counter(calls);
 
-    Kokkos::deep_copy(calls, 0LL);
-    for (int s = 0; s < nsteps; ++s)
-      on.advance(Uon, dt, 1);
-    const long long calls_on = read_counter(calls);
+  Kokkos::deep_copy(calls, 0LL);
+  for (int s = 0; s < nsteps; ++s)
+    on.advance(Uon, dt, 1);
+  const long long calls_on = read_counter(calls);
 
-    device_fence();
-    const long long ndiff = count_diff_bits(Uoff, Uon, dom);
-    const long long evolved = count_diff_bits(Uoff, U0, dom);
-    const double ratio = calls_on > 0 ? double(calls_off) / double(calls_on) : 0.0;
-    std::printf("  n=%d nsteps=%d : ndiff_bits=%lld evolved_bits=%lld\n", n, nsteps, ndiff,
-                evolved);
-    std::printf("  wave_speeds calls : OFF=%lld ON=%lld  ratio=%.2fx\n", calls_off, calls_on,
-                ratio);
-    chk(evolved > 0, "l'etat a reellement evolue (test non creux)");
-    chk(ndiff == 0, "bit-exact NoSlope+HLL : cache ON == OFF (0 ulp)");
-    // PREUVE D'ENGAGEMENT : le cache pre-calcule wave_speeds par cellule, le chemin par face le rappelle
-    // pour chaque face -> strictement moins d'appels. calls_on == calls_off signalerait un cache no-op.
-    chk(calls_on < calls_off, "cache ENGAGE : moins d'appels wave_speeds que le chemin par face");
-    chk(calls_off > 0 && calls_on > 0, "les deux chemins evaluent reellement wave_speeds");
-  }
-
-  // ----- (3) gain de temps (DIAGNOSTIC, non asserte) : wave_speeds couteux -----
-  {
-    Counter calls("ws_calls_costly");
-    CountingIsothermal model{Real(1), /*busy=*/100, calls};  // emule moments + factorisations
-    BlockClosures off = make_block(model, "none", "hll", ctx, false, false, "ssprk2", {}, {},
-                                   nullptr, Real(0), false);
-    BlockClosures on = make_block(model, "none", "hll", ctx, false, false, "ssprk2", {}, {},
-                                  nullptr, Real(0), true);
-    MultiFab Uoff(ba, dm, 3, 1), Uon(ba, dm, 3, 1);
-    init_state(Uoff, geom, dom);
-    init_state(Uon, geom, dom);
-    const double dt = 0.2 * (L / n) / 2.0;
-    const int nsteps = 10;
-
-    auto t0 = std::chrono::steady_clock::now();
-    for (int s = 0; s < nsteps; ++s)
-      off.advance(Uoff, dt, 1);
-    device_fence();
-    auto t1 = std::chrono::steady_clock::now();
-    for (int s = 0; s < nsteps; ++s)
-      on.advance(Uon, dt, 1);
-    device_fence();
-    auto t2 = std::chrono::steady_clock::now();
-    const double ms_off = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    const double ms_on = std::chrono::duration<double, std::milli>(t2 - t1).count();
-    const long long ndiff = count_diff_bits(Uoff, Uon, dom);
-    std::printf(
-        "  [diag] n=%d nsteps=%d busy=100 : OFF=%.1f ms ON=%.1f ms speedup=%.2fx ndiff_bits=%lld\n",
-        n, nsteps, ms_off, ms_on, ms_on > 0 ? ms_off / ms_on : 0.0, ndiff);
-    chk(ndiff == 0, "bit-exact (cas wave_speeds couteux) : cache ON == OFF");
-  }
-
-  std::printf(fails == 0 ? "\nALL OK\n" : "\n%d FAIL\n", fails);
-  return fails == 0 ? 0 : 1;
+  device_fence();
+  const long long ndiff = count_diff_bits(Uoff, Uon, dom);
+  const long long evolved = count_diff_bits(Uoff, U0, dom);
+  EXPECT_TRUE(evolved > 0) << "l'etat a reellement evolue (test non creux)";
+  EXPECT_TRUE(ndiff == 0) << "bit-exact NoSlope+HLL : cache ON == OFF (0 ulp), ndiff_bits=" << ndiff;
+  // PREUVE D'ENGAGEMENT : le cache pre-calcule wave_speeds par cellule, le chemin par face le rappelle
+  // pour chaque face -> strictement moins d'appels. calls_on == calls_off signalerait un cache no-op.
+  EXPECT_TRUE(calls_on < calls_off)
+      << "cache ENGAGE : moins d'appels wave_speeds que le chemin par face (OFF=" << calls_off
+      << " ON=" << calls_on << ")";
+  EXPECT_TRUE(calls_off > 0 && calls_on > 0) << "les deux chemins evaluent reellement wave_speeds";
 }
 
-TEST(test_wave_speed_cache_engagement, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_wave_speed_cache_engagement, "test_wave_speed_cache_engagement"), 0);
+// (3) gain de temps (mesure diagnostique) : wave_speeds couteux reste bit-exact ON == OFF. Le temps
+// n'est pas asserte (bruit de mesure) ; seule la bit-exactitude l'est.
+TEST(WaveSpeedCacheEngagement, CostlyWaveSpeedsStaysBitExact) {
+  const int n = 48;
+  const double L = 1.0;
+  Box2D dom = Box2D::from_extents(n, n);
+  Geometry geom{dom, 0.0, L, 0.0, L};
+  BoxArray ba = BoxArray::from_domain(dom, n);
+  DistributionMapping dm(ba.size(), n_ranks());
+  BCRec bc;  // periodique
+  MultiFab aux(ba, dm, 3, 1);
+  aux.set_val(0.0);
+  const GridContext ctx{dom, bc, geom, &aux};
+
+  Counter calls("ws_calls_costly");
+  CountingIsothermal model{Real(1), /*busy=*/100, calls};  // emule moments + factorisations
+  BlockClosures off = make_block(model, "none", "hll", ctx, false, false, "ssprk2", {}, {},
+                                 nullptr, Real(0), false);
+  BlockClosures on = make_block(model, "none", "hll", ctx, false, false, "ssprk2", {}, {},
+                                nullptr, Real(0), true);
+  MultiFab Uoff(ba, dm, 3, 1), Uon(ba, dm, 3, 1);
+  init_state(Uoff, geom, dom);
+  init_state(Uon, geom, dom);
+  const double dt = 0.2 * (L / n) / 2.0;
+  const int nsteps = 10;
+
+  auto t0 = std::chrono::steady_clock::now();
+  for (int s = 0; s < nsteps; ++s)
+    off.advance(Uoff, dt, 1);
+  device_fence();
+  auto t1 = std::chrono::steady_clock::now();
+  for (int s = 0; s < nsteps; ++s)
+    on.advance(Uon, dt, 1);
+  device_fence();
+  auto t2 = std::chrono::steady_clock::now();
+  const double ms_off = std::chrono::duration<double, std::milli>(t1 - t0).count();
+  const double ms_on = std::chrono::duration<double, std::milli>(t2 - t1).count();
+  const long long ndiff = count_diff_bits(Uoff, Uon, dom);
+  EXPECT_TRUE(ndiff == 0) << "bit-exact (cas wave_speeds couteux) : cache ON == OFF ; OFF="
+                          << ms_off << " ms ON=" << ms_on
+                          << " ms speedup=" << (ms_on > 0 ? ms_off / ms_on : 0.0) << "x";
 }

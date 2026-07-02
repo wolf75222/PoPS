@@ -10,7 +10,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/physics/bricks/source.hpp>                // NoSource
 #include <pops/physics/composition/composite.hpp>        // CompositeModel
@@ -20,7 +19,6 @@
 #include <pops/runtime/system.hpp>
 
 #include <cmath>
-#include <cstdio>
 #include <functional>
 #include <string>
 #include <vector>
@@ -64,12 +62,9 @@ static void add_gas(System& s, double gamma) {
   s.set_poisson("charge_density", "geometric_mg");
 }
 
-static int pops_run_test_program_runtime(int argc, char** argv) {
+TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsKernels) {
 #if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard(argc, argv);
-#else
-  (void)argc;
-  (void)argv;
+  static Kokkos::ScopeGuard guard;
 #endif
   const int n = 16;
   const double gamma = 1.4, dt = 1e-3;
@@ -119,68 +114,38 @@ static int pops_run_test_program_runtime(int argc, char** argv) {
   sim.step(dt);
   const std::vector<double> Up = sim.get_state("gas");
 
-  int fails = 0;
   double err = 0, change = 0;
   for (std::size_t k = 0; k < Up.size(); ++k) {
     err = std::fmax(err, std::fabs(Up[k] - Uref[k]));
     change = std::fmax(change, std::fabs(Up[k] - U0[k]));
   }
-  if (!(err < 1e-12)) {
-    std::printf("FAIL parity: max|Up - Uref| = %.3e\n", err);
-    ++fails;
-  }
-  if (sim.macro_step() != step0 + 1) {
-    std::printf("FAIL macro_step not advanced (%d -> %d)\n", step0, sim.macro_step());
-    ++fails;
-  }
-  if (!(change > 1e-9)) {
-    std::printf("FAIL program step did not change the state (change = %.3e)\n", change);
-    ++fails;
-  }
+  EXPECT_TRUE(err < 1e-12) << "parity: max|Up - Uref| = " << err;
+  EXPECT_TRUE(sim.macro_step() == step0 + 1)
+      << "macro_step not advanced (" << step0 << " -> " << sim.macro_step() << ")";
+  EXPECT_TRUE(change > 1e-9) << "program step did not change the state (change = " << change << ")";
 
   // ADC-459 counters: one step ran solve_fields + (1 block) rhs_into + axpy = EXACTLY 3 kernel-
   // dispatching seam ops (no double-count: solve_fields counts once, via Impl::solve_fields). Pinning
   // the exact value guards against a seam double-counting (a >0 check would not).
   const runtime::program::Profiler& prof = sim.profiler();
-  if (prof.counter("kernels") != 3) {
-    std::printf("FAIL kernels counter = %lld, expected 3 (solve_fields + rhs_into + axpy, no double)\n",
-                static_cast<long long>(prof.counter("kernels")));
-    ++fails;
-  }
-  if (!(prof.counter("scratch_allocs") > 0)) {
-    std::printf("FAIL scratch_allocs counter not incremented (= %lld)\n",
-                static_cast<long long>(prof.counter("scratch_allocs")));
-    ++fails;
-  }
-  if (!(prof.counter("scratch_peak_bytes") > 0)) {
-    std::printf("FAIL scratch_peak_bytes not recorded (= %lld)\n",
-                static_cast<long long>(prof.counter("scratch_peak_bytes")));
-    ++fails;
-  }
+  EXPECT_TRUE(prof.counter("kernels") == 3)
+      << "kernels counter = " << static_cast<long long>(prof.counter("kernels"))
+      << ", expected 3 (solve_fields + rhs_into + axpy, no double)";
+  EXPECT_TRUE(prof.counter("scratch_allocs") > 0)
+      << "scratch_allocs counter not incremented (= "
+      << static_cast<long long>(prof.counter("scratch_allocs")) << ")";
+  EXPECT_TRUE(prof.counter("scratch_peak_bytes") > 0)
+      << "scratch_peak_bytes not recorded (= "
+      << static_cast<long long>(prof.counter("scratch_peak_bytes")) << ")";
   // The cache hit/skip counters never fire on this native ProgramContext step (no held schedule); they
   // exist as counters only after the compiled scheduler emits cache_should_update. Assert they read 0.
-  if (prof.counter("cache_hits") != 0 || prof.counter("cache_misses") != 0) {
-    std::printf("FAIL cache counters moved on the native path (hits=%lld misses=%lld)\n",
-                static_cast<long long>(prof.counter("cache_hits")),
-                static_cast<long long>(prof.counter("cache_misses")));
-    ++fails;
-  }
+  EXPECT_TRUE(prof.counter("cache_hits") == 0 && prof.counter("cache_misses") == 0)
+      << "cache counters moved on the native path (hits="
+      << static_cast<long long>(prof.counter("cache_hits"))
+      << " misses=" << static_cast<long long>(prof.counter("cache_misses")) << ")";
   {
     const std::string report = sim.profile_report();
-    if (report.find("kernels=") == std::string::npos) {
-      std::printf("FAIL profile_report omits the kernels counter line\n");
-      ++fails;
-    }
+    EXPECT_TRUE(report.find("kernels=") != std::string::npos)
+        << "profile_report omits the kernels counter line";
   }
-
-  if (fails == 0)
-    std::printf(
-        "OK test_program_runtime (program Forward Euler == eval_rhs reference; "
-        "max|d| = %.2e, change = %.2e)\n",
-        err, change);
-  return fails ? 1 : 0;
-}
-
-TEST(test_program_runtime, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_program_runtime, "test_program_runtime"), 0);
 }

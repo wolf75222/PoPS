@@ -8,7 +8,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/model/physical_model.hpp>
 #include <pops/core/state/state.hpp>
@@ -20,7 +19,6 @@
 #include <pops/parallel/comm.hpp>
 
 #include <cmath>
-#include <cstdio>
 
 using namespace pops;
 
@@ -56,15 +54,7 @@ static_assert(PhysicalModel<BzGrow> && PhysicalModel<Scalar>);
 using BlkA = EquationBlock<BzGrow, FirstOrder, ExplicitTime<SSPRK2, 1>>;
 using BlkB = EquationBlock<Scalar, FirstOrder, ExplicitTime<SSPRK2, 1>>;
 
-static int pops_run_test_aux_system_bz() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+TEST(AuxSystemBz, SharedAuxChannelWidensToMaxAndBzGrowReadsWhileScalarIgnores) {
   const int n = 16;
   const Real c = 0.7;
   const Box2D dom = Box2D::from_extents(n, n);
@@ -86,7 +76,7 @@ static int pops_run_test_aux_system_bz() {
                             [c](Real, Real) { return c; });
 
   // --- (A) canal partage : largeur = max(4, 3) = 4 ; B_z peuple a c ---
-  chk(assembler.aux().fab(0).ncomp() == 4, "shared_aux_width_is_max");
+  ASSERT_TRUE(assembler.aux().fab(0).ncomp() == 4) << "shared_aux_width_is_max";
   assembler.solve_fields();
   {
     double maxbz = 0, maxphi = 0;
@@ -100,10 +90,8 @@ static int pops_run_test_aux_system_bz() {
           maxbz = std::max(maxbz, std::fabs(aa(i, j, 3) - c));
         }
     }
-    std::printf("  (A) largeur=%d  max|phi|=%.2e  max|B_z - c|=%.2e\n",
-                assembler.aux().fab(0).ncomp(), maxphi, maxbz);
-    chk(maxphi < 1e-12, "phi_zero");
-    chk(maxbz < 1e-14, "Bz_populated_shared");
+    EXPECT_TRUE(maxphi < 1e-12) << "phi_zero (max|phi| = " << maxphi << ")";
+    EXPECT_TRUE(maxbz < 1e-14) << "Bz_populated_shared (max|B_z - c| = " << maxbz << ")";
   }
 
   // --- (B) le bloc A lit B_z : residu = source = B_z u = c ---
@@ -120,8 +108,7 @@ static int pops_run_test_aux_system_bz() {
         for (int i = v.lo[0]; i <= v.hi[0]; ++i)
           maxerr = std::max(maxerr, std::fabs(r(i, j, 0) - c));
     }
-    std::printf("  (B) bloc A : max|R - c| = %.2e\n", maxerr);
-    chk(maxerr < 1e-14, "blockA_reads_Bz");
+    EXPECT_TRUE(maxerr < 1e-14) << "blockA_reads_Bz (max|R - c| = " << maxerr << ")";
   }
 
   // --- (C) le bloc B (base) sur le MEME aux elargi ignore la comp 3 : residu nul ---
@@ -130,15 +117,7 @@ static int pops_run_test_aux_system_bz() {
     assembler.block_residual<NoSlope, RusanovFlux>(assembler.system().block<1>(),
                                                    assembler.system().block<1>().U(), R,
                                                    /*recompute_aux=*/false);
-    chk(norm_inf(R) < 1e-14, "blockB_ignores_extra_comp");
-    std::printf("  (C) bloc B : ||R||_inf = %.2e\n", norm_inf(R));
+    EXPECT_TRUE(norm_inf(R) < 1e-14) << "blockB_ignores_extra_comp (||R||_inf = " << norm_inf(R)
+                                     << ")";
   }
-
-  if (fails == 0)
-    std::printf("OK test_aux_system_bz\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_aux_system_bz, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_aux_system_bz, "test_aux_system_bz"), 0);
 }
