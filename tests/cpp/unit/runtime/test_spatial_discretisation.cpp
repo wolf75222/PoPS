@@ -4,13 +4,11 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/time/integrators/time_integrator.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/numerics/fv/reconstruction.hpp>
 #include <pops/numerics/fv/spatial_discretisation.hpp>
 
-#include <cstdio>
 #include <type_traits>
 
 using namespace pops;
@@ -35,11 +33,8 @@ static_assert(TimePolicyTraits<ExplicitTime<SSPRK3, 4>>::substeps == 4);
 static_assert(TimePolicyTraits<ImplicitTime<UserTimeIntegrator, 10>>::treatment ==
               TimeTreatment::Implicit);
 
-static int pops_run_test_spatial_discretisation() {
-  std::printf("OK test_spatial_discretisation\n");
-  return 0;
-}
-
-TEST(test_spatial_discretisation, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_spatial_discretisation, "test_spatial_discretisation"), 0);
+// Aucune assertion d'execution : ce test verrouille uniquement les bundles/alias ci-dessus a la
+// compilation (static_assert). Le TEST existe pour que la suite s'enregistre et tourne sous CTest.
+TEST(SpatialDiscretisation, BundlesAndTimeTagsCompileTimeContract) {
+  SUCCEED() << "bundles limiteur/flux et tags d'integration en temps verrouilles par static_assert";
 }
