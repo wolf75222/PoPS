@@ -17,6 +17,17 @@ import json
 
 BRICK_TYPES = ("native", "generated", "macro", "external_cpp")
 
+# STRICT versioned schema of the external-brick manifest (ADC-611). The JSON pops_brick_manifest()
+# exports carries schema_version at the top level; the parser refuses a manifest without it (legacy /
+# pre-ADC-611 -> "regenerate the brick library"), a wrong version, a missing required field, or an
+# UNKNOWN field (top-level or per entry). Emitter (POPS_DEFINE_BRICK_MANIFEST / BrickRegistry::to_json)
+# and parser stay in LOCKSTEP: they share this version and this field set.
+BRICK_MANIFEST_SCHEMA_VERSION = 1
+# Allowed keys at the top level and per brick entry (strict allow-lists -- anything else is refused).
+_BRICK_MANIFEST_TOP_KEYS = frozenset({"schema_version", "abi_key", "bricks"})
+_BRICK_MANIFEST_ENTRY_REQUIRED = ("id", "category", "requirements", "capabilities")
+_BRICK_MANIFEST_ENTRY_KEYS = frozenset(_BRICK_MANIFEST_ENTRY_REQUIRED)
+
 
 class BrickDescriptor:
     """A typed, numerics-free descriptor of a numerical brick.
@@ -167,38 +178,80 @@ def _split_csv(value):
     return [tok.strip() for tok in value.split(",") if tok.strip()]
 
 
-def _register_manifest(manifest_json):
-    """Parse a brick manifest (the JSON ``pops_brick_manifest()`` returns) and register it.
+def parse_brick_manifest(manifest_json):
+    """Parse a brick manifest (the JSON ``pops_brick_manifest()`` returns) under the STRICT versioned
+    schema (ADC-611) into ``(records, abi_key)`` WITHOUT registering anything.
 
-    The manifest is ``{"bricks": [{"id", "category", "requirements", "capabilities"}, ...]}``
-    where ``requirements``/``capabilities`` are optional CSV strings. Each entry's id is
-    registered in the in-process catalog (last load wins on a repeated id). Returns the number
-    of bricks registered. A malformed manifest or an entry missing its id raises ``ValueError``
-    rather than silently drop a brick. This is the seam ``load_cpp_library`` calls after dlopen;
-    it is also usable directly (a test does not need a compiled ``.so``).
+    The manifest is ``{"schema_version": 1, "abi_key": <opt str>, "bricks": [{"id", "category",
+    "requirements", "capabilities"}, ...]}``. STRICT policy -- the error always NAMES the offending field:
+      - not valid JSON / not an object -> ValueError;
+      - missing ``schema_version`` -> ValueError ("regenerate the brick library"): a manifest without it
+        is legacy (pre-ADC-611); the in-tree emitter always writes it now;
+      - ``schema_version`` != BRICK_MANIFEST_SCHEMA_VERSION -> ValueError (naming got vs expected);
+      - an UNKNOWN top-level key or an UNKNOWN entry key -> ValueError (no permissive silent-ignore);
+      - a brick entry missing any of id / category / requirements / capabilities -> ValueError (naming
+        the field and the brick id). requirements/capabilities are CSV strings (possibly empty "").
+    ``abi_key`` is carried as inert metadata (the .so's dlopen-time ABI guard is enforced separately for
+    the library-.so path; a brick .so rebuilds against the headers, so it is documented-optional here).
     """
     try:
         doc = json.loads(manifest_json)
     except (json.JSONDecodeError, TypeError) as err:
         raise ValueError("external brick manifest is not valid JSON: %s" % (err,)) from err
-    bricks = doc.get("bricks") if isinstance(doc, dict) else None
+    if not isinstance(doc, dict):
+        raise ValueError("external brick manifest must be a JSON object with 'schema_version' and "
+                         "'bricks'; got %r" % (manifest_json,))
+    unknown_top = sorted(set(doc) - _BRICK_MANIFEST_TOP_KEYS)
+    if unknown_top:
+        raise ValueError("external brick manifest has unknown top-level field(s) %s; the strict schema "
+                         "allows only %s" % (unknown_top, sorted(_BRICK_MANIFEST_TOP_KEYS)))
+    if "schema_version" not in doc:
+        raise ValueError("external brick manifest is missing the required 'schema_version' field "
+                         "(expected %d); it predates the versioned schema -- regenerate the brick "
+                         "library against the current headers" % (BRICK_MANIFEST_SCHEMA_VERSION,))
+    version = doc["schema_version"]
+    if version != BRICK_MANIFEST_SCHEMA_VERSION:
+        raise ValueError("external brick manifest 'schema_version' is %r, incompatible with the "
+                         "supported version %d; regenerate the brick library"
+                         % (version, BRICK_MANIFEST_SCHEMA_VERSION))
+    bricks = doc.get("bricks")
     if not isinstance(bricks, list):
-        raise ValueError("external brick manifest must be {\"bricks\": [...]}; got %r"
+        raise ValueError("external brick manifest 'bricks' must be a list; got %r"
                          % (manifest_json,))
-    count = 0
+    records = []
     for entry in bricks:
-        if not isinstance(entry, dict) or not entry.get("id"):
-            raise ValueError("external brick manifest entry must carry a non-empty 'id'; "
-                             "got %r" % (entry,))
-        brick_id = str(entry["id"])
-        _EXTERNAL_BRICKS[brick_id] = {
-            "id": brick_id,
+        if not isinstance(entry, dict):
+            raise ValueError("external brick manifest entry must be an object; got %r" % (entry,))
+        unknown_entry = sorted(set(entry) - _BRICK_MANIFEST_ENTRY_KEYS)
+        if unknown_entry:
+            raise ValueError("external brick manifest entry %r has unknown field(s) %s; the strict "
+                             "schema allows only %s"
+                             % (entry.get("id"), unknown_entry, list(_BRICK_MANIFEST_ENTRY_REQUIRED)))
+        for field in _BRICK_MANIFEST_ENTRY_REQUIRED:
+            if field not in entry:
+                raise ValueError("external brick manifest entry %r is missing the required '%s' field"
+                                 % (entry.get("id"), field))
+        if not entry.get("id"):
+            raise ValueError("external brick manifest entry must carry a non-empty 'id'; got %r"
+                             % (entry,))
+        records.append({
+            "id": str(entry["id"]),
             "category": str(entry.get("category") or "brick"),
             "requirements": _split_csv(entry.get("requirements")),
             "capabilities": _split_csv(entry.get("capabilities")),
-        }
-        count += 1
-    return count
+        })
+    return records, doc.get("abi_key")
+
+
+def _register_manifest(manifest_json):
+    """Parse a brick manifest under the strict versioned schema and register its bricks in the in-process
+    catalog (last load wins on a repeated id). Returns the number of bricks registered. Delegates the
+    strict parse (schema_version / required fields / unknown-field refusal) to :func:`parse_brick_manifest`;
+    this is the seam ``load_cpp_library`` calls after dlopen (also usable directly, no compiled ``.so``)."""
+    records, _abi_key = parse_brick_manifest(manifest_json)
+    for record in records:
+        _EXTERNAL_BRICKS[record["id"]] = dict(record)
+    return len(records)
 
 
 def load_cpp_library(path):

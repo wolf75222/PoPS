@@ -68,7 +68,23 @@ class SystemBlockStore {
   /// add_compiled_model) initialize this struct by positional AGGREGATE
   /// {name, U, ncomp, substeps, evolve, stride, gamma, advance, rhs_into, max_speed, add_poisson_rhs};
   /// do not reorder these members nor insert any before add_poisson_rhs.
+  ///
+  /// DESIGN DECISION (ADC-610, named-option-groups audit): this struct is DELIBERATELY kept flat, unlike
+  /// AmrBuildParams / AmrCompiledHooks which were regrouped into named sub-structs. Three constraints make
+  /// a regroup net-negative here:
+  ///   (1) it is a POSITIONAL AGGREGATE (the frozen brace-init above): grouping members into sub-structs
+  ///       would break every {..} construction site (install_block, native_loader push_dynamic /
+  ///       add_compiled_model) with no ordering safety gained;
+  ///   (2) the SystemStepper templates read these members by name on the hot path, and
+  ///       tests/test_strang_splitting.cpp's MockImpl MIRRORS this exact member contract (Species =
+  ///       SystemBlockStore::BlockState) -- a regroup churns the stepper AND the mock;
+  ///   (3) unlike AmrBuildParams, BlockState does NOT cross the dlopen `.so` boundary by value, so there is
+  ///       no ABI-versioning payoff.
+  /// The members below are therefore left flat but ANNOTATED with named-group comments (IDENTITY / SCHEME /
+  /// SCHUR STAGE / MASKED TRANSPORT ...) so the ownership is legible without paying the regroup cost. This
+  /// is the honest per-target decision the audit calls for, not an omission.
   struct BlockState {
+    // --- IDENTITY + SCHEME (positional-aggregate head; order frozen) ---
     std::string name;
     MultiFab U;
     int ncomp;
@@ -89,6 +105,7 @@ class SystemBlockStore {
     // model exposes no conversion, e.g. pure scalar or .so generated before this work).
     // Consumed by set_primitive_state / get_primitive_state (init/diagnostic in primitive).
     CellConvert prim_to_cons, cons_to_prim;
+    // --- SCHUR / GENERIC SOURCE STAGE (opt-in; all default-inert -> bit-identical) ---
     // Schur-CONDENSED SOURCE STAGE (OPT-IN, pops.Split(source=CondensedSchur), cf. set_source_stage).
     // nullptr (default) = no condensed source stage: the block advances EXACTLY as before
     // (bit-identical). Non null = after the hyperbolic transport, the step runs the standalone source stage
@@ -112,6 +129,7 @@ class SystemBlockStore {
     // source stage) and for the stepper time-order tests (non-commuting toy operators). Trailing
     // + nullptr default: the positional aggregate init of the other members stays unchanged.
     std::function<void(MultiFab&, Real)> source_step;
+    // --- MASKED / DISK TRANSPORT (opt-in; empty default -> Cartesian path, bit-identical) ---
     // DISK TRANSPORT ADVANCES (work T5-PR3, OPT-IN). Empty (default) -> no disk routing:
     // the stepper advances via `advance` (full Cartesian path, BIT-IDENTICAL). Non empty, they MIMIC
     // `advance` (same RK / IMEX scheme, same limiter / flux) but dispatch the transport residual

@@ -118,10 +118,10 @@ int main(int argc, char** argv) {
 
   // --- single ExB block on a frozen one-level shared hierarchy (default Poisson f = q*rho) ---
   AmrBuildParams bp;
-  bp.n = N;
-  bp.L = L;
-  bp.regrid_every = 0;
-  bp.poisson_bc = BCRec{};  // periodic
+  bp.mesh.n = N;
+  bp.mesh.L = L;
+  bp.mesh.regrid_every = 0;
+  bp.poisson.bc = BCRec{};  // periodic
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
 
   std::vector<AmrRuntimeBlock> blocks;

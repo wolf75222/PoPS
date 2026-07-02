@@ -97,8 +97,11 @@ def test_user_riemann_is_external():
     # A User brick must be loaded first (ADC-463); registering its manifest then makes
     # riemann.User(id) surface an external_cpp descriptor.
     import json
+    # ADC-611 : le schema strict versionne exige schema_version + chaque champ d'entree.
     lib._register_manifest(json.dumps(
-        {"bricks": [{"id": "my_hllc_variant", "category": "riemann"}]}))
+        {"schema_version": 1,
+         "bricks": [{"id": "my_hllc_variant", "category": "riemann",
+                     "requirements": "", "capabilities": ""}]}))
     try:
         d = lib.riemann.User("my_hllc_variant")
         assert d.brick_type == "external_cpp"

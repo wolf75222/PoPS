@@ -1,6 +1,7 @@
 #include "../bindings_detail.hpp"
 
 #include <pops/core/state/aux_names.hpp>  // ADC-291: canonical aux name<->component table + bounds
+#include <pops/runtime/config/runtime_params.hpp>  // ADC-610: kMaxRuntimeParams (mirrored to Python)
 #include <pops/runtime/module_capabilities.hpp>  // ADC-479 (#36/#37): authoritative static capability facts
 #include <pops/runtime/runtime_environment.hpp>  // ADC-609: runtime environment/precision/communicator report
 
@@ -245,6 +246,10 @@ void init_core(py::module_& m) {
   m.attr("__aux_named_base__") = static_cast<int>(pops::kAuxNamedBase);
   m.attr("__aux_max_extra__") = static_cast<int>(pops::kAuxMaxExtra);
   m.attr("__aux_max_comps__") = static_cast<int>(pops::kAuxMaxComps);
+  // Runtime-param capacity (ADC-610): the SINGLE C++ source of kMaxRuntimeParams
+  // (pops/runtime/config/runtime_params.hpp). The codegen guard reads this so the Python literal
+  // fallback (physics/aux.py) cannot SILENTLY drift from the fixed-size device array bound.
+  m.attr("__max_runtime_params__") = static_cast<int>(pops::kMaxRuntimeParams);
   {
     py::dict canon;
     for (const auto& [name, comp] : pops::kAuxCanonicalNames)

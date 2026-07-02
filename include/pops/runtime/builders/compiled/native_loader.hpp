@@ -562,6 +562,19 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
   // only one entry without resetting the others to zero.
   auto nparams_fn = reinterpret_cast<nv_fn_t>(pops::dynlib::sym(h, "pops_compiled_nparams"));
   const int nparams = nparams_fn ? nparams_fn() : 0;
+  // DEFENCE IN DEPTH (ADC-610): the Python codegen already refuses a model with more than
+  // kMaxRuntimeParams runtime params (assign_runtime_indices), but a HAND-BUILT .so could declare a
+  // bogus pops_compiled_nparams. Reject it EARLY, at the host boundary, with a clear error naming the
+  // limit -- otherwise the flat block would be copied into the fixed-size device array
+  // RuntimeParams::values[kMaxRuntimeParams] (silently truncated in make_model_with_params, then read
+  // out of bounds on device for values a wrongly-large loader passed). Never a silent overflow.
+  if (nparams > kMaxRuntimeParams)
+    throw std::runtime_error(
+        "add_compiled_block: the .so declares " + std::to_string(nparams) +
+        " runtime parameters > kMaxRuntimeParams=" + std::to_string(kMaxRuntimeParams) +
+        " (include/pops/runtime/config/runtime_params.hpp); the fixed-size device carrier "
+        "RuntimeParams cannot hold them. Regenerate the compiled module with the current headers "
+        "(the codegen enforces the same bound).");
   using res_p_fn_t = void (*)(const double*, double*, const double*, int, double, double, int,
                               const char*, const char*, int, const double*, int, double);
   using adv_p_fn_t = void (*)(double*, const double*, int, double, double, int, const char*,

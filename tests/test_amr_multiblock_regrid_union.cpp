@@ -155,11 +155,11 @@ static AmrRuntime make_two_block(int N, double L, double B0, double q0, double q
                                  const std::vector<double>& rho0, const std::vector<double>& rho1,
                                  int stride1 = 1) {
   AmrBuildParams bp;
-  bp.n = N;
-  bp.L = L;
-  bp.regrid_every =
+  bp.mesh.n = N;
+  bp.mesh.L = L;
+  bp.mesh.regrid_every =
       0;  // le runtime porte sa propre cadence via set_regrid (la facade ne pilote pas ici)
-  bp.poisson_bc = BCRec{};  // periodique
+  bp.poisson.bc = BCRec{};  // periodique
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
   std::vector<AmrRuntimeBlock> blocks;
   detail::dispatch_model(exb_charge(q0, B0), [&](auto m) {

@@ -90,132 +90,140 @@ struct AmrSystemConfig {
 /// Frozen parameters passed to the deferred build of the compiled path (add_compiled_model). Materialized
 /// by AmrSystem at ensure_built time: the geometry + the refine/poisson/density choices known
 /// at that moment. The amr_dsl_block header consumes them to instantiate AmrCouplerMP<Model>.
+///
+/// STRUCTURE (ADC-610). The 31 settings are grouped into NAMED sub-structs by ownership/role
+/// (mesh, physics, regrid, poisson, initial data, Schur source stage, named aux) instead of one flat
+/// append-only bag. A new setting goes INTO its semantic group -- the historical "add at the tail so an
+/// older .so loader falls back silently" idiom is RETIRED because it no longer describes how this struct
+/// evolves. The ABI story is now the VERSIONED KEY, not tail-only placement: this struct crosses the
+/// dlopen .so boundary BY VALUE, and any layout change (a new field, a regroup) shifts POPS_HEADER_SIG
+/// (a sha256 over include/, cf. abi_key.hpp / python/CMakeLists.txt), which re-keys pops_native_abi_key.
+/// A .so generated before the change then diverges from the module key and add_native_block REJECTS it
+/// with a clear "regenerate" error (never silent UB). So an older .so is refused, not silently truncated.
 struct AmrBuildParams {
-  int n = 128;
-  double L = 1.0;
-  int regrid_every = 20;
-  double gamma = static_cast<double>(kPhysicalDefaultGamma);
-  int substeps = 1;
-  bool recon_prim = false;               ///< recon == "primitive" (frozen by add_compiled_model)
-  bool imex = false;                     ///< time == "imex": stiff implicit source (backward_euler)
-  double refine_threshold = static_cast<double>(kAmrRefinementDisabledThreshold);  ///< no refinement
-  BCRec poisson_bc;                      ///< coarse Poisson BC (resolved by set_poisson)
-  std::function<bool(Real, Real)> wall;  ///< conductive wall predicate (empty = none)
-  bool has_density = false;
-  std::vector<double> density;     ///< initial coarse density (component 0), n*n
-  bool distribute_coarse = false;  ///< distributed multi-box coarse (AMR strong-scaling)
-  int coarse_max_grid = 0;         ///< tile size of the distributed coarse (0 => n/2)
-  // FULL initial conservative state (all components), takes priority over `density` when
-  // has_state. ADDED AT THE END OF THE STRUCT: the offsets of the preceding fields are unchanged, so an
-  // older mono-block .so loader (which COPIES bp into its own layout then does not read these fields)
-  // falls back SILENTLY to the historical density path -- no corruption (append-only).
-  bool has_state = false;
-  std::vector<double>
-      state;  ///< ncomp*n*n, component-major c*n*n + j*n + i; ncomp == Model::n_vars
-  // Schur-CONDENSED SOURCE STAGE (amr-schur path, counterpart of System::set_source_stage). ADDED AT THE
-  // END OF THE STRUCT (append-only, same reason as has_state: an older .so loader does not read these
-  // fields and falls back to the historical explicit/imex path). schur==false -> path unchanged.
-  bool schur = false;  ///< true: GLOBAL condensed source stage (instead of local explicit/imex)
-  double schur_theta = 0.5;  ///< theta-scheme of the condensed stage (0.5 = Crank-Nicolson)
-  double schur_alpha = 1.0;  ///< electrostatic coupling constant of the condensed stage
-  bool schur_strang =
-      false;  ///< true: Strang splitting H(dt/2) S(dt) H(dt/2); false: Lie H(dt) S(dt)
-  std::vector<double>
-      bz_field;  ///< coarse B_z(x,y) field, n*n row-major (required by the condensed stage)
-  /// Model-NAMED aux fields (ADC-291): component (>= kAuxNamedBase) -> coarse base-level field
-  /// (n*n row-major). Seeded onto the coupler's shared aux at build (build_amr_compiled), like bz_field;
-  /// the coupler re-applies them each update so they persist across regrid. Empty -> bit-identical.
-  std::map<int, std::vector<double>> named_aux;
-  /// Per-field aux HALO policies (ADC-369): component -> uniform boundary policy, seeded onto the engine
-  /// at build (single-block coupler + multi-block runtime), applied after the shared aux fill. Empty ->
-  /// bit-identical.
-  std::map<int, AuxHaloPolicy> named_aux_bc;
-  // Settings of the condensed stage TRANSPORTED by the ABI (audit wave 3, append-only like has_state).
-  double schur_krylov_tol = 0.0;   ///< tolerance of the coarse Krylov solve (<= 0 = default 1e-10)
-  int schur_krylov_max_iters = 0;  ///< iteration budget (<= 0 = default 400)
-  // Field descriptors of the stage ("" = canonical role, bit-identical; otherwise stable role
-  // name OR block variable name, resolved at build against Model::conservative_vars()).
-  std::string schur_density, schur_momentum_x, schur_momentum_y, schur_energy;
-  // NEWTON OPTIONS of the IMEX source on the MONO-BLOCK path (wave 3: mono-block AMR options wired).
-  // ADDED AT THE END OF THE STRUCT (append-only, same reason as has_state / schur_*: an older .so loader
-  // does not read this field and falls back to the historical Newton with 2 frozen iters). DEFAULT {} =
-  // historical constants (2 / 0 / 0 / 1e-7 / 1.0 / none) -> backward_euler_source path (2a)
-  // bit-identical. Consumed by build_amr_compiled (the mono-block closure passes it to cpl->step).
-  NewtonOptions newton_options{};
-  // TEMPORAL METHOD of the block, transported as an INTEGER by the flat ABI (0 == kEuler, historical
-  // before, 1 == kSsprk3). ADDED AT THE END OF THE STRUCT (append-only, same reason as has_state /
-  // schur_* / newton_options: an older .so loader does not read this field and falls back SILENTLY
-  // to 0 == kEuler -- no corruption). Consumed by build_amr_compiled (mono-block -> cpl->step).
-  int time_method = 0;  // pops::AmrTimeMethod: 0 kEuler (default), 1 kSsprk3
-  // Zhang-Shu positivity floor (ADC-259): Density-role face-state + C/F-ghost-mean floor on the AMR
-  // transport. ADDED AT THE END OF THE STRUCT (append-only, same reason as has_state / schur_* /
-  // newton_options / time_method: an older flat-ABI .so loader does not read this field and falls
-  // back SILENTLY to 0 -- inactive, bit-identical). Consumed by build_amr_compiled (mono-block ->
-  // cpl->step / advance_transport). The COMPILED .so path now carries it too (ADC-322): the
-  // regenerated loader marshals pos_floor (pops_install_native_amr) into add_compiled_model ->
-  // set_compiled_block, which stores it here (mono) and passes it to the AmrCompiledBlockBuilder (multi).
-  double pos_floor = 0.0;
+  /// Coarse mesh geometry + coarse ownership policy (AMR strong-scaling).
+  struct Mesh {
+    int n = 128;                     ///< coarse cells per direction
+    double L = 1.0;                  ///< size of the square domain [0, L]^2
+    int regrid_every = 20;           ///< re-refinement cadence (0 = never after init)
+    bool distribute_coarse = false;  ///< distributed multi-box coarse (AMR strong-scaling)
+    int coarse_max_grid = 0;         ///< tile size of the distributed coarse (0 => n/2)
+  } mesh;
+  /// Physical + temporal treatment of the block (gamma, substeps, recon, IMEX, time method, Newton,
+  /// positivity floor). newton_options serves the IMEX source; pos_floor serves the transport.
+  struct Physics {
+    double gamma = static_cast<double>(kPhysicalDefaultGamma);
+    int substeps = 1;
+    bool recon_prim = false;  ///< recon == "primitive" (frozen by add_compiled_model)
+    bool imex = false;        ///< time == "imex": stiff implicit source (backward_euler)
+    int time_method = 0;      ///< pops::AmrTimeMethod: 0 kEuler (default), 1 kSsprk3
+    // NEWTON OPTIONS of the IMEX source on the MONO-BLOCK path (wave 3: mono-block AMR options wired).
+    // DEFAULT {} = historical constants (2 / 0 / 0 / 1e-7 / 1.0 / none) -> backward_euler_source path
+    // (2a) bit-identical. Consumed by build_amr_compiled (the mono-block closure passes it to cpl->step).
+    NewtonOptions newton_options{};
+    // Zhang-Shu positivity floor (ADC-259): Density-role face-state + C/F-ghost-mean floor on the AMR
+    // transport. 0 (default) -> inactive, bit-identical. Consumed by build_amr_compiled (mono-block ->
+    // cpl->step / advance_transport). The COMPILED .so path carries it too (ADC-322): the loader marshals
+    // it (pops_install_native_amr) into add_compiled_model -> set_compiled_block, which stores it here.
+    double pos_floor = 0.0;
+  } physics;
+  /// Refinement criterion frozen at build.
+  struct Regrid {
+    double threshold =
+        static_cast<double>(kAmrRefinementDisabledThreshold);  ///< no refinement (sentinel)
+  } regrid;
+  /// Coarse Poisson boundary condition + conductive wall (resolved by set_poisson).
+  struct Poisson {
+    BCRec bc;                              ///< coarse Poisson BC
+    std::function<bool(Real, Real)> wall;  ///< conductive wall predicate (empty = none)
+  } poisson;
+  /// Initial coarse seed: density only (historical) OR the FULL conservative state (priority).
+  struct InitialData {
+    bool has_density = false;
+    std::vector<double> density;  ///< initial coarse density (component 0), n*n
+    // FULL initial conservative state (all components), takes priority over `density` when has_state.
+    bool has_state = false;
+    std::vector<double>
+        state;  ///< ncomp*n*n, component-major c*n*n + j*n + i; ncomp == Model::n_vars
+  } initial;
+  /// Schur-CONDENSED SOURCE STAGE (amr-schur path, counterpart of System::set_source_stage).
+  /// enabled==false -> the explicit/imex path is unchanged, bit-identical. The field descriptors ("" =
+  /// canonical role) mirror SourceStageOptions and are resolved at build against Model::conservative_vars().
+  struct SchurStage {
+    bool enabled = false;  ///< true: GLOBAL condensed source stage (instead of local explicit/imex)
+    double theta = 0.5;    ///< theta-scheme of the condensed stage (0.5 = Crank-Nicolson)
+    double alpha = 1.0;    ///< electrostatic coupling constant of the condensed stage
+    bool strang = false;  ///< true: Strang H(dt/2) S(dt) H(dt/2); false: Lie H(dt) S(dt)
+    std::vector<double>
+        bz_field;              ///< coarse B_z(x,y) field, n*n row-major (required by the stage)
+    double krylov_tol = 0.0;   ///< tolerance of the coarse Krylov solve (<= 0 = default 1e-10)
+    int krylov_max_iters = 0;  ///< iteration budget (<= 0 = default 400)
+    // Field descriptors ("" = canonical role, bit-identical; otherwise stable role name OR block
+    // variable name).
+    std::string density, momentum_x, momentum_y, energy;
+  } schur;
+  /// Model-NAMED aux fields (ADC-291) + their per-field HALO policies (ADC-369). Seeded onto the coupler's
+  /// shared aux at build (build_amr_compiled), like bz_field; re-applied each update (persist across
+  /// regrid). Both empty -> bit-identical.
+  struct NamedAux {
+    std::map<int, std::vector<double>> fields;   ///< component (>= kAuxNamedBase) -> coarse field (n*n)
+    std::map<int, AuxHaloPolicy> halo_policies;  ///< component -> uniform boundary policy
+  } named_aux;
 };
 
 /// Type-erased closures of a compiled AMR block, produced by amr_dsl_block::build_amr_compiled and
 /// installed via AmrSystem::set_compiled_block. Symmetric with the std::function hooks of AmrSystem::Impl.
+///
+/// STRUCTURE (ADC-610). The 22 closures are grouped into the FIVE named tiers documented in the design
+/// (lifetime, base, stability, checkpoint, MPI gather) instead of one flat append-only list. A new
+/// closure goes INTO its tier -- the historical "add at the tail" idiom is retired (a regroup or add
+/// shifts POPS_HEADER_SIG anyway, which re-keys pops_native_abi_key, so a stale .so is REJECTED at
+/// add_native_block with a clear regenerate error, never silently truncated). The builder always
+/// populates every closure (none are optional except stability, empty without the trait).
 struct AmrCompiledHooks {
-  std::shared_ptr<void> coupler_holder;            ///< keeps the AmrCouplerMP<Model> alive
-  std::function<void(double)> step;                ///< one macro-step (periodic regrid included)
-  std::function<double()> max_speed;               ///< max wave speed (CFL step)
-  std::function<double()> mass;                    ///< coarse mass
-  std::function<int()> n_patches;                  ///< number of fine patches
-  std::function<std::vector<double>()> density;    ///< coarse density, n*n row-major
-  std::function<std::vector<double>()> potential;  ///< coarse-level phi, n*n row-major
-  // ADDED AT THE TAIL (additive, moves no existing field): index-space signatures of the fine
-  // patches. Mirror of n_patches (same box_array(), the COUNT becomes the BOXES). The .so loader that
-  // builds this struct is guarded by pops_native_abi_key: a .so generated BEFORE this addition must be
-  // recompiled (the guard already diagnoses it clearly); the tail addition makes it purely additive.
-  std::function<std::vector<PatchBox>()>
-      patch_boxes;  ///< index-space signatures of the fine patches
-  // ADDED AT THE TAIL (AMR StabilityPolicy, audit 2026-06, additive like patch_boxes): OPTIONAL step
-  // bounds of the block, evaluated on the COARSE level by AmrSystem::step_cfl mono-block. EMPTY if
-  // the model does not declare the HasSourceFrequency / HasStabilityDt traits (bit-identical). The
-  // pops_native_abi_key guard forces regeneration of older .so files (purely additive addition).
-  std::function<double()> source_frequency;  ///< coarse max of mu [1/s] (0 = does not constrain)
-  std::function<double()>
-      stability_dt;  ///< coarse min of the admissible step (0 = does not constrain)
-  // ADDED AT THE TAIL (IO v1, parity with System::set_clock): restoration of the macro-step counter of
-  // the MONO-BLOCK engine (the AmrCouplerMP coupler carries the regrid-cadence phase in a step_state;
-  // this hook writes it at restart). EMPTY is never the case (the builder always populates it); the
-  // pops_native_abi_key guard forces regeneration of older .so files (purely additive tail addition).
-  std::function<void(int)>
-      set_macro_step;  ///< restores the cadence (regrid) phase of the mono-block
-  // ADDED AT THE TAIL (mono-rank AMR checkpoint/restart, ADC-65; additive like set_macro_step): FULL
-  // CONSERVATIVE state per level (all components) + phi (warm-start) + imposition of a SAVED fine
-  // hierarchy. The mono-block coupler (AmrCouplerMP) carries them; the builder always populates them
-  // (never empty). The pops_native_abi_key guard forces regeneration of older .so files.
-  std::function<int()> n_levels;                        ///< number of levels (>= 1)
-  std::function<int()> n_vars;                          ///< conserved components of the block
-  std::function<std::vector<double>(int)> level_state;  ///< full state of level k (c*nf*nf+j*nf+i)
-  std::function<void(int, const std::vector<double>&)>
-      set_level_state;                                      ///< restores the state of level k
-  std::function<std::vector<double>(int)> level_potential;  ///< phi of level k (nf*nf row-major)
-  std::function<void(int, const std::vector<double>&)>
-      set_level_potential;  ///< restores phi of level k
-  std::function<void(const std::vector<PatchBox>&)>
-      set_hierarchy;  ///< imposes the saved fine patches
-  // ADDED AT THE TAIL (ADC-319, MPI ownership diagnostic; additive like the fields above): COARSE-level
-  // (base) box counts. coarse_local_boxes = cpl->coarse().local_size() (level-0 fabs OWNED by this rank);
-  // coarse_total_boxes = cpl->coarse().box_array().size() (total base boxes, all ranks). They reveal
-  // whether distribute_coarse actually distributes the base across ranks (local < total) or replicates
-  // it (local == total on every rank). The pops_native_abi_key guard forces regeneration of older .so
-  // files (purely additive tail addition); the builder always populates them (never empty).
-  std::function<int()> coarse_local_boxes;  ///< per-rank owned coarse (level-0) fab count
-  std::function<int()> coarse_total_boxes;  ///< global coarse box count (identical on all ranks)
-  // ADDED AT THE TAIL (np>1 mono-block AMR checkpoint, ADC-509; additive like the fields above): the
-  // GLOBAL (all_reduce_sum gather) counterparts of level_state / level_potential. Under MPI np>1 the
-  // per-level fabs are distributed (round-robin fine patches, optionally distributed coarse), so a
-  // bit-identical checkpoint must GATHER them onto every rank before rank 0 writes -- exactly like
-  // System::state_global / potential_global. The pops_native_abi_key guard forces regeneration of
-  // older .so files (purely additive tail addition); the builder always populates them (never empty).
-  std::function<std::vector<double>(int)> level_state_global;      ///< level k state, gathered
-  std::function<std::vector<double>(int)> level_potential_global;  ///< level k phi, gathered
+  /// LIFETIME tier: keeps the concrete coupler alive (every other closure captures it).
+  std::shared_ptr<void> coupler_holder;  ///< keeps the AmrCouplerMP<Model> alive
+  /// BASE tier: the macro-step + the primary observables.
+  struct Base {
+    std::function<void(double)> step;                ///< one macro-step (periodic regrid included)
+    std::function<double()> max_speed;               ///< max wave speed (CFL step)
+    std::function<double()> mass;                    ///< coarse mass
+    std::function<int()> n_patches;                  ///< number of fine patches
+    std::function<std::vector<double>()> density;    ///< coarse density, n*n row-major
+    std::function<std::vector<double>()> potential;  ///< coarse-level phi, n*n row-major
+  } base;
+  /// STABILITY tier: patch signatures + OPTIONAL step bounds (empty without the HasSourceFrequency /
+  /// HasStabilityDt traits, bit-identical). patch_boxes mirrors base.n_patches (count becomes boxes).
+  struct Stability {
+    std::function<std::vector<PatchBox>()>
+        patch_boxes;                           ///< index-space signatures of the fine patches
+    std::function<double()> source_frequency;  ///< coarse max of mu [1/s] (0 = does not constrain)
+    std::function<double()>
+        stability_dt;  ///< coarse min of the admissible step (0 = does not constrain)
+  } stability;
+  /// CHECKPOINT tier (ADC-65 mono-rank restart): cadence phase + per-level state/phi + hierarchy.
+  struct Checkpoint {
+    std::function<void(int)>
+        set_macro_step;  ///< restores the cadence (regrid) phase of the mono-block
+    std::function<int()> n_levels;                        ///< number of levels (>= 1)
+    std::function<int()> n_vars;                          ///< conserved components of the block
+    std::function<std::vector<double>(int)> level_state;  ///< full state of level k (c*nf*nf+j*nf+i)
+    std::function<void(int, const std::vector<double>&)>
+        set_level_state;                                      ///< restores the state of level k
+    std::function<std::vector<double>(int)> level_potential;  ///< phi of level k (nf*nf row-major)
+    std::function<void(int, const std::vector<double>&)>
+        set_level_potential;  ///< restores phi of level k
+    std::function<void(const std::vector<PatchBox>&)>
+        set_hierarchy;  ///< imposes the saved fine patches
+  } checkpoint;
+  /// MPI-GATHER tier: coarse ownership diagnostic (ADC-319) + the all_reduce_sum gather counterparts of
+  /// the checkpoint state/phi (ADC-509), so a bit-identical np>1 checkpoint gathers onto rank 0.
+  struct MpiGather {
+    std::function<int()> coarse_local_boxes;  ///< per-rank owned coarse (level-0) fab count
+    std::function<int()> coarse_total_boxes;  ///< global coarse box count (identical on all ranks)
+    std::function<std::vector<double>(int)> level_state_global;      ///< level k state, gathered
+    std::function<std::vector<double>(int)> level_potential_global;  ///< level k phi, gathered
+  } mpi_gather;
 };
 
 /// DEFERRED builder of a COMPILED block on the multi-block hierarchy: receives the SHARED layout (created

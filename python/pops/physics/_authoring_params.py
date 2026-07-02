@@ -9,7 +9,7 @@ from pops.ir import Expr, _wrap  # noqa: F401  -- _validate_hook_form isinstance
 from pops.ir.values import RuntimeParamRef  # noqa: F401
 from pops.ir.visitors import _children  # noqa: F401
 
-from .aux import _K_MAX_RUNTIME_PARAMS
+from .aux import _K_MAX_RUNTIME_PARAMS, max_runtime_params  # noqa: F401 -- literal + _pops-preferring
 
 
 class _RuntimeParamsMixin:
@@ -70,13 +70,19 @@ class _RuntimeParamsMixin:
         """Assigns to each RuntimeParamRef its STABLE index (sorted order of names) and returns the
         ordered list of nodes. CALLED before any brick codegen: without this call, to_cpp() would raise
         (index -1). Idempotent (reassigns the same indices). Rejects a model exceeding the C++ bound
-        kMaxRuntimeParams (otherwise the fixed-size array would overflow)."""
+        kMaxRuntimeParams EARLY, with a user-facing error naming the limit, the count, and the offending
+        params -- the fixed-size device array RuntimeParams::values[kMaxRuntimeParams] would otherwise be
+        read out of bounds on device (no bound check on the hot path get())."""
         nodes = self.runtime_param_nodes()
-        if len(nodes) > _K_MAX_RUNTIME_PARAMS:
+        limit = max_runtime_params()  # _pops.__max_runtime_params__ when present, else literal 32
+        if len(nodes) > limit:
+            names = ", ".join(repr(node.name) for node in nodes)
             raise ValueError(
-                "model '%s': %d runtime parameters > kMaxRuntimeParams bound=%d "
-                "(include/pops/runtime/runtime_params.hpp); reduce the number of runtime params"
-                % (self.name, len(nodes), _K_MAX_RUNTIME_PARAMS))
+                "model '%s': %d runtime parameters exceed kMaxRuntimeParams=%d "
+                "(include/pops/runtime/config/runtime_params.hpp); the fixed-size device array would "
+                "overflow. Reduce the number of runtime params or promote some to kind='const'. "
+                "Declared runtime params: %s"
+                % (self.name, len(nodes), limit, names))
         for k, node in enumerate(nodes):
             node.index = k
         return nodes

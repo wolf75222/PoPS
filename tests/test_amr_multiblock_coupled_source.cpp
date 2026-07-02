@@ -97,10 +97,10 @@ static AmrRuntime make_two_block(int N, double L, double B0, const std::vector<d
                                  const std::vector<double>& rho_neut, int stride_ions,
                                  int stride_neut) {
   AmrBuildParams bp;
-  bp.n = N;
-  bp.L = L;
-  bp.regrid_every = 0;      // hierarchie figee (multi-blocs)
-  bp.poisson_bc = BCRec{};  // periodique
+  bp.mesh.n = N;
+  bp.mesh.L = L;
+  bp.mesh.regrid_every = 0;      // hierarchie figee (multi-blocs)
+  bp.poisson.bc = BCRec{};  // periodique
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
   std::vector<AmrRuntimeBlock> blocks;
   detail::dispatch_model(exb_charge(+1.0, B0), [&](auto m) {

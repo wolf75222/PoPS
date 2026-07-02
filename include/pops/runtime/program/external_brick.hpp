@@ -9,12 +9,20 @@
 // descriptor. This is a HOST registry (no POPS_HD, no device state): it catalogs the brick's identity
 // and requirements; the brick's numerical kernel stays a separate concern wired by the codegen.
 
+#include <pops/runtime/dynamic/abi_key.hpp>  // POPS_ABI_KEY_LITERAL: brick .so's own ABI key (ADC-611)
+
 #include <cstddef>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace pops::runtime::program {
+
+// STRICT versioned schema of the external-brick manifest (ADC-611). Emitted at the top level of
+// pops_brick_manifest() so the host parser (pops.descriptors.parse_brick_manifest) refuses an
+// unversioned/legacy manifest with a clear "regenerate" error. MUST stay in LOCKSTEP with the Python
+// BRICK_MANIFEST_SCHEMA_VERSION.
+inline constexpr int kBrickManifestSchemaVersion = 1;
 
 // Escapes a string so a manifest field built from a user-supplied id/category/CSV is always valid
 // JSON: the two structural characters (`"` and `\`) plus every control character (`\n`, `\r`, `\t`,
@@ -152,13 +160,22 @@ class BrickRegistry {
   // Every registered manifest entry, in registration order.
   const std::vector<BrickManifestEntry>& entries() const { return entries_; }
 
-  // The manifest of every registered brick as the JSON `pops.lib.load_cpp_library` parses:
-  //   {"bricks": [{"id", "category", "requirements", "capabilities"}, ...]}
-  // requirements/capabilities are the CSV strings the macro registered (empty when none). This is
-  // the wire form a brick `.so` exports through `pops_brick_manifest()` (POPS_DEFINE_BRICK_MANIFEST);
-  // the host dlopens the `.so` and feeds the returned string to `_register_manifest`.
+  // The manifest of every registered brick as the STRICT versioned schema (ADC-611) the host parser
+  // `pops.descriptors.parse_brick_manifest` accepts:
+  //   {"schema_version": 1, "abi_key": "<this .so's key>",
+  //    "bricks": [{"id", "category", "requirements", "capabilities"}, ...]}
+  // schema_version + the four per-entry fields are ALWAYS present (the parser refuses a missing field or
+  // an unknown one); requirements/capabilities are the CSV strings the macro registered (empty "" when
+  // none). abi_key is the LITERAL of THIS translation unit (POPS_ABI_KEY_LITERAL, a preprocessor string,
+  // no symbol -- valid inside a brick .so that never links the module's abi_key()). This is the wire form
+  // a brick `.so` exports through `pops_brick_manifest()` (POPS_DEFINE_BRICK_MANIFEST); the host dlopens
+  // the `.so` and feeds the returned string to `_register_manifest`. Emitter and parser stay in lockstep.
   std::string to_json() const {
-    std::string out = "{\"bricks\":[";
+    std::string out = "{\"schema_version\":";
+    out += std::to_string(kBrickManifestSchemaVersion);
+    out += ",\"abi_key\":\"";
+    out += json_escape(POPS_ABI_KEY_LITERAL);
+    out += "\",\"bricks\":[";
     for (std::size_t k = 0; k < entries_.size(); ++k) {
       const BrickManifestEntry& e = entries_[k];
       if (k != 0)
