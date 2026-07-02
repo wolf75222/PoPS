@@ -609,6 +609,11 @@ class AmrSystem {
   /// Default 1/1 -> a single program closure call per macro-step. Kept SEPARATE from install_program so
   /// the generated .so ABI is untouched (the cadence is runtime metadata).
   POPS_EXPORT void set_program_cadence(int substeps, int stride);
+  /// Installed GLOBAL macro-step cadence (ADC-594, parity System): the current @c substeps / @c stride
+  /// the compiled Program runs at (default 1/1 with no cadence set). Const, side-effect-free -- the
+  /// structured ProgramRuntimeReport reads them; there was no Python-visible getter before.
+  POPS_EXPORT int program_substeps() const;
+  POPS_EXPORT int program_stride() const;
   /// Install the program-index -> AMR-block-index map (entry p = the AMR block index of Program block
   /// p), built by install_program after matching the .so's block names to the instantiated AMR blocks
   /// BY NAME (Spec 3 criterion 23, ADC-457). Empty clears it (identity: a single-block or order-matching

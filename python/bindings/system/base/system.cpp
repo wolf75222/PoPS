@@ -34,6 +34,7 @@
 #include <pops/runtime/program/module_metadata.hpp>  // read_module_metadata / required_aux: install-time requirement validation (ADC-446)
 #include <pops/runtime/program/program_context.hpp>  // ProgramContext: wraps the System for the .so dt_bound call (ADC-417)
 #include <pops/runtime/program/profiler.hpp>  // Profiler / ProfileScope: per-node / per-brick timing (ADC-459)
+#include <pops/runtime/program/program_runtime_state.hpp>  // ProgramRuntimeState: the extracted compiled-Program subsystem (ADC-594)
 
 #include <algorithm>
 #include <cmath>
@@ -238,73 +239,22 @@ struct System::Impl {
   std::map<std::string, std::shared_ptr<NewtonReport>> newton_reports_;
   double t = 0;
   int macro_step_ = 0;  // macro-step counter (0-indexed): feeds the per-block stride filter
-  std::function<void(double)>
-      program_step_;  // compiled time Program macro-step body (ADC-399); empty = historical path
-  // OPTIONAL compiled-Program dt bound (epic ADC-399 / ADC-417, spec s18). When a generated .so exports
-  // pops_program_has_dt_bound() == true, install_program stores a closure here that runs the .so's
-  // lowered dt_bound expression (a scalar reading state + reductions / hmin / max_wave_speed) for a
-  // given cfl. step_cfl then tightens dt to min(native CFL dt, program dt bound). Empty = no program dt
-  // bound -> the native CFL is used UNCHANGED. Referenced by SystemStepper::step_cfl (so the MockImpl in
-  // tests/test_strang_splitting.cpp carries a matching member).
-  std::function<Real(Real)> program_dt_bound_;
-  // Compiled-Program macro-step cadence (ADC-411), the SYSTEM-level orchestration around program_step_
-  // (cf. SystemStepper::step). Defaults 1/1 -> byte-identical to a single program_step_(dt) call.
-  // substeps n: program_step_ runs n times over eff_dt/n. stride M: the program runs once per M
-  // macro-steps with eff_dt = M*dt (GLOBAL hold-then-catch-up). Set by System::set_program_cadence.
-  int program_substeps_ = 1;
-  int program_stride_ = 1;
-  // IR hash of the installed compiled Program (the .so's pops_program_hash, ADC-406b). Empty until
-  // install_program records it. Serialized in the checkpoint so a restart against a DIFFERENT compiled
-  // Program is rejected fail-loud (mismatched buffers / cadence would be meaningless).
-  std::string installed_program_hash_;
+  // COMPILED TIME-PROGRAM RUNTIME STATE (ADC-594): the whole compiled-Program subsystem -- installed
+  // step + dt bound, cadence, IR-hash guard, name-based block map, runtime params, recorded
+  // diagnostics, the profiler, the scheduler cache and the multistep history rings -- extracted out of
+  // this god-object into ONE inspectable struct (include/pops/runtime/program/program_runtime_state.hpp),
+  // SHARED verbatim with AmrSystem::Impl (the documented common contract). The stepper reads only
+  // program_.step_ / substeps_ / stride_ / dt_bound_ (so the tests/test_strang_splitting.cpp MockImpl
+  // embeds the SAME struct); the diagnostics / params / cache / history / profiler are System-owned and
+  // NOT stepper-visible. Program invariants live here, block/field/layout invariants stay on Impl.
+  pops::runtime::program::ProgramRuntimeState program_;
   // RUNTIME FREEZE LIFECYCLE (ADC-592): false while assembling (the composition is mutable), true
   // once mark_bound() runs (the Python bind flow calls it LAST, after every install call). When true,
   // the structural setters (add_block / set_poisson / set_source_stage / install_program / ...) reject;
   // the runtime-data setters stay allowed. NOT referenced by SystemStepper -> no MockImpl impact (like
-  // installed_program_hash_ / program_block_map_), and false for a direct engine script that never
+  // program_.installed_hash_ / program_.block_map_), and false for a direct engine script that never
   // binds (the 159 C++/low-level tests) -> historical behavior unchanged.
   bool bound_ = false;
-  // NAME-BASED block binding (Spec 3 criterion 23, ADC-457): program-index -> system-index map. entry
-  // p holds the System block index that the Program's block p (in P.state declaration order) names.
-  // Built by install_program from the .so's pops_program_block_name table; read by ProgramContext to
-  // resolve a Program block index to the name-matched System block. EMPTY = identity (single-block /
-  // order-matching Program, or a ProgramContext built directly in a C++ test). Not referenced by
-  // SystemStepper -> no MockImpl impact (like program_diagnostics_ / installed_program_hash_).
-  std::vector<int> program_block_map_;
-  // COMPILED-PROGRAM SCALAR DIAGNOSTICS (ADC-414, spec op 23): name -> last value recorded by the
-  // installed program via P.record_scalar (ProgramContext::record_scalar). Retrievable AFTER a step
-  // (System::program_diagnostic / program_diagnostics). Lives HERE (not in the .so) so it outlives the
-  // step closure and Python can read it; not referenced by SystemStepper -> no MockImpl impact.
-  std::map<std::string, Real> program_diagnostics_;
-  // COMPILED-PROGRAM RUNTIME PARAMETERS (ADC-510, Spec 5 C5): program-block index -> current
-  // RuntimeParams of a compiled time Program that reads a dsl.Param(..., kind="runtime"). Seeded to
-  // the declaration defaults by install_program (the .so pops_program_param_* metadata) and overwritten
-  // at run time by set_program_params -- the installed step closure reads the CURRENT value through
-  // ProgramContext::program_params each step (no recompile, the AOT-native set_block_params contract,
-  // mirrored for the Program). Lives HERE (not in the .so) so the value change reaches the captured
-  // ctx; not referenced by SystemStepper -> no MockImpl impact (like program_diagnostics_).
-  std::map<int, RuntimeParams> program_block_params_;
-  // PER-NODE / PER-BRICK PROFILER (ADC-459, Spec 3 section 29-30): System-owned, like the diagnostics
-  // above -- NOT referenced by SystemStepper, so no MockImpl impact. Disabled by default (no hot-path
-  // cost when off). System::step / solve_fields wrap themselves in a ProfileScope into it.
-  pops::runtime::program::Profiler profiler_;
-  // SCHEDULER VALUE CACHE (ADC-458, Spec 3 section 17-18 + 30): the held-node cache (every(N).hold /
-  // accumulate_dt) keyed by IR node id. SYSTEM-OWNED (not the .so step closure) so the checkpoint can
-  // serialize it, exactly like the history rings above; every ProgramContext forwards its cache_* seam
-  // ops to this single manager. Empty by default -> a program with no held schedule never touches it.
-  pops::runtime::program::CacheManager program_cache_;
-  // MULTISTEP HISTORY (ADC-406a): SYSTEM-OWNED ring buffers for multistep schemes (Adams-Bashforth and
-  // friends). A name maps to a ring of (depth = max lag + 1) MultiFabs, newest at [0], each
-  // co-distributed with block 0's state (ba/dm, the block's ncomp). The history lives HERE (not in the
-  // .so closure) so a later checkpoint slice (ADC-406b) can serialize it. depth_[name] is the ring
-  // length; initialized_[name] is false until the first store (a read before then is a fail-loud
-  // config error -- spec error 17). Empty by default -> the historical / single-step paths are untouched.
-  struct HistoryManager {
-    std::map<std::string, std::vector<MultiFab>> histories;  // name -> ring (newest at [0])
-    std::map<std::string, int> depth;                        // name -> ring length (max lag + 1)
-    std::map<std::string, bool> initialized;                 // name -> stored at least once
-  };
-  HistoryManager hist_;
   std::vector<std::function<void(Real)>> couplings;  // inter-species coupled sources (splitting)
   // GLOBAL time-step bounds (System::add_dt_bound): evaluated ONCE per step (host) by
   // step_cfl / step_adaptive. Hook for non-cell-local constraints (multi-block coupling,
@@ -524,7 +474,7 @@ struct System::Impl {
   // host path -- no SystemStepper edit (Profiler stays an Impl member the stepper never reads). The
   // count() is a single predictable branch when profiling is off (zero hot-path cost).
   void solve_fields() {
-    profiler_.count("kernels");
+    program_.profiler_.count("kernels");
     fields_.solve_fields();
   }
   // Per-stage field solve (ADC-409): re-solve + re-fill the shared aux from a stage state of the
@@ -2090,7 +2040,7 @@ std::vector<double> System::get_primitive_state(const std::string& name) {
 }
 
 void System::solve_fields() {
-  pops::runtime::program::ProfileScope s(p_->profiler_, "field_solve");
+  pops::runtime::program::ProfileScope s(p_->program_.profiler_, "field_solve");
   p_->solve_fields();
   // ELLIPTIC-SOLVER NATIVE COUNTERS (Spec 5 sec.13.11.1, ADC-479 criteria 42/43). The opaque
   // "field_solve" scope hides where the elliptic solve (96-99.9% of step cost) spends its time: read
@@ -2099,15 +2049,15 @@ void System::solve_fields() {
   // before phi is read), preserving the device-fence ordering. Cheap int/double reads, all guarded
   // by enabled() -> ZERO cost when profiling is off (count/record are no-ops too, but the accessor
   // reads are skipped entirely).
-  if (p_->profiler_.enabled()) {
+  if (p_->program_.profiler_.enabled()) {
     // mg_cycles / krylov_iters ACCUMULATE (total elliptic iteration work over the run); elliptic_bottom
     // records the coarsest-grid self-time as a timing sample. mg_levels is a STRUCTURAL CONSTANT (the
     // hierarchy depth), so count_max (peak) reports the actual level count instead of summing it per
     // step (same idiom as scratch_peak_bytes). All four are honest 0 for a direct FFT solver.
-    p_->profiler_.count("mg_cycles", p_->fields_.last_mg_cycles());
-    p_->profiler_.count("krylov_iters", p_->fields_.last_krylov_iters());
-    p_->profiler_.count_max("mg_levels", p_->fields_.last_num_levels());
-    p_->profiler_.record("elliptic_bottom", p_->fields_.last_bottom_seconds());
+    p_->program_.profiler_.count("mg_cycles", p_->fields_.last_mg_cycles());
+    p_->program_.profiler_.count("krylov_iters", p_->fields_.last_krylov_iters());
+    p_->program_.profiler_.count_max("mg_levels", p_->fields_.last_num_levels());
+    p_->program_.profiler_.record("elliptic_bottom", p_->fields_.last_bottom_seconds());
   }
 }
 
@@ -2116,19 +2066,19 @@ void System::solve_fields() {
 // coarse phases (step, field_solve); the per-Program-node / per-native-brick granularity is wired
 // through the compiled-program ProgramContext as a follow-up.
 void System::enable_profiling() {
-  p_->profiler_.enable();
+  p_->program_.profiler_.enable();
 }
 void System::disable_profiling() {
-  p_->profiler_.disable();
+  p_->program_.profiler_.disable();
 }
 bool System::is_profiling() const {
-  return p_->profiler_.enabled();
+  return p_->program_.profiler_.enabled();
 }
 void System::reset_profiling() {
-  p_->profiler_.reset();
+  p_->program_.profiler_.reset();
 }
 std::string System::profile_report() const {
-  return p_->profiler_.report();
+  return p_->program_.profiler_.report();
 }
 std::vector<RuntimeDiagnosticEvent> System::solver_diagnostics() const {
   return p_->fields_.combined_diagnostics_report().events;
@@ -2137,7 +2087,7 @@ std::vector<RuntimeDiagnosticEvent> System::solver_diagnostics() const {
 // times each Program node into it, so per-node scopes accumulate in the SAME table as the coarse
 // step / field_solve phases. POPS_EXPORT: resolved by a generated problem.so across the dlopen boundary.
 POPS_EXPORT pops::runtime::program::Profiler& System::profiler() {
-  return p_->profiler_;
+  return p_->program_.profiler_;
 }
 
 void System::solve_fields_from_state(int block_idx, const MultiFab& U_stage) {
@@ -2149,16 +2099,16 @@ void System::solve_fields_from_state(int block_idx, const MultiFab& U_stage) {
 // once (U_stages indexed by block index; nullptr -> the block's live state), then re-fills the shared
 // aux. POPS_EXPORT: resolved by a generated problem.so (ProgramContext) across the dlopen boundary.
 POPS_EXPORT void System::solve_fields_from_blocks(const std::vector<const MultiFab*>& U_stages) {
-  pops::runtime::program::ProfileScope s(p_->profiler_, "field_solve");
+  pops::runtime::program::ProfileScope s(p_->program_.profiler_, "field_solve");
   p_->solve_fields_from_blocks(U_stages);
   // Same elliptic-solver counters as System::solve_fields (ADC-479 criteria 42/43), read back AFTER
   // the coupled solve returns -- i.e. after its internal device_fence() (system_field_solver.hpp). The
   // coupled multi-block solve uses the SAME ell_ solver, so the stats are populated identically.
-  if (p_->profiler_.enabled()) {
-    p_->profiler_.count("mg_cycles", p_->fields_.last_mg_cycles());
-    p_->profiler_.count("krylov_iters", p_->fields_.last_krylov_iters());
-    p_->profiler_.count_max("mg_levels", p_->fields_.last_num_levels());
-    p_->profiler_.record("elliptic_bottom", p_->fields_.last_bottom_seconds());
+  if (p_->program_.profiler_.enabled()) {
+    p_->program_.profiler_.count("mg_cycles", p_->fields_.last_mg_cycles());
+    p_->program_.profiler_.count("krylov_iters", p_->fields_.last_krylov_iters());
+    p_->program_.profiler_.count_max("mg_levels", p_->fields_.last_num_levels());
+    p_->program_.profiler_.record("elliptic_bottom", p_->fields_.last_bottom_seconds());
   }
 }
 
@@ -2194,8 +2144,8 @@ POPS_EXPORT void System::set_block_elliptic_field(
 // hold-then-catch-up semantics of the macro-step counter, the condensed source stage and the couplings live
 // now in the header (bit-identical). The public API stays unchanged.
 void System::step(double dt) {
-  pops::runtime::program::ProfileScope s(p_->profiler_, "step");
-  p_->profiler_.count("steps");
+  pops::runtime::program::ProfileScope s(p_->program_.profiler_, "step");
+  p_->program_.profiler_.count("steps");
   p_->stepper_.step(dt);
 }
 void System::advance(double dt, int nsteps) {
@@ -2267,21 +2217,24 @@ std::vector<double> System::eval_rhs(const std::string& name) {
 // Compiled time-program seam (epic ADC-399 / ADC-401): a generated problem.so installs its macro-step
 // body and reaches per-block storage through these accessors (Impl is private to this TU).
 void System::install_program_step(std::function<void(double)> step) {
-  p_->program_step_ = std::move(step);
+  p_->program_.step_ = std::move(step);
 }
 // Compiled-Program macro-step cadence (ADC-411): SYSTEM-level substeps + stride around the installed
 // program closure (cf. SystemStepper::step). Kept separate from install_program so the .so ABI is
 // untouched. Validates substeps >= 1 && stride >= 1 (fail-loud: a non-positive cadence is meaningless).
 void System::set_program_cadence(int substeps, int stride) {
   require_assembling(p_->bound_, "set_program_cadence");  // frozen once pops.bind completes (ADC-592)
-  if (substeps < 1)
-    throw std::invalid_argument("System::set_program_cadence: substeps >= 1 required (got " +
-                                std::to_string(substeps) + ")");
-  if (stride < 1)
-    throw std::invalid_argument("System::set_program_cadence: stride >= 1 required (got " +
-                                std::to_string(stride) + ")");
-  p_->program_substeps_ = substeps;
-  p_->program_stride_ = stride;
+  // Program subsystem owns the cadence validation + storage (ADC-594): the guard message names
+  // "System::set_program_cadence" verbatim (unchanged wording), keeping the pinned error intact.
+  p_->program_.set_cadence(substeps, stride, "System");
+}
+// Read the installed GLOBAL cadence (ADC-594): the tiny const getters the ProgramRuntimeReport reads
+// through the bindings (there was no Python-visible getter before). Default 1/1 with no program.
+int System::program_substeps() const {
+  return p_->program_.substeps_;
+}
+int System::program_stride() const {
+  return p_->program_.stride_;
 }
 int System::n_blocks() const {
   return static_cast<int>(p_->sp.size());
@@ -2343,8 +2296,8 @@ MultiFab System::alloc_scalar_field(int n_comp, int n_ghost) {
 
 // Multistep history seam (ADC-406a): a generated problem.so declares / reads / writes a named history
 // field across macro-steps (Adams-Bashforth), reaching the SYSTEM-OWNED ring buffers through these
-// accessors. The history lives in Impl::hist_ (private to this TU) so a later checkpoint slice
-// (ADC-406b) can serialize it without touching the .so ABI.
+// accessors. The rings live in Impl::program_.hist_ (the extracted Program subsystem, ADC-594) so a
+// later checkpoint slice (ADC-406b) can serialize them without touching the .so ABI.
 MultiFab& System::register_history(const std::string& name, int lag) {
   if (lag < 1)
     throw std::runtime_error("System::register_history: lag must be >= 1 (got " +
@@ -2354,22 +2307,22 @@ MultiFab& System::register_history(const std::string& name, int lag) {
         "System::register_history: no block exists yet; a history is co-distributed with block 0's "
         "state (add the block before installing the program)");
   const int want_depth = lag + 1;
-  auto it = p_->hist_.histories.find(name);
-  if (it != p_->hist_.histories.end()) {
+  auto it = p_->program_.hist_.histories.find(name);
+  if (it != p_->program_.hist_.histories.end()) {
     // Idempotent re-registration: the ring depth is the MAX lag any caller requests. A read at the
     // declared max lag and the store (which only needs the current slot, register_history(name, 1))
     // can register in EITHER order without conflict -- a smaller request is a no-op (returns the
     // existing current slot), a larger one grows the ring (appending zero-filled deeper slots; the
     // current slot [0] and the already-stored slots are preserved). A program reads each name at one
     // fixed lag, so the depth converges in the first step and never changes again.
-    if (want_depth > p_->hist_.depth[name]) {
+    if (want_depth > p_->program_.hist_.depth[name]) {
       const int ncomp = it->second[0].ncomp();
-      for (int k = p_->hist_.depth[name]; k < want_depth; ++k) {
+      for (int k = p_->program_.hist_.depth[name]; k < want_depth; ++k) {
         MultiFab slot(p_->ba, p_->dm, ncomp, 1);
         slot.set_val(Real(0));
         it->second.push_back(std::move(slot));
       }
-      p_->hist_.depth[name] = want_depth;
+      p_->program_.hist_.depth[name] = want_depth;
     }
     return it->second[0];
   }
@@ -2385,57 +2338,49 @@ MultiFab& System::register_history(const std::string& name, int lag) {
     slot.set_val(Real(0));
     ring.push_back(std::move(slot));
   }
-  auto& stored = p_->hist_.histories.emplace(name, std::move(ring)).first->second;
-  p_->hist_.depth[name] = want_depth;
-  p_->hist_.initialized[name] = false;
+  auto& stored = p_->program_.hist_.histories.emplace(name, std::move(ring)).first->second;
+  p_->program_.hist_.depth[name] = want_depth;
+  p_->program_.hist_.initialized[name] = false;
   return stored[0];
 }
 
 MultiFab& System::read_history(const std::string& name, int lag) {
-  auto it = p_->hist_.histories.find(name);
-  if (it == p_->hist_.histories.end())
+  auto it = p_->program_.hist_.histories.find(name);
+  if (it == p_->program_.hist_.histories.end())
     throw std::runtime_error("System::read_history: unknown history '" + name +
                              "' (register it first)");
-  if (lag < 0 || lag >= p_->hist_.depth[name])
+  if (lag < 0 || lag >= p_->program_.hist_.depth[name])
     throw std::runtime_error("System::read_history: lag=" + std::to_string(lag) +
                              " out of range for history '" + name + "' (depth " +
-                             std::to_string(p_->hist_.depth[name]) + ")");
-  if (!p_->hist_.initialized[name])
+                             std::to_string(p_->program_.hist_.depth[name]) + ")");
+  if (!p_->program_.hist_.initialized[name])
     throw std::runtime_error("history '" + name + "' with lag=" + std::to_string(lag) +
                              " was requested but not initialized");
   return it->second[static_cast<std::size_t>(lag)];
 }
 
 void System::store_history(const std::string& name, const MultiFab& value) {
-  auto it = p_->hist_.histories.find(name);
-  if (it == p_->hist_.histories.end())
+  auto it = p_->program_.hist_.histories.find(name);
+  if (it == p_->program_.hist_.histories.end())
     throw std::runtime_error("System::store_history: unknown history '" + name +
                              "' (register it first)");
   std::vector<MultiFab>& ring = it->second;
   // Copy the valid cells of value into the current slot [0] (identical layout: ring slots and the
   // block state share (ba, dm); lincomb(dst, 1, src, 0, src) is a valid-cell deep copy).
   pops::lincomb(ring[0], Real(1), value, Real(0), value);
-  if (!p_->hist_.initialized[name]) {
+  if (!p_->program_.hist_.initialized[name]) {
     // COLD START (first store): broadcast into every deeper slot so a multistep step 0 reads the same
     // value at every lag (degenerating to a one-step method). Deterministic + machine-precision exact.
     for (std::size_t k = 1; k < ring.size(); ++k)
       pops::lincomb(ring[k], Real(1), value, Real(0), value);
-    p_->hist_.initialized[name] = true;
+    p_->program_.hist_.initialized[name] = true;
   }
 }
 
 void System::rotate_histories() {
-  // Shift each ring one step (slot k gets slot k-1's value, newest-to-oldest), called ONCE at the end
-  // of a macro-step. O(1) std::swap of the MultiFab handles (not a deep pops::lincomb copy): the swap
-  // chain from the deepest slot down to 1 leaves every read slot k >= 1 holding slot k-1's old value
-  // (identical to a copy-shift) and RECYCLES the now-oldest buffer into slot [0]. Slot [0] is always
-  // overwritten by the next store before any read (the AB2 body stores then reads lag 1), so recycling
-  // it is harmless and avoids reallocation; the slots stay co-distributed (same (ba, dm)).
-  for (auto& [name, ring] : p_->hist_.histories) {
-    (void)name;
-    for (std::size_t k = ring.size(); k-- > 1;)
-      std::swap(ring[k], ring[k - 1]);
-  }
+  // Shift each ring one step at the end of a macro-step (O(1) std::swap chain, buffer recycled into
+  // slot [0]); the grid-free ring bookkeeping lives in the extracted Program subsystem (ADC-594).
+  p_->program_.hist_.rotate();
 }
 
 // Multistep history checkpoint/restart seam (ADC-406b): the System owns the rings, so the checkpoint
@@ -2443,29 +2388,24 @@ void System::rotate_histories() {
 // gather (gather_global) / scatter (write_state) machinery as the block state, so the round-trip is
 // MPI-safe and bit-identical under np>1. No .so checkpoint_extra ABI is needed for the buffers.
 std::vector<std::string> System::history_names() const {
-  std::vector<std::string> out;
-  out.reserve(p_->hist_.histories.size());
-  for (const auto& [name, ring] : p_->hist_.histories) {
-    (void)ring;
-    out.push_back(name);
-  }
-  return out;
+  // enumeration lives in the extracted Program subsystem (ADC-594)
+  return p_->program_.hist_.names();
 }
 int System::history_depth(const std::string& name) const {
-  auto it = p_->hist_.depth.find(name);
-  if (it == p_->hist_.depth.end())
+  auto it = p_->program_.hist_.depth.find(name);
+  if (it == p_->program_.hist_.depth.end())
     throw std::runtime_error("System::history_depth: unknown history '" + name + "'");
   return it->second;
 }
 int System::history_ncomp(const std::string& name) const {
-  auto it = p_->hist_.histories.find(name);
-  if (it == p_->hist_.histories.end())
+  auto it = p_->program_.hist_.histories.find(name);
+  if (it == p_->program_.hist_.histories.end())
     throw std::runtime_error("System::history_ncomp: unknown history '" + name + "'");
   return it->second[0].ncomp();
 }
 std::vector<double> System::history_global(const std::string& name, int slot) const {
-  auto it = p_->hist_.histories.find(name);
-  if (it == p_->hist_.histories.end())
+  auto it = p_->program_.hist_.histories.find(name);
+  if (it == p_->program_.hist_.histories.end())
     throw std::runtime_error("System::history_global: unknown history '" + name + "'");
   const std::vector<MultiFab>& ring = it->second;
   if (slot < 0 || slot >= static_cast<int>(ring.size()))
@@ -2476,19 +2416,19 @@ std::vector<double> System::history_global(const std::string& name, int slot) co
   return gather_global(ring[static_cast<std::size_t>(slot)], ring[0].ncomp(), nx(), ny());
 }
 bool System::history_initialized(const std::string& name) const {
-  auto it = p_->hist_.initialized.find(name);
-  if (it == p_->hist_.initialized.end())
+  auto it = p_->program_.hist_.initialized.find(name);
+  if (it == p_->program_.hist_.initialized.end())
     throw std::runtime_error("System::history_initialized: unknown history '" + name + "'");
   return it->second;
 }
 void System::restore_history(const std::string& name, int slot, const std::vector<double>& values) {
-  auto it = p_->hist_.histories.find(name);
-  if (it == p_->hist_.histories.end()) {
+  auto it = p_->program_.hist_.histories.find(name);
+  if (it == p_->program_.hist_.histories.end()) {
     // The program will re-register the ring on its first post-restart step, but we restore BEFORE that
     // step; register it now (depth = slot + 1, grown as deeper slots arrive) so the values land. Uses
     // the SAME co-distributed (ba, dm, block 0 ncomp) ring as register_history.
     register_history(name, slot >= 1 ? slot : 1);
-    it = p_->hist_.histories.find(name);
+    it = p_->program_.hist_.histories.find(name);
   }
   std::vector<MultiFab>& ring = it->second;
   if (slot < 0)
@@ -2503,7 +2443,7 @@ void System::restore_history(const std::string& name, int slot, const std::vecto
       s.set_val(Real(0));
       ring.push_back(std::move(s));
     }
-    p_->hist_.depth[name] = static_cast<int>(ring.size());
+    p_->program_.hist_.depth[name] = static_cast<int>(ring.size());
   }
   // Scatter the GLOBAL component-major buffer into the slot's fab: reuse the Impl multi-box
   // write_state (the SAME scatter set_state uses), the true inverse of the multi-box gather
@@ -2513,8 +2453,8 @@ void System::restore_history(const std::string& name, int slot, const std::vecto
   p_->write_state(ring[static_cast<std::size_t>(slot)], ring[0].ncomp(), values);
 }
 void System::set_history_initialized(const std::string& name, bool initialized) {
-  auto it = p_->hist_.initialized.find(name);
-  if (it == p_->hist_.initialized.end())
+  auto it = p_->program_.hist_.initialized.find(name);
+  if (it == p_->program_.hist_.initialized.end())
     throw std::runtime_error("System::set_history_initialized: unknown history '" + name +
                              "' (restore its slots first)");
   it->second = initialized;
@@ -2718,7 +2658,7 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
   // cf. _PROGRAM_CPP_TEMPLATE) is serialized in the checkpoint so a restart against a DIFFERENT
   // compiled Program is rejected fail-loud. Missing symbol (older module) -> empty hash, no guard.
   auto hash_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_hash"));
-  p_->installed_program_hash_ = hash_fn ? std::string(hash_fn()) : std::string();
+  p_->program_.installed_hash_ = hash_fn ? std::string(hash_fn()) : std::string();
   // OPTIONAL dt bound (epic ADC-399 / ADC-417, spec s18). A Program may export a SECOND ABI pair --
   // pops_program_has_dt_bound() and pops_program_dt_bound(ProgramContext*, Real cfl) -- alongside
   // pops_install_program. When present AND has_dt_bound() is true, store a closure that builds a
@@ -2731,17 +2671,17 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
   auto dt_bound = reinterpret_cast<dt_bound_t>(pops::dynlib::sym(h, "pops_program_dt_bound"));
   if (has_dt && dt_bound && has_dt()) {
     System* self = this;
-    p_->program_dt_bound_ = [self, dt_bound](Real cfl) -> Real {
+    p_->program_.dt_bound_ = [self, dt_bound](Real cfl) -> Real {
       pops::runtime::program::ProgramContext ctx(self);
       return dt_bound(&ctx, cfl);
     };
   } else {
-    p_->program_dt_bound_ = nullptr;  // no program dt bound -> native CFL unchanged
+    p_->program_.dt_bound_ = nullptr;  // no program dt bound -> native CFL unchanged
   }
   // .so left loaded for the duration of the process (the installed closure points to code in it).
 }
 std::string System::installed_program_hash() const {
-  return p_->installed_program_hash_;
+  return p_->program_.installed_hash_;
 }
 // RUNTIME FREEZE LIFECYCLE (ADC-592). mark_bound() is the ONE transition into the frozen state; the
 // Python bind flow calls it LAST (after every install call), so the install sequence itself never
@@ -2764,28 +2704,28 @@ std::string System::lifecycle_state() const {
 // SCHEDULER VALUE CACHE (ADC-458): the System-owned CacheManager every ProgramContext forwards to. The
 // .so resolves this across the dlopen boundary (POPS_EXPORT), so the step closure's cache_store_aux /
 // cache_should_update reach the SAME manager the checkpoint serializes.
-POPS_EXPORT pops::runtime::program::CacheManager& System::program_cache() { return p_->program_cache_; }
+POPS_EXPORT pops::runtime::program::CacheManager& System::program_cache() { return p_->program_.cache_; }
 // Scheduler-cache checkpoint/restart seam (ADC-458, Spec 3 section 30): the System owns the cache, so
 // the facade (sim.checkpoint / sim.restart) gathers and restores it DIRECTLY -- reusing the SAME global
 // gather (gather_global, via copy_state) / scatter (write_state) machinery as the block state and the
 // history rings, so the round-trip is MPI-safe and bit-identical under np>1. Mirrors the history seam.
-std::vector<int> System::program_cache_nodes() const { return p_->program_cache_.node_ids(); }
+std::vector<int> System::program_cache_nodes() const { return p_->program_.cache_.node_ids(); }
 std::string System::program_cache_name(int node_id) const {
-  return p_->program_cache_.name_of(node_id);
+  return p_->program_.cache_.name_of(node_id);
 }
 int System::program_cache_last_update_step(int node_id) const {
-  return p_->program_cache_.last_update_step(node_id);
+  return p_->program_.cache_.last_update_step(node_id);
 }
 double System::program_cache_accumulated_dt(int node_id) const {
-  return static_cast<double>(p_->program_cache_.accumulated_dt_of(node_id));
+  return static_cast<double>(p_->program_.cache_.accumulated_dt_of(node_id));
 }
-int System::program_cache_ncomp(int node_id) const { return p_->program_cache_.ncomp_of(node_id); }
-int System::program_cache_ngrow(int node_id) const { return p_->program_cache_.ngrow_of(node_id); }
+int System::program_cache_ncomp(int node_id) const { return p_->program_.cache_.ncomp_of(node_id); }
+int System::program_cache_ngrow(int node_id) const { return p_->program_.cache_.ngrow_of(node_id); }
 std::vector<double> System::program_cache_global(int node_id) const {
   // Reuse the Impl multi-box gather (copy_state -> gather_global): the cache value is co-distributed
   // with block 0's storage (ba/dm), so this is the SAME component-major gather state_global / history_
   // global use (device_fence + all_reduce). All ranks call it; @throws if @p node_id is absent.
-  const MultiFab& v = p_->program_cache_.value_of(node_id);
+  const MultiFab& v = p_->program_.cache_.value_of(node_id);
   return p_->copy_state(v, v.ncomp());
 }
 void System::restore_program_cache(int node_id, int ncomp, int ngrow, int last_update_step,
@@ -2803,7 +2743,7 @@ void System::restore_program_cache(int node_id, int ncomp, int ngrow, int last_u
   MultiFab value(p_->ba, p_->dm, ncomp, ngrow);
   value.set_val(Real(0));
   p_->write_state(value, ncomp, values);
-  p_->program_cache_.restore_slot(node_id, std::move(value), last_update_step,
+  p_->program_.cache_.restore_slot(node_id, std::move(value), last_update_step,
                                   static_cast<Real>(accumulated_dt), name);
 }
 // Configured field (Poisson) solver token, owned by SystemFieldSolver (p_solver, default
@@ -2816,10 +2756,10 @@ std::string System::poisson_solver() const {
 // matching the .so's block names; ProgramContext reads it to translate a Program block index to the
 // name-matched System block index. POPS_EXPORT: resolved by the generated .so across the dlopen boundary.
 void System::set_program_block_map(const std::vector<int>& prog_to_sys) {
-  p_->program_block_map_ = prog_to_sys;
+  p_->program_.block_map_ = prog_to_sys;
 }
 const std::vector<int>& System::program_block_map() const {
-  return p_->program_block_map_;
+  return p_->program_.block_map_;
 }
 // Block positivity projection (ADC-177) reached by a compiled Program (ProgramContext::apply_projection,
 // spec op 21). REUSES the block's own projection closure; a block without one is a no-op.
@@ -2829,53 +2769,31 @@ void System::block_project(int b, MultiFab& u) {
     proj(u);
 }
 // Compiled-Program scalar diagnostics (ADC-414, spec op 23): the installed program writes named scalars
-// via P.record_scalar (ProgramContext::record_scalar); Python reads them after the step.
+// via P.record_scalar (ProgramContext::record_scalar); Python reads them after the step. Delegated to
+// the extracted Program subsystem (ADC-594); the read keeps the "System::program_diagnostic" wording.
 void System::record_program_diagnostic(const std::string& name, Real value) {
-  p_->program_diagnostics_[name] = value;
+  p_->program_.record_diagnostic(name, value);
 }
 Real System::program_diagnostic(const std::string& name) const {
-  auto it = p_->program_diagnostics_.find(name);
-  if (it == p_->program_diagnostics_.end())
-    throw std::out_of_range("System::program_diagnostic: no diagnostic named '" + name +
-                            "' has been recorded (the installed Program must P.record_scalar it)");
-  return it->second;
+  return p_->program_.diagnostic(name, "System");
 }
 std::map<std::string, Real> System::program_diagnostics() const {
-  return p_->program_diagnostics_;
+  return p_->program_.diagnostics();
 }
 // COMPILED-PROGRAM RUNTIME PARAMETERS (ADC-510, Spec 5 C5). Seed/overwrite/read the per-PROGRAM-block
-// RuntimeParams the installed step closure reads through ProgramContext::program_params. The store
-// lives in Impl so a value change reaches the captured ctx -- the no-recompile contract mirrored from
-// the AOT-native set_block_params (shared vector). install_program seeds the defaults; Python's
-// _install_params overwrites the supplied values (validated against the .so param-name metadata).
+// RuntimeParams the installed step closure reads through ProgramContext::program_params. Delegated to
+// the extracted Program subsystem (ADC-594): the store lives in program_ so a value change reaches the
+// captured ctx -- the no-recompile contract mirrored from the AOT-native set_block_params. The fail-loud
+// messages keep the "System::set_program_params" wording (unchanged). install_program seeds the
+// defaults; Python's _install_params overwrites the supplied values (validated against the .so metadata).
 void System::seed_program_params(int prog_block, const std::vector<double>& defaults) {
-  RuntimeParams rp;
-  const int count = static_cast<int>(defaults.size());
-  rp.count = count > kMaxRuntimeParams ? kMaxRuntimeParams : count;
-  for (int k = 0; k < rp.count; ++k)
-    rp.values[k] = static_cast<Real>(defaults[static_cast<std::size_t>(k)]);
-  p_->program_block_params_[prog_block] = rp;  // idempotent: re-seeding resets to the declaration baseline
+  p_->program_.seed_params(prog_block, defaults);  // idempotent: re-seeding resets to the baseline
 }
 void System::set_program_params(int prog_block, const std::vector<double>& values) {
-  auto it = p_->program_block_params_.find(prog_block);
-  if (it == p_->program_block_params_.end())
-    throw std::out_of_range(
-        "System::set_program_params: program block " + std::to_string(prog_block) +
-        " has no runtime parameter (the installed compiled Program declares none for it; declare "
-        "dsl.Param(..., kind='runtime') in the model the Program lowers, or omit params=)");
-  RuntimeParams& rp = it->second;
-  if (static_cast<int>(values.size()) != rp.count)
-    throw std::runtime_error("System::set_program_params: program block " +
-                             std::to_string(prog_block) + " expects " + std::to_string(rp.count) +
-                             " runtime parameters, received " + std::to_string(values.size()));
-  for (int k = 0; k < rp.count; ++k)
-    rp.values[k] = static_cast<Real>(values[static_cast<std::size_t>(k)]);  // current value, next step reads it
+  p_->program_.set_params(prog_block, values, "System");
 }
 RuntimeParams System::program_params(int prog_block) const {
-  auto it = p_->program_block_params_.find(prog_block);
-  // Unseeded block (no runtime param): a default RuntimeParams (count 0) -- a kernel that reads no
-  // param is unaffected (it never calls get()). By value: device-clean, trivially copyable.
-  return it == p_->program_block_params_.end() ? RuntimeParams{} : it->second;
+  return p_->program_.params(prog_block);
 }
 std::vector<double> System::get_state(const std::string& name) {
   Impl::Species& s = p_->find(name);

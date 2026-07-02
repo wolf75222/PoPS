@@ -5,6 +5,7 @@
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::dispatch_amr_compiled + build_amr_compiled (shared path)
 #include <pops/runtime/amr/amr_runtime.hpp>  // AmrRuntime + AmrRuntimeBlock (multi-block runtime engine)
 #include <pops/runtime/program/profiler.hpp>  // Profiler: AMR / MPI phase timings (Spec 5 criterion 43, ADC-479)
+#include <pops/runtime/program/program_runtime_state.hpp>  // ProgramRuntimeState: the shared compiled-Program subsystem (ADC-594)
 #include <pops/runtime/program/module_metadata.hpp>  // read_module_metadata / required_blocks / required_solver: install-time validation (ADC-508)
 #include <pops/runtime/builders/block/amr_block_seam.hpp>  // ADC-335: per-transport AMR build seam (build_amr_block/_compiled_<transport>)
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model + compiled bricks
@@ -241,56 +242,33 @@ struct AmrSystem::Impl {
   bool clock_restore_pending_ =
       false;  // a set_clock is waiting to be pushed to the engine (at the next step)
 
-  // AMR / MPI PROFILING (Spec 5 criterion 43, ADC-479): the facade OWNS the Profiler (parity with
-  // System::Impl::profiler_); it is wired into the multi-block AmrRuntime engine at build
-  // (runtime->set_profiler(&profiler_)), which times its non-numeric AMR phases (regrid /
-  // fill_boundary / average_down) + MPI counters into it. Disabled by default -> zero hot-path cost.
-  // It lives on the Impl, NOT on SystemStepper -- the C++ MockImpl never reads it.
-  pops::runtime::program::Profiler profiler_;
-
-  // --- compiled time-program install seam (epic ADC-511 / ADC-508, Spec 6) ---------------------------
-  // Macro-step body of an installed compiled time Program (parity System::Impl::program_step_); empty =
-  // the historical AmrRuntime::step / single-block path. Set by install_program_step (the .so's
-  // pops_install_program_amr installs it through the AmrProgramContext). Read by AmrSystem::step.
-  std::function<void(double)> program_step_;
-  // GLOBAL macro-step cadence around program_step_ (parity System::Impl, ADC-411). Defaults 1/1 -> one
-  // program closure call per macro-step. substeps n: program_step_ runs n times over eff_dt/n. stride M:
-  // the program runs once per M macro-steps with eff_dt = M*dt (hold-then-catch-up). Set by
-  // set_program_cadence; consumed by AmrSystem::step (run_program_cadence_).
-  int program_substeps_ = 1;
-  int program_stride_ = 1;
-  // IR hash of the installed compiled Program (the .so's pops_program_hash); empty until install_program
-  // records it. Parity System::Impl::installed_program_hash_ (checkpoint guard).
-  std::string installed_program_hash_;
-  // NAME-based block binding (Spec 3 criterion 23, ADC-457): program-index -> AMR-block-index map. Built
-  // by install_program from the .so's pops_program_block_name table; read by the AmrProgramContext to
-  // resolve a Program block index to the name-matched AMR block. EMPTY = identity.
-  std::vector<int> program_block_map_;
-  // COMPILED-PROGRAM RUNTIME PARAMETERS (ADC-508, parity ADC-510): program-block index -> current
-  // RuntimeParams. Seeded to the declaration defaults by install_program (the .so pops_program_param_*
-  // metadata) and overwritten at run time by set_program_params -- the installed step closure reads the
-  // CURRENT value through the AmrProgramContext each step (no recompile). Lives HERE (not in the .so).
-  std::map<int, RuntimeParams> program_block_params_;
-  // PROGRAM DIAGNOSTICS (parity System::Impl::program_diagnostics_): named runtime scalars the installed
-  // AmrProgramContext records via record_scalar (inspection / logging; does not feed the numerics).
-  std::map<std::string, double> program_diagnostics_;
+  // COMPILED TIME-PROGRAM RUNTIME STATE (ADC-594): the AMR runtime embeds the SAME ProgramRuntimeState
+  // struct System::Impl holds (include/pops/runtime/program/program_runtime_state.hpp) -- the SHARED,
+  // non-diverging Program subsystem the issue mandates. AMR uses the COMMON subset (step_ / substeps_ /
+  // stride_ / installed_hash_ / block_map_ / block_params_ / diagnostics_ / profiler_); the dt_bound_ /
+  // cache_ / hist_ fields stay EMPTY here (AMR has no dt-bound seam and defers the history / cache
+  // seams -- the documented Uniform/AMR divergence, not a second subsystem). The multi-block AmrRuntime
+  // engine is wired to &program_.profiler_ at build (parity with System::Impl); the Profiler's Impl
+  // address stays stable (program_ is a stable Impl member). AmrSystem::step routes through
+  // run_program_cadence_ (reading program_.step_ / substeps_ / stride_) when a program is installed.
+  pops::runtime::program::ProgramRuntimeState program_;
 
   explicit Impl(const AmrSystemConfig& c) : cfg(c) {}
 
   // SUBSTEPS/STRIDE cadence around the installed program closure (parity SystemStepper::run_program_
   // cadence): runs the whole program ONCE over eff_dt = stride*dt when the stride window closes (the
   // clock still ticks every macro-step), subdivided into substeps equal program calls. With 1/1 this is
-  // a single program_step_(dt) call (bit-identical to a bare install). MULTI-BLOCK stride is GLOBAL
+  // a single program_.step_(dt) call (bit-identical to a bare install). MULTI-BLOCK stride is GLOBAL
   // (whole-program), equal to the native per-block stride only for a single-block Program.
   void run_program_cadence_(double dt) {
     // stride window: program runs only at the END of each stride window ((macro_step_+1) % stride == 0),
     // mirroring AmrRuntime::step / SystemStepper. stride=1 -> always true (every macro-step).
-    if ((macro_step_ + 1) % program_stride_ != 0)
+    if ((macro_step_ + 1) % program_.stride_ != 0)
       return;
-    const double eff_dt = dt * static_cast<double>(program_stride_);  // catch-up effective step
-    const double h = eff_dt / static_cast<double>(program_substeps_);
-    for (int s = 0; s < program_substeps_; ++s)
-      program_step_(h);
+    const double eff_dt = dt * static_cast<double>(program_.stride_);  // catch-up effective step
+    const double h = eff_dt / static_cast<double>(program_.substeps_);
+    for (int s = 0; s < program_.substeps_; ++s)
+      program_.step_(h);
   }
 
   // Pushes macro_step_ to the engine's cadence counter (regrid/stride): multi-block runtime OR
@@ -535,9 +513,9 @@ struct AmrSystem::Impl {
                                           S.base_per, S.replicated_coarse, S.wall);
     // AMR / MPI PROFILING (Spec 5 criterion 43, ADC-479): wire the facade-owned Profiler into the
     // engine so it times its AMR phases (regrid / fill_boundary / average_down) into the SAME table
-    // profile_report() renders. Non-owning: profiler_ outlives runtime (both on the Impl). When
-    // profiling is disabled the engine never touches it (every scope/count is enabled()-guarded).
-    runtime->set_profiler(&profiler_);
+    // profile_report() renders. Non-owning: program_.profiler_ outlives runtime (both live on the
+    // Impl, stable address). When profiling is disabled the engine never touches it (enabled()-guarded).
+    runtime->set_profiler(&program_.profiler_);
     // Model-NAMED aux fields (ADC-291): push the pending coarse fields into the runtime engine, which
     // re-applies them onto the shared aux each solve_fields (so they persist across the union regrid)
     // and injects them to the fine levels. Empty -> no-op (bit-identical).
@@ -1418,7 +1396,7 @@ void AmrSystem::step(double dt) {
   // closure REPLACES the native AmrRuntime::step body (parity SystemStepper::step routing to program_
   // step_), wrapped by the GLOBAL substeps/stride cadence. The closure drives the per-level Lie/Strang
   // macro-step through the AmrProgramContext. Empty (no program installed) -> the historical path.
-  if (p_->program_step_)
+  if (p_->program_.step_)
     p_->run_program_cadence_(dt);
   else if (p_->runtime)
     p_->runtime->step(static_cast<Real>(dt));
@@ -1440,13 +1418,13 @@ double AmrSystem::step_cfl(double cfl) {
   const double hx = p_->cfg.L / p_->cfg.n;  // coarse grid spacing (dx_coarse)
   // COMPILED time-program path (epic ADC-508 / ADC-511): when a Program is installed, its macro-step
   // closure REPLACES the native engine step here too (parity AmrSystem::step and SystemStepper::step_cfl,
-  // which both route to program_step_). install_program forces the multi-block runtime build, so a
+  // which both route to program_.step_). install_program forces the multi-block runtime build, so a
   // Program is ALWAYS on the runtime path: we take the SAME CFL dt the native step would (runtime->cfl_dt,
   // the computation half of step_cfl WITHOUT the native advance), then drive the macro-step through the
   // Program (run_program_cadence_ + the clock tick), never the native scheme. Without this branch the
   // installed Program was SILENTLY bypassed and the native engine advanced instead -- a silent-wrong step
   // contradicting AmrSystem::step / System::step_cfl. The native paths below stay UNCHANGED.
-  if (p_->program_step_) {
+  if (p_->program_.step_) {
     const double dt =
         static_cast<double>(p_->runtime->cfl_dt(static_cast<Real>(cfl), static_cast<Real>(hx)));
     p_->run_program_cadence_(dt);
@@ -1585,11 +1563,12 @@ void AmrSystem::set_clock(double t, int macro_step) {
 
 // --- compiled time-program install seam on the AMR hierarchy (epic ADC-511 / ADC-508, Spec 6) -------
 // AMR counterpart of System::install_program_step / set_program_cadence / install_program / the
-// per-block RuntimeParams store. The macro-step body the .so installs lives on the Impl (program_step_);
-// AmrSystem::step routes through it (run_program_cadence_) when set. The cadence + RuntimeParams stores
-// live HERE (not in the .so closure), mirroring System, so a value change reaches the captured context.
+// per-block RuntimeParams store. The macro-step body the .so installs lives in the shared Program
+// subsystem (program_.step_, ADC-594); AmrSystem::step routes through it (run_program_cadence_) when
+// set. The cadence + RuntimeParams stores live in program_ (not the .so closure), mirroring System, so
+// a value change reaches the captured context.
 void AmrSystem::install_program_step(std::function<void(double)> step) {
-  p_->program_step_ = std::move(step);
+  p_->program_.step_ = std::move(step);
 }
 // GLOBAL macro-step cadence around the installed program closure (parity System::set_program_cadence,
 // ADC-411). Validates substeps >= 1 && stride >= 1 (fail-loud: a non-positive cadence is meaningless).
@@ -1602,20 +1581,28 @@ void AmrSystem::set_program_cadence(int substeps, int stride) {
   if (stride < 1)
     throw std::invalid_argument("AmrSystem::set_program_cadence : stride >= 1 required (got " +
                                 std::to_string(stride) + ")");
-  p_->program_substeps_ = substeps;
-  p_->program_stride_ = stride;
+  p_->program_.substeps_ = substeps;
+  p_->program_.stride_ = stride;
+}
+// Read the installed GLOBAL cadence (ADC-594, parity System): the tiny const getters the
+// ProgramRuntimeReport reads through the bindings (no Python-visible getter existed before).
+int AmrSystem::program_substeps() const {
+  return p_->program_.substeps_;
+}
+int AmrSystem::program_stride() const {
+  return p_->program_.stride_;
 }
 // NAME-based block binding seam (Spec 3 criterion 23, ADC-457): install_program builds the map after
 // matching the .so's block names; the AmrProgramContext reads it to translate a Program block index to
 // the name-matched AMR block index.
 void AmrSystem::set_program_block_map(const std::vector<int>& prog_to_sys) {
-  p_->program_block_map_ = prog_to_sys;
+  p_->program_.block_map_ = prog_to_sys;
 }
 const std::vector<int>& AmrSystem::program_block_map() const {
-  return p_->program_block_map_;
+  return p_->program_.block_map_;
 }
 std::string AmrSystem::installed_program_hash() const {
-  return p_->installed_program_hash_;
+  return p_->program_.installed_hash_;
 }
 // RUNTIME FREEZE LIFECYCLE (ADC-592, parity with System). mark_bound() is the ONE transition into the
 // frozen state; the Python bind flow calls it LAST (after every install call), so the install sequence
@@ -1640,16 +1627,11 @@ std::string AmrSystem::lifecycle_state() const {
 // mirrored from System. install_program seeds the defaults; Python's _install_program_params overwrites
 // the supplied values (validated against the .so param-name metadata). VERBATIM mirror of System.
 void AmrSystem::seed_program_params(int prog_block, const std::vector<double>& defaults) {
-  RuntimeParams rp;
-  const int count = static_cast<int>(defaults.size());
-  rp.count = count > kMaxRuntimeParams ? kMaxRuntimeParams : count;
-  for (int k = 0; k < rp.count; ++k)
-    rp.values[k] = static_cast<Real>(defaults[static_cast<std::size_t>(k)]);
-  p_->program_block_params_[prog_block] = rp;  // idempotent: re-seeding resets to the declaration baseline
+  p_->program_.seed_params(prog_block, defaults);  // shared subsystem (ADC-594); resets to baseline
 }
 void AmrSystem::set_program_params(int prog_block, const std::vector<double>& values) {
-  auto it = p_->program_block_params_.find(prog_block);
-  if (it == p_->program_block_params_.end())
+  auto it = p_->program_.block_params_.find(prog_block);
+  if (it == p_->program_.block_params_.end())
     throw std::out_of_range(
         "AmrSystem::set_program_params : program block " + std::to_string(prog_block) +
         " has no runtime parameter (the installed compiled Program declares none for it; declare "
@@ -1663,10 +1645,8 @@ void AmrSystem::set_program_params(int prog_block, const std::vector<double>& va
     rp.values[k] = static_cast<Real>(values[static_cast<std::size_t>(k)]);  // current value, next step
 }
 RuntimeParams AmrSystem::program_params(int prog_block) const {
-  auto it = p_->program_block_params_.find(prog_block);
-  // Unseeded block (no runtime param): a default RuntimeParams (count 0) -- a kernel that reads no param
-  // is unaffected. By value: device-clean, trivially copyable.
-  return it == p_->program_block_params_.end() ? RuntimeParams{} : it->second;
+  // Unseeded block (no runtime param) -> default RuntimeParams (count 0). Shared subsystem (ADC-594).
+  return p_->program_.params(prog_block);
 }
 // The built multi-block AMR engine the AmrProgramContext driver wraps (nullptr before the lazy build /
 // on the single-block coupler path). install_program forces the runtime build so this is live there.
@@ -1675,19 +1655,21 @@ AmrRuntime* AmrSystem::engine() const {
 }
 // The facade-owned Profiler (parity System), forwarded to by the AmrProgramContext's profiling seam.
 pops::runtime::program::Profiler& AmrSystem::profiler_handle() {
-  return p_->profiler_;
+  return p_->program_.profiler_;
 }
 // Record / read a Program runtime diagnostic (parity System::record_program_diagnostic). Pure side
 // effect; lives on the Impl (not the .so) so a later checkpoint can reach it.
 void AmrSystem::record_program_diagnostic(const std::string& name, double value) {
-  p_->program_diagnostics_[name] = value;
+  p_->program_.record_diagnostic(name, value);  // shared subsystem (ADC-594)
 }
 double AmrSystem::program_diagnostic(const std::string& name) const {
-  auto it = p_->program_diagnostics_.find(name);
-  return it == p_->program_diagnostics_.end() ? 0.0 : it->second;
+  // AMR keeps its historical LENIENT read (missing name -> 0.0), distinct from System's fail-loud
+  // program_diagnostic; not routed through the struct's throwing diagnostic() helper.
+  auto it = p_->program_.diagnostics_.find(name);
+  return it == p_->program_.diagnostics_.end() ? 0.0 : it->second;
 }
 std::map<std::string, double> AmrSystem::program_diagnostics() const {
-  return p_->program_diagnostics_;
+  return p_->program_.diagnostics_;
 }
 
 // Load a generated problem.so and install its compiled time Program on the AMR hierarchy. Mirrors
@@ -1890,7 +1872,7 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
   install(static_cast<void*>(this));
   // Record the program's IR hash (parity System, checkpoint guard). Missing symbol -> empty hash.
   auto hash_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_hash"));
-  p_->installed_program_hash_ = hash_fn ? std::string(hash_fn()) : std::string();
+  p_->program_.installed_hash_ = hash_fn ? std::string(hash_fn()) : std::string();
   // .so left loaded for the duration of the process (the installed closure points to code in it).
 }
 // --- AMR / MPI profiling (Spec 5 sec.12.5, ADC-479 criterion 43) ---------------------------------
@@ -1900,19 +1882,19 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
 // Profiler lives on the Impl (NOT on SystemStepper), so the C++ MockImpl never reads it. enable
 // BEFORE the run; the engine is enabled()-guarded so toggling between runs is safe.
 void AmrSystem::enable_profiling() {
-  p_->profiler_.enable();
+  p_->program_.profiler_.enable();
 }
 void AmrSystem::disable_profiling() {
-  p_->profiler_.disable();
+  p_->program_.profiler_.disable();
 }
 bool AmrSystem::is_profiling() const {
-  return p_->profiler_.enabled();
+  return p_->program_.profiler_.enabled();
 }
 void AmrSystem::reset_profiling() {
-  p_->profiler_.reset();
+  p_->program_.profiler_.reset();
 }
 std::string AmrSystem::profile_report() const {
-  return p_->profiler_.report();
+  return p_->program_.profiler_.report();
 }
 
 int AmrSystem::n_blocks() const {

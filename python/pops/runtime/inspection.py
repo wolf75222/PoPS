@@ -182,8 +182,47 @@ def _profile_payload(sim):
 
 
 def _program(sim):
-    h = _call(sim, "installed_program_hash", "") or ""
-    return {"installed": bool(h), "hash": h}
+    """The compiled-Program section, built FROM the structured ProgramRuntimeReport (ADC-594) so the
+    two reports share a SINGLE source. Kept back-compatible: the historical inspection keys
+    ("installed"/"hash") are preserved, with the richer cadence/block_map/param/history/cache summary
+    folded in from the same report."""
+    from pops.runtime.program_report import build_program_report
+    report = build_program_report(sim)
+    return {
+        "installed": report.installed,
+        "hash": report.program_hash,
+        "cadence": dict(report.cadence),
+        "block_map": list(report.block_map),
+        "params": [dict(row) for row in report.params],
+        "histories": [dict(row) for row in report.histories],
+        "cache": [dict(row) for row in report.cache],
+        "profiler": dict(report.profiler),
+    }
+
+
+def _lifecycle(sim):
+    """The runtime lifecycle state (ADC-592): "assembling" for an engine never bound, else the
+    engine's own ``lifecycle_state()`` ("bound"/"running"). Graceful default keeps a pre-bind or
+    low-level engine describable rather than raising."""
+    state = _call(sim, "lifecycle_state", None)
+    return str(state) if state is not None else "assembling"
+
+
+def _bound_snapshot(sim):
+    """The BoundSnapshot manifest of what pops.bind froze, as a plain dict + its hash (ADC-592).
+
+    Reads the engine's ``bound_snapshot`` (None before bind); serialises it via ``to_dict()`` and
+    folds in the stable ``snapshot_hash`` so inspection carries the frozen identity. Returns None when
+    the engine was never bound (an engine driven by the low-level seam without pops.bind)."""
+    snap = getattr(sim, "bound_snapshot", None)
+    if snap is None:
+        return None
+    to_dict = getattr(snap, "to_dict", None)
+    payload = dict(to_dict()) if callable(to_dict) else {}
+    snapshot_hash = getattr(snap, "snapshot_hash", None)
+    if snapshot_hash is not None:
+        payload["snapshot_hash"] = snapshot_hash
+    return payload
 
 
 def _lifecycle(sim):

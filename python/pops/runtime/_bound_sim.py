@@ -40,7 +40,7 @@ _DIAGNOSTICS = frozenset({
     "block_names", "inspect", "explain_bind", "check_model", "profile", "field",
     "patch_rectangles", "patch_boxes", "n_patches", "coarse_local_boxes", "coarse_total_boxes",
     "by_amr_mpi", "newton_report", "program_diagnostic", "program_diagnostics", "abi_key", "amr",
-    "lifecycle_state", "bound_snapshot",
+    "lifecycle_state", "bound_snapshot", "program_report",
 })
 
 # Write outputs / checkpoints.

@@ -285,6 +285,10 @@ void init_amr(py::module_& m) {
       // install_program so the .so ABI is untouched; CompiledTime(substeps=, stride=) threads here.
       .def("set_program_cadence", &AmrSystem::set_program_cadence, py::arg("substeps"),
            py::arg("stride"))
+      // ADC-594: read the installed GLOBAL cadence (substeps / stride) for the ProgramRuntimeReport.
+      // Const getters (default 1/1 with no program); there was no Python-visible getter before.
+      .def("program_substeps", &AmrSystem::program_substeps)
+      .def("program_stride", &AmrSystem::program_stride)
       // Changes the RUNTIME parameters of a compiled time PROGRAM block WITHOUT recompiling the .so
       // (ADC-508, parity ADC-510). prog_block = the PROGRAM block index (P.state order); values = that
       // block's params in sorted-name order. Python's _install_program_params routes params={name: value}

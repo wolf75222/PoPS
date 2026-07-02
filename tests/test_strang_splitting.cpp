@@ -24,6 +24,7 @@
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/system/system_block_store.hpp>
 #include <pops/runtime/system/system_stepper.hpp>
 // run_source_stage (gabarit, instancie via SystemStepper<MockImpl>::step) DEREFERENCE les types Schur
@@ -57,12 +58,11 @@ struct MockImpl {
   std::vector<std::function<void(Real)>> couplings;
   double t = 0.0;
   int macro_step_ = 0;
-  std::function<void(double)>
-      program_step_;          // compiled time Program hook (ADC-401); empty here -> historical path
-  int program_substeps_ = 1;  // compiled-Program macro-step cadence (ADC-411); default 1/1
-  int program_stride_ = 1;    // matches System::Impl so SystemStepper::step compiles for the mock
-  std::function<Real(Real)>
-      program_dt_bound_;  // compiled-Program dt bound (ADC-417); empty -> step_cfl uses the native CFL
+  // COMPILED TIME-PROGRAM RUNTIME STATE (ADC-594): the mock embeds the SAME struct System::Impl /
+  // AmrSystem::Impl now hold, so SystemStepper<MockImpl> reads program_.step_ / substeps_ / stride_ /
+  // dt_bound_ through the real contract -- no mocked members, no divergence. Defaults (empty step_,
+  // 1/1 cadence, empty dt_bound_) keep this toy on the historical native path.
+  pops::runtime::program::ProgramRuntimeState program_;
   bool polar_ = false;
   // Geometrie de transport EMBEDDED-BOUNDARY (chantier T5-PR3) : le stepper lit geometry_mode_ / eb_set_
   // pour aiguiller l'avance de transport. None + !eb_set_ -> le toy emprunte s.advance (chemin plein),

@@ -190,6 +190,15 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         from pops.runtime.inspection import build_runtime_inspection
         return build_runtime_inspection(self, runtime="system")
 
+    def program_report(self):
+        """Structured report of the compiled-Program runtime subsystem (ADC-594).
+
+        Aggregates the bound Program accessors (installed step / hash, cadence, block map, param
+        counts, diagnostics, histories, cache, profiler) into one inspectable value object. Metadata
+        only; installed=False with empty sections on a runtime with no program installed."""
+        from pops.runtime.program_report import build_program_report
+        return build_program_report(self)
+
     def __str__(self):
         """Short, array-free summary: the installed block names (Spec 5 sec.12.1).
 

@@ -327,22 +327,22 @@ class SystemStepper {
   ///     stride_due is false, then runs ONCE with the effective step eff_dt = M*dt at the window end.
   ///     A compiled program is ONE whole-system closure, so the stride is GLOBAL (whole-system); this
   ///     equals native per-block stride ONLY for a single-block system (or all blocks sharing M).
-  ///   - substeps n: subdivides the EFFECTIVE step into n calls program_step_(eff_dt/n), mirroring
-  ///     native advance_transport_n(s, eff_dt, n) -> eff_dt/n. BUT program_step_(h) re-runs the WHOLE
+  ///   - substeps n: subdivides the EFFECTIVE step into n calls program_.step_(eff_dt/n), mirroring
+  ///     native advance_transport_n(s, eff_dt, n) -> eff_dt/n. BUT program_.step_(h) re-runs the WHOLE
   ///     program (its solve_fields included), whereas native substeps subdivides ONLY the transport
   ///     (solve_fields + source run ONCE per macro-step). So n>1 here is bit-exact vs native substeps
   ///     ONLY for an UNCOUPLED / transport-only program (solve_fields inert).
   /// The clock ticks EVERY macro-step (held steps included), matching native. Default cadence 1/1 is
-  /// byte-identical to the single program_step_(dt) call: stride_due(_, 1) is always true and n == 1
+  /// byte-identical to the single program_.step_(dt) call: stride_due(_, 1) is always true and n == 1
   /// collapses the loop to one call with h == dt.
   void run_program_cadence(double dt) {
     Impl* P = owner_;
-    if (stride_due(P->macro_step_, P->program_stride_)) {
-      const Real eff_dt = Real(dt) * Real(P->program_stride_);  // catch-up: effective step M*dt
-      const int n = P->program_substeps_;
+    if (stride_due(P->macro_step_, P->program_.stride_)) {
+      const Real eff_dt = Real(dt) * Real(P->program_.stride_);  // catch-up: effective step M*dt
+      const int n = P->program_.substeps_;
       const Real h = eff_dt / Real(n);  // substeps subdivide the EFFECTIVE step (native: eff_dt/n)
       for (int sub = 0; sub < n; ++sub)
-        P->program_step_(h);
+        P->program_.step_(h);
     }
     P->t += dt;  // clock ticks EVERY macro-step (held steps included), like native
     P->macro_step_++;
@@ -364,7 +364,7 @@ class SystemStepper {
     // keeps the clock coherent (the SYSTEM-level substeps + stride cadence + clock tick are factored
     // into run_program_cadence, shared with step_cfl so both route a program the same way -- ADC-413).
     // No implicit solve_fields / couplings / projections here: the Program expresses them explicitly.
-    if (P->program_step_) {
+    if (P->program_.step_) {
       run_program_cadence(dt);
       return;
     }
@@ -559,14 +559,14 @@ class SystemStepper {
     // winning reason (see apply_global_dt_bounds for the MPI deadlock-safety rationale).
     apply_global_dt_bounds(dt, &reason);
     // OPTIONAL compiled-Program dt bound (epic ADC-399 / ADC-417, spec s18). When the installed Program
-    // exported one (System::install_program stored program_dt_bound_), it TIGHTENS dt to the min of the
+    // exported one (System::install_program stored program_.dt_bound_), it TIGHTENS dt to the min of the
     // native CFL dt above and the program's own bound. No program / no bound -> the closure is empty and
     // dt is the native CFL UNCHANGED. The native CFL logic above is left intact: this only reduces dt.
-    // MPI-SAFE: program_dt_bound_ runs the SAME collective reduction (block_max_speed / reductions) on
+    // MPI-SAFE: program_.dt_bound_ runs the SAME collective reduction (block_max_speed / reductions) on
     // every rank, so the bound is rank-uniform -- like apply_global_dt_bounds, the min keeps the step
     // collectives symmetric (no desync / deadlock).
-    if (P->program_dt_bound_) {
-      const double pb = static_cast<double>(P->program_dt_bound_(static_cast<Real>(cfl)));
+    if (P->program_.dt_bound_) {
+      const double pb = static_cast<double>(P->program_.dt_bound_(static_cast<Real>(cfl)));
       if (std::isfinite(pb) && pb > 0.0 && pb < dt) {
         dt = pb;
         reason = "program:dt_bound";
@@ -586,7 +586,7 @@ class SystemStepper {
     // (the Program expresses solve_fields / couplings / projections itself). The native advance path
     // below is taken ONLY when no program is installed. (step_adaptive -- multirate -- still drives
     // only the native path; a Program is whole-system, so multirate subcycling does not apply.)
-    if (P->program_step_) {
+    if (P->program_.step_) {
       run_program_cadence(dt);
       return dt;
     }

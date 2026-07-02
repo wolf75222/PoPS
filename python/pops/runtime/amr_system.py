@@ -338,6 +338,16 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         from pops.runtime.inspection import build_runtime_inspection
         return build_runtime_inspection(self, runtime="amr_system")
 
+    def program_report(self):
+        """Structured report of the compiled-Program runtime subsystem (ADC-594).
+
+        Same value object as ``System.program_report`` -- the SHARED Program subsystem (the AMR runtime
+        uses the common subset: no dt bound, no scheduler cache / history rings wired, so those
+        sections stay empty). Metadata only; installed=False with empty sections on a runtime with no
+        program installed."""
+        from pops.runtime.program_report import build_program_report
+        return build_program_report(self)
+
     def __getattr__(self, attr):
         # RUNTIME FREEZE (ADC-592): once bound, refuse a native STRUCTURAL setter reached through the
         # passthrough (sim._engine.set_refinement / install_program / ...) with the bind-vocabulary
