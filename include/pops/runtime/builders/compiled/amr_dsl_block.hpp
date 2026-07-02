@@ -126,10 +126,10 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
   // Level 0 (coarse): layout decided by the ownership policy (replicated mono-box by default,
   // distributed multi-box if bp.distribute_coarse). When replicated, dmap = my_rank() everywhere (the box
   // lives on each rank; a round-robin would place it on rank 0 only -> out-of-bounds fab elsewhere,
-  // segfault under np>1). The fine seed (allocated below ONLY when refinement is configured) starts on the
-  // SAME dmap as the coarse; the initial regrid REBUILDS it then REDISTRIBUTES round-robin
-  // (DistributionMapping(nfine, n_ranks())) -> multi-GPU distribution of the fine patches. When distributed,
-  // the coarse is distributed TOO (AMR strong-scaling).
+  // segfault under np>1). The fine seed (allocated below ONLY when refinement is configured) starts on a
+  // one-box round-robin dmap (box 0 -> rank 0); the initial regrid REBUILDS it then REDISTRIBUTES
+  // round-robin (DistributionMapping(nfine, n_ranks())) -> multi-GPU distribution of the fine patches.
+  // When distributed, the coarse is distributed TOO (AMR strong-scaling).
   const auto [bac, dm] = coupler_make_coarse_layout(bp.n, bp.distribute_coarse, bp.coarse_max_grid);
   const int ng = Limiter::n_ghost;  // limiter stencil (1 NoSlope, 2 MUSCL): scheme parity
   MultiFab Uc(bac, dm, nc, ng);
@@ -154,7 +154,13 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
     const int I0 = bp.n / 4, I1 = 3 * bp.n / 4 - 1, J0 = bp.n / 4, J1 = 3 * bp.n / 4 - 1;
     Box2D fb{{2 * I0, 2 * J0}, {2 * I1 + 1, 2 * J1 + 1}};
     BoxArray baf(std::vector<Box2D>{fb});
-    MultiFab Uf(baf, dm, nc, ng);
+    // The single-box fine seed carries its OWN coherent one-entry dmap (round-robin of one box ->
+    // rank 0), NOT the coarse dm: with distribute_coarse the coarse dm has one entry per box,
+    // so reusing it here pairs a 1-box BoxArray with a longer DistributionMapping (rejected by the
+    // MultiFab layout check). Round-robin places the box on rank 0 -- identical to the previous
+    // dm[0] (replicated dm[0]==my_rank(), so in serial np=1 both are rank 0; distributed dm[0]==0),
+    // so ownership, MPI comms and the trajectory are unchanged. Mirrors make_shared_amr_layout.
+    MultiFab Uf(baf, DistributionMapping(baf.size(), n_ranks()), nc, ng);
     Uf.set_val(Real(0));
     levels.push_back({std::move(Uf), nullptr, dxf, dxf});
   }

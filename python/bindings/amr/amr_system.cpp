@@ -1621,6 +1621,23 @@ std::string AmrSystem::lifecycle_state() const {
     return "assembling";
   return p_->macro_step_ > 0 ? "running" : "bound";
 }
+// RUNTIME FREEZE LIFECYCLE (ADC-592, parity with System). mark_bound() is the ONE transition into the
+// frozen state; the Python bind flow calls it LAST (after every install call), so the install sequence
+// itself never trips require_assembling_amr. A second call throws. lifecycle_state() reports
+// "assembling" / "bound" / "running" (running derived from the authoritative macro_step_ counter, so it
+// needs no extra state).
+void AmrSystem::mark_bound() {
+  if (p_->bound_)
+    throw std::runtime_error(
+        "AmrSystem::mark_bound: the composition is already bound (pops.bind binds a compiled Case "
+        "exactly once; a fresh run needs a fresh pops.bind)");
+  p_->bound_ = true;
+}
+std::string AmrSystem::lifecycle_state() const {
+  if (!p_->bound_)
+    return "assembling";
+  return p_->macro_step_ > 0 ? "running" : "bound";
+}
 // COMPILED-PROGRAM RUNTIME PARAMETERS on AMR (ADC-508, parity ADC-510). Seed/overwrite/read the
 // per-PROGRAM-block RuntimeParams the installed step closure reads through the AmrProgramContext. The
 // store lives on the Impl so a value change reaches the captured context -- the no-recompile contract
