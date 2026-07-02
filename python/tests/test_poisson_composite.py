@@ -130,16 +130,15 @@ def token_alias():
     assert err == 0.0, "token 'composite' != 'charge_density' sur un bloc charge (err %.2e)" % err
     print("OK  token 'composite' alias bit-identique de 'charge_density' (bloc charge)")
 
-    # Un token inconnu est refuse explicitement.
+    # Un token inconnu est refuse explicitement -- desormais PRE-BIND par set_poisson lui-meme
+    # (validation de route typee, ADC-599/584), avant tout solve.
     sim = pops.System(n=n, L=1.0, periodic=True)
     sim.add_block("blk", model=_scalar(pops.ChargeDensity(charge=1.0)), spatial=pops.Spatial(none=True))
     try:
         sim.set_poisson(rhs="bogus", solver="fft")
-        sim.set_density("blk", dens.reshape(-1).tolist())
-        sim.solve_fields()
         raise AssertionError("un token rhs inconnu aurait du etre refuse")
-    except RuntimeError:
-        print("OK  token rhs inconnu refuse explicitement")
+    except ValueError:
+        print("OK  token rhs inconnu refuse explicitement (pre-bind, route typee)")
 
 
 def main():
