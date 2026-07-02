@@ -298,7 +298,13 @@ def parse_cpp_targets() -> list[str]:
     cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
     targets = set(re.findall(r"\bpops_add_test\(\s*([A-Za-z0-9_]+)", cmake))
     targets.update(re.findall(r"\badd_executable\(\s*([A-Za-z0-9_]+)", cmake))
-    return sorted(t for t in targets if t.startswith("test_") and not t.startswith("test_mpi_"))
+    # The scraper is textual, so it also sees targets registered inside if(POPS_USE_MPI) blocks.
+    # Those only exist in the ci-mpi build (the serial gate would hit `ninja: unknown target`);
+    # by convention every MPI-only test carries an `mpi` NAME SEGMENT (prefix test_mpi_* or infix
+    # like test_amr_regrid_mpi_parity), so drop any target with such a segment -- they are covered
+    # by the MPI job in full mode.
+    return sorted(t for t in targets
+                  if t.startswith("test_") and "mpi" not in t.split("_"))
 
 
 def list_python_tests() -> list[str]:
