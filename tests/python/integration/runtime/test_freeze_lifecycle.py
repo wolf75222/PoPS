@@ -210,6 +210,65 @@ def test_assembling_during_install():
     print("ok test_assembling_during_install")
 
 
+# --- 4b. Double bind : le seam d'install refuse un second lowering ----------------------------
+def test_double_bind_rejected():
+    """Un second bind (le seam _install_compiled) leve : le contrat de gel interdit de re-lowerer.
+
+    _finalize_bind est la primitive bas-niveau qui bascule le flag (idempotente : la rappeler ne
+    leve pas). Le VRAI point d'entree du bind, _install_compiled, est garde par guard_assembling en
+    tete : une fois 'bound', un second _install_compiled leve freeze_error avec le vocabulaire bind.
+    C'est le contrat reel du mixin (guard_assembling lit self._lifecycle), pas une invention."""
+    engine = pops.System(n=8, L=1.0, periodic=True)
+    engine.set_poisson(bc="periodic")
+    engine.add_block("ions", _isothermal_model())
+    engine._finalize_bind(_minimal_snapshot())
+    _check(engine.lifecycle_state() == "bound", "le System est 'bound' apres le premier bind")
+    # Un second passage par le seam d'install (ce que pops.bind appelle) DOIT lever.
+    try:
+        engine._install_compiled(compiled=None, instances=[])
+        raise AssertionError("un second _install_compiled doit lever une fois bound")
+    except RuntimeError as exc:
+        _assert_bind_vocabulary(exc, "_install_compiled")
+    print("ok test_double_bind_rejected")
+
+
+# --- 4c. Restart d'une sim bindee (mutation runtime permise) ---------------------------------
+def test_restart_on_bound_sim_restores_state():
+    """checkpoint -> _finalize_bind -> restart a travers la vue restaure l'etat bit-a-bit.
+
+    restart est une mutation runtime allowlistee (pas un setter structurel) : elle reste permise sur
+    une sim gelee et repose l'etat/le potentiel/l'horloge du checkpoint. On prouve le round-trip a
+    travers la vue BoundSimulation, aucun compilateur requis (bloc natif)."""
+    import os
+    import tempfile
+
+    n = 16
+    engine = pops.System(n=n, L=1.0, periodic=True)
+    engine.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    engine.add_block("ions", _isothermal_model(),
+                     spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
+    engine.set_density("ions", _bubble(n))
+    d0 = np.array(engine.density("ions"), copy=True)
+
+    tmp = tempfile.mkdtemp(prefix="pops_freeze_ckpt_")
+    path = os.path.join(tmp, "state")
+    engine.checkpoint(path)
+
+    # Gel bas-niveau LEGITIME (ce que _install_compiled fait en dernier), puis vue.
+    engine._finalize_bind(_minimal_snapshot())
+    sim = BoundSimulation(engine)
+    _check(sim.lifecycle_state() == "bound", "la sim est 'bound' apres _finalize_bind")
+
+    # On perturbe l'etat PAR LA VUE (mutation runtime permise), puis on restaure PAR LA VUE.
+    sim.set_density("ions", np.ones(n * n))
+    _check(not np.array_equal(np.array(sim.density("ions")), d0),
+           "la perturbation a bien change l'etat avant restart")
+    sim.restart(path)  # restart est allowlistee : elle ne doit PAS lever sur une sim gelee
+    _check(np.array_equal(np.array(sim.density("ions")), d0),
+           "restart a travers la vue restaure l'etat bit-a-bit sur une sim bindee")
+    print("ok test_restart_on_bound_sim_restores_state")
+
+
 # --- 5. Snapshot : manifeste inerte + hash stable + inspect() --------------------------------
 def test_bound_snapshot_manifest():
     """BoundSnapshot est JSON-ready, hash 64-hex stable ; inspect() montre lifecycle + hash."""
@@ -370,6 +429,58 @@ def test_full_bind_flow_freeze_gated():
     else:
         print("  (skip native-guard sub-assert: needs a _pops rebuilt from this branch (CI covers))")
     print("ok test_full_bind_flow_freeze_gated")
+
+
+def test_checkpoint_restart_roundtrip_through_bind_gated():
+    """checkpoint / restart round-trip a travers pops.bind : rebind + restart == etat sauve.
+
+    Comme test_full_bind_flow_freeze_gated, l'authoring est VALIDE et hors du try ; la SEULE barriere
+    locale est le compile .so (headers / cxx / Kokkos), qui skippe en nommant le TYPE d'exception.
+    Sur CI-Kokkos le flux complet tourne : on binde, on avance, on checkpoint PAR LA VUE, on rebinde
+    une sim IDENTIQUE (meme composition, exigence v1 du restart) et on restart PAR LA VUE ; l'etat du
+    bloc revient bit-a-bit a celui sauve (checkpoint / restart sont allowlistes sur la vue)."""
+    import os
+    import tempfile
+
+    from pops.mesh.cartesian import CartesianMesh
+    from pops.mesh.layouts import Uniform
+
+    n = 64
+
+    def _case():
+        return (pops.Case(layout=Uniform(CartesianMesh(n=n, L=1.0, periodic=True)))
+                .block("ne", physics=_dsl_isothermal_model()))
+
+    xs = (np.arange(n) + 0.5) / n
+    xx, yy = np.meshgrid(xs, xs, indexing="ij")
+    rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * xx) * np.cos(2 * np.pi * yy)
+    u0 = np.stack([rho0, 0.4 * rho0, -0.2 * rho0])
+
+    try:
+        compiled = pops.compile(_case(), time=_lie_program(block="ne"))
+    except Exception as exc:  # noqa: BLE001 - barriere toolchain -> skip diagnosable
+        print("skip test_checkpoint_restart_roundtrip_through_bind_gated (toolchain %s: %s)"
+              % (type(exc).__name__, str(exc)[:140]))
+        return
+
+    solvers = {"phi": pops.fields.catalog.GeometricMG()}
+    sim = pops.bind(compiled, state={"ne": u0}, solvers=solvers)
+    sim.run(t_end=0.01, cfl=0.4, max_steps=4)
+    saved = np.array(sim.density("ne"), copy=True)
+
+    tmp = tempfile.mkdtemp(prefix="pops_bind_ckpt_")
+    path = os.path.join(tmp, "state")
+    sim.checkpoint(path)  # checkpoint est allowlistee sur la vue
+
+    # Rebind une sim IDENTIQUE (le restart v1 exige la MEME composition rejouee avant l'appel) puis
+    # restaure PAR LA VUE : l'etat du bloc revient a celui sauve.
+    compiled2 = pops.compile(_case(), time=_lie_program(block="ne"))
+    sim2 = pops.bind(compiled2, state={"ne": u0}, solvers=solvers)
+    sim2.restart(path)  # restart est allowlistee sur la vue
+    restored = np.array(sim2.density("ne"))
+    _check(np.array_equal(restored, saved),
+           "restart a travers pops.bind restaure l'etat du bloc bit-a-bit")
+    print("ok test_checkpoint_restart_roundtrip_through_bind_gated")
 
 
 def _run_all():
