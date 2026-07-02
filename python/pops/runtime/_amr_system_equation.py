@@ -191,15 +191,21 @@ class _AmrSystemEquation:
             raise ValueError(
                 "AmrSystem.add_equation: riemann '%s' requires a pressure: declare a primitive 'p' "
                 "(m.primitive('p', ...)) in the model, or emit the capability "
-                "(m.enable_hllc() / m.enable_roe()); otherwise use riemann='rusanov'"
-                % spatial.flux)
+                "(m.enable_hllc() / m.enable_roe()); otherwise use riemann='rusanov' "
+                "[requested route %s -> %s; requires: %s]"
+                % (spatial.flux, getattr(spatial.flux, "id", spatial.flux),
+                   getattr(spatial.flux, "native_entry", "?"),
+                   ", ".join(getattr(spatial.flux, "requirements", ()))))
         # HLL: same early guard as System.add_equation (wave_speeds emitted by the explicit pair
         # m.wave_speeds(x=, y=) OR primitive 'p'; the C++ gate only triggers at first use).
         if spatial.flux == "hll" and not getattr(compiled, "has_wave_speeds", True):
             raise ValueError(
                 "AmrSystem.add_equation: riemann 'hll' requires signed wave speeds: declare "
                 "m.wave_speeds(x=(smin, smax), y=(smin, smax)) (without pressure), or a primitive "
-                "'p' (m.primitive('p', ...)); otherwise use riemann='rusanov'")
+                "'p' (m.primitive('p', ...)); otherwise use riemann='rusanov' "
+                "[requested route %s -> %s]"
+                % (getattr(spatial.flux, "id", "riemann.hll"),
+                   getattr(spatial.flux, "native_entry", "?")))
 
         # The flat ABI of the .so loader (pops_install_native_amr / add_native_block) transports NEITHER the
         # multirate cadence (stride) NOR the partial IMEX mask (implicit_vars / implicit_roles):

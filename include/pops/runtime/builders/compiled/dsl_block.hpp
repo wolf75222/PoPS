@@ -2,6 +2,7 @@
 
 #include <pops/core/model/physical_model.hpp>  // aux_comps<Model>: aux width requested by the model
 #include <pops/runtime/builders/block/block_builder.hpp>
+#include <pops/runtime/config/route_ids.hpp>  // parse_time_route: typed time validation (ADC-584)
 #include <pops/runtime/system.hpp>
 
 #include <functional>
@@ -58,16 +59,30 @@ void add_compiled_model(System& sys, const std::string& name, Model model,
                         double gamma = static_cast<double>(kPhysicalDefaultGamma),
                         int substeps = 1,
                         bool evolve = true, int stride = 1, double positivity_floor = 0) {
-  const bool imex = (time == "imex");
-  const bool recon_prim = (recon == "primitive");
+  // TYPED time route (ADC-584): an unknown time token is REFUSED here (parse_time_route cites
+  // the family, the requested token and the valid set) instead of silently running SSPRK2 -- the
+  // historical `else -> "ssprk2"` fallback made add_compiled_model("...", time="typo") run a
+  // scheme different from the requested one when called directly from C++ (the Python entry
+  // points validate upstream, but this template is itself a public seam). Valid tokens keep the
+  // EXACT historical mapping, bit-identical: "imexrk_ars222" is parseable but only the composed
+  // native add_block wires the tableau, so it is rejected with its limitation.
+  const TimeRouteId time_route = parse_time_route(time, "add_compiled_model");
+  if (time_route == TimeRouteId::kImexRkArs222)
+    throw std::runtime_error(
+        std::string("add_compiled_model: time route 'imexrk_ars222' not wired on the compiled "
+                    "path (") +
+        route_info(time_route).limitations + ")");
+  const bool imex = (time_route == TimeRouteId::kImex);
+  const bool recon_prim = (parse_recon_route(recon, "add_compiled_model") ==
+                           ReconRouteId::kPrimitive);
   // EXPLICIT RK scheme marshaled by the production path (add_native_block -> pops_install_native
   // -> this template): "ssprk3" (3 stages, order 3, less dissipative, to pair with weno5), "euler"
   // (ForwardEuler, order 1: fidelity to first-order references, validation) vs "ssprk2"
-  // (historical default, bit-identical). Has effect ONLY on the explicit advance -- IMEX keeps its
-  // ForwardEuler half-step + implicit source, so method is ignored when imex. We thus align the
-  // production .so with the native add_block path (system.cpp) which already exposed ssprk3; any
-  // other string ("explicit"/unknown) falls back to ssprk2 (add_native_block validates the upstream string).
-  const std::string method = (time == "ssprk3") ? "ssprk3" : (time == "euler") ? "euler" : "ssprk2";
+  // (historical default for "explicit", bit-identical). Has effect ONLY on the explicit advance --
+  // IMEX keeps its ForwardEuler half-step + implicit source, so method is ignored when imex.
+  const std::string method = (time_route == TimeRouteId::kSsprk3)         ? "ssprk3"
+                             : (time_route == TimeRouteId::kForwardEuler) ? "euler"
+                                                                          : "ssprk2";
   // The block may read extra auxiliary fields (aux_comps<Model> > 3, e.g. B_z of a magnetized
   // source): we widen the System's SHARED aux channel BEFORE capturing its address, so that the
   // closure reads a wide enough aux. Base model (3) -> no-op, unchanged.

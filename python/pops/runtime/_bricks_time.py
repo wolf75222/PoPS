@@ -9,6 +9,8 @@ module under the 500-line cap ; ``pops.runtime.bricks`` re-exports all of them. 
 """
 
 from pops.runtime._bricks_scheme import Explicit
+from pops.runtime.routes import (SOURCE_STAGE_ELECTROSTATIC_LORENTZ, SPLITTING_LIE,
+                                 SPLITTING_STRANG, TIME_IMEX, TIME_IMEXRK_ARS222)
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
     NEWTON_DEFAULT_DAMPING,
@@ -100,7 +102,7 @@ class IMEX:
     to the IMEX half-step); a true IMEXRK family would be a distinct future work.
     """
 
-    kind = "imex"
+    kind = TIME_IMEX  # typed time route (ADC-584); str value stays the historical "imex"
     def __init__(self, substeps=1, stride=1, implicit_vars=None, implicit_roles=None,
                  newton_max_iters=NEWTON_DEFAULT_MAX_ITERS,
                  newton_rel_tol=NEWTON_DEFAULT_REL_TOL,
@@ -162,7 +164,7 @@ class SourceImplicit:
       THIS POLICY / the block, not by the model. Defaults [] = model default, bit-identical.
     """
 
-    kind = "imex"  # same C++ path as IMEX (ImplicitSourceStepper)
+    kind = TIME_IMEX  # same C++ path as IMEX (ImplicitSourceStepper); typed route (ADC-584)
 
     def __init__(self, substeps=1, stride=1, implicit_vars=None, implicit_roles=None,
                  newton_max_iters=NEWTON_DEFAULT_MAX_ITERS,
@@ -232,7 +234,7 @@ class IMEXRK:
     mask is rejected on the C++ side; for a partial per-component IMEX, use pops.IMEX.
     """
 
-    kind = "imexrk_ars222"
+    kind = TIME_IMEXRK_ARS222  # typed time route (ADC-584)
 
     def __init__(self, scheme="ars222", substeps=1, stride=1,
                  newton_max_iters=NEWTON_DEFAULT_MAX_ITERS,
@@ -399,7 +401,8 @@ class CondensedSchur:
                 "CondensedSchur: potential=%r not configurable (the source stage solves the "
                 "system Poisson potential phi; another field would have no solver "
                 "behind it); leave potential='phi' (default)." % (potential,))
-        self.kind = kind
+        # Typed source-stage route (ADC-584); str value stays the historical token.
+        self.kind = SOURCE_STAGE_ELECTROSTATIC_LORENTZ
         self.theta = float(theta)
         self.alpha = float(alpha)
         self.density = density
@@ -462,10 +465,10 @@ class Split:
         self.method = hyperbolic.method
         self.substeps = hyperbolic.substeps
         self.stride = hyperbolic.stride
-        # Splitting policy WIRED to the system stepper (set_time_scheme). pops.Split = "lie"
-        # (Godunov, 1st order): H(dt) then S(dt) once per macro-step, BIT-IDENTICAL to the history.
-        # pops.Strang overrides this attribute to "strang" (cf. below).
-        self.scheme = "lie"
+        # Splitting policy WIRED to the system stepper (set_time_scheme). pops.Split = the "lie"
+        # route (Godunov, 1st order): H(dt) then S(dt) once per macro-step, BIT-IDENTICAL to the
+        # history; pops.Strang overrides this attribute (cf. below). Typed route (ADC-584).
+        self.scheme = SPLITTING_LIE
 
 
 class Strang(Split):
@@ -492,4 +495,4 @@ class Strang(Split):
 
     def __init__(self, hyperbolic=None, source=None):
         super().__init__(hyperbolic=hyperbolic, source=source)
-        self.scheme = "strang"
+        self.scheme = SPLITTING_STRANG

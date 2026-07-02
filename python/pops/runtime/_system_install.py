@@ -20,24 +20,16 @@ from pops.runtime.bricks import (
     Spatial, Explicit, Split, DivEpsGrad, CompositeRhs, ChargeDensitySource,
     Ionization, Collision, ThermalExchange,
 )
+from pops.runtime.routes import RIEMANN_HLL, RIEMANN_HLLC, RIEMANN_ROE, resolve as _resolve_route
 
 
 def _lower_wall(wall):
     """Lower a Poisson ``wall`` to the native ``(wall_token, wall_radius)`` (Spec 5 sec.8.16).
 
-    Accepts the legacy string (``"none"`` / ``"circle"``) -> ``(wall, 0.0)`` (the caller supplies
-    ``wall_radius`` separately, so the string path stays byte-identical), OR a typed
-    :mod:`pops.mesh.geometry` wall (``NoWall`` -> ``("none", 0.0)``, ``Disc`` ->
-    ``("circle", radius)``) -> ``(token, radius)``. A typed geometry that is NOT a wall raises a
-    clear :class:`TypeError` (that surface is new, so there is no legacy behavior to preserve). Any
-    STRING passes straight through to the native ``set_poisson``, which validates an unknown token
-    with its own error exactly as before -- the coercion never adds a stricter string rejection of
-    its own (cf. the ``lower_backend(None)`` regression: a transparent coercion keeps the legacy
-    error path intact).
-
-    Returns:
-        A ``(wall_token, wall_radius)`` pair, or ``None`` when ``wall`` is a string (the caller
-        keeps its own ``wall_radius=`` argument so the legacy call is byte-identical).
+    A typed :mod:`pops.mesh.geometry` wall lowers to its pair (``NoWall`` -> ``("none", 0.0)``,
+    ``Disc`` -> ``("circle", radius)``); a non-wall typed geometry raises a clear ``TypeError``.
+    Returns ``None`` when ``wall`` is a string: the caller keeps its own ``wall_radius=`` and the
+    token is then route-validated by ``set_poisson`` (ADC-584) before the native call.
     """
     if isinstance(wall, str):
         return None
@@ -50,15 +42,12 @@ def _lower_wall(wall):
 
 
 def _lower_bc(bc):
-    """Lower a Poisson boundary condition to the native ``bc`` string (Spec 5 sec.14.2.6).
+    """Lower a Poisson boundary condition to the native ``bc`` token (Spec 5 sec.14.2.6).
 
     A typed native boundary brick (``pops.Dirichlet()`` / ``pops.Neumann()`` / ``pops.Periodic()``)
-    lowers to its token (``"dirichlet"`` / ``"neumann"`` / ``"periodic"``) via its ``.bc`` attribute;
-    any STRING (including ``"auto"``) passes straight through to the native ``set_poisson``, which
-    validates an unknown token with its own error exactly as before -- the coercion never adds a
-    stricter string rejection of its own (cf. the ``lower_backend(None)`` regression: a transparent
-    coercion keeps the legacy error path intact). A non-string, non-boundary value raises a clear
-    ``TypeError`` (that surface is new, so there is no legacy behavior to preserve).
+    lowers to its token via its ``.bc`` attribute; a string (including ``"auto"``) passes through
+    and is route-validated by ``set_poisson`` (ADC-584). A non-string, non-boundary value raises
+    a clear ``TypeError``.
     """
     if isinstance(bc, str):
         return bc
@@ -258,14 +247,17 @@ class _SystemInstall:
         # hllc / roe: the emitted capability (m.enable_hllc -> has_hllc, m.enable_roe -> has_roe)
         # OPENS the flux even outside 4-var Euler (the C++ requires-gate accepts it); otherwise the
         # canonical path requires 'p' in the primitives.
-        if (spatial.flux in ("hllc", "roe") and "p" not in compiled.prim_names
-                and not (spatial.flux == "hllc" and getattr(compiled, "has_hllc", False))
-                and not (spatial.flux == "roe" and getattr(compiled, "has_roe", False))):
+        if (spatial.flux in (RIEMANN_HLLC, RIEMANN_ROE) and "p" not in compiled.prim_names
+                and not (spatial.flux == RIEMANN_HLLC and getattr(compiled, "has_hllc", False))
+                and not (spatial.flux == RIEMANN_ROE and getattr(compiled, "has_roe", False))):
             raise ValueError(
                 "add_equation: riemann '%s' requires a pressure: declare a primitive 'p' "
                 "(m.primitive('p', ...)) in the model, or emit the capability "
-                "(m.enable_hllc() / m.enable_roe()); otherwise use riemann='rusanov'"
-                % spatial.flux)
+                "(m.enable_hllc() / m.enable_roe()); otherwise use riemann='rusanov' "
+                "[requested route %s -> %s; requires: %s]"
+                % (spatial.flux, getattr(spatial.flux, "id", spatial.flux),
+                   getattr(spatial.flux, "native_entry", "?"),
+                   ", ".join(getattr(spatial.flux, "requirements", ()))))
         # HLL: the generated brick emits wave_speeds either from the EXPLICIT pair
         # m.wave_speeds(x=, y=) (WITHOUT primitive 'p': moments, isothermal..., cf. has_wave_speeds),
         # or as soon as a primitive 'p' is DECLARED (m.primitive('p', ...)), even OUTSIDE the
@@ -276,11 +268,13 @@ class _SystemInstall:
         # ALWAYS sets has_wave_speeds (Model.compile from 'p'/pair; HybridModel from the
         # transport brick, True for a native brick = unknown) -- the default only applies to
         # a foreign object without the flag, which then falls back on the C++ gate (history).
-        if spatial.flux == "hll" and not getattr(compiled, "has_wave_speeds", True):
+        if spatial.flux == RIEMANN_HLL and not getattr(compiled, "has_wave_speeds", True):
             raise ValueError(
                 "add_equation: riemann 'hll' requires signed wave speeds: declare "
                 "m.wave_speeds(x=(smin, smax), y=(smin, smax)) (without pressure), or a primitive "
-                "'p' (m.primitive('p', ...)); otherwise use riemann='rusanov'")
+                "'p' (m.primitive('p', ...)); otherwise use riemann='rusanov' "
+                "[requested route %s -> %s]"
+                % (getattr(RIEMANN_HLL, "id", "riemann.hll"), RIEMANN_HLL.native_entry))
 
         # AUTHORITATIVE dispatch by the CompiledModel adder (fixed by the backend, cf. dsl._BACKENDS):
         # prototype -> add_dynamic_block, aot -> add_compiled_block, production -> add_native_block (#85).
@@ -439,6 +433,13 @@ class _SystemInstall:
         lowered = _lower_wall(wall)
         if lowered is not None:
             wall, wall_radius = lowered  # typed wall overrides the wall string + radius
+        # PRE-BIND route validation (ADC-584): unknown tokens are refused here (family +
+        # requested token + valid set), never defaulted; a valid Route IS its wire token
+        # (str subclass), so the native call below stays byte-identical.
+        rhs = _resolve_route("poisson_rhs", rhs, context="set_poisson")
+        solver = _resolve_route("field_solver", solver, context="set_poisson")
+        bc = _resolve_route("poisson_bc", bc, context="set_poisson")
+        wall = _resolve_route("wall", wall, context="set_poisson")
         self._s.set_poisson(rhs=rhs, solver=solver, bc=bc, wall=wall,
                             wall_radius=wall_radius, epsilon=epsilon, abs_tol=abs_tol)
 

@@ -130,6 +130,7 @@ pops_add_test(test_multifab)
 pops_add_test(test_sync_residence)  # API memoire explicite : sync_host/sync_device (idempotence, no-op sous SharedSpace)
 pops_add_test(test_reduce)
 pops_add_test(test_dense_eig)  # numerics/dense_eig.hpp : extremes du spectre d'un petit bloc dense (HLL exact)
+pops_add_test(test_route_ids)  # runtime/config/route_ids.hpp : typed route IDs (ADC-584) round-trip + registry mirror
 pops_add_test(test_fill_boundary)
 pops_add_test(test_fill_boundary_cache)
 pops_add_test(test_physical_bc)
