@@ -237,7 +237,3 @@ def test_dedup_does_not_fabricate_a_runtime_path():
     for obj in (factory, typed):
         for attr in ("eval", "compile", "__call__", "run"):
             assert not hasattr(obj, attr), "%r must stay inert (has %s)" % (obj, attr)
-
-
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))

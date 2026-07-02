@@ -13,32 +13,12 @@ import shutil
 import subprocess
 import tempfile
 
-from pops.ir.ops import sqrt
-from pops.physics.model import HyperbolicModel
-
 GAMMA = 1.4
 from tests.python.support.requirements import repo_include
 INCLUDE = repo_include()
 
 
-def build_euler_brick():
-    """Euler en formules + layout primitif + inverse cons<-prim, pret pour emit_cpp_brick.
-
-    Identique au montage de test_dsl_brick.py : layout de Prim = (rho, u, v, p), inverse explicite
-    fourni via set_conservative_from (le DSL ne sait pas inverser symboliquement)."""
-    e = HyperbolicModel("euler")
-    rho, rhou, rhov, E = e.conservative_vars("rho", "rho_u", "rho_v", "E")
-    u = e.primitive("u", rhou / rho)
-    v = e.primitive("v", rhov / rho)
-    p = e.primitive("p", (GAMMA - 1.0) * (E - 0.5 * rho * (u * u + v * v)))
-    H = (E + p) / rho
-    c = sqrt(GAMMA * p / rho)
-    e.set_flux(x=[rhou, rhou * u + p, rhou * v, rho * H * u],
-               y=[rhov, rhov * u, rhov * v + p, rho * H * v])
-    e.set_eigenvalues(x=[u - c, u, u + c], y=[v - c, v, v + c])
-    e.set_primitive_state(rho, u, v, p)
-    e.set_conservative_from([rho, rho * u, rho * v, p / (GAMMA - 1.0) + 0.5 * rho * (u * u + v * v)])
-    return e
+from tests.python.support.models import build_euler_brick
 
 
 HARNESS = r"""

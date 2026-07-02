@@ -32,7 +32,11 @@ import pops
 from pops.physics.facade import Model
 
 fails = 0
-from tests.python.support.requirements import repo_include
+from tests.python.support.requirements import (
+    missing_compiler_requirement,
+    repo_include,
+    skip_process_test,
+)
 INCLUDE = repo_include()
 
 
@@ -137,14 +141,12 @@ chk(amr3.last_dt_bound() == "global:cap_multi",
     f"AMR multi-blocs borne active = global:cap_multi (recu {amr3.last_dt_bound()!r})")
 
 # --- (B) DSL stability_speed / stability_dt (avec compilateur) ---------------------
-cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
-if not cxx or not os.path.isdir(INCLUDE):
-    print("skip  (B) : compilateur ou en-tetes pops absents")
+missing = missing_compiler_requirement(INCLUDE)
+if missing:
     if fails:
         print(f"FAIL test_dt_bounds : {fails} echec(s)")
         sys.exit(1)
-    print("OK test_dt_bounds (partie A)")
-    sys.exit(0)
+    skip_process_test(f"(B) test_dt_bounds : {missing}")
 
 
 def scalar_model(name, stab_speed=None, stab_dt=None, src_freq=None):

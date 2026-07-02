@@ -256,7 +256,3 @@ def test_problem_contains_descriptors():
     prob = _uniform_problem()
     assert isinstance(prob.layout, (Uniform, AMR))
     assert isinstance(prob.layout, Descriptor)  # the layout it CONTAINS is a descriptor.
-
-
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))

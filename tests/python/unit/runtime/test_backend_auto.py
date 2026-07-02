@@ -25,7 +25,11 @@ from pops.ir.ops import sqrt
 from pops.physics.facade import Model
 
 fails = 0
-from tests.python.support.requirements import repo_include
+from tests.python.support.requirements import (
+    missing_compiler_requirement,
+    repo_include,
+    skip_process_test,
+)
 INCLUDE = repo_include()
 
 
@@ -51,10 +55,9 @@ def iso3(name):
     return m
 
 
-cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
-if not cxx or not os.path.isdir(INCLUDE):
-    print("skip test_backend_auto : compilateur ou en-tetes pops absents")
-    sys.exit(0)
+missing = missing_compiler_requirement(INCLUDE)
+if missing:
+    skip_process_test(f"test_backend_auto : {missing}")
 
 tmp = tempfile.mkdtemp()
 try:

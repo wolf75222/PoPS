@@ -21,7 +21,6 @@ Pure Python: it imports only the inert authoring packages (the compiled ``_pops`
 effect of ``import pops`` but no model is built or run). Pytest + ``__main__`` guard.
 """
 import json
-import sys
 
 import pytest
 
@@ -269,7 +268,3 @@ def test_validation_is_inert_no_so_needed():
     # Building + validating the manifest must not raise despite the absent .so.
     m = cp.manifest()
     check_layout_supported(m, "uniform")
-
-
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))

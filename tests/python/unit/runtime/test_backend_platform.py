@@ -23,7 +23,6 @@ Pure Python: it imports the inert authoring/codegen packages (the compiled _pops
 effect of ``import pops`` -- platform availability reads its build flags -- but no model is built
 or run, and no compiler is invoked).
 """
-import sys
 
 import pytest
 
@@ -269,7 +268,3 @@ def test_platform_lower_is_inert_metadata():
     assert record["category"] == "platform"
     assert record["device"] == "mpi"
     assert record["capabilities"]["mpi"] is True
-
-
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))

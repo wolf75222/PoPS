@@ -10,7 +10,6 @@ schedule and a string policy, and the policies themselves inspect / validate. Pu
 needs only ``import pops`` (nothing here computes on a grid). The cadence is authoring
 metadata: it deliberately does NOT lower into the Program / codegen here.
 """
-import sys
 
 import pytest
 
@@ -144,9 +143,3 @@ def test_solve_cadence_inspect_and_repr():
     assert "SolveCadence" in repr(cadence)
     # the cadence forwards the policy's requirements (cacheable output).
     assert cadence.requirements()["cacheable_output"] is True
-
-
-# The CI python runner invokes each test file as `python3 <file>`; run pytest on this
-# module so the assertions execute (a bare import would only define the test functions).
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))

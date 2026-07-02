@@ -7,7 +7,6 @@ the typed bcs / rhs / coefficients / nullspace / aux pieces, and the typed right
 composition terms (Flux / SourceTerm / LocalTerm). Pure Python; needs only ``import pops``
 (nothing here computes on a grid).
 """
-import sys
 
 import pytest
 
@@ -182,9 +181,3 @@ def test_print_summaries_are_short_and_named():
         text = str(obj)
         assert len(text) < 300, "summary too long for %s: %r" % (type(obj).__name__, text)
         assert text.startswith(obj.name), text
-
-
-# The CI python runner invokes each test file as `python3 <file>`; run pytest on this
-# module so the assertions execute (a bare import would only define the test functions).
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))

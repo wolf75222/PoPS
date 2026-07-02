@@ -45,9 +45,7 @@ except Exception as exc:  # noqa: BLE001
     sys.exit(0)
 
 
-def _check(cond, msg):
-    if not cond:
-        raise AssertionError(msg)
+from tests.python.support.assertions import _check
 
 
 # Noms d'assemblage que la vue DOIT cacher (ceux qui existent sur au moins un moteur + le seam).
@@ -73,10 +71,7 @@ def _compressible_model():
                       elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0))
 
 
-def _bubble(n):
-    xs = (np.arange(n) + 0.5) / n
-    X, Y = np.meshgrid(xs, xs, indexing="xy")
-    return (1.0 + 0.4 * np.exp(-50.0 * ((X - 0.4) ** 2 + (Y - 0.5) ** 2))).reshape(-1)
+from tests.python.support.initial_states import bubble_offset as _bubble
 
 
 # --- 1. Sélection d'adaptateur ---------------------------------------------------------------
@@ -155,6 +150,26 @@ def test_bound_simulation_delegates_uniform():
            "str() nomme la bound simulation et resume le moteur")
     _check(sim._engine is engine, "sim._engine est bien le System")
     print("ok test_bound_simulation_delegates_uniform")
+
+
+def test_set_potential_delegated():
+    """set_potential -- the one allowlist mutation not yet driven through the view -- roundtrips.
+
+    Write phi through the BoundSimulation view, read it back with potential() (also through the
+    view): both forward to the engine, the value is finite and returned bit-for-bit.
+    """
+    n = 16
+    engine = pops.System(n=n, L=1.0, periodic=True)  # route interne bas-niveau (legitime en test)
+    sim = BoundSimulation(engine)
+    phi = (np.arange(n * n, dtype=np.float64) / (n * n)).reshape(n, n)
+    sim.set_potential(phi.ravel())
+    got = np.array(sim.potential())
+    _check(np.isfinite(got).all(), "le potentiel reste fini apres set_potential via la vue")
+    _check(got.shape == (n, n), "potential() rend une grille n x n via la vue")
+    _check(np.array_equal(got.ravel(), phi.ravel()),
+           "set_potential -> potential() roundtrip bit-a-bit a travers la vue")
+    _check(sim._engine is engine, "les deux appels delegent au moteur (sim._engine)")
+    print("ok test_set_potential_delegated")
 
 
 # --- 4. Facade AMR ---------------------------------------------------------------------------

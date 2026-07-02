@@ -94,10 +94,7 @@ def _build_euler_poisson():
     return m
 
 
-def _bubble(n):
-    xs = (np.arange(n) + 0.5) / n
-    X, Y = np.meshgrid(xs, xs)
-    return (1.0 + 0.5 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / 0.02)).reshape(-1)
+from tests.python.support.initial_states import bubble_amr as _bubble
 
 
 def _amr(n, L, branch, refine=1.2):

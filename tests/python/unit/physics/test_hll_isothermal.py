@@ -33,7 +33,11 @@ from pops.ir.ops import sqrt
 from pops.physics.facade import Model
 
 fails = 0
-from tests.python.support.requirements import repo_include
+from tests.python.support.requirements import (
+    missing_compiler_requirement,
+    repo_include,
+    skip_process_test,
+)
 INCLUDE = repo_include()
 
 
@@ -85,11 +89,12 @@ chk(float(np.max(np.abs(d_hll - d_rus))) > 1e-9, "(2) HLL DIFFERE de Rusanov (br
 chk("godunov" in err_msg(lambda: run_gas("godunov")), "(1) bare-string flux 'godunov' rejete (Spec 5 sec.7)")
 
 # --- (3)/(4) capacite DSL 3-var isotherme (avec compilateur) ---------------------------------------
-cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
-if not cxx or not os.path.isdir(INCLUDE):
-    print("skip  (3)/(4) : compilateur ou en-tetes pops absents")
-    print("test_hll_isothermal : OK (HLL natif vert)" if fails == 0 else f"{fails} ECHEC(S)")
-    sys.exit(0 if fails == 0 else 1)
+missing = missing_compiler_requirement(INCLUDE)
+if missing:
+    if fails:
+        print(f"test_hll_isothermal : {fails} ECHEC(S)")
+        sys.exit(1)
+    skip_process_test(f"(3)/(4) test_hll_isothermal : {missing}")
 
 
 def iso3(declare_p):

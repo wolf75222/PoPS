@@ -1,6 +1,5 @@
 """ADC-609 runtime environment report and explicit unsupported-policy validators."""
 
-import sys
 
 import pytest
 
@@ -52,7 +51,3 @@ def test_runtime_environment_validators_reject_unsupported_requests():
         validate_runtime_environment(precision="single")
     with pytest.raises(ValueError, match="communicator"):
         validate_runtime_environment(communicator="MPI_COMM_SELF")
-
-
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))

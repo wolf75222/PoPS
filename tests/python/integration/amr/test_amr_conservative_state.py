@@ -32,7 +32,11 @@ from pops.ir.ops import sqrt
 from pops.physics.facade import Model
 
 GAMMA = 1.4
-from tests.python.support.requirements import repo_include
+from tests.python.support.requirements import (
+    missing_compiler_requirement,
+    repo_include,
+    skip_process_test,
+)
 INCLUDE = repo_include()
 
 fails = 0
@@ -117,11 +121,12 @@ chk(np.all(np.isfinite(np.asarray(s.density("a")))),
     "(G) set_conservative_state + multi-blocs natif -> accepte au build, pas fini (vague 3)")
 
 # --- (A)/(D)/(E) : necessitent un compilateur (modele isotherme 3-var compile production) -----------
-cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
-if not cxx or not os.path.isdir(INCLUDE):
-    print("skip  (A)/(D)/(E) : compilateur ou en-tetes pops absents")
-    print("test_amr_conservative_state : OK (gardes vertes)" if fails == 0 else f"{fails} ECHEC(S)")
-    sys.exit(0 if fails == 0 else 1)
+missing = missing_compiler_requirement(INCLUDE)
+if missing:
+    if fails:
+        print(f"test_amr_conservative_state : {fails} ECHEC(S)")
+        sys.exit(1)
+    skip_process_test(f"(A)/(D)/(E) test_amr_conservative_state : {missing}")
 
 
 def _isothermal():

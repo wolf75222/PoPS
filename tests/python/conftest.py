@@ -47,6 +47,9 @@ class PythonProcessItem(pytest.Item):
             check=False,
             timeout=PROCESS_TEST_TIMEOUT,
         )
+        skip_reason = _process_skip_reason(result.stdout)
+        if skip_reason:
+            pytest.skip(skip_reason)
         if result.returncode != 0:
             missing = _missing_process_requirement(result.stdout)
             if missing:
@@ -173,6 +176,7 @@ def stable_test_cwd(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    compiler_missing = _compiler_gate_reason()
     for item in items:
         path = Path(str(item.fspath))
         parts = set(path.parts)
@@ -193,6 +197,13 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             item.add_marker(pytest.mark.hdf5)
         if isinstance(item, PythonProcessItem):
             item.add_marker(pytest.mark.process_isolated)
+        # A pytest-native test tagged ``compiler`` cannot run without a C++
+        # toolchain and the header tree; skip it explicitly rather than let it
+        # fail at import. Process-isolated tests gate themselves and report the
+        # skip through the POPS_SKIP marker, so they are left alone here.
+        if compiler_missing and not isinstance(item, PythonProcessItem):
+            if any(m.name == "compiler" for m in item.iter_markers()):
+                item.add_marker(pytest.mark.skip(reason=compiler_missing))
 
 
 @lru_cache(maxsize=None)
@@ -215,6 +226,47 @@ def _process_pythonpath(existing: str | None) -> str:
     return os.pathsep.join(deduped)
 
 
+@lru_cache(maxsize=None)
+def _compiler_gate_reason() -> str | None:
+    """Return why a compiler-gated test cannot run here, or None if it can.
+
+    The gate mirrors the script-mode guard the process tests use: a usable C++
+    driver plus the in-repo header tree. Cached because it never changes within
+    a run.
+    """
+    cxx = (
+        os.environ.get("POPS_TEST_CXX")
+        or os.environ.get("CXX")
+        or shutil.which("c++")
+        or shutil.which("g++")
+        or shutil.which("clang++")
+    )
+    if not cxx:
+        return "no C++ compiler available"
+    include = os.environ.get("POPS_INCLUDE") or str(REPO_ROOT / "include")
+    if not Path(include).is_dir():
+        return f"PoPS headers absent: {include}"
+    return None
+
+
+PROCESS_SKIP_MARKER = "POPS_SKIP:"
+
+
+def _process_skip_reason(output: str) -> str | None:
+    """Return the reason a subprocess test declared itself skipped, if any.
+
+    Script-style tests that gate on a missing requirement (a C++ compiler, the
+    header tree, ...) exit 0 after printing a line, which pytest would otherwise
+    record as a silent pass. When such a test prints ``POPS_SKIP: <reason>`` the
+    subprocess runner reports SKIPPED instead, whatever the exit status.
+    """
+    for line in output.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(PROCESS_SKIP_MARKER):
+            return stripped[len(PROCESS_SKIP_MARKER):].strip() or "requirement not met"
+    return None
+
+
 def _missing_process_requirement(output: str) -> str | None:
     if "compile_aot: PoPS is Kokkos-only" in output:
         return "AOT compile requires POPS_KOKKOS_ROOT/Kokkos_ROOT"
@@ -224,6 +276,8 @@ def _missing_process_requirement(output: str) -> str | None:
         return "native compile requires POPS_KOKKOS_ROOT/Kokkos_ROOT"
     if "Kokkos introuvable" in output:
         return "AOT compile requires POPS_KOKKOS_ROOT/Kokkos_ROOT"
+    if "DO NOT MATCH those with which the _pops module was built" in output:
+        return "headers do not match the built _pops module (stale build/overlay)"
     return None
 
 

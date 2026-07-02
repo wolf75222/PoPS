@@ -21,7 +21,6 @@ typed views DECLARE those measures unavailable here rather than fabricating them
 """
 import json
 import os
-import sys
 
 import pytest
 
@@ -298,10 +297,3 @@ def test_engine_profile_no_arg_uses_env_default():
             os.environ.pop("POPS_PROFILE", None)
         else:
             os.environ["POPS_PROFILE"] = saved
-
-
-# The CI python runner invokes each test file as `python3 <file>`; run pytest on this module so the
-# assertions execute (a bare import would only define the test functions).
-if __name__ == "__main__":
-    import sys
-    sys.exit(pytest.main([__file__, "-q"]))

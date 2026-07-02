@@ -352,7 +352,3 @@ def test_positive_matrix_keeps_supported_native_routes_available():
     assert "diagnostics" in inspected
     assert "fallbacks" in inspected["diagnostics"]
     assert "solver_events" in inspected["diagnostics"]
-
-
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))

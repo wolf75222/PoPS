@@ -8,7 +8,6 @@ state so ``m.inspect()`` surfaces it. The shortcut is INERT: it lowers ONLY to t
 it does not touch the dsl model, the operator graph, codegen or the runtime. Pure Python: only
 pops.physics / pops.math / pops.fields are needed (nothing computes on a grid).
 """
-import sys
 
 import pytest
 
@@ -122,9 +121,3 @@ def test_field_problem_does_not_perturb_the_dsl_elliptic_rhs():
     rho, mx, my = U
     m.field_problem("poisson", equation=(-laplacian(phi) == rho), solver="geometric_mg")
     assert m.dsl._m._elliptic is None
-
-
-# The CI python runner invokes each test file as `python3 <file>`; run pytest on this
-# module so the assertions execute (a bare import would only define the test functions).
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))

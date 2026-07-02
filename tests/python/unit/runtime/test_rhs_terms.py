@@ -114,8 +114,3 @@ def test_bad_term_raises_typeerror():
         with pytest.raises(ValueError, match="must be named"):
             P.rhs("R", state=U, fields=f, terms=[Flux(), unnamed])
     print("OK  8. a non-term in terms= -> TypeError; an unnamed source term -> ValueError")
-
-
-if __name__ == "__main__":
-    import sys
-    sys.exit(pytest.main([__file__, "-q"]))
