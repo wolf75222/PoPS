@@ -1,73 +1,66 @@
 #!/usr/bin/env python3
 """Select affected tests for CI.
 
-The policy is intentionally conservative. For the Python suite (``plan_python``) the
-precedence, from most to least conservative, is:
+The policy is intentionally conservative. C++ selection is manifest-driven over the
+GoogleTest targets. Python selection is manifest-driven too, with a static
+import-closure for ``python/pops/**`` changes so pure Python edits can run only the
+tests that import the changed module.
 
-(a) BROAD change -- any C++/bindings/CMake change (routed here as ``python`` too), a
-    Python broad file (``pyproject.toml``, ``python/CMakeLists.txt``,
-    ``python/pops/__init__.py``), or a ``python/bindings/`` file -> run ALL. Unchanged.
-(b) direct test edit (a changed ``python/tests/test_*.py``) -> that test is selected
-    directly, and its cross-test dependencies come along via the import closure
-    (``ci_import_closure``); behaviour unchanged, now closure-aware.
-(c) a changed ``python/pops/**`` file (not broad) -> the tests are chosen by the
-    REVERSE import closure of the changed module (``ci_import_closure.impacted_tests``),
-    UNION the existing smoke tests. This REPLACES the coarse name-token area heuristic
-    for pops source changes.
-(d) a changed ``python/pops`` file whose module is NOT on the import graph (a brand-new
-    file the graph has never seen, or an unparseable one) -> fail-safe to ALL.
-(e) the ``>75% selected -> all`` rule and the ``unknown non-meta path -> all`` rule are
-    kept unchanged as the final safety nets.
-
-``plan_cpp`` is untouched: it keeps the area heuristic (no C++ import-closure yet).
-
-The whole module is stdlib-only so it runs on the bare runner interpreter before any
-``pip install`` in the ``Select affected tests`` step.
+The module is stdlib-only and runs before any ``pip install`` in CI.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
+import tomllib
 from pathlib import Path
 from typing import Iterable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import ci_import_closure  # noqa: E402  (sibling stdlib-only module, same scripts/ dir)
+import ci_import_closure  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
+MANIFEST = ROOT / "tests/test_manifest.toml"
 
 
 CPP_BROAD_FILES = {
     "CMakeLists.txt",
     "CMakePresets.json",
     "tests/CMakeLists.txt",
+    "tests/cpp/test_sources.cmake",
+    "tests/test_manifest.toml",
 }
 
 CPP_BROAD_PREFIXES = (
     "cmake/",
     "include/pops/core/",
     "include/pops/parallel/",
+    "tests/cpp/support/",
 )
 
 PYTHON_BROAD_FILES = {
     "pyproject.toml",
     "python/CMakeLists.txt",
     "python/pops/__init__.py",
+    "tests/python/conftest.py",
+    "tests/test_manifest.toml",
 }
 
 PYTHON_BROAD_PREFIXES = (
     "python/bindings/",
+    "tests/python/support/",
 )
 
 META_PREFIXES = (
     ".github/",
     "docs/",
     "tutorials/",
-    "tests/architecture/",
+    "tests/python/architecture/",
 )
 
 CPP_PATH_AREAS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
@@ -100,155 +93,21 @@ PYTHON_PATH_AREAS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (("scripts/gen_solver_kernel.py",), ("codegen", "elliptic")),
 )
 
-CPP_NAME_PATTERNS: dict[str, tuple[str, ...]] = {
-    "mesh": (
-        "box",
-        "fab",
-        "mesh",
-        "geometry",
-        "boundary",
-        "bc",
-        "fill_boundary",
-        "domain",
-        "cut",
-        "layout",
-        "patch",
-        "coverage",
-        "cluster",
-        "load_balance",
-        "reduce",
-    ),
-    "amr": (
-        "amr",
-        "regrid",
-        "refinement",
-        "ref_ratio",
-        "flux_register",
-        "cf_interface",
-        "multiblock",
-        "substeps",
-        "stride",
-    ),
-    "coupling": (
-        "coupler",
-        "coupled",
-        "source",
-        "fieldsolve",
-        "solve_fields",
-        "condensed",
-        "schur",
-    ),
-    "elliptic": (
-        "poisson",
-        "elliptic",
-        "mg",
-        "schur",
-        "krylov",
-        "tensor",
-        "epsilon",
-        "fieldsolve",
-        "field_solve",
-        "solve",
-        "newton",
-        "potential",
-    ),
-    "runtime": (
-        "runtime",
-        "system",
-        "program",
-        "cache",
-        "scheduler",
-        "profil",
-        "external",
-        "module",
-        "metadata",
-        "facade",
-        "config",
-        "dynamic",
-        "block_builder",
-        "native",
-        "capabilities",
-    ),
-    "numerics": (
-        "riemann",
-        "weno",
-        "hll",
-        "roe",
-        "flux",
-        "recon",
-        "imex",
-        "ssprk",
-        "strang",
-        "cfl",
-        "diffusion",
-        "splitting",
-        "primitive",
-        "projection",
-        "rhs",
-        "dt",
-        "time",
-        "multirate",
-        "limiter",
-        "wave_speed",
-        "positivity",
-    ),
-    "physics": (
-        "aux",
-        "magnetic",
-        "lorentz",
-        "isothermal",
-        "compressible",
-        "fluid",
-        "polar",
-        "two_species",
-        "board",
-        "moments",
-        "ap_limit",
-        "vacuum",
-        "bz",
-        "te",
-    ),
-    "codegen": (
-        "codegen",
-        "dsl",
-        "compile",
-        "compiled",
-        "aot",
-        "jit",
-        "operator",
-        "ir",
-        "generated",
-        "loader",
-    ),
-    "validation": (
-        "validation",
-        "reference",
-        "parity",
-        "capabilities",
-    ),
-    "time": (
-        "time",
-        "imex",
-        "ssprk",
-        "strang",
-        "euler",
-        "bdf",
-        "rk",
-        "gmres",
-        "multistage",
-        "stride",
-    ),
-}
-
-PYTHON_NAME_PATTERNS = CPP_NAME_PATTERNS | {
-    "codegen": CPP_NAME_PATTERNS["codegen"]
-    + (
-        "dsl",
-        "compile_cache",
-        "module",
-        "lib",
-        "name_binding",
-    ),
+AREA_LABEL_ALIASES: dict[str, tuple[str, ...]] = {
+    "amr": ("amr", "mesh"),
+    "bindings": ("bindings", "runtime", "native_loader"),
+    "codegen": ("codegen", "native_loader", "compiler", "bindings"),
+    "coupling": ("coupling", "runtime", "elliptic", "amr", "physics"),
+    "elliptic": ("elliptic", "solvers"),
+    "io": ("io", "runtime"),
+    "mesh": ("mesh", "amr"),
+    "native_loader": ("native_loader", "codegen", "compiler"),
+    "numerics": ("numerics", "elliptic", "solvers", "time"),
+    "physics": ("physics", "numerics"),
+    "runtime": ("runtime", "bindings", "native_loader"),
+    "solvers": ("solvers", "elliptic"),
+    "time": ("time", "numerics", "solvers"),
+    "validation": ("validation", "physics", "runtime"),
 }
 
 CPP_SMOKE_TARGETS = (
@@ -258,8 +117,8 @@ CPP_SMOKE_TARGETS = (
 )
 
 PYTHON_SMOKE_TESTS = (
-    "python/tests/test_bindings.py",
-    "python/tests/test_capabilities.py",
+    "tests/python/integration/bindings/test_bindings.py",
+    "tests/python/unit/runtime/test_capabilities.py",
 )
 
 
@@ -272,6 +131,12 @@ def normalize(path: str) -> str:
 
 def read_changed_files(path: Path) -> list[str]:
     return [normalize(line) for line in path.read_text().splitlines() if normalize(line)]
+
+
+def load_manifest() -> dict:
+    if not MANIFEST.exists():
+        raise SystemExit(f"missing test manifest: {MANIFEST.relative_to(ROOT)}")
+    return tomllib.loads(MANIFEST.read_text(encoding="utf-8"))
 
 
 def write_github_outputs(path: str | None, values: dict[str, str]) -> None:
@@ -294,38 +159,60 @@ def areas_for(path: str, table: Iterable[tuple[tuple[str, ...], tuple[str, ...]]
     return matched
 
 
-def parse_cpp_targets() -> list[str]:
-    cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
-    targets = set(re.findall(r"\bpops_add_test\(\s*([A-Za-z0-9_]+)", cmake))
-    targets.update(re.findall(r"\badd_executable\(\s*([A-Za-z0-9_]+)", cmake))
-    # The scraper is textual, so it also sees targets registered inside if(POPS_USE_MPI) blocks.
-    # Those only exist in the ci-mpi build (the serial gate would hit `ninja: unknown target`);
-    # by convention every MPI-only test carries an `mpi` NAME SEGMENT (prefix test_mpi_* or infix
-    # like test_amr_regrid_mpi_parity), so drop any target with such a segment -- they are covered
-    # by the MPI job in full mode.
-    return sorted(t for t in targets
-                  if t.startswith("test_") and "mpi" not in t.split("_"))
+def expand_area_labels(areas: Iterable[str]) -> set[str]:
+    labels: set[str] = set()
+    for area in areas:
+        labels.add(area)
+        labels.update(AREA_LABEL_ALIASES.get(area, ()))
+    return labels
 
 
-def list_python_tests() -> list[str]:
-    return sorted(str(p.relative_to(ROOT)) for p in (ROOT / "python/tests").glob("test_*.py"))
+def add_reason(reasons: dict[str, set[str]], item: str, reason: str) -> None:
+    reasons.setdefault(item, set()).add(reason)
 
 
-def select_by_name(names: Iterable[str], areas: Iterable[str], patterns: dict[str, tuple[str, ...]]) -> set[str]:
-    wanted: set[str] = set()
-    selected_areas = set(areas)
-    for name in names:
-        for area in selected_areas:
-            if any(token in name for token in patterns.get(area, ())):
-                wanted.add(name)
-                break
-    return wanted
+def manifest_cpp_suites(manifest: dict) -> list[dict]:
+    suites: list[dict] = []
+    for suite in manifest.get("cpp", {}).get("suite", []):
+        name = str(suite.get("name", ""))
+        labels = set(str(label) for label in suite.get("labels", []))
+        if not name:
+            raise SystemExit("invalid C++ suite without name in tests/test_manifest.toml")
+        # MPI-only suites are built solely in the ci-mpi job; keep them out of the serial
+        # selection or the gate hits `ninja: unknown target`. The manifest label/mpi_nproc
+        # is the primary filter; the `mpi` NAME SEGMENT check is a belt-and-braces guard for
+        # a suite that forgets the label (see #435, test_amr_regrid_mpi_parity).
+        if "mpi" in labels or suite.get("mpi_nproc") or "mpi" in name.split("_"):
+            continue
+        sources = [normalize(str(source)) for source in suite.get("sources", [])]
+        if not sources:
+            raise SystemExit(f"C++ suite {name} has no sources in tests/test_manifest.toml")
+        suites.append({"name": name, "labels": labels, "sources": sources})
+    return sorted(suites, key=lambda item: item["name"])
+
+
+def manifest_python_suites(manifest: dict) -> list[dict]:
+    suites: list[dict] = []
+    for suite in manifest.get("python", {}).get("suite", []):
+        name = str(suite.get("name", ""))
+        path = normalize(str(suite.get("path", "")))
+        labels = set(str(label) for label in suite.get("labels", []))
+        if not name or not path:
+            raise SystemExit("invalid Python suite without name/path in tests/test_manifest.toml")
+        if "architecture" in labels:
+            continue
+        suite_path = ROOT / path
+        files = sorted(str(p.relative_to(ROOT)) for p in suite_path.glob("test_*.py"))
+        if not files:
+            raise SystemExit(f"Python suite {name} has no test_*.py files under {path}")
+        suites.append({"name": name, "path": path, "labels": labels, "files": files})
+    return sorted(suites, key=lambda item: item["name"])
 
 
 def direct_cpp_targets(changed: Iterable[str], all_targets: set[str]) -> set[str]:
     targets: set[str] = set()
     for path in changed:
-        if path.startswith("tests/test_") and path.endswith(".cpp"):
+        if path.startswith("tests/cpp/") and path.endswith(".cpp"):
             target = Path(path).stem
             if target in all_targets:
                 targets.add(target)
@@ -334,6 +221,33 @@ def direct_cpp_targets(changed: Iterable[str], all_targets: set[str]) -> set[str
 
 def direct_python_tests(changed: Iterable[str], all_tests: set[str]) -> set[str]:
     return {path for path in changed if path in all_tests}
+
+
+def select_cpp_by_labels(suites: Iterable[dict], areas: Iterable[str], reasons: dict[str, set[str]]) -> set[str]:
+    wanted_labels = expand_area_labels(areas)
+    selected: set[str] = set()
+    if not wanted_labels:
+        return selected
+    for suite in suites:
+        matched = suite["labels"] & wanted_labels
+        if matched:
+            selected.add(suite["name"])
+            add_reason(reasons, suite["name"], "manifest-labels:" + ",".join(sorted(matched)))
+    return selected
+
+
+def select_python_by_labels(suites: Iterable[dict], areas: Iterable[str], reasons: dict[str, set[str]]) -> set[str]:
+    wanted_labels = expand_area_labels(areas)
+    selected: set[str] = set()
+    if not wanted_labels:
+        return selected
+    for suite in suites:
+        matched = suite["labels"] & wanted_labels
+        if matched:
+            for test in suite["files"]:
+                selected.add(test)
+                add_reason(reasons, test, f"manifest-suite:{suite['name']} labels=" + ",".join(sorted(matched)))
+    return selected
 
 
 def force_full_from_changed(changed: Iterable[str], files: set[str], prefixes: tuple[str, ...]) -> bool:
@@ -356,36 +270,64 @@ def shard(items: list[str], index: int | None, total: int | None) -> list[str]:
     return [item for i, item in enumerate(items) if i % total == index]
 
 
+def write_explain_file(path: str | None, payload: dict) -> None:
+    if not path:
+        return
+    Path(path).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def plan_cpp(args: argparse.Namespace) -> int:
     changed = read_changed_files(Path(args.changed_files))
-    all_targets = parse_cpp_targets()
+    manifest = load_manifest()
+    suites = manifest_cpp_suites(manifest)
+    all_targets = sorted(suite["name"] for suite in suites)
     all_target_set = set(all_targets)
 
-    full = args.force_all or force_full_from_changed(changed, CPP_BROAD_FILES, CPP_BROAD_PREFIXES)
+    if not all_targets:
+        raise SystemExit("no non-MPI C++ suites found in tests/test_manifest.toml")
+
+    full_reasons: list[str] = []
+    if args.force_all:
+        full_reasons.append("force-all")
+    if force_full_from_changed(changed, CPP_BROAD_FILES, CPP_BROAD_PREFIXES):
+        full_reasons.append("broad-build-or-support-change")
+    full = bool(full_reasons)
     if not full and any(path.startswith("include/pops/") for path in changed):
         known_include = any(areas_for(path, CPP_PATH_AREAS) for path in changed if path.startswith("include/pops/"))
-        full = not known_include
+        if not known_include:
+            full = True
+            full_reasons.append("unknown-cpp-public-api-path")
 
     selected: set[str] = set()
     areas: set[str] = set()
+    reasons: dict[str, set[str]] = {}
     if not full:
-        selected.update(direct_cpp_targets(changed, all_target_set))
+        direct = direct_cpp_targets(changed, all_target_set)
+        selected.update(direct)
+        for target in direct:
+            add_reason(reasons, target, "direct-test-edit")
         for path in changed:
             areas.update(areas_for(path, CPP_PATH_AREAS))
-        selected.update(select_by_name(all_targets, areas, CPP_NAME_PATTERNS))
+        selected.update(select_cpp_by_labels(suites, areas, reasons))
         if selected:
-            selected.update(t for t in CPP_SMOKE_TARGETS if t in all_target_set)
+            for target in CPP_SMOKE_TARGETS:
+                if target in all_target_set:
+                    selected.add(target)
+                    add_reason(reasons, target, "smoke-backstop")
         elif not only_meta(changed):
             full = True
+            full_reasons.append("no-manifest-match-for-non-meta-change")
 
     if full or len(selected) > len(all_targets) * 0.75:
+        if not full:
+            full_reasons.append("selected-more-than-75-percent")
         mode = "all"
         targets = all_targets
         regex = ""
     else:
         mode = "subset" if selected else "none"
         targets = sorted(selected)
-        regex = "^(" + "|".join(re.escape(t) for t in targets) + ")$" if targets else "$^"
+        regex = "^(" + "|".join(re.escape(t) for t in targets) + r")(\.|$)" if targets else "$^"
 
     summary = f"{mode}: {len(targets)}/{len(all_targets)} C++ tests"
     print(summary)
@@ -395,7 +337,7 @@ def plan_cpp(args: argparse.Namespace) -> int:
         print(target)
 
     write_github_outputs(
-        args.github_output,
+        getattr(args, "github_output", None),
         {
             "cpp_mode": mode,
             "cpp_targets": " ".join(targets),
@@ -406,70 +348,109 @@ def plan_cpp(args: argparse.Namespace) -> int:
             "cpp_summary": summary,
         },
     )
+    write_explain_file(
+        getattr(args, "explain_file", None),
+        {
+            "kind": "cpp",
+            "mode": mode,
+            "changed_files": changed,
+            "areas": sorted(areas),
+            "expanded_labels": sorted(expand_area_labels(areas)),
+            "full_reasons": full_reasons,
+            "selected_count": len(targets),
+            "total_count": len(all_targets),
+            "selected": targets,
+            "selected_reasons": {key: sorted(value) for key, value in sorted(reasons.items()) if key in targets},
+        },
+    )
     return 0
+
+
+def _apply_cross_test_closure(selected: set[str], reasons: dict[str, set[str]]) -> None:
+    before = set(selected)
+    ci_import_closure._close_cross_test(selected, _test_to_test())
+    for test in selected - before:
+        add_reason(reasons, test, "cross-test-closure")
 
 
 def plan_python(args: argparse.Namespace) -> int:
     changed = read_changed_files(Path(args.changed_files))
-    all_tests = list_python_tests()
+    manifest = load_manifest()
+    suites = manifest_python_suites(manifest)
+    all_tests = sorted({test for suite in suites for test in suite["files"]})
     all_test_set = set(all_tests)
 
-    # (a) BROAD -> all. Any C++/bindings/CMake change is routed to this job as `python`
-    # too, so a broad Python file or a bindings change forces the whole suite.
-    full = args.force_all or force_full_from_changed(changed, PYTHON_BROAD_FILES, PYTHON_BROAD_PREFIXES)
-    reason = "force-all" if args.force_all else ("broad-file" if full else "")
+    if not all_tests:
+        raise SystemExit("no Python suites found in tests/test_manifest.toml")
+
+    full_reasons: list[str] = []
+    why: set[str] = set()
+    if args.force_all:
+        full_reasons.append("force-all")
+    if force_full_from_changed(changed, PYTHON_BROAD_FILES, PYTHON_BROAD_PREFIXES):
+        full_reasons.append("broad-file")
+    full = bool(full_reasons)
+    why.update(full_reasons)
 
     selected: set[str] = set()
     areas: set[str] = set()
-    reasons: set[str] = set()
-    if reason:
-        reasons.add(reason)
-
+    reasons: dict[str, set[str]] = {}
     if not full:
-        # (b) direct test edits -> the touched tests, closure-aware.
         direct = direct_python_tests(changed, all_test_set)
+        selected.update(direct)
         if direct:
-            selected.update(direct)
-            reasons.add("direct-test")
+            why.add("direct-test")
+        for test in direct:
+            add_reason(reasons, test, "direct-test-edit")
 
-        # (c) pops source changes -> the REVERSE import closure of the changed module,
-        # union the smoke tests. (d) an off-graph pops file (new/unparseable) -> ALL.
-        pops_changed = [p for p in changed if p.startswith("python/pops/") and p.endswith(".py")]
+        pops_changed = [path for path in changed if path.startswith("python/pops/") and path.endswith(".py")]
         if pops_changed:
             try:
                 closure = ci_import_closure.impacted_tests(pops_changed, repo_root=ROOT)
             except ci_import_closure.OffGraphChange:
                 full = True
-                reasons.add("off-graph-pops-file")
+                full_reasons.append("off-graph-pops-file")
+                why.add("off-graph-pops-file")
             else:
-                selected.update(t for t in closure if t in all_test_set)
-                reasons.add("import-closure")
+                closure_hits = {test for test in closure if test in all_test_set}
+                selected.update(closure_hits)
+                if closure_hits:
+                    why.add("import-closure")
+                for test in closure_hits:
+                    add_reason(reasons, test, "import-closure")
 
-        # A non-.py pops change (e.g. a data/asset file under python/pops) has no module
-        # to close over; keep the conservative old behaviour of running ALL for it.
-        if not full and any(
-            p.startswith("python/pops/") and not p.endswith(".py") for p in changed
-        ):
+        if not full and any(path.startswith("python/pops/") and not path.endswith(".py") for path in changed):
             full = True
-            reasons.add("non-py-pops-file")
+            full_reasons.append("non-py-pops-file")
+            why.add("non-py-pops-file")
 
-        # Cross-test closure over ALL currently-selected tests (both directions): a
-        # selected test pulls the helpers it imports, and any test importing a selected
-        # helper is pulled in too. Applies to the direct edits and closure hits alike.
-        if selected:
-            ci_import_closure._close_cross_test(selected, _test_to_test())
-            selected.update(t for t in PYTHON_SMOKE_TESTS if t in all_test_set)
+        if not full:
+            for path in changed:
+                if path.startswith("python/pops/") and path.endswith(".py"):
+                    continue
+                areas.update(areas_for(path, PYTHON_PATH_AREAS))
+                areas.update(areas_for(path, CPP_PATH_AREAS))
+            label_hits = select_python_by_labels(suites, areas, reasons)
+            if label_hits:
+                selected.update(label_hits)
+                why.add("manifest-labels")
 
-        # (e) safety net: a non-meta change that resolved to nothing runs ALL rather than
-        # silently dropping coverage (matches the historical area-heuristic fallback).
+        if not full and selected:
+            _apply_cross_test_closure(selected, reasons)
+            for test in PYTHON_SMOKE_TESTS:
+                if test in all_test_set:
+                    selected.add(test)
+                    add_reason(reasons, test, "smoke-backstop")
+
         if not full and not selected and not only_meta(changed):
             full = True
-            reasons.add("unknown-path")
+            full_reasons.append("no-manifest-match-for-non-meta-change")
+            why.add("no-manifest-match-for-non-meta-change")
 
-    # (e) safety net: >75% selected is not worth the bookkeeping -- run ALL.
     if full or len(selected) > len(all_tests) * 0.75:
         if not full:
-            reasons.add(">75%-all")
+            full_reasons.append("selected-more-than-75-percent")
+            why.add("selected-more-than-75-percent")
         mode = "all"
         selected_tests = all_tests
     else:
@@ -480,8 +461,8 @@ def plan_python(args: argparse.Namespace) -> int:
     if args.tests_file:
         Path(args.tests_file).write_text("".join(f"{test}\n" for test in sharded), encoding="utf-8")
 
-    why = ",".join(sorted(reasons)) if reasons else "meta-only"
-    summary = f"{mode}: {len(selected_tests)}/{len(all_tests)} Python test files [why: {why}]"
+    why_text = ",".join(sorted(why)) if why else "meta-only"
+    summary = f"{mode}: {len(selected_tests)}/{len(all_tests)} Python test files [why: {why_text}]"
     if args.shard_index is not None and args.shard_total is not None:
         summary += f" ({len(sharded)} in shard {args.shard_index}/{args.shard_total})"
     print(summary)
@@ -491,22 +472,41 @@ def plan_python(args: argparse.Namespace) -> int:
         print(test)
 
     write_github_outputs(
-        args.github_output,
+        getattr(args, "github_output", None),
         {
             "python_mode": mode,
             "python_count": str(len(selected_tests)),
             "python_total": str(len(all_tests)),
             "python_shard_count": str(len(sharded)),
             "python_areas": ",".join(sorted(areas)) if areas else "-",
-            "python_why": why,
+            "python_why": why_text,
             "python_summary": summary,
+        },
+    )
+    write_explain_file(
+        getattr(args, "explain_file", None),
+        {
+            "kind": "python",
+            "mode": mode,
+            "changed_files": changed,
+            "areas": sorted(areas),
+            "expanded_labels": sorted(expand_area_labels(areas)),
+            "full_reasons": full_reasons,
+            "selected_count": len(selected_tests),
+            "total_count": len(all_tests),
+            "shard_index": args.shard_index,
+            "shard_total": args.shard_total,
+            "sharded_count": len(sharded),
+            "selected": selected_tests,
+            "sharded": sharded,
+            "selected_reasons": {key: sorted(value) for key, value in sorted(reasons.items()) if key in selected_tests},
         },
     )
     return 0
 
 
 def _test_to_test() -> dict[str, set[str]]:
-    """Return only the cross-test edge map (the second half of ``test_imports``)."""
+    """Return only the cross-test edge map from ``ci_import_closure``."""
     _, edges = ci_import_closure.test_imports(repo_root=ROOT)
     return edges
 
@@ -518,12 +518,14 @@ def main() -> int:
     cpp = sub.add_parser("cpp")
     cpp.add_argument("--changed-files", required=True)
     cpp.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
+    cpp.add_argument("--explain-file")
     cpp.add_argument("--force-all", action="store_true")
     cpp.set_defaults(func=plan_cpp)
 
     py = sub.add_parser("python")
     py.add_argument("--changed-files", required=True)
     py.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
+    py.add_argument("--explain-file")
     py.add_argument("--tests-file")
     py.add_argument("--shard-index", type=int)
     py.add_argument("--shard-total", type=int)

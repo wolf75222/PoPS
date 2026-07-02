@@ -86,8 +86,8 @@ def condensed_schur(P, block, *, alpha, theta=1.0, c_rho=0, c_mx=1, c_my=2, c_bz
 
     NEAR-MATCH to native, not bit-exact: the native solve is BiCGStab + GeometricMG preconditioner while
     the Program solve is matrix-free BiCGStab WITHOUT a preconditioner -- the SAME operator and RHS, a
-    different Krylov path (both converge to the same phi at tolerance). ``python/tests/
-    test_time_condensed_schur.py`` checks against an offline reference of the identical assemble / solve
+    different Krylov path (both converge to the same phi at tolerance).
+    ``tests/python/unit/time/test_time_condensed_schur.py`` checks against an offline reference of the identical assemble / solve
     / reconstruct / extrapolate steps and documents the gap vs native (theta == 1 and theta == 0.5)."""
     if not (0.0 < float(theta) <= 1.0):
         raise ValueError("condensed_schur: theta must be in (0, 1] (got %r)" % (theta,))

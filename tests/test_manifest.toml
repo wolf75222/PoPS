@@ -1,0 +1,1016 @@
+# Generated from the reorganized test tree. Keep paths and labels in sync with CMake/pytest.
+
+[[cpp.suite]]
+name = "test_amr_aux_bz"
+sources = ["tests/cpp/integration/amr/test_amr_aux_bz.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_composite_poisson"
+sources = ["tests/cpp/integration/amr/test_amr_composite_poisson.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_composite_source_conservation"
+sources = ["tests/cpp/integration/amr/test_amr_composite_source_conservation.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_condensed_schur_composite"
+sources = ["tests/cpp/integration/amr/test_amr_condensed_schur_composite.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_condensed_schur_source_stepper"
+sources = ["tests/cpp/integration/amr/test_amr_condensed_schur_source_stepper.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_coupled_source_role_strict"
+sources = ["tests/cpp/integration/amr/test_amr_coupled_source_role_strict.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_diagnostics"
+sources = ["tests/cpp/integration/amr/test_amr_diagnostics.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_diffusion"
+sources = ["tests/cpp/integration/amr/test_amr_diffusion.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_distribute_coarse_serial"
+sources = ["tests/cpp/integration/amr/test_amr_distribute_coarse_serial.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_hierarchy"
+sources = ["tests/cpp/integration/amr/test_amr_hierarchy.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_layout_guard"
+sources = ["tests/cpp/integration/amr/test_amr_layout_guard.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_multiblock_compiled"
+sources = ["tests/cpp/integration/amr/test_amr_multiblock_compiled.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_multiblock_coupled_source"
+sources = ["tests/cpp/integration/amr/test_amr_multiblock_coupled_source.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_multiblock_imex"
+sources = ["tests/cpp/integration/amr/test_amr_multiblock_imex.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_multiblock_regrid_union"
+sources = ["tests/cpp/integration/amr/test_amr_multiblock_regrid_union.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_multiblock_substeps"
+sources = ["tests/cpp/integration/amr/test_amr_multiblock_substeps.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_named_field"
+sources = ["tests/cpp/integration/amr/test_amr_named_field.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_positivity_floor"
+sources = ["tests/cpp/integration/amr/test_amr_positivity_floor.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_potential"
+sources = ["tests/cpp/integration/amr/test_amr_potential.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_regrid_variable"
+sources = ["tests/cpp/integration/amr/test_amr_regrid_variable.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_seed_no_refine"
+sources = ["tests/cpp/integration/amr/test_amr_seed_no_refine.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_source_covered_cells"
+sources = ["tests/cpp/integration/amr/test_amr_source_covered_cells.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_spatial_parity"
+sources = ["tests/cpp/integration/amr/test_amr_spatial_parity.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_stride_cadence"
+sources = ["tests/cpp/integration/amr/test_amr_stride_cadence.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_system_bz_multibox"
+sources = ["tests/cpp/integration/amr/test_amr_system_bz_multibox.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_system_bz_pop"
+sources = ["tests/cpp/integration/amr/test_amr_system_bz_pop.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_system_contract"
+sources = ["tests/cpp/integration/amr/test_amr_system_contract.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_system_coupler"
+sources = ["tests/cpp/integration/amr/test_amr_system_coupler.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_system_twoblock"
+sources = ["tests/cpp/integration/amr/test_amr_system_twoblock.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_cf_interface"
+sources = ["tests/cpp/integration/amr/test_cf_interface.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_flux_register"
+sources = ["tests/cpp/integration/amr/test_flux_register.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_ref_ratio"
+sources = ["tests/cpp/integration/amr/test_ref_ratio.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_refinement"
+sources = ["tests/cpp/integration/amr/test_refinement.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_regrid"
+sources = ["tests/cpp/integration/amr/test_regrid.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_regrid_mpi_parity"
+sources = ["tests/cpp/integration/mpi/test_amr_regrid_mpi_parity.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
+name = "test_mpi_amr_compiled_parity"
+sources = ["tests/cpp/integration/mpi/test_mpi_amr_compiled_parity.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
+name = "test_mpi_amr_distributed_coarse"
+sources = ["tests/cpp/integration/mpi/test_mpi_amr_distributed_coarse.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
+name = "test_mpi_amr_twoblock_parity"
+sources = ["tests/cpp/integration/mpi/test_mpi_amr_twoblock_parity.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
+name = "test_mpi_array_reduce"
+sources = ["tests/cpp/integration/mpi/test_mpi_array_reduce.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [4]
+
+[[cpp.suite]]
+name = "test_mpi_coupled_source"
+sources = ["tests/cpp/integration/mpi/test_mpi_coupled_source.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
+name = "test_mpi_coupler_inject"
+sources = ["tests/cpp/integration/mpi/test_mpi_coupler_inject.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [4]
+
+[[cpp.suite]]
+name = "test_mpi_cutcell_multibox"
+sources = ["tests/cpp/integration/mpi/test_mpi_cutcell_multibox.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
+name = "test_mpi_fft_distributed"
+sources = ["tests/cpp/integration/mpi/test_mpi_fft_distributed.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [4]
+
+[[cpp.suite]]
+name = "test_mpi_fillboundary"
+sources = ["tests/cpp/integration/mpi/test_mpi_fillboundary.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [4]
+
+[[cpp.suite]]
+name = "test_mpi_hybrid_mbox_parity"
+sources = ["tests/cpp/integration/mpi/test_mpi_hybrid_mbox_parity.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
+name = "test_mpi_mbox_parity"
+sources = ["tests/cpp/integration/mpi/test_mpi_mbox_parity.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
+name = "test_mpi_poisson"
+sources = ["tests/cpp/integration/mpi/test_mpi_poisson.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [4]
+
+[[cpp.suite]]
+name = "test_mpi_polar_schur"
+sources = ["tests/cpp/integration/mpi/test_mpi_polar_schur.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
+name = "test_mpi_redistribute"
+sources = ["tests/cpp/integration/mpi/test_mpi_redistribute.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [4]
+
+[[cpp.suite]]
+name = "test_mpi_smoke"
+sources = ["tests/cpp/integration/mpi/test_mpi_smoke.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [4]
+
+[[cpp.suite]]
+name = "test_mpi_system_fft"
+sources = ["tests/cpp/integration/mpi/test_mpi_system_fft.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
+name = "test_mpi_system_gather_scatter"
+sources = ["tests/cpp/integration/mpi/test_mpi_system_gather_scatter.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
+name = "test_mpi_system_io_gather"
+sources = ["tests/cpp/integration/mpi/test_mpi_system_io_gather.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
+name = "test_mpi_system_solve_fields"
+sources = ["tests/cpp/integration/mpi/test_mpi_system_solve_fields.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
+name = "test_amr_compiled_model"
+sources = ["tests/cpp/integration/native_loader/test_amr_compiled_model.cpp"]
+labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_imex_native"
+sources = ["tests/cpp/integration/native_loader/test_amr_imex_native.cpp"]
+labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_native_loader"
+sources = ["tests/cpp/integration/native_loader/test_amr_native_loader.cpp"]
+labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_riemann_native"
+sources = ["tests/cpp/integration/native_loader/test_amr_riemann_native.cpp"]
+labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_weno5_native"
+sources = ["tests/cpp/integration/native_loader/test_amr_weno5_native.cpp"]
+labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
+
+[[cpp.suite]]
+name = "test_compiled_model_parity"
+sources = ["tests/cpp/integration/native_loader/test_compiled_model_parity.cpp"]
+labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
+
+[[cpp.suite]]
+name = "test_external_riemann_dispatch"
+sources = ["tests/cpp/integration/native_loader/test_external_riemann_dispatch.cpp"]
+labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
+
+[[cpp.suite]]
+name = "test_native_aux_named"
+sources = ["tests/cpp/integration/native_loader/test_native_aux_named.cpp"]
+labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
+
+[[cpp.suite]]
+name = "test_native_loader_param_overflow"
+sources = ["tests/cpp/integration/native_loader/test_native_loader_param_overflow.cpp"]
+labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
+
+[[cpp.suite]]
+name = "test_program_loader"
+sources = ["tests/cpp/integration/native_loader/test_program_loader.cpp"]
+labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
+
+[[cpp.suite]]
+name = "test_weno5_compiled_model"
+sources = ["tests/cpp/integration/native_loader/test_weno5_compiled_model.cpp"]
+labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
+
+[[cpp.suite]]
+name = "test_aux_runtime_bz"
+sources = ["tests/cpp/integration/runtime/test_aux_runtime_bz.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_aux_system_bz"
+sources = ["tests/cpp/integration/runtime/test_aux_system_bz.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_brick_catalog"
+sources = ["tests/cpp/integration/runtime/test_brick_catalog.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_cache_manager"
+sources = ["tests/cpp/integration/runtime/test_cache_manager.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_capability_report"
+sources = ["tests/cpp/integration/runtime/test_capability_report.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_checkpoint_cache"
+sources = ["tests/cpp/integration/runtime/test_checkpoint_cache.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_config_model_validation"
+sources = ["tests/cpp/integration/runtime/test_config_model_validation.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_exb_seam"
+sources = ["tests/cpp/integration/runtime/test_exb_seam.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_external_brick"
+sources = ["tests/cpp/integration/runtime/test_external_brick.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_external_brick_json"
+sources = ["tests/cpp/integration/runtime/test_external_brick_json.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_facade_routing"
+sources = ["tests/cpp/integration/runtime/test_facade_routing.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_module_metadata"
+sources = ["tests/cpp/integration/runtime/test_module_metadata.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_polar_system_step"
+sources = ["tests/cpp/integration/runtime/test_polar_system_step.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_profiler"
+sources = ["tests/cpp/integration/runtime/test_profiler.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_program_runtime"
+sources = ["tests/cpp/integration/runtime/test_program_runtime.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_route_ids"
+sources = ["tests/cpp/integration/runtime/test_route_ids.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_runtime_environment"
+sources = ["tests/cpp/integration/runtime/test_runtime_environment.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_system_abstraction"
+sources = ["tests/cpp/integration/runtime/test_system_abstraction.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_system_coupler"
+sources = ["tests/cpp/integration/runtime/test_system_coupler.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_system_hardening"
+sources = ["tests/cpp/integration/runtime/test_system_hardening.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_system_two_explicit"
+sources = ["tests/cpp/integration/runtime/test_system_two_explicit.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_wave_speed_cache_engagement"
+sources = ["tests/cpp/integration/runtime/test_wave_speed_cache_engagement.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_block_builder"
+sources = ["tests/cpp/unit/codegen/test_block_builder.cpp"]
+labels = ["unit", "codegen", "fast"]
+
+[[cpp.suite]]
+name = "test_dynamic_model"
+sources = ["tests/cpp/unit/codegen/test_dynamic_model.cpp"]
+labels = ["unit", "codegen", "fast"]
+
+[[cpp.suite]]
+name = "test_model_registry"
+sources = ["tests/cpp/unit/codegen/test_model_registry.cpp"]
+labels = ["unit", "codegen", "fast"]
+
+[[cpp.suite]]
+name = "test_anisotropic_epsilon"
+sources = ["tests/cpp/unit/elliptic/test_anisotropic_epsilon.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_composite_fac_poisson"
+sources = ["tests/cpp/unit/elliptic/test_composite_fac_poisson.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_composite_fac_tensor"
+sources = ["tests/cpp/unit/elliptic/test_composite_fac_tensor.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_condensed_schur_source_stepper"
+sources = ["tests/cpp/unit/elliptic/test_condensed_schur_source_stepper.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_coupled_fieldsolve"
+sources = ["tests/cpp/unit/elliptic/test_coupled_fieldsolve.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_cut_cell"
+sources = ["tests/cpp/unit/elliptic/test_cut_cell.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_cut_cell_anisotropic"
+sources = ["tests/cpp/unit/elliptic/test_cut_cell_anisotropic.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_cut_cell_anisotropic_multibox"
+sources = ["tests/cpp/unit/elliptic/test_cut_cell_anisotropic_multibox.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_cut_fraction"
+sources = ["tests/cpp/unit/elliptic/test_cut_fraction.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_cut_fraction_mg_identity"
+sources = ["tests/cpp/unit/elliptic/test_cut_fraction_mg_identity.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_elliptic_composite_rhs"
+sources = ["tests/cpp/unit/elliptic/test_elliptic_composite_rhs.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_elliptic_interface"
+sources = ["tests/cpp/unit/elliptic/test_elliptic_interface.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_elliptic_operator"
+sources = ["tests/cpp/unit/elliptic/test_elliptic_operator.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_elliptic_problem"
+sources = ["tests/cpp/unit/elliptic/test_elliptic_problem.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_full_tensor_operator"
+sources = ["tests/cpp/unit/elliptic/test_full_tensor_operator.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_generic_krylov"
+sources = ["tests/cpp/unit/elliptic/test_generic_krylov.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_geometric_mg"
+sources = ["tests/cpp/unit/elliptic/test_geometric_mg.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_krylov_solver"
+sources = ["tests/cpp/unit/elliptic/test_krylov_solver.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_newton_robustness"
+sources = ["tests/cpp/unit/elliptic/test_newton_robustness.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_poisson_convergence"
+sources = ["tests/cpp/unit/elliptic/test_poisson_convergence.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_poisson_disc"
+sources = ["tests/cpp/unit/elliptic/test_poisson_disc.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_poisson_fft"
+sources = ["tests/cpp/unit/elliptic/test_poisson_fft.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_poisson_smoother"
+sources = ["tests/cpp/unit/elliptic/test_poisson_smoother.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_poisson_smoother_cache"
+sources = ["tests/cpp/unit/elliptic/test_poisson_smoother_cache.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_polar_condensed_schur_source_stepper"
+sources = ["tests/cpp/unit/elliptic/test_polar_condensed_schur_source_stepper.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_polar_poisson_mms"
+sources = ["tests/cpp/unit/elliptic/test_polar_poisson_mms.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_polar_schur_multibox"
+sources = ["tests/cpp/unit/elliptic/test_polar_schur_multibox.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_polar_tensor_elliptic_mms"
+sources = ["tests/cpp/unit/elliptic/test_polar_tensor_elliptic_mms.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_schur_condensation"
+sources = ["tests/cpp/unit/elliptic/test_schur_condensation.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_screened_poisson"
+sources = ["tests/cpp/unit/elliptic/test_screened_poisson.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_solve_robust"
+sources = ["tests/cpp/unit/elliptic/test_solve_robust.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_solver_codegen_generated"
+sources = ["tests/cpp/unit/elliptic/test_solver_codegen_generated.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_structured_solver_diagnostics"
+sources = ["tests/cpp/unit/elliptic/test_structured_solver_diagnostics.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_variable_epsilon"
+sources = ["tests/cpp/unit/elliptic/test_variable_epsilon.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_box2d"
+sources = ["tests/cpp/unit/mesh/test_box2d.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_box_array"
+sources = ["tests/cpp/unit/mesh/test_box_array.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_cluster"
+sources = ["tests/cpp/unit/mesh/test_cluster.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_coverage_mask"
+sources = ["tests/cpp/unit/mesh/test_coverage_mask.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_dispatch_tags"
+sources = ["tests/cpp/unit/mesh/test_dispatch_tags.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_fab2d"
+sources = ["tests/cpp/unit/mesh/test_fab2d.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_fill_boundary"
+sources = ["tests/cpp/unit/mesh/test_fill_boundary.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_fill_boundary_cache"
+sources = ["tests/cpp/unit/mesh/test_fill_boundary_cache.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_geometry"
+sources = ["tests/cpp/unit/mesh/test_geometry.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_load_balance"
+sources = ["tests/cpp/unit/mesh/test_load_balance.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_multifab"
+sources = ["tests/cpp/unit/mesh/test_multifab.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_patch_range"
+sources = ["tests/cpp/unit/mesh/test_patch_range.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_physical_bc"
+sources = ["tests/cpp/unit/mesh/test_physical_bc.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_reduce"
+sources = ["tests/cpp/unit/mesh/test_reduce.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_sync_residence"
+sources = ["tests/cpp/unit/mesh/test_sync_residence.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_cfl_dt"
+sources = ["tests/cpp/unit/numerics/test_cfl_dt.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_diffusion"
+sources = ["tests/cpp/unit/numerics/test_diffusion.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_fallback_diagnostics"
+sources = ["tests/cpp/unit/numerics/test_fallback_diagnostics.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_imex_ap"
+sources = ["tests/cpp/unit/numerics/test_imex_ap.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_imex_partial"
+sources = ["tests/cpp/unit/numerics/test_imex_partial.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_imex_transport"
+sources = ["tests/cpp/unit/numerics/test_imex_transport.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_numerical_defaults"
+sources = ["tests/cpp/unit/numerics/test_numerical_defaults.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_positivity_floor"
+sources = ["tests/cpp/unit/numerics/test_positivity_floor.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_primitive_recon"
+sources = ["tests/cpp/unit/numerics/test_primitive_recon.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_riemann_capabilities"
+sources = ["tests/cpp/unit/numerics/test_riemann_capabilities.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_roe_flux"
+sources = ["tests/cpp/unit/numerics/test_roe_flux.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_splitting"
+sources = ["tests/cpp/unit/numerics/test_splitting.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_strang_splitting"
+sources = ["tests/cpp/unit/numerics/test_strang_splitting.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_weno5_ssprk3"
+sources = ["tests/cpp/unit/numerics/test_weno5_ssprk3.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_weno_convergence"
+sources = ["tests/cpp/unit/numerics/test_weno_convergence.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_adaptive_multirate"
+sources = ["tests/cpp/unit/physics/test_adaptive_multirate.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_ap_limit"
+sources = ["tests/cpp/unit/physics/test_ap_limit.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_aux_composite"
+sources = ["tests/cpp/unit/physics/test_aux_composite.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_aux_coupler_bz"
+sources = ["tests/cpp/unit/physics/test_aux_coupler_bz.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_aux_extra"
+sources = ["tests/cpp/unit/physics/test_aux_extra.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_aux_halo"
+sources = ["tests/cpp/unit/physics/test_aux_halo.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_aux_names"
+sources = ["tests/cpp/unit/physics/test_aux_names.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_aux_single_source"
+sources = ["tests/cpp/unit/physics/test_aux_single_source.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_aux_te"
+sources = ["tests/cpp/unit/physics/test_aux_te.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_composite_fac_variable_eps"
+sources = ["tests/cpp/unit/physics/test_composite_fac_variable_eps.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_coupled_source_stack_limit"
+sources = ["tests/cpp/unit/physics/test_coupled_source_stack_limit.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_isothermal_vacuum_floor"
+sources = ["tests/cpp/unit/physics/test_isothermal_vacuum_floor.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_lorentz_eliminator"
+sources = ["tests/cpp/unit/physics/test_lorentz_eliminator.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_multirate_stride"
+sources = ["tests/cpp/unit/physics/test_multirate_stride.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_polar_fluid_transport"
+sources = ["tests/cpp/unit/physics/test_polar_fluid_transport.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_polar_lorentz_source"
+sources = ["tests/cpp/unit/physics/test_polar_lorentz_source.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_polar_mms_vr"
+sources = ["tests/cpp/unit/physics/test_polar_mms_vr.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_polar_ring_advection"
+sources = ["tests/cpp/unit/physics/test_polar_ring_advection.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_polar_transport_mms"
+sources = ["tests/cpp/unit/physics/test_polar_transport_mms.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_two_species_minimal"
+sources = ["tests/cpp/unit/physics/test_two_species_minimal.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_user_time_integrator"
+sources = ["tests/cpp/unit/physics/test_user_time_integrator.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_assembler_driver"
+sources = ["tests/cpp/unit/runtime/test_assembler_driver.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
+name = "test_coupled_source"
+sources = ["tests/cpp/unit/runtime/test_coupled_source.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
+name = "test_dense_eig"
+sources = ["tests/cpp/unit/runtime/test_dense_eig.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
+name = "test_disc_domain_mask"
+sources = ["tests/cpp/unit/runtime/test_disc_domain_mask.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
+name = "test_eb_transport"
+sources = ["tests/cpp/unit/runtime/test_eb_transport.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
+name = "test_embedded_boundary_generic"
+sources = ["tests/cpp/unit/runtime/test_embedded_boundary_generic.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
+name = "test_public_validation_errors"
+sources = ["tests/cpp/unit/runtime/test_public_validation_errors.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
+name = "test_spatial_discretisation"
+sources = ["tests/cpp/unit/runtime/test_spatial_discretisation.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
+name = "test_variable_role"
+sources = ["tests/cpp/unit/runtime/test_variable_role.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
+name = "test_variable_user_role"
+sources = ["tests/cpp/unit/runtime/test_variable_user_role.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[python.suite]]
+name = "pops_python_integration_amr"
+path = "tests/python/integration/amr"
+labels = ["integration", "python", "amr", "medium"]
+
+[[python.suite]]
+name = "pops_python_integration_bindings"
+path = "tests/python/integration/bindings"
+labels = ["integration", "python", "bindings", "medium"]
+
+[[python.suite]]
+name = "pops_python_integration_io"
+path = "tests/python/integration/io"
+labels = ["integration", "python", "io", "medium"]
+
+[[python.suite]]
+name = "pops_python_integration_mpi"
+path = "tests/python/integration/mpi"
+labels = ["integration", "python", "mpi", "medium"]
+
+[[python.suite]]
+name = "pops_python_integration_native_loader"
+path = "tests/python/integration/native_loader"
+labels = ["integration", "python", "native_loader", "medium"]
+
+[[python.suite]]
+name = "pops_python_integration_runtime"
+path = "tests/python/integration/runtime"
+labels = ["integration", "python", "runtime", "medium"]
+
+[[python.suite]]
+name = "pops_python_unit_codegen"
+path = "tests/python/unit/codegen"
+labels = ["unit", "python", "codegen", "fast"]
+
+[[python.suite]]
+name = "pops_python_unit_descriptors"
+path = "tests/python/unit/descriptors"
+labels = ["unit", "python", "descriptors", "fast"]
+
+[[python.suite]]
+name = "pops_python_unit_mesh"
+path = "tests/python/unit/mesh"
+labels = ["unit", "python", "mesh", "fast"]
+
+[[python.suite]]
+name = "pops_python_unit_physics"
+path = "tests/python/unit/physics"
+labels = ["unit", "python", "physics", "fast"]
+
+[[python.suite]]
+name = "pops_python_unit_runtime"
+path = "tests/python/unit/runtime"
+labels = ["unit", "python", "runtime", "fast"]
+
+[[python.suite]]
+name = "pops_python_unit_solvers"
+path = "tests/python/unit/solvers"
+labels = ["unit", "python", "solvers", "fast"]
+
+[[python.suite]]
+name = "pops_python_unit_time"
+path = "tests/python/unit/time"
+labels = ["unit", "python", "time", "fast"]
+
+[[python.suite]]
+name = "pops_python_architecture"
+path = "tests/python/architecture"
+labels = ["quality", "python", "architecture", "fast"]

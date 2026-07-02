@@ -2,7 +2,7 @@
 """Import-closure test selection for the PoPS CI gate.
 
 This module answers one question for the ``gate-python`` selector: given a set of
-changed ``python/pops/**`` files, which ``python/tests/test_*.py`` files can be
+changed ``python/pops/**`` files, which ``tests/python/**/test_*.py`` files can be
 affected by that change? It replaces the coarse "area heuristic" (name-token match)
 for pops source changes with the ACTUAL static import graph.
 
@@ -14,7 +14,7 @@ Two graphs are built by walking the source tree:
 
 * the pops MODULE graph -- ``python/pops/**/*.py``, mapping each pops module to the
   set of pops modules it imports;
-* the TEST import map -- ``python/tests/test_*.py``, mapping each test file to the
+* the TEST import map -- ``tests/python/**/test_*.py``, mapping each test file to the
   pops modules it imports AND the sibling ``test_*`` modules it imports (cross-test
   edges resolved by the ``python3 <file>`` sys.path[0] convention).
 
@@ -40,7 +40,7 @@ from pathlib import Path
 # Repo layout anchors. ``parents[1]`` is the repo root (this file is scripts/…).
 ROOT = Path(__file__).resolve().parents[1]
 POPS_DIR = ROOT / "python" / "pops"
-TESTS_DIR = ROOT / "python" / "tests"
+TESTS_DIR = ROOT / "tests" / "python"
 
 
 # --------------------------------------------------------------------------- #
@@ -182,7 +182,7 @@ def build_module_graph(repo_root: Path | None = None) -> dict[str, set[str]]:
     global POPS_DIR, TESTS_DIR
     if repo_root is not None:
         POPS_DIR = repo_root / "python" / "pops"
-        TESTS_DIR = repo_root / "python" / "tests"
+        TESTS_DIR = repo_root / "tests" / "python"
 
     modules = _pops_module_files()
     valid = set(modules)
@@ -203,16 +203,20 @@ def build_module_graph(repo_root: Path | None = None) -> dict[str, set[str]]:
 
 
 def _test_files() -> list[Path]:
-    return sorted(TESTS_DIR.glob("test_*.py"))
+    return sorted(
+        path
+        for path in TESTS_DIR.rglob("test_*.py")
+        if "architecture" not in path.relative_to(TESTS_DIR).parts
+    )
 
 
 def test_imports(
     repo_root: Path | None = None,
 ) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
-    """Return two maps over ``python/tests/test_*.py``.
+    """Return two maps over ``tests/python/**/test_*.py``.
 
-    * ``test_to_pops``: ``{"python/tests/test_x.py": {pops modules it imports}}``.
-    * ``test_to_test``: ``{"python/tests/test_x.py": {"python/tests/test_y.py", ...}}``
+    * ``test_to_pops``: ``{"tests/python/unit/x/test_x.py": {pops modules it imports}}``.
+    * ``test_to_test``: ``{"tests/python/unit/x/test_x.py": {"tests/python/unit/x/test_y.py", ...}}``
       -- the cross-test edges (a bare ``from test_y import ...`` resolves to the sibling
       file via the ``python3 <file>`` sys.path[0] convention).
 
@@ -222,16 +226,19 @@ def test_imports(
     global POPS_DIR, TESTS_DIR
     if repo_root is not None:
         POPS_DIR = repo_root / "python" / "pops"
-        TESTS_DIR = repo_root / "python" / "tests"
+        TESTS_DIR = repo_root / "tests" / "python"
 
     pops_modules = set(_pops_module_files())
     files = _test_files()
-    test_stems = {p.stem: p for p in files}
+    test_stems_by_dir: dict[Path, dict[str, Path]] = defaultdict(dict)
+    for file in files:
+        test_stems_by_dir[file.parent][file.stem] = file
 
     test_to_pops: dict[str, set[str]] = {}
     test_to_test: dict[str, set[str]] = {}
     for path in files:
         rel = path.resolve().relative_to(ROOT).as_posix()
+        test_stems = test_stems_by_dir[path.parent]
         pops_hit: set[str] = set()
         sibling_hit: set[str] = set()
         try:

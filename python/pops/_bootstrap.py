@@ -17,7 +17,7 @@ import os as _os
 import sys as _sys
 
 
-def _explain_missing_extension(exc):
+def _explain_missing_extension(exc: ImportError) -> ImportError:
     """Turn the raw ModuleNotFoundError on pops._pops into an ACTIONABLE message (recurring bug :
     the extension is pinned to the cpython-3XY ABI of the interpreter that built it ; under a
     different python, the import fails without saying why). We list the .so files present next to the package

@@ -24,7 +24,7 @@ over a lowered ``pops.time.Program`` IR and reports, BEFORE any bind / run / all
 Nothing here binds, dlopens, allocates or reads a runtime array: the builder reads the Program IR
 (the same SSA value list ``_ir_hash`` digests) and the carried model's component counts only. It
 imports ``pops.time`` lazily (in-function) so the codegen layering stays acyclic and the module is
-``numpy`` / ``_pops``-free at module scope (cf. tests/architecture/test_import_graph.py).
+``numpy`` / ``_pops``-free at module scope (cf. tests/python/architecture/test_import_graph.py).
 """
 
 import json

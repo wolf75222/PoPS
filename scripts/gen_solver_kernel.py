@@ -3,7 +3,7 @@
 
 Lowers a textbook Richardson solver authored in the ``@pops.codegen.solvers.solver`` IR-DSL
 to a self-contained C++ kernel (``pops.codegen.solvers.generate_solver_cpp``) and writes it
-to a header the C++ validation test (``tests/test_solver_codegen_generated.cpp``) includes.
+to a header the C++ validation test (``tests/cpp/unit/elliptic/test_solver_codegen_generated.cpp``) includes.
 This is the build-time half of the codegen->compile->run validation: the test compiles the
 emitted kernel against the real ``pops::pops`` runtime and runs it on a known linear system,
 comparing to the native ``pops::richardson_solve``.
@@ -41,7 +41,7 @@ def _load_dsl():
 
 
 # omega / tol of the generated Richardson solver. They MUST match the constants the C++ validation
-# test (tests/test_solver_codegen_generated.cpp) feeds the NATIVE richardson_solve so the two trace
+# test (tests/cpp/unit/elliptic/test_solver_codegen_generated.cpp) feeds the NATIVE richardson_solve so the two trace
 # the same iterates and stop at the same residual level (parity). omega = 1e-3 under-relaxes the SPD
 # Helmholtz operator A = I - 0.1*Lap on the 32x32 grid (lambda_max ~ 820, stable for omega < ~2.4e-3);
 # tol is the ABSOLUTE residual L2 norm the loop breaks on.

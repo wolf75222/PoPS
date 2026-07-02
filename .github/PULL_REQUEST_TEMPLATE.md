@@ -46,7 +46,7 @@ Fixes PoPS-NN
      1. include/pops/numerics/flux.hpp   (the new flux)
      2. include/pops/runtime/system.cpp  (dispatch wiring)
      3. python/bindings.cpp             (Python surface)
-     4. tests/test_flux.cpp             (regression)
+     4. tests/cpp/unit/numerics/test_roe_flux.cpp (regression)
      5. docs/sphinx/reference/bricks_reference.md -->
 
 ## Risks / attention

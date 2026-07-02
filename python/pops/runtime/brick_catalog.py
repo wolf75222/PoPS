@@ -10,7 +10,7 @@ contract" without touching the compiled ``_pops`` extension.
 This module is the MIRROR of ``include/pops/runtime/builders/factory/brick_catalog.hpp`` (same
 categories, same ordered ids, same native entries / params / n_vars / polar_ok); the C++ header
 static_asserts itself against the registry (model_registry.hpp) and route (route_ids.hpp) tables,
-and ``tests/architecture/test_brick_catalog_parity.py`` locks this table against the header at the
+and ``tests/python/architecture/test_brick_catalog_parity.py`` locks this table against the header at the
 source level (no build). Deliberately IMPORT-FREE (stdlib only, like ``pops.runtime.routes``): the
 architecture gate loads it standalone, before the compiled ``_pops`` module exists.
 

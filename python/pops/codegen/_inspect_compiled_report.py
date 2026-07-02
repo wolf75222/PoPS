@@ -7,7 +7,7 @@ out of ``pops.codegen.inspect_report`` for the 500-line cap;
 ``from pops.codegen.inspect_report import CompiledReport, build_compiled_report``
 paths stay unchanged. Nothing here compiles, binds, dlopens or allocates: it reads
 Python-side metadata only. ``pops.time`` / the runtime are imported lazily to keep
-the codegen import graph acyclic (cf. tests/architecture/test_import_graph.py).
+the codegen import graph acyclic (cf. tests/python/architecture/test_import_graph.py).
 """
 
 import json

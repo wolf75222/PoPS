@@ -49,7 +49,7 @@ provider = "scikit_build_core.metadata.regex"
 input = "CMakeLists.txt"
 regex = '(?m)^\s*VERSION (?P<value>\d+\.\d+\.\d+)'
 
-# ---- ruff: Python lint (python/pops + python/tests + scripts) ----------------------------------
+# ---- ruff: Python lint (python/pops + tests/python + scripts) ----------------------------------
 # Run by the `format` job of quality.yml (informative, --exit-zero) and by pre-commit (local).
 # Ignores calibrated on the REAL state of the codebase (otherwise ~2150 pure-style findings drown the
 # ~130 useful ones, including the bugprone B and the F):
@@ -66,3 +66,22 @@ extend-exclude = ["build*", "docs", "Tools", ".kokkos-install"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "B", "UP", "NPY"]
 ignore = ["E741", "E501", "UP031"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python"]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+markers = [
+  "unit: small Python-only or pure API test",
+  "integration: requires _pops or multiple subsystems",
+  "regression: historical bug or numerical oracle",
+  "architecture: source-only architecture contract",
+  "bindings: requires the compiled _pops extension",
+  "kokkos: requires a visible Kokkos install",
+  "native_loader: compiles or loads a native shared object",
+  "compiler: requires a C++ compiler",
+  "mpi: requires MPI runtime support",
+  "hdf5: requires h5py/HDF5 support",
+  "slow: too slow for the default PR lane",
+  "serial_resource: uses process-global state or a shared external resource",
+  "process_isolated: runs the whole file in a subprocess instead of importing it as a pytest module",
+]

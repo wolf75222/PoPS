@@ -20,7 +20,7 @@
 #   template in the headers (that is NUMERICS, not bindings). NO new hand-written pybind file. This
 #   manifest is NOT the descriptor registry: the declarative registry is brick_catalog.hpp (its
 #   Python mirror brick_catalog.py) for transports and routes.py _REGISTRY["riemann"] for fluxes;
-#   tests/architecture/test_pybind_seam_manifest.py asserts every row's (transport, flux) is legal
+#   tests/python/architecture/test_pybind_seam_manifest.py asserts every row's (transport, flux) is legal
 #   there, so the manifest cannot invent a route.
 #
 # ROW FORMAT (fields separated by "|", one row per string in the list):
