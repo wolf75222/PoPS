@@ -52,6 +52,10 @@ class _AmrSystemInstall:
             AMR install has no Program, so a non-None cadence there raises (set substeps / stride on
             the native time policy instead).
         """
+        # RUNTIME FREEZE (ADC-592): a second install on an already-bound AMR engine is a re-composition
+        # and is refused explicitly -- the compiled artifact is bound exactly once.
+        from pops.runtime._lifecycle import guard_assembling
+        guard_assembling(self, "_install_compiled")
         instances = instances or {}
         params = params or {}
         aux = aux or {}
@@ -125,6 +129,15 @@ class _AmrSystemInstall:
         # apply the global cadence (or reject params= / cadence= on a NATIVE install). Extracted into the
         # _AmrSystemProgram mixin (_finish_program_install) to keep this module under the line budget.
         self._finish_program_install(compiled, so_path, params, cadence)
+
+        # (7) FREEZE (ADC-592): the AMR composition is fully lowered -- build the BoundSnapshot manifest
+        # of WHAT was bound (build_amr_snapshot, in _bound_snapshot), then _finalize_bind marks the
+        # runtime 'bound' as the LAST act. The AMR route installs no whole-system Program, so
+        # program_hash / abi_key / cache_key are None; each block's own CompiledModel hash lands in the
+        # per-block snapshot row.
+        from pops.runtime._bound_snapshot import build_amr_snapshot
+        snapshot = build_amr_snapshot(instances, solvers, aux, params)
+        self._finalize_bind(snapshot)  # freeze (ADC-592): _finalize_bind lives on _LifecycleMixin
 
     # Field names the default AMR Poisson route already serves (the shared coarse elliptic solve).
     _DEFAULT_POISSON_FIELDS = ("phi", "poisson", "charge_density", "default")

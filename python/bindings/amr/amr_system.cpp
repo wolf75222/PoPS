@@ -183,6 +183,12 @@ struct AmrSystem::Impl {
   double p_wall_radius = 0.0;
 
   bool built = false;
+  // RUNTIME FREEZE LIFECYCLE (ADC-592, parity System::Impl::bound_): false while assembling, true once
+  // mark_bound() runs (the Python bind flow calls it LAST). 'bound' is DISTINCT from the lazy 'built'
+  // materialization (bind runs BEFORE ensure_built): the structural guards refuse a call when EITHER
+  // built (the historical lazy-phase message, unchanged) OR bound_ (the new bind-vocabulary message).
+  // false for a direct engine script that never binds -> historical behavior unchanged.
+  bool bound_ = false;
   // --- single-block path (AmrCouplerMP, untouched: bit-identical to history) ---
   std::shared_ptr<void> coupler_holder;  // keeps the hooks' AmrCouplerMP<Model> alive
   std::function<void(double)> step_fn;
@@ -729,6 +735,23 @@ void validate_amr_system_config(const AmrSystemConfig& c) {
         "distribute_coarse only) ; got coarse_max_grid = " +
         std::to_string(c.coarse_max_grid));
 }
+
+// RUNTIME FREEZE LIFECYCLE guard (ADC-592, parity with System::require_assembling): a STRUCTURAL setter
+// must not mutate the composition once pops.bind has completed (@p bound == true). Called at the TOP of
+// each structural setter, BEFORE its existing 'if (p_->built) throw' lazy-phase guard -- 'bound' is a
+// DISTINCT (earlier) phase than the lazy 'built' materialization, so the historical built messages
+// (pinned by existing tests) are left verbatim; this adds the bind-vocabulary refusal on top. The
+// message NEVER recommends a legacy setter as the remedy (no validation bypass).
+void require_assembling_amr(bool bound, const char* what) {
+  if (bound)
+    throw std::runtime_error(
+        std::string("AmrSystem::") + what +
+        ": the composition is frozen once pops.bind completes (runtime lifecycle 'bound'); declare "
+        "it on the pops.Case (blocks / field problems / AMR layout / source stage / refinement / "
+        "solver routes / aux layout / installed Program) and lower it with pops.compile(...) + "
+        "pops.bind(...). Only runtime data / params / checkpoint / diagnostics may change on a "
+        "bound simulation.");
+}
 }  // namespace
 
 AmrSystem::AmrSystem(const AmrSystemConfig& c) {
@@ -746,6 +769,7 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
                           const std::vector<std::string>& implicit_roles,
                           const NewtonOptions& newton, bool newton_diagnostics,
                           double positivity_floor) {
+  require_assembling_amr(p_->bound_, "add_block");  // frozen once pops.bind completes (ADC-592)
   if (p_->built)
     throw std::runtime_error(
         "AmrSystem::add_block : the system is already built (call "
@@ -853,6 +877,7 @@ POPS_EXPORT void AmrSystem::set_compiled_block(
     const std::vector<std::string>& implicit_roles, double pos_floor) {
   (void)ncomp;  // the number of variables is carried by the concrete Model (Model::n_vars) in the
                 // type-erasing builders; the parameter stays for API symmetry with System.
+  require_assembling_amr(p_->bound_, "set_compiled_block");  // frozen once pops.bind completes (ADC-592)
   if (p_->built)
     throw std::runtime_error("AmrSystem::set_compiled_block : the system is already built");
   if (substeps < 1)
@@ -906,6 +931,8 @@ POPS_EXPORT void AmrSystem::set_compiled_block(
 // resolved by the generated AMR .so loader across the dlopen boundary (same as set_compiled_block).
 POPS_EXPORT void AmrSystem::register_elliptic_field(const std::string& field, int phi_comp,
                                                     int gx_comp, int gy_comp) {
+  require_assembling_amr(p_->bound_,
+                         "register_elliptic_field");  // frozen once pops.bind completes (ADC-592)
   if (p_->built)
     throw std::runtime_error("AmrSystem::register_elliptic_field : the system is already built");
   p_->ell_field_comps_[field] = {phi_comp, gx_comp, gy_comp};
@@ -920,6 +947,8 @@ POPS_EXPORT void AmrSystem::register_elliptic_field(const std::string& field, in
 POPS_EXPORT void AmrSystem::set_block_elliptic_field(
     const std::string& block_name, const std::string& field,
     std::function<void(const MultiFab&, MultiFab&)> rhs) {
+  require_assembling_amr(p_->bound_,
+                         "set_block_elliptic_field");  // frozen once pops.bind completes (ADC-592)
   if (p_->built)
     throw std::runtime_error("AmrSystem::set_block_elliptic_field : the system is already built");
   p_->ell_field_rhs_[field][block_name] = std::move(rhs);
@@ -951,6 +980,7 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
                                  const std::string& limiter, const std::string& riemann,
                                  const std::string& recon, const std::string& time, double gamma,
                                  int substeps, double positivity_floor) {
+  require_assembling_amr(p_->bound_, "add_native_block");  // frozen once pops.bind completes (ADC-592)
   if (substeps < 1)
     throw std::runtime_error("AmrSystem::add_native_block : substeps >= 1");
   // Zhang-Shu positivity floor (ADC-322): eager validation (parity with add_block). 0 = inactive,
@@ -1108,6 +1138,7 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
 
 void AmrSystem::set_refinement(double threshold, const std::string& variable,
                                const std::string& role) {
+  require_assembling_amr(p_->bound_, "set_refinement");  // frozen once pops.bind completes (ADC-592)
   // Reject the ambiguous double selector immediately (fast feedback); cons_vars is only known at the
   // lazy build, so an absent name/role is caught there (build_multi -> resolve_selected_component).
   if (!variable.empty() && !role.empty())
@@ -1122,6 +1153,8 @@ void AmrSystem::set_refinement(double threshold, const std::string& variable,
 }
 
 void AmrSystem::set_phi_refinement(double grad_threshold) {
+  require_assembling_amr(p_->bound_,
+                         "set_phi_refinement");  // frozen once pops.bind completes (ADC-592)
   if (p_->built)
     throw std::runtime_error(
         "AmrSystem::set_phi_refinement : the system is already built (set the "
@@ -1140,6 +1173,7 @@ void AmrSystem::set_phi_refinement(double grad_threshold) {
 
 void AmrSystem::set_poisson(const std::string& rhs, const std::string& solver,
                             const std::string& bc, const std::string& wall, double wall_radius) {
+  require_assembling_amr(p_->bound_, "set_poisson");  // frozen once pops.bind completes (ADC-592)
   // single-block/explicit CONTRACT (cf. set_compiled_block): AMR wires a SINGLE elliptic
   // solver (GeometricMG, the AmrCouplerMP template default) and a SINGLE right-hand side
   // (f = model.elliptic_rhs(U), assembled by coupler_eval_rhs). We thus explicitly REFUSE
@@ -1185,6 +1219,8 @@ void AmrSystem::set_density(const std::string& name, const std::vector<double>& 
 }
 
 void AmrSystem::set_conservative_state(const std::string& name, const std::vector<double>& U) {
+  require_assembling_amr(p_->bound_,
+                         "set_conservative_state");  // frozen once pops.bind completes (ADC-592)
   if (p_->built)
     throw std::runtime_error(
         "AmrSystem::set_conservative_state : the system is already built "
@@ -1268,6 +1304,7 @@ void AmrSystem::set_aux_field_halo_component(int comp, int bc_type, double value
 
 void AmrSystem::set_source_stage(const std::string& name, const std::string& kind, double theta,
                                  double alpha, const SourceStageOptions& opts) {
+  require_assembling_amr(p_->bound_, "set_source_stage");  // frozen once pops.bind completes (ADC-592)
   // Settings grouped into a POD (ADC-214): local aliases to keep the body readable (same names /
   // semantics as the old flat parameters). bz_aux_component of the POD is ignored here (the single-block
   // AMR stage reads the canonical B_z channel, cf. set_source_stage in amr_system.hpp).
@@ -1328,6 +1365,7 @@ void AmrSystem::set_source_stage(const std::string& name, const std::string& kin
 }
 
 void AmrSystem::set_time_scheme(const std::string& scheme) {
+  require_assembling_amr(p_->bound_, "set_time_scheme");  // frozen once pops.bind completes (ADC-592)
   if (p_->built)
     throw std::runtime_error(
         "AmrSystem::set_time_scheme : the system is already built "
@@ -1343,6 +1381,8 @@ void AmrSystem::set_time_scheme(const std::string& scheme) {
 
 void AmrSystem::add_coupled_source(const CoupledSourceProgram& prog, double frequency,
                                    const std::string& label) {
+  require_assembling_amr(p_->bound_,
+                         "add_coupled_source");  // frozen once pops.bind completes (ADC-592)
   if (p_->built)
     throw std::runtime_error(
         "AmrSystem::add_coupled_source : the system is already built "
@@ -1480,6 +1520,7 @@ double AmrSystem::step_cfl(double cfl) {
 // (single-block: read by step_cfl at each step; multi-block: passed to the engine, or added hot
 // if it already exists). fn() is evaluated PER RANK then reduced all_reduce_min on the consumer side.
 void AmrSystem::add_dt_bound(const std::string& label, std::function<double()> fn) {
+  require_assembling_amr(p_->bound_, "add_dt_bound");  // frozen once pops.bind completes (ADC-592)
   if (!fn)
     throw std::runtime_error("AmrSystem::add_dt_bound : empty bound function");
   p_->dt_bounds.push_back(Impl::GlobalDtBound{label, fn});
@@ -1553,6 +1594,8 @@ void AmrSystem::install_program_step(std::function<void(double)> step) {
 // GLOBAL macro-step cadence around the installed program closure (parity System::set_program_cadence,
 // ADC-411). Validates substeps >= 1 && stride >= 1 (fail-loud: a non-positive cadence is meaningless).
 void AmrSystem::set_program_cadence(int substeps, int stride) {
+  require_assembling_amr(p_->bound_,
+                         "set_program_cadence");  // frozen once pops.bind completes (ADC-592)
   if (substeps < 1)
     throw std::invalid_argument("AmrSystem::set_program_cadence : substeps >= 1 required (got " +
                                 std::to_string(substeps) + ")");
@@ -1573,6 +1616,23 @@ const std::vector<int>& AmrSystem::program_block_map() const {
 }
 std::string AmrSystem::installed_program_hash() const {
   return p_->installed_program_hash_;
+}
+// RUNTIME FREEZE LIFECYCLE (ADC-592, parity with System). mark_bound() is the ONE transition into the
+// frozen state; the Python bind flow calls it LAST (after every install call), so the install sequence
+// itself never trips require_assembling_amr. A second call throws. lifecycle_state() reports
+// "assembling" / "bound" / "running" (running derived from the authoritative macro_step_ counter, so it
+// needs no extra state).
+void AmrSystem::mark_bound() {
+  if (p_->bound_)
+    throw std::runtime_error(
+        "AmrSystem::mark_bound: the composition is already bound (pops.bind binds a compiled Case "
+        "exactly once; a fresh run needs a fresh pops.bind)");
+  p_->bound_ = true;
+}
+std::string AmrSystem::lifecycle_state() const {
+  if (!p_->bound_)
+    return "assembling";
+  return p_->macro_step_ > 0 ? "running" : "bound";
 }
 // COMPILED-PROGRAM RUNTIME PARAMETERS on AMR (ADC-508, parity ADC-510). Seed/overwrite/read the
 // per-PROGRAM-block RuntimeParams the installed step closure reads through the AmrProgramContext. The
@@ -1637,6 +1697,7 @@ std::map<std::string, double> AmrSystem::program_diagnostics() const {
 // frozen at the first lazy build); install_program runs BEFORE the first step so the .so's
 // pops_install_program_amr captures an AmrProgramContext over THIS AmrSystem. The .so stays loaded.
 POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
+  require_assembling_amr(p_->bound_, "install_program");  // frozen once pops.bind completes (ADC-592)
 #if defined(_WIN32)
   // Windows: the generated .dll links against _pops.lib at compile time; no global promotion needed.
   pops::dynlib::handle h = pops::dynlib::open(so_path);

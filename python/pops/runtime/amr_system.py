@@ -10,6 +10,9 @@ native-add_block / coupling / diagnostics glue.
 
 from pops._bootstrap import AmrSystemConfig, _AmrSystem
 from pops.runtime import threading as _threading
+from pops.runtime._lifecycle import (
+    FROZEN_STRUCTURAL as _FROZEN_STRUCTURAL, freeze_error as _freeze_error,
+    guard_assembling as _guard_assembling, _LifecycleMixin)
 from pops.runtime.bricks import Spatial, Explicit, Split
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
@@ -66,7 +69,8 @@ class _AmrProfileSession:
         return PerformanceSummary(_profile_payload(self._system), self._profile)
 
 
-class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemProgram):
+class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemProgram,
+                _LifecycleMixin):
     """Refined counterpart of System : one or SEVERAL blocks carried on an AMR hierarchy.
 
     SINGLE-BLOCK (1 add_block) : historical AmrCouplerMP path (dynamic regrid, reflux). MULTI-BLOCK
@@ -109,6 +113,12 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         # set_aux_field(block, name, array). Empty for blocks without a named aux field. Mirror of
         # System._aux_field_index.
         self._aux_field_index = {}
+        # RUNTIME FREEZE LIFECYCLE (ADC-592, parity with System): "assembling" until _finalize_bind
+        # flips it to "bound" (the LAST act of _install_compiled). The Python flag enforces the freeze
+        # even under a prebuilt .so with no native mark_bound; _bound_snapshot is the BoundSnapshot of
+        # what was bound (None until bind).
+        self._lifecycle = "assembling"
+        self._bound_snapshot = None
 
     def profile(self, profile=None):
         """Typed AMR / MPI profiling context manager (Spec 5 sec.12.5, criterion 43).
@@ -210,6 +220,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         first step. The COMPILED .so path carries it too now (ADC-322): a loader regenerated against
         the current headers marshals the floor (add_equation on a CompiledModel, add_native_block).
         """
+        _guard_assembling(self, "add_block")  # frozen once pops.bind completes (ADC-592)
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
         # pops.Split / pops.Strang (Schur-condensed source stage) is only wired by add_equation (which
@@ -267,6 +278,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         constant -> dt bound dt <= cfl/mu; Expr -> PER-CELL frequency mu(U) evaluated on the COARSE grid at
         each step_cfl (the freq_prog_* vectors are forwarded). Must be called BEFORE the first
         step (the source is frozen then injected at the lazy build of the runtime engine)."""
+        _guard_assembling(self, "add_coupling")  # frozen once pops.bind completes (ADC-592)
         # Late import (the multispecies module imports this package: avoid the cycle).
         from pops.physics.multispecies import CompiledCoupledSource
 
@@ -327,4 +339,10 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         return build_runtime_inspection(self, runtime="amr_system")
 
     def __getattr__(self, attr):
+        # RUNTIME FREEZE (ADC-592): once bound, refuse a native STRUCTURAL setter reached through the
+        # passthrough (sim._engine.set_refinement / install_program / ...) with the bind-vocabulary
+        # RuntimeError, so the bypass is closed even under a prebuilt .so whose C++ setters are not yet
+        # frozen. The data / param / diagnostic passthrough is untouched.
+        if attr in _FROZEN_STRUCTURAL and getattr(self, "_lifecycle", "assembling") != "assembling":
+            raise _freeze_error(attr)
         return getattr(self._s, attr)

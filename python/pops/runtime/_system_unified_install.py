@@ -131,35 +131,33 @@ class _SystemUnifiedInstall:
         @throws the verbatim Spec section-24 errors at install (missing aux / solver / block instance /
             Riemann capability). A disallowed schedule is rejected earlier, at Program compile.
         """
+        # RUNTIME FREEZE (ADC-592): a second install on an already-bound engine is refused explicitly.
+        from pops.runtime._lifecycle import guard_assembling
+        guard_assembling(self, "_install_compiled")
         instances = instances or {}
         params = params or {}
         aux = aux or {}
         solvers = solvers or {}
 
-        # (0) EARLY VALIDATION (Spec 5 sec.10): in the COMPILED path, read the artifact's DECLARED
-        # bind inputs (compiled.arguments()) and reject BEFORE any native call an install missing a
-        # REQUIRED argument (instance / runtime param / aux / solver). It enforces only 'required';
-        # an input the artifact marks optional (a const param, an unrequired solver) is never demanded.
-        # Inert: it reads metadata and compares dicts (no compile / bind / allocation). It never
-        # rejects an install that supplies everything required, so a valid install is unchanged.
+        # (0) EARLY VALIDATION (Spec 5 sec.10): in the COMPILED path, read the artifact's DECLARED bind
+        # inputs (compiled.arguments()) and reject BEFORE any native call an install missing a REQUIRED
+        # argument (instance / param / aux / solver). Inert (reads metadata); enforces only 'required',
+        # so a valid install is unchanged.
         self._validate_install_arguments(compiled, instances, params, aux, solvers)
 
         # (1) FIELD SOLVERS first: set_poisson must run before install_program (the C++ section-24
-        # solver requirement reads poisson_solver()). The DECLARED named elliptic fields (collected
-        # from the compiled handle + the per-instance models) widen the accepted solver-field set
-        # beyond the default Poisson names, so a solver selection for a model-declared named field
-        # routes (C1-System) while a typo is rejected against the declared set.
+        # solver requirement reads poisson_solver()). The DECLARED named elliptic fields (from the
+        # handle + per-instance models) widen the accepted solver-field set beyond the default Poisson
+        # names (C1-System), while a typo is rejected against the declared set.
         declared_fields = self._declared_elliptic_fields(compiled, instances)
         for field, solver_brick in solvers.items():
             self._install_solver(field, solver_brick, declared_fields)
 
         # (2) INSTANCES: add each named block (binds the Program block of that name, criterion 23),
-        # lower its spatial brick and set its initial state. The block model is the per-instance
-        # "model" if given, else the PHYSICAL model carried by the compiled handle (not the handle,
-        # which is the time Program .so installed in step 5). COMPILED: `compiled` is a
-        # compile_problem(...) handle with a .so_path time Program (section-24 validated). NATIVE:
-        # `compiled is None` -- each instance carries its OWN native model + time policy, step 5 is
-        # skipped. Validate the handle up front, BEFORE any System mutation.
+        # lower its spatial brick and set its initial state. The block model is the per-instance "model"
+        # if given, else the PHYSICAL model on the handle (not the handle, which is the step-5 .so).
+        # COMPILED: a compile_problem(...) handle with a .so_path time Program. NATIVE: compiled is None
+        # (each instance carries its own model + time policy, step 5 skipped). Validate the handle first.
         so_path = None
         compiled_model = None
         if compiled is not None:
@@ -197,9 +195,8 @@ class _SystemUnifiedInstall:
             self._install_aux(field_name, field)
 
         # (4) PARAMS (AOT-block path, P7-b): route each runtime param to the instance whose RESOLVED
-        # CompiledModel declares it (set_block_params), so a block's compiled residual (ctx.rhs_into) sees
-        # the runtime value. Native mode rejects an unknown name; the compiled-program path defers (an
-        # unconsumed name may be a Program-lowered param routed in 5b) and subtracts the consumed ones.
+        # CompiledModel declares it (set_block_params). Native mode rejects an unknown name; the
+        # compiled-program path defers (an unconsumed name may be a Program param routed in 5b).
         program_params_left = dict(params)
         if params:
             consumed = self._install_params(resolved_models, params,
@@ -212,19 +209,17 @@ class _SystemUnifiedInstall:
         # NATIVE mode (compiled=None) there is no Program -- the step-2 blocks drive the native loop.
         if so_path is not None:
             self.install_program(so_path)
-            # (5b) COMPILED-PROGRAM RUNTIME PARAMS (ADC-510, Spec 5 C5): route the REMAINING params (the
-            # ones no AOT instance consumed in 4) to the per-PROGRAM-block set_program_params, AFTER
-            # install_program seeded each block's declaration defaults. A runtime param read by the
-            # Program's own source / linear-source kernels reaches them via the System-owned per-block
-            # RuntimeParams (no recompile). A name declared by neither an AOT instance nor a Program
-            # kernel raises here (no silent drop).
+            # (5b) COMPILED-PROGRAM RUNTIME PARAMS (ADC-510, Spec 5 C5): route the REMAINING params (no
+            # AOT instance consumed them in 4) to the per-PROGRAM-block set_program_params AFTER
+            # install_program seeded the declaration defaults; the Program kernels read them via the
+            # System-owned RuntimeParams (no recompile). A name no AOT instance / Program kernel declares
+            # raises (no silent drop).
             if program_params_left:
                 self._install_program_params(compiled, program_params_left)
 
         # (6) PROGRAM CADENCE (substeps / stride): a compiled Program is ONE whole-system closure, so
-        # its macro-step cadence is GLOBAL (not per-block). Apply it AFTER install_program (the cadence
-        # wraps the installed closure). It is a compiled-program concept; a native sim sets substeps /
-        # stride on its native time policy (pops.Explicit(substeps=, stride=)) instead.
+        # its macro-step cadence is GLOBAL. Apply it AFTER install_program (the cadence wraps the
+        # installed closure); a native sim sets substeps / stride on its time policy instead.
         if cadence is not None:
             if so_path is None:
                 raise ValueError(
@@ -235,6 +230,14 @@ class _SystemUnifiedInstall:
 
         if outputs:  # (7) OUTPUT / CHECKPOINT policies (C4): run() fires each at its cadence
             self._output_policies = list(outputs)
+
+        # (8) FREEZE (ADC-592): the composition is fully lowered -- snapshot WHAT was bound, then
+        # _finalize_bind marks the runtime 'bound' as the LAST act (nothing above ran frozen, so the
+        # install sequence never trips its own guards).
+        from pops.runtime._bound_snapshot import build_uniform_snapshot
+        snapshot = build_uniform_snapshot(self, compiled, resolved_models, instances, solvers,
+                                          cadence, aux, params)
+        self._finalize_bind(snapshot)  # _finalize_bind lives on _LifecycleMixin
 
     def explain_bind(self, compiled):
         """A printable :class:`pops.codegen.inspect_report.BindReport` of @p compiled vs this sim
@@ -261,13 +264,11 @@ class _SystemUnifiedInstall:
     def _install_cadence(self, cadence):
         """Apply a CompiledTime macro-step cadence to the installed program (set_program_cadence).
 
-        set_program_cadence is a SYSTEM-level orchestration around the opaque program closure
-        (program.py): substeps=n re-runs the whole program over eff_dt/n; stride=M runs it once per M
-        macro-steps. A NUMERIC cadence.cfl is NOT consumed here (set_program_cadence carries only
-        substeps / stride); instead it is stored on the System so a bare sim.run(t_end) defaults
-        sim.run(cfl=) to it (System::step_cfl routes the resulting per-block CFL dt through the
-        installed program). A self-computed cfl sub-program (cfl='program') is rejected upstream by
-        CompiledTime, so it never reaches here."""
+        set_program_cadence is a SYSTEM-level orchestration around the opaque program closure:
+        substeps=n re-runs the whole program over eff_dt/n; stride=M runs it once per M macro-steps. A
+        NUMERIC cadence.cfl is NOT consumed here; it is stored on the System so a bare sim.run(t_end)
+        defaults sim.run(cfl=) to it. A self-computed cfl sub-program (cfl='program') is rejected
+        upstream by CompiledTime, so it never reaches here."""
         from pops.time.program import CompiledTime
         if not isinstance(cadence, CompiledTime):
             raise TypeError("install(cadence=): expected a pops.CompiledTime(substeps=, stride=), "
@@ -312,10 +313,8 @@ class _SystemUnifiedInstall:
         production/native backend FREEZES runtime params at their declaration value (so
         install(params=...) -> set_block_params would raise 'block ... has no runtime parameter'); a
         const-only model keeps the native production path (no .so dlopen). The AOT block gates its OWN
-        time integrator to SSPRK2 + backward-Euler, but that is harmless here: a unified install runs
-        the compiled time Program, which drives the step (the per-instance ``time`` is not the stepper;
-        cf. compile_problem). A runtime-param instance must therefore use an AOT-compatible
-        ``time`` (the default pops.Explicit() == SSPRK2 is fine; euler/ssprk3 raise at add_equation)."""
+        time integrator to SSPRK2 + backward-Euler, harmless here (the compiled time Program drives the
+        step). A runtime-param instance must use an AOT-compatible ``time`` (Explicit()==SSPRK2 fine)."""
         # Late imports (the codegen/physics modules import this package: avoid the cycle).
         from pops.codegen.loader import CompiledModel
         from pops.physics.facade import Model

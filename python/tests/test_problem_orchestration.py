@@ -747,6 +747,106 @@ def test_bind_unknown_initial_state_raises():
 _SAVED = []
 
 
+# --- ADC-592: compile-time snapshot authority + Case-mutation drift check ---
+def test_compile_freezes_snapshot_authority(monkeypatch=None):
+    # ADC-592: compile() freezes WHAT it saw on the handle -- _block_specs (model + spatial per block),
+    # _field_solvers, _outputs -- so bind() lowers from the compile-time truth, not a live Case re-read.
+    def _fake_compile_problem(*, time, model, backend, target, **kw):
+        return _StubCompiled(target=target)
+
+    _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _fake_compile_problem)
+    try:
+        prob = (pops.Case().block("ne", physics=_StubModel("ne"))
+                .block("ni", physics=_StubModel("ni")).field(_poisson_problem()))
+        compiled = orchestration.compile(prob, time=object())
+        _check(set(compiled._block_specs) == {"ne", "ni"},
+               "compile freezes a per-block spec (model + spatial) on the handle")
+        _check(all("model" in s and "spatial" in s for s in compiled._block_specs.values()),
+               "each frozen block spec carries model + spatial")
+        _check("phi" in compiled._field_solvers,
+               "compile freezes the field solvers (not a live re-read)")
+        _check(compiled._outputs == [], "compile freezes the (empty) output policies")
+    finally:
+        _unpatch(monkeypatch)
+    print("ok test_compile_freezes_snapshot_authority")
+
+
+def test_bind_rejects_case_mutated_after_compile(monkeypatch=None):
+    # ADC-592 (the proven vulnerability closed): mutating the Case's blocks between compile and bind is
+    # a LOUD ValueError -- a compiled artifact is frozen at compile and not affected by a later mutation.
+    def _fake_compile_problem(*, time, model, backend, target, **kw):
+        return _StubCompiled(target=target)
+
+    _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _fake_compile_problem)
+    try:
+        import pops.runtime.system as rtsys
+
+        class _StubSystem(_RecordingSim):
+            # ADC-583/#427: the Uniform adapter derives a SystemConfig from the Case mesh and
+            # passes it to the engine constructor; mirror the real System signature.
+            def __init__(self, config=None):
+                self.config = config
+
+        orig = rtsys.System
+        rtsys.System = _StubSystem
+        try:
+            prob = pops.Case().block("ne", physics=_StubModel("ne")).field(_poisson_problem())
+            compiled = orchestration.compile(prob, time=object())
+            compiled._problem = prob  # the live Case bind() re-reads
+            # MUTATE the Case after compile: add a block the snapshot never saw.
+            prob.block("ni_late", physics=_StubModel("ni_late"))
+            try:
+                orchestration.bind(compiled, initial_state={"ne": [1.0]})
+                raise AssertionError("a Case mutated after compile must be refused at bind")
+            except ValueError as exc:
+                msg = str(exc)
+                _check("mutated after pops.compile" in msg, "the drift error names the mutation")
+                _check("ni_late" in msg, "the drift error names the added block")
+                _check("recompile" in msg, "the drift error points at a recompile")
+        finally:
+            rtsys.System = orig
+    finally:
+        _unpatch(monkeypatch)
+    print("ok test_bind_rejects_case_mutated_after_compile")
+
+
+def test_bind_uses_snapshot_not_live_physics(monkeypatch=None):
+    # ADC-592: the Uniform install instances come from the COMPILE-TIME snapshot (_block_specs), so a
+    # mutation of a block's physics AFTER compile (without changing the block set) does not leak into
+    # the bound install -- the frozen model is what gets bound.
+    def _fake_compile_problem(*, time, model, backend, target, **kw):
+        return _StubCompiled(target=target)
+
+    _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _fake_compile_problem)
+    try:
+        import pops.runtime.system as rtsys
+
+        class _StubSystem(_RecordingSim):
+            # ADC-583/#427: the Uniform adapter derives a SystemConfig from the Case mesh and
+            # passes it to the engine constructor; mirror the real System signature.
+            def __init__(self, config=None):
+                self.config = config
+
+        orig = rtsys.System
+        rtsys.System = _StubSystem
+        try:
+            m0 = _StubModel("ne")
+            prob = pops.Case().block("ne", physics=m0).field(_poisson_problem())
+            compiled = orchestration.compile(prob, time=object())
+            frozen_model = compiled._block_specs["ne"]["model"]
+            # Swap the block's physics AFTER compile (same block name -> no drift).
+            prob._blocks["ne"]["physics"] = _StubModel("ne_swapped")
+            sim = orchestration.bind(compiled, initial_state={"ne": [1.0]})
+            _check(_RecordingSim.last["instances"]["ne"]["model"] is frozen_model,
+                   "bind installs the COMPILE-TIME frozen model, not the live-swapped physics")
+            _check(sim is not None, "bind still returns a bound simulation view")
+        finally:
+            rtsys.System = orig
+    finally:
+        _unpatch(monkeypatch)
+    print("ok test_bind_uses_snapshot_not_live_physics")
+
+
 def _patch(monkeypatch, dotted, value):
     module_name, attr = dotted.rsplit(".", 1)
     import importlib

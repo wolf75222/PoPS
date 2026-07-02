@@ -817,6 +817,26 @@ class System {
   /// or "" if no program is installed. Recorded in the checkpoint (sim.checkpoint) so a restart against
   /// a DIFFERENT compiled Program is rejected fail-loud (the buffers / cadence would be meaningless).
   POPS_EXPORT std::string installed_program_hash() const;
+
+  /// @name Runtime freeze lifecycle (ADC-592)
+  /// The runtime lifecycle is EXPLICIT: assembly mutable BEFORE bind, composition FROZEN once
+  /// pops.bind completes, simulation mutable only through controlled runtime APIs (state data,
+  /// runtime params, checkpoint/restart, diagnostics, output). mark_bound() is the ONE transition
+  /// into the frozen state; it is called LAST by the Python bind flow (after every install call), so
+  /// the install sequence itself never trips the structural-setter guards. A direct engine script
+  /// that never binds (the C++ tests, the low-level runtime seam) is UNAFFECTED -- bound_ stays false
+  /// until mark_bound() runs, so the historical setters keep working.
+  /// @{
+  /// Mark the composition as bound (frozen): every structural setter (add_block / set_poisson /
+  /// set_source_stage / install_program / set_disc_domain / ...) then rejects with a precise error.
+  /// The runtime-data setters (set_state / set_density / set_block_params / set_program_params /
+  /// set_magnetic_field / set_aux_field_component / set_clock / set_potential) stay allowed. A second
+  /// mark_bound() throws (a composition binds exactly once).
+  void mark_bound();
+  /// The runtime lifecycle state: "assembling" (not yet bound -- the composition is mutable),
+  /// "bound" (mark_bound() ran, no macro-step advanced yet), "running" (bound AND macro_step() > 0).
+  std::string lifecycle_state() const;
+  /// @}
   /// @name Scheduler value cache (epic ADC-399 / ADC-458, Spec 3 section 17-18 + 30)
   /// The held-node value cache (every(N).hold / accumulate_dt) lives in the SYSTEM (one CacheManager
   /// per installed Program), NOT in the .so step closure -- so the checkpoint can reach it, exactly the

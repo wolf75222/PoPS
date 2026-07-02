@@ -89,6 +89,8 @@ class _AmrSystemEquation:
         @p time: pops.Explicit (default) or pops.IMEX (implicit stiff source). @p substeps: overrides
         time.substeps.
         """
+        from pops.runtime._lifecycle import guard_assembling
+        guard_assembling(self, "add_equation")  # frozen once pops.bind completes (ADC-592)
         # Late imports (the codegen/physics modules import this package: avoid the cycle).
         from pops.codegen.loader import CompiledModel
         from pops.physics.aux import AUX_NAMED_BASE

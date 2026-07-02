@@ -10,6 +10,8 @@ are split into cohesive mixins (``_system_install`` / ``_system_unified_install`
 
 from pops._bootstrap import SystemConfig, _System
 from pops.runtime import threading as _threading
+from pops.runtime._lifecycle import (
+    FROZEN_STRUCTURAL as _FROZEN_STRUCTURAL, freeze_error as _freeze_error, _LifecycleMixin)
 from pops.runtime.amr_system import AmrSystem  # noqa: F401  (re-exported via this module)
 from pops.runtime._system_aux_state import _SystemAuxState
 from pops.runtime._system_diagnostics import _SystemDiagnostics
@@ -63,7 +65,7 @@ class _ProfileSession:
 
 
 class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
-             _SystemDiagnostics, _SystemIO):
+             _SystemDiagnostics, _SystemIO, _LifecycleMixin):
     """The system/coupler: composes blocks, shares a Poisson, advances the whole.
 
     Low-level runtime. The documented PUBLIC path is the typed ``pops.Case`` assembly lowered by
@@ -112,6 +114,12 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         # OUTPUT / CHECKPOINT policies (C4 / ADC-509) flowed by pops.bind through _install_compiled.
         # Empty until install; run(output_dir=...) fires each at its cadence via write()/checkpoint.
         self._output_policies = []
+        # RUNTIME FREEZE LIFECYCLE (ADC-592): "assembling" while the composition is mutable, "bound"
+        # once _finalize_bind runs (the LAST act of _install_compiled). The Python flag enforces the
+        # freeze even under a prebuilt .so with no native mark_bound; the native lifecycle is defence
+        # in depth. _bound_snapshot is the BoundSnapshot manifest of what was bound (None until bind).
+        self._lifecycle = "assembling"
+        self._bound_snapshot = None
 
     def run(self, t_end, cfl=None, max_steps=1_000_000, output_dir=None):
         """Advance up to t_end by CFL steps (sugar: `while time() < t_end: step_cfl(cfl)`).
@@ -223,4 +231,10 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
                 "with no AMR hierarchy. Declare layout=AMR(...) on the pops.Case for a refined run "
                 "(its sim.amr returns an AmrRuntimeView), or pops.inspect_amr(layout) for the "
                 "static authoring report.")
+        # RUNTIME FREEZE (ADC-592): once bound, refuse a native STRUCTURAL setter reached through the
+        # passthrough (sim._engine.install_program / set_refinement / ...) with the bind-vocabulary
+        # RuntimeError -- NOT AttributeError -- so the bypass is closed even under a prebuilt .so whose
+        # C++ setters are not yet frozen. The data / param / diagnostic passthrough is untouched.
+        if attr in _FROZEN_STRUCTURAL and getattr(self, "_lifecycle", "assembling") != "assembling":
+            raise _freeze_error(attr)
         return getattr(self._s, attr)

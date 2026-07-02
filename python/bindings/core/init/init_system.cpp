@@ -128,6 +128,11 @@ void init_system(py::module_& m) {
       // ADC-406b: IR hash of the installed compiled Program (the .so's pops_program_hash), or "" if
       // none. sim.checkpoint records it; sim.restart rejects a restart against a DIFFERENT Program.
       .def("installed_program_hash", &System::installed_program_hash)
+      // ADC-592: runtime freeze lifecycle. mark_bound() (called LAST by the Python bind flow) freezes
+      // the composition -> every structural setter then rejects; lifecycle_state() reports
+      // assembling / bound / running (running derived from macro_step()).
+      .def("mark_bound", &System::mark_bound)
+      .def("lifecycle_state", &System::lifecycle_state)
       // ADC-466 (Spec criterion 24): configured field (Poisson) solver token (the last set_poisson
       // solver, default "geometric_mg"). install_program reads it to validate a field operator's
       // solver requirement; exposed so the unified sim.install can pre-validate host-side too.

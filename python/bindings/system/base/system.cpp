@@ -257,6 +257,13 @@ struct System::Impl {
   // install_program records it. Serialized in the checkpoint so a restart against a DIFFERENT compiled
   // Program is rejected fail-loud (mismatched buffers / cadence would be meaningless).
   std::string installed_program_hash_;
+  // RUNTIME FREEZE LIFECYCLE (ADC-592): false while assembling (the composition is mutable), true
+  // once mark_bound() runs (the Python bind flow calls it LAST, after every install call). When true,
+  // the structural setters (add_block / set_poisson / set_source_stage / install_program / ...) reject;
+  // the runtime-data setters stay allowed. NOT referenced by SystemStepper -> no MockImpl impact (like
+  // installed_program_hash_ / program_block_map_), and false for a direct engine script that never
+  // binds (the 159 C++/low-level tests) -> historical behavior unchanged.
+  bool bound_ = false;
   // NAME-BASED block binding (Spec 3 criterion 23, ADC-457): program-index -> system-index map. entry
   // p holds the System block index that the Program's block p (in P.state declaration order) names.
   // Built by install_program from the .so's pops_program_block_name table; read by ProgramContext to
@@ -659,6 +666,23 @@ void validate_system_config(const SystemConfig& c) {
                              std::to_string(c.L));
   check_geometry(c);  // geometry token + polar ring (r_max>r_min>=0, nr>=3, theta_boxes) invariants
 }
+
+// RUNTIME FREEZE LIFECYCLE guard (ADC-592): a STRUCTURAL setter must not mutate the composition once
+// pops.bind has completed (@p bound == true). @p what names the refused method. The message speaks the
+// BIND vocabulary and points at the pops.Case / pops.compile / pops.bind path -- it NEVER recommends a
+// legacy setter as the remedy, so it cannot read as a validation bypass. mark_bound() is called LAST by
+// the Python bind flow, so the install sequence itself never trips this; a direct engine script that
+// never binds keeps bound == false and is unaffected. Called at the TOP of each structural setter.
+void require_assembling(bool bound, const char* what) {
+  if (bound)
+    throw std::runtime_error(
+        std::string("System::") + what +
+        ": the composition is frozen once pops.bind completes (runtime lifecycle 'bound'); declare "
+        "it on the pops.Case (blocks / field problems / AMR layout / source stage / refinement / "
+        "solver routes / aux layout / installed Program) and lower it with pops.compile(...) + "
+        "pops.bind(...). Only runtime data / params / checkpoint / diagnostics may change on a "
+        "bound simulation.");
+}
 }  // namespace
 
 System::System(const SystemConfig& c) {
@@ -676,6 +700,7 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
                        const std::vector<std::string>& implicit_roles, const NewtonOptions& newton,
                        bool newton_diagnostics, double positivity_floor, bool wave_speed_cache) {
   Impl* P = p_.get();
+  require_assembling(P->bound_, "add_block");  // frozen once pops.bind completes (ADC-592)
   // Completeness contract of the model (ADC-290): transport / elliptic must be chosen explicitly.
   // Validated HERE, before the transport string routing below (which would otherwise report a
   // cryptic "unknown transport ''" for an unset tag) -- a default-constructed ModelSpec no longer
@@ -981,6 +1006,7 @@ void System::set_block_dt_bounds(const std::string& name,
 // GLOBAL step bound (host, one evaluation per step): multi-block coupling, Schur/Poisson,
 // scheduler, user policy. cf. SystemStepper::step_cfl for the aggregation.
 void System::add_dt_bound(const std::string& label, std::function<double()> fn) {
+  require_assembling(p_->bound_, "add_dt_bound");  // frozen once pops.bind completes (ADC-592)
   if (!fn)
     throw std::runtime_error("System::add_dt_bound : empty bound function");
   p_->dt_bounds_.push_back(Impl::GlobalDtBound{label, std::move(fn)});
@@ -1034,6 +1060,7 @@ System::SourceNewtonReport System::newton_report(const std::string& name) const 
 // here with System::Impl (defined above, private to this TU). Bit-identical: pure delegation.
 void System::add_dynamic_block(const std::string& name, const std::string& so_path, int substeps,
                                const std::vector<std::string>& names, const std::string& recon) {
+  require_assembling(p_->bound_, "add_dynamic_block");  // frozen once pops.bind completes (ADC-592)
   native_loader::add_dynamic_block(this, p_.get(), name, so_path, substeps, names, recon);
   EffectiveBlockOptions& opt = p_->block_options_[name];
   opt.route = "dynamic_loader";
@@ -1054,6 +1081,7 @@ void System::add_compiled_block(const std::string& name, const std::string& so_p
                                 const std::string& limiter, const std::string& riemann,
                                 const std::string& recon, const std::string& time, int substeps,
                                 const std::vector<std::string>& names, double positivity_floor) {
+  require_assembling(p_->bound_, "add_compiled_block");  // frozen once pops.bind completes (ADC-592)
   if (!(positivity_floor >= 0.0) || !std::isfinite(positivity_floor))
     throw std::runtime_error(
         "System::add_compiled_block : positivity_floor >= 0 and finite (0 = inactive)");
@@ -1102,6 +1130,7 @@ void System::add_native_block(const std::string& name, const std::string& so_pat
                               const std::string& limiter, const std::string& riemann,
                               const std::string& recon, const std::string& time, double gamma,
                               int substeps, bool evolve, int stride, double positivity_floor) {
+  require_assembling(p_->bound_, "add_native_block");  // frozen once pops.bind completes (ADC-592)
   if (!(positivity_floor >= 0.0) || !std::isfinite(positivity_floor))
     throw std::runtime_error(
         "System::add_native_block : positivity_floor >= 0 and finite (0 = inactive)");
@@ -1136,6 +1165,7 @@ void System::add_native_block(const std::string& name, const std::string& so_pat
 void System::set_poisson(const std::string& rhs, const std::string& solver, const std::string& bc,
                          const std::string& wall, double wall_radius, double epsilon,
                          double abs_tol) {
+  require_assembling(p_->bound_, "set_poisson");  // frozen once pops.bind completes (ADC-592)
   if (epsilon == 0.0)
     throw std::runtime_error("System::set_poisson : epsilon != 0 required");
   if (abs_tol < 0.0)
@@ -1168,6 +1198,7 @@ GeometryMode parse_geometry_mode(const std::string& mode, const char* err_contex
 
 void System::set_disc_domain(double cx, double cy, double R, const std::string& mode) {
   Impl* P = p_.get();
+  require_assembling(P->bound_, "set_disc_domain");  // frozen once pops.bind completes (ADC-592)
   // CARTESIAN only: polar already bounds the ring by its radial walls (r_min / r_max,
   // zero radial flux) -> a Cartesian disc mask makes no sense on the (r, theta) grid.
   if (P->polar_)
@@ -1210,6 +1241,7 @@ void System::set_disc_domain(double cx, double cy, double R, const std::string& 
 
 void System::set_geometry_mode(const std::string& mode) {
   Impl* P = p_.get();
+  require_assembling(P->bound_, "set_geometry_mode");  // frozen once pops.bind completes (ADC-592)
   const GeometryMode gmode = parse_geometry_mode(mode, "System::set_geometry_mode");
   // An embedded-boundary mode (staircase/cutcell) only makes sense with a fixed domain: otherwise the
   // stepper would fall back on the full transport (the mask / level set does not exist), a silent
@@ -1248,6 +1280,7 @@ std::vector<double> System::disc_mask() const {
 }
 
 void System::set_epsilon_field(const std::vector<double>& eps) {
+  require_assembling(p_->bound_, "set_epsilon_field");  // frozen once pops.bind completes (ADC-592)
   const int n = p_->cfg.n;
   if (static_cast<int>(eps.size()) != n * n)
     throw std::runtime_error("System::set_epsilon_field : size != n*n");
@@ -1262,6 +1295,8 @@ void System::set_epsilon_field(const std::vector<double>& eps) {
 
 void System::set_epsilon_anisotropic_field(const std::vector<double>& eps_x,
                                            const std::vector<double>& eps_y) {
+  require_assembling(p_->bound_,
+                     "set_epsilon_anisotropic_field");  // frozen once pops.bind completes (ADC-592)
   const int n = p_->cfg.n;
   if (static_cast<int>(eps_x.size()) != n * n || static_cast<int>(eps_y.size()) != n * n)
     throw std::runtime_error(
@@ -1282,6 +1317,7 @@ void System::set_epsilon_anisotropic_field(const std::vector<double>& eps_x,
 }
 
 void System::set_reaction_field(const std::vector<double>& kappa) {
+  require_assembling(p_->bound_, "set_reaction_field");  // frozen once pops.bind completes (ADC-592)
   const int n = p_->cfg.n;
   if (static_cast<int>(kappa.size()) != n * n)
     throw std::runtime_error("System::set_reaction_field : size != n*n");
@@ -1318,6 +1354,8 @@ void System::set_magnetic_field(const std::vector<double>& bz) {
 }
 
 void System::set_electron_temperature_from(const std::string& name) {
+  require_assembling(p_->bound_,
+                     "set_electron_temperature_from");  // frozen once pops.bind completes (ADC-592)
   const int idx = p_->index(name);  // raises if unknown block
   if (p_->sp[static_cast<std::size_t>(idx)].ncomp != 4)
     throw std::runtime_error(
@@ -1418,6 +1456,7 @@ std::vector<double> System::aux_field_component(int comp) const {
 void System::add_ionization(const std::string& electron, const std::string& ion,
                             const std::string& neutral, double rate) {
   Impl* P = p_.get();
+  require_assembling(P->bound_, "add_ionization");  // frozen once pops.bind completes (ADC-592)
   const int ie = P->index(electron), ii = P->index(ion), ig = P->index(neutral);
   const Real k = static_cast<Real>(rate);
   // Density resolved by ROLE (like add_collision / add_thermal_exchange). A genuinely ROLELESS block
@@ -1456,6 +1495,7 @@ void System::add_ionization(const std::string& electron, const std::string& ion,
 
 void System::add_collision(const std::string& a, const std::string& b, double rate) {
   Impl* P = p_.get();
+  require_assembling(P->bound_, "add_collision");  // frozen once pops.bind completes (ADC-592)
   const int ia = P->index(a), ib = P->index(b);
   if (P->sp[ia].ncomp < 3 || P->sp[ib].ncomp < 3)
     throw std::runtime_error(
@@ -1504,6 +1544,7 @@ void System::add_collision(const std::string& a, const std::string& b, double ra
 
 void System::add_thermal_exchange(const std::string& a, const std::string& b, double rate) {
   Impl* P = p_.get();
+  require_assembling(P->bound_, "add_thermal_exchange");  // frozen once pops.bind completes (ADC-592)
   const int ia = P->index(a), ib = P->index(b);
   if (P->sp[ia].ncomp != 4 || P->sp[ib].ncomp != 4)
     throw std::runtime_error(
@@ -1559,6 +1600,7 @@ void System::add_thermal_exchange(const std::string& a, const std::string& b, do
 
 void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double frequency,
                                 const std::string& label) {
+  require_assembling(p_->bound_, "add_coupled_source");  // frozen once pops.bind completes (ADC-592)
   // Bytecode description grouped into a POD (ADC-214): local aliases to keep the body readable (the
   // names and the semantics are strictly those of the old flat parameters).
   const std::vector<std::string>& in_blocks = prog_desc.in_blocks;
@@ -1745,6 +1787,7 @@ void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double fr
 
 void System::set_source_stage(const std::string& name, const std::string& kind, double theta,
                               double alpha, const SourceStageOptions& opts) {
+  require_assembling(p_->bound_, "set_source_stage");  // frozen once pops.bind completes (ADC-592)
   // Settings grouped into a POD (ADC-214): local aliases to keep the body readable (the names and the
   // semantics are strictly those of the old flat parameters).
   const double krylov_tol = opts.krylov_tol;
@@ -1895,6 +1938,7 @@ void System::set_source_stage(const std::string& name, const std::string& kind, 
 }
 
 void System::set_time_scheme(const std::string& scheme) {
+  require_assembling(p_->bound_, "set_time_scheme");  // frozen once pops.bind completes (ADC-592)
   // Routes the splitting policy of the system stepper (default Lie = bit-identical). The Strang
   // scheme reuses the SAME bricks (s.advance for the transport half-advances, run_source_stage
   // for the full source stage); it RE-SOLVES solve_fields between the stages (cf. SystemStepper::step_strang
@@ -1912,6 +1956,7 @@ void System::set_time_scheme(const std::string& scheme) {
 }
 
 void System::set_gauss_policy(const std::string& policy) {
+  require_assembling(p_->bound_, "set_gauss_policy");  // frozen once pops.bind completes (ADC-592)
   // Gauss's law policy (project R0, Hoffart reproduction). "restart" (default): solve_fields
   // re-solves -Delta phi = f at each step (bit-identical to the historical). "evolve": after the first
   // solve (phi^0), solve_fields NO LONGER re-solves the Poisson; it derives the aux from the CURRENT phi that
@@ -2228,6 +2273,7 @@ void System::install_program_step(std::function<void(double)> step) {
 // program closure (cf. SystemStepper::step). Kept separate from install_program so the .so ABI is
 // untouched. Validates substeps >= 1 && stride >= 1 (fail-loud: a non-positive cadence is meaningless).
 void System::set_program_cadence(int substeps, int stride) {
+  require_assembling(p_->bound_, "set_program_cadence");  // frozen once pops.bind completes (ADC-592)
   if (substeps < 1)
     throw std::invalid_argument("System::set_program_cadence: substeps >= 1 required (got " +
                                 std::to_string(substeps) + ")");
@@ -2480,6 +2526,7 @@ void System::set_history_initialized(const std::string& name, bool initialized) 
 // pops_install_program(this) which wraps the System in a ProgramContext and installs the macro-step
 // closure. The .so stays loaded for the process lifetime (the closure runs every step).
 POPS_EXPORT void System::install_program(const std::string& so_path) {
+  require_assembling(p_->bound_, "install_program");  // frozen once pops.bind completes (ADC-592)
 #if defined(_WIN32)
   // Windows: the generated .dll links against _pops.lib at compile time; no global promotion needed.
   pops::dynlib::handle h = pops::dynlib::open(so_path);
@@ -2695,6 +2742,24 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
 }
 std::string System::installed_program_hash() const {
   return p_->installed_program_hash_;
+}
+// RUNTIME FREEZE LIFECYCLE (ADC-592). mark_bound() is the ONE transition into the frozen state; the
+// Python bind flow calls it LAST (after every install call), so the install sequence itself never
+// trips require_assembling. A second call throws (a composition binds exactly once). lifecycle_state()
+// reports "assembling" (not bound), "bound" (bound, no macro-step advanced), "running" (bound AND
+// macro_step_ > 0) -- the running edge is derived from the macro-step counter, so it needs no extra
+// state (and SystemStepper never reads bound_ -> no MockImpl impact).
+void System::mark_bound() {
+  if (p_->bound_)
+    throw std::runtime_error(
+        "System::mark_bound: the composition is already bound (pops.bind binds a compiled Case "
+        "exactly once; a fresh run needs a fresh pops.bind)");
+  p_->bound_ = true;
+}
+std::string System::lifecycle_state() const {
+  if (!p_->bound_)
+    return "assembling";
+  return p_->macro_step_ > 0 ? "running" : "bound";
 }
 // SCHEDULER VALUE CACHE (ADC-458): the System-owned CacheManager every ProgramContext forwards to. The
 // .so resolves this across the dlopen boundary (POPS_EXPORT), so the step closure's cache_store_aux /
