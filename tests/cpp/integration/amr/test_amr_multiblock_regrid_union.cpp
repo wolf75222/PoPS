@@ -30,7 +30,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>    // AmrRuntime, AmrRuntimeBlock
 #include <pops/runtime/amr_system.hpp>  // facade AmrSystem (deverrouillage multi-blocs + regrid_every>0)
@@ -178,19 +177,12 @@ static AmrRuntime make_two_block(int N, double L, double B0, double q0, double q
                     S.replicated_coarse, S.wall);
 }
 
-static int pops_run_test_amr_multiblock_regrid_union(int argc, char** argv) {
+TEST(test_amr_multiblock_regrid_union, Runs) {
 #if defined(POPS_HAS_KOKKOS)
+  int argc = 0;
+  char** argv = nullptr;
   Kokkos::ScopeGuard guard(argc, argv);
-#else
-  (void)argc;
-  (void)argv;
 #endif
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    std::printf("  [%s] %s\n", c ? "OK " : "XX ", w);
-    if (!c)
-      ++fails;
-  };
 
   const int N = 32;
   const double L = 1.0, B0 = 1.0;
@@ -215,8 +207,8 @@ static int pops_run_test_amr_multiblock_regrid_union(int argc, char** argv) {
     };
     const auto a = run_frozen();
     const auto b = run_frozen();
-    chk(a.second, "e_frozen_fine_layout_unchanged");  // la grille n'a pas bouge
-    chk(dmax_field(a.first, b.first) == 0.0, "e_frozen_bit_identical_dmax0");
+    EXPECT_TRUE(a.second) << "e_frozen_fine_layout_unchanged";  // la grille n'a pas bouge
+    EXPECT_EQ(dmax_field(a.first, b.first), 0.0) << "e_frozen_bit_identical_dmax0";
 
     AmrRuntime rt = make_two_block(N, L, B0, +1.0, -1.0, blob(N, 0.35, 0.5, 0.8, 1.0, 0.10),
                                    blob(N, 0.65, 0.5, 0.8, 1.0, 0.10));
@@ -224,7 +216,7 @@ static int pops_run_test_amr_multiblock_regrid_union(int argc, char** argv) {
     rt.set_block_tag_predicate(0, TagDensityAbove{Real(1.3)});
     for (int s = 0; s < 8; ++s)
       rt.step(Real(0.01));
-    chk(rt.regrid_count() == 0, "e_regrid_count_zero_when_frozen");
+    EXPECT_EQ(rt.regrid_count(), 0) << "e_regrid_count_zero_when_frozen";
   }
 
   // ============================================================================================
@@ -241,16 +233,19 @@ static int pops_run_test_amr_multiblock_regrid_union(int argc, char** argv) {
     const double m0_before = rt.mass(0), m1_before = rt.mass(1);  // (V1) snapshot avant la sequence
     for (int s = 0; s < 6; ++s)
       rt.step(Real(0.01));
-    chk(rt.regrid_count() >= 1, "a_regrid_was_called");
+    EXPECT_TRUE(rt.regrid_count() >= 1) << "a_regrid_was_called";
     const std::vector<Box2D> fb_now = fine_boxes(rt);
-    chk(!same_box_list(fb_seed, fb_now), "a_fine_layout_evolved_from_seed");
-    chk(all_finite(rt.density(0)) && all_finite(rt.density(1)), "a_state_finite_after_regrid");
-    chk(rt.n_patches() >= 1, "a_hierarchy_still_has_fine_patches");
+    EXPECT_TRUE(!same_box_list(fb_seed, fb_now)) << "a_fine_layout_evolved_from_seed";
+    EXPECT_TRUE(all_finite(rt.density(0)) && all_finite(rt.density(1)))
+        << "a_state_finite_after_regrid";
+    EXPECT_TRUE(rt.n_patches() >= 1) << "a_hierarchy_still_has_fine_patches";
     // (V1) CONSERVATION PAR BLOC a travers les regrids : le report fin (exact) + l'interp parent
     // piecewise-constant (conservative au sens integral) redistribuent sans creer ni detruire de masse ;
     // le transport ExB periodique + reflux conserve la masse grossiere. Verifie POUR CHAQUE bloc.
-    chk(std::fabs(rt.mass(0) - m0_before) < 1e-9, "a_block0_mass_conserved_across_regrid");
-    chk(std::fabs(rt.mass(1) - m1_before) < 1e-9, "a_block1_mass_conserved_across_regrid");
+    EXPECT_TRUE(std::fabs(rt.mass(0) - m0_before) < 1e-9)
+        << "a_block0_mass_conserved_across_regrid";
+    EXPECT_TRUE(std::fabs(rt.mass(1) - m1_before) < 1e-9)
+        << "a_block1_mass_conserved_across_regrid";
   }
 
   // ============================================================================================
@@ -272,18 +267,19 @@ static int pops_run_test_amr_multiblock_regrid_union(int argc, char** argv) {
     const std::vector<Box2D> fb_seed = fine_boxes(rt);
     rt.step(Real(0.005));
     rt.step(Real(0.005));
-    chk(rt.regrid_count() >= 1, "bc_union_regrid_called");
+    EXPECT_TRUE(rt.regrid_count() >= 1) << "bc_union_regrid_called";
     const Box2D bb = fine_bbox(rt);
     // coords du niveau fin = 2 x coords grossieres. Gauche ~ cellule grossiere 8 (x=0.25*32) -> fin ~16 ;
     // droite ~ cellule grossiere 24 -> fin ~48. L'union doit enjamber le milieu (fin ~32) : lo a gauche
     // du milieu, hi a droite du milieu -> couvre les DEUX regions, pas une seule.
     const int mid_fine = N;  // milieu du domaine en coords fin (2 * N/2)
-    chk(!bb.empty(), "bc_union_layout_nonempty");
-    chk(bb.lo[0] < mid_fine && bb.hi[0] > mid_fine, "bc_union_covers_both_left_and_right");
+    EXPECT_TRUE(!bb.empty()) << "bc_union_layout_nonempty";
+    EXPECT_TRUE(bb.lo[0] < mid_fine && bb.hi[0] > mid_fine)
+        << "bc_union_covers_both_left_and_right";
     // Le layout d'union DIFFERE du seed central fixe : la couverture des DEUX regions est bien le
     // produit du regrid d'union, pas un artefact du patch central initial (qui couvre deja le milieu).
-    chk(!same_box_list(fb_seed, fine_boxes(rt)), "bc_union_layout_differs_from_seed");
-    chk(all_finite(rt.density(0)) && all_finite(rt.density(1)), "bc_state_finite");
+    EXPECT_TRUE(!same_box_list(fb_seed, fine_boxes(rt))) << "bc_union_layout_differs_from_seed";
+    EXPECT_TRUE(all_finite(rt.density(0)) && all_finite(rt.density(1))) << "bc_state_finite";
 
     // (c) UNION PAR PHI SEUL : nouveau runtime, AUCUN predicat de bloc, seulement le predicat phi sur
     //     |grad phi|. Un raffinement est alors declenche PAR PHI (preuve que phi entre dans l'union,
@@ -298,10 +294,11 @@ static int pops_run_test_amr_multiblock_regrid_union(int argc, char** argv) {
     const std::vector<Box2D> fb_seed_phi = fine_boxes(rtp);
     rtp.step(Real(0.005));
     rtp.step(Real(0.005));
-    chk(rtp.regrid_count() >= 1, "c_phi_only_regrid_called");
-    chk(rtp.n_patches() >= 1, "c_phi_only_triggers_refinement");
-    chk(!same_box_list(fb_seed_phi, fine_boxes(rtp)), "c_phi_only_layout_from_regrid_not_seed");
-    chk(all_finite(rtp.density(0)), "c_phi_only_state_finite");
+    EXPECT_TRUE(rtp.regrid_count() >= 1) << "c_phi_only_regrid_called";
+    EXPECT_TRUE(rtp.n_patches() >= 1) << "c_phi_only_triggers_refinement";
+    EXPECT_TRUE(!same_box_list(fb_seed_phi, fine_boxes(rtp)))
+        << "c_phi_only_layout_from_regrid_not_seed";
+    EXPECT_TRUE(all_finite(rtp.density(0))) << "c_phi_only_state_finite";
   }
 
   // ============================================================================================
@@ -320,16 +317,16 @@ static int pops_run_test_amr_multiblock_regrid_union(int argc, char** argv) {
     // Avance jusqu'a un macro-pas de regrid (macro_step_=2, every=2) ou B est TENU ((2+1)%4 != 0).
     for (int s = 0; s < 3; ++s)
       rt.step(Real(0.01));
-    chk(rt.regrid_count() >= 1, "d_regrid_called_with_strided_block");
+    EXPECT_TRUE(rt.regrid_count() >= 1) << "d_regrid_called_with_strided_block";
     // Le bloc B (stride-tenu) partage EXACTEMENT le layout fin du bloc A apres regrid (sinon le
     // same_layout_or_throw interne au regrid aurait leve avant d'arriver ici).
     const std::vector<Box2D> fa = rt.levels(0)[1].U.box_array().boxes();
     const std::vector<Box2D> fb = rt.levels(1)[1].U.box_array().boxes();
-    chk(same_box_list(fa, fb), "d_strided_block_on_union_layout_not_stale");
+    EXPECT_TRUE(same_box_list(fa, fb)) << "d_strided_block_on_union_layout_not_stale";
     // Son fin porte des donnees finies (report + interp du regrid), pas un fab non initialise.
-    chk(all_finite(rt.density(1)), "d_strided_block_state_finite");
+    EXPECT_TRUE(all_finite(rt.density(1))) << "d_strided_block_state_finite";
     // Et le bloc B a bien ete re-grille hors de l'ancien seed central : son fin a evolue.
-    chk(rt.n_patches() >= 1, "d_strided_block_has_fine_patches");
+    EXPECT_TRUE(rt.n_patches() >= 1) << "d_strided_block_has_fine_patches";
   }
 
   // ============================================================================================
@@ -370,7 +367,8 @@ static int pops_run_test_amr_multiblock_regrid_union(int argc, char** argv) {
       if (!all_finite(sim.density("a")) || !all_finite(sim.density("b")))
         throw std::runtime_error("etat non fini");
     });
-    chk(unlocked_no_throw, "T7_facade_multiblock_regrid_every_positive_no_longer_throws");
+    EXPECT_TRUE(unlocked_no_throw)
+        << "T7_facade_multiblock_regrid_every_positive_no_longer_throws";
 
     // (T7-b) regrid_every == 0 reste FIGE et BIT-IDENTIQUE a la facade.
     auto run_facade_frozen = [&]() {
@@ -391,16 +389,7 @@ static int pops_run_test_amr_multiblock_regrid_union(int argc, char** argv) {
     };
     const std::vector<double> fa = run_facade_frozen();
     const std::vector<double> fb = run_facade_frozen();
-    chk(dmax_field(fa, fb) == 0.0, "T7_facade_frozen_regrid_every_zero_bit_identical_dmax0");
+    EXPECT_EQ(dmax_field(fa, fb), 0.0)
+        << "T7_facade_frozen_regrid_every_zero_bit_identical_dmax0";
   }
-
-  if (fails == 0)
-    std::printf("OK test_amr_multiblock_regrid_union\n");
-  else
-    std::printf("FAIL test_amr_multiblock_regrid_union : %d echec(s)\n", fails);
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_amr_multiblock_regrid_union, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_multiblock_regrid_union, "test_amr_multiblock_regrid_union"), 0);
 }

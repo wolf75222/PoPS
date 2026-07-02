@@ -31,7 +31,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/coupling/source/coupled_source_program.hpp>  // CsOp (opcodes du bytecode P5)
 #include <pops/physics/bricks/bricks.hpp>                   // CompositeModel
 #include <pops/physics/bricks/elliptic.hpp>                 // ChargeDensity
@@ -200,19 +199,12 @@ static void register_ionization(AmrSystem& sim, const std::string& block_a,
   sim.add_coupled_source(prog);
 }
 
-static int pops_run_test_amr_multiblock_compiled(int argc, char** argv) {
+TEST(test_amr_multiblock_compiled, Runs) {
 #if defined(POPS_HAS_KOKKOS)
+  int argc = 0;
+  char** argv = nullptr;
   Kokkos::ScopeGuard guard(argc, argv);
-#else
-  (void)argc;
-  (void)argv;
 #endif
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    std::printf("  [%s] %s\n", c ? "OK " : "XX ", w);
-    if (!c)
-      ++fails;
-  };
 
   const int N = 32;
   const double L = 1.0, B0 = 1.0, k = 0.5;
@@ -243,7 +235,7 @@ static int pops_run_test_amr_multiblock_compiled(int argc, char** argv) {
     sim.set_density("ions", rho0);
     sim.set_density("electrons", rho1);
 
-    chk(sim.n_blocks() == 2, "A_two_compiled_blocks");
+    EXPECT_EQ(sim.n_blocks(), 2) << "A_two_compiled_blocks";
 
     const std::vector<double> d0_before = sim.density("ions");
     const std::vector<double> d1_before = sim.density("electrons");
@@ -254,19 +246,20 @@ static int pops_run_test_amr_multiblock_compiled(int argc, char** argv) {
 
     const std::vector<double> d0_after = sim.density("ions");
     const std::vector<double> d1_after = sim.density("electrons");
-    chk(all_finite(d0_after) && all_finite(d1_after), "A_state_finite");
-    chk(dmax_field(d0_after, d0_before) > 1e-6, "A_block0_evolved");
-    chk(dmax_field(d1_after, d1_before) > 1e-6, "A_block1_evolved");
+    EXPECT_TRUE(all_finite(d0_after) && all_finite(d1_after)) << "A_state_finite";
+    EXPECT_TRUE(dmax_field(d0_after, d0_before) > 1e-6) << "A_block0_evolved";
+    EXPECT_TRUE(dmax_field(d1_after, d1_before) > 1e-6) << "A_block1_evolved";
 
-    chk(std::fabs(sim.mass("ions") - m0_before) < 1e-10, "A_block0_mass_conserved");
-    chk(std::fabs(sim.mass("electrons") - m1_before) < 1e-10, "A_block1_mass_conserved");
+    EXPECT_TRUE(std::fabs(sim.mass("ions") - m0_before) < 1e-10) << "A_block0_mass_conserved";
+    EXPECT_TRUE(std::fabs(sim.mass("electrons") - m1_before) < 1e-10)
+        << "A_block1_mass_conserved";
 
     const std::vector<double> phi = sim.potential();
     double pmax = 0;
     for (double v : phi)
       pmax = std::max(pmax, std::fabs(v));
-    chk(pmax > 1e-8, "A_system_potential_nonzero");
-    chk(sim.n_patches() >= 1, "A_shared_hierarchy_has_fine_patch");
+    EXPECT_TRUE(pmax > 1e-8) << "A_system_potential_nonzero";
+    EXPECT_TRUE(sim.n_patches() >= 1) << "A_shared_hierarchy_has_fine_patch";
   }
 
   // ============================================================================================
@@ -297,10 +290,11 @@ static int pops_run_test_amr_multiblock_compiled(int argc, char** argv) {
 
     sim.advance(0.01, 6);
 
-    chk(all_finite(sim.density("ions")) && all_finite(sim.density("neutrals")), "B_state_finite");
+    EXPECT_TRUE(all_finite(sim.density("ions")) && all_finite(sim.density("neutrals")))
+        << "B_state_finite";
     const double tot1 = sim.mass("ions") + sim.mass("neutrals");
-    chk(std::fabs(tot1 - tot0) < 1e-9, "B_composite_mass_conserved");
-    chk(sim.mass("ions") > mi0 + 1e-6, "B_source_transfers_to_ions");
+    EXPECT_TRUE(std::fabs(tot1 - tot0) < 1e-9) << "B_composite_mass_conserved";
+    EXPECT_TRUE(sim.mass("ions") > mi0 + 1e-6) << "B_source_transfers_to_ions";
   }
 
   // ============================================================================================
@@ -323,13 +317,14 @@ static int pops_run_test_amr_multiblock_compiled(int argc, char** argv) {
     sim.set_density("ions", rho0);
     sim.set_density("electrons", rho1);
 
-    chk(sim.n_blocks() == 2, "C_mixed_two_blocks");
+    EXPECT_EQ(sim.n_blocks(), 2) << "C_mixed_two_blocks";
     const std::vector<double> d0_before = sim.density("ions");
     const std::vector<double> d1_before = sim.density("electrons");
     sim.advance(0.01, 5);
-    chk(dmax_field(sim.density("ions"), d0_before) > 1e-6, "C_compiled_block_evolved");
-    chk(dmax_field(sim.density("electrons"), d1_before) > 1e-6, "C_native_block_evolved");
-    chk(std::fabs(sim.mass("ions") - 0.0) >= 0.0, "C_mass_queryable");  // n'a pas crash
+    EXPECT_TRUE(dmax_field(sim.density("ions"), d0_before) > 1e-6) << "C_compiled_block_evolved";
+    EXPECT_TRUE(dmax_field(sim.density("electrons"), d1_before) > 1e-6)
+        << "C_native_block_evolved";
+    EXPECT_TRUE(std::fabs(sim.mass("ions") - 0.0) >= 0.0) << "C_mass_queryable";  // n'a pas crash
   }
 
   // ============================================================================================
@@ -355,7 +350,7 @@ static int pops_run_test_amr_multiblock_compiled(int argc, char** argv) {
     };
     const std::vector<double> a = run_mono();
     const std::vector<double> b = run_mono();
-    chk(dmax_field(a, b) == 0.0, "D_monoblock_compiled_bit_identical_dmax0");
+    EXPECT_EQ(dmax_field(a, b), 0.0) << "D_monoblock_compiled_bit_identical_dmax0";
   }
 
   // ============================================================================================
@@ -375,7 +370,7 @@ static int pops_run_test_amr_multiblock_compiled(int argc, char** argv) {
       add_compiled_model(sim, "b", exb_model(q1, B0), "minmod", "rusanov", "conservative",
                          "explicit", 1.4);  // 2e bloc compile : NE DOIT PLUS lever
     });
-    chk(!threw, "E_second_compiled_block_no_longer_throws");
+    EXPECT_TRUE(!threw) << "E_second_compiled_block_no_longer_throws";
   }
 
   // ============================================================================================
@@ -427,21 +422,24 @@ static int pops_run_test_amr_multiblock_compiled(int argc, char** argv) {
 
     // (F1) IMEX stable vs EXPLICITE qui explose (genuine IMEX, pas un no-op silencieux).
     const auto imex_res = run_stiff_compiled(/*imex=*/true, /*stride=*/1, {});
-    chk(all_finite(imex_res.first) && maxabs(imex_res.first) < 1e3,
-        "F1_compiled_imex_block_finite_and_bounded");
-    chk(imex_res.second < 1e-10, "F1_compiled_imex_mass_conserved");  // source ne touche pas rho
+    EXPECT_TRUE(all_finite(imex_res.first) && maxabs(imex_res.first) < 1e3)
+        << "F1_compiled_imex_block_finite_and_bounded";
+    EXPECT_TRUE(imex_res.second < 1e-10)
+        << "F1_compiled_imex_mass_conserved";  // source ne touche pas rho
 
     const auto expl_res = run_stiff_compiled(/*imex=*/false, /*stride=*/1, {});
     const bool expl_blew_up = !all_finite(expl_res.first) || maxabs(expl_res.first) > 1e3;
-    chk(expl_blew_up, "F1_compiled_explicit_block_BLOWS_UP (disable-and-fail : IMEX requis)");
+    EXPECT_TRUE(expl_blew_up)
+        << "F1_compiled_explicit_block_BLOWS_UP (disable-and-fail : IMEX requis)";
     std::printf("      (F) compile IMEX : max(rho)=%.3e ; EXPLICITE : %s\n", maxabs(imex_res.first),
                 all_finite(expl_res.first) ? "borne >> 1" : "NON FINI (explose)");
 
     // (F2) stride=2 DIFFERE de stride=1 (memes eps/dt/macro-pas) : la cadence est effective.
     const auto imex_s2 = run_stiff_compiled(/*imex=*/true, /*stride=*/2, {});
-    chk(all_finite(imex_s2.first), "F2_compiled_imex_stride2_finite");
+    EXPECT_TRUE(all_finite(imex_s2.first)) << "F2_compiled_imex_stride2_finite";
     const double d_stride = dmax_field(imex_res.first, imex_s2.first);
-    chk(d_stride > 0.0, "F2_compiled_imex_stride2_DIFFERS_from_stride1 (multirate effectif)");
+    EXPECT_TRUE(d_stride > 0.0)
+        << "F2_compiled_imex_stride2_DIFFERS_from_stride1 (multirate effectif)";
     std::printf("      (F2) stride : dmax(rho ; s1 vs s2)=%.3e\n", d_stride);
 
     // (F3) masque IMEX PARTIEL implicit_roles={"momentum_x", "momentum_y"} : resolu contre l'Euler
@@ -450,8 +448,8 @@ static int pops_run_test_amr_multiblock_compiled(int argc, char** argv) {
     //      donne un run FINI/BORNE -> preuve que le masque a ete RESOLU et APPLIQUE.
     const auto imex_mask =
         run_stiff_compiled(/*imex=*/true, /*stride=*/1, {"momentum_x", "momentum_y"});
-    chk(all_finite(imex_mask.first) && maxabs(imex_mask.first) < 1e3,
-        "F3_compiled_imex_partial_mask_mxmy_resolved_and_runs");
+    EXPECT_TRUE(all_finite(imex_mask.first) && maxabs(imex_mask.first) < 1e3)
+        << "F3_compiled_imex_partial_mask_mxmy_resolved_and_runs";
 
     // (F3-bis) le masque est GENUINEMENT PARTIEL (pas un backward-Euler plein deguise) : un masque
     //          {momentum_x} SEUL laisse my en EXPLICITE -> my (raide) EXPLOSE et contamine rho. Si le
@@ -460,24 +458,14 @@ static int pops_run_test_amr_multiblock_compiled(int argc, char** argv) {
     const auto imex_mask_mx = run_stiff_compiled(/*imex=*/true, /*stride=*/1, {"momentum_x"});
     const bool partial_blew_up =
         !all_finite(imex_mask_mx.first) || maxabs(imex_mask_mx.first) > 1e3;
-    chk(partial_blew_up,
-        "F3_compiled_partial_mask_mx_only_leaves_my_EXPLICIT_and_blows_up (masque honore par "
-        "composante)");
+    EXPECT_TRUE(partial_blew_up)
+        << "F3_compiled_partial_mask_mx_only_leaves_my_EXPLICIT_and_blows_up (masque honore par "
+           "composante)";
 
     // (F3-neg) masque PARTIEL demande en EXPLICITE -> LEVE (pas d'ignore silencieux ; meme garde que
     //          add_block / set_compiled_block, amr_system.cpp / amr_dsl_block.hpp).
     const bool mask_in_explicit_threw =
         raises([&] { (void)run_stiff_compiled(/*imex=*/false, /*stride=*/1, {"momentum_x"}); });
-    chk(mask_in_explicit_threw, "F3_compiled_partial_mask_rejected_in_explicit");
+    EXPECT_TRUE(mask_in_explicit_threw) << "F3_compiled_partial_mask_rejected_in_explicit";
   }
-
-  if (fails == 0)
-    std::printf("OK test_amr_multiblock_compiled\n");
-  else
-    std::printf("FAIL test_amr_multiblock_compiled : %d echec(s)\n", fails);
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_amr_multiblock_compiled, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_multiblock_compiled, "test_amr_multiblock_compiled"), 0);
 }

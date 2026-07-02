@@ -24,7 +24,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/coupling/source/coupled_source_program.hpp>  // CsOp (opcodes du bytecode P5)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>    // AmrRuntime, AmrRuntimeBlock
@@ -144,19 +143,12 @@ static void register_ionization(AmrRuntime& rt, double k) {
                         prog_lens);
 }
 
-static int pops_run_test_amr_multiblock_coupled_source(int argc, char** argv) {
+TEST(test_amr_multiblock_coupled_source, Runs) {
 #if defined(POPS_HAS_KOKKOS)
+  int argc = 0;
+  char** argv = nullptr;
   Kokkos::ScopeGuard guard(argc, argv);
-#else
-  (void)argc;
-  (void)argv;
 #endif
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    std::printf("  [%s] %s\n", c ? "OK " : "XX ", w);
-    if (!c)
-      ++fails;
-  };
 
   const int N = 32;
   const double L = 1.0, B0 = 1.0, k = 0.5;
@@ -181,12 +173,13 @@ static int pops_run_test_amr_multiblock_coupled_source(int argc, char** argv) {
     const std::vector<double> ni1 = rt.density(0);
     const std::vector<double> ng1 = rt.density(1);
 
-    chk(all_finite(ni1) && all_finite(ng1), "cell_state_finite");  // AVANT toute tolerance
+    EXPECT_TRUE(all_finite(ni1) && all_finite(ng1))
+        << "cell_state_finite";  // AVANT toute tolerance
     // echange conservatif : (n_ions + n_neutrals) inchange PAR CELLULE (+S sur l'un, -S sur l'autre).
-    chk(dmax_pair_sum(ni1, ng1, ni0, ng0) < 1e-12, "cell_pair_sum_conserved");
+    EXPECT_TRUE(dmax_pair_sum(ni1, ng1, ni0, ng0) < 1e-12) << "cell_pair_sum_conserved";
     // ACTIVE : ions GAGNENT (+k ni ng > 0), neutrals PERDENT -> les deux changent (non no-op).
-    chk(dmax_field(ni1, ni0) > 1e-9, "source_active_ions_change");
-    chk(dmax_field(ng1, ng0) > 1e-9, "source_active_neutrals_change");
+    EXPECT_TRUE(dmax_field(ni1, ni0) > 1e-9) << "source_active_ions_change";
+    EXPECT_TRUE(dmax_field(ng1, ng0) > 1e-9) << "source_active_neutrals_change";
   }
 
   // ============================================================================================
@@ -205,10 +198,10 @@ static int pops_run_test_amr_multiblock_coupled_source(int argc, char** argv) {
     const std::vector<double> ni = rt.density(0);
     const std::vector<double> ng = rt.density(1);
     const Real tot1 = rt.mass(0) + rt.mass(1);
-    chk(all_finite(ni) && all_finite(ng), "global_state_finite");
-    chk(std::fabs(tot1 - tot0) < 1e-9, "global_composite_mass_conserved");
+    EXPECT_TRUE(all_finite(ni) && all_finite(ng)) << "global_state_finite";
+    EXPECT_TRUE(std::fabs(tot1 - tot0) < 1e-9) << "global_composite_mass_conserved";
     // la source TRANSFERE vraiment entre blocs : la masse des ions a sensiblement augmente.
-    chk(rt.mass(0) > mi0 + Real(1e-6), "global_source_transfers_to_ions");
+    EXPECT_TRUE(rt.mass(0) > mi0 + Real(1e-6)) << "global_source_transfers_to_ions";
   }
 
   // ============================================================================================
@@ -240,8 +233,8 @@ static int pops_run_test_amr_multiblock_coupled_source(int argc, char** argv) {
         dmax_cover = std::max(dmax_cover, std::fabs(uc(ic, jc, 0) - avg));
         covered_seen = true;
       }
-    chk(covered_seen, "cover_has_fine_patch");
-    chk(dmax_cover < 1e-12, "cover_coarse_is_avg_of_fine_after_source");
+    EXPECT_TRUE(covered_seen) << "cover_has_fine_patch";
+    EXPECT_TRUE(dmax_cover < 1e-12) << "cover_coarse_is_avg_of_fine_after_source";
   }
 
   // ============================================================================================
@@ -256,8 +249,10 @@ static int pops_run_test_amr_multiblock_coupled_source(int argc, char** argv) {
     const Real tot0 = rt.mass(0) + rt.mass(1);
     for (int s = 0; s < K; ++s)
       rt.step(dt);
-    chk(all_finite(rt.density(0)) && all_finite(rt.density(1)), "multirate_state_finite");
-    chk(std::fabs((rt.mass(0) + rt.mass(1)) - tot0) < 1e-9, "multirate_composite_mass_conserved");
+    EXPECT_TRUE(all_finite(rt.density(0)) && all_finite(rt.density(1)))
+        << "multirate_state_finite";
+    EXPECT_TRUE(std::fabs((rt.mass(0) + rt.mass(1)) - tot0) < 1e-9)
+        << "multirate_composite_mass_conserved";
   }
 
   // ============================================================================================
@@ -274,23 +269,13 @@ static int pops_run_test_amr_multiblock_coupled_source(int argc, char** argv) {
     };
     const std::vector<double> a = run_no_source();
     const std::vector<double> b = run_no_source();
-    chk(dmax_field(a, b) == 0.0, "no_source_bit_identical");
+    EXPECT_EQ(dmax_field(a, b), 0.0) << "no_source_bit_identical";
 
     AmrRuntime rt_src = make_two_block(N, L, B0, rho_ions, rho_neut, 1, 1);
     register_ionization(rt_src, k);
     for (int s = 0; s < K; ++s)
       rt_src.step(dt);
-    chk(dmax_field(rt_src.density(0), a) > 1e-9, "source_differs_from_no_source");
-    chk(rt_src.n_coupled_sources() == 1, "one_coupled_source_registered");
+    EXPECT_TRUE(dmax_field(rt_src.density(0), a) > 1e-9) << "source_differs_from_no_source";
+    EXPECT_EQ(rt_src.n_coupled_sources(), 1) << "one_coupled_source_registered";
   }
-
-  if (fails == 0)
-    std::printf("OK test_amr_multiblock_coupled_source\n");
-  else
-    std::printf("FAIL test_amr_multiblock_coupled_source : %d echec(s)\n", fails);
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_amr_multiblock_coupled_source, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_multiblock_coupled_source, "test_amr_multiblock_coupled_source"), 0);
 }

@@ -33,7 +33,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, BackgroundDensity, ChargeDensity, PotentialForce
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / build_amr_block / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>    // AmrRuntime, AmrRuntimeBlock
@@ -216,19 +215,12 @@ std::vector<double> bump(int n, double base, double amp) {
 
 }  // namespace
 
-static int pops_run_test_amr_multiblock_imex(int argc, char** argv) {
+TEST(test_amr_multiblock_imex, Runs) {
 #if defined(POPS_HAS_KOKKOS)
+  int argc = 0;
+  char** argv = nullptr;
   Kokkos::ScopeGuard guard(argc, argv);
-#else
-  (void)argc;
-  (void)argv;
 #endif
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    std::printf("  [%s] %s\n", c ? "OK " : "XX ", w);
-    if (!c)
-      ++fails;
-  };
 
   const int N = 32;
   const double L = 1.0;
@@ -245,27 +237,27 @@ static int pops_run_test_amr_multiblock_imex(int argc, char** argv) {
   {
     AmrRuntime rt = make_stiff_pair(N, L, eps, /*imex_stiff=*/true, rho);
     const Real m0 = rt.mass(0);  // masse du bloc raide AVANT (sur le grossier, cascade incluse)
-    chk(rt.nlev() == 2, "imex_two_levels_present");  // un patch fin existe (couverture exercee)
+    EXPECT_EQ(rt.nlev(), 2) << "imex_two_levels_present";  // un patch fin existe (couverture exercee)
     for (int s = 0; s < K; ++s)
       rt.step(static_cast<Real>(dt));
     const std::vector<double> dStiff = rt.density(0);
     const std::vector<double> dNeutral = rt.density(1);
     const Real m1 = rt.mass(0);
     // AVANT toute tolerance : etat fini (un nan passerait une borne par hasard).
-    chk(all_finite(dStiff) && all_finite(dNeutral), "imex_stiff_state_finite");
-    chk(maxabs(dStiff) < 1e3, "imex_stiff_state_bounded");
+    EXPECT_TRUE(all_finite(dStiff) && all_finite(dNeutral)) << "imex_stiff_state_finite";
+    EXPECT_TRUE(maxabs(dStiff) < 1e3) << "imex_stiff_state_bounded";
     // (3-revue #184) STABILITE OBSERVEE SUR LE BON CHAMP : la source raide ne stiffenne PAS la densite
     // (comp 0) mais mx/my/E (comp 1/2/3). Borner la seule densite n'observe la stabilite qu'INDIRECTEMENT
     // (par contamination via le transport). On lit donc DIRECTEMENT mx/my/E du grossier et on exige
     // qu'elles restent finies ET bornees sous IMEX (la ou l'explicite, ci-dessous, les fait diverger).
     bool me_finite = false;
     const double me_max = max_momentum_energy_coarse(rt, 0, me_finite);
-    chk(me_finite, "imex_stiff_momentum_energy_finite_DIRECT");
-    chk(me_max < 1e3, "imex_stiff_momentum_energy_bounded_DIRECT");
+    EXPECT_TRUE(me_finite) << "imex_stiff_momentum_energy_finite_DIRECT";
+    EXPECT_TRUE(me_max < 1e3) << "imex_stiff_momentum_energy_bounded_DIRECT";
     // (2) CONSERVATION : la source raide ne touche pas la densite (comp 0) -> masse conservee ~machine.
     const double drift =
         std::fabs(static_cast<double>(m1 - m0)) / (std::fabs(static_cast<double>(m0)) + 1e-30);
-    chk(drift < 1e-12, "imex_stiff_mass_conserved_to_machine");
+    EXPECT_TRUE(drift < 1e-12) << "imex_stiff_mass_conserved_to_machine";
     std::printf(
         "      IMEX : max(rho)=%.3e, max|mx,my,E|=%.3e, derive de masse=%.3e (eps=%.0e, dt=%.0e)\n",
         maxabs(dStiff), me_max, drift, eps, dt);
@@ -285,9 +277,10 @@ static int pops_run_test_amr_multiblock_imex(int argc, char** argv) {
     // critere densite (contamination par le transport) pour la lisibilite du diagnostic.
     const bool me_blew_up = !me_finite || me_max > 1e3;
     const bool rho_blew_up = !all_finite(dStiff) || maxabs(dStiff) > 1e3;
-    chk(me_blew_up,
-        "explicit_stiff_momentum_energy_BLOWS_UP_DIRECT (disable-and-fail sur mx/my/E)");
-    chk(rho_blew_up, "explicit_stiff_BLOWS_UP (disable-and-fail : IMEX genuinement requis)");
+    EXPECT_TRUE(me_blew_up)
+        << "explicit_stiff_momentum_energy_BLOWS_UP_DIRECT (disable-and-fail sur mx/my/E)";
+    EXPECT_TRUE(rho_blew_up)
+        << "explicit_stiff_BLOWS_UP (disable-and-fail : IMEX genuinement requis)";
     std::printf("      EXPLICITE : mx/my/E %s, rho %s (la stabilite vient bien du pas implicite)\n",
                 me_finite ? "borne >> 1" : "NON FINI (explose)",
                 all_finite(dStiff) ? "borne >> 1" : "NON FINI (explose)");
@@ -326,13 +319,13 @@ static int pops_run_test_amr_multiblock_imex(int argc, char** argv) {
 
     // (a)(b) le run sous-cycle reste fini + borne (backward-Euler stable a tout pas ; transport plus sur
     //        en CFL sur dt/4) sur la densite ET sur le champ stiffene mx/my/E lu directement.
-    chk(all_finite(d4) && me4_finite, "imex_subcycled_s4_finite");
-    chk(maxabs(d4) < 1e3 && me4_max < 1e3, "imex_subcycled_s4_bounded");
+    EXPECT_TRUE(all_finite(d4) && me4_finite) << "imex_subcycled_s4_finite";
+    EXPECT_TRUE(maxabs(d4) < 1e3 && me4_max < 1e3) << "imex_subcycled_s4_bounded";
     // (c) conservation : la source raide laisse rho intacte -> masse conservee ~machine, comme substeps=1.
-    chk(drift4 < 1e-12, "imex_subcycled_s4_mass_conserved");
+    EXPECT_TRUE(drift4 < 1e-12) << "imex_subcycled_s4_mass_conserved";
     // (d) VERROU : substeps=4 DIFFERE de substeps=1 -> le sous-cyclage IMEX est intentionnel et execute.
     const double d14 = dmax_field(d1, d4);
-    chk(d14 > 0.0, "imex_subcycled_s4_DIFFERS_from_s1 (sous-cyclage assume, pas ignore)");
+    EXPECT_TRUE(d14 > 0.0) << "imex_subcycled_s4_DIFFERS_from_s1 (sous-cyclage assume, pas ignore)";
     std::printf(
         "      IMEX substeps : s1 (derive=%.2e) vs s4 (max|mx,my,E|=%.3e, derive=%.2e), "
         "dmax(rho)=%.3e\n",
@@ -353,8 +346,8 @@ static int pops_run_test_amr_multiblock_imex(int argc, char** argv) {
     };
     const std::vector<double> a = run_all_explicit();
     const std::vector<double> b = run_all_explicit();
-    chk(all_finite(a), "all_explicit_state_finite");
-    chk(dmax_field(a, b) == 0.0, "all_explicit_multiblock_bit_identical");
+    EXPECT_TRUE(all_finite(a)) << "all_explicit_state_finite";
+    EXPECT_EQ(dmax_field(a, b), 0.0) << "all_explicit_multiblock_bit_identical";
   }
 
   // ============================================================================================
@@ -377,21 +370,18 @@ static int pops_run_test_amr_multiblock_imex(int argc, char** argv) {
     sim.set_density("B", bump(N, 1.0, 0.20));
     for (int s = 0; s < 6; ++s)
       sim.step(5e-3);
-    chk(sim.n_blocks() == 2, "facade_two_blocks");
-    chk(all_finite(sim.density("A")) && all_finite(sim.density("B")),
-        "facade_multiblock_imex_runs_finite");
+    EXPECT_EQ(sim.n_blocks(), 2) << "facade_two_blocks";
+    EXPECT_TRUE(all_finite(sim.density("A")) && all_finite(sim.density("B")))
+        << "facade_multiblock_imex_runs_finite";
 
     // (5b) masque IMEX partiel REFUSE en explicite (pas d'ignore silencieux).
     {
       AmrSystem s2(cfg);
-      bool threw = false;
-      try {
-        s2.add_block("A", pot_charge(50.0), "minmod", "rusanov", "conservative", "explicit", 1, 1,
-                     /*implicit_vars=*/{}, /*implicit_roles=*/{"momentum_x"});
-      } catch (const std::exception&) {
-        threw = true;
-      }
-      chk(threw, "facade_mask_rejected_in_explicit");
+      EXPECT_THROW(s2.add_block("A", pot_charge(50.0), "minmod", "rusanov", "conservative",
+                                "explicit", 1, 1,
+                                /*implicit_vars=*/{}, /*implicit_roles=*/{"momentum_x"}),
+                  std::runtime_error)
+          << "facade_mask_rejected_in_explicit";
     }
 
     // (5c) masque IMEX partiel RESOLU en multi-blocs (role momentum_x present sur un Euler) : construit
@@ -413,7 +403,7 @@ static int pops_run_test_amr_multiblock_imex(int argc, char** argv) {
       } catch (const std::exception& e) {
         std::printf("      (5c) masque partiel a leve : %s\n", e.what());
       }
-      chk(ok, "facade_partial_mask_resolved_and_runs");
+      EXPECT_TRUE(ok) << "facade_partial_mask_resolved_and_runs";
     }
 
     // (5d) role ABSENT du bloc -> erreur claire au build (resolution du masque, build_multi).
@@ -426,23 +416,8 @@ static int pops_run_test_amr_multiblock_imex(int argc, char** argv) {
       s4.set_poisson("charge_density", "geometric_mg", "periodic");
       s4.set_density("A", bump(N, 1.0, 0.40));
       s4.set_density("B", bump(N, 1.0, 0.20));
-      bool threw = false;
-      try {
-        s4.step(5e-3);  // build paresseux : resolution du masque -> role absent -> leve
-      } catch (const std::exception&) {
-        threw = true;
-      }
-      chk(threw, "facade_partial_mask_absent_role_throws");
+      EXPECT_THROW(s4.step(5e-3), std::runtime_error)  // build paresseux : role absent -> leve
+          << "facade_partial_mask_absent_role_throws";
     }
   }
-
-  if (fails == 0)
-    std::printf("OK test_amr_multiblock_imex\n");
-  else
-    std::printf("FAIL test_amr_multiblock_imex : %d echec(s)\n", fails);
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_amr_multiblock_imex, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_multiblock_imex, "test_amr_multiblock_imex"), 0);
 }

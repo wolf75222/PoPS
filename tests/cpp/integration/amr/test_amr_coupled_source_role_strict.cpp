@@ -22,7 +22,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/coupling/source/coupled_source_program.hpp>  // CsOp (opcodes du bytecode P5)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>    // AmrRuntime, AmrRuntimeBlock
@@ -127,19 +126,10 @@ static void add_source_with_io_role(AmrRuntime& rt, const std::string& io_role) 
                         prog_lens);
 }
 
-static int pops_run_test_amr_coupled_source_role_strict(int argc, char** argv) {
+TEST(test_amr_coupled_source_role_strict, Runs) {
 #if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard(argc, argv);
-#else
-  (void)argc;
-  (void)argv;
+  Kokkos::ScopeGuard guard;
 #endif
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    std::printf("  [%s] %s\n", c ? "OK " : "XX ", w);
-    if (!c)
-      ++fails;
-  };
 
   const int N = 32;
   const double L = 1.0, B0 = 1.0;
@@ -157,8 +147,8 @@ static int pops_run_test_amr_coupled_source_role_strict(int argc, char** argv) {
     } catch (const std::exception&) {
       threw = true;
     }
-    chk(!threw, "valid_role_density_resolves");
-    chk(rt.n_coupled_sources() == 1, "valid_role_source_registered");
+    EXPECT_TRUE(!threw) << "valid_role_density_resolves";
+    EXPECT_EQ(rt.n_coupled_sources(), 1) << "valid_role_source_registered";
   }
 
   // ============================================================================================
@@ -177,11 +167,11 @@ static int pops_run_test_amr_coupled_source_role_strict(int argc, char** argv) {
       names_block = msg.find("ions") != std::string::npos;       // le bloc cible
       names_role = msg.find("momentum_x") != std::string::npos;  // le role absent
     }
-    chk(threw, "absent_role_raises");
-    chk(names_block, "absent_role_message_names_block");
-    chk(names_role, "absent_role_message_names_role");
+    EXPECT_TRUE(threw) << "absent_role_raises";
+    EXPECT_TRUE(names_block) << "absent_role_message_names_block";
+    EXPECT_TRUE(names_role) << "absent_role_message_names_role";
     // STRICT : aucune source enregistree (pas de repli silencieux qui aurait stocke comp 0).
-    chk(rt.n_coupled_sources() == 0, "absent_role_no_source_registered");
+    EXPECT_EQ(rt.n_coupled_sources(), 0) << "absent_role_no_source_registered";
   }
 
   // ============================================================================================
@@ -195,8 +185,8 @@ static int pops_run_test_amr_coupled_source_role_strict(int argc, char** argv) {
     } catch (const std::exception&) {
       threw = true;
     }
-    chk(threw, "unknown_role_raises");
-    chk(rt.n_coupled_sources() == 0, "unknown_role_no_source_registered");
+    EXPECT_TRUE(threw) << "unknown_role_raises";
+    EXPECT_EQ(rt.n_coupled_sources(), 0) << "unknown_role_no_source_registered";
   }
 
   // ============================================================================================
@@ -211,8 +201,8 @@ static int pops_run_test_amr_coupled_source_role_strict(int argc, char** argv) {
     } catch (const std::exception&) {
       threw = true;
     }
-    chk(!threw, "user_role_label_resolves_end_to_end");
-    chk(rt.n_coupled_sources() == 1, "user_role_source_registered");
+    EXPECT_TRUE(!threw) << "user_role_label_resolves_end_to_end";
+    EXPECT_EQ(rt.n_coupled_sources(), 1) << "user_role_source_registered";
   }
 
   // ============================================================================================
@@ -228,18 +218,8 @@ static int pops_run_test_amr_coupled_source_role_strict(int argc, char** argv) {
       threw = true;
       names_role = std::string(e.what()).find("not_a_label") != std::string::npos;
     }
-    chk(threw, "absent_user_label_raises");
-    chk(names_role, "absent_user_label_message_names_role");
-    chk(rt.n_coupled_sources() == 0, "absent_user_label_no_source_registered");
+    EXPECT_TRUE(threw) << "absent_user_label_raises";
+    EXPECT_TRUE(names_role) << "absent_user_label_message_names_role";
+    EXPECT_EQ(rt.n_coupled_sources(), 0) << "absent_user_label_no_source_registered";
   }
-
-  if (fails == 0)
-    std::printf("OK test_amr_coupled_source_role_strict\n");
-  else
-    std::printf("FAIL test_amr_coupled_source_role_strict : %d echec(s)\n", fails);
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_amr_coupled_source_role_strict, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_coupled_source_role_strict, "test_amr_coupled_source_role_strict"), 0);
 }

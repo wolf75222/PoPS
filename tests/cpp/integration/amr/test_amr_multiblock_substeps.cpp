@@ -20,7 +20,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/coupling/base/elliptic_rhs.hpp>  // add_scaled_component (RHS de reference assemble main)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>    // AmrRuntime, AmrRuntimeBlock
@@ -110,19 +109,12 @@ static AmrRuntime make_two_block(int N, double L, double q0, double q1, double B
                     S.replicated_coarse, S.wall);
 }
 
-static int pops_run_test_amr_multiblock_substeps(int argc, char** argv) {
+TEST(test_amr_multiblock_substeps, Runs) {
 #if defined(POPS_HAS_KOKKOS)
+  int argc = 0;
+  char** argv = nullptr;
   Kokkos::ScopeGuard guard(argc, argv);
-#else
-  (void)argc;
-  (void)argv;
 #endif
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    std::printf("  [%s] %s\n", c ? "OK " : "XX ", w);
-    if (!c)
-      ++fails;
-  };
 
   const int N = 32;
   const double L = 1.0, B0 = 1.0;
@@ -145,9 +137,10 @@ static int pops_run_test_amr_multiblock_substeps(int argc, char** argv) {
     const std::vector<double> dB = rt.density(1);
     const Real mA1 = rt.mass(0), mB1 = rt.mass(1);
 
-    chk(all_finite(dA4) && all_finite(dB), "subA4_state_finite");  // AVANT toute tolerance
-    chk(std::fabs(mA1 - mA0) < 1e-10, "subA4_blockA_mass_conserved");
-    chk(std::fabs(mB1 - mB0) < 1e-10, "subA4_blockB_mass_conserved");
+    EXPECT_TRUE(all_finite(dA4) && all_finite(dB))
+        << "subA4_state_finite";  // AVANT toute tolerance
+    EXPECT_TRUE(std::fabs(mA1 - mA0) < 1e-10) << "subA4_blockA_mass_conserved";
+    EXPECT_TRUE(std::fabs(mB1 - mB0) < 1e-10) << "subA4_blockB_mass_conserved";
 
     // Reference : MEME config mais A substeps=1. Le resultat de A doit DIFFERER (le sous-cyclage agit).
     AmrRuntime rt1 = make_two_block(N, L, q0, q1, B0, rho0, rho1, "minmod", "minmod",
@@ -155,8 +148,8 @@ static int pops_run_test_amr_multiblock_substeps(int argc, char** argv) {
     for (int s = 0; s < K; ++s)
       rt1.step(dt);
     const std::vector<double> dA1 = rt1.density(0);
-    chk(all_finite(dA1), "subA1_state_finite");
-    chk(dmax_field(dA4, dA1) > 1e-9, "subA4_differs_from_subA1");  // substepping NON no-op
+    EXPECT_TRUE(all_finite(dA1)) << "subA1_state_finite";
+    EXPECT_TRUE(dmax_field(dA4, dA1) > 1e-9) << "subA4_differs_from_subA1";  // substepping NON no-op
     // bloc B (substeps=1 dans les deux runs) : meme trajectoire au bit pres (A ne le perturbe pas, les
     // blocs avancent independamment ; phi differe car A differe, mais le couplage est once-per-step et A
     // substeps n'altere PAS l'etat de B a substeps=1 sur le MEME phi de tete).
@@ -173,16 +166,16 @@ static int pops_run_test_amr_multiblock_substeps(int argc, char** argv) {
       rt.step(dt);
     const std::vector<double> dB4 = rt.density(1);
     const Real mA1 = rt.mass(0), mB1 = rt.mass(1);
-    chk(all_finite(dB4), "revB4_state_finite");
-    chk(std::fabs(mA1 - mA0) < 1e-10, "revB4_blockA_mass_conserved");
-    chk(std::fabs(mB1 - mB0) < 1e-10, "revB4_blockB_mass_conserved");
+    EXPECT_TRUE(all_finite(dB4)) << "revB4_state_finite";
+    EXPECT_TRUE(std::fabs(mA1 - mA0) < 1e-10) << "revB4_blockA_mass_conserved";
+    EXPECT_TRUE(std::fabs(mB1 - mB0) < 1e-10) << "revB4_blockB_mass_conserved";
 
     AmrRuntime rt1 = make_two_block(N, L, q0, q1, B0, rho0, rho1, "minmod", "minmod",
                                     /*sub0=*/1, /*sub1=*/1, /*stride0=*/1, /*stride1=*/1);
     for (int s = 0; s < K; ++s)
       rt1.step(dt);
     const std::vector<double> dB1 = rt1.density(1);
-    chk(dmax_field(dB4, dB1) > 1e-9, "revB4_differs_from_subB1");
+    EXPECT_TRUE(dmax_field(dB4, dB1) > 1e-9) << "revB4_differs_from_subB1";
   }
 
   // ============================================================================================
@@ -202,17 +195,18 @@ static int pops_run_test_amr_multiblock_substeps(int argc, char** argv) {
     rt.step(dt);
     const std::vector<double> dA_0 = rt.density(0);
     const std::vector<double> dB_0 = rt.density(1);
-    chk(dmax_field(dA_0, dA_init) > 1e-9, "stride_blockA_advances_at_mac0");
-    chk(dmax_field(dB_0, dB_init) == 0.0, "stride_blockB_held_at_mac0");  // exactement inchange
+    EXPECT_TRUE(dmax_field(dA_0, dA_init) > 1e-9) << "stride_blockA_advances_at_mac0";
+    EXPECT_EQ(dmax_field(dB_0, dB_init), 0.0)
+        << "stride_blockB_held_at_mac0";  // exactement inchange
     // Poisson somme actif au pas 0 (les DEUX densites contribuent ; B avec son etat fige).
-    chk(norm_inf(rt.poisson_rhs()) > 1e-6, "stride_poisson_sum_active_mac0");
+    EXPECT_TRUE(norm_inf(rt.poisson_rhs()) > 1e-6) << "stride_poisson_sum_active_mac0";
 
     // macro-pas 1 : B RATTRAPE (pas effectif 2*dt).
     rt.step(dt);
     const std::vector<double> dB_1 = rt.density(1);
-    chk(dmax_field(dB_1, dB_init) > 1e-9, "stride_blockB_catchup_at_mac1");
-    chk(std::fabs(rt.mass(1) - mB_init) < 1e-10, "stride_blockB_mass_conserved");
-    chk(norm_inf(rt.poisson_rhs()) > 1e-6, "stride_poisson_sum_active_mac1");
+    EXPECT_TRUE(dmax_field(dB_1, dB_init) > 1e-9) << "stride_blockB_catchup_at_mac1";
+    EXPECT_TRUE(std::fabs(rt.mass(1) - mB_init) < 1e-10) << "stride_blockB_mass_conserved";
+    EXPECT_TRUE(norm_inf(rt.poisson_rhs()) > 1e-6) << "stride_poisson_sum_active_mac1";
   }
 
   // ============================================================================================
@@ -227,12 +221,12 @@ static int pops_run_test_amr_multiblock_substeps(int argc, char** argv) {
     const Real h = Real(L) / Real(N);  // dx_coarse
     const Real cfl = Real(0.4);
     const Real w = rt.max_speed();  // solve_fields + max sur les blocs (identiques -> w commun)
-    chk(w > Real(0), "cfl_wave_speed_positive");
+    EXPECT_TRUE(w > Real(0)) << "cfl_wave_speed_positive";
     // min(substeps/(stride*w)) sur {(4,1),(1,2)} = min(4, 0.5)/w = 0.5/w.
     const Real expected = cfl * h * Real(0.5) / w;
     const Real got = rt.step_cfl(cfl, h);
-    chk(std::fabs(got - expected) <= Real(1e-12) * std::fabs(expected) + Real(1e-15),
-        "cfl_dt_is_substeps_stride_aware");
+    EXPECT_TRUE(std::fabs(got - expected) <= Real(1e-12) * std::fabs(expected) + Real(1e-15))
+        << "cfl_dt_is_substeps_stride_aware";
   }
 
   // ============================================================================================
@@ -256,7 +250,7 @@ static int pops_run_test_amr_multiblock_substeps(int argc, char** argv) {
     };
     const std::vector<double> a = run_step();
     const std::vector<double> b = run_step();
-    chk(dmax_field(a, b) == 0.0, "monoblock_step_bit_identical");
+    EXPECT_EQ(dmax_field(a, b), 0.0) << "monoblock_step_bit_identical";
 
     auto run_cfl = [&]() {
       AmrSystemConfig cfg;
@@ -275,17 +269,7 @@ static int pops_run_test_amr_multiblock_substeps(int argc, char** argv) {
     };
     const auto ra = run_cfl();
     const auto rb = run_cfl();
-    chk(dmax_field(ra.first, rb.first) == 0.0, "monoblock_step_cfl_field_bit_identical");
-    chk(ra.second == rb.second, "monoblock_step_cfl_dt_bit_identical");
+    EXPECT_EQ(dmax_field(ra.first, rb.first), 0.0) << "monoblock_step_cfl_field_bit_identical";
+    EXPECT_EQ(ra.second, rb.second) << "monoblock_step_cfl_dt_bit_identical";
   }
-
-  if (fails == 0)
-    std::printf("OK test_amr_multiblock_substeps\n");
-  else
-    std::printf("FAIL test_amr_multiblock_substeps : %d echec(s)\n", fails);
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_amr_multiblock_substeps, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_multiblock_substeps, "test_amr_multiblock_substeps"), 0);
 }

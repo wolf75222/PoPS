@@ -15,7 +15,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/coupling/schur/amr/amr_condensed_schur_source_stepper.hpp>
 
 #include <pops/mesh/layout/box_array.hpp>
@@ -104,17 +103,10 @@ static bool all_finite(const MultiFab& m, int nc) {
   return all_reduce_max(bad) == 0.0;  // collectif : aucun NaN sur AUCUN rang.
 }
 
-static int pops_run_test_amr_condensed_schur_composite(int argc, char** argv) {
+TEST(test_amr_condensed_schur_composite, Runs) {
+  int argc = 0;
+  char** argv = nullptr;
   comm_init(&argc, &argv);
-  const int me = my_rank();
-  long fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      if (me == 0)
-        std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
 
   const int n = 32;
   const Real rho0 = Real(1.5), B0 = Real(4.0), alpha = Real(3.0), theta = Real(1.0);
@@ -166,11 +158,12 @@ static int pops_run_test_amr_condensed_schur_composite(int argc, char** argv) {
   run_step(dt, Uc, Uf);
 
   // (A) finitude.
-  chk(all_finite(Uc, vars.size) && all_finite(Uf, vars.size), "(A) etat fini (grossier + fin)");
+  EXPECT_TRUE(all_finite(Uc, vars.size) && all_finite(Uf, vars.size))
+      << "(A) etat fini (grossier + fin)";
 
   // (B) la source a agi sur le FIN (mom change).
-  chk(max_diff(Uf, Uf0, vars.size) > 1e-6,
-      "(B) la source modifie l'etat fin (etage composite a tourne)");
+  EXPECT_GT(max_diff(Uf, Uf0, vars.size), 1e-6)
+      << "(B) la source modifie l'etat fin (etage composite a tourne)";
 
   // (C) rho gelee (grossier ET fin) : la densite est inchangee.
   {
@@ -191,8 +184,9 @@ static int pops_run_test_amr_condensed_schur_composite(int argc, char** argv) {
           drho_f = std::fmax(drho_f, std::fabs(u(i, j, c_rho) - u0(i, j, c_rho)));
     }
     // NB : rho grossier COUVERT = average_down de rho fin (= rho0, gele) -> inchange a la precision machine.
-    chk(all_reduce_max(drho_c) < 1e-12 && all_reduce_max(drho_f) < 1e-12,
-        "(C) rho gelee par la source (grossier + fin inchanges)");
+    const double drho_c_max = all_reduce_max(drho_c), drho_f_max = all_reduce_max(drho_f);
+    EXPECT_TRUE(drho_c_max < 1e-12 && drho_f_max < 1e-12)
+        << "(C) rho gelee par la source (grossier + fin inchanges)";
   }
 
   // (D) cascade average_down : cellule grossiere COUVERTE = moyenne 2x2 des cellules fines (mom_x).
@@ -208,8 +202,8 @@ static int pops_run_test_amr_condensed_schur_composite(int argc, char** argv) {
                                      UF(2 * I, 2 * J + 1, c) + UF(2 * I + 1, 2 * J + 1, c));
           dcov = std::fmax(dcov, std::fabs(UC(I, J, c) - avg));
         }
-    chk(all_reduce_max(dcov) < 1e-12,
-        "(D) cascade average_down : grossier couvert = moyenne 2x2 fine");
+    EXPECT_LT(all_reduce_max(dcov), 1e-12)
+        << "(D) cascade average_down : grossier couvert = moyenne 2x2 fine";
   }
 
   // (E) stabilite a grand dt (source raide, theta=1 implicite) : etat fini et borne.
@@ -227,17 +221,10 @@ static int pops_run_test_amr_condensed_schur_composite(int argc, char** argv) {
         for (int i = b.lo[0]; i <= b.hi[0]; ++i)
           mmax = std::fmax(mmax, std::fmax(std::fabs(u(i, j, c_mx)), std::fabs(u(i, j, c_my))));
     }
-    chk(fin && all_reduce_max(mmax) < 20.0 * rho0,
-        "(E) stable et borne a grand dt (theta=1 implicite)");
+    const double mmax_all = all_reduce_max(mmax);
+    EXPECT_TRUE(fin && mmax_all < 20.0 * rho0)
+        << "(E) stable et borne a grand dt (theta=1 implicite)";
   }
 
-  fails = static_cast<long>(all_reduce_max(static_cast<double>(fails)));
-  if (me == 0 && fails == 0)
-    std::printf("OK test_amr_condensed_schur_composite\n");
   comm_finalize();
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_amr_condensed_schur_composite, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_condensed_schur_composite, "test_amr_condensed_schur_composite"), 0);
 }
