@@ -111,10 +111,12 @@ def compile(problem, backend="production", time=None, **kwargs):
                              for name, spec in problem._blocks.items()}
     compiled._field_solvers = _problem_field_solvers(problem)
     compiled._outputs = list(problem._outputs or [])
-    # Carry the AMR layout so bind() can rebuild the AmrSystemConfig (n / L / periodic / regrid /
-    # patch settings) and flow the typed refinement + field problem onto the AmrSystem. None for a
-    # Uniform layout (System bind reads no layout); set only on the AMR route.
-    compiled._layout = None
+    # Carry the layout so bind()'s runtime adapter can derive the engine config from the mesh: the
+    # Uniform adapter builds the System's SystemConfig (n / L / periodic) from the Uniform mesh,
+    # mirroring how the AMR adapter derives the AmrSystemConfig (n / L / periodic / regrid / patch
+    # settings) and flows the typed refinement. A handle NOT produced here carries no layout and
+    # binds on the bare System() defaults.
+    compiled._layout = problem.layout
     return compiled
 
 

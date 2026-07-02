@@ -72,10 +72,15 @@ class _UniformRuntimeAdapter(_RuntimeAdapter):
 
     def build_engine(self, layout):
         # Resolved from pops.runtime.system at call time so a monkeypatched System (low-level tests)
-        # still takes effect; the Uniform route reads no layout descriptor (System carries none).
+        # still takes effect. The Uniform layout carries the single-level mesh: derive the System's
+        # SystemConfig (n / L / periodic) from it so the engine matches the Case's grid, mirroring the
+        # AMR adapter. A handle with no layout (not produced by pops.compile) binds on the System()
+        # defaults.
         from pops.runtime.system import System
 
-        return System()
+        if layout is None:
+            return System()
+        return System(_system_config_from_layout(layout))
 
     def install(self, engine, compiled, *, instances, params, aux, solvers, cadence, outputs):
         engine._install_compiled(compiled, instances=instances, params=params, aux=aux,
@@ -148,10 +153,30 @@ def adapter_for(target, layout, n_blocks=1):
     return _UniformRuntimeAdapter()
 
 
-# --- AMR layout lowering (moved from codegen.orchestration, behavior byte-identical) ------------
-# These lower an inert AMR layout onto the C++ AmrSystem config / refinement seams; that is
-# runtime-adapter responsibility, so they live here (not in the codegen layer). Their error
-# messages already speak the "pops.bind:" vocabulary and are preserved verbatim.
+# --- Mesh layout lowering (engine config + AMR refinement seams) --------------------------------
+# These lower an inert mesh layout onto the C++ engine config / refinement seams; that is
+# runtime-adapter responsibility, so they live here (not in the codegen layer). The AMR helpers
+# were moved verbatim from codegen.orchestration (behavior byte-identical); their error messages
+# already speak the "pops.bind:" vocabulary and are preserved verbatim.
+
+
+def _system_config_from_layout(layout):
+    """Build a ``SystemConfig`` from a :class:`pops.mesh.layouts.Uniform` descriptor.
+
+    Maps the inert Uniform layout onto the C++ runtime config the ``System`` constructor consumes:
+    ``n`` / ``L`` / ``periodic`` from the single-level ``CartesianMesh`` (``layout.mesh``), mirroring
+    :func:`_amr_config_from_layout` for the AMR route so the bound engine matches the Case's grid
+    instead of the ``SystemConfig`` defaults. Imported lazily so the runtime module stays
+    import-light.
+    """
+    from pops._bootstrap import SystemConfig
+
+    mesh = layout.mesh
+    cfg = SystemConfig()
+    cfg.n = int(mesh.n)
+    cfg.L = float(mesh.L)
+    cfg.periodic = bool(mesh.periodic)
+    return cfg
 
 
 def _amr_config_from_layout(layout):

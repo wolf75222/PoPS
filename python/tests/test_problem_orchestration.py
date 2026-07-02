@@ -505,7 +505,11 @@ def _bind_with_stub_runtime(target, layout=None, blocks=("ne",), initial=None):
     import pops.runtime.system as rtsys
 
     class _StubSystem(_RecordingSim):
-        pass
+        # Mirrors the real System constructor: the Uniform adapter derives a SystemConfig from the
+        # Case's mesh and passes it (or None when the handle carries no layout). Recorded so a test
+        # can assert n / L / periodic reached the engine instead of the System() defaults.
+        def __init__(self, config=None):
+            self.config = config
 
     class _StubAmrSystem(_RecordingSim):
         def __init__(self, config=None):
@@ -550,6 +554,21 @@ def test_bind_system_dispatch():
     _check(last["instances"]["ne"]["initial"] == [1.0], "initial state routed by block name")
     _check("phi" in last["solvers"], "the Poisson field solver derived from the problem")
     print("ok test_bind_system_dispatch")
+
+
+def test_bind_system_config_from_uniform_layout():
+    # The Uniform bind derives the System's SystemConfig (n / L / periodic) from the Case's mesh,
+    # mirroring the AMR route -- so a NON-default mesh reaches the engine instead of the System()
+    # defaults (n=64, L=1.0, periodic). Locks the fix: pre-fix compile set _layout=None on Uniform
+    # and the adapter built a bare System(), so the Case mesh was silently ignored.
+    layout = Uniform(CartesianMesh(n=16, L=2.0, periodic=False))
+    sim_class, _, stub_system, _, engine = _bind_with_stub_runtime("system", layout=layout)
+    _check(sim_class is stub_system, "target='system' binds a System")
+    cfg = engine.config
+    _check(cfg is not None, "the Uniform adapter builds the System from a derived SystemConfig")
+    _check(cfg.n == 16 and cfg.L == 2.0 and cfg.periodic is False,
+           "SystemConfig n/L/periodic derived from the Uniform CartesianMesh (not the defaults)")
+    print("ok test_bind_system_config_from_uniform_layout")
 
 
 def test_bind_returns_bound_simulation_view():
@@ -763,7 +782,10 @@ def test_bind_rejects_case_mutated_after_compile(monkeypatch=None):
         import pops.runtime.system as rtsys
 
         class _StubSystem(_RecordingSim):
-            pass
+            # ADC-583/#427: the Uniform adapter derives a SystemConfig from the Case mesh and
+            # passes it to the engine constructor; mirror the real System signature.
+            def __init__(self, config=None):
+                self.config = config
 
         orig = rtsys.System
         rtsys.System = _StubSystem
@@ -800,7 +822,10 @@ def test_bind_uses_snapshot_not_live_physics(monkeypatch=None):
         import pops.runtime.system as rtsys
 
         class _StubSystem(_RecordingSim):
-            pass
+            # ADC-583/#427: the Uniform adapter derives a SystemConfig from the Case mesh and
+            # passes it to the engine constructor; mirror the real System signature.
+            def __init__(self, config=None):
+                self.config = config
 
         orig = rtsys.System
         rtsys.System = _StubSystem
