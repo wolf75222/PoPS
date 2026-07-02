@@ -105,6 +105,19 @@ def _old_cache_path(model_hash, abi_key, backend, target, name):
     return os.path.join(pops_cache_dir(), "%s-%s.so" % ((model_hash or "nohash")[:16], tag))
 
 
+def _registry_cache_path(model_hash, abi_key, backend, target, name):
+    """The pre-aot-marker key PLUS the route-registry component (ADC-599): the expected native
+    file name after the designed one-time re-key. Rebuilding it here (instead of calling
+    _cache_so_path) keeps the assertion independent: it proves the native key differs from the
+    historical one ONLY through the registry component -- i.e. the aot optflags still do not
+    leak into the native key."""
+    from pops.codegen.cache import _registry_cache_key
+    rest = "|".join((abi_key or "", backend or "", target or "", name or "",
+                     _platform_cache_key(), _registry_cache_key())).encode()
+    tag = hashlib.sha256(rest).hexdigest()[:16]
+    return os.path.join(pops_cache_dir(), "%s-%s.so" % ((model_hash or "nohash")[:16], tag))
+
+
 def check_cache_key():
     """The flags enter the cache key of the aot artifact (a stale -O2 is not served); native/jit
     keep an unchanged name (no collateral invalidation)."""
@@ -123,10 +136,13 @@ def check_cache_key():
         assert _cache_so_path("mh", "abi", aot_be, "system", None) \
             != _old_cache_path("mh", "abi", aot_be, "system", None), \
             "the pre-fix -O2 aot .so would still be served (key not invalidated)"
-        # (3) native (key already faithful to its binary) keeps its file name: no invalidation
+        # (3) native: the aot optflags do NOT leak into its key. Since ADC-599 every key carries
+        # the route-registry component (a designed one-time global re-key), so the reference is
+        # the historical key PLUS that component -- equality proves optflags stay out of it.
         assert _cache_so_path("mh", "abi", prod_be, "system", None) \
-            == _old_cache_path("mh", "abi", prod_be, "system", None), \
-            "the native backend key changed (collateral invalidation)"
+            == _registry_cache_path("mh", "abi", prod_be, "system", None), \
+            "the native backend key changed beyond the ADC-599 registry component (collateral " \
+            "invalidation)"
     finally:
         if saved_env is None:
             os.environ.pop("POPS_DSL_OPTFLAGS", None)
