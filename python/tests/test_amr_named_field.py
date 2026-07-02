@@ -200,7 +200,7 @@ def _run_section_b():
     # register_elliptic_field + set_block_elliptic_field at add time, so the named field "psi" is
     # registered with its own coarse GeometricMG; sim.run() solves it each step (default Poisson
     # first, then the named field), and sim.field("psi") reads the solved coarse potential.
-    from pops.codegen.orchestration import _amr_config_from_layout
+    from pops.runtime._bind_adapters import _amr_config_from_layout  # ADC-583: moved from codegen
     layout = AMR(CartesianMesh(n=N, L=1.0, periodic=True))
     sim = pops.AmrSystem(_amr_config_from_layout(layout))
     sim.set_poisson("charge_density", "geometric_mg")

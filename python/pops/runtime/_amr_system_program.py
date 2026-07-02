@@ -37,9 +37,9 @@ class _AmrSystemProgram:
         elif params:
             raise NotImplementedError(
                 "pops.bind: runtime params (params=%s) are not wired on a NATIVE AMR install (the AMR "
-                "native .so loader does not transport runtime params, and AmrSystem has no "
-                "set_block_params); pass a compiled time Program (compile_problem(target='amr_system')) "
-                "to use params=, set them as const on the native model, or use System."
+                "native .so loader does not transport runtime params, and the AMR runtime has no "
+                "per-block param seam); set them as const on the block's model in the pops.Case, or "
+                "declare layout=Uniform(...) (the uniform route carries runtime params=)."
                 % sorted(params))
 
         if cadence is not None:

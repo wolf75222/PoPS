@@ -46,8 +46,8 @@ def _reject_newton_amr_compiled(label, time):
             "%s : the Newton options/diagnostics (newton_max_iters/rel_tol/abs_tol/fd_eps/damping/"
             "fail_policy/diagnostics) are not transported by the AMR production path (loader "
             ".so, flat ABI add_native_block : they would be taken at their defaults silently). "
-            "Use AmrSystem.add_block (native model pops.Model(...)) or add_compiled_model("
-            "AmrSystem&) directly (C++)." % label)
+            "They are available only on the internal native engine API (a composed native model, "
+            "pops.Model(...) on the AMR layout)." % label)
 
 
 class _AmrSystemEquation:
@@ -123,7 +123,8 @@ class _AmrSystemEquation:
                 raise ValueError(
                     "AmrSystem.add_equation: magnetic_field != 'B_z' is not transported by the "
                     "amr-schur path (the AMR stage reads the dedicated coarse B_z buffer). Keep "
-                    "magnetic_field='B_z', or use System (mono-level).")
+                    "magnetic_field='B_z', or declare layout=Uniform(...) on the pops.Case "
+                    "(the mono-level route carries a general magnetic aux field).")
             self._s.set_source_stage(name, src.kind, src.theta, src.alpha,
                                      getattr(src, "krylov_tol", 0.0),
                                      getattr(src, "krylov_max_iters", 0),
@@ -208,15 +209,15 @@ class _AmrSystemEquation:
             raise ValueError(
                 "AmrSystem.add_equation: stride=%d not transported by the production AMR path "
                 "(.so loader, flat ABI add_native_block: the block would run at stride=1 silently). "
-                "Use AmrSystem.add_block (native model pops.Model(...), wired cadence) or "
-                "add_compiled_model(AmrSystem&) directly (C++) which exposes stride." % nstride)
+                "The multirate cadence is available only on the internal native engine API (a "
+                "composed native model, pops.Model(...) on the AMR layout)." % nstride)
         if getattr(time, "implicit_vars", []) or getattr(time, "implicit_roles", []):
             raise ValueError(
                 "AmrSystem.add_equation: implicit_vars / implicit_roles (partial IMEX mask) not "
                 "transported by the production AMR path (.so loader, flat ABI add_native_block: the "
-                "mask would be empty = full backward-Euler silently). Use AmrSystem.add_block "
-                "(native model pops.Model(...), wired mask) or add_compiled_model(AmrSystem&) "
-                "directly (C++) which exposes the IMEX mask.")
+                "mask would be empty = full backward-Euler silently). The partial IMEX mask is "
+                "available only on the internal native engine API (a composed native model, "
+                "pops.Model(...) on the AMR layout).")
         # Newton options / diagnostics: same flat ABI -> neither the options nor the report transit
         # through the .so loader. Explicit rejection (otherwise iters=2 / no report silently), parity with
         # the stride/mask rejection above and with System.add_equation (compiled backend).
@@ -257,8 +258,8 @@ class _AmrSystemEquation:
         table = self._aux_field_index.get(block)
         if table is None:
             raise ValueError(
-                "set_aux_field: block '%s' unknown (or added without a named aux field); add the block "
-                "via add_equation(model=...) with a model declaring m.aux_field('%s')." % (block, name))
+                "set_aux_field: block '%s' unknown (or bound without a named aux field); declare "
+                "m.aux_field('%s') on that block's model in the pops.Case." % (block, name))
         if name not in table:
             raise ValueError(
                 "set_aux_field: aux field '%s' not declared by block '%s'; known named fields: %s"

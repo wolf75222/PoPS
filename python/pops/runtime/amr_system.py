@@ -218,9 +218,9 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         if isinstance(time, Split):
             raise TypeError(
                 "AmrSystem.add_block : pops.Split / pops.Strang (Schur-condensed source stage) is "
-                "supported only by add_equation (which connects the source stage) ; use "
-                "add_equation(..., time=pops.Strang(hyperbolic=pops.Explicit(...), "
-                "source=pops.CondensedSchur(...))).")
+                "not wired on this native seam. Declare the splitting on the pops.Case time scheme "
+                "(time=pops.Strang(hyperbolic=pops.Explicit(...), source=pops.CondensedSchur(...))) "
+                "and lower it with pops.compile(...) + pops.bind(...).")
         # positivity_floor (ADC-259) IS now wired on the AMR transport (Density-role face states +
         # C/F fine ghost means). Threaded to AmrSystem::add_block below; the compiled .so path carries
         # it too (ADC-322, regenerated loader). The C++ side rejects it on a model without a Density role.
@@ -229,7 +229,8 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         if getattr(spatial, "wave_speed_cache", False):
             raise ValueError(
                 "AmrSystem.add_block : wave_speed_cache not supported on the AMR path (separate "
-                "work item) ; remove wave_speed_cache or use the uniform System.")
+                "work item) ; remove wave_speed_cache, or declare layout=Uniform(...) on the "
+                "pops.Case (the uniform route wires the cache).")
         # We thread substeps/stride (multirate, capstone iv), the partial IMEX mask, the Newton OPTIONS
         # AND newton_diagnostics (wave 3, settle). Resolved / validated on the C++ side (AmrSystem::add_block)
         # against the block names/roles : empty -> full backward-Euler. The options are wired in single-block

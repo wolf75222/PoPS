@@ -36,6 +36,9 @@ try:
     import numpy as np
     import pops
     from pops.codegen import orchestration
+    # ADC-583: the AMR layout-lowering helpers moved to the runtime adapter layer; the compile
+    # ROUTE (orchestration.compile) still lives in codegen, the lowering helpers do not.
+    from pops.runtime import _bind_adapters
     from pops.mesh.amr import (FrozenRegrid, PatchLayout, Refine, RegridEvery, TagUnion,
                                NATIVE_MAX_LEVELS, NATIVE_RATIOS)
     from pops.mesh.cartesian import CartesianMesh
@@ -142,7 +145,7 @@ def test_amr_config_from_layout_mapping():
     layout = AMR(CartesianMesh(n=64, L=1.5, periodic=False), max_levels=2, ratio=2,
                  regrid=RegridEvery(8),
                  patches=PatchLayout(distribute_coarse=True, coarse_max_grid=16))
-    cfg = orchestration._amr_config_from_layout(layout)
+    cfg = _bind_adapters._amr_config_from_layout(layout)
     _check(cfg.n == 64, "n from the base CartesianMesh")
     _check(cfg.L == 1.5, "L from the base CartesianMesh")
     _check(cfg.periodic is False, "periodic from the base CartesianMesh")
@@ -157,10 +160,10 @@ def test_amr_config_from_layout_mapping():
 
 def test_amr_config_regrid_and_patch_defaults():
     """FrozenRegrid / no regrid -> regrid_every == 0; default patches -> native config defaults."""
-    frozen = orchestration._amr_config_from_layout(
+    frozen = _bind_adapters._amr_config_from_layout(
         AMR(CartesianMesh(n=32), regrid=FrozenRegrid()))
     _check(frozen.regrid_every == 0, "FrozenRegrid -> frozen hierarchy (regrid_every == 0)")
-    no_regrid = orchestration._amr_config_from_layout(AMR(CartesianMesh(n=32)))
+    no_regrid = _bind_adapters._amr_config_from_layout(AMR(CartesianMesh(n=32)))
     _check(no_regrid.regrid_every == 0, "no regrid policy -> regrid_every == 0")
     _check(no_regrid.n == 32, "n still derived from the base mesh")
     print("ok test_amr_config_regrid_and_patch_defaults")
@@ -168,11 +171,11 @@ def test_amr_config_regrid_and_patch_defaults():
 
 def test_amr_refine_default_density_subject():
     """The density / component-0 subjects map to the single-block default; others are non-default."""
-    _check(orchestration._is_default_density_subject("Density"), "Density role is the default")
-    _check(orchestration._is_default_density_subject("density"), "density name is the default")
-    _check(orchestration._is_default_density_subject("rho"), "rho name is the default")
-    _check(orchestration._is_default_density_subject(None), "no subject is the default")
-    _check(not orchestration._is_default_density_subject("MomentumX"),
+    _check(_bind_adapters._is_default_density_subject("Density"), "Density role is the default")
+    _check(_bind_adapters._is_default_density_subject("density"), "density name is the default")
+    _check(_bind_adapters._is_default_density_subject("rho"), "rho name is the default")
+    _check(_bind_adapters._is_default_density_subject(None), "no subject is the default")
+    _check(not _bind_adapters._is_default_density_subject("MomentumX"),
            "a non-density role is a non-default (multi-block) selector")
     print("ok test_amr_refine_default_density_subject")
 
@@ -189,7 +192,7 @@ def test_amr_non_default_refine_selector_rejected():
     layout = AMR(CartesianMesh(n=32))
     layout.refine = Refine.on("MomentumX").above(0.5)
     try:
-        orchestration._flow_amr_layout(_Recorder(), layout)
+        _bind_adapters._flow_amr_layout(_Recorder(), layout)
         raise AssertionError("a non-density selector must raise on the single-block route")
     except NotImplementedError as exc:
         _check("multi-block" in str(exc), "the message names the multi-block limitation")
@@ -224,12 +227,12 @@ def test_native_amr_from_layout_runs():
     layout.refine = TagUnion(Refine.on("Density").above(1.2),
                              Refine.on("phi").gradient_above(0.5))
 
-    cfg = orchestration._amr_config_from_layout(layout)
+    cfg = _bind_adapters._amr_config_from_layout(layout)
     _check(cfg.n == n and cfg.regrid_every == 4, "config derived from the layout")
 
     sim = pops.AmrSystem(cfg)
     # Flow the typed refinement exactly as pops.bind does (set_refinement / set_phi_refinement).
-    orchestration._flow_amr_layout(sim, layout)
+    _bind_adapters._flow_amr_layout(sim, layout)
     # The Poisson field (set via the install solvers seam in bind) -- exercise it directly here.
     sim.set_poisson("charge_density", "geometric_mg")
     sim.add_block("gas", _native_compressible_model(),

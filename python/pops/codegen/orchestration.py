@@ -11,20 +11,22 @@ These are the Spec 5 sec.11 lowering entry points for a :class:`pops.case.Case`:
   ``.so`` loader, ``add_native_block``) and carries the ``{block: CompiledModel}`` table on the
   handle -- there is NO whole-system time Program on AMR (``AmrSystem`` has no ``install_program``
   seam; the native blocks carry their own time policy).
-* :func:`bind` dispatches ``System`` vs ``AmrSystem`` from the carried target, assembles the
-  per-instance state mapping, and calls the INTERNAL ``sim._install_compiled(compiled, instances=,
-  ...)`` seam (``pops.runtime._system_unified_install``). For ``amr_system`` it installs through the
-  NATIVE path (``compiled=None`` with each instance carrying its ``target='amr_system'``
-  ``CompiledModel``), sidestepping the blocked whole-system time-Program install. ``bind`` is the
-  public entry point; the ``_install_compiled`` seam is undocumented / low-level. No parallel runtime.
+* :func:`bind` assembles the per-instance state mapping + field solvers + output policies, then
+  delegates to an internal RUNTIME ADAPTER (:mod:`pops.runtime._bind_adapters`) selected from the
+  carried target: ``layout=Uniform`` -> the Uniform adapter (``System``), ``layout=AMR`` -> the AMR
+  adapter (``AmrSystem``). The adapter builds the engine, lowers the validated objects onto its
+  INTERNAL ``_install_compiled`` seam, and returns a
+  :class:`pops.runtime._bound_sim.BoundSimulation` view -- NOT the raw engine, so the legacy setters
+  (``add_block`` / ``set_poisson`` / ``set_refinement`` / ``install_program`` / ...) are hidden.
+  ``bind`` is the public entry point; the engines stay internal backends. No parallel runtime.
 
 There is NO new codegen and NO new install machinery here: this module ORCHESTRATES the
-proven pieces (``Model.compile`` for the per-block AMR loader, ``add_equation`` for the native
+proven pieces (``Model.compile`` for the per-block AMR loader, the runtime adapters for the
 install). Every not-yet-wired route raises a clear ``NotImplementedError``.
 
 Import-graph rule (Spec 4 / sec.4): ``codegen`` may import only ir / model / physics / time /
-lib at module scope. The runtime (System / AmrSystem), mesh (AMR) and case types are pulled
-LAZILY inside the function bodies, so this module adds no forbidden cross-layer edge.
+lib at module scope. The runtime (System / AmrSystem), the runtime adapters, mesh (AMR) and case
+types are pulled LAZILY inside the function bodies, so this module adds no forbidden cross-layer edge.
 """
 
 
@@ -99,10 +101,12 @@ def compile(problem, backend="production", time=None, **kwargs):
     compiled._problem = problem
     compiled._target = target
     compiled._block_models = block_models
-    # Carry the AMR layout so bind() can rebuild the AmrSystemConfig (n / L / periodic / regrid /
-    # patch settings) and flow the typed refinement + field problem onto the AmrSystem. None for a
-    # Uniform layout (System bind reads no layout); set only on the AMR route.
-    compiled._layout = None
+    # Carry the layout so bind()'s runtime adapter can derive the engine config from the mesh: the
+    # Uniform adapter builds the System's SystemConfig (n / L / periodic) from the Uniform mesh,
+    # mirroring how the AMR adapter derives the AmrSystemConfig (n / L / periodic / regrid / patch
+    # settings) and flows the typed refinement. A handle NOT produced here carries no layout and
+    # binds on the bare System() defaults.
+    compiled._layout = problem.layout
     return compiled
 
 
@@ -166,18 +170,19 @@ def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
     """Wire a compiled handle onto the runtime: the PUBLIC bind entry point.
 
     ``pops.bind`` is THE documented way to instantiate a runnable simulation from a compiled handle
-    (``compiled = pops.compile(...)``); it dispatches ``System`` vs ``AmrSystem`` from the target
-    carried on @p compiled (set by :func:`compile`), builds the per-instance state mapping from the
-    problem's blocks and the supplied initial state, derives the field solvers from the problem's
-    field problems (an explicit @p solvers overrides), flows the Case's output / checkpoint policies
-    (C4 / ADC-509) so the bound sim's ``run(output_dir=...)`` fires them at each policy cadence, and
-    calls the INTERNAL ``sim._install_compiled(compiled, instances=, params=, aux=, solvers=,
-    cadence=, outputs=)`` seam -- the low-level install lowering, not a public entry. For
-    ``target='amr_system'`` (ADC-503) the install goes through the NATIVE path
-    (``_install_compiled(compiled=None, ...)`` with each instance carrying its own
-    ``target='amr_system'`` ``CompiledModel`` from the handle's ``_block_compiled_models``), since the
-    AMR runtime has no whole-system ``install_program`` seam. Returns the bound simulation (the
-    ``System`` / ``AmrSystem`` is the Simulation facade for now): call ``sim.run(...)`` to advance it.
+    (``compiled = pops.compile(...)``). It builds the per-instance state mapping from the problem's
+    blocks and the supplied initial state, derives the field solvers from the problem's field
+    problems (an explicit @p solvers overrides), flows the Case's output / checkpoint policies
+    (C4 / ADC-509) so the bound sim's ``run(output_dir=...)`` fires them at each policy cadence, then
+    delegates to an internal RUNTIME ADAPTER selected from the carried target
+    (:func:`pops.runtime._bind_adapters.adapter_for`): ``layout=Uniform`` -> the Uniform adapter
+    (``System``, whole-system compiled time Program), ``layout=AMR`` -> the AMR adapter
+    (``AmrSystem`` derived from the layout, native per-block install). The adapter builds the internal
+    engine, lowers the validated objects onto its INTERNAL ``_install_compiled`` seam and returns a
+    ``BoundSimulation`` VIEW over that engine. The engines stay internal backends: the returned view
+    exposes the run / data / diagnostic / io surface and hides the assembly setters
+    (``add_block`` / ``set_poisson`` / ``set_refinement`` / ``install_program`` / ...). Call
+    ``sim.run(...)`` to advance it.
 
     Args:
         compiled: A ``CompiledProblem`` from :func:`compile` (carries ``_problem`` / ``_target``).
@@ -189,7 +194,7 @@ def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
         cadence: optional ``pops.CompiledTime`` macro-step cadence.
 
     Returns:
-        The bound ``System`` / ``AmrSystem`` simulation handle.
+        A ``BoundSimulation`` view over the internal ``System`` / ``AmrSystem`` engine.
     """
     so_path = getattr(compiled, "so_path", None)
     if so_path is None:
@@ -212,169 +217,26 @@ def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
     # write()/checkpoint writers). Empty for a Case with no .output(...) -- the install is unchanged.
     outputs = list(getattr(problem, "_outputs", []) or [])
 
-    from pops.runtime.system import AmrSystem, System
+    # The AMR install goes through the NATIVE per-block path (each instance carries its OWN
+    # target='amr_system' CompiledModel from compile()'s _block_compiled_models); the Uniform install
+    # carries the whole-system compiled time Program (@p compiled). _assemble_instances builds the
+    # right per-block model table for either route.
+    n_blocks = len(problem._blocks) if problem is not None else 1
     if target == "amr_system":
-        # Build the AmrSystem from an AmrSystemConfig DERIVED from the AMR layout (n / L / periodic
-        # from the base CartesianMesh, regrid cadence from AMR.regrid, patch settings from
-        # AMR.patches), then flow the typed refinement (problem.amr / AMR.refine -> set_refinement /
-        # set_phi_refinement) BEFORE install, mirroring the old string path. A missing layout (an AMR
-        # target with no carried descriptor) is a bug.
-        if layout is None:
-            raise TypeError(
-                "pops.bind: an AMR target carries no layout descriptor; the compiled handle must "
-                "come from pops.compile(problem_with_AMR_layout, ...)")
-        n_blocks = len(problem._blocks) if problem is not None else 1
-        sim = AmrSystem(_amr_config_from_layout(layout))
-        _flow_amr_layout(sim, layout, n_blocks=n_blocks)
-        # AMR install goes through the NATIVE path (compiled=None): each instance carries its OWN
-        # target='amr_system' CompiledModel (from compile()'s _block_compiled_models), which
-        # _install_compiled wires with add_equation -> add_native_block. There is NO whole-system time
-        # Program install on AMR (AmrSystem rejects compiled != None), so the handle's per-block table
-        # is the install payload, not the handle itself.
         instances = _assemble_instances(problem, initial or {},
                                         models=getattr(compiled, "_block_compiled_models", None))
-        sim._install_compiled(compiled=None, instances=instances, params=params or {},
-                              aux=aux or {}, solvers=field_solvers, cadence=cadence, outputs=outputs)
-        return sim
-
-    sim = System()
-    instances = _assemble_instances(problem, initial or {})
-    sim._install_compiled(compiled, instances=instances, params=params or {}, aux=aux or {},
-                          solvers=field_solvers, cadence=cadence, outputs=outputs)
-    return sim
-
-
-def _amr_config_from_layout(layout):
-    """Build an ``AmrSystemConfig`` from a :class:`pops.mesh.layouts.AMR` descriptor.
-
-    Maps the inert AMR layout onto the C++ runtime config the ``AmrSystem`` constructor consumes:
-
-      - ``n`` / ``L`` / ``periodic`` from the base ``CartesianMesh`` (``layout.base``);
-      - ``regrid_every`` from ``layout.regrid``: a ``RegridEvery(n)`` -> ``n``, a ``FrozenRegrid``
-        (or no regrid policy) -> ``0`` (a frozen hierarchy, bit-identical);
-      - ``distribute_coarse`` / ``coarse_max_grid`` from ``layout.patches`` (a ``PatchLayout``),
-        else the C++ defaults.
-
-    The native AMR route is fixed at ``NATIVE_MAX_LEVELS`` levels / ratio ``NATIVE_RATIOS`` (the
-    config carries no ``max_levels`` / ``ratio`` field); ``layout.max_levels`` / ``layout.ratio``
-    are validated against that envelope by ``compile`` (and ``AMR.available`` / ``validate``), not
-    flowed as config knobs. Imported lazily so this codegen module stays mesh-import-free.
-    """
-    from pops._bootstrap import AmrSystemConfig
-    from pops.mesh.amr import FrozenRegrid, PatchLayout, RegridEvery
-
-    base = layout.base
-    cfg = AmrSystemConfig()
-    cfg.n = int(base.n)
-    cfg.L = float(base.L)
-    cfg.periodic = bool(base.periodic)
-
-    regrid = layout.regrid
-    if isinstance(regrid, RegridEvery):
-        cfg.regrid_every = int(regrid.steps)
-    elif regrid is None or isinstance(regrid, FrozenRegrid):
-        cfg.regrid_every = 0
     else:
-        raise TypeError(
-            "pops.bind: AMR.regrid must be a pops.mesh.amr.RegridEvery(n) / FrozenRegrid() "
-            "(got %r)" % type(regrid).__name__)
+        instances = _assemble_instances(problem, initial or {})
 
-    patches = layout.patches
-    if isinstance(patches, PatchLayout):
-        cfg.distribute_coarse = bool(patches.distribute_coarse)
-        cfg.coarse_max_grid = int(patches.coarse_max_grid)
-    elif patches is not None:
-        raise TypeError(
-            "pops.bind: AMR.patches must be a pops.mesh.amr.PatchLayout(...) (got %r)"
-            % type(patches).__name__)
-    return cfg
+    # Delegate to the internal runtime adapter (lazy import: runtime edge, kept in-function so the
+    # codegen module-scope import graph stays clean). adapter_for selects Uniform vs AMR from the
+    # target the layout produced; the adapter builds the engine, installs, and wraps it in a
+    # BoundSimulation view.
+    from pops.runtime._bind_adapters import adapter_for
 
-
-def _flow_amr_layout(sim, layout, n_blocks=1):
-    """Flow the AMR layout's typed refinement criterion onto @p sim BEFORE the blocks are installed.
-
-    Mirrors the old string path: a ``Refine.on(subject).above(threshold)`` (or a ``TagUnion`` of
-    them) becomes ``set_refinement(threshold, ...)`` and a ``gradient``-predicate on the potential
-    becomes ``set_phi_refinement(threshold)``. The field problem (Poisson) is flowed through the
-    unified ``install(solvers=...)`` seam (``AmrSystem._install_solver`` -> ``set_poisson``), which
-    runs its field solvers BEFORE adding the blocks, so it is not duplicated here.
-
-    @p n_blocks is the declared block count: the per-block variable / role selector is only wired in
-    MULTI-BLOCK (>= 2 blocks, the union-of-tags runtime engine), so a single-block Case keeps the
-    component-0-only behaviour and a multi-block Case forwards a non-density subject to
-    ``set_refinement(threshold, variable=)`` (the C++ AmrSystem resolves it per block; a compiled
-    block refuses a non-default selector, the honest native boundary).
-    """
-    criterion = getattr(layout, "refine", None)
-    if criterion is not None:
-        _apply_refine_criterion(sim, criterion, is_multiblock=n_blocks > 1)
-
-
-def _apply_refine_criterion(sim, criterion, is_multiblock=False):
-    """Lower one typed refinement criterion to set_refinement / set_phi_refinement on @p sim.
-
-    A ``Refine`` whose predicate is a gradient on the potential (``phi`` / ``grad phi``) lowers to
-    ``set_phi_refinement(threshold)``; a density subject lowers to ``set_refinement(threshold)`` on
-    component 0. A non-density subject lowers to ``set_refinement(threshold, variable=subject)`` when
-    @p is_multiblock (the union-of-tags engine resolves the selector per block); in single-block it is
-    refused (the AmrCouplerMP path refines on component 0 only). A ``TagUnion`` lowers to each call in
-    turn. A criterion that is neither raises a clear error rather than silently dropping it."""
-    from pops.mesh.amr import Refine, TagUnion
-
-    if isinstance(criterion, TagUnion):
-        for c in criterion.criteria:
-            _apply_refine_criterion(sim, c, is_multiblock=is_multiblock)
-        return
-    if not isinstance(criterion, Refine):
-        raise TypeError(
-            "pops.bind: AMR refine criterion must be a pops.mesh.amr.Refine / TagUnion (got %r)"
-            % type(criterion).__name__)
-    threshold = criterion.threshold
-    if threshold is None:
-        raise ValueError("pops.bind: Refine criterion has no threshold "
-                         "(use Refine.on(subject).above(value))")
-    subject = _refine_subject_name(criterion.subject)
-    # The potential-gradient tag (|grad phi| > threshold) is the AMR-specific ring-edge criterion.
-    if criterion.predicate == "gradient_above" and subject in ("phi", "grad phi", "potential"):
-        sim.set_phi_refinement(float(threshold))
-        return
-    # A density subject lowers to set_refinement(threshold) on component 0 (no selector).
-    if _is_default_density_subject(subject):
-        sim.set_refinement(float(threshold))
-        return
-    # A non-density subject is a per-block variable / role selector. It is only wired in MULTI-BLOCK
-    # (the union-of-tags runtime engine); the single-block AmrCouplerMP path refines on component 0
-    # only, so a selector there is refused with a clear message rather than silently dropped.
-    if not is_multiblock:
-        raise NotImplementedError(
-            "pops.bind: refining on %r is a multi-block AMR feature; the single-block AMR route "
-            "refines on the density (component 0) only. Refine on the density "
-            "(Refine.on(Density).above(...)), or use the |grad phi| tag "
-            "(Refine.on(phi).gradient_above(...))." % (subject,))
-    # Forward the subject as the per-block variable name. The C++ AmrSystem::set_refinement resolves
-    # it against each block's conserved variables (a native block) or refuses it (a compiled .so
-    # block: component 0 only) -- the honest native boundary, not a silent drop here.
-    sim.set_refinement(float(threshold), variable=subject)
-
-
-def _refine_subject_name(subject):
-    """The plain string name of a Refine subject (a string, or an object carrying ``.name``)."""
-    if isinstance(subject, str):
-        return subject
-    name = getattr(subject, "name", None)
-    return name if isinstance(name, str) else None
-
-
-def _is_default_density_subject(subject):
-    """True when a Refine subject names the density / component 0 (the single-block default).
-
-    The native single-block AMR refines on component 0 (the historical density), so a Density-role
-    or density-named subject maps to ``set_refinement(threshold)`` with no selector; ``None`` (an
-    unnamed subject) is treated as the default too. Any other name is a non-default selector that
-    the single-block route cannot honor."""
-    if subject is None:
-        return True
-    return subject in ("Density", "density", "rho", "n", "ne")
+    adapter = adapter_for(target, layout, n_blocks=n_blocks)
+    return adapter.build(compiled, layout=layout, instances=instances, params=params or {},
+                         aux=aux or {}, solvers=field_solvers, cadence=cadence, outputs=outputs)
 
 
 def _resolve_problem_model(physics):
@@ -435,6 +297,22 @@ def _problem_field_solvers(problem):
     if problem is None:
         return {}
     return {name: fp.solver for name, fp in problem._fields.items() if fp.solver is not None}
+
+
+# The AMR layout-lowering helpers moved to pops.runtime._bind_adapters (ADC-583): lowering a layout
+# onto the AmrSystem config / refinement seams is runtime-adapter work, not codegen. They are still
+# reachable as orchestration attributes via this LAZY forwarder (a function-scope import, so the
+# codegen module-scope import graph stays runtime-free) for the few tests that reference them here.
+_MOVED_TO_BIND_ADAPTERS = (
+    "_amr_config_from_layout", "_flow_amr_layout", "_apply_refine_criterion",
+    "_refine_subject_name", "_is_default_density_subject")
+
+
+def __getattr__(name):
+    if name in _MOVED_TO_BIND_ADAPTERS:
+        from pops.runtime import _bind_adapters
+        return getattr(_bind_adapters, name)
+    raise AttributeError("module %r has no attribute %r" % (__name__, name))
 
 
 __all__ = ["compile", "bind"]

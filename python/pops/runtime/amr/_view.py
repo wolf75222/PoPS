@@ -22,8 +22,11 @@ from pops.runtime.amr._reports import (
 )
 
 
-# The build raises this exact message before the first block is added / the hierarchy is built; we
-# treat it as "not built yet" rather than letting it propagate (the report is inert, never a build).
+# The NATIVE C++ engine raises this substring before the first block is installed / the hierarchy
+# is built; we treat it as "not built yet" rather than letting it propagate (the report is inert,
+# never a build). This is a native-message MATCHER, not a user remedy -- it must stay byte-for-byte
+# in sync with the C++ side ("AmrSystem : call add_block first"), so it is not reworded here; a bound
+# simulation is populated by pops.bind(compiled, ...) before its amr view reports a built hierarchy.
 _NOT_BUILT = "call add_block first"
 
 
@@ -109,11 +112,12 @@ class AmrRuntimeView:
         frozen = regrid_every == 0
         # The union-of-tags criteria shape, as the multi-block route documents it (the exact
         # threshold lives on the native model; we name the criteria, not a fabricated number).
+        # Refinement is declared on the AMR layout (AMR(refine=Refine.on(subject).above(value))).
         criteria = [
-            "per-block variable threshold (set_refinement(threshold, variable=/role=); "
-            "default component 0)",
-            "grad phi (set_phi_refinement(grad_threshold); multi-block only, disabled when "
-            "grad_threshold <= 0)",
+            "per-block variable threshold (AMR(refine=Refine.on(variable/role).above(threshold)); "
+            "default the density, component 0)",
+            "grad phi (AMR(refine=Refine.on(phi).gradient_above(threshold)); multi-block only, "
+            "disabled when the threshold <= 0)",
         ]
         notes = []
         if frozen:
