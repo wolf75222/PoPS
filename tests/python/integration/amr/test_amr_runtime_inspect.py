@@ -22,7 +22,7 @@ pops = pytest.importorskip("pops")
 
 from pops.runtime.amr import (  # noqa: E402
     AmrRuntimeView, PatchReport, RegridReport, GhostReport, RefluxReport, CheckpointReport,
-    HierarchySnapshot)
+    HierarchySnapshot, RuntimeInspection)
 
 
 def _model():
@@ -170,6 +170,43 @@ def test_explain_checkpoint_flags_dynamic_regrid_violation():
     assert any("regrid_every=3" in v for v in rep.violations)
     # The composite multi-level Poisson restart is declared unavailable, not faked.
     assert any("composite multi-level Poisson" in n for n in rep.notes)
+
+
+# --- inspect() (ADC-589/555 criterion #34: the unified hierarchy/patch/regrid/limitations view) --
+def test_inspect_returns_unified_runtime_inspection():
+    sim = _built_amr(regrid_every=2)
+    report = sim.amr.inspect()
+    assert isinstance(report, RuntimeInspection)
+    # The four parts 589 asks for, each the SAME report class the standalone methods return.
+    assert isinstance(report.hierarchy, HierarchySnapshot)
+    assert isinstance(report.patches, PatchReport)
+    assert isinstance(report.regrid, RegridReport)
+    assert isinstance(report.limitations, list)
+
+    # Consistent with the standalone reports read off the same live system.
+    assert report.hierarchy.blocks == sim.amr.hierarchy_snapshot().blocks
+    assert report.patches.n_patches == sim.amr.patch_table().n_patches
+    assert report.regrid.regrid_every == sim.amr.explain_regrid().regrid_every
+
+    payload = report.to_dict()
+    assert set(payload) == {"hierarchy", "patches", "regrid", "limitations"}
+    assert payload["hierarchy"]["patch_table"]["n_patches"] == payload["patches"]["n_patches"]
+    assert payload["regrid"]["regrid_every"] == 2
+    # limitations rows carry a feature/status/reason shape; only non-available rows are listed.
+    for row in payload["limitations"]:
+        assert row["status"] != "available"
+        assert "feature" in row and "reason" in row
+
+    text = str(report)
+    assert "AMR runtime inspection" in text and "array(" not in text
+
+
+def test_inspect_before_build_reports_unbuilt_patches_honestly():
+    sim = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+    report = sim.amr.inspect()
+    assert report.patches.built is False
+    assert report.hierarchy.patch_table.built is False
+    assert report.regrid.frozen is True
 
 
 # --- compiled static delegation ------------------------------------------------

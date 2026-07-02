@@ -14,9 +14,11 @@ Poisson, a per-level ghost depth not exposed by C++) is DECLARED unavailable, ne
 
 Layering: this module sits in the ``runtime`` layer, the only one allowed to reach ``_pops``
 (through the bound :class:`AmrSystem`). The report value classes themselves
-(:class:`PatchReport`, :class:`RegridReport`, :class:`HierarchySnapshot`, and the
-``explain_*`` reports) are plain inert data -- they hold pre-read numbers and strings and import
-nothing. Only :class:`AmrRuntimeView` is bound to the live system.
+(:class:`PatchReport`, :class:`RegridReport`, :class:`HierarchySnapshot`,
+:class:`RuntimeInspection`, and the ``explain_*`` reports) are plain inert data -- they hold
+pre-read numbers and strings and import nothing. Only :class:`AmrRuntimeView` is bound to the
+live system. ``sim.amr.inspect()`` returns the unified :class:`RuntimeInspection` (ADC-589/555):
+hierarchy + patches + regrid + capability limitations in one call.
 """
 
 from pops.runtime.amr._reports import (
@@ -26,6 +28,7 @@ from pops.runtime.amr._reports import (
     RefluxReport,
     CheckpointReport,
     HierarchySnapshot,
+    RuntimeInspection,
 )
 from pops.runtime.amr._view import AmrRuntimeView
 
@@ -37,4 +40,5 @@ __all__ = [
     "RefluxReport",
     "CheckpointReport",
     "HierarchySnapshot",
+    "RuntimeInspection",
 ]

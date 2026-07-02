@@ -19,6 +19,7 @@ from pops.runtime.amr._reports import (
     RefluxReport,
     CheckpointReport,
     HierarchySnapshot,
+    RuntimeInspection,
 )
 
 
@@ -187,8 +188,25 @@ class AmrRuntimeView:
             config_available=envelope["available"])
 
     def inspect(self):
-        """Return the structured AMR hierarchy inspection report (ADC-591)."""
-        return self.hierarchy_snapshot()
+        """Return the unified AMR runtime inspection report (Spec 5 sec.8.12, ADC-589/ADC-555).
+
+        Composes the four things a single ``sim.amr.inspect()`` call must answer: the
+        :class:`HierarchySnapshot` (config envelope + live patches), the live
+        :class:`PatchReport` again as its own key, the :class:`RegridReport` (cadence + union-tag
+        criteria), and the capability ``limitations`` (the non-available native-route rows from
+        :func:`pops.native_capability_report`, the same source :mod:`pops.case`'s route matrix
+        reads). This REPLACES the pre-ADC-589 shape (bare ``HierarchySnapshot``); the snapshot
+        itself is unchanged and still reachable directly via :meth:`hierarchy_snapshot`.
+        """
+        from pops import native_capability_report
+
+        limitations = [row.to_dict() for row in native_capability_report().routes
+                       if row.status != "available"]
+        return RuntimeInspection(
+            hierarchy=self.hierarchy_snapshot(),
+            patches=self.patch_table(),
+            regrid=self.explain_regrid(),
+            limitations=limitations)
 
     def __repr__(self):
         return "AmrRuntimeView(blocks=%r)" % (self._block_names(),)

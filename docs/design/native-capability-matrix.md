@@ -10,8 +10,11 @@ ADC-591 adds a versioned native report above the route rows:
 - C++: `pops::native_capability_report(target)` returns a `NativeCapabilityReport`.
 - Python native binding: `_pops.capability_report(target)` returns the same report as a stable dict.
 - Public Python: `pops.native_capability_report(target)` wraps it as `NativeCapabilityReport`.
-- Runtime: `sim.inspect()` / `sim.amr.inspect()` include the native report plus profile,
-  diagnostics, history/cache metadata and runtime environment facts.
+- Runtime: `sim.inspect()` includes the native report plus profile, diagnostics, history/cache
+  metadata and runtime environment facts. `sim.amr.inspect()` (ADC-589/ADC-555) returns a
+  `pops.runtime.amr.RuntimeInspection` composing `hierarchy` (config envelope + live patches),
+  `patches` (the live patch census), `regrid` (cadence + union-tag criteria), and `limitations`
+  (the non-available rows of the same native report, filtered to `status != "available"`).
 - Compiled artifacts: `compiled.inspect().to_dict()["capabilities"]` carries the same route IDs and
   statuses, projected from the artifact manifest without loading or recompiling the `.so`.
 
@@ -51,7 +54,9 @@ The canonical inventory lives in `pops._capabilities.native_capability_matrix()`
 
 Supported native routes include:
 
-- Uniform single-level layout.
+- Uniform single-level layout. A `Uniform(...)` layout with an active AMR refinement criterion
+  attached is refused by `Case.validate` by default (ADC-589/ADC-555); the explicit escape is
+  `Uniform(mesh, refine=..., ignore_amr=pops.mesh.amr.IgnoreAMRCriteria())`.
 - AMR through the native production route, limited to `max_levels <= 2` and `ratio == 2`.
 - Finite-volume spatial discretisation on the 2D core.
 - Native Riemann routes: Rusanov, HLL, HLLC, Roe, subject to model capability requirements.
