@@ -75,9 +75,10 @@ def test_output_and_checkpoint_policies():
 def test_external_brick_ref_resolves_from_json_manifest(tmp_path):
     _desc._clear_external_catalog()
     manifest = tmp_path / "bricks.json"
+    # ADC-611 : le schema strict versionne exige schema_version + chaque champ d'entree.
     manifest.write_text(
-        '{"bricks": [{"id": "my_ext_hll", "category": "riemann", '
-        '"requirements": "physical_flux,wave_speeds"}]}', encoding="utf-8")
+        '{"schema_version": 1, "bricks": [{"id": "my_ext_hll", "category": "riemann", '
+        '"requirements": "physical_flux,wave_speeds", "capabilities": ""}]}', encoding="utf-8")
     ref = CompiledBrickRef(manifest=str(manifest), native_id="my_ext_hll",
                            expect_category="riemann")
     assert ref.available()  # registers + resolves
