@@ -1,12 +1,28 @@
 #!/usr/bin/env python3
 """Select affected tests for CI.
 
-The policy is intentionally conservative:
+The policy is intentionally conservative. For the Python suite (``plan_python``) the
+precedence, from most to least conservative, is:
 
-* shared build/runtime changes run the full relevant suite;
-* direct test edits run the touched tests;
-* clear domain changes run the matching domain tests plus a small smoke set;
-* unknown paths run everything rather than silently dropping coverage.
+(a) BROAD change -- any C++/bindings/CMake change (routed here as ``python`` too), a
+    Python broad file (``pyproject.toml``, ``python/CMakeLists.txt``,
+    ``python/pops/__init__.py``), or a ``python/bindings/`` file -> run ALL. Unchanged.
+(b) direct test edit (a changed ``python/tests/test_*.py``) -> that test is selected
+    directly, and its cross-test dependencies come along via the import closure
+    (``ci_import_closure``); behaviour unchanged, now closure-aware.
+(c) a changed ``python/pops/**`` file (not broad) -> the tests are chosen by the
+    REVERSE import closure of the changed module (``ci_import_closure.impacted_tests``),
+    UNION the existing smoke tests. This REPLACES the coarse name-token area heuristic
+    for pops source changes.
+(d) a changed ``python/pops`` file whose module is NOT on the import graph (a brand-new
+    file the graph has never seen, or an unparseable one) -> fail-safe to ALL.
+(e) the ``>75% selected -> all`` rule and the ``unknown non-meta path -> all`` rule are
+    kept unchanged as the final safety nets.
+
+``plan_cpp`` is untouched: it keeps the area heuristic (no C++ import-closure yet).
+
+The whole module is stdlib-only so it runs on the bare runner interpreter before any
+``pip install`` in the ``Select affected tests`` step.
 """
 
 from __future__ import annotations
@@ -14,8 +30,12 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Iterable
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ci_import_closure  # noqa: E402  (sibling stdlib-only module, same scripts/ dir)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -388,25 +408,62 @@ def plan_python(args: argparse.Namespace) -> int:
     all_tests = list_python_tests()
     all_test_set = set(all_tests)
 
+    # (a) BROAD -> all. Any C++/bindings/CMake change is routed to this job as `python`
+    # too, so a broad Python file or a bindings change forces the whole suite.
     full = args.force_all or force_full_from_changed(changed, PYTHON_BROAD_FILES, PYTHON_BROAD_PREFIXES)
-    if not full and any(path.startswith("python/pops/") for path in changed):
-        known_python = any(areas_for(path, PYTHON_PATH_AREAS) for path in changed if path.startswith("python/pops/"))
-        full = not known_python
+    reason = "force-all" if args.force_all else ("broad-file" if full else "")
 
     selected: set[str] = set()
     areas: set[str] = set()
-    if not full:
-        selected.update(direct_python_tests(changed, all_test_set))
-        for path in changed:
-            areas.update(areas_for(path, PYTHON_PATH_AREAS))
-            areas.update(areas_for(path, CPP_PATH_AREAS))
-        selected.update(select_by_name(all_tests, areas, PYTHON_NAME_PATTERNS))
-        if selected:
-            selected.update(t for t in PYTHON_SMOKE_TESTS if t in all_test_set)
-        elif not only_meta(changed):
-            full = True
+    reasons: set[str] = set()
+    if reason:
+        reasons.add(reason)
 
+    if not full:
+        # (b) direct test edits -> the touched tests, closure-aware.
+        direct = direct_python_tests(changed, all_test_set)
+        if direct:
+            selected.update(direct)
+            reasons.add("direct-test")
+
+        # (c) pops source changes -> the REVERSE import closure of the changed module,
+        # union the smoke tests. (d) an off-graph pops file (new/unparseable) -> ALL.
+        pops_changed = [p for p in changed if p.startswith("python/pops/") and p.endswith(".py")]
+        if pops_changed:
+            try:
+                closure = ci_import_closure.impacted_tests(pops_changed, repo_root=ROOT)
+            except ci_import_closure.OffGraphChange:
+                full = True
+                reasons.add("off-graph-pops-file")
+            else:
+                selected.update(t for t in closure if t in all_test_set)
+                reasons.add("import-closure")
+
+        # A non-.py pops change (e.g. a data/asset file under python/pops) has no module
+        # to close over; keep the conservative old behaviour of running ALL for it.
+        if not full and any(
+            p.startswith("python/pops/") and not p.endswith(".py") for p in changed
+        ):
+            full = True
+            reasons.add("non-py-pops-file")
+
+        # Cross-test closure over ALL currently-selected tests (both directions): a
+        # selected test pulls the helpers it imports, and any test importing a selected
+        # helper is pulled in too. Applies to the direct edits and closure hits alike.
+        if selected:
+            ci_import_closure._close_cross_test(selected, _test_to_test())
+            selected.update(t for t in PYTHON_SMOKE_TESTS if t in all_test_set)
+
+        # (e) safety net: a non-meta change that resolved to nothing runs ALL rather than
+        # silently dropping coverage (matches the historical area-heuristic fallback).
+        if not full and not selected and not only_meta(changed):
+            full = True
+            reasons.add("unknown-path")
+
+    # (e) safety net: >75% selected is not worth the bookkeeping -- run ALL.
     if full or len(selected) > len(all_tests) * 0.75:
+        if not full:
+            reasons.add(">75%-all")
         mode = "all"
         selected_tests = all_tests
     else:
@@ -417,7 +474,8 @@ def plan_python(args: argparse.Namespace) -> int:
     if args.tests_file:
         Path(args.tests_file).write_text("".join(f"{test}\n" for test in sharded), encoding="utf-8")
 
-    summary = f"{mode}: {len(selected_tests)}/{len(all_tests)} Python test files"
+    why = ",".join(sorted(reasons)) if reasons else "meta-only"
+    summary = f"{mode}: {len(selected_tests)}/{len(all_tests)} Python test files [why: {why}]"
     if args.shard_index is not None and args.shard_total is not None:
         summary += f" ({len(sharded)} in shard {args.shard_index}/{args.shard_total})"
     print(summary)
@@ -434,10 +492,17 @@ def plan_python(args: argparse.Namespace) -> int:
             "python_total": str(len(all_tests)),
             "python_shard_count": str(len(sharded)),
             "python_areas": ",".join(sorted(areas)) if areas else "-",
+            "python_why": why,
             "python_summary": summary,
         },
     )
     return 0
+
+
+def _test_to_test() -> dict[str, set[str]]:
+    """Return only the cross-test edge map (the second half of ``test_imports``)."""
+    _, edges = ci_import_closure.test_imports(repo_root=ROOT)
+    return edges
 
 
 def main() -> int:
