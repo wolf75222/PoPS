@@ -16,7 +16,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/model/physical_model.hpp>
 #include <pops/core/state/state.hpp>
@@ -76,15 +75,7 @@ static_assert(PhysicalModel<BzGrow> && PhysicalModel<AdvectX>);
 static_assert(aux_comps<BzGrow>() == 4, "BzGrow declare n_aux = 4");
 static_assert(aux_comps<AdvectX>() == kAuxBaseComps, "AdvectX reste au contrat de base (3)");
 
-static int pops_run_test_amr_aux_bz() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+TEST(test_amr_aux_bz, Runs) {
   const int NC = 16;
   const Box2D dom = Box2D::from_extents(NC, NC);
   const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
@@ -108,7 +99,7 @@ static int pops_run_test_amr_aux_bz() {
     // largeur, load_aux<4> dans la source AMR lirait hors borne ; ici la place existe.
     MultiFab auxc(ba_coarse, dm, aux_comps<BzGrow>(), 1);
     MultiFab auxf(ba_fine, dm, aux_comps<BzGrow>(), 1);
-    chk(auxc.ncomp() == 4 && auxf.ncomp() == 4, "amr_aux_allocated_width_4");
+    EXPECT_TRUE(auxc.ncomp() == 4 && auxf.ncomp() == 4) << "amr_aux_allocated_width_4";
     auxc.set_val(Real(0));
     auxf.set_val(Real(0));
     auto set_bz = [&](MultiFab& A) {
@@ -142,11 +133,11 @@ static int pops_run_test_amr_aux_bz() {
       device_fence();
       const ConstArray4 uc = L[0].U.fab(0).const_array();
       const ConstArray4 uf = L[1].U.fab(0).const_array();
-      chk(std::fabs(uc(0, 0, 0) - expect_c) < Real(1e-12), "amr_coarse_source_reads_Bz");
-      chk(std::fabs(uf(fbox.lo[0], fbox.lo[1], 0) - expect_f) < Real(1e-12),
-          "amr_fine_source_reads_Bz");
+      EXPECT_TRUE(std::fabs(uc(0, 0, 0) - expect_c) < Real(1e-12)) << "amr_coarse_source_reads_Bz";
+      EXPECT_TRUE(std::fabs(uf(fbox.lo[0], fbox.lo[1], 0) - expect_f) < Real(1e-12))
+          << "amr_fine_source_reads_Bz";
       // sanity : sans lecture de B_z (B_z ignore), u serait reste a u0 -> on rejette ce cas.
-      chk(std::fabs(uc(0, 0, 0) - u0) > Real(1e-3), "amr_Bz_actually_read");
+      EXPECT_TRUE(std::fabs(uc(0, 0, 0) - u0) > Real(1e-3)) << "amr_Bz_actually_read";
     }
   }
 
@@ -170,7 +161,7 @@ static int pops_run_test_amr_aux_bz() {
     MultiFab auxc(ba_coarse, dm, 3, 1), auxf(ba_fine, dm, 3, 1);  // largeur 3 (base)
     auxc.set_val(Real(0));
     auxf.set_val(Real(0));
-    chk(auxc.ncomp() == 3, "base_aux_width_3");
+    EXPECT_EQ(auxc.ncomp(), 3) << "base_aux_width_3";
 
     std::vector<AmrLevelMP> L;
     L.push_back(AmrLevelMP{std::move(Uc), &auxc, dxc, dyc});
@@ -179,7 +170,7 @@ static int pops_run_test_amr_aux_bz() {
     const Real m0 = sum(L[0].U) * dxc * dyc;
     advance_amr(AdvectX{Real(1)}, L, dom, Real(0.01));
     const Real m1 = sum(L[0].U) * dxc * dyc;
-    chk(std::fabs(m1 - m0) < Real(1e-12), "base_model_mass_conserved_amr");
+    EXPECT_TRUE(std::fabs(m1 - m0) < Real(1e-12)) << "base_model_mass_conserved_amr";
   }
 
   // --- (D) end-to-end AmrSystemCoupler : canal aux partage a la largeur MAX (4) -------------
@@ -215,8 +206,8 @@ static int pops_run_test_amr_aux_bz() {
     AmrSystemCoupler sim(system, geom, ba_coarse, BCRec{}, charge, std::move(bl));
 
     // canal aux PARTAGE : largeur = max(aux_comps) = max(4, 3) = 4, a CHAQUE niveau.
-    chk(sim.aux_ncomp() == 4, "shared_aux_width_is_max_amr");
-    chk(sim.aux(0).ncomp() == 4 && sim.aux(1).ncomp() == 4, "shared_aux_4_at_each_level");
+    EXPECT_EQ(sim.aux_ncomp(), 4) << "shared_aux_width_is_max_amr";
+    EXPECT_TRUE(sim.aux(0).ncomp() == 4 && sim.aux(1).ncomp() == 4) << "shared_aux_4_at_each_level";
 
     sim.solve_fields();  // phi = 0 ; field_postprocess n'ecrit que comp 0..2
 
@@ -237,17 +228,9 @@ static int pops_run_test_amr_aux_bz() {
 
     const Real mg1 = sim.mass(0), mb1 = sim.mass(1);
     // bloc BzGrow : source = B_z u > 0 -> masse grossiere CROIT (B_z bien lu en AMR).
-    chk(mg1 > mg0 + Real(1e-6), "amr_system_BzGrow_block_grew");
+    EXPECT_TRUE(mg1 > mg0 + Real(1e-6)) << "amr_system_BzGrow_block_grew";
     // bloc base sur le MEME aux elargi : v=0 (pas de flux), source nulle -> masse inchangee
     // (la comp 3 du canal partage est ignoree par AdvectX, n_aux=3).
-    chk(std::fabs(mb1 - mb0) < Real(1e-12), "amr_system_base_block_inert");
+    EXPECT_TRUE(std::fabs(mb1 - mb0) < Real(1e-12)) << "amr_system_base_block_inert";
   }
-
-  if (fails == 0)
-    std::printf("test_amr_aux_bz: OK\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_amr_aux_bz, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_aux_bz, "test_amr_aux_bz"), 0);
 }

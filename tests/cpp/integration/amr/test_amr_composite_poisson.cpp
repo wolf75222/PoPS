@@ -15,7 +15,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/coupling/amr/amr_coupler_mp.hpp>
 
 #include <pops/core/state/state.hpp>
@@ -28,7 +27,6 @@
 #include <pops/parallel/comm.hpp>
 
 #include <cmath>
-#include <cstdio>
 #include <vector>
 
 using namespace pops;
@@ -84,17 +82,10 @@ static double aux_grad_err(const MultiFab& aux_f, const Geometry& gf, int Ic0, i
   return all_reduce_max(e);
 }
 
-static int pops_run_test_amr_composite_poisson(int argc, char** argv) {
+TEST(test_amr_composite_poisson, Runs) {
+  int argc = 0;
+  char** argv = nullptr;
   comm_init(&argc, &argv);
-  const int me = my_rank();
-  long fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      if (me == 0)
-        std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
 
   const int n = 48, r = 2;
   const Real dxc = Real(1) / n, dxf = dxc / 2;
@@ -132,14 +123,13 @@ static int pops_run_test_amr_composite_poisson(int argc, char** argv) {
   cpl.compute_aux();
   const double e_comp = aux_grad_err(*cpl.levels()[1].aux, gf, Ic0, Ic1, /*guard=*/3, r);
 
-  if (me == 0)
-    std::printf("  grad phi aux fin : e_optionA=%.3e  e_composite=%.3e  (x%.2f)\n", e_optA, e_comp,
-                e_optA / std::fmax(e_comp, 1e-30));
-
-  chk(std::isfinite(e_optA) && std::isfinite(e_comp), "erreurs finies");
+  EXPECT_TRUE(std::isfinite(e_optA) && std::isfinite(e_comp))
+      << "erreurs finies: e_optionA=" << e_optA << " e_composite=" << e_comp;
   // CRITERE : le patch fin raffine VRAIMENT l'elliptique -> grad phi fin nettement plus precis.
-  chk(e_comp < 0.5 * e_optA,
-      "(fidelite) composite plus precis que Option A sur grad phi (e_comp < 0.5 e_optA)");
+  EXPECT_TRUE(e_comp < 0.5 * e_optA)
+      << "(fidelite) composite plus precis que Option A sur grad phi (e_comp < 0.5 e_optA): "
+      << "e_optionA=" << e_optA << " e_composite=" << e_comp
+      << " (x" << e_optA / std::fmax(e_comp, 1e-30) << ")";
 
   // --- (3) non-regression : composite OFF -> Option A inchange (bit-identique a un coupleur neuf) ---
   {
@@ -155,17 +145,10 @@ static int pops_run_test_amr_composite_poisson(int argc, char** argv) {
     set_state_f(ref.levels()[1].U, gf);
     ref.compute_aux();  // Option A (composite OFF par defaut)
     const double e_ref = aux_grad_err(*ref.levels()[1].aux, gf, Ic0, Ic1, 3, r);
-    chk(std::fabs(e_ref - e_optA) < 1e-12,
-        "(non-regression) Option A inchange (composite OFF par defaut)");
+    EXPECT_TRUE(std::fabs(e_ref - e_optA) < 1e-12)
+        << "(non-regression) Option A inchange (composite OFF par defaut): e_ref=" << e_ref
+        << " e_optA=" << e_optA;
   }
 
-  fails = static_cast<long>(all_reduce_max(static_cast<double>(fails)));
-  if (me == 0 && fails == 0)
-    std::printf("OK test_amr_composite_poisson\n");
   comm_finalize();
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_amr_composite_poisson, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_composite_poisson, "test_amr_composite_poisson"), 0);
 }

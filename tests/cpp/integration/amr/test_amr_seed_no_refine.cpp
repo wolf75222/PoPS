@@ -12,7 +12,6 @@
 // bit-a-bit du chemin raffine est verrouillee par test_amr_compiled_model / test_amr_riemann_native).
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, GravityForce, GravityCoupling
 #include <pops/physics/fluids/euler.hpp>   // Euler (= CompressibleFlux)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
@@ -20,7 +19,6 @@
 #include <pops/runtime/config/model_spec.hpp>
 
 #include <cmath>
-#include <cstdio>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -41,23 +39,12 @@ static std::vector<double> bubble(int n) {  // bulle de densite lisse (pic 1.5 >
 
 using Model = CompositeModel<Euler, GravityForce, GravityCoupling>;
 
-static int pops_run_test_amr_seed_no_refine(int argc, char** argv) {
+TEST(test_amr_seed_no_refine, Runs) {
 #if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard(argc, argv);
-#else
-  (void)argc;
-  (void)argv;
+  Kokkos::ScopeGuard guard;
 #endif
   const int n = 64;
   const std::vector<double> rho = bubble(n);
-
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
 
   AmrSystemConfig cfg;
   cfg.n = n;
@@ -74,7 +61,7 @@ static int pops_run_test_amr_seed_no_refine(int argc, char** argv) {
                        "minmod", "rusanov", "conservative", "explicit", /*gamma=*/1.4);
     A.set_poisson("charge_density", "geometric_mg");
     A.set_density("gas", rho);
-    chk(A.n_patches() == 0, "no set_refinement -> n_patches()==0 (compile, mono-niveau)");
+    EXPECT_EQ(A.n_patches(), 0) << "no set_refinement -> n_patches()==0 (compile, mono-niveau)";
     // le mono-niveau reste un solveur valide : il avance et conserve la masse (FV periodique).
     const double m0 = A.mass();
     for (int s = 0; s < 8; ++s)
@@ -83,10 +70,10 @@ static int pops_run_test_amr_seed_no_refine(int argc, char** argv) {
     double nrm = 0;
     for (double v : d)
       nrm = std::fmax(nrm, std::fabs(v));
-    chk(!d.empty() && nrm > 1e-6, "no set_refinement : densite non triviale apres pas");
-    chk(std::fabs(A.mass() - m0) < 1e-9 * (std::fabs(m0) + 1.0),
-        "no set_refinement : masse conservee (mono-niveau)");
-    chk(A.n_patches() == 0, "no set_refinement : reste mono-niveau apres pas");
+    EXPECT_TRUE(!d.empty() && nrm > 1e-6) << "no set_refinement : densite non triviale apres pas";
+    EXPECT_TRUE(std::fabs(A.mass() - m0) < 1e-9 * (std::fabs(m0) + 1.0))
+        << "no set_refinement : masse conservee (mono-niveau)";
+    EXPECT_EQ(A.n_patches(), 0) << "no set_refinement : reste mono-niveau apres pas";
   }
 
   // (B) AVEC set_refinement(1.2) (seuil fini, bulle a 1.5 > 1.2) : le seed est alloue et le regrid de
@@ -100,10 +87,10 @@ static int pops_run_test_amr_seed_no_refine(int argc, char** argv) {
     B.set_poisson("charge_density", "geometric_mg");
     B.set_refinement(1.2);
     B.set_density("gas", rho);
-    chk(B.n_patches() >= 1, "set_refinement(1.2) -> n_patches()>=1 (seed alloue + regrid)");
+    EXPECT_GE(B.n_patches(), 1) << "set_refinement(1.2) -> n_patches()>=1 (seed alloue + regrid)";
     for (int s = 0; s < 8; ++s)
       B.step(1e-3);
-    chk(B.n_patches() >= 1, "set_refinement(1.2) : raffinement actif apres pas");
+    EXPECT_GE(B.n_patches(), 1) << "set_refinement(1.2) : raffinement actif apres pas";
   }
 
   // (C) chemin NATIF (add_block via ModelSpec) : il PARTAGE build_amr_compiled, donc la meme garde
@@ -123,16 +110,6 @@ static int pops_run_test_amr_seed_no_refine(int argc, char** argv) {
     C.add_block("gas", spec, "minmod", "rusanov", "conservative", "explicit", 1);
     C.set_poisson("charge_density", "geometric_mg");
     C.set_density("gas", rho);
-    chk(C.n_patches() == 0, "no set_refinement -> n_patches()==0 (natif, builder partage)");
+    EXPECT_EQ(C.n_patches(), 0) << "no set_refinement -> n_patches()==0 (natif, builder partage)";
   }
-
-  if (fails == 0)
-    std::printf(
-        "OK test_amr_seed_no_refine (seed alloue seulement si set_refinement ; "
-        "no-refine -> mono-niveau n_patches==0)\n");
-  return fails ? 1 : 0;
-}
-
-TEST(test_amr_seed_no_refine, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_seed_no_refine, "test_amr_seed_no_refine"), 0);
 }

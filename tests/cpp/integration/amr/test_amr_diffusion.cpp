@@ -7,7 +7,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/state/state.hpp>
 #include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // AmrLevelMP, advance_amr, mf_average_down_mb
 #include <pops/mesh/index/box2d.hpp>
@@ -18,7 +17,6 @@
 #include <pops/mesh/storage/multifab.hpp>
 
 #include <cmath>
-#include <cstdio>
 #include <vector>
 
 using namespace pops;
@@ -50,15 +48,7 @@ static void fill(MultiFab& U, Real dx, F f) {
     }
 }
 
-static int pops_run_test_amr_diffusion() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+TEST(test_amr_diffusion, Runs) {
   const int NC = 16;
   const Box2D dom = Box2D::from_extents(NC, NC);
   const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
@@ -101,15 +91,9 @@ static int pops_run_test_amr_diffusion() {
 
   // conservation : la diffusion en flux de face conserve l'integrale, AUSSI a travers
   // l'interface coarse-fine (c'est ce que le reflux garantit).
-  chk(std::fabs(M1 - M0) < Real(1e-12), "amr_diffusion_mass_conserved");
+  EXPECT_TRUE(std::fabs(M1 - M0) < Real(1e-12))
+      << "amr_diffusion_mass_conserved: M0=" << M0 << " M1=" << M1;
   // la diffusion a bien agi : amplitude reduite (pic plus proche de la moyenne 1).
-  chk(peak1 < peak0 - Real(1e-6), "amr_diffusion_smooths");
-
-  if (fails == 0)
-    std::printf("OK test_amr_diffusion\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_amr_diffusion, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_diffusion, "test_amr_diffusion"), 0);
+  EXPECT_TRUE(peak1 < peak0 - Real(1e-6))
+      << "amr_diffusion_smooths: peak0=" << peak0 << " peak1=" << peak1;
 }

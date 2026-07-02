@@ -12,13 +12,11 @@
 // scenario diocotron qui echantillonne phi sur un cercle median (FFT azimutale).
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <cmath>
-#include <cstdio>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -54,24 +52,13 @@ static ModelSpec exb_background(double n0) {
   return spec;
 }
 
-static int pops_run_test_amr_potential(int argc, char** argv) {
+TEST(test_amr_potential, Runs) {
 #if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard(argc, argv);
-#else
-  (void)argc;
-  (void)argv;
+  Kokkos::ScopeGuard guard;
 #endif
   const int n = 64;
   double n0 = 0;
   const std::vector<double> rho = blob(n, n0);
-
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
 
   // --- AmrSystem SANS raffinement : un seul niveau grossier mono-box couvrant tout le domaine ---
   AmrSystemConfig cfg;
@@ -89,7 +76,7 @@ static int pops_run_test_amr_potential(int argc, char** argv) {
   const std::vector<double> pa = amr.potential();
 
   // (1) forme + valeurs finies + non trivial
-  chk(static_cast<int>(pa.size()) == n * n, "potential() rend n*n valeurs");
+  EXPECT_EQ(static_cast<int>(pa.size()), n * n) << "potential() rend n*n valeurs";
   bool all_finite = true;
   double pmin = pa.empty() ? 0 : pa[0], pmax = pa.empty() ? 0 : pa[0], psum = 0;
   for (double v : pa) {
@@ -99,12 +86,13 @@ static int pops_run_test_amr_potential(int argc, char** argv) {
     pmax = std::fmax(pmax, v);
     psum += v;
   }
-  chk(all_finite, "potential() : toutes les valeurs sont finies");
-  chk((pmax - pmin) > 1e-6, "potential() : champ non trivial (variation spatiale)");
+  EXPECT_TRUE(all_finite) << "potential() : toutes les valeurs sont finies";
+  EXPECT_TRUE((pmax - pmin) > 1e-6) << "potential() : champ non trivial (variation spatiale)";
 
   // (2) Poisson periodique a source neutre -> phi defini a une constante pres, moyenne ~ 0
   const double pmean = psum / (static_cast<double>(n) * n);
-  chk(std::fabs(pmean) < 1e-6 * (pmax - pmin) + 1e-9, "potential() : moyenne ~0 (source neutre)");
+  EXPECT_TRUE(std::fabs(pmean) < 1e-6 * (pmax - pmin) + 1e-9)
+      << "potential() : moyenne ~0 (source neutre)";
 
   // --- System (solver geometric_mg) sur le MEME modele/densite : oracle de parite ---
   SystemConfig scfg;
@@ -117,7 +105,7 @@ static int pops_run_test_amr_potential(int argc, char** argv) {
   sys.set_density("phi_test", rho);
   sys.solve_fields();
   const std::vector<double> ps = sys.potential();
-  chk(ps.size() == pa.size(), "System.potential() meme taille qu'AmrSystem.potential()");
+  EXPECT_EQ(ps.size(), pa.size()) << "System.potential() meme taille qu'AmrSystem.potential()";
 
   // (3) parite a une constante additive pres (phi periodique defini modulo une constante) : on
   // compare apres recentrage sur la moyenne. Tolerance MG : meme operateur, meme rhs, meme box ->
@@ -131,14 +119,15 @@ static int pops_run_test_amr_potential(int argc, char** argv) {
     dmax = std::fmax(dmax, std::fabs((pa[k] - pmean) - (ps[k] - smean)));
     ref = std::fmax(ref, std::fabs(ps[k] - smean));
   }
-  chk(ref > 1e-6, "System phi non trivial (oracle valide)");
-  chk(dmax < 1e-3 * (ref + 1e-12),
-      "AmrSystem.potential() == System.potential() (geometric_mg) a la tolerance MG pres");
+  EXPECT_TRUE(ref > 1e-6) << "System phi non trivial (oracle valide)";
+  EXPECT_TRUE(dmax < 1e-3 * (ref + 1e-12))
+      << "AmrSystem.potential() == System.potential() (geometric_mg) a la tolerance MG pres"
+      << " dmax=" << dmax << " ref=" << ref;
 
   // (4) apres quelques pas (transport ExB + regrid), potential() reste fini et non trivial
   amr.advance(1e-3, 8);
   const std::vector<double> pa2 = amr.potential();
-  chk(static_cast<int>(pa2.size()) == n * n, "potential() apres advance : n*n");
+  EXPECT_EQ(static_cast<int>(pa2.size()), n * n) << "potential() apres advance : n*n";
   bool finite2 = true;
   double p2min = pa2[0], p2max = pa2[0];
   for (double v : pa2) {
@@ -147,15 +136,6 @@ static int pops_run_test_amr_potential(int argc, char** argv) {
     p2min = std::fmin(p2min, v);
     p2max = std::fmax(p2max, v);
   }
-  chk(finite2, "potential() apres advance : valeurs finies");
-  chk((p2max - p2min) > 1e-6, "potential() apres advance : champ non trivial");
-
-  if (fails == 0)
-    std::printf("OK test_amr_potential (phi grossier expose ; parite System dmax/ref=%.1e/%.1e)\n",
-                dmax, ref);
-  return fails ? 1 : 0;
-}
-
-TEST(test_amr_potential, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_potential, "test_amr_potential"), 0);
+  EXPECT_TRUE(finite2) << "potential() apres advance : valeurs finies";
+  EXPECT_TRUE((p2max - p2min) > 1e-6) << "potential() apres advance : champ non trivial";
 }

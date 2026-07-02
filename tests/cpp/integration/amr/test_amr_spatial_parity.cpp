@@ -15,7 +15,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, CompressibleFlux, NoSource, ChargeDensity
 #include <pops/numerics/fv/numerical_flux.hpp>      // HLLCFlux, RoeFlux
 #include <pops/numerics/fv/reconstruction.hpp>      // Minmod
@@ -33,20 +32,11 @@
 #include <pops/mesh/boundary/physical_bc.hpp>
 
 #include <cmath>
-#include <cstdio>
 
 using namespace pops;
 static constexpr double kPi = 3.14159265358979323846;
 
-static int pops_run_test_amr_spatial_parity() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+TEST(test_amr_spatial_parity, Runs) {
   const int n = 32;
   const double L = 1.0;
   const Box2D dom = Box2D::from_extents(n, n);
@@ -117,18 +107,18 @@ static int pops_run_test_amr_spatial_parity() {
     // HLLC + primitif : div(face fluxes) == assemble_rhs, exactement.
     rhs_system(HLLCFlux{}, true, Rs);
     rhs_amr(HLLCFlux{}, true, Ra);
-    chk(maxdiff(Rs, Ra) < 1e-13, "HLLC+primitif : div(compute_face_fluxes) == assemble_rhs");
-    chk(norm_inf(Rs) > 1e-6, "HLLC+primitif : residu non trivial");
+    EXPECT_TRUE(maxdiff(Rs, Ra) < 1e-13) << "HLLC+primitif : div(compute_face_fluxes) == assemble_rhs";
+    EXPECT_TRUE(norm_inf(Rs) > 1e-6) << "HLLC+primitif : residu non trivial";
 
     // le primitif change le residu vs le conservatif (la reconstruction joue).
     rhs_system(HLLCFlux{}, false, Rc);
-    chk(maxdiff(Rs, Rc) > 1e-9, "HLLC : recon primitif != conservatif");
+    EXPECT_TRUE(maxdiff(Rs, Rc) > 1e-9) << "HLLC : recon primitif != conservatif";
 
     // Roe + primitif : meme parite bit-identique.
     rhs_system(RoeFlux{}, true, Rs);
     rhs_amr(RoeFlux{}, true, Ra);
-    chk(maxdiff(Rs, Ra) < 1e-13, "Roe+primitif : div(compute_face_fluxes) == assemble_rhs");
-    chk(norm_inf(Rs) > 1e-6, "Roe+primitif : residu non trivial");
+    EXPECT_TRUE(maxdiff(Rs, Ra) < 1e-13) << "Roe+primitif : div(compute_face_fluxes) == assemble_rhs";
+    EXPECT_TRUE(norm_inf(Rs) > 1e-6) << "Roe+primitif : residu non trivial";
   }
 
   // --- Partie B : recon_prim transmis a travers advance_amr (moteur AMR) ---
@@ -145,18 +135,11 @@ static int pops_run_test_amr_spatial_parity() {
     MultiFab Up = one_step(true);
     MultiFab Uc = one_step(false);
 
-    chk(std::isfinite(norm_inf(Up)) && norm_inf(Up) < 1e6, "advance_amr primitif : etat fini");
-    chk(std::fabs(sum(Up) - sum0) < 1e-9, "advance_amr primitif : masse conservee (periodique)");
-    chk(std::fabs(sum(Uc) - sum0) < 1e-9, "advance_amr conservatif : masse conservee");
+    EXPECT_TRUE(std::isfinite(norm_inf(Up)) && norm_inf(Up) < 1e6) << "advance_amr primitif : etat fini";
+    EXPECT_TRUE(std::fabs(sum(Up) - sum0) < 1e-9)
+        << "advance_amr primitif : masse conservee (periodique)";
+    EXPECT_TRUE(std::fabs(sum(Uc) - sum0) < 1e-9) << "advance_amr conservatif : masse conservee";
     // recon_prim a bien traverse advance_amr -> compute_face_fluxes : les deux pas different.
-    chk(maxdiff(Up, Uc) > 1e-9, "advance_amr : recon_prim plumbing (primitif != conservatif)");
+    EXPECT_TRUE(maxdiff(Up, Uc) > 1e-9) << "advance_amr : recon_prim plumbing (primitif != conservatif)";
   }
-
-  if (fails == 0)
-    std::printf("OK test_amr_spatial_parity\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_amr_spatial_parity, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_spatial_parity, "test_amr_spatial_parity"), 0);
 }

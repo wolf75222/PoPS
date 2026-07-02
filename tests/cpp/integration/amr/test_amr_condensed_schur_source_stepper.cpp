@@ -29,7 +29,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/coupling/schur/amr/amr_condensed_schur_source_stepper.hpp>
 #include <pops/coupling/schur/source/condensed_schur_source_stepper.hpp>
 
@@ -221,22 +220,16 @@ static double implicit_residual(const MultiFab& st_new, const MultiFab& vxn, con
   return all_reduce_max(d);
 }
 
-static int pops_run_test_amr_condensed_schur_source_stepper(int argc, char** argv) {
+TEST(test_amr_condensed_schur_source_stepper, Runs) {
+  int argc = 0;
+  char** argv = nullptr;
   comm_init(&argc, &argv);
   const int me = my_rank();
-  long fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      if (me == 0)
-        std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
 
   const int n = 32;
   const Real rho0 = Real(1.5), B0 = Real(4.0), alpha = Real(3.0);
   const Real theta = Real(1.0);  // Euler retrograde (parite la plus stricte)
-  Setup S(n);
+  ::Setup S(n);
   const VariableSet vars = fluid_vars(/*with_E=*/true);
   const int c_rho = vars.index_of(VariableRole::Density);
   const int c_mx = vars.index_of(VariableRole::MomentumX);
@@ -285,19 +278,23 @@ static int pops_run_test_amr_condensed_schur_source_stepper(int argc, char** arg
   // (A) PARITE bit-pour-bit etat + phi.
   const double dstate = max_diff(levels[0].U, st_ref, vars.size);
   const double dphi = max_diff(phi_amr, phi_ref, 1);
-  chk(std::isfinite(dstate) && dstate < 1e-13, "parite etat AMR == uniforme (< 1e-13)");
-  chk(std::isfinite(dphi) && dphi < 1e-13, "parite phi AMR == uniforme (< 1e-13)");
-  chk(kref.converged && kamr.converged, "les deux solves convergent");
-  chk(kref.iters == kamr.iters, "memes iterations BiCGStab");
+  EXPECT_TRUE(std::isfinite(dstate) && dstate < 1e-13)
+      << "parite etat AMR == uniforme (< 1e-13), dstate=" << dstate;
+  EXPECT_TRUE(std::isfinite(dphi) && dphi < 1e-13)
+      << "parite phi AMR == uniforme (< 1e-13), dphi=" << dphi;
+  EXPECT_TRUE(kref.converged && kamr.converged) << "les deux solves convergent";
+  EXPECT_EQ(kref.iters, kamr.iters) << "memes iterations BiCGStab";
 
   // (B) RELATION IMPLICITE de l'etage AMR.
   const double rimp =
       implicit_residual(levels[0].U, vxn, vyn, phi_amr, S.geom, S.bc, B0, dt, c_rho, c_mx, c_my);
-  chk(std::isfinite(rimp) && rimp < 1e-7, "relation implicite B v = v^n - dt grad phi (< 1e-7)");
+  EXPECT_TRUE(std::isfinite(rimp) && rimp < 1e-7)
+      << "relation implicite B v = v^n - dt grad phi (< 1e-7), rimp=" << rimp;
 
   // (C) la source a CHANGE la quantite de mouvement.
   const double dmom = max_diff(levels[0].U, mom0, vars.size);
-  chk(std::isfinite(dmom) && dmom > 1e-6, "la source modifie l'etat (dmom > 1e-6)");
+  EXPECT_TRUE(std::isfinite(dmom) && dmom > 1e-6)
+      << "la source modifie l'etat (dmom > 1e-6), dmom=" << dmom;
 
   // (D) GARDE Phase 4b : > 2 niveaux -> erreur claire (l'etage composite est cable pour 2 niveaux ;
   // > 2 niveaux / MPI / multi-blocs sont la Phase 4b). Le multi-patch fin (Phase 4a) est desormais
@@ -312,14 +309,8 @@ static int pops_run_test_amr_condensed_schur_source_stepper(int argc, char** arg
     three.push_back(AmrLevelMP{std::move(levels[0].U), &bz, S.geom.dx(), S.geom.dy()});
     three.push_back(AmrLevelMP{std::move(f1), &bz, S.geom.dx() / 2, S.geom.dy() / 2});
     three.push_back(AmrLevelMP{std::move(f2), &bz, S.geom.dx() / 4, S.geom.dy() / 4});
-    bool threw = false;
-    try {
-      amr.step(three, cphi, bz, 0, theta, dt);
-    } catch (const std::exception&) {
-      threw = true;
-    }
-    chk(threw,
-        "hierarchie > 2 niveaux -> erreur claire (>2 niveaux / MPI / multi-blocs = Phase 4b)");
+    EXPECT_THROW(amr.step(three, cphi, bz, 0, theta, dt), std::runtime_error)
+        << "hierarchie > 2 niveaux -> erreur claire (>2 niveaux / MPI / multi-blocs = Phase 4b)";
   }
 
   // =========================== MULTI-PATCH FIN (Phase 4a) ===========================
@@ -379,8 +370,8 @@ static int pops_run_test_amr_condensed_schur_source_stepper(int argc, char** arg
     run(ba_fA, dm_fA, UcA, UfA, UfA0);       // mono-patch (A seul) -> reference de parite
 
     // (i) FINITUDE : etat grossier + les deux patchs fins du run multi-patch.
-    chk(all_finite(UcAB, vars.size) && all_finite(UfAB, vars.size),
-        "(multi-i) etat fini (grossier + 2 patchs fins)");
+    EXPECT_TRUE(all_finite(UcAB, vars.size) && all_finite(UfAB, vars.size))
+        << "(multi-i) etat fini (grossier + 2 patchs fins)";
 
     // (ii) PARITE PHYSIQUE FAIBLE. Le patch A est fab(0) dans les DEUX runs (meme box, premier du pavage).
     // dmom_A = effet de la source dans le patch A (mono) ; diff_A = perturbation due a l'ajout du patch B.
@@ -408,11 +399,14 @@ static int pops_run_test_amr_condensed_schur_source_stepper(int argc, char** arg
       if (me == 0)
         std::printf("  [multi] dmom_A=%.3e diff_A=%.3e (rel=%.2e)\n", dmom_A, diff_A,
                     diff_A / std::fmax(dmom_A, 1e-30));
-      chk(dmom_A > 1e-3,
-          "(multi-ii) la source agit reellement dans le patch A (dynamique non triviale)");
-      chk(std::isfinite(diff_A) && diff_A < Real(1e-5) * dmom_A,
-          "(multi-ii) parite physique : patch A ~ cas mono-patch (perturbation du patch B distant "
-          "< 1e-5)");
+      EXPECT_TRUE(dmom_A > 1e-3)
+          << "(multi-ii) la source agit reellement dans le patch A (dynamique non triviale), "
+             "dmom_A="
+          << dmom_A;
+      EXPECT_TRUE(std::isfinite(diff_A) && diff_A < Real(1e-5) * dmom_A)
+          << "(multi-ii) parite physique : patch A ~ cas mono-patch (perturbation du patch B "
+             "distant < 1e-5), diff_A="
+          << diff_A << " dmom_A=" << dmom_A;
     }
 
     // (iii) MASSE CONSERVEE : rho GELEE par la source sur le grossier ET les deux patchs fins. On compare
@@ -421,8 +415,8 @@ static int pops_run_test_amr_condensed_schur_source_stepper(int argc, char** arg
     {
       MultiFab UcAB0(S.ba, S.dm, vars.size, 1);
       fill_localized(UcAB0, geom_c);  // meme init -> rho0 partout
-      chk(max_drho(UcAB, UcAB0, c_rho) < 1e-12 && max_drho(UfAB, UfAB0, c_rho) < 1e-12,
-          "(multi-iii) masse conservee : rho gelee (grossier + 2 patchs fins)");
+      EXPECT_TRUE(max_drho(UcAB, UcAB0, c_rho) < 1e-12 && max_drho(UfAB, UfAB0, c_rho) < 1e-12)
+          << "(multi-iii) masse conservee : rho gelee (grossier + 2 patchs fins)";
     }
 
     // (iv) CHEMIN MONO-PATCH INTACT : sur le run A seul, les cellules grossieres COUVERTES = moyenne 2x2
@@ -439,8 +433,10 @@ static int pops_run_test_amr_condensed_schur_source_stepper(int argc, char** arg
                                        UF(2 * I, 2 * J + 1, c) + UF(2 * I + 1, 2 * J + 1, c));
             dcov = std::fmax(dcov, std::fabs(UC(I, J, c) - avg));
           }
-      chk(all_reduce_max(dcov) < 1e-12,
-          "(multi-iv) mono-patch intact : grossier couvert = moyenne 2x2 fine (average_down)");
+      EXPECT_TRUE(all_reduce_max(dcov) < 1e-12)
+          << "(multi-iv) mono-patch intact : grossier couvert = moyenne 2x2 fine (average_down), "
+             "dcov="
+          << dcov;
     }
 
     // (v) REJET du raccord fin-fin (Phase 4b) : deux patchs ADJACENTS (empreintes grossieres [8,15] et
@@ -463,23 +459,10 @@ static int pops_run_test_amr_condensed_schur_source_stepper(int argc, char** arg
       lv.push_back(AmrLevelMP{std::move(Uc), &cphi, geom_c.dx(), geom_c.dy()});
       lv.push_back(AmrLevelMP{std::move(Uf), &faux, geom_f.dx(), geom_f.dy()});
       AmrCondensedSchurSourceStepper st(vars, geom_c, S.ba, S.bc, alpha);
-      bool threw = false;
-      try {
-        st.step(lv, cphi, cbz, /*c_bz=*/0, theta, dt);
-      } catch (const std::exception&) {
-        threw = true;
-      }
-      chk(threw, "(multi-v) patchs fins ADJACENTS -> erreur claire (raccord fin-fin = Phase 4b)");
+      EXPECT_THROW(st.step(lv, cphi, cbz, /*c_bz=*/0, theta, dt), std::runtime_error)
+          << "(multi-v) patchs fins ADJACENTS -> erreur claire (raccord fin-fin = Phase 4b)";
     }
   }
 
-  fails = static_cast<long>(all_reduce_max(static_cast<double>(fails)));
-  if (me == 0 && fails == 0)
-    std::printf("OK test_amr_condensed_schur_source_stepper\n");
   comm_finalize();
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_amr_condensed_schur_source_stepper, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_condensed_schur_source_stepper, "test_amr_condensed_schur_source_stepper"), 0);
 }

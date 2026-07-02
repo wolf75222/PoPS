@@ -17,7 +17,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/system/amr_system_coupler.hpp>
@@ -72,28 +71,7 @@ static void fill_by_coarse_i(MultiFab& U, int ratio, F f) {
   }
 }
 
-// True si l'appel jette une std::runtime_error (et donc rejette le layout).
-template <class F>
-static bool throws_runtime(F&& f) {
-  try {
-    f();
-  } catch (const std::runtime_error&) {
-    return true;
-  } catch (...) {
-    return false;
-  }
-  return false;
-}
-
-static int pops_run_test_amr_layout_guard() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+TEST(test_amr_layout_guard, Runs) {
   const int NC = 16;
   const Box2D dom = Box2D::from_extents(NC, NC);
   const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
@@ -171,10 +149,10 @@ static int pops_run_test_amr_layout_guard() {
   {
     const BoxArray cba_one(std::vector<Box2D>{dom});
     const DistributionMapping cdm_one(cba_one.size(), n_ranks());
-    chk(throws_runtime([&] {
-          build_two_block(cba_one, cdm_one, dxc, dyc, ba_fine, dm_fine, dxc / 2, dyc / 2);
-        }),
-        "guard_throws_on_box_set_mismatch");
+    EXPECT_THROW(
+        build_two_block(cba_one, cdm_one, dxc, dyc, ba_fine, dm_fine, dxc / 2, dyc / 2),
+        std::runtime_error)
+        << "guard_throws_on_box_set_mismatch";
   }
 
   // A.2 memes boites mais ORDRE different (cb1, cb0) : l'aux partage exige le MEME ordre (fab(li)
@@ -182,44 +160,43 @@ static int pops_run_test_amr_layout_guard() {
   {
     const BoxArray cba_swapped(std::vector<Box2D>{cb1, cb0});
     const DistributionMapping cdm_swapped(cba_swapped.size(), n_ranks());
-    chk(throws_runtime([&] {
-          build_two_block(cba_swapped, cdm_swapped, dxc, dyc, ba_fine, dm_fine, dxc / 2, dyc / 2);
-        }),
-        "guard_throws_on_box_order_mismatch");
+    EXPECT_THROW(
+        build_two_block(cba_swapped, cdm_swapped, dxc, dyc, ba_fine, dm_fine, dxc / 2, dyc / 2),
+        std::runtime_error)
+        << "guard_throws_on_box_order_mismatch";
   }
 
   // A.3 memes boites, DistributionMapping different (rang 1 -> rang 0 sur la 2e boite). Pertinent
   // surtout sous MPI ; en serie tous les rangs valent 0 -> on FORCE une dmap explicite differente.
   {
     const DistributionMapping cdm_alt(std::vector<int>{0, 7});  // rang 7 inexistant en serie
-    chk(throws_runtime([&] {
-          build_two_block(ba_coarse, cdm_alt, dxc, dyc, ba_fine, dm_fine, dxc / 2, dyc / 2);
-        }),
-        "guard_throws_on_dmap_mismatch");
+    EXPECT_THROW(
+        build_two_block(ba_coarse, cdm_alt, dxc, dyc, ba_fine, dm_fine, dxc / 2, dyc / 2),
+        std::runtime_error)
+        << "guard_throws_on_dmap_mismatch";
   }
 
   // A.4 dx DIFFERENT (geometrie mal cablee : meme grille d'indices mais pas d'espace different).
   {
-    chk(throws_runtime([&] {
-          build_two_block(ba_coarse, dm, dxc * Real(2), dyc, ba_fine, dm_fine, dxc / 2, dyc / 2);
-        }),
-        "guard_throws_on_dx_mismatch");
+    EXPECT_THROW(
+        build_two_block(ba_coarse, dm, dxc * Real(2), dyc, ba_fine, dm_fine, dxc / 2, dyc / 2),
+        std::runtime_error)
+        << "guard_throws_on_dx_mismatch";
   }
 
   // A.5 NOMBRE DE NIVEAUX different (le 2e bloc n'a que le grossier).
   {
-    chk(throws_runtime([&] {
-          build_two_block(ba_coarse, dm, dxc, dyc, ba_fine, dm_fine, dxc / 2, dyc / 2,
-                          /*second_has_fine=*/false);
-        }),
-        "guard_throws_on_nlevels_mismatch");
+    EXPECT_THROW(build_two_block(ba_coarse, dm, dxc, dyc, ba_fine, dm_fine, dxc / 2, dyc / 2,
+                                 /*second_has_fine=*/false),
+                 std::runtime_error)
+        << "guard_throws_on_nlevels_mismatch";
   }
 
   // --- Partie B : le garde-fou PASSE sur un layout strictement identique ---
   {
-    chk(!throws_runtime(
-            [&] { build_two_block(ba_coarse, dm, dxc, dyc, ba_fine, dm_fine, dxc / 2, dyc / 2); }),
-        "guard_passes_on_matching_layout");
+    EXPECT_NO_THROW(
+        build_two_block(ba_coarse, dm, dxc, dyc, ba_fine, dm_fine, dxc / 2, dyc / 2))
+        << "guard_passes_on_matching_layout";
   }
 
   // --- Partie C : chemin MONO-BLOC bit-identique (dmax == 0) ---
@@ -248,7 +225,7 @@ static int pops_run_test_amr_layout_guard() {
     // dmax sur le grossier (composante 0) : difference STRICTEMENT nulle.
     MultiFab diff(ba_coarse, dm, 1, 0);
     lincomb(diff, Real(1), a.levels(0)[0].U, Real(-1), b.levels(0)[0].U);
-    chk(norm_inf(diff) == Real(0), "single_block_bit_identical_dmax_zero");
+    EXPECT_EQ(norm_inf(diff), Real(0)) << "single_block_bit_identical_dmax_zero";
   }
 
   // --- Partie D : AmrHierarchyLayout::from_levels extrait la grille ---
@@ -256,19 +233,11 @@ static int pops_run_test_amr_layout_guard() {
     std::vector<AmrLevelMP> levels = make_two_level_block(ba_coarse, dm, dxc, dyc, ba_fine, dm_fine,
                                                           dxc / 2, dyc / 2, /*is_e=*/true);
     const AmrHierarchyLayout L = AmrHierarchyLayout::from_levels(levels);
-    chk(L.nlev() == 2, "layout_nlev");
-    chk(L.ba[0].boxes() == ba_coarse.boxes(), "layout_coarse_boxes");
-    chk(L.ba[1].boxes() == ba_fine.boxes(), "layout_fine_boxes");
-    chk(L.dm[0].ranks() == dm.ranks(), "layout_coarse_dmap");
-    chk(L.dx[0] == dxc && L.dy[0] == dyc, "layout_coarse_dxdy");
-    chk(L.dx[1] == dxc / 2 && L.dy[1] == dyc / 2, "layout_fine_dxdy");
+    EXPECT_EQ(L.nlev(), 2) << "layout_nlev";
+    EXPECT_TRUE(L.ba[0].boxes() == ba_coarse.boxes()) << "layout_coarse_boxes";
+    EXPECT_TRUE(L.ba[1].boxes() == ba_fine.boxes()) << "layout_fine_boxes";
+    EXPECT_TRUE(L.dm[0].ranks() == dm.ranks()) << "layout_coarse_dmap";
+    EXPECT_TRUE(L.dx[0] == dxc && L.dy[0] == dyc) << "layout_coarse_dxdy";
+    EXPECT_TRUE(L.dx[1] == dxc / 2 && L.dy[1] == dyc / 2) << "layout_fine_dxdy";
   }
-
-  if (fails == 0)
-    std::printf("OK test_amr_layout_guard\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_amr_layout_guard, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_layout_guard, "test_amr_layout_guard"), 0);
 }

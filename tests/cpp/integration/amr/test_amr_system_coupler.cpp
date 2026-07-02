@@ -11,7 +11,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/system/amr_system_coupler.hpp>
@@ -112,15 +111,7 @@ static void fill_by_coarse_i(MultiFab& U, int ratio, F f) {
   }
 }
 
-static int pops_run_test_amr_system_coupler() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+TEST(test_amr_system_coupler, Runs) {
   const int NC = 16;
   const Box2D dom = Box2D::from_extents(NC, NC);
   const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
@@ -177,16 +168,16 @@ static int pops_run_test_amr_system_coupler() {
     // RHS de systeme a N blocs sur le grossier : f = n_i - n_e = -0.5 p (|.| = 0.5).
     MultiFab rhs(ba_coarse, dm, 1, 0);
     charge(sim.system(), rhs);
-    chk(std::fabs(norm_inf(rhs) - Real(0.5)) < Real(1e-12), "amr_system_rhs_nidne");
-    chk(norm_inf(sim.phi()) > Real(1e-6), "amr_poisson_phi_nonzero");
+    EXPECT_TRUE(std::fabs(norm_inf(rhs) - Real(0.5)) < Real(1e-12)) << "amr_system_rhs_nidne";
+    EXPECT_TRUE(norm_inf(sim.phi()) > Real(1e-6)) << "amr_poisson_phi_nonzero";
 
     const Real m0e = sim.mass(0), m0i = sim.mass(1);
     sim.step(Real(0.01));  // tout explicite
     const Real m1e = sim.mass(0), m1i = sim.mass(1);
     // conservation (reflux + average_down) : la masse grossiere totale est invariante
     // sous advection periodique, malgre l'interface coarse-fine.
-    chk(std::fabs(m1e - m0e) < Real(1e-11), "amr_electron_mass_conserved");
-    chk(std::fabs(m1i - m0i) < Real(1e-11), "amr_ion_mass_conserved");
+    EXPECT_TRUE(std::fabs(m1e - m0e) < Real(1e-11)) << "amr_electron_mass_conserved";
+    EXPECT_TRUE(std::fabs(m1i - m0i) < Real(1e-11)) << "amr_ion_mass_conserved";
   }
 
   // --- Partie B : electrons implicites (relaxation raide) + ions explicites ---
@@ -224,12 +215,12 @@ static int pops_run_test_amr_system_coupler() {
     // grossier ET fin relaxes (backward-Euler exact, applique a chaque niveau).
     const MultiFab& eC = sim.levels(0)[0].U;
     const MultiFab& eF = sim.levels(0)[1].U;
-    chk(std::fabs(sum(eC) - ne_be * 256) < Real(1e-9), "amr_electron_coarse_relaxed");
-    chk(std::fabs(sum(eF) - ne_be * 256) < Real(1e-9), "amr_electron_fine_relaxed");
-    chk(norm_inf(eC) < Real(5), "amr_electron_bounded");
+    EXPECT_TRUE(std::fabs(sum(eC) - ne_be * 256) < Real(1e-9)) << "amr_electron_coarse_relaxed";
+    EXPECT_TRUE(std::fabs(sum(eF) - ne_be * 256) < Real(1e-9)) << "amr_electron_fine_relaxed";
+    EXPECT_TRUE(norm_inf(eC) < Real(5)) << "amr_electron_bounded";
     // ions explicites : production constante sur le grossier (dt * rate = 0.3).
-    chk(std::fabs(sum(sim.levels(1)[0].U) - Real(0.3) * 256) < Real(1e-12),
-        "amr_ion_coarse_produced");
+    EXPECT_TRUE(std::fabs(sum(sim.levels(1)[0].U) - Real(0.3) * 256) < Real(1e-12))
+        << "amr_ion_coarse_produced";
   }
 
   // --- Partie C : cadence Poisson (jalon 2.2.3) ---
@@ -251,11 +242,11 @@ static int pops_run_test_amr_system_coupler() {
     };
     auto once = build(PoissonCadence::OncePerStep);
     once.step(Real(0.01));
-    chk(once.solve_count() == 1, "cadence_once_per_step");
+    EXPECT_EQ(once.solve_count(), 1) << "cadence_once_per_step";
 
     auto each = build(PoissonCadence::PerSubstep);
     each.step(Real(0.01));
-    chk(each.solve_count() == 4, "cadence_per_substep");
+    EXPECT_EQ(each.solve_count(), 4) << "cadence_per_substep";
   }
 
   // --- Partie D : source de couplage inter-especes sur AMR (revue Codex 9.5) ---
@@ -285,20 +276,13 @@ static int pops_run_test_amr_system_coupler() {
     const Real tot0 = sim.mass(0) + sim.mass(1);
     const Real m0_before = sim.mass(0);
     sim.coupled_source_step(LinearExchange{Real(0.5)}, Real(0.1));
-    chk(std::fabs((sim.mass(0) + sim.mass(1)) - tot0) < Real(1e-12),
-        "amr_coupled_source_conserves");
-    chk(sim.mass(0) > m0_before + Real(1e-6), "amr_coupled_source_transfers");  // b0 gagne (n1>n0)
+    EXPECT_TRUE(std::fabs((sim.mass(0) + sim.mass(1)) - tot0) < Real(1e-12))
+        << "amr_coupled_source_conserves";
+    EXPECT_TRUE(sim.mass(0) > m0_before + Real(1e-6))
+        << "amr_coupled_source_transfers";  // b0 gagne (n1>n0)
     // NoCoupledSource : no-op.
     const Real m0_now = sim.mass(0);
     sim.coupled_source_step(NoCoupledSource{}, Real(0.1));
-    chk(std::fabs(sim.mass(0) - m0_now) < Real(1e-14), "amr_no_coupled_source_noop");
+    EXPECT_TRUE(std::fabs(sim.mass(0) - m0_now) < Real(1e-14)) << "amr_no_coupled_source_noop";
   }
-
-  if (fails == 0)
-    std::printf("OK test_amr_system_coupler\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_amr_system_coupler, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_system_coupler, "test_amr_system_coupler"), 0);
 }

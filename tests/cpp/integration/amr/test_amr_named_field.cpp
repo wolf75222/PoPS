@@ -29,7 +29,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/coupling/base/elliptic_rhs.hpp>  // add_scaled_component (per-field RHS closure)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
@@ -40,7 +39,6 @@
 #include <pops/mesh/storage/multifab.hpp>
 
 #include <cmath>
-#include <cstdio>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -50,18 +48,6 @@
 #endif
 
 using namespace pops;
-
-template <class F>
-static bool raises(F&& f) {
-  try {
-    f();
-  } catch (const std::runtime_error&) {
-    return true;
-  } catch (...) {
-    return false;
-  }
-  return false;
-}
 
 // Scalar ExB block of charge q: transport E x B (advection driven by grad phi), charge density q*n for
 // the default system Poisson (elliptic = "charge" -> elliptic_rhs = q*n).
@@ -100,24 +86,15 @@ static double mean_of(const std::vector<double>& f) {
   return f.empty() ? 0.0 : s / static_cast<double>(f.size());
 }
 
-static int pops_run_test_amr_named_field(int argc, char** argv) {
+TEST(test_amr_named_field, Runs) {
 #if defined(POPS_HAS_KOKKOS)
+  int argc = 0;
+  char** argv = nullptr;
   Kokkos::ScopeGuard guard(argc, argv);
-#else
-  (void)argc;
-  (void)argv;
 #endif
   const int N = 64;
   const double L = 1.0, B0 = 1.0, q = -1.0;
   const std::vector<double> rho = blob(N, 0.5);
-
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
 
   // --- single ExB block on a frozen one-level shared hierarchy (default Poisson f = q*rho) ---
   AmrBuildParams bp;
@@ -144,7 +121,7 @@ static int pops_run_test_amr_named_field(int argc, char** argv) {
 
   AmrRuntime rt(S.geom, S.ba_coarse, S.poisson_bc, std::move(blocks), S.base_per,
                 S.replicated_coarse, S.wall);
-  chk(rt.n_blocks() == 1, "named_engine_one_block");
+  EXPECT_EQ(rt.n_blocks(), 1) << "named_engine_one_block";
 
   // Default Poisson REFERENCE (the engine's own solve): potential() solves the fields and returns phi.
   const std::vector<double> phi_default = rt.potential();
@@ -152,7 +129,7 @@ static int pops_run_test_amr_named_field(int argc, char** argv) {
   double phi_def_span = 0;
   for (double v : phi_default)
     phi_def_span = std::fmax(phi_def_span, std::fabs(v - phi_def_mean));
-  chk(phi_def_span > 1e-6, "named_default_phi_nontrivial");
+  EXPECT_GT(phi_def_span, 1e-6) << "named_default_phi_nontrivial";
 
   // (1) PARITY: named field "psi" with RHS = q*rho (the SAME as the default Poisson). gradient comps
   // declared. The closure mirrors make_poisson_rhs of a charge brick: rhs += q * U[0].
@@ -160,14 +137,14 @@ static int pops_run_test_amr_named_field(int argc, char** argv) {
   rt.set_block_named_elliptic_rhs(0, "psi", [q](const MultiFab& U, MultiFab& rhs) {
     add_scaled_component(U, Real(q), 0, rhs);  // f_psi = q * rho == default Poisson RHS
   });
-  chk(rt.has_named_field("psi") && rt.n_named_fields() == 1, "named_psi_registered");
+  EXPECT_TRUE(rt.has_named_field("psi") && rt.n_named_fields() == 1) << "named_psi_registered";
 
   const std::vector<double> psi = rt.named_field_values("psi");
-  chk(static_cast<int>(psi.size()) == N * N, "named_psi_shape_nxn");
+  EXPECT_EQ(static_cast<int>(psi.size()), N * N) << "named_psi_shape_nxn";
   bool psi_finite = true;
   for (double v : psi)
     psi_finite = psi_finite && std::isfinite(v);
-  chk(psi_finite, "named_psi_finite");
+  EXPECT_TRUE(psi_finite) << "named_psi_finite";
 
   // psi == default phi to the MG tolerance, after recentering on the periodic additive constant (same
   // operator, same RHS, same coarse box -> the only gap is the iterative MG rel_tol).
@@ -178,9 +155,9 @@ static int pops_run_test_amr_named_field(int argc, char** argv) {
         std::fmax(dmax_par, std::fabs((psi[k] - psi_mean) - (phi_default[k] - phi_def_mean)));
     ref_par = std::fmax(ref_par, std::fabs(phi_default[k] - phi_def_mean));
   }
-  chk(ref_par > 1e-6, "named_parity_oracle_nontrivial");
-  chk(dmax_par < 1e-3 * (ref_par + 1e-12),
-      "named psi (RHS=q*rho) == default Poisson potential() to the MG tolerance");
+  EXPECT_GT(ref_par, 1e-6) << "named_parity_oracle_nontrivial";
+  EXPECT_LT(dmax_par, 1e-3 * (ref_par + 1e-12))
+      << "named psi (RHS=q*rho) == default Poisson potential() to the MG tolerance";
 
   // (2) DISTINCT RHS (linearity): named field "chi" with RHS = 2*q*rho -> chi = 2*psi (Poisson linear).
   // A genuinely different, correctly scaled second field (not an alias of the default phi).
@@ -189,7 +166,7 @@ static int pops_run_test_amr_named_field(int argc, char** argv) {
   rt.set_block_named_elliptic_rhs(0, "chi", [q](const MultiFab& U, MultiFab& rhs) {
     add_scaled_component(U, Real(2.0 * q), 0, rhs);  // f_chi = 2 * (q * rho)
   });
-  chk(rt.n_named_fields() == 2, "named_chi_registered");
+  EXPECT_EQ(rt.n_named_fields(), 2) << "named_chi_registered";
 
   const std::vector<double> chi = rt.named_field_values("chi");
   const double chi_mean = mean_of(chi);
@@ -202,9 +179,9 @@ static int pops_run_test_amr_named_field(int argc, char** argv) {
     dmax_lin = std::fmax(dmax_lin, std::fabs((chi[k] - chi_mean) - 2.0 * (psi2[k] - psi2_mean)));
     ref_lin = std::fmax(ref_lin, std::fabs(chi[k] - chi_mean));
   }
-  chk(ref_lin > 1e-6, "named_chi_nontrivial");
-  chk(dmax_lin < 1e-3 * (ref_lin + 1e-12),
-      "named chi (RHS=2*q*rho) == 2 * psi (linearity: genuinely distinct scaled field)");
+  EXPECT_GT(ref_lin, 1e-6) << "named_chi_nontrivial";
+  EXPECT_LT(dmax_lin, 1e-3 * (ref_lin + 1e-12))
+      << "named chi (RHS=2*q*rho) == 2 * psi (linearity: genuinely distinct scaled field)";
 
   // (3) NO REGRESSION: the DEFAULT potential() is unchanged by the named-field registration. The
   // default Poisson (mg_) is solved FIRST in solve_fields, BEFORE solve_named_fields, which only writes
@@ -219,8 +196,8 @@ static int pops_run_test_amr_named_field(int argc, char** argv) {
   for (int k = 0; k < N * N; ++k)
     dmax_def = std::fmax(
         dmax_def, std::fabs((phi_after[k] - phi_after_mean) - (phi_default[k] - phi_def_mean)));
-  chk(dmax_def < 1e-3 * (phi_def_span + 1e-12),
-      "named registration leaves the default potential() unchanged to the MG tolerance");
+  EXPECT_LT(dmax_def, 1e-3 * (phi_def_span + 1e-12))
+      << "named registration leaves the default potential() unchanged to the MG tolerance";
 
   // (4) after a few ExB transport steps (named field re-solved each step), psi stays finite + non-trivial.
   rt.step(Real(1e-3));
@@ -233,20 +210,9 @@ static int pops_run_test_amr_named_field(int argc, char** argv) {
     adv_finite = adv_finite && std::isfinite(v);
     adv_span = std::fmax(adv_span, std::fabs(v - adv_mean));
   }
-  chk(adv_finite, "named_psi_finite_after_advance");
-  chk(adv_span > 1e-6, "named_psi_nontrivial_after_advance");
+  EXPECT_TRUE(adv_finite) << "named_psi_finite_after_advance";
+  EXPECT_GT(adv_span, 1e-6) << "named_psi_nontrivial_after_advance";
 
   // an unregistered field name is rejected loud (never a silent zero field).
-  chk(raises([&] { rt.named_field_values("nope"); }), "named_unknown_field_rejected");
-
-  if (fails == 0)
-    std::printf(
-        "OK test_amr_named_field (psi==default dmax/ref=%.1e/%.1e ; chi==2psi "
-        "dmax/ref=%.1e/%.1e)\n",
-        dmax_par, ref_par, dmax_lin, ref_lin);
-  return fails ? 1 : 0;
-}
-
-TEST(test_amr_named_field, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_named_field, "test_amr_named_field"), 0);
+  EXPECT_THROW(rt.named_field_values("nope"), std::runtime_error) << "named_unknown_field_rejected";
 }
