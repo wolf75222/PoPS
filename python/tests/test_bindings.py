@@ -13,6 +13,7 @@ import sys
 import numpy as np
 
 import pops
+from pops.runtime import ModelSpec  # ADC-585: ModelSpec is the legacy native-bridge POD, off pops root
 
 fails = 0
 
@@ -387,17 +388,20 @@ def err(fn):
 
 # --- ADC-290 : un ModelSpec INCOMPLET echoue clairement, jamais de retombee physique silencieuse. ---
 # Avant, transport defaut="compressible" / elliptic="charge" -> un ModelSpec nu valait Euler +
-# Poisson-charge par accident. pops.ModelSpec() est desormais NON POSE (transport="" et elliptic="").
-chk(raises(lambda: pops.System(n=16).add_block("m", pops.ModelSpec())),
+# Poisson-charge par accident. ModelSpec() est desormais NON POSE (transport="" et elliptic="").
+# ADC-585 : ModelSpec est le POD herite du pont natif, hors racine pops (pops.runtime.ModelSpec).
+chk(not hasattr(pops, "ModelSpec"),
+    "ModelSpec est hors racine pops (ADC-585) : pops.ModelSpec n'existe plus")
+chk(raises(lambda: pops.System(n=16).add_block("m", ModelSpec())),
     "ModelSpec incomplet (transport non pose) refuse : pas de 'compressible' silencieux")
-chk("transport" in err(lambda: pops.System(n=16).add_block("m", pops.ModelSpec())).lower(),
+chk("transport" in err(lambda: pops.System(n=16).add_block("m", ModelSpec())).lower(),
     "message ModelSpec incomplet nomme 'transport' (erreur lisible)")
-_only_transport = pops.ModelSpec()
+_only_transport = ModelSpec()
 _only_transport.transport = "exb"  # elliptic encore non pose
 chk(raises(lambda: pops.System(n=16).add_block("m", _only_transport)),
     "ModelSpec sans elliptic refuse : pas de 'charge' silencieux")
 # Parite AmrSystem : meme contrat a l'entree de add_block.
-chk(raises(lambda: pops.AmrSystem(n=16).add_block("m", pops.ModelSpec())),
+chk(raises(lambda: pops.AmrSystem(n=16).add_block("m", ModelSpec())),
     "AmrSystem.add_block(ModelSpec incomplet) refuse")
 # Un modele COMPLET (via pops.Model) reste accepte : le garde-fou ne sur-rejette pas.
 chk(not raises(lambda: pops.System(n=16).add_block("ok", diocotron())),

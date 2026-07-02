@@ -22,6 +22,12 @@ compiled ``_pops`` extension.
 """
 from .bundles import RateBundle
 from .handles import OperatorHandle
+from .manifest import (
+    ModuleManifest,
+    OperatorManifestEntry,
+    OperatorRegistryManifest,
+    build_module_manifest,
+)
 from .module import Module
 from .operators import (
     OPERATOR_KINDS,
@@ -58,4 +64,8 @@ __all__ = [
     "RateBundle",
     "OperatorHandle",
     "OPERATOR_KINDS",
+    "ModuleManifest",
+    "OperatorManifestEntry",
+    "OperatorRegistryManifest",
+    "build_module_manifest",
 ]

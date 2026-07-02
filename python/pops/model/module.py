@@ -153,6 +153,16 @@ class Module:
         """The Module's :class:`OperatorRegistry` (bind it to a Program with P.bind_operators)."""
         return self._registry
 
+    def manifest(self):
+        """The self-describing :class:`pops.model.manifest.ModuleManifest` of this Module (ADC-585).
+
+        The central, JSON-ready representation of the model -- spaces, params, aux, eigenvalue
+        presence, the typed operator registry (each operator by its stable id) and the native
+        route-registry components -- that supersedes the legacy flat ModelSpec POD. Read-only:
+        it does not mutate the Module."""
+        from pops.model.manifest import build_module_manifest
+        return build_module_manifest(self)
+
     def to_dsl(self):
         """Lower this Module to a :class:`pops.physics.facade.Model` -- the physical/codegen engine -- by mapping
         each typed operator (with its IR body) to the dsl method of its kind. Reuses the dsl backend

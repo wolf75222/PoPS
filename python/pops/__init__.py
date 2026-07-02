@@ -28,8 +28,9 @@ application side (see adc_cases). No scenario name here.
 """
 # Load the _pops extension (RTLD_GLOBAL so the DSL production .so resolves C++ symbols).
 from pops import _bootstrap  # noqa: F401  (import side effect: loads _pops with the right flags)
-from pops._bootstrap import (SystemConfig, ModelSpec, _System,  # noqa: F401
+from pops._bootstrap import (SystemConfig, _System,  # noqa: F401
                              AmrSystemConfig, _AmrSystem, abi_key)
+# ADC-585 quarantined ModelSpec (legacy native-bridge POD) to pops.runtime.ModelSpec.
 from pops._version import __version__  # noqa: F401
 
 # Runtime layer (the ONLY importer of _pops): systems, parallelism, doctor, mesh, bricks, host flux.

@@ -173,6 +173,12 @@ def Model(state, transport, source, elliptic):
 
     Validates the state <-> transport consistency (Scalar with ExB; compressible FluidState with
     CompressibleFlux; isothermal with IsothermalFlux) and carries the parameters into the spec.
+
+    The returned ``ModelSpec`` is the BOUNDED LEGACY BRIDGE for the native ``add_block`` path (a
+    flat C++ POD of brick tags + parameters); it is NOT the target representation. The target
+    representation of a model is the operator-first ``pops.model.Module`` (compiled to a Problem)
+    and its self-describing ``ModuleManifest`` (ADC-585). ADC-585 also moved this POD off the pops
+    root: it lives at ``pops.runtime.ModelSpec``, not ``pops.ModelSpec``.
     """
     spec = ModelSpec()
 
