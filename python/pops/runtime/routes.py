@@ -336,7 +336,9 @@ def check_riemann_capability(flux, compiled, ctx):
     layout is served by the EXPLICIT euler_hllc / euler_roe routes, which require n_vars == 4 +
     primitive 'p' and REFUSE a model that emitted the generic capability (no ambiguity). Raises
     ``ValueError`` with a @p ctx-prefixed message that names the missing capability and both
-    remedies. HLL keeps its own wave-speeds guard at the call-site.
+    remedies. HLL keeps its own wave-speeds guard at the call-site; the ADC-552 provider cross-check
+    rides through :func:`pops.numerics.riemann.waves.check_hll_waves` at the call site (routes.py
+    stays import-free of the pops package).
     """
     def _tail():
         return ("[requested route %s -> %s; requires: %s]"
@@ -362,5 +364,44 @@ def check_riemann_capability(flux, compiled, ctx):
             % (ctx, flux, generic, _tail()))
 
 
+def check_wave_speed_provider(requested_kind, compiled, ctx, actual_provider=None):
+    """Cross-check an HLL(waves=<provider>) request against the compiled model's source (ADC-552).
+
+    @p requested_kind is the provider kind an ``HLL(waves=...)`` descriptor pinned (a signed-pair
+    kind: ``explicit_pair`` / ``jacobian`` / ``pressure_derived`` / ``einfeldt`` / ``davis``). The
+    model MUST at least emit wave speeds (``has_wave_speeds``): a mismatch is refused with a message
+    naming the requested provider and the model's actual provider. @p actual_provider is the model's
+    DERIVED source kind (``explicit_pair`` / ``jacobian`` / ``pressure_derived``) or ``None`` -- the
+    caller computes it via :func:`pops.numerics.riemann.waves.provider_of` (routes.py stays
+    import-free of the pops package). The estimate kinds (``einfeldt`` / ``davis``) are compatible
+    with any signed source. When @p actual_provider is ``None`` (a bare CompiledModel whose source
+    kind is unrecorded) the request is ACCEPTED once ``has_wave_speeds`` is True (a documented,
+    honest limitation -- the ``.so`` metadata does not carry the source kind).
+    """
+    if not getattr(compiled, "has_wave_speeds", True):
+        raise ValueError(
+            "%s: riemann 'hll' with a wave-speed provider %r requires the model to emit signed "
+            "wave speeds, but it emits none; declare m.wave_speeds(x=(smin, smax), y=(smin, smax)) "
+            "or m.wave_speeds_from_jacobian(...) or a primitive 'p', or use riemann='rusanov'."
+            % (ctx, requested_kind))
+    if requested_kind in ("einfeldt", "davis"):
+        return  # estimate providers are compatible with any signed wave-speed source
+    if actual_provider not in ("explicit_pair", "jacobian", "pressure_derived"):
+        return  # source kind not derivable on this handle: accept (documented limitation)
+    if actual_provider != requested_kind:
+        raise ValueError(
+            "%s: riemann 'hll' was pinned to the wave-speed provider %r, but the model's actual "
+            "wave-speed source is %r; pass HLL(waves=%s) matching the model, or declare the "
+            "requested source." % (ctx, requested_kind, actual_provider,
+                                    _provider_factory(actual_provider)))
+
+
+def _provider_factory(kind):
+    """The typed factory name for a provider @p kind (used in the mismatch message)."""
+    return {"explicit_pair": "ExplicitPair()", "jacobian": "FromJacobian()",
+            "pressure_derived": "FromPressure()", "einfeldt": "Einfeldt()",
+            "davis": "Davis()"}.get(kind, "the matching provider")
+
+
 __all__ = ["Route", "resolve", "routes_of", "route_manifest", "check_riemann_capability",
-           "euler_layout_ok"]
+           "check_wave_speed_provider", "euler_layout_ok"]

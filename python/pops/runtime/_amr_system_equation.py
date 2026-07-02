@@ -182,6 +182,10 @@ class _AmrSystemEquation:
         # (require has_hllc/has_roe -- the 'p'-only Euler fallback is removed); the explicit
         # euler_hllc/euler_roe routes serve the canonical 4-var Euler layout.
         _check_riemann_capability(spatial.flux, compiled, "AmrSystem.add_equation")
+        # ADC-552: cross-check a HLL(waves=<provider>) selection against the model's actual source.
+        if spatial.flux == "hll" and getattr(spatial, "waves_provider", None) is not None:
+            from pops.numerics.riemann.waves import check_hll_waves
+            check_hll_waves(spatial.waves_provider, compiled, "AmrSystem.add_equation")
         # HLL: same early guard as System.add_equation (wave_speeds emitted by the explicit pair
         # m.wave_speeds(x=, y=) OR primitive 'p'; the C++ gate only triggers at first use).
         if spatial.flux == "hll" and not getattr(compiled, "has_wave_speeds", True):

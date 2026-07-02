@@ -248,6 +248,10 @@ class _SystemInstall:
         # GENERIC-ONLY (require has_hllc/has_roe -- the 'p'-only Euler fallback is removed); the
         # explicit euler_hllc/euler_roe routes serve the canonical 4-var Euler layout.
         _check_riemann_capability(spatial.flux, compiled, "add_equation")
+        # ADC-552: cross-check a HLL(waves=<provider>) selection against the model's actual source.
+        if spatial.flux == RIEMANN_HLL and getattr(spatial, "waves_provider", None) is not None:
+            from pops.numerics.riemann.waves import check_hll_waves
+            check_hll_waves(spatial.waves_provider, compiled, "add_equation")
         # HLL: the generated brick emits wave_speeds either from the EXPLICIT pair
         # m.wave_speeds(x=, y=) (WITHOUT primitive 'p': moments, isothermal..., cf. has_wave_speeds),
         # or as soon as a primitive 'p' is DECLARED (m.primitive('p', ...)), even OUTSIDE the

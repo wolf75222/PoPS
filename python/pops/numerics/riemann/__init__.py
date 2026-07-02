@@ -11,15 +11,53 @@ HLL``), not only via the ``riemann`` namespace.
 from types import SimpleNamespace
 
 from pops.descriptors import _native, _external_descriptor
+from . import waves
+from .waves import (WaveSpeedProvider, ExplicitPair, FromJacobian, FromPressure,
+                    Einfeldt, Davis, MaxWaveSpeed, provider_of)
 
 
 def _riemann(name, native_id, caps):
     return _native(name, native_id, name, category="riemann", caps=caps)
 
 
+def _hll(waves=None):
+    """The HLL numerical flux descriptor, optionally pinned to a typed wave-speed provider.
+
+    ``HLL()`` is the historical generic signed-wave flux (requires the model's wave_speeds). With
+    ``waves=`` it takes a TYPED :class:`~pops.numerics.riemann.waves.WaveSpeedProvider` (e.g.
+    ``ExplicitPair()`` / ``FromJacobian()`` / ``F.capabilities.wave_speeds``): a bare string is
+    REJECTED (pointing at the typed factories) and a NON-signed provider (``MaxWaveSpeed``) is
+    REFUSED with a precise message -- HLL needs a signed pair, ``MaxWaveSpeed`` is the Rusanov
+    majorant. The accepted provider enters the descriptor options (``options["waves"]``) and
+    requirements so the identity / inspection / install guard reflect it."""
+    desc = _riemann("hll", "pops::HLLFlux", ["physical_flux", "wave_speeds"])
+    if waves is None:
+        return desc
+    if isinstance(waves, str):
+        from pops.descriptors import reject_string_selector
+        reject_string_selector(
+            waves, "waves",
+            "pops.numerics.riemann.waves.ExplicitPair() / FromJacobian() / FromPressure() / "
+            "Einfeldt() / Davis(), or F.capabilities.wave_speeds")
+    if not isinstance(waves, WaveSpeedProvider):
+        raise TypeError(
+            "HLL(waves=): expected a typed WaveSpeedProvider (pops.numerics.riemann.waves.*), "
+            "got %r." % (type(waves).__name__,))
+    if not waves.signed_pair:
+        raise ValueError(
+            "HLL requires a signed wave-speed provider; %s is the Rusanov majorant "
+            "(unsigned) -- use Rusanov() or a signed provider (ExplicitPair() / FromJacobian() / "
+            "FromPressure() / Einfeldt() / Davis())." % (waves.describe(),))
+    desc.options["waves"] = waves.kind
+    # The provider participates in the descriptor requirements (identity / inspection reflect it).
+    desc.requirements.setdefault("capabilities", ["physical_flux", "wave_speeds"])
+    desc.requirements["wave_speed_provider"] = waves.kind
+    return desc
+
+
 riemann = SimpleNamespace(
     Rusanov=lambda: _riemann("rusanov", "pops::RusanovFlux", ["max_wave_speed"]),
-    HLL=lambda: _riemann("hll", "pops::HLLFlux", ["physical_flux", "wave_speeds"]),
+    HLL=_hll,
     HLLC=lambda: _riemann("hllc", "pops::HLLCFlux",
                           ["physical_flux", "pressure", "wave_speeds",
                            "contact_speed", "hllc_star_state"]),
@@ -39,6 +77,10 @@ from .capabilities import _attach_capabilities  # noqa: E402
 
 _attach_capabilities(riemann)
 
+# The typed wave-speed provider layer (ADC-552): reachable as ``riemann.waves.ExplicitPair()``
+# (the real submodule exposes the factories) so ``HLL(waves=riemann.waves.ExplicitPair())`` works.
+riemann.waves = waves
+
 # Spec 5: expose the fluxes at module scope so ``from pops.numerics.riemann import HLL``
 # works (the namespace stays for ``riemann.HLL`` and the attached capability hooks).
 Rusanov = riemann.Rusanov
@@ -49,4 +91,6 @@ EulerHLLC2D = riemann.EulerHLLC2D
 EulerRoe2D = riemann.EulerRoe2D
 User = riemann.User
 
-__all__ = ["riemann", "Rusanov", "HLL", "HLLC", "Roe", "EulerHLLC2D", "EulerRoe2D", "User"]
+__all__ = ["riemann", "waves", "Rusanov", "HLL", "HLLC", "Roe", "EulerHLLC2D", "EulerRoe2D",
+           "User", "WaveSpeedProvider", "ExplicitPair", "FromJacobian", "FromPressure",
+           "Einfeldt", "Davis", "MaxWaveSpeed", "provider_of"]

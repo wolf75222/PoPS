@@ -41,6 +41,15 @@ class Model(_FacadeCompileMixin):
     @property
     def name(self): return self._m.name
 
+    @property
+    def capabilities(self):
+        """Typed capability handles of this model (ADC-552): ``m.capabilities.wave_speeds`` returns
+        the model's :class:`~pops.numerics.riemann.waves.WaveSpeedProvider`. There is NO silent
+        None -- a model that declares no wave speeds raises a precise, actionable error on access.
+        Pass the returned provider to ``HLL(waves=m.capabilities.wave_speeds)``."""
+        from pops.numerics.riemann.waves import _CapabilityHandles  # lazy: keep facade lean
+        return _CapabilityHandles(self)
+
     # --- variable declaration (direct delegation to HyperbolicModel) ---
     def conservative_vars(self, *names, roles=None):
         """Declares the conservative variables. @p roles: same convention as HyperbolicModel."""

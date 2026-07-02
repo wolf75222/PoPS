@@ -57,6 +57,16 @@ class CompiledModel:
         self.std = std
 
     @property
+    def capabilities(self):
+        """Typed capability handles of this compiled model (ADC-552): ``compiled.capabilities.
+        wave_speeds`` returns the artifact's :class:`~pops.numerics.riemann.waves.WaveSpeedProvider`.
+        Derived from the carried authoring model when present, else from ``has_wave_speeds`` (a
+        generic signed-pair provider); raises a precise error when the artifact declares no wave
+        speeds (no silent None)."""
+        from pops.numerics.riemann.waves import _CapabilityHandles  # lazy: loader <-> numerics edge
+        return _CapabilityHandles(self)
+
+    @property
     def runtime_param_names(self):
         """Names of the model's RUNTIME parameters (kind='runtime'), SORTED: this is the ORDER of
         the indices on the C++ side (RuntimeParams) AND the order expected by
