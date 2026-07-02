@@ -60,6 +60,26 @@ def _walk_brick_catalog(namespace):
             yield _entry_from_brick(descriptor)
 
 
+def _external_brick_rows():
+    """CapabilityEntry rows for the registered EXTERNAL C++ bricks (ADC-611): one ``source="external"``
+    row per brick registered via ``pops.load_cpp_library`` / ``pops.external.register`` (the in-process
+    catalog ``pops.descriptors._EXTERNAL_BRICKS``). Empty when none are registered. This surfaces the
+    external bricks in ``inspect_capabilities()`` so a third-party brick loaded at runtime appears in the
+    capability report instead of being invisible."""
+    from pops.descriptors import _EXTERNAL_BRICKS
+    rows = []
+    for brick_id in sorted(_EXTERNAL_BRICKS):
+        record = _EXTERNAL_BRICKS[brick_id]
+        category = record.get("category", "brick")
+        reqs = {"capabilities": list(record.get("requirements", []))} if record.get("requirements") \
+            else {}
+        rows.append(CapabilityEntry(
+            brick_id, category, brick_id, "yes", reqs, source="external",
+            feature="%s:%s" % (category, brick_id), backend="external_cpp",
+            status="available", limitation=""))
+    return rows
+
+
 def _walk_class_catalog(category, classes):
     """Yield entries for descriptor CLASSES that need constructor args (e.g. mesh layouts).
 
@@ -158,6 +178,9 @@ def inspect_capabilities():
     for namespace in (riemann, reconstruction, limiters, projections):
         entries.extend(_walk_brick_catalog(namespace))
     entries.extend(_walk_class_catalog("layout", (Uniform, AMR)))
+    # External C++ bricks registered at runtime (ADC-611): surfaced so a loaded third-party brick
+    # appears in the report. Empty when none registered -> bit-identical to before.
+    entries.extend(_external_brick_rows())
 
     # The solver / field brick catalogs (Spec 5 criterion 7: solvers under pops.solvers, the
     # field brick catalog under pops.fields.catalog) -- optional layers walked when present.
