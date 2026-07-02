@@ -45,6 +45,7 @@ def build_shuffled_euler():
     e.set_conservative_from([rho * v, p / (GAMMA - 1.0) + 0.5 * rho * (u * u + v * v),
                              rho * u, rho])
     e.set_gamma(GAMMA)  # transporte via pops_compiled_gamma
+    e.enable_hllc()  # ADC-590 : riemann='hllc' generique exige la capability emise
     return e
 
 
