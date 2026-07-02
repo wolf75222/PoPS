@@ -13,16 +13,41 @@
 # plus de test "Performing Test HAS_FLTO - Failed" parasite, et le build est rapide/previsible. ON =>
 # THIN_LTO (clang) pour un binaire "release perf" PONCTUEL ; exige une toolchain dont le linker accepte
 # -flto=thin (sur macOS, plutot la chaine clang conda complete que le melange AppleClang + linker conda).
+# ADC-593: the per-route block-build SEAM translation units (system/{isothermal,compressible}, amr/block,
+# amr/compiled) are no longer hand-written one .cpp per (transport, flux). They are GENERATED from ONE
+# declarative manifest (bindings/seam_combinations.cmake) into ${CMAKE_CURRENT_BINARY_DIR}/generated_seams
+# by configure_file per row -- byte-equivalent in symbols/semantics to the deleted files. Adding a Riemann
+# is now one manifest row, never a new pybind file (the acceptance criterion). The build-memory mitigation
+# is UNCHANGED: the generated TUs are still one leaf each, still serialized by the JOB_POOL below.
+include(${CMAKE_CURRENT_SOURCE_DIR}/bindings/seam_combinations.cmake)
+set(POPS_GENERATED_SEAMS_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated_seams)
+set(POPS_GENERATED_SEAM_SOURCES "")
+foreach(_seam_row ${POPS_SEAM_COMBINATIONS})
+  pops_generate_seam("${_seam_row}" "${POPS_GENERATED_SEAMS_DIR}" POPS_GENERATED_SEAM_SOURCES)
+endforeach()
+
+# The HAND-WRITTEN binding TUs: the module entry + init split, the two heavy facades (system.cpp /
+# amr_system.cpp), the unique polar visitor body, and the two thin riemann DISPATCHERS
+# (amr_block_compressible.cpp / amr_compiled_compressible.cpp -- one per transport, genuinely distinct
+# control flow, classified in docs/design/pybind-binding-audit.md). The per-(transport, flux) seam leaves
+# come from POPS_GENERATED_SEAM_SOURCES.
+set(POPS_MODULE_SOURCES
+    bindings/core/bindings.cpp bindings/core/init/init_core.cpp bindings/core/init/init_system.cpp
+    bindings/core/init/init_amr.cpp bindings/system/base/system.cpp bindings/system/base/system_polar.cpp
+    bindings/amr/amr_system.cpp bindings/amr/block/compressible/amr_block_compressible.cpp
+    bindings/amr/compiled/compressible/amr_compiled_compressible.cpp
+    ${POPS_GENERATED_SEAM_SOURCES})
+
 option(POPS_PY_LTO "LTO (ThinLTO) sur le module _pops (OFF = build rapide, recommande)" OFF)
 if(POPS_PY_LTO)
-  pybind11_add_module(_pops THIN_LTO bindings/core/bindings.cpp bindings/core/init/init_core.cpp bindings/core/init/init_system.cpp bindings/core/init/init_amr.cpp bindings/system/base/system.cpp bindings/system/base/system_exb.cpp bindings/system/isothermal/system_isothermal_rusanov.cpp bindings/system/isothermal/system_isothermal_hll.cpp bindings/system/compressible/system_compressible_rusanov.cpp bindings/system/compressible/system_compressible_hll.cpp bindings/system/compressible/system_compressible_hllc.cpp bindings/system/compressible/system_compressible_roe.cpp bindings/system/base/system_polar.cpp bindings/amr/amr_system.cpp bindings/amr/block/base/amr_block_exb.cpp bindings/amr/block/base/amr_block_isothermal.cpp bindings/amr/block/compressible/amr_block_compressible.cpp bindings/amr/block/compressible/amr_block_compressible_rusanov.cpp bindings/amr/block/compressible/amr_block_compressible_hll.cpp bindings/amr/block/compressible/amr_block_compressible_hllc.cpp bindings/amr/block/compressible/amr_block_compressible_roe.cpp bindings/amr/compiled/base/amr_compiled_exb.cpp bindings/amr/compiled/base/amr_compiled_isothermal.cpp bindings/amr/compiled/compressible/amr_compiled_compressible.cpp bindings/amr/compiled/compressible/amr_compiled_compressible_rusanov.cpp bindings/amr/compiled/compressible/amr_compiled_compressible_hll.cpp bindings/amr/compiled/compressible/amr_compiled_compressible_hllc.cpp bindings/amr/compiled/compressible/amr_compiled_compressible_roe.cpp)
+  pybind11_add_module(_pops THIN_LTO ${POPS_MODULE_SOURCES})
 else()
   # NO_EXTRAS empeche pybind11 d'ACTIVER le LTO sur _pops. C'est NECESSAIRE, pas cosmetique : des que
   # le test HAS_FLTO passe (cas du pybind11 de l'env, p.ex. conda), pybind11_add_module activerait le
   # ThinLTO par defaut -> link/codegen au LINK -> build nettement plus long (le backend -O3 est deja le
   # goulot). On re-applique la visibilite cachee (seule "extra" qui compte ici) pour rester identique au
   # binaire produit jusqu'ici ; le chemin DSL "production" exporte quand meme ses symboles via POPS_EXPORT.
-  pybind11_add_module(_pops NO_EXTRAS bindings/core/bindings.cpp bindings/core/init/init_core.cpp bindings/core/init/init_system.cpp bindings/core/init/init_amr.cpp bindings/system/base/system.cpp bindings/system/base/system_exb.cpp bindings/system/isothermal/system_isothermal_rusanov.cpp bindings/system/isothermal/system_isothermal_hll.cpp bindings/system/compressible/system_compressible_rusanov.cpp bindings/system/compressible/system_compressible_hll.cpp bindings/system/compressible/system_compressible_hllc.cpp bindings/system/compressible/system_compressible_roe.cpp bindings/system/base/system_polar.cpp bindings/amr/amr_system.cpp bindings/amr/block/base/amr_block_exb.cpp bindings/amr/block/base/amr_block_isothermal.cpp bindings/amr/block/compressible/amr_block_compressible.cpp bindings/amr/block/compressible/amr_block_compressible_rusanov.cpp bindings/amr/block/compressible/amr_block_compressible_hll.cpp bindings/amr/block/compressible/amr_block_compressible_hllc.cpp bindings/amr/block/compressible/amr_block_compressible_roe.cpp bindings/amr/compiled/base/amr_compiled_exb.cpp bindings/amr/compiled/base/amr_compiled_isothermal.cpp bindings/amr/compiled/compressible/amr_compiled_compressible.cpp bindings/amr/compiled/compressible/amr_compiled_compressible_rusanov.cpp bindings/amr/compiled/compressible/amr_compiled_compressible_hll.cpp bindings/amr/compiled/compressible/amr_compiled_compressible_hllc.cpp bindings/amr/compiled/compressible/amr_compiled_compressible_roe.cpp)
+  pybind11_add_module(_pops NO_EXTRAS ${POPS_MODULE_SOURCES})
   set_target_properties(_pops PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
 endif()
 target_link_libraries(_pops PRIVATE pops::pops pops_dev_options ${CMAKE_DL_LIBS})  # dl : add_dynamic_block (dlopen) ; pops_dev_options : warnings/sanitizers opt-in (vide par defaut, cf. cmake/PopsDevTooling.cmake)

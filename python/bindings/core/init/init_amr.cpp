@@ -1,27 +1,18 @@
 #include "../bindings_detail.hpp"
 
 // ADC-365: the AMR (AmrSystemConfig + AmrSystem) bindings.
-void init_amr(py::module_& m) {
-  // --- AMR: single-species composition on multi-patch AMR (generic composable brick) ---
-  // adc_cases DRIVES it from Python (no C++ on the cases side) just like System.
-  //
-  // NB: the two-fluid AP integrator (BESPOKE asymptotic-preserving scheme, not composable
-  // block by block) has left the core: it is not a generic brick but a SCENARIO. It now lives
-  // in adc_cases (cf. adc_cases/two_fluid_ap/), compiled on the fly against the generic
-  // headers of PoPS; it is no longer exposed by the _pops module.
+//
+// ADC-593: like init_system, the AmrSystem .def registrations are INTERNAL seams of the bind flow (the
+// AMR target reaches them through the typed layout, not as public vocabulary). The AmrSystem chain is
+// split into concern-grouped static helpers (assembly / physics / stepping / program / data), each taking
+// the class handle and adding its slice. PURE reorganization: same .def names, docstrings, args, and
+// RELATIVE order (no overload set is reordered -- every AmrSystem method name here is unique). The class
+// name and the .def names are unchanged, so the legacy-name architecture gate still finds them here.
+namespace {
 
-  // AmrSystem: generic single-species composition on AMR.
-  py::class_<AmrSystemConfig>(m, "AmrSystemConfig")
-      .def(py::init<>())
-      .def_readwrite("n", &AmrSystemConfig::n)
-      .def_readwrite("L", &AmrSystemConfig::L)
-      .def_readwrite("regrid_every", &AmrSystemConfig::regrid_every)
-      .def_readwrite("periodic", &AmrSystemConfig::periodic)
-      .def_readwrite("distribute_coarse", &AmrSystemConfig::distribute_coarse)
-      .def_readwrite("coarse_max_grid", &AmrSystemConfig::coarse_max_grid);
-
-  py::class_<AmrSystem>(m, "AmrSystem")
-      .def(py::init<const AmrSystemConfig&>())
+// Assembly seams: per-block composition, native block, and refinement tagging.
+void bind_amr_assembly(py::class_<AmrSystem>& cls) {
+  cls.def(py::init<const AmrSystemConfig&>())
       // ADC-214: Python surface UNCHANGED (same flat newton_* kwargs, same defaults). The lambda
       // assembles the NewtonOptions POD before the C++ call (parity with System.add_block).
       .def(
@@ -140,7 +131,12 @@ void init_amr(py::module_& m) {
           "FFT on the hierarchy). bc: 'auto' | 'periodic' | 'dirichlet' | 'neumann'. wall: "
           "'none' | 'circle' (circular conducting wall, requires wall_radius > 0).",
           py::arg("rhs") = "charge_density", py::arg("solver") = "geometric_mg",
-          py::arg("bc") = "auto", py::arg("wall") = "none", py::arg("wall_radius") = 0.0)
+          py::arg("bc") = "auto", py::arg("wall") = "none", py::arg("wall_radius") = 0.0);
+}
+
+// Physics wiring: dt bounds, GLOBAL Schur/coupled source stages, and time-splitting policy.
+void bind_amr_physics(py::class_<AmrSystem>& cls) {
+  cls
       // GLOBAL step bound + ACTIVE bound (AMR StabilityPolicy, System.add_dt_bound parity).
       .def("add_dt_bound", &AmrSystem::add_dt_bound, py::arg("label"), py::arg("fn"))
       .def("last_dt_bound", &AmrSystem::last_dt_bound)
@@ -243,8 +239,12 @@ void init_amr(py::module_& m) {
           py::arg("frequency") = 0.0, py::arg("label") = "coupled_source",
           // Optional PER-CELL frequency mu(U): evaluated on the coarse level (cf. System).
           py::arg("freq_prog_ops") = std::vector<int>{},
-          py::arg("freq_prog_args") = std::vector<int>{})
-      .def("step", &AmrSystem::step, py::arg("dt"))
+          py::arg("freq_prog_args") = std::vector<int>{});
+}
+
+// Stepping + profiling: step/advance/CFL/adaptive and the profiler surface.
+void bind_amr_stepping(py::class_<AmrSystem>& cls) {
+  cls.def("step", &AmrSystem::step, py::arg("dt"))
       .def("advance", &AmrSystem::advance, py::arg("dt"), py::arg("nsteps"))
       .def("step_cfl", &AmrSystem::step_cfl,
            "Advances by one AMR macro-step at dt = cfl * dx_coarse / max wave speed (also honors "
@@ -267,8 +267,12 @@ void init_amr(py::module_& m) {
            "Per-rank.")
       .def("profile_snapshot",
            [](AmrSystem& s) { return profile_snapshot_to_dict(s.profiler_handle().snapshot()); },
-           "Structured AMR profiling snapshot: schema_version, enabled, scopes and counters.")
-      .def("nx", &AmrSystem::nx)
+           "Structured AMR profiling snapshot: schema_version, enabled, scopes and counters.");
+}
+
+// Clock + compiled-Program install/introspection + runtime freeze lifecycle.
+void bind_amr_program(py::class_<AmrSystem>& cls) {
+  cls.def("nx", &AmrSystem::nx)
       .def("time", &AmrSystem::time)
       // AMR clock (IO v1, System parity): macro-step counter + restoration (t, macro_step) ->
       // the regrid/stride cadence resumes exactly after a set_clock. Prerequisite PR-IO-3.
@@ -302,8 +306,12 @@ void init_amr(py::module_& m) {
       // Python bind flow) freezes the composition; lifecycle_state() reports assembling / bound /
       // running (running derived from macro_step()).
       .def("mark_bound", &AmrSystem::mark_bound)
-      .def("lifecycle_state", &AmrSystem::lifecycle_state)
-      .def("n_blocks", &AmrSystem::n_blocks)
+      .def("lifecycle_state", &AmrSystem::lifecycle_state);
+}
+
+// Data + IO accessors: block/patch introspection, mass/density/potential, level/var shape.
+void bind_amr_data(py::class_<AmrSystem>& cls) {
+  cls.def("n_blocks", &AmrSystem::n_blocks)
       .def("block_names", &AmrSystem::block_names)
       .def("effective_options_report",
            [](const AmrSystem& s) {
@@ -427,4 +435,35 @@ void init_amr(py::module_& m) {
             s.set_block_level_state(name, k, flat(arr));
           },
           py::arg("name"), py::arg("k"), py::arg("state"));
+}
+
+}  // namespace
+
+// Registers AmrSystemConfig, then the AmrSystem facade and each concern's bindings IN ORDER (assembly
+// first, so the class exists before the other groups extend it). The per-concern order matches the
+// historical single chain; no overload set spans two concerns.
+void init_amr(py::module_& m) {
+  // --- AMR: single-species composition on multi-patch AMR (generic composable brick) ---
+  // adc_cases DRIVES it from Python (no C++ on the cases side) just like System.
+  //
+  // NB: the two-fluid AP integrator (BESPOKE asymptotic-preserving scheme, not composable
+  // block by block) has left the core: it is not a generic brick but a SCENARIO. It now lives
+  // in adc_cases (cf. adc_cases/two_fluid_ap/), compiled on the fly against the generic
+  // headers of PoPS; it is no longer exposed by the _pops module.
+  py::class_<AmrSystemConfig>(m, "AmrSystemConfig")
+      .def(py::init<>())
+      .def_readwrite("n", &AmrSystemConfig::n)
+      .def_readwrite("L", &AmrSystemConfig::L)
+      .def_readwrite("regrid_every", &AmrSystemConfig::regrid_every)
+      .def_readwrite("periodic", &AmrSystemConfig::periodic)
+      .def_readwrite("distribute_coarse", &AmrSystemConfig::distribute_coarse)
+      .def_readwrite("coarse_max_grid", &AmrSystemConfig::coarse_max_grid);
+
+  // AmrSystem: generic single-species composition on AMR.
+  py::class_<AmrSystem> cls(m, "AmrSystem");
+  bind_amr_assembly(cls);
+  bind_amr_physics(cls);
+  bind_amr_stepping(cls);
+  bind_amr_program(cls);
+  bind_amr_data(cls);
 }
