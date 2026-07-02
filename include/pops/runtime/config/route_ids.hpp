@@ -29,7 +29,7 @@
 /// of drift (same pattern as the limiter_n_ghost_ct / transport_n_vars_ct locks). This header is
 /// deliberately LIGHT (strings + enums only, no numerics dependency) so it can be included by the
 /// bindings, the loaders and the tests at zero cost. The Python mirror is
-/// python/pops/runtime/routes.py; tests/architecture/test_route_registry_parity.py locks the two
+/// python/pops/runtime/routes.py; tests/python/architecture/test_route_registry_parity.py locks the two
 /// registries against each other at the source level (no build required).
 
 namespace pops {
@@ -449,7 +449,7 @@ inline constexpr int kRouteRegistryVersion = 1;
 /// Compact per-family signature "family:count,..." (registry order) -- the form EMBEDDED in
 /// generated artifacts (pops_compiled_route_manifest / pops_program_route_manifest) and compared
 /// at load time. MIRROR of routes.py::route_registry_signature(); the parity is locked by
-/// tests/architecture/test_route_registry_parity.py. A stale .so built against a different route
+/// tests/python/architecture/test_route_registry_parity.py. A stale .so built against a different route
 /// set is refused with the mismatching family named (see verify_route_manifest below), instead
 /// of failing later on a cryptic dispatch or symbol error.
 inline std::string route_registry_signature() {

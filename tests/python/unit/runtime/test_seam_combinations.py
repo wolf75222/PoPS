@@ -25,7 +25,7 @@ except Exception as exc:  # noqa: BLE001
 
 
 # The manifest combinations, expressed in the public brick vocabulary. Kept in sync with
-# python/bindings/seam_combinations.cmake by tests/architecture/test_pybind_seam_manifest.py (that gate
+# python/bindings/seam_combinations.cmake by tests/python/architecture/test_pybind_seam_manifest.py (that gate
 # locks the manifest to the catalog / registry; this list is the runtime projection of the same rows).
 # (transport, flux) with flux=None for the transport-only (whole make_block dispatcher) seams.
 _SYSTEM_COMBOS = [

@@ -69,7 +69,7 @@ Adding a Riemann or reconstruction is:
    bindings;
 3. the flux row in `route_ids.hpp` / `routes.py` (the registry) if the flux is new.
 
-No new hand-written pybind file. `tests/architecture/test_pybind_seam_manifest.py` enforces this: the
+No new hand-written pybind file. `tests/python/architecture/test_pybind_seam_manifest.py` enforces this: the
 former leaf files must be absent from git, every manifest `(transport, flux)` must be a legal catalog /
 registry route, and no new `.cpp` under `python/bindings/` may carry the seam-leaf signature outside the
 generated dir and templates. `python/tests/test_seam_combinations.py` is the runtime sibling: it drives
