@@ -7,7 +7,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/physical_model.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
@@ -21,7 +20,6 @@
 #include <pops/parallel/comm.hpp>
 
 #include <cmath>
-#include <cstdio>
 #include <functional>
 
 using namespace pops;
@@ -45,15 +43,7 @@ struct BzGrow {
 static_assert(PhysicalModel<BzGrow>, "BzGrow modele PhysicalModel");
 static_assert(aux_comps<BzGrow>() == 4, "BzGrow declare n_aux = 4");
 
-static int pops_run_test_aux_coupler_bz() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+TEST(AuxCouplerBz, FullPathAppliesBzGrowth) {
   const int n = 16;
   const Real L = 1.0, c = 0.5;
   Box2D dom = Box2D::from_extents(n, n);
@@ -71,7 +61,7 @@ static int pops_run_test_aux_coupler_bz() {
   U.set_val(1.0);
 
   // --- (A) le canal aux est alloue a la largeur du modele (4) et B_z est peuple ---
-  chk(cpl.aux().fab(0).ncomp() == 4, "aux_width_is_model_width");
+  ASSERT_TRUE(cpl.aux().fab(0).ncomp() == 4) << "aux_width_is_model_width";
   cpl.solve_fields(U);  // Poisson (f=0 -> phi=0) puis derive aux
   {
     double maxphi = 0, maxbz = 0;
@@ -85,9 +75,8 @@ static int pops_run_test_aux_coupler_bz() {
           maxbz = std::max(maxbz, std::fabs(a(i, j, 3) - c));  // B_z = c
         }
     }
-    std::printf("  (A) apres solve : max|phi|=%.2e  max|B_z - c|=%.2e\n", maxphi, maxbz);
-    chk(maxphi < 1e-12, "phi_is_zero");
-    chk(maxbz < 1e-14, "Bz_populated");
+    EXPECT_TRUE(maxphi < 1e-12) << "phi_is_zero (max|phi|=" << maxphi << ")";
+    EXPECT_TRUE(maxbz < 1e-14) << "Bz_populated (max|B_z - c|=" << maxbz << ")";
   }
 
   // --- (B) le chemin complet applique B_z : du/dt = c u -> u = A^N (amplification SSPRK2) ---
@@ -109,17 +98,8 @@ static int pops_run_test_aux_coupler_bz() {
           val = u(i, j, 0);
         }
     }
-    std::printf("  (B) apres %d pas : u=%.6f  attendu A^N=%.6f  err=%.2e\n", N, val, expected,
-                maxerr);
-    chk(maxerr < 1e-10, "Bz_drives_growth_ssprk2");
-    chk(val > 1.05, "u_grew");  // c>0 -> croissance nette
+    EXPECT_TRUE(maxerr < 1e-10) << "Bz_drives_growth_ssprk2 (u=" << val << " attendu=" << expected
+                                << " err=" << maxerr << ")";
+    EXPECT_TRUE(val > 1.05) << "u_grew (val=" << val << ")";  // c>0 -> croissance nette
   }
-
-  if (fails == 0)
-    std::printf("OK test_aux_coupler_bz\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_aux_coupler_bz, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_aux_coupler_bz, "test_aux_coupler_bz"), 0);
 }

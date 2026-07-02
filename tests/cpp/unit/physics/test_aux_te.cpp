@@ -6,7 +6,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/physics/composition/composite.hpp>
 #include <pops/physics/fluids/euler.hpp>       // Euler (bloc fluide source de T_e)
 #include <pops/physics/bricks/hyperbolic.hpp>  // ExBVelocity
@@ -15,7 +14,6 @@
 #include <pops/runtime/system.hpp>
 
 #include <cmath>
-#include <cstdio>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -45,21 +43,12 @@ using ProbeModel = CompositeModel<ExBVelocity, TeSource, NoEll>;  // lit T_e
 using GasModel = CompositeModel<Euler, NoSource, NoEll>;          // fournit p/rho
 static_assert(ProbeModel::n_aux == 5, "le probe lit T_e (composante aux 4)");
 
-static int pops_run_test_aux_te(int argc, char** argv) {
+TEST(AuxTe, DerivedFromGasDrivesProbeSource) {
 #if defined(POPS_HAS_KOKKOS)
+  int argc = 0;
+  char** argv = nullptr;
   Kokkos::ScopeGuard guard(argc, argv);
-#else
-  (void)argc;
-  (void)argv;
 #endif
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
   const int n = 16;
   const double gamma = 1.4, rho_gas = 1.0, p_gas = 3.0;
   const double Te = p_gas / rho_gas;  // T = p / rho = 3
@@ -92,14 +81,5 @@ static int pops_run_test_aux_te(int argc, char** argv) {
   double err = 0;
   for (double r : R)
     err = std::fmax(err, std::fabs(r - Te));
-  std::printf("  T_e derive p/rho : eval_rhs(probe) max|R - T_e| = %.2e (T_e=%.3g)\n", err, Te);
-  chk(err < 1e-12, "te_derived_and_read");
-
-  if (fails == 0)
-    std::printf("OK test_aux_te\n");
-  return fails ? 1 : 0;
-}
-
-TEST(test_aux_te, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_aux_te, "test_aux_te"), 0);
+  EXPECT_TRUE(err < 1e-12) << "te_derived_and_read (max|R - T_e|=" << err << " T_e=" << Te << ")";
 }

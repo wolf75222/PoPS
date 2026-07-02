@@ -10,7 +10,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/physical_model.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
@@ -28,7 +27,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 
 using namespace pops;
 
@@ -60,15 +58,7 @@ static_assert(MagModel::n_aux == 4, "CompositeModel propage n_aux d'une brique")
 static_assert(aux_comps<MagModel>() == 4, "aux_comps voit le n_aux du compose");
 static_assert(PlainModel::n_aux == 3, "compose sans champ extra = contrat de base");
 
-static int pops_run_test_aux_composite() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+TEST(AuxComposite, CompositeModelReadsBz) {
   const int n = 16;
   const Real L = 1.0, Bz = 0.4;
   Box2D dom = Box2D::from_extents(n, n);
@@ -102,14 +92,5 @@ static int pops_run_test_aux_composite() {
       for (int i = v.lo[0]; i <= v.hi[0]; ++i)
         maxerr = std::max(maxerr, std::fabs(r(i, j, 0) - Bz));
   }
-  std::printf("  composite n_aux=%d : max|R - B_z| = %.2e\n", MagModel::n_aux, maxerr);
-  chk(maxerr < 1e-14, "composite_reads_Bz");
-
-  if (fails == 0)
-    std::printf("OK test_aux_composite\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_aux_composite, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_aux_composite, "test_aux_composite"), 0);
+  EXPECT_TRUE(maxerr < 1e-14) << "composite_reads_Bz (max|R - B_z|=" << maxerr << ")";
 }

@@ -9,7 +9,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/physical_model.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
@@ -24,7 +23,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
+#include <memory>
 
 using namespace pops;
 
@@ -76,86 +75,76 @@ static void fill_aux_comp(MultiFab& aux, int c, Real v) {
   }
 }
 
-static int pops_run_test_aux_extra() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
-  const int n = 16;
-  const double L = 1.0;
-  Box2D dom = Box2D::from_extents(n, n);
-  Geometry geom{dom, 0.0, L, 0.0, L};
-  BoxArray ba = BoxArray::from_domain(dom, n);
-  DistributionMapping dm(ba.size(), n_ranks());
-  BCRec bc;  // periodique
-
-  MultiFab U(ba, dm, 1, 1);
-  U.set_val(1.0);  // u = 1 partout (ghosts inclus)
-
-  // --- (A) modele a n_aux=4 : la source lit bien B_z (composante aux 3) ---
-  {
-    const Real Bz = 0.7;
-    MultiFab aux(ba, dm, 4, 1);  // canal aux elargi a 4 composantes
-    aux.set_val(0.0);
-    fill_aux_comp(aux, 3, Bz);  // B_z partout
-    MultiFab R(ba, dm, 1, 0);
-    R.set_val(-12345.0);
-    MagSource m;
-    assemble_rhs<NoSlope>(m, U, aux, geom, R);  // flux nul -> R = source = B_z * u = 0.7
-    double maxerr = 0;
-    for (int li = 0; li < R.local_size(); ++li) {
-      const ConstArray4 r = R.fab(li).const_array();
-      const Box2D v = R.box(li);
-      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-        for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-          maxerr = std::max(maxerr, std::fabs(r(i, j, 0) - Bz));
-    }
-    std::printf("  (A) n_aux=4 : max|R - B_z| = %.2e\n", maxerr);
-    chk(maxerr < 1e-14, "extra_aux_Bz_read");
+// Fixture partagee : domaine periodique 16x16 et etat U = 1 (ghosts inclus), communs aux deux
+// sections (A) et (B), qui sont independantes (chacune construit son propre canal aux/R).
+class AuxExtra : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    dom_ = Box2D::from_extents(n_, n_);
+    geom_ = std::make_unique<Geometry>(dom_, 0.0, L_, 0.0, L_);
+    ba_ = std::make_unique<BoxArray>(BoxArray::from_domain(dom_, n_));
+    dm_ = std::make_unique<DistributionMapping>(ba_->size(), n_ranks());
+    U_ = std::make_unique<MultiFab>(*ba_, *dm_, 1, 1);
+    U_->set_val(1.0);  // u = 1 partout (ghosts inclus)
   }
 
-  // --- (B) retro-compat : un modele de base ignore STRICTEMENT la composante 3 ---
-  // Meme grad_x impose ; comp 3 = 0 puis 999. R doit etre IDENTIQUE (B_z jamais lu).
-  {
-    const Real gx = 0.3;
-    auto run = [&](Real comp3) {
-      MultiFab aux(ba, dm, 4, 1);
-      aux.set_val(0.0);
-      fill_aux_comp(aux, 1, gx);     // grad_x
-      fill_aux_comp(aux, 3, comp3);  // B_z parasite : ne doit pas etre lu
-      MultiFab R(ba, dm, 1, 0);
-      GradSource m;
-      assemble_rhs<NoSlope>(m, U, aux, geom, R);
-      return R;
-    };
-    MultiFab R0 = run(0.0);
-    MultiFab R1 = run(999.0);
-    double maxdiff = 0, val = 0;
-    for (int li = 0; li < R0.local_size(); ++li) {
-      const ConstArray4 r0 = R0.fab(li).const_array();
-      const ConstArray4 r1 = R1.fab(li).const_array();
-      const Box2D v = R0.box(li);
-      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-        for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
-          maxdiff = std::max(maxdiff, std::fabs(r0(i, j, 0) - r1(i, j, 0)));
-          val = r0(i, j, 0);
-        }
-    }
-    std::printf("  (B) base n_aux=3 : R(c3=0) vs R(c3=999) max diff = %.2e (R=%.3f)\n", maxdiff,
-                val);
-    chk(maxdiff == 0.0, "base_model_ignores_extra_comp");
-    chk(std::fabs(val - gx) < 1e-14, "base_model_reads_grad_x");
-  }
+  const int n_ = 16;
+  const double L_ = 1.0;
+  Box2D dom_;
+  std::unique_ptr<Geometry> geom_;
+  std::unique_ptr<BoxArray> ba_;
+  std::unique_ptr<DistributionMapping> dm_;
+  std::unique_ptr<MultiFab> U_;
+};
 
-  if (fails == 0)
-    std::printf("OK test_aux_extra\n");
-  return fails == 0 ? 0 : 1;
+// --- (A) modele a n_aux=4 : la source lit bien B_z (composante aux 3) ---
+TEST_F(AuxExtra, ExtraAuxBzRead) {
+  const Real Bz = 0.7;
+  MultiFab aux(*ba_, *dm_, 4, 1);  // canal aux elargi a 4 composantes
+  aux.set_val(0.0);
+  fill_aux_comp(aux, 3, Bz);  // B_z partout
+  MultiFab R(*ba_, *dm_, 1, 0);
+  R.set_val(-12345.0);
+  MagSource m;
+  assemble_rhs<NoSlope>(m, *U_, aux, *geom_, R);  // flux nul -> R = source = B_z * u = 0.7
+  double maxerr = 0;
+  for (int li = 0; li < R.local_size(); ++li) {
+    const ConstArray4 r = R.fab(li).const_array();
+    const Box2D v = R.box(li);
+    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+      for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+        maxerr = std::max(maxerr, std::fabs(r(i, j, 0) - Bz));
+  }
+  EXPECT_TRUE(maxerr < 1e-14) << "extra_aux_Bz_read (max|R - B_z|=" << maxerr << ")";
 }
 
-TEST(test_aux_extra, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_aux_extra, "test_aux_extra"), 0);
+// --- (B) retro-compat : un modele de base ignore STRICTEMENT la composante 3 ---
+// Meme grad_x impose ; comp 3 = 0 puis 999. R doit etre IDENTIQUE (B_z jamais lu).
+TEST_F(AuxExtra, BaseModelIgnoresExtraComp) {
+  const Real gx = 0.3;
+  auto run = [&](Real comp3) {
+    MultiFab aux(*ba_, *dm_, 4, 1);
+    aux.set_val(0.0);
+    fill_aux_comp(aux, 1, gx);     // grad_x
+    fill_aux_comp(aux, 3, comp3);  // B_z parasite : ne doit pas etre lu
+    MultiFab R(*ba_, *dm_, 1, 0);
+    GradSource m;
+    assemble_rhs<NoSlope>(m, *U_, aux, *geom_, R);
+    return R;
+  };
+  MultiFab R0 = run(0.0);
+  MultiFab R1 = run(999.0);
+  double maxdiff = 0, val = 0;
+  for (int li = 0; li < R0.local_size(); ++li) {
+    const ConstArray4 r0 = R0.fab(li).const_array();
+    const ConstArray4 r1 = R1.fab(li).const_array();
+    const Box2D v = R0.box(li);
+    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+      for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
+        maxdiff = std::max(maxdiff, std::fabs(r0(i, j, 0) - r1(i, j, 0)));
+        val = r0(i, j, 0);
+      }
+  }
+  EXPECT_TRUE(maxdiff == 0.0) << "base_model_ignores_extra_comp (max diff=" << maxdiff << ")";
+  EXPECT_TRUE(std::fabs(val - gx) < 1e-14) << "base_model_reads_grad_x (R=" << val << ")";
 }

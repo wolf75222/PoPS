@@ -28,7 +28,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/state/state.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
@@ -45,7 +44,6 @@
 #include <pops/physics/bricks/hyperbolic.hpp>
 
 #include <cmath>
-#include <cstdio>
 #include <vector>
 
 using namespace pops;
@@ -254,93 +252,58 @@ static double run_conservation() {
 
   const double m1 = total_mass(U, g, dom);
   const double rel = std::fabs(m1 - m0) / std::fabs(m0);
-  std::printf("[conservation] masse initiale=%.15e finale=%.15e  ecart relatif=%.3e (K=%d pas)\n",
-              m0, m1, rel, nsteps);
   return rel;
 }
 
-static int pops_run_test_polar_transport_mms() {
-  std::printf("=== MMS + conservation de l'operateur de transport POLAIRE (Phase 1) ===\n");
-  std::printf("Anneau r in [%.2f, %.2f], theta in [0, 2pi), mode azimutal m=%d, B0=%.1f\n", kRmin,
-              kRmax, kMode, kB0);
-
-  bool ok = true;
+// (A) CONVERGENCE MMS de la divergence polaire. L'operateur est un schema VOLUMES FINIS conservatif
+// a flux de FACE ponctuels, comme l'operateur cartesien : (1/r_i) (r_{i+1/2}F_{i+1/2} -
+// r_{i-1/2}F_{i-1/2})/dr + (1/r_i)(Ftheta_{j+1/2}-Ftheta_{j-1/2})/dtheta. La PONDERATION par le rayon
+// de face (r_{i+/-1/2}, constantes DIFFERENTES sur les deux faces) brise le telescopage haut ordre
+// exact du cartesien uniforme -> l'operateur de DIVERGENCE est formellement d'ORDRE 2 (resultat
+// STANDARD du FV-WENO sur grille a metrique : une quadrature de face d'ordre eleve serait necessaire
+// pour preserver l'ordre 5, hors scope Phase 1). WENO5-Z apporte ici la FAIBLE DISSIPATION / capture
+// de gradient (le benefice mesure par le proto Phase-0 : rapport 73 sur le pic radial), PAS un ordre
+// formel superieur. On EXIGE donc une convergence d'ordre 2 PROPRE pour WENO5 ET minmod (un facteur
+// metrique r errone donnerait un ordre 0 ou une divergence) : c'est la preuve que la metrique polaire
+// est correctement portee. Vitesse CONSTANTE (aux constant) : la reconstruction de la vitesse est
+// exacte a la face, donc l'ordre observe est celui de l'operateur de divergence lui-meme (et v_r != 0
+// exerce le terme radial (1/r) d_r(r F_r)).
+TEST(test_polar_transport_mms, DivergenceConvergesAtOrderTwoConstantVelocity) {
   const int res[3] = {48, 96, 192};  // nth = 2 nr (anneau, theta plus echantillonne)
-
-  // (A) CONVERGENCE MMS de la divergence polaire. L'operateur est un schema VOLUMES FINIS conservatif
-  // a flux de FACE ponctuels, comme l'operateur cartesien : (1/r_i) (r_{i+1/2}F_{i+1/2} -
-  // r_{i-1/2}F_{i-1/2})/dr + (1/r_i)(Ftheta_{j+1/2}-Ftheta_{j-1/2})/dtheta. La PONDERATION par le rayon
-  // de face (r_{i+/-1/2}, constantes DIFFERENTES sur les deux faces) brise le telescopage haut ordre
-  // exact du cartesien uniforme -> l'operateur de DIVERGENCE est formellement d'ORDRE 2 (resultat
-  // STANDARD du FV-WENO sur grille a metrique : une quadrature de face d'ordre eleve serait necessaire
-  // pour preserver l'ordre 5, hors scope Phase 1). WENO5-Z apporte ici la FAIBLE DISSIPATION / capture
-  // de gradient (le benefice mesure par le proto Phase-0 : rapport 73 sur le pic radial), PAS un ordre
-  // formel superieur. On EXIGE donc une convergence d'ordre 2 PROPRE pour WENO5 ET minmod (un facteur
-  // metrique r errone donnerait un ordre 0 ou une divergence) : c'est la preuve que la metrique polaire
-  // est correctement portee. Vitesse CONSTANTE (aux constant) : la reconstruction de la vitesse est
-  // exacte a la face, donc l'ordre observe est celui de l'operateur de divergence lui-meme (et v_r != 0
-  // exerce le terme radial (1/r) d_r(r F_r)).
-  std::printf(
-      "\n--- (A) Convergence MMS de la divergence polaire (ordre 2, vitesse constante) ---\n");
   ErrNorms e[3];
-  for (int k = 0; k < 3; ++k) {
+  for (int k = 0; k < 3; ++k)
     e[k] = mms_error<Weno5>(res[k], 2 * res[k], /*const_vel=*/true);
-    std::printf("  WENO5  nr=%-4d nth=%-4d : L1=%.4e  Linf=%.4e\n", res[k], 2 * res[k], e[k].l1,
-                e[k].linf);
-  }
   const double p1 = std::log2(e[0].l1 / e[1].l1);
   const double p2 = std::log2(e[1].l1 / e[2].l1);
-  std::printf("  ordre observe WENO5 (L1) : %.2f (48->96), %.2f (96->192)\n", p1, p2);
   ErrNorms em[3];
   for (int k = 0; k < 3; ++k)
     em[k] = mms_error<Minmod>(res[k], 2 * res[k], /*const_vel=*/true);
   const double pm1 = std::log2(em[0].l1 / em[1].l1);
   const double pm2 = std::log2(em[1].l1 / em[2].l1);
-  std::printf("  ordre observe minmod (L1): %.2f (48->96), %.2f (96->192)\n", pm1, pm2);
   // Ordre 2 attendu : on accepte [1.7, 2.3] (la borne haute exclut un ordre artificiellement gonfle).
   auto order2_ok = [](double p) { return p >= 1.7 && p <= 2.3; };
-  if (!order2_ok(p1) || !order2_ok(p2) || !order2_ok(pm1) || !order2_ok(pm2)) {
-    std::printf("  ECHEC : ordre hors [1.7, 2.3] (metrique polaire incoherente)\n");
-    ok = false;
-  } else {
-    std::printf(
-        "  OK : convergence d'ordre 2 propre (metrique polaire correcte, WENO5 et minmod)\n");
-  }
+  EXPECT_TRUE(order2_ok(p1) && order2_ok(p2) && order2_ok(pm1) && order2_ok(pm2))
+      << "ordre hors [1.7, 2.3] (metrique polaire incoherente) : WENO5 p1=" << p1 << " p2=" << p2
+      << ", minmod pm1=" << pm1 << " pm2=" << pm2;
+}
 
-  // (A') Champ ExB VARIABLE (realiste, lisse) : meme operateur, aux non constant -> la vitesse de face
-  // (aux pris au centre des cellules, comme le cartesien) est elle aussi d'ordre 2 ; l'operateur
-  // converge encore proprement a l'ordre 2 sur un champ non trivial. Confirme la coherence de
-  // reconstruct<> (reutilise verbatim) sur un cas ou densite ET vitesse varient.
-  std::printf("\n--- (A') MMS champ ExB variable : ordre 2 sur densite + vitesse variables ---\n");
+// (A') Champ ExB VARIABLE (realiste, lisse) : meme operateur, aux non constant -> la vitesse de face
+// (aux pris au centre des cellules, comme le cartesien) est elle aussi d'ordre 2 ; l'operateur
+// converge encore proprement a l'ordre 2 sur un champ non trivial. Confirme la coherence de
+// reconstruct<> (reutilise verbatim) sur un cas ou densite ET vitesse varient.
+TEST(test_polar_transport_mms, DivergenceConvergesOnVariableExBField) {
   ErrNorms ew[2];
   ew[0] = mms_error<Weno5>(96, 192, /*const_vel=*/false);
   ew[1] = mms_error<Weno5>(192, 384, /*const_vel=*/false);
   const double pw = std::log2(ew[0].l1 / ew[1].l1);
-  std::printf("  WENO5 : L1(96)=%.4e L1(192)=%.4e ordre=%.2f\n", ew[0].l1, ew[1].l1, pw);
-  if (pw < 1.7) {
-    std::printf(
-        "  ECHEC : ordre < 1.7 sur champ variable (metrique ou reconstruction incoherente)\n");
-    ok = false;
-  } else {
-    std::printf("  OK : ordre 2 sur champ variable\n");
-  }
-
-  // (B) CONSERVATION : masse conservee a la machine (champ azimutal pur, v_r = 0).
-  std::printf("\n--- (B) Conservation FV (champ azimutal pur, v_r = 0) ---\n");
-  const double rel = run_conservation();
-  // Tolerance machine elargie (accumulation sur K pas x 3 etages SSPRK3, reductions hote) : 1e-12.
-  if (rel > 1e-12) {
-    std::printf("  ECHEC : ecart de masse %.3e > 1e-12\n", rel);
-    ok = false;
-  } else {
-    std::printf("  OK : masse conservee a ~machine (%.3e <= 1e-12)\n", rel);
-  }
-
-  std::printf("\n=== VERDICT : %s ===\n", ok ? "SUCCESS" : "ECHEC");
-  std::printf("OK test_polar_transport_mms\n");
-  return ok ? 0 : 1;
+  EXPECT_TRUE(pw >= 1.7) << "ordre < 1.7 sur champ variable (metrique ou reconstruction "
+                            "incoherente) : L1(96)="
+                         << ew[0].l1 << " L1(192)=" << ew[1].l1 << " ordre=" << pw;
 }
 
-TEST(test_polar_transport_mms, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_polar_transport_mms, "test_polar_transport_mms"), 0);
+// (B) CONSERVATION : masse conservee a la machine (champ azimutal pur, v_r = 0). Tolerance machine
+// elargie (accumulation sur K pas x 3 etages SSPRK3, reductions hote) : 1e-12.
+TEST(test_polar_transport_mms, MassConservedWithPureAzimuthalField) {
+  const double rel = run_conservation();
+  EXPECT_TRUE(rel <= 1e-12) << "ecart de masse relatif = " << rel << " > 1e-12";
 }

@@ -12,7 +12,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/system/system_coupler.hpp>
@@ -22,7 +21,6 @@
 #include <pops/mesh/storage/multifab.hpp>
 
 #include <cmath>
-#include <cstdio>
 #include <type_traits>
 
 using namespace pops;
@@ -66,61 +64,75 @@ static_assert(EquationBlockLike<IonBlock>);
 static_assert(ElectronBlock::Time::treatment == TimeTreatment::Implicit);
 static_assert(IonBlock::Time::treatment == TimeTreatment::Explicit);
 
-static int pops_run_test_two_species_minimal() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
+// Fixture partageant la composition du cas (electrons implicites + ions explicites + Poisson a
+// 2 especes) et l'unique macro-pas : les 3 groupes de verification (ions, electrons, RHS Poisson)
+// portent sur l'etat resultant de ce meme pas, mais sont independants entre eux.
+class TwoSpeciesMinimal : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    ba_ = BoxArray::from_domain(dom_, 4);
+    dm_ = DistributionMapping(ba_.size(), n_ranks());
+    Ue_ = MultiFab(ba_, dm_, 1, 2);
+    Ui_ = MultiFab(ba_, dm_, 1, 2);
+    Ue_.set_val(Real(5));  // loin de neq=1 : la relaxation doit etre forte
+    Ui_.set_val(Real(0));
+  }
 
-  const Box2D dom = Box2D::from_extents(4, 4);
-  const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
-  const BoxArray ba = BoxArray::from_domain(dom, 4);
-  const DistributionMapping dm(ba.size(), n_ranks());
-  const int ncell = 16;
-  BCRec bc;  // periodique partout (le defaut)
+  static constexpr int kNcell = 16;
+  static constexpr Real kDt = Real(0.1);
 
-  MultiFab Ue(ba, dm, 1, 2), Ui(ba, dm, 1, 2);
-  Ue.set_val(Real(5));  // loin de neq=1 : la relaxation doit etre forte
-  Ui.set_val(Real(0));
+  Box2D dom_ = Box2D::from_extents(4, 4);
+  Geometry geom_{dom_, 0.0, 1.0, 0.0, 1.0};
+  BoxArray ba_;
+  DistributionMapping dm_{1, 1};
+  BCRec bc_;  // periodique partout (le defaut)
+  MultiFab Ue_, Ui_;
+};
 
-  // --- composition du cas : trois briques par espece, rien de plus ---
-  ElectronBlock electrons{"electrons", ElectronRelax{}, Ue, bc};
-  IonBlock ions{"ions", IonProduction{}, Ui, bc};
+TEST_F(TwoSpeciesMinimal, IonExplicitBlockAdvancesExactly) {
+  ElectronBlock electrons{"electrons", ElectronRelax{}, Ue_, bc_};
+  IonBlock ions{"ions", IonProduction{}, Ui_, bc_};
   CoupledSystem system{electrons, ions};
-
-  // Poisson rhs = Sum_s q_s n_s = (+1) n_i + (-1) n_e = n_i - n_e.
   ChargeDensityRhs charge{{{Real(-1), 0}, {Real(1), 0}}};  // [electrons, ions]
-  auto sim = make_system_coupler(system, geom, ba, bc, charge);
+  auto sim = make_system_coupler(system, geom_, ba_, bc_, charge);
 
-  // Un pas : electrons via le defaut implicite, ions explicites par le coeur.
-  const Real dt = Real(0.1);
-  sim.step(dt, ImplicitSourceStepper{});
+  sim.step(kDt, ImplicitSourceStepper{});
 
-  // (1) Ions explicites : production constante exacte, n_i = dt * rate = 0.3.
-  chk(std::fabs(sum(Ui) - Real(0.3) * ncell) < Real(1e-12), "ion_explicit");
-
-  // (2) Electrons implicites : backward-Euler exact pour la relaxation lineaire,
-  //     n_e = (n0 + dt k neq) / (1 + dt k). dt*k = 100 : un schema explicite
-  //     EXPLOSERAIT (n_e ~ 5 - 400). Ici la valeur reste bornee et proche de neq.
-  const Real ne_be = (Real(5) + dt * Real(1000) * Real(1)) / (Real(1) + dt * Real(1000));
-  chk(std::fabs(sum(Ue) - ne_be * ncell) < Real(1e-9), "electron_implicit_exact");
-  chk(sum(Ue) > Real(0) && sum(Ue) < Real(5) * ncell, "electron_implicit_bounded");
-
-  // (3) RHS Poisson a N especes, non nul (jalon 2.1.1 / 2.5.1) : f = n_i - n_e,
-  //     et l'assembleur somme bien sur tous les blocs.
-  MultiFab rhs(ba, dm, 1, 0);
-  charge(system, rhs);
-  chk(std::fabs(sum(rhs) - (sum(Ui) - sum(Ue))) < Real(1e-12), "charge_density_rhs");
-  chk(std::fabs(sum(rhs)) > Real(1), "poisson_rhs_nonzero");
-
-  if (fails == 0)
-    std::printf("OK test_two_species_minimal\n");
-  return fails == 0 ? 0 : 1;
+  // Ions explicites : production constante exacte, n_i = dt * rate = 0.3.
+  EXPECT_TRUE(std::fabs(sum(Ui_) - Real(0.3) * kNcell) < Real(1e-12)) << "ion_explicit";
 }
 
-TEST(test_two_species_minimal, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_two_species_minimal, "test_two_species_minimal"), 0);
+TEST_F(TwoSpeciesMinimal, ElectronImplicitBlockIsBackwardEulerExactAndBounded) {
+  ElectronBlock electrons{"electrons", ElectronRelax{}, Ue_, bc_};
+  IonBlock ions{"ions", IonProduction{}, Ui_, bc_};
+  CoupledSystem system{electrons, ions};
+  ChargeDensityRhs charge{{{Real(-1), 0}, {Real(1), 0}}};  // [electrons, ions]
+  auto sim = make_system_coupler(system, geom_, ba_, bc_, charge);
+
+  sim.step(kDt, ImplicitSourceStepper{});
+
+  // Electrons implicites : backward-Euler exact pour la relaxation lineaire,
+  // n_e = (n0 + dt k neq) / (1 + dt k). dt*k = 100 : un schema explicite
+  // EXPLOSERAIT (n_e ~ 5 - 400). Ici la valeur reste bornee et proche de neq.
+  const Real ne_be = (Real(5) + kDt * Real(1000) * Real(1)) / (Real(1) + kDt * Real(1000));
+  EXPECT_TRUE(std::fabs(sum(Ue_) - ne_be * kNcell) < Real(1e-9)) << "electron_implicit_exact";
+  EXPECT_TRUE(sum(Ue_) > Real(0) && sum(Ue_) < Real(5) * kNcell) << "electron_implicit_bounded";
+}
+
+TEST_F(TwoSpeciesMinimal, PoissonRhsSumsAcrossSpeciesAndIsNonZero) {
+  ElectronBlock electrons{"electrons", ElectronRelax{}, Ue_, bc_};
+  IonBlock ions{"ions", IonProduction{}, Ui_, bc_};
+  CoupledSystem system{electrons, ions};
+  // Poisson rhs = Sum_s q_s n_s = (+1) n_i + (-1) n_e = n_i - n_e.
+  ChargeDensityRhs charge{{{Real(-1), 0}, {Real(1), 0}}};  // [electrons, ions]
+  auto sim = make_system_coupler(system, geom_, ba_, bc_, charge);
+
+  sim.step(kDt, ImplicitSourceStepper{});
+
+  // RHS Poisson a N especes, non nul (jalon 2.1.1 / 2.5.1) : f = n_i - n_e, et l'assembleur
+  // somme bien sur tous les blocs.
+  MultiFab rhs(ba_, dm_, 1, 0);
+  charge(system, rhs);
+  EXPECT_TRUE(std::fabs(sum(rhs) - (sum(Ui_) - sum(Ue_))) < Real(1e-12)) << "charge_density_rhs";
+  EXPECT_TRUE(std::fabs(sum(rhs)) > Real(1)) << "poisson_rhs_nonzero";
 }
