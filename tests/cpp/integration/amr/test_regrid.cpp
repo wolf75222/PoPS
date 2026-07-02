@@ -4,7 +4,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/amr/hierarchy/amr_hierarchy.hpp>
 #include <pops/amr/tagging/cluster.hpp>
 #include <pops/amr/regridding/regrid.hpp>
@@ -14,29 +13,27 @@
 #include <pops/mesh/storage/multifab.hpp>
 
 #include <cmath>
-#include <cstdio>
 
 using namespace pops;
 
+namespace {
+
 // feature centrale : 1 dans [6..9]^2, 0 ailleurs
-static double feature(int i, int j) {
+double feature(int i, int j) {
   return (i >= 6 && i <= 9 && j >= 6 && j <= 9) ? 1.0 : 0.0;
 }
 
-static auto threshold_crit() {
+auto threshold_crit() {
   return [](const ConstArray4& a, int i, int j) { return a(i, j, 0) > 0.5; };
 }
 
-static int pops_run_test_regrid() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-  auto close = [](Real x, Real y) { return std::fabs(x - y) < 1e-9; };
+bool close(Real x, Real y) {
+  return std::fabs(x - y) < 1e-9;
+}
 
+}  // namespace
+
+TEST(test_regrid, Runs) {
   Box2D cdom = Box2D::from_extents(16, 16);
 
   // --- regrid sans buffer : box fine = refine de la feature ---
@@ -49,15 +46,15 @@ static int pops_run_test_regrid() {
     rp.n_buffer = 0;
     regrid_level(h, 0, threshold_crit(), rp);
 
-    chk(h.num_levels() == 2, "level_created");
-    chk(h.domain(1) == cdom.refine(2), "fine_domain");
-    chk(h.boxes(1).size() == 1, "one_fine_box");
-    chk(h.boxes(1)[0] == (Box2D{{12, 12}, {19, 19}}), "fine_box_extent");
+    EXPECT_EQ(h.num_levels(), 2) << "level_created";
+    EXPECT_TRUE(h.domain(1) == cdom.refine(2)) << "fine_domain";
+    EXPECT_EQ(h.boxes(1).size(), 1) << "one_fine_box";
+    EXPECT_TRUE(h.boxes(1)[0] == (Box2D{{12, 12}, {19, 19}})) << "fine_box_extent";
     // interpolation injective : fine(12,12)=coarse(6,6)=1, fine(19,19)=coarse(9,9)=1
-    chk(close(h.data(1).fab(0)(12, 12, 0), 1.0), "interp_lo");
-    chk(close(h.data(1).fab(0)(19, 19, 0), 1.0), "interp_hi");
+    EXPECT_TRUE(close(h.data(1).fab(0)(12, 12, 0), 1.0)) << "interp_lo";
+    EXPECT_TRUE(close(h.data(1).fab(0)(19, 19, 0), 1.0)) << "interp_hi";
     // conservation de l'injection : 16 cellules grossieres -> 64 fines a 1
-    chk(close(sum(h.data(1)), 64.0), "interp_sum");
+    EXPECT_TRUE(close(sum(h.data(1)), 64.0)) << "interp_sum";
   }
 
   // --- buffer dilate la region taguee ---
@@ -70,7 +67,7 @@ static int pops_run_test_regrid() {
     rp.n_buffer = 1;
     regrid_level(h, 0, threshold_crit(), rp);
     // tags [6..9] dilates -> [5..10], refine -> [10..21]
-    chk(h.boxes(1)[0] == (Box2D{{10, 10}, {21, 21}}), "buffered_box");
+    EXPECT_TRUE(h.boxes(1)[0] == (Box2D{{10, 10}, {21, 21}})) << "buffered_box";
   }
 
   // --- re-regrid : l'ancien fin est preserve la ou il recouvre ---
@@ -85,8 +82,8 @@ static int pops_run_test_regrid() {
     h.data(1).fab(0)(12, 12, 0) = 999.0;  // marqueur dans le fin
 
     regrid_level(h, 0, threshold_crit(), rp);  // memes boxes
-    chk(close(h.data(1).fab(0)(12, 12, 0), 999.0), "old_fine_preserved");
-    chk(close(h.data(1).fab(0)(19, 19, 0), 1.0), "rest_interpolated");
+    EXPECT_TRUE(close(h.data(1).fab(0)(12, 12, 0), 999.0)) << "old_fine_preserved";
+    EXPECT_TRUE(close(h.data(1).fab(0)(19, 19, 0), 1.0)) << "rest_interpolated";
   }
 
   // --- tagging vide : le niveau fin disparait ---
@@ -95,18 +92,10 @@ static int pops_run_test_regrid() {
     Array4 a = h.data(0).fab(0).array();
     for_each_cell(cdom, [a](int i, int j) { a(i, j, 0) = feature(i, j); });
     regrid_level(h, 0, threshold_crit(), RegridParams{});
-    chk(h.num_levels() == 2, "before_clear");
+    EXPECT_EQ(h.num_levels(), 2) << "before_clear";
 
     h.data(0).set_val(0.0);  // plus aucune cellule au-dessus du seuil
     regrid_level(h, 0, threshold_crit(), RegridParams{});
-    chk(h.num_levels() == 1, "fine_removed");
+    EXPECT_EQ(h.num_levels(), 1) << "fine_removed";
   }
-
-  if (fails == 0)
-    std::printf("OK test_regrid\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_regrid, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_regrid, "test_regrid"), 0);
 }

@@ -22,7 +22,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
@@ -43,6 +42,8 @@
 #include <vector>
 
 using namespace pops;
+
+namespace {
 
 // --- Impl JOUET : satisfait le contrat structurel de SystemStepper<Impl> -----------------------------
 // Membres lus par le gabarit : Species (= SystemBlockStore::BlockState), sp, solve_fields(), t,
@@ -101,7 +102,7 @@ struct MockImpl {
 
 using Stepper = pops::stepper::SystemStepper<MockImpl>;
 
-static void fill_ic(MultiFab& U, Real x0, Real y0) {
+void fill_ic(MultiFab& U, Real x0, Real y0) {
   for (int li = 0; li < U.local_size(); ++li) {
     Array4 a = U.fab(li).array();
     const Box2D b = U.box(li);
@@ -116,7 +117,7 @@ static void fill_ic(MultiFab& U, Real x0, Real y0) {
 // Construit un Impl jouet a UN bloc avec le transport H (x += h y). L'etage source generique
 // (source_step) est branche PAR L'APPELANT apres que impl a son adresse FINALE (la fermeture capture
 // &impl->g, peuple par solve_fields). eff_dt/n sous-pas non utiles ici (operateur lineaire, n=1).
-static MockImpl make_impl(Real x0, Real y0) {
+MockImpl make_impl(Real x0, Real y0) {
   const int N = 4;
   Box2D dom = Box2D::from_extents(N, N);
   BoxArray ba(std::vector<Box2D>{dom});
@@ -148,7 +149,7 @@ static MockImpl make_impl(Real x0, Real y0) {
 
 // Branche l'etage source generique S (exp(B h) -> y += h g, g = champ resolu par solve_fields) sur le
 // bloc 0 de @p impl (capture l'adresse FINALE de impl).
-static void attach_source(MockImpl& impl) {
+void attach_source(MockImpl& impl) {
   MockImpl* self = &impl;
   impl.sp[0].source_step = [self](MultiFab& U, Real h) {
     const Real g = self->g;  // champ resolu (g <- x courant) par le dernier solve_fields
@@ -163,7 +164,7 @@ static void attach_source(MockImpl& impl) {
 }
 
 // Erreur max vs solution exacte a T, en n macro-pas, schema strang/lie.
-static double run(bool strang, int n, double T, Real x0, Real y0) {
+double run(bool strang, int n, double T, Real x0, Real y0) {
   MockImpl impl = make_impl(x0, y0);
   attach_source(impl);
   Stepper st(&impl);
@@ -186,7 +187,7 @@ static double run(bool strang, int n, double T, Real x0, Real y0) {
 }
 
 // Compte des solve_fields sur k macro-pas pour le schema donne (structure de la consistance phi).
-static int count_solves(bool strang, int k) {
+int count_solves(bool strang, int k) {
   MockImpl impl = make_impl(Real(1), Real(0));
   attach_source(impl);
   Stepper st(&impl);
@@ -197,8 +198,8 @@ static int count_solves(bool strang, int k) {
 
 // Lit l'etat final (x, y) d'un run a UN seul macro-pas, avec source et/ou transport desactives, pour
 // les cas degeneres (Strang == transport pur si source nulle ; Strang == source pure si transport nul).
-static void run_one_step(bool with_transport, bool with_source, double dt, Real x0, Real y0,
-                         double& xf, double& yf) {
+void run_one_step(bool with_transport, bool with_source, double dt, Real x0, Real y0, double& xf,
+                  double& yf) {
   MockImpl impl = make_impl(x0, y0);
   if (!with_transport)
     impl.sp[0].advance = [](MultiFab&, Real, int) {};  // H = identite
@@ -213,83 +214,73 @@ static void run_one_step(bool with_transport, bool with_source, double dt, Real 
   yf = a(0, 0, 1);
 }
 
-static int pops_run_test_strang_splitting() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
+}  // namespace
 
+// (A) ORDRE TEMPOREL observe : Strang ~2, Lie ~1.
+TEST(test_strang_splitting, observed_temporal_order_strang2_lie1) {
   const double T = 0.8;
   const Real x0 = 1.0, y0 = 0.0;
 
-  // --- (A) ORDRE TEMPOREL observe : Strang ~2, Lie ~1 -------------------------------------------------
   const double sE1 = run(true, 20, T, x0, y0), sE2 = run(true, 40, T, x0, y0);
   const double lE1 = run(false, 20, T, x0, y0), lE2 = run(false, 40, T, x0, y0);
   const double sOrder = std::log2(sE1 / sE2);
   const double lOrder = std::log2(lE1 / lE2);
   std::printf("Strang : err(20)=%.3e err(40)=%.3e ordre=%.2f\n", sE1, sE2, sOrder);
   std::printf("Lie    : err(20)=%.3e err(40)=%.3e ordre=%.2f\n", lE1, lE2, lOrder);
-  chk(sOrder > 1.8 && sOrder < 2.2, "strang_ordre_2");
-  chk(lOrder > 0.8 && lOrder < 1.3, "lie_ordre_1");
-  chk(sE1 < lE1, "strang_plus_precis_que_lie");
-
-  // --- (B) NON-REGRESSION Lie : le chemin Lie est INCHANGE (= H(dt) puis S(dt), 1 seul solve) ---------
-  // On reproduit le pas Lie a la main (H(dt) ; S(dt) avec g <- x apres H) et on compare au stepper Lie.
-  {
-    const double dt = 0.05;
-    double xs, ys;
-    {  // stepper Lie, 1 pas
-      MockImpl impl = make_impl(x0, y0);
-      attach_source(impl);
-      Stepper st(&impl);
-      st.set_scheme(pops::stepper::SplitScheme::Lie);
-      st.step(dt);
-      const ConstArray4 a = impl.sp[0].U.fab(0).const_array();
-      xs = a(0, 0, 0);
-      ys = a(0, 0, 1);
-    }
-    // Reference manuelle Lie : solve (g=x0) ; H : x = x0 + dt*y0 ; S : y = y0 + dt*g(=x0).
-    const double xref = (double)x0 + dt * (double)y0;
-    const double yref = (double)y0 + dt * (double)x0;
-    chk(std::fabs(xs - xref) < 1e-14, "lie_x_inchange");
-    chk(std::fabs(ys - yref) < 1e-14, "lie_y_inchange");
-    chk(count_solves(false, 5) == 5, "lie_un_solve_par_pas");  // 1 solve_fields / macro-pas
-  }
-
-  // --- (C) CONSISTANCE phi : Strang RE-RESOUT solve_fields entre les etages (3 / macro-pas) -----------
-  chk(count_solves(true, 5) == 15, "strang_trois_solves_par_pas");  // 3 solve_fields / macro-pas
-
-  // --- (D) DEGENERESCENCE source nulle : Strang(H(dt/2) S0 H(dt/2)) == transport pur H(dt) ------------
-  {
-    const double dt = 0.3;
-    double xf, yf;
-    run_one_step(/*transport*/ true, /*source*/ false, dt, x0, y0, xf, yf);
-    // H seul : 2 demi-avances de transport pur = H(dt/2) puis H(dt/2). y inchange ; x += dt*y0.
-    const double xref = (double)x0 + dt * (double)y0;
-    chk(std::fabs(xf - xref) < 1e-14 && std::fabs(yf - (double)y0) < 1e-14,
-        "strang_source_nulle_eq_transport");
-  }
-
-  // --- (E) DEGENERESCENCE transport nul : Strang(H0 S(dt) H0) == source pure S(dt) --------------------
-  {
-    const double dt = 0.3;
-    double xf, yf;
-    run_one_step(/*transport*/ false, /*source*/ true, dt, x0, y0, xf, yf);
-    // H = identite -> g = x0 a chaque solve. S(dt) plein : y = y0 + dt*x0 ; x inchange.
-    const double xref = (double)x0;
-    const double yref = (double)y0 + dt * (double)x0;
-    chk(std::fabs(xf - xref) < 1e-14 && std::fabs(yf - yref) < 1e-14,
-        "strang_transport_nul_eq_source");
-  }
-
-  if (fails == 0)
-    std::printf("OK test_strang_splitting\n");
-  return fails == 0 ? 0 : 1;
+  EXPECT_TRUE(sOrder > 1.8 && sOrder < 2.2) << "strang_ordre_2";
+  EXPECT_TRUE(lOrder > 0.8 && lOrder < 1.3) << "lie_ordre_1";
+  EXPECT_LT(sE1, lE1) << "strang_plus_precis_que_lie";
 }
 
-TEST(test_strang_splitting, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_strang_splitting, "test_strang_splitting"), 0);
+// (B) NON-REGRESSION Lie : le chemin Lie est INCHANGE (= H(dt) puis S(dt), 1 seul solve).
+TEST(test_strang_splitting, lie_path_matches_manual_reference) {
+  const Real x0 = 1.0, y0 = 0.0;
+  const double dt = 0.05;
+  double xs, ys;
+  {  // stepper Lie, 1 pas
+    MockImpl impl = make_impl(x0, y0);
+    attach_source(impl);
+    Stepper st(&impl);
+    st.set_scheme(pops::stepper::SplitScheme::Lie);
+    st.step(dt);
+    const ConstArray4 a = impl.sp[0].U.fab(0).const_array();
+    xs = a(0, 0, 0);
+    ys = a(0, 0, 1);
+  }
+  // Reference manuelle Lie : solve (g=x0) ; H : x = x0 + dt*y0 ; S : y = y0 + dt*g(=x0).
+  const double xref = (double)x0 + dt * (double)y0;
+  const double yref = (double)y0 + dt * (double)x0;
+  EXPECT_LT(std::fabs(xs - xref), 1e-14) << "lie_x_inchange";
+  EXPECT_LT(std::fabs(ys - yref), 1e-14) << "lie_y_inchange";
+  EXPECT_EQ(count_solves(false, 5), 5) << "lie_un_solve_par_pas";  // 1 solve_fields / macro-pas
+}
+
+// (C) CONSISTANCE phi : Strang RE-RESOUT solve_fields entre les etages (3 / macro-pas).
+TEST(test_strang_splitting, strang_resolves_fields_three_times_per_step) {
+  EXPECT_EQ(count_solves(true, 5), 15) << "strang_trois_solves_par_pas";  // 3 solve_fields / macro-pas
+}
+
+// (D) DEGENERESCENCE source nulle : Strang(H(dt/2) S0 H(dt/2)) == transport pur H(dt).
+TEST(test_strang_splitting, zero_source_degenerates_to_pure_transport) {
+  const Real x0 = 1.0, y0 = 0.0;
+  const double dt = 0.3;
+  double xf, yf;
+  run_one_step(/*transport*/ true, /*source*/ false, dt, x0, y0, xf, yf);
+  // H seul : 2 demi-avances de transport pur = H(dt/2) puis H(dt/2). y inchange ; x += dt*y0.
+  const double xref = (double)x0 + dt * (double)y0;
+  EXPECT_TRUE(std::fabs(xf - xref) < 1e-14 && std::fabs(yf - (double)y0) < 1e-14)
+      << "strang_source_nulle_eq_transport";
+}
+
+// (E) DEGENERESCENCE transport nul : Strang(H0 S(dt) H0) == source pure S(dt).
+TEST(test_strang_splitting, zero_transport_degenerates_to_pure_source) {
+  const Real x0 = 1.0, y0 = 0.0;
+  const double dt = 0.3;
+  double xf, yf;
+  run_one_step(/*transport*/ false, /*source*/ true, dt, x0, y0, xf, yf);
+  // H = identite -> g = x0 a chaque solve. S(dt) plein : y = y0 + dt*x0 ; x inchange.
+  const double xref = (double)x0;
+  const double yref = (double)y0 + dt * (double)x0;
+  EXPECT_TRUE(std::fabs(xf - xref) < 1e-14 && std::fabs(yf - yref) < 1e-14)
+      << "strang_transport_nul_eq_source";
 }

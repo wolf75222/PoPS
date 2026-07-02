@@ -85,15 +85,14 @@ def main():
     sim_missing = make_sim(m, with_bz=False)
     try:
         sim_missing.install_program(compiled.so_path)
-        print("MISMATCH: install accepted a simulation missing B_z")
-        return 1
+        raise AssertionError("install accepted a simulation missing B_z; expected a RuntimeError "
+                             "naming operator 'lorentz' and aux 'B_z'")
     except RuntimeError as exc:
         msg = str(exc)
         ok = "lorentz" in msg and "B_z" in msg and "did not provide" in msg
-        print("OK  install rejects a missing required aux: %s" % msg if ok
-              else "MISMATCH: unexpected error: %s" % msg)
-        if not ok:
-            return 1
+        assert ok, ("install rejection message must name operator 'lorentz', aux 'B_z' and "
+                    "'did not provide'; got: %s" % msg)
+        print("OK  install rejects a missing required aux: %s" % msg)
 
     # (2) Positive: providing B_z (set_magnetic_field) lets the same program install cleanly.
     sim_ok = make_sim(m, with_bz=True)

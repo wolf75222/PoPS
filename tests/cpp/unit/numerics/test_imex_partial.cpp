@@ -9,7 +9,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/system/system_coupler.hpp>
@@ -19,9 +18,10 @@
 #include <pops/mesh/storage/multifab.hpp>
 
 #include <cmath>
-#include <cstdio>
 
 using namespace pops;
+
+namespace {
 
 // Deux relaxations independantes. eq = (1, 2), k = (100, 1).
 struct TwoVarRelax {
@@ -52,8 +52,8 @@ static_assert(PartiallyImplicitModel<TwoVarRelaxPartial>);
 static_assert(!PartiallyImplicitModel<TwoVarRelax>);
 
 template <class Model>
-static void run(MultiFab& U, const Geometry& geom, const BoxArray& ba, const DistributionMapping&,
-                Real dt) {
+void run(MultiFab& U, const Geometry& geom, const BoxArray& ba, const DistributionMapping&,
+         Real dt) {
   using Blk = EquationBlock<Model, FirstOrder, IMEXTime<UserTimeIntegrator, 1>>;
   BCRec bc;
   Blk block{"relax", Model{}, U, bc};
@@ -62,15 +62,9 @@ static void run(MultiFab& U, const Geometry& geom, const BoxArray& ba, const Dis
   sim.step(dt, ImplicitSourceStepper{});
 }
 
-static int pops_run_test_imex_partial() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
+}  // namespace
 
+TEST(test_imex_partial, partial_trait_changes_only_the_flagged_variable) {
   const Box2D dom = Box2D::from_extents(4, 4);
   const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
   const BoxArray ba = BoxArray::from_domain(dom, 4);
@@ -93,19 +87,11 @@ static int pops_run_test_imex_partial() {
   run<TwoVarRelax>(Uf, geom, ba, dm, dt);         // tout implicite
 
   // var 0 raide : implicite dans les deux -> meme valeur bornee (pas d'explosion).
-  chk(std::fabs(sum(Up, 0) - W0 * ncell) < Real(1e-9), "partial_var0_implicit");
-  chk(std::fabs(sum(Uf, 0) - W0 * ncell) < Real(1e-9), "full_var0_implicit");
+  EXPECT_LT(std::fabs(sum(Up, 0) - W0 * ncell), Real(1e-9)) << "partial_var0_implicit";
+  EXPECT_LT(std::fabs(sum(Uf, 0) - W0 * ncell), Real(1e-9)) << "full_var0_implicit";
   // var 1 : explicite (3.5) en partiel, implicite (4.0) en plein -> le trait CHANGE bien
   // le traitement de cette seule variable.
-  chk(std::fabs(sum(Up, 1) - W1_expl * ncell) < Real(1e-12), "partial_var1_explicit");
-  chk(std::fabs(sum(Uf, 1) - W1_impl * ncell) < Real(1e-9), "full_var1_implicit");
-  chk(std::fabs(sum(Up, 1) - sum(Uf, 1)) > Real(1), "partial_vs_full_differ");
-
-  if (fails == 0)
-    std::printf("OK test_imex_partial\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_imex_partial, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_imex_partial, "test_imex_partial"), 0);
+  EXPECT_LT(std::fabs(sum(Up, 1) - W1_expl * ncell), Real(1e-12)) << "partial_var1_explicit";
+  EXPECT_LT(std::fabs(sum(Uf, 1) - W1_impl * ncell), Real(1e-9)) << "full_var1_implicit";
+  EXPECT_GT(std::fabs(sum(Up, 1) - sum(Uf, 1)), Real(1)) << "partial_vs_full_differ";
 }

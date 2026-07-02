@@ -16,7 +16,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/system/amr_system_coupler.hpp>
@@ -91,23 +90,13 @@ static void fill_by_index(MultiFab& U, F f) {
   }
 }
 
-static int pops_run_test_amr_source_covered_cells() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
+TEST(test_amr_source_covered_cells, Runs) {
   // garde anti faux-positif : rejette nan/inf AVANT toute comparaison de tolerance, car en
   // C++ "nan < tol" est faux et passerait silencieusement le test.
   auto finite_close = [&](Real got, Real want, Real tol, const char* w) {
-    if (!std::isfinite(got) || !std::isfinite(want)) {
-      std::printf("FAIL %s (non finite : got=%g want=%g)\n", w, got, want);
-      ++fails;
-      return;
-    }
-    chk(std::fabs(got - want) < tol, w);
+    ASSERT_TRUE(std::isfinite(got) && std::isfinite(want))
+        << w << " (non finite : got=" << got << " want=" << want << ")";
+    EXPECT_LT(std::fabs(got - want), tol) << w;
   };
 
   const int NC = 16;
@@ -143,14 +132,12 @@ static int pops_run_test_amr_source_covered_cells() {
         const Real avg = Real(0.25) * (f(2 * ci, 2 * cj, 0) + f(2 * ci + 1, 2 * cj, 0) +
                                        f(2 * ci, 2 * cj + 1, 0) + f(2 * ci + 1, 2 * cj + 1, 0));
         const Real cov = c(ci, cj, 0);
-        if (!std::isfinite(cov) || !std::isfinite(avg)) {
-          std::printf("FAIL %s (non finite a (%d,%d) : cov=%g avg=%g)\n", tag, ci, cj, cov, avg);
-          ++fails;
-          return;
-        }
+        ASSERT_TRUE(std::isfinite(cov) && std::isfinite(avg))
+            << tag << " (non finite a (" << ci << "," << cj << ") : cov=" << cov
+            << " avg=" << avg << ")";
         worst = std::max(worst, std::fabs(cov - avg));
       }
-    chk(worst < Real(1e-12), tag);
+    EXPECT_LT(worst, Real(1e-12)) << tag;
   };
 
   // --- chemin A : source de COUPLAGE explicite (coupled_source_step) ---
@@ -175,7 +162,7 @@ static int pops_run_test_amr_source_covered_cells() {
     // sanity : la source a REELLEMENT bouge l'etat (sinon coherence triviale a l'init).
     device_fence();
     const Real uf_lo = sim.levels(0)[1].U.fab(0).const_array()(2 * CLO, 2 * CLO, 0);
-    chk(std::fabs(uf_lo - profile(2 * CLO, 2 * CLO)) > Real(1e-4), "coupled_source_active");
+    EXPECT_GT(std::fabs(uf_lo - profile(2 * CLO, 2 * CLO)), Real(1e-4)) << "coupled_source_active";
   }
 
   // --- chemin B : source IMPLICITE par defaut (AmrImplicitSourceStepper via step) ---
@@ -222,22 +209,10 @@ static int pops_run_test_amr_source_covered_cells() {
         const Real u0 = profile(i, j);
         const Real want = u0 - k * dt * u0 * u0;  // S applique une fois, pas d'average_down
         const Real got = c(i, j, 0);
-        if (!std::isfinite(got)) {
-          std::printf("FAIL single_level_bit_identical (non finite a (%d,%d))\n", i, j);
-          ++fails;
-          j = NC;
-          break;
-        }
+        ASSERT_TRUE(std::isfinite(got))
+            << "single_level_bit_identical (non finite a (" << i << "," << j << "))";
         worst = std::max(worst, std::fabs(got - want));
       }
     finite_close(worst, Real(0), Real(1e-14), "single_level_bit_identical");
   }
-
-  if (fails == 0)
-    std::printf("OK test_amr_source_covered_cells\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_amr_source_covered_cells, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_source_covered_cells, "test_amr_source_covered_cells"), 0);
 }

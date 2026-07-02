@@ -40,7 +40,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
@@ -57,6 +56,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 using namespace pops;
@@ -418,25 +418,24 @@ static PolarMetrics run_polar() {
 }
 
 // -------------------------------------------------------------------
-// main
+// Mesure decisive (proto Phase-0) : ce test NE VERIFIE aucune assertion -- c'est une MESURE
+// comparative qui produit un verdict SUCCESS/ABORT informatif (chantier polaire justifie ou non),
+// conserve tel quel du corps historique (qui renvoyait toujours 0, meme en cas d'ABORT). Le
+// verdict est enregistre via RecordProperty pour rester visible dans le rapport XML/CTest.
 // -------------------------------------------------------------------
-static int pops_run_test_polar_ring_advection() {
-  std::printf("=== Proto Phase-0 : diffusion radiale Cartesien vs Polaire ===\n");
-  std::printf("Profil n(r)=exp(-((r-%.3f)/%.3f)^2), N=%d, K=%d rotations, CFL=%.2f\n", kR0, kW, kN,
-              kK, kCFL);
-
+TEST(test_polar_ring_advection, MeasuresRadialDiffusionCartesianVsPolar) {
   // --- bras polaire en premier (rapide, pas de MultiFab) ---
   const PolarMetrics polar = run_polar();
 
   // --- bras cartesien ---
   // On mesure le pic initial avant advection.
-  const double L = 1.0;
   const double xlo = -0.5, xhi = 0.5;
   const double ylo = -0.5, yhi = 0.5;
   Box2D dom0 = Box2D::from_extents(kN, kN);
   Geometry geom0{dom0, xlo, xhi, ylo, yhi};
   BoxArray ba0 = BoxArray::from_domain(dom0, kN);
   DistributionMapping dm0(ba0.size(), n_ranks());
+  double peak_init_measured = 0.0;
   {
     MultiFab Utmp(ba0, dm0, 1, 0);
     Array4 a = Utmp.fab(0).array();
@@ -444,47 +443,40 @@ static int pops_run_test_polar_ring_advection() {
       for (int i = dom0.lo[0]; i <= dom0.hi[0]; ++i)
         a(i, j, 0) = ring_profile(cart_r(geom0.x_cell(i), geom0.y_cell(j)));
     const RadialMetrics m0 = cartesian_radial_cut(Utmp, geom0, dom0);
-    std::printf("[Cartesien] pic initial (avant avance) = %.6f\n", m0.peak);
+    peak_init_measured = m0.peak;
   }
 
   const RadialMetrics cart = run_cartesian();
 
   // --- calcul des metriques de perte ---
   // Pic initial theorique = 1.0 (profil = exp(0) = 1 exactement au centre r=r0).
-  // Les discretisations sont approchees -> on utilise la valeur initiale mesuree.
-  // Pour la comparaison, on relit les pics initiaux depuis les mesures ci-dessus.
-  // Simplification : peak theorique = 1.0 (pour la perte relative).
   const double peak_init_theory = 1.0;
-
   const double loss_cart = (peak_init_theory - cart.peak) / peak_init_theory * 100.0;
   const double loss_polar = (peak_init_theory - polar.peak) / peak_init_theory * 100.0;
-
-  std::printf("\n=== RESULTATS ===\n");
-  std::printf("Perte Cartesien  : %.2f %%  (pic apres K=%d rot = %.6f)\n", loss_cart, kK,
-              cart.peak);
-  std::printf("Perte Polaire    : %.2f %%  (pic apres K=%d rot = %.6f)\n", loss_polar, kK,
-              polar.peak);
-
   const double ratio = (loss_polar > 1e-12) ? (loss_cart / loss_polar) : 1e99;
-  std::printf("Rapport perte C/P: %.1f\n", ratio);
-  std::printf("FWHM Cartesien   : %.4f -> %.4f\n", kW * 2.0 * std::sqrt(std::log(2.0)), cart.fwhm);
-
   const bool verdict_success = (loss_polar <= 2.0) && (ratio >= 5.0);
-  if (verdict_success) {
-    std::printf("\nVERDICT : SUCCESS -- ecart ordre-de-grandeur, chantier polaire JUSTIFIE.\n");
-    std::printf("  perte polaire=%.2f%% <= 2%%,  rapport=%.1f >= 5.\n", loss_polar, ratio);
-  } else {
-    std::printf("\nVERDICT : ABORT -- ecart marginal, verrou N'EST PAS la grille Cartesienne.\n");
-    if (loss_polar > 2.0)
-      std::printf("  perte polaire=%.2f%% > 2%% (schema polaire lui-meme diffusif).\n", loss_polar);
-    if (ratio < 5.0)
-      std::printf("  rapport=%.1f < 5 (Cartesien pas significativement pire).\n", ratio);
-  }
 
-  std::printf("\nOK test_polar_ring_advection\n");
-  return 0;
-}
+  RecordProperty("peak_init_measured", std::to_string(peak_init_measured));
+  RecordProperty("loss_cartesian_pct", std::to_string(loss_cart));
+  RecordProperty("loss_polar_pct", std::to_string(loss_polar));
+  RecordProperty("loss_ratio_cart_over_polar", std::to_string(ratio));
+  RecordProperty("fwhm_cartesian_final", std::to_string(cart.fwhm));
+  RecordProperty("verdict", verdict_success ? "SUCCESS" : "ABORT");
 
-TEST(test_polar_ring_advection, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_polar_ring_advection, "test_polar_ring_advection"), 0);
+  // Gardes de SANITE (audit campagne GoogleTest) : le VERDICT comparatif reste observationnel par
+  // design (RecordProperty ci-dessus, cf. l'en-tete), mais une simulation cassee doit FAIRE ECHOUER
+  // le test -- avant ces gardes il ne pouvait jamais echouer, meme sur des NaN.
+  EXPECT_TRUE(std::isfinite(cart.peak) && std::isfinite(polar.peak))
+      << "pic non fini: cart=" << cart.peak << " polar=" << polar.peak;
+  EXPECT_TRUE(std::isfinite(cart.fwhm) && std::isfinite(polar.fwhm))
+      << "FWHM non finie: cart=" << cart.fwhm << " polar=" << polar.fwhm;
+  EXPECT_GT(cart.peak, 0.0) << "advection cartesienne effondree (pic <= 0)";
+  EXPECT_GT(polar.peak, 0.0) << "advection polaire effondree (pic <= 0)";
+  // Le profil initial vaut exactement 1.0 au centre de l'anneau : un pic final au-dela de ~1.5 ou un
+  // pic initial mesure loin de 1 signale un schema instable ou une grille mal construite, pas une
+  // simple perte de diffusion.
+  EXPECT_NEAR(peak_init_measured, peak_init_theory, 0.05)
+      << "le pic initial mesure ne correspond pas au profil analytique";
+  EXPECT_LT(cart.peak, 1.5) << "surtir cartesien non physique";
+  EXPECT_LT(polar.peak, 1.5) << "surtir polaire non physique";
 }

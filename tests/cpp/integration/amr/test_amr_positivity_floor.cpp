@@ -19,7 +19,6 @@
 //      runtime_error mentioning positivity_floor (positivity_comp resolved on the AMR path).
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/validation/physics/advection_diffusion.hpp>
 #include <pops/physics/fluids/euler.hpp>
 
@@ -109,17 +108,9 @@ static void init_spike(MultiFab& U, const Box2D& dom, const EulerNoSrc& m) {
   }
 }
 
-static int pops_run_test_amr_positivity_floor(int argc, char** argv) {
-  comm_init(&argc, &argv);
+TEST(test_amr_positivity_floor, Runs) {
+  comm_init();
   const int me = my_rank();
-  long fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      if (me == 0)
-        std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
 
   std::printf("=== POSITIVITY FLOOR on AMR (positivity_floor, ADC-259) ===\n");
 
@@ -199,10 +190,11 @@ static int pops_run_test_amr_positivity_floor(int argc, char** argv) {
           "mom = %.3f\n",
           n_raw, n_pp, static_cast<double>(ghost_rho), static_cast<double>(ghost_mom));
     if (n_ranks() == 1) {
-      chk(n_raw > 0, "1_unclamped_ghost_subfloor");  // the problem exists at the C/F interface
-      chk(n_pp == 0, "1_clamped_ghost_floor");       // the clamp fixes every C/F ghost
-      chk(ghost_rho >= floor, "1_clamped_ghost_density_floored");
-      chk(std::abs(ghost_mom - Real(0.5)) < Real(1e-12), "1_clamped_ghost_momentum_interpolated");
+      EXPECT_TRUE(n_raw > 0) << "1_unclamped_ghost_subfloor";  // the problem exists at the C/F interface
+      EXPECT_EQ(n_pp, 0) << "1_clamped_ghost_floor";           // the clamp fixes every C/F ghost
+      EXPECT_TRUE(ghost_rho >= floor) << "1_clamped_ghost_density_floored";
+      EXPECT_TRUE(std::abs(ghost_mom - Real(0.5)) < Real(1e-12))
+          << "1_clamped_ghost_momentum_interpolated";
     }
   }
 
@@ -274,9 +266,9 @@ static int pops_run_test_amr_positivity_floor(int argc, char** argv) {
     if (me == 0)
       std::printf("(2) no-default-change : max|U(floor) - U(no floor)| = %.3e (smooth state)\n",
                   dmax);
-    chk(dmax == 0.0, "2_smooth_floor_bit_identical");
-    chk(finite, "2_floor_finite");
-    chk(std::abs(m1 - m0) < 1e-10, "2_mass_conserved");
+    EXPECT_EQ(dmax, 0.0) << "2_smooth_floor_bit_identical";
+    EXPECT_TRUE(finite) << "2_floor_finite";
+    EXPECT_TRUE(std::abs(m1 - m0) < 1e-10) << "2_mass_conserved";
   }
 
   // ------------------------------------------------------------------------------------------------
@@ -314,9 +306,9 @@ static int pops_run_test_amr_positivity_floor(int argc, char** argv) {
     if (me == 0)
       std::printf("(3) spike + floor : finite = %d, mass drift = %.3e, trajectory differs = %d\n",
                   finite_on ? 1 : 0, m1 - m0, differs ? 1 : 0);
-    chk(finite_on, "3_floored_spike_finite");
-    chk(std::abs(m1 - m0) < 1e-10, "3_floored_spike_mass_conserved");
-    chk(differs, "3_floor_active_on_spike");
+    EXPECT_TRUE(finite_on) << "3_floored_spike_finite";
+    EXPECT_TRUE(std::abs(m1 - m0) < 1e-10) << "3_floored_spike_mass_conserved";
+    EXPECT_TRUE(differs) << "3_floor_active_on_spike";
   }
 
   // ------------------------------------------------------------------------------------------------
@@ -344,17 +336,10 @@ static int pops_run_test_amr_positivity_floor(int argc, char** argv) {
     if (me == 0)
       std::printf("(4) model without Density : %s (%s)\n", threw ? "REJECTED" : "ACCEPTED (!)",
                   msg.c_str());
-    chk(threw, "4_reject_model_without_density");
-    chk(msg.find("positivity_floor") != std::string::npos, "4_message_mentions_positivity_floor");
+    EXPECT_TRUE(threw) << "4_reject_model_without_density";
+    EXPECT_TRUE(msg.find("positivity_floor") != std::string::npos)
+        << "4_message_mentions_positivity_floor";
   }
 
-  fails = static_cast<long>(all_reduce_max(static_cast<double>(fails)));
-  if (me == 0 && fails == 0)
-    std::printf("OK test_amr_positivity_floor\n");
   comm_finalize();
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_amr_positivity_floor, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_positivity_floor, "test_amr_positivity_floor"), 0);
 }

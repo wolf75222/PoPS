@@ -19,7 +19,6 @@ Geometry is a TYPED object, not a ``wall="circle"`` / ``mode="staircase"`` strin
 Runs both as ``python3 test_typed_disc_domain.py`` (CI runs these directly) and under pytest.
 Skips cleanly if the compiled ``pops`` extension is absent (lowering layer still runs).
 """
-import sys
 
 import pytest
 
@@ -213,7 +212,3 @@ def test_set_poisson_wall_coercion_is_transparent():
     from pops.runtime._system_install import _lower_wall
     assert _lower_wall("square") is None
     assert _lower_wall("none") is None and _lower_wall("circle") is None
-
-
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))

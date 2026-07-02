@@ -9,7 +9,6 @@ These build elliptic operator terms (Reaction / CoeffGradient / DivCoeffGrad / E
 nothing computes in Python -- the C++ elliptic solver executes. This test covers the IR
 construction, the principal-kind inspection, and the Poisson-family validation.
 """
-import sys
 
 import pytest
 
@@ -125,7 +124,3 @@ def test_terms_are_inert_no_runtime_data():
     assert react.field is phi                   # a reference, not a value
     assert react.coeff.name == "eps"            # the coefficient descriptor, not an array
     assert "Reaction" in repr(react)            # inspectable
-
-
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))

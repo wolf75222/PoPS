@@ -28,7 +28,11 @@ from pops.ir.ops import sqrt
 from pops.physics.facade import Model
 
 fails = 0
-from tests.python.support.requirements import repo_include
+from tests.python.support.requirements import (
+    missing_compiler_requirement,
+    repo_include,
+    skip_process_test,
+)
 INCLUDE = repo_include()
 GAMMA = 1.4
 
@@ -89,10 +93,9 @@ def iso3_dsl(name, roe=False, p_decl=True):
     return m
 
 
-cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
-if not cxx or not os.path.isdir(INCLUDE):
-    print("skip test_dsl_roe : compilateur ou en-tetes pops absents")
-    sys.exit(0)
+missing = missing_compiler_requirement(INCLUDE)
+if missing:
+    skip_process_test(f"test_dsl_roe : {missing}")
 
 tmp = tempfile.mkdtemp()
 try:

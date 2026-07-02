@@ -14,7 +14,6 @@ still builds every canonical brick:
 The System construction in groups 3-4 needs the compiled _pops extension, so the whole module is
 guarded with pytest.importorskip("pops"), like the sibling test_route_ids.py.
 """
-import sys
 
 import numpy as np
 import pytest
@@ -119,7 +118,3 @@ def test_unknown_transport_modelspec_throws_historical_message():
     assert "unknown transport" in message, "historical 'unknown transport' message drifted: %r" % message
     assert "bogus" in message
     assert "exb|compressible|isothermal" in message
-
-
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))

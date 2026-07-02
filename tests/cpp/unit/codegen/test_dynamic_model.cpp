@@ -4,19 +4,17 @@
 // une brique generee/JIT dont le type n'est pas connu a la compilation (cf. dynamic_model.hpp).
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/physics/fluids/euler.hpp>
 #include <pops/runtime/dynamic/dynamic_model.hpp>
 
 #include <cmath>
-#include <cstdio>
 
 using State = pops::StateVec<4>;
 
 static_assert(std::is_base_of_v<pops::IModel<4>, pops::ModelAdapter<pops::Euler>>,
               "ModelAdapter<Euler> doit deriver de IModel<4>");
 
-static int pops_run_test_dynamic_model() {
+TEST(test_dynamic_model, type_erased_matches_direct_call) {
   pops::Euler ref;
   ref.gamma = 1.4;
   auto dyn = pops::make_dynamic(ref);  // std::unique_ptr<pops::IModel<4>>
@@ -39,14 +37,5 @@ static int pops_run_test_dynamic_model() {
                           std::fabs(ref.max_wave_speed(u, a, dir) - m.max_wave_speed(u, a, dir)));
     }
   }
-  if (maxdiff > 1e-14) {
-    std::printf("FAIL test_dynamic_model : IModel != direct (maxdiff=%.3e)\n", maxdiff);
-    return 1;
-  }
-  std::printf("OK test_dynamic_model : IModel<4>(Euler) == Euler direct (maxdiff=%.1e)\n", maxdiff);
-  return 0;
-}
-
-TEST(test_dynamic_model, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_dynamic_model, "test_dynamic_model"), 0);
+  EXPECT_LE(maxdiff, 1e-14) << "IModel != direct (maxdiff=" << maxdiff << ")";
 }

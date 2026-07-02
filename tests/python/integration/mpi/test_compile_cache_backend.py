@@ -74,13 +74,11 @@ def build_euler(name="euler_cacheb", gamma=1.6667):
     return m
 
 
+from tests.python.support.initial_states import euler_bubble_state
+
+
 def initial_state(n):
-    xs = (np.arange(n) + 0.5) / n
-    X, Y = np.meshgrid(xs, xs)
-    U = np.zeros((4, n, n))
-    U[0] = 1.0 + 0.3 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / 0.02)
-    U[3] = 1.0 / (1.6667 - 1.0)
-    return U.reshape(-1).tolist()
+    return euler_bubble_state(n, 1.6667)
 
 
 def is_production_so(path):

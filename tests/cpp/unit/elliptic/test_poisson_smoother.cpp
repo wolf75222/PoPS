@@ -6,7 +6,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
@@ -28,15 +27,7 @@ static double phi_exact(double x, double y) {
   return std::sin(kPi * x) * std::sin(kPi * y);
 }
 
-static int pops_run_test_poisson_smoother() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+TEST(test_poisson_smoother, Runs) {
   const int n = 16;
   Box2D dom = Box2D::from_extents(n, n);
   Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
@@ -63,7 +54,7 @@ static int pops_run_test_poisson_smoother() {
 
   poisson_residual(phi, f, geom, bc, res);
   const Real rN = norm_inf(res);
-  chk(rN / r0 < 1e-4, "residual_reduced");
+  EXPECT_TRUE(rN / r0 < 1e-4) << "residual_reduced (r0=" << r0 << " rN=" << rN << ")";
 
   // erreur vs solution exacte (au noeud du laplacien discret) : O(dx^2)
   Real err = 0;
@@ -73,13 +64,7 @@ static int pops_run_test_poisson_smoother() {
       Real e = std::fabs(p(i, j, 0) - phi_exact(geom.x_cell(i), geom.y_cell(j)));
       err = std::max(err, e);
     }
-  chk(err < 0.02, "solution_accurate");
+  EXPECT_TRUE(err < 0.02) << "solution_accurate (err=" << err << ")";
 
-  if (fails == 0)
-    std::printf("OK test_poisson_smoother (r0=%.3e rN=%.3e err=%.3e)\n", r0, rN, err);
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_poisson_smoother, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_poisson_smoother, "test_poisson_smoother"), 0);
+  std::printf("OK test_poisson_smoother (r0=%.3e rN=%.3e err=%.3e)\n", r0, rN, err);
 }

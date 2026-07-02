@@ -26,7 +26,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/model/physical_model.hpp>
 #include <pops/core/state/state.hpp>
@@ -94,15 +93,8 @@ Real read_bz(const MultiFab& A, int li, int i, int j) {
 
 }  // namespace
 
-static int pops_run_test_amr_system_bz_multibox(int argc, char** argv) {
-  comm_init(&argc, &argv);
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
+TEST(test_amr_system_bz_multibox, Runs) {
+  comm_init();
 
   const Box2D dom = Box2D::from_extents(NC, NC);
   const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
@@ -176,14 +168,14 @@ static int pops_run_test_amr_system_bz_multibox(int argc, char** argv) {
   // --- (A) peuplement multi-box, echantillonne a la resolution du niveau --------------------
   {
     auto sim = build(bz_field, /*use_setter=*/false, /*u0g=*/Real(2));
-    chk(sim->aux_ncomp() == 4, "shared_aux_width_max_4");
-    chk(ba_coarse.size() >= 2, "coarse_is_multibox");  // garde-fou : le decoupage a bien eu lieu
-    chk(ba_fine.size() == 2, "fine_is_multibox");
+    EXPECT_EQ(sim->aux_ncomp(), 4) << "shared_aux_width_max_4";
+    EXPECT_GE(ba_coarse.size(), 2) << "coarse_is_multibox";  // garde-fou : le decoupage a bien eu lieu
+    EXPECT_EQ(ba_fine.size(), 2) << "fine_is_multibox";
 
     // grossier : B_z correct sur les 4 boites (valides + ghosts).
-    chk(bz_all_boxes_ok(sim->aux(0), geom), "coarse_Bz_all_boxes_all_cells");
+    EXPECT_TRUE(bz_all_boxes_ok(sim->aux(0), geom)) << "coarse_Bz_all_boxes_all_cells";
     // fin : B_z correct sur les 2 patchs (valides + ghosts), echantillonne a dx/2.
-    chk(bz_all_boxes_ok(sim->aux(1), gf), "fine_Bz_all_boxes_all_cells");
+    EXPECT_TRUE(bz_all_boxes_ok(sim->aux(1), gf)) << "fine_Bz_all_boxes_all_cells";
 
     // les deux patchs fins voient des plages de B_z DISTINCTES (boites disjointes, B_z variable) :
     // le coin bas-gauche du patch 0 vs celui du patch 1 doivent differer nettement.
@@ -198,12 +190,14 @@ static int pops_run_test_amr_system_bz_multibox(int argc, char** argv) {
     // au moins un rang possede chaque patch ; si local, la valeur a ete lue. Sur np=1 les deux sont
     // locaux. On exige la difference seulement la ou les deux patchs sont locaux (np=1 garanti).
     if (bz_p0 >= 0 && bz_p1 >= 0)
-      chk(std::fabs(bz_p0 - bz_p1) > Real(1), "fine_patches_see_distinct_Bz");
+      EXPECT_TRUE(std::fabs(bz_p0 - bz_p1) > Real(1)) << "fine_patches_see_distinct_Bz";
 
     // --- (B) preservation par solve_fields sur toutes les boites -----------------------------
     sim->solve_fields();
-    chk(bz_all_boxes_ok(sim->aux(0), geom), "coarse_Bz_preserved_after_solve_fields_all_boxes");
-    chk(bz_all_boxes_ok(sim->aux(1), gf), "fine_Bz_preserved_after_solve_fields_all_boxes");
+    EXPECT_TRUE(bz_all_boxes_ok(sim->aux(0), geom))
+        << "coarse_Bz_preserved_after_solve_fields_all_boxes";
+    EXPECT_TRUE(bz_all_boxes_ok(sim->aux(1), gf))
+        << "fine_Bz_preserved_after_solve_fields_all_boxes";
 
     // --- (C) la source lit B_z PAR BOITE -----------------------------------------------------
     const Real u0 = Real(2), dt = Real(0.05);
@@ -223,13 +217,13 @@ static int pops_run_test_amr_system_bz_multibox(int argc, char** argv) {
       const Real bz = bz_field(geom.x_cell(ci), geom.y_cell(cj));
       const Real expect = u0 * (Real(1) + dt * bz);
       const Real got = Ug.fab(li).const_array()(ci, cj, 0);
-      chk(std::fabs(got - expect) < Real(1e-12), "coarse_source_reads_boxlocal_Bz");
-      chk(std::fabs(got - u0) > Real(1e-3), "coarse_Bz_actually_read");
+      EXPECT_TRUE(std::fabs(got - expect) < Real(1e-12)) << "coarse_source_reads_boxlocal_Bz";
+      EXPECT_TRUE(std::fabs(got - u0) > Real(1e-3)) << "coarse_Bz_actually_read";
       ++checked_coarse;
     }
     // au moins une boite grossiere verifiee GLOBALEMENT (tous rangs confondus).
-    chk(static_cast<int>(all_reduce_sum(static_cast<double>(checked_coarse))) >= 1,
-        "at_least_one_coarse_box_checked_global");
+    EXPECT_GE(static_cast<int>(all_reduce_sum(static_cast<double>(checked_coarse))), 1)
+        << "at_least_one_coarse_box_checked_global";
 
     // FIN : une cellule au coin bas-gauche de CHAQUE patch fin local. r=2 sous-pas Euler avant de
     // dt/2 -> u0*(1+(dt/2)*B_z_fin)^2, avec le B_z DU PATCH (centres fins distincts entre patchs).
@@ -242,19 +236,19 @@ static int pops_run_test_amr_system_bz_multibox(int argc, char** argv) {
       const Real bzf = bz_field(gf.x_cell(fi), gf.y_cell(fj));
       const Real expect = u0 * (Real(1) + half * bzf) * (Real(1) + half * bzf);
       const Real got = Uf.fab(li).const_array()(fi, fj, 0);
-      chk(std::fabs(got - expect) < Real(1e-12), "fine_source_reads_boxlocal_Bz");
+      EXPECT_TRUE(std::fabs(got - expect) < Real(1e-12)) << "fine_source_reads_boxlocal_Bz";
       ++checked_fine;
     }
     // au moins un patch fin verifie GLOBALEMENT (2 patchs ; a np=4 certains rangs n'en ont aucun).
-    chk(static_cast<int>(all_reduce_sum(static_cast<double>(checked_fine))) >= 1,
-        "at_least_one_fine_patch_checked_global");
+    EXPECT_GE(static_cast<int>(all_reduce_sum(static_cast<double>(checked_fine))), 1)
+        << "at_least_one_fine_patch_checked_global";
   }
 
   // --- (D) setter set_bz : meme resultat multi-box que par le ctor -------------------------
   {
     auto sim = build(bz_field, /*use_setter=*/true, /*u0g=*/Real(2));
-    chk(bz_all_boxes_ok(sim->aux(0), geom), "set_bz_populates_coarse_all_boxes");
-    chk(bz_all_boxes_ok(sim->aux(1), gf), "set_bz_populates_fine_all_boxes");
+    EXPECT_TRUE(bz_all_boxes_ok(sim->aux(0), geom)) << "set_bz_populates_coarse_all_boxes";
+    EXPECT_TRUE(bz_all_boxes_ok(sim->aux(1), gf)) << "set_bz_populates_fine_all_boxes";
   }
 
   // --- (E) garde : sans bz fourni, la composante B_z reste 0 sur toutes les boites ----------
@@ -272,22 +266,9 @@ static int pops_run_test_amr_system_bz_multibox(int argc, char** argv) {
       if (std::fabs(read_bz(sim->aux(1), li, b.lo[0], b.lo[1])) >= Real(1e-30))
         fine_zero = false;
     }
-    chk(coarse_zero, "no_bz_coarse_stays_zero_all_boxes");
-    chk(fine_zero, "no_bz_fine_stays_zero_all_boxes");
+    EXPECT_TRUE(coarse_zero) << "no_bz_coarse_stays_zero_all_boxes";
+    EXPECT_TRUE(fine_zero) << "no_bz_fine_stays_zero_all_boxes";
   }
 
-  // somme globale des echecs : sous MPI, un seul rang imprime mais tous votent.
-  fails = static_cast<int>(all_reduce_sum(static_cast<double>(fails)));
-  if (my_rank() == 0) {
-    if (fails == 0)
-      std::printf("test_amr_system_bz_multibox: OK\n");
-    else
-      std::printf("test_amr_system_bz_multibox: %d FAIL\n", fails);
-  }
   comm_finalize();
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_amr_system_bz_multibox, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_system_bz_multibox, "test_amr_system_bz_multibox"), 0);
 }

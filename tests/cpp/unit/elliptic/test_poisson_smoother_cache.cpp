@@ -15,7 +15,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/storage/fab2d.hpp>
@@ -32,15 +31,7 @@ using namespace pops;
 
 static constexpr double kPi = 3.14159265358979323846;
 
-static int pops_run_test_poisson_smoother_cache() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+TEST(test_poisson_smoother_cache, Runs) {
   // Dirichlet MMS problem big enough for a multi-level V-cycle (deep enough that nbottom=50 bottom
   // sweeps run): lap(phi) = -2 pi^2 sin(pi x) sin(pi y).
   const int n = 64;
@@ -62,20 +53,21 @@ static int pops_run_test_poisson_smoother_cache() {
   reset_halo_schedule_build_count();
   mg.vcycle();
   const std::int64_t builds_after_1 = halo_schedule_build_count();
-  chk(builds_after_1 >= 1, "smoother does fill_ghosts (schedule built at least once)");
+  EXPECT_TRUE(builds_after_1 >= 1) << "smoother does fill_ghosts (schedule built at least once)";
 
   // DECISIVE: four more V-cycles -- hundreds more sweeps, each with two fill_ghosts -- must add ZERO
   // schedule builds. If gs_rb_sweep re-enumerated the exchange per sweep, this would grow ~5x.
   for (int c = 0; c < 4; ++c)
     mg.vcycle();
   const std::int64_t builds_after_5 = halo_schedule_build_count();
-  chk(builds_after_5 == builds_after_1,
-      "RB-GS reuses the cached halo schedule across sweeps and cycles (no per-sweep "
-      "re-enumeration)");
+  EXPECT_TRUE(builds_after_5 == builds_after_1)
+      << "RB-GS reuses the cached halo schedule across sweeps and cycles (no per-sweep "
+         "re-enumeration)";
 
   // The first-cycle build count reflects distinct layouts (a few MG levels), NOT the sweep count: a
   // single cycle already runs nbottom=50 bottom sweeps, so a per-sweep rebuild would exceed 50.
-  chk(builds_after_1 < 50, "schedule builds scale with MG levels, not with the sweep count");
+  EXPECT_TRUE(builds_after_1 < 50)
+      << "schedule builds scale with MG levels, not with the sweep count";
 
   std::printf("  halo-schedule builds: after 1 vcycle = %lld, after 5 = %lld (reused)\n",
               static_cast<long long>(builds_after_1), static_cast<long long>(builds_after_5));
@@ -84,14 +76,6 @@ static int pops_run_test_poisson_smoother_cache() {
   const Real r0 = mg.current_residual();
   for (int c = 0; c < 20; ++c)
     mg.vcycle();
-  chk(mg.current_residual() < 1e-6 * r0 || mg.current_residual() < 1e-10,
-      "GeometricMG still converges with the cached smoother");
-
-  if (fails == 0)
-    std::printf("OK test_poisson_smoother_cache\n");
-  return fails ? 1 : 0;
-}
-
-TEST(test_poisson_smoother_cache, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_poisson_smoother_cache, "test_poisson_smoother_cache"), 0);
+  EXPECT_TRUE(mg.current_residual() < 1e-6 * r0 || mg.current_residual() < 1e-10)
+      << "GeometricMG still converges with the cached smoother";
 }

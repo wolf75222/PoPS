@@ -8,10 +8,8 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/runtime/program/external_brick.hpp>
 
-#include <cstdio>
 #include <string>
 
 using pops::runtime::program::json_escape;
@@ -19,17 +17,9 @@ using pops::runtime::program::json_unescape;
 
 namespace {
 
-int fails = 0;
-
-void chk(bool cond, const char* label) {
-  std::printf("  [%s] %s\n", cond ? "OK " : "XX ", label);
-  if (!cond)
-    ++fails;
-}
-
 // json_escape then json_unescape recovers the original byte-for-byte.
-void roundtrip(const std::string& raw, const char* label) {
-  chk(json_unescape(json_escape(raw)) == raw, label);
+void expect_roundtrip(const std::string& raw, const char* label) {
+  EXPECT_TRUE(json_unescape(json_escape(raw)) == raw) << label;
 }
 
 // A valid JSON string body carries no raw control char and no bare `"`; every backslash starts a
@@ -52,30 +42,26 @@ bool is_valid_json_string_body(const std::string& e) {
 
 }  // namespace
 
-static int pops_run_test_external_brick_json() {
+TEST(ExternalBrickJson, RoundtripsOverTokenBytes) {
   // round-trips over the bytes a brick token can carry
-  roundtrip("my_riemann", "plain identifier");
-  roundtrip("B_z,T_e,rho", "requirements CSV (commas untouched)");
-  roundtrip("a\"b", "embedded double quote");
-  roundtrip("a\\b", "embedded backslash");
-  roundtrip("c:/p\\q", "windows-ish path");
-  roundtrip(std::string("line1\nline2\tcol\r"), "newline + tab + carriage return");
-  roundtrip(std::string("x\x01y\x1fz", 5), "low control bytes 0x01 / 0x1f");
-  roundtrip("", "empty string");
-
-  // the escaped form is always a valid JSON string body (what json.loads requires)
-  chk(is_valid_json_string_body(json_escape("a\"b\\c")), "escaped quote+backslash is valid JSON");
-  chk(is_valid_json_string_body(json_escape(std::string("n\nt\tctrl\x02", 8))),
-      "escaped control chars are valid JSON");
-
-  // a value carrying an escaped quote is NOT truncated at the inner quote (the field-scan contract)
-  chk(json_unescape(json_escape("pre\"post")) == "pre\"post", "escaped quote not truncated");
-
-  if (fails == 0)
-    std::printf("OK test_external_brick_json\n");
-  return fails ? 1 : 0;
+  expect_roundtrip("my_riemann", "plain identifier");
+  expect_roundtrip("B_z,T_e,rho", "requirements CSV (commas untouched)");
+  expect_roundtrip("a\"b", "embedded double quote");
+  expect_roundtrip("a\\b", "embedded backslash");
+  expect_roundtrip("c:/p\\q", "windows-ish path");
+  expect_roundtrip(std::string("line1\nline2\tcol\r"), "newline + tab + carriage return");
+  expect_roundtrip(std::string("x\x01y\x1fz", 5), "low control bytes 0x01 / 0x1f");
+  expect_roundtrip("", "empty string");
 }
 
-TEST(test_external_brick_json, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_external_brick_json, "test_external_brick_json"), 0);
+TEST(ExternalBrickJson, EscapedFormIsValidJsonStringBody) {
+  // the escaped form is always a valid JSON string body (what json.loads requires)
+  EXPECT_TRUE(is_valid_json_string_body(json_escape("a\"b\\c")))
+      << "escaped quote+backslash is valid JSON";
+  EXPECT_TRUE(is_valid_json_string_body(json_escape(std::string("n\nt\tctrl\x02", 8))))
+      << "escaped control chars are valid JSON";
+
+  // a value carrying an escaped quote is NOT truncated at the inner quote (the field-scan contract)
+  EXPECT_TRUE(json_unescape(json_escape("pre\"post")) == "pre\"post")
+      << "escaped quote not truncated";
 }

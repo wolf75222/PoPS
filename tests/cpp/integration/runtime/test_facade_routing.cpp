@@ -22,12 +22,10 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <cmath>
-#include <cstdio>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -90,12 +88,9 @@ bool all_finite(const std::vector<double>& a) {
 
 }  // namespace
 
-static int pops_run_test_facade_routing(int argc, char** argv) {
+TEST(FacadeRouting, DiscModeRoutingBehavesAcrossNoneStaircaseCutcellAndSplittings) {
 #if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard(argc, argv);
-#else
-  (void)argc;
-  (void)argv;
+  static Kokkos::ScopeGuard guard;
 #endif
   const int n = 48;
   const double L = 1.0;
@@ -106,14 +101,6 @@ static int pops_run_test_facade_routing(int argc, char** argv) {
   const double dt = 2e-4;  // pas court, transport ExB sous-CFL
   const int n_steps = 12;
   const std::vector<double> rho0 = ring_density(n, L);
-
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
 
   // ----------------------------------------------------------------------
   // (a) NO-DISC PAR DEFAUT : mode='none' (disque materialise) == jamais set_disc_domain (byte a byte).
@@ -137,13 +124,14 @@ static int pops_run_test_facade_routing(int argc, char** argv) {
     const std::vector<double> none_state = none.get_state("n");
 
     const double d = max_abs_diff(ref_state, none_state);
-    std::printf("  (a) mode='none' vs sans disque : max|diff| = %.3e (attendu 0)\n", d);
     // Egalite BYTE A BYTE : mode none emprunte exactement assemble_rhs, le disque materialise n'a AUCUN
     // effet sur le transport. Pas une tolerance -- l'invariant "inerte par defaut".
-    chk(d == 0.0,
-        "(a) mode='none' BIT-IDENTIQUE au chemin sans disque (routage inerte sauf opt-in)");
-    chk(all_finite(ref_state) && ref_state.size() == static_cast<std::size_t>(n) * n,
-        "(a) etat de reference fini et de taille n*n (le pas plein a bien tourne)");
+    EXPECT_TRUE(d == 0.0)
+        << "(a) mode='none' BIT-IDENTIQUE au chemin sans disque (routage inerte sauf opt-in) : "
+           "max|diff| = "
+        << d << " (attendu 0)";
+    EXPECT_TRUE(all_finite(ref_state) && ref_state.size() == static_cast<std::size_t>(n) * n)
+        << "(a) etat de reference fini et de taille n*n (le pas plein a bien tourne)";
   }
 
   // ----------------------------------------------------------------------
@@ -168,8 +156,8 @@ static int pops_run_test_facade_routing(int argc, char** argv) {
       } else
         ++n_inactive;
     }
-    chk(n_active > 0 && n_inactive > 0,
-        "(b) le disque partitionne la grille en cellules actives ET inactives (test non vide)");
+    ASSERT_TRUE(n_active > 0 && n_inactive > 0)
+        << "(b) le disque partitionne la grille en cellules actives ET inactives (test non vide)";
 
     for (int k = 0; k < n_steps; ++k)
       sc.step(dt);
@@ -184,20 +172,20 @@ static int pops_run_test_facade_routing(int argc, char** argv) {
 
     const double d_vs_square = max_abs_diff(ref_state, sc_state);
     const double rel_drift = std::fabs(mass1 - mass0) / std::fabs(mass0);
-    std::printf(
-        "  (b) staircase vs carre : max|diff| = %.3e (attendu > 0) ; masse active drift = %.3e\n",
-        d_vs_square, rel_drift);
 
     // Le routage N'EST PAS inerte : l'operateur masque ferme les faces a la frontiere du disque, donc
     // l'etat diverge du chemin plein cartesien. C'est la preuve directe contre le footgun T2.
-    chk(d_vs_square > 1e-10,
-        "(b) staircase produit un etat DIFFERENT du carre (le transport disque est REELLEMENT "
-        "cable)");
-    chk(all_finite(sc_state), "(b) etat staircase fini partout (aucun NaN/Inf)");
+    EXPECT_TRUE(d_vs_square > 1e-10)
+        << "(b) staircase produit un etat DIFFERENT du carre (le transport disque est REELLEMENT "
+           "cable) : max|diff| = "
+        << d_vs_square << " (attendu > 0)";
+    EXPECT_TRUE(all_finite(sc_state)) << "(b) etat staircase fini partout (aucun NaN/Inf)";
     // La masse sur les cellules actives est conservee a la machine (flux normal nul aux faces
     // active/inactive). Borne juste au-dessus du bruit flottant des sommes telescopiques de flux.
-    chk(rel_drift < 1e-12,
-        "(b) masse sur les cellules actives conservee a la machine (schema masque conservatif)");
+    EXPECT_TRUE(rel_drift < 1e-12)
+        << "(b) masse sur les cellules actives conservee a la machine (schema masque conservatif) "
+           ": drift = "
+        << rel_drift;
   }
 
   // ----------------------------------------------------------------------
@@ -213,12 +201,11 @@ static int pops_run_test_facade_routing(int argc, char** argv) {
       cc.step(dt);
     const std::vector<double> cc_state = cc.get_state("n");
     const double d_vs_square = max_abs_diff(ref_state, cc_state);
-    std::printf("  (c1) cutcell vs carre : max|diff| = %.3e (attendu > 0) ; fini = %d\n",
-                d_vs_square, all_finite(cc_state) ? 1 : 0);
-    chk(all_finite(cc_state),
-        "(c1) etat cutcell fini partout (clamp small-cell -> pas de NaN/Inf)");
-    chk(d_vs_square > 1e-10,
-        "(c1) cutcell produit un etat DIFFERENT du carre (transport EB cable)");
+    EXPECT_TRUE(all_finite(cc_state))
+        << "(c1) etat cutcell fini partout (clamp small-cell -> pas de NaN/Inf)";
+    EXPECT_TRUE(d_vs_square > 1e-10)
+        << "(c1) cutcell produit un etat DIFFERENT du carre (transport EB cable) : max|diff| = "
+        << d_vs_square << " (attendu > 0)";
 
     // (c2) disque ENGLOBANT (rayon > demi-diagonale) : TOUTE cellule est active, AUCUNE face coupee ->
     // assemble_rhs_eb == assemble_rhs (kappa=1, alpha=1 partout, cf. test_eb_transport bit-identite).
@@ -238,10 +225,9 @@ static int pops_run_test_facade_routing(int argc, char** argv) {
     const std::vector<double> eb1 = eb.get_state("n");
 
     const double d_enclosing = max_abs_diff(sq1, eb1);
-    std::printf("  (c2) cutcell disque englobant vs carre (1 pas) : max|diff| = %.3e (attendu 0)\n",
-                d_enclosing);
-    chk(d_enclosing == 0.0,
-        "(c2) cutcell sans coupe BIT-IDENTIQUE au carre (kappa=1, alpha=1 partout)");
+    EXPECT_TRUE(d_enclosing == 0.0)
+        << "(c2) cutcell sans coupe BIT-IDENTIQUE au carre (kappa=1, alpha=1 partout) : max|diff| = "
+        << d_enclosing << " (attendu 0)";
   }
 
   // ----------------------------------------------------------------------
@@ -264,28 +250,21 @@ static int pops_run_test_facade_routing(int argc, char** argv) {
     const std::vector<double> lie_none = run("lie", "none");
     const std::vector<double> lie_sc = run("lie", "staircase");
     const double d_lie = max_abs_diff(lie_none, lie_sc);
-    std::printf("  (d) LIE : staircase vs none = %.3e (attendu > 0)\n", d_lie);
-    chk(d_lie > 1e-10, "(d) sous LIE, le mode disque change l'etat (step consulte le mode)");
+    EXPECT_TRUE(d_lie > 1e-10)
+        << "(d) sous LIE, le mode disque change l'etat (step consulte le mode) : diff = " << d_lie;
 
     // STRANG : meme exigence sur le chemin step_strang (H(dt/2) S(dt) H(dt/2)).
     const std::vector<double> str_none = run("strang", "none");
     const std::vector<double> str_sc = run("strang", "staircase");
     const double d_str = max_abs_diff(str_none, str_sc);
-    std::printf("  (d) STRANG : staircase vs none = %.3e (attendu > 0)\n", d_str);
-    chk(all_finite(str_none) && all_finite(str_sc), "(d) etats Strang finis (les deux modes)");
-    chk(d_str > 1e-10,
-        "(d) sous STRANG, le mode disque change l'etat (step_strang consulte le mode)");
+    EXPECT_TRUE(all_finite(str_none) && all_finite(str_sc))
+        << "(d) etats Strang finis (les deux modes)";
+    EXPECT_TRUE(d_str > 1e-10)
+        << "(d) sous STRANG, le mode disque change l'etat (step_strang consulte le mode) : diff = "
+        << d_str;
     // Et la cutcell aussi est honoree sous Strang (chemin step_strang -> advance_transport_half EB).
     const std::vector<double> str_cc = run("strang", "cutcell");
-    chk(all_finite(str_cc) && max_abs_diff(str_none, str_cc) > 1e-10,
-        "(d) sous STRANG, le mode cutcell est aussi cable (fini + different de none)");
+    EXPECT_TRUE(all_finite(str_cc) && max_abs_diff(str_none, str_cc) > 1e-10)
+        << "(d) sous STRANG, le mode cutcell est aussi cable (fini + different de none)";
   }
-
-  if (fails == 0)
-    std::printf("OK test_facade_routing\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_facade_routing, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_facade_routing, "test_facade_routing"), 0);
 }

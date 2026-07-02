@@ -20,7 +20,6 @@ The System construction in group 8 needs the compiled _pops extension, so the wh
 guarded with pytest.importorskip("pops"), exactly like the sibling
 test_runtime_inspection_reports.py.
 """
-import sys
 
 import pytest
 
@@ -132,7 +131,3 @@ def test_user_flux_stays_a_plain_token():
     # external-brick catalog, so the scheme table keeps it as a plain string.
     assert _FLUX_SCHEMES["user"] == "user"
     assert not isinstance(_FLUX_SCHEMES["user"], routes.Route)
-
-
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))

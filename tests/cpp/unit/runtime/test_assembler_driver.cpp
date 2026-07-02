@@ -4,7 +4,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/system/system_coupler.hpp>  // SystemAssembler, SystemDriver, SystemCoupler
@@ -37,15 +36,7 @@ using Blk = EquationBlock<Scalar, FirstOrder, ExplicitTime<SSPRK2, 1>>;
 static_assert(std::is_same_v<SystemCoupler<CoupledSystem<Blk, Blk>, ChargeDensityRhs>,
                              SystemDriver<CoupledSystem<Blk, Blk>, ChargeDensityRhs>>);
 
-static int pops_run_test_assembler_driver() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+TEST(AssemblerDriver, SplitAssemblerSolvesFieldsAndDriverAdvances) {
   const int n = 16;
   const Box2D dom = Box2D::from_extents(n, n);
   const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
@@ -71,13 +62,13 @@ static int pops_run_test_assembler_driver() {
   // --- ASSEMBLEUR seul : resout les champs, expose phi/aux, ne fait AUCUN pas. ---
   SystemAssembler assembler(system, geom, ba, bc, charge);
   assembler.solve_fields();
-  chk(norm_inf(assembler.phi()) > Real(1e-6), "assembler_phi_nonzero");
+  EXPECT_TRUE(norm_inf(assembler.phi()) > Real(1e-6)) << "assembler_phi_nonzero";
   // residu d'un bloc : Scalar -> flux et source nuls -> R = 0 (l'evaluateur tourne).
   MultiFab R(ba, dm, 1, 0);
   assembler.block_residual<NoSlope, RusanovFlux>(assembler.system().block<0>(),
                                                  assembler.system().block<0>().U(), R,
                                                  /*recompute_aux=*/false);
-  chk(norm_inf(R) < Real(1e-14), "assembler_block_residual_zero");
+  EXPECT_TRUE(norm_inf(R) < Real(1e-14)) << "assembler_block_residual_zero";
 
   // --- DRIVER : avance (et possede un assembleur). ---
   MultiFab V0(ba, dm, 1, 2), V1(ba, dm, 1, 2);
@@ -87,14 +78,6 @@ static int pops_run_test_assembler_driver() {
   CoupledSystem dsys{d0, d1};
   SystemDriver driver(dsys, geom, ba, bc, charge);
   driver.step(Real(0.1));  // blocs explicites, flux/source nuls -> etat inchange, mais tourne
-  chk(std::fabs(sum(V0, 0) - Real(1) * n * n) < Real(1e-12), "driver_step_runs");
-  chk(norm_inf(driver.phi()) < Real(1e-9), "driver_phi_zero_for_neutral_balance");
-
-  if (fails == 0)
-    std::printf("OK test_assembler_driver\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_assembler_driver, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_assembler_driver, "test_assembler_driver"), 0);
+  EXPECT_TRUE(std::fabs(sum(V0, 0) - Real(1) * n * n) < Real(1e-12)) << "driver_step_runs";
+  EXPECT_TRUE(norm_inf(driver.phi()) < Real(1e-9)) << "driver_phi_zero_for_neutral_balance";
 }

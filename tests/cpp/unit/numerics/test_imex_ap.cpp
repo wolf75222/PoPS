@@ -13,7 +13,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/time/schemes/imex.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
@@ -24,7 +23,9 @@
 
 using namespace pops;
 
-static MultiFab make_uniform(double u0) {
+namespace {
+
+MultiFab make_uniform(double u0) {
   Box2D dom = Box2D::from_extents(4, 4);
   BoxArray ba(std::vector<Box2D>{dom});
   DistributionMapping dm(1, 1);
@@ -33,14 +34,14 @@ static MultiFab make_uniform(double u0) {
   return U;
 }
 
-static double value(const MultiFab& U) {
+double value(const MultiFab& U) {
   return U.fab(0).const_array()(0, 0, 0);
 }
 
 // transport nul (champ uniforme) : la partie explicite ne fait rien
-static void no_transport(MultiFab&, Real) {}
+void no_transport(MultiFab&, Real) {}
 
-static double run_imex(double eps, double u0, double u_eq, double dt, int n) {
+double run_imex(double eps, double u0, double u_eq, double dt, int n) {
   MultiFab U = make_uniform(u0);
   auto simpl = [=](MultiFab& V, Real h) {
     const Real c = h / eps;
@@ -57,52 +58,34 @@ static double run_imex(double eps, double u0, double u_eq, double dt, int n) {
   return value(U);
 }
 
-static double run_explicit(double eps, double u0, double u_eq, double dt, int n) {
+double run_explicit(double eps, double u0, double u_eq, double dt, int n) {
   double u = u0;
   for (int s = 0; s < n; ++s)
     u = u + dt * (u_eq - u) / eps;
   return u;
 }
 
-static int pops_run_test_imex_ap() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
+}  // namespace
 
+TEST(test_imex_ap, stiff_regime_imex_is_asymptotic_preserving) {
   const double u0 = 2.0, u_eq = 1.0;
-
-  // --- AP : raide (eps << dt), IMEX stable et -> equilibre ---
-  {
-    const double eps = 1e-6, dt = 0.1;
-    const double ui = run_imex(eps, u0, u_eq, dt, 20);
-    const double ue = run_explicit(eps, u0, u_eq, dt, 5);
-    std::printf("AP raide (eps=%.0e, dt=%.2f) : IMEX u=%.6f (u_eq=%.1f) | explicite |u|=%.3e\n",
-                eps, dt, ui, u_eq, std::fabs(ue));
-    chk(std::isfinite(ui) && std::fabs(ui - u_eq) < 1e-3, "imex_AP_vers_equilibre");
-    chk(!std::isfinite(ue) || std::fabs(ue) > 1e3, "explicite_explose");
-  }
-
-  // --- non raide (eps = 1) : IMEX 1er ordre en dt ---
-  {
-    const double eps = 1.0, T = 1.0;
-    const double exact = u_eq + (u0 - u_eq) * std::exp(-T / eps);
-    const double e1 = std::fabs(run_imex(eps, u0, u_eq, T / 20, 20) - exact);
-    const double e2 = std::fabs(run_imex(eps, u0, u_eq, T / 40, 40) - exact);
-    const double order = std::log2(e1 / e2);
-    std::printf("non raide : err(dt)=%.3e err(dt/2)=%.3e ordre=%.2f (exact=%.6f)\n", e1, e2, order,
-                exact);
-    chk(order > 0.8 && order < 1.3, "imex_ordre_1");
-  }
-
-  if (fails == 0)
-    std::printf("OK test_imex_ap\n");
-  return fails == 0 ? 0 : 1;
+  const double eps = 1e-6, dt = 0.1;
+  const double ui = run_imex(eps, u0, u_eq, dt, 20);
+  const double ue = run_explicit(eps, u0, u_eq, dt, 5);
+  std::printf("AP raide (eps=%.0e, dt=%.2f) : IMEX u=%.6f (u_eq=%.1f) | explicite |u|=%.3e\n", eps,
+              dt, ui, u_eq, std::fabs(ue));
+  EXPECT_TRUE(std::isfinite(ui) && std::fabs(ui - u_eq) < 1e-3) << "imex_AP_vers_equilibre";
+  EXPECT_TRUE(!std::isfinite(ue) || std::fabs(ue) > 1e3) << "explicite_explose";
 }
 
-TEST(test_imex_ap, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_imex_ap, "test_imex_ap"), 0);
+TEST(test_imex_ap, nonstiff_regime_imex_is_first_order) {
+  const double u0 = 2.0, u_eq = 1.0;
+  const double eps = 1.0, T = 1.0;
+  const double exact = u_eq + (u0 - u_eq) * std::exp(-T / eps);
+  const double e1 = std::fabs(run_imex(eps, u0, u_eq, T / 20, 20) - exact);
+  const double e2 = std::fabs(run_imex(eps, u0, u_eq, T / 40, 40) - exact);
+  const double order = std::log2(e1 / e2);
+  std::printf("non raide : err(dt)=%.3e err(dt/2)=%.3e ordre=%.2f (exact=%.6f)\n", e1, e2, order,
+              exact);
+  EXPECT_TRUE(order > 0.8 && order < 1.3) << "imex_ordre_1";
 }

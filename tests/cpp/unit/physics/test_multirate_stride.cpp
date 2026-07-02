@@ -8,7 +8,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/system/system_coupler.hpp>
@@ -18,7 +17,6 @@
 #include <pops/mesh/storage/multifab.hpp>
 
 #include <cmath>
-#include <cstdio>
 
 using namespace pops;
 
@@ -45,15 +43,9 @@ using SlowBlk = EquationBlock<Production, FirstOrder, ExplicitTime<SSPRK2, 1, 3>
 static_assert(FastBlk::Time::stride == 1);
 static_assert(SlowBlk::Time::stride == 3);
 
-static int pops_run_test_multirate_stride() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+// Pipeline avec etat : chaque macro-pas depend du precedent (le stride du bloc lent). Un seul
+// TEST natif, assertions inline a chaque point de verification.
+TEST(test_multirate_stride, FastAndSlowResyncAfterStridePeriod) {
   const Box2D dom = Box2D::from_extents(4, 4);
   const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
   const BoxArray ba(std::vector<Box2D>{dom});
@@ -72,23 +64,15 @@ static int pops_run_test_multirate_stride() {
 
   // 1er macro-pas : rapide avance de dt (0.1) ; lent avance de 3*dt (0.3) en une fois.
   sim.step(dt);
-  chk(std::fabs(sum(Uf, 0) - Real(0.1) * ncell) < Real(1e-12), "fast_after_1");
-  chk(std::fabs(sum(Us, 0) - Real(0.3) * ncell) < Real(1e-12), "slow_after_1_big_step");
+  EXPECT_TRUE(std::fabs(sum(Uf, 0) - Real(0.1) * ncell) < Real(1e-12)) << "fast_after_1";
+  EXPECT_TRUE(std::fabs(sum(Us, 0) - Real(0.3) * ncell) < Real(1e-12)) << "slow_after_1_big_step";
 
   // 2e et 3e macro-pas : rapide +0.1 chacun ; lent saute (1%3, 2%3 != 0) -> reste 0.3.
   sim.step(dt);
-  chk(std::fabs(sum(Us, 0) - Real(0.3) * ncell) < Real(1e-12), "slow_skips_step2");
+  EXPECT_TRUE(std::fabs(sum(Us, 0) - Real(0.3) * ncell) < Real(1e-12)) << "slow_skips_step2";
   sim.step(dt);
 
   // Apres 3 macro-pas : les deux ont avance d'un temps total 3*dt -> synchronises a 0.3.
-  chk(std::fabs(sum(Uf, 0) - Real(0.3) * ncell) < Real(1e-12), "fast_after_3");
-  chk(std::fabs(sum(Us, 0) - Real(0.3) * ncell) < Real(1e-12), "slow_after_3_synced");
-
-  if (fails == 0)
-    std::printf("OK test_multirate_stride\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_multirate_stride, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_multirate_stride, "test_multirate_stride"), 0);
+  EXPECT_TRUE(std::fabs(sum(Uf, 0) - Real(0.3) * ncell) < Real(1e-12)) << "fast_after_3";
+  EXPECT_TRUE(std::fabs(sum(Us, 0) - Real(0.3) * ncell) < Real(1e-12)) << "slow_after_3_synced";
 }

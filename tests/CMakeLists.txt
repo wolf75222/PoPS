@@ -415,6 +415,9 @@ endif()
 pops_test_source(_src test_facade_routing)
 pops_add_gtest_suite(NAME test_facade_routing SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
 
+pops_test_source(_src test_exb_seam)
+pops_add_gtest_suite(NAME test_exb_seam SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
+
 pops_test_source(_src test_coupled_fieldsolve)
 pops_add_gtest_suite(NAME test_coupled_fieldsolve SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
 
@@ -441,6 +444,9 @@ pops_add_gtest_suite(NAME test_amr_regrid_variable SOURCES "${_src}" EXTRA_LIBS 
 
 pops_test_source(_src test_amr_potential)
 pops_add_gtest_suite(NAME test_amr_potential SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
+
+pops_test_source(_src test_amr_distribute_coarse_serial)
+pops_add_gtest_suite(NAME test_amr_distribute_coarse_serial SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
 pops_test_source(_src test_amr_native_loader)
 pops_native_loader_definitions(_native_defs)
@@ -499,6 +505,9 @@ pops_add_gtest_suite(NAME test_amr_multiblock_regrid_union SOURCES "${_src}" EXT
 pops_test_source(_src test_aux_runtime_bz)
 pops_add_gtest_suite(NAME test_aux_runtime_bz SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
 
+pops_test_source(_src test_coupled_source_stack_limit)
+pops_add_gtest_suite(NAME test_coupled_source_stack_limit SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
+
 pops_test_source(_src test_aux_te)
 pops_add_gtest_suite(NAME test_aux_te SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
 
@@ -508,6 +517,10 @@ pops_add_gtest_suite(NAME test_program_runtime SOURCES "${_src}" EXTRA_LIBS ${CM
 pops_test_source(_src test_program_loader)
 pops_native_loader_definitions(_native_defs)
 pops_add_gtest_suite(NAME test_program_loader SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
+
+pops_test_source(_src test_native_loader_param_overflow)
+pops_native_loader_definitions(_native_defs)
+pops_add_gtest_suite(NAME test_native_loader_param_overflow SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
 
 pops_test_source(_src test_module_metadata)
 pops_add_gtest_suite(NAME test_module_metadata SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS})

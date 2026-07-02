@@ -21,7 +21,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/system/amr_system_coupler.hpp>
@@ -94,15 +93,7 @@ static void fill_by_index(MultiFab& U, F f) {
   }
 }
 
-static int pops_run_test_amr_composite_source_conservation() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+TEST(test_amr_composite_source_conservation, Runs) {
   const int NC = 16;
   const Box2D dom = Box2D::from_extents(NC, NC);
   const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
@@ -176,12 +167,12 @@ static int pops_run_test_amr_composite_source_conservation() {
   const Real leaf_tot0 = leaf0_b0 + leaf0_b1;
 
   // garde anti faux-positif : la reference doit etre finie et non triviale.
-  chk(std::isfinite(leaf_tot0), "ref_mass_finite");
-  chk(std::fabs(leaf_tot0) > Real(1e-6), "ref_mass_nonzero");
+  ASSERT_TRUE(std::isfinite(leaf_tot0)) << "ref_mass_finite";
+  EXPECT_GT(std::fabs(leaf_tot0), Real(1e-6)) << "ref_mass_nonzero";
   // a l'init coherent (covered = moyenne des enfants), la masse grossiere naive d'une espece
   // egale sa masse feuille-consciente.
-  chk(std::fabs(sim.mass(0) - leaf0_b0) < Real(1e-12), "ref_b0_coarse_eq_leaf");
-  chk(std::fabs(sim.mass(1) - leaf0_b1) < Real(1e-12), "ref_b1_coarse_eq_leaf");
+  EXPECT_LT(std::fabs(sim.mass(0) - leaf0_b0), Real(1e-12)) << "ref_b0_coarse_eq_leaf";
+  EXPECT_LT(std::fabs(sim.mass(1) - leaf0_b1), Real(1e-12)) << "ref_b1_coarse_eq_leaf";
 
   // plusieurs pas de source conservative non lineaire.
   for (int s = 0; s < 3; ++s)
@@ -193,31 +184,23 @@ static int pops_run_test_amr_composite_source_conservation() {
   const Real coarse1_b0 = sim.mass(0), coarse1_b1 = sim.mass(1);
 
   // (garde) rejette nan/inf avant toute tolerance.
-  chk(std::isfinite(leaf_tot1) && std::isfinite(coarse1_b0) && std::isfinite(coarse1_b1),
-      "post_mass_finite");
+  ASSERT_TRUE(std::isfinite(leaf_tot1) && std::isfinite(coarse1_b0) && std::isfinite(coarse1_b1))
+      << "post_mass_finite";
   // (1) garde-fou physique : la masse TOTALE feuille-consciente (n0 + n1) est conservee a
   // ~machine par la source conservative (vrai independamment du correctif : la source
   // conserve cellule par cellule a chaque niveau).
-  chk(std::fabs(leaf_tot1 - leaf_tot0) < Real(1e-12), "leaf_total_mass_conserved");
+  EXPECT_LT(std::fabs(leaf_tot1 - leaf_tot0), Real(1e-12)) << "leaf_total_mass_conserved";
   // (2) c'est ICI que mord le correctif : la masse GROSSIERE naive d'une espece (le
   // diagnostic amr_mass) doit egaler sa masse FEUILLE-CONSCIENTE. Sous champ non uniforme +
   // source non lineaire, sans l'average_down trailing la cellule grossiere couverte porte
   // S(grossier) au lieu de moyenne(S(fin)), donc mass(b) (grossier seul) derive de la masse
   // feuille-consciente. Le correctif ramene les cellules couvertes a la moyenne des enfants
   // -> les deux mesures coincident a ~machine.
-  chk(std::fabs(coarse1_b0 - leaf1_b0) < Real(1e-12), "b0_coarse_eq_leaf_after_source");
-  chk(std::fabs(coarse1_b1 - leaf1_b1) < Real(1e-12), "b1_coarse_eq_leaf_after_source");
+  EXPECT_LT(std::fabs(coarse1_b0 - leaf1_b0), Real(1e-12)) << "b0_coarse_eq_leaf_after_source";
+  EXPECT_LT(std::fabs(coarse1_b1 - leaf1_b1), Real(1e-12)) << "b1_coarse_eq_leaf_after_source";
 
   // sanity : la source a REELLEMENT redistribue (sinon conservation triviale).
   device_fence();
   const Real n0_lo = sim.levels(0)[1].U.fab(0).const_array()(2 * CLO, 2 * CLO, 0);
-  chk(std::fabs(n0_lo - p0(2 * CLO, 2 * CLO)) > Real(1e-4), "source_active");
-
-  if (fails == 0)
-    std::printf("OK test_amr_composite_source_conservation\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_amr_composite_source_conservation, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_composite_source_conservation, "test_amr_composite_source_conservation"), 0);
+  EXPECT_GT(std::fabs(n0_lo - p0(2 * CLO, 2 * CLO)), Real(1e-4)) << "source_active";
 }

@@ -29,7 +29,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/physical_model.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
@@ -145,51 +144,31 @@ static double mms_error(int n, double margin) {
   return area > 0.0 ? l1 / area : 0.0;
 }
 
-static int pops_run_test_eb_transport() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
+// (a) MMS sur le disque : ordre 2 interieur (rapport d'erreur ~4 sous raffinement x2).
+TEST(EbTransport, MmsSecondOrderConvergenceInteriorToDisc) {
+  // margin = ~2 cellules de la resolution la plus grossiere, en coordonnees physiques, pour exclure la
+  // couche cut-cell des DEUX grilles a la meme distance physique (ordre mesure sur le coeur lisse).
+  const double margin = 3.0 * (kL / 64.0);
+  const double e0 = mms_error<Minmod>(64, margin);
+  const double e1 = mms_error<Minmod>(128, margin);
+  const double e2 = mms_error<Minmod>(256, margin);
+  const double p1 = std::log2(e0 / e1);
+  const double p2 = std::log2(e1 / e2);
+  ASSERT_TRUE(e0 > 0.0 && e1 > 0.0 && e2 > 0.0)
+      << "erreurs MMS strictement positives (mesure non vide); e0=" << e0 << " e1=" << e1
+      << " e2=" << e2;
+  // Ordre 2 : rapport d'erreur ~4 (2^2). On exige p in [1.7, 2.3] sur les DEUX raffinements (la borne
+  // haute exclut un ordre artificiellement gonfle ; la basse, un schema sous-convergent / une metrique
+  // EB erronee qui donnerait un ordre 0 ou 1).
+  auto order2_ok = [](double p) { return p >= 1.7 && p <= 2.3; };
+  EXPECT_TRUE(order2_ok(p1))
+      << "ordre ~2 (64->128) : transport EB du 2e ordre a l'interieur du disque, got p1=" << p1;
+  EXPECT_TRUE(order2_ok(p2))
+      << "ordre ~2 (128->256) : convergence soutenue (rapport d'erreur ~4), got p2=" << p2;
+}
 
-  std::printf("=== T5-PR2 : transport FV embedded-boundary conservatif sur disque ===\n");
-  std::printf("Boite [0, %.1f]^2, disque centre rayon %.2f, v=(%.2f, %.2f)\n", kL, kRdisc, kVx,
-              kVy);
-
-  // ----------------------------------------------------------------------
-  // (a) MMS sur le disque : ordre 2 interieur (rapport d'erreur ~4 sous raffinement x2).
-  // ----------------------------------------------------------------------
-  std::printf("\n--- (a) MMS divergence EB (ordre 2 a l'interieur du disque) ---\n");
-  {
-    // margin = ~2 cellules de la resolution la plus grossiere, en coordonnees physiques, pour exclure la
-    // couche cut-cell des DEUX grilles a la meme distance physique (ordre mesure sur le coeur lisse).
-    const double margin = 3.0 * (kL / 64.0);
-    const double e0 = mms_error<Minmod>(64, margin);
-    const double e1 = mms_error<Minmod>(128, margin);
-    const double e2 = mms_error<Minmod>(256, margin);
-    const double p1 = std::log2(e0 / e1);
-    const double p2 = std::log2(e1 / e2);
-    std::printf("  minmod L1 : n=64 %.4e  n=128 %.4e  n=256 %.4e\n", e0, e1, e2);
-    std::printf(
-        "  ordre observe : %.2f (64->128), %.2f (128->256)  (rapport e0/e1=%.2f, e1/e2=%.2f)\n", p1,
-        p2, e0 / e1, e1 / e2);
-    chk(e0 > 0.0 && e1 > 0.0 && e2 > 0.0,
-        "(a) erreurs MMS strictement positives (mesure non vide)");
-    // Ordre 2 : rapport d'erreur ~4 (2^2). On exige p in [1.7, 2.3] sur les DEUX raffinements (la borne
-    // haute exclut un ordre artificiellement gonfle ; la basse, un schema sous-convergent / une metrique
-    // EB erronee qui donnerait un ordre 0 ou 1).
-    auto order2_ok = [](double p) { return p >= 1.7 && p <= 2.3; };
-    chk(order2_ok(p1), "(a) ordre ~2 (64->128) : transport EB du 2e ordre a l'interieur du disque");
-    chk(order2_ok(p2), "(a) ordre ~2 (128->256) : convergence soutenue (rapport d'erreur ~4)");
-  }
-
-  // ----------------------------------------------------------------------
-  // (b) CONSERVATION de masse a la machine sur le disque (aucun flux ne franchit le mur immerge).
-  // ----------------------------------------------------------------------
-  std::printf(
-      "\n--- (b) Conservation de masse EB (Sum n kappa_eff dx dy, mur no-penetration) ---\n");
+// (b) CONSERVATION de masse a la machine sur le disque (aucun flux ne franchit le mur immerge).
+TEST(EbTransport, MassConservedToMachinePrecisionOnDisc) {
   {
     const int n = 96;
     const Box2D dom = Box2D::from_extents(n, n);
@@ -237,7 +216,7 @@ static int pops_run_test_eb_transport() {
     };
 
     const double m0 = eb_mass(U);
-    chk(m0 > 0.0, "(b) masse EB initiale strictement positive (bosse couvre le disque)");
+    ASSERT_TRUE(m0 > 0.0) << "masse EB initiale strictement positive (bosse couvre le disque)";
 
     // Compte des cellules COUPEES (kappa < 1) : le test n'a de sens EB que s'il y a de vraies coupes.
     int n_cut = 0, n_active = 0;
@@ -255,9 +234,9 @@ static int pops_run_test_eb_transport() {
             ++n_cut;
         }
     }
-    std::printf("  cellules actives=%d dont coupees (kappa<1)=%d\n", n_active, n_cut);
-    chk(n_active > 0 && n_cut > 0,
-        "(b) le disque produit de vraies cellules coupees (test EB non vide)");
+    ASSERT_TRUE(n_active > 0 && n_cut > 0)
+        << "le disque produit de vraies cellules coupees (test EB non vide); n_active=" << n_active
+        << " n_cut=" << n_cut;
 
     // Avance EXPLICITE Euler avant sur le residu EB : U^{n+1} = U^n + dt R_eb(U^n).
     const double v = std::hypot(kVx, kVy);
@@ -278,18 +257,17 @@ static int pops_run_test_eb_transport() {
       }
       saxpy(U, Real(dt), R);
     }
-    chk(!any_nan,
-        "(b) residu FINI sur toutes les cellules (clamp small-cell : pas de NaN sur la couche "
-        "r0/r1)");
+    EXPECT_TRUE(!any_nan)
+        << "residu FINI sur toutes les cellules (clamp small-cell : pas de NaN sur la couche "
+           "r0/r1)";
 
     const double m1 = eb_mass(U);
     const double rel_drift = std::fabs(m1 - m0) / std::fabs(m0);
-    std::printf("  masse EB : m0=%.15e  m1=%.15e  drift relatif=%.3e\n", m0, m1, rel_drift);
     // Conservation a la machine : la masse EB coherente avec le schema est conservee (telescopage exact
     // des flux internes, bords fermes). Borne juste au-dessus du bruit machine (accumulation 60 pas).
-    chk(rel_drift < 1e-12,
-        "(b) masse EB conservee a la machine (aucun flux ne franchit le mur immerge ; drift < "
-        "1e-12)");
+    EXPECT_TRUE(rel_drift < 1e-12)
+        << "masse EB conservee a la machine (aucun flux ne franchit le mur immerge ; drift < "
+           "1e-12), got drift=" << rel_drift;
     // Temoin que la dynamique a TOURNE (conservation non triviale) : l'etat a bouge.
     {
       device_fence();
@@ -302,16 +280,15 @@ static int pops_run_test_eb_transport() {
             continue;
           max_dev = std::max(max_dev, std::fabs(double(u(i, j, 0)) - 1.0));
         }
-      chk(max_dev > 1e-3,
-          "(b) le transport EB a effectivement avance l'etat (conservation non triviale)");
+      EXPECT_TRUE(max_dev > 1e-3)
+          << "le transport EB a effectivement avance l'etat (conservation non triviale)";
     }
   }
+}
 
-  // ----------------------------------------------------------------------
-  // (c) BIT-IDENTITE : un disque ENGLOBANT (aucune coupe : alpha_f = 1, kappa = 1 partout) rend
-  //     assemble_rhs_eb STRICTEMENT egal a assemble_rhs (diff bit a bit = 0).
-  // ----------------------------------------------------------------------
-  std::printf("\n--- (c) Bit-identite : sans coupe, EB == operateur cartesien historique ---\n");
+// (c) BIT-IDENTITE : un disque ENGLOBANT (aucune coupe : alpha_f = 1, kappa = 1 partout) rend
+//     assemble_rhs_eb STRICTEMENT egal a assemble_rhs (diff bit a bit = 0).
+TEST(EbTransport, EncompassingDiscIsBitIdenticalToCartesianOperator) {
   {
     const int n = 48;
     const Box2D dom = Box2D::from_extents(n, n);
@@ -350,25 +327,22 @@ static int pops_run_test_eb_transport() {
     for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
       for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
         max_abs_diff = std::max(max_abs_diff, std::fabs(double(rr(i, j, 0)) - double(re(i, j, 0))));
-    std::printf("  max|R_eb - R_cartesien| = %.3e (attendu 0)\n", max_abs_diff);
     // Egalite BIT A BIT : sans coupe (alpha = 1, kappa = 1), l'EB emprunte le MEME flux/reconstruction,
     // la division par kappa = 1 et la ponderation par alpha = 1 sont l'identite -> diff EXACTEMENT 0.
-    chk(max_abs_diff == 0.0,
-        "(c) sans coupe : residu EB BIT-IDENTIQUE au residu cartesien (alpha=1, kappa=1 -> "
-        "identite)");
+    EXPECT_TRUE(max_abs_diff == 0.0)
+        << "sans coupe : residu EB BIT-IDENTIQUE au residu cartesien (alpha=1, kappa=1 -> "
+           "identite), got " << max_abs_diff;
   }
+}
 
-  // ----------------------------------------------------------------------
-  // (d) CLAMP SMALL-CELL load-bearing : sur une cellule a kappa << kappa_min (dalle mince), le residu EB
-  //     est BORNE par le clamp (amplification 1/kappa_eff = 1/kappa_min), PAS par le 1/kappa brut qui
-  //     deborderait le pas fixe. On compare le residu CLAMPE (kappa_min = kEbKappaMin) au residu NON
-  //     clampe (kappa_min = kappa_brut, donc clamp inactif) sur la MEME cellule : leur rapport doit etre
-  //     EXACTEMENT kappa_brut / kappa_min (le clamp n'agit que sur le denominateur). C'est la preuve que
-  //     le clamp est ACTIF et borne reellement l'amplification (assertion non vide : sans clamp le
-  //     residu serait ~ (kappa_min/kappa_brut) fois plus grand).
-  // ----------------------------------------------------------------------
-  std::printf(
-      "\n--- (d) Clamp small-cell : residu borne sur une cellule a kappa << kappa_min ---\n");
+// (d) CLAMP SMALL-CELL load-bearing : sur une cellule a kappa << kappa_min (dalle mince), le residu EB
+//     est BORNE par le clamp (amplification 1/kappa_eff = 1/kappa_min), PAS par le 1/kappa brut qui
+//     deborderait le pas fixe. On compare le residu CLAMPE (kappa_min = kEbKappaMin) au residu NON
+//     clampe (kappa_min = kappa_brut, donc clamp inactif) sur la MEME cellule : leur rapport doit etre
+//     EXACTEMENT kappa_brut / kappa_min (le clamp n'agit que sur le denominateur). C'est la preuve que
+//     le clamp est ACTIF et borne reellement l'amplification (assertion non vide : sans clamp le
+//     residu serait ~ (kappa_min/kappa_brut) fois plus grand).
+TEST(EbTransport, SmallCellClampBoundsResidualAmplification) {
   {
     const int n = 16;
     const Box2D dom = Box2D::from_extents(n, n);
@@ -393,10 +367,9 @@ static int pops_run_test_eb_transport() {
     detail::CutFraction cf =
         detail::cut_fraction(ls, Real(geom.x_cell(n / 2)), Real(yc), Real(geom.dx()), Real(dy));
     const double kappa_raw = double(cf.kappa);
-    std::printf("  cellule centrale : kappa_brut = %.6e (kappa_min = %.1e)\n", kappa_raw,
-                double(detail::kEbKappaMin));
-    chk(kappa_raw < double(detail::kEbKappaMin),
-        "(d) la dalle mince produit bien kappa < kappa_min (le clamp DOIT agir : test non vide)");
+    ASSERT_TRUE(kappa_raw < double(detail::kEbKappaMin))
+        << "la dalle mince produit bien kappa < kappa_min (le clamp DOIT agir : test non vide); "
+           "kappa_brut=" << kappa_raw << " kappa_min=" << double(detail::kEbKappaMin);
 
     // Etat variant en X (les faces y de la rangee coupee sont FERMEES : seul le flux x compte ; il faut
     // donc une variation en x pour que div_x != 0 -> residu non nul a amplifier par 1/kappa).
@@ -439,30 +412,18 @@ static int pops_run_test_eb_transport() {
         max_rel_err = std::max(max_rel_err, std::fabs(r - ratio_expected) / ratio_expected);
       }
     }
-    std::printf(
-        "  rangee coupee : max|R_clamp|=%.4e  max|R_raw|=%.4e  ratio attendu=%.4e  err rel=%.3e\n",
-        max_abs_clamp, max_abs_raw, ratio_expected, max_rel_err);
-    chk(clamp_finite,
-        "(d) residu clampe FINI sur la rangee a kappa minuscule (pas de debordement)");
-    chk(max_abs_raw > 0.0,
-        "(d) residu non trivial sur la rangee coupee (flux y non nul : test reel)");
+    EXPECT_TRUE(clamp_finite)
+        << "residu clampe FINI sur la rangee a kappa minuscule (pas de debordement)";
+    EXPECT_TRUE(max_abs_raw > 0.0)
+        << "residu non trivial sur la rangee coupee (flux y non nul : test reel)";
     // Le clamp ATTENUE le residu d'un facteur kappa_raw/kappa_min < 1 : R_clamp = ratio * R_raw a la
     // tolerance arithmetique. Prouve que le clamp borne l'amplification 1/kappa a 1/kappa_min (sans lui
-    // le residu serait 1/ratio ~ %.0f fois plus grand -> instabilite du pas fixe).
-    chk(max_rel_err < 1e-12,
-        "(d) R_clamp == (kappa_raw/kappa_min) * R_raw : le clamp borne 1/kappa a 1/kappa_min "
-        "(exact)");
-    chk(ratio_expected < 1.0,
-        "(d) le clamp ATTENUE bien (kappa_raw < kappa_min : amplification reduite, stabilite "
-        "assuree)");
+    // le residu serait 1/ratio fois plus grand -> instabilite du pas fixe).
+    EXPECT_TRUE(max_rel_err < 1e-12)
+        << "R_clamp == (kappa_raw/kappa_min) * R_raw : le clamp borne 1/kappa a 1/kappa_min "
+           "(exact), got err rel=" << max_rel_err;
+    EXPECT_TRUE(ratio_expected < 1.0)
+        << "le clamp ATTENUE bien (kappa_raw < kappa_min : amplification reduite, stabilite "
+           "assuree)";
   }
-
-  std::printf("\n=== VERDICT : %s ===\n", fails == 0 ? "SUCCESS" : "ECHEC");
-  if (fails == 0)
-    std::printf("OK test_eb_transport\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_eb_transport, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_eb_transport, "test_eb_transport"), 0);
 }

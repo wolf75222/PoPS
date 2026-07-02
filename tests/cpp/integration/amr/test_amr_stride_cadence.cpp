@@ -21,7 +21,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/system/amr_system_coupler.hpp>
@@ -91,158 +90,155 @@ static auto make_sim(const Geometry& geom, const BoxArray& ba, const Distributio
   return AmrSystemCoupler(system, geom, ba, BCRec{}, ZeroRhs{}, std::move(bl));
 }
 
-static int pops_run_test_amr_stride_cadence() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
+namespace {
+constexpr int kNC = 4;
+constexpr int kNcell = kNC * kNC;  // 16 cellules
+}  // namespace
 
-  const int NC = 4;
-  const Box2D dom = Box2D::from_extents(NC, NC);
-  const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
-  const BoxArray ba(std::vector<Box2D>{dom});
-  const DistributionMapping dm(1, n_ranks());
-  const int ncell = NC * NC;  // 16 cellules
+// -----------------------------------------------------------------------
+// Test A : bloc rapide stride=1, bloc lent stride=3.
+//   ExplicitTime<SSPRK2, substeps=1, stride>.
+// -----------------------------------------------------------------------
+TEST(test_amr_stride_cadence, HoldThenCatchUpStride3) {
   const Real dt = Real(0.1);
+  constexpr int M = 3;
+  using FastBlk = EquationBlock<Prod, FirstOrder, ExplicitTime<SSPRK2, 1, 1>>;
+  using SlowBlk = EquationBlock<Prod, FirstOrder, ExplicitTime<SSPRK2, 1, M>>;
+  static_assert(FastBlk::Time::stride == 1);
+  static_assert(SlowBlk::Time::stride == M);
 
-  // -----------------------------------------------------------------------
-  // Test A : bloc rapide stride=1, bloc lent stride=3.
-  //   ExplicitTime<SSPRK2, substeps=1, stride>.
-  // -----------------------------------------------------------------------
-  {
-    constexpr int M = 3;
-    using FastBlk = EquationBlock<Prod, FirstOrder, ExplicitTime<SSPRK2, 1, 1>>;
-    using SlowBlk = EquationBlock<Prod, FirstOrder, ExplicitTime<SSPRK2, 1, M>>;
-    static_assert(FastBlk::Time::stride == 1);
-    static_assert(SlowBlk::Time::stride == M);
+  const Box2D dom = Box2D::from_extents(kNC, kNC);
+  const Geometry geometry{dom, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray box_array(std::vector<Box2D>{dom});
+  const DistributionMapping dist_map(1, n_ranks());
 
-    MultiFab Uf_out, Us_out;  // non utilise ici -- on lit via sim.coarse()
-    FastBlk fast{"fast", Prod{Real(1)}, Uf_out, BCRec{}};
-    SlowBlk slow{"slow", Prod{Real(1)}, Us_out, BCRec{}};
+  MultiFab Uf_out, Us_out;  // non utilise ici -- on lit via sim.coarse()
+  FastBlk fast{"fast", Prod{Real(1)}, Uf_out, BCRec{}};
+  SlowBlk slow{"slow", Prod{Real(1)}, Us_out, BCRec{}};
 
-    MultiFab Uf(ba, dm, 1, 2), Us(ba, dm, 1, 2);
-    Uf.set_val(Real(0));
-    Us.set_val(Real(0));
-    FastBlk f2{"fast", Prod{Real(1)}, Uf, BCRec{}};
-    SlowBlk s2{"slow", Prod{Real(1)}, Us, BCRec{}};
-    CoupledSystem system{f2, s2};
+  MultiFab Uf(box_array, dist_map, 1, 2), Us(box_array, dist_map, 1, 2);
+  Uf.set_val(Real(0));
+  Us.set_val(Real(0));
+  FastBlk f2{"fast", Prod{Real(1)}, Uf, BCRec{}};
+  SlowBlk s2{"slow", Prod{Real(1)}, Us, BCRec{}};
+  CoupledSystem system{f2, s2};
 
-    const Real dx = geom.dx(), dy = geom.dy();
-    std::vector<std::vector<AmrLevelMP>> bl;
-    bl.emplace_back();
-    bl.back().push_back(AmrLevelMP{std::move(Uf), nullptr, dx, dy});
-    bl.emplace_back();
-    bl.back().push_back(AmrLevelMP{std::move(Us), nullptr, dx, dy});
+  const Real dx = geometry.dx(), dy = geometry.dy();
+  std::vector<std::vector<AmrLevelMP>> bl;
+  bl.emplace_back();
+  bl.back().push_back(AmrLevelMP{std::move(Uf), nullptr, dx, dy});
+  bl.emplace_back();
+  bl.back().push_back(AmrLevelMP{std::move(Us), nullptr, dx, dy});
 
-    AmrSystemCoupler sim(system, geom, ba, BCRec{}, ZeroRhs{}, std::move(bl));
+  AmrSystemCoupler sim(system, geometry, box_array, BCRec{}, ZeroRhs{}, std::move(bl));
 
-    // -- macro-pas 0 (macro_step_=0 avant ++, verifie apres) :
-    //    (0+1)%3 = 1 != 0 -> bloc lent TENU.
-    //    Bloc rapide avance de dt.
-    sim.step(dt);
-    const Real uf0 = sum(sim.coarse(0), 0) / Real(ncell);  // valeur moyenne rapide
-    const Real us0 = sum(sim.coarse(1), 0) / Real(ncell);  // valeur moyenne lente
-    chk(std::fabs(uf0 - Real(0.1)) < Real(1e-12), "A_fast_advances_at_mac0");
-    chk(std::fabs(us0 - Real(0.0)) < Real(1e-12),
-        "A_slow_held_at_mac0");  // BUG : ancienne version donnait 0.3 ici
+  // -- macro-pas 0 (macro_step_=0 avant ++, verifie apres) :
+  //    (0+1)%3 = 1 != 0 -> bloc lent TENU.
+  //    Bloc rapide avance de dt.
+  sim.step(dt);
+  const Real uf0 = sum(sim.coarse(0), 0) / Real(kNcell);  // valeur moyenne rapide
+  const Real us0 = sum(sim.coarse(1), 0) / Real(kNcell);  // valeur moyenne lente
+  EXPECT_LT(std::fabs(uf0 - Real(0.1)), Real(1e-12)) << "A_fast_advances_at_mac0";
+  // BUG : ancienne version donnait 0.3 ici.
+  EXPECT_LT(std::fabs(us0 - Real(0.0)), Real(1e-12)) << "A_slow_held_at_mac0";
 
-    // -- macro-pas 1 (macro_step_=1) : (1+1)%3 = 2 != 0 -> bloc lent encore TENU.
-    sim.step(dt);
-    const Real uf1 = sum(sim.coarse(0), 0) / Real(ncell);
-    const Real us1 = sum(sim.coarse(1), 0) / Real(ncell);
-    chk(std::fabs(uf1 - Real(0.2)) < Real(1e-12), "A_fast_advances_at_mac1");
-    chk(std::fabs(us1 - Real(0.0)) < Real(1e-12), "A_slow_held_at_mac1");
+  // -- macro-pas 1 (macro_step_=1) : (1+1)%3 = 2 != 0 -> bloc lent encore TENU.
+  sim.step(dt);
+  const Real uf1 = sum(sim.coarse(0), 0) / Real(kNcell);
+  const Real us1 = sum(sim.coarse(1), 0) / Real(kNcell);
+  EXPECT_LT(std::fabs(uf1 - Real(0.2)), Real(1e-12)) << "A_fast_advances_at_mac1";
+  EXPECT_LT(std::fabs(us1 - Real(0.0)), Real(1e-12)) << "A_slow_held_at_mac1";
 
-    // -- macro-pas 2 (macro_step_=2) : (2+1)%3 = 0 -> bloc lent RATTRAPE (3*dt).
-    sim.step(dt);
-    const Real uf2 = sum(sim.coarse(0), 0) / Real(ncell);
-    const Real us2 = sum(sim.coarse(1), 0) / Real(ncell);
-    chk(std::fabs(uf2 - Real(0.3)) < Real(1e-12), "A_fast_at_mac2");
-    chk(std::fabs(us2 - Real(0.3)) < Real(1e-12),
-        "A_slow_catchup_at_mac2");  // synchronises a 0.3
+  // -- macro-pas 2 (macro_step_=2) : (2+1)%3 = 0 -> bloc lent RATTRAPE (3*dt).
+  sim.step(dt);
+  const Real uf2 = sum(sim.coarse(0), 0) / Real(kNcell);
+  const Real us2 = sum(sim.coarse(1), 0) / Real(kNcell);
+  EXPECT_LT(std::fabs(uf2 - Real(0.3)), Real(1e-12)) << "A_fast_at_mac2";
+  // synchronises a 0.3.
+  EXPECT_LT(std::fabs(us2 - Real(0.3)), Real(1e-12)) << "A_slow_catchup_at_mac2";
 
-    // Invariant de couplage : le bloc lent n'est JAMAIS en avance sur le rapide.
-    // Apres chaque macro-pas, slow_time <= fast_time.
-    // (Verifie implicitement : us0=0 <= uf0=0.1, us1=0 <= uf1=0.2, us2=0.3 == uf2=0.3)
-    chk(us0 <= uf0 + Real(1e-14), "A_coupling_invariant_mac0");
-    chk(us1 <= uf1 + Real(1e-14), "A_coupling_invariant_mac1");
-    chk(us2 <= uf2 + Real(1e-14), "A_coupling_invariant_mac2");
-  }
-
-  // -----------------------------------------------------------------------
-  // Test A2 : stride=5 (M=5). Le lent est tenu 4 pas, rattrape au 5eme.
-  // -----------------------------------------------------------------------
-  {
-    constexpr int M = 5;
-    using FastBlk = EquationBlock<Prod, FirstOrder, ExplicitTime<SSPRK2, 1, 1>>;
-    using SlowBlk = EquationBlock<Prod, FirstOrder, ExplicitTime<SSPRK2, 1, M>>;
-
-    MultiFab Uf(ba, dm, 1, 2), Us(ba, dm, 1, 2);
-    Uf.set_val(Real(0));
-    Us.set_val(Real(0));
-    FastBlk f{"fast", Prod{Real(1)}, Uf, BCRec{}};
-    SlowBlk s{"slow", Prod{Real(1)}, Us, BCRec{}};
-    CoupledSystem system{f, s};
-
-    const Real dx = geom.dx(), dy = geom.dy();
-    std::vector<std::vector<AmrLevelMP>> bl;
-    bl.emplace_back();
-    bl.back().push_back(AmrLevelMP{std::move(Uf), nullptr, dx, dy});
-    bl.emplace_back();
-    bl.back().push_back(AmrLevelMP{std::move(Us), nullptr, dx, dy});
-    AmrSystemCoupler sim(system, geom, ba, BCRec{}, ZeroRhs{}, std::move(bl));
-
-    // Pas 0..3 : lent tenu.
-    for (int mac = 0; mac < M - 1; ++mac) {
-      sim.step(dt);
-      const Real us = sum(sim.coarse(1), 0) / Real(ncell);
-      chk(std::fabs(us - Real(0.0)) < Real(1e-12), "A2_slow_held");
-    }
-    // Pas 4 (mac=M-1) : lent rattrape.
-    sim.step(dt);
-    const Real uf = sum(sim.coarse(0), 0) / Real(ncell);
-    const Real us = sum(sim.coarse(1), 0) / Real(ncell);
-    chk(std::fabs(uf - Real(0.5)) < Real(1e-12), "A2_fast_final");
-    chk(std::fabs(us - Real(0.5)) < Real(1e-12), "A2_slow_catchup");
-    chk(us <= uf + Real(1e-14), "A2_coupling_invariant");
-  }
-
-  // -----------------------------------------------------------------------
-  // Test B : stride=1 -> avance a CHAQUE macro-pas (bit-identique historique).
-  //   Apres N pas, u = N * dt * rate (production constante, SSPRK2 exact sur
-  //   une source constante).
-  // -----------------------------------------------------------------------
-  {
-    using Blk = EquationBlock<Prod, FirstOrder, ExplicitTime<SSPRK2, 1, 1>>;
-    static_assert(Blk::Time::stride == 1);
-
-    MultiFab Uc(ba, dm, 1, 2);
-    Uc.set_val(Real(0));
-    Blk blk{"b", Prod{Real(1)}, Uc, BCRec{}};
-    CoupledSystem system{blk};
-
-    const Real dx = geom.dx(), dy = geom.dy();
-    std::vector<std::vector<AmrLevelMP>> bl;
-    bl.emplace_back();
-    bl.back().push_back(AmrLevelMP{std::move(Uc), nullptr, dx, dy});
-    AmrSystemCoupler sim(system, geom, ba, BCRec{}, ZeroRhs{}, std::move(bl));
-
-    const int N = 5;
-    for (int i = 0; i < N; ++i)
-      sim.step(dt);
-    const Real u = sum(sim.coarse(0), 0) / Real(ncell);
-    // SSPRK2 exact pour u' = 1 : u(N*dt) = N*dt.
-    chk(std::fabs(u - Real(N) * dt) < Real(1e-12), "B_stride1_advances_every_step");
-  }
-
-  if (fails == 0)
-    std::printf("OK test_amr_stride_cadence\n");
-  return fails == 0 ? 0 : 1;
+  // Invariant de couplage : le bloc lent n'est JAMAIS en avance sur le rapide.
+  // Apres chaque macro-pas, slow_time <= fast_time.
+  // (Verifie implicitement : us0=0 <= uf0=0.1, us1=0 <= uf1=0.2, us2=0.3 == uf2=0.3)
+  EXPECT_LE(us0, uf0 + Real(1e-14)) << "A_coupling_invariant_mac0";
+  EXPECT_LE(us1, uf1 + Real(1e-14)) << "A_coupling_invariant_mac1";
+  EXPECT_LE(us2, uf2 + Real(1e-14)) << "A_coupling_invariant_mac2";
 }
 
-TEST(test_amr_stride_cadence, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_stride_cadence, "test_amr_stride_cadence"), 0);
+// -----------------------------------------------------------------------
+// Test A2 : stride=5 (M=5). Le lent est tenu 4 pas, rattrape au 5eme.
+// -----------------------------------------------------------------------
+TEST(test_amr_stride_cadence, HoldThenCatchUpStride5) {
+  const Real dt = Real(0.1);
+  constexpr int M = 5;
+  using FastBlk = EquationBlock<Prod, FirstOrder, ExplicitTime<SSPRK2, 1, 1>>;
+  using SlowBlk = EquationBlock<Prod, FirstOrder, ExplicitTime<SSPRK2, 1, M>>;
+
+  const Box2D dom = Box2D::from_extents(kNC, kNC);
+  const Geometry geometry{dom, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray box_array(std::vector<Box2D>{dom});
+  const DistributionMapping dist_map(1, n_ranks());
+
+  MultiFab Uf(box_array, dist_map, 1, 2), Us(box_array, dist_map, 1, 2);
+  Uf.set_val(Real(0));
+  Us.set_val(Real(0));
+  FastBlk f{"fast", Prod{Real(1)}, Uf, BCRec{}};
+  SlowBlk s{"slow", Prod{Real(1)}, Us, BCRec{}};
+  CoupledSystem system{f, s};
+
+  const Real dx = geometry.dx(), dy = geometry.dy();
+  std::vector<std::vector<AmrLevelMP>> bl;
+  bl.emplace_back();
+  bl.back().push_back(AmrLevelMP{std::move(Uf), nullptr, dx, dy});
+  bl.emplace_back();
+  bl.back().push_back(AmrLevelMP{std::move(Us), nullptr, dx, dy});
+  AmrSystemCoupler sim(system, geometry, box_array, BCRec{}, ZeroRhs{}, std::move(bl));
+
+  // Pas 0..3 : lent tenu.
+  for (int mac = 0; mac < M - 1; ++mac) {
+    sim.step(dt);
+    const Real us = sum(sim.coarse(1), 0) / Real(kNcell);
+    EXPECT_LT(std::fabs(us - Real(0.0)), Real(1e-12)) << "A2_slow_held";
+  }
+  // Pas 4 (mac=M-1) : lent rattrape.
+  sim.step(dt);
+  const Real uf = sum(sim.coarse(0), 0) / Real(kNcell);
+  const Real us = sum(sim.coarse(1), 0) / Real(kNcell);
+  EXPECT_LT(std::fabs(uf - Real(0.5)), Real(1e-12)) << "A2_fast_final";
+  EXPECT_LT(std::fabs(us - Real(0.5)), Real(1e-12)) << "A2_slow_catchup";
+  EXPECT_LE(us, uf + Real(1e-14)) << "A2_coupling_invariant";
+}
+
+// -----------------------------------------------------------------------
+// Test B : stride=1 -> avance a CHAQUE macro-pas (bit-identique historique).
+//   Apres N pas, u = N * dt * rate (production constante, SSPRK2 exact sur
+//   une source constante).
+// -----------------------------------------------------------------------
+TEST(test_amr_stride_cadence, Stride1AdvancesEveryStep) {
+  const Real dt = Real(0.1);
+  using Blk = EquationBlock<Prod, FirstOrder, ExplicitTime<SSPRK2, 1, 1>>;
+  static_assert(Blk::Time::stride == 1);
+
+  const Box2D dom = Box2D::from_extents(kNC, kNC);
+  const Geometry geometry{dom, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray box_array(std::vector<Box2D>{dom});
+  const DistributionMapping dist_map(1, n_ranks());
+
+  MultiFab Uc(box_array, dist_map, 1, 2);
+  Uc.set_val(Real(0));
+  Blk blk{"b", Prod{Real(1)}, Uc, BCRec{}};
+  CoupledSystem system{blk};
+
+  const Real dx = geometry.dx(), dy = geometry.dy();
+  std::vector<std::vector<AmrLevelMP>> bl;
+  bl.emplace_back();
+  bl.back().push_back(AmrLevelMP{std::move(Uc), nullptr, dx, dy});
+  AmrSystemCoupler sim(system, geometry, box_array, BCRec{}, ZeroRhs{}, std::move(bl));
+
+  const int N = 5;
+  for (int i = 0; i < N; ++i)
+    sim.step(dt);
+  const Real u = sum(sim.coarse(0), 0) / Real(kNcell);
+  // SSPRK2 exact pour u' = 1 : u(N*dt) = N*dt.
+  EXPECT_LT(std::fabs(u - Real(N) * dt), Real(1e-12)) << "B_stride1_advances_every_step";
 }

@@ -13,7 +13,6 @@
 //       seed central -> les deux layouts DIFFERENT, preuve que la composante lue a change.
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/physics/fluids/euler.hpp>          // Euler::conservative_vars (rho, rho_u, rho_v, E)
 #include <pops/core/state/variables.hpp>         // VariableSet, VariableRole, VariableKind
 #include <pops/mesh/layout/patch_box.hpp>         // PatchBox (signature index-espace des patchs fins)
@@ -23,7 +22,6 @@
 
 #include <algorithm>
 #include <climits>
-#include <cstdio>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -33,18 +31,6 @@
 #endif
 
 using namespace pops;
-
-template <class F>
-static bool raises(F&& f) {
-  try {
-    f();
-  } catch (const std::runtime_error&) {
-    return true;
-  } catch (...) {
-    return false;
-  }
-  return false;
-}
 
 // Euler compressible pur (sans source), elliptique de fond trivial (alpha=0) : meme spec que
 // test_amr_riemann_native / test_amr_weno5_native -> Poisson a second membre nul, aucune contrainte de
@@ -121,19 +107,12 @@ static std::vector<PatchBox> run_case(int N, double thr, const std::string& vari
   return sim.patch_boxes();
 }
 
-static int pops_run_test_amr_regrid_variable(int argc, char** argv) {
+TEST(test_amr_regrid_variable, Runs) {
 #if defined(POPS_HAS_KOKKOS)
+  int argc = 0;
+  char** argv = nullptr;
   Kokkos::ScopeGuard guard(argc, argv);
-#else
-  (void)argc;
-  (void)argv;
 #endif
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    std::printf("  [%s] %s\n", c ? "OK " : "XX ", w);
-    if (!c)
-      ++fails;
-  };
 
   // ============================================================================================
   // (1) RESOLVEUR PUR detail::resolve_selected_component : nom XOR role -> composante, STRICT.
@@ -141,29 +120,30 @@ static int pops_run_test_amr_regrid_variable(int argc, char** argv) {
   {
     // Layout Euler canonique : rho(0) rho_u(1) rho_v(2) E(3).
     const VariableSet cv = Euler::conservative_vars();
-    chk(detail::resolve_selected_component("set_refinement", "gas", cv, "", "") == -1,
-        "resolver_empty_selector_means_default");
-    chk(detail::resolve_selected_component("set_refinement", "gas", cv, "E", "") == 3,
-        "resolver_name_E_is_comp3");
-    chk(detail::resolve_selected_component("set_refinement", "gas", cv, "rho", "") == 0,
-        "resolver_name_rho_is_comp0");
-    chk(detail::resolve_selected_component("set_refinement", "gas", cv, "", "energy") == 3,
-        "resolver_role_energy_is_comp3");
-    chk(detail::resolve_selected_component("set_refinement", "gas", cv, "", "density") == 0,
-        "resolver_role_density_is_comp0");
-    chk(detail::resolve_selected_component("set_refinement", "gas", cv, "", "momentum_x") == 1,
-        "resolver_role_momentum_x_is_comp1");
-    chk(raises(
-            [&] { detail::resolve_selected_component("set_refinement", "gas", cv, "bogus", ""); }),
-        "resolver_unknown_name_throws");
-    chk(raises([&] {
-          detail::resolve_selected_component("set_refinement", "gas", cv, "", "temperature");
-        }),
-        "resolver_absent_role_throws");
-    chk(raises([&] {
-          detail::resolve_selected_component("set_refinement", "gas", cv, "E", "energy");
-        }),
-        "resolver_name_and_role_both_set_throws");
+    EXPECT_EQ(detail::resolve_selected_component("set_refinement", "gas", cv, "", ""), -1)
+        << "resolver_empty_selector_means_default";
+    EXPECT_EQ(detail::resolve_selected_component("set_refinement", "gas", cv, "E", ""), 3)
+        << "resolver_name_E_is_comp3";
+    EXPECT_EQ(detail::resolve_selected_component("set_refinement", "gas", cv, "rho", ""), 0)
+        << "resolver_name_rho_is_comp0";
+    EXPECT_EQ(detail::resolve_selected_component("set_refinement", "gas", cv, "", "energy"), 3)
+        << "resolver_role_energy_is_comp3";
+    EXPECT_EQ(detail::resolve_selected_component("set_refinement", "gas", cv, "", "density"), 0)
+        << "resolver_role_density_is_comp0";
+    EXPECT_EQ(detail::resolve_selected_component("set_refinement", "gas", cv, "", "momentum_x"), 1)
+        << "resolver_role_momentum_x_is_comp1";
+    EXPECT_THROW(
+        detail::resolve_selected_component("set_refinement", "gas", cv, "bogus", ""),
+        std::runtime_error)
+        << "resolver_unknown_name_throws";
+    EXPECT_THROW(
+        detail::resolve_selected_component("set_refinement", "gas", cv, "", "temperature"),
+        std::runtime_error)
+        << "resolver_absent_role_throws";
+    EXPECT_THROW(
+        detail::resolve_selected_component("set_refinement", "gas", cv, "E", "energy"),
+        std::runtime_error)
+        << "resolver_name_and_role_both_set_throws";
 
     // CAS D'ACCEPTATION CLE : densite NON situee a la composante 0. Le selecteur la retrouve par role
     // OU par nom, sans supposer l'index 0 (ce que l'ancien `a(i, j, 0)` ne pouvait pas).
@@ -172,10 +152,11 @@ static int pops_run_test_amr_regrid_variable(int argc, char** argv) {
                             4,
                             {VariableRole::Scalar, VariableRole::MomentumX, VariableRole::Density,
                              VariableRole::Energy}};
-    chk(detail::resolve_selected_component("set_refinement", "weird", weird, "", "density") == 2,
-        "resolver_density_not_at_comp0_role");
-    chk(detail::resolve_selected_component("set_refinement", "weird", weird, "rho", "") == 2,
-        "resolver_density_not_at_comp0_name");
+    EXPECT_EQ(detail::resolve_selected_component("set_refinement", "weird", weird, "", "density"),
+              2)
+        << "resolver_density_not_at_comp0_role";
+    EXPECT_EQ(detail::resolve_selected_component("set_refinement", "weird", weird, "rho", ""), 2)
+        << "resolver_density_not_at_comp0_name";
   }
 
   // ============================================================================================
@@ -194,26 +175,27 @@ static int pops_run_test_amr_regrid_variable(int argc, char** argv) {
 
   // Le defaut (densite uniforme < seuil) ne tague rien -> regrid no-op -> seed central conserve
   // (coin fin = n/2 = 32). Refiner sur l'energie deplace le patch vers la bosse bas-gauche (coin << 32).
-  chk(min_fine_corner(byrole) < min_fine_corner(def), "role_energy_patch_reaches_lower_left");
-  chk(min_fine_corner(byname) < min_fine_corner(def), "name_E_patch_reaches_lower_left");
-  chk(!same_boxes(byrole, def), "role_energy_layout_differs_from_default");
-  chk(!same_boxes(byname, def), "name_E_layout_differs_from_default");
+  EXPECT_LT(min_fine_corner(byrole), min_fine_corner(def)) << "role_energy_patch_reaches_lower_left";
+  EXPECT_LT(min_fine_corner(byname), min_fine_corner(def)) << "name_E_patch_reaches_lower_left";
+  EXPECT_FALSE(same_boxes(byrole, def)) << "role_energy_layout_differs_from_default";
+  EXPECT_FALSE(same_boxes(byname, def)) << "name_E_layout_differs_from_default";
 
   // NON-REGRESSION composante 0 : sur une bosse de DENSITE (comp 0) en bas-gauche, le selecteur par
   // defaut raffine bien la densite (le chemin historique reste fonctionnel).
   const std::vector<double> s_density =
       make_state(N, 1.0, 2.0, /*bump_comp=*/0, /*bump_val=*/3.0, 4, 20);
   const std::vector<PatchBox> dens_def = run_case(N, 2.0, "", "", s_density);
-  chk(min_fine_corner(dens_def) < 32, "default_still_refines_on_density_comp0");
+  EXPECT_LT(min_fine_corner(dens_def), 32) << "default_still_refines_on_density_comp0";
 
   // ============================================================================================
   // (3) ERREURS STRICTES : role absent du bloc -> erreur au build ; nom+role -> erreur immediate.
   // ============================================================================================
-  chk(raises([&] { run_case(N, 6.0, "", "temperature", s_energy); }),
-      "absent_role_throws_at_build_no_silent_comp0");
+  EXPECT_THROW(run_case(N, 6.0, "", "temperature", s_energy), std::runtime_error)
+      << "absent_role_throws_at_build_no_silent_comp0";
   // SINGLE-BLOCK : le selecteur n'est cable que sur le moteur multi-blocs ; un bloc unique + selecteur
   // est REFUSE au build (pas de repli silencieux vers la composante 0), comme le masque IMEX mono-bloc.
-  chk(raises([&] {
+  EXPECT_THROW(
+      {
         AmrSystemConfig cfg;
         cfg.n = N;
         cfg.L = 1.0;
@@ -224,9 +206,11 @@ static int pops_run_test_amr_regrid_variable(int argc, char** argv) {
         sim.set_refinement(6.0, "", "energy");  // bloc unique + role -> refus au build
         sim.set_density("solo", std::vector<double>(static_cast<std::size_t>(N) * N, 1.0));
         (void)sim.n_patches();  // declenche ensure_built -> refus
-      }),
-      "single_block_selector_rejected_at_build");
-  chk(raises([&] {
+      },
+      std::runtime_error)
+      << "single_block_selector_rejected_at_build";
+  EXPECT_THROW(
+      {
         AmrSystemConfig cfg;
         cfg.n = N;
         cfg.L = 1.0;
@@ -235,16 +219,7 @@ static int pops_run_test_amr_regrid_variable(int argc, char** argv) {
         sim.add_block("gas0", comp_spec(), "minmod", "rusanov", "conservative", "explicit", 1);
         sim.add_block("gas1", comp_spec(), "minmod", "rusanov", "conservative", "explicit", 1);
         sim.set_refinement(6.0, "E", "energy");  // nom ET role -> ambiguite refusee
-      }),
-      "name_and_role_both_set_throws_at_facade");
-
-  if (fails == 0)
-    std::printf("OK test_amr_regrid_variable\n");
-  else
-    std::printf("FAIL test_amr_regrid_variable : %d echec(s)\n", fails);
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_amr_regrid_variable, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_regrid_variable, "test_amr_regrid_variable"), 0);
+      },
+      std::runtime_error)
+      << "name_and_role_both_set_throws_at_facade";
 }

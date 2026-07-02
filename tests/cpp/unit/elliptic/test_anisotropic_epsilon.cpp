@@ -22,7 +22,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/storage/fab2d.hpp>
@@ -36,18 +35,20 @@
 using namespace pops;
 static constexpr double kPi = 3.14159265358979323846;
 
-static double phi_exact(double x, double y) {
+namespace {
+
+double phi_exact(double x, double y) {
   return std::sin(kPi * x) * std::sin(kPi * y);
 }
-static double eps_x_field(double x, double /*y*/) {
+double eps_x_field(double x, double /*y*/) {
   return 1.0 + 0.5 * x;
 }
-static double eps_y_field(double /*x*/, double y) {
+double eps_y_field(double /*x*/, double y) {
   return 1.0 + 0.3 * y;
 }
 
 // f = div(diag(eps_x, eps_y) grad phi) (analytique).
-static double rhs_exact(double x, double y) {
+double rhs_exact(double x, double y) {
   const double s = std::sin(kPi * x) * std::sin(kPi * y);
   return 0.5 * kPi * std::cos(kPi * x) * std::sin(kPi * y) +
          0.3 * kPi * std::sin(kPi * x) * std::cos(kPi * y) -
@@ -55,7 +56,7 @@ static double rhs_exact(double x, double y) {
 }
 
 // Resout div(diag(eps_x, eps_y) grad phi) = f sur n x n (Dirichlet exact), erreur L-inf.
-static double solve_mms(int n) {
+double solve_mms(int n) {
   Box2D dom = Box2D::from_extents(n, n);
   Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
   BoxArray ba = BoxArray::from_domain(dom, n);
@@ -90,7 +91,7 @@ static double solve_mms(int n) {
 // Non-regression : eps_y == eps_x (anisotropie DEGENEREE) doit donner exactement l'operateur
 // isotrope set_epsilon(eps_x). On compare le residu sur un phi non trivial entre le solveur
 // anisotrope degenere et le solveur isotrope : coincidence a la precision machine.
-static double degenerate_aniso_residual_gap(int n) {
+double degenerate_aniso_residual_gap(int n) {
   Box2D dom = Box2D::from_extents(n, n);
   Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
   BoxArray ba = BoxArray::from_domain(dom, n);
@@ -125,8 +126,8 @@ static double degenerate_aniso_residual_gap(int n) {
 
 // Composabilite anisotrope + reaction kappa : div(diag(eps_x, eps_y) grad phi) - kappa phi = f,
 // kappa constant. f gagne le terme - kappa phi. Convergence ordre 2 attendue.
-static constexpr double KAPPA = 50.0;
-static double solve_mms_kappa(int n) {
+constexpr double KAPPA = 50.0;
+double solve_mms_kappa(int n) {
   Box2D dom = Box2D::from_extents(n, n);
   Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
   BoxArray ba = BoxArray::from_domain(dom, n);
@@ -160,41 +161,28 @@ static double solve_mms_kappa(int n) {
   return eInf;
 }
 
-static int pops_run_test_anisotropic_epsilon() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
+}  // namespace
 
-  // (A) MMS anisotrope : convergence ordre 2.
+TEST(test_anisotropic_epsilon, mms_order2_convergence) {
   const double e32 = solve_mms(32);
   const double e64 = solve_mms(64);
   const double e128 = solve_mms(128);
   const double r1 = e32 / e64, r2 = e64 / e128;
   std::printf("aniso MMS : Linf e32=%.3e e64=%.3e e128=%.3e | ratios %.2f %.2f\n", e32, e64, e128,
               r1, r2);
-  chk(r1 > 3.5 && r1 < 4.5, "ordre2_ratio_32_64");
-  chk(r2 > 3.5 && r2 < 4.5, "ordre2_ratio_64_128");
+  EXPECT_TRUE(r1 > 3.5 && r1 < 4.5) << "ordre2_ratio_32_64";
+  EXPECT_TRUE(r2 > 3.5 && r2 < 4.5) << "ordre2_ratio_64_128";
+}
 
-  // (B) non-regression : eps_y = eps_x (degenere) == isotrope eps_x au bit.
+TEST(test_anisotropic_epsilon, degenerate_matches_isotropic_bit_identical) {
   const double gap = degenerate_aniso_residual_gap(64);
   std::printf("eps_y=eps_x : ecart residu vs isotrope eps_x = %.3e\n", gap);
-  chk(gap < 1e-12, "aniso_degenere_non_regression");
+  EXPECT_TRUE(gap < 1e-12) << "aniso_degenere_non_regression";
+}
 
-  // (C) composabilite aniso + kappa : ordre 2.
+TEST(test_anisotropic_epsilon, composable_with_reaction_kappa_order2) {
   const double c64 = solve_mms_kappa(64), c128 = solve_mms_kappa(128);
   const double rc = c64 / c128;
   std::printf("aniso + kappa MMS : Linf c64=%.3e c128=%.3e | ratio %.2f\n", c64, c128, rc);
-  chk(rc > 3.5 && rc < 4.5, "ordre2_aniso_plus_kappa");
-
-  if (fails == 0)
-    std::printf("OK test_anisotropic_epsilon\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_anisotropic_epsilon, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_anisotropic_epsilon, "test_anisotropic_epsilon"), 0);
+  EXPECT_TRUE(rc > 3.5 && rc < 4.5) << "ordre2_aniso_plus_kappa";
 }

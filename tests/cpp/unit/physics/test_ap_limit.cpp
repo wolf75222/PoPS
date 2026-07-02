@@ -9,14 +9,12 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/time/schemes/imex.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 
 #include <cmath>
-#include <cstdio>
 #include <vector>
 
 using namespace pops;
@@ -53,25 +51,15 @@ static double explicit_val(double eps, double u0, double u_eq, double dt, int n)
   return u;
 }
 
-static int pops_run_test_ap_limit() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+TEST(ApLimit, UniformStabilityAcrossStiffness) {
   const double u0 = 2.0, u_eq = 1.0, dt = 0.1;
   const int n = 50;
   const std::vector<double> epss = {1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8};
 
   double prev = 1e30, worst = 0;
   bool monotone = true;
-  std::printf("limite AP (dt=%.2f fixe, %d pas) :\n", dt, n);
   for (double eps : epss) {
     const double e = imex_err(eps, u0, u_eq, dt, n);
-    std::printf("  eps=%.0e (dt/eps=%.0e) : |u-u_eq|=%.3e\n", eps, dt / eps, e);
     worst = std::fmax(worst, e);
     if (!std::isfinite(e))
       monotone = false;
@@ -83,19 +71,13 @@ static int pops_run_test_ap_limit() {
   const double e_expl = explicit_val(1e-6, u0, u_eq, dt, 10);
 
   // stabilite UNIFORME : borne independante de la raideur (jamais > |u0 - u_eq|).
-  chk(std::isfinite(worst) && worst <= std::fabs(u0 - u_eq) + 1e-12, "AP_borne_uniforme");
+  EXPECT_TRUE(std::isfinite(worst) && worst <= std::fabs(u0 - u_eq) + 1e-12)
+      << "AP_borne_uniforme (worst=" << worst << ")";
   // capture de l'equilibre dans la limite raide.
-  chk(e_stiff < 1e-6, "AP_capture_equilibre");
+  EXPECT_TRUE(e_stiff < 1e-6) << "AP_capture_equilibre (e_stiff=" << e_stiff << ")";
   // l'erreur ne croit pas quand on durcit (de plus en plus AP).
-  chk(monotone, "AP_monotone_en_raideur");
+  EXPECT_TRUE(monotone) << "AP_monotone_en_raideur";
   // contraste : l'explicite explose au meme regime.
-  chk(!std::isfinite(e_expl) || std::fabs(e_expl) > 1e3, "explicite_explose");
-
-  if (fails == 0)
-    std::printf("OK test_ap_limit\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_ap_limit, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_ap_limit, "test_ap_limit"), 0);
+  EXPECT_TRUE(!std::isfinite(e_expl) || std::fabs(e_expl) > 1e3)
+      << "explicite_explose (e_expl=" << e_expl << ")";
 }

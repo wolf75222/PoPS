@@ -23,7 +23,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/state/state.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
@@ -42,7 +41,6 @@
 #include <pops/runtime/builders/block/block_builder_polar.hpp>  // derive_aux_polar : MEME derivation aux que System::solve_fields_polar
 
 #include <cmath>
-#include <cstdio>
 #include <vector>
 
 using namespace pops;
@@ -117,11 +115,7 @@ static void coupled_step(const PolarModel& model, MultiFab& U, MultiFab& aux,
       U, static_cast<Real>(dt));
 }
 
-static int pops_run_test_polar_system_step() {
-  std::printf("=== Pas COUPLE POLAIRE (transport -> Poisson -> aux -> avance), Phase 2b ===\n");
-  std::printf("Anneau r in [%.2f, %.2f], theta in [0, 2pi), B0=%.1f, q=%.1f\n", kRmin, kRmax, kB0,
-              kQ);
-
+TEST(PolarSystemStep, CoupledStepAdvectsDensityAndConservesMassUnderRadialWall) {
   const int nr = 64, nth = 64;
   Box2D dom = Box2D::from_extents(nr, nth);
   PolarGeometry g{dom, kRmin, kRmax};
@@ -186,67 +180,36 @@ static int pops_run_test_polar_system_step() {
       for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
         dmax = std::max(dmax, std::fabs(u(i, j, 0) - u0(i, j, 0)));
   }
-  std::printf("\n--- (A) Pas couple non trivial ---\n");
-  std::printf("  variation max de densite apres 1 pas : %.4e\n", dmax);
   const double minrho_A = min_density(U, dom);  // nan si blow-up
 
-  bool ok = true;
-  if (!std::isfinite(dmax) || !std::isfinite(minrho_A)) {
-    std::printf(
-        "  ECHEC : champ non fini apres 1 pas (blow-up : Poisson/aux/transport instable)\n");
-    ok = false;
-  } else if (!(dmax > 1e-9)) {
-    std::printf(
-        "  ECHEC : le pas couple ne modifie pas la densite (Poisson/aux/transport inertes ?)\n");
-    ok = false;
-  } else if (dmax > 1.0) {
-    // Borne de STABILITE : a la CFL choisie (~0.3) un pas WENO5/SSPRK3 ne change une cellule que de
-    // O(CFL * variation locale) ~ 0.1 ; une variation > 1.0 (densite initiale ~1) signe une divergence.
-    // C'est ce garde qui rattrape le blow-up "fini mais enorme" (135) qui passait avant le fix.
-    std::printf("  ECHEC : variation %.4e > 1.0 apres 1 pas = instabilite (gradient/CFL faux ?)\n",
-                dmax);
-    ok = false;
-  } else if (!(minrho_A > 0.0)) {
-    std::printf("  ECHEC : densite <= 0 apres 1 pas\n");
-    ok = false;
-  } else {
-    std::printf(
-        "  OK : le pas couple advecte reellement la densite (variation finie, bornee, positive)\n");
-  }
+  // (A) Un pas couple modifie reellement la densite (champ non gele).
+  EXPECT_TRUE(std::isfinite(dmax) && std::isfinite(minrho_A))
+      << "(A) champ non fini apres 1 pas (blow-up : Poisson/aux/transport instable) : dmax="
+      << dmax << " minrho=" << minrho_A;
+  EXPECT_TRUE(dmax > 1e-9) << "(A) le pas couple ne modifie pas la densite (Poisson/aux/transport "
+                              "inertes ?) : dmax="
+                           << dmax;
+  // Borne de STABILITE : a la CFL choisie (~0.3) un pas WENO5/SSPRK3 ne change une cellule que de
+  // O(CFL * variation locale) ~ 0.1 ; une variation > 1.0 (densite initiale ~1) signe une divergence.
+  // C'est ce garde qui rattrape le blow-up "fini mais enorme" (135) qui passait avant le fix.
+  EXPECT_TRUE(dmax <= 1.0) << "(A) variation " << dmax
+                           << " > 1.0 apres 1 pas = instabilite (gradient/CFL faux ?)";
+  EXPECT_TRUE(minrho_A > 0.0) << "(A) densite <= 0 apres 1 pas : minrho=" << minrho_A;
 
   // (B) Conservation de masse a la machine sur K pas couples (paroi radiale solide).
-  std::printf("\n--- (B) Conservation de masse sur %d pas couples (paroi radiale solide) ---\n",
-              nsteps);
   for (int s = 1; s < nsteps; ++s)
     coupled_step(model, U, aux, solver, g, dom, bc, dt);
   const double m1 = total_mass(U, g, dom);
   const double minrho1 = min_density(U, dom);
   const double rel = std::fabs(m1 - m0) / std::fabs(m0);
-  std::printf("  masse initiale=%.15e finale=%.15e  ecart relatif=%.3e\n", m0, m1, rel);
-  std::printf("  densite min initiale=%.4e finale=%.4e (sanity : reste positive)\n", minrho0,
-              minrho1);
   // GARDE anti-faux-positif : nan/inf doit FAIRE ECHOUER (nan > 1e-12 est faux en C++ -> sinon un run
   // divergent passerait silencieusement, exactement le bug attrape ici).
-  if (!std::isfinite(m1) || !std::isfinite(rel) || !std::isfinite(minrho1)) {
-    std::printf("  ECHEC : masse/densite non finie apres %d pas (blow-up)\n", nsteps);
-    ok = false;
-  } else if (rel > 1e-12) {
-    // Tolerance machine elargie (accumulation sur K pas x 3 etages SSPRK3, derivation aux, solve hote).
-    std::printf("  ECHEC : ecart de masse %.3e > 1e-12 (paroi radiale non conservative)\n", rel);
-    ok = false;
-  } else if (!(minrho1 > 0.0)) {
-    std::printf("  ECHEC : densite devenue negative (pas couple instable)\n");
-    ok = false;
-  } else {
-    std::printf("  OK : masse conservee a ~machine (%.3e <= 1e-12) et densite positive\n", rel);
-  }
-
-  std::printf("\n=== VERDICT : %s ===\n", ok ? "SUCCESS" : "ECHEC");
-  if (ok)
-    std::printf("OK test_polar_system_step\n");
-  return ok ? 0 : 1;
-}
-
-TEST(test_polar_system_step, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_polar_system_step, "test_polar_system_step"), 0);
+  EXPECT_TRUE(std::isfinite(m1) && std::isfinite(rel) && std::isfinite(minrho1))
+      << "(B) masse/densite non finie apres " << nsteps << " pas (blow-up)";
+  // Tolerance machine elargie (accumulation sur K pas x 3 etages SSPRK3, derivation aux, solve hote).
+  EXPECT_TRUE(rel <= 1e-12) << "(B) ecart de masse " << rel
+                            << " > 1e-12 (paroi radiale non conservative) : masse initiale=" << m0
+                            << " finale=" << m1;
+  EXPECT_TRUE(minrho1 > 0.0) << "(B) densite devenue negative (pas couple instable) : minrho1="
+                             << minrho1;
 }

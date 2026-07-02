@@ -5,7 +5,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/system/system_coupler.hpp>
@@ -16,10 +15,11 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <limits>
 
 using namespace pops;
+
+namespace {
 
 // Advection a vitesse constante a : vitesse d'onde max = |a|.
 struct AdvectX {
@@ -59,15 +59,9 @@ struct ZeroSystemRhs {
 
 using Blk = EquationBlock<AdvectX, FirstOrder, ExplicitTime<SSPRK2, 1>>;
 
-static int pops_run_test_cfl_dt() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
+}  // namespace
 
+TEST(test_cfl_dt, fastest_species_sets_the_step) {
   const int n = 16;
   const Box2D dom = Box2D::from_extents(n, n);
   const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
@@ -89,48 +83,57 @@ static int pops_run_test_cfl_dt() {
   const Real expected = cfl * h / Real(2);  // w_max = max(2, 0.5) = 2
 
   const Real dt = sim.step_cfl(cfl);
-  chk(std::fabs(dt - expected) < Real(1e-14), "cfl_dt_from_fastest_species");
-  chk(dt > Real(0), "cfl_dt_positive");
+  EXPECT_LT(std::fabs(dt - expected), Real(1e-14)) << "cfl_dt_from_fastest_species";
+  EXPECT_GT(dt, Real(0)) << "cfl_dt_positive";
   // le systeme a avance (etat fini, masse conservee pour l'advection periodique).
-  chk(std::fabs(sum(Uf, 0) - Real(1) * n * n) < Real(1e-10), "fast_mass_conserved");
-  chk(std::fabs(sum(Us, 0) - Real(1) * n * n) < Real(1e-10), "slow_mass_conserved");
-
-  // --- ADC-267 : systeme au repos (w_max = 0) -> le garde CFL clampe le denominateur a 1e-30 ---
-  // dt = cfl*h / max(w_max, 1e-30) ; sans le plancher, dt = +inf sur un etat au repos.
-  {
-    MultiFab Uq(ba, dm, 1, 2);
-    Uq.set_val(Real(1));
-    Blk quiet{"quiet", AdvectX{Real(0)}, Uq, bc};  // a = 0 -> w_max = 0
-    CoupledSystem qsys{quiet};
-    SystemCoupler qsim(qsys, geom, ba, bc, ZeroSystemRhs{});
-    const Real dtq = qsim.step_cfl(cfl);
-    const Real floor_dt = cfl * h / Real(1e-30);  // denominateur clampe au plancher
-    chk(std::isfinite(dtq), "quiescent_dt_finite");
-    chk(std::fabs(dtq - floor_dt) <= floor_dt * Real(1e-12), "quiescent_dt_clamped_to_floor");
-    chk(std::isfinite(sum(Uq, 0)), "quiescent_state_finite");  // a = 0 -> aucune advection
-  }
-
-  // --- ADC-267 : une vitesse d'onde NaN est avalee par le garde CFL -> le PAS reste fini. ---
-  // On ne fait PAS avancer l'etat ici : le flux numerique (Rusanov) utilise aussi la vitesse
-  // d'onde, donc un NaN s'y propagerait (comportement attendu du schema, pas du garde). Ce qu'on
-  // verifie, c'est la robustesse du calcul du pas (cfl_dt sans avancer).
-  {
-    MultiFab Un(ba, dm, 1, 2);
-    Un.set_val(Real(1));
-    using NanBlk = EquationBlock<NanSpeed, FirstOrder, ExplicitTime<SSPRK2, 1>>;
-    NanBlk nblk{"nan", NanSpeed{}, Un, bc};
-    CoupledSystem nsys{nblk};
-    SystemCoupler nsim(nsys, geom, ba, bc, ZeroSystemRhs{});
-    const Real dtn = nsim.cfl_dt(cfl);               // calcule le pas SANS avancer l'etat
-    chk(std::isfinite(dtn), "nan_speed_dt_finite");  // std::max(0, NaN) = 0 -> w_max = 0 -> dt fini
-    chk(dtn > Real(0), "nan_speed_dt_positive");
-  }
-
-  if (fails == 0)
-    std::printf("OK test_cfl_dt\n");
-  return fails == 0 ? 0 : 1;
+  EXPECT_LT(std::fabs(sum(Uf, 0) - Real(1) * n * n), Real(1e-10)) << "fast_mass_conserved";
+  EXPECT_LT(std::fabs(sum(Us, 0) - Real(1) * n * n), Real(1e-10)) << "slow_mass_conserved";
 }
 
-TEST(test_cfl_dt, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_cfl_dt, "test_cfl_dt"), 0);
+// ADC-267 : systeme au repos (w_max = 0) -> le garde CFL clampe le denominateur a 1e-30.
+// dt = cfl*h / max(w_max, 1e-30) ; sans le plancher, dt = +inf sur un etat au repos.
+TEST(test_cfl_dt, quiescent_system_dt_clamped_to_floor) {
+  const int n = 16;
+  const Box2D dom = Box2D::from_extents(n, n);
+  const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray ba(std::vector<Box2D>{dom});
+  const DistributionMapping dm(1, n_ranks());
+  BCRec bc;
+  const Real cfl = Real(0.4);
+  const Real h = std::min(geom.dx(), geom.dy());
+
+  MultiFab Uq(ba, dm, 1, 2);
+  Uq.set_val(Real(1));
+  Blk quiet{"quiet", AdvectX{Real(0)}, Uq, bc};  // a = 0 -> w_max = 0
+  CoupledSystem qsys{quiet};
+  SystemCoupler qsim(qsys, geom, ba, bc, ZeroSystemRhs{});
+  const Real dtq = qsim.step_cfl(cfl);
+  const Real floor_dt = cfl * h / Real(1e-30);  // denominateur clampe au plancher
+  EXPECT_TRUE(std::isfinite(dtq)) << "quiescent_dt_finite";
+  EXPECT_LE(std::fabs(dtq - floor_dt), floor_dt * Real(1e-12)) << "quiescent_dt_clamped_to_floor";
+  EXPECT_TRUE(std::isfinite(sum(Uq, 0))) << "quiescent_state_finite";  // a = 0 -> aucune advection
+}
+
+// ADC-267 : une vitesse d'onde NaN est avalee par le garde CFL -> le PAS reste fini. On ne fait
+// PAS avancer l'etat ici : le flux numerique (Rusanov) utilise aussi la vitesse d'onde, donc un
+// NaN s'y propagerait (comportement attendu du schema, pas du garde). Ce qu'on verifie, c'est la
+// robustesse du calcul du pas (cfl_dt sans avancer).
+TEST(test_cfl_dt, nan_wave_speed_is_swallowed_by_cfl_guard) {
+  const int n = 16;
+  const Box2D dom = Box2D::from_extents(n, n);
+  const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray ba(std::vector<Box2D>{dom});
+  const DistributionMapping dm(1, n_ranks());
+  BCRec bc;
+  const Real cfl = Real(0.4);
+
+  MultiFab Un(ba, dm, 1, 2);
+  Un.set_val(Real(1));
+  using NanBlk = EquationBlock<NanSpeed, FirstOrder, ExplicitTime<SSPRK2, 1>>;
+  NanBlk nblk{"nan", NanSpeed{}, Un, bc};
+  CoupledSystem nsys{nblk};
+  SystemCoupler nsim(nsys, geom, ba, bc, ZeroSystemRhs{});
+  const Real dtn = nsim.cfl_dt(cfl);                     // calcule le pas SANS avancer l'etat
+  EXPECT_TRUE(std::isfinite(dtn)) << "nan_speed_dt_finite";  // max(0, NaN) = 0 -> w_max = 0 -> fini
+  EXPECT_GT(dtn, Real(0)) << "nan_speed_dt_positive";
 }

@@ -20,7 +20,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/coupling/base/elliptic_rhs.hpp>  // add_scaled_component (RHS de reference assemble main)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>    // AmrRuntime, AmrRuntimeBlock
@@ -41,18 +40,6 @@
 #endif
 
 using namespace pops;
-
-template <class F>
-static bool raises(F&& f) {
-  try {
-    f();
-  } catch (const std::runtime_error&) {
-    return true;
-  } catch (...) {
-    return false;
-  }
-  return false;
-}
 
 // Spec ExB scalaire (1 var) a charge q : transport E x B (advection pilotee par grad phi), densite
 // de charge q n pour le Poisson de systeme. La charge q (signe inclus) distingue electrons / ions.
@@ -78,19 +65,12 @@ static std::vector<double> bump(int n, double base, double amp) {
   return r;
 }
 
-static int pops_run_test_amr_system_twoblock(int argc, char** argv) {
+TEST(test_amr_system_twoblock, Runs) {
 #if defined(POPS_HAS_KOKKOS)
+  int argc = 0;
+  char** argv = nullptr;
   Kokkos::ScopeGuard guard(argc, argv);
-#else
-  (void)argc;
-  (void)argv;
 #endif
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    std::printf("  [%s] %s\n", c ? "OK " : "XX ", w);
-    if (!c)
-      ++fails;
-  };
 
   const int N = 32;
   const double L = 1.0, B0 = 1.0;
@@ -129,8 +109,8 @@ static int pops_run_test_amr_system_twoblock(int argc, char** argv) {
 
     AmrRuntime rt(S.geom, S.ba_coarse, S.poisson_bc, std::move(blocks), S.base_per,
                   S.replicated_coarse, S.wall);
-    chk(rt.n_blocks() == 2, "twoblock_engine_two_blocks");
-    chk(rt.nlev() == 2, "twoblock_engine_two_levels");
+    EXPECT_EQ(rt.n_blocks(), 2) << "twoblock_engine_two_blocks";
+    EXPECT_EQ(rt.nlev(), 2) << "twoblock_engine_two_levels";
 
     rt.solve_fields();  // average_down par bloc + Poisson somme co-localise + aux
 
@@ -148,18 +128,18 @@ static int pops_run_test_amr_system_twoblock(int argc, char** argv) {
     diff.set_val(Real(0));
     add_scaled_component(got, Real(1), 0, diff);
     add_scaled_component(ref, Real(-1), 0, diff);
-    chk(norm_inf(diff) < Real(1e-13), "twoblock_poisson_rhs_is_sum_colocated");
+    EXPECT_LT(norm_inf(diff), Real(1e-13)) << "twoblock_poisson_rhs_is_sum_colocated";
     // somme non triviale (les deux densites contribuent) + phi non nul -> Poisson de systeme actif.
-    chk(norm_inf(ref) > Real(1e-6), "twoblock_poisson_rhs_nonzero");
-    chk(norm_inf(rt.phi()) > Real(1e-8), "twoblock_poisson_phi_nonzero");
+    EXPECT_GT(norm_inf(ref), Real(1e-6)) << "twoblock_poisson_rhs_nonzero";
+    EXPECT_GT(norm_inf(rt.phi()), Real(1e-8)) << "twoblock_poisson_phi_nonzero";
 
     // (c) masse de CHAQUE bloc conservee a travers un pas (reflux + average_down, PAR BLOC).
     const Real m0a = rt.mass(0), m1a = rt.mass(1);
     rt.step(Real(0.01));
     rt.step(Real(0.01));
     const Real m0b = rt.mass(0), m1b = rt.mass(1);
-    chk(std::fabs(m0b - m0a) < Real(1e-11), "twoblock_block0_mass_conserved");
-    chk(std::fabs(m1b - m1a) < Real(1e-11), "twoblock_block1_mass_conserved");
+    EXPECT_LT(std::fabs(m0b - m0a), Real(1e-11)) << "twoblock_block0_mass_conserved";
+    EXPECT_LT(std::fabs(m1b - m1a), Real(1e-11)) << "twoblock_block1_mass_conserved";
   }
 
   // ============================================================================================
@@ -180,7 +160,7 @@ static int pops_run_test_amr_system_twoblock(int argc, char** argv) {
     sim.set_density("ions", rho0);
     sim.set_density("electrons", rho1);
 
-    chk(sim.n_blocks() == 2, "facade_two_blocks");
+    EXPECT_EQ(sim.n_blocks(), 2) << "facade_two_blocks";
 
     const std::vector<double> d0_before = sim.density("ions");
     const std::vector<double> d1_before = sim.density("electrons");
@@ -200,28 +180,28 @@ static int pops_run_test_amr_system_twoblock(int argc, char** argv) {
       dmax0 = std::max(dmax0, std::fabs(d0_after[i] - d0_before[i]));
       dmax1 = std::max(dmax1, std::fabs(d1_after[i] - d1_before[i]));
     }
-    chk(dmax0 > 1e-6, "facade_block0_evolved");
-    chk(dmax1 > 1e-6, "facade_block1_evolved");
+    EXPECT_GT(dmax0, 1e-6) << "facade_block0_evolved";
+    EXPECT_GT(dmax1, 1e-6) << "facade_block1_evolved";
 
     // (c) masse de CHAQUE bloc conservee a ~machine (advection periodique conservative, par bloc).
-    chk(std::fabs(m0_after - m0_before) < 1e-10, "facade_block0_mass_conserved");
-    chk(std::fabs(m1_after - m1_before) < 1e-10, "facade_block1_mass_conserved");
+    EXPECT_LT(std::fabs(m0_after - m0_before), 1e-10) << "facade_block0_mass_conserved";
+    EXPECT_LT(std::fabs(m1_after - m1_before), 1e-10) << "facade_block1_mass_conserved";
 
     // potentiel de systeme non trivial (Poisson somme co-localise q0 n0 + q1 n1).
     const std::vector<double> phi = sim.potential();
     double pmax = 0;
     for (double v : phi)
       pmax = std::max(pmax, std::fabs(v));
-    chk(pmax > 1e-8, "facade_potential_nonzero");
+    EXPECT_GT(pmax, 1e-8) << "facade_potential_nonzero";
 
-    chk(sim.n_patches() >= 1, "facade_shared_hierarchy_has_fine_patch");
+    EXPECT_GE(sim.n_patches(), 1) << "facade_shared_hierarchy_has_fine_patch";
   }
 
   // (e) multi-blocs + regrid_every > 0 ACCEPTE au build (deverrouillage Phase 2, C.6 : regrid d'union
   //     des tags). L'ancien refus (hierarchie figee) est leve ; ensure_built construit le moteur avec
   //     la cadence de regrid active. Le mouvement effectif de la hierarchie est verrouille en detail
   //     par test_amr_multiblock_regrid_union ; ici on verifie seulement que la facade NE LEVE PLUS.
-  chk(!raises([&] {
+  EXPECT_NO_THROW({
     AmrSystemConfig cfg;
     cfg.n = N;
     cfg.L = L;
@@ -233,8 +213,7 @@ static int pops_run_test_amr_system_twoblock(int argc, char** argv) {
     sim.set_density("ions", rho0);
     sim.set_density("electrons", rho1);
     (void)sim.mass("ions");  // declenche ensure_built -> moteur multi-blocs + regrid d'union actif
-  }),
-      "multiblock_regrid_now_accepted");
+  }) << "multiblock_regrid_now_accepted";
 
   // ============================================================================================
   // (d) MONO-BLOC BIT-IDENTIQUE : un seul bloc passe TOUJOURS par AmrCouplerMP (jamais AmrRuntime).
@@ -261,16 +240,6 @@ static int pops_run_test_amr_system_twoblock(int argc, char** argv) {
     double dmax = 0;
     for (std::size_t i = 0; i < a.size(); ++i)
       dmax = std::max(dmax, std::fabs(a[i] - b[i]));
-    chk(dmax == 0.0, "monoblock_bit_identical_dmax0");
+    EXPECT_EQ(dmax, 0.0) << "monoblock_bit_identical_dmax0";
   }
-
-  if (fails == 0)
-    std::printf("OK test_amr_system_twoblock\n");
-  else
-    std::printf("FAIL test_amr_system_twoblock : %d echec(s)\n", fails);
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_amr_system_twoblock, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_system_twoblock, "test_amr_system_twoblock"), 0);
 }

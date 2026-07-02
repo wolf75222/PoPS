@@ -31,7 +31,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/state/state.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
@@ -48,7 +47,6 @@
 #include <pops/physics/bricks/hyperbolic.hpp>
 
 #include <cmath>
-#include <cstdio>
 #include <vector>
 
 using namespace pops;
@@ -399,101 +397,60 @@ static double run_mass_conservation() {
   }
   const double m1 = total_mass(U, g, dom);
   const double rel = std::fabs(m1 - m0) / std::fabs(m0);
-  std::printf("[masse] initiale=%.15e finale=%.15e  ecart relatif=%.3e (K=%d pas)\n", m0, m1, rel,
-              nsteps);
   return rel;
 }
 
-static int pops_run_test_polar_fluid_transport() {
-  std::printf("=== TRANSPORT FLUIDE ISOTHERME POLAIRE (Voie A etape 1) ===\n");
-  std::printf("Anneau r in [%.2f, %.2f], theta in [0, 2pi), cs2=%.2f\n", kRmin, kRmax, kCs2);
-  bool ok = true;
-
-  // --- (A) Equilibre rotatif : residu radial -> 0 AVEC le terme geometrique ---------------------
-  std::printf("\n--- (A) Equilibre rotatif (rotation rigide Omega=%.2f, rho cyclostrophique) ---\n",
-              kOmega);
-  std::printf(
-      "    AVEC terme geometrique de courbure (IsothermalFluxPolar) : residu radial -> 0\n");
+// (A) Equilibre rotatif : residu radial -> 0 AVEC le terme geometrique de courbure.
+// L'equilibre exact rend le residu -> 0 a l'ordre de l'operateur (FV polaire ~ ordre 2). On exige
+// une DECROISSANCE nette (ordre >= 1.5) ET un residu fin petit : preuve que le terme geometrique
+// equilibre la divergence de pression radiale.
+TEST(test_polar_fluid_transport, EquilibriumResidualVanishesWithGeomTerm) {
   const int res[3] = {48, 96, 192};
   IsothermalFluxPolar fp;
   fp.cs2 = kCs2;
   double eq[3];
-  for (int k = 0; k < 3; ++k) {
+  for (int k = 0; k < 3; ++k)
     eq[k] = equilibrium_residual_radial(res[k], 2 * res[k], fp);
-    std::printf("    nr=%-4d nth=%-4d : |R_radial|_inf = %.6e\n", res[k], 2 * res[k], eq[k]);
-  }
   const double peq1 = std::log2(eq[0] / eq[1]);
   const double peq2 = std::log2(eq[1] / eq[2]);
-  std::printf("    ordre observe (Linf) : %.2f (48->96), %.2f (96->192)\n", peq1, peq2);
-  // L'equilibre exact rend le residu -> 0 a l'ordre de l'operateur (FV polaire ~ ordre 2). On exige
-  // une DECROISSANCE nette (ordre >= 1.5) ET un residu fin petit : preuve que le terme geometrique
-  // equilibre la divergence de pression radiale.
-  if (!(peq1 >= 1.5) || !(peq2 >= 1.5)) {
-    std::printf(
-        "    ECHEC : le residu ne decroit pas a l'ordre attendu (terme geometrique faux ?)\n");
-    ok = false;
-  } else {
-    std::printf("    OK : residu radial -> 0 (ordre >= 1.5) => terme geometrique correct\n");
-  }
-
-  // --- (A') Controle negatif : MEME etat, brique SANS terme geometrique -> residu O(1) ----------
-  std::printf("\n--- (A') Controle negatif (IsothermalFlux SANS terme geometrique) ---\n");
-  IsothermalFlux f_nogeom;
-  f_nogeom.cs2 = kCs2;
-  double ng_res[2];
-  ng_res[0] = equilibrium_residual_radial(48, 96, f_nogeom);
-  ng_res[1] = equilibrium_residual_radial(192, 384, f_nogeom);
-  std::printf("    nr=48  : |R_radial|_inf = %.6e\n", ng_res[0]);
-  std::printf("    nr=192 : |R_radial|_inf = %.6e\n", ng_res[1]);
-  // Sans le terme geometrique le residu est domine par rho v_theta^2/r (O(1)), il NE decroit PAS avec
-  // la resolution : on exige qu'il reste GRAND (>> le residu AVEC geometrie a meme resolution).
-  if (!(ng_res[1] > 0.1) || !(ng_res[1] > 100.0 * eq[2])) {
-    std::printf("    ECHEC : le residu sans geometrie devrait rester O(1) et >> le residu avec\n");
-    ok = false;
-  } else {
-    std::printf(
-        "    OK : residu O(1) non convergent sans terme geometrique (>> %.2e avec) => le terme\n"
-        "         geometrique est INDISPENSABLE (la divergence conservative seule ne suffit pas)\n",
-        eq[2]);
-  }
-
-  // --- (B) MMS du systeme fluide complet (3 var) : ordre 2 ---------------------------------------
-  std::printf(
-      "\n--- (B) MMS fluide complet 3 var (v_r != 0, v_theta != 0) : ordre 2 attendu ---\n");
-  double e[3];
-  for (int k = 0; k < 3; ++k) {
-    e[k] = run_mms_fluid<Weno5>(res[k], 2 * res[k]);
-    std::printf("    WENO5  nr=%-4d nth=%-4d : L2 = %.6e\n", res[k], 2 * res[k], e[k]);
-  }
-  const double p1 = std::log2(e[0] / e[1]);
-  const double p2 = std::log2(e[1] / e[2]);
-  std::printf("    ordre observe WENO5 (L2) : %.2f (48->96), %.2f (96->192)\n", p1, p2);
-  const double kSeuil = 1.7;
-  if (!(p1 >= kSeuil) || !(p2 >= kSeuil) || !std::isfinite(e[2])) {
-    std::printf("    ECHEC : ordre < %.1f (transport fluide polaire non convergent)\n", kSeuil);
-    ok = false;
-  } else {
-    std::printf(
-        "    OK : convergence d'ordre >= %.1f (transport fluide 3 var + courbure correct)\n",
-        kSeuil);
-  }
-
-  // --- (C) Conservation de la masse (paroi radiale) ---------------------------------------------
-  std::printf("\n--- (C) Conservation de la masse (paroi radiale, v_r != 0) ---\n");
-  const double rel = run_mass_conservation();
-  if (rel > 1e-12) {
-    std::printf("    ECHEC : ecart de masse %.3e > 1e-12\n", rel);
-    ok = false;
-  } else {
-    std::printf("    OK : masse conservee a ~machine (%.3e <= 1e-12)\n", rel);
-  }
-
-  std::printf("\n=== VERDICT : %s ===\n", ok ? "SUCCESS" : "ECHEC");
-  if (ok)
-    std::printf("OK test_polar_fluid_transport\n");
-  return ok ? 0 : 1;
+  EXPECT_TRUE(peq1 >= 1.5 && peq2 >= 1.5)
+      << "residu radial ordre observe : " << peq1 << " (48->96), " << peq2
+      << " (96->192), residus=" << eq[0] << "," << eq[1] << "," << eq[2];
 }
 
-TEST(test_polar_fluid_transport, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_polar_fluid_transport, "test_polar_fluid_transport"), 0);
+// (A') Controle negatif : MEME etat, brique SANS terme geometrique -> residu O(1) non convergent.
+// Sans le terme geometrique le residu est domine par rho v_theta^2/r (O(1)), il NE decroit PAS
+// avec la resolution : on exige qu'il reste GRAND (>> le residu AVEC geometrie a meme resolution).
+TEST(test_polar_fluid_transport, NegativeControlWithoutGeomTermStaysOrderOne) {
+  IsothermalFluxPolar fp;
+  fp.cs2 = kCs2;
+  const double eq2 = equilibrium_residual_radial(192, 384, fp);
+
+  IsothermalFlux f_nogeom;
+  f_nogeom.cs2 = kCs2;
+  const double ng_res0 = equilibrium_residual_radial(48, 96, f_nogeom);
+  const double ng_res1 = equilibrium_residual_radial(192, 384, f_nogeom);
+  EXPECT_TRUE(ng_res1 > 0.1 && ng_res1 > 100.0 * eq2)
+      << "residu sans geometrie devrait rester O(1) et >> le residu avec : ng_res0=" << ng_res0
+      << " ng_res1=" << ng_res1 << " eq_avec_geom=" << eq2;
+}
+
+// (B) MMS du systeme fluide complet (3 var, v_r != 0, v_theta != 0) : ordre 2 attendu.
+TEST(test_polar_fluid_transport, MmsFullFluidSystemConvergesAtOrderTwo) {
+  const int res[3] = {48, 96, 192};
+  double e[3];
+  for (int k = 0; k < 3; ++k)
+    e[k] = run_mms_fluid<Weno5>(res[k], 2 * res[k]);
+  const double p1 = std::log2(e[0] / e[1]);
+  const double p2 = std::log2(e[1] / e[2]);
+  const double kSeuil = 1.7;
+  EXPECT_TRUE(p1 >= kSeuil && p2 >= kSeuil && std::isfinite(e[2]))
+      << "ordre observe WENO5 (L2) : " << p1 << " (48->96), " << p2 << " (96->192), seuil="
+      << kSeuil << ", e[2]=" << e[2];
+}
+
+// (C) Conservation de la masse sur une avance SSPRK3 avec paroi radiale.
+TEST(test_polar_fluid_transport, MassConservedWithRadialWall) {
+  const double rel = run_mass_conservation();
+  EXPECT_TRUE(rel <= 1e-12) << "ecart de masse relatif = " << rel << " > 1e-12";
 }

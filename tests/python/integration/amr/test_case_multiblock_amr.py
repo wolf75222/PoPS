@@ -23,9 +23,7 @@ except Exception as exc:  # noqa: BLE001
     sys.exit(0)
 
 
-def _check(cond, msg):
-    if not cond:
-        raise AssertionError(msg)
+from tests.python.support.assertions import _check
 
 
 class _StubCompiledModel:

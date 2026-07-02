@@ -35,7 +35,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/physical_model.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
@@ -97,49 +96,35 @@ struct SlabBand {
   }
 };
 
-static int pops_run_test_embedded_boundary_generic() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
+// (1) CONTRAT : convention de signe, operator() == level_set, cell_active == (ls < 0).
+TEST(EmbeddedBoundaryGeneric, LevelSetContract) {
+  // Demi-plan a*x + b*y - c : actif (ls < 0) du cote a*x + b*y < c. Diagonal (a, b != 0) : geometrie
+  // franchement non-axiale, non-disque.
+  const detail::HalfPlaneDomain hp{1.0, 1.0, 1.0};  // x + y < 1 actif
+  // Convention de signe : (0.1, 0.1) dedans (0.2 < 1), (0.9, 0.9) dehors (1.8 > 1).
+  EXPECT_TRUE(double(hp.level_set(Real(0.1), Real(0.1))) < 0.0)
+      << "demi-plan : interieur ls < 0";
+  EXPECT_TRUE(double(hp.level_set(Real(0.9), Real(0.9))) > 0.0)
+      << "demi-plan : exterieur ls > 0";
+  EXPECT_TRUE(hp.cell_active(Real(0.1), Real(0.1)) && !hp.cell_active(Real(0.9), Real(0.9)))
+      << "demi-plan : cell_active == (ls < 0)";
+  // operator() (forme callable consommee par les operateurs) == level_set (alias nomme).
+  bool callable_ok = true;
+  for (double x = 0.05; x < 1.0; x += 0.17)
+    for (double y = 0.05; y < 1.0; y += 0.19)
+      if (double(hp(Real(x), Real(y))) != double(hp.level_set(Real(x), Real(y))))
+        callable_ok = false;
+  EXPECT_TRUE(callable_ok) << "demi-plan : operator() == level_set (forme callable)";
 
-  std::printf("=== ADC-327 : contrat generique embedded-boundary / level-set (non-disque) ===\n");
+  // Le disque (instance historique) respecte le meme contrat (operator() ajoute, level_set inchange).
+  const detail::DiscDomain disc = detail::DiscDomain::centered_in_box(kL, 0.3);
+  EXPECT_TRUE(double(disc.level_set(Real(0.5), Real(0.5))) < 0.0) << "disque : centre ls < 0";
+  EXPECT_TRUE(double(disc(Real(0.5), Real(0.5))) == double(disc.level_set(Real(0.5), Real(0.5))))
+      << "disque : operator() == level_set";
+}
 
-  // ----------------------------------------------------------------------
-  // (1) CONTRAT : convention de signe, operator() == level_set, cell_active == (ls < 0).
-  // ----------------------------------------------------------------------
-  std::printf("\n--- (1) contrat level-set (disque + demi-plan) ---\n");
-  {
-    // Demi-plan a*x + b*y - c : actif (ls < 0) du cote a*x + b*y < c. Diagonal (a, b != 0) : geometrie
-    // franchement non-axiale, non-disque.
-    const detail::HalfPlaneDomain hp{1.0, 1.0, 1.0};  // x + y < 1 actif
-    // Convention de signe : (0.1, 0.1) dedans (0.2 < 1), (0.9, 0.9) dehors (1.8 > 1).
-    chk(double(hp.level_set(Real(0.1), Real(0.1))) < 0.0, "(1) demi-plan : interieur ls < 0");
-    chk(double(hp.level_set(Real(0.9), Real(0.9))) > 0.0, "(1) demi-plan : exterieur ls > 0");
-    chk(hp.cell_active(Real(0.1), Real(0.1)) && !hp.cell_active(Real(0.9), Real(0.9)),
-        "(1) demi-plan : cell_active == (ls < 0)");
-    // operator() (forme callable consommee par les operateurs) == level_set (alias nomme).
-    bool callable_ok = true;
-    for (double x = 0.05; x < 1.0; x += 0.17)
-      for (double y = 0.05; y < 1.0; y += 0.19)
-        if (double(hp(Real(x), Real(y))) != double(hp.level_set(Real(x), Real(y))))
-          callable_ok = false;
-    chk(callable_ok, "(1) demi-plan : operator() == level_set (forme callable)");
-
-    // Le disque (instance historique) respecte le meme contrat (operator() ajoute, level_set inchange).
-    const detail::DiscDomain disc = detail::DiscDomain::centered_in_box(kL, 0.3);
-    chk(double(disc.level_set(Real(0.5), Real(0.5))) < 0.0, "(1) disque : centre ls < 0");
-    chk(double(disc(Real(0.5), Real(0.5))) == double(disc.level_set(Real(0.5), Real(0.5))),
-        "(1) disque : operator() == level_set");
-  }
-
-  // ----------------------------------------------------------------------
-  // (2) EB cut-cell sur un demi-plan : partition active/inactive + vraies cellules coupees.
-  // ----------------------------------------------------------------------
-  std::printf("\n--- (2) EB sur demi-plan : partition + cellules coupees ---\n");
+// (2) EB cut-cell sur un demi-plan : partition active/inactive + vraies cellules coupees.
+TEST(EmbeddedBoundaryGeneric, HalfPlaneCutCellPartition) {
   {
     const int n = 64;
     const Box2D dom = Box2D::from_extents(n, n);
@@ -160,16 +145,15 @@ static int pops_run_test_embedded_boundary_generic() {
         if (double(cf.kappa) < 1.0 - 1e-9)
           ++n_cut;
       }
-    std::printf("  actives=%d inactives=%d coupees=%d\n", n_active, n_inactive, n_cut);
-    chk(n_active > 0 && n_inactive > 0,
-        "(2) le demi-plan partitionne la grille (actives ET inactives)");
-    chk(n_cut > 0, "(2) le demi-plan produit de vraies cellules coupees (kappa < 1)");
+    EXPECT_TRUE(n_active > 0 && n_inactive > 0)
+        << "le demi-plan partitionne la grille (actives ET inactives); n_active=" << n_active
+        << " n_inactive=" << n_inactive;
+    EXPECT_TRUE(n_cut > 0) << "le demi-plan produit de vraies cellules coupees (kappa < 1)";
   }
+}
 
-  // ----------------------------------------------------------------------
-  // (3) BIT-IDENTITE sans coupe : demi-plan rejete loin -> EB == cartesien (diff = 0).
-  // ----------------------------------------------------------------------
-  std::printf("\n--- (3) sans coupe : EB(demi-plan) == cartesien (bit-identite) ---\n");
+// (3) BIT-IDENTITE sans coupe : demi-plan rejete loin -> EB == cartesien (diff = 0).
+TEST(EmbeddedBoundaryGeneric, NoCutIsBitIdenticalToCartesian) {
   {
     const int n = 48;
     const Box2D dom = Box2D::from_extents(n, n);
@@ -206,15 +190,14 @@ static int pops_run_test_embedded_boundary_generic() {
     for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
       for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
         max_abs_diff = std::max(max_abs_diff, std::fabs(double(rr(i, j, 0)) - double(re(i, j, 0))));
-    std::printf("  max|R_eb - R_cartesien| = %.3e (attendu 0)\n", max_abs_diff);
-    chk(max_abs_diff == 0.0,
-        "(3) demi-plan sans coupe : residu EB BIT-IDENTIQUE au cartesien (alpha=1, kappa=1)");
+    EXPECT_TRUE(max_abs_diff == 0.0)
+        << "demi-plan sans coupe : residu EB BIT-IDENTIQUE au cartesien (alpha=1, kappa=1), got "
+        << max_abs_diff;
   }
+}
 
-  // ----------------------------------------------------------------------
-  // (4) RESIDU FINI : un demi-plan qui coupe la boite -> residu fini (clamp small-cell, pas de NaN).
-  // ----------------------------------------------------------------------
-  std::printf("\n--- (4) demi-plan coupant : residu fini (clamp generique) ---\n");
+// (4) RESIDU FINI : un demi-plan qui coupe la boite -> residu fini (clamp small-cell, pas de NaN).
+TEST(EmbeddedBoundaryGeneric, CuttingHalfPlaneProducesFiniteResidual) {
   {
     const int n = 64;
     const Box2D dom = Box2D::from_extents(n, n);
@@ -250,14 +233,13 @@ static int pops_run_test_embedded_boundary_generic() {
             any_nan = true;
       saxpy(U, Real(dt), R);
     }
-    chk(!any_nan,
-        "(4) demi-plan coupant : residu FINI partout (clamp small-cell generique, pas de NaN)");
+    EXPECT_TRUE(!any_nan)
+        << "demi-plan coupant : residu FINI partout (clamp small-cell generique, pas de NaN)";
   }
+}
 
-  // ----------------------------------------------------------------------
-  // (5) MASQUE STAIRCASE generique : residu nul sur les inactives ; tout-actif == cartesien.
-  // ----------------------------------------------------------------------
-  std::printf("\n--- (5) masque staircase materialise depuis un demi-plan ---\n");
+// (5) MASQUE STAIRCASE generique : residu nul sur les inactives ; tout-actif == cartesien.
+TEST(EmbeddedBoundaryGeneric, GenericStaircaseMask) {
   {
     const int n = 48;
     const Box2D dom = Box2D::from_extents(n, n);
@@ -309,9 +291,10 @@ static int pops_run_test_embedded_boundary_generic() {
             ++n_inactive;
             max_inactive_residual = std::max(max_inactive_residual, std::fabs(double(rr(i, j, 0))));
           }
-      chk(n_inactive > 0, "(5) le masque demi-plan a de vraies cellules inactives");
-      chk(max_inactive_residual == 0.0,
-          "(5) residu masque EXACTEMENT nul sur les cellules inactives (demi-plan generique)");
+      EXPECT_TRUE(n_inactive > 0) << "le masque demi-plan a de vraies cellules inactives";
+      EXPECT_TRUE(max_inactive_residual == 0.0)
+          << "residu masque EXACTEMENT nul sur les cellules inactives (demi-plan generique), got "
+          << max_inactive_residual;
     }
 
     // (5b) masque tout-actif (demi-plan rejete) : assemble_rhs_masked BIT-IDENTIQUE a assemble_rhs.
@@ -329,17 +312,15 @@ static int pops_run_test_embedded_boundary_generic() {
         for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
           max_abs_diff =
               std::max(max_abs_diff, std::fabs(double(rr(i, j, 0)) - double(ra(i, j, 0))));
-      std::printf("  masque tout-actif : max|R_masked - R_cartesien| = %.3e (attendu 0)\n",
-                  max_abs_diff);
-      chk(max_abs_diff == 0.0,
-          "(5) masque tout-actif : residu masque BIT-IDENTIQUE au cartesien (chemin inerte)");
+      EXPECT_TRUE(max_abs_diff == 0.0)
+          << "masque tout-actif : residu masque BIT-IDENTIQUE au cartesien (chemin inerte), got "
+          << max_abs_diff;
     }
   }
+}
 
-  // ----------------------------------------------------------------------
-  // (6) CONSERVATION de masse a la machine sur une geometrie NON-disque BORNEE (bande |y - yc| - h).
-  // ----------------------------------------------------------------------
-  std::printf("\n--- (6) conservation EB sur une bande non-disque (periodique x) ---\n");
+// (6) CONSERVATION de masse a la machine sur une geometrie NON-disque BORNEE (bande |y - yc| - h).
+TEST(EmbeddedBoundaryGeneric, MassConservationOnBoundedNonDiscGeometry) {
   {
     const int n = 96;
     const Box2D dom = Box2D::from_extents(n, n);
@@ -394,11 +375,12 @@ static int pops_run_test_embedded_boundary_generic() {
         if (double(cf.kappa) < 1.0 - 1e-9)
           ++n_cut;
       }
-    chk(n_active > 0 && n_cut > 0,
-        "(6) la bande produit des cellules actives ET coupees (test EB non vide)");
+    ASSERT_TRUE(n_active > 0 && n_cut > 0)
+        << "la bande produit des cellules actives ET coupees (test EB non vide); n_active="
+        << n_active << " n_cut=" << n_cut;
 
     const double m0 = eb_mass(U);
-    chk(m0 > 0.0, "(6) masse EB initiale strictement positive");
+    ASSERT_TRUE(m0 > 0.0) << "masse EB initiale strictement positive";
     const double v = std::hypot(kVx, kVy);
     const double dt = 0.2 * geom.dx() / v;
     for (int s = 0; s < 60; ++s) {
@@ -409,9 +391,9 @@ static int pops_run_test_embedded_boundary_generic() {
     }
     const double m1 = eb_mass(U);
     const double rel_drift = std::fabs(m1 - m0) / std::fabs(m0);
-    std::printf("  masse EB : m0=%.15e  m1=%.15e  drift relatif=%.3e\n", m0, m1, rel_drift);
-    chk(rel_drift < 1e-12,
-        "(6) masse EB conservee a la machine sur une geometrie non-disque (drift < 1e-12)");
+    EXPECT_TRUE(rel_drift < 1e-12)
+        << "masse EB conservee a la machine sur une geometrie non-disque (drift < 1e-12), got "
+        << rel_drift;
     {
       device_fence();
       const ConstArray4 u = U.fab(0).const_array();
@@ -423,17 +405,8 @@ static int pops_run_test_embedded_boundary_generic() {
             continue;
           max_dev = std::max(max_dev, std::fabs(double(u(i, j, 0)) - 1.0));
         }
-      chk(max_dev > 1e-3,
-          "(6) le transport EB a effectivement avance l'etat (conservation non triviale)");
+      EXPECT_TRUE(max_dev > 1e-3)
+          << "le transport EB a effectivement avance l'etat (conservation non triviale)";
     }
   }
-
-  std::printf("\n=== VERDICT : %s ===\n", fails == 0 ? "SUCCESS" : "ECHEC");
-  if (fails == 0)
-    std::printf("OK test_embedded_boundary_generic\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_embedded_boundary_generic, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_embedded_boundary_generic, "test_embedded_boundary_generic"), 0);
 }

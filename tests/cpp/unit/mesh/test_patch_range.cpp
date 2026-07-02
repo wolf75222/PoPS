@@ -7,42 +7,27 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // pops::PatchRange
 #include <pops/mesh/index/box2d.hpp>
 
-#include <cstdio>
-
 using namespace pops;
 
-static int pops_run_test_patch_range() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+TEST(test_patch_range, aligned_fine_patch_footprint) {
   // patch fin aligne grossier : cellules grossieres [2..5]^2 raffinees -> [4..11]^2.
   PatchRange pr(Box2D{{4, 4}, {11, 11}});
-  chk(pr.I0 == 2 && pr.I1 == 5 && pr.J0 == 2 && pr.J1 == 5, "empreinte_alignee");
-  chk(pr.box() == (Box2D{{2, 2}, {5, 5}}), "box");
+  EXPECT_TRUE(pr.I0 == 2 && pr.I1 == 5 && pr.J0 == 2 && pr.J1 == 5) << "empreinte_alignee";
+  EXPECT_EQ(pr.box(), (Box2D{{2, 2}, {5, 5}})) << "box";
+}
 
+TEST(test_patch_range, nonzero_origin) {
   // origine non nulle : fin [6..9]x[10..13] -> grossier [3..4]x[5..6].
   PatchRange pr2(Box2D{{6, 10}, {9, 13}});
-  chk(pr2.I0 == 3 && pr2.I1 == 4 && pr2.J0 == 5 && pr2.J1 == 6, "origine_non_nulle");
+  EXPECT_TRUE(pr2.I0 == 3 && pr2.I1 == 4 && pr2.J0 == 5 && pr2.J1 == 6) << "origine_non_nulle";
+}
 
+TEST(test_patch_range, high_bound_uses_hi_minus_one_over_two) {
   // borne haute (hi-1)/2 et NON floor(hi/2) : pour hi pair les deux differeraient. Un patch
   // aligne a hi impair ; on verifie tout de meme que la formule historique est preservee.
   PatchRange pr3(Box2D{{0, 0}, {3, 3}});  // fin 4x4 -> grossier [0..1]^2
-  chk(pr3.I1 == 1 && pr3.J1 == 1, "borne_haute_hi_moins_1_sur_2");
-
-  if (fails == 0)
-    std::printf("OK test_patch_range\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_patch_range, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_patch_range, "test_patch_range"), 0);
+  EXPECT_TRUE(pr3.I1 == 1 && pr3.J1 == 1) << "borne_haute_hi_moins_1_sur_2";
 }

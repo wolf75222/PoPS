@@ -6,7 +6,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/coupling/amr/amr_diagnostics.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
@@ -14,20 +13,11 @@
 #include <pops/mesh/storage/multifab.hpp>
 
 #include <cmath>
-#include <cstdio>
 #include <vector>
 
 using namespace pops;
 
-static int pops_run_test_amr_diagnostics() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+TEST(test_amr_diagnostics, Runs) {
   const int nc = 16;
   Box2D dom = Box2D::from_extents(nc, nc);
   const Real dx = Real(1) / nc, dy = Real(1) / nc;
@@ -43,8 +33,8 @@ static int pops_run_test_amr_diagnostics() {
       for (int i = g.lo[0]; i <= g.hi[0]; ++i)
         u(i, j, 0) = Real(2.5);
     const Real M = amr_mass(U, dom, dx, dy);
-    std::printf("amr_mass(const 2.5) = %.15e (attendu 2.5)\n", M);
-    chk(std::fabs(M - Real(2.5)) < 1e-13, "amr_mass_constant");
+    EXPECT_TRUE(std::fabs(M - Real(2.5)) < 1e-13)
+        << "amr_mass_constant: M=" << M << " (attendu 2.5)";
   }
 
   // amr_mass, champ varie : EXACTEMENT la boucle hote de reference en serie (meme dV
@@ -61,9 +51,7 @@ static int pops_run_test_amr_diagnostics() {
         ref += v * dV;
       }
     const Real M = amr_mass(U, dom, dx, dy);
-    std::printf("amr_mass(varie) = %.15e (ref hote %.15e | diff %.2e)\n", M, ref,
-                std::fabs(M - ref));
-    chk(M == ref, "amr_mass_bit_identique_hote");
+    EXPECT_EQ(M, ref) << "amr_mass_bit_identique_hote: diff=" << std::fabs(M - ref);
   }
 
   // amr_max_drift_speed, aux a gradient constant (gx, gy) : max = hypot(gx,gy) / B0.
@@ -80,8 +68,8 @@ static int pops_run_test_amr_diagnostics() {
       }
     const Real v = amr_max_drift_speed(aux, dom, B0);
     const Real exp = std::hypot(gx, gy) / B0;
-    std::printf("amr_max_drift_speed(const) = %.15e (attendu %.15e)\n", v, exp);
-    chk(std::fabs(v - exp) < 1e-13, "amr_max_drift_speed_const");
+    EXPECT_TRUE(std::fabs(v - exp) < 1e-13)
+        << "amr_max_drift_speed_const: v=" << v << " (attendu " << exp << ")";
   }
 
   // amr_max_drift_speed, plancher 1e-12 quand le champ est nul (garde-fou CFL).
@@ -96,14 +84,6 @@ static int pops_run_test_amr_diagnostics() {
         a(i, j, 2) = 0;
       }
     const Real v = amr_max_drift_speed(aux, dom, Real(1));
-    chk(v == Real(1e-12), "amr_max_drift_speed_plancher");
+    EXPECT_EQ(v, Real(1e-12)) << "amr_max_drift_speed_plancher";
   }
-
-  if (fails == 0)
-    std::printf("OK test_amr_diagnostics\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_amr_diagnostics, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_diagnostics, "test_amr_diagnostics"), 0);
 }

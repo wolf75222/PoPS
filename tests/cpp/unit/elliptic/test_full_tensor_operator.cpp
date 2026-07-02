@@ -29,7 +29,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
 #include <pops/mesh/layout/box_array.hpp>
@@ -45,6 +44,8 @@
 using namespace pops;
 static constexpr double kPi = 3.14159265358979323846;
 
+namespace {
+
 // Foncteur de remplissage commun aux tests (A) et (B) : pose phi = sin(pi x) sin(2 pi y) et
 // f = cos(pi x) sin(pi y) sur la grille. Top-level (device-clean) : pas de lambda dans lambda.
 struct FillPhiRhsKernel {
@@ -57,13 +58,13 @@ struct FillPhiRhsKernel {
   }
 };
 
-static double phi_exact(double x, double y) {
+double phi_exact(double x, double y) {
   return std::sin(kPi * x) * std::sin(kPi * y);
 }
-static double eps_x_field(double x, double /*y*/) {
+double eps_x_field(double x, double /*y*/) {
   return 1.0 + 0.5 * x;
 }
-static double eps_y_field(double /*x*/, double y) {
+double eps_y_field(double /*x*/, double y) {
   return 1.0 + 0.3 * y;
 }
 
@@ -100,7 +101,7 @@ struct ObserveMgRhsKernel {
 };
 
 // Ecart MAX (norme inf) entre deux residus discrets sur le meme phi : dmax pour le gating bit.
-static double residual_gap(MultiFab& ra, MultiFab& rb, const Box2D& dom) {
+double residual_gap(MultiFab& ra, MultiFab& rb, const Box2D& dom) {
   const ConstArray4 a = ra.fab(0).const_array(), b = rb.fab(0).const_array();
   double d = 0;
   for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
@@ -110,7 +111,7 @@ static double residual_gap(MultiFab& ra, MultiFab& rb, const Box2D& dom) {
 }
 
 // (A) A = I : residu plein (set_cross_terms a 0) == Poisson canonique sans coefficient. dmax attendu 0.
-static double gap_identity(int n) {
+double gap_identity(int n) {
   Box2D dom = Box2D::from_extents(n, n);
   Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
   BoxArray ba = BoxArray::from_domain(dom, n);
@@ -138,7 +139,7 @@ static double gap_identity(int n) {
 }
 
 // (B) A = diag(eps_x, eps_y), Axy = Ayx = 0 : residu plein == residu anisotrope existant. dmax 0.
-static double gap_diagonal(int n) {
+double gap_diagonal(int n) {
   Box2D dom = Box2D::from_extents(n, n);
   Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
   BoxArray ba = BoxArray::from_domain(dom, n);
@@ -171,7 +172,7 @@ static double gap_diagonal(int n) {
 // (C) MMS sur l'OPERATEUR : A constant non diagonal. f = div(A grad phi) analytique ; on mesure la
 // norme inf du residu discret f - L_discret(phi_exact), SANS solve. Convergence ordre 2 attendue.
 //   axx, ayy : bloc diagonal (constants) ; cxy, cyx : termes croises (constants).
-static double operator_mms_resid(int n, double axx, double ayy, double cxy, double cyx) {
+double operator_mms_resid(int n, double axx, double ayy, double cxy, double cyx) {
   Box2D dom = Box2D::from_extents(n, n);
   Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
   BoxArray ba = BoxArray::from_domain(dom, n);
@@ -197,7 +198,7 @@ static double operator_mms_resid(int n, double axx, double ayy, double cxy, doub
 // OBSERVATION MG (non gating) : V-cycles sur la MMS NON diagonale (A SDP : Axy=Ayx=c, |c|<1 -> A
 // reste definie positive). On rapporte si le residu chute (convergence) ou non. Le lisseur etant
 // 5 points (bloc diagonal), c'est un indicateur pour PR2 (Krylov si non symetrique fort).
-static void observe_mg_solve(int n, double c, double& r0_out, double& rN_out, int& nc_out) {
+void observe_mg_solve(int n, double c, double& r0_out, double& rN_out, int& nc_out) {
   Box2D dom = Box2D::from_extents(n, n);
   Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
   BoxArray ba = BoxArray::from_domain(dom, n);
@@ -226,26 +227,21 @@ static void observe_mg_solve(int n, double c, double& r0_out, double& rN_out, in
   nc_out = c_done;
 }
 
-static int pops_run_test_full_tensor_operator() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
+}  // namespace
 
-  // (A) A = I : bit-identique au Poisson canonique.
+TEST(test_full_tensor_operator, identity_matches_canonical_poisson_bit_identical) {
   const double gA = gap_identity(64);
   std::printf("(A) A=I : ecart residu plein vs Poisson = %.3e\n", gA);
-  chk(gA == 0.0, "A_eq_I_bit_identique");
+  EXPECT_TRUE(gA == 0.0) << "A_eq_I_bit_identique";
+}
 
-  // (B) A = diag(eps_x, eps_y) : bit-identique a l'anisotrope existant.
+TEST(test_full_tensor_operator, diagonal_matches_anisotropic_bit_identical) {
   const double gB = gap_diagonal(64);
   std::printf("(B) A=diag(eps_x,eps_y) : ecart residu plein vs anisotrope = %.3e\n", gB);
-  chk(gB == 0.0, "A_diag_bit_identique");
+  EXPECT_TRUE(gB == 0.0) << "A_diag_bit_identique";
+}
 
-  // (C1) A symetrique constant Axy=Ayx=c : residu de l'operateur ordre 2.
+TEST(test_full_tensor_operator, symmetric_cross_terms_operator_order2) {
   const double c = 0.4;
   const double s32 = operator_mms_resid(32, 1.0, 1.0, c, c);
   const double s64 = operator_mms_resid(64, 1.0, 1.0, c, c);
@@ -254,10 +250,12 @@ static int pops_run_test_full_tensor_operator() {
   std::printf(
       "(C1) A sym (Axy=Ayx=%.2f) : residu op r32=%.3e r64=%.3e r128=%.3e | ratios %.2f %.2f\n", c,
       s32, s64, s128, rs1, rs2);
-  chk(rs1 > 3.5 && rs1 < 4.5, "C1_op_ordre2_32_64");
-  chk(rs2 > 3.5 && rs2 < 4.5, "C1_op_ordre2_64_128");
+  EXPECT_TRUE(rs1 > 3.5 && rs1 < 4.5) << "C1_op_ordre2_32_64";
+  EXPECT_TRUE(rs2 > 3.5 && rs2 < 4.5) << "C1_op_ordre2_64_128";
+}
 
-  // (C2) A NON symetrique constant Axy=c, Ayx=-c : residu de l'operateur ordre 2.
+TEST(test_full_tensor_operator, nonsymmetric_cross_terms_operator_order2) {
+  const double c = 0.4;
   const double u32 = operator_mms_resid(32, 1.0, 1.0, c, -c);
   const double u64 = operator_mms_resid(64, 1.0, 1.0, c, -c);
   const double u128 = operator_mms_resid(128, 1.0, 1.0, c, -c);
@@ -266,22 +264,18 @@ static int pops_run_test_full_tensor_operator() {
       "(C2) A NON sym (Axy=%.2f Ayx=%.2f) : residu op r32=%.3e r64=%.3e r128=%.3e | ratios %.2f "
       "%.2f\n",
       c, -c, u32, u64, u128, ru1, ru2);
-  chk(ru1 > 3.5 && ru1 < 4.5, "C2_op_ordre2_32_64");
-  chk(ru2 > 3.5 && ru2 < 4.5, "C2_op_ordre2_64_128");
+  EXPECT_TRUE(ru1 > 3.5 && ru1 < 4.5) << "C2_op_ordre2_32_64";
+  EXPECT_TRUE(ru2 > 3.5 && ru2 < 4.5) << "C2_op_ordre2_64_128";
+}
 
-  // OBSERVATION (non gating) : V-cycle MG sur la MMS non diagonale SDP (Axy=Ayx=c).
+// OBSERVATION (non gating) : V-cycle MG sur la MMS non diagonale SDP (Axy=Ayx=c). Ne fait jamais
+// echouer le test ; sert d'indicateur pour la decision PR2 (Krylov).
+TEST(test_full_tensor_operator, observe_mg_vcycle_on_nondiagonal_sdp) {
+  const double c = 0.4;
   double r0, rN;
   int nc;
   observe_mg_solve(64, c, r0, rN, nc);
   std::printf("[obs] MG V-cycle, A SDP non diag (c=%.2f) : r0=%.3e rN=%.3e (%d cycles) -> %s\n", c,
               r0, rN, nc,
               (rN < 1e-6 * r0 ? "CONVERGE" : (rN < r0 ? "decroit (incomplet)" : "DIVERGE/STAGNE")));
-
-  if (fails == 0)
-    std::printf("OK test_full_tensor_operator\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_full_tensor_operator, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_full_tensor_operator, "test_full_tensor_operator"), 0);
 }

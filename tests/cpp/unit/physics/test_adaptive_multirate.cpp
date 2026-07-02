@@ -9,7 +9,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/system/system_coupler.hpp>
@@ -20,7 +19,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 
 using namespace pops;
 
@@ -46,15 +44,7 @@ struct ZeroSystemRhs {
 
 using Blk = EquationBlock<AdvectProduce, FirstOrder, ExplicitTime<SSPRK2, 1>>;
 
-static int pops_run_test_adaptive_multirate() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+TEST(AdaptiveMultirate, MacroDtFromFastestSpecies) {
   const int n = 16;
   const Box2D dom = Box2D::from_extents(n, n);
   const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
@@ -77,19 +67,12 @@ static int pops_run_test_adaptive_multirate() {
   const Real macro_dt = cfl * h / Real(4);  // w_max = 4
 
   const Real dt = sim.step_adaptive(cfl);
-  chk(std::fabs(dt - macro_dt) < Real(1e-14), "adaptive_macro_dt_from_fastest");
+  EXPECT_TRUE(std::fabs(dt - macro_dt) < Real(1e-14)) << "adaptive_macro_dt_from_fastest";
   // rapide : stride 1 -> avance de macro_dt ; production -> +macro_dt.
   // tol 1e-10 : arrondi SSPRK vs valeur directe, cumule sur 256 cellules (~1e-12).
-  chk(std::fabs(sum(Uf, 0) - (Real(1) + macro_dt) * ncell) < Real(1e-10), "fast_one_macro_step");
+  EXPECT_TRUE(std::fabs(sum(Uf, 0) - (Real(1) + macro_dt) * ncell) < Real(1e-10))
+      << "fast_one_macro_step";
   // lent : stride 4 -> avance de 4*macro_dt en une fois ; production -> +4*macro_dt.
-  chk(std::fabs(sum(Us, 0) - (Real(1) + Real(4) * macro_dt) * ncell) < Real(1e-10),
-      "slow_big_adaptive_step");
-
-  if (fails == 0)
-    std::printf("OK test_adaptive_multirate\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_adaptive_multirate, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_adaptive_multirate, "test_adaptive_multirate"), 0);
+  EXPECT_TRUE(std::fabs(sum(Us, 0) - (Real(1) + Real(4) * macro_dt) * ncell) < Real(1e-10))
+      << "slow_big_adaptive_step";
 }

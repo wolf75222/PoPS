@@ -7,7 +7,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_fft_solver.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // poisson_residual : l'operateur canonique
@@ -19,7 +18,7 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
 
-#include "test_harness.hpp"  // pops::test::Checker + kPi partages
+#include "test_harness.hpp"  // pops::test::kPi partage
 
 #include <cmath>
 #include <cstdio>
@@ -28,9 +27,7 @@
 using namespace pops;
 using pops::test::kPi;
 
-static int pops_run_test_elliptic_operator() {
-  pops::test::Checker chk;  // style terse : n'imprime que les echecs (FAIL <libelle>)
-
+TEST(test_elliptic_operator, Runs) {
   const int N = 64;  // puissance de 2 (FFT)
   Box2D dom = Box2D::from_extents(N, N);
   Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
@@ -76,15 +73,7 @@ static int pops_run_test_elliptic_operator() {
   std::printf("operateur partage : residu(MG)=%.3e residu(FFT)=%.3e | maxdiff(phi)=%.3e\n", rmg,
               rfft, maxdiff);
 
-  chk(rmg < 1e-9, "MG_inverse_l_operateur_canonique");
-  chk(rfft < 1e-9, "FFT_inverse_l_operateur_canonique");
-  chk(maxdiff < 1e-9, "MG_et_FFT_meme_solution");
-
-  if (chk.fails() == 0)
-    std::printf("OK test_elliptic_operator\n");
-  return chk.failed();
-}
-
-TEST(test_elliptic_operator, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_elliptic_operator, "test_elliptic_operator"), 0);
+  EXPECT_TRUE(rmg < 1e-9) << "MG_inverse_l_operateur_canonique (rmg=" << rmg << ")";
+  EXPECT_TRUE(rfft < 1e-9) << "FFT_inverse_l_operateur_canonique (rfft=" << rfft << ")";
+  EXPECT_TRUE(maxdiff < 1e-9) << "MG_et_FFT_meme_solution (maxdiff=" << maxdiff << ")";
 }

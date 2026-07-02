@@ -4,7 +4,6 @@ The codegen optimization policy and the numeric math mode are typed objects, not
 ``optimization="fast"``. A non-strict math transform is never implicit -- it must be chosen
 explicitly. These are inert; the codegen consumes them.
 """
-import sys
 
 import pytest
 
@@ -50,7 +49,3 @@ def test_printable_summaries():
     s = str(Optimization())
     assert s.startswith("Optimization") and len(s) < 300
     assert repr(StrictMath()).startswith("StrictMath")
-
-
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))

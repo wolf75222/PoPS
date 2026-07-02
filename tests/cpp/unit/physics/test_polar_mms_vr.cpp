@@ -54,7 +54,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/state/state.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
@@ -70,7 +69,6 @@
 #include <pops/numerics/time/integrators/time_steppers.hpp>
 
 #include <cmath>
-#include <cstdio>
 #include <vector>
 
 using namespace pops;
@@ -269,52 +267,22 @@ static double run_mms(int nr, int nth) {
   return l2_error(U, g, dom);
 }
 
-static int pops_run_test_polar_mms_vr() {
-  std::printf("=== MMS POLAIRE DEDIE avec vitesse radiale v_r != 0 (Lot A4) ===\n");
-  std::printf("Anneau r in [%.2f, %.2f], theta in [0, 2pi), mode m=%d, B0=%.1f\n", kRmin, kRmax,
-              kMode, kB0);
-  std::printf(
-      "Vitesse CONSTANTE : v_r=%.2f (NON NUL), v_theta=%.2f ; t_final=%.2f (stationnaire)\n", kVr,
-      kVth, kTfinal);
-  std::printf("Solution exacte : rho = (1+0.5 sin(pi (r-rmin)/(rmax-rmin)))*(2+cos(m theta))\n");
-  std::printf("Source S = (1/r) d_r(r rho v_r) + (1/r) d_theta(rho v_theta)  (d_t rho = 0)\n");
-
-  bool ok = true;
+// Convergence spatiale : erreur L2 de la solution vs l'exact, v_r != 0 (Lot A4). L'operateur de
+// divergence FV polaire est formellement d'ordre 2 (ponderation par le rayon de face brise le
+// telescopage haut ordre ; cf. test_polar_transport_mms). On EXIGE donc un ordre >= 1.8 (un peu
+// sous l'ordre 2 mesure, marge pour les effets de bord). Une metrique radiale (1/r, r aux faces)
+// erronee donnerait un ordre 0 ou une divergence : l'ordre 2 PROUVE que le transport RADIAL
+// (v_r != 0) converge correctement, ce que ce lot vise.
+TEST(test_polar_mms_vr, MmsSolutionConvergesAtOrderTwoWithNonzeroRadialVelocity) {
   const int res[3] = {48, 96, 192};
   const int nthf = 2;  // nth = 2 * nr (anneau, theta plus echantillonne)
-
-  // --- Convergence spatiale : erreur L2 de la solution vs l'exact, v_r != 0 ---
-  std::printf("\n--- Convergence MMS de la SOLUTION (transport radial + azimutal, v_r != 0) ---\n");
   double e[3];
-  for (int k = 0; k < 3; ++k) {
+  for (int k = 0; k < 3; ++k)
     e[k] = run_mms<Weno5>(res[k], nthf * res[k]);
-    std::printf("  WENO5  nr=%-4d nth=%-4d : L2=%.6e\n", res[k], nthf * res[k], e[k]);
-  }
   const double p1 = std::log2(e[0] / e[1]);
   const double p2 = std::log2(e[1] / e[2]);
-  std::printf("  ordre observe WENO5 (L2) : %.2f (48->96), %.2f (96->192)\n", p1, p2);
-
-  // L'operateur de divergence FV polaire est formellement d'ordre 2 (ponderation par le rayon de face
-  // brise le telescopage haut ordre ; cf. test_polar_transport_mms). On EXIGE donc un ordre >= 1.8 (un peu
-  // sous l'ordre 2 mesure, marge pour les effets de bord). Une metrique radiale (1/r, r aux faces) erronee
-  // donnerait un ordre 0 ou une divergence : l'ordre 2 PROUVE que le transport RADIAL (v_r != 0) converge
-  // correctement, ce que ce lot vise.
   const double kSeuil = 1.8;
-  if (!(p1 >= kSeuil) || !(p2 >= kSeuil) || !std::isfinite(e[2])) {
-    std::printf(
-        "  ECHEC : ordre < %.1f (transport radial v_r != 0 non convergent a l'ordre attendu)\n",
-        kSeuil);
-    ok = false;
-  } else {
-    std::printf("  OK : convergence d'ordre >= %.1f (transport radial v_r != 0 correct)\n", kSeuil);
-  }
-
-  std::printf("\n=== VERDICT : %s ===\n", ok ? "SUCCESS" : "ECHEC");
-  if (ok)
-    std::printf("OK test_polar_mms_vr\n");
-  return ok ? 0 : 1;
-}
-
-TEST(test_polar_mms_vr, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_polar_mms_vr, "test_polar_mms_vr"), 0);
+  EXPECT_TRUE(p1 >= kSeuil && p2 >= kSeuil && std::isfinite(e[2]))
+      << "ordre observe WENO5 (L2) : " << p1 << " (48->96), " << p2 << " (96->192), seuil="
+      << kSeuil << ", L2(48)=" << e[0] << " L2(96)=" << e[1] << " L2(192)=" << e[2];
 }

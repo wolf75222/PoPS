@@ -3,7 +3,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/base/elliptic_rhs.hpp>
@@ -14,7 +13,6 @@
 #include <pops/mesh/storage/multifab.hpp>
 
 #include <cmath>
-#include <cstdio>
 #include <type_traits>
 
 using namespace pops;
@@ -51,15 +49,7 @@ static_assert(IonBlock::Time::treatment == TimeTreatment::Explicit);
 static_assert(std::is_same_v<ElectronBlock::Spatial::NumericalFlux, HLLCFlux>);
 static_assert(std::is_same_v<IonBlock::Spatial::NumericalFlux, RusanovFlux>);
 
-static int pops_run_test_system_abstraction() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+TEST(SystemAbstraction, CoupledSystemSubcyclesBlocksAndAssemblesChargeDensityRhs) {
   const Box2D dom = Box2D::from_extents(4, 4);
   const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
   const BoxArray ba = BoxArray::from_domain(dom, 4);
@@ -74,7 +64,7 @@ static int pops_run_test_system_abstraction() {
   IonBlock ions{"ions", IonToy{}, Ui, bc};
   CoupledSystem system{electrons, ions};
   static_assert(CoupledSystemLike<decltype(system)>);
-  chk(decltype(system)::n_blocks == 2, "two_blocks");
+  EXPECT_TRUE(decltype(system)::n_blocks == 2) << "two_blocks";
 
   int ne = 0, ni = 0;
   Real dte = 0, dti = 0;
@@ -88,22 +78,14 @@ static int pops_run_test_system_abstraction() {
       dti += h;
     }
   });
-  chk(ne == 10, "electron_substeps");
-  chk(ni == 1, "ion_substeps");
-  chk(std::fabs(dte - 0.2) < 1e-12, "electron_dt_sum");
-  chk(std::fabs(dti - 0.2) < 1e-12, "ion_dt_sum");
+  EXPECT_TRUE(ne == 10) << "electron_substeps";
+  EXPECT_TRUE(ni == 1) << "ion_substeps";
+  EXPECT_TRUE(std::fabs(dte - 0.2) < 1e-12) << "electron_dt_sum";
+  EXPECT_TRUE(std::fabs(dti - 0.2) < 1e-12) << "ion_dt_sum";
 
   TwoFieldChargeDensityRhs charge;
   charge.q0 = Real(-1);  // electrons
   charge.q1 = Real(1);   // ions
   charge(Ue, Ui, rhs);
-  chk(std::fabs(sum(rhs) - Real(3 * 16)) < 1e-12, "charge_density_rhs");
-
-  if (fails == 0)
-    std::printf("OK test_system_abstraction\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_system_abstraction, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_system_abstraction, "test_system_abstraction"), 0);
+  EXPECT_TRUE(std::fabs(sum(rhs) - Real(3 * 16)) < 1e-12) << "charge_density_rhs";
 }

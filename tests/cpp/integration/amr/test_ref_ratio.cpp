@@ -12,11 +12,9 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/amr/hierarchy/amr_hierarchy.hpp>
 #include <pops/amr/hierarchy/refinement_ratio.hpp>
 
-#include <cstdio>
 #include <stdexcept>
 #include <string>
 
@@ -24,72 +22,52 @@ using namespace pops;
 
 namespace {
 
-// Runs fn(), returns true if it threw, capturing the message in @p msg.
+// Runs fn(), returns true if it threw std::invalid_argument, capturing the message in @p msg.
 template <class Fn>
 bool throws(Fn&& fn, std::string& msg) {
   try {
     fn();
     msg.clear();
     return false;
-  } catch (const std::exception& e) {
+  } catch (const std::invalid_argument& e) {
     msg = e.what();
     return true;
   }
 }
 
-int failures = 0;
-
-void check(bool ok, const char* what) {
-  if (!ok) {
-    std::printf("FAIL: %s\n", what);
-    ++failures;
-  }
-}
-
 }  // namespace
 
-static int pops_run_test_ref_ratio() {
+TEST(test_ref_ratio, Runs) {
   // (1) The invariant value (compile-time + run-time, so a drift is caught both ways).
   static_assert(kAmrRefRatio == 2,
                 "the native AMR hierarchy only supports refinement ratio 2 today");
-  check(kAmrRefRatio == 2, "kAmrRefRatio == 2");
+  EXPECT_EQ(kAmrRefRatio, 2);
 
   // (2) The guard: accepts the supported ratio, rejects any other with a clear message.
   std::string msg;
-  check(!throws([] { require_supported_ref_ratio(kAmrRefRatio); }, msg),
-        "require_supported_ref_ratio(kAmrRefRatio) does not throw");
+  EXPECT_FALSE(throws([] { require_supported_ref_ratio(kAmrRefRatio); }, msg))
+      << "require_supported_ref_ratio(kAmrRefRatio) does not throw";
 
-  check(throws([] { require_supported_ref_ratio(3); }, msg),
-        "require_supported_ref_ratio(3) throws");
-  check(msg.find('3') != std::string::npos && msg.find("refinement_ratio.hpp") != std::string::npos,
-        "rejection message names the ratio and the home header");
+  EXPECT_TRUE(throws([] { require_supported_ref_ratio(3); }, msg))
+      << "require_supported_ref_ratio(3) throws";
+  EXPECT_TRUE(msg.find('3') != std::string::npos && msg.find("refinement_ratio.hpp") != std::string::npos)
+      << "rejection message names the ratio and the home header";
 
-  check(throws([] { require_supported_ref_ratio(1); }, msg),
-        "require_supported_ref_ratio(1) throws");
-  check(throws([] { require_supported_ref_ratio(4); }, msg),
-        "require_supported_ref_ratio(4) throws");
+  EXPECT_TRUE(throws([] { require_supported_ref_ratio(1); }, msg))
+      << "require_supported_ref_ratio(1) throws";
+  EXPECT_TRUE(throws([] { require_supported_ref_ratio(4); }, msg))
+      << "require_supported_ref_ratio(4) throws";
 
   // (3) The single entry point: AmrHierarchy refuses a non-2 ratio at construction.
   // The guard is the ctor's first statement, so this throws before any allocation.
   const Box2D dom{{0, 0}, {7, 7}};
-  check(throws(
-            [&] {
-              AmrHierarchy h(dom, /*max_grid_size=*/8, /*ncomp=*/1, /*ngrow=*/0,
-                             /*ref_ratio=*/3);
-            },
-            msg),
-        "AmrHierarchy with ref_ratio 3 is rejected at construction");
-  check(msg.find("refinement ratio") != std::string::npos,
-        "AmrHierarchy rejection message explains the ratio constraint");
-
-  if (failures == 0) {
-    std::printf("test_ref_ratio: OK\n");
-    return 0;
-  }
-  std::printf("test_ref_ratio: %d failure(s)\n", failures);
-  return 1;
-}
-
-TEST(test_ref_ratio, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_ref_ratio, "test_ref_ratio"), 0);
+  EXPECT_TRUE(throws(
+      [&] {
+        AmrHierarchy h(dom, /*max_grid_size=*/8, /*ncomp=*/1, /*ngrow=*/0,
+                       /*ref_ratio=*/3);
+      },
+      msg))
+      << "AmrHierarchy with ref_ratio 3 is rejected at construction";
+  EXPECT_TRUE(msg.find("refinement ratio") != std::string::npos)
+      << "AmrHierarchy rejection message explains the ratio constraint";
 }

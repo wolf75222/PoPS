@@ -20,7 +20,6 @@ must still pass):
 Pure Python; needs only ``import pops`` (nothing computes on a grid). The validations read
 descriptor metadata and run nothing.
 """
-import sys
 
 import pytest
 
@@ -263,9 +262,3 @@ def test_problem_amr_refine_validates_the_subject_against_the_block_model():
     prob2 = pops.Case(layout=AMR(base=CartesianMesh(n=64))).block("plasma", physics=model)
     with pytest.raises(ValueError, match="is not a declared subject"):
         prob2.amr.refine(Refine.on("definitely_not_a_role").above(0.05))
-
-
-# The CI python runner invokes each test file as `python3 <file>`; run pytest on this module so
-# the assertions execute (a bare import would only define the test functions).
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))

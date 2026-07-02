@@ -33,6 +33,10 @@ import numpy as np
 
 import pops
 from test_dsl_coupled import build_euler_poisson, GAMMA, INCLUDE
+from tests.python.support.requirements import (
+    missing_compiler_requirement,
+    skip_process_test,
+)
 
 fails = 0
 
@@ -83,12 +87,12 @@ chk(msg_bad != "" and ("explicit'" in msg_bad and "imex'" in msg_bad),
     "time='rk4' (inconnu) reste rejete par la garde amont (pas de dlopen)")
 
 # --- (2)/(3) PARITE + NON-TRIVIALITE (necessite un compilateur + en-tetes pops) ---------------------
-cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
-if not cxx or not os.path.isdir(INCLUDE):
-    print("skip  (2)/(3) : compilateur ou en-tetes pops absents")
-    print("test_ssprk3_production : OK (garde amont verte, parite non compilee)"
-          if fails == 0 else f"{fails} ECHEC(S)")
-    sys.exit(0 if fails == 0 else 1)
+missing = missing_compiler_requirement(INCLUDE)
+if missing:
+    if fails:
+        print(f"test_ssprk3_production : {fails} ECHEC(S)")
+        sys.exit(1)
+    skip_process_test(f"(2)/(3) test_ssprk3_production : {missing}")
 
 n, L = 48, 1.0
 U = _initial_state(n)

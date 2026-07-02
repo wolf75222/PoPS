@@ -79,9 +79,7 @@ def _seed_density(sim, name, n):
     sim.set_density(name, rho)
 
 
-def _check(cond, msg):
-    if not cond:
-        raise AssertionError(msg)
+from tests.python.support.assertions import _check
 
 
 def test_system_seam_combinations():

@@ -32,9 +32,7 @@ except Exception as exc:  # noqa: BLE001
     sys.exit(0)
 
 
-def _check(cond, msg):
-    if not cond:
-        raise AssertionError(msg)
+from tests.python.support.assertions import _check
 
 
 def _isothermal_model():
@@ -67,6 +65,16 @@ def test_fresh_report_is_empty():
     _check(rep.cache == [], "pas de slot de cache sur un System frais")
     _check(rep.diagnostics == {}, "pas de diagnostic recorded sur un System frais")
     _check(rep.block_map == [], "block_map vide (identite) sans program")
+    # params : liste de lignes {program_block, count}. Sans program installe AUCUNE ligne ne declare
+    # de param runtime (count None ou 0) -- le contrat reel du builder (_params), pas une invention.
+    _check(isinstance(rep.params, list), "params est une liste de lignes par bloc program")
+    for row in rep.params:
+        _check(set(row) == {"program_block", "count"}, "chaque ligne params porte program_block+count")
+        _check(row["count"] in (None, 0), "aucun param runtime declare sur un System frais")
+    # profiler : dict portant la cle 'enabled' ; le profiling est ETEINT sur un System frais.
+    _check(isinstance(rep.profiler, dict) and "enabled" in rep.profiler,
+           "profiler est un dict portant la cle 'enabled'")
+    _check(rep.profiler["enabled"] in (False, None), "profiler eteint sur un System frais")
     # Cadence : 1/1 si le .so expose les getters ADC-594, sinon None (skip gracieux, CI couvre).
     cad = rep.cadence
     if cad.get("substeps") is None:

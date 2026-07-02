@@ -17,7 +17,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/storage/fab2d.hpp>
@@ -175,58 +174,50 @@ static double solve_mms_varkappa(int n, bool use_field, double* rel_resid = null
   return eInf;
 }
 
-static int pops_run_test_screened_poisson() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
-  // (A) kappa constant, eps=1 : convergence ordre 2.
+// (A) kappa constant, eps=1 : convergence ordre 2.
+TEST(test_screened_poisson, constant_kappa_order2) {
   const double e32 = solve_mms(32, false), e64 = solve_mms(64, false), e128 = solve_mms(128, false);
   const double r1 = e32 / e64, r2 = e64 / e128;
   std::printf("ecrante (kappa=%.0f) MMS : Linf e32=%.3e e64=%.3e e128=%.3e | ratios %.2f %.2f\n",
               KAPPA, e32, e64, e128, r1, r2);
-  chk(r1 > 3.5 && r1 < 4.5, "ordre2_ratio_32_64");
-  chk(r2 > 3.5 && r2 < 4.5, "ordre2_ratio_64_128");
+  EXPECT_TRUE(r1 > 3.5 && r1 < 4.5) << "ordre2_ratio_32_64 (r1=" << r1 << ")";
+  EXPECT_TRUE(r2 > 3.5 && r2 < 4.5) << "ordre2_ratio_64_128 (r2=" << r2 << ")";
+}
 
-  // (B) non-regression kappa=0.
+// (B) non-regression kappa=0.
+TEST(test_screened_poisson, zero_kappa_matches_poisson) {
   const double gap = zero_kappa_residual_gap(64);
   std::printf("kappa=0 : ecart residu vs Poisson = %.3e\n", gap);
-  chk(gap < 1e-12, "kappa0_non_regression");
+  EXPECT_TRUE(gap < 1e-12) << "kappa0_non_regression (gap=" << gap << ")";
+}
 
-  // (C) composabilite eps(x) + kappa : ordre 2.
+// (C) composabilite eps(x) + kappa : ordre 2.
+TEST(test_screened_poisson, eps_field_plus_kappa_order2) {
   const double c64 = solve_mms(64, true), c128 = solve_mms(128, true);
   const double rc = c64 / c128;
   std::printf("eps(x) + kappa MMS : Linf c64=%.3e c128=%.3e | ratio %.2f\n", c64, c128, rc);
-  chk(rc > 3.5 && rc < 4.5, "ordre2_eps_plus_kappa");
+  EXPECT_TRUE(rc > 3.5 && rc < 4.5) << "ordre2_eps_plus_kappa (rc=" << rc << ")";
+}
 
-  // (D) kappa(x,y) VARIABLE via set_reaction(fn) : lecture diagonale par cellule (ADC-251), ordre 2.
+// (D) kappa(x,y) VARIABLE via set_reaction(fn) : lecture diagonale par cellule (ADC-251), ordre 2.
+TEST(test_screened_poisson, varying_kappa_function_order2) {
   double rr_d = 0;
   const double d64 = solve_mms_varkappa(64, false), d128 = solve_mms_varkappa(128, false, &rr_d);
   const double rd = d64 / d128;
   std::printf("kappa(x,y) fn MMS : Linf d64=%.3e d128=%.3e | ratio %.2f (resid %.1e)\n", d64, d128,
               rd, rr_d);
-  chk(rr_d < 1e-9,
-      "conv_varkappa_fn_128");  // le solveur a converge -> eInf = erreur de discretisation
-  chk(rd > 3.5 && rd < 4.5, "ordre2_varkappa_fn");
+  // le solveur a converge -> eInf = erreur de discretisation
+  EXPECT_TRUE(rr_d < 1e-9) << "conv_varkappa_fn_128 (rr_d=" << rr_d << ")";
+  EXPECT_TRUE(rd > 3.5 && rd < 4.5) << "ordre2_varkappa_fn (rd=" << rd << ")";
+}
 
-  // (E) kappa(x,y) VARIABLE via set_reaction(MultiFab) : meme invariant, chemin restrict_and_fill.
+// (E) kappa(x,y) VARIABLE via set_reaction(MultiFab) : meme invariant, chemin restrict_and_fill.
+TEST(test_screened_poisson, varying_kappa_field_order2) {
   double rr_f = 0;
   const double f64 = solve_mms_varkappa(64, true), f128 = solve_mms_varkappa(128, true, &rr_f);
   const double rf = f64 / f128;
   std::printf("kappa(x,y) field MMS : Linf f64=%.3e f128=%.3e | ratio %.2f (resid %.1e)\n", f64,
               f128, rf, rr_f);
-  chk(rr_f < 1e-9, "conv_varkappa_field_128");
-  chk(rf > 3.5 && rf < 4.5, "ordre2_varkappa_field");
-
-  if (fails == 0)
-    std::printf("OK test_screened_poisson\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_screened_poisson, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_screened_poisson, "test_screened_poisson"), 0);
+  EXPECT_TRUE(rr_f < 1e-9) << "conv_varkappa_field_128 (rr_f=" << rr_f << ")";
+  EXPECT_TRUE(rf > 3.5 && rf < 4.5) << "ordre2_varkappa_field (rf=" << rf << ")";
 }

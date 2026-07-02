@@ -29,7 +29,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
@@ -101,45 +100,32 @@ static double order(double e1, double e2, int n1, int n2) {
   return std::log(e1 / e2) / std::log(double(n2) / n1);
 }
 
-static int pops_run_test_cut_cell_anisotropic_multibox() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
+// max_grid_size = 64 sur n = 128/256/512 -> 2x2, 4x4, 8x8 boites (4, 16, 64 boites) pavant le
+// domaine. Chaque boite 64x64 se coarsen proprement dans la hierarchie MG (puissances de 2).
+static constexpr int kMaxGridSize = 64;
 
-  // max_grid_size = 64 sur n = 128/256/512 -> 2x2, 4x4, 8x8 boites (4, 16, 64 boites) pavant le
-  // domaine. Chaque boite 64x64 se coarsen proprement dans la hierarchie MG (puissances de 2).
-  const int mgs = 64;
-
-  // (A) convergence cut-cell + anisotrope ordre ~2 en L2, sur grille MULTI-BOX.
-  const double m128 = solve_l2(128, mgs);
-  const double m256 = solve_l2(256, mgs);
-  const double m512 = solve_l2(512, mgs);
+// (A) convergence cut-cell + anisotrope ordre ~2 en L2, sur grille MULTI-BOX.
+TEST(CutCellAnisotropicMultiboxTest, converges_at_order_two_in_l2_on_multibox) {
+  const double m128 = solve_l2(128, kMaxGridSize);
+  const double m256 = solve_l2(256, kMaxGridSize);
+  const double m512 = solve_l2(512, kMaxGridSize);
   const double o = order(m128, m512, 128, 512);
   std::printf("cut-cell+aniso (ex=%.1f ey=%.1f) MULTI-BOX L2 : %.3e %.3e %.3e  ordre=%.2f\n", kEx,
               kEy, m128, m256, m512, o);
-  chk(o > 1.7, "cutcell_aniso_multibox_ordre2_L2");  // Shortley-Weller : ~2 en L2
-  chk(std::isfinite(m512) && m512 > 0, "cutcell_aniso_multibox_fini");
+  EXPECT_TRUE(o > 1.7) << "cutcell_aniso_multibox_ordre2_L2: order=" << o;  // Shortley-Weller : ~2 en L2
+  EXPECT_TRUE(std::isfinite(m512) && m512 > 0) << "cutcell_aniso_multibox_fini: m512=" << m512;
+}
 
-  // (B) invariance au decoupage : MONO-box (une seule boite couvrant le domaine) vs MULTI-box, a
-  // n = 256 fixe. Les deux passent par la meme machinerie ; seul le pavage change. L'erreur L2
-  // sur le disque doit etre BIT-IDENTIQUE (le solveur ne depend pas du decoupage en boites).
+// (B) invariance au decoupage : MONO-box (une seule boite couvrant le domaine) vs MULTI-box, a
+// n = 256 fixe. Les deux passent par la meme machinerie ; seul le pavage change. L'erreur L2
+// sur le disque doit etre BIT-IDENTIQUE (le solveur ne depend pas du decoupage en boites).
+TEST(CutCellAnisotropicMultiboxTest, l2_error_is_invariant_to_box_decomposition) {
   const int nc = 256;
-  const double l2_mono = solve_l2(nc, nc);    // max_grid_size = nc -> 1 boite
-  const double l2_multi = solve_l2(nc, mgs);  // plusieurs boites
+  const double l2_mono = solve_l2(nc, nc);              // max_grid_size = nc -> 1 boite
+  const double l2_multi = solve_l2(nc, kMaxGridSize);  // plusieurs boites
   const double gap = std::fabs(l2_mono - l2_multi);
   std::printf("invariance decoupage n=%d : mono=%.12e multi=%.12e  ecart=%.3e\n", nc, l2_mono,
               l2_multi, gap);
-  chk(gap <= 1e-12 * (l2_mono + 1.0), "cutcell_aniso_invariance_decoupage");  // bit-identique
-
-  if (fails == 0)
-    std::printf("OK test_cut_cell_anisotropic_multibox\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_cut_cell_anisotropic_multibox, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_cut_cell_anisotropic_multibox, "test_cut_cell_anisotropic_multibox"), 0);
+  EXPECT_TRUE(gap <= 1e-12 * (l2_mono + 1.0))
+      << "cutcell_aniso_invariance_decoupage: gap=" << gap;  // bit-identique
 }
