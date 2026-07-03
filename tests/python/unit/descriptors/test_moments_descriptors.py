@@ -135,6 +135,84 @@ def test_hierarchy_snapshot_exposes_inspectable_descriptors():
     assert snapshot.projection.capabilities().to_dict()["guard_level"] == "bare"
 
 
+# ---------------------------------------------------------------------------------------------
+# ADC-543: the generic construction vocabulary is additive and the four issue contracts hold.
+# ---------------------------------------------------------------------------------------------
+def test_moment_projection_alias_and_realizable_set_descriptor():
+    # MomentProjection is the SAME descriptor as RealizabilityProjection (an identity alias);
+    # the existing asserts on RealizabilityProjection therefore cover it unchanged.
+    assert moments.MomentProjection is moments.RealizabilityProjection
+    # RealizableSet is a NEW inert descriptor describing the realizable cone at an order.
+    cone = moments.RealizableSet(4)
+    assert isinstance(cone, (Descriptor, DescriptorProtocol))
+    assert cone.name == "RealizableSet"
+    assert cone.category == "realizability_set"
+    assert cone.options() == {"order": 4}
+    caps = cone.capabilities()
+    assert caps.to_dict()["constraints"] == "m00_positive,cov_psd,schur"
+    # Both the alias and the new descriptor answer available() with an Availability, not a bool.
+    for descriptor in (moments.MomentProjection(), cone):
+        status = descriptor.available()
+        assert isinstance(status, Availability) and not isinstance(status, bool)
+        assert status.ok is True
+    assert cone.validate() is True
+    with pytest.raises(ValueError):
+        moments.RealizableSet(1)
+
+
+def test_realizable_set_descriptor_protocol_round_trip():
+    # DescriptorProtocol conformity: options / available / validate / lower / freeze round-trip
+    # (the inert typed-descriptor contract the base guarantees).
+    cone = moments.RealizableSet(4)
+    assert isinstance(cone, DescriptorProtocol)
+    lowered = cone.lower()
+    assert lowered.name == "RealizableSet" and lowered.category == "realizability_set"
+    assert lowered.options() == {"order": 4} if callable(getattr(lowered, "options", None)) \
+        else lowered.options == {"order": 4}
+    inspected = cone.inspect()
+    assert inspected["category"] == "realizability_set"
+    # freeze lifecycle: a post-freeze mutation raises (inherited from Descriptor).
+    cone.freeze()
+    with pytest.raises(RuntimeError):
+        cone.order = 2
+
+
+def test_wave_speed_capability_and_single_home():
+    # ExactSpeeds is the MOMENT wave-speed axis (how exact speeds are computed): a typed
+    # CapabilitySet, kept as the moments chooser.
+    exact = moments.ExactSpeeds()
+    assert isinstance(exact.capabilities().to_dict(), dict)
+    assert exact.capabilities().to_dict()["exact_speeds"] is True
+    # The canonical WaveSpeedProvider (which SOURCE HLL binds) is re-exported from pops.moments
+    # but stays a SINGLE class -- identical to pops.numerics.riemann.waves.WaveSpeedProvider.
+    from pops.numerics.riemann.waves import WaveSpeedProvider as canonical
+    assert moments.WaveSpeedProvider is canonical
+    provider = moments.WaveSpeedProvider("jacobian")
+    assert provider.capabilities().supports("signed_pair") is True
+    assert moments.WaveSpeedProvider("max_wave_speed").capabilities().supports("signed_pair") is False
+
+
+def test_hyqmom15_model_is_inspectable_and_runtime_free():
+    # The provided HyQMOM15 model builds to an authoring physics object whose Module lists the
+    # typed transport + source operators and the 15 conservative names, with no runtime leakage
+    # (mirrors the ADC-566 lib boundary: models lower runtime-free to pops.model.Module).
+    try:
+        from pops.lib.models.moments import HyQMOM15
+    except Exception as exc:  # pragma: no cover - bare tree without importable pops.
+        pytest.skip("pops import unavailable: %s" % exc)
+    model = HyQMOM15.vlasov_poisson_magnetic(order=4)
+    module = getattr(model, "module", model)
+    assert hasattr(module, "operator_registry")
+    op_names = module.operator_registry().names()
+    assert "flux_default" in op_names and "source_default" in op_names
+    # 15 conservative components (the order-4 hierarchy), canonical names.
+    components = model._m.state_space().components
+    assert len(components) == 15 and components[0] == "M00"
+    # No compiled / runtime leakage on the authoring object.
+    for runtime_attr in ("so_path", "abi_key"):
+        assert not getattr(model, runtime_attr, None)
+
+
 # The CI python runner invokes each test file as `python3 <file>`; run pytest on this module
 # so the assertions execute (a bare import would only define the test functions).
 if __name__ == "__main__":
