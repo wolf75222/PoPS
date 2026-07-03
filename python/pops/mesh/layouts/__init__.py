@@ -78,8 +78,8 @@ class Uniform(MeshDescriptor):
     ``refine=`` is NOT a supported single-level feature: a :class:`~pops.mesh.amr.Refine` /
     :class:`~pops.mesh.amr.TagUnion` attached here has no level to refine onto and would be a
     silently-ignored criterion if it were just dropped (Spec 5 sec.8.6 / ADC-589 / ADC-555). It
-    is carried on the descriptor ONLY so :meth:`pops.case.Case.validate` can see it and refuse the
-    case by default; the explicit escape is ``ignore_amr=pops.mesh.amr.IgnoreAMRCriteria()``.
+    is carried on the descriptor ONLY so :meth:`pops.Problem.validate` can see it and refuse the
+    problem by default; the explicit escape is ``ignore_amr=pops.mesh.amr.IgnoreAMRCriteria()``.
     """
 
     category = "layout"

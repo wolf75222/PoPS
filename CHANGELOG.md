@@ -80,6 +80,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   minimal docs quality tooling needed for the rebuild.
 
 ### Added
+- ADC-540 The codegen `Optimization` policy now participates in the compile cache key: its
+  signature (`_optimization_cache_key`) is folded into `_cache_so_path`, so a policy change (CSE /
+  fusion / math mode) is a cache MISS with a distinct `.so` name (surfaced in the manifest
+  `cache_key`), never a silent reuse of a differently-optimised binary. Tests cover the
+  layout / backend / platform separation, the absence of a `target` string on `Uniform` / `AMR`,
+  build-capability refusals before compile, and typed-slot string rejections.
 - ADC-535 Mandatory `max_iter` (a positive int) on the Krylov descriptors
   (`pops.solvers.krylov.CG/BiCGStab/GMRES/Richardson`): a missing / non-positive budget is refused
   at descriptor construction (mirroring the native `require_max_iter`), not only at
