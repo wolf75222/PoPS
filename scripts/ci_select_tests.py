@@ -22,6 +22,7 @@ from typing import Iterable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ci_import_closure  # noqa: E402
+import ci_include_graph  # noqa: E402
 import ci_shard_binpack  # noqa: E402
 
 
@@ -114,6 +115,12 @@ AREA_LABEL_ALIASES: dict[str, tuple[str, ...]] = {
     "time": ("time", "numerics", "solvers"),
     "validation": ("validation", "physics", "runtime"),
 }
+
+# A changed file is HEADER-IMPACT ELIGIBLE only if it is a project header under this prefix.
+# These are the only paths the include-graph impact selection reasons about; anything else in
+# the changeset makes the whole change fall through to the coarser label logic or force-full.
+CPP_INCLUDE_PREFIX = "include/pops/"
+CPP_HEADER_SUFFIXES = (".hpp", ".h", ".hh", ".hxx", ".inc", ".ipp", ".tpp")
 
 CPP_SMOKE_TARGETS = (
     "test_box2d",
@@ -228,6 +235,73 @@ def direct_python_tests(changed: Iterable[str], all_tests: set[str]) -> set[str]
     return {path for path in changed if path in all_tests}
 
 
+def is_cpp_header(path: str) -> bool:
+    """True if ``path`` is a project header under ``include/pops/`` (an impact-graph node)."""
+    return path.startswith(CPP_INCLUDE_PREFIX) and path.endswith(CPP_HEADER_SUFFIXES)
+
+
+def changed_header_nodes(changed: Iterable[str]) -> set[str]:
+    """Map the changed ``include/pops/`` headers to graph nodes (``pops/...`` identifiers)."""
+    return {path[len("include/") :] for path in changed if is_cpp_header(path)}
+
+
+def header_impact_eligible(changed: Iterable[str]) -> bool:
+    """True iff EVERY changed file is a project header under ``include/pops/``.
+
+    Header-impact selection is scoped to pure-header changesets: a single non-header C++
+    concern (cmake, a ``.cpp``, tests support, a python binding) means the include graph does
+    not capture the whole blast radius, so the caller keeps the coarser label logic instead.
+    This predicate is only consulted after the broad-file force-full guards, so ``core`` /
+    ``parallel`` header changes never reach it.
+    """
+    changed = list(changed)
+    return bool(changed) and all(is_cpp_header(path) for path in changed)
+
+
+def select_cpp_by_include_impact(
+    suites: Iterable[dict],
+    changed_headers: set[str],
+    reasons: dict[str, set[str]],
+) -> tuple[set[str], list[str]]:
+    """Select the suites whose source include-closure intersects ``changed_headers``.
+
+    Returns ``(selected, full_reasons)``. ``full_reasons`` is non-empty when the include graph
+    forces a FULL selection instead of a subset -- either a changed header is a global includer
+    (in the transitive closure of the heavy shared TUs / seams / emitter / cpp support, so it is
+    compiled into or linked by every target) or an anomaly is hit (a changed header absent from
+    the tree, or a suite source that cannot be read). Fail-open: any doubt escalates to FULL.
+    """
+    try:
+        global_closure = ci_include_graph.global_includer_closure()
+    except ci_include_graph.GraphError as exc:
+        return set(), [f"include-graph-unreadable:{exc}"]
+
+    # SOUNDNESS: a changed header reachable from the heavy shared TUs / seams / emitter / cpp
+    # support is linked into effectively every test -> select ALL suites.
+    global_hits = sorted(changed_headers & global_closure)
+    if global_hits:
+        return set(), ["header-in-global-includer-closure:" + ",".join(global_hits)]
+
+    # FAIL-OPEN: a changed header that does not exist on disk cannot be reasoned about.
+    missing = sorted(h for h in changed_headers if not ci_include_graph.header_exists(h))
+    if missing:
+        return set(), ["changed-header-not-in-tree:" + ",".join(missing)]
+
+    selected: set[str] = set()
+    for suite in suites:
+        closure: set[str] = set()
+        try:
+            for source in suite["sources"]:
+                closure |= ci_include_graph.source_closure(source)
+        except ci_include_graph.GraphError as exc:
+            return set(), [f"suite-source-missing:{suite['name']}:{exc}"]
+        hits = sorted(closure & changed_headers)
+        if hits:
+            selected.add(suite["name"])
+            add_reason(reasons, suite["name"], "include-impact:" + ",".join(hits))
+    return selected, []
+
+
 def select_cpp_by_labels(suites: Iterable[dict], areas: Iterable[str], reasons: dict[str, set[str]]) -> set[str]:
     wanted_labels = expand_area_labels(areas)
     selected: set[str] = set()
@@ -312,16 +386,38 @@ def plan_cpp(args: argparse.Namespace) -> int:
     if force_full_from_changed(changed, CPP_BROAD_FILES, CPP_BROAD_PREFIXES):
         full_reasons.append("broad-build-or-support-change")
     full = bool(full_reasons)
-    if not full and any(path.startswith("include/pops/") for path in changed):
+
+    selected: set[str] = set()
+    areas: set[str] = set()
+    reasons: dict[str, set[str]] = {}
+    # ADC-629: a pure ``include/pops/`` header changeset (after the broad guards, so never
+    # core/parallel) is narrowed by the include graph -- each suite is selected iff its source
+    # include-closure reaches a changed header. A global-includer header or any graph anomaly
+    # fails open to FULL; the coarser label logic below handles every non-pure-header change.
+    if not full and header_impact_eligible(changed):
+        changed_headers = changed_header_nodes(changed)
+        impacted, impact_full = select_cpp_by_include_impact(suites, changed_headers, reasons)
+        if impact_full:
+            full = True
+            full_reasons.extend(impact_full)
+        else:
+            # ``impacted`` may be empty: a pure-header change that reaches NO suite closure is a
+            # header no test includes (and not a global includer). Selecting nothing would be
+            # sound, but the smoke backstop keeps a conservative floor either way.
+            selected.update(impacted)
+            for target in CPP_SMOKE_TARGETS:
+                if target in all_target_set:
+                    selected.add(target)
+                    add_reason(reasons, target, "smoke-backstop")
+    elif not full and any(path.startswith("include/pops/") for path in changed):
+        # Mixed change touching headers: the include graph does not capture the non-header
+        # blast radius, so fall through to labels but keep the unknown-path force-full guard.
         known_include = any(areas_for(path, CPP_PATH_AREAS) for path in changed if path.startswith("include/pops/"))
         if not known_include:
             full = True
             full_reasons.append("unknown-cpp-public-api-path")
 
-    selected: set[str] = set()
-    areas: set[str] = set()
-    reasons: dict[str, set[str]] = {}
-    if not full:
+    if not full and not selected and not header_impact_eligible(changed):
         direct = direct_cpp_targets(changed, all_target_set)
         selected.update(direct)
         for target in direct:
