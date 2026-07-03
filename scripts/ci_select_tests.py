@@ -95,19 +95,21 @@ PYTHON_PATH_AREAS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (("scripts/gen_solver_kernel.py",), ("codegen", "elliptic")),
 )
 
+# The ADC-547 compliance matrix (label "compliance") is the cross-cutting regression net, so a
+# change to any core route area (runtime / physics / elliptic / amr) pulls it in.
 AREA_LABEL_ALIASES: dict[str, tuple[str, ...]] = {
-    "amr": ("amr", "mesh"),
+    "amr": ("amr", "mesh", "compliance"),
     "bindings": ("bindings", "runtime", "native_loader"),
     "codegen": ("codegen", "native_loader", "compiler", "bindings"),
     "coupling": ("coupling", "runtime", "elliptic", "amr", "physics"),
-    "elliptic": ("elliptic", "solvers"),
+    "elliptic": ("elliptic", "solvers", "compliance"),
     "io": ("io", "runtime"),
     "mesh": ("mesh", "amr"),
     "native_loader": ("native_loader", "codegen", "compiler"),
     "numerics": ("numerics", "elliptic", "solvers", "time"),
-    "physics": ("physics", "numerics"),
+    "physics": ("physics", "numerics", "compliance"),
     "problem": ("problem", "runtime"),
-    "runtime": ("runtime", "bindings", "native_loader"),
+    "runtime": ("runtime", "bindings", "native_loader", "compliance"),
     "solvers": ("solvers", "elliptic"),
     "time": ("time", "numerics", "solvers"),
     "validation": ("validation", "physics", "runtime"),

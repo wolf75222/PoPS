@@ -17,6 +17,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 ## [Unreleased]
 
 ### Added
+- ADC-547 A single declarative spec-compliance matrix (`tests/python/unit/compliance`) enumerates
+  every positive and negative cell in one greppable table: the 8 positive cells assert the chosen
+  native route via `native_capability_report()`/`compiled.inspect()`, the 11 negative cells assert a
+  stable, warning-free refusal on the clean route (the `pops.runtime.routes` install-time predicates
+  and `run_bind_gates` metadata stubs, not the legacy `System.add_block` route), and every
+  compiler-gated decision runs its full pre-compile bind-gate path locally so a regression cannot
+  hide until CI; a completeness test pins the cell ids so a dropped cell fails loud.
+- ADC-566 `pops.lib` boundaries are locked to `models`, `time`, `presets`: a new
+  `python/pops/lib/<other>/`, any lazy or module-scope import of `_pops`/`pops.runtime`/`pops.codegen`,
+  and any definition or module-scope re-export of a central object
+  (`HLL`/`MUSCL`/`PoissonProblem`/`GeometricMG`/`AMR`/`RuntimeParam`) under `pops.lib` fail tests;
+  `pops.lib.__init__` stays under a line cap, every block-name `pops.lib.time` macro returns a
+  `pops.time.Program`, and `pops.lib.models` lower to `pops.model`/`pops.physics` with no runtime.
+- ADC-565 Architecture gates refuse a second core system: a new public stepper class bypassing
+  `pops.time.Program`, a parallel field-problem system beside `pops.fields`
+  `FieldProblem`/`PoissonProblem` (or the bind path constructing one), or an AMR configuration route
+  other than `layout=AMR(...)` (a `target=`/string vocabulary, or a `sim.amr` mutator) all fail
+  tests; the facade and direct field lowering are proven identical via the IR hash, with no broad
+  allowlist (only `Program`, `ButcherTableau`, and the mesh AMR descriptor are named exceptions).
 - ADC-564 `Problem.inspect()` and `Program.inspect()` return typed report objects (attributes +
   `to_dict()`, never a dict subclass) on a shared `pops.Report` base that `compiled.inspect()`,
   `sim.inspect()`, `sim.explain_bind()` and `sim.amr` inspection also adopt; the reports carry
