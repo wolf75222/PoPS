@@ -17,14 +17,28 @@ from __future__ import annotations
 from typing import Any
 
 
-def policy_due(cadence: Any, step: Any) -> Any:
+def policy_due(cadence: Any, step: Any, last_step: Any = None, sim: Any = None) -> Any:
     """True when @p cadence is DUE at macro-step @p step (1-based: the count after a step).
 
-    Accepts the typed schedule objects (``pops.time.schedule.every(N)`` / ``always()``) and the
-    integer shorthand ``cadence=N`` (== ``every(N)``). ``None`` means every step (the default).
-    An ``every(N)`` fires when ``step % N == 0`` (and ``step > 0``); ``always`` fires every step;
-    a schedule kind with no run-loop meaning here (``when`` / ``on_start`` / ``on_end`` /
-    ``subcycle``) raises rather than silently never firing.
+    Accepts the typed schedule objects (``pops.time.schedule.every(N)`` / ``always()`` /
+    ``on_start()`` / ``on_end()`` / ``when(cond)``) and the integer shorthand ``cadence=N``
+    (== ``every(N)``). ``None`` means every step (the default). Behaviors:
+
+    - ``every(N)`` / int ``N``: fires when ``step % N == 0`` (and ``step > 0``).
+    - ``always``: fires every step.
+    - ``on_start``: fires at step 1 only.
+    - ``on_end``: fires when ``step == last_step`` (the LAST step actually taken -- decided in the
+      run loop, not pre-guessed). Never fires when @p last_step is unknown (``None``): honest silence
+      rather than a wrong fire.
+    - ``when(cond)``: fires when the condition holds this step. A CALLABLE ``cond(sim, step)`` is
+      evaluated (a non-bool return is rejected); a STRING ``cond`` names a recorded program
+      diagnostic and fires iff ``sim.program_diagnostic(cond) != 0.0`` (the native record_scalar map
+      is the runtime-condition seam; a missing name raises the existing fail-loud lookup). A Program
+      Bool IR value as ``cond`` has no host evaluation seam by design and is refused, the message
+      naming the recorded-scalar bridge.
+
+    ``subcycle`` stays refused: subcycles happen INSIDE the native macro step and are invisible to
+    this run-loop hook, so an "every subcycle" IO cadence has no meaning at this tier.
     """
     if step <= 0:
         return False
@@ -40,9 +54,37 @@ def policy_due(cadence: Any, step: Any) -> Any:
     if kind == "every":
         n = int(cadence.params.get("n", 1))
         return step % n == 0
+    if kind == "on_start":
+        return step == 1
+    if kind == "on_end":
+        return last_step is not None and step == last_step
+    if kind == "when":
+        return _when_due(cadence, step, sim)
     raise NotImplementedError(
-        "output cadence schedule kind %r is not honored by the Uniform run loop; use every(N) "
-        "or an int interval (when/on_start/on_end/subcycle output is a follow-up)." % (kind,))
+        "output cadence schedule kind %r is not honored by the run loop; use every(N), an int "
+        "interval, always(), on_start(), on_end() or when(cond). subcycle output is refused: "
+        "subcycles are internal to the native macro step and invisible to the run-loop IO hook."
+        % (kind,))
+
+
+def _when_due(cadence, step, sim):
+    """Evaluate a ``when(cond)`` cadence at macro-step @p step (see :func:`policy_due`)."""
+    cond = cadence.params.get("cond", None)
+    if callable(cond):
+        result = cond(sim, step)
+        if not isinstance(result, bool):
+            raise TypeError(
+                "when(cond) callable must return a bool (got %r); the run loop fires the policy "
+                "iff the callable returns True this step." % (type(result).__name__,))
+        return result
+    if isinstance(cond, str):
+        if sim is None:
+            return False
+        return sim.program_diagnostic(cond) != 0.0
+    raise NotImplementedError(
+        "when(cond) supports a callable cond(sim, step) or a string naming a recorded program "
+        "diagnostic (fires iff sim.program_diagnostic(name) != 0.0); a Program Bool IR value has no "
+        "host evaluation seam -- record it with P.record_scalar and use the recorded-scalar name.")
 
 
 def _format_token(fmt: Any) -> Any:
@@ -50,8 +92,8 @@ def _format_token(fmt: Any) -> Any:
 
     ``HDF5`` -> ``"hdf5"``; ``None`` (no explicit format) -> ``"npz"`` (the dependency-free
     default). A string is passed through (back-compat with ``format="npz"`` authoring). ``Plotfile``
-    has no ``System`` writer -- it is the AMReX per-level format -- so it raises a precise
-    ``NotImplementedError`` naming the AMR epic, NOT a reject of the whole output surface.
+    -> ``"plotfile"`` (the driver routes it to :mod:`pops.runtime._plotfile_writer`, which writes a
+    single-level plotfile on a Uniform System -- the former refusal is DELETED, ADC-542 addendum C.1).
     """
     if fmt is None:
         return "npz"
@@ -61,10 +103,7 @@ def _format_token(fmt: Any) -> Any:
     if name == "HDF5":
         return "hdf5"
     if name == "Plotfile":
-        raise NotImplementedError(
-            "OutputPolicy(format=Plotfile()) has no Uniform System writer: Plotfile is the AMReX "
-            "per-level format, deferred to the AMR output epic ADC-511. Use HDF5() or the npz "
-            "default for a Uniform System.")
+        return "plotfile"
     # An unknown typed format: defer to its declared name so System.write rejects it precisely.
     return getattr(fmt, "name", name)
 
@@ -93,19 +132,21 @@ def _field_names(fields: Any) -> Any:
     return names or None
 
 
-def fire_output_policies(sim: Any, policies: Any, step: Any, output_dir: Any) -> Any:
+def fire_output_policies(sim: Any, policies: Any, step: Any, output_dir: Any,
+                         last_step: Any = None) -> Any:
     """Fire every DUE output / checkpoint policy at macro-step @p step (the run-loop hook).
 
     For each :class:`pops.output.OutputPolicy` whose cadence is due, call the existing
     ``sim.write(prefix, format=, step=, fields=, parallel=)``; for each
     :class:`pops.output.CheckpointPolicy` whose cadence is due, call the existing
     ``sim.checkpoint(prefix)``. @p output_dir is the directory the files land in (the run supplies
-    it); each policy writes ``<output_dir>/<sim-or-policy-prefix>``. Returns the list of written
-    paths (useful for tests / logging).
+    it); each policy writes ``<output_dir>/<sim-or-policy-prefix>``. @p last_step is the LAST step the
+    run will take (for ``on_end`` cadences); the run loop supplies it when known. Returns the list of
+    written paths (useful for tests / logging).
 
     The level selection on a policy is a documented NO-OP on a single-level System (one level to
-    write); AMR per-level filtering is ADC-511. A policy type the driver does not recognise raises
-    rather than being silently skipped.
+    write); AMR per-level filtering rides the AMR output driver. A policy type the driver does not
+    recognise raises rather than being silently skipped.
     """
     import os
 
@@ -113,18 +154,22 @@ def fire_output_policies(sim: Any, policies: Any, step: Any, output_dir: Any) ->
     for policy in policies:
         cat = getattr(policy, "category", None)
         if cat == "output_policy":
-            if not policy_due(policy.cadence, step):
+            if not policy_due(policy.cadence, step, last_step=last_step, sim=sim):
                 continue
             fmt = _format_token(policy.format)
             prefix = os.path.join(output_dir, getattr(policy, "prefix", None) or "output")
-            written.append(sim.write(
-                prefix, format=fmt, step=step, fields=_field_names(policy.fields),
-                parallel=_hdf5_parallel(policy.format)))
+            if fmt == "plotfile":
+                from pops.runtime._plotfile_writer import write_plotfile
+                written.append(write_plotfile(sim, prefix, step=step))
+            else:
+                written.append(sim.write(
+                    prefix, format=fmt, step=step, fields=_field_names(policy.fields),
+                    parallel=_hdf5_parallel(policy.format)))
         elif cat == "checkpoint_policy":
-            if not policy_due(policy.cadence, step):
+            if not policy_due(policy.cadence, step, last_step=last_step, sim=sim):
                 continue
             prefix = os.path.join(output_dir, getattr(policy, "prefix", None) or "checkpoint")
-            # The v1 checkpoint numbers nothing itself; suffix the step so a cadence keeps a history
+            # The checkpoint numbers nothing itself; suffix the step so a cadence keeps a history
             # of restartable points rather than overwriting one file.
             written.append(sim.checkpoint("%s_%06d" % (prefix, step)))
         else:
