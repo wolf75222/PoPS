@@ -166,6 +166,7 @@ class TimeState:
         self._prev = _Prev(self)
         self._history_depth = None
         self._cold_start = None
+        self._checkpoint_policy = None
 
     # --- the current state U^n (read-only) -----------------------------------------------
     @property
@@ -242,15 +243,25 @@ class TimeState:
         version._value = out
         return out
 
-    def _keep_history(self, depth, cold_start=None):
-        """Record the history depth / cold-start policy and lower a ``store_history`` of the
-        current state so the ring is populated each step."""
+    def _keep_history(self, depth, cold_start=None, checkpoint_policy=None):
+        """Record the history depth / cold-start / checkpoint policy and lower a ``store_history`` of
+        the current state so the ring is populated each step.
+
+        ``checkpoint_policy`` (ADC-531) is recorded as inspectable metadata on the handle; a non-None
+        policy is CLEARLY REFUSED with a ``NotImplementedError`` because the checkpointing runtime is
+        deferred (the authoring surface lands, the runtime does not), rather than silently dropped."""
         if isinstance(depth, bool) or not isinstance(depth, int) or depth < 1:
             raise ValueError("keep_history: depth must be a Python int >= 1 (got %r)" % (depth,))
         if cold_start is None:
             cold_start = CopyCurrent()
+        if checkpoint_policy is not None:
+            raise NotImplementedError(
+                "keep_history: checkpoint_policy=%r is recognized but its runtime (restart / adjoint "
+                "checkpointing of the history ring) is not implemented yet; omit it for the in-memory "
+                "ring" % (checkpoint_policy,))
         self._history_depth = depth
         self._cold_start = cold_start
+        self._checkpoint_policy = checkpoint_policy
         return self.program.store_history(self._history_name(), self.n)
 
     def __repr__(self):

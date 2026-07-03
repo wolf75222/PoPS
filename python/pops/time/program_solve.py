@@ -199,7 +199,7 @@ class _ProgramSolve(_ProgramConstants):
         self._histories.setdefault(name, 1)
         return self._new("state", "store_history", (value,), {"history": name}, name, value.block)
 
-    def keep_history(self, timestate, depth, cold_start=None):
+    def keep_history(self, timestate, depth, cold_start=None, checkpoint_policy=None):
         """Keep a ring of past states for a :class:`pops.time.handles.TimeState` (Spec 5 sec.5.3.1).
 
         Records the ring ``depth`` and the ``cold_start`` policy on the handle and lowers a
@@ -207,14 +207,20 @@ class _ProgramSolve(_ProgramConstants):
         After this, ``U.prev(lag)`` (for ``lag <= depth``) reads the lagged state via ``P.history``.
         ``cold_start`` defaults to :class:`pops.time.history.CopyCurrent` (seed every slot with the
         current state on step 0, the historical behavior). Returns the lowered ``store_history`` node.
-        """
+
+        @p checkpoint_policy (ADC-531) is an OPTIONAL forward declaration of how the ring is
+        checkpointed for restart / adjoint replay. ``None`` (the default) keeps the historical
+        in-memory ring. A non-None policy is carried as inspectable metadata on the handle but the
+        checkpointing RUNTIME is not implemented yet, so it is CLEARLY REFUSED with a
+        ``NotImplementedError`` rather than silently ignored -- the authoring surface lands, the
+        runtime is deferred."""
         from pops.time.handles import TimeState
         if not isinstance(timestate, TimeState):
             raise ValueError(
                 "keep_history: a TimeState handle is required (P.state('U', block=...))")
         if timestate.program is not self:
             raise ValueError("keep_history: the TimeState belongs to a different Program")
-        return timestate._keep_history(depth, cold_start)
+        return timestate._keep_history(depth, cold_start, checkpoint_policy)
 
     def commit(self, block, state=None):
         """Replace the current state of ``block`` with ``state`` at the end of the step. Each block
