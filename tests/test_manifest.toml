@@ -1031,6 +1031,11 @@ path = "tests/python/unit/codegen"
 labels = ["unit", "python", "codegen", "fast"]
 
 [[python.suite]]
+name = "pops_python_unit_compliance"
+path = "tests/python/unit/compliance"
+labels = ["unit", "python", "compliance", "runtime", "medium"]
+
+[[python.suite]]
 name = "pops_python_unit_descriptors"
 path = "tests/python/unit/descriptors"
 labels = ["unit", "python", "descriptors", "fast"]
