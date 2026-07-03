@@ -60,4 +60,22 @@ class In(Constraint):
         return True
 
 
-__all__ = ["Constraint", "Positive", "NonNegative", "Range", "In"]
+class Interval(Range):
+    """A closed interval domain ``[lo, hi]`` (ADC-541: the readable alias of :class:`Range`).
+
+    ``Interval(0.0, 1.0)`` is the same closed-interval constraint as ``Range(0.0, 1.0)``; the name
+    reads more naturally on a param's ``domain=``. It is a thin subclass so an ``isinstance(...,
+    Range)`` check keeps recognising it, while its own ``name`` distinguishes it in diagnostics.
+    """
+
+
+class OneOf(In):
+    """A fixed allowed-value set (ADC-541: the readable alias of :class:`In`).
+
+    ``OneOf("roe", "hll")`` is the same membership constraint as ``In("roe", "hll")``; the name
+    reads more naturally on a param's ``domain=``. A thin subclass so ``isinstance(..., In)`` keeps
+    recognising it, with its own ``name`` for diagnostics.
+    """
+
+
+__all__ = ["Constraint", "Positive", "NonNegative", "Range", "In", "Interval", "OneOf"]

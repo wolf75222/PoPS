@@ -80,6 +80,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   minimal docs quality tooling needed for the rebuild.
 
 ### Added
+- ADC-541 `pops.params` gains the readable typed constraint aliases `Interval` (over `Range`) and
+  `OneOf` (over `In`), and `RuntimeParam.check_bind(value)` for bind-time domain validation with a
+  4-part diagnostic (param name / expected domain / received value / phase). A bare-string
+  `domain="positive"` is refused at construction; the compile-time-vs-runtime choice is carried by
+  the descriptor TYPE (`ConstParam` vs `RuntimeParam`), never a `kind=` string. A const param
+  participates in the cache key while a runtime param change does not recompile.
 - ADC-540 The codegen `Optimization` policy now participates in the compile cache key: its
   signature (`_optimization_cache_key`) is folded into `_cache_so_path`, so a policy change (CSE /
   fusion / math mode) is a cache MISS with a distinct `.so` name (surfaced in the manifest
