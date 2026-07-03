@@ -17,6 +17,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 ## [Unreleased]
 
 ### Added
+- ADC-566 `pops.lib` boundaries are locked to `models`, `time`, `presets`: a new
+  `python/pops/lib/<other>/`, any lazy or module-scope import of `_pops`/`pops.runtime`/`pops.codegen`,
+  and any definition or module-scope re-export of a central object
+  (`HLL`/`MUSCL`/`PoissonProblem`/`GeometricMG`/`AMR`/`RuntimeParam`) under `pops.lib` fail tests;
+  `pops.lib.__init__` stays under a line cap, every block-name `pops.lib.time` macro returns a
+  `pops.time.Program`, and `pops.lib.models` lower to `pops.model`/`pops.physics` with no runtime.
 - ADC-565 Architecture gates refuse a second core system: a new public stepper class bypassing
   `pops.time.Program`, a parallel field-problem system beside `pops.fields`
   `FieldProblem`/`PoissonProblem` (or the bind path constructing one), or an AMR configuration route
