@@ -4,7 +4,8 @@
 Complements test_time_handles.py / test_time_control_flow.py with the ADC-531 acceptance points not
 covered there:
 
-  - keep_history carries a checkpoint_policy but CLEARLY REFUSES an unimplemented one (no silent drop);
+  - keep_history carries a typed history-persistence checkpoint_policy (ADC-626); the default resolves
+    to Dense and a bare-string policy is refused (only a typed descriptor is accepted);
   - a bounded loop is MANDATORY-BOUND: P.range / P.static_range require a Python-int count (the loop
     bound), and a non-int / runtime-scalar / negative count is refused;
   - commit_many is ATOMIC: a group with a double-commit or a foreign value is rejected as a unit,
@@ -18,6 +19,7 @@ import pytest
 
 from pops import time as adctime
 from pops.time.history import CopyCurrent
+from pops.time.history_persistence import Dense, Interval
 
 
 def _expect(exc_type, fn, needle):
@@ -29,22 +31,44 @@ def _expect(exc_type, fn, needle):
         raise AssertionError("expected %s containing %r" % (exc_type.__name__, needle))
 
 
-# --- keep_history checkpoint policy -------------------------------------------------------------
-def test_keep_history_default_no_checkpoint_policy():
+# --- keep_history checkpoint policy (ADC-626) ---------------------------------------------------
+def test_keep_history_default_resolves_to_dense():
     P = adctime.Program("h")
     U = P.state("U", block="plasma")
     node = P.keep_history(U, depth=2)
     assert node.op == "store_history"
-    # The historical in-memory ring: cold start defaults to CopyCurrent, no checkpoint policy.
+    # The historical whole-ring behaviour: cold start defaults to CopyCurrent, persistence to Dense.
     assert isinstance(U._cold_start, CopyCurrent)
-    assert U._checkpoint_policy is None
+    assert isinstance(U._checkpoint_policy, Dense)
+    # The resolved policy is recorded on the Program keyed by the ring name (depth, policy).
+    depth, policy = P._history_persistence["plasma.U"]
+    assert depth == 2 and isinstance(policy, Dense)
 
 
-def test_keep_history_checkpoint_policy_is_refused_not_dropped():
+def test_keep_history_accepts_typed_policy():
     P = adctime.Program("h")
     U = P.state("U", block="plasma")
-    _expect(NotImplementedError, lambda: P.keep_history(U, depth=2, checkpoint_policy="disk"),
-            "checkpoint_policy")
+    # depth 4 with Interval(3): (depth-1)=3 divisible by 3 -> stores {0, 3}, coherent.
+    node = P.keep_history(U, depth=4, checkpoint_policy=Interval(3))
+    assert node.op == "store_history"
+    assert isinstance(U._checkpoint_policy, Interval) and U._checkpoint_policy.k == 3
+    depth, policy = P._history_persistence["plasma.U"]
+    assert depth == 4 and policy.stored_slots(4) == (0, 3)
+
+
+def test_keep_history_bad_string_policy_refused():
+    P = adctime.Program("h")
+    U = P.state("U", block="plasma")
+    # A bare string is NOT a typed policy: refused with a TypeError (only the descriptors are accepted).
+    _expect(TypeError, lambda: P.keep_history(U, depth=2, checkpoint_policy="disk"), "typed policy")
+
+
+def test_keep_history_incoherent_policy_refused_at_author_time():
+    P = adctime.Program("h")
+    U = P.state("U", block="plasma")
+    # Interval(2) on depth 4: (depth-1)=3 not divisible by 2 -> the oldest lag is unreconstructable.
+    _expect(ValueError, lambda: P.keep_history(U, depth=4, checkpoint_policy=Interval(2)),
+            "oldest slot")
 
 
 # --- bounded loops: the count is a MANDATORY bound ----------------------------------------------

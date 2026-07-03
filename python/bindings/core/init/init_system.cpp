@@ -188,6 +188,14 @@ void bind_system_checkpoint(py::class_<System>& cls) {
           py::arg("name"), py::arg("slot"), py::arg("values"))
       .def("set_history_initialized", &System::set_history_initialized, py::arg("name"),
            py::arg("initialized"))
+      // Selective history persistence + deterministic ring replay (ADC-626): the checkpoint stores only
+      // the policy-selected slots + the per-slot dt; the restart replays the gaps via
+      // rebuild_history_slots (re-stepping the installed Program from the nearest older stored slot).
+      .def("history_slot_dt", &System::history_slot_dt, py::arg("name"), py::arg("slot"))
+      .def("restore_history_slot_dt", &System::restore_history_slot_dt, py::arg("name"),
+           py::arg("slot"), py::arg("dt"))
+      .def("rebuild_history_slots", &System::rebuild_history_slots, py::arg("name"),
+           py::arg("stored_slots"))
       // Scheduler value-cache checkpoint/restart seam (ADC-458, Spec 3 section 30): the facade gathers/
       // restores the System-owned held-node cache DIRECTLY (no .so checkpoint_extra ABI), mirroring the
       // history seam. program_cache_global mirrors history_global (collective gather, component-major);

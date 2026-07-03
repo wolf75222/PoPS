@@ -1,0 +1,89 @@
+"""History-ring checkpoint serialization + selective-persistence restart (ADC-626).
+
+Split out of :mod:`pops.runtime._system_io` (the 500-line cap): the checkpoint WRITER emits, per
+history ring, only the policy-selected slots plus the policy manifest and the per-slot dt; the
+RESTART reader restores the stored slots and REPLAYS the recomputed gaps via the native
+``rebuild_history_slots`` seam. A Dense policy (or a v1 checkpoint) stores every slot and never
+replays -- byte-compatible with the historical whole-ring checkpoint.
+"""
+import json
+
+
+def resolve_ring_policy(policy, depth):
+    """The history-persistence policy for one ring at @p depth: @p policy when a typed one is attached,
+    else :class:`pops.time.Dense` (every slot stored -- the v1-compatible whole ring). Validated against
+    @p depth (defence in depth; the author-time gate already ran)."""
+    from pops.time.history_persistence import Dense, HistoryPersistence
+    resolved = policy if isinstance(policy, HistoryPersistence) else Dense()
+    resolved.validate_for(depth)
+    return resolved
+
+
+def serialize_histories(system, persistence, out):
+    """Write every registered ring of @p system into the checkpoint dict @p out (ADC-626).
+
+    @p persistence is the ``name -> policy`` map (empty -> Dense everywhere). Per ring: depth / ncomp /
+    initialized / the policy manifest / the stored-slot index array / the per-slot dt, then ONLY the
+    policy-selected slots' global buffers (a recomputed slot is replayed at restart, not stored). The
+    gather is collective (all ranks call), like state_global."""
+    import numpy as np
+    names = list(system.history_names())
+    out["history_names"] = np.array(names)
+    for hname in names:
+        depth = int(system.history_depth(hname))
+        out["history_depth_" + hname] = depth
+        out["history_ncomp_" + hname] = int(system.history_ncomp(hname))
+        out["history_init_" + hname] = bool(system.history_initialized(hname))
+        policy = resolve_ring_policy(persistence.get(hname), depth)
+        stored = list(policy.stored_slots(depth))
+        out["history_policy_" + hname] = np.array(json.dumps(policy.to_manifest()))
+        out["history_stored_slots_" + hname] = np.asarray(stored, dtype=np.int64)
+        if hasattr(system, "history_slot_dt"):
+            out["history_slot_dt_" + hname] = np.asarray(
+                [float(system.history_slot_dt(hname, k)) for k in range(depth)], dtype=np.float64)
+        for k in stored:
+            out["history_%s_%d" % (hname, k)] = np.asarray(
+                system.history_global(hname, k), dtype=np.float64)
+
+
+def restore_histories(system, d, ckpt_version):
+    """Restore every checkpointed ring of @p system, replaying the recomputed slots (ADC-626).
+
+    v1 (or a Dense v2): every slot present -> restore all, no replay. v2 non-Dense: restore the stored
+    slots + the per-slot dt, then ``rebuild_history_slots`` reconstructs the gaps by deterministic
+    replay. A stored-slots / policy mismatch is refused verbatim. Returns the typed
+    :class:`~pops.time.history_persistence_report.HistoryReplayReport`."""
+    import numpy as np
+    from pops.time.history_persistence import Dense, HistoryPersistence
+    from pops.time.history_persistence_report import HistoryReplayReport
+    report = HistoryReplayReport()
+    for hname in (str(h) for h in d["history_names"]):
+        depth = int(d["history_depth_" + hname])
+        policy_key = "history_policy_" + hname
+        if ckpt_version == 1 or policy_key not in d:
+            policy = Dense()
+            stored = list(range(depth))
+        else:
+            policy = HistoryPersistence.from_manifest(json.loads(str(d[policy_key])))
+            stored = [int(s) for s in d["history_stored_slots_" + hname]]
+            expected = list(policy.stored_slots(depth))
+            if sorted(stored) != expected:
+                raise RuntimeError(
+                    "restart : history '%s' checkpoint stored slots %r != policy %s expects %r"
+                    % (hname, sorted(stored), policy.name, expected))
+        for k in stored:
+            system.restore_history(
+                hname, k, np.asarray(d["history_%s_%d" % (hname, k)], dtype=np.float64))
+        if hasattr(system, "restore_history_slot_dt") and ("history_slot_dt_" + hname) in d:
+            for k, dt in enumerate(np.asarray(d["history_slot_dt_" + hname], dtype=np.float64)):
+                system.restore_history_slot_dt(hname, int(k), float(dt))
+        system.set_history_initialized(hname, bool(d["history_init_" + hname]))
+        recomputed = 0
+        if len(stored) < depth and hasattr(system, "rebuild_history_slots"):
+            recomputed = int(system.rebuild_history_slots(hname, sorted(stored)))
+        report.add(name=hname, depth=depth, policy_kind=policy.kind,
+                   stored_slots=len(stored), recomputed_slots=recomputed, replay_steps=recomputed)
+    return report
+
+
+__all__ = ["resolve_ring_policy", "serialize_histories", "restore_histories"]

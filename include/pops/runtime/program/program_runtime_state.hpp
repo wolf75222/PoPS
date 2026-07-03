@@ -59,16 +59,30 @@ struct HistoryManager {
   std::map<std::string, std::vector<MultiFab>> histories;  // name -> ring (newest at [0])
   std::map<std::string, int> depth;                        // name -> ring length (max lag + 1)
   std::map<std::string, bool> initialized;                 // name -> stored at least once
+  /// PER-SLOT dt (ADC-626). slot_dt[name][s] = the macro-step dt whose commit produced the value now
+  /// in slot s (slot 0 = newest). Filled by the runtime's store_history (which knows the current dt via
+  /// ProgramRuntimeState::last_dt_) and rotated ALONGSIDE the ring, so a selective-persistence restart
+  /// can re-step the recomputed slots with the EXACT recorded dt sequence (variable-dt replay is
+  /// bit-exact). A plain data member (no method the stepper template instantiates) -> MockImpl-safe;
+  /// empty by default so the dense / non-persistence paths never touch it.
+  std::map<std::string, std::vector<Real>> slot_dt;
 
   /// Shift each ring one step (newest-to-oldest), called ONCE at the end of a macro-step. O(1)
   /// std::swap of the MultiFab handles (not a deep copy): the swap chain from the deepest slot down
   /// to 1 leaves every read slot k >= 1 holding slot k-1's old value and RECYCLES the now-oldest
   /// buffer into slot [0] (overwritten by the next store before any read). Grid-free -> lives here.
+  /// The per-slot dt (ADC-626) rotates on the SAME chain (a scalar swap) so slot_dt stays aligned with
+  /// the ring it annotates.
   void rotate() {
     for (auto& [name, ring] : histories) {
-      (void)name;
       for (std::size_t k = ring.size(); k-- > 1;)
         std::swap(ring[k], ring[k - 1]);
+      auto dt_it = slot_dt.find(name);
+      if (dt_it != slot_dt.end()) {
+        std::vector<Real>& dts = dt_it->second;
+        for (std::size_t k = dts.size(); k-- > 1;)
+          std::swap(dts[k], dts[k - 1]);
+      }
     }
   }
 
@@ -104,6 +118,12 @@ struct ProgramRuntimeState {
   /// byte-identical to a single step_(dt) call. Read by the stepper; guarded by set_cadence.
   int substeps_ = 1;
   int stride_ = 1;
+  /// LAST macro-step dt handed to step_ (ADC-626). Set by the stepper right before each
+  /// program_.step_(h) call (run_program_cadence, shared by step() and step_cfl()), so the runtime's
+  /// store_history can tag the slot it produces with the dt that produced it (HistoryManager::slot_dt).
+  /// A plain data field only assigned by the template (never a new method it instantiates) -> the mock
+  /// System (test_strang_splitting) compiles unchanged. Default 0 -> no program stepped yet.
+  Real last_dt_ = Real(0);
 
   // --- checkpoint / binding identity ---------------------------------------------------------------
   /// IR hash of the installed compiled Program (the .so's pops_program_hash, ADC-406b). Empty until

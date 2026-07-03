@@ -152,6 +152,15 @@ class _SystemUnifiedInstall:
         # NATIVE mode (compiled=None) there is no Program -- the step-2 blocks drive the native loop.
         if so_path is not None:
             self.install_program(so_path)
+            # (5a) HISTORY-PERSISTENCE POLICIES (ADC-626): the compiled Program records a per-ring
+            # persistence policy (Dense / Interval / Revolve) on program._history_persistence. Attach the
+            # name -> policy map to the System so the checkpoint stores only the policy-selected slots and
+            # the restart replays the gaps. Absent -> Dense (the whole ring), byte-compatible with v1.
+            program = getattr(compiled, "program", None)
+            persistence = getattr(program, "_history_persistence", None) if program else None
+            if persistence and hasattr(self, "set_history_persistence"):
+                self.set_history_persistence(
+                    {name: policy for name, (_depth, policy) in persistence.items()})
             # (5b) COMPILED-PROGRAM RUNTIME PARAMS (ADC-510, Spec 5 C5): route the REMAINING params (no
             # AOT instance consumed them in 4) to the per-PROGRAM-block set_program_params AFTER
             # install_program seeded the declaration defaults; the Program kernels read them via the

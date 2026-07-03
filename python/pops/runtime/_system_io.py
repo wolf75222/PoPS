@@ -13,6 +13,20 @@ from pops.runtime.bricks import abi_key
 class _SystemIO:
     """Output / checkpoint / restart methods of System."""
 
+    def set_history_persistence(self, mapping):
+        """Attach the per-history persistence policies (ADC-626): @p mapping is ``name -> policy`` (a
+        :class:`pops.time.history_persistence.HistoryPersistence`). The checkpoint reads it to store only
+        the policy-selected slots; a ring absent from the map (or an empty map) persists Dense (the whole
+        ring, byte-compatible with a v1 checkpoint). Idempotent; ``None`` clears it."""
+        self._history_persistence = dict(mapping or {})
+        return self
+
+    def last_restart_report(self):
+        """The typed :class:`~pops.time.history_persistence_report.HistoryReplayReport` of the last
+        restart (stored-vs-recomputed ring slots + replay steps), or ``None`` if no restart has run.
+        Metadata-only (ADC-591); populated by :meth:`restart`."""
+        return getattr(self, "_last_restart_report", None)
+
     # ------------------------------------------------------------------
     # OUTPUTS / CHECKPOINT / RESTART v1 (audit 2026-06, IO; cf. docs/IO_CHECKPOINT_PLAN.md).
     # Pure Python (zero change to the C++ hot path), single-rank; HDF5 aggregated/parallel and AMR =
@@ -265,7 +279,7 @@ class _SystemIO:
                 "HDF5 checkpoint remains to be done (PR-IO-3, docs/IO_CHECKPOINT_PLAN.md) ; for "
                 "now : checkpoint(parallel=False).")
         blocks = list(self._s.block_names())
-        out = {"pops_checkpoint_version": 1,
+        out = {"pops_checkpoint_version": 2,
                "t": self._s.time(), "macro_step": self._s.macro_step(),
                "nx": self._s.nx(), "ny": self._s.ny(),
                "abi_key": abi_key(), "blocks": np.array(blocks)}
@@ -292,16 +306,12 @@ class _SystemIO:
             out["program_hash"] = prog_hash
         hist_names = list(self._s.history_names()) if hasattr(self._s, "history_names") else []
         if hist_names:
-            out["history_names"] = np.array(hist_names)
-            for hname in hist_names:
-                depth = int(self._s.history_depth(hname))
-                out["history_depth_" + hname] = depth
-                out["history_ncomp_" + hname] = int(self._s.history_ncomp(hname))
-                out["history_init_" + hname] = bool(self._s.history_initialized(hname))
-                # COLLECTIVE gather of every slot (all ranks call), like state_global above.
-                for k in range(depth):
-                    out["history_%s_%d" % (hname, k)] = np.asarray(
-                        self._s.history_global(hname, k), dtype=np.float64)
+            # HISTORY-PERSISTENCE (ADC-626): serialize each ring storing ONLY the policy-selected slots +
+            # the policy manifest + the per-slot dt (a recomputed slot is replayed at restart). The
+            # name -> policy map is attached at install (set_history_persistence); empty -> Dense (whole
+            # ring, byte-compatible with v1). The heavy loop lives in _system_io_history (500-line cap).
+            from pops.runtime._system_io_history import serialize_histories
+            serialize_histories(self._s, getattr(self, "_history_persistence", None) or {}, out)
         # SCHEDULER VALUE CACHE (ADC-458, Spec 3 section 30): a compiled Program with a held schedule
         # (every(N).hold / accumulate_dt) caches the System aux / a scratch per node so the field solve
         # runs only when DUE. The cache lives in the System (program_cache, NOT the .so step closure),
@@ -349,8 +359,12 @@ class _SystemIO:
         import numpy as np
         target = path if path.endswith(".npz") else path + ".npz"
         d = np.load(target, allow_pickle=False)
-        if int(d["pops_checkpoint_version"]) != 1:
-            raise ValueError("restart : checkpoint version %r not supported (expected 1)"
+        ckpt_version = int(d["pops_checkpoint_version"])
+        if ckpt_version not in (1, 2):
+            # v1 = the pre-ADC-626 dense checkpoint (every ring slot stored); v2 adds the selective
+            # history-persistence keys (stored slots + policy + per-slot dt). A v1 checkpoint restores
+            # as Dense (back-compatible), following the AMR checkpoint versioning precedent.
+            raise ValueError("restart : checkpoint version %r not supported (expected 1 or 2)"
                              % (d["pops_checkpoint_version"],))
         if int(d["nx"]) != self._s.nx() or int(d["ny"]) != self._s.ny():
             raise ValueError("restart : checkpoint grid (%d x %d) != system (%d x %d)"
@@ -397,12 +411,8 @@ class _SystemIO:
                     raise RuntimeError(
                         "checkpoint does not contain required Program history '%s'" % hname)
         if available:
-            for hname in (str(h) for h in d["history_names"]):
-                depth = int(d["history_depth_" + hname])
-                for k in range(depth):
-                    self._s.restore_history(
-                        hname, k, np.asarray(d["history_%s_%d" % (hname, k)], dtype=np.float64))
-                self._s.set_history_initialized(hname, bool(d["history_init_" + hname]))
+            from pops.runtime._system_io_history import restore_histories
+            self._last_restart_report = restore_histories(self._s, d, ckpt_version)
         # SCHEDULER VALUE CACHE (ADC-458, Spec 3 section 30): restore each held node's cached value +
         # bookkeeping so a held schedule resumes EXACTLY on its cadence -- continuous == (run, ckpt,
         # restart, continue) bit-for-bit. The cache is keyed by IR node id (re-keyed by the re-installed

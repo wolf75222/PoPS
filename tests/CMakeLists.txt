@@ -534,6 +534,12 @@ pops_add_gtest_suite(NAME test_program_context_contract SOURCES "${_src}" EXTRA_
 pops_test_source(_src test_checkpoint_history)
 pops_add_gtest_suite(NAME test_checkpoint_history SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
 
+# ADC-626: selective history persistence + deterministic ring replay. Drives a real System (installs a
+# native ramp step closure and calls rebuild_history_slots), so it links the heavy runtime object
+# library like test_checkpoint_history above.
+pops_test_source(_src test_checkpoint_history_policy)
+pops_add_gtest_suite(NAME test_checkpoint_history_policy SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
+
 pops_test_source(_src test_program_loader)
 pops_native_loader_definitions(_native_defs)
 pops_add_gtest_suite(NAME test_program_loader SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})

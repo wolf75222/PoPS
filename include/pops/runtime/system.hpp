@@ -816,6 +816,33 @@ class System {
   /// @p name is unknown (restore its slots first).
   POPS_EXPORT void set_history_initialized(const std::string& name, bool initialized);
   /// @}
+  /// @name Selective history persistence + deterministic ring replay (ADC-626)
+  /// A history-persistence policy (pops.time.Dense / Interval / Revolve) stores only a SUBSET of a
+  /// ring's slots in a checkpoint; the restart REBUILDS the missing slots by re-stepping the installed
+  /// Program. The per-slot dt each store produced is exposed so the checkpoint records it and replay
+  /// reproduces a variable-dt history bit-for-bit.
+  /// @{
+  /// The dt that produced slot @p slot of history @p name (HistoryManager::slot_dt). 0 for a slot that
+  /// was never stored (a never-stepped ring). @throws if @p name is unknown or @p slot out of range.
+  POPS_EXPORT double history_slot_dt(const std::string& name, int slot) const;
+  /// Restore the dt that produced slot @p slot of history @p name (the inverse of history_slot_dt, used
+  /// at restart so replay re-steps with the exact recorded dt). Grows the per-slot dt vector to fit the
+  /// ring. @throws if @p name is unknown (restore its slots first).
+  POPS_EXPORT void restore_history_slot_dt(const std::string& name, int slot, double dt);
+  /// REBUILD the MISSING slots of history @p name by deterministic replay (ADC-626). @p stored_slots is
+  /// the sorted set of slot indices already restored (via restore_history); every OTHER slot in
+  /// [0, depth) is reconstructed by seeding a SCRATCH block state from the nearest OLDER stored slot and
+  /// re-stepping the installed Program forward (program_.step_) with the recorded per-slot dt, capturing
+  /// each intermediate state into its ring slot. The live block state U and the scheduler cache are
+  /// SAVE/RESTORE-bracketed so replay is identity on them (bit-for-bit). Slots are placed BY INDEX (no
+  /// rotate), sidestepping the rotation-invalidation edge. Requires an installed Program (program_.step_)
+  /// and at least the oldest slot (depth-1) present in @p stored_slots. Returns the number of slots
+  /// RECOMPUTED (== depth - stored_slots.size()); the replay-step count equals it (each missing slot is
+  /// captured once as a contiguous run passes it). @throws if @p name is unknown, no Program is
+  /// installed, or the oldest slot is not stored (the ring would be unreconstructable).
+  POPS_EXPORT int rebuild_history_slots(const std::string& name,
+                                        const std::vector<int>& stored_slots);
+  /// @}
   /// Load a generated problem.so and install its compiled time Program. dlopens @p so_path, checks
   /// its ABI key against this module (fail-loud on mismatch), and calls its pops_install_program(this),
   /// which wraps the System in a ProgramContext and installs the macro-step closure. The .so resolves

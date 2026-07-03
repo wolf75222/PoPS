@@ -207,12 +207,12 @@ class _ProgramSolve(_ProgramConstants):
         ``cold_start`` defaults to :class:`pops.time.history.CopyCurrent` (seed every slot with the
         current state on step 0, the historical behavior). Returns the lowered ``store_history`` node.
 
-        @p checkpoint_policy (ADC-531) is an OPTIONAL forward declaration of how the ring is
-        checkpointed for restart / adjoint replay. ``None`` (the default) keeps the historical
-        in-memory ring. A non-None policy is carried as inspectable metadata on the handle but the
-        checkpointing RUNTIME is not implemented yet, so it is CLEARLY REFUSED with a
-        ``NotImplementedError`` rather than silently ignored -- the authoring surface lands, the
-        runtime is deferred."""
+        @p checkpoint_policy (ADC-626) is a typed history-persistence policy
+        (:class:`pops.time.Dense` / :class:`~pops.time.Interval` / :class:`~pops.time.Revolve`)
+        selecting which ring slots a checkpoint STORES; the remaining slots are recomputed at restart
+        by deterministic replay of the installed compiled Program (bit-identical to a dense-restored
+        ring). ``None`` (the default) resolves to :class:`~pops.time.Dense` (the whole-ring historical
+        behaviour). The policy is validated against @p depth at author time (loud on incoherence)."""
         from pops.time.handles import TimeState
         if not isinstance(timestate, TimeState):
             raise ValueError(

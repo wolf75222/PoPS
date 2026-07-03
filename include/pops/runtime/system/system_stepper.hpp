@@ -341,8 +341,13 @@ class SystemStepper {
       const Real eff_dt = Real(dt) * Real(P->program_.stride_);  // catch-up: effective step M*dt
       const int n = P->program_.substeps_;
       const Real h = eff_dt / Real(n);  // substeps subdivide the EFFECTIVE step (native: eff_dt/n)
-      for (int sub = 0; sub < n; ++sub)
+      for (int sub = 0; sub < n; ++sub) {
+        // Record the dt handed to the program BEFORE the call so the runtime's store_history can tag
+        // the slot it produces with the exact dt (ADC-626 variable-dt replay). Shared by step() and
+        // step_cfl() (both route here), so no call site is missed. A plain field assignment.
+        P->program_.last_dt_ = h;
         P->program_.step_(h);
+      }
     }
     P->t += dt;  // clock ticks EVERY macro-step (held steps included), like native
     P->macro_step_++;

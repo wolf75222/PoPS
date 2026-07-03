@@ -56,6 +56,7 @@ set(POPS_CPP_TEST_SOURCE_test_cf_interface "tests/cpp/integration/amr/test_cf_in
 set(POPS_CPP_TEST_SOURCE_test_cfl_dt "tests/cpp/unit/numerics/test_cfl_dt.cpp")
 set(POPS_CPP_TEST_SOURCE_test_checkpoint_cache "tests/cpp/integration/runtime/test_checkpoint_cache.cpp")
 set(POPS_CPP_TEST_SOURCE_test_checkpoint_history "tests/cpp/integration/runtime/test_checkpoint_history.cpp")
+set(POPS_CPP_TEST_SOURCE_test_checkpoint_history_policy "tests/cpp/integration/runtime/test_checkpoint_history_policy.cpp")
 set(POPS_CPP_TEST_SOURCE_test_cluster "tests/cpp/unit/mesh/test_cluster.cpp")
 set(POPS_CPP_TEST_SOURCE_test_compiled_model_parity "tests/cpp/integration/native_loader/test_compiled_model_parity.cpp")
 set(POPS_CPP_TEST_SOURCE_test_composite_fac_poisson "tests/cpp/unit/elliptic/test_composite_fac_poisson.cpp")
