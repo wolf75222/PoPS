@@ -256,7 +256,10 @@ class Case:
         assemblies, named non-Poisson elliptic fields and output / checkpoint policies now LOWER
         (C3 / C1-System / C4); each output entry is only confirmed to be a real policy descriptor
         here (a non-policy object is rejected loud). AMR per-level output is deferred (ADC-511).
+        A ``Uniform`` layout with an active AMR criterion is refused unless it also carries the
+        ``IgnoreAMRCriteria()`` escape (ADC-589/ADC-555).
         """
+        self._refuse_uniform_with_amr_criteria()
         self._layout.validate(context)
         if not self._blocks:
             raise ValueError(
@@ -293,6 +296,24 @@ class Case:
                     "Case.validate: output() expects a pops.output.OutputPolicy / CheckpointPolicy; "
                     "got %r (category %r)" % (type(policy).__name__, cat))
         return True
+
+    def _refuse_uniform_with_amr_criteria(self):
+        """Refuse a ``Uniform`` layout with an AMR criterion and no explicit escape (sec.8.6/5.14,
+        ADC-589/555): a single-level layout has no level to refine onto, so a criterion is never
+        silently dropped."""
+        layout = self._layout
+        criterion = getattr(layout, "refine", None) if isinstance(layout, Uniform) else None
+        if criterion is None or getattr(layout, "ignore_amr", None) is not None:
+            return
+        sub_criteria = getattr(criterion, "criteria", None)
+        names = [c.name for c in sub_criteria] if sub_criteria is not None else [criterion.name]
+        raise ValueError(
+            "Case.validate: layout=Uniform(...) carries active AMR criteria (%s) but a "
+            "single-level layout has no level to refine onto; a criterion is never silently "
+            "ignored. Use layout=AMR(...) to actually refine, or pass "
+            "Uniform(mesh, refine=..., ignore_amr=pops.mesh.amr.IgnoreAMRCriteria()) to keep the "
+            "criterion attached but explicitly unused."
+            % ", ".join(names))
 
     def _field_validation_context(self, context):
         """The validation context handed to each field problem, carrying the mesh layout.

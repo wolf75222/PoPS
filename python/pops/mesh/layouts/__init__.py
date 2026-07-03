@@ -9,7 +9,7 @@ These are inert descriptors: they declare requirements / capabilities and answer
 ``available(context)`` so an unsupported route is refused before the runtime is touched.
 """
 from .._descriptor import Availability, MeshDescriptor
-from ..amr import NATIVE_MAX_LEVELS, NATIVE_RATIOS
+from ..amr import IgnoreAMRCriteria, NATIVE_MAX_LEVELS, NATIVE_RATIOS
 from pops.runtime_environment import validate_amr_refinement_ratio
 
 
@@ -73,18 +73,35 @@ def _layout_inspect_dict(layout, *, native_features, amr_report=None):
 
 
 class Uniform(MeshDescriptor):
-    """A single-level (uniform) mesh layout."""
+    """A single-level (uniform) mesh layout.
+
+    ``refine=`` is NOT a supported single-level feature: a :class:`~pops.mesh.amr.Refine` /
+    :class:`~pops.mesh.amr.TagUnion` attached here has no level to refine onto and would be a
+    silently-ignored criterion if it were just dropped (Spec 5 sec.8.6 / ADC-589 / ADC-555). It
+    is carried on the descriptor ONLY so :meth:`pops.case.Case.validate` can see it and refuse the
+    case by default; the explicit escape is ``ignore_amr=pops.mesh.amr.IgnoreAMRCriteria()``.
+    """
 
     category = "layout"
 
-    def __init__(self, mesh, embedded_boundary=None):
+    def __init__(self, mesh, embedded_boundary=None, refine=None, ignore_amr=None):
+        if ignore_amr is not None and not isinstance(ignore_amr, IgnoreAMRCriteria):
+            raise TypeError(
+                "Uniform(ignore_amr=...) accepts only the typed "
+                "pops.mesh.amr.IgnoreAMRCriteria() marker, got %r; the escape must be "
+                "the explicit descriptor, never a truthy value" % (ignore_amr,))
         self.mesh = mesh
         self.embedded_boundary = embedded_boundary
+        self.refine = refine
+        self.ignore_amr = ignore_amr
 
     def options(self):
         opt = {"mesh": self.mesh.name}
         if self.embedded_boundary is not None:
             opt["embedded_boundary"] = self.embedded_boundary.name
+        if self.refine is not None:
+            opt["refine"] = self.refine.name
+            opt["ignore_amr"] = self.ignore_amr is not None
         return opt
 
     def capabilities(self):

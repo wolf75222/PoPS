@@ -22,7 +22,7 @@ pops = pytest.importorskip("pops")
 
 from pops.runtime.amr import (  # noqa: E402
     AmrRuntimeView, PatchReport, RegridReport, GhostReport, RefluxReport, CheckpointReport,
-    HierarchySnapshot)
+    HierarchySnapshot, RuntimeInspection)
 
 
 def _model():
@@ -172,9 +172,46 @@ def test_explain_checkpoint_flags_dynamic_regrid_violation():
     assert any("composite multi-level Poisson" in n for n in rep.notes)
 
 
+# --- inspect() (ADC-589/555 criterion #34: the unified hierarchy/patch/regrid/limitations view) --
+def test_inspect_returns_unified_runtime_inspection():
+    sim = _built_amr(regrid_every=2)
+    report = sim.amr.inspect()
+    assert isinstance(report, RuntimeInspection)
+    # The four parts 589 asks for, each the SAME report class the standalone methods return.
+    assert isinstance(report.hierarchy, HierarchySnapshot)
+    assert isinstance(report.patches, PatchReport)
+    assert isinstance(report.regrid, RegridReport)
+    assert isinstance(report.limitations, list)
+
+    # Consistent with the standalone reports read off the same live system.
+    assert report.hierarchy.blocks == sim.amr.hierarchy_snapshot().blocks
+    assert report.patches.n_patches == sim.amr.patch_table().n_patches
+    assert report.regrid.regrid_every == sim.amr.explain_regrid().regrid_every
+
+    payload = report.to_dict()
+    assert set(payload) == {"hierarchy", "patches", "regrid", "limitations"}
+    assert payload["hierarchy"]["patch_table"]["n_patches"] == payload["patches"]["n_patches"]
+    assert payload["regrid"]["regrid_every"] == 2
+    # limitations rows carry a feature/status/reason shape; only non-available rows are listed.
+    for row in payload["limitations"]:
+        assert row["status"] != "available"
+        assert "feature" in row and "reason" in row
+
+    text = str(report)
+    assert "AMR runtime inspection" in text and "array(" not in text
+
+
+def test_inspect_before_build_reports_unbuilt_patches_honestly():
+    sim = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+    report = sim.amr.inspect()
+    assert report.patches.built is False
+    assert report.hierarchy.patch_table.built is False
+    assert report.regrid.frozen is True
+
+
 # --- compiled static delegation ------------------------------------------------
 def test_compiled_inspect_amr_delegates_to_top_level():
-    # A CompiledModel/Case carries no AMR layout; its inspect_amr delegates to pops.inspect_amr.
+    # A stub CompiledModel with no carried layout; its inspect_amr delegates to pops.inspect_amr.
     # Build a tiny stub CompiledModel (no .so dlopen needed for the inert delegation path).
     from pops.codegen.loader import CompiledModel
     cm = CompiledModel(
@@ -182,13 +219,43 @@ def test_compiled_inspect_amr_delegates_to_top_level():
         cons_roles=["Density"], prim_names=["rho"], n_vars=1, gamma=None, n_aux=0, params={},
         caps={}, abi_key="k", model_hash="h", cxx="c++", std="23", target="amr_system")
     rep = cm.inspect_amr()
-    # Default (no layout) -> the native envelope report (never a fabricated hierarchy).
+    # Default (no layout carried, none passed) -> the native envelope (never a fabricated hierarchy).
     assert rep.to_dict()["layout"] == "native-envelope"
     # An explicit AMR layout is reported through the same top-level inspector.
     from pops.mesh import CartesianMesh
     from pops.mesh.layouts import AMR
     rep2 = cm.inspect_amr(AMR(base=CartesianMesh(n=64), max_levels=2, ratio=2))
     assert rep2.to_dict()["layout"] == "amr" and rep2.to_dict()["max_levels"] == 2
+
+
+def test_compiled_inspect_amr_surfaces_the_carried_layout_by_default():
+    # ADC-555 criterion: the refine/regrid/... tags appear in compiled.inspect_amr(), not just
+    # layout.inspect(). pops.compile's AMR route (_compile_amr) attaches the Case's AMR layout
+    # to the returned CompiledModel as `_layout`; a bare inspect_amr() call must report THAT
+    # layout (with its tags), not silently fall back to the generic native envelope.
+    from pops.codegen.loader import CompiledModel
+    from pops.mesh import CartesianMesh
+    from pops.mesh.amr import Refine, RegridEvery
+    from pops.mesh.layouts import AMR
+
+    cm = CompiledModel(
+        so_path="<stub>", backend="aot", adder="add_native_block", cons_names=["rho"],
+        cons_roles=["Density"], prim_names=["rho"], n_vars=1, gamma=None, n_aux=0, params={},
+        caps={}, abi_key="k", model_hash="h", cxx="c++", std="23", target="amr_system")
+    carried = AMR(base=CartesianMesh(n=64), regrid=RegridEvery(4),
+                  refine=Refine.on("rho").above(0.1))
+    cm._layout = carried  # what pops.codegen.orchestration._compile_amr attaches
+
+    rep = cm.inspect_amr()
+    payload = rep.to_dict()
+    assert payload["layout"] == "amr"
+    slots = {row["slot"] for row in payload["policies"]}
+    assert "refine" in slots and "regrid" in slots
+
+    # An explicit argument still overrides the carried layout.
+    override = cm.inspect_amr(AMR(base=CartesianMesh(n=32)))
+    assert override.to_dict()["max_levels"] == 2 and "policies" in override.to_dict()
+    assert {row["slot"] for row in override.to_dict()["policies"]} == set()
 
 
 # The CI python runner invokes each test file as `python3 <file>`; run pytest on this

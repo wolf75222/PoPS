@@ -47,7 +47,11 @@ def test_amr_system_inspect_composes_amr_snapshot():
     assert any(row["feature"] == "amr:refinement_ratio" and row["status"] == "partial"
                for row in d["limitations"])
     view_rep = sim.amr.inspect()
-    assert view_rep.to_dict()["ratio"] == 2
+    view_d = view_rep.to_dict()
+    # ADC-589: sim.amr.inspect() is the unified 4-part RuntimeInspection; the
+    # hierarchy snapshot (which used to BE the whole report) is one component.
+    assert set(view_d) == {"hierarchy", "patches", "regrid", "limitations"}
+    assert view_d["hierarchy"]["ratio"] == 2
     assert "array(" not in str(rep)
 
 

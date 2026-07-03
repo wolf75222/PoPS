@@ -425,6 +425,63 @@ def test_amr_route_lowers_through_typed_layout_policy_manifest():
     slots = {row["slot"] for row in amr_report["policies"]}
     assert {"refine", "regrid", "patches", "nesting", "checkpoint", "output"} <= slots
 
+    # ADC-589 criterion #34: sim.amr.inspect() is the unified hierarchy/patch/regrid/limitations
+    # view. Building a live AmrSystem needs the native extension; skip cleanly without it (the
+    # manifest assertions above already run source-only).
+    try:
+        import pops
+        sim = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=4)
+    except Exception as exc:  # pragma: no cover - native extension unavailable in this build.
+        pytest.skip("AmrSystem construction unavailable: %s" % exc)
+
+    report = sim.amr.inspect()
+    payload = report.to_dict()
+    assert set(payload) == {"hierarchy", "patches", "regrid", "limitations"}
+    assert payload["hierarchy"]["max_levels"] == 2
+    assert payload["patches"]["built"] is False
+    assert payload["regrid"]["regrid_every"] == 4
+    assert isinstance(payload["limitations"], list)
+
+
+class _FakeAmrRefineModel:
+    """A minimal model advertising its declared subjects (mirrors HyperbolicModel's surface)."""
+
+    cons_names = ["rho"]
+    cons_roles = None
+
+
+def test_uniform_plus_amr_tags_refused_by_default():
+    try:
+        import pops
+        from pops.mesh import CartesianMesh
+        from pops.mesh.amr import Refine
+        from pops.mesh.layouts import Uniform
+    except Exception as exc:  # pragma: no cover - bare source tree without importable pops.
+        pytest.skip("pops import unavailable: %s" % exc)
+
+    layout = Uniform(CartesianMesh(n=16), refine=Refine.on("rho").above(0.1))
+    case = pops.Case(layout=layout).block("ne", physics=_FakeAmrRefineModel())
+    with pytest.raises(ValueError, match="carries active AMR criteria"):
+        case.validate()
+
+
+def test_ignore_amr_criteria_escape():
+    try:
+        import pops
+        from pops.mesh import CartesianMesh
+        from pops.mesh.amr import IgnoreAMRCriteria, Refine
+        from pops.mesh.layouts import Uniform
+    except Exception as exc:  # pragma: no cover - bare source tree without importable pops.
+        pytest.skip("pops import unavailable: %s" % exc)
+
+    layout = Uniform(
+        CartesianMesh(n=16),
+        refine=Refine.on("rho").above(0.1),
+        ignore_amr=IgnoreAMRCriteria())
+    case = pops.Case(layout=layout).block("ne", physics=_FakeAmrRefineModel())
+    # The explicit escape is honoured: no refusal.
+    case.validate()
+
 
 def test_text_behavior_selectors_stay_on_explicit_allowlist():
     violations = []

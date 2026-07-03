@@ -300,9 +300,26 @@ class AMROutput(MeshDescriptor):
                 "include_patch_boxes": self.include_patch_boxes}
 
 
+class IgnoreAMRCriteria(MeshDescriptor):
+    """The explicit escape hatch for a ``Uniform(...)`` layout carrying AMR criteria.
+
+    Spec 5 sec.8.6 / sec.5.14 (ADC-589 / ADC-555): a :class:`~pops.mesh.layouts.Uniform` layout
+    with an active refinement criterion attached is refused by default (a criterion silently
+    ignored on a single-level mesh is a correctness trap, not a convenience). Passing
+    ``Uniform(mesh, refine=..., ignore_amr=IgnoreAMRCriteria())`` is the one explicit,
+    self-documenting way to opt out: it is a marker descriptor (it carries no behaviour of its
+    own) that :meth:`pops.case.Case.validate` looks for before it raises.
+    """
+
+    category = "amr_override"
+
+    def options(self):
+        return {"ignore_amr_criteria": True}
+
+
 __all__ = [
     "Refine", "TagUnion", "RegridEvery", "FrozenRegrid", "PatchLayout",
     "ProperNesting", "BufferCells", "AllLevels", "CoarseOnly", "SelectedLevels",
-    "CheckpointPolicy", "AMROutput", "NATIVE_MAX_LEVELS", "NATIVE_RATIOS",
-    "Availability",
+    "CheckpointPolicy", "AMROutput", "IgnoreAMRCriteria", "NATIVE_MAX_LEVELS",
+    "NATIVE_RATIOS", "Availability",
 ]

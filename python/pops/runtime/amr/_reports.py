@@ -296,3 +296,45 @@ class HierarchySnapshot:
             for note in self.limitations:
                 lines.append("    - %s" % note)
         return "\n".join(lines)
+
+
+class RuntimeInspection:
+    """The unified ``sim.amr.inspect()`` report (Spec 5 sec.8.12, ADC-589 criterion #34).
+
+    Composes the four things 589 asks a single inspection call to answer, each already an inert
+    report value class read straight off the live runtime: the hierarchy
+    (:class:`HierarchySnapshot`, itself embedding the live :class:`PatchReport`), the live
+    :class:`PatchReport` again as its own top-level key (the patch census is asked for both bare
+    and nested inside the hierarchy so a caller does not have to reach through
+    ``hierarchy.patch_table``), the :class:`RegridReport`, and the capability ``limitations`` rows
+    (the same native-route limitation dicts :func:`pops.native_capability_report` exposes,
+    filtered to non-available rows). It is a plain value object: it holds report objects already
+    built by :class:`AmrRuntimeView`, computes nothing, and never dumps a field array.
+    """
+
+    def __init__(self, *, hierarchy, patches, regrid, limitations):
+        self.hierarchy = hierarchy
+        self.patches = patches
+        self.regrid = regrid
+        self.limitations = list(limitations)
+
+    def to_dict(self):
+        return {
+            "hierarchy": self.hierarchy.to_dict(),
+            "patches": self.patches.to_dict(),
+            "regrid": self.regrid.to_dict(),
+            "limitations": [dict(row) for row in self.limitations],
+        }
+
+    def __repr__(self):
+        return ("RuntimeInspection(n_patches=%r, regrid_every=%r, %d limitation(s))"
+                % (self.patches.n_patches, self.regrid.regrid_every, len(self.limitations)))
+
+    def __str__(self):
+        lines = ["AMR runtime inspection:", str(self.hierarchy), str(self.regrid)]
+        if self.limitations:
+            lines.append("capability limitations:")
+            for row in self.limitations:
+                lines.append("  - %s: %s (%s)"
+                             % (row.get("feature"), row.get("status"), row.get("reason")))
+        return "\n".join(lines)

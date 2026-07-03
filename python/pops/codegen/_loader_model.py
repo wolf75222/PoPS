@@ -126,16 +126,18 @@ class CompiledModel:
     def inspect_amr(self, layout=None):
         """STATIC AMR report on this compiled MODEL (Spec 5 sec.8.12 / sec.8.4).
 
-        A ``CompiledModel`` is a per-block physics ``.so``; ``target='amr_system'`` means it is
-        loadable on the native AMR hierarchy (``add_equation``), but the model carries NO layout
-        descriptor (the levels / ratio / regrid policy belong to the ``AmrSystem`` it is installed
-        in, not to the model). So this delegates to the top-level :func:`pops.inspect_amr` on an
-        EXPLICIT ``layout`` argument and returns the native AMR envelope report for ``layout=None``;
-        for a target='system' model the report still describes the native AMR envelope (a model is
-        AMR-installable only with target='amr_system'). It never fabricates a hierarchy. @p layout
-        an optional AMR / Uniform layout descriptor (default: the native envelope).
+        A ``CompiledModel`` produced off the AMR route (``pops.compile(Case(layout=AMR(...)))``)
+        carries the compile-time layout on ``self._layout`` (ADC-555: the refine/regrid/patches
+        tags must appear in ``compiled.inspect_amr()``, not just ``layout.inspect()``), so a bare
+        call with no argument reports THAT layout when one is attached, rather than the generic
+        native envelope. An explicit @p layout argument always wins (it overrides the carried
+        one); a handle with no ``_layout`` (a ``target='system'`` model, or a stub built outside
+        ``pops.compile``) falls back to the native envelope, same as before. Delegates to the
+        top-level :func:`pops.inspect_amr`; never fabricates a hierarchy.
         """
         from pops import inspect_amr
+        if layout is None:
+            layout = getattr(self, "_layout", None)
         return inspect_amr(layout)
 
     def capability_matrix(self):
