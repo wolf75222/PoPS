@@ -165,6 +165,7 @@ set(POPS_CPP_TEST_SOURCE_test_program_loader "tests/cpp/integration/native_loade
 set(POPS_CPP_TEST_SOURCE_test_program_runtime "tests/cpp/integration/runtime/test_program_runtime.cpp")
 set(POPS_CPP_TEST_SOURCE_test_public_validation_errors "tests/cpp/unit/runtime/test_public_validation_errors.cpp")
 set(POPS_CPP_TEST_SOURCE_test_reduce "tests/cpp/unit/mesh/test_reduce.cpp")
+set(POPS_CPP_TEST_SOURCE_test_reduce_abs_sum "tests/cpp/unit/mesh/test_reduce_abs_sum.cpp")
 set(POPS_CPP_TEST_SOURCE_test_ref_ratio "tests/cpp/integration/amr/test_ref_ratio.cpp")
 set(POPS_CPP_TEST_SOURCE_test_refinement "tests/cpp/integration/amr/test_refinement.cpp")
 set(POPS_CPP_TEST_SOURCE_test_regrid "tests/cpp/integration/amr/test_regrid.cpp")

@@ -281,6 +281,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_multifab
   test_sync_residence
   test_reduce
+  test_reduce_abs_sum
   test_dense_eig
   test_route_ids
   test_brick_catalog

@@ -227,6 +227,15 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
             raise ValueError("norm_inf: a State/RHS value is required")
         return self._new("scalar", "reduce", (state,), {"kind": "norm_inf"}, None, state.block)
 
+    def norm1(self, state: Any) -> Any:
+        """The 1-norm ``sum|u|`` of a State (a collective all_reduce, component 0). Returns a Scalar.
+        Lowered as ``pops::reduce_abs_sum(u, 0)`` -- the L1 reduction (reduce_sum is signed; this
+        folds magnitudes) -- COLLECTIVE, called on every rank like norm2/dot."""
+        if not (isinstance(state, Value) and state.is_field()):
+            raise ValueError("norm1: a State/RHS value is required")
+        return self._new("scalar", "reduce", (state,), {"kind": "abs_sum", "comp": 0}, None,
+                         state.block)
+
     def sum(self, state: Any) -> Any:
         """The sum ``sum_cells u`` of a State over component 0 (a collective all_reduce). Returns a
         Scalar value. Lowered as ``pops::reduce_sum(u, 0)`` -- COLLECTIVE, called on every rank (empty
@@ -262,6 +271,16 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
         if isinstance(comp, bool) or not isinstance(comp, int) or comp < 0:
             raise ValueError("sum_component: comp must be a Python int >= 0 (got %r)" % (comp,))
         return self._new("scalar", "reduce", (state,), {"kind": "sum", "comp": int(comp)}, None,
+                         state.block)
+
+    def abs_sum_component(self, state: Any, comp: Any) -> Any:
+        """The role-selected L1 ``sum_cells |u(.,comp)|`` (collective all_reduce). Lowered as
+        ``pops::reduce_abs_sum(u, comp)``. @p comp must be a Python int >= 0."""
+        if not (isinstance(state, Value) and state.is_field()):
+            raise ValueError("abs_sum_component: a State/RHS value is required")
+        if isinstance(comp, bool) or not isinstance(comp, int) or comp < 0:
+            raise ValueError("abs_sum_component: comp must be a Python int >= 0 (got %r)" % (comp,))
+        return self._new("scalar", "reduce", (state,), {"kind": "abs_sum", "comp": int(comp)}, None,
                          state.block)
 
     def record_scalar(self, name: Any, value: Any) -> Any:

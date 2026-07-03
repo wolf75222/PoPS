@@ -756,6 +756,11 @@ sources = ["tests/cpp/unit/mesh/test_reduce.cpp"]
 labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]
+name = "test_reduce_abs_sum"
+sources = ["tests/cpp/unit/mesh/test_reduce_abs_sum.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
 name = "test_sync_residence"
 sources = ["tests/cpp/unit/mesh/test_sync_residence.cpp"]
 labels = ["unit", "mesh", "fast"]

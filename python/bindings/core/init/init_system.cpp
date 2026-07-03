@@ -160,7 +160,15 @@ void bind_system_program(py::class_<System>& cls) {
       // retrievable AFTER sim.step. program_diagnostic(name) reads one (raises if never recorded);
       // program_diagnostics() returns the whole name -> value dict.
       .def("program_diagnostic", &System::program_diagnostic, py::arg("name"))
-      .def("program_diagnostics", &System::program_diagnostics);
+      .def("program_diagnostics", &System::program_diagnostics)
+      // ADC-542: the native collective reduction over a named block the diagnostics driver drives to
+      // fire a declared typed measure (Norm / Integral / MinMax) each cadence tick, and the sink the
+      // driver records the measured scalar into (readable via program_diagnostics, same map a
+      // compiled Program's P.record_scalar writes).
+      .def("reduce_component", &System::reduce_component, py::arg("block"), py::arg("kind"),
+           py::arg("comp") = 0)
+      .def("record_program_diagnostic", &System::record_program_diagnostic, py::arg("name"),
+           py::arg("value"));
 }
 
 // Checkpoint/restart seams: multistep history rings + scheduler value-cache (gathered/restored directly).
