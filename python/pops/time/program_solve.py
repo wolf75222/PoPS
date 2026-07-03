@@ -282,6 +282,35 @@ class _ProgramSolve(_ProgramConstants):
             return self._call(operator, *states, name=name)
         return self.solve_fields_from_blocks(states, name=name)
 
+    def value(self, name, expr):
+        """Name an intermediate SSA value ``name`` from ``expr`` (ADC-561: the short named-value form).
+
+        The lightweight spelling of the free-value case of :meth:`define`::
+
+            U_star = T.value("rhs_star", U.n + T.dt * R_n)
+            Q      = T.value("Q", U.n + 0.5 * T.dt * R_n + 0.5 * T.dt * R_star)
+
+        Returns the named IR handle (a :class:`pops.time.values.Value`) so the value composes in the
+        affine algebra. It lowers to the EXACT ``program.define(name, expr)`` path (an affine
+        combination materializes via ``linear_combine``, a ``rate(U) == <expr>`` equation keeps its
+        right-hand side, any other Value is named in place), so ``T.value(name, expr)`` produces the
+        byte-identical IR as ``T.define(name, expr)`` -- and the SSA invariants (single definition, no
+        redefine, use-before-define) are unchanged.
+
+        ``name`` MUST be a non-empty string (an intermediate SSA value, never a mutation): the
+        temporal-VERSION handles (``U.stage(k)`` / ``U.next``) stay the ``T.define(handle, ...)`` door,
+        and ``T.define(U.next, value)`` remains the commit-facing definition. Passing a version handle
+        here is refused pointing at ``T.define``.
+        """
+        from pops.time.handles import TimeState, _Prev, _Version
+        if isinstance(name, (_Version, _Prev, TimeState)):
+            raise TypeError(
+                "T.value(name, expr) names a free intermediate value: pass a string name. For a "
+                "temporal version use T.define(U.stage(k) / U.next, expr).")
+        if not isinstance(name, str) or not name:
+            raise ValueError("T.value: name must be a non-empty string")
+        return self.define(name, expr)
+
     def define(self, name, value=None):
         """Board sugar to name a value, or lower a typed temporal-version handle (Spec 5 sec.5.3.1).
 
