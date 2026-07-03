@@ -4,12 +4,13 @@ Public surface:
   closure          -- a decorator that validates a closure returns exactly the order
                       ``N+1`` standardized-moment keys (mirrors the engine ``want`` check).
   Closure          -- the closure typing.Protocol.
+  MomentClosure    -- the issue-vocabulary alias of ``Closure`` (the same Protocol).
   gaussian_closure -- the generic Gaussian / Levermore closure (provided).
   HyQMOM15Closure  -- the order-4 HyQMOM closure (Levermore variant) for vlasov_poisson.
 """
 import functools
 
-from .protocol import Closure
+from .protocol import Closure, MomentClosure
 from .gaussian import gaussian_closure
 
 
@@ -52,4 +53,4 @@ def closure(order):
 # HyQMOM15Closure imports gaussian_closure, so import it after gaussian is bound.
 from .hyqmom15 import HyQMOM15Closure  # noqa: E402
 
-__all__ = ["closure", "Closure", "gaussian_closure", "HyQMOM15Closure"]
+__all__ = ["closure", "Closure", "MomentClosure", "gaussian_closure", "HyQMOM15Closure"]
