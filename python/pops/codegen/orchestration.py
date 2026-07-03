@@ -265,7 +265,7 @@ def _validate_layout_for_compile(problem, layout):
     message rather than silently dropping the criteria. The field problems are also re-validated
     with the resolved layout in context so a solver can refuse a layout it cannot serve.
     """
-    from pops.mesh.layouts import AMR, Uniform
+    from pops.mesh.layouts import Uniform
 
     criteria = getattr(getattr(problem, "_constraints", None), "refinement", {}) or {}
     if criteria.get("refine") is not None and isinstance(layout, Uniform) \

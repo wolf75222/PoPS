@@ -73,7 +73,8 @@ class RuntimeParam(Descriptor):
             try:
                 self.domain.check(self.default, who="%s default" % self._name)
             except ValueError:
-                raise ValueError(_domain_error(self._name, self.domain, self.default, "compile"))
+                raise ValueError(
+                    _domain_error(self._name, self.domain, self.default, "compile")) from None
         return True
 
     def check_bind(self, value):
@@ -94,7 +95,8 @@ class RuntimeParam(Descriptor):
             try:
                 self.domain.check(value, who=self._name)
             except ValueError:
-                raise ValueError(_domain_error(self._name, self.domain, value, "bind"))
+                raise ValueError(
+                    _domain_error(self._name, self.domain, value, "bind")) from None
         return True
 
 

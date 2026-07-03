@@ -10,8 +10,6 @@ Python-side metadata only. ``pops.time`` / the runtime are imported lazily to ke
 the codegen import graph acyclic (cf. tests/python/architecture/test_import_graph.py).
 """
 
-import json
-
 from pops._report import Report
 
 
@@ -79,15 +77,6 @@ class CompiledReport(Report):
                 "env": dict(self.env), "runtime": dict(self.runtime),
                 "capabilities": dict(self.capabilities), "options": dict(self.options),
                 "module_manifest": dict(self.module_manifest) if self.module_manifest else None}
-
-    def to_json(self, path=None, *, indent=2):
-        """Serialise :meth:`to_dict` to JSON; write to ``path`` if given, else return the string."""
-        text = json.dumps(self.to_dict(), indent=indent, sort_keys=True)
-        if path is not None:
-            with open(str(path), "w", encoding="utf-8") as handle:
-                handle.write(text)
-            return path
-        return text
 
     def __str__(self):
         lines = ["compiled problem %r" % self.name]

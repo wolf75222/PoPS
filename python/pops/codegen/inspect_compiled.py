@@ -19,8 +19,6 @@ The module imports ``pops.mesh`` lazily (in-function) to respect the codegen lay
 module may not import ``pops.mesh`` at module scope; cf. tests/python/architecture/test_import_graph.py).
 """
 
-import json
-
 from pops._report import Report
 
 # Bytes per double-precision cell value. The core is 2D (n x n cells), one field component is a
@@ -78,15 +76,6 @@ class Arguments(Report):
                 "solvers": {k: dict(v) for k, v in self.solvers.items()},
                 "outputs": {k: dict(v) for k, v in self.outputs.items()},
                 "layout_runtime": dict(self.layout_runtime)}
-
-    def to_json(self, path=None, *, indent=2):
-        """Serialise :meth:`to_dict` to JSON; write to ``path`` if given, else return the string."""
-        text = json.dumps(self.to_dict(), indent=indent, sort_keys=True)
-        if path is not None:
-            with open(str(path), "w", encoding="utf-8") as handle:
-                handle.write(text)
-            return path
-        return text
 
     def __str__(self):
         lines = ["arguments for compiled artifact %r (bind inputs)"
@@ -308,15 +297,6 @@ class MemoryEstimate(Report):
                 "n_cons": self.n_cons, "n_aux": self.n_aux,
                 "scratch_buffers": self.scratch_buffers, "layout": self.layout,
                 "conservative": self.conservative, "assumptions": list(self.assumptions)}
-
-    def to_json(self, path=None, *, indent=2):
-        """Serialise :meth:`to_dict` to JSON; write to ``path`` if given, else return the string."""
-        text = json.dumps(self.to_dict(), indent=indent, sort_keys=True)
-        if path is not None:
-            with open(str(path), "w", encoding="utf-8") as handle:
-                handle.write(text)
-            return path
-        return text
 
     def _mib(self, n_bytes):
         return n_bytes / (1024.0 * 1024.0)
