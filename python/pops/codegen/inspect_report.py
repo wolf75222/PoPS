@@ -23,8 +23,6 @@ The module imports ``pops.time`` / the runtime lazily (in-function) to keep the 
 graph acyclic (cf. tests/python/architecture/test_import_graph.py).
 """
 
-import json
-
 from pops._report import Report
 
 # CompiledReport (the print(compiled) summary) + its builders and hash helpers are split into
@@ -74,15 +72,6 @@ class RequirementsReport(Report):
         return {"capabilities": [dict(c) for c in self.capabilities],
                 "descriptors": [dict(d) for d in self.descriptors],
                 "constraints": dict(self.constraints), "unknown": list(self.unknown)}
-
-    def to_json(self, path=None, *, indent=2):
-        """Serialise :meth:`to_dict` to JSON; write to ``path`` if given, else return the string."""
-        text = json.dumps(self.to_dict(), indent=indent, sort_keys=True)
-        if path is not None:
-            with open(str(path), "w", encoding="utf-8") as handle:
-                handle.write(text)
-            return path
-        return text
 
     def __str__(self):
         lines = ["compile-time requirements:"]
@@ -220,15 +209,6 @@ class BindReport(Report):
                 "provided": {k: list(v) for k, v in self.provided.items()},
                 "required": {k: list(v) for k, v in self.required.items()},
                 "missing": list(self.missing), "ready": self.ready}
-
-    def to_json(self, path=None, *, indent=2):
-        """Serialise :meth:`to_dict` to JSON; write to ``path`` if given, else return the string."""
-        text = json.dumps(self.to_dict(), indent=indent, sort_keys=True)
-        if path is not None:
-            with open(str(path), "w", encoding="utf-8") as handle:
-                handle.write(text)
-            return path
-        return text
 
     def __str__(self):
         lines = ["bind plan for compiled artifact %r" % (self.program_name or "problem")]
