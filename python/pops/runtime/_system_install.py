@@ -26,42 +26,9 @@ from pops.runtime.routes import (
     resolve as _resolve_route,
 )
 
-
-def _lower_wall(wall):
-    """Lower a Poisson ``wall`` to the native ``(wall_token, wall_radius)`` (Spec 5 sec.8.16).
-
-    A typed :mod:`pops.mesh.geometry` wall lowers to its pair (``NoWall`` -> ``("none", 0.0)``,
-    ``Disc`` -> ``("circle", radius)``); a non-wall typed geometry raises a clear ``TypeError``.
-    Returns ``None`` when ``wall`` is a string: the caller keeps its own ``wall_radius=`` and the
-    token is then route-validated by ``set_poisson`` (ADC-584) before the native call.
-    """
-    if isinstance(wall, str):
-        return None
-    lower_wall = getattr(wall, "lower_wall", None)
-    if lower_wall is None:
-        raise TypeError(
-            "set_poisson: wall must be a 'none' / 'circle' string or a typed "
-            "pops.mesh.geometry wall (NoWall / Disc), got %r" % (type(wall).__name__,))
-    return lower_wall()
-
-
-def _lower_bc(bc):
-    """Lower a Poisson boundary condition to the native ``bc`` token (Spec 5 sec.14.2.6).
-
-    A typed native boundary brick (``pops.Dirichlet()`` / ``pops.Neumann()`` / ``pops.Periodic()``)
-    lowers to its token via its ``.bc`` attribute; a string (including ``"auto"``) passes through
-    and is route-validated by ``set_poisson`` (ADC-584). A non-string, non-boundary value raises
-    a clear ``TypeError``.
-    """
-    if isinstance(bc, str):
-        return bc
-    token = getattr(bc, "bc", None)  # native _Boundary brick carries its token on .bc
-    if isinstance(token, str):
-        return token
-    raise TypeError(
-        "set_poisson: bc must be an 'auto' / 'dirichlet' / 'neumann' / 'periodic' string or a typed "
-        "native boundary brick (pops.Dirichlet() / Neumann() / Periodic()), got %r"
-        % (type(bc).__name__,))
+# The Poisson wall / bc lowerers are split into ``_system_install_lowering`` for the 500-line cap
+# (ADC-550) and re-imported so ``set_poisson`` below and the direct-import tests are unchanged.
+from pops.runtime._system_install_lowering import _lower_bc, _lower_wall  # noqa: F401
 
 
 class _SystemInstall:
