@@ -40,7 +40,7 @@ lib = _t.SimpleNamespace(
 
 def _objects():
     """A small set of REAL pops.lib brick descriptors (no fakes)."""
-    return [lib.solvers.GMRES(), lib.riemann.HLLC()]
+    return [lib.solvers.GMRES(max_iter=200), lib.riemann.HLLC()]
 
 
 def _toolchain_or_skip():
@@ -106,8 +106,9 @@ def test_content_hash_is_stable():
 
 
 def test_content_hash_is_sensitive_to_objects():
-    base = pops.compile_library("lib.so", objects=[lib.solvers.GMRES()])
-    more = pops.compile_library("lib.so", objects=[lib.solvers.GMRES(), lib.riemann.HLLC()])
+    base = pops.compile_library("lib.so", objects=[lib.solvers.GMRES(max_iter=200)])
+    more = pops.compile_library("lib.so",
+                                objects=[lib.solvers.GMRES(max_iter=200), lib.riemann.HLLC()])
     assert base.content_hash != more.content_hash
 
 
@@ -118,8 +119,10 @@ def test_content_hash_is_sensitive_to_name():
 
 
 def test_content_hash_is_order_insensitive():
-    fwd = pops.compile_library("lib.so", objects=[lib.solvers.GMRES(), lib.riemann.HLLC()])
-    rev = pops.compile_library("lib.so", objects=[lib.riemann.HLLC(), lib.solvers.GMRES()])
+    fwd = pops.compile_library("lib.so",
+                               objects=[lib.solvers.GMRES(max_iter=200), lib.riemann.HLLC()])
+    rev = pops.compile_library("lib.so",
+                               objects=[lib.riemann.HLLC(), lib.solvers.GMRES(max_iter=200)])
     assert fwd.content_hash == rev.content_hash
 
 

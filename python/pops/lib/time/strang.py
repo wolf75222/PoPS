@@ -121,7 +121,7 @@ def condensed_schur(P, block, *, alpha, theta=1.0, c_rho=0, c_mx=1, c_my=2, c_bz
     # "bicgstab" string.
     if method is None:
         from pops.solvers.krylov import BiCGStab
-        method = BiCGStab()
+        method = BiCGStab(max_iter=max_iter)
     P.set_apply(A, apply)
     phi = P.solve_linear(operator=A, rhs=rhs, method=method, tol=tol, max_iter=max_iter)
     # The reconstruction overwrites the MOMENTUM in place. theta == 1 with no energy keeps the historical

@@ -63,7 +63,7 @@ def _divgrad_program(t, *, name="divgrad", method=None, tol=1e-10, max_iter=200,
 
     if method is None:
         from pops.solvers.krylov import BiCGStab  # typed default (Spec 5 sec.7); lowers to "bicgstab"
-        method = BiCGStab()
+        method = BiCGStab(max_iter=max_iter)  # ADC-535: max_iter is mandatory on the descriptor
     P.set_apply(A, apply)
     phi = P.solve_linear(operator=A, rhs=U, method=method, tol=tol, max_iter=max_iter)
     P.commit("blk", phi)
@@ -86,7 +86,7 @@ def test_divergence_records_and_validates(t):
     from pops.solvers.krylov import BiCGStab
     P.set_apply(A, apply)
     U = P.state("blk")
-    phi = P.solve_linear(operator=A, rhs=U, method=BiCGStab(), tol=1e-8, max_iter=50)
+    phi = P.solve_linear(operator=A, rhs=U, method=BiCGStab(max_iter=50), tol=1e-8, max_iter=50)
     P.commit("blk", phi)
     assert P.validate() is True, "the div(grad) Program must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
@@ -131,7 +131,7 @@ def test_scalar_field_ncomp_validates(t):
 
 
 def test_divgrad_codegen(t):
-    src = _divgrad_program(t, method=krylov.BiCGStab()).emit_cpp_program()
+    src = _divgrad_program(t, method=krylov.BiCGStab(max_iter=200)).emit_cpp_program()
     for frag in ("ctx.gradient", "ctx.divergence", "pops::bicgstab_solve",
                  "ctx.alloc_scalar_field(2, 1)"):  # the 2-component gradient buffer
         assert frag in src, "the div(grad) solve must contain %r\n%s" % (frag, src)
@@ -265,7 +265,7 @@ def _run_section_b(t):
     try:
         compiled = pops.codegen.compile_problem(
             model=passive_model("divgrad_prog"),
-            time=_divgrad_program(t, name="divgrad_step", method=krylov.BiCGStab(),
+            time=_divgrad_program(t, name="divgrad_step", method=krylov.BiCGStab(max_iter=200),
                                   tol=tol, max_iter=200))
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])

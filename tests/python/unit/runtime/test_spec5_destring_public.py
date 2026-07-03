@@ -49,8 +49,10 @@ def test_solve_linear_typed_method_byte_identical():
     """Each typed Krylov descriptor lowers to the SAME IR hash as the historical string token."""
     from pops.solvers import krylov
     # The internal scheme tokens the runtime keyed on; the typed objects must reproduce them.
-    cases = [(krylov.CG(), "cg", None), (krylov.BiCGStab(), "bicgstab", None),
-             (krylov.Richardson(), "richardson", None), (krylov.GMRES(), "gmres", 8)]
+    # ADC-535: the Krylov descriptors carry a mandatory max_iter; solve_linear reads only .scheme.
+    cases = [(krylov.CG(max_iter=200), "cg", None), (krylov.BiCGStab(max_iter=200), "bicgstab", None),
+             (krylov.Richardson(max_iter=200), "richardson", None),
+             (krylov.GMRES(max_iter=200), "gmres", 8)]
     for descriptor, token, restart in cases:
         P = _solve_program(descriptor, restart=restart)
         node = P._commits["blk"]
@@ -63,7 +65,7 @@ def test_solve_linear_default_method_is_cg():
     """method=None defaults to CG() -- byte-identical to the historical default."""
     a = _solve_program(None)._ir_hash()
     from pops.solvers import krylov
-    b = _solve_program(krylov.CG())._ir_hash()
+    b = _solve_program(krylov.CG(max_iter=200))._ir_hash()
     assert a == b
 
 
@@ -76,20 +78,21 @@ def test_solve_linear_string_method_rejected():
         assert "method" in msg and "pops.solvers.krylov" in msg, msg
         assert "GMRES" in msg and "CG" in msg, msg
     # the typed object is accepted (no raise)
-    _solve_program(krylov.GMRES(), restart=8)
+    _solve_program(krylov.GMRES(max_iter=200), restart=8)
 
 
 def test_solve_linear_typed_preconditioner_byte_identical():
     from pops.solvers import krylov, preconditioners
-    base = _solve_program(krylov.CG())._ir_hash()
-    typed = _solve_program(krylov.CG(), preconditioner=preconditioners.Identity())._ir_hash()
+    base = _solve_program(krylov.CG(max_iter=200))._ir_hash()
+    typed = _solve_program(krylov.CG(max_iter=200),
+                           preconditioner=preconditioners.Identity())._ir_hash()
     assert typed == base
 
 
 def test_solve_linear_string_preconditioner_rejected():
     from pops.solvers import krylov
     with pytest.raises(TypeError) as exc:
-        _solve_program(krylov.CG(), preconditioner="identity")
+        _solve_program(krylov.CG(max_iter=200), preconditioner="identity")
     msg = str(exc.value)
     assert "preconditioner" in msg and "preconditioners" in msg, msg
 
@@ -97,7 +100,7 @@ def test_solve_linear_string_preconditioner_rejected():
 # --- 2. compile_library(backend=) ------------------------------------------------------------
 def _lib_objects():
     import pops.solvers as solvers
-    return [solvers.GMRES()]
+    return [solvers.GMRES(max_iter=200)]
 
 
 def test_compile_library_typed_backend_byte_identical():

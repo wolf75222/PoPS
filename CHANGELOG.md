@@ -80,6 +80,26 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   minimal docs quality tooling needed for the rebuild.
 
 ### Added
+- ADC-541 `pops.params` gains the readable typed constraint aliases `Interval` (over `Range`) and
+  `OneOf` (over `In`), and `RuntimeParam.check_bind(value)` for bind-time domain validation with a
+  4-part diagnostic (param name / expected domain / received value / phase). A bare-string
+  `domain="positive"` is refused at construction; the compile-time-vs-runtime choice is carried by
+  the descriptor TYPE (`ConstParam` vs `RuntimeParam`), never a `kind=` string. A const param
+  participates in the cache key while a runtime param change does not recompile.
+- ADC-540 The codegen `Optimization` policy now participates in the compile cache key: its
+  signature (`_optimization_cache_key`) is folded into `_cache_so_path`, so a policy change (CSE /
+  fusion / math mode) is a cache MISS with a distinct `.so` name (surfaced in the manifest
+  `cache_key`), never a silent reuse of a differently-optimised binary. Tests cover the
+  layout / backend / platform separation, the absence of a `target` string on `Uniform` / `AMR`,
+  build-capability refusals before compile, and typed-slot string rejections.
+- ADC-535 Mandatory `max_iter` (a positive int) on the Krylov descriptors
+  (`pops.solvers.krylov.CG/BiCGStab/GMRES/Richardson`): a missing / non-positive budget is refused
+  at descriptor construction (mirroring the native `require_max_iter`), not only at
+  `P.solve_linear`. `pops.linalg.LinearProblem` gains a `solve_linear`-shaped `lower()` bridge
+  (method / preconditioner / tol / max_iter / restart) onto the native Krylov route -- no public
+  Python solver and no per-iteration Python callback -- and a distinguishable
+  operator / rhs / preconditioner / layout error taxonomy on `available` / `validate`.
+  Newton / FixedPoint stay planned and refuse cleanly (no native backing).
 - ADC-524 `pops.lib.presets` -- the single home for ready-to-run compose-and-go bundles. A `Preset`
   pairs a provided model (`pops.lib.models`) with a provided time scheme (`pops.lib.time`); the
   provided `vlasov_poisson_magnetic_euler` bundles the HyQMOM15 Vlasov-Poisson-magnetic model with a

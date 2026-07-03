@@ -68,14 +68,39 @@ def _registry_cache_key():
                                           CAPABILITY_VOCAB_VERSION)
 
 
-def _cache_so_path(model_hash, abi_key, backend, target, name):
-    """Cached .so path for this (model_hash, abi_key, backend, target, name).
+def _optimization_cache_key(optimization):
+    """The codegen-optimization component of the cache key (ADC-540), or "" when unset.
+
+    A typed pops.codegen.Optimization changes WHICH IR / expression transforms the emitter applies
+    (CSE, dead-node / redundant-solve elimination, local fusion, reciprocal hoisting) and the
+    numeric math mode -- so two artifacts built from the SAME model under DIFFERENT policies are
+    NOT interchangeable and must be a cache MISS. Its signature therefore participates in the .so
+    identity. The component is readable ("opt=cse=1;fuse=conservative;math=strict_math;...") so the
+    changed knob is nameable in diagnostics and in the manifest cache_key. ``None`` yields "" so the
+    key is byte-identical to before this fold (the historical default: no explicit policy).
+
+    Accepts an Optimization descriptor (its ``options()`` drive the signature) or ``None``; a plain
+    dict of the same shape is also accepted (a pre-lowered options view)."""
+    if optimization is None:
+        return ""
+    opts = optimization.options() if hasattr(optimization, "options") else dict(optimization)
+    # Stable, sorted key=value rendering so the same policy always yields the same signature.
+    body = ";".join("%s=%s" % (k, opts[k]) for k in sorted(opts))
+    return "opt=%s" % body
+
+
+def _cache_so_path(model_hash, abi_key, backend, target, name, optimization=None):
+    """Cached .so path for this (model_hash, abi_key, backend, target, name[, optimization]).
 
     The cache key combines model_hash (the WHAT: formulas/roles/params) and abi_key (the HOW:
     headers + compiler + std), plus backend/target/name which change the emitted code (native loader
-    vs AOT vs JIT, System vs AmrSystem), plus the route registry / report vocabulary component
-    (_registry_cache_key, ADC-599). The file name is <model_hash[:16]>-<sha(rest)[:16]>.so:
-    readable (prefix = model identity) and collision-free (suffix = rest of the key)."""
+    vs AOT vs JIT, System vs AmrSystem), the route registry / report vocabulary component
+    (_registry_cache_key, ADC-599), and -- when a typed codegen Optimization policy is supplied --
+    its signature (_optimization_cache_key, ADC-540) so a policy change is a cache MISS, never a
+    silent reuse of a differently-optimised binary. The file name is
+    <model_hash[:16]>-<sha(rest)[:16]>.so: readable (prefix = model identity) and collision-free
+    (suffix = rest of the key). ``optimization=None`` keeps the file name byte-identical to before
+    the fold (no explicit policy is the historical default)."""
     import hashlib
     import os
     # _platform_cache_key: the CPU arch + the optflags enter the key (a .so x86_64 or
@@ -88,6 +113,11 @@ def _cache_so_path(model_hash, abi_key, backend, target, name):
     # binary, keep an UNCHANGED file name (marker added for aot only).
     if (backend or "").split(";", 1)[0] in ("aot", "hybrid-aot"):
         parts.append("aot-optflags")
+    # ADC-540: fold the optimization policy signature into the rest bytes. Empty (no policy) leaves
+    # the file name unchanged; a policy change moves the .so name (and the manifest cache_key).
+    opt_key = _optimization_cache_key(optimization)
+    if opt_key:
+        parts.append(opt_key)
     rest = "|".join(parts).encode()
     tag = hashlib.sha256(rest).hexdigest()[:16]
     fname = "%s-%s.so" % ((model_hash or "nohash")[:16], tag)

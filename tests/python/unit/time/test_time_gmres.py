@@ -48,8 +48,10 @@ def _krylov(method):
     """Map a method name to its TYPED pops.solvers.krylov descriptor (Spec 5 sec.7: solve_linear
     takes a typed solver, not a string -- the test still parametrizes by the name for clarity)."""
     from pops.solvers import krylov
+    # ADC-535: the Krylov descriptors carry a mandatory max_iter; solve_linear uses only its
+    # .scheme here (its own max_iter= is the authoritative budget), so any positive budget serves.
     return {"cg": krylov.CG, "bicgstab": krylov.BiCGStab,
-            "richardson": krylov.Richardson, "gmres": krylov.GMRES}[method]()
+            "richardson": krylov.Richardson, "gmres": krylov.GMRES}[method](max_iter=50)
 
 
 def _spd_program(t, *, name="gmres_spd", method="gmres", tol=1e-9, max_iter=300, restart=30,

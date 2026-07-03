@@ -268,3 +268,71 @@ def test_platform_lower_is_inert_metadata():
     assert record["category"] == "platform"
     assert record["device"] == "mpi"
     assert record["capabilities"]["mpi"] is True
+
+
+# --- ADC-540: layout / backend / platform are THREE orthogonal, separately-typed axes ----------
+def test_layout_backend_platform_are_distinct_typed_axes():
+    # The mesh STRUCTURE (Uniform / AMR), the compile ENGINE (Production / AOT / JIT) and the
+    # execution DEVICE (KokkosOpenMP / MPI / ...) are three different descriptor categories: none
+    # is a substitute for another (a layout is not a target string, a platform is not a backend).
+    from pops.mesh.cartesian import CartesianMesh
+    from pops.mesh.layouts import AMR, Uniform
+    uniform = Uniform(CartesianMesh(n=64))
+    amr = AMR(base=CartesianMesh(n=64))
+    assert uniform.category == "layout" and amr.category == "layout"
+    assert Production().category == "backend"
+    assert KokkosOpenMP().category == "platform"
+    # Recording a platform on a backend does NOT change the backend token, and neither the backend
+    # nor the platform carries a layout: the three stay separable.
+    prod = Production(platform=KokkosOpenMP())
+    assert prod.lower() == "production"
+    assert prod.options().get("platform") == "KokkosOpenMP"
+    assert "layout" not in prod.options()
+
+
+def test_layout_descriptors_expose_no_target_string():
+    # Spec 5 sec.5.10: layout=AMR(...) REPLACES the old target="amr_system" string. A layout
+    # descriptor selects the structure via its capabilities()["layout"] token, NOT a target string
+    # on its options -- so no "amr_system" / "system" target string leaks onto the public surface.
+    from pops.mesh.cartesian import CartesianMesh
+    from pops.mesh.layouts import AMR, Uniform
+    for layout, kind in ((Uniform(CartesianMesh(n=64)), "uniform"), (AMR(base=CartesianMesh(n=64)), "amr")):
+        assert layout.capabilities()["layout"] == kind
+        opts = layout.options()
+        assert "target" not in opts, opts
+        for value in opts.values():
+            assert value not in ("system", "amr_system"), opts
+
+
+def test_unavailable_platform_refuses_before_compile_with_reason():
+    # An unavailable device is refused through the EXPLAINABLE Availability BEFORE any compile: the
+    # status is not "yes", it carries a reason, and it names the missing build flag or an alternative
+    # (never a bare bool, never a silent fallback). MPI on a non-MPI build is the deterministic case.
+    has_mpi = getattr(pops._pops, "__has_mpi__", None)
+    status = MPI().available()
+    assert isinstance(status, Availability)
+    if has_mpi is False:
+        assert status.status == "no"
+        assert status.reason and status.missing and status.alternatives
+        # A backend targeting an unavailable platform surfaces the SAME refusal (no compile).
+        back = Production(platform=MPI()).available()
+        assert not back.ok and "MPI" in back.reason
+
+
+def test_backend_string_is_refused_on_the_typed_platform_slot():
+    # backend="production" / platform="cuda" (bare strings) are the Spec 5 sec.7 anti-pattern on the
+    # typed platform slot: Production(platform="cuda") is refused naming the typed alternative.
+    with pytest.raises(TypeError, match="platform must be a typed"):
+        Production(platform="cuda")
+    with pytest.raises(TypeError, match="platform must be a typed"):
+        AOT(platform="openmp")
+
+
+def test_optimization_is_separate_from_backend_and_platform():
+    # ADC-540: the codegen Optimization policy is a FOURTH axis (which transforms + math mode); it is
+    # neither the backend nor the platform, and its category is distinct.
+    from pops.codegen import Optimization
+    opt = Optimization()
+    assert opt.category == "optimization"
+    assert opt.category != Production().category
+    assert opt.category != KokkosOpenMP().category

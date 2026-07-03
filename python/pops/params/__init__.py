@@ -9,12 +9,12 @@ descriptors (a runtime param appears in ``compiled.arguments()``; a const param 
 cache key).
 """
 from .runtime import RuntimeParam, ConstParam, DerivedParam
-from .constraints import Constraint, Positive, NonNegative, Range, In
+from .constraints import Constraint, Positive, NonNegative, Range, In, Interval, OneOf
 from .constants import Constant
 from . import constraints, constants
 
 __all__ = [
     "RuntimeParam", "ConstParam", "DerivedParam",
-    "Constraint", "Positive", "NonNegative", "Range", "In",
+    "Constraint", "Positive", "NonNegative", "Range", "In", "Interval", "OneOf",
     "Constant", "constraints", "constants",
 ]

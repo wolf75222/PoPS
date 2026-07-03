@@ -68,8 +68,8 @@ def _objects():
         "fields.PoissonProblem": fields.PoissonProblem(unknown=phi),
         # elliptic + krylov solvers.
         "solvers.elliptic.GeometricMG": elliptic.GeometricMG(),
-        "solvers.krylov.GMRES": krylov.GMRES(),
-        "solvers.krylov.CG": krylov.CG(),
+        "solvers.krylov.GMRES": krylov.GMRES(max_iter=200),
+        "solvers.krylov.CG": krylov.CG(max_iter=200),
         # codegen optimization.
         "codegen.Optimization": codegen.Optimization(),
         # runtime params.

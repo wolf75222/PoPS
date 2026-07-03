@@ -132,6 +132,113 @@ def test_linear_problem_rejects_none_operator():
         p.validate()
 
 
+# --- ADC-535: LinearProblem lowers onto the solve_linear native route -------------------
+def _krylov(factory, **kw):
+    from pops.solvers import krylov
+    return getattr(krylov, factory)(max_iter=kw.pop("max_iter", 200), **kw)
+
+
+def test_linear_problem_lowers_to_solve_linear_shaped_record():
+    # A LinearProblem carrying a typed Krylov method lowers to the solve_linear-shaped record
+    # (method / preconditioner / tol / max_iter / restart) -- the SAME attrs the Program op emits.
+    M = MatrixFreeOperator("stencil_apply")
+    p = LinearProblem(operator=M, unknown=_Handle("phi"), rhs=_Handle("b"),
+                      method=_krylov("GMRES", max_iter=150), tol=1e-9, max_iter=150, restart=20)
+    rec = p.lower()
+    assert rec["method"] == "gmres"
+    assert rec["preconditioner"] == "identity"  # None defaults to the unpreconditioned scheme
+    assert rec["tol"] == 1e-9
+    assert rec["max_iter"] == 150
+    assert rec["restart"] == 20
+    assert rec["category"] == "linear_problem"
+    assert rec["operator"] == "stencil_apply" and rec["rhs"] == "b"
+
+
+def test_linear_problem_lower_matches_program_solve_linear_attrs():
+    # The lowered record's method / preconditioner / tol / max_iter / restart must equal the attrs
+    # the Program's P.solve_linear op emits for the same choices (single source of the lowering).
+    from pops.time.program_solve import _lower_krylov_method, _lower_preconditioner
+    from pops.solvers import krylov, preconditioners
+    method, precond = krylov.BiCGStab(max_iter=80), preconditioners.Identity()
+    M = MatrixFreeOperator("apply")
+    p = LinearProblem(operator=M, unknown="x", rhs=_Handle("b"),
+                      method=method, preconditioner=precond, tol=1e-7, max_iter=80)
+    rec = p.lower()
+    assert rec["method"] == _lower_krylov_method(method)
+    assert rec["preconditioner"] == _lower_preconditioner(precond)
+
+
+def test_linear_problem_lower_requires_a_method():
+    M = MatrixFreeOperator("apply")
+    p = LinearProblem(operator=M, unknown="x", rhs=_Handle("b"))  # no method
+    with pytest.raises(ValueError, match="typed Krylov method is required"):
+        p.lower()
+
+
+def test_linear_problem_lower_requires_positive_max_iter():
+    M = MatrixFreeOperator("apply")
+    # A LinearProblem(max_iter=) set directly is refused when missing / non-positive at lower.
+    for bad in (None, 0, -5):
+        p = LinearProblem(operator=M, unknown="x", rhs=_Handle("b"),
+                          method=_krylov("CG"), max_iter=bad)
+        with pytest.raises(ValueError, match="max_iter"):
+            p.lower()
+
+
+def test_linear_problem_error_taxonomy_distinguishes_classes():
+    # ADC-535 acceptance: operator / rhs / preconditioner / layout incompatibilities are DISTINCT
+    # (the Availability.missing tag names the class), so a caller can tell them apart pre-runtime.
+    from pops.solvers import krylov, preconditioners
+
+    # (1) operator: not a linear-operator descriptor.
+    op_bad = LinearProblem(operator="laplacian", unknown="x", rhs=_Handle("b"))
+    assert op_bad.available().missing == ["operator"]
+
+    # (2) rhs: a linear solve A x = b has no b.
+    M = MatrixFreeOperator("apply")
+    rhs_bad = LinearProblem(operator=M, unknown="x", rhs=None)
+    assert rhs_bad.available().missing == ["rhs"]
+
+    # (3) preconditioner: a non-identity preconditioner on CG has no matrix-free slot.
+    precond_bad = LinearProblem(operator=M, unknown="x", rhs=_Handle("b"),
+                                method=krylov.CG(max_iter=50),
+                                preconditioner=preconditioners.GeometricMG())
+    st = precond_bad.available()
+    assert st.missing == ["preconditioner"]
+    assert not st.ok
+
+    # (4) layout: a method that does not support the context layout. The real Krylov solvers ARE
+    # AMR-capable, so use a capability-limited stub method to exercise the layout branch honestly.
+    class _UniformOnlyMethod:
+        name = "uniform_only"
+        scheme = "cg"
+
+        def capabilities(self):
+            return {"supports_amr": False, "supports_uniform": True}
+
+    class _AmrLayout:
+        def capabilities(self):
+            return {"layout": "amr"}
+
+    layout_bad = LinearProblem(operator=M, unknown="x", rhs=_Handle("b"),
+                               method=_UniformOnlyMethod(), max_iter=50)
+    st = layout_bad.available({"layout": _AmrLayout()})
+    assert st.missing == ["layout"]
+    # an AMR-capable real method on the same AMR context stays available (no false positive).
+    ok = LinearProblem(operator=M, unknown="x", rhs=_Handle("b"),
+                       method=krylov.CG(max_iter=50))
+    assert ok.available({"layout": _AmrLayout()}).ok
+
+
+def test_linear_problem_no_method_stays_available_and_inert():
+    # A method-less LinearProblem is still a valid inert descriptor (it names the algebra only):
+    # available() is yes and it does not lower (no route to solve_linear).
+    M = MatrixFreeOperator("apply")
+    p = LinearProblem(operator=M, unknown="x", rhs=_Handle("b"))
+    assert p.available().ok
+    assert p.validate() is True
+
+
 # --- residual ---------------------------------------------------------------------------
 def test_residual_names_b_minus_ax():
     A = LinearOperator("A")

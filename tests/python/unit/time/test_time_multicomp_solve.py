@@ -60,7 +60,7 @@ def _mc_program(t, ncomp, *, name="mc_solve", method=None, tol=1e-10, max_iter=2
 
     if method is None:
         from pops.solvers.krylov import CG  # typed default (Spec 5 sec.7); CG lowers to "cg"
-        method = CG()
+        method = CG(max_iter=max_iter)  # ADC-535: max_iter is mandatory on the descriptor
     P.set_apply(A, apply)
     phi = P.solve_linear(operator=A, rhs=U, method=method, tol=tol, max_iter=max_iter)
     P.commit("blk", phi)
@@ -83,7 +83,7 @@ def test_state_operator_builds(t):
     from pops.solvers.krylov import CG
     P.set_apply(A, apply)
     U = P.state("blk")
-    phi = P.solve_linear(operator=A, rhs=U, method=CG(), tol=1e-10, max_iter=50)
+    phi = P.solve_linear(operator=A, rhs=U, method=CG(max_iter=50), tol=1e-10, max_iter=50)
     assert phi.attrs["ncomp"] == 2, "the solution carries the operator ncomp"
     P.commit("blk", phi)
     assert P.validate() is True, "the multi-component Program must validate"
@@ -238,7 +238,7 @@ def _run_one(t, pops, np, ncomp, init):
     try:
         compiled = pops.codegen.compile_problem(
             model=_passive_model("mc_prog%d" % ncomp, cons),
-            time=_mc_program(t, ncomp, name="mc_step%d" % ncomp, method=krylov.CG(),
+            time=_mc_program(t, ncomp, name="mc_step%d" % ncomp, method=krylov.CG(max_iter=200),
                              tol=tol, max_iter=200))
         compiled_model = _passive_model("mc_block%d" % ncomp, cons).compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
