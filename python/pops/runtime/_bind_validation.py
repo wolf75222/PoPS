@@ -291,6 +291,72 @@ def aggregate_bind_refusals(groups):
             % len(flat)) + "\n  ".join(flat)
 
 
+def collect_missing_arguments(args, provided_blocks, provided_params, provided_aux,
+                              provided_solvers):
+    """Pure core of the early bind-input check (Spec 5 sec.10); no engine call -> host-testable.
+
+    Compare an :class:`pops.codegen.inspect_compiled.Arguments` against what an install supplies and
+    return one actionable line per MISSING required argument (empty list when everything required is
+    met). Shared by ``System._install_compiled`` and ``AmrSystem._install_compiled`` so both enforce
+    the SAME contract.
+
+    Only entries whose ``required`` flag is true are enforced: an input the artifact marks optional
+    (a const param, an unrequired solver -- the default Poisson field has a working default and is
+    NOT flagged required by ``arguments()``) is never demanded, so a previously valid install passes
+    through unchanged. ``provided_*`` are the supplied sets (block names, param names, aux names,
+    solver fields); a block already added on the sim counts as provided. Each line names EXACTLY what
+    is missing and the matching ``pops.bind`` keyword to supply it."""
+    missing = []
+    for name, spec in sorted(getattr(args, "instances", {}).items()):
+        if spec.get("required") and name not in provided_blocks:
+            missing.append("instance %r (a state block the program advances); supply its initial "
+                           "state via pops.bind(state={%r: <array>})" % (name, name))
+    for name, spec in sorted(getattr(args, "params", {}).items()):
+        if spec.get("required") and name not in provided_params:
+            missing.append("runtime param %r; pass pops.bind(params={%r: <value>})" % (name, name))
+    for name, spec in sorted(getattr(args, "aux", {}).items()):
+        if spec.get("required") and name not in provided_aux:
+            missing.append("aux field %r; pass pops.bind(aux={%r: <array>})" % (name, name))
+    for name, spec in sorted(getattr(args, "solvers", {}).items()):
+        if spec.get("required") and name not in provided_solvers:
+            missing.append("solver for field %r; pass pops.bind(solvers={%r: <Solver>})"
+                           % (name, name))
+    return missing
+
+
+def validate_install_arguments(sim, compiled, instances, params, aux, solvers):
+    """Early bind-input validation (Spec 5 sec.10) for a COMPILED install on @p sim (System OR
+    AmrSystem): reject -- BEFORE any native mutation -- an install missing a REQUIRED argument the
+    artifact declares, with one clear actionable error aggregating every missing input.
+
+    Reads ``compiled.arguments()`` (the inert metadata the .so DECLARES) and confirms every argument
+    marked ``required`` is supplied by this install call (@p instances / params / aux / solvers) OR
+    already wired on the sim (an added block, a declared named aux). A NATIVE install
+    (``compiled is None``) carries no declared arguments and is skipped; a handle whose
+    ``arguments()`` is unavailable or unreadable is skipped too (conservative -- a missing check
+    never breaks a working install)."""
+    if compiled is None or not hasattr(compiled, "arguments"):
+        return
+    try:
+        args = compiled.arguments()
+    except Exception:  # noqa: BLE001 -- introspection must never break a valid install
+        return
+    provided_blocks = set(instances)
+    try:
+        provided_blocks |= set(sim.block_names())
+    except Exception:  # noqa: BLE001 -- block_names is a convenience; absence is not a failure
+        pass
+    # Named aux already declared on the sim (B_z has no queryable trace, so it must come via aux=).
+    provided_named_aux = set()
+    for table in getattr(sim, "_aux_field_index", {}).values():
+        provided_named_aux |= set(table)
+    missing = collect_missing_arguments(
+        args, provided_blocks, set(params), set(aux) | provided_named_aux, set(solvers))
+    if missing:
+        raise ValueError("pops.bind: the compiled artifact is missing required argument(s):\n  "
+                         + "\n  ".join(missing))
+
+
 def run_bind_gates(compiled, problem, layout, initial, params, aux):
     """Run the four ADC-537 bind refusal gates, raising ONE aggregated ``ValueError`` on any violation.
 
@@ -320,4 +386,5 @@ def run_bind_gates(compiled, problem, layout, initial, params, aux):
 
 __all__ = ["validate_initial_state", "validate_runtime_param_domains", "validate_bind_manifest",
            "validate_operator_aux", "operator_required_aux", "loaded_runtime_facts",
-           "aggregate_bind_refusals", "run_bind_gates"]
+           "aggregate_bind_refusals", "run_bind_gates",
+           "collect_missing_arguments", "validate_install_arguments"]
