@@ -524,9 +524,25 @@ pops_add_gtest_suite(NAME test_aux_te SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LI
 pops_test_source(_src test_program_runtime)
 pops_add_gtest_suite(NAME test_program_runtime SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
 
+# ADC-538: the native ProgramContext contract + the history-ring checkpoint round-trip both drive a
+# real System (the ring memory is co-distributed with block 0), so they link the heavy runtime object
+# library like test_program_runtime -- NOT the standalone-core POPS_CPP_STANDARD_TESTS list.
+pops_test_source(_src test_program_context_contract)
+pops_add_gtest_suite(NAME test_program_context_contract SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
+
+pops_test_source(_src test_checkpoint_history)
+pops_add_gtest_suite(NAME test_checkpoint_history SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
+
 pops_test_source(_src test_program_loader)
 pops_native_loader_definitions(_native_defs)
 pops_add_gtest_suite(NAME test_program_loader SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
+
+# ADC-538: the ABI symbol-presence fence compiles a stub problem.so at test time and dlsyms the Program
+# + module-metadata symbol contract -- gated exactly like test_program_loader (ENABLE_EXPORTS so the
+# System seam symbols export; native_loader lock so the runtime compiles are serialized).
+pops_test_source(_src test_program_abi_symbols)
+pops_native_loader_definitions(_native_defs)
+pops_add_gtest_suite(NAME test_program_abi_symbols SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
 
 pops_test_source(_src test_native_loader_param_overflow)
 pops_native_loader_definitions(_native_defs)
