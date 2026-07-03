@@ -5,7 +5,7 @@ reusable-library MANIFEST (name, abi_key, brick list, requirements, capabilities
 generated symbols) plus a stable content hash. With ``emit=True`` it ALSO emits the
 library C++ and compiles a REAL ``.so`` (same Kokkos toolchain a problem ``.so`` uses),
 which :func:`pops.read_library_manifest` reads back (dlopen) with a HARD ABI / Kokkos guard;
-``pops.compile_problem(..., libraries=[...])`` reads + validates it. These tests pin the
+``pops.codegen.compile_problem(..., libraries=[...])`` reads + validates it. These tests pin the
 manifest shape, the hash stability/sensitivity, the reader round-trip, and -- when Kokkos
 is visible -- the real emit + compile + read-back + the ABI-mismatch hard error.
 """

@@ -20,7 +20,7 @@ it to a handle, then bind a runnable simulation::
             .field(PoissonProblem(unknown="phi", equation=eq, solver=mg))
             .time(time_program))
     compiled = pops.compile(case, backend=Production())
-    sim = pops.bind(compiled, state={"ne": ne0}, params=None, aux=None, solvers=None)
+    sim = pops.bind(compiled, initial_state={"ne": ne0})
     sim.run(t_end=0.1, cfl=0.4)
 
 The scenario names (diocotron, electron_euler...) are compositions on the
@@ -76,7 +76,7 @@ __all__ = [
     "abi_key", "capabilities", "inspect_capabilities", "inspect_amr", "native_capability_report",
     "runtime_environment_report", "validate_runtime_environment", "RuntimeCapabilityError",
     "set_threads", "has_kokkos", "parallel_info", "doctor",
-    "compile_problem", "CompiledProblem", "CompiledTime",
+    "CompiledArtifact", "CompiledTime",
     "compile_library", "read_library_manifest", "LibraryManifest",
     "Case", "PhysicsModel", "compile", "bind",
 ]
@@ -100,20 +100,20 @@ from .runtime_environment import (  # noqa: E402,F401
     RuntimeCapabilityError, runtime_environment_report, validate_runtime_environment)
 
 
-# LAZY pops.compile_problem / pops.CompiledProblem (PEP 562): the codegen engine pulls numpy at
-# import (host evaluator of the prototype IR), whereas the native path (System/add_block) and the
-# production backend do not need it. Exposing these top-level names LAZILY keeps `import pops`
-# numpy-free until the DSL/compile path is first used; numpy's absence then gives a targeted message
-# (doctor too).
+# LAZY public front doors (PEP 562, ADC-523). `pops.compile` / `pops.bind` are the ONLY public
+# compile/bind entry points; the low-level `compile_problem` driver and the concrete
+# `CompiledProblem` loader class leave the surface (still reachable as `pops.codegen.compile_problem`
+# / `pops.codegen.CompiledProblem`). `pops.CompiledArtifact` (a Protocol) types the inspectable
+# handle so users never name the runtime-coupled loader class; lazy resolution keeps import numpy-free.
 def __getattr__(name):
-    if name == "compile_problem":
-        from .codegen.compile import compile_problem
-        return compile_problem
-    if name == "CompiledProblem":
-        from .codegen.loader import CompiledProblem
-        return CompiledProblem
     if name in ("compile", "bind"):
-        # Thin pops.Case orchestration over compile_problem + System/AmrSystem install.
         from .codegen import orchestration
         return getattr(orchestration, name)
+    if name == "CompiledArtifact":
+        from .codegen.compiled_artifact import CompiledArtifact
+        return CompiledArtifact
+    if name in ("compile_problem", "CompiledProblem"):
+        raise AttributeError(
+            "pops.%s left the public surface (ADC-523): use pops.compile(...) / pops.bind(...) as "
+            "the front doors; the low-level driver stays reachable as pops.codegen.%s." % (name, name))
     raise AttributeError("module %r has no attribute %r" % (__name__, name))

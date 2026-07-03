@@ -184,7 +184,7 @@ print("== (B) compiled std.strang == native pops.Strang (bit-exact) ==")
 
 # Compile the std.strang program (skips cleanly without a compiler / visible Kokkos).
 try:
-    compiled = pops.compile_problem(model=transport_model(), time=strang_program("strang_prog"))
+    compiled = pops.codegen.compile_problem(model=transport_model(), time=strang_program("strang_prog"))
 except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
     _skip("compile_problem could not build the .so: %s (A passed)" % str(exc)[:160])
 

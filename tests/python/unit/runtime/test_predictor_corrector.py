@@ -279,7 +279,7 @@ def analytic_lorentz_apply(U):
 # ---- (B) focused: one FE step, named-source rhs == default-source eval_rhs ----
 print("== (B) focused: rhs(sources=['electric']) == -div F + electric (one FE step) ==")
 try:
-    compiled_fe = pops.compile_problem(model=named_source_model("electric_fe_prog"),
+    compiled_fe = pops.codegen.compile_problem(model=named_source_model("electric_fe_prog"),
                                       time=_electric_fe_program())
 except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
@@ -301,7 +301,7 @@ chk(float(np.abs(U_fe - U0).max()) > 1e-6, "the electric source actually moved t
 # ---- (C) full predictor-corrector parity ----
 print("== (C) full predictor-corrector parity ==")
 try:
-    compiled_pc = pops.compile_problem(model=named_source_model("pc_prog"),
+    compiled_pc = pops.codegen.compile_problem(model=named_source_model("pc_prog"),
                                       time=predictor_corrector_program())
 except RuntimeError as exc:
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])

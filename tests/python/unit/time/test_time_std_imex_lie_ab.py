@@ -223,7 +223,7 @@ def _run_ab3(t):
     P = t.Program("ab3_step")
     lt.adams_bashforth(P, "blk", 3)
     try:
-        compiled = pops.compile_problem(model=_passive_source_model("ab3_prog"), time=P)
+        compiled = pops.codegen.compile_problem(model=_passive_source_model("ab3_prog"), time=P)
         cm = _passive_source_model("ab3_block").compile(backend="production")
     except RuntimeError as exc:
         print("-- (B AB3) skipped: compile could not build the .so: %s --" % str(exc)[:160])
@@ -265,7 +265,7 @@ def _run_imex(t):
     P = t.Program("imex_step")
     lt.imex_local(P, "plasma", linear_source="lorentz", flux=True, sources=["default"], theta=1.0)
     try:
-        compiled = pops.compile_problem(model=_lorentz_model("imex_prog"), time=P)
+        compiled = pops.codegen.compile_problem(model=_lorentz_model("imex_prog"), time=P)
         cm = _lorentz_model("imex_block").compile(backend="production")
     except RuntimeError as exc:
         print("-- (B imex) skipped: compile could not build the .so: %s --" % str(exc)[:160])
@@ -328,7 +328,7 @@ def _run_lie(t):
     P = t.Program("lie_step")
     lt.lie(P, "blk", half_flow, source)
     try:
-        compiled = pops.compile_problem(model=_reaction_term_model("lie_prog"), time=P)
+        compiled = pops.codegen.compile_problem(model=_reaction_term_model("lie_prog"), time=P)
         cm = _reaction_term_model("lie_block").compile(backend="production")
     except RuntimeError as exc:
         print("-- (B lie) skipped: compile could not build the .so: %s --" % str(exc)[:160])

@@ -30,11 +30,14 @@ types are pulled LAZILY inside the function bodies, so this module adds no forbi
 """
 
 
-def compile(problem, backend="production", time=None, **kwargs):
+def compile(problem, layout=None, backend="production", time=None, **kwargs):
     """Lower a :class:`pops.case.Case` to a compiled handle.
 
-    Validates @p problem, derives the compile target from its LAYOUT (``Uniform`` -> system,
-    ``AMR`` -> amr_system) and lowers via the route the target selects:
+    Validates @p problem, derives the compile target from the LAYOUT (``Uniform`` -> system,
+    ``AMR`` -> amr_system) and lowers via the route the target selects. The layout comes from @p
+    layout when given, else from ``problem.layout`` (ADC-523: the layout is on its way to becoming a
+    ``pops.compile`` argument; PR-1 accepts it optionally and falls back to the problem's own layout,
+    raising if an explicit @p layout disagrees with the one the problem already carries):
 
     - ``Uniform``: compiles the whole-system time ``Program`` once with ``compile_problem``
       (BYTE-IDENTICAL to before), resolving each block's physics and carrying the full
@@ -52,6 +55,9 @@ def compile(problem, backend="production", time=None, **kwargs):
 
     Args:
         problem: The :class:`pops.case.Case` assembly to lower.
+        layout: Optional explicit mesh layout (``Uniform`` / ``AMR``). When omitted the layout is
+            read from ``problem.layout``; when given it must match the problem's layout (a mismatch
+            raises), so a Case built with one layout cannot be silently compiled for another.
         backend: The codegen backend (default "production"). The AMR route requires "production"
             (the only native AMR loader, ``Model.compile`` enforces it).
         time: The ``pops.time.Program`` time scheme (Uniform route only); falls back to
@@ -70,7 +76,10 @@ def compile(problem, backend="production", time=None, **kwargs):
     # native envelope (NATIVE_MAX_LEVELS / NATIVE_RATIOS) is refused HERE with the existing clear
     # AMR.available message before any compile, never silently clamped.
     problem.validate()
-    is_amr = isinstance(problem.layout, AMR)
+    # ADC-523: resolve the effective layout -- an explicit layout= wins but must agree with the one
+    # the problem already carries (no silent override); omitted, it falls back to problem.layout.
+    layout = _resolve_layout(problem, layout)
+    is_amr = isinstance(layout, AMR)
     target = "amr_system" if is_amr else "system"
 
     if is_amr:
@@ -80,7 +89,7 @@ def compile(problem, backend="production", time=None, **kwargs):
         # no install_program seam, so time= is NOT required here -- the per-block time policy is set at
         # bind from the block spec. compile_problem is NOT called (the byte-identical Uniform path is
         # untouched).
-        return _compile_amr(problem, backend, target, **kwargs)
+        return _compile_amr(problem, layout, backend, target, **kwargs)
 
     time = time if time is not None else problem._time
     if time is None:
@@ -116,11 +125,11 @@ def compile(problem, backend="production", time=None, **kwargs):
     # mirroring how the AMR adapter derives the AmrSystemConfig (n / L / periodic / regrid / patch
     # settings) and flows the typed refinement. A handle NOT produced here carries no layout and
     # binds on the bare System() defaults.
-    compiled._layout = problem.layout
+    compiled._layout = layout
     return compiled
 
 
-def _compile_amr(problem, backend, target, **kwargs):
+def _compile_amr(problem, layout, backend, target, **kwargs):
     """Compile each AMR block to a ``target='amr_system'`` ``CompiledModel`` (single AND multi block).
 
     There is no whole-system time Program on AMR: each block's resolved physics model is compiled to a
@@ -159,7 +168,7 @@ def _compile_amr(problem, backend, target, **kwargs):
     compiled._outputs = list(problem._outputs or [])
     # Carry the AMR layout so bind() can rebuild the AmrSystemConfig (n / L / periodic / regrid /
     # patch settings) and flow the typed refinement + field problem onto the AmrSystem.
-    compiled._layout = problem.layout
+    compiled._layout = layout
     return compiled
 
 
@@ -271,6 +280,27 @@ def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
     adapter = adapter_for(target, layout, n_blocks=n_blocks)
     return adapter.build(compiled, layout=layout, instances=instances, params=params or {},
                          aux=aux or {}, solvers=field_solvers, cadence=cadence, outputs=outputs)
+
+
+def _resolve_layout(problem, layout):
+    """Resolve the effective compile layout from an optional explicit @p layout (ADC-523).
+
+    Omitted (``None``), the layout is read from ``problem.layout`` (the historical path). Given, it
+    must be the SAME layout the problem already carries: a ``pops.compile(case, layout=other)`` that
+    disagrees with ``case.layout`` is refused loudly rather than silently overriding what the Case was
+    assembled and validated with. PR-1 accepts the argument as a forward step toward
+    ``pops.compile(problem, layout=...)``; PR-2 completes the move (the Problem loses the mandatory
+    constructor layout).
+    """
+    problem_layout = getattr(problem, "layout", None)
+    if layout is None:
+        return problem_layout
+    if problem_layout is not None and layout is not problem_layout and layout != problem_layout:
+        raise ValueError(
+            "pops.compile: the explicit layout= (%r) disagrees with the problem's own layout (%r); "
+            "build the Case with the layout you compile for (a compiled artifact is frozen to one "
+            "layout)." % (layout, problem_layout))
+    return layout
 
 
 def _resolve_problem_model(physics):

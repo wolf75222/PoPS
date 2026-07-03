@@ -201,7 +201,7 @@ def _run_section_b(t):
 
     floor = 0.5
     try:
-        compiled = pops.compile_problem(
+        compiled = pops.codegen.compile_problem(
             model=passive_model("where_prog"),
             time=_clamp_program(t, name="where_step", floor=floor))
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed

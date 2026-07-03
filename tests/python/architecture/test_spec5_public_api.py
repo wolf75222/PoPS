@@ -166,6 +166,42 @@ def test_no_public_target_kwarg_on_compile_or_bind():
     assert not hasattr(pm, "target"), "pops.physics.Model must not expose a target surface"
 
 
+def test_compile_problem_off_public_surface():
+    # ADC-523: pops.compile / pops.bind are the ONLY public front doors. The low-level
+    # compile_problem driver and the concrete CompiledProblem loader class leave the top-level
+    # surface (still reachable as pops.codegen.compile_problem / pops.codegen.CompiledProblem).
+    assert "compile" in pops.__all__ and "bind" in pops.__all__
+    for removed in ("compile_problem", "CompiledProblem"):
+        assert removed not in pops.__all__, "pops.%s must not linger in pops.__all__" % removed
+        assert not hasattr(pops, removed), "pops.%s must be gone from the top-level surface" % removed
+        with pytest.raises(AttributeError) as excinfo:
+            getattr(pops, removed)
+        msg = str(excinfo.value)
+        assert "pops.compile" in msg, "the AttributeError must point at pops.compile (got %r)" % msg
+        assert "pops.codegen.%s" % removed in msg, (
+            "the AttributeError must name the advanced pops.codegen.%s path (got %r)" % (removed, msg))
+    # The advanced path is preserved: pops.codegen.compile_problem / CompiledProblem still resolve.
+    import importlib  # noqa: PLC0415
+
+    codegen = importlib.import_module("pops.codegen")
+    assert codegen.compile_problem is not None
+    assert codegen.CompiledProblem is not None
+    # ADC-523: pops.CompiledArtifact types the inspectable handle without the concrete loader class.
+    assert hasattr(pops, "CompiledArtifact"), "pops.CompiledArtifact must type the compiled handle"
+    assert "CompiledArtifact" in pops.__all__
+    assert pops.CompiledArtifact is codegen.CompiledArtifact
+
+
+def test_compile_accepts_optional_layout_passthrough():
+    # ADC-523: pops.compile gains an optional layout= passthrough (falls back to problem.layout when
+    # omitted). PR-1 accepts it; the full move to pops.compile(problem, layout=...) completes in PR-2.
+    import inspect  # noqa: PLC0415
+
+    params = inspect.signature(pops.compile).parameters
+    assert "layout" in params, "pops.compile must accept an optional layout= argument"
+    assert params["layout"].default is None, "layout= must default to None (fall back to the Case)"
+
+
 def test_solver_generation_dsl_is_internal_experimental():
     # The @solver generation DSL lives ONLY under the internal / experimental pops.codegen.solvers.
     import pops.codegen.solvers as codegen_solvers  # noqa: PLC0415

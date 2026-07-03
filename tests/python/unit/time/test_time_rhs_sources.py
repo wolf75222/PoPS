@@ -168,7 +168,7 @@ def run_one_step(sources, flux=True):
     """Compile + install a one-step program, step once, return (out, rho0)."""
     pname = "p_%s_%s" % ("flux" if flux else "noflux", "_".join(sources) or "empty")
     try:
-        compiled = pops.compile_problem(model=decay_model("decay_%s" % pname, C),
+        compiled = pops.codegen.compile_problem(model=decay_model("decay_%s" % pname, C),
                                        time=one_step_program(pname, sources, flux=flux))
     except RuntimeError as exc:  # no compiler / no Kokkos / .so compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
@@ -209,7 +209,7 @@ def lie_split_program(name):
 
 
 try:
-    compiled_lie = pops.compile_problem(model=decay_model("decay_lie", C), time=lie_split_program("lie"))
+    compiled_lie = pops.codegen.compile_problem(model=decay_model("decay_lie", C), time=lie_split_program("lie"))
 except RuntimeError as exc:
     _skip("compile_problem (lie) could not build the .so: %s" % str(exc)[:160])
 sim_lie, rho0l = make_sim("lie")
@@ -227,7 +227,7 @@ chk(d_lie < 1e-12, "Lie split H(flux,sources=[]);S(source) == offline single-sou
 try:
     P_fe = adctime.Program("fe_default")
     libtime.forward_euler(P_fe, "plasma", sources=("default",))
-    compiled_fe = pops.compile_problem(model=decay_model("decay_fe", C), time=P_fe)
+    compiled_fe = pops.codegen.compile_problem(model=decay_model("decay_fe", C), time=P_fe)
 except RuntimeError as exc:
     _skip("compile_problem (forward_euler) could not build the .so: %s" % str(exc)[:160])
 sim_fe, rho0f = make_sim("fe")

@@ -157,7 +157,7 @@ def make_sim():
 dt = 0.05
 
 try:
-    compiled = pops.compile_problem(model=lorentz_model("lorentz_prog"), time=lorentz_program())
+    compiled = pops.codegen.compile_problem(model=lorentz_model("lorentz_prog"), time=lorentz_program())
 except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 

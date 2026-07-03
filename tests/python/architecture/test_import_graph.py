@@ -64,7 +64,9 @@ ALLOWED = {
     "external": set(),
     # lib.models wraps pops.moments. Criterion 7: lib is presets-only -- the solver catalog lives in
     # pops.solvers (the lib.solvers shim was removed, so lib no longer imports solvers) and the
-    # solver-gen DSL is in codegen, not here.
+    # solver-gen DSL is in codegen, not here. lib.presets (ADC-524) composes a lib.models model with
+    # a lib.time scheme (same-layer, no edge) and must NOT reach up into codegen / runtime; the graph
+    # keeps it inside these allowed lower layers.
     "lib": {"ir", "model", "time", "physics", "moments"},
     # codegen.solvers (the solver-gen DSL, criterion 19) imports pops.solvers at module scope to
     # attach the custom-solver registry hooks -> codegen -> solvers (solvers is a sink: acyclic).

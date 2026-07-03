@@ -135,10 +135,10 @@ class _EvalMixin:
         """Source term (numpy (n_vars, ...)), or zeros if not defined. A model that declares only
         NAMED sources (no m.source default) cannot answer the legacy total-source query: the named
         terms are never summed implicitly, so an old stepper asking for the total source is rejected
-        (use pops.compile_problem(...) with a time Program, or define m.source(...) explicitly)."""
+        (use pops.compile(...) with a time Program, or define m.source(...) explicitly)."""
         if self._source is None:
             if self._source_terms:
-                raise ValueError("model has multiple named sources; use pops.compile_problem(...) "
+                raise ValueError("model has multiple named sources; use pops.compile(...) "
                                  "or define m.source(...) explicitly")
             return np.zeros_like(U)
         env = self._env(U, aux)

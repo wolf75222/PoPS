@@ -166,8 +166,8 @@ class Module:
     def to_dsl(self):
         """Lower this Module to a :class:`pops.physics.facade.Model` -- the physical/codegen engine -- by mapping
         each typed operator (with its IR body) to the dsl method of its kind. Reuses the dsl backend
-        (a translation, not a second codegen). ``pops.compile_problem(model=module, ...)`` does this
-        implicitly; call it directly to build the block model for ``sim.add_equation``."""
+        (a translation, not a second codegen). ``pops.codegen.compile_problem(model=module, ...)``
+        does this implicitly; call it directly to build the block model for ``sim.add_equation``."""
         # Lazy: codegen.compile imports this module, so import only when compiling.
         from pops.codegen.compile import _module_to_model
         return _module_to_model(self)

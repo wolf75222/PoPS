@@ -131,7 +131,7 @@ def _run_section_b(t):
         P = t.Program(name)
         build(P)
         try:
-            return pops.compile_problem(model=_passive_model(name + "_m"), time=P)
+            return pops.codegen.compile_problem(model=_passive_model(name + "_m"), time=P)
         except RuntimeError as exc:
             print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:160])
             return None

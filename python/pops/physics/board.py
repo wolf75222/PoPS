@@ -444,7 +444,7 @@ class Model(_MultiSpeciesMixin):
         return self.module
 
     # Spec 5 sec.11 alias: physics.Model.to_module() == physics.Model.lower(). Both return the
-    # pops.model.Module that pops.compile / pops.compile_problem(model=...) accepts.
+    # pops.model.Module that pops.compile / pops.codegen.compile_problem(model=...) accepts.
     to_module = lower
 
     # --- introspection ---

@@ -261,7 +261,7 @@ def make_sim(model):
 
 def step_program(model, prog):
     try:
-        compiled = pops.compile_problem(model=model, time=prog)
+        compiled = pops.codegen.compile_problem(model=model, time=prog)
     except RuntimeError as exc:
         _skipB("compile_problem could not build the .so: %s" % str(exc)[:160])
     sim = make_sim(model)

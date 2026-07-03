@@ -236,7 +236,7 @@ def _run_one(t, pops, np, ncomp, init):
     cons = tuple("c%d" % i for i in range(ncomp))
     tol = 1e-10
     try:
-        compiled = pops.compile_problem(
+        compiled = pops.codegen.compile_problem(
             model=_passive_model("mc_prog%d" % ncomp, cons),
             time=_mc_program(t, ncomp, name="mc_step%d" % ncomp, method=krylov.CG(),
                              tol=tol, max_iter=200))

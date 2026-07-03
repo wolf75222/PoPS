@@ -33,7 +33,7 @@ dependencies = [
 [tool.scikit-build]
 minimum-version = "0.10"
 cmake.version = ">=3.21"
-# The PURE package (pops/__init__.py, dsl.py, integrate.py, moments.py) is copied as-is into the wheel;
+# The PURE package (the whole python/pops tree of spec sub-packages) is copied as-is into the wheel;
 # the _pops extension is added by the install(TARGETS _pops ...) rule of python/CMakeLists.txt.
 wheel.packages = ["python/pops"]
 build-dir = "build/{wheel_tag}"  # persistent build cache: fast reinstall/editable

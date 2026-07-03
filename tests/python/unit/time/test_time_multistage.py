@@ -80,7 +80,7 @@ def offline_rhs(ref, U):
 def run_compiled(P, dt):
     """compile_problem(P) -> install -> one step; returns the advanced state (or None to skip)."""
     try:
-        compiled = pops.compile_problem(model=transport_model(), time=P)
+        compiled = pops.codegen.compile_problem(model=transport_model(), time=P)
     except RuntimeError as exc:  # no compiler / no Kokkos visible / compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
     sim = make_sim()

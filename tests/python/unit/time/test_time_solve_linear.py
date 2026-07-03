@@ -330,7 +330,7 @@ def _run_section_b(t):
 
     tol = 1e-10
     try:
-        compiled = pops.compile_problem(
+        compiled = pops.codegen.compile_problem(
             model=passive_model("solve_prog"),
             time=_solve_program(t, name="solve_step", method="cg", tol=tol, max_iter=200))
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
@@ -411,7 +411,7 @@ def _run_section_b_gmg_precond(t):
     prog = _solve_program(t, name="solve_gmg", method="gmres", tol=tol, max_iter=200,
                           preconditioner=preconditioners.GeometricMG())
     try:
-        compiled = pops.compile_problem(model=passive_model("solve_gmg_prog"), time=prog)
+        compiled = pops.codegen.compile_problem(model=passive_model("solve_gmg_prog"), time=prog)
         compiled_model = passive_model("solve_gmg_block").compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- (B') skipped: compile could not build the .so: %s --" % str(exc)[:200])

@@ -16,7 +16,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ## [Unreleased]
 
+### Changed
+- ADC-523 `pops.compile` / `pops.bind` are the only public front doors; the low-level
+  `compile_problem` driver and the concrete `CompiledProblem` loader class leave the top-level
+  surface (still reachable as `pops.codegen.compile_problem` / `pops.codegen.CompiledProblem` for
+  advanced use). `pops.compile` gains an optional `layout=None` passthrough (falls back to the
+  Case's own layout when omitted, raising if an explicit `layout=` disagrees). `pops.CompiledArtifact`
+  exposes the inspectable compiled-handle protocol without exposing the concrete runtime-coupled
+  loader class. Internal tests that drive the low-level driver now name `pops.codegen.compile_problem`.
+- ADC-524 Extended the architecture tests to cover `pops.lib.presets` and codified the flat-layout
+  rules: a new `tests/python/architecture/test_package_layout.py` asserts the presets package exists
+  and that no package is shadowed by a flat root module of the same name; `test_lib_keeps_only_presets`
+  now allows the `presets` sub-package.
+
 ### Removed
+- ADC-523 Removed `compile_problem` / `CompiledProblem` from `pops.__all__` and the top-level lazy
+  attributes; `pops.compile_problem` now raises `AttributeError` pointing at `pops.compile` and the
+  advanced `pops.codegen.compile_problem` path.
 - **ADC-595: the named C++ coupling methods and the public raw coupled-source ABI** -- `System::add_ionization` / `add_collision` / `add_thermal_exchange` are deleted (they are now Python presets lowering to the generic coupled source), and the flat 12-kwarg bytecode binding is internalized as `System._add_coupled_source` / `AmrSystem._add_coupled_source` (an escape hatch called only by the typed lowering and the low-level ABI tests). End users register a coupling through `sim.add_coupling(...)` (a preset or a `CoupledSource(...).compile()`), which routes to the typed `add_coupling_operator`; the coupled-source STORAGE (`Impl::couplings` / `coupled_freqs_` / `coupled_freq_exprs_`, read by the stepper) is untouched. The single-block force composite `CompositeSource<A,B>` (diocotron production route) is out of scope and unchanged. New source-only guard `tests/python/architecture/test_no_named_coupling_surface.py`.
 - **Retained-docs and profiling harness cleanup** -- removed `docs/TRANSLATION_GLOSSARY.md`,
   `docs/BIBLIOGRAPHY.md`, the `bench/` profiling harness, and the ROMEO machine profile under
@@ -27,6 +43,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   minimal docs quality tooling needed for the rebuild.
 
 ### Added
+- ADC-524 `pops.lib.presets` -- the single home for ready-to-run compose-and-go bundles. A `Preset`
+  pairs a provided model (`pops.lib.models`) with a provided time scheme (`pops.lib.time`); the
+  provided `vlasov_poisson_magnetic_euler` bundles the HyQMOM15 Vlasov-Poisson-magnetic model with a
+  forward-Euler step. Presets compose descriptors only (the user still picks the mesh layout on the
+  Case), so `pops.lib` stays a leaf of the import graph.
+- ADC-524 `docs/design/python_package_layout.md` -- the canonical package map, layering DAG, and the
+  size / flatness budgets for the `python/pops` tree.
 - **ADC-595: named couplings lower through typed presets to the generic coupled source** -- `pops.Ionization` / `Collision` / `ThermalExchange` are now PRESETS (`python/pops/physics/coupling_presets.py`) that emit the SAME formula as a `pops.dsl.CoupledSource` with a DECLARED conservation contract, rather than a hard-coded C++ method each. `System.add_coupling` / `AmrSystem.add_coupling` lower a preset (or a raw `CompiledCoupledSource`) through `System.add_coupling_operator`, so every coupling is registered as a typed operator, inspectable via `sim.coupled_operators()`. `CoupledSource.verify_declared_contract` promotes the former opt-in `verify_conservation` flag to a CHECKED contract: a role declared CONSERVED whose terms do not cancel raises, while a CREATED role (ionization net-sourcing an electron/ion pair) is allowed; `pops.model.coupling_operator_manifest` surfaces the operator (conservation, frequency, capacity utilization) as a JSON-ready manifest row. The presets reproduce the deleted C++ helpers BIT-IDENTICALLY on representative states (the terms are built in the exact C++ associativity, including the per-block gamma read from the block descriptor for the thermal-exchange pressure closure); the only theoretical caveat is the position of `dt` (the kernel applies `dt * S` after evaluating `S`), which can drift a coupling by at most one ULP per step on non-representative values, the same precedent as `strang.py`. New `tests/python/integration/runtime/test_coupling_preset_parity.py` and extended `test_dsl_coupled_source_conservation.py` / `test_dsl_coupled_role_error.py` / `test_coupled_freq_expr.py`.
 - **ADC-595: typed `CouplingOperator` contract for inter-species couplings** -- the runtime coupled-source representation (`CoupledSourceProgram`, an opaque bytecode POD) is now wrapped by a typed contract in the new `include/pops/coupling/source/coupling_operator.hpp` (`ConservationContract`, `FrequencyBound`, `CouplingOperator`, `CouplingOperatorView`). `System::add_coupling_operator` / `AmrSystem::add_coupling_operator` register a coupling with a DECLARED conservation contract (which roles it CONSERVES versus CREATES) that is validated at registration on the host (fail-loud, `validate_coupling_contract`) against the actual output terms before the program is lowered through the SAME `add_coupled_source` path (bit-identical numerics), and record the contracts for a read-only `coupled_operators()` view (a raw `add_coupled_source` registers an "unchecked" entry). The new inspect metadata is a plain `Impl` member the `SystemStepper` never reads (no MockImpl impact). One-time AOT `.so` regeneration is expected (adding the header shifts `POPS_HEADER_SIG`). New `tests/cpp/unit/runtime/test_coupled_source.cpp` missing-block case and the Python coverage below.
 - **ADC-561: the short named-value API `T.value(name, expr)`** -- naming an intermediate SSA value no longer needs the heavy `T.define(U.stage("rhs_star"), expr)`. `python/pops/time/program_solve.py` gains `Program.value(name, expr)` which lowers to the EXACT `program.define(name, expr)` path (an affine combination materializes via `linear_combine`, a `rate(U) == <expr>` equation keeps its right-hand side, any other Value is named in place), so `T.value("rhs_star", U.n + T.dt * R_n)` produces the byte-identical IR as the long `T.define` form and appears in `ir_nodes()` under its name. `U.stage(k)` stays the temporal-VERSION handle only (its docstring now points at `T.value` for free intermediates) and `T.define(U.next, value)` remains the commit door; passing a version handle to `T.value` is refused pointing at `T.define`, and the SSA invariants (single definition, no redefine, use-before-define) are unchanged. New `tests/python/unit/time/test_named_value.py`.

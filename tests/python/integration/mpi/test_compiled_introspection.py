@@ -309,7 +309,7 @@ def test_real_compile_populates_metadata_or_skips():
     cp = _compiled()
     program = cp.program
     try:
-        compiled = pops.compile_problem(time=program, debug=True, force=True)
+        compiled = pops.codegen.compile_problem(time=program, debug=True, force=True)
     except Exception as exc:  # noqa: BLE001 -- no compiler / no Kokkos / compile failure: skip cleanly
         print("  [..] real compile skipped (no toolchain / Kokkos): %s" % str(exc)[:90])
         return

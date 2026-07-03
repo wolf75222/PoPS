@@ -212,11 +212,11 @@ def section_b(t):
 
     # Compile the single-block reference programs (one per block name) and the 2-block program.
     try:
-        comp_a = pops.compile_problem(model=passive_model("pa_ref"),
+        comp_a = pops.codegen.compile_problem(model=passive_model("pa_ref"),
                                      time=single_block_program(t, "fe_a", "a"))
-        comp_b = pops.compile_problem(model=passive_model("pb_ref"),
+        comp_b = pops.codegen.compile_problem(model=passive_model("pb_ref"),
                                      time=single_block_program(t, "fe_b", "b"))
-        comp_ab = pops.compile_problem(model=passive_model("pab"), time=two_block_program(t))
+        comp_ab = pops.codegen.compile_problem(model=passive_model("pab"), time=two_block_program(t))
     except (RuntimeError, ValueError) as exc:  # no compiler / no Kokkos / .so compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 

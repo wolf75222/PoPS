@@ -321,7 +321,7 @@ def _run_section_b(t):
     c = 0.5
     P = _reductions_program(t)
     try:
-        compiled = pops.compile_problem(model=_const_source_model("red_prog", c), time=P)
+        compiled = pops.codegen.compile_problem(model=_const_source_model("red_prog", c), time=P)
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
         return None
@@ -404,7 +404,7 @@ def _run_section_b2(t):
     from pops.physics.facade import Model
     P = _fill_project_program(t)
     try:
-        compiled = pops.compile_problem(model=_const_source_model("fp_prog", 0.0), time=P)
+        compiled = pops.codegen.compile_problem(model=_const_source_model("fp_prog", 0.0), time=P)
     except RuntimeError as exc:
         print("-- (B.2) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
         return None

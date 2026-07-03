@@ -401,7 +401,7 @@ def _run_section_b(t):
         P = t.Program("cs_step_%d" % int(round(theta * 100)))
         lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=theta, tol=_TOL, max_iter=400)
         try:
-            compiled = pops.compile_problem(model=schur_model("cs_prog_%d" % int(round(theta * 100))),
+            compiled = pops.codegen.compile_problem(model=schur_model("cs_prog_%d" % int(round(theta * 100))),
                                            time=P)
         except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
             print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])

@@ -15,6 +15,9 @@ from .cache import pops_cache_dir  # noqa: F401
 from .abi import check_compiled_matches_module  # noqa: F401
 from .compile import compile_problem  # noqa: F401
 from .loader import CompiledProblem  # noqa: F401
+# ADC-523: the public inspectable handle protocol (re-exported as pops.CompiledArtifact); the
+# concrete CompiledProblem loader class stays advanced/internal, reachable only here.
+from .compiled_artifact import CompiledArtifact  # noqa: F401
 from .library_codegen import emit_library_cpp  # noqa: F401
 # Spec 5 (sec.12.2 / 12.3): inert introspection of a compiled artifact (bind arguments + memory).
 from .inspect_compiled import Arguments, MemoryEstimate  # noqa: F401
@@ -44,6 +47,7 @@ __all__ = [
     "check_compiled_matches_module",
     "compile_problem",
     "CompiledProblem",
+    "CompiledArtifact",
     "Arguments", "MemoryEstimate",
     "ScratchPlan", "build_scratch_plan",
     "CompiledReport", "RequirementsReport", "BindReport",

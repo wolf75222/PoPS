@@ -156,7 +156,7 @@ def test_amr_install_program_end_to_end_kokkos():
         return
     m = _euler_model()
     try:
-        compiled = pops.compile_problem(model=m, time=_lie_program(), target="amr_system")
+        compiled = pops.codegen.compile_problem(model=m, time=_lie_program(), target="amr_system")
         block_cm = m.compile(backend="production", target="amr_system")
     except RuntimeError as exc:
         print("skip (no Kokkos to build the AMR .so: %s)" % str(exc)[:120])
@@ -199,7 +199,7 @@ def test_multi_block_amr_program_install_fails_loud():
         return
     m = _euler_model("adc508_2block_model")
     try:
-        compiled = pops.compile_problem(model=m, time=_two_block_program(), target="amr_system")
+        compiled = pops.codegen.compile_problem(model=m, time=_two_block_program(), target="amr_system")
         block_cm = m.compile(backend="production", target="amr_system")
     except RuntimeError as exc:
         print("skip (no Kokkos to build the 2-block AMR .so: %s)" % str(exc)[:120])

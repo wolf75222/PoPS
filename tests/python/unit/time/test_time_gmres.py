@@ -269,7 +269,7 @@ def _run_one(t, pops, np, program, name):
     from pops.physics.facade import Model
 
     try:
-        compiled = pops.compile_problem(model=_passive_model(name + "_prog"), time=program)
+        compiled = pops.codegen.compile_problem(model=_passive_model(name + "_prog"), time=program)
         compiled_model = _passive_model(name + "_block").compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- (B) skipped: could not build the .so: %s --" % str(exc)[:200])

@@ -243,7 +243,7 @@ def test_install_end_to_end_kokkos():
         return
     m = _lorentz_model()
     try:
-        compiled = pops.compile_problem(model=m, time=_lie_program())
+        compiled = pops.codegen.compile_problem(model=m, time=_lie_program())
     except RuntimeError as exc:
         print("skip test_install_end_to_end_kokkos (no Kokkos to build the .so: %s)"
               % str(exc)[:120])
@@ -314,7 +314,7 @@ def test_install_routes_runtime_param_kokkos():
         return
     m = _iso_runtime_model()
     try:
-        compiled = pops.compile_problem(model=m, time=_lie_program())  # compiled.model is the raw Model
+        compiled = pops.codegen.compile_problem(model=m, time=_lie_program())  # compiled.model is the raw Model
     except RuntimeError as exc:
         print("skip test_install_routes_runtime_param_kokkos (no Kokkos to build the .so: %s)"
               % str(exc)[:120])
