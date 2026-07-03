@@ -367,6 +367,13 @@ def _resolve_problem_model(physics):
     via ``.dsl`` -- that is what ``compile_problem(model=...)`` wants. A ``pops.model.Module``
     or a raw ``pops.dsl`` model is forwarded as-is (``compile_problem`` lowers a ``Module``
     itself). ``None`` raises, so a block with no physics never reaches codegen.
+
+    The operator-first :class:`pops.model.Module` is the CANONICAL compile IR (ADC-557): it is the
+    validation + trace authority ``compile_problem`` captures (via ``lower_and_validate``) from the
+    resolved model's ``.module``, so a facade ``Model`` never needs a manual ``m.to_module()`` in the
+    standard flow. The model returned HERE is the one the kernel emitters consume (a dsl model / a
+    facade Model duck-typed by the emitter); the Module IR authority is derived downstream. The
+    Module -> dsl lowering that a raw Module needs stays INTERNAL to ``compile_problem``.
     """
     if physics is None:
         raise ValueError("pops.compile: the block has no physics model to resolve")

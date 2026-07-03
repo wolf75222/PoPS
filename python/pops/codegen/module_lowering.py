@@ -9,6 +9,12 @@ dsl.Model INTERNALLY. That translation -- a re-expression of the SAME physics, n
 StateSpace, an expression body for every codegen operator, at most one field_operator). That IS the
 compile pipeline's one validation (ADC-557): there is no second ``model.check()`` path. Imported
 lazily by ``compile_problem`` to avoid a top-level physics import.
+
+``lower_and_validate`` is the SINGLE entry the compile pipeline calls (ADC-557): it validates the
+model ONCE and returns the ``(emit_model, source_module)`` pair -- the dsl model the kernel emitters
+consume plus the operator-first Module that is the canonical compile-IR authority (the trace shown in
+``compiled.inspect()`` and the hash bind drifts against). A lowering error is remapped onto the
+facade handles the user actually wrote via ``remap_lowering_error``.
 """
 
 
@@ -94,3 +100,69 @@ def _module_to_model(module):
         elif op.kind == "projection":
             m.projection(body)
     return m
+
+
+def remap_lowering_error(exc, facade):
+    """Re-raise a lowering ``ValueError`` citing the user's facade handles, not internal dsl symbols.
+
+    When the user authored a physics :class:`pops.physics.Model` and the internal Module -> dsl
+    lowering (or the model dependency check) fails, the raw message may name a dsl symbol the user
+    never typed. This wraps it with the facade context -- the model name and its declared operator /
+    state handle names -- so the diagnostic points at what the user WROTE (ADC-557 I3). @p facade is
+    the physics Model (or ``None`` for a raw Module, where the message already speaks the user's IR).
+    """
+    if facade is None:
+        raise exc
+    name = getattr(facade, "name", None) or "model"
+    ops = states = ()
+    module = getattr(facade, "module", None)
+    if module is not None:
+        try:
+            ops = tuple(op.name for op in module.operator_registry())
+            states = tuple(module.state_spaces())
+        except Exception:  # noqa: BLE001 -- a best-effort context, never mask the real error
+            ops = states = ()
+    raise ValueError(
+        "pops.compile: lowering the physics model %r failed while validating it for compile.\n"
+        "  %s\n"
+        "Your model declares states %s and operators %s -- check that every quantity the flux / "
+        "sources / field solve reference is declared on the model."
+        % (name, exc, sorted(states) or "(none)", sorted(ops) or "(none)")) from exc
+
+
+def lower_and_validate(model, facade=None):
+    """The SINGLE validate + lower entry of the compile pipeline (ADC-557).
+
+    Validates @p model ONCE and returns ``(emit_model, source_module)``:
+
+      - ``emit_model`` is the model the kernel emitters consume: a raw :class:`pops.model.Module` is
+        lowered to a dsl model via :func:`_module_to_model` (whose embedded checks ARE the validation);
+        a dsl / physics ``Model`` is consumed as-is (byte-identical emit) after its ``check()``
+        dependency validation runs -- the ONE validation, replacing the removed divergent
+        ``model.check()`` compile step.
+      - ``source_module`` is the operator-first :class:`pops.model.Module` -- the canonical compile-IR
+        authority: the raw Module itself, or the dsl / physics model's ``.module`` view. It is what
+        ``compiled.inspect()`` carries as the lowered-module trace and what ``module_hash`` drifts
+        against. ``None`` only for a bare dsl model with no backing Module.
+
+    @p facade is the physics Model the user wrote (for the error remap); pass it when @p model was
+    resolved FROM a facade so a lowering error cites the user's handles (:func:`remap_lowering_error`).
+    A lowering / validation ``ValueError`` is remapped through @p facade and re-raised.
+    """
+    try:
+        from pops import model as _model_pkg
+    except ImportError:
+        _model_pkg = None
+    try:
+        if _model_pkg is not None and isinstance(model, _model_pkg.Module):
+            source_module = model
+            emit_model = _module_to_model(model)
+            return emit_model, source_module
+        # A dsl / physics Model: the ONE dependency validation is its own check() (fail-loud); the
+        # operator-first Module view is the canonical trace authority.
+        if model is not None and hasattr(model, "check"):
+            model.check()
+        source_module = getattr(model, "module", None)
+        return model, source_module
+    except ValueError as exc:
+        remap_lowering_error(exc, facade)

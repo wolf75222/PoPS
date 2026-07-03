@@ -44,6 +44,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   alongside `inspect()` / `requirements()`.
 
 ### Changed
+- ADC-557 `pops.compile` lowers a physics `Model` through its operator-first `pops.model.Module`
+  as the canonical compile IR and validates ONCE via a single `lower_and_validate` step (the
+  divergent standalone `model.check()` compile call is gone). A lowering / dependency error is
+  remapped onto the user's facade handles (the model name, its states and operators), the handle
+  carries the compile-time `module_hash` for post-compile drift detection, and `compiled.inspect()`
+  always carries the lowered-module trace. `m.to_module()` / `m.lower()` remain advanced /
+  inspection-only and are never required in the standard `problem.add_block(model=m)` flow.
 - ADC-558 A compiled artifact is validated-or-absent: every structural check happens during
   `pops.compile(...)` (Program / model validation at emit, the compiler run, and the cache-HIT
   sidecar guard), so a returned `CompiledProblem` is always fully valid and directly bindable. There

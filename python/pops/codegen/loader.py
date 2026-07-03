@@ -38,7 +38,7 @@ class CompiledProblem:
 
     def __init__(self, so_path, program, model, abi_key, cxx, std, libraries=None,
                  problem_hash=None, cache_key=None, compile_command=None, generated_sources=None,
-                 codegen_env=None, module_manifest=None):
+                 codegen_env=None, module_manifest=None, module_hash=None):
         self.so_path = so_path
         self.program = program          # the pops.time.Program that was lowered
         self.model = model              # the physical model (optional; added as a block in the MVP)
@@ -51,6 +51,10 @@ class CompiledProblem:
         self.module_manifest = module_manifest
         if module_manifest is not None and abi_key is not None:
             module_manifest.abi_requirements["abi_key"] = abi_key
+        # The operator-first Module hash (ADC-557 I5): the compile-time identity of the canonical
+        # compile IR, frozen on the handle so a post-compile in-place model mutation can be DETECTED
+        # loudly (parity with the block-name drift check). None for a model with no backing Module.
+        self._module_hash = module_hash
         self.program_name = getattr(program, "name", None)
         self.program_hash = program._ir_hash() if hasattr(program, "_ir_hash") else None
         self.abi_key = abi_key          # cache key: header signature | compiler | C++ standard
@@ -140,6 +144,16 @@ class CompiledProblem:
         gate. Surfaced in :meth:`inspect` so the active env state is never hidden (criterion #47).
         ``None`` for a handle built outside ``compile_problem``."""
         return self._codegen_env
+
+    def module_hash(self):
+        """The compile-time hash of the operator-first Module (ADC-557 I5), or ``None``.
+
+        The stable ``pops.model.Module.module_hash`` captured at compile time: the identity of the
+        canonical compile IR the artifact was built from. bind compares the LIVE model's Module hash
+        against it to DETECT a post-compile in-place mutation loudly (a compiled artifact is frozen at
+        compile; the model object is held by reference, so a later mutation would otherwise silently
+        change what bind lowers). ``None`` for a model with no backing Module."""
+        return self._module_hash
 
     def runtime_param_routes(self):
         """``(per_block, defaults)`` routing the Program's RUNTIME parameters to the per-PROGRAM-block

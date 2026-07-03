@@ -326,32 +326,28 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
         for lib_obj in libraries:
             library_manifests.append(read_library_manifest(lib_obj))
 
-    # A pure operator-first Module lowers to a dsl.Model via the shared codegen. The source Module
-    # is captured BEFORE lowering so its manifest (ADC-585) can be attached to the handle.
-    source_module = None
-    if model is not None:
-        try:
-            from pops import model as _model_pkg
-            if isinstance(model, _model_pkg.Module):
-                source_module = model
-                model = _module_to_model(model)
-        except ImportError:
-            pass  # pops.model unavailable; carry model as-is
-
     if time is None or not hasattr(time, "emit_cpp_program"):
         raise ValueError("compile_problem: time must be an pops.time.Program (got %r)" % (time,))
-    if model is not None and hasattr(model, "check"):
-        model.check()
+
+    # ONE VALIDATION (ADC-557): lower_and_validate is the SINGLE validate + lower step. It validates
+    # the model ONCE (a raw Module's embedded checks, or a dsl / physics Model's check() dependency
+    # validation) and returns the emit model + the operator-first Module (the canonical compile-IR
+    # authority carried as the lowered-module trace). The divergent standalone model.check() compile
+    # step is gone -- there is no second validation path. A lowering error is remapped onto the user's
+    # facade handles. The emit model is byte-identical to before (a Module still lowers via
+    # _module_to_model; a dsl / physics Model is consumed as-is).
+    from pops.codegen.module_lowering import lower_and_validate
+    model, source_module = lower_and_validate(model, facade=model)
 
     # VALIDATED-OR-ABSENT INVARIANT (ADC-558): every structural check runs HERE, before a handle
-    # exists. emit_cpp_program calls program.validate() + _check_lowerable, so a malformed Program /
-    # model raises now; a compiler error raises at _run_compile below; a stale cache HIT raises at
-    # verify_cached_program_so. A CompiledProblem is therefore returned ONLY after validation AND a
-    # successful (or already-cached-and-verified) compile -- both return points below hand back a
-    # fully-valid, directly bindable handle, never a "to-check" one. There is no public check() to
-    # run after compile: the handle's validity is guaranteed by its existence, and the single status
-    # signal is the "compiled, waiting for pops.bind(...)" line in inspect(). A failure NEVER lets a
-    # partially-validated handle escape.
+    # exists. lower_and_validate validated the model above; emit_cpp_program calls program.validate()
+    # + _check_lowerable, so a malformed Program raises now; a compiler error raises at _run_compile
+    # below; a stale cache HIT raises at verify_cached_program_so. A CompiledProblem is therefore
+    # returned ONLY after validation AND a successful (or already-cached-and-verified) compile -- both
+    # return points below hand back a fully-valid, directly bindable handle, never a "to-check" one.
+    # There is no public check() to run after compile: the handle's validity is guaranteed by its
+    # existence, and the single status signal is the "compiled, waiting for pops.bind(...)" line in
+    # inspect(). A failure NEVER lets a partially-validated handle escape.
     src = time.emit_cpp_program(model=model, target=target)
 
     include = include or pops_include()
@@ -383,8 +379,15 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
 
     # The Module manifest (ADC-585): attached on BOTH the cache-hit and fresh-compile path; its
     # abi_key slot is bound in CompiledProblem. None for a bare dsl.Model with no backing Module.
+    # source_module is now the operator-first Module for a facade / dsl Model too (ADC-557), so the
+    # manifest is ALWAYS the operator-first trace on the standard flow.
     from pops.model.manifest import module_manifest_of
     module_manifest = module_manifest_of(source_module if source_module is not None else model)
+    # module_hash (ADC-557 I5): the stable hash of the operator-first Module, carried on the handle so
+    # a post-compile in-place model mutation can be DETECTED loudly by bind (parity with the block
+    # drift check). None for a model with no backing Module.
+    module_hash = source_module.module_hash() if (source_module is not None
+                                                   and hasattr(source_module, "module_hash")) else None
 
     if so_path is None:
         # Fold the feature-key + precision token into the backend slot of the cache file name (the
@@ -409,7 +412,7 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
             compiled = CompiledProblem(so_path, time, model, abi_key, cc, eff_std,
                                        libraries=library_manifests, problem_hash=program_hash,
                                        cache_key=cache_key, codegen_env=cenv,
-                                       module_manifest=module_manifest)
+                                       module_manifest=module_manifest, module_hash=module_hash)
             cenv.run_dumps(compiled)
             return compiled
 
@@ -475,6 +478,7 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
                                libraries=library_manifests, problem_hash=program_hash,
                                cache_key=cache_key, compile_command=compile_command,
                                generated_sources=[gen_src_path] if gen_src_path else [],
-                               codegen_env=cenv, module_manifest=module_manifest)
+                               codegen_env=cenv, module_manifest=module_manifest,
+                               module_hash=module_hash)
     cenv.run_dumps(compiled)
     return compiled
