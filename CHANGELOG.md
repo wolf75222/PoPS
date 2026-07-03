@@ -17,6 +17,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 ## [Unreleased]
 
 ### Added
+- ADC-545 New source-only guard `tests/python/architecture/test_no_legacy_top_level_exports.py`
+  keeps the eight retired names off `pops.__all__` and the root, and asserts each migration message
+  names its advanced path; a runtime companion in `test_public_imports.py` checks the AttributeErrors,
+  the advanced-seam imports, and the typed `Production()` compile-backend default.
 - ADC-547 A single declarative spec-compliance matrix (`tests/python/unit/compliance`) enumerates
   every positive and negative cell in one greppable table: the 8 positive cells assert the chosen
   native route via `native_capability_report()`/`compiled.inspect()`, the 11 negative cells assert a
@@ -79,6 +83,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   alongside `inspect()` / `requirements()`.
 
 ### Changed
+- ADC-545 `pops.compile(...)` now defaults `backend=` to the typed `Production()` descriptor (a bare
+  `backend="production"` string is refused with a `TypeError` naming `Production()`); the produced
+  artifact is byte-identical (the typed descriptor lowers to the same `"production"` token). Updated
+  `README.md` and the `pops.runtime` docstring to teach only the compile/bind front door; dropped
+  `pops.System` / `pops.AmrSystem` from the documented public surface in `docs/VERSIONING.md`.
 - ADC-563 Descriptors freeze after their assembly is sealed, `pops.compile` freezes the `Problem`
   (via `problem.freeze()` -> a `ProblemSnapshot` with a stable `.hash`) and the time `Program`; a
   mutation after freeze raises an explicit error naming the frozen object (no warning, no
@@ -169,6 +178,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `pops.Case`.
 
 ### Removed
+- ADC-545 Retired the legacy top-level runtime exports from `pops.__all__` and the `pops` root:
+  `pops.System`, `pops.AmrSystem`, `pops.SystemConfig`, `pops.AmrSystemConfig`, `pops.CompiledTime`,
+  `pops.compile_library`, `pops.read_library_manifest`, `pops.LibraryManifest`. Each now raises
+  `AttributeError` pointing at the front door (`pops.compile(problem, layout=..., backend=Production())`
+  then `pops.bind(...)`) and, where a seam is still needed, the advanced path:
+  `pops.runtime.system.System` / `.AmrSystem` / `.SystemConfig` / `.AmrSystemConfig`,
+  `pops.time.CompiledTime`, `pops.codegen.compile_library` / `read_library_manifest` /
+  `LibraryManifest`. The runtime engines and the brick-library manifest API are unchanged behind
+  those advanced spellings.
 - ADC-523 Removed `compile_problem` / `CompiledProblem` from `pops.__all__` and the top-level lazy
   attributes; `pops.compile_problem` now raises `AttributeError` pointing at `pops.compile` and the
   advanced `pops.codegen.compile_problem` path.

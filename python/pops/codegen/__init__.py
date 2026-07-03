@@ -15,6 +15,10 @@ from .cache import pops_cache_dir  # noqa: F401
 from .abi import check_compiled_matches_module  # noqa: F401
 from .compile import compile_problem  # noqa: F401
 from .loader import CompiledProblem  # noqa: F401
+# ADC-545: the brick-library manifest API is an advanced/codegen concern (mirrors compile_problem);
+# it left the pops root, so pops.codegen is its one reachable home. library imports only stdlib +
+# pops.descriptors, so this adds no _pops / numpy weight and no cross-layer edge.
+from .library import LibraryManifest, compile_library, read_library_manifest  # noqa: F401
 # ADC-523: the public inspectable handle protocol (re-exported as pops.CompiledArtifact); the
 # concrete CompiledProblem loader class stays advanced/internal, reachable only here.
 from .compiled_artifact import CompiledArtifact  # noqa: F401
@@ -47,6 +51,7 @@ __all__ = [
     "check_compiled_matches_module",
     "compile_problem",
     "CompiledProblem",
+    "LibraryManifest", "compile_library", "read_library_manifest",
     "CompiledArtifact",
     "Arguments", "MemoryEstimate",
     "ScratchPlan", "build_scratch_plan",

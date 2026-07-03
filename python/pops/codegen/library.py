@@ -1,6 +1,6 @@
-"""pops.compile_library -- the Spec 3 brick-library manifest / ABI layer.
+"""pops.codegen.compile_library -- the Spec 3 brick-library manifest / ABI layer.
 
-``pops.compile_library("my_numerics.so", objects=[...], backend=pops.codegen.Production())``
+``pops.codegen.compile_library("my_numerics.so", objects=[...], backend=pops.codegen.Production())``
 collects generated / macro / native brick descriptors (from :mod:`pops.numerics` /
 :mod:`pops.solvers`, the ``@pops.codegen.solvers.solver`` registry, IR macros) into a
 reusable-library MANIFEST: the
@@ -316,7 +316,7 @@ def _read_so_manifest(so_path):
         except AttributeError as err:
             raise ValueError(
                 "library %r does not export %s(); it is not an pops compiled brick library "
-                "(pops.compile_library(..., emit=True))" % (so_path, symbol)) from err
+                "(pops.codegen.compile_library(..., emit=True))" % (so_path, symbol)) from err
         fn.restype = ctypes.c_char_p
         raw = fn()
         return "" if raw is None else raw.decode("utf-8")
@@ -338,11 +338,11 @@ def _read_so_manifest(so_path):
     # HARD ABI / Kokkos guard: never silently load bricks compiled against a different toolchain.
     if module_abi not in ("", "abi_key=unavailable") and so_abi != module_abi:
         raise RuntimeError(
-            "pops.read_library_manifest: library %r was compiled with an ABI key DIFFERENT "
+            "pops.codegen.read_library_manifest: library %r was compiled with an ABI key DIFFERENT "
             "from the loaded _pops module (library %r vs module %r). The bricks were built "
             "against another compiler / C++ standard / header tree / Kokkos build; dlopen-ing "
             "them into a problem would fail with a cryptic symbol error or undefined behavior. "
-            "Recompile the library with pops.compile_library(..., emit=True) using the SAME "
+            "Recompile the library with pops.codegen.compile_library(..., emit=True) using the SAME "
             "toolchain (POPS_KOKKOS_ROOT) that built _pops." % (so_path, so_abi, module_abi))
 
     n = cint("pops_library_brick_count")

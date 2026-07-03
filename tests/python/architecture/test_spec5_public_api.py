@@ -88,10 +88,15 @@ def test_install_is_not_the_public_path():
     # Spec 5 sec.11 (epic ADC-479, item #3): `install` is no longer a public method on
     # System / AmrSystem; the internal seam is `_install_compiled`, and pops.bind is the
     # documented entry. The public surface advertises pops.compile / pops.bind, not install.
-    sim = pops.System()
+    # ADC-545: the engines left the top-level surface -- reach them via the advanced seam.
+    from pops.runtime.system import System, AmrSystem  # ADC-545 advanced runtime seam
+
+    assert not hasattr(pops, "System") and not hasattr(pops, "AmrSystem"), (
+        "pops.System / pops.AmrSystem must be gone from the top-level surface (ADC-545)")
+    sim = System()
     assert not hasattr(sim, "install"), "System.install must be gone (renamed to _install_compiled)"
     assert hasattr(sim, "_install_compiled"), "the internal install seam is _install_compiled"
-    amr = pops.AmrSystem(n=8, L=1.0)
+    amr = AmrSystem(n=8, L=1.0)
     assert not hasattr(amr, "install"), "AmrSystem.install must be gone (renamed to _install_compiled)"
     assert hasattr(amr, "_install_compiled"), "AmrSystem keeps the internal _install_compiled seam"
     # The documented public entry points are pops.compile / pops.bind (not install / install_program).

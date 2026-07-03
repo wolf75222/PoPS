@@ -79,12 +79,10 @@ LEGACY_RUNTIME_SETTERS = {
     "set_state",
 }
 
-ARCH_FRONT_DOOR_ALLOWLIST = {
-    "tests/python/architecture/test_public_imports.py":
-        "existing runtime export smoke; does not construct a target route",
-    "tests/python/architecture/test_spec5_public_api.py":
-        "existing adapter-surface check that install is not public",
-}
+# ADC-545: the two compliance tests that used to construct pops.System / pops.AmrSystem now assert
+# those names are GONE from the top-level surface and reach the engines through the advanced
+# pops.runtime.system import, so they no longer need an allowlist entry here. The list is empty.
+ARCH_FRONT_DOOR_ALLOWLIST = {}
 
 TEXT_SELECTOR_ARGS = {
     "backend",
@@ -427,10 +425,11 @@ def test_amr_route_lowers_through_typed_layout_policy_manifest():
 
     # ADC-589 criterion #34: sim.amr.inspect() is the unified hierarchy/patch/regrid/limitations
     # view. Building a live AmrSystem needs the native extension; skip cleanly without it (the
-    # manifest assertions above already run source-only).
+    # manifest assertions above already run source-only). ADC-545: the engine left the top-level
+    # surface, so reach it through the advanced pops.runtime.system seam.
     try:
-        import pops
-        sim = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=4)
+        from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
+        sim = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=4)
     except Exception as exc:  # pragma: no cover - native extension unavailable in this build.
         pytest.skip("AmrSystem construction unavailable: %s" % exc)
 

@@ -16,20 +16,16 @@ The lower layers (ir / model / physics / time / lib / codegen) are numpy-free un
 and never import this package. The runtime methods that need the codegen / physics / dsl layers
 import them LAZILY in-method, both to avoid a cycle and to keep ``import pops`` numpy-free.
 
-Example::
-
-    import pops
-    sim = pops.System(n=192, periodic=False)
-    sim.add_block(
-        "ne",
-        model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                        source=pops.NoSource(), elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
-        spatial=pops.Spatial(minmod=True), time=pops.Explicit())
-    sim.set_poisson(bc="dirichlet", wall="circle", wall_radius=0.40)
-    sim.set_density("ne", ne_numpy)
-    sim.step_cfl(0.4)
+This layer is INTERNAL: the public front door is the typed compile / bind flow
+(``pops.compile(problem, layout=..., backend=Production())`` then ``pops.bind(compiled, ...)``).
+``System`` / ``AmrSystem`` are the engines ``pops.bind`` wires; they left the ``pops`` root
+(ADC-545) and are reached, for advanced / native tests only, as
+``pops.runtime.system.System`` / ``pops.runtime.system.AmrSystem`` (re-exported here too).
 """
 from pops._bootstrap import ModelSpec  # noqa: F401  (legacy native-bridge POD, quarantined from the pops root by ADC-585)
+# ADC-545: the engines are the advanced seam behind pops.bind; expose them here (and via
+# pops.runtime.system) so advanced tests reach them without the removed top-level pops.System.
+from pops.runtime.system import System, AmrSystem  # noqa: F401  (advanced runtime seam)
 from pops.runtime.profile import PerformanceSummary, Profile  # noqa: F401
 from pops.runtime.inspection import RuntimeInspectionReport  # noqa: F401
 from pops.runtime.defaults import numerical_defaults_report  # noqa: F401
