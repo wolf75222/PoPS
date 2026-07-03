@@ -100,6 +100,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   alongside `inspect()` / `requirements()`.
 
 ### Changed
+- ADC-629 The serial C++ gate narrows a pure `include/pops/` header change by include-graph impact:
+  a shared source-parse of the `#include <pops/...>` graph (`scripts/ci_include_graph.py`) selects
+  only the suites whose sources transitively include a changed header, instead of the whole ~175
+  serial suites. A header in the closure of the heavy shared translation units, seam templates,
+  codegen emitter or `tests/cpp/support` selects every suite (soundness), and any anomaly (a changed
+  header absent from the tree, a mixed non-header change, or an unreadable file) fails open to the
+  full selection; the `ci.yml` contract is unchanged (fewer targets in the same `cpp_targets` step).
 - ADC-545 `pops.compile(...)` now defaults `backend=` to the typed `Production()` descriptor (a bare
   `backend="production"` string is refused with a `TypeError` naming `Production()`); the produced
   artifact is byte-identical (the typed descriptor lowers to the same `"production"` token). Updated
