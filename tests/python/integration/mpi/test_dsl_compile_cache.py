@@ -36,6 +36,9 @@ from pops.ir.ops import sqrt
 from pops.physics.facade import Model
 
 from tests.python.support.requirements import repo_include
+# Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
+# global 300 s process-isolation budget (ADC-627, same class as test_compile_cache_backend).
+POPS_PROCESS_TIMEOUT = 900
 INCLUDE = repo_include()
 GAMMA = 1.6667  # gamma NON STANDARD (5/3)
 

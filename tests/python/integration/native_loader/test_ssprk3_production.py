@@ -38,6 +38,10 @@ from tests.python.support.requirements import (
     skip_process_test,
 )
 
+# Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
+# global 300 s process-isolation budget (ADC-627, same class as test_compile_cache_backend).
+POPS_PROCESS_TIMEOUT = 900
+
 fails = 0
 
 
