@@ -38,14 +38,14 @@ def test_brick_availability_is_explainable_for_a_planned_brick():
     # A catalogued-but-not-native brick reports an explainable 'no' with the typed alternative.
     planned = BrickDescriptor("Planned", "native", category="riemann", native_id="",
                               available=False)
-    status = planned.availability()
+    status = planned.available()
     assert isinstance(status, Availability)
     assert status.status == "no"
     assert status.reason
     assert status.alternatives  # points at pops.inspect_capabilities()
     # A native brick is available.
     native = BrickDescriptor("HLL", "native", category="riemann", native_id="pops::HLLFlux")
-    assert native.availability().ok
+    assert native.available().ok
 
 
 def test_availability_never_returns_a_bare_bool_on_the_descriptor_family():

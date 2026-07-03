@@ -42,7 +42,7 @@ def test_krylov_native_ids_and_schemes():
     for d in (krylov.CG(max_iter=200), krylov.GMRES(max_iter=200),
               krylov.BiCGStab(max_iter=200), krylov.Richardson(max_iter=200)):
         assert d.brick_type == "native"
-        assert d.available
+        assert d.available().ok
         assert d.category == "solver"
 
 
@@ -106,7 +106,7 @@ def test_krylov_declare_amr_route_capabilities():
 
 def test_nonlinear_are_planned():
     for d in (nonlinear.Newton(), nonlinear.FixedPoint()):
-        assert d.available is False
+        assert d.available().ok is False
         assert d.native_id == ""
         assert d.category == "solver"
     assert nonlinear.Newton().scheme == "newton"
@@ -290,7 +290,7 @@ def test_preconditioners_catalog():
     assert pre.GeometricMG().native_id == "pops::GeometricMG"
     assert pre.GeometricMG().category == "preconditioner"
     for d in (pre.Identity(), pre.Jacobi(), pre.BlockJacobi()):
-        assert d.available is False
+        assert d.available().ok is False
         assert d.native_id == ""
 
 
@@ -321,7 +321,7 @@ def test_lib_solvers_shim_is_removed():
     assert ns.GMRES(max_iter=200).scheme == "gmres"
     assert ns.CG(max_iter=200).native_id == "pops::cg_solve"
     assert ns.Schur().native_id == "pops::SchurCondensationOperator"
-    assert ns.Newton().available is False
+    assert ns.Newton().available().ok is False
     assert solvers.preconditioners.GeometricMG().native_id == "pops::GeometricMG"
 
     # The custom-solver authoring / generation DSL is internal / experimental under

@@ -72,6 +72,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   consumer reads it through the typed accessors (`supports(tag)` / `check(context)` / the
   `LoweredDescriptor` attributes) or `to_dict()`; the dict-emulation crutch is removed and fenced by
   `tests/python/architecture/test_descriptor_protocol_family.py`.
+- ADC-625 `BrickDescriptor` availability is the explained `available(context) -> Availability` route
+  (matching the `DescriptorProtocol` member the `Descriptor` base exposes); the public `.available`
+  bool attribute is removed, so there is one source of truth. `inspect()["available"]` and the
+  capability-matrix / manifest entries derive from that route. Newton / FixedPoint keep refusing with
+  a reason.
 
 ### Removed
 - ADC-523 Removed `compile_problem` / `CompiledProblem` from `pops.__all__` and the top-level lazy
