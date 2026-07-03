@@ -6,26 +6,21 @@ aux field a lowered operator requires but the state omits, and an ABI / Kokkos /
 manifest mismatch. Every refusal is a HARD error with precise context; there is NO Python-runtime
 fallback when the native load fails (that decision lives in :mod:`pops.codegen.orchestration`).
 
-This module is the PURE core of those gates: each function takes plain metadata (the compiled
-artifact's manifest / arguments, the mesh layout, the declared runtime params, the supplied
-initial state) and returns a list of one actionable refusal line per violation (empty list = ok).
-It imports no ``_pops`` and no numpy at module scope -- an array is inspected through its duck-typed
-``.shape`` / ``.dtype`` attributes -- so the whole refusal surface is host-testable with plain dicts
-and needs no engine. :func:`aggregate_bind_refusals` folds the per-gate lines into one error.
+This module is the PURE core of those gates: each function takes plain metadata (manifest /
+arguments / layout / declared params / supplied state) and returns one actionable refusal line per
+violation (empty list = ok). No ``_pops`` and no numpy at module scope (arrays are duck-typed via
+``.shape`` / ``.dtype``), so the whole refusal surface is host-testable with plain dicts;
+:func:`aggregate_bind_refusals` folds the per-gate lines into one error.
 
-Per the phase-6 cross-stream contract (decisions 4-5): the per-block ghost depth and the ABI /
-Kokkos / MPI feature tokens come from the compiled MANIFEST (:meth:`CompiledProblem.manifest`). A
-FRESH artifact always carries them; a manifest that lacks a field it must carry is refused as
-ABI-incomplete / ABI-unverifiable (fail loud), never skipped silently. A feature the runtime and the
-manifest BOTH report is compared; a definite mismatch is a hard refusal.
+Per the phase-6 cross-stream contract (decisions 4-5): per-block ghost depth and the ABI / Kokkos /
+MPI feature tokens come from the compiled MANIFEST; a fresh artifact always carries them, and a
+manifest lacking a field it must carry is refused as ABI-incomplete (fail loud, never skipped).
 
-The ABI comparison is LIKE-WITH-LIKE: the two sides spell the same identity in DIFFERENT
-representations (the artifact key is ``<headers-sha>|<cxx>|<std>``; the runtime key is the env
-string ``compiler=..;std=202002L;headers=<sha>;kokkos=..;stdlib=..``), so the gate parses BOTH into
-components and compares only the comparable ones -- the headers signature (the real header-ABI
-anchor) and the normalized C++ standard (``c++20`` == ``202002L``). An incomparable token (the
-compiler path vs its version string) is never compared, and a string token spelled ``unknown`` is an
-honest-unknown, skipped like ``None`` -- never refused, never a fallback.
+The ABI comparison is LIKE-WITH-LIKE: the artifact key (``<headers-sha>|<cxx>|<std>``) and the
+runtime env key (``compiler=..;std=..;headers=..;kokkos=..;stdlib=..``) are parsed into components
+and only the comparable ones are compared -- the headers signature (the real header-ABI anchor) and
+the normalized C++ standard (``c++20`` == ``202002L``). Incomparable tokens (compiler path vs
+version) are never compared; a token spelled ``unknown`` is an honest-unknown, skipped like ``None``.
 """
 import re
 
