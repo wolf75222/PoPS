@@ -25,6 +25,8 @@ try:
 
     import pops
     from pops import time as adctime
+    from pops.numerics.reconstruction import FirstOrder
+    from pops.numerics.riemann import Rusanov
 except Exception as exc:  # noqa: BLE001
     _skip("pops/numpy unavailable: %s" % exc)
 
@@ -73,8 +75,8 @@ if not hasattr(sim, "install_program"):
     print("-- install skipped: _pops lacks the install_program binding --")
 else:
     sim.add_block("ions", transport_model(),
-                  spatial=pops.FiniteVolume(limiter=pops.numerics.reconstruction.FirstOrder(),
-                                            riemann=pops.numerics.riemann.Rusanov()),
+                  spatial=pops.FiniteVolume(limiter=FirstOrder(),
+                                            riemann=Rusanov()),
                   time=pops.Explicit(method="euler"))
     sim.set_poisson("charge_density", "geometric_mg")
     n = 24
