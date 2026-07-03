@@ -75,7 +75,7 @@ class _AmrSystemProgram:
         explicit cfl= uses it (step_cfl routes the per-block CFL dt through the installed program)."""
         from pops.time.program import CompiledTime
         if not isinstance(cadence, CompiledTime):
-            raise TypeError("pops.bind(cadence=): expected a pops.CompiledTime(substeps=, stride=), "
+            raise TypeError("pops.bind(cadence=): expected a pops.time.CompiledTime(substeps=, stride=), "
                             "got %r" % type(cadence).__name__)
         if isinstance(cadence.cfl, (int, float)):
             self._program_cadence_cfl = float(cadence.cfl)

@@ -14,7 +14,7 @@ class PythonFlux:
     OUT of the GPU/MPI hot path: this is a pure HOST path (numpy), it NEVER goes through a Kokkos
     kernel. For production (GPU/MPI), compose a COMPILED flux (pops.CompressibleFlux brick,
     pops.ExB...). PythonFlux formalizes the pattern of the custom_scheme case: iterate quickly on a
-    novel flux without recompiling (pops.System serving as Poisson oracle if needed).
+    novel flux without recompiling (the advanced System seam serving as Poisson oracle if needed).
 
     NON-PRODUCTION / TESTS-ONLY: reachable as ``pops.experimental.PythonFlux`` for residual
     prototyping in tests; it is intentionally absent from the public ``pops`` surface.
