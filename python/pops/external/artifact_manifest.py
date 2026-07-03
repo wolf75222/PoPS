@@ -51,7 +51,10 @@ class CompiledArtifactManifest:
       - ``aux_required``: the static aux inputs the model declares.
       - ``params_const`` / ``params_runtime``: the const (frozen at compile) and runtime (settable
         at bind) parameter names.
-      - ``ghost_depth``: the halo depth the artifact assumes.
+      - ``ghost_depth``: the halo depth the artifact assumes (a single conservative scalar).
+      - ``ghost_depth_by_block``: the halo depth keyed by block name (ADC-536); the bind stream
+        validates each block's initial-state ghosts against it. ``{}`` for a degraded handle that
+        exposes no bind table.
       - ``field_outputs``: the elliptic / diagnostic field outputs the Program records.
       - ``supports_uniform`` / ``supports_amr`` / ``supports_mpi`` / ``supports_gpu``: the layout /
         backend capability flags, read from the model's backend capability dict (``None`` when the
@@ -69,6 +72,7 @@ class CompiledArtifactManifest:
     def __init__(self, *, model_name=None, abi_key=None, abi_version=None,
                  required_headers_sig=None, blocks=None, variables=None, roles=None,
                  aux_required=None, params_const=None, params_runtime=None, ghost_depth=None,
+                 ghost_depth_by_block=None,
                  field_outputs=None, supports_uniform=None, supports_amr=None, supports_mpi=None,
                  supports_gpu=None, supports_stride=None, supports_partial_imex_mask=None,
                  supports_named_fields=None, native_entrypoints=None, dimension=2,
@@ -85,6 +89,10 @@ class CompiledArtifactManifest:
         self.params_const = list(params_const or [])
         self.params_runtime = list(params_runtime or [])
         self.ghost_depth = ghost_depth
+        # Per-block halo depth (ADC-536 / CONTRACTS6 decision 4): the bind stream validates each
+        # block's initial-state ghosts against this map. A plain {name: depth} dict, serializable
+        # so the ADC-564 typed-report conversion wraps it unchanged.
+        self.ghost_depth_by_block = dict(ghost_depth_by_block or {})
         self.field_outputs = list(field_outputs or [])
         # supports_* flags: True / False when GENUINELY known, None when the C++ does not emit it.
         self.supports_uniform = supports_uniform
@@ -138,6 +146,7 @@ class CompiledArtifactManifest:
                "aux_required": list(self.aux_required),
                "params_const": list(self.params_const),
                "params_runtime": list(self.params_runtime), "ghost_depth": self.ghost_depth,
+               "ghost_depth_by_block": dict(self.ghost_depth_by_block),
                "field_outputs": list(self.field_outputs),
                "dimension": self.dimension,
                "amr_refinement_ratio": self.amr_refinement_ratio,
@@ -175,7 +184,8 @@ class CompiledArtifactManifest:
         # The constructor keyword arguments (every stored field, including the supports_* flags).
         ctor_keys = set(_SUPPORTS_FLAGS) | {
             "model_name", "abi_key", "abi_version", "required_headers_sig", "blocks", "variables",
-            "roles", "aux_required", "params_const", "params_runtime", "ghost_depth", "field_outputs",
+            "roles", "aux_required", "params_const", "params_runtime", "ghost_depth",
+            "ghost_depth_by_block", "field_outputs",
             "native_entrypoints", "dimension", "amr_refinement_ratio", "precision", "real_bytes",
             "communicator"}
         unknown = sorted(set(data) - ctor_keys - derived)
@@ -202,7 +212,9 @@ class CompiledArtifactManifest:
         lines.append("  aux_required : %s" % (", ".join(self.aux_required) or "(none)"))
         lines.append("  params       : const=[%s] runtime=[%s]"
                      % (", ".join(self.params_const), ", ".join(self.params_runtime)))
-        lines.append("  ghost_depth  : %s" % self.ghost_depth)
+        by_block = ("; ".join("%s=%s" % (b, d) for b, d in sorted(self.ghost_depth_by_block.items()))
+                    if self.ghost_depth_by_block else "(none)")
+        lines.append("  ghost_depth  : %s (by block: %s)" % (self.ghost_depth, by_block))
         lines.append("  field_outputs: %s" % (", ".join(self.field_outputs) or "(none)"))
         lines.append("  runtime      : dimension=%s amr_refinement_ratio=%s precision=%s "
                      "real_bytes=%s communicator=%s custom_communicator=%s"
@@ -295,9 +307,11 @@ def build_compiled_manifest(compiled):
         params_runtime = sorted(n for n, s in args.params.items() if s.get("kind") == "runtime")
         field_outputs = sorted(set(args.solvers) | set(args.outputs))
         ghost_depth = args.layout_runtime.get("ghost_depth")
+        ghost_depth_by_block = dict(args.layout_runtime.get("ghost_depth_by_block") or {})
     else:
         blocks = aux_required = params_const = params_runtime = field_outputs = []
         ghost_depth = None
+        ghost_depth_by_block = {}
 
     variables = list(getattr(model, "cons_names", []) or [])
     raw_roles = getattr(model, "cons_roles", None)
@@ -311,7 +325,8 @@ def build_compiled_manifest(compiled):
         model_name=model_name, abi_key=abi_key, abi_version=None,
         required_headers_sig=_headers_sig(abi_key), blocks=blocks, variables=variables,
         roles=roles, aux_required=aux_required, params_const=params_const,
-        params_runtime=params_runtime, ghost_depth=ghost_depth, field_outputs=field_outputs,
+        params_runtime=params_runtime, ghost_depth=ghost_depth,
+        ghost_depth_by_block=ghost_depth_by_block, field_outputs=field_outputs,
         supports_stride=None, supports_partial_imex_mask=None, supports_named_fields=None,
         native_entrypoints=[], dimension=runtime_facts["dimension"],
         amr_refinement_ratio=runtime_facts["amr_refinement_ratio"],
@@ -353,6 +368,8 @@ def apply_native_manifest(manifest, native):
         manifest.abi_version = native["abi_version"]
     if "ghost_depth" in native and manifest.ghost_depth is None:
         manifest.ghost_depth = native["ghost_depth"]
+    if native.get("ghost_depth_by_block") and not manifest.ghost_depth_by_block:
+        manifest.ghost_depth_by_block = dict(native["ghost_depth_by_block"])
     for field in _NATIVE_BOOL_FIELDS:
         if field in native:
             setattr(manifest, field, bool(native[field]))

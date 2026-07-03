@@ -428,23 +428,23 @@ class Model(_MultiSpeciesMixin):
         return self._dsl.check()
 
     def lower(self):
-        """Lower this writing facade to its :class:`pops.model.Module` (Spec 5 sec.11).
+        """Lower this writing facade to its :class:`pops.model.Module` (ADVANCED / inspection).
 
         ``pops.physics.Model`` is an AUTHORING facade: it writes the physics (state, primitives,
         flux, sources, field solves) and lowers to the operator-first IR. It does NOT compile.
-        The documented flow is::
+        The STANDARD flow needs NO manual lower (ADC-557) -- add the model and compile::
 
             physics_model = pops.physics.Model(...)
-            model = physics_model.lower()              # -> pops.model.Module
-            compiled = pops.compile(case_with(model), backend=pops.codegen.Production())
+            problem.add_block("blk", model=physics_model)
+            compiled = pops.compile(problem, layout=..., backend=pops.codegen.Production())
 
-        Single-species: the dsl-derived Module (one StateSpace). Multi-species: the multi-block
-        Module this model assembled directly (N StateSpaces + ``coupled_rate`` + a multi-block
-        field operator). Identical to :pyattr:`module`; ``lower`` is the Spec 5 sec.11 name."""
+        ``pops.compile`` captures the operator-first Module and validates ONCE internally; ``lower``
+        (and its ``to_module`` alias) stay ADVANCED / inspection-only. Identical to :pyattr:`module`."""
         return self.module
 
-    # Spec 5 sec.11 alias: physics.Model.to_module() == physics.Model.lower(). Both return the
-    # pops.model.Module that pops.compile / pops.codegen.compile_problem(model=...) accepts.
+    # Spec 5 sec.11 alias: physics.Model.to_module() == physics.Model.lower(). ADVANCED / inspection
+    # only (ADC-557): the standard problem.add_block(model=m) -> pops.compile flow captures the Module
+    # itself; neither is REQUIRED (pops.compile does the lowering once, internally).
     to_module = lower
 
     # --- introspection ---

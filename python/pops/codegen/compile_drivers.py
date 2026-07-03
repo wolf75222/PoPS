@@ -37,8 +37,14 @@ from pops.codegen.cache import (
     _backend_distinct_so_path,
     _record_so_backend,
     _registry_cache_key,
+    _precision_cache_key,
     _native_mpi_flags,
     _dsl_optflags,
+)
+from pops.codegen.compile_provenance import (
+    build_debug_banner,
+    verify_cached_program_so,
+    write_cachekey_sidecar,
 )
 from pops.codegen.abi import _abi_key_python
 from pops.codegen.compile_emit import (
@@ -50,6 +56,9 @@ from pops.codegen.compile_emit import (
 )
 from pops.codegen.backends import lower_backend
 from pops.codegen._compile_command_redact import _redact_compile_command  # noqa: F401
+# _module_to_model moved to module_lowering.py (500-line budget); re-exported here so
+# ``from pops.codegen.compile_drivers import _module_to_model`` (and pops.codegen.compile) is unchanged.
+from pops.codegen.module_lowering import _module_to_model  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -262,94 +271,6 @@ def compile_model(model, so_path=None, include=None, backend="auto", name=None, 
 
 
 # ---------------------------------------------------------------------------
-# _module_to_model -- lower a pops.model.Module to a dsl.Model
-# ---------------------------------------------------------------------------
-
-def _module_to_model(module):
-    """Lower a :class:`pops.model.Module` to a :class:`pops.dsl.Model`
-    (Spec 2, S2-11), reusing the dsl codegen engine -- a translation, NOT a
-    second backend.  The Module's typed operators carry dsl ``Expr`` bodies;
-    each is mapped to the dsl method of its kind.
-
-    Imported lazily by compile_problem to avoid a top-level physics import.
-    """
-    # Import the model facade + aux constants lazily here (called only at
-    # compile_problem time, not at import time).
-    from pops.physics.facade import Model  # noqa: PLC0415
-    from pops.physics.aux import AUX_CANONICAL  # noqa: PLC0415
-    states = module.state_spaces()
-    if len(states) != 1:
-        raise ValueError("compile_problem: a Module must declare exactly one StateSpace to compile "
-                         "(got %s)" % sorted(states))
-    state = next(iter(states.values()))
-    m = Model(module.name)
-    _spec_role = {"density": "Density", "momentum_x": "MomentumX", "momentum_y": "MomentumY",
-                  "momentum_z": "MomentumZ", "energy": "Energy", "pressure": "Pressure",
-                  "velocity_x": "VelocityX", "velocity_y": "VelocityY", "velocity_z": "VelocityZ",
-                  "temperature": "Temperature"}
-    roles = None
-    if state.roles:
-        roles = [_spec_role.get(state.roles.get(c)) for c in state.components]
-        if all(r is None for r in roles):
-            roles = None
-    cvars = m.conservative_vars(*state.components, roles=roles)
-    m.primitive_vars(*cvars)
-    m.conservative_from(list(cvars))
-    for p in module.params().values():
-        m.param(p.name, p.default)  # (name, value) shorthand -> a const param (no kind= string)
-    declared = set()
-
-    def _declare_aux(nm):
-        if nm in declared:
-            return
-        declared.add(nm)
-        if nm in AUX_CANONICAL:
-            m.aux(nm)
-        else:
-            m.aux_field(nm)
-
-    for fs in module.field_spaces().values():
-        for comp in fs.components:
-            _declare_aux(comp)
-    for a in module.aux().values():
-        _declare_aux(a.name)
-    if module._eigenvalues is not None:
-        m.eigenvalues(x=module._eigenvalues["x"], y=module._eigenvalues["y"])
-    _CODEGEN_KINDS = ("grid_operator", "local_source", "local_linear_operator", "field_operator",
-                      "projection")
-    n_field_ops = 0
-    for op in module.operator_registry():
-        body = op.body
-        if op.kind in _CODEGEN_KINDS and (body is None or callable(body)):
-            raise ValueError(
-                "compile_problem: operator %r (%s) has no IR body; a compilable Module operator "
-                "needs an expression body (Module.operator(..., expr=...))" % (op.name, op.kind))
-        if op.kind == "grid_operator":
-            if op.name in ("flux", "flux_default"):
-                m.flux(x=body["x"], y=body["y"])
-            else:
-                m.flux_term(op.name, x=body["x"], y=body["y"])
-        elif op.kind == "local_source":
-            m.source_term(op.name, body)
-        elif op.kind == "local_linear_operator":
-            m.linear_source(op.name, body)
-        elif op.kind == "field_operator":
-            n_field_ops += 1
-            if n_field_ops > 1:
-                raise ValueError(
-                    "compile_problem: a Module currently supports one field_operator (the default "
-                    "elliptic solve); multiple solved fields are deferred (operator %r)" % op.name)
-            m.elliptic_rhs(body)
-        elif op.kind == "local_rate":
-            low = op.lowering
-            m.rate_operator(op.name, flux=low.get("flux", True),
-                            sources=low.get("sources"), fluxes=low.get("fluxes"))
-        elif op.kind == "projection":
-            m.projection(body)
-    return m
-
-
-# ---------------------------------------------------------------------------
 # compile_problem -- compile a pops.time.Program into a problem.so
 # ---------------------------------------------------------------------------
 
@@ -405,23 +326,28 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
         for lib_obj in libraries:
             library_manifests.append(read_library_manifest(lib_obj))
 
-    # A pure operator-first Module lowers to a dsl.Model via the shared codegen. The source Module
-    # is captured BEFORE lowering so its manifest (ADC-585) can be attached to the handle.
-    source_module = None
-    if model is not None:
-        try:
-            from pops import model as _model_pkg
-            if isinstance(model, _model_pkg.Module):
-                source_module = model
-                model = _module_to_model(model)
-        except ImportError:
-            pass  # pops.model unavailable; carry model as-is
-
     if time is None or not hasattr(time, "emit_cpp_program"):
         raise ValueError("compile_problem: time must be an pops.time.Program (got %r)" % (time,))
-    if model is not None and hasattr(model, "check"):
-        model.check()
 
+    # ONE VALIDATION (ADC-557): lower_and_validate is the SINGLE validate + lower step. It validates
+    # the model ONCE (a raw Module's embedded checks, or a dsl / physics Model's check() dependency
+    # validation) and returns the emit model + the operator-first Module (the canonical compile-IR
+    # authority carried as the lowered-module trace). The divergent standalone model.check() compile
+    # step is gone -- there is no second validation path. A lowering error is remapped onto the user's
+    # facade handles. The emit model is byte-identical to before (a Module still lowers via
+    # _module_to_model; a dsl / physics Model is consumed as-is).
+    from pops.codegen.module_lowering import lower_and_validate
+    model, source_module = lower_and_validate(model, facade=model)
+
+    # VALIDATED-OR-ABSENT INVARIANT (ADC-558): every structural check runs HERE, before a handle
+    # exists. lower_and_validate validated the model above; emit_cpp_program calls program.validate()
+    # + _check_lowerable, so a malformed Program raises now; a compiler error raises at _run_compile
+    # below; a stale cache HIT raises at verify_cached_program_so. A CompiledProblem is therefore
+    # returned ONLY after validation AND a successful (or already-cached-and-verified) compile -- both
+    # return points below hand back a fully-valid, directly bindable handle, never a "to-check" one.
+    # There is no public check() to run after compile: the handle's validity is guaranteed by its
+    # existence, and the single status signal is the "compiled, waiting for pops.bind(...)" line in
+    # inspect(). A failure NEVER lets a partially-validated handle escape.
     src = time.emit_cpp_program(model=model, target=target)
 
     include = include or pops_include()
@@ -436,18 +362,39 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
     # The route registry / report vocabulary component (ADC-599) enters the key too: a native
     # route change invalidates cached Programs exactly like model .so files. Numerics DESCRIPTOR
     # changes are already covered by program_hash (they change the emitted source).
+    # ADC-536: the native Kokkos/MPI feature-key and the precision token join the PROGRAM cache key
+    # (the model .so path already folds the feature-key via _native_feature_key; the program key
+    # omitted both). A SERIAL-stub .so must not be reused on an MPI module, a .so built against a
+    # different Kokkos must be a MISS, and a future precision switch must not reuse a double .so.
+    # These tokens were NOT in the key before, so adding them is a ONE-TIME cache invalidation (the
+    # .so BYTES are unchanged -- the emitted source is byte-identical; only the keyed file name and
+    # the manifest cache_key move once). The same tokens enter _cache_so_path below.
+    feature_key = _native_feature_key()
+    precision_key = _precision_cache_key()
     program_hash = hashlib.sha256(src.encode()).hexdigest()
-    cache_key = hashlib.sha256(("%s|%s|program-production|%s|%s"
-                                % (program_hash, abi_key, target, _registry_cache_key()))
+    cache_key = hashlib.sha256(("%s|%s|program-production|%s|%s|%s|%s"
+                                % (program_hash, abi_key, target, _registry_cache_key(),
+                                   feature_key, precision_key))
                                .encode()).hexdigest()
 
     # The Module manifest (ADC-585): attached on BOTH the cache-hit and fresh-compile path; its
     # abi_key slot is bound in CompiledProblem. None for a bare dsl.Model with no backing Module.
+    # source_module is now the operator-first Module for a facade / dsl Model too (ADC-557), so the
+    # manifest is ALWAYS the operator-first trace on the standard flow.
     from pops.model.manifest import module_manifest_of
     module_manifest = module_manifest_of(source_module if source_module is not None else model)
+    # module_hash (ADC-557 I5): the stable hash of the operator-first Module, carried on the handle so
+    # a post-compile in-place model mutation can be DETECTED loudly by bind (parity with the block
+    # drift check). None for a model with no backing Module.
+    module_hash = source_module.module_hash() if (source_module is not None
+                                                   and hasattr(source_module, "module_hash")) else None
 
     if so_path is None:
-        so_path = _cache_so_path(program_hash, abi_key, "program-production", target,
+        # Fold the feature-key + precision token into the backend slot of the cache file name (the
+        # model .so path folds the feature-key the same way), so the keyed .so is distinct once the
+        # tokens are non-default -- a one-time re-key, the .so bytes unchanged (ADC-536).
+        cache_backend = "program-production;%s;%s" % (feature_key, precision_key)
+        so_path = _cache_so_path(program_hash, abi_key, cache_backend, target,
                                  getattr(time, "name", "problem"))
         # POPS_CODEGEN_DIR (sec.12.4, #47): redirect the out-of-source .so (and any kept source /
         # dump) into the requested directory, keeping the collision-free cache file name. An explicit
@@ -456,11 +403,16 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
             os.makedirs(cenv.codegen_dir, exist_ok=True)
             so_path = os.path.join(cenv.codegen_dir, os.path.basename(so_path))
         if not force and os.path.isfile(so_path):
+            # STALE / ABI GUARD (ADC-536, CONTRACTS6 decision 1): a cache HIT reuses the .so WITHOUT
+            # recompiling, so nothing else re-checks it against the current keys. verify the sidecar
+            # <so>.cachekey matches the freshly computed cache_key / abi_key; a missing sidecar (a
+            # legacy .so) or any mismatch RAISES (never a silent warn-and-reuse).
+            verify_cached_program_so(so_path, cache_key=cache_key, abi_key=abi_key)
             cenv.log("compile_problem: cache HIT -> %s" % so_path)
             compiled = CompiledProblem(so_path, time, model, abi_key, cc, eff_std,
                                        libraries=library_manifests, problem_hash=program_hash,
                                        cache_key=cache_key, codegen_env=cenv,
-                                       module_manifest=module_manifest)
+                                       module_manifest=module_manifest, module_hash=module_hash)
             cenv.run_dumps(compiled)
             return compiled
 
@@ -471,14 +423,11 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
     gen_src_path = os.path.splitext(so_path)[0] + ".cpp" if cenv.keep_generated else None
     with tempfile.TemporaryDirectory() as tmp:
         cpp = os.path.join(tmp, "problem.cpp")
+        # The compiler ALWAYS reads the banner-free src (the temp .cpp). The debug banner rides ONLY
+        # the persisted sidecar below, so the .so bytes and the cache key are byte-identical whether
+        # debug is on or off (ADC-536 R5).
         with open(cpp, "w") as f:
             f.write(src)
-        if gen_src_path:
-            try:
-                with open(gen_src_path, "w") as f:
-                    f.write(src)
-            except OSError:
-                gen_src_path = None
         flags = ["-shared", "-fPIC", "-std=" + eff_std, *optflags,
                  "-DPOPS_HEADER_SIG=\"%s\"" % sig, *cflags]
         cmd = [cc, *flags, "-I", include, cpp, "-o", so_path, *lflags]
@@ -487,13 +436,49 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
         # (or "<generated>") rather than the vanished temp path; redact secrets/env in the tokens.
         compile_command = _redact_compile_command(cmd, tmp_cpp=cpp,
                                                   gen_src=gen_src_path or "<generated>")
+        # Persist the sidecar .cpp with a leading provenance banner (ADC-536): serialized IR, hashes,
+        # flags, toolchain and the redacted command. Written to gen_src_path ONLY, never to cpp -- so
+        # the compiled bytes stay banner-free. Now that compile_command is known the banner is complete.
+        if gen_src_path:
+            banner = build_debug_banner(
+                time, model, program_hash=program_hash, abi_key=abi_key, cache_key=cache_key,
+                cflags=cflags, lflags=lflags, cxx=cc, std=eff_std, command=compile_command,
+                registry=_registry_cache_key())
+            try:
+                with open(gen_src_path, "w") as f:
+                    f.write(banner + src)
+            except OSError:
+                gen_src_path = None
         cenv.log("compile_problem: invoking %s" % compile_command, level="debug")
-        _run_compile(cmd, "compile_problem (backend production)")
+        # C++ ERROR CONTEXT (ADC-536): _run_compile raises a self-contained RuntimeError with the
+        # compiler output, but the ephemeral temp .cpp it names is gone after this block. On failure
+        # persist the GENERATED source next to the .so (unless debug already did) and re-raise citing
+        # it, so a compiler error in the emitted code is always inspectable and clearly flagged as
+        # generated (re-run with debug=True for the full provenance banner).
+        try:
+            _run_compile(cmd, "compile_problem (backend production)")
+        except RuntimeError as exc:
+            failed_src = os.path.splitext(so_path)[0] + ".failed.cpp"
+            try:
+                with open(failed_src, "w") as f:
+                    f.write(src)
+            except OSError:
+                failed_src = "<generated (not persisted: write failed)>"
+            raise RuntimeError(
+                "%s\nThis is GENERATED code emitted by pops.time.Program %r; the failing source was "
+                "written to %s. Re-run pops.compile(..., debug=True) to keep the .cpp with a full "
+                "provenance banner (IR + hashes + flags + command)."
+                % (exc, getattr(time, "name", "problem"), failed_src)) from exc
+    # Sidecar cache-key file (ADC-536): record the keys + toolchain next to the fresh .so so a later
+    # cache HIT can prove the on-disk artifact matches (verify_cached_program_so). Atomic write.
+    write_cachekey_sidecar(so_path, cache_key=cache_key, abi_key=abi_key,
+                           toolchain="%s|%s" % (cc, eff_std))
     cenv.log("compile_problem: compiled -> %s" % so_path)
     compiled = CompiledProblem(so_path, time, model, abi_key, cc, eff_std,
                                libraries=library_manifests, problem_hash=program_hash,
                                cache_key=cache_key, compile_command=compile_command,
                                generated_sources=[gen_src_path] if gen_src_path else [],
-                               codegen_env=cenv, module_manifest=module_manifest)
+                               codegen_env=cenv, module_manifest=module_manifest,
+                               module_hash=module_hash)
     cenv.run_dumps(compiled)
     return compiled

@@ -33,8 +33,31 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   multi-block right-hand side (`ChargeDensity(...) + FixedSource(...)` -> `SumRHS`). `FieldProblem`
   now rejects a bare-string `solver=` (pointing at `pops.solvers.GeometricMG`) and refuses a
   missing required output or a missing nullspace on a singular operator before the runtime is touched.
+- ADC-536 `pops.compile` closes the compile pipeline: the program `.so` cache key now folds the
+  native Kokkos/MPI feature-key and the precision token (a one-time cache invalidation; the `.so`
+  bytes are unchanged), a cache HIT re-verifies the cached artifact's `<so>.cachekey` sidecar against
+  the freshly computed ABI/cache key and fails loud on a missing or mismatched sidecar (no silent
+  stale reuse), and `debug=True` writes a generated-C++ sidecar carrying the serialized IR, hashes,
+  compile flags, toolchain and redacted command (banner in the sidecar only, so the `.so` bytes stay
+  binary-identical). The manifest carries per-block ghost depth, a compile error cites the generated
+  source, and `CompiledArtifact` now names `manifest()` / `arguments()` / `capability_matrix()`
+  alongside `inspect()` / `requirements()`.
 
 ### Changed
+- ADC-557 `pops.compile` lowers a physics `Model` through its operator-first `pops.model.Module`
+  as the canonical compile IR and validates ONCE via a single `lower_and_validate` step (the
+  divergent standalone `model.check()` compile call is gone). A lowering / dependency error is
+  remapped onto the user's facade handles (the model name, its states and operators), the handle
+  carries the compile-time `module_hash` for post-compile drift detection, and `compiled.inspect()`
+  always carries the lowered-module trace. `m.to_module()` / `m.lower()` remain advanced /
+  inspection-only and are never required in the standard `problem.add_block(model=m)` flow.
+- ADC-558 A compiled artifact is validated-or-absent: every structural check happens during
+  `pops.compile(...)` (Program / model validation at emit, the compiler run, and the cache-HIT
+  sidecar guard), so a returned `CompiledProblem` is always fully valid and directly bindable. There
+  is no post-compile `check()` step (none is added to the handle or the `CompiledArtifact` protocol);
+  the inspectable surface is `compiled.inspect()` / `compiled.requirements()` / `compiled.manifest()`
+  and the single validity signal is the `"compiled, waiting for pops.bind(...)"` status line. A
+  failed compile raises before any handle exists.
 - ADC-623 Rebalanced the CI pytest gate: the selected test files are now packed onto shards by
   measured duration (greedy longest-processing-time over a committed `tests/python/test_durations.json`)
   instead of a modulo of the file list, so the slowest shard is minimized; grew the Python shards from

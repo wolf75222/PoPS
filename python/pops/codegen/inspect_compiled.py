@@ -215,8 +215,17 @@ def build_arguments(compiled):
                 outputs[value.name or "diagnostic"] = {"kind": "diagnostic"}
 
     caps = getattr(getattr(compiled, "model", None), "caps", {}) or {}
+    ghost_depth = _ghost_depth(compiled)
+    # Per-block ghost depth (ADC-536 / CONTRACTS6 decision 4): the bind stream validates each
+    # block's initial-state ghosts against the MANIFEST value, so the manifest must carry the depth
+    # keyed by block, not just a single scalar. Every committed instance shares the model's stencil
+    # width today (one physics model per Program), so each block maps to the same conservative
+    # depth; a heterogeneous per-block stencil would populate distinct values here without changing
+    # the shape the bind validator reads.
+    ghost_depth_by_block = {name: ghost_depth for name in instances}
     layout_runtime = {"layout": "system", "requires_mpi": False,
-                      "ghost_depth": _ghost_depth(compiled),
+                      "ghost_depth": ghost_depth,
+                      "ghost_depth_by_block": ghost_depth_by_block,
                       "supports_mpi": bool(caps.get("mpi", False))}
 
     return Arguments(instances=instances, params=param_args, aux=aux_args,
