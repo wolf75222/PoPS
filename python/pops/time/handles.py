@@ -179,7 +179,12 @@ class TimeState:
     # --- stages / next (SSA versions, defined via T.define) ------------------------------
     def stage(self, key):
         """A cached :class:`_Version` handle for stage ``key`` (an int or str). Undefined
-        until lowered with ``T.define``; reusing the same key returns the same handle."""
+        until lowered with ``T.define``; reusing the same key returns the same handle.
+
+        ``stage`` is the temporal-VERSION handle only (a numbered version of this block state). A free
+        intermediate value (an RHS, a scratch combine) does NOT need a stage: name it with the short
+        ``T.value("name", expr)`` (ADC-561), which lowers to the same IR as ``T.define("name", expr)``.
+        """
         if not isinstance(key, (int, str)) or isinstance(key, bool):
             raise ValueError("TimeState.stage: key must be an int or a str (got %r)" % (key,))
         if key not in self._stages:

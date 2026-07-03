@@ -7,10 +7,47 @@ introspect the Program-bound registry for the operator-first macros
 (predictor_corrector_local_linear, explicit_rk, imex_local_linear) and dispatch
 calls with the correct arity.
 
-All three take the live ``pops.time.Program`` instance as their first argument, so
-this module needs no ``pops.time`` import (it stays free of any lib -> time
-module-scope edge beyond the layering allowance).
+The ``@program_macro`` decorator (ADC-554) makes a scheme builder ONE IR route with
+the manual Program: called with a live ``Program`` first argument it is the historical
+in-place builder (unchanged, returns the final state / value); called WITHOUT one (block
+name first) it builds a fresh ``Program``, lowers into it and RETURNS that Program, so
+``isinstance(pops.lib.time.forward_euler("plasma"), Program)`` holds.
+
+The stage helpers take the live ``pops.time.Program`` instance as their first argument,
+so they need no ``pops.time`` import; the decorator imports ``pops.time.Program`` LAZILY
+(function-local), keeping this module free of a lib -> time module-scope edge beyond the
+layering allowance.
 """
+import functools
+
+
+def program_macro(build):
+    """Make a scheme builder both an in-place mutator AND a Program factory (ADC-554).
+
+    ``build(P, block, ...)`` is the historical in-place builder. The wrapper dispatches on the FIRST
+    positional argument:
+
+      - a live ``pops.time.Program`` -> the legacy path, called unchanged, returning ``build``'s own
+        result (the final state / value / ``None``) so every existing ``macro(P, block, ...)`` caller
+        is byte-identical;
+      - anything else (the block name) -> a fresh ``Program`` (named after the scheme) is created, the
+        builder lowers into it, and the PROGRAM is returned -- so a macro invoked as ``macro(block,
+        ...)`` yields an inspectable Program, the same type the manual route produces.
+
+    The two forms lower through the SAME builder into the SAME IR (only the Program's ``name`` differs
+    between an explicit ``Program("x")`` and the fresh default), so a macro and the equivalent manual
+    Program produce the same logical IR.
+    """
+    @functools.wraps(build)
+    def macro(*args, **kwargs):
+        from pops.time import Program  # lazy: keep pops.lib.time free of a module-scope time edge
+        if args and isinstance(args[0], Program):
+            return build(*args, **kwargs)  # legacy in-place path, result unchanged
+        prog = Program(build.__name__)
+        build(prog, *args, **kwargs)
+        return prog
+
+    return macro
 
 
 def _stage_rhs(P, U, sources, flux):

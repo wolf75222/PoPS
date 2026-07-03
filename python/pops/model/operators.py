@@ -9,7 +9,7 @@ lives in the model / codegen.
 from .signatures import Signature
 from .spaces import Space, _as_signature_inputs
 
-# The ten operator kinds of Spec 2. A kind is metadata only; the Signature carries
+# The operator kinds of Spec 2. A kind is metadata only; the Signature carries
 # the actual type contract that Program validation checks.
 OPERATOR_KINDS = (
     "local_rate",
@@ -24,6 +24,33 @@ OPERATOR_KINDS = (
     "global_residual",
     "coupled_rate",
 )
+
+# The MATHEMATICAL families a user reads (ADC-559): every operator kind folds into one of the
+# seven families the model exposes -- rate, field_solve, local_linear_map, matrix_free_map,
+# projection, diagnostic, coupled_rate. The family is a READABLE label for `OperatorHandle.category`
+# / `OperatorHandle.inspect()`; the kind stays the codegen-facing selector. A kind is never absent
+# here (a KeyError would be a bug), so `operator_family` is total over OPERATOR_KINDS.
+OPERATOR_FAMILIES = {
+    "local_rate": "rate",
+    "grid_operator": "rate",
+    "local_source": "rate",
+    "coupled_rate": "coupled_rate",
+    "field_operator": "field_solve",
+    "local_linear_operator": "local_linear_map",
+    "matrix_free_operator": "matrix_free_map",
+    "projection": "projection",
+    "diagnostic": "diagnostic",
+    "local_nonlinear_residual": "residual",
+    "global_residual": "residual",
+}
+
+
+def operator_family(kind):
+    """The mathematical family of an operator ``kind`` (ADC-559): a readable label
+    (``rate`` / ``field_solve`` / ``local_linear_map`` / ``matrix_free_map`` / ``projection`` /
+    ``coupled_rate`` / ``diagnostic`` / ``residual``) for introspection. An unknown kind maps to
+    ``"other"`` rather than raising, so introspection never fails on a foreign kind."""
+    return OPERATOR_FAMILIES.get(kind, "other")
 
 
 class LocalLinearOperator:

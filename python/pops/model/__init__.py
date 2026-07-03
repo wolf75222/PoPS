@@ -30,10 +30,12 @@ from .manifest import (
 )
 from .module import Module
 from .operators import (
+    OPERATOR_FAMILIES,
     OPERATOR_KINDS,
     LocalLinearOperator,
     MatrixFreeOperator,
     Operator,
+    operator_family,
 )
 from .registry import OperatorRegistry
 from .signatures import Signature
@@ -64,6 +66,8 @@ __all__ = [
     "RateBundle",
     "OperatorHandle",
     "OPERATOR_KINDS",
+    "OPERATOR_FAMILIES",
+    "operator_family",
     "ModuleManifest",
     "OperatorManifestEntry",
     "OperatorRegistryManifest",

@@ -178,32 +178,52 @@ class LocalLinearOperatorExpr:
         return "LocalLinearOperatorExpr(%r)" % (self.name,)
 
 
-class CallableOperator:
-    """A registered, typed operator usable in a time Program: ``op(U, fields, ...)``.
+class CallableOperator(OperatorHandle):
+    """A board-authored, self-binding :class:`pops.model.OperatorHandle` (ADC-560 fold).
 
-    Returned by ``m.rate`` / ``m.operator``. Calling it with Program values lowers through the
-    INTERNAL ``P._call(name, ...)`` on the values' Program (binding the model's operator registry on
-    first use), so a board-style program can write ``explicit_rate(U_n, fields_n)`` and get the same
-    IR as the public typed ``P.call(rate_handle, U_n, fields_n)``. The CallableOperator IS the typed
-    handle the user holds; its internal lowering uses the operator name as a selector (not the public
-    string-rejecting ``P.call``).
+    Returned by ``m.rate`` / ``m.operator``. Since ADC-560 the ONE typed handle is
+    ``OperatorHandle`` (callable via ``handle(...)``); ``CallableOperator`` is now that handle
+    SUBTYPE, kept for one release for the board path, which needs an extra self-binding step: a board
+    program may register operators in any order, so a call binds (or rebinds) the model's FRESH module
+    when the Program has no registry yet or the bound one predates this operator. It then delegates to
+    the SAME ``P._call(name, ...)`` lowering the base handle uses, so ``explicit_rate(U_n, fields_n)``
+    builds the byte-identical IR as the public typed ``P.call(rate_handle, U_n, fields_n)``. Its kind /
+    signature are resolved lazily from the model's module so ``inspect()`` reads the math object it
+    names.
     """
 
+    __slots__ = ("reg_name", "_model")
+
     def __init__(self, name, model):
-        self.name = str(name)
-        self.reg_name = self.name
-        self._model = model     # bound to its FRESH module at call time (sees all operators)
+        super().__init__(str(name))
+        object.__setattr__(self, "reg_name", str(name))
+        object.__setattr__(self, "_model", model)  # bound to its FRESH module at call time
+        self._resolve_kind_signature()
+
+    def _resolve_kind_signature(self):
+        """Stamp the kind / signature / category from the model's module (best effort, never raises).
+
+        The operator was registered by the board declarer before this handle was built, so it is
+        usually resolvable now; a not-yet-registered name (unusual ordering) leaves the fields ``None``
+        and they stay resolvable through the registry at call time."""
+        model = self._model
+        if model is None:
+            return
+        try:
+            op = model.module.operator_registry().get(self.reg_name)
+        except Exception:  # registry unavailable / name not registered yet -> leave metadata None
+            return
+        object.__setattr__(self, "kind", op.kind)
+        object.__setattr__(self, "signature", op.signature)
+        from pops.model.operators import operator_family
+        object.__setattr__(self, "category", operator_family(op.kind))
 
     def __call__(self, *args, name=None):
-        prog = next((a.prog for a in args if hasattr(a, "prog")), None)
-        if prog is None:
-            raise ValueError(
-                "operator %r must be called with time-Program values (inside a Program); "
-                "got %r" % (self.name, args))
+        prog = self._program_from_args(args)
         reg = getattr(prog, "_registry", None)
-        # Bind (or rebind) the model's FRESH module if the program has no registry yet or
-        # the bound one predates this operator -- so operators registered in any order all
-        # resolve, not just those present when the program was first bound.
+        # Bind (or rebind) the model's FRESH module if the program has no registry yet or the bound
+        # one predates this operator -- so operators registered in any order all resolve, not just
+        # those present when the program was first bound.
         if self._model is not None and (reg is None or self.name not in reg):
             prog.bind_operators(self._model.module)
         return prog._call(self.name, *args, name=name)

@@ -80,6 +80,25 @@ def guard_assembling(engine, what):
         raise freeze_error(what)
 
 
+def reject_compiled_time_route(time, where):
+    """Refuse ``time=CompiledTime(...)`` on the native install seam (ADC-554).
+
+    A compiled ``Program`` is not a per-block transport POLICY: it OWNS the whole step and is installed
+    separately (``pops.bind(..., cadence=CompiledTime(...))`` drives its macro-step cadence), so a
+    ``CompiledTime`` handed as ``time=`` is a category error. It is refused with a structured message
+    pointing at the Case time scheme and the cadence path -- NOT a bare ``AttributeError`` on ``.kind``.
+    ``CompiledTime`` stays importable / constructible in its ``cadence=`` role; only the bypass is blocked.
+    """
+    from pops.time.program import CompiledTime
+    if isinstance(time, CompiledTime):
+        raise TypeError(
+            "%s: time=CompiledTime(...) is not a transport time policy -- a compiled Program owns the "
+            "whole step and is installed separately (pops.bind(..., cadence=CompiledTime(...)) drives its "
+            "macro-step cadence). Declare the time scheme on the Case; a pops.lib.time macro returns an "
+            "inspectable Program (the one IR route). CompiledTime is the cadence descriptor, never the "
+            "time= policy." % (where,))
+
+
 def derive_lifecycle_state(engine):
     """The lifecycle state of @p engine, preferring the native ``_s.lifecycle_state()`` when present.
 
