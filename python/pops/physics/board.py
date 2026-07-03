@@ -247,9 +247,9 @@ class Model(_MultiSpeciesMixin):
                 % (name, type(equation).__name__))
         unknown = equation.lhs.field if isinstance(equation.lhs, _bm.Laplacian) else name
         cls = _fields.FieldProblem if coefficients is not None else _fields.PoissonProblem
-        problem = cls(name=name, unknown=unknown, equation=equation,
-                      coefficients=coefficients, bcs=tuple(bcs or ()), outputs=outputs,
-                      solver=solver)
+        problem = cls(name=name, unknown=unknown, equation=equation, coefficients=coefficients,
+                      bcs=tuple(bcs or ()), outputs=outputs,
+                      solver=_fields.lower_field_solver(solver))
         self._field_problems[name] = problem
         return problem
 

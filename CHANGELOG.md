@@ -21,6 +21,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `pops.numerics` (re-exported at its historical `pops.FiniteVolume` path), and the HLL/HLLC/Roe and
   explicit-Euler route refusals plus the WENO5 ghost-depth check are surfaced through the descriptor
   `available(context)` / `validate(context)` protocol, delegating to the install-time predicates.
+- ADC-534 `pops.fields.outputs` (`FieldOutput` / `GradientOutput` / `DerivedField`) and a composed
+  multi-block right-hand side (`ChargeDensity(...) + FixedSource(...)` -> `SumRHS`). `FieldProblem`
+  now rejects a bare-string `solver=` (pointing at `pops.solvers.GeometricMG`) and refuses a
+  missing required output or a missing nullspace on a singular operator before the runtime is touched.
 
 ### Changed
 - ADC-553 Renamed `pops.Case` to `pops.Problem` (no back-compat alias; `pops.Case` raises

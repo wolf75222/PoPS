@@ -9,10 +9,36 @@ touched.
 
 It computes nothing; codegen / runtime consume the descriptor.
 """
-from pops.descriptors import Availability, Descriptor
+from pops.descriptors import Availability, Descriptor, reject_string_selector
 from pops.math import Equation
 
 from .policies import FieldSolvePolicy
+
+# The legacy elliptic-solver tokens the board facade still accepts, lowered to the typed
+# descriptor factory name so the string is turned into a real descriptor before it reaches the
+# FieldProblem constructor (which rejects a bare string). Spec 5 sec.7: strings are not a public
+# API, but the board shortcut lowers them here rather than propagating an untyped selector.
+_LEGACY_SOLVER_TOKENS = {"geometric_mg": "GeometricMG", "fft": "FFT", "fft_spectral": "FFT"}
+
+
+def lower_field_solver(solver):
+    """Lower a legacy string solver token to its typed elliptic descriptor (Spec 5 sec.7).
+
+    A descriptor / ``None`` passes through unchanged. A recognised legacy token
+    (``"geometric_mg"`` / ``"fft"`` / ``"fft_spectral"``) is turned into the matching typed
+    :mod:`pops.solvers.elliptic` descriptor (``fft_spectral`` -> ``FFT(spectral=True)``). An
+    unrecognised string is rejected, naming the typed factory. The board facade calls this so its
+    string shortcut yields a typed solver instead of propagating an untyped selector.
+    """
+    if not isinstance(solver, str):
+        return solver
+    factory = _LEGACY_SOLVER_TOKENS.get(solver)
+    if factory is None:
+        reject_string_selector(solver, "solver", "pops.solvers.GeometricMG() / pops.solvers.FFT()")
+    from pops.solvers.elliptic import FFT, GeometricMG  # lazy: fields must not import solvers.
+    if factory == "FFT":
+        return FFT(spectral=(solver == "fft_spectral"))
+    return GeometricMG()
 
 
 def _summarize(side, limit=60):
@@ -82,6 +108,14 @@ class FieldProblem(Descriptor):
         self.nullspace = nullspace
         self.outputs = outputs
         self.postprocess = postprocess
+        # Spec 5 sec.7 (ADC-534): the elliptic solver is a TYPED descriptor, never a bare string.
+        # Reject solver="geometric_mg" / "fft" at construction, pointing at the typed factory, so
+        # the mistake is caught before the (silently string-keeping) options()/validate path.
+        if isinstance(solver, str):
+            reject_string_selector(
+                solver, "solver",
+                "pops.solvers.GeometricMG() / pops.solvers.FFT() "
+                "(pops.solvers.elliptic.GeometricMG())")
         self.solver = solver
         # The inert field-solve cadence recorded by solve(); None until authored.
         self.cadence = None
@@ -133,13 +167,79 @@ class FieldProblem(Descriptor):
             raise ValueError("%s: a solver must be provided" % self.name)
         self._require_periodic_compatible_solver()
         self._require_layout_compatible_solver(context)
+        self._require_declared_nullspace(context)
+        self._require_declared_outputs(context)
         return True
+
+    def _require_declared_nullspace(self, context):
+        """Refuse a singular field solve that declares no nullspace (Spec 5 sec.7, criterion 11).
+
+        A pure-Neumann / fully periodic elliptic operator is SINGULAR: its solution is defined up to
+        an additive constant and the solver must project the constant mode out (a
+        :class:`~pops.fields.nullspace.ConstantNullspace`). When the route @p context flags the
+        operator singular (``{"requires_nullspace": True}``) and the problem declares NO nullspace,
+        refuse before the runtime hits an inconsistent system. Opt-in via the context flag, so a
+        problem whose singularity is not known is never falsely rejected.
+        """
+        if not self._context_flag(context, "requires_nullspace"):
+            return
+        if self.nullspace is None:
+            raise ValueError(
+                "%s: the elliptic operator is singular (pure-Neumann / periodic) and needs a "
+                "nullspace projection; declare nullspace=pops.fields.ConstantNullspace()."
+                % self.name)
+
+    def _require_declared_outputs(self, context):
+        """Refuse a solve that does not expose a required derived output (Spec 5 sec.9).
+
+        When the route @p context names outputs the downstream stage NEEDS
+        (``{"required_outputs": ["E"]}``) but the problem's declared ``outputs`` do not cover them,
+        refuse with the missing name so the gap is caught before a stage reads a field that was
+        never produced. Opt-in via the context flag (no false positive on an unspecified context).
+        """
+        required = self._context_value(context, "required_outputs")
+        if not required:
+            return
+        produced = self._declared_output_names()
+        missing = [name for name in required if name not in produced]
+        if missing:
+            raise ValueError(
+                "%s: the field solve does not declare the required output(s) %s; add a typed "
+                "pops.fields.outputs descriptor (FieldOutput / GradientOutput / DerivedField) "
+                "for each." % (self.name, missing))
+
+    def _declared_output_names(self):
+        """The set of names this problem's ``outputs`` expose (a single output or an iterable)."""
+        outputs = self.outputs
+        if outputs is None:
+            return set()
+        items = outputs if isinstance(outputs, (list, tuple, set)) else [outputs]
+        names = set()
+        for item in items:
+            name = getattr(item, "name", None)
+            if name is not None:
+                names.add(name)
+        return names
+
+    @staticmethod
+    def _context_flag(context, key):
+        """True when @p context (a dict or attribute-bearing object) sets @p key truthy."""
+        return bool(FieldProblem._context_value(context, key))
+
+    @staticmethod
+    def _context_value(context, key):
+        """The value @p context carries under @p key (dict or attribute), or ``None``."""
+        if context is None:
+            return None
+        if isinstance(context, dict):
+            return context.get(key)
+        return getattr(context, key, None)
 
     @staticmethod
     def _context_is_amr_layout(context):
         """True when @p context names an AMR mesh layout (duck-typed; no mesh import).
 
-        ``Case.validate`` passes the layout under the ``"layout"`` key; a layout advertises its
+        ``Problem.validate`` passes the layout under the ``"layout"`` key; a layout advertises its
         kind through ``capabilities()["layout"]`` (``"amr"`` / ``"uniform"``), so AMR is detected
         without importing :mod:`pops.mesh` into the fields layer. Defensive: a context with no
         layout, or a layout whose ``capabilities`` is absent / non-callable / raises, is "not AMR".
@@ -354,4 +454,4 @@ class FieldProblem(Descriptor):
             self.name, self.category, self._equation_summary(), len(self.bcs), solver, outputs)
 
 
-__all__ = ["FieldProblem", "SolveCadence"]
+__all__ = ["FieldProblem", "SolveCadence", "lower_field_solver"]
