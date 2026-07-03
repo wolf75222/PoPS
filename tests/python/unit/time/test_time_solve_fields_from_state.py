@@ -196,7 +196,7 @@ def offline_rhs_frozen(ref, U, U_fields):
 
 print("== (B) field-coupled 2-stage parity (per-stage field solve) ==")
 try:
-    compiled = pops.compile_problem(model=named_source_model("sffs_prog"), time=heun_program())
+    compiled = pops.codegen.compile_problem(model=named_source_model("sffs_prog"), time=heun_program())
 except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 

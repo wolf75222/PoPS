@@ -11,16 +11,18 @@ Neither class imports ``pops.dsl`` or ``pops.physics`` at module level.
 
 
 class CompiledProblem:
-    """Result of ``pops.compile_problem(...)``; a generated ``problem.so``
-    (a compiled time Program) plus the metadata to install + reproduce it.
-    Install it with ``sim.install_program(compiled.so_path)`` AFTER the
-    physical block has been added (``sim.add_equation`` / ``sim.add_block``);
-    the Program then drives ``sim.step(dt)`` entirely in C++ via
-    ``ProgramContext``.
+    """An advanced, INTERNAL compiled handle: a generated ``problem.so`` (a
+    compiled time Program) plus the metadata to install + reproduce it. It is
+    produced by the low-level ``pops.codegen.compile_problem(...)`` driver and,
+    for the public path, wrapped by ``pops.compile(...)``; wire a runnable
+    simulation from it with ``pops.bind(compiled, ...)`` (ADC-523). The concrete
+    class stays off the top-level surface -- annotate against the inspectable
+    ``pops.CompiledArtifact`` protocol instead. The bound Program drives
+    ``sim.step(dt)`` entirely in C++ via ``ProgramContext``.
 
     The ``.so`` is compiled against the pops headers with the SAME Kokkos
     toolchain as the loaded _pops module (cf. ``pops_loader_build_flags``),
-    so its ABI key matches and ``System::install_program`` accepts it.
+    so its ABI key matches and the internal install seam accepts it.
     ``os.fspath(compiled)`` returns ``so_path`` (it can be passed where a
     path is expected).
     """

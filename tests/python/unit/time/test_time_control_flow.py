@@ -169,7 +169,7 @@ def _run_section_b(t):
 
     omega, tol = 0.5, 1e-10
     try:
-        compiled = pops.compile_problem(
+        compiled = pops.codegen.compile_problem(
             model=passive_model("cflow_prog"),
             time=_convergence_program(t, name="cflow_step", omega=omega, tol=tol))
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed

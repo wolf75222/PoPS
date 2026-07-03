@@ -74,7 +74,7 @@ def main():
         return 0
     m = lorentz_model()
     try:
-        compiled = pops.compile_problem(model=m, time=lie_program())
+        compiled = pops.codegen.compile_problem(model=m, time=lie_program())
     except RuntimeError as exc:
         print("skip test_install_requirement_validation (no Kokkos to build the .so: %s)"
               % str(exc)[:120])

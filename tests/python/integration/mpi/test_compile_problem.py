@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""pops.compile_problem + sim.install_program + CompiledTime, end to end (epic ADC-399 / ADC-401).
+"""pops.codegen.compile_problem + sim.install_program + CompiledTime, end to end (epic ADC-399 / ADC-401).
 
 (A) Validation (pure Python, always runs): compile_problem rejects backend != 'production' and
     target != 'system' and a missing Program; a multi-stage Program is refused by the codegen;
@@ -64,11 +64,11 @@ def _fe_program(name="forward_euler_parity"):
 
 # ---- (A) validation: pure Python, always runs ----
 print("== (A) compile_problem / CompiledTime validation ==")
-chk(raises(ValueError, lambda: pops.compile_problem(time=_fe_program(), backend="aot")),
+chk(raises(ValueError, lambda: pops.codegen.compile_problem(time=_fe_program(), backend="aot")),
     "compile_problem backend != 'production' rejected")
-chk(raises(ValueError, lambda: pops.compile_problem(time=_fe_program(), target="polar_system")),
+chk(raises(ValueError, lambda: pops.codegen.compile_problem(time=_fe_program(), target="polar_system")),
     "compile_problem unknown target rejected (target='system' | 'amr_system' only)")
-chk(raises(ValueError, lambda: pops.compile_problem(time=None)),
+chk(raises(ValueError, lambda: pops.codegen.compile_problem(time=None)),
     "compile_problem without a Program rejected")
 # substeps>1 / stride>1 are WIRED now (ADC-411): they STORE the cadence (System.set_program_cadence
 # applies it around the program closure) instead of being rejected. cf. test_time_substeps_stride.py.
@@ -122,7 +122,7 @@ U_ref = U0 + dt * R0
 
 # Compiled-Program path: lower the FE IR -> problem.so, install it, step once.
 try:
-    compiled = pops.compile_problem(model=transport_model(), time=_fe_program())
+    compiled = pops.codegen.compile_problem(model=transport_model(), time=_fe_program())
 except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 
@@ -158,20 +158,20 @@ def _fe_scaled(name, a):
 
 
 # Cache HIT: compiling the same Program twice (no explicit so_path) returns the SAME cached .so.
-c1 = pops.compile_problem(time=_fe_program("cache_probe"))
-c2 = pops.compile_problem(time=_fe_program("cache_probe"))
+c1 = pops.codegen.compile_problem(time=_fe_program("cache_probe"))
+c2 = pops.codegen.compile_problem(time=_fe_program("cache_probe"))
 chk(c1.so_path == c2.so_path and os.path.isfile(c1.so_path),
     "cache HIT: identical Program -> same cached .so")
 
 # Cache MISS: a different dt coefficient is a different IR -> different generated source -> different
 # cache key -> different .so (spec: a changed temporal coefficient must invalidate the cache).
-c_a = pops.compile_problem(time=_fe_scaled("cache_coeff", 1.0))
-c_b = pops.compile_problem(time=_fe_scaled("cache_coeff", 2.0))
+c_a = pops.codegen.compile_problem(time=_fe_scaled("cache_coeff", 1.0))
+c_b = pops.codegen.compile_problem(time=_fe_scaled("cache_coeff", 2.0))
 chk(c_a.so_path != c_b.so_path, "cache MISS: a changed dt coefficient invalidates the cache")
 
 # debug=True writes the generated .cpp next to the .so for inspection.
 dbg_so = os.path.join(tempfile.mkdtemp(), "dbg_problem.so")
-pops.compile_problem(dbg_so, time=_fe_program("debug_probe"), debug=True)
+pops.codegen.compile_problem(dbg_so, time=_fe_program("debug_probe"), debug=True)
 dbg_cpp = os.path.splitext(dbg_so)[0] + ".cpp"
 chk(os.path.isfile(dbg_cpp), "debug=True writes the generated .cpp next to the .so")
 if os.path.isfile(dbg_cpp):

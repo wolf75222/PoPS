@@ -101,7 +101,7 @@ def _run():
 
     # Compile the 2-block .so ONCE (production model + compiled Program). Needs compiler + Kokkos.
     try:
-        comp = pops.compile_problem(model=passive_model("nb_model"), time=two_block_program(t))
+        comp = pops.codegen.compile_problem(model=passive_model("nb_model"), time=two_block_program(t))
     except (RuntimeError, ValueError) as exc:  # no compiler / no Kokkos / .so compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 

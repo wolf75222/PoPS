@@ -263,7 +263,7 @@ def _run_section_b(t):
 
     tol = 1e-10
     try:
-        compiled = pops.compile_problem(
+        compiled = pops.codegen.compile_problem(
             model=passive_model("divgrad_prog"),
             time=_divgrad_program(t, name="divgrad_step", method=krylov.BiCGStab(),
                                   tol=tol, max_iter=200))

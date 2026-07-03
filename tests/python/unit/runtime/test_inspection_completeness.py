@@ -336,7 +336,7 @@ def test_real_compile_inspection_or_skips():
     print("== real compile_problem inspection (Kokkos-gated; skips if absent) ==")
     program = _program()
     try:
-        compiled = pops.compile_problem(time=program, force=True)
+        compiled = pops.codegen.compile_problem(time=program, force=True)
     except Exception as exc:  # noqa: BLE001 -- no compiler / no Kokkos: skip cleanly
         print("  [..] real compile skipped (no toolchain / Kokkos): %s" % str(exc)[:90])
         return

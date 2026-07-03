@@ -225,7 +225,7 @@ def section_b(t):
 
     # ---- compile the Program + a native reaction block, run one implicit step ----
     try:
-        compiled = pops.compile_problem(model=reaction_model("react_prog", k),
+        compiled = pops.codegen.compile_problem(model=reaction_model("react_prog", k),
                                        time=reaction_program(t, "react_step"))
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])

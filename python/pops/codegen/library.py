@@ -8,7 +8,7 @@ library name, the loaded-module ABI key, the brick list (id, type, category,
 scheme, native id, requirements, capabilities), the generated symbols a future
 ``.so`` would export, and a stable content hash. The manifest is consumed by the
 library-descriptor reader (:func:`read_library_manifest`) and by
-``pops.compile_problem(..., libraries=[...])``.
+``pops.codegen.compile_problem(..., libraries=[...])``.
 
 The manifest, the ABI key and the content hash are numerics-free (no Python solve).
 ``compile_library(..., emit=True)`` ALSO emits the C++ of the library's bricks
@@ -16,7 +16,7 @@ The manifest, the ABI key and the content hash are numerics-free (no Python solv
 problem ``.so`` uses (:func:`pops.codegen.toolchain.pops_loader_build_flags`, ``POPS_KOKKOS_ROOT``), exporting
 the metadata, the ABI key, the brick list / signatures / requirements / capabilities and the
 generated symbols. :func:`read_library_manifest` reads that descriptor back from the ``.so``
-(dlopen) and rejects an ABI / Kokkos mismatch as a HARD error. ``pops.compile_problem(...,
+(dlopen) and rejects an ABI / Kokkos mismatch as a HARD error. ``pops.codegen.compile_problem(...,
 libraries=[...])`` reads + validates the compiled ``.so`` (the consume path).
 """
 import hashlib
@@ -267,8 +267,8 @@ def read_library_manifest(manifest):
       key is compared against the loaded ``_pops`` module -- an ABI / Kokkos mismatch is a HARD
       error (the bricks would otherwise crash the loader with a cryptic symbol failure).
 
-    ``pops.compile_problem(..., libraries=[...])`` uses this to accept a manifest, a serialized
-    descriptor, OR a compiled ``.so`` path.
+    ``pops.codegen.compile_problem(..., libraries=[...])`` uses this to accept a manifest, a
+    serialized descriptor, OR a compiled ``.so`` path.
     """
     import os
 

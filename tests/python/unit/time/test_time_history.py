@@ -203,7 +203,7 @@ def _run_section_b(t):
     P = t.Program("ab2_step")
     lt.adams_bashforth2(P, "blk")
     try:
-        compiled = pops.compile_problem(model=_passive_source_model("ab2_prog"), time=P)
+        compiled = pops.codegen.compile_problem(model=_passive_source_model("ab2_prog"), time=P)
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
         return None
@@ -273,7 +273,7 @@ def _run_section_c(t):
     P.commit("blk", P.linear_combine(U + P.dt * (R - Rp)))
 
     try:
-        compiled = pops.compile_problem(model=_passive_source_model("miss_prog"), time=P)
+        compiled = pops.codegen.compile_problem(model=_passive_source_model("miss_prog"), time=P)
     except RuntimeError as exc:
         print("-- (C) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
         return None

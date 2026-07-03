@@ -212,7 +212,7 @@ def run_one_step(sources, flux):
     """Compile + install a one-step program, step once, return (out, rho0)."""
     tag = "%s_%s" % ("flux" if flux else "noflux", "_".join(sources) or "empty")
     try:
-        compiled = pops.compile_problem(model=advect_model("adv_%s" % tag, A, C),
+        compiled = pops.codegen.compile_problem(model=advect_model("adv_%s" % tag, A, C),
                                        time=one_step_program("p_%s" % tag, sources, flux=flux))
     except RuntimeError as exc:  # no compiler / no Kokkos / .so compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
@@ -255,7 +255,7 @@ def lie_split_program(name):
 
 
 try:
-    compiled_lie = pops.compile_problem(model=advect_model("adv_lie", A, C), time=lie_split_program("lie"))
+    compiled_lie = pops.codegen.compile_problem(model=advect_model("adv_lie", A, C), time=lie_split_program("lie"))
 except RuntimeError as exc:
     _skip("compile_problem (lie) could not build the .so: %s" % str(exc)[:160])
 sim_lie, rho0l = make_sim("lie")

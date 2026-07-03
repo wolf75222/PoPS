@@ -117,7 +117,7 @@ if not hasattr(probe, "install_program") or not hasattr(probe, "set_program_cade
     _skip("_pops lacks install_program / set_program_cadence (rebuild _pops) (A passed)")
 
 try:
-    compiled = pops.compile_problem(model=transport_model(), time=fe_program())
+    compiled = pops.codegen.compile_problem(model=transport_model(), time=fe_program())
 except RuntimeError as exc:  # no compiler / no Kokkos visible / compile failed
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 

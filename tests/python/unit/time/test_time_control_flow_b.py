@@ -186,13 +186,13 @@ def _run_section_b(t):
 
     count = 3
     try:
-        compiled = pops.compile_problem(model=_passive_model("cf_rg"),
+        compiled = pops.codegen.compile_problem(model=_passive_model("cf_rg"),
                                        time=_contraction_program(t, "range", count, name="cf_range"))
-        compiled_sr = pops.compile_problem(model=_passive_model("cf_sr"),
+        compiled_sr = pops.codegen.compile_problem(model=_passive_model("cf_sr"),
                                           time=_contraction_program(t, "static", count, name="cf_sr"))
-        compiled_if = pops.compile_problem(model=_passive_model("cf_if"),
+        compiled_if = pops.codegen.compile_problem(model=_passive_model("cf_if"),
                                           time=_if_program(t, name="cf_if", threshold=1e3))  # cond FALSE
-        compiled_if_t = pops.compile_problem(model=_passive_model("cf_ift"),
+        compiled_if_t = pops.codegen.compile_problem(model=_passive_model("cf_ift"),
                                             time=_if_program(t, name="cf_ift", threshold=0.0))  # TRUE
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- (B) skipped: compile_problem could not build a .so: %s --" % str(exc)[:160])

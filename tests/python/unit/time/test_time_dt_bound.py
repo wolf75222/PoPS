@@ -181,10 +181,10 @@ def fe_program(name, *, factor=None):
 
 
 try:
-    prog_none = pops.compile_problem(model=transport_model(), time=fe_program("fe_none"))
-    prog_tight = pops.compile_problem(model=transport_model(),
+    prog_none = pops.codegen.compile_problem(model=transport_model(), time=fe_program("fe_none"))
+    prog_tight = pops.codegen.compile_problem(model=transport_model(),
                                      time=fe_program("fe_tight", factor=0.5))
-    prog_loose = pops.compile_problem(model=transport_model(),
+    prog_loose = pops.codegen.compile_problem(model=transport_model(),
                                      time=fe_program("fe_loose", factor=2.0))
 except RuntimeError as exc:  # no compiler / no Kokkos visible / compile failed
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])

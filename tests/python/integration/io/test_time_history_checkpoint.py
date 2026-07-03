@@ -146,7 +146,7 @@ def _compile_program(pops, t, builder, prog_name, model_name):
     P = t.Program(prog_name)
     builder(P, "blk")
     try:
-        return pops.compile_problem(model=_passive_source_model(model_name), time=P)
+        return pops.codegen.compile_problem(model=_passive_source_model(model_name), time=P)
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- skipped: compile_problem could not build the .so: %s --" % str(exc)[:160])
         return None

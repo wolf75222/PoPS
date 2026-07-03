@@ -72,4 +72,8 @@ def test_numerics_and_diagnostics_packages():
 def test_top_level_runtime_entry_points():
     pops = importlib.import_module("pops")
     assert pops.System is not None
-    assert pops.compile_problem is not None
+    # ADC-523: pops.compile / pops.bind are the public front doors; the low-level compile_problem
+    # driver left the top-level surface (still reachable as pops.codegen.compile_problem).
+    assert pops.compile is not None and pops.bind is not None
+    with pytest.raises(AttributeError):
+        pops.compile_problem  # noqa: B018

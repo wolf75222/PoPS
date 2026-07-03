@@ -105,7 +105,7 @@ def emit_cpp_source(model, name=None, namespace="pops_generated", cse=True,
     from pops.ir.expr import _wrap as _ir_wrap
     if model._source is None:
         if model._source_terms:
-            raise ValueError("model has multiple named sources; use pops.compile_problem(...) "
+            raise ValueError("model has multiple named sources; use pops.compile(...) "
                              "or define m.source(...) explicitly")
         raise ValueError("emit_cpp_source: call set_source([...]) first")
     nm = name or (model.name.capitalize() + "Source")

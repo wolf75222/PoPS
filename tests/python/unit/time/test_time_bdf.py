@@ -294,7 +294,7 @@ def _run_section_b(t):
 
     def _build(order):
         try:
-            compiled = pops.compile_problem(
+            compiled = pops.codegen.compile_problem(
                 model=_nonlinear_flux_model(),
                 time=_bdf_program(t, order, name="bdf_iso_step%d" % order, newton_max=newton_max,
                                   krylov_max=200, tol=tol))

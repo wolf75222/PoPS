@@ -149,7 +149,7 @@ def make_sim(model):
 
 
 try:
-    compiled = pops.compile_problem(model=_decay_model("runtime", 2.0), time=_decay_program())
+    compiled = pops.codegen.compile_problem(model=_decay_model("runtime", 2.0), time=_decay_program())
 except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 
@@ -181,7 +181,7 @@ chk(np.allclose(d6, 3.0 * d2, rtol=1e-9, atol=1e-12),
     "= %.2e)" % float(np.abs(d6 - 3.0 * d2).max()))
 
 # The cache is HIT on a second compile of the same Program -> the runtime change needed no recompile.
-c2 = pops.compile_problem(model=_decay_model("runtime", 2.0), time=_decay_program())
+c2 = pops.codegen.compile_problem(model=_decay_model("runtime", 2.0), time=_decay_program())
 chk(c2.so_path == compiled.so_path, "cache HIT: same Program -> same .so (the k change recompiled nothing)")
 
 # An unknown params= name routed at bind raises a clear ValueError (no silent drop).

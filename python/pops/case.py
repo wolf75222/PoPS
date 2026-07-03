@@ -11,9 +11,10 @@ inspectable surface -- it declares its requirements / capabilities / options and
 ever touched -- by implementing those methods DIRECTLY, not by inheriting a descriptor base.
 It computes nothing.
 
-``pops.compile(case, time=...)`` lowers the assembly through the EXISTING codegen
-(``compile_problem``) and ``pops.bind(compiled, ...)`` wires it onto the EXISTING runtime
-(``System`` / ``AmrSystem`` via the unified ``install``). The :class:`Case` here owns no
+``pops.compile(case, time=...)`` -- the public front door -- lowers the assembly through the
+EXISTING codegen (internally the ``pops.codegen.compile_problem`` driver) and
+``pops.bind(compiled, ...)`` wires it onto the EXISTING runtime (``System`` / ``AmrSystem`` via
+the internal unified install seam). The :class:`Case` here owns no
 codegen and no runtime of its own; the heavy ``.so`` compile + install + run path is
 Kokkos-gated and validated on CI / ROMEO. Every not-yet-wired route fails LOUD (a clear
 ``NotImplementedError``), never silently.
@@ -347,7 +348,8 @@ class Case:
 
         Mirrors the descriptor :meth:`lower` shape so a Case duck-types as a route-describing
         object, without being a :class:`pops.descriptors.Descriptor`. It runs no numeric loop and
-        touches no runtime; ``pops.compile`` does the real lowering through ``compile_problem``.
+        touches no runtime; ``pops.compile`` does the real lowering (via the internal
+        ``pops.codegen.compile_problem`` driver).
         """
         return {"name": self._name, "category": self.category,
                 "native_id": self.native_id, "options": self.options()}

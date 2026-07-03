@@ -5,7 +5,7 @@ This is the runtime counterpart to the emit-only Spec 3 tests (test_pernode_prof
 test_profiling_counters, scheduled_fields_subcycled_transport): those pin the GENERATED C++ or
 assert the scheduler counters are ABSENT on the native path and defer the runtime to ROMEO. Here we
 build a REAL board-flavoured Program, compile it to a problem.so against the loaded _pops toolchain
-(`pops.compile_problem`), install it, and STEP it -- so the spec's runtime acceptance criteria are
+(`pops.codegen.compile_problem`), install it, and STEP it -- so the spec's runtime acceptance criteria are
 RUNTIME-proven, not emit-asserted. It never fakes the engine.
 
 The Program holds a board-style field solve on an `every(N).hold()` schedule (Spec 3 sections 17-18,
@@ -111,7 +111,7 @@ if not hasattr(probe, "install_program") or not hasattr(probe, "step_cfl"):
 
 print("== compile the held-schedule Program to a problem.so ==")
 try:
-    compiled = pops.compile_problem(model=plasma_model(), time=held_program())
+    compiled = pops.codegen.compile_problem(model=plasma_model(), time=held_program())
 except RuntimeError as exc:  # no compiler / no visible Kokkos / .so compile failed
     _skip("compile_problem could not build the .so: %s" % str(exc)[:200])
 chk(bool(compiled.program_hash), "compiled handle carries the IR hash (%s...)" % compiled.program_hash[:12])

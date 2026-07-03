@@ -16,7 +16,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ## [Unreleased]
 
+### Changed
+- ADC-523 `pops.compile` / `pops.bind` are the only public front doors; the low-level
+  `compile_problem` driver and the concrete `CompiledProblem` loader class leave the top-level
+  surface (still reachable as `pops.codegen.compile_problem` / `pops.codegen.CompiledProblem` for
+  advanced use). `pops.compile` gains an optional `layout=None` passthrough (falls back to the
+  Case's own layout when omitted, raising if an explicit `layout=` disagrees). `pops.CompiledArtifact`
+  exposes the inspectable compiled-handle protocol without exposing the concrete runtime-coupled
+  loader class. Internal tests that drive the low-level driver now name `pops.codegen.compile_problem`.
+
 ### Removed
+- ADC-523 Removed `compile_problem` / `CompiledProblem` from `pops.__all__` and the top-level lazy
+  attributes; `pops.compile_problem` now raises `AttributeError` pointing at `pops.compile` and the
+  advanced `pops.codegen.compile_problem` path.
 - **ADC-595: the named C++ coupling methods and the public raw coupled-source ABI** -- `System::add_ionization` / `add_collision` / `add_thermal_exchange` are deleted (they are now Python presets lowering to the generic coupled source), and the flat 12-kwarg bytecode binding is internalized as `System._add_coupled_source` / `AmrSystem._add_coupled_source` (an escape hatch called only by the typed lowering and the low-level ABI tests). End users register a coupling through `sim.add_coupling(...)` (a preset or a `CoupledSource(...).compile()`), which routes to the typed `add_coupling_operator`; the coupled-source STORAGE (`Impl::couplings` / `coupled_freqs_` / `coupled_freq_exprs_`, read by the stepper) is untouched. The single-block force composite `CompositeSource<A,B>` (diocotron production route) is out of scope and unchanged. New source-only guard `tests/python/architecture/test_no_named_coupling_surface.py`.
 - **Retained-docs and profiling harness cleanup** -- removed `docs/TRANSLATION_GLOSSARY.md`,
   `docs/BIBLIOGRAPHY.md`, the `bench/` profiling harness, and the ROMEO machine profile under

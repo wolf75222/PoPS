@@ -322,9 +322,9 @@ def _flux_fe_program(name, fluxes):
 # to it. Both go through the SAME centered-FV neg_div_flux_into, so -div(conv)+-div(press) ==
 # -div(whole) exactly (linearity) -> the stepped states must match to round-off.
 try:
-    compiled_whole = pops.compile_problem(model=whole_flux_model("nf_whole_prog"),
+    compiled_whole = pops.codegen.compile_problem(model=whole_flux_model("nf_whole_prog"),
                                          time=_flux_fe_program("nf_whole_fe", ["whole"]))
-    compiled_split = pops.compile_problem(model=split_flux_model("nf_split_prog2"),
+    compiled_split = pops.codegen.compile_problem(model=split_flux_model("nf_split_prog2"),
                                          time=_flux_fe_program("nf_split_fe", ["conv", "press"]))
 except RuntimeError as exc:
     _skipB("compile_problem could not build the .so: %s" % str(exc)[:160])

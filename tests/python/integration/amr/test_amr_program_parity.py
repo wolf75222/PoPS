@@ -145,7 +145,7 @@ def _system_run(program, model, u0, nsteps=NSTEPS, dt=DT):
     sim = pops.System(n=N, L=1.0)
     try:
         block_cm = model.compile(backend="production")
-        compiled = pops.compile_problem(model=model, time=program)
+        compiled = pops.codegen.compile_problem(model=model, time=program)
     except RuntimeError as exc:
         return None, "compile (System): %s" % str(exc)[:140]
     sim.add_equation("plasma", block_cm,
@@ -167,7 +167,7 @@ def _amr_run(program, model, u0, nsteps=NSTEPS, dt=DT):
     if not hasattr(amr, "install_program"):
         return None, "the built _pops lacks AmrSystem.install_program (rebuild _pops)"
     try:
-        compiled = pops.compile_problem(model=model, time=program, target="amr_system")
+        compiled = pops.codegen.compile_problem(model=model, time=program, target="amr_system")
         block_cm = model.compile(backend="production", target="amr_system")
     except RuntimeError as exc:
         return None, "compile (AMR): %s" % str(exc)[:140]
@@ -277,7 +277,7 @@ def _amr_run_cfl(program, model, u0, nsteps=NSTEPS, cfl=0.4):
     if not hasattr(amr, "install_program") or not hasattr(amr, "step_cfl"):
         return None, "the built _pops lacks AmrSystem.install_program/step_cfl (rebuild _pops)"
     try:
-        compiled = pops.compile_problem(model=model, time=program, target="amr_system")
+        compiled = pops.codegen.compile_problem(model=model, time=program, target="amr_system")
         block_cm = model.compile(backend="production", target="amr_system")
     except RuntimeError as exc:
         return None, "compile (AMR): %s" % str(exc)[:140]
