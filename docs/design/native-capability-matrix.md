@@ -43,7 +43,7 @@ Every route row is a plain metadata record with these fields:
 
 The same shape is exposed by:
 
-- `pops.Case(...).explain_routes()`
+- `pops.Problem(...).explain_routes()`
 - descriptor `capability_matrix()` methods
 - `CompiledProblem.capability_matrix()`
 - `CompiledModel.capability_matrix()`

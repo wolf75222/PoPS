@@ -206,7 +206,8 @@ class Problem:
     def requirements(self):
         """The route's requirements as a typed :class:`~pops.descriptors_report.RequirementSet`."""
         from pops.descriptors_report import RequirementSet
-        req = RequirementSet(dict(self._layout.requirements()) if self._layout is not None else {})
+        base = self._layout.requirements().to_dict() if self._layout is not None else {}
+        req = RequirementSet(base)
         if len(self._field_registry):
             req.add("elliptic_solve")
         req.add("time_scheme")
@@ -215,10 +216,10 @@ class Problem:
     def capabilities(self):
         """The route's capabilities as a typed :class:`~pops.descriptors_report.CapabilitySet`."""
         from pops.descriptors_report import CapabilitySet
-        caps = CapabilitySet(dict(self._layout.capabilities()) if self._layout is not None else {})
+        caps = self._layout.capabilities().to_dict() if self._layout is not None else {}
         caps["blocks"] = sorted(self._block_registry.names())
         caps["fields"] = sorted(self._field_registry.names())
-        return caps
+        return CapabilitySet(caps)
 
     def available(self, context=None):
         """An EXPLAINABLE availability status, computed from the parts (no runtime)."""
@@ -315,14 +316,15 @@ class Problem:
 
     def lower(self, context=None):
         """The inert lowering record for the assembly (metadata only; no computation)."""
-        return {"name": self._name, "category": self.category,
-                "native_id": self.native_id, "options": self.options()}
+        from pops.descriptors_report import LoweredDescriptor
+        return LoweredDescriptor(name=self._name, category=self.category,
+                                 native_id=self.native_id, options=self.options())
 
     def inspect(self):
         """A plain, JSON-serialisable structured view of the assembly (no build, no compile)."""
         info = {"name": self._name, "category": self.category, "native_id": self.native_id,
-                "options": self.options(), "requirements": self.requirements(),
-                "capabilities": self.capabilities()}
+                "options": self.options(), "requirements": self.requirements().to_dict(),
+                "capabilities": self.capabilities().to_dict()}
         info["layout"] = self._layout.inspect() if self._layout is not None else None
         info["blocks"] = self._block_registry.inspect()
         info["fields"] = self._field_registry.inspect()

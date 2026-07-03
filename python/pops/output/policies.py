@@ -58,13 +58,14 @@ class OutputPolicy(Descriptor):
                 "require_parallel": self.require_parallel, "prefix": self.prefix}
 
     def requirements(self):
+        from pops.descriptors_report import RequirementSet
         req = {}
         if self.require_parallel:
             req["parallel_io"] = True
         # Union the chosen format's own requirements (e.g. HDF5(parallel=True) -> parallel_io).
         if self.format is not None and hasattr(self.format, "requirements"):
-            req.update(self.format.requirements())
-        return req
+            req.update(self.format.requirements().to_dict())
+        return RequirementSet(req)
 
 
 class CheckpointPolicy(Descriptor):

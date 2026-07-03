@@ -50,7 +50,7 @@ def test_norm_accepts_typed_norm_kind(cls, kind):
     assert n.options()["scheme"] == "norm"
     assert n.options()["block"] == "ne"
     assert n.options()["role"] == "Density"
-    assert n.capabilities()["norm_kind"] == kind
+    assert n.capabilities().to_dict()["norm_kind"] == kind
 
 
 def test_norm_rejects_string_kind():
@@ -75,7 +75,7 @@ def test_integral_is_a_sum_reduction():
     assert mass.options()["scheme"] == "integral"
     assert mass.options()["role"] == "Density"
     assert mass.options()["block"] is None
-    assert mass.capabilities()["reduction"] == "sum"
+    assert mass.capabilities().to_dict()["reduction"] == "sum"
 
 
 def test_minmax_is_a_minmax_reduction():
@@ -83,7 +83,7 @@ def test_minmax_is_a_minmax_reduction():
     assert mm.category == "diagnostic_minmax"
     assert mm.options()["scheme"] == "min_max"
     assert mm.options()["block"] == "ne"
-    assert mm.capabilities()["reduction"] == "min_max"
+    assert mm.capabilities().to_dict()["reduction"] == "min_max"
 
 
 # --- ConservationCheck: takes a diagnostic descriptor, rejects a string -----------------
@@ -128,22 +128,22 @@ def test_conservation_check_rejects_non_descriptor():
     Norm(L2(), block="ne"), Integral(role="Density"), MinMax(block="ne"),
 ])
 def test_measures_declare_reduction_metadata(measure):
-    caps = measure.capabilities()
+    caps = measure.capabilities().to_dict()
     assert caps["mpi_reduction"] is True
     assert caps["amr_compatible"] is True
     assert caps["multi_level"] is True
     assert caps["cadence_slot"] == "diagnostic"
     # the requirement mirrors the capability: a distributed reduction needs an all-reduce.
-    assert measure.requirements()["mpi_reduction"] is True
+    assert measure.requirements().to_dict()["mpi_reduction"] is True
 
 
 def test_conservation_check_declares_metadata():
     chk = ConservationCheck(Integral(), tolerance=1e-9)
-    caps = chk.capabilities()
+    caps = chk.capabilities().to_dict()
     assert caps["reduction"] == "check"
     assert caps["mpi_reduction"] is True and caps["amr_compatible"] is True
     assert caps["multi_level"] is True and caps["cadence_slot"] == "diagnostic"
-    assert chk.requirements()["quantity"] is True
+    assert chk.requirements().to_dict()["quantity"] is True
 
 
 # --- inspect() / options() / __repr__ (Spec 5 sec.12.1 printable rule) ------------------
@@ -163,7 +163,7 @@ def test_inspect_options_and_repr(measure, cls_name, category):
     assert cls_name in repr(measure)
     assert repr(measure) == repr(measure)
     # lower() is metadata only, carrying the native reduction scheme.
-    assert measure.lower()["scheme"] == measure.options()["scheme"]
+    assert measure.lower().to_dict()["scheme"] == measure.options()["scheme"]
 
 
 # --- inertness: the typed measures compute nothing and pull no runtime ------------------
@@ -233,7 +233,7 @@ def test_dedup_does_not_fabricate_a_runtime_path():
 
     factory = diag.norm()
     typed = Norm(L2())
-    assert factory.lower()["scheme"] == typed.lower()["scheme"] == Norm.scheme
+    assert factory.lower().to_dict()["scheme"] == typed.lower().to_dict()["scheme"] == Norm.scheme
     for obj in (factory, typed):
         for attr in ("eval", "compile", "__call__", "run"):
             assert not hasattr(obj, attr), "%r must stay inert (has %s)" % (obj, attr)

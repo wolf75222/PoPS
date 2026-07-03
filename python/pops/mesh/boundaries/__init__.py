@@ -8,6 +8,7 @@ Neumann / first-order extrapolation) are a fields concern and land in ``pops.fie
 Inert descriptors; the runtime materialises the actual ghost fills.
 """
 from .._descriptor import MeshDescriptor
+from ...descriptors_report import RequirementSet, CapabilitySet
 
 
 class _Face(MeshDescriptor):
@@ -49,10 +50,10 @@ class Periodic(MeshDescriptor):
         return {"axes": self.axes if self.axes is not None else "all"}
 
     def capabilities(self):
-        return {"periodic": True}
+        return CapabilitySet({"periodic": True})
 
     def requirements(self):
-        return {"mesh_topology": "periodic"}
+        return RequirementSet({"mesh_topology": "periodic"})
 
 
 class Physical(MeshDescriptor):
@@ -69,7 +70,7 @@ class Physical(MeshDescriptor):
         return {"kind": self.kind}
 
     def capabilities(self):
-        return {"physical": True, "kind": self.kind}
+        return CapabilitySet({"physical": True, "kind": self.kind})
 
 
 class FaceBC(MeshDescriptor):

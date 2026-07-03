@@ -16,6 +16,7 @@ compute nothing. The C++ runtime / codegen consumes the recorded cadence; see
 :meth:`pops.fields.FieldProblem.solve`.
 """
 from pops.descriptors import Descriptor
+from pops.descriptors_report import CapabilitySet, RequirementSet
 
 
 class FieldSolvePolicy(Descriptor):
@@ -38,10 +39,10 @@ class HoldPrevious(FieldSolvePolicy):
     """
 
     def requirements(self):
-        return {"cacheable_output": True}
+        return RequirementSet({"cacheable_output": True})
 
     def capabilities(self):
-        return {"reuses_cache": True, "recomputes": False}
+        return CapabilitySet({"reuses_cache": True, "recomputes": False})
 
     def options(self):
         return {"policy": "hold_previous"}
@@ -59,10 +60,10 @@ class Recompute(FieldSolvePolicy):
     """
 
     def requirements(self):
-        return {}
+        return RequirementSet({})
 
     def capabilities(self):
-        return {"reuses_cache": False, "recomputes": True}
+        return CapabilitySet({"reuses_cache": False, "recomputes": True})
 
     def options(self):
         return {"policy": "recompute"}

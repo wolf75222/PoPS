@@ -6,6 +6,7 @@ conservative default; ``FastMath`` allows rounding-changing transforms; ``DebugM
 readable generated C++; ``GpuRegisterAware`` limits temporaries / register pressure. Inert.
 """
 from pops.descriptors import Descriptor
+from pops.descriptors_report import CapabilitySet
 
 
 class _MathMode(Descriptor):
@@ -19,7 +20,7 @@ class StrictMath(_MathMode):
         return {"fast_math": False, "implicit_fma": False}
 
     def capabilities(self):
-        return {"bit_reproducible": True}
+        return CapabilitySet({"bit_reproducible": True})
 
 
 class FastMath(_MathMode):
@@ -29,7 +30,7 @@ class FastMath(_MathMode):
         return {"fast_math": True}
 
     def capabilities(self):
-        return {"may_change_rounding": True, "bit_reproducible": False}
+        return CapabilitySet({"may_change_rounding": True, "bit_reproducible": False})
 
 
 class DebugMath(_MathMode):
@@ -46,7 +47,7 @@ class GpuRegisterAware(_MathMode):
         return {"limit_temporaries": True}
 
     def capabilities(self):
-        return {"register_pressure_aware": True}
+        return CapabilitySet({"register_pressure_aware": True})
 
 
 __all__ = ["StrictMath", "FastMath", "DebugMath", "GpuRegisterAware"]

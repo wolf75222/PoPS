@@ -48,7 +48,7 @@ def test_poisson_problem_stores_equation():
     prob = PoissonProblem(unknown=phi, equation=eq, solver=object())
     assert prob.equation is eq
     assert isinstance(prob.equation, Equation)
-    assert prob.capabilities()["poisson"] is True
+    assert prob.capabilities().to_dict()["poisson"] is True
 
 
 def test_validate_passes_with_solver():
@@ -128,7 +128,7 @@ def test_facebc_rejects_non_face():
 def test_rhs_from_blocks():
     cd = rhs.ChargeDensity.from_blocks("ions", "electrons")
     assert cd.options()["blocks"] == ("ions", "electrons")
-    assert cd.requirements()["blocks"] == ["ions", "electrons"]
+    assert cd.requirements().to_dict()["blocks"] == ["ions", "electrons"]
     # Single-iterable form is also accepted.
     cd2 = rhs.ChargeDensity.from_blocks(["a", "b"])
     assert cd2.options()["blocks"] == ("a", "b")
@@ -137,10 +137,10 @@ def test_rhs_from_blocks():
 def test_coefficients_and_nullspace():
     sc = coefficients.ScalarCoefficient("eps")
     rc = coefficients.ReactionCoefficient("k")
-    assert sc.requirements()["aux_field"] == "eps"
+    assert sc.requirements().to_dict()["aux_field"] == "eps"
     assert rc.options()["role"] == "reaction"
     ns = nullspace.ConstantNullspace()
-    assert ns.capabilities()["removes_constant"] is True
+    assert ns.capabilities().to_dict()["removes_constant"] is True
 
 
 def test_aux_static_derived_and_halo():
@@ -161,7 +161,7 @@ def test_numerics_terms_construct_and_options():
     assert flux.options()["term"] == "flux"
     assert src.options()["name"] == "ionization"
     assert loc.options()["term"] == "local"
-    assert flux.capabilities()["conservative"] is True
+    assert flux.capabilities().to_dict()["conservative"] is True
 
 
 def test_print_summaries_are_short_and_named():

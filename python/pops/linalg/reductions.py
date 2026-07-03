@@ -7,6 +7,7 @@ helpers :func:`dot` / :func:`norm2` build the descriptor referencing the operand
 authoring sugar, not a numeric kernel. The C++ runtime performs the reduction.
 """
 from pops.descriptors import Descriptor
+from pops.descriptors_report import RequirementSet
 
 
 def _operand_name(operand):
@@ -33,7 +34,7 @@ class Dot(Descriptor):
         return {"op": "dot", "a": _operand_name(self.a), "b": _operand_name(self.b)}
 
     def requirements(self):
-        return {"operands": 2}
+        return RequirementSet({"operands": 2})
 
 
 class Norm2(Descriptor):
@@ -53,7 +54,7 @@ class Norm2(Descriptor):
         return {"op": "norm2", "x": _operand_name(self.x)}
 
     def requirements(self):
-        return {"operands": 1}
+        return RequirementSet({"operands": 1})
 
 
 def dot(a, b):

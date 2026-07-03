@@ -28,10 +28,12 @@ from pops._capabilities_report import (
 
 def _entry_from_brick(descriptor):
     """A :class:`CapabilityEntry` from a :class:`pops.descriptors.BrickDescriptor`."""
-    status = "yes" if descriptor.available else "no"
+    # ADC-625: availability is the explained route; read it once through available().ok.
+    ok = descriptor.available().ok
+    status = "yes" if ok else "no"
     feature = "%s:%s" % (descriptor.category, descriptor.name)
-    limitation = "" if descriptor.available else "catalogued descriptor has no native C++ symbol"
-    error = "" if descriptor.available else _unsupported_error(
+    limitation = "" if ok else "catalogued descriptor has no native C++ symbol"
+    error = "" if ok else _unsupported_error(
         requested=feature,
         available="native %s descriptors with a non-empty native_id" % descriptor.category,
         alternative="choose an available descriptor from pops.inspect_capabilities()")
@@ -347,4 +349,4 @@ def inspect_amr(layout_or_context=None):
         layout="amr", max_levels=layout.max_levels, ratio=layout.ratio,
         native_max_levels=NATIVE_MAX_LEVELS, native_ratios=NATIVE_RATIOS,
         available=status.status, limitations=limitations,
-        requirements=layout.requirements(), policies=_amr_policy_rows(layout))
+        requirements=layout.requirements().to_dict(), policies=_amr_policy_rows(layout))

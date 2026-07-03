@@ -7,6 +7,7 @@ native symbol), while :class:`MatrixFreeOperator` names an operator known only b
 a matrix-free capability flag, and compute nothing -- the C++ runtime applies the operator.
 """
 from pops.descriptors import Descriptor
+from pops.descriptors_report import CapabilitySet
 
 
 class LinearOperator(Descriptor):
@@ -33,7 +34,7 @@ class LinearOperator(Descriptor):
         return {"name": self._name}
 
     def capabilities(self):
-        return {"matrix_free": False}
+        return CapabilitySet({"matrix_free": False})
 
 
 class MatrixFreeOperator(Descriptor):
@@ -58,7 +59,7 @@ class MatrixFreeOperator(Descriptor):
         return {"name": self._name}
 
     def capabilities(self):
-        return {"matrix_free": True}
+        return CapabilitySet({"matrix_free": True})
 
 
 __all__ = ["LinearOperator", "MatrixFreeOperator"]

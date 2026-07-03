@@ -10,6 +10,7 @@ single multi-block / multi-source right-hand side (``ChargeDensity(...) + FixedS
 Inert descriptors; the runtime assembles the actual density field.
 """
 from pops.descriptors import Descriptor
+from pops.descriptors_report import RequirementSet
 
 
 class _RHS(Descriptor):
@@ -48,7 +49,7 @@ class ChargeDensity(_RHS):
         return {"rhs": "charge_density", "blocks": self.blocks}
 
     def requirements(self):
-        return {"blocks": list(self.blocks)}
+        return RequirementSet({"blocks": list(self.blocks)})
 
 
 class FixedSource(_RHS):
@@ -69,7 +70,7 @@ class FixedSource(_RHS):
         return {"rhs": "fixed_source", "aux_field": self.aux_field}
 
     def requirements(self):
-        return {"aux_field": self.aux_field}
+        return RequirementSet({"aux_field": self.aux_field})
 
 
 class SumRHS(_RHS):
@@ -100,9 +101,10 @@ class SumRHS(_RHS):
                 "terms": [t.options().get("rhs") for t in self.terms]}
 
     def requirements(self):
+        from pops.descriptors_report import RequirementSet
         blocks, aux = [], []
         for term in self.terms:
-            req = term.requirements()
+            req = term.requirements().to_dict()
             blocks.extend(req.get("blocks", []))
             if "aux_field" in req:
                 aux.append(req["aux_field"])
@@ -111,7 +113,7 @@ class SumRHS(_RHS):
             out["blocks"] = blocks
         if aux:
             out["aux_fields"] = aux
-        return out
+        return RequirementSet(out)
 
 
 __all__ = ["ChargeDensity", "FixedSource", "SumRHS"]

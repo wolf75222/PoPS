@@ -1,5 +1,9 @@
-"""ADC-527: the typed result objects (RequirementSet / CapabilitySet / LoweredDescriptor /
-ValidationReport) behave per the frozen contract and stay Mapping-compatible.
+"""ADC-527 / ADC-625: the typed result objects (RequirementSet / CapabilitySet /
+LoweredDescriptor / ValidationReport) behave per the frozen contract.
+
+ADC-625 makes them the ONE final form: TYPED objects, NOT dict subclasses. The only mapping
+bridge is ``to_dict()``; the typed accessors (``add`` / ``check`` / ``supports`` and the
+``LoweredDescriptor`` attributes) are the interface.
 
 Pure Python; needs only `import pops`.
 """
@@ -14,20 +18,20 @@ from pops.descriptors import (  # noqa: E402
     ValidationReport)
 
 
-def test_requirement_set_is_mapping_compatible():
+def test_requirement_set_is_typed_not_a_dict_subclass():
     r = RequirementSet({"time_scheme": True, "elliptic_solve": True})
-    assert isinstance(r, dict)  # back-compat: it IS a mapping
-    assert r["time_scheme"] is True
-    assert r.get("missing", "d") == "d"
-    assert set(r) == {"time_scheme", "elliptic_solve"}
+    assert not isinstance(r, dict)  # ADC-625: a typed object, not a dict subclass
+    assert r.to_dict()["time_scheme"] is True
+    assert r.to_dict().get("missing", "d") == "d"
+    assert set(r.to_dict()) == {"time_scheme", "elliptic_solve"}
     assert r.to_dict() == {"time_scheme": True, "elliptic_solve": True}
 
 
 def test_requirement_set_from_iterable_and_add_chains():
     r = RequirementSet([Requirement("mpi"), Requirement("gpu", value=False)])
-    assert r["mpi"] is True and r["gpu"] is False
+    assert r.to_dict()["mpi"] is True and r.to_dict()["gpu"] is False
     assert r.add("amr").add("uniform") is r
-    assert "amr" in r and "uniform" in r
+    assert "amr" in r.to_dict() and "uniform" in r.to_dict()
 
 
 def test_requirement_set_check_reports_unsatisfied():
@@ -40,18 +44,19 @@ def test_requirement_set_check_reports_unsatisfied():
 
 def test_capability_set_supports_and_from_dict():
     c = CapabilitySet.from_dict({"supports_amr": True, "supports_gpu": False})
-    assert isinstance(c, dict)
+    assert not isinstance(c, dict)  # ADC-625: a typed object, not a dict subclass
     assert c.supports("amr") is True
     assert c.supports("gpu") is False
     assert c.supports("mpi") is False       # absent -> False, never raises
+    assert c.to_dict() == {"supports_amr": True, "supports_gpu": False}
 
 
-def test_lowered_descriptor_is_dict_superset_and_inert():
+def test_lowered_descriptor_exposes_attributes_and_to_dict():
     ld = LoweredDescriptor(name="HLL", category="riemann", native_id="pops::HLLFlux",
                            options={"order": 1})
-    assert isinstance(ld, dict)
-    assert ld["name"] == "HLL" and ld["native_id"] == "pops::HLLFlux"
-    assert ld.native_id == "pops::HLLFlux"
+    assert not isinstance(ld, dict)  # ADC-625: a typed object, not a dict subclass
+    assert ld.name == "HLL" and ld.native_id == "pops::HLLFlux"
+    assert ld.to_dict()["name"] == "HLL" and ld.to_dict()["native_id"] == "pops::HLLFlux"
     assert ld.to_dict()["category"] == "riemann"
 
 

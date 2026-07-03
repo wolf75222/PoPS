@@ -5,6 +5,7 @@ cells. theta is PERIODIC, r carries a PHYSICAL boundary. Axis convention: direct
 radial, direction 1 = azimuthal (cf. PolarGeometry / assemble_rhs_polar on the C++ side).
 """
 from ._descriptor import MeshDescriptor
+from ..descriptors_report import CapabilitySet
 from pops.runtime_environment import NATIVE_DIMENSION, validate_dimension
 
 
@@ -54,7 +55,7 @@ class PolarMesh(MeshDescriptor):
                 "ntheta": self.ntheta, "theta_boxes": self.theta_boxes}
 
     def capabilities(self):
-        return {
+        return CapabilitySet({
             "geometry": "polar",
             "dim": self.dim,
             "scalar_transport": True,
@@ -63,7 +64,7 @@ class PolarMesh(MeshDescriptor):
             "amr": False,
             "direct_poisson_mpi": False,
             "multibox_transport": self.theta_boxes > 1,
-        }
+        })
 
     def _apply(self, config):
         config.geometry = "polar"

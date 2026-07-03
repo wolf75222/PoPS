@@ -14,6 +14,7 @@ and is inspectable. The bare ``gaussian_closure`` factory stays a plain callable
 that does the arithmetic, not a route chooser); this descriptor wraps it.
 """
 from pops.descriptors import Descriptor
+from pops.descriptors_report import CapabilitySet
 
 from .gaussian import gaussian_closure
 
@@ -53,7 +54,7 @@ class HyQMOM15Closure(Descriptor):
         return {"variant": self.variant, "order": self.order}
 
     def capabilities(self):
-        return {"provides": "order_%d_standardized_moments" % self.order}
+        return CapabilitySet({"provides": "order_%d_standardized_moments" % self.order})
 
     def __call__(self, S):  # noqa: N803  (S mirrors the engine variable name)
         return self._closure(S)

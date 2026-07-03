@@ -117,9 +117,10 @@ def test_call_linear_operator_matches_solve_local_linear():
     m = build_model()
 
     def shortcut(P, _m):
+        from pops.model import OperatorHandle
         U = P.state("plasma")
         f = P.solve_fields(U)
-        L = P.linear_source("lorentz")
+        L = P.linear_source(OperatorHandle("lorentz"))
         U1 = P.solve_local_linear("u1", operator=P.I - P.dt * L, rhs=U, fields=f)
         P.commit("plasma", U1)
 

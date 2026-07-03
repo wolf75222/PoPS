@@ -37,9 +37,9 @@ def test_hold_previous_is_a_field_solve_policy():
     assert isinstance(policy, FieldSolvePolicy)
     assert policy.category == "field_solve_policy"
     # HoldPrevious reuses the cached field, so it requires a cacheable output.
-    assert policy.requirements()["cacheable_output"] is True
-    assert policy.capabilities()["reuses_cache"] is True
-    assert policy.capabilities()["recomputes"] is False
+    assert policy.requirements().to_dict()["cacheable_output"] is True
+    assert policy.capabilities().to_dict()["reuses_cache"] is True
+    assert policy.capabilities().to_dict()["recomputes"] is False
     assert policy.validate() is True
 
 
@@ -47,9 +47,9 @@ def test_recompute_is_a_field_solve_policy():
     policy = Recompute()
     assert isinstance(policy, FieldSolvePolicy)
     # Recompute reads no cache, so it requires nothing of the output.
-    assert policy.requirements() == {}
-    assert policy.capabilities()["recomputes"] is True
-    assert policy.capabilities()["reuses_cache"] is False
+    assert policy.requirements().to_dict() == {}
+    assert policy.capabilities().to_dict()["recomputes"] is True
+    assert policy.capabilities().to_dict()["reuses_cache"] is False
     assert policy.validate() is True
 
 
@@ -95,7 +95,7 @@ def test_solve_records_cadence_and_inspects():
 def test_solve_with_recompute_and_when_schedule():
     prob = _poisson()
     prob.solve(schedule=when("cond"), policy=Recompute())
-    assert prob.cadence.policy.capabilities()["recomputes"] is True
+    assert prob.cadence.policy.capabilities().to_dict()["recomputes"] is True
     assert prob.cadence.schedule.kind == "when"
 
 
@@ -142,4 +142,4 @@ def test_solve_cadence_inspect_and_repr():
     assert cadence.inspect()["policy"]["category"] == "field_solve_policy"
     assert "SolveCadence" in repr(cadence)
     # the cadence forwards the policy's requirements (cacheable output).
-    assert cadence.requirements()["cacheable_output"] is True
+    assert cadence.requirements().to_dict()["cacheable_output"] is True

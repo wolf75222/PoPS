@@ -3,7 +3,8 @@
 Local solves, matrix-free operators, laplacian/gradient/divergence and the Schur helpers.
 """
 from pops.time.program_base import _ProgramConstants
-from pops.time.values import Value, _Affine, _Coeff, _Operator, _is_field_value, _residual_wants_guess
+from pops.time.values import (
+    Value, _Affine, _Coeff, _Operator, _is_field_value, _residual_wants_guess, _resolve_handle)
 
 
 class _ProgramLocal(_ProgramConstants):
@@ -135,6 +136,32 @@ class _ProgramLocal(_ProgramConstants):
         raise ValueError(
             "%s: operator must be a linear source (P.linear_source(handle) or its OperatorHandle)"
             % where)
+
+    def _linear_source(self, name):
+        """Internal seam: reference a linear source by its bare NAME (an internal selector).
+
+        NOT a public surface -- it is the byte-identical lowering the public typed
+        :meth:`linear_source` delegates to (after unwrapping its handle), and the path the internal
+        lowering (``_lower_call``) and the ``pops.lib.time`` macros use directly with a bare name."""
+        if not isinstance(name, str) or not name:
+            raise ValueError("_linear_source: a non-empty operator name is required")
+        return self._new("operator", "linear_source", (), {"linear_source": name}, name, None)
+
+    def _apply(self, operator=None, state=None, fields=None, name=None):
+        """Internal seam: apply a linear source given as a typed value / handle OR a bare name.
+
+        NOT a public surface -- the public :meth:`apply` refuses a bare-name string and delegates
+        here; the solver-DSL and other internal callers pass the name selector directly."""
+        state, fields = _resolve_handle(state), _resolve_handle(fields)
+        lname = self._linear_source_name(operator, "apply")
+        if not (isinstance(state, Value) and state.vtype == "state"):
+            raise ValueError("apply: a State value is required (state=...)")
+        if fields is not None and not (isinstance(fields, Value) and fields.vtype == "fields"):
+            raise ValueError("apply: fields must be a FieldContext from solve_fields")
+        self._check_operator_state(operator, state, "apply")
+        inputs = (state, fields) if fields is not None else (state,)
+        return self._new("rhs", "apply", inputs, {"linear_source": lname},
+                         name or ("apply_" + lname), state.block)
 
     # --- matrix-free operators / dynamic linear solve (ADC-405 Phase 6b) ----------------------------
     # A ``matrix_free_op`` names a GLOBAL matrix-free operator A : scalar_field -> scalar_field whose

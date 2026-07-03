@@ -65,6 +65,31 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   rules: a new `tests/python/architecture/test_package_layout.py` asserts the presets package exists
   and that no package is shadowed by a flat root module of the same name; `test_lib_keeps_only_presets`
   now allows the `presets` sub-package.
+- ADC-625 The typed descriptor result objects (`RequirementSet` / `CapabilitySet` /
+  `LoweredDescriptor`) are the ONE final form: they are typed objects, no longer `dict` subclasses.
+  Every descriptor family (`numerics` / `fields` / `solvers` / `mesh` / `params` / `linalg` /
+  `diagnostics` / `platforms` / external bricks) returns the typed object directly, and every
+  consumer reads it through the typed accessors (`supports(tag)` / `check(context)` / the
+  `LoweredDescriptor` attributes) or `to_dict()`; the dict-emulation crutch is removed and fenced by
+  `tests/python/architecture/test_descriptor_protocol_family.py`.
+- ADC-625 `BrickDescriptor` availability is the explained `available(context) -> Availability` route
+  (matching the `DescriptorProtocol` member the `Descriptor` base exposes); the public `.available`
+  bool attribute is removed, so there is one source of truth. `inspect()["available"]` and the
+  capability-matrix / manifest entries derive from that route. Newton / FixedPoint keep refusing with
+  a reason.
+- ADC-625 `Program.linear_source` / `Program.apply` refuse a free string on the public route with a
+  `TypeError` naming the typed handle form; string acceptance stays only in the internal
+  `_linear_source` / `_apply` seams the lowering and the `pops.lib.time` macros use. Cleaned the
+  stale `pops.Case` prose and constructor-layout examples (`Problem(layout=...)`) to the final
+  spellings (`pops.Problem` assembled fluently, mesh at `pops.compile(problem, layout=...)`) across
+  `pops.lib`, the README and the design docs.
+- ADC-625 Added `[[python.suite]]` entries for `tests/python/unit/problem` and
+  `tests/python/unit/numerics` (two Phase-5 directories that no CI lane ran) plus their
+  `ci_select_tests.py` route and area alias, and a source-only fence
+  (`test_manifest_suite_coverage.py`) asserting every `tests/python/**/test_*.py` is claimed by a
+  suite path. New architecture fences keep the crutches out: no `dict`-subclass reports, no public
+  `BrickDescriptor.available` bool attribute, no public string `linear_source` / `apply`, no
+  `pops.Case`.
 
 ### Removed
 - ADC-523 Removed `compile_problem` / `CompiledProblem` from `pops.__all__` and the top-level lazy

@@ -10,6 +10,7 @@ These are inert descriptors: they declare requirements / capabilities and answer
 """
 from .._descriptor import Availability, MeshDescriptor
 from ..amr import IgnoreAMRCriteria, NATIVE_MAX_LEVELS, NATIVE_RATIOS
+from ...descriptors_report import RequirementSet, CapabilitySet
 from pops.runtime_environment import validate_amr_refinement_ratio
 
 
@@ -50,8 +51,8 @@ def _layout_inspect_dict(layout, *, native_features, amr_report=None):
         "category": layout.category,
         "native_id": layout.native_id,
         "options": layout.options(),
-        "requirements": layout.requirements(),
-        "capabilities": layout.capabilities(),
+        "requirements": layout.requirements().to_dict(),
+        "capabilities": layout.capabilities().to_dict(),
         "available": _availability_dict(status),
         "native_capabilities": _native_layout_report(native_features),
     }
@@ -105,7 +106,7 @@ class Uniform(MeshDescriptor):
         return opt
 
     def capabilities(self):
-        return {"layout": "uniform", "levels": 1, "supports_amr": False}
+        return CapabilitySet({"layout": "uniform", "levels": 1, "supports_amr": False})
 
     def inspect(self):
         from pops import inspect_amr
@@ -149,13 +150,13 @@ class AMR(MeshDescriptor):
                 "refine": self.refine.name if self.refine else None}
 
     def capabilities(self):
-        return {"layout": "amr", "max_levels": self.max_levels, "ratio": self.ratio,
-                "supports_amr": True}
+        return CapabilitySet({"layout": "amr", "max_levels": self.max_levels,
+                              "ratio": self.ratio, "supports_amr": True})
 
     def requirements(self):
-        return {"amr_runtime": True,
-                "reflux": True,
-                "tag_reduction": True}
+        return RequirementSet({"amr_runtime": True,
+                               "reflux": True,
+                               "tag_reduction": True})
 
     def available(self, context=None):
         if self.max_levels > NATIVE_MAX_LEVELS:

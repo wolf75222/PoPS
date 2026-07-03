@@ -18,6 +18,15 @@ def _pops_time():
     return t
 
 
+def _op(name):
+    """A typed OperatorHandle for the public linear_source/apply route (ADC-625).
+
+    ``linear_source(handle)`` unwraps to ``handle.name``, so passing OperatorHandle(name) builds
+    the byte-identical IR the historical bare-name selector built, through the public typed route."""
+    from pops.model import OperatorHandle
+    return OperatorHandle(name)
+
+
 def _predictor_corrector(t):
     """Spec example 5: predictor-corrector Poisson/Lorentz (electric source + Lorentz local solve)."""
     P = t.Program("predictor_corrector_poisson_lorentz")
@@ -26,13 +35,13 @@ def _predictor_corrector(t):
     f_n = P.solve_fields("fields_n", U_n)
     R_n = P._rhs_legacy(name="R_n", state=U_n, fields=f_n, flux=True, sources=["electric"])
     U_star_rhs = P.linear_combine("U_star_rhs", U_n + dt * R_n)
-    U_star = P.solve_local_linear(name="U_star", operator=P.I - dt * P.linear_source("lorentz"),
+    U_star = P.solve_local_linear(name="U_star", operator=P.I - dt * P.linear_source(_op("lorentz")),
                                   rhs=U_star_rhs, fields=f_n)
     f_star = P.solve_fields("fields_star", U_star)
     R_star = P._rhs_legacy(name="R_star", state=U_star, fields=f_star, flux=True, sources=["electric"])
-    C_star = P.apply(operator=P.linear_source("lorentz"), state=U_star, fields=f_star, name="C_star")
+    C_star = P.apply(operator=P.linear_source(_op("lorentz")), state=U_star, fields=f_star, name="C_star")
     Q = P.linear_combine("Q", U_n + 0.5 * dt * R_n + 0.5 * dt * R_star + 0.5 * dt * C_star)
-    U_np1 = P.solve_local_linear(name="U_np1", operator=P.I - 0.5 * dt * P.linear_source("lorentz"),
+    U_np1 = P.solve_local_linear(name="U_np1", operator=P.I - 0.5 * dt * P.linear_source(_op("lorentz")),
                                  rhs=Q, fields=f_star)
     P.solve_fields("fields_np1", U_np1)
     P.commit("plasma", U_np1)
@@ -51,7 +60,7 @@ def test_a_coeff_recorded_and_hashed(t):
         P = t.Program("scl")
         U = P.state("plasma")
         Q = P.linear_combine("Q", 1.0 * U)
-        op = P.I - a * P.dt * P.linear_source("lorentz")
+        op = P.I - a * P.dt * P.linear_source(_op("lorentz"))
         P.commit("plasma", P.solve_local_linear(name="W", operator=op, rhs=Q))
         return P
     assert prog(1.0)._ir_hash() != prog(0.5)._ir_hash(), "a different solve coefficient must rehash"
@@ -74,7 +83,7 @@ def test_solve_local_linear_requires_identity(t):
     U = P.state("plasma")
     Q = P.linear_combine("Q", 1.0 * U)
     try:  # a*L without the identity I is not the I +/- a*L form
-        P.solve_local_linear(name="W", operator=P.dt * P.linear_source("lorentz"), rhs=Q)
+        P.solve_local_linear(name="W", operator=P.dt * P.linear_source(_op("lorentz")), rhs=Q)
     except ValueError as exc:
         assert "local linear operators only" in str(exc)
     else:
@@ -86,7 +95,7 @@ def test_source_and_apply_are_rhs_like(t):
     U = P.state("plasma")
     f = P.solve_fields(U)
     S = P.source("electric", state=U, fields=f)
-    LU = P.apply("lorentz", state=U, fields=f)
+    LU = P.apply(P.linear_source(_op("lorentz")), state=U, fields=f)
     assert S.vtype == "rhs" and LU.vtype == "rhs", "source/apply are dU/dt-like (RHS) values"
     P.commit("plasma", P.linear_combine("Un", U + P.dt * S + P.dt * LU))
     assert P.validate() is True

@@ -183,7 +183,7 @@ class SolverContext:
         """Apply the matrix-free operator ``A(x)`` as an IR node (an RHS-like value)."""
         if not (hasattr(x, "vtype") and x.vtype == "state"):
             raise TypeError("apply: x must be a State IR value")
-        return self._p.apply(operator=_operator_name(operator), state=x)
+        return self._p._apply(operator=_operator_name(operator), state=x)
 
     def residual(self, operator, x, b):
         """The residual ``r = b - A(x)`` as an affine IR combine (no Python math)."""
@@ -290,7 +290,7 @@ def build_solver_ir(solver_brick):
     desc = _as_descriptor(solver_brick)
     program = _time.Program("solver_" + desc.name)
     ctx = SolverContext(program)
-    a_op = program.linear_source("A")    # the matrix-free operator A, an IR operator value
+    a_op = program._linear_source("A")   # the matrix-free operator A, an IR operator value
     b_rhs = ctx.unknown("b")             # the right-hand side b, an IR State value
     result = desc.builder(ctx, a_op, b_rhs)
     # A builder may return an affine expression (``x + omega*r``); materialize it into a

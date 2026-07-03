@@ -81,8 +81,8 @@ def test_anisotropic_with_fft_is_rejected_with_actionable_message():
 def test_screened_with_geometric_mg_is_fine():
     # NO FALSE POSITIVE: GeometricMG declares supports_variable_epsilon -> it serves the
     # screened reaction term; supports_screened=False is not a real incompatibility.
-    assert GeometricMG().capabilities()["supports_screened"] is False
-    assert GeometricMG().capabilities()["supports_variable_epsilon"] is True
+    assert GeometricMG().capabilities().supports("screened") is False
+    assert GeometricMG().capabilities().supports("variable_epsilon") is True
     assert _screened_problem(GeometricMG()).validate() is True
 
 
@@ -132,7 +132,7 @@ def test_fft_with_periodic_bc_is_fine():
 
 def test_geometric_mg_with_dirichlet_is_fine():
     # NO FALSE POSITIVE: GeometricMG declares supports_wall_bc True -> it serves a Dirichlet wall.
-    assert GeometricMG().capabilities()["supports_wall_bc"] is True
+    assert GeometricMG().capabilities().supports("wall_bc") is True
     phi = unknown("phi")
     rho = Var("rho", "cons")
     prob = PoissonProblem(unknown=phi, equation=(-laplacian(phi) == rho),

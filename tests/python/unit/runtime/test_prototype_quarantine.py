@@ -52,7 +52,7 @@ def test_backend_descriptor_tiers():
     assert AOT().tier == "internal", "AOT (host-marshalled production algorithm) is internal"
     assert Production().tier == "production", "Production (native loader) is the production route"
     # The tier is also on the capabilities() dict (single source: _BACKEND_CAPS).
-    assert Production().capabilities().get("tier") == "production"
+    assert Production().capabilities().to_dict().get("tier") == "production"
     print("OK  JIT=prototype, AOT=internal, Production=production")
 
 

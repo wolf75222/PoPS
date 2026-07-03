@@ -277,7 +277,7 @@ class _ProgramCore(_ProgramConstants):
                                     flux=low.get("flux", True), sources=low.get("sources"),
                                     fluxes=low.get("fluxes"))
         if kind == "local_linear_operator":
-            return self.linear_source(operator_name)
+            return self._linear_source(operator_name)
         if kind == "projection":
             return self.project(name=name, state=args[0])
         if kind == "coupled_rate":
@@ -444,18 +444,20 @@ LocalTerm`, an :class:`pops.model.OperatorHandle` from ``m.source_term``, or a p
 
     def linear_source(self, operator):
         """Reference a model linear-source operator ``L`` (declared via ``m.linear_source`` /
-        ``m.local_linear_map``). Use it in operator algebra (``self.I - a * P.linear_source(L)``) or
-        `apply`. The coefficients of L are the model's; the Program only names it (resolved at compile
-        time).
-
-        ``operator`` is the typed :class:`pops.model.OperatorHandle` the declarer returned (ADC-532).
-        A handle unwraps to its ``.name`` internally, so the IR is byte-identical to the historical
-        string form; the internal lowering / lib.time macros may still pass the bare name as an
-        internal selector (undocumented)."""
-        name = self._operator_call_name(operator) if not isinstance(operator, str) else operator
-        if not isinstance(name, str) or not name:
-            raise ValueError("linear_source: a non-empty operator name or OperatorHandle is required")
-        return self._new("operator", "linear_source", (), {"linear_source": name}, name, None)
+        ``m.local_linear_map``), for operator algebra (``self.I - a * P.linear_source(L)``) or `apply`.
+        ``operator`` MUST be the typed :class:`pops.model.OperatorHandle` the declarer returned
+        (ADC-532 / ADC-625): a free string is REFUSED here with a ``TypeError`` naming the handle form;
+        the lowering / lib.time macros lower through the ``_linear_source`` seam with the bare name, so
+        the IR is byte-identical to the historical string form."""
+        from pops.model import OperatorHandle
+        if isinstance(operator, str):
+            raise TypeError(
+                "linear_source: a free string %r is not accepted on the public route; pass the typed "
+                "OperatorHandle the declarer returned (P.linear_source(handle))" % (operator,))
+        if not isinstance(operator, OperatorHandle):
+            raise TypeError(
+                "linear_source: expected an pops.model.OperatorHandle, got %r" % (operator,))
+        return self._linear_source(operator.name)
 
     def source(self, name, state=None, fields=None):
         """Evaluate a single named model source ``S_name(U, fields)`` (``m.source_term``) on its own.
@@ -483,16 +485,14 @@ LocalTerm`, an :class:`pops.model.OperatorHandle` from ``m.source_term``, or a p
                 % (where, dom, getattr(lop, "range_name", dom), st))
 
     def apply(self, operator=None, state=None, fields=None, name=None):
-        """Apply a linear-source operator to a state: ``LU = L_name(aux, params) U``. ``operator`` is
-        a `linear_source` value (or its name). Returns an RHS-like value."""
-        state, fields = _resolve_handle(state), _resolve_handle(fields)
-        lname = self._linear_source_name(operator, "apply")
-        if not (isinstance(state, Value) and state.vtype == "state"):
-            raise ValueError("apply: a State value is required (state=...)")
-        if fields is not None and not (isinstance(fields, Value) and fields.vtype == "fields"):
-            raise ValueError("apply: fields must be a FieldContext from solve_fields")
-        self._check_operator_state(operator, state, "apply")
-        inputs = (state, fields) if fields is not None else (state,)
-        return self._new("rhs", "apply", inputs, {"linear_source": lname},
-                         name or ("apply_" + lname), state.block)
+        """Apply a linear-source operator to a state: ``LU = L_name(aux, params) U``.
+
+        ``operator`` MUST be a typed :meth:`linear_source` value or an
+        :class:`pops.model.OperatorHandle` (ADC-625): a free string is REFUSED on this public route
+        with a ``TypeError`` naming the handle form. Returns an RHS-like value."""
+        if isinstance(operator, str):
+            raise TypeError(
+                "apply: a free string %r is not accepted on the public route; pass a typed "
+                "P.linear_source(handle) value or the OperatorHandle" % (operator,))
+        return self._apply(operator, state=state, fields=fields, name=name)
 

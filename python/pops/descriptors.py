@@ -51,7 +51,10 @@ class BrickDescriptor:
         self.requirements = dict(requirements or {})
         self.capabilities = dict(capabilities or {})
         self.options = dict(options or {})
-        self.available = bool(available)
+        # ADC-625: availability is the EXPLAINED route (available(context) -> Availability), not a
+        # public bool. The constructor flag is stored privately as the single source the explaining
+        # route derives from; consumers ask available(), never a bool attribute.
+        self._available = bool(available)
         # Optional board value carried by a generated/macro brick; kept OFF the
         # identity key (it may be an unhashable board node).
         self.expression = expression
@@ -75,37 +78,34 @@ class BrickDescriptor:
             self.name, self.brick_type, self.scheme)
 
     # --- DescriptorProtocol surface (Spec 5 sec.6). The metadata stays carried by the
-    # ``requirements`` / ``capabilities`` / ``options`` / ``available`` ATTRIBUTES above
-    # (this descriptor's documented identity); these inert methods only expose the same
-    # protocol member NAMES the ``Descriptor`` base does. They add no computation.
+    # ``requirements`` / ``capabilities`` / ``options`` ATTRIBUTES above (this descriptor's
+    # documented identity); availability is the EXPLAINED ``available(context) -> Availability``
+    # route (ADC-625), matching the protocol member the ``Descriptor`` base exposes. No computation.
     def lower(self, context=None):
         """The inert :class:`~pops.descriptors_report.LoweredDescriptor` for this brick (ADC-527).
 
-        Metadata only, no computation. The typed record subclasses ``dict``, so a caller that read
-        the old ``lower()`` dict (``name`` / ``category`` / ``native_id`` / ``scheme`` / ``options``)
-        is unchanged. A route with an empty ``native_id`` (a catalogued-but-not-native brick) is left
-        to the loud :meth:`validate` refusal upstream -- never a silent fallback.
+        Metadata only, no computation. The typed record carries ``name`` / ``category`` /
+        ``native_id`` / ``scheme`` / ``options`` as attributes (and via ``to_dict``; ADC-625). A route
+        with an empty ``native_id`` (a catalogued-but-not-native brick) is left to the loud
+        :meth:`validate` refusal upstream -- never a silent fallback.
         """
         from pops.descriptors_report import LoweredDescriptor
-        record = LoweredDescriptor(name=self.name, category=self.category,
-                                   native_id=self.native_id or None, options=dict(self.options),
-                                   extra={"scheme": self.scheme})
-        # Keep ``scheme`` at the TOP level (not just under ``extra``) so callers that read the old
-        # ``lower()["scheme"]`` are unchanged.
-        record["scheme"] = self.scheme
-        record.scheme = self.scheme
-        return record
+        return LoweredDescriptor(name=self.name, category=self.category,
+                                 native_id=self.native_id or None, options=dict(self.options),
+                                 scheme=self.scheme)
 
-    def availability(self, context=None):
-        """The EXPLAINABLE availability status of this brick (ADC-527: not just the bool attribute).
+    def available(self, context=None):
+        """The EXPLAINABLE availability status of this brick (ADC-625: the ONE availability route).
 
-        ``BrickDescriptor.available`` stays a bool attribute (its documented identity, and the shape
-        the catalog walks read). This method gives the typed :class:`Availability` the protocol wants:
-        a native brick is ``yes``; a catalogued brick with no native symbol yet is ``no`` with the
-        reason and the typed alternative (mirrors the :meth:`validate` message), so a rejection is
-        explainable before the runtime is touched.
+        Matches the ``DescriptorProtocol`` ``available(context) -> Availability`` member (the same
+        method the base :class:`Descriptor` and the mesh descriptors expose): a route is chosen by an
+        EXPLAINED status, never a bare bool. There is no public ``.available`` bool attribute anymore;
+        this is the single source of truth. A native brick is ``yes``; a catalogued brick with no
+        native symbol yet is ``no`` with the reason and the typed alternative (mirrors the
+        :meth:`validate` message), so a rejection is explainable before the runtime is touched. A
+        consumer reads ``brick.available(context).ok`` (or ``bool(brick.available(context))``).
         """
-        if self.available:
+        if self._available:
             return Availability.yes()
         return Availability.no(
             "%s [%s] has no native C++ symbol yet" % (self.name, self.category),
@@ -113,15 +113,19 @@ class BrickDescriptor:
             alternatives=["choose an available descriptor from pops.inspect_capabilities()"])
 
     def inspect(self):
-        """A plain-dict view of the brick descriptor (Spec 5 sec.12.1)."""
+        """A plain-dict view of the brick descriptor (Spec 5 sec.12.1).
+
+        ``available`` is derived from the ONE availability route (``available().ok``), so the
+        inspect view never diverges from the explained status (ADC-625).
+        """
         return {"name": self.name, "category": self.category, "native_id": self.native_id,
                 "scheme": self.scheme, "options": dict(self.options),
                 "requirements": dict(self.requirements),
-                "capabilities": dict(self.capabilities), "available": self.available}
+                "capabilities": dict(self.capabilities), "available": self.available().ok}
 
     def validate(self, context=None):
-        """Raise a clear error when this brick has no native symbol yet (``available`` False)."""
-        if not self.available:
+        """Raise a clear error when this brick has no native symbol yet (unavailable route)."""
+        if not self.available(context).ok:
             raise ValueError(
                 "%s [%s] is not available: it has no native C++ symbol yet; unsupported route: "
                 "requested %s:%s; available route: native %s descriptors with a non-empty "
@@ -133,10 +137,11 @@ class BrickDescriptor:
     def capability_matrix(self, context=None):
         """One-row ADC-549 capability matrix for this brick descriptor (metadata only)."""
         from pops._capabilities import CapabilityRouteMatrix, CapabilityRouteRow
-        status = "available" if self.available else "unavailable"
-        limitation = "" if self.available else "catalogued descriptor has no native C++ symbol"
+        ok = self.available(context).ok
+        status = "available" if ok else "unavailable"
+        limitation = "" if ok else "catalogued descriptor has no native C++ symbol"
         error = ""
-        if not self.available:
+        if not ok:
             error = ("unsupported route: requested %s:%s; available route: native %s "
                      "descriptors with a non-empty native_id; alternative: choose an available "
                      "descriptor from pops.inspect_capabilities()."

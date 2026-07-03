@@ -39,12 +39,12 @@ def test_field_outputs_construct_and_inspect():
     J = DerivedField("J", "ohm", source="phi")
     assert phi.options() == {"name": "phi", "recipe": "field", "source": "phi"}
     assert E.options()["recipe"] == "grad_phi" and E.options()["source"] == "phi"
-    assert E.capabilities()["vector"] is True
+    assert E.capabilities().to_dict()["vector"] is True
     assert J.options()["recipe"] == "ohm"
     for out in (phi, E, J):
         assert out.category == "field_output"
         assert isinstance(out.inspect(), dict)
-        assert out.requirements()["field"] == "phi"
+        assert out.requirements().to_dict()["field"] == "phi"
 
 
 def test_fields_package_exports_outputs():
@@ -59,7 +59,7 @@ def test_composed_multiblock_rhs():
     assert isinstance(composed, SumRHS)
     assert composed.options()["n_terms"] == 2
     assert composed.options()["terms"] == ["charge_density", "fixed_source"]
-    req = composed.requirements()
+    req = composed.requirements().to_dict()
     assert req["blocks"] == ["ions", "electrons"]
     assert req["aux_fields"] == ["rho_background"]
 
@@ -132,7 +132,7 @@ def test_required_nullspace_refused():
     # Declaring a ConstantNullspace satisfies the singular operator.
     ok = _problem(GeometricMG(), nullspace=ConstantNullspace())
     assert ok.validate(context=ctx) is True
-    assert ok.requirements()["nullspace"] == "ConstantNullspace"
+    assert ok.requirements().to_dict()["nullspace"] == "ConstantNullspace"
 
 
 # --- NO FALSE POSITIVE: an unspecified context never triggers the opt-in guards ----------------

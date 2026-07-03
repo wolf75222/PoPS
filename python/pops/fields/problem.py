@@ -68,10 +68,10 @@ class SolveCadence(Descriptor):
         return {"schedule": repr(self.schedule), "policy": self.policy.name}
 
     def requirements(self):
-        return dict(self.policy.requirements())
+        return self.policy.requirements()
 
     def capabilities(self):
-        return dict(self.policy.capabilities())
+        return self.policy.capabilities()
 
     def inspect(self):
         info = super().inspect()
@@ -136,13 +136,15 @@ class FieldProblem(Descriptor):
                 "has_cadence": self.cadence is not None}
 
     def requirements(self):
+        from pops.descriptors_report import RequirementSet
         req = {"equation": True, "solver": True}
         if self.nullspace is not None:
             req["nullspace"] = getattr(self.nullspace, "name", repr(self.nullspace))
-        return req
+        return RequirementSet(req)
 
     def capabilities(self):
-        return {"elliptic": True}
+        from pops.descriptors_report import CapabilitySet
+        return CapabilitySet({"elliptic": True})
 
     def available(self, context=None):
         if not isinstance(self.equation, Equation):
@@ -257,7 +259,8 @@ class FieldProblem(Descriptor):
             declared = caps()
         except Exception:
             return False
-        return isinstance(declared, dict) and declared.get("layout") == "amr"
+        # ``declared`` is a typed CapabilitySet (or a plain dict): both expose ``.get`` (ADC-625).
+        return hasattr(declared, "get") and declared.get("layout") == "amr"
 
     def _require_layout_compatible_solver(self, context):
         """Refuse a solver that cannot serve an AMR mesh layout (Spec 6 sec.8/9, #11).
@@ -328,7 +331,8 @@ class FieldProblem(Descriptor):
         if not callable(caps):
             return
         declared = caps()
-        if not isinstance(declared, dict):
+        # ``declared`` is a typed CapabilitySet (or a plain dict): both expose ``.get`` (ADC-625).
+        if not hasattr(declared, "get"):
             return
         periodic_only = (declared.get("supports_wall_bc") is False
                          and declared.get("supports_periodic_bc") is True)
@@ -373,7 +377,8 @@ class FieldProblem(Descriptor):
         if not callable(caps):
             return  # no capability surface -> absent, not declared-False: never reject.
         declared = caps()
-        if not isinstance(declared, dict):
+        # ``declared`` is a typed CapabilitySet (or a plain dict): both expose ``.get`` (ADC-625).
+        if not hasattr(declared, "get"):
             return
         # A variable-coefficient elliptic kernel serves screened / anisotropic-by-coefficient.
         if declared.get("supports_variable_epsilon") is True:

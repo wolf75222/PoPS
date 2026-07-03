@@ -8,6 +8,7 @@ codegen consumes it. A non-strict numeric transform is never implicit -- it must
 here (Spec 5 sec.13.10).
 """
 from pops.descriptors import Descriptor, reject_string_selector
+from pops.descriptors_report import CapabilitySet
 from .math_options import StrictMath, _MathMode
 
 
@@ -38,7 +39,7 @@ class ConservativeFusion(_Fusion):
 
     def capabilities(self):
         # Fusion across an elliptic solve / global reduction / halo refresh is never allowed.
-        return {"crosses_solve": False, "crosses_reduction": False}
+        return CapabilitySet({"crosses_solve": False, "crosses_reduction": False})
 
 
 _MATH_SUGGEST = ('a typed StrictMath()/FastMath()/DebugMath()/GpuRegisterAware(), not the '
@@ -115,7 +116,7 @@ class Optimization(Descriptor):
                 "math": self.math.name}
 
     def capabilities(self):
-        return {"strict_math": isinstance(self.math, StrictMath)}
+        return CapabilitySet({"strict_math": isinstance(self.math, StrictMath)})
 
     def to_emit_kwargs(self):
         """Map this policy onto the existing ``emit_cpp*`` knobs (cse / hoist_reciprocals)."""

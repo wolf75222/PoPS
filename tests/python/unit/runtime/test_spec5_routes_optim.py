@@ -203,8 +203,8 @@ def test_optimization_typed_math_still_works():
         assert opt.options()["math"] == type(mode).__name__
     # A bare Optimization() default stays StrictMath (conservative).
     assert isinstance(Optimization().math, StrictMath)
-    assert Optimization().capabilities()["strict_math"] is True
-    assert Optimization(math=FastMath()).capabilities()["strict_math"] is False
+    assert Optimization().capabilities().to_dict()["strict_math"] is True
+    assert Optimization(math=FastMath()).capabilities().to_dict()["strict_math"] is False
     # The typed fuse policy still threads through.
     opt = Optimization(fuse=ConservativeFusion())
     assert opt.options()["fuse"] == "ConservativeFusion"
@@ -245,13 +245,13 @@ def test_problem_methods_still_work_after_dropping_descriptor_base():
     assert prob.category == "problem"
     assert prob.native_id is None
     assert isinstance(prob.options(), dict) and prob.options()["n_blocks"] == 1
-    assert isinstance(prob.requirements(), dict)
-    assert isinstance(prob.capabilities(), dict)
+    assert isinstance(prob.requirements().to_dict(), dict)
+    assert isinstance(prob.capabilities().to_dict(), dict)
     assert bool(prob.available()) is True
     assert prob.validate() is True
     info = prob.inspect()
     assert info["name"] == "plasma" and "layout" in info and "blocks" in info
-    record = prob.lower()
+    record = prob.lower().to_dict()
     assert record["name"] == "plasma" and record["category"] == "problem"
     assert "plasma" in str(prob) and "Problem(" in repr(prob)
 

@@ -89,7 +89,8 @@ class _Backend(Descriptor):
         # Imported lazily to keep this module dependency-light and avoid an import cycle with the
         # compile pipeline (which imports the backend descriptors back).
         from pops.codegen.compile_emit import _BACKEND_CAPS
-        return dict(_BACKEND_CAPS.get(self._string, {}))
+        from pops.descriptors_report import CapabilitySet
+        return CapabilitySet(dict(_BACKEND_CAPS.get(self._string, {})))
 
     def available(self, context=None):
         """Available when the recorded platform (if any) is available; else explain why not."""
