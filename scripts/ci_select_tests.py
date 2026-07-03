@@ -22,6 +22,7 @@ from typing import Iterable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ci_import_closure  # noqa: E402
+import ci_shard_binpack  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -265,11 +266,26 @@ def only_meta(changed: Iterable[str]) -> bool:
 
 
 def shard(items: list[str], index: int | None, total: int | None) -> list[str]:
+    """Duration-balanced binpacking of the selected files onto one shard (ADC-623).
+
+    When ``index``/``total`` are omitted (the unsharded query used by the tests and by the
+    "has this shard any work" check) the full selected list is returned unchanged, EXCEPT
+    the compile-cache files that run in their own dedicated CI job -- excluding them here too
+    keeps the unsharded view consistent with what the shards actually run.
+
+    With a shard requested, ``ci_shard_binpack.shard_files`` removes the excluded files,
+    greedily LPT-packs the remainder by measured duration, verifies the partition is an exact
+    cover of ``items`` (fails loudly otherwise), and returns this shard's file list.
+    """
+    excluded = set(ci_shard_binpack.EXCLUDED_FROM_SHARDS)
     if index is None or total is None:
-        return items
+        return [item for item in items if item not in excluded]
     if total <= 0 or index < 0 or index >= total:
         raise SystemExit(f"invalid shard {index}/{total}")
-    return [item for i, item in enumerate(items) if i % total == index]
+    try:
+        return ci_shard_binpack.shard_files(items, index, total)
+    except ci_shard_binpack.PartitionError as exc:
+        raise SystemExit(f"shard partition invariant violated: {exc}")
 
 
 def write_explain_file(path: str | None, payload: dict) -> None:
@@ -375,8 +391,38 @@ def _apply_cross_test_closure(selected: set[str], reasons: dict[str, set[str]]) 
         add_reason(reasons, test, "cross-test-closure")
 
 
-def plan_python(args: argparse.Namespace) -> int:
-    changed = read_changed_files(Path(args.changed_files))
+class PythonSelection:
+    """The result of the Python test selection, independent of any sharding."""
+
+    def __init__(
+        self,
+        changed: list[str],
+        all_tests: list[str],
+        selected_tests: list[str],
+        mode: str,
+        areas: set[str],
+        why: set[str],
+        full_reasons: list[str],
+        reasons: dict[str, set[str]],
+    ) -> None:
+        self.changed = changed
+        self.all_tests = all_tests
+        self.selected_tests = selected_tests
+        self.mode = mode
+        self.areas = areas
+        self.why = why
+        self.full_reasons = full_reasons
+        self.reasons = reasons
+
+
+def compute_python_selection(changed_files: str, force_all: bool) -> PythonSelection:
+    """Compute the selected Python test files (the shard-independent selection).
+
+    Shared by ``plan_python`` (which then shards + reports) and the ``verify`` subcommand
+    (which reconstructs every shard and asserts an exact cover). Keeping selection in one
+    place means the exactness check verifies the SAME set the shards run.
+    """
+    changed = read_changed_files(Path(changed_files))
     manifest = load_manifest()
     suites = manifest_python_suites(manifest)
     all_tests = sorted({test for suite in suites for test in suite["files"]})
@@ -387,7 +433,7 @@ def plan_python(args: argparse.Namespace) -> int:
 
     full_reasons: list[str] = []
     why: set[str] = set()
-    if args.force_all:
+    if force_all:
         full_reasons.append("force-all")
     if force_full_from_changed(changed, PYTHON_BROAD_FILES, PYTHON_BROAD_PREFIXES):
         full_reasons.append("broad-file")
@@ -459,6 +505,29 @@ def plan_python(args: argparse.Namespace) -> int:
         mode = "subset" if selected else "none"
         selected_tests = sorted(selected)
 
+    return PythonSelection(
+        changed=changed,
+        all_tests=all_tests,
+        selected_tests=selected_tests,
+        mode=mode,
+        areas=areas,
+        why=why,
+        full_reasons=full_reasons,
+        reasons=reasons,
+    )
+
+
+def plan_python(args: argparse.Namespace) -> int:
+    sel = compute_python_selection(args.changed_files, args.force_all)
+    changed = sel.changed
+    all_tests = sel.all_tests
+    selected_tests = sel.selected_tests
+    mode = sel.mode
+    areas = sel.areas
+    why = sel.why
+    full_reasons = sel.full_reasons
+    reasons = sel.reasons
+
     sharded = shard(selected_tests, args.shard_index, args.shard_total)
     if args.tests_file:
         Path(args.tests_file).write_text("".join(f"{test}\n" for test in sharded), encoding="utf-8")
@@ -507,6 +576,40 @@ def plan_python(args: argparse.Namespace) -> int:
     return 0
 
 
+def plan_verify(args: argparse.Namespace) -> int:
+    """Reconstruct every shard and fail loudly unless they exactly cover the selection.
+
+    The safety net for the duration binpacking (ADC-623): recompute the SAME selection the
+    shard jobs use, pack it across ``--shard-total`` shards, and assert the union of all
+    shards plus the excluded (dedicated-job) files equals the selection exactly -- no test
+    silently dropped, none duplicated. Runs as an explicit CI step so a broken partition
+    fails the gate rather than quietly under-testing.
+    """
+    sel = compute_python_selection(args.changed_files, args.force_all)
+    selected = sel.selected_tests
+    total = args.shard_total
+    excluded = set(ci_shard_binpack.EXCLUDED_FROM_SHARDS)
+    shardable = [t for t in selected if t not in excluded]
+    shards = ci_shard_binpack.assign_shards(shardable, total)
+    try:
+        ci_shard_binpack.verify_partition(selected, shards, ci_shard_binpack.EXCLUDED_FROM_SHARDS)
+    except ci_shard_binpack.PartitionError as exc:
+        print(f"::error::shard partition is not an exact cover: {exc}")
+        raise SystemExit(1)
+
+    excluded_present = sorted(set(selected) & excluded)
+    loads = [round(sum(1 for _ in shard), 0) for shard in shards]
+    print(
+        f"partition OK: {sel.mode} selection of {len(selected)} files "
+        f"({len(shardable)} sharded across {total} + {len(excluded_present)} in the dedicated "
+        f"compile-cache job) is an exact cover"
+    )
+    print("per-shard file counts: " + ", ".join(str(int(n)) for n in loads))
+    if excluded_present:
+        print("dedicated-job files (excluded from shards): " + ", ".join(excluded_present))
+    return 0
+
+
 def _test_to_test() -> dict[str, set[str]]:
     """Return only the cross-test edge map from ``ci_import_closure``."""
     _, edges = ci_import_closure.test_imports(repo_root=ROOT)
@@ -533,6 +636,12 @@ def main() -> int:
     py.add_argument("--shard-total", type=int)
     py.add_argument("--force-all", action="store_true")
     py.set_defaults(func=plan_python)
+
+    verify = sub.add_parser("verify")
+    verify.add_argument("--changed-files", required=True)
+    verify.add_argument("--shard-total", type=int, required=True)
+    verify.add_argument("--force-all", action="store_true")
+    verify.set_defaults(func=plan_verify)
 
     args = parser.parse_args()
     return args.func(args)
