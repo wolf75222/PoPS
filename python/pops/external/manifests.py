@@ -9,19 +9,22 @@ exported_symbols>}, ...]}``. It can be read from a ``.json`` file or from a ``.s
 WITHOUT registering or executing anything. The strict parse (schema_version / required fields /
 unknown-field refusal) lives ONCE in :func:`pops.descriptors.parse_brick_manifest`. Nothing here computes.
 """
+from __future__ import annotations
+
 import ctypes
+from typing import Any
 
 from pops.descriptors import (BRICK_MANIFEST_SCHEMA_VERSION, load_cpp_library, _register_manifest,
                               parse_brick_manifest)
 
 
-def register_manifest_file(path):
+def register_manifest_file(path: Any) -> Any:
     """Register the bricks in a manifest ``.json`` file. Returns the count registered."""
     with open(str(path), "r", encoding="utf-8") as handle:
         return _register_manifest(handle.read())
 
 
-def register(path):
+def register(path: Any) -> Any:
     """Register a manifest from a ``.json`` file or a brick ``.so`` (dlopen). Returns the count.
 
     A ``.json`` path is parsed directly; anything else is treated as a loadable ``.so`` and
@@ -77,29 +80,29 @@ class CompiledManifest:
     :func:`pops.external.register` to actually register the bricks.
     """
 
-    def __init__(self, bricks, *, abi_key=None):
+    def __init__(self, bricks: Any, *, abi_key: Any = None) -> None:
         self.bricks = list(bricks)
         self.abi_key = abi_key
 
     @property
-    def ids(self):
+    def ids(self) -> list:
         """The brick ids in declaration order."""
         return [b["id"] for b in self.bricks]
 
     @property
-    def categories(self):
+    def categories(self) -> list:
         """The set of brick categories the manifest declares."""
         return sorted({b["category"] for b in self.bricks})
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         """A plain-dict view of the manifest (abi_key + brick records)."""
         return {"abi_key": self.abi_key, "bricks": [dict(b) for b in self.bricks]}
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "CompiledManifest(ids=%r, abi_key=%r)" % (self.ids, self.abi_key)
 
 
-def _parse_manifest_metadata(manifest_json):
+def _parse_manifest_metadata(manifest_json: Any) -> Any:
     """Parse manifest JSON into a :class:`CompiledManifest` WITHOUT registering it, under the STRICT
     versioned schema (ADC-611).
 
@@ -111,7 +114,7 @@ def _parse_manifest_metadata(manifest_json):
     return CompiledManifest(records, abi_key=abi_key)
 
 
-def read_manifest(path):
+def read_manifest(path: Any) -> Any:
     """Read a brick manifest (``.json`` or ``.so``) for INSPECTION only (Spec 5 sec.5.17).
 
     Returns a :class:`CompiledManifest` with the manifest's ids / categories / requirements /

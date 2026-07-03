@@ -18,10 +18,13 @@ so they need no ``pops.time`` import; the decorator imports ``pops.time.Program`
 (function-local), keeping this module free of a lib -> time module-scope edge beyond the
 layering allowance.
 """
+from __future__ import annotations
+
 import functools
+from typing import Any
 
 
-def program_macro(build):
+def program_macro(build: Any) -> Any:
     """Make a scheme builder both an in-place mutator AND a Program factory (ADC-554).
 
     ``build(P, block, ...)`` is the historical in-place builder. The wrapper dispatches on the FIRST
@@ -39,7 +42,7 @@ def program_macro(build):
     Program produce the same logical IR.
     """
     @functools.wraps(build)
-    def macro(*args, **kwargs):
+    def macro(*args: Any, **kwargs: Any) -> Any:
         from pops.time import Program  # lazy: keep pops.lib.time free of a module-scope time edge
         if args and isinstance(args[0], Program):
             return build(*args, **kwargs)  # legacy in-place path, result unchanged
@@ -50,7 +53,7 @@ def program_macro(build):
     return macro
 
 
-def _stage_rhs(P, U, sources, flux):
+def _stage_rhs(P: Any, U: Any, sources: Any, flux: Any) -> Any:
     """Solve the elliptic fields from U and assemble its RHS for one stage. The FieldContext is
     distinct per stage (no stale global aux). flux=False builds a source-only sub-flow (e.g. Strang S).
 
@@ -61,7 +64,7 @@ def _stage_rhs(P, U, sources, flux):
     return P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
 
 
-def _operator_handle(operator, kwarg):
+def _operator_handle(operator: Any, kwarg: Any) -> Any:
     """Coerce a macro operator selector to a typed :class:`pops.model.OperatorHandle` (ADC-532).
 
     An operator-first macro takes typed handles (from ``m.rate`` / ``m.field_solve`` /
@@ -81,7 +84,7 @@ def _operator_handle(operator, kwarg):
         % (kwarg, operator))
 
 
-def _op_space_arity(P, handle):
+def _op_space_arity(P: Any, handle: Any) -> Any:
     """Number of space-typed inputs (State / FieldSpace) of @p handle's operator in the bound
     registry. Accepts an :class:`pops.model.OperatorHandle` (resolved by its ``.name``)."""
     if P._registry is None:
@@ -90,7 +93,7 @@ def _op_space_arity(P, handle):
     return sum(1 for t in op.signature.inputs if getattr(t, "kind", None) in ("state", "field"))
 
 
-def _opcall(P, handle, *candidate_args, value_name=None):
+def _opcall(P: Any, handle: Any, *candidate_args: Any, value_name: Any = None) -> Any:
     """Call @p handle's operator passing exactly as many leading args as its signature's space inputs
     (so an operator that ignores the fields is called with the state alone, and a fields-free linear
     operator with no args). @p handle is a typed :class:`pops.model.OperatorHandle`.

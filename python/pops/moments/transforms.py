@@ -9,6 +9,9 @@ Document the two transforms the generator performs:
 
 Both are inert records; the arithmetic lives in the generator and lowers to C++.
 """
+from __future__ import annotations
+
+from typing import Any
 
 
 class CenteredTransform:
@@ -18,10 +21,10 @@ class CenteredTransform:
     applies to; it performs no arithmetic in Python.
     """
 
-    def __init__(self, order):
+    def __init__(self, order: Any) -> None:
         self.order = int(order)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "CenteredTransform(order=%d)" % (self.order,)
 
 
@@ -32,10 +35,10 @@ class StandardizedTransform:
     ``sy = sqrt(C02)``). It records the order; it performs no arithmetic in Python.
     """
 
-    def __init__(self, order):
+    def __init__(self, order: Any) -> None:
         self.order = int(order)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "StandardizedTransform(order=%d)" % (self.order,)
 
 

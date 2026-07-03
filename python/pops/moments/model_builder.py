@@ -8,25 +8,28 @@ The PDE-model facade (``physics.PdeModel``) is imported
 LAZILY inside :func:`build_moment_model` because :mod:`pops.physics` pulls the
 compile machinery transitively, and ``lib`` must stay importable without it.
 """
+from __future__ import annotations
+
 from math import comb
+from typing import Any
 
 from pops.ir.expr import Const as _Const
 from pops.ir.ops import sqrt as _sqrt, abs_ as _abs_
 
 
-def moment_indices(order):
+def moment_indices(order: Any) -> list:
     """Canonical list of (p, q) with p + q <= order: q outer, p inner, increasing."""
     if order < 1:
         raise ValueError("moments: order >= 1 required (order %r)" % (order,))
     return [(p, q) for q in range(order + 1) for p in range(order + 1 - q)]
 
 
-def moment_names(order):
+def moment_names(order: Any) -> list:
     """Canonical names 'M{p}{q}' aligned with moment_indices(order)."""
     return ["M%d%d" % pq for pq in moment_indices(order)]
 
 
-def _pow(e, k):
+def _pow(e: Any, k: Any) -> Any:
     """e**k by repeated multiplication (k >= 0; e a DSL Expr or a number)."""
     if k == 0:
         return 1.0
@@ -36,7 +39,7 @@ def _pow(e, k):
     return r
 
 
-def _is_zero(e):
+def _is_zero(e: Any) -> bool:
     # NUMERIC zero (int/float) or SYMBOLIC zero (ir.Const(0.0)): a closure may return
     # either one; both drop the term from the generated flux (dead primitive not emitted).
     if isinstance(e, (int, float)):
@@ -44,8 +47,9 @@ def _is_zero(e):
     return isinstance(e, _Const) and e.value == 0.0
 
 
-def build_moment_model(name, order, closure, blocks=None, exact_speeds=True,
-                       robust=False, eps_m00=1e-12, eps_cov=1e-12, sources=None, roe=False):
+def build_moment_model(name: Any, order: Any, closure: Any, blocks: Any = None,
+                       exact_speeds: bool = True, robust: bool = False, eps_m00: Any = 1e-12,
+                       eps_cov: Any = 1e-12, sources: Any = None, roe: bool = False) -> Any:
     """2D moment model with an arbitrary closure: flux and intermediates GENERATED.
 
     @p order: max order of the transported moments (order=2 -> 6 variables, order=4 -> 15).
@@ -80,7 +84,7 @@ def build_moment_model(name, order, closure, blocks=None, exact_speeds=True,
     cons = m.conservative_vars(*moment_names(order))
     M = dict(zip(idx, cons))
 
-    def floor(nm, x, eps):
+    def floor(nm: Any, x: Any, eps: Any) -> Any:
         # max(x, eps) = ((x + eps) + |x - eps|) / 2: smooth floor, expressible in the AST.
         return m.primitive(nm, ((x + eps) + _abs_(x - eps)) / 2.0)
 
@@ -97,7 +101,7 @@ def build_moment_model(name, order, closure, blocks=None, exact_speeds=True,
     for s in range(2, order + 1):
         for q in range(s + 1):
             p = s - q
-            expr = None
+            expr: Any = None
             for i in range(p + 1):
                 for j in range(q + 1):
                     coef = float(comb(p, i) * comb(q, j) * (-1) ** (p - i + q - j))
@@ -148,7 +152,7 @@ def build_moment_model(name, order, closure, blocks=None, exact_speeds=True,
         Mtop[(p, q)] = m.primitive("M%d%d" % (p, q), M00 * expr)
 
     # --- flux: order shift F_x[M_pq] = M_{p+1,q}, F_y[M_pq] = M_{p,q+1} ---
-    def raw(pq):
+    def raw(pq: Any) -> Any:
         return M[pq] if pq in M else Mtop[pq]
 
     m.flux(x=[raw((p + 1, q)) for (p, q) in idx],

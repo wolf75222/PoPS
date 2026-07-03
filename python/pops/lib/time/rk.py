@@ -2,12 +2,15 @@
 
 Exports: rk4, rk, explicit_rk, ButcherTableau, RK4_TABLEAU, SSPRK2_TABLEAU.
 """
+from __future__ import annotations
+
+from typing import Any
 
 from ._helpers import _opcall, _operator_handle, _stage_rhs, program_macro
 
 
 @program_macro
-def rk4(P, block, *, sources=("default",), flux=True):
+def rk4(P: Any, block: Any, *, sources: Any = ("default",), flux: Any = True) -> Any:
     """Classic RK4, expressed with NO special RK4 class (spec acceptance 29):
     U^{n+1} = U0 + dt/6 (k1 + 2 k2 + 2 k3 + k4)."""
     U0 = P.state(block)
@@ -28,7 +31,7 @@ class ButcherTableau:
     depends only on stages j < i), ``b`` the final weights, ``c`` the (unused-by-the-lowering) nodes.
     Validated as explicit and consistent (``len(A) == len(b)``, row i has i entries, ``sum(b) == 1``)."""
 
-    def __init__(self, A, b, c=None, name=None):
+    def __init__(self, A: Any, b: Any, c: Any = None, name: Any = None) -> None:
         self.A = [list(row) for row in A]
         self.b = list(b)
         self.c = list(c) if c is not None else [sum(row) for row in self.A]
@@ -45,7 +48,7 @@ class ButcherTableau:
             raise ValueError("ButcherTableau: weights b must sum to 1 (got %r)" % (sum(self.b),))
 
     @property
-    def stages(self):
+    def stages(self) -> int:
         return len(self.b)
 
 
@@ -69,7 +72,7 @@ SSPRK2_TABLEAU = ButcherTableau(
 
 
 @program_macro
-def rk(P, block, tableau, *, sources=("default",), flux=True):
+def rk(P: Any, block: Any, tableau: Any, *, sources: Any = ("default",), flux: Any = True) -> Any:
     """Generic explicit Runge-Kutta from a Butcher @p tableau (ADC-423), lowered to the SAME stage chain
     the hard-coded `rk4` macro emits -- ``solve_fields`` + ``rhs`` + ``linear_combine``, no RK class:
 
@@ -86,7 +89,7 @@ def rk(P, block, tableau, *, sources=("default",), flux=True):
         tableau = ButcherTableau(A, b, c)
     tag = (tableau.name + "_") if tableau.name else "rk_"
     U0 = P.state(block)
-    ks = []
+    ks: list[Any] = []
     for i in range(tableau.stages):
         if i == 0:
             Ui = U0  # the first stage reads U^n directly (no scratch combine, like rk4)
@@ -107,8 +110,9 @@ def rk(P, block, tableau, *, sources=("default",), flux=True):
 
 
 @program_macro
-def explicit_rk(P, block, *, rhs_operator, fields_operator=None, tableau=None, A=None, b=None,
-                c=None, state_space="U"):
+def explicit_rk(P: Any, block: Any, *, rhs_operator: Any, fields_operator: Any = None,
+                tableau: Any = None, A: Any = None, b: Any = None, c: Any = None,
+                state_space: Any = "U") -> Any:
     """Generic explicit Runge-Kutta over a typed rate operator (Spec 2, operator-first).
 
     Each stage is ``k_i = rhs_operator(U_i[, fields_operator(U_i)])``; the tableau lowers to the same
@@ -129,7 +133,7 @@ def explicit_rk(P, block, *, rhs_operator, fields_operator=None, tableau=None, A
         tableau = ButcherTableau(ta, tb, tc)
     tag = (tableau.name + "_") if tableau.name else "rk_"
     u0 = P.state(block)
-    ks = []
+    ks: list[Any] = []
     for i in range(tableau.stages):
         if i == 0:
             u_i = u0

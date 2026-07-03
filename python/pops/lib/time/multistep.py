@@ -3,12 +3,15 @@
 Exports: adams_bashforth, adams_bashforth2, bdf.
 Private helpers: _AB_WEIGHTS, _bdf_local_linear, _bdf_implicit_flux.
 """
+from __future__ import annotations
+
+from typing import Any
 
 from ._helpers import _operator_handle, _stage_rhs, program_macro
 from .euler import forward_euler as _forward_euler_macro
 
 
-def _forward_euler(P, block, sources, flux):
+def _forward_euler(P: Any, block: Any, sources: Any, flux: Any) -> None:
     # AB1 degenerates to Forward Euler; reuse the local euler macro for byte-identical IR.
     _forward_euler_macro(P, block, sources=sources, flux=flux)
 
@@ -22,7 +25,8 @@ _AB_WEIGHTS = {
 
 
 @program_macro
-def adams_bashforth(P, block, order, *, sources=("default",), flux=True):
+def adams_bashforth(P: Any, block: Any, order: Any, *, sources: Any = ("default",),
+                    flux: Any = True) -> Any:
     """Adams-Bashforth, explicit ``order``-step, over the System-owned history ring (ADC-406a / ADC-423):
 
         R_n     = R(U)
@@ -63,7 +67,7 @@ def adams_bashforth(P, block, order, *, sources=("default",), flux=True):
 
 
 @program_macro
-def adams_bashforth2(P, block, *, sources=("default",), flux=True):
+def adams_bashforth2(P: Any, block: Any, *, sources: Any = ("default",), flux: Any = True) -> Any:
     """Adams-Bashforth 2, a thin back-compat alias for ``adams_bashforth(P, block, 2)`` (ADC-423).
 
     Kept so existing callers and the historical ``"ab2_step"`` IR are unchanged: this lowers to the
@@ -71,7 +75,8 @@ def adams_bashforth2(P, block, *, sources=("default",), flux=True):
     adams_bashforth(P, block, 2, sources=sources, flux=flux)
 
 
-def _bdf_local_linear(P, block, order, linear_source, sources, flux):
+def _bdf_local_linear(P: Any, block: Any, order: Any, linear_source: Any, sources: Any,
+                      flux: Any) -> Any:
     """The cell-LOCAL linear-source BDF fast path (the historical lowering): the BDF system is
     block-diagonal, so ``(c0*I - dt*L) U^{n+1} = rhs`` is solved per cell by `P.solve_local_linear`.
 
@@ -84,7 +89,7 @@ def _bdf_local_linear(P, block, order, linear_source, sources, flux):
     R = (P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
          if (flux or sources) else None)
 
-    def _with_explicit(expr):
+    def _with_explicit(expr: Any) -> Any:
         return (expr + P.dt * R) if R is not None else expr
 
     if order == 1:  # (I - dt*L) U^{n+1} = U^n [+ dt R]
@@ -106,8 +111,9 @@ def _bdf_local_linear(P, block, order, linear_source, sources, flux):
     return out
 
 
-def _bdf_implicit_flux(P, block, order, sources, flux, ncomp, newton_tol, newton_max, krylov_tol,
-                       krylov_max, krylov_restart, eps):
+def _bdf_implicit_flux(P: Any, block: Any, order: Any, sources: Any, flux: Any, ncomp: Any,
+                       newton_tol: Any, newton_max: Any, krylov_tol: Any,
+                       krylov_max: Any, krylov_restart: Any, eps: Any) -> Any:
     """The IMPLICIT-FLUX BDF lowering (ADC-431): a matrix-free Newton-Krylov solve of the coupled
     nonlinear system, composed PURELY from existing IR primitives (no new C++ stepper).
 
@@ -147,7 +153,7 @@ def _bdf_implicit_flux(P, block, order, sources, flux, ncomp, newton_tol, newton
         P.store_history(name, U0)                   # store U^n (cold-start fills the ring)
         U_nm1 = P.history(name, lag=1)              # U^{n-1} (== U^n on step 0 -> BDF1 cold start)
 
-    def _un_terms():
+    def _un_terms() -> Any:
         # The lagged (constant-in-Newton) part of the residual: U^n for BDF1, (4/3)U^n - (1/3)U^{n-1}
         # for BDF2 (the constant-state coefficients of the BDF residual normalized to a unit U^{n+1}).
         if order == 1:
@@ -157,20 +163,20 @@ def _bdf_implicit_flux(P, block, order, sources, flux, ncomp, newton_tol, newton
     src = list(sources) if sources is not None else None
     kind = "scalar" if ncomp == 1 else "state"
 
-    def _residual(P, Uk, tag):
+    def _residual(P: Any, Uk: Any, tag: Any) -> Any:
         # F^k = U^k - U^n_terms - c*dt*rhs(U^k); returns (F^k, R^k) so the matvec can reuse R^k.
         Rk = P._rhs_legacy(name="%s_R" % tag, state=Uk, fields=fields, flux=flux, sources=src)
         Fk = P.linear_combine("%s_F" % tag, _un_terms() * (-1.0) + 1.0 * Uk - (c * P.dt) * Rk)
         return Fk, Rk
 
-    def _newton_step(P, Uk, k):
+    def _newton_step(P: Any, Uk: Any, k: Any) -> Any:
         tag = "%s_bdf%d_n%d" % (block, order, k)
         Fk, Rk = _residual(P, Uk, tag)
         negF = P.linear_combine("%s_negF" % tag, -1.0 * Fk)
         A = P.matrix_free_operator("%s_J" % tag, domain=kind, range_=kind,
                                    ncomp=(None if ncomp == 1 else ncomp))
 
-        def apply(P, out, v):
+        def apply(P: Any, out: Any, v: Any) -> Any:
             # J v = v - c*dt * d(rhs)/dU v, matrix-free FD around the frozen iterate U^k (r0 = R^k).
             return P.rhs_jacvec(out, v, iterate=Uk, r0=Rk, c_dt=(c * P.dt), eps=eps, flux=flux,
                                 sources=sources)
@@ -194,9 +200,10 @@ def _bdf_implicit_flux(P, block, order, sources, flux, ncomp, newton_tol, newton
 
 
 @program_macro
-def bdf(P, block, order, *, linear_source=None, sources=("default",), flux=True, ncomp=1,
-        newton_tol=1e-10, newton_max=20, krylov_tol=1e-10, krylov_max=200, krylov_restart=None,
-        eps=1e-7):
+def bdf(P: Any, block: Any, order: Any, *, linear_source: Any = None,
+        sources: Any = ("default",), flux: Any = True, ncomp: Any = 1,
+        newton_tol: Any = 1e-10, newton_max: Any = 20, krylov_tol: Any = 1e-10,
+        krylov_max: Any = 200, krylov_restart: Any = None, eps: Any = 1e-7) -> Any:
     """Backward Differentiation Formula, IMPLICIT ``order``-step (ADC-423 / ADC-431).
 
     Two lowerings share this entry point, selected by whether an implicit @p linear_source is named:

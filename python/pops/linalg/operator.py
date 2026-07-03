@@ -6,6 +6,10 @@ native symbol), while :class:`MatrixFreeOperator` names an operator known only b
 ``x -> A x`` (no stored matrix). Both are inert descriptors: they carry the operator name and
 a matrix-free capability flag, and compute nothing -- the C++ runtime applies the operator.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Descriptor
 from pops.descriptors_report import CapabilitySet
 
@@ -22,18 +26,18 @@ class LinearOperator(Descriptor):
 
     category = "linear_operator"
 
-    def __init__(self, name, native_id=None):
+    def __init__(self, name: Any, native_id: Any = None) -> None:
         self._name = str(name)
         self.native_id = native_id if native_id is None else str(native_id)
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name
 
-    def options(self):
+    def options(self) -> dict:
         return {"name": self._name}
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"matrix_free": False})
 
 
@@ -48,17 +52,17 @@ class MatrixFreeOperator(Descriptor):
 
     category = "linear_operator"
 
-    def __init__(self, name):
+    def __init__(self, name: Any) -> None:
         self._name = str(name)
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name
 
-    def options(self):
+    def options(self) -> dict:
         return {"name": self._name}
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"matrix_free": True})
 
 

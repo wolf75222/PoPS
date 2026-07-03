@@ -2,13 +2,17 @@
 
 Exports: predictor_corrector_local_linear.
 """
+from __future__ import annotations
+
+from typing import Any
 
 from ._helpers import _opcall, _operator_handle, program_macro
 
 
 @program_macro
-def predictor_corrector_local_linear(P, block, *, fields_operator, explicit_rate_operator,
-                                     implicit_operator, state_space="U", commit=True):
+def predictor_corrector_local_linear(P: Any, block: Any, *, fields_operator: Any,
+                                     explicit_rate_operator: Any, implicit_operator: Any,
+                                     state_space: Any = "U", commit: Any = True) -> Any:
     """Generic predictor-corrector for ``dU/dt = R(U, fields) + L(fields) U`` (Spec 2, operator-first).
 
     Composes THREE typed operators by name -- a field operator ``fields_operator: U -> Fields``, an

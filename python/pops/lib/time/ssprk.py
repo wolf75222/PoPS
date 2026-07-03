@@ -1,10 +1,13 @@
 """pops.lib.time.ssprk -- Strong Stability Preserving Runge-Kutta schemes (SSPRK2 / SSPRK3)."""
+from __future__ import annotations
+
+from typing import Any
 
 from ._helpers import _stage_rhs, program_macro
 
 
 @program_macro
-def ssprk2(P, block, *, sources=("default",), flux=True):
+def ssprk2(P: Any, block: Any, *, sources: Any = ("default",), flux: Any = True) -> Any:
     """SSPRK2 (Heun / Shu-Osher): U1 = U0 + dt k0; U^{n+1} = 1/2 U0 + 1/2 (U1 + dt k1)."""
     U0 = P.state(block)
     k0 = _stage_rhs(P, U0, sources, flux)
@@ -14,7 +17,7 @@ def ssprk2(P, block, *, sources=("default",), flux=True):
 
 
 @program_macro
-def ssprk3(P, block, *, sources=("default",), flux=True):
+def ssprk3(P: Any, block: Any, *, sources: Any = ("default",), flux: Any = True) -> Any:
     """SSPRK3 (Shu-Osher): U1 = U0 + dt k0; U2 = 3/4 U0 + 1/4 (U1 + dt k1);
     U^{n+1} = 1/3 U0 + 2/3 (U2 + dt k2)."""
     U0 = P.state(block)

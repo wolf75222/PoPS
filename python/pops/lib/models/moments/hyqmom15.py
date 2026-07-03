@@ -4,6 +4,10 @@ HyQMOM15 is the 15-variable order-4 2D moment hierarchy. The provided builder co
 the Spec-4 moment facade into the Vlasov-Poisson-magnetic model used by the diocotron /
 column reference cases. It is a PURE composition of the facade -- no ``custom.py``.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.moments.hierarchy import CartesianVelocityMoments
 from pops.moments.closures import HyQMOM15Closure
 
@@ -14,10 +18,10 @@ class HyQMOM15:
     """The provided HyQMOM15 (order-4) moment models."""
 
     @staticmethod
-    def vlasov_poisson_magnetic(order=_HYQMOM15_ORDER, *, closure=None, robust=True,
-                                exact_speeds=True, roe=False,
-                                q_over_m="q_over_m", omega_c="omega_c",
-                                eps=1.0):
+    def vlasov_poisson_magnetic(order: Any = _HYQMOM15_ORDER, *, closure: Any = None,
+                                robust: Any = True, exact_speeds: Any = True, roe: Any = False,
+                                q_over_m: Any = "q_over_m", omega_c: Any = "omega_c",
+                                eps: Any = 1.0) -> Any:
         """The Vlasov-Poisson moment model with a magnetic (Lorentz) source.
 
         A pure composition of the :func:`CartesianVelocityMoments` facade: transport flux,

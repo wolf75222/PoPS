@@ -6,12 +6,16 @@ of the string form ``Param(kind="runtime")`` / ``domain="positive"``. These are 
 descriptors; the codegen / runtime consume them (a runtime param appears in
 ``compiled.arguments()``; a const param participates in the cache key).
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Descriptor, reject_string_selector
 from pops.descriptors_report import CapabilitySet
 from pops.math import Real
 
 
-def _check_domain(name, domain):
+def _check_domain(name: str, domain: Any) -> Any:
     """Refuse a bare-string ``domain=`` (Spec 5 sec.7); pass a typed constraint / None through.
 
     ``domain="positive"`` is the anti-pattern a typed domain replaces: it is rejected via
@@ -26,7 +30,7 @@ def _check_domain(name, domain):
     return domain
 
 
-def _domain_error(name, domain, value, phase):
+def _domain_error(name: str, domain: Any, value: Any, phase: str) -> str:
     """The 4-part domain-violation message (ADC-541): param / expected domain / value / phase.
 
     Every domain refusal -- at ``compile`` (the declared default) or at ``bind`` (a supplied value)
@@ -48,25 +52,26 @@ class RuntimeParam(Descriptor):
 
     category = "runtime_param"
 
-    def __init__(self, name, dtype=Real, default=None, domain=None):
+    def __init__(self, name: Any, dtype: Any = Real, default: Any = None,
+                 domain: Any = None) -> None:
         self._name = str(name)
         self.dtype = dtype
         self.default = default
         self.domain = _check_domain(self._name, domain)
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name
 
-    def options(self):
+    def options(self) -> dict:
         return {"name": self._name, "dtype": getattr(self.dtype, "name", self.dtype),
                 "default": self.default,
                 "domain": self.domain.name if self.domain is not None else None}
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"runtime": True, "compile_time": False})
 
-    def validate(self, context=None):
+    def validate(self, context: Any = None) -> bool:
         """Validate the declared DEFAULT against the domain (the ``compile`` phase)."""
         super().validate(context)  # honour the explainable available() route check too
         if self.domain is not None and self.default is not None:
@@ -77,7 +82,7 @@ class RuntimeParam(Descriptor):
                     _domain_error(self._name, self.domain, self.default, "compile")) from None
         return True
 
-    def check_bind(self, value):
+    def check_bind(self, value: Any) -> bool:
         """Validate a value SUPPLIED at bind time against the domain (ADC-541, the ``bind`` phase).
 
         A runtime param is set at ``System.install`` / bind; a bound value outside the declared
@@ -109,20 +114,20 @@ class ConstParam(Descriptor):
 
     category = "const_param"
 
-    def __init__(self, name, value, dtype=Real):
+    def __init__(self, name: Any, value: Any, dtype: Any = Real) -> None:
         self._name = str(name)
         self.value = value
         self.dtype = dtype
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name
 
-    def options(self):
+    def options(self) -> dict:
         return {"name": self._name, "value": self.value,
                 "dtype": getattr(self.dtype, "name", self.dtype)}
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"runtime": False, "compile_time": True, "in_cache_key": True})
 
 
@@ -131,15 +136,15 @@ class DerivedParam(Descriptor):
 
     category = "derived_param"
 
-    def __init__(self, name, expression):
+    def __init__(self, name: Any, expression: Any) -> None:
         self._name = str(name)
         self.expression = expression
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name
 
-    def options(self):
+    def options(self) -> dict:
         return {"name": self._name,
                 "expression": getattr(self.expression, "name", repr(self.expression))}
 

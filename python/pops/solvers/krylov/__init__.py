@@ -18,6 +18,10 @@ non-positive budget (generic_krylov.hpp ``require_max_iter``). Refusing a missin
 budget HERE, at descriptor construction, surfaces the same error before the runtime is ever
 touched (Spec 5 sec.6: a route is refused explainably, pre-compile).
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import _native
 from pops.solvers.requirements import capability_map
 
@@ -29,7 +33,7 @@ from pops.solvers.requirements import capability_map
 _KRYLOV_CAPABILITIES = capability_map(uniform=True, amr=True, mpi=True, gpu=True)
 
 
-def _check_max_iter(name, max_iter):
+def _check_max_iter(name: str, max_iter: Any) -> int:
     """Refuse a missing / non-positive Krylov iteration budget at descriptor construction.
 
     ``max_iter`` is MANDATORY (a positive Python int): a dynamic solver loop with no budget is a
@@ -50,7 +54,7 @@ def _check_max_iter(name, max_iter):
     return int(max_iter)
 
 
-def _solver(name, native_id, factory, max_iter, **options):
+def _solver(name: str, native_id: str, factory: str, max_iter: Any, **options: Any) -> Any:
     """A native Krylov-solver descriptor in the ``solver`` category (scheme == @p name).
 
     ``max_iter`` is validated (positive int, mandatory) and folded into the descriptor options so
@@ -62,7 +66,7 @@ def _solver(name, native_id, factory, max_iter, **options):
                    capabilities=_KRYLOV_CAPABILITIES, **options)
 
 
-def CG(max_iter=None, **options):
+def CG(max_iter: Any = None, **options: Any) -> Any:
     """The conjugate-gradient Krylov solver (``pops::cg_solve``; scheme ``"cg"``). Inert.
 
     ``max_iter`` is a MANDATORY positive int (the iteration budget); a missing / non-positive
@@ -71,7 +75,7 @@ def CG(max_iter=None, **options):
     return _solver("cg", "pops::cg_solve", "CG", max_iter, **options)
 
 
-def BiCGStab(max_iter=None, **options):
+def BiCGStab(max_iter: Any = None, **options: Any) -> Any:
     """The stabilised bi-CG Krylov solver (``pops::bicgstab_solve``; scheme ``"bicgstab"``).
 
     ``max_iter`` is a MANDATORY positive int; a missing / non-positive budget is refused.
@@ -79,7 +83,7 @@ def BiCGStab(max_iter=None, **options):
     return _solver("bicgstab", "pops::bicgstab_solve", "BiCGStab", max_iter, **options)
 
 
-def GMRES(max_iter=None, **options):
+def GMRES(max_iter: Any = None, **options: Any) -> Any:
     """The GMRES Krylov solver (``pops::gmres_solve``; scheme ``"gmres"``). Inert.
 
     ``max_iter`` is a MANDATORY positive int; a missing / non-positive budget is refused.
@@ -87,7 +91,7 @@ def GMRES(max_iter=None, **options):
     return _solver("gmres", "pops::gmres_solve", "GMRES", max_iter, **options)
 
 
-def Richardson(max_iter=None, **options):
+def Richardson(max_iter: Any = None, **options: Any) -> Any:
     """The Richardson iteration (``pops::richardson_solve``; scheme ``"richardson"``). Inert.
 
     ``max_iter`` is a MANDATORY positive int; a missing / non-positive budget is refused.

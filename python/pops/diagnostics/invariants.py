@@ -9,13 +9,16 @@ The ``conservation_check`` factory borrows its native reduction scheme label fro
 factory still returns the historical ``BrickDescriptor`` (``category="invariant"``) consumers
 expect; the typed class is the canonical authoring form.
 """
+from __future__ import annotations
+
 from types import SimpleNamespace
+from typing import Any
 
 from pops.descriptors import BrickDescriptor
 from .measures import ConservationCheck as _ConservationCheck
 
 
-def _invariant(name, expression=None, over=None):
+def _invariant(name: Any, expression: Any = None, over: Any = None) -> Any:
     """A catalog invariant descriptor; the value ``expression`` is kept off the
     identity key (it may be an unhashable board node) as a plain attribute."""
     return BrickDescriptor(name, "macro", category="invariant", scheme="invariant",

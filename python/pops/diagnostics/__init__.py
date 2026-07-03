@@ -21,14 +21,17 @@ typed class is the canonical authoring form. The reductions with no typed counte
 (``mass`` / ``momentum`` / ``energy`` / ``invariant_error`` / ``residual``) keep their own
 self-named scheme.
 """
+from __future__ import annotations
+
 from types import SimpleNamespace
+from typing import Any
 
 from pops.descriptors import BrickDescriptor
 from .invariants import invariants
 from .measures import ConservationCheck, Integral, MinMax, Norm
 
 
-def _diag(_dname, *, scheme=None, **o):
+def _diag(_dname: Any, *, scheme: Any = None, **o: Any) -> Any:
     """An inert ``diagnostic`` macro descriptor; @p scheme defaults to the reduction name."""
     return BrickDescriptor(_dname, "macro", category="diagnostic",
                            scheme=scheme if scheme is not None else _dname,

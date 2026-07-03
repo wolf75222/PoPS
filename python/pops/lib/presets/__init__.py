@@ -26,6 +26,9 @@ Usage::
                .time(preset.time_scheme("f")))
     compiled = pops.compile(problem, layout=Uniform(CartesianMesh(n=96)))
 """
+from __future__ import annotations
+
+from typing import Any
 
 
 class Preset:
@@ -45,33 +48,34 @@ class Preset:
 
     category = "preset"
 
-    def __init__(self, name, model_factory, time_factory, description=""):
+    def __init__(self, name: Any, model_factory: Any, time_factory: Any,
+                 description: Any = "") -> None:
         self._name = name
         self._model_factory = model_factory
         self._time_factory = time_factory
         self._description = description
 
     @property
-    def name(self):
+    def name(self) -> Any:
         return self._name
 
-    def model(self):
+    def model(self) -> Any:
         """Build the provided model for a Case block (``.block(name, physics=preset.model())``)."""
         return self._model_factory()
 
-    def time_scheme(self, block):
+    def time_scheme(self, block: Any) -> Any:
         """Build the matching ``pops.time.Program`` for @p block (``.time(preset.time_scheme(name))``)."""
         return self._time_factory(block)
 
-    def inspect(self):
+    def inspect(self) -> dict:
         """An inert ``{name, category, description}`` view of the bundle (no build, no compile)."""
         return {"name": self._name, "category": self.category, "description": self._description}
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "Preset(%r)" % self._name
 
 
-def vlasov_poisson_magnetic_euler(*, order=4):
+def vlasov_poisson_magnetic_euler(*, order: Any = 4) -> Any:
     """The HyQMOM15 Vlasov-Poisson-magnetic model paired with a forward-Euler step.
 
     Composes :meth:`pops.lib.models.moments.HyQMOM15.vlasov_poisson_magnetic` (transport flux +

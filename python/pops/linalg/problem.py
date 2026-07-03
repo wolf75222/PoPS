@@ -14,6 +14,10 @@ callback -- the loop stays in C++ (ADC-535). The method / preconditioner lowerin
 the SAME predicates the Program ``P.solve_linear`` op uses (``pops.time.program_solve``), so the
 typed object and the Program path lower through a single source.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Availability, Descriptor
 from .operator import LinearOperator, MatrixFreeOperator
 
@@ -21,14 +25,14 @@ from .operator import LinearOperator, MatrixFreeOperator
 _OPERATOR_TYPES = (LinearOperator, MatrixFreeOperator)
 
 
-def _handle_name(handle):
+def _handle_name(handle: Any) -> Any:
     """A short, stable name for an unknown / rhs handle (its ``name`` attr, else its repr)."""
     if handle is None:
         return None
     return getattr(handle, "name", repr(handle))
 
 
-def _context_is_amr_layout(context):
+def _context_is_amr_layout(context: Any) -> bool:
     """True when the route @p context names an AMR mesh layout (duck-typed, no mesh import).
 
     A layout descriptor advertises its kind through ``capabilities()["layout"]`` (``"amr"`` /
@@ -45,7 +49,7 @@ def _context_is_amr_layout(context):
     caps = getattr(layout, "capabilities", None)
     if callable(caps):
         try:
-            declared = caps()
+            declared: Any = caps()
         except Exception:
             return False  # available() must never raise: an odd context is simply "not AMR"
         # ``declared`` is a typed CapabilitySet (or a plain dict): both expose ``.get`` (ADC-625).
@@ -75,8 +79,9 @@ class LinearProblem(Descriptor):
 
     category = "linear_problem"
 
-    def __init__(self, operator=None, unknown=None, rhs=None, name=None, method=None,
-                 preconditioner=None, tol=1e-8, max_iter=None, restart=None):
+    def __init__(self, operator: Any = None, unknown: Any = None, rhs: Any = None,
+                 name: Any = None, method: Any = None, preconditioner: Any = None,
+                 tol: float = 1e-8, max_iter: Any = None, restart: Any = None) -> None:
         self.operator = operator
         self.unknown = unknown
         self.rhs = rhs
@@ -88,10 +93,10 @@ class LinearProblem(Descriptor):
         self.restart = restart
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name if self._name is not None else type(self).__name__
 
-    def options(self):
+    def options(self) -> dict:
         return {"name": self._name,
                 "operator": _handle_name(self.operator),
                 "unknown": _handle_name(self.unknown),
@@ -99,17 +104,17 @@ class LinearProblem(Descriptor):
                 "method": _handle_name(self.method),
                 "preconditioner": _handle_name(self.preconditioner)}
 
-    def requirements(self):
+    def requirements(self) -> Any:
         from pops.descriptors_report import RequirementSet
         return RequirementSet({"operator": True, "unknown": True, "rhs": True})
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         from pops.descriptors_report import CapabilitySet
         matrix_free = bool(getattr(self.operator, "capabilities", dict)().get("matrix_free")) \
             if isinstance(self.operator, _OPERATOR_TYPES) else False
         return CapabilitySet({"linear": True, "matrix_free": matrix_free})
 
-    def available(self, context=None):
+    def available(self, context: Any = None) -> Any:
         """An explainable status; the ``missing`` tag NAMES the incompatibility class (ADC-535)."""
         if not isinstance(self.operator, _OPERATOR_TYPES):
             got = type(self.operator).__name__
@@ -138,7 +143,7 @@ class LinearProblem(Descriptor):
             # Layout: refuse when the method's DECLARED capabilities do not cover the context mesh
             # layout (delegated to the descriptor's own capabilities -- no fabricated rule).
             caps = getattr(self.method, "capabilities", None)
-            declared = caps if isinstance(caps, dict) else (caps() if callable(caps) else {})
+            declared: Any = caps if isinstance(caps, dict) else (caps() if callable(caps) else {})
             if _context_is_amr_layout(context) and declared.get("supports_amr") is False:
                 return Availability.no(
                     "%s: method %s does not support an AMR layout (supports_amr=False); use an "
@@ -146,7 +151,7 @@ class LinearProblem(Descriptor):
                     missing=["layout"])
         return Availability.yes()
 
-    def validate(self, context=None):
+    def validate(self, context: Any = None) -> Any:
         status = self.available(context)
         if status.ok:
             return True
@@ -158,7 +163,7 @@ class LinearProblem(Descriptor):
                 "got %r" % (self.name, type(self.operator).__name__))
         raise ValueError("%s is not available for this route:\n%s" % (self.name, status))
 
-    def lower(self, context=None):
+    def lower(self, context: Any = None) -> Any:
         """The ``solve_linear``-shaped lowering RECORD for this problem (metadata only; ADC-535).
 
         Emits ``{name, category, native_id, options, operator, unknown, rhs, method, preconditioner,
@@ -201,7 +206,7 @@ class LinearProblem(Descriptor):
                    "restart": int(self.restart) if scheme == "gmres" and self.restart is not None
                    else None})
 
-    def inspect(self):
+    def inspect(self) -> Any:
         info = super().inspect()
         info["operator"] = _handle_name(self.operator)
         info["unknown"] = _handle_name(self.unknown)
@@ -221,24 +226,24 @@ class Residual(Descriptor):
 
     category = "residual"
 
-    def __init__(self, problem):
+    def __init__(self, problem: Any) -> None:
         self.problem = problem
 
-    def options(self):
+    def options(self) -> dict:
         return {"problem": _handle_name(self.problem)}
 
-    def requirements(self):
+    def requirements(self) -> Any:
         from pops.descriptors_report import RequirementSet
         return RequirementSet({"problem": True})
 
-    def available(self, context=None):
+    def available(self, context: Any = None) -> Any:
         if not isinstance(self.problem, LinearProblem):
             got = type(self.problem).__name__
             return Availability.no(
                 "%s needs a LinearProblem; got %r" % (self.name, got), missing=["problem"])
         return Availability.yes()
 
-    def validate(self, context=None):
+    def validate(self, context: Any = None) -> Any:
         if not isinstance(self.problem, LinearProblem):
             raise TypeError(
                 "%s: problem must be a pops.linalg.LinearProblem; got %r"
