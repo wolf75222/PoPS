@@ -8,7 +8,10 @@ Spec 5 (sec.4 / sec.5.4) homes the discretisation descriptors in ``pops.numerics
 the individual fluxes are importable directly (``from pops.numerics.riemann import
 HLL``), not only via the ``riemann`` namespace.
 """
+from __future__ import annotations
+
 from types import SimpleNamespace
+from typing import Any
 
 from pops.descriptors import _native, _external_descriptor
 from . import waves
@@ -16,11 +19,11 @@ from .waves import (WaveSpeedProvider, ExplicitPair, FromJacobian, FromPressure,
                     Einfeldt, Davis, MaxWaveSpeed, provider_of)
 
 
-def _riemann(name, native_id, caps):
+def _riemann(name: Any, native_id: Any, caps: Any) -> Any:
     return _native(name, native_id, name, category="riemann", caps=caps)
 
 
-def _hll(waves=None):
+def _hll(waves: Any = None) -> Any:
     """The HLL numerical flux descriptor, optionally pinned to a typed wave-speed provider.
 
     ``HLL()`` is the historical generic signed-wave flux (requires the model's wave_speeds). With

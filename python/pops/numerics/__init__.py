@@ -14,6 +14,8 @@ brick catalogs, :class:`pops.descriptors.Descriptor` for the rhs terms); codegen
 runtime consume them, nothing here computes in Python. ``pops.numerics`` is the Spec 5
 home of the catalogs formerly parked under ``pops.lib``.
 """
+from __future__ import annotations
+
 from . import riemann, reconstruction, variables, projections, terms
 from .reconstruction import limiters
 # The finite-volume spatial brick catalog (criterion 7: moved out of pops.lib.spatial). Bind the

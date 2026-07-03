@@ -10,7 +10,10 @@
     "python/pops/solvers/tolerances.py",
     "python/pops/time",
     "python/pops/codegen",
-    "python/pops/runtime"
+    "python/pops/runtime",
+    "python/pops/mesh",
+    "python/pops/numerics",
+    "python/pops/fields"
   ],
   "exclude": [
     "**/__pycache__",

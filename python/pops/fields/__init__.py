@@ -19,6 +19,8 @@ Everything is inert; the runtime materialises and solves after validation. This 
 surface is DISTINCT from the flat elliptic-field brick catalog re-exported as
 :data:`pops.fields.catalog` (Spec 5 criterion 7: moved out of ``pops.lib.fields``).
 """
+from __future__ import annotations
+
 from .problem import FieldProblem, SolveCadence, lower_field_solver
 from .poisson import (PoissonProblem, ScreenedPoissonProblem,
                       AnisotropicPoissonProblem)

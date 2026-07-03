@@ -9,6 +9,10 @@ touched.
 
 It computes nothing; codegen / runtime consume the descriptor.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Availability, Descriptor, reject_string_selector
 from pops.math import Equation
 
@@ -21,7 +25,7 @@ from .policies import FieldSolvePolicy
 _LEGACY_SOLVER_TOKENS = {"geometric_mg": "GeometricMG", "fft": "FFT", "fft_spectral": "FFT"}
 
 
-def lower_field_solver(solver):
+def lower_field_solver(solver: Any) -> Any:
     """Lower a legacy string solver token to its typed elliptic descriptor (Spec 5 sec.7).
 
     A descriptor / ``None`` passes through unchanged. A recognised legacy token
@@ -41,7 +45,7 @@ def lower_field_solver(solver):
     return GeometricMG()
 
 
-def _summarize(side, limit=60):
+def _summarize(side: Any, limit: Any = 60) -> str:
     """A short repr of one equation side, truncated to keep the print() summary small."""
     text = repr(side)
     return text if len(text) <= limit else text[: limit - 3] + "..."
@@ -60,26 +64,26 @@ class SolveCadence(Descriptor):
 
     category = "solve_cadence"
 
-    def __init__(self, schedule, policy):
+    def __init__(self, schedule: Any, policy: Any) -> None:
         self.schedule = schedule
         self.policy = policy
 
-    def options(self):
+    def options(self) -> dict:
         return {"schedule": repr(self.schedule), "policy": self.policy.name}
 
-    def requirements(self):
+    def requirements(self) -> Any:
         return self.policy.requirements()
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return self.policy.capabilities()
 
-    def inspect(self):
+    def inspect(self) -> dict:
         info = super().inspect()
         info["schedule"] = repr(self.schedule)
         info["policy"] = self.policy.inspect()
         return info
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "SolveCadence(schedule=%r, policy=%r)" % (self.schedule, self.policy)
 
 
@@ -96,9 +100,10 @@ class FieldProblem(Descriptor):
 
     category = "field_problem"
 
-    def __init__(self, name=None, unknown=None, equation=None, inputs=(),
-                 coefficients=None, bcs=(), nullspace=None, outputs=None,
-                 postprocess=None, solver=None):
+    def __init__(self, name: Any = None, unknown: Any = None, equation: Any = None,
+                 inputs: Any = (), coefficients: Any = None, bcs: Any = (),
+                 nullspace: Any = None, outputs: Any = None, postprocess: Any = None,
+                 solver: Any = None) -> None:
         self._name = None if name is None else str(name)
         self.unknown = unknown
         self.equation = equation
@@ -121,10 +126,10 @@ class FieldProblem(Descriptor):
         self.cadence = None
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name if self._name is not None else type(self).__name__
 
-    def options(self):
+    def options(self) -> dict:
         return {"name": self._name,
                 "unknown": getattr(self.unknown, "name", repr(self.unknown))
                 if self.unknown is not None else None,
@@ -135,18 +140,18 @@ class FieldProblem(Descriptor):
                 "solver": getattr(self.solver, "name", self.solver),
                 "has_cadence": self.cadence is not None}
 
-    def requirements(self):
+    def requirements(self) -> Any:
         from pops.descriptors_report import RequirementSet
-        req = {"equation": True, "solver": True}
+        req: dict = {"equation": True, "solver": True}
         if self.nullspace is not None:
             req["nullspace"] = getattr(self.nullspace, "name", repr(self.nullspace))
         return RequirementSet(req)
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         from pops.descriptors_report import CapabilitySet
         return CapabilitySet({"elliptic": True})
 
-    def available(self, context=None):
+    def available(self, context: Any = None) -> Any:
         if not isinstance(self.equation, Equation):
             return Availability.no(
                 "%s needs a pops.math.Equation; got %r" % (self.name, type(self.equation).__name__),
@@ -155,7 +160,7 @@ class FieldProblem(Descriptor):
             return Availability.no("%s needs a solver" % self.name, missing=["solver"])
         return Availability.yes()
 
-    def validate(self, context=None):
+    def validate(self, context: Any = None) -> bool:
         if isinstance(self.equation, bool):
             raise TypeError(
                 "%s: equation must be a pops.math.Equation built from PoPS operators "
@@ -173,7 +178,7 @@ class FieldProblem(Descriptor):
         self._require_declared_outputs(context)
         return True
 
-    def _require_declared_nullspace(self, context):
+    def _require_declared_nullspace(self, context: Any) -> None:
         """Refuse a singular field solve that declares no nullspace (Spec 5 sec.7, criterion 11).
 
         A pure-Neumann / fully periodic elliptic operator is SINGULAR: its solution is defined up to
@@ -191,7 +196,7 @@ class FieldProblem(Descriptor):
                 "nullspace projection; declare nullspace=pops.fields.ConstantNullspace()."
                 % self.name)
 
-    def _require_declared_outputs(self, context):
+    def _require_declared_outputs(self, context: Any) -> None:
         """Refuse a solve that does not expose a required derived output (Spec 5 sec.9).
 
         When the route @p context names outputs the downstream stage NEEDS
@@ -210,7 +215,7 @@ class FieldProblem(Descriptor):
                 "pops.fields.outputs descriptor (FieldOutput / GradientOutput / DerivedField) "
                 "for each." % (self.name, missing))
 
-    def _declared_output_names(self):
+    def _declared_output_names(self) -> set:
         """The set of names this problem's ``outputs`` expose (a single output or an iterable)."""
         outputs = self.outputs
         if outputs is None:
@@ -224,12 +229,12 @@ class FieldProblem(Descriptor):
         return names
 
     @staticmethod
-    def _context_flag(context, key):
+    def _context_flag(context: Any, key: Any) -> bool:
         """True when @p context (a dict or attribute-bearing object) sets @p key truthy."""
         return bool(FieldProblem._context_value(context, key))
 
     @staticmethod
-    def _context_value(context, key):
+    def _context_value(context: Any, key: Any) -> Any:
         """The value @p context carries under @p key (dict or attribute), or ``None``."""
         if context is None:
             return None
@@ -238,7 +243,7 @@ class FieldProblem(Descriptor):
         return getattr(context, key, None)
 
     @staticmethod
-    def _context_is_amr_layout(context):
+    def _context_is_amr_layout(context: Any) -> bool:
         """True when @p context names an AMR mesh layout (duck-typed; no mesh import).
 
         ``Problem.validate`` passes the layout under the ``"layout"`` key; a layout advertises its
@@ -256,13 +261,13 @@ class FieldProblem(Descriptor):
         if not callable(caps):
             return False
         try:
-            declared = caps()
+            declared: Any = caps()
         except Exception:
             return False
         # ``declared`` is a typed CapabilitySet (or a plain dict): both expose ``.get`` (ADC-625).
         return hasattr(declared, "get") and declared.get("layout") == "amr"
 
-    def _require_layout_compatible_solver(self, context):
+    def _require_layout_compatible_solver(self, context: Any) -> None:
         """Refuse a solver that cannot serve an AMR mesh layout (Spec 6 sec.8/9, #11).
 
         SCOPED to an AMR layout -- the only mesh structure a field solver currently refuses (the
@@ -296,7 +301,7 @@ class FieldProblem(Descriptor):
         raise ValueError("%s: %s" % (self.name, reason))
 
     @staticmethod
-    def _bc_kind(bc):
+    def _bc_kind(bc: Any) -> Any:
         """The declared boundary kind ("periodic"/"dirichlet"/...) of a field BC, or None.
 
         Reads the BC's own ``options()["bc"]``; a :class:`~pops.fields.bcs.FaceBC` is unwrapped
@@ -311,7 +316,7 @@ class FieldProblem(Descriptor):
                 return declared.get("bc")
         return None
 
-    def _require_periodic_compatible_solver(self):
+    def _require_periodic_compatible_solver(self) -> None:
         """Reject a periodic-only solver paired with a non-periodic boundary (Spec 5 sec.7, #11).
 
         The FFT Poisson solver only serves a periodic boundary (``supports_wall_bc`` False,
@@ -330,7 +335,7 @@ class FieldProblem(Descriptor):
         caps = getattr(self.solver, "capabilities", None)
         if not callable(caps):
             return
-        declared = caps()
+        declared: Any = caps()
         # ``declared`` is a typed CapabilitySet (or a plain dict): both expose ``.get`` (ADC-625).
         if not hasattr(declared, "get"):
             return
@@ -346,7 +351,7 @@ class FieldProblem(Descriptor):
                 "(pops.fields.bcs.Periodic()) or pops.solvers.elliptic.GeometricMG()."
                 % (self.name, solver_name))
 
-    def _require_solver_capability(self, tag, operator, alternative):
+    def _require_solver_capability(self, tag: Any, operator: Any, alternative: Any) -> None:
         """Reject the solver only when it declares ``supports_<tag>`` KNOWN-False (Spec 5 sec.7).
 
         The Poisson-family subclasses call this so a problem whose operator needs a special
@@ -376,7 +381,7 @@ class FieldProblem(Descriptor):
         caps = getattr(self.solver, "capabilities", None)
         if not callable(caps):
             return  # no capability surface -> absent, not declared-False: never reject.
-        declared = caps()
+        declared: Any = caps()
         # ``declared`` is a typed CapabilitySet (or a plain dict): both expose ``.get`` (ADC-625).
         if not hasattr(declared, "get"):
             return
@@ -390,7 +395,7 @@ class FieldProblem(Descriptor):
                 "use pops.solvers.elliptic.%s."
                 % (self.name, solver_name, operator, tag, alternative))
 
-    def solve(self, schedule, policy):
+    def solve(self, schedule: Any, policy: Any) -> "FieldProblem":
         """Record an inert field-solve cadence (a schedule + a not-due policy).
 
         Pairs a typed :class:`pops.time.Schedule` (WHEN to solve -- e.g. ``every(4)`` to
@@ -439,7 +444,7 @@ class FieldProblem(Descriptor):
         self.cadence = SolveCadence(schedule, policy)
         return self
 
-    def inspect(self):
+    def inspect(self) -> dict:
         info = super().inspect()
         info["equation"] = self._equation_summary()
         info["bcs"] = [getattr(b, "name", repr(b)) for b in self.bcs]
@@ -447,12 +452,12 @@ class FieldProblem(Descriptor):
         info["cadence"] = self.cadence.inspect() if self.cadence is not None else None
         return info
 
-    def _equation_summary(self):
+    def _equation_summary(self) -> str:
         if not isinstance(self.equation, Equation):
             return repr(self.equation)
         return "%s == %s" % (_summarize(self.equation.lhs), _summarize(self.equation.rhs))
 
-    def __str__(self):
+    def __str__(self) -> str:
         solver = getattr(self.solver, "name", self.solver)
         outputs = getattr(self.outputs, "name", self.outputs)
         return "%s [%s] %s | bcs=%d | solver=%s | outputs=%s" % (

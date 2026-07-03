@@ -15,6 +15,10 @@ cacheability / math-admissibility through :meth:`capabilities` / :meth:`requirem
 compute nothing. The C++ runtime / codegen consumes the recorded cadence; see
 :meth:`pops.fields.FieldProblem.solve`.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Descriptor
 from pops.descriptors_report import CapabilitySet, RequirementSet
 
@@ -38,16 +42,16 @@ class HoldPrevious(FieldSolvePolicy):
     consumer can check math-admissibility before the runtime is touched.
     """
 
-    def requirements(self):
+    def requirements(self) -> Any:
         return RequirementSet({"cacheable_output": True})
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"reuses_cache": True, "recomputes": False})
 
-    def options(self):
+    def options(self) -> dict:
         return {"policy": "hold_previous"}
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "HoldPrevious()"
 
 
@@ -59,16 +63,16 @@ class Recompute(FieldSolvePolicy):
     :class:`HoldPrevious` is inspectable.
     """
 
-    def requirements(self):
+    def requirements(self) -> Any:
         return RequirementSet({})
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"reuses_cache": False, "recomputes": True})
 
-    def options(self):
+    def options(self) -> dict:
         return {"policy": "recompute"}
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "Recompute()"
 
 

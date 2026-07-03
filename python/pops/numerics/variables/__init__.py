@@ -10,12 +10,15 @@ two states are typed descriptors here, mirroring :mod:`pops.numerics.riemann` an
 records; ``Spatial`` / ``FiniteVolume`` read their ``.scheme`` ("conservative" / "primitive")
 when lowering to the C++ ABI.
 """
+from __future__ import annotations
+
 from types import SimpleNamespace
+from typing import Any
 
 from pops.descriptors import BrickDescriptor
 
 
-def _variables(scheme):
+def _variables(scheme: Any) -> Any:
     """A reconstructed-variable-set descriptor (no native C++ symbol: a per-block flag)."""
     return BrickDescriptor(scheme, "native", category="variables", native_id="",
                            scheme=scheme)

@@ -11,6 +11,8 @@ standalone ``pops::Poisson`` / ``Helmholtz`` / ``FieldSolver`` type yet, so thos
 planned (``available=False``). The rich typed elliptic-solver descriptor lives in
 :class:`pops.solvers.GeometricMG`.
 """
+from __future__ import annotations
+
 from types import SimpleNamespace
 
 from pops.descriptors import _native, _planned

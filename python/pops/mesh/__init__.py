@@ -15,6 +15,8 @@ contains no physics and no solver. Spec 5 lifts the mesh objects out of
 Every object is an inert :class:`pops.mesh._descriptor.MeshDescriptor`; the C++ runtime
 materialises the actual grids, patches and halos after validation.
 """
+from __future__ import annotations
+
 from ._descriptor import Availability, MeshDescriptor
 from .cartesian import CartesianMesh
 from .polar import PolarMesh

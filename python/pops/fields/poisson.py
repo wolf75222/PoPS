@@ -10,6 +10,10 @@ shapes:
 They only refine the declared capabilities and the validation; the runtime / codegen treat
 them as a :class:`FieldProblem`.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors_report import CapabilitySet
 from pops.math import Equation, principal_kinds
 from .problem import FieldProblem
@@ -27,12 +31,12 @@ class PoissonProblem(FieldProblem):
 
     category = "poisson_problem"
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         caps = super().capabilities().to_dict()
         caps["poisson"] = True
         return CapabilitySet(caps)
 
-    def validate(self, context=None):
+    def validate(self, context: Any = None) -> bool:
         super().validate(context)
         if isinstance(self.equation, Equation):
             if not (principal_kinds(self.equation.lhs) & _PRINCIPAL_OPERATORS):
@@ -51,12 +55,12 @@ class ScreenedPoissonProblem(PoissonProblem):
 
     category = "screened_poisson_problem"
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         caps = super().capabilities().to_dict()
         caps["screened"] = True
         return CapabilitySet(caps)
 
-    def validate(self, context=None):
+    def validate(self, context: Any = None) -> bool:
         super().validate(context)
         if isinstance(self.equation, Equation):
             if "reaction" not in principal_kinds(self.equation.lhs):
@@ -81,12 +85,12 @@ class AnisotropicPoissonProblem(PoissonProblem):
 
     category = "anisotropic_poisson_problem"
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         caps = super().capabilities().to_dict()
         caps["anisotropic"] = True
         return CapabilitySet(caps)
 
-    def validate(self, context=None):
+    def validate(self, context: Any = None) -> bool:
         super().validate(context)
         if isinstance(self.equation, Equation):
             if "div_coeff_grad" not in principal_kinds(self.equation.lhs):
