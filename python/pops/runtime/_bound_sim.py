@@ -13,6 +13,9 @@ Users obtain a :class:`BoundSimulation` only from ``pops.bind(...)``; it is not 
 ``pops`` root. The wrapped engine is reachable as ``sim._engine`` -- the documented INTERNAL escape
 hatch for low-level / internal engine tests, not part of the public surface.
 """
+from __future__ import annotations
+
+from typing import Any
 
 
 # --- delegation allowlist, grouped by category -------------------------------------------------
@@ -76,7 +79,7 @@ class BoundSimulation:
     the public surface.
     """
 
-    def __init__(self, engine):
+    def __init__(self, engine: Any) -> None:
         # Store on the instance dict directly so __getattr__ is not consulted for _engine itself.
         object.__setattr__(self, "_engine", engine)
 
@@ -86,7 +89,7 @@ class BoundSimulation:
     # than raising a cryptic AttributeError from deep inside the forward.
     _GATED_IO = frozenset({"restart", "checkpoint"})
 
-    def __getattr__(self, attr):
+    def __getattr__(self, attr: Any) -> Any:
         # __getattr__ runs only when normal lookup fails, so _engine (set in __init__) never
         # reaches here. Dunder names raise normally so copy / pickle / inspect do not loop.
         if attr.startswith("__") and attr.endswith("__"):
@@ -112,8 +115,8 @@ class BoundSimulation:
             "...). Author the composition on the pops.Problem and lower it with pops.compile(...) + "
             "pops.bind(...)." % attr)
 
-    def __repr__(self):
+    def __repr__(self) -> Any:
         return "BoundSimulation(%s)" % (self._engine.__str__(),)
 
-    def __str__(self):
+    def __str__(self) -> Any:
         return self.__repr__()

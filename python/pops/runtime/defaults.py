@@ -1,7 +1,10 @@
 """Structured native numerical/solver/physical defaults."""
+from __future__ import annotations
+
+from typing import Any
 
 
-def _static_report():
+def _static_report() -> dict:
     return {
         "schema_version": 1,
         "source": "pops.runtime.defaults.static_fallback",
@@ -76,22 +79,23 @@ def _static_report():
     }
 
 
-def numerical_defaults_report():
+def numerical_defaults_report() -> dict:
     """Return structured native numerical, solver and physical defaults."""
     try:
         from pops import _pops  # noqa: PLC0415
 
-        fn = getattr(_pops, "numerical_defaults_report", None)
+        fn: Any = getattr(_pops, "numerical_defaults_report", None)
         if callable(fn):
-            return dict(fn())
+            report: Any = fn()
+            return dict(report)
     except Exception:
         pass
     return _static_report()
 
 
-_DEFAULTS = numerical_defaults_report()
-_NEWTON = _DEFAULTS["newton"]
-_PHYSICAL = _DEFAULTS["physical"]
+_DEFAULTS: Any = numerical_defaults_report()
+_NEWTON: Any = _DEFAULTS["newton"]
+_PHYSICAL: Any = _DEFAULTS["physical"]
 
 NEWTON_DEFAULT_MAX_ITERS = int(_NEWTON["max_iters"])
 NEWTON_DEFAULT_REL_TOL = float(_NEWTON["rel_tol"])

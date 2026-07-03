@@ -10,8 +10,10 @@ Like ``profile``, this is a pure typed/parsing wrapper: it imports neither ``_po
 The native extension is reached only through the :class:`System` instance the context manager the
 summary is built by is bound to.
 """
+from __future__ import annotations
 
 import json
+from typing import Any
 
 from pops.runtime.profile import (
     _AMR_MPI_COUNTER_TOKENS,
@@ -41,7 +43,7 @@ class PerformanceSummary:
     rather than a faked zero.
     """
 
-    def __init__(self, report, profile=None):
+    def __init__(self, report: Any, profile: Any = None) -> None:
         self._snapshot = dict(report) if isinstance(report, dict) else None
         self._report_text = "" if self._snapshot is not None else (report or "")
         self._profile = profile if profile is not None else Profile.Basic()
@@ -50,34 +52,34 @@ class PerformanceSummary:
 
     # ---- raw access -------------------------------------------------------------------------
     @property
-    def profile(self):
+    def profile(self) -> Any:
         """The :class:`Profile` level the run requested."""
         return self._profile
 
     @property
-    def raw_report(self):
+    def raw_report(self) -> Any:
         """The exact legacy string the native profiler returned, or ``""`` for snapshot input."""
         return self._report_text
 
     @property
-    def source(self):
+    def source(self) -> Any:
         """``"snapshot"`` for structured C++ input, ``"text"`` for the legacy parser path."""
         return "snapshot" if self._snapshot is not None else "text"
 
-    def scopes(self):
+    def scopes(self) -> Any:
         """All timed scopes: ``{name: {count, total_s, mean_s, min_s, max_s}}``."""
         return dict(self._parsed["scopes"])
 
-    def counters(self):
+    def counters(self) -> Any:
         """All integer counters: ``{name: int}``."""
         return dict(self._parsed["counters"])
 
-    def total_s(self):
+    def total_s(self) -> Any:
         """Sum of every scope's total wall-clock time (seconds)."""
         return self._parsed["total_s"]
 
     # ---- typed views ------------------------------------------------------------------------
-    def by_program_node(self):
+    def by_program_node(self) -> Any:
         """Per-program-node timings (the ``node:<name>`` scopes the compiled step emits).
 
         Keys are the bare node names (``rhs2``, ``solve_fields1``, ...). Empty on a native step
@@ -88,7 +90,7 @@ class PerformanceSummary:
                  if name.startswith(_NODE_PREFIX)}
         return nodes
 
-    def by_native_brick(self):
+    def by_native_brick(self) -> Any:
         """Per-native-brick timings.
 
         The native runtime times Program nodes and coarse phases, not individual bricks: there is no
@@ -99,7 +101,7 @@ class PerformanceSummary:
             "by_native_brick",
             "native runtime times program nodes / phases, not individual bricks")
 
-    def by_solver(self):
+    def by_solver(self) -> Any:
         """Solver-attributable timings: the elliptic field-solve phase + any solve_fields node.
 
         Reads the coarse ``field_solve`` phase and the ``node:solve_fields*`` program nodes. Empty
@@ -113,7 +115,7 @@ class PerformanceSummary:
                 out[name[len(_NODE_PREFIX):]] = dict(fields)
         return out
 
-    def by_elliptic(self):
+    def by_elliptic(self) -> Any:
         """Elliptic-solver counters: the most actionable view given the elliptic-solve dominance.
 
         The elliptic field solve is 96-99.9% of step cost (Spec 5 sec.13.11.1), yet ``by_solver`` only
@@ -143,7 +145,7 @@ class PerformanceSummary:
                 "that emits them (mg_cycles / krylov_iters / mg_levels / elliptic_bottom)")
         return out
 
-    def by_amr_mpi(self):
+    def by_amr_mpi(self) -> Any:
         """AMR / MPI phase timings + counters: the distributed-runtime dimension (criterion 43).
 
         Spec 5 sec.12.5 requires time attributable to AMR / MPI alongside the program-node, native-brick,
@@ -189,7 +191,7 @@ class PerformanceSummary:
                 "no scope is emitted on a host / non-AMR build")
         return out
 
-    def by_memory(self):
+    def by_memory(self) -> Any:
         """Scratch-memory counters: allocation count + the largest single scratch buffer (bytes).
 
         Reads ``scratch_allocs`` / ``scratch_peak_bytes`` (program_context.hpp ``count_scratch``).
@@ -205,7 +207,7 @@ class PerformanceSummary:
         return present
 
     # ---- serialisation ----------------------------------------------------------------------
-    def to_dict(self):
+    def to_dict(self) -> Any:
         """The full structured report: level + scopes + counters + total, plus the typed views.
 
         ``by_native_brick`` / ``by_amr_mpi`` / ``by_memory`` serialise their availability honestly (an
@@ -229,7 +231,7 @@ class PerformanceSummary:
             },
         }
 
-    def to_json(self, path=None):
+    def to_json(self, path: Any = None) -> Any:
         """Serialise :meth:`to_dict` to JSON. Writes to @p path when given; returns the JSON string."""
         text = json.dumps(self.to_dict(), indent=2, sort_keys=True)
         if path is not None:
@@ -238,7 +240,7 @@ class PerformanceSummary:
         return text
 
     # ---- printable --------------------------------------------------------------------------
-    def __str__(self):
+    def __str__(self) -> Any:
         if not self._parsed["scopes"] and not self._parsed["counters"]:
             return "PerformanceSummary(%s): no profiling data recorded" % self._profile.level
         lines = ["PerformanceSummary (%s, total %.6f s, %d scopes)"
@@ -252,16 +254,16 @@ class PerformanceSummary:
             lines.append("counters: %s" % counters)
         return "\n".join(lines)
 
-    def print(self):
+    def print(self) -> None:
         """Print the human-readable summary (``print(summary)`` sugar)."""
         print(str(self))
 
-    def __repr__(self):
+    def __repr__(self) -> Any:
         return "PerformanceSummary(profile=%r, scopes=%d, counters=%d)" % (
             self._profile.level, len(self._parsed["scopes"]), len(self._parsed["counters"]))
 
 
-def _view_to_dict(view):
+def _view_to_dict(view: Any) -> Any:
     """Serialise a typed view: a dict passes through; an _Unavailable records its availability."""
     if isinstance(view, _Unavailable):
         return view.to_dict()

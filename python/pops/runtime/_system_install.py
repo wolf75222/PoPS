@@ -6,6 +6,10 @@ Holds the densest part of :class:`pops.runtime.system.System`: ``add_block`` /
 inheritance; methods operate on ``self._s`` (the compiled facade) and ``self._aux_field_index``.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from pops._bootstrap import ModelSpec
 from pops.runtime._lifecycle import guard_assembling as _guard_assembling
 from pops.runtime._lifecycle import reject_compiled_time_route as _reject_compiled_time_route
@@ -30,11 +34,17 @@ from pops.runtime.routes import (
 # (ADC-550) and re-imported so ``set_poisson`` below and the direct-import tests are unchanged.
 from pops.runtime._system_install_lowering import _lower_bc, _lower_wall  # noqa: F401
 
+if TYPE_CHECKING:
+    from pops.runtime._system_contract import _System
+else:
+    _System = object
 
-class _SystemInstall:
+
+class _SystemInstall(_System):
     """Block/equation/coupling installation methods of System."""
 
-    def add_block(self, name, model, spatial=None, time=None, evolve=True):
+    def add_block(self, name: Any, model: Any, spatial: Any = None, time: Any = None,
+                  evolve: bool = True) -> Any:
         """Installs an evolved block composed of NATIVE BRICKS on the shared system Poisson.
 
         Low-level runtime seam. The documented PUBLIC path is the typed
@@ -91,8 +101,9 @@ class _SystemInstall:
                           getattr(spatial, "positivity_floor", 0.0),
                           getattr(spatial, "wave_speed_cache", False))
 
-    def add_equation(self, name, model, spatial=None, time=None, substeps=None, names=None,
-                     evolve=True, stride=None):
+    def add_equation(self, name: Any, model: Any, spatial: Any = None, time: Any = None,
+                     substeps: Any = None, names: Any = None, evolve: bool = True,
+                     stride: Any = None) -> Any:
         """Adds an equation/block by dispatching on the TYPE of @p model (DSL Phase A).
 
         Low-level runtime seam. The documented PUBLIC path is the typed
@@ -342,10 +353,10 @@ class _SystemInstall:
             return
         raise ValueError("add_equation: adder %r unknown (backend %r)" % (adder, backend))
 
-    def set_source_stage(self, name, kind, theta, alpha,
-                         krylov_tol=0.0, krylov_max_iters=0,
-                         density="", momentum_x="", momentum_y="", energy="",
-                         bz_aux_component=-1):
+    def set_source_stage(self, name: Any, kind: Any, theta: Any, alpha: Any,
+                         krylov_tol: float = 0.0, krylov_max_iters: int = 0,
+                         density: str = "", momentum_x: str = "", momentum_y: str = "",
+                         energy: str = "", bz_aux_component: int = -1) -> Any:
         """Attach a Schur-condensed source stage to an already-added block (ADC-308).
 
         Thin public pass-through to the C++ binding (_pops.System.set_source_stage): same flat
@@ -360,15 +371,16 @@ class _SystemInstall:
         self._s.set_source_stage(name, kind, theta, alpha, krylov_tol, krylov_max_iters,
                                  density, momentum_x, momentum_y, energy, bz_aux_component)
 
-    def add_background(self, name, model, density, spatial=None):
+    def add_background(self, name: Any, model: Any, density: Any, spatial: Any = None) -> Any:
         """FROZEN species (not advanced): a fixed background that contributes to the system Poisson (and,
         in the future, to coupled sources). density: n*n array. Equivalent to add_block(evolve=False)
         followed by set_density (freeze ADC-592 enforced by the delegated, guarded add_block)."""
         self.add_block(name, model, spatial=spatial, evolve=False)
         self.set_density(name, density)
 
-    def set_poisson(self, rhs="charge_density", solver="geometric_mg", bc="auto",
-                    wall="none", wall_radius=0.0, epsilon=1.0, abs_tol=0.0):
+    def set_poisson(self, rhs: Any = "charge_density", solver: Any = "geometric_mg",
+                    bc: Any = "auto", wall: Any = "none", wall_radius: float = 0.0,
+                    epsilon: float = 1.0, abs_tol: float = 0.0) -> Any:
         """Configure the shared system Poisson solve (thin wrapper over the native binding).
 
         Low-level runtime seam. The documented PUBLIC elliptic surface is the typed
@@ -408,8 +420,8 @@ class _SystemInstall:
         self._s.set_poisson(rhs=rhs, solver=solver, bc=bc, wall=wall,
                             wall_radius=wall_radius, epsilon=epsilon, abs_tol=abs_tol)
 
-    def add_elliptic_model(self, name, model, solver=None, bc="auto", wall="none",
-                           wall_radius=0.0):
+    def add_elliptic_model(self, name: Any, model: Any, solver: Any = None, bc: Any = "auto",
+                           wall: Any = "none", wall_radius: float = 0.0) -> Any:
         """EPM: configures the system elliptic model (Poisson is its current instance).
         model = pops.elliptic(operator=pops.div_eps_grad(eps), rhs=pops.composite_rhs(),
         output=pops.electric_field_from_potential()). set_poisson(...) remains the equivalent shortcut.
@@ -433,7 +445,7 @@ class _SystemInstall:
         self.set_poisson(rhs=rhs_tok, solver=kind, bc=bc, wall=wall, wall_radius=wall_radius,
                          epsilon=model.operator.epsilon)
 
-    def add_coupling(self, coupling):
+    def add_coupling(self, coupling: Any) -> Any:
         """Add an inter-species coupling (operator-split, applied after transport):
 
         - NAMED object pops.Ionization / Collision / ThermalExchange -> a PRESET lowering to the generic

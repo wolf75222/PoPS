@@ -9,6 +9,9 @@ The transport stage type ``Explicit`` comes from ``_bricks_scheme``; the condens
 ``CondensedSchur`` comes from ``_bricks_time`` (defined before this module is imported, so the
 module load order stays acyclic).
 """
+from __future__ import annotations
+
+from typing import Any
 
 from pops.runtime._bricks_scheme import Explicit
 from pops.runtime._bricks_time import CondensedSchur
@@ -36,7 +39,7 @@ class Split:
     # kind="explicit": the transport is run by the core explicit path (SSPRK), the condensed source
     # is plugged IN ADDITION via set_source_stage (cf. System.add_equation). The block is therefore
     # NOT IMEX (the local stiff source backward-Euler): its source is the condensed stage, apart.
-    def __init__(self, hyperbolic=None, source=None):
+    def __init__(self, hyperbolic: Any = None, source: Any = None) -> None:
         hyperbolic = hyperbolic if hyperbolic is not None else Explicit()
         if not isinstance(hyperbolic, Explicit):
             raise TypeError(
@@ -86,7 +89,7 @@ class Strang(Split):
     ``hyperbolic`` / ``source`` : identical to pops.Split. Wired by add_equation (which plugs the source
     stage AND calls set_time_scheme('strang') on the System)."""
 
-    def __init__(self, hyperbolic=None, source=None):
+    def __init__(self, hyperbolic: Any = None, source: Any = None) -> None:
         super().__init__(hyperbolic=hyperbolic, source=source)
         self.scheme = SPLITTING_STRANG
 

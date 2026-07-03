@@ -4,12 +4,20 @@ Named-aux resolution + set/get, the disc transport-domain controls, and the prim
 state helpers of :class:`pops.runtime.system.System`. Mixed in via inheritance; methods operate
 on ``self._s`` and ``self._aux_field_index``.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pops.runtime._system_contract import _System
+else:
+    _System = object
 
 
-class _SystemAuxState:
+class _SystemAuxState(_System):
     """Named aux + disc domain + primitive state methods of System."""
 
-    def _resolve_aux_field(self, block, name):
+    def _resolve_aux_field(self, block: Any, name: Any) -> Any:
         """Resolve (block, NAMED aux field name) -> canonical component of the aux channel (ADC-70 phase 1).
         Resolution rule: a CANONICAL name (phi/grad/B_z/T_e) is REJECTED here -- these fields have
         their dedicated paths (B_z -> set_magnetic_field, T_e -> set_electron_temperature_from, phi/grad
@@ -40,7 +48,7 @@ class _SystemAuxState:
                 % (name, block, known))
         return table[name]
 
-    def set_aux_field(self, block, name, field, halo=None):
+    def set_aux_field(self, block: Any, name: Any, field: Any, halo: Any = None) -> Any:
         """Set a NAMED aux field (ADC-70 phase 1) of a block: @p name must have been declared by the
         model via m.aux_field(name) (and the block added via add_equation). @p field: 2D array (ny, nx)
         or flat (n*n), row-major. The field is STATIC (user-supplied, like B_z) and PERSISTS
@@ -57,7 +65,7 @@ class _SystemAuxState:
         if halo is not None:
             self._s.set_aux_field_halo_component(comp, halo.bc_type, halo.value)
 
-    def aux_field(self, block, name):
+    def aux_field(self, block: Any, name: Any) -> Any:
         """Read a NAMED aux field (ADC-70 phase 1) of a block -> 2D array (ny, nx). Equals 0 everywhere as
         long as no set_aux_field has written it (aux channel initialized to zero, never rewritten by
         solve_fields beyond the derived components). @p name: declared by m.aux_field(name)."""
@@ -65,7 +73,7 @@ class _SystemAuxState:
         comp = self._resolve_aux_field(block, name)
         return np.asarray(self._s.aux_field_component(comp), dtype=float)
 
-    def set_disc_domain(self, cx, cy=None, R=None, mode="none"):
+    def set_disc_domain(self, cx: Any, cy: Any = None, R: Any = None, mode: Any = "none") -> Any:
         """Set the TRANSPORT DOMAIN as a DISC of center (cx, cy) and radius R, and WIRE the
         transport according to mode= (T2 / T5-PR3 work). Materializes a 0/1 cell-centered mask (cell
         active when its center is inside the disc, level set hypot(x-cx, y-cy) - R < 0, SAME convention
@@ -118,7 +126,7 @@ class _SystemAuxState:
             mode = lower_disc_mode(mode)
         self._s.set_disc_domain(cx, cy, R, mode)
 
-    def set_geometry_mode(self, mode):
+    def set_geometry_mode(self, mode: Any) -> Any:
         """Switch ONLY the disc transport mode ('none'|'staircase'|'cutcell') without (re)defining the
         disc. A mode != 'none' requires a disc already set (set_disc_domain) -> error otherwise. Setting
         back to 'none' restores the full Cartesian transport (bit-identical).
@@ -130,13 +138,13 @@ class _SystemAuxState:
         from pops.mesh.masks import lower_disc_mode
         self._s.set_geometry_mode(lower_disc_mode(mode))
 
-    def disc_mask(self):
+    def disc_mask(self) -> Any:
         """0/1 cell-centered domain mask, array (ny, nx) (diagnostic / contract
         verification). All 1.0 as long as set_disc_domain has not been called (subdomain = whole
         domain, default path)."""
         return self._s.disc_mask()
 
-    def set_primitive_state(self, name, **prims):
+    def set_primitive_state(self, name: Any, **prims: Any) -> Any:
         """Initialize a block from its PRIMITIVE variables, named (rho/u/v/p ...):
 
             sim.set_primitive_state("electrons", rho=rho0, u=u0, v=v0, p=p0)
@@ -173,7 +181,7 @@ class _SystemAuxState:
             prim[c] = arr
         self._s.set_primitive_state(name, prim)
 
-    def get_primitive_state(self, name):
+    def get_primitive_state(self, name: Any) -> Any:
         """Read the conservative state of a block and return it in PRIMITIVE variables (diagnostic):
 
             P = sim.get_primitive_state("electrons")   # {"rho": ..., "u": ..., "v": ..., "p": ...}

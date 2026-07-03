@@ -7,6 +7,10 @@ scheme/time policies in ``_bricks_scheme``. ``ModelSpec`` comes from the loaded 
 ``pops._bootstrap``.
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 from pops._bootstrap import ModelSpec
 from pops.runtime.defaults import (
     PHYSICAL_DEFAULT_ALPHA,
@@ -43,10 +47,10 @@ class FluidState:
     """
 
     def __init__(self,
-                 kind="compressible",
-                 gamma=PHYSICAL_DEFAULT_GAMMA,
-                 cs2=PHYSICAL_DEFAULT_FLUID_STATE_CS2,
-                 vacuum_floor=PHYSICAL_DEFAULT_VACUUM_FLOOR):
+                 kind: str = "compressible",
+                 gamma: Any = PHYSICAL_DEFAULT_GAMMA,
+                 cs2: Any = PHYSICAL_DEFAULT_FLUID_STATE_CS2,
+                 vacuum_floor: Any = PHYSICAL_DEFAULT_VACUUM_FLOOR) -> None:
         self.kind = kind
         self.gamma = float(gamma)
         self.cs2 = float(cs2)
@@ -55,7 +59,7 @@ class FluidState:
         self.vacuum_floor = float(vacuum_floor)
 
     @classmethod
-    def compressible(cls, gamma=PHYSICAL_DEFAULT_GAMMA):
+    def compressible(cls, gamma: Any = PHYSICAL_DEFAULT_GAMMA) -> Any:
         """Typed constructor for the COMPRESSIBLE fluid state (Spec 5 sec.14.2.5).
 
         ``pops.FluidState.compressible(gamma=1.4)`` is the typed equivalent of
@@ -67,8 +71,8 @@ class FluidState:
 
     @classmethod
     def isothermal(cls,
-                   cs2=PHYSICAL_DEFAULT_FLUID_STATE_CS2,
-                   vacuum_floor=PHYSICAL_DEFAULT_VACUUM_FLOOR):
+                   cs2: Any = PHYSICAL_DEFAULT_FLUID_STATE_CS2,
+                   vacuum_floor: Any = PHYSICAL_DEFAULT_VACUUM_FLOOR) -> Any:
         """Typed constructor for the ISOTHERMAL fluid state (Spec 5 sec.14.2.5).
 
         ``pops.FluidState.isothermal(cs2=0.5, vacuum_floor=0.0)`` is the typed equivalent of
@@ -84,7 +88,7 @@ class FluidState:
 class ExB:
     """Scalar advection by the E x B drift (magnetic field B0)."""
 
-    def __init__(self, B0=PHYSICAL_DEFAULT_B0):
+    def __init__(self, B0: Any = PHYSICAL_DEFAULT_B0) -> None:
         self.B0 = float(B0)
 
 
@@ -104,7 +108,7 @@ class NoSource:
 class PotentialForce:
     """Potential force (q/m) rho E on the momentum (+ work if 4 vars)."""
 
-    def __init__(self, charge=PHYSICAL_DEFAULT_QOM):
+    def __init__(self, charge: Any = PHYSICAL_DEFAULT_QOM) -> None:
         self.charge = float(charge)
 
 
@@ -124,7 +128,7 @@ class MagneticLorentzForce:
 
     ``charge`` = q/m, sign included (same convention as PotentialForce)."""
 
-    def __init__(self, charge=PHYSICAL_DEFAULT_QOM):
+    def __init__(self, charge: Any = PHYSICAL_DEFAULT_QOM) -> None:
         self.charge = float(charge)
 
 
@@ -134,7 +138,7 @@ class PotentialMagneticForce:
     force). Same q/m for both forces (same species). Reads B_z (set_magnetic_field); requires a
     fluid transport >= 3 variables. ``charge`` = q/m, sign included."""
 
-    def __init__(self, charge=PHYSICAL_DEFAULT_QOM):
+    def __init__(self, charge: Any = PHYSICAL_DEFAULT_QOM) -> None:
         self.charge = float(charge)
 
 
@@ -142,7 +146,7 @@ class PotentialMagneticForce:
 class ChargeDensity:
     """Charge density f = q n."""
 
-    def __init__(self, charge=PHYSICAL_DEFAULT_CHARGE_Q):
+    def __init__(self, charge: Any = PHYSICAL_DEFAULT_CHARGE_Q) -> None:
         self.charge = float(charge)
 
 
@@ -150,8 +154,8 @@ class BackgroundDensity:
     """Neutralizing background f = alpha (n - n0)."""
 
     def __init__(self,
-                 alpha=PHYSICAL_DEFAULT_ALPHA,
-                 n0=PHYSICAL_DEFAULT_BACKGROUND_N0):
+                 alpha: Any = PHYSICAL_DEFAULT_ALPHA,
+                 n0: Any = PHYSICAL_DEFAULT_BACKGROUND_N0) -> None:
         self.alpha = float(alpha)
         self.n0 = float(n0)
 
@@ -160,15 +164,15 @@ class GravityCoupling:
     """Self-consistent coupling f = sign 4piG (rho - rho0). sign = +1 gravity, -1 plasma."""
 
     def __init__(self,
-                 sign=PHYSICAL_DEFAULT_GRAVITY_SIGN,
-                 four_pi_G=PHYSICAL_DEFAULT_FOUR_PI_G,
-                 rho0=PHYSICAL_DEFAULT_GRAVITY_RHO0):
+                 sign: Any = PHYSICAL_DEFAULT_GRAVITY_SIGN,
+                 four_pi_G: Any = PHYSICAL_DEFAULT_FOUR_PI_G,
+                 rho0: Any = PHYSICAL_DEFAULT_GRAVITY_RHO0) -> None:
         self.sign = float(sign)
         self.four_pi_G = float(four_pi_G)
         self.rho0 = float(rho0)
 
 
-def Model(state, transport, source, elliptic):
+def Model(state: Any, transport: Any, source: Any, elliptic: Any) -> Any:
     """Compose a model (ModelSpec) from state, transport, source, elliptic bricks.
 
     Validates the state <-> transport consistency (Scalar with ExB; compressible FluidState with
@@ -180,7 +184,7 @@ def Model(state, transport, source, elliptic):
     and its self-describing ``ModuleManifest`` (ADC-585). ADC-585 also moved this POD off the pops
     root: it lives at ``pops.runtime.ModelSpec``, not ``pops.ModelSpec``.
     """
-    spec = ModelSpec()
+    spec: Any = ModelSpec()
 
     if isinstance(state, Scalar):
         if not isinstance(transport, ExB):
@@ -242,7 +246,7 @@ def Model(state, transport, source, elliptic):
 # model, NATIVE bricks (pops.ExB / PotentialForce / ChargeDensity ...) and PARTIAL compiled DSL
 # bricks (pops.dsl.HyperbolicBrick(...).compile() / SourceBrick / EllipticBrick). The
 # mix is compiled into ONE composite .so (prototype: backend 'aot'). cf. pops/dsl.py (Phase B).
-def _native_to_brick(obj, role):
+def _native_to_brick(obj: Any, role: Any) -> Any:
     """Translate a NATIVE brick (pops.* object) into a NativeBrick descriptor for the @p role slot.
     An already-compiled DSL brick (CompiledBrick) passes through unchanged (after slot check)."""
     from pops.physics.bricks import CompiledBrick, NativeBrick
@@ -304,7 +308,7 @@ def _native_to_brick(obj, role):
     raise ValueError("pops.CompositeModel: unknown slot %r" % (role,))
 
 
-def CompositeModel(transport, source, elliptic, name="hybrid"):
+def CompositeModel(transport: Any, source: Any, elliptic: Any, name: str = "hybrid") -> Any:
     """Compose a HYBRID model mixing NATIVE bricks and PARTIAL DSL bricks in ONE model.
 
     Each slot (transport / source / elliptic) is EITHER a native brick (pops.ExB(...),
@@ -341,7 +345,7 @@ class DivEpsGrad:
     """Elliptic operator D = div(eps grad .). eps constant (1.0 = Poisson). Variable eps(x) and
     other operators (diffusion, projection) are refinements (they would touch the solver)."""
 
-    def __init__(self, epsilon=1.0):
+    def __init__(self, epsilon: Any = 1.0) -> None:
         self.epsilon = float(epsilon)
 
 
@@ -364,31 +368,32 @@ class ElectricFieldFromPotential:
 class EllipticModel:
     """EllipticPhysicalModel: unknown + operator + right-hand side + output."""
 
-    def __init__(self, unknown, operator, rhs, output):
+    def __init__(self, unknown: Any, operator: Any, rhs: Any, output: Any) -> None:
         self.unknown = unknown
         self.operator = operator
         self.rhs = rhs
         self.output = output
 
 
-def div_eps_grad(epsilon=1.0):
+def div_eps_grad(epsilon: Any = 1.0) -> Any:
     return DivEpsGrad(epsilon)
 
 
-def charge_density():
+def charge_density() -> Any:
     return ChargeDensitySource()
 
 
-def composite_rhs():
+def composite_rhs() -> Any:
     """Generic right-hand side f = sum_s elliptic_rhs_s(u_s) (sum of the per-block bricks)."""
     return CompositeRhs()
 
 
-def electric_field_from_potential():
+def electric_field_from_potential() -> Any:
     return ElectricFieldFromPotential()
 
 
-def elliptic(unknown="phi", operator=None, rhs=None, output=None):
+def elliptic(unknown: Any = "phi", operator: Any = None, rhs: Any = None,
+             output: Any = None) -> Any:
     """Compose an EPM. Poisson = elliptic(operator=div_eps_grad(), rhs=charge_density(),
     output=electric_field_from_potential()). The right-hand side can be composite_rhs() (GENERIC
     sum of the per-block elliptic bricks: charge, background, gravity); charge_density() is
@@ -402,5 +407,5 @@ class EllipticSolver:
     stencil) | 'fft_spectral' (periodic, continuous symbol -(kx^2+ky^2): fidelity to spectral
     references such as poisson_fft.m, exact on sinusoids)."""
 
-    def __init__(self, kind="geometric_mg"):
+    def __init__(self, kind: str = "geometric_mg") -> None:
         self.kind = kind

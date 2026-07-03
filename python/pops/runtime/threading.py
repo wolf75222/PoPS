@@ -11,6 +11,9 @@ pops.set_threads(n) writes OMP_NUM_THREADS BEFORE this init : a single call repl
 ``threading._first_system_built = True`` (a module attribute, not a cross-file ``global`` rebind).
 All readers/writers live in ``pops.runtime``, so the flag never leaks across layers.
 """
+from __future__ import annotations
+
+from typing import Any
 
 _first_system_built = False
 
@@ -20,7 +23,7 @@ _first_system_built = False
 _THREADS_ENV_VAR = "POPS_THREADS"
 
 
-def _threads_from_env():
+def _threads_from_env() -> Any:
     """Resolve a positive thread count from ``POPS_THREADS``, or None when unset/unusable.
 
     Returns None (so the caller falls back to ``os.cpu_count()``) when the variable is unset,
@@ -38,7 +41,7 @@ def _threads_from_env():
     return value if value >= 1 else None
 
 
-def has_kokkos():
+def has_kokkos() -> Any:
     """True if _pops was compiled with Kokkos (multi-thread/GPU possible), False if SERIAL.
 
     None if the module is too old to expose the info (attribute __has_kokkos__ absent)."""
@@ -46,7 +49,7 @@ def has_kokkos():
     return getattr(_pops, "__has_kokkos__", None)
 
 
-def set_threads(n=None):
+def set_threads(n: Any = None) -> None:
     """Set the number of compute threads (Kokkos OpenMP backend) in ONE line.
 
     Equivalent to exporting OMP_NUM_THREADS=n before launching Python, but without touching the shell. Has
@@ -105,7 +108,7 @@ def set_threads(n=None):
         os.environ.setdefault("OMP_PROC_BIND", "false")
 
 
-def parallel_info():
+def parallel_info() -> Any:
     """Parallelism state : compiled backend, current OMP_NUM_THREADS, Kokkos init already done."""
     import os
     return {

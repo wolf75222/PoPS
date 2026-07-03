@@ -26,6 +26,9 @@ Poisson solve), and are DISTINCT from two other typed boundary surfaces already 
 All objects here are inert (no ``_pops`` / numpy / runtime / codegen compute) : they record /
 lower their token (boundary) or pin a kind (Schur). ``pops.runtime.bricks`` re-exports them.
 """
+from __future__ import annotations
+
+from typing import Any
 
 from pops.runtime._bricks_time import CondensedSchur, Role
 from pops.runtime.defaults import PHYSICAL_DEFAULT_ALPHA
@@ -48,17 +51,17 @@ class _Boundary:
 
     bc = ""
 
-    def lower(self):
+    def lower(self) -> Any:
         """The native ``bc=`` token this boundary lowers to (e.g. ``"dirichlet"``)."""
         return self.bc
 
-    def __eq__(self, other):
+    def __eq__(self, other: Any) -> Any:
         return isinstance(other, _Boundary) and other.bc == self.bc
 
-    def __hash__(self):
+    def __hash__(self) -> Any:
         return hash((type(self).__name__, self.bc))
 
-    def __repr__(self):
+    def __repr__(self) -> Any:
         return "%s(bc=%r)" % (type(self).__name__, self.bc)
 
 
@@ -108,10 +111,10 @@ class ElectrostaticLorentzSchur(CondensedSchur):
     ``kind`` is not allowed (it is fixed to "electrostatic_lorentz").
     """
 
-    def __init__(self, theta=0.5, alpha=PHYSICAL_DEFAULT_ALPHA, density=Role.Density,
-                 momentum=(Role.MomentumX, Role.MomentumY), energy=None,
-                 magnetic_field="B_z", potential="phi",
-                 krylov_tol=None, krylov_max_iters=None):
+    def __init__(self, theta: Any = 0.5, alpha: Any = PHYSICAL_DEFAULT_ALPHA, density: Any = Role.Density,
+                 momentum: Any = (Role.MomentumX, Role.MomentumY), energy: Any = None,
+                 magnetic_field: str = "B_z", potential: str = "phi",
+                 krylov_tol: Any = None, krylov_max_iters: Any = None) -> None:
         super().__init__(kind="electrostatic_lorentz", theta=theta, alpha=alpha,
                          density=density, momentum=momentum, energy=energy,
                          magnetic_field=magnetic_field, potential=potential,

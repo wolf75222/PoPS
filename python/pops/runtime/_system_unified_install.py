@@ -8,6 +8,10 @@ calls this seam. Mixed into ``System`` via inheritance; methods operate on ``sel
 other mixins' methods) and ``self._s``.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from pops._bootstrap import ModelSpec
 from pops.runtime._install_param_routing import route_program_params
 from pops.runtime.bricks import Spatial
@@ -22,12 +26,18 @@ from pops.runtime._bind_validation import (  # noqa: F401
     validate_install_arguments,
 )
 
+if TYPE_CHECKING:
+    from pops.runtime._system_contract import _System
+else:
+    _System = object
 
-class _SystemUnifiedInstall:
+
+class _SystemUnifiedInstall(_System):
     """The internal ``_install_compiled`` lowering seam of System (driven by ``pops.bind``)."""
 
-    def _install_compiled(self, compiled=None, *, instances=None, params=None, aux=None,
-                          solvers=None, cadence=None, outputs=None):
+    def _install_compiled(self, compiled: Any = None, *, instances: Any = None, params: Any = None,
+                          aux: Any = None, solvers: Any = None, cadence: Any = None,
+                          outputs: Any = None) -> Any:
         """INTERNAL low-level install seam (Spec 5 sec.11): wire a compiled handle + per-instance
         state/spatial + params + aux + field solvers in ONE call, then install the compiled time
         Program. NOT the public entry point: author the run with ``pops.bind(compiled, state=,
@@ -191,7 +201,7 @@ class _SystemUnifiedInstall:
                                           cadence, aux, params)
         self._finalize_bind(snapshot)  # _finalize_bind lives on _LifecycleMixin
 
-    def explain_bind(self, compiled):
+    def explain_bind(self, compiled: Any) -> Any:
         """A printable :class:`pops.codegen.inspect_report.BindReport` of @p compiled vs this sim
         (Spec 5 sec.12.1, criterion #15). INERT: reads the artifact's DECLARED bind inputs
         (``compiled.arguments()``) and the blocks / named aux ALREADY wired on this System, then
@@ -202,7 +212,8 @@ class _SystemUnifiedInstall:
         from pops.codegen.inspect_report import build_bind_report
         return build_bind_report(self, compiled)
 
-    def _validate_install_arguments(self, compiled, instances, params, aux, solvers):
+    def _validate_install_arguments(self, compiled: Any, instances: Any, params: Any, aux: Any,
+                                    solvers: Any) -> Any:
         """Early bind-input validation (Spec 5 sec.10): reject a COMPILED install missing a REQUIRED
         argument the artifact declares, BEFORE any native mutation. Thin wrapper around the shared
         module-level :func:`validate_install_arguments` (reused by ``AmrSystem._install_compiled``
@@ -213,7 +224,7 @@ class _SystemUnifiedInstall:
     # System._collect_missing_arguments without building a System).
     _collect_missing_arguments = staticmethod(collect_missing_arguments)
 
-    def _install_cadence(self, cadence):
+    def _install_cadence(self, cadence: Any) -> Any:
         """Apply a CompiledTime macro-step cadence to the installed program (set_program_cadence).
 
         set_program_cadence is a SYSTEM-level orchestration around the opaque program closure:
@@ -230,7 +241,7 @@ class _SystemUnifiedInstall:
             self._program_cadence_cfl = float(cadence.cfl)
         self.set_program_cadence(cadence.substeps, cadence.stride)
 
-    def _lower_spatial(self, spatial):
+    def _lower_spatial(self, spatial: Any) -> Any:
         """Lower a spatial selection to an pops.Spatial consumed by add_equation. Accepts an
         pops.Spatial / pops.FiniteVolume (returned as-is), an pops.numerics.spatial.FiniteVolume(...)
         BrickDescriptor (read its riemann/reconstruction/positivity_floor options), or None (default
@@ -255,7 +266,7 @@ class _SystemUnifiedInstall:
                         "pops.numerics.spatial.FiniteVolume(...) descriptor; got %r"
                         % type(spatial).__name__)
 
-    def _resolve_instance_model(self, model):
+    def _resolve_instance_model(self, model: Any) -> Any:
         """Resolve an instance's block model to something add_equation accepts. A ModelSpec
         (pops.Model(...)) or a dsl.CompiledModel passes through unchanged. A dsl.Model (the PDE
         builder, e.g. carried by compile_problem(model=...)) is compiled to a CompiledModel so the
@@ -278,7 +289,7 @@ class _SystemUnifiedInstall:
             return model.compile(backend="aot" if has_runtime else "production")
         return model  # unknown -> let add_equation raise its own clear error
 
-    def _validate_riemann_capability(self, model, spatial):
+    def _validate_riemann_capability(self, model: Any, spatial: Any) -> Any:
         """Section 24 capability check: reject the selected Riemann flux when a compiled model does
         not back it (verbatim spec message ``riemann <FLUX> requires capability '<cap>'``), lowered
         from CompiledModel.has_hllc / has_roe / has_wave_speeds. A composed native pops.Model(...)
@@ -302,7 +313,8 @@ class _SystemUnifiedInstall:
     # Field names the default native Poisson route already serves (the shared system elliptic solve).
     _DEFAULT_POISSON_FIELDS = ("phi", "poisson", "charge_density", "default")
 
-    def _install_solver(self, field, solver_brick, declared_fields=frozenset()):
+    def _install_solver(self, field: Any, solver_brick: Any,
+                        declared_fields: Any = frozenset()) -> Any:
         """Lower a field-solver selection to set_poisson (C1-System).
 
         The default Poisson field and any NAMED elliptic field a block's model DECLARES (via
@@ -327,7 +339,7 @@ class _SystemUnifiedInstall:
                          abs_tol=float(opts.get("abs_tol", 0.0)))
 
     @staticmethod
-    def _declared_elliptic_fields(compiled, instances):
+    def _declared_elliptic_fields(compiled: Any, instances: Any) -> Any:
         """Collect the NAMED elliptic fields declared by the compiled handle's model and the
         per-instance models (C1-System). Reads each model's declared names WITHOUT compiling: a
         CompiledModel exposes ``elliptic_field_names``; a raw physics/dsl Model exposes the
@@ -350,7 +362,7 @@ class _SystemUnifiedInstall:
         return names
 
     @staticmethod
-    def _solver_token(solver_brick):
+    def _solver_token(solver_brick: Any) -> Any:
         """Resolve a field-solver selection to its set_poisson token. Accepts a string, or a
         descriptor carrying ``scheme`` (pops.solvers.GeometricMG -> 'geometric_mg')."""
         if isinstance(solver_brick, str):
@@ -361,7 +373,7 @@ class _SystemUnifiedInstall:
                             "descriptor; got %r" % type(solver_brick).__name__)
         return token
 
-    def _install_aux(self, field_name, field):
+    def _install_aux(self, field_name: Any, field: Any) -> Any:
         """Lower an aux entry: 'B_z' -> set_magnetic_field; 'T_e' rejected (derived); any other name
         -> set_aux_field on the block that declares it."""
         if field_name == "B_z":
@@ -378,7 +390,7 @@ class _SystemUnifiedInstall:
                 "with a model declaring m.aux_field(%r)." % (field_name, field_name))
         self.set_aux_field(block, field_name, field)
 
-    def _block_declaring_aux(self, field_name):
+    def _block_declaring_aux(self, field_name: Any) -> Any:
         """The block whose named-aux table declares @p field_name, or None."""
         for block, table in self._aux_field_index.items():
             if field_name in table:
@@ -386,7 +398,7 @@ class _SystemUnifiedInstall:
         return None
 
     @staticmethod
-    def _route_block_params(resolved_models, params):
+    def _route_block_params(resolved_models: Any, params: Any) -> Any:
         """Pure routing core of _install_params (no engine call -> host-testable). Map a flat
         {param_name: value} to {block: sorted runtime-param value vector} using each RESOLVED model's
         runtime_param_names (declaration defaults for unspecified names), and return the param names
@@ -402,7 +414,8 @@ class _SystemUnifiedInstall:
             if not rt_names:
                 continue
             values_fn = getattr(model, "runtime_param_values", None)
-            defaults = list(values_fn()) if callable(values_fn) else [None] * len(rt_names)
+            raw_defaults: Any = values_fn() if callable(values_fn) else [None] * len(rt_names)
+            defaults: Any = list(raw_defaults)
             values = []
             for k, pname in enumerate(rt_names):
                 if pname in params:
@@ -414,7 +427,8 @@ class _SystemUnifiedInstall:
         unknown = sorted(set(params) - consumed)
         return per_block, unknown
 
-    def _install_params(self, resolved_models, params, reject_unknown=True):
+    def _install_params(self, resolved_models: Any, params: Any,
+                        reject_unknown: bool = True) -> Any:
         """Route flat {param_name: value} to set_block_params per instance: build each instance's
         sorted runtime-param vector (declaration defaults for unspecified names) and push it. @p
         resolved_models maps each instance name to its RESOLVED CompiledModel. @p reject_unknown (native
@@ -433,14 +447,15 @@ class _SystemUnifiedInstall:
     # as System._route_program_params without building a System.
     _route_program_params = staticmethod(route_program_params)
 
-    def _install_program_params(self, compiled, params):
+    def _install_program_params(self, compiled: Any, params: Any) -> Any:
         """Route flat {param_name: value} to set_program_params per PROGRAM block (ADC-510): read the
         compiled handle's declared routing (runtime_param_routes), build each block's COMPLETE value
         vector (declaration defaults for unspecified names) and push it to the System-owned per-block
         RuntimeParams the Program kernels read. A name declared by no Program kernel (incl. a const-only /
         param-free Program carrying no routing) raises (no silent drop)."""
         routes_fn = getattr(compiled, "runtime_param_routes", None)
-        routes, defaults = routes_fn() if callable(routes_fn) else ({}, {})
+        routing: Any = routes_fn() if callable(routes_fn) else ({}, {})
+        routes, defaults = routing
         per_block, unknown = self._route_program_params(routes, defaults, params)
         for blk, values in per_block.items():
             self._s.set_program_params(blk, values)

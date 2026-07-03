@@ -21,6 +21,9 @@ module lives in the ``runtime`` layer, which may import ``mesh`` / ``codegen`` /
 mesh / ``_bootstrap`` / engine imports are kept LAZY (function scope) to mirror the existing bind
 path and keep the import-graph architecture gates green.
 """
+from __future__ import annotations
+
+from typing import Any
 
 
 class _RuntimeAdapter:
@@ -38,15 +41,17 @@ class _RuntimeAdapter:
     #: The compile target this adapter serves (``"system"`` / ``"amr_system"``). Overridden.
     target = None
 
-    def build_engine(self, layout):
+    def build_engine(self, layout: Any) -> Any:
         """Construct and return the internal engine (System / AmrSystem). Overridden per adapter."""
         raise NotImplementedError
 
-    def install(self, engine, compiled, *, instances, params, aux, solvers, cadence, outputs):
+    def install(self, engine: Any, compiled: Any, *, instances: Any, params: Any, aux: Any,
+                solvers: Any, cadence: Any, outputs: Any) -> Any:
         """Lower the bind inputs onto @p engine's internal ``_install_compiled`` seam. Overridden."""
         raise NotImplementedError
 
-    def build(self, compiled, *, layout, instances, params, aux, solvers, cadence, outputs):
+    def build(self, compiled: Any, *, layout: Any, instances: Any, params: Any, aux: Any,
+              solvers: Any, cadence: Any, outputs: Any) -> Any:
         """Build the engine, install the compiled Problem onto it, wrap it in a bound-simulation view.
 
         This is the one place Uniform and AMR share: the adapter-specific ``build_engine`` /
@@ -70,7 +75,7 @@ class _UniformRuntimeAdapter(_RuntimeAdapter):
 
     target = "system"
 
-    def build_engine(self, layout):
+    def build_engine(self, layout: Any) -> Any:
         # Resolved from pops.runtime.system at call time so a monkeypatched System (low-level tests)
         # still takes effect. The Uniform layout carries the single-level mesh: derive the System's
         # SystemConfig (n / L / periodic) from it so the engine matches the Problem's grid, mirroring the
@@ -82,7 +87,8 @@ class _UniformRuntimeAdapter(_RuntimeAdapter):
             return System()
         return System(_system_config_from_layout(layout))
 
-    def install(self, engine, compiled, *, instances, params, aux, solvers, cadence, outputs):
+    def install(self, engine: Any, compiled: Any, *, instances: Any, params: Any, aux: Any,
+                solvers: Any, cadence: Any, outputs: Any) -> Any:
         engine._install_compiled(compiled, instances=instances, params=params, aux=aux,
                                  solvers=solvers, cadence=cadence, outputs=outputs)
 
@@ -100,11 +106,11 @@ class _AmrRuntimeAdapter(_RuntimeAdapter):
 
     target = "amr_system"
 
-    def __init__(self, n_blocks=1):
+    def __init__(self, n_blocks: Any = 1) -> None:
         # The declared block count decides the single- vs multi-block refinement wiring.
         self._n_blocks = n_blocks
 
-    def build_engine(self, layout):
+    def build_engine(self, layout: Any) -> Any:
         # Resolved from pops.runtime.system at call time (mirrors the Uniform adapter) so a
         # monkeypatched AmrSystem is honored. A missing layout on an AMR target is a bind bug.
         from pops.runtime.system import AmrSystem
@@ -117,7 +123,8 @@ class _AmrRuntimeAdapter(_RuntimeAdapter):
         _flow_amr_layout(engine, layout, n_blocks=self._n_blocks)
         return engine
 
-    def install(self, engine, compiled, *, instances, params, aux, solvers, cadence, outputs):
+    def install(self, engine: Any, compiled: Any, *, instances: Any, params: Any, aux: Any,
+                solvers: Any, cadence: Any, outputs: Any) -> Any:
         # AMR installs via the NATIVE path (compiled=None): each instance carries its OWN
         # target='amr_system' CompiledModel, wired with add_equation -> add_native_block. There is
         # NO whole-system time Program install on AMR (AmrSystem rejects compiled != None).
@@ -125,7 +132,7 @@ class _AmrRuntimeAdapter(_RuntimeAdapter):
                                  solvers=solvers, cadence=cadence, outputs=outputs)
 
 
-def adapter_for(target, layout, n_blocks=1):
+def adapter_for(target: Any, layout: Any, n_blocks: Any = 1) -> Any:
     """Select the runtime adapter for a compiled Problem.
 
     ``layout=Uniform(...)`` compiles to ``target='system'`` and selects the Uniform adapter;
@@ -160,7 +167,7 @@ def adapter_for(target, layout, n_blocks=1):
 # already speak the "pops.bind:" vocabulary and are preserved verbatim.
 
 
-def _system_config_from_layout(layout):
+def _system_config_from_layout(layout: Any) -> Any:
     """Build a ``SystemConfig`` from a :class:`pops.mesh.layouts.Uniform` descriptor.
 
     Maps the inert Uniform layout onto the C++ runtime config the ``System`` constructor consumes:
@@ -179,7 +186,7 @@ def _system_config_from_layout(layout):
     return cfg
 
 
-def _amr_config_from_layout(layout):
+def _amr_config_from_layout(layout: Any) -> Any:
     """Build an ``AmrSystemConfig`` from a :class:`pops.mesh.layouts.AMR` descriptor.
 
     Maps the inert AMR layout onto the C++ runtime config the ``AmrSystem`` constructor consumes:
@@ -199,7 +206,7 @@ def _amr_config_from_layout(layout):
     from pops.mesh.amr import FrozenRegrid, PatchLayout, RegridEvery
 
     base = layout.base
-    cfg = AmrSystemConfig()
+    cfg: Any = AmrSystemConfig()
     cfg.n = int(base.n)
     cfg.L = float(base.L)
     cfg.periodic = bool(base.periodic)
@@ -225,7 +232,7 @@ def _amr_config_from_layout(layout):
     return cfg
 
 
-def _flow_amr_layout(sim, layout, n_blocks=1):
+def _flow_amr_layout(sim: Any, layout: Any, n_blocks: Any = 1) -> Any:
     """Flow the AMR layout's typed refinement criterion onto @p sim BEFORE the blocks are installed.
 
     Mirrors the old string path: a ``Refine.on(subject).above(threshold)`` (or a ``TagUnion`` of
@@ -245,7 +252,7 @@ def _flow_amr_layout(sim, layout, n_blocks=1):
         _apply_refine_criterion(sim, criterion, is_multiblock=n_blocks > 1)
 
 
-def _apply_refine_criterion(sim, criterion, is_multiblock=False):
+def _apply_refine_criterion(sim: Any, criterion: Any, is_multiblock: bool = False) -> Any:
     """Lower one typed refinement criterion to set_refinement / set_phi_refinement on @p sim.
 
     A ``Refine`` whose predicate is a gradient on the potential (``phi`` / ``grad phi``) lowers to
@@ -292,7 +299,7 @@ def _apply_refine_criterion(sim, criterion, is_multiblock=False):
     sim.set_refinement(float(threshold), variable=subject)
 
 
-def _refine_subject_name(subject):
+def _refine_subject_name(subject: Any) -> Any:
     """The plain string name of a Refine subject (a string, or an object carrying ``.name``)."""
     if isinstance(subject, str):
         return subject
@@ -300,7 +307,7 @@ def _refine_subject_name(subject):
     return name if isinstance(name, str) else None
 
 
-def _is_default_density_subject(subject):
+def _is_default_density_subject(subject: Any) -> Any:
     """True when a Refine subject names the density / component 0 (the single-block default).
 
     The native single-block AMR refines on component 0 (the historical density), so a Density-role

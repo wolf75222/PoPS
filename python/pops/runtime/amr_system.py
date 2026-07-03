@@ -7,6 +7,9 @@ and ``_amr_system_install`` (the ``pops.bind`` install seam + field-solver / aux
 mixins to satisfy the <=500-line cap ; this module composes them and keeps the constructor + the
 native-add_block / coupling / diagnostics glue.
 """
+from __future__ import annotations
+
+from typing import Any
 
 from pops._bootstrap import AmrSystemConfig, _AmrSystem
 from pops.runtime import threading as _threading
@@ -29,7 +32,7 @@ from pops.runtime._amr_system_program import _AmrSystemProgram
 from pops.runtime.profile import PerformanceSummary, Profile
 
 
-def _profile_payload(system):
+def _profile_payload(system: Any) -> Any:
     """Structured profiler payload when the native extension exposes it, else legacy text."""
     snapshot = getattr(system, "profile_snapshot", None)
     if callable(snapshot):
@@ -47,22 +50,22 @@ class _AmrProfileSession:
     here rather than importing from system.py to avoid a circular import (system imports amr_system).
     """
 
-    def __init__(self, system, profile):
+    def __init__(self, system: Any, profile: Any) -> None:
         self._system = system
         self._profile = profile
         self._summary = None
 
-    def __enter__(self):
+    def __enter__(self) -> Any:
         self._system.reset_profiling()
         self._system.enable_profiling()
         return self
 
-    def __exit__(self, exc_type, exc, tb):
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
         self._summary = PerformanceSummary(_profile_payload(self._system), self._profile)
         self._system.disable_profiling()
         return False
 
-    def summary(self):
+    def summary(self) -> Any:
         """Return a :class:`PerformanceSummary` (live report inside the block, snapshot after)."""
         if self._summary is not None:
             return self._summary
@@ -95,7 +98,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
     regrid_every == 0 -> FROZEN hierarchy (regrid never called, bit-identical).
     """
 
-    def __init__(self, config=None, **cfg_kw):
+    def __init__(self, config: Any = None, **cfg_kw: Any) -> None:
         if config is None:
             config = AmrSystemConfig()
             for k, v in cfg_kw.items():
@@ -120,7 +123,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         self._lifecycle = "assembling"
         self._bound_snapshot = None
 
-    def profile(self, profile=None):
+    def profile(self, profile: Any = None) -> Any:
         """Typed AMR / MPI profiling context manager (Spec 5 sec.12.5, criterion 43).
 
         Usage::
@@ -144,7 +147,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
                 % type(profile).__name__)
         return _AmrProfileSession(self, profile)
 
-    def patch_rectangles(self):
+    def patch_rectangles(self) -> Any:
         """Physical rectangles (x0, y0, width, height) of the current fine patches, in [0, L]^2.
 
         Converts patch_boxes() (index space, inclusive corners) into physical coordinates. The level
@@ -163,7 +166,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
             rects.append((ilo * dx, jlo * dx, (ihi - ilo + 1) * dx, (jhi - jlo + 1) * dx))
         return rects
 
-    def coarse_local_boxes(self):
+    def coarse_local_boxes(self) -> Any:
         """Number of coarse (base) boxes owned by this MPI rank (ADC-319 diagnostic).
 
         The base level is a MultiFab whose boxes are spread across ranks by a DistributionMapping.
@@ -175,7 +178,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         """
         return self._s.coarse_local_boxes()
 
-    def coarse_total_boxes(self):
+    def coarse_total_boxes(self) -> Any:
         """Total number of coarse (base) boxes across all ranks (ADC-319 diagnostic).
 
         Identical on every rank (BoxArray size, no communication). With distribute_coarse=True this is
@@ -185,7 +188,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         """
         return self._s.coarse_total_boxes()
 
-    def add_block(self, name, model, spatial=None, time=None):
+    def add_block(self, name: Any, model: Any, spatial: Any = None, time: Any = None) -> Any:
         """Installs an evolved block composed of NATIVE BRICKS on the shared AMR hierarchy.
 
         Low-level runtime seam. The documented PUBLIC path is the typed ``pops.Problem`` assembly
@@ -260,7 +263,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
                           getattr(time, "newton_diagnostics", False),
                           getattr(spatial, "positivity_floor", 0.0))
 
-    def field(self, name):
+    def field(self, name: Any) -> Any:
         """Return the solved potential of a NAMED elliptic field (ADC-428) as an (n, n) array.
 
         Read-back of a second elliptic field declared via m.elliptic_field and lowered on the AMR layout:
@@ -270,7 +273,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         carries no named field)."""
         return self._s.named_field_values(name)
 
-    def add_coupling(self, coupling):
+    def add_coupling(self, coupling: Any) -> Any:
         """Add a generic inter-species COUPLED SOURCE (pops.dsl.CoupledSource(...).compile(...))
         on the SHARED AMR hierarchy (MULTI-BLOCK), refined counterpart of System.add_coupling. The source
         is transported as bytecode and interpreted on the C++ side (AmrSystem.add_coupled_source; no
@@ -301,7 +304,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
                                       frequency=preset.frequency)
         self._s.add_coupling_operator(*args)
 
-    def _amr_block_gamma(self, name):
+    def _amr_block_gamma(self, name: Any) -> Any:
         """Per-block adiabatic index for the ThermalExchange preset (ADC-595). AmrSystem does not expose
         a block_gamma accessor, so a ThermalExchange on AMR raises a clear error pointing at the generic
         CoupledSource path (build the pressure closure with an explicit gamma via pops.dsl.CoupledSource)."""
@@ -311,7 +314,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
             "param, or use it on a uniform System.")
 
     @property
-    def amr(self):
+    def amr(self) -> Any:
         """The live AMR runtime inspection handle (Spec 5 sec.8.12), an
         :class:`pops.runtime.amr.AmrRuntimeView`.
 
@@ -329,7 +332,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
 
         return AmrRuntimeView(self)
 
-    def __str__(self):
+    def __str__(self) -> Any:
         """Short, array-free summary: block names on the AMR hierarchy (Spec 5 sec.12.1).
 
         Field/patch data stays out of the summary -- it prints the block registry only.
@@ -340,7 +343,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
             blocks = []
         return "AmrSystem(blocks=%s)" % (blocks,)
 
-    def explain_bind(self, compiled):
+    def explain_bind(self, compiled: Any) -> Any:
         """A printable :class:`pops.codegen.inspect_report.BindReport` of @p compiled vs this AMR sim
         (Spec 5 sec.12.1, criterion #15). INERT parity with ``System.explain_bind``: reads the
         artifact's DECLARED bind inputs (``compiled.arguments()``) and the blocks / named aux wired on
@@ -349,12 +352,12 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         from pops.codegen.inspect_report import build_bind_report
         return build_bind_report(self, compiled)
 
-    def inspect(self):
+    def inspect(self) -> Any:
         """Structured, array-free AMR runtime inspection report (ADC-591)."""
         from pops.runtime.inspection import build_runtime_inspection
         return build_runtime_inspection(self, runtime="amr_system")
 
-    def program_report(self):
+    def program_report(self) -> Any:
         """Structured report of the compiled-Program runtime subsystem (ADC-594).
 
         Same value object as ``System.program_report`` -- the SHARED Program subsystem (the AMR runtime
@@ -364,7 +367,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         from pops.runtime.program_report import build_program_report
         return build_program_report(self)
 
-    def __getattr__(self, attr):
+    def __getattr__(self, attr: Any) -> Any:
         # RUNTIME FREEZE (ADC-592): once bound, refuse a native STRUCTURAL setter reached through the
         # passthrough (sim._engine.set_refinement / install_program / ...) with the bind-vocabulary
         # RuntimeError, so the bypass is closed even under a prebuilt .so whose C++ setters are not yet

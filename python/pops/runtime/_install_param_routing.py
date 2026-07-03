@@ -6,9 +6,12 @@ block ``set_program_params`` vectors (ADC-510, Spec 5 C5); it is the mirror of `
 (the AOT-block ``set_block_params`` route, P7-b) and is re-exposed as
 ``System._route_program_params`` for host tests.
 """
+from __future__ import annotations
+
+from typing import Any
 
 
-def route_program_params(routes, defaults, params):
+def route_program_params(routes: Any, defaults: Any, params: Any) -> Any:
     """Map a flat ``{param_name: value}`` to the per-PROGRAM-block ``set_program_params`` vectors.
 
     @p routes maps a program block index to its param names in within-block index order; @p defaults

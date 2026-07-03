@@ -22,6 +22,14 @@ symbols. The native ``System::mark_bound`` / ``lifecycle_state`` (added in the s
 DEFENCE IN DEPTH consulted when present. Stdlib-only imports so this module stays import-light and
 buildable without the compiled ``_pops`` extension.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pops.runtime._system_contract import _System
+else:
+    _System = object
 
 # NATIVE structural setter names that the frozen engine must intercept in its ``__getattr__``
 # native passthrough (each exists on System and/or AmrSystem's C++ facade ``_s``). A bound engine
@@ -49,7 +57,7 @@ FROZEN_STRUCTURAL = frozenset({
 })
 
 
-def freeze_error(what):
+def freeze_error(what: Any) -> Any:
     """The precise :class:`RuntimeError` for a structural mutation attempted after ``pops.bind``.
 
     @p what names the refused operation (a method / attribute name). The message speaks the BIND
@@ -66,7 +74,7 @@ def freeze_error(what):
         "may change on a bound simulation." % (what,))
 
 
-def guard_assembling(engine, what):
+def guard_assembling(engine: Any, what: Any) -> Any:
     """Raise :func:`freeze_error` when @p engine is already bound (the Python-layer structural guard).
 
     Called at the TOP of each Python-implemented structural method (add_block / add_equation /
@@ -80,7 +88,7 @@ def guard_assembling(engine, what):
         raise freeze_error(what)
 
 
-def reject_compiled_time_route(time, where):
+def reject_compiled_time_route(time: Any, where: Any) -> Any:
     """Refuse ``time=CompiledTime(...)`` on the native install seam (ADC-554).
 
     A compiled ``Program`` is not a per-block transport POLICY: it OWNS the whole step and is installed
@@ -99,7 +107,7 @@ def reject_compiled_time_route(time, where):
             "time= policy." % (where,))
 
 
-def derive_lifecycle_state(engine):
+def derive_lifecycle_state(engine: Any) -> Any:
     """The lifecycle state of @p engine, preferring the native ``_s.lifecycle_state()`` when present.
 
     Falls back to the Python ``self._lifecycle`` flag combined with the macro-step counter so the
@@ -119,15 +127,16 @@ def derive_lifecycle_state(engine):
             pass
     if getattr(engine, "_lifecycle", "assembling") != "bound":
         return "assembling"
-    macro = getattr(engine, "macro_step", None)
+    macro: Any = getattr(engine, "macro_step", None)
     try:
-        stepped = callable(macro) and int(macro()) > 0
+        step_value: Any = macro() if callable(macro) else 0
+        stepped = int(step_value) > 0
     except Exception:  # noqa: BLE001 -- macro_step is a convenience; absence is not a failure
         stepped = False
     return "running" if stepped else "bound"
 
 
-class _LifecycleMixin:
+class _LifecycleMixin(_System):
     """The shared freeze-lifecycle surface of System and AmrSystem (ADC-592).
 
     Both engines mix this in so Uniform and AMR share the SAME transition + inspection semantics
@@ -136,7 +145,7 @@ class _LifecycleMixin:
     ``self._lifecycle`` flag (set to ``"assembling"`` at ``__init__``) and native facade ``self._s``.
     """
 
-    def _finalize_bind(self, snapshot):
+    def _finalize_bind(self, snapshot: Any) -> Any:
         """Freeze the runtime as the LAST act of ``_install_compiled`` (ADC-592).
 
         Stores the :class:`~pops.runtime._bound_snapshot.BoundSnapshot`, flips the Python lifecycle
@@ -151,7 +160,7 @@ class _LifecycleMixin:
         if callable(native):
             native()
 
-    def lifecycle_state(self):
+    def lifecycle_state(self) -> Any:
         """The runtime lifecycle state: ``assembling`` / ``bound`` / ``running`` (ADC-592).
 
         Prefers the native ``self._s.lifecycle_state()`` when present (defence in depth); else derives
@@ -159,7 +168,7 @@ class _LifecycleMixin:
         return derive_lifecycle_state(self)
 
     @property
-    def bound_snapshot(self):
+    def bound_snapshot(self) -> Any:
         """The :class:`~pops.runtime._bound_snapshot.BoundSnapshot` of what ``pops.bind`` froze
         (``None`` before bind)."""
         return getattr(self, "_bound_snapshot", None)

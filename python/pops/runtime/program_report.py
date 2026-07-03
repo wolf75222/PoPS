@@ -18,10 +18,14 @@ getters -- yields ``None`` for that field rather than raising, so the report sta
 stale extension (CI proves the fresh accessors).
 """
 
+from __future__ import annotations
+
 import json
 
+from typing import Any
 
-def _call(obj, name, default=None, *args):
+
+def _call(obj: Any, name: Any, default: Any = None, *args: Any) -> Any:
     """Call ``obj.name(*args)`` if present + callable, else return @p default (never raises)."""
     fn = getattr(obj, name, None)
     if not callable(fn):
@@ -43,8 +47,9 @@ class ProgramRuntimeReport:
     schema_version = 1
     report_type = "program_runtime"
 
-    def __init__(self, *, installed, program_hash, cadence, block_map, params, diagnostics,
-                 histories, cache, profiler):
+    def __init__(self, *, installed: Any, program_hash: Any, cadence: Any, block_map: Any,
+                 params: Any, diagnostics: Any, histories: Any, cache: Any,
+                 profiler: Any) -> None:
         self.installed = bool(installed)
         self.program_hash = program_hash or ""
         self.cadence = dict(cadence)
@@ -55,7 +60,7 @@ class ProgramRuntimeReport:
         self.cache = [dict(row) for row in cache]
         self.profiler = dict(profiler)
 
-    def to_dict(self):
+    def to_dict(self) -> Any:
         return {
             "schema_version": self.schema_version,
             "report_type": self.report_type,
@@ -70,7 +75,7 @@ class ProgramRuntimeReport:
             "profiler": dict(self.profiler),
         }
 
-    def to_json(self, path=None, *, indent=2):
+    def to_json(self, path: Any = None, *, indent: int = 2) -> Any:
         text = json.dumps(self.to_dict(), indent=indent, sort_keys=True)
         if path is not None:
             with open(str(path), "w", encoding="utf-8") as handle:
@@ -78,12 +83,12 @@ class ProgramRuntimeReport:
             return path
         return text
 
-    def __repr__(self):
+    def __repr__(self) -> Any:
         return ("ProgramRuntimeReport(installed=%r, hash=%r, histories=%d, cache=%d)"
                 % (self.installed, self.program_hash or "(none)", len(self.histories),
                    len(self.cache)))
 
-    def __str__(self):
+    def __str__(self) -> Any:
         cad = self.cadence
         lines = ["program runtime report (schema=%d)" % self.schema_version]
         lines.append("  installed   : %s" % self.installed)
@@ -99,7 +104,7 @@ class ProgramRuntimeReport:
         return "\n".join(lines)
 
 
-def _cadence(sim):
+def _cadence(sim: Any) -> Any:
     """The GLOBAL macro-step cadence (ADC-594). ``program_substeps`` / ``program_stride`` are the
     ADC-594 getters; an older ``.so`` lacks them -> None (graceful, CI proves the fresh accessors)."""
     return {
@@ -108,7 +113,7 @@ def _cadence(sim):
     }
 
 
-def _params(sim):
+def _params(sim: Any) -> Any:
     """Per-program-block runtime-param COUNT + the kMaxRuntimeParams limit (never the values -- inert
     metadata). Derived from the block map (or, absent it, block 0): a block with no runtime param reports
     count 0. The limit (ADC-610) surfaces the previously-hidden fixed-array capacity so a block's headroom
@@ -125,7 +130,7 @@ def _params(sim):
     return rows
 
 
-def _histories(sim):
+def _histories(sim: Any) -> Any:
     rows = []
     for name in _call(sim, "history_names", []) or []:
         rows.append({
@@ -137,7 +142,7 @@ def _histories(sim):
     return rows
 
 
-def _cache(sim):
+def _cache(sim: Any) -> Any:
     rows = []
     for node_id in _call(sim, "program_cache_nodes", []) or []:
         rows.append({
@@ -149,7 +154,7 @@ def _cache(sim):
     return rows
 
 
-def build_program_report(sim):
+def build_program_report(sim: Any) -> Any:
     """Aggregate the bound Program-subsystem accessors of @p sim into a :class:`ProgramRuntimeReport`.
 
     @p sim is the engine (or a delegating view that forwards to it). Every field is read gracefully

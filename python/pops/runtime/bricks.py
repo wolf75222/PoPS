@@ -10,6 +10,7 @@ sec.14.2.5 typed native-brick constructors : the native elliptic boundary bricks
 import point. ``abi_key`` (the module ABI key on the extension) is re-exported here too, surfaced
 through the runtime layer (it comes from ``pops._bootstrap``).
 """
+from __future__ import annotations
 
 from pops._bootstrap import abi_key
 

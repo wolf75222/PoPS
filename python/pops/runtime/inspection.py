@@ -4,6 +4,9 @@
 report is deliberately metadata-only: it reads already-owned C++ facts and runtime registries, never
 field arrays, never recompiles, never installs a program.
 """
+from __future__ import annotations
+
+from typing import Any
 
 from pops._report import Report
 from pops._capabilities import native_capability_report
@@ -19,9 +22,10 @@ class RuntimeInspectionReport(Report):
     schema_version = 1
     report_type = "runtime_inspection"
 
-    def __init__(self, *, runtime, blocks, clock, runtime_environment, capabilities, program,
-                 profile, history, cache, diagnostics, options=None, amr=None, limitations=None,
-                 routes=None, lifecycle=None, bound_snapshot=None):
+    def __init__(self, *, runtime: Any, blocks: Any, clock: Any, runtime_environment: Any,
+                 capabilities: Any, program: Any, profile: Any, history: Any, cache: Any,
+                 diagnostics: Any, options: Any = None, amr: Any = None, limitations: Any = None,
+                 routes: Any = None, lifecycle: Any = None, bound_snapshot: Any = None) -> None:
         self.runtime = runtime
         self.blocks = list(blocks)
         self.clock = dict(clock)
@@ -42,7 +46,7 @@ class RuntimeInspectionReport(Report):
         self.lifecycle = lifecycle if lifecycle is not None else "assembling"
         self.bound_snapshot = dict(bound_snapshot) if bound_snapshot is not None else None
 
-    def to_dict(self):
+    def to_dict(self) -> Any:
         return {
             "schema_version": self.schema_version,
             "report_type": self.report_type,
@@ -64,11 +68,11 @@ class RuntimeInspectionReport(Report):
             "bound_snapshot": dict(self.bound_snapshot) if self.bound_snapshot is not None else None,
         }
 
-    def __repr__(self):
+    def __repr__(self) -> Any:
         return ("RuntimeInspectionReport(runtime=%r, blocks=%d, history=%d, cache=%d)"
                 % (self.runtime, len(self.blocks), len(self.history), len(self.cache)))
 
-    def __str__(self):
+    def __str__(self) -> Any:
         rt = self.runtime_environment
         prof = self.profile
         lines = ["%s report (schema=%d)" % (self.runtime, self.schema_version)]
@@ -116,7 +120,7 @@ class RuntimeInspectionReport(Report):
         return "\n".join(lines)
 
 
-def build_runtime_inspection(sim, *, runtime):
+def build_runtime_inspection(sim: Any, *, runtime: Any) -> Any:
     cap_report = native_capability_report()
     cap_dict = cap_report.to_dict()
     options = _options(sim, runtime)
@@ -144,7 +148,7 @@ def build_runtime_inspection(sim, *, runtime):
         bound_snapshot=_bound_snapshot(sim))
 
 
-def _call(obj, name, default=None, *args):
+def _call(obj: Any, name: Any, default: Any = None, *args: Any) -> Any:
     fn = getattr(obj, name, None)
     if not callable(fn):
         return default
@@ -154,25 +158,25 @@ def _call(obj, name, default=None, *args):
         return default
 
 
-def _block_names(sim):
+def _block_names(sim: Any) -> Any:
     return list(_call(sim, "block_names", []) or [])
 
 
-def _clock(sim):
+def _clock(sim: Any) -> Any:
     return {
         "time": _call(sim, "time", None),
         "macro_step": _call(sim, "macro_step", None),
     }
 
 
-def _profile_payload(sim):
+def _profile_payload(sim: Any) -> Any:
     snapshot = getattr(sim, "profile_snapshot", None)
     if callable(snapshot):
         return snapshot()
     return _call(sim, "profile_report", "") or ""
 
 
-def _program(sim):
+def _program(sim: Any) -> Any:
     """The compiled-Program section, built FROM the structured ProgramRuntimeReport (ADC-594) so the
     two reports share a SINGLE source. Kept back-compatible: the historical inspection keys
     ("installed"/"hash") are preserved, with the richer cadence/block_map/param/history/cache summary
@@ -191,7 +195,7 @@ def _program(sim):
     }
 
 
-def _lifecycle(sim):
+def _lifecycle(sim: Any) -> Any:
     """The runtime lifecycle state (ADC-592): "assembling" for an engine never bound, else the
     engine's own ``lifecycle_state()`` ("bound"/"running"). Graceful default keeps a pre-bind or
     low-level engine describable rather than raising."""
@@ -199,7 +203,7 @@ def _lifecycle(sim):
     return str(state) if state is not None else "assembling"
 
 
-def _bound_snapshot(sim):
+def _bound_snapshot(sim: Any) -> Any:
     """The BoundSnapshot manifest of what pops.bind froze, as a plain dict + its hash (ADC-592).
 
     Reads the engine's ``bound_snapshot`` (None before bind); serialises it via ``to_dict()`` and
@@ -208,15 +212,16 @@ def _bound_snapshot(sim):
     snap = getattr(sim, "bound_snapshot", None)
     if snap is None:
         return None
-    to_dict = getattr(snap, "to_dict", None)
-    payload = dict(to_dict()) if callable(to_dict) else {}
+    to_dict: Any = getattr(snap, "to_dict", None)
+    raw: Any = to_dict() if callable(to_dict) else {}
+    payload: Any = dict(raw)
     snapshot_hash = getattr(snap, "snapshot_hash", None)
     if snapshot_hash is not None:
         payload["snapshot_hash"] = snapshot_hash
     return payload
 
 
-def _history(sim):
+def _history(sim: Any) -> Any:
     rows = []
     for name in _call(sim, "history_names", []) or []:
         rows.append({
@@ -228,7 +233,7 @@ def _history(sim):
     return rows
 
 
-def _cache(sim):
+def _cache(sim: Any) -> Any:
     rows = []
     for node_id in _call(sim, "program_cache_nodes", []) or []:
         rows.append({
@@ -242,14 +247,14 @@ def _cache(sim):
     return rows
 
 
-def _diagnostics(sim, options):
-    diagnostics = dict(_call(sim, "program_diagnostics", {}) or {})
+def _diagnostics(sim: Any, options: Any) -> Any:
+    diagnostics: Any = dict(_call(sim, "program_diagnostics", {}) or {})
     diagnostics["solver_events"] = list(_call(sim, "solver_diagnostics", []) or [])
     diagnostics["fallbacks"] = fallback_diagnostics_report(options)
     return diagnostics
 
 
-def _options(sim, runtime):
+def _options(sim: Any, runtime: Any) -> Any:
     report = _call(sim, "effective_options_report", None)
     if report:
         try:
@@ -268,7 +273,7 @@ def _options(sim, runtime):
     }
 
 
-def _try_route(family, token):
+def _try_route(family: Any, token: Any) -> Any:
     """Route manifest of @p token in @p family, or a minimal unregistered row (ADC-584).
 
     The effective options carry the wire tokens; MOST map to a typed native route. A token
@@ -286,7 +291,7 @@ def _try_route(family, token):
                 "requirements": [], "limitations": []}
 
 
-def _routes(options):
+def _routes(options: Any) -> Any:
     """The typed native routes USED by the live runtime (ADC-584 inspection).
 
     Derived from the effective options report (which already carries the per-block wire
@@ -314,14 +319,14 @@ def _routes(options):
     return {"blocks": blocks, "poisson": poisson}
 
 
-def _amr(sim):
+def _amr(sim: Any) -> Any:
     try:
         return sim.amr.hierarchy_snapshot().to_dict()
     except Exception as exc:
         return {"available": False, "reason": str(exc)}
 
 
-def _amr_patch_count(amr):
+def _amr_patch_count(amr: Any) -> Any:
     patch_table = amr.get("patch_table") or {}
     return patch_table.get("n_patches")
 

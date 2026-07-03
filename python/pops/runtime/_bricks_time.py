@@ -10,6 +10,9 @@ helpers live in ``_bricks_time_imex`` and the operator-splitting policies in ``_
 (both split out for the 500-line cap, ADC-550, and re-imported here so no public path changes). The
 ``Split`` transport stage type ``Explicit`` comes from ``_bricks_scheme``.
 """
+from __future__ import annotations
+
+from typing import Any
 
 from pops.runtime.routes import SOURCE_STAGE_ELECTROSTATIC_LORENTZ
 from pops.runtime.defaults import PHYSICAL_DEFAULT_ALPHA
@@ -93,11 +96,11 @@ class CondensedSchur:
       made configurable by the 2026-06 audit (explicit numerical constants).
     """
 
-    def __init__(self, kind="electrostatic_lorentz", theta=0.5,
-                 alpha=PHYSICAL_DEFAULT_ALPHA,
-                 density=Role.Density, momentum=(Role.MomentumX, Role.MomentumY),
-                 energy=None, magnetic_field="B_z", potential="phi",
-                 krylov_tol=None, krylov_max_iters=None):
+    def __init__(self, kind: str = "electrostatic_lorentz", theta: Any = 0.5,
+                 alpha: Any = PHYSICAL_DEFAULT_ALPHA,
+                 density: Any = Role.Density, momentum: Any = (Role.MomentumX, Role.MomentumY),
+                 energy: Any = None, magnetic_field: str = "B_z", potential: str = "phi",
+                 krylov_tol: Any = None, krylov_max_iters: Any = None) -> None:
         self.krylov_tol = float(krylov_tol) if krylov_tol is not None else 0.0
         self.krylov_max_iters = int(krylov_max_iters) if krylov_max_iters is not None else 0
         if krylov_tol is not None and not (0.0 < self.krylov_tol < 1.0):
@@ -131,7 +134,7 @@ class CondensedSchur:
         # (AUX_CANONICAL: "B_z", "T_e", ...) -> carried aux component. potential stays fixed
         # to "phi" (the stage uses the system Poisson potential; another field would have
         # no solver behind it -> explicit rejection, no silent ignore).
-        def _spec(v):
+        def _spec(v: Any) -> Any:
             return "" if v is None else str(v)
         # Canonical defaults -> EMPTY strings on the ABI side (the C++ then resolves the canonical
         # roles, historical path strictly unchanged).
@@ -167,7 +170,7 @@ class CondensedSchur:
         self.energy = energy
         self.magnetic_field = magnetic_field
         self.potential = potential
-    def _has_field_overrides(self):
+    def _has_field_overrides(self) -> Any:
         """True if a non-canonical descriptor is requested (AMR: explicit rejection, not wired)."""
         return bool(self.density_spec or self.momentum_x_spec or self.momentum_y_spec
                     or self.energy_spec or self.bz_aux_component >= 0)

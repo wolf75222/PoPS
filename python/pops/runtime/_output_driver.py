@@ -12,9 +12,12 @@ there is one level to write -- and AMR per-level writes are the Spec 6 epic ADC-
 has no ``System`` writer (it is the AMReX per-level format), so a ``Plotfile`` output policy is
 the one precise reject here, naming ADC-511; every other policy lowers.
 """
+from __future__ import annotations
+
+from typing import Any
 
 
-def policy_due(cadence, step):
+def policy_due(cadence: Any, step: Any) -> Any:
     """True when @p cadence is DUE at macro-step @p step (1-based: the count after a step).
 
     Accepts the typed schedule objects (``pops.time.schedule.every(N)`` / ``always()``) and the
@@ -42,7 +45,7 @@ def policy_due(cadence, step):
         "or an int interval (when/on_start/on_end/subcycle output is a follow-up)." % (kind,))
 
 
-def _format_token(fmt):
+def _format_token(fmt: Any) -> Any:
     """Map a typed output format (``HDF5()`` / ``Plotfile()``) to a ``System.write`` format string.
 
     ``HDF5`` -> ``"hdf5"``; ``None`` (no explicit format) -> ``"npz"`` (the dependency-free
@@ -66,12 +69,12 @@ def _format_token(fmt):
     return getattr(fmt, "name", name)
 
 
-def _hdf5_parallel(fmt):
+def _hdf5_parallel(fmt: Any) -> Any:
     """True when the typed format requests the parallel-HDF5 path (``HDF5(parallel=True)``)."""
     return bool(getattr(fmt, "parallel", False))
 
 
-def _field_names(fields):
+def _field_names(fields: Any) -> Any:
     """Resolve an OutputPolicy ``fields=[...]`` list to the block-name subset ``write`` wants.
 
     Each entry is a block name string or a typed handle carrying ``.name`` (a field / state
@@ -90,7 +93,7 @@ def _field_names(fields):
     return names or None
 
 
-def fire_output_policies(sim, policies, step, output_dir):
+def fire_output_policies(sim: Any, policies: Any, step: Any, output_dir: Any) -> Any:
     """Fire every DUE output / checkpoint policy at macro-step @p step (the run-loop hook).
 
     For each :class:`pops.output.OutputPolicy` whose cadence is due, call the existing
