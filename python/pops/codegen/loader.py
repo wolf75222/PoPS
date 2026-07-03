@@ -25,6 +25,15 @@ class CompiledProblem:
     so its ABI key matches and the internal install seam accepts it.
     ``os.fspath(compiled)`` returns ``so_path`` (it can be passed where a
     path is expected).
+
+    VALIDATED-OR-ABSENT (ADC-558): a ``CompiledProblem`` is returned ONLY after
+    ``compile_problem`` has validated the Program / model and successfully
+    compiled (or verified a cached) ``.so`` -- so a handle in hand is always
+    fully validated and directly ``pops.bind``-able. There is NO public
+    ``check()`` to run afterwards; the inspectable surface is
+    :meth:`inspect` / :meth:`requirements` / :meth:`manifest`, and the single
+    validity signal is the ``"compiled, waiting for pops.bind(...)"`` status
+    line. A failed compile raises before any handle exists.
     """
 
     def __init__(self, so_path, program, model, abi_key, cxx, std, libraries=None,

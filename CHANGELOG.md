@@ -44,6 +44,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   alongside `inspect()` / `requirements()`.
 
 ### Changed
+- ADC-558 A compiled artifact is validated-or-absent: every structural check happens during
+  `pops.compile(...)` (Program / model validation at emit, the compiler run, and the cache-HIT
+  sidecar guard), so a returned `CompiledProblem` is always fully valid and directly bindable. There
+  is no post-compile `check()` step (none is added to the handle or the `CompiledArtifact` protocol);
+  the inspectable surface is `compiled.inspect()` / `compiled.requirements()` / `compiled.manifest()`
+  and the single validity signal is the `"compiled, waiting for pops.bind(...)"` status line. A
+  failed compile raises before any handle exists.
 - ADC-623 Rebalanced the CI pytest gate: the selected test files are now packed onto shards by
   measured duration (greedy longest-processing-time over a committed `tests/python/test_durations.json`)
   instead of a modulo of the file list, so the slowest shard is minimized; grew the Python shards from

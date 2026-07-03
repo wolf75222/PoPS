@@ -343,6 +343,15 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
     if model is not None and hasattr(model, "check"):
         model.check()
 
+    # VALIDATED-OR-ABSENT INVARIANT (ADC-558): every structural check runs HERE, before a handle
+    # exists. emit_cpp_program calls program.validate() + _check_lowerable, so a malformed Program /
+    # model raises now; a compiler error raises at _run_compile below; a stale cache HIT raises at
+    # verify_cached_program_so. A CompiledProblem is therefore returned ONLY after validation AND a
+    # successful (or already-cached-and-verified) compile -- both return points below hand back a
+    # fully-valid, directly bindable handle, never a "to-check" one. There is no public check() to
+    # run after compile: the handle's validity is guaranteed by its existence, and the single status
+    # signal is the "compiled, waiting for pops.bind(...)" line in inspect(). A failure NEVER lets a
+    # partially-validated handle escape.
     src = time.emit_cpp_program(model=model, target=target)
 
     include = include or pops_include()
