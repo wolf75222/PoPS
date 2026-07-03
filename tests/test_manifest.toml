@@ -336,6 +336,11 @@ sources = ["tests/cpp/integration/native_loader/test_native_loader_param_overflo
 labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
 
 [[cpp.suite]]
+name = "test_program_abi_symbols"
+sources = ["tests/cpp/integration/native_loader/test_program_abi_symbols.cpp"]
+labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
+
+[[cpp.suite]]
 name = "test_program_loader"
 sources = ["tests/cpp/integration/native_loader/test_program_loader.cpp"]
 labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
@@ -376,6 +381,11 @@ sources = ["tests/cpp/integration/runtime/test_checkpoint_cache.cpp"]
 labels = ["integration", "runtime", "medium"]
 
 [[cpp.suite]]
+name = "test_checkpoint_history"
+sources = ["tests/cpp/integration/runtime/test_checkpoint_history.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
 name = "test_config_model_validation"
 sources = ["tests/cpp/integration/runtime/test_config_model_validation.cpp"]
 labels = ["integration", "runtime", "medium"]
@@ -398,6 +408,11 @@ labels = ["integration", "runtime", "medium"]
 [[cpp.suite]]
 name = "test_field_context"
 sources = ["tests/cpp/unit/runtime/test_field_context.cpp"]
+labels = ["unit", "runtime", "small"]
+
+[[cpp.suite]]
+name = "test_program_context_contract"
+sources = ["tests/cpp/unit/runtime/test_program_context_contract.cpp"]
 labels = ["unit", "runtime", "small"]
 
 [[cpp.suite]]

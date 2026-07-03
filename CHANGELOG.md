@@ -17,6 +17,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 ## [Unreleased]
 
 ### Added
+- ADC-538 Native ProgramContext execution contract is fenced by tests: the host-validatable
+  compiled-Program call path (per-stage `solve_fields_from_state`, `rhs_into` /
+  `neg_div_flux_default_into` / `source_default_into`, `lincomb` / `axpy`, `fill_boundary`,
+  `apply_projection`, reductions, `laplacian` / `gradient` / `divergence`, scratch allocation, history
+  register / store / read / rotate, `record_scalar` -> `program_diagnostic`, runtime params, `hmin` /
+  `max_wave_speed`), Forward-Euler and 2-stage SSPRK parity against direct System primitives, the
+  per-stage `FieldContext` validity guard, the multistep history-ring checkpoint / restart round-trip,
+  and the generated-.so ABI symbol presence are covered by native C++ tests.
 - ADC-533 `pops.numerics.spatial.FiniteVolume(riemann=, reconstruction=)` composite is homed under
   `pops.numerics` (re-exported at its historical `pops.FiniteVolume` path), and the HLL/HLLC/Roe and
   explicit-Euler route refusals plus the WENO5 ghost-depth check are surfaced through the descriptor
