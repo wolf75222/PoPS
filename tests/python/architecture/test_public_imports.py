@@ -48,6 +48,19 @@ def test_lib_models_moments_hyqmom15():
     assert HyQMOM15 is not None
 
 
+def test_lib_presets():
+    # ADC-524: pops.lib.presets is the home for ready-to-run compose-and-go bundles. A preset really
+    # composes a provided model and a provided time scheme (not a stub).
+    from pops.lib.presets import Preset, vlasov_poisson_magnetic_euler
+    from pops.time import Program
+
+    assert Preset is not None
+    preset = vlasov_poisson_magnetic_euler()
+    assert preset.category == "preset"
+    assert preset.model() is not None
+    assert isinstance(preset.time_scheme("f"), Program)
+
+
 def test_moments_kit():
     # Spec 5 (sec.4): the moment-model construction kit lives in the top-level pops.moments.
     from pops.moments import CartesianVelocityMoments, MomentModel
