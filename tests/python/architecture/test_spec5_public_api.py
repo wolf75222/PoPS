@@ -2,8 +2,8 @@
 
 This guards the FOUNDATION cleanup of the public bindings surface:
 
-* the top-level compilable assembly is ``pops.Case`` (the old ``pops.Problem`` name is gone, with
-  NO deprecated alias) ;
+* the top-level compilable assembly is ``pops.Problem`` (Phase 5 re-adopts it as the declarative
+  assembly root; the transitional ``pops.Case`` name is gone, with NO back-compat alias) ;
 * ``pops.PythonFlux`` is removed from the public surface (it computes a numpy residual in Python,
   which the PoPS "no public Python numeric" rule excludes); it is reachable only as
   ``pops.experimental.PythonFlux`` for residual prototyping in tests ;
@@ -31,28 +31,30 @@ except Exception as _exc:  # pragma: no cover - only without a built extension
 import pops  # noqa: E402
 
 
-def test_case_replaces_problem_on_the_public_surface():
-    # The assembly is pops.Case now; pops.Problem is gone with no alias (hard break).
-    assert hasattr(pops, "Case"), "pops.Case must be the top-level compilable assembly"
-    assert not hasattr(pops, "Problem"), "pops.Problem must be gone (renamed to pops.Case, no alias)"
-    assert "Case" in pops.__all__, "Case must be exported in pops.__all__"
-    assert "Problem" not in pops.__all__, "Problem must not linger in pops.__all__"
-    # pops.Problem must raise AttributeError (not be a silently-aliased attribute).
-    with pytest.raises(AttributeError):
-        pops.Problem  # noqa: B018
+def test_problem_is_the_assembly_root():
+    # Phase 5 re-adopts pops.Problem as the declarative assembly root; pops.Case is gone with NO
+    # back-compat alias (ADC-553/ADC-526/ADC-523: no soft-compat alias).
+    assert hasattr(pops, "Problem"), "pops.Problem must be the top-level compilable assembly"
+    assert not hasattr(pops, "Case"), "pops.Case must be gone (renamed to pops.Problem, no alias)"
+    assert "Problem" in pops.__all__, "Problem must be exported in pops.__all__"
+    assert "Case" not in pops.__all__, "Case must not linger in pops.__all__"
+    # pops.Case must raise AttributeError (not be a silently-aliased attribute), pointing at Problem.
+    with pytest.raises(AttributeError) as excinfo:
+        pops.Case  # noqa: B018
+    assert "pops.Problem" in str(excinfo.value), "the AttributeError must point at pops.Problem"
 
 
-def test_case_keeps_the_assembly_chaining_surface():
+def test_problem_keeps_the_assembly_chaining_surface():
     # The rename preserves the authoring surface (chaining setters + inspect/route/lower path).
-    case = pops.Case(name="arch")
+    problem = pops.Problem(name="arch")
     for member in ("block", "field", "param", "aux", "output", "time", "layout",
                    "validate", "inspect", "explain_routes", "available", "requirements",
                    "capabilities", "lower"):
-        assert hasattr(case, member), "pops.Case lost the %r surface member" % member
+        assert hasattr(problem, member), "pops.Problem lost the %r surface member" % member
     # ``amr`` is a property that raises for a non-AMR layout, so probe the class, not the instance.
-    assert hasattr(type(case), "amr"), "pops.Case lost the .amr handle"
-    assert case.category == "case"
-    assert "arch" in repr(case) and repr(case).startswith("Case(")
+    assert hasattr(type(problem), "amr"), "pops.Problem lost the .amr handle"
+    assert problem.category == "problem"
+    assert "arch" in repr(problem) and repr(problem).startswith("Problem(")
 
 
 def test_field_problem_classes_are_untouched():
@@ -157,10 +159,10 @@ def test_no_public_target_kwarg_on_compile_or_bind():
         sig = inspect.signature(fn)
         assert "target" not in sig.parameters, (
             "%s must not accept a public target= kwarg (the layout picks the runtime)" % fn.__name__)
-    # The public assembly pops.Case has no compile / install / target surface either.
-    case = pops.Case(name="arch")
+    # The public assembly pops.Problem has no compile / install / target surface either.
+    problem = pops.Problem(name="arch")
     for forbidden in ("compile", "install", "target"):
-        assert not hasattr(case, forbidden), "pops.Case must not expose %r" % forbidden
+        assert not hasattr(problem, forbidden), "pops.Problem must not expose %r" % forbidden
     # pops.physics.Model (the writing facade) lowers; it has no target= path.
     pm = pops.physics.Model("arch")
     assert not hasattr(pm, "target"), "pops.physics.Model must not expose a target surface"
@@ -199,7 +201,7 @@ def test_compile_accepts_optional_layout_passthrough():
 
     params = inspect.signature(pops.compile).parameters
     assert "layout" in params, "pops.compile must accept an optional layout= argument"
-    assert params["layout"].default is None, "layout= must default to None (fall back to the Case)"
+    assert params["layout"].default is None, "layout= must default to None (fall back to the Problem)"
 
 
 def test_solver_generation_dsl_is_internal_experimental():

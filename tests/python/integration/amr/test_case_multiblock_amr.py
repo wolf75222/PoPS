@@ -1,6 +1,6 @@
 """ADC-503 Spec 6 sec.11: multi-block on an AMR layout lowers via the native per-block path.
 
-ADC-503 lifts the C3 boundary: a multi-block (and single-block) AMR Case now lowers. Each block's
+ADC-503 lifts the C3 boundary: a multi-block (and single-block) AMR Problem now lowers. Each block's
 resolved physics is compiled to a target='amr_system' production CompiledModel (the native AMR .so
 loader, add_native_block), the {block: CompiledModel} table is carried on the handle, and bind
 installs through the native path (_install_compiled(compiled=None, instances=...)). There is NO
@@ -75,7 +75,7 @@ def _unpatch():
 
 
 def test_multi_block_amr_lowers_natively():
-    """ADC-503: a multi-block AMR Case lowers -- each block compiled for target='amr_system', the
+    """ADC-503: a multi-block AMR Problem lowers -- each block compiled for target='amr_system', the
     {block: CompiledModel} table carried, and compile_problem NEVER called (a tripwire proves it)."""
     called = {"hit": False}
 
@@ -86,7 +86,7 @@ def test_multi_block_amr_lowers_natively():
     _patch_compile_problem(_tripwire)
     try:
         m_ne, m_ni = _StubModel("ne"), _StubModel("ni")
-        case = (pops.Case(layout=AMR(CartesianMesh())).block("ne", physics=m_ne)
+        case = (pops.Problem(layout=AMR(CartesianMesh())).block("ne", physics=m_ne)
                 .block("ni", physics=m_ni))
         compiled = orchestration.compile(case)  # no time= : the AMR route does not need one
         _check(called["hit"] is False, "multi-block AMR does NOT call compile_problem (no .so built)")
@@ -105,7 +105,7 @@ def test_multi_block_amr_lowers_natively():
 
 
 def test_single_block_amr_still_lowers():
-    """ADC-503 regression: a single-block AMR Case still lowers (now via the native per-block path,
+    """ADC-503 regression: a single-block AMR Problem still lowers (now via the native per-block path,
     not compile_problem)."""
     called = {"hit": False}
 
@@ -117,7 +117,7 @@ def test_single_block_amr_still_lowers():
     try:
         layout = AMR(CartesianMesh())
         model = _StubModel("ne")
-        case = pops.Case(layout=layout).block("ne", physics=model)
+        case = pops.Problem(layout=layout).block("ne", physics=model)
         compiled = orchestration.compile(case)
         _check(called["hit"] is False, "single-block AMR does NOT call compile_problem")
         _check(model.dsl.compiled == [("production", "amr_system")],

@@ -79,9 +79,38 @@ class BrickDescriptor:
     # (this descriptor's documented identity); these inert methods only expose the same
     # protocol member NAMES the ``Descriptor`` base does. They add no computation.
     def lower(self, context=None):
-        """The inert lowering record for this brick (metadata only; no computation)."""
-        return {"name": self.name, "category": self.category, "native_id": self.native_id,
-                "scheme": self.scheme, "options": dict(self.options)}
+        """The inert :class:`~pops.descriptors_report.LoweredDescriptor` for this brick (ADC-527).
+
+        Metadata only, no computation. The typed record subclasses ``dict``, so a caller that read
+        the old ``lower()`` dict (``name`` / ``category`` / ``native_id`` / ``scheme`` / ``options``)
+        is unchanged. A route with an empty ``native_id`` (a catalogued-but-not-native brick) is left
+        to the loud :meth:`validate` refusal upstream -- never a silent fallback.
+        """
+        from pops.descriptors_report import LoweredDescriptor
+        record = LoweredDescriptor(name=self.name, category=self.category,
+                                   native_id=self.native_id or None, options=dict(self.options),
+                                   extra={"scheme": self.scheme})
+        # Keep ``scheme`` at the TOP level (not just under ``extra``) so callers that read the old
+        # ``lower()["scheme"]`` are unchanged.
+        record["scheme"] = self.scheme
+        record.scheme = self.scheme
+        return record
+
+    def availability(self, context=None):
+        """The EXPLAINABLE availability status of this brick (ADC-527: not just the bool attribute).
+
+        ``BrickDescriptor.available`` stays a bool attribute (its documented identity, and the shape
+        the catalog walks read). This method gives the typed :class:`Availability` the protocol wants:
+        a native brick is ``yes``; a catalogued brick with no native symbol yet is ``no`` with the
+        reason and the typed alternative (mirrors the :meth:`validate` message), so a rejection is
+        explainable before the runtime is touched.
+        """
+        if self.available:
+            return Availability.yes()
+        return Availability.no(
+            "%s [%s] has no native C++ symbol yet" % (self.name, self.category),
+            missing=["native_id"],
+            alternatives=["choose an available descriptor from pops.inspect_capabilities()"])
 
     def inspect(self):
         """A plain-dict view of the brick descriptor (Spec 5 sec.12.1)."""
@@ -360,4 +389,15 @@ from pops._descriptor_protocol import (  # noqa: E402,F401  (re-exported at the 
     Descriptor,
     DescriptorProtocol,
     reject_string_selector,
+)
+
+# ADC-527: the typed DescriptorProtocol result objects. Re-exported here so the one public home of
+# the descriptor surface (pops.descriptors) exposes them alongside Availability / Descriptor.
+from pops.descriptors_report import (  # noqa: E402,F401
+    CapabilitySet,
+    LoweredDescriptor,
+    Requirement,
+    RequirementSet,
+    ValidationIssue,
+    ValidationReport,
 )

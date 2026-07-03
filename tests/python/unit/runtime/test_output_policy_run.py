@@ -5,7 +5,7 @@ The typed output / checkpoint policies (pops.output) wire to the EXISTING write(
 writers through a run-loop hook (pops.runtime._output_driver). This is a LOCAL end-to-end proof
 on the Uniform / single-level System path: it builds a REAL native System (native bricks, no DSL
 compile, no Kokkos .so -- the no-fake-engine rule), attaches output policies on its
-``_output_policies`` (exactly what pops.bind flows from a Case), runs a few steps, and asserts:
+``_output_policies`` (exactly what pops.bind flows from a Problem), runs a few steps, and asserts:
 
   (1) an OutputPolicy(format=npz, cadence=every(N)) writes a file at every Nth step and NOT
       in between, with the right step suffix and the expected fields inside;

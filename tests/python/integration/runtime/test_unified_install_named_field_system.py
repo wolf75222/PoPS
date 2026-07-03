@@ -109,7 +109,7 @@ def test_install_solver_rejects_undeclared_field():
 
 
 def test_case_validate_accepts_named_field():
-    """C1: a Case with a named non-Poisson field VALIDATES (the whitelist reject is removed)."""
+    """C1: a Problem with a named non-Poisson field VALIDATES (the whitelist reject is removed)."""
     class _M:
         def validate(self, context=None):
             return True
@@ -127,9 +127,11 @@ def test_case_validate_accepts_named_field():
         def requirements(self):
             return {}
 
-    case = pops.Case().block("ne", physics=_M())
-    case._fields["psi"] = _F()
-    _check(case.validate() is True, "a named non-Poisson field validates (C1-System)")
+    problem = pops.Problem().block("ne", physics=_M())
+    # Poke a stub field into the field registry's backing store directly (the stub is intentionally
+    # not a real FieldProblem, so the typed .field() guard is bypassed as it was on the old dict).
+    problem._fields._fields["psi"] = _F()
+    _check(problem.validate() is True, "a named non-Poisson field validates (C1-System)")
     print("ok test_case_validate_accepts_named_field")
 
 

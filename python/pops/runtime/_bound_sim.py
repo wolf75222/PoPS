@@ -6,7 +6,7 @@ third runtime: it holds no state and runs no stepping logic of its own; every ru
 forwarded, unchanged, to the engine, which stays the C++-backed runtime. Its sole job is to expose
 the RUN / DATA / DIAGNOSTIC / IO surface of a bound simulation while HIDING the assembly vocabulary
 (``add_block`` / ``add_equation`` / ``set_poisson`` / ``set_refinement`` / ``install_program`` /
-...): a composition is declared on the ``pops.Case`` and lowered by ``pops.compile`` + ``pops.bind``,
+...): a composition is declared on the ``pops.Problem`` and lowered by ``pops.compile`` + ``pops.bind``,
 never mutated on the bound simulation.
 
 Users obtain a :class:`BoundSimulation` only from ``pops.bind(...)``; it is not exported on the
@@ -20,7 +20,7 @@ hatch for low-level / internal engine tests, not part of the public surface.
 # in one of these sets is refused, so the bound simulation exposes exactly the run / data /
 # diagnostic / io surface and nothing structural.
 
-# Advance the clock (the whole point of binding a compiled Case).
+# Advance the clock (the whole point of binding a compiled Problem).
 _STEPPING = frozenset({
     "run", "step", "step_cfl", "step_adaptive", "solve_fields",
 })
@@ -49,7 +49,7 @@ _IO = frozenset({"write", "checkpoint"})
 _ALLOWED = _STEPPING | _MUTATIONS | _DIAGNOSTICS | _IO
 
 # Structural / assembly vocabulary that a bound simulation must NOT expose: the composition is
-# declared on the pops.Case and lowered by pops.compile(...) + pops.bind(...). Accessing one of
+# declared on the pops.Problem and lowered by pops.compile(...) + pops.bind(...). Accessing one of
 # these raises a precise AttributeError (never recommends the legacy engine setters).
 _BLOCKED = frozenset({
     "add_block", "add_equation", "add_background", "add_coupling", "add_elliptic_model",
@@ -69,7 +69,7 @@ class BoundSimulation:
     :class:`pops.runtime.amr_system.AmrSystem`) and forwards the allowlisted run / data /
     diagnostic / io surface to it. It adds NO stepping logic of its own -- it is a pure view, the
     engine stays the C++-backed runtime. Assembly vocabulary (blocks / fields / couplings / the time
-    program) is declared on the ``pops.Case`` and lowered by ``pops.compile`` + ``pops.bind``; the
+    program) is declared on the ``pops.Problem`` and lowered by ``pops.compile`` + ``pops.bind``; the
     bound simulation refuses those setters.
 
     ``self._engine`` is the documented INTERNAL escape hatch for low-level tests; it is not part of
@@ -90,7 +90,7 @@ class BoundSimulation:
         if attr in _BLOCKED:
             raise AttributeError(
                 "pops.bind: %r is assembly vocabulary and is not part of a bound simulation; the "
-                "composition is declared on the pops.Case (blocks / fields / layout / couplings) "
+                "composition is declared on the pops.Problem (blocks / fields / layout / couplings) "
                 "and lowered by pops.compile(...) + pops.bind(...)." % attr)
         # Any other name: strict refusal. The bound simulation does NOT silently pass unknown
         # attributes through to the engine -- the run / data / diagnostic / io allowlist is the
@@ -98,7 +98,7 @@ class BoundSimulation:
         raise AttributeError(
             "pops.bind: a bound simulation has no %r; its surface is the run / data / diagnostic / "
             "io methods (run / step / step_cfl / set_state / density / mass / inspect / write / "
-            "...). Author the composition on the pops.Case and lower it with pops.compile(...) + "
+            "...). Author the composition on the pops.Problem and lower it with pops.compile(...) + "
             "pops.bind(...)." % attr)
 
     def __repr__(self):

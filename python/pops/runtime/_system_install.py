@@ -71,7 +71,7 @@ class _SystemInstall:
         """Installs an evolved block composed of NATIVE BRICKS on the shared system Poisson.
 
         Low-level runtime seam. The documented PUBLIC path is the typed
-        ``pops.Case(...).block(...)`` assembly lowered by ``pops.compile`` and wired by
+        ``pops.Problem(...).block(...)`` assembly lowered by ``pops.compile`` and wired by
         ``pops.bind`` (which calls this method internally); ``add_block`` stays for that seam,
         the native/AMR runtime, and the tests.
 
@@ -106,7 +106,7 @@ class _SystemInstall:
         if isinstance(time, Split):
             raise TypeError(
                 "System.add_block: pops.Split (Schur-condensed source stage) is not wired on this "
-                "native seam. Declare the splitting on the pops.Case time scheme "
+                "native seam. Declare the splitting on the pops.Problem time scheme "
                 "(time=pops.Split(...)) and lower it with pops.compile(...) + pops.bind(...).")
         # Implicit mask + Newton options carried by the temporal policy (IMEX/SourceImplicit);
         # neutral defaults on the other policies (Explicit). Resolved/validated on the C++ side
@@ -129,7 +129,7 @@ class _SystemInstall:
         """Adds an equation/block by dispatching on the TYPE of @p model (DSL Phase A).
 
         Low-level runtime seam. The documented PUBLIC path is the typed
-        ``pops.Case(...).block(...)`` assembly lowered by ``pops.compile`` and wired by
+        ``pops.Problem(...).block(...)`` assembly lowered by ``pops.compile`` and wired by
         ``pops.bind``; ``add_equation`` stays for that seam, the native/AMR runtime, and the tests.
 
         Dispatch:

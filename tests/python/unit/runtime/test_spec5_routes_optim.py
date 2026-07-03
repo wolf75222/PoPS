@@ -1,16 +1,16 @@
-"""Spec 5 sec.15 audit follow-ups (epic ADC-479): route matrix + Optimization de-string + Case.
+"""Spec 5 sec.15 audit follow-ups (epic ADC-479): route matrix + Optimization de-string + Problem.
 
 Three items a Spec 5 sec.15 audit surfaced, exercised here against the REAL pops package (no
 fake module): every check imports ``pops`` and reads only inert descriptor metadata.
 
-  - sec.13.12.1 / #37: ``pops.Case.explain_routes()`` returns a printable, INERT route matrix
+  - sec.13.12.1 / #37: ``pops.Problem.explain_routes()`` returns a printable, INERT route matrix
     (feature x layout x backend x platform -> status / limitation / error_message) sourced from
     the assembled descriptors; an empty problem returns an honest empty envelope.
   - sec.14.2 / #20-21: ``pops.codegen.Optimization(math="fast")`` REJECTS the bare string at
     construction with a clear, actionable message (instead of silently mis-setting and crashing
     later in ``options()``); the typed ``StrictMath()`` / ``FastMath()`` / ... usage still works.
-  - sec.6 table / sec.15: ``pops.Case`` is an ASSEMBLY that CONTAINS descriptors, so it is NOT
-    itself a ``pops.descriptors.Descriptor`` -- while every Case method still works.
+  - sec.6 table / sec.15: ``pops.Problem`` is an ASSEMBLY that CONTAINS descriptors, so it is NOT
+    itself a ``pops.descriptors.Descriptor`` -- while every Problem method still works.
 
 Runs under pytest and as a plain script (the ``__main__`` guard), like the sibling Spec 5 tests.
 """
@@ -51,13 +51,18 @@ def _poisson_field():
 
 
 def _uniform_problem():
-    return (pops.Case(name="plasma")
+    # ADC-526: a Problem no longer carries a default layout, so these route-matrix / contained-
+    # descriptor tests pass an explicit Uniform layout (still accepted at construction) to exercise
+    # the layout-carrying surface.
+    from pops.mesh.cartesian import CartesianMesh
+    from pops.mesh.layouts import Uniform
+    return (pops.Problem(name="plasma", layout=Uniform(CartesianMesh()))
             .block("ne", physics=_StubModel(), spatial=pops.FiniteVolume())
             .field(_poisson_field()))
 
 
 # =====================================================================================
-# ITEM 1 -- Case.explain_routes(): a printable route matrix sourced from the C++ core
+# ITEM 1 -- Problem.explain_routes(): a printable route matrix sourced from the C++ core
 # (Spec 5 sec.13.12.1 / #37). The capability VALUES come from _pops.module_capabilities(),
 # NOT a Python-derived walk: every row carries source="native".
 # =====================================================================================
@@ -103,7 +108,7 @@ def test_explain_routes_values_are_native_sourced_not_python_derived():
 def test_explain_routes_amr_feature_reported_from_native_build():
     # supports_amr is reported with the status the built _pops decides (this build has the AMR
     # runtime), not a Python guess. An AMR layout problem reports the same native feature row.
-    prob = pops.Case(name="amr", layout=AMR(CartesianMesh())).block("ne", physics=_StubModel())
+    prob = pops.Problem(name="amr", layout=AMR(CartesianMesh())).block("ne", physics=_StubModel())
     matrix = prob.explain_routes()
     amr = {r.feature: r for r in matrix.rows}["supports_amr"]
     assert amr.source == "native"
@@ -114,7 +119,7 @@ def test_explain_routes_amr_feature_reported_from_native_build():
 def test_explain_routes_is_native_capability_matrix_even_without_blocks():
     # The transport capability matrix is a property of the build, so it is honest (not fabricated)
     # even for a bare problem: the native rows are present and printable, never an empty lie.
-    matrix = pops.Case(name="bare").explain_routes()
+    matrix = pops.Problem(name="bare").explain_routes()
     assert len(matrix.rows) >= 5
     assert all(r.source == "native" for r in matrix.rows)
     assert "route matrix" in str(matrix)
@@ -216,28 +221,28 @@ def test_optimization_options_no_longer_crashes_on_a_bad_math():
 
 
 # =====================================================================================
-# ITEM 3 -- Case is NOT a Descriptor (sec.6 table / sec.15)
+# ITEM 3 -- Problem is NOT a Descriptor (sec.6 table / sec.15)
 # =====================================================================================
 def test_problem_is_not_a_descriptor():
     prob = _uniform_problem()
     assert not isinstance(prob, Descriptor), (
-        "a Case is an assembly that CONTAINS descriptors; it must NOT be a Descriptor")
+        "a Problem is an assembly that CONTAINS descriptors; it must NOT be a Descriptor")
 
 
 def test_problem_still_duck_types_as_a_route_describing_object():
-    # Dropping the Descriptor base must not drop the inspectable surface: Case still satisfies
+    # Dropping the Descriptor base must not drop the inspectable surface: Problem still satisfies
     # the structural DescriptorProtocol by duck typing.
     prob = _uniform_problem()
     assert isinstance(prob, DescriptorProtocol)
     for member in ("name", "category", "native_id", "requirements", "capabilities",
                    "options", "available", "validate", "lower", "inspect"):
-        assert hasattr(prob, member), "Case lost protocol member %r" % member
+        assert hasattr(prob, member), "Problem lost protocol member %r" % member
 
 
 def test_problem_methods_still_work_after_dropping_descriptor_base():
     prob = _uniform_problem()
     assert prob.name == "plasma"
-    assert prob.category == "case"
+    assert prob.category == "problem"
     assert prob.native_id is None
     assert isinstance(prob.options(), dict) and prob.options()["n_blocks"] == 1
     assert isinstance(prob.requirements(), dict)
@@ -247,12 +252,12 @@ def test_problem_methods_still_work_after_dropping_descriptor_base():
     info = prob.inspect()
     assert info["name"] == "plasma" and "layout" in info and "blocks" in info
     record = prob.lower()
-    assert record["name"] == "plasma" and record["category"] == "case"
-    assert "plasma" in str(prob) and "Case(" in repr(prob)
+    assert record["name"] == "plasma" and record["category"] == "problem"
+    assert "plasma" in str(prob) and "Problem(" in repr(prob)
 
 
 def test_problem_contains_descriptors():
-    # The parts a Case holds ARE descriptors -- the Case is their assembly, not one of them.
+    # The parts a Problem holds ARE descriptors -- the Problem is their assembly, not one of them.
     prob = _uniform_problem()
     assert isinstance(prob.layout, (Uniform, AMR))
     assert isinstance(prob.layout, Descriptor)  # the layout it CONTAINS is a descriptor.

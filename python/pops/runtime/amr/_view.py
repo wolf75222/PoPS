@@ -194,7 +194,7 @@ class AmrRuntimeView:
         :class:`HierarchySnapshot` (config envelope + live patches), the live
         :class:`PatchReport` again as its own key, the :class:`RegridReport` (cadence + union-tag
         criteria), and the capability ``limitations`` (the non-available native-route rows from
-        :func:`pops.native_capability_report`, the same source :mod:`pops.case`'s route matrix
+        :func:`pops.native_capability_report`, the same source :mod:`pops.problem`'s route matrix
         reads). This REPLACES the pre-ADC-589 shape (bare ``HierarchySnapshot``); the snapshot
         itself is unchanged and still reachable directly via :meth:`hierarchy_snapshot`.
         """

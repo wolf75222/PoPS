@@ -2,7 +2,7 @@
 """ADC-583 : System / AmrSystem cachés derrière les adaptateurs de runtime de pops.bind.
 
 pops.bind ne rend plus le moteur C++ brut : il construit un adaptateur interne (Uniform ou AMR,
-pops.runtime._bind_adapters), qui lowerise les objets validés de la Case sur le seam interne
+pops.runtime._bind_adapters), qui lowerise les objets validés de la Problem sur le seam interne
 _install_compiled, puis emballe le moteur dans une VUE BoundSimulation (pops.runtime._bound_sim).
 La vue expose la surface run / data / diagnostics / io et CACHE le vocabulaire d'assemblage
 (add_block / add_equation / set_poisson / set_refinement / install_program / ...).
@@ -12,7 +12,7 @@ Ce que l'on prouve LOCALEMENT (sous un _pops déjà construit, sans codegen / Ko
   1. Sélection d'adaptateur : adapter_for('system', None) -> Uniform, adapter_for('amr_system',
      layout) -> AMR, et 'amr_system' sans layout lève le TypeError existant (message inchangé).
   2. Blocage de la facade : sur un moteur System REEL (route bas-niveau interne), chaque nom
-     d'assemblage bloqué lève AttributeError, le message parle pops.Case / pops.compile / pops.bind
+     d'assemblage bloqué lève AttributeError, le message parle pops.Problem / pops.compile / pops.bind
      et ne recommande JAMAIS System / AmrSystem / set_poisson / install_program / set_refinement ;
      un attribut inconnu lève aussi.
   3. Délégation de la facade : on pilote un System (un bloc natif installé par la route interne)
@@ -23,7 +23,7 @@ Ce que l'on prouve LOCALEMENT (sous un _pops déjà construit, sans codegen / Ko
   5. Mapping _amr_config_from_layout (fonction déplacée dans le nouveau module).
 
 Gated compilateur (skip propre comme les autres tests DSL) : le flux complet
-pops.Case -> pops.compile -> pops.bind sur Uniform (a besoin de cxx / include / Kokkos).
+pops.Problem -> pops.compile -> pops.bind sur Uniform (a besoin de cxx / include / Kokkos).
 
 Ne FALSIFIE jamais le moteur pops : on construit un vrai System / AmrSystem par la route interne
 (légitime dans un test bas-niveau) ou on appelle des helpers purs ; on skippe si l'environnement
@@ -76,7 +76,7 @@ from tests.python.support.initial_states import bubble_offset as _bubble
 
 # --- 1. Sélection d'adaptateur ---------------------------------------------------------------
 def test_adapter_selection():
-    """adapter_for choisit l'adaptateur d'apres le TARGET produit par le layout de la Case."""
+    """adapter_for choisit l'adaptateur d'apres le TARGET produit par le layout de la Problem."""
     _check(isinstance(adapter_for("system", None), _UniformRuntimeAdapter),
            "target='system' -> l'adaptateur Uniform")
     layout = AMR(CartesianMesh(n=16))
@@ -103,7 +103,7 @@ def test_bound_simulation_blocks_assembly_vocabulary():
             raise AssertionError("l'attribut d'assemblage %r doit etre cache" % name)
         except AttributeError as exc:
             msg = str(exc)
-            _check("pops.Case" in msg, "le message de %r mentionne pops.Case" % name)
+            _check("pops.Problem" in msg, "le message de %r mentionne pops.Problem" % name)
             _check("pops.compile" in msg and "pops.bind" in msg,
                    "le message de %r mentionne pops.compile / pops.bind" % name)
             # Le message nomme HONNETEMENT l'attribut bloque (le contexte), mais ne doit recommander
@@ -198,7 +198,7 @@ def test_bound_simulation_delegates_amr():
         sim.set_refinement
         raise AssertionError("set_refinement doit etre cache sur la bound simulation AMR")
     except AttributeError as exc:
-        _check("pops.Case" in str(exc), "le rejet AMR parle pops.Case")
+        _check("pops.Problem" in str(exc), "le rejet AMR parle pops.Problem")
     _check(sim._engine is engine, "sim._engine est bien l'AmrSystem")
     print("ok test_bound_simulation_delegates_amr")
 
@@ -219,7 +219,7 @@ def test_amr_config_from_layout_mapping():
     print("ok test_amr_config_from_layout_mapping")
 
 
-# --- Gated compilateur : le flux complet Case -> compile -> bind sur Uniform ------------------
+# --- Gated compilateur : le flux complet Problem -> compile -> bind sur Uniform ------------------
 def _dsl_isothermal_model(name="adc583_bind_iso"):
     """Un modele DSL isotherme MINIMAL et VALIDE (facade pops.physics), compilable en Program .so.
 
@@ -256,7 +256,7 @@ def _lie_program(block="ne", name="adc583_bind_prog"):
 
 
 def test_full_bind_flow_uniform_gated():
-    """pops.Case -> pops.compile -> pops.bind (Uniform) rend une BoundSimulation ; add_equation cache.
+    """pops.Problem -> pops.compile -> pops.bind (Uniform) rend une BoundSimulation ; add_equation cache.
 
     L'AUTHORING (modele DSL + Program Lie) est VALIDE et HORS du try : une erreur d'ecriture fait
     ECHOUER le test, jamais le skipper (pas de test fantome). La SEULE barriere locale est le
@@ -267,13 +267,13 @@ def test_full_bind_flow_uniform_gated():
 
     # Authoring valide, hors du try : une regression d'ecriture FAIT ECHOUER le test.
     # NB : la route Uniform de bind derive desormais la SystemConfig (n / L / periodic) du maillage
-    # de la Case (compile pose _layout=problem.layout sur Uniform), donc un n NON par defaut circule
+    # de la Problem (compile pose _layout=problem.layout sur Uniform), donc un n NON par defaut circule
     # jusqu'au moteur. On declare n=16 pour VERROUILLER le fix : avant, bind construisait un System a
     # n=64 par defaut et un etat 16x16 echouait a l'install ('taille != ncomp*n*n').
     n = 16
     m = _dsl_isothermal_model()
     prog = _lie_program(block="ne")
-    case = (pops.Case(layout=Uniform(CartesianMesh(n=n, L=1.0, periodic=True)))
+    case = (pops.Problem(layout=Uniform(CartesianMesh(n=n, L=1.0, periodic=True)))
             .block("ne", physics=m))
 
     # La SEULE barriere locale : l'emit + compile du Program .so (headers / cxx / Kokkos).

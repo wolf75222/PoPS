@@ -11,7 +11,7 @@ Surfaces covered:
      descriptors (CG / GMRES / BiCGStab / Richardson, Identity); a bare string is rejected.
   2. ``pops.compile_library(backend=)`` -- a typed pops.codegen backend (Production / AOT / JIT);
      a bare string is rejected (mirrors pops.compile).
-  3. ``Model.param`` / board ``param`` / ``Case.param`` -- a typed pops.physics param object
+  3. ``Model.param`` / board ``param`` / ``Problem.param`` -- a typed pops.physics param object
      (ConstParam / RuntimeParam); a bare ``kind=`` string is rejected.
 
 Pure Python, no _pops / compiler needed: every check exercises the authoring + lowering layer.
@@ -171,10 +171,10 @@ def test_board_param_typed_accepted():
 
 
 def test_case_param_typed_byte_identical():
-    """Case.param(typed) stores the SAME {default, kind} record the kind= string did."""
+    """Problem.param(typed) stores the SAME {default, kind} record the kind= string did."""
     import pops
     from pops.physics import ConstParam, RuntimeParam
-    case = pops.Case(name="c")
+    case = pops.Problem(name="c")
     case.param(RuntimeParam("alpha", 1.0))
     case.param(ConstParam("gamma", 1.4))
     case.param("beta", 2.0)  # shorthand -> const
@@ -186,7 +186,7 @@ def test_case_param_typed_byte_identical():
 
 def test_case_param_string_kind_rejected():
     import pops
-    case = pops.Case(name="c")
+    case = pops.Problem(name="c")
     for kind in ("const", "runtime"):
         with pytest.raises(TypeError) as exc:
             case.param("alpha", 1.0, kind=kind)

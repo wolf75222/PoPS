@@ -13,7 +13,7 @@ Two pieces are shared:
     expose through its ``__getattr__`` native passthrough (the ``sim._engine.install_program``
     bypass closer, effective even under an old ``.so`` with no native ``mark_bound``);
   - :func:`freeze_error` -- the shared, precise ``RuntimeError`` message (never recommends a legacy
-    setter as the remedy; always points at ``pops.Case`` + ``pops.compile`` + ``pops.bind``).
+    setter as the remedy; always points at ``pops.Problem`` + ``pops.compile`` + ``pops.bind``).
 
 The Python-layer guard is bypass-proof WITHOUT the native ``mark_bound``: the engines carry a
 ``self._lifecycle`` string flag (``assembling`` at ``__init__``, ``bound`` after
@@ -53,7 +53,7 @@ def freeze_error(what):
     """The precise :class:`RuntimeError` for a structural mutation attempted after ``pops.bind``.
 
     @p what names the refused operation (a method / attribute name). The message speaks the BIND
-    vocabulary and points at the assembly path (``pops.Case`` + ``pops.compile`` + ``pops.bind``);
+    vocabulary and points at the assembly path (``pops.Problem`` + ``pops.compile`` + ``pops.bind``);
     it NEVER recommends a legacy setter as the remedy (no ``add_block`` / ``set_poisson`` /
     ``install_program`` / ``set_refinement`` as an alternative), so it cannot be read as a
     validation bypass.
@@ -61,7 +61,7 @@ def freeze_error(what):
     return RuntimeError(
         "pops.bind: %r is frozen once pops.bind completes (runtime lifecycle 'bound'): the "
         "composition (blocks / field problems / AMR layout / source stage / refinement / solver "
-        "routes / aux layout / installed Program) is declared on the pops.Case and lowered with "
+        "routes / aux layout / installed Program) is declared on the pops.Problem and lowered with "
         "pops.compile(...) + pops.bind(...); only runtime data / params / checkpoint / diagnostics "
         "may change on a bound simulation." % (what,))
 
@@ -86,7 +86,7 @@ def reject_compiled_time_route(time, where):
     A compiled ``Program`` is not a per-block transport POLICY: it OWNS the whole step and is installed
     separately (``pops.bind(..., cadence=CompiledTime(...))`` drives its macro-step cadence), so a
     ``CompiledTime`` handed as ``time=`` is a category error. It is refused with a structured message
-    pointing at the Case time scheme and the cadence path -- NOT a bare ``AttributeError`` on ``.kind``.
+    pointing at the Problem time scheme and the cadence path -- NOT a bare ``AttributeError`` on ``.kind``.
     ``CompiledTime`` stays importable / constructible in its ``cadence=`` role; only the bypass is blocked.
     """
     from pops.time.program import CompiledTime
@@ -94,7 +94,7 @@ def reject_compiled_time_route(time, where):
         raise TypeError(
             "%s: time=CompiledTime(...) is not a transport time policy -- a compiled Program owns the "
             "whole step and is installed separately (pops.bind(..., cadence=CompiledTime(...)) drives its "
-            "macro-step cadence). Declare the time scheme on the Case; a pops.lib.time macro returns an "
+            "macro-step cadence). Declare the time scheme on the Problem; a pops.lib.time macro returns an "
             "inspectable Program (the one IR route). CompiledTime is the cadence descriptor, never the "
             "time= policy." % (where,))
 

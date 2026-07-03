@@ -6,8 +6,8 @@ composes the bricks (objects), the cell-by-cell computation stays in compiled C+
 numpy, GPU/MPI preserved).
 
 The front door is the typed assembly + compile/bind/run flow: author an inert
-``pops.Case`` (a mesh layout, physics blocks, elliptic fields, a time scheme), compile
-it to a handle, then bind a runnable simulation::
+``pops.Problem`` (physics blocks, elliptic fields, a time scheme), compile it to a handle for a
+mesh layout, then bind a runnable simulation::
 
     import pops
     from pops.codegen import Production
@@ -15,11 +15,12 @@ it to a handle, then bind a runnable simulation::
     from pops.mesh.layouts import Uniform
     from pops.fields import PoissonProblem
 
-    case = (pops.Case(layout=Uniform(CartesianMesh(n=96, periodic=False)), name="plasma")
-            .block("ne", physics=model)
-            .field(PoissonProblem(unknown="phi", equation=eq, solver=mg))
-            .time(time_program))
-    compiled = pops.compile(case, backend=Production())
+    problem = (pops.Problem(name="plasma")
+               .block("ne", physics=model)
+               .field(PoissonProblem(unknown="phi", equation=eq, solver=mg))
+               .time(time_program))
+    compiled = pops.compile(problem, layout=Uniform(CartesianMesh(n=96, periodic=False)),
+                            backend=Production())
     sim = pops.bind(compiled, initial_state={"ne": ne0})
     sim.run(t_end=0.1, cfl=0.4)
 
@@ -73,38 +74,35 @@ __all__ = [
     "numerical_defaults_report", "fallback_diagnostics_report", "reset_fallback_diagnostics",
     "time", "model", "math", "physics", "lib", "mesh",
     "params", "output", "external", "fields", "linalg", "solvers", "experimental",
-    "abi_key", "capabilities", "inspect_capabilities", "inspect_amr", "native_capability_report",
+    "abi_key", "capabilities", "inspect", "inspect_capabilities", "inspect_amr", "native_capability_report",
     "runtime_environment_report", "validate_runtime_environment", "RuntimeCapabilityError",
     "set_threads", "has_kokkos", "parallel_info", "doctor",
     "CompiledArtifact", "CompiledTime",
     "compile_library", "read_library_manifest", "LibraryManifest",
-    "Case", "PhysicsModel", "compile", "bind",
+    "Problem", "PhysicsModel", "compile", "bind",
 ]
 
 
-# Lower / authoring layers + the moved integrate (re-exported, surface unchanged). All pure-stdlib
-# authoring packages (numpy-free import; the dsl / codegen path pulls numpy lazily on first use).
+# Lower / authoring layers + the moved integrate (re-exported, surface unchanged; numpy-free import).
 from pops.runtime import integrate  # noqa: E402,F401  (pops.integrate name preserved; without numpy)
 from . import time, model, math, lib, physics, mesh  # noqa: E402  (Spec 2/3 operator-first + board authoring + IR)
 from . import params, output, external, fields, linalg, solvers  # noqa: E402  (Spec 5 typed params/output/fields/algebra/solvers)
-# pops.experimental (numpy-host, TESTS-ONLY) is NOT eagerly imported onto the root (ADC-600): it
-# stays a lazily-reachable submodule so PythonFlux is never bound as pops.PythonFlux.
-from .case import Case  # noqa: E402,F401  (Spec 5 sec.5.16: top-level compilable assembly; pure stdlib)
+# pops.experimental (numpy-host, TESTS-ONLY) stays a lazily-reachable submodule (ADC-600), never bound.
+from .problem import Problem  # noqa: E402,F401  (Spec 5 sec.5.16: top-level compilable assembly; pure stdlib)
 from pops.physics import PhysicsModel  # noqa: E402,F401  (Spec 5 sec.11: alias of pops.physics.Model)
 from .codegen.library import (  # noqa: E402,F401  (re-export: brick-library manifest API, Spec 3 section 21)
     LibraryManifest, compile_library, read_library_manifest)
 from .time import CompiledTime  # noqa: E402,F401  (re-export: compiled-Program time policy)
 from ._capabilities import (  # noqa: E402,F401  (Spec 5: descriptor-sourced matrix + native reports)
     inspect_capabilities, inspect_amr, native_capability_report)
+from ._inspect import inspect  # noqa: E402,F401  (ADC-527: stable per-object inspect dispatcher)
 from .runtime_environment import (  # noqa: E402,F401
     RuntimeCapabilityError, runtime_environment_report, validate_runtime_environment)
 
 
 # LAZY public front doors (PEP 562, ADC-523). `pops.compile` / `pops.bind` are the ONLY public
-# compile/bind entry points; the low-level `compile_problem` driver and the concrete
-# `CompiledProblem` loader class leave the surface (still reachable as `pops.codegen.compile_problem`
-# / `pops.codegen.CompiledProblem`). `pops.CompiledArtifact` (a Protocol) types the inspectable
-# handle so users never name the runtime-coupled loader class; lazy resolution keeps import numpy-free.
+# compile/bind entry points; the low-level `compile_problem` / `CompiledProblem` leave the surface
+# (reachable as `pops.codegen.*`). `pops.CompiledArtifact` (a Protocol) types the inspectable handle.
 def __getattr__(name):
     if name in ("compile", "bind"):
         from .codegen import orchestration
@@ -116,4 +114,7 @@ def __getattr__(name):
         raise AttributeError(
             "pops.%s left the public surface (ADC-523): use pops.compile(...) / pops.bind(...) as "
             "the front doors; the low-level driver stays reachable as pops.codegen.%s." % (name, name))
+    if name == "Case":
+        raise AttributeError(
+            "pops.Case was renamed to pops.Problem (ADC-553/ADC-526), no alias: use pops.Problem(...).")
     raise AttributeError("module %r has no attribute %r" % (__name__, name))

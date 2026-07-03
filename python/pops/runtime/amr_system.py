@@ -188,9 +188,9 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
     def add_block(self, name, model, spatial=None, time=None):
         """Installs an evolved block composed of NATIVE BRICKS on the shared AMR hierarchy.
 
-        Low-level runtime seam. The documented PUBLIC path is the typed
-        ``pops.Case(layout=AMR(...))`` assembly lowered by ``pops.compile`` and wired by
-        ``pops.bind`` (which calls this internally); ``add_block`` stays for that seam and the tests.
+        Low-level runtime seam. The documented PUBLIC path is the typed ``pops.Problem`` assembly
+        lowered by ``pops.compile(problem, layout=AMR(...))`` and wired by ``pops.bind`` (which calls
+        this internally); ``add_block`` stays for that seam and the tests.
 
         Refined counterpart of System.add_block. The 1st add_block opens the single-block path
         (AmrCouplerMP : dynamic regrid, reflux) ; each subsequent add_block co-locates one more block
@@ -229,7 +229,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         if isinstance(time, Split):
             raise TypeError(
                 "AmrSystem.add_block : pops.Split / pops.Strang (Schur-condensed source stage) is "
-                "not wired on this native seam. Declare the splitting on the pops.Case time scheme "
+                "not wired on this native seam. Declare the splitting on the pops.Problem time scheme "
                 "(time=pops.Strang(hyperbolic=pops.Explicit(...), source=pops.CondensedSchur(...))) "
                 "and lower it with pops.compile(...) + pops.bind(...).")
         # positivity_floor (ADC-259) IS now wired on the AMR transport (Density-role face states +
@@ -241,7 +241,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
             raise ValueError(
                 "AmrSystem.add_block : wave_speed_cache not supported on the AMR path (separate "
                 "work item) ; remove wave_speed_cache, or declare layout=Uniform(...) on the "
-                "pops.Case (the uniform route wires the cache).")
+                "pops.Problem (the uniform route wires the cache).")
         # We thread substeps/stride (multirate, capstone iv), the partial IMEX mask, the Newton OPTIONS
         # AND newton_diagnostics (wave 3, settle). Resolved / validated on the C++ side (AmrSystem::add_block)
         # against the block names/roles : empty -> full backward-Euler. The options are wired in single-block
