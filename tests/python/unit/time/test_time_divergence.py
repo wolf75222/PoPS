@@ -146,12 +146,15 @@ def test_condensed_schur_macro_lowers(t):
     lt.condensed_schur(P, "blk", alpha=1.0, theta=1.0)
     assert P.validate() is True, "the condensed-Schur macro must validate"
     src = P.emit_cpp_program()
-    assert "ctx.assemble_schur_coeffs" in src and "ctx.schur_reconstruct" in src, src
+    # ADC-587: the Schur ops lower to the native operator module (pops::coupling::schur::program::).
+    assert ("pops::coupling::schur::program::assemble_schur_coeffs" in src
+            and "pops::coupling::schur::program::schur_reconstruct" in src), src
     # ADC-427: theta != 1 now lowers (the extrapolation is plain affine algebra), no longer raises.
     P2 = t.Program("p2")
     lt.condensed_schur(P2, "blk", alpha=1.0, theta=0.5)
     assert P2.validate() is True, "condensed_schur(theta != 1) must validate (ADC-427)"
-    assert "ctx.schur_reconstruct" in P2.emit_cpp_program(), "theta=0.5 must lower the reconstruct chain"
+    assert "pops::coupling::schur::program::schur_reconstruct" in P2.emit_cpp_program(), (
+        "theta=0.5 must lower the reconstruct chain")
     # theta out of (0, 1] is still rejected (loud).
     try:
         lt.condensed_schur(t.Program("p3"), "blk", alpha=1.0, theta=1.5)

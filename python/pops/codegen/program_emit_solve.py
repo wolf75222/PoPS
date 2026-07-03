@@ -17,7 +17,7 @@ def _emit_schur_coeffs(program, v, var, lines, prelude):
     """Lower a schur_coeffs bundle (ADC-421): allocate the four 1-component coefficient fields
     (eps_x, eps_y, a_xy, a_yx) ONCE as persistent shared_ptrs (prelude, alloc-once, captured by the
     step closure and by the apply lambda that consumes them) and FILL them per step in the body from
-    the live state + B_z aux via ``ctx.assemble_schur_coeffs`` (the SAME native
+    the live state + B_z aux via ``pops::coupling::schur::program::assemble_schur_coeffs`` (the SAME native
     detail::SchurOperatorCoeffKernel). The bundle's token is the tuple of the four shared_ptr names;
     ``apply_laplacian_coeff`` dereferences them inside the matrix-free apply."""
     (state_in,) = v.inputs
@@ -30,7 +30,8 @@ def _emit_schur_coeffs(program, v, var, lines, prelude):
             "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(1, 1));" % sp)
     var[v.id] = (ex, ey, axy, ayx)  # the bundle token: the four coefficient shared_ptr names
     lines.append(
-        "ctx.assemble_schur_coeffs(*%s, *%s, *%s, *%s, %s, %s, %s, %d, %d);"
+        "pops::coupling::schur::program::assemble_schur_coeffs("
+        "ctx, *%s, *%s, *%s, *%s, %s, %s, %s, %d, %d);"
         % (ex, ey, axy, ayx, var[state_in.id], _coeff_cpp(v.attrs["c"]),
            _coeff_cpp(v.attrs["th_dt"]), v.attrs["c_rho"], v.attrs["c_bz"]))
 
@@ -157,7 +158,8 @@ def _emit_matrix_free_operator(program, v, var, prelude, lines=None):
             o, i, coeffs = w.inputs
             ex, ey, axy, ayx = var[coeffs.id]
             sub[w.id] = sub[o.id]
-            body.append("ctx.apply_laplacian_coeff(*%s, %s, *%s, *%s, *%s, *%s);"
+            body.append("pops::coupling::schur::program::apply_laplacian_coeff("
+                        "ctx, *%s, %s, *%s, *%s, *%s, *%s);"
                         % (sub[o.id], _apply_in_arg(sub, i), ex, ey, axy, ayx))
         elif w.op == "rhs_jacvec":
             # out = J(U^k) in = in - (c*dt/h)(rhs(U^k + h*in) - rhs(U^k)), the finite-difference
@@ -212,9 +214,10 @@ def _precond_applyfn(v, prelude):
 
       - ``"identity"`` -> ``pops::ApplyFn{}`` (an EMPTY std::function = unpreconditioned; the historical
         path, byte-identical);
-      - ``"geometric_mg"`` -> a named ``pops::ApplyFn precond_mg{id}`` lambda capturing the context that
-        forwards each apply ``out <- M^{-1}(in)`` to ``ctx.geometric_mg_precond_apply`` -- ONE V-cycle of
-        the already-wired pops::GeometricMG (the field-solve multigrid), no new numerical kernel (ADC-516).
+      - ``"geometric_mg"`` -> a named ``pops::ApplyFn precond_mg{id}`` lambda capturing a persistent
+        ``pops::coupling::schur::program::GeometricMgPreconditioner`` (the V-cycle cache, ADC-587) whose
+        ``apply(ctx, out, in)`` runs ONE V-cycle of the already-wired pops::GeometricMG (the field-solve
+        multigrid), no new numerical kernel (ADC-516).
 
     A scheme other than these two never reaches here: the Python layer
     (pops.time.program_solve.solve_linear) lowers only identity / geometric_mg for gmres / bicgstab and
@@ -224,11 +227,19 @@ def _precond_applyfn(v, prelude):
         return "pops::ApplyFn{}"
     if scheme == "geometric_mg":
         name = "precond_mg%d" % v.id
-        # The lambda captures ctx by value (like the operator apply): the GeometricMG is built once and
-        # cached in that captured ctx's mutable member, reused across every Krylov iteration / step.
+        # The GeometricMG V-cycle cache lives on a PERSISTENT GeometricMgPreconditioner (ADC-587: it
+        # moved off ProgramContext when the Schur/Lorentz module split out). Allocate ONE (alloc-once,
+        # like the matrix-free scratch), capture it by shared_ptr into the ApplyFn lambda: the MG is
+        # built once on the first apply and reused across every Krylov iteration / step. ctx is captured
+        # by value too (it forwards the seam ops the apply reuses).
+        pc = "precond_mg_state%d" % v.id
         prelude.append(
-            "pops::ApplyFn %s = [ctx](pops::MultiFab& out, const pops::MultiFab& in) {" % name)
-        prelude.append("  ctx.geometric_mg_precond_apply(out, in);")
+            "auto %s = std::make_shared<pops::coupling::schur::program::GeometricMgPreconditioner>();"
+            % pc)
+        prelude.append(
+            "pops::ApplyFn %s = [ctx, %s](pops::MultiFab& out, const pops::MultiFab& in) {"
+            % (name, pc))
+        prelude.append("  %s->apply(ctx, out, in);" % pc)
         prelude.append("};")
         return name
     raise NotImplementedError(

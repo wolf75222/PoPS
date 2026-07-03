@@ -168,7 +168,7 @@ def test_condensed_schur_buffer_writers_never_removed():
     ``P.schur_rhs(rhs, phi_n, U, ...)`` -- a top-level op whose RESULT is DISCARDED. Its real effect is
     filling the caller-allocated ``rhs`` scalar_field buffer, which ``P.solve_linear(rhs=rhs)`` then
     reads BY BUFFER IDENTITY, not via a dataflow input edge. A blacklist marks ``schur_rhs`` dead and
-    drops it -> the emitted C++ loses ``ctx.assemble_schur_rhs`` and the Schur solve runs on a zero RHS
+    drops it -> the emitted C++ loses ``assemble_schur_rhs`` and the Schur solve runs on a zero RHS
     (silent corruption, ``validate()`` stays True). Under the allow-list ``schur_rhs`` (and every other
     buffer-writer) is NOT removable, so the pass is a no-op: the emitted C++ is byte-identical and still
     contains ``assemble_schur_rhs``. Covers theta == 1 (historical IR) and theta < 1 + energy (the

@@ -296,7 +296,7 @@ class _ProgramLocal(_ProgramConstants):
         @p c = theta^2 * dt^2 * alpha and @p th_dt = theta*dt are scalar coefficients (numbers or
         dt-polynomials via the affine ``P.dt`` algebra; ``B^{-1}`` depends only on ``w = th_dt*B_z``).
         The assembly runs ONCE per step (rho / B_z frozen in the source) and the bundle is reused across
-        every Krylov iteration of the phi solve. Lowered to ``ctx.assemble_schur_coeffs`` -- the SAME
+        every Krylov iteration of the phi solve. Lowered to ``pops::coupling::schur::program::assemble_schur_coeffs`` -- the SAME
         native detail::SchurOperatorCoeffKernel + apply_laplacian coefficient path, no reimplementation.
         """
         if not (isinstance(state, Value) and state.vtype == "state"):
@@ -320,7 +320,7 @@ class _ProgramLocal(_ProgramConstants):
         coefficient path). @p out and @p in_ are scalar_field values; @p coeffs is a ``schur_coeffs``
         value. Used inside a matrix-free apply: the condensed operator ``L_schur(phi) = -div(A grad
         phi) = -out``, so build it as ``-1 * P.apply_laplacian_coeff(out, in_, A)`` via the affine
-        algebra. Lowered to ``ctx.apply_laplacian_coeff(out, in_, eps_x, eps_y, a_xy, a_yx)``."""
+        algebra. Lowered to ``pops::coupling::schur::program::apply_laplacian_coeff(ctx, out, in_, eps_x, eps_y, a_xy, a_yx)``."""
         if not (isinstance(out, Value) and out.vtype == "scalar_field"):
             raise ValueError("apply_laplacian_coeff: out must be a scalar_field value")
         if not (isinstance(in_, Value) and in_.vtype == "scalar_field"):
@@ -336,7 +336,7 @@ class _ProgramLocal(_ProgramConstants):
         ``F = rho*B^{-1}*v^n`` (Fx in component 0, Fy in component 1). @p out is a scalar_field (>= 2
         components), @p state a State (mx / my at @p c_mx / @p c_my), B_z the aux field at @p c_bz.
         @p th_dt = theta*dt. Chain ``P.divergence(d, out, out)`` for the centered divergence of F.
-        Lowered to ``ctx.schur_explicit_flux`` (native detail::SchurExplicitFluxKernel)."""
+        Lowered to ``pops::coupling::schur::program::schur_explicit_flux`` (native detail::SchurExplicitFluxKernel)."""
         if not (isinstance(out, Value) and out.vtype == "scalar_field"):
             raise ValueError("schur_explicit_flux: out must be a scalar_field value (ncomp >= 2)")
         if not (isinstance(state, Value) and state.vtype == "state"):
@@ -352,7 +352,7 @@ class _ProgramLocal(_ProgramConstants):
         @p out is a 1-component scalar_field, @p phi_n a scalar_field (phi^n warm start; its ghosts are
         filled for the Laplacian), @p state a State (mx / my at @p c_mx / @p c_my). @p th_dt = theta*dt
         and @p g = theta*dt*alpha are scalar coefficients (numbers or dt-polynomials). Lowered to
-        ``ctx.assemble_schur_rhs``. A single op because there is no scalar-field affine combine at the
+        ``pops::coupling::schur::program::assemble_schur_rhs``. A single op because there is no scalar-field affine combine at the
         IR level -- the fused C++ assembler mirrors the native one (bare Lap + explicit flux + the
         SchurRhsAssemble divergence)."""
         if not (isinstance(out, Value) and out.vtype == "scalar_field"):
@@ -376,7 +376,7 @@ class _ProgramLocal(_ProgramConstants):
         """Record the condensed-Schur velocity reconstruction ``v^{n+theta} = B^{-1}(v^n - theta*dt*
         grad phi)`` IN PLACE on @p state (rho frozen; mom = rho*v written back). @p phi is the solved
         potential (a scalar_field or 1-component State), @p th_dt = theta*dt; B_z the aux at @p c_bz.
-        Returns the updated State. Lowered to ``ctx.schur_reconstruct`` (the native centered gradient +
+        Returns the updated State. Lowered to ``pops::coupling::schur::program::schur_reconstruct`` (the native centered gradient +
         closed B^{-1}). The final n+1 extrapolation (factor 1/theta) is the caller's affine algebra."""
         if isinstance(name, Value) and state is None:
             name, state = None, name
@@ -398,7 +398,7 @@ class _ProgramLocal(_ProgramConstants):
         SchurEnergyKernel). @p state carries ``rho`` / ``mx`` / ``my`` / ``E`` at @p c_rho / @p c_mx /
         @p c_my / @p c_E AFTER the velocity update (mom = rho*v^{n+1}); @p state_old is U^n (read for
         v^n = mom^n/rho^n and the base energy E^n). rho is frozen, so the same rho is read from both.
-        Returns @p state (E overwritten in place). Lowered to ``ctx.schur_energy``."""
+        Returns @p state (E overwritten in place). Lowered to ``pops::coupling::schur::program::schur_energy``."""
         if isinstance(name, Value) and state is None:
             name, state = None, name
         if not (isinstance(state, Value) and state.vtype == "state"):

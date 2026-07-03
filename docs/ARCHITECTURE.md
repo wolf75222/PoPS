@@ -575,7 +575,7 @@ include/pops/
   numerics/           flux de Riemann (Rusanov/HLL/HLLC/Roe), reconstruction (MUSCL/WENO5-Z), spatial_operator (cartesien, EB cut-cell, polaire), LorentzEliminator
   numerics/elliptic/  concepts EllipticOperator/Solver, GeometricMG (eps(x), anisotrope, kappa), Poisson FFT (mono + bandes), polaire direct + tensoriel, TensorKrylovSolver, composite FAC AMR (mg/composite_fac_poisson)
   numerics/time/      tags SSPRK, integrateurs objets, scheduler de sous-cyclage, IMEX/AP, splitting Lie/Strang, moteur AMR de production (amr_reflux_mf)
-  coupling/           Coupler, SystemCoupler, AmrCouplerMP, AmrSystemCoupler, regrid BR extrait, source couplee, condensation de Schur (cartesien + polaire + AMR)
+  coupling/           Coupler, SystemCoupler, AmrCouplerMP, AmrSystemCoupler, regrid BR extrait, source couplee, condensation de Schur (cartesien + polaire + AMR + operateur programme compile schur/program)
   runtime/            facades System / AmrSystem, model_factory (briques -> CompositeModel), block builders, chemins DSL (compiled/native/aot), canal aux extensible
   amr/                AmrHierarchy, tag_box, clustering Berger-Rigoutsos, regrid (proper nesting)
   parallel/           seam MPI (comm degenere en serie), load balance (round-robin / SFC)

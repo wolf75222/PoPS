@@ -309,7 +309,7 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
         # F = B^{-1} (mx, my) per cell into a 2-component scalar field (Fx comp 0, Fy comp 1): the
         # explicit condensed-Schur flux, a step-body one-shot (not a per-iteration apply).
         out_in, state_in = v.inputs
-        lines.append("ctx.schur_explicit_flux(%s, %s, %s, %d, %d, %d);"
+        lines.append("pops::coupling::schur::program::schur_explicit_flux(ctx, %s, %s, %s, %d, %d, %d);"
                      % (_deref(var[out_in.id]), var[state_in.id], _coeff_cpp(v.attrs["th_dt"]),
                         v.attrs["c_mx"], v.attrs["c_my"], v.attrs["c_bz"]))
         var[v.id] = var[out_in.id]
@@ -318,7 +318,7 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
         # native assemble_rhs in one ctx call (no scalar-field affine combine at IR level).
         out_in, phi_in, state_in = v.inputs
         lines.append(
-            "ctx.assemble_schur_rhs(%s, %s, %s, %s, %s, %d, %d, %d);"
+            "pops::coupling::schur::program::assemble_schur_rhs(ctx, %s, %s, %s, %s, %s, %d, %d, %d);"
             % (_deref(var[out_in.id]), _deref(var[phi_in.id]), var[state_in.id],
                _coeff_cpp(v.attrs["th_dt"]), _coeff_cpp(v.attrs["g"]), v.attrs["c_mx"],
                v.attrs["c_my"], v.attrs["c_bz"]))
@@ -342,7 +342,7 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
         # In-place velocity reconstruction v = B^{-1}(v^n - theta dt grad phi); mom = rho v. Result
         # aliases the input state (mx/my overwritten). phi is a scalar_field / 1-comp State token.
         state_in, phi_in = v.inputs
-        lines.append("ctx.schur_reconstruct(%s, %s, %s, %d, %d, %d, %d);"
+        lines.append("pops::coupling::schur::program::schur_reconstruct(ctx, %s, %s, %s, %d, %d, %d, %d);"
                      % (var[state_in.id], _deref(var[phi_in.id]), _coeff_cpp(v.attrs["th_dt"]),
                         v.attrs["c_rho"], v.attrs["c_mx"], v.attrs["c_my"], v.attrs["c_bz"]))
         var[v.id] = var[state_in.id]
@@ -350,7 +350,7 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
         # In-place energy increment E += (1/2) rho (|v^{n+1}|^2 - |v^n|^2) (ADC-427). Reads v^{n+1}
         # from the updated state and v^n / E^n from state_old (U^n); rho frozen (same in both).
         state_in, old_in = v.inputs
-        lines.append("ctx.schur_energy(%s, %s, %d, %d, %d, %d);"
+        lines.append("pops::coupling::schur::program::schur_energy(ctx, %s, %s, %d, %d, %d, %d);"
                      % (var[state_in.id], var[old_in.id], v.attrs["c_rho"], v.attrs["c_mx"],
                         v.attrs["c_my"], v.attrs["c_E"]))
         var[v.id] = var[state_in.id]

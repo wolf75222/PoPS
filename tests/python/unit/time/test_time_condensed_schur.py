@@ -134,8 +134,16 @@ def test_condensed_schur_macro_lowers(t):
     assert P.validate() is True, "the condensed-Schur macro must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
     src = P.emit_cpp_program()
-    for frag in ("ctx.solve_fields_from_state", "ctx.assemble_schur_coeffs", "ctx.assemble_schur_rhs",
-                 "ctx.apply_laplacian_coeff", "pops::bicgstab_solve", "ctx.schur_reconstruct"):
+    # ADC-587: the Schur ops lower to the native condensed-Schur operator module (free functions in
+    # pops::coupling::schur::program taking ctx), not to ProgramContext methods; solve_fields stays a
+    # ctx seam. The .so also pulls the operator module header.
+    for frag in ("ctx.solve_fields_from_state",
+                 "pops::coupling::schur::program::assemble_schur_coeffs",
+                 "pops::coupling::schur::program::assemble_schur_rhs",
+                 "pops::coupling::schur::program::apply_laplacian_coeff",
+                 "pops::bicgstab_solve",
+                 "pops::coupling::schur::program::schur_reconstruct",
+                 "coupling/schur/program/condensed_schur_operator.hpp"):
         assert frag in src, "the condensed-Schur macro must contain %r\n%s" % (frag, src)
 
 
@@ -148,8 +156,9 @@ def test_condensed_schur_theta_half_lowers(t):
     assert P.validate() is True, "the theta=0.5 condensed-Schur macro must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
     src = P.emit_cpp_program()
-    for frag in ("ctx.assemble_schur_coeffs", "ctx.assemble_schur_rhs", "pops::bicgstab_solve",
-                 "ctx.schur_reconstruct"):
+    for frag in ("pops::coupling::schur::program::assemble_schur_coeffs",
+                 "pops::coupling::schur::program::assemble_schur_rhs", "pops::bicgstab_solve",
+                 "pops::coupling::schur::program::schur_reconstruct"):
         assert frag in src, "the theta=0.5 macro must contain %r\n%s" % (frag, src)
     # th_dt = theta*dt is lowered into the reconstruction; the extrapolation is an axpy(2.0, ...) (1/0.5).
     assert "0.5 * dt" in src, "th_dt = theta*dt must reach the reconstruction\n%s" % src
@@ -167,12 +176,16 @@ def test_condensed_schur_theta_out_of_range_raises(t):
 
 
 def test_condensed_schur_energy_lowers(t):
-    """ADC-427: an energy component (c_E) adds the native kinetic-energy increment via P.schur_energy."""
+    """ADC-427: an energy component (c_E) adds the native kinetic-energy increment via P.schur_energy.
+
+    ADC-587: the op lowers to the native operator module free function
+    pops::coupling::schur::program::schur_energy(ctx, ...), not a ProgramContext method."""
     P = t.Program("cs")
     lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=0.5, c_E=3)
     assert P.validate() is True
     src = P.emit_cpp_program()
-    assert "ctx.schur_energy" in src, "the energy variant must emit ctx.schur_energy\n%s" % src
+    assert "pops::coupling::schur::program::schur_energy(ctx," in src, (
+        "the energy variant must emit the native schur_energy operator call\n%s" % src)
 
 
 def test_condensed_schur_theta_one_ir_unchanged(t):
@@ -181,9 +194,9 @@ def test_condensed_schur_theta_one_ir_unchanged(t):
     P = t.Program("cs")
     lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=1.0)
     src = P.emit_cpp_program()
-    assert "ctx.schur_energy" not in src, "theta=1 must NOT emit an energy op"
+    assert "schur_energy" not in src, "theta=1 must NOT emit an energy op"
     # No copy-then-reconstruct: the reconstruction writes U^n in place, the commit is the reconstruction.
-    assert src.count("ctx.schur_reconstruct") == 1, src
+    assert src.count("pops::coupling::schur::program::schur_reconstruct(ctx,") == 1, src
     assert "static_cast<pops::Real>(2.0)" not in src, "theta=1 must NOT emit a 1/theta extrapolation"
 
 
