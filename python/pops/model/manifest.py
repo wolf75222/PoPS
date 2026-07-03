@@ -358,6 +358,41 @@ def schur_route_manifest(program):
     }
 
 
+def coupling_operator_manifest(compiled, conserved=(), created=(), frequency=None):
+    """The STRUCTURED manifest row of a compiled inter-species coupling operator (ADC-595).
+
+    A named coupling preset (Ionization / Collision / ThermalExchange) or a
+    :class:`~pops.physics.multispecies.CompiledCoupledSource` lowers to the ONE generic coupled-source
+    representation. This row makes that operator -- its declared CONSERVATION contract, its FREQUENCY
+    bound and its capacity UTILIZATION against the frozen ``kCsMax*`` bounds -- machine-visible in the
+    ModuleManifest / report, exactly as :func:`schur_route_manifest` surfaces the condensed-Schur route.
+    Purely additive, JSON-ready; reads @p compiled through its public attributes only (no mutation, no
+    ``_pops`` import).
+
+    ``conservation`` records the DECLARED conserved / created roles (empty both -> "unchecked", a raw
+    user CoupledSource); ``frequency`` records the constant mu bound and whether a per-cell mu(U) program
+    is carried; ``utilization`` is the compiled source's ``utilization()`` (registers / terms / program
+    against the C++ fixed-array capacities).
+    """
+    conserved, created = list(conserved), list(created)
+    freq = getattr(compiled, "frequency", 0.0) if frequency is None else float(frequency)
+    per_cell = bool(getattr(compiled, "freq_prog_ops", []) or getattr(compiled, "freq_prog_args", []))
+    return {
+        "route": "coupled_source",
+        "name": getattr(compiled, "name", "coupled_source"),
+        "operator_module": "pops::CouplingOperator",
+        "operator_header": "pops/coupling/source/coupling_operator.hpp",
+        "in_fields": list(zip(getattr(compiled, "in_blocks", []), getattr(compiled, "in_roles", []),
+                              strict=True)),
+        "out_terms": list(zip(getattr(compiled, "out_blocks", []), getattr(compiled, "out_roles", []),
+                              strict=True)),
+        "conservation": {"conserved_roles": conserved, "created_roles": created,
+                         "unchecked": not (conserved or created)},
+        "frequency": {"constant_mu": freq, "per_cell": per_cell},
+        "utilization": compiled.utilization() if hasattr(compiled, "utilization") else None,
+    }
+
+
 def _is_manifestable_module(obj):
     """True when @p obj exposes the full Module accessor surface the builder reads.
 
@@ -384,4 +419,5 @@ def module_manifest_of(model_or_module):
 
 
 __all__ = ["OperatorManifestEntry", "OperatorRegistryManifest", "ModuleManifest",
-           "build_module_manifest", "module_manifest_of", "schur_route_manifest", "SCHEMA_VERSION"]
+           "build_module_manifest", "module_manifest_of", "schur_route_manifest",
+           "coupling_operator_manifest", "SCHEMA_VERSION"]

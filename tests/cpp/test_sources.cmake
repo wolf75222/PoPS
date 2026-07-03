@@ -66,6 +66,7 @@ set(POPS_CPP_TEST_SOURCE_test_config_model_validation "tests/cpp/integration/run
 set(POPS_CPP_TEST_SOURCE_test_coupled_fieldsolve "tests/cpp/unit/elliptic/test_coupled_fieldsolve.cpp")
 set(POPS_CPP_TEST_SOURCE_test_coupled_source "tests/cpp/unit/runtime/test_coupled_source.cpp")
 set(POPS_CPP_TEST_SOURCE_test_coupled_source_stack_limit "tests/cpp/unit/physics/test_coupled_source_stack_limit.cpp")
+set(POPS_CPP_TEST_SOURCE_test_coupling_operator_contract "tests/cpp/unit/physics/test_coupling_operator_contract.cpp")
 set(POPS_CPP_TEST_SOURCE_test_coverage_mask "tests/cpp/unit/mesh/test_coverage_mask.cpp")
 set(POPS_CPP_TEST_SOURCE_test_cut_cell "tests/cpp/unit/elliptic/test_cut_cell.cpp")
 set(POPS_CPP_TEST_SOURCE_test_cut_cell_anisotropic "tests/cpp/unit/elliptic/test_cut_cell_anisotropic.cpp")

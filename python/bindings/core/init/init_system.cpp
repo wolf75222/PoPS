@@ -222,11 +222,10 @@ void bind_system_checkpoint(py::class_<System>& cls) {
 // Physics wiring: inter-species couplings, source stages, time-splitting policy, Poisson/field config,
 // geometry (disc), epsilon/reaction/magnetic/aux fields, and state initialization.
 void bind_system_physics(py::class_<System>& cls) {
-  cls.def("add_ionization", &System::add_ionization, py::arg("electron"), py::arg("ion"),
-           py::arg("neutral"), py::arg("rate"))
-      .def("add_collision", &System::add_collision, py::arg("a"), py::arg("b"), py::arg("rate"))
-      .def("add_thermal_exchange", &System::add_thermal_exchange, py::arg("a"), py::arg("b"),
-           py::arg("rate"))
+  // The named inter-species couplings (add_ionization / add_collision / add_thermal_exchange) are no
+  // longer bound (ADC-595): they are Python presets lowering to add_coupling_operator. A new coupling
+  // needs no new pybind def.
+  cls
       // Schur-condensed source stage (OPT-IN, pops.Split(source=pops.CondensedSchur(...))): replaces
       // the block's explicit / IMEX source with the C++ condensed stage (CondensedSchurSourceStepper, #126)
       // after the hyperbolic transport. kind='electrostatic_lorentz'. Default (without the call) unchanged.
@@ -278,14 +277,13 @@ void bind_system_physics(py::class_<System>& cls) {
       // step, bit-identical) or "evolve" (after phi^0, no more re-solve; the Schur stage evolves phi
       // without restart, like the paper). Cf. System::set_gauss_policy.
       .def("set_gauss_policy", &System::set_gauss_policy, py::arg("policy"))
-      // Generic COUPLED source (pops.dsl.CoupledSource, P5): flat ABI (postfix bytecode). Reads
-      // fields (block, role) and writes source terms compiled into a stack machine, applied by
-      // explicit splitting after the transport (same seam as add_ionization). Without the call, unchanged.
-      // ADC-214: Python surface UNCHANGED (same flat kwargs in_blocks/.../freq_prog_args, same
-      // defaults). The lambda assembles the CoupledSourceProgram POD before the C++ call (frequency / label
-      // stay flat, distinct types outside the homogeneous family).
+      // INTERNAL raw coupled-source ABI (ADC-595): the flat 12-kwarg bytecode form is now an INTERNAL
+      // escape hatch (leading underscore), called only by the typed lowering (add_coupling ->
+      // add_coupling_operator) and by the low-level ABI-validation tests. End users register a coupling
+      // through sim.add_coupling(CoupledSource(...).compile()) or a named preset, never this raw form.
+      // The lambda assembles the CoupledSourceProgram POD before the C++ call.
       .def(
-          "add_coupled_source",
+          "_add_coupled_source",
           [](System& s, const std::vector<std::string>& in_blocks,
              const std::vector<std::string>& in_roles, const std::vector<double>& consts,
              const std::vector<std::string>& out_blocks, const std::vector<std::string>& out_roles,
@@ -306,6 +304,56 @@ void bind_system_physics(py::class_<System>& cls) {
           // table as the terms). EMPTY (default) = constant frequency only, bit-identical.
           py::arg("freq_prog_ops") = std::vector<int>{},
           py::arg("freq_prog_args") = std::vector<int>{})
+      // Typed COUPLING OPERATOR (ADC-595): the same flat coupled-source program PLUS the DECLARED
+      // conservation contract (conserved / created roles) and frequency bound. The declared contract is
+      // validated at registration (host, fail-loud) against the actual terms, then the program lowers
+      // through the SAME add_coupled_source path (bit-identical). Used by the typed named-coupling
+      // presets; the raw add_coupled_source above stays the unchecked (empty-contract) entry.
+      .def(
+          "add_coupling_operator",
+          [](System& s, const std::vector<std::string>& in_blocks,
+             const std::vector<std::string>& in_roles, const std::vector<double>& consts,
+             const std::vector<std::string>& out_blocks, const std::vector<std::string>& out_roles,
+             const std::vector<int>& prog_ops, const std::vector<int>& prog_args,
+             const std::vector<int>& prog_lens, double frequency, const std::string& label,
+             const std::vector<int>& freq_prog_ops, const std::vector<int>& freq_prog_args,
+             const std::vector<std::string>& conserved_roles,
+             const std::vector<std::string>& created_roles) {
+            CouplingOperator op;
+            op.label = label;
+            op.program = CoupledSourceProgram{in_blocks,     in_roles,      consts,    out_blocks,
+                                              out_roles,     prog_ops,      prog_args, prog_lens,
+                                              freq_prog_ops, freq_prog_args};
+            op.conservation.conserved_roles = conserved_roles;
+            op.conservation.created_roles = created_roles;
+            op.frequency.constant_mu = frequency;
+            op.frequency.per_cell = !freq_prog_ops.empty() || !freq_prog_args.empty();
+            s.add_coupling_operator(op);
+          },
+          py::arg("in_blocks"), py::arg("in_roles"), py::arg("consts"), py::arg("out_blocks"),
+          py::arg("out_roles"), py::arg("prog_ops"), py::arg("prog_args"), py::arg("prog_lens"),
+          py::arg("frequency") = 0.0, py::arg("label") = "coupled_source",
+          py::arg("freq_prog_ops") = std::vector<int>{},
+          py::arg("freq_prog_args") = std::vector<int>{},
+          py::arg("conserved_roles") = std::vector<std::string>{},
+          py::arg("created_roles") = std::vector<std::string>{})
+      // Read-only view of the registered coupling operators (ADC-595): one dict per coupling
+      // {label, conserved_roles, created_roles, frequency_mu, per_cell_frequency}, in registration
+      // order, so a Program / report enumerates couplings as typed operators (never raw bytecode).
+      .def("coupled_operators",
+           [](const System& s) {
+             py::list out;
+             for (const CouplingOperatorView& v : s.coupled_operators()) {
+               py::dict row;
+               row["label"] = v.label;
+               row["conserved_roles"] = v.conservation.conserved_roles;
+               row["created_roles"] = v.conservation.created_roles;
+               row["frequency_mu"] = v.frequency.constant_mu;
+               row["per_cell_frequency"] = v.frequency.per_cell;
+               out.append(row);
+             }
+             return out;
+           })
       .def("variable_names", &System::variable_names,
            "Variable names of a block (introspection). kind = 'conservative' | 'primitive'.",
            py::arg("name"), py::arg("kind") = "conservative")

@@ -69,7 +69,7 @@ def main():
             add_ions(s)
             s.set_poisson(rhs="charge_density", solver="geometric_mg")
             if collision:
-                s.add_collision("electrons", "ions", RATE)
+                s.add_coupling(pops.Collision("electrons", "ions", RATE))  # preset (ADC-595)
             s.set_state("electrons", Ueflat)
             s.set_state("ions", Uiflat)
             for _ in range(8):

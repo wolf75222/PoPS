@@ -221,8 +221,11 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
       // flat ABI as System.add_coupled_source. Without the call, unchanged. cf. AmrSystem::add_coupled_source.
       // ADC-214: Python surface UNCHANGED (same flat kwargs, same defaults). The lambda assembles the
       // CoupledSourceProgram POD before the C++ call (parity with System.add_coupled_source).
+      // INTERNAL raw coupled-source ABI (ADC-595): flat 12-kwarg bytecode form, called only by the
+      // typed lowering (AmrSystem.add_coupling -> add_coupling_operator) and low-level tests. End users
+      // register through sim.add_coupling(...); parity with System._add_coupled_source.
       .def(
-          "add_coupled_source",
+          "_add_coupled_source",
           [](AmrSystem& s, const std::vector<std::string>& in_blocks,
              const std::vector<std::string>& in_roles, const std::vector<double>& consts,
              const std::vector<std::string>& out_blocks, const std::vector<std::string>& out_roles,
@@ -239,7 +242,53 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
           py::arg("frequency") = 0.0, py::arg("label") = "coupled_source",
           // Optional PER-CELL frequency mu(U): evaluated on the coarse level (cf. System).
           py::arg("freq_prog_ops") = std::vector<int>{},
-          py::arg("freq_prog_args") = std::vector<int>{});
+          py::arg("freq_prog_args") = std::vector<int>{})
+      // Typed COUPLING OPERATOR (ADC-595, parity with System): the same flat program PLUS the DECLARED
+      // conservation contract (conserved / created roles) and frequency bound, validated at
+      // registration (host, fail-loud) then lowered through the SAME add_coupled_source path.
+      .def(
+          "add_coupling_operator",
+          [](AmrSystem& s, const std::vector<std::string>& in_blocks,
+             const std::vector<std::string>& in_roles, const std::vector<double>& consts,
+             const std::vector<std::string>& out_blocks, const std::vector<std::string>& out_roles,
+             const std::vector<int>& prog_ops, const std::vector<int>& prog_args,
+             const std::vector<int>& prog_lens, double frequency, const std::string& label,
+             const std::vector<int>& freq_prog_ops, const std::vector<int>& freq_prog_args,
+             const std::vector<std::string>& conserved_roles,
+             const std::vector<std::string>& created_roles) {
+            CouplingOperator op;
+            op.label = label;
+            op.program = CoupledSourceProgram{in_blocks,     in_roles,      consts,    out_blocks,
+                                              out_roles,     prog_ops,      prog_args, prog_lens,
+                                              freq_prog_ops, freq_prog_args};
+            op.conservation.conserved_roles = conserved_roles;
+            op.conservation.created_roles = created_roles;
+            op.frequency.constant_mu = frequency;
+            op.frequency.per_cell = !freq_prog_ops.empty() || !freq_prog_args.empty();
+            s.add_coupling_operator(op);
+          },
+          py::arg("in_blocks"), py::arg("in_roles"), py::arg("consts"), py::arg("out_blocks"),
+          py::arg("out_roles"), py::arg("prog_ops"), py::arg("prog_args"), py::arg("prog_lens"),
+          py::arg("frequency") = 0.0, py::arg("label") = "coupled_source",
+          py::arg("freq_prog_ops") = std::vector<int>{},
+          py::arg("freq_prog_args") = std::vector<int>{},
+          py::arg("conserved_roles") = std::vector<std::string>{},
+          py::arg("created_roles") = std::vector<std::string>{})
+      // Read-only view of the registered coupling operators (ADC-595): one dict per coupling
+      // {label, conserved_roles, created_roles, frequency_mu, per_cell_frequency}.
+      .def("coupled_operators", [](const AmrSystem& s) {
+        py::list out;
+        for (const CouplingOperatorView& v : s.coupled_operators()) {
+          py::dict row;
+          row["label"] = v.label;
+          row["conserved_roles"] = v.conservation.conserved_roles;
+          row["created_roles"] = v.conservation.created_roles;
+          row["frequency_mu"] = v.frequency.constant_mu;
+          row["per_cell_frequency"] = v.frequency.per_cell;
+          out.append(row);
+        }
+        return out;
+      });
 }
 
 // Stepping + profiling: step/advance/CFL/adaptive and the profiler surface.

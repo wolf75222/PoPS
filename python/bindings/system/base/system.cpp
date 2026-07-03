@@ -290,6 +290,13 @@ struct System::Impl {
     std::vector<Real> kconsts;  // constants loaded into r[n_in ..] (same as the source)
   };
   std::vector<CoupledFreqExpr> coupled_freq_exprs_;
+  // TYPED coupling operator inspect metadata (ADC-595): one read-only view (label + declared
+  // conservation / frequency contracts) per registered coupled source, in registration order. Populated
+  // by add_coupled_source (an "unchecked" entry, empty contract) and by add_coupling_operator (the
+  // declared contract). It is METADATA ONLY: the SystemStepper never reads it (unlike couplings /
+  // coupled_freqs_ / coupled_freq_exprs_), so it is MockImpl-safe like dt_bounds_ / bound_. Exposed
+  // read-only via coupled_operators() so a Program / runtime report enumerates couplings as operators.
+  std::vector<CouplingOperatorView> coupled_operators_;
 
   // stride_due (hold-then-catch-up cadence filter) EXTRACTED into stepper_ (SystemStepper, Batch B):
   // it serves exclusively the time advance. macro_step_ (above) stays a SHARED member of Impl
@@ -1404,150 +1411,11 @@ std::vector<double> System::aux_field_component(int comp) const {
   return out;
 }
 
-void System::add_ionization(const std::string& electron, const std::string& ion,
-                            const std::string& neutral, double rate) {
-  Impl* P = p_.get();
-  require_assembling(P->bound_, "add_ionization");  // frozen once pops.bind completes (ADC-592)
-  const int ie = P->index(electron), ii = P->index(ion), ig = P->index(neutral);
-  const Real k = static_cast<Real>(rate);
-  // Density resolved by ROLE (like add_collision / add_thermal_exchange). A genuinely ROLELESS block
-  // (no roles declared: dynamic / compiled block) keeps the canonical fallback comp 0; a ROLES-BEARING
-  // block that omits Density fails loud (no silent coupling on the wrong component, ADC-292). A block
-  // storing its density off index 0 (but declaring the role) stays correctly coupled.
-  const int de = coupling_role_index_reported(P->sp[ie].cons_vars, VariableRole::Density, 0,
-                                              "System::add_ionization", electron);
-  const int di = coupling_role_index_reported(P->sp[ii].cons_vars, VariableRole::Density, 0,
-                                              "System::add_ionization", ion);
-  const int dg = coupling_role_index_reported(P->sp[ig].cons_vars, VariableRole::Density, 0,
-                                              "System::add_ionization", neutral);
-  // Ionization (operator-split, on the density): rate r = k n_e n_g. One neutral disappears, one ion and
-  // one electron appear: n_g -= dt r, n_i += dt r, n_e += dt r. Mass is transferred from the
-  // neutral to the ion (n_i + n_g conserved). First coupling brick; the momentum
-  // / energy transfer (fluid species) is a later refinement.
-  P->couplings.push_back([P, ie, ii, ig, k, de, di, dg](Real dt) {
-    // MPI / multi-box-safe: iteration over the LOCAL fabs (local_size()==0 on a rank without a box ->
-    // no-op), SAME pattern as add_coupled_source -- no more hard-coded fab(0)/box(0), which existed only
-    // on the rank owning box 0 and would become wrong if System went multi-box. The blocks
-    // share the System DistributionMapping -> same local_size(), co-located fabs.
-    MultiFab& Ue = P->sp[ie].U;
-    for (int li = 0; li < Ue.local_size(); ++li) {
-      Array4 ue = Ue.fab(li).array();
-      Array4 ui = P->sp[ii].U.fab(li).array();
-      Array4 ug = P->sp[ig].U.fab(li).array();
-      for_each_cell(Ue.box(li), [=] POPS_HD(int i, int j) {  // on device (reads n_e, n_g)
-        const Real dn = dt * k * ue(i, j, de) * ug(i, j, dg);
-        ug(i, j, dg) -= dn;
-        ui(i, j, di) += dn;
-        ue(i, j, de) += dn;
-      });
-    }
-  });
-}
-
-void System::add_collision(const std::string& a, const std::string& b, double rate) {
-  Impl* P = p_.get();
-  require_assembling(P->bound_, "add_collision");  // frozen once pops.bind completes (ADC-592)
-  const int ia = P->index(a), ib = P->index(b);
-  if (P->sp[ia].ncomp < 3 || P->sp[ib].ncomp < 3)
-    throw std::runtime_error(
-        "System::add_collision : both blocks must carry a momentum "
-        "(fluid transport >= 3 variables)");
-  const Real k = static_cast<Real>(rate);
-  // Components resolved by ROLE (momentum x/y, density) rather than by literal index: a block that
-  // stores its variables differently stays correctly coupled. A genuinely ROLELESS block keeps the
-  // historical fallback indices (1, 2, 0); a ROLES-BEARING block that omits a required role fails loud
-  // (no silent coupling on the wrong component, ADC-292).
-  const VariableSet& va_set = P->sp[ia].cons_vars;
-  const VariableSet& vb_set = P->sp[ib].cons_vars;
-  auto ra = [&](VariableRole r, int fb) {
-    return coupling_role_index_reported(va_set, r, fb, "System::add_collision", a);
-  };
-  auto rb = [&](VariableRole r, int fb) {
-    return coupling_role_index_reported(vb_set, r, fb, "System::add_collision", b);
-  };
-  const int mxa = ra(VariableRole::MomentumX, 1);
-  const int mya = ra(VariableRole::MomentumY, 2);
-  const int da = ra(VariableRole::Density, 0);
-  const int mxb = rb(VariableRole::MomentumX, 1);
-  const int myb = rb(VariableRole::MomentumY, 2);
-  const int db = rb(VariableRole::Density, 0);
-  // Inter-species friction (operator-split): force F = k (u_a - u_b) on the momentum,
-  // opposite on each species (total momentum conserved); the velocities relax
-  // toward each other. Frictional heating (energy) is a later refinement
-  // (neglected: fits isothermal species, without an energy eq.).
-  P->couplings.push_back([P, ia, ib, k, mxa, mya, da, mxb, myb, db](Real dt) {
-    // MPI / multi-box-safe: LOCAL fabs, same pattern as add_coupled_source (cf. add_ionization).
-    MultiFab& Ua = P->sp[ia].U;
-    for (int li = 0; li < Ua.local_size(); ++li) {
-      Array4 ua = Ua.fab(li).array();
-      Array4 ub = P->sp[ib].U.fab(li).array();
-      for_each_cell(Ua.box(li), [=] POPS_HD(int i, int j) {  // on device
-        const Real fx = dt * k * (ua(i, j, mxa) / ua(i, j, da) - ub(i, j, mxb) / ub(i, j, db));
-        ua(i, j, mxa) -= fx;
-        ub(i, j, mxb) += fx;
-        const Real fy = dt * k * (ua(i, j, mya) / ua(i, j, da) - ub(i, j, myb) / ub(i, j, db));
-        ua(i, j, mya) -= fy;
-        ub(i, j, myb) += fy;
-      });
-    }
-  });
-}
-
-void System::add_thermal_exchange(const std::string& a, const std::string& b, double rate) {
-  Impl* P = p_.get();
-  require_assembling(P->bound_, "add_thermal_exchange");  // frozen once pops.bind completes (ADC-592)
-  const int ia = P->index(a), ib = P->index(b);
-  if (P->sp[ia].ncomp != 4 || P->sp[ib].ncomp != 4)
-    throw std::runtime_error(
-        "System::add_thermal_exchange : both blocks must carry an "
-        "energy (compressible Euler, 4 variables)");
-  const Real k = static_cast<Real>(rate);
-  const Real ga = static_cast<Real>(P->sp[ia].gamma), gb = static_cast<Real>(P->sp[ib].gamma);
-  // Components resolved by ROLE (energy, momentum x/y, density) rather than by literal index. A
-  // genuinely ROLELESS block keeps the historical fallback indices (3, 1, 2, 0); a ROLES-BEARING block
-  // that omits a required role fails loud (no silent coupling on the wrong component, ADC-292).
-  const VariableSet& va_set = P->sp[ia].cons_vars;
-  const VariableSet& vb_set = P->sp[ib].cons_vars;
-  auto ra = [&](VariableRole r, int fb) {
-    return coupling_role_index_reported(va_set, r, fb, "System::add_thermal_exchange", a);
-  };
-  auto rb = [&](VariableRole r, int fb) {
-    return coupling_role_index_reported(vb_set, r, fb, "System::add_thermal_exchange", b);
-  };
-  const int ea = ra(VariableRole::Energy, 3);
-  const int mxa = ra(VariableRole::MomentumX, 1);
-  const int mya = ra(VariableRole::MomentumY, 2);
-  const int da = ra(VariableRole::Density, 0);
-  const int eb = rb(VariableRole::Energy, 3);
-  const int mxb = rb(VariableRole::MomentumX, 1);
-  const int myb = rb(VariableRole::MomentumY, 2);
-  const int db = rb(VariableRole::Density, 0);
-  // Thermal exchange (operator-split): heat flux q = k (T_a - T_b) on the energy, opposite
-  // on each species (total energy conserved); the temperatures relax. T = p/rho (up to a
-  // constant), p = (gamma-1)(E - 1/2 rho |u|^2). Transfers the INTERNAL energy (u unchanged).
-  P->couplings.push_back([P, ia, ib, k, ga, gb, ea, mxa, mya, da, eb, mxb, myb, db](Real dt) {
-    // MPI / multi-box-safe: LOCAL fabs, same pattern as add_coupled_source (cf. add_ionization).
-    MultiFab& Ua = P->sp[ia].U;
-    for (int li = 0; li < Ua.local_size(); ++li) {
-      Array4 ua = Ua.fab(li).array();
-      Array4 ub = P->sp[ib].U.fab(li).array();
-      for_each_cell(Ua.box(li), [=] POPS_HD(int i, int j) {  // on device
-        const Real ra = ua(i, j, da), rb = ub(i, j, db);
-        const Real pa =
-            (ga - Real(1)) *
-            (ua(i, j, ea) -
-             Real(0.5) * (ua(i, j, mxa) * ua(i, j, mxa) + ua(i, j, mya) * ua(i, j, mya)) / ra);
-        const Real pb =
-            (gb - Real(1)) *
-            (ub(i, j, eb) -
-             Real(0.5) * (ub(i, j, mxb) * ub(i, j, mxb) + ub(i, j, myb) * ub(i, j, myb)) / rb);
-        const Real q = dt * k * (pa / ra - pb / rb);  // k (T_a - T_b), T = p/rho
-        ua(i, j, ea) -= q;
-        ub(i, j, eb) += q;
-      });
-    }
-  });
-}
+// The named inter-species couplings (System::add_ionization / add_collision / add_thermal_exchange)
+// are removed (ADC-595): they are Python presets (python/pops/physics/coupling_presets.py) that emit the
+// same formulas as a generic CoupledSource and register through add_coupling_operator with a declared
+// conservation contract. Impl::couplings / coupled_freqs_ / coupled_freq_exprs_ STORAGE stays untouched
+// (SystemStepper::apply_couplings / step_cfl read them); only the entry methods go.
 
 void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double frequency,
                                 const std::string& label) {
@@ -1734,6 +1602,31 @@ void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double fr
       for_each_cell(Uref.box(li), kern);  // NAMED functor (device-clean), additive forward-Euler
     }
   });
+  // Inspect metadata (ADC-595): a raw add_coupled_source declares NO conservation contract, so it
+  // registers an "unchecked" view (empty ConservationContract) carrying the label and the frequency
+  // bound. add_coupling_operator overwrites this behavior by pushing the DECLARED contract instead.
+  CouplingOperatorView view;
+  view.label = label;
+  view.frequency.constant_mu = frequency;
+  view.frequency.per_cell = has_freq_expr;
+  P->coupled_operators_.push_back(std::move(view));
+}
+
+void System::add_coupling_operator(const CouplingOperator& op) {
+  // Validate the DECLARED conservation contract against the actual output terms BEFORE anything is
+  // stored (host, fail-loud): a coupling that declares a role conserved whose terms do not cancel
+  // raises here and leaves no partial state (anti-phantom-registration, like add_coupled_source's
+  // frequency-bound rule). An unchecked (empty) contract is a no-op check.
+  validate_coupling_contract(op, "System::add_coupling_operator");
+  // Lower through the SAME flat path (bit-identical numerics); it pushes an "unchecked" inspect view
+  // at its tail. We then replace that view's contract with the DECLARED one so coupled_operators()
+  // reports the typed contract rather than "unchecked".
+  add_coupled_source(op.program, op.frequency.constant_mu, op.label);
+  p_->coupled_operators_.back().conservation = op.conservation;
+}
+
+const std::vector<CouplingOperatorView>& System::coupled_operators() const {
+  return p_->coupled_operators_;
 }
 
 void System::set_source_stage(const std::string& name, const std::string& kind, double theta,

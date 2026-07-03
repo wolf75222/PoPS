@@ -866,6 +866,11 @@ sources = ["tests/cpp/unit/physics/test_composite_fac_variable_eps.cpp"]
 labels = ["unit", "physics", "fast"]
 
 [[cpp.suite]]
+name = "test_coupling_operator_contract"
+sources = ["tests/cpp/unit/physics/test_coupling_operator_contract.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
 name = "test_coupled_source_stack_limit"
 sources = ["tests/cpp/unit/physics/test_coupled_source_stack_limit.cpp"]
 labels = ["unit", "physics", "fast"]

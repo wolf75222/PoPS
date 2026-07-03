@@ -112,7 +112,7 @@ def test_add_coupled_source_rejects_unknown_role_direct():
     raised = False
     msg = ""
     try:
-        sim._s.add_coupled_source(
+        sim._s._add_coupled_source(
             in_blocks=["ne"],
             in_roles=["density"],           # valide (canonique connu)
             consts=[],
@@ -145,7 +145,7 @@ def test_add_coupled_source_rejects_role_not_exposed():
     raised = False
     msg = ""
     try:
-        sim._s.add_coupled_source(
+        sim._s._add_coupled_source(
             in_blocks=["ne"],
             in_roles=["density"],            # valide ET expose
             consts=[],
@@ -165,6 +165,46 @@ def test_add_coupled_source_rejects_role_not_exposed():
     assert "expose" in msg or "momentum_x" in msg, "message inattendu : %r" % msg
 
 
+# ---------------------------------------------------------------------------
+# (D) Bloc MANQUANT et chemin PRESET (ADC-595)
+# ---------------------------------------------------------------------------
+
+def test_add_coupling_operator_rejects_missing_block():
+    """(D) add_coupling_operator ciblant un bloc NON enregistre -> RuntimeError (P->index leve).
+
+    Le chemin typed (System.add_coupling_operator) resout chaque (bloc, role) par P->index(bloc) :
+    un bloc inconnu leve AVANT tout pas, sans repli silencieux."""
+    sim = _make_cartesian_system()  # un seul bloc 'ne'
+    _CS_PUSHREG = 0
+    raised = False
+    msg = ""
+    try:
+        sim._s.add_coupling_operator(
+            in_blocks=["ne"], in_roles=["density"], consts=[],
+            out_blocks=["absent_block"],  # bloc jamais add_block'e -> P->index leve
+            out_roles=["density"], prog_ops=[_CS_PUSHREG], prog_args=[0], prog_lens=[1],
+        )
+    except RuntimeError as e:
+        raised = True
+        msg = str(e)
+    assert raised, "add_coupling_operator ciblant un bloc absent aurait du lever (P->index)"
+    assert "absent_block" in msg, "message inattendu : %r" % msg
+
+
+def test_collision_preset_rejects_missing_block():
+    """(D-preset) sim.add_coupling(Collision(...)) referencant un bloc absent -> RuntimeError.
+
+    La preset abaisse en add_coupling_operator, qui resout les blocs : un bloc non enregistre leve
+    a l'enregistrement (fail-loud), pas au premier pas."""
+    sim = _make_cartesian_system()  # 'ne' seul ; 'b' n'existe pas
+    raised = False
+    try:
+        sim.add_coupling(pops.Collision("ne", "b", 0.5))
+    except Exception as e:  # RuntimeError du C++ (bloc absent)
+        raised = "b" in str(e) or "block" in str(e).lower()
+    assert raised, "Collision(ne, b) avec 'b' absent aurait du lever a l'enregistrement"
+
+
 if __name__ == "__main__":
     test_coupled_source_rejects_unknown_role_at_field()
     print("OK A1 : role inconnu dans .block().role() rejete")
@@ -176,4 +216,8 @@ if __name__ == "__main__":
     print("OK B : role inconnu dans add_coupled_source C++ rejete")
     test_add_coupled_source_rejects_role_not_exposed()
     print("OK C : role valide non expose rejete (gap Lot E corrige)")
+    test_add_coupling_operator_rejects_missing_block()
+    print("OK D : bloc manquant dans add_coupling_operator rejete")
+    test_collision_preset_rejects_missing_block()
+    print("OK D-preset : bloc manquant via la preset Collision rejete")
     print("test_dsl_coupled_role_error : OK")

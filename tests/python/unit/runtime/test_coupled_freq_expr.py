@@ -158,6 +158,34 @@ chk(amr.last_dt_bound() == "coupled_source:amrfreq",
     f"AMR raison = coupled_source:amrfreq (recu {amr.last_dt_bound()!r})")
 
 
+# --- (f) PRESET / typed operator : la borne de frequence CONSTANTE dt <= cfl/mu (ADC-595) --------
+# Un couplage type (System.add_coupling_operator, le point d'abaissement des presets nommees) declare
+# une frequence CONSTANTE mu : le pas est borne dt == cfl/mu et coupled_operators() la rapporte.
+print("== (f) operateur type : frequence constante mu -> dt == cfl/mu, inspect rapporte mu ==")
+MU = 250.0
+simf = make_system()
+rho = gaussian(N)
+simf.set_density("a", rho.ravel())
+simf.set_density("b", rho.ravel())
+# ABI plate d'un echange benin conservatif (deux termes opposes en densite), avec une frequence mu
+# CONSTANTE declaree ET le role 'density' declare conserve (les deux legs s'annulent structurellement).
+_CS_PUSHREG, _CS_MUL, _CS_NEG = 0, 3, 5
+simf._s.add_coupling_operator(
+    in_blocks=["a"], in_roles=["density"], consts=[1e-9],
+    out_blocks=["a", "b"], out_roles=["density", "density"],
+    # terme 0 = 1e-9 * na (PushReg reg0 ; PushReg reg1(const) ; Mul) ; terme 1 = Neg(terme 0)
+    prog_ops=[_CS_PUSHREG, _CS_PUSHREG, _CS_MUL, _CS_PUSHREG, _CS_PUSHREG, _CS_MUL, _CS_NEG],
+    prog_args=[0, 1, 0, 0, 1, 0, 0], prog_lens=[3, 4],
+    frequency=MU, label="freqpreset", conserved_roles=["density"], created_roles=[])
+dt_f = simf.step_cfl(CFL)
+chk(abs(dt_f - CFL / MU) < 1e-15, f"operateur type : dt = cfl/mu = {CFL/MU:.6e} (recu {dt_f:.6e})")
+chk(simf.last_dt_bound() == "coupled_source:freqpreset",
+    f"raison = coupled_source:freqpreset (recu {simf.last_dt_bound()!r})")
+ops = simf.coupled_operators()
+chk(len(ops) == 1 and ops[0]["frequency_mu"] == MU and ops[0]["conserved_roles"] == ["density"],
+    f"coupled_operators() rapporte mu={MU} + role conserve (recu {ops})")
+
+
 if fails:
     print(f"XX test_coupled_freq_expr : {fails} echec(s)")
     sys.exit(1)

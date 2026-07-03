@@ -140,6 +140,11 @@ struct AmrSystem::Impl {
     std::vector<int> freq_prog_ops, freq_prog_args;
   };
   std::vector<CoupledSourceSpec> coupled_sources;
+  // TYPED coupling operator inspect metadata (ADC-595, parity with System::Impl::coupled_operators_):
+  // one read-only view (label + declared contracts) per registered coupled source, in registration
+  // order. Populated at add_coupled_source (unchecked) / add_coupling_operator (declared) so the facade
+  // exposes the couplings as typed operators BEFORE the lazy multi-block runtime build. Metadata only.
+  std::vector<CouplingOperatorView> coupled_operators;
 
   double refine_threshold =
       static_cast<double>(kAmrRefinementDisabledThreshold);  // no refinement by default
@@ -1389,6 +1394,27 @@ void AmrSystem::add_coupled_source(const CoupledSourceProgram& prog, double freq
   p_->coupled_sources.push_back(Impl::CoupledSourceSpec{
       prog.in_blocks, prog.in_roles, prog.consts, prog.out_blocks, prog.out_roles, prog.prog_ops,
       prog.prog_args, prog.prog_lens, frequency, label, prog.freq_prog_ops, prog.freq_prog_args});
+  // Inspect metadata (ADC-595): a raw add_coupled_source declares NO contract -> an "unchecked" view
+  // (empty ConservationContract) carrying label + frequency bound. add_coupling_operator overwrites the
+  // contract with the declared one.
+  CouplingOperatorView view;
+  view.label = label;
+  view.frequency.constant_mu = frequency;
+  view.frequency.per_cell = !prog.freq_prog_ops.empty() || !prog.freq_prog_args.empty();
+  p_->coupled_operators.push_back(std::move(view));
+}
+
+void AmrSystem::add_coupling_operator(const CouplingOperator& op) {
+  // Validate the DECLARED conservation contract against the actual output terms BEFORE anything is
+  // stashed (host, fail-loud; anti-phantom-registration). Lower through the SAME add_coupled_source
+  // path (bit-identical), then replace the unchecked view's contract with the declared one.
+  validate_coupling_contract(op, "AmrSystem::add_coupling_operator");
+  add_coupled_source(op.program, op.frequency.constant_mu, op.label);
+  p_->coupled_operators.back().conservation = op.conservation;
+}
+
+const std::vector<CouplingOperatorView>& AmrSystem::coupled_operators() const {
+  return p_->coupled_operators;
 }
 
 void AmrSystem::step(double dt) {
