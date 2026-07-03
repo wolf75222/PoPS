@@ -102,6 +102,148 @@ def test_npz_key_scheme_roundtrips(_t):
             "a legacy checkpoint must not carry the ADC-406b keys (back-compatible restart)"
 
 
+# ---- (A2) ADC-626 v2 selective-persistence key scheme + reader dispatch (pure numpy) ----
+def test_v2_history_persistence_key_scheme(_t):
+    """The v2 checkpoint stores only the policy-selected slots + the policy manifest + the per-slot dt;
+    the restore_histories reader dispatches on the manifest, restores the stored slots, and the
+    policy-compat guard refuses a stored-slots / policy mismatch verbatim. Pure numpy (no engine): a
+    fake System captures restore_history / restore_history_slot_dt / rebuild_history_slots calls."""
+    try:
+        import json
+
+        import numpy as np
+    except Exception as exc:  # noqa: BLE001
+        print("-- (A2) skipped: numpy unavailable: %s --" % exc)
+        return
+    from pops.runtime._system_io_history import restore_histories, serialize_histories
+    from pops.time.history_persistence import Interval, Revolve
+
+    hname = "blk.state"
+    depth = 5
+    ncomp, ny, nx = 1, 4, 4
+    # A distinct per-slot global buffer so a slot mixup is caught.
+    full = {k: np.full(ncomp * ny * nx, float(k + 1)) for k in range(depth)}
+
+    class FakeSystem:
+        def __init__(self, present_slots):
+            self._present = present_slots
+            self.restored = {}
+            self.restored_dt = {}
+            self.rebuilt = None
+            self.init = None
+
+        # --- writer side ---
+        def history_names(self):
+            return [hname]
+
+        def history_depth(self, name):
+            return depth
+
+        def history_ncomp(self, name):
+            return ncomp
+
+        def history_initialized(self, name):
+            return True
+
+        def history_global(self, name, slot):
+            return full[slot]
+
+        def history_slot_dt(self, name, slot):
+            return 0.01 * (slot + 1)
+
+        # --- reader side ---
+        def restore_history(self, name, slot, values):
+            self.restored[slot] = np.asarray(values)
+
+        def restore_history_slot_dt(self, name, slot, dt):
+            self.restored_dt[slot] = dt
+
+        def set_history_initialized(self, name, initialized):
+            self.init = initialized
+
+        def rebuild_history_slots(self, name, stored_slots):
+            self.rebuilt = list(stored_slots)
+            return depth - len(stored_slots)
+
+    # WRITER: Revolve(3) on depth 5 stores {0, 2, 4}; only those slot buffers are emitted.
+    out = {}
+    writer = FakeSystem(present_slots=None)
+    serialize_histories(writer, {hname: Revolve(3)}, out)
+    stored = sorted(int(s) for s in out["history_stored_slots_" + hname])
+    assert stored == [0, 2, 4], stored
+    for k in stored:
+        assert ("history_%s_%d" % (hname, k)) in out
+    for k in (1, 3):
+        assert ("history_%s_%d" % (hname, k)) not in out, "a recomputed slot is not written"
+    assert json.loads(str(out["history_policy_" + hname]))["kind"] == "revolve"
+    assert len(out["history_slot_dt_" + hname]) == depth
+
+    # READER: round-trip through numpy so the dtypes match, then restore + replay.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "v2.npz")
+        payload = dict(out)
+        payload["history_names"] = np.array([hname])
+        payload["history_depth_" + hname] = depth
+        payload["history_init_" + hname] = True
+        with open(path, "wb") as f:
+            np.savez_compressed(f, **payload)
+        d = np.load(path, allow_pickle=False)
+        reader = FakeSystem(present_slots=stored)
+        report = restore_histories(reader, d, ckpt_version=2)
+    assert sorted(reader.restored) == [0, 2, 4], "only the stored slots are restored"
+    assert reader.rebuilt == [0, 2, 4], "replay is driven from the stored slots"
+    assert len(reader.restored_dt) == depth, "every slot's dt is restored"
+    row = report.histories[0]
+    assert row["policy_kind"] == "revolve" and row["stored_slots"] == 3 and row["recomputed_slots"] == 2
+
+    # POLICY-COMPAT GUARD: a stored-slots array that disagrees with the policy is refused verbatim.
+    bad = dict(payload)
+    bad["history_stored_slots_" + hname] = np.asarray([0, 1, 4], dtype=np.int64)  # not Revolve(3)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "bad.npz")
+        with open(path, "wb") as f:
+            np.savez_compressed(f, **bad)
+        d = np.load(path, allow_pickle=False)
+        raised = False
+        try:
+            restore_histories(FakeSystem(stored), d, ckpt_version=2)
+        except RuntimeError as exc:
+            raised = "stored slots" in str(exc) and "policy" in str(exc)
+        assert raised, "a stored-slots / policy mismatch must be refused verbatim"
+
+    # BACK-COMPAT: a v1 checkpoint (no policy keys, every slot present) restores as Dense, no replay.
+    v1 = {"history_names": np.array([hname]),
+          "history_depth_" + hname: depth,
+          "history_init_" + hname: True}
+    for k in range(depth):
+        v1["history_%s_%d" % (hname, k)] = full[k]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "v1.npz")
+        with open(path, "wb") as f:
+            np.savez_compressed(f, **v1)
+        d = np.load(path, allow_pickle=False)
+        reader = FakeSystem(present_slots=list(range(depth)))
+        report = restore_histories(reader, d, ckpt_version=1)
+    assert sorted(reader.restored) == list(range(depth)), "v1 restores every slot (Dense)"
+    assert reader.rebuilt is None, "v1 never replays (every slot is present)"
+    assert report.histories[0]["policy_kind"] == "dense" and report.histories[0]["recomputed_slots"] == 0
+
+    # UNKNOWN kind at restart fails loud (a checkpoint written by a newer pops).
+    unknown = dict(payload)
+    unknown["history_policy_" + hname] = np.array(json.dumps({"kind": "brand_new"}))
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "unknown.npz")
+        with open(path, "wb") as f:
+            np.savez_compressed(f, **unknown)
+        d = np.load(path, allow_pickle=False)
+        raised = False
+        try:
+            restore_histories(FakeSystem(stored), d, ckpt_version=2)
+        except ValueError as exc:
+            raised = "unknown" in str(exc)
+        assert raised, "an unknown policy kind must fail loud at restart"
+
+
 # ---- shared engine setup for (B)/(C) ----
 def _passive_source_model(name):
     """A 1-variable model (rho), ZERO flux, default LINEAR source S(rho) = _C*rho (R = c*rho changes
