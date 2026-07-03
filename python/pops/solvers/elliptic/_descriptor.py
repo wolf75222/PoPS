@@ -18,6 +18,7 @@ Both are inert (Spec 5 sec.6): they record the choice and answer ``available`` /
 the runtime token so the install path's solver-token resolution keeps working.
 """
 from pops.descriptors import Availability, Descriptor
+from pops.descriptors_report import CapabilitySet
 from pops.solvers.options import Chebyshev, DirectSmallGrid, RedBlackGaussSeidel
 from pops.solvers.requirements import capability_map
 from pops.solvers.tolerances import Absolute, AbsoluteFloor, Relative
@@ -61,8 +62,8 @@ class GeometricMG(Descriptor):
         return "geometric_mg"
 
     def capabilities(self):
-        return capability_map(uniform=True, amr=True, mpi=True, gpu=True,
-                              variable_epsilon=True, periodic_bc=True, wall_bc=True)
+        return CapabilitySet(capability_map(uniform=True, amr=True, mpi=True, gpu=True,
+                                            variable_epsilon=True, periodic_bc=True, wall_bc=True))
 
     def options(self):
         return {
@@ -73,13 +74,14 @@ class GeometricMG(Descriptor):
         }
 
     def lower(self, context=None):
-        rec = super().lower(context)
-        rec["scheme"] = self.scheme
-        rec["smoother"] = self.smoother.lower(context)
-        rec["coarse"] = self.coarse.lower(context)
-        rec["tolerance"] = self.tolerance.lower(context)
-        rec["max_cycles"] = self.max_cycles
-        return rec
+        from pops.descriptors_report import LoweredDescriptor
+        return LoweredDescriptor(
+            name=self.name, category=self.category, native_id=self.native_id,
+            options=self.options(), scheme=self.scheme,
+            extra={"smoother": self.smoother.lower(context),
+                   "coarse": self.coarse.lower(context),
+                   "tolerance": self.tolerance.lower(context),
+                   "max_cycles": self.max_cycles})
 
     def inspect(self):
         view = super().inspect()
@@ -115,7 +117,7 @@ class FFT(Descriptor):
         return "fft_spectral" if self.spectral else "fft"
 
     def capabilities(self):
-        return capability_map(uniform=True, mpi=True, gpu=True, periodic_bc=True)
+        return CapabilitySet(capability_map(uniform=True, mpi=True, gpu=True, periodic_bc=True))
 
     def options(self):
         return {"spectral": self.spectral}
@@ -170,7 +172,8 @@ def _context_is_amr_layout(context):
             # available() must always return an Availability, never raise: a context whose
             # capabilities() needs an argument or itself raises is simply "not an AMR layout".
             return False
-        if isinstance(declared, dict) and declared.get("layout") == "amr":
+        # ``declared`` is a typed CapabilitySet (or a plain dict): both expose ``.get`` (ADC-625).
+        if hasattr(declared, "get") and declared.get("layout") == "amr":
             return True
     return False
 

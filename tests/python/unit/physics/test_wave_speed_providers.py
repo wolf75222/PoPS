@@ -81,8 +81,8 @@ def test_factory_kinds_and_signed_pair():
 
 
 def test_provider_capabilities_and_options():
-    assert ExplicitPair().capabilities() == {"signed_pair": True}
-    assert MaxWaveSpeed().capabilities() == {"signed_pair": False, "majorant": True}
+    assert ExplicitPair().capabilities().to_dict() == {"signed_pair": True}
+    assert MaxWaveSpeed().capabilities().to_dict() == {"signed_pair": False, "majorant": True}
     assert FromJacobian(eig="fd").options()["eig"] == "fd"
     assert FromJacobian(blocks=[[0], [1]]).options()["blocks"] == [[0], [1]]
     with pytest.raises(ValueError, match="eig 'numeric' | 'fd'"):

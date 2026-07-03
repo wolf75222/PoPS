@@ -10,6 +10,7 @@ capabilities and is inspectable. Inert -- it records the floor parameters; the f
 arithmetic is generated and runs in C++.
 """
 from pops.descriptors import Descriptor
+from pops.descriptors_report import CapabilitySet
 
 
 class RealizabilityProjection(Descriptor):
@@ -37,7 +38,7 @@ class RealizabilityProjection(Descriptor):
         return {"eps_m00": self.eps_m00, "eps_cov": self.eps_cov, "robust": self.robust}
 
     def capabilities(self):
-        return {"guard_level": "smooth" if self.robust else "bare"}
+        return CapabilitySet({"guard_level": "smooth" if self.robust else "bare"})
 
     def __repr__(self):
         return ("RealizabilityProjection(eps_m00=%g, eps_cov=%g, robust=%r)"

@@ -16,29 +16,29 @@ from pops.codegen import (  # noqa: E402
 def test_default_optimization_is_strict():
     opt = Optimization()
     assert isinstance(opt.math, StrictMath)
-    assert opt.capabilities()["strict_math"] is True
+    assert opt.capabilities().to_dict()["strict_math"] is True
     assert opt.options()["cse"] is True and opt.options()["math"] == "StrictMath"
     assert opt.to_emit_kwargs() == {"cse": True, "hoist_reciprocals": True}
-    assert Optimization.default().capabilities()["strict_math"] is True
+    assert Optimization.default().capabilities().to_dict()["strict_math"] is True
 
 
 def test_explicit_fast_math_is_not_strict():
     opt = Optimization(cse=False, hoist_reciprocals=False, math=FastMath())
-    assert opt.capabilities()["strict_math"] is False
-    assert FastMath().capabilities()["may_change_rounding"] is True
+    assert opt.capabilities().to_dict()["strict_math"] is False
+    assert FastMath().capabilities().to_dict()["may_change_rounding"] is True
     assert opt.to_emit_kwargs() == {"cse": False, "hoist_reciprocals": False}
 
 
 def test_math_modes():
     assert StrictMath().options()["fast_math"] is False
     assert DebugMath().options()["readable"] is True
-    assert GpuRegisterAware().capabilities()["register_pressure_aware"] is True
+    assert GpuRegisterAware().capabilities().to_dict()["register_pressure_aware"] is True
 
 
 def test_fusion_never_crosses_solve():
     fuse = ConservativeFusion(local_sources=True, flux_divergence=False, field_solves=False)
-    assert fuse.capabilities()["crosses_solve"] is False
-    assert fuse.capabilities()["crosses_reduction"] is False
+    assert fuse.capabilities().to_dict()["crosses_solve"] is False
+    assert fuse.capabilities().to_dict()["crosses_reduction"] is False
     assert fuse.options()["field_solves"] is False
     assert Disabled().options()["enabled"] is False
     opt = Optimization(fuse=fuse)

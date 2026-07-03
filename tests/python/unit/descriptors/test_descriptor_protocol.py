@@ -104,7 +104,7 @@ def test_moments_route_choosers_satisfy_protocol():
         assert isinstance(descriptor.available(), Availability)
         assert descriptor.validate() is True
         # lower() is inert metadata, never a numeric loop.
-        assert descriptor.lower()["category"] == category
+        assert descriptor.lower().to_dict()["category"] == category
 
 
 def test_moments_handles_are_not_descriptors():
@@ -135,10 +135,10 @@ def test_available_returns_availability_not_bool():
     assert status.ok is True  # a plain mesh is unconditionally available.
 
 
-def test_lower_is_inert_dict_and_never_raises():
-    # lower() returns a metadata dict for a valid descriptor and never raises (no numeric loop).
+def test_lower_is_inert_record_and_never_raises():
+    # lower() returns a typed LoweredDescriptor for a valid descriptor and never raises (ADC-625).
     for descriptor in (CartesianMesh(n=8), HLL()):
-        record = descriptor.lower()
+        record = descriptor.lower().to_dict()
         assert isinstance(record, dict)
         assert record["name"] == descriptor.name
         assert record["category"] == descriptor.category
@@ -148,9 +148,9 @@ def test_lower_is_inert_dict_and_never_raises():
 
 def test_brick_descriptor_native_id_carried_in_lowering():
     # A native brick lowers with its real C++ symbol; a planned brick lowers with no symbol.
-    assert HLL().lower()["native_id"] == "pops::HLLFlux"
+    assert HLL().lower().to_dict()["native_id"] == "pops::HLLFlux"
     from pops.numerics.reconstruction.limiters import MC  # planned, no native type yet.
-    assert MC().lower()["native_id"] in (None, "")
+    assert MC().lower().to_dict()["native_id"] in (None, "")
     matrix = MC().capability_matrix()
     row = matrix.rows[0]
     assert row.status == "unavailable"

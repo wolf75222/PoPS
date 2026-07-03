@@ -31,8 +31,8 @@ def test_back_compat_and_package_export():
 def test_cartesian_options_and_caps():
     m = CartesianMesh(n=128, L=2.0, periodic=False)
     assert m.options() == {"n": 128, "L": 2.0, "periodic": False}
-    assert m.capabilities()["geometry"] == "cartesian"
-    assert m.capabilities()["dim"] == 2
+    assert m.capabilities().to_dict()["geometry"] == "cartesian"
+    assert m.capabilities().to_dict()["dim"] == 2
 
 
 def test_dimension_policy_rejects_non_2d_meshes():
@@ -63,7 +63,7 @@ def test_patch_box_and_layout():
 
 def test_uniform_layout():
     u = Uniform(CartesianMesh(), embedded_boundary=EmbeddedBoundary(Disc(), CutCell()))
-    assert u.capabilities()["supports_amr"] is False
+    assert u.capabilities().supports("amr") is False
     assert "embedded_boundary" in u.options()
 
 
@@ -96,16 +96,16 @@ def test_typed_refinement_criteria():
 
 
 def test_boundaries_and_masks():
-    assert Periodic().capabilities()["periodic"] is True
+    assert Periodic().capabilities().to_dict()["periodic"] is True
     assert Physical("wall").options()["kind"] == "wall"
     with pytest.raises(ValueError):
         Physical("nope")
     FaceBC(XMin(), Periodic())
     with pytest.raises(TypeError):
         FaceBC("x", Periodic())
-    assert CutCell().capabilities()["conservative"] is True
-    assert NoMask().capabilities()["masked_transport"] is False
-    assert Staircase().capabilities()["conservative"] is False
+    assert CutCell().capabilities().to_dict()["conservative"] is True
+    assert NoMask().capabilities().to_dict()["masked_transport"] is False
+    assert Staircase().capabilities().to_dict()["conservative"] is False
 
 
 def test_amr_policies():

@@ -10,6 +10,7 @@ shapes:
 They only refine the declared capabilities and the validation; the runtime / codegen treat
 them as a :class:`FieldProblem`.
 """
+from pops.descriptors_report import CapabilitySet
 from pops.math import Equation, principal_kinds
 from .problem import FieldProblem
 
@@ -27,9 +28,9 @@ class PoissonProblem(FieldProblem):
     category = "poisson_problem"
 
     def capabilities(self):
-        caps = super().capabilities()
+        caps = super().capabilities().to_dict()
         caps["poisson"] = True
-        return caps
+        return CapabilitySet(caps)
 
     def validate(self, context=None):
         super().validate(context)
@@ -51,9 +52,9 @@ class ScreenedPoissonProblem(PoissonProblem):
     category = "screened_poisson_problem"
 
     def capabilities(self):
-        caps = super().capabilities()
+        caps = super().capabilities().to_dict()
         caps["screened"] = True
-        return caps
+        return CapabilitySet(caps)
 
     def validate(self, context=None):
         super().validate(context)
@@ -81,9 +82,9 @@ class AnisotropicPoissonProblem(PoissonProblem):
     category = "anisotropic_poisson_problem"
 
     def capabilities(self):
-        caps = super().capabilities()
+        caps = super().capabilities().to_dict()
         caps["anisotropic"] = True
-        return caps
+        return CapabilitySet(caps)
 
     def validate(self, context=None):
         super().validate(context)

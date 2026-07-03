@@ -14,6 +14,7 @@ records the choice and exposes it as the engine flags on ``.build()``; the eigen
 arithmetic is generated and runs in C++.
 """
 from pops.descriptors import Descriptor
+from pops.descriptors_report import CapabilitySet
 
 
 class ExactSpeeds(Descriptor):
@@ -58,7 +59,7 @@ class ExactSpeeds(Descriptor):
         return {"kind": self.kind}
 
     def capabilities(self):
-        return {"exact_speeds": self.exact_speeds, "roe": self.roe}
+        return CapabilitySet({"exact_speeds": self.exact_speeds, "roe": self.roe})
 
     def __repr__(self):
         return "ExactSpeeds(%r)" % (self.kind,)

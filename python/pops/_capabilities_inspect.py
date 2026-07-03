@@ -347,4 +347,4 @@ def inspect_amr(layout_or_context=None):
         layout="amr", max_levels=layout.max_levels, ratio=layout.ratio,
         native_max_levels=NATIVE_MAX_LEVELS, native_ratios=NATIVE_RATIOS,
         available=status.status, limitations=limitations,
-        requirements=layout.requirements(), policies=_amr_policy_rows(layout))
+        requirements=layout.requirements().to_dict(), policies=_amr_policy_rows(layout))

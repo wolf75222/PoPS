@@ -7,6 +7,7 @@ a native brick: a reference carries a manifest + a native id, and resolves to th
 capabilities). A missing manifest or an unregistered id is a clear error before runtime.
 """
 from pops.descriptors import Availability, Descriptor, _external_descriptor
+from pops.descriptors_report import CapabilitySet, RequirementSet
 from .manifests import register
 
 
@@ -41,16 +42,19 @@ class CompiledBrickRef(Descriptor):
         return _external_descriptor(self.native_id, expect_category=self.expect_category)
 
     def requirements(self):
+        # Inert metadata accessor: an unresolved brick (not loaded / bad manifest) has no
+        # requirements to report; the loud signal is surfaced by available()/resolve(), so this
+        # degrades to an empty typed set rather than crashing an introspection walk.
         try:
-            return dict(self.resolve().requirements)
-        except Exception:
-            return {}
+            return RequirementSet(dict(self.resolve().requirements))
+        except (LookupError, ValueError, OSError):
+            return RequirementSet()
 
     def capabilities(self):
         try:
-            return dict(self.resolve().capabilities)
-        except Exception:
-            return {}
+            return CapabilitySet(dict(self.resolve().capabilities))
+        except (LookupError, ValueError, OSError):
+            return CapabilitySet()
 
     def available(self, context=None):
         try:

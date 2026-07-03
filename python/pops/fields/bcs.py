@@ -12,6 +12,7 @@ physical); this module owns what value/flux a field takes on a face.
 Inert descriptors; the runtime materialises the actual ghost fills.
 """
 from pops.descriptors import Descriptor
+from pops.descriptors_report import CapabilitySet
 
 
 class _Face(Descriptor):
@@ -50,7 +51,7 @@ class Periodic(Descriptor):
         return {"bc": "periodic"}
 
     def capabilities(self):
-        return {"periodic": True}
+        return CapabilitySet({"periodic": True})
 
 
 class Dirichlet(Descriptor):

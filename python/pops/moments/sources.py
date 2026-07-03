@@ -8,6 +8,7 @@ the DSL compiler; no lazy import is needed here.
 from math import comb
 
 from pops.descriptors import Descriptor
+from pops.descriptors_report import CapabilitySet
 
 from .model_builder import moment_indices, _pow
 
@@ -158,7 +159,7 @@ class MagneticMomentSource(Descriptor):
         return {"q_over_m": self.q_over_m, "b_field": self.b_field}
 
     def capabilities(self):
-        return {"provides": "magnetic_lorentz"}
+        return CapabilitySet({"provides": "magnetic_lorentz"})
 
     def as_sources(self, q_over_m_value=1.0):
         """A ``(m, M) -> list`` sources callable: ``omega_c = q_over_m * B`` (electric field 0).

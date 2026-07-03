@@ -7,6 +7,7 @@ descriptors; the codegen / runtime consume them (a runtime param appears in
 ``compiled.arguments()``; a const param participates in the cache key).
 """
 from pops.descriptors import Descriptor, reject_string_selector
+from pops.descriptors_report import CapabilitySet
 from pops.math import Real
 
 
@@ -63,7 +64,7 @@ class RuntimeParam(Descriptor):
                 "domain": self.domain.name if self.domain is not None else None}
 
     def capabilities(self):
-        return {"runtime": True, "compile_time": False}
+        return CapabilitySet({"runtime": True, "compile_time": False})
 
     def validate(self, context=None):
         """Validate the declared DEFAULT against the domain (the ``compile`` phase)."""
@@ -120,7 +121,7 @@ class ConstParam(Descriptor):
                 "dtype": getattr(self.dtype, "name", self.dtype)}
 
     def capabilities(self):
-        return {"runtime": False, "compile_time": True, "in_cache_key": True}
+        return CapabilitySet({"runtime": False, "compile_time": True, "in_cache_key": True})
 
 
 class DerivedParam(Descriptor):

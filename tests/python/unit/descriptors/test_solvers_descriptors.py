@@ -53,7 +53,7 @@ def test_krylov_max_iter_is_mandatory_and_carried():
         d = factory(max_iter=123)
         assert d.options["max_iter"] == 123, d.options
         assert d.inspect()["options"]["max_iter"] == 123
-        assert d.lower()["options"]["max_iter"] == 123
+        assert d.lower().to_dict()["options"]["max_iter"] == 123
 
 
 @pytest.mark.parametrize("factory", [krylov.CG, krylov.BiCGStab, krylov.GMRES, krylov.Richardson])
@@ -82,7 +82,7 @@ def test_krylov_descriptors_compute_nothing():
 
 
 def test_krylov_lower_carries_native_id_and_scheme():
-    rec = krylov.CG(max_iter=200).lower()
+    rec = krylov.CG(max_iter=200).lower().to_dict()
     assert rec["native_id"] == "pops::cg_solve"
     assert rec["scheme"] == "cg"
 
@@ -179,13 +179,13 @@ def test_geometric_mg_rich_surface():
 
 def test_geometric_mg_capabilities():
     caps = elliptic.GeometricMG().capabilities()
-    assert caps["supports_uniform"] is True
-    assert caps["supports_amr"] is True
-    assert caps["supports_mpi"] is True
-    assert caps["supports_gpu"] is True
-    assert caps["supports_variable_epsilon"] is True
-    assert caps["supports_anisotropic"] is False
-    assert caps["supports_screened"] is False
+    assert caps.supports("uniform") is True
+    assert caps.supports("amr") is True
+    assert caps.supports("mpi") is True
+    assert caps.supports("gpu") is True
+    assert caps.supports("variable_epsilon") is True
+    assert caps.supports("anisotropic") is False
+    assert caps.supports("screened") is False
 
 
 def test_geometric_mg_inspect_and_lower():
@@ -196,7 +196,7 @@ def test_geometric_mg_inspect_and_lower():
     assert view["scheme"] == "geometric_mg"
     assert view["available"] is True
     assert view["capabilities"]["supports_amr"] is True
-    rec = g.lower()
+    rec = g.lower().to_dict()
     assert rec["native_id"] == "pops::GeometricMG"
     assert rec["scheme"] == "geometric_mg"
     assert rec["smoother"] == {"kind": "chebyshev", "degree": 3}
@@ -279,7 +279,7 @@ def test_geometric_mg_accepts_amr_layout():
     from pops.mesh.cartesian import CartesianMesh
     from pops.mesh.layouts import AMR
     g = elliptic.GeometricMG()
-    assert g.capabilities()["supports_amr"] is True
+    assert g.capabilities().supports("amr") is True
     assert g.available(AMR(base=CartesianMesh(n=64))).status == "yes"
 
 

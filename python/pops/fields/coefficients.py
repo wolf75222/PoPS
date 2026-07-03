@@ -8,6 +8,7 @@ names an aux field that supplies the coefficient values; the runtime reads them.
 Inert descriptors; they compute nothing.
 """
 from pops.descriptors import Descriptor
+from pops.descriptors_report import RequirementSet
 
 
 class ScalarCoefficient(Descriptor):
@@ -26,7 +27,7 @@ class ScalarCoefficient(Descriptor):
         return {"name": self._name, "role": "scalar"}
 
     def requirements(self):
-        return {"aux_field": self._name}
+        return RequirementSet({"aux_field": self._name})
 
 
 class ReactionCoefficient(Descriptor):
@@ -45,7 +46,7 @@ class ReactionCoefficient(Descriptor):
         return {"name": self._name, "role": "reaction"}
 
     def requirements(self):
-        return {"aux_field": self._name}
+        return RequirementSet({"aux_field": self._name})
 
 
 __all__ = ["ScalarCoefficient", "ReactionCoefficient"]

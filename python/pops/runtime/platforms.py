@@ -16,6 +16,7 @@ communicator is created -- the runtime selects and drives the device. Like
 ``import pops.runtime.platforms`` is side-effect-free.
 """
 from pops.descriptors import Availability, Descriptor
+from pops.descriptors_report import CapabilitySet, LoweredDescriptor, RequirementSet
 
 
 def _has_kokkos():
@@ -53,19 +54,21 @@ class _Platform(Descriptor):
         return {"device": self._device}
 
     def capabilities(self):
-        return {"host": self._host, "gpu": self._gpu, "mpi": self._mpi}
+        return CapabilitySet({"host": self._host, "gpu": self._gpu, "mpi": self._mpi})
 
     def requirements(self):
         """What the platform NEEDS from the compiled module (the build flag it depends on)."""
         req = {}
         if self._device != "serial":
             req["kokkos"] = True
-        return req
+        return RequirementSet(req)
 
     def lower(self, context=None):
         """The inert lowering record: the device token + the declared capabilities (metadata only)."""
-        return {"name": self.name, "category": self.category, "device": self._device,
-                "capabilities": self.capabilities()}
+        return LoweredDescriptor(name=self.name, category=self.category,
+                                 native_id=self.native_id, options=self.options(),
+                                 extra={"device": self._device,
+                                        "capabilities": self.capabilities().to_dict()})
 
 
 class KokkosSerial(_Platform):
@@ -82,7 +85,7 @@ class KokkosSerial(_Platform):
         # Serial is the baseline host device: a Kokkos build offers it unconditionally; a strictly
         # SERIAL (non-Kokkos) _pops still runs single-threaded host code, so do not hard-require the
         # Kokkos flag here -- available() reports the honest status.
-        return {}
+        return RequirementSet()
 
     def available(self, context=None):
         """Available on any build (host single-thread is always present)."""
@@ -188,7 +191,7 @@ class MPI(_Platform):
     _mpi = True
 
     def requirements(self):
-        return {"mpi": True}
+        return RequirementSet({"mpi": True})
 
     def available(self, context=None):
         mpi = _has_mpi()

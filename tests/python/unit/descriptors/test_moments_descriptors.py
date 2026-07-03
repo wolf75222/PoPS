@@ -33,13 +33,13 @@ def test_exact_speeds_descriptor_contract():
     assert speeds.name == "ExactSpeeds"
     assert speeds.category == "wave_speed"
     assert speeds.options()["kind"] == moments.ExactSpeeds.ROE_DISSIPATION
-    caps = speeds.capabilities()
+    caps = speeds.capabilities().to_dict()
     assert caps["exact_speeds"] is True and caps["roe"] is True
     assert speeds.available().ok
     assert speeds.validate() is True
     # The BOUNDED strategy turns the engine flags off (still a valid, available route).
     bounded = moments.ExactSpeeds(moments.ExactSpeeds.BOUNDED)
-    assert bounded.capabilities() == {"exact_speeds": False, "roe": False}
+    assert bounded.capabilities().to_dict() == {"exact_speeds": False, "roe": False}
     # from_flags round-trips to the same descriptor kind.
     assert moments.ExactSpeeds.from_flags(True, True).options()["kind"] == \
         moments.ExactSpeeds.ROE_DISSIPATION
@@ -54,8 +54,8 @@ def test_realizability_projection_descriptor_contract():
     assert proj.category == "realizability"
     opts = proj.options()
     assert opts["eps_m00"] == 1e-10 and opts["eps_cov"] == 1e-9 and opts["robust"] is False
-    assert proj.capabilities()["guard_level"] == "bare"
-    assert moments.RealizabilityProjection().capabilities()["guard_level"] == "smooth"
+    assert proj.capabilities().to_dict()["guard_level"] == "bare"
+    assert moments.RealizabilityProjection().capabilities().to_dict()["guard_level"] == "smooth"
     assert proj.validate() is True
     # The .none() preset is the bare guard-free route.
     assert moments.RealizabilityProjection.none().options()["robust"] is False
@@ -67,7 +67,7 @@ def test_magnetic_moment_source_descriptor_contract():
     assert src.name == "MagneticMomentSource"
     assert src.category == "moment_source"
     assert src.options() == {"q_over_m": "my_q", "b_field": "my_b"}
-    assert src.capabilities()["provides"] == "magnetic_lorentz"
+    assert src.capabilities().to_dict()["provides"] == "magnetic_lorentz"
     assert src.validate() is True
     # The builder side stays: as_sources() returns a (m, M) -> list callable.
     assert callable(src.as_sources(2.0))
@@ -81,7 +81,7 @@ def test_hyqmom15_closure_descriptor_contract():
     assert closure.order == 4
     opts = closure.options()
     assert opts["variant"] == "levermore" and opts["order"] == 4
-    assert closure.capabilities()["provides"] == "order_4_standardized_moments"
+    assert closure.capabilities().to_dict()["provides"] == "order_4_standardized_moments"
     assert closure.validate() is True
     # The descriptor is still the closure callable (Spec 5 sec.6 does not change its role).
     standardized = {"S11": 0.1, "S20": 1.0, "S02": 1.0, "S30": 0.0, "S21": 0.0,
@@ -132,7 +132,7 @@ def test_hierarchy_snapshot_exposes_inspectable_descriptors():
     assert isinstance(snapshot.speeds, Descriptor)
     assert snapshot.speeds.options()["kind"] == moments.ExactSpeeds.ROE_DISSIPATION
     assert isinstance(snapshot.projection, Descriptor)
-    assert snapshot.projection.capabilities()["guard_level"] == "bare"
+    assert snapshot.projection.capabilities().to_dict()["guard_level"] == "bare"
 
 
 # The CI python runner invokes each test file as `python3 <file>`; run pytest on this module

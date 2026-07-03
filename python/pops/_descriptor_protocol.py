@@ -87,14 +87,18 @@ class Descriptor:
     def requirements(self):
         """What the route NEEDS from context, as a :class:`~pops.descriptors_report.RequirementSet`.
 
-        The default is empty. The typed set is Mapping-compatible (it subclasses ``dict``), so a
-        caller that treats it as a plain dict is unchanged (ADC-527).
+        The default is empty. The typed set is the ONE interface (ADC-625): a consumer reads it
+        through :meth:`~pops.descriptors_report.RequirementSet.check` or :meth:`to_dict`.
         """
         from pops.descriptors_report import RequirementSet
         return RequirementSet()
 
     def capabilities(self):
-        """What the route PROVIDES, as a :class:`~pops.descriptors_report.CapabilitySet` (ADC-527)."""
+        """What the route PROVIDES, as a :class:`~pops.descriptors_report.CapabilitySet` (ADC-527).
+
+        Read it through :meth:`~pops.descriptors_report.CapabilitySet.supports` (for a ``supports_``
+        tag) or :meth:`to_dict`; it is the ONE interface (ADC-625).
+        """
         from pops.descriptors_report import CapabilitySet
         return CapabilitySet()
 
@@ -132,8 +136,8 @@ class Descriptor:
 
         The lowering is metadata ONLY -- the name, the category, the native id and the chosen
         options the C++ runtime will materialise. It NEVER runs a numeric loop, opens an extension or
-        touches a cell; a descriptor computes nothing. The typed record subclasses ``dict``, so a
-        caller that read the old ``lower()`` dict is unchanged (ADC-527).
+        touches a cell; a descriptor computes nothing. The typed record exposes its fields as
+        attributes and via :meth:`to_dict` (ADC-625).
         """
         from pops.descriptors_report import LoweredDescriptor
         return LoweredDescriptor(name=self.name, category=self.category,
@@ -141,8 +145,8 @@ class Descriptor:
 
     def inspect(self):
         return {"name": self.name, "category": self.category, "native_id": self.native_id,
-                "options": self.options(), "requirements": self.requirements(),
-                "capabilities": self.capabilities()}
+                "options": self.options(), "requirements": self.requirements().to_dict(),
+                "capabilities": self.capabilities().to_dict()}
 
     def capability_matrix(self, context=None):
         """One-row ADC-549 capability matrix for this typed descriptor (metadata only)."""
@@ -150,20 +154,14 @@ class Descriptor:
         status_obj = self.available(context)
         status = {"yes": "available", "no": "unavailable",
                   "partial": "partial"}.get(status_obj.status, "unknown")
-        # capabilities() returns a typed CapabilitySet (Mapping-compatible): read the mpi/gpu route
-        # support through the typed .supports() accessor (ADC-527), falling back to a plain-dict get
-        # only for a not-yet-migrated family that still returns a bare dict.
+        # capabilities() returns a typed CapabilitySet (ADC-625): read the mpi/gpu route support
+        # through the typed .supports() accessor and the layout kind through the narrow .get().
         caps = self.capabilities()
-        supports = getattr(caps, "supports", None)
-        mpi = supports("mpi") if callable(supports) else (
-            caps.get("supports_mpi") if isinstance(caps, dict) else None)
-        gpu = supports("gpu") if callable(supports) else (
-            caps.get("supports_gpu") if isinstance(caps, dict) else None)
         row = CapabilityRouteRow(
             "%s:%s" % (self.category, self.name),
-            layout=caps.get("layout", "context") if isinstance(caps, dict) else "context",
+            layout=caps.get("layout", "context"),
             backend="native" if self.native_id else "context",
-            platform="context", mpi=mpi, gpu=gpu,
+            platform="context", mpi=caps.supports("mpi"), gpu=caps.supports("gpu"),
             status=status, limitation=status_obj.reason,
             error_message="" if status_obj.ok else str(status_obj), source="descriptor")
         return CapabilityRouteMatrix(self.name, row.layout, [row])
@@ -200,8 +198,8 @@ class DescriptorProtocol(typing.Protocol):
             route with no compiled symbol.
 
     Methods:
-        requirements(): What the route NEEDS from the context (a ``RequirementSet``; Mapping-like).
-        capabilities(): What the route PROVIDES / supports (a ``CapabilitySet``; Mapping-like).
+        requirements(): What the route NEEDS from the context (a ``RequirementSet``).
+        capabilities(): What the route PROVIDES / supports (a ``CapabilitySet``).
         options(): The configured knobs and their chosen values (a plain dict).
         available(context): An :class:`Availability` (yes / no / partial), never a bare bool.
         validate(context): A ``ValidationReport`` of accumulated errors (also raises for strict
@@ -209,10 +207,10 @@ class DescriptorProtocol(typing.Protocol):
         lower(context): The inert ``LoweredDescriptor`` record (metadata only, no computation).
         inspect(): A plain-dict view of the descriptor for tooling and printing.
 
-    ADC-527: the result objects (``RequirementSet`` / ``CapabilitySet`` / ``LoweredDescriptor`` /
-    ``ValidationReport``) are typed but Mapping-compatible -- they subclass ``dict`` so a caller that
-    treated the old returns as plain dicts is unchanged. A family that still returns a bare dict is
-    wrapped by the base :class:`Descriptor`, so it is conform the moment it inherits it.
+    ADC-527 / ADC-625: the result objects (``RequirementSet`` / ``CapabilitySet`` /
+    ``LoweredDescriptor`` / ``ValidationReport``) are TYPED, not ``dict`` subclasses. Each family
+    returns the typed object directly; a consumer reads it through the typed accessors
+    (``supports`` / ``check`` / the ``LoweredDescriptor`` attributes) or ``to_dict``.
     """
 
     name: str

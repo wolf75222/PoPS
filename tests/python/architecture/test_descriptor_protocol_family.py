@@ -1,11 +1,12 @@
-"""ADC-527: the typed DescriptorProtocol result objects exist and are Mapping-compatible.
+"""ADC-527 / ADC-625: the typed DescriptorProtocol result objects exist and are the ONE form.
 
-Source-only guards (no ``import pops`` / no ``_pops``) on the ADC-527 result-object module:
+Source-only guards (no ``import pops`` / no ``_pops``) on the result-object module:
 
 * ``python/pops/descriptors_report.py`` defines the four typed result objects (RequirementSet,
   CapabilitySet, LoweredDescriptor, ValidationReport) plus Requirement / ValidationIssue ;
-* RequirementSet / CapabilitySet / LoweredDescriptor subclass ``dict`` so every dict-consuming caller
-  is unchanged (Mapping-compatible, ADC-527) ;
+* ADC-625: RequirementSet / CapabilitySet / LoweredDescriptor are TYPED objects, NOT ``dict``
+  subclasses -- ``to_dict()`` is the only mapping bridge, so a caller reads them through the typed
+  accessors (no dict emulation crutch can come back) ;
 * ``pops.descriptors`` re-exports them, and ``pops._inspect`` defines the ``inspect`` dispatcher ;
 * the base ``Descriptor`` returns the typed objects (no bare ``{}`` / ``dict()`` literal for
   requirements / capabilities / lower).
@@ -20,7 +21,7 @@ POPS = REPO_ROOT / "python" / "pops"
 
 RESULT_OBJECTS = ("Requirement", "RequirementSet", "CapabilitySet", "LoweredDescriptor",
                   "ValidationIssue", "ValidationReport")
-DICT_SUBCLASSED = ("RequirementSet", "CapabilitySet", "LoweredDescriptor")
+TYPED_RESULT_OBJECTS = ("RequirementSet", "CapabilitySet", "LoweredDescriptor")
 
 
 def _classes(path):
@@ -36,12 +37,15 @@ def test_descriptors_report_defines_the_typed_result_objects():
         assert name in classes, "descriptors_report.py must define %r (ADC-527)" % name
 
 
-def test_mapping_compatible_result_objects_subclass_dict():
+def test_result_objects_are_typed_not_dict_subclasses():
+    # ADC-625: the ONE final form is a typed object, never a dict subclass. A dict base would let
+    # the dict-emulation crutch (x[key] / x.get / iteration) creep back; forbid it structurally.
     classes = _classes(POPS / "descriptors_report.py")
-    for name in DICT_SUBCLASSED:
+    for name in TYPED_RESULT_OBJECTS:
         bases = [b.id for b in classes[name].bases if isinstance(b, ast.Name)]
-        assert "dict" in bases, (
-            "%s must subclass dict so it stays Mapping-compatible (ADC-527 back-compat)" % name)
+        assert "dict" not in bases, (
+            "%s must NOT subclass dict (ADC-625): it is a typed object; the only mapping bridge is "
+            "to_dict()" % name)
 
 
 def test_descriptors_reexports_result_objects():

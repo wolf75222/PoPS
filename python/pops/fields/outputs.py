@@ -15,6 +15,7 @@ actual arrays. This is the typed counterpart of the flat ``physics.board_handles
 string map (which the facade ``solve_field`` shortcut still accepts).
 """
 from pops.descriptors import Descriptor
+from pops.descriptors_report import CapabilitySet, RequirementSet
 
 
 class _Output(Descriptor):
@@ -37,7 +38,7 @@ class _Output(Descriptor):
         return {"name": self._name, "recipe": self.recipe, "source": self.source}
 
     def requirements(self):
-        return {"field": self.source}
+        return RequirementSet({"field": self.source})
 
 
 class FieldOutput(_Output):
@@ -56,7 +57,7 @@ class GradientOutput(_Output):
     recipe = "grad_phi"
 
     def capabilities(self):
-        return {"vector": True, "derivative_order": 1}
+        return CapabilitySet({"vector": True, "derivative_order": 1})
 
 
 class DerivedField(_Output):
@@ -71,7 +72,7 @@ class DerivedField(_Output):
         self.recipe = str(recipe)
 
     def capabilities(self):
-        return {"derived": True}
+        return CapabilitySet({"derived": True})
 
 
 __all__ = ["FieldOutput", "GradientOutput", "DerivedField"]

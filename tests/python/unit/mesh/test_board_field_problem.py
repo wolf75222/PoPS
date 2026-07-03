@@ -41,7 +41,7 @@ def test_field_problem_returns_an_inspectable_poisson_problem():
     assert "Laplacian" in info["equation"]
     assert info["options"]["solver"] == "geometric_mg"
     assert prob.outputs is not None and set(prob.outputs) == {"phi", "grad_x", "grad_y"}
-    assert prob.capabilities()["poisson"] is True
+    assert prob.capabilities().to_dict()["poisson"] is True
 
 
 def test_field_problem_validates_and_is_available_with_a_solver():

@@ -24,11 +24,11 @@ def test_math_dtypes():
 
 def test_runtime_and_const_params():
     a = RuntimeParam("alpha", dtype=Real, default=1.0, domain=Positive())
-    assert a.name == "alpha" and a.capabilities()["runtime"] is True
+    assert a.name == "alpha" and a.capabilities().to_dict()["runtime"] is True
     assert a.options()["dtype"] == "Real"
     a.validate()  # default 1.0 satisfies Positive
     g = ConstParam("gamma", value=5.0 / 3.0)
-    assert g.capabilities()["in_cache_key"] is True and g.value == 5.0 / 3.0
+    assert g.capabilities().to_dict()["in_cache_key"] is True and g.value == 5.0 / 3.0
     assert DerivedParam("Te", expression="p/rho").category == "derived_param"
 
 
@@ -121,9 +121,9 @@ def test_output_and_checkpoint_policies():
     out = OutputPolicy(format=HDF5(parallel=True), cadence=20, fields=["phi", "E"],
                        levels=AllLevels(), require_parallel=True)
     assert out.options()["format"] == "HDF5" and out.options()["levels"] == "all"
-    assert out.requirements()["parallel_io"] is True
-    assert HDF5(parallel=True).requirements()["parallel_io"] is True
-    assert Plotfile().capabilities()["per_level"] is True
+    assert out.requirements().to_dict()["parallel_io"] is True
+    assert HDF5(parallel=True).requirements().to_dict()["parallel_io"] is True
+    assert Plotfile().capabilities().to_dict()["per_level"] is True
     assert SelectedLevels(0, 1).options()["levels"] == (0, 1)
     assert CoarseOnly().options()["levels"] == "coarse"
     chk = CheckpointPolicy(restartable=True, require_bit_identical=True)
@@ -170,7 +170,7 @@ def test_const_param_change_invalidates_cache():
     # recompile (a distinct model_hash / cache key). ConstParam.capabilities advertises this.
     from pops.codegen.compile_emit import model_hash
     from pops.physics.model import Param
-    assert ConstParam("gamma", value=1.4).capabilities()["in_cache_key"] is True
+    assert ConstParam("gamma", value=1.4).capabilities().to_dict()["in_cache_key"] is True
     slow = _scalar_model("scal_ct", Param("c", 0.25, kind="const"))
     fast = _scalar_model("scal_ct", Param("c", 4.0, kind="const"))
     assert model_hash(slow) != model_hash(fast), "a const param value must recompile"
@@ -181,8 +181,8 @@ def test_runtime_param_change_does_not_recompile():
     # so changing it is NOT a recompile while the ABI holds. RuntimeParam.capabilities advertises it.
     from pops.codegen.compile_emit import model_hash
     from pops.physics.model import Param
-    assert RuntimeParam("nu", dtype=Real).capabilities()["runtime"] is True
-    assert RuntimeParam("nu", dtype=Real).capabilities()["compile_time"] is False
+    assert RuntimeParam("nu", dtype=Real).capabilities().to_dict()["runtime"] is True
+    assert RuntimeParam("nu", dtype=Real).capabilities().to_dict()["compile_time"] is False
     slow = _scalar_model("scal_rt", Param("nu", 0.25, kind="runtime"))
     fast = _scalar_model("scal_rt", Param("nu", 4.0, kind="runtime"))
     assert model_hash(slow) == model_hash(fast), "a runtime param value must not recompile"
@@ -197,5 +197,5 @@ def test_params_public_surface_has_no_kind_or_domain_string():
         assert "kind" not in sig.parameters, "%s must not take a kind= string" % cls.__name__
     # domain= is a typed constraint slot: a bare string is refused (verified above); confirm the
     # type distinction is what carries the compile-time vs runtime choice.
-    assert RuntimeParam("a").capabilities()["runtime"] is True
-    assert ConstParam("g", 1.0).capabilities()["compile_time"] is True
+    assert RuntimeParam("a").capabilities().to_dict()["runtime"] is True
+    assert ConstParam("g", 1.0).capabilities().to_dict()["compile_time"] is True

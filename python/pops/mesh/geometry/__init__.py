@@ -18,6 +18,7 @@ cross-layer dependency; the package stays inert and runtime-free at module scope
 """
 from .._descriptor import Availability, MeshDescriptor
 from ..masks import lower_disc_mode
+from ...descriptors_report import CapabilitySet, RequirementSet
 
 
 class _Boundary(MeshDescriptor):
@@ -40,7 +41,7 @@ class _Geometry(MeshDescriptor):
         return _Boundary(self)
 
     def capabilities(self):
-        return {"provides": "level_set"}
+        return CapabilitySet({"provides": "level_set"})
 
     def lower_wall(self):
         """Lower this geometry to the native Poisson wall tokens ``(wall, wall_radius)``.
@@ -59,7 +60,7 @@ class NoWall(_Geometry):
     """No conducting wall: the elliptic solve sees the full Cartesian square (wall='none')."""
 
     def capabilities(self):
-        return {"provides": "level_set", "wall": False}
+        return CapabilitySet({"provides": "level_set", "wall": False})
 
     def lower_wall(self):
         """Lower to the native no-wall tokens (byte-identical to ``wall='none'``)."""
@@ -142,13 +143,13 @@ class DiscDomain(MeshDescriptor):
                 "mode": self.mode if isinstance(self.mode, str) else self.mode.name}
 
     def capabilities(self):
-        return {"transport_domain": "disc"}
+        return CapabilitySet({"transport_domain": "disc"})
 
     def requirements(self):
         # A cut-cell disc needs embedded-boundary support; surface the mode's own requirements.
         if isinstance(self.mode, str):
-            return {}
-        return dict(self.mode.requirements())
+            return RequirementSet()
+        return self.mode.requirements()
 
     def available(self, context=None):
         """Defer to the chosen transport mode's availability (a typed mask explains itself)."""
@@ -180,8 +181,8 @@ class EmbeddedBoundary(MeshDescriptor):
         return {"domain": self.domain.name, "transport": self.transport.name}
 
     def requirements(self):
-        return {"embedded_boundary_support": True,
-                "geometry": self.domain.name, "transport_mask": self.transport.name}
+        return RequirementSet({"embedded_boundary_support": True,
+                               "geometry": self.domain.name, "transport_mask": self.transport.name})
 
 
 __all__ = ["Disc", "NoWall", "HalfPlane", "LevelSet", "DiscDomain", "EmbeddedBoundary"]

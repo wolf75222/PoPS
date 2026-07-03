@@ -50,7 +50,7 @@ def test_linear_operator_is_inert_descriptor():
     assert A.name == "laplacian"
     assert A.native_id == "pops::DivEpsGrad"
     assert A.options() == {"name": "laplacian"}
-    assert A.capabilities() == {"matrix_free": False}
+    assert A.capabilities().to_dict() == {"matrix_free": False}
     info = A.inspect()
     assert info["category"] == "linear_operator"
     assert info["native_id"] == "pops::DivEpsGrad"
@@ -68,7 +68,7 @@ def test_matrix_free_operator_is_matrix_free():
     assert M.category == "linear_operator"
     assert M.name == "stencil_apply"
     assert M.native_id is None
-    assert M.capabilities() == {"matrix_free": True}
+    assert M.capabilities().to_dict() == {"matrix_free": True}
     assert M.options() == {"name": "stencil_apply"}
     assert "stencil_apply" in repr(M)
 
@@ -83,8 +83,8 @@ def test_linear_problem_constructs_and_inspects():
     assert opts["operator"] == "A"
     assert opts["unknown"] == "phi"
     assert opts["rhs"] == "b"
-    assert p.requirements() == {"operator": True, "unknown": True, "rhs": True}
-    assert p.capabilities() == {"linear": True, "matrix_free": False}
+    assert p.requirements().to_dict() == {"operator": True, "unknown": True, "rhs": True}
+    assert p.capabilities().to_dict() == {"linear": True, "matrix_free": False}
     info = p.inspect()
     assert info["operator"] == "A" and info["unknown"] == "phi" and info["rhs"] == "b"
     assert "LinearProblem" in repr(p)
@@ -100,7 +100,7 @@ def test_linear_problem_named():
 def test_linear_problem_matrix_free_capability_propagates():
     M = MatrixFreeOperator("apply")
     p = LinearProblem(operator=M, unknown="x", rhs="b")
-    assert p.capabilities() == {"linear": True, "matrix_free": True}
+    assert p.capabilities().to_dict() == {"linear": True, "matrix_free": True}
 
 
 def test_linear_problem_validate_accepts_linear_operator():
@@ -144,7 +144,7 @@ def test_linear_problem_lowers_to_solve_linear_shaped_record():
     M = MatrixFreeOperator("stencil_apply")
     p = LinearProblem(operator=M, unknown=_Handle("phi"), rhs=_Handle("b"),
                       method=_krylov("GMRES", max_iter=150), tol=1e-9, max_iter=150, restart=20)
-    rec = p.lower()
+    rec = p.lower().to_dict()
     assert rec["method"] == "gmres"
     assert rec["preconditioner"] == "identity"  # None defaults to the unpreconditioned scheme
     assert rec["tol"] == 1e-9
@@ -163,7 +163,7 @@ def test_linear_problem_lower_matches_program_solve_linear_attrs():
     M = MatrixFreeOperator("apply")
     p = LinearProblem(operator=M, unknown="x", rhs=_Handle("b"),
                       method=method, preconditioner=precond, tol=1e-7, max_iter=80)
-    rec = p.lower()
+    rec = p.lower().to_dict()
     assert rec["method"] == _lower_krylov_method(method)
     assert rec["preconditioner"] == _lower_preconditioner(precond)
 
@@ -288,7 +288,7 @@ def test_dot_builds_a_reduction_descriptor():
     assert isinstance(d, Descriptor)
     assert d.category == "reduction"
     assert d.options() == {"op": "dot", "a": "a", "b": "b"}
-    assert d.requirements() == {"operands": 2}
+    assert d.requirements().to_dict() == {"operands": 2}
     # It only references the operands; it did NOT compute an inner product.
     assert d.a is a and d.b is b
 
@@ -300,7 +300,7 @@ def test_norm2_builds_a_reduction_descriptor():
     assert isinstance(n, Descriptor)
     assert n.category == "reduction"
     assert n.options() == {"op": "norm2", "x": "x"}
-    assert n.requirements() == {"operands": 1}
+    assert n.requirements().to_dict() == {"operands": 1}
     assert n.x is x
 
 

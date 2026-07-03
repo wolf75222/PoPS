@@ -15,6 +15,7 @@ model declares. The moment-hierarchy strategy stays :class:`pops.moments.speeds.
 (a different axis: it chooses HOW the exact speeds are computed, not which source HLL binds).
 """
 from pops.descriptors import Descriptor
+from pops.descriptors_report import CapabilitySet, RequirementSet
 
 
 class WaveSpeedProvider(Descriptor):
@@ -55,13 +56,13 @@ class WaveSpeedProvider(Descriptor):
             "davis": "the Davis wave-speed estimate hook",
             "max_wave_speed": "max_wave_speed (the Rusanov spectral-radius majorant)",
         }
-        return {"model": needs[self.kind]}
+        return RequirementSet({"model": needs[self.kind]})
 
     def capabilities(self):
         """What the source PROVIDES: a signed pair, or (max_wave_speed) only an unsigned majorant."""
         if self.kind == "max_wave_speed":
-            return {"signed_pair": False, "majorant": True}
-        return {"signed_pair": True}
+            return CapabilitySet({"signed_pair": False, "majorant": True})
+        return CapabilitySet({"signed_pair": True})
 
     def options(self):
         return dict(self._options, kind=self.kind)

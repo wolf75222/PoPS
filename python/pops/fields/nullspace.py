@@ -8,6 +8,7 @@ constant nullspace; the runtime pins the mean.
 Inert descriptors; they compute nothing.
 """
 from pops.descriptors import Descriptor
+from pops.descriptors_report import CapabilitySet
 
 
 class ConstantNullspace(Descriptor):
@@ -23,7 +24,7 @@ class ConstantNullspace(Descriptor):
         return {"nullspace": "constant"}
 
     def capabilities(self):
-        return {"removes_constant": True}
+        return CapabilitySet({"removes_constant": True})
 
 
 __all__ = ["ConstantNullspace"]

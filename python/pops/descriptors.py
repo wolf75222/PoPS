@@ -81,20 +81,15 @@ class BrickDescriptor:
     def lower(self, context=None):
         """The inert :class:`~pops.descriptors_report.LoweredDescriptor` for this brick (ADC-527).
 
-        Metadata only, no computation. The typed record subclasses ``dict``, so a caller that read
-        the old ``lower()`` dict (``name`` / ``category`` / ``native_id`` / ``scheme`` / ``options``)
-        is unchanged. A route with an empty ``native_id`` (a catalogued-but-not-native brick) is left
-        to the loud :meth:`validate` refusal upstream -- never a silent fallback.
+        Metadata only, no computation. The typed record carries ``name`` / ``category`` /
+        ``native_id`` / ``scheme`` / ``options`` as attributes (and via ``to_dict``; ADC-625). A route
+        with an empty ``native_id`` (a catalogued-but-not-native brick) is left to the loud
+        :meth:`validate` refusal upstream -- never a silent fallback.
         """
         from pops.descriptors_report import LoweredDescriptor
-        record = LoweredDescriptor(name=self.name, category=self.category,
-                                   native_id=self.native_id or None, options=dict(self.options),
-                                   extra={"scheme": self.scheme})
-        # Keep ``scheme`` at the TOP level (not just under ``extra``) so callers that read the old
-        # ``lower()["scheme"]`` are unchanged.
-        record["scheme"] = self.scheme
-        record.scheme = self.scheme
-        return record
+        return LoweredDescriptor(name=self.name, category=self.category,
+                                 native_id=self.native_id or None, options=dict(self.options),
+                                 scheme=self.scheme)
 
     def availability(self, context=None):
         """The EXPLAINABLE availability status of this brick (ADC-527: not just the bool attribute).

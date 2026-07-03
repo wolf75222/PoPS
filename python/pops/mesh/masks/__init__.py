@@ -10,6 +10,7 @@ shared :func:`lower_disc_mode`, which also passes a legacy string through unchan
 token is byte-identical to what a user passes today in the string form.
 """
 from .._descriptor import MeshDescriptor
+from ...descriptors_report import RequirementSet, CapabilitySet
 
 #: The native disc-transport tokens (single source). A typed mask lowers to one of these.
 DISC_MODE_TOKENS = ("none", "staircase", "cutcell")
@@ -36,7 +37,7 @@ class NoMask(_TransportMask):
     mode_token = "none"
 
     def capabilities(self):
-        return {"masked_transport": False}
+        return CapabilitySet({"masked_transport": False})
 
 
 class Staircase(_TransportMask):
@@ -45,7 +46,7 @@ class Staircase(_TransportMask):
     mode_token = "staircase"
 
     def capabilities(self):
-        return {"masked_transport": True, "conservative": False}
+        return CapabilitySet({"masked_transport": True, "conservative": False})
 
 
 class CutCell(_TransportMask):
@@ -54,10 +55,10 @@ class CutCell(_TransportMask):
     mode_token = "cutcell"
 
     def requirements(self):
-        return {"embedded_boundary_support": True}
+        return RequirementSet({"embedded_boundary_support": True})
 
     def capabilities(self):
-        return {"masked_transport": True, "conservative": True}
+        return CapabilitySet({"masked_transport": True, "conservative": True})
 
 
 def lower_disc_mode(mode):

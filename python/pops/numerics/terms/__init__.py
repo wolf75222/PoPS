@@ -10,6 +10,7 @@ Every term is an inert :class:`pops.descriptors.Descriptor`; codegen / runtime t
 declared composition into the discrete residual after validation.
 """
 from pops.descriptors import Descriptor
+from pops.descriptors_report import CapabilitySet
 
 
 class Flux(Descriptor):
@@ -25,7 +26,7 @@ class Flux(Descriptor):
         return {"term": "flux"}
 
     def capabilities(self):
-        return {"conservative": True, "divergence": True}
+        return CapabilitySet({"conservative": True, "divergence": True})
 
 
 class SourceTerm(Descriptor):
@@ -47,7 +48,7 @@ class SourceTerm(Descriptor):
         return {"term": "source", "name": self._name}
 
     def capabilities(self):
-        return {"local": True}
+        return CapabilitySet({"local": True})
 
 
 class LocalTerm(Descriptor):
@@ -70,7 +71,7 @@ class LocalTerm(Descriptor):
         return {"term": "local", "name": self._name}
 
     def capabilities(self):
-        return {"local": True, "algebraic": True}
+        return CapabilitySet({"local": True, "algebraic": True})
 
 
 __all__ = ["Flux", "SourceTerm", "LocalTerm"]

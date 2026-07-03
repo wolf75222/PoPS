@@ -48,7 +48,8 @@ def _context_is_amr_layout(context):
             declared = caps()
         except Exception:
             return False  # available() must never raise: an odd context is simply "not AMR"
-        if isinstance(declared, dict) and declared.get("layout") == "amr":
+        # ``declared`` is a typed CapabilitySet (or a plain dict): both expose ``.get`` (ADC-625).
+        if hasattr(declared, "get") and declared.get("layout") == "amr":
             return True
     return False
 
@@ -99,12 +100,14 @@ class LinearProblem(Descriptor):
                 "preconditioner": _handle_name(self.preconditioner)}
 
     def requirements(self):
-        return {"operator": True, "unknown": True, "rhs": True}
+        from pops.descriptors_report import RequirementSet
+        return RequirementSet({"operator": True, "unknown": True, "rhs": True})
 
     def capabilities(self):
+        from pops.descriptors_report import CapabilitySet
         matrix_free = bool(getattr(self.operator, "capabilities", dict)().get("matrix_free")) \
             if isinstance(self.operator, _OPERATOR_TYPES) else False
-        return {"linear": True, "matrix_free": matrix_free}
+        return CapabilitySet({"linear": True, "matrix_free": matrix_free})
 
     def available(self, context=None):
         """An explainable status; the ``missing`` tag NAMES the incompatibility class (ADC-535)."""
@@ -184,17 +187,19 @@ class LinearProblem(Descriptor):
             raise ValueError(
                 "%s.lower(): max_iter is required and must be a positive int (dynamic solver "
                 "loops require max_iter); got %r" % (self.name, self.max_iter))
-        rec = super().lower(context)
-        rec["operator"] = _handle_name(self.operator)
-        rec["unknown"] = _handle_name(self.unknown)
-        rec["rhs"] = _handle_name(self.rhs)
-        rec["method"] = scheme
-        rec["preconditioner"] = precond
-        rec["tol"] = float(self.tol)
-        rec["max_iter"] = int(self.max_iter)
-        rec["restart"] = int(self.restart) if scheme == "gmres" and self.restart is not None \
-            else None
-        return rec
+        from pops.descriptors_report import LoweredDescriptor
+        return LoweredDescriptor(
+            name=self.name, category=self.category, native_id=self.native_id,
+            options=self.options(),
+            extra={"operator": _handle_name(self.operator),
+                   "unknown": _handle_name(self.unknown),
+                   "rhs": _handle_name(self.rhs),
+                   "method": scheme,
+                   "preconditioner": precond,
+                   "tol": float(self.tol),
+                   "max_iter": int(self.max_iter),
+                   "restart": int(self.restart) if scheme == "gmres" and self.restart is not None
+                   else None})
 
     def inspect(self):
         info = super().inspect()
@@ -223,7 +228,8 @@ class Residual(Descriptor):
         return {"problem": _handle_name(self.problem)}
 
     def requirements(self):
-        return {"problem": True}
+        from pops.descriptors_report import RequirementSet
+        return RequirementSet({"problem": True})
 
     def available(self, context=None):
         if not isinstance(self.problem, LinearProblem):

@@ -117,7 +117,7 @@ def test_problem_is_not_a_descriptor():
     assert isinstance(prob, DescriptorProtocol)
     assert prob.validate.__self__ is prob  # validate() is implemented directly on Problem.
     assert prob.inspect()["category"] == "problem"
-    assert prob.lower()["name"] == "arch"
+    assert prob.lower().to_dict()["name"] == "arch"
     # The layout it CONTAINS is still a descriptor (the assembly holds descriptors).
     assert isinstance(prob.layout, Descriptor)
 

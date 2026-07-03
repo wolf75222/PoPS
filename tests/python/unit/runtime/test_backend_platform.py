@@ -54,9 +54,9 @@ def test_backend_descriptor_is_inert_typed_descriptor():
     assert isinstance(prod, _Backend)
     assert prod.category == "backend"
     # capabilities come from the honest native backend table (cpu/mpi/amr/gpu).
-    caps = prod.capabilities()
+    caps = prod.capabilities().to_dict()
     assert caps["cpu"] is True and caps["mpi"] is True and caps["amr"] is True
-    assert JIT().capabilities()["mpi"] is False
+    assert JIT().capabilities().to_dict()["mpi"] is False
     # inspect is a plain dict carrying the platform slot.
     record = prod.inspect()
     assert record["category"] == "backend"
@@ -219,11 +219,11 @@ def test_backend_refuses_string_platform():
 
 # --- platform descriptors: capabilities + explainable availability ----------------------------
 def test_platform_descriptors_declare_capabilities():
-    assert KokkosSerial().capabilities() == {"host": True, "gpu": False, "mpi": False}
-    assert KokkosOpenMP().capabilities()["host"] is True
-    assert KokkosCuda().capabilities()["gpu"] is True
-    assert KokkosHIP().capabilities()["gpu"] is True
-    assert MPI().capabilities()["mpi"] is True
+    assert KokkosSerial().capabilities().to_dict() == {"host": True, "gpu": False, "mpi": False}
+    assert KokkosOpenMP().capabilities().to_dict()["host"] is True
+    assert KokkosCuda().capabilities().to_dict()["gpu"] is True
+    assert KokkosHIP().capabilities().to_dict()["gpu"] is True
+    assert MPI().capabilities().to_dict()["mpi"] is True
     for cls in (KokkosSerial, KokkosOpenMP, KokkosCuda, KokkosHIP, MPI):
         desc = cls()
         assert desc.category == "platform"
@@ -264,7 +264,7 @@ def test_unavailable_platform_explains_missing_build_flag():
 
 
 def test_platform_lower_is_inert_metadata():
-    record = MPI().lower()
+    record = MPI().lower().to_dict()
     assert record["category"] == "platform"
     assert record["device"] == "mpi"
     assert record["capabilities"]["mpi"] is True
@@ -297,7 +297,7 @@ def test_layout_descriptors_expose_no_target_string():
     from pops.mesh.cartesian import CartesianMesh
     from pops.mesh.layouts import AMR, Uniform
     for layout, kind in ((Uniform(CartesianMesh(n=64)), "uniform"), (AMR(base=CartesianMesh(n=64)), "amr")):
-        assert layout.capabilities()["layout"] == kind
+        assert layout.capabilities().to_dict()["layout"] == kind
         opts = layout.options()
         assert "target" not in opts, opts
         for value in opts.values():

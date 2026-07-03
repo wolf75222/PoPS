@@ -65,6 +65,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   rules: a new `tests/python/architecture/test_package_layout.py` asserts the presets package exists
   and that no package is shadowed by a flat root module of the same name; `test_lib_keeps_only_presets`
   now allows the `presets` sub-package.
+- ADC-625 The typed descriptor result objects (`RequirementSet` / `CapabilitySet` /
+  `LoweredDescriptor`) are the ONE final form: they are typed objects, no longer `dict` subclasses.
+  Every descriptor family (`numerics` / `fields` / `solvers` / `mesh` / `params` / `linalg` /
+  `diagnostics` / `platforms` / external bricks) returns the typed object directly, and every
+  consumer reads it through the typed accessors (`supports(tag)` / `check(context)` / the
+  `LoweredDescriptor` attributes) or `to_dict()`; the dict-emulation crutch is removed and fenced by
+  `tests/python/architecture/test_descriptor_protocol_family.py`.
 
 ### Removed
 - ADC-523 Removed `compile_problem` / `CompiledProblem` from `pops.__all__` and the top-level lazy
