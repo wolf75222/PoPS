@@ -6,6 +6,10 @@ a coarse-grid solver (:class:`DirectSmallGrid`). These are inert descriptors -- 
 the choice and its knobs and compute nothing; the C++ multigrid kernel runs the smoother and
 the coarse solve.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Descriptor
 
 
@@ -18,7 +22,7 @@ class Chebyshev(Descriptor):
     category = "smoother"
     native_id = None
 
-    def __init__(self, degree=2):
+    def __init__(self, degree: int = 2) -> None:
         if isinstance(degree, bool) or not isinstance(degree, int):
             raise TypeError("Chebyshev(degree=) must be a Python int; got %r" % (degree,))
         if degree < 1:
@@ -26,13 +30,13 @@ class Chebyshev(Descriptor):
         self.degree = int(degree)
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "chebyshev"
 
-    def options(self):
+    def options(self) -> dict:
         return {"degree": self.degree}
 
-    def lower(self, context=None):
+    def lower(self, context: Any = None) -> dict:
         return {"kind": "chebyshev", "degree": self.degree}
 
 
@@ -43,13 +47,13 @@ class RedBlackGaussSeidel(Descriptor):
     native_id = None
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "red_black_gauss_seidel"
 
-    def options(self):
+    def options(self) -> dict:
         return {}
 
-    def lower(self, context=None):
+    def lower(self, context: Any = None) -> dict:
         return {"kind": "red_black_gauss_seidel"}
 
 
@@ -63,7 +67,7 @@ class DirectSmallGrid(Descriptor):
     category = "coarse_solver"
     native_id = None
 
-    def __init__(self, threshold=100):
+    def __init__(self, threshold: int = 100) -> None:
         if isinstance(threshold, bool) or not isinstance(threshold, int):
             raise TypeError(
                 "DirectSmallGrid(threshold=) must be a Python int; got %r" % (threshold,))
@@ -72,13 +76,13 @@ class DirectSmallGrid(Descriptor):
         self.threshold = int(threshold)
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "direct_small_grid"
 
-    def options(self):
+    def options(self) -> dict:
         return {"threshold": self.threshold}
 
-    def lower(self, context=None):
+    def lower(self, context: Any = None) -> dict:
         return {"kind": "direct_small_grid", "threshold": self.threshold}
 
 

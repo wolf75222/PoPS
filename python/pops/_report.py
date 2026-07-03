@@ -12,7 +12,10 @@ printer. A subclass sets ``report_type`` / ``schema_version`` and defines its at
 :meth:`to_dict`; it inherits the rest. A report is INERT -- building one runs no numeric loop, opens
 no extension and triggers no validation / compilation (it reads carried metadata only).
 """
+from __future__ import annotations
+
 import json
+from typing import Any
 
 
 class Report:
@@ -30,17 +33,17 @@ class Report:
     #: The report's schema version; bump only on a breaking shape change (additive keeps it).
     schema_version = 1
 
-    def _stamp(self, payload):
+    def _stamp(self, payload: dict) -> dict:
         """Prepend the ``report_type`` / ``schema_version`` identity to a subclass ``to_dict`` body."""
         stamped = {"report_type": self.report_type, "schema_version": self.schema_version}
         stamped.update(payload)
         return stamped
 
-    def to_dict(self):  # pragma: no cover - overridden by every concrete report
+    def to_dict(self) -> dict:  # pragma: no cover - overridden by every concrete report
         """A JSON-ready dict view (subclasses override; must call :meth:`_stamp`)."""
         return self._stamp({})
 
-    def to_json(self, path=None, *, indent=2):
+    def to_json(self, path: Any = None, *, indent: int = 2) -> Any:
         """Serialise :meth:`to_dict` to JSON; write to ``path`` if given, else return the string."""
         text = json.dumps(self.to_dict(), indent=indent, sort_keys=True)
         if path is not None:
@@ -49,7 +52,7 @@ class Report:
             return path
         return text
 
-    def __str__(self):
+    def __str__(self) -> str:
         """A short, deterministic pretty print (a subclass may override for a richer table)."""
         lines = ["%s (schema v%d):" % (self.report_type, self.schema_version)]
         for key, value in self.to_dict().items():
@@ -58,11 +61,11 @@ class Report:
             lines.append("  %-14s %s" % (key, _short(value)))
         return "\n".join(lines)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "%s(report_type=%r)" % (type(self).__name__, self.report_type)
 
 
-def _short(value):
+def _short(value: Any) -> str:
     """A compact, single-line rendering of a value for the ``__str__`` pretty printer."""
     if isinstance(value, dict):
         return "{%d key(s)}" % len(value)

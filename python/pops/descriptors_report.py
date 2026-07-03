@@ -15,22 +15,26 @@ typed helpers (:meth:`RequirementSet.check`, :meth:`CapabilitySet.supports`, and
 :class:`LoweredDescriptor` attributes) are the vocabulary every producer and consumer speaks. These
 objects run NO numeric loop and touch no runtime.
 """
+from __future__ import annotations
+
+from typing import Any
 
 
 class Requirement:
     """One typed requirement: a key, its required value, why, and what may satisfy it."""
 
-    def __init__(self, key, *, value=True, reason="", satisfied_by=None):
+    def __init__(self, key: Any, *, value: Any = True, reason: str = "",
+                 satisfied_by: Any = None) -> None:
         self.key = str(key)
         self.value = value
         self.reason = str(reason)
         self.satisfied_by = satisfied_by
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {"key": self.key, "value": self.value, "reason": self.reason,
                 "satisfied_by": self.satisfied_by}
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "Requirement(%r, value=%r)" % (self.key, self.value)
 
 
@@ -42,7 +46,7 @@ class RequirementSet:
     iterable of :class:`Requirement`.
     """
 
-    def __init__(self, requirements=()):
+    def __init__(self, requirements: Any = ()) -> None:
         self._data = {}
         if isinstance(requirements, dict):
             self._data.update(requirements)
@@ -51,15 +55,15 @@ class RequirementSet:
                 self._data[req.key] = req.value
 
     @classmethod
-    def from_dict(cls, mapping):
+    def from_dict(cls, mapping: Any) -> RequirementSet:
         return cls(dict(mapping or {}))
 
-    def add(self, key, *, value=True, reason=""):
+    def add(self, key: Any, *, value: Any = True, reason: str = "") -> RequirementSet:
         """Add a requirement (chains)."""
         self._data[str(key)] = value
         return self
 
-    def check(self, context):
+    def check(self, context: Any) -> ValidationReport:
         """Metadata-only membership check: report each requirement the context does not satisfy.
 
         NO numerics -- a requirement is satisfied when @p context carries a truthy value for its
@@ -78,18 +82,18 @@ class RequirementSet:
                              context={"requirement": key})
         return report
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return dict(self._data)
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return isinstance(other, RequirementSet) and self._data == other._data
 
-    __hash__ = None
+    __hash__ = None  # type: ignore[assignment]  # unhashable (defines __eq__): the standard idiom
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         return bool(self._data)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "RequirementSet(%r)" % (self._data,)
 
 
@@ -103,7 +107,7 @@ class CapabilitySet:
     ``capabilities`` attribute dict -- via :meth:`from_dict`.
     """
 
-    def __init__(self, capabilities=()):
+    def __init__(self, capabilities: Any = ()) -> None:
         self._data = {}
         if isinstance(capabilities, dict):
             self._data.update(capabilities)
@@ -113,15 +117,15 @@ class CapabilitySet:
                 self._data[key] = value
 
     @classmethod
-    def from_dict(cls, mapping):
+    def from_dict(cls, mapping: Any) -> CapabilitySet:
         return cls(dict(mapping or {}))
 
-    def supports(self, tag):
+    def supports(self, tag: Any) -> bool:
         """True when the route supports @p tag (reads ``supports_<tag>``; False if absent)."""
         key = tag if str(tag).startswith("supports_") else "supports_%s" % tag
         return bool(self._data.get(key, self._data.get(str(tag), False)))
 
-    def get(self, key, default=None):
+    def get(self, key: Any, default: Any = None) -> Any:
         """Read one capability value (metadata only; ``default`` when absent).
 
         A narrow, explicit accessor for the handful of non-``supports_`` capabilities a route reads
@@ -130,18 +134,18 @@ class CapabilitySet:
         """
         return self._data.get(key, default)
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return dict(self._data)
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return isinstance(other, CapabilitySet) and self._data == other._data
 
-    __hash__ = None
+    __hash__ = None  # type: ignore[assignment]  # unhashable (defines __eq__): the standard idiom
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         return bool(self._data)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "CapabilitySet(%r)" % (self._data,)
 
 
@@ -155,8 +159,9 @@ class LoweredDescriptor:
     fail loud upstream (no silent fallback).
     """
 
-    def __init__(self, *, name, category, native_id, options=None, ir=None,
-                 manifest_entry=None, extra=None, scheme=None):
+    def __init__(self, *, name: Any, category: Any, native_id: Any, options: Any = None,
+                 ir: Any = None, manifest_entry: Any = None, extra: Any = None,
+                 scheme: Any = None) -> None:
         self.name = str(name)
         self.category = str(category)
         self.native_id = native_id
@@ -167,14 +172,14 @@ class LoweredDescriptor:
         self.scheme = scheme
 
     @classmethod
-    def from_dict(cls, mapping):
+    def from_dict(cls, mapping: Any) -> LoweredDescriptor:
         data = dict(mapping or {})
         return cls(name=data.get("name", ""), category=data.get("category", "descriptor"),
                    native_id=data.get("native_id"), options=data.get("options"),
                    ir=data.get("ir"), manifest_entry=data.get("manifest_entry"),
                    extra=data.get("extra"), scheme=data.get("scheme"))
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         out = {"name": self.name, "category": self.category, "native_id": self.native_id,
                "options": dict(self.options)}
         if self.scheme is not None:
@@ -189,12 +194,12 @@ class LoweredDescriptor:
         out.update(self.extra)
         return out
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return isinstance(other, LoweredDescriptor) and self.to_dict() == other.to_dict()
 
-    __hash__ = None
+    __hash__ = None  # type: ignore[assignment]  # unhashable (defines __eq__): the standard idiom
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "LoweredDescriptor(name=%r, category=%r, native_id=%r)" % (
             self.name, self.category, self.native_id)
 
@@ -202,8 +207,8 @@ class LoweredDescriptor:
 class ValidationIssue:
     """One structured validation error: its family, a stable code, a message and user context."""
 
-    def __init__(self, *, family, code, message, context=None, severity="error",
-                 alternatives=()):
+    def __init__(self, *, family: Any, code: Any, message: Any, context: Any = None,
+                 severity: str = "error", alternatives: Any = ()) -> None:
         self.family = str(family)
         self.code = str(code)
         self.message = str(message)
@@ -211,18 +216,18 @@ class ValidationIssue:
         self.severity = str(severity)
         self.alternatives = list(alternatives or [])
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {"family": self.family, "code": self.code, "message": self.message,
                 "context": dict(self.context), "severity": self.severity,
                 "alternatives": list(self.alternatives)}
 
-    def __str__(self):
+    def __str__(self) -> str:
         head = "[%s/%s] %s" % (self.family, self.code, self.message)
         if self.alternatives:
             head += " (alternatives: %s)" % ", ".join(self.alternatives)
         return head
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "ValidationIssue(family=%r, code=%r)" % (self.family, self.code)
 
 
@@ -236,56 +241,57 @@ class ValidationReport:
     Problem-facing view over this same shape.
     """
 
-    def __init__(self, subject=None):
+    def __init__(self, subject: Any = None) -> None:
         self.subject = subject
         self._issues = []
 
-    def add(self, issue):
+    def add(self, issue: ValidationIssue) -> ValidationReport:
         self._issues.append(issue)
         return self
 
-    def error(self, family, code, message, *, context=None, alternatives=()):
+    def error(self, family: Any, code: Any, message: Any, *, context: Any = None,
+              alternatives: Any = ()) -> ValidationReport:
         return self.add(ValidationIssue(family=family, code=code, message=message,
                                         context=context, severity="error",
                                         alternatives=alternatives))
 
-    def extend(self, other):
+    def extend(self, other: ValidationReport | None) -> ValidationReport:
         if other is not None:
             self._issues.extend(other.issues)
         return self
 
     @property
-    def issues(self):
+    def issues(self) -> list:
         return list(self._issues)
 
-    def by_family(self):
+    def by_family(self) -> dict:
         grouped = {}
         for issue in self._issues:
             grouped.setdefault(issue.family, []).append(issue)
         return grouped
 
     @property
-    def ok(self):
+    def ok(self) -> bool:
         return not any(issue.severity == "error" for issue in self._issues)
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         return self.ok
 
-    def __iter__(self):
+    def __iter__(self) -> Any:
         return iter(self._issues)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._issues)
 
-    def raise_if_error(self):
+    def raise_if_error(self) -> None:
         if not self.ok:
             raise ValueError(str(self))
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {"subject": getattr(self.subject, "name", None),
                 "ok": self.ok, "issues": [issue.to_dict() for issue in self._issues]}
 
-    def __str__(self):
+    def __str__(self) -> str:
         if self.ok:
             return "validation ok"
         lines = ["validation failed:"]
@@ -295,7 +301,7 @@ class ValidationReport:
                 lines.append("    - %s" % issue)
         return "\n".join(lines)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "ValidationReport(%d issue(s), ok=%s)" % (len(self._issues), self.ok)
 
 
