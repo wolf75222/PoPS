@@ -83,6 +83,21 @@ class CompiledProblem:
         # resolved -- a documented absence, not a fabricated default).
         self._codegen_env = codegen_env
 
+    def _seal(self):
+        """Make this handle immutable (ADC-563): ``pops.compile`` seals it after its last attach.
+
+        The advanced ``pops.codegen.compile_problem`` route returns an unsealed handle (its callers
+        legitimately attach orchestration metadata); the PUBLIC artifact is sealed."""
+        object.__setattr__(self, "_sealed", True)
+
+    def __setattr__(self, name, value):
+        if getattr(self, "_sealed", False):
+            raise AttributeError(
+                "CompiledProblem is immutable after pops.compile (ADC-563): cannot set %r. The "
+                "artifact is frozen to what was compiled; assemble a new Problem and recompile to "
+                "change it." % (name,))
+        object.__setattr__(self, name, value)
+
     def __fspath__(self):
         return self.so_path
 

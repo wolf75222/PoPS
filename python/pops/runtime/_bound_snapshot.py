@@ -198,7 +198,7 @@ def build_uniform_snapshot(engine, compiled, resolved_models, instances, solvers
         layout="system", blocks=blocks, solvers=solver_tokens, program_hash=_program_hash(compiled),
         abi_key=getattr(compiled, "abi_key", None), cache_key=getattr(compiled, "cache_key", None),
         cadence=_cadence_row(cadence), aux=list(aux or {}), params=list(params or {}),
-        outputs=[type(p).__name__ for p in getattr(engine, "_output_policies", []) or []])
+        outputs=[_output_policy_row(p) for p in getattr(engine, "_output_policies", []) or []])
 
 
 def build_amr_snapshot(instances, solvers, aux, params):
@@ -222,6 +222,31 @@ def build_amr_snapshot(instances, solvers, aux, params):
     return BoundSnapshot(layout="amr_system", blocks=blocks, solvers=solver_tokens,
                          program_hash=None, abi_key=None, cache_key=None, cadence=None,
                          aux=list(aux or {}), params=list(params or {}), outputs=[])
+
+
+def _output_policy_row(policy):
+    """The typed ``{name, category, options}`` row of an output / checkpoint policy (ADC-562 / G9).
+
+    Enriches the snapshot's ``outputs`` from a bare type name to the policy's typed options
+    (format / cadence / levels / prefix). Each option value is coerced JSON-ready (a non-scalar such
+    as a Schedule cadence becomes its name token) so the snapshot round-trips through JSON. A policy
+    exposing no ``options`` degrades to its class name so an unusual entry never breaks it."""
+    opts = getattr(policy, "options", None)
+    raw = opts() if callable(opts) else {}
+    return {"name": getattr(policy, "name", type(policy).__name__),
+            "category": getattr(policy, "category", None),
+            "options": {k: _jsonable_option(v) for k, v in raw.items()}}
+
+
+def _jsonable_option(value):
+    """Coerce an option value to a JSON-ready form (a non-scalar, e.g. a Schedule, becomes a token)."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_jsonable_option(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _jsonable_option(v) for k, v in value.items()}
+    return getattr(value, "name", None) or repr(value)
 
 
 __all__ = ["BoundSnapshot", "block_snapshot_entry", "build_uniform_snapshot", "build_amr_snapshot",

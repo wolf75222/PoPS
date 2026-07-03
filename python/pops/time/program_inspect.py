@@ -5,12 +5,55 @@ memory-traffic + kernel-count ``estimate``, the GPU anti-pattern detectors (``gp
 and the human-readable ``estimate_report`` (Spec 3 s28, ADC-465). A REPORT surface: pure IR
 analysis, never mutates the Program, no codegen / _pops.
 """
+from pops._report import Report
 from pops.time.program_base import _ProgramConstants
 from pops.time.values import Value, _Affine  # noqa: F401
 
 
+class ProgramReport(Report):
+    """The typed inspection report of a :class:`pops.time.Program` (ADC-564).
+
+    Attributes: ``name`` / ``ops`` (node count) / ``commits`` (committed block names) / ``hash``
+    (the IR hash) / ``histories`` / ``dt_bound`` / ``scratch`` (the static buffer estimate). Inert:
+    built from the IR, it runs no codegen and mutates nothing. :meth:`to_dict` is the JSON bridge.
+    """
+
+    report_type = "program"
+    schema_version = 1
+
+    def __init__(self, *, name, ops, commits, hash, histories, dt_bound, scratch):
+        self.name = name
+        self.ops = ops
+        self.commits = list(commits)
+        self.hash = hash
+        self.histories = dict(histories)
+        self.dt_bound = dt_bound
+        self.scratch = dict(scratch)
+
+    def to_dict(self):
+        return self._stamp({"name": self.name, "ops": self.ops, "commits": list(self.commits),
+                            "hash": self.hash, "histories": dict(self.histories),
+                            "dt_bound": self.dt_bound, "scratch": dict(self.scratch)})
+
+
 class _ProgramInspect(_ProgramConstants):
     """Static cost / buffer inspection for the Program authoring class."""
+
+    def inspect(self):
+        """A typed :class:`ProgramReport` of this Program (ADC-564). Inert: no codegen, no mutation.
+
+        Aggregates the IR facts the Program already carries -- its name, node count, committed
+        blocks, IR hash, declared histories, the optional dt bound and the static scratch estimate
+        -- into attributes + a ``to_dict`` bridge. ``pops.inspect(program)`` returns its ``to_dict``.
+        """
+        ir_hash = self._ir_hash() if hasattr(self, "_ir_hash") else None
+        estimate = self.estimate() if hasattr(self, "estimate") else {}
+        dt_bound = self._dt_bound[0] if getattr(self, "_dt_bound", None) else None
+        return ProgramReport(
+            name=getattr(self, "name", None), ops=len(getattr(self, "_values", [])),
+            commits=sorted(getattr(self, "_commits", {})), hash=ir_hash,
+            histories=dict(getattr(self, "_histories", {})), dt_bound=dt_bound,
+            scratch=dict(estimate))
 
     def ir_nodes(self):
         """The generated IR nodes as a structured, inert list (ADC-554 inspection surface).

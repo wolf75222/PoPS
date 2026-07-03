@@ -132,6 +132,7 @@ def compile(problem, layout=None, backend="production", time=None, **kwargs):
     # settings) and flows the typed refinement. A handle NOT produced here carries no layout and
     # binds on the bare System() defaults.
     compiled._layout = layout
+    _freeze_and_snapshot(problem, time, compiled)
     return compiled
 
 
@@ -175,6 +176,7 @@ def _compile_amr(problem, layout, backend, target, **kwargs):
     # Carry the AMR layout so bind() can rebuild the AmrSystemConfig (n / L / periodic / regrid /
     # patch settings) and flow the typed refinement + field problem onto the AmrSystem.
     compiled._layout = layout
+    _freeze_and_snapshot(problem, None, compiled)
     return compiled
 
 
@@ -196,6 +198,18 @@ def _compile_block_amr(name, physics, backend, compile_kwargs):
             "pops.physics.Model physics (a raw pops.model.Module has no per-block AMR loader)."
             % (name, type(model).__name__))
     return block_compile(backend=backend, target="amr_system", **compile_kwargs)
+
+
+def _freeze_and_snapshot(problem, time, compiled):
+    """Freeze the compiled Problem + Program and fold the snapshot hash into the cache key (ADC-563).
+
+    Delegates to :func:`pops.problem._snapshot.freeze_compiled` (bind-owned, lazy import to keep the
+    codegen module-scope import graph clean). ``pops.compile``'s last authoring act: freeze the
+    Problem (-> a stable ProblemSnapshot on ``compiled._problem_snapshot``), freeze the time Program,
+    and fold ``snapshot.hash`` into the handle's cache key (composing with the compile stream's
+    tokens, never replacing) so a mutated Problem cannot rebind a compiled artifact."""
+    from pops.problem._snapshot import freeze_compiled
+    freeze_compiled(problem, time, compiled)
 
 
 def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
@@ -277,6 +291,14 @@ def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
     instances = _assemble_instances(problem, initial or {}, block_specs=block_specs,
                                     models=amr_models)
 
+    # HARD REFUSAL GATES (ADC-537): reject a bad install with precise context BEFORE the native
+    # artifact is loaded -- an initial state of the wrong shape/dtype/components/ghost depth, a
+    # runtime param outside its typed domain, an aux a lowered operator requires but the state omits,
+    # and an ABI/Kokkos/MPI/layout manifest mismatch. run_bind_gates raises ONE aggregated error on
+    # any violation; there is no Python-runtime fallback when the native load fails.
+    from pops.runtime._bind_validation import run_bind_gates
+    run_bind_gates(compiled, problem, layout, initial or {}, params or {}, aux or {})
+
     # Delegate to the internal runtime adapter (lazy import: runtime edge, kept in-function so the
     # codegen module-scope import graph stays clean). adapter_for selects Uniform vs AMR from the
     # target the layout produced; the adapter builds the engine, installs, and wraps it in a
@@ -321,17 +343,12 @@ def _validate_layout_for_compile(problem, layout):
 def _resolve_layout(problem, layout):
     """Resolve the effective compile layout, then apply the problem's AMR criteria (ADC-526).
 
-    ADC-526 completes the move of the layout to ``pops.compile(problem, layout=...)``: the Problem no
-    longer owns a mandatory layout. The effective layout is the explicit @p layout when given, else a
-    layout the Problem may still carry from its constructor (back-compat); neither present is a loud
-    error pointing at ``pops.compile(problem, layout=...)``. When BOTH are given they must agree (a
-    compiled artifact is frozen to one layout), so a disagreement is refused rather than silently
-    overridden.
-
-    The AMR refinement criteria the user recorded via ``problem.amr.refine(...)`` live on the
-    Problem's constraint registry (layout-free); they are applied to the resolved layout HERE, when
-    the layout is finally known, so ONE Problem compiles under a plain ``Uniform`` or under an
-    ``AMR`` that receives its refine / regrid / nesting / patches.
+    The layout lives on ``pops.compile(problem, layout=...)``: explicit @p layout wins, else a
+    constructor layout the Problem may still carry; neither present is a loud error naming the
+    spelling, and a disagreement between the two is refused (an artifact is frozen to one layout).
+    The AMR criteria recorded via ``problem.amr.refine(...)`` sit layout-free on the constraint
+    registry and are applied HERE, once the layout is known, so ONE Problem compiles under Uniform
+    or under an AMR that receives its refine / regrid / nesting / patches.
     """
     from pops.mesh.layouts import AMR
 

@@ -26,7 +26,38 @@ from pops.problem.report import ProblemValidationReport
 _NO_KIND = object()
 
 
-class BlockRegistry:
+class _FreezableRegistry:
+    """Shared freeze mixin (ADC-563): a frozen registry refuses ``add`` / ``set`` and seals members.
+
+    ``pops.compile`` freezes the Problem, which cascades :meth:`freeze` to each registry. After
+    freeze, :meth:`_guard_frozen` raises in every mutating method, and any contained typed descriptor
+    (a field problem's solver, a param declaration) is sealed via its own ``freeze``. The Problem's
+    own setters guard first, so this is the belt-and-suspenders backstop against a direct registry
+    edit."""
+
+    _frozen = False
+
+    def freeze(self):
+        """Freeze the registry and its member descriptors (idempotent). Returns ``self``."""
+        for member in self._freezable_members():
+            member_freeze = getattr(member, "freeze", None)
+            if callable(member_freeze):
+                member_freeze()
+        self._frozen = True
+        return self
+
+    def _freezable_members(self):
+        """The contained descriptors to seal on freeze (override; default: none)."""
+        return ()
+
+    def _guard_frozen(self, what):
+        if self._frozen:
+            raise RuntimeError(
+                "pops.Problem registry is frozen (ADC-563): cannot %s after pops.compile froze the "
+                "Problem; author a fresh Problem and recompile." % what)
+
+
+class BlockRegistry(_FreezableRegistry):
     """The physics blocks declared on a Problem (name -> model + spatial + time + diagnostics).
 
     A block records its physics ``model`` (required), its ``spatial`` discretisation brick, and the
@@ -39,8 +70,12 @@ class BlockRegistry:
     def __init__(self):
         self._blocks = {}
 
+    def _freezable_members(self):
+        return [spec.get("spatial") for spec in self._blocks.values()]
+
     def add(self, name, model, *, spatial=None, time=None, diagnostics=None):
         """Record a block ``name`` with its ``model`` (required). Returns a stable :class:`BlockHandle`."""
+        self._guard_frozen("add a block")
         key = str(name)
         if model is None:
             raise ValueError("add_block(%r): a physics model is required" % key)
@@ -94,7 +129,7 @@ class BlockRegistry:
                 for name, spec in self._blocks.items()}
 
 
-class FieldRegistry:
+class FieldRegistry(_FreezableRegistry):
     """The elliptic field problems declared on a Problem (keyed on the field's name)."""
 
     family = "field"
@@ -102,8 +137,12 @@ class FieldRegistry:
     def __init__(self):
         self._fields = {}
 
+    def _freezable_members(self):
+        return list(self._fields.values())
+
     def add(self, field_problem):
         """Register a :class:`pops.fields.FieldProblem` (keyed on its name). Returns a :class:`FieldHandle`."""
+        self._guard_frozen("add a field")
         from pops.fields import FieldProblem  # lazy: keep pops.problem free of a fields module edge
         if not isinstance(field_problem, FieldProblem):
             raise TypeError("field: expected a pops.fields.FieldProblem; got %r"
@@ -150,7 +189,7 @@ class FieldRegistry:
         return {name: fp.inspect() for name, fp in self._fields.items()}
 
 
-class TimeRegistry:
+class TimeRegistry(_FreezableRegistry):
     """The whole-system time scheme slot (a single ``pops.time.Program``, attached at compile)."""
 
     family = "time"
@@ -160,6 +199,7 @@ class TimeRegistry:
 
     def set(self, program):
         """Record the time scheme (the whole-system Program). Overwrites a prior one."""
+        self._guard_frozen("set the time scheme")
         self._program = program
 
     @property
@@ -181,28 +221,51 @@ class TimeRegistry:
                 if self._program is not None else None}
 
 
-class ParamRegistry:
+class ParamRegistry(_FreezableRegistry):
     """The runtime / const parameter declarations (name -> {default, kind})."""
 
     family = "params"
 
     def __init__(self):
         self._params = {}
+        # The TYPED declaration object per name (a pops.params RuntimeParam / ConstParam carrying its
+        # domain), retained so the bind-time domain check (ADC-541) can call decl.check_bind(value).
+        # A bare (name, default) declaration has no typed object -> None.
+        self._declarations = {}
+
+    def _freezable_members(self):
+        return [d for d in self._declarations.values() if d is not None]
 
     def add(self, name, default=None, *, kind=_NO_KIND):
         """Declare a parameter. A bare ``kind=`` string is rejected (Spec 5 sec.7)."""
+        self._guard_frozen("declare a param")
         if kind is not _NO_KIND:
             raise TypeError(
                 "param: the kind= string is removed (Spec 5 sec.7); pass a typed param object "
                 "(pops.physics.RuntimeParam(name, value) or pops.physics.ConstParam(name, value)) "
                 "instead of kind=%r" % (kind,))
         if hasattr(name, "kind") and hasattr(name, "name") and hasattr(name, "value"):
+            # A pops.physics RuntimeParam/ConstParam (Param): kind + value carried directly.
             if default is not None:
                 raise TypeError(
                     "param: a typed param was given; do not also pass a default (%r)" % (default,))
             self._params[str(name.name)] = {"default": name.value, "kind": str(name.kind)}
+            self._declarations[str(name.name)] = name
+        elif getattr(name, "category", None) in ("runtime_param", "const_param") \
+                and hasattr(name, "name"):
+            # A pops.params typed param carrying a DOMAIN (RuntimeParam(domain=...) / ConstParam):
+            # retain it as the declaration so the bind-time domain check (ADC-541) can call
+            # check_bind(value); its kind is derived from the category.
+            if default is not None:
+                raise TypeError(
+                    "param: a typed param was given; do not also pass a default (%r)" % (default,))
+            kind_of = {"runtime_param": "runtime", "const_param": "const"}[name.category]
+            declared = getattr(name, "default", getattr(name, "value", None))
+            self._params[str(name.name)] = {"default": declared, "kind": kind_of}
+            self._declarations[str(name.name)] = name
         else:
             self._params[str(name)] = {"default": default, "kind": "const"}
+            self._declarations[str(name)] = None
 
     def get(self, name):
         return self._params.get(str(name))
@@ -212,6 +275,14 @@ class ParamRegistry:
 
     def items(self):
         return self._params.items()
+
+    def declarations(self):
+        """The ``{name: typed declaration}`` map (a ``RuntimeParam``/``ConstParam`` or ``None``).
+
+        The bind-time domain check (ADC-541) reads it to call ``decl.check_bind(value)`` on each
+        supplied runtime param. A name declared without a typed object maps to ``None``.
+        """
+        return dict(self._declarations)
 
     def __iter__(self):
         return iter(self._params)
@@ -226,7 +297,7 @@ class ParamRegistry:
         return dict(self._params)
 
 
-class RuntimePolicyRegistry:
+class RuntimePolicyRegistry(_FreezableRegistry):
     """Runtime-facing declarations: static aux inputs and output / checkpoint policies.
 
     These describe what the runtime does with the assembly (background aux fields, when to write /
@@ -240,14 +311,43 @@ class RuntimePolicyRegistry:
     def __init__(self):
         self._aux = {}
         self._outputs = []
+        # The typed RuntimePolicies bundle (ADC-562), retained so its self-contained validate runs
+        # with the compile context; its output / checkpoint members are ALSO unpacked into _outputs.
+        self._policies = None
+
+    def _freezable_members(self):
+        return list(self._outputs)
 
     def add_aux(self, name, value=None):
         """Declare a static aux input ``name`` (e.g. a background field)."""
+        self._guard_frozen("declare an aux input")
         self._aux[str(name)] = value
 
     def add_output(self, policy):
         """Attach an output / checkpoint policy descriptor."""
+        self._guard_frozen("attach an output policy")
         self._outputs.append(policy)
+
+    def set_policies(self, policies):
+        """Record a typed :class:`pops.output.RuntimePolicies` bundle (ADC-562).
+
+        Unpacks the bundle's output / checkpoint members into ``_outputs`` (so ``run(output_dir=...)``
+        fires them exactly like :meth:`add_output`) and retains the bundle for its self-contained
+        :meth:`validate`. A non-bundle argument is refused loudly (no options bag)."""
+        self._guard_frozen("attach runtime policies")
+        from pops.output.runtime_policies import RuntimePolicies
+        if not isinstance(policies, RuntimePolicies):
+            raise TypeError(
+                "problem.runtime(...) expects a typed pops.RuntimePolicies bundle; got %r. Group the "
+                "runtime concerns with pops.RuntimePolicies(output=..., checkpoint=..., "
+                "diagnostics=..., schedules=...)." % (type(policies).__name__,))
+        self._policies = policies
+        for policy in policies.outputs():
+            self._outputs.append(policy)
+
+    @property
+    def policies(self):
+        return self._policies
 
     @property
     def aux(self):
@@ -264,7 +364,12 @@ class RuntimePolicyRegistry:
         return iter(self._outputs)
 
     def validate(self, context=None):
-        """Refuse an output entry that is not a real output / checkpoint policy descriptor."""
+        """Refuse a bad output entry and run the RuntimePolicies bundle's self-contained validate.
+
+        Each ``_outputs`` entry must be a real output / checkpoint policy descriptor. When a typed
+        :class:`pops.output.RuntimePolicies` bundle was attached (``problem.runtime(...)``), its OWN
+        ``validate(context)`` runs too, so an AMR / MPI / backend-incompatible policy is refused
+        before the runtime -- with the resolved layout / backend @p context (ADC-562)."""
         report = ProblemValidationReport()
         for policy in self._outputs:
             cat = getattr(policy, "category", None)
@@ -274,14 +379,19 @@ class RuntimePolicyRegistry:
                     "output() expects a pops.output.OutputPolicy / CheckpointPolicy; got %r "
                     "(category %r)" % (type(policy).__name__, cat),
                     context={"policy": type(policy).__name__, "category": cat})
+        if self._policies is not None:
+            report.extend(self._policies.validate(context))
         return report
 
     def inspect(self):
-        return {"aux": sorted(self._aux),
+        info = {"aux": sorted(self._aux),
                 "outputs": [getattr(p, "name", repr(p)) for p in self._outputs]}
+        if self._policies is not None:
+            info["policies"] = self._policies.inspect().to_dict()
+        return info
 
 
-class ConstraintRegistry:
+class ConstraintRegistry(_FreezableRegistry):
     """Structural constraints + layout-free AMR refinement criteria (ADC-526).
 
     A Problem carries no layout, so the AMR refinement criteria (refine / regrid / nesting / patches)
@@ -297,6 +407,7 @@ class ConstraintRegistry:
 
     def set_refinement(self, *, refine=None, regrid=None, nesting=None, patches=None):
         """Record the AMR refinement criteria (layout-free; applied at compile)."""
+        self._guard_frozen("record AMR refinement criteria")
         if refine is not None:
             self._criteria["refine"] = refine
         if regrid is not None:

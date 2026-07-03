@@ -21,6 +21,8 @@ module may not import ``pops.mesh`` at module scope; cf. tests/python/architectu
 
 import json
 
+from pops._report import Report
+
 # Bytes per double-precision cell value. The core is 2D (n x n cells), one field component is a
 # full grid traversal; a "field pass" in Program.estimate is one such state-sized buffer.
 _BYTES_PER_CELL = 8
@@ -30,7 +32,7 @@ _BYTES_PER_CELL = 8
 # sec.12.2 -- Arguments: the runtime inputs the artifact expects at bind
 # ---------------------------------------------------------------------------
 
-class Arguments:
+class Arguments(Report):
     """The runtime inputs a compiled artifact expects at ``System.install`` (Spec 5 sec.12.2).
 
     A plain, inert value describing what a caller must SUPPLY to bind the artifact -- distinct
@@ -50,8 +52,12 @@ class Arguments:
 
     It is built by :func:`build_arguments` from the carried Program + model; it neither compiles,
     binds nor reads any runtime array. ``str(args)`` is a readable table; :meth:`to_dict` /
-    :meth:`to_json` serialise it.
+    :meth:`to_json` serialise it. Adopts the shared :class:`pops.Report` base (ADC-564); its
+    ``to_dict`` keeps the historical shape (no ``report_type`` stamp) so a consumer is unchanged.
     """
+
+    report_type = "arguments"
+    schema_version = 1
 
     def __init__(self, *, instances, params, aux, solvers, outputs, layout_runtime,
                  program_name=None):
@@ -247,7 +253,7 @@ def _ghost_depth(compiled):
 # sec.12.3 -- MemoryEstimate: an absolute byte FORMULA over a mesh shape
 # ---------------------------------------------------------------------------
 
-class MemoryEstimate:
+class MemoryEstimate(Report):
     """An ABSOLUTE memory estimate for a compiled artifact on a given mesh (Spec 5 sec.12.3).
 
     A FORMULA, not an allocation: it multiplies the Program's grid-relative static cost
@@ -257,7 +263,11 @@ class MemoryEstimate:
     :attr:`assumptions` list records what the estimate takes for granted (it is CONSERVATIVE: it
     over-counts scratch as if no codegen reuse happened beyond the static reuse report, and ignores
     in-solver V-cycle traffic). :meth:`by_block` / :meth:`by_solver` / :meth:`by_scratch` slice it.
+    Adopts :class:`pops.Report` (ADC-564); its ``to_dict`` keeps the historical shape.
     """
+
+    report_type = "memory_estimate"
+    schema_version = 1
 
     def __init__(self, *, categories, cells, mesh_shape, n_cons, n_aux, scratch_buffers,
                  assumptions, conservative=True, layout="system"):

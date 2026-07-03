@@ -25,6 +25,8 @@ graph acyclic (cf. tests/python/architecture/test_import_graph.py).
 
 import json
 
+from pops._report import Report
+
 # CompiledReport (the print(compiled) summary) + its builders and hash helpers are split into
 # ``_inspect_compiled_report`` for the 500-line cap and re-exported so the historical
 # ``from pops.codegen.inspect_report import CompiledReport, build_compiled_report`` paths are
@@ -48,15 +50,19 @@ _CAPABILITY_FLAGS = (
 )
 
 
-class RequirementsReport:
+class RequirementsReport(Report):
     """The COMPILE-TIME constraints of a compiled artifact (Spec 5 sec.12.1).
 
     DISTINCT from :meth:`CompiledProblem.arguments` (the runtime bind inputs): this lists what the
     lowered ROUTE needs from the model + toolchain -- the model capabilities the emitted flux relies
     on, the required descriptors and the layout / backend constraints. An inert record:
     :meth:`to_dict` is JSON-ready and :meth:`__str__` a short table. A piece genuinely unknowable
-    from today's metadata is recorded in :attr:`unknown` (honestly, never fabricated).
+    from today's metadata is recorded in :attr:`unknown` (honestly, never fabricated). Adopts the
+    shared :class:`pops.Report` base (ADC-564); its ``to_dict`` keeps the historical shape.
     """
+
+    report_type = "requirements"
+    schema_version = 1
 
     def __init__(self, *, capabilities, descriptors, constraints, unknown):
         self.capabilities = list(capabilities)  # [{capability, used_by, provided}]
@@ -185,15 +191,18 @@ def build_requirements(compiled):
 # sec.12.1 -- BindReport: provided vs still-required, for a given sim
 # ---------------------------------------------------------------------------
 
-class BindReport:
+class BindReport(Report):
     """The ``sim.explain_bind(compiled)`` view: provided vs still-required (Spec 5 sec.12.1).
 
     A plain, inert record of which bind inputs a System / AmrSystem ALREADY provides and which the
     artifact still REQUIRES, per group (instances / params / aux / solvers). :attr:`missing` is the
     actionable list ADC-463 :func:`collect_missing_arguments` produces (each line names exactly what
     to supply); :attr:`ready` is true when nothing required is missing. :meth:`__str__` is a short,
-    deterministic table.
+    deterministic table. Adopts :class:`pops.Report` (ADC-564); its ``to_dict`` keeps the shape.
     """
+
+    report_type = "bind"
+    schema_version = 1
 
     def __init__(self, *, program_name, provided, required, missing):
         self.program_name = program_name

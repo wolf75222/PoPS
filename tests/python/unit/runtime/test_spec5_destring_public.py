@@ -181,7 +181,7 @@ def test_case_param_typed_byte_identical():
     case.param(RuntimeParam("alpha", 1.0))
     case.param(ConstParam("gamma", 1.4))
     case.param("beta", 2.0)  # shorthand -> const
-    rec = case.inspect()["params"]
+    rec = case.inspect().params  # ADC-564: Problem.inspect() is a typed report; read the attribute
     assert rec["alpha"] == {"default": 1.0, "kind": "runtime"}, rec
     assert rec["gamma"] == {"default": 1.4, "kind": "const"}, rec
     assert rec["beta"] == {"default": 2.0, "kind": "const"}, rec

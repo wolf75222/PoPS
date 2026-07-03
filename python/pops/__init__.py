@@ -79,7 +79,7 @@ __all__ = [
     "set_threads", "has_kokkos", "parallel_info", "doctor",
     "CompiledArtifact", "CompiledTime",
     "compile_library", "read_library_manifest", "LibraryManifest",
-    "Problem", "PhysicsModel", "compile", "bind",
+    "Problem", "PhysicsModel", "compile", "bind", "RuntimePolicies",
 ]
 
 
@@ -87,7 +87,6 @@ __all__ = [
 from pops.runtime import integrate  # noqa: E402,F401  (pops.integrate name preserved; without numpy)
 from . import time, model, math, lib, physics, mesh  # noqa: E402  (Spec 2/3 operator-first + board authoring + IR)
 from . import params, output, external, fields, linalg, solvers  # noqa: E402  (Spec 5 typed params/output/fields/algebra/solvers)
-# pops.experimental (numpy-host, TESTS-ONLY) stays a lazily-reachable submodule (ADC-600), never bound.
 from .problem import Problem  # noqa: E402,F401  (Spec 5 sec.5.16: top-level compilable assembly; pure stdlib)
 from pops.physics import PhysicsModel  # noqa: E402,F401  (Spec 5 sec.11: alias of pops.physics.Model)
 from .codegen.library import (  # noqa: E402,F401  (re-export: brick-library manifest API, Spec 3 section 21)
@@ -96,8 +95,7 @@ from .time import CompiledTime  # noqa: E402,F401  (re-export: compiled-Program 
 from ._capabilities import (  # noqa: E402,F401  (Spec 5: descriptor-sourced matrix + native reports)
     inspect_capabilities, inspect_amr, native_capability_report)
 from ._inspect import inspect  # noqa: E402,F401  (ADC-527: stable per-object inspect dispatcher)
-from .runtime_environment import (  # noqa: E402,F401
-    RuntimeCapabilityError, runtime_environment_report, validate_runtime_environment)
+from .runtime_environment import RuntimeCapabilityError, runtime_environment_report, validate_runtime_environment  # noqa: E402,F401,E501
 
 
 # LAZY public front doors (PEP 562, ADC-523). `pops.compile` / `pops.bind` are the ONLY public
@@ -107,6 +105,8 @@ def __getattr__(name):
     if name in ("compile", "bind"):
         from .codegen import orchestration
         return getattr(orchestration, name)
+    if name == "RuntimePolicies":  # ADC-562: typed runtime-policy bundle
+        return output.RuntimePolicies  # noqa: E501
     if name == "CompiledArtifact":
         from .codegen.compiled_artifact import CompiledArtifact
         return CompiledArtifact

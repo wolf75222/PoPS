@@ -99,7 +99,7 @@ def test_assembly_chaining_and_inspect():
             .aux("B_z", value=None))
     _check(prob is prob.block.__self__, "setters operate on the same problem")
     _check(prob.layout is None, "ADC-526: a layout-free Problem carries no layout (supplied at compile)")
-    info = prob.inspect()
+    info = prob.inspect().to_dict()  # ADC-564: Problem.inspect() is a typed report; to_dict() bridges
     _check(info["name"] == "plasma", "name carried")
     _check(set(info["blocks"]) == {"ne"}, "block recorded")
     _check(info["params"]["alpha"]["default"] == 1.0, "param recorded")
@@ -778,39 +778,27 @@ def test_compile_freezes_snapshot_authority(monkeypatch=None):
 
 
 def test_bind_rejects_case_mutated_after_compile(monkeypatch=None):
-    # ADC-592 (the proven vulnerability closed): mutating the Problem's blocks between compile and bind is
-    # a LOUD ValueError -- a compiled artifact is frozen at compile and not affected by a later mutation.
+    # ADC-563 (the ADC-592 vulnerability closed even MORE strongly): pops.compile FREEZES the Problem,
+    # so mutating it after compile is refused AT THE MUTATION -- a RuntimeError naming the frozen
+    # Problem -- rather than only detected later at bind. A post-compile mutation cannot change a bound
+    # artifact because it cannot happen at all.
     def _fake_compile_problem(*, time, model, backend, target, **kw):
         return _StubCompiled(target=target)
 
     _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _fake_compile_problem)
     try:
-        import pops.runtime.system as rtsys
-
-        class _StubSystem(_RecordingSim):
-            # ADC-583/#427: the Uniform adapter derives a SystemConfig from the Problem mesh and
-            # passes it to the engine constructor; mirror the real System signature.
-            def __init__(self, config=None):
-                self.config = config
-
-        orig = rtsys.System
-        rtsys.System = _StubSystem
+        prob = pops.Problem().block("ne", physics=_StubModel("ne")).field(_poisson_problem())
+        compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=object())
+        _check(prob.frozen, "pops.compile froze the Problem")
+        # MUTATE the Problem after compile: adding a block the snapshot never saw is refused here.
         try:
-            prob = pops.Problem().block("ne", physics=_StubModel("ne")).field(_poisson_problem())
-            compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=object())
-            compiled._problem = prob  # the live Problem bind() re-reads
-            # MUTATE the Problem after compile: add a block the snapshot never saw.
             prob.block("ni_late", physics=_StubModel("ni_late"))
-            try:
-                orchestration.bind(compiled, initial_state={"ne": [1.0]})
-                raise AssertionError("a Problem mutated after compile must be refused at bind")
-            except ValueError as exc:
-                msg = str(exc)
-                _check("mutated after pops.compile" in msg, "the drift error names the mutation")
-                _check("ni_late" in msg, "the drift error names the added block")
-                _check("recompile" in msg, "the drift error points at a recompile")
-        finally:
-            rtsys.System = orig
+            raise AssertionError("a Problem mutated after compile must be refused (frozen)")
+        except RuntimeError as exc:
+            msg = str(exc)
+            _check("frozen" in msg, "the freeze error says the Problem is frozen")
+            _check("pops.compile" in msg, "the freeze error points at pops.compile")
+            _check("recompile" in msg, "the freeze error points at a recompile")
     finally:
         _unpatch(monkeypatch)
     print("ok test_bind_rejects_case_mutated_after_compile")

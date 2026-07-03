@@ -17,6 +17,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 ## [Unreleased]
 
 ### Added
+- ADC-564 `Problem.inspect()` and `Program.inspect()` return typed report objects (attributes +
+  `to_dict()`, never a dict subclass) on a shared `pops.Report` base that `compiled.inspect()`,
+  `sim.inspect()`, `sim.explain_bind()` and `sim.amr` inspection also adopt; the reports carry
+  capabilities / requirements / blocks / fields / params / aux / errors as attributes and never
+  trigger validation or compilation. `pops.inspect(obj)` is the explicit dict bridge over the
+  report's `to_dict()`; a per-descriptor `inspect()` keeps its documented dict contract.
+- ADC-562 `pops.RuntimePolicies(output=..., checkpoint=..., diagnostics=..., schedules=...)` groups
+  the runtime descriptors as TYPED members (no options bag, no string keys; a non-descriptor argument
+  raises) and `problem.runtime(policies)` attaches them, so output/checkpoint/diagnostics live
+  outside the physics script; the bundle is inspectable and validatable on its own and refuses a
+  parallel-only policy on an explicitly serial/non-MPI backend before the runtime is touched.
+- ADC-537 `pops.bind` refuses an initial state of the wrong shape/dtype/components/ghost depth, a
+  runtime param outside its typed domain, an aux field a lowered operator requires but the state
+  omits, and an ABI/Kokkos/MPI/layout manifest mismatch, all as hard errors with precise context
+  before the native artifact is loaded; the artifact loads only via its manifest/ABI and there is no
+  Python-runtime fallback when the native load fails.
 - ADC-538 Native ProgramContext execution contract is fenced by tests: the host-validatable
   compiled-Program call path (per-stage `solve_fields_from_state`, `rhs_into` /
   `neg_div_flux_default_into` / `source_default_into`, `lincomb` / `axpy`, `fill_boundary`,
@@ -44,6 +60,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   alongside `inspect()` / `requirements()`.
 
 ### Changed
+- ADC-563 Descriptors freeze after their assembly is sealed, `pops.compile` freezes the `Problem`
+  (via `problem.freeze()` -> a `ProblemSnapshot` with a stable `.hash`) and the time `Program`; a
+  mutation after freeze raises an explicit error naming the frozen object (no warning, no
+  shallow-copy escape). The snapshot hash folds into the compile cache key so a post-compile Problem
+  mutation cannot change a bound artifact.
 - ADC-557 `pops.compile` lowers a physics `Model` through its operator-first `pops.model.Module`
   as the canonical compile IR and validates ONCE via a single `lower_and_validate` step (the
   divergent standalone `model.check()` compile call is gone). A lowering / dependency error is

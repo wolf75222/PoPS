@@ -39,6 +39,17 @@ def test_inspect_a_problem_is_json_ready():
     json.dumps(record)                   # serialisable
 
 
+def test_problem_inspect_is_a_typed_report_bridged_by_pops_inspect():
+    # ADC-564: Problem.inspect() is a typed pops.Report (attributes), and pops.inspect(obj) is the
+    # explicit dict bridge over its to_dict() -- so a structure-wanting caller reads attributes.
+    from pops._report import Report
+    prob = pops.Problem(name="plasma").block("ne", physics=_StubModel())
+    report = prob.inspect()
+    assert isinstance(report, Report) and not isinstance(report, dict)
+    assert report.name == "plasma"                 # attribute access
+    assert pops.inspect(prob) == report.to_dict()  # pops.inspect(obj) == report.to_dict()
+
+
 def test_inspect_a_brick_descriptor():
     from pops.numerics.riemann import HLL
     brick = HLL()

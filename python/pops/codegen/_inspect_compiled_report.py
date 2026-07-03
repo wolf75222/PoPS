@@ -12,6 +12,8 @@ the codegen import graph acyclic (cf. tests/python/architecture/test_import_grap
 
 import json
 
+from pops._report import Report
+
 
 def _short(value, width=12):
     """A short prefix of a hash-like string, or ``"none"`` when absent."""
@@ -26,14 +28,19 @@ def _abi_token(abi_key, name):
     return None
 
 
-class CompiledReport:
+class CompiledReport(Report):
     """The printable ``print(compiled)`` summary of a compiled artifact (Spec 5 sec.12.1).
 
     A plain, inert record AGGREGATING the metadata the :class:`CompiledProblem` carries -- it
     computes nothing of its own. :meth:`to_dict` is a JSON-ready view; :meth:`__str__` is the
     deterministic, array-free, multi-line report shaped like the Spec 5 sec.12.1 example. It never
-    prints the ``.so`` contents, a field array, or a ``<...object at 0x...>`` repr.
+    prints the ``.so`` contents, a field array, or a ``<...object at 0x...>`` repr. Adopts the shared
+    :class:`pops.Report` base (ADC-564); its ``to_dict`` keeps the historical shape (the compile
+    stream may ADD fields, which the base leaves untouched).
     """
+
+    report_type = "compiled"
+    schema_version = 1
 
     def __init__(self, *, name, backend, platform, layout, blocks, fields, program, inputs,
                  artifacts, status, env=None, runtime=None, capabilities=None, options=None,

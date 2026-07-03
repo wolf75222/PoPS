@@ -55,6 +55,11 @@ class Problem:
 
     def __init__(self, layout=None, name=None):
         self._name = str(name) if name else "Problem"
+        # ADC-563 freeze: a Problem is MUTABLE during assembly and FROZEN by pops.compile. After
+        # freeze every mutating setter RAISES (naming the Problem) and freeze() returns a stable
+        # ProblemSnapshot the compile cache keys on.
+        self._frozen = False
+        self._snapshot = None
         # ADC-526: the Problem does NOT own a layout. Layout is supplied at compile
         # (pops.compile(problem, layout=Uniform(...)|AMR(...))), so ONE Problem compiles under
         # either. A constructor layout= is still accepted (back-compat) and, when given, is carried
@@ -70,6 +75,51 @@ class Problem:
     @property
     def name(self):
         return self._name
+
+    # --- freeze lifecycle (ADC-563) -----------------------------------------------------
+    def _guard_mutable(self, what):
+        """Raise when a mutating setter runs after :meth:`freeze` (ADC-563), naming the Problem."""
+        if self._frozen:
+            raise RuntimeError(
+                "pops.Problem %r is frozen (ADC-563): cannot %s after pops.compile froze it. A "
+                "compiled artifact is frozen to exactly the assembly it was compiled from; author a "
+                "fresh Problem (or edit BEFORE compile) and recompile -- a post-compile mutation "
+                "cannot change a bound artifact." % (self._name, what))
+
+    def freeze(self):
+        """Freeze the assembly and return its stable :class:`~pops.problem._snapshot.ProblemSnapshot`.
+
+        ``pops.compile`` calls this on the Problem it compiles: after freeze every mutating setter
+        RAISES (naming the Problem), the member registries and their descriptors are sealed, and the
+        returned snapshot's ``.hash`` is the frozen identity the compile cache key folds in. Idempotent
+        -- a second call returns the SAME snapshot, so ``compile`` can freeze a Problem the caller
+        already froze."""
+        if self._frozen:
+            return self._snapshot
+        from pops.problem._snapshot import build_problem_snapshot
+        self._freeze_registries()
+        self._snapshot = build_problem_snapshot(self)
+        self._frozen = True
+        return self._snapshot
+
+    def _freeze_registries(self):
+        """Cascade freeze to each registry and the member descriptors (fields' solvers, layout)."""
+        for registry in (self._block_registry, self._field_registry, self._time_registry,
+                         self._param_registry, self._runtime_registry, self._constraint_registry):
+            freeze = getattr(registry, "freeze", None)
+            if callable(freeze):
+                freeze()
+        if self._layout is not None and hasattr(self._layout, "freeze"):
+            self._layout.freeze()
+
+    @property
+    def frozen(self):
+        return self._frozen
+
+    @property
+    def snapshot(self):
+        """The :class:`ProblemSnapshot` from the last :meth:`freeze` (``None`` before freeze)."""
+        return self._snapshot
 
     # --- registry access (the typed internals, each independently inspectable) ----------
     @property
@@ -87,6 +137,7 @@ class Problem:
     # --- assembly (chaining setters delegate to the registries) -------------------------
     def block(self, name, physics, spatial=None):
         """Declare a physics block ``name`` (its ``physics`` model is REQUIRED). Chains."""
+        self._guard_mutable("add a block")
         self._block_registry.add(name, physics, spatial=spatial)
         return self
 
@@ -98,11 +149,13 @@ class Problem:
         ``diagnostics``. Unlike the chaining :meth:`block`, this returns a stable HANDLE the user can
         hold to reference the block later. A duplicate name / missing model is refused loudly here.
         """
+        self._guard_mutable("add a block")
         return self._block_registry.add(name, model, spatial=spatial, time=time,
                                         diagnostics=diagnostics)
 
     def field(self, field_problem):
         """Register an elliptic :class:`~pops.fields.FieldProblem` (keyed on its name). Chains."""
+        self._guard_mutable("add a field")
         self._field_registry.add(field_problem)
         return self
 
@@ -111,6 +164,7 @@ class Problem:
 
         The handle-returning counterpart of the chaining :meth:`field` (ADC-526 stable handles).
         """
+        self._guard_mutable("add a field")
         return self._field_registry.add(field_problem)
 
     def param(self, name, default=None, *, kind=_NO_KIND):
@@ -121,26 +175,45 @@ class Problem:
         ``problem.param(pops.physics.ConstParam("gamma", 1.4))`` / ``problem.param("alpha", 1.0)``.
         A bare ``kind="const"/"runtime"`` keyword is REJECTED.
         """
+        self._guard_mutable("declare a param")
         self._param_registry.add(name, default, kind=kind)
         return self
 
     def aux(self, name, value=None):
         """Declare a static aux input ``name`` (e.g. a background field). Chains."""
+        self._guard_mutable("declare an aux input")
         self._runtime_registry.add_aux(name, value)
         return self
 
     def output(self, policy):
         """Attach an output / checkpoint policy. Chains."""
+        self._guard_mutable("attach an output policy")
         self._runtime_registry.add_output(policy)
+        return self
+
+    def runtime(self, policies):
+        """Attach a typed :class:`pops.output.RuntimePolicies` bundle (ADC-562). Chains.
+
+        Groups the runtime concerns (output / checkpoint / diagnostics / schedules) out of the
+        physics script: ``problem.runtime(pops.RuntimePolicies(output=..., checkpoint=...))``. The
+        bundle's typed members are unpacked into the runtime registry (its output / checkpoint
+        policies feed ``run(output_dir=...)`` exactly like :meth:`output`), and the bundle is retained
+        so its self-contained ``validate`` runs with the compile context. ``output()`` / ``aux()``
+        stay the granular primitives the bundle composes.
+        """
+        self._guard_mutable("attach runtime policies")
+        self._runtime_registry.set_policies(policies)
         return self
 
     def time(self, program):
         """Attach the time scheme (a ``pops.time.Program``) used at compile. Chains."""
+        self._guard_mutable("set the time scheme")
         self._time_registry.set(program)
         return self
 
     def program(self, program):
         """Attach the whole-system time ``Program`` (the ADC-526 spelling of :meth:`time`). Chains."""
+        self._guard_mutable("set the time program")
         self._time_registry.set(program)
         return self
 
@@ -152,6 +225,11 @@ class Problem:
     @property
     def _params(self):
         return dict(self._param_registry.items())
+
+    @property
+    def _param_declarations(self):
+        """The ``{name: typed declaration}`` map for the bind-time domain check (ADC-541)."""
+        return self._param_registry.declarations()
 
     @property
     def _aux(self):
@@ -321,7 +399,18 @@ class Problem:
                                  native_id=self.native_id, options=self.options())
 
     def inspect(self):
-        """A plain, JSON-serialisable structured view of the assembly (no build, no compile)."""
+        """A typed :class:`~pops.problem.report_view.ProblemReport` of the assembly (ADC-564).
+
+        Attributes + ``to_dict()`` (never a dict subclass), carrying the name / blocks / fields /
+        params / aux / outputs / constraints / requirements / capabilities. Inert: no build, no
+        compile, no validation. ``pops.inspect(problem)`` is the explicit dict bridge over its
+        ``to_dict()``.
+        """
+        from pops.problem.report_view import ProblemReport
+        return ProblemReport(self._inspect_payload())
+
+    def _inspect_payload(self):
+        """The ordered inspection dict (the historical inspect() shape) the ProblemReport wraps."""
         info = {"name": self._name, "category": self.category, "native_id": self.native_id,
                 "options": self.options(), "requirements": self.requirements().to_dict(),
                 "capabilities": self.capabilities().to_dict()}
@@ -329,8 +418,9 @@ class Problem:
         info["blocks"] = self._block_registry.inspect()
         info["fields"] = self._field_registry.inspect()
         info["params"] = self._param_registry.inspect()
-        info["aux"] = self._runtime_registry.inspect()["aux"]
-        info["outputs"] = self._runtime_registry.inspect()["outputs"]
+        runtime = self._runtime_registry.inspect()
+        info["aux"] = runtime["aux"]
+        info["outputs"] = runtime["outputs"]
         info["constraints"] = self._constraint_registry.inspect()
         info["time"] = self._time_registry.inspect()["program"]
         return info
@@ -338,11 +428,12 @@ class Problem:
     def to_dict(self):
         """A JSON-ready, array-free serialisation of the assembly for cache / codegen / debug.
 
-        A superset of :meth:`inspect` that also names each block's stable handle id and the
-        refinement criteria recorded on the constraint registry, so the whole declaration
-        round-trips through a plain dict with no runtime object and no numpy array (ADC-526).
+        A superset of :meth:`_inspect_payload` that also names each block's stable handle id, so the
+        whole declaration round-trips through a plain dict with no runtime object and no numpy array
+        (ADC-526). It stays a plain dict (the snapshot / codegen consume it), distinct from the typed
+        :meth:`inspect` report.
         """
-        info = self.inspect()
+        info = self._inspect_payload()
         info["handles"] = {"blocks": [h.handle_id for h in self.blocks().values()],
                            "fields": [h.handle_id for h in self.fields().values()]}
         return info

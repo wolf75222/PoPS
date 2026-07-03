@@ -7,6 +7,7 @@ field arrays, never recompiles, never installs a program.
 
 import json
 
+from pops._report import Report
 from pops._capabilities import native_capability_report
 from pops.runtime.defaults import numerical_defaults_report
 from pops.runtime.fallbacks import fallback_diagnostics_report
@@ -14,8 +15,8 @@ from pops.runtime.profile import PerformanceSummary
 from pops.runtime_environment import runtime_environment_report
 
 
-class RuntimeInspectionReport:
-    """Structured, printable snapshot of a live runtime facade."""
+class RuntimeInspectionReport(Report):
+    """Structured, printable snapshot of a live runtime facade (adopts the pops.Report base, ADC-564)."""
 
     schema_version = 1
     report_type = "runtime_inspection"

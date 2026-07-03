@@ -109,14 +109,20 @@ def test_problem_is_not_a_descriptor():
     import pops
     from pops.descriptors import Descriptor, DescriptorProtocol
 
-    prob = pops.Problem(name="arch").block("ne", physics=type("M", (), {"name": "m"})())
+    from pops.mesh.cartesian import CartesianMesh
+    from pops.mesh.layouts import Uniform
+    # A constructor layout is still accepted (ADC-526 back-compat); give the fixture one so the
+    # "the assembly holds descriptors" assertion below has a layout descriptor to check.
+    prob = (pops.Problem(name="arch", layout=Uniform(CartesianMesh(n=8)))
+            .block("ne", physics=type("M", (), {"name": "m"})()))
     assert not isinstance(prob, Descriptor), (
         "Spec 5 sec.6: a Problem must NOT be a pops.descriptors.Descriptor (it is an assembly "
         "that contains descriptors, not one itself)")
     # The inspectable surface survives the de-Descriptor change (structural duck typing).
     assert isinstance(prob, DescriptorProtocol)
     assert prob.validate.__self__ is prob  # validate() is implemented directly on Problem.
-    assert prob.inspect()["category"] == "problem"
+    # ADC-564: Problem.inspect() is a typed report; read the attribute (or .to_dict() for a dict).
+    assert prob.inspect().category == "problem"
     assert prob.lower().to_dict()["name"] == "arch"
     # The layout it CONTAINS is still a descriptor (the assembly holds descriptors).
     assert isinstance(prob.layout, Descriptor)

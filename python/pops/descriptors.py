@@ -63,6 +63,24 @@ class BrickDescriptor:
         # the identity key (a callable is not part of the brick's value identity).
         self.builder = builder
 
+    def freeze(self):
+        """Freeze this brick descriptor: a later attribute mutation RAISES (ADC-563). Returns ``self``.
+
+        The :class:`BrickDescriptor` counterpart of :meth:`pops.descriptors.Descriptor.freeze`; the
+        assembly that holds it (a frozen ``Problem`` / ``Program``) seals it so a route the compiled
+        artifact committed cannot be silently re-pointed. Idempotent."""
+        object.__setattr__(self, "_frozen", True)
+        return self
+
+    def __setattr__(self, key, value):
+        """Refuse an attribute mutation after :meth:`freeze` (ADC-563), naming the frozen brick."""
+        if getattr(self, "_frozen", False):
+            raise RuntimeError(
+                "brick descriptor %r [%s] is frozen (ADC-563): cannot set %r after the assembly was "
+                "frozen by pops.compile; author a fresh descriptor and recompile."
+                % (getattr(self, "name", "?"), getattr(self, "category", "brick"), key))
+        object.__setattr__(self, key, value)
+
     def _key(self):
         return (self.category, self.name, self.brick_type, self.native_id,
                 self.scheme, tuple(sorted(self.options.items())))

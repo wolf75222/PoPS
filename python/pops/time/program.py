@@ -54,6 +54,27 @@ class Program(_ProgramCore, _ProgramLocal, _ProgramSolve, _ProgramAuthoring,
         # scratch (ADC-457). Populated during _emit_op; harmless to keep across emits (keys are unique
         # per node id).
         self._coupled_scratch = {}
+        # ADC-563 freeze: a Program is MUTABLE while authored and FROZEN by pops.compile. After
+        # freeze, adding an IR node (via _new) RAISES -- a compiled artifact is frozen to exactly the
+        # program it was compiled from. Emission / hashing are pure reads and stay allowed.
+        self._frozen = False
+
+    def freeze(self):
+        """Freeze the Program: a later IR node addition RAISES (ADC-563). Returns ``self``.
+
+        ``pops.compile`` freezes the time Program it lowers; emission (``emit_cpp_program``) and the
+        IR hash are pure reads and remain allowed, but building a new node afterwards is refused so a
+        post-compile edit cannot diverge from the compiled artifact. Idempotent."""
+        self._frozen = True
+        return self
+
+    def _new(self, vtype, op, inputs, attrs, name, block):
+        """Guard the single IR-append choke point against a post-freeze mutation (ADC-563)."""
+        if self._frozen:
+            raise RuntimeError("pops.time.Program %r is frozen (ADC-563): cannot add IR node %r "
+                               "after pops.compile; author a fresh Program and recompile."
+                               % (self.name, op))
+        return super()._new(vtype, op, inputs, attrs, name, block)
 
     def capture_source_locations(self, enabled=True):
         """Enable (or disable) recording each IR node's authoring source location (ADC-530).
