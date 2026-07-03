@@ -18,6 +18,7 @@
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/patch_box.hpp>  // PatchBox: index-space signature of a fine patch (patch_boxes())
 #include <pops/mesh/layout/distribution_mapping.hpp>
+#include <pops/mesh/storage/mf_arith.hpp>  // reduce_sum / reduce_abs_sum / reduce_min / reduce_max / dot / norm_inf (composite_reduce)
 #include <pops/mesh/layout/copy_schedule.hpp>  // copy_schedule_{hit,miss}_count (ADC-607 counters)
 #include <pops/mesh/boundary/fill_boundary.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
@@ -425,6 +426,28 @@ class AmrRuntime {
     auto& L = *blocks_[b].levels;
     mf_average_down_mb(L[k].U, L[k - 1].U);
   }
+
+  /// LEVEL-COMPOSITE collective reduction over a NAMED block, folding EVERY level (ADC-542) -- the AMR
+  /// counterpart of System::reduce_component. @p kind is per-component "sum" / "min" / "max" /
+  /// "abs_sum" / "sum_sq" (dot) / "abs_max" (norm_inf), or the full-state "*_all" variants. Extrema
+  /// fold all levels UNMASKED (a covered coarse cell is the average of its children, within their
+  /// extrema); volume-weighted sums are dx*dy-weighted per level with covered-cell exclusion (the
+  /// level-(k+1) patches coarsened by 2). COLLECTIVE; unknown block / kind throws. Body in amr_restore.hpp.
+  double composite_reduce(const std::string& block, const std::string& kind, int comp) const;
+
+  /// Impose a mid-run hierarchy from a checkpoint (multi-block, all levels, reusing regrid R6/R7):
+  /// build each level's BoxArray + DistributionMapping from the manifest, reallocate every block's
+  /// level MultiFab on it (inherited ghost width), rebuild + rewire the shared aux, verify the
+  /// shared-layout invariant. The layout AND the data come from the checkpoint (the per-level state
+  /// restore overwrites every valid cell), so no tagging / clustering / prolong -- regrid MINUS the
+  /// recompute. Body in amr_restore.hpp (ADC-542). @p level_boxes / @p level_owner_ranks are indexed by
+  /// level; a level count over the composed max_levels is refused verbatim.
+  void rebuild_hierarchy(const std::vector<std::vector<PatchBox>>& level_boxes,
+                         const std::vector<std::vector<int>>& level_owner_ranks);
+  /// Owner rank per box of level @p k (the shared layout's DistributionMapping), index-aligned with
+  /// that level's boxes in patch_boxes(). The v3 checkpoint serializes it so a restart reproduces the
+  /// LOCAL-fab iteration order (bit-identity of the host aggregations). Body in amr_restore.hpp.
+  std::vector<int> level_owner_ranks(int k) const;
   /// Head-of-step union-tags regrid at the Program driver's cadence (the SAME regrid() the native step
   /// runs at its head). @p macro_step gates it like AmrRuntime::step (skip step 0; honor regrid_every_).
   void regrid_if_due(int macro_step) {
@@ -1561,6 +1584,15 @@ class AmrRuntime {
     }
   }
 
+  // Composite-reduction + hierarchy-rebuild helpers (ADC-542); bodies in amr_restore.hpp (this header
+  // is at its line budget). block_index_by_name_ resolves a named block; composite_extremum_ folds a
+  // level's extremum; composite_level_sum_ masks covered cells; cell_covered_ tests coverage.
+  std::size_t block_index_by_name_(const std::string& name) const;
+  static double composite_extremum_(const MultiFab& U, const std::string& kind, int comp, bool full);
+  double composite_level_sum_(std::size_t b, int k, const std::string& kind, int comp,
+                              bool full) const;
+  static bool cell_covered_(int i, int j, const std::vector<Box2D>& covered);
+
   // Re-applies the model-NAMED aux fields (ADC-291) onto the COARSE shared aux valid cells. Mirror of
   // SystemFieldSolver::apply_named_aux_one (cartesian System): per LOCAL fab (MPI-safe), valid cells
   // only, global flat index j*nx+i. The coarse layout is frozen across regrid (only fine levels are
@@ -1806,3 +1838,8 @@ class AmrRuntime {
 };
 
 }  // namespace pops
+
+// Out-of-line AmrRuntime member definitions kept OUT of this header (its line budget): the
+// composite-reduction folds and the checkpoint hierarchy-rebuild seam (ADC-542). Included last so
+// the full AmrRuntime class is visible.
+#include <pops/runtime/amr/amr_restore.hpp>  // NOLINT(build/include_order)

@@ -26,7 +26,7 @@ class _AmrSystemInstall(_AmrSystem):
 
     def _install_compiled(self, compiled: Any = None, *, instances: Any = None, params: Any = None,
                           aux: Any = None, solvers: Any = None, cadence: Any = None,
-                          outputs: Any = None) -> Any:
+                          outputs: Any = None, diagnostics: Any = None) -> Any:
         """INTERNAL low-level install seam on the AMR hierarchy (Spec 5 sec.11) -- signature parity
         with ``System._install_compiled``. NOT the public entry point: author the run with
         ``pops.bind(...)``, which dispatches System / AmrSystem and calls this seam.
@@ -89,10 +89,14 @@ class _AmrSystemInstall(_AmrSystem):
                     "result (target='amr_system'), or compiled=None for a native AMR install (each "
                     "instance carries its own native model)." % type(compiled).__name__)
             compiled_model = getattr(compiled, "model", None)
+        # (7) OUTPUT / CHECKPOINT policies and DIAGNOSTIC measures flow onto the AMR engine exactly
+        # like the Uniform System (ADC-542 / addendum C.1): AmrSystem.run() fires each at its cadence
+        # through the AMR per-level output driver + the composite-reduction diagnostics path. Stored
+        # here; the run-loop hook lives on AmrSystem.
         if outputs:
-            raise NotImplementedError(
-                "pops.bind: output/checkpoint policies are deferred on AMR (per-level writes are "
-                "Spec 6 / ADC-511); use a Uniform layout for output, or omit it on the AMR route.")
+            self._output_policies = list(outputs)
+        if diagnostics:
+            self._diagnostic_measures = list(diagnostics)
 
         # (1) FIELD SOLVERS first (parity with System: set_poisson before adding blocks AND before
         # install_program -- the section-24 solver requirement reads the configured solver). The DECLARED

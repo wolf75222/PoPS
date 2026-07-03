@@ -1705,6 +1705,82 @@ std::map<std::string, double> AmrSystem::program_diagnostics() const {
   return p_->program_.diagnostics_;
 }
 
+// Level-composite collective reduction over a named block (ADC-542). Multi-block / forced-runtime
+// routes to AmrRuntime::composite_reduce (native masked level sums + unmasked extrema). Single-block
+// (AmrCouplerMP coupler, no runtime) composes the SAME reduction from the coupler's native per-level
+// state accessors: it gathers each level's valid cells (the existing AMR checkpoint route) and folds
+// them with the covered-cell / extrema discipline on the host -- correct, and single-block AMR carries
+// at most a shallow hierarchy. COLLECTIVE: called on every rank.
+double AmrSystem::composite_reduce(const std::string& block, const std::string& kind,
+                                   int comp) const {
+  p_->ensure_built();
+  if (p_->runtime)
+    return p_->runtime->composite_reduce(block, kind, comp);
+  // Single-block coupler path: compose from the per-level state gathers (level_state_global under
+  // np>1, else level_state). n_vars / n_levels come from the coupler closures.
+  const int nlev = p_->n_levels_fn ? p_->n_levels_fn() : 1;
+  const int nc = p_->n_vars_fn ? p_->n_vars_fn() : 1;
+  const bool gather = n_ranks() != 1;
+  const bool full = kind.size() > 4 && kind.compare(kind.size() - 4, 4, "_all") == 0;
+  const std::string base = full ? kind.substr(0, kind.size() - 4) : kind;
+  const int c0 = full ? 0 : comp;
+  const int c1 = full ? nc : comp + 1;
+  const int n = p_->cfg.n;  // coarse cells per direction
+  const double L = p_->cfg.L;
+  const bool is_sum = (base == "sum" || base == "abs_sum" || base == "sum_sq");
+  double acc = is_sum ? 0.0 : (base == "min" ? std::numeric_limits<double>::infinity()
+                               : (base == "max" ? -std::numeric_limits<double>::infinity() : 0.0));
+  for (int k = 0; k < nlev; ++k) {
+    const std::size_t nf = static_cast<std::size_t>(n) << k;
+    std::vector<double> st = (gather && p_->level_state_global_fn)
+                                 ? p_->level_state_global_fn(k)
+                                 : (p_->level_state_fn ? p_->level_state_fn(k) : std::vector<double>());
+    if (st.empty())
+      continue;
+    // Covered cells of level k: the level-(k+1) patches coarsened by 2 (from patch_boxes()).
+    std::vector<PatchBox> covered;
+    if (k + 1 < nlev && p_->patch_boxes_fn) {
+      for (const PatchBox& fb : p_->patch_boxes_fn())
+        if (fb.level == k + 1)
+          covered.push_back(PatchBox{k, fb.ilo >> 1, fb.jlo >> 1, fb.ihi >> 1, fb.jhi >> 1});
+    }
+    const double dx = (L / static_cast<double>(n)) / static_cast<double>(1 << k);
+    const double cell = dx * dx;
+    for (std::size_t j = 0; j < nf; ++j)
+      for (std::size_t i = 0; i < nf; ++i) {
+        bool cov = false;
+        for (const PatchBox& c : covered)
+          if (static_cast<int>(i) >= c.ilo && static_cast<int>(i) <= c.ihi &&
+              static_cast<int>(j) >= c.jlo && static_cast<int>(j) <= c.jhi) {
+            cov = true;
+            break;
+          }
+        for (int c = c0; c < c1; ++c) {
+          const double v = st[static_cast<std::size_t>(c) * nf * nf + j * nf + i];
+          if (base == "min")
+            acc = std::min(acc, v);
+          else if (base == "max")
+            acc = std::max(acc, v);
+          else if (base == "abs_max")
+            acc = std::max(acc, v < 0 ? -v : v);
+          else if (!cov) {  // volume-weighted sums exclude covered coarse cells
+            if (base == "sum")
+              acc += cell * v;
+            else if (base == "abs_sum")
+              acc += cell * (v < 0 ? -v : v);
+            else if (base == "sum_sq")
+              acc += cell * v * v;
+          }
+        }
+      }
+  }
+  if (!is_sum && base != "min" && base != "max" && base != "abs_max")
+    throw std::runtime_error(
+        "AmrSystem::composite_reduce : unknown reduction kind '" + kind + "' for block '" + block +
+        "'");
+  return acc;
+}
+
 // Load a generated problem.so and install its compiled time Program on the AMR hierarchy. Mirrors
 // System::install_program (the loader logic is VERBATIM, only the AMR ABI conventions differ: the
 // global-scope promotion is anchored on amr_native_anchor like add_native_block, not pops::abi_key, and
@@ -2151,6 +2227,32 @@ void AmrSystem::set_hierarchy(const std::vector<PatchBox>& boxes) {
   p_->set_hierarchy_fn(boxes);
 }
 
+// Impose a mid-run MULTI-BLOCK hierarchy from a v3 checkpoint (ADC-542). Regroups the flat level-tagged
+// box + owner-rank arrays by level and forwards to AmrRuntime::rebuild_hierarchy (all levels rebuilt,
+// reusing regrid R6/R7). MULTI-BLOCK / runtime engine only.
+void AmrSystem::rebuild_hierarchy(const std::vector<PatchBox>& boxes,
+                                  const std::vector<int>& owner_ranks) {
+  p_->ensure_built();
+  if (!p_->runtime)
+    throw std::runtime_error(
+        "AmrSystem::rebuild_hierarchy : MULTI-BLOCK / runtime engine only (the single-block coupler "
+        "uses set_hierarchy). This system has no AmrRuntime engine.");
+  if (owner_ranks.size() != boxes.size())
+    throw std::runtime_error(
+        "AmrSystem::rebuild_hierarchy : boxes and owner_ranks length mismatch");
+  const int nlev = p_->runtime->nlev();
+  std::vector<std::vector<PatchBox>> level_boxes(static_cast<std::size_t>(nlev));
+  std::vector<std::vector<int>> level_owners(static_cast<std::size_t>(nlev));
+  for (std::size_t idx = 0; idx < boxes.size(); ++idx) {
+    const int k = boxes[idx].level;
+    if (k < 0 || k >= nlev)
+      throw std::runtime_error("AmrSystem::rebuild_hierarchy : box level out of range");
+    level_boxes[static_cast<std::size_t>(k)].push_back(boxes[idx]);
+    level_owners[static_cast<std::size_t>(k)].push_back(owner_ranks[idx]);
+  }
+  p_->runtime->rebuild_hierarchy(level_boxes, level_owners);
+}
+
 // --- MULTI-BLOCK per-BLOCK per-level checkpoint accessors (ADC-509) --------------------------------
 // All require the multi-block runtime (the AmrRuntime engine carries the per-block level stacks on the
 // SHARED layout): mono-block uses the level_state path above (explicit redirection). The named block is
@@ -2185,6 +2287,12 @@ void AmrSystem::set_block_level_state(const std::string& name, int k,
   if (!p_->runtime)
     throw std::runtime_error(kAmrCkptMultiOnly);
   p_->runtime->set_block_level_state(p_->block_index_or_throw(name), k, s);
+}
+std::vector<int> AmrSystem::level_owner_ranks(int k) {
+  p_->ensure_built();
+  if (!p_->runtime)
+    return {};  // single-block coupler: no runtime DistributionMapping to serialize (serial path)
+  return p_->runtime->level_owner_ranks(k);
 }
 
 }  // namespace pops

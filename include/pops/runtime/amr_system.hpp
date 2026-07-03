@@ -704,6 +704,14 @@ class AmrSystem {
   /// The recorded diagnostic @p name (0 if absent) / the whole map. Exposed to Python for inspection.
   POPS_EXPORT double program_diagnostic(const std::string& name) const;
   POPS_EXPORT std::map<std::string, double> program_diagnostics() const;
+  /// LEVEL-COMPOSITE collective reduction over a named block, the AMR counterpart of
+  /// System::reduce_component the diagnostics driver drives (ADC-542). @p kind is per-component
+  /// "sum" / "min" / "max" / "abs_sum" / "sum_sq" / "abs_max", or the full-state "*_all" variants.
+  /// Volume-weighted sums exclude covered coarse cells; extrema fold all levels unmasked (a covered
+  /// coarse cell is the average of its children, within their extrema). Multi-block routes to the
+  /// AmrRuntime; single-block composes the native per-level reductions. Unknown block / kind throws.
+  POPS_EXPORT double composite_reduce(const std::string& block, const std::string& kind,
+                                      int comp) const;
   /// @}
   /// @}
 
@@ -788,6 +796,13 @@ class AmrSystem {
   /// are the patch_boxes() signatures of the checkpoint (filtered to level 1 in mono-block). MONO-BLOCK.
   void set_hierarchy(const std::vector<PatchBox>& boxes);
 
+  /// Impose a mid-run MULTI-BLOCK hierarchy from a v3 checkpoint (ADC-542): @p boxes are ALL the
+  /// checkpoint patch boxes (level tagged, level 0 implicit), @p owner_ranks the per-box owner rank
+  /// aligned with @p boxes. Routes to AmrRuntime::rebuild_hierarchy (all levels rebuilt, reusing regrid
+  /// R6/R7). MULTI-BLOCK / runtime engine only; @throws on the single-block coupler path (use
+  /// set_hierarchy). The v3 restart calls this so restartable=True works under ACTIVE regridding.
+  void rebuild_hierarchy(const std::vector<PatchBox>& boxes, const std::vector<int>& owner_ranks);
+
   /// MULTI-BLOCK per-BLOCK per-level checkpoint accessors (ADC-509). The AmrRuntime engine shares the
   /// layout AND the aux across blocks, so the per-level STATE is read/restored PER BLOCK (by NAME)
   /// while phi stays shared (level_potential above). @p name indexes the block (block_names()); @p k:
@@ -800,6 +815,10 @@ class AmrSystem {
   std::vector<double> block_level_state_global(const std::string& name,
                                                int k);  ///< np>1 gather (all ranks call)
   void set_block_level_state(const std::string& name, int k, const std::vector<double>& s);
+  /// Owner rank per box of level @p k (the shared layout's DistributionMapping), aligned with the
+  /// level-@p k rows of patch_boxes(). The v3 checkpoint (ADC-542) serializes it so a restart
+  /// reproduces the LOCAL-fab iteration order. MULTI-BLOCK / runtime engine; empty on the coupler path.
+  std::vector<int> level_owner_ranks(int k);
 
   double mass();  ///< mass of the 1st block on the coarse (conserved at reflux)
   double mass(
