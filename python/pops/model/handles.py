@@ -11,13 +11,15 @@ returns one so a named operator is referenced as a typed, INSPECTABLE object, NO
     R.category        # "rate"
     R.signature       # Signature((U, Fields) -> Rate(U))
     rate = P.call(R, U, fields)      # the handle is the one public P.call selector
+    rate = R(U, fields)              # ADC-560: the callable facade -> the same IR
 
 The handle is the public :meth:`pops.time.Program.call` selector: the public ``P.call`` REQUIRES an
-``OperatorHandle`` (a bare string operator name is refused). The handle resolves through the registry
-lookup + lowering identical to the internal name path, so ``P.call(handle, ...)`` builds the
-byte-identical IR (same ``_ir_hash``) as the internal ``P._call(name, ...)`` the lib.time macros /
-lowering use. The handle holds no Program reference, so the same handle works in any Program bound to
-a registry that declares its name.
+``OperatorHandle`` (a bare string operator name is refused). ``OperatorHandle.__call__`` (ADC-560) is
+a thin FACADE over that same path: it locates the Program from its Value arguments and delegates to
+the internal ``P._call(self.name, ...)``, so ``R(U, f)`` builds the BYTE-IDENTICAL IR (same
+``_ir_hash``) as ``P.call(R, U, f)`` -- same registry lookup, same signature type-checks, ZERO
+numerics. The handle holds no Program reference, so the same handle works in any Program bound to a
+registry that declares its name.
 
 This module imports only the standard library (and the sibling ``pops.model`` types lazily inside
 methods) so it stays codegen-free and ``_pops``-free and keeps the ``pops.time`` import graph acyclic
@@ -70,6 +72,36 @@ class OperatorHandle:
 
     def __hash__(self):
         return hash((self.name, self.kind))
+
+    def __call__(self, *args, name=None):
+        """Call the operator inside a time Program (ADC-560): the tableau-style facade over ``P.call``.
+
+        Locates the Program from the first Value argument that carries a ``.prog`` back-reference and
+        delegates to the INTERNAL ``P._call(self.name, *args, name=name)`` -- the byte-identical
+        lowering the public ``P.call(handle, ...)`` uses. So ``R(U, f)`` builds the SAME IR (same
+        ``_ir_hash``), runs the SAME signature type-checks and raises the SAME signature errors as
+        ``P.call(R, U, f)``, with ZERO numerics: ``__call__`` only builds IR. A call outside a Program
+        (no Value argument to find the Program from) is refused with a clear error; the operator name
+        stays an internal selector, never re-exposed as a public string.
+        """
+        prog = self._program_from_args(args)
+        return prog._call(self.name, *args, name=name)
+
+    def _program_from_args(self, args):
+        """Find the time-Program to build IR into from the call arguments (ADC-560).
+
+        The Program is the ``.prog`` back-reference on the first :class:`pops.time.values.Value`
+        argument. A call with no such argument (outside a Program) is refused with a clear error
+        naming the explicit ``P.call`` alternative. Shared by the base handle and its callable
+        subtypes so the Program-location rule is defined once.
+        """
+        prog = next((a.prog for a in args if hasattr(a, "prog")), None)
+        if prog is None:
+            raise ValueError(
+                "operator %r must be called with time-Program values (inside a Program) so it can "
+                "find the Program to build IR into; got %r. Use P.call(%r, ...) if you hold the "
+                "Program explicitly." % (self.name, args, self.name))
+        return prog
 
     def __repr__(self):
         if self.kind is None:
