@@ -32,6 +32,7 @@ from .module import Module
 from .operators import (
     OPERATOR_FAMILIES,
     OPERATOR_KINDS,
+    OPERATOR_REQUIREMENT_KEYS,
     LocalLinearOperator,
     MatrixFreeOperator,
     Operator,
@@ -67,6 +68,7 @@ __all__ = [
     "OperatorHandle",
     "OPERATOR_KINDS",
     "OPERATOR_FAMILIES",
+    "OPERATOR_REQUIREMENT_KEYS",
     "operator_family",
     "ModuleManifest",
     "OperatorManifestEntry",

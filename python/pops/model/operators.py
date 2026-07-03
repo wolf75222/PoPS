@@ -53,6 +53,19 @@ def operator_family(kind):
     return OPERATOR_FAMILIES.get(kind, "other")
 
 
+# The documented axes of an operator's ``requirements`` dict (ADC-528). Requirements are what an
+# operator NEEDS from the runtime context, declared by the operator's author -- NEVER inferred from
+# the operator's name. The axes are: ``ghosts`` (halo depth an int), ``fields`` (named elliptic
+# fields solved before the call), ``params`` (named model parameters read), ``aux`` (named aux
+# channels read), ``solvers`` (named local/global solvers needed), ``layout`` (a required storage
+# layout, e.g. "cell"), ``backend`` (a required backend capability, e.g. "device"). The set is a
+# documented VOCABULARY, not a hard schema: an author may still record an extra key, but
+# ``Module.operator_requirements`` warns on one outside this set so a typo surfaces early.
+OPERATOR_REQUIREMENT_KEYS = frozenset({
+    "ghosts", "fields", "params", "aux", "solvers", "layout", "backend",
+})
+
+
 class LocalLinearOperator:
     """Operator-valued type ``State -> State`` (an ``L`` such that ``L: U -> U``).
 

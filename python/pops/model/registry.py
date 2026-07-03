@@ -52,6 +52,11 @@ class OperatorRegistry:
         one; otherwise the sole operator of that kind. Raises a clear error when none
         exists, or when several are compatible and none is privileged -- the caller
         must then disambiguate with an explicit ``P.call(name, ...)``.
+
+        This is a BUILD-TIME resolution (kind -> operator), used only while lowering a Program; it is
+        never on a hot kernel path. In a generated kernel operators are addressed by their integer
+        ``OperatorId`` (:meth:`id_of` / :meth:`by_id`), so no operator-name string lookup survives into
+        the compiled step (ADC-528).
         """
         candidates = self.operators_of_kind(kind)
         privileged = [op for op in candidates if op.capabilities.get("default")]

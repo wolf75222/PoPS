@@ -205,6 +205,39 @@ class Module:
         """The requirements dict of operator ``name`` (aux / solver / params / ...)."""
         return dict(self._registry.get(name).requirements)
 
+    def unknown_requirement_keys(self, name):
+        """Requirement keys of operator ``name`` outside the documented vocabulary (ADC-528).
+
+        Returns the sorted list of keys in the operator's ``requirements`` dict that are NOT one of
+        :data:`pops.model.operators.OPERATOR_REQUIREMENT_KEYS` (ghosts / fields / params / aux /
+        solvers / layout / backend). Empty for a clean operator. This is a diagnostic, not a hard
+        gate: a foreign key is allowed (the vocabulary is documented, not enforced), but surfacing it
+        lets a typo (``"ghost"`` for ``"ghosts"``) be caught. Requirements are always declared by the
+        operator's author; they are NEVER inferred from the operator name."""
+        from .operators import OPERATOR_REQUIREMENT_KEYS
+        reqs = self._registry.get(name).requirements
+        return sorted(k for k in reqs if k not in OPERATOR_REQUIREMENT_KEYS)
+
+    def validate_requirements(self):
+        """Warn on every operator requirement key outside the documented vocabulary (ADC-528).
+
+        Emits one :class:`UserWarning` per operator that carries an unrecognized requirement key and
+        returns ``{operator_name: [unknown_key, ...]}`` for the offending operators (empty when the
+        whole registry is clean). Additive and non-fatal: it never rejects a Module, so a family that
+        has not yet adopted the vocabulary keeps working; it only flags a likely typo."""
+        import warnings
+        from .operators import OPERATOR_REQUIREMENT_KEYS
+        known = sorted(OPERATOR_REQUIREMENT_KEYS)
+        offenders = {}
+        for op in self._registry:
+            unknown = self.unknown_requirement_keys(op.name)
+            if unknown:
+                offenders[op.name] = unknown
+                warnings.warn(
+                    "operator %r declares requirement key(s) %s outside the documented vocabulary %s"
+                    % (op.name, unknown, known), UserWarning, stacklevel=2)
+        return offenders
+
     def operator_capabilities(self, name, **caps):
         """Get or set the capabilities of operator ``name``.
 
