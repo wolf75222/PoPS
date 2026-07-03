@@ -81,12 +81,12 @@ class WaveSpeedProvider(Descriptor):
 
 
 # --- factories (typed handles for each source; the public authoring surface) ------------------
-def ExplicitPair() -> "WaveSpeedProvider":
+def ExplicitPair() -> WaveSpeedProvider:
     """The signed pair declared with ``m.wave_speeds(x=(smin, smax), y=(...))``."""
     return WaveSpeedProvider("explicit_pair")
 
 
-def FromJacobian(eig: Any = "numeric", blocks: Any = None) -> "WaveSpeedProvider":
+def FromJacobian(eig: Any = "numeric", blocks: Any = None) -> WaveSpeedProvider:
     """The exact signed speeds from the flux jacobian eigenvalues (``m.wave_speeds_from_jacobian``).
 
     @p eig ``"numeric"`` | ``"fd"`` (mirror of the authoring option); @p blocks the optional
@@ -100,22 +100,22 @@ def FromJacobian(eig: Any = "numeric", blocks: Any = None) -> "WaveSpeedProvider
     return WaveSpeedProvider("jacobian", options=opts)
 
 
-def FromPressure() -> "WaveSpeedProvider":
+def FromPressure() -> WaveSpeedProvider:
     """The historical source: primitive 'p' + eigenvalues -> signed wave speeds."""
     return WaveSpeedProvider("pressure_derived")
 
 
-def Einfeldt() -> "WaveSpeedProvider":
+def Einfeldt() -> WaveSpeedProvider:
     """The Einfeldt signed-speed estimate. Typed superset of ``riemann.speeds.einfeldt()``."""
     return WaveSpeedProvider("einfeldt")
 
 
-def Davis() -> "WaveSpeedProvider":
+def Davis() -> WaveSpeedProvider:
     """The Davis signed-speed estimate. Typed superset of ``riemann.speeds.davis()``."""
     return WaveSpeedProvider("davis")
 
 
-def MaxWaveSpeed() -> "WaveSpeedProvider":
+def MaxWaveSpeed() -> WaveSpeedProvider:
     """The Rusanov MAJORANT (spectral radius). ``signed_pair`` is False -- HLL refuses it."""
     return WaveSpeedProvider("max_wave_speed")
 

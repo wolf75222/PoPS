@@ -108,22 +108,22 @@ class Refine(MeshDescriptor):
         self.threshold = threshold
 
     @classmethod
-    def on(cls, subject: Any) -> "Refine":
+    def on(cls, subject: Any) -> Refine:
         return cls(subject)
 
-    def _with(self, predicate: Any, threshold: Any) -> "Refine":
+    def _with(self, predicate: Any, threshold: Any) -> Refine:
         return Refine(self.subject, predicate, float(threshold))
 
-    def above(self, threshold: Any) -> "Refine":
+    def above(self, threshold: Any) -> Refine:
         return self._with("above", threshold)
 
-    def below(self, threshold: Any) -> "Refine":
+    def below(self, threshold: Any) -> Refine:
         return self._with("below", threshold)
 
-    def gradient_above(self, threshold: Any) -> "Refine":
+    def gradient_above(self, threshold: Any) -> Refine:
         return self._with("gradient_above", threshold)
 
-    def magnitude_above(self, threshold: Any) -> "Refine":
+    def magnitude_above(self, threshold: Any) -> Refine:
         return self._with("magnitude_above", threshold)
 
     def options(self) -> dict:

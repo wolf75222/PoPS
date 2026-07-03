@@ -39,7 +39,7 @@ class ChargeDensity(_RHS):
         self.blocks = tuple(str(b) for b in blocks)
 
     @classmethod
-    def from_blocks(cls, *blocks: Any) -> "ChargeDensity":
+    def from_blocks(cls, *blocks: Any) -> ChargeDensity:
         """A :class:`ChargeDensity` summed over the named contributing :paramref:`blocks`.
 
         Accepts the block names either as varargs (``from_blocks("ions", "electrons")``)

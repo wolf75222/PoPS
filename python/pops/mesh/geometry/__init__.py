@@ -40,7 +40,7 @@ class _Boundary(MeshDescriptor):
 class _Geometry(MeshDescriptor):
     category = "geometry"
 
-    def boundary(self) -> "_Boundary":
+    def boundary(self) -> _Boundary:
         """The boundary of this geometry (e.g. ``Dirichlet(on=wall.boundary())``)."""
         return _Boundary(self)
 
