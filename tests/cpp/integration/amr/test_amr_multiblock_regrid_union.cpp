@@ -229,11 +229,27 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
     rt.set_regrid(/*every=*/2, /*grow=*/2, /*margin=*/2);
     rt.set_block_tag_predicate(0, TagDensityAbove{Real(1.5)});
     rt.set_block_tag_predicate(1, TagDensityAbove{Real(1.5)});
+    // ADC-607: wire a profiler so the regrid data-structure counters emit. The regrid site records
+    // tag_density (dense TagBox fill, permille), box_hash_rebuilds + copy_cache_hits/misses
+    // (parallel_copy schedule-cache engagement). We only assert the counters exist and are
+    // internally consistent (rebuilds == misses); the numeric trajectory is untouched.
+    pops::runtime::program::Profiler prof;
+    prof.enable();
+    rt.set_profiler(&prof);
     const std::vector<Box2D> fb_seed = fine_boxes(rt);            // patch central fixe du build
     const double m0_before = rt.mass(0), m1_before = rt.mass(1);  // (V1) snapshot avant la sequence
     for (int s = 0; s < 6; ++s)
       rt.step(Real(0.01));
     EXPECT_TRUE(rt.regrid_count() >= 1) << "a_regrid_was_called";
+    // (ADC-607) the regrid emitted the new counters; box_hash_rebuilds mirrors copy_cache_misses,
+    // and each parallel_copy either hit or missed (hits + misses == total copies >= misses >= 0).
+    EXPECT_EQ(prof.counter("box_hash_rebuilds"), prof.counter("copy_cache_misses"))
+        << "a_box_hash_rebuilds_equals_copy_misses";
+    EXPECT_TRUE(prof.counter("copy_cache_hits") >= 0 && prof.counter("copy_cache_misses") >= 0)
+        << "a_copy_cache_counters_nonnegative";
+    EXPECT_TRUE(prof.counter("tag_density") >= 0 && prof.counter("tag_density") <= 1000 * rt.regrid_count())
+        << "a_tag_density_in_permille_range";
+    rt.set_profiler(nullptr);  // detach before rt is destroyed (prof is a local)
     const std::vector<Box2D> fb_now = fine_boxes(rt);
     EXPECT_TRUE(!same_box_list(fb_seed, fb_now)) << "a_fine_layout_evolved_from_seed";
     EXPECT_TRUE(all_finite(rt.density(0)) && all_finite(rt.density(1)))

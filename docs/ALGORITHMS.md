@@ -1626,6 +1626,16 @@ de-replicated coarse would revert to replicated mode (`mf_find_box` instead of `
 non-conservation: the mask is the central invariant of the correction. The register must be filled locally
 (zero elsewhere) before `gather`, otherwise the all_reduce double-counts. Bit-for-bit reproducibility requires a
 deterministic enumeration order of the `parallel_copy` jobs (spatial hash on the source, sorted candidates).
+That job schedule is MEMOIZED per layout pair (dst BoxArray/DistributionMapping, src BoxArray/DistributionMapping)
+by `CopyScheduleCache` in [`mesh/copy_schedule.hpp`](../include/pops/mesh/layout/copy_schedule.hpp): the cache
+lives on the dst `MultiFab` (dropped when regrid move-assigns a fresh dst) but each entry is keyed on a src-layout
+fingerprint, so only the live-data copy/pack/MPI/unpack reruns while the enumeration runs once. The schedule
+replays in the same order as the inline loops, so the memoized path is bit-identical to a per-call rebuild
+(the same design as the intra-level halo `HaloScheduleCache`, section on `fill_boundary`). The replicated-parent
+coarse-fine ghost fill likewise replaces its per-cell `mf_find_box` scan with a precomputed dense cell -> local-box
+lookup (`MfBoxLookup`): the parent valid boxes are disjoint, so the first-hit the linear scan returned is the only
+hit, and the lookup returns the identical box index. The regrid profiler exposes `tag_density`,
+`box_hash_rebuilds` and `copy_cache_hits`/`copy_cache_misses` counters for this machinery (ADC-607).
 Validation: `test_amr_spatial_parity` (the spatial core of the AMR path is identical to that of `System`:
 same primitive reconstruction, same HLLC/Roe flux), `test_mpi_mbox_parity` (residual invariant to the box
 splitting AND to the number of ranks np = 1/2/4, dmax = 0), `test_mpi_amr_distributed_coarse` (distributed coarse

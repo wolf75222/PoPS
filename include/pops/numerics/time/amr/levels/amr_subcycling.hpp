@@ -234,6 +234,53 @@ inline int mf_find_box(const MultiFab& mf, int I, int J) {
   return -1;
 }
 
+// Dense cell -> LOCAL-box-index lookup over the bounding box of a MultiFab's LOCAL valid boxes
+// (ADC-607). Built ONCE (O(sum of local box areas)), then queried O(1) per cell, replacing the
+// per-cell O(local_size) linear scan of mf_find_box in the replicated-parent coarse fill. The valid
+// boxes of a MultiFab are DISJOINT, so a cell is covered by at most one box: marking each cell with
+// its owning local index and reading it back returns EXACTLY what mf_find_box's first-hit would
+// (first-hit == only-hit, order-independent) -> bit-identical. Cells outside every local box (and
+// outside the bounding box) map to -1, matching mf_find_box's "not found". Per-rank local: no
+// collective, MPI-safe (each rank builds over its own local boxes, exactly as it scanned before).
+struct MfBoxLookup {
+  int I0 = 0, J0 = 0, NX = 0, NY = 0;
+  std::vector<int> idx;  // cell -> local box index (-1 if none); empty if the mf owns no box
+
+  explicit MfBoxLookup(const MultiFab& mf) {
+    const int n = mf.local_size();
+    if (n == 0)
+      return;
+    Box2D bb = mf.box(0);
+    for (int li = 1; li < n; ++li) {
+      const Box2D b = mf.box(li);
+      bb.lo[0] = std::min(bb.lo[0], b.lo[0]);
+      bb.lo[1] = std::min(bb.lo[1], b.lo[1]);
+      bb.hi[0] = std::max(bb.hi[0], b.hi[0]);
+      bb.hi[1] = std::max(bb.hi[1], b.hi[1]);
+    }
+    I0 = bb.lo[0];
+    J0 = bb.lo[1];
+    NX = bb.nx();
+    NY = bb.ny();
+    idx.assign(static_cast<std::size_t>(NX) * NY, -1);
+    // Fill in ASCENDING local order so a (hypothetical) overlap would keep the FIRST box, matching
+    // mf_find_box; disjoint boxes make the order moot but the intent stays explicit.
+    for (int li = n - 1; li >= 0; --li) {
+      const Box2D b = mf.box(li);
+      for (int J = b.lo[1]; J <= b.hi[1]; ++J)
+        for (int I = b.lo[0]; I <= b.hi[0]; ++I)
+          idx[(static_cast<std::size_t>(J - J0) * NX) + (I - I0)] = li;
+    }
+  }
+
+  // Local box index containing (I,J), or -1. Identical to mf_find_box(mf, I, J).
+  int find(int I, int J) const {
+    if (I < I0 || I >= I0 + NX || J < J0 || J >= J0 + NY)
+      return -1;
+    return idx[(static_cast<std::size_t>(J - J0) * NX) + (I - I0)];
+  }
+};
+
 // BoxArray of the child boxes grown by ngrow then coarsened (ratio 2). Each box covers all the
 // coarse cells the child needs, ghosts included: this is the FillPatch fine-coarsen grid (cf.
 // refinement.hpp::interpolate).
@@ -261,6 +308,10 @@ inline void mf_fill_fine_ghosts_mb(MultiFab& Uf, const MultiFab& Po, const Multi
   const int nc = Uf.ncomp(), ng = Uf.n_grow();
   if (replicated_parent) {
     device_fence();
+    // Precompute the parent cell -> local-box lookup ONCE (ADC-607): the per-ghost-cell
+    // mf_find_box(Po, ci, cj) below was an O(Po.local_size()) linear scan run per ghost cell; the
+    // dense lookup returns the identical box (disjoint valid boxes -> first-hit == only-hit).
+    const MfBoxLookup po_lookup(Po);
     for (int li = 0; li < Uf.local_size(); ++li) {
       Array4 f = Uf.fab(li).array();
       const Box2D v = Uf.box(li), g = Uf.fab(li).grown_box();
@@ -268,7 +319,7 @@ inline void mf_fill_fine_ghosts_mb(MultiFab& Uf, const MultiFab& Po, const Multi
         for (int i = g.lo[0]; i <= g.hi[0]; ++i)
           if (!v.contains(i, j)) {
             const int ci = coarsen_index(i, kAmrRefRatio), cj = coarsen_index(j, kAmrRefRatio);
-            const int pb = mf_find_box(Po, ci, cj);
+            const int pb = po_lookup.find(ci, cj);
             if (pb < 0)
               continue;  // outside parent coverage -> leave to fill_boundary
             const ConstArray4 po = Po.fab(pb).const_array(), pn = Pn.fab(pb).const_array();

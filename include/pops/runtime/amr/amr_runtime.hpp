@@ -17,6 +17,7 @@
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/patch_box.hpp>  // PatchBox: index-space signature of a fine patch (patch_boxes())
 #include <pops/mesh/layout/distribution_mapping.hpp>
+#include <pops/mesh/layout/copy_schedule.hpp>  // copy_schedule_{hit,miss}_count (ADC-607 counters)
 #include <pops/mesh/boundary/fill_boundary.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
@@ -876,6 +877,13 @@ class AmrRuntime {
     // attempt times itself but does not inflate the count. Null/disabled profiler -> no scope object.
     auto _rg = profile_amr_scope("regrid");
 
+    // AMR PROFILING (ADC-607): baseline the process-wide parallel_copy schedule counters so we can
+    // attribute this regrid's BoxHash rebuilds + copy-cache hits/misses (the R6 prolong/restrict and
+    // R8 re-solve replay parallel_copy). A miss builds a fresh schedule (== one BoxHash rebuild); a
+    // hit reuses a memoized plan. Sampled only when profiling; zero cost otherwise.
+    const std::int64_t copy_miss_before = copy_schedule_miss_count();
+    const std::int64_t copy_hit_before = copy_schedule_hit_count();
+
     // (R0) PRECONDITION: fields up to date (aux per level, for the |grad phi| criterion). The per-block
     // mass snapshot is NOT needed by the engine (conservation is checked test-side V1).
     solve_fields();
@@ -898,6 +906,16 @@ class AmrRuntime {
 
     // (R3) UNION (OR) of the tags + dilation (nesting + anticipation of the structures moving).
     TagBox grown = grow_tags(tag_union(parts), regrid_grow_, pdom);
+
+    // AMR PROFILING (ADC-607): tag density = tagged cells / total parent cells (x1000, integer
+    // permille). Records how full the DENSE TagBox is -- the decision to keep TagBox dense (a sparse
+    // grid would degrade Berger-Rigoutsos on a high-density front) is measured, not assumed. count()
+    // and box.num_cells() are the same dense buffer this regrid already walks; no extra sweep.
+    if (profiler_ != nullptr) {
+      const std::int64_t total = grown.box.num_cells();
+      if (total > 0)
+        profiler_->count("tag_density", (grown.count() * 1000) / total);
+    }
 
     // (R4)+(R5) cross-rank collective reduction (if coarse distributed) + UNIQUE clustering -> SHARED
     // fine layout. all_reduce_or_inplace is called INSIDE regrid_compute_fine_layout for distributed
@@ -956,6 +974,17 @@ class AmrRuntime {
     // attempt; this counts only the regrids that actually rebuilt the hierarchy.
     if (profiler_ != nullptr)
       profiler_->count("regrid");
+    // AMR PROFILING (ADC-607): attribute this regrid's parallel_copy schedule work. A miss is one
+    // BoxHash rebuild (a fresh schedule enumeration); box_hash_rebuilds should stay small (one per
+    // distinct layout pair the R6/R8 copies touch), so a growing count flags a cache that is not
+    // engaging. Deltas over the whole regrid body (baseline sampled at the head).
+    if (profiler_ != nullptr) {
+      const std::int64_t misses = copy_schedule_miss_count() - copy_miss_before;
+      const std::int64_t hits = copy_schedule_hit_count() - copy_hit_before;
+      profiler_->count("box_hash_rebuilds", misses);
+      profiler_->count("copy_cache_misses", misses);
+      profiler_->count("copy_cache_hits", hits);
+    }
   }
 
   /// Advances the system by one macro-step dt. We first solve the fields (co-located summed Poisson,

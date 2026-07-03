@@ -696,6 +696,11 @@ sources = ["tests/cpp/unit/mesh/test_fill_boundary.cpp"]
 labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]
+name = "test_copy_schedule_cache"
+sources = ["tests/cpp/unit/mesh/test_copy_schedule_cache.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
 name = "test_fill_boundary_cache"
 sources = ["tests/cpp/unit/mesh/test_fill_boundary_cache.cpp"]
 labels = ["unit", "mesh", "fast"]
