@@ -116,7 +116,7 @@ def build_requirements(compiled):
         has_roe / has_wave_speeds``) becomes a row naming the capability TOKEN and the flux that
         needs it; a model that carries no such flag (a base Rusanov-only or a composed native
         ``pops.Model``) yields no rows;
-      - descriptors: the spatial scheme is a BIND input (chosen on the Case block's ``spatial=`` and
+      - descriptors: the spatial scheme is a BIND input (chosen on the Problem block's ``spatial=`` and
         flowed by ``pops.bind``), so it is reported as bind-time -- the artifact does not freeze a
         reconstruction / Riemann descriptor at compile;
       - constraints: backend (always ``production`` for a compiled Program), the target layout,
@@ -163,7 +163,7 @@ def build_requirements(compiled):
 
     unknown = [
         "the spatial scheme (reconstruction / Riemann / variables) is a BIND input -- it is chosen "
-        "on the Case block (block(..., spatial=...)) and flowed by pops.bind, not frozen at compile, "
+        "on the Problem block (block(..., spatial=...)) and flowed by pops.bind, not frozen at compile, "
         "so no descriptor is named here.",
         "the reconstruction stencil width (ghost depth) is not recorded in today's metadata; the "
         "memory estimate assumes the conservative 2-cell MUSCL halo (cf. estimate_memory).",

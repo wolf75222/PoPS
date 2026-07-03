@@ -5,10 +5,10 @@ C++-backed runtime engines (:class:`pops.runtime.system.System` /
 :class:`pops.runtime.amr_system.AmrSystem`). It hides the legacy engine setters
 (``add_block`` / ``add_equation`` / ``set_poisson`` / ``set_refinement`` / ``install_program`` /
 ...) from the user: ``pops.bind`` builds one of these adapters, the adapter constructs the engine,
-lowers the validated Case objects onto it, installs through the INTERNAL ``_install_compiled`` seam
+lowers the validated Problem objects onto it, installs through the INTERNAL ``_install_compiled`` seam
 and returns a :class:`pops.runtime._bound_sim.BoundSimulation` view -- never the raw engine.
 
-The Case's ``layout`` descriptor is the selector carried by ``pops.compile``:
+The Problem's ``layout`` descriptor is the selector carried by ``pops.compile``:
 ``layout=Uniform(...)`` selects :class:`_UniformRuntimeAdapter` (target ``"system"``),
 ``layout=AMR(...)`` selects :class:`_AmrRuntimeAdapter` (target ``"amr_system"``). Both share the
 bind logic in :class:`_RuntimeAdapter`; only ``build_engine`` / ``install`` differ (the AMR adapter
@@ -47,7 +47,7 @@ class _RuntimeAdapter:
         raise NotImplementedError
 
     def build(self, compiled, *, layout, instances, params, aux, solvers, cadence, outputs):
-        """Build the engine, install the compiled Case onto it, wrap it in a bound-simulation view.
+        """Build the engine, install the compiled Problem onto it, wrap it in a bound-simulation view.
 
         This is the one place Uniform and AMR share: the adapter-specific ``build_engine`` /
         ``install`` are the only branch points. Returns a :class:`BoundSimulation` -- the delegating
@@ -73,7 +73,7 @@ class _UniformRuntimeAdapter(_RuntimeAdapter):
     def build_engine(self, layout):
         # Resolved from pops.runtime.system at call time so a monkeypatched System (low-level tests)
         # still takes effect. The Uniform layout carries the single-level mesh: derive the System's
-        # SystemConfig (n / L / periodic) from it so the engine matches the Case's grid, mirroring the
+        # SystemConfig (n / L / periodic) from it so the engine matches the Problem's grid, mirroring the
         # AMR adapter. A handle with no layout (not produced by pops.compile) binds on the System()
         # defaults.
         from pops.runtime.system import System
@@ -126,10 +126,10 @@ class _AmrRuntimeAdapter(_RuntimeAdapter):
 
 
 def adapter_for(target, layout, n_blocks=1):
-    """Select the runtime adapter for a compiled Case.
+    """Select the runtime adapter for a compiled Problem.
 
     ``layout=Uniform(...)`` compiles to ``target='system'`` and selects the Uniform adapter;
-    ``layout=AMR(...)`` compiles to ``target='amr_system'`` and selects the AMR adapter. The Case's
+    ``layout=AMR(...)`` compiles to ``target='amr_system'`` and selects the AMR adapter. The Problem's
     layout descriptor (carried on the handle by :func:`pops.compile`) is the selector: this function
     maps the target the layout produced onto the matching adapter.
 
@@ -165,7 +165,7 @@ def _system_config_from_layout(layout):
 
     Maps the inert Uniform layout onto the C++ runtime config the ``System`` constructor consumes:
     ``n`` / ``L`` / ``periodic`` from the single-level ``CartesianMesh`` (``layout.mesh``), mirroring
-    :func:`_amr_config_from_layout` for the AMR route so the bound engine matches the Case's grid
+    :func:`_amr_config_from_layout` for the AMR route so the bound engine matches the Problem's grid
     instead of the ``SystemConfig`` defaults. Imported lazily so the runtime module stays
     import-light.
     """
@@ -235,8 +235,8 @@ def _flow_amr_layout(sim, layout, n_blocks=1):
     runs its field solvers BEFORE adding the blocks, so it is not duplicated here.
 
     @p n_blocks is the declared block count: the per-block variable / role selector is only wired in
-    MULTI-BLOCK (>= 2 blocks, the union-of-tags runtime engine), so a single-block Case keeps the
-    component-0-only behaviour and a multi-block Case forwards a non-density subject to
+    MULTI-BLOCK (>= 2 blocks, the union-of-tags runtime engine), so a single-block Problem keeps the
+    component-0-only behaviour and a multi-block Problem forwards a non-density subject to
     ``set_refinement(threshold, variable=)`` (the C++ AmrSystem resolves it per block; a compiled
     block refuses a non-default selector, the honest native boundary).
     """

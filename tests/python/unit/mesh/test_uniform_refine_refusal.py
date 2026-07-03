@@ -2,7 +2,7 @@
 
 A refinement criterion attached to a single-level ``Uniform`` layout has no level to refine
 onto. Silently dropping it would be a correctness trap (the user believes the tag is active), so
-:meth:`pops.case.Case.validate` refuses it by default and only accepts the explicit
+:meth:`pops.problem.Problem.validate` refuses it by default and only accepts the explicit
 ``Uniform(mesh, refine=..., ignore_amr=pops.mesh.amr.IgnoreAMRCriteria())`` escape.
 
 Pure Python; needs only ``import pops`` (nothing computes on a grid).
@@ -24,12 +24,12 @@ class _FakeModel:
 
 
 def _case(layout):
-    return pops.Case(layout=layout).block("ne", physics=_FakeModel())
+    return pops.Problem(layout=layout).block("ne", physics=_FakeModel())
 
 
 def test_uniform_without_refine_validates():
     # Baseline: a plain Uniform layout (no criterion attached) is untouched by the new refusal;
-    # Case.validate() raises loud on error and returns normally otherwise.
+    # Problem.validate() raises loud on error and returns normally otherwise.
     case = _case(Uniform(CartesianMesh(n=16)))
     case.validate()
 

@@ -11,7 +11,7 @@ Section A (pure Python, always runs): the AMR native loader EMITS the named-fiel
 AmrSystem facade (no longer the ADC-428 NotImplementedError), and the AmrSystem install seam routes a
 declared named field while rejecting an undeclared one.
 
-Section B (gated, self-skip): the typed Case end-to-end -- a default phi + a named field on an AMR
+Section B (gated, self-skip): the typed Problem end-to-end -- a default phi + a named field on an AMR
 layout -- compiles (production .so), binds, runs a few steps, and sim.field(name) returns a solved,
 non-trivial second field distinct from the default potential. Skips cleanly (exit 0) without _pops / a
 compiler / a visible Kokkos -- never fakes the engine.

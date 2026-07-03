@@ -126,7 +126,7 @@ class CompiledModel:
     def inspect_amr(self, layout=None):
         """STATIC AMR report on this compiled MODEL (Spec 5 sec.8.12 / sec.8.4).
 
-        A ``CompiledModel`` produced off the AMR route (``pops.compile(Case(layout=AMR(...)))``)
+        A ``CompiledModel`` produced off the AMR route (``pops.compile(problem, layout=AMR(...))``)
         carries the compile-time layout on ``self._layout`` (ADC-555: the refine/regrid/patches
         tags must appear in ``compiled.inspect_amr()``, not just ``layout.inspect()``), so a bare
         call with no argument reports THAT layout when one is attached, rather than the generic

@@ -57,7 +57,7 @@ class _AmrSystemEquation:
         """Add the SINGLE AMR equation/block by dispatching on the TYPE of @p model (DSL Phase D).
 
         Low-level runtime seam. The documented PUBLIC path is the typed
-        ``pops.Case(layout=AMR(...))`` assembly lowered by ``pops.compile`` and wired by
+        ``pops.Problem(layout=AMR(...))`` assembly lowered by ``pops.compile`` and wired by
         ``pops.bind``; ``add_equation`` stays for that seam and the tests.
 
         Dispatch:
@@ -125,7 +125,7 @@ class _AmrSystemEquation:
                 raise ValueError(
                     "AmrSystem.add_equation: magnetic_field != 'B_z' is not transported by the "
                     "amr-schur path (the AMR stage reads the dedicated coarse B_z buffer). Keep "
-                    "magnetic_field='B_z', or declare layout=Uniform(...) on the pops.Case "
+                    "magnetic_field='B_z', or declare layout=Uniform(...) on the pops.Problem "
                     "(the mono-level route carries a general magnetic aux field).")
             self._s.set_source_stage(name, src.kind, src.theta, src.alpha,
                                      getattr(src, "krylov_tol", 0.0),
@@ -261,7 +261,7 @@ class _AmrSystemEquation:
         if table is None:
             raise ValueError(
                 "set_aux_field: block '%s' unknown (or bound without a named aux field); declare "
-                "m.aux_field('%s') on that block's model in the pops.Case." % (block, name))
+                "m.aux_field('%s') on that block's model in the pops.Problem." % (block, name))
         if name not in table:
             raise ValueError(
                 "set_aux_field: aux field '%s' not declared by block '%s'; known named fields: %s"

@@ -1,4 +1,4 @@
-"""ADC-492 (Spec 5 sec.5.16 / sec.11): pops.Case assembly + pops.compile/bind + PhysicsModel.
+"""ADC-492 (Spec 5 sec.5.16 / sec.11): pops.Problem assembly + pops.compile/bind + PhysicsModel.
 
 These are PURE-PYTHON tests of the inert assembly, the alias, and the thin dispatch wiring.
 The real ``.so`` compile (``compile_problem``) and the runtime install/run are Kokkos-gated
@@ -93,7 +93,7 @@ from tests.python.support.assertions import _check
 # --- assembly + chaining + inspect -----------------------------------------
 def test_assembly_chaining_and_inspect():
     model = _StubModel("ne")
-    prob = (pops.Case(name="plasma")
+    prob = (pops.Problem(name="plasma")
             .block("ne", physics=model, spatial=None)
             .param(pops.physics.ConstParam("alpha", 1.0))
             .aux("B_z", value=None))
@@ -109,7 +109,7 @@ def test_assembly_chaining_and_inspect():
 
 
 def test_block_requires_physics_and_no_duplicate():
-    prob = pops.Case()
+    prob = pops.Problem()
     try:
         prob.block("ne", physics=None)
         raise AssertionError("block with no physics must raise")
@@ -125,7 +125,7 @@ def test_block_requires_physics_and_no_duplicate():
 
 
 def test_field_type_checked():
-    prob = pops.Case()
+    prob = pops.Problem()
     try:
         prob.field("not a FieldProblem")
         raise AssertionError("field must reject a non-FieldProblem")
@@ -139,12 +139,12 @@ def test_field_type_checked():
 def test_amr_property():
     # Uniform layout -> amr raises ValueError.
     try:
-        pops.Case().amr
+        pops.Problem().amr
         raise AssertionError("amr on a Uniform layout must raise")
     except ValueError:
         pass
     # AMR layout -> returns a handle whose .refine chains back to the problem.
-    prob = pops.Case(layout=AMR(CartesianMesh()))
+    prob = pops.Problem(layout=AMR(CartesianMesh()))
     handle = prob.amr
     from pops.mesh.amr import RegridEvery
     returned = handle.refine(regrid=RegridEvery(20))
@@ -155,7 +155,7 @@ def test_amr_property():
 
 # --- validate(): structural pass + each deferred case raising ---------------
 def test_validate_structural_pass():
-    prob = pops.Case().block("ne", physics=_StubModel()).field(_poisson_problem())
+    prob = pops.Problem().block("ne", physics=_StubModel()).field(_poisson_problem())
     _check(prob.validate() is True, "a single-block + Poisson-field problem validates")
     _check(bool(prob.available()) is True, "available() is yes for a valid problem")
     print("ok test_validate_structural_pass")
@@ -163,7 +163,7 @@ def test_validate_structural_pass():
 
 def test_validate_requires_a_block():
     try:
-        pops.Case().validate()
+        pops.Problem().validate()
         raise AssertionError("a problem with no block must not validate")
     except ValueError:
         pass
@@ -173,9 +173,9 @@ def test_validate_requires_a_block():
 def test_validate_multi_block_uniform_lowers():
     # C3: a multi-block assembly on a Uniform layout now VALIDATES (the >1-block reject is removed);
     # each block lowers as its own instance at bind.
-    prob = (pops.Case().block("ne", physics=_StubModel())
+    prob = (pops.Problem().block("ne", physics=_StubModel())
             .block("ni", physics=_StubModel()))
-    _check(prob.validate() is True, "a multi-block Uniform Case validates (C3)")
+    _check(prob.validate() is True, "a multi-block Uniform Problem validates (C3)")
     _check(prob.options()["n_blocks"] == 2, "options report two blocks")
     print("ok test_validate_multi_block_uniform_lowers")
 
@@ -185,8 +185,8 @@ def test_validate_named_field_lowers():
     # is removed); an undeclared field name is caught downstream at install (_install_solver).
     field = FieldProblem(name="temperature", unknown="T",
                          equation=(-laplacian("T") == "src"), solver=_StubSolver())
-    prob = pops.Case().block("ne", physics=_StubModel()).field(field)
-    _check(prob.validate() is True, "a Case with a named non-Poisson field validates (C1-System)")
+    prob = pops.Problem().block("ne", physics=_StubModel()).field(field)
+    _check(prob.validate() is True, "a Problem with a named non-Poisson field validates (C1-System)")
     print("ok test_validate_named_field_lowers")
 
 
@@ -195,25 +195,27 @@ def test_validate_outputs_lower():
     # deferral is removed); a non-policy object is rejected loud (it is a typo, not a deferral).
     from pops.output import OutputPolicy, CheckpointPolicy, HDF5
     from pops.time.schedule import every
-    prob = (pops.Case().block("ne", physics=_StubModel())
+    prob = (pops.Problem().block("ne", physics=_StubModel())
             .output(OutputPolicy(format=HDF5(), cadence=every(20)))
             .output(CheckpointPolicy(cadence=every(100), restartable=True)))
-    _check(prob.validate() is True, "a Case with valid output/checkpoint policies validates (C4)")
+    _check(prob.validate() is True, "a Problem with valid output/checkpoint policies validates (C4)")
 
     class _NotAPolicy:
         name = "nope"
-    bad = pops.Case().block("ne", physics=_StubModel()).output(_NotAPolicy())
+    bad = pops.Problem().block("ne", physics=_StubModel()).output(_NotAPolicy())
     try:
         bad.validate()
         raise AssertionError("a non-policy output object must raise")
-    except TypeError as exc:
+    except ValueError as exc:
+        # ADC-553/ADC-527: Problem.validate() aggregates the per-family reports and raises a single
+        # ValueError via ProblemValidationReport.raise_if_error(); the message still names the type.
         _check("OutputPolicy" in str(exc), "non-policy reject names the expected type")
     print("ok test_validate_outputs_lower")
 
 
 def test_validate_name_collision():
     field = _poisson_problem()
-    prob = pops.Case().block("phi", physics=_StubModel()).field(field)
+    prob = pops.Problem().block("phi", physics=_StubModel()).field(field)
     try:
         prob.validate()
         raise AssertionError("a block/field name collision must raise")
@@ -244,7 +246,7 @@ def test_compile_layout_drives_target(monkeypatch=None):
 
     _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _fake_compile_problem)
     try:
-        prob = pops.Case(name="u").block("ne", physics=_StubModel())
+        prob = pops.Problem(name="u").block("ne", physics=_StubModel())
         compiled = orchestration.compile(prob, time=object())
         _check(captured["target"] == "system", "Uniform layout routes to target='system'")
         _check(captured["backend"] == "production", "default backend forwarded")
@@ -281,7 +283,7 @@ def test_compile_amr_routes_to_amr_system():
     try:
         layout = AMR(CartesianMesh())
         model = _StubModel("ne")
-        prob = pops.Case(layout=layout).block("ne", physics=model)
+        prob = pops.Problem(layout=layout).block("ne", physics=model)
         compiled = orchestration.compile(prob)  # no time= : the AMR route does not need one
         _check(tripwire["hit"] is False,
                "the AMR route does NOT call compile_problem (no whole-system time Program)")
@@ -299,7 +301,7 @@ def test_compile_amr_routes_to_amr_system():
 
 
 def test_compile_multi_block_amr_routes_natively():
-    # ADC-503: a 2-block AMR Case lowers -- compile() compiles EACH block to target='amr_system'
+    # ADC-503: a 2-block AMR Problem lowers -- compile() compiles EACH block to target='amr_system'
     # (twice), carries the {block: CompiledModel} table, and NEVER calls compile_problem.
     tripwire = {"hit": False}
     saved = []
@@ -313,7 +315,7 @@ def test_compile_multi_block_amr_routes_natively():
     cd.compile_problem = _tripwire
     try:
         m_ne, m_ni = _StubModel("ne"), _StubModel("ni")
-        prob = (pops.Case(layout=AMR(CartesianMesh()))
+        prob = (pops.Problem(layout=AMR(CartesianMesh()))
                 .block("ne", physics=m_ne)
                 .block("ni", physics=m_ni))
         compiled = orchestration.compile(prob)
@@ -337,7 +339,7 @@ def test_compile_amr_max_levels_beyond_native_raises():
     # max_levels above the native envelope is refused at compile (problem.validate() runs the
     # layout's AMR.available check), with the existing clear message, never silently clamped.
     from pops.mesh.amr import NATIVE_MAX_LEVELS
-    prob = (pops.Case(layout=AMR(CartesianMesh(), max_levels=NATIVE_MAX_LEVELS + 1))
+    prob = (pops.Problem(layout=AMR(CartesianMesh(), max_levels=NATIVE_MAX_LEVELS + 1))
             .block("ne", physics=_StubModel()))
     try:
         orchestration.compile(prob, time=object())
@@ -349,7 +351,7 @@ def test_compile_amr_max_levels_beyond_native_raises():
 
 def test_fft_field_solver_on_amr_layout_rejected_at_validate():
     # Spec 6 sec.8/9 (ADC-516): a field whose solver cannot serve the chosen mesh LAYOUT is
-    # refused at Case.validate (so pops.compile refuses it before any .so build), with the
+    # refused at Problem.validate (so pops.compile refuses it before any .so build), with the
     # solver's PRECISE message -- here the spectral FFT on an AMR hierarchy.
     from pops.solvers.elliptic import FFT, GeometricMG
 
@@ -358,7 +360,7 @@ def test_fft_field_solver_on_amr_layout_rejected_at_validate():
                             equation=(-laplacian("phi") == "charge_density"), solver=solver)
 
     # FFT on an AMR layout -> rejected with the precise sec.8 message.
-    amr_fft = (pops.Case(layout=AMR(CartesianMesh())).block("ne", physics=_StubModel())
+    amr_fft = (pops.Problem(layout=AMR(CartesianMesh())).block("ne", physics=_StubModel())
                .field(_field(FFT())))
     try:
         amr_fft.validate()
@@ -368,11 +370,11 @@ def test_fft_field_solver_on_amr_layout_rejected_at_validate():
                "FFT-on-AMR rejection must carry the precise sec.8 message; got: %s" % exc)
 
     # GeometricMG on the SAME AMR layout validates (it is AMR-capable).
-    (pops.Case(layout=AMR(CartesianMesh())).block("ne", physics=_StubModel())
+    (pops.Problem(layout=AMR(CartesianMesh())).block("ne", physics=_StubModel())
      .field(_field(GeometricMG()))).validate()
 
     # FFT on a Uniform layout still validates (its route 'partial' is not a hard 'no').
-    (pops.Case(layout=Uniform(CartesianMesh())).block("ne", physics=_StubModel())
+    (pops.Problem(layout=Uniform(CartesianMesh())).block("ne", physics=_StubModel())
      .field(_field(FFT()))).validate()
     print("ok test_fft_field_solver_on_amr_layout_rejected_at_validate")
 
@@ -380,8 +382,8 @@ def test_fft_field_solver_on_amr_layout_rejected_at_validate():
 def test_layout_solver_check_scoped_to_amr_no_false_positive():
     # The layout-solver check is SCOPED to an AMR route (Spec 6 no-false-positive): a solver whose
     # available() returns a hard "no" for a NON-layout reason (an unresolved external brick) on a
-    # Uniform layout is NOT refused, and a solver whose available() reads a context key Case does
-    # not supply never crashes Case.validate (the call is guarded).
+    # Uniform layout is NOT refused, and a solver whose available() reads a context key Problem does
+    # not supply never crashes Problem.validate (the call is guarded).
     from pops.descriptors import Availability
 
     class _UnresolvableSolver:
@@ -401,19 +403,19 @@ def test_layout_solver_check_scoped_to_amr_no_false_positive():
                             equation=(-laplacian("phi") == "charge_density"), solver=solver)
 
     # A non-layout "no" on a Uniform route is not refused by the layout check (it is never run).
-    (pops.Case(layout=Uniform(CartesianMesh())).block("ne", physics=_StubModel())
+    (pops.Problem(layout=Uniform(CartesianMesh())).block("ne", physics=_StubModel())
      .field(_field(_UnresolvableSolver()))).validate()
     # A solver whose available() reads a missing key does not crash validate -- Uniform (not run)
     # nor AMR (the call is guarded; a raise is "not a known incompatibility").
-    (pops.Case(layout=Uniform(CartesianMesh())).block("ne", physics=_StubModel())
+    (pops.Problem(layout=Uniform(CartesianMesh())).block("ne", physics=_StubModel())
      .field(_field(_ContextHungrySolver()))).validate()
-    (pops.Case(layout=AMR(CartesianMesh())).block("ne", physics=_StubModel())
+    (pops.Problem(layout=AMR(CartesianMesh())).block("ne", physics=_StubModel())
      .field(_field(_ContextHungrySolver()))).validate()
     print("ok test_layout_solver_check_scoped_to_amr_no_false_positive")
 
 
 def test_compile_missing_time_raises():
-    prob = pops.Case().block("ne", physics=_StubModel())
+    prob = pops.Problem().block("ne", physics=_StubModel())
     try:
         orchestration.compile(prob)  # no time= and no problem.time(...)
         raise AssertionError("missing time scheme must raise (no silent default)")
@@ -432,7 +434,7 @@ def test_compile_problem_time_setter_honored(monkeypatch=None):
     _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _fake_compile_problem)
     try:
         sentinel = object()
-        prob = pops.Case().block("ne", physics=_StubModel()).time(sentinel)
+        prob = pops.Problem().block("ne", physics=_StubModel()).time(sentinel)
         orchestration.compile(prob)  # time taken from problem._time
         _check(captured["time"] is sentinel, "problem.time(...) is honored when time= omitted")
     finally:
@@ -441,7 +443,7 @@ def test_compile_problem_time_setter_honored(monkeypatch=None):
 
 
 def test_compile_multi_block_uniform_lowers(monkeypatch=None):
-    # C3: a multi-block Uniform Case lowers -- compile resolves EACH block's physics and carries the
+    # C3: a multi-block Uniform Problem lowers -- compile resolves EACH block's physics and carries the
     # {block: model} table on the handle (_block_models); the per-block models flow to install via
     # bind()'s _assemble_instances. compile_problem is monkeypatched so no real .so is built.
     def _fake_compile_problem(*, time, model, backend, target, **kw):
@@ -449,7 +451,7 @@ def test_compile_multi_block_uniform_lowers(monkeypatch=None):
 
     _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _fake_compile_problem)
     try:
-        prob = (pops.Case().block("ne", physics=_StubModel())
+        prob = (pops.Problem().block("ne", physics=_StubModel())
                 .block("ni", physics=_StubModel()))
         compiled = orchestration.compile(prob, time=object())
         _check(compiled._target == "system", "multi-block Uniform routes to target='system'")
@@ -467,7 +469,7 @@ def test_compile_amr_module_without_compile_raises():
     class _NoCompilePhysics:
         name = "raw"  # no .dsl, no .compile
 
-    prob = pops.Case(layout=AMR(CartesianMesh())).block("ne", physics=_NoCompilePhysics())
+    prob = pops.Problem(layout=AMR(CartesianMesh())).block("ne", physics=_NoCompilePhysics())
     try:
         orchestration.compile(prob)
         raise AssertionError("an AMR block without .compile must raise")
@@ -504,7 +506,7 @@ def _bind_with_stub_runtime(target, layout=None, blocks=("ne",), initial=None):
 
     class _StubSystem(_RecordingSim):
         # Mirrors the real System constructor: the Uniform adapter derives a SystemConfig from the
-        # Case's mesh and passes it (or None when the handle carries no layout). Recorded so a test
+        # Problem's mesh and passes it (or None when the handle carries no layout). Recorded so a test
         # can assert n / L / periodic reached the engine instead of the System() defaults.
         def __init__(self, config=None):
             self.config = config
@@ -524,7 +526,7 @@ def _bind_with_stub_runtime(target, layout=None, blocks=("ne",), initial=None):
     orig_sys, orig_amr = rtsys.System, rtsys.AmrSystem
     rtsys.System, rtsys.AmrSystem = _StubSystem, _StubAmrSystem
     try:
-        prob = pops.Case(layout=layout) if layout is not None else pops.Case()
+        prob = pops.Problem(layout=layout) if layout is not None else pops.Problem()
         for name in blocks:
             prob = prob.block(name, physics=_StubModel(name))
         prob = prob.field(_poisson_problem())
@@ -555,10 +557,10 @@ def test_bind_system_dispatch():
 
 
 def test_bind_system_config_from_uniform_layout():
-    # The Uniform bind derives the System's SystemConfig (n / L / periodic) from the Case's mesh,
+    # The Uniform bind derives the System's SystemConfig (n / L / periodic) from the Problem's mesh,
     # mirroring the AMR route -- so a NON-default mesh reaches the engine instead of the System()
     # defaults (n=64, L=1.0, periodic). Locks the fix: pre-fix compile set _layout=None on Uniform
-    # and the adapter built a bare System(), so the Case mesh was silently ignored.
+    # and the adapter built a bare System(), so the Problem mesh was silently ignored.
     layout = Uniform(CartesianMesh(n=16, L=2.0, periodic=False))
     sim_class, _, stub_system, _, engine = _bind_with_stub_runtime("system", layout=layout)
     _check(sim_class is stub_system, "target='system' binds a System")
@@ -580,7 +582,7 @@ def test_bind_returns_bound_simulation_view():
     orig = rtsys.System
     rtsys.System = _StubSystem
     try:
-        prob = pops.Case().block("ne", physics=_StubModel()).field(_poisson_problem())
+        prob = pops.Problem().block("ne", physics=_StubModel()).field(_poisson_problem())
         compiled = _StubCompiled(target="system", problem=prob)
         sim = orchestration.bind(compiled, initial_state={"ne": [1.0]})
         _check(type(sim).__name__ == "BoundSimulation", "bind returns a BoundSimulation view")
@@ -591,7 +593,7 @@ def test_bind_returns_bound_simulation_view():
             raise AssertionError("add_equation must be hidden on the bound simulation")
         except AttributeError as exc:
             msg = str(exc)
-            _check("pops.Case" in msg and "pops.compile" in msg, "the reject speaks Case/compile/bind")
+            _check("pops.Problem" in msg and "pops.compile" in msg, "the reject speaks Problem/compile/bind")
             for bad in ("System.", "AmrSystem", "set_poisson", "install_program", "set_refinement"):
                 _check(bad not in msg, "the reject does not recommend %r" % bad)
     finally:
@@ -600,7 +602,7 @@ def test_bind_returns_bound_simulation_view():
 
 
 def test_bind_flows_output_policies():
-    # C4 / ADC-509: bind() must flow the Case's stored output / checkpoint policies onto the install
+    # C4 / ADC-509: bind() must flow the Problem's stored output / checkpoint policies onto the install
     # seam (outputs=) so the bound sim's run() can fire them. Uses the recording stub System.
     from pops.output import OutputPolicy, CheckpointPolicy
     from pops.time.schedule import every
@@ -614,7 +616,7 @@ def test_bind_flows_output_policies():
     try:
         out = OutputPolicy(cadence=every(5))
         ckpt = CheckpointPolicy(cadence=every(10))
-        prob = (pops.Case().block("ne", physics=_StubModel())
+        prob = (pops.Problem().block("ne", physics=_StubModel())
                 .field(_poisson_problem()).output(out).output(ckpt))
         compiled = _StubCompiled(target="system", problem=prob)
         orchestration.bind(compiled, initial_state={"ne": [1.0]})
@@ -655,14 +657,14 @@ def test_bind_amr_dispatch():
 
 
 def test_bind_multi_block_amr_native_install():
-    # ADC-503: a 2-block AMR Case binds via the native path -- compiled=None and TWO instances, each
+    # ADC-503: a 2-block AMR Problem binds via the native path -- compiled=None and TWO instances, each
     # carrying its OWN target='amr_system' CompiledModel (so each routes add_native_block).
     from pops.mesh.amr import RegridEvery
     layout = AMR(CartesianMesh(n=32), regrid=RegridEvery(2))
     _, last, _, stub_amr, sim = _bind_with_stub_runtime(
         "amr_system", layout=layout, blocks=("ne", "ni"),
         initial={"ne": [1.0], "ni": [2.0]})
-    _check(type(sim) is stub_amr, "a multi-block AMR Case binds an AmrSystem")
+    _check(type(sim) is stub_amr, "a multi-block AMR Problem binds an AmrSystem")
     _check(last["compiled"] is None, "multi-block AMR install passes compiled=None (native path)")
     _check(set(last["instances"]) == {"ne", "ni"}, "both blocks become install instances")
     for name in ("ne", "ni"):
@@ -726,7 +728,7 @@ def test_bind_rejects_non_compiled():
 
 
 def test_bind_unknown_initial_state_raises():
-    prob = pops.Case().block("ne", physics=_StubModel())
+    prob = pops.Problem().block("ne", physics=_StubModel())
     compiled = _StubCompiled(problem=prob)
     import pops.runtime.system as rtsys
     orig = rtsys.System
@@ -745,16 +747,16 @@ def test_bind_unknown_initial_state_raises():
 _SAVED = []
 
 
-# --- ADC-592: compile-time snapshot authority + Case-mutation drift check ---
+# --- ADC-592: compile-time snapshot authority + Problem-mutation drift check ---
 def test_compile_freezes_snapshot_authority(monkeypatch=None):
     # ADC-592: compile() freezes WHAT it saw on the handle -- _block_specs (model + spatial per block),
-    # _field_solvers, _outputs -- so bind() lowers from the compile-time truth, not a live Case re-read.
+    # _field_solvers, _outputs -- so bind() lowers from the compile-time truth, not a live Problem re-read.
     def _fake_compile_problem(*, time, model, backend, target, **kw):
         return _StubCompiled(target=target)
 
     _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _fake_compile_problem)
     try:
-        prob = (pops.Case().block("ne", physics=_StubModel("ne"))
+        prob = (pops.Problem().block("ne", physics=_StubModel("ne"))
                 .block("ni", physics=_StubModel("ni")).field(_poisson_problem()))
         compiled = orchestration.compile(prob, time=object())
         _check(set(compiled._block_specs) == {"ne", "ni"},
@@ -770,7 +772,7 @@ def test_compile_freezes_snapshot_authority(monkeypatch=None):
 
 
 def test_bind_rejects_case_mutated_after_compile(monkeypatch=None):
-    # ADC-592 (the proven vulnerability closed): mutating the Case's blocks between compile and bind is
+    # ADC-592 (the proven vulnerability closed): mutating the Problem's blocks between compile and bind is
     # a LOUD ValueError -- a compiled artifact is frozen at compile and not affected by a later mutation.
     def _fake_compile_problem(*, time, model, backend, target, **kw):
         return _StubCompiled(target=target)
@@ -780,7 +782,7 @@ def test_bind_rejects_case_mutated_after_compile(monkeypatch=None):
         import pops.runtime.system as rtsys
 
         class _StubSystem(_RecordingSim):
-            # ADC-583/#427: the Uniform adapter derives a SystemConfig from the Case mesh and
+            # ADC-583/#427: the Uniform adapter derives a SystemConfig from the Problem mesh and
             # passes it to the engine constructor; mirror the real System signature.
             def __init__(self, config=None):
                 self.config = config
@@ -788,14 +790,14 @@ def test_bind_rejects_case_mutated_after_compile(monkeypatch=None):
         orig = rtsys.System
         rtsys.System = _StubSystem
         try:
-            prob = pops.Case().block("ne", physics=_StubModel("ne")).field(_poisson_problem())
+            prob = pops.Problem().block("ne", physics=_StubModel("ne")).field(_poisson_problem())
             compiled = orchestration.compile(prob, time=object())
-            compiled._problem = prob  # the live Case bind() re-reads
-            # MUTATE the Case after compile: add a block the snapshot never saw.
+            compiled._problem = prob  # the live Problem bind() re-reads
+            # MUTATE the Problem after compile: add a block the snapshot never saw.
             prob.block("ni_late", physics=_StubModel("ni_late"))
             try:
                 orchestration.bind(compiled, initial_state={"ne": [1.0]})
-                raise AssertionError("a Case mutated after compile must be refused at bind")
+                raise AssertionError("a Problem mutated after compile must be refused at bind")
             except ValueError as exc:
                 msg = str(exc)
                 _check("mutated after pops.compile" in msg, "the drift error names the mutation")
@@ -820,7 +822,7 @@ def test_bind_uses_snapshot_not_live_physics(monkeypatch=None):
         import pops.runtime.system as rtsys
 
         class _StubSystem(_RecordingSim):
-            # ADC-583/#427: the Uniform adapter derives a SystemConfig from the Case mesh and
+            # ADC-583/#427: the Uniform adapter derives a SystemConfig from the Problem mesh and
             # passes it to the engine constructor; mirror the real System signature.
             def __init__(self, config=None):
                 self.config = config
@@ -829,11 +831,12 @@ def test_bind_uses_snapshot_not_live_physics(monkeypatch=None):
         rtsys.System = _StubSystem
         try:
             m0 = _StubModel("ne")
-            prob = pops.Case().block("ne", physics=m0).field(_poisson_problem())
+            prob = pops.Problem().block("ne", physics=m0).field(_poisson_problem())
             compiled = orchestration.compile(prob, time=object())
             frozen_model = compiled._block_specs["ne"]["model"]
-            # Swap the block's physics AFTER compile (same block name -> no drift).
-            prob._blocks["ne"]["physics"] = _StubModel("ne_swapped")
+            # Swap the block's physics AFTER compile (same block name -> no drift). Poke the block
+            # registry's backing spec directly (the registry keys the model under "model").
+            prob._blocks.spec("ne")["model"] = _StubModel("ne_swapped")
             sim = orchestration.bind(compiled, initial_state={"ne": [1.0]})
             _check(_RecordingSim.last["instances"]["ne"]["model"] is frozen_model,
                    "bind installs the COMPILE-TIME frozen model, not the live-swapped physics")

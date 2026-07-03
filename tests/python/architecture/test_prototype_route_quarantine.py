@@ -20,11 +20,11 @@ import re
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 POPS = REPO_ROOT / "python" / "pops"
 
-# The TARGET compile/bind surface (Spec 5 sec.11): the Case authoring type, the pops.compile /
+# The TARGET compile/bind surface (Spec 5 sec.11): the Problem authoring type, the pops.compile /
 # pops.bind orchestration, and the internal install seam bind calls.  None of these may reference a
 # host/prototype route -- their only route is the production native loader.
 TARGET_SURFACE = (
-    "case.py",
+    "problem/problem.py",
     "codegen/orchestration.py",
     "runtime/_system_unified_install.py",
 )

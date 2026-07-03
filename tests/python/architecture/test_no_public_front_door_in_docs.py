@@ -7,7 +7,8 @@ the deleted ``sim.install(...)`` / ``install_program`` methods, a raw ``System.i
 picks the runtime, never a user string).
 
 Scope: this greps the USER-FACING surface only -- ``README.md`` plus the module docstrings of
-``pops/__init__.py`` and ``pops/case.py`` (the two docstrings a user reads first). Internal design /
+``pops/__init__.py`` and ``pops/problem/__init__.py`` (the two docstrings a user reads first).
+Internal design /
 reference docs (``docs/design/**``, ``docs/ARCHITECTURE.md``, ``docs/ALGORITHMS.md``, the vendored
 ``docs/docguide/**``) legitimately DESCRIBE the internal mechanism in that vocabulary and are
 allowlisted, as is ``CHANGELOG.md`` (history).
@@ -52,7 +53,7 @@ def test_readme_teaches_only_the_public_front_doors():
         "layout (Uniform / AMR), never compile_problem / install / target= (ADC-523)." % hits)
 
 
-@pytest.mark.parametrize("rel", ["__init__.py", "case.py"])
+@pytest.mark.parametrize("rel", ["__init__.py", "problem/__init__.py"])
 def test_public_module_docstring_is_clean(rel):
     path = POPS / rel
     doc = ast.get_docstring(ast.parse(path.read_text(), str(path))) or ""

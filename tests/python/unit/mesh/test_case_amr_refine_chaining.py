@@ -27,7 +27,7 @@ class _FakeModel:
 
 
 def _case():
-    return pops.Case(layout=AMR(base=CartesianMesh(n=32))).block("ne", physics=_FakeModel())
+    return pops.Problem(layout=AMR(base=CartesianMesh(n=32))).block("ne", physics=_FakeModel())
 
 
 def test_refine_writes_the_criterion_onto_the_layout_and_chains():

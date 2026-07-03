@@ -8,7 +8,7 @@ pops.bind termine (etat 'bound'), simulation mutable seulement par les APIs runt
 
   1. AVANT bind : un System frais est 'assembling' ; add_block fonctionne.
   2. Gel couche Python : apres _finalize_bind (route bas-niveau legitime), chaque methode
-     structurelle Python leve RuntimeError avec le vocabulaire bind (pops.Case + pops.compile +
+     structurelle Python leve RuntimeError avec le vocabulaire bind (pops.Problem + pops.compile +
      pops.bind, JAMAIS un setter herite comme REMEDE) ; les noms natifs structurels interceptes
      par __getattr__ (install_program / set_refinement / set_program_cadence) levent aussi ; les
      mutations runtime (set_density / set_block_params) restent permises ; lifecycle passe a
@@ -19,7 +19,7 @@ pops.bind termine (etat 'bound'), simulation mutable seulement par les APIs runt
      inspect() montre le lifecycle + le hash + les blocs/solveurs.
   6. Params runtime : set_block_params reste permis apres bind SANS recompiler (le lifecycle reste
      'bound'/'running', aucun appel codegen).
-  7. Gate compilateur : le flux complet Case -> compile -> bind (le native mark_bound absent du .so
+  7. Gate compilateur : le flux complet Problem -> compile -> bind (le native mark_bound absent du .so
      prebuilt -> les sous-asserts natifs skippent avec un message CI-diagnosable).
 
 Ne FALSIFIE jamais le moteur pops : on construit un vrai System / AmrSystem par la route interne
@@ -73,7 +73,7 @@ def _minimal_snapshot(layout="system"):
 def _assert_bind_vocabulary(exc, what):
     """Le message d'un refus de gel parle le vocabulaire bind et ne recommande aucun setter herite."""
     msg = str(exc)
-    _check("pops.Case" in msg, "le refus de %r mentionne pops.Case" % what)
+    _check("pops.Problem" in msg, "le refus de %r mentionne pops.Problem" % what)
     _check("pops.compile" in msg and "pops.bind" in msg,
            "le refus de %r mentionne pops.compile / pops.bind" % what)
     # Il nomme HONNETEMENT l'operation refusee (le contexte), mais ne recommande AUCUN autre setter
@@ -327,7 +327,7 @@ def test_runtime_params_allowed_after_bind():
     print("ok test_runtime_params_allowed_after_bind")
 
 
-# --- Gate compilateur : le flux complet Case -> compile -> bind + snapshot reel ---------------
+# --- Gate compilateur : le flux complet Problem -> compile -> bind + snapshot reel ---------------
 def _dsl_isothermal_model(name="adc592_iso"):
     """Un modele DSL isotherme MINIMAL et VALIDE (facade pops.physics), compilable en Program .so."""
     from pops.ir.ops import sqrt
@@ -358,7 +358,7 @@ def _lie_program(block="ne", name="adc592_prog"):
 
 
 def test_full_bind_flow_freeze_gated():
-    """pops.Case -> pops.compile -> pops.bind : la sim est 'bound', snapshot 64-hex, bypass ferme.
+    """pops.Problem -> pops.compile -> pops.bind : la sim est 'bound', snapshot 64-hex, bypass ferme.
 
     L'AUTHORING est VALIDE et HORS du try (une regression fait ECHOUER, jamais skipper). La SEULE
     barriere locale est le compile .so (headers / cxx / Kokkos), qui skippe en nommant le TYPE
@@ -370,7 +370,7 @@ def test_full_bind_flow_freeze_gated():
     n = 64
     m = _dsl_isothermal_model()
     prog = _lie_program(block="ne")
-    case = (pops.Case(layout=Uniform(CartesianMesh(n=n, L=1.0, periodic=True)))
+    case = (pops.Problem(layout=Uniform(CartesianMesh(n=n, L=1.0, periodic=True)))
             .block("ne", physics=m))
     try:
         compiled = pops.compile(case, time=prog)
@@ -443,7 +443,7 @@ def test_checkpoint_restart_roundtrip_through_bind_gated():
     n = 64
 
     def _case():
-        return (pops.Case(layout=Uniform(CartesianMesh(n=n, L=1.0, periodic=True)))
+        return (pops.Problem(layout=Uniform(CartesianMesh(n=n, L=1.0, periodic=True)))
                 .block("ne", physics=_dsl_isothermal_model()))
 
     xs = (np.arange(n) + 0.5) / n

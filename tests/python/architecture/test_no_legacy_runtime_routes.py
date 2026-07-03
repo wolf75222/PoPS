@@ -310,7 +310,7 @@ def test_target_surface_does_not_construct_system_front_doors():
                                       % (rel, node.lineno, name))
 
     assert not violations, (
-        "target authoring layers must lower through Case/Program/layout descriptors, not construct "
+        "target authoring layers must lower through Problem/Program/layout descriptors, not construct "
         "System/AmrSystem directly:\n  " + "\n  ".join(violations)
     )
 
@@ -460,7 +460,7 @@ def test_uniform_plus_amr_tags_refused_by_default():
         pytest.skip("pops import unavailable: %s" % exc)
 
     layout = Uniform(CartesianMesh(n=16), refine=Refine.on("rho").above(0.1))
-    case = pops.Case(layout=layout).block("ne", physics=_FakeAmrRefineModel())
+    case = pops.Problem(layout=layout).block("ne", physics=_FakeAmrRefineModel())
     with pytest.raises(ValueError, match="carries active AMR criteria"):
         case.validate()
 
@@ -478,7 +478,7 @@ def test_ignore_amr_criteria_escape():
         CartesianMesh(n=16),
         refine=Refine.on("rho").above(0.1),
         ignore_amr=IgnoreAMRCriteria())
-    case = pops.Case(layout=layout).block("ne", physics=_FakeAmrRefineModel())
+    case = pops.Problem(layout=layout).block("ne", physics=_FakeAmrRefineModel())
     # The explicit escape is honoured: no refusal.
     case.validate()
 

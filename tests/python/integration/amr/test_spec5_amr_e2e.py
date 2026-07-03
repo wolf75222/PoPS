@@ -120,7 +120,7 @@ def test_amr_layout_drives_compile_target(monkeypatch=None):
     try:
         layout = AMR(CartesianMesh(n=48, L=2.0, periodic=False), max_levels=2, ratio=2)
         model = _StubModel("ne")
-        prob = pops.Case(layout=layout).block("ne", physics=model)
+        prob = pops.Problem(layout=layout).block("ne", physics=model)
         compiled = orchestration.compile(prob)  # no time= : the AMR route does not need one
         _check(tripwire["hit"] is False, "layout=AMR does NOT call compile_problem")
         _check(model.dsl.compiled == [("production", "amr_system")],
@@ -272,7 +272,7 @@ def test_production_so_compile_is_romeo_gated():
             self.dsl = _RomeoDsl()
 
     layout = AMR(CartesianMesh(n=32), max_levels=2, ratio=2)
-    prob = pops.Case(layout=layout).block("ne", physics=_RomeoModel())
+    prob = pops.Problem(layout=layout).block("ne", physics=_RomeoModel())
     try:
         orchestration.compile(prob)
         raise AssertionError("the ROMEO-boundary stub should have raised")

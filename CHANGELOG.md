@@ -17,6 +17,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 ## [Unreleased]
 
 ### Changed
+- ADC-553 Renamed `pops.Case` to `pops.Problem` (no back-compat alias; `pops.Case` raises
+  `AttributeError` pointing at `pops.Problem`) and split the flat assembly monolith into a
+  `pops.problem` package of typed internal registries (blocks / fields / time / params / runtime
+  policies / constraints) behind a compact facade. Each registry is independently inspectable and
+  validatable; `Problem.validate()` aggregates the per-family reports into one
+  `ProblemValidationReport` whose `by_family()` lists the errors per subsystem. The package owns no
+  runtime data and imports no `_pops` / runtime / codegen (guarded by
+  `tests/python/architecture/test_problem_dependencies.py`).
 - ADC-523 `pops.compile` / `pops.bind` are the only public front doors; the low-level
   `compile_problem` driver and the concrete `CompiledProblem` loader class leave the top-level
   surface (still reachable as `pops.codegen.compile_problem` / `pops.codegen.CompiledProblem` for

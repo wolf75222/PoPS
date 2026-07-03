@@ -1,6 +1,6 @@
 """pops.codegen.orchestration -- thin pops.compile / pops.bind over the existing runtime.
 
-These are the Spec 5 sec.11 lowering entry points for a :class:`pops.case.Case`:
+These are the Spec 5 sec.11 lowering entry points for a :class:`pops.problem.Problem`:
 
 * :func:`compile` validates the assembly, picks the compile target from the LAYOUT
   (``Uniform`` -> ``"system"``, ``AMR`` -> ``"amr_system"``; no user ``target=`` string),
@@ -25,13 +25,13 @@ proven pieces (``Model.compile`` for the per-block AMR loader, the runtime adapt
 install). Every not-yet-wired route raises a clear ``NotImplementedError``.
 
 Import-graph rule (Spec 4 / sec.4): ``codegen`` may import only ir / model / physics / time /
-lib at module scope. The runtime (System / AmrSystem), the runtime adapters, mesh (AMR) and case
+lib at module scope. The runtime (System / AmrSystem), the runtime adapters, mesh (AMR) and problem
 types are pulled LAZILY inside the function bodies, so this module adds no forbidden cross-layer edge.
 """
 
 
 def compile(problem, layout=None, backend="production", time=None, **kwargs):
-    """Lower a :class:`pops.case.Case` to a compiled handle.
+    """Lower a :class:`pops.problem.Problem` to a compiled handle.
 
     Validates @p problem, derives the compile target from the LAYOUT (``Uniform`` -> system,
     ``AMR`` -> amr_system) and lowers via the route the target selects. The layout comes from @p
@@ -54,10 +54,10 @@ def compile(problem, layout=None, backend="production", time=None, **kwargs):
       ``_layout`` / ``_problem`` are attached for bind's AMR dispatch.
 
     Args:
-        problem: The :class:`pops.case.Case` assembly to lower.
+        problem: The :class:`pops.problem.Problem` assembly to lower.
         layout: Optional explicit mesh layout (``Uniform`` / ``AMR``). When omitted the layout is
             read from ``problem.layout``; when given it must match the problem's layout (a mismatch
-            raises), so a Case built with one layout cannot be silently compiled for another.
+            raises), so a Problem built with one layout cannot be silently compiled for another.
         backend: The codegen backend (default "production"). The AMR route requires "production"
             (the only native AMR loader, ``Model.compile`` enforces it).
         time: The ``pops.time.Program`` time scheme (Uniform route only); falls back to
@@ -101,7 +101,7 @@ def compile(problem, layout=None, backend="production", time=None, **kwargs):
     # first block as the codegen representative (compiled.model -- the per-instance default at bind),
     # while _block_models carries the full {block_name: resolved model} table so bind()'s
     # _assemble_instances installs each block with its OWN model.
-    block_models = {name: _resolve_problem_model(spec["physics"])
+    block_models = {name: _resolve_problem_model(spec["model"])
                     for name, spec in problem._blocks.items()}
     _, model = next(iter(block_models.items()))
 
@@ -111,8 +111,8 @@ def compile(problem, layout=None, backend="production", time=None, **kwargs):
     compiled._target = target
     compiled._block_models = block_models
     # COMPILE-TIME SNAPSHOT AUTHORITY (ADC-592): freeze WHAT the compile saw so bind() lowers from the
-    # compile-time truth, not a LIVE re-read of a possibly-mutated Case. Without this, bind() re-resolves
-    # problem._blocks / problem._fields / problem._outputs from the live object, so mutating the Case
+    # compile-time truth, not a LIVE re-read of a possibly-mutated Problem. Without this, bind() re-resolves
+    # problem._blocks / problem._fields / problem._outputs from the live object, so mutating the Problem
     # between compile and bind would silently change what gets bound (the proven vulnerability). We snap
     # the per-block model + spatial, the field solvers and the output policies at COMPILE time; bind()
     # uses them as the authority and raises a loud drift error if the live block-name set diverges.
@@ -144,7 +144,7 @@ def _compile_amr(problem, layout, backend, target, **kwargs):
     name / require_metadata / hoist_reciprocals); a whole-system kwarg like ``force`` / ``debug`` /
     ``libraries`` has no per-block-loader equivalent and is dropped (the AMR route does not build a
     Program .so). An explicit ``so_path`` is forwarded ONLY for a single block: pinning the SAME path
-    for several blocks would make their loaders collide (one .so per block), so a multi-block Case lets
+    for several blocks would make their loaders collide (one .so per block), so a multi-block Problem lets
     each block fall back to its model-hash-keyed cache path.
     """
     compile_kwargs = {k: v for k, v in kwargs.items()
@@ -152,7 +152,7 @@ def _compile_amr(problem, layout, backend, target, **kwargs):
                                "hoist_reciprocals")}
     if "so_path" in kwargs and len(problem._blocks) == 1:
         compile_kwargs["so_path"] = kwargs["so_path"]
-    block_compiled = {name: _compile_block_amr(name, spec["physics"], backend, compile_kwargs)
+    block_compiled = {name: _compile_block_amr(name, spec["model"], backend, compile_kwargs)
                       for name, spec in problem._blocks.items()}
     _, compiled = next(iter(block_compiled.items()))
     compiled._problem = problem
@@ -160,7 +160,7 @@ def _compile_amr(problem, layout, backend, target, **kwargs):
     compiled._block_compiled_models = block_compiled
     # COMPILE-TIME SNAPSHOT AUTHORITY (ADC-592, parity with the Uniform route): the AMR route is already
     # snapshot-safe for the per-block models (_block_compiled_models table), but the field solvers /
-    # output policies / spatial are still re-read live at bind. Freeze them at compile so a Case mutated
+    # output policies / spatial are still re-read live at bind. Freeze them at compile so a Problem mutated
     # between compile and bind is caught by bind()'s drift check rather than silently rebound.
     compiled._block_specs = {name: {"model": block_compiled[name], "spatial": spec["spatial"]}
                              for name, spec in problem._blocks.items()}
@@ -199,7 +199,7 @@ def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
     ``pops.bind`` is THE documented way to instantiate a runnable simulation from a compiled handle
     (``compiled = pops.compile(...)``). It builds the per-instance state mapping from the problem's
     blocks and the supplied initial state, derives the field solvers from the problem's field
-    problems (an explicit @p solvers overrides), flows the Case's output / checkpoint policies
+    problems (an explicit @p solvers overrides), flows the Problem's output / checkpoint policies
     (C4 / ADC-509) so the bound sim's ``run(output_dir=...)`` fires them at each policy cadence, then
     delegates to an internal RUNTIME ADAPTER selected from the carried target
     (:func:`pops.runtime._bind_adapters.adapter_for`): ``layout=Uniform`` -> the Uniform adapter
@@ -236,8 +236,8 @@ def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
     target = getattr(compiled, "_target", "system")
     layout = getattr(compiled, "_layout", None)
 
-    # COMPILE-TIME SNAPSHOT AUTHORITY (ADC-592): drift-check the LIVE Case against what compile froze,
-    # then lower from the compile-time snapshot -- not a fresh live re-read -- so a Case mutated between
+    # COMPILE-TIME SNAPSHOT AUTHORITY (ADC-592): drift-check the LIVE Problem against what compile froze,
+    # then lower from the compile-time snapshot -- not a fresh live re-read -- so a Problem mutated between
     # compile and bind cannot silently change what gets bound. A block-name divergence is a loud error;
     # an explicit solvers= kwarg is a documented override, not drift.
     block_specs = getattr(compiled, "_block_specs", None)
@@ -251,7 +251,7 @@ def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
     field_solvers.update(solvers or {})
 
     # OUTPUT / CHECKPOINT policies (C4 / ADC-509) from the COMPILE-TIME snapshot (compiled._outputs),
-    # so the bound sim's run() fires exactly the policies the compile saw. Empty for a Case with no
+    # so the bound sim's run() fires exactly the policies the compile saw. Empty for a Problem with no
     # .output(...) -- the install is unchanged.
     outputs = list(getattr(compiled, "_outputs", None)
                    if getattr(compiled, "_outputs", None) is not None
@@ -261,7 +261,7 @@ def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
     # target='amr_system' CompiledModel from compile()'s _block_compiled_models); the Uniform install
     # carries the whole-system compiled time Program (@p compiled). _assemble_instances builds the
     # right per-block model table from the COMPILE-TIME block specs (models + spatial), so it is immune
-    # to a post-compile Case mutation (the Uniform route used to re-resolve spec["physics"] live). A
+    # to a post-compile Problem mutation (the Uniform route used to re-resolve spec["model"] live). A
     # legacy handle with no _block_specs falls back to the historical live-read path (AMR then routes
     # via _block_compiled_models, byte-identical to before).
     n_blocks = len(block_specs) if block_specs is not None else (
@@ -286,8 +286,8 @@ def _resolve_layout(problem, layout):
     """Resolve the effective compile layout from an optional explicit @p layout (ADC-523).
 
     Omitted (``None``), the layout is read from ``problem.layout`` (the historical path). Given, it
-    must be the SAME layout the problem already carries: a ``pops.compile(case, layout=other)`` that
-    disagrees with ``case.layout`` is refused loudly rather than silently overriding what the Case was
+    must be the SAME layout the problem already carries: a ``pops.compile(problem, layout=other)`` that
+    disagrees with ``problem.layout`` is refused loudly rather than silently overriding what the Problem was
     assembled and validated with. PR-1 accepts the argument as a forward step toward
     ``pops.compile(problem, layout=...)``; PR-2 completes the move (the Problem loses the mandatory
     constructor layout).
@@ -298,7 +298,7 @@ def _resolve_layout(problem, layout):
     if problem_layout is not None and layout is not problem_layout and layout != problem_layout:
         raise ValueError(
             "pops.compile: the explicit layout= (%r) disagrees with the problem's own layout (%r); "
-            "build the Case with the layout you compile for (a compiled artifact is frozen to one "
+            "build the Problem with the layout you compile for (a compiled artifact is frozen to one "
             "layout)." % (layout, problem_layout))
     return layout
 
@@ -326,13 +326,13 @@ def _assemble_instances(problem, initial, block_specs=None, models=None):
     shape the unified install consumes. The per-block model + spatial come from @p block_specs, the
     COMPILE-TIME snapshot (``compiled._block_specs``, ADC-592): the model is the resolved engine model
     (Uniform, handed to the compiled time Program) OR the block's own ``target='amr_system'``
-    CompiledModel (AMR), captured at compile so a post-compile Case mutation cannot change it. The
+    CompiledModel (AMR), captured at compile so a post-compile Problem mutation cannot change it. The
     per-block initial state comes from @p initial (keyed by block name); an unknown key raises so a
     typo is not silently dropped.
 
     @p block_specs of ``None`` is a legacy/degraded handle (produced without the ADC-592 snapshot):
     fall back to a LIVE re-read of ``problem._blocks`` (byte-identical to before for a non-mutated
-    Case). On that fallback path, @p models -- when given (the AMR route's
+    Problem). On that fallback path, @p models -- when given (the AMR route's
     ``compiled._block_compiled_models`` table) -- supplies each block's own ``target='amr_system'``
     CompiledModel (installed via ``add_native_block``) instead of the resolved engine model.
     """
@@ -361,7 +361,7 @@ def _assemble_instances(problem, initial, block_specs=None, models=None):
                     "carry one CompiledModel per block (was it produced by pops.compile?)" % (name,))
             model = models[name]
         else:
-            model = _resolve_problem_model(spec["physics"])
+            model = _resolve_problem_model(spec["model"])
         entry = {"model": model, "spatial": spec["spatial"]}
         if name in initial:
             entry["initial"] = initial[name]
@@ -370,13 +370,13 @@ def _assemble_instances(problem, initial, block_specs=None, models=None):
 
 
 def _check_case_not_mutated(problem, block_specs):
-    """Raise a LOUD error when the LIVE Case's blocks diverge from the compile-time snapshot (ADC-592).
+    """Raise a LOUD error when the LIVE Problem's blocks diverge from the compile-time snapshot (ADC-592).
 
     ``compiled._block_specs`` is the block-name set the compile FROZE; if the live ``problem._blocks``
     no longer matches (a block added / removed after ``pops.compile``), bind would silently bind a
     stale composition. We refuse it, naming the drift, and point at a recompile. A degraded handle
     (no snapshot, ``block_specs is None``) or a handle with no live problem is skipped (nothing to
-    compare -- the legacy live-read path stays byte-identical for a non-mutated Case)."""
+    compare -- the legacy live-read path stays byte-identical for a non-mutated Problem)."""
     if block_specs is None or problem is None:
         return
     live = set(getattr(problem, "_blocks", {}) or {})
@@ -385,9 +385,9 @@ def _check_case_not_mutated(problem, block_specs):
         added = sorted(live - frozen)
         removed = sorted(frozen - live)
         raise ValueError(
-            "pops.bind: the Case was mutated after pops.compile (blocks changed: added=%s removed=%s);"
-            " a compiled artifact is frozen at compile time and is not affected by a later Case "
-            "mutation -- recompile the Case (pops.compile(...)) before pops.bind(...)."
+            "pops.bind: the Problem was mutated after pops.compile (blocks changed: added=%s removed=%s);"
+            " a compiled artifact is frozen at compile time and is not affected by a later Problem "
+            "mutation -- recompile the Problem (pops.compile(...)) before pops.bind(...)."
             % (added, removed))
 
 

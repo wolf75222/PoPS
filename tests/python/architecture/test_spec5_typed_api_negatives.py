@@ -102,21 +102,21 @@ def test_catalog_descriptors_are_inspectable_and_validate():
 
 
 def test_problem_is_not_a_descriptor():
-    # Spec 5 sec.6 table / sec.15: a Case is an ASSEMBLY that CONTAINS descriptors (its layout,
+    # Spec 5 sec.6 table / sec.15: a Problem is an ASSEMBLY that CONTAINS descriptors (its layout,
     # the blocks' physics, the field problems). It is NOT itself a Descriptor. The architecture
-    # promise: isinstance(Case(...), Descriptor) is False, yet every Case method still works
+    # promise: isinstance(Problem(...), Descriptor) is False, yet every Problem method still works
     # (it duck-types the inspectable surface), and the parts it holds ARE descriptors.
     import pops
     from pops.descriptors import Descriptor, DescriptorProtocol
 
-    prob = pops.Case(name="arch").block("ne", physics=type("M", (), {"name": "m"})())
+    prob = pops.Problem(name="arch").block("ne", physics=type("M", (), {"name": "m"})())
     assert not isinstance(prob, Descriptor), (
-        "Spec 5 sec.6: a Case must NOT be a pops.descriptors.Descriptor (it is an assembly "
+        "Spec 5 sec.6: a Problem must NOT be a pops.descriptors.Descriptor (it is an assembly "
         "that contains descriptors, not one itself)")
     # The inspectable surface survives the de-Descriptor change (structural duck typing).
     assert isinstance(prob, DescriptorProtocol)
-    assert prob.validate.__self__ is prob  # validate() is implemented directly on Case.
-    assert prob.inspect()["category"] == "case"
+    assert prob.validate.__self__ is prob  # validate() is implemented directly on Problem.
+    assert prob.inspect()["category"] == "problem"
     assert prob.lower()["name"] == "arch"
     # The layout it CONTAINS is still a descriptor (the assembly holds descriptors).
     assert isinstance(prob.layout, Descriptor)

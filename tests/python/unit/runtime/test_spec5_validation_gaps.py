@@ -255,10 +255,10 @@ def test_tag_union_forwards_the_model_context():
 def test_problem_amr_refine_validates_the_subject_against_the_block_model():
     model = _FakeModel()
     # The role check fires where the model IS available: problem.amr.refine.
-    prob = pops.Case(layout=AMR(base=CartesianMesh(n=64))).block("plasma", physics=model)
+    prob = pops.Problem(layout=AMR(base=CartesianMesh(n=64))).block("plasma", physics=model)
     # A real role passes and the call chains back to the problem.
     assert prob.amr.refine(Refine.on("rho").above(0.05)) is prob
     # A bogus role is refused before runtime.
-    prob2 = pops.Case(layout=AMR(base=CartesianMesh(n=64))).block("plasma", physics=model)
+    prob2 = pops.Problem(layout=AMR(base=CartesianMesh(n=64))).block("plasma", physics=model)
     with pytest.raises(ValueError, match="is not a declared subject"):
         prob2.amr.refine(Refine.on("definitely_not_a_role").above(0.05))

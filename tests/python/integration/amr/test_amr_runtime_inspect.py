@@ -59,7 +59,7 @@ def test_amr_handle_is_an_inert_runtime_view():
 def test_system_has_no_amr_handle_with_a_clear_error():
     sim = pops.System(n=16, L=1.0, periodic=True)
     assert not hasattr(sim, "amr")
-    # ADC-583: the remedy speaks the bind vocabulary (layout=AMR on the Case), not AmrSystem.
+    # ADC-583: the remedy speaks the bind vocabulary (layout=AMR on the Problem), not AmrSystem.
     with pytest.raises(AttributeError, match=r"layout=AMR\(.*inspect_amr"):
         operator.attrgetter("amr")(sim)
 
@@ -123,7 +123,7 @@ def test_explain_regrid_dynamic_vs_frozen():
     assert dyn.frozen is False and dyn.regrid_every == 4
     # The union-of-tags criteria are named (config-sourced shape, not a fabricated threshold).
     blob = " ".join(dyn.criteria)
-    # ADC-583: the criteria are described in the Case vocabulary (AMR(refine=Refine.on(...))).
+    # ADC-583: the criteria are described in the Problem vocabulary (AMR(refine=Refine.on(...))).
     assert "AMR(refine=Refine.on" in blob and "grad phi" in blob
 
     frozen = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0).amr.explain_regrid()
@@ -230,7 +230,7 @@ def test_compiled_inspect_amr_delegates_to_top_level():
 
 def test_compiled_inspect_amr_surfaces_the_carried_layout_by_default():
     # ADC-555 criterion: the refine/regrid/... tags appear in compiled.inspect_amr(), not just
-    # layout.inspect(). pops.compile's AMR route (_compile_amr) attaches the Case's AMR layout
+    # layout.inspect(). pops.compile's AMR route (_compile_amr) attaches the Problem's AMR layout
     # to the returned CompiledModel as `_layout`; a bare inspect_amr() call must report THAT
     # layout (with its tags), not silently fall back to the generic native envelope.
     from pops.codegen.loader import CompiledModel
