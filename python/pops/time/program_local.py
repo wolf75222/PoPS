@@ -2,15 +2,25 @@
 
 Local solves, matrix-free operators, laplacian/gradient/divergence and the Schur helpers.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from pops.time.program_base import _ProgramConstants
 from pops.time.values import (
     Value, _Affine, _Coeff, _Operator, _is_field_value, _residual_wants_guess, _resolve_handle)
 
+if TYPE_CHECKING:
+    from pops.time._program_contract import _ProgramBase
+else:
+    _ProgramBase = object
 
-class _ProgramLocal(_ProgramConstants):
+
+class _ProgramLocal(_ProgramConstants, _ProgramBase):
     """Local solves, matrix-free operators, laplacian/gradient/divergence and the Schur helpers."""
 
-    def solve_local_linear(self, name=None, operator=None, rhs=None, fields=None):
+    def solve_local_linear(self, name: Any = None, operator: Any = None, rhs: Any = None,
+                           fields: Any = None) -> Any:
         """Solve a LOCAL linear system ``operator U = rhs`` cell by cell, where
         ``operator = self.I +/- a*L`` for a single model linear source ``L`` (``a`` may depend on dt
         / constants). Returns the solution State. A non-local or non-linear operator is rejected; the
@@ -41,8 +51,9 @@ class _ProgramLocal(_ProgramConstants):
     # non-local op (rhs / divergence / solve_fields / a nested solve) is allowed (it would need a halo
     # / global solve, which a per-cell Newton kernel cannot evaluate at a perturbed stack state).
 
-    def solve_local_nonlinear(self, name=None, residual=None, initial_guess=None, method="newton",
-                              tol=1e-12, max_iter=20):
+    def solve_local_nonlinear(self, name: Any = None, residual: Any = None,
+                              initial_guess: Any = None, method: Any = "newton",
+                              tol: Any = 1e-12, max_iter: Any = 20) -> Any:
         """Solve a LOCAL non-linear system ``residual(U) = 0`` cell by cell with a per-cell Newton
         iteration (spec op 10). Returns the converged solution State.
 
@@ -117,7 +128,7 @@ class _ProgramLocal(_ProgramConstants):
             {"residual_block": sub, "residual": r, "iterate": iterate, "guess": guess_ph,
              "tol": float(tol), "max_iter": int(max_iter), "method": method}, name, block)
 
-    def _linear_source_name(self, operator, where):
+    def _linear_source_name(self, operator: Any, where: Any) -> Any:
         """Resolve `operator` to the linear-source name.
 
         Accepts a typed :class:`pops.model.OperatorHandle` (ADC-532; unwrapped to its ``.name``, so the
@@ -137,7 +148,7 @@ class _ProgramLocal(_ProgramConstants):
             "%s: operator must be a linear source (P.linear_source(handle) or its OperatorHandle)"
             % where)
 
-    def _linear_source(self, name):
+    def _linear_source(self, name: Any) -> Any:
         """Internal seam: reference a linear source by its bare NAME (an internal selector).
 
         NOT a public surface -- it is the byte-identical lowering the public typed
@@ -147,7 +158,8 @@ class _ProgramLocal(_ProgramConstants):
             raise ValueError("_linear_source: a non-empty operator name is required")
         return self._new("operator", "linear_source", (), {"linear_source": name}, name, None)
 
-    def _apply(self, operator=None, state=None, fields=None, name=None):
+    def _apply(self, operator: Any = None, state: Any = None, fields: Any = None,
+               name: Any = None) -> Any:
         """Internal seam: apply a linear source given as a typed value / handle OR a bare name.
 
         NOT a public surface -- the public :meth:`apply` refuses a bare-name string and delegates
@@ -170,7 +182,7 @@ class _ProgramLocal(_ProgramConstants):
     # gmres_solve): the iteration is DYNAMIC and lives C++-side (inside the loop), invisible to the IR --
     # the Program only supplies the apply (a C++ lambda) + the rhs / tolerance / iteration budget.
 
-    def scalar_field(self, name=None, ncomp=1):
+    def scalar_field(self, name: Any = None, ncomp: Any = 1) -> Any:
         """A fresh, zero-initialized scalar field: scratch the apply sub-block uses (e.g. the Laplacian
         output, or a 2-component gradient buffer). @p ncomp is the component count (1 by default; 2 for a
         gradient field consumed by ``P.divergence``). Lowered to ``ctx.alloc_scalar_field(ncomp, 1)``."""
@@ -179,7 +191,8 @@ class _ProgramLocal(_ProgramConstants):
         return self._new("scalar_field", "scalar_field", (), {"ncomp": int(ncomp)}, name, None)
 
 
-    def matrix_free_operator(self, name, domain="scalar", range_="scalar", ncomp=None):
+    def matrix_free_operator(self, name: Any, domain: Any = "scalar", range_: Any = "scalar",
+                             ncomp: Any = None) -> Any:
         """Declare a matrix-free operator ``A : domain -> range_``. @p domain / @p range_ are the field
         kind on each side and MUST match (a square operator: the Krylov iterate, residual and solution
         share one layout): ``"scalar"`` (a 1-component scalar field, the default), or ``"vector"`` /
@@ -210,7 +223,7 @@ class _ProgramLocal(_ProgramConstants):
                          {"domain": domain, "range": range_, "ncomp": int(ncomp), "apply_block": None,
                           "apply_result": None, "apply_in": None, "apply_out": None}, name, None)
 
-    def set_apply(self, operator, body_fn):
+    def set_apply(self, operator: Any, body_fn: Any) -> Any:
         """Record the apply ``out <- A(in)`` of a ``matrix_free_operator``. @p body_fn(P, out, in) is an
         IR-building callable: @p in and @p out are scalar_field values (the operator's argument and
         result); the body builds @p out from @p in (e.g. ``P.laplacian(tmp, in); ...``) using
@@ -248,7 +261,7 @@ class _ProgramLocal(_ProgramConstants):
         operator.attrs["apply_out"] = out_sf
         return operator
 
-    def laplacian(self, out, in_):
+    def laplacian(self, out: Any, in_: Any) -> Any:
         """Record ``out = Lap(in_)`` (the shared discrete 5-point Laplacian). @p out and @p in_ are
         scalar_field values. Lowered to ``ctx.laplacian(out, in_)``. Used inside an apply sub-block to
         form a Helmholtz operator ``A(in) = in - alpha*Lap(in)`` via the affine algebra."""
@@ -258,7 +271,7 @@ class _ProgramLocal(_ProgramConstants):
             raise ValueError("laplacian: in must be a scalar_field value")
         return self._new("scalar_field", "laplacian", (out, in_), {}, out.name, None)
 
-    def gradient(self, out, phi):
+    def gradient(self, out: Any, phi: Any) -> Any:
         """Record ``out = grad(phi)`` (centered differences; @p out has >= 2 components). @p out and
         @p phi are scalar_field values. Lowered to ``ctx.gradient(out, phi)``."""
         if not (isinstance(out, Value) and out.vtype == "scalar_field"):
@@ -267,7 +280,7 @@ class _ProgramLocal(_ProgramConstants):
             raise ValueError("gradient: phi must be a scalar_field value")
         return self._new("scalar_field", "gradient", (out, phi), {}, out.name, None)
 
-    def divergence(self, out, fx, fy):
+    def divergence(self, out: Any, fx: Any, fy: Any) -> Any:
         """Record ``out = div(fx, fy)`` (centered FV divergence d fx/dx + d fy/dy, component 0). @p out,
         @p fx and @p fy are scalar_field values. Lowered to ``ctx.divergence(out, fx, fy)``. The exact
         inverse of @ref gradient: chaining ``P.gradient(g, phi); P.divergence(d, gx, gy)`` recovers the
@@ -279,7 +292,8 @@ class _ProgramLocal(_ProgramConstants):
         return self._new("scalar_field", "divergence", (out, fx, fy), {}, out.name, None)
 
     # --- finite-difference Jacobian-vector product (ADC-431: implicit-flux BDF Newton-Krylov) --------
-    def rhs_jacvec(self, out, in_, *, iterate, r0, c_dt, eps=1e-7, flux=True, sources=("default",)):
+    def rhs_jacvec(self, out: Any, in_: Any, *, iterate: Any, r0: Any, c_dt: Any, eps: Any = 1e-7,
+                   flux: Any = True, sources: Any = ("default",)) -> Any:
         """Record the finite-difference Jacobian-vector product of an implicit-flux residual, INSIDE a
         matrix_free_operator apply sub-block (ADC-431). It lowers to ``out <- J(@p iterate) @p in`` where
         the Newton-system Jacobian is ``J = I - c*dt * d(rhs)/dU`` and the matvec is formed matrix-free by
@@ -321,7 +335,8 @@ class _ProgramLocal(_ProgramConstants):
                          out.name, None)
 
     # --- anisotropic condensed-Schur coefficient assembly + coefficiented apply (ADC-399 / ADC-421) ---
-    def schur_coeffs(self, name=None, state=None, c=None, th_dt=None, c_rho=0, c_bz=3):
+    def schur_coeffs(self, name: Any = None, state: Any = None, c: Any = None, th_dt: Any = None,
+                     c_rho: Any = 0, c_bz: Any = 3) -> Any:
         """Assemble the per-cell tensor coefficient ``A = I + c*rho*B^{-1}`` of the condensed-Schur
         operator from a State (rho at component @p c_rho) and the B_z aux field (component @p c_bz,
         canonical B_z=3). Returns a ``schur_coeffs`` bundle value carrying the four coefficient fields
@@ -348,7 +363,7 @@ class _ProgramLocal(_ProgramConstants):
                          {"c": c_d, "th_dt": th_d, "c_rho": int(c_rho), "c_bz": int(c_bz)}, name,
                          state.block)
 
-    def apply_laplacian_coeff(self, out, in_, coeffs):
+    def apply_laplacian_coeff(self, out: Any, in_: Any, coeffs: Any) -> Any:
         """Record ``out = div(A grad in_)`` with the tensor ``A`` of a @ref schur_coeffs bundle (the
         coefficiented matrix-free matvec of the condensed-Schur operator, ``pops::apply_laplacian``'s
         coefficient path). @p out and @p in_ are scalar_field values; @p coeffs is a ``schur_coeffs``
@@ -365,7 +380,8 @@ class _ProgramLocal(_ProgramConstants):
         return self._new("scalar_field", "apply_laplacian_coeff", (out, in_, coeffs), {}, out.name,
                          None)
 
-    def schur_explicit_flux(self, out, state, th_dt, c_mx=1, c_my=2, c_bz=3):
+    def schur_explicit_flux(self, out: Any, state: Any, th_dt: Any, c_mx: Any = 1, c_my: Any = 2,
+                            c_bz: Any = 3) -> Any:
         """Record ``out = B^{-1} (mx, my)`` per cell -- the explicit condensed-Schur flux
         ``F = rho*B^{-1}*v^n`` (Fx in component 0, Fy in component 1). @p out is a scalar_field (>= 2
         components), @p state a State (mx / my at @p c_mx / @p c_my), B_z the aux field at @p c_bz.
@@ -380,7 +396,8 @@ class _ProgramLocal(_ProgramConstants):
                          {"th_dt": th_d, "c_mx": int(c_mx), "c_my": int(c_my), "c_bz": int(c_bz)},
                          out.name, None)
 
-    def schur_rhs(self, out, phi_n, state, th_dt, g, c_mx=1, c_my=2, c_bz=3):
+    def schur_rhs(self, out: Any, phi_n: Any, state: Any, th_dt: Any, g: Any, c_mx: Any = 1,
+                  c_my: Any = 2, c_bz: Any = 3) -> Any:
         """Record the FUSED condensed-Schur right-hand side ``out = -Lap(phi_n) - g*div(F)`` with
         ``F = B^{-1}(mx, my)`` -- the native ElectrostaticLorentzCondensation::assemble_rhs in one op.
         @p out is a 1-component scalar_field, @p phi_n a scalar_field (phi^n warm start; its ghosts are
@@ -405,8 +422,9 @@ class _ProgramLocal(_ProgramConstants):
                          {"th_dt": th_d, "g": g_d, "c_mx": int(c_mx), "c_my": int(c_my),
                           "c_bz": int(c_bz)}, out.name, None)
 
-    def schur_reconstruct(self, name=None, state=None, phi=None, th_dt=None, c_rho=0, c_mx=1, c_my=2,
-                          c_bz=3):
+    def schur_reconstruct(self, name: Any = None, state: Any = None, phi: Any = None,
+                          th_dt: Any = None, c_rho: Any = 0, c_mx: Any = 1, c_my: Any = 2,
+                          c_bz: Any = 3) -> Any:
         """Record the condensed-Schur velocity reconstruction ``v^{n+theta} = B^{-1}(v^n - theta*dt*
         grad phi)`` IN PLACE on @p state (rho frozen; mom = rho*v written back). @p phi is the solved
         potential (a scalar_field or 1-component State), @p th_dt = theta*dt; B_z the aux at @p c_bz.
@@ -426,7 +444,8 @@ class _ProgramLocal(_ProgramConstants):
                          {"th_dt": th_d, "c_rho": int(c_rho), "c_mx": int(c_mx), "c_my": int(c_my),
                           "c_bz": int(c_bz)}, name, state.block)
 
-    def schur_energy(self, name=None, state=None, state_old=None, c_rho=0, c_mx=1, c_my=2, c_E=3):
+    def schur_energy(self, name: Any = None, state: Any = None, state_old: Any = None, c_rho: Any = 0,
+                     c_mx: Any = 1, c_my: Any = 2, c_E: Any = 3) -> Any:
         """Record the condensed-Schur kinetic-energy increment IN PLACE on @p state (ADC-427):
         ``E^{n+1} = E^n + (1/2)*rho*(|v^{n+1}|^2 - |v^n|^2)``, ``v = (mx, my)/rho`` (the native
         SchurEnergyKernel). @p state carries ``rho`` / ``mx`` / ``my`` / ``E`` at @p c_rho / @p c_mx /

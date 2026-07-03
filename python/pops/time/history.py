@@ -7,6 +7,7 @@ authoring descriptors: they carry NO runtime data and emit NO IR on their own. T
 runtime / codegen phase can honor it; the historical cold start (the runtime fills every
 slot on the first store) is the default when no policy is given.
 """
+from __future__ import annotations
 
 
 class CopyCurrent:
@@ -19,5 +20,5 @@ class CopyCurrent:
 
     kind = "copy_current"
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "CopyCurrent()"

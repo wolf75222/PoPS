@@ -9,7 +9,8 @@
     "python/pops/runtime/brick_catalog.py",
     "python/pops/params/constants.py",
     "python/pops/solvers/options.py",
-    "python/pops/solvers/tolerances.py"
+    "python/pops/solvers/tolerances.py",
+    "python/pops/time"
   ],
   "exclude": [
     "**/__pycache__",
@@ -18,7 +19,9 @@
     "tests/gpu",
     "tests/python"
   ],
-  "extraPaths": ["python"],
+  "extraPaths": [
+    "python"
+  ],
   "pythonVersion": "3.10",
   "typeCheckingMode": "basic",
   "reportMissingModuleSource": "none",
@@ -29,7 +32,9 @@
   "executionEnvironments": [
     {
       "root": "python",
-      "extraPaths": ["python"]
+      "extraPaths": [
+        "python"
+      ]
     }
   ]
 }

@@ -6,19 +6,27 @@ Optimization passes (dead-node / CSE / redundant-solve elimination, ``optimize``
 ``_ProgramInspect`` (``pops.time.program_inspect``). All pure IR analysis: no codegen, no
 _pops.
 """
+from __future__ import annotations
+
 import hashlib
 import json
+from typing import TYPE_CHECKING, Any
 
 from pops.time.program_base import _ProgramConstants
 from pops.time.schedule import Schedule
 from pops.time.values import Value, _Affine, _affine_ids  # noqa: F401
 
+if TYPE_CHECKING:
+    from pops.time._program_contract import _ProgramBase
+else:
+    _ProgramBase = object
 
-class _ProgramPasses(_ProgramConstants):
+
+class _ProgramPasses(_ProgramConstants, _ProgramBase):
     """IR optimization passes, serialization and validation for the Program authoring class."""
 
     @staticmethod
-    def _subblock_value_refs(v):
+    def _subblock_value_refs(v: Any) -> Any:
         """Yield every Value an op references THROUGH its attrs (sub-block result pointers + the ops
         nested in its recorded sub-blocks). Used to keep alive anything a control-flow / matrix-free
         node closes over from the enclosing scope -- v1 never rewrites a sub-block, so it is all live.
@@ -46,7 +54,7 @@ class _ProgramPasses(_ProgramConstants):
                     yield from _ProgramPasses._subblock_value_refs(w)
 
     @staticmethod
-    def _cse_key(v, canon):
+    def _cse_key(v: Any, canon: Any) -> Any:
         """A canonical, alias-aware fingerprint of a PURE node: its op, vtype, block, the attrs the IR
         hash uses, and its inputs MAPPED THROUGH @p canon (each input id replaced by the id of the
         representative node it was deduplicated to). Two pure nodes with the same key compute the SAME
@@ -62,7 +70,7 @@ class _ProgramPasses(_ProgramConstants):
                 json.dumps(node["attrs"], sort_keys=True, separators=(",", ":")))
 
     @staticmethod
-    def _serialize_node(v):
+    def _serialize_node(v: Any) -> Any:
         attrs = dict(v.attrs)
         if "schedule" in attrs:  # an authoring annotation: serialize its repr so the IR hash is
             attrs["schedule"] = repr(attrs["schedule"])  # schedule-sensitive yet JSON-safe
@@ -95,7 +103,7 @@ class _ProgramPasses(_ProgramConstants):
                 "inputs": [i.id for i in v.inputs], "attrs": attrs}
 
 
-    def _live_value_ids(self):
+    def _live_value_ids(self) -> Any:
         """The set of value ids reverse-reachable from the live roots: the commits plus every flat node
         whose op is NOT on the ``_REMOVABLE_OPS`` allow-list (safe-by-default -- a buffer-writing,
         side-effecting, sub-block-owning, or unknown op is a live root). A flat node is DEAD only if its
@@ -124,7 +132,7 @@ class _ProgramPasses(_ProgramConstants):
                 stack.append(w.id)
         return live
 
-    def eliminate_dead_nodes(self):
+    def eliminate_dead_nodes(self) -> Any:
         """Return a NEW Program with the dead flat-list nodes removed (Spec 3 s28 dead-node
         elimination, ADC-465). An OPT-IN pass: call it explicitly to optimize a copy -- it NEVER runs
         on the default ``emit_cpp_program`` path, so it cannot change an existing compiled program.
@@ -145,7 +153,7 @@ class _ProgramPasses(_ProgramConstants):
         live = self._live_value_ids()
         return self._rebuild(lambda v: v.id in live)
 
-    def _rebuild(self, keep, alias=None):
+    def _rebuild(self, keep: Any, alias: Any = None) -> Any:
         """Clone this Program into a fresh one keeping the flat nodes for which ``keep(v)`` is true,
         renumbering surviving ids to a contiguous 0.. range in original order. Sub-blocks are cloned
         wholesale (never filtered). The clone reproduces the IR identity of an equivalent hand-built
@@ -169,7 +177,7 @@ class _ProgramPasses(_ProgramConstants):
                 by_id.setdefault(w.id, w)
         alias = alias or {}
 
-        def rep(v):
+        def rep(v: Any) -> Any:
             """Follow @p v through the alias chain to the surviving representative Value (identity for a
             kept node). The passes only alias onto an EARLIER, kept node, so the chain terminates."""
             seen = set()
@@ -180,17 +188,17 @@ class _ProgramPasses(_ProgramConstants):
                 v = by_id[alias[v.id]]
             return v
 
-        def clone_block(block):
+        def clone_block(block: Any) -> Any:
             return [clone(w) for w in block]
 
-        def remap(ref):
+        def remap(ref: Any) -> Any:
             if isinstance(ref, Value):
                 return idmap[rep(ref)]
             if isinstance(ref, _Affine):
                 return _Affine([(idmap[rep(v)], c) for v, c in ref.terms])
             return ref
 
-        def clone_attrs(v):
+        def clone_attrs(v: Any) -> Any:
             attrs = {}
             for key, val in v.attrs.items():
                 if key in ("cond_block", "body_block", "apply_block", "residual_block"):
@@ -208,7 +216,7 @@ class _ProgramPasses(_ProgramConstants):
                     attrs[key] = val
             return attrs
 
-        def deps(v):
+        def deps(v: Any) -> Any:
             """The values v depends on that must be cloned (hence id-assigned) BEFORE v, in their
             ORIGINAL creation order. A fresh build records the inputs and most sub-blocks before the
             owning node, BUT a matrix_free_operator is created (its node id assigned) BEFORE
@@ -229,7 +237,7 @@ class _ProgramPasses(_ProgramConstants):
             # whose original id precedes v's (the genuine predecessors) and visit them id-ascending.
             return sorted((w for w in seen if w.id < v.id), key=lambda w: w.id)
 
-        def clone(v):
+        def clone(v: Any) -> Any:
             if v in idmap:
                 return idmap[v]
             # Assign new ids in ORIGINAL creation order: clone every predecessor (id < v.id) first,
@@ -262,7 +270,7 @@ class _ProgramPasses(_ProgramConstants):
         return out
 
     # --- common-subexpression elimination (Spec 3 s28, ADC-465) ---
-    def eliminate_common_subexpressions(self):
+    def eliminate_common_subexpressions(self) -> Any:
         """Return a NEW Program with duplicated PURE sub-IR computed once and aliased (Spec 3 s28
         common-subexpression elimination, ADC-465).
 
@@ -307,7 +315,7 @@ class _ProgramPasses(_ProgramConstants):
         return self._rebuild(lambda v: v.id not in drop, alias=canon)
 
     # --- redundant field-solve elimination (Spec 3 s28, ADC-465) ---
-    def eliminate_redundant_field_solves(self):
+    def eliminate_redundant_field_solves(self) -> Any:
         """Return a NEW Program with a provably-redundant second ``solve_fields`` removed and aliased
         (Spec 3 s28 redundant-solve elimination, ADC-465).
 
@@ -362,7 +370,7 @@ class _ProgramPasses(_ProgramConstants):
     # whole pipeline is a no-op on an already-optimal Program. Analysis passes (liveness / estimate /
     # GPU detector) are reports, NOT in this list -- they never rewrite the IR.
 
-    def optimize(self):
+    def optimize(self) -> Any:
         """Return a NEW Program with the proven-safe Spec 3 s28 transform passes applied in sequence
         (ADC-465): dead-node elimination, common-subexpression elimination, redundant field-solve
         elimination. OPT-IN -- the default ``emit_cpp_program`` path never optimizes. Each pass is
@@ -375,7 +383,7 @@ class _ProgramPasses(_ProgramConstants):
             prog = getattr(prog, name)()
         return prog
 
-    def dump_passes(self):
+    def dump_passes(self) -> Any:
         """Inspect the optimization pipeline: for each proven-safe transform pass, the number of flat
         nodes before / after and whether it changed the IR hash. A report only -- it RUNS the pipeline
         on a copy (``self`` is never mutated) and returns a human-readable trace, so a reviewer can see
@@ -407,7 +415,7 @@ class _ProgramPasses(_ProgramConstants):
     # kernels (an elliptic / Krylov solve) -- counted as a HEAVY kernel, not a small one.
 
 
-    def validate(self):
+    def validate(self) -> Any:
         """Structural validation of the IR. Raises ValueError on a malformed program."""
         if not self._commits:
             raise ValueError("a time Program must commit each advanced block exactly once "
@@ -440,7 +448,7 @@ class _ProgramPasses(_ProgramConstants):
         check_program(self)
         return True
 
-    def _validate_block(self, block, outer_seen):
+    def _validate_block(self, block: Any, outer_seen: Any) -> Any:
         """Validate a control-flow sub-block: each op may read values defined earlier in the SAME block
         or in the enclosing scope (the loop variable / anything defined before the while). @p outer_seen
         is the enclosing scope's def set (copied, not mutated -- the sub-block ops are not visible
@@ -453,7 +461,7 @@ class _ProgramPasses(_ProgramConstants):
             seen.add(v.id)
 
     # --- serialization / hash ---
-    def _serialize(self):
+    def _serialize(self) -> Any:
         nodes = [self._serialize_node(v) for v in self._values]
         commits = sorted((b, s.id) for b, s in self._commits.items())
         # NAME-based block binding (Spec 3 criterion 23, ADC-457): the block names in P.state
@@ -473,13 +481,13 @@ class _ProgramPasses(_ProgramConstants):
                                "result": result.id}
         return out
 
-    def _ir_hash(self):
+    def _ir_hash(self) -> Any:
         """Stable SHA-256 of the IR (feeds the compiled-problem cache key in a later phase)."""
         blob = json.dumps(self._serialize(), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode()).hexdigest()
 
 
-    def _block_indices(self):
+    def _block_indices(self) -> Any:
         """Map each block name to a stable runtime block index, in the order the Program FIRST declares
         it via ``P.state(...)`` (ADC-426). Index 0 is the first declared block, 1 the second, ...; the
         single-block program keeps index 0 (byte-identical lowering). The generated ``.so`` addresses

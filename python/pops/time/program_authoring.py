@@ -2,15 +2,24 @@
 
 IR dumps, decorator step(), control flow (while_/if_/range), reductions and the dt bound.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from pops.time.program_base import _ProgramConstants
 from pops.time.values import Value, _is_field_value, _resolve_handle
 
+if TYPE_CHECKING:
+    from pops.time._program_contract import _ProgramBase
+else:
+    _ProgramBase = object
 
-class _ProgramAuthoring(_ProgramConstants):
+
+class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
     """IR dumps, decorator step(), control flow (while_/if_/range), reductions and the dt bound."""
 
     @staticmethod
-    def _render_node(v):
+    def _render_node(v: Any) -> Any:
         """Render one IR value as an operator-first line (introspection, not codegen)."""
         ins = ", ".join(i.name for i in v.inputs)
         extra = ""
@@ -21,7 +30,7 @@ class _ProgramAuthoring(_ProgramConstants):
             extra = "  # %s" % (keys,)
         return "%-16s = P.%s(%s)%s" % (v.name, v.op, ins, extra)
 
-    def dump_operator_ir(self):
+    def dump_operator_ir(self) -> Any:
         """The operator-first Program IR (one line per node): P.call/linear_combine/
         solve_local_linear/commit. The board sugar lowers to exactly this -- the dump
         proves the board and the operator-first writings share one IR."""
@@ -32,12 +41,12 @@ class _ProgramAuthoring(_ProgramConstants):
             lines.append("  P.commit(%r, %s)" % (block, st.name))
         return "\n".join(lines)
 
-    def dump_board(self):
+    def dump_board(self) -> Any:
         """The board-level view; board notation lowers to the operator-first IR below."""
         return ("# board program %s lowers to the operator-first IR (board == operator-first):\n%s"
                 % (self.name, self.dump_operator_ir()))
 
-    def dump_cpp_plan(self):
+    def dump_cpp_plan(self) -> Any:
         """A textual C++ plan of the generated step (ProgramContext calls), NOT the exact
         codegen -- it shows which ctx / GeneratedModule call each node lowers to."""
         lines = ["// C++ plan for GeneratedProgram step of %s" % self.name]
@@ -60,7 +69,7 @@ class _ProgramAuthoring(_ProgramConstants):
         return "\n".join(lines)
 
     # --- decorator mode (ADC-423): record the step body from a function ---
-    def step(self, fn):
+    def step(self, fn: Any) -> Any:
         """Record this Program's IR by calling @p fn(self) ONCE, at build time (decorator mode).
 
         ``@P.step`` is sugar for an inline builder body: the decorated function receives the Program
@@ -84,7 +93,7 @@ class _ProgramAuthoring(_ProgramConstants):
         return self
 
     # --- ghost fill / positivity projection (spec ops 22 / 21) ---
-    def fill_boundary(self, x):
+    def fill_boundary(self, x: Any) -> Any:
         """Fill the ghost cells (halos) of a State/scalar_field @p x in place: the transport BC
         (periodic by default), the same exchange `laplacian` / `gradient` / `divergence` do internally
         before differencing (spec op 22). Returns @p x (the SAME value -- a side effect on its ghosts,
@@ -94,7 +103,7 @@ class _ProgramAuthoring(_ProgramConstants):
                              % (x,))
         return self._new(x.vtype, "fill_boundary", (x,), {}, x.name, x.block)
 
-    def project(self, name=None, state=None, projection="block"):
+    def project(self, name: Any = None, state: Any = None, projection: Any = "block") -> Any:
         """Apply the block's post-step positivity projection to @p state in place (spec op 21):
         ``U <- project(U, aux)`` over the valid cells, the SAME Zhang-Shu / floor projection the native
         per-step path runs (ADC-177). Returns a State value (the projected state). @p projection selects
@@ -115,7 +124,7 @@ class _ProgramAuthoring(_ProgramConstants):
 
     # --- per-cell conditional select (spec op 17, ADC-418) ---
 
-    def cell_compare(self, field, value, cmp, name=None):
+    def cell_compare(self, field: Any, value: Any, cmp: Any, name: Any = None) -> Any:
         """A PER-CELL comparison ``field <cmp> value`` -> a fresh 1-component 0/1 mask scalar_field (1.0
         where the comparison holds, 0.0 otherwise), evaluated cell by cell on component 0 of @p field
         (its sole / first conserved component). @p field is a State/RHS/scalar_field value; @p value is a
@@ -135,23 +144,23 @@ class _ProgramAuthoring(_ProgramConstants):
         return self._new("scalar_field", "cell_compare", (field,),
                          {"cmp": cmp, "value": float(value)}, name, field.block)
 
-    def cell_gt(self, field, value, name=None):
+    def cell_gt(self, field: Any, value: Any, name: Any = None) -> Any:
         """Per-cell ``field > value`` mask (1.0 / 0.0). See `cell_compare`."""
         return self.cell_compare(field, value, ">", name)
 
-    def cell_ge(self, field, value, name=None):
+    def cell_ge(self, field: Any, value: Any, name: Any = None) -> Any:
         """Per-cell ``field >= value`` mask (1.0 / 0.0). See `cell_compare`."""
         return self.cell_compare(field, value, ">=", name)
 
-    def cell_lt(self, field, value, name=None):
+    def cell_lt(self, field: Any, value: Any, name: Any = None) -> Any:
         """Per-cell ``field < value`` mask (1.0 / 0.0). See `cell_compare`."""
         return self.cell_compare(field, value, "<", name)
 
-    def cell_le(self, field, value, name=None):
+    def cell_le(self, field: Any, value: Any, name: Any = None) -> Any:
         """Per-cell ``field <= value`` mask (1.0 / 0.0). See `cell_compare`."""
         return self.cell_compare(field, value, "<=", name)
 
-    def where(self, mask, a, b, name=None):
+    def where(self, mask: Any, a: Any, b: Any, name: Any = None) -> Any:
         """A PER-CELL conditional select (spec op 17): ``out(i,j,c) = mask(i,j,*) != 0 ? a(i,j,c) :
         b(i,j,c)`` COMPONENT-WISE over the field. This is NOT the scalar runtime branch `if_` -- the
         condition is decided per cell INSIDE a Kokkos kernel.
@@ -184,7 +193,7 @@ class _ProgramAuthoring(_ProgramConstants):
         return self._new(a.vtype, "where", (mask, a, b), attrs, name, a.block)
 
     @staticmethod
-    def _ncomp(value):
+    def _ncomp(value: Any) -> Any:
         """The statically-known component count of a field value, or None when it is not pinned in the
         IR (a State / RHS ncomp is the model's n_cons, known only at codegen): a scalar_field carries its
         own ``ncomp`` attr. Used by `where` for the static a/b/mask ncomp consistency check."""
@@ -193,7 +202,7 @@ class _ProgramAuthoring(_ProgramConstants):
         return None
 
     # --- reductions / comparisons / control flow (ADC-404a) ---
-    def norm2(self, state):
+    def norm2(self, state: Any) -> Any:
         """The Euclidean norm ``||u||_2`` of a State (a collective all_reduce). Returns a Scalar value.
         Lowered as ``sqrt(pops::dot(u, u))`` -- the same collective reduction every rank must run. NOTE:
         ``pops::dot`` reduces COMPONENT 0 only, so for a multi-component State this is the L2 norm of the
@@ -203,14 +212,14 @@ class _ProgramAuthoring(_ProgramConstants):
             raise ValueError("norm2: a State/RHS value is required")
         return self._new("scalar", "reduce", (state,), {"kind": "norm2"}, None, state.block)
 
-    def dot(self, a, b):
+    def dot(self, a: Any, b: Any) -> Any:
         """The inner product ``<a, b>`` of two State values (a collective all_reduce). Returns a Scalar.
         Lowered as ``pops::dot(a, b)`` -- COLLECTIVE, called on every rank (empty ranks included)."""
         if not (isinstance(a, Value) and a.is_field() and isinstance(b, Value) and b.is_field()):
             raise ValueError("dot: two State/RHS values are required")
         return self._new("scalar", "reduce", (a, b), {"kind": "dot"}, None, a.block)
 
-    def norm_inf(self, state):
+    def norm_inf(self, state: Any) -> Any:
         """The infinity norm ``max|u|`` of a State (a collective all_reduce). Returns a Scalar value.
         Lowered as ``pops::norm_inf(u)``. Like norm2/dot it reduces COMPONENT 0 only (a multi-component
         reduction is a later phase) and MUST run on every rank (it goes through the collective seam)."""
@@ -218,7 +227,7 @@ class _ProgramAuthoring(_ProgramConstants):
             raise ValueError("norm_inf: a State/RHS value is required")
         return self._new("scalar", "reduce", (state,), {"kind": "norm_inf"}, None, state.block)
 
-    def sum(self, state):
+    def sum(self, state: Any) -> Any:
         """The sum ``sum_cells u`` of a State over component 0 (a collective all_reduce). Returns a
         Scalar value. Lowered as ``pops::reduce_sum(u, 0)`` -- COLLECTIVE, called on every rank (empty
         ranks included), the same seam pops::dot uses. Like norm2/dot it reduces COMPONENT 0 only (a
@@ -228,7 +237,7 @@ class _ProgramAuthoring(_ProgramConstants):
             raise ValueError("sum: a State/RHS value is required")
         return self._new("scalar", "reduce", (state,), {"kind": "sum", "comp": 0}, None, state.block)
 
-    def max(self, state):
+    def max(self, state: Any) -> Any:
         """The maximum ``max_cells u`` of a State over component 0 (a collective all_reduce). Returns a
         Scalar value. Lowered as ``pops::reduce_max(u, 0)`` (the SIGNED max, not the magnitude -- use
         `norm_inf` for max|u|). COLLECTIVE: called on every rank. Component 0 only."""
@@ -236,7 +245,7 @@ class _ProgramAuthoring(_ProgramConstants):
             raise ValueError("max: a State/RHS value is required")
         return self._new("scalar", "reduce", (state,), {"kind": "max", "comp": 0}, None, state.block)
 
-    def min(self, state):
+    def min(self, state: Any) -> Any:
         """The minimum ``min_cells u`` of a State over component 0 (a collective all_reduce). Returns a
         Scalar value. Lowered as ``pops::reduce_min(u, 0)``. COLLECTIVE: called on every rank.
         Component 0 only."""
@@ -244,7 +253,7 @@ class _ProgramAuthoring(_ProgramConstants):
             raise ValueError("min: a State/RHS value is required")
         return self._new("scalar", "reduce", (state,), {"kind": "min", "comp": 0}, None, state.block)
 
-    def sum_component(self, state, comp):
+    def sum_component(self, state: Any, comp: Any) -> Any:
         """The sum ``sum_cells u(.,comp)`` of a State over conservative component @p comp (a collective
         all_reduce). Returns a Scalar value. Lowered as ``pops::reduce_sum(u, comp)``. COLLECTIVE:
         called on every rank. @p comp must be a Python int >= 0 (a runtime component is meaningless)."""
@@ -255,7 +264,7 @@ class _ProgramAuthoring(_ProgramConstants):
         return self._new("scalar", "reduce", (state,), {"kind": "sum", "comp": int(comp)}, None,
                          state.block)
 
-    def record_scalar(self, name, value):
+    def record_scalar(self, name: Any, value: Any) -> Any:
         """Record a runtime Scalar @p value (e.g. ``P.norm2(R)``) into the System diagnostics map under
         @p name, retrievable after the step via ``sim.program_diagnostic(name)`` /
         ``sim.program_diagnostics()`` (spec op 23). A side-effecting op (no value): it stores the scalar
@@ -270,7 +279,7 @@ class _ProgramAuthoring(_ProgramConstants):
         return self._new("scalar", "record_scalar", (value,), {"diagnostic": name}, name,
                          value.block)
 
-    def _scalar_binop(self, a, b, fn):
+    def _scalar_binop(self, a: Any, b: Any, fn: Any) -> Any:
         """Build a Scalar arithmetic node ``a <fn> b`` (fn in add/sub/mul/div). Each operand is a Scalar
         Value or a Python number (a literal constant, stored in attrs). Used by the Value scalar dunders
         so a dt_bound can express cfl * hmin / max_wave_speed (spec s18); never evaluated in Python."""
@@ -292,7 +301,7 @@ class _ProgramAuthoring(_ProgramConstants):
         return self._new("scalar", "scalar_op", tuple(inputs), {"fn": fn, "operands": operands}, None,
                          block)
 
-    def max_wave_speed(self, state):
+    def max_wave_speed(self, state: Any) -> Any:
         """The maximum |wave speed| of @p state's block (a collective reduction): the SAME per-block
         wave speed the native CFL uses (BlockState::max_speed). Returns a Scalar value. Lowered to
         ``ctx.max_wave_speed(idx, u)`` for @p state's own block (ADC-426). The denominator of a
@@ -302,13 +311,13 @@ class _ProgramAuthoring(_ProgramConstants):
             raise ValueError("max_wave_speed: a State value is required")
         return self._new("scalar", "max_wave_speed", (state,), {}, None, state.block)
 
-    def hmin(self):
+    def hmin(self) -> Any:
         """The MIN physical cell size of the grid (Cartesian min(dx, dy); polar min(dr, r_min*dtheta)):
         the SAME hmin the native CFL uses. Returns a Scalar value. Lowered to ``ctx.hmin()``. The
         numerator factor of a CFL-style dt bound cfl * hmin / max_wave_speed (spec s18)."""
         return self._new("scalar", "hmin", (), {}, None, None)
 
-    def _compare(self, lhs, rhs, cmp):
+    def _compare(self, lhs: Any, rhs: Any, cmp: Any) -> Any:
         """Build a Bool predicate ``s_lhs <cmp> rhs`` (re-evaluated each loop pass). @p rhs is a Python
         float tolerance (stored as a literal) or another Scalar value (compared at runtime). Inputs are
         the Scalar operand(s); the float bound lives in attrs['rhs']."""
@@ -320,7 +329,7 @@ class _ProgramAuthoring(_ProgramConstants):
         raise TypeError("compare: the right-hand side must be a float tolerance or a Scalar value, "
                         "got %r" % (rhs,))
 
-    def while_(self, state, cond_fn, body_fn):
+    def while_(self, state: Any, cond_fn: Any, body_fn: Any) -> Any:
         """A convergence loop: starting from @p state, while ``cond_fn(self, x)`` holds, replace x by
         ``body_fn(self, x)``; return the final State.
 
@@ -350,7 +359,7 @@ class _ProgramAuthoring(_ProgramConstants):
                           "body_block": body_block, "body": next_state},
                          None, state.block)
 
-    def static_range(self, state, count, body_fn):
+    def static_range(self, state: Any, count: Any, body_fn: Any) -> Any:
         """A COMPILE-TIME (unrolled) loop: apply ``body_fn(self, x)`` to the State @p count times,
         threading the result, and return the final State. @p count must be a Python int known at IR
         build time -- the loop is unrolled HERE (no IR control-flow op, no C++ loop): it simply builds
@@ -370,7 +379,7 @@ class _ProgramAuthoring(_ProgramConstants):
                                  "block")
         return x
 
-    def range(self, state, count, body_fn):
+    def range(self, state: Any, count: Any, body_fn: Any) -> Any:
         """A C++ ``for`` loop over a FIXED count: from @p state, apply ``body_fn(self, x)`` @p count
         times, threading the loop-variable State in place, and return the final State. @p count must be
         a Python int (a runtime/Scalar count is a later phase). The body is RE-EXECUTED each pass, so
@@ -398,7 +407,7 @@ class _ProgramAuthoring(_ProgramConstants):
                          {"count": int(count), "body_block": body_block, "body": next_state},
                          None, state.block)
 
-    def if_(self, state, cond, body_fn):
+    def if_(self, state: Any, cond: Any, body_fn: Any) -> Any:
         """A C++ ``if`` branch: from @p state, if the runtime Bool @p cond holds, replace the state by
         ``body_fn(self, x)``; otherwise leave it unchanged. Returns the (possibly updated) State. @p
         cond is a Bool value built BEFORE if_ (e.g. ``P.norm2(d) > tol``), evaluated ONCE. The body ops
@@ -417,7 +426,7 @@ class _ProgramAuthoring(_ProgramConstants):
         return self._new("state", "if", (state, cond),
                          {"body_block": body_block, "body": next_state}, None, state.block)
 
-    def _record(self, fn, x):
+    def _record(self, fn: Any, x: Any) -> Any:
         """Run a control-flow callable ``fn(self, x)`` with a fresh recording scope active, capturing the
         ops it builds into a sub-block (returned with the value fn produced). The sub-block ops are NOT
         appended to self._values (they belong to the owning control-flow op)."""
@@ -430,7 +439,7 @@ class _ProgramAuthoring(_ProgramConstants):
         return sub, out
 
     # --- optional dt bound (spec s18 / ADC-417) ----------------------------------------------------
-    def set_dt_bound(self, expr_or_fn):
+    def set_dt_bound(self, expr_or_fn: Any) -> Any:
         """Set an OPTIONAL dt bound for this Program (spec s18). The generated .so exports it as a
         SECOND ABI function (``pops_program_dt_bound``) alongside the macro step; ``step_cfl`` then uses
         ``min(native CFL dt, program dt bound)``. Without a dt bound the native CFL is UNCHANGED.
@@ -473,13 +482,13 @@ class _ProgramAuthoring(_ProgramConstants):
         self._dt_bound = (sub, result)
         return result
 
-    def dt_bound(self, fn):
+    def dt_bound(self, fn: Any) -> Any:
         """Decorator form of `set_dt_bound`: ``@P.dt_bound`` over ``def f(P, cfl): return ...`` records
         the dt bound (spec s18) and returns the function unchanged (so the name stays usable)."""
         self.set_dt_bound(fn)
         return fn
 
-    def has_dt_bound(self):
+    def has_dt_bound(self) -> Any:
         """True iff an optional dt bound was set (spec s18)."""
         return self._dt_bound is not None
 

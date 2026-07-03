@@ -13,10 +13,14 @@ PROXIES the affine algebra to its resolved :class:`pops.time.values.Value` once
 ``T.define`` has lowered it. Before definition, using a stage in arithmetic raises a clear
 error; the handles themselves carry no ndarray.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.time.history import CopyCurrent
 
 
-def _proxy_value(handle):
+def _proxy_value(handle: Any) -> Any:
     """Return the resolved Value behind a handle, or raise the handle's undefined error."""
     value = handle._resolved()
     if value is None:
@@ -37,54 +41,54 @@ class _Version:
     the resolved Value's affine algebra, so a handle composes exactly like the Value would.
     """
 
-    def __init__(self, timestate, key):
+    def __init__(self, timestate: Any, key: Any) -> None:
         self._timestate = timestate
         self._key = key
         self._value = None  # set by TimeState._define once T.define lowers this version
 
     @property
-    def block(self):
+    def block(self) -> Any:
         return self._timestate.block
 
     @property
-    def value(self):
+    def value(self) -> Any:
         """The resolved Value (raises if the version was never defined)."""
         return _proxy_value(self)
 
-    def _resolved(self):
+    def _resolved(self) -> Any:
         return self._value
 
-    def _as_value(self):
+    def _as_value(self) -> Any:
         """The resolved Value, for the State-accepting boundaries (``solve_fields`` / ``rhs``)."""
         return _proxy_value(self)
 
-    def _undefined(self):
+    def _undefined(self) -> Any:
         raise ValueError(
             "stage %r is undefined (define it with T.define first)" % (self._key,))
 
     # --- affine algebra: delegate to the resolved Value (else fail loud) -----------------
-    def __add__(self, other):
+    def __add__(self, other: Any) -> Any:
         return _proxy_value(self).__add__(other)
 
-    def __radd__(self, other):
+    def __radd__(self, other: Any) -> Any:
         return _proxy_value(self).__radd__(other)
 
-    def __sub__(self, other):
+    def __sub__(self, other: Any) -> Any:
         return _proxy_value(self).__sub__(other)
 
-    def __rsub__(self, other):
+    def __rsub__(self, other: Any) -> Any:
         return _proxy_value(self).__rsub__(other)
 
-    def __mul__(self, other):
+    def __mul__(self, other: Any) -> Any:
         return _proxy_value(self).__mul__(other)
 
-    def __rmul__(self, other):
+    def __rmul__(self, other: Any) -> Any:
         return _proxy_value(self).__rmul__(other)
 
-    def __truediv__(self, other):
+    def __truediv__(self, other: Any) -> Any:
         return _proxy_value(self).__truediv__(other)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         state = "undefined" if self._value is None else ("#%d" % self._value.id)
         return "<_Version %s.%s key=%r %s>" % (
             self._timestate.block, self._timestate.name, self._key, state)
@@ -100,42 +104,42 @@ class _Prev:
     history policy, not by an SSA definition). Carries no runtime data.
     """
 
-    def __init__(self, timestate):
+    def __init__(self, timestate: Any) -> None:
         self._timestate = timestate
 
-    def __call__(self, lag=1):
+    def __call__(self, lag: Any = 1) -> Any:
         return self._timestate._history(lag)
 
-    def _lag1(self):
+    def _lag1(self) -> Any:
         return self._timestate._history(1)
 
-    def _as_value(self):
+    def _as_value(self) -> Any:
         """The lag-1 history Value, for the State-accepting boundaries (bare ``U.prev``)."""
         return self._lag1()
 
     # --- affine algebra: bare U.prev behaves as U.prev(1) --------------------------------
-    def __add__(self, other):
+    def __add__(self, other: Any) -> Any:
         return self._lag1().__add__(other)
 
-    def __radd__(self, other):
+    def __radd__(self, other: Any) -> Any:
         return self._lag1().__radd__(other)
 
-    def __sub__(self, other):
+    def __sub__(self, other: Any) -> Any:
         return self._lag1().__sub__(other)
 
-    def __rsub__(self, other):
+    def __rsub__(self, other: Any) -> Any:
         return self._lag1().__rsub__(other)
 
-    def __mul__(self, other):
+    def __mul__(self, other: Any) -> Any:
         return self._lag1().__mul__(other)
 
-    def __rmul__(self, other):
+    def __rmul__(self, other: Any) -> Any:
         return self._lag1().__rmul__(other)
 
-    def __truediv__(self, other):
+    def __truediv__(self, other: Any) -> Any:
         return self._lag1().__truediv__(other)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "<_Prev %s.%s>" % (self._timestate.block, self._timestate.name)
 
 
@@ -154,7 +158,7 @@ class TimeState:
     versions hold only a key, and ``.prev`` holds only its parent.
     """
 
-    def __init__(self, program, block, name="U"):
+    def __init__(self, program: Any, block: Any, name: Any = "U") -> None:
         if not isinstance(block, str) or not block:
             raise ValueError("TimeState: block must be a non-empty string")
         self.program = program
@@ -170,7 +174,7 @@ class TimeState:
 
     # --- the current state U^n (read-only) -----------------------------------------------
     @property
-    def n(self):
+    def n(self) -> Any:
         """The current conservative state ``U^n`` (cached Value, byte-identical to the
         positional ``P.state(block)``)."""
         if self._n is None:
@@ -178,7 +182,7 @@ class TimeState:
         return self._n
 
     # --- stages / next (SSA versions, defined via T.define) ------------------------------
-    def stage(self, key):
+    def stage(self, key: Any) -> Any:
         """A cached :class:`_Version` handle for stage ``key`` (an int or str). Undefined
         until lowered with ``T.define``; reusing the same key returns the same handle.
 
@@ -193,7 +197,7 @@ class TimeState:
         return self._stages[key]
 
     @property
-    def next(self):
+    def next(self) -> Any:
         """A cached :class:`_Version` for the end-of-step state ``U^{n+1}``."""
         if self._next is None:
             self._next = _Version(self, "next")
@@ -201,11 +205,11 @@ class TimeState:
 
     # --- lagged history (requires keep_history) ------------------------------------------
     @property
-    def prev(self):
+    def prev(self) -> Any:
         """The lagged-history accessor: ``U.prev`` (lag 1) or ``U.prev(lag)``."""
         return self._prev
 
-    def _history(self, lag):
+    def _history(self, lag: Any) -> Any:
         """Resolve the history Value at ``lag``, after validating ``keep_history`` set up a
         deep-enough ring. Lowers to the existing ``P.history`` op."""
         if isinstance(lag, bool) or not isinstance(lag, int) or lag < 1:
@@ -220,14 +224,14 @@ class TimeState:
                 % (self.block, lag, self._history_depth))
         return self.program.history(self._history_name(), lag)
 
-    def _history_name(self):
+    def _history_name(self) -> Any:
         return "%s.%s" % (self.block, self.name)
 
     # --- lowering hooks driven by Program.define / Program.keep_history ------------------
-    def _is_n(self, version):
+    def _is_n(self, version: Any) -> Any:
         return version is self._n
 
-    def _define(self, version, value):
+    def _define(self, version: Any, value: Any) -> Any:
         """Lower a stage/next definition through the existing ``define`` path and bind the
         resulting Value onto the handle (SSA single assignment)."""
         if version is self._n:
@@ -243,7 +247,8 @@ class TimeState:
         version._value = out
         return out
 
-    def _keep_history(self, depth, cold_start=None, checkpoint_policy=None):
+    def _keep_history(self, depth: Any, cold_start: Any = None,
+                      checkpoint_policy: Any = None) -> Any:
         """Record the history depth / cold-start / checkpoint policy and lower a ``store_history`` of
         the current state so the ring is populated each step.
 
@@ -269,5 +274,5 @@ class TimeState:
         self.program._history_persistence[self._history_name()] = (depth, policy)
         return self.program.store_history(self._history_name(), self.n)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "TimeState(block=%r, name=%r)" % (self.block, self.name)

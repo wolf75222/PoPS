@@ -2,6 +2,10 @@
 
 State / field / RHS / source / apply construction (the operator-first builder core).
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from pops.time.program_base import _ProgramConstants
 from pops.time.program_call import _ProgramCall
 from pops.time.values import (
@@ -9,8 +13,13 @@ from pops.time.values import (
     _state_base_name, _to_affine,
 )
 
+if TYPE_CHECKING:
+    from pops.time._program_contract import _ProgramBase
+else:
+    _ProgramBase = object
 
-class _ProgramCore(_ProgramCall, _ProgramConstants):
+
+class _ProgramCore(_ProgramCall, _ProgramConstants, _ProgramBase):
     """State / field / RHS / source / apply construction (the operator-first builder core).
 
     The typed operator-call lowering (``P.call`` / ``_call`` and helpers) is mixed in from
@@ -18,7 +27,7 @@ class _ProgramCore(_ProgramCall, _ProgramConstants):
     """
 
     # --- node construction ---
-    def _new(self, vtype, op, inputs, attrs, name, block):
+    def _new(self, vtype: Any, op: Any, inputs: Any, attrs: Any, name: Any, block: Any) -> Any:
         for v in inputs:
             if isinstance(v, Value) and v.prog is not self:
                 raise ValueError("IR value %r belongs to a different Program" % (v,))
@@ -37,7 +46,7 @@ class _ProgramCore(_ProgramCall, _ProgramConstants):
             self._values.append(v)
         return v
 
-    def state(self, arg=None, space=None, *, block=None):
+    def state(self, arg: Any = None, space: Any = None, *, block: Any = None) -> Any:
         """Reference the current conservative state of a block at the start of the step.
 
         Two forms (additive; the positional form is the historical one, byte-identical):
@@ -65,7 +74,7 @@ class _ProgramCore(_ProgramCall, _ProgramConstants):
         v.space = space
         return v
 
-    def solve_fields(self, name=None, state=None, field=None):
+    def solve_fields(self, name: Any = None, state: Any = None, field: Any = None) -> Any:
         """Solve the elliptic fields from ``state`` and return a FieldContext. Accepts
         ``solve_fields(state)`` or ``solve_fields(name, state)``. Each call is a DISTINCT
         FieldContext (a stage's RHS must read the fields solved from its own state, never a stale
@@ -96,7 +105,7 @@ class _ProgramCore(_ProgramCall, _ProgramConstants):
         v.field_context = FieldContext(field or DEFAULT_FIELD_PROBLEM, state.block, state.id, outputs)
         return v
 
-    def solve_fields_from_blocks(self, states, name=None):
+    def solve_fields_from_blocks(self, states: Any, name: Any = None) -> Any:
         """Solve the elliptic fields from the SIMULTANEOUS stage states of MULTIPLE blocks (spec
         \"Multi-blocs\"): a coupled Poisson where each listed block reads its own @p states[k] override
         at once, returning a FieldContext.
@@ -132,7 +141,7 @@ class _ProgramCore(_ProgramCall, _ProgramConstants):
         return v
 
     # --- operator-first calls (Spec 2) -------------------------------------------
-    def bind_operators(self, source):
+    def bind_operators(self, source: Any) -> Any:
         """Bind a typed operator registry so ``P.call`` can resolve and type-check operators.
 
         ``source`` is an ``pops.model.OperatorRegistry`` or any object exposing
@@ -148,7 +157,8 @@ class _ProgramCore(_ProgramCall, _ProgramConstants):
         self._registry = reg
         return self
 
-    def rhs(self, name=None, state=None, fields=None, *, terms=None, **legacy):
+    def rhs(self, name: Any = None, state: Any = None, fields: Any = None, *,
+            terms: Any = None, **legacy: Any) -> Any:
         """Build the typed right-hand side R from a list of TYPED ``terms`` (Spec 5 sec.14.2.4, the one
         public path, ADC-479 criterion 27).
 
@@ -184,7 +194,8 @@ LocalTerm`, an :class:`pops.model.OperatorHandle` from ``m.source_term``, or a p
         flux, sources = terms_to_flux_sources(terms)
         return self._rhs_legacy(name=name, state=state, fields=fields, flux=flux, sources=sources)
 
-    def _rhs_legacy(self, name=None, state=None, fields=None, flux=True, sources=None, fluxes=None):
+    def _rhs_legacy(self, name: Any = None, state: Any = None, fields: Any = None, flux: Any = True,
+                    sources: Any = None, fluxes: Any = None) -> Any:
         """Internal RHS builder: ``R = -div F(U) + sum of the requested named sources`` from the
         legacy ``(flux, sources, fluxes)`` triple. NOT a public surface -- the public typed
         :meth:`rhs` lowers ``terms=`` onto this byte-identically, and the ``pops.lib.time`` macros /
@@ -213,7 +224,7 @@ LocalTerm`, an :class:`pops.model.OperatorHandle` from ``m.source_term``, or a p
         inputs = (state, fields) if fields is not None else (state,)
         return self._new("rhs", "rhs", inputs, attrs, name, state.block)
 
-    def linear_combine(self, name=None, expr=None):
+    def linear_combine(self, name: Any = None, expr: Any = None) -> Any:
         """Materialize an affine combination of State/RHS values into a new State. Accepts
         ``linear_combine(name, expr)`` or ``linear_combine(expr)``. The per-input coefficient
         polynomials in ``dt`` are recorded in ``attrs['coeffs']`` (aligned with ``inputs``)."""
@@ -247,12 +258,12 @@ LocalTerm`, an :class:`pops.model.OperatorHandle` from ``m.source_term``, or a p
 
     # --- named sources / local linear operators (Phase 4 / ADC-403) ---
     @property
-    def I(self):  # noqa: E743  -- the mathematical identity operator (matches the spec's P.I)
+    def I(self) -> Any:  # noqa: E743  -- the mathematical identity operator (matches the spec's P.I)
         """The identity operator, for building a local linear operator ``self.I - a * L`` (L a
         linear source). Consumed by `solve_local_linear`."""
         return _Operator(_Coeff({0: 1.0}), [])
 
-    def linear_source(self, operator):
+    def linear_source(self, operator: Any) -> Any:
         """Reference a model linear-source operator ``L`` (declared via ``m.linear_source`` /
         ``m.local_linear_map``), for operator algebra (``self.I - a * P.linear_source(L)``) or `apply`.
         ``operator`` MUST be the typed :class:`pops.model.OperatorHandle` the declarer returned
@@ -269,7 +280,7 @@ LocalTerm`, an :class:`pops.model.OperatorHandle` from ``m.source_term``, or a p
                 "linear_source: expected an pops.model.OperatorHandle, got %r" % (operator,))
         return self._linear_source(operator.name)
 
-    def source(self, name, state=None, fields=None):
+    def source(self, name: Any, state: Any = None, fields: Any = None) -> Any:
         """Evaluate a single named model source ``S_name(U, fields)`` (``m.source_term``) on its own.
         Returns an RHS-like value (a dU/dt contribution) usable in linear combinations. Named sources
         are never summed implicitly; this requests exactly one."""
@@ -283,7 +294,7 @@ LocalTerm`, an :class:`pops.model.OperatorHandle` from ``m.source_term``, or a p
         inputs = (state, fields) if fields is not None else (state,)
         return self._new("rhs", "source", inputs, {"source": name}, name, state.block)
 
-    def _check_operator_state(self, l_value, state_value, where):
+    def _check_operator_state(self, l_value: Any, state_value: Any, where: Any) -> Any:
         """Operator-first type check (Spec 2): a LocalLinearOperator L: U -> U may only act on a State
         over U. Fires only when both carry space tags (P.call / P.state(space=)); legacy skips."""
         lop = getattr(l_value, "space", None) if isinstance(l_value, Value) else None
@@ -294,7 +305,8 @@ LocalTerm`, an :class:`pops.model.OperatorHandle` from ``m.source_term``, or a p
                 "%s: operator maps %s -> %s but was applied to a State over %r"
                 % (where, dom, getattr(lop, "range_name", dom), st))
 
-    def apply(self, operator=None, state=None, fields=None, name=None):
+    def apply(self, operator: Any = None, state: Any = None, fields: Any = None,
+              name: Any = None) -> Any:
         """Apply a linear-source operator to a state: ``LU = L_name(aux, params) U``.
 
         ``operator`` MUST be a typed :meth:`linear_source` value or an

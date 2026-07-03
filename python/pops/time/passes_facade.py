@@ -8,29 +8,32 @@ delegates to the matching ``Program`` method, so a caller can write
 Authoring only; every pass returns a NEW Program and is OPT-IN (byte-identical when nothing
 is optimizable). They never touch the default ``emit_cpp_program`` path.
 """
+from __future__ import annotations
+
+from typing import Any
 
 
-def eliminate_dead_nodes(program):
+def eliminate_dead_nodes(program: Any) -> Any:
     """Return a NEW Program with dead flat-list nodes removed (free-function form of
     :meth:`Program.eliminate_dead_nodes`, Spec 3 s28 / ADC-465). OPT-IN: it optimizes a copy and never
     touches the default ``emit_cpp_program`` path. See the method for the dead-node rule."""
     return program.eliminate_dead_nodes()
 
 
-def eliminate_common_subexpressions(program):
+def eliminate_common_subexpressions(program: Any) -> Any:
     """Return a NEW Program with duplicated PURE sub-IR computed once and aliased (free-function form
     of :meth:`Program.eliminate_common_subexpressions`, Spec 3 s28 / ADC-465). OPT-IN, proven-safe."""
     return program.eliminate_common_subexpressions()
 
 
-def eliminate_redundant_field_solves(program):
+def eliminate_redundant_field_solves(program: Any) -> Any:
     """Return a NEW Program with a provably-redundant second ``solve_fields`` removed (free-function
     form of :meth:`Program.eliminate_redundant_field_solves`, Spec 3 s28 / ADC-465). OPT-IN,
     conservative: only when no state/aux mutation intervenes between the two solves."""
     return program.eliminate_redundant_field_solves()
 
 
-def optimize(program):
+def optimize(program: Any) -> Any:
     """Return a NEW Program with the proven-safe Spec 3 s28 transform passes applied (free-function
     form of :meth:`Program.optimize`, ADC-465). OPT-IN: byte-identical when nothing is optimizable."""
     return program.optimize()
