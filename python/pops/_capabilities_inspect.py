@@ -46,7 +46,10 @@ def _walk_brick_catalog(namespace):
     """Yield brick-catalog entries from a SimpleNamespace of zero-arg descriptor factories.
 
     A factory that requires an argument (e.g. ``User(brick_id)``) is skipped: it names a slot
-    that is only realisable with user input, not a standing catalog entry.
+    that is only realisable with user input, not a standing catalog entry. A Krylov solver factory
+    that now requires a mandatory ``max_iter`` (ADC-535) IS a standing catalog entry, though -- the
+    budget is per-use and does NOT change the entry identity (native_id / category / capabilities),
+    so it is built with a nominal budget for the listing rather than dropped.
     """
     for attr_name in sorted(vars(namespace)):
         factory = getattr(namespace, attr_name)
@@ -56,6 +59,13 @@ def _walk_brick_catalog(namespace):
             descriptor = factory()
         except TypeError:
             continue  # needs an argument (User selectors); not a standing entry.
+        except ValueError:
+            # A mandatory-budget solver (ADC-535): the entry identity is budget-independent, so a
+            # nominal max_iter lets it appear in the report. Still skipped if it needs more.
+            try:
+                descriptor = factory(max_iter=1)
+            except (TypeError, ValueError):
+                continue
         if hasattr(descriptor, "brick_type"):  # a BrickDescriptor
             yield _entry_from_brick(descriptor)
 

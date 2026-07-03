@@ -216,7 +216,7 @@ def test_custom_solver_is_selectable_like_a_native_solver():
     def s(ctx, A, b):
         return _richardson(ctx, A, b)
 
-    native = lib.solvers.GMRES()
+    native = lib.solvers.GMRES(max_iter=200)
     # Same metadata shape as a native solver descriptor: a scheme string and a
     # category, so T.solve(..., solver=<descriptor>) accepts it like GMRES.
     assert s.scheme is not None

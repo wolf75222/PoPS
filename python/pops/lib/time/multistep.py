@@ -177,7 +177,8 @@ def _bdf_implicit_flux(P, block, order, sources, flux, ncomp, newton_tol, newton
 
         from pops.solvers import krylov
         P.set_apply(A, apply)
-        dU = P.solve_linear(name="%s_dU" % tag, operator=A, rhs=negF, method=krylov.GMRES(),
+        dU = P.solve_linear(name="%s_dU" % tag, operator=A, rhs=negF,
+                            method=krylov.GMRES(max_iter=krylov_max),
                             tol=krylov_tol, max_iter=krylov_max, restart=krylov_restart)
         return P.linear_combine("%s_next" % tag, 1.0 * Uk + 1.0 * dU)
 

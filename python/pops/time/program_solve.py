@@ -13,10 +13,15 @@ def _lower_krylov_method(method):
     ``BiCGStab()`` / ``Richardson()``); its ``scheme`` is the C++ token (``"cg"`` ...) the
     runtime keys on, so the typed object lowers byte-identically to the historical string. A
     bare algorithm-selector string is REJECTED (Spec 5 forbids keeping the string form on the
-    public surface); ``None`` defaults to ``CG()``.
+    public surface); ``None`` defaults to the ``cg`` scheme.
+
+    Only the ``scheme`` is read here: the descriptor's own ``max_iter`` (mandatory at descriptor
+    construction, ADC-535) is metadata for the LinearProblem-lowering path; the program's
+    ``P.solve_linear(max_iter=...)`` argument is the authoritative budget for THIS op, so the
+    ``None`` default returns the ``cg`` token directly without constructing a budgeted descriptor.
     """
     if method is None:
-        method = _krylov().CG()
+        return "cg"
     if isinstance(method, str):
         raise TypeError(
             "solve_linear: method must be a typed pops.solvers.krylov descriptor "
@@ -68,12 +73,6 @@ def _lower_preconditioner(preconditioner):
             "solve_linear: the %r preconditioner is planned, not wired yet (it needs a native C++ "
             "kernel); use preconditioners.Identity() or preconditioners.GeometricMG()" % (scheme,))
     return scheme
-
-
-def _krylov():
-    """The pops.solvers.krylov catalog (imported lazily to keep pops.time import-light)."""
-    from pops.solvers import krylov
-    return krylov
 
 
 def _preconditioners():

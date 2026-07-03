@@ -80,6 +80,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   minimal docs quality tooling needed for the rebuild.
 
 ### Added
+- ADC-535 Mandatory `max_iter` (a positive int) on the Krylov descriptors
+  (`pops.solvers.krylov.CG/BiCGStab/GMRES/Richardson`): a missing / non-positive budget is refused
+  at descriptor construction (mirroring the native `require_max_iter`), not only at
+  `P.solve_linear`. `pops.linalg.LinearProblem` gains a `solve_linear`-shaped `lower()` bridge
+  (method / preconditioner / tol / max_iter / restart) onto the native Krylov route -- no public
+  Python solver and no per-iteration Python callback -- and a distinguishable
+  operator / rhs / preconditioner / layout error taxonomy on `available` / `validate`.
+  Newton / FixedPoint stay planned and refuse cleanly (no native backing).
 - ADC-524 `pops.lib.presets` -- the single home for ready-to-run compose-and-go bundles. A `Preset`
   pairs a provided model (`pops.lib.models`) with a provided time scheme (`pops.lib.time`); the
   provided `vlasov_poisson_magnetic_euler` bundles the HyQMOM15 Vlasov-Poisson-magnetic model with a

@@ -70,7 +70,7 @@ def _krylov(name="krylov_demo"):
 
     from pops.solvers.krylov import CG
     P.set_apply(A, _apply)
-    P.solve_linear(operator=A, rhs=buf, method=CG(), max_iter=10)
+    P.solve_linear(operator=A, rhs=buf, method=CG(max_iter=10), max_iter=10)
     P.commit("plasma", P.linear_combine("U1", U + P.dt * r))
     return P
 

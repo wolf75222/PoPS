@@ -31,30 +31,58 @@ def test_solvers_is_top_level_and_exposed():
 # --- Krylov solvers (moved from pops.lib.solvers) ----------------------------------------
 
 def test_krylov_native_ids_and_schemes():
-    assert krylov.CG().native_id == "pops::cg_solve"
-    assert krylov.CG().scheme == "cg"
-    assert krylov.BiCGStab().native_id == "pops::bicgstab_solve"
-    assert krylov.BiCGStab().scheme == "bicgstab"
-    assert krylov.GMRES().native_id == "pops::gmres_solve"
-    assert krylov.GMRES().scheme == "gmres"
-    assert krylov.Richardson().native_id == "pops::richardson_solve"
-    assert krylov.Richardson().scheme == "richardson"
-    for d in (krylov.CG(), krylov.GMRES(), krylov.BiCGStab(), krylov.Richardson()):
+    assert krylov.CG(max_iter=200).native_id == "pops::cg_solve"
+    assert krylov.CG(max_iter=200).scheme == "cg"
+    assert krylov.BiCGStab(max_iter=200).native_id == "pops::bicgstab_solve"
+    assert krylov.BiCGStab(max_iter=200).scheme == "bicgstab"
+    assert krylov.GMRES(max_iter=200).native_id == "pops::gmres_solve"
+    assert krylov.GMRES(max_iter=200).scheme == "gmres"
+    assert krylov.Richardson(max_iter=200).native_id == "pops::richardson_solve"
+    assert krylov.Richardson(max_iter=200).scheme == "richardson"
+    for d in (krylov.CG(max_iter=200), krylov.GMRES(max_iter=200),
+              krylov.BiCGStab(max_iter=200), krylov.Richardson(max_iter=200)):
         assert d.brick_type == "native"
         assert d.available
         assert d.category == "solver"
 
 
+def test_krylov_max_iter_is_mandatory_and_carried():
+    # ADC-535: max_iter is a MANDATORY positive int on the descriptor; the native pops::*_solve
+    # loops throw on a non-positive budget, so the descriptor refuses one BEFORE the runtime.
+    for factory in (krylov.CG, krylov.BiCGStab, krylov.GMRES, krylov.Richardson):
+        d = factory(max_iter=123)
+        assert d.options["max_iter"] == 123, d.options
+        assert d.inspect()["options"]["max_iter"] == 123
+        assert d.lower()["options"]["max_iter"] == 123
+
+
+@pytest.mark.parametrize("factory", [krylov.CG, krylov.BiCGStab, krylov.GMRES, krylov.Richardson])
+def test_krylov_missing_max_iter_is_refused(factory):
+    # A missing budget is refused at construction (pre-runtime), naming the factory.
+    with pytest.raises(ValueError, match="max_iter is required"):
+        factory()
+
+
+@pytest.mark.parametrize("factory", [krylov.CG, krylov.BiCGStab, krylov.GMRES, krylov.Richardson])
+@pytest.mark.parametrize("bad", [0, -1, -100, True, 2.0, "200"])
+def test_krylov_nonpositive_or_nonint_max_iter_is_refused(factory, bad):
+    # Zero / negative / bool / non-int budgets are all refused (dynamic loops require a real budget).
+    with pytest.raises(ValueError, match="max_iter"):
+        factory(max_iter=bad)
+
+
 def test_krylov_descriptors_compute_nothing():
-    d = krylov.GMRES()
+    d = krylov.GMRES(max_iter=200)
     assert not hasattr(d, "eval")
     assert not hasattr(d, "compile")
-    # value identity: the same descriptor twice compares equal.
-    assert krylov.GMRES() == krylov.GMRES()
+    # value identity: the same descriptor twice (same budget) compares equal.
+    assert krylov.GMRES(max_iter=200) == krylov.GMRES(max_iter=200)
+    # a different budget is a distinct descriptor (the budget is part of the identity key).
+    assert krylov.GMRES(max_iter=200) != krylov.GMRES(max_iter=400)
 
 
 def test_krylov_lower_carries_native_id_and_scheme():
-    rec = krylov.CG().lower()
+    rec = krylov.CG(max_iter=200).lower()
     assert rec["native_id"] == "pops::cg_solve"
     assert rec["scheme"] == "cg"
 
@@ -63,7 +91,8 @@ def test_krylov_declare_amr_route_capabilities():
     # Spec 6 sec.4 / sec.9: the matrix-free Krylov solvers are layout-agnostic (they run over
     # pops::MultiFab dot / saxpy / apply), so each declares every route -- uniform / amr / mpi /
     # gpu -- and a route check can see they are AMR-capable instead of guessing from an empty set.
-    for d in (krylov.CG(), krylov.GMRES(), krylov.BiCGStab(), krylov.Richardson()):
+    for d in (krylov.CG(max_iter=200), krylov.GMRES(max_iter=200),
+              krylov.BiCGStab(max_iter=200), krylov.Richardson(max_iter=200)):
         caps = d.capabilities
         assert caps["supports_uniform"] is True
         assert caps["supports_amr"] is True
@@ -82,6 +111,19 @@ def test_nonlinear_are_planned():
         assert d.category == "solver"
     assert nonlinear.Newton().scheme == "newton"
     assert nonlinear.FixedPoint().scheme == "fixed_point"
+
+
+def test_nonlinear_refuse_cleanly_with_no_native_backing():
+    # ADC-535: Newton / FixedPoint have NO native solver TYPE (Newton is the implicit-stepper
+    # kernel; a fixed point is authored over Krylov). They must REFUSE cleanly -- validate()
+    # raises a clear "no native C++ symbol yet" message, never fabricating a symbol.
+    for d in (nonlinear.Newton(), nonlinear.FixedPoint()):
+        with pytest.raises(ValueError, match=r"no native C\+\+ symbol"):
+            d.validate()
+        # the refusal is surfaced structurally too (the ADC-549 capability-matrix row).
+        row = d.capability_matrix().rows[0]
+        assert row.status == "unavailable"
+        assert row.error_message  # names the unsupported route
 
 
 # --- Schur-condensation solver -----------------------------------------------------------
@@ -276,8 +318,8 @@ def test_lib_solvers_shim_is_removed():
 
     # The one public home resolves the flat factory namespace and the preconditioners.
     ns = solvers.solvers
-    assert ns.GMRES().scheme == "gmres"
-    assert ns.CG().native_id == "pops::cg_solve"
+    assert ns.GMRES(max_iter=200).scheme == "gmres"
+    assert ns.CG(max_iter=200).native_id == "pops::cg_solve"
     assert ns.Schur().native_id == "pops::SchurCondensationOperator"
     assert ns.Newton().available is False
     assert solvers.preconditioners.GeometricMG().native_id == "pops::GeometricMG"
