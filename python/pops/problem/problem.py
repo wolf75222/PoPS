@@ -21,6 +21,10 @@ choose the layout (ADC-526): the layout (``Uniform`` / ``AMR``) is supplied at
 ``pops.compile(problem, layout=...)``, so ONE Problem compiles under either. A layout given to the
 constructor is still accepted (back-compat) and must agree with the one passed at compile.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Availability
 from pops.mesh.layouts import AMR, Uniform
 from pops.problem.amr_handle import ProblemAmrHandle
@@ -53,7 +57,7 @@ class Problem:
     #: A Problem names a pure-Python assembly, not a single native C++ symbol.
     native_id = None
 
-    def __init__(self, layout=None, name=None):
+    def __init__(self, layout: Any = None, name: Any = None) -> None:
         self._name = str(name) if name else "Problem"
         # ADC-563 freeze: a Problem is MUTABLE during assembly and FROZEN by pops.compile. After
         # freeze every mutating setter RAISES (naming the Problem) and freeze() returns a stable
@@ -73,11 +77,11 @@ class Problem:
         self._constraint_registry = ConstraintRegistry()
 
     @property
-    def name(self):
+    def name(self) -> Any:
         return self._name
 
     # --- freeze lifecycle (ADC-563) -----------------------------------------------------
-    def _guard_mutable(self, what):
+    def _guard_mutable(self, what: Any) -> None:
         """Raise when a mutating setter runs after :meth:`freeze` (ADC-563), naming the Problem."""
         if self._frozen:
             raise RuntimeError(
@@ -86,7 +90,7 @@ class Problem:
                 "fresh Problem (or edit BEFORE compile) and recompile -- a post-compile mutation "
                 "cannot change a bound artifact." % (self._name, what))
 
-    def freeze(self):
+    def freeze(self) -> Any:
         """Freeze the assembly and return its stable :class:`~pops.problem._snapshot.ProblemSnapshot`.
 
         ``pops.compile`` calls this on the Problem it compiles: after freeze every mutating setter
@@ -102,7 +106,7 @@ class Problem:
         self._frozen = True
         return self._snapshot
 
-    def _freeze_registries(self):
+    def _freeze_registries(self) -> None:
         """Cascade freeze to each registry and the member descriptors (fields' solvers, layout)."""
         for registry in (self._block_registry, self._field_registry, self._time_registry,
                          self._param_registry, self._runtime_registry, self._constraint_registry):
@@ -113,35 +117,36 @@ class Problem:
             self._layout.freeze()
 
     @property
-    def frozen(self):
+    def frozen(self) -> Any:
         return self._frozen
 
     @property
-    def snapshot(self):
+    def snapshot(self) -> Any:
         """The :class:`ProblemSnapshot` from the last :meth:`freeze` (``None`` before freeze)."""
         return self._snapshot
 
     # --- registry access (the typed internals, each independently inspectable) ----------
     @property
-    def _blocks(self):
+    def _blocks(self) -> Any:
         return self._block_registry
 
     @property
-    def _fields(self):
+    def _fields(self) -> Any:
         return self._field_registry
 
     @property
-    def _constraints(self):
+    def _constraints(self) -> Any:
         return self._constraint_registry
 
     # --- assembly (chaining setters delegate to the registries) -------------------------
-    def block(self, name, physics, spatial=None):
+    def block(self, name: Any, physics: Any, spatial: Any = None) -> Any:
         """Declare a physics block ``name`` (its ``physics`` model is REQUIRED). Chains."""
         self._guard_mutable("add a block")
         self._block_registry.add(name, physics, spatial=spatial)
         return self
 
-    def add_block(self, name, model, spatial=None, time=None, diagnostics=None):
+    def add_block(self, name: Any, model: Any, spatial: Any = None, time: Any = None,
+                  diagnostics: Any = None) -> Any:
         """Declare a physics block and return its stable :class:`~pops.problem.handles.BlockHandle`.
 
         The ADC-526 declarative form (a superset of :meth:`block`): a block carries its ``model``
@@ -153,13 +158,13 @@ class Problem:
         return self._block_registry.add(name, model, spatial=spatial, time=time,
                                         diagnostics=diagnostics)
 
-    def field(self, field_problem):
+    def field(self, field_problem: Any) -> Any:
         """Register an elliptic :class:`~pops.fields.FieldProblem` (keyed on its name). Chains."""
         self._guard_mutable("add a field")
         self._field_registry.add(field_problem)
         return self
 
-    def add_field(self, field_problem):
+    def add_field(self, field_problem: Any) -> Any:
         """Register a field problem and return its stable :class:`~pops.problem.handles.FieldHandle`.
 
         The handle-returning counterpart of the chaining :meth:`field` (ADC-526 stable handles).
@@ -167,7 +172,7 @@ class Problem:
         self._guard_mutable("add a field")
         return self._field_registry.add(field_problem)
 
-    def param(self, name, default=None, *, kind=_NO_KIND):
+    def param(self, name: Any, default: Any = None, *, kind: Any = _NO_KIND) -> Any:
         """Declare a runtime/const parameter and its default value. Chains.
 
         The KIND is a TYPED param object (Spec 5 sec.7), not a ``kind=`` string:
@@ -179,19 +184,19 @@ class Problem:
         self._param_registry.add(name, default, kind=kind)
         return self
 
-    def aux(self, name, value=None):
+    def aux(self, name: Any, value: Any = None) -> Any:
         """Declare a static aux input ``name`` (e.g. a background field). Chains."""
         self._guard_mutable("declare an aux input")
         self._runtime_registry.add_aux(name, value)
         return self
 
-    def output(self, policy):
+    def output(self, policy: Any) -> Any:
         """Attach an output / checkpoint policy. Chains."""
         self._guard_mutable("attach an output policy")
         self._runtime_registry.add_output(policy)
         return self
 
-    def runtime(self, policies):
+    def runtime(self, policies: Any) -> Any:
         """Attach a typed :class:`pops.output.RuntimePolicies` bundle (ADC-562). Chains.
 
         Groups the runtime concerns (output / checkpoint / diagnostics / schedules) out of the
@@ -205,13 +210,13 @@ class Problem:
         self._runtime_registry.set_policies(policies)
         return self
 
-    def time(self, program):
+    def time(self, program: Any) -> Any:
         """Attach the time scheme (a ``pops.time.Program``) used at compile. Chains."""
         self._guard_mutable("set the time scheme")
         self._time_registry.set(program)
         return self
 
-    def program(self, program):
+    def program(self, program: Any) -> Any:
         """Attach the whole-system time ``Program`` (the ADC-526 spelling of :meth:`time`). Chains."""
         self._guard_mutable("set the time program")
         self._time_registry.set(program)
@@ -219,33 +224,33 @@ class Problem:
 
     # --- compile-time compatibility accessors (read by pops.codegen.orchestration) ------
     @property
-    def _time(self):
+    def _time(self) -> Any:
         return self._time_registry.program
 
     @property
-    def _params(self):
+    def _params(self) -> Any:
         return dict(self._param_registry.items())
 
     @property
-    def _param_declarations(self):
+    def _param_declarations(self) -> Any:
         """The ``{name: typed declaration}`` map for the bind-time domain check (ADC-541)."""
         return self._param_registry.declarations()
 
     @property
-    def _aux(self):
+    def _aux(self) -> Any:
         return self._runtime_registry.aux
 
     @property
-    def _outputs(self):
+    def _outputs(self) -> Any:
         return self._runtime_registry.outputs
 
     # --- layout / amr access -------------------------------------------------
     @property
-    def layout(self):
+    def layout(self) -> Any:
         return self._layout
 
     @property
-    def amr(self):
+    def amr(self) -> Any:
         """The AMR refinement-policy handle (records criteria on the constraint registry; ADC-526).
 
         A layout-free Problem always exposes ``.amr`` -- the criteria are applied to the layout at
@@ -260,28 +265,28 @@ class Problem:
                 % type(self._layout).__name__)
         return ProblemAmrHandle(self)
 
-    def blocks(self):
+    def blocks(self) -> Any:
         """The declared blocks as ``{name: BlockHandle}`` (ADC-526 stable-handle accessor)."""
         from pops.problem.handles import BlockHandle
         return {name: BlockHandle(name, owner=self) for name in self._block_registry.names()}
 
-    def fields(self):
+    def fields(self) -> Any:
         """The declared field problems as ``{name: FieldHandle}`` (ADC-526 stable-handle accessor)."""
         from pops.problem.handles import FieldHandle
         return {name: FieldHandle(name, owner=self) for name in self._field_registry.names()}
 
     # --- DescriptorProtocol surface (pure Python; no runtime, no codegen) ----
-    def _layout_name(self):
+    def _layout_name(self) -> Any:
         return self._layout.name if self._layout is not None else None
 
-    def options(self):
+    def options(self) -> Any:
         return {"name": self._name, "layout": self._layout_name(),
                 "n_blocks": len(self._block_registry), "n_fields": len(self._field_registry),
                 "n_params": len(self._param_registry), "n_aux": len(self._runtime_registry.aux),
                 "n_outputs": len(self._runtime_registry.outputs),
                 "has_time": self._time_registry.program is not None}
 
-    def requirements(self):
+    def requirements(self) -> Any:
         """The route's requirements as a typed :class:`~pops.descriptors_report.RequirementSet`."""
         from pops.descriptors_report import RequirementSet
         base = self._layout.requirements().to_dict() if self._layout is not None else {}
@@ -291,7 +296,7 @@ class Problem:
         req.add("time_scheme")
         return req
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         """The route's capabilities as a typed :class:`~pops.descriptors_report.CapabilitySet`."""
         from pops.descriptors_report import CapabilitySet
         caps = self._layout.capabilities().to_dict() if self._layout is not None else {}
@@ -299,7 +304,7 @@ class Problem:
         caps["fields"] = sorted(self._field_registry.names())
         return CapabilitySet(caps)
 
-    def available(self, context=None):
+    def available(self, context: Any = None) -> Any:
         """An EXPLAINABLE availability status, computed from the parts (no runtime)."""
         if self._layout is not None:
             layout_status = self._layout.available(context)
@@ -322,7 +327,7 @@ class Problem:
                 missing=list(collisions))
         return Availability.yes()
 
-    def validate(self, context=None):
+    def validate(self, context: Any = None) -> Any:
         """Structural validation; aggregate the registries' per-family reports and fail loud.
 
         Runs the layout check plus each registry's own ``validate``, folds them into ONE
@@ -334,7 +339,7 @@ class Problem:
         report.raise_if_error()
         return True
 
-    def validate_report(self, context=None):
+    def validate_report(self, context: Any = None) -> Any:
         """Aggregate the per-family validation reports into ONE report (no raise; ADC-553).
 
         When the Problem carries NO layout (the ADC-526 default), the layout-specific checks
@@ -363,7 +368,7 @@ class Problem:
                          context={"names": sorted(collisions)})
         return report
 
-    def _refuse_uniform_with_amr_criteria(self, report):
+    def _refuse_uniform_with_amr_criteria(self, report: Any) -> None:
         """Refuse a ``Uniform`` layout with an AMR criterion and no explicit escape (sec.8.6/5.14)."""
         layout = self._layout
         criterion = getattr(layout, "refine", None) if isinstance(layout, Uniform) else None
@@ -380,25 +385,25 @@ class Problem:
             "explicitly unused." % ", ".join(names),
             context={"criteria": names})
 
-    def _field_validation_context(self, context):
+    def _field_validation_context(self, context: Any) -> Any:
         """The validation context handed to each field problem, carrying the mesh layout."""
-        merged = dict(context) if isinstance(context, dict) else {}
+        merged: dict[str, Any] = dict(context) if isinstance(context, dict) else {}
         merged["layout"] = self._layout
         return merged
 
-    def explain_routes(self):
+    def explain_routes(self) -> Any:
         """Return a printable route matrix sourced from the C++ authoritative facts (sec.13.12.1)."""
         from pops._capabilities import native_capability_matrix
         return native_capability_matrix(owner=self.name, layout=self._layout_name() or "context",
                                         target="module")
 
-    def lower(self, context=None):
+    def lower(self, context: Any = None) -> Any:
         """The inert lowering record for the assembly (metadata only; no computation)."""
         from pops.descriptors_report import LoweredDescriptor
         return LoweredDescriptor(name=self._name, category=self.category,
                                  native_id=self.native_id, options=self.options())
 
-    def inspect(self):
+    def inspect(self) -> Any:
         """A typed :class:`~pops.problem.report_view.ProblemReport` of the assembly (ADC-564).
 
         Attributes + ``to_dict()`` (never a dict subclass), carrying the name / blocks / fields /
@@ -409,9 +414,9 @@ class Problem:
         from pops.problem.report_view import ProblemReport
         return ProblemReport(self._inspect_payload())
 
-    def _inspect_payload(self):
+    def _inspect_payload(self) -> Any:
         """The ordered inspection dict (the historical inspect() shape) the ProblemReport wraps."""
-        info = {"name": self._name, "category": self.category, "native_id": self.native_id,
+        info: dict[str, Any] = {"name": self._name, "category": self.category, "native_id": self.native_id,
                 "options": self.options(), "requirements": self.requirements().to_dict(),
                 "capabilities": self.capabilities().to_dict()}
         info["layout"] = self._layout.inspect() if self._layout is not None else None
@@ -425,7 +430,7 @@ class Problem:
         info["time"] = self._time_registry.inspect()["program"]
         return info
 
-    def to_dict(self):
+    def to_dict(self) -> Any:
         """A JSON-ready, array-free serialisation of the assembly for cache / codegen / debug.
 
         A superset of :meth:`_inspect_payload` that also names each block's stable handle id, so the
@@ -438,14 +443,14 @@ class Problem:
                            "fields": [h.handle_id for h in self.fields().values()]}
         return info
 
-    def __str__(self):
+    def __str__(self) -> str:
         return ("%s [%s] layout=%s | blocks=%d | fields=%d | params=%d | aux=%d | time=%s"
                 % (self._name, self.category, self._layout_name() or "none",
                    len(self._block_registry), len(self._field_registry),
                    len(self._param_registry), len(self._runtime_registry.aux),
                    "set" if self._time_registry.program is not None else "none"))
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return ("Problem(name=%r, layout=%s, blocks=%s, fields=%s)"
                 % (self._name, self._layout_name() or "none",
                    sorted(self._block_registry.names()), sorted(self._field_registry.names())))

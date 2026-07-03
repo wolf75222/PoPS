@@ -8,8 +8,14 @@ The Spec 5 sec.6 typed-descriptor family that is NOT the native-brick catalog:
 ``from pops.descriptors import Availability, Descriptor, ...`` paths keep working.
 A descriptor is INERT: it declares metadata and computes nothing.
 """
+from __future__ import annotations
 
 import typing
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pops.descriptors_report import (
+        CapabilitySet, LoweredDescriptor, RequirementSet, ValidationReport)
 
 
 class Availability:
@@ -22,7 +28,8 @@ class Availability:
 
     _STATUSES = ("yes", "no", "partial")
 
-    def __init__(self, status, reason="", *, missing=None, alternatives=None):
+    def __init__(self, status: str, reason: str = "", *, missing: Any = None,
+                 alternatives: Any = None) -> None:
         if status not in self._STATUSES:
             raise ValueError("Availability status must be one of %s (got %r)"
                              % (", ".join(self._STATUSES), status))
@@ -32,28 +39,29 @@ class Availability:
         self.alternatives = list(alternatives or [])
 
     @classmethod
-    def yes(cls, reason=""):
+    def yes(cls, reason: str = "") -> Availability:
         return cls("yes", reason)
 
     @classmethod
-    def no(cls, reason, *, missing=None, alternatives=None):
+    def no(cls, reason: str, *, missing: Any = None, alternatives: Any = None) -> Availability:
         return cls("no", reason, missing=missing, alternatives=alternatives)
 
     @classmethod
-    def partial(cls, reason, *, missing=None, alternatives=None):
+    def partial(cls, reason: str, *, missing: Any = None,
+                alternatives: Any = None) -> Availability:
         return cls("partial", reason, missing=missing, alternatives=alternatives)
 
     @property
-    def ok(self):
+    def ok(self) -> bool:
         return self.status == "yes"
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         return self.status == "yes"
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "Availability(%r, reason=%r)" % (self.status, self.reason)
 
-    def __str__(self):
+    def __str__(self) -> str:
         lines = ["available: %s" % self.status]
         if self.reason:
             lines.append("  reason: %s" % self.reason)
@@ -80,7 +88,7 @@ class Descriptor:
     #: native brick set this (as a class or instance attribute).
     native_id = None
 
-    def freeze(self):
+    def freeze(self) -> Descriptor:
         """Freeze this descriptor: a later attribute mutation RAISES (ADC-563). Returns ``self``.
 
         A descriptor is mutable while it is authored / composed; once the assembly that holds it is
@@ -90,7 +98,7 @@ class Descriptor:
         object.__setattr__(self, "_frozen", True)
         return self
 
-    def __setattr__(self, key, value):
+    def __setattr__(self, key: str, value: Any) -> None:
         """Refuse an attribute mutation after :meth:`freeze` (ADC-563), naming the frozen descriptor.
 
         Before freeze (the ``_frozen`` flag is unset / False) every assignment passes -- construction
@@ -106,10 +114,10 @@ class Descriptor:
         object.__setattr__(self, key, value)
 
     @property
-    def name(self):
+    def name(self) -> str:
         return type(self).__name__
 
-    def requirements(self):
+    def requirements(self) -> RequirementSet:
         """What the route NEEDS from context, as a :class:`~pops.descriptors_report.RequirementSet`.
 
         The default is empty. The typed set is the ONE interface (ADC-625): a consumer reads it
@@ -118,7 +126,7 @@ class Descriptor:
         from pops.descriptors_report import RequirementSet
         return RequirementSet()
 
-    def capabilities(self):
+    def capabilities(self) -> CapabilitySet:
         """What the route PROVIDES, as a :class:`~pops.descriptors_report.CapabilitySet` (ADC-527).
 
         Read it through :meth:`~pops.descriptors_report.CapabilitySet.supports` (for a ``supports_``
@@ -127,13 +135,13 @@ class Descriptor:
         from pops.descriptors_report import CapabilitySet
         return CapabilitySet()
 
-    def options(self):
+    def options(self) -> dict:
         return {}
 
-    def available(self, context=None):
+    def available(self, context: Any = None) -> Availability:
         return Availability.yes()
 
-    def validate(self, context=None):
+    def validate(self, context: Any = None) -> bool:
         """Return a :class:`~pops.descriptors_report.ValidationReport`, raising loud on error.
 
         ADC-527: ``validate`` accumulates structured issues into a report; for the strict callers
@@ -146,7 +154,7 @@ class Descriptor:
             raise ValueError("%s is not available for this route:\n%s" % (self.name, status))
         return True
 
-    def validate_report(self, context=None):
+    def validate_report(self, context: Any = None) -> ValidationReport:
         """Return the accumulated :class:`~pops.descriptors_report.ValidationReport` (no raise)."""
         from pops.descriptors_report import ValidationReport
         report = ValidationReport(subject=self)
@@ -156,7 +164,7 @@ class Descriptor:
                          alternatives=status.alternatives)
         return report
 
-    def lower(self, context=None):
+    def lower(self, context: Any = None) -> LoweredDescriptor:
         """Return the inert :class:`~pops.descriptors_report.LoweredDescriptor` for this route.
 
         The lowering is metadata ONLY -- the name, the category, the native id and the chosen
@@ -168,12 +176,12 @@ class Descriptor:
         return LoweredDescriptor(name=self.name, category=self.category,
                                  native_id=self.native_id, options=self.options())
 
-    def inspect(self):
+    def inspect(self) -> dict:
         return {"name": self.name, "category": self.category, "native_id": self.native_id,
                 "options": self.options(), "requirements": self.requirements().to_dict(),
                 "capabilities": self.capabilities().to_dict()}
 
-    def capability_matrix(self, context=None):
+    def capability_matrix(self, context: Any = None) -> Any:
         """One-row ADC-549 capability matrix for this typed descriptor (metadata only)."""
         from pops._capabilities import CapabilityRouteMatrix, CapabilityRouteRow
         status_obj = self.available(context)
@@ -191,13 +199,13 @@ class Descriptor:
             error_message="" if status_obj.ok else str(status_obj), source="descriptor")
         return CapabilityRouteMatrix(self.name, row.layout, [row])
 
-    def _summary(self):
+    def _summary(self) -> str:
         return ", ".join("%s=%r" % (k, v) for k, v in self.options().items())
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "%s(%s)" % (self.name, self._summary())
 
-    def __str__(self):
+    def __str__(self) -> str:
         body = self._summary()
         head = "%s [%s]" % (self.name, self.category)
         return "%s(%s)" % (head, body) if body else head
@@ -242,22 +250,22 @@ class DescriptorProtocol(typing.Protocol):
     category: str
     native_id: str | None
 
-    def requirements(self) -> "RequirementSet": ...
+    def requirements(self) -> RequirementSet: ...
 
-    def capabilities(self) -> "CapabilitySet": ...
+    def capabilities(self) -> CapabilitySet: ...
 
     def options(self) -> dict: ...
 
-    def available(self, context=None) -> "Availability": ...
+    def available(self, context: Any = None) -> Availability: ...
 
-    def validate(self, context=None) -> "ValidationReport": ...
+    def validate(self, context: Any = None) -> ValidationReport: ...
 
-    def lower(self, context=None) -> "LoweredDescriptor": ...
+    def lower(self, context: Any = None) -> LoweredDescriptor: ...
 
     def inspect(self) -> dict: ...
 
 
-def reject_string_selector(value, param, suggestion):
+def reject_string_selector(value: Any, param: str, suggestion: str) -> None:
     """Raise a clear :class:`TypeError` for a free-string algorithm selector (Spec 5 sec.7).
 
     Spec 5 forbids naming a brick / scheme / layout with a bare string; every route is a typed

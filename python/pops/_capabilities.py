@@ -18,6 +18,7 @@ and ``_capabilities_inspect`` (the descriptor-catalog walk, the C++ cross-check,
 report). This module re-exports every public and private name they used to expose, so every
 ``from pops._capabilities import ...`` path keeps working unchanged.
 """
+from __future__ import annotations
 
 from pops._capabilities_common import (  # noqa: F401  (re-exported at the historical path)
     CapabilityEntry,

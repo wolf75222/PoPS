@@ -11,15 +11,18 @@ The criteria live on the Problem's layout-free constraint registry (ADC-526) and
 WAS built with a constructor ``AMR`` layout (back-compat), the handle also mirrors the criteria onto
 that layout so the pre-existing layout-at-construction tests keep passing.
 """
+from __future__ import annotations
+
+from typing import Any
 
 
 class ProblemAmrHandle:
     """The ``problem.amr`` handle: record refinement criteria, chain back to the Problem."""
 
-    def __init__(self, problem):
+    def __init__(self, problem: Any) -> None:
         self._problem = problem
 
-    def _refine_context(self):
+    def _refine_context(self) -> Any:
         """The single block's physics model the refine subject is checked against, or ``None``.
 
         Returns ``None`` when there is not exactly one block (the subject would be ambiguous across
@@ -32,7 +35,8 @@ class ProblemAmrHandle:
         spec = blocks.spec(name)
         return spec.get("model") if spec else None
 
-    def refine(self, criterion=None, *, regrid=None, nesting=None, patches=None):
+    def refine(self, criterion: Any = None, *, regrid: Any = None, nesting: Any = None,
+               patches: Any = None) -> Any:
         """Record the refinement criterion / regrid / nesting / patch policies (chains).
 
         When a @p criterion is recorded, its subject (role / state component / named aux) is

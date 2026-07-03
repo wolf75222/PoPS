@@ -9,9 +9,12 @@ status helpers (``_unsupported_error``, ``_route_status_from_availability``,
 cap; ``pops._capabilities`` re-exports every name here so the public import paths
 stay unchanged. Everything in this module is PURE: it never imports ``_pops``.
 """
+from __future__ import annotations
+
+from typing import Any
 
 
-def _availability_status(descriptor):
+def _availability_status(descriptor: Any) -> str:
     """The Availability status string of a descriptor (always defined; no context needed)."""
     try:
         return descriptor.available().status
@@ -19,7 +22,7 @@ def _availability_status(descriptor):
         return "unknown"
 
 
-def _route_status_from_availability(available):
+def _route_status_from_availability(available: Any) -> str:
     """Map the legacy availability token to the route-matrix status vocabulary."""
     if available == "yes":
         return "available"
@@ -30,7 +33,7 @@ def _route_status_from_availability(available):
     return "unknown"
 
 
-def _unsupported_error(*, requested, available, alternative=None):
+def _unsupported_error(*, requested: Any, available: Any, alternative: Any = None) -> str:
     """Uniform ADC-549 unsupported-route message fragment."""
     msg = "unsupported route: requested %s; available route: %s" % (requested, available)
     if alternative:
@@ -38,7 +41,7 @@ def _unsupported_error(*, requested, available, alternative=None):
     return msg
 
 
-def _axis_for_route(layout, backend, platform):
+def _axis_for_route(layout: Any, backend: Any, platform: Any) -> str:
     if layout not in ("any", "uniform|amr", "context"):
         return "layout"
     if platform in ("mpi", "gpu"):
@@ -48,13 +51,13 @@ def _axis_for_route(layout, backend, platform):
     return "transport"
 
 
-def _flag_value(flags, name):
+def _flag_value(flags: Any, name: str) -> Any:
     if flags is None:
         return None
     return flags.get(name)
 
 
-def _status_from_flag(flags, name):
+def _status_from_flag(flags: Any, name: str) -> str:
     value = _flag_value(flags, name)
     if value is None:
         return "unknown"
@@ -70,9 +73,11 @@ class CapabilityEntry:
     from the C++ ``_pops.module_capabilities()`` authoritative facts (Spec 5 sec.13.12).
     """
 
-    def __init__(self, name, category, native_id, available, requirements, source="descriptor",
-                 *, feature=None, layout="context", backend="context", platform="context",
-                 mpi=None, gpu=None, status=None, limitation="", error_message=""):
+    def __init__(self, name: str, category: str, native_id: Any, available: Any,
+                 requirements: Any, source: str = "descriptor", *, feature: Any = None,
+                 layout: str = "context", backend: str = "context", platform: str = "context",
+                 mpi: Any = None, gpu: Any = None, status: Any = None, limitation: str = "",
+                 error_message: str = "") -> None:
         self.name = name
         self.category = category
         self.native_id = native_id
@@ -91,7 +96,7 @@ class CapabilityEntry:
         self.limitation = limitation
         self.error_message = error_message
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {"name": self.name, "category": self.category, "native_id": self.native_id,
                 "available": self.available, "requirements": self.requirements,
                 "source": self.source, "feature": self.feature, "layout": self.layout,
@@ -99,7 +104,7 @@ class CapabilityEntry:
                 "gpu": self.gpu, "status": self.status, "limitation": self.limitation,
                 "error_message": self.error_message}
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return ("CapabilityEntry(name=%r, category=%r, native_id=%r, available=%r, source=%r)"
                 % (self.name, self.category, self.native_id, self.available, self.source))
 
@@ -111,32 +116,32 @@ class CapabilityMatrix:
     plain nested dict and :meth:`__str__` a short, deterministic table. It is inert.
     """
 
-    def __init__(self, entries):
+    def __init__(self, entries: Any) -> None:
         self.entries = list(entries)
 
-    def categories(self):
+    def categories(self) -> list:
         return sorted({e.category for e in self.entries})
 
-    def by_category(self, category):
+    def by_category(self, category: str) -> list:
         return [e for e in self.entries if e.category == category]
 
-    def to_dict(self):
-        out = {}
+    def to_dict(self) -> dict:
+        out: dict = {}
         for entry in self.entries:
             out.setdefault(entry.category, []).append(entry.to_dict())
         return out
 
-    def __iter__(self):
+    def __iter__(self) -> Any:
         return iter(self.entries)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.entries)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "CapabilityMatrix(%d entries, %d categories)" % (
             len(self.entries), len(self.categories()))
 
-    def __str__(self):
+    def __str__(self) -> str:
         lines = ["capability matrix (%d entries):" % len(self.entries)]
         for category in self.categories():
             lines.append("  [%s]" % category)
@@ -156,9 +161,11 @@ class CapabilityRouteRow:
     route matrix tests.
     """
 
-    def __init__(self, feature, *, layout="any", backend="any", platform="host",
-                 mpi=False, gpu=False, status="unknown", limitation="", error_message="",
-                 source="native", axis=None, available_route="", alternative=""):
+    def __init__(self, feature: str, *, layout: str = "any", backend: str = "any",
+                 platform: str = "host", mpi: Any = False, gpu: Any = False,
+                 status: str = "unknown", limitation: str = "", error_message: str = "",
+                 source: str = "native", axis: Any = None, available_route: str = "",
+                 alternative: str = "") -> None:
         self.feature = feature
         self.layout = layout
         self.backend = backend
@@ -173,7 +180,7 @@ class CapabilityRouteRow:
         self.available_route = available_route
         self.alternative = alternative
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {
             "route_id": self.feature,
             "feature": self.feature,
@@ -192,7 +199,7 @@ class CapabilityRouteRow:
             "alternative": self.alternative,
         }
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return ("CapabilityRouteRow(feature=%r, layout=%r, backend=%r, status=%r, source=%r)"
                 % (self.feature, self.layout, self.backend, self.status, self.source))
 
@@ -200,8 +207,9 @@ class CapabilityRouteRow:
 class CapabilityRouteMatrix:
     """Printable ADC-549 matrix of feature x layout/backend/platform support."""
 
-    def __init__(self, owner, layout, rows, *, schema_version=None, abi_version=None,
-                 target=None, abi_key=None, platform=None):
+    def __init__(self, owner: Any, layout: Any, rows: Any, *, schema_version: Any = None,
+                 abi_version: Any = None, target: Any = None, abi_key: Any = None,
+                 platform: Any = None) -> None:
         self.owner = owner
         self.case_name = owner  # compatibility with the old Case route matrix object.
         self.layout = layout
@@ -213,23 +221,23 @@ class CapabilityRouteMatrix:
         self.abi_key = abi_key
         self.platform = platform
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {"case": self.owner, "owner": self.owner, "layout": self.layout,
                 "schema_version": self.schema_version, "abi_version": self.abi_version,
                 "target": self.target, "abi_key": self.abi_key, "platform": self.platform,
                 "rows": [r.to_dict() for r in self.rows]}
 
-    def __iter__(self):
+    def __iter__(self) -> Any:
         return iter(self.rows)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.rows)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "CapabilityRouteMatrix(owner=%r, layout=%r, %d rows)" % (
             self.owner, self.layout, len(self.rows))
 
-    def __str__(self):
+    def __str__(self) -> str:
         lines = ["route matrix for %r (layout=%s, ADC-549):" % (self.owner, self.layout)]
         for row in self.rows:
             note = ("  -- %s" % row.limitation) if row.limitation else ""

@@ -11,6 +11,8 @@ Currently:
   for iterating on a novel flux without recompiling. For production (GPU/MPI), compose a COMPILED
   flux brick (``pops.CompressibleFlux`` / ``pops.ExB`` ...) instead.
 """
+from __future__ import annotations
+
 from pops.experimental.python_flux import PythonFlux  # noqa: F401
 
 __experimental__ = True

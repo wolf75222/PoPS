@@ -13,7 +13,10 @@ DSL bricks) are NOT here: they live permanently in :mod:`pops.physics.bricks` an
 :mod:`pops.physics.hybrid`. ``lib.descriptors`` is the Spec-3 catalog descriptor
 only.
 """
+from __future__ import annotations
+
 import json
+from typing import Any
 
 BRICK_TYPES = ("native", "generated", "macro", "external_cpp")
 
@@ -47,9 +50,10 @@ class BrickDescriptor:
     hash). It is intentionally inert: it has no ``eval`` / ``compile`` / call.
     """
 
-    def __init__(self, name, brick_type, *, category="brick", native_id="",
-                 scheme=None, requirements=None, capabilities=None, options=None,
-                 available=True, expression=None, builder=None):
+    def __init__(self, name: str, brick_type: str, *, category: str = "brick",
+                 native_id: str = "", scheme: Any = None, requirements: Any = None,
+                 capabilities: Any = None, options: Any = None, available: bool = True,
+                 expression: Any = None, builder: Any = None) -> None:
         if brick_type not in BRICK_TYPES:
             raise ValueError("brick_type %r must be one of %s"
                              % (brick_type, ", ".join(BRICK_TYPES)))
@@ -73,7 +77,7 @@ class BrickDescriptor:
         # the identity key (a callable is not part of the brick's value identity).
         self.builder = builder
 
-    def freeze(self):
+    def freeze(self) -> BrickDescriptor:
         """Freeze this brick descriptor: a later attribute mutation RAISES (ADC-563). Returns ``self``.
 
         The :class:`BrickDescriptor` counterpart of :meth:`pops.descriptors.Descriptor.freeze`; the
@@ -82,7 +86,7 @@ class BrickDescriptor:
         object.__setattr__(self, "_frozen", True)
         return self
 
-    def __setattr__(self, key, value):
+    def __setattr__(self, key: str, value: Any) -> None:
         """Refuse an attribute mutation after :meth:`freeze` (ADC-563), naming the frozen brick."""
         if getattr(self, "_frozen", False):
             raise RuntimeError(
@@ -91,17 +95,17 @@ class BrickDescriptor:
                 % (getattr(self, "name", "?"), getattr(self, "category", "brick"), key))
         object.__setattr__(self, key, value)
 
-    def _key(self):
+    def _key(self) -> tuple:
         return (self.category, self.name, self.brick_type, self.native_id,
                 self.scheme, tuple(sorted(self.options.items())))
 
-    def __eq__(self, other):
+    def __eq__(self, other: Any) -> bool:
         return isinstance(other, BrickDescriptor) and self._key() == other._key()
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(self._key())
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "BrickDescriptor(%r, %r, scheme=%r)" % (
             self.name, self.brick_type, self.scheme)
 
@@ -109,7 +113,7 @@ class BrickDescriptor:
     # ``requirements`` / ``capabilities`` / ``options`` ATTRIBUTES above (this descriptor's
     # documented identity); availability is the EXPLAINED ``available(context) -> Availability``
     # route (ADC-625), matching the protocol member the ``Descriptor`` base exposes. No computation.
-    def lower(self, context=None):
+    def lower(self, context: Any = None) -> Any:
         """The inert :class:`~pops.descriptors_report.LoweredDescriptor` for this brick (ADC-527).
 
         Metadata only, no computation. The typed record carries ``name`` / ``category`` /
@@ -122,7 +126,7 @@ class BrickDescriptor:
                                  native_id=self.native_id or None, options=dict(self.options),
                                  scheme=self.scheme)
 
-    def available(self, context=None):
+    def available(self, context: Any = None) -> Availability:
         """The EXPLAINABLE availability status of this brick (ADC-625: the ONE availability route).
 
         Matches the ``DescriptorProtocol`` ``available(context) -> Availability`` member (the same
@@ -140,7 +144,7 @@ class BrickDescriptor:
             missing=["native_id"],
             alternatives=["choose an available descriptor from pops.inspect_capabilities()"])
 
-    def inspect(self):
+    def inspect(self) -> dict:
         """A plain-dict view of the brick descriptor (Spec 5 sec.12.1).
 
         ``available`` is derived from the ONE availability route (``available().ok``), so the
@@ -151,7 +155,7 @@ class BrickDescriptor:
                 "requirements": dict(self.requirements),
                 "capabilities": dict(self.capabilities), "available": self.available().ok}
 
-    def validate(self, context=None):
+    def validate(self, context: Any = None) -> bool:
         """Raise a clear error when this brick has no native symbol yet (unavailable route)."""
         if not self.available(context).ok:
             raise ValueError(
@@ -162,7 +166,7 @@ class BrickDescriptor:
                 % (self.name, self.category, self.category, self.name, self.category))
         return True
 
-    def capability_matrix(self, context=None):
+    def capability_matrix(self, context: Any = None) -> Any:
         """One-row ADC-549 capability matrix for this brick descriptor (metadata only)."""
         from pops._capabilities import CapabilityRouteMatrix, CapabilityRouteRow
         ok = self.available(context).ok
@@ -188,7 +192,8 @@ class BrickDescriptor:
 # not under a numerics/fv namespace. Some catalogued bricks have no native type yet --
 # they are emitted with ``available=False`` and an EMPTY native_id rather than a
 # fabricated symbol.
-def _native(name, native_id, scheme, *, category, caps=None, capabilities=None, **options):
+def _native(name: str, native_id: str, scheme: Any, *, category: str, caps: Any = None,
+            capabilities: Any = None, **options: Any) -> BrickDescriptor:
     """A native-brick descriptor.
 
     ``caps`` lists the model capabilities the brick REQUIRES (folded into ``requirements``);
@@ -204,7 +209,7 @@ def _native(name, native_id, scheme, *, category, caps=None, capabilities=None, 
                            options=options or None)
 
 
-def _planned(name, scheme, *, category, **options):
+def _planned(name: str, scheme: Any, *, category: str, **options: Any) -> BrickDescriptor:
     """A catalogued brick with NO native C++ symbol yet (available=False, no id).
 
     It names the slot in the catalog without overclaiming a symbol; wiring a native
@@ -222,15 +227,15 @@ def _planned(name, scheme, *, category, **options):
 # ``external(id)`` then surface an ``external_cpp`` descriptor carrying the manifest's
 # requirements/capabilities. An id that was never loaded raises a clear error -- a
 # descriptor is NEVER fabricated for an unregistered brick.
-_EXTERNAL_BRICKS = {}
+_EXTERNAL_BRICKS: dict = {}
 
 
-def _clear_external_catalog():
+def _clear_external_catalog() -> None:
     """Drop every loaded external brick (test isolation; not part of the public API)."""
     _EXTERNAL_BRICKS.clear()
 
 
-def _split_csv(value):
+def _split_csv(value: Any) -> list:
     """Split a manifest CSV field into a stripped, non-empty token list ([] when absent)."""
     if value is None:
         return []
@@ -241,7 +246,7 @@ def _split_csv(value):
     return [tok.strip() for tok in value.split(",") if tok.strip()]
 
 
-def parse_brick_manifest(manifest_json):
+def parse_brick_manifest(manifest_json: Any) -> tuple:
     """Parse a brick manifest (the JSON ``pops_brick_manifest()`` returns) under the STRICT versioned
     schema (ADC-611) into ``(records, abi_key)`` WITHOUT registering anything.
 
@@ -287,7 +292,7 @@ def parse_brick_manifest(manifest_json):
     if not isinstance(bricks, list):
         raise ValueError("external brick manifest 'bricks' must be a list; got %r"
                          % (manifest_json,))
-    records = []
+    records: list = []
     for entry in bricks:
         if not isinstance(entry, dict):
             raise ValueError("external brick manifest entry must be an object; got %r" % (entry,))
@@ -321,7 +326,7 @@ def parse_brick_manifest(manifest_json):
     return records, doc.get("abi_key")
 
 
-def _register_manifest(manifest_json):
+def _register_manifest(manifest_json: Any) -> int:
     """Parse a brick manifest under the strict versioned schema and register its bricks in the in-process
     catalog (last load wins on a repeated id). Returns the number of bricks registered. Delegates the
     strict parse (schema_version / required fields / unknown-field refusal) to :func:`parse_brick_manifest`;
@@ -332,7 +337,7 @@ def _register_manifest(manifest_json):
     return len(records)
 
 
-def load_cpp_library(path):
+def load_cpp_library(path: Any) -> int:
     """Load an external C++ brick ``.so`` and register the bricks it manifests (criterion 20).
 
     Opens @p path with :func:`ctypes.CDLL` (its static initializers run the
@@ -357,7 +362,7 @@ def load_cpp_library(path):
     return _register_manifest(raw.decode("utf-8"))
 
 
-def load_compiled_manifest(path):
+def load_compiled_manifest(path: Any) -> Any:
     """Read the per-artifact NativeManifest JSON of a compiled block ``.so`` (Spec 5 sec.13.12, #36).
 
     The sibling of :func:`load_cpp_library` for an AOT model artifact (one built by the DSL through
@@ -393,7 +398,7 @@ def load_compiled_manifest(path):
     return doc
 
 
-def _external_descriptor(brick_id, *, expect_category=None):
+def _external_descriptor(brick_id: Any, *, expect_category: Any = None) -> BrickDescriptor:
     """The ``external_cpp`` descriptor for a loaded brick @p brick_id (raise if not loaded).
 
     An unloaded id raises :class:`LookupError` naming the id and :func:`load_cpp_library`; a
@@ -416,7 +421,7 @@ def _external_descriptor(brick_id, *, expect_category=None):
                            requirements=req or None, capabilities=caps or None)
 
 
-def external(brick_id):
+def external(brick_id: Any) -> BrickDescriptor:
     """An ``external_cpp`` descriptor for a loaded brick of ANY category (criterion 20).
 
     The category-agnostic counterpart of ``riemann.User`` / ``preconditioner.User``: it surfaces

@@ -4,6 +4,7 @@ Thin facade: all node classes and constructors now live in :mod:`pops.ir`
 (single source of truth). This module re-exports them so every existing
 ``from pops.math import ...`` or ``pops.math.X`` call keeps working unchanged.
 """
+from __future__ import annotations
 
 __all__ = [
     "sqrt", "grad", "div", "laplacian", "dx", "dy", "ddt", "rate", "unknown",
@@ -59,14 +60,14 @@ class _DType:
     the codegen / runtime consume it. It computes nothing.
     """
 
-    def __init__(self, name):
+    def __init__(self, name: str) -> None:
         self._name = str(name)
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self._name
 
     __str__ = __repr__

@@ -4,6 +4,9 @@ NON-PRODUCTION / TESTS-ONLY: this module lives under :mod:`pops.experimental` an
 of the stable public API. It computes a numpy residual in Python (the PoPS "no public Python
 numeric" rule keeps it off the public surface); use it only for residual prototyping in tests.
 """
+from __future__ import annotations
+
+from typing import Any
 
 
 class PythonFlux:
@@ -23,11 +26,11 @@ class PythonFlux:
     max_wave_speed(U) -> float: bound for the Rusanov flux and the CFL.
     """
 
-    def __init__(self, flux, max_wave_speed):
+    def __init__(self, flux: Any, max_wave_speed: Any) -> None:
         self.flux = flux
         self.max_wave_speed = max_wave_speed
 
-    def residual(self, U, dx, dy=None):
+    def residual(self, U: Any, dx: Any, dy: Any = None) -> Any:
         """-div(F*) by Rusanov flux (order 1, periodic). U numpy (ncomp, n, n); returns dU/dt."""
         import numpy as np
         dy = dx if dy is None else dy
@@ -41,6 +44,6 @@ class PythonFlux:
             res -= (face - np.roll(face, 1, axis=axis)) / h  # -div: (F_{i+1/2} - F_{i-1/2}) / h
         return res
 
-    def cfl_dt(self, U, h, cfl=0.4):
+    def cfl_dt(self, U: Any, h: Any, cfl: float = 0.4) -> float:
         """Stable time step: dt = cfl * h / max_wave_speed(U)."""
         return cfl * h / max(float(self.max_wave_speed(U)), 1e-30)

@@ -11,9 +11,12 @@ that is not a JSON scalar / list / dict is coerced to a stable string token (its
 so the canonical serialisation is deterministic and there is no shallow-copy escape (the snapshot is
 a deep, inert copy). It is stdlib-only (``hashlib`` / ``json``); it imports no ``_pops`` / runtime.
 """
+from __future__ import annotations
+
 import hashlib
 import json
 import re
+from typing import Any
 
 # A default object repr carries a memory address ("<pops._pops.ModelSpec object at 0x10384f0f0>");
 # the address is per-instance and would make the hash non-reproducible. We strip the "at 0x..." tail
@@ -26,7 +29,7 @@ _ADDRESS_RE = re.compile(r" at 0x[0-9a-fA-F]+")
 SNAPSHOT_SCHEMA_VERSION = 1
 
 
-def _canonical(value):
+def _canonical(value: Any) -> Any:
     """Coerce @p value to a JSON-ready, DETERMINISTIC form (a non-scalar becomes a stable token).
 
     A JSON scalar / ``None`` passes through; a list / tuple / dict is canonicalised element-wise
@@ -67,37 +70,37 @@ class ProblemSnapshot:
 
     schema_version = SNAPSHOT_SCHEMA_VERSION
 
-    def __init__(self, payload):
+    def __init__(self, payload: Any) -> None:
         # A deep, canonical, JSON-ready copy: no shared reference to a live registry, no runtime
         # object -- so there is no shallow-copy escape from the frozen identity.
-        self._payload = _canonical(payload)
-        self._hash = None
+        self._payload: Any = _canonical(payload)
+        self._hash: Any = None
 
-    def to_dict(self):
+    def to_dict(self) -> Any:
         """The canonical, JSON-ready dict of the frozen assembly (stamped with the schema version)."""
-        out = {"schema_version": self.schema_version}
+        out: dict[str, Any] = {"schema_version": self.schema_version}
         out.update(self._payload)
         return out
 
     @property
-    def hash(self):
+    def hash(self) -> Any:
         """The stable sha256 (64-hex) over the canonical ``to_dict`` (computed once, then cached)."""
         if self._hash is None:
             canonical = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
             self._hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         return self._hash
 
-    def __eq__(self, other):
+    def __eq__(self, other: Any) -> bool:
         return isinstance(other, ProblemSnapshot) and self.hash == other.hash
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(self.hash)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "ProblemSnapshot(hash=%s...)" % self.hash[:12]
 
 
-def build_problem_snapshot(problem):
+def build_problem_snapshot(problem: Any) -> Any:
     """Build the :class:`ProblemSnapshot` of @p problem (the frozen input to the compile cache key).
 
     Reads the Problem's ``to_dict`` (the array-free, registry-sourced serialisation of the whole
@@ -108,7 +111,7 @@ def build_problem_snapshot(problem):
     return ProblemSnapshot(payload)
 
 
-def freeze_compiled(problem, time, compiled):
+def freeze_compiled(problem: Any, time: Any, compiled: Any) -> None:
     """Freeze the compiled Problem + time Program and fold the snapshot hash into the cache key.
 
     ``pops.compile``'s LAST authoring act (ADC-563): freeze the ``Problem`` (-> a stable
@@ -129,7 +132,7 @@ def freeze_compiled(problem, time, compiled):
         compiled._seal()
 
 
-def fold_snapshot_hash(compiled, snapshot_hash):
+def fold_snapshot_hash(compiled: Any, snapshot_hash: Any) -> None:
     """Compose @p snapshot_hash into the handle's cache key (APPEND, never replace; ADC-563).
 
     The compile stream (536) owns the base cache key (model / program IR / registry / platform +

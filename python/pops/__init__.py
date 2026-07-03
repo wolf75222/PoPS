@@ -98,7 +98,7 @@ _ADC545_HOMES = {
 # LAZY public front doors (PEP 562, ADC-523): pops.compile / pops.bind are the only compile/bind
 # entry points; compile_problem / CompiledProblem live at pops.codegen.*; CompiledArtifact types the
 # inspectable handle. ADC-545 removals refuse below with a targeted, advanced-home AttributeError.
-def __getattr__(name):
+def __getattr__(name: str):
     if name in ("compile", "bind"):
         from .codegen import orchestration
         return getattr(orchestration, name)
