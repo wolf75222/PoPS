@@ -5,8 +5,6 @@ report is deliberately metadata-only: it reads already-owned C++ facts and runti
 field arrays, never recompiles, never installs a program.
 """
 
-import json
-
 from pops._report import Report
 from pops._capabilities import native_capability_report
 from pops.runtime.defaults import numerical_defaults_report
@@ -65,14 +63,6 @@ class RuntimeInspectionReport(Report):
             "lifecycle": self.lifecycle,
             "bound_snapshot": dict(self.bound_snapshot) if self.bound_snapshot is not None else None,
         }
-
-    def to_json(self, path=None, *, indent=2):
-        text = json.dumps(self.to_dict(), indent=indent, sort_keys=True)
-        if path is not None:
-            with open(str(path), "w", encoding="utf-8") as handle:
-                handle.write(text)
-            return path
-        return text
 
     def __repr__(self):
         return ("RuntimeInspectionReport(runtime=%r, blocks=%d, history=%d, cache=%d)"

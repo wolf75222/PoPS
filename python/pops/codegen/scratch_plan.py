@@ -176,16 +176,6 @@ def _scratch_family(op, vtype):
     return "state"
 
 
-def _ranges_overlap(a, b):
-    """True iff two live ranges (each ``[def_index, last_use_index]``) overlap.
-
-    Two scratches can share a buffer ONLY when their ranges are DISJOINT: the earlier one's last use
-    strictly precedes the later one's definition. They overlap (so reuse is unsound) otherwise."""
-    a_def, a_end = a["def_index"], a["last_use_index"]
-    b_def, b_end = b["def_index"], b["last_use_index"]
-    return not (a_end < b_def or b_end < a_def)
-
-
 def build_scratch_plan(program, model=None):
     """Build the :class:`ScratchPlan` of a lowered ``pops.time.Program`` (Spec 5 sec.13.11.3, #38).
 
