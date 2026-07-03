@@ -12,6 +12,39 @@ from pops.time.values import Value, _Affine  # noqa: F401
 class _ProgramInspect(_ProgramConstants):
     """Static cost / buffer inspection for the Program authoring class."""
 
+    def ir_nodes(self):
+        """The generated IR nodes as a structured, inert list (ADC-554 inspection surface).
+
+        One dict per SSA node in build order -- ``{name, op, vtype, block, inputs, attrs}`` -- plus the
+        committed blocks appended as ``{op: "commit", block, inputs: [state], ...}`` entries. This is
+        the machine-readable counterpart of :meth:`dump_operator_ir`: a macro-built Program and the
+        equivalent manual Program expose the SAME node list, so a caller can inspect what a
+        ``pops.lib.time`` macro generated without reaching into ``self._values``. Read-only: it copies
+        each node's ``attrs`` (never the live dict) and mutates nothing.
+        """
+        def _attr(val):
+            # Keep the report array-free and JSON-friendly: reference Values / sub-blocks by name/id,
+            # pass scalars through, summarize anything else by its type name.
+            if isinstance(val, Value):
+                return "#%d" % val.id
+            if isinstance(val, (str, int, float, bool)) or val is None:
+                return val
+            if isinstance(val, (list, tuple)):
+                return [_attr(x) for x in val]
+            return type(val).__name__
+
+        nodes = []
+        for v in self._values:
+            nodes.append({
+                "name": v.name, "op": v.op, "vtype": v.vtype, "block": v.block,
+                "inputs": [i.name for i in v.inputs],
+                "attrs": {k: _attr(val) for k, val in v.attrs.items()},
+            })
+        for block, st in self._commits.items():
+            nodes.append({"name": st.name, "op": "commit", "vtype": st.vtype,
+                          "block": block, "inputs": [st.name], "attrs": {}})
+        return nodes
+
     def scratch_liveness(self):
         """Per-scratch LIVE RANGES over the linear step-body order (Spec 3 s28 scratch-liveness
         analysis, ADC-465). A REPORT, not a transform: it never rewrites the IR.

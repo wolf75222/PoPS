@@ -4,7 +4,7 @@ Exports: adams_bashforth, adams_bashforth2, bdf.
 Private helpers: _AB_WEIGHTS, _bdf_local_linear, _bdf_implicit_flux.
 """
 
-from ._helpers import _stage_rhs
+from ._helpers import _stage_rhs, program_macro
 from .euler import forward_euler as _forward_euler_macro
 
 
@@ -21,6 +21,7 @@ _AB_WEIGHTS = {
 }
 
 
+@program_macro
 def adams_bashforth(P, block, order, *, sources=("default",), flux=True):
     """Adams-Bashforth, explicit ``order``-step, over the System-owned history ring (ADC-406a / ADC-423):
 
@@ -61,6 +62,7 @@ def adams_bashforth(P, block, order, *, sources=("default",), flux=True):
     P.commit(block, P.linear_combine(step_name, expr))
 
 
+@program_macro
 def adams_bashforth2(P, block, *, sources=("default",), flux=True):
     """Adams-Bashforth 2, a thin back-compat alias for ``adams_bashforth(P, block, 2)`` (ADC-423).
 
@@ -190,6 +192,7 @@ def _bdf_implicit_flux(P, block, order, sources, flux, ncomp, newton_tol, newton
     return Uk
 
 
+@program_macro
 def bdf(P, block, order, *, linear_source=None, sources=("default",), flux=True, ncomp=1,
         newton_tol=1e-10, newton_max=20, krylov_tol=1e-10, krylov_max=200, krylov_restart=None,
         eps=1e-7):

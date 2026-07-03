@@ -3,9 +3,10 @@
 Exports: imex_local, imex_local_linear.
 """
 
-from ._helpers import _opcall
+from ._helpers import _opcall, program_macro
 
 
+@program_macro
 def imex_local(P, block, *, linear_source, sources=("default",), flux=True, theta=1.0):
     """IMEX with an EXPLICIT flux/source and an IMPLICIT cell-local linear source (ADC-423).
 
@@ -38,6 +39,7 @@ def imex_local(P, block, *, linear_source, sources=("default",), flux=True, thet
     return out
 
 
+@program_macro
 def imex_local_linear(P, block, *, explicit_operator, implicit_operator, fields_operator=None,
                       theta=1.0, state_space="U"):
     """Generic IMEX with an explicit rate and an implicit local linear operator (Spec 2).

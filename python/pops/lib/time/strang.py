@@ -2,8 +2,10 @@
 
 Exports: strang, lie, condensed_schur.
 """
+from ._helpers import program_macro
 
 
+@program_macro
 def strang(P, block, half_flow, source, *, commit=True):
     """Strang splitting macro H(dt/2); S(dt); H(dt/2), the macro form of pops.Strang (lowers to the SAME
     IR, no special class). @p half_flow and @p source are IR-building callables (prog, state, frac) ->
@@ -18,6 +20,7 @@ def strang(P, block, half_flow, source, *, commit=True):
     return U3
 
 
+@program_macro
 def lie(P, block, half_flow, source, *, commit=True):
     """Lie (Godunov) splitting macro H(dt); S(dt) -- the sequential first-order sibling of `strang`
     (ADC-423). @p half_flow and @p source are the SAME IR-building callables `strang` takes
@@ -33,6 +36,7 @@ def lie(P, block, half_flow, source, *, commit=True):
     return U2
 
 
+@program_macro
 def condensed_schur(P, block, *, alpha, theta=1.0, c_rho=0, c_mx=1, c_my=2, c_bz=3, c_E=None,
                     method=None, tol=1e-10, max_iter=400, commit=True):
     """Condensed-Schur implicit electrostatic-Lorentz SOURCE stage as a compiled Program (epic ADC-399,

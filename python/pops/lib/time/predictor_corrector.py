@@ -3,9 +3,10 @@
 Exports: predictor_corrector_local_linear.
 """
 
-from ._helpers import _opcall
+from ._helpers import _opcall, program_macro
 
 
+@program_macro
 def predictor_corrector_local_linear(P, block, *, fields_operator, explicit_rate_operator,
                                      implicit_operator, state_space="U", commit=True):
     """Generic predictor-corrector for ``dU/dt = R(U, fields) + L(fields) U`` (Spec 2, operator-first).

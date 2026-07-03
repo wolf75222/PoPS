@@ -8,6 +8,7 @@ inheritance; methods operate on ``self._s`` (the compiled facade) and ``self._au
 
 from pops._bootstrap import ModelSpec
 from pops.runtime._lifecycle import guard_assembling as _guard_assembling
+from pops.runtime._lifecycle import reject_compiled_time_route as _reject_compiled_time_route
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
     NEWTON_DEFAULT_DAMPING,
@@ -97,6 +98,7 @@ class _SystemInstall:
             not wired here: go through add_equation(..., time=pops.Split(...)).
         """
         _guard_assembling(self, "add_block")  # frozen once pops.bind completes (ADC-592)
+        _reject_compiled_time_route(time, "System.add_block")  # ADC-554: no CompiledTime time= bypass
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
         # pops.Split (condensed source stage) is only wired by add_equation (which plugs
@@ -150,6 +152,7 @@ class _SystemInstall:
         evolve) an evolve=False is REJECTED explicitly -> use a native block (add_background).
         """
         _guard_assembling(self, "add_equation")  # frozen once pops.bind completes (ADC-592)
+        _reject_compiled_time_route(time, "System.add_equation")  # ADC-554 (see add_block)
         # Late imports (the codegen/physics modules import this package: avoid the cycle).
         from pops.codegen.abi import check_compiled_matches_module
         from pops.codegen.loader import CompiledModel
@@ -157,13 +160,11 @@ class _SystemInstall:
 
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
-
         # --- pops.Split (Lie) / pops.Strang (2nd order): EXPLICIT / IMPLICIT splitting, Schur OPT-IN --
-        # The block is first added with the explicit HYPERBOLIC stage (existing production path,
-        # no dispatch duplication), THEN we plug the condensed SOURCE stage (set_source_stage,
-        # C++). The source is run AFTER the transport at each step. The default (without Split) is unchanged.
-        # The splitting POLICY (Lie / Strang) is WIRED to the system stepper via set_time_scheme:
-        # pops.Split -> "lie" (default, bit-identical), pops.Strang -> "strang" (H(dt/2) S(dt) H(dt/2)).
+        # The block is added with the explicit HYPERBOLIC stage (existing production path, no dispatch
+        # duplication), THEN the condensed SOURCE stage is plugged (set_source_stage, C++), run AFTER
+        # transport each step; the default (without Split) is unchanged. The splitting POLICY is WIRED
+        # to the stepper via set_time_scheme: pops.Split -> "lie" (bit-identical), pops.Strang -> "strang".
         if isinstance(time, Split):
             self.add_equation(name, model, spatial=spatial, time=time.hyperbolic,
                               substeps=substeps, names=names, evolve=evolve, stride=stride)

@@ -3,9 +3,10 @@
 Exports: rk4, rk, explicit_rk, ButcherTableau, RK4_TABLEAU, SSPRK2_TABLEAU.
 """
 
-from ._helpers import _opcall, _stage_rhs
+from ._helpers import _opcall, _stage_rhs, program_macro
 
 
+@program_macro
 def rk4(P, block, *, sources=("default",), flux=True):
     """Classic RK4, expressed with NO special RK4 class (spec acceptance 29):
     U^{n+1} = U0 + dt/6 (k1 + 2 k2 + 2 k3 + k4)."""
@@ -67,6 +68,7 @@ SSPRK2_TABLEAU = ButcherTableau(
     name="ssprk2")
 
 
+@program_macro
 def rk(P, block, tableau, *, sources=("default",), flux=True):
     """Generic explicit Runge-Kutta from a Butcher @p tableau (ADC-423), lowered to the SAME stage chain
     the hard-coded `rk4` macro emits -- ``solve_fields`` + ``rhs`` + ``linear_combine``, no RK class:
@@ -104,6 +106,7 @@ def rk(P, block, tableau, *, sources=("default",), flux=True):
     P.commit(block, P.linear_combine("%sstep" % tag, final))
 
 
+@program_macro
 def explicit_rk(P, block, *, rhs_operator, fields_operator=None, tableau=None, A=None, b=None,
                 c=None, state_space="U"):
     """Generic explicit Runge-Kutta over a typed rate operator (Spec 2, operator-first).
