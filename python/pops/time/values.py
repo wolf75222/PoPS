@@ -78,6 +78,23 @@ def _resolve_handle(x):
     return to_value() if callable(to_value) else x
 
 
+def _authoring_source_location():
+    """The (file, line) of the first authoring frame outside pops.time (ADC-530, debug-only).
+
+    Walks the current stack past the pops.time internals (this package builds the IR) to the first
+    caller frame -- a user script or a pops.lib.time macro -- so a captured ``Value.source_location``
+    points at the line that authored the node, not at ``_new``. Returns ``"<file>:<line>"`` or ``None``
+    if no such frame is found. Called only when a Program enabled ``capture_source_locations()``; it is
+    never on the normal build path."""
+    import os
+    import traceback
+    time_dir = os.path.dirname(__file__)
+    for frame in reversed(traceback.extract_stack()[:-1]):
+        if os.path.dirname(frame.filename) != time_dir:
+            return "%s:%d" % (frame.filename, frame.lineno)
+    return None
+
+
 def _to_affine(x):
     x = _resolve_handle(x)
     if isinstance(x, _Affine):
@@ -225,6 +242,10 @@ class Value:
         # P.call. Used only for build-time type checks; NEVER serialized into the IR. None = untyped
         # (legacy), and all the space checks are skipped (backward compatible).
         self.space = None
+        # OPTIONAL authoring source location (ADC-530): the (file, line) of the call that built this
+        # node, populated by _new only when the Program has capture_source_locations() enabled. A pure
+        # debug aid, INSPECTION-ONLY -- NEVER serialized into the IR / the hash. None by default.
+        self.source_location = None
 
     def is_field(self):
         return self.vtype in Value._FIELD
@@ -247,6 +268,35 @@ class Value:
         raise TypeError(
             "a Program %s (%r) cannot be used as a Python index; use P.while_ / P.if_ for runtime "
             "control flow" % (self.vtype, self.name))
+
+    def __len__(self):
+        # An IR Value has no Python length: its component / cell shape is a runtime grid property, not a
+        # compile-time count. len(value) / iterating it would silently mis-read the grid, so refuse it
+        # loudly (ADC-530) and point at the inspection-only logical_shape for the component layout.
+        raise TypeError(
+            "a Program %s value (%r) has no Python len(): its shape is a runtime grid property. Read "
+            "its inspection-only logical_shape for the component layout; use P.while_ / P.if_ / "
+            "P.static_range for control flow." % (self.vtype, self.name))
+
+    @property
+    def logical_shape(self):
+        """The INSPECTION-ONLY logical shape of this value, derived on demand from its space (ADC-530).
+
+        A plain dict ``{"vtype", "space", "n_comp", "layout"}`` naming the value's operator-first space
+        (a StateSpace / RateSpace / FieldSpace) and its component count / storage layout when a space
+        tag is present, else ``n_comp``/``layout`` = ``None`` (an untyped legacy value). It is DERIVED
+        (never stored, never serialized): it does not appear in ``_serialize`` / ``_ir_hash``, so two
+        Programs differing only in a value's space tag hash identically and every ``.so`` cache key is
+        unchanged. Purely a debug view."""
+        space = self.space
+        n_comp = None
+        layout = None
+        space_name = getattr(space, "name", None)
+        components = getattr(space, "components", None)
+        if components is not None:
+            n_comp = len(components)
+        layout = getattr(space, "layout", None)
+        return {"vtype": self.vtype, "space": space_name, "n_comp": n_comp, "layout": layout}
 
     # --- scalar comparisons (scalar values only): build a Bool predicate, do not compare in Python ---
     def _compare(self, other, cmp):

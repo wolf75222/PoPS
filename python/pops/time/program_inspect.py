@@ -35,14 +35,20 @@ class _ProgramInspect(_ProgramConstants):
 
         nodes = []
         for v in self._values:
+            # logical_shape / source_location are INSPECTION-ONLY (ADC-530): derived on demand and
+            # never serialized into the IR / the hash, so surfacing them here cannot change a .so cache
+            # key. source_location is None unless the Program enabled capture_source_locations().
             nodes.append({
                 "name": v.name, "op": v.op, "vtype": v.vtype, "block": v.block,
                 "inputs": [i.name for i in v.inputs],
                 "attrs": {k: _attr(val) for k, val in v.attrs.items()},
+                "logical_shape": v.logical_shape,
+                "source_location": v.source_location,
             })
         for block, st in self._commits.items():
             nodes.append({"name": st.name, "op": "commit", "vtype": st.vtype,
-                          "block": block, "inputs": [st.name], "attrs": {}})
+                          "block": block, "inputs": [st.name], "attrs": {},
+                          "logical_shape": st.logical_shape, "source_location": st.source_location})
         return nodes
 
     def scratch_liveness(self):

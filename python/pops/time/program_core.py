@@ -5,7 +5,8 @@ State / field / RHS / source / apply construction (the operator-first builder co
 from pops.time.program_base import _ProgramConstants
 from pops.time.schedule import Schedule
 from pops.time.values import (
-    Value, _Coeff, _CoupledResult, _Operator, _resolve_handle, _state_base_name, _to_affine,
+    Value, _Coeff, _CoupledResult, _Operator, _authoring_source_location, _resolve_handle,
+    _state_base_name, _to_affine,
 )
 
 
@@ -21,6 +22,8 @@ class _ProgramCore(_ProgramConstants):
         self._next_id += 1
         v = Value(self, vid, vtype, op, [i for i in inputs if isinstance(i, Value)],
                   attrs, name or ("%s%d" % (op, vid)), block)
+        if self._capture_source:
+            v.source_location = _authoring_source_location()
         # Inside a control-flow recording scope (cond_fn / body_fn of a while_), ops go into the active
         # sub-block, NOT the flat self._values: a while body must RE-EXECUTE each iteration, so its ops
         # are owned by the while op and re-emitted in the loop, never walked once at the top level.

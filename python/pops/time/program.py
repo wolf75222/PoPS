@@ -44,11 +44,27 @@ class Program(_ProgramCore, _ProgramLocal, _ProgramSolve, _ProgramAuthoring,
         # OPTIONAL bound operator registry (Spec 2, operator-first): set by bind_operators so P.call
         # can resolve and type-check operators at build time. None = legacy PDE-shortcut-only Program.
         self._registry = None
+        # OPTIONAL debug capture of the authoring source location per IR node (ADC-530). DEFAULT OFF:
+        # a stack walk per node is too costly for the normal build path, and the location is
+        # INSPECTION-ONLY (never serialized into the IR / the hash). Toggle with
+        # capture_source_locations(True) before building to populate Value.source_location.
+        self._capture_source = False
         # Per-emit scratch names of coupled_rate blocks, keyed by (coupled node id, block): the
         # coupled_rate kernel fills them and each coupled_rate_out projection aliases its block's
         # scratch (ADC-457). Populated during _emit_op; harmless to keep across emits (keys are unique
         # per node id).
         self._coupled_scratch = {}
+
+    def capture_source_locations(self, enabled=True):
+        """Enable (or disable) recording each IR node's authoring source location (ADC-530).
+
+        When enabled, every subsequently built :class:`pops.time.values.Value` captures the file and
+        line of the authoring call site into its ``source_location`` (a debug aid: which macro line
+        emitted a node). It is INSPECTION-ONLY -- excluded from ``_serialize`` / ``_ir_hash`` -- so it
+        never changes a compiled-artifact cache key or a trajectory. Off by default (the stack walk is
+        skipped on the normal build path). Returns ``self`` for chaining."""
+        self._capture_source = bool(enabled)
+        return self
 
     def __str__(self):
         """Short, deterministic, array-free summary -- never the full SSA IR.
