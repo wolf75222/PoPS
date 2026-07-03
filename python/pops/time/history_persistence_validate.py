@@ -70,7 +70,8 @@ def _op_is_nondeterministic(op):
         caps = getattr(value, "capabilities", None)
         if callable(caps):
             try:
-                if caps().supports(_NONDETERMINISM_TAG):
+                supports = getattr(caps(), "supports", None)
+                if callable(supports) and supports(_NONDETERMINISM_TAG):
                     return ("op %r references a brick declaring it is non-deterministic" % op_name)
             except Exception:  # noqa: BLE001 -- a descriptor whose capabilities() raises is not our gate
                 continue

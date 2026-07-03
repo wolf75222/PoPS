@@ -1,17 +1,10 @@
 """pops.codegen.compile_drivers : the compiler-invocation + facade layer of the pipeline.
 
-Extracted verbatim from ``pops.codegen.compile`` so the model compile pipeline fits the
-Spec-4 file-size budget.  These drivers receive a ``HyperbolicModel`` (or a Program /
-Module) and invoke the C++ compiler on the source the ``compile_emit`` emitters produce:
-``compile_so`` / ``compile_aot`` / ``compile_native`` (one per backend), the
-``compile_or_jit`` mode dispatcher, the ``compile_model`` facade, ``_module_to_model``
-(lower a ``pops.model.Module`` to a dsl ``Model``) and ``compile_problem`` (compile a
-``pops.time.Program`` into a ``problem.so``).  ``pops.codegen.compile`` re-imports every
-name so its public surface is unchanged.
-
-Does NOT import pops.physics at module level to avoid import cycles; the physics facade and
-aux helpers are imported lazily inside the functions that need them.
-"""
+Extracted verbatim from ``pops.codegen.compile`` (Spec-4 budget): compile_so / compile_aot /
+compile_native (one per backend), the compile_or_jit dispatcher, the compile_model facade,
+_module_to_model (Module -> dsl Model) and compile_problem (Program -> problem.so);
+``pops.codegen.compile`` re-imports every name so its public surface is unchanged. Does NOT
+import pops.physics at module scope (cycle); facade/aux helpers are imported lazily."""
 
 from __future__ import annotations
 

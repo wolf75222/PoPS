@@ -1,11 +1,8 @@
 """pops.time Program IR passes + serialization (authoring mixin).
 
-Optimization passes (dead-node / CSE / redundant-solve elimination, ``optimize`` /
-``dump_passes``), IR serialization (``_serialize`` / ``_serialize_node`` / ``_ir_hash``),
-``validate`` and ``_block_indices``. The static cost inspection surface lives in
-``_ProgramInspect`` (``pops.time.program_inspect``). All pure IR analysis: no codegen, no
-_pops.
-"""
+Optimization passes (dead-node / CSE / redundant-solve elimination), IR serialization
+(``_serialize`` / ``_ir_hash``), ``validate`` and ``_block_indices``; static cost inspection
+lives in ``_ProgramInspect``. Pure IR analysis: no codegen, no _pops."""
 from __future__ import annotations
 
 import hashlib
