@@ -17,16 +17,26 @@ import json
 
 BRICK_TYPES = ("native", "generated", "macro", "external_cpp")
 
-# STRICT versioned schema of the external-brick manifest (ADC-611). The JSON pops_brick_manifest()
-# exports carries schema_version at the top level; the parser refuses a manifest without it (legacy /
-# pre-ADC-611 -> "regenerate the brick library"), a wrong version, a missing required field, or an
-# UNKNOWN field (top-level or per entry). Emitter (POPS_DEFINE_BRICK_MANIFEST / BrickRegistry::to_json)
-# and parser stay in LOCKSTEP: they share this version and this field set.
-BRICK_MANIFEST_SCHEMA_VERSION = 1
+# STRICT versioned schema of the external-brick manifest (ADC-611 / ADC-544). The JSON
+# pops_brick_manifest() exports carries schema_version at the top level; the parser refuses a manifest
+# without it (legacy / pre-ADC-611 -> "regenerate the brick library"), a wrong version, a missing
+# required field, or an UNKNOWN field (top-level or per entry). Emitter (POPS_DEFINE_BRICK_MANIFEST /
+# BrickRegistry::to_json) and parser stay in LOCKSTEP: they share this version and this field set.
+#
+# ADC-544 widens the per-entry schema (v1 -> v2) with the OPTIONAL fields native_id / supported_layouts
+# / supported_platforms / params / options / exported_symbols. They are additive with safe defaults
+# (native_id -> id, the CSV lists -> []), but the strict allow-list REFUSES an unknown key, so adding
+# them IS a version bump: the parser accepts EXACTLY version 2 and a version-1 manifest is refused with
+# the existing "regenerate the brick library" error -- the correct refuse-never-warn posture for a
+# versioned wire format. The four REQUIRED fields stay id / category / requirements / capabilities.
+BRICK_MANIFEST_SCHEMA_VERSION = 2
 # Allowed keys at the top level and per brick entry (strict allow-lists -- anything else is refused).
 _BRICK_MANIFEST_TOP_KEYS = frozenset({"schema_version", "abi_key", "bricks"})
 _BRICK_MANIFEST_ENTRY_REQUIRED = ("id", "category", "requirements", "capabilities")
-_BRICK_MANIFEST_ENTRY_KEYS = frozenset(_BRICK_MANIFEST_ENTRY_REQUIRED)
+# ADC-544 optional per-entry fields (v2). A missing one defaults to id (native_id) or [] (the CSVs).
+_BRICK_MANIFEST_ENTRY_OPTIONAL = ("native_id", "supported_layouts", "supported_platforms",
+                                  "params", "options", "exported_symbols")
+_BRICK_MANIFEST_ENTRY_KEYS = frozenset(_BRICK_MANIFEST_ENTRY_REQUIRED + _BRICK_MANIFEST_ENTRY_OPTIONAL)
 
 
 class BrickDescriptor:
@@ -225,8 +235,9 @@ def _split_csv(value):
     if value is None:
         return []
     if not isinstance(value, str):
-        raise ValueError("manifest requirements/capabilities must be a CSV string; got %r"
-                         % (value,))
+        raise ValueError("manifest CSV field (requirements / capabilities / supported_layouts / "
+                         "supported_platforms / params / options / exported_symbols) must be a CSV "
+                         "string; got %r" % (value,))
     return [tok.strip() for tok in value.split(",") if tok.strip()]
 
 
@@ -234,15 +245,21 @@ def parse_brick_manifest(manifest_json):
     """Parse a brick manifest (the JSON ``pops_brick_manifest()`` returns) under the STRICT versioned
     schema (ADC-611) into ``(records, abi_key)`` WITHOUT registering anything.
 
-    The manifest is ``{"schema_version": 1, "abi_key": <opt str>, "bricks": [{"id", "category",
-    "requirements", "capabilities"}, ...]}``. STRICT policy -- the error always NAMES the offending field:
+    The manifest is ``{"schema_version": 2, "abi_key": <opt str>, "bricks": [{"id", "category",
+    "requirements", "capabilities", <optional native_id / supported_layouts / supported_platforms /
+    params / options / exported_symbols>}, ...]}``. STRICT policy -- the error always NAMES the offending
+    field:
       - not valid JSON / not an object -> ValueError;
       - missing ``schema_version`` -> ValueError ("regenerate the brick library"): a manifest without it
         is legacy (pre-ADC-611); the in-tree emitter always writes it now;
-      - ``schema_version`` != BRICK_MANIFEST_SCHEMA_VERSION -> ValueError (naming got vs expected);
+      - ``schema_version`` != BRICK_MANIFEST_SCHEMA_VERSION -> ValueError (naming got vs expected); a
+        version-1 manifest (no v2 fields) is refused here -- the ADC-544 widening is a wire-format bump;
       - an UNKNOWN top-level key or an UNKNOWN entry key -> ValueError (no permissive silent-ignore);
       - a brick entry missing any of id / category / requirements / capabilities -> ValueError (naming
         the field and the brick id). requirements/capabilities are CSV strings (possibly empty "").
+    The v2 OPTIONAL fields (ADC-544) default when absent: ``native_id`` -> the entry ``id`` (the exported
+    numerical symbol base, distinct from the user-facing selector id); ``supported_layouts`` /
+    ``supported_platforms`` / ``params`` / ``options`` / ``exported_symbols`` are CSV strings -> ``[]``.
     ``abi_key`` is carried as inert metadata (the .so's dlopen-time ABI guard is enforced separately for
     the library-.so path; a brick .so rebuilds against the headers, so it is documented-optional here).
     """
@@ -278,7 +295,8 @@ def parse_brick_manifest(manifest_json):
         if unknown_entry:
             raise ValueError("external brick manifest entry %r has unknown field(s) %s; the strict "
                              "schema allows only %s"
-                             % (entry.get("id"), unknown_entry, list(_BRICK_MANIFEST_ENTRY_REQUIRED)))
+                             % (entry.get("id"), unknown_entry,
+                                list(_BRICK_MANIFEST_ENTRY_REQUIRED + _BRICK_MANIFEST_ENTRY_OPTIONAL)))
         for field in _BRICK_MANIFEST_ENTRY_REQUIRED:
             if field not in entry:
                 raise ValueError("external brick manifest entry %r is missing the required '%s' field"
@@ -286,11 +304,19 @@ def parse_brick_manifest(manifest_json):
         if not entry.get("id"):
             raise ValueError("external brick manifest entry must carry a non-empty 'id'; got %r"
                              % (entry,))
+        brick_id = str(entry["id"])
+        # ADC-544 v2: native_id defaults to the selector id; the CSV lists default to [] when absent.
         records.append({
-            "id": str(entry["id"]),
+            "id": brick_id,
             "category": str(entry.get("category") or "brick"),
             "requirements": _split_csv(entry.get("requirements")),
             "capabilities": _split_csv(entry.get("capabilities")),
+            "native_id": str(entry.get("native_id") or brick_id),
+            "supported_layouts": _split_csv(entry.get("supported_layouts")),
+            "supported_platforms": _split_csv(entry.get("supported_platforms")),
+            "params": _split_csv(entry.get("params")),
+            "options": _split_csv(entry.get("options")),
+            "exported_symbols": _split_csv(entry.get("exported_symbols")),
         })
     return records, doc.get("abi_key")
 

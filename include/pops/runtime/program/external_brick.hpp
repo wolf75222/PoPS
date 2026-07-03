@@ -18,11 +18,13 @@
 
 namespace pops::runtime::program {
 
-// STRICT versioned schema of the external-brick manifest (ADC-611). Emitted at the top level of
-// pops_brick_manifest() so the host parser (pops.descriptors.parse_brick_manifest) refuses an
+// STRICT versioned schema of the external-brick manifest (ADC-611 / ADC-544). Emitted at the top level
+// of pops_brick_manifest() so the host parser (pops.descriptors.parse_brick_manifest) refuses an
 // unversioned/legacy manifest with a clear "regenerate" error. MUST stay in LOCKSTEP with the Python
-// BRICK_MANIFEST_SCHEMA_VERSION.
-inline constexpr int kBrickManifestSchemaVersion = 1;
+// BRICK_MANIFEST_SCHEMA_VERSION. v2 (ADC-544) adds the optional per-entry fields native_id /
+// supported_layouts / supported_platforms / params / options / exported_symbols; the four required
+// fields (id / category / requirements / capabilities) are unchanged.
+inline constexpr int kBrickManifestSchemaVersion = 2;
 
 // Escapes a string so a manifest field built from a user-supplied id/category/CSV is always valid
 // JSON: the two structural characters (`"` and `\`) plus every control character (`\n`, `\r`, `\t`,
@@ -113,13 +115,26 @@ inline std::string json_unescape(const std::string& s) {
 }
 
 // The manifest of one external C++ brick: its identity plus the requirements/capabilities the
-// selector and codegen need. All fields are host strings (no device data); `requirements` and
-// `capabilities` are comma-separated lists (the manifest's wire form), empty when none.
+// selector and codegen need. All fields are host strings (no device data); the CSV fields are
+// comma-separated lists (the manifest's wire form), empty when none.
+//
+// ADC-544 v2 adds the optional descriptors native_id / supported_layouts / supported_platforms /
+// params / options / exported_symbols. native_id is the exported numerical symbol base (distinct
+// from the user-facing selector id, empty -> defaults to id host-side); supported_layouts /
+// supported_platforms feed the compile-time layout/platform gates; exported_symbols drives the
+// dlsym gate (the extern "C" symbols the .so MUST export). All default to "" (the host parser then
+// fills native_id from id and the CSV lists from []).
 struct BrickManifestEntry {
-  std::string id;            // the brick id a user selects (e.g. "my_hllc")
-  std::string category;      // the catalog slot ("riemann", "preconditioner", ...)
-  std::string requirements;  // CSV of required model capabilities ("pressure,wave_speeds"), or ""
-  std::string capabilities;  // CSV of capabilities the brick PROVIDES, or ""
+  std::string id;                    // the brick id a user selects (e.g. "my_hllc")
+  std::string category;              // the catalog slot ("riemann", "preconditioner", ...)
+  std::string requirements;          // CSV of required model capabilities ("pressure,wave_speeds")
+  std::string capabilities;          // CSV of capabilities the brick PROVIDES, or ""
+  std::string native_id;             // exported numerical symbol base, or "" (defaults to id)
+  std::string supported_layouts;     // CSV of supported layouts ("uniform,amr"), or "" (unconstrained)
+  std::string supported_platforms;   // CSV of supported platforms ("cpu,mpi,gpu"), or "" (unknown)
+  std::string params;                // CSV of runtime param names the brick reads, or ""
+  std::string options;               // CSV of compile-time option keys, or ""
+  std::string exported_symbols;      // CSV of extern "C" symbols the .so MUST export, or ""
 };
 
 // A process-global catalog of registered external bricks, keyed by id. Populated at static-init
@@ -160,16 +175,20 @@ class BrickRegistry {
   // Every registered manifest entry, in registration order.
   const std::vector<BrickManifestEntry>& entries() const { return entries_; }
 
-  // The manifest of every registered brick as the STRICT versioned schema (ADC-611) the host parser
-  // `pops.descriptors.parse_brick_manifest` accepts:
-  //   {"schema_version": 1, "abi_key": "<this .so's key>",
-  //    "bricks": [{"id", "category", "requirements", "capabilities"}, ...]}
-  // schema_version + the four per-entry fields are ALWAYS present (the parser refuses a missing field or
-  // an unknown one); requirements/capabilities are the CSV strings the macro registered (empty "" when
-  // none). abi_key is the LITERAL of THIS translation unit (POPS_ABI_KEY_LITERAL, a preprocessor string,
-  // no symbol -- valid inside a brick .so that never links the module's abi_key()). This is the wire form
-  // a brick `.so` exports through `pops_brick_manifest()` (POPS_DEFINE_BRICK_MANIFEST); the host dlopens
-  // the `.so` and feeds the returned string to `_register_manifest`. Emitter and parser stay in lockstep.
+  // The manifest of every registered brick as the STRICT versioned schema (ADC-611 / ADC-544) the host
+  // parser `pops.descriptors.parse_brick_manifest` accepts:
+  //   {"schema_version": 2, "abi_key": "<this .so's key>",
+  //    "bricks": [{"id", "category", "requirements", "capabilities",
+  //                "native_id", "supported_layouts", "supported_platforms",
+  //                "params", "options", "exported_symbols"}, ...]}
+  // schema_version + the four required per-entry fields are ALWAYS present (the parser refuses a missing
+  // field or an unknown one); the six ADC-544 v2 fields are ALSO emitted (empty "" when the brick left
+  // them unset -- the host parser then defaults native_id from id and the CSV lists to []). All CSV
+  // fields carry the strings the macro registered. abi_key is the LITERAL of THIS translation unit
+  // (POPS_ABI_KEY_LITERAL, a preprocessor string, no symbol -- valid inside a brick .so that never links
+  // the module's abi_key()). This is the wire form a brick `.so` exports through `pops_brick_manifest()`
+  // (POPS_DEFINE_BRICK_MANIFEST); the host dlopens the `.so` and feeds the returned string to
+  // `_register_manifest`. Emitter and parser stay in lockstep on this version and this field set.
   std::string to_json() const {
     std::string out = "{\"schema_version\":";
     out += std::to_string(kBrickManifestSchemaVersion);
@@ -182,7 +201,12 @@ class BrickRegistry {
         out += ',';
       out += "{\"id\":\"" + json_escape(e.id) + "\",\"category\":\"" + json_escape(e.category) +
              "\",\"requirements\":\"" + json_escape(e.requirements) + "\",\"capabilities\":\"" +
-             json_escape(e.capabilities) + "\"}";
+             json_escape(e.capabilities) + "\",\"native_id\":\"" + json_escape(e.native_id) +
+             "\",\"supported_layouts\":\"" + json_escape(e.supported_layouts) +
+             "\",\"supported_platforms\":\"" + json_escape(e.supported_platforms) +
+             "\",\"params\":\"" + json_escape(e.params) + "\",\"options\":\"" +
+             json_escape(e.options) + "\",\"exported_symbols\":\"" +
+             json_escape(e.exported_symbols) + "\"}";
     }
     out += "]}";
     return out;
@@ -206,9 +230,13 @@ class BrickRegistry {
 
 // Registers a manifest entry at static-init time. Use at namespace scope in a brick's `.so`:
 //   POPS_REGISTER_BRICK("my_hllc", "riemann", "pressure,wave_speeds");
-// The capabilities field is left empty by this 3-argument form; a brick that PROVIDES capabilities
-// calls `BrickRegistry::instance().register_brick({...})` directly. The trailing static is a unique
-// dummy whose initializer performs the registration (zero-cost at runtime, runs once before main).
+// The capabilities field and the six ADC-544 v2 fields (native_id / supported_layouts /
+// supported_platforms / params / options / exported_symbols) are left empty by this 3-argument form
+// (aggregate value-initialization fills the trailing members with ""); the host parser then defaults
+// native_id from id and the CSV lists to []. A brick that PROVIDES capabilities or declares any v2
+// field calls `BrickRegistry::instance().register_brick({...})` directly with the full aggregate. The
+// trailing static is a unique dummy whose initializer performs the registration (zero-cost at runtime,
+// runs once before main).
 #define POPS_REGISTER_BRICK(brick_id, brick_category, brick_requirements)            \
   static const bool POPS_REGISTER_BRICK_CAT_(pops_brick_registered_, __LINE__) = [] { \
     ::pops::runtime::program::BrickRegistry::instance().register_brick(              \

@@ -38,7 +38,7 @@ class CompiledProblem:
 
     def __init__(self, so_path, program, model, abi_key, cxx, std, libraries=None,
                  problem_hash=None, cache_key=None, compile_command=None, generated_sources=None,
-                 codegen_env=None, module_manifest=None, module_hash=None):
+                 codegen_env=None, module_manifest=None, module_hash=None, external_bricks=None):
         self.so_path = so_path
         self.program = program          # the pops.time.Program that was lowered
         self.model = model              # the physical model (optional; added as a block in the MVP)
@@ -65,6 +65,12 @@ class CompiledProblem:
         # generated symbols) are exposed to the problem; a compiled library .so was already
         # dlopen'd (and ABI-guarded) by read_library_manifest.
         self.libraries = list(libraries) if libraries else []
+        # ADC-544: the external compiled-brick manifest records (native_id / category / requirements
+        # / capabilities / supported_layouts / supported_platforms / exported_symbols) bound into this
+        # artifact via CompiledBrickRef entries in libraries=. They were VALIDATED (the four
+        # compile-time gates) by compile_problem before the handle existed. Empty when none were
+        # passed. manifest() lists them so the artifact self-describes its external dependencies.
+        self.external_bricks = [dict(r) for r in external_bricks] if external_bricks else []
         # Compiled-artifact metadata (Spec 5 sec.12.4, #48-49): set by compile_problem. The
         # problem hash is the program-SOURCE hash (the WHAT the .so was built from -- distinct from
         # program_hash, the IR hash of the in-memory Program); cache_key is the (problem_hash|abi)

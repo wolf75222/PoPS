@@ -64,6 +64,8 @@ class CompiledArtifactManifest:
         :meth:`needs_cpp_followup`.
       - ``native_entrypoints``: the native symbols the artifact exports; ``[]`` until the C++ emits
         them in the manifest.
+      - ``external_bricks``: the external compiled bricks bound into the artifact (ADC-544); each entry
+        is a per-brick manifest record. ``[]`` for an artifact with no external bricks.
 
     A flag that is ``None`` is UNKNOWN, not ``False``: a validator must not hard-reject on it (cf.
     :func:`check_layout_supported`). :meth:`to_dict` / :meth:`__str__` serialise / print it.
@@ -77,7 +79,8 @@ class CompiledArtifactManifest:
                  supports_gpu=None, supports_stride=None, supports_partial_imex_mask=None,
                  supports_named_fields=None, native_entrypoints=None, dimension=2,
                  amr_refinement_ratio=2, precision="double", real_bytes=8,
-                 communicator="unknown", supports_custom_communicator=False):
+                 communicator="unknown", supports_custom_communicator=False,
+                 external_bricks=None):
         self.model_name = model_name
         self.abi_key = abi_key
         self.abi_version = abi_version
@@ -103,6 +106,12 @@ class CompiledArtifactManifest:
         self.supports_partial_imex_mask = supports_partial_imex_mask
         self.supports_named_fields = supports_named_fields
         self.native_entrypoints = list(native_entrypoints or [])
+        # ADC-544: the external compiled bricks bound into this artifact (via CompiledBrickRef entries
+        # in libraries=). Each entry is the brick's manifest record (native_id / category /
+        # requirements / capabilities / supported_layouts / supported_platforms / exported_symbols), so
+        # the artifact self-describes its external dependencies. Additive field -> no schema bump; []
+        # for an artifact with no external bricks (byte-identical serialization to before).
+        self.external_bricks = [dict(b) for b in external_bricks] if external_bricks else []
         self.dimension = dimension
         self.amr_refinement_ratio = amr_refinement_ratio
         self.precision = precision
@@ -155,6 +164,7 @@ class CompiledArtifactManifest:
                "communicator": self.communicator,
                "supports_custom_communicator": self.supports_custom_communicator,
                "native_entrypoints": list(self.native_entrypoints),
+               "external_bricks": [dict(b) for b in self.external_bricks],
                "capability_matrix": [row.to_dict() for row in self.capability_matrix().rows]}
         out.update(self.supports())
         return out
@@ -186,8 +196,8 @@ class CompiledArtifactManifest:
             "model_name", "abi_key", "abi_version", "required_headers_sig", "blocks", "variables",
             "roles", "aux_required", "params_const", "params_runtime", "ghost_depth",
             "ghost_depth_by_block", "field_outputs",
-            "native_entrypoints", "dimension", "amr_refinement_ratio", "precision", "real_bytes",
-            "communicator"}
+            "native_entrypoints", "external_bricks", "dimension", "amr_refinement_ratio", "precision",
+            "real_bytes", "communicator"}
         unknown = sorted(set(data) - ctor_keys - derived)
         if unknown:
             raise ValueError("compiled-artifact manifest has unknown field(s) %s; the strict schema does "
@@ -226,6 +236,13 @@ class CompiledArtifactManifest:
             lines.append("    %-26s %s" % (name, _flag(getattr(self, name))))
         lines.append("  native_entrypoints: %s"
                      % (", ".join(self.native_entrypoints) or "(none)"))
+        if self.external_bricks:
+            lines.append("  external_bricks:")
+            for brick in self.external_bricks:
+                layouts = ",".join(brick.get("supported_layouts") or []) or "(any)"
+                lines.append("    - %s [%s] native_id=%s layouts=%s"
+                             % (brick.get("id"), brick.get("category", "brick"),
+                                brick.get("native_id") or brick.get("id"), layouts))
         pending = self.needs_cpp_followup()
         if pending:
             lines.append("  needs C++ follow-up (UNKNOWN, not fabricated): %s"
@@ -317,6 +334,10 @@ def build_compiled_manifest(compiled):
     raw_roles = getattr(model, "cons_roles", None)
     roles = list(raw_roles) if raw_roles else None
 
+    # ADC-544: the external compiled bricks bound into the artifact (the CompiledBrickRef records
+    # compile_problem validated + captured on the handle). [] for an artifact with no external bricks.
+    external_bricks = list(getattr(compiled, "external_bricks", []) or [])
+
     caps_flags = _caps_flags(model)
     from pops.runtime_environment import compiled_runtime_facts
     runtime_facts = compiled_runtime_facts(supports_mpi=caps_flags.get("supports_mpi"))
@@ -328,7 +349,8 @@ def build_compiled_manifest(compiled):
         params_runtime=params_runtime, ghost_depth=ghost_depth,
         ghost_depth_by_block=ghost_depth_by_block, field_outputs=field_outputs,
         supports_stride=None, supports_partial_imex_mask=None, supports_named_fields=None,
-        native_entrypoints=[], dimension=runtime_facts["dimension"],
+        native_entrypoints=[], external_bricks=external_bricks,
+        dimension=runtime_facts["dimension"],
         amr_refinement_ratio=runtime_facts["amr_refinement_ratio"],
         precision=runtime_facts["precision"], real_bytes=runtime_facts["real_bytes"],
         communicator=runtime_facts["communicator"],

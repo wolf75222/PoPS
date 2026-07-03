@@ -1,8 +1,9 @@
 """pops.external.manifests -- read + register a compiled-brick manifest (Spec 5 sec.5.17).
 
-A manifest is the JSON ``pops_brick_manifest()`` exports under the STRICT versioned schema (ADC-611):
-``{"schema_version": 1, "abi_key": <opt>, "bricks": [{"id", "category", "requirements",
-"capabilities"}, ...]}``. It can be read from a ``.json`` file or from a ``.so`` (dlopened).
+A manifest is the JSON ``pops_brick_manifest()`` exports under the STRICT versioned schema (ADC-611 /
+ADC-544): ``{"schema_version": 2, "abi_key": <opt>, "bricks": [{"id", "category", "requirements",
+"capabilities", <optional native_id / supported_layouts / supported_platforms / params / options /
+exported_symbols>}, ...]}``. It can be read from a ``.json`` file or from a ``.so`` (dlopened).
 :func:`register` / :func:`register_manifest_file` register the ids in the in-process catalog owned by
 :mod:`pops.descriptors`; :func:`read_manifest` is the read-only counterpart that returns the metadata
 WITHOUT registering or executing anything. The strict parse (schema_version / required fields /
@@ -31,6 +32,39 @@ def register(path):
     if p.endswith(".json"):
         return register_manifest_file(p)
     return load_cpp_library(p)
+
+
+def register_and_capture(path):
+    """Register a manifest AND return ``(records, abi_key, handle)`` for the ADC-544 gates.
+
+    Like :func:`register` but exposes the parsed per-brick records, the manifest ``abi_key`` (for the
+    G1 ABI gate) and the loaded ``.so`` handle (the ctypes ``CDLL`` for the G4 dlsym probe). A ``.json``
+    path is parsed directly and yields ``handle=None`` -- there is no ``.so`` to probe, so a
+    ``CompiledBrickRef`` over a ``.json`` honestly SKIPS G4. A ``.so`` path is dlopened (its static
+    initializers register the bricks) and the SAME ``CDLL`` handle is returned so the G4 probe reads
+    THIS brick ``.so``'s own symbols (never a process-global lookup; ADC-622 STB_GNU_UNIQUE caveat).
+    The bricks are also registered in the in-process catalog (parity with :func:`register`)."""
+    p = str(path)
+    if p.endswith(".json"):
+        with open(p, "r", encoding="utf-8") as fh:
+            manifest_json = fh.read()
+        records, abi_key = parse_brick_manifest(manifest_json)
+        _register_manifest(manifest_json)
+        return records, abi_key, None
+    handle = ctypes.CDLL(p)  # raises OSError if the path is not a loadable library
+    try:
+        manifest_fn = handle.pops_brick_manifest
+    except AttributeError as err:
+        raise ValueError("brick library %r does not export pops_brick_manifest(); it is not an "
+                         "pops brick .so" % (p,)) from err
+    manifest_fn.restype = ctypes.c_char_p
+    raw = manifest_fn()
+    if raw is None:
+        raise ValueError("brick library %r: pops_brick_manifest() returned NULL" % (p,))
+    manifest_json = raw.decode("utf-8")
+    records, abi_key = parse_brick_manifest(manifest_json)
+    _register_manifest(manifest_json)
+    return records, abi_key, handle
 
 
 class CompiledManifest:
@@ -104,5 +138,5 @@ def read_manifest(path):
     return _parse_manifest_metadata(raw.decode("utf-8"))
 
 
-__all__ = ["register", "register_manifest_file", "read_manifest", "CompiledManifest",
-           "BRICK_MANIFEST_SCHEMA_VERSION"]
+__all__ = ["register", "register_manifest_file", "register_and_capture", "read_manifest",
+           "CompiledManifest", "BRICK_MANIFEST_SCHEMA_VERSION"]

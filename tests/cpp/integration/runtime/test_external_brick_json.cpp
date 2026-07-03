@@ -12,8 +12,11 @@
 
 #include <string>
 
+using pops::runtime::program::BrickManifestEntry;
+using pops::runtime::program::BrickRegistry;
 using pops::runtime::program::json_escape;
 using pops::runtime::program::json_unescape;
+using pops::runtime::program::kBrickManifestSchemaVersion;
 
 namespace {
 
@@ -64,4 +67,53 @@ TEST(ExternalBrickJson, EscapedFormIsValidJsonStringBody) {
   // a value carrying an escaped quote is NOT truncated at the inner quote (the field-scan contract)
   EXPECT_TRUE(json_unescape(json_escape("pre\"post")) == "pre\"post")
       << "escaped quote not truncated";
+}
+
+// ADC-544: to_json emits schema_version 2 and the six v2 per-entry fields (native_id /
+// supported_layouts / supported_platforms / params / options / exported_symbols) the host parser
+// (pops.descriptors.parse_brick_manifest) accepts. Emitter + parser stay in lockstep on this field set.
+TEST(ExternalBrickJson, ToJsonEmitsV2SchemaAndFields) {
+  EXPECT_TRUE(kBrickManifestSchemaVersion == 2) << "schema version is v2 (ADC-544)";
+
+  // A clean registry so the emitted JSON contains exactly the one entry we register here (this TU's
+  // executable has no static POPS_REGISTER_BRICK, so the singleton starts empty; clear() is belt-and-
+  // braces isolation from the sibling test below in the same binary).
+  BrickRegistry& reg = BrickRegistry::instance();
+  reg.clear();
+  reg.register_brick({"json_brick", "riemann", "pressure,wave_speeds", "physical_flux",
+                      "json_native", "uniform,amr", "cpu,mpi", "cs2", "reconstruct",
+                      "pops_brick_residual"});
+  const std::string out = reg.to_json();
+
+  // The top-level schema_version stamp is v2.
+  EXPECT_TRUE(out.find("\"schema_version\":2") != std::string::npos) << "stamps v2";
+
+  // Each v2 field is emitted with its registered value.
+  EXPECT_TRUE(out.find("\"native_id\":\"json_native\"") != std::string::npos) << "native_id";
+  EXPECT_TRUE(out.find("\"supported_layouts\":\"uniform,amr\"") != std::string::npos) << "layouts";
+  EXPECT_TRUE(out.find("\"supported_platforms\":\"cpu,mpi\"") != std::string::npos) << "platforms";
+  EXPECT_TRUE(out.find("\"params\":\"cs2\"") != std::string::npos) << "params";
+  EXPECT_TRUE(out.find("\"options\":\"reconstruct\"") != std::string::npos) << "options";
+  EXPECT_TRUE(out.find("\"exported_symbols\":\"pops_brick_residual\"") != std::string::npos)
+      << "exported_symbols";
+
+  // The four required fields are still present alongside the v2 additions.
+  EXPECT_TRUE(out.find("\"id\":\"json_brick\"") != std::string::npos) << "id";
+  EXPECT_TRUE(out.find("\"category\":\"riemann\"") != std::string::npos) << "category";
+  EXPECT_TRUE(out.find("\"requirements\":\"pressure,wave_speeds\"") != std::string::npos)
+      << "requirements";
+  EXPECT_TRUE(out.find("\"capabilities\":\"physical_flux\"") != std::string::npos) << "capabilities";
+}
+
+// A brick registered via the 3-argument POPS_REGISTER_BRICK path leaves the six v2 fields empty in
+// to_json (aggregate value-initialization). The host parser then defaults native_id from id and the
+// CSV lists to []. This locks the minimal-brick wire form.
+TEST(ExternalBrickJson, ToJsonEmitsEmptyV2FieldsForMinimalBrick) {
+  BrickRegistry& reg = BrickRegistry::instance();
+  reg.clear();
+  reg.register_brick({"minimal", "riemann", "", ""});  // 4-arg aggregate: v2 fields default to ""
+  const std::string out = reg.to_json();
+  EXPECT_TRUE(out.find("\"native_id\":\"\"") != std::string::npos) << "empty native_id emitted";
+  EXPECT_TRUE(out.find("\"supported_layouts\":\"\"") != std::string::npos) << "empty layouts emitted";
+  EXPECT_TRUE(out.find("\"exported_symbols\":\"\"") != std::string::npos) << "empty symbols emitted";
 }

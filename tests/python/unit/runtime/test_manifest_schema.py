@@ -177,6 +177,61 @@ def test_artifact_manifest_from_dict_unknown_field_refused():
     assert "totally_new" in str(exc.value)
 
 
+def test_artifact_manifest_external_bricks_is_additive_and_round_trips():
+    # ADC-544: external_bricks is an additive field -> present as [] by default and round-trips.
+    from pops.external.artifact_manifest import CompiledArtifactManifest
+    m = _artifact()
+    assert m.to_dict()["external_bricks"] == []  # additive, empty when none
+    brick = {"id": "my_ext", "native_id": "ext_native", "category": "riemann",
+             "requirements": ["pressure"], "capabilities": [], "supported_layouts": ["uniform"],
+             "supported_platforms": ["cpu"], "params": [], "options": [],
+             "exported_symbols": ["pops_brick_residual"]}
+    m2 = CompiledArtifactManifest(model_name="demo", abi_key="h|c|20", external_bricks=[brick])
+    d = m2.to_dict()
+    assert d["external_bricks"][0]["native_id"] == "ext_native"
+    back = CompiledArtifactManifest.from_dict(d)
+    assert back.to_dict() == d
+
+
+# ---- ADC-544 v2 optional fields (native_id / layouts / platforms / params / options / symbols) ---
+
+def test_v2_optional_fields_parse():
+    entry = _entry(id="ext_full", native_id="ext_native", supported_layouts="uniform,amr",
+                   supported_platforms="cpu,mpi", params="cs2", options="reconstruct",
+                   exported_symbols="pops_brick_residual")
+    records, _ = _desc.parse_brick_manifest(_manifest([entry]))
+    rec = records[0]
+    assert rec["native_id"] == "ext_native"
+    assert rec["supported_layouts"] == ["uniform", "amr"]
+    assert rec["supported_platforms"] == ["cpu", "mpi"]
+    assert rec["params"] == ["cs2"]
+    assert rec["options"] == ["reconstruct"]
+    assert rec["exported_symbols"] == ["pops_brick_residual"]
+
+
+def test_v2_native_id_defaults_to_id_when_absent():
+    records, _ = _desc.parse_brick_manifest(_manifest([_entry(id="ext_default")]))
+    rec = records[0]
+    assert rec["native_id"] == "ext_default"  # native_id defaults to the selector id
+    # The CSV lists default to [] when the field is absent.
+    assert rec["supported_layouts"] == [] and rec["exported_symbols"] == []
+
+
+def test_v2_still_refuses_an_unknown_entry_field():
+    with pytest.raises(ValueError) as exc:
+        _desc.parse_brick_manifest(_manifest([_entry(surprise_v2="x")]))
+    assert "surprise_v2" in str(exc.value) and "unknown field" in str(exc.value)
+
+
+def test_v1_manifest_is_refused_after_the_bump():
+    # The ADC-544 bump makes a version-1 manifest incompatible (refuse-never-warn on the wire format).
+    doc = json.dumps({"schema_version": 1, "bricks": [_entry()]})
+    with pytest.raises(ValueError) as exc:
+        _desc.parse_brick_manifest(doc)
+    msg = str(exc.value)
+    assert "schema_version" in msg and "1" in msg and str(VERSION) in msg
+
+
 # ---- external bricks appear in the capability report (ADC-611) --------------------------------
 
 def test_registered_external_brick_appears_in_capabilities():
@@ -185,6 +240,22 @@ def test_registered_external_brick_appears_in_capabilities():
     matrix = inspect_capabilities()
     externals = [row for row in matrix.entries if row.source == "external"]
     assert any(row.name == "ext_hllc" for row in externals)
+
+
+def test_external_brick_row_carries_v2_route_fields(tmp_path):
+    # ADC-544: a resolved brick's supported layouts/platforms appear on its capability row so a reader
+    # sees the declared route surface, not just that the brick exists.
+    from pops import inspect_capabilities
+    _desc._register_manifest(_manifest([_entry(
+        id="ext_route", category="riemann", native_id="route_native",
+        supported_layouts="uniform,amr", supported_platforms="cpu,mpi")]))
+    matrix = inspect_capabilities()
+    row = next(r for r in matrix.entries if r.source == "external" and r.name == "ext_route")
+    assert row.native_id == "route_native"
+    assert row.layout == "amr|uniform"  # sorted join of the declared layouts
+    assert row.platform == "cpu|mpi"
+    assert row.mpi is True
+    assert "layouts=amr,uniform" in row.limitation and "platforms=cpu,mpi" in row.limitation
 
 
 if __name__ == "__main__":

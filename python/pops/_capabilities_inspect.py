@@ -73,11 +73,17 @@ def _walk_brick_catalog(namespace):
 
 
 def _external_brick_rows():
-    """CapabilityEntry rows for the registered EXTERNAL C++ bricks (ADC-611): one ``source="external"``
-    row per brick registered via ``pops.load_cpp_library`` / ``pops.external.register`` (the in-process
-    catalog ``pops.descriptors._EXTERNAL_BRICKS``). Empty when none are registered. This surfaces the
-    external bricks in ``inspect_capabilities()`` so a third-party brick loaded at runtime appears in the
-    capability report instead of being invisible."""
+    """CapabilityEntry rows for the registered EXTERNAL C++ bricks (ADC-611 / ADC-544): one
+    ``source="external"`` row per brick registered via ``pops.load_cpp_library`` /
+    ``pops.external.register`` (the in-process catalog ``pops.descriptors._EXTERNAL_BRICKS``). Empty
+    when none are registered. This surfaces the external bricks in ``inspect_capabilities()`` so a
+    third-party brick loaded at runtime appears in the capability report instead of being invisible.
+
+    ADC-544 enriches the row with the brick's declared route surface: ``supported_layouts`` becomes the
+    row ``layout`` (``uniform|amr`` when several, ``context`` when unconstrained), ``supported_platforms``
+    the ``platform`` (with the mpi/gpu flags derived from it), and the ``native_id`` (distinct from the
+    selector id) the row native id. The ``limitation`` names the declared layouts / platforms so a reader
+    sees WHY a brick would be unavailable under an unlisted route, not just that it exists."""
     from pops.descriptors import _EXTERNAL_BRICKS
     rows = []
     for brick_id in sorted(_EXTERNAL_BRICKS):
@@ -85,10 +91,25 @@ def _external_brick_rows():
         category = record.get("category", "brick")
         reqs = {"capabilities": list(record.get("requirements", []))} if record.get("requirements") \
             else {}
+        layouts = list(record.get("supported_layouts", []))
+        platforms = list(record.get("supported_platforms", []))
+        native_id = record.get("native_id") or brick_id
+        layout = "|".join(sorted(layouts)) if layouts else "context"
+        platform = "|".join(sorted(platforms)) if platforms else "context"
+        limitation = ""
+        if layouts or platforms:
+            parts = []
+            if layouts:
+                parts.append("layouts=%s" % ",".join(sorted(layouts)))
+            if platforms:
+                parts.append("platforms=%s" % ",".join(sorted(platforms)))
+            limitation = "declared route surface: %s" % "; ".join(parts)
         rows.append(CapabilityEntry(
-            brick_id, category, brick_id, "yes", reqs, source="external",
+            brick_id, category, native_id, "yes", reqs, source="external",
             feature="%s:%s" % (category, brick_id), backend="external_cpp",
-            status="available", limitation=""))
+            layout=layout, platform=platform,
+            mpi=("mpi" in platforms) or None, gpu=("gpu" in platforms) or None,
+            status="available", limitation=limitation))
     return rows
 
 

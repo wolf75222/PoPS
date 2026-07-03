@@ -320,10 +320,23 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
                          "(received %r)" % (target,))
 
     library_manifests = []
+    external_brick_records = []
     if libraries:
         # Lazy import to avoid a top-level library chain at import time.
         from pops.codegen.library import read_library_manifest  # type: ignore[attr-defined]
+        from pops.external.bricks import CompiledBrickRef
         for lib_obj in libraries:
+            # ADC-544: a CompiledBrickRef among libraries= is VALIDATED here (the four compile-time
+            # gates fire BEFORE any use -- ABI mismatch / missing capability / unsupported layout /
+            # missing symbol, all RAISE never warn) and its manifest record is captured so the
+            # artifact's manifest() can list its external bricks. Anything else is a brick LIBRARY
+            # manifest (LibraryManifest / dict / compiled .so path).
+            if isinstance(lib_obj, CompiledBrickRef):
+                lib_obj.validate()  # gates fire; raises on ABI / capability / layout / symbol failure
+                record = lib_obj.manifest_record()
+                if record is not None:
+                    external_brick_records.append(record)
+                continue
             library_manifests.append(read_library_manifest(lib_obj))
 
     if time is None or not hasattr(time, "emit_cpp_program"):
@@ -412,7 +425,8 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
             compiled = CompiledProblem(so_path, time, model, abi_key, cc, eff_std,
                                        libraries=library_manifests, problem_hash=program_hash,
                                        cache_key=cache_key, codegen_env=cenv,
-                                       module_manifest=module_manifest, module_hash=module_hash)
+                                       module_manifest=module_manifest, module_hash=module_hash,
+                                       external_bricks=external_brick_records)
             cenv.run_dumps(compiled)
             return compiled
 
@@ -479,6 +493,6 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
                                cache_key=cache_key, compile_command=compile_command,
                                generated_sources=[gen_src_path] if gen_src_path else [],
                                codegen_env=cenv, module_manifest=module_manifest,
-                               module_hash=module_hash)
+                               module_hash=module_hash, external_bricks=external_brick_records)
     cenv.run_dumps(compiled)
     return compiled

@@ -99,8 +99,9 @@ def test_user_riemann_is_external():
     # riemann.User(id) surface an external_cpp descriptor.
     import json
     # ADC-611 : le schema strict versionne exige schema_version + chaque champ d'entree.
+    # ADC-544 : le schema passe a la v2 (les champs v2 sont optionnels; native_id defaut = id).
     lib._register_manifest(json.dumps(
-        {"schema_version": 1,
+        {"schema_version": 2,
          "bricks": [{"id": "my_hllc_variant", "category": "riemann",
                      "requirements": "", "capabilities": ""}]}))
     try:
