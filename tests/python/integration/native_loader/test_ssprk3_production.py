@@ -37,6 +37,7 @@ from tests.python.support.requirements import (
     missing_compiler_requirement,
     skip_process_test,
 )
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
 # global 300 s process-isolation budget (ADC-627, same class as test_compile_cache_backend).
@@ -79,7 +80,7 @@ def _initial_state(n):
 
 # --- (1) GARDE-FOU amont : ssprk3 ACCEPTE par add_native_block (echec au dlopen, pas un rejet) -----
 print("== (1) add_native_block(time='ssprk3') : accepte (dlopen fail), 'rk4' rejete ==")
-ss = pops.System(n=16)._s  # facade compilee brute, pour viser add_native_block directement
+ss = System(n=16)._s  # facade compilee brute, pour viser add_native_block directement
 msg_ok = err_msg(lambda: ss.add_native_block("x", "/inexistant.so", limiter="minmod",
                                              riemann="rusanov", recon="conservative", time="ssprk3"))
 chk(msg_ok != "" and "dlopen" in msg_ok and "ssprk3' | 'imex'" not in msg_ok and "explicit' | 'imex'"
@@ -108,7 +109,7 @@ try:
     so = e.compile(os.path.join(tmp, "euler_poisson_native.so"), INCLUDE, backend="production")
 
     def build_prod(method):
-        s = pops.System(n=n, L=L, periodic=True)
+        s = System(n=n, L=L, periodic=True)
         s._s.add_native_block("gas", so, limiter="minmod", riemann="rusanov", recon="conservative",
                               time=method, gamma=GAMMA, substeps=1, evolve=True)
         s.set_poisson(rhs="charge_density", solver="geometric_mg")
@@ -116,7 +117,7 @@ try:
         return s
 
     def build_ref_ssprk3():
-        s = pops.System(n=n, L=L, periodic=True)
+        s = System(n=n, L=L, periodic=True)
         s.add_block("gas", spec, spatial=pops.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
                     time=pops.Explicit(method="ssprk3"))
         s.set_poisson(rhs="charge_density", solver="geometric_mg")

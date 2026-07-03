@@ -1,6 +1,6 @@
 """Spec 5 (sec.12.5, ADC-479 criterion 43): the AMR / MPI profiling counters are REAL.
 
-The multi-block AMR runtime (``pops.AmrRuntime``, wired into ``pops.AmrSystem`` when >= 2 blocks are
+The multi-block AMR runtime (``pops.AmrRuntime``, wired into ``AmrSystem`` when >= 2 blocks are
 added) times its non-numeric phases into the facade-owned ``pops::runtime::program::Profiler`` --
 ``regrid`` (rebuild the patch hierarchy), ``fill_boundary`` (the coarse aux / phi ghost halo
 exchange) and ``average_down`` (restrict fine onto coarse) -- plus integer counters (``regrid`` /
@@ -25,6 +25,7 @@ import sys
 
 import numpy as np
 import pytest
+from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
 
@@ -55,7 +56,7 @@ def _built_multiblock(n=64, regrid_every=1):
     Two Euler blocks on the shared hierarchy; block 0 carries an energy bump in the bottom-left
     corner and the refinement tags on energy (role) so the union regrid forms a real fine patch.
     """
-    sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every)
+    sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every)
     sim.add_block("gas0", _comp(), time=pops.Explicit())
     sim.add_block("gas1", _comp(), time=pops.Explicit())
     sim.set_poisson(bc="periodic")
@@ -67,7 +68,7 @@ def _built_multiblock(n=64, regrid_every=1):
 
 def _has_amr_profiling():
     """True iff this _pops exposes the AmrSystem profiling bindings (skip-guard, pre-rebuild)."""
-    sim = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+    sim = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
     return all(hasattr(sim, m) for m in
                ("enable_profiling", "disable_profiling", "reset_profiling", "profile_report"))
 

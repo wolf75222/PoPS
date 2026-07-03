@@ -18,6 +18,7 @@ without the install_program binding / numpy / a compiler / a visible Kokkos -- n
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):
@@ -54,7 +55,7 @@ N = 24
 
 
 def make_sim(method="euler"):
-    sim = pops.System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodic=True)
     sim.add_block("ions", transport_model(),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                   time=pops.Explicit(method=method))
@@ -118,7 +119,7 @@ def rk4_program():
     return P
 
 
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
     _skip("_pops lacks the install_program binding (rebuild _pops)")
 
 dt = 2e-3

@@ -23,6 +23,7 @@ import sys
 import numpy as np
 
 import pops
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
 
@@ -58,7 +59,7 @@ def smooth_rho(n):
 
 
 def run(n, limiter, flux, method, nsteps=10, cfl=0.2):
-    s = pops.System(n=n, L=1.0, periodic=True)
+    s = System(n=n, L=1.0, periodic=True)
     s.add_block("gas", model=gas(),
                 spatial=pops.Spatial(limiter=limiter, flux=flux),
                 time=pops.Explicit(method=method))
@@ -78,7 +79,7 @@ chk(np.isfinite(dw).all() and dw.min() > 0, "weno5+rusanov+ssprk3 : etat fini, d
 m0 = float(smooth_rho(n).sum())
 chk(abs(sw.mass("gas") - m0) < 1e-7 * abs(m0), "weno5 : masse conservee")
 # raccourci weno5=True + flux hllc
-sw2 = pops.System(n=32, L=1.0, periodic=True)
+sw2 = System(n=32, L=1.0, periodic=True)
 sw2.add_block("gas", model=gas(), spatial=pops.Spatial(weno5=True, flux=HLLC()),
               time=pops.Explicit(ssprk3=True))
 sw2.set_poisson(); sw2.set_density("gas", smooth_rho(32))
@@ -100,7 +101,7 @@ print("== no-default-change : minmod/SSPRK2 (defaut) bit-identique ==")
 s_def = run(64, Minmod(), Rusanov(), "ssprk2")  # method explicite mais == defaut
 d_def = np.array(s_def.density("gas"))
 # Reference : memes etapes, en laissant TOUS les defauts implicites (Spatial(), Explicit()).
-s_ref = pops.System(n=64, L=1.0, periodic=True)
+s_ref = System(n=64, L=1.0, periodic=True)
 s_ref.add_block("gas", model=gas())  # spatial/time None -> Spatial() (minmod) + Explicit() (ssprk2)
 s_ref.set_poisson(); s_ref.set_density("gas", smooth_rho(64))
 for _ in range(10):
@@ -115,7 +116,7 @@ chk(np.array_equal(d_def, d_ref),
 # on verifie l'end-to-end : WENO5+SSPRK3 reste fini, densite positive, masse conservee sur un Euler
 # lisse de longue duree, et un bloc weno5 et un bloc minmod (defaut) coexistent dans le meme System.
 print("== WENO5+SSPRK3 sain (long run lisse) + coexistence avec le defaut ==")
-s_w5 = pops.System(n=64, L=1.0, periodic=True)
+s_w5 = System(n=64, L=1.0, periodic=True)
 s_w5.add_block("gas", model=gas(), spatial=pops.Spatial(weno5=True), time=pops.Explicit(ssprk3=True))
 s_w5.set_poisson(); s_w5.set_density("gas", smooth_rho(64))
 m_w5_0 = s_w5.mass("gas")
@@ -125,7 +126,7 @@ d_w5 = np.array(s_w5.density("gas"))
 chk(np.isfinite(d_w5).all() and d_w5.min() > 0, "WENO5+SSPRK3 long run : fini, densite positive")
 chk(abs(s_w5.mass("gas") - m_w5_0) < 1e-9 * abs(m_w5_0),
     "WENO5+SSPRK3 long run : masse conservee (flux conservatif)")
-mix = pops.System(n=32, L=1.0, periodic=True)
+mix = System(n=32, L=1.0, periodic=True)
 mix.add_block("hi", model=gas(), spatial=pops.Spatial(weno5=True), time=pops.Explicit(ssprk3=True))
 mix.add_block("lo", model=gas(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
 mix.set_poisson(); mix.set_density("hi", smooth_rho(32)); mix.set_density("lo", smooth_rho(32))
@@ -140,7 +141,7 @@ chk(np.isfinite(np.array(mix.density("hi"))).all() and np.isfinite(np.array(mix.
 # expose / 2 ghosts" a ete supprime. On le PROUVE en visant un .so INEXISTANT : l'erreur doit etre
 # un echec de dlopen (chemin introuvable), PAS un rejet du limiteur -> weno5 a passe la garde schema.
 print("== weno5 accepte par les chemins compiles (rejet limiteur supprime) ==")
-ss = pops.System(n=16)._s  # facade compilee brute (pour viser les methodes .so directement)
+ss = System(n=16)._s  # facade compilee brute (pour viser les methodes .so directement)
 
 
 def err_msg(fn):

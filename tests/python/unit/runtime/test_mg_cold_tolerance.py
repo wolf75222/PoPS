@@ -16,12 +16,13 @@ Couvre :
 import numpy as np
 
 import pops
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def build(n=64, abs_tol=None):
     """System cartesien Dirichlet, un bloc de charge (ExB + fond), densite gaussienne -> phi non trivial.
     abs_tol=None : set_poisson par defaut (parametre omis) ; sinon passe abs_tol explicitement."""
-    sim = pops.System(n=n, periodic=False)
+    sim = System(n=n, periodic=False)
     sim.add_block(
         "ne",
         model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),

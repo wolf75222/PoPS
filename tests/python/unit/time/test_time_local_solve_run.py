@@ -23,6 +23,7 @@ cell by cell via a dense per-cell inverse) -- reusing ProgramContext + for_each_
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):
@@ -131,7 +132,7 @@ chk(raises(ValueError, lambda: Pbig.emit_cpp_program(model=big)),
     "n_cons > 8 dense-fallback guard fires")
 
 # ---- (B) end-to-end Lorentz parity: skips unless the full toolchain is present ----
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
     print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
     print("%s test_time_local_solve_run (A only)" % ("FAIL" if fails else "PASS"))
     sys.exit(1 if fails else 0)
@@ -141,7 +142,7 @@ print("== (B) end-to-end: implicit Lorentz solve vs analytic rotation ==")
 
 def make_sim():
     n = 16
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     # Production-backend DSL model added as a native block; the Program drives the step.
     try:
         compiled_model = lorentz_model("lorentz_block").compile(backend="production")

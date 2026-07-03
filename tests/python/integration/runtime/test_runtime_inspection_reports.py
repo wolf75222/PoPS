@@ -3,6 +3,7 @@
 import json
 
 import pytest
+from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
 from pops.mesh import CartesianMesh  # noqa: E402
@@ -10,7 +11,7 @@ from pops.mesh.layouts import AMR, Uniform  # noqa: E402
 
 
 def test_system_inspect_is_structured_and_array_free():
-    sim = pops.System(n=8, L=1.0, periodic=True)
+    sim = System(n=8, L=1.0, periodic=True)
     rep = sim.inspect()
     d = rep.to_dict()
     assert d["schema_version"] == 1
@@ -34,7 +35,7 @@ def test_system_inspect_is_structured_and_array_free():
 
 
 def test_amr_system_inspect_composes_amr_snapshot():
-    sim = pops.AmrSystem(n=8, L=1.0, periodic=True)
+    sim = AmrSystem(n=8, L=1.0, periodic=True)
     rep = sim.inspect()
     d = rep.to_dict()
     assert d["runtime"] == "amr_system"

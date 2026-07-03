@@ -28,10 +28,11 @@ import tempfile
 import numpy as np
 
 import pops
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _build(n=16):
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     sim.add_block("ions",
                   pops.Model(state=pops.FluidState("isothermal", cs2=0.5),

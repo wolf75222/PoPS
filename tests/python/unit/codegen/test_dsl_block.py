@@ -15,6 +15,7 @@ import pops.experimental  # noqa: F401  (ADC-600: no longer eagerly bound on the
 from test_dsl_brick import build_euler_brick, GAMMA
 
 from tests.python.support.requirements import repo_include
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 INCLUDE = repo_include()
 
 
@@ -32,7 +33,7 @@ def main():
     try:
         so = e.compile_so(os.path.join(tmp, "euler_model.so"), INCLUDE)   # JIT -> .so chargeable
 
-        sim = pops.System(n=n, L=L, periodic=True)
+        sim = System(n=n, L=L, periodic=True)
         sim.add_dynamic_block("euler", so, names=["rho", "rho_u", "rho_v", "E"])
         print("OK  add_dynamic_block : modele charge a l'execution (vars=%s)"
               % sim.variable_names("euler"))

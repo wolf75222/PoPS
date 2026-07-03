@@ -13,6 +13,7 @@ import sys
 import numpy as np
 
 import pops
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 n = 32
 
@@ -25,7 +26,7 @@ def diocotron():
 
 
 def make():
-    s = pops.System(n=n, L=1.0, periodic=True)
+    s = System(n=n, L=1.0, periodic=True)
     s.add_block("ne", model=diocotron(), spatial=pops.Spatial(minmod=True))
     s.set_poisson()
     rho = 1.0 + 0.05 * np.cos(2 * np.pi * np.arange(n) / n)[None, :] * np.ones((n, 1))

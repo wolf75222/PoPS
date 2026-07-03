@@ -8,6 +8,7 @@ non-regression (kappa=0 == Poisson), le refus de kappa < 0 et le refus avec le s
 import numpy as np
 
 import pops
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 PI = np.pi
 KAPPA = 50.0  # 1/lambda_D^2 (ecrantage modere)
@@ -30,7 +31,7 @@ def main():
     f = -(2.0 * PI ** 2 + KAPPA) * s_xy
 
     def solve(kappa_field, solver="geometric_mg"):
-        s = pops.System(n=n, L=1.0, periodic=False)
+        s = System(n=n, L=1.0, periodic=False)
         s.add_block("q", model=_charge_scalar(), spatial=pops.Spatial(none=True))
         s.set_poisson(rhs="charge_density", solver=solver, bc="dirichlet")
         s.set_density("q", f)
@@ -67,7 +68,7 @@ def main():
         print("OK  kappa < 0 refuse")
 
     # (E) kappa + solveur 'fft' (Poisson pur) : refus explicite.
-    sp = pops.System(n=n, L=1.0, periodic=True)
+    sp = System(n=n, L=1.0, periodic=True)
     sp.add_block("q", model=_charge_scalar(), spatial=pops.Spatial(none=True))
     sp.set_poisson(rhs="charge_density", solver="fft")
     sp.set_density("q", f)

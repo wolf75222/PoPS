@@ -31,6 +31,7 @@ import numpy as np
 import pops
 from pops.ir.ops import sqrt
 from pops.physics.facade import Model
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
 from tests.python.support.requirements import (
@@ -67,7 +68,7 @@ def smooth_rho(n):
 
 
 def run_gas(riemann, n=48, nsteps=10, cfl=0.2):
-    s = pops.System(n=n, L=1.0, periodic=True)
+    s = System(n=n, L=1.0, periodic=True)
     s.add_block("gas", model=gas(), spatial=pops.Spatial(weno5=True, flux=riemann),
                 time=pops.Explicit())
     s.set_poisson()
@@ -122,7 +123,7 @@ try:
     chk("p" not in cm_p.prim_names, "(3) 'p' hors primitive_vars (hllc/roe le rejetteraient)")
 
     def build(cm, riem):
-        s = pops.System(n=40, L=1.0, periodic=True)
+        s = System(n=40, L=1.0, periodic=True)
         s.add_equation("f", model=cm, spatial=pops.FiniteVolume(limiter=WENO5(), riemann=riem,
                                                               variables=Conservative()),
                        time=pops.Explicit(method="ssprk2"))

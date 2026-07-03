@@ -28,6 +28,7 @@ Run with python3 (PYTHONPATH = built pops package).
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):
@@ -136,7 +137,7 @@ chk("ctx.neg_div_flux_default_into(0," in src_named_only,
 
 
 # ---- (B) end-to-end probe: skips unless the full toolchain is present ----
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
     print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
     print("%s test_time_rhs_sources (A only)" % ("FAIL" if fails else "PASS"))
     sys.exit(1 if fails else 0)
@@ -149,7 +150,7 @@ N = 16
 
 
 def make_sim(prog_model_name):
-    sim = pops.System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodic=True)
     try:
         compiled_model = decay_model("decay_block", C).compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible

@@ -20,6 +20,7 @@ import numpy as np
 
 import pops
 from pops.physics.bricks import SourceBrick
+from pops.runtime.system import AmrSystem, AmrSystemConfig  # ADC-545 advanced runtime seam
 
 GAMMA = 1.4
 from tests.python.support.requirements import repo_include
@@ -40,12 +41,12 @@ from tests.python.support.initial_states import bubble_amr as _bubble
 
 
 def _amr(n, L, branch):
-    cfg = pops.AmrSystemConfig()
+    cfg = AmrSystemConfig()
     cfg.n = n
     cfg.L = L
     cfg.periodic = True
     cfg.regrid_every = 4
-    s = pops.AmrSystem(cfg)
+    s = AmrSystem(cfg)
     branch(s)
     s.set_refinement(1.2)
     s.set_density("gas", _bubble(n))
@@ -110,7 +111,7 @@ def main():
         co_sys = m.compile(backend="production", target="system",
                            so_path=os.path.join(tmp, "hybrid_sys.so"), include=INCLUDE)
         try:
-            pops.AmrSystem(n=n, L=L, periodic=True).add_equation("gas", co_sys, spatial=spatial)
+            AmrSystem(n=n, L=L, periodic=True).add_equation("gas", co_sys, spatial=spatial)
             raise AssertionError("AmrSystem.add_equation a accepte un CompiledModel target='system'")
         except ValueError as ex:
             assert "target='system'" in str(ex) or "amr_system" in str(ex)

@@ -18,6 +18,7 @@ import pops
 from pops.physics.model import HyperbolicModel
 
 from tests.python.support.requirements import repo_include
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 INCLUDE = repo_include()
 
 
@@ -55,7 +56,7 @@ def main():
     try:
         so = m.compile_so(os.path.join(tmp, "tescalar.so"), INCLUDE)
 
-        sim = pops.System(n=n, L=L, periodic=True)
+        sim = System(n=n, L=L, periodic=True)
         sim.add_dynamic_block("te", so, names=["n"])  # IModel.n_aux()=5 -> ensure_aux_width(5)
         sim.add_block("gas", model=euler_gas(gamma))  # bloc fluide source de T_e
         sim.set_poisson(rhs="charge_density", solver="geometric_mg")

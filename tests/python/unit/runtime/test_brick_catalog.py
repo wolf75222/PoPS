@@ -17,6 +17,7 @@ guarded with pytest.importorskip("pops"), like the sibling test_route_ids.py.
 
 import numpy as np
 import pytest
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
 import importlib  # noqa: E402
@@ -64,7 +65,7 @@ def test_resolve_refusal_lists_catalog_entries():
 
 
 def _system(n=16):
-    return pops.System(n=n, L=1.0, periodic=True)
+    return System(n=n, L=1.0, periodic=True)
 
 
 def test_every_canonical_brick_still_builds():

@@ -18,6 +18,7 @@ import pops
 from pops.physics.model import HyperbolicModel
 
 from tests.python.support.requirements import repo_include
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 INCLUDE = repo_include()
 
 
@@ -48,7 +49,7 @@ def main():
     try:
         so = m.compile_or_jit(os.path.join(tmp, "bzscalar_aot.so"), INCLUDE, mode="compile")
 
-        sim = pops.System(n=n, L=L, periodic=True)
+        sim = System(n=n, L=L, periodic=True)
         # add_compiled_block : pops_compiled_naux()=4 -> ensure_aux_width(4)
         sim.add_compiled_block("bz", so, limiter="none", riemann="rusanov",
                                recon="conservative", time="explicit", names=["n"])

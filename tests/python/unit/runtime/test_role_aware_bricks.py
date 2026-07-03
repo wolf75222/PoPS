@@ -32,6 +32,7 @@ import sys
 import numpy as np
 
 import pops
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
 
@@ -49,7 +50,7 @@ ones = np.ones((n, n))
 
 # --- 1. NO-DEFAULT-CHANGE quantitatif : magnetique sur ISOTHERME 3-var (rho=0, m_x=1, m_y=2) --------
 print("== 1. isotherme 3-var : residu magnetique == force exacte (roles canoniques resolus) ==")
-sim = pops.System(n=n, L=1.0, periodic=True)
+sim = System(n=n, L=1.0, periodic=True)
 sim.add_block("e",
               pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                         transport=pops.IsothermalFlux(),
@@ -69,7 +70,7 @@ chk(np.allclose(R[2], 0.0, atol=1e-12), "R[m_y] = -q*B*m_x = 0 (c_my resolu a la
 
 # --- 2. NO-DEFAULT-CHANGE quantitatif : magnetique sur EULER 4-var (energie c_E=3 intouchee) --------
 print("== 2. compressible 4-var : energie (composante 3) intouchee par la force magnetique ==")
-sE = pops.System(n=n, L=1.0, periodic=True)
+sE = System(n=n, L=1.0, periodic=True)
 sE.add_block("g",
              pops.Model(state=pops.FluidState("compressible", gamma=1.4),
                        transport=pops.CompressibleFlux(),
@@ -95,7 +96,7 @@ rho_bump = (1.0 + 0.3 * np.exp(-60.0 * ((X - 0.5) ** 2 + (Y - 0.5) ** 2))).ravel
 
 
 def run_potential():
-    s = pops.System(n=n, L=1.0, periodic=True)
+    s = System(n=n, L=1.0, periodic=True)
     s.add_block("e",
                 pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                           transport=pops.IsothermalFlux(),

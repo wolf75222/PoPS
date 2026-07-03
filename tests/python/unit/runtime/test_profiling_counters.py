@@ -10,11 +10,12 @@ the host path. The cache hit/skip + nodes due/skipped counters only move under a
 that emits a held schedule (ProgramContext::cache_should_update); that runtime is exercised on
 Kokkos/ROMEO, so here we assert those lines simply EXIST and read 0 on the native path -- never faked.
 
-Real engine only: it builds a real pops.System and self-skips only if _pops/numpy is unavailable.
+Real engine only: it builds a real System and self-skips only if _pops/numpy is unavailable.
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):
@@ -42,7 +43,7 @@ def chk(cond, label):
 # ---- build a real native block and step it under profiling ----
 print("== §29 counters on a stepped native block ==")
 N = 16
-sim = pops.System(n=N, L=1.0, periodic=True)
+sim = System(n=N, L=1.0, periodic=True)
 sim.add_block("gas",
               pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                         transport=pops.IsothermalFlux(),
@@ -85,7 +86,7 @@ chk("kernels=" not in sim.profile_report(), "reset clears the counters")
 
 # profiling OFF stays zero-overhead: a stepped, never-enabled System records nothing.
 print("== profiling off records no counters ==")
-sim_off = pops.System(n=N, L=1.0, periodic=True)
+sim_off = System(n=N, L=1.0, periodic=True)
 sim_off.add_block("gas",
                   pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                             transport=pops.IsothermalFlux(),

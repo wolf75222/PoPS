@@ -12,7 +12,7 @@ Two kinds of check:
   typed objects + the report parser against the EXACT native report format
   (profiler.hpp report()). They do NOT fake the engine: they parse a literal sample of what the C++
   Profiler emits, which is the contract this wrapper is built to read.
-* ENGINE -- a real native pops.System under the context manager: asserts enable/disable, the
+* ENGINE -- a real native System under the context manager: asserts enable/disable, the
   off-by-default contract, and that a stepped block's report flows into a PerformanceSummary. Skipped
   (not failed) if _pops / numpy is unavailable; never faked.
 
@@ -26,6 +26,7 @@ import pytest
 
 from pops.runtime.profile import (PerformanceSummary, Profile, _parse_report,
                                    _Unavailable)
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 # A literal sample of the native report (profiler.hpp report()): two coarse phases, a per-node scope,
@@ -211,7 +212,7 @@ def test_empty_summary_has_no_data_message():
 
 # ---- (D) ENGINE: the context manager over a real native System ------------------------------
 def _make_stepped_system():
-    """A real native pops.System with one isothermal block, ready to step. Returns (pops, sim, np)."""
+    """A real native System with one isothermal block, ready to step. Returns (pops, sim, np)."""
     import numpy as np
 
     import pops
@@ -219,7 +220,7 @@ def _make_stepped_system():
     from pops.numerics.riemann import Rusanov
 
     n = 16
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     sim.add_block(
         "gas",
         pops.Model(state=pops.FluidState("isothermal", cs2=0.5),

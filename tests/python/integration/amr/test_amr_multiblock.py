@@ -17,6 +17,7 @@ from pops.numerics.riemann import Rusanov
 import numpy as np
 
 import pops
+from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 
 
 def _bump(n, amp):
@@ -31,7 +32,7 @@ def _scalar_charge(q, B0=1.0):
 
 
 def _build(n=32, regrid_every=0):
-    sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every)
+    sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every)
     sim.add_block("ions", _scalar_charge(+1.0),
                   spatial=pops.Spatial(limiter=FirstOrder(), flux=Rusanov()))
     sim.add_block("electrons", _scalar_charge(-1.0),
@@ -73,7 +74,7 @@ def main():
 
     # (d) MONO-BLOC deterministe (chemin AmrCouplerMP intouche) : run x2 -> dmax == 0.
     def run_mono():
-        s = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
+        s = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
         s.add_block("ne", _scalar_charge(+1.0), spatial=pops.Spatial(limiter=FirstOrder(), flux=Rusanov()))
         s.set_poisson(bc="periodic")
         s.set_density("ne", _bump(n, 0.40))

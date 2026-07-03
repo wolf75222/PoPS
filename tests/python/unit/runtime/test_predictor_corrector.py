@@ -37,6 +37,7 @@ never fakes the engine.
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):
@@ -228,7 +229,7 @@ chk(bool(predictor_corrector_program().emit_cpp_program(model=named_source_model
     "the full predictor-corrector Program emits C++ (named sources + Lorentz local solves)")
 
 # ---- (B)/(C) end-to-end: skip unless the install_program binding is present ----
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
     print("-- (B)/(C) skipped: _pops lacks the install_program binding (rebuild _pops) --")
     print("%s test_predictor_corrector (A only)" % ("FAIL" if fails else "PASS"))
     sys.exit(1 if fails else 0)
@@ -242,7 +243,7 @@ def make_sim(model):
     """A System carrying ONE block (the given DSL model, production backend) + shared Poisson + B_z.
     The block is added as a normal equation; a compiled Program (or the offline primitives) drives the
     step. Returns (sim, U0) with U0 the initial conservative state (n_vars, N, N)."""
-    sim = pops.System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodic=True)
     try:
         compiled = model.compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible

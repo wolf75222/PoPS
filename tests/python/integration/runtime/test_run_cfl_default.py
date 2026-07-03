@@ -17,6 +17,7 @@ import sys
 try:
     import pops
     from pops import time as adctime
+    from pops.runtime.system import System  # ADC-545 advanced runtime seam
 except Exception as exc:  # noqa: BLE001
     print("skip test_run_cfl_default (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -61,7 +62,7 @@ def _pin_cadence_cfl(sim, value):
 
 def test_run_cfl_none_uses_pinned_cadence():
     """run(cfl=None) forwards the pinned program-cadence CFL to step_cfl (not the 0.4 fallback)."""
-    sim = pops.System(n=8, L=1.0, periodic=True)
+    sim = System(n=8, L=1.0, periodic=True)
     _pin_cadence_cfl(sim, 0.5)
     captured = _instrument(sim)
     steps = sim.run(t_end=0.01, cfl=None)
@@ -72,7 +73,7 @@ def test_run_cfl_none_uses_pinned_cadence():
 
 def test_run_explicit_cfl_overrides_pinned_cadence():
     """An explicit run(cfl=0.9) overrides the pinned cadence CFL."""
-    sim = pops.System(n=8, L=1.0, periodic=True)
+    sim = System(n=8, L=1.0, periodic=True)
     _pin_cadence_cfl(sim, 0.5)
     captured = _instrument(sim)
     steps = sim.run(t_end=0.01, cfl=0.9)
@@ -83,7 +84,7 @@ def test_run_explicit_cfl_overrides_pinned_cadence():
 
 def test_run_cfl_none_without_cadence_uses_default():
     """With no cadence pinned, run(cfl=None) falls back to the historical 0.4 default."""
-    sim = pops.System(n=8, L=1.0, periodic=True)
+    sim = System(n=8, L=1.0, periodic=True)
     assert sim._program_cadence_cfl is None, "no cadence cfl should be pinned on a fresh System"
     captured = _instrument(sim)
     sim.run(t_end=0.01, cfl=None)

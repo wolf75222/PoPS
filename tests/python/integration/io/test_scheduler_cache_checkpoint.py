@@ -23,6 +23,7 @@ CacheManager serialize/restore round-trip + both verbatim messages are unit-test
 import os
 import sys
 import tempfile
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 # ---- (A) NPZ facade keys + the missing-cache guard: pure numpy, always runs when numpy is present ----
@@ -33,7 +34,7 @@ def test_cache_npz_key_scheme_roundtrips():
         print("-- (A) skipped: numpy unavailable: %s --" % exc)
         return
 
-    # Mirror EXACTLY the keys + dtypes pops.System.checkpoint writes for one held node.
+    # Mirror EXACTLY the keys + dtypes System.checkpoint writes for one held node.
     nid = 5
     name = "fields_from_state"
     ncomp, ny, nx = 1, 4, 4

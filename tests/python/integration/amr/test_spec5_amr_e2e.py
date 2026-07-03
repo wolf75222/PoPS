@@ -49,6 +49,7 @@ except Exception as exc:  # noqa: BLE001
 
 
 from tests.python.support.assertions import _check
+from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 
 
 class _StubCompiledModel:
@@ -225,7 +226,7 @@ def test_native_amr_from_layout_runs():
     cfg = _bind_adapters._amr_config_from_layout(layout)
     _check(cfg.n == n and cfg.regrid_every == 4, "config derived from the layout")
 
-    sim = pops.AmrSystem(cfg)
+    sim = AmrSystem(cfg)
     # Flow the typed refinement exactly as pops.bind does (set_refinement / set_phi_refinement).
     _bind_adapters._flow_amr_layout(sim, layout)
     # The Poisson field (set via the install solvers seam in bind) -- exercise it directly here.

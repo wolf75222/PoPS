@@ -26,6 +26,7 @@ import numpy as np
 import pops
 from pops.ir.ops import sqrt
 from pops.physics.facade import Model
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
 from tests.python.support.requirements import (
@@ -108,13 +109,13 @@ try:
     z = np.zeros((n, n))
     p0 = 1.0 + 0.0 * rho0
 
-    sd = pops.System(n=n, L=1.0, periodic=True)
+    sd = System(n=n, L=1.0, periodic=True)
     sd.set_poisson()
     sd.add_equation("gas", model=cm, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Roe()),
                     time=pops.Explicit())
     sd.set_primitive_state("gas", rho=rho0, u=z + 0.1, v=z, p=p0)
 
-    sn = pops.System(n=n, L=1.0, periodic=True)
+    sn = System(n=n, L=1.0, periodic=True)
     sn.set_poisson()
     sn.add_block("gas",
                  pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
@@ -134,7 +135,7 @@ try:
     print("== (2) 3-var isotherme + enable_roe : accepte, fini, cisaillement EXACT ==")
     cm3 = iso3_dsl("iso3_roe", roe=True).compile(os.path.join(tmp, "iso3_roe.so"), INCLUDE,
                                                  backend="production")
-    s3 = pops.System(n=n, L=1.0, periodic=True)
+    s3 = System(n=n, L=1.0, periodic=True)
     s3.set_poisson()
     s3.add_equation("f", model=cm3, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Roe()),
                     time=pops.Explicit())
@@ -152,7 +153,7 @@ try:
     cm_no = iso3_dsl("iso3_noroe").compile(os.path.join(tmp, "iso3_noroe.so"), INCLUDE,
                                            backend="production")
     try:
-        s = pops.System(n=16, L=1.0, periodic=True)
+        s = System(n=16, L=1.0, periodic=True)
         s.add_equation("f", model=cm_no, spatial=pops.FiniteVolume(limiter=Minmod(),
                                                                   riemann=Roe()))
         chk(False, "roe sans capability sur 3-var aurait du lever")

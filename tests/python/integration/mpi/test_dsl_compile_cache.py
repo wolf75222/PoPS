@@ -36,6 +36,7 @@ from pops.ir.ops import sqrt
 from pops.physics.facade import Model
 
 from tests.python.support.requirements import repo_include
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
 # global 300 s process-isolation budget (ADC-627, same class as test_compile_cache_backend).
 POPS_PROCESS_TIMEOUT = 900
@@ -164,7 +165,7 @@ def end_to_end_checks():
                   % (backend, cm.adder, os.path.basename(cm.so_path)))
 
             # (b) branchable via add_equation et tourne
-            s = pops.System(n=n, periodic=True)
+            s = System(n=n, periodic=True)
             s.add_equation("gas", cm, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
                                                                variables=Primitive()))
             s.set_poisson(rhs="charge_density", solver="geometric_mg")
@@ -196,7 +197,7 @@ def end_to_end_checks():
         ex_path = os.path.join(explicit, "explicit.so")
         cm_ex = m.compile(ex_path, INCLUDE, backend="aot")
         assert cm_ex.so_path == ex_path and os.path.exists(ex_path), "so_path explicite casse"
-        s = pops.System(n=n, periodic=True)
+        s = System(n=n, periodic=True)
         s.add_equation("gas", cm_ex, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
                                                               variables=Primitive()))
         s.set_poisson(rhs="charge_density", solver="geometric_mg")

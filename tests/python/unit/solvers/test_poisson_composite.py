@@ -18,6 +18,7 @@ Tests :
 import numpy as np
 
 import pops
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 PI = np.pi
 
@@ -36,7 +37,7 @@ def _density(n):
 
 
 def _solve_single(elliptic, dens, n, rhs="composite"):
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     sim.add_block("blk", model=_scalar(elliptic), spatial=pops.Spatial(none=True))
     sim.set_poisson(rhs=rhs, solver="fft")
     sim.set_density("blk", dens.reshape(-1).tolist())
@@ -76,7 +77,7 @@ def mixed_bricks_sum():
     q0, alpha, n0bg = -0.8, 1.3, 0.5
     d0, d1 = _density(n), 1.0 + 0.2 * np.cos(2 * PI * (np.arange(n) + 0.5) / n)[None, :] * np.ones((n, n))
 
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     sim.add_block("a", model=_scalar(pops.ChargeDensity(charge=q0)), spatial=pops.Spatial(none=True))
     sim.add_block("b", model=_scalar(pops.BackgroundDensity(alpha=alpha, n0=n0bg)),
                   spatial=pops.Spatial(none=True))
@@ -103,7 +104,7 @@ def epm_facade_roundtrip():
     dens = _density(n)
     phi_setpoisson = _solve_single(pops.BackgroundDensity(alpha=alpha, n0=n0), dens, n)
 
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     sim.add_block("blk", model=_scalar(pops.BackgroundDensity(alpha=alpha, n0=n0)),
                   spatial=pops.Spatial(none=True))
     sim.add_elliptic_model("poisson",
@@ -132,7 +133,7 @@ def token_alias():
 
     # Un token inconnu est refuse explicitement -- desormais PRE-BIND par set_poisson lui-meme
     # (validation de route typee, ADC-599/584), avant tout solve.
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     sim.add_block("blk", model=_scalar(pops.ChargeDensity(charge=1.0)), spatial=pops.Spatial(none=True))
     try:
         sim.set_poisson(rhs="bogus", solver="fft")

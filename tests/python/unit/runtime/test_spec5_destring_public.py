@@ -9,7 +9,7 @@ Surfaces covered:
 
   1. ``P.solve_linear(method=, preconditioner=)`` -- typed pops.solvers.krylov / preconditioners
      descriptors (CG / GMRES / BiCGStab / Richardson, Identity); a bare string is rejected.
-  2. ``pops.compile_library(backend=)`` -- a typed pops.codegen backend (Production / AOT / JIT);
+  2. ``pops.codegen.compile_library(backend=)`` -- a typed pops.codegen backend (Production / AOT / JIT);
      a bare string is rejected (mirrors pops.compile).
   3. ``Model.param`` / board ``param`` / ``Problem.param`` -- a typed pops.physics param object
      (ConstParam / RuntimeParam); a bare ``kind=`` string is rejected.
@@ -106,8 +106,8 @@ def _lib_objects():
 def test_compile_library_typed_backend_byte_identical():
     import pops
     from pops.codegen import Production
-    default = pops.compile_library("lib.so", objects=_lib_objects())            # None -> Production()
-    typed = pops.compile_library("lib.so", objects=_lib_objects(), backend=Production())
+    default = pops.codegen.compile_library("lib.so", objects=_lib_objects())            # None -> Production()
+    typed = pops.codegen.compile_library("lib.so", objects=_lib_objects(), backend=Production())
     assert default.backend == "production" == typed.backend
     assert default.content_hash == typed.content_hash
     assert default == typed
@@ -116,7 +116,7 @@ def test_compile_library_typed_backend_byte_identical():
 def test_compile_library_string_backend_rejected():
     import pops
     with pytest.raises(TypeError) as exc:
-        pops.compile_library("lib.so", objects=_lib_objects(), backend="production")
+        pops.codegen.compile_library("lib.so", objects=_lib_objects(), backend="production")
     assert "Production" in str(exc.value), str(exc.value)
 
 
@@ -125,7 +125,7 @@ def test_compile_library_non_production_typed_backend_rejected():
     from pops.codegen import AOT, JIT
     for backend in (AOT(), JIT()):
         with pytest.raises(ValueError):
-            pops.compile_library("lib.so", objects=_lib_objects(), backend=backend)
+            pops.codegen.compile_library("lib.so", objects=_lib_objects(), backend=backend)
 
 
 # --- 3. param(kind=) on the public surfaces --------------------------------------------------

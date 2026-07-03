@@ -33,6 +33,7 @@ visible Kokkos can build the .so -- never asserting a fake pass.
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):
@@ -73,7 +74,7 @@ EVERY = 2  # the field solve recomputes every 2 macro-steps and holds the cached
 
 
 def make_sim():
-    sim = pops.System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodic=True)
     sim.add_block("ions", plasma_model(),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                   time=pops.Explicit(method="euler"))
@@ -105,7 +106,7 @@ def held_program(name="spec3_runtime_held"):
 
 
 # --- toolchain probe: skip cleanly if the runtime chain is not buildable here ---------------------
-probe = pops.System(n=8, L=1.0, periodic=True)
+probe = System(n=8, L=1.0, periodic=True)
 if not hasattr(probe, "install_program") or not hasattr(probe, "step_cfl"):
     _skip("_pops lacks install_program / step_cfl (rebuild _pops)")
 
@@ -178,7 +179,7 @@ chk(len(py_calls) == 0,
 # Python `compiled` handle and the Python model objects can be DROPPED entirely and the step still
 # runs -- if the step needed any Python object, it would fault after these are gc'd. We dlopen the .so
 # afresh into a sim built from a model whose Python object is then deleted + gc-collected.
-orphan = pops.System(n=N, L=1.0, periodic=True)
+orphan = System(n=N, L=1.0, periodic=True)
 _m = plasma_model()
 orphan.add_block("ions", _m,
                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),

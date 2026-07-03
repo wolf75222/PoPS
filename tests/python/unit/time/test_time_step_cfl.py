@@ -18,6 +18,7 @@ otherwise. It never fakes the engine.
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):
@@ -45,7 +46,7 @@ def chk(cond, label):
 
 # ---- (A) sanity: the System API exposes step_cfl (always runs) ----
 print("== (A) step_cfl API present ==")
-probe = pops.System(n=8, L=1.0, periodic=True)
+probe = System(n=8, L=1.0, periodic=True)
 chk(hasattr(probe, "step_cfl"), "System exposes step_cfl")
 
 
@@ -67,7 +68,7 @@ N = 24
 
 
 def make_sim(time):
-    sim = pops.System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodic=True)
     sim.add_block("ions", transport_model(),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()), time=time)
     sim.set_poisson("charge_density", "geometric_mg")
@@ -139,17 +140,17 @@ print("-- (c) substeps / stride honored under step_cfl --")
 # substeps=2: step_cfl computes the SAME dt (CFL is on the state, cadence-independent at step 1),
 # then runs the cadence -> 2x program_step_(dt/2). Must match step(dt) with substeps=2 set, and DIFFER
 # from substeps=1.
-sim_c1 = make_compiled(pops.CompiledTime(substeps=1))
+sim_c1 = make_compiled(pops.time.CompiledTime(substeps=1))
 dt_c1 = sim_c1.step_cfl(CFL)
 u_c1 = np.array(sim_c1.get_state("ions"))
 
-sim_c2 = make_compiled(pops.CompiledTime(substeps=2))
+sim_c2 = make_compiled(pops.time.CompiledTime(substeps=2))
 dt_c2 = sim_c2.step_cfl(CFL)
 u_c2 = np.array(sim_c2.get_state("ions"))
 chk(abs(dt_c2 - dt_c1) < 1e-14, "step_cfl dt is cadence-independent at step 1 (%.10g vs %.10g)"
     % (dt_c2, dt_c1))
 
-sim_c2_ref = make_compiled(pops.CompiledTime(substeps=2))
+sim_c2_ref = make_compiled(pops.time.CompiledTime(substeps=2))
 sim_c2_ref.step(dt_c2)
 u_c2_ref = np.array(sim_c2_ref.get_state("ions"))
 e_c2 = float(np.abs(u_c2 - u_c2_ref).max())
@@ -164,14 +165,14 @@ chk(d_c > 1e-9, "substeps=2 differs from substeps=1 under step_cfl (non-degenera
 # capture the first step_cfl dt, then drive the reference with step(that_dt).
 print("-- (c') stride honored under step_cfl --")
 K = 4
-sim_s = make_compiled(pops.CompiledTime(stride=2))
+sim_s = make_compiled(pops.time.CompiledTime(stride=2))
 dts = []
 for _ in range(K):
     dts.append(sim_s.step_cfl(CFL))
 u_s = np.array(sim_s.get_state("ions"))
 t_s = float(sim_s.time())
 
-sim_s_ref = make_compiled(pops.CompiledTime(stride=2))
+sim_s_ref = make_compiled(pops.time.CompiledTime(stride=2))
 for dt_k in dts:
     sim_s_ref.step(dt_k)
 u_s_ref = np.array(sim_s_ref.get_state("ions"))
@@ -179,7 +180,7 @@ e_s = float(np.abs(u_s - u_s_ref).max())
 chk(e_s == 0.0, "step_cfl stride=2 == step(dt_k) stride=2 over %d steps bit-exact (max|d|=%.2e)"
     % (K, e_s))
 
-sim_s1 = make_compiled(pops.CompiledTime(stride=1))
+sim_s1 = make_compiled(pops.time.CompiledTime(stride=1))
 for dt_k in dts:
     sim_s1.step(dt_k)
 u_s1 = np.array(sim_s1.get_state("ions"))

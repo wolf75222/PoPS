@@ -26,6 +26,7 @@ from tests.python.support.requirements import (
     missing_compiler_requirement,
     skip_process_test,
 )
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
 
@@ -47,7 +48,7 @@ def raises(fn):
 
 # --- (a) API (sans compilateur) --------------------------------------------------------------------
 print("== (a) set_gauss_policy : restart/evolve acceptes, inconnu rejete ==")
-s = pops.System(n=16)
+s = System(n=16)
 s.set_gauss_policy("restart")
 s.set_gauss_policy("evolve")
 chk(True, "(a) set_gauss_policy('restart'/'evolve') acceptes")

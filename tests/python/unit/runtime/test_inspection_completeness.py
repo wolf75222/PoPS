@@ -34,6 +34,7 @@ try:
     from pops.codegen.loader import CompiledModel, CompiledProblem
     from pops.physics.model import Param
     from pops import time as adctime
+    from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 except Exception as exc:  # noqa: BLE001 -- pops unavailable in this interpreter
     print("skip test_inspection_completeness (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -299,7 +300,7 @@ def test_explain_bind_on_real_system():
     print("== System.explain_bind (real System, no fake engine) ==")
     params = {"cs2": Param("cs2", 1.0, kind="runtime")}
     cp = _compiled(n_vars=4, n_aux=1, aux_names=("B_z",), params=params)
-    sim = pops.System(n=16, L=1.0, periodic=True)  # a REAL engine (no fake adc)
+    sim = System(n=16, L=1.0, periodic=True)  # a REAL engine (no fake adc)
     rep = sim.explain_bind(cp)
     chk(isinstance(rep, BindReport), "explain_bind returns a BindReport")
     chk(rep.required["instances"] == ["plasma"], "the committed block is a required instance")
@@ -319,7 +320,7 @@ def test_explain_bind_amr_parity():
     """AmrSystem.explain_bind has signature parity with System.explain_bind (inert)."""
     print("== AmrSystem.explain_bind parity ==")
     cp = _compiled(n_vars=4, n_aux=1, aux_names=("B_z",))
-    amr = pops.AmrSystem(n=16, L=1.0)
+    amr = AmrSystem(n=16, L=1.0)
     rep = amr.explain_bind(cp)
     chk(isinstance(rep, BindReport), "AmrSystem.explain_bind returns a BindReport")
     chk(rep.required["instances"] == ["plasma"], "the required instance is reported on AMR too")

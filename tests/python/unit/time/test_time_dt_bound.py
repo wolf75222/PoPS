@@ -19,6 +19,7 @@ never fakes the engine.
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):
@@ -132,7 +133,7 @@ print("PASS test_time_dt_bound Section A")
 # ====================================================================================================
 print("== (B) step_cfl applies min(native CFL, program dt bound) ==")
 
-probe = pops.System(n=8, L=1.0, periodic=True)
+probe = System(n=8, L=1.0, periodic=True)
 if not hasattr(probe, "install_program") or not hasattr(probe, "set_program_cadence"):
     _skip("_pops lacks install_program (rebuild _pops) (A passed)")
 
@@ -151,7 +152,7 @@ CFL = 0.4
 
 
 def make_sim():
-    sim = pops.System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodic=True)
     sim.add_block("ions", transport_model(),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                   time=pops.Explicit(method="euler"))

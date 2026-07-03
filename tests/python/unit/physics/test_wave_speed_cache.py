@@ -33,6 +33,7 @@ import sys
 import numpy as np
 
 import pops
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
 
@@ -59,7 +60,7 @@ N = 32
 def make_sim(cache, riemann=None, limiter=None, time=None):
     riemann = riemann if riemann is not None else HLL()
     limiter = limiter if limiter is not None else FirstOrder()
-    sim = pops.System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodic=True)
     sim.add_block("ions",
                   pops.Model(state=pops.FluidState("isothermal", cs2=CS2),
                             transport=pops.IsothermalFlux(),
@@ -91,7 +92,7 @@ chk(not np.array_equal(A_off, U0), "l'etat a reellement evolue (test non creux)"
 chk(np.array_equal(A_off, A_on), "cache ON et OFF bit-identiques (0 ulp) sur l'etat final")
 
 print("== (2) defaut inchange : sans wave_speed_cache == cache OFF ==")
-s_def = pops.System(n=N, L=1.0, periodic=True)
+s_def = System(n=N, L=1.0, periodic=True)
 s_def.add_block("ions",
                 pops.Model(state=pops.FluidState("isothermal", cs2=CS2),
                           transport=pops.IsothermalFlux(),
@@ -127,7 +128,7 @@ def make_disc_sim_then_mode():
 
 
 def make_mode_then_cache():
-    sim = pops.System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodic=True)
     sim.set_disc_domain(0.5, 0.5, 0.3, mode="cutcell")  # mode disque d'abord
     sim.add_block("ions",
                   pops.Model(state=pops.FluidState("isothermal", cs2=CS2),
@@ -166,7 +167,7 @@ for backend, adder in (("aot", "add_compiled_block"),
     fake.has_wave_speeds = True  # le cache cible les modeles a vitesses d'onde (passe la garde hll)
 
     def add_eq_cache(fk=fake):
-        s = pops.System(n=16, L=1.0, periodic=True)
+        s = System(n=16, L=1.0, periodic=True)
         s.add_equation("g", fk, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL(),
                                                          wave_speed_cache=True),
                        time=pops.Explicit())

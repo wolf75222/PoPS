@@ -25,6 +25,7 @@ import numpy as np
 
 import pops
 from test_dsl_coupled import build_euler_poisson, GAMMA, INCLUDE
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
 # global 300 s process-isolation budget (ADC-627, same class as test_compile_cache_backend).
 POPS_PROCESS_TIMEOUT = 900
@@ -66,7 +67,7 @@ def main():
         assert e.adder_for("production") == "add_native_block"
 
         def build_native(limiter, riemann, recon, evolve=True):
-            sys = pops.System(n=n, L=L, periodic=True)
+            sys = System(n=n, L=L, periodic=True)
             sys._s.add_native_block("gas", so, limiter=limiter, riemann=riemann, recon=recon,
                                     time="explicit", gamma=GAMMA, substeps=1, evolve=evolve)
             sys.set_poisson(rhs="charge_density", solver="geometric_mg")
@@ -74,7 +75,7 @@ def main():
             return sys
 
         def build_ref(limiter, riemann, recon, evolve=True):
-            sys = pops.System(n=n, L=L, periodic=True)
+            sys = System(n=n, L=L, periodic=True)
             # add_native_block (above) takes string tokens (C++ ABI); the native Spatial takes typed
             # pops.numerics descriptors (Spec 5 sec.7). Resolve the strings to descriptors.
             from pops.numerics.riemann import Rusanov, HLL, HLLC, Roe
@@ -136,7 +137,7 @@ def main():
         # ARM cela invaliderait la signature ad-hoc et le noyau tuerait le process ; on recompile un .so
         # valide a la cle differente, ce qui teste exactement la frontiere d'ABI.)
         bad = _compile_wrong_abi(e, os.path.join(tmp, "euler_poisson_wrongabi.so"), cxx)
-        sys = pops.System(n=n, L=L, periodic=True)
+        sys = System(n=n, L=L, periodic=True)
         raised = False
         try:
             sys._s.add_native_block("gas", bad, limiter="minmod", riemann="rusanov",

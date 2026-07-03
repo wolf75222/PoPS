@@ -30,6 +30,7 @@ import numpy as np
 import pops
 from pops.ir.ops import sqrt
 from pops.physics.facade import Model
+from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 
 GAMMA = 1.4
 from tests.python.support.requirements import (
@@ -71,7 +72,7 @@ def _bump(n):
 
 
 def _amr(n, L=1.0):
-    s = pops.AmrSystem(n=n, L=L, periodic=True)
+    s = AmrSystem(n=n, L=L, periodic=True)
     s.set_refinement(1.2)
     return s
 
@@ -83,7 +84,7 @@ rho = _bump(n)
 
 # n == 0 (settable depuis Python) -> rejet a la CONSTRUCTION (nn = n*n = 0 ferait une division par
 # zero dans set_conservative_state, U.size() % nn). On le refuse au point de configuration.
-chk(raises(lambda: pops.AmrSystem(n=0, L=1.0, periodic=True)),
+chk(raises(lambda: AmrSystem(n=0, L=1.0, periodic=True)),
     "(G) AmrSystem(n=0) rejete a la construction (n >= 1 requis)")
 
 # ndim != 3 (densite 2D passee par erreur) -> rejet au binding.

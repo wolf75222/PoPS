@@ -13,6 +13,7 @@ Chemin natif (pops.Model) : aucun compilateur requis (cf. test_amr_conservative_
 import numpy as np
 
 import pops
+from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 
 fails = 0
 
@@ -56,7 +57,7 @@ def _min_fine_corner(boxes):
 
 
 def _run(n, thr, variable, role, s0):
-    sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
+    sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
     sim.add_block("gas0", _comp(), time=pops.Explicit())
     sim.add_block("gas1", _comp(), time=pops.Explicit())
     sim.set_poisson(bc="periodic")
@@ -95,7 +96,7 @@ chk(raises(lambda: _run(N, 6.0, "", "temperature", s_energy)),
 def _solo_with_selector():
     # Bloc UNIQUE + selecteur : le selecteur n'est cable que sur le moteur multi-blocs ; refuse au
     # build (pas de repli silencieux vers la composante 0).
-    sim = pops.AmrSystem(n=N, L=1.0, periodic=True, regrid_every=1)
+    sim = AmrSystem(n=N, L=1.0, periodic=True, regrid_every=1)
     sim.add_block("solo", _comp(), time=pops.Explicit())
     sim.set_poisson(bc="periodic")
     sim.set_refinement(6.0, role="energy")
@@ -104,7 +105,7 @@ def _solo_with_selector():
 
 
 chk(raises(_solo_with_selector), "bloc unique + selecteur -> leve au build (multi-blocs only)")
-chk(raises(lambda: pops.AmrSystem(n=N, L=1.0, periodic=True, regrid_every=1)
+chk(raises(lambda: AmrSystem(n=N, L=1.0, periodic=True, regrid_every=1)
            .set_refinement(6.0, variable="E", role="energy")),
     "variable ET role -> leve immediatement")
 

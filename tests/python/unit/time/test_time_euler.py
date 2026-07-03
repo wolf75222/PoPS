@@ -36,6 +36,7 @@ import numpy as np
 import pops
 from pops.codegen.toolchain import _default_cxx
 from pops.physics.facade import Model
+from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 fails = 0
 
@@ -65,7 +66,7 @@ def transport_model():
 
 def make_sim(method):
     n = 24
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     sim.add_block("ions", transport_model(),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                   time=pops.Explicit(method=method))
@@ -100,7 +101,7 @@ if not bit:
 
 print("== (3) no-default-change : defaut == ssprk2 ==")
 sd = make_sim("ssprk2")
-s_def = pops.System(n=24, L=1.0, periodic=True)
+s_def = System(n=24, L=1.0, periodic=True)
 s_def.add_block("ions", transport_model(),
                 spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                 time=pops.Explicit())
@@ -119,7 +120,7 @@ d = np.abs(np.array(s2b.get_state("ions")) - np.array(seb.get_state("ions"))).ma
 chk(d > 1e-8, f"euler != ssprk2 sur un pas (ecart max {d:.2e})")
 
 print("== (5) AMR : rejet explicite ==")
-amr = pops.AmrSystem(n=32, L=1.0, periodic=True, regrid_every=0)
+amr = AmrSystem(n=32, L=1.0, periodic=True, regrid_every=0)
 msg = err_msg(lambda: amr.add_block("ions", transport_model(),
                                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                                     time=pops.Explicit(method="euler")))
@@ -160,7 +161,7 @@ except RuntimeError as ex:
 
 def make_prod_sim(method):
     n = 16
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     sim.add_equation("q", model=prod,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit(method=method))
@@ -184,7 +185,7 @@ chk(np.array_equal(gotp, refp) or ep < 1e-15,
     f"production : identite de Shu-Osher (err max {ep:.1e})")
 
 aot = adv_model().compile(os.path.join(tmp, "eulaot.so"), INCLUDE, backend="aot")
-sim_a = pops.System(n=16, L=1.0, periodic=True)
+sim_a = System(n=16, L=1.0, periodic=True)
 msg = err_msg(lambda: sim_a.add_equation("q", model=aot,
                                          spatial=pops.FiniteVolume(limiter=FirstOrder(),
                                                                   riemann=Rusanov()),

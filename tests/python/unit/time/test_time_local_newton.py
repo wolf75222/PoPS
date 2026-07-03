@@ -25,6 +25,7 @@ uses -- iterating to ``max_c |r_c| < tol`` or the budget. No heap / std::functio
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _pops_time():
@@ -195,7 +196,7 @@ def section_b(t):
         print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return
 
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+    if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
         print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return
 
@@ -232,7 +233,7 @@ def section_b(t):
 
     chk(compiled.program_name == "react_step", "handle carries the program name")
 
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     try:
         compiled_model = reaction_model("react_block", k).compile(backend="production")
     except RuntimeError as exc:

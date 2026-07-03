@@ -17,6 +17,7 @@
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
 # global 300 s process-isolation budget (ADC-627, same class as test_compile_cache_backend).
 POPS_PROCESS_TIMEOUT = 900
@@ -75,15 +76,15 @@ chk(raises(ValueError, lambda: pops.codegen.compile_problem(time=None)),
     "compile_problem without a Program rejected")
 # substeps>1 / stride>1 are WIRED now (ADC-411): they STORE the cadence (System.set_program_cadence
 # applies it around the program closure) instead of being rejected. cf. test_time_substeps_stride.py.
-chk(pops.CompiledTime(substeps=2).substeps == 2, "CompiledTime substeps>1 accepted (wired, ADC-411)")
-chk(pops.CompiledTime(stride=2).stride == 2, "CompiledTime stride>1 accepted (wired, ADC-411)")
-chk(raises(NotImplementedError, lambda: pops.CompiledTime(cfl="program")),
+chk(pops.time.CompiledTime(substeps=2).substeps == 2, "CompiledTime substeps>1 accepted (wired, ADC-411)")
+chk(pops.time.CompiledTime(stride=2).stride == 2, "CompiledTime stride>1 accepted (wired, ADC-411)")
+chk(raises(NotImplementedError, lambda: pops.time.CompiledTime(cfl="program")),
     "CompiledTime cfl='program' self-computed sub-program deferred (numeric cfl wired)")
-chk(pops.CompiledTime().kind == "compiled", "CompiledTime() default ok (kind 'compiled')")
+chk(pops.time.CompiledTime().kind == "compiled", "CompiledTime() default ok (kind 'compiled')")
 
 # ---- (B) end-to-end parity: skips unless the full toolchain is present ----
 # install_program is forwarded by the System facade (__getattr__ -> self._s), so probe an instance.
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
     print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
     print("%s test_compile_problem (A only)" % ("FAIL" if fails else "PASS"))
     sys.exit(1 if fails else 0)
@@ -102,7 +103,7 @@ def transport_model():
 
 def make_sim():
     n = 24
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     sim.add_block("ions", transport_model(),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                   time=pops.Explicit(method="euler"))

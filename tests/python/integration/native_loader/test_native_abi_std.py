@@ -33,6 +33,7 @@ from pops.physics.model import HyperbolicModel
 
 
 from tests.python.support.requirements import repo_include
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 INCLUDE = repo_include()
 GAMMA = 1.4
 
@@ -94,7 +95,7 @@ def check_native_loads_without_abi_error(expected_std):
         so = e.compile(os.path.join(tmp, "euler_abistd.so"), INCLUDE, backend="production")
         assert os.path.exists(so), "compile(backend='production') n'a pas produit de .so"
 
-        sys = pops.System(n=n, L=1.0, periodic=True)
+        sys = System(n=n, L=1.0, periodic=True)
         # Si le std du modele != std du loader, add_native_block leve RuntimeError("incompatible ABI").
         try:
             sys._s.add_native_block("gas", so, limiter="minmod", riemann="rusanov",

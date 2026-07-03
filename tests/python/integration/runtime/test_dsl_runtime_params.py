@@ -27,6 +27,7 @@ from pops.ir.ops import sqrt
 from pops.physics.facade import Model
 
 from tests.python.support.requirements import repo_include
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 INCLUDE = repo_include()
 
 
@@ -94,7 +95,7 @@ def main():
         so = compiled.so_path
 
         def build(cs2):
-            sys = pops.System(n=n, L=L, periodic=True)
+            sys = System(n=n, L=L, periodic=True)
             sys._s.add_compiled_block("gas", so, limiter="minmod", riemann="rusanov",
                                       recon="conservative", time="explicit",
                                       names=["rho", "rho_u", "rho_v"])
@@ -137,7 +138,7 @@ def main():
         # modele a cs2 CONST=2.0 et on le compare au modele runtime apres set_block_params(cs2=2.0).
         mc = _build_iso("const", 2.0)
         so_const = mc.compile(os.path.join(tmp, "iso_const2.so"), INCLUDE, backend="aot").so_path
-        sysc = pops.System(n=n, L=L, periodic=True)
+        sysc = System(n=n, L=L, periodic=True)
         sysc._s.add_compiled_block("gas", so_const, limiter="minmod", riemann="rusanov",
                                    recon="conservative", time="explicit",
                                    names=["rho", "rho_u", "rho_v"])

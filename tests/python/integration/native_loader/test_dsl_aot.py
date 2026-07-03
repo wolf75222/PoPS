@@ -15,6 +15,7 @@ import numpy as np
 
 import pops
 from test_dsl_coupled import build_euler_poisson, GAMMA, INCLUDE
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def main():
@@ -45,7 +46,7 @@ def main():
         # Pour chaque schema (rusanov, puis HLLC qui exige pressure() + wave_speeds() generes), le
         # bloc AOT doit etre IDENTIQUE au bloc NATIF add_block (memes briques, meme assemble_rhs).
         def compare(limiter, riemann, recon):
-            aot = pops.System(n=n, L=L, periodic=True)
+            aot = System(n=n, L=L, periodic=True)
             aot.add_compiled_block("gas", so, limiter=limiter, riemann=riemann, recon=recon,
                                    time="explicit", names=["rho", "rho_u", "rho_v", "E"])
             aot.set_poisson(rhs="charge_density", solver="geometric_mg")
@@ -54,7 +55,7 @@ def main():
             R_aot = np.array(aot.eval_rhs("gas")).reshape(4, n, n)
             phi_aot = np.array(aot.potential()).reshape(n, n)
 
-            nat = pops.System(n=n, L=L, periodic=True)
+            nat = System(n=n, L=L, periodic=True)
             # The raw add_compiled_block facade takes string tokens (C++ ABI); the native Spatial
             # takes typed pops.numerics descriptors (Spec 5 sec.7). Resolve the strings to descriptors.
             from pops.numerics.riemann import Rusanov, HLL, HLLC, Roe
@@ -85,7 +86,7 @@ def main():
         compare("minmod", "hllc", "primitive")  # flux de production : pressure()/wave_speeds() generes
 
         # (C) avance de production (SSPRK2 + HLLC) : tourne, masse conservee, dynamique non triviale
-        aot = pops.System(n=n, L=L, periodic=True)
+        aot = System(n=n, L=L, periodic=True)
         aot.add_compiled_block("gas", so, limiter="minmod", riemann="hllc", recon="primitive",
                                names=["rho", "rho_u", "rho_v", "E"])
         aot.set_poisson(rhs="charge_density", solver="geometric_mg")

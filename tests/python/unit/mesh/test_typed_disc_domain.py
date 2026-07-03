@@ -9,7 +9,7 @@ Geometry is a TYPED object, not a ``wall="circle"`` / ``mode="staircase"`` strin
       ``"cutcell"``). ``DiscDomain`` lowers to the four-argument ``(cx, cy, R, mode_token)`` tuple
       the native ``set_disc_domain`` consumes. The descriptors inspect() / available() honestly.
 
-  (2) RUNTIME ACCEPTANCE (real engine, host): a real ``pops.System`` accepts BOTH the legacy
+  (2) RUNTIME ACCEPTANCE (real engine, host): a real ``System`` accepts BOTH the legacy
       string and the typed object for ``set_disc_domain`` and ``set_poisson(wall=...)``, with an
       IDENTICAL effect -- byte-identical disc mask, and a byte-identical Poisson potential for a
       circle wall solve. The native cut-cell / staircase TRANSPORT physics is Kokkos-gated and is
@@ -24,6 +24,7 @@ import pytest
 
 from pops.mesh.geometry import Disc, NoWall, DiscDomain, HalfPlane
 from pops.mesh.masks import NoMask, Staircase, CutCell, lower_disc_mode, DISC_MODE_TOKENS
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 # --------------------------------------------------------------------------------------------
@@ -110,7 +111,7 @@ requires_engine = pytest.mark.skipif(
 
 
 def _build(n=32, L=1.0):
-    return pops.System(n=n, L=L, periodic=False)
+    return System(n=n, L=L, periodic=False)
 
 
 @requires_engine

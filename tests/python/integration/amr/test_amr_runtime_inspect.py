@@ -17,6 +17,7 @@ import sys
 
 import numpy as np
 import pytest
+from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
 
@@ -33,7 +34,7 @@ def _model():
 
 def _built_amr(regrid_every=2, n=32):
     """A small built AmrSystem with one refined patch (density bump + a few steps)."""
-    sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every, coarse_max_grid=16)
+    sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every, coarse_max_grid=16)
     sim.add_block("ne", model=_model(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     sim.set_refinement(threshold=0.5)
     ne = np.ones((n, n))
@@ -46,7 +47,7 @@ def _built_amr(regrid_every=2, n=32):
 
 # --- the handle ----------------------------------------------------------------
 def test_amr_handle_is_an_inert_runtime_view():
-    sim = pops.AmrSystem(n=16, L=1.0, periodic=True)
+    sim = AmrSystem(n=16, L=1.0, periodic=True)
     view = sim.amr
     assert isinstance(view, AmrRuntimeView)
     # A fresh view every access (handle, not cached state); both bound to the same system.
@@ -57,7 +58,7 @@ def test_amr_handle_is_an_inert_runtime_view():
 
 
 def test_system_has_no_amr_handle_with_a_clear_error():
-    sim = pops.System(n=16, L=1.0, periodic=True)
+    sim = System(n=16, L=1.0, periodic=True)
     assert not hasattr(sim, "amr")
     # ADC-583: the remedy speaks the bind vocabulary (layout=AMR on the Problem), not AmrSystem.
     with pytest.raises(AttributeError, match=r"layout=AMR\(.*inspect_amr"):
@@ -66,7 +67,7 @@ def test_system_has_no_amr_handle_with_a_clear_error():
 
 # --- patch_table ---------------------------------------------------------------
 def test_patch_table_before_build_reports_unbuilt():
-    sim = pops.AmrSystem(n=16, L=1.0, periodic=True)
+    sim = AmrSystem(n=16, L=1.0, periodic=True)
     rep = sim.amr.patch_table()
     assert isinstance(rep, PatchReport)
     assert rep.built is False
@@ -118,7 +119,7 @@ def test_hierarchy_snapshot_composes_config_envelope_and_live_patches():
 
 # --- explain_regrid ------------------------------------------------------------
 def test_explain_regrid_dynamic_vs_frozen():
-    dyn = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=4).amr.explain_regrid()
+    dyn = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=4).amr.explain_regrid()
     assert isinstance(dyn, RegridReport)
     assert dyn.frozen is False and dyn.regrid_every == 4
     # The union-of-tags criteria are named (config-sourced shape, not a fabricated threshold).
@@ -126,14 +127,14 @@ def test_explain_regrid_dynamic_vs_frozen():
     # ADC-583: the criteria are described in the Problem vocabulary (AMR(refine=Refine.on(...))).
     assert "AMR(refine=Refine.on" in blob and "grad phi" in blob
 
-    frozen = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0).amr.explain_regrid()
+    frozen = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0).amr.explain_regrid()
     assert frozen.frozen is True and frozen.regrid_every == 0
     assert any("frozen" in n for n in frozen.notes)
 
 
 # --- explain_ghosts (honest deferral) -----------------------------------------
 def test_explain_ghosts_defers_per_level_depth_honestly():
-    rep = pops.AmrSystem(n=16, L=1.0, periodic=True).amr.explain_ghosts()
+    rep = AmrSystem(n=16, L=1.0, periodic=True).amr.explain_ghosts()
     assert isinstance(rep, GhostReport)
     # Per-level ghost depth is NOT fabricated: it is None and rendered as unavailable.
     assert rep.per_level_depth is None
@@ -144,7 +145,7 @@ def test_explain_ghosts_defers_per_level_depth_honestly():
 
 # --- explain_reflux ------------------------------------------------------------
 def test_explain_reflux_reports_route_requirement():
-    rep = pops.AmrSystem(n=16, L=1.0, periodic=True).amr.explain_reflux()
+    rep = AmrSystem(n=16, L=1.0, periodic=True).amr.explain_reflux()
     assert isinstance(rep, RefluxReport)
     assert rep.enabled is True
     # The per-stage timing is honestly unavailable (route property, not a counter).
@@ -154,7 +155,7 @@ def test_explain_reflux_reports_route_requirement():
 
 # --- explain_checkpoint --------------------------------------------------------
 def test_explain_checkpoint_restartable_for_frozen_single_block():
-    sim = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+    sim = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
     sim.add_block("ne", model=_model())
     rep = sim.amr.explain_checkpoint()
     assert isinstance(rep, CheckpointReport)
@@ -163,7 +164,7 @@ def test_explain_checkpoint_restartable_for_frozen_single_block():
 
 
 def test_explain_checkpoint_flags_dynamic_regrid_violation():
-    sim = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=3)
+    sim = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=3)
     sim.add_block("ne", model=_model())
     rep = sim.amr.explain_checkpoint()
     assert rep.restartable is False
@@ -202,7 +203,7 @@ def test_inspect_returns_unified_runtime_inspection():
 
 
 def test_inspect_before_build_reports_unbuilt_patches_honestly():
-    sim = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+    sim = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
     report = sim.amr.inspect()
     assert report.patches.built is False
     assert report.hierarchy.patch_table.built is False
