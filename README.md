@@ -19,10 +19,11 @@
 ---
 
 PoPS is a compiled solver engine, not a Python numerical library and not a scenario repository.
-Python authors an inert, typed `pops.Case`: mesh layout, physics model, finite-volume descriptors,
-field problems, time program, outputs, and runtime parameters. `pops.compile(...)` lowers that
-assembly to generated or native C++; `pops.bind(...)` creates the runtime; `sim.run(...)` advances
-with C++/Kokkos/MPI kernels. Python never runs a per-cell loop.
+Python authors an inert, typed `pops.Problem`: physics model, finite-volume descriptors,
+field problems, time program, outputs, and runtime parameters, with the mesh layout supplied at
+`pops.compile(problem, layout=...)`. `pops.compile(...)` lowers that assembly to generated or native
+C++; `pops.bind(...)` creates the runtime; `sim.run(...)` advances with C++/Kokkos/MPI kernels.
+Python never runs a per-cell loop.
 
 Named applications such as diocotron, Euler-Poisson, two-fluid, and validation setups live in
 [`adc_cases`](https://github.com/wolf75222/adc_cases). This repository owns the reusable solver core,
@@ -179,13 +180,14 @@ poisson = PoissonProblem(name="phi", unknown="phi",
 time = Program("advance")
 ssprk3(time, "ne")
 
-case = (pops.Case(layout=Uniform(CartesianMesh(n=96, L=1.0, periodic=True)), name="diocotron")
-        .block("ne", physics=m,
-               spatial=pops.FiniteVolume(reconstruction=Minmod(), riemann=Rusanov()))
-        .field(poisson)
-        .time(time))
+problem = (pops.Problem(name="diocotron")
+           .block("ne", physics=m,
+                  spatial=pops.FiniteVolume(reconstruction=Minmod(), riemann=Rusanov()))
+           .field(poisson)
+           .time(time))
 
-compiled = pops.compile(case, backend=Production())
+compiled = pops.compile(problem, layout=Uniform(CartesianMesh(n=96, L=1.0, periodic=True)),
+                        backend=Production())
 sim = pops.bind(compiled, state={"ne": ne0})        # ne0: initial density (2D array)
 sim.run(t_end=0.1, cfl=0.4)
 sim.write("ne.npz", format="npz")                   # save the block states (npz; "vtk" also available)

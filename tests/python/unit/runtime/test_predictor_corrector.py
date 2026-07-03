@@ -50,11 +50,20 @@ try:
     import pops
     from pops.ir.ops import sqrt
     from pops.physics.facade import Model
+    from pops.model import OperatorHandle
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001  -- numpy or _pops unavailable in this interpreter
     _skip("pops/numpy unavailable: %s" % exc)
 
 fails = 0
+
+
+def _op(name):
+    """A typed OperatorHandle for the public P.linear_source/apply route (ADC-625).
+
+    ``linear_source(handle)`` unwraps to ``handle.name``, so the built IR is byte-identical to the
+    historical bare-name selector, keeping the compiled route bit-identical."""
+    return OperatorHandle(name)
 
 
 def chk(cond, label):
@@ -202,13 +211,13 @@ def predictor_corrector_program(name="predictor_corrector_poisson_lorentz"):
     f_n = P.solve_fields("fields_n", U_n)
     R_n = P._rhs_legacy(name="R_n", state=U_n, fields=f_n, flux=True, sources=["electric"])
     U_star_rhs = P.linear_combine("U_star_rhs", U_n + dt * R_n)
-    U_star = P.solve_local_linear(name="U_star", operator=P.I - dt * P.linear_source("lorentz"),
+    U_star = P.solve_local_linear(name="U_star", operator=P.I - dt * P.linear_source(_op("lorentz")),
                                   rhs=U_star_rhs, fields=f_n)
     f_star = P.solve_fields("fields_star", U_star)
     R_star = P._rhs_legacy(name="R_star", state=U_star, fields=f_star, flux=True, sources=["electric"])
-    C_star = P.apply(operator=P.linear_source("lorentz"), state=U_star, fields=f_star, name="C_star")
+    C_star = P.apply(operator=P.linear_source(_op("lorentz")), state=U_star, fields=f_star, name="C_star")
     Q = P.linear_combine("Q", U_n + 0.5 * dt * R_n + 0.5 * dt * R_star + 0.5 * dt * C_star)
-    U_np1 = P.solve_local_linear(name="U_np1", operator=P.I - 0.5 * dt * P.linear_source("lorentz"),
+    U_np1 = P.solve_local_linear(name="U_np1", operator=P.I - 0.5 * dt * P.linear_source(_op("lorentz")),
                                  rhs=Q, fields=f_star)
     P.commit("plasma", U_np1)
     return P

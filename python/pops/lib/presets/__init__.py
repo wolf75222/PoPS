@@ -1,7 +1,7 @@
 """pops.lib.presets -- ready-to-run compose-and-go bundles (ADC-524, criterion 7).
 
 A PRESET pairs a provided model (:mod:`pops.lib.models`) with a provided time scheme
-(:mod:`pops.lib.time`) so a user drops both into a :class:`pops.Case` in one step instead of
+(:mod:`pops.lib.time`) so a user drops both into a :class:`pops.Problem` in one step instead of
 re-deriving the pairing every time. This is the ONE namespace for such bundles: ``pops.lib`` keeps
 only things that are ready to use (``lib.time`` schemes, ``lib.models`` models, ``lib.presets``
 bundles); the generic building blocks live in the top-level central packages (``pops.numerics`` /
@@ -9,9 +9,9 @@ bundles); the generic building blocks live in the top-level central packages (``
 
 A preset composes DESCRIPTORS ONLY -- a provided model factory and a time-scheme macro. It never
 touches the runtime, the codegen driver, or a mesh layout: WHERE the bundle runs (``Uniform`` /
-``AMR``) stays the user's choice on the Case, and the ``.so`` compile stays ``pops.compile``'s job.
-That keeps ``pops.lib`` a leaf of the import graph (``lib`` may import ir / model / time / physics /
-moments, never codegen or runtime).
+``AMR``) stays the user's choice at ``pops.compile(problem, layout=...)``, and the ``.so`` compile
+stays ``pops.compile``'s job. That keeps ``pops.lib`` a leaf of the import graph (``lib`` may import
+ir / model / time / physics / moments, never codegen or runtime).
 
 Usage::
 
@@ -21,10 +21,10 @@ Usage::
     from pops.mesh.cartesian import CartesianMesh
 
     preset = vlasov_poisson_magnetic_euler()
-    case = (pops.Case(layout=Uniform(CartesianMesh(n=96)), name="plasma")
-            .block("f", physics=preset.model())
-            .time(preset.time_scheme("f")))
-    compiled = pops.compile(case)
+    problem = (pops.Problem(name="plasma")
+               .block("f", physics=preset.model())
+               .time(preset.time_scheme("f")))
+    compiled = pops.compile(problem, layout=Uniform(CartesianMesh(n=96)))
 """
 
 
@@ -32,9 +32,9 @@ class Preset:
     """A ready-to-run pairing of a provided model factory and a provided time-scheme macro.
 
     ``model()`` builds the provided physics model (a ``pops.physics`` / ``pops.lib.models``
-    composition ready for a Case block); ``time_scheme(block)`` builds the matching
+    composition ready for a Problem block); ``time_scheme(block)`` builds the matching
     ``pops.time.Program`` for that block name. Both are DESCRIPTOR-level authoring objects the user
-    hands to a :class:`pops.Case`; the preset carries no mesh, no runtime, and no compiled ``.so``.
+    hands to a :class:`pops.Problem`; the preset carries no mesh, no runtime, and no compiled ``.so``.
 
     Args:
         name: The preset's identifier (shown in ``repr`` and ``inspect()``).

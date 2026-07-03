@@ -12,6 +12,11 @@ from pops.time import Program
 from pops.math import rate, unknown
 
 
+def _op(name):
+    """A typed OperatorHandle for the public linear_source route (ADC-625): unwraps to name."""
+    return _model.OperatorHandle(name)
+
+
 def _ir(P):
     """Structural IR of a Program: per value (vtype, op, input positions, attrs, block)."""
     idx = {id(v): k for k, v in enumerate(P._values)}
@@ -48,10 +53,10 @@ def test_solve_matches_linear_combine_plus_solve_local_linear():
         if board:
             u1 = P.solve(
                 "U1",
-                (P.I - dt * P.linear_source("lorentz")) @ unknown("U1") == u + dt * r,
+                (P.I - dt * P.linear_source(_op("lorentz"))) @ unknown("U1") == u + dt * r,
             )
         else:
-            op = P.I - dt * P.linear_source("lorentz")  # build the operator first (board order)
+            op = P.I - dt * P.linear_source(_op("lorentz"))  # build the operator first (board order)
             rhs = P.linear_combine("U1_rhs", u + dt * r)
             u1 = P.solve_local_linear(name="U1", operator=op, rhs=rhs)
         P.commit("plasma", u1)
@@ -63,8 +68,8 @@ def test_solve_matches_linear_combine_plus_solve_local_linear():
 def test_apply_operator_to_state_via_matmul():
     P = Program("apply")
     u = P.state("plasma")
-    lu_board = P.linear_source("lorentz") @ u
-    lu_manual = P.apply(operator=P.linear_source("lorentz"), state=u)
+    lu_board = P.linear_source(_op("lorentz")) @ u
+    lu_manual = P.apply(operator=P.linear_source(_op("lorentz")), state=u)
     assert lu_board.op == "apply" and lu_board.attrs["linear_source"] == "lorentz"
     assert lu_manual.op == "apply"
 

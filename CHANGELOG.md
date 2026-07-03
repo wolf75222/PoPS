@@ -77,6 +77,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   bool attribute is removed, so there is one source of truth. `inspect()["available"]` and the
   capability-matrix / manifest entries derive from that route. Newton / FixedPoint keep refusing with
   a reason.
+- ADC-625 `Program.linear_source` / `Program.apply` refuse a free string on the public route with a
+  `TypeError` naming the typed handle form; string acceptance stays only in the internal
+  `_linear_source` / `_apply` seams the lowering and the `pops.lib.time` macros use. Cleaned the
+  stale `pops.Case` prose and constructor-layout examples (`Problem(layout=...)`) to the final
+  spellings (`pops.Problem` assembled fluently, mesh at `pops.compile(problem, layout=...)`) across
+  `pops.lib`, the README and the design docs.
 
 ### Removed
 - ADC-523 Removed `compile_problem` / `CompiledProblem` from `pops.__all__` and the top-level lazy

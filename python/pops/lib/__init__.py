@@ -7,7 +7,8 @@ packages and keeps ``pops.lib`` for things that are ready to use (criterion 7: p
   ssprk2 / ssprk3 / rk4 / strang / imex / bdf / predictor_corrector ...);
 * :mod:`pops.lib.models` -- provided physical models (HyQMOM15 / Gaussian);
 * :mod:`pops.lib.presets` -- ready-to-run compose-and-go bundles (a provided model paired
-  with a provided time scheme; the user still picks the mesh layout on the Case).
+  with a provided time scheme; the user still picks the mesh layout at
+  ``pops.compile(problem, layout=...)``).
 
 The relocated central catalogs now live in:
 

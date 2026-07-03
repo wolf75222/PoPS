@@ -183,7 +183,7 @@ class SolverContext:
         """Apply the matrix-free operator ``A(x)`` as an IR node (an RHS-like value)."""
         if not (hasattr(x, "vtype") and x.vtype == "state"):
             raise TypeError("apply: x must be a State IR value")
-        return self._p.apply(operator=_operator_name(operator), state=x)
+        return self._p._apply(operator=_operator_name(operator), state=x)
 
     def residual(self, operator, x, b):
         """The residual ``r = b - A(x)`` as an affine IR combine (no Python math)."""
