@@ -112,15 +112,15 @@ class EigWitness(Expr):
             M[..., idx // k, idx % k] = np.broadcast_to(np.asarray(v, dtype=float), bshape)
         ev = np.linalg.eigvals(M)  # (..., k) complexe
         if self.field == "max_im":
-            out = np.max(np.abs(ev.imag), axis=-1)
+            out = np.max(np.abs(ev.imag), axis=-1)  # pyright: ignore[reportAttributeAccessIssue]
         elif self.field == "lmin":
-            out = np.min(ev.real, axis=-1)
+            out = np.min(ev.real, axis=-1)  # pyright: ignore[reportAttributeAccessIssue]
         elif self.field == "lmax":
-            out = np.max(ev.real, axis=-1)
+            out = np.max(ev.real, axis=-1)  # pyright: ignore[reportAttributeAccessIssue]
         else:  # predicat all_real (ADC-362) : MEME formule RELATIVE que pops::EigBounds::all_real.
-            max_im = np.max(np.abs(ev.imag), axis=-1)
-            lmin = np.min(ev.real, axis=-1)
-            lmax = np.max(ev.real, axis=-1)
+            max_im = np.max(np.abs(ev.imag), axis=-1)  # pyright: ignore[reportAttributeAccessIssue]
+            lmin = np.min(ev.real, axis=-1)  # pyright: ignore[reportAttributeAccessIssue]
+            lmax = np.max(ev.real, axis=-1)  # pyright: ignore[reportAttributeAccessIssue]
             scale = np.maximum(np.maximum(np.abs(lmin), np.abs(lmax)), 1.0)
             # numpy/LAPACK converge toujours -> PAS de kUnknown cote hote (le miroir definit le spectre
             # comme converge par construction) ; une non-convergence DEVICE rendrait 0.0 (= PAS reel),

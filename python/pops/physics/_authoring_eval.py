@@ -91,8 +91,8 @@ class _EvalMixin(_HyperbolicModel):
         for b in ws["blocks"][key]:
             idx = np.asarray(b)
             lam = np.linalg.eigvals(J[:, idx[:, None], idx[None, :]])
-            lo = np.minimum(lo, lam.real.min(axis=1))
-            hi = np.maximum(hi, lam.real.max(axis=1))
+            lo = np.minimum(lo, lam.real.min(axis=1))  # pyright: ignore[reportAttributeAccessIssue]
+            hi = np.maximum(hi, lam.real.max(axis=1))  # pyright: ignore[reportAttributeAccessIssue]
         return lo, hi
 
     def _flux_jacobian_spectral_radius(self, U: Any, aux: Any, dir: Any) -> Any:
@@ -119,7 +119,7 @@ class _EvalMixin(_HyperbolicModel):
                 J[:, i, j] = (np.broadcast_to(Fp[i], (nsmp,))
                               - np.broadcast_to(Fm[i], (nsmp,))) / (2.0 * eps)
         lam = np.linalg.eigvals(J)
-        return float(np.max(np.abs(lam.real)))
+        return float(np.max(np.abs(lam.real)))  # pyright: ignore[reportAttributeAccessIssue]
 
     def wave_speeds_value(self, U: Any, aux: Any, dir: Any) -> Any:
         """Numpy evaluator of the signed speeds (smin, smax) -- mirror of the emitted wave_speeds:
