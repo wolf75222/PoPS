@@ -249,7 +249,7 @@ def test_problem_methods_still_work_after_dropping_descriptor_base():
     assert isinstance(prob.capabilities().to_dict(), dict)
     assert bool(prob.available()) is True
     assert prob.validate() is True
-    info = prob.inspect()
+    info = prob.inspect().to_dict()  # ADC-564: Problem.inspect() is a typed report; to_dict() bridges
     assert info["name"] == "plasma" and "layout" in info and "blocks" in info
     record = prob.lower().to_dict()
     assert record["name"] == "plasma" and record["category"] == "problem"

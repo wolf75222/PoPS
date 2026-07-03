@@ -47,7 +47,7 @@ def test_chaining_setters_return_the_problem():
             .aux("B_z")
             .program(program))
     assert prob is prob.block.__self__
-    info = prob.inspect()
+    info = prob.inspect().to_dict()  # ADC-564: Problem.inspect() is a typed report; to_dict() bridges
     assert info["name"] == "plasma"
     assert set(info["blocks"]) == {"ne"}
     assert info["params"]["alpha"]["default"] == 1.0

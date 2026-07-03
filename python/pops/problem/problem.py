@@ -399,7 +399,18 @@ class Problem:
                                  native_id=self.native_id, options=self.options())
 
     def inspect(self):
-        """A plain, JSON-serialisable structured view of the assembly (no build, no compile)."""
+        """A typed :class:`~pops.problem.report_view.ProblemReport` of the assembly (ADC-564).
+
+        Attributes + ``to_dict()`` (never a dict subclass), carrying the name / blocks / fields /
+        params / aux / outputs / constraints / requirements / capabilities. Inert: no build, no
+        compile, no validation. ``pops.inspect(problem)`` is the explicit dict bridge over its
+        ``to_dict()``.
+        """
+        from pops.problem.report_view import ProblemReport
+        return ProblemReport(self._inspect_payload())
+
+    def _inspect_payload(self):
+        """The ordered inspection dict (the historical inspect() shape) the ProblemReport wraps."""
         info = {"name": self._name, "category": self.category, "native_id": self.native_id,
                 "options": self.options(), "requirements": self.requirements().to_dict(),
                 "capabilities": self.capabilities().to_dict()}
@@ -407,8 +418,9 @@ class Problem:
         info["blocks"] = self._block_registry.inspect()
         info["fields"] = self._field_registry.inspect()
         info["params"] = self._param_registry.inspect()
-        info["aux"] = self._runtime_registry.inspect()["aux"]
-        info["outputs"] = self._runtime_registry.inspect()["outputs"]
+        runtime = self._runtime_registry.inspect()
+        info["aux"] = runtime["aux"]
+        info["outputs"] = runtime["outputs"]
         info["constraints"] = self._constraint_registry.inspect()
         info["time"] = self._time_registry.inspect()["program"]
         return info
@@ -416,11 +428,12 @@ class Problem:
     def to_dict(self):
         """A JSON-ready, array-free serialisation of the assembly for cache / codegen / debug.
 
-        A superset of :meth:`inspect` that also names each block's stable handle id and the
-        refinement criteria recorded on the constraint registry, so the whole declaration
-        round-trips through a plain dict with no runtime object and no numpy array (ADC-526).
+        A superset of :meth:`_inspect_payload` that also names each block's stable handle id, so the
+        whole declaration round-trips through a plain dict with no runtime object and no numpy array
+        (ADC-526). It stays a plain dict (the snapshot / codegen consume it), distinct from the typed
+        :meth:`inspect` report.
         """
-        info = self.inspect()
+        info = self._inspect_payload()
         info["handles"] = {"blocks": [h.handle_id for h in self.blocks().values()],
                            "fields": [h.handle_id for h in self.fields().values()]}
         return info

@@ -17,6 +17,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 ## [Unreleased]
 
 ### Added
+- ADC-564 `Problem.inspect()` and `Program.inspect()` return typed report objects (attributes +
+  `to_dict()`, never a dict subclass) on a shared `pops.Report` base that `compiled.inspect()`,
+  `sim.inspect()`, `sim.explain_bind()` and `sim.amr` inspection also adopt; the reports carry
+  capabilities / requirements / blocks / fields / params / aux / errors as attributes and never
+  trigger validation or compilation. `pops.inspect(obj)` is the explicit dict bridge over the
+  report's `to_dict()`; a per-descriptor `inspect()` keeps its documented dict contract.
 - ADC-562 `pops.RuntimePolicies(output=..., checkpoint=..., diagnostics=..., schedules=...)` groups
   the runtime descriptors as TYPED members (no options bag, no string keys; a non-descriptor argument
   raises) and `problem.runtime(policies)` attaches them, so output/checkpoint/diagnostics live

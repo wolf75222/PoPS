@@ -99,7 +99,7 @@ def test_assembly_chaining_and_inspect():
             .aux("B_z", value=None))
     _check(prob is prob.block.__self__, "setters operate on the same problem")
     _check(prob.layout is None, "ADC-526: a layout-free Problem carries no layout (supplied at compile)")
-    info = prob.inspect()
+    info = prob.inspect().to_dict()  # ADC-564: Problem.inspect() is a typed report; to_dict() bridges
     _check(info["name"] == "plasma", "name carried")
     _check(set(info["blocks"]) == {"ne"}, "block recorded")
     _check(info["params"]["alpha"]["default"] == 1.0, "param recorded")

@@ -15,6 +15,9 @@ It is inert: it records typed declarations and computes nothing.
 """
 
 
+from pops._report import Report
+
+
 class RuntimePolicies:
     """A typed bundle of the runtime output / checkpoint / diagnostics / schedule policies (ADC-562).
 
@@ -141,12 +144,12 @@ class RuntimePolicies:
         return str(self.inspect())
 
 
-class RuntimePoliciesReport:
+class RuntimePoliciesReport(Report):
     """The typed inspection report of a :class:`RuntimePolicies` bundle (ADC-562 / ADC-564).
 
-    Attributes + :meth:`to_dict`, NEVER a dict subclass. Carries the output / checkpoint / diagnostic
-    / schedule member options and the unioned requirements, so a caller sees the runtime concerns
-    grouped, independent of the physics assembly.
+    Attributes + :meth:`to_dict`, NEVER a dict subclass (adopts the shared :class:`pops.Report`
+    base). Carries the output / checkpoint / diagnostic / schedule member options and the unioned
+    requirements, so a caller sees the runtime concerns grouped, independent of the physics assembly.
     """
 
     report_type = "runtime_policies"
@@ -160,11 +163,10 @@ class RuntimePoliciesReport:
         self.requirements = dict(requirements)
 
     def to_dict(self):
-        return {"report_type": self.report_type, "schema_version": self.schema_version,
-                "output": self.output, "checkpoint": self.checkpoint,
-                "diagnostics": [dict(d) for d in self.diagnostics],
-                "schedules": [dict(s) for s in self.schedules],
-                "requirements": dict(self.requirements)}
+        return self._stamp({"output": self.output, "checkpoint": self.checkpoint,
+                            "diagnostics": [dict(d) for d in self.diagnostics],
+                            "schedules": [dict(s) for s in self.schedules],
+                            "requirements": dict(self.requirements)})
 
     def __str__(self):
         lines = ["runtime policies:"]
