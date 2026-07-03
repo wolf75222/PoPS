@@ -41,4 +41,19 @@ class MomentBasis:
         return "MomentBasis(order=%d, kind=%r)" % (self.order, self.kind)
 
 
-__all__ = ["MomentBasis"]
+class RawMomentBasis(MomentBasis):
+    """A :class:`MomentBasis` fixed to the RAW representation (``M_pq``).
+
+    The issue vocabulary names the raw-moment basis explicitly; this thin subclass pins
+    ``kind=RAW`` so ``RawMomentBasis(order)`` reads as the transported raw-moment vector while
+    staying a ``MomentBasis`` (``isinstance`` still holds). It adds no state and computes nothing.
+    """
+
+    def __init__(self, order, ordering=None):
+        super().__init__(order, kind=MomentBasis.RAW, ordering=ordering)
+
+    def __repr__(self):
+        return "RawMomentBasis(order=%d)" % (self.order,)
+
+
+__all__ = ["MomentBasis", "RawMomentBasis"]

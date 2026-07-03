@@ -45,4 +45,37 @@ class RealizabilityProjection(Descriptor):
                 % (self.eps_m00, self.eps_cov, self.robust))
 
 
-__all__ = ["RealizabilityProjection"]
+#: The issue vocabulary spells the projection ``MomentProjection``; it is the SAME
+#: descriptor (an identity alias, so ``isinstance`` / descriptor identity are unchanged).
+MomentProjection = RealizabilityProjection
+
+
+class RealizableSet(Descriptor):
+    """The realizable moment cone at ``order`` (an inert capability descriptor).
+
+    Describes WHICH states a moment vector of this order may take (the realizable set the
+    :class:`RealizabilityProjection` floors a state back into): a positive density
+    (``M00 > 0``), a positive-semidefinite covariance (``C20`` / ``C02 >= 0``) and the Schur
+    (Hankel) conditions on the higher moments. It CHOOSES no algorithm and computes nothing --
+    it is the typed, inspectable record of the cone's constraints, so tooling can report what
+    "realizable" means for an order without touching the runtime.
+    """
+
+    category = "realizability_set"
+
+    def __init__(self, order):
+        if order < 2:
+            raise ValueError("RealizableSet: order >= 2 required (got %r)" % (order,))
+        self.order = int(order)
+
+    def options(self):
+        return {"order": self.order}
+
+    def capabilities(self):
+        return CapabilitySet({"constraints": "m00_positive,cov_psd,schur"})
+
+    def __repr__(self):
+        return "RealizableSet(order=%d)" % (self.order,)
+
+
+__all__ = ["RealizabilityProjection", "MomentProjection", "RealizableSet"]

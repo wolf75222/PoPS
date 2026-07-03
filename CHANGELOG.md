@@ -29,6 +29,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   unregistered `test_coupling_operator_contract` into the standard C++ test list.
 
 ### Added
+- ADC-543 Completed the generic moment-construction vocabulary under `pops.moments`: added the
+  inert `VelocitySpace` / `MomentState` / `MomentTransport` handles and the `RealizableSet`
+  descriptor, plus the `RawMomentBasis` / `MomentProjection` / `MomentClosure` aliases, and
+  re-exported the canonical `WaveSpeedProvider` (single home in `pops.numerics.riemann.waves`, via a
+  lazy `__getattr__` so no new import-graph edge). All additive, so the HyQMOM15 / diocotron flux
+  goldens stay byte-identical; pinned four contracts (the provided HyQMOM15 model is inspectable and
+  runtime-free, a user closure plugs through the facade with no `custom.py` in the lib, the wave-speed
+  capability, the projection descriptor) and documented that a custom closure is authoring-only
+  (evaluated once over the symbolic moments and compiled into the flux; no Python on the per-cell path).
 - ADC-545 New source-only guard `tests/python/architecture/test_no_legacy_top_level_exports.py`
   keeps the eight retired names off `pops.__all__` and the root, and asserts each migration message
   names its advanced path; a runtime companion in `test_public_imports.py` checks the AttributeErrors,
