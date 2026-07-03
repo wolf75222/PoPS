@@ -82,3 +82,28 @@ def test_base_descriptor_returns_typed_objects_not_bare_dicts():
                           ("lower", "LoweredDescriptor")):
         assert typed in method_src.get(method, ""), (
             "Descriptor.%s must return a %s (ADC-527), not a bare dict" % (method, typed))
+
+
+def test_brick_descriptor_availability_is_a_method_not_a_bool_attribute():
+    # ADC-625: BrickDescriptor availability is the explained available(context) -> Availability
+    # route, NOT a public bool attribute. The __init__ must not assign a public self.available (only
+    # the private self._available), and `available` must be a method.
+    src = (POPS / "descriptors.py").read_text()
+    tree = ast.parse(src, "descriptors.py")
+    brick = next(node for node in tree.body
+                 if isinstance(node, ast.ClassDef) and node.name == "BrickDescriptor")
+    methods = {node.name for node in brick.body if isinstance(node, ast.FunctionDef)}
+    assert "available" in methods, (
+        "BrickDescriptor.available must be a method (available(context) -> Availability), ADC-625")
+    # No `self.available = ...` public attribute assignment anywhere in the class body.
+    public_available_assign = []
+    for node in ast.walk(brick):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (isinstance(target, ast.Attribute) and target.attr == "available"
+                        and isinstance(target.value, ast.Name) and target.value.id == "self"):
+                    public_available_assign.append(node.lineno)
+    assert not public_available_assign, (
+        "BrickDescriptor must not assign a public self.available bool (ADC-625: use the explained "
+        "available() route and the private self._available); found at line(s) %s"
+        % public_available_assign)

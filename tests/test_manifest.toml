@@ -1026,9 +1026,19 @@ path = "tests/python/unit/mesh"
 labels = ["unit", "python", "mesh", "fast"]
 
 [[python.suite]]
+name = "pops_python_unit_numerics"
+path = "tests/python/unit/numerics"
+labels = ["unit", "python", "numerics", "fast"]
+
+[[python.suite]]
 name = "pops_python_unit_physics"
 path = "tests/python/unit/physics"
 labels = ["unit", "python", "physics", "fast"]
+
+[[python.suite]]
+name = "pops_python_unit_problem"
+path = "tests/python/unit/problem"
+labels = ["unit", "python", "problem", "fast"]
 
 [[python.suite]]
 name = "pops_python_unit_runtime"

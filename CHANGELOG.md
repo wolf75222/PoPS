@@ -83,6 +83,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   stale `pops.Case` prose and constructor-layout examples (`Problem(layout=...)`) to the final
   spellings (`pops.Problem` assembled fluently, mesh at `pops.compile(problem, layout=...)`) across
   `pops.lib`, the README and the design docs.
+- ADC-625 Added `[[python.suite]]` entries for `tests/python/unit/problem` and
+  `tests/python/unit/numerics` (two Phase-5 directories that no CI lane ran) plus their
+  `ci_select_tests.py` route and area alias, and a source-only fence
+  (`test_manifest_suite_coverage.py`) asserting every `tests/python/**/test_*.py` is claimed by a
+  suite path. New architecture fences keep the crutches out: no `dict`-subclass reports, no public
+  `BrickDescriptor.available` bool attribute, no public string `linear_source` / `apply`, no
+  `pops.Case`.
 
 ### Removed
 - ADC-523 Removed `compile_problem` / `CompiledProblem` from `pops.__all__` and the top-level lazy
