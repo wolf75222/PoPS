@@ -161,6 +161,18 @@ def test_cache_key_fold_composes_not_replaces():
     assert "problem_snapshot=" + "a" * 64 in h._cache_key
 
 
+def test_compiled_handle_is_sealed_after_public_compile():
+    from pops.codegen.loader import CompiledProblem
+
+    handle = CompiledProblem("x.so", None, None, "abi", "c++", "c++23")
+    handle._advanced_attach = "ok"  # the advanced compile_problem route stays attachable
+    handle._seal()
+    with pytest.raises(AttributeError, match="immutable after pops.compile"):
+        handle.so_path = "y.so"
+    with pytest.raises(AttributeError, match="ADC-563"):
+        handle._layout = object()
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-q"]))

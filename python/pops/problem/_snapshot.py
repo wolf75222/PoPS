@@ -123,6 +123,10 @@ def freeze_compiled(problem, time, compiled):
         time.freeze()
     if snapshot is not None:
         fold_snapshot_hash(compiled, snapshot.hash)
+    # ADC-563: the handle is complete -- seal it so the PUBLIC artifact is immutable (the advanced
+    # compile_problem route stays unsealed for its callers' legitimate metadata attaches).
+    if hasattr(compiled, "_seal"):
+        compiled._seal()
 
 
 def fold_snapshot_hash(compiled, snapshot_hash):

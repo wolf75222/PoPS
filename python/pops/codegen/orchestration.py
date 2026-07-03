@@ -343,17 +343,12 @@ def _validate_layout_for_compile(problem, layout):
 def _resolve_layout(problem, layout):
     """Resolve the effective compile layout, then apply the problem's AMR criteria (ADC-526).
 
-    ADC-526 completes the move of the layout to ``pops.compile(problem, layout=...)``: the Problem no
-    longer owns a mandatory layout. The effective layout is the explicit @p layout when given, else a
-    layout the Problem may still carry from its constructor (back-compat); neither present is a loud
-    error pointing at ``pops.compile(problem, layout=...)``. When BOTH are given they must agree (a
-    compiled artifact is frozen to one layout), so a disagreement is refused rather than silently
-    overridden.
-
-    The AMR refinement criteria the user recorded via ``problem.amr.refine(...)`` live on the
-    Problem's constraint registry (layout-free); they are applied to the resolved layout HERE, when
-    the layout is finally known, so ONE Problem compiles under a plain ``Uniform`` or under an
-    ``AMR`` that receives its refine / regrid / nesting / patches.
+    The layout lives on ``pops.compile(problem, layout=...)``: explicit @p layout wins, else a
+    constructor layout the Problem may still carry; neither present is a loud error naming the
+    spelling, and a disagreement between the two is refused (an artifact is frozen to one layout).
+    The AMR criteria recorded via ``problem.amr.refine(...)`` sit layout-free on the constraint
+    registry and are applied HERE, once the layout is known, so ONE Problem compiles under Uniform
+    or under an AMR that receives its refine / regrid / nesting / patches.
     """
     from pops.mesh.layouts import AMR
 
