@@ -5,11 +5,11 @@ patches) and returns the :class:`~pops.problem.problem.Problem` so calls chain. 
 runtime and no layout; the policies it records (``pops.mesh.amr.Refine`` / ``TagUnion`` /
 ``RegridEvery`` ...) are inert descriptors the deferred AMR route materialises at compile.
 
-In this commit the Problem still carries a layout (the ADC-553 split preserves the pre-existing
-layout-at-construction behaviour); the handle records the criteria on the layout when the layout is
-AMR AND on the Problem's constraint registry. Commit 2 (ADC-526) removes the layout from the
-constructor, so the criteria then live ONLY on the constraint registry and are applied to the
-layout passed to ``pops.compile(problem, layout=...)``.
+The criteria live on the Problem's layout-free constraint registry (ADC-526) and are applied to the
+``AMR`` layout passed to ``pops.compile(problem, layout=...)``, so ONE Problem compiles under a plain
+``Uniform`` or under an ``AMR`` that receives its refine / regrid / nesting / patches. When a Problem
+WAS built with a constructor ``AMR`` layout (back-compat), the handle also mirrors the criteria onto
+that layout so the pre-existing layout-at-construction tests keep passing.
 """
 
 

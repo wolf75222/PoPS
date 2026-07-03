@@ -51,7 +51,12 @@ def _poisson_field():
 
 
 def _uniform_problem():
-    return (pops.Problem(name="plasma")
+    # ADC-526: a Problem no longer carries a default layout, so these route-matrix / contained-
+    # descriptor tests pass an explicit Uniform layout (still accepted at construction) to exercise
+    # the layout-carrying surface.
+    from pops.mesh.cartesian import CartesianMesh
+    from pops.mesh.layouts import Uniform
+    return (pops.Problem(name="plasma", layout=Uniform(CartesianMesh()))
             .block("ne", physics=_StubModel(), spatial=pops.FiniteVolume())
             .field(_poisson_field()))
 

@@ -13,6 +13,8 @@ try:
     import pops
     from pops.codegen import orchestration
     import pops.codegen.compile_drivers as compile_drivers
+    from pops.mesh.cartesian import CartesianMesh
+    from pops.mesh.layouts import Uniform
 except Exception as exc:  # noqa: BLE001
     print("skip test_case_multiblock_uniform (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -70,7 +72,7 @@ def test_multi_block_uniform_compiles_one_handle_per_block():
     try:
         case = (pops.Problem().block("ne", physics=_StubModel())
                 .block("ni", physics=_StubModel()))
-        compiled = orchestration.compile(case, time=object())
+        compiled = orchestration.compile(case, layout=Uniform(CartesianMesh()), time=object())
         _check(captured["target"] == "system", "Uniform multi-block routes to target='system'")
         _check(hasattr(compiled, "_block_models"), "the handle carries _block_models (C3)")
         _check(set(compiled._block_models) == {"ne", "ni"},
@@ -89,7 +91,7 @@ def test_single_block_uniform_still_lowers():
     _patch_compile_problem(_fake)
     try:
         case = pops.Problem().block("ne", physics=_StubModel())
-        compiled = orchestration.compile(case, time=object())
+        compiled = orchestration.compile(case, layout=Uniform(CartesianMesh()), time=object())
         _check(compiled._target == "system", "single-block Uniform routes to target='system'")
         _check(set(compiled._block_models) == {"ne"}, "one block carried")
     finally:

@@ -98,7 +98,7 @@ def test_assembly_chaining_and_inspect():
             .param(pops.physics.ConstParam("alpha", 1.0))
             .aux("B_z", value=None))
     _check(prob is prob.block.__self__, "setters operate on the same problem")
-    _check(prob.layout.name == "Uniform", "default layout is Uniform")
+    _check(prob.layout is None, "ADC-526: a layout-free Problem carries no layout (supplied at compile)")
     info = prob.inspect()
     _check(info["name"] == "plasma", "name carried")
     _check(set(info["blocks"]) == {"ne"}, "block recorded")
@@ -137,19 +137,25 @@ def test_field_type_checked():
 
 
 def test_amr_property():
-    # Uniform layout -> amr raises ValueError.
+    from pops.mesh.amr import RegridEvery
+    from pops.mesh.layouts import Uniform
+    # ADC-526: a layout-free Problem exposes .amr (criteria applied at compile). A CONSTRUCTOR
+    # Uniform layout still refuses .amr (no level to refine onto).
     try:
-        pops.Problem().amr
-        raise AssertionError("amr on a Uniform layout must raise")
+        pops.Problem(layout=Uniform(CartesianMesh())).amr
+        raise AssertionError("amr on a Uniform constructor layout must raise")
     except ValueError:
         pass
-    # AMR layout -> returns a handle whose .refine chains back to the problem.
-    prob = pops.Problem(layout=AMR(CartesianMesh()))
-    handle = prob.amr
-    from pops.mesh.amr import RegridEvery
-    returned = handle.refine(regrid=RegridEvery(20))
+    # A layout-free Problem records the criteria on the constraint registry and chains.
+    prob = pops.Problem()
+    returned = prob.amr.refine(regrid=RegridEvery(20))
     _check(returned is prob, "amr.refine chains back to the problem")
-    _check(prob.layout.regrid is not None, "refine recorded the regrid policy")
+    _check(prob._constraints.refinement.get("regrid") is not None,
+           "refine recorded the regrid policy on the constraint registry")
+    # AMR constructor layout -> back-compat: criteria also mirror onto the layout.
+    prob2 = pops.Problem(layout=AMR(CartesianMesh()))
+    prob2.amr.refine(regrid=RegridEvery(20))
+    _check(prob2.layout.regrid is not None, "refine mirrors onto a constructor AMR layout")
     print("ok test_amr_property")
 
 
@@ -247,7 +253,7 @@ def test_compile_layout_drives_target(monkeypatch=None):
     _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _fake_compile_problem)
     try:
         prob = pops.Problem(name="u").block("ne", physics=_StubModel())
-        compiled = orchestration.compile(prob, time=object())
+        compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=object())
         _check(captured["target"] == "system", "Uniform layout routes to target='system'")
         _check(captured["backend"] == "production", "default backend forwarded")
         _check(compiled._target == "system", "target carried on the handle")
@@ -417,7 +423,7 @@ def test_layout_solver_check_scoped_to_amr_no_false_positive():
 def test_compile_missing_time_raises():
     prob = pops.Problem().block("ne", physics=_StubModel())
     try:
-        orchestration.compile(prob)  # no time= and no problem.time(...)
+        orchestration.compile(prob, layout=Uniform(CartesianMesh()))  # no time= and no problem.time(...)
         raise AssertionError("missing time scheme must raise (no silent default)")
     except NotImplementedError as exc:
         _check("time scheme is required" in str(exc), "missing-time message is explicit")
@@ -435,7 +441,7 @@ def test_compile_problem_time_setter_honored(monkeypatch=None):
     try:
         sentinel = object()
         prob = pops.Problem().block("ne", physics=_StubModel()).time(sentinel)
-        orchestration.compile(prob)  # time taken from problem._time
+        orchestration.compile(prob, layout=Uniform(CartesianMesh()))  # time taken from problem._time
         _check(captured["time"] is sentinel, "problem.time(...) is honored when time= omitted")
     finally:
         _unpatch(monkeypatch)
@@ -453,7 +459,7 @@ def test_compile_multi_block_uniform_lowers(monkeypatch=None):
     try:
         prob = (pops.Problem().block("ne", physics=_StubModel())
                 .block("ni", physics=_StubModel()))
-        compiled = orchestration.compile(prob, time=object())
+        compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=object())
         _check(compiled._target == "system", "multi-block Uniform routes to target='system'")
         _check(set(compiled._block_models) == {"ne", "ni"},
                "compile carries a model per block (_block_models)")
@@ -758,7 +764,7 @@ def test_compile_freezes_snapshot_authority(monkeypatch=None):
     try:
         prob = (pops.Problem().block("ne", physics=_StubModel("ne"))
                 .block("ni", physics=_StubModel("ni")).field(_poisson_problem()))
-        compiled = orchestration.compile(prob, time=object())
+        compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=object())
         _check(set(compiled._block_specs) == {"ne", "ni"},
                "compile freezes a per-block spec (model + spatial) on the handle")
         _check(all("model" in s and "spatial" in s for s in compiled._block_specs.values()),
@@ -791,7 +797,7 @@ def test_bind_rejects_case_mutated_after_compile(monkeypatch=None):
         rtsys.System = _StubSystem
         try:
             prob = pops.Problem().block("ne", physics=_StubModel("ne")).field(_poisson_problem())
-            compiled = orchestration.compile(prob, time=object())
+            compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=object())
             compiled._problem = prob  # the live Problem bind() re-reads
             # MUTATE the Problem after compile: add a block the snapshot never saw.
             prob.block("ni_late", physics=_StubModel("ni_late"))
@@ -832,7 +838,7 @@ def test_bind_uses_snapshot_not_live_physics(monkeypatch=None):
         try:
             m0 = _StubModel("ne")
             prob = pops.Problem().block("ne", physics=m0).field(_poisson_problem())
-            compiled = orchestration.compile(prob, time=object())
+            compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=object())
             frozen_model = compiled._block_specs["ne"]["model"]
             # Swap the block's physics AFTER compile (same block name -> no drift). Poke the block
             # registry's backing spec directly (the registry keys the model under "model").

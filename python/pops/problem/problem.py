@@ -17,10 +17,11 @@ constraints) and DELEGATES to them; it holds no flat dict and no inline subsyste
 ``pops.compile(problem, layout=..., time=...)`` -- the public front door -- lowers the assembly
 through the existing codegen; ``pops.bind(compiled, ...)`` wires it onto the runtime. The Problem
 here owns no codegen and no runtime of its own; it never imports ``_pops``. The Problem does NOT
-choose the layout (ADC-526): the layout (``Uniform`` / ``AMR``) is supplied at compile.
+choose the layout (ADC-526): the layout (``Uniform`` / ``AMR``) is supplied at
+``pops.compile(problem, layout=...)``, so ONE Problem compiles under either. A layout given to the
+constructor is still accepted (back-compat) and must agree with the one passed at compile.
 """
 from pops.descriptors import Availability
-from pops.mesh.cartesian import CartesianMesh
 from pops.mesh.layouts import AMR, Uniform
 from pops.problem.amr_handle import ProblemAmrHandle
 from pops.problem.registries import (
@@ -54,10 +55,11 @@ class Problem:
 
     def __init__(self, layout=None, name=None):
         self._name = str(name) if name else "Problem"
-        # ADC-553: the assembly lives in typed registries, not flat dicts. The layout is still
-        # accepted at construction in this commit (the ADC-526 move to compile-time layout lands in
-        # the next commit); it defaults to a single-level Uniform over a default CartesianMesh.
-        self._layout = layout if layout is not None else Uniform(CartesianMesh())
+        # ADC-526: the Problem does NOT own a layout. Layout is supplied at compile
+        # (pops.compile(problem, layout=Uniform(...)|AMR(...))), so ONE Problem compiles under
+        # either. A constructor layout= is still accepted (back-compat) and, when given, is carried
+        # here so pops.compile can cross-check it against the layout passed at compile.
+        self._layout = layout
         self._block_registry = BlockRegistry()
         self._field_registry = FieldRegistry()
         self._time_registry = TimeRegistry()
@@ -88,10 +90,28 @@ class Problem:
         self._block_registry.add(name, physics, spatial=spatial)
         return self
 
+    def add_block(self, name, model, spatial=None, time=None, diagnostics=None):
+        """Declare a physics block and return its stable :class:`~pops.problem.handles.BlockHandle`.
+
+        The ADC-526 declarative form (a superset of :meth:`block`): a block carries its ``model``
+        (required), its ``spatial`` discretisation, and the optional per-block ``time`` scheme and
+        ``diagnostics``. Unlike the chaining :meth:`block`, this returns a stable HANDLE the user can
+        hold to reference the block later. A duplicate name / missing model is refused loudly here.
+        """
+        return self._block_registry.add(name, model, spatial=spatial, time=time,
+                                        diagnostics=diagnostics)
+
     def field(self, field_problem):
         """Register an elliptic :class:`~pops.fields.FieldProblem` (keyed on its name). Chains."""
         self._field_registry.add(field_problem)
         return self
+
+    def add_field(self, field_problem):
+        """Register a field problem and return its stable :class:`~pops.problem.handles.FieldHandle`.
+
+        The handle-returning counterpart of the chaining :meth:`field` (ADC-526 stable handles).
+        """
+        return self._field_registry.add(field_problem)
 
     def param(self, name, default=None, *, kind=_NO_KIND):
         """Declare a runtime/const parameter and its default value. Chains.
@@ -119,6 +139,11 @@ class Problem:
         self._time_registry.set(program)
         return self
 
+    def program(self, program):
+        """Attach the whole-system time ``Program`` (the ADC-526 spelling of :meth:`time`). Chains."""
+        self._time_registry.set(program)
+        return self
+
     # --- compile-time compatibility accessors (read by pops.codegen.orchestration) ------
     @property
     def _time(self):
@@ -143,39 +168,60 @@ class Problem:
 
     @property
     def amr(self):
-        """The AMR refinement-policy handle (raises ``ValueError`` if layout is not AMR)."""
-        if not isinstance(self._layout, AMR):
+        """The AMR refinement-policy handle (records criteria on the constraint registry; ADC-526).
+
+        A layout-free Problem always exposes ``.amr`` -- the criteria are applied to the layout at
+        ``pops.compile(problem, layout=AMR(...))``. When a layout WAS given to the constructor it
+        must be AMR (a Uniform layout has no level to refine onto), so a back-compat
+        ``Problem(layout=Uniform(...)).amr`` is still refused loudly.
+        """
+        if self._layout is not None and not isinstance(self._layout, AMR):
             raise ValueError(
-                "problem.amr: only available with layout=AMR(...); this problem has layout %r"
+                "problem.amr: only available with no constructor layout (supply layout=AMR(...) at "
+                "compile) or layout=AMR(...); this problem has layout %r"
                 % type(self._layout).__name__)
         return ProblemAmrHandle(self)
 
+    def blocks(self):
+        """The declared blocks as ``{name: BlockHandle}`` (ADC-526 stable-handle accessor)."""
+        from pops.problem.handles import BlockHandle
+        return {name: BlockHandle(name, owner=self) for name in self._block_registry.names()}
+
+    def fields(self):
+        """The declared field problems as ``{name: FieldHandle}`` (ADC-526 stable-handle accessor)."""
+        from pops.problem.handles import FieldHandle
+        return {name: FieldHandle(name, owner=self) for name in self._field_registry.names()}
+
     # --- DescriptorProtocol surface (pure Python; no runtime, no codegen) ----
+    def _layout_name(self):
+        return self._layout.name if self._layout is not None else None
+
     def options(self):
-        return {"name": self._name, "layout": self._layout.name,
+        return {"name": self._name, "layout": self._layout_name(),
                 "n_blocks": len(self._block_registry), "n_fields": len(self._field_registry),
                 "n_params": len(self._param_registry), "n_aux": len(self._runtime_registry.aux),
                 "n_outputs": len(self._runtime_registry.outputs),
                 "has_time": self._time_registry.program is not None}
 
     def requirements(self):
-        req = dict(self._layout.requirements())
+        req = dict(self._layout.requirements()) if self._layout is not None else {}
         if len(self._field_registry):
             req["elliptic_solve"] = True
         req["time_scheme"] = True
         return req
 
     def capabilities(self):
-        caps = dict(self._layout.capabilities())
+        caps = dict(self._layout.capabilities()) if self._layout is not None else {}
         caps["blocks"] = sorted(self._block_registry.names())
         caps["fields"] = sorted(self._field_registry.names())
         return caps
 
     def available(self, context=None):
         """An EXPLAINABLE availability status, computed from the parts (no runtime)."""
-        layout_status = self._layout.available(context)
-        if not layout_status.ok:
-            return layout_status
+        if self._layout is not None:
+            layout_status = self._layout.available(context)
+            if not layout_status.ok:
+                return layout_status
         if not len(self._block_registry):
             return Availability.no("problem has no block; add one with .block(name, physics)",
                                    missing=["block"])
@@ -206,13 +252,20 @@ class Problem:
         return True
 
     def validate_report(self, context=None):
-        """Aggregate the per-family validation reports into ONE report (no raise; ADC-553)."""
+        """Aggregate the per-family validation reports into ONE report (no raise; ADC-553).
+
+        When the Problem carries NO layout (the ADC-526 default), the layout-specific checks
+        (the layout's own ``validate`` and the Uniform-with-AMR-criteria refusal) DEFER to
+        ``pops.compile(problem, layout=...)``, where the layout is finally known; the structural
+        registry checks always run.
+        """
         report = ProblemValidationReport(subject=self)
-        self._refuse_uniform_with_amr_criteria(report)
-        try:
-            self._layout.validate(context)
-        except Exception as exc:  # noqa: BLE001 -- surface the layout's own message as an issue
-            report.error("layout", "layout_invalid", str(exc))
+        if self._layout is not None:
+            self._refuse_uniform_with_amr_criteria(report)
+            try:
+                self._layout.validate(context)
+            except Exception as exc:  # noqa: BLE001 -- surface the layout's own message as an issue
+                report.error("layout", "layout_invalid", str(exc))
         report.extend(self._block_registry.validate(context))
         # Carry the mesh layout into each field problem's validation so its solver can refuse a
         # layout it cannot serve (Spec 6 sec.8/9), precisely, before any compile.
@@ -253,7 +306,8 @@ class Problem:
     def explain_routes(self):
         """Return a printable route matrix sourced from the C++ authoritative facts (sec.13.12.1)."""
         from pops._capabilities import native_capability_matrix
-        return native_capability_matrix(owner=self.name, layout=self._layout.name, target="module")
+        return native_capability_matrix(owner=self.name, layout=self._layout_name() or "context",
+                                        target="module")
 
     def lower(self, context=None):
         """The inert lowering record for the assembly (metadata only; no computation)."""
@@ -265,26 +319,39 @@ class Problem:
         info = {"name": self._name, "category": self.category, "native_id": self.native_id,
                 "options": self.options(), "requirements": self.requirements(),
                 "capabilities": self.capabilities()}
-        info["layout"] = self._layout.inspect()
+        info["layout"] = self._layout.inspect() if self._layout is not None else None
         info["blocks"] = self._block_registry.inspect()
         info["fields"] = self._field_registry.inspect()
         info["params"] = self._param_registry.inspect()
         info["aux"] = self._runtime_registry.inspect()["aux"]
         info["outputs"] = self._runtime_registry.inspect()["outputs"]
+        info["constraints"] = self._constraint_registry.inspect()
         info["time"] = self._time_registry.inspect()["program"]
+        return info
+
+    def to_dict(self):
+        """A JSON-ready, array-free serialisation of the assembly for cache / codegen / debug.
+
+        A superset of :meth:`inspect` that also names each block's stable handle id and the
+        refinement criteria recorded on the constraint registry, so the whole declaration
+        round-trips through a plain dict with no runtime object and no numpy array (ADC-526).
+        """
+        info = self.inspect()
+        info["handles"] = {"blocks": [h.handle_id for h in self.blocks().values()],
+                           "fields": [h.handle_id for h in self.fields().values()]}
         return info
 
     def __str__(self):
         return ("%s [%s] layout=%s | blocks=%d | fields=%d | params=%d | aux=%d | time=%s"
-                % (self._name, self.category, self._layout.name, len(self._block_registry),
-                   len(self._field_registry), len(self._param_registry),
-                   len(self._runtime_registry.aux),
+                % (self._name, self.category, self._layout_name() or "none",
+                   len(self._block_registry), len(self._field_registry),
+                   len(self._param_registry), len(self._runtime_registry.aux),
                    "set" if self._time_registry.program is not None else "none"))
 
     def __repr__(self):
         return ("Problem(name=%r, layout=%s, blocks=%s, fields=%s)"
-                % (self._name, self._layout.name, sorted(self._block_registry.names()),
-                   sorted(self._field_registry.names())))
+                % (self._name, self._layout_name() or "none",
+                   sorted(self._block_registry.names()), sorted(self._field_registry.names())))
 
 
 __all__ = ["Problem"]

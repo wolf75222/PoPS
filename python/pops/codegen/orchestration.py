@@ -34,10 +34,12 @@ def compile(problem, layout=None, backend="production", time=None, **kwargs):
     """Lower a :class:`pops.problem.Problem` to a compiled handle.
 
     Validates @p problem, derives the compile target from the LAYOUT (``Uniform`` -> system,
-    ``AMR`` -> amr_system) and lowers via the route the target selects. The layout comes from @p
-    layout when given, else from ``problem.layout`` (ADC-523: the layout is on its way to becoming a
-    ``pops.compile`` argument; PR-1 accepts it optionally and falls back to the problem's own layout,
-    raising if an explicit @p layout disagrees with the one the problem already carries):
+    ``AMR`` -> amr_system) and lowers via the route the target selects. ADC-526: the layout is a
+    ``pops.compile`` argument -- the Problem no longer owns a mandatory layout, so ONE Problem
+    compiles under ``layout=Uniform(...)`` OR ``layout=AMR(...)``. A layout given to the Problem
+    constructor (back-compat) is still honoured and must agree with @p layout; neither present is a
+    loud error. The Problem's recorded AMR criteria (``problem.amr.refine(...)``) are applied to an
+    ``AMR`` layout here:
 
     - ``Uniform``: compiles the whole-system time ``Program`` once with ``compile_problem``
       (BYTE-IDENTICAL to before), resolving each block's physics and carrying the full
@@ -55,9 +57,9 @@ def compile(problem, layout=None, backend="production", time=None, **kwargs):
 
     Args:
         problem: The :class:`pops.problem.Problem` assembly to lower.
-        layout: Optional explicit mesh layout (``Uniform`` / ``AMR``). When omitted the layout is
-            read from ``problem.layout``; when given it must match the problem's layout (a mismatch
-            raises), so a Problem built with one layout cannot be silently compiled for another.
+        layout: The mesh layout (``Uniform`` / ``AMR``) to compile for (ADC-526). Required unless the
+            Problem carries a constructor layout (back-compat); when both are given they must agree (a
+            mismatch raises), so a compiled artifact is frozen to exactly one layout.
         backend: The codegen backend (default "production"). The AMR route requires "production"
             (the only native AMR loader, ``Model.compile`` enforces it).
         time: The ``pops.time.Program`` time scheme (Uniform route only); falls back to
@@ -72,13 +74,17 @@ def compile(problem, layout=None, backend="production", time=None, **kwargs):
     # Lazy imports keep the codegen layer's module-scope import graph clean (no mesh / runtime).
     from pops.mesh.layouts import AMR
 
-    # problem.validate() runs the layout's own check, so an AMR(max_levels) / AMR(ratio) beyond the
-    # native envelope (NATIVE_MAX_LEVELS / NATIVE_RATIOS) is refused HERE with the existing clear
-    # AMR.available message before any compile, never silently clamped.
-    problem.validate()
-    # ADC-523: resolve the effective layout -- an explicit layout= wins but must agree with the one
-    # the problem already carries (no silent override); omitted, it falls back to problem.layout.
+    # ADC-526: resolve the effective layout FIRST (the Problem no longer carries a mandatory layout),
+    # applying the Problem's recorded AMR criteria to it. A missing layout / a layout= that disagrees
+    # with a constructor layout is refused here.
     layout = _resolve_layout(problem, layout)
+    # Validate the resolved layout NOW that it is known: an AMR(max_levels) / AMR(ratio) beyond the
+    # native envelope (NATIVE_MAX_LEVELS / NATIVE_RATIOS), or a Uniform layout carrying active AMR
+    # criteria (recorded via problem.amr.refine on a Uniform compile), is refused before any compile
+    # with the existing clear message -- never silently clamped or dropped.
+    _validate_layout_for_compile(problem, layout)
+    # problem.validate() runs the structural registry checks (blocks / fields / collisions).
+    problem.validate()
     is_amr = isinstance(layout, AMR)
     target = "amr_system" if is_amr else "system"
 
@@ -282,25 +288,76 @@ def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
                          aux=aux or {}, solvers=field_solvers, cadence=cadence, outputs=outputs)
 
 
-def _resolve_layout(problem, layout):
-    """Resolve the effective compile layout from an optional explicit @p layout (ADC-523).
+def _validate_layout_for_compile(problem, layout):
+    """Validate the resolved layout at compile, once the layout is finally known (ADC-526).
 
-    Omitted (``None``), the layout is read from ``problem.layout`` (the historical path). Given, it
-    must be the SAME layout the problem already carries: a ``pops.compile(problem, layout=other)`` that
-    disagrees with ``problem.layout`` is refused loudly rather than silently overriding what the Problem was
-    assembled and validated with. PR-1 accepts the argument as a forward step toward
-    ``pops.compile(problem, layout=...)``; PR-2 completes the move (the Problem loses the mandatory
-    constructor layout).
+    The Problem's ``validate()`` is layout-agnostic (it defers layout-specific checks to compile), so
+    the layout's OWN ``validate`` runs HERE: an AMR envelope violation is refused, and a ``Uniform``
+    layout that received active AMR criteria (a user recorded ``problem.amr.refine(...)`` then
+    compiled with ``layout=Uniform(...)``) is refused with the clear "no level to refine onto"
+    message rather than silently dropping the criteria. The field problems are also re-validated
+    with the resolved layout in context so a solver can refuse a layout it cannot serve.
     """
+    from pops.mesh.layouts import AMR, Uniform
+
+    criteria = getattr(getattr(problem, "_constraints", None), "refinement", {}) or {}
+    if criteria.get("refine") is not None and isinstance(layout, Uniform) \
+            and getattr(layout, "ignore_amr", None) is None:
+        criterion = criteria["refine"]
+        sub = getattr(criterion, "criteria", None)
+        names = [c.name for c in sub] if sub is not None else [criterion.name]
+        raise ValueError(
+            "pops.compile: layout=Uniform(...) but the Problem recorded active AMR criteria (%s) via "
+            "problem.amr.refine(...); a single-level layout has no level to refine onto, and a "
+            "criterion is never silently ignored. Compile with layout=AMR(...) to actually refine, "
+            "or drop the refinement criteria." % ", ".join(names))
+    context = {"layout": layout}
+    layout.validate(context)
+    for field in getattr(problem, "_fields", {}).items() if hasattr(
+            getattr(problem, "_fields", None), "items") else []:
+        field[1].validate(context)
+
+
+def _resolve_layout(problem, layout):
+    """Resolve the effective compile layout, then apply the problem's AMR criteria (ADC-526).
+
+    ADC-526 completes the move of the layout to ``pops.compile(problem, layout=...)``: the Problem no
+    longer owns a mandatory layout. The effective layout is the explicit @p layout when given, else a
+    layout the Problem may still carry from its constructor (back-compat); neither present is a loud
+    error pointing at ``pops.compile(problem, layout=...)``. When BOTH are given they must agree (a
+    compiled artifact is frozen to one layout), so a disagreement is refused rather than silently
+    overridden.
+
+    The AMR refinement criteria the user recorded via ``problem.amr.refine(...)`` live on the
+    Problem's constraint registry (layout-free); they are applied to the resolved layout HERE, when
+    the layout is finally known, so ONE Problem compiles under a plain ``Uniform`` or under an
+    ``AMR`` that receives its refine / regrid / nesting / patches.
+    """
+    from pops.mesh.layouts import AMR
+
     problem_layout = getattr(problem, "layout", None)
     if layout is None:
-        return problem_layout
-    if problem_layout is not None and layout is not problem_layout and layout != problem_layout:
-        raise ValueError(
-            "pops.compile: the explicit layout= (%r) disagrees with the problem's own layout (%r); "
-            "build the Problem with the layout you compile for (a compiled artifact is frozen to one "
-            "layout)." % (layout, problem_layout))
-    return layout
+        if problem_layout is None:
+            raise ValueError(
+                "pops.compile: no layout given; pass layout=Uniform(...) or layout=AMR(...) to "
+                "pops.compile(problem, layout=...). The Problem no longer carries a layout (ADC-526).")
+        resolved = problem_layout
+    else:
+        if problem_layout is not None and layout is not problem_layout and layout != problem_layout:
+            raise ValueError(
+                "pops.compile: the explicit layout= (%r) disagrees with the problem's own layout "
+                "(%r); a compiled artifact is frozen to one layout." % (layout, problem_layout))
+        resolved = layout
+
+    # Apply the layout-free AMR criteria recorded on the Problem's constraint registry to the AMR
+    # layout (ADC-526). A Uniform layout ignores them (its own validate refuses active criteria);
+    # criteria the constructor-layout path already wrote are re-applied idempotently.
+    criteria = getattr(getattr(problem, "_constraints", None), "refinement", {}) or {}
+    if criteria and isinstance(resolved, AMR):
+        for slot in ("refine", "regrid", "nesting", "patches"):
+            if criteria.get(slot) is not None:
+                setattr(resolved, slot, criteria[slot])
+    return resolved
 
 
 def _resolve_problem_model(physics):

@@ -25,6 +25,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `ProblemValidationReport` whose `by_family()` lists the errors per subsystem. The package owns no
   runtime data and imports no `_pops` / runtime / codegen (guarded by
   `tests/python/architecture/test_problem_dependencies.py`).
+- ADC-526 `pops.Problem` is the declarative assembly root and no longer owns a layout: the layout
+  (`Uniform` / `AMR`) is supplied at `pops.compile(problem, layout=...)`, so ONE Problem compiles
+  under either. Added `add_block(name, model, spatial, time, diagnostics)` and `add_field(...)`
+  returning stable handles, `program(T)`, the `blocks()` / `fields()` / `requirements()` accessors,
+  and a JSON-ready `to_dict()`. `problem.amr.refine(...)` records the AMR criteria on a layout-free
+  constraint registry, applied to the layout at compile. Duplicate / missing block, missing physics,
+  a bad field / output policy, a missing layout, and a layout that disagrees with a constructor
+  layout are all refused early. A constructor `layout=` stays accepted (back-compat) and must agree
+  with the layout passed at compile.
 - ADC-523 `pops.compile` / `pops.bind` are the only public front doors; the low-level
   `compile_problem` driver and the concrete `CompiledProblem` loader class leave the top-level
   surface (still reachable as `pops.codegen.compile_problem` / `pops.codegen.CompiledProblem` for
