@@ -53,6 +53,19 @@ def pops_cache_dir():
     return base
 
 
+def _precision_cache_key():
+    """The floating-point precision component of a compiled artifact's cache key (ADC-536).
+
+    The native runtime is fixed to double precision today (``NATIVE_REAL_BYTES`` = 8), but the token
+    enters the key so a FUTURE precision switch (single / mixed) is a cache MISS, never a silent
+    reuse of a double-precision ``.so`` under a single-precision request. Readable
+    ("precision=double;real_bytes=8") so the mismatching field is nameable in a diagnostic. When a
+    typed ``Production(precision=...)`` backend descriptor lands (538/537) it becomes the token's
+    source; until then it mirrors the single native fact."""
+    from pops.runtime_environment import NATIVE_PRECISION, NATIVE_REAL_BYTES
+    return "precision=%s;real_bytes=%d" % (NATIVE_PRECISION, NATIVE_REAL_BYTES)
+
+
 def _registry_cache_key():
     """Route registry + report vocabulary components of EVERY cache key (ADC-599).
 

@@ -33,6 +33,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   multi-block right-hand side (`ChargeDensity(...) + FixedSource(...)` -> `SumRHS`). `FieldProblem`
   now rejects a bare-string `solver=` (pointing at `pops.solvers.GeometricMG`) and refuses a
   missing required output or a missing nullspace on a singular operator before the runtime is touched.
+- ADC-536 `pops.compile` closes the compile pipeline: the program `.so` cache key now folds the
+  native Kokkos/MPI feature-key and the precision token (a one-time cache invalidation; the `.so`
+  bytes are unchanged), a cache HIT re-verifies the cached artifact's `<so>.cachekey` sidecar against
+  the freshly computed ABI/cache key and fails loud on a missing or mismatched sidecar (no silent
+  stale reuse), and `debug=True` writes a generated-C++ sidecar carrying the serialized IR, hashes,
+  compile flags, toolchain and redacted command (banner in the sidecar only, so the `.so` bytes stay
+  binary-identical). The manifest carries per-block ghost depth, a compile error cites the generated
+  source, and `CompiledArtifact` now names `manifest()` / `arguments()` / `capability_matrix()`
+  alongside `inspect()` / `requirements()`.
 
 ### Changed
 - ADC-623 Rebalanced the CI pytest gate: the selected test files are now packed onto shards by

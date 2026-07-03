@@ -36,5 +36,27 @@ class CompiledArtifact(Protocol):
         """The compile-time :class:`pops.codegen.inspect_report.RequirementsReport`."""
         ...
 
+    def manifest(self):
+        """The rich :class:`pops.external.CompiledArtifactManifest` self-description (ADC-536).
+
+        The ABI identity, blocks / variables / roles, required aux, const / runtime params, per-block
+        ghost depth, field outputs and ``supports_*`` capability flags -- what a runtime needs to bind
+        the ``.so`` safely. Metadata-only (no bind / dlopen)."""
+        ...
+
+    def arguments(self):
+        """The runtime inputs the artifact expects at bind (ADC-536).
+
+        An :class:`pops.codegen.inspect_compiled.Arguments` listing the instances / params / aux /
+        solvers / outputs and runtime layout to SUPPLY at :func:`pops.bind`. Metadata-only."""
+        ...
+
+    def capability_matrix(self):
+        """The ADC-549 native route matrix for this artifact (ADC-536).
+
+        The route support columns (feature / layout / backend / platform / MPI / GPU / status /
+        limitation) built from the carried manifest. Metadata-only (no dlopen / bind)."""
+        ...
+
 
 __all__ = ["CompiledArtifact"]
