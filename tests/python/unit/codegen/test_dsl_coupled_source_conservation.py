@@ -171,6 +171,59 @@ def main():
         raised_same = True
     chk(raised_same, "add_pair refuse block_a == block_b", fails)
 
+    # --- (E) NAMED PRESETS lower to a declared coupling contract (ADC-595) ---
+    from pops.physics.coupling_presets import (collision_preset, ionization_preset,
+                                               thermal_exchange_preset)
+    # Collision conserves momentum: its declared contract passes verify_declared_contract, and the
+    # add_pair legs make the momentum terms cancel structurally (momentum_x AND momentum_y).
+    col = collision_preset("a", "b", 0.7)
+    chk(col.conserved == ["momentum_x", "momentum_y"], "collision preset declares momentum conserved",
+        fails)
+    col_ok = True
+    try:
+        col.source.verify_declared_contract(conserved=col.conserved, created=col.created)
+    except Exception as e:
+        print("FAIL collision preset contract:", e)
+        col_ok = False
+    chk(col_ok, "collision preset satisfies its declared conserved-momentum contract", fails)
+    # A collision that FALSELY declared it also conserves density must be rejected (density is only read,
+    # never a source term), proving the contract is checked, not trusted.
+    raised_bad_col = False
+    try:
+        col.source.verify_declared_contract(conserved=["momentum_x", "momentum_y", "density"])
+    except ValueError:
+        raised_bad_col = True
+    chk(raised_bad_col, "collision preset rejects a bogus extra conserved role (density)", fails)
+
+    # Ionization legally NET-SOURCES density (an electron/ion pair is created): it is declared CREATED,
+    # so the contract validator accepts the net source; declaring density CONSERVED must instead raise.
+    ion = ionization_preset("e", "i", "g", 1.7)
+    chk(ion.created == ["density"] and ion.conserved == [],
+        "ionization preset declares density created (net source)", fails)
+    ion_ok = True
+    try:
+        ion.source.verify_declared_contract(conserved=ion.conserved, created=ion.created)
+    except Exception as e:
+        print("FAIL ionization preset created-contract:", e)
+        ion_ok = False
+    chk(ion_ok, "ionization preset legally net-sources under declared created", fails)
+    raised_ion = False
+    try:
+        ion.source.verify_declared_contract(conserved=["density"])
+    except ValueError:
+        raised_ion = True
+    chk(raised_ion, "ionization density-declared-conserved raises (it net-sources)", fails)
+
+    # ThermalExchange conserves energy (add_pair on energy); its contract passes.
+    th = thermal_exchange_preset("a", "b", 0.3, 1.4, 1.6667)
+    th_ok = True
+    try:
+        th.source.verify_declared_contract(conserved=th.conserved, created=th.created)
+    except Exception as e:
+        print("FAIL thermal preset contract:", e)
+        th_ok = False
+    chk(th.conserved == ["energy"] and th_ok, "thermal_exchange preset conserves energy", fails)
+
     if fails[0] == 0:
         print("test_dsl_coupled_source_conservation : OK")
     else:

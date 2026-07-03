@@ -369,6 +369,19 @@ class CoupledSource:
             expr = expr.a
         return (sign, _key(expr))
 
+    def _role_net_bodies(self):
+        """Per-role signed structural balance of the source terms (shared by the conservation checks).
+
+        Returns ``{role: {body_key: net_sign}}``: +1 for a ``+E`` term, -1 for a ``-E`` term, summed
+        per structural body. A role whose every body nets to 0 CANCELS (conservative); a non-zero net is
+        an uncompensated term. Purely symbolic (same structural key as the codegen CSE)."""
+        from collections import Counter
+        per_role = {}
+        for (_block, role, expr) in self._terms:
+            sign, body = self._signed_key(expr)
+            per_role.setdefault(role, Counter())[body] += sign
+        return per_role
+
     def _verify_conservation(self):
         """Verify that, role by role, the sum of the source terms CANCELS structurally: each
         contribution +E on one block is compensated by a contribution -E (same structural body) on
@@ -376,13 +389,7 @@ class CoupledSource:
         guarantees by construction; this check extends it to hand-written couplings (two .add) and detects
         a break (slightly different formulas, forgotten sign, orphan term). Purely symbolic
         (no numerical evaluation): same structural key as the codegen CSE."""
-        from collections import Counter
-        per_role = {}
-        for (_block, role, expr) in self._terms:
-            sign, body = self._signed_key(expr)
-            # Signed counter per structural body: +1 for +E, -1 for -E. Everything cancels => conservative.
-            c = per_role.setdefault(role, Counter())
-            c[body] += sign
+        per_role = self._role_net_bodies()
         offenders = []
         for role in sorted(per_role):
             for body, net in per_role[role].items():
@@ -397,6 +404,31 @@ class CoupledSource:
                 "Each contribution +E on one block must be compensated by -E (same expression) "
                 "on another block (use add_pair to guarantee it). Uncompensated terms: "
                 + details)
+
+    def verify_declared_contract(self, conserved=(), created=()):
+        """Validate a named preset's DECLARED conservation contract against its terms (ADC-595).
+
+        Promotes ``_verify_conservation`` from an opt-in flag to a CHECKED contract: a declared
+        CONSERVED role whose terms do not cancel (net != 0) raises; a declared CREATED role is allowed to
+        net-source (ionization). Also rejects a role declared both / a declaration no term targets. Roles
+        declared neither stay UNCHECKED (a raw user CoupledSource keeps its historical freedom)."""
+        conserved, created = list(conserved), list(created)
+        both = sorted(set(conserved) & set(created))
+        if both:
+            raise ValueError("CoupledSource: role(s) %s declared BOTH conserved and created"
+                             % (", ".join(map(repr, both)),))
+        per_role = self._role_net_bodies()
+        for role in conserved + created:
+            if role not in per_role:
+                raise ValueError("CoupledSource: declared role %r but no source term targets it"
+                                 % (role,))
+        for role in conserved:
+            offenders = [(b, n) for b, n in per_role[role].items() if n != 0]
+            if offenders:
+                raise ValueError(
+                    "CoupledSource: role %r declared CONSERVED but its terms do not cancel (each +E "
+                    "must be balanced by -E on another block; use add_pair). Uncompensated: %s"
+                    % (role, "; ".join("term %r (net=%+d)" % (b, n) for (b, n) in offenders)))
 
     def compile(self, backend="production", verify_conservation=False):
         """Compile the source into a CompiledCoupledSource (flat bytecode ABI). @p backend documents

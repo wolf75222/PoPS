@@ -281,18 +281,34 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         _guard_assembling(self, "add_coupling")  # frozen once pops.bind completes (ADC-592)
         # Late import (the multispecies module imports this package: avoid the cycle).
         from pops.physics.multispecies import CompiledCoupledSource
+        from pops.physics.coupling_presets import lower_named_coupling, coupling_operator_args
 
         if isinstance(coupling, CompiledCoupledSource):
-            self._s.add_coupled_source(coupling.in_blocks, coupling.in_roles, coupling.consts,
-                                       coupling.out_blocks, coupling.out_roles, coupling.prog_ops,
-                                       coupling.prog_args, coupling.prog_lens,
-                                       getattr(coupling, "frequency", 0.0), coupling.name,
-                                       getattr(coupling, "freq_prog_ops", []),
-                                       getattr(coupling, "freq_prog_args", []))
-        else:
-            raise TypeError("AmrSystem.add_coupling expects a CompiledCoupledSource "
-                            "(pops.dsl.CoupledSource(...).compile(...)): the AMR coupled source is "
-                            "MULTI-BLOCK and described in formulas")
+            args = coupling_operator_args(coupling, getattr(coupling, "conserved_roles", ()),
+                                          getattr(coupling, "created_roles", ()))
+            self._s.add_coupling_operator(*args)
+            return
+        # Named preset (ADC-595): lower to the generic coupled source (bit-identical to System), so the
+        # AMR path gains the named couplings as typed operators too. ThermalExchange needs a per-block
+        # gamma; AmrSystem does not expose block_gamma, so a preset that requires it raises clearly.
+        preset = lower_named_coupling(coupling, self._amr_block_gamma)
+        if preset is None:
+            raise TypeError("AmrSystem.add_coupling expects pops.Ionization / Collision / "
+                            "ThermalExchange or a CompiledCoupledSource "
+                            "(pops.dsl.CoupledSource(...).compile(...))")
+        preset.source.verify_declared_contract(conserved=preset.conserved, created=preset.created)
+        args = coupling_operator_args(preset.source.compile(), preset.conserved, preset.created,
+                                      frequency=preset.frequency)
+        self._s.add_coupling_operator(*args)
+
+    def _amr_block_gamma(self, name):
+        """Per-block adiabatic index for the ThermalExchange preset (ADC-595). AmrSystem does not expose
+        a block_gamma accessor, so a ThermalExchange on AMR raises a clear error pointing at the generic
+        CoupledSource path (build the pressure closure with an explicit gamma via pops.dsl.CoupledSource)."""
+        raise NotImplementedError(
+            "AmrSystem: the ThermalExchange preset needs a per-block gamma, which AMR does not expose; "
+            "author the thermal exchange as a generic pops.dsl.CoupledSource with an explicit gamma "
+            "param, or use it on a uniform System.")
 
     @property
     def amr(self):

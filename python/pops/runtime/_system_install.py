@@ -20,7 +20,6 @@ from pops.runtime.defaults import (
 )
 from pops.runtime.bricks import (
     Spatial, Explicit, Split, DivEpsGrad, CompositeRhs, ChargeDensitySource,
-    Ionization, Collision, ThermalExchange,
 )
 from pops.runtime.routes import (
     RIEMANN_HLL, check_riemann_capability as _check_riemann_capability,
@@ -470,31 +469,32 @@ class _SystemInstall:
     def add_coupling(self, coupling):
         """Add an inter-species coupling (operator-split, applied after transport):
 
-        - NAMED object pops.Ionization / Collision / ThermalExchange -> fixed formula
-          (add_ionization / add_collision / add_thermal_exchange);
-        - CompiledCoupledSource (pops.dsl.CoupledSource(...).compile(...)) -> GENERIC source described in
-          formulas, carried as bytecode and interpreted on the C++ side (System.add_coupled_source; no
-          per-cell Python callback, MPI-safe)."""
+        - NAMED object pops.Ionization / Collision / ThermalExchange -> a PRESET lowering to the generic
+          coupled source (ADC-595): the fixed formula is emitted as a CoupledSource with a DECLARED
+          conservation contract, compiled to bytecode, and registered as a typed coupling operator;
+        - CompiledCoupledSource (pops.dsl.CoupledSource(...).compile(...)) -> GENERIC bytecode source
+          interpreted on the C++ side (no per-cell Python callback, MPI-safe).
+
+        Both paths register through System.add_coupling_operator, so the coupling is inspectable as a
+        typed operator (sim.coupled_operators()) with its declared conservation validated at
+        registration. There is no longer a named C++ coupling method per coupling."""
         _guard_assembling(self, "add_coupling")  # frozen once pops.bind completes (ADC-592)
         # Late import (the multispecies module imports this package: avoid the cycle).
         from pops.physics.multispecies import CompiledCoupledSource
+        from pops.physics.coupling_presets import lower_named_coupling, coupling_operator_args
 
         if isinstance(coupling, CompiledCoupledSource):
-            self._s.add_coupled_source(coupling.in_blocks, coupling.in_roles, coupling.consts,
-                                       coupling.out_blocks, coupling.out_roles, coupling.prog_ops,
-                                       coupling.prog_args, coupling.prog_lens,
-                                       getattr(coupling, "frequency", 0.0), coupling.name,
-                                       # PER-CELL frequency mu(U) (empty = constant only, cf.
-                                       # CoupledSource.frequency(Expr)). Forwarded to the C++ boundary.
-                                       getattr(coupling, "freq_prog_ops", []),
-                                       getattr(coupling, "freq_prog_args", []))
-        elif isinstance(coupling, Ionization):
-            self.add_ionization(electron=coupling.electron, ion=coupling.ion,
-                                neutral=coupling.neutral, rate=coupling.rate)
-        elif isinstance(coupling, Collision):
-            self.add_collision(coupling.a, coupling.b, coupling.rate)
-        elif isinstance(coupling, ThermalExchange):
-            self.add_thermal_exchange(coupling.a, coupling.b, coupling.rate)
-        else:
+            args = coupling_operator_args(coupling, getattr(coupling, "conserved_roles", ()),
+                                          getattr(coupling, "created_roles", ()))
+            self._s.add_coupling_operator(*args)
+            return
+        preset = lower_named_coupling(coupling, self._s.block_gamma)
+        if preset is None:
             raise TypeError("add_coupling expects pops.Ionization / Collision / ThermalExchange or a "
                             "CompiledCoupledSource (pops.dsl.CoupledSource(...).compile(...))")
+        # Validate the DECLARED contract symbolically (Python); the C++ side revalidates at
+        # registration. A created role (ionization) may net-source, so compile without verify_conservation.
+        preset.source.verify_declared_contract(conserved=preset.conserved, created=preset.created)
+        args = coupling_operator_args(preset.source.compile(), preset.conserved, preset.created,
+                                      frequency=preset.frequency)
+        self._s.add_coupling_operator(*args)
