@@ -184,6 +184,100 @@ def test_honest_unknown_runtime_token_is_skipped_not_a_fallback():
 
 
 # ---------------------------------------------------------------------------
+# Gate b -- the ABI comparison is LIKE-WITH-LIKE across the TWO representations
+# (regression: the PR #453 gate false-positived on a legitimately built artifact
+# by comparing the artifact's '<headers>|<cxx>|<std>' key against the runtime's
+# 'compiler=..;std=..;headers=..;...' env string as raw strings).
+# ---------------------------------------------------------------------------
+
+_SHA = "157c5531" + "a" * 56  # a full 64-hex headers signature (prefix from the CI log)
+# The two representations of the SAME identity, verbatim shapes from the failed gate log.
+_ARTIFACT_KEY = "%s|/usr/bin/c++|c++20" % _SHA
+_RUNTIME_KEY = ("compiler=13.3.0;std=202002L;headers=%s;kokkos=1;stdlib=libstdc++_20240904" % _SHA)
+
+
+def test_same_identity_across_representations_is_not_a_mismatch():
+    # The CI regression verbatim: same headers sha, same std (c++20 == 202002L), different
+    # spellings and an incomparable compiler token (path vs version) -> NO refusal.
+    manifest = _Manifest(abi_key=_ARTIFACT_KEY)
+    assert bv.validate_bind_manifest(manifest, {"abi_key": _RUNTIME_KEY}) == []
+
+
+def test_headers_signature_mismatch_across_representations_is_refused():
+    other = "deadbeef" + "b" * 56
+    manifest = _Manifest(abi_key="%s|/usr/bin/c++|c++20" % other)
+    lines = bv.validate_bind_manifest(manifest, {"abi_key": _RUNTIME_KEY})
+    assert any("ABI mismatch" in l and "headers signature" in l for l in lines)
+    # The full keys of BOTH sides are quoted for context.
+    assert any(other in l and _SHA in l for l in lines)
+
+
+def test_std_mismatch_is_refused_after_normalization():
+    # Same headers sha but a genuinely different standard (c++17 vs 202002L) -> refused.
+    manifest = _Manifest(abi_key="%s|/usr/bin/c++|c++17" % _SHA)
+    lines = bv.validate_bind_manifest(manifest, {"abi_key": _RUNTIME_KEY})
+    assert any("C++ standard mismatch" in l and "201703" in l and "202002" in l for l in lines)
+
+
+def test_unparseable_std_token_is_skipped_not_refused():
+    # A std token the parser does not understand is honest-unknown: never a refusal.
+    manifest = _Manifest(abi_key="%s|/usr/bin/c++|weird-std" % _SHA)
+    assert bv.validate_bind_manifest(manifest, {"abi_key": _RUNTIME_KEY}) == []
+
+
+def test_abi_components_parses_both_representations():
+    assert bv._abi_components(_ARTIFACT_KEY) == (_SHA, "202002")
+    assert bv._abi_components(_RUNTIME_KEY) == (_SHA, "202002")
+    # An opaque token (neither form) anchors on the whole string, std honest-unknown.
+    assert bv._abi_components("OPAQUE_TOKEN") == ("OPAQUE_TOKEN", None)
+
+
+def test_normalize_std_spellings():
+    assert bv._normalize_std("c++20") == "202002"
+    assert bv._normalize_std("202002L") == "202002"
+    assert bv._normalize_std("202002") == "202002"
+    assert bv._normalize_std("gnu++17") == "201703"
+    assert bv._normalize_std("not-a-std") is None
+    assert bv._normalize_std(None) is None
+
+
+# ---------------------------------------------------------------------------
+# Gate b -- communicator / precision: 'unknown' is honest-unknown; the check is
+# directional (regression: communicator='unknown' vs runtime 'serial' was refused).
+# ---------------------------------------------------------------------------
+
+def test_unknown_communicator_on_the_artifact_is_skipped():
+    # The CI regression verbatim: the artifact declares communicator='unknown' (honest-unknown)
+    # and the runtime reports 'serial' -> SKIPPED, never refused.
+    manifest = _Manifest(abi_key="A", communicator="unknown")
+    assert bv.validate_bind_manifest(manifest, {"abi_key": "A", "communicator": "serial"}) == []
+
+
+def test_unknown_communicator_on_the_runtime_is_skipped():
+    manifest = _Manifest(abi_key="A", communicator="serial")
+    assert bv.validate_bind_manifest(manifest, {"abi_key": "A", "communicator": "unknown"}) == []
+
+
+def test_serial_artifact_binds_under_a_parallel_runtime():
+    # Directional: a serial artifact needs no communicator the runtime could lack.
+    manifest = _Manifest(abi_key="A", communicator="serial")
+    facts = {"abi_key": "A", "communicator": "mpi_comm_world"}
+    assert bv.validate_bind_manifest(manifest, facts) == []
+
+
+def test_parallel_artifact_on_a_serial_runtime_is_refused():
+    # The only refusable direction: the artifact DECLARES a communicator the runtime lacks.
+    manifest = _Manifest(abi_key="A", communicator="mpi_comm_world")
+    lines = bv.validate_bind_manifest(manifest, {"abi_key": "A", "communicator": "serial"})
+    assert any("communicator mismatch" in l and "requires" in l for l in lines)
+
+
+def test_unknown_precision_is_skipped():
+    manifest = _Manifest(abi_key="A", precision="unknown")
+    assert bv.validate_bind_manifest(manifest, {"abi_key": "A", "precision": "double"}) == []
+
+
+# ---------------------------------------------------------------------------
 # Gate a -- aux required by a lowered operator
 # ---------------------------------------------------------------------------
 

@@ -18,7 +18,72 @@ Kokkos / MPI feature tokens come from the compiled MANIFEST (:meth:`CompiledProb
 FRESH artifact always carries them; a manifest that lacks a field it must carry is refused as
 ABI-incomplete / ABI-unverifiable (fail loud), never skipped silently. A feature the runtime and the
 manifest BOTH report is compared; a definite mismatch is a hard refusal.
+
+The ABI comparison is LIKE-WITH-LIKE: the two sides spell the same identity in DIFFERENT
+representations (the artifact key is ``<headers-sha>|<cxx>|<std>``; the runtime key is the env
+string ``compiler=..;std=202002L;headers=<sha>;kokkos=..;stdlib=..``), so the gate parses BOTH into
+components and compares only the comparable ones -- the headers signature (the real header-ABI
+anchor) and the normalized C++ standard (``c++20`` == ``202002L``). An incomparable token (the
+compiler path vs its version string) is never compared, and a string token spelled ``unknown`` is an
+honest-unknown, skipped like ``None`` -- never refused, never a fallback.
 """
+import re
+
+# The runtime env-format abi key: 'compiler=..;std=202002L;headers=<sha>;kokkos=..;stdlib=..'.
+_ENV_HEADERS_RE = re.compile(r"(?:^|;)\s*headers=([^;]+)")
+_ENV_STD_RE = re.compile(r"(?:^|;)\s*std=(\d{6})L?(?:;|$)")
+# Normalized C++ standard: a 'c++NN' / 'gnu++NN' flag token -> the 6-digit __cplusplus year value.
+_CXX_FLAG_RE = re.compile(r"^(?:c|gnu)\+\+(\d{2})$")
+_STD_YEARS = {"11": "201103", "14": "201402", "17": "201703", "20": "202002", "23": "202302"}
+# String tokens that mean honest-unknown on either side (skipped, exactly like None).
+_UNKNOWN_TOKENS = ("unknown", "")
+
+
+def _normalize_std(token):
+    """Normalize a C++ standard token to its 6-digit year form (``c++20``/``202002L`` -> ``202002``).
+
+    Accepts the flag spelling (``c++20`` / ``gnu++23``) and the ``__cplusplus`` spelling
+    (``202002L`` / ``202002``). An unparseable token returns ``None`` -- honest-unknown, skipped by
+    the comparison (never a refusal on a token the parser does not understand)."""
+    if token is None:
+        return None
+    text = str(token).strip().lower()
+    year = re.match(r"^(\d{6})l?$", text)
+    if year:
+        return year.group(1)
+    flag = _CXX_FLAG_RE.match(text)
+    if flag:
+        return _STD_YEARS.get(flag.group(1))
+    return None
+
+
+def _abi_components(abi_key):
+    """Parse an abi key in EITHER representation into ``(headers_signature, normalized_std)``.
+
+    Artifact form (:class:`~pops.codegen.loader.CompiledProblem`): ``<headers-sha>|<cxx>|<std>``
+    (pipe-delimited; the first field is the headers signature, the third the ``c++NN`` standard).
+    Runtime form (``pops.abi_key()``): the env string
+    ``compiler=..;std=202002L;headers=<sha>;kokkos=..;stdlib=..``. An OPAQUE token (neither form)
+    anchors the comparison on the whole string. A component a side cannot supply is ``None``
+    (honest-unknown, skipped). The compiler token is deliberately NOT extracted: a compiler PATH
+    (``/usr/bin/c++``) and a compiler VERSION (``13.3.0``) are not comparable, and the headers
+    signature already covers the header ABI."""
+    text = str(abi_key)
+    env_headers = _ENV_HEADERS_RE.search(text)
+    if env_headers:
+        env_std = _ENV_STD_RE.search(text)
+        return env_headers.group(1).strip(), (env_std.group(1) if env_std else None)
+    if "|" in text:
+        parts = [p.strip() for p in text.split("|")]
+        headers = parts[0] or None
+        std = _normalize_std(parts[2]) if len(parts) > 2 else None
+        return headers, std
+    return (text.strip() or None), None
+
+
+def _is_unknown_token(value):
+    """True when a string token is the honest-unknown spelling (``unknown`` / empty)."""
+    return str(value).strip().lower() in _UNKNOWN_TOKENS
 
 
 def _shape_of(array):
@@ -174,20 +239,64 @@ def validate_bind_manifest(manifest, runtime_facts):
         lines.append("the compiled manifest carries no abi_key; the artifact is ABI-unverifiable and "
                      "cannot be bound (rebuild it so its manifest stamps the ABI key)")
     else:
-        runtime_abi = facts.get("abi_key")
-        if runtime_abi and runtime_abi != manifest_abi:
-            lines.append("ABI mismatch: the artifact was built for abi_key %r but the loaded pops "
-                         "runtime reports %r; rebuild the artifact against this runtime"
-                         % (manifest_abi, runtime_abi))
+        _compare_abi(lines, manifest_abi, facts.get("abi_key"))
     _compare_feature(lines, "supports_mpi", getattr(manifest, "supports_mpi", None),
                      facts.get("supports_mpi"), "MPI")
     _compare_feature(lines, "supports_gpu", getattr(manifest, "supports_gpu", None),
                      facts.get("supports_gpu"), "GPU / Kokkos device")
     _compare_str(lines, "precision", getattr(manifest, "precision", None),
                  facts.get("precision"))
-    _compare_str(lines, "communicator", getattr(manifest, "communicator", None),
-                 facts.get("communicator"))
+    _compare_communicator(lines, getattr(manifest, "communicator", None),
+                          facts.get("communicator"))
     return lines
+
+
+def _compare_abi(lines, manifest_abi, runtime_abi):
+    """Compare the two abi keys COMPONENT-WISE (like-with-like), never as raw strings.
+
+    The artifact key (``<headers-sha>|<cxx>|<std>``) and the runtime key (the env string with
+    ``headers=`` / ``std=`` tokens) are DIFFERENT representations of the same identity: both are
+    parsed (:func:`_abi_components`) and only the comparable components are adjudicated -- the
+    headers signature (the real header-ABI anchor) and the normalized C++ standard. A component a
+    side cannot supply is honest-unknown and skipped; the compiler path-vs-version token is never
+    compared (incomparable; the headers signature covers the header ABI)."""
+    if not runtime_abi:
+        return  # the runtime cannot state its ABI: not adjudicable, the manifest is still stamped
+    m_headers, m_std = _abi_components(manifest_abi)
+    r_headers, r_std = _abi_components(runtime_abi)
+    if m_headers and r_headers and m_headers != r_headers:
+        lines.append("ABI mismatch: the artifact was built against headers signature %r but the "
+                     "loaded pops runtime reports %r (artifact abi_key %r vs runtime %r); rebuild "
+                     "the artifact against this runtime"
+                     % (m_headers, r_headers, manifest_abi, runtime_abi))
+        return  # the headers anchor already adjudicated; do not stack a redundant std line
+    if m_std and r_std and m_std != r_std:
+        lines.append("C++ standard mismatch: the artifact was built for std %s but the loaded pops "
+                     "runtime reports %s (artifact abi_key %r vs runtime %r); rebuild the artifact "
+                     "against this runtime" % (m_std, r_std, manifest_abi, runtime_abi))
+
+
+def _compare_communicator(lines, manifest_value, runtime_value):
+    """Directional communicator check: refuse only what the artifact NEEDS and the runtime LACKS.
+
+    ``unknown`` (either side) is an honest-unknown token, skipped exactly like ``None`` -- an
+    artifact that does not state its communicator is never refused on it. An artifact declaring
+    ``serial`` binds under ANY runtime (a serial artifact needs no communicator the runtime could
+    lack -- the more-capable-runtime direction is fine). Only an artifact that DECLARES a specific
+    parallel communicator the runtime reports it cannot provide (a known, different token) is
+    refused."""
+    if manifest_value is None or runtime_value is None:
+        return
+    if _is_unknown_token(manifest_value) or _is_unknown_token(runtime_value):
+        return  # honest-unknown on either side: not adjudicable, not a fallback
+    needed = str(manifest_value).strip().lower()
+    provided = str(runtime_value).strip().lower()
+    if needed == "serial":
+        return  # a serial artifact binds anywhere; a more-capable runtime is never a mismatch
+    if needed != provided:
+        lines.append("communicator mismatch: the artifact requires communicator=%r but the loaded "
+                     "pops runtime provides %r; bind under a matching runtime or rebuild the "
+                     "artifact" % (manifest_value, runtime_value))
 
 
 def _compare_feature(lines, field, manifest_value, runtime_value, human):
@@ -206,9 +315,14 @@ def _compare_feature(lines, field, manifest_value, runtime_value, human):
 
 
 def _compare_str(lines, field, manifest_value, runtime_value):
-    """Refuse a definite string-token mismatch (both sides known and different)."""
+    """Refuse a definite string-token mismatch (both sides KNOWN and different).
+
+    ``None`` and the ``unknown`` spelling are honest-unknown on either side and skipped (not
+    adjudicable, not a fallback); only two known, different tokens refuse."""
     if manifest_value is None or runtime_value is None:
         return
+    if _is_unknown_token(manifest_value) or _is_unknown_token(runtime_value):
+        return  # honest-unknown token: skipped exactly like None
     if str(manifest_value) != str(runtime_value):
         lines.append("%s mismatch: the artifact declares %s=%r but the loaded pops runtime reports "
                      "%r; bind under a matching runtime or rebuild the artifact"
