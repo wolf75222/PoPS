@@ -17,6 +17,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 ## [Unreleased]
 
 ### Removed
+- **ADC-595: the named C++ coupling methods and the public raw coupled-source ABI** -- `System::add_ionization` / `add_collision` / `add_thermal_exchange` are deleted (they are now Python presets lowering to the generic coupled source), and the flat 12-kwarg bytecode binding is internalized as `System._add_coupled_source` / `AmrSystem._add_coupled_source` (an escape hatch called only by the typed lowering and the low-level ABI tests). End users register a coupling through `sim.add_coupling(...)` (a preset or a `CoupledSource(...).compile()`), which routes to the typed `add_coupling_operator`; the coupled-source STORAGE (`Impl::couplings` / `coupled_freqs_` / `coupled_freq_exprs_`, read by the stepper) is untouched. The single-block force composite `CompositeSource<A,B>` (diocotron production route) is out of scope and unchanged. New source-only guard `tests/python/architecture/test_no_named_coupling_surface.py`.
 - **Retained-docs and profiling harness cleanup** -- removed `docs/TRANSLATION_GLOSSARY.md`,
   `docs/BIBLIOGRAPHY.md`, the `bench/` profiling harness, and the ROMEO machine profile under
   `Tools/machines/romeo/`.

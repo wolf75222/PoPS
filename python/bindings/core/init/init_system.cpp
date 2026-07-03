@@ -222,11 +222,10 @@ void bind_system_checkpoint(py::class_<System>& cls) {
 // Physics wiring: inter-species couplings, source stages, time-splitting policy, Poisson/field config,
 // geometry (disc), epsilon/reaction/magnetic/aux fields, and state initialization.
 void bind_system_physics(py::class_<System>& cls) {
-  cls.def("add_ionization", &System::add_ionization, py::arg("electron"), py::arg("ion"),
-           py::arg("neutral"), py::arg("rate"))
-      .def("add_collision", &System::add_collision, py::arg("a"), py::arg("b"), py::arg("rate"))
-      .def("add_thermal_exchange", &System::add_thermal_exchange, py::arg("a"), py::arg("b"),
-           py::arg("rate"))
+  // The named inter-species couplings (add_ionization / add_collision / add_thermal_exchange) are no
+  // longer bound (ADC-595): they are Python presets lowering to add_coupling_operator. A new coupling
+  // needs no new pybind def.
+  cls
       // Schur-condensed source stage (OPT-IN, pops.Split(source=pops.CondensedSchur(...))): replaces
       // the block's explicit / IMEX source with the C++ condensed stage (CondensedSchurSourceStepper, #126)
       // after the hyperbolic transport. kind='electrostatic_lorentz'. Default (without the call) unchanged.
@@ -278,14 +277,13 @@ void bind_system_physics(py::class_<System>& cls) {
       // step, bit-identical) or "evolve" (after phi^0, no more re-solve; the Schur stage evolves phi
       // without restart, like the paper). Cf. System::set_gauss_policy.
       .def("set_gauss_policy", &System::set_gauss_policy, py::arg("policy"))
-      // Generic COUPLED source (pops.dsl.CoupledSource, P5): flat ABI (postfix bytecode). Reads
-      // fields (block, role) and writes source terms compiled into a stack machine, applied by
-      // explicit splitting after the transport (same seam as add_ionization). Without the call, unchanged.
-      // ADC-214: Python surface UNCHANGED (same flat kwargs in_blocks/.../freq_prog_args, same
-      // defaults). The lambda assembles the CoupledSourceProgram POD before the C++ call (frequency / label
-      // stay flat, distinct types outside the homogeneous family).
+      // INTERNAL raw coupled-source ABI (ADC-595): the flat 12-kwarg bytecode form is now an INTERNAL
+      // escape hatch (leading underscore), called only by the typed lowering (add_coupling ->
+      // add_coupling_operator) and by the low-level ABI-validation tests. End users register a coupling
+      // through sim.add_coupling(CoupledSource(...).compile()) or a named preset, never this raw form.
+      // The lambda assembles the CoupledSourceProgram POD before the C++ call.
       .def(
-          "add_coupled_source",
+          "_add_coupled_source",
           [](System& s, const std::vector<std::string>& in_blocks,
              const std::vector<std::string>& in_roles, const std::vector<double>& consts,
              const std::vector<std::string>& out_blocks, const std::vector<std::string>& out_roles,

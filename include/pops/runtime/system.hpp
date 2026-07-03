@@ -455,21 +455,10 @@ class System {
   /// block), or "" if no step_cfl has run. Diagnostic of the step policy.
   std::string last_dt_bound() const;
 
-  /// Adds an IONIZATION coupling (operator-split): rate k n_e n_g; a neutral becomes an ion
-  /// and an electron. Mass transferred from the neutral to the ion (n_i + n_g conserved). The three blocks
-  /// must exist. First inter-species source brick (on the density, comp 0).
-  void add_ionization(const std::string& electron, const std::string& ion,
-                      const std::string& neutral, double rate);
-
-  /// Adds an inter-species COLLISION / friction (operator-split): force k (u_a - u_b) on the
-  /// momentum, opposite on each species (total momentum conserved). The two
-  /// blocks must be fluids (>= 3 variables). Frictional heating neglected (refinement).
-  void add_collision(const std::string& a, const std::string& b, double rate);
-
-  /// Adds an inter-species THERMAL EXCHANGE (operator-split): heat flux k (T_a - T_b)
-  /// on the energy, opposite on each species (total energy conserved); T = p/rho. The two
-  /// blocks must be compressible Euler (4 variables, energy equation).
-  void add_thermal_exchange(const std::string& a, const std::string& b, double rate);
+  // The named inter-species couplings (ionization / collision / thermal exchange) are no longer C++
+  // methods (ADC-595): they are Python presets (python/pops/physics/coupling_presets.py) that lower to
+  // the generic coupled source and register through add_coupling_operator with a declared conservation
+  // contract. A new coupling needs no new public C++ method.
 
   /// Enables a Schur-condensed SOURCE STAGE on block @p name (EXPLICIT / IMPLICIT splitting,
   /// cf. docs/SCHUR_CONDENSATION_DESIGN.md sections 5-6). It is the OPT-IN of the pops.Split(

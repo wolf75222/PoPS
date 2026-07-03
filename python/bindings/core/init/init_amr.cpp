@@ -221,8 +221,11 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
       // flat ABI as System.add_coupled_source. Without the call, unchanged. cf. AmrSystem::add_coupled_source.
       // ADC-214: Python surface UNCHANGED (same flat kwargs, same defaults). The lambda assembles the
       // CoupledSourceProgram POD before the C++ call (parity with System.add_coupled_source).
+      // INTERNAL raw coupled-source ABI (ADC-595): flat 12-kwarg bytecode form, called only by the
+      // typed lowering (AmrSystem.add_coupling -> add_coupling_operator) and low-level tests. End users
+      // register through sim.add_coupling(...); parity with System._add_coupled_source.
       .def(
-          "add_coupled_source",
+          "_add_coupled_source",
           [](AmrSystem& s, const std::vector<std::string>& in_blocks,
              const std::vector<std::string>& in_roles, const std::vector<double>& consts,
              const std::vector<std::string>& out_blocks, const std::vector<std::string>& out_roles,

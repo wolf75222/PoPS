@@ -81,7 +81,7 @@ TEST(VariableUserRole, NamedUserRolesAndStrictCouplingFallback) {
   // Bloc AVEC roles mais SANS le role requis (vs ne porte pas Energy) -> LEVE en nommant bloc + role.
   bool threw = false, names_block = false, names_role = false;
   try {
-    (void)pops::coupling_role_index(vs, R::Energy, 3, "System::add_thermal_exchange", "fluid_a");
+    (void)pops::coupling_role_index(vs, R::Energy, 3, "coupling role resolve", "fluid_a");
   } catch (const std::exception& e) {
     threw = true;
     const std::string m = e.what();

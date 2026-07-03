@@ -24,7 +24,7 @@ def _make_system():
 def test_direct_coupled_source_rejects_stack_underflow_before_kernel():
     sim = _make_system()
     with pytest.raises(RuntimeError) as exc:
-        sim._s.add_coupled_source(
+        sim._s._add_coupled_source(
             in_blocks=["ne"],
             in_roles=["density"],
             consts=[],
@@ -44,7 +44,7 @@ def test_direct_coupled_source_rejects_stack_underflow_before_kernel():
 def test_direct_coupled_frequency_rejects_unused_stack_result():
     sim = _make_system()
     with pytest.raises(RuntimeError) as exc:
-        sim._s.add_coupled_source(
+        sim._s._add_coupled_source(
             in_blocks=["ne"],
             in_roles=["density"],
             consts=[],

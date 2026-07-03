@@ -213,7 +213,7 @@ iz.set_poisson()
 iz.set_density("ne", 0.1 * np.ones((24, 24)))
 iz.set_density("ni", np.zeros((24, 24)))
 iz.set_density("ng", np.ones((24, 24)))
-iz.add_ionization(electron="ne", ion="ni", neutral="ng", rate=0.5)
+iz.add_coupling(pops.Ionization(electron="ne", ion="ni", neutral="ng", rate=0.5))  # preset (ADC-595)
 ne0, ni0i, ng0 = iz.mass("ne"), iz.mass("ni"), iz.mass("ng")
 iz.advance(0.05, 10)  # pas FIXE (transport nul) : on teste uniquement la source couplee
 ne1, ni1, ng1 = iz.mass("ne"), iz.mass("ni"), iz.mass("ng")
@@ -265,7 +265,7 @@ Ua = np.zeros((4, 16, 16)); Ua[0] = 1.0; Ua[3] = 2.0 / 0.4   # rho=1, u=0, p=2 -
 Ub = np.zeros((4, 16, 16)); Ub[0] = 1.0; Ub[3] = 1.0 / 0.4   # rho=1, u=0, p=1 -> T=1
 te.set_state("a", Ua.reshape(-1).tolist())
 te.set_state("b", Ub.reshape(-1).tolist())
-te.add_thermal_exchange("a", "b", rate=1.0)
+te.add_coupling(pops.ThermalExchange("a", "b", rate=1.0))  # preset (ADC-595)
 A0 = np.array(te.get_state("a")).reshape(4, 16, 16)
 B0 = np.array(te.get_state("b")).reshape(4, 16, 16)
 Ea0, Eb0 = float(A0[3].sum()), float(B0[3].sum())

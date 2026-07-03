@@ -112,7 +112,7 @@ def test_add_coupled_source_rejects_unknown_role_direct():
     raised = False
     msg = ""
     try:
-        sim._s.add_coupled_source(
+        sim._s._add_coupled_source(
             in_blocks=["ne"],
             in_roles=["density"],           # valide (canonique connu)
             consts=[],
@@ -145,7 +145,7 @@ def test_add_coupled_source_rejects_role_not_exposed():
     raised = False
     msg = ""
     try:
-        sim._s.add_coupled_source(
+        sim._s._add_coupled_source(
             in_blocks=["ne"],
             in_roles=["density"],            # valide ET expose
             consts=[],

@@ -1948,7 +1948,8 @@ species seen by Poisson); [`runtime/amr_system.hpp`](../include/pops/runtime/amr
 `AmrSystem` (1 block -> historical mono-model `AmrCouplerMP<Model>`; `>= 2 add_block` -> engine
 `AmrRuntime` multi-block on a shared hierarchy, same BoxArray + DistributionMapping + dx/dy per
 level via `same_layout_or_throw`, coarse Poisson co-located sum, conservation per block,
-`add_coupled_source` for the inter-species sources, `n_blocks()`). On the coupling side:
+`add_coupling_operator` for the inter-species sources (the raw bytecode ABI is the internal
+`_add_coupled_source`), `n_blocks()`). On the coupling side:
 `coupling/system_coupler.hpp` (`SystemAssembler` assembles, `SystemDriver` advances),
 `coupling/amr_system_coupler.hpp` (the system carried over AMR).
 [`runtime/model_factory.hpp`](../include/pops/runtime/builders/factory/model_factory.hpp):
