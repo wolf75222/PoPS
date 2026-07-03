@@ -402,6 +402,9 @@ set(POPS_CPP_STANDARD_TESTS
   test_riemann_capabilities
   test_newton_robustness
   test_elliptic_interface
+  test_field_context
+  test_field_problem_registry
+  test_field_registry_uniform_amr
 )
 
 foreach(_test IN LISTS POPS_CPP_STANDARD_TESTS)

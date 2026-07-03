@@ -13,6 +13,7 @@
 #include <pops/parallel/comm.hpp>                           // n_ranks() (FFT MPI guard)
 #include <pops/runtime/builders/block/block_builder_polar.hpp>  // derive_aux_polar (polar aux in local basis)
 #include <pops/runtime/context/wall_predicate.hpp>       // detail::wall_predicate
+#include <pops/runtime/system/field_problem_registry.hpp>  // FieldProblemRegistry (ADC-596 descriptor)
 
 #include <cstdlib>  // getenv
 #include <functional>
@@ -207,6 +208,22 @@ class SystemFieldSolver {
   };
   std::map<std::string, NamedField> named_fields_;
 
+  /// Unified DESCRIPTOR registry of the field problems this solver realizes (ADC-596): the default
+  /// shared Poisson ("phi") plus every named field, each recorded ONCE with its output AuxLayout,
+  /// solver kind and route support. It owns no solver and does not change any numerics -- it is the
+  /// single place Uniform and AMR describe field problems so a solver x layout x output combination
+  /// is validated early. Populated as a side effect of register_named_field (below); the default
+  /// "phi" entry is seeded lazily by field_problem_registry().
+  FieldProblemRegistry field_problems_;
+
+  /// The unified field-problem registry, seeding the default "phi" entry on first access so the
+  /// single-field case is described the same way as a named one (the numerics stay in ell_).
+  const FieldProblemRegistry& field_problem_registry() {
+    if (field_problems_.find("phi") < 0)
+      field_problems_.register_problem(default_poisson_entry());
+    return field_problems_;
+  }
+
   /// Register a named elliptic field (ADC-428): records the aux output components (where the field's
   /// solved phi and centered gradient land). @p gx_comp / @p gy_comp < 0 => only phi is written (the
   /// model declared fewer than 3 aux slots for the field). Idempotent (re-register overwrites the
@@ -218,6 +235,13 @@ class SystemFieldSolver {
     nf.gx_comp = gx_comp;
     nf.gy_comp = gy_comp;
     named_fields_[field] = std::move(nf);  // solver built lazily by ensure_named_elliptic
+    // ADC-596: mirror the field into the unified descriptor registry (a named GeometricMG field on
+    // the Uniform route). The component map is the low-level truth; the AuxLayout is its named view.
+    // Purely descriptive -- the lazy solver build and RHS assembly are untouched.
+    if (field_problems_.find("phi") < 0)
+      field_problems_.register_problem(default_poisson_entry());
+    field_problems_.register_problem(
+        named_field_entry(field, phi_comp, gx_comp, gy_comp, EllipticSolverKind::GeometricMG));
   }
 
   /// Re-applies the per-field aux HALO policies (ADC-369) onto the shared channel, AFTER the shared

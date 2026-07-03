@@ -396,6 +396,21 @@ sources = ["tests/cpp/integration/runtime/test_external_brick_json.cpp"]
 labels = ["integration", "runtime", "medium"]
 
 [[cpp.suite]]
+name = "test_field_context"
+sources = ["tests/cpp/unit/runtime/test_field_context.cpp"]
+labels = ["unit", "runtime", "small"]
+
+[[cpp.suite]]
+name = "test_field_problem_registry"
+sources = ["tests/cpp/unit/runtime/test_field_problem_registry.cpp"]
+labels = ["unit", "runtime", "small"]
+
+[[cpp.suite]]
+name = "test_field_registry_uniform_amr"
+sources = ["tests/cpp/integration/runtime/test_field_registry_uniform_amr.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
 name = "test_facade_routing"
 sources = ["tests/cpp/integration/runtime/test_facade_routing.cpp"]
 labels = ["integration", "runtime", "medium"]

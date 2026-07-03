@@ -24,6 +24,7 @@
 
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/runtime_environment.hpp>
+#include <pops/runtime/system/field_problem_registry.hpp>  // FieldProblemRegistry field-problem rows (ADC-596)
 
 #include <string>
 #include <vector>
@@ -270,6 +271,11 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "FFT requires a single uniform periodic mesh, not AMR", "amr", "none",
                        "host", mpi, gpu, "solver=FFT() with layout=AMR", "GeometricMG() on AMR",
                        "use pops.solvers.elliptic.GeometricMG()"),
+      capability_route("elliptic:field_problem_registry", "available",
+                       "the default and named field problems are described by one native "
+                       "FieldProblemRegistry (id/outputs/solver/route), validated before bind "
+                       "on both the Uniform and AMR routes (ADC-596)",
+                       "uniform|amr", "production", "host", mpi, gpu),
       capability_route("mesh:2d_storage_arithmetic", "partial",
                        "native mesh/storage/arithmetic primitives are Box2D/Fab2D/MultiFab 2D; "
                        "Dim!=2 is rejected before runtime",
@@ -338,6 +344,32 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "AMR checkpoint with regrid_every=0",
                        "use AmrSystem.write for visualization or freeze regrid"),
   };
+}
+
+/// Per-field-problem report rows from a live FieldProblemRegistry (ADC-596): each entry becomes one
+/// ``field_problem:<id>`` route naming its equation, solver, output handles and the route it was
+/// validated for. Descriptive; it reads the registry, never mutates it or the numerics. @p route is
+/// the layout the entries are reported for (Uniform vs AMR) so the ``layout`` column is accurate.
+inline std::vector<CapabilityRouteReport> field_problem_routes(const FieldProblemRegistry& reg,
+                                                               LayoutRoute route, bool mpi = false,
+                                                               bool gpu = false) {
+  std::vector<CapabilityRouteReport> rows;
+  const char* layout = (route == LayoutRoute::Uniform) ? "uniform" : "amr";
+  for (const FieldProblemEntry& e : reg.entries()) {
+    std::string outputs;
+    for (const AuxChannel& c : e.layout.channels()) {
+      if (!outputs.empty())
+        outputs += ", ";
+      outputs += c.handle;
+    }
+    rows.push_back(capability_route(
+        "field_problem:" + e.id,
+        "available",
+        std::string("equation=") + to_string(e.equation) + ", solver=" + to_string(e.solver) +
+            ", outputs=[" + outputs + "]",
+        layout, "production", "host", mpi, gpu));
+  }
+  return rows;
 }
 
 inline NativeCapabilityReport native_capability_report(

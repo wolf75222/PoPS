@@ -79,7 +79,15 @@ class _ProgramCore(_ProgramConstants):
         # (empty attrs) -> the .so cache key of an existing time program is byte-identical (no spurious
         # invalidation from this feature).
         attrs = {"field": field} if field is not None else {}
-        return self._new("fields", "solve_fields", (state,), attrs, name, state.block)
+        v = self._new("fields", "solve_fields", (state,), attrs, name, state.block)
+        # ADC-588: tag the value with a typed FieldContext (the "solve_fields returns a FieldContext"
+        # contract, now a real object). The default problem exposes the historical phi/grad outputs;
+        # a named field exposes its own single output. The context is build-time metadata only, NEVER
+        # serialized into the IR -> the .so cache key stays byte-identical.
+        from pops.time.field_context import DEFAULT_FIELD_PROBLEM, FieldContext
+        outputs = ("phi", "grad_x", "grad_y") if field is None else (field,)
+        v.field_context = FieldContext(field or DEFAULT_FIELD_PROBLEM, state.block, state.id, outputs)
+        return v
 
     def solve_fields_from_blocks(self, states, name=None):
         """Solve the elliptic fields from the SIMULTANEOUS stage states of MULTIPLE blocks (spec
@@ -108,7 +116,13 @@ class _ProgramCore(_ProgramConstants):
                 raise ValueError("solve_fields_from_blocks: block '%s' listed twice" % s.block)
             seen.add(s.block)
         # The FieldContext is attached to the first listed block (an arbitrary but stable owner).
-        return self._new("fields", "solve_fields_from_blocks", tuple(states), {}, name, states[0].block)
+        v = self._new("fields", "solve_fields_from_blocks", tuple(states), {}, name, states[0].block)
+        # ADC-588: typed FieldContext for the coupled solve -- the shared default Poisson, owned by
+        # the first listed block, stage-sourced by that block's state (build-time metadata only).
+        from pops.time.field_context import DEFAULT_FIELD_PROBLEM, FieldContext
+        v.field_context = FieldContext(
+            DEFAULT_FIELD_PROBLEM, states[0].block, states[0].id, ("phi", "grad_x", "grad_y"))
+        return v
 
     # --- operator-first calls (Spec 2) -------------------------------------------
     def bind_operators(self, source):

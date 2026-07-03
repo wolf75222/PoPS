@@ -26,8 +26,9 @@ path is byte-identical to the single-state board model. The compiled multi-block
 import re
 
 from .. import math as _bm
+from ..model.handles import OperatorHandle
 
-__all__ = ["Invariant", "FluxHandle", "SourceHandle", "FieldsHandle", "FieldHandle",
+__all__ = ["Invariant", "FluxHandle", "SourceHandle", "FieldsHandle", "FieldOutputs", "FieldHandle",
            "LocalLinearOperatorExpr", "CallableOperator", "StateHandle", "VectorHandle",
            "_safe_name", "_canon_role", "_roles_for", "_BOARD_ROLE"]
 
@@ -211,13 +212,83 @@ class CallableOperator:
         return "CallableOperator(%r)" % (self.name,)
 
 
-class FieldsHandle:
-    """The result of a field-solve operator: a named bundle of solved fields."""
+class FieldOutputs:
+    """Structured, typed access to a field solve's produced outputs (ADC-556).
 
-    def __init__(self, name, outputs, solver):
-        self.name = str(name)
-        self.outputs = dict(outputs or {})
-        self.solver = solver
+    Replaces free-string output lookup: a field solve's outputs are reachable BOTH as attributes
+    (``fields.outputs.E``) and by item (``fields.outputs["E"]``), and iterate like the underlying
+    mapping (``.items()`` / ``in`` / ``len`` still work, so existing dict readers are unaffected).
+    An unknown output raises a structured error NAMING the known handles, never a silent miss.
+    """
+
+    __slots__ = ("_m",)
+
+    def __init__(self, mapping):
+        object.__setattr__(self, "_m", dict(mapping or {}))
+
+    def __getattr__(self, key):
+        # __getattr__ runs only for names not found normally, so it never shadows _m / methods.
+        try:
+            return self._m[key]
+        except KeyError:
+            raise AttributeError(
+                "unknown field output %r; known outputs: %s" % (key, sorted(self._m))) from None
+
+    def __getitem__(self, key):
+        try:
+            return self._m[key]
+        except KeyError:
+            raise KeyError(
+                "unknown field output %r; known outputs: %s" % (key, sorted(self._m))) from None
+
+    def __contains__(self, key):
+        return key in self._m
+
+    def __iter__(self):
+        return iter(self._m)
+
+    def __len__(self):
+        return len(self._m)
+
+    def keys(self):
+        return self._m.keys()
+
+    def values(self):
+        return self._m.values()
+
+    def items(self):
+        return self._m.items()
+
+    def __repr__(self):
+        return "FieldOutputs(%r)" % (sorted(self._m),)
+
+
+class FieldsHandle(OperatorHandle):
+    """The result of a field-solve operator: a typed ``OperatorHandle`` over a bundle of solved
+    fields (ADC-556).
+
+    A ``FieldsHandle`` IS an :class:`pops.model.OperatorHandle` of kind ``"field_operator"`` (so it
+    resolves through the one public ``P.call`` path like any operator), enriched with the field
+    solve's structured :class:`FieldOutputs` and the required elliptic ``solver``. Calling it with a
+    Program State value lowers to that Program's per-stage field solve
+    (``P.solve_fields(name, state)``), returning the FieldContext-tagged value; a bare call without a
+    Program value is refused. ``__call__`` is defined ONLY here, not on the base ``OperatorHandle``.
+    """
+
+    __slots__ = ("outputs", "solver")
+
+    def __init__(self, name, outputs=None, solver=None):
+        super().__init__(str(name), kind="field_operator")
+        object.__setattr__(self, "outputs", FieldOutputs(outputs))
+        object.__setattr__(self, "solver", solver)
+
+    def __call__(self, state, name=None):
+        prog = getattr(state, "prog", None)
+        if prog is None:
+            raise ValueError(
+                "field operator %r must be called with a time-Program State value "
+                "(inside a Program); got %r" % (self.name, state))
+        return prog.solve_fields(name=name or self.name, state=state)
 
     def __repr__(self):
         return "FieldsHandle(%r)" % (self.name,)

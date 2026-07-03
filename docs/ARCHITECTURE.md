@@ -321,7 +321,33 @@ The `solve_fields` delegates to `SystemFieldSolver`
 ([`include/pops/runtime/system/system_field_solver.hpp`](../include/pops/runtime/system/system_field_solver.hpp)): it
 solves the system Poisson whose right-hand side is the sum of the elliptic bricks of the blocks
 ($f = \sum_b q_b\, n_b$), then derives the aux. The aux is the shared channel that carries $\phi$ and $\nabla\phi$
-(components 1 and 2), plus optionally $B_z$ and $T_e$. The transport of a block, in turn, reads this aux:
+(components 1 and 2), plus optionally $B_z$ and $T_e$.
+
+The mapping from a field-solve output (the handle `phi`, `grad_x`, `grad_y`, or a model-named field)
+to the real aux component it lands in is described by a typed `AuxLayout`
+([`include/pops/runtime/context/aux_layout.hpp`](../include/pops/runtime/context/aux_layout.hpp)): a
+host-only descriptor that WRAPS the fixed component truth of
+[`include/pops/core/state/state.hpp`](../include/pops/core/state/state.hpp) (it never redefines the
+`kAux*` constants) so a report or a validation step can name outputs instead of magic indices. One
+field solve carries a `FieldContext`
+([`include/pops/runtime/context/field_context.hpp`](../include/pops/runtime/context/field_context.hpp)),
+a validity token recording which field problem, block and stage produced the aux: a context solved for
+one stage cannot be silently read as another. These are descriptors around already-computed values;
+they add no numerics.
+
+The default shared Poisson and each named elliptic field are described by ONE native
+`FieldProblemRegistry`
+([`include/pops/runtime/system/field_problem_registry.hpp`](../include/pops/runtime/system/field_problem_registry.hpp)):
+both the Uniform `SystemFieldSolver` and the AMR `AmrRuntime` register their field problems into it
+(id, equation kind, output `AuxLayout`, solver kind, route support), so the two routes share one field
+abstraction. Its `validate(id, route)` refuses an illegal combination BEFORE bind (an FFT solver on
+the AMR route, an FFT solve with a Dirichlet potential, an entry declared on a route it does not
+support, or a problem producing no output), and `field_problem_routes` surfaces each entry as a
+`field_problem:<id>` capability report row. The registry owns no solver: the lazy solver build
+(`ensure_named_elliptic`) and RHS assembly (`assemble_poisson_rhs`) remain the numerical truth; the
+`NamedField` component fields become the derived low-level view of an entry's layout.
+
+The transport of a block, in turn, reads this aux:
 `advance_transport` routes toward the closure `s.advance` (full path) or its disk variants, and
 this closure does `fill_ghosts` then `assemble_rhs` (limited reconstruction then numerical flux ->
 $R = -\mathrm{div} F + S$) at each SSPRK stage (cf.

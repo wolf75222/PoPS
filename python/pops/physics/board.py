@@ -189,10 +189,11 @@ class Model(_MultiSpeciesMixin):
         return LocalLinearOperatorExpr(name, matrix, on=on)
 
     def solve_field(self, name, equation=None, outputs=None, solver=None):
-        """Declare an elliptic field solve ``-laplacian(phi) == rhs``.
+        """Declare an elliptic field solve ``-laplacian(phi) == rhs`` (ADC-556: the single facade).
 
-        Lowers to the model's Poisson coupling; ``outputs`` names the produced
-        fields, ``solver`` records the required elliptic solver.
+        Wires the Poisson coupling AND records an inspectable :class:`pops.fields.PoissonProblem`
+        (like :meth:`field_problem`); returns a typed :class:`FieldsHandle` (an ``OperatorHandle`` of
+        kind ``"field_operator"``) with structured ``outputs`` (``fields.outputs.E``) and ``solver``.
         """
         if not isinstance(equation, _bm.Equation):
             raise TypeError("solve_field expects an equation '-laplacian(phi) == rhs'")
@@ -201,15 +202,14 @@ class Model(_MultiSpeciesMixin):
             raise ValueError(
                 "solve_field left-hand side must be (-)laplacian(field); got %r" % (lhs,))
         rhs = self._to_expr(equation.rhs)
-        # -laplacian(phi) == rhs  ->  -Delta phi = rhs (the dsl Poisson convention).
-        # laplacian(phi) == rhs  ->  -Delta phi = -rhs.
-        if lhs.scale > 0:
+        if lhs.scale > 0:  # laplacian(phi) == rhs -> -Delta phi = -rhs (dsl Poisson convention)
             rhs = -rhs
         self._dsl.elliptic_rhs(rhs)
-        h = FieldsHandle(name, outputs, solver)
-        self._fields[name] = h
+        # Unify with field_problem: also record the inert typed descriptor so inspect() surfaces it.
+        self.field_problem(name, equation, outputs=outputs, solver=solver)
+        self._fields[name] = h = FieldsHandle(name, outputs, solver)
         if solver is not None:
-            self._field_solvers[name] = solver
+            self._field_solvers[name] = solver  # runtime solver map, beside the descriptor
         return h
 
     def field_problem(self, name, equation, outputs=None, solver=None, bcs=None,
