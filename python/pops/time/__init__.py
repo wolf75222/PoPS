@@ -16,6 +16,9 @@ cf. docs/sphinx/reference/time-program.md (Phase 8) and the ADC-399 epic.
 """
 from pops.time.handles import TimeState, _Version  # noqa: F401
 from pops.time.history import CopyCurrent  # noqa: F401
+from pops.time.history_persistence import (  # noqa: F401
+    Dense, HistoryPersistence, Interval, Revolve,
+)
 from pops.time.passes_facade import (  # noqa: F401
     eliminate_common_subexpressions,
     eliminate_dead_nodes,
@@ -30,6 +33,7 @@ from pops.time.values import StageStateSet, Value  # noqa: F401
 
 __all__ = ["Program", "CompiledTime", "StageStateSet", "Schedule",
            "TimeState", "CopyCurrent",
+           "HistoryPersistence", "Dense", "Interval", "Revolve",
            "always", "every", "when", "on_start", "on_end", "subcycle",
            "eliminate_dead_nodes", "eliminate_common_subexpressions",
            "eliminate_redundant_field_solves", "optimize"]

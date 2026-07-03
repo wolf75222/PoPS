@@ -29,6 +29,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   unregistered `test_coupling_operator_contract` into the standard C++ test list.
 
 ### Added
+- ADC-626 `T.keep_history(..., checkpoint_policy=)` now runs: typed history-persistence policies
+  (`pops.time.Dense` / `Interval(k)` / `Revolve(snapshots)`) select which ring slots a checkpoint
+  stores, and the restart replays the gaps by deterministic re-stepping of the installed compiled
+  Program (bit-identical to a dense-restored ring, proven by `test_checkpoint_history_policy.cpp`).
+  The npz checkpoint schema bumps to v2 (additive; a v1 checkpoint still restarts as Dense); the
+  `Revolve` schedule is the exact min-max-gap equispaced placement with both ring endpoints forced;
+  coherence and program-determinism are validated at `pops.compile` (loud refusal, never a silent
+  degrade); a typed restart report states stored-vs-recomputed slot counts. Removes the previous
+  `NotImplementedError` gate on a non-None `checkpoint_policy`.
 - ADC-544 External compiled brick references (`pops.external.CompiledBrickRef`) gain a versioned (v2)
   per-brick manifest carrying native_id, supported layouts/platforms, params/options and exported
   symbols, and four compile-time validation gates run before any use and never warned: G1 ABI key

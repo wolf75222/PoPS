@@ -247,21 +247,26 @@ class TimeState:
         """Record the history depth / cold-start / checkpoint policy and lower a ``store_history`` of
         the current state so the ring is populated each step.
 
-        ``checkpoint_policy`` (ADC-531) is recorded as inspectable metadata on the handle; a non-None
-        policy is CLEARLY REFUSED with a ``NotImplementedError`` because the checkpointing runtime is
-        deferred (the authoring surface lands, the runtime does not), rather than silently dropped."""
+        ``checkpoint_policy`` (ADC-626) is a typed history-persistence policy
+        (:class:`pops.time.Dense` / :class:`~pops.time.Interval` / :class:`~pops.time.Revolve`)
+        selecting which ring slots a checkpoint stores; the gaps are recomputed at restart by
+        deterministic replay. ``None`` resolves to :class:`~pops.time.Dense` (the whole-ring historical
+        behaviour) via the named-constant default. The resolved policy is validated against @p depth
+        EAGERLY (author-time coherence -- k / snapshots vs depth) and recorded on the handle as
+        inspectable metadata; a bare string / object is refused (it is not a typed policy)."""
+        from pops.time.history_persistence import resolve_history_persistence
         if isinstance(depth, bool) or not isinstance(depth, int) or depth < 1:
             raise ValueError("keep_history: depth must be a Python int >= 1 (got %r)" % (depth,))
         if cold_start is None:
             cold_start = CopyCurrent()
-        if checkpoint_policy is not None:
-            raise NotImplementedError(
-                "keep_history: checkpoint_policy=%r is recognized but its runtime (restart / adjoint "
-                "checkpointing of the history ring) is not implemented yet; omit it for the in-memory "
-                "ring" % (checkpoint_policy,))
+        policy = resolve_history_persistence(checkpoint_policy)
+        policy.validate_for(depth)  # author-time coherence; loud, never deferred to restart
         self._history_depth = depth
         self._cold_start = cold_start
-        self._checkpoint_policy = checkpoint_policy
+        self._checkpoint_policy = policy
+        # Record (depth, policy) on the Program keyed by the ring name so the compile-time pass
+        # (coherence + determinism) and the checkpoint reach it without retaining this handle.
+        self.program._history_persistence[self._history_name()] = (depth, policy)
         return self.program.store_history(self._history_name(), self.n)
 
     def __repr__(self):

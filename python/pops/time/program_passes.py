@@ -434,6 +434,10 @@ class _ProgramPasses(_ProgramConstants):
                 # enclosing value (which the per-cell kernel cannot evaluate) fails loud here, not as a
                 # codegen KeyError.
                 self._validate_block(v.attrs["residual_block"], set())
+        # ADC-626 compile-time gate: per keep_history ring, policy coherence + program-determinism of
+        # the replay that recomputes the non-stored slots. Loud (never a silent degrade to Dense).
+        from pops.time.history_persistence_validate import check_program
+        check_program(self)
         return True
 
     def _validate_block(self, block, outer_seen):
