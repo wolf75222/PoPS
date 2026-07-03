@@ -73,11 +73,12 @@ def _clean_catalog():
     lib._clear_external_catalog()
 
 
-def _manifest(*entries, schema_version=1):
-    """Build a STRICT versioned manifest (ADC-611): stamp schema_version and fill each entry's four
-    required fields (id / category / requirements / capabilities) with defaults so the happy-path tests
-    exercise a valid payload. A test that probes a MISSING field passes the raw dict via _register_manifest
-    directly rather than through this helper."""
+def _manifest(*entries, schema_version=2):
+    """Build a STRICT versioned manifest (ADC-611 / ADC-544): stamp schema_version and fill each entry's
+    four required fields (id / category / requirements / capabilities) with defaults so the happy-path
+    tests exercise a valid payload. The ADC-544 v2 fields (native_id / supported_layouts / ...) are
+    optional -- an entry may add them, but the required set is unchanged. A test that probes a MISSING
+    field passes the raw dict via _register_manifest directly rather than through this helper."""
     normed = []
     for e in entries:
         row = {"category": "brick", "requirements": "", "capabilities": ""}

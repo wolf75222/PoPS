@@ -213,8 +213,9 @@ def test_read_manifest_reads_without_registering():
     from pops.external import read_manifest, CompiledManifest
     from pops import descriptors as desc
     # ADC-611 : le schema strict versionne exige schema_version (et chaque champ d'entree).
+    # ADC-544 : le schema passe a la v2 (les champs v2 sont optionnels; native_id defaut = id).
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "abi_key": "pops-test-abi",
         "bricks": [
             {"id": "my_flux", "category": "riemann",

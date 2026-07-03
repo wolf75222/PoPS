@@ -29,6 +29,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   unregistered `test_coupling_operator_contract` into the standard C++ test list.
 
 ### Added
+- ADC-544 External compiled brick references (`pops.external.CompiledBrickRef`) gain a versioned (v2)
+  per-brick manifest carrying native_id, supported layouts/platforms, params/options and exported
+  symbols, and four compile-time validation gates run before any use and never warned: G1 ABI key
+  mismatch (`RuntimeError`), G2 missing model capability (`ValueError`), G3 unsupported layout
+  (`ValueError`) and G4 a missing exported symbol probed by dlsym on the loaded brick handle
+  (`ValueError`; `.json`-only manifests honestly skip G4). The bricks are surfaced with their new
+  fields in `inspect_capabilities()` and an artifact's external bricks are listed on
+  `compiled.manifest()`.
 - ADC-543 Completed the generic moment-construction vocabulary under `pops.moments`: added the
   inert `VelocitySpace` / `MomentState` / `MomentTransport` handles and the `RealizableSet`
   descriptor, plus the `RawMomentBasis` / `MomentProjection` / `MomentClosure` aliases, and

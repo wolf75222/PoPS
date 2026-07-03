@@ -1,8 +1,9 @@
 """pops.external.manifests -- read + register a compiled-brick manifest (Spec 5 sec.5.17).
 
-A manifest is the JSON ``pops_brick_manifest()`` exports under the STRICT versioned schema (ADC-611):
-``{"schema_version": 1, "abi_key": <opt>, "bricks": [{"id", "category", "requirements",
-"capabilities"}, ...]}``. It can be read from a ``.json`` file or from a ``.so`` (dlopened).
+A manifest is the JSON ``pops_brick_manifest()`` exports under the STRICT versioned schema (ADC-611 /
+ADC-544): ``{"schema_version": 2, "abi_key": <opt>, "bricks": [{"id", "category", "requirements",
+"capabilities", <optional native_id / supported_layouts / supported_platforms / params / options /
+exported_symbols>}, ...]}``. It can be read from a ``.json`` file or from a ``.so`` (dlopened).
 :func:`register` / :func:`register_manifest_file` register the ids in the in-process catalog owned by
 :mod:`pops.descriptors`; :func:`read_manifest` is the read-only counterpart that returns the metadata
 WITHOUT registering or executing anything. The strict parse (schema_version / required fields /
