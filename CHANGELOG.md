@@ -17,6 +17,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 ## [Unreleased]
 
 ### Added
+- ADC-608 A source-only architecture fence
+  (`tests/python/architecture/test_no_quarantined_header_leak.py`) recomputes the production include
+  closure from the codegen-emitter, bindings and seam roots and asserts it never reaches a
+  quarantined validation/reference/test-only header, and that every quarantined header is justified
+  by a `tests/cpp` reference or deleted, so a header going orphan fails loudly.
 - ADC-547 A single declarative spec-compliance matrix (`tests/python/unit/compliance`) enumerates
   every positive and negative cell in one greppable table: the 8 positive cells assert the chosen
   native route via `native_capability_report()`/`compiled.inspect()`, the 11 negative cells assert a
@@ -169,6 +174,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `pops.Case`.
 
 ### Removed
+- ADC-608 Delete the dead AMR reference oracles `numerics/time/reference/amr_reflux.hpp` and
+  `numerics/time/reference/amr_level.hpp` (the latter's only includer, the `amr_reflux_mf.hpp`
+  umbrella, drops the now-unused re-export) and the zero-reference validation bricks
+  `validation/physics/langmuir.hpp` and `validation/physics/two_fluid_isothermal.hpp`; no production
+  or test path used their symbols and git history preserves them.
 - ADC-523 Removed `compile_problem` / `CompiledProblem` from `pops.__all__` and the top-level lazy
   attributes; `pops.compile_problem` now raises `AttributeError` pointing at `pops.compile` and the
   advanced `pops.codegen.compile_problem` path.

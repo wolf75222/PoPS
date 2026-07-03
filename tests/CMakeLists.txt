@@ -348,6 +348,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_system_coupler
   test_two_species_minimal
   test_coupled_source
+  test_coupling_operator_contract
   test_system_two_explicit
   test_assembler_driver
   test_amr_system_coupler
