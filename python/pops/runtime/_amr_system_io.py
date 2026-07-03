@@ -105,11 +105,12 @@ class _AmrSystemIO(_AmrSystem):
         import os
         import numpy as np
         from pops import _pops
+        # ADC-542: regrid-active checkpoints are RESTARTABLE now (format v3 rebuilds the hierarchy from
+        # the manifest at restart). A regridding system writes v3; a frozen hierarchy keeps the v2 path
+        # (back-compat, zero behaviour change) so existing v2 readers still work.
         if self._regrid_every != 0:
-            raise ValueError(
-                "AmrSystem.checkpoint : bit-identical resume wired for regrid_every == 0 only "
-                "(frozen hierarchy) ; this system has regrid_every=%d (the post-restart regrid would re-diverge "
-                "the hierarchy). Rebuild the system with regrid_every=0." % self._regrid_every)
+            from pops.runtime._amr_checkpoint_v3 import write_v3
+            return write_v3(self._s, path, self._L, self._regrid_every)
         gather = _pops.n_ranks() != 1  # np>1 : COLLECTIVE _global accessors (every rank gathers)
         multi = self._s.n_blocks() != 1
         nlev = int(self._s.n_levels())
@@ -175,17 +176,23 @@ class _AmrSystemIO(_AmrSystem):
         -> bit-identical resume under np>1 (parity with System.restart)."""
         import numpy as np
         from pops import _pops
-        if self._regrid_every != 0:
-            raise ValueError(
-                "AmrSystem.restart : requires regrid_every == 0 (frozen hierarchy ; otherwise the regrid "
-                "post-restart would re-diverge the restored hierarchy). Rebuild the system with "
-                "regrid_every=0 before restart. (current regrid_every = %d)" % self._regrid_every)
         target = path if path.endswith(".npz") else path + ".npz"
         d = np.load(target, allow_pickle=False)
         version = int(d["pops_amr_checkpoint_version"])
-        if version not in (1, 2):
-            raise ValueError("restart : AMR checkpoint version %r not supported (expected 1 or 2)"
+        if version not in (1, 2, 3):
+            raise ValueError("restart : AMR checkpoint version %r not supported (expected 1, 2 or 3)"
                              % (d["pops_amr_checkpoint_version"],))
+        if version == 3:
+            # ADC-542: v3 rebuilds the mid-run hierarchy from the manifest (restartable under active
+            # regridding). The frozen-hierarchy requirement does NOT apply to v3.
+            from pops.runtime._amr_checkpoint_v3 import restart_v3
+            restart_v3(self._s, d, self._L)
+            return
+        if self._regrid_every != 0:
+            raise ValueError(
+                "AmrSystem.restart : a v1/v2 checkpoint requires regrid_every == 0 (frozen hierarchy). "
+                "This system has regrid_every=%d; write a v3 checkpoint (it restarts under active "
+                "regridding) or rebuild the system with regrid_every=0." % self._regrid_every)
         if int(d["n"]) != self._s.nx():
             raise ValueError("restart : checkpoint grid (n=%d) != system (n=%d)"
                              % (int(d["n"]), self._s.nx()))
