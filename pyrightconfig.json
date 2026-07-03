@@ -18,7 +18,9 @@
     "python/pops/diagnostics",
     "python/pops/moments",
     "python/pops/external",
-    "python/pops/lib"
+    "python/pops/lib",
+    "python/pops/model",
+    "python/pops/ir"
   ],
   "exclude": [
     "**/__pycache__",

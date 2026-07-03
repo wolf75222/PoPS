@@ -6,12 +6,15 @@ Originally in pops.dsl.
   _expr_uses_cons_or_prim(e) -- True if the tree references a cons or prim Var
   _key(e)                   -- structural CSE key of a node
 """
+from __future__ import annotations
+
+from typing import Any
 
 from .expr import Const, Var, _Bin, Neg, Sqrt, Abs, Sign
 from .values import EigWitness, StateRef, RuntimeParamRef
 
 
-def _children(e):
+def _children(e: Any) -> Any:
     if isinstance(e, _Bin):
         return (e.a, e.b)
     if isinstance(e, (Neg, Sqrt, Abs, Sign)):
@@ -23,7 +26,7 @@ def _children(e):
     return ()
 
 
-def _expr_uses_cons_or_prim(e):
+def _expr_uses_cons_or_prim(e: Any) -> bool:
     """True if the expression tree references a conservative or primitive Var. Tests the Var KIND, so
     the answer does not depend on declaration order. Used to enforce that linear_source coefficients
     are linear in U: a coefficient depending on U or a primitive is not a constant matrix entry."""
@@ -36,7 +39,7 @@ def _expr_uses_cons_or_prim(e):
     return False
 
 
-def _key(e):
+def _key(e: Any) -> Any:
     if isinstance(e, Const):
         return ("const", e.value)
     if isinstance(e, RuntimeParamRef):

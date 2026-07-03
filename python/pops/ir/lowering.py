@@ -6,6 +6,9 @@ Originally in pops.dsl.
   _s_add / _s_neg / _s_sub / _s_mul / _s_div / _s_pow  -- minimal simplifying constructors
   diff(expr, var, defs) -- symbolic differentiation of the Expr tree
 """
+from __future__ import annotations
+
+from typing import Any
 
 from .expr import (
     Expr, _wrap,
@@ -23,12 +26,12 @@ from .values import RuntimeParamRef
 # symbol (readable emission), only the DERIVATIVE descends to the conservatives. Unknown node ->
 # NotImplementedError (never a silent zero). Minimal simplifications (0*x, 1*x, x+0).
 
-def _is_const(e, val=None):
+def _is_const(e: Any, val: Any = None) -> bool:
     """True if e is a numeric constant (Const); if @p val is given, equal to val."""
     return isinstance(e, Const) and (val is None or e.value == val)
 
 
-def _s_add(a, b):
+def _s_add(a: Any, b: Any) -> Any:
     if _is_const(a, 0.0):
         return b
     if _is_const(b, 0.0):
@@ -38,7 +41,7 @@ def _s_add(a, b):
     return Add(a, b)
 
 
-def _s_neg(a):
+def _s_neg(a: Any) -> Any:
     if _is_const(a, 0.0):
         return Const(0.0)
     if isinstance(a, Const):
@@ -48,7 +51,7 @@ def _s_neg(a):
     return Neg(a)
 
 
-def _s_sub(a, b):
+def _s_sub(a: Any, b: Any) -> Any:
     if _is_const(b, 0.0):
         return a
     if _is_const(a, 0.0):
@@ -58,7 +61,7 @@ def _s_sub(a, b):
     return Sub(a, b)
 
 
-def _s_mul(a, b):
+def _s_mul(a: Any, b: Any) -> Any:
     if _is_const(a, 0.0) or _is_const(b, 0.0):
         return Const(0.0)
     if _is_const(a, 1.0):
@@ -70,7 +73,7 @@ def _s_mul(a, b):
     return Mul(a, b)
 
 
-def _s_div(a, b):
+def _s_div(a: Any, b: Any) -> Any:
     if _is_const(a, 0.0):
         return Const(0.0)
     if _is_const(b, 1.0):
@@ -78,7 +81,7 @@ def _s_div(a, b):
     return Div(a, b)
 
 
-def _s_pow(a, b):
+def _s_pow(a: Any, b: Any) -> Any:
     # b: exponent (Expr), here assumed INDEPENDENT of the differentiation variable.
     if _is_const(b, 0.0):
         return Const(1.0)
@@ -87,7 +90,7 @@ def _s_pow(a, b):
     return Pow(a, b)
 
 
-def diff(expr, var, defs=None):
+def diff(expr: Any, var: Any, defs: Any = None) -> Any:
     """Symbolic derivative of @p expr with respect to @p var (variable name or Var).
 
     @p defs (optional): dictionary {primitive name: definition Expr}. When the differentiation
@@ -102,7 +105,7 @@ def diff(expr, var, defs=None):
     target = var.name if isinstance(var, Var) else str(var)
     d = defs or {}
 
-    def go(e):
+    def go(e: Any) -> Any:
         if isinstance(e, Const):
             return Const(0.0)
         if isinstance(e, RuntimeParamRef):

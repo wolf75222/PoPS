@@ -17,6 +17,9 @@ Board free functions
   grad, dx, dy, laplacian, div, ddt, rate, unknown, integral,
   board_sqrt.
 """
+from __future__ import annotations
+
+from typing import Any
 
 from .expr import Sqrt, Abs, Sign, _wrap
 from .expr import Gradient, Partial, Laplacian, Divergence, TimeDerivative, Unknown, Integral
@@ -28,22 +31,22 @@ from .values import EigWitness, StateRef
 # FLUX-DSL OPS
 # =============================================================================
 
-def sqrt(x):
+def sqrt(x: Any) -> Any:
     """Symbolic square root."""
     return Sqrt(_wrap(x))
 
 
-def abs_(x):
+def abs_(x: Any) -> Any:
     """Symbolic absolute value (equivalent of abs(expr); suffixed name so as not to shadow abs)."""
     return Abs(_wrap(x))
 
 
-def sign(x):
+def sign(x: Any) -> Any:
     """Signe symbolique (-1 / 0 / 1) : selections par masques sans branche par cellule."""
     return Sign(_wrap(x))
 
 
-def eig_max_im(rows):
+def eig_max_im(rows: Any) -> Any:
     """Temoin de VALEURS PROPRES COMPLEXES d'une petite matrice dense @p rows (liste de @c k lignes de
     @c k Expr) : valeur scalaire = max des |Im(lambda)| (0 = spectre reel, donc hyperbolique), via
     ``pops::real_eig_minmax`` (ADC-289). Sert les selections branchless de m.projection (p.ex. ``si
@@ -52,19 +55,19 @@ def eig_max_im(rows):
     return EigWitness(rows, "max_im")
 
 
-def eig_lmin(rows):
+def eig_lmin(rows: Any) -> Any:
     """Plus petite PARTIE REELLE du spectre de la matrice dense @p rows (cf. eig_max_im), via
     ``pops::real_eig_minmax`` -- valeur scalaire DSL (extreme de borne de vitesse / spectre reel)."""
     return EigWitness(rows, "lmin")
 
 
-def eig_lmax(rows):
+def eig_lmax(rows: Any) -> Any:
     """Plus grande PARTIE REELLE du spectre de la matrice dense @p rows (cf. eig_max_im), via
     ``pops::real_eig_minmax`` -- valeur scalaire DSL (extreme de borne de vitesse / spectre reel)."""
     return EigWitness(rows, "lmax")
 
 
-def eig_all_real(rows, im_tol=1e-5):
+def eig_all_real(rows: Any, im_tol: Any = 1e-5) -> Any:
     """PREDICAT reel/complexe du spectre de la PETITE matrice dense @p rows (liste de @c k lignes de
     @c k Expr) : valeur scalaire DSL = 1.0 si le spectre est REEL et le bloc a CONVERGE, 0.0 sinon
     (paire complexe OU non-convergence). Surface DSL d'``pops::EigBounds::all_real`` (dense_eig.hpp,
@@ -85,12 +88,12 @@ def eig_all_real(rows, im_tol=1e-5):
     return EigWitness(rows, "all_real", im_tol=im_tol)
 
 
-def left(expr):
+def left(expr: Any) -> Any:
     """Marks @p expr as evaluated on the LEFT state UL (Roe dissipation, m.roe_dissipation)."""
     return StateRef("L", expr)
 
 
-def right(expr):
+def right(expr: Any) -> Any:
     """Marks @p expr as evaluated on the RIGHT state UR (Roe dissipation, m.roe_dissipation)."""
     return StateRef("R", expr)
 
@@ -99,27 +102,27 @@ def right(expr):
 # BOARD OPS
 # =============================================================================
 
-def grad(field):
+def grad(field: Any) -> Any:
     """The gradient of a scalar field; use ``grad(phi).x`` / ``.y`` for components."""
     return Gradient(field)
 
 
-def dx(field):
+def dx(field: Any) -> Any:
     """The x partial derivative of a field (``grad(field).x``)."""
     return Partial(field, 0)
 
 
-def dy(field):
+def dy(field: Any) -> Any:
     """The y partial derivative of a field (``grad(field).y``)."""
     return Partial(field, 1)
 
 
-def laplacian(field):
+def laplacian(field: Any) -> Any:
     """The Laplacian of a field -- the elliptic operator of a Poisson solve."""
     return Laplacian(field)
 
 
-def div(flux):
+def div(flux: Any) -> Any:
     """The divergence of a flux or of an elliptic gradient.
 
     ``div(F)`` of a model flux handle builds the hyperbolic ``-div F`` term. ``div`` of a
@@ -136,27 +139,27 @@ def div(flux):
     return Divergence(flux)
 
 
-def ddt(state):
+def ddt(state: Any) -> Any:
     """The time derivative of a state -- the left-hand side of a rate equation."""
     return TimeDerivative(state)
 
 
-def rate(state):
+def rate(state: Any) -> Any:
     """The rate (time derivative) of a state; synonym of :func:`ddt` for time programs."""
     return TimeDerivative(state)
 
 
-def unknown(name):
+def unknown(name: Any) -> Any:
     """A named solve unknown, e.g. ``unknown("U*")``."""
     return Unknown(name)
 
 
-def integral(expr, over=None):
+def integral(expr: Any, over: Any = None) -> Any:
     """The spatial integral of ``expr`` -- the value of a generic invariant."""
     return Integral(expr, over=over)
 
 
-def board_sqrt(x):
+def board_sqrt(x: Any) -> Any:
     """Square root, lifted to the board: wraps an Expr in a Sqrt node, or falls
     back to :func:`math.sqrt` on a plain number.
 

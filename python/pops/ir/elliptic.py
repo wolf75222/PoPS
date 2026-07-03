@@ -12,10 +12,14 @@ They are INERT: IR construction only; the C++ elliptic solver executes. The base
 Lowering the variable-coefficient operators in the elliptic codegen is the coordinated
 follow-up.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from .expr import _BoardNode, _EllipticTerm
 
 
-def _as_elliptic(x):
+def _as_elliptic(x: Any) -> Any:
     """Coerce ``x`` to an :class:`pops.ir.expr._EllipticTerm`, else a clear error."""
     if isinstance(x, _EllipticTerm):
         return x
@@ -24,7 +28,7 @@ def _as_elliptic(x):
         "(laplacian(phi) / div(coeff*grad(phi)) / a reaction coeff*phi); got %r" % (x,))
 
 
-def principal_kinds(node):
+def principal_kinds(node: Any) -> Any:
     """The set of elliptic principal-operator kinds in a field-equation LHS (empty if none)."""
     return node._principal_kinds() if isinstance(node, _EllipticTerm) else set()
 
@@ -32,18 +36,18 @@ def principal_kinds(node):
 class Reaction(_EllipticTerm):
     """A zeroth-order reaction term ``coeff * phi`` (built by ``coeff * unknown("phi")``)."""
 
-    def __init__(self, field, coeff, scale=1.0):
+    def __init__(self, field: Any, coeff: Any, scale: Any = 1.0) -> None:
         self.field = field
         self.coeff = coeff
         self.scale = float(scale)
 
-    def _kind(self):
+    def _kind(self) -> Any:
         return "reaction"
 
-    def __neg__(self):
+    def __neg__(self) -> Any:
         return Reaction(self.field, self.coeff, -self.scale)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         lead = "" if self.scale == 1.0 else "%g*" % self.scale
         return "Reaction(%s%r*%r)" % (lead, self.coeff, self.field)
 
@@ -51,33 +55,33 @@ class Reaction(_EllipticTerm):
 class CoeffGradient(_BoardNode):
     """``coeff * grad(phi)`` -- consumed by ``div(...)`` to build a :class:`DivCoeffGrad`."""
 
-    def __init__(self, field, coeff, scale=1.0):
+    def __init__(self, field: Any, coeff: Any, scale: Any = 1.0) -> None:
         self.field = field
         self.coeff = coeff
         self.scale = float(scale)
 
-    def __neg__(self):
+    def __neg__(self) -> Any:
         return CoeffGradient(self.field, self.coeff, -self.scale)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "CoeffGradient(%r*grad(%r))" % (self.coeff, self.field)
 
 
 class DivCoeffGrad(_EllipticTerm):
     """``scale * div(coeff * grad(phi))`` -- a variable / anisotropic principal operator."""
 
-    def __init__(self, field, coeff, scale=1.0):
+    def __init__(self, field: Any, coeff: Any, scale: Any = 1.0) -> None:
         self.field = field
         self.coeff = coeff
         self.scale = float(scale)
 
-    def _kind(self):
+    def _kind(self) -> Any:
         return "div_coeff_grad"
 
-    def __neg__(self):
+    def __neg__(self) -> Any:
         return DivCoeffGrad(self.field, self.coeff, -self.scale)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         lead = "" if self.scale == 1.0 else "%g*" % self.scale
         return "DivCoeffGrad(%sdiv(%r*grad(%r)))" % (lead, self.coeff, self.field)
 
@@ -85,25 +89,25 @@ class DivCoeffGrad(_EllipticTerm):
 class EllipticSum(_EllipticTerm):
     """An accumulated sum of elliptic operator terms (laplacian / div-coeff-grad / reaction)."""
 
-    def __init__(self, terms):
+    def __init__(self, terms: Any) -> None:
         self.terms = list(terms)
 
-    def _elliptic_terms(self):
+    def _elliptic_terms(self) -> Any:
         return list(self.terms)
 
-    def _principal_kinds(self):
+    def _principal_kinds(self) -> Any:
         kinds = set()
         for term in self.terms:
             kinds |= term._principal_kinds()
         return kinds
 
-    def _kind(self):
+    def _kind(self) -> Any:
         return "sum"
 
-    def __neg__(self):
+    def __neg__(self) -> Any:
         return EllipticSum([-term for term in self.terms])
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "EllipticSum(%r)" % (self.terms,)
 
 
