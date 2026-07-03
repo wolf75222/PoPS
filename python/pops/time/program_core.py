@@ -442,12 +442,19 @@ LocalTerm`, an :class:`pops.model.OperatorHandle` from ``m.source_term``, or a p
         linear source). Consumed by `solve_local_linear`."""
         return _Operator(_Coeff({0: 1.0}), [])
 
-    def linear_source(self, name):
-        """Reference a model linear-source operator ``L_name`` (declared via ``m.linear_source``).
-        Use it in operator algebra (``self.I - a * P.linear_source('lorentz')``) or `apply`. The
-        coefficients of L are the model's; the Program only names it (resolved at compile time)."""
+    def linear_source(self, operator):
+        """Reference a model linear-source operator ``L`` (declared via ``m.linear_source`` /
+        ``m.local_linear_map``). Use it in operator algebra (``self.I - a * P.linear_source(L)``) or
+        `apply`. The coefficients of L are the model's; the Program only names it (resolved at compile
+        time).
+
+        ``operator`` is the typed :class:`pops.model.OperatorHandle` the declarer returned (ADC-532).
+        A handle unwraps to its ``.name`` internally, so the IR is byte-identical to the historical
+        string form; the internal lowering / lib.time macros may still pass the bare name as an
+        internal selector (undocumented)."""
+        name = self._operator_call_name(operator) if not isinstance(operator, str) else operator
         if not isinstance(name, str) or not name:
-            raise ValueError("linear_source: name must be a non-empty string")
+            raise ValueError("linear_source: a non-empty operator name or OperatorHandle is required")
         return self._new("operator", "linear_source", (), {"linear_source": name}, name, None)
 
     def source(self, name, state=None, fields=None):

@@ -19,6 +19,12 @@ except Exception as exc:  # pops not importable here -> skip, never fake
     sys.exit(0)
 
 
+def _op(m, name):
+    """A typed OperatorHandle for a registered operator (the de-stringed macro selector, ADC-532)."""
+    op = m.operator_registry().get(name)
+    return model.OperatorHandle(op.name, kind=op.kind, signature=op.signature)
+
+
 def _model():
     m = Model("ep")
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
@@ -60,8 +66,8 @@ def test_compiled_problem_introspection():
     m = _model()
     P = adctime.Program("pc").bind_operators(m)
     libtime.predictor_corrector_local_linear(
-        P, "plasma", fields_operator="fields_from_state",
-        explicit_rate_operator="explicit_rhs", implicit_operator="lorentz")
+        P, "plasma", fields_operator=_op(m, "fields_from_state"),
+        explicit_rate_operator=_op(m, "explicit_rhs"), implicit_operator=_op(m, "lorentz"))
     # A CompiledProblem built directly: introspection reads model metadata, never the .so.
     compiled = CompiledProblem(so_path="<not built>", program=P, model=m,
                                    abi_key="k", cxx="clang", std="c++23")

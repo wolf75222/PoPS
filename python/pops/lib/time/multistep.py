@@ -4,7 +4,7 @@ Exports: adams_bashforth, adams_bashforth2, bdf.
 Private helpers: _AB_WEIGHTS, _bdf_local_linear, _bdf_implicit_flux.
 """
 
-from ._helpers import _stage_rhs, program_macro
+from ._helpers import _operator_handle, _stage_rhs, program_macro
 from .euler import forward_euler as _forward_euler_macro
 
 
@@ -210,8 +210,9 @@ def bdf(P, block, order, *, linear_source=None, sources=("default",), flux=True,
         a pure-macro composition of existing primitives (matrix_free_operator + solve_linear + the affine
         algebra + history) -- no new C++ runtime stepper.
 
-      - **cell-local linear SOURCE** (the fast path, ADC-423): when @p linear_source names a model
-        ``m.linear_source`` ``L``, the BDF system is block-diagonal and ``(c0*I - dt*L) U^{n+1} = rhs``
+      - **cell-local linear SOURCE** (the fast path, ADC-423): when @p linear_source is the typed
+        handle of a model ``m.linear_source`` ``L``, the BDF system is block-diagonal and
+        ``(c0*I - dt*L) U^{n+1} = rhs``
         is solved per cell by `P.solve_local_linear` (no Newton / Krylov). @p flux / @p sources then add
         an EXPLICIT flux/source RHS lagged at U^n (like `imex_local`).
 
@@ -224,15 +225,16 @@ def bdf(P, block, order, *, linear_source=None, sources=("default",), flux=True,
     if isinstance(order, bool) or not isinstance(order, int) or order not in (1, 2):
         raise ValueError("bdf: order must be the int 1 or 2 (got %r)" % (order,))
     if linear_source is not None:
-        if not (isinstance(linear_source, str) and linear_source):
-            raise ValueError("bdf: linear_source must be a non-empty model linear-source name or None")
+        # ADC-532: linear_source is a typed OperatorHandle (m.linear_source / m.local_linear_map),
+        # not a name string. _bdf_local_linear passes it to P.linear_source, which accepts a handle.
+        linear_source = _operator_handle(linear_source, "linear_source")
         return _bdf_local_linear(P, block, order, linear_source, sources, flux)
     # The implicit-flux Newton-Krylov path (ADC-431): a flux-less BDF with no implicit term is a no-op.
     if not flux:
         raise ValueError(
             "bdf with flux=False needs a cell-local implicit linear_source (there is no implicit term to "
-            "solve); pass linear_source='<name>' for the relaxation BDF, or flux=True for the "
-            "implicit-flux Newton-Krylov BDF")
+            "solve); pass linear_source=<m.linear_source handle> for the relaxation BDF, or flux=True "
+            "for the implicit-flux Newton-Krylov BDF")
     if isinstance(ncomp, bool) or not isinstance(ncomp, int) or ncomp < 1:
         raise ValueError("bdf: ncomp must be a positive int (the block component count); got %r"
                          % (ncomp,))

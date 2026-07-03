@@ -16,11 +16,18 @@ try:
     import pytest
     import pops
     import pops.lib.time as libtime
+    from pops.model import OperatorHandle
     from pops.time import Program
     from pops.time.program import CompiledTime
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_macro_program_route (pops unavailable: %s)" % exc)
     sys.exit(0)
+
+
+def _op(m, name):
+    """A typed OperatorHandle for a registered operator (the de-stringed macro selector, ADC-532)."""
+    op = m.operator_registry().get(name)
+    return OperatorHandle(op.name, kind=op.kind, signature=op.signature)
 
 
 def test_macro_without_program_returns_a_program():
@@ -58,8 +65,8 @@ def test_predictor_corrector_returns_program():
     def build(P):
         P.bind_operators(m)
         libtime.predictor_corrector_local_linear(
-            P, "plasma", fields_operator="fields_from_state",
-            explicit_rate_operator="explicit_rhs", implicit_operator="lorentz")
+            P, "plasma", fields_operator=_op(m, "fields_from_state"),
+            explicit_rate_operator=_op(m, "explicit_rhs"), implicit_operator=_op(m, "lorentz"))
 
     # Manual route: build into an explicit Program.
     manual = Program("pc")

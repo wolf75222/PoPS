@@ -3,7 +3,7 @@
 Exports: predictor_corrector_local_linear.
 """
 
-from ._helpers import _opcall, program_macro
+from ._helpers import _opcall, _operator_handle, program_macro
 
 
 @program_macro
@@ -19,8 +19,13 @@ def predictor_corrector_local_linear(P, block, *, fields_operator, explicit_rate
         U*    = (I - dt L_n)^{-1} (U^n + dt R_n)
         U^n+1 = (I - 1/2 dt L*)^{-1} (U^n + 1/2 dt R_n + 1/2 dt R* + 1/2 dt L* U*)
 
-    It mentions no physics; ``state_space`` is informational. Requires ``P.bind_operators(module)``.
+    It mentions no physics; ``state_space`` is informational. Each of ``fields_operator`` /
+    ``explicit_rate_operator`` / ``implicit_operator`` is a typed :class:`pops.model.OperatorHandle`
+    from an ``m.*`` declarer, not a name string. Requires ``P.bind_operators(module)``.
     """
+    fields_operator = _operator_handle(fields_operator, "fields_operator")
+    explicit_rate_operator = _operator_handle(explicit_rate_operator, "explicit_rate_operator")
+    implicit_operator = _operator_handle(implicit_operator, "implicit_operator")
     u_n = P.state(block)
     fields_n = _opcall(P, fields_operator, u_n, value_name="fields_n")
     r_n = _opcall(P, explicit_rate_operator, u_n, fields_n, value_name="R_n")

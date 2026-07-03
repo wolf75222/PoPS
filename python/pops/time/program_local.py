@@ -117,8 +117,14 @@ class _ProgramLocal(_ProgramConstants):
              "tol": float(tol), "max_iter": int(max_iter), "method": method}, name, block)
 
     def _linear_source_name(self, operator, where):
-        """Resolve `operator` (a `linear_source` value, its name, or a single unit-coefficient
-        ``_Operator`` term) to the linear-source name."""
+        """Resolve `operator` to the linear-source name.
+
+        Accepts a typed :class:`pops.model.OperatorHandle` (ADC-532; unwrapped to its ``.name``, so the
+        IR is byte-identical to the historical string form), a `linear_source` Value, a single
+        unit-coefficient ``_Operator`` term, or a bare name string (an internal selector)."""
+        from pops.model import OperatorHandle
+        if isinstance(operator, OperatorHandle):
+            return operator.name
         if isinstance(operator, str) and operator:
             return operator
         if isinstance(operator, Value) and operator.op == "linear_source":
@@ -127,7 +133,8 @@ class _ProgramLocal(_ProgramConstants):
                 and len(operator.terms) == 1 and operator.terms[0][1].as_dict() == {0: 1.0}):
             return operator.terms[0][0].attrs["linear_source"]
         raise ValueError(
-            "%s: operator must be a linear source (P.linear_source(name) or its name)" % where)
+            "%s: operator must be a linear source (P.linear_source(handle) or its OperatorHandle)"
+            % where)
 
     # --- matrix-free operators / dynamic linear solve (ADC-405 Phase 6b) ----------------------------
     # A ``matrix_free_op`` names a GLOBAL matrix-free operator A : scalar_field -> scalar_field whose

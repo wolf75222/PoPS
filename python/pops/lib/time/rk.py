@@ -3,7 +3,7 @@
 Exports: rk4, rk, explicit_rk, ButcherTableau, RK4_TABLEAU, SSPRK2_TABLEAU.
 """
 
-from ._helpers import _opcall, _stage_rhs, program_macro
+from ._helpers import _opcall, _operator_handle, _stage_rhs, program_macro
 
 
 @program_macro
@@ -112,9 +112,14 @@ def explicit_rk(P, block, *, rhs_operator, fields_operator=None, tableau=None, A
     """Generic explicit Runge-Kutta over a typed rate operator (Spec 2, operator-first).
 
     Each stage is ``k_i = rhs_operator(U_i[, fields_operator(U_i)])``; the tableau lowers to the same
-    affine stage chain as :func:`rk`. Pass a ``ButcherTableau`` / ``(A, b, c)`` via ``tableau`` or the
-    raw ``A`` / ``b`` / ``c``. ``fields_operator`` is optional (a pure-flux rate needs no fields).
+    affine stage chain as :func:`rk`. ``rhs_operator`` / ``fields_operator`` are typed
+    :class:`pops.model.OperatorHandle` selectors (from ``m.rate`` / ``m.field_solve``), not name
+    strings. Pass a ``ButcherTableau`` / ``(A, b, c)`` via ``tableau`` or the raw ``A`` / ``b`` / ``c``.
+    ``fields_operator`` is optional (a pure-flux rate needs no fields).
     """
+    rhs_operator = _operator_handle(rhs_operator, "rhs_operator")
+    if fields_operator is not None:
+        fields_operator = _operator_handle(fields_operator, "fields_operator")
     if tableau is None:
         if A is None or b is None:
             raise ValueError("explicit_rk: provide a tableau or A and b")

@@ -20,6 +20,12 @@ except Exception as exc:  # pops not importable here -> skip, never fake
     sys.exit(0)
 
 
+def _op(mod, name):
+    """A typed OperatorHandle for a registered operator (the de-stringed macro selector, ADC-532)."""
+    op = mod.operator_registry().get(name)
+    return model.OperatorHandle(op.name, kind=op.kind, signature=op.signature)
+
+
 def pure_module():
     mod = model.Module("euler_poisson_lorentz_operator_first")
     u = mod.state_space("U", ("rho", "mx", "my"),
@@ -68,8 +74,8 @@ def test_pure_module_program_emits():
     mod = pure_module()
     P = adctime.Program("pc").bind_operators(mod)
     libtime.predictor_corrector_local_linear(
-        P, "plasma", fields_operator="fields_from_state",
-        explicit_rate_operator="explicit_rhs", implicit_operator="lorentz")
+        P, "plasma", fields_operator=_op(mod, "fields_from_state"),
+        explicit_rate_operator=_op(mod, "explicit_rhs"), implicit_operator=_op(mod, "lorentz"))
     # compile_problem(model=Module) lowers the Module internally; emit the .so source (no compile).
     src = P.emit_cpp_program(model=mod.to_dsl())
     assert "pops_install_program" in src

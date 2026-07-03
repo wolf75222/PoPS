@@ -45,6 +45,13 @@ def _pops_time():
     return t
 
 
+def _llop(name):
+    """A bare local-linear-operator OperatorHandle, the de-stringed bdf linear_source selector
+    (ADC-532). The IR tests bind no module; the model resolves the operator by name at compile time."""
+    from pops.model import OperatorHandle
+    return OperatorHandle(name, kind="local_linear_operator")
+
+
 # ---- (A) codegen + IR validation: pure Python, always runs ----
 def test_implicit_flux_bdf1_codegen(t):
     P = t.Program("bdf1")
@@ -95,7 +102,7 @@ def test_cell_local_fast_path_unchanged(t):
     # The cell-local linear-source path stays the block-diagonal solve_local_linear: NO Newton/Krylov.
     for order in (1, 2):
         P = t.Program("bdfL%d" % order)
-        lt.bdf(P, "blk", order, linear_source="lorentz")
+        lt.bdf(P, "blk", order, linear_source=_llop("lorentz"))
         assert P.validate() is True
         ops = {v.op for v in P._values}
         assert "solve_local_linear" in ops, "the cell-local fast path uses solve_local_linear"

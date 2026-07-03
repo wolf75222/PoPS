@@ -33,6 +33,15 @@ def _pops_time():
     return t
 
 
+def _llop(name):
+    """A bare local-linear-operator OperatorHandle, the de-stringed macro selector (ADC-532).
+
+    The section-A imex/bdf IR tests bind no module, so a handle is built directly from the operator
+    name (the model still resolves it by name at compile time in section B)."""
+    from pops.model import OperatorHandle
+    return OperatorHandle(name, kind="local_linear_operator")
+
+
 _C = 0.75  # AB linear-source coefficient: S(rho) = _C*rho
 
 
@@ -96,7 +105,7 @@ def _lorentz_model(name):
 # ============================ (A) IR + codegen: pure Python =============================
 def test_imex_local_builds_and_lowers(t):
     P = t.Program("imex")
-    out = lt.imex_local(P, "plasma", linear_source="lorentz")
+    out = lt.imex_local(P, "plasma", linear_source=_llop("lorentz"))
     assert P.validate() is True and P.commits()["plasma"] is out
     try:
         from pops.physics.facade import Model
@@ -111,20 +120,21 @@ def test_imex_local_builds_and_lowers(t):
 def test_imex_local_theta_guard(t):
     for bad in (0.0, -0.5, 1.5):
         try:
-            lt.imex_local(t.Program("x"), "plasma", linear_source="lorentz", theta=bad)
+            lt.imex_local(t.Program("x"), "plasma", linear_source=_llop("lorentz"), theta=bad)
         except ValueError as exc:
             assert "theta" in str(exc)
         else:
             raise AssertionError("imex_local theta=%r must raise (0 < theta <= 1)" % (bad,))
 
 
-def test_imex_local_rejects_empty_linear_source(t):
+def test_imex_local_rejects_string_linear_source(t):
+    # ADC-532: a string linear_source is refused pointing at the typed handle form.
     try:
-        lt.imex_local(t.Program("x"), "plasma", linear_source="")
-    except ValueError as exc:
-        assert "linear_source" in str(exc)
+        lt.imex_local(t.Program("x"), "plasma", linear_source="lorentz")
+    except TypeError as exc:
+        assert "OperatorHandle" in str(exc) and "linear_source" in str(exc)
     else:
-        raise AssertionError("imex_local must reject an empty linear_source name")
+        raise AssertionError("imex_local must reject a string linear_source (use a handle)")
 
 
 def test_lie_chains_two_stages(t):
@@ -263,7 +273,8 @@ def _run_imex(t):
         print("-- (B imex) skipped: _pops lacks install_program (rebuild _pops) --")
         return
     P = t.Program("imex_step")
-    lt.imex_local(P, "plasma", linear_source="lorentz", flux=True, sources=["default"], theta=1.0)
+    lt.imex_local(P, "plasma", linear_source=_llop("lorentz"), flux=True, sources=["default"],
+                  theta=1.0)
     try:
         compiled = pops.codegen.compile_problem(model=_lorentz_model("imex_prog"), time=P)
         cm = _lorentz_model("imex_block").compile(backend="production")
