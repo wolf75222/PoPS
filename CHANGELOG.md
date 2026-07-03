@@ -17,6 +17,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 ## [Unreleased]
 
 ### Added
+- ADC-547 A single declarative spec-compliance matrix (`tests/python/unit/compliance`) enumerates
+  every positive and negative cell in one greppable table: the 8 positive cells assert the chosen
+  native route via `native_capability_report()`/`compiled.inspect()`, the 11 negative cells assert a
+  stable, warning-free refusal on the clean route (the `pops.runtime.routes` install-time predicates
+  and `run_bind_gates` metadata stubs, not the legacy `System.add_block` route), and every
+  compiler-gated decision runs its full pre-compile bind-gate path locally so a regression cannot
+  hide until CI; a completeness test pins the cell ids so a dropped cell fails loud.
 - ADC-566 `pops.lib` boundaries are locked to `models`, `time`, `presets`: a new
   `python/pops/lib/<other>/`, any lazy or module-scope import of `_pops`/`pops.runtime`/`pops.codegen`,
   and any definition or module-scope re-export of a central object
