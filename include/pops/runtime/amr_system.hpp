@@ -4,6 +4,7 @@
 #include <pops/mesh/layout/patch_box.hpp>  // PatchBox: index-space signature of a fine patch (patch_boxes())
 #include <pops/mesh/boundary/physical_bc.hpp>                // BCRec
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions (Newton options of the IMEX source)
+#include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperator / CouplingOperatorView (typed contract, ADC-595)
 #include <pops/runtime/export.hpp>  // POPS_EXPORT: set_compiled_block resolved by the native AMR loader
 #include <pops/runtime/facade_options.hpp>  // SourceStageOptions / CoupledSourceProgram (facade PODs, ADC-214)
 #include <pops/runtime/config/model_spec.hpp>
@@ -590,6 +591,20 @@ class AmrSystem {
   /// @param label     name of the coupling (reason "coupled_source:<label>" of last_dt_bound).
   void add_coupled_source(const CoupledSourceProgram& prog, double frequency = 0.0,
                           const std::string& label = "coupled_source");
+
+  /// Registers a TYPED coupling operator (ADC-595, parity with System::add_coupling_operator): the
+  /// same coupled-source program PLUS its declared conservation contract and frequency bound. The
+  /// declared contract is VALIDATED at registration (host, fail-loud) against the actual output terms,
+  /// then the program is lowered through the SAME add_coupled_source path (bit-identical numerics), and
+  /// the declared contract is recorded for coupled_operators(). An empty (unchecked) contract is
+  /// equivalent to add_coupled_source.
+  void add_coupling_operator(const CouplingOperator& op);
+
+  /// Read-only view of the registered coupling operators (ADC-595, parity with System): label plus the
+  /// declared conservation / frequency contracts, in registration order, so a Program or a runtime
+  /// report enumerates the AMR couplings as typed operators. A raw add_coupled_source registers an
+  /// "unchecked" entry (empty contract). Empty until the first coupling is added.
+  const std::vector<CouplingOperatorView>& coupled_operators() const;
 
   void step(double dt);  ///< one AMR macro-step (periodic regrid included)
   void advance(double dt, int nsteps);

@@ -1956,7 +1956,14 @@ level via `same_layout_or_throw`, coarse Poisson co-located sum, conservation pe
 `CompositeModel` from a `ModelSpec` (the core names no scenario).
 
 **Constraints / remarks.** The blocks share an aux and a Poisson; the coupling between species
-goes through the elliptic right-hand side (sum) and the coupled sources, not through the flux. `substeps`
+goes through the elliptic right-hand side (sum) and the coupled sources, not through the flux. An
+inter-species coupling is a TYPED operator (`CouplingOperator`,
+[`include/pops/coupling/source/coupling_operator.hpp`](../include/pops/coupling/source/coupling_operator.hpp)):
+it carries a DECLARED conservation contract (conserved versus created roles) validated at registration,
+so `apply_couplings` applies a term-set whose invariants are machine-checked rather than trusted;
+ionization is declared NON-conservative in density (it net-sources an electron/ion pair) while collision
+conserves momentum and thermal exchange conserves energy. The named couplings are presets lowering to
+this one representation, inspectable read-only through `coupled_operators()`. `substeps`
 and `stride` are orthogonal (a slow block on `stride=M` is held M-1 steps then catches up by an effective
 step `M*dt`); between two catch-ups the held block enters the Poisson sum with its stale state.
 In multi-block AMR, `regrid_every > 0` is supported (the union-tag regrid rebuilds the hierarchy from all blocks' tags; `regrid_every == 0` keeps it frozen)
@@ -2153,7 +2160,7 @@ of this page. The goal is not to present a partial capability as complete.
 | Poisson with wall, Dirichlet, or $\varepsilon(x)$ | `geometric_mg` | multigrid, arbitrary geometry (section 9, 11) |
 | full-tensor operator (anisotropic, polar) | `krylov_solver` (matrix-free BiCGStab) | no matrix assembly (section 12, 16) |
 | localized feature (front, ring) | `layout=AMR(refine=Refine.on(...).above(...))` | adaptive refinement, conservative reflux (section 17 to 19) |
-| inter-species sources | `CoupledSource` (bytecode) | conservative by construction (section 22) |
+| inter-species sources | `CoupledSource` bytecode as a typed `CouplingOperator` | declared conservation contract, validated at registration (section 22) |
 | non-rectangular domain | EB cut-cell (disc) or polar ring | curved boundary without staircase (section 14 to 16) |
 
 ## References

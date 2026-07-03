@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pops/core/state/variables.hpp>  // VariableSet (role-bearing descriptor carried by each block)
+#include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperator / CouplingOperatorView (typed contract, ADC-595)
 #include <pops/diagnostics/runtime_diagnostics.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions (options of the IMEX source Newton)
 #include <pops/runtime/export.hpp>  // POPS_EXPORT (methods resolved by the native loader through dlopen)
@@ -548,6 +549,20 @@ class System {
   /// error (before any step). Without a call, the default path stays BIT-IDENTICAL.
   void add_coupled_source(const CoupledSourceProgram& prog, double frequency = 0.0,
                           const std::string& label = "coupled_source");
+
+  /// Registers a TYPED coupling operator (ADC-595): the same coupled-source program as
+  /// add_coupled_source, PLUS its declared conservation contract and frequency bound. The declared
+  /// ConservationContract is VALIDATED at registration (host, fail-loud) against the actual output
+  /// terms (validate_coupling_contract) BEFORE the program is stored, then the program is lowered
+  /// through the SAME add_coupled_source path (bit-identical numerics), and the declared contracts are
+  /// recorded for coupled_operators(). An empty (unchecked) contract is equivalent to add_coupled_source.
+  void add_coupling_operator(const CouplingOperator& op);
+
+  /// Read-only view of the registered coupling operators (ADC-595): label + declared conservation /
+  /// frequency contracts, in registration order, so a Program or a runtime report can enumerate the
+  /// couplings as typed operators instead of reading raw bytecode. A raw add_coupled_source registers an
+  /// "unchecked" entry (empty contract). Empty until the first coupling is added.
+  const std::vector<CouplingOperatorView>& coupled_operators() const;
 
   POPS_EXPORT void solve_fields();  ///< solves Poisson then derives aux = (phi, grad phi); exported
                                    ///< so a compiled program .so resolves it via ProgramContext

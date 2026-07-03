@@ -290,6 +290,13 @@ struct System::Impl {
     std::vector<Real> kconsts;  // constants loaded into r[n_in ..] (same as the source)
   };
   std::vector<CoupledFreqExpr> coupled_freq_exprs_;
+  // TYPED coupling operator inspect metadata (ADC-595): one read-only view (label + declared
+  // conservation / frequency contracts) per registered coupled source, in registration order. Populated
+  // by add_coupled_source (an "unchecked" entry, empty contract) and by add_coupling_operator (the
+  // declared contract). It is METADATA ONLY: the SystemStepper never reads it (unlike couplings /
+  // coupled_freqs_ / coupled_freq_exprs_), so it is MockImpl-safe like dt_bounds_ / bound_. Exposed
+  // read-only via coupled_operators() so a Program / runtime report enumerates couplings as operators.
+  std::vector<CouplingOperatorView> coupled_operators_;
 
   // stride_due (hold-then-catch-up cadence filter) EXTRACTED into stepper_ (SystemStepper, Batch B):
   // it serves exclusively the time advance. macro_step_ (above) stays a SHARED member of Impl
@@ -1734,6 +1741,31 @@ void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double fr
       for_each_cell(Uref.box(li), kern);  // NAMED functor (device-clean), additive forward-Euler
     }
   });
+  // Inspect metadata (ADC-595): a raw add_coupled_source declares NO conservation contract, so it
+  // registers an "unchecked" view (empty ConservationContract) carrying the label and the frequency
+  // bound. add_coupling_operator overwrites this behavior by pushing the DECLARED contract instead.
+  CouplingOperatorView view;
+  view.label = label;
+  view.frequency.constant_mu = frequency;
+  view.frequency.per_cell = has_freq_expr;
+  P->coupled_operators_.push_back(std::move(view));
+}
+
+void System::add_coupling_operator(const CouplingOperator& op) {
+  // Validate the DECLARED conservation contract against the actual output terms BEFORE anything is
+  // stored (host, fail-loud): a coupling that declares a role conserved whose terms do not cancel
+  // raises here and leaves no partial state (anti-phantom-registration, like add_coupled_source's
+  // frequency-bound rule). An unchecked (empty) contract is a no-op check.
+  validate_coupling_contract(op, "System::add_coupling_operator");
+  // Lower through the SAME flat path (bit-identical numerics); it pushes an "unchecked" inspect view
+  // at its tail. We then replace that view's contract with the DECLARED one so coupled_operators()
+  // reports the typed contract rather than "unchecked".
+  add_coupled_source(op.program, op.frequency.constant_mu, op.label);
+  p_->coupled_operators_.back().conservation = op.conservation;
+}
+
+const std::vector<CouplingOperatorView>& System::coupled_operators() const {
+  return p_->coupled_operators_;
 }
 
 void System::set_source_stage(const std::string& name, const std::string& kind, double theta,

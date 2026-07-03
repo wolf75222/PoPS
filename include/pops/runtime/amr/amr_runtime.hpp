@@ -9,6 +9,7 @@
 #include <pops/coupling/system/amr_system_coupler.hpp>  // detail::same_layout_or_throw (shared-layout guard)
 #include <pops/coupling/base/aux_fill.hpp>            // detail::derive_aux_bc (BC of the aux channel)
 #include <pops/coupling/source/coupled_source_program.hpp>  // CoupledSourceKernel + CsProgram (flat ABI, P5 bytecode)
+#include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperator / CouplingOperatorView (typed contract, ADC-595)
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess, FieldPostProcess
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // AmrLevelMP, mf_average_down_mb
@@ -330,6 +331,11 @@ class AmrRuntime {
     return blocks_[b].cons_vars;
   }
   std::size_t n_coupled_sources() const { return coupled_sources_.size(); }
+  /// Read-only view of the registered coupling operators (ADC-595, parity with System): label plus the
+  /// declared conservation / frequency contracts, in registration order, so a Program or a runtime
+  /// report enumerates the AMR couplings as typed operators. A raw add_coupled_source registers an
+  /// "unchecked" entry (empty contract); add_coupling_operator records the declared contract.
+  const std::vector<CouplingOperatorView>& coupled_operators() const { return coupled_operators_; }
   MultiFab& phi() { return mg_.phi(); }
   // System Poisson right-hand side after the last solve_fields: f = Sum_b elliptic_rhs_b(U_b) on the
   // shared coarse. Exposed to check the CO-LOCATED SUM (PR1 test); same grid as the coarse (the
@@ -670,6 +676,25 @@ class AmrRuntime {
     std::vector<Real> kconsts(consts.begin(), consts.end());
     coupled_sources_.push_back(CoupledSourceSpec{std::move(ins), std::move(outs),
                                                  std::move(kconsts), n_in, n_const, n_terms});
+  }
+
+  /// Registers a TYPED coupling operator on the AMR runtime (ADC-595, parity with
+  /// System::add_coupling_operator): validates the DECLARED conservation contract against the terms
+  /// (host, fail-loud) BEFORE storing, lowers the program through the SAME add_coupled_source path
+  /// (bit-identical), then records the declared contract for coupled_operators(). @p frequency /
+  /// @p label name the operator's declared frequency bound in the inspect view (the AMR frequency
+  /// bound itself is registered separately via add_coupled_freq / add_coupled_freq_expr).
+  void add_coupling_operator(const CouplingOperator& op, double frequency, const std::string& label) {
+    validate_coupling_contract(op, "AmrRuntime::add_coupling_operator");
+    const CoupledSourceProgram& p = op.program;
+    add_coupled_source(p.in_blocks, p.in_roles, p.consts, p.out_blocks, p.out_roles, p.prog_ops,
+                       p.prog_args, p.prog_lens);
+    CouplingOperatorView view;
+    view.label = label;
+    view.conservation = op.conservation;
+    view.frequency.constant_mu = frequency;
+    view.frequency.per_cell = !p.freq_prog_ops.empty() || !p.freq_prog_args.empty();
+    coupled_operators_.push_back(std::move(view));
   }
 
   /// Applies ALL the registered coupled sources of a step dt, by forward-Euler splitting. Runtime
@@ -1702,6 +1727,11 @@ class AmrRuntime {
   FieldProblemRegistry field_problems_;
   std::vector<CoupledSourceSpec>
       coupled_sources_;  // registered coupled sources (applied after transport)
+  // TYPED coupling operator inspect metadata (ADC-595, parity with System::Impl::coupled_operators_):
+  // one read-only view (label + declared contracts) per registered coupled source, in registration
+  // order. Populated by add_coupled_source (unchecked) / add_coupling_operator (declared). Metadata
+  // only; the step never reads it.
+  std::vector<CouplingOperatorView> coupled_operators_;
   // UNION-TAGS REGRID (capstone Phase 2, C.6). regrid_every_ == 0 -> FROZEN hierarchy (default,
   // bit-identical). block_tag_: PER-BLOCK tag predicate (D1; same size as blocks_, empty = this block
   // tags nothing on its side). phi_tag_: phi tag predicate on |grad phi| (D4; empty = phi does not
