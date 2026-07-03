@@ -18,6 +18,38 @@ name: CI
 #    ajoute MPI (+ Kokkos Serial) et Kokkos OpenMP, la suite COMPLETE. INCHANGE par ADC-171.
 # Aucun test n'est supprime : seuls les declencheurs et le cache changent. Le serie passe par
 # Kokkos Serial (Kokkos_ENABLE_SERIAL=ON), le multi-thread par Kokkos OpenMP (Kokkos_ENABLE_OPENMP).
+#
+# ADC-548 COMPLIANCE MAP -- which job PROVES each acceptance dimension (ASCII, no docs page: this
+# header comment is the single source of the CI-narrative documentation).
+#  (a) EXPLICIT NAMED JOBS per compliance dimension:
+#      - architecture gates      -> gate-python-architecture (source-only compliance proof: it runs
+#        the WHOLE tests/python/architecture dir -- package layout, import graph, public imports,
+#        file-size budget, no-legacy-route, no-string-selectors, and the header include fences; a new
+#        *.py dropped under architecture/ auto-enrolls, no CI edit needed).
+#      - unit families           -> gate-python shards 0..N (duration-packed; tests/python/unit/**
+#        via impacted selection). The shard job NAME "... shard N" is a required-check contract.
+#      - codegen / manifest / cache-ABI -> gate-python-compile-cache (the dedicated DSL compile-cache
+#        job: it write/verify-keys the <so>.cachekey sidecar, the manifest and the backend/ABI cache
+#        key across up to 8 real native compiles).
+#      - generated-program compile + bind SMOKE -> gate-python-compile-cache (the 8 real DSL native
+#        compiles ARE the compile/bind smoke: emit -> .so -> load).
+#      - bind-RUN / ProgramContext execution SMOKE -> kokkos-openmp (the add_native_block route:
+#        test_native_abi_std / test_dsl_production / test_dsl_production_amr actually RUN a compiled
+#        Program). Fast lane carries the compile-BIND proof; the full lane carries the bind-RUN proof.
+#  (b) DEBUG ARTIFACTS ON CODEGEN FAILURE: the codegen-running jobs (gate-python-compile-cache and the
+#      gate-python shards) export POPS_KEEP_GENERATED=1 into a known POPS_CACHE_DIR and, on failure,
+#      upload the ADC-536 provenance sidecars -- the generated .cpp (banner = serialized IR + hashes +
+#      flags + toolchain + REDACTED compile command) and the .cachekey -- as a debug artifact. The
+#      banner is redacted and sidecar-only, so it never leaks a secret and never enters the .so bytes.
+#  (c) LEGACY TESTS separated from the compliance proof: the compliance proof (gate-python-architecture)
+#      is SOURCE-ONLY and never imports/executes the functional or legacy-surface tests, so it cannot
+#      be contaminated. Functional tests (incl. the legacy System-coupler / reference-oracle C++
+#      surface) live in the unit/integration shards and the full lanes, kept distinct BY JOB. No
+#      separate legacy lane exists or is warranted today.
+#  (d) SLOW MATRICES named and documented: mpi (MPI + Kokkos Serial, ctest -L mpi) and kokkos-openmp
+#      (Kokkos OpenMP + the native-ABI bind-RUN route). Triggers (set-mode): the full matrix runs on
+#      push-master when a build/backend path changed, on the nightly cron (03:17 UTC), on
+#      workflow_dispatch, and on a PR carrying the label ci-full.
 on:
   push:
     branches: [master]
@@ -305,6 +337,14 @@ jobs:
   # GATE PYTHON ARCHITECTURE : tests source-only (pas de _pops, pas de Kokkos). Ils couvrent les
   # invariants de structure du package Python et doivent rester legers meme quand seule l'architecture
   # de tests change.
+  # ADC-548 (a)(c): this job IS the architecture COMPLIANCE PROOF. It runs the whole
+  # tests/python/architecture dir wholesale -- package layout (test_package_layout.py), import graph
+  # (test_import_graph.py) + public imports, the 500-line file-size budget (test_file_sizes.py),
+  # no-legacy-route (test_no_legacy_runtime_routes.py), no-string-selectors
+  # (test_lib_time_no_string_selectors.py) and the header include fences (e.g. the schur / quarantined
+  # header no-leak fences). A new *.py under architecture/ auto-enrolls (the pytest call is wholesale),
+  # so the proof grows without a CI edit. Source-only: it never imports _pops nor executes the
+  # functional / legacy-surface tests, so the compliance proof cannot be contaminated by them.
   gate-python-architecture:
     name: ubuntu-latest / Python architecture
     runs-on: ubuntu-latest
@@ -512,6 +552,13 @@ jobs:
       CCACHE_SLOPPINESS: locale,time_macros
       SHARD_INDEX: ${{ matrix.shard }}
       SHARD_TOTAL: ${{ strategy.job-total }}
+      # ADC-548 (b): pin the DSL .so cache to a KNOWN dir and keep the generated source so a codegen
+      # failure in a shard's DSL tests leaves the ADC-536 provenance sidecars (<so>.cpp + <so>.cachekey)
+      # on disk for the on-failure upload. Setting POPS_CACHE_DIR here just relocates the default cache
+      # (~/.cache/pops/dsl) to a workspace path; POPS_KEEP_GENERATED=1 persists the inert (sidecar-only,
+      # redacted) banner .cpp -- neither changes the compiled .so bytes nor the cache key.
+      POPS_CACHE_DIR: ${{ github.workspace }}/.pops-dsl-cache
+      POPS_KEEP_GENERATED: "1"
 
     steps:
       - uses: actions/checkout@v7
@@ -627,6 +674,9 @@ jobs:
           # incluent les en-tetes pops (-> for_each, #error sans Kokkos). Ils lisent le Kokkos a utiliser
           # via Kokkos_ROOT / POPS_KOKKOS_ROOT : on pointe le MEME Kokkos Serial que le module _pops.
           export Kokkos_ROOT="${KOKKOS_PREFIX}" POPS_KOKKOS_ROOT="${KOKKOS_PREFIX}"
+          # ADC-548 (b): ensure the pinned DSL cache dir exists so any codegen sidecars land in a known
+          # place for the on-failure upload (empty when this shard runs no DSL-compiling test).
+          mkdir -p "$POPS_CACHE_DIR"
           SECONDS=0
           # ADC-366 sharded runner. The selected file list is produced by scripts/ci_select_tests.py,
           # then pytest owns collection, fixtures, markers and reporting.
@@ -674,6 +724,22 @@ jobs:
           path: ${{ runner.temp }}/pytimings/timings.*
           if-no-files-found: ignore
 
+      # ADC-548 (b): on a shard failure, ship any ADC-536 provenance sidecars a DSL-compiling test
+      # left in POPS_CACHE_DIR (the generated .cpp banner + the .cachekey). Most shards run no codegen
+      # test, so if-no-files-found: ignore keeps a non-codegen failure from turning red on an empty
+      # upload. The banner is redacted and sidecar-only -- it cannot leak a secret nor alter the .so.
+      - name: Upload codegen debug artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: codegen-debug-shard${{ matrix.shard }}
+          path: |
+            ${{ env.POPS_CACHE_DIR }}/**/*.cpp
+            ${{ env.POPS_CACHE_DIR }}/**/*.cachekey
+            ${{ env.POPS_CACHE_DIR }}/**/*.json
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: ccache stats (Python module)
         if: always() && steps.test-plan.outputs.python_shard_count != '0'
         run: ccache -s
@@ -687,6 +753,10 @@ jobs:
   # on the SAME inputs as the ADC-621 _pops.so module cache PLUS python/pops/** (the DSL
   # codegen) and the test file, so a warm run skips the recompiles. Same routing/`if:` as
   # gate-python: it runs whenever the sharded Python gate runs.
+  # ADC-548 (a): this dedicated job is the CODEGEN + MANIFEST + CACHE-ABI proof AND the
+  # generated-program compile/bind SMOKE -- its ~8 back-to-back native compiles emit -> .so -> load,
+  # exercising the write/verify of the <so>.cachekey sidecar and the backend/ABI cache key. On a
+  # codegen failure it uploads the ADC-536 provenance sidecars (see the trailing failure step).
   gate-python-compile-cache:
     name: ubuntu-latest / Kokkos Serial (Python) compile-cache
     runs-on: ubuntu-latest
@@ -760,6 +830,13 @@ jobs:
             ccache-${{ runner.os }}-python-
 
       - name: Test DSL compile-cache (Kokkos Serial)
+        # ADC-548 (b): POPS_KEEP_GENERATED=1 persists the ADC-536 provenance sidecar -- the generated
+        # <so>.cpp (banner = serialized IR + hashes + flags + toolchain + REDACTED compile command) --
+        # next to each .so in POPS_CACHE_DIR, alongside the <so>.cachekey the compile writes anyway.
+        # The banner is inert (sidecar-only), so the .so bytes and the cache key are unchanged whether
+        # this is set or not; on a codegen failure the trailing step uploads the sidecars for debug.
+        env:
+          POPS_KEEP_GENERATED: "1"
         run: |
           pip install --upgrade pip numpy pytest
           export PYTHONPATH="$PWD/build-kokkos-py/python"
@@ -772,7 +849,7 @@ jobs:
           set -e
           test_s=$SECONDS
           {
-            echo "### gate-python-compile-cache (module _pops, Kokkos Serial)"
+            echo "### gate-python-compile-cache: codegen + manifest + cache-ABI + generated-program compile/bind SMOKE (Kokkos Serial)"
             echo ""
             echo "| Phase | Duree (s) |"
             echo "| --- | --- |"
@@ -784,6 +861,22 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit $rc
+
+      # ADC-548 (b): on a codegen failure, ship the ADC-536 provenance sidecars for offline debug --
+      # the generated .cpp (self-describing banner) and the .cachekey the compile persisted into
+      # POPS_CACHE_DIR. The banner uses the REDACTED compile command and lives only in the sidecar, so
+      # this cannot leak a secret. if-no-files-found: ignore keeps a non-codegen failure from going red.
+      - name: Upload codegen debug artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: codegen-debug-compile-cache
+          path: |
+            ${{ env.POPS_CACHE_DIR }}/**/*.cpp
+            ${{ env.POPS_CACHE_DIR }}/**/*.cachekey
+            ${{ env.POPS_CACHE_DIR }}/**/*.json
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: ccache stats (Python compile-cache)
         if: always()
@@ -1002,6 +1095,10 @@ jobs:
           cmake --preset ci-kokkos-python
           cmake --build --preset ci-kokkos-python
 
+      # ADC-548 (a): this add_native_block section is the bind-RUN / ProgramContext EXECUTION smoke --
+      # it compiles a production model at runtime and actually RUNS it (System + AMR) via
+      # add_native_block, the counterpart to the compile/bind smoke carried on the fast gate
+      # (gate-python-compile-cache). The full lane carries the bind-RUN proof; the gate lane the compile-BIND.
       - name: Test ABI natif (production -> add_native_block, std aligne sur le loader c++20)
         env:
           OMP_NUM_THREADS: "2"

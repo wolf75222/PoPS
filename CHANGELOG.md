@@ -109,6 +109,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   3 to 5; and isolated the multi-compile DSL compile-cache test into its own cached job so it no longer
   sits on a shard's critical path. A verify step fails the gate if the shard partition is not an exact
   cover of the selection.
+- ADC-548 CI now names each compliance dimension explicitly: the source-only architecture tier as the
+  compliance proof, the DSL compile-cache job as the codegen/manifest/cache-ABI plus generated-program
+  compile/bind smoke, and the OpenMP lane's `add_native_block` route as the bind-run ProgramContext
+  smoke; a header acceptance map documents these and the slow-matrix (mpi, kokkos-openmp) triggers. The
+  codegen-running jobs (compile-cache and the Python shards) upload the ADC-536 provenance sidecars (the
+  generated C++ with its redacted banner and the `.cachekey`) as a debug artifact when a codegen job
+  fails. The required `gate` check name and the `... shard N` job-name contract are unchanged.
 - ADC-553 Renamed `pops.Case` to `pops.Problem` (no back-compat alias; `pops.Case` raises
   `AttributeError` pointing at `pops.Problem`) and split the flat assembly monolith into a
   `pops.problem` package of typed internal registries (blocks / fields / time / params / runtime
