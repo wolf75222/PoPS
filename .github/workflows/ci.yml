@@ -363,7 +363,9 @@ jobs:
 
       - name: Spec 4 architecture tests
         run: |
-          pip install --upgrade pip pytest pyright
+          # numpy: a hard dependency of the package that pyright must RESOLVE now that the
+          # ADC-628 include list covers all of python/pops (the tests themselves stay source-only).
+          pip install --upgrade pip pytest pyright numpy
           python3 -m pytest tests/python/architecture -q
 
       - name: Pyright
