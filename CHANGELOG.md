@@ -17,6 +17,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 ## [Unreleased]
 
 ### Added
+- ADC-565 Architecture gates refuse a second core system: a new public stepper class bypassing
+  `pops.time.Program`, a parallel field-problem system beside `pops.fields`
+  `FieldProblem`/`PoissonProblem` (or the bind path constructing one), or an AMR configuration route
+  other than `layout=AMR(...)` (a `target=`/string vocabulary, or a `sim.amr` mutator) all fail
+  tests; the facade and direct field lowering are proven identical via the IR hash, with no broad
+  allowlist (only `Program`, `ButcherTableau`, and the mesh AMR descriptor are named exceptions).
 - ADC-564 `Problem.inspect()` and `Program.inspect()` return typed report objects (attributes +
   `to_dict()`, never a dict subclass) on a shared `pops.Report` base that `compiled.inspect()`,
   `sim.inspect()`, `sim.explain_bind()` and `sim.amr` inspection also adopt; the reports carry
