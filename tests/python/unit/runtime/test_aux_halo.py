@@ -26,6 +26,7 @@ import pops
 from pops.physics.facade import Model
 
 from tests.python.support.requirements import repo_include
+from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 INCLUDE = repo_include()
 
 
@@ -73,7 +74,7 @@ def test_capabilities_halo():
 
 
 def _cart_rhs(compiled, n, vx2d, halo):
-    sim = pops.System(n=n, L=1.0, periodic=False)
+    sim = System(n=n, L=1.0, periodic=False)
     sim.add_equation("a", model=compiled,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit())
@@ -132,7 +133,7 @@ def test_polar_halo():
         vx = np.tile((np.arange(nr) + 0.5) / nr, (nth, 1))  # varies in r (fast axis i)
 
         def rhs(halo):
-            s = pops.System(mesh=pops.PolarMesh(r_min=0.3, r_max=1.0, nr=nr, ntheta=nth))
+            s = System(mesh=pops.PolarMesh(r_min=0.3, r_max=1.0, nr=nr, ntheta=nth))
             s.add_equation("a", model=compiled,
                            spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()), time=pops.Explicit())
             s.set_density("a", np.ones((nth, nr)))
@@ -172,7 +173,7 @@ def test_amr_halo():
         vx = np.tile((np.arange(n) + 0.5) / n, (n, 1))
 
         def stepped_density(halo):
-            s = pops.AmrSystem(n=n, L=1.0, periodic=False)
+            s = AmrSystem(n=n, L=1.0, periodic=False)
             s.add_equation("a", model=compiled, spatial=sp, time=pops.Explicit())
             s.set_poisson(bc="dirichlet")
             s.set_density("a", np.ones((n, n)))

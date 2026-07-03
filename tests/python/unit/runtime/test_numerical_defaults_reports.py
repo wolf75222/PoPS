@@ -3,6 +3,7 @@
 import math
 
 import pytest
+from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
 
@@ -38,7 +39,7 @@ def test_numerical_defaults_report_is_structured():
 
 
 def test_system_inspect_reports_effective_block_and_solver_options():
-    sim = pops.System(n=8, L=1.0, periodic=True)
+    sim = System(n=8, L=1.0, periodic=True)
     sim.add_block(
         "ion",
         _isothermal_model(),
@@ -78,7 +79,7 @@ def test_invalid_newton_and_refinement_values_are_rejected():
     with pytest.raises(ValueError, match="newton_max_iters"):
         pops.IMEX(newton_max_iters=0)
 
-    amr = pops.AmrSystem(n=8, L=1.0, periodic=True)
+    amr = AmrSystem(n=8, L=1.0, periodic=True)
     with pytest.raises(RuntimeError, match="threshold must be finite"):
         amr.set_refinement(math.inf)
     with pytest.raises(RuntimeError, match="grad_threshold must be finite"):
@@ -86,7 +87,7 @@ def test_invalid_newton_and_refinement_values_are_rejected():
 
 
 def test_amr_inspect_reports_refinement_sentinel_as_policy():
-    amr = pops.AmrSystem(n=8, L=1.0, periodic=True)
+    amr = AmrSystem(n=8, L=1.0, periodic=True)
     amr.set_refinement(1e30)
     options = amr.inspect().to_dict()["options"]
     assert options["runtime"] == "amr_system"

@@ -23,6 +23,7 @@ validation errors #18/#19.
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _pops_time():
@@ -310,7 +311,7 @@ def _run_section_b(t):
         return None
 
     n = 8
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program") or not hasattr(sim, "program_diagnostics"):
         print("-- (B) skipped: _pops lacks the install_program/program_diagnostics bindings "
               "(rebuild _pops) --")
@@ -397,7 +398,7 @@ def _run_section_b2(t):
         return None
 
     n = 8
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
         print("-- (B.2) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
@@ -485,7 +486,7 @@ def test_restart_missing_history_fails_loud(t):
 
     # Build a checkpoint dict that does NOT contain the required 'blk.R' history (a legacy / wrong
     # checkpoint), then drive System.restart against a System that has registered it.
-    sysobj = pops.System.__new__(pops.System)  # bypass __init__ (no engine needed for the guard path)
+    sysobj = System.__new__(System)  # bypass __init__ (no engine needed for the guard path)
     sysobj._s = _MockSystem()
     ckpt = {
         "pops_checkpoint_version": 1,
@@ -527,7 +528,7 @@ def _run_section_c2(t):
         return None
 
     n = 4
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
         print("-- (C.2) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None

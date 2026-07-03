@@ -25,6 +25,7 @@ import tempfile
 import numpy as np
 
 import pops
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 N, L = 24, 1.0
 from tests.python.support.requirements import repo_include
@@ -54,7 +55,7 @@ def test_compressible():
     spec = pops.Model(state=pops.FluidState("compressible", gamma=1.4),
                      transport=pops.CompressibleFlux(),
                      source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0))
-    s = pops.System(n=N, L=L, periodic=True)
+    s = System(n=N, L=L, periodic=True)
     s.add_block("e", spec, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     assert s.variable_names("e", "primitive") == ["rho", "u", "v", "p"]
 
@@ -82,7 +83,7 @@ def test_isothermal():
     spec = pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                      transport=pops.IsothermalFlux(),
                      source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0))
-    s = pops.System(n=N, L=L, periodic=True)
+    s = System(n=N, L=L, periodic=True)
     s.add_block("g", spec, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     assert s.variable_names("g", "primitive") == ["rho", "u", "v"]
 
@@ -106,7 +107,7 @@ def test_scalar():
     rho, _, _, _ = _fields()
     spec = pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
                      source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0))
-    s = pops.System(n=N, L=L, periodic=True)
+    s = System(n=N, L=L, periodic=True)
     s.add_block("q", spec, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     name = s.variable_names("q", "primitive")[0]
     err = _roundtrip_err(s, "q", **{name: rho})
@@ -120,7 +121,7 @@ def test_set_density_unchanged():
     spec = pops.Model(state=pops.FluidState("compressible", gamma=1.4),
                      transport=pops.CompressibleFlux(),
                      source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0))
-    s = pops.System(n=N, L=L, periodic=True)
+    s = System(n=N, L=L, periodic=True)
     s.add_block("e", spec, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     s.set_density("e", rho)
     U = np.array(s.get_state("e")).reshape(4, N, N)
@@ -136,7 +137,7 @@ def test_errors():
     spec = pops.Model(state=pops.FluidState("compressible", gamma=1.4),
                      transport=pops.CompressibleFlux(),
                      source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0))
-    s = pops.System(n=N, L=L, periodic=True)
+    s = System(n=N, L=L, periodic=True)
     s.add_block("e", spec, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
 
     try:
@@ -171,7 +172,7 @@ def test_dsl_compiled():
     try:
         # --- AOT : .so a ABI plate, charge par add_compiled_block ---
         so_aot = e.compile_or_jit(os.path.join(tmp, "ep_aot.so"), INCLUDE, mode="compile")
-        a = pops.System(n=N, L=L, periodic=True)
+        a = System(n=N, L=L, periodic=True)
         a.add_compiled_block("gas", so_aot, limiter="minmod", riemann="rusanov",
                              recon="conservative", names=["rho", "rho_u", "rho_v", "E"])
         assert a.variable_names("gas", "primitive") == ["rho", "u", "v", "p"]
@@ -186,7 +187,7 @@ def test_dsl_compiled():
 
         # --- JIT prototype : .so IModel virtuel, charge par add_dynamic_block ---
         so_jit = e.compile_so(os.path.join(tmp, "ep_jit.so"), INCLUDE)
-        j = pops.System(n=N, L=L, periodic=True)
+        j = System(n=N, L=L, periodic=True)
         j.add_dynamic_block("gas", so_jit, names=["rho", "rho_u", "rho_v", "E"])
         err_j = _roundtrip_err(j, "gas", rho=rho, u=u, v=v, p=p)
         assert err_j < 1e-13, "DSL JIT : round-trip cons<->prim non exact (%.2e)" % err_j

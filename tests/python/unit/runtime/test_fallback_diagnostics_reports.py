@@ -1,6 +1,7 @@
 """ADC-604 structured fallback/degraded-route diagnostics."""
 
 import pytest
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
 
@@ -24,7 +25,7 @@ def test_fallback_diagnostics_report_has_explicit_policies():
 
 
 def test_runtime_inspect_includes_fallback_diagnostics_and_configured_opt_in():
-    sim = pops.System(n=8, L=1.0, periodic=True)
+    sim = System(n=8, L=1.0, periodic=True)
     model = pops.Model(
         pops.FluidState.isothermal(cs2=0.7),
         pops.IsothermalFlux(),

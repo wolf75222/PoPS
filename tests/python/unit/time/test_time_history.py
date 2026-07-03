@@ -34,6 +34,7 @@ mirrors this exactly (FE step 0, AB2 thereafter), so the comparison is to machin
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _pops_time():
@@ -193,7 +194,7 @@ def _run_section_b(t):
         return None
 
     n = 16
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
         print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
@@ -258,7 +259,7 @@ def _run_section_c(t):
         return None
 
     n = 8
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
         print("-- (C) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None

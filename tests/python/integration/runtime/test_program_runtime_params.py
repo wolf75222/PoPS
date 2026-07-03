@@ -20,6 +20,7 @@ kernel reads the CURRENT value via ``ctx.program_params(block).get(index)``.
     skips if numpy/_pops/compiler/Kokkos is absent or the .so compile fails -- never faking the engine.
 """
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):
@@ -111,11 +112,11 @@ _, unk3 = route_program_params({0: ["k"]}, {"k": 2.0}, {"nope": 1.0})
 chk(unk3 == ["nope"], "an unknown param name is flagged (no silent drop)")
 
 # ---- (B) end-to-end: skips unless the full Kokkos toolchain is present ----
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
     print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
     print("%s test_program_runtime_params (A only)" % ("FAIL" if fails else "PASS"))
     sys.exit(1 if fails else 0)
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "set_program_params"):
+if not hasattr(System(n=8, L=1.0, periodic=True), "set_program_params"):
     print("-- (B) skipped: _pops lacks the set_program_params binding (rebuild _pops) --")
     print("%s test_program_runtime_params (A only)" % ("FAIL" if fails else "PASS"))
     sys.exit(1 if fails else 0)
@@ -136,7 +137,7 @@ def make_sim(model):
     # add_equation, not add_block which takes a _pops.ModelSpec); install_program then OVERLAYS the
     # whole-system Program, whose source reads k via ctx.program_params -> set_program_params changes
     # it. No set_poisson: _decay_program has no solve_fields, so install_program needs no solver.
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     try:
         cm = model.compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed

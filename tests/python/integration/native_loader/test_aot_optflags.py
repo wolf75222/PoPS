@@ -21,6 +21,7 @@ import sys
 import tempfile
 
 import numpy as np
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -186,7 +187,7 @@ def check_numeric_parity():
             cm_prod = build_euler("euler_optflags_production").compile(
                 os.path.join(tmp, "m_prod.so"), INCLUDE, backend="production")
             for backend, cm in (("aot", cm_aot), ("production", cm_prod)):
-                s = pops.System(n=n, periodic=True)
+                s = System(n=n, periodic=True)
                 s.add_equation("gas", cm, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
                                                                    variables=Primitive()))
                 s.set_poisson(rhs="charge_density", solver="geometric_mg")

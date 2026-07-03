@@ -9,7 +9,7 @@ STABLE, warning-free refusal (exception type + exact message needles that are al
 in the sources), so a message drift fails in ONE place.
 
 Design notes (from the plan):
-  * The CLEAN route only. The ADC-597 matrix drives the legacy ``pops.System(...).add_block()``
+  * The CLEAN route only. The ADC-597 matrix drives the legacy ``System(...).add_block()``
     route; this matrix inspects the Problem/layout/descriptor clean route and the metadata-stub bind
     gates instead (``pops.runtime.routes`` install-time predicates over a ``CompiledModel`` stub;
     ``run_bind_gates`` over a ``CompiledProblem`` stub -- no ``.so`` on disk). That is also the
@@ -43,6 +43,7 @@ from pops.runtime._install_param_routing import route_program_params
 from pops.solvers.elliptic import GeometricMG
 from pops.solvers.krylov import CG
 from pops import model as _model
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 # --------------------------------------------------------------------------------------------------

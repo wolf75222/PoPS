@@ -37,6 +37,7 @@ from types import SimpleNamespace
 from pops.ir.expr import Const, Var
 from pops.ir.ops import abs_, eig_lmax, eig_lmin, eig_max_im, sign
 from pops.physics.model import HyperbolicModel
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 dsl = SimpleNamespace(Const=Const, Var=Var, abs_=abs_, sign=sign, eig_lmax=eig_lmax,
                       eig_lmin=eig_lmin, eig_max_im=eig_max_im, HyperbolicModel=HyperbolicModel)
@@ -247,7 +248,7 @@ def test_system_end_to_end():
         return np.stack([q0, q1, q2])
 
     def make_sys(so, adder):
-        s = pops.System(n=N, L=L, periodic=True)
+        s = System(n=N, L=L, periodic=True)
         if adder == "native":
             s._s.add_native_block("toy", so, limiter="minmod", riemann="rusanov",
                                   recon="conservative", time="explicit", gamma=1.4, substeps=1)

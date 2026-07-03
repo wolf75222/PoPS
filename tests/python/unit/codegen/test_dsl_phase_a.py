@@ -29,6 +29,7 @@ from pops.physics.facade import Model
 from pops.physics.model import Param, RuntimeParam
 
 from tests.python.support.requirements import repo_include
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 INCLUDE = repo_include()
 GAMMA = 1.6667
 
@@ -142,7 +143,7 @@ def pure_python_checks():
 
     # add_equation : erreurs sur un CompiledModel FACTICE (pas de .so reel necessaire, les gardes
     # levent AVANT la frontiere C++).
-    sys = pops.System(n=16, periodic=True)
+    sys = System(n=16, periodic=True)
     fake = CompiledModel(so_path="/inexistant.so", backend="aot", adder="add_compiled_block",
                              cons_names=["rho", "rho_u", "rho_v", "E"],
                              cons_roles=["Density", "MomentumX", "MomentumY", "Energy"],
@@ -194,7 +195,7 @@ def end_to_end_checks(cxx):
             print("OK  %s : compile -> CompiledModel(adder=%s, n_vars=%d, abi_key=%.8s...)"
                   % (backend, cm.adder, cm.n_vars, cm.abi_key))
 
-            s = pops.System(n=n, periodic=True)
+            s = System(n=n, periodic=True)
             s.add_equation("gas", cm, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
                                                                variables=Primitive()))
             s.set_poisson(rhs="charge_density", solver="geometric_mg")
@@ -217,7 +218,7 @@ def end_to_end_checks(cxx):
         # (sans le fix, u=u -> `Real u = u;` auto-init) et (b) donner le MEME modele que la forme expr.
         mp = build_euler_predef("euler_predef")
         cmp_ = mp.compile(os.path.join(tmp, "m_predef.so"), INCLUDE, backend="aot")
-        sp = pops.System(n=n, periodic=True)
+        sp = System(n=n, periodic=True)
         sp.add_equation("gas", cmp_, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
                                                               variables=Primitive()))
         sp.set_poisson(rhs="charge_density", solver="geometric_mg")
@@ -236,7 +237,7 @@ def modelspec_substeps_check():
     """substeps= doit etre forwarde pour un ModelSpec (pas seulement pour un CompiledModel) : la
     branche ModelSpec d'add_equation appelle _s.add_block DIRECTEMENT avec nsub (pas self.add_block,
     qui retomberait sur time.substeps et IGNORERAIT l'override). Verifie via un espion sur _s.add_block."""
-    s = pops.System(n=16, periodic=True)
+    s = System(n=16, periodic=True)
     spec = pops.Model(state=pops.FluidState("isothermal", cs2=1.0), transport=pops.IsothermalFlux(),
                      source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=-1.0))
     calls = []

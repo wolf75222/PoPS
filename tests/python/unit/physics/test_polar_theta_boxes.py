@@ -30,6 +30,7 @@ import numpy as np
 
 try:
     import pops
+    from pops.runtime.system import System, SystemConfig  # ADC-545 advanced runtime seam
 except ImportError as e:  # PYTHONPATH non pose : skip CI-safe (comme les autres tests Python)
     print("skip  module pops absent (PYTHONPATH ?) : %s" % e)
     sys.exit(0)
@@ -49,7 +50,7 @@ def _iso_system(theta_boxes):
     """System polaire isotherme NATIF (rho, mom_r, mom_theta) a theta_boxes bandes. AUCUN Poisson n'est
     configure ni resolu : on n'exerce que le TRANSPORT (eval_rhs) -- le flux isotherme est self-contenu
     (cs2 du modele), il ne lit pas grad phi."""
-    sim = pops.System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH, theta_boxes=theta_boxes))
+    sim = System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH, theta_boxes=theta_boxes))
     sim.add_block(
         "iso",
         model=pops.Model(state=pops.FluidState(kind="isothermal", cs2=1.0),
@@ -61,7 +62,7 @@ def _iso_system(theta_boxes):
 
 def _exb_system(theta_boxes):
     """System polaire ExB scalaire (1 variable) a theta_boxes bandes. Poisson NON resolu ici (cf. (c))."""
-    sim = pops.System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH, theta_boxes=theta_boxes))
+    sim = System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH, theta_boxes=theta_boxes))
     sim.add_block(
         "ne",
         model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0), source=pops.NoSource(),
@@ -208,14 +209,14 @@ def test_rejections_divisibility_and_direct_poisson():
     assert raised, "PolarMesh(theta_boxes=16, ntheta=8) doit lever (theta_boxes > ntheta)"
 
     # (c2) un SystemConfig construit a la main (contourne PolarMesh) est protege cote C++.
-    cfg = pops.SystemConfig()
+    cfg = SystemConfig()
     cfg.geometry = "polar"
     cfg.r_min, cfg.r_max, cfg.nr, cfg.ntheta = RMIN, RMAX, NR, NTH
     cfg.theta_boxes = 5  # 32 % 5 != 0
     cfg.n = NR
     raised = False
     try:
-        pops.System(config=cfg)
+        System(config=cfg)
     except Exception:
         raised = True
     assert raised, "System(theta_boxes=5, ntheta=32) doit lever cote C++ (check_geometry)"
@@ -255,7 +256,7 @@ def test_state_roundtrip_multibox():
 
     # set_primitive_state -> get_primitive_state == identite (conversion modele consistante, multi-box).
     # On passe par le binding bas niveau (tableau (ncomp, ntheta, nr)) pour eviter la reshape carree de
-    # la facade pops.System.set_primitive_state (hypothese n x n, hors-sujet ici).
+    # la facade System.set_primitive_state (hypothese n x n, hors-sujet ici).
     dr = (RMAX - RMIN) / NR
     dth = 2.0 * math.pi / NTH
     P0 = np.empty((3, NTH, NR))

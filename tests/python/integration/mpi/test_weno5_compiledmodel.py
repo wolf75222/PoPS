@@ -27,6 +27,7 @@ import numpy as np
 
 import pops
 from test_dsl_coupled import build_euler_poisson, GAMMA, INCLUDE
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
 # global 300 s process-isolation budget (ADC-627, same class as test_compile_cache_backend).
 POPS_PROCESS_TIMEOUT = 900
@@ -71,7 +72,7 @@ def main():
 
         # --- reference NATIVE add_block (oracle de parite) ---
         def ref(limiter):
-            sys = pops.System(n=n, L=L, periodic=True)
+            sys = System(n=n, L=L, periodic=True)
             lim = {"none": dict(none=True), "minmod": dict(minmod=True),
                    "weno5": dict(weno5=True)}[limiter]
             sys.add_block("gas", spec, spatial=pops.Spatial(flux=Rusanov(), recon=Conservative(),
@@ -84,7 +85,7 @@ def main():
 
         # --- (1) AOT : add_compiled_block accepte weno5, parite serree au natif ---
         def aot(limiter):
-            sys = pops.System(n=n, L=L, periodic=True)
+            sys = System(n=n, L=L, periodic=True)
             sys.add_compiled_block("gas", so_aot, limiter=limiter, riemann="rusanov",
                                    recon="conservative", time="explicit",
                                    names=["rho", "rho_u", "rho_v", "E"])
@@ -108,7 +109,7 @@ def main():
                   % (limiter, max(dphi, dres)))
 
         # avance AOT weno5 : tourne, masse conservee, dynamique non triviale
-        sys = pops.System(n=n, L=L, periodic=True)
+        sys = System(n=n, L=L, periodic=True)
         sys.add_compiled_block("gas", so_aot, limiter="weno5", riemann="rusanov",
                                recon="conservative", names=["rho", "rho_u", "rho_v", "E"])
         sys.set_poisson(rhs="charge_density", solver="geometric_mg")
@@ -124,7 +125,7 @@ def main():
 
         # --- (2) production : add_native_block accepte weno5, parite STRICTE (bit-identique) ---
         def prod(limiter):
-            sys = pops.System(n=n, L=L, periodic=True)
+            sys = System(n=n, L=L, periodic=True)
             sys._s.add_native_block("gas", so_prod, limiter=limiter, riemann="rusanov",
                                     recon="conservative", time="explicit", gamma=GAMMA, substeps=1,
                                     evolve=True)
@@ -149,7 +150,7 @@ def main():
 
         # avance production weno5 : etat final bit-identique au natif sur 12 pas a dt fixe.
         def build_prod_step():
-            sys = pops.System(n=n, L=L, periodic=True)
+            sys = System(n=n, L=L, periodic=True)
             sys._s.add_native_block("gas", so_prod, limiter="weno5", riemann="rusanov",
                                     recon="conservative", time="explicit", gamma=GAMMA, substeps=1,
                                     evolve=True)
@@ -158,7 +159,7 @@ def main():
             return sys
 
         def build_ref_step():
-            sys = pops.System(n=n, L=L, periodic=True)
+            sys = System(n=n, L=L, periodic=True)
             sys.add_block("gas", spec, spatial=pops.Spatial(weno5=True, flux=Rusanov(),
                                                            recon=Conservative()),
                           time=pops.Explicit())

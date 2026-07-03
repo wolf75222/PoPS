@@ -40,6 +40,7 @@ except Exception as exc:  # noqa: BLE001
 
 
 from tests.python.support.assertions import _check
+from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 
 # Vocabulaire herite que le message d'un refus ne doit JAMAIS recommander comme le REMEDE.
@@ -87,7 +88,7 @@ def _assert_bind_vocabulary(exc, what):
 # --- 1. AVANT bind : assembling, mutable -----------------------------------------------------
 def test_assembling_before_bind():
     """Un System frais est 'assembling' ; add_block passe ; lifecycle_state est expose."""
-    engine = pops.System(n=8, L=1.0, periodic=True)
+    engine = System(n=8, L=1.0, periodic=True)
     _check(engine.lifecycle_state() == "assembling", "un System frais est 'assembling'")
     _check(engine._lifecycle == "assembling", "le flag Python demarre a 'assembling'")
     engine.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
@@ -102,7 +103,7 @@ def test_assembling_before_bind():
 def test_python_freeze_uniform():
     """Apres _finalize_bind, toute methode structurelle Python leve ; les mutations restent OK."""
     n = 16
-    engine = pops.System(n=n, L=1.0, periodic=True)
+    engine = System(n=n, L=1.0, periodic=True)
     engine.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     engine.add_block("ions", _isothermal_model(),
                      spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
@@ -158,7 +159,7 @@ def test_python_freeze_uniform():
 def test_python_freeze_amr():
     """Apres _finalize_bind, les setters structurels AMR (Python + natifs) levent ; step OK."""
     n = 16
-    engine = pops.AmrSystem(n=n, L=1.0)
+    engine = AmrSystem(n=n, L=1.0)
     engine.set_poisson("charge_density", "geometric_mg")
     engine.add_block("gas", _compressible_model(),
                      spatial=pops.Spatial(minmod=True), time=pops.Explicit())
@@ -194,7 +195,7 @@ def test_python_freeze_amr():
 # --- 4. PENDANT bind : reste assembling jusqu'au DERNIER acte ---------------------------------
 def test_assembling_during_install():
     """Le flag reste 'assembling' pendant le lowering ; _finalize_bind (dernier acte) le bascule."""
-    engine = pops.System(n=8, L=1.0, periodic=True)
+    engine = System(n=8, L=1.0, periodic=True)
     # Toute la sequence d'install (add_block / set_poisson) tourne sous 'assembling'.
     engine.set_poisson(bc="periodic")
     engine.add_block("ions", _isothermal_model())
@@ -213,7 +214,7 @@ def test_double_bind_rejected():
     leve pas). Le VRAI point d'entree du bind, _install_compiled, est garde par guard_assembling en
     tete : une fois 'bound', un second _install_compiled leve freeze_error avec le vocabulaire bind.
     C'est le contrat reel du mixin (guard_assembling lit self._lifecycle), pas une invention."""
-    engine = pops.System(n=8, L=1.0, periodic=True)
+    engine = System(n=8, L=1.0, periodic=True)
     engine.set_poisson(bc="periodic")
     engine.add_block("ions", _isothermal_model())
     engine._finalize_bind(_minimal_snapshot())
@@ -238,7 +239,7 @@ def test_restart_on_bound_sim_restores_state():
     import tempfile
 
     n = 16
-    engine = pops.System(n=n, L=1.0, periodic=True)
+    engine = System(n=n, L=1.0, periodic=True)
     engine.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     engine.add_block("ions", _isothermal_model(),
                      spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
@@ -286,7 +287,7 @@ def test_bound_snapshot_manifest():
     _check(snap.block_names() == ["ions"], "block_names() liste les blocs bindes")
 
     # inspect() a travers un moteur reel gele expose lifecycle + snapshot.
-    engine = pops.System(n=8, L=1.0, periodic=True)
+    engine = System(n=8, L=1.0, periodic=True)
     engine.set_poisson(bc="periodic")
     engine.add_block("ions", _isothermal_model())
     engine._finalize_bind(snap)

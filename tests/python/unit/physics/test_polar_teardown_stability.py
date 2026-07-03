@@ -23,6 +23,7 @@ Mono-rang (le Poisson polaire direct refuse MPI) : ce n'est pas un test MPI.
 import subprocess
 import sys
 import textwrap
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 # Scenario INSTABLE execute dans un sous-processus isole. nr != ntheta est le declencheur deterministe
 # du debordement de tampon ; la Gaussienne raide + BackgroundDensity(n0=0) reproduit le run instable
@@ -31,6 +32,7 @@ _CHILD = textwrap.dedent(
     """
     import math
     import pops
+    from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
     RMIN, RMAX, NR, NTH = 0.30, 1.00, 48, 64  # nr != ntheta : declencheur du debordement de tampon
 
@@ -49,7 +51,7 @@ _CHILD = textwrap.dedent(
                 rho.append(100.0 * g * (1.0 + 0.5 * math.cos(3.0 * th)))
         return rho
 
-    sim = pops.System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
+    sim = System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
     sim.add_block(
         "ne",
         model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),

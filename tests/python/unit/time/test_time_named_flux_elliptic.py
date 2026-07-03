@@ -25,6 +25,7 @@ Skips cleanly (exit 0) without numpy / _pops / a compiler / a visible Kokkos -- 
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _pops_mods():
@@ -284,7 +285,7 @@ try:
 except Exception as exc:  # noqa: BLE001
     _skipB("numpy/_pops unavailable: %s" % exc)
 
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
     _skipB("_pops lacks the install_program binding (rebuild _pops)")
 
 N = 16
@@ -292,7 +293,7 @@ DT = 0.01
 
 
 def make_sim(model):
-    sim = pops.System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodic=True)
     try:
         compiled = model.compile(backend="production")
     except RuntimeError as exc:

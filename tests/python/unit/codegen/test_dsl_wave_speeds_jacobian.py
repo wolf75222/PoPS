@@ -35,6 +35,7 @@ import numpy as np
 import pops
 from pops.codegen.toolchain import _default_cxx
 from pops.physics.facade import Model
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
 from tests.python.support.requirements import missing_aot_requirement, repo_include
@@ -216,7 +217,7 @@ def expected_rhs_hll(U, n):
 
 
 print("== (5) riemann='hll' via System : vitesses exactes par cellule ==")
-sim = pops.System(n=n, L=1.0, periodic=True)
+sim = System(n=n, L=1.0, periodic=True)
 sim.add_equation("burg", model=c_burg,
                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL()),
                  time=pops.Explicit())
@@ -229,7 +230,7 @@ chk(d < 1e-12, f"eval_rhs hll == reference numpy a vitesses exactes (dmax = {d:.
 
 print("== (6) eig='fd' == eig='numeric' ==")
 c_fd = burgers_toy(eig="fd").compile(os.path.join(tmp, "jacburg_fd.so"), INCLUDE, backend="aot")
-sim_fd = pops.System(n=n, L=1.0, periodic=True)
+sim_fd = System(n=n, L=1.0, periodic=True)
 sim_fd.add_equation("burg", model=c_fd,
                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL()),
                     time=pops.Explicit())

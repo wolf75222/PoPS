@@ -45,6 +45,7 @@ fakes the engine (project policy: no fake pops in tests).
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _pops_time():
@@ -342,7 +343,7 @@ def _run_section_b(t):
         print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return None
 
-    sim_probe = pops.System(n=8, L=_L, periodic=True)
+    sim_probe = System(n=8, L=_L, periodic=True)
     if not hasattr(sim_probe, "install_program"):
         print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
@@ -371,7 +372,7 @@ def _run_section_b(t):
         return m
 
     def make_sim(name):
-        sim = pops.System(n=_N, L=_L, periodic=True)
+        sim = System(n=_N, L=_L, periodic=True)
         try:
             compiled_model = schur_model(name).compile(backend="production")
         except RuntimeError as exc:  # no compiler / no Kokkos visible
@@ -437,7 +438,7 @@ def _run_section_b(t):
     # native bound here would mean asserting against a transport-confounded step -- we do not.
     if half is not None:
         out_c, U0, _ = half
-        sim_n = pops.System(n=_N, L=_L, periodic=True)
+        sim_n = System(n=_N, L=_L, periodic=True)
         try:
             native_model = schur_model("cs_native").compile(backend="production")
         except RuntimeError as exc:

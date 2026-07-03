@@ -4,7 +4,7 @@
 Pendant POLAIRE de test_schur_via_system.py (cartesien). L'etage PolarCondensedSchurSourceStepper est
 teste en STANDALONE par le test C++ test_polar_condensed_schur_source_stepper (relation implicite,
 stabilite vs Euler, ordre 1) ; ce test comble le chemin FACADE, sur l'anneau (r, theta) :
-  pops.System(mesh=pops.PolarMesh(...)).add_equation(time=pops.Split(source=pops.CondensedSchur(...)))
+  System(mesh=pops.PolarMesh(...)).add_equation(time=pops.Split(source=pops.CondensedSchur(...)))
     -> _s.add_block (IsothermalFluxPolar : roles Density / MomentumX (radial) / MomentumY (azimutal))
     -> _s.set_source_stage (geometrie polaire -> PolarCondensedSchurSourceStepper, dispatch C++)
   sim.step(dt)
@@ -39,6 +39,7 @@ import numpy as np
 
 try:
     import pops
+    from pops.runtime.system import System  # ADC-545 advanced runtime seam
 except ImportError as e:
     print("skip  module pops absent (PYTHONPATH ?) : %s" % e)
     sys.exit(0)
@@ -110,7 +111,7 @@ def build_system(nr, nth, B0, alpha, theta, with_schur, cs2=1.0):
                        (-> PolarCondensedSchurSourceStepper, dispatch C++ polaire).
     with_schur=False : add_equation(Explicit) -> add_block, sans set_source_stage (chemin de reference).
     """
-    sim = pops.System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=nr, ntheta=nth))
+    sim = System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=nr, ntheta=nth))
     sim.set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
     # B_z constant sur l'anneau. Layout (ntheta, nr) aplati C-order = flat[j*nr+i] (theta lent, r
     # rapide), coherent avec set_density / set_state polaire.

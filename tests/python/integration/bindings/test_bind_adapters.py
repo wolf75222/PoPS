@@ -46,6 +46,7 @@ except Exception as exc:  # noqa: BLE001
 
 
 from tests.python.support.assertions import _check
+from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 
 # Noms d'assemblage que la vue DOIT cacher (ceux qui existent sur au moins un moteur + le seam).
@@ -94,7 +95,7 @@ def test_adapter_selection():
 # --- 2. Blocage de la facade -----------------------------------------------------------------
 def test_bound_simulation_blocks_assembly_vocabulary():
     """La vue cache tout le vocabulaire d'assemblage ; un inconnu leve aussi ; message propre."""
-    engine = pops.System(n=8, L=1.0, periodic=True)  # moteur REEL (route interne bas-niveau)
+    engine = System(n=8, L=1.0, periodic=True)  # moteur REEL (route interne bas-niveau)
     sim = BoundSimulation(engine)
     _check(sim._engine is engine, "sim._engine est le moteur interne (echappatoire documentee)")
     for name in _BLOCKED_SAMPLE:
@@ -126,7 +127,7 @@ def test_bound_simulation_blocks_assembly_vocabulary():
 def test_bound_simulation_delegates_uniform():
     """On pilote un System UNIQUEMENT via la vue : set_density / step_cfl / density / mass / str."""
     n = 16
-    engine = pops.System(n=n, L=1.0, periodic=True)  # route interne bas-niveau (legitime en test)
+    engine = System(n=n, L=1.0, periodic=True)  # route interne bas-niveau (legitime en test)
     engine.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     engine.add_block("ions", _isothermal_model(),
                      spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
@@ -159,7 +160,7 @@ def test_set_potential_delegated():
     view): both forward to the engine, the value is finite and returned bit-for-bit.
     """
     n = 16
-    engine = pops.System(n=n, L=1.0, periodic=True)  # route interne bas-niveau (legitime en test)
+    engine = System(n=n, L=1.0, periodic=True)  # route interne bas-niveau (legitime en test)
     sim = BoundSimulation(engine)
     phi = (np.arange(n * n, dtype=np.float64) / (n * n)).reshape(n, n)
     sim.set_potential(phi.ravel())
@@ -176,7 +177,7 @@ def test_set_potential_delegated():
 def test_bound_simulation_delegates_amr():
     """Idem sur un petit AmrSystem natif : step / mass / n_patches / vue amr ; set_refinement cache."""
     n = 16
-    engine = pops.AmrSystem(n=n, L=1.0)  # route interne bas-niveau
+    engine = AmrSystem(n=n, L=1.0)  # route interne bas-niveau
     engine.set_poisson("charge_density", "geometric_mg")
     engine.add_block("gas", _compressible_model(),
                      spatial=pops.Spatial(minmod=True), time=pops.Explicit())

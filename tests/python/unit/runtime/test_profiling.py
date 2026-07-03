@@ -4,12 +4,13 @@
 Section (A) checks the binding surface and the enable/disable/report state machine on a bare
 System. Section (B) builds a real NATIVE block (no DSL compile, so it needs only the _pops module),
 steps it under profiling, and asserts the report carries the timed "step" phase + the step counter.
-It never fakes the engine -- it builds a real pops.System; it self-skips only if _pops/numpy is
+It never fakes the engine -- it builds a real System; it self-skips only if _pops/numpy is
 unavailable, and otherwise fails loudly (a setup bug must not masquerade as a skip).
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):
@@ -36,7 +37,7 @@ def chk(cond, label):
 
 # ---- (A) binding surface + enable/disable state machine (no compile needed) ----
 print("== (A) profiling API present + toggles ==")
-sim = pops.System(n=8, L=1.0, periodic=True)
+sim = System(n=8, L=1.0, periodic=True)
 for name in ("enable_profiling", "disable_profiling", "is_profiling", "reset_profiling",
              "profile_report"):
     chk(hasattr(sim, name), "System exposes %s" % name)
@@ -54,7 +55,7 @@ chk(isinstance(sim.profile_report(), str), "profile_report returns a str")
 # whenever section A ran; a failure here is a real bug, not a skip.
 print("== (B) profile_report carries the timed step phase ==")
 N = 16
-sim2 = pops.System(n=N, L=1.0, periodic=True)
+sim2 = System(n=N, L=1.0, periodic=True)
 sim2.add_block("gas",
                pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                          transport=pops.IsothermalFlux(),

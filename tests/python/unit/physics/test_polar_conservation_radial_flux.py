@@ -49,6 +49,7 @@ import math
 import numpy as np
 
 import pops
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 # Parametres geometriques
 RMIN, RMAX = 0.30, 1.00
@@ -127,7 +128,7 @@ def test_polar_conservation_with_nonzero_radial_flux():
 
     Voir docstring du module pour la motivation et la strategie.
     """
-    sim = pops.System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
+    sim = System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
     sim.add_block(
         "ne",
         model=pops.Model(

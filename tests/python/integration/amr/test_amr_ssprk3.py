@@ -26,6 +26,7 @@ from pops.numerics.riemann import Rusanov
 import numpy as np
 
 import pops
+from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 
 
 def _bump(n, amp):
@@ -42,7 +43,7 @@ def _scalar_charge(q, B0=1.0):
 
 # --- (a) mono-bloc + multi-blocs ssprk3 : fini + masse conservee, patchs fins actifs ---
 def _check_mono(n=32):
-    sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=4)
+    sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=4)
     sim.add_block("ne", _scalar_charge(+1.0),
                   spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()),
                   time=pops.Explicit(ssprk3=True))  # SSPRK3 mono-bloc (chemin AmrCouplerMP)
@@ -62,7 +63,7 @@ def _check_mono(n=32):
 
 
 def _check_multi(n=32):
-    sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=4)
+    sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=4)
     sim.add_block("ions", _scalar_charge(+1.0),
                   spatial=pops.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                   time=pops.Explicit(ssprk3=True))     # SSPRK3 multi-blocs (moteur AmrRuntime)
@@ -91,7 +92,7 @@ def _check_multi(n=32):
 # --- (b) defaut bit-identique : euler explicit deterministe (verrou du threading time_method) ---
 def _check_default_bit_identical(n=32):
     def run_euler():
-        s = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
+        s = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
         s.add_block("ne", _scalar_charge(+1.0),
                     spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()))  # time defaut = Explicit() euler
         s.set_poisson(bc="periodic")
@@ -110,7 +111,7 @@ def _check_default_bit_identical(n=32):
 def _build_advect(n, kind):
     """AMR mono-bloc, hierarchie FIGEE (regrid_every=0, patch seed central) : SEULE la methode
     temporelle (time) change entre les runs -> l'erreur mesuree est purement TEMPORELLE."""
-    s = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
+    s = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
     s.add_block("ne", _scalar_charge(+1.0),
                 spatial=pops.Spatial(limiter=FirstOrder(), flux=Rusanov()),  # MEME schema spatial pour tous
                 time=pops.Explicit(ssprk3=True) if kind == "ssprk3" else pops.Explicit())
@@ -160,7 +161,7 @@ def _check_imex_ssprk3_rejected(n=16):
     model = _scalar_charge(+1.0)
 
     def add(time, **kw):
-        s = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
+        s = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
         kwargs = dict(implicit_vars=[], implicit_roles=[], newton_max_iters=2, newton_rel_tol=0.0,
                       newton_abs_tol=0.0, newton_fd_eps=1e-7, newton_damping=1.0,
                       newton_fail_policy="none", newton_diagnostics=False)
@@ -188,7 +189,7 @@ def _check_imex_ssprk3_rejected(n=16):
 
 # --- (e) loader .so + ssprk3 : rejet explicite (ABI plate ne transporte pas la methode) ---
 def _check_native_loader_rejects_ssprk3(n=16):
-    s = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
+    s = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
     # add_native_block valide time AVANT le dlopen : aucun .so reel requis pour observer le rejet.
     try:
         s._s.add_native_block("b", "/tmp/_pops_ssprk3_inexistant.so", "minmod", "rusanov",

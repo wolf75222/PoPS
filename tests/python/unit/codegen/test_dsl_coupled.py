@@ -24,6 +24,7 @@ import pops
 import pops.experimental  # noqa: F401  (ADC-600: no longer eagerly bound on the pops root)
 from pops.ir.ops import sqrt
 from pops.physics.model import HyperbolicModel
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 GAMMA = 1.4
 from tests.python.support.requirements import repo_include
@@ -83,7 +84,7 @@ def main():
         Uflat = U.reshape(-1).tolist()
 
         # --- bloc DYNAMIQUE (JIT) euler_poisson ---
-        dyn = pops.System(n=n, L=L, periodic=True)
+        dyn = System(n=n, L=L, periodic=True)
         dyn.add_dynamic_block("gas", so, names=["rho", "rho_u", "rho_v", "E"])
         dyn.set_poisson(rhs="charge_density", solver="geometric_mg")
         dyn.set_state("gas", Uflat)
@@ -96,7 +97,7 @@ def main():
                          transport=pops.CompressibleFlux(),
                          source=pops.GravityForce(),
                          elliptic=pops.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
-        cmp = pops.System(n=n, L=L, periodic=True)
+        cmp = System(n=n, L=L, periodic=True)
         cmp.add_block("gas", spec, spatial=pops.Spatial(none=True, flux=Rusanov()),
                       time=pops.Explicit())
         cmp.set_poisson(rhs="charge_density", solver="geometric_mg")

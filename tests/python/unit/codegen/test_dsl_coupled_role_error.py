@@ -24,6 +24,7 @@ import pytest
 
 import pops
 from pops.physics.multispecies import CoupledSource
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +82,7 @@ def test_coupled_source_accepts_valid_role():
 
 def _make_cartesian_system():
     """System cartesien minimal avec un bloc scalaire pour les tests C++ directs."""
-    sim = pops.System(n=4, L=1.0, periodic=True)
+    sim = System(n=4, L=1.0, periodic=True)
     sim.add_block(
         "ne",
         model=pops.Model(

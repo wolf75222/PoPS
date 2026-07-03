@@ -22,6 +22,7 @@ test_runtime_inspection_reports.py.
 """
 
 import pytest
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
 from pops.numerics.riemann import HLL  # noqa: E402
@@ -111,7 +112,7 @@ def test_set_poisson_refuses_unknown_routes_before_bind():
     # Group 8: set_poisson resolves every behavior token to its typed route BEFORE the C++
     # boundary, so an unknown token is refused (with the family + the token) and never binds.
     def system():
-        return pops.System(n=8, L=1.0, periodic=True)
+        return System(n=8, L=1.0, periodic=True)
 
     with pytest.raises(ValueError, match="field_solver") as exc:
         system().set_poisson(solver="bogus_solver")

@@ -36,6 +36,7 @@ from pops.ir.ops import sqrt
 from pops.physics.facade import Model
 
 from tests.python.support.requirements import repo_include
+from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 INCLUDE = repo_include()
 
 fails = 0
@@ -84,7 +85,7 @@ def build_sim(compiled, n=32, L=1.0, B0=4.0, alpha=3.0, theta=1.0, with_bz=True,
               with_source_stage=True):
     """System non periodique (Dirichlet pour le Poisson condense), un bloc isotherme magnetise. Pose
     B_z AVANT add_equation (set_source_stage exige le champ B_z) si with_bz."""
-    sim = pops.System(n=n, L=L, periodic=False)
+    sim = System(n=n, L=L, periodic=False)
     sim.set_poisson(bc="dirichlet")
     if with_bz:
         sim.set_magnetic_field(B0 * np.ones((n, n)))  # B_z constant ; doit preceder set_source_stage
@@ -183,13 +184,13 @@ def check_amr_split_rejected():
                       source=pops.CondensedSchur(kind="electrostatic_lorentz", theta=0.5))
     model = scalar_native_model()
 
-    amr1 = pops.AmrSystem(n=n, L=L, periodic=True)
+    amr1 = AmrSystem(n=n, L=L, periodic=True)
     e1 = raises((TypeError, ValueError), amr1.add_block, "ne", model=model, time=split)
     chk("Split" in str(e1) or "Schur" in str(e1),
         "(f) AmrSystem.add_block(time=pops.Split(...)) -> rejet explicite (Split/Schur)")
 
     # DEFAUT INCHANGE : un bloc AMR en pops.Explicit pur s'ajoute toujours sans lever.
-    amr_ok = pops.AmrSystem(n=n, L=L, periodic=True)
+    amr_ok = AmrSystem(n=n, L=L, periodic=True)
     amr_ok.add_block("ne", model=scalar_native_model(), time=pops.Explicit())
     chk(True, "(f) AmrSystem.add_block(time=pops.Explicit()) defaut inchange (pas de rejet)")
 
@@ -274,7 +275,7 @@ def main():
     scal.primitive_vars(q=q)
     scal.conservative_from([q])
     scal_c = scal.compile(backend="aot", include=INCLUDE)
-    sim_c1 = pops.System(n=n, L=L, periodic=False)
+    sim_c1 = System(n=n, L=L, periodic=False)
     sim_c1.set_poisson(bc="dirichlet")
     sim_c1.set_magnetic_field(np.ones((n, n)))
     raised = False
@@ -287,7 +288,7 @@ def main():
     chk(raised, "(c1) role requis manquant -> erreur claire a add_equation")
 
     # (c2) pas de B_z (set_magnetic_field non appele) -> erreur a add_equation.
-    sim_c2 = pops.System(n=n, L=L, periodic=False)
+    sim_c2 = System(n=n, L=L, periodic=False)
     sim_c2.set_poisson(bc="dirichlet")
     raised = False
     try:
@@ -332,7 +333,7 @@ def main():
     # IDENTIQUE a un run ou "bg" est seul (le Split d'ions ne le perturbe pas via le couplage Poisson au
     # dela du couplage physique attendu -- ici on compare le bloc bg a son run SOLO, memes pas).
     # On verifie au minimum que "bg" reste FINI et que retirer l'etage source d'ions NE casse PAS bg.
-    sim_two = pops.System(n=n, L=L, periodic=False)
+    sim_two = System(n=n, L=L, periodic=False)
     sim_two.set_poisson(bc="dirichlet")
     sim_two.set_magnetic_field(4.0 * np.ones((n, n)))
     sim_two.add_equation("ions", model=compiled,
@@ -354,7 +355,7 @@ def main():
     #     PAS evolve (force a true cote C++). On exige un REJET explicite (ValueError) nommant le
     #     backend, et on verifie que evolve=True (defaut) passe toujours sur ces memes backends.
     # ------------------------------------------------------------------------------------------
-    sim_aot = pops.System(n=n, L=L, periodic=False)
+    sim_aot = System(n=n, L=L, periodic=False)
     sim_aot.set_poisson(bc="dirichlet")
     sim_aot.set_magnetic_field(np.ones((n, n)))
     e_aot = raises(ValueError, sim_aot.add_equation, "frozen", model=compiled,
@@ -366,7 +367,7 @@ def main():
     chk(True, "(g) backend 'aot' : evolve=True (defaut) passe toujours (pas de rejet)")
 
     proto = isothermal_magnetized().compile(backend="prototype", include=INCLUDE)
-    sim_proto = pops.System(n=n, L=L, periodic=False)
+    sim_proto = System(n=n, L=L, periodic=False)
     sim_proto.set_poisson(bc="dirichlet")
     sim_proto.set_magnetic_field(np.ones((n, n)))
     e_proto = raises(ValueError, sim_proto.add_equation, "frozen", model=proto,

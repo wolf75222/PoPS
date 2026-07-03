@@ -32,6 +32,7 @@ from pops.numerics.riemann import Rusanov
 import os
 import sys
 import tempfile
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _pops_time():
@@ -57,7 +58,7 @@ def test_npz_key_scheme_roundtrips(_t):
     except Exception as exc:  # noqa: BLE001 -- numpy unavailable in this interpreter
         print("-- (A) skipped: numpy unavailable: %s --" % exc)
         return
-    # Mirror EXACTLY the keys + dtypes pops.System.checkpoint writes for a program with one AB2 history.
+    # Mirror EXACTLY the keys + dtypes System.checkpoint writes for a program with one AB2 history.
     hname = "blk.R"
     depth = 2
     ncomp, ny, nx = 1, 4, 4
@@ -119,7 +120,7 @@ def _passive_source_model(name):
 
 def _build_system(pops, np, n):
     """A fresh n x n periodic System with the compiled passive-source block added; (sim, has_engine)."""
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program") or not hasattr(sim, "history_names"):
         return None, None
     from pops.physics.facade import Model

@@ -33,6 +33,7 @@ from pops.ir.ops import sqrt
 from pops.physics.facade import Model
 
 from tests.python.support.requirements import repo_include
+from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 INCLUDE = repo_include()
 
 fails = 0
@@ -86,7 +87,7 @@ def smooth_init(n, L):
 
 def build_sim(compiled, time, n=32, L=1.0, B0=4.0):
     """System non periodique (Dirichlet), un bloc isotherme magnetise, politique temporelle @p time."""
-    sim = pops.System(n=n, L=L, periodic=False)
+    sim = System(n=n, L=L, periodic=False)
     sim.set_poisson(bc="dirichlet")
     sim.set_magnetic_field(B0 * np.ones((n, n)))
     sim.add_equation("ions", model=compiled,
@@ -130,11 +131,11 @@ def check_api():
     # jamais par add_block (qui jouerait le seul transport et PERDRAIT la source en silence). Depuis le
     # chemin amr-schur (#265), AmrSystem.add_equation(time=pops.Strang(...)) est au contraire SUPPORTE
     # (cf. test_amr_schur_via_system.py pour la couverture positive sur AMR) : seul add_block rejette.
-    sys_ = pops.System(n=8, L=1.0, periodic=False)
+    sys_ = System(n=8, L=1.0, periodic=False)
     e_blk = raises(TypeError, sys_.add_block, "x", scalar_native_model(), time=strang())
     chk("Split" in str(e_blk) or "Schur" in str(e_blk),
         "(a) System.add_block(time=pops.Strang(...)) -> rejet (heritage Split)")
-    amr = pops.AmrSystem(n=8, L=1.0, periodic=True)
+    amr = AmrSystem(n=8, L=1.0, periodic=True)
     e_amr = raises((TypeError, ValueError), amr.add_block, "x", scalar_native_model(),
                    time=strang())
     chk("Split" in str(e_amr) or "Schur" in str(e_amr),

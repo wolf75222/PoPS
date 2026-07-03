@@ -68,6 +68,7 @@ import numpy as np
 
 try:
     import pops
+    from pops.runtime.system import System  # ADC-545 advanced runtime seam
 except ImportError as e:  # pragma: no cover - environnement sans build
     print("skip  module pops absent (PYTHONPATH ? build ?) : %s" % e)
     sys.exit(0)
@@ -153,7 +154,7 @@ def test_masse():
     rho0, u0, v0 = ring_axisym(n, L)
     n0 = float(rho0.mean())  # fond neutralisant -> RHS Poisson a moyenne nulle (periodique bien pose)
 
-    sim = pops.System(n=n, L=L, periodic=True)
+    sim = System(n=n, L=L, periodic=True)
     sim.set_poisson(bc="periodic")
     sim.set_magnetic_field(B0 * np.ones((n, n)))
     sim.add_equation("ions", model=iso_model(alpha=alpha, n0=n0),
@@ -189,7 +190,7 @@ def test_masse():
 def _run_momentum(periodic, sym, n=64, L=1.0, B0=4.0, alpha=3.0, N=20, dt_fac=0.3):
     """Renvoie (m0, dmx, dmy) apres N pas. sym=True : anneau axisymetrique centre ;
     sym=False : bosse de densite DECENTREE (force nette non nulle)."""
-    sim = pops.System(n=n, L=L, periodic=periodic)
+    sim = System(n=n, L=L, periodic=periodic)
     sim.set_poisson(bc="periodic" if periodic else "dirichlet")
     sim.set_magnetic_field(B0 * np.ones((n, n)))
     if sym:
@@ -278,7 +279,7 @@ def test_momentum():
 # ---------------------------------------------------------------------------
 
 def _run_energy(with_schur, n=48, L=1.0, B0=4.0, alpha=3.0, gamma=1.4, N=30):
-    sim = pops.System(n=n, L=L, periodic=False)
+    sim = System(n=n, L=L, periodic=False)
     sim.set_poisson(bc="dirichlet")
     sim.set_magnetic_field(B0 * np.ones((n, n)))
     time = split_time(theta=1.0, alpha=alpha) if with_schur else pops.Explicit()
@@ -358,7 +359,7 @@ def test_positivite_densite():
     n, L = 64, 1.0
     B0, alpha, cs2 = 4.0, 3.0, 1.0
     for limiter in (Minmod(), VanLeer(), WENO5()):
-        sim = pops.System(n=n, L=L, periodic=False)
+        sim = System(n=n, L=L, periodic=False)
         sim.set_poisson(bc="dirichlet")
         sim.set_magnetic_field(B0 * np.ones((n, n)))
         sim.add_equation("ions", model=iso_model(cs2=cs2, alpha=alpha),

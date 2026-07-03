@@ -22,6 +22,7 @@ from pops.ir.ops import sqrt
 from pops.physics.model import HyperbolicModel
 
 from tests.python.support.requirements import repo_include
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 INCLUDE = repo_include()
 GAMMA = 1.6667  # gamma NON STANDARD (monoatomique 5/3), distinct du defaut historique 1.4
 
@@ -121,7 +122,7 @@ def main():
 
         # (1a) PROPAGATION via le chemin AOT (add_compiled_block) --------------------------------
         so_aot = e.compile_or_jit(os.path.join(tmp, "meta_aot.so"), INCLUDE, mode="compile")
-        s = pops.System(n=n, L=L, periodic=True)
+        s = System(n=n, L=L, periodic=True)
         s.add_compiled_block("gas", so_aot, limiter="minmod", riemann="hllc", recon="primitive")
         # noms : ceux DU MODELE (layout shuffle), pas le fallback u0..u3
         assert s.variable_names("gas") == ["my", "ee", "mx", "rho"], \
@@ -140,7 +141,7 @@ def main():
               % s.block_gamma("gas"))
 
         # (1a-bis) names= explicite garde la priorite sur les noms du .so ; roles/gamma restent du .so
-        s2 = pops.System(n=n, L=L, periodic=True)
+        s2 = System(n=n, L=L, periodic=True)
         s2.add_compiled_block("gas", so_aot, limiter="minmod", riemann="hllc", recon="primitive",
                               names=["c0", "c1", "c2", "c3"])
         assert s2.variable_names("gas") == ["c0", "c1", "c2", "c3"], "names= devrait primer"
@@ -151,7 +152,7 @@ def main():
 
         # (1b) PROPAGATION via le chemin JIT (add_dynamic_block) ---------------------------------
         so_jit = e.compile_or_jit(os.path.join(tmp, "meta_jit.so"), INCLUDE, mode="jit")
-        sj = pops.System(n=n, L=L, periodic=True)
+        sj = System(n=n, L=L, periodic=True)
         sj.add_dynamic_block("gas", so_jit, recon="minmod")
         assert sj.variable_names("gas") == ["my", "ee", "mx", "rho"], \
             "JIT : noms != metadonnees du .so : %r" % sj.variable_names("gas")
@@ -167,7 +168,7 @@ def main():
         # (1c) GARDE-FOU : names= de mauvaise longueur doit lever (sinon variable_names/roles desync)
         for mode, adder in (("AOT", lambda S: S.add_compiled_block("g", so_aot, names=["a", "b"])),
                             ("JIT", lambda S: S.add_dynamic_block("g", so_jit, names=["a", "b"]))):
-            S = pops.System(n=n, L=L, periodic=True)
+            S = System(n=n, L=L, periodic=True)
             try:
                 adder(S)
             except Exception:
@@ -177,7 +178,7 @@ def main():
 
         # (2a) RETRO-COMPAT : .so AOT ANCIEN (sans metadonnees) -> fallback -----------------------
         old_aot = legacy_aot_so(os.path.join(tmp, "legacy_aot.so"))
-        so = pops.System(n=n, L=L, periodic=True)
+        so = System(n=n, L=L, periodic=True)
         so.add_compiled_block("scal", old_aot, limiter="none", riemann="rusanov")
         assert so.variable_names("scal") == ["u0"], \
             "AOT legacy : fallback noms attendu, recu %r" % so.variable_names("scal")
@@ -189,7 +190,7 @@ def main():
 
         # (2b) RETRO-COMPAT : .so JIT ANCIEN (sans metadonnees) -> fallback -----------------------
         old_jit = legacy_jit_so(os.path.join(tmp, "legacy_jit.so"))
-        sjo = pops.System(n=n, L=L, periodic=True)
+        sjo = System(n=n, L=L, periodic=True)
         sjo.add_dynamic_block("scal", old_jit, recon="none")
         assert sjo.variable_names("scal") == ["u0"], \
             "JIT legacy : fallback noms attendu, recu %r" % sjo.variable_names("scal")

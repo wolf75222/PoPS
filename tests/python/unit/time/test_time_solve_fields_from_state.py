@@ -30,6 +30,7 @@ never fakes the engine.
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):
@@ -146,7 +147,7 @@ chk(src_fe.count("ctx.solve_fields_from_state(0, ") == 1,
 
 
 # ============================ (B) field-coupled parity: skip without the toolchain ===========
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
     print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
     print("%s test_time_solve_fields_from_state (A only)" % ("FAIL" if fails else "PASS"))
     sys.exit(1 if fails else 0)
@@ -158,7 +159,7 @@ DT = 0.02
 def make_sim(model):
     """A System with ONE field-coupled block (production backend) + shared Poisson, charged with a
     non-uniform rho so a stage change shifts phi. Returns (sim, U0)."""
-    sim = pops.System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodic=True)
     try:
         compiled = model.compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible

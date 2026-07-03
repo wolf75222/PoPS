@@ -26,6 +26,7 @@ import sys
 import numpy as np
 
 import pops
+from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 
 GAMMA = 1.4
 fails = 0
@@ -64,7 +65,7 @@ rho = bump(n)
 # --- 1. MONO-BLOC (dispatch_amr_compiled) : weno5 + hllc, puis weno5 + roe ---------------------------
 for riem in (HLLC(), Roe()):
     print(f"== mono-bloc Euler : weno5 + {riem.scheme} (dispatch_amr_compiled) ==")
-    s = pops.AmrSystem(n=n, L=1.0, periodic=True)
+    s = AmrSystem(n=n, L=1.0, periodic=True)
     s.set_refinement(1e30)  # mono-niveau : le sujet est le ROUTAGE du dispatch (exerce au build)
     s.add_block("gas", euler_spec(),
                 spatial=pops.FiniteVolume(limiter=WENO5(), riemann=riem), time=pops.Explicit())
@@ -76,7 +77,7 @@ for riem in (HLLC(), Roe()):
 
 # --- 2. MULTI-BLOCS (dispatch_amr_block) : deux blocs Euler weno5 + hllc -----------------------------
 print("== multi-blocs Euler : 2 blocs weno5 + hllc (dispatch_amr_block) ==")
-s = pops.AmrSystem(n=n, L=1.0, periodic=True)
+s = AmrSystem(n=n, L=1.0, periodic=True)
 s.set_refinement(1e30)
 s.add_block("a", euler_spec(), spatial=pops.FiniteVolume(limiter=WENO5(), riemann=HLLC()), time=pops.Explicit())
 s.add_block("b", euler_spec(), spatial=pops.FiniteVolume(limiter=WENO5(), riemann=HLLC()), time=pops.Explicit())
@@ -90,7 +91,7 @@ chk(np.all(np.isfinite(np.asarray(s.density("b")))), "multi-blocs weno5 + hllc :
 # --- 3. GARDE DE CAPABILITE INTACTE : weno5 + hllc sur isotherme 3-var -> rejet de FLUX, pas de LIM --
 print("== isotherme 3-var : weno5 + hllc rejete par la CAPABILITE (pas par le limiteur) ==")
 try:
-    s = pops.AmrSystem(n=n, L=1.0, periodic=True)
+    s = AmrSystem(n=n, L=1.0, periodic=True)
     s.set_refinement(1e30)
     s.add_block("iso", iso_spec(),
                 spatial=pops.FiniteVolume(limiter=WENO5(), riemann=HLLC()), time=pops.Explicit())

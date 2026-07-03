@@ -21,6 +21,7 @@ Builds on ADC-404a (Scalar/Bool IR, P.norm2/P.dot, P.while_). This slice adds:
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _pops_time():
@@ -177,7 +178,7 @@ def _run_section_b(t):
         return None
 
     n = 8
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
         print("-- (B) skipped: _pops lacks install_program (rebuild _pops) --")
         return None
@@ -199,7 +200,7 @@ def _run_section_b(t):
         return None
 
     def run(handle):
-        s = pops.System(n=n, L=1.0, periodic=True)
+        s = System(n=n, L=1.0, periodic=True)
         try:
             cm = _passive_model("blk_" + handle.program_name).compile(backend="production")
         except RuntimeError as exc:

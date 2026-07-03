@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""ADC-308 : methode PUBLIQUE pops.System.set_source_stage sur la facade.
+"""ADC-308 : methode PUBLIQUE System.set_source_stage sur la facade.
 
 Le moteur expose set_source_stage cote binding (_pops.System) et la facade
-pops.System l'APPELLE en interne (add_block / add_equation, etage source condense
+System l'APPELLE en interne (add_block / add_equation, etage source condense
 par Schur), mais elle ne la publiait PAS comme methode publique : un cas aval
 devait atteindre l'objet prive (sim._s.set_source_stage(...)). On surface ici un
 mince wrapper public, de meme signature que le binding.
 
 Le test prouve DEUX choses, chacune non triviale :
 
-  1) EXPLICITE -- pops.System.set_source_stage est une vraie methode DEFINIE SUR LA
+  1) EXPLICITE -- System.set_source_stage est une vraie methode DEFINIE SUR LA
      FACADE, pas un simple transfert implicite via __getattr__ vers _s. On le
      verifie avec inspect.getattr_static, qui NE declenche PAS __getattr__ : sur le
      code d'avant ADC-308 il leve AttributeError (le test ECHOUE), la garde est donc
@@ -33,6 +33,7 @@ import numpy as np
 
 try:
     import pops
+    from pops.runtime.system import System  # ADC-545 advanced runtime seam
 except ImportError as e:  # module pas construit : on se saute proprement (comme les freres)
     print("skip  module pops absent (PYTHONPATH ?) : %s" % e)
     sys.exit(0)
@@ -70,7 +71,7 @@ def build_block(n, L, B0, alpha, cs2):
     L'etage source n'est PAS cable ici : l'appelant decide ensuite (facade publique,
     chemin _s, ou rien). B_z est pose AVANT (prerequis du terme de Lorentz condense).
     """
-    sim = pops.System(n=n, L=L, periodic=False)
+    sim = System(n=n, L=L, periodic=False)
     sim.set_poisson(bc="dirichlet")
     sim.set_magnetic_field(B0 * np.ones((n, n)))
     sim.add_equation(
@@ -100,11 +101,11 @@ def main():
     #     getattr_static ne declenche PAS __getattr__ : sans le wrapper, AttributeError.
     # ------------------------------------------------------------------
     try:
-        meth = inspect.getattr_static(pops.System, "set_source_stage")
+        meth = inspect.getattr_static(System, "set_source_stage")
     except AttributeError:
         meth = None
     chk(meth is not None,
-        "(1a) pops.System.set_source_stage defini sur la facade (pas seulement __getattr__)")
+        "(1a) System.set_source_stage defini sur la facade (pas seulement __getattr__)")
     # The facade method now lives on the _SystemInstall mixin (Spec-4 PR-F runtime split):
     # System composes the install/aux/io mixins, so the qualname is _SystemInstall.set_source_stage.
     # The intent of (1b) is "a real method on the class hierarchy, not the __getattr__ delegate";

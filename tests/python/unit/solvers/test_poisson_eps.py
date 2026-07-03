@@ -11,6 +11,7 @@ from pops.numerics.riemann import Rusanov
 import numpy as np
 
 import pops
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 PI = np.pi
 
@@ -35,7 +36,7 @@ def _density(n):
 
 
 def phi_set_poisson(eps, n=64):
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     sim.add_block("gas", model=_charge_model(),
                   spatial=pops.Spatial(flux=Rusanov()), time=pops.Explicit())
     sim.set_density("gas", _density(n).reshape(-1).tolist())
@@ -55,7 +56,7 @@ def main():
     print("OK  set_poisson(epsilon) : phi(eps=2) == phi(eps=1)/2 (err %.1e)" % err)
 
     # meme resultat via l'EPM compose (div_eps_grad(2.0))
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     sim.add_block("gas", model=_charge_model(),
                   spatial=pops.Spatial(flux=Rusanov()), time=pops.Explicit())
     sim.set_density("gas", _density(n).reshape(-1).tolist())
@@ -87,7 +88,7 @@ def variable_epsilon_tests():
     f = -(1.0 + 0.5 * X) * 2.0 * PI ** 2 * s_xy + 0.5 * PI * np.cos(PI * X) * np.sin(PI * Y)
 
     def solve(eps_field, solver="geometric_mg"):
-        s = pops.System(n=n, L=1.0, periodic=False)
+        s = System(n=n, L=1.0, periodic=False)
         s.add_block("q", model=_charge_scalar(), spatial=pops.Spatial(none=True))
         s.set_poisson(rhs="charge_density", solver=solver, bc="dirichlet")
         s.set_density("q", f)
@@ -115,7 +116,7 @@ def variable_epsilon_tests():
     print("OK  non-regression : champ eps uniforme=1 == operateur sans eps (gap %.1e)" % gap)
 
     # eps(x) variable + solveur 'fft' (coefficient constant) : refus explicite au solve.
-    sp = pops.System(n=n, L=1.0, periodic=True)
+    sp = System(n=n, L=1.0, periodic=True)
     sp.add_block("q", model=_charge_scalar(), spatial=pops.Spatial(none=True))
     sp.set_poisson(rhs="charge_density", solver="fft")
     sp.set_density("q", f)

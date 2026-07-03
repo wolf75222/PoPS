@@ -40,6 +40,7 @@ try:
     from pops.runtime._system_unified_install import (collect_missing_arguments,
                                                       validate_install_arguments)
     from pops import time as adctime
+    from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
     print("skip test_install_validation (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -144,7 +145,7 @@ def test_install_raises_before_native_when_required_missing():
     print("== System._install_compiled raises BEFORE the native install_program ==")
     params = {"cs2": Param("cs2", 1.0, kind="runtime")}
     cp = _compiled(aux_names=("B_z",), params=params)
-    sim = pops.System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodic=True)
     called = {"native": False}
     sim.install_program = lambda *a, **k: called.__setitem__("native", True)
     try:
@@ -162,7 +163,7 @@ def test_install_missing_instance_is_flagged():
     """A program that commits a block not supplied (and not already added) is rejected."""
     print("== System._install_compiled flags a missing required instance ==")
     cp = _compiled(aux_names=())  # no aux, no params -> only the 'plasma' instance is required
-    sim = pops.System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodic=True)
     sim.install_program = lambda *a, **k: None
     try:
         sim._install_compiled(cp, instances={})  # 'plasma' neither passed nor added
@@ -194,7 +195,7 @@ def test_valid_install_passes_validation_unchanged():
     has no dlopen-able .so); we assert validation passed and install_program was reached."""
     print("== a valid install (no required aux/params) passes through unchanged ==")
     cp = _compiled(aux_names=())  # Euler-style: no aux, no runtime params
-    sim = pops.System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodic=True)
     record = {}
     _stub_lower_layer(sim, record)
     sim._install_compiled(cp,
@@ -210,7 +211,7 @@ def test_native_install_skips_validation():
     """A NATIVE install (compiled=None) carries no declared arguments -> validation is skipped (the
     instance model is the native source of truth, not a compiled artifact)."""
     print("== native install (compiled=None) skips the compiled-argument validation ==")
-    sim = pops.System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodic=True)
     record = {}
     _stub_lower_layer(sim, record)
     sim._install_compiled(None, instances={"plasma": {"model": _model(aux_names=()),
@@ -225,7 +226,7 @@ def test_validate_helper_is_inert_on_bad_handle():
     whose arguments() raises, is skipped (conservative -- a missing check is better than a false
     reject)."""
     print("== validate_install_arguments is conservative on an un-introspectable handle ==")
-    sim = pops.System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodic=True)
 
     class _NoArgs:  # a handle that is not a CompiledProblem (no arguments())
         so_path = "/tmp/x.so"
@@ -252,10 +253,10 @@ def test_amr_install_signature_parity():
     """AmrSystem._install_compiled mirrors System._install_compiled's signature exactly. The seam
     is internal (Spec 5 sec.11): authors call pops.bind, not the install method directly."""
     print("== AmrSystem._install_compiled signature parity with System._install_compiled ==")
-    chk(not hasattr(pops.System, "install"), "System.install must be gone (now _install_compiled)")
-    chk(not hasattr(pops.AmrSystem, "install"), "AmrSystem.install must be gone (now _install_compiled)")
-    sys_params = list(inspect.signature(pops.System._install_compiled).parameters)
-    amr_params = list(inspect.signature(pops.AmrSystem._install_compiled).parameters)
+    chk(not hasattr(System, "install"), "System.install must be gone (now _install_compiled)")
+    chk(not hasattr(AmrSystem, "install"), "AmrSystem.install must be gone (now _install_compiled)")
+    sys_params = list(inspect.signature(System._install_compiled).parameters)
+    amr_params = list(inspect.signature(AmrSystem._install_compiled).parameters)
     chk(sys_params == amr_params, "same parameter list (got %r vs %r)" % (amr_params, sys_params))
 
 
@@ -264,7 +265,7 @@ def test_amr_install_runs_the_same_validation():
     raises the clear ValueError BEFORE the compiled-path NotImplementedError."""
     print("== AmrSystem._install_compiled runs the same early validation ==")
     cp = _compiled(aux_names=("B_z",))
-    amr = pops.AmrSystem(n=N, L=1.0)
+    amr = AmrSystem(n=N, L=1.0)
     try:
         amr._install_compiled(cp, instances={"plasma": {"model": _model(), "initial": np.ones((3, N, N))}})
         chk(False, "AMR install should have raised for the missing B_z")
@@ -299,7 +300,7 @@ def test_amr_compiled_path_reaches_install_program():
     the WIRING (no NotImplementedError), not the run."""
     print("== AmrSystem._install_compiled: compiled path reaches install_program (no reject) ==")
     cp = _compiled(aux_names=("B_z",))
-    amr = pops.AmrSystem(n=N, L=1.0)
+    amr = AmrSystem(n=N, L=1.0)
     record = {}
     _stub_amr_lower_layer(amr, record)
     amr._install_compiled(cp, instances={"plasma": {"model": _model(), "initial": np.ones((3, N, N))}},
@@ -317,7 +318,7 @@ def test_amr_compiled_params_and_cadence_route():
     print("== AmrSystem._install_compiled routes compiled params + cadence ==")
     cp = _compiled(aux_names=())
     cp.runtime_param_routes = lambda: ({0: ["cs2"]}, {"cs2": 1.0})  # the codegen routing for one block
-    amr = pops.AmrSystem(n=N, L=1.0)
+    amr = AmrSystem(n=N, L=1.0)
     record = {}
     _stub_amr_lower_layer(amr, record)
     amr._install_compiled(cp,
@@ -334,7 +335,7 @@ def test_amr_native_params_and_cadence_rejected():
     """A NATIVE AMR install (compiled=None) still honestly rejects params= (the native AMR .so loader
     transports no runtime params) and cadence= (no Program to wrap) rather than dropping them."""
     print("== AmrSystem._install_compiled rejects un-wired native params / cadence ==")
-    amr = pops.AmrSystem(n=N, L=1.0)
+    amr = AmrSystem(n=N, L=1.0)
     try:
         amr._install_compiled(None, params={"nu": 1.0})
         chk(False, "params= should raise on a native AMR install")

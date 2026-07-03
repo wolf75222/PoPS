@@ -21,6 +21,7 @@ per step is possible; the tolerance below is bit-exact for the tested states, wi
 """
 import numpy as np
 import pytest
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 # The _bootstrap of a mismatched-interpreter extension raises ImportError (a subclass), so gate on it.
 pops = pytest.importorskip("pops", exc_type=ImportError)
@@ -79,7 +80,7 @@ def _isothermal():
 
 
 def test_collision_preset_matches_deleted_helper():
-    sim = pops.System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodic=True)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     sim.add_block("a", _compressible(1.4), spatial=pops.FiniteVolume())
     sim.add_block("b", _compressible(1.4), spatial=pops.FiniteVolume())
@@ -100,7 +101,7 @@ def test_collision_preset_matches_deleted_helper():
 
 
 def test_ionization_preset_matches_deleted_helper():
-    sim = pops.System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodic=True)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     for name in ("e", "i", "g"):
         sim.add_block(name, _isothermal(), spatial=pops.FiniteVolume())
@@ -125,7 +126,7 @@ def test_ionization_preset_matches_deleted_helper():
 
 
 def test_thermal_exchange_preset_matches_deleted_helper():
-    sim = pops.System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodic=True)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     sim.add_block("a", _compressible(1.4), spatial=pops.FiniteVolume())
     sim.add_block("b", _compressible(1.6667), spatial=pops.FiniteVolume())

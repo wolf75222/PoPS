@@ -31,6 +31,7 @@ from pops.ir.expr import Expr, Var
 from pops.ir.lowering import diff
 from pops.ir.ops import left, right, sqrt
 from pops.physics.facade import Model
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
 from tests.python.support.requirements import (
@@ -314,14 +315,14 @@ try:
     rho0 = gaussian(n)
     z = np.zeros((n, n))
 
-    s_hand = pops.System(n=n, L=1.0, periodic=True)
+    s_hand = System(n=n, L=1.0, periodic=True)
     s_hand.set_poisson()
     s_hand.add_equation("f", model=cm_hand,
                         spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Roe()),
                         time=pops.Explicit())
     s_hand.set_primitive_state("f", rho=rho0, u=z + 0.1, v=z)
 
-    s_ref = pops.System(n=n, L=1.0, periodic=True)
+    s_ref = System(n=n, L=1.0, periodic=True)
     s_ref.set_poisson()
     s_ref.add_equation("f", model=cm_ref,
                        spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Roe()),

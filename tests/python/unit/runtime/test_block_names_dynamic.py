@@ -20,6 +20,7 @@ import pops
 from test_dsl_brick import build_euler_brick, GAMMA
 
 from tests.python.support.requirements import repo_include
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 INCLUDE = repo_include()
 
 
@@ -31,7 +32,7 @@ def euler_native():
 
 def main():
     # (0) sans .so : un add_block est deja vu par block_names (garde de base, sans compilateur).
-    s0 = pops.System(n=16, L=1.0, periodic=True)
+    s0 = System(n=16, L=1.0, periodic=True)
     s0.add_block("gas", model=euler_native(), spatial=pops.Spatial(minmod=True))
     assert list(s0.block_names()) == ["gas"], "add_block invisible dans block_names()"
     assert s0.n_species() == 1, "n_species != 1 pour un bloc"
@@ -49,7 +50,7 @@ def main():
     try:
         so = e.compile_so(os.path.join(tmp, "euler_model.so"), INCLUDE)
 
-        sim = pops.System(n=n, L=L, periodic=True)
+        sim = System(n=n, L=L, periodic=True)
         sim.add_block("native", model=euler_native(), spatial=pops.Spatial(minmod=True))
         sim.add_dynamic_block("dyn", so, names=["rho", "rho_u", "rho_v", "E"])
 

@@ -38,6 +38,7 @@ try:
     from pops.ir.ops import sqrt
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
+    from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
     print("skip test_amr_program_parity (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -142,7 +143,7 @@ def test_codegen_emits_amr_install_wrapper():
 
 def _system_run(program, model, u0, nsteps=NSTEPS, dt=DT):
     """Install `program` on a single-level System and return (density, potential) after nsteps."""
-    sim = pops.System(n=N, L=1.0)
+    sim = System(n=N, L=1.0)
     try:
         block_cm = model.compile(backend="production")
         compiled = pops.codegen.compile_problem(model=model, time=program)
@@ -163,7 +164,7 @@ def _amr_run(program, model, u0, nsteps=NSTEPS, dt=DT):
     (coarse density component-0, coarse potential, coarse mass) after nsteps. Uses the
     ``_install_compiled`` seam (the AMR counterpart of System's compiled install): a native instance
     carries the block model, the compiled handle carries the time Program installed on the hierarchy."""
-    amr = pops.AmrSystem(n=N, L=1.0, regrid_every=0)
+    amr = AmrSystem(n=N, L=1.0, regrid_every=0)
     if not hasattr(amr, "install_program"):
         return None, "the built _pops lacks AmrSystem.install_program (rebuild _pops)"
     try:
@@ -273,7 +274,7 @@ def test_custom_two_stage_runs_and_differs():
 def _amr_run_cfl(program, model, u0, nsteps=NSTEPS, cfl=0.4):
     """Install `program` on a single-level AmrSystem and drive it with step_cfl (NOT step). Returns
     (coarse density, program hash, last dt) -- the step_cfl Program route (ADC-508 review fix 1)."""
-    amr = pops.AmrSystem(n=N, L=1.0, regrid_every=0)
+    amr = AmrSystem(n=N, L=1.0, regrid_every=0)
     if not hasattr(amr, "install_program") or not hasattr(amr, "step_cfl"):
         return None, "the built _pops lacks AmrSystem.install_program/step_cfl (rebuild _pops)"
     try:
@@ -298,7 +299,7 @@ def _amr_run_cfl(program, model, u0, nsteps=NSTEPS, cfl=0.4):
 def _amr_run_cfl_native(model, u0, nsteps=NSTEPS, cfl=0.4):
     """A NATIVE (no Program installed) AMR step_cfl run, the baseline the Program route must NOT silently
     reproduce. Same block + IC, but no install_program -> the native engine advances under step_cfl."""
-    amr = pops.AmrSystem(n=N, L=1.0, regrid_every=0)
+    amr = AmrSystem(n=N, L=1.0, regrid_every=0)
     try:
         block_cm = model.compile(backend="production", target="amr_system")
     except RuntimeError as exc:

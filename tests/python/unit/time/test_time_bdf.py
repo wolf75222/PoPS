@@ -32,6 +32,7 @@ matrix-free apply sub-block, perturbing the frozen Newton iterate).
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _pops_time():
@@ -285,7 +286,7 @@ def _run_section_b(t):
         print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return None
 
-    probe = pops.System(n=8, L=1.0, periodic=True)
+    probe = System(n=8, L=1.0, periodic=True)
     if not hasattr(probe, "install_program") or not hasattr(probe, "eval_rhs"):
         print("-- (B) skipped: _pops lacks install_program / eval_rhs (rebuild _pops) --")
         return None
@@ -311,7 +312,7 @@ def _run_section_b(t):
         return compiled
 
     def _make_sim():
-        sim = pops.System(n=n, L=1.0, periodic=True)
+        sim = System(n=n, L=1.0, periodic=True)
         sim.add_equation("blk", _nonlinear_flux_model(),
                          spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                          time=pops.Explicit(method="euler"))

@@ -22,6 +22,7 @@ import numpy as np
 import pops
 from pops.ir.ops import sqrt
 from pops.physics.facade import Model
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
 
@@ -79,7 +80,7 @@ chk(not rep["ok"] and any("flux" in f for f in rep["failures"]),
 # --- 4. System.check_model : bloc natif sain puis densite cassee --------------------
 print("== System.check_model : bloc natif ==")
 n = 16
-sim = pops.System(n=n, L=1.0, periodic=True)
+sim = System(n=n, L=1.0, periodic=True)
 sim.add_block("ions",
               pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                         transport=pops.IsothermalFlux(),

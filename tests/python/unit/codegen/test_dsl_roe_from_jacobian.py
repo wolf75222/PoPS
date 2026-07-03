@@ -27,6 +27,7 @@ import numpy as np
 import pops
 from pops.codegen.toolchain import _default_cxx
 from pops.moments import build_moment_model, gaussian_closure
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
 from tests.python.support.requirements import repo_include
@@ -99,7 +100,7 @@ try:
     base = np.array([1.0, 0.0, 1.0, 0.0, 0.0, 1.0])
     U0 = base[:, None, None] * gaussian(n)[None, :, :]
 
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     sim.add_equation("mom", model=compiled,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Roe()),
                      time=pops.Explicit())
@@ -114,7 +115,7 @@ try:
     # a roe=False moment model must REJECT riemann='roe' (no capability)
     cm_no = build_moment_model("g2noroe", 2, gaussian_closure(2), roe=False).compile(
         os.path.join(tmp, "g2noroe.so"), INCLUDE, backend="aot")
-    s2 = pops.System(n=16, L=1.0, periodic=True)
+    s2 = System(n=16, L=1.0, periodic=True)
     msg = err_msg(lambda: s2.add_equation(
         "mom", model=cm_no, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Roe()),
         time=pops.Explicit()))

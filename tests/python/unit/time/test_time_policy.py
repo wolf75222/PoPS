@@ -15,6 +15,7 @@ import sys
 import warnings
 import numpy as np
 import pops
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
 
@@ -90,7 +91,7 @@ policies = {
 # (la source PotentialForce est raide ; le chemin imex est plus significatif qu'ExB/NoSource).
 results = {}
 for label, policy in policies.items():
-    s = pops.System(n=n, periodic=False)
+    s = System(n=n, periodic=False)
     s.add_block("ne", electron_model(),
                 spatial=pops.Spatial(minmod=True), time=policy)
     s.set_poisson(bc="dirichlet")

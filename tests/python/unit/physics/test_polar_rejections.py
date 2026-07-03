@@ -34,6 +34,7 @@ import numpy as np
 import pytest
 
 import pops
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 # ---------------------------------------------------------------------------
@@ -67,12 +68,12 @@ _RMIN, _RMAX = 0.3, 1.0
 
 def _make_polar_sim():
     """System polaire minimal (ExB scalaire, Rusanov, Explicit), sans bloc encore ajoute."""
-    return pops.System(mesh=pops.PolarMesh(r_min=_RMIN, r_max=_RMAX, nr=_NR, ntheta=_NTH))
+    return System(mesh=pops.PolarMesh(r_min=_RMIN, r_max=_RMAX, nr=_NR, ntheta=_NTH))
 
 
 def _make_polar_sim_ready(solver="polar"):
     """System polaire minimal avec bloc ExB et densite initiale : pret pour step()."""
-    sim = pops.System(mesh=pops.PolarMesh(r_min=_RMIN, r_max=_RMAX, nr=_NR, ntheta=_NTH))
+    sim = System(mesh=pops.PolarMesh(r_min=_RMIN, r_max=_RMAX, nr=_NR, ntheta=_NTH))
     sim.add_block("ne", model=_exb_model(),
                   spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     sim.set_poisson(rhs="charge_density", solver=solver, bc="dirichlet")

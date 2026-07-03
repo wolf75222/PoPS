@@ -17,6 +17,7 @@ import sys
 import numpy as np
 
 import pops
+from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 
 
 def _band(n, L=1.0, width=0.06, floor=1.0, amp=1.0):
@@ -55,7 +56,7 @@ def main():
     ne0 = _band(n, L)
 
     # --- MONO-BLOC : AmrCouplerMP ---
-    mono = pops.AmrSystem(n=n, L=L, regrid_every=10, periodic=True)
+    mono = AmrSystem(n=n, L=L, regrid_every=10, periodic=True)
     mono.add_block("ne",
                    model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
                                    source=pops.NoSource(),
@@ -77,7 +78,7 @@ def main():
     # --- MULTI-BLOCS : AmrRuntime (>= 2 add_block, hierarchie figee regrid_every=0) ---
     ne1 = _band(n, L)
     ne2 = _band(n, L) * 0.5 + 0.5
-    multi = pops.AmrSystem(n=n, L=L, regrid_every=0, periodic=True)
+    multi = AmrSystem(n=n, L=L, regrid_every=0, periodic=True)
     for nm, arr in (("a", ne1), ("b", ne2)):
         multi.add_block(nm,
                         model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),

@@ -42,6 +42,7 @@ import pops
 from pops.codegen.loader import CompiledModel
 from pops.ir.ops import sqrt
 from pops.physics.facade import Model
+from pops.runtime.system import AmrSystem, AmrSystemConfig  # ADC-545 advanced runtime seam
 
 GAMMA = 1.4
 from tests.python.support.requirements import repo_include
@@ -101,12 +102,12 @@ from tests.python.support.initial_states import bubble_amr as _bubble
 
 
 def _amr(n, L, branch, refine=1.2):
-    cfg = pops.AmrSystemConfig()
+    cfg = AmrSystemConfig()
     cfg.n = n
     cfg.L = L
     cfg.periodic = True
     cfg.regrid_every = 4
-    s = pops.AmrSystem(cfg)
+    s = AmrSystem(cfg)
     branch(s)
     s.set_refinement(refine)
     s.set_density("gas", _bubble(n))
@@ -238,7 +239,7 @@ def main():
         assert "p" not in cm_iso.prim_names, "modele isotherme ne devrait pas avoir 'p'"
         raised = False
         try:
-            s_nop = pops.AmrSystem(n=n, L=L, periodic=True)
+            s_nop = AmrSystem(n=n, L=L, periodic=True)
             s_nop.add_equation("gas", cm_iso,
                                spatial=pops.Spatial(minmod=True, flux=HLLC()))
         except ValueError as ex:
@@ -271,7 +272,7 @@ def main():
         assert float(np.max(np.abs(daw - da))) > 1e-9, "weno5 == minmod (reconstruction inactive)"
         # WENO5 via la facade add_equation (pas seulement le binding bas niveau) : meme chemin nominal.
         # Reutilise cm_t (transport pur) : pas de Poisson, tourne sans set_poisson.
-        Gw = pops.AmrSystem(n=n, L=L, periodic=True)
+        Gw = AmrSystem(n=n, L=L, periodic=True)
         Gw.add_equation("gas", cm_t,
                         spatial=pops.Spatial(weno5=True, flux=Rusanov(), recon=Conservative()))
         Gw.set_refinement(1.2)
@@ -283,7 +284,7 @@ def main():
               "add_equation(weno5) tourne" % dmaxw)
 
         # add_equation chemin nominal (rusanov + conservatif) accepte et tourne :
-        E = pops.AmrSystem(n=n, L=L, periodic=True)
+        E = AmrSystem(n=n, L=L, periodic=True)
         E.set_poisson("charge_density", "geometric_mg")
         E.add_equation("gas", cm_t,
                        spatial=pops.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()))
@@ -305,7 +306,7 @@ def main():
 
         sys_cm = ep.compile(os.path.join(tmp, "ep_sys_cm.so"), INCLUDE,
                             backend="production", target="system")  # target System par defaut
-        s = pops.AmrSystem(n=n, L=L, periodic=True)
+        s = AmrSystem(n=n, L=L, periodic=True)
         raised = False
         try:
             s.add_equation("gas", sys_cm,
@@ -318,7 +319,7 @@ def main():
 
         # --- (5) GARDE-FOU ABI : loader AMR a cle pops_native_abi_key falsifiee -> rejet ---
         bad_abi = _compile_wrong_abi(ep, os.path.join(tmp, "ep_amr_wrongabi.so"), cxx)
-        s = pops.AmrSystem(n=n, L=L, periodic=True)
+        s = AmrSystem(n=n, L=L, periodic=True)
         raised = False
         try:
             s._s.add_native_block("gas", bad_abi, limiter="minmod", riemann="rusanov",

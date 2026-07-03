@@ -5,7 +5,7 @@ The inert architecture gate ``tests/python/architecture/test_print_readability.p
 contract for the inert authoring objects, but it deliberately CANNOT cover the three headline
 objects that are not inert:
 
-  * ``pops.System`` / ``pops.AmrSystem`` -- constructing one allocates Fabs and initialises Kokkos
+  * ``System`` / ``AmrSystem`` -- constructing one allocates Fabs and initialises Kokkos
     (it needs the compiled ``_pops`` extension), so it has no place in an import-only inert gate;
     that gate also runs source-only in CI (before ``_pops`` is built), so it would only skip them.
   * ``pops.codegen.CompiledProblem`` -- normally the result of a Kokkos-gated ``compile_problem``.
@@ -33,6 +33,7 @@ try:
     import pops
     from pops import time as adctime
     from pops.codegen.loader import CompiledModel, CompiledProblem
+    from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 except Exception as exc:  # noqa: BLE001 -- _pops not built in this interpreter
     print("skip test_print_readability_runtime (_pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -78,14 +79,14 @@ def _synthetic_compiled():
 def test_system_print_is_readable():
     """str(System) is a short block-registry summary, never a Fab dump or a bare address."""
     print("== System prints readably ==")
-    sim = pops.System(n=8, L=1.0, periodic=True)
+    sim = System(n=8, L=1.0, periodic=True)
     _assert_readable("System", sim)
 
 
 def test_amr_system_print_is_readable():
     """str(AmrSystem) is a short block-registry summary on the AMR hierarchy (frozen, no regrid)."""
     print("== AmrSystem prints readably ==")
-    sim = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+    sim = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
     _assert_readable("AmrSystem", sim)
 
 

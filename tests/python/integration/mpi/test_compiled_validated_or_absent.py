@@ -13,6 +13,7 @@ Two claims (skips cleanly unless the full toolchain is present, like the sibling
 Runs in CI; skips locally when no compiler / Kokkos is visible or the .so compile fails.
 """
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):
@@ -70,7 +71,7 @@ chk(compiled.inspect().status == "compiled, waiting for pops.bind(...)",
 chk(not hasattr(compiled, "check"), "the handle carries no post-compile check()")
 
 # install_program is forwarded by the System facade; skip the install if _pops lacks the binding.
-sim = pops.System(n=24, L=1.0, periodic=True)
+sim = System(n=24, L=1.0, periodic=True)
 if not hasattr(sim, "install_program"):
     print("-- install skipped: _pops lacks the install_program binding --")
 else:

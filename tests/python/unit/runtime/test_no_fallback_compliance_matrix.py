@@ -19,6 +19,7 @@ import tempfile
 import warnings
 
 import pytest
+from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
 
@@ -158,7 +159,7 @@ def test_refusal_matrix_checks_error_type_reason_and_no_warning():
         (
             "HLL without wave speeds",
             RuntimeError,
-            lambda: pops.System(n=8, L=1.0, periodic=True).add_block(
+            lambda: System(n=8, L=1.0, periodic=True).add_block(
                 "s",
                 _scalar_exb_model(),
                 spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLL()),
@@ -168,7 +169,7 @@ def test_refusal_matrix_checks_error_type_reason_and_no_warning():
         (
             "HLLC without contact/star-state capability",
             RuntimeError,
-            lambda: pops.System(n=8, L=1.0, periodic=True)._validate_riemann_capability(
+            lambda: System(n=8, L=1.0, periodic=True)._validate_riemann_capability(
                 _compiled_model(hllc=False, prim_names=("rho", "u", "v")),
                 pops.FiniteVolume(riemann=HLLC()),
             ),
@@ -177,7 +178,7 @@ def test_refusal_matrix_checks_error_type_reason_and_no_warning():
         (
             "Roe without dissipation capability",
             RuntimeError,
-            lambda: pops.System(n=8, L=1.0, periodic=True)._validate_riemann_capability(
+            lambda: System(n=8, L=1.0, periodic=True)._validate_riemann_capability(
                 _compiled_model(roe=False, prim_names=("rho", "u", "v")),
                 pops.FiniteVolume(riemann=Roe()),
             ),
@@ -216,7 +217,7 @@ def test_refusal_matrix_checks_error_type_reason_and_no_warning():
         (
             "AMR dynamic-regrid checkpoint unsupported",
             ValueError,
-            lambda: pops.AmrSystem(n=8, L=1.0, periodic=True, regrid_every=3).checkpoint(
+            lambda: AmrSystem(n=8, L=1.0, periodic=True, regrid_every=3).checkpoint(
                 "/tmp/adc597_unwritten_checkpoint"
             ),
             ("AmrSystem.checkpoint", "regrid_every == 0", "regrid_every=3"),
@@ -224,7 +225,7 @@ def test_refusal_matrix_checks_error_type_reason_and_no_warning():
         (
             "program route incompatible with AMR target",
             ValueError,
-            lambda: pops.AmrSystem(n=8, L=1.0, periodic=True).add_equation(
+            lambda: AmrSystem(n=8, L=1.0, periodic=True).add_equation(
                 "gas",
                 _compiled_model(target="system"),
                 spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov()),
@@ -242,7 +243,7 @@ def test_native_abi_header_mismatch_refuses_before_installing_program():
         _expect_refusal(
             "native program ABI/header mismatch",
             RuntimeError,
-            lambda: pops.System(n=4, L=1.0, periodic=True).install_program(so),
+            lambda: System(n=4, L=1.0, periodic=True).install_program(so),
             ("compiled program ABI mismatch", "adc597-wrong-abi-key"),
         )
     finally:
@@ -294,7 +295,7 @@ def test_fallback_policy_rows_for_refused_routes_are_not_warning_only():
 def test_positive_matrix_keeps_supported_native_routes_available():
     # Uniform + FV + HLL typed wave speeds.
     n = 16
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     sim.add_block(
         "ions",
         _isothermal_model(),

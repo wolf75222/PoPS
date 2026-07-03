@@ -19,6 +19,7 @@ try:
     from pops.ir.ops import sqrt
     from pops.physics.facade import Model
     from pops import time as adctime
+    from pops.runtime.system import System  # ADC-545 advanced runtime seam
 except Exception as exc:  # noqa: BLE001
     print("skip test_install_requirement_validation (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -54,7 +55,7 @@ def lie_program(name="adc446_prog"):
 
 
 def make_sim(block_model, with_bz):
-    sim = pops.System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodic=True)
     sim.add_equation("plasma", block_model.compile(backend="production"),
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit(method="euler"))
@@ -69,7 +70,7 @@ def make_sim(block_model, with_bz):
 
 
 def main():
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+    if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
         print("skip test_install_requirement_validation (_pops lacks install_program; rebuild _pops)")
         return 0
     m = lorentz_model()

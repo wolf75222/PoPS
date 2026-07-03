@@ -15,6 +15,7 @@ import numpy as np
 import pops
 import pops.experimental  # noqa: F401  (ADC-600: no longer eagerly bound on the pops root)
 from pops.runtime import ModelSpec  # ADC-585: ModelSpec is the legacy native-bridge POD, off pops root
+from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 fails = 0
 
@@ -52,7 +53,7 @@ def diocotron(B0=1.0, alpha=1.0, n_i0=0.0):
 
 # --- 1. Composition de briques : un schema par bloc -----------------------------
 print("== composition par briques (electrons Euler/HLLC/IMEX + ions isothermes) ==")
-sim = pops.System(n=48)
+sim = System(n=48)
 sim.add_block("electrons", model=electron(),
               spatial=pops.Spatial(vanleer=True, flux=HLLC()), time=pops.IMEX(substeps=10))
 sim.add_block("ions", model=ion(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
@@ -75,7 +76,7 @@ chk(abs(sim.mass("electrons") - mea) < 1e-9 and abs(sim.mass("ions") - mia) < 1e
 # --- 2. implicite/explicite par bloc, REVERSIBLE --------------------------------
 print("== implicite/explicite par bloc, reversible ==")
 for et, it in [("imex", "explicit"), ("explicit", "imex")]:
-    s = pops.System(n=32)
+    s = System(n=32)
     s.add_block("e", electron(), time=(pops.IMEX() if et == "imex" else pops.Explicit()))
     s.add_block("i", ion(), time=(pops.IMEX() if it == "imex" else pops.Explicit()))
     s.set_poisson()
@@ -88,7 +89,7 @@ for et, it in [("imex", "explicit"), ("explicit", "imex")]:
 # --- 3. Diocotron compose par briques + paroi conductrice -----------------------
 print("== diocotron compose par briques (ExB + BackgroundDensity) + paroi ==")
 n = 96
-dio = pops.System(n=n, L=1.0, periodic=False)
+dio = System(n=n, L=1.0, periodic=False)
 dio.add_block("ne", model=diocotron(B0=1.0, alpha=1.0, n_i0=0.0), spatial=pops.Spatial(minmod=True))
 dio.set_poisson(bc="dirichlet", wall="circle", wall_radius=0.40)
 xx, yy = np.meshgrid(meshx(n), meshx(n), indexing="xy")
@@ -107,7 +108,7 @@ chk(abs(dio.mass("ne") - m0) < 1e-9, "diocotron : masse conservee")
 
 # --- 4. Integrateur temporel ECRIT EN PYTHON ------------------------------------
 print("== integrateur temporel ecrit en Python (primitives eval_rhs/get_state/set_state) ==")
-pd = pops.System(n=64, L=1.0, periodic=False)
+pd = System(n=64, L=1.0, periodic=False)
 pd.add_block("ne", model=diocotron(B0=1.0, alpha=1.0, n_i0=0.0), spatial=pops.Spatial(minmod=True))
 pd.set_poisson(bc="dirichlet", wall="circle", wall_radius=0.40)
 xx, yy = np.meshgrid(meshx(64), meshx(64), indexing="xy")
@@ -129,7 +130,7 @@ xx, yy = np.meshgrid(xs, xs, indexing="xy")
 y0 = 0.5 + 0.02 * np.cos(2 * np.pi * 4 * xx)
 band = 1.0 + np.exp(-((yy - y0) ** 2) / 0.05 ** 2)
 nbar = float(band.mean())
-amr = pops.AmrSystem(n=nb, regrid_every=10, periodic=True)
+amr = AmrSystem(n=nb, regrid_every=10, periodic=True)
 amr.add_block("ne", model=diocotron(B0=1.0, alpha=1.0, n_i0=nbar), spatial=pops.Spatial(none=True))
 amr.set_refinement(threshold=nbar + 0.15)
 amr.set_poisson()
@@ -157,7 +158,7 @@ exs = meshx(ne); exx, eyy = np.meshgrid(exs, exs, indexing="xy")
 erho = 1.0 + 0.4 * np.exp(-((exx - 0.5) ** 2 + (eyy - 0.5) ** 2) / 0.02)
 for elim, eflux in ((Minmod(), HLLC()), (Minmod(), Roe()), (VanLeer(), HLLC())):
     tag = f"{elim.scheme}+{eflux.scheme}"
-    eamr = pops.AmrSystem(n=ne, regrid_every=0, periodic=True)
+    eamr = AmrSystem(n=ne, regrid_every=0, periodic=True)
     eamr.add_block("gas", model=euler_gas(),
                    spatial=pops.Spatial(limiter=elim, flux=eflux, primitive=True))
     eamr.set_refinement(threshold=1e9)  # patch seed coherent, sans tagger de cellule
@@ -170,7 +171,7 @@ for elim, eflux in ((Minmod(), HLLC()), (Minmod(), Roe()), (VanLeer(), HLLC())):
         f"AMR {tag}+primitif : fini, densite positive")
     chk(abs(eamr.mass() - em0) / abs(em0) < 1e-6,
         f"AMR {tag}+primitif : masse conservee (reflux)")
-    esys = pops.System(n=ne, periodic=True)
+    esys = System(n=ne, periodic=True)
     esys.add_block("gas", model=euler_gas(),
                    spatial=pops.Spatial(limiter=elim, flux=eflux, primitive=True))
     esys.set_poisson(); esys.set_density("gas", erho)
@@ -182,7 +183,7 @@ for elim, eflux in ((Minmod(), HLLC()), (Minmod(), Roe()), (VanLeer(), HLLC())):
 
 # --- 4c. Espece gelee (background fixe) : non avancee, mais vue par Poisson ------
 print("== espece gelee (evolve=False) : fond fixe vu par Poisson ==")
-fz = pops.System(n=32, L=1.0, periodic=True)
+fz = System(n=32, L=1.0, periodic=True)
 fz.add_block("electrons", model=electron(), spatial=pops.Spatial(minmod=True))
 fz.add_background("ions", model=ion(charge=1.0), density=np.ones((32, 32)))
 fz.set_poisson()
@@ -205,7 +206,7 @@ def inert():  # scalaire SANS transport (charge 0 -> phi 0 -> derive nulle) : is
                      source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=0.0))
 
 
-iz = pops.System(n=24, L=1.0, periodic=True)
+iz = System(n=24, L=1.0, periodic=True)
 iz.add_block("ne", model=inert(), spatial=pops.Spatial(none=True))
 iz.add_block("ni", model=inert(), spatial=pops.Spatial(none=True))
 iz.add_block("ng", model=inert(), spatial=pops.Spatial(none=True))
@@ -230,7 +231,7 @@ def iso_inert():  # isotherme sans couplage de champ (charge 0) : on isole la fr
                      source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=0.0))
 
 
-co = pops.System(n=24, L=1.0, periodic=True)
+co = System(n=24, L=1.0, periodic=True)
 co.add_block("a", model=iso_inert(), spatial=pops.Spatial(minmod=True))
 co.add_block("b", model=iso_inert(), spatial=pops.Spatial(minmod=True))
 co.set_poisson()
@@ -257,7 +258,7 @@ def euler_inert():  # Euler sans couplage de champ (charge 0) : on isole l'echan
                      elliptic=pops.ChargeDensity(charge=0.0))
 
 
-te = pops.System(n=16, L=1.0, periodic=True)
+te = System(n=16, L=1.0, periodic=True)
 te.add_block("a", model=euler_inert(), spatial=pops.Spatial(minmod=True))
 te.add_block("b", model=euler_inert(), spatial=pops.Spatial(minmod=True))
 te.set_poisson()
@@ -280,7 +281,7 @@ chk(abs(Ta1 - Tb1) < 1.0 - 1e-3, "echange thermique : temperatures relaxent")
 
 # --- 4g. EPM : Poisson comme instance composable d'add_elliptic_model -----------
 print("== EPM : Poisson via add_elliptic_model (set_poisson = raccourci) ==")
-ep = pops.System(n=48, L=1.0, periodic=False)
+ep = System(n=48, L=1.0, periodic=False)
 ep.add_block("ne", model=diocotron(B0=1.0, alpha=1.0, n_i0=0.0), spatial=pops.Spatial(minmod=True))
 ep.add_elliptic_model("phi", model=pops.elliptic(operator=pops.div_eps_grad(1.0),
                       rhs=pops.charge_density(), output=pops.electric_field_from_potential()),
@@ -295,7 +296,7 @@ ep.solve_fields()
 chk(np.abs(ep.potential()).max() > 1e-6, "EPM : add_elliptic_model (Poisson) actif")
 # eps != 1 CONSTANT est desormais supporte (div(eps grad phi) = f <=> lap phi = f/eps)
 try:
-    pops.System(n=16).add_elliptic_model("d", pops.elliptic(operator=pops.div_eps_grad(2.0)))
+    System(n=16).add_elliptic_model("d", pops.elliptic(operator=pops.div_eps_grad(2.0)))
     chk(True, "EPM : eps != 1 constant accepte")
 except NotImplementedError:
     chk(False, "EPM : eps != 1 constant accepte")
@@ -306,14 +307,14 @@ class _BogusOperator:  # operateur non div_eps_grad (diffusion / projection : no
 
 
 try:
-    pops.System(n=16).add_elliptic_model("d", pops.elliptic(operator=_BogusOperator()))
+    System(n=16).add_elliptic_model("d", pops.elliptic(operator=_BogusOperator()))
     chk(False, "EPM : operateur non div_eps_grad refuse")
 except NotImplementedError:
     chk(True, "EPM : operateur non div_eps_grad refuse")
 
 # --- 4h. Descripteur de variables (introspection : noms cons/prim par bloc) -----
 print("== descripteur Variables : noms des variables par bloc ==")
-vn = pops.System(n=16)
+vn = System(n=16)
 vn.add_block("e", model=electron())
 vn.add_block("d", model=diocotron())
 chk(list(vn.variable_names("e", "conservative")) == ["rho", "rho_u", "rho_v", "E"],
@@ -366,12 +367,12 @@ def raises(fn):
 
 
 # HLLC exige un transport compressible (4 var) : refuse sur un scalaire (ExB).
-chk(raises(lambda: pops.System(n=16).add_block("d", diocotron(), spatial=pops.Spatial(flux=HLLC()))),
+chk(raises(lambda: System(n=16).add_block("d", diocotron(), spatial=pops.Spatial(flux=HLLC()))),
     "hllc refuse sur transport scalaire")
 # Source fluide (PotentialForce) sur un transport scalaire (ExB) : invalide.
 bad = pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
                 source=pops.PotentialForce(charge=1.0), elliptic=pops.ChargeDensity(charge=1.0))
-chk(raises(lambda: pops.System(n=16).add_block("x", bad)),
+chk(raises(lambda: System(n=16).add_block("x", bad)),
     "source fluide refusee sur transport scalaire")
 # Etat/transport incoherents rejetes cote Python.
 chk(raises(lambda: pops.Model(state=pops.Scalar(), transport=pops.CompressibleFlux(),
@@ -393,27 +394,27 @@ def err(fn):
 # ADC-585 : ModelSpec est le POD herite du pont natif, hors racine pops (pops.runtime.ModelSpec).
 chk(not hasattr(pops, "ModelSpec"),
     "ModelSpec est hors racine pops (ADC-585) : pops.ModelSpec n'existe plus")
-chk(raises(lambda: pops.System(n=16).add_block("m", ModelSpec())),
+chk(raises(lambda: System(n=16).add_block("m", ModelSpec())),
     "ModelSpec incomplet (transport non pose) refuse : pas de 'compressible' silencieux")
-chk("transport" in err(lambda: pops.System(n=16).add_block("m", ModelSpec())).lower(),
+chk("transport" in err(lambda: System(n=16).add_block("m", ModelSpec())).lower(),
     "message ModelSpec incomplet nomme 'transport' (erreur lisible)")
 _only_transport = ModelSpec()
 _only_transport.transport = "exb"  # elliptic encore non pose
-chk(raises(lambda: pops.System(n=16).add_block("m", _only_transport)),
+chk(raises(lambda: System(n=16).add_block("m", _only_transport)),
     "ModelSpec sans elliptic refuse : pas de 'charge' silencieux")
 # Parite AmrSystem : meme contrat a l'entree de add_block.
-chk(raises(lambda: pops.AmrSystem(n=16).add_block("m", ModelSpec())),
+chk(raises(lambda: AmrSystem(n=16).add_block("m", ModelSpec())),
     "AmrSystem.add_block(ModelSpec incomplet) refuse")
 # Un modele COMPLET (via pops.Model) reste accepte : le garde-fou ne sur-rejette pas.
-chk(not raises(lambda: pops.System(n=16).add_block("ok", diocotron())),
+chk(not raises(lambda: System(n=16).add_block("ok", diocotron())),
     "modele complet (pops.Model) accepte par add_block")
 
 # --- ADC-299 : une config invalide est REJETEE avant toute construction interne (System / AmrSystem). ---
-chk(raises(lambda: pops.System(n=0)), "System(n=0) refuse (n >= 1)")
-chk("n >= 1" in err(lambda: pops.System(n=0)), "message System(n=0) nomme la contrainte (lisible)")
-chk(raises(lambda: pops.System(n=16, L=0.0)), "System(L=0) refuse (L > 0)")
-chk(raises(lambda: pops.AmrSystem(n=0)), "AmrSystem(n=0) refuse (n >= 1)")
-chk(raises(lambda: pops.AmrSystem(n=32, regrid_every=-1)), "AmrSystem(regrid_every=-1) refuse (>= 0)")
+chk(raises(lambda: System(n=0)), "System(n=0) refuse (n >= 1)")
+chk("n >= 1" in err(lambda: System(n=0)), "message System(n=0) nomme la contrainte (lisible)")
+chk(raises(lambda: System(n=16, L=0.0)), "System(L=0) refuse (L > 0)")
+chk(raises(lambda: AmrSystem(n=0)), "AmrSystem(n=0) refuse (n >= 1)")
+chk(raises(lambda: AmrSystem(n=32, regrid_every=-1)), "AmrSystem(regrid_every=-1) refuse (>= 0)")
 
 print("OK test_bindings" if fails == 0 else f"{fails} ECHEC(S)")
 sys.exit(0 if fails == 0 else 1)
