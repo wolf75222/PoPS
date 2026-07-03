@@ -385,7 +385,6 @@ set(POPS_CPP_STANDARD_TESTS
   test_imex_ap
   test_ap_limit
   test_lorentz_eliminator
-  test_polar_ring_advection
   test_polar_transport_mms
   test_polar_system_step
   test_polar_mms_vr
@@ -411,6 +410,11 @@ set(POPS_CPP_STANDARD_TESTS
 foreach(_test IN LISTS POPS_CPP_STANDARD_TESTS)
   pops_add_test(${_test})
 endforeach()
+
+# The Cartesian-vs-polar radial-diffusion comparison runs two full advections and sits close to the
+# 600 s default cap on slow CI runners (timed out on identical binaries across consecutive master
+# runs, ADC-624); labels stay inferred (unit physics fast).
+pops_add_gtest_suite(NAME test_polar_ring_advection TIMEOUT 1800)
 
 if(TARGET test_solver_codegen_generated AND TARGET pops_gen_solver_kernel)
   target_include_directories(test_solver_codegen_generated PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
