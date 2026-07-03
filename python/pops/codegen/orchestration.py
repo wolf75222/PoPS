@@ -30,7 +30,7 @@ types are pulled LAZILY inside the function bodies, so this module adds no forbi
 """
 
 
-def compile(problem, layout=None, backend="production", time=None, **kwargs):
+def compile(problem, layout=None, backend=None, time=None, **kwargs):
     """Lower a :class:`pops.problem.Problem` to a compiled handle.
 
     Validates @p problem, derives the compile target from the LAYOUT (``Uniform`` -> system,
@@ -47,21 +47,21 @@ def compile(problem, layout=None, backend="production", time=None, **kwargs):
       (multi-block Uniform Cases lower; C3). The time scheme is explicit here: @p time (a
       ``pops.time.Program``), else ``problem.time(...)``; a missing scheme raises (no silent default).
     - ``AMR`` (single OR multi block): compiles EACH block's resolved model to a
-      ``target='amr_system'`` production ``CompiledModel`` (the native AMR ``.so`` loader,
-      ``add_native_block``) and carries the ``{block: CompiledModel}`` table on
-      ``_block_compiled_models``. There is NO whole-system time Program on AMR (``AmrSystem`` has no
-      ``install_program`` seam), so the AMR route does NOT require @p time -- the native blocks carry
-      their own per-block time policy (set at bind from the block spec). The handle returned is the
-      FIRST block's ``CompiledModel`` (it satisfies bind's ``.so_path`` guard); ``_target`` /
-      ``_layout`` / ``_problem`` are attached for bind's AMR dispatch.
+      ``target='amr_system'`` production ``CompiledModel`` (native AMR ``.so`` loader,
+      ``add_native_block``) and carries ``{block: CompiledModel}`` on ``_block_compiled_models``.
+      There is NO whole-system time Program on AMR (no ``install_program`` seam), so @p time is not
+      required (native blocks carry their own time policy). The handle returned is the FIRST block's
+      ``CompiledModel``; ``_target`` / ``_layout`` / ``_problem`` are attached for bind's dispatch.
 
     Args:
         problem: The :class:`pops.problem.Problem` assembly to lower.
         layout: The mesh layout (``Uniform`` / ``AMR``) to compile for (ADC-526). Required unless the
             Problem carries a constructor layout (back-compat); when both are given they must agree (a
             mismatch raises), so a compiled artifact is frozen to exactly one layout.
-        backend: The codegen backend (default "production"). The AMR route requires "production"
-            (the only native AMR loader, ``Model.compile`` enforces it).
+        backend: The typed codegen backend descriptor; defaults to ``Production()`` (ADC-545: the
+            backend string was removed -- a bare ``backend="production"`` raises ``TypeError``). It
+            lowers to the same token the driver always consumed, so the artifact is byte-identical.
+            The AMR route requires ``Production()`` (``Model.compile`` enforces it).
         time: The ``pops.time.Program`` time scheme (Uniform route only); falls back to
             ``problem._time``. Ignored on the AMR route (the native blocks carry their own time policy).
         **kwargs: Extra keyword args forwarded verbatim to the compile driver (so_path / force / cxx /
@@ -73,28 +73,31 @@ def compile(problem, layout=None, backend="production", time=None, **kwargs):
     """
     # Lazy imports keep the codegen layer's module-scope import graph clean (no mesh / runtime).
     from pops.mesh.layouts import AMR
+    from pops.codegen.backends import Production, _Backend
 
-    # ADC-526: resolve the effective layout FIRST (the Problem no longer carries a mandatory layout),
-    # applying the Problem's recorded AMR criteria to it. A missing layout / a layout= that disagrees
-    # with a constructor layout is refused here.
+    # ADC-545: backend is a TYPED descriptor (None -> Production(), byte-identical lowering to the
+    # same "production" token). A bare string is refused; the public string form was removed.
+    if backend is None:
+        backend = Production()
+    elif not isinstance(backend, _Backend):
+        raise TypeError(
+            "pops.compile: backend must be a typed pops.codegen backend descriptor "
+            "(pops.codegen.Production() -- the default), not %r" % (backend,))
+
+    # ADC-526: resolve + validate the effective layout FIRST (the Problem no longer carries a
+    # mandatory layout); a missing / disagreeing layout, or an AMR envelope / Uniform-with-AMR-tags
+    # violation, is refused here before any compile. Then the structural registry checks.
     layout = _resolve_layout(problem, layout)
-    # Validate the resolved layout NOW that it is known: an AMR(max_levels) / AMR(ratio) beyond the
-    # native envelope (NATIVE_MAX_LEVELS / NATIVE_RATIOS), or a Uniform layout carrying active AMR
-    # criteria (recorded via problem.amr.refine on a Uniform compile), is refused before any compile
-    # with the existing clear message -- never silently clamped or dropped.
     _validate_layout_for_compile(problem, layout)
-    # problem.validate() runs the structural registry checks (blocks / fields / collisions).
     problem.validate()
     is_amr = isinstance(layout, AMR)
     target = "amr_system" if is_amr else "system"
 
     if is_amr:
         # AMR route (single AND multi block): no whole-system time Program. Each block lowers to a
-        # target='amr_system' production CompiledModel and installs through the NATIVE add_native_block
-        # path at bind (compiled=None, instances carry the per-block CompiledModel). The AMR runtime has
-        # no install_program seam, so time= is NOT required here -- the per-block time policy is set at
-        # bind from the block spec. compile_problem is NOT called (the byte-identical Uniform path is
-        # untouched).
+        # target='amr_system' production CompiledModel installed via the NATIVE add_native_block path
+        # at bind; time= is NOT required (per-block time policy set at bind). compile_problem is NOT
+        # called (the byte-identical Uniform path is untouched).
         return _compile_amr(problem, layout, backend, target, **kwargs)
 
     time = time if time is not None else problem._time
@@ -117,11 +120,10 @@ def compile(problem, layout=None, backend="production", time=None, **kwargs):
     compiled._target = target
     compiled._block_models = block_models
     # COMPILE-TIME SNAPSHOT AUTHORITY (ADC-592): freeze WHAT the compile saw so bind() lowers from the
-    # compile-time truth, not a LIVE re-read of a possibly-mutated Problem. Without this, bind() re-resolves
-    # problem._blocks / problem._fields / problem._outputs from the live object, so mutating the Problem
-    # between compile and bind would silently change what gets bound (the proven vulnerability). We snap
-    # the per-block model + spatial, the field solvers and the output policies at COMPILE time; bind()
-    # uses them as the authority and raises a loud drift error if the live block-name set diverges.
+    # compile-time truth, not a LIVE re-read of a possibly-mutated Problem (mutating between compile and
+    # bind would otherwise silently change what gets bound). We snap the per-block model + spatial, the
+    # field solvers and the output policies at COMPILE time; bind() uses them as the authority and raises
+    # a loud drift error if the live block-name set diverges.
     compiled._block_specs = {name: {"model": block_models[name], "spatial": spec["spatial"]}
                              for name, spec in problem._blocks.items()}
     compiled._field_solvers = _problem_field_solvers(problem)

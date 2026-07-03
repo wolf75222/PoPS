@@ -368,9 +368,10 @@ def test_amr_config_lives_in_the_layout_descriptor_only():
         "AMR(...) must be the typed AMR configuration surface")
 
     # sim.amr is a runtime VIEW: no config mutator, and inspect() is the fixed four-key view.
+    # ADC-545: the engine left the top-level surface -- reach it via the advanced runtime seam.
     try:
-        import pops
-        sim = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=4)
+        from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
+        sim = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=4)
     except Exception as exc:  # pragma: no cover - native extension unavailable in this build.
         pytest.skip("AmrSystem construction unavailable: %s" % exc)
 

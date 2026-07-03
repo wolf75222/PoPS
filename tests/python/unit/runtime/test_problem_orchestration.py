@@ -37,14 +37,19 @@ class _StubCompiledModel:
 
 class _StubDsl:
     """The ``.dsl`` engine model a physics block resolves to: its ``.compile(backend, target)``
-    returns a stub CompiledModel and records the call (no compiler)."""
+    returns a stub CompiledModel and records the call (no compiler).
+
+    ADC-545: pops.compile now flows the TYPED backend descriptor (``Production()``) to the driver;
+    the real ``Model.compile`` lowers it via ``lower_backend`` to the canonical token, so this stub
+    mirrors that and records the LOWERED string (byte-identical to the pre-ADC-545 default)."""
 
     def __init__(self, name="stub"):
         self.name = name
-        self.compiled = []  # (backend, target) per compile call
+        self.compiled = []  # (backend_token, target) per compile call
 
     def compile(self, *, backend, target, **kw):
-        self.compiled.append((backend, target))
+        from pops.codegen.backends import lower_backend
+        self.compiled.append((lower_backend(backend), target))
         return _StubCompiledModel(name=self.name, so_path="/tmp/%s_amr.so" % self.name)
 
 
@@ -247,7 +252,10 @@ def test_compile_layout_drives_target(monkeypatch=None):
     captured = {}
 
     def _fake_compile_problem(*, time, model, backend, target, **kw):
-        captured.update(time=time, model=model, backend=backend, target=target)
+        # ADC-545: the typed Production() flows here; the real compile_problem lowers it. Record the
+        # lowered token so the assertion stays the byte-identical "production".
+        from pops.codegen.backends import lower_backend
+        captured.update(time=time, model=model, backend=lower_backend(backend), target=target)
         return _StubCompiled(target=target)
 
     _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _fake_compile_problem)
@@ -255,7 +263,7 @@ def test_compile_layout_drives_target(monkeypatch=None):
         prob = pops.Problem(name="u").block("ne", physics=_StubModel())
         compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=object())
         _check(captured["target"] == "system", "Uniform layout routes to target='system'")
-        _check(captured["backend"] == "production", "default backend forwarded")
+        _check(captured["backend"] == "production", "default backend forwarded (typed Production() lowered)")
         _check(compiled._target == "system", "target carried on the handle")
         _check(compiled._problem is prob, "problem carried on the handle")
     finally:
