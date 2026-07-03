@@ -158,6 +158,62 @@ inline std::vector<int> AmrRuntime::level_owner_ranks(int k) const {
   return (*blocks_[0].levels)[k].U.dmap().ranks();
 }
 
+// FULL shared aux of level k: ALL aux_ncomp_ components of aux_[k], LOCAL valid cells at GLOBAL
+// component-major flat indices c*nf*nf + j*nf + i (zeros outside the patches at a fine level) -- the
+// exact layout of block_level_state, so the v3 checkpoint reader/writer share one convention. phi
+// (comp 0) is included; the level-0 multigrid WARM START stays a separate phi_<k> payload
+// (level_potential), which reads mg_.phi(), not aux_[0].
+inline std::vector<double> AmrRuntime::level_aux_flat(int k) const {
+  if (k < 0 || k >= nlev_)
+    throw std::runtime_error("AmrRuntime::level_aux_flat : level out of bounds");
+  const MultiFab& A = aux_[k];
+  const int nc = A.ncomp();
+  const std::size_t nf = static_cast<std::size_t>(dom_.nx()) << k;
+  std::vector<double> out(static_cast<std::size_t>(nc) * nf * nf, 0.0);
+  device_fence();
+  for (int li = 0; li < A.local_size(); ++li) {
+    const ConstArray4 a = A.fab(li).const_array();
+    const Box2D v = A.box(li);
+    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+      for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+        for (int c = 0; c < nc; ++c)
+          out[static_cast<std::size_t>(c) * nf * nf + static_cast<std::size_t>(j) * nf +
+              static_cast<std::size_t>(i)] = a(i, j, c);
+  }
+  return out;
+}
+
+// np>1 gather of level_aux_flat (all_reduce_sum of the disjoint per-rank contributions -- the AMR
+// checkpoint gather pattern). COLLECTIVE: all ranks MUST call it. Mono-rank identity.
+inline std::vector<double> AmrRuntime::level_aux_flat_global(int k) const {
+  std::vector<double> out = level_aux_flat(k);
+  all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+  return out;
+}
+
+// Restores the FULL shared aux of level k from the flat layout above. Writes ONLY the VALID cells of
+// the LOCAL fabs (owner-rank writes; a rank without a box is a no-op); the ghosts are redone by the
+// next solve_fields, exactly like after a regrid.
+inline void AmrRuntime::set_level_aux_flat(int k, const std::vector<double>& v) {
+  if (k < 0 || k >= nlev_)
+    throw std::runtime_error("AmrRuntime::set_level_aux_flat : level out of bounds");
+  MultiFab& A = aux_[k];
+  const int nc = A.ncomp();
+  const std::size_t nf = static_cast<std::size_t>(dom_.nx()) << k;
+  if (v.size() != static_cast<std::size_t>(nc) * nf * nf)
+    throw std::runtime_error("AmrRuntime::set_level_aux_flat : aux size != ncomp*nf*nf");
+  device_fence();
+  for (int li = 0; li < A.local_size(); ++li) {
+    Array4 a = A.fab(li).array();
+    const Box2D b = A.box(li);
+    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+      for (int i = b.lo[0]; i <= b.hi[0]; ++i)
+        for (int c = 0; c < nc; ++c)
+          a(i, j, c) = v[static_cast<std::size_t>(c) * nf * nf + static_cast<std::size_t>(j) * nf +
+                         static_cast<std::size_t>(i)];
+  }
+}
+
 // --- ADC-542 hierarchy rebuild (v3 checkpoint restore) --------------------------------------------
 
 inline void AmrRuntime::rebuild_hierarchy(const std::vector<std::vector<PatchBox>>& level_boxes,

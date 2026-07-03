@@ -74,16 +74,25 @@ def write_plotfile(sim, prefix, step=None, levels=None):
             lhdr.append("((%d,%d) (%d,%d) (0,0))" % (ilo, jlo, ihi, jhi))
         with open(os.path.join(ldir, "Level_Header"), "w") as f:
             f.write("\n".join(lhdr) + "\n")
-        if k == 0:
-            out = {"t": t, "n": cells}
+        # Per-level cell payload. An AMR sim carries per-level accessors (the same ones the v3
+        # checkpoint gathers): EVERY selected level emits its full per-block state + shared phi. A
+        # Uniform sim (no per-level accessors) writes its single-level fields at level 0.
+        out = {"t": t, "n": cells}
+        if hasattr(sim, "level_potential"):
+            multi = sim.n_blocks() != 1
+            for b in names:
+                st = (sim.block_level_state(b, k) if multi else sim.level_state(k))
+                out["state_%s" % (b if b else "block")] = np.asarray(st, dtype=np.float64)
+            out["phi"] = np.asarray(sim.level_potential(k), dtype=np.float64)
+        elif k == 0:
             for b in names:
                 key = b if b else "block"
                 out["density_" + key] = np.asarray(sim.density(b) if b else sim.density(),
                                                     dtype=np.float64)
             if hasattr(sim, "potential"):
                 out["phi"] = np.asarray(sim.potential(), dtype=np.float64)
-            with open(os.path.join(ldir, "Cell.npz"), "wb") as f:
-                np.savez_compressed(f, **out)
+        with open(os.path.join(ldir, "Cell.npz"), "wb") as f:
+            np.savez_compressed(f, **out)
     return root
 
 

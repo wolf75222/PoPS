@@ -448,6 +448,11 @@ class AmrRuntime {
   /// that level's boxes in patch_boxes(). The v3 checkpoint serializes it so a restart reproduces the
   /// LOCAL-fab iteration order (bit-identity of the host aggregations). Body in amr_restore.hpp.
   std::vector<int> level_owner_ranks(int k) const;
+  /// FULL shared aux of level @p k (ALL aux_ncomp_ components, flat c*nf*nf+j*nf+i; _global = np>1
+  /// all-reduce gather, COLLECTIVE) + owner-rank restore -- the v3 aux payload. Bodies in amr_restore.hpp.
+  std::vector<double> level_aux_flat(int k) const;
+  std::vector<double> level_aux_flat_global(int k) const;
+  void set_level_aux_flat(int k, const std::vector<double>& v);
   /// Head-of-step union-tags regrid at the Program driver's cadence (the SAME regrid() the native step
   /// runs at its head). @p macro_step gates it like AmrRuntime::step (skip step 0; honor regrid_every_).
   void regrid_if_due(int macro_step) {

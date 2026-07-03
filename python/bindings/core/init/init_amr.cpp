@@ -501,6 +501,21 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def(
           "level_owner_ranks", [](AmrSystem& s, int k) { return s.level_owner_ranks(k); },
           py::arg("k"))
+      // ADC-542: the FULL shared aux of a level (ALL components, flat c*nf*nf+j*nf+i) -- the v3
+      // checkpoint aux payload. _global gathers under np>1 (COLLECTIVE); the setter restores the
+      // valid cells owner-rank. Empty read / throwing write on the single-block coupler path.
+      .def(
+          "level_aux_flat", [](AmrSystem& s, int k) { return s.level_aux_flat(k); }, py::arg("k"))
+      .def(
+          "level_aux_flat_global", [](AmrSystem& s, int k) { return s.level_aux_flat_global(k); },
+          py::arg("k"))
+      .def(
+          "set_level_aux_flat",
+          [](AmrSystem& s, int k,
+             py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
+            s.set_level_aux_flat(k, flat(arr));
+          },
+          py::arg("k"), py::arg("aux"))
       // ADC-542: impose a mid-run MULTI-BLOCK hierarchy from a v3 checkpoint. @p boxes are the
       // level-tagged patch signatures (level, ilo, jlo, ihi, jhi); @p owner_ranks is the per-box owner
       // rank aligned with @p boxes. Routes to AmrRuntime::rebuild_hierarchy (all levels rebuilt).

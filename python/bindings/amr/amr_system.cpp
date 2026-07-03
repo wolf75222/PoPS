@@ -2294,5 +2294,27 @@ std::vector<int> AmrSystem::level_owner_ranks(int k) {
     return {};  // single-block coupler: no runtime DistributionMapping to serialize (serial path)
   return p_->runtime->level_owner_ranks(k);
 }
+// Full shared aux of a level (ALL components) -- the v3 checkpoint aux payload (ADC-542). The coupler
+// path returns EMPTY (derived + static-reapplied aux, phi suffices): the writer skips the aux keys.
+std::vector<double> AmrSystem::level_aux_flat(int k) {
+  p_->ensure_built();
+  if (!p_->runtime)
+    return {};
+  return p_->runtime->level_aux_flat(k);
+}
+std::vector<double> AmrSystem::level_aux_flat_global(int k) {
+  p_->ensure_built();
+  if (!p_->runtime)
+    return {};
+  return p_->runtime->level_aux_flat_global(k);
+}
+void AmrSystem::set_level_aux_flat(int k, const std::vector<double>& v) {
+  p_->ensure_built();
+  if (!p_->runtime)
+    throw std::runtime_error(
+        "AmrSystem::set_level_aux_flat : MULTI-BLOCK / runtime engine only (the coupler aux is "
+        "derived and re-applied by solve_fields; restore phi via set_level_potential)");
+  p_->runtime->set_level_aux_flat(k, v);
+}
 
 }  // namespace pops

@@ -51,7 +51,8 @@ def _build(n, regrid_every):
 
 
 def _snapshot(sim):
-    """A comparable snapshot of the FULL trajectory state at one step (per-block per-level + phi + boxes)."""
+    """A comparable snapshot of the FULL trajectory state at one step (per-block per-level state +
+    phi + the FULL shared aux + boxes)."""
     nlev = int(sim.n_levels())
     names = list(sim.block_names())
     snap = {"t": sim.time(), "macro_step": sim.macro_step(),
@@ -61,6 +62,7 @@ def _snapshot(sim):
             snap["s_%s_%d" % (b, k)] = np.asarray(sim.block_level_state(b, k), dtype=float)
     for k in range(nlev):
         snap["phi_%d" % k] = np.asarray(sim.level_potential(k), dtype=float)
+        snap["aux_%d" % k] = np.asarray(sim.level_aux_flat(k), dtype=float)
     return snap
 
 
@@ -114,9 +116,32 @@ for _ in range(STEPS - K):
     fresh.step(DT)
     rest_traj.append(_snapshot(fresh))
 
-# BIT-IDENTICAL : the continued trajectory == the uninterrupted one at every compared step.
+# BIT-IDENTICAL : the continued trajectory == the uninterrupted one at every compared step. The
+# snapshots include the FULL shared aux per level, so aux equality across restart is asserted too.
 all_eq = all(_eq(rest_traj[i], ref_traj[K + i]) for i in range(STEPS - K))
 chk(all_eq, "post-restart trajectory is BIT-IDENTICAL to the uninterrupted run (==, no tolerance)")
+
+# PER-LEVEL OUTPUT (ADC-542 addendum C.1): an AllLevels npz output on the live multi-level hierarchy
+# carries EVERY level's per-block arrays, bit-identical to the engine's per-level state.
+from pops.output import OutputPolicy
+from pops.output.policies import AllLevels
+from pops.runtime._amr_output_driver import fire_amr_output_policies
+
+out_dir = tempfile.mkdtemp()
+written = fire_amr_output_policies(ref, [OutputPolicy(cadence=1, levels=AllLevels(), prefix="lvl")],
+                                   step=STEPS, output_dir=out_dir)
+chk(len(written) == 1 and written[0].endswith(".npz"), "AllLevels npz output written")
+d = np.load(written[0])
+nlev_out = int(ref.n_levels())
+have_all = all(("state_%s_%d" % (b, k)) in d
+               for b in ref.block_names() for k in range(nlev_out))
+chk(have_all, "the npz carries EVERY level's per-block state arrays (AllLevels honored)")
+lvl1_ok = all(np.array_equal(d["state_%s_1" % b],
+                             np.asarray(ref.block_level_state(b, 1), dtype=float))
+              for b in ref.block_names()) if nlev_out >= 2 else False
+chk(lvl1_ok, "level-1 arrays in the npz match the engine per-level state bit-for-bit")
+chk(np.array_equal(d["phi_0"], np.asarray(ref.level_potential(0), dtype=float)),
+    "phi_0 in the npz matches the engine potential bit-for-bit")
 
 
 if __name__ == "__main__":

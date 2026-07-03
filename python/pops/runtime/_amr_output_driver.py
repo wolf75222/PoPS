@@ -73,20 +73,59 @@ def _write_amr(sim, prefix, policy, step, levels):
     """Write the AMR state for the resolved @p levels via the typed format.
 
     A ``Plotfile()`` format writes the AMReX plotfile layout (:mod:`pops.runtime._plotfile_writer`);
-    every other format writes the npz / vtk visualization the AMR writer already produces (coarse
-    fields + fine-patch footprints), the levels metadata carried alongside. The level set is recorded
-    so a reader knows which levels the file covers.
+    ``vtk`` keeps the existing coarse visualization writer; every other format (npz default, the HDF5
+    token included) writes the PER-LEVEL npz: every selected level's full per-block state arrays plus
+    the shared phi -- the same per-level accessors the v3 checkpoint gathers, so AllLevels /
+    SelectedLevels actually emit every selected level's data, not just level 0 + footprints.
     """
     fmt = getattr(policy, "format", None)
     fmt_name = type(fmt).__name__ if fmt is not None else "npz"
     if fmt_name == "Plotfile":
         from pops.runtime._plotfile_writer import write_plotfile
         return write_plotfile(sim, prefix, step=step, levels=levels)
-    token = "vtk" if fmt_name == "VTK" else ("npz" if fmt is None or fmt_name in ("HDF5",) else
-                                             getattr(fmt, "name", "npz"))
-    # The AMR writer produces coarse fields + patch footprints; the level set is honored by the
-    # plotfile path (per-level) and recorded for the visualization path.
-    return sim.write(prefix, format="npz" if token == "hdf5" else token, step=step)
+    if fmt_name == "VTK" or (isinstance(fmt, str) and fmt == "vtk"):
+        return sim.write(prefix, format="vtk", step=step)
+    return _write_amr_levels_npz(sim, prefix, step, levels)
+
+
+def _write_amr_levels_npz(sim, prefix, step, levels):
+    """Per-level npz payload: state_<block>_<k> + phi_<k> for every selected level @p k.
+
+    Uses the SAME per-level accessors the AMR checkpoint gathers (block_level_state / level_state +
+    level_potential; the _global collective variants under np>1, every rank calls, rank 0 writes), so
+    the emitted arrays are bit-identical to the engine's per-level state. Also carries t / n / the
+    selected level list / patch_boxes so a reader can reconstruct the geometry.
+    """
+    import os
+    import numpy as np
+    from pops import _pops
+
+    gather = _pops.n_ranks() != 1
+    multi = sim.n_blocks() != 1
+    names = list(sim.block_names())
+    pb = sim.patch_boxes()
+    out = {"t": sim.time(), "n": sim.nx(),
+           "levels": np.asarray(sorted(levels), dtype=np.int64),
+           "patch_boxes": (np.asarray(pb, dtype=np.int64) if pb
+                           else np.zeros((0, 5), dtype=np.int64))}
+    for k in sorted(levels):
+        for b in names:
+            if multi:
+                st = sim.block_level_state_global(b, k) if gather else sim.block_level_state(b, k)
+            else:
+                st = sim.level_state_global(k) if gather else sim.level_state(k)
+            out["state_%s_%d" % (b, k)] = np.asarray(st, dtype=np.float64)
+        out["phi_%d" % k] = np.asarray(
+            sim.level_potential_global(k) if gather else sim.level_potential(k), dtype=np.float64)
+    suffix = ("_%06d" % int(step)) if step is not None else ""
+    target = prefix + suffix + ".npz"
+    if _pops.my_rank() != 0:
+        return target  # only rank 0 writes (the gathers already ran on every rank)
+    tmp = target + ".tmp"
+    with open(tmp, "wb") as f:
+        np.savez_compressed(f, **out)
+    os.replace(tmp, target)
+    return target
 
 
 __all__ = ["resolve_levels", "fire_amr_output_policies"]

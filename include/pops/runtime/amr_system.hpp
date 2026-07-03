@@ -819,6 +819,13 @@ class AmrSystem {
   /// level-@p k rows of patch_boxes(). The v3 checkpoint (ADC-542) serializes it so a restart
   /// reproduces the LOCAL-fab iteration order. MULTI-BLOCK / runtime engine; empty on the coupler path.
   std::vector<int> level_owner_ranks(int k);
+  /// FULL shared aux of level @p k (ALL components, flat c*nf*nf+j*nf+i; _global = np>1 gather,
+  /// COLLECTIVE) + the owner-rank restore -- the v3 checkpoint aux payload (ADC-542). MULTI-BLOCK /
+  /// runtime engine; the read returns EMPTY on the single-block coupler path (its aux is derived +
+  /// static-reapplied each solve, phi_<k> suffices there) and the write throws on it.
+  std::vector<double> level_aux_flat(int k);
+  std::vector<double> level_aux_flat_global(int k);
+  void set_level_aux_flat(int k, const std::vector<double>& v);
 
   double mass();  ///< mass of the 1st block on the coarse (conserved at reflux)
   double mass(

@@ -12,12 +12,16 @@ zero behaviour change. New keys (all additive):
   - ``pops_amr_checkpoint_version = 3``
   - ``dmap_<k>``: owner rank per box of level k, aligned with the level-k rows of ``patch_boxes``
     (bit-identity requires the box->rank map: it fixes the local-fab aggregation order).
+  - ``aux_<k>``: the FULL shared aux of level k, ALL components (phi comp 0, gradients, named aux),
+    flat c*nf*nf+j*nf+i. Absent on the single-block coupler path (its aux is derived +
+    static-reapplied; the reader falls back to phi-only, the documented fallback semantics).
   - ``regrid_count``, ``regrid_every``: regrid metadata (report parity + the cadence guard).
   - ``program_hash``: the installed compiled-Program hash (a compiled AMR Program must restart under
     the SAME program; absent for a native composition -- the guard is skipped, like the uniform writer).
 
 Restore order (addendum B.6): guards -> rebuild_hierarchy (impose the mid-run hierarchy) -> per-level
-state -> phi -> clock. The clock is LAST so the next step's regrid_if_due sees the uninterrupted clock.
+state -> aux -> phi -> clock. The clock is LAST so the next step's regrid_if_due sees the
+uninterrupted clock.
 """
 
 _V3 = 3
@@ -72,6 +76,14 @@ def write_v3(sim, path, L, regrid_every):
     for k in range(nlev):
         out["phi_%d" % k] = np.asarray(
             sim.level_potential_global(k) if gather else sim.level_potential(k), dtype=np.float64)
+    # FULL shared aux per level (m2): ALL aux components (phi comp 0 + gradients + named aux), flat
+    # c*nf*nf+j*nf+i. EMPTY on the single-block coupler path (its aux is derived + static-reapplied;
+    # phi_<k> suffices there) -- the key is then skipped and the reader falls back to phi-only.
+    for k in range(nlev):
+        aux = np.asarray(sim.level_aux_flat_global(k) if gather else sim.level_aux_flat(k),
+                         dtype=np.float64)
+        if aux.size:
+            out["aux_%d" % k] = aux
 
     target = path if path.endswith(".npz") else path + ".npz"
     if _pops.my_rank() != 0:
@@ -146,7 +158,13 @@ def restart_v3(sim, d, L):
             else:
                 sim.set_level_state(k, st)
 
-    # (5) SHARED phi warm-start.
+    # (5) FULL SHARED AUX per level when the checkpoint carries it (m2; the reader PREFERS aux_<k> and
+    # falls back to phi-only when absent -- the single-block coupler path), then the phi warm-start
+    # (separate storage: the level-0 phi is the multigrid warm start mg_.phi(), not aux comp 0).
+    for k in range(nlev):
+        key = "aux_%d" % k
+        if key in d:
+            sim.set_level_aux_flat(k, np.asarray(d[key], dtype=np.float64).ravel())
     for k in range(nlev):
         sim.set_level_potential(k, np.asarray(d["phi_%d" % k], dtype=np.float64).ravel())
 
