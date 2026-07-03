@@ -1,7 +1,10 @@
 """Structured fallback/degraded-route diagnostics."""
+from __future__ import annotations
+
+from typing import Any
 
 
-def _static_report():
+def _static_report() -> dict:
     return {
         "schema_version": 1,
         "source": "pops.runtime.fallbacks.static_fallback",
@@ -37,19 +40,20 @@ def _static_report():
     }
 
 
-def _native_report():
+def _native_report() -> dict:
     try:
         from pops import _pops  # noqa: PLC0415
 
-        fn = getattr(_pops, "fallback_diagnostics_report", None)
+        fn: Any = getattr(_pops, "fallback_diagnostics_report", None)
         if callable(fn):
-            return dict(fn())
+            report: Any = fn()
+            return dict(report)
     except Exception:
         pass
     return _static_report()
 
 
-def _configured_routes(options):
+def _configured_routes(options: Any) -> Any:
     configured = []
     for block in (options or {}).get("blocks", []) or []:
         name = block.get("name")
@@ -76,19 +80,19 @@ def _configured_routes(options):
     return configured
 
 
-def fallback_diagnostics_report(options=None):
+def fallback_diagnostics_report(options: Any = None) -> Any:
     """Return structured fallback/degraded-route diagnostics and explicit policies."""
-    report = _native_report()
+    report: Any = _native_report()
     entries = [dict(row) for row in report.get("entries", [])]
     total = sum(int(row.get("count") or 0) for row in entries)
-    out = dict(report)
+    out: Any = dict(report)
     out["entries"] = entries
     out["total_count"] = total
     out["configured"] = _configured_routes(options or {})
     return out
 
 
-def reset_fallback_diagnostics():
+def reset_fallback_diagnostics() -> None:
     """Reset process-local fallback/degraded-route counters when the native module supports it."""
     try:
         from pops import _pops  # noqa: PLC0415

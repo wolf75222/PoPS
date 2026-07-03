@@ -2,12 +2,16 @@
 
 Exports: imex_local, imex_local_linear.
 """
+from __future__ import annotations
+
+from typing import Any
 
 from ._helpers import _opcall, _operator_handle, program_macro
 
 
 @program_macro
-def imex_local(P, block, *, linear_source, sources=("default",), flux=True, theta=1.0):
+def imex_local(P: Any, block: Any, *, linear_source: Any, sources: Any = ("default",),
+               flux: Any = True, theta: Any = 1.0) -> Any:
     """IMEX with an EXPLICIT flux/source and an IMPLICIT cell-local linear source (ADC-423).
 
     One step of a theta-implicit splitting of ``dU/dt = R_explicit(U) + L U`` where ``L`` is a named
@@ -39,8 +43,9 @@ def imex_local(P, block, *, linear_source, sources=("default",), flux=True, thet
 
 
 @program_macro
-def imex_local_linear(P, block, *, explicit_operator, implicit_operator, fields_operator=None,
-                      theta=1.0, state_space="U"):
+def imex_local_linear(P: Any, block: Any, *, explicit_operator: Any, implicit_operator: Any,
+                      fields_operator: Any = None, theta: Any = 1.0,
+                      state_space: Any = "U") -> Any:
     """Generic IMEX with an explicit rate and an implicit local linear operator (Spec 2).
 
     One theta-implicit step of ``dU/dt = R(U[, fields]) + L([fields]) U``::

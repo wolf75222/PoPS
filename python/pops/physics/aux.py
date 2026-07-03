@@ -13,6 +13,9 @@ LAZILY from ``pops.physics`` (e.g. ``codegen.compile``'s lazy
 ``from pops.physics import Model, AUX_CANONICAL``); see the Spec-4 blueprint
 punch-list P5.
 """
+from __future__ import annotations
+
+from typing import Any
 
 # (cf. pops::Aux / kAuxBaseComps on the C++ side). phi/grad_x/grad_y = BASE contract (3 components);
 # the following ones (B_z, ...) WIDEN the channel -> the generated brick then declares n_aux so that
@@ -43,7 +46,7 @@ AUX_NAMED_MAX = 4  # maximum number of named aux fields per model (= kAuxMaxExtr
 _K_MAX_RUNTIME_PARAMS = 32
 
 
-def max_runtime_params():
+def max_runtime_params() -> int:
     """The runtime-param capacity, preferring the C++ constant _pops.__max_runtime_params__ when the
     module is importable (single source), else the stdlib-only literal mirror. hasattr-gated so a stale
     _pops (built before ADC-610 exposed the attribute) transparently falls back to the literal 32."""
@@ -54,7 +57,7 @@ def max_runtime_params():
     return int(getattr(_pops, "__max_runtime_params__", _K_MAX_RUNTIME_PARAMS))
 
 
-def aux_n_aux(aux_names):
+def aux_n_aux(aux_names: Any) -> int:
     """Aux channel width required by these CANONICAL fields: max(3, largest index + 1).
     Raises ValueError on an unknown name (a canonical aux field MUST be a component of pops::Aux)."""
     w = AUX_BASE_COMPS
@@ -66,7 +69,7 @@ def aux_n_aux(aux_names):
     return w
 
 
-def aux_total_n_aux(aux_names, aux_extra_names):
+def aux_total_n_aux(aux_names: Any, aux_extra_names: Any) -> int:
     """TOTAL width of the aux channel: max of the canonical width (aux_n_aux) and, if NAMED fields
     (aux_field) are declared, AUX_NAMED_BASE + number of names (the last name = component
     AUX_NAMED_BASE + len-1). Without a named field -> aux_n_aux (historical path, bit-identical)."""
@@ -97,12 +100,12 @@ CANONICAL_ROLES = {
 }
 
 
-def role_of(name):
+def role_of(name: Any) -> Any:
     """CANONICAL physical role of name @p name (member of pops::VariableRole), 'Custom' if unknown."""
     return CANONICAL_ROLES.get(name, "Custom")
 
 
-def roles_for(names, override=None):
+def roles_for(names: Any, override: Any = None) -> Any:
     """List of roles (pops::VariableRole members) parallel to @p names. @p override (optional):
     list of the same length explicitly fixing the roles (string 'Density'... or None to fall back
     on the canonical mapping of the name). Used for non-standard layouts where names are not enough."""

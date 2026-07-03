@@ -13,6 +13,10 @@ It CHOOSES the wave-speed algorithm, so it is a typed :class:`pops.descriptors.D
 records the choice and exposes it as the engine flags on ``.build()``; the eigenvalue / Roe
 arithmetic is generated and runs in C++.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Descriptor
 from pops.descriptors_report import CapabilitySet
 
@@ -32,36 +36,36 @@ class ExactSpeeds(Descriptor):
     BOUNDED = "bounded"
     _KINDS = (EXACT_EIGENVALUES, ROE_DISSIPATION, BOUNDED)
 
-    def __init__(self, kind=EXACT_EIGENVALUES):
+    def __init__(self, kind: Any = EXACT_EIGENVALUES) -> None:
         if kind not in ExactSpeeds._KINDS:
             raise ValueError("ExactSpeeds kind %r must be one of %s"
                              % (kind, ", ".join(ExactSpeeds._KINDS)))
         self.kind = kind
 
     @classmethod
-    def from_flags(cls, exact_speeds, roe):
+    def from_flags(cls, exact_speeds: Any, roe: Any) -> Any:
         """The descriptor matching the engine flags (``roe`` wins, then ``exact_speeds``)."""
         if roe:
             return cls(cls.ROE_DISSIPATION)
         return cls(cls.EXACT_EIGENVALUES if exact_speeds else cls.BOUNDED)
 
     @property
-    def exact_speeds(self):
+    def exact_speeds(self) -> bool:
         """The engine ``exact_speeds`` flag (True unless the BOUNDED strategy)."""
         return self.kind != ExactSpeeds.BOUNDED
 
     @property
-    def roe(self):
+    def roe(self) -> bool:
         """The engine ``roe`` flag (True only for the ROE_DISSIPATION strategy)."""
         return self.kind == ExactSpeeds.ROE_DISSIPATION
 
-    def options(self):
+    def options(self) -> dict:
         return {"kind": self.kind}
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"exact_speeds": self.exact_speeds, "roe": self.roe})
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "ExactSpeeds(%r)" % (self.kind,)
 
 

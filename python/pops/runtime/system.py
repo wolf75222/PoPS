@@ -7,6 +7,9 @@ are split into cohesive mixins (``_system_install`` / ``_system_unified_install`
 ``AmrSystem`` lives in :mod:`pops.runtime.amr_system` and is re-exported here for the
 ``from pops.runtime.system import System, AmrSystem`` import in the slim ``pops`` hub.
 """
+from __future__ import annotations
+
+from typing import Any
 
 from pops._bootstrap import SystemConfig, _System  # noqa: F401  (SystemConfig re-exported below)
 # ADC-545: SystemConfig / AmrSystemConfig left the pops root; this module is their advanced home
@@ -25,7 +28,7 @@ from pops.runtime._system_unified_install import _SystemUnifiedInstall
 from pops.runtime.profile import PerformanceSummary, Profile
 
 
-def _profile_payload(system):
+def _profile_payload(system: Any) -> Any:
     """Structured profiler payload when the native extension exposes it, else legacy text."""
     snapshot = getattr(system, "profile_snapshot", None)
     if callable(snapshot):
@@ -42,22 +45,22 @@ class _ProfileSession:
     The off-by-default contract holds: nothing here enables until the block is entered.
     """
 
-    def __init__(self, system, profile):
+    def __init__(self, system: Any, profile: Any) -> None:
         self._system = system
         self._profile = profile
         self._summary = None
 
-    def __enter__(self):
+    def __enter__(self) -> Any:
         self._system.reset_profiling()
         self._system.enable_profiling()
         return self
 
-    def __exit__(self, exc_type, exc, tb):
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
         self._summary = PerformanceSummary(_profile_payload(self._system), self._profile)
         self._system.disable_profiling()
         return False
 
-    def summary(self):
+    def summary(self) -> Any:
         """Return a :class:`PerformanceSummary` of the run.
 
         Inside the ``with`` block it reads the live native report; after the block it returns the
@@ -88,7 +91,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
     is WIRED in System.step (Phase 2b): polar ExB transport + polar Poisson + aux in local basis
     (e_r, e_theta). Limits: scalar ExB transport, single-rank, no cart<->polar coupling."""
 
-    def __init__(self, config=None, mesh=None, **cfg_kw):
+    def __init__(self, config: Any = None, mesh: Any = None, **cfg_kw: Any) -> None:
         if config is None:
             config = SystemConfig()
             for k, v in cfg_kw.items():
@@ -125,7 +128,8 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         self._lifecycle = "assembling"
         self._bound_snapshot = None
 
-    def run(self, t_end, cfl=None, max_steps=1_000_000, output_dir=None):
+    def run(self, t_end: Any, cfl: Any = None, max_steps: int = 1_000_000,
+            output_dir: Any = None) -> Any:
         """Advance up to t_end by CFL steps (sugar: `while time() < t_end: step_cfl(cfl)`).
 
         @p cfl: Courant number passed to step_cfl. When omitted (None) it defaults to the CFL pinned
@@ -149,7 +153,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
                 self._fire_outputs(policies, steps, out_dir)
         return steps
 
-    def _fire_outputs(self, policies, step, output_dir):
+    def _fire_outputs(self, policies: Any, step: Any, output_dir: Any) -> Any:
         """Fire the DUE output / checkpoint policies at macro-step @p step (C4 run-loop hook).
 
         Delegates to :func:`pops.runtime._output_driver.fire_output_policies`, which maps each
@@ -158,7 +162,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         from pops.runtime._output_driver import fire_output_policies
         return fire_output_policies(self, policies, step, output_dir)
 
-    def profile(self, profile=None):
+    def profile(self, profile: Any = None) -> Any:
         """Typed profiling context manager (Spec 5 sec.12.5, criteria 41-44).
 
         Usage::
@@ -181,7 +185,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
                 % type(profile).__name__)
         return _ProfileSession(self, profile)
 
-    def block_names(self):
+    def block_names(self) -> Any:
         """Names of the added blocks, in order (useful for a Python integrator).
 
         Delegates to the C++ block registry (single source), so it includes the blocks loaded via
@@ -189,12 +193,12 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         """
         return list(self._s.block_names())
 
-    def inspect(self):
+    def inspect(self) -> Any:
         """Structured, array-free runtime inspection report (ADC-591)."""
         from pops.runtime.inspection import build_runtime_inspection
         return build_runtime_inspection(self, runtime="system")
 
-    def program_report(self):
+    def program_report(self) -> Any:
         """Structured report of the compiled-Program runtime subsystem (ADC-594).
 
         Aggregates the bound Program accessors (installed step / hash, cadence, block map, param
@@ -203,7 +207,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         from pops.runtime.program_report import build_program_report
         return build_program_report(self)
 
-    def __str__(self):
+    def __str__(self) -> Any:
         """Short, array-free summary: the installed block names (Spec 5 sec.12.1).
 
         Deliberately field-data-free -- it prints the block registry, never a Fab dump.
@@ -215,7 +219,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         return "System(blocks=%s)" % (blocks,)
 
     @property
-    def amr(self):
+    def amr(self) -> Any:
         """The AMR runtime inspection surface does not apply to a uniform ``System``.
 
         ``System`` is single-level: it carries no AMR hierarchy, so ``sim.amr`` (the live
@@ -228,13 +232,14 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         raise AttributeError("amr")
 
     @staticmethod
-    def abi_key():
+    def abi_key() -> Any:
         """Module ABI key (compiler, C++ standard, signature of the pops headers). Compared to
         that of a native loader by add_native_block. Also exposed as a class attribute (the
         __getattr__ delegate only covers instances), so pops.System.abi_key() works."""
-        return _System.abi_key()
+        native: Any = _System
+        return native.abi_key()
 
-    def __getattr__(self, attr):
+    def __getattr__(self, attr: Any) -> Any:
         # 'amr' is an AmrSystem-only inspection handle; the System @property raises AttributeError,
         # which routes here -- intercept it so the clear message surfaces instead of the raw _pops
         # "object has no attribute 'amr'" delegation (Spec 5 sec.8.12).

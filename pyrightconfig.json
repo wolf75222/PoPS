@@ -1,15 +1,6 @@
 {
   "include": [
-    "python/pops/_pops.pyi",
-    "python/pops/_bootstrap.py",
-    "python/pops/_version.py",
-    "python/pops/_report.py",
-    "python/pops/descriptors_report.py",
-    "python/pops/runtime/routes.py",
-    "python/pops/runtime/brick_catalog.py",
-    "python/pops/params/constants.py",
-    "python/pops/solvers/options.py",
-    "python/pops/solvers/tolerances.py"
+    "python/pops"
   ],
   "exclude": [
     "**/__pycache__",
@@ -18,7 +9,9 @@
     "tests/gpu",
     "tests/python"
   ],
-  "extraPaths": ["python"],
+  "extraPaths": [
+    "python"
+  ],
   "pythonVersion": "3.10",
   "typeCheckingMode": "basic",
   "reportMissingModuleSource": "none",
@@ -29,7 +22,9 @@
   "executionEnvironments": [
     {
       "root": "python",
-      "extraPaths": ["python"]
+      "extraPaths": [
+        "python"
+      ]
     }
   ]
 }

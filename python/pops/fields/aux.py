@@ -8,6 +8,10 @@ expression (in C++, not Python). The per-field aux halo / ghost policy
 
 Inert descriptors; they compute nothing.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Descriptor
 
 
@@ -16,15 +20,15 @@ class StaticAux(Descriptor):
 
     category = "aux"
 
-    def __init__(self, name, value=None):
+    def __init__(self, name: Any, value: Any = None) -> None:
         self._name = str(name)
         self.value = value
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name
 
-    def options(self):
+    def options(self) -> dict:
         return {"name": self._name, "kind": "static", "value": self.value}
 
 
@@ -36,15 +40,15 @@ class DerivedAux(Descriptor):
 
     category = "aux"
 
-    def __init__(self, name, expression=None):
+    def __init__(self, name: Any, expression: Any = None) -> None:
         self._name = str(name)
         self.expression = expression
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name
 
-    def options(self):
+    def options(self) -> dict:
         return {"name": self._name, "kind": "derived",
                 "expression": getattr(self.expression, "name", repr(self.expression))
                 if self.expression is not None else None}
@@ -55,7 +59,7 @@ class DerivedAux(Descriptor):
 # copy). Resolved lazily via module __getattr__ so ``pops.fields`` keeps importing only
 # pops.descriptors at module scope (the mesh package is not pulled in until AuxHalo is
 # actually referenced).
-def __getattr__(name):
+def __getattr__(name: str) -> Any:
     if name == "AuxHalo":
         from pops.mesh.aux import AuxHalo
         return AuxHalo

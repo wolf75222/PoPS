@@ -5,35 +5,44 @@ codegen module is imported LAZILY inside each method body so that importing
 ``pops.physics`` never pulls in :mod:`pops.codegen` or ``_pops`` (Spec-4
 import-graph rule). This is the same delegation the historical ``dsl.py`` used.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from .aux import roles_for
 
+if TYPE_CHECKING:
+    from ._model_contract import _HyperbolicModel
+else:
+    _HyperbolicModel = object
 
-def _cg_compile():
+
+def _cg_compile() -> Any:
     """The :mod:`pops.codegen.compile` module (lazy import; keeps physics codegen-free)."""
     from pops.codegen import compile as _cg
     return _cg
 
 
-class _CodegenMixin:
+class _CodegenMixin(_HyperbolicModel):
     """C++ emission and compilation wrappers, all delegating lazily to pops.codegen."""
 
-    def _codegen_exprs(self, exprs, cse, real="pops::Real", indent="    "):
+    def _codegen_exprs(self, exprs: Any, cse: Any, real: str = "pops::Real", indent: str = "    ") -> Any:
         from pops.codegen import module_codegen as _cg
         return _cg._codegen_exprs(self, exprs, cse, real=real, indent=indent)
 
-    def _live_prims(self, exprs, seed=()):
+    def _live_prims(self, exprs: Any, seed: Any = ()) -> Any:
         from pops.codegen import module_codegen as _cg
         return _cg._live_prims(self, exprs, seed=seed)
 
-    def _prim_block(self, live=None, hoist=False):
+    def _prim_block(self, live: Any = None, hoist: bool = False) -> Any:
         from pops.codegen import module_codegen as _cg
         return _cg._prim_block(self, live=live, hoist=hoist)
 
-    def _jac_entries(self):
+    def _jac_entries(self) -> Any:
         from pops.codegen import module_codegen as _cg
         return _cg._jac_entries(self)
 
-    def emit_cpp(self, func=None, cse=True):
+    def emit_cpp(self, func: Any = None, cse: bool = True) -> Any:
         """Generates a compilable C++ function computing the physical flux from the symbolic
         tree (each Expr node knows how to write itself in C++ via to_cpp).
 
@@ -45,8 +54,8 @@ class _CodegenMixin:
         from pops.codegen import module_codegen as _cg
         return _cg.emit_cpp(self, func=func, cse=cse)
 
-    def emit_cpp_brick(self, name=None, namespace="pops_generated", cse=True,
-                       hoist_reciprocals=False):
+    def emit_cpp_brick(self, name: Any = None, namespace: str = "pops_generated", cse: bool = True,
+                       hoist_reciprocals: bool = False) -> Any:
         """Generates a C++ BRICK satisfying the pops::HyperbolicModel concept (wrapping : step
         2bis). The produced struct uses StateVec / Aux / POPS_HD / Variables and exposes flux,
         max_wave_speed, to_primitive, to_conservative, conservative_vars, primitive_vars : it can
@@ -60,8 +69,8 @@ class _CodegenMixin:
         return _cg.emit_cpp_brick(self, name=name, namespace=namespace, cse=cse,
                                   hoist_reciprocals=hoist_reciprocals)
 
-    def emit_cpp_source(self, name=None, namespace="pops_generated", cse=True,
-                        hoist_reciprocals=False):
+    def emit_cpp_source(self, name: Any = None, namespace: str = "pops_generated", cse: bool = True,
+                        hoist_reciprocals: bool = False) -> Any:
         """Generate a composable C++ SOURCE BRICK (in the pops sense) from self._source.
 
         The produced struct exposes apply(U, a) returning the source term S(U, aux), with one line per
@@ -81,7 +90,7 @@ class _CodegenMixin:
         return _cg.emit_cpp_source(self, name=name, namespace=namespace, cse=cse,
                                    hoist_reciprocals=hoist_reciprocals)
 
-    def _emit_bricks(self, name=None, hoist_reciprocals=False):
+    def _emit_bricks(self, name: Any = None, hoist_reciprocals: bool = False) -> Any:
         """Generate the bricks (hyperbolic + source + elliptic) and the CompositeModel<...> type
         shared by BOTH backends (JIT IModel and AOT). Source / elliptic OPTIONAL: without
         set_source -> pops::NoSource; without set_elliptic_rhs -> zero rhs (no Poisson coupling).
@@ -90,7 +99,7 @@ class _CodegenMixin:
         from pops.codegen import module_codegen as _cg
         return _cg._emit_bricks(self, name=name, hoist_reciprocals=hoist_reciprocals)
 
-    def _elliptic_field_registrations(self, nm):
+    def _elliptic_field_registrations(self, nm: Any) -> Any:
         """Per named elliptic field (ADC-428): (field, brick_struct, phi_comp, gx_comp, gy_comp) for the
         native loader. The aux component of each output name is its channel index: a CANONICAL name
         (phi/grad_x/...) maps via AUX_CANONICAL; a model-named aux (aux_field) maps to
@@ -100,7 +109,7 @@ class _CodegenMixin:
         from pops.codegen import module_codegen as _cg
         return _cg._elliptic_field_registrations(self, nm)
 
-    def _emit_metadata(self, model_alias):
+    def _emit_metadata(self, model_alias: Any) -> Any:
         """OPTIONAL metadata symbols of the .so block, read by dlsym on the System side. SHARED by both
         backends (JIT and AOT). The NAMES + ROLES are always emitted (POPS_EXPORT_BLOCK_METADATA):
         they come from the model's VariableSet (single source of truth), the System reads them instead of
@@ -112,39 +121,42 @@ class _CodegenMixin:
         from pops.codegen import module_codegen as _cg
         return _cg._emit_metadata(self, model_alias)
 
-    def emit_cpp_so_source(self, name=None, hoist_reciprocals=False):
+    def emit_cpp_so_source(self, name: Any = None, hoist_reciprocals: bool = False) -> Any:
         """Thin wrapper: delegates to pops.codegen.compile.emit_cpp_so_source."""
         return _cg_compile().emit_cpp_so_source(self, name=name, hoist_reciprocals=hoist_reciprocals)
 
-    def compile_so(self, so_path, include=None, name=None, cxx=None, std="c++20",
-                   hoist_reciprocals=False):
+    def compile_so(self, so_path: Any, include: Any = None, name: Any = None, cxx: Any = None,
+                   std: str = "c++20", hoist_reciprocals: bool = False) -> Any:
         """Thin wrapper: delegates to pops.codegen.compile.compile_so."""
         return _cg_compile().compile_so(self, so_path, include=include, name=name, cxx=cxx, std=std,
                               hoist_reciprocals=hoist_reciprocals)
 
-    def emit_cpp_aot_source(self, name=None, hoist_reciprocals=False):
+    def emit_cpp_aot_source(self, name: Any = None, hoist_reciprocals: bool = False) -> Any:
         """Thin wrapper: delegates to pops.codegen.compile.emit_cpp_aot_source."""
         return _cg_compile().emit_cpp_aot_source(self, name=name, hoist_reciprocals=hoist_reciprocals)
 
-    def compile_aot(self, so_path, include=None, name=None, cxx=None, std="c++20",
-                    hoist_reciprocals=False):
+    def compile_aot(self, so_path: Any, include: Any = None, name: Any = None, cxx: Any = None,
+                    std: str = "c++20", hoist_reciprocals: bool = False) -> Any:
         """Thin wrapper: delegates to pops.codegen.compile.compile_aot."""
         return _cg_compile().compile_aot(self, so_path, include=include, name=name, cxx=cxx, std=std,
                                hoist_reciprocals=hoist_reciprocals)
 
-    def emit_cpp_native_loader(self, name=None, target="system", hoist_reciprocals=False):
+    def emit_cpp_native_loader(self, name: Any = None, target: str = "system",
+                               hoist_reciprocals: bool = False) -> Any:
         """Thin wrapper: delegates to pops.codegen.compile.emit_cpp_native_loader."""
         return _cg_compile().emit_cpp_native_loader(self, name=name, target=target,
                                           hoist_reciprocals=hoist_reciprocals)
 
-    def compile_native(self, so_path, include=None, name=None, cxx=None, std="c++23", target="system",
-                       hoist_reciprocals=False):
+    def compile_native(self, so_path: Any, include: Any = None, name: Any = None, cxx: Any = None,
+                       std: str = "c++23", target: str = "system",
+                       hoist_reciprocals: bool = False) -> Any:
         """Thin wrapper: delegates to pops.codegen.compile.compile_native."""
         return _cg_compile().compile_native(self, so_path, include=include, name=name, cxx=cxx, std=std,
                                   target=target, hoist_reciprocals=hoist_reciprocals)
 
-    def compile_or_jit(self, so_path, include=None, mode="jit", name=None, cxx=None, std="c++20",
-                       target="system", hoist_reciprocals=False):
+    def compile_or_jit(self, so_path: Any, include: Any = None, mode: str = "jit", name: Any = None,
+                       cxx: Any = None, std: str = "c++20", target: str = "system",
+                       hoist_reciprocals: bool = False) -> Any:
         """Thin wrapper: delegates to pops.codegen.compile.compile_or_jit."""
         return _cg_compile().compile_or_jit(self, so_path, include=include, mode=mode, name=name, cxx=cxx,
                                   std=std, target=target, hoist_reciprocals=hoist_reciprocals)
@@ -166,11 +178,11 @@ class _CodegenMixin:
     #                   To be wired via System.add_native_block (ABI key verified). This is the path
     #                   prepared for a real production backend (Kokkos/CUDA codegen = later PR).
 
-    def _model_hash(self, params=None):
+    def _model_hash(self, params: Any = None) -> Any:
         """Stable hash of the model; delegates to pops.codegen.compile.model_hash."""
         return _cg_compile().model_hash(self, params=params)
 
-    def _check_require_metadata(self, require_metadata, backend):
+    def _check_require_metadata(self, require_metadata: Any, backend: Any) -> None:
         """require_metadata guard rails (pure-Python, deterministic on the model + backend). Factored out
         to be called BEFORE the cache (in HyperbolicModel AND Model): a cache HIT must never
         mask a metadata requirement. Without require_metadata, no-op."""
@@ -195,8 +207,9 @@ class _CodegenMixin:
                 "would fall back to the System fallback (roles 'custom' / gamma 1.4)"
                 % (self.name, " nor ".join(missing)))
 
-    def compile(self, so_path=None, include=None, backend="auto", name=None, cxx=None, std=None,
-                require_metadata=False, target="system", hoist_reciprocals=False):
+    def compile(self, so_path: Any = None, include: Any = None, backend: str = "auto", name: Any = None,
+                cxx: Any = None, std: Any = None, require_metadata: bool = False, target: str = "system",
+                hoist_reciprocals: bool = False) -> Any:
         """Thin wrapper: delegates to pops.codegen.compile.compile_model."""
         return _cg_compile().compile_model(self, so_path=so_path, include=include, backend=backend,
                                  name=name, cxx=cxx, std=std,
@@ -204,14 +217,14 @@ class _CodegenMixin:
                                  hoist_reciprocals=hoist_reciprocals)
 
     @classmethod
-    def adder_for(cls, backend):
+    def adder_for(cls, backend: Any) -> Any:
         """Name of the System method to use to wire the .so produced by compile(backend=...):
         'add_dynamic_block' (prototype/JIT), 'add_compiled_block' (aot) or 'add_native_block'
         (production/native). Delegates to pops.codegen.compile.adder_for."""
         return _cg_compile().adder_for(backend)
 
-    def emit_cpp_elliptic(self, name=None, namespace="pops_generated", cse=True,
-                          hoist_reciprocals=False):
+    def emit_cpp_elliptic(self, name: Any = None, namespace: str = "pops_generated", cse: bool = True,
+                          hoist_reciprocals: bool = False) -> Any:
         """Generates a composable elliptic RIGHT-HAND SIDE BRICK from self._elliptic.
 
         The produced struct exposes rhs(U) -> Real (charge density, background, gravity...), same shape as
@@ -222,8 +235,8 @@ class _CodegenMixin:
         return _cg.emit_cpp_elliptic(self, name=name, namespace=namespace, cse=cse,
                                      hoist_reciprocals=hoist_reciprocals)
 
-    def emit_cpp_elliptic_field(self, field, struct_name, namespace="pops_generated",
-                                hoist_reciprocals=False, cse=True):
+    def emit_cpp_elliptic_field(self, field: Any, struct_name: Any, namespace: str = "pops_generated",
+                                hoist_reciprocals: bool = False, cse: bool = True) -> Any:
         """Generates a SELF-CONTAINED elliptic RHS brick for the NAMED field @p field (ADC-428).
 
         Unlike emit_cpp_elliptic (which emits only ``rhs(U)``, consumed by CompositeModel), this brick

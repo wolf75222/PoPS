@@ -10,10 +10,14 @@ the ``solvers.Newton`` / ``solvers.FixedPoint`` entries formerly parked under
 NOTE: the ``newton`` keyword of :mod:`pops.time` (the implicit time-stepper role) is a
 DIFFERENT object from :func:`Newton` here (a solver descriptor); they share no namespace.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import _planned
 
 
-def Newton(**options):
+def Newton(**options: Any) -> Any:
     """A planned Newton nonlinear solver descriptor (no native solver type yet; inert).
 
     Newton's iteration is realised by the implicit time-stepper kernel (pops.time), so there is
@@ -22,7 +26,7 @@ def Newton(**options):
     return _planned("newton", "newton", category="solver", **options)
 
 
-def FixedPoint(**options):
+def FixedPoint(**options: Any) -> Any:
     """A planned fixed-point (Picard) nonlinear solver descriptor (no native type yet; inert)."""
     return _planned("fixed_point", "fixed_point", category="solver", **options)
 

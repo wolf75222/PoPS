@@ -6,12 +6,15 @@ A catalog SimpleNamespace of MACRO ``BrickDescriptor``-style entries that forwar
 package (:mod:`pops.lib.time`'s ``forward_euler`` / ``ssprk2`` / ...), so this catalog ns is
 kept here as an internal artifact and is NOT re-exported as ``lib.time``.
 """
+from __future__ import annotations
+
 from types import SimpleNamespace
+from typing import Any
 
 
-def _time_macro(scheme_name):
+def _time_macro(scheme_name: Any) -> Any:
     """A macro brick that forwards to ``pops.lib.time.<scheme_name>``; builds IR only."""
-    def macro(P, block, *args, **kwargs):
+    def macro(P: Any, block: Any, *args: Any, **kwargs: Any) -> Any:
         from pops.lib import time as _libtime  # lazy: pops.lib.time is fully loaded at call time
         return getattr(_libtime, scheme_name)(P, block, *args, **kwargs)
     macro.__name__ = scheme_name

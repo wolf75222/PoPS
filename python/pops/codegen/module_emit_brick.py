@@ -7,6 +7,10 @@ satisfying the ``pops::HyperbolicModel`` concept; the OPTIONAL Riemann capabilit
 historical single-module form.
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 from pops.codegen.cpp_writer import (
     _collect_eig_witnesses,
     _eig_witness_helpers,
@@ -28,8 +32,8 @@ from pops.codegen.module_emit_riemann import (
 from pops.ir.expr import Const
 
 
-def emit_cpp_brick(model, name=None, namespace="pops_generated", cse=True,
-                   hoist_reciprocals=False):
+def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generated", cse: Any = True,
+                   hoist_reciprocals: Any = False) -> str:
     """Generates a C++ BRICK satisfying the pops::HyperbolicModel concept (wrapping : step
     2bis). The produced struct uses StateVec / Aux / POPS_HD / Variables and exposes flux,
     max_wave_speed, to_primitive, to_conservative, conservative_vars, primitive_vars : it can
@@ -56,21 +60,21 @@ def emit_cpp_brick(model, name=None, namespace="pops_generated", cse=True,
     nm = name or (model.name.capitalize() + "Gen")
     nc, npr = model.n_vars, len(model.prim_state)
 
-    def cons_locals():
+    def cons_locals() -> list:
         return ["    const pops::Real %s = U[%d];" % (c, i) for i, c in enumerate(model.cons_names)]
 
-    def prim_locals(live=None):
+    def prim_locals(live: Any = None) -> list:
         # FILTER on the live primitives (live) + OPT-IN hoist; without live, full output.
         return _prim_block(model, live, hoist_reciprocals)
 
-    def aux_locals():
+    def aux_locals() -> list:
         return model._aux_locals_lines()  # canonical (a.<n>) + named (a.extra_field(k)), ADC-70
 
     # Aux parameter named 'a' only if a formula reads an auxiliary field (canonical OR
     # named ; otherwise anonymous, so as not to trigger an unused-parameter warning).
     aux_param = "const Aux& a" if model._reads_aux() else "const Aux&"
 
-    def eig_reduce(cpps, ind):
+    def eig_reduce(cpps: Any, ind: Any) -> list:
         # cpps : C++ already generated (possibly CSE) for the eigenvalues. Internal names suffixed
         # '_' : they shadow neither a user variable nor the Aux parameter 'a' (see adversarial review).
         lines = ["%sconst pops::Real lam%d_ = %s;" % (ind, k, c) for k, c in enumerate(cpps)]
@@ -81,7 +85,7 @@ def emit_cpp_brick(model, name=None, namespace="pops_generated", cse=True,
         lines.append("%sreturn mws_;" % ind)
         return lines
 
-    def eig_minmax(cpps, ind):
+    def eig_minmax(cpps: Any, ind: Any) -> list:
         # signed wave speeds : smin = smallest, smax = largest eigenvalue (for
         # HLLC / Roe). Same internal names suffixed '_' as eig_reduce.
         lines = ["%sconst pops::Real lam%d_ = %s;" % (ind, k, c) for k, c in enumerate(cpps)]
@@ -91,7 +95,7 @@ def emit_cpp_brick(model, name=None, namespace="pops_generated", cse=True,
             lines.append("%sif (lam%d_ > smax) smax = lam%d_;" % (ind, k, k))
         return lines
 
-    def ws_jac_pieces(key):
+    def ws_jac_pieces(key: Any) -> tuple:
         # 'numeric' jacobian path : CSE of the NON-ZERO entries of the sub-blocks of
         # direction @p key ; the structural zeros (10 identity rows of a moment system,
         # arbitrary sparsity) are emitted as literals without going through the CSE.
@@ -114,7 +118,7 @@ def emit_cpp_brick(model, name=None, namespace="pops_generated", cse=True,
             fill.setdefault(bi, []).append((r, c, "pops::Real(0)"))
         return tl, fill
 
-    def ws_jac_body(ind, lo, hi, key="x", fill=None):
+    def ws_jac_body(ind: Any, lo: Any, hi: Any, key: Any = "x", fill: Any = None) -> list:
         # body of the jacobian computation -> extremes (@p lo/@p hi : destination names).
         # eig='fd' : column-wise jacobian by finite differences of the COMPILED flux ;
         # eig='numeric' : fill of the sub-blocks from @p fill. @p key : direction
@@ -160,7 +164,7 @@ def emit_cpp_brick(model, name=None, namespace="pops_generated", cse=True,
     # least one component has a recognized role (otherwise empty roles -> brick identical to history,
     # couplings fall back on the fallback indices). The roles let System
     # resolve inter-species couplings by index_of(role) instead of a literal index.
-    def roles_init(roles):
+    def roles_init(roles: Any) -> Any:
         if all(r == "Custom" for r in roles):
             return None  # no useful role : we do not emit the 4th field (strict back-compat)
         return ", ".join("pops::VariableRole::%s" % r for r in roles)
@@ -217,6 +221,7 @@ def emit_cpp_brick(model, name=None, namespace="pops_generated", cse=True,
 
     # in 'fd' jacobian mode WITHOUT eigenvalues, max_wave_speed calls flux(U, a, dir) : the
     # Aux parameter must be named even if no formula reads an aux.
+    ws_jac: Any = model._ws_jacobian
     jac_fd = model._ws_jacobian is not None and model._ws_jacobian["eig"] == "fd"
     mws_aux_param = "const Aux& a" if (jac_fd and not model._eig) else aux_param
     S.append("  POPS_HD pops::Real max_wave_speed(const State& U, %s, int dir) const {"
@@ -225,7 +230,7 @@ def emit_cpp_brick(model, name=None, namespace="pops_generated", cse=True,
         mws_drv = model._eig["x"] + model._eig["y"]
     elif model._wave_speeds is not None:
         mws_drv = list(model._wave_speeds["x"]) + list(model._wave_speeds["y"])
-    elif model._ws_jacobian["eig"] == "fd":
+    elif ws_jac["eig"] == "fd":
         mws_drv = []  # fd path: max_wave_speed calls flux(), no direct primitive
     else:
         mws_drv = _jac_entries(model)
@@ -256,10 +261,10 @@ def emit_cpp_brick(model, name=None, namespace="pops_generated", cse=True,
         # spectrum extremes (same blocks as wave_speeds : Rusanov and HLL share the
         # same truth).
         S.append("    pops::Real lo_ = pops::Real(0), hi_ = pops::Real(0);")
-        jac_same_blocks = model._ws_jacobian["blocks"]["x"] == model._ws_jacobian["blocks"]["y"]
-        if model._ws_jacobian["eig"] == "fd" and jac_same_blocks:
+        jac_same_blocks = ws_jac["blocks"]["x"] == ws_jac["blocks"]["y"]
+        if ws_jac["eig"] == "fd" and jac_same_blocks:
             S += ws_jac_body("    ", "lo_", "hi_")
-        elif model._ws_jacobian["eig"] == "fd":
+        elif ws_jac["eig"] == "fd":
             S.append("    if (dir == 0) {")
             S += ws_jac_body("      ", "lo_", "hi_", "x")
             S.append("    } else {")

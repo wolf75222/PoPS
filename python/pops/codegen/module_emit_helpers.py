@@ -11,6 +11,9 @@ _AUX_BASE_COMPS, _AUX_CANONICAL, _AUX_NAMED_BASE   -- aux channel constants
 _CANONICAL_ROLES, _role_of, _roles_for             -- role mirror (dsl.roles_for)
 _codegen_exprs, _live_prims, _prim_block, _jac_entries
 """
+from __future__ import annotations
+
+from typing import Any
 
 from pops.codegen.cpp_writer import (
     _cse_emit,
@@ -44,11 +47,11 @@ _CANONICAL_ROLES = {
 }
 
 
-def _role_of(name):
+def _role_of(name: Any) -> str:
     return _CANONICAL_ROLES.get(name, "Custom")
 
 
-def _roles_for(names, override=None):
+def _roles_for(names: Any, override: Any = None) -> list:
     """Roles list parallel to names -- local copy of dsl.roles_for."""
     if override is None:
         return [_role_of(nm) for nm in names]
@@ -61,7 +64,7 @@ def _roles_for(names, override=None):
 # Codegen-only helpers (used solely by the emit* functions)
 # ---------------------------------------------------------------------------
 
-def _codegen_exprs(model, exprs, cse, real="pops::Real", indent="    "):
+def _codegen_exprs(model: Any, exprs: Any, cse: Any, real: str = "pops::Real", indent: str = "    ") -> tuple:
     """(CSE local lines, [C++ per expr]). If cse, factor the common subexpressions
     (H, c...) into ``cseK_`` locals ; otherwise inline each expression via to_cpp."""
     if cse:
@@ -69,7 +72,7 @@ def _codegen_exprs(model, exprs, cse, real="pops::Real", indent="    "):
     return [], [e.to_cpp() for e in exprs]
 
 
-def _live_prims(model, exprs, seed=()):
+def _live_prims(model: Any, exprs: Any, seed: Any = ()) -> set:
     """Names of the primitives transitively referenced by @p exprs (and the @p seed names).
     Closure over prim_defs: a live primitive pulls in its own primitive dependencies.
     Used to emit in a method only the primitives actually used (dead-code elimination):
@@ -88,7 +91,7 @@ def _live_prims(model, exprs, seed=()):
     return live
 
 
-def _prim_block(model, live=None, hoist=False):
+def _prim_block(model: Any, live: Any = None, hoist: bool = False) -> list:
     """``const pops::Real <prim> = ...;`` lines of a method. @p live (default None = all):
     declares only the live primitives. @p hoist: hoists at the top the reciprocal of the
     recurring conservative denominators (>= 2 uses) and replaces those divisions by
@@ -108,7 +111,7 @@ def _prim_block(model, live=None, hoist=False):
     return lines
 
 
-def _jac_entries(model):
+def _jac_entries(model: Any) -> list:
     """Entries (Expr) of the Jacobian sub-blocks of both directions (wave_speeds 'numeric'
     path). Drives the dead-code elimination of max_wave_speed / wave_speeds."""
     ws = model._ws_jacobian

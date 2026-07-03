@@ -17,6 +17,10 @@ is the IR backing store and is imported lazily (``time`` is a heavy package, and
 import keeps the codegen layer free of a module-scope ``time`` edge). The C++ lowering lives
 in :mod:`pops.codegen.solvers.solver_cpp`.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import BrickDescriptor
 
 # This DSL is internal / experimental, not a stable public API (Spec 5 criterion 19).
@@ -34,7 +38,7 @@ _CUSTOM_SOLVERS = {}
 # @solver decorator
 # ---------------------------------------------------------------------------
 
-def solver(name=None, signature=None):
+def solver(name: Any = None, signature: Any = None) -> Any:
     """Register a custom solver written in the IR-authoring DSL (criterion 23).
 
     Decorates a builder ``f(ctx, *args)`` that AUTHORS a solver IR using the
@@ -54,7 +58,7 @@ def solver(name=None, signature=None):
     if signature is not None and not isinstance(signature, str):
         raise TypeError("@pops.codegen.solvers.solver signature= must be a string (e.g. '(A, b)')")
 
-    def decorate(builder):
+    def decorate(builder: Any) -> Any:
         if not callable(builder):
             raise TypeError("@pops.codegen.solvers.solver must decorate a callable builder; got %r"
                             % (builder,))
@@ -67,17 +71,17 @@ def solver(name=None, signature=None):
     return decorate
 
 
-def _custom_solver(name):
+def _custom_solver(name: Any) -> Any:
     """The registered custom-solver descriptor named @p name (KeyError if absent)."""
     return _CUSTOM_SOLVERS[name]
 
 
-def _registered_solvers():
+def _registered_solvers() -> list:
     """The names of the registered custom solvers (registration order)."""
     return list(_CUSTOM_SOLVERS)
 
 
-def _as_descriptor(solver_brick):
+def _as_descriptor(solver_brick: Any) -> Any:
     """Coerce a ``@pops.codegen.solvers.solver`` argument to its descriptor: accept the
     descriptor itself or a registered name. A non-generated/non-solver brick is rejected loud."""
     if isinstance(solver_brick, BrickDescriptor):
@@ -109,12 +113,12 @@ class SolverIR:
     raises rather than fake a Python solve.
     """
 
-    def __init__(self, descriptor, program, result):
+    def __init__(self, descriptor: Any, program: Any, result: Any) -> None:
         self.descriptor = descriptor
         self.program = program
         self.result = result
 
-    def nodes(self):
+    def nodes(self) -> list:
         """The IR value nodes the builder authored, including control-flow body ops.
 
         Walks the flat SSA list AND the recorded ``cond``/``body`` sub-blocks of ``while``
@@ -123,14 +127,14 @@ class SolverIR:
         _walk_nodes(self.program._values, out)
         return out
 
-    def op_kinds(self):
+    def op_kinds(self) -> set:
         """The set of op kinds present in the IR (e.g. ``norm2`` / ``apply`` / ``while``)."""
         kinds = set()
         for node in self.nodes():
             kinds.add(node.attrs.get("kind", node.op))
         return kinds
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "SolverIR(%r, nodes=%d)" % (self.descriptor.name, len(self.program._values))
 
 
@@ -148,21 +152,21 @@ class SolverContext:
     the residual ``r`` and the operator apply ``A(x)`` are IR values, not arrays.
     """
 
-    def __init__(self, program, block="solve"):
+    def __init__(self, program: Any, block: Any = "solve") -> None:
         self._p = program
         self._block = block
 
     # --- operands -----------------------------------------------------------
-    def unknown(self, name=None):
+    def unknown(self, name: Any = None) -> Any:
         """A fresh solver unknown (the iterate ``x`` / the rhs ``b``): a State IR value."""
         return self._p.state(self._block)
 
-    def zeros_like(self, value):
+    def zeros_like(self, value: Any) -> Any:
         """A zero-initialized iterate over the same block as @p value (the warm start)."""
         _require_field(value, "zeros_like")
         return self._p.state(value.block or self._block)
 
-    def scalar_int(self, n):
+    def scalar_int(self, n: Any) -> Any:
         """A COMPILE-TIME integer literal as a Scalar IR value (a loop count / index). It
         is an IR node, never a live Python counter the loop mutates."""
         if isinstance(n, bool) or not isinstance(n, int):
@@ -170,27 +174,27 @@ class SolverContext:
         return self._p._scalar_binop(float(n), 0.0, "add")
 
     # --- reductions ---------------------------------------------------------
-    def norm2(self, x):
+    def norm2(self, x: Any) -> Any:
         """The Euclidean norm ``||x||_2`` as a Scalar IR value (a collective reduction)."""
         return self._p.norm2(x)
 
-    def dot(self, a, b):
+    def dot(self, a: Any, b: Any) -> Any:
         """The inner product ``<a, b>`` as a Scalar IR value (a collective reduction)."""
         return self._p.dot(a, b)
 
     # --- operator apply / residual ------------------------------------------
-    def apply(self, operator, x):
+    def apply(self, operator: Any, x: Any) -> Any:
         """Apply the matrix-free operator ``A(x)`` as an IR node (an RHS-like value)."""
         if not (hasattr(x, "vtype") and x.vtype == "state"):
             raise TypeError("apply: x must be a State IR value")
         return self._p._apply(operator=_operator_name(operator), state=x)
 
-    def residual(self, operator, x, b):
+    def residual(self, operator: Any, x: Any, b: Any) -> Any:
         """The residual ``r = b - A(x)`` as an affine IR combine (no Python math)."""
         ax = self.apply(operator, x)
         return self._p.linear_combine(expr=b - ax)
 
-    def combine(self, expr):
+    def combine(self, expr: Any) -> Any:
         """Materialize an affine IR expression (e.g. ``x + omega*r``) into a State IR node.
 
         The affine ``x + omega*r`` is a deferred IR expression; this records it as one
@@ -199,7 +203,7 @@ class SolverContext:
         return self._p.linear_combine(expr=expr)
 
     # --- predicates ---------------------------------------------------------
-    def logical_and(self, a, b):
+    def logical_and(self, a: Any, b: Any) -> Any:
         """The conjunction of two Bool predicates as a Bool IR node (re-evaluated each
         loop pass). Builds an ``and`` node; it never short-circuits in Python."""
         for nm, val in (("a", a), ("b", b)):
@@ -208,7 +212,7 @@ class SolverContext:
         return self._p._new("bool", "logical_and", (a, b), {}, None, a.block)
 
     # --- control flow -------------------------------------------------------
-    def while_(self, cond_fn):
+    def while_(self, cond_fn: Any) -> Any:
         """A convergence loop as a context manager: ``with ctx.while_(cond_fn):`` records the
         loop body, then RE-EVALUATES the convergence predicate against the loop-updated
         iterate and emits one IR ``while`` node owning both blocks.
@@ -243,18 +247,18 @@ class _SolverWhile:
     The blocks are re-emitted inside the generated C++ loop; they are never replayed in
     Python."""
 
-    def __init__(self, program, cond_fn, block):
+    def __init__(self, program: Any, cond_fn: Any, block: Any) -> None:
         self._p = program
         self._cond_fn = cond_fn
         self._block = block
         self._body = None
 
-    def __enter__(self):
+    def __enter__(self) -> Any:
         self._body = []
         self._p._recording.append(self._body)
         return self
 
-    def __exit__(self, exc_type, exc, tb):
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
         self._p._recording.pop()
         if exc_type is not None:
             return False
@@ -279,7 +283,7 @@ class _SolverWhile:
 # build_solver_ir
 # ---------------------------------------------------------------------------
 
-def build_solver_ir(solver_brick):
+def build_solver_ir(solver_brick: Any) -> SolverIR:
     """Run a custom-solver builder to AUTHOR its IR (no Python numerics).
 
     @p solver_brick is a ``@pops.codegen.solvers.solver`` descriptor (or its registered name). The
@@ -297,7 +301,8 @@ def build_solver_ir(solver_brick):
     # State IR node so the solution is always a recorded value, never a deferred Python expr.
     if not (hasattr(result, "vtype")) and result is not None:
         result = ctx.combine(result)
-    if not (hasattr(result, "vtype") and result.vtype == "state"):
+    checked: Any = result
+    if not (hasattr(checked, "vtype") and checked.vtype == "state"):
         raise ValueError("a custom solver builder must return the solution State IR value; "
                          "got %r" % (result,))
     return SolverIR(desc, program, result)
@@ -317,7 +322,7 @@ _SOLVER_MAX_ITERS = 1000000
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _walk_nodes(values, out):
+def _walk_nodes(values: Any, out: Any) -> None:
     """Append @p values and any ops recorded in their ``while`` cond/body sub-blocks to @p
     out, depth-first in build order (a loop's cond and body blocks are owned by its op, not
     the flat list). The cond block is walked too so the re-evaluated convergence predicate's
@@ -331,12 +336,12 @@ def _walk_nodes(values, out):
                 _walk_nodes(block, out)
 
 
-def _require_field(value, where):
+def _require_field(value: Any, where: Any) -> None:
     if not (hasattr(value, "is_field") and value.is_field()):
         raise TypeError("%s: a State/RHS IR value is required; got %r" % (where, value))
 
 
-def _operator_name(operator):
+def _operator_name(operator: Any) -> Any:
     """The linear-source name of a matrix-free operator IR value (or a bare string)."""
     if isinstance(operator, str):
         return operator

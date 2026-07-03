@@ -5,9 +5,12 @@ Factored out of :mod:`pops.time.program_core` (file-size budget): the transforma
 (no Program state), so it lives as a module function. The ``pops.numerics`` / ``pops.model``
 imports stay function-local so this module adds no module-scope edge to the time package.
 """
+from __future__ import annotations
+
+from typing import Any
 
 
-def terms_to_flux_sources(terms):
+def terms_to_flux_sources(terms: Any) -> Any:
     """Lower a typed ``terms=[...]`` list onto the legacy ``(flux, sources)``.
 
     A :class:`pops.numerics.terms.Flux` sets ``flux=True`` (its absence -> ``flux=False``); every

@@ -7,9 +7,12 @@ can read. It runs NO numerics and touches no runtime -- it is metadata only. It 
 ``pops.inspect_capabilities()`` / ``pops.inspect_amr()`` (those build the native capability matrix
 from the C++ core); this one is the per-object introspection entry point.
 """
+from __future__ import annotations
+
+from typing import Any
 
 
-def inspect(obj):
+def inspect(obj: Any) -> Any:
     """Return a stable, serialisable ``dict`` view of @p obj (descriptor / Problem / report).
 
     The ONE explicit dict bridge (ADC-564): it dispatches to ``obj.inspect()`` and, when that returns
@@ -19,22 +22,22 @@ def inspect(obj):
     already returns a dict passes through unchanged. Falls back to the protocol members / a
     ``to_dict()`` / repr view when the object exposes no ``inspect``. Never runs numerics.
     """
-    own = getattr(obj, "inspect", None)
+    own: Any = getattr(obj, "inspect", None)
     if callable(own):
-        result = own()
+        result: Any = own()
         to_dict = getattr(result, "to_dict", None)
         return to_dict() if callable(to_dict) else result
-    to_dict = getattr(obj, "to_dict", None)
+    to_dict: Any = getattr(obj, "to_dict", None)
     if callable(to_dict):
         return to_dict()
-    record = {}
+    record: dict = {}
     for member in ("name", "category", "native_id"):
         if hasattr(obj, member):
             record[member] = getattr(obj, member)
     for method in ("options", "requirements", "capabilities"):
-        fn = getattr(obj, method, None)
+        fn: Any = getattr(obj, method, None)
         if callable(fn):
-            value = fn()
+            value: Any = fn()
             record[method] = dict(value) if hasattr(value, "keys") else value
     if not record:
         return {"repr": repr(obj)}

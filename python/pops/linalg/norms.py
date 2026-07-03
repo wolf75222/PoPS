@@ -5,6 +5,8 @@ Spec 5 names a norm with a TYPED object, not the string ``norm="l2"``. :class:`L
 solver tolerance, ``pops.diagnostics.Norm(L2(), ...)``, a convergence test) references to say
 WHICH norm to take. They compute nothing; the runtime evaluates the norm.
 """
+from __future__ import annotations
+
 from pops.descriptors import Descriptor
 
 
@@ -15,7 +17,7 @@ class _Norm(Descriptor):
     #: The native / IR tag for this norm (``"l1"`` / ``"l2"`` / ``"linf"``).
     kind = None
 
-    def options(self):
+    def options(self) -> dict:
         return {"kind": self.kind}
 
 

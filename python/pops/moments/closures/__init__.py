@@ -8,13 +8,16 @@ Public surface:
   gaussian_closure -- the generic Gaussian / Levermore closure (provided).
   HyQMOM15Closure  -- the order-4 HyQMOM closure (Levermore variant) for vlasov_poisson.
 """
+from __future__ import annotations
+
 import functools
+from typing import Any
 
 from .protocol import Closure, MomentClosure
 from .gaussian import gaussian_closure
 
 
-def closure(order):
+def closure(order: Any) -> Any:
     """Decorate a moment closure, validating its returned keys against the order (criterion).
 
     A closure for a model of order ``order`` must return EXACTLY the keys ``S{p}{q}`` with
@@ -30,12 +33,12 @@ def closure(order):
         raise ValueError("@closure(order): order must be an int >= 2 (got %r)" % (order,))
     want = {"S%d%d" % (p, order + 1 - p) for p in range(order + 2)}
 
-    def decorate(fn):
+    def decorate(fn: Any) -> Any:
         if not callable(fn):
             raise TypeError("@closure must decorate a callable closure; got %r" % (fn,))
 
         @functools.wraps(fn)
-        def wrapped(S):  # noqa: N803  (S mirrors the engine variable name)
+        def wrapped(S: Any) -> Any:  # noqa: N803  (S mirrors the engine variable name)
             out = fn(S)
             if not isinstance(out, dict) or set(out) != want:
                 raise TypeError(
@@ -44,7 +47,7 @@ def closure(order):
                        sorted(out) if isinstance(out, dict) else type(out).__name__))
             return out
 
-        wrapped.order = order
+        wrapped.order = order  # type: ignore[attr-defined]
         return wrapped
 
     return decorate

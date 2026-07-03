@@ -5,6 +5,9 @@ central-moment dict and ``S`` standardized-moment dict): RAW raw moments M_pq,
 CENTRAL central moments C_pq, STANDARDIZED standardized moments S_pq. It documents
 the engine's internal transforms; it computes nothing.
 """
+from __future__ import annotations
+
+from typing import Any
 
 from .ordering import MomentOrdering
 
@@ -22,7 +25,7 @@ class MomentBasis:
     STANDARDIZED = "standardized"
     _KINDS = (RAW, CENTRAL, STANDARDIZED)
 
-    def __init__(self, order, kind=RAW, ordering=None):
+    def __init__(self, order: Any, kind: Any = RAW, ordering: Any = None) -> None:
         if order < 2:
             raise ValueError("MomentBasis: order >= 2 required (got %r)" % (order,))
         if kind not in MomentBasis._KINDS:
@@ -32,12 +35,12 @@ class MomentBasis:
         self.kind = kind
         self.ordering = ordering or MomentOrdering()
 
-    def names(self):
+    def names(self) -> Any:
         """The moment names of this basis at its order (``M{p}{q}`` for the RAW basis)."""
         from .model_builder import moment_names
         return moment_names(self.order)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "MomentBasis(order=%d, kind=%r)" % (self.order, self.kind)
 
 

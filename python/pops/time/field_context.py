@@ -7,6 +7,9 @@ identifiable and a cross-stage / cross-block read fails loud instead of silently
 solve. It mirrors the C++ ``pops::FieldContext`` (include/pops/runtime/context/field_context.hpp):
 a validity token, not a container -- it holds no field data and changes no numerics.
 """
+from __future__ import annotations
+
+from typing import Any
 
 # The default single field problem's name (the shared Poisson coupling). A named elliptic field
 # uses its own name; ``None`` here means "the default phi solve". Kept as the reserved sentinel the
@@ -31,13 +34,14 @@ class FieldContext:
 
     __slots__ = ("field_problem", "block", "stage_source", "outputs")
 
-    def __init__(self, field_problem, block, stage_source, outputs=()):
+    def __init__(self, field_problem: Any, block: Any, stage_source: Any,
+                 outputs: Any = ()) -> None:
         self.field_problem = field_problem or DEFAULT_FIELD_PROBLEM
         self.block = block
         self.stage_source = stage_source
         self.outputs = tuple(outputs)
 
-    def matches(self, field_problem, block, stage_source):
+    def matches(self, field_problem: Any, block: Any, stage_source: Any) -> Any:
         """True when this context was produced by exactly the requested triple.
 
         A ``None`` ``field_problem`` matches any problem (the default single-field case), mirroring
@@ -46,7 +50,7 @@ class FieldContext:
         return ((field_problem is None or self.field_problem == field_problem)
                 and self.block == block and self.stage_source == stage_source)
 
-    def require_read(self, field_problem, block, stage_source):
+    def require_read(self, field_problem: Any, block: Any, stage_source: Any) -> Any:
         """Assert a downstream read targets THIS solve, else raise a structured error naming the
         field problem, the block and the stage that mismatched (the ADC-588 incompatible-context
         contract). Returns ``self`` so it composes in an expression.
@@ -59,7 +63,7 @@ class FieldContext:
                    field_problem, block, stage_source))
         return self
 
-    def output(self, handle):
+    def output(self, handle: Any) -> Any:
         """Resolve an output handle, raising a structured error listing the known outputs when the
         handle is unknown (never a silent miss). The default problem exposes ``phi`` /
         ``grad_x`` / ``grad_y``; a named field exposes the handles its problem declared.
@@ -70,6 +74,6 @@ class FieldContext:
             "unknown field output %r of problem %r; known outputs: %s"
             % (handle, self.field_problem, list(self.outputs)))
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return ("FieldContext(field_problem=%r, block=%r, stage_source=%r, outputs=%r)"
                 % (self.field_problem, self.block, self.stage_source, self.outputs))

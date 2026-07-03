@@ -2,11 +2,20 @@
 
 Krylov solve_linear, histories, commits, board sugar (fields/define/solve) and records.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from pops.time.program_base import _ProgramConstants
 from pops.time.values import StageStateSet, Value, _Affine, _is_field_value, _resolve_handle
 
+if TYPE_CHECKING:
+    from pops.time._program_contract import _ProgramBase
+else:
+    _ProgramBase = object
 
-def _lower_krylov_method(method):
+
+def _lower_krylov_method(method: Any) -> Any:
     """Lower a typed Krylov descriptor to its internal scheme token (Spec 5 sec.7).
 
     ``method`` is a :mod:`pops.solvers.krylov` descriptor (``CG()`` / ``GMRES()`` /
@@ -44,7 +53,7 @@ def _lower_krylov_method(method):
 _WIRED_PRECOND_SCHEMES = frozenset({"identity", "geometric_mg"})
 
 
-def _lower_preconditioner(preconditioner):
+def _lower_preconditioner(preconditioner: Any) -> Any:
     """Lower a typed preconditioner descriptor to its scheme token (Spec 5 sec.7).
 
     ``preconditioner`` is a :mod:`pops.solvers.preconditioners` descriptor
@@ -75,17 +84,18 @@ def _lower_preconditioner(preconditioner):
     return scheme
 
 
-def _preconditioners():
+def _preconditioners() -> Any:
     """The pops.solvers.preconditioners catalog (imported lazily)."""
     from pops.solvers import preconditioners
     return preconditioners
 
 
-class _ProgramSolve(_ProgramConstants):
+class _ProgramSolve(_ProgramConstants, _ProgramBase):
     """Krylov solve_linear, histories, commits, board sugar (fields/define/solve) and records."""
 
-    def solve_linear(self, name=None, operator=None, rhs=None, initial_guess=None, method=None,
-                     preconditioner=None, tol=1e-8, max_iter=None, restart=None):
+    def solve_linear(self, name: Any = None, operator: Any = None, rhs: Any = None,
+                     initial_guess: Any = None, method: Any = None, preconditioner: Any = None,
+                     tol: Any = 1e-8, max_iter: Any = None, restart: Any = None) -> Any:
         """Solve the matrix-free linear system ``operator x = rhs`` with the runtime's Krylov loop and
         return the solution as a scalar_field. The iteration is DYNAMIC (C++-side, inside the loop):
         the IR only carries the operator (its apply lambda), the rhs, the initial guess, and the
@@ -163,14 +173,17 @@ class _ProgramSolve(_ProgramConstants):
             raise ValueError("solve_linear: restart only applies to method='gmres' (got method=%r)"
                              % (method,))
         inputs = (operator, rhs) if initial_guess is None else (operator, rhs, initial_guess)
+        # restart is a positive int on the gmres path (validated above); the None union member the
+        # checker infers is from the non-gmres branch, which takes the else arm of the ternary.
+        restart_int = int(restart) if method == "gmres" else None  # pyright: ignore[reportArgumentType]
         return self._new("scalar_field", "solve_linear", inputs,
                          {"method": method, "preconditioner": preconditioner, "tol": float(tol),
                           "max_iter": int(max_iter), "has_guess": initial_guess is not None,
                           "ncomp": op_ncomp,
-                          "restart": int(restart) if method == "gmres" else None}, name, rhs.block)
+                          "restart": restart_int}, name, rhs.block)
 
     # --- multistep histories (ADC-406a) ---
-    def history(self, name, lag=1):
+    def history(self, name: Any, lag: Any = 1) -> Any:
         """Read a SYSTEM-OWNED history field carried across macro-steps: the value stored @p lag steps
         back (e.g. ``P.history("plasma.R", lag=1)`` is R_{n-1} for Adams-Bashforth). Returns a
         State-typed value usable in the affine algebra. The history is owned by the System (a
@@ -184,7 +197,7 @@ class _ProgramSolve(_ProgramConstants):
         self._histories[name] = max(self._histories.get(name, 0), lag)
         return self._new("state", "history", (), {"history": name, "lag": int(lag)}, name, None)
 
-    def store_history(self, name, value):
+    def store_history(self, name: Any, value: Any) -> Any:
         """Store @p value (a State/RHS field) into the CURRENT slot of history @p name at the end of the
         step (rotated to lag 1 on the next step). A multistep scheme stores its current RHS so the next
         step can read it back via `history`. The history is System-owned; this is a side-effecting op
@@ -198,7 +211,8 @@ class _ProgramSolve(_ProgramConstants):
         self._histories.setdefault(name, 1)
         return self._new("state", "store_history", (value,), {"history": name}, name, value.block)
 
-    def keep_history(self, timestate, depth, cold_start=None, checkpoint_policy=None):
+    def keep_history(self, timestate: Any, depth: Any, cold_start: Any = None,
+                     checkpoint_policy: Any = None) -> Any:
         """Keep a ring of past states for a :class:`pops.time.handles.TimeState` (Spec 5 sec.5.3.1).
 
         Records the ring ``depth`` and the ``cold_start`` policy on the handle and lowers a
@@ -221,7 +235,7 @@ class _ProgramSolve(_ProgramConstants):
             raise ValueError("keep_history: the TimeState belongs to a different Program")
         return timestate._keep_history(depth, cold_start, checkpoint_policy)
 
-    def commit(self, block, state=None):
+    def commit(self, block: Any, state: Any = None) -> Any:
         """Replace the current state of ``block`` with ``state`` at the end of the step. Each block
         is committed AT MOST once; read-only blocks need no commit.
 
@@ -248,24 +262,25 @@ class _ProgramSolve(_ProgramConstants):
             raise ValueError("block '%s' committed more than once" % block)
         self._commits[block] = state
 
-    def commits(self):
+    def commits(self) -> Any:
         """Map of committed block -> committed State value (copy)."""
         return dict(self._commits)
 
     # --- board-like sugar (Spec 3): T.define / T.fields / T.solve / T.commit_many ---
     # These lower to the SAME primitive ops as the P.call / linear_combine /
     # solve_local_linear / commit style; they are blackboard notation, not a new IR.
-    def op(self, name):
+    def op(self, name: Any) -> Any:
         """Return a callable board handle for a bound operator: ``expl = P.op("explicit_rate")``
         then ``expl(U, fields)`` builds the same IR as ``P.call(rate_handle, U, fields)``. The
         board handle names the operator at creation (``P.op(name)``), so its call lowers through the
         INTERNAL ``P._call`` -- the name is an internal selector, not the public handle-only path."""
-        def _handle(*args, value_name=None):
+        def _handle(*args: Any, value_name: Any = None) -> Any:
             return self._call(name, *args, name=value_name)
         _handle.__name__ = str(name)
         return _handle
 
-    def fields(self, name, from_state=None, from_states=None, from_state_set=None, operator=None):
+    def fields(self, name: Any, from_state: Any = None, from_states: Any = None,
+               from_state_set: Any = None, operator: Any = None) -> Any:
         """Board sugar for a field solve. Lowers through the internal ``P._call(operator, ...)`` when
         a named operator is bound, else to ``P.solve_fields`` (single state) or
         ``P.solve_fields_from_blocks`` (the board names the operator here; ``_call`` is the internal
@@ -287,7 +302,7 @@ class _ProgramSolve(_ProgramConstants):
             return self._call(operator, *states, name=name)
         return self.solve_fields_from_blocks(states, name=name)
 
-    def value(self, name, expr):
+    def value(self, name: Any, expr: Any) -> Any:
         """Name an intermediate SSA value ``name`` from ``expr`` (ADC-561: the short named-value form).
 
         The lightweight spelling of the free-value case of :meth:`define`::
@@ -316,7 +331,7 @@ class _ProgramSolve(_ProgramConstants):
             raise ValueError("T.value: name must be a non-empty string")
         return self.define(name, expr)
 
-    def define(self, name, value=None):
+    def define(self, name: Any, value: Any = None) -> Any:
         """Board sugar to name a value, or lower a typed temporal-version handle (Spec 5 sec.5.3.1).
 
         Two forms (additive; the ``(name, value)`` board form is unchanged):
@@ -361,7 +376,7 @@ class _ProgramSolve(_ProgramConstants):
             "define(%r): expected a Value, an affine combination, or a rate equation; got %r"
             % (name, value))
 
-    def solve(self, name, equation):
+    def solve(self, name: Any, equation: Any) -> Any:
         """Board sugar for an implicit local solve ``(I -/+ a*L) @ unknown("x") == rhs``.
 
         Lowers to ``linear_combine`` (if the rhs is an affine combination) then
@@ -380,7 +395,7 @@ class _ProgramSolve(_ProgramConstants):
                              % (name,))
         return self.solve_local_linear(name=name, operator=lhs.operator, rhs=rhs)
 
-    def commit_many(self, mapping, fields=None):
+    def commit_many(self, mapping: Any, fields: Any = None) -> Any:
         """Atomically commit several coupled blocks (Spec 3). ALL entries are validated before any
         commit, so a partial or double commit of a coupled group is rejected as a unit and no block
         is left half-committed. ``fields`` (optional) is validated as a coherent FieldContext but is
@@ -400,11 +415,11 @@ class _ProgramSolve(_ProgramConstants):
         for block, state in mapping.items():
             self._commits[block] = state
 
-    def state_set(self, name, mapping):
+    def state_set(self, name: Any, mapping: Any) -> Any:
         """Build a :class:`StageStateSet` -- a coherent set of stage states for a field solve."""
         return StageStateSet(name, mapping)
 
-    def record(self, name, value):
+    def record(self, name: Any, value: Any) -> Any:
         """Record a scalar diagnostic (board sugar over :meth:`record_scalar`).
 
         ``value`` is a Program scalar -- a reduction result such as ``P.sum(U)`` or
@@ -417,7 +432,8 @@ class _ProgramSolve(_ProgramConstants):
                 % (name, value))
         return self.record_scalar(name, value)
 
-    def check_invariant(self, name, before=None, after=None, tolerance=1e-10):
+    def check_invariant(self, name: Any, before: Any = None, after: Any = None,
+                        tolerance: Any = 1e-10) -> Any:
         """Record the drift of a generic invariant between two stages (board diagnostic).
 
         ``before`` / ``after`` are Program scalars (reduction results); the recorded

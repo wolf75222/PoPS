@@ -12,6 +12,10 @@ The model-coefficient per-cell kernels (source / flux / apply / local solves) li
 Krylov emitters in ``program_emit_solve``.  ``program_codegen`` re-imports every name so
 its public surface is unchanged.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.time.values import Value, _to_affine  # noqa: F401
 
 # Emission-only op tables (formerly Program class constants; the lowering owns them).
@@ -47,7 +51,7 @@ _SCHUR_PROGRAM_INCLUDE = ("#include <pops/coupling/schur/program/condensed_schur
                           "  // native condensed-Schur / Lorentz operator (ADC-587)\n")
 
 
-def _needs_schur_program_header(program):
+def _needs_schur_program_header(program: Any) -> bool:
     """True iff @p program's IR lowers to the native condensed-Schur / Lorentz operator module -- a
     flat op in _SCHUR_PROGRAM_OPS, OR a solve_linear that requests the geometric_mg preconditioner
     (its GeometricMgPreconditioner also lives in that header, ADC-587). Sub-block ops (a matrix-free
@@ -61,14 +65,14 @@ def _needs_schur_program_header(program):
     return False
 
 
-def _schur_include(program):
+def _schur_include(program: Any) -> str:
     """The condensed-Schur operator #include for @p program's generated .so, or "" when it carries no
     Schur op (ADC-587): a Schur-free Program's source must not include coupling/schur/**."""
     return _SCHUR_PROGRAM_INCLUDE if _needs_schur_program_header(program) else ""
 
 
 # --- module-level emission helpers (per-cell kernels, coeff rendering, the .so template) ---
-def _deref(tok):
+def _deref(tok: Any) -> Any:
     """C++ MultiFab-lvalue argument for a top-level (step-body) field token. Every top-level token is
     already a MultiFab lvalue expression: a state / RHS scratch (``u5``, ``r5``), a history (``h5``) or
     a dereferenced scratch scalar field (``(*sf5)``). The step-body laplacian / gradient / divergence /
@@ -77,7 +81,7 @@ def _deref(tok):
     return tok
 
 
-def _apply_in_arg(sub, value):
+def _apply_in_arg(sub: Any, value: Any) -> str:
     """C++ argument for the INPUT field of a laplacian / gradient inside an apply lambda. When the input
     is the lambda's ``in`` (a const&), const_cast it (ctx.laplacian / gradient take a non-const MultiFab&
     and only write the ghosts, never the valid cells -- the same contract test_generic_krylov relies on);
@@ -88,7 +92,7 @@ def _apply_in_arg(sub, value):
     return "*%s" % tok
 
 
-def _emit_field_combine(result, target, sub, acc):
+def _emit_field_combine(result: Any, target: Any, sub: Any, acc: Any) -> list:
     """Emit C++ writing the affine combination @p result into the field @p target (a C++ MultiFab token,
     e.g. ``out``). Mirrors the linear_combine commit: zero the PERSISTENT accumulator @p acc (a scratch
     shared_ptr allocated once at install time -- no per-call/per-iteration allocation), accumulate the
@@ -114,7 +118,7 @@ def _emit_field_combine(result, target, sub, acc):
     return lines
 
 
-def _coeff_cpp(powers):
+def _coeff_cpp(powers: Any) -> str:
     """Render a dt-polynomial coefficient (``power -> float`` dict) as a C++ ``pops::Real`` expression
     in the closure's ``dt`` parameter: ``{1: 1.0}`` -> ``static_cast<pops::Real>(dt)``,
     ``{1: 0.5}`` -> ``static_cast<pops::Real>(0.5 * dt)``, ``{0: 2.0}`` ->
@@ -136,13 +140,13 @@ def _coeff_cpp(powers):
 # and the existing numerics (pops::detail::mat_inverse). A device kernel must stay heap-free /
 # allocation-free: only stack scalars + fixed-size arrays, no std::vector / std::function / Eigen.
 
-def _model_impl(model):
+def _model_impl(model: Any) -> Any:
     """The underlying HyperbolicModel carrying the symbolic coefficients: the public pops.dsl.Model
     wraps it as ``_m``; a HyperbolicModel is already itself."""
     return getattr(model, "_m", model)
 
 
-def _named_fluxes(v):
+def _named_fluxes(v: Any) -> Any:
     """Resolve a ``rhs`` op's ``fluxes`` attr to the list of NAMED fluxes to assemble (ADC-419), or
     ``None`` for the historical default flux path (``ctx.rhs_into`` -- byte-identical -div F). ``None``
     or ``["default"]`` -> default path; a list of named fluxes -> that list. Mixing ``"default"`` with
@@ -159,7 +163,7 @@ def _named_fluxes(v):
     return named
 
 
-def _aux_comp(impl, name):
+def _aux_comp(impl: Any, name: Any) -> int:
     """Component index of an aux field @p name in the System aux channel: canonical (dsl.AUX_CANONICAL)
     or a model NAMED aux field (dsl.AUX_NAMED_BASE + position in aux_extra_names). @p impl is the
     HyperbolicModel."""
@@ -174,7 +178,7 @@ def _aux_comp(impl, name):
         "(%s); cannot map it to an aux component" % (name, sorted(AUX_CANONICAL), extra))
 
 
-def _has_runtime_param(exprs):
+def _has_runtime_param(exprs: Any) -> bool:
     """True if any of @p exprs reads a RUNTIME parameter (a RuntimeParamRef anywhere in the tree).
     A runtime-param read lowers to ``params.get(<index>)``; the kernel binds a ``params`` local from
     ``ctx.program_params(<block>)`` (ADC-510) so a compiled time Program reads the CURRENT value
@@ -190,7 +194,7 @@ def _has_runtime_param(exprs):
     return False
 
 
-def _cell_locals(impl, exprs, state_var, *, with_cons, with_prim):
+def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_prim: Any) -> list:
     """C++ local declarations binding the names the @p exprs reference to per-cell values:
       - aux fields -> ``const pops::Real <name> = auxA(i, j, <comp>);`` (always, by dependency);
       - conservative vars -> ``const pops::Real <name> = <state>A(i, j, <idx>);`` (when @p with_cons);
@@ -225,7 +229,7 @@ def _cell_locals(impl, exprs, state_var, *, with_cons, with_prim):
     return lines
 
 
-def _kernel_open(out_var, state_var, params_block=None):
+def _kernel_open(out_var: Any, state_var: Any, params_block: Any = None) -> list:
     """Open the per-fab loop + per-cell for_each_cell over the VALID cells of @p out_var, binding the
     write handle ``outA``, the read state handle ``<state_var>A`` and the aux read handle ``auxA``.
 
@@ -256,7 +260,7 @@ def _kernel_open(out_var, state_var, params_block=None):
     return lines
 
 
-def _kernel_close():
+def _kernel_close() -> list:
     return ["  });", "}"]
 
 
@@ -269,7 +273,7 @@ def _kernel_close():
 # states / scalar_fields, so fab(li) is the same box on every rank.
 
 
-def _emit_cell_compare_kernel(field_var, mask_var, cmp, value):
+def _emit_cell_compare_kernel(field_var: Any, mask_var: Any, cmp: Any, value: Any) -> list:
     """Lower ``cell_compare``: maskA(i,j,0) = fieldA(i,j,0) <cmp> value ? 1 : 0 over the valid cells of
     the 1-component mask. Reads component 0 of @p field_var; writes the 0/1 mask into @p mask_var."""
     return [
@@ -284,7 +288,7 @@ def _emit_cell_compare_kernel(field_var, mask_var, cmp, value):
     ]
 
 
-def _emit_where_kernel(mask_var, a_var, b_var, out_var):
+def _emit_where_kernel(mask_var: Any, a_var: Any, b_var: Any, out_var: Any) -> list:
     """Lower ``where``: outA(i,j,c) = maskA(i,j,mc) != 0 ? aA(i,j,c) : bA(i,j,c) COMPONENT-WISE over the
     valid cells of @p out_var (out's runtime ncomp). The mask component mc is 0 when the mask is
     1-component (a shared mask) and c when the mask has the SAME ncomp as a/b (a per-component mask) --

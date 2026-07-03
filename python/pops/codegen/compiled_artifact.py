@@ -10,7 +10,9 @@ Annotating with ``CompiledArtifact`` (not ``CompiledProblem``) keeps the front d
 callers depend on the inspectable contract, not on the concrete loader class that also carries
 the bind / install machinery.
 """
-from typing import Protocol, runtime_checkable
+from __future__ import annotations
+
+from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -28,15 +30,15 @@ class CompiledArtifact(Protocol):
         """Path to the compiled ``.so`` artifact on disk."""
         ...
 
-    def inspect(self):
+    def inspect(self) -> Any:
         """A printable :class:`pops.codegen.inspect_report.CompiledReport` of this artifact."""
         ...
 
-    def requirements(self):
+    def requirements(self) -> Any:
         """The compile-time :class:`pops.codegen.inspect_report.RequirementsReport`."""
         ...
 
-    def manifest(self):
+    def manifest(self) -> Any:
         """The rich :class:`pops.external.CompiledArtifactManifest` self-description (ADC-536).
 
         The ABI identity, blocks / variables / roles, required aux, const / runtime params, per-block
@@ -44,14 +46,14 @@ class CompiledArtifact(Protocol):
         the ``.so`` safely. Metadata-only (no bind / dlopen)."""
         ...
 
-    def arguments(self):
+    def arguments(self) -> Any:
         """The runtime inputs the artifact expects at bind (ADC-536).
 
         An :class:`pops.codegen.inspect_compiled.Arguments` listing the instances / params / aux /
         solvers / outputs and runtime layout to SUPPLY at :func:`pops.bind`. Metadata-only."""
         ...
 
-    def capability_matrix(self):
+    def capability_matrix(self) -> Any:
         """The ADC-549 native route matrix for this artifact (ADC-536).
 
         The route support columns (feature / layout / backend / platform / MPI / GPU / status /

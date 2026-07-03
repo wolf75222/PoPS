@@ -6,6 +6,8 @@ no native symbol yet (a generated brick or a planned native type).
 Spec 5 (sec.4) homes these post-step projection bricks under ``pops.numerics`` (formerly
 ``pops.lib.operators``).
 """
+from __future__ import annotations
+
 from types import SimpleNamespace
 
 from pops.descriptors import _native, _planned, BrickDescriptor

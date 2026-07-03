@@ -8,6 +8,10 @@ module scope). The class is composed from focused authoring mixins.
 
 cf. docs/sphinx/reference/time-program.md (Phase 8) and the ADC-399 epic.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.time.program_authoring import _ProgramAuthoring
 from pops.time.program_core import _ProgramCore
 from pops.time.program_inspect import _ProgramInspect
@@ -25,7 +29,7 @@ class Program(_ProgramCore, _ProgramLocal, _ProgramSolve, _ProgramAuthoring,
     ``pops.codegen.program_codegen`` via :meth:`emit_cpp_program`.
     """
 
-    def __init__(self, name):
+    def __init__(self, name: Any) -> None:
         self.name = name
         # De-stringing is the ONE public path (Spec 5 sec.15, ADC-479 criteria 23 + 27): the public
         # P.call requires a typed operator handle and the public P.rhs requires the typed terms= list
@@ -63,7 +67,7 @@ class Program(_ProgramCore, _ProgramLocal, _ProgramSolve, _ProgramAuthoring,
         # program it was compiled from. Emission / hashing are pure reads and stay allowed.
         self._frozen = False
 
-    def freeze(self):
+    def freeze(self) -> Any:
         """Freeze the Program: a later IR node addition RAISES (ADC-563). Returns ``self``.
 
         ``pops.compile`` freezes the time Program it lowers; emission (``emit_cpp_program``) and the
@@ -72,7 +76,7 @@ class Program(_ProgramCore, _ProgramLocal, _ProgramSolve, _ProgramAuthoring,
         self._frozen = True
         return self
 
-    def _new(self, vtype, op, inputs, attrs, name, block):
+    def _new(self, vtype: Any, op: Any, inputs: Any, attrs: Any, name: Any, block: Any) -> Any:
         """Guard the single IR-append choke point against a post-freeze mutation (ADC-563)."""
         if self._frozen:
             raise RuntimeError("pops.time.Program %r is frozen (ADC-563): cannot add IR node %r "
@@ -80,7 +84,7 @@ class Program(_ProgramCore, _ProgramLocal, _ProgramSolve, _ProgramAuthoring,
                                % (self.name, op))
         return super()._new(vtype, op, inputs, attrs, name, block)
 
-    def capture_source_locations(self, enabled=True):
+    def capture_source_locations(self, enabled: Any = True) -> Any:
         """Enable (or disable) recording each IR node's authoring source location (ADC-530).
 
         When enabled, every subsequently built :class:`pops.time.values.Value` captures the file and
@@ -91,7 +95,7 @@ class Program(_ProgramCore, _ProgramLocal, _ProgramSolve, _ProgramAuthoring,
         self._capture_source = bool(enabled)
         return self
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Short, deterministic, array-free summary -- never the full SSA IR.
 
         Prints the program name, the op count and the committed block names (Spec 5 sec.12.1):
@@ -102,7 +106,7 @@ class Program(_ProgramCore, _ProgramLocal, _ProgramSolve, _ProgramAuthoring,
 
     # --- C++ codegen (lowering to a problem.so source) lives in pops.codegen; the authoring
     # Program delegates via a LAZY import so pops.time stays free of any codegen/_pops edge. ---
-    def emit_cpp_program(self, model=None, target="system"):
+    def emit_cpp_program(self, model: Any = None, target: Any = "system") -> Any:
         """Generate the C++ source of a problem.so implementing this Program (codegen).
 
         Thin authoring entry point: delegates to the free function
@@ -117,21 +121,21 @@ class Program(_ProgramCore, _ProgramLocal, _ProgramSolve, _ProgramAuthoring,
         from pops.codegen import program_codegen as _pcg
         return _pcg.emit_cpp_program(self, model=model, target=target)
 
-    def _check_lowerable(self, model=None):
+    def _check_lowerable(self, model: Any = None) -> Any:
         """Raise if the IR uses a construct the codegen cannot lower (delegates to
         :func:`pops.codegen.program_codegen._check_lowerable`, lazy import).
         """
         from pops.codegen import program_codegen as _pcg
         return _pcg._check_lowerable(self, model)
 
-    def _check_schedules_lowerable(self):
+    def _check_schedules_lowerable(self) -> Any:
         """Raise if a node carries a schedule the codegen cannot lower (delegates to
         :func:`pops.codegen.program_codegen._check_schedules_lowerable`, lazy import).
         """
         from pops.codegen import program_codegen as _pcg
         return _pcg._check_schedules_lowerable(self)
 
-    def _emit_body(self, model=None):
+    def _emit_body(self, model: Any = None) -> Any:
         """Lower the install-function body to ``(prelude, body)`` C++ (delegates to
         :func:`pops.codegen.program_codegen._emit_body`, lazy import). Exposed for the codegen
         tests that assert the body shape directly.
@@ -168,7 +172,7 @@ class CompiledTime:
     SUB-PROGRAM (`cfl="program"`) is still deferred (the Program would export its own dt bound); it
     fails loud rather than being silently ignored."""
 
-    def __init__(self, substeps=1, stride=1, cfl="default"):
+    def __init__(self, substeps: Any = 1, stride: Any = 1, cfl: Any = "default") -> None:
         if not isinstance(substeps, int) or substeps < 1:
             raise ValueError("CompiledTime: substeps must be a positive int (got %r)" % (substeps,))
         if not isinstance(stride, int) or stride < 1:
@@ -185,5 +189,5 @@ class CompiledTime:
         self.cfl = cfl
         self.kind = "compiled"
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "CompiledTime(substeps=%d, stride=%d, cfl=%r)" % (self.substeps, self.stride, self.cfl)

@@ -8,7 +8,10 @@ standalone (``spec_from_file_location`` with no parent package, e.g.
 loading the sibling ``model/`` PACKAGE by path -- it is stdlib-only, so this pulls
 in neither ``pops`` nor ``_pops``. Mirrors the historical ``dsl.py`` fallback.
 """
+from __future__ import annotations
+
 import os
+from typing import Any
 
 try:
     from pops import model as model  # noqa: F401  -- normal package path
@@ -17,7 +20,7 @@ except ImportError:  # pragma: no cover - exercised only by the standalone-impor
     import sys
 
     _mdir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "model")
-    _mspec = _ilu.spec_from_file_location(
+    _mspec: Any = _ilu.spec_from_file_location(
         "pops_model", os.path.join(_mdir, "__init__.py"),
         submodule_search_locations=[_mdir])
     model = _ilu.module_from_spec(_mspec)

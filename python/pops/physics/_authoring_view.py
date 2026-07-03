@@ -6,24 +6,33 @@ the codegen. Methods only; the touched attributes are created by
 ``HyperbolicModel.__init__``. Imports only :mod:`pops.model` and :mod:`pops.ir`
 (no codegen, no ``_pops``).
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from ._modelpkg import model as _model
 from .aux import AUX_CANONICAL, roles_for
 
+if TYPE_CHECKING:
+    from ._model_contract import _HyperbolicModel
+else:
+    _HyperbolicModel = object
 
-class _OperatorViewMixin:
+
+class _OperatorViewMixin(_HyperbolicModel):
     """Typed StateSpace / FieldSpace / OperatorRegistry view of the model."""
 
-    def _aux_name_set(self):
+    def _aux_name_set(self) -> Any:
         """Names that denote an auxiliary field read by a formula (canonical + named)."""
         return set(AUX_CANONICAL) | set(self.aux_extra_names)
 
-    def _aux_requirements(self, exprs):
+    def _aux_requirements(self, exprs: Any) -> Any:
         """{'aux': [...]} of the aux fields the expressions read, or {} if none."""
         aux_set = self._aux_name_set()
         read = sorted({d for e in exprs for d in (e.deps() & aux_set)})
         return {"aux": read} if read else {}
 
-    def state_space(self, name="U"):
+    def state_space(self, name: str = "U") -> Any:
         """Typed :class:`pops.model.StateSpace` view of the conservative state: its
         components and canonical physical roles. Derived; carries no data."""
         role_list = roles_for(self.cons_names, self.cons_roles)
@@ -31,7 +40,7 @@ class _OperatorViewMixin:
         return _model.StateSpace(name=name, components=tuple(self.cons_names),
                                  roles=roles, layout="cell")
 
-    def field_space(self, name="fields"):
+    def field_space(self, name: str = "fields") -> Any:
         """Typed :class:`pops.model.FieldSpace` view of the auxiliary surface the model
         reads (canonical aux + named aux fields, in read order, de-duplicated)."""
         comps = []
@@ -40,7 +49,7 @@ class _OperatorViewMixin:
                 comps.append(nm)
         return _model.FieldSpace(name=name, components=tuple(comps), layout="cell")
 
-    def operator_registry(self, state_name="U"):
+    def operator_registry(self, state_name: str = "U") -> Any:
         """Typed :class:`pops.model.OperatorRegistry` derived from this model.
 
         Lowers the PDE shortcuts into typed operators (ids follow registration order):
@@ -56,7 +65,7 @@ class _OperatorViewMixin:
         fields = self.field_space()
         aux_set = self._aux_name_set()
 
-        def reads_fields(exprs):
+        def reads_fields(exprs: Any) -> bool:
             return any(e.deps() & aux_set for e in exprs)
 
         # Flux divergence (grid_operator: State -> Rate(State)).

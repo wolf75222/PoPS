@@ -11,6 +11,9 @@ added / no first step) they raise, and the view reports an unbuilt hierarchy ins
 build. A measure the native build cannot answer (per-level ghost depth, composite Poisson) is
 reported as honestly unavailable.
 """
+from __future__ import annotations
+
+from typing import Any
 
 from pops.runtime.amr._reports import (
     PatchReport,
@@ -39,13 +42,13 @@ class AmrRuntimeView:
     :class:`RefluxReport`, :class:`CheckpointReport`, :class:`HierarchySnapshot`).
     """
 
-    def __init__(self, amr_system):
+    def __init__(self, amr_system: Any) -> None:
         # Bound to the AmrSystem facade (not the raw _AmrSystem): we read its box helpers, its
         # block registry and the config snapshot it retained.
         self._sim = amr_system
 
     # --- live box readers (guard the pre-build RuntimeError) -----------------
-    def _is_built(self):
+    def _is_built(self) -> Any:
         """True once the native hierarchy has been built (a block added; boxes available)."""
         try:
             self._sim._s.n_levels()
@@ -55,7 +58,7 @@ class AmrRuntimeView:
                 return False
             raise
 
-    def _coarse_boxes(self):
+    def _coarse_boxes(self) -> Any:
         """(local, total) coarse base box counts, or (None, None) before the build."""
         try:
             return (int(self._sim.coarse_local_boxes()), int(self._sim.coarse_total_boxes()))
@@ -64,13 +67,13 @@ class AmrRuntimeView:
                 return (None, None)
             raise
 
-    def _block_names(self):
+    def _block_names(self) -> Any:
         try:
             return list(self._sim._s.block_names())
         except RuntimeError:
             return []
 
-    def _per_level(self):
+    def _per_level(self) -> Any:
         """Per-level patch census from patch_boxes() + patch_rectangles(), level 0 = base box."""
         s = self._sim._s
         n_levels = int(s.n_levels())
@@ -95,7 +98,7 @@ class AmrRuntimeView:
         return [levels[k] for k in sorted(levels)]
 
     # --- the sec.8.12 reports ------------------------------------------------
-    def patch_table(self):
+    def patch_table(self) -> Any:
         """Return a :class:`PatchReport` of the live patches + coarse box distribution."""
         coarse_local, coarse_total = self._coarse_boxes()
         if not self._is_built():
@@ -107,7 +110,7 @@ class AmrRuntimeView:
             domain_l=self._sim._L, per_level=self._per_level(),
             coarse_local_boxes=coarse_local, coarse_total_boxes=coarse_total)
 
-    def explain_regrid(self):
+    def explain_regrid(self) -> Any:
         """Return a :class:`RegridReport` of the regrid cadence + union-tag criteria."""
         regrid_every = int(self._sim._regrid_every)
         frozen = regrid_every == 0
@@ -128,7 +131,7 @@ class AmrRuntimeView:
             notes.append("a cell is tagged when ANY criterion fires (cell-by-cell OR).")
         return RegridReport(regrid_every=regrid_every, frozen=frozen, criteria=criteria, notes=notes)
 
-    def explain_ghosts(self):
+    def explain_ghosts(self) -> Any:
         """Return a :class:`GhostReport`; the per-level ghost depth is honestly unavailable."""
         return GhostReport(
             per_level_depth=None,
@@ -137,7 +140,7 @@ class AmrRuntimeView:
                               "are re-derived per path on the AMR transport."),
             notes=["per-level ghost depth is not exposed by this native build."])
 
-    def explain_reflux(self):
+    def explain_reflux(self) -> Any:
         """Return a :class:`RefluxReport` of the route reflux requirement."""
         return RefluxReport(
             enabled=True,
@@ -145,7 +148,7 @@ class AmrRuntimeView:
             notes=["coarse-fine flux refluxing is a native AMR route requirement (the AMR layout "
                    "descriptor reports reflux=True); it runs on the single-block coupler path."])
 
-    def explain_checkpoint(self):
+    def explain_checkpoint(self) -> Any:
         """Return a :class:`CheckpointReport` of the live system's restartability (sec.8.11)."""
         constraints = ["single block", "single rank", "frozen hierarchy (regrid_every == 0)"]
         violations = []
@@ -168,7 +171,7 @@ class AmrRuntimeView:
         return CheckpointReport(
             restartable=not violations, constraints=constraints, violations=violations, notes=notes)
 
-    def hierarchy_snapshot(self):
+    def hierarchy_snapshot(self) -> Any:
         """Return a :class:`HierarchySnapshot`: config envelope (reusing :func:`pops.inspect_amr`)
         composed with the live patch table."""
         # Config envelope from the inert authoring report (native max_levels / ratio / limitations).
@@ -187,7 +190,7 @@ class AmrRuntimeView:
             limitations=envelope["limitations"],
             config_available=envelope["available"])
 
-    def inspect(self):
+    def inspect(self) -> Any:
         """Return the unified AMR runtime inspection report (Spec 5 sec.8.12, ADC-589/ADC-555).
 
         Composes the four things a single ``sim.amr.inspect()`` call must answer: the
@@ -208,10 +211,10 @@ class AmrRuntimeView:
             regrid=self.explain_regrid(),
             limitations=limitations)
 
-    def __repr__(self):
+    def __repr__(self) -> Any:
         return "AmrRuntimeView(blocks=%r)" % (self._block_names(),)
 
-    def __str__(self):
+    def __str__(self) -> Any:
         """Short, array-free handle summary (Spec 5 sec.12.1)."""
         built = "built" if self._is_built() else "not built"
         return "AmrRuntimeView(blocks=%s, hierarchy %s)" % (self._block_names(), built)

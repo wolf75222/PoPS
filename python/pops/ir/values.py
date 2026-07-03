@@ -2,6 +2,9 @@
 
 Originally in pops.dsl.
 """
+from __future__ import annotations
+
+from typing import Any
 
 from .expr import Expr, _wrap
 
@@ -47,7 +50,7 @@ class EigWitness(Expr):
     Gershgorin du chemin C++ (non-convergence d'un bloc >= 3 sous le cap QR) n'est PAS reproduit ici --
     sur des matrices saines (cas vise) les deux chemins coincident a la tolerance QR (cf. dense_eig)."""
 
-    def __init__(self, rows, field, im_tol=None):
+    def __init__(self, rows: Any, field: Any, im_tol: Any = None) -> None:
         if field not in _EIG_FIELDS and field not in _EIG_PREDICATES:
             raise ValueError("EigWitness : field '%s' inconnu (attendu : %s)"
                              % (field, ", ".join(sorted({**_EIG_FIELDS, **_EIG_PREDICATES}))))
@@ -80,24 +83,24 @@ class EigWitness(Expr):
                                  "(field='%s' est un champ scalaire)" % field)
             self.im_tol = None
 
-    def is_predicate(self):
+    def is_predicate(self) -> bool:
         """True si @c field est un PREDICAT reel/complexe (all_real) plutot qu'un champ scalaire."""
         return self.field in _EIG_PREDICATES
 
-    def entries(self):
+    def entries(self) -> Any:
         """Entrees de la matrice a plat (ordre ligne-major), une par enfant Expr."""
         return [e for row in self.rows for e in row]
 
-    def _extra_args_cpp(self):
+    def _extra_args_cpp(self) -> Any:
         """Arguments scalaires C++ apres les entrees de la matrice : le seuil relatif im_tol pour un
         predicat (all_real), aucun pour un champ scalaire (chemin scalaire bit-identique)."""
         return [repr(self.im_tol)] if self.is_predicate() else []
 
-    def helper_name(self):
+    def helper_name(self) -> str:
         """Nom du foncteur nomme emis dans la brique pour ce couple (field, taille)."""
         return "pops_eig_%s_%dx%d" % (self.field, self.k, self.k)
 
-    def eval(self, env):
+    def eval(self, env: Any) -> Any:
         # Miroir hote (reference de test / prototypage) : empile la matrice par cellule puis numpy.
         # Les entrees sont diffusees a une forme commune ; eigvals s'applique sur le dernier axe 2x2.
         import numpy as np
@@ -109,15 +112,15 @@ class EigWitness(Expr):
             M[..., idx // k, idx % k] = np.broadcast_to(np.asarray(v, dtype=float), bshape)
         ev = np.linalg.eigvals(M)  # (..., k) complexe
         if self.field == "max_im":
-            out = np.max(np.abs(ev.imag), axis=-1)
+            out = np.max(np.abs(ev.imag), axis=-1)  # pyright: ignore[reportAttributeAccessIssue]
         elif self.field == "lmin":
-            out = np.min(ev.real, axis=-1)
+            out = np.min(ev.real, axis=-1)  # pyright: ignore[reportAttributeAccessIssue]
         elif self.field == "lmax":
-            out = np.max(ev.real, axis=-1)
+            out = np.max(ev.real, axis=-1)  # pyright: ignore[reportAttributeAccessIssue]
         else:  # predicat all_real (ADC-362) : MEME formule RELATIVE que pops::EigBounds::all_real.
-            max_im = np.max(np.abs(ev.imag), axis=-1)
-            lmin = np.min(ev.real, axis=-1)
-            lmax = np.max(ev.real, axis=-1)
+            max_im = np.max(np.abs(ev.imag), axis=-1)  # pyright: ignore[reportAttributeAccessIssue]
+            lmin = np.min(ev.real, axis=-1)  # pyright: ignore[reportAttributeAccessIssue]
+            lmax = np.max(ev.real, axis=-1)  # pyright: ignore[reportAttributeAccessIssue]
             scale = np.maximum(np.maximum(np.abs(lmin), np.abs(lmax)), 1.0)
             # numpy/LAPACK converge toujours -> PAS de kUnknown cote hote (le miroir definit le spectre
             # comme converge par construction) ; une non-convergence DEVICE rendrait 0.0 (= PAS reel),
@@ -125,17 +128,17 @@ class EigWitness(Expr):
             out = (max_im <= self.im_tol * scale).astype(float)
         return out if bshape else float(out)
 
-    def deps(self):
+    def deps(self) -> Any:
         d = set()
         for e in self.entries():
             d |= e.deps()
         return d
 
-    def to_cpp(self):
+    def to_cpp(self) -> str:
         args = [e.to_cpp() for e in self.entries()] + self._extra_args_cpp()
         return "%s(%s)" % (self.helper_name(), ", ".join(args))
 
-    def _str(self):
+    def _str(self) -> str:
         return "eig_%s([%s])" % (self.field, ", ".join(str(e) for e in self.entries()))
 
 
@@ -148,21 +151,21 @@ class StateRef(Expr):
     compiled into C++, not evaluated on the host). deps() = deps of the sub-expression (dependency
     checking)."""
 
-    def __init__(self, side, expr):
+    def __init__(self, side: Any, expr: Any) -> None:
         if side not in ("L", "R"):
             raise ValueError("StateRef: side must be 'L' (UL) or 'R' (UR), got %r" % (side,))
         self.side = side
         self.expr = _wrap(expr)
 
-    def deps(self):
+    def deps(self) -> Any:
         return self.expr.deps()
 
-    def eval(self, env):
+    def eval(self, env: Any) -> Any:
         raise NotImplementedError(
             "StateRef (dsl.left / dsl.right) is not evaluated by the numpy interpreter: the two-state "
             "Roe dissipation is EMITTED in C++ (m.roe_dissipation), not interpreted on the host.")
 
-    def _str(self):
+    def _str(self) -> str:
         return "%s(%s)" % ("left" if self.side == "L" else "right", self.expr)
 
 
@@ -180,27 +183,27 @@ class RuntimeParamRef(Expr):
     Structural CSE key (cf. _key): the NAME (two refs to the same runtime param share the same
     CSE local); the declaration value does not enter the key (it is runtime, not structural)."""
 
-    def __init__(self, name, value, index=-1):
+    def __init__(self, name: Any, value: Any, index: int = -1) -> None:
         self.name = name
         self.value = float(value)
         self.index = index
 
-    def eval(self, env):
+    def eval(self, env: Any) -> Any:
         # Numpy interpreter (host proto / debug): the declaration value stands in for the current value
         # (the numpy path does not go through RuntimeParams; it serves prototyping, not production).
         return self.value
 
-    def deps(self):
+    def deps(self) -> Any:
         # A runtime parameter is NOT an environment variable (cons/prim/aux): it comes from the
         # RuntimeParams channel, so nothing to check in check() (like a Const).
         return set()
 
-    def to_cpp(self):
+    def to_cpp(self) -> str:
         if self.index < 0:
             raise RuntimeError(
                 "RuntimeParamRef('%s'): index not assigned at codegen (call the compilation via "
                 "dsl.Model which assigns the runtime indices)" % self.name)
         return "params.get(%d)" % self.index
 
-    def _str(self):
+    def _str(self) -> str:
         return "rparam(%s)" % self.name

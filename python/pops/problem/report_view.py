@@ -7,6 +7,10 @@ registries' metadata, it triggers no validation and no compilation. This is dist
 per-registry ``inspect()`` dicts it composes and from ``Problem.to_dict()`` (the array-free
 serialisation the snapshot / codegen consume, a superset that adds the stable handle ids).
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops._report import Report
 
 
@@ -22,18 +26,18 @@ class ProblemReport(Report):
     report_type = "problem"
     schema_version = 1
 
-    def __init__(self, payload):
+    def __init__(self, payload: Any) -> None:
         # Store each field as an attribute AND keep the ordered payload for the byte-identical
         # to_dict (the historical inspect() dict shape).
         self._payload = dict(payload)
         for key, value in payload.items():
             setattr(self, key, value)
 
-    def to_dict(self):
+    def to_dict(self) -> Any:
         # Byte-identical to the historical Problem.inspect() dict, stamped with the report identity.
         return self._stamp(dict(self._payload))
 
-    def __str__(self):
+    def __str__(self) -> str:
         return ("problem %r [%s]: blocks=%s fields=%s params=%s aux=%s outputs=%s time=%s"
                 % (self._payload.get("name"), self._payload.get("category"),
                    list(self._payload.get("blocks", {})), list(self._payload.get("fields", {})),

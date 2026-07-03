@@ -13,6 +13,10 @@ It CHOOSES the closure variant (the only physics of a moment model), so it is a 
 and is inspectable. The bare ``gaussian_closure`` factory stays a plain callable (a builder
 that does the arithmetic, not a route chooser); this descriptor wraps it.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Descriptor
 from pops.descriptors_report import CapabilitySet
 
@@ -37,7 +41,7 @@ class HyQMOM15Closure(Descriptor):
 
     _VARIANTS = ("levermore", "custom")
 
-    def __init__(self, variant="levermore"):
+    def __init__(self, variant: Any = "levermore") -> None:
         if variant not in HyQMOM15Closure._VARIANTS:
             raise ValueError("HyQMOM15Closure variant %r must be one of %s"
                              % (variant, ", ".join(HyQMOM15Closure._VARIANTS)))
@@ -50,16 +54,16 @@ class HyQMOM15Closure(Descriptor):
         self.order = _HYQMOM15_ORDER
         self._closure = gaussian_closure(_HYQMOM15_ORDER)
 
-    def options(self):
+    def options(self) -> dict:
         return {"variant": self.variant, "order": self.order}
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"provides": "order_%d_standardized_moments" % self.order})
 
-    def __call__(self, S):  # noqa: N803  (S mirrors the engine variable name)
+    def __call__(self, S: Any) -> Any:  # noqa: N803  (S mirrors the engine variable name)
         return self._closure(S)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "HyQMOM15Closure(variant=%r)" % (self.variant,)
 
 

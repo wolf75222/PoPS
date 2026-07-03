@@ -15,11 +15,15 @@ is fabricated -- the labels name the reduction the C++ runtime evaluates. The :c
 measure takes a typed norm kind from :mod:`pops.linalg.norms` (``L1`` / ``L2`` / ``LInf``); a
 bare string is rejected.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Availability, Descriptor
 from pops.linalg.norms import _Norm
 
 
-def _ref_name(value):
+def _ref_name(value: Any) -> Any:
     """The stable display name for a block / role reference (its ``name`` or its repr).
 
     A block is named by a string and a role by a typed role object (carrying a ``name``); the
@@ -48,21 +52,21 @@ class _Measure(Descriptor):
     #: The reduction kind this measure performs ("sum" / "norm" / "min_max" / "check").
     reduction = None
 
-    def __init__(self, block=None, role=None, cadence=None):
+    def __init__(self, block: Any = None, role: Any = None, cadence: Any = None) -> None:
         self.block = block
         self.role = role
         self.cadence = cadence
 
-    def options(self):
+    def options(self) -> dict:
         return {"scheme": self.scheme, "block": _ref_name(self.block),
                 "role": _ref_name(self.role), "cadence": _ref_name(self.cadence)}
 
-    def requirements(self):
+    def requirements(self) -> Any:
         from pops.descriptors_report import RequirementSet
         # A scalar reduction over a distributed mesh needs an MPI all-reduce to be correct.
         return RequirementSet({"mpi_reduction": True})
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         from pops.descriptors_report import CapabilitySet
         # Reduction metadata, declared not computed: a single scalar reduction is AMR /
         # multi-level safe (it sums / folds across levels) and runs on the diagnostic cadence.
@@ -70,13 +74,13 @@ class _Measure(Descriptor):
                               "amr_compatible": True, "multi_level": True,
                               "cadence_slot": "diagnostic"})
 
-    def lower(self, context=None):
+    def lower(self, context: Any = None) -> Any:
         from pops.descriptors_report import LoweredDescriptor
         return LoweredDescriptor(name=self.name, category=self.category,
                                  native_id=self.native_id, options=self.options(),
                                  scheme=self.scheme)
 
-    def inspect(self):
+    def inspect(self) -> Any:
         info = super().inspect()
         info["scheme"] = self.scheme
         return info
@@ -94,7 +98,8 @@ class Norm(_Measure):
     scheme = "norm"
     reduction = "norm"
 
-    def __init__(self, norm, block=None, role=None, cadence=None):
+    def __init__(self, norm: Any, block: Any = None, role: Any = None,
+                 cadence: Any = None) -> None:
         if not isinstance(norm, _Norm):
             from pops.descriptors import reject_string_selector
             if isinstance(norm, str):
@@ -105,12 +110,12 @@ class Norm(_Measure):
         super().__init__(block=block, role=role, cadence=cadence)
         self.norm = norm
 
-    def options(self):
+    def options(self) -> dict:
         opts = super().options()
         opts["norm"] = self.norm.kind
         return opts
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         from pops.descriptors_report import CapabilitySet
         caps = super().capabilities().to_dict()
         caps["norm_kind"] = self.norm.kind
@@ -155,26 +160,26 @@ class ConservationCheck(Descriptor):
     category = "conservation_check"
     scheme = "conservation_check"
 
-    def __init__(self, quantity, tolerance=1e-12):
+    def __init__(self, quantity: Any, tolerance: float = 1e-12) -> None:
         self.quantity = quantity
         self.tolerance = float(tolerance)
 
-    def options(self):
+    def options(self) -> dict:
         return {"scheme": self.scheme, "quantity": _ref_name(self.quantity),
                 "tolerance": self.tolerance}
 
-    def requirements(self):
+    def requirements(self) -> Any:
         from pops.descriptors_report import RequirementSet
         # The checked quantity is itself a reduction, so the check inherits its MPI need.
         return RequirementSet({"mpi_reduction": True, "quantity": True})
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         from pops.descriptors_report import CapabilitySet
         return CapabilitySet({"reduction": "check", "mpi_reduction": True, "amr_compatible": True,
                               "multi_level": True, "cadence_slot": "diagnostic",
                               "tolerance": self.tolerance})
 
-    def available(self, context=None):
+    def available(self, context: Any = None) -> Any:
         if not isinstance(self.quantity, Descriptor):
             return Availability.no(
                 "ConservationCheck(quantity=...) needs a diagnostic descriptor "
@@ -183,19 +188,19 @@ class ConservationCheck(Descriptor):
                 alternatives=["Integral(...)", "Norm(L2(), ...)", "MinMax(...)"])
         return Availability.yes()
 
-    def validate(self, context=None):
+    def validate(self, context: Any = None) -> bool:
         status = self.available(context)
         if not status.ok:
             raise TypeError("%s is not valid:\n%s" % (self.name, status))
         return True
 
-    def lower(self, context=None):
+    def lower(self, context: Any = None) -> Any:
         from pops.descriptors_report import LoweredDescriptor
         return LoweredDescriptor(name=self.name, category=self.category,
                                  native_id=self.native_id, options=self.options(),
                                  scheme=self.scheme)
 
-    def inspect(self):
+    def inspect(self) -> Any:
         info = super().inspect()
         info["scheme"] = self.scheme
         return info

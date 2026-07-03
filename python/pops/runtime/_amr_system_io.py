@@ -6,13 +6,22 @@ inheritance; operates on ``self._s``, ``self._L`` and ``self._regrid_every``. ``
 module ABI key re-exported through ``pops.runtime.bricks``.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from pops.runtime.bricks import abi_key
 
+if TYPE_CHECKING:
+    from pops.runtime._amr_system_contract import _AmrSystem
+else:
+    _AmrSystem = object
 
-class _AmrSystemIO:
+
+class _AmrSystemIO(_AmrSystem):
     """Output / checkpoint / restart methods of AmrSystem."""
 
-    def write(self, path, format="npz", step=None):
+    def write(self, path: Any, format: str = "npz", step: Any = None) -> Any:
         """AMR VISUALIZATION OUTPUT (wave 3) : COARSE fields per block + phi + footprints of the
         fine patches. format='npz' (per-block densities, phi, patch_rectangles, t) or 'vtk' (.vti of
         the COARSE : per-block density + phi -- the fine patches are provided in npz via their
@@ -69,7 +78,7 @@ class _AmrSystemIO:
             return target
         raise ValueError("AmrSystem.write : format 'npz' | 'vtk' (received %r)" % (format,))
 
-    def checkpoint(self, path):
+    def checkpoint(self, path: Any) -> Any:
         """RESTARTABLE BIT-IDENTICAL AMR CHECKPOINT (npz). v1 = SINGLE-BLOCK SINGLE-RANK (ADC-65) ;
         v2 (ADC-509) = MULTI-BLOCK and/or MPI np>1. Writes the FULL CONSERVATIVE STATE of EACH level
         (all components ; the coarse AND the fine patches, valid cells -- PER BLOCK in multi-block),
@@ -145,7 +154,7 @@ class _AmrSystemIO:
         os.replace(tmp, target)
         return target
 
-    def restart(self, path):
+    def restart(self, path: Any) -> Any:
         """RESUMES an AMR checkpoint (BIT-IDENTICAL). v1 = SINGLE-BLOCK SINGLE-RANK (ADC-65) ;
         v2 (ADC-509) = MULTI-BLOCK and/or MPI np>1. CHECKS consistency (version, grid, blocks,
         components, regrid_every == 0) then : (1) MONO-BLOCK only, IMPOSES the saved fine hierarchy

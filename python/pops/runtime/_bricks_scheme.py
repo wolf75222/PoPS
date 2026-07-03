@@ -6,6 +6,10 @@ policies (IMEX / SourceImplicit / IMEXRK / Implicit / Role / CondensedSchur / Sp
 live in ``_bricks_time`` (split out for the 500-line cap). ``pops.runtime.bricks`` re-exports
 these together with the model bricks in ``_bricks_model`` and the time policies in ``_bricks_time``.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.runtime.routes import (
     LIMITER_MINMOD, LIMITER_NONE, LIMITER_VANLEER, LIMITER_WENO5,
     RECON_CONSERVATIVE, RECON_PRIMITIVE,
@@ -20,7 +24,7 @@ from pops.runtime.routes import (
 class Ionization:
     """Ionization n_g -> n_i + n_e (rate k n_e n_g). Mass transferred from the neutral to the ion."""
 
-    def __init__(self, electron, ion, neutral, rate):
+    def __init__(self, electron: Any, ion: Any, neutral: Any, rate: Any) -> None:
         self.electron = electron
         self.ion = ion
         self.neutral = neutral
@@ -30,7 +34,7 @@ class Ionization:
 class Collision:
     """Inter-species friction: force k (u_a - u_b), momentum conserved. Fluid blocks (>= 3 var)."""
 
-    def __init__(self, a, b, rate):
+    def __init__(self, a: Any, b: Any, rate: Any) -> None:
         self.a = a
         self.b = b
         self.rate = rate
@@ -39,7 +43,7 @@ class Collision:
 class ThermalExchange:
     """Thermal exchange k (T_a - T_b), energy conserved. Euler blocks (4 var)."""
 
-    def __init__(self, a, b, rate):
+    def __init__(self, a: Any, b: Any, rate: Any) -> None:
         self.a = a
         self.b = b
         self.rate = rate
@@ -75,7 +79,7 @@ _FLUX_SUGGEST = "pops.numerics.riemann.Rusanov() / HLL() / HLLC() / Roe()"
 _RECON_SUGGEST = "pops.numerics.variables.Conservative() / Primitive()"
 
 
-def _lower_selector(value, *, param, schemes, suggestion, categories):
+def _lower_selector(value: Any, *, param: Any, schemes: Any, suggestion: Any, categories: Any) -> Any:
     """Lower a typed spatial-scheme descriptor to its canonical C++ token (Spec 5 sec.7).
 
     @p value is a typed descriptor (``BrickDescriptor`` / ``Descriptor``) carrying ``.scheme`` and
@@ -151,10 +155,10 @@ class Spatial:
       geometry, or a staircase/cutcell disc transport mode is active (set_disc_domain / set_geometry_mode).
     """
 
-    def __init__(self, limiter=None, flux=None, recon=None, *, none=False,
-                 minmod=False, vanleer=False, weno5=False, primitive=False,
-                 positivity_floor=None, wave_speed_cache=False, reconstruction=None,
-                 _tokens=None):
+    def __init__(self, limiter: Any = None, flux: Any = None, recon: Any = None, *, none: bool = False,
+                 minmod: bool = False, vanleer: bool = False, weno5: bool = False, primitive: bool = False,
+                 positivity_floor: Any = None, wave_speed_cache: bool = False, reconstruction: Any = None,
+                 _tokens: Any = None) -> None:
         # Spec 5 sec.14.1 names the reconstruction/limiter slot ``reconstruction=``; keep ``limiter=``
         # working and accept ``reconstruction=`` as an alias (only one of the two at a time).
         if reconstruction is not None:
@@ -215,7 +219,7 @@ class Spatial:
         self.positivity_floor = pf
         self.wave_speed_cache = bool(wave_speed_cache)
 
-    def __str__(self):
+    def __str__(self) -> Any:
         # Spec 5 sec.12.1: a SHORT, deterministic one-line summary of the chosen scheme (the
         # default object repr leaks a memory address, so print() was unreadable). Only the
         # non-default knobs (positivity floor, wave-speed cache) are appended, to keep the line
@@ -227,14 +231,14 @@ class Spatial:
             body += ", wave_speed_cache=True"
         return "Spatial(%s)" % body
 
-    def routes(self):
+    def routes(self) -> Any:
         """The typed native routes chosen by this spatial scheme (ADC-584 inspection).
 
         A structured dict slot -> route manifest (family, id, token, native entry point,
         requirements, limitations). The ``user`` external-flux token has no native route (it
         resolves through the external-brick catalog manifest) and reports a minimal entry.
         """
-        def _manifest(slot_route):
+        def _manifest(slot_route: Any) -> Any:
             if hasattr(slot_route, "manifest"):
                 return slot_route.manifest()
             return {"family": "riemann", "id": "riemann.user", "token": str(slot_route),
@@ -244,7 +248,7 @@ class Spatial:
                 "recon": _manifest(self.recon)}
 
     @classmethod
-    def _from_tokens(cls, limiter, flux, recon, *, positivity_floor=None, wave_speed_cache=False):
+    def _from_tokens(cls, limiter: Any, flux: Any, recon: Any, *, positivity_floor: Any = None, wave_speed_cache: bool = False) -> Any:
         """Build a Spatial from ALREADY-canonical string tokens (internal lowering only).
 
         The spatial brick-catalog descriptor (``pops.numerics.spatial.FiniteVolume``) carries its scheme
@@ -255,7 +259,7 @@ class Spatial:
         return cls(_tokens=(limiter, flux, recon),
                    positivity_floor=positivity_floor, wave_speed_cache=wave_speed_cache)
 
-    def validate(self, ghost_depth=None, block=None):
+    def validate(self, ghost_depth: Any = None, block: Any = None) -> Any:
         """Reject a reconstruction whose ghost depth exceeds an EXPLICIT block halo (Spec 5 sec.7).
 
         The fifth-order WENO5 stencil needs a 3-cell halo; reading past a too-thin halo is a
@@ -286,7 +290,7 @@ class Spatial:
         return validate_ghost_depth(self.limiter, available=available, block=block)
 
 
-def FiniteVolume(*args, **kwargs):
+def FiniteVolume(*args: Any, **kwargs: Any) -> Any:
     """Re-export of the composite finite-volume surface homed in ``pops.numerics.spatial`` (ADC-533).
 
     Spec 5 criterion 7 homes the ``FiniteVolume(riemann=HLL(...), reconstruction=MUSCL(...))``
@@ -322,7 +326,7 @@ class Explicit:
                  to first-order references, validation only). Shortcut ssprk3=True.
     """
 
-    def __init__(self, substeps=1, method="ssprk2", stride=1, *, ssprk3=False):
+    def __init__(self, substeps: int = 1, method: str = "ssprk2", stride: int = 1, *, ssprk3: bool = False) -> None:
         if ssprk3:
             method = "ssprk3"
         if method not in ("ssprk2", "ssprk3", "euler"):
@@ -340,6 +344,6 @@ class Explicit:
         self.kind = (TIME_SSPRK3 if method == "ssprk3"
                      else TIME_EULER if method == "euler" else TIME_EXPLICIT)
 
-    def routes(self):
+    def routes(self) -> Any:
         """The typed native routes chosen by this time treatment (ADC-584 inspection)."""
         return {"time": self.kind.manifest()}

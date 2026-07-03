@@ -18,6 +18,10 @@ The predicates read the model from the @p context (a plain ``dict`` with a ``"mo
 carries no model cannot know the capability, so the flux stays :meth:`Availability.yes` -- the
 hard gate still fires at install when a real model is present.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Availability
 
 # The generic-hooks fluxes and the explicit canonical-Euler routes both refuse through
@@ -26,7 +30,7 @@ from pops.descriptors import Availability
 _CAPABILITY_FLUXES = ("hllc", "roe", "euler_hllc", "euler_roe")
 
 
-def _model_of(context):
+def _model_of(context: Any) -> Any:
     """Extract the compiled / authoring model from a validate/available @p context, or ``None``.
 
     Accepts a plain ``dict`` carrying the model under ``"model"`` or ``"compiled"``, an object
@@ -49,12 +53,12 @@ def _model_of(context):
     return model
 
 
-def _scheme_of(flux):
+def _scheme_of(flux: Any) -> Any:
     """The lowered flux token of a riemann descriptor (its ``.scheme``), or ``None``."""
     return getattr(flux, "scheme", None)
 
 
-def flux_validate(flux, context=None):
+def flux_validate(flux: Any, context: Any = None) -> bool:
     """Raise the exact install-time refusal when @p flux cannot serve the model in @p context.
 
     Delegates to :func:`pops.runtime.routes.check_riemann_capability` (hllc / roe / euler_hllc /
@@ -87,7 +91,7 @@ def flux_validate(flux, context=None):
     return True
 
 
-def flux_available(flux, context=None):
+def flux_available(flux: Any, context: Any = None) -> Any:
     """The structured :class:`Availability` of @p flux against the model in @p context.
 
     The ``no`` path carries the predicate's precise reason so a report / negative test can read

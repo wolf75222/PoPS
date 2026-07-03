@@ -13,6 +13,9 @@ No C++ emission lives here: the to_cpp() methods on the flux-DSL nodes are
 the canonical symbolic representation; helpers that *emit* C++ source strings
 (_cpp_expand, _cse_emit, _cpp_roe, etc.) remain in pops.dsl.
 """
+from __future__ import annotations
+
+from typing import Any
 
 # numpy backs only the .eval() host interpreter (Sqrt/Abs/Sign below); IR construction and the
 # to_cpp() codegen never touch it. It is imported lazily inside eval() so pops.ir stays importable
@@ -28,26 +31,26 @@ class Expr:
     """Symbolic expression node. Operators build the tree; eval(env) applies it to
     numpy arrays (env: name -> array or scalar)."""
 
-    def __add__(self, o): return Add(self, _wrap(o))
-    def __radd__(self, o): return Add(_wrap(o), self)
-    def __sub__(self, o): return Sub(self, _wrap(o))
-    def __rsub__(self, o): return Sub(_wrap(o), self)
-    def __mul__(self, o): return Mul(self, _wrap(o))
-    def __rmul__(self, o): return Mul(_wrap(o), self)
-    def __truediv__(self, o): return Div(self, _wrap(o))
-    def __rtruediv__(self, o): return Div(_wrap(o), self)
-    def __neg__(self): return Neg(self)
-    def __pos__(self): return self  # +expr = identity (the CoupledSource API writes +k*ne*ng)
-    def __abs__(self): return Abs(self)  # abs(expr) -> |expr| (absolute value, e.g. |lambda| of Roe)
-    def __pow__(self, o): return Pow(self, _wrap(o))
+    def __add__(self, o: Any) -> Any: return Add(self, _wrap(o))
+    def __radd__(self, o: Any) -> Any: return Add(_wrap(o), self)
+    def __sub__(self, o: Any) -> Any: return Sub(self, _wrap(o))
+    def __rsub__(self, o: Any) -> Any: return Sub(_wrap(o), self)
+    def __mul__(self, o: Any) -> Any: return Mul(self, _wrap(o))
+    def __rmul__(self, o: Any) -> Any: return Mul(_wrap(o), self)
+    def __truediv__(self, o: Any) -> Any: return Div(self, _wrap(o))
+    def __rtruediv__(self, o: Any) -> Any: return Div(_wrap(o), self)
+    def __neg__(self) -> Any: return Neg(self)
+    def __pos__(self) -> Any: return self  # +expr = identity (the CoupledSource API writes +k*ne*ng)
+    def __abs__(self) -> Any: return Abs(self)  # abs(expr) -> |expr| (absolute value, e.g. |lambda| of Roe)
+    def __pow__(self, o: Any) -> Any: return Pow(self, _wrap(o))
 
-    def eval(self, env): raise NotImplementedError
-    def deps(self): return set()
-    def __repr__(self): return self._str()
-    def _str(self): return "?"
+    def eval(self, env: Any) -> Any: raise NotImplementedError
+    def deps(self) -> Any: return set()
+    def __repr__(self) -> str: return self._str()
+    def _str(self) -> str: return "?"
 
 
-def _wrap(o):
+def _wrap(o: Any) -> Any:
     if isinstance(o, Expr):
         return o
     # A Param exposes its internal tree NODE (_node: Const for 'const', RuntimeParamRef for
@@ -60,91 +63,91 @@ def _wrap(o):
 
 
 class Const(Expr):
-    def __init__(self, value): self.value = float(value)
-    def eval(self, env): return self.value
-    def to_cpp(self): return repr(self.value)
-    def _str(self): return repr(self.value)
+    def __init__(self, value: Any) -> None: self.value = float(value)
+    def eval(self, env: Any) -> Any: return self.value
+    def to_cpp(self) -> str: return repr(self.value)
+    def _str(self) -> str: return repr(self.value)
 
 
 class Var(Expr):
     """Named variable: conservative, primitive, auxiliary (field) or constant."""
 
-    def __init__(self, name, kind):
+    def __init__(self, name: Any, kind: Any) -> None:
         self.name = name
         self.kind = kind
-    def eval(self, env):
+    def eval(self, env: Any) -> Any:
         if self.name not in env:
             raise KeyError("variable '%s' (%s) missing from the environment" % (self.name, self.kind))
         return env[self.name]
-    def deps(self): return {self.name}
-    def to_cpp(self): return self.name
-    def _str(self): return self.name
+    def deps(self) -> Any: return {self.name}
+    def to_cpp(self) -> Any: return self.name
+    def _str(self) -> Any: return self.name
 
 
 class _Bin(Expr):
     op = "?"
-    def __init__(self, a, b):
+    def __init__(self, a: Any, b: Any) -> None:
         self.a = a
         self.b = b
-    def deps(self): return self.a.deps() | self.b.deps()
-    def to_cpp(self): return "(%s %s %s)" % (self.a.to_cpp(), self.op, self.b.to_cpp())
-    def _str(self): return "(%s %s %s)" % (self.a, self.op, self.b)
+    def deps(self) -> Any: return self.a.deps() | self.b.deps()
+    def to_cpp(self) -> str: return "(%s %s %s)" % (self.a.to_cpp(), self.op, self.b.to_cpp())
+    def _str(self) -> str: return "(%s %s %s)" % (self.a, self.op, self.b)
 
 
 class Add(_Bin):
     op = "+"
-    def eval(self, env): return self.a.eval(env) + self.b.eval(env)
+    def eval(self, env: Any) -> Any: return self.a.eval(env) + self.b.eval(env)
 
 
 class Sub(_Bin):
     op = "-"
-    def eval(self, env): return self.a.eval(env) - self.b.eval(env)
+    def eval(self, env: Any) -> Any: return self.a.eval(env) - self.b.eval(env)
 
 
 class Mul(_Bin):
     op = "*"
-    def eval(self, env): return self.a.eval(env) * self.b.eval(env)
+    def eval(self, env: Any) -> Any: return self.a.eval(env) * self.b.eval(env)
 
 
 class Div(_Bin):
     op = "/"
-    def eval(self, env): return self.a.eval(env) / self.b.eval(env)
+    def eval(self, env: Any) -> Any: return self.a.eval(env) / self.b.eval(env)
 
 
 class Pow(_Bin):
     op = "**"
-    def eval(self, env): return self.a.eval(env) ** self.b.eval(env)
-    def to_cpp(self): return "std::pow(%s, %s)" % (self.a.to_cpp(), self.b.to_cpp())
+    def eval(self, env: Any) -> Any: return self.a.eval(env) ** self.b.eval(env)
+    def to_cpp(self) -> str: return "std::pow(%s, %s)" % (self.a.to_cpp(), self.b.to_cpp())
 
 
 class Neg(Expr):
-    def __init__(self, a): self.a = a
-    def eval(self, env): return -self.a.eval(env)
-    def deps(self): return self.a.deps()
-    def to_cpp(self): return "(-%s)" % self.a.to_cpp()
-    def _str(self): return "(-%s)" % self.a
+    def __init__(self, a: Any) -> None: self.a = a
+    def eval(self, env: Any) -> Any: return -self.a.eval(env)
+    def deps(self) -> Any: return self.a.deps()
+    def to_cpp(self) -> str: return "(-%s)" % self.a.to_cpp()
+    def _str(self) -> str: return "(-%s)" % self.a
 
 
 class Sqrt(Expr):
-    def __init__(self, a): self.a = a
-    def eval(self, env):
+    def __init__(self, a: Any) -> None: self.a = a
+    def eval(self, env: Any) -> Any:
         import numpy as np
         return np.sqrt(self.a.eval(env))
-    def deps(self): return self.a.deps()
-    def to_cpp(self): return "std::sqrt(%s)" % self.a.to_cpp()
-    def _str(self): return "sqrt(%s)" % self.a
+    def deps(self) -> Any: return self.a.deps()
+    def to_cpp(self) -> str: return "std::sqrt(%s)" % self.a.to_cpp()
+    def _str(self) -> str: return "sqrt(%s)" % self.a
 
 
 class Abs(Expr):
     """Absolute value ``|a|`` (e.g. ``|lambda_k|`` of a Roe dissipation). Emitted as std::fabs at codegen
     (equal to the ternary a<0?-a:a outside -0.0). Not differentiable by dsl.diff (no sign node)."""
-    def __init__(self, a): self.a = a
-    def eval(self, env):
+    def __init__(self, a: Any) -> None: self.a = a
+    def eval(self, env: Any) -> Any:
         import numpy as np
         return np.abs(self.a.eval(env))
-    def deps(self): return self.a.deps()
-    def to_cpp(self): return "std::fabs(%s)" % self.a.to_cpp()
-    def _str(self): return "abs(%s)" % self.a
+    def deps(self) -> Any: return self.a.deps()
+    def to_cpp(self) -> str: return "std::fabs(%s)" % self.a.to_cpp()
+    def _str(self) -> str: return "abs(%s)" % self.a
 
 
 class Sign(Expr):
@@ -152,15 +155,15 @@ class Sign(Expr):
     branche (a > 0) - (a < 0) (exact en pops::Real). Sert aux selections par masques des branches par
     cellule (ADC-177 : clamps de projection en max/min via abs/sign, sans if). Derivee nulle presque
     partout (saut en 0, mesure nulle), cf. dsl.diff."""
-    def __init__(self, a): self.a = a
-    def eval(self, env):
+    def __init__(self, a: Any) -> None: self.a = a
+    def eval(self, env: Any) -> Any:
         import numpy as np
         return np.sign(self.a.eval(env))
-    def deps(self): return self.a.deps()
-    def to_cpp(self):
+    def deps(self) -> Any: return self.a.deps()
+    def to_cpp(self) -> str:
         s = self.a.to_cpp()
         return "(pops::Real(%s > 0) - pops::Real(%s < 0))" % (s, s)
-    def _str(self): return "sign(%s)" % self.a
+    def _str(self) -> str: return "sign(%s)" % self.a
 
 
 # =============================================================================
@@ -178,11 +181,11 @@ class Equation:
 
     __slots__ = ("lhs", "rhs")
 
-    def __init__(self, lhs, rhs):
+    def __init__(self, lhs: Any, rhs: Any) -> None:
         self.lhs = lhs
         self.rhs = rhs
 
-    def __bool__(self):
+    def __bool__(self) -> Any:
         # An Equation is an inspectable lhs == rhs, NOT a truth value: ``if ddt(U) == R:`` or
         # ``bool(ddt(U) == R)`` is almost always a mistaken comparison. Refuse it loudly (ADC-529)
         # and name the consuming APIs that lower it (m.rate / m.solve_field / T.define / T.solve).
@@ -191,17 +194,17 @@ class Equation:
             "comparison. Pass it to m.rate / m.solve_field / T.define / T.solve to lower it; use "
             "'is' for identity or compare the sides explicitly.")
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "Equation(%r == %r)" % (self.lhs, self.rhs)
 
 
 class _BoardNode:
     """Base of every board node: owns ``==`` (build an :class:`Equation`)."""
 
-    def __eq__(self, other):  # noqa: D105 -- equation builder, not a comparison
+    def __eq__(self, other: Any) -> Any:  # noqa: D105 -- equation builder, not a comparison
         return Equation(self, other)
 
-    def __bool__(self):
+    def __bool__(self) -> Any:
         # A board node builds an Equation on ``==``, so ``if U == V:`` yields an Equation, not a
         # bool: refuse the truthiness of the node itself too (ADC-529), catching e.g. a stray
         # ``if ddt(U):`` before it silently reads as True.
@@ -210,7 +213,7 @@ class _BoardNode:
             "not a comparison. Lower it via m.rate / m.solve_field / T.define / T.solve.")
 
     # board nodes are not hashable (they define a non-identity ``__eq__``)
-    __hash__ = None
+    __hash__ = None  # type: ignore[assignment]
 
 
 # --- elliptic field-operator algebra base (Spec 5 sec.9.2, ADC-491) -----------------------
@@ -224,27 +227,27 @@ class _EllipticTerm(_BoardNode):
     ``pops.ir.elliptic.EllipticSum``; ``==`` builds the field :class:`Equation`.
     """
 
-    def _elliptic_terms(self):
+    def _elliptic_terms(self) -> Any:
         return [self]
 
-    def _principal_kinds(self):
+    def _principal_kinds(self) -> Any:
         return {self._kind()}
 
-    def _kind(self):
+    def _kind(self) -> Any:
         raise NotImplementedError
 
-    def __neg__(self):  # concrete terms (Laplacian / Reaction / ...) override this
+    def __neg__(self) -> Any:  # concrete terms (Laplacian / Reaction / ...) override this
         raise NotImplementedError
 
-    def __add__(self, other):
+    def __add__(self, other: Any) -> Any:
         from .elliptic import EllipticSum, _as_elliptic
         return EllipticSum(self._elliptic_terms() + _as_elliptic(other)._elliptic_terms())
 
-    def __radd__(self, other):
+    def __radd__(self, other: Any) -> Any:
         from .elliptic import EllipticSum, _as_elliptic
         return EllipticSum(_as_elliptic(other)._elliptic_terms() + self._elliptic_terms())
 
-    def __sub__(self, other):
+    def __sub__(self, other: Any) -> Any:
         from .elliptic import _as_elliptic
         return self.__add__(-_as_elliptic(other))
 
@@ -257,20 +260,20 @@ class Partial(_BoardNode):
     leading coefficient so ``-grad(phi).x`` resolves to ``-grad_x``.
     """
 
-    def __init__(self, field, axis, scale=1.0):
+    def __init__(self, field: Any, axis: Any, scale: Any = 1.0) -> None:
         self.field = field
         self.axis = int(axis)
         self.scale = float(scale)
 
-    def __neg__(self):
+    def __neg__(self) -> Any:
         return Partial(self.field, self.axis, -self.scale)
 
-    def __mul__(self, k):
+    def __mul__(self, k: Any) -> Any:
         return Partial(self.field, self.axis, self.scale * float(k))
 
     __rmul__ = __mul__
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         d = "x" if self.axis == 0 else "y"
         return "Partial(%s%r.d%s)" % (
             ("" if self.scale == 1.0 else "%g*" % self.scale), self.field, d)
@@ -279,46 +282,46 @@ class Partial(_BoardNode):
 class Gradient(_BoardNode):
     """The gradient of a scalar field; ``grad(phi).x`` / ``.y`` are :class:`Partial`."""
 
-    def __init__(self, field, scale=1.0):
+    def __init__(self, field: Any, scale: Any = 1.0) -> None:
         self.field = field
         self.scale = float(scale)
 
     @property
-    def x(self):
+    def x(self) -> Any:
         return Partial(self.field, 0, self.scale)
 
     @property
-    def y(self):
+    def y(self) -> Any:
         return Partial(self.field, 1, self.scale)
 
-    def __neg__(self):
+    def __neg__(self) -> Any:
         return Gradient(self.field, -self.scale)
 
-    def __mul__(self, coeff):
+    def __mul__(self, coeff: Any) -> Any:
         # coeff * grad(phi) -- a coefficient-scaled gradient (the flux of div(coeff*grad)).
         from .elliptic import CoeffGradient
         return CoeffGradient(self.field, coeff, self.scale)
 
     __rmul__ = __mul__
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "Gradient(%r)" % (self.field,)
 
 
 class Laplacian(_EllipticTerm):
     """``scale * Laplacian(field)`` -- the elliptic operator of a field solve."""
 
-    def __init__(self, field, scale=1.0):
+    def __init__(self, field: Any, scale: Any = 1.0) -> None:
         self.field = field
         self.scale = float(scale)
 
-    def _kind(self):
+    def _kind(self) -> Any:
         return "laplacian"
 
-    def __neg__(self):
+    def __neg__(self) -> Any:
         return Laplacian(self.field, -self.scale)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "Laplacian(%s%r)" % (
             ("" if self.scale == 1.0 else "%g*" % self.scale), self.field)
 
@@ -331,24 +334,24 @@ class RateTerm(_BoardNode):
     :class:`RateExpr` that the model destructures into ``flux`` and ``sources``.
     """
 
-    def _rate_terms(self):
+    def _rate_terms(self) -> Any:
         """Return ``[(kind, payload, sign)]`` -- one entry per primitive summand."""
         raise NotImplementedError
 
-    def __neg__(self):
+    def __neg__(self) -> Any:
         return RateExpr([(k, p, -s) for (k, p, s) in self._rate_terms()])
 
-    def __add__(self, other):
+    def __add__(self, other: Any) -> Any:
         return RateExpr(self._rate_terms() + _as_rate(other)._rate_terms())
 
-    def __radd__(self, other):
+    def __radd__(self, other: Any) -> Any:
         return RateExpr(_as_rate(other)._rate_terms() + self._rate_terms())
 
-    def __sub__(self, other):
+    def __sub__(self, other: Any) -> Any:
         return self + (-_as_rate(other))
 
 
-def _as_rate(x):
+def _as_rate(x: Any) -> Any:
     """Coerce ``x`` to a :class:`RateTerm` or raise a clear error."""
     if isinstance(x, RateTerm):
         return x
@@ -360,13 +363,13 @@ def _as_rate(x):
 class RateExpr(RateTerm):
     """An accumulated sum of rate terms (flux contributions and source handles)."""
 
-    def __init__(self, terms):
+    def __init__(self, terms: Any) -> None:
         self.terms = list(terms)
 
-    def _rate_terms(self):
+    def _rate_terms(self) -> Any:
         return list(self.terms)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "RateExpr(%r)" % (self.terms,)
 
 
@@ -377,14 +380,14 @@ class Divergence(RateTerm):
     model's flux handle (or ``None`` for the model's default flux).
     """
 
-    def __init__(self, flux, scale=1.0):
+    def __init__(self, flux: Any, scale: Any = 1.0) -> None:
         self.flux = flux
         self.scale = float(scale)
 
-    def _rate_terms(self):
+    def _rate_terms(self) -> Any:
         return [("flux", self.flux, self.scale)]
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "Divergence(%s%r)" % (
             ("" if self.scale == 1.0 else "%g*" % self.scale), self.flux)
 
@@ -392,31 +395,31 @@ class Divergence(RateTerm):
 class TimeDerivative(_BoardNode):
     """``ddt(U)`` / ``rate(U)`` -- the left-hand side of a rate equation."""
 
-    def __init__(self, state):
+    def __init__(self, state: Any) -> None:
         self.state = state
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "ddt(%r)" % (self.state,)
 
 
 class Unknown(_BoardNode):
     """A solve unknown: ``unknown("U*")`` in ``(I - dt*C) @ unknown("U*") == rhs``."""
 
-    def __init__(self, name):
+    def __init__(self, name: Any) -> None:
         self.name = str(name)
 
-    def __rmatmul__(self, operator):
+    def __rmatmul__(self, operator: Any) -> Any:
         """``operator @ unknown("U*")`` -- the left-hand side of an implicit solve."""
         return OpApply(operator, self)
 
-    def __mul__(self, coeff):
+    def __mul__(self, coeff: Any) -> Any:
         # coeff * phi -- a zeroth-order reaction term (the k*phi of a screened Poisson).
         from .elliptic import Reaction
         return Reaction(self, coeff)
 
     __rmul__ = __mul__
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "unknown(%r)" % (self.name,)
 
 
@@ -427,20 +430,20 @@ class OpApply(_BoardNode):
     :class:`Unknown`; :meth:`pops.time.Program.solve` destructures it.
     """
 
-    def __init__(self, operator, unknown):
+    def __init__(self, operator: Any, unknown: Any) -> None:
         self.operator = operator
         self.unknown = unknown
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "OpApply(%r @ %r)" % (self.operator, self.unknown)
 
 
 class Integral(_BoardNode):
     """A spatial integral of an expression -- the value of a generic invariant."""
 
-    def __init__(self, expr, over=None):
+    def __init__(self, expr: Any, over: Any = None) -> None:
         self.expr = expr
         self.over = over
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "integral(%r)" % (self.expr,)

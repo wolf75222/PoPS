@@ -17,6 +17,10 @@ Both are inert (Spec 5 sec.6): they record the choice and answer ``available`` /
 ``inspect``; the C++ kernel performs the multigrid V-cycles. The ``scheme`` attribute mirrors
 the runtime token so the install path's solver-token resolution keeps working.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Availability, Descriptor
 from pops.descriptors_report import CapabilitySet
 from pops.solvers.options import Chebyshev, DirectSmallGrid, RedBlackGaussSeidel
@@ -42,7 +46,8 @@ class GeometricMG(Descriptor):
     native_id = "pops::GeometricMG"
     scheme = "geometric_mg"
 
-    def __init__(self, smoother=None, coarse=None, tolerance=None, max_cycles=20):
+    def __init__(self, smoother: Any = None, coarse: Any = None, tolerance: Any = None,
+                 max_cycles: int = 20) -> None:
         self.smoother = _check(smoother, _SMOOTHERS, "smoother",
                                "pops.solvers.options.Chebyshev()", Chebyshev())
         self.coarse = _check(coarse, _COARSE, "coarse",
@@ -58,14 +63,14 @@ class GeometricMG(Descriptor):
         self.max_cycles = int(max_cycles)
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "geometric_mg"
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet(capability_map(uniform=True, amr=True, mpi=True, gpu=True,
                                             variable_epsilon=True, periodic_bc=True, wall_bc=True))
 
-    def options(self):
+    def options(self) -> dict:
         return {
             "smoother": self.smoother.name,
             "coarse": self.coarse.name,
@@ -73,7 +78,7 @@ class GeometricMG(Descriptor):
             "max_cycles": self.max_cycles,
         }
 
-    def lower(self, context=None):
+    def lower(self, context: Any = None) -> Any:
         from pops.descriptors_report import LoweredDescriptor
         return LoweredDescriptor(
             name=self.name, category=self.category, native_id=self.native_id,
@@ -83,7 +88,7 @@ class GeometricMG(Descriptor):
                    "tolerance": self.tolerance.lower(context),
                    "max_cycles": self.max_cycles})
 
-    def inspect(self):
+    def inspect(self) -> Any:
         view = super().inspect()
         view["scheme"] = self.scheme
         view["available"] = True
@@ -105,24 +110,24 @@ class FFT(Descriptor):
     category = "elliptic_solver"
     native_id = "pops::PoissonFFTSolver"
 
-    def __init__(self, spectral=False):
+    def __init__(self, spectral: bool = False) -> None:
         self.spectral = bool(spectral)
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "fft"
 
     @property
-    def scheme(self):
+    def scheme(self) -> str:
         return "fft_spectral" if self.spectral else "fft"
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet(capability_map(uniform=True, mpi=True, gpu=True, periodic_bc=True))
 
-    def options(self):
+    def options(self) -> dict:
         return {"spectral": self.spectral}
 
-    def available(self, context=None):
+    def available(self, context: Any = None) -> Any:
         # Spec 6 sec.8: FFT is mathematically incompatible with an AMR hierarchy (it needs a
         # single uniform periodic mesh, not a refined one). When the route's layout is AMR,
         # refuse PRECISELY -- naming the incompatibility and the general elliptic alternative --
@@ -139,14 +144,14 @@ class FFT(Descriptor):
             missing=["periodic BC", "constant coefficient", "power-of-two grid"],
             alternatives=["pops.solvers.elliptic.GeometricMG()"])
 
-    def inspect(self):
+    def inspect(self) -> Any:
         view = super().inspect()
         view["scheme"] = self.scheme
         view["available"] = "partial"
         return view
 
 
-def _context_is_amr_layout(context):
+def _context_is_amr_layout(context: Any) -> bool:
     """True when the route @p context names an AMR mesh layout (duck-typed, no mesh import).
 
     A compile / validate context may carry the chosen layout under a ``"layout"`` key (a dict)
@@ -167,7 +172,7 @@ def _context_is_amr_layout(context):
     caps = getattr(layout, "capabilities", None)
     if callable(caps):
         try:
-            declared = caps()
+            declared: Any = caps()
         except Exception:
             # available() must always return an Availability, never raise: a context whose
             # capabilities() needs an argument or itself raises is simply "not an AMR layout".
@@ -178,7 +183,7 @@ def _context_is_amr_layout(context):
     return False
 
 
-def _check(value, allowed, param, suggestion, default):
+def _check(value: Any, allowed: Any, param: str, suggestion: str, default: Any) -> Any:
     """Validate a typed sub-descriptor keyword: pass it through, default None, reject a string.
 
     A bare string / number for a typed slot is the Spec 5 sec.7 anti-pattern; it is rejected

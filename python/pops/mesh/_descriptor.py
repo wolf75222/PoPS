@@ -14,6 +14,8 @@ longer a parallel duplicate. ``pops.mesh._descriptor.Availability`` and ``MeshDe
 importable for back-compat. The ``mesh -> descriptors`` import is on a flat root module
 (``pops.descriptors`` is not a tracked layer), so it does not add a cross-layer edge.
 """
+from __future__ import annotations
+
 from pops.descriptors import Availability, Descriptor
 
 

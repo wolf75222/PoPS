@@ -5,9 +5,18 @@ memory-traffic + kernel-count ``estimate``, the GPU anti-pattern detectors (``gp
 and the human-readable ``estimate_report`` (Spec 3 s28, ADC-465). A REPORT surface: pure IR
 analysis, never mutates the Program, no codegen / _pops.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from pops._report import Report
 from pops.time.program_base import _ProgramConstants
 from pops.time.values import Value, _Affine  # noqa: F401
+
+if TYPE_CHECKING:
+    from pops.time._program_contract import _ProgramBase
+else:
+    _ProgramBase = object
 
 
 class ProgramReport(Report):
@@ -21,7 +30,8 @@ class ProgramReport(Report):
     report_type = "program"
     schema_version = 1
 
-    def __init__(self, *, name, ops, commits, hash, histories, dt_bound, scratch):
+    def __init__(self, *, name: Any, ops: Any, commits: Any, hash: Any, histories: Any,
+                 dt_bound: Any, scratch: Any) -> None:
         self.name = name
         self.ops = ops
         self.commits = list(commits)
@@ -30,16 +40,16 @@ class ProgramReport(Report):
         self.dt_bound = dt_bound
         self.scratch = dict(scratch)
 
-    def to_dict(self):
+    def to_dict(self) -> Any:
         return self._stamp({"name": self.name, "ops": self.ops, "commits": list(self.commits),
                             "hash": self.hash, "histories": dict(self.histories),
                             "dt_bound": self.dt_bound, "scratch": dict(self.scratch)})
 
 
-class _ProgramInspect(_ProgramConstants):
+class _ProgramInspect(_ProgramConstants, _ProgramBase):
     """Static cost / buffer inspection for the Program authoring class."""
 
-    def inspect(self):
+    def inspect(self) -> Any:
         """A typed :class:`ProgramReport` of this Program (ADC-564). Inert: no codegen, no mutation.
 
         Aggregates the IR facts the Program already carries -- its name, node count, committed
@@ -55,7 +65,7 @@ class _ProgramInspect(_ProgramConstants):
             histories=dict(getattr(self, "_histories", {})), dt_bound=dt_bound,
             scratch=dict(estimate))
 
-    def ir_nodes(self):
+    def ir_nodes(self) -> Any:
         """The generated IR nodes as a structured, inert list (ADC-554 inspection surface).
 
         One dict per SSA node in build order -- ``{name, op, vtype, block, inputs, attrs}`` -- plus the
@@ -65,7 +75,7 @@ class _ProgramInspect(_ProgramConstants):
         ``pops.lib.time`` macro generated without reaching into ``self._values``. Read-only: it copies
         each node's ``attrs`` (never the live dict) and mutates nothing.
         """
-        def _attr(val):
+        def _attr(val: Any) -> Any:
             # Keep the report array-free and JSON-friendly: reference Values / sub-blocks by name/id,
             # pass scalars through, summarize anything else by its type name.
             if isinstance(val, Value):
@@ -94,7 +104,7 @@ class _ProgramInspect(_ProgramConstants):
                           "logical_shape": st.logical_shape, "source_location": st.source_location})
         return nodes
 
-    def scratch_liveness(self):
+    def scratch_liveness(self) -> Any:
         """Per-scratch LIVE RANGES over the linear step-body order (Spec 3 s28 scratch-liveness
         analysis, ADC-465). A REPORT, not a transform: it never rewrites the IR.
 
@@ -141,7 +151,7 @@ class _ProgramInspect(_ProgramConstants):
                         "def_index": d, "last_use_index": lu, "live_span": lu - d})
         return out
 
-    def buffer_reuse_report(self):
+    def buffer_reuse_report(self) -> Any:
         """Buffer-reuse opportunities from the scratch live ranges (Spec 3 s28 buffer reuse, ADC-465).
         A REPORT, not a transform: the codegen may keep separate buffers, but the memory ESTIMATE
         reflects reuse.
@@ -177,7 +187,7 @@ class _ProgramInspect(_ProgramConstants):
         return {"scratch_count": len(ranges), "buffer_count": n_buffers,
                 "reused": reused, "assignment": assignment}
 
-    def estimate(self):
+    def estimate(self) -> Any:
         """Static memory-traffic + kernel-count estimate over the lowered IR (Spec 3 s28, ADC-465).
         A REPORT, not a transform. All figures are STRUCTURAL (counted off the IR / the lowering),
         in UNITS of one block-state field traversal (n_cons * n_cells * 8 bytes) -- the absolute byte
@@ -228,7 +238,7 @@ class _ProgramInspect(_ProgramConstants):
                 "field_reads": reads, "field_writes": writes, "traffic_fields": traffic}
 
 
-    def gpu_detectors(self):
+    def gpu_detectors(self) -> Any:
         """Flag GPU anti-patterns from the static :meth:`estimate` (Spec 3 s28, ADC-465). Returns a
         list of warning dicts ``{"detector", "value", "threshold", "message"}`` -- NEVER raises (an
         analysis report, not a hard error). Detects too-many-small-kernels (launch overhead),
@@ -251,7 +261,7 @@ class _ProgramInspect(_ProgramConstants):
                                  "message": msg})
         return warnings
 
-    def scratch_plan(self, model=None):
+    def scratch_plan(self, model: Any = None) -> Any:
         """The scratch-buffer liveness plan of this Program (Spec 5 sec.13.11.3, criterion #38).
 
         A thin delegator to :func:`pops.codegen.scratch_plan.build_scratch_plan` (lazy import, so
@@ -264,7 +274,7 @@ class _ProgramInspect(_ProgramConstants):
         from pops.codegen.scratch_plan import build_scratch_plan
         return build_scratch_plan(self, model=model)
 
-    def estimate_report(self):
+    def estimate_report(self) -> Any:
         """A human-readable cost report: the static memory-traffic / kernel-count :meth:`estimate`,
         the buffer-reuse summary and any GPU detector warnings (Spec 3 s28 inspection surface,
         ADC-465). A report only -- ``self`` is never mutated."""

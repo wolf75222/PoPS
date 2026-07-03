@@ -4,6 +4,11 @@
 not; the module helpers (``always`` / ``every`` / ``when`` / ``on_start`` / ``on_end`` /
 ``subcycle``) build the kinds. Authoring only.
 """
+from __future__ import annotations
+
+from typing import Any
+
+
 class Schedule:
     """When a Program node is due, and what to do when it is not (Spec 3 unified scheduler).
 
@@ -25,7 +30,7 @@ class Schedule:
     # policies that reuse a stored value, so the operator must be cacheable
     _CACHING = ("hold", "accumulate_dt")
 
-    def __init__(self, kind, policy="recompute", **params):
+    def __init__(self, kind: Any, policy: Any = "recompute", **params: Any) -> None:
         if kind not in Schedule._KINDS:
             raise ValueError("schedule kind %r must be one of %s"
                              % (kind, ", ".join(Schedule._KINDS)))
@@ -36,36 +41,42 @@ class Schedule:
         self.policy = policy
         self.params = dict(params)
 
-    def is_always(self):
+    def is_always(self) -> Any:
         """True for the default cadence (every step, recompute) -- the only schedule that lowers."""
         return self.kind == "always" and self.policy == "recompute"
 
-    def needs_cache(self):
+    def needs_cache(self) -> Any:
         """True if the policy reuses a stored value (so the operator must be cacheable)."""
         return self.policy in Schedule._CACHING
 
-    def _with_policy(self, policy):
+    def _with_policy(self, policy: Any) -> Any:
         return Schedule(self.kind, policy=policy, **self.params)
 
-    def recompute(self):
+    def recompute(self) -> Any:
+        """A copy whose off-cadence policy re-evaluates the node (the default)."""
         return self._with_policy("recompute")
 
-    def hold(self):
+    def hold(self) -> Any:
+        """A copy whose off-cadence policy reuses the cached value (needs a cacheable op)."""
         return self._with_policy("hold")
 
-    def skip(self):
+    def skip(self) -> Any:
+        """A copy whose off-cadence policy skips the node entirely."""
         return self._with_policy("skip")
 
-    def zero(self):
+    def zero(self) -> Any:
+        """A copy whose off-cadence policy substitutes a zero value."""
         return self._with_policy("zero")
 
-    def accumulate_dt(self):
+    def accumulate_dt(self) -> Any:
+        """A copy whose off-cadence policy accumulates dt until the node is next due."""
         return self._with_policy("accumulate_dt")
 
-    def error(self):
+    def error(self) -> Any:
+        """A copy whose off-cadence policy raises: the node must never run off cadence."""
         return self._with_policy("error")
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         if self.kind == "every":
             base = "every(%r)" % (self.params.get("n"),)
         elif self.kind == "subcycle":
@@ -77,34 +88,34 @@ class Schedule:
         return base if self.policy == "recompute" else "%s.%s()" % (base, self.policy)
 
 
-def always():
+def always() -> Any:
     """Due every step, recomputed -- the default cadence (the only schedule that runs today)."""
     return Schedule("always")
 
 
-def every(n):
+def every(n: Any) -> Any:
     """Due every ``n`` macro-steps (``n`` a positive int)."""
     if not (isinstance(n, int) and n > 0):
         raise ValueError("every(n): n must be a positive int, got %r" % (n,))
     return Schedule("every", n=n)
 
 
-def when(cond):
+def when(cond: Any) -> Any:
     """Due when the runtime condition ``cond`` holds (a Program Bool value or a callable)."""
     return Schedule("when", cond=cond)
 
 
-def on_start():
+def on_start() -> Any:
     """Due only at the first step."""
     return Schedule("on_start")
 
 
-def on_end():
+def on_end() -> Any:
     """Due only at the last step."""
     return Schedule("on_end")
 
 
-def subcycle(count, dt=None):
+def subcycle(count: Any, dt: Any = None) -> Any:
     """Structured sub-cycling: ``count`` inner steps (of ``dt`` each, default ``macro_dt/count``)."""
     if not (isinstance(count, int) and count > 0):
         raise ValueError("subcycle(count): count must be a positive int, got %r" % (count,))

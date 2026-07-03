@@ -9,8 +9,10 @@ Split out of ``_capabilities`` for the 500-line cap; ``pops._capabilities``
 re-exports every name here. ``_pops`` is imported LAZILY so this module stays
 importable without a compiled extension.
 """
+from __future__ import annotations
 
 import json
+from typing import Any
 
 from pops._capabilities_common import (
     CapabilityRouteMatrix,
@@ -21,7 +23,7 @@ from pops._capabilities_common import (
 )
 
 
-def _module_capabilities(target="module"):
+def _module_capabilities(target: str = "module") -> Any:
     """The C++ authoritative capability dict (``_pops.module_capabilities()``) or ``None``.
 
     Lazily imports ``_pops`` (top-level then ``pops._pops``, mirroring the codegen toolchain) so the
@@ -46,7 +48,7 @@ def _module_capabilities(target="module"):
         return None
 
 
-def _native_capability_report_from_extension(target="module"):
+def _native_capability_report_from_extension(target: str = "module") -> Any:
     """Return ``_pops.capability_report(target)`` as :class:`NativeCapabilityReport`, or ``None``."""
     try:
         import _pops as mod  # noqa: PLC0415 -- lazy: keeps this module importable without _pops
@@ -64,7 +66,8 @@ def _native_capability_report_from_extension(target="module"):
         return None
 
 
-def native_capability_report(target="module", *, flags=None, source=None):
+def native_capability_report(target: str = "module", *, flags: Any = None,
+                             source: Any = None) -> Any:
     """Return the structured native capability report (ADC-591).
 
     With a current ``_pops`` build, values come from C++ ``capability_report(target)``. ``flags`` is
@@ -87,7 +90,7 @@ def native_capability_report(target="module", *, flags=None, source=None):
         abi_key=None, platform="unknown", capabilities=caps, runtime={}, routes=rows)
 
 
-def _feature_layout(feature):
+def _feature_layout(feature: str) -> str:
     if feature == "supports_uniform":
         return "uniform"
     if feature == "supports_amr":
@@ -95,13 +98,13 @@ def _feature_layout(feature):
     return "uniform|amr"
 
 
-def _feature_backend(feature):
+def _feature_backend(feature: str) -> str:
     if feature in ("supports_stride", "supports_amr"):
         return "production"
     return "module"
 
 
-def _feature_platform(feature):
+def _feature_platform(feature: str) -> str:
     if feature in ("supports_mpi", "supports_custom_communicator"):
         return "mpi"
     if feature == "supports_gpu":
@@ -109,7 +112,7 @@ def _feature_platform(feature):
     return "host"
 
 
-def _flag_error_message(feature):
+def _flag_error_message(feature: str) -> str:
     requests = {
         "supports_amr": ("layout=AMR", "layout=Uniform or backend='production' target='amr_system'",
                          "use layout=Uniform or compile with backend='production' target='amr_system'"),
@@ -137,8 +140,8 @@ class NativeCapabilityReport:
     validators do not parse formatted strings.
     """
 
-    def __init__(self, *, schema_version, abi_version, target, abi_key, platform,
-                 capabilities, runtime, routes):
+    def __init__(self, *, schema_version: Any, abi_version: Any, target: Any, abi_key: Any,
+                 platform: Any, capabilities: Any, runtime: Any, routes: Any) -> None:
         self.schema_version = int(schema_version)
         self.abi_version = int(abi_version)
         self.target = target
@@ -149,7 +152,7 @@ class NativeCapabilityReport:
         self.routes = list(routes)
 
     @classmethod
-    def from_dict(cls, payload):
+    def from_dict(cls, payload: Any) -> NativeCapabilityReport:
         routes = [_route_from_native_dict(row) for row in payload.get("routes", [])]
         return cls(
             schema_version=payload.get("schema_version", 0),
@@ -161,7 +164,7 @@ class NativeCapabilityReport:
             runtime=payload.get("runtime", {}),
             routes=routes)
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {
             "schema_version": self.schema_version,
             "abi_version": self.abi_version,
@@ -173,7 +176,7 @@ class NativeCapabilityReport:
             "routes": [row.to_dict() for row in self.routes],
         }
 
-    def to_json(self, path=None, *, indent=2):
+    def to_json(self, path: Any = None, *, indent: int = 2) -> Any:
         text = json.dumps(self.to_dict(), indent=indent, sort_keys=True)
         if path is not None:
             with open(str(path), "w", encoding="utf-8") as handle:
@@ -181,17 +184,17 @@ class NativeCapabilityReport:
             return path
         return text
 
-    def route(self, feature):
+    def route(self, feature: str) -> Any:
         for row in self.routes:
             if row.feature == feature:
                 return row
         raise KeyError(feature)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return ("NativeCapabilityReport(schema=%r, abi=%r, target=%r, routes=%d)"
                 % (self.schema_version, self.abi_version, self.target, len(self.routes)))
 
-    def __str__(self):
+    def __str__(self) -> str:
         lines = ["native capability report (schema=%s, abi=%s, target=%s)"
                  % (self.schema_version, self.abi_version, self.target)]
         lines.append("  platform : %s" % self.platform)
@@ -206,7 +209,7 @@ class NativeCapabilityReport:
         return "\n".join(lines)
 
 
-def _route_from_native_dict(raw):
+def _route_from_native_dict(raw: Any) -> Any:
     status = raw.get("status", "unknown")
     requested = raw.get("requested") or raw.get("feature")
     available_route = raw.get("available_route") or "no native route"
@@ -232,9 +235,11 @@ def _route_from_native_dict(raw):
         alternative=raw.get("alternative", ""))
 
 
-def _row(feature, *, layout="any", backend="any", platform="host", flags=None,
-         flag=None, mpi=False, gpu=False, limitation="", requested=None,
-         available_route=None, alternative=None, source="native", status=None):
+def _row(feature: str, *, layout: str = "any", backend: str = "any",
+         platform: str = "host", flags: Any = None, flag: Any = None, mpi: Any = False,
+         gpu: Any = False, limitation: str = "", requested: Any = None,
+         available_route: Any = None, alternative: Any = None, source: str = "native",
+         status: Any = None) -> Any:
     if status is None:
         status = _status_from_flag(flags, flag) if flag else "available"
     err = ""
@@ -249,7 +254,7 @@ def _row(feature, *, layout="any", backend="any", platform="host", flags=None,
         available_route=available_route or "", alternative=alternative or "")
 
 
-def _support_rows(flags, source):
+def _support_rows(flags: Any, source: Any) -> list:
     return [
         _row("supports_uniform", layout="uniform", backend="module", platform="host",
              flags=flags, flag="supports_uniform", limitation="single-level Uniform layout",
@@ -292,7 +297,7 @@ def _support_rows(flags, source):
     ]
 
 
-def _inventory_rows(flags, source):
+def _inventory_rows(flags: Any, source: Any) -> list:
     mpi = bool(_flag_value(flags, "supports_mpi"))
     gpu = bool(_flag_value(flags, "supports_gpu"))
     return [
@@ -468,8 +473,9 @@ def _inventory_rows(flags, source):
     ]
 
 
-def native_capability_matrix(*, owner="module", layout="module", target="module",
-                             flags=None, source=None):
+def native_capability_matrix(*, owner: str = "module", layout: str = "module",
+                             target: str = "module", flags: Any = None,
+                             source: Any = None) -> Any:
     """Return the ADC-549 native route matrix.
 
     ``flags`` can be supplied by a compiled artifact manifest. When absent, the built module's

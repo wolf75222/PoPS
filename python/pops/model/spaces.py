@@ -9,6 +9,9 @@ numerics and no array data; they are a TYPED VIEW only.
 Imports only the standard library so it can be exercised without the compiled
 ``_pops`` extension.
 """
+from __future__ import annotations
+
+from typing import Any
 
 
 class Space:
@@ -22,37 +25,37 @@ class Space:
 
     kind = "space"
 
-    def __init__(self, name, components=(), layout="cell"):
+    def __init__(self, name: Any, components: Any = (), layout: str = "cell") -> None:
         self.name = str(name)
         self.components = tuple(components)
         self.layout = str(layout)
 
-    def _key(self):
+    def _key(self) -> Any:
         return (self.kind, self.name, self.components, self.layout)
 
-    def __eq__(self, other):
+    def __eq__(self, other: Any) -> bool:
         return isinstance(other, Space) and self._key() == other._key()
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(self._key())
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "%s(%r, components=%r)" % (
             type(self).__name__, self.name, list(self.components))
 
     # Operator-first signature sugar: ``U >> Fields`` and ``(U, Fields) >> Rate(U)``.
-    def __rshift__(self, output):
+    def __rshift__(self, output: Any) -> Any:
         """``space >> output`` -- a Signature with this space as the sole input."""
         from .signatures import Signature
         return Signature((self,), output)
 
-    def __rrshift__(self, inputs):
+    def __rrshift__(self, inputs: Any) -> Any:
         """``(a, b) >> space`` -- this space is the output, the left tuple the inputs."""
         from .signatures import Signature
         return Signature(_as_signature_inputs(inputs), self)
 
 
-def _as_signature_inputs(inputs):
+def _as_signature_inputs(inputs: Any) -> Any:
     """Normalize the left side of ``>>`` to a tuple of input types."""
     if isinstance(inputs, (tuple, list)):
         return tuple(inputs)
@@ -66,8 +69,8 @@ class StateSpace(Space):
 
     kind = "state"
 
-    def __init__(self, name="U", components=(), roles=None, layout="cell",
-                 storage="multifab"):
+    def __init__(self, name: Any = "U", components: Any = (), roles: Any = None, layout: str = "cell",
+                 storage: str = "multifab") -> None:
         super().__init__(name, components, layout)
         self.roles = dict(roles) if roles else {}
         self.storage = str(storage)
@@ -90,7 +93,7 @@ class RateSpace(Space):
 
     kind = "rate"
 
-    def __init__(self, base):
+    def __init__(self, base: Any) -> None:
         base_name = base.name if isinstance(base, StateSpace) else str(base)
         # Components are intentionally NOT copied from the base: identity is by the
         # base name (encoded in the space name "Rate(<base>)"), so Rate("U") built
@@ -99,7 +102,7 @@ class RateSpace(Space):
         self.base_name = base_name
 
 
-def Rate(base):  # noqa: N802 (type-constructor sugar, intentionally capitalized)
+def Rate(base: Any) -> Any:  # noqa: N802 (type-constructor sugar, intentionally capitalized)
     """Return the :class:`RateSpace` tangent of ``base`` (a StateSpace or a name)."""
     return RateSpace(base)
 
@@ -109,12 +112,12 @@ class ParameterSpace:
     holds only the declaration; the runtime value belongs to the Simulation (read in a
     generated kernel via ProgramContext / ModuleContext, never frozen at codegen)."""
 
-    def __init__(self, name, default=0.0, dtype="real"):
+    def __init__(self, name: Any, default: Any = 0.0, dtype: str = "real") -> None:
         self.name = str(name)
         self.default = default
         self.dtype = str(dtype)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "ParameterSpace(%r, default=%r, dtype=%r)" % (
             self.name, self.default, self.dtype)
 
@@ -124,9 +127,9 @@ class AuxSpace:
     imposed magnetic field, a mask). Distinct from a FieldSpace, which an operator
     produces; an AuxSpace is imposed runtime data the operators may read."""
 
-    def __init__(self, name, kind="cell_scalar"):
+    def __init__(self, name: Any, kind: str = "cell_scalar") -> None:
         self.name = str(name)
         self.kind = str(kind)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "AuxSpace(%r, kind=%r)" % (self.name, self.kind)

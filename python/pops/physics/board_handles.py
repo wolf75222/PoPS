@@ -23,7 +23,10 @@ operators a hand-written ``pops.model.Module`` registers (ADC-457). The single-s
 path is byte-identical to the single-state board model. The compiled multi-block
 ``.so`` run is validated on ROMEO (Kokkos-only AOT).
 """
+from __future__ import annotations
+
 import re
+from typing import Any
 
 from .. import math as _bm
 from ..model.handles import OperatorHandle
@@ -33,7 +36,7 @@ __all__ = ["Invariant", "FluxHandle", "SourceHandle", "FieldsHandle", "FieldOutp
            "_safe_name", "_canon_role", "_roles_for", "_BOARD_ROLE"]
 
 
-def _safe_name(name):
+def _safe_name(name: Any) -> str:
     """A C-identifier-safe operator name derived from a board display name."""
     s = re.sub(r"[^0-9a-zA-Z_]", "_", str(name)).strip("_")
     if not s:
@@ -53,14 +56,14 @@ _BOARD_ROLE = {
 }
 
 
-def _canon_role(role):
+def _canon_role(role: Any) -> Any:
     """Canonicalize a board role string to a dsl role; pass through None and unknown roles."""
     if role is None:
         return None
     return _BOARD_ROLE.get(str(role).lower(), role)
 
 
-def _roles_for(hyp):
+def _roles_for(hyp: Any) -> Any:
     """The canonical roles of a HyperbolicModel's conservative state."""
     from .aux import roles_for
     return roles_for(hyp.cons_names, hyp.cons_roles)
@@ -78,7 +81,7 @@ class StateHandle:
     operator-first ``dsl.Var("ni", "cons") - dsl.Var("ne", "cons")``.
     """
 
-    def __init__(self, name, components, vars_, roles, space=None):
+    def __init__(self, name: Any, components: Any, vars_: Any, roles: Any, space: Any = None) -> None:
         self.name = str(name)
         self.components = tuple(components)
         self.vars = tuple(vars_)
@@ -88,13 +91,13 @@ class StateHandle:
         # derived on demand from the dsl model.
         self.space = space
 
-    def __iter__(self):
+    def __iter__(self) -> Any:
         return iter(self.vars)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.vars)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: Any) -> Any:
         if isinstance(key, str):
             try:
                 return self.vars[self.components.index(key)]
@@ -104,54 +107,54 @@ class StateHandle:
                     % (self.name, key, ", ".join(self.components))) from None
         return self.vars[key]
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "StateHandle(%r, %r)" % (self.name, list(self.components))
 
 
 class FieldHandle:
     """A solved/auxiliary scalar field (e.g. the potential ``phi``)."""
 
-    def __init__(self, name):
+    def __init__(self, name: Any) -> None:
         self.name = str(name)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "FieldHandle(%r)" % (self.name,)
 
 
 class VectorHandle:
     """A named vector field with ``.x`` / ``.y`` expression components."""
 
-    def __init__(self, name, x, y):
+    def __init__(self, name: Any, x: Any, y: Any) -> None:
         self.name = str(name)
         self.x = x
         self.y = y
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "VectorHandle(%r)" % (self.name,)
 
 
 class FluxHandle:
     """A declared physical flux (the default hyperbolic flux of a model)."""
 
-    def __init__(self, name, is_default=True):
+    def __init__(self, name: Any, is_default: bool = True) -> None:
         self.name = str(name)
         self.is_default = bool(is_default)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "FluxHandle(%r)" % (self.name,)
 
 
 class SourceHandle(_bm.RateTerm):
     """A declared local source term -- a summand of a rate equation."""
 
-    def __init__(self, display_name, reg_name):
+    def __init__(self, display_name: Any, reg_name: Any) -> None:
         self.name = str(display_name)
         self.reg_name = str(reg_name)
 
-    def _rate_terms(self):
+    def _rate_terms(self) -> Any:
         return [("source", self, 1.0)]
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "SourceHandle(%r)" % (self.name,)
 
 
@@ -164,17 +167,17 @@ class LocalLinearOperatorExpr:
     is an error -- it cannot resolve its field inputs without a registration.
     """
 
-    def __init__(self, display_name, matrix, on=None):
+    def __init__(self, display_name: Any, matrix: Any, on: Any = None) -> None:
         self.name = str(display_name)
         self.matrix = matrix
         self.on = on
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
         raise TypeError(
             "local_linear_operator object %r is not a callable operator. Register it with "
             "m.operator(%r, returns=...) or @module.operator(...) first." % (self.name, self.name))
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "LocalLinearOperatorExpr(%r)" % (self.name,)
 
 
@@ -194,13 +197,13 @@ class CallableOperator(OperatorHandle):
 
     __slots__ = ("reg_name", "_model")
 
-    def __init__(self, name, model):
+    def __init__(self, name: Any, model: Any) -> None:
         super().__init__(str(name))
         object.__setattr__(self, "reg_name", str(name))
         object.__setattr__(self, "_model", model)  # bound to its FRESH module at call time
         self._resolve_kind_signature()
 
-    def _resolve_kind_signature(self):
+    def _resolve_kind_signature(self) -> None:
         """Stamp the kind / signature / category from the model's module (best effort, never raises).
 
         The operator was registered by the board declarer before this handle was built, so it is
@@ -218,7 +221,7 @@ class CallableOperator(OperatorHandle):
         from pops.model.operators import operator_family
         object.__setattr__(self, "category", operator_family(op.kind))
 
-    def __call__(self, *args, name=None):
+    def __call__(self, *args: Any, name: Any = None) -> Any:
         prog = self._program_from_args(args)
         reg = getattr(prog, "_registry", None)
         # Bind (or rebind) the model's FRESH module if the program has no registry yet or the bound
@@ -228,7 +231,7 @@ class CallableOperator(OperatorHandle):
             prog.bind_operators(self._model.module)
         return prog._call(self.name, *args, name=name)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "CallableOperator(%r)" % (self.name,)
 
 
@@ -243,10 +246,10 @@ class FieldOutputs:
 
     __slots__ = ("_m",)
 
-    def __init__(self, mapping):
+    def __init__(self, mapping: Any) -> None:
         object.__setattr__(self, "_m", dict(mapping or {}))
 
-    def __getattr__(self, key):
+    def __getattr__(self, key: Any) -> Any:
         # __getattr__ runs only for names not found normally, so it never shadows _m / methods.
         try:
             return self._m[key]
@@ -254,32 +257,32 @@ class FieldOutputs:
             raise AttributeError(
                 "unknown field output %r; known outputs: %s" % (key, sorted(self._m))) from None
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: Any) -> Any:
         try:
             return self._m[key]
         except KeyError:
             raise KeyError(
                 "unknown field output %r; known outputs: %s" % (key, sorted(self._m))) from None
 
-    def __contains__(self, key):
+    def __contains__(self, key: Any) -> bool:
         return key in self._m
 
-    def __iter__(self):
+    def __iter__(self) -> Any:
         return iter(self._m)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._m)
 
-    def keys(self):
+    def keys(self) -> Any:
         return self._m.keys()
 
-    def values(self):
+    def values(self) -> Any:
         return self._m.values()
 
-    def items(self):
+    def items(self) -> Any:
         return self._m.items()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "FieldOutputs(%r)" % (sorted(self._m),)
 
 
@@ -297,12 +300,12 @@ class FieldsHandle(OperatorHandle):
 
     __slots__ = ("outputs", "solver")
 
-    def __init__(self, name, outputs=None, solver=None):
+    def __init__(self, name: Any, outputs: Any = None, solver: Any = None) -> None:
         super().__init__(str(name), kind="field_operator")
         object.__setattr__(self, "outputs", FieldOutputs(outputs))
         object.__setattr__(self, "solver", solver)
 
-    def __call__(self, state, name=None):
+    def __call__(self, state: Any, name: Any = None) -> Any:
         prog = getattr(state, "prog", None)
         if prog is None:
             raise ValueError(
@@ -310,7 +313,7 @@ class FieldsHandle(OperatorHandle):
                 "(inside a Program); got %r" % (self.name, state))
         return prog.solve_fields(name=name or self.name, state=state)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "FieldsHandle(%r)" % (self.name,)
 
 
@@ -322,11 +325,11 @@ class Invariant:
     is whatever the user writes. Used for diagnostics and conservation checks.
     """
 
-    def __init__(self, name, value, over=None):
+    def __init__(self, name: Any, value: Any, over: Any = None) -> None:
         self.name = str(name)
         self.value = value
         self.over = tuple(over) if over else ()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "Invariant(%r)" % (self.name,)
 

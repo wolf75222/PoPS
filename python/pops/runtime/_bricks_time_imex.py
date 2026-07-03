@@ -7,6 +7,9 @@ re-imports every name and ``pops.runtime.bricks`` re-exports them, so no public 
 changes. The split / Schur policies (``Split`` / ``Strang`` / ``CondensedSchur``) and ``Role``
 stay in their own modules.
 """
+from __future__ import annotations
+
+from typing import Any
 
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
@@ -19,7 +22,7 @@ from pops.runtime.defaults import (
 from pops.runtime.routes import TIME_IMEX, TIME_IMEXRK_ARS222
 
 
-def _role_to_stable(name):
+def _role_to_stable(name: Any) -> Any:
     """Normalize a role name to the STABLE key expected by the C++ (role_from_name): lowercase
     snake_case ("momentum_x", "energy"). Tolerates the PascalCase variants of the C++ enum exposed in
     the target API (e.g. "MomentumX" -> "momentum_x", "Energy" -> "energy") by inserting a '_' before each
@@ -39,7 +42,7 @@ def _role_to_stable(name):
     return "".join(out)
 
 
-def _norm_implicit(label, implicit_vars, implicit_roles):
+def _norm_implicit(label: Any, implicit_vars: Any, implicit_roles: Any) -> Any:
     """Normalize the implicit-mask lists (names / physical roles) into lists of strings.
 
     None -> [] (default: inactive mask, model default, bit-identical). A bare string is tolerated
@@ -48,7 +51,7 @@ def _norm_implicit(label, implicit_vars, implicit_roles):
     POLICY / block side (and NOT the model): the SAME model is reused with distinct implicit treatments.
     The RESOLUTION of names/roles -> indices and the validation (name/role absent from the block) lives
     on the C++ side (System::add_block), the only source of truth for the block names/roles."""
-    def as_list(x, what):
+    def as_list(x: Any, what: Any) -> Any:
         if x is None:
             return []
         if isinstance(x, str):
@@ -100,14 +103,14 @@ class IMEX:
     """
 
     kind = TIME_IMEX  # typed time route (ADC-584); str value stays the historical "imex"
-    def __init__(self, substeps=1, stride=1, implicit_vars=None, implicit_roles=None,
-                 newton_max_iters=NEWTON_DEFAULT_MAX_ITERS,
-                 newton_rel_tol=NEWTON_DEFAULT_REL_TOL,
-                 newton_abs_tol=NEWTON_DEFAULT_ABS_TOL,
-                 newton_fd_eps=NEWTON_DEFAULT_FD_EPS,
-                 newton_diagnostics=False,
-                 newton_damping=NEWTON_DEFAULT_DAMPING,
-                 newton_fail_policy=NEWTON_DEFAULT_FAIL_POLICY):
+    def __init__(self, substeps: int = 1, stride: int = 1, implicit_vars: Any = None, implicit_roles: Any = None,
+                 newton_max_iters: Any = NEWTON_DEFAULT_MAX_ITERS,
+                 newton_rel_tol: Any = NEWTON_DEFAULT_REL_TOL,
+                 newton_abs_tol: Any = NEWTON_DEFAULT_ABS_TOL,
+                 newton_fd_eps: Any = NEWTON_DEFAULT_FD_EPS,
+                 newton_diagnostics: bool = False,
+                 newton_damping: Any = NEWTON_DEFAULT_DAMPING,
+                 newton_fail_policy: Any = NEWTON_DEFAULT_FAIL_POLICY) -> None:
         if int(substeps) < 1:
             raise ValueError("IMEX: substeps >= 1 (got %r)" % (substeps,))
         if int(stride) < 1:
@@ -163,14 +166,14 @@ class SourceImplicit:
 
     kind = TIME_IMEX  # same C++ path as IMEX (ImplicitSourceStepper); typed route (ADC-584)
 
-    def __init__(self, substeps=1, stride=1, implicit_vars=None, implicit_roles=None,
-                 newton_max_iters=NEWTON_DEFAULT_MAX_ITERS,
-                 newton_rel_tol=NEWTON_DEFAULT_REL_TOL,
-                 newton_abs_tol=NEWTON_DEFAULT_ABS_TOL,
-                 newton_fd_eps=NEWTON_DEFAULT_FD_EPS,
-                 newton_diagnostics=False,
-                 newton_damping=NEWTON_DEFAULT_DAMPING,
-                 newton_fail_policy=NEWTON_DEFAULT_FAIL_POLICY):
+    def __init__(self, substeps: int = 1, stride: int = 1, implicit_vars: Any = None, implicit_roles: Any = None,
+                 newton_max_iters: Any = NEWTON_DEFAULT_MAX_ITERS,
+                 newton_rel_tol: Any = NEWTON_DEFAULT_REL_TOL,
+                 newton_abs_tol: Any = NEWTON_DEFAULT_ABS_TOL,
+                 newton_fd_eps: Any = NEWTON_DEFAULT_FD_EPS,
+                 newton_diagnostics: bool = False,
+                 newton_damping: Any = NEWTON_DEFAULT_DAMPING,
+                 newton_fail_policy: Any = NEWTON_DEFAULT_FAIL_POLICY) -> None:
         if int(substeps) < 1:
             raise ValueError("SourceImplicit: substeps >= 1 (got %r)" % (substeps,))
         if int(stride) < 1:
@@ -233,14 +236,14 @@ class IMEXRK:
 
     kind = TIME_IMEXRK_ARS222  # typed time route (ADC-584)
 
-    def __init__(self, scheme="ars222", substeps=1, stride=1,
-                 newton_max_iters=NEWTON_DEFAULT_MAX_ITERS,
-                 newton_rel_tol=NEWTON_DEFAULT_REL_TOL,
-                 newton_abs_tol=NEWTON_DEFAULT_ABS_TOL,
-                 newton_fd_eps=NEWTON_DEFAULT_FD_EPS,
-                 newton_diagnostics=False,
-                 newton_damping=NEWTON_DEFAULT_DAMPING,
-                 newton_fail_policy=NEWTON_DEFAULT_FAIL_POLICY):
+    def __init__(self, scheme: str = "ars222", substeps: int = 1, stride: int = 1,
+                 newton_max_iters: Any = NEWTON_DEFAULT_MAX_ITERS,
+                 newton_rel_tol: Any = NEWTON_DEFAULT_REL_TOL,
+                 newton_abs_tol: Any = NEWTON_DEFAULT_ABS_TOL,
+                 newton_fd_eps: Any = NEWTON_DEFAULT_FD_EPS,
+                 newton_diagnostics: bool = False,
+                 newton_damping: Any = NEWTON_DEFAULT_DAMPING,
+                 newton_fail_policy: Any = NEWTON_DEFAULT_FAIL_POLICY) -> None:
         if scheme != "ars222":
             raise ValueError("IMEXRK: scheme 'ars222' (only wired IMEX-RK scheme; got %r)"
                              % (scheme,))

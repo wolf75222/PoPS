@@ -8,6 +8,10 @@ replaces ``target="amr_system"`` / ``AmrSystemTarget()`` with ``layout=AMR(...)`
 These are inert descriptors: they declare requirements / capabilities and answer
 ``available(context)`` so an unsupported route is refused before the runtime is touched.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from .._descriptor import Availability, MeshDescriptor
 from ..amr import IgnoreAMRCriteria, NATIVE_MAX_LEVELS, NATIVE_RATIOS
 from ...descriptors_report import RequirementSet, CapabilitySet
@@ -17,7 +21,7 @@ from pops.runtime_environment import validate_amr_refinement_ratio
 _LAYOUT_REPORT_SCHEMA_VERSION = 1
 
 
-def _availability_dict(status):
+def _availability_dict(status: Any) -> dict:
     return {
         "status": status.status,
         "ok": status.ok,
@@ -27,7 +31,7 @@ def _availability_dict(status):
     }
 
 
-def _native_layout_report(features):
+def _native_layout_report(features: Any) -> dict:
     from pops._capabilities import native_capability_report
 
     report = native_capability_report()
@@ -42,7 +46,7 @@ def _native_layout_report(features):
     }
 
 
-def _layout_inspect_dict(layout, *, native_features, amr_report=None):
+def _layout_inspect_dict(layout: Any, *, native_features: Any, amr_report: Any = None) -> dict:
     status = layout.available()
     info = {
         "schema_version": _LAYOUT_REPORT_SCHEMA_VERSION,
@@ -85,7 +89,8 @@ class Uniform(MeshDescriptor):
 
     category = "layout"
 
-    def __init__(self, mesh, embedded_boundary=None, refine=None, ignore_amr=None):
+    def __init__(self, mesh: Any, embedded_boundary: Any = None, refine: Any = None,
+                 ignore_amr: Any = None) -> None:
         if ignore_amr is not None and not isinstance(ignore_amr, IgnoreAMRCriteria):
             raise TypeError(
                 "Uniform(ignore_amr=...) accepts only the typed "
@@ -96,7 +101,7 @@ class Uniform(MeshDescriptor):
         self.refine = refine
         self.ignore_amr = ignore_amr
 
-    def options(self):
+    def options(self) -> dict:
         opt = {"mesh": self.mesh.name}
         if self.embedded_boundary is not None:
             opt["embedded_boundary"] = self.embedded_boundary.name
@@ -105,10 +110,10 @@ class Uniform(MeshDescriptor):
             opt["ignore_amr"] = self.ignore_amr is not None
         return opt
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"layout": "uniform", "levels": 1, "supports_amr": False})
 
-    def inspect(self):
+    def inspect(self) -> dict:
         from pops import inspect_amr
 
         return _layout_inspect_dict(
@@ -132,8 +137,9 @@ class AMR(MeshDescriptor):
 
     category = "layout"
 
-    def __init__(self, base, max_levels=2, ratio=2, regrid=None, patches=None,
-                 refine=None, nesting=None, checkpoint=None, output=None):
+    def __init__(self, base: Any, max_levels: Any = 2, ratio: Any = 2, regrid: Any = None,
+                 patches: Any = None, refine: Any = None, nesting: Any = None,
+                 checkpoint: Any = None, output: Any = None) -> None:
         self.base = base
         self.max_levels = int(max_levels)
         self.ratio = int(ratio)
@@ -144,21 +150,21 @@ class AMR(MeshDescriptor):
         self.checkpoint = checkpoint
         self.output = output
 
-    def options(self):
+    def options(self) -> dict:
         return {"base": self.base.name, "max_levels": self.max_levels, "ratio": self.ratio,
                 "regrid": self.regrid.name if self.regrid else None,
                 "refine": self.refine.name if self.refine else None}
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"layout": "amr", "max_levels": self.max_levels,
                               "ratio": self.ratio, "supports_amr": True})
 
-    def requirements(self):
+    def requirements(self) -> Any:
         return RequirementSet({"amr_runtime": True,
                                "reflux": True,
                                "tag_reduction": True})
 
-    def available(self, context=None):
+    def available(self, context: Any = None) -> Any:
         if self.max_levels > NATIVE_MAX_LEVELS:
             return Availability.no(
                 "AMR(max_levels=%d) is not supported by the current native AMR route "
@@ -171,7 +177,7 @@ class AMR(MeshDescriptor):
                 alternatives=["AMR(ratio=2)"])
         return Availability.yes()
 
-    def validate(self, context=None):
+    def validate(self, context: Any = None) -> Any:
         if self.max_levels < 1:
             raise ValueError("AMR: max_levels must be >= 1")
         validate_amr_refinement_ratio(self.ratio, where="AMR")
@@ -182,7 +188,7 @@ class AMR(MeshDescriptor):
                 policy.validate(context)
         return super().validate(context)
 
-    def inspect(self):
+    def inspect(self) -> dict:
         from pops import inspect_amr
 
         return _layout_inspect_dict(

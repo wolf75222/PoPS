@@ -274,7 +274,7 @@ def _optimal_placement(depth, snapshots):
     # the count is met. anchors already contains 0 and depth-1, so every split lands strictly
     # inside an existing gap and the endpoints stay forced.
     while len(anchors) < snapshots:
-        widest_lo = None
+        widest_lo = anchors[0]
         widest_gap = -1
         for lo, hi in zip(anchors, anchors[1:]):
             gap = hi - lo

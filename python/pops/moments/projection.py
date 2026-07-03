@@ -9,6 +9,10 @@ typed :class:`pops.descriptors.Descriptor` (Spec 5 sec.6): it declares its optio
 capabilities and is inspectable. Inert -- it records the floor parameters; the floor
 arithmetic is generated and runs in C++.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Descriptor
 from pops.descriptors_report import CapabilitySet
 
@@ -24,23 +28,23 @@ class RealizabilityProjection(Descriptor):
 
     category = "realizability"
 
-    def __init__(self, eps_m00=1e-12, eps_cov=1e-12, robust=True):
+    def __init__(self, eps_m00: Any = 1e-12, eps_cov: Any = 1e-12, robust: bool = True) -> None:
         self.eps_m00 = float(eps_m00)
         self.eps_cov = float(eps_cov)
         self.robust = bool(robust)
 
     @classmethod
-    def none(cls):
+    def none(cls) -> Any:
         """The bare, guard-free projection (``robust=False``)."""
         return cls(robust=False)
 
-    def options(self):
+    def options(self) -> dict:
         return {"eps_m00": self.eps_m00, "eps_cov": self.eps_cov, "robust": self.robust}
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"guard_level": "smooth" if self.robust else "bare"})
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return ("RealizabilityProjection(eps_m00=%g, eps_cov=%g, robust=%r)"
                 % (self.eps_m00, self.eps_cov, self.robust))
 

@@ -4,10 +4,14 @@ Extracted verbatim from pops.dsl (bodies byte-for-byte); only import lines adjus
 Public API re-exported from pops.codegen.__init__.
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 from .toolchain import pops_header_signature, _pops_module, pops_include  # noqa: F401
 
 
-def module_header_signature():
+def module_header_signature() -> Any:
     """Header signature BAKED into the loaded _pops module (token headers= of abi_key()), or None
     if the module is not loadable / the key is absent ("unknown" from a manual build -> None too)."""
     mod = _pops_module()
@@ -25,7 +29,7 @@ def module_header_signature():
     return None
 
 
-def check_compiled_matches_module(abi_key):
+def check_compiled_matches_module(abi_key: Any) -> None:
     """PRE-DLOPEN guard at the WIRING of a CompiledModel (add_equation -> add_native_block).
 
     INDISPENSABLE COMPLEMENT of _check_headers_match_module : on a cache HIT, compile_native does not
@@ -52,7 +56,7 @@ def check_compiled_matches_module(abi_key):
             % (so_sig[:12], baked[:12]))
 
 
-def _abi_key_python(include, cxx, std):
+def _abi_key_python(include: Any, cxx: Any, std: Any) -> str:
     """ABI key on the Python side, MIRROR of pops::detail::abi_key_string (compiler + standard +
     header signature). Makes the verification + diagnostic available on the Python side BEFORE
     loading the .so (the native path compares its own on the C++ side). Stable and readable form:

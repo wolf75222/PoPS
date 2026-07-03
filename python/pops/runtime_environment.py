@@ -5,6 +5,9 @@ This module is metadata-only at import time. It centralizes the current native r
 When the compiled extension is available, :func:`runtime_environment_report` delegates to the
 C++ report; otherwise it returns the same conservative static facts with unknown lifecycle fields.
 """
+from __future__ import annotations
+
+from typing import Any
 
 NATIVE_DIMENSION = 2
 NATIVE_AMR_REFINEMENT_RATIO = 2
@@ -16,13 +19,14 @@ NATIVE_COMMUNICATOR = "MPI_COMM_WORLD"
 class RuntimeCapabilityError(ValueError):
     """Unsupported runtime capability request with the structured report attached."""
 
-    def __init__(self, message, *, field, requested, report=None):
+    def __init__(self, message: str, *, field: str, requested: Any,
+                 report: Any = None) -> None:
         super().__init__(message)
         self.field = field
         self.requested = requested
         self.report = dict(report) if report is not None else runtime_environment_report()
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {
             "field": self.field,
             "requested": self.requested,
@@ -31,7 +35,7 @@ class RuntimeCapabilityError(ValueError):
         }
 
 
-def _static_report():
+def _static_report() -> dict:
     return {
         "dimension": NATIVE_DIMENSION,
         "amr_refinement_ratio": NATIVE_AMR_REFINEMENT_RATIO,
@@ -59,7 +63,7 @@ def _static_report():
     }
 
 
-def runtime_environment_report():
+def runtime_environment_report() -> dict:
     """Return runtime facts for reports and validators.
 
     The preferred source is ``_pops.runtime_environment_report()``. The fallback is static and
@@ -76,7 +80,7 @@ def runtime_environment_report():
     return _static_report()
 
 
-def compiled_runtime_facts(*, supports_mpi=None):
+def compiled_runtime_facts(*, supports_mpi: Any = None) -> dict:
     """Runtime facts for inert compiled-artifact reports.
 
     ``supports_mpi`` is the artifact's own MPI capability when known. ``None`` keeps the
@@ -93,7 +97,7 @@ def compiled_runtime_facts(*, supports_mpi=None):
     return facts
 
 
-def validate_dimension(value, *, where="runtime"):
+def validate_dimension(value: Any, *, where: str = "runtime") -> int:
     """Reject any requested dimension other than the native 2D core."""
     dim = int(value)
     if dim != NATIVE_DIMENSION:
@@ -104,7 +108,7 @@ def validate_dimension(value, *, where="runtime"):
     return dim
 
 
-def validate_amr_refinement_ratio(value, *, where="AMR"):
+def validate_amr_refinement_ratio(value: Any, *, where: str = "AMR") -> int:
     """Reject any requested AMR refinement ratio other than 2."""
     ratio = int(value)
     if ratio != NATIVE_AMR_REFINEMENT_RATIO:
@@ -116,7 +120,7 @@ def validate_amr_refinement_ratio(value, *, where="AMR"):
     return ratio
 
 
-def validate_precision(value, *, where="runtime"):
+def validate_precision(value: Any, *, where: str = "runtime") -> str:
     """Reject precision policies that the hardcoded C++ ``Real=double`` core cannot honor."""
     precision = str(value).lower()
     aliases = {"double", "float64", "real64"}
@@ -128,7 +132,7 @@ def validate_precision(value, *, where="runtime"):
     return NATIVE_PRECISION
 
 
-def validate_communicator(value, *, where="runtime"):
+def validate_communicator(value: Any, *, where: str = "runtime") -> str:
     """Reject custom communicator requests until the native MPI seam supports them."""
     comm = str(value)
     if comm in ("serial", "none"):
@@ -143,10 +147,11 @@ def validate_communicator(value, *, where="runtime"):
         % (where, value, NATIVE_COMMUNICATOR), field="communicator", requested=value)
 
 
-def validate_runtime_environment(*, dimension=None, amr_refinement_ratio=None,
-                                 precision=None, communicator=None, where="runtime"):
+def validate_runtime_environment(*, dimension: Any = None, amr_refinement_ratio: Any = None,
+                                 precision: Any = None, communicator: Any = None,
+                                 where: str = "runtime") -> dict:
     """Validate all explicit runtime environment requests supplied by a caller."""
-    out = {}
+    out: dict = {}
     if dimension is not None:
         out["dimension"] = validate_dimension(dimension, where=where)
     if amr_refinement_ratio is not None:

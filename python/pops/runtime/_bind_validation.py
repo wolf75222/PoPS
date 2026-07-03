@@ -1,28 +1,18 @@
 """pops.runtime._bind_validation -- the pure bind-time refusal core (ADC-537).
 
-``pops.bind`` refuses a bad install BEFORE the native artifact is loaded: an initial state of the
-wrong shape / dtype / component count / ghost depth, a runtime param outside its typed domain, an
-aux field a lowered operator requires but the state omits, and an ABI / Kokkos / MPI / layout
-manifest mismatch. Every refusal is a HARD error with precise context; there is NO Python-runtime
-fallback when the native load fails (that decision lives in :mod:`pops.codegen.orchestration`).
+``pops.bind`` refuses a bad install BEFORE the native artifact is loaded: an initial state of the wrong shape / dtype / component count / ghost depth, a runtime param outside its typed domain, an aux field a lowered operator requires but the state omits, and an ABI / Kokkos / MPI / layout manifest mismatch. Every refusal is a HARD error with precise context; there is NO Python-runtime fallback when the native load fails (that decision lives in :mod:`pops.codegen.orchestration`).
 
-This module is the PURE core of those gates: each function takes plain metadata (manifest /
-arguments / layout / declared params / supplied state) and returns one actionable refusal line per
-violation (empty list = ok). No ``_pops`` and no numpy at module scope (arrays are duck-typed via
-``.shape`` / ``.dtype``), so the whole refusal surface is host-testable with plain dicts;
-:func:`aggregate_bind_refusals` folds the per-gate lines into one error.
+This module is the PURE core of those gates: each function takes plain metadata (manifest / arguments / layout / declared params / supplied state) and returns one actionable refusal line per violation (empty list = ok). No ``_pops`` and no numpy at module scope (arrays are duck-typed via ``.shape`` / ``.dtype``), so the whole refusal surface is host-testable with plain dicts; :func:`aggregate_bind_refusals` folds the per-gate lines into one error.
 
-Per the phase-6 cross-stream contract (decisions 4-5): per-block ghost depth and the ABI / Kokkos /
-MPI feature tokens come from the compiled MANIFEST; a fresh artifact always carries them, and a
-manifest lacking a field it must carry is refused as ABI-incomplete (fail loud, never skipped).
+Per the phase-6 cross-stream contract (decisions 4-5): per-block ghost depth and the ABI / Kokkos / MPI feature tokens come from the compiled MANIFEST; a fresh artifact always carries them, and a manifest lacking a field it must carry is refused as ABI-incomplete (fail loud, never skipped).
 
-The ABI comparison is LIKE-WITH-LIKE: the artifact key (``<headers-sha>|<cxx>|<std>``) and the
-runtime env key (``compiler=..;std=..;headers=..;kokkos=..;stdlib=..``) are parsed into components
-and only the comparable ones are compared -- the headers signature (the real header-ABI anchor) and
-the normalized C++ standard (``c++20`` == ``202002L``). Incomparable tokens (compiler path vs
-version) are never compared; a token spelled ``unknown`` is an honest-unknown, skipped like ``None``.
+The ABI comparison is LIKE-WITH-LIKE: the artifact key (``<headers-sha>|<cxx>|<std>``) and the runtime env key (``compiler=..;std=..;headers=..;kokkos=..;stdlib=..``) are parsed into components and only the comparable ones are compared -- the headers signature (the real header-ABI anchor) and the normalized C++ standard (``c++20`` == ``202002L``). Incomparable tokens (compiler path vs version) are never compared; a token spelled ``unknown`` is an honest-unknown, skipped like ``None``.
 """
+from __future__ import annotations
+
 import re
+
+from typing import Any
 
 # The runtime env-format abi key: 'compiler=..;std=202002L;headers=<sha>;kokkos=..;stdlib=..'.
 _ENV_HEADERS_RE = re.compile(r"(?:^|;)\s*headers=([^;]+)")
@@ -34,7 +24,7 @@ _STD_YEARS = {"11": "201103", "14": "201402", "17": "201703", "20": "202002", "2
 _UNKNOWN_TOKENS = ("unknown", "")
 
 
-def _normalize_std(token):
+def _normalize_std(token: Any) -> Any:
     """Normalize a C++ standard token to its 6-digit year form (``c++20``/``202002L`` -> ``202002``).
 
     Accepts the flag spelling (``c++20`` / ``gnu++23``) and the ``__cplusplus`` spelling
@@ -52,7 +42,7 @@ def _normalize_std(token):
     return None
 
 
-def _abi_components(abi_key):
+def _abi_components(abi_key: Any) -> Any:
     """Parse an abi key in EITHER representation into ``(headers_signature, normalized_std)``.
 
     Artifact form (:class:`~pops.codegen.loader.CompiledProblem`): ``<headers-sha>|<cxx>|<std>``
@@ -76,12 +66,12 @@ def _abi_components(abi_key):
     return (text.strip() or None), None
 
 
-def _is_unknown_token(value):
+def _is_unknown_token(value: Any) -> Any:
     """True when a string token is the honest-unknown spelling (``unknown`` / empty)."""
     return str(value).strip().lower() in _UNKNOWN_TOKENS
 
 
-def _shape_of(array):
+def _shape_of(array: Any) -> Any:
     """The ``.shape`` tuple of @p array, or ``None`` when it exposes none (a bare list / scalar)."""
     shape = getattr(array, "shape", None)
     if shape is None:
@@ -89,7 +79,7 @@ def _shape_of(array):
     return tuple(int(s) for s in shape)
 
 
-def _dtype_name(array):
+def _dtype_name(array: Any) -> Any:
     """The dtype name of @p array (``arr.dtype.name`` / ``str(arr.dtype)``), or ``None``."""
     dtype = getattr(array, "dtype", None)
     if dtype is None:
@@ -97,13 +87,14 @@ def _dtype_name(array):
     return getattr(dtype, "name", None) or str(dtype)
 
 
-def _precision_dtype_names(precision):
+def _precision_dtype_names(precision: Any) -> Any:
     """The accepted dtype name(s) for a manifest ``precision`` token (``double`` -> float64)."""
     table = {"double": ("float64",), "single": ("float32",), "float": ("float32",)}
     return table.get(str(precision or "double").lower(), ("float64",))
 
 
-def validate_initial_state(manifest, arguments, layout, initial_state):
+def validate_initial_state(manifest: Any, arguments: Any, layout: Any,
+                           initial_state: Any) -> Any:
     """Refuse an initial state that does not match the artifact + mesh (ADC-537 gate d / G4).
 
     For each supplied block array, check -- against the MANIFEST (the ABI truth) and the mesh
@@ -139,7 +130,8 @@ def validate_initial_state(manifest, arguments, layout, initial_state):
     return lines
 
 
-def _check_one_initial_state(lines, name, array, spec, mesh, ghost, accepted_dtypes):
+def _check_one_initial_state(lines: Any, name: Any, array: Any, spec: Any, mesh: Any, ghost: Any,
+                             accepted_dtypes: Any) -> Any:
     """Append the shape / dtype / component refusals for ONE block's supplied @p array."""
     components = int(spec.get("components", 0) or 0)
     shape = _shape_of(array)
@@ -159,7 +151,7 @@ def _check_one_initial_state(lines, name, array, spec, mesh, ghost, accepted_dty
                      "expects %s" % (name, dtype, " or ".join(accepted_dtypes)))
 
 
-def _expected_shapes(components, mesh, ghost):
+def _expected_shapes(components: Any, mesh: Any, ghost: Any) -> Any:
     """The set of accepted (..., n, n) shapes for @p components on an @p mesh (valid or +ghost ring)."""
     n = int(mesh)
     valid = (n, n)
@@ -174,7 +166,7 @@ def _expected_shapes(components, mesh, ghost):
     return shapes
 
 
-def _layout_mesh(layout):
+def _layout_mesh(layout: Any) -> Any:
     """The 2D cell count ``n`` (an n x n grid) of @p layout, or ``None`` when it carries no mesh."""
     if layout is None:
         return None
@@ -187,7 +179,7 @@ def _layout_mesh(layout):
     return int(n)
 
 
-def validate_runtime_param_domains(declared_params, params):
+def validate_runtime_param_domains(declared_params: Any, params: Any) -> Any:
     """Refuse a supplied runtime param outside its declared typed domain (ADC-537 gate c / G3).
 
     @p declared_params maps a param name to its typed declaration (a
@@ -214,7 +206,7 @@ def validate_runtime_param_domains(declared_params, params):
     return lines
 
 
-def validate_bind_manifest(manifest, runtime_facts):
+def validate_bind_manifest(manifest: Any, runtime_facts: Any) -> Any:
     """Refuse an ABI / Kokkos / MPI / layout manifest mismatch at the bind front door (gate b / G2).
 
     Compares the compiled MANIFEST against the loaded runtime facts (@p runtime_facts, a plain dict
@@ -246,7 +238,7 @@ def validate_bind_manifest(manifest, runtime_facts):
     return lines
 
 
-def _compare_abi(lines, manifest_abi, runtime_abi):
+def _compare_abi(lines: Any, manifest_abi: Any, runtime_abi: Any) -> Any:
     """Compare the two abi keys COMPONENT-WISE (like-with-like), never as raw strings.
 
     The artifact key (``<headers-sha>|<cxx>|<std>``) and the runtime key (the env string with
@@ -271,7 +263,7 @@ def _compare_abi(lines, manifest_abi, runtime_abi):
                      "against this runtime" % (m_std, r_std, manifest_abi, runtime_abi))
 
 
-def _compare_communicator(lines, manifest_value, runtime_value):
+def _compare_communicator(lines: Any, manifest_value: Any, runtime_value: Any) -> Any:
     """Directional communicator check: refuse only what the artifact NEEDS and the runtime LACKS.
 
     ``unknown`` (either side) is an honest-unknown token, skipped exactly like ``None`` -- an
@@ -294,7 +286,8 @@ def _compare_communicator(lines, manifest_value, runtime_value):
                      "artifact" % (manifest_value, runtime_value))
 
 
-def _compare_feature(lines, field, manifest_value, runtime_value, human):
+def _compare_feature(lines: Any, field: Any, manifest_value: Any, runtime_value: Any,
+                     human: Any) -> Any:
     """Refuse a boolean feature the artifact REQUIRES but the runtime LACKS (directional).
 
     A refusal is only ``manifest=True`` and ``runtime=False``: the artifact needs a feature the
@@ -309,7 +302,7 @@ def _compare_feature(lines, field, manifest_value, runtime_value, human):
                      % (human, field, field))
 
 
-def _compare_str(lines, field, manifest_value, runtime_value):
+def _compare_str(lines: Any, field: Any, manifest_value: Any, runtime_value: Any) -> Any:
     """Refuse a definite string-token mismatch (both sides KNOWN and different).
 
     ``None`` and the ``unknown`` spelling are honest-unknown on either side and skipped (not
@@ -324,7 +317,7 @@ def _compare_str(lines, field, manifest_value, runtime_value):
                      % (field, field, manifest_value, runtime_value))
 
 
-def operator_required_aux(manifest):
+def operator_required_aux(manifest: Any) -> Any:
     """The aux fields a lowered OPERATOR requires, unioned from the module manifest (gate a / G1).
 
     An aux a lowered operator reads must be supplied even when the model's ``aux_extra_names`` omits
@@ -342,7 +335,7 @@ def operator_required_aux(manifest):
     return sorted(required)
 
 
-def validate_operator_aux(manifest, aux, provided_named_aux=()):
+def validate_operator_aux(manifest: Any, aux: Any, provided_named_aux: Any = ()) -> Any:
     """Refuse an aux a lowered operator requires but the bind omits (ADC-537 gate a / G1).
 
     Unions the operator-required aux (:func:`operator_required_aux`) and refuses each name neither
@@ -357,7 +350,7 @@ def validate_operator_aux(manifest, aux, provided_named_aux=()):
     return lines
 
 
-def loaded_runtime_facts():
+def loaded_runtime_facts() -> Any:
     """The feature tokens the LOADED pops runtime reports, for the manifest bind gate (G2).
 
     Reads the live runtime's ABI key (``pops.abi_key()``) and its environment report
@@ -385,7 +378,7 @@ def loaded_runtime_facts():
     return facts
 
 
-def aggregate_bind_refusals(groups):
+def aggregate_bind_refusals(groups: Any) -> Any:
     """Fold the per-gate refusal lines into ONE ``ValueError`` message, or ``None`` when all pass.
 
     @p groups is an iterable of ``(gate_label, [lines])``; a non-empty aggregate returns the message
@@ -400,8 +393,8 @@ def aggregate_bind_refusals(groups):
             % len(flat)) + "\n  ".join(flat)
 
 
-def collect_missing_arguments(args, provided_blocks, provided_params, provided_aux,
-                              provided_solvers):
+def collect_missing_arguments(args: Any, provided_blocks: Any, provided_params: Any,
+                              provided_aux: Any, provided_solvers: Any) -> Any:
     """Pure core of the early bind-input check (Spec 5 sec.10); no engine call -> host-testable.
 
     Compare an :class:`pops.codegen.inspect_compiled.Arguments` against what an install supplies and
@@ -433,7 +426,8 @@ def collect_missing_arguments(args, provided_blocks, provided_params, provided_a
     return missing
 
 
-def validate_install_arguments(sim, compiled, instances, params, aux, solvers):
+def validate_install_arguments(sim: Any, compiled: Any, instances: Any, params: Any, aux: Any,
+                               solvers: Any) -> Any:
     """Early bind-input validation (Spec 5 sec.10) for a COMPILED install on @p sim (System OR
     AmrSystem): reject -- BEFORE any native mutation -- an install missing a REQUIRED argument the
     artifact declares, with one clear actionable error aggregating every missing input.
@@ -466,7 +460,8 @@ def validate_install_arguments(sim, compiled, instances, params, aux, solvers):
                          + "\n  ".join(missing))
 
 
-def run_bind_gates(compiled, problem, layout, initial, params, aux):
+def run_bind_gates(compiled: Any, problem: Any, layout: Any, initial: Any, params: Any,
+                   aux: Any) -> Any:
     """Run the four ADC-537 bind refusal gates, raising ONE aggregated ``ValueError`` on any violation.
 
     The ``pops.bind`` front-door check (called from :mod:`pops.codegen.orchestration` BEFORE the

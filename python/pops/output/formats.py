@@ -3,6 +3,10 @@
 A format is a typed object (``HDF5()`` / ``Plotfile()``), not a string ``format="hdf5"``.
 Inert; the runtime writes the actual files.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Descriptor
 from pops.descriptors_report import CapabilitySet, RequirementSet
 
@@ -12,13 +16,13 @@ class HDF5(Descriptor):
 
     category = "output_format"
 
-    def __init__(self, parallel=False):
+    def __init__(self, parallel: bool = False) -> None:
         self.parallel = bool(parallel)
 
-    def options(self):
+    def options(self) -> dict:
         return {"parallel": self.parallel}
 
-    def requirements(self):
+    def requirements(self) -> Any:
         return RequirementSet({"parallel_io": True} if self.parallel else {})
 
 
@@ -27,7 +31,7 @@ class Plotfile(Descriptor):
 
     category = "output_format"
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"per_level": True})
 
 

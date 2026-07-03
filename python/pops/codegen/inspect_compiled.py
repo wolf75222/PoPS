@@ -19,7 +19,9 @@ The module imports ``pops.mesh`` lazily (in-function) to respect the codegen lay
 module may not import ``pops.mesh`` at module scope; cf. tests/python/architecture/test_import_graph.py).
 """
 
-import json
+from __future__ import annotations
+
+from typing import Any
 
 from pops._report import Report
 
@@ -59,8 +61,8 @@ class Arguments(Report):
     report_type = "arguments"
     schema_version = 1
 
-    def __init__(self, *, instances, params, aux, solvers, outputs, layout_runtime,
-                 program_name=None):
+    def __init__(self, *, instances: Any, params: Any, aux: Any, solvers: Any, outputs: Any,
+                 layout_runtime: Any, program_name: Any = None) -> None:
         self.instances = dict(instances)
         self.params = dict(params)
         self.aux = dict(aux)
@@ -69,7 +71,7 @@ class Arguments(Report):
         self.layout_runtime = dict(layout_runtime)
         self.program_name = program_name
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         """A plain-dict view of every argument group (JSON-ready)."""
         return {"program": self.program_name,
                 "instances": {k: dict(v) for k, v in self.instances.items()},
@@ -79,16 +81,7 @@ class Arguments(Report):
                 "outputs": {k: dict(v) for k, v in self.outputs.items()},
                 "layout_runtime": dict(self.layout_runtime)}
 
-    def to_json(self, path=None, *, indent=2):
-        """Serialise :meth:`to_dict` to JSON; write to ``path`` if given, else return the string."""
-        text = json.dumps(self.to_dict(), indent=indent, sort_keys=True)
-        if path is not None:
-            with open(str(path), "w", encoding="utf-8") as handle:
-                handle.write(text)
-            return path
-        return text
-
-    def __str__(self):
+    def __str__(self) -> str:
         lines = ["arguments for compiled artifact %r (bind inputs)"
                  % (self.program_name or "problem")]
         lines.append("  instances (install instances=):")
@@ -116,12 +109,12 @@ class Arguments(Report):
                      % (lr.get("layout"), lr.get("requires_mpi"), lr.get("ghost_depth")))
         return "\n".join(lines)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return ("Arguments(instances=%d, params=%d, aux=%d, solvers=%d)"
                 % (len(self.instances), len(self.params), len(self.aux), len(self.solvers)))
 
 
-def _model_metadata(compiled):
+def _model_metadata(compiled: Any) -> tuple:
     """Read the carried model's (name -> ...) metadata WITHOUT loading the .so.
 
     Returns ``(cons_names, n_cons, params, aux_names, n_aux, state_space)`` from the physical model
@@ -140,13 +133,13 @@ def _model_metadata(compiled):
     spaces = getattr(model, "list_state_spaces", None)
     state_space = "U"
     if callable(spaces):
-        names = spaces()
+        names: Any = spaces()
         if names:
             state_space = names[0]
     return cons, n_cons, params, aux_names, n_aux, state_space
 
 
-def _solver_arguments(program):
+def _solver_arguments(program: Any) -> dict:
     """Elliptic field solves the Program performs (field name -> {problem, solver}).
 
     Read from the lowered IR: every ``solve_fields`` / ``solve_fields_from_blocks`` node names an
@@ -166,7 +159,7 @@ def _solver_arguments(program):
     return solvers
 
 
-def build_arguments(compiled):
+def build_arguments(compiled: Any) -> Arguments:
     """Build the :class:`Arguments` of a compiled artifact from its carried metadata (sec.12.2).
 
     Sources, all Python-side (no compile / bind / runtime read):
@@ -239,7 +232,7 @@ def build_arguments(compiled):
                      program_name=getattr(compiled, "program_name", None))
 
 
-def _ghost_depth(compiled):
+def _ghost_depth(compiled: Any) -> int:
     """Conservative ghost (halo) depth of the model: 2 for a finite-volume MUSCL stencil.
 
     The artifact does not record its reconstruction stencil width in today's metadata, so we report
@@ -269,8 +262,9 @@ class MemoryEstimate(Report):
     report_type = "memory_estimate"
     schema_version = 1
 
-    def __init__(self, *, categories, cells, mesh_shape, n_cons, n_aux, scratch_buffers,
-                 assumptions, conservative=True, layout="system"):
+    def __init__(self, *, categories: Any, cells: Any, mesh_shape: Any, n_cons: Any, n_aux: Any,
+                 scratch_buffers: Any, assumptions: Any, conservative: Any = True,
+                 layout: Any = "system") -> None:
         self.categories = dict(categories)   # category -> bytes
         self.cells = int(cells)
         self.mesh_shape = tuple(mesh_shape)
@@ -282,26 +276,26 @@ class MemoryEstimate(Report):
         self.layout = str(layout)
 
     @property
-    def total_bytes(self):
+    def total_bytes(self) -> Any:
         """Sum of every category, in bytes."""
         return sum(self.categories.values())
 
-    def by_block(self):
+    def by_block(self) -> dict:
         """The per-block (state-sized) categories: persistent state, RHS / state scratch."""
         keys = ("state", "rhs_scratch", "state_scratch", "field_output", "aux")
         return {k: self.categories[k] for k in keys if k in self.categories}
 
-    def by_solver(self):
+    def by_solver(self) -> dict:
         """The elliptic / Krylov / multigrid categories (the field solves)."""
         keys = ("scalar_field", "krylov", "multigrid")
         return {k: self.categories[k] for k in keys if k in self.categories}
 
-    def by_scratch(self):
+    def by_scratch(self) -> dict:
         """The transient scratch categories (RHS / state scratch, halo, MPI buffers)."""
         keys = ("rhs_scratch", "state_scratch", "halo", "mpi_buffer", "amr_patch")
         return {k: self.categories[k] for k in keys if k in self.categories}
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         """A plain-dict view: every category, the total, the mesh + assumptions (JSON-ready)."""
         return {"total_bytes": self.total_bytes, "categories": dict(self.categories),
                 "cells": self.cells, "mesh_shape": list(self.mesh_shape),
@@ -309,19 +303,10 @@ class MemoryEstimate(Report):
                 "scratch_buffers": self.scratch_buffers, "layout": self.layout,
                 "conservative": self.conservative, "assumptions": list(self.assumptions)}
 
-    def to_json(self, path=None, *, indent=2):
-        """Serialise :meth:`to_dict` to JSON; write to ``path`` if given, else return the string."""
-        text = json.dumps(self.to_dict(), indent=indent, sort_keys=True)
-        if path is not None:
-            with open(str(path), "w", encoding="utf-8") as handle:
-                handle.write(text)
-            return path
-        return text
-
-    def _mib(self, n_bytes):
+    def _mib(self, n_bytes: Any) -> float:
         return n_bytes / (1024.0 * 1024.0)
 
-    def __str__(self):
+    def __str__(self) -> str:
         lines = ["memory estimate on mesh %s (%d cells, %d cons, %d aux) -- %s formula"
                  % (self.mesh_shape, self.cells, self.n_cons, self.n_aux,
                     "conservative" if self.conservative else "tight")]
@@ -336,18 +321,18 @@ class MemoryEstimate(Report):
                 lines.append("    - %s" % note)
         return "\n".join(lines)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return ("MemoryEstimate(total=%d B, cells=%d, categories=%d)"
                 % (self.total_bytes, self.cells, len(self.categories)))
 
 
-def _mesh_shape(mesh):
+def _mesh_shape(mesh: Any) -> tuple:
     """Return ``(cells, (nx, ny))`` for a mesh argument WITHOUT touching the runtime.
 
     Accepts a ``pops.mesh.CartesianMesh`` (or any object exposing ``n``), or a plain int / 2-tuple.
     The core is 2D (n x n), so a scalar ``n`` means ``n * n`` cells. A richer mesh carrying an
     explicit ``(nx, ny)`` is honoured if present."""
-    n = getattr(mesh, "n", mesh)
+    n: Any = getattr(mesh, "n", mesh)
     if isinstance(n, (tuple, list)):
         if len(n) != 2:
             raise ValueError("estimate_memory: mesh shape must be 2D (got %r)" % (n,))
@@ -359,7 +344,8 @@ def _mesh_shape(mesh):
     return nx * ny, (nx, ny)
 
 
-def build_memory_estimate(compiled, mesh, *, platform=None, layout=None):
+def build_memory_estimate(compiled: Any, mesh: Any, *, platform: Any = None,
+                          layout: Any = None) -> MemoryEstimate:
     """Build the :class:`MemoryEstimate` for a compiled artifact on ``mesh`` (sec.12.3).
 
     A pure FORMULA over the Program's static cost (``Program.estimate``) and the carried model's
@@ -448,7 +434,7 @@ def build_memory_estimate(compiled, mesh, *, platform=None, layout=None):
                           conservative=True, layout=layout_kind)
 
 
-def _amr_patch_budget(layout, state_field, cell_field, n_elliptic):
+def _amr_patch_budget(layout: Any, state_field: Any, cell_field: Any, n_elliptic: Any) -> tuple:
     """A CONSERVATIVE AMR patch budget from an ``AMR`` layout descriptor (no bind).
 
     Returns ``(layout_kind, amr_patch_bytes, notes)``. For a ``Uniform`` layout there is no extra

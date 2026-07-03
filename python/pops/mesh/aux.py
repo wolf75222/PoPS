@@ -4,6 +4,10 @@
 ``set_aux_field(..., halo=pops.AuxHalo(...))``. Spec 5 re-homes the mesh-level objects
 into ``pops.mesh``; the field-side re-export (``pops.fields.aux``) lands in Spec 5 Phase E.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from ._descriptor import MeshDescriptor
 
 
@@ -27,17 +31,17 @@ class AuxHalo(MeshDescriptor):
     # Mirrors pops::BCType on the C++ side: Periodic=0, Foextrap=1, Dirichlet=2.
     _KINDS = {"foextrap": 1, "dirichlet": 2}
 
-    def __init__(self, kind, value=0.0):
+    def __init__(self, kind: Any, value: Any = 0.0) -> None:
         if kind not in self._KINDS:
             raise ValueError("AuxHalo: kind must be 'foextrap' or 'dirichlet' (got %r)" % (kind,))
         self.kind = kind
         self.bc_type = self._KINDS[kind]
         self.value = float(value)
 
-    def options(self):
+    def options(self) -> dict:
         return {"kind": self.kind, "value": self.value}
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "AuxHalo(%r, value=%g)" % (self.kind, self.value)
 
     # Keep the original concise form for str() too (do not inherit the verbose base).

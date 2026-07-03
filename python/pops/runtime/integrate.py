@@ -14,9 +14,12 @@ time scheme (here forward Euler and SSPRK2) without touching the C++. These
 integrators re-solve Poisson at each RK stage (per-stage coupling, more accurate
 than the per-step frozen coupling of the compiled step()).
 """
+from __future__ import annotations
+
+from typing import Any
 
 
-def euler_step(sim, dt, names=None):
+def euler_step(sim: Any, dt: Any, names: Any = None) -> None:
     """Forward Euler, written in Python: U <- U + dt * RHS(U). Poisson solved once."""
     names = names if names is not None else sim.block_names()
     sim.solve_fields()
@@ -24,7 +27,7 @@ def euler_step(sim, dt, names=None):
         sim.set_state(n, sim.get_state(n) + dt * sim.eval_rhs(n))
 
 
-def ssprk2_step(sim, dt, names=None):
+def ssprk2_step(sim: Any, dt: Any, names: Any = None) -> None:
     """SSPRK2 (strong-stable Heun) written in Python, Poisson re-solved at each stage.
 
         U1 = U0 + dt R(U0)

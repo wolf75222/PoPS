@@ -9,6 +9,10 @@ the C++ ``set_disc_domain`` / ``set_geometry_mode`` consume, exposed via :meth:`
 shared :func:`lower_disc_mode`, which also passes a legacy string through unchanged). The lowered
 token is byte-identical to what a user passes today in the string form.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from .._descriptor import MeshDescriptor
 from ...descriptors_report import RequirementSet, CapabilitySet
 
@@ -23,10 +27,10 @@ class _TransportMask(MeshDescriptor):
     #: The native ``set_disc_domain`` / ``set_geometry_mode`` token this mask selects.
     mode_token = "none"
 
-    def options(self):
+    def options(self) -> dict:
         return {"mode": self.mode_token}
 
-    def lower(self, context=None):
+    def lower(self, context: Any = None) -> Any:
         """The native disc-transport token (byte-identical to the legacy ``mode=`` string)."""
         return self.mode_token
 
@@ -36,7 +40,7 @@ class NoMask(_TransportMask):
 
     mode_token = "none"
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"masked_transport": False})
 
 
@@ -45,7 +49,7 @@ class Staircase(_TransportMask):
 
     mode_token = "staircase"
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"masked_transport": True, "conservative": False})
 
 
@@ -54,14 +58,14 @@ class CutCell(_TransportMask):
 
     mode_token = "cutcell"
 
-    def requirements(self):
+    def requirements(self) -> Any:
         return RequirementSet({"embedded_boundary_support": True})
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"masked_transport": True, "conservative": True})
 
 
-def lower_disc_mode(mode):
+def lower_disc_mode(mode: Any) -> Any:
     """Lower a disc-transport ``mode`` to its native token (Spec 5 sec.8.16).
 
     Accepts a typed :class:`_TransportMask` (``NoMask`` / ``Staircase`` / ``CutCell``) -> its

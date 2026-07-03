@@ -11,12 +11,15 @@ C++ install-time seed (System::install_program), the Python bind-time route
 three agree byte-for-byte. The per-cell read of the parameter (``params.get(index)`` bound from
 ``ctx.program_params(block)``) lives in ``program_emit_kernels`` / ``program_emit_model_kernels``.
 """
+from __future__ import annotations
+
 import json
+from typing import Any
 
 from pops.codegen.program_emit_kernels import _has_runtime_param, _model_impl
 
 
-def _op_model_exprs(impl, v):
+def _op_model_exprs(impl: Any, v: Any) -> list:
     """The model coefficient Expr a model-kernel op @p v lowers, so the param routing can detect which
     runtime parameters it reads (ADC-510). Mirrors the kernel emitters' expr selection:
       - ``source`` / ``rhs`` named source -> impl._source_terms[name];
@@ -50,7 +53,7 @@ def _op_model_exprs(impl, v):
     return out
 
 
-def _runtime_param_names_in(exprs):
+def _runtime_param_names_in(exprs: Any) -> set:
     """The set of runtime-parameter NAMES read anywhere in @p exprs (a RuntimeParamRef walk)."""
     from pops.ir.values import RuntimeParamRef
     from pops.ir.visitors import _children
@@ -65,7 +68,7 @@ def _runtime_param_names_in(exprs):
     return names
 
 
-def program_param_entries(program, model):
+def program_param_entries(program: Any, model: Any) -> list:
     """Per (PROGRAM block, runtime parameter) entries the .so exports + Python routes (ADC-510).
 
     Walk the Program ops (descending into control-flow / apply / residual sub-blocks); for each
@@ -101,7 +104,7 @@ def program_param_entries(program, model):
     return entries
 
 
-def _all_program_ops(program):
+def _all_program_ops(program: Any) -> Any:
     """Iterate every op of the Program, descending into control-flow + apply + residual sub-blocks (the
     same flat walk the lowerability guards use; the sub-block ops are not in program._values)."""
     for v in program._values:
@@ -112,7 +115,7 @@ def _all_program_ops(program):
                 yield from blk
 
 
-def program_param_routes(program, model):
+def program_param_routes(program: Any, model: Any) -> tuple:
     """Routing of @p program's RUNTIME parameters to the per-PROGRAM-block ``set_program_params``
     vectors (ADC-510, Spec 5 C5). Returns ``(per_block, defaults)``: ``per_block`` maps a program block
     index to the COMPLETE list of param names in within-block index order (the order
@@ -133,7 +136,7 @@ def program_param_routes(program, model):
     return per_block, defaults
 
 
-def emit_program_params(program, model=None):
+def emit_program_params(program: Any, model: Any = None) -> str:
     """C++ source of the RUNTIME-parameter metadata the .so exports (ADC-510, Spec 5 C5): per flat
     parameter i, its PROGRAM block index, its stable WITHIN-block index (sorted-name order, the index
     the lowered runtime read uses), its NAME and its declaration DEFAULT. install_program reads it to
@@ -148,7 +151,7 @@ def emit_program_params(program, model=None):
     name_cases = "".join('    case %d: return %s;\n' % (k, json.dumps(nm))
                          for k, (_, nm, _, _) in enumerate(entries))
 
-    def ival(accessor, csv):
+    def ival(accessor: Any, csv: Any) -> str:
         return ('extern "C" int pops_program_param_%s(int i) {\n'
                 '  static const int v[] = {%s};\n'
                 '  return (i >= 0 && i < %d) ? v[i] : -1;\n}\n'

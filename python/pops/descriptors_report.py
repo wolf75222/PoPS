@@ -246,16 +246,19 @@ class ValidationReport:
         self._issues = []
 
     def add(self, issue: ValidationIssue) -> ValidationReport:
+        """Append a structured issue (chains)."""
         self._issues.append(issue)
         return self
 
     def error(self, family: Any, code: Any, message: Any, *, context: Any = None,
               alternatives: Any = ()) -> ValidationReport:
+        """Append an error-severity issue built from its parts (chains)."""
         return self.add(ValidationIssue(family=family, code=code, message=message,
                                         context=context, severity="error",
                                         alternatives=alternatives))
 
     def extend(self, other: ValidationReport | None) -> ValidationReport:
+        """Absorb every issue of @p other (None is a no-op; chains)."""
         if other is not None:
             self._issues.extend(other.issues)
         return self
@@ -265,6 +268,7 @@ class ValidationReport:
         return list(self._issues)
 
     def by_family(self) -> dict:
+        """The issues grouped per descriptor family (the ADC-553 per-family listing)."""
         grouped = {}
         for issue in self._issues:
             grouped.setdefault(issue.family, []).append(issue)
@@ -284,6 +288,7 @@ class ValidationReport:
         return len(self._issues)
 
     def raise_if_error(self) -> None:
+        """Raise ValueError with the full report when any error-severity issue accumulated."""
         if not self.ok:
             raise ValueError(str(self))
 

@@ -13,6 +13,10 @@ The compiler-invocation drivers + the ``compile_problem`` facade live in
 ``emit_cpp_*`` from here).
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 # ---------------------------------------------------------------------------
 # Backend / capability tables (single source of truth in this module)
 # ---------------------------------------------------------------------------
@@ -58,7 +62,7 @@ _BACKENDS = {
 # model_hash -- stable hash of a HyperbolicModel
 # ---------------------------------------------------------------------------
 
-def model_hash(model, params=None):
+def model_hash(model: Any, params: Any = None) -> str:
     """Stable hash of *model* (a ``HyperbolicModel``): formulas
     (flux/eig/source/elliptic/primitives/cons_from) + roles + n_aux + gamma
     (+ any NAMED params). Single source of the hash, reused by
@@ -73,7 +77,7 @@ def model_hash(model, params=None):
     from pops.ir.values import _EIG_FIELDS  # noqa: F401 -- confirm ir is importable
 
     # --- lazy helpers: resolve at call time, not at import time ---
-    def _aux_total_n_aux(aux_names, aux_extra_names):
+    def _aux_total_n_aux(aux_names: Any, aux_extra_names: Any) -> int:
         # Mirrors pops.dsl.aux_total_n_aux without importing dsl.
         _AUX_CANONICAL = {"phi": 0, "grad_x": 1, "grad_y": 2, "B_z": 3, "T_e": 4}
         _AUX_BASE_COMPS = 3
@@ -87,7 +91,7 @@ def model_hash(model, params=None):
             w = max(w, _AUX_NAMED_BASE + len(aux_extra_names))
         return w
 
-    def _role_of(name):
+    def _role_of(name: Any) -> str:
         _CANONICAL_ROLES = {
             "rho": "Density", "n": "Density", "density": "Density",
             "rho_u": "MomentumX", "rhou": "MomentumX", "mom_x": "MomentumX", "mx": "MomentumX",
@@ -101,7 +105,7 @@ def model_hash(model, params=None):
         }
         return _CANONICAL_ROLES.get(name, "Custom")
 
-    def _roles_for(names, override=None):
+    def _roles_for(names: Any, override: Any = None) -> list:
         if override is None:
             return [_role_of(nm) for nm in names]
         if len(override) != len(names):
@@ -186,7 +190,7 @@ def model_hash(model, params=None):
 # adder_for -- System adder name for a backend
 # ---------------------------------------------------------------------------
 
-def adder_for(backend):
+def adder_for(backend: Any) -> str:
     """Name of the System method to use to wire the .so produced by
     ``compile_model(backend=...)``:
     ``'add_dynamic_block'`` (prototype/JIT), ``'add_compiled_block'`` (aot) or
@@ -202,7 +206,7 @@ def adder_for(backend):
 # _emit_route_manifest -- embedded native route registry signature (ADC-599)
 # ---------------------------------------------------------------------------
 
-def _emit_route_manifest(symbol_name):
+def _emit_route_manifest(symbol_name: Any) -> str:
     """OPTIONAL symbol embedding the native route registry SIGNATURE into the artifact (ADC-599).
 
     Returns the C++ source of ``extern "C" const char* <symbol_name>()`` returning
@@ -222,7 +226,7 @@ def _emit_route_manifest(symbol_name):
 # Source emitters (emit_cpp_so_source, emit_cpp_aot_source, emit_cpp_native_loader)
 # ---------------------------------------------------------------------------
 
-def emit_cpp_so_source(model, name=None, hoist_reciprocals=False):
+def emit_cpp_so_source(model: Any, name: Any = None, hoist_reciprocals: Any = False) -> str:
     """Source of the JIT library (backend "jit"): the FULL MODEL as
     CompositeModel<GenHyp, GenSrc, GenEll> behind an extern "C" factory
     (pops_model_nvars / pops_make_model / pops_destroy_model via
@@ -254,7 +258,7 @@ def emit_cpp_so_source(model, name=None, hoist_reciprocals=False):
             + _emit_route_manifest("pops_compiled_route_manifest"))
 
 
-def emit_cpp_aot_source(model, name=None, hoist_reciprocals=False):
+def emit_cpp_aot_source(model: Any, name: Any = None, hoist_reciprocals: Any = False) -> str:
     """Source of the AOT library (backend "compile"): the FULL MODEL as
     CompositeModel<...> behind the extern "C" ABI of compiled_block_abi.hpp.
     The .so RUNS the PRODUCTION path (assemble_rhs<Limiter, Flux>, the core's
@@ -280,7 +284,8 @@ def emit_cpp_aot_source(model, name=None, hoist_reciprocals=False):
             + _emit_route_manifest("pops_compiled_route_manifest"))
 
 
-def emit_cpp_native_loader(model, name=None, target="system", hoist_reciprocals=False):
+def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
+                           hoist_reciprocals: Any = False) -> str:
     """Source of the NATIVE LOADER (backend "production"): the FULL MODEL as
     CompositeModel<...> behind a THIN extern "C" ABI.
 

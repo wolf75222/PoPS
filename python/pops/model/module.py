@@ -9,7 +9,10 @@ Imports only the standard library (plus the sibling operator-first types) so it
 can be exercised without the compiled ``_pops`` extension; the codegen engine is
 imported lazily inside :meth:`Module.to_dsl` to avoid an import cycle.
 """
+from __future__ import annotations
+
 import hashlib
+from typing import Any
 
 from .operators import Operator
 from .registry import OperatorRegistry
@@ -36,7 +39,7 @@ class Module:
     any Module that provides operators with the expected signatures.
     """
 
-    def __init__(self, name):
+    def __init__(self, name: Any) -> None:
         self.name = str(name)
         self._state_spaces = {}
         self._field_spaces = {}
@@ -49,43 +52,44 @@ class Module:
         self._eigenvalues = None
 
     # --- spaces ---
-    def state_space(self, name="U", components=(), roles=None, layout="cell",
-                    storage="multifab"):
+    def state_space(self, name: Any = "U", components: Any = (), roles: Any = None, layout: str = "cell",
+                    storage: str = "multifab") -> Any:
         """Declare and return a :class:`StateSpace`."""
         space = StateSpace(name, components, roles, layout, storage)
         self._state_spaces[space.name] = space
         return space
 
-    def field_space(self, name, components=(), layout="cell"):
+    def field_space(self, name: Any, components: Any = (), layout: str = "cell") -> Any:
         """Declare and return a :class:`FieldSpace`."""
         space = FieldSpace(name, components, layout)
         self._field_spaces[space.name] = space
         return space
 
     # --- parameters / aux ---
-    def param(self, name, default=0.0, dtype="real"):
+    def param(self, name: Any, default: Any = 0.0, dtype: str = "real") -> Any:
         """Declare and return one :class:`ParameterSpace`."""
         p = ParameterSpace(name, default, dtype)
         self._params[p.name] = p
         return p
 
-    def parameters(self, **defaults):
+    def parameters(self, **defaults: Any) -> Any:
         """Declare several parameters by keyword; return ``{name: ParameterSpace}``."""
         return {k: self.param(k, v) for k, v in defaults.items()}
 
-    def aux_field(self, name, kind="cell_scalar"):
+    def aux_field(self, name: Any, kind: str = "cell_scalar") -> Any:
         """Declare and return one :class:`AuxSpace`."""
         a = AuxSpace(name, kind)
         self._aux[a.name] = a
         return a
 
-    def aux_fields(self, **kinds):
+    def aux_fields(self, **kinds: Any) -> Any:
         """Declare several aux fields by keyword; return ``{name: AuxSpace}``."""
         return {k: self.aux_field(k, v) for k, v in kinds.items()}
 
     # --- operators ---
-    def operator(self, name=None, signature=None, kind=None, capabilities=None,
-                 requirements=None, lowering=None, expr=None):
+    def operator(self, name: Any = None, signature: Any = None, kind: Any = None,
+                 capabilities: Any = None, requirements: Any = None, lowering: Any = None,
+                 expr: Any = None) -> Any:
         """Register a typed operator.
 
         Builder mode (``expr`` given) registers the operator immediately and returns the
@@ -104,7 +108,7 @@ class Module:
                 "module.operator(%r): signature must be a Signature (use the >> sugar or "
                 "Signature(inputs, output)); got %r" % (name, signature))
 
-        def _register(body):
+        def _register(body: Any) -> Any:
             op = Operator(name, kind, signature, capabilities=capabilities,
                           requirements=requirements, lowering=lowering, source="module",
                           body=body)
@@ -114,13 +118,14 @@ class Module:
         if expr is not None:
             return _register(expr)
 
-        def decorator(func):
+        def decorator(func: Any) -> Any:
             _register(func)
             return func
 
         return decorator
 
-    def rate_operator(self, name, state_space="U", flux=True, sources=("default",), fluxes=None):
+    def rate_operator(self, name: Any, state_space: Any = "U", flux: bool = True,
+                      sources: Any = ("default",), fluxes: Any = None) -> Any:
         """Register a composite ``local_rate`` operator ``R = -div F + sum(sources)`` from named
         sub-operators (the flux and the listed source operators). Mirrors ``dsl.rate_operator``; the
         ``lowering`` carries the flux/sources/fluxes so ``P.call`` and the codegen compose it."""
@@ -134,14 +139,14 @@ class Module:
         self._registry.register(op)
         return op
 
-    def eigenvalues(self, x, y):
+    def eigenvalues(self, x: Any, y: Any) -> Any:
         """Declare the per-direction wave speeds (eigenvalues) the Riemann solver needs, as lists of
         IR expressions over the state. Carried so a pure Module is a self-contained, compilable model
         (lowered to ``dsl.Model.eigenvalues``)."""
         self._eigenvalues = {"x": list(x), "y": list(y)}
         return self._eigenvalues
 
-    def adopt_registry(self, registry):
+    def adopt_registry(self, registry: Any) -> Any:
         """Use ``registry`` as this Module's operator registry (the dsl.Model facade adopts
         the derived registry of its HyperbolicModel). Returns ``self``."""
         if not isinstance(registry, OperatorRegistry):
@@ -149,11 +154,11 @@ class Module:
         self._registry = registry
         return self
 
-    def operator_registry(self):
+    def operator_registry(self) -> Any:
         """The Module's :class:`OperatorRegistry` (bind it to a Program with P.bind_operators)."""
         return self._registry
 
-    def manifest(self):
+    def manifest(self) -> Any:
         """The self-describing :class:`pops.model.manifest.ModuleManifest` of this Module (ADC-585).
 
         The central, JSON-ready representation of the model -- spaces, params, aux, eigenvalue
@@ -163,7 +168,7 @@ class Module:
         from pops.model.manifest import build_module_manifest
         return build_module_manifest(self)
 
-    def to_dsl(self):
+    def to_dsl(self) -> Any:
         """Lower this Module to a :class:`pops.physics.facade.Model` -- the physical/codegen engine -- by mapping
         each typed operator (with its IR body) to the dsl method of its kind. Reuses the dsl backend
         (a translation, not a second codegen). ``pops.codegen.compile_problem(model=module, ...)``
@@ -173,39 +178,39 @@ class Module:
         return _module_to_model(self)
 
     # --- introspection (Spec 2, S2-5) ---
-    def state_spaces(self):
+    def state_spaces(self) -> Any:
         return dict(self._state_spaces)
 
-    def field_spaces(self):
+    def field_spaces(self) -> Any:
         return dict(self._field_spaces)
 
-    def params(self):
+    def params(self) -> Any:
         return dict(self._params)
 
-    def aux(self):
+    def aux(self) -> Any:
         return dict(self._aux)
 
-    def list_state_spaces(self):
+    def list_state_spaces(self) -> Any:
         """Names of the declared state spaces."""
         return list(self._state_spaces)
 
-    def list_field_spaces(self):
+    def list_field_spaces(self) -> Any:
         """Names of the declared field spaces."""
         return list(self._field_spaces)
 
-    def list_operators(self):
+    def list_operators(self) -> Any:
         """Operator names in registration (id) order."""
         return self._registry.names()
 
-    def operator_signature(self, name):
+    def operator_signature(self, name: Any) -> Any:
         """The :class:`Signature` of operator ``name``."""
         return self._registry.get(name).signature
 
-    def operator_requirements(self, name):
+    def operator_requirements(self, name: Any) -> Any:
         """The requirements dict of operator ``name`` (aux / solver / params / ...)."""
         return dict(self._registry.get(name).requirements)
 
-    def unknown_requirement_keys(self, name):
+    def unknown_requirement_keys(self, name: Any) -> Any:
         """Requirement keys of operator ``name`` outside the documented vocabulary (ADC-528).
 
         Returns the sorted list of keys in the operator's ``requirements`` dict that are NOT one of
@@ -218,7 +223,7 @@ class Module:
         reqs = self._registry.get(name).requirements
         return sorted(k for k in reqs if k not in OPERATOR_REQUIREMENT_KEYS)
 
-    def validate_requirements(self):
+    def validate_requirements(self) -> Any:
         """Warn on every operator requirement key outside the documented vocabulary (ADC-528).
 
         Emits one :class:`UserWarning` per operator that carries an unrecognized requirement key and
@@ -238,7 +243,7 @@ class Module:
                     % (op.name, unknown, known), UserWarning, stacklevel=2)
         return offenders
 
-    def operator_capabilities(self, name, **caps):
+    def operator_capabilities(self, name: Any, **caps: Any) -> Any:
         """Get or set the capabilities of operator ``name``.
 
         Called with only a name it is a getter (returns a copy of the dict). Called with
@@ -251,7 +256,7 @@ class Module:
             op.capabilities.update(caps)
         return dict(op.capabilities)
 
-    def module_hash(self):
+    def module_hash(self) -> str:
         """Stable hash of the ModuleSpec for the compiled-artifact cache (Spec 2, S2-7).
 
         Folds the spaces, parameters, aux declarations and -- for every operator -- the name,
@@ -284,11 +289,11 @@ class Module:
                 _body_identity(op.body)))
         return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "Module(%r, operators=[%s])" % (self.name, ", ".join(self._registry.names()))
 
 
-def _body_identity(body):
+def _body_identity(body: Any) -> str:
     """A stable string identifying an operator body for the module hash: the source of a callable
     (so editing it invalidates the cache), else its repr; never raises."""
     if body is None:

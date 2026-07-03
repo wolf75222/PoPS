@@ -6,6 +6,8 @@ enum), so they are catalogued as PLANNED descriptors. :func:`User` surfaces a lo
 preconditioner brick. This is the ONE public home of the catalog formerly parked under
 ``pops.lib.solvers.preconditioners`` (that re-export shim is removed; no second public path).
 """
+from __future__ import annotations
+
 from types import SimpleNamespace
 
 from pops.descriptors import _external_descriptor, _native, _planned

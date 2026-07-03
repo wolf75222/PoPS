@@ -4,12 +4,15 @@ Builds a pops.time.Program step for the classic first-order explicit method.
 The backward_euler name is not defined here (the implicit BDF1 path is accessed
 via bdf(..., order=1, linear_source=...)); only forward_euler lives here.
 """
+from __future__ import annotations
+
+from typing import Any
 
 from ._helpers import _stage_rhs, program_macro
 
 
 @program_macro
-def forward_euler(P, block, *, sources=("default",), flux=True):
+def forward_euler(P: Any, block: Any, *, sources: Any = ("default",), flux: Any = True) -> Any:
     """Forward Euler: U^{n+1} = U + dt * R(U).
 
     Called with a live ``Program`` first (``forward_euler(P, block)``) it mutates ``P`` in place; called

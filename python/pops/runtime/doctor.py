@@ -5,6 +5,9 @@ of "build environment != execution environment" bugs). ``capabilities()`` is the
 introspectable matrix of what each facade / geometry / backend supports. Both read ``_pops`` and
 the codegen / physics layers, so they live in the runtime layer.
 """
+from __future__ import annotations
+
+from typing import Any
 
 from pops.runtime import threading as _threading
 from pops.runtime.threading import has_kokkos
@@ -21,7 +24,7 @@ _LIMITER_ORDER = ("none", "minmod", "vanleer", "weno5")
 _POLAR_RIEMANN = ("rusanov", "hll")
 
 
-def _ordered(tokens, order):
+def _ordered(tokens: Any, order: Any) -> Any:
     """Tokens kept in canonical ``order`` first, then any extras sorted (deterministic display)."""
     present = set(tokens)
     ranked = [t for t in order if t in present]
@@ -29,7 +32,7 @@ def _ordered(tokens, order):
     return ranked + extra
 
 
-def _descriptor_tokens():
+def _descriptor_tokens() -> Any:
     """Available brick tokens per category, sourced from the descriptor catalogs (Spec 5 sec.12).
 
     Single source of truth: this reads the SAME inert catalogs that
@@ -44,14 +47,14 @@ def _descriptor_tokens():
     from pops.numerics.riemann import riemann
     from pops.solvers.elliptic import FFT, GeometricMG
 
-    def _available(namespace):
+    def _available(namespace: Any) -> Any:
         names = []
         for attr in sorted(vars(namespace)):
             factory = getattr(namespace, attr)
             if not callable(factory):
                 continue
             try:
-                descriptor = factory()
+                descriptor: Any = factory()
             except TypeError:
                 continue  # a selector that needs an argument (User(...)); not a standing entry.
             if getattr(descriptor, "available", False):
@@ -85,7 +88,7 @@ def _descriptor_tokens():
     }
 
 
-def doctor(verbose=True):
+def doctor(verbose: bool = True) -> Any:
     """Diagnose the pops environment in ONE command : python -c "import pops; pops.doctor()".
 
     Checks each link on which the module AND the runtime compilation of the DSL depend (the class of
@@ -221,7 +224,7 @@ def doctor(verbose=True):
     return checks
 
 
-def capabilities():
+def capabilities() -> Any:
     """OFFICIAL MATRIX of capabilities by facade / geometry / backend (audit 2026-06, wave 2).
 
     SINGLE source of truth consultable by scripts and docs (the audits showed that System,

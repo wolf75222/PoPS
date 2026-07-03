@@ -3,6 +3,10 @@
 Insertion order fixes each operator's integer ``OperatorId`` so the C++ codegen
 can dispatch by integer in hot kernels while strings stay for debug / validation.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from .operators import Operator
 
 
@@ -14,11 +18,11 @@ class OperatorRegistry:
     debug / validation only. Re-registering an existing name raises.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._by_name = {}
         self._order = []
 
-    def register(self, operator):
+    def register(self, operator: Any) -> Any:
         """Register ``operator`` and return it; its id is its insertion index."""
         if not isinstance(operator, Operator):
             raise TypeError("register expects an Operator, got %r" % (operator,))
@@ -28,7 +32,7 @@ class OperatorRegistry:
         self._order.append(operator.name)
         return operator
 
-    def get(self, name):
+    def get(self, name: Any) -> Any:
         """Return the operator named ``name`` or raise a clear KeyError."""
         try:
             return self._by_name[name]
@@ -37,15 +41,15 @@ class OperatorRegistry:
             raise KeyError(
                 "unknown operator %r (registered: %s)" % (name, known)) from None
 
-    def names(self):
+    def names(self) -> Any:
         """Operator names in registration (id) order."""
         return list(self._order)
 
-    def operators_of_kind(self, kind):
+    def operators_of_kind(self, kind: Any) -> Any:
         """Operators of the given kind, in registration order."""
         return [self._by_name[n] for n in self._order if self._by_name[n].kind == kind]
 
-    def default_of_kind(self, kind):
+    def default_of_kind(self, kind: Any) -> Any:
         """The default operator of ``kind`` for model-free resolution.
 
         Picks the operator flagged ``capabilities["default"]`` if there is exactly
@@ -71,22 +75,22 @@ class OperatorRegistry:
             "multiple %s operators are compatible (%s); call P.call(name, ...) "
             "explicitly" % (kind, names))
 
-    def id_of(self, name):
+    def id_of(self, name: Any) -> int:
         """Integer OperatorId of ``name`` (its registration index)."""
         return self._order.index(name)
 
-    def by_id(self, operator_id):
+    def by_id(self, operator_id: Any) -> Any:
         """Operator at integer id ``operator_id``."""
         return self._by_name[self._order[operator_id]]
 
-    def __contains__(self, name):
+    def __contains__(self, name: Any) -> bool:
         return name in self._by_name
 
-    def __iter__(self):
+    def __iter__(self) -> Any:
         return (self._by_name[n] for n in self._order)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._order)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "OperatorRegistry(%s)" % ", ".join(self._order)

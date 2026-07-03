@@ -3,12 +3,21 @@
 ``check_model``, the runtime counterpart of dsl.Model.check_model (which checks formulas before
 compilation). Mixed into ``System`` via inheritance; operates on ``self._s``.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pops.runtime._system_contract import _System
+else:
+    _System = object
 
 
-class _SystemDiagnostics:
+class _SystemDiagnostics(_System):
     """Runtime block verification method of System."""
 
-    def check_model(self, block, raise_on_error=True, rtol=1e-8, atol=1e-10):
+    def check_model(self, block: Any, raise_on_error: bool = True, rtol: float = 1e-8,
+                    atol: float = 1e-10) -> Any:
         """Generic RUNTIME verification of an installed block (audit 2026-06, work item 6): check
         on the CURRENT STATE of the block (whatever the backend: native composed, .so JIT/AOT/production):
 

@@ -9,14 +9,24 @@ the other AmrSystem methods (``add_equation`` / ``set_density`` / ``set_poisson`
 ``_finish_program_install``).
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from pops.runtime._system_unified_install import validate_install_arguments
 
+if TYPE_CHECKING:
+    from pops.runtime._amr_system_contract import _AmrSystem
+else:
+    _AmrSystem = object
 
-class _AmrSystemInstall:
+
+class _AmrSystemInstall(_AmrSystem):
     """``pops.bind`` install seam for :class:`AmrSystem` (mixed in; operates on ``self``)."""
 
-    def _install_compiled(self, compiled=None, *, instances=None, params=None, aux=None,
-                          solvers=None, cadence=None, outputs=None):
+    def _install_compiled(self, compiled: Any = None, *, instances: Any = None, params: Any = None,
+                          aux: Any = None, solvers: Any = None, cadence: Any = None,
+                          outputs: Any = None) -> Any:
         """INTERNAL low-level install seam on the AMR hierarchy (Spec 5 sec.11) -- signature parity
         with ``System._install_compiled``. NOT the public entry point: author the run with
         ``pops.bind(...)``, which dispatches System / AmrSystem and calls this seam.
@@ -142,7 +152,8 @@ class _AmrSystemInstall:
     # Field names the default AMR Poisson route already serves (the shared coarse elliptic solve).
     _DEFAULT_POISSON_FIELDS = ("phi", "poisson", "charge_density", "default")
 
-    def _install_solver(self, field, solver_brick, declared_fields=frozenset()):
+    def _install_solver(self, field: Any, solver_brick: Any,
+                        declared_fields: Any = frozenset()) -> Any:
         """Lower a field-solver selection to set_poisson (AMR, ADC-428).
 
         The default Poisson field and any NAMED elliptic field a block's model DECLARES (via
@@ -168,7 +179,7 @@ class _AmrSystemInstall:
         self.set_poisson(solver=token)
 
     @staticmethod
-    def _declared_elliptic_fields(instances):
+    def _declared_elliptic_fields(instances: Any) -> Any:
         """Collect the NAMED elliptic fields declared by the per-instance models (ADC-428). Reads each
         model's declared names WITHOUT compiling: a target='amr_system' CompiledModel exposes
         ``elliptic_field_names``; a raw physics/dsl Model exposes the ``_elliptic_fields`` mapping.
@@ -190,7 +201,7 @@ class _AmrSystemInstall:
                 names.update(raw)
         return names
 
-    def _install_aux(self, field_name, field):
+    def _install_aux(self, field_name: Any, field: Any) -> Any:
         """Lower an aux entry on AMR: 'B_z' -> set_magnetic_field; 'T_e' rejected (derived); any
         other name -> set_aux_field on the block that declares it. Mirror of System._install_aux."""
         if field_name == "B_z":

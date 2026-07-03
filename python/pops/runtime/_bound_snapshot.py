@@ -13,8 +13,12 @@ The snapshot is built INSIDE ``_install_compiled`` where every piece is already 
 steps touch each), then handed to ``_finalize_bind`` as the LAST act of the install. Stdlib-only
 imports so this module stays import-light and buildable without the compiled ``_pops`` extension.
 """
+from __future__ import annotations
+
 import hashlib
 import json
+
+from typing import Any
 
 SCHEMA_VERSION = 1
 
@@ -41,8 +45,10 @@ class BoundSnapshot:
     is captured at compile time, so it is unaffected: cf. orchestration.compile snapshot authority).
     """
 
-    def __init__(self, *, layout, blocks=None, solvers=None, program_hash=None, abi_key=None,
-                 cache_key=None, cadence=None, aux=None, params=None, outputs=None):
+    def __init__(self, *, layout: Any, blocks: Any = None, solvers: Any = None,
+                 program_hash: Any = None, abi_key: Any = None, cache_key: Any = None,
+                 cadence: Any = None, aux: Any = None, params: Any = None,
+                 outputs: Any = None) -> None:
         self.schema_version = SCHEMA_VERSION
         self.layout = layout
         self.blocks = [dict(b) for b in (blocks or [])]
@@ -55,7 +61,7 @@ class BoundSnapshot:
         self.params = sorted(params or [])
         self.outputs = list(outputs or [])
 
-    def to_dict(self):
+    def to_dict(self) -> Any:
         """A plain-dict view of the whole snapshot (JSON-ready)."""
         return {
             "schema_version": self.schema_version,
@@ -71,7 +77,7 @@ class BoundSnapshot:
             "outputs": list(self.outputs),
         }
 
-    def to_json(self, path=None, *, indent=2):
+    def to_json(self, path: Any = None, *, indent: int = 2) -> Any:
         """Serialise :meth:`to_dict` to JSON; write to @p path if given, else return the string."""
         text = json.dumps(self.to_dict(), indent=indent, sort_keys=True)
         if path is not None:
@@ -81,7 +87,7 @@ class BoundSnapshot:
         return text
 
     @property
-    def snapshot_hash(self):
+    def snapshot_hash(self) -> Any:
         """A stable sha256 (64-hex) over the canonically serialised snapshot.
 
         Ties the bound identity to WHAT was frozen: the layout, the per-block model hashes + spatial
@@ -91,17 +97,17 @@ class BoundSnapshot:
         blob = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
-    def block_names(self):
+    def block_names(self) -> Any:
         """The bound block names in order (a convenience for inspection summaries)."""
         return [b.get("name") for b in self.blocks]
 
-    def __repr__(self):
+    def __repr__(self) -> Any:
         return ("BoundSnapshot(layout=%r, blocks=[%s], hash=%s)"
                 % (self.layout, ", ".join(str(n) for n in self.block_names()),
                    self.snapshot_hash[:12]))
 
 
-def _model_hash(model):
+def _model_hash(model: Any) -> Any:
     """The stable hash of an instance's block model, or ``None`` when it records none.
 
     A CompiledModel exposes ``model_hash`` / ``hash``; a native ModelSpec / physics Model records
@@ -121,7 +127,7 @@ def _model_hash(model):
     return None
 
 
-def _spatial_tokens(spatial):
+def _spatial_tokens(spatial: Any) -> Any:
     """The ``{limiter, flux, recon}`` plain-string tokens of a lowered spatial brick.
 
     Reads the canonical token attributes an ``pops.Spatial`` carries (``limiter`` / ``flux`` /
@@ -134,7 +140,8 @@ def _spatial_tokens(spatial):
     }
 
 
-def block_snapshot_entry(name, model, spatial, time, evolve=True):
+def block_snapshot_entry(name: Any, model: Any, spatial: Any, time: Any,
+                         evolve: Any = True) -> Any:
     """One :class:`BoundSnapshot` block row from the install-time pieces (helper for the seam).
 
     @p model / @p spatial are the RESOLVED objects the install already built; @p time is the block's
@@ -152,7 +159,7 @@ def block_snapshot_entry(name, model, spatial, time, evolve=True):
     }
 
 
-def _program_hash(compiled):
+def _program_hash(compiled: Any) -> Any:
     """The compiled Program's IR hash for the snapshot (None on a native install)."""
     if compiled is None:
         return None
@@ -165,7 +172,7 @@ def _program_hash(compiled):
     return fn if isinstance(fn, str) else getattr(compiled, "hash", None)
 
 
-def _cadence_row(cadence):
+def _cadence_row(cadence: Any) -> Any:
     """The ``{substeps, stride, cfl}`` snapshot row of a CompiledTime cadence (None when absent)."""
     if cadence is None:
         return None
@@ -175,8 +182,8 @@ def _cadence_row(cadence):
             "cfl": cfl if isinstance(cfl, (int, float)) else None}
 
 
-def build_uniform_snapshot(engine, compiled, resolved_models, instances, solvers, cadence, aux,
-                           params):
+def build_uniform_snapshot(engine: Any, compiled: Any, resolved_models: Any, instances: Any,
+                           solvers: Any, cadence: Any, aux: Any, params: Any) -> Any:
     """Assemble the Uniform :class:`BoundSnapshot` from the lowered install pieces (ADC-592).
 
     Reads only what ``System._install_compiled`` already resolved (block models / spatial / time /
@@ -201,7 +208,7 @@ def build_uniform_snapshot(engine, compiled, resolved_models, instances, solvers
         outputs=[_output_policy_row(p) for p in getattr(engine, "_output_policies", []) or []])
 
 
-def build_amr_snapshot(instances, solvers, aux, params):
+def build_amr_snapshot(instances: Any, solvers: Any, aux: Any, params: Any) -> Any:
     """Assemble the AMR :class:`BoundSnapshot` from the lowered install pieces (ADC-592).
 
     The AMR route installs NO whole-system compiled time Program, so program_hash / abi_key /
@@ -224,7 +231,7 @@ def build_amr_snapshot(instances, solvers, aux, params):
                          aux=list(aux or {}), params=list(params or {}), outputs=[])
 
 
-def _output_policy_row(policy):
+def _output_policy_row(policy: Any) -> Any:
     """The typed ``{name, category, options}`` row of an output / checkpoint policy (ADC-562 / G9).
 
     Enriches the snapshot's ``outputs`` from a bare type name to the policy's typed options
@@ -232,13 +239,13 @@ def _output_policy_row(policy):
     as a Schedule cadence becomes its name token) so the snapshot round-trips through JSON. A policy
     exposing no ``options`` degrades to its class name so an unusual entry never breaks it."""
     opts = getattr(policy, "options", None)
-    raw = opts() if callable(opts) else {}
+    raw: Any = opts() if callable(opts) else {}
     return {"name": getattr(policy, "name", type(policy).__name__),
             "category": getattr(policy, "category", None),
             "options": {k: _jsonable_option(v) for k, v in raw.items()}}
 
 
-def _jsonable_option(value):
+def _jsonable_option(value: Any) -> Any:
     """Coerce an option value to a JSON-ready form (a non-scalar, e.g. a Schedule, becomes a token)."""
     if value is None or isinstance(value, (bool, int, float, str)):
         return value

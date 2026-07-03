@@ -7,12 +7,21 @@ and global cadence (``set_program_cadence``). Mixed in via inheritance; operates
 through the native binding and on the ``_install_*`` helpers of the host class. Mirror of the
 System routes in :mod:`pops.runtime._system_unified_install`.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pops.runtime._amr_system_contract import _AmrSystem
+else:
+    _AmrSystem = object
 
 
-class _AmrSystemProgram:
+class _AmrSystemProgram(_AmrSystem):
     """COMPILED time-Program install / params / cadence methods of AmrSystem (ADC-508)."""
 
-    def _finish_program_install(self, compiled, so_path, params, cadence):
+    def _finish_program_install(self, compiled: Any, so_path: Any, params: Any,
+                                cadence: Any) -> Any:
         """Steps 5/5b/6 of ``_install_compiled`` for a COMPILED time Program (ADC-508).
 
         Runs AFTER the field solvers, blocks, aux inputs and initial state are wired:
@@ -50,7 +59,7 @@ class _AmrSystemProgram:
                     "policy (pops.Explicit(substeps=, stride=)) instead.")
             self._install_cadence(cadence)
 
-    def _install_program_params(self, compiled, params):
+    def _install_program_params(self, compiled: Any, params: Any) -> Any:
         """Route flat {param_name: value} to set_program_params per PROGRAM block (ADC-508, AMR mirror
         of System._install_program_params): read the compiled handle's declared routing
         (runtime_param_routes), build each block's COMPLETE value vector (declaration defaults for
@@ -58,7 +67,8 @@ class _AmrSystemProgram:
         A name declared by no Program kernel raises (no silent drop)."""
         from pops.runtime._install_param_routing import route_program_params
         routes_fn = getattr(compiled, "runtime_param_routes", None)
-        routes, defaults = routes_fn() if callable(routes_fn) else ({}, {})
+        routing: Any = routes_fn() if callable(routes_fn) else ({}, {})
+        routes, defaults = routing
         per_block, unknown = route_program_params(routes, defaults, params)
         for blk, values in per_block.items():
             self.set_program_params(blk, values)
@@ -68,7 +78,7 @@ class _AmrSystemProgram:
                 "(a runtime param must be read by the Program's source / linear-source kernels and "
                 "declared dsl.Param(..., kind='runtime'))" % (unknown,))
 
-    def _install_cadence(self, cadence):
+    def _install_cadence(self, cadence: Any) -> Any:
         """Apply a CompiledTime macro-step cadence to the installed AMR program (set_program_cadence,
         AMR mirror of System._install_cadence). substeps=n re-runs the whole program over eff_dt/n;
         stride=M runs it once per M macro-steps. A NUMERIC cadence.cfl is pinned so a bare run() with no

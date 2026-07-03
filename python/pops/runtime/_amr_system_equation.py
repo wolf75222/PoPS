@@ -6,6 +6,10 @@
 ``self._s`` and ``self._aux_field_index``.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from pops._bootstrap import ModelSpec
 from pops.runtime.bricks import Spatial, Explicit, Split
 from pops.runtime.routes import check_riemann_capability as _check_riemann_capability
@@ -19,8 +23,13 @@ from pops.runtime.defaults import (
     PHYSICAL_DEFAULT_GAMMA,
 )
 
+if TYPE_CHECKING:
+    from pops.runtime._amr_system_contract import _AmrSystem
+else:
+    _AmrSystem = object
 
-def _reject_newton_amr_compiled(label, time):
+
+def _reject_newton_amr_compiled(label: Any, time: Any) -> Any:
     """REJECTS Newton options/diagnostics on the COMPILED AMR path (.so loader, flat ABI
     add_native_block / pops_install_native_amr) -- wave 3, settle. On the NATIVE side (pops.Model(...)), the
     Newton OPTIONS are now wired in single-block (coupler) AND multi-block (engine), and the
@@ -50,10 +59,11 @@ def _reject_newton_amr_compiled(label, time):
             "pops.Model(...) on the AMR layout)." % label)
 
 
-class _AmrSystemEquation:
+class _AmrSystemEquation(_AmrSystem):
     """add_equation + named-aux methods of AmrSystem."""
 
-    def add_equation(self, name, model, spatial=None, time=None, substeps=None):
+    def add_equation(self, name: Any, model: Any, spatial: Any = None, time: Any = None,
+                     substeps: Any = None) -> Any:
         """Add the SINGLE AMR equation/block by dispatching on the TYPE of @p model (DSL Phase D).
 
         Low-level runtime seam. The documented PUBLIC path is the typed ``pops.Problem`` assembly
@@ -244,7 +254,7 @@ class _AmrSystemEquation:
         if extra:
             self._aux_field_index[name] = {nm: AUX_NAMED_BASE + k for k, nm in enumerate(extra)}
 
-    def _resolve_aux_field(self, block, name):
+    def _resolve_aux_field(self, block: Any, name: Any) -> Any:
         """Resolve (block, named aux field) -> aux channel component (ADC-291). Mirror of
         System._resolve_aux_field: a canonical name is redirected to its dedicated path; an unknown
         block or an undeclared field raises (no silent component-0 fallback)."""
@@ -268,7 +278,7 @@ class _AmrSystemEquation:
                 % (name, block, sorted(table)))
         return table[name]
 
-    def set_aux_field(self, block, name, field, halo=None):
+    def set_aux_field(self, block: Any, name: Any, field: Any, halo: Any = None) -> Any:
         """Set a model-NAMED aux field of @p block (declared via m.aux_field(name)) on the AMR
         hierarchy. AMR counterpart of System.set_aux_field. @p field: 2D array (n, n) on the COARSE
         base level; it is STATIC (re-applied each step, injected to the fine levels, survives a regrid).

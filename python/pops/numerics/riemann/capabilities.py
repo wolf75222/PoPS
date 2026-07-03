@@ -6,19 +6,22 @@ The canonical capability-hook selectors used by
 speed / star state). Each selector is a macro descriptor naming a canonical model
 hook; the hook C++ is generated from the model roles by the dsl backend.
 """
+from __future__ import annotations
+
 from types import SimpleNamespace
+from typing import Any
 
 from pops.descriptors import BrickDescriptor
 
 
-def _hook(name, scheme):
+def _hook(name: Any, scheme: Any) -> Any:
     """A capability-hook selector descriptor: it picks a canonical model hook (e.g. the Euler
     contact speed / star state, the Einfeldt wave speeds) that the native solver consumes. It
     computes nothing; the hook C++ is generated from the model (roles) by the dsl backend."""
     return BrickDescriptor(name, "macro", category="riemann_hook", scheme=scheme)
 
 
-def _attach_capabilities(riemann):
+def _attach_capabilities(riemann: Any) -> None:
     """Attach the ``speeds`` / ``hllc`` capability-hook selectors onto the @p riemann ns."""
     riemann.speeds = SimpleNamespace(
         einfeldt=lambda: _hook("einfeldt", "einfeldt"),

@@ -5,7 +5,10 @@ moments ``S`` (a dict of ``S{p}{q}`` for ``2 <= p+q <= order``) to the standardi
 moments of order ``order+1`` (a dict of ``S{p}{q}`` for ``p+q == order+1``). The values
 may be DSL expressions or plain numbers (a numeric zero drops the term from the flux).
 """
+from __future__ import annotations
+
 import typing
+from typing import Any
 
 
 @typing.runtime_checkable
@@ -18,7 +21,7 @@ class Closure(typing.Protocol):
     numeric zero removes the term from the generated flux.
     """
 
-    def __call__(self, S):  # noqa: N803  (S mirrors the engine variable name)
+    def __call__(self, S: Any) -> Any:  # noqa: N803  (S mirrors the engine variable name)
         ...
 
 

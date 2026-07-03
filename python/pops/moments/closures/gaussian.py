@@ -6,9 +6,12 @@ python/pops/lib/moments/__init__.py.
 This closure is pure Python arithmetic on DSL expressions (or plain numbers)
 and has no import-time dependency on the DSL compiler.
 """
+from __future__ import annotations
+
+from typing import Any
 
 
-def gaussian_closure(order):
+def gaussian_closure(order: Any) -> Any:
     """Generic Gaussian (Levermore) closure: the standardized moments of order order+1 are
     those of a standardized Gaussian with correlation s11 = S['S11'].
 
@@ -17,13 +20,13 @@ def gaussian_closure(order):
     @return callable S -> dict 'S{p}{q}' (p+q = order+1)."""
     top = order + 1
 
-    def closure(S):
+    def closure(S: Any) -> Any:
         if top % 2 == 1:
             return {"S%d%d" % (p, top - p): 0.0 for p in range(top + 1)}
         s11 = S["S11"]
         memo = {(0, 0): 1.0, (1, 0): 0.0, (0, 1): 0.0}
 
-        def m(p, q):
+        def m(p: Any, q: Any) -> Any:
             if p < 0 or q < 0:
                 return 0.0
             if (p, q) not in memo:

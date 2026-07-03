@@ -38,6 +38,9 @@ This module imports only the standard library at module scope (``os`` / ``sys`` 
 references no other ``pops`` layer, so it adds no edge to the codegen import graph
 (tests/python/architecture/test_import_graph.py).
 """
+from __future__ import annotations
+
+from typing import Any
 
 import os
 import sys
@@ -77,17 +80,17 @@ _AUTOTUNE_ALIASES = {"": _AUTOTUNE_OFF, "0": _AUTOTUNE_OFF, "off": _AUTOTUNE_OFF
 _TRUTHY = ("1", "on", "true", "yes", "y")
 
 
-def _truthy(value):
+def _truthy(value: Any) -> bool:
     """True for an explicit truthy token; False for unset / blank / falsey (lenient, never raises)."""
     return str(value or "").strip().lower() in _TRUTHY
 
 
-def _level(value, aliases, default):
+def _level(value: Any, aliases: Any, default: Any) -> Any:
     """Map a raw env value to a known level via @p aliases; an unknown value -> @p default."""
     return aliases.get(str(value or "").strip().lower(), default)
 
 
-def resolve_log_level(env=None):
+def resolve_log_level(env: Any = None) -> Any:
     """The codegen/compile log level: POPS_CODEGEN_LOG (specific) wins over POPS_LOG (broad).
 
     Quiet by default. Returns one of ``"quiet"`` / ``"info"`` / ``"debug"``; an unrecognised value
@@ -100,7 +103,7 @@ def resolve_log_level(env=None):
     return _level(raw, _LOG_ALIASES, _LOG_QUIET)
 
 
-def resolve_autotune(env=None):
+def resolve_autotune(env: Any = None) -> Any:
     """The autotune level from ``POPS_AUTOTUNE``: ``"off"`` (default) / ``"basic"`` / ``"aggressive"``.
 
     HONEST STUB: no autotune engine exists, so any non-``off`` value is recorded and surfaced but
@@ -111,7 +114,7 @@ def resolve_autotune(env=None):
     return _level(env.get(ENV_AUTOTUNE), _AUTOTUNE_ALIASES, _AUTOTUNE_OFF)
 
 
-def jit_backdoor_enabled(env=None):
+def jit_backdoor_enabled(env: Any = None) -> bool:
     """True iff ``POPS_JIT_BACKDOOR`` is set truthy (criterion #48). DISABLED by default.
 
     Pure predicate: it reads the env and nothing else. The LOUD warning is emitted once by
@@ -133,9 +136,10 @@ class CodegenEnv:
     __slots__ = ("log_level", "codegen_dir", "keep_generated", "dump_ir", "dump_cpp",
                  "cache_dir", "profile", "autotune", "jit_backdoor")
 
-    def __init__(self, *, log_level=_LOG_QUIET, codegen_dir=None, keep_generated=False,
-                 dump_ir=False, dump_cpp=False, cache_dir=None, profile=None,
-                 autotune=_AUTOTUNE_OFF, jit_backdoor=False):
+    def __init__(self, *, log_level: Any = _LOG_QUIET, codegen_dir: Any = None,
+                 keep_generated: Any = False, dump_ir: Any = False, dump_cpp: Any = False,
+                 cache_dir: Any = None, profile: Any = None,
+                 autotune: Any = _AUTOTUNE_OFF, jit_backdoor: Any = False) -> None:
         self.log_level = log_level
         self.codegen_dir = codegen_dir
         self.keep_generated = bool(keep_generated)
@@ -147,7 +151,8 @@ class CodegenEnv:
         self.jit_backdoor = bool(jit_backdoor)
 
     @classmethod
-    def from_env(cls, *, codegen_dir=None, keep_generated=None, env=None, warn=True):
+    def from_env(cls, *, codegen_dir: Any = None, keep_generated: Any = None, env: Any = None,
+                 warn: bool = True) -> Any:
         """Resolve the snapshot, EXPLICIT arguments winning over the environment (sec.12.4).
 
         @p codegen_dir  an explicit codegen directory (wins over ``POPS_CODEGEN_DIR``);
@@ -194,11 +199,11 @@ class CodegenEnv:
             jit_backdoor=backdoor)
 
     @property
-    def verbose(self):
+    def verbose(self) -> bool:
         """True when the log level asks for at least ``info`` output."""
         return self.log_level != _LOG_QUIET
 
-    def log(self, message, *, level="info", stream=None):
+    def log(self, message: Any, *, level: str = "info", stream: Any = None) -> None:
         """Emit @p message to stderr iff the active level is at least @p level (else a no-op).
 
         An honest, dependency-free level gate: ``quiet`` < ``info`` < ``debug``. Used by the compile
@@ -209,7 +214,7 @@ class CodegenEnv:
         if have >= want and want < len(_LOG_LEVELS):
             print("pops.codegen: %s" % message, file=stream or sys.stderr, flush=True)
 
-    def run_dumps(self, compiled):
+    def run_dumps(self, compiled: Any) -> None:
         """Honor POPS_DUMP_IR / POPS_DUMP_CPP on a freshly resolved handle (Spec 5 sec.12.4, #47).
 
         After a successful compile (or a cache hit), dump the IR / the C++ via the EXISTING
@@ -235,14 +240,14 @@ class CodegenEnv:
             except (OSError, ValueError, NotImplementedError) as exc:
                 self.log("compile_problem: POPS_DUMP_CPP skipped (%s)" % exc)
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         """A plain-dict, JSON-ready view of the resolved settings (inspectable, never an array)."""
         return {"log_level": self.log_level, "codegen_dir": self.codegen_dir,
                 "keep_generated": self.keep_generated, "dump_ir": self.dump_ir,
                 "dump_cpp": self.dump_cpp, "cache_dir": self.cache_dir, "profile": self.profile,
                 "autotune": self.autotune, "jit_backdoor": self.jit_backdoor}
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return ("CodegenEnv(log_level=%r, codegen_dir=%r, keep_generated=%s, dump_ir=%s, "
                 "dump_cpp=%s, autotune=%r, jit_backdoor=%s)"
                 % (self.log_level, self.codegen_dir, self.keep_generated, self.dump_ir,

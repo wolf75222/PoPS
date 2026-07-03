@@ -5,7 +5,10 @@ Symbols are re-exported via python/pops/lib/moments/__init__.py.
 These functions are pure Python / DSL-expression arithmetic and do NOT require
 the DSL compiler; no lazy import is needed here.
 """
+from __future__ import annotations
+
 from math import comb
+from typing import Any
 
 from pops.descriptors import Descriptor
 from pops.descriptors_report import CapabilitySet
@@ -13,7 +16,7 @@ from pops.descriptors_report import CapabilitySet
 from .model_builder import moment_indices, _pow
 
 
-def lorentz_sources(M, ex, ey, q_over_m, omega_c):
+def lorentz_sources(M: Any, ex: Any, ey: Any, q_over_m: Any, omega_c: Any) -> list:
     """Sources of the moment hierarchy under the Lorentz force (Vlasov), generic in the
     order and INDEPENDENT of the closure (no higher-order moment referenced: the electric
     term LOWERS the order, the magnetic term CONSERVES it):
@@ -27,7 +30,7 @@ def lorentz_sources(M, ex, ey, q_over_m, omega_c):
     order = max(p + q for (p, q) in M)
     out = []
     for (p, q) in moment_indices(order):
-        expr = None
+        expr: Any = None
         if p >= 1:
             t = q_over_m * (float(p) * ex * M[(p - 1, q)])
             expr = t if expr is None else expr + t
@@ -42,7 +45,7 @@ def lorentz_sources(M, ex, ey, q_over_m, omega_c):
     return out
 
 
-def maxwellian_moments(M):
+def maxwellian_moments(M: Any) -> list:
     """Raw moments of the LOCAL Maxwellian (Gaussian in velocity) matching the lower moments
     of M: density M00, mean (u, v) = M10/M00, M01/M00, and covariance [[C20, C11], [C11, C02]]
     from the second central moments. The Maxwellian is its own closure, so this is INDEPENDENT
@@ -78,7 +81,7 @@ def maxwellian_moments(M):
     for (p, q) in moment_indices(order):
         # de-standardization / reconstruction: M_eq[p, q] = M00 * sum_ij C(p,i) C(q,j)
         # u^(p-i) v^(q-j) Cg(i, j); a numeric-zero Cg term drops out of the generated flux.
-        acc = None
+        acc: Any = None
         for i in range(p + 1):
             for j in range(q + 1):
                 cij = cg.get((i, j), 0.0)
@@ -92,7 +95,7 @@ def maxwellian_moments(M):
     return out
 
 
-def bgk_source(M, nu):
+def bgk_source(M: Any, nu: Any) -> list:
     """BGK relaxation source S[M_pq] = nu (M_eq[p, q] - M[p, q]) toward the local Maxwellian.
 
     @p M: dict (p, q) -> Expr/value of the transported (conservative) moments.
@@ -123,17 +126,17 @@ class VlasovSources:
     """
 
     @staticmethod
-    def lorentz(M, ex, ey, q_over_m, omega_c):
+    def lorentz(M: Any, ex: Any, ey: Any, q_over_m: Any, omega_c: Any) -> list:
         """The Vlasov-Lorentz hierarchy source (forwards to :func:`lorentz_sources`)."""
         return lorentz_sources(M, ex, ey, q_over_m, omega_c)
 
     @staticmethod
-    def maxwellian_eq(M):
+    def maxwellian_eq(M: Any) -> list:
         """The local-Maxwellian raw moments (forwards to :func:`maxwellian_moments`)."""
         return maxwellian_moments(M)
 
     @staticmethod
-    def bgk(M, nu):
+    def bgk(M: Any, nu: Any) -> list:
         """The BGK relaxation source (forwards to :func:`bgk_source`)."""
         return bgk_source(M, nu)
 
@@ -151,24 +154,24 @@ class MagneticMomentSource(Descriptor):
 
     category = "moment_source"
 
-    def __init__(self, q_over_m="q_over_m", b_field="B_z"):
+    def __init__(self, q_over_m: Any = "q_over_m", b_field: Any = "B_z") -> None:
         self.q_over_m = str(q_over_m)
         self.b_field = str(b_field)
 
-    def options(self):
+    def options(self) -> dict:
         return {"q_over_m": self.q_over_m, "b_field": self.b_field}
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"provides": "magnetic_lorentz"})
 
-    def as_sources(self, q_over_m_value=1.0):
+    def as_sources(self, q_over_m_value: Any = 1.0) -> Any:
         """A ``(m, M) -> list`` sources callable: ``omega_c = q_over_m * B`` (electric field 0).
 
         @p q_over_m_value: the default value of the declared ``q_over_m`` param.
         """
         qom_name, b_name = self.q_over_m, self.b_field
 
-        def sources(m, M):
+        def sources(m: Any, M: Any) -> Any:
             qom = m.param(qom_name, q_over_m_value)
             b_z = m.aux(b_name)
             omega_c = qom * b_z
@@ -176,5 +179,5 @@ class MagneticMomentSource(Descriptor):
 
         return sources
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "MagneticMomentSource(q_over_m=%r, b_field=%r)" % (self.q_over_m, self.b_field)

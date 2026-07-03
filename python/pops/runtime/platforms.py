@@ -15,11 +15,15 @@ communicator is created -- the runtime selects and drives the device. Like
 :mod:`pops.runtime.threading`, the only ``_pops`` touch is lazy inside :meth:`available`, so
 ``import pops.runtime.platforms`` is side-effect-free.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Availability, Descriptor
 from pops.descriptors_report import CapabilitySet, LoweredDescriptor, RequirementSet
 
 
-def _has_kokkos():
+def _has_kokkos() -> Any:
     """True/False/None: whether _pops was compiled with Kokkos (None if too old to expose it)."""
     # Lazy, mirroring pops.runtime.threading.has_kokkos: importing _pops at module scope would
     # make this inert authoring module pull the C extension at import time.
@@ -27,7 +31,7 @@ def _has_kokkos():
     return getattr(_pops, "__has_kokkos__", None)
 
 
-def _has_mpi():
+def _has_mpi() -> Any:
     """True/False/None: whether _pops was compiled with MPI (None if too old to expose it)."""
     from pops import _pops
     return getattr(_pops, "__has_mpi__", None)
@@ -50,20 +54,20 @@ class _Platform(Descriptor):
     _gpu = False
     _mpi = False
 
-    def options(self):
+    def options(self) -> Any:
         return {"device": self._device}
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"host": self._host, "gpu": self._gpu, "mpi": self._mpi})
 
-    def requirements(self):
+    def requirements(self) -> Any:
         """What the platform NEEDS from the compiled module (the build flag it depends on)."""
         req = {}
         if self._device != "serial":
             req["kokkos"] = True
         return RequirementSet(req)
 
-    def lower(self, context=None):
+    def lower(self, context: Any = None) -> Any:
         """The inert lowering record: the device token + the declared capabilities (metadata only)."""
         return LoweredDescriptor(name=self.name, category=self.category,
                                  native_id=self.native_id, options=self.options(),
@@ -81,13 +85,13 @@ class KokkosSerial(_Platform):
     _device = "serial"
     _host = True
 
-    def requirements(self):
+    def requirements(self) -> Any:
         # Serial is the baseline host device: a Kokkos build offers it unconditionally; a strictly
         # SERIAL (non-Kokkos) _pops still runs single-threaded host code, so do not hard-require the
         # Kokkos flag here -- available() reports the honest status.
         return RequirementSet()
 
-    def available(self, context=None):
+    def available(self, context: Any = None) -> Any:
         """Available on any build (host single-thread is always present)."""
         return Availability.yes("host serial device is always available")
 
@@ -102,7 +106,7 @@ class KokkosOpenMP(_Platform):
     _device = "openmp"
     _host = True
 
-    def available(self, context=None):
+    def available(self, context: Any = None) -> Any:
         kokkos = _has_kokkos()
         if kokkos is None:
             return Availability.partial(
@@ -127,7 +131,7 @@ class KokkosCuda(_Platform):
     _device = "cuda"
     _gpu = True
 
-    def available(self, context=None):
+    def available(self, context: Any = None) -> Any:
         kokkos = _has_kokkos()
         if kokkos is None:
             return Availability.partial(
@@ -159,7 +163,7 @@ class KokkosHIP(_Platform):
     _device = "hip"
     _gpu = True
 
-    def available(self, context=None):
+    def available(self, context: Any = None) -> Any:
         kokkos = _has_kokkos()
         if kokkos is None:
             return Availability.partial(
@@ -190,10 +194,10 @@ class MPI(_Platform):
     _host = True
     _mpi = True
 
-    def requirements(self):
+    def requirements(self) -> Any:
         return RequirementSet({"mpi": True})
 
-    def available(self, context=None):
+    def available(self, context: Any = None) -> Any:
         mpi = _has_mpi()
         if mpi is None:
             return Availability.partial(

@@ -9,6 +9,10 @@ single multi-block / multi-source right-hand side (``ChargeDensity(...) + FixedS
 
 Inert descriptors; the runtime assembles the actual density field.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Descriptor
 from pops.descriptors_report import RequirementSet
 
@@ -18,7 +22,7 @@ class _RHS(Descriptor):
 
     category = "rhs"
 
-    def __add__(self, other):
+    def __add__(self, other: Any) -> Any:
         if not isinstance(other, _RHS):
             return NotImplemented
         return SumRHS(self, other)
@@ -31,11 +35,11 @@ class ChargeDensity(_RHS):
     charge; the runtime assembles the density from those blocks' conserved state.
     """
 
-    def __init__(self, blocks=()):
+    def __init__(self, blocks: Any = ()) -> None:
         self.blocks = tuple(str(b) for b in blocks)
 
     @classmethod
-    def from_blocks(cls, *blocks):
+    def from_blocks(cls, *blocks: Any) -> ChargeDensity:
         """A :class:`ChargeDensity` summed over the named contributing :paramref:`blocks`.
 
         Accepts the block names either as varargs (``from_blocks("ions", "electrons")``)
@@ -45,10 +49,10 @@ class ChargeDensity(_RHS):
             blocks = tuple(blocks[0])
         return cls(blocks=blocks)
 
-    def options(self):
+    def options(self) -> dict:
         return {"rhs": "charge_density", "blocks": self.blocks}
 
-    def requirements(self):
+    def requirements(self) -> Any:
         return RequirementSet({"blocks": list(self.blocks)})
 
 
@@ -59,17 +63,17 @@ class FixedSource(_RHS):
     right-hand side alongside the block-deposited charge; the runtime reads its values.
     """
 
-    def __init__(self, aux_field):
+    def __init__(self, aux_field: Any) -> None:
         self.aux_field = str(aux_field)
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self.aux_field
 
-    def options(self):
+    def options(self) -> dict:
         return {"rhs": "fixed_source", "aux_field": self.aux_field}
 
-    def requirements(self):
+    def requirements(self) -> Any:
         return RequirementSet({"aux_field": self.aux_field})
 
 
@@ -81,7 +85,7 @@ class SumRHS(_RHS):
     so the composition stays a single flat list of terms, and unions each term's requirements.
     """
 
-    def __init__(self, *terms):
+    def __init__(self, *terms: Any) -> None:
         flat = []
         for term in terms:
             if isinstance(term, SumRHS):
@@ -96,11 +100,11 @@ class SumRHS(_RHS):
             raise ValueError("SumRHS: needs at least one RHS term")
         self.terms = tuple(flat)
 
-    def options(self):
+    def options(self) -> dict:
         return {"rhs": "sum", "n_terms": len(self.terms),
                 "terms": [t.options().get("rhs") for t in self.terms]}
 
-    def requirements(self):
+    def requirements(self) -> Any:
         from pops.descriptors_report import RequirementSet
         blocks, aux = [], []
         for term in self.terms:

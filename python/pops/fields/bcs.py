@@ -11,6 +11,10 @@ physical); this module owns what value/flux a field takes on a face.
 
 Inert descriptors; the runtime materialises the actual ghost fills.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Descriptor
 from pops.descriptors_report import CapabilitySet
 
@@ -22,7 +26,7 @@ class _Face(Descriptor):
     axis = -1
     side = ""
 
-    def options(self):
+    def options(self) -> dict:
         return {"axis": self.axis, "side": self.side}
 
 
@@ -47,10 +51,10 @@ class Periodic(Descriptor):
 
     category = "field_bc"
 
-    def options(self):
+    def options(self) -> dict:
         return {"bc": "periodic"}
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"periodic": True})
 
 
@@ -63,11 +67,11 @@ class Dirichlet(Descriptor):
 
     category = "field_bc"
 
-    def __init__(self, value=0.0, on=None):
+    def __init__(self, value: Any = 0.0, on: Any = None) -> None:
         self.value = float(value)
         self.on = on
 
-    def options(self):
+    def options(self) -> dict:
         return {"bc": "dirichlet", "value": self.value,
                 "on": getattr(self.on, "name", self.on)}
 
@@ -81,11 +85,11 @@ class Neumann(Descriptor):
 
     category = "field_bc"
 
-    def __init__(self, value=0.0, on=None):
+    def __init__(self, value: Any = 0.0, on: Any = None) -> None:
         self.value = float(value)
         self.on = on
 
-    def options(self):
+    def options(self) -> dict:
         return {"bc": "neumann", "value": self.value,
                 "on": getattr(self.on, "name", self.on)}
 
@@ -95,7 +99,7 @@ class FirstOrderExtrapolation(Descriptor):
 
     category = "field_bc"
 
-    def options(self):
+    def options(self) -> dict:
         return {"bc": "foextrap"}
 
 
@@ -104,14 +108,14 @@ class FaceBC(Descriptor):
 
     category = "face_bc"
 
-    def __init__(self, face, condition):
+    def __init__(self, face: Any, condition: Any) -> None:
         if not isinstance(face, _Face):
             raise TypeError(
                 "FaceBC: face must be a face selector (XMin/XMax/YMin/YMax), got %r" % (face,))
         self.face = face
         self.condition = condition
 
-    def options(self):
+    def options(self) -> dict:
         return {"face": self.face.name,
                 "condition": getattr(self.condition, "name", repr(self.condition))}
 

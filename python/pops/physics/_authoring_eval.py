@@ -6,17 +6,26 @@ Host-side evaluators (``flux`` / ``max_wave_speed`` / ``wave_speeds_value`` /
 ``HyperbolicModel.__init__``. Imports numpy, :mod:`pops.ir` and the aux/role
 helpers; codegen-free and ``_pops``-free.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 import numpy as np
 
 from pops.ir.visitors import _expr_uses_cons_or_prim  # noqa: F401
 
 from .aux import roles_for
 
+if TYPE_CHECKING:
+    from ._model_contract import _HyperbolicModel
+else:
+    _HyperbolicModel = object
 
-class _EvalMixin:
+
+class _EvalMixin(_HyperbolicModel):
     """numpy evaluators and the numerical model self-check."""
 
-    def _env(self, U, aux):
+    def _env(self, U: Any, aux: Any) -> dict:
         """Environment: cons (from U), aux (provided), then derived primitives (insertion
         order = dependency order)."""
         env = {self.cons_names[i]: U[i] for i in range(len(self.cons_names))}
@@ -26,13 +35,13 @@ class _EvalMixin:
             env[pname] = pexpr.eval(env)
         return env
 
-    def flux(self, U, aux, dir):
+    def flux(self, U: Any, aux: Any, dir: Any) -> Any:
         """Physical flux in direction dir (0=x, 1=y). U: numpy (n_vars, ...)."""
         env = self._env(U, aux)
         comps = self._flux["x" if dir == 0 else "y"]
         return np.stack([np.broadcast_to(c.eval(env), U[0].shape) for c in comps], axis=0)
 
-    def max_wave_speed(self, U, aux, dir):
+    def max_wave_speed(self, U: Any, aux: Any, dir: Any) -> Any:
         """max_k max_cells ``|lambda_k|``: Rusanov / CFL bound. Source: eigenvalues
         (legacy); WITHOUT set_eigenvalues, ``max(|smin|, |smax|)`` of the explicit signed speeds
         (set_wave_speeds), an exact mirror of the C++ emission."""
@@ -49,7 +58,7 @@ class _EvalMixin:
                              % self.name)
         return max(float(np.max(np.abs(np.asarray(e.eval(env))))) for e in exprs)
 
-    def _ws_jacobian_value(self, U, env, key):
+    def _ws_jacobian_value(self, U: Any, env: Any, key: Any) -> Any:
         """Numpy evaluator of the jacobian path: extremes of the real parts of the eigenvalues
         of the sub-blocks, per sample (mirror of the emitted wave_speeds; np.linalg.eigvals)."""
         ws = self._ws_jacobian
@@ -82,11 +91,11 @@ class _EvalMixin:
         for b in ws["blocks"][key]:
             idx = np.asarray(b)
             lam = np.linalg.eigvals(J[:, idx[:, None], idx[None, :]])
-            lo = np.minimum(lo, lam.real.min(axis=1))
-            hi = np.maximum(hi, lam.real.max(axis=1))
+            lo = np.minimum(lo, lam.real.min(axis=1))  # pyright: ignore[reportAttributeAccessIssue]
+            hi = np.maximum(hi, lam.real.max(axis=1))  # pyright: ignore[reportAttributeAccessIssue]
         return lo, hi
 
-    def _flux_jacobian_spectral_radius(self, U, aux, dir):
+    def _flux_jacobian_spectral_radius(self, U: Any, aux: Any, dir: Any) -> Any:
         """Spectral radius max_cells max_k |Re(lambda_k)| of the FULL dense Jacobian A = dF_dir/dU,
         evaluated by CENTRAL finite differences on the interpreted flux. Independent of any declared
         partition (set_wave_speeds_from_jacobian blocks=...): serves as a non-circular reference bound
@@ -110,9 +119,9 @@ class _EvalMixin:
                 J[:, i, j] = (np.broadcast_to(Fp[i], (nsmp,))
                               - np.broadcast_to(Fm[i], (nsmp,))) / (2.0 * eps)
         lam = np.linalg.eigvals(J)
-        return float(np.max(np.abs(lam.real)))
+        return float(np.max(np.abs(lam.real)))  # pyright: ignore[reportAttributeAccessIssue]
 
-    def wave_speeds_value(self, U, aux, dir):
+    def wave_speeds_value(self, U: Any, aux: Any, dir: Any) -> Any:
         """Numpy evaluator of the signed speeds (smin, smax) -- mirror of the emitted wave_speeds:
         explicit pair (set_wave_speeds) if declared, otherwise min/max of the eigenvalues (legacy
         path, which requires 'p' to be EMITTED but remains evaluable here)."""
@@ -131,7 +140,7 @@ class _EvalMixin:
         eigs = list(np.broadcast_arrays(*eigs)) if len(eigs) > 1 else eigs  # mixed shapes (constant lambda)
         return (np.min(np.stack(eigs), axis=0), np.max(np.stack(eigs), axis=0))
 
-    def source_value(self, U, aux):
+    def source_value(self, U: Any, aux: Any) -> Any:
         """Source term (numpy (n_vars, ...)), or zeros if not defined. A model that declares only
         NAMED sources (no m.source default) cannot answer the legacy total-source query: the named
         terms are never summed implicitly, so an old stepper asking for the total source is rejected
@@ -144,7 +153,7 @@ class _EvalMixin:
         env = self._env(U, aux)
         return np.stack([np.broadcast_to(s.eval(env), U[0].shape) for s in self._source], axis=0)
 
-    def to_python_flux(self, aux=None):
+    def to_python_flux(self, aux: Any = None) -> Any:
         """Produces a pops.experimental.PythonFlux (host backend) from the formulas: the model RUNS
         (interpreted on CPU). aux: dict name -> array (auxiliary fields), frozen for this flux.
 
@@ -156,7 +165,7 @@ class _EvalMixin:
             lambda U, d: self.flux(U, a, d),
             lambda U: max(self.max_wave_speed(U, a, 0), self.max_wave_speed(U, a, 1)))
 
-    def check(self):
+    def check(self) -> bool:
         """Checks that every referenced variable (primitives, flux, eigenvalues, source) is
         properly declared (cons / prim / aux). Raises ValueError otherwise (dependency check)."""
         known = (set(self.cons_names) | set(self.prim_defs) | set(self.aux_names)
@@ -223,8 +232,9 @@ class _EvalMixin:
                                          "conservative or primitive variables" % nm)
         return True
 
-    def check_model(self, samples=None, n_samples=64, seed=0, aux=None, rtol=1e-8, atol=1e-10,
-                    raise_on_error=True, jac_rtol=1e-3, jac_atol=1e-9):
+    def check_model(self, samples: Any = None, n_samples: int = 64, seed: int = 0, aux: Any = None,
+                    rtol: float = 1e-8, atol: float = 1e-10, raise_on_error: bool = True,
+                    jac_rtol: float = 1e-3, jac_atol: float = 1e-9) -> Any:
         """Generic NUMERICAL verification of the symbolic model (audit 2026-06, work item 6):
         evaluates the formulas on sample states and checks, when the piece exists:
 
@@ -279,7 +289,7 @@ class _EvalMixin:
                 a[k] = np.broadcast_to(np.asarray(v, dtype=float), (U.shape[1],)).copy()
         failures = []
 
-        def finite(x):
+        def finite(x: Any) -> bool:
             return bool(np.all(np.isfinite(np.asarray(x, dtype=float))))
 
         for d, dn in ((0, "x"), (1, "y")):

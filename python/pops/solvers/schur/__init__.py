@@ -11,6 +11,10 @@ NOTE: this :func:`CondensedSchur` SOLVER descriptor is DISTINCT from
 :class:`pops.CondensedSchur` (``pops.time``), which is the time-integration SPLITTING POLICY
 for an implicit source. They share no namespace and are not the same object.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import _native
 from pops.solvers.requirements import capability_map
 
@@ -21,7 +25,7 @@ from pops.solvers.requirements import capability_map
 _SCHUR_CAPABILITIES = capability_map(uniform=True, amr=True, mpi=True, gpu=True)
 
 
-def Schur(**options):
+def Schur(**options: Any) -> Any:
     """The Schur-condensation solver descriptor (``pops::SchurCondensationOperator``).
 
     Scheme token ``"schur"``; inert (the C++ runtime applies the condensation operator).
@@ -30,7 +34,7 @@ def Schur(**options):
                    category="solver", capabilities=_SCHUR_CAPABILITIES, **options)
 
 
-def CondensedSchur(**options):
+def CondensedSchur(**options: Any) -> Any:
     """Alias of :func:`Schur` naming the same ``pops::SchurCondensationOperator`` (inert).
 
     Distinct from the ``pops.time`` ``CondensedSchur`` time-splitting policy -- this is the

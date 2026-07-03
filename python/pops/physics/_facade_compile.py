@@ -6,22 +6,32 @@ private :class:`HyperbolicModel`) and ``self.params``; the build engine is pulle
 in LAZILY inside ``compile`` (toolchain/cache/abi/loader names), so importing
 ``pops.physics`` never loads it (Spec-4 import-graph rule).
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from .aux import aux_total_n_aux, roles_for
 from .model import HyperbolicModel
 
+if TYPE_CHECKING:
+    from ._model_contract import _FacadeModel
+else:
+    _FacadeModel = object
 
-class _FacadeCompileMixin:
+
+class _FacadeCompileMixin(_FacadeModel):
     """Model-hash + compile half of the PDE facade (lazy codegen)."""
 
-    def _model_hash(self):
+    def _model_hash(self) -> Any:
         """Stable hash of the model: formulas (flux/eig/source/elliptic/primitives/cons_from) + roles +
         n_aux + NAMED params (m.params). Used to identify/reuse an already-compiled .so (cache key)
         and to trace the run. Delegates to the shared computation HyperbolicModel._model_hash, passing it
         the Param of the facade (otherwise two models differing only by a param would have the same hash)."""
         return self._m._model_hash(params=self.params)
 
-    def compile(self, so_path=None, include=None, backend="auto", target="system", name=None,
-                cxx=None, std=None, require_metadata=False, hoist_reciprocals=False):
+    def compile(self, so_path: Any = None, include: Any = None, backend: str = "auto",
+                target: str = "system", name: Any = None, cxx: Any = None, std: Any = None,
+                require_metadata: bool = False, hoist_reciprocals: bool = False) -> Any:
         """Compiles the model into a CompiledModel (Phase A). Delegates the GENERATION + compilation to
         HyperbolicModel.compile (engines unchanged: compile_so / compile_aot / compile_native), then
         packages the .so with the already-known metadata (no re-reading of the .so).
@@ -131,7 +141,7 @@ class _FacadeCompileMixin:
 
         adder = HyperbolicModel.adder_for(backend)
         cons_roles = roles_for(m.cons_names, m.cons_roles)
-        cm = CompiledModel(
+        cm: Any = CompiledModel(
             so_path=out_path, backend=backend, adder=adder, target=target,
             cons_names=m.cons_names, cons_roles=cons_roles, prim_names=m.prim_state,
             n_vars=m.n_vars, gamma=m.gamma, n_aux=aux_total_n_aux(m.aux_names, m.aux_extra_names),

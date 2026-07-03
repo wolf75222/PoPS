@@ -14,6 +14,10 @@ guard cross-checks it against the compiled model. :func:`provider_of` derives TH
 model declares. The moment-hierarchy strategy stays :class:`pops.moments.speeds.ExactSpeeds`
 (a different axis: it chooses HOW the exact speeds are computed, not which source HLL binds).
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Descriptor
 from pops.descriptors_report import CapabilitySet, RequirementSet
 
@@ -34,7 +38,7 @@ class WaveSpeedProvider(Descriptor):
     _MAJORANT = ("max_wave_speed",)
     _KINDS = _SIGNED + _MAJORANT
 
-    def __init__(self, kind, *, options=None):
+    def __init__(self, kind: Any, *, options: Any = None) -> None:
         if kind not in WaveSpeedProvider._KINDS:
             raise ValueError("WaveSpeedProvider kind %r must be one of %s"
                              % (kind, ", ".join(WaveSpeedProvider._KINDS)))
@@ -42,11 +46,11 @@ class WaveSpeedProvider(Descriptor):
         self._options = dict(options or {})
 
     @property
-    def signed_pair(self):
+    def signed_pair(self) -> bool:
         """True when the provider yields a SIGNED (smin, smax) pair (the HLL contract)."""
         return self.kind in WaveSpeedProvider._SIGNED
 
-    def requirements(self):
+    def requirements(self) -> Any:
         """What the source NEEDS from the model (documentary; the hard gate stays at install)."""
         needs = {
             "explicit_pair": "m.wave_speeds(x=(smin, smax), y=(smin, smax))",
@@ -58,31 +62,31 @@ class WaveSpeedProvider(Descriptor):
         }
         return RequirementSet({"model": needs[self.kind]})
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         """What the source PROVIDES: a signed pair, or (max_wave_speed) only an unsigned majorant."""
         if self.kind == "max_wave_speed":
             return CapabilitySet({"signed_pair": False, "majorant": True})
         return CapabilitySet({"signed_pair": True})
 
-    def options(self):
+    def options(self) -> dict:
         return dict(self._options, kind=self.kind)
 
-    def describe(self):
+    def describe(self) -> str:
         """A one-line, human-readable summary of this provider (no runtime data)."""
         tail = " (signed pair)" if self.signed_pair else " (unsigned majorant, Rusanov only)"
         return "wave-speed provider %r%s" % (self.kind, tail)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "WaveSpeedProvider(%r)" % (self.kind,)
 
 
 # --- factories (typed handles for each source; the public authoring surface) ------------------
-def ExplicitPair():
+def ExplicitPair() -> WaveSpeedProvider:
     """The signed pair declared with ``m.wave_speeds(x=(smin, smax), y=(...))``."""
     return WaveSpeedProvider("explicit_pair")
 
 
-def FromJacobian(eig="numeric", blocks=None):
+def FromJacobian(eig: Any = "numeric", blocks: Any = None) -> WaveSpeedProvider:
     """The exact signed speeds from the flux jacobian eigenvalues (``m.wave_speeds_from_jacobian``).
 
     @p eig ``"numeric"`` | ``"fd"`` (mirror of the authoring option); @p blocks the optional
@@ -96,28 +100,28 @@ def FromJacobian(eig="numeric", blocks=None):
     return WaveSpeedProvider("jacobian", options=opts)
 
 
-def FromPressure():
+def FromPressure() -> WaveSpeedProvider:
     """The historical source: primitive 'p' + eigenvalues -> signed wave speeds."""
     return WaveSpeedProvider("pressure_derived")
 
 
-def Einfeldt():
+def Einfeldt() -> WaveSpeedProvider:
     """The Einfeldt signed-speed estimate. Typed superset of ``riemann.speeds.einfeldt()``."""
     return WaveSpeedProvider("einfeldt")
 
 
-def Davis():
+def Davis() -> WaveSpeedProvider:
     """The Davis signed-speed estimate. Typed superset of ``riemann.speeds.davis()``."""
     return WaveSpeedProvider("davis")
 
 
-def MaxWaveSpeed():
+def MaxWaveSpeed() -> WaveSpeedProvider:
     """The Rusanov MAJORANT (spectral radius). ``signed_pair`` is False -- HLL refuses it."""
     return WaveSpeedProvider("max_wave_speed")
 
 
 # --- deriving the provider a model declares ---------------------------------------------------
-def _authoring_model(model):
+def _authoring_model(model: Any) -> Any:
     """Return the backing HyperbolicModel of @p model (facade / board / raw), or ``None``."""
     for attr in ("_m", "_dsl"):
         inner = getattr(model, attr, None)
@@ -129,7 +133,7 @@ def _authoring_model(model):
     return None
 
 
-def provider_of(model_or_compiled):
+def provider_of(model_or_compiled: Any) -> Any:
     """Derive THE wave-speed provider a model declares, or ``None`` when it declares none.
 
     On an authoring model (facade / board / :class:`HyperbolicModel`) the source is read from the
@@ -170,7 +174,7 @@ def provider_of(model_or_compiled):
     return None
 
 
-def check_hll_waves(requested_kind, model, ctx):
+def check_hll_waves(requested_kind: Any, model: Any, ctx: Any) -> None:
     """Cross-check an ``HLL(waves=<provider>)`` selection against @p model's actual source (ADC-552).
 
     The single shared idiom the install guards call: derive the model's actual provider kind with
@@ -190,11 +194,11 @@ class _CapabilityHandles:
     :class:`WaveSpeedProvider`. There is NO silent ``None``: a model that declares no wave speeds
     raises a precise, actionable error on access (name the three ways to declare them)."""
 
-    def __init__(self, model):
+    def __init__(self, model: Any) -> None:
         self._model = model
 
     @property
-    def wave_speeds(self):
+    def wave_speeds(self) -> Any:
         provider = provider_of(self._model)
         if provider is None:
             raise ValueError(
@@ -203,7 +207,7 @@ class _CapabilityHandles:
                 "(m.primitive('p', ...)) before reading .capabilities.wave_speeds.")
         return provider
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "_CapabilityHandles(%r)" % (getattr(self._model, "name", "model"),)
 
 

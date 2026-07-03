@@ -7,6 +7,10 @@ Neumann / first-order extrapolation) are a fields concern and land in ``pops.fie
 
 Inert descriptors; the runtime materialises the actual ghost fills.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from .._descriptor import MeshDescriptor
 from ...descriptors_report import RequirementSet, CapabilitySet
 
@@ -18,7 +22,7 @@ class _Face(MeshDescriptor):
     axis = -1
     side = ""
 
-    def options(self):
+    def options(self) -> dict:
         return {"axis": self.axis, "side": self.side}
 
 
@@ -43,16 +47,16 @@ class Periodic(MeshDescriptor):
 
     category = "boundary"
 
-    def __init__(self, axes=None):
+    def __init__(self, axes: Any = None) -> None:
         self.axes = tuple(axes) if axes is not None else None
 
-    def options(self):
+    def options(self) -> dict:
         return {"axes": self.axes if self.axes is not None else "all"}
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"periodic": True})
 
-    def requirements(self):
+    def requirements(self) -> Any:
         return RequirementSet({"mesh_topology": "periodic"})
 
 
@@ -61,15 +65,15 @@ class Physical(MeshDescriptor):
 
     category = "boundary"
 
-    def __init__(self, kind="wall"):
+    def __init__(self, kind: Any = "wall") -> None:
         if kind not in ("wall", "outlet"):
             raise ValueError("Physical: kind must be 'wall' or 'outlet' (got %r)" % (kind,))
         self.kind = kind
 
-    def options(self):
+    def options(self) -> dict:
         return {"kind": self.kind}
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"physical": True, "kind": self.kind})
 
 
@@ -78,14 +82,14 @@ class FaceBC(MeshDescriptor):
 
     category = "face_bc"
 
-    def __init__(self, face, condition):
+    def __init__(self, face: Any, condition: Any) -> None:
         if not isinstance(face, _Face):
             raise TypeError("FaceBC: face must be a face selector (XMin/XMax/YMin/YMax), got %r"
                             % (face,))
         self.face = face
         self.condition = condition
 
-    def options(self):
+    def options(self) -> dict:
         return {"face": self.face.name, "condition": getattr(self.condition, "name",
                                                               repr(self.condition))}
 

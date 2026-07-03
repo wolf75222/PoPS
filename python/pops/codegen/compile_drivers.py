@@ -1,20 +1,16 @@
 """pops.codegen.compile_drivers : the compiler-invocation + facade layer of the pipeline.
 
-Extracted verbatim from ``pops.codegen.compile`` so the model compile pipeline fits the
-Spec-4 file-size budget.  These drivers receive a ``HyperbolicModel`` (or a Program /
-Module) and invoke the C++ compiler on the source the ``compile_emit`` emitters produce:
-``compile_so`` / ``compile_aot`` / ``compile_native`` (one per backend), the
-``compile_or_jit`` mode dispatcher, the ``compile_model`` facade, ``_module_to_model``
-(lower a ``pops.model.Module`` to a dsl ``Model``) and ``compile_problem`` (compile a
-``pops.time.Program`` into a ``problem.so``).  ``pops.codegen.compile`` re-imports every
-name so its public surface is unchanged.
+Extracted verbatim from ``pops.codegen.compile`` (Spec-4 budget): compile_so / compile_aot /
+compile_native (one per backend), the compile_or_jit dispatcher, the compile_model facade,
+_module_to_model (Module -> dsl Model) and compile_problem (Program -> problem.so);
+``pops.codegen.compile`` re-imports every name so its public surface is unchanged. Does NOT
+import pops.physics at module scope (cycle); facade/aux helpers are imported lazily."""
 
-Does NOT import pops.physics at module level to avoid import cycles; the physics facade and
-aux helpers are imported lazily inside the functions that need them.
-"""
+from __future__ import annotations
 
 import os
 import sys
+from typing import Any
 
 from pops.codegen.toolchain import (
     pops_include,
@@ -65,8 +61,8 @@ from pops.codegen.module_lowering import _module_to_model  # noqa: F401
 # Compiler runners
 # ---------------------------------------------------------------------------
 
-def compile_so(model, so_path, include=None, name=None, cxx=None, std="c++20",
-               hoist_reciprocals=False):
+def compile_so(model: Any, so_path: Any, include: Any = None, name: Any = None, cxx: Any = None,
+               std: Any = "c++20", hoist_reciprocals: Any = False) -> Any:
     """JIT: generate the FULL MODEL (emit_cpp_so_source) and compile a shared
     library loadable by System.add_dynamic_block (dlopen). Returns so_path.
     """
@@ -87,8 +83,8 @@ def compile_so(model, so_path, include=None, name=None, cxx=None, std="c++20",
     return so_path
 
 
-def compile_aot(model, so_path, include=None, name=None, cxx=None, std="c++20",
-                hoist_reciprocals=False):
+def compile_aot(model: Any, so_path: Any, include: Any = None, name: Any = None, cxx: Any = None,
+                std: Any = "c++20", hoist_reciprocals: Any = False) -> Any:
     """Backend "compile" (AOT): generate the FULL MODEL (emit_cpp_aot_source)
     and compile a .so loadable by System.add_compiled_block. Returns so_path.
 
@@ -125,8 +121,9 @@ def compile_aot(model, so_path, include=None, name=None, cxx=None, std="c++20",
     return so_path
 
 
-def compile_native(model, so_path, include=None, name=None, cxx=None, std="c++23", target="system",
-                   hoist_reciprocals=False):
+def compile_native(model: Any, so_path: Any, include: Any = None, name: Any = None, cxx: Any = None,
+                   std: Any = "c++23", target: Any = "system",
+                   hoist_reciprocals: Any = False) -> Any:
     """Backend "production": generate the NATIVE LOADER (emit_cpp_native_loader)
     and compile it into a .so loadable by System.add_native_block
     (target="system") or AmrSystem.add_native_block (target="amr_system").
@@ -177,8 +174,9 @@ def compile_native(model, so_path, include=None, name=None, cxx=None, std="c++23
     return so_path
 
 
-def compile_or_jit(model, so_path, include=None, mode="jit", name=None, cxx=None, std="c++20",
-                   target="system", hoist_reciprocals=False):
+def compile_or_jit(model: Any, so_path: Any, include: Any = None, mode: Any = "jit",
+                   name: Any = None, cxx: Any = None, std: Any = "c++20", target: Any = "system",
+                   hoist_reciprocals: Any = False) -> Any:
     """Unified API selecting the backend by mode:
 
     - mode="jit"     -> compile_so (IModel, virtual dispatch: host prototyping);
@@ -209,8 +207,10 @@ def compile_or_jit(model, so_path, include=None, mode="jit", name=None, cxx=None
 # compile_model -- full facade (mirrors HyperbolicModel.compile logic)
 # ---------------------------------------------------------------------------
 
-def compile_model(model, so_path=None, include=None, backend="auto", name=None, cxx=None,
-                  std=None, require_metadata=False, target="system", hoist_reciprocals=False):
+def compile_model(model: Any, so_path: Any = None, include: Any = None, backend: Any = "auto",
+                  name: Any = None, cxx: Any = None, std: Any = None,
+                  require_metadata: Any = False, target: Any = "system",
+                  hoist_reciprocals: Any = False) -> Any:
     """Compilation facade by INTENTION: compiles *model* (a ``HyperbolicModel``)
     into a .so via the engine designated by *backend* and returns its path.
 
@@ -274,8 +274,10 @@ def compile_model(model, so_path=None, include=None, backend="auto", name=None, 
 # compile_problem -- compile a pops.time.Program into a problem.so
 # ---------------------------------------------------------------------------
 
-def compile_problem(so_path=None, *, model=None, time=None, backend="production", target="system",
-                    force=False, cxx=None, include=None, std=None, debug=False, libraries=None):
+def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
+                    backend: Any = "production", target: Any = "system", force: Any = False,
+                    cxx: Any = None, include: Any = None, std: Any = None, debug: Any = False,
+                    libraries: Any = None) -> Any:
     """Compile a ``pops.time.Program`` into a ``problem.so`` the runtime loads
     via ``sim.install_program``.
 

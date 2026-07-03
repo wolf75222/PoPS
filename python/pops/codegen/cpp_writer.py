@@ -4,6 +4,9 @@ These top-level functions translate the symbolic IR into C++ source strings.
 They are the sole owners of all C++ emission logic; pops.dsl will eventually
 import them from here.  No dependency on pops.dsl (no import cycle).
 """
+from __future__ import annotations
+
+from typing import Any
 
 from pops.ir.expr import Const, Var, _Bin, Neg, Sqrt, Abs, Sign, Pow, Div, Mul
 from pops.ir.values import EigWitness, StateRef, RuntimeParamRef, _EIG_FIELDS, _EIG_PREDICATES
@@ -11,7 +14,7 @@ from pops.ir.visitors import _key, _children
 from pops.ir.expr import _wrap
 
 
-def _cpp_expand(e, cse_map):
+def _cpp_expand(e: Any, cse_map: Any) -> str:
     """C++ of node e expanding ITS level; the children go through _cpp_cse (-> CSE locals)."""
     if isinstance(e, Const):
         return repr(e.value)
@@ -41,7 +44,7 @@ def _cpp_expand(e, cse_map):
     raise TypeError("expression not handled by the codegen: %r" % (e,))
 
 
-def _cpp_cse(e, cse_map):
+def _cpp_cse(e: Any, cse_map: Any) -> str:
     """C++ of e; if e matches an already-defined CSE local, returns its name."""
     k = _key(e)
     if k in cse_map:
@@ -49,7 +52,7 @@ def _cpp_cse(e, cse_map):
     return _cpp_expand(e, cse_map)
 
 
-def _cse_emit(roots, real, indent):
+def _cse_emit(roots: Any, real: Any, indent: Any) -> Any:
     """Return (local_declaration_lines, [C++ per root]). Compound subexpressions seen >= 2 times
     become ``cseK_`` locals. roots: list of Expr.
 
@@ -62,7 +65,7 @@ def _cse_emit(roots, real, indent):
     counts, rep, size = {}, {}, {}
     memo = {}  # id(e) -> (size, {key: occurrences} of the subtree, in post-order of insertion)
 
-    def visit(e):
+    def visit(e: Any) -> Any:
         if isinstance(e, (Const, Var)):
             return 1, None
         sub = memo.get(id(e))
@@ -102,13 +105,13 @@ def _cse_emit(roots, real, indent):
 # (device-clean : pas de lambda etendue cross-TU qui casse nvcc) declare une fois par couple (field, k)
 # rencontre dans les formules de la brique. Ces deux fonctions decouvrent les couples et emettent les
 # declarations.
-def _collect_eig_witnesses(exprs):
+def _collect_eig_witnesses(exprs: Any) -> Any:
     """Couples (field, k) des EigWitness presents dans @p exprs, dedupliques, en ordre stable
     (tri par (k, field)). Vide si aucun temoin -> aucune declaration, brique bit-identique a l'histoire."""
     seen = set()
     memo = set()  # id() : DAG -> chaque objet Expr visite une fois
 
-    def walk(e):
+    def walk(e: Any) -> None:
         if id(e) in memo:
             return
         memo.add(id(e))
@@ -122,7 +125,7 @@ def _collect_eig_witnesses(exprs):
     return sorted(seen, key=lambda fk: (fk[1], fk[0]))
 
 
-def _eig_witness_helpers(pairs, indent="  "):
+def _eig_witness_helpers(pairs: Any, indent: str = "  ") -> Any:
     """Lignes C++ des foncteurs nommes (methodes statiques POPS_HD) pour les couples (field, k) de
     @p pairs (cf. _collect_eig_witnesses). Chaque foncteur prend les k*k entrees de la matrice en
     arguments scalaires (ordre ligne-major), remplit pops::Real M[k][k] et renvoie le champ @c field de
@@ -157,7 +160,7 @@ def _eig_witness_helpers(pairs, indent="  "):
 # method), emit once inv_<name> = 1 / <name> and replace its divisions by products.
 # Restricted to CONSERVATIVE VARIABLE denominators: computable right after the cons locals,
 # before the primitives. OPT-IN because rounding changes (not bit-identical to the default output).
-def _count_cons_denoms(e, cons_set, counts):
+def _count_cons_denoms(e: Any, cons_set: Any, counts: Any) -> None:
     """Collects the Var-conservative denominators of @p e into @p counts (name -> occurrences)."""
     if isinstance(e, Div) and isinstance(e.b, Var) and e.b.name in cons_set:
         counts[e.b.name] = counts.get(e.b.name, 0) + 1
@@ -165,7 +168,7 @@ def _count_cons_denoms(e, cons_set, counts):
         _count_cons_denoms(c, cons_set, counts)
 
 
-def _recip_rewrite(e, inv_set):
+def _recip_rewrite(e: Any, inv_set: Any) -> Any:
     """Rewrites @p e: any division by a conservative Var of @p inv_set becomes a product by
     its hoisted reciprocal inv_<name>. Rebuilds NEW nodes (does not mutate the model)."""
     if isinstance(e, Div):
@@ -186,7 +189,7 @@ def _recip_rewrite(e, inv_set):
     return e
 
 
-def _dir_key(direction):
+def _dir_key(direction: Any) -> str:
     """Normalize a direction into 'x' / 'y' (accepts 0/'x'/'X' and 1/'y'/'Y'). Raises otherwise."""
     if direction in (0, "x", "X"):
         return "x"
@@ -200,7 +203,7 @@ def _dir_key(direction):
 # _roe_validate checks that no variable appears OUTSIDE a marker (undetermined state) and that no
 # marker is nested; _cpp_roe renders the C++ by resolving left/right through a local prefix
 # (L_ for UL, R_ for UR).
-def _roe_validate(e, in_marker):
+def _roe_validate(e: Any, in_marker: Any) -> None:
     """Structural check of a roe_dissipation line. Raises ValueError if a variable is outside a
     left()/right() marker (undetermined state) or if a marker is nested. Const / runtime
     parameter: allowed everywhere (without state). Evaluates nothing (usable before the assignment of
@@ -223,7 +226,7 @@ def _roe_validate(e, in_marker):
         _roe_validate(c, in_marker)
 
 
-def _cpp_roe(e, prefix):
+def _cpp_roe(e: Any, prefix: Any) -> str:
     """C++ of a roe_dissipation line expression. @p prefix: None at the root level (no active
     state -> a bare variable is an error), 'L_' / 'R_' inside a marker (the variables take
     that local prefix). ALSO used to render a primitive definition with a state prefix

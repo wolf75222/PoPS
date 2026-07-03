@@ -5,6 +5,10 @@ selects which numeric transformations the codegen may apply. ``StrictMath`` is t
 conservative default; ``FastMath`` allows rounding-changing transforms; ``DebugMath`` favours
 readable generated C++; ``GpuRegisterAware`` limits temporaries / register pressure. Inert.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Descriptor
 from pops.descriptors_report import CapabilitySet
 
@@ -16,37 +20,37 @@ class _MathMode(Descriptor):
 class StrictMath(_MathMode):
     """Conservative numeric behaviour (recommended default): no fast-math, no implicit FMA."""
 
-    def options(self):
+    def options(self) -> dict:
         return {"fast_math": False, "implicit_fma": False}
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"bit_reproducible": True})
 
 
 class FastMath(_MathMode):
     """Aggressive numeric transforms -- EXPLICIT only; may change rounding."""
 
-    def options(self):
+    def options(self) -> dict:
         return {"fast_math": True}
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"may_change_rounding": True, "bit_reproducible": False})
 
 
 class DebugMath(_MathMode):
     """Fewer optimizations, more readable generated C++ (debugging the codegen)."""
 
-    def options(self):
+    def options(self) -> dict:
         return {"optimize": False, "readable": True}
 
 
 class GpuRegisterAware(_MathMode):
     """Limit temporaries / register pressure (large moment systems on GPU)."""
 
-    def options(self):
+    def options(self) -> dict:
         return {"limit_temporaries": True}
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"register_pressure_aware": True})
 
 

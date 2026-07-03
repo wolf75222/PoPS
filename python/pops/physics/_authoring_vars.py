@@ -9,19 +9,28 @@ created by ``HyperbolicModel.__init__`` (see :mod:`pops.physics.model`).
 Imports only :mod:`pops.ir` and the package-level aux constants: this layer is
 codegen-free and ``_pops``-free (Spec-4 import-graph rule).
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from pops.ir import Var, _wrap
 
 from .aux import AUX_CANONICAL, AUX_NAMED_MAX, aux_total_n_aux
 
+if TYPE_CHECKING:
+    from ._model_contract import _HyperbolicModel
+else:
+    _HyperbolicModel = object
 
-class _VariablesMixin:
+
+class _VariablesMixin(_HyperbolicModel):
     """Conservative / primitive / auxiliary variable declarations."""
 
-    def cons(self, name):
+    def cons(self, name: Any) -> Any:
         self.cons_names.append(name)
         return Var(name, "cons")
 
-    def conservative_vars(self, *names, roles=None):
+    def conservative_vars(self, *names: Any, roles: Any = None) -> Any:
         """Declare the conservative variables. @p roles (optional): list of the same length explicitly
         setting the physical role of each component (string 'Density'/'MomentumX'... or None
         to fall back on the canonical mapping of the name); useful for a non-standard layout where the names
@@ -31,18 +40,18 @@ class _VariablesMixin:
         self.cons_roles = list(roles) if roles is not None else None
         return tuple(self.cons(n) for n in names)
 
-    def primitive(self, name, expr):
+    def primitive(self, name: Any, expr: Any) -> Any:
         """Define a primitive by its formula (in terms of the cons / previous primitives)."""
         self.prim_defs[name] = _wrap(expr)
         return Var(name, "prim")
 
-    def aux(self, name):
+    def aux(self, name: Any) -> Any:
         """CANONICAL auxiliary field (e.g. grad_x, grad_y, B_z, T_e) provided at execution. The name
         MUST be a key of AUX_CANONICAL. For an arbitrary NAMED field, see aux_field."""
         self.aux_names.append(name)
         return Var(name, "aux")
 
-    def aux_field(self, name):
+    def aux_field(self, name: Any) -> Any:
         """NAMED auxiliary field (ADC-70 phase 1) provided at execution per block via
         System.set_aux_field(bloc, name, array). Unlike aux(...) (CANONICAL components
         phi/grad/B_z/T_e), name is ARBITRARY: the k-th call reserves component
@@ -71,7 +80,7 @@ class _VariablesMixin:
         self.aux_extra_names.append(name)
         return Var(name, "aux")
 
-    def _aux_locals_lines(self):
+    def _aux_locals_lines(self) -> Any:
         """C++ locals for the aux fields read in a formula: canonical '<n>' <- a.<n> ;
         named '<n>' <- a.extra_field(k) (k = position in aux_extra_names). The local name is
         IDENTICAL to the one the Expr emits (Var.to_cpp), so the formula references it directly."""
@@ -80,16 +89,16 @@ class _VariablesMixin:
                   for k, n in enumerate(self.aux_extra_names)]
         return lines
 
-    def _reads_aux(self):
+    def _reads_aux(self) -> bool:
         """True if a formula reads an aux field (canonical or named): drives the naming of the Aux
         parameter ('a' vs anonymous) so as not to trigger an unused-parameter warning."""
         return bool(self.aux_names) or bool(self.aux_extra_names)
 
-    def _total_n_aux(self):
+    def _total_n_aux(self) -> Any:
         """TOTAL width of the model's aux channel (canonical + named fields)."""
         return aux_total_n_aux(self.aux_names, self.aux_extra_names)
 
-    def set_primitive_state(self, *vars_or_names, roles=None):
+    def set_primitive_state(self, *vars_or_names: Any, roles: Any = None) -> None:
         """Declares the ORDERED layout of the primitive state (Prim): component names, in order.
         Necessary for the brick codegen (to_primitive fills Prim in this order). Each name must
         be a conservative variable or an already-defined primitive. @p roles (optional): same
@@ -100,11 +109,11 @@ class _VariablesMixin:
                              % (len(roles), len(self.prim_state)))
         self.prim_roles = list(roles) if roles is not None else None
 
-    def set_conservative_from(self, exprs):
+    def set_conservative_from(self, exprs: Any) -> None:
         """Formulas of the conservative state as a function of the primitives (one per conservative
         variable, in conservative_vars order). Used to generate to_conservative: the DSL cannot invert
         the primitives symbolically, so the user provides the inverse explicitly."""
         self.cons_from = [_wrap(e) for e in exprs]
 
     @property
-    def n_vars(self): return len(self.cons_names)
+    def n_vars(self) -> int: return len(self.cons_names)

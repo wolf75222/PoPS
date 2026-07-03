@@ -9,9 +9,12 @@ these; they carry no reference back to the system.
 A field whose value the current native build cannot answer is set to ``None`` and rendered as an
 explicit "unavailable (<reason>)" line rather than a fabricated zero (sec.8 honesty rule).
 """
+from __future__ import annotations
+
+from typing import Any
 
 
-def _fmt_unavailable(reason):
+def _fmt_unavailable(reason: Any) -> Any:
     """Render an honestly-deferred measure as a short, stable string."""
     return "unavailable (%s)" % reason
 
@@ -27,8 +30,8 @@ class PatchReport:
     patches to report.
     """
 
-    def __init__(self, *, built, n_levels, base_n, domain_l, per_level, coarse_local_boxes,
-                 coarse_total_boxes):
+    def __init__(self, *, built: Any, n_levels: Any, base_n: Any, domain_l: Any, per_level: Any, coarse_local_boxes: Any,
+                 coarse_total_boxes: Any) -> None:
         self.built = bool(built)
         self.n_levels = n_levels
         self.base_n = base_n
@@ -40,18 +43,18 @@ class PatchReport:
         self.coarse_total_boxes = coarse_total_boxes
 
     @property
-    def n_patches(self):
+    def n_patches(self) -> Any:
         """Total fine patches (every refined level combined)."""
         return sum(lvl["n_patches"] for lvl in self.per_level if lvl["level"] > 0)
 
     @property
-    def coarse_is_distributed(self):
+    def coarse_is_distributed(self) -> Any:
         """True when this rank owns a strict subset of the coarse base (MPI strong-scaling)."""
         if self.coarse_local_boxes is None or self.coarse_total_boxes is None:
             return None
         return self.coarse_local_boxes < self.coarse_total_boxes
 
-    def to_dict(self):
+    def to_dict(self) -> Any:
         return {
             "built": self.built,
             "n_levels": self.n_levels,
@@ -64,11 +67,11 @@ class PatchReport:
             "per_level": [dict(lvl) for lvl in self.per_level],
         }
 
-    def __repr__(self):
+    def __repr__(self) -> Any:
         return "PatchReport(built=%r, n_levels=%r, n_patches=%r)" % (
             self.built, self.n_levels, self.n_patches)
 
-    def __str__(self):
+    def __str__(self) -> Any:
         if not self.built:
             return ("AMR patch table: hierarchy not built yet (add a block and take a step, or "
                     "set the initial density, to build the levels).")
@@ -100,13 +103,13 @@ class RegridReport:
     fabricated threshold it cannot read back.
     """
 
-    def __init__(self, *, regrid_every, frozen, criteria, notes):
+    def __init__(self, *, regrid_every: Any, frozen: Any, criteria: Any, notes: Any) -> None:
         self.regrid_every = regrid_every
         self.frozen = bool(frozen)
         self.criteria = list(criteria)
         self.notes = list(notes)
 
-    def to_dict(self):
+    def to_dict(self) -> Any:
         return {
             "regrid_every": self.regrid_every,
             "frozen": self.frozen,
@@ -114,10 +117,10 @@ class RegridReport:
             "notes": list(self.notes),
         }
 
-    def __repr__(self):
+    def __repr__(self) -> Any:
         return "RegridReport(regrid_every=%r, frozen=%r)" % (self.regrid_every, self.frozen)
 
-    def __str__(self):
+    def __str__(self) -> Any:
         mode = "frozen" if self.frozen else "dynamic"
         lines = ["AMR regrid policy: %s (regrid_every=%s)" % (mode, self.regrid_every)]
         if self.criteria:
@@ -138,22 +141,22 @@ class GhostReport:
     states the requirement shape (stencil -> ghost depth) instead of a fabricated number.
     """
 
-    def __init__(self, *, per_level_depth, requirement_note, notes):
+    def __init__(self, *, per_level_depth: Any, requirement_note: Any, notes: Any) -> None:
         self.per_level_depth = per_level_depth
         self.requirement_note = requirement_note
         self.notes = list(notes)
 
-    def to_dict(self):
+    def to_dict(self) -> Any:
         return {
             "per_level_depth": self.per_level_depth,
             "requirement_note": self.requirement_note,
             "notes": list(self.notes),
         }
 
-    def __repr__(self):
+    def __repr__(self) -> Any:
         return "GhostReport(per_level_depth=%r)" % (self.per_level_depth,)
 
-    def __str__(self):
+    def __str__(self) -> Any:
         lines = ["AMR ghost cells:"]
         if self.per_level_depth is None:
             lines.append("  per-level ghost depth: %s"
@@ -175,22 +178,22 @@ class RefluxReport:
     as the documented requirement rather than a measured count.
     """
 
-    def __init__(self, *, enabled, per_stage, notes):
+    def __init__(self, *, enabled: Any, per_stage: Any, notes: Any) -> None:
         self.enabled = bool(enabled)
         self.per_stage = per_stage
         self.notes = list(notes)
 
-    def to_dict(self):
+    def to_dict(self) -> Any:
         return {
             "enabled": self.enabled,
             "per_stage": self.per_stage,
             "notes": list(self.notes),
         }
 
-    def __repr__(self):
+    def __repr__(self) -> Any:
         return "RefluxReport(enabled=%r, per_stage=%r)" % (self.enabled, self.per_stage)
 
-    def __str__(self):
+    def __str__(self) -> Any:
         lines = ["AMR reflux: %s" % ("enabled" if self.enabled else "disabled")]
         if self.per_stage is None:
             lines.append("  per-stage timing: %s"
@@ -212,13 +215,13 @@ class CheckpointReport:
     surfaced here as an inert explanation rather than a raised error.
     """
 
-    def __init__(self, *, restartable, constraints, violations, notes):
+    def __init__(self, *, restartable: Any, constraints: Any, violations: Any, notes: Any) -> None:
         self.restartable = bool(restartable)
         self.constraints = list(constraints)
         self.violations = list(violations)
         self.notes = list(notes)
 
-    def to_dict(self):
+    def to_dict(self) -> Any:
         return {
             "restartable": self.restartable,
             "constraints": list(self.constraints),
@@ -226,10 +229,10 @@ class CheckpointReport:
             "notes": list(self.notes),
         }
 
-    def __repr__(self):
+    def __repr__(self) -> Any:
         return "CheckpointReport(restartable=%r)" % (self.restartable,)
 
-    def __str__(self):
+    def __str__(self) -> Any:
         head = "restartable" if self.restartable else "NOT restartable"
         lines = ["AMR checkpoint policy: %s (bit-identical v1 envelope)" % head]
         lines.append("  envelope: single block, single rank, frozen hierarchy "
@@ -252,8 +255,8 @@ class HierarchySnapshot:
     of the hierarchy at the moment it was taken, suitable to ``print()`` or diff between snapshots.
     """
 
-    def __init__(self, *, blocks, max_levels, ratio, regrid_every, frozen, patch_table,
-                 limitations, config_available):
+    def __init__(self, *, blocks: Any, max_levels: Any, ratio: Any, regrid_every: Any, frozen: Any, patch_table: Any,
+                 limitations: Any, config_available: Any) -> None:
         self.blocks = list(blocks)
         self.max_levels = max_levels
         self.ratio = ratio
@@ -263,7 +266,7 @@ class HierarchySnapshot:
         self.limitations = list(limitations)
         self.config_available = config_available
 
-    def to_dict(self):
+    def to_dict(self) -> Any:
         return {
             "blocks": list(self.blocks),
             "max_levels": self.max_levels,
@@ -275,11 +278,11 @@ class HierarchySnapshot:
             "limitations": list(self.limitations),
         }
 
-    def __repr__(self):
+    def __repr__(self) -> Any:
         return ("HierarchySnapshot(blocks=%r, max_levels=%r, n_patches=%r)"
                 % (self.blocks, self.max_levels, self.patch_table.n_patches))
 
-    def __str__(self):
+    def __str__(self) -> Any:
         mode = "frozen" if self.frozen else "dynamic"
         lines = ["AMR hierarchy snapshot:"]
         lines.append("  blocks: %s" % (self.blocks,))
@@ -312,13 +315,13 @@ class RuntimeInspection:
     built by :class:`AmrRuntimeView`, computes nothing, and never dumps a field array.
     """
 
-    def __init__(self, *, hierarchy, patches, regrid, limitations):
+    def __init__(self, *, hierarchy: Any, patches: Any, regrid: Any, limitations: Any) -> None:
         self.hierarchy = hierarchy
         self.patches = patches
         self.regrid = regrid
         self.limitations = list(limitations)
 
-    def to_dict(self):
+    def to_dict(self) -> Any:
         return {
             "hierarchy": self.hierarchy.to_dict(),
             "patches": self.patches.to_dict(),
@@ -326,11 +329,11 @@ class RuntimeInspection:
             "limitations": [dict(row) for row in self.limitations],
         }
 
-    def __repr__(self):
+    def __repr__(self) -> Any:
         return ("RuntimeInspection(n_patches=%r, regrid_every=%r, %d limitation(s))"
                 % (self.patches.n_patches, self.regrid.regrid_every, len(self.limitations)))
 
-    def __str__(self):
+    def __str__(self) -> Any:
         lines = ["AMR runtime inspection:", str(self.hierarchy), str(self.regrid)]
         if self.limitations:
             lines.append("capability limitations:")

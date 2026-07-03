@@ -25,8 +25,10 @@ front door: it enables on ``__enter__`` and disables on ``__exit__``, and expose
 This module is a pure typed/parsing wrapper: it imports neither ``_pops`` nor numpy. The native
 extension is reached only through the :class:`System` instance the context manager is bound to.
 """
+from __future__ import annotations
 
 import os
+from typing import Any
 
 
 # Native scope-name conventions the C++ Profiler emits (program_context.hpp / system.cpp):
@@ -90,29 +92,29 @@ class Profile:
     #: The two recognised levels.
     _LEVELS = ("basic", "advanced")
 
-    def __init__(self, level="basic"):
+    def __init__(self, level: str = "basic") -> None:
         if level not in self._LEVELS:
             raise ValueError(
                 "Profile level must be one of %s (got %r)" % (self._LEVELS, level))
         self.level = level
 
     @classmethod
-    def Basic(cls):
+    def Basic(cls) -> Any:
         """Coarse phase timings + step / kernel counters."""
         return cls("basic")
 
     @classmethod
-    def Advanced(cls):
+    def Advanced(cls) -> Any:
         """Per-program-node timings + scheduler / memory counters (Kokkos-gated; honest about gaps)."""
         return cls("advanced")
 
     @property
-    def advanced(self):
+    def advanced(self) -> Any:
         """True for the Advanced level (asks for the per-node / scheduler / memory views)."""
         return self.level == "advanced"
 
     @classmethod
-    def from_env(cls, default=None):
+    def from_env(cls, default: Any = None) -> Any:
         """Resolve the level from ``POPS_PROFILE`` (sim.profile() with no argument).
 
         Unset / ``0`` / ``off`` -> @p default (a Basic() when @p default is None); ``advanced`` /
@@ -126,17 +128,17 @@ class Profile:
             return cls.Advanced()
         return cls.Basic()
 
-    def __eq__(self, other):
+    def __eq__(self, other: Any) -> Any:
         return isinstance(other, Profile) and other.level == self.level
 
-    def __hash__(self):
+    def __hash__(self) -> Any:
         return hash(("Profile", self.level))
 
-    def __repr__(self):
+    def __repr__(self) -> Any:
         return "Profile.%s()" % self.level.capitalize()
 
 
-def _parse_report(report):
+def _parse_report(report: Any) -> Any:
     """Parse the native ``profile_report()`` string into a structured dict.
 
     The C++ Profiler renders (profiler.hpp ``report()``)::
@@ -181,7 +183,7 @@ def _parse_report(report):
     return {"scopes": scopes, "counters": counters, "total_s": total_s}
 
 
-def _parse_snapshot(snapshot):
+def _parse_snapshot(snapshot: Any) -> Any:
     """Normalize the C++ ``profile_snapshot()`` dict into the PerformanceSummary internal shape."""
     scopes = {}
     counters = {}
@@ -212,7 +214,7 @@ def _parse_snapshot(snapshot):
     }
 
 
-def _extract_float(text, after):
+def _extract_float(text: Any, after: Any) -> Any:
     """Best-effort: the float token that follows @p after in @p text (else 0.0)."""
     idx = text.find(after)
     if idx < 0:
@@ -220,14 +222,14 @@ def _extract_float(text, after):
     return _to_float(text[idx + len(after):].split()[0]) if text[idx + len(after):].split() else 0.0
 
 
-def _to_float(token):
+def _to_float(token: Any) -> Any:
     try:
         return float(token)
     except (TypeError, ValueError):
         return 0.0
 
 
-def _to_int(token):
+def _to_int(token: Any) -> Any:
     try:
         return int(token)
     except (TypeError, ValueError):
@@ -239,21 +241,21 @@ class _Unavailable:
 
     __slots__ = ("measure", "reason")
 
-    def __init__(self, measure, reason):
+    def __init__(self, measure: Any, reason: Any) -> None:
         self.measure = measure
         self.reason = reason
 
     @property
-    def available(self):
+    def available(self) -> Any:
         return False
 
-    def to_dict(self):
+    def to_dict(self) -> Any:
         return {"available": False, "measure": self.measure, "reason": self.reason, "entries": {}}
 
-    def __bool__(self):
+    def __bool__(self) -> Any:
         return False
 
-    def __repr__(self):
+    def __repr__(self) -> Any:
         return "<unavailable %s: %s>" % (self.measure, self.reason)
 
 

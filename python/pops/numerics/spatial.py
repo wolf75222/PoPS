@@ -17,7 +17,10 @@ The finite-volume residual is assembled by the ``pops::SpatialDiscretisation<Lim
 NumericalFlux>`` tag-type bundle (spatial_discretisation.hpp); there are no separate
 residual/divergence/source-assembly types, so these name that bundle.
 """
+from __future__ import annotations
+
 from types import SimpleNamespace
+from typing import Any
 
 from pops.descriptors import _native
 
@@ -47,9 +50,10 @@ _FLUX_SUGGEST = "pops.numerics.riemann.Rusanov() / HLL() / HLLC() / Roe()"
 _RECON_SUGGEST = "pops.numerics.variables.Conservative() / Primitive()"
 
 
-def FiniteVolume(limiter=None, riemann=None, variables=None,
-                 positivity_floor=None, wave_speed_cache=False, *, reconstruction=None,
-                 none=False, minmod=False, vanleer=False, weno5=False, primitive=False):
+def FiniteVolume(limiter: Any = None, riemann: Any = None, variables: Any = None,
+                 positivity_floor: Any = None, wave_speed_cache: Any = False, *,
+                 reconstruction: Any = None, none: Any = False, minmod: Any = False,
+                 vanleer: Any = False, weno5: Any = False, primitive: Any = False) -> Any:
     """Finite-volume scheme: a TYPED reconstruction + numerical Riemann flux + variable set.
 
     Homed in ``pops.numerics.spatial`` (Spec 5 criterion 7 / ADC-533) and re-exported at

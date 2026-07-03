@@ -13,7 +13,9 @@ loud error, not a silent runtime surprise. The bundle inspects and validates ON 
 physics facade) and refuses an AMR / MPI / backend-incompatible member before the runtime is touched.
 It is inert: it records typed declarations and computes nothing.
 """
+from __future__ import annotations
 
+from typing import Any
 
 from pops._report import Report
 
@@ -30,17 +32,18 @@ class RuntimePolicies:
     category = "runtime_policies"
     native_id = None
 
-    def __init__(self, *, output=None, checkpoint=None, diagnostics=(), schedules=()):
+    def __init__(self, *, output: Any = None, checkpoint: Any = None, diagnostics: Any = (),
+                 schedules: Any = ()) -> None:
         self.output = _require_category(output, "output", ("output_policy",))
         self.checkpoint = _require_category(checkpoint, "checkpoint", ("checkpoint_policy",))
         self.diagnostics = tuple(_require_diagnostic(d) for d in _as_tuple(diagnostics))
         self.schedules = tuple(_require_schedule(s) for s in _as_tuple(schedules))
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "RuntimePolicies"
 
-    def members(self):
+    def members(self) -> list:
         """The typed members in a flat list (output / checkpoint / each diagnostic / each schedule)."""
         out = []
         if self.output is not None:
@@ -51,26 +54,27 @@ class RuntimePolicies:
         out.extend(self.schedules)
         return out
 
-    def outputs(self):
+    def outputs(self) -> list:
         """The output / checkpoint policy list ``problem.output(...)`` records (order: output first)."""
         return [p for p in (self.output, self.checkpoint) if p is not None]
 
-    def options(self):
+    def options(self) -> dict:
         return {"has_output": self.output is not None,
                 "has_checkpoint": self.checkpoint is not None,
                 "n_diagnostics": len(self.diagnostics), "n_schedules": len(self.schedules)}
 
-    def requirements(self):
+    def requirements(self) -> Any:
         """The union of every member's requirements (e.g. an HDF5 parallel output -> parallel_io)."""
         from pops.descriptors_report import RequirementSet
         merged = {}
         for member in self.members():
             req = getattr(member, "requirements", None)
             if callable(req):
-                merged.update(req().to_dict())
+                reqset: Any = req()
+                merged.update(reqset.to_dict())
         return RequirementSet(merged)
 
-    def validate(self, context=None):
+    def validate(self, context: Any = None) -> Any:
         """Refuse an AMR / MPI / backend-incompatible member GIVEN @p context, before the runtime.
 
         Returns a :class:`~pops.problem.report.ProblemValidationReport`. A parallel-only output on a
@@ -102,7 +106,7 @@ class RuntimePolicies:
     # context that does not know its parallel state is never rejected), matching the Spec-6 discipline.
     _INCOMPATIBILITY_REQUIREMENTS = {"parallel_io": ("parallel", "mpi", "supports_mpi")}
 
-    def _check_context_requirements(self, report, ctx):
+    def _check_context_requirements(self, report: Any, ctx: Any) -> Any:
         """Refuse a parallel-only member on an EXPLICITLY serial / non-MPI context (no false positive).
 
         Only a requirement in :attr:`_INCOMPATIBILITY_REQUIREMENTS` is gated, and only when the
@@ -122,7 +126,7 @@ class RuntimePolicies:
                     context={"requirement": key})
         return report
 
-    def inspect(self):
+    def inspect(self) -> Any:
         """A typed :class:`RuntimePoliciesReport` of the bundle (no physics facade, no runtime)."""
         return RuntimePoliciesReport(
             output=_member_options(self.output),
@@ -131,16 +135,16 @@ class RuntimePolicies:
             schedules=[_schedule_options(s) for s in self.schedules],
             requirements=self.requirements().to_dict())
 
-    def to_dict(self):
+    def to_dict(self) -> Any:
         """The plain-dict bridge (the typed report's ``to_dict``)."""
         return self.inspect().to_dict()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return ("RuntimePolicies(output=%s, checkpoint=%s, diagnostics=%d, schedules=%d)"
                 % (self.output is not None, self.checkpoint is not None,
                    len(self.diagnostics), len(self.schedules)))
 
-    def __str__(self):
+    def __str__(self) -> str:
         return str(self.inspect())
 
 
@@ -155,20 +159,21 @@ class RuntimePoliciesReport(Report):
     report_type = "runtime_policies"
     schema_version = 1
 
-    def __init__(self, *, output, checkpoint, diagnostics, schedules, requirements):
+    def __init__(self, *, output: Any, checkpoint: Any, diagnostics: Any, schedules: Any,
+                 requirements: Any) -> None:
         self.output = output
         self.checkpoint = checkpoint
         self.diagnostics = list(diagnostics)
         self.schedules = list(schedules)
         self.requirements = dict(requirements)
 
-    def to_dict(self):
+    def to_dict(self) -> Any:
         return self._stamp({"output": self.output, "checkpoint": self.checkpoint,
                             "diagnostics": [dict(d) for d in self.diagnostics],
                             "schedules": [dict(s) for s in self.schedules],
                             "requirements": dict(self.requirements)})
 
-    def __str__(self):
+    def __str__(self) -> str:
         lines = ["runtime policies:"]
         lines.append("  output      : %s" % (self.output or "(none)"))
         lines.append("  checkpoint  : %s" % (self.checkpoint or "(none)"))
@@ -178,12 +183,12 @@ class RuntimePoliciesReport(Report):
             lines.append("  requires    : %s" % ", ".join(sorted(self.requirements)))
         return "\n".join(lines)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return ("RuntimePoliciesReport(output=%s, checkpoint=%s, diagnostics=%d)"
                 % (self.output is not None, self.checkpoint is not None, len(self.diagnostics)))
 
 
-def _as_tuple(value):
+def _as_tuple(value: Any) -> tuple:
     """Normalise a single descriptor / an iterable of them to a tuple (a bare policy is wrapped)."""
     if value is None:
         return ()
@@ -192,7 +197,7 @@ def _as_tuple(value):
     return (value,)
 
 
-def _require_category(value, role, categories):
+def _require_category(value: Any, role: str, categories: Any) -> Any:
     """Refuse a @p role member whose ``category`` is not one of @p categories (None passes)."""
     if value is None:
         return None
@@ -205,7 +210,7 @@ def _require_category(value, role, categories):
     return value
 
 
-def _require_diagnostic(value):
+def _require_diagnostic(value: Any) -> Any:
     """Refuse a diagnostics member that is not a typed diagnostic-measure / conservation descriptor."""
     cat = getattr(value, "category", None)
     if not (isinstance(cat, str) and (cat.startswith("diagnostic") or cat == "conservation_check")):
@@ -216,7 +221,7 @@ def _require_diagnostic(value):
     return value
 
 
-def _require_schedule(value):
+def _require_schedule(value: Any) -> Any:
     """Refuse a schedules member that is not a typed :class:`pops.time.schedule.Schedule`."""
     from pops.time.schedule import Schedule
     if not isinstance(value, Schedule):
@@ -226,18 +231,18 @@ def _require_schedule(value):
     return value
 
 
-def _member_options(member):
+def _member_options(member: Any) -> Any:
     """The ``{name, category, options}`` view of a policy member, or ``None`` (JSON-ready options)."""
     if member is None:
         return None
     opts = getattr(member, "options", None)
-    raw = opts() if callable(opts) else {}
+    raw: Any = opts() if callable(opts) else {}
     return {"name": getattr(member, "name", type(member).__name__),
             "category": getattr(member, "category", None),
             "options": {k: _jsonable(v) for k, v in raw.items()}}
 
 
-def _jsonable(value):
+def _jsonable(value: Any) -> Any:
     """Coerce an option value to a JSON-ready form (a non-scalar, e.g. a Schedule, becomes a token)."""
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
@@ -248,7 +253,7 @@ def _jsonable(value):
     return getattr(value, "name", None) or repr(value)
 
 
-def _schedule_options(schedule):
+def _schedule_options(schedule: Any) -> dict:
     """The ``{kind, policy}`` view of a Schedule (it is not a Descriptor, so read its fields)."""
     return {"kind": getattr(schedule, "kind", None), "policy": getattr(schedule, "policy", None)}
 

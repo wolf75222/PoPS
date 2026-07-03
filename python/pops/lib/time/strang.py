@@ -2,11 +2,15 @@
 
 Exports: strang, lie, condensed_schur.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from ._helpers import program_macro
 
 
 @program_macro
-def strang(P, block, half_flow, source, *, commit=True):
+def strang(P: Any, block: Any, half_flow: Any, source: Any, *, commit: Any = True) -> Any:
     """Strang splitting macro H(dt/2); S(dt); H(dt/2), the macro form of pops.Strang (lowers to the SAME
     IR, no special class). @p half_flow and @p source are IR-building callables (prog, state, frac) ->
     state that advance the hyperbolic flow and the source by a fraction @p frac of dt. Returns the final
@@ -21,7 +25,7 @@ def strang(P, block, half_flow, source, *, commit=True):
 
 
 @program_macro
-def lie(P, block, half_flow, source, *, commit=True):
+def lie(P: Any, block: Any, half_flow: Any, source: Any, *, commit: Any = True) -> Any:
     """Lie (Godunov) splitting macro H(dt); S(dt) -- the sequential first-order sibling of `strang`
     (ADC-423). @p half_flow and @p source are the SAME IR-building callables `strang` takes
     ``(prog, state, frac) -> state`` (each advances its sub-flow by a fraction @p frac of dt); Lie
@@ -37,8 +41,10 @@ def lie(P, block, half_flow, source, *, commit=True):
 
 
 @program_macro
-def condensed_schur(P, block, *, alpha, theta=1.0, c_rho=0, c_mx=1, c_my=2, c_bz=3, c_E=None,
-                    method=None, tol=1e-10, max_iter=400, commit=True):
+def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1.0, c_rho: Any = 0,
+                    c_mx: Any = 1, c_my: Any = 2, c_bz: Any = 3, c_E: Any = None,
+                    method: Any = None, tol: Any = 1e-10, max_iter: Any = 400,
+                    commit: Any = True) -> Any:
     """Condensed-Schur implicit electrostatic-Lorentz SOURCE stage as a compiled Program (epic ADC-399,
     acceptance 32), mirroring the native ``pops.CondensedSchur`` (CondensedSchurSourceStepper) sequence:
 
@@ -110,7 +116,7 @@ def condensed_schur(P, block, *, alpha, theta=1.0, c_rho=0, c_mx=1, c_my=2, c_bz
     P.schur_rhs(rhs, phi_n, U, th_dt, g, c_mx=c_mx, c_my=c_my, c_bz=c_bz)
     A = P.matrix_free_operator(block + ".schur_op")
 
-    def apply(P, out, x):  # out <- A(x) = -div((I + c rho B^{-1}) grad x) = -apply_laplacian_coeff(x)
+    def apply(P: Any, out: Any, x: Any) -> Any:  # out <- A(x) = -div((I + c rho B^{-1}) grad x) = -apply_laplacian_coeff(x)
         lap = P.scalar_field("schur_lap")
         P.apply_laplacian_coeff(lap, x, coeffs)
         return -1.0 * lap  # the condensed operator -div(A grad phi); the affine is the lowered result

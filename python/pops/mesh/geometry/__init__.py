@@ -16,6 +16,10 @@ byte-identical to the historical string form.
 The ``geometry -> masks`` import below is an INTRA-mesh edge (same layer), so it does not add a
 cross-layer dependency; the package stays inert and runtime-free at module scope.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from .._descriptor import Availability, MeshDescriptor
 from ..masks import lower_disc_mode
 from ...descriptors_report import CapabilitySet, RequirementSet
@@ -26,24 +30,24 @@ class _Boundary(MeshDescriptor):
 
     category = "geometry_boundary"
 
-    def __init__(self, geometry):
+    def __init__(self, geometry: Any) -> None:
         self.geometry = geometry
 
-    def options(self):
+    def options(self) -> dict:
         return {"of": self.geometry.name}
 
 
 class _Geometry(MeshDescriptor):
     category = "geometry"
 
-    def boundary(self):
+    def boundary(self) -> _Boundary:
         """The boundary of this geometry (e.g. ``Dirichlet(on=wall.boundary())``)."""
         return _Boundary(self)
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"provides": "level_set"})
 
-    def lower_wall(self):
+    def lower_wall(self) -> Any:
         """Lower this geometry to the native Poisson wall tokens ``(wall, wall_radius)``.
 
         Only a disc and a no-wall are wired to the native conducting-wall predicate; the base
@@ -59,10 +63,10 @@ class _Geometry(MeshDescriptor):
 class NoWall(_Geometry):
     """No conducting wall: the elliptic solve sees the full Cartesian square (wall='none')."""
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"provides": "level_set", "wall": False})
 
-    def lower_wall(self):
+    def lower_wall(self) -> Any:
         """Lower to the native no-wall tokens (byte-identical to ``wall='none'``)."""
         return ("none", 0.0)
 
@@ -75,16 +79,16 @@ class Disc(_Geometry):
     TRANSPORT domain, cf. :class:`DiscDomain`).
     """
 
-    def __init__(self, center=(0.0, 0.0), radius=0.5):
+    def __init__(self, center: Any = (0.0, 0.0), radius: Any = 0.5) -> None:
         self.center = tuple(float(c) for c in center)
         self.radius = float(radius)
         if self.radius <= 0.0:
             raise ValueError("Disc: radius must be > 0 (got %r)" % (self.radius,))
 
-    def options(self):
+    def options(self) -> dict:
         return {"center": self.center, "radius": self.radius}
 
-    def lower_wall(self):
+    def lower_wall(self) -> Any:
         """Lower to the native conducting-wall tokens ``("circle", radius)``."""
         return ("circle", self.radius)
 
@@ -92,21 +96,21 @@ class Disc(_Geometry):
 class HalfPlane(_Geometry):
     """A half-plane wall: a point on the plane + an outward normal."""
 
-    def __init__(self, point=(0.0, 0.0), normal=(1.0, 0.0)):
+    def __init__(self, point: Any = (0.0, 0.0), normal: Any = (1.0, 0.0)) -> None:
         self.point = tuple(float(c) for c in point)
         self.normal = tuple(float(c) for c in normal)
 
-    def options(self):
+    def options(self) -> dict:
         return {"point": self.point, "normal": self.normal}
 
 
 class LevelSet(_Geometry):
     """A generic level-set geometry (the wall is {phi(x) == 0})."""
 
-    def __init__(self, expression):
+    def __init__(self, expression: Any) -> None:
         self.expression = expression
 
-    def options(self):
+    def options(self) -> dict:
         return {"expression": getattr(self.expression, "name", repr(self.expression))}
 
 
@@ -127,7 +131,7 @@ class DiscDomain(MeshDescriptor):
 
     category = "disc_domain"
 
-    def __init__(self, center=(0.0, 0.0), radius=0.5, mode=None):
+    def __init__(self, center: Any = (0.0, 0.0), radius: Any = 0.5, mode: Any = None) -> None:
         self.center = tuple(float(c) for c in center)
         self.radius = float(radius)
         if self.radius <= 0.0:
@@ -138,26 +142,26 @@ class DiscDomain(MeshDescriptor):
             mode = NoMask()
         self.mode = mode
 
-    def options(self):
+    def options(self) -> dict:
         return {"center": self.center, "radius": self.radius,
                 "mode": self.mode if isinstance(self.mode, str) else self.mode.name}
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"transport_domain": "disc"})
 
-    def requirements(self):
+    def requirements(self) -> Any:
         # A cut-cell disc needs embedded-boundary support; surface the mode's own requirements.
         if isinstance(self.mode, str):
             return RequirementSet()
         return self.mode.requirements()
 
-    def available(self, context=None):
+    def available(self, context: Any = None) -> Any:
         """Defer to the chosen transport mode's availability (a typed mask explains itself)."""
         if isinstance(self.mode, str):
             return Availability.yes()
         return self.mode.available(context)
 
-    def lower(self, context=None):
+    def lower(self, context: Any = None) -> Any:
         """Lower to the native ``(cx, cy, R, mode_token)`` set_disc_domain arguments."""
         cx, cy = self.center
         return (cx, cy, self.radius, lower_disc_mode(self.mode))
@@ -173,14 +177,14 @@ class EmbeddedBoundary(MeshDescriptor):
 
     category = "mesh_feature"
 
-    def __init__(self, domain, transport):
+    def __init__(self, domain: Any, transport: Any) -> None:
         self.domain = domain
         self.transport = transport
 
-    def options(self):
+    def options(self) -> dict:
         return {"domain": self.domain.name, "transport": self.transport.name}
 
-    def requirements(self):
+    def requirements(self) -> Any:
         return RequirementSet({"embedded_boundary_support": True,
                                "geometry": self.domain.name, "transport_mask": self.transport.name})
 

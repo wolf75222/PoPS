@@ -15,6 +15,10 @@ Import-graph rule (Spec 4): this module imports only :mod:`pops.ir`; any
 :mod:`pops.codegen` / ``_pops`` use is LAZY, inside method bodies (the codegen
 wrappers in ``_authoring_codegen`` and the lazy ``_BACKENDS`` metaclass).
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.ir import (  # noqa: F401  -- node classes used by Param's operator overloads
     _wrap, Const, Add, Sub, Mul, Div, Pow, Neg, Var)
 from pops.ir.values import RuntimeParamRef
@@ -38,7 +42,7 @@ class _BackendLazyMeta(type):
     instead, so ``HyperbolicModel._BACKENDS[backend]`` keeps working unchanged.
     """
 
-    def __getattr__(cls, name):
+    def __getattr__(cls, name: Any) -> Any:
         if name in ("_BACKENDS", "_BACKEND_CAPS"):
             from pops.codegen import compile as _cg
             return getattr(_cg, name)
@@ -54,7 +58,7 @@ class HyperbolicModel(_VariablesMixin, _FluxMixin, _SourceMixin, _RiemannMixin,
     The behaviour lives in the topical authoring mixins; this concrete class only assembles
     them and owns ``__init__`` (the full instance-attribute layout the mixins operate on)."""
 
-    def __init__(self, name):
+    def __init__(self, name: Any) -> None:
         self.name = name
         self.cons_names = []
         self.prim_defs = {}     # name -> Expr (in terms of the cons / previous prims / aux)
@@ -140,7 +144,7 @@ class Param:
 
     # NB: Param DOES NOT INHERIT from Expr to avoid embedding its state (name/kind) in the CSE
     # structural key; it EXPOSES the tree hooks instead by delegating to an internal node.
-    def __init__(self, name, value, kind="const"):
+    def __init__(self, name: Any, value: Any, kind: str = "const") -> None:
         if kind not in ("const", "runtime"):
             raise ValueError("Param: kind 'const' | 'runtime' (got %r)" % (kind,))
         self.name = name
@@ -155,34 +159,34 @@ class Param:
             self._node = Const(self.value)  # inlines at codegen: value written HARD-CODED in the .so
 
     # --- tree hooks (delegated to the internal node): Param usable like an Expr ---
-    def eval(self, env): return self._node.eval(env)
-    def to_cpp(self): return self._node.to_cpp()
-    def deps(self): return set()  # neither const nor runtime has a dependency (nothing to check in check())
+    def eval(self, env: Any) -> Any: return self._node.eval(env)
+    def to_cpp(self) -> Any: return self._node.to_cpp()
+    def deps(self) -> Any: return set()  # neither const nor runtime has a dependency (nothing to check in check())
 
     # --- operators: Param combines like an Expr (promotion via _wrap of the internal node) ---
-    def __add__(self, o): return Add(self._node, _wrap(o))
-    def __radd__(self, o): return Add(_wrap(o), self._node)
-    def __sub__(self, o): return Sub(self._node, _wrap(o))
-    def __rsub__(self, o): return Sub(_wrap(o), self._node)
-    def __mul__(self, o): return Mul(self._node, _wrap(o))
-    def __rmul__(self, o): return Mul(_wrap(o), self._node)
-    def __truediv__(self, o): return Div(self._node, _wrap(o))
-    def __rtruediv__(self, o): return Div(_wrap(o), self._node)
-    def __neg__(self): return Neg(self._node)
-    def __pos__(self): return self._node  # +param = identity (Expr), for +k*ne*ng
-    def __pow__(self, o): return Pow(self._node, _wrap(o))
+    def __add__(self, o: Any) -> Any: return Add(self._node, _wrap(o))
+    def __radd__(self, o: Any) -> Any: return Add(_wrap(o), self._node)
+    def __sub__(self, o: Any) -> Any: return Sub(self._node, _wrap(o))
+    def __rsub__(self, o: Any) -> Any: return Sub(_wrap(o), self._node)
+    def __mul__(self, o: Any) -> Any: return Mul(self._node, _wrap(o))
+    def __rmul__(self, o: Any) -> Any: return Mul(_wrap(o), self._node)
+    def __truediv__(self, o: Any) -> Any: return Div(self._node, _wrap(o))
+    def __rtruediv__(self, o: Any) -> Any: return Div(_wrap(o), self._node)
+    def __neg__(self) -> Any: return Neg(self._node)
+    def __pos__(self) -> Any: return self._node  # +param = identity (Expr), for +k*ne*ng
+    def __pow__(self, o: Any) -> Any: return Pow(self._node, _wrap(o))
 
-    def __float__(self): return self.value
-    def __repr__(self): return "Param(%r, %r, kind=%r)" % (self.name, self.value, self.kind)
+    def __float__(self) -> float: return self.value
+    def __repr__(self) -> str: return "Param(%r, %r, kind=%r)" % (self.name, self.value, self.kind)
 
 
-def RuntimeParam(name, value):
+def RuntimeParam(name: Any, value: Any) -> Any:
     """Sugar: a RUNTIME parameter (modifiable without recompiling). Equivalent to Param(name, value,
     kind='runtime'). cf. Param mode (b) and include/pops/runtime/runtime_params.hpp (P7-b)."""
     return Param(name, value, kind="runtime")
 
 
-def ConstParam(name, value):
+def ConstParam(name: Any, value: Any) -> Any:
     """Sugar: a CONST parameter (frozen / inlined at compile time). Equivalent to Param(name, value,
     kind='const') -- the default param mode (a). The TYPED counterpart of the removed
     ``kind="const"`` string on the public param surface (Spec 5 sec.7)."""
@@ -195,7 +199,7 @@ def ConstParam(name, value):
 _NO_KIND = object()
 
 
-def _coerce_param(name, value=None, *, kind=_NO_KIND, who="param"):
+def _coerce_param(name: Any, value: Any = None, *, kind: Any = _NO_KIND, who: str = "param") -> Any:
     """Coerce a public param argument into a typed :class:`Param`, rejecting the ``kind=`` string.
 
     Accepts a typed :class:`Param` (e.g. :func:`ConstParam` / :func:`RuntimeParam`) as ``name``

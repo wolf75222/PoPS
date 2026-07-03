@@ -4,6 +4,10 @@
 cells. theta is PERIODIC, r carries a PHYSICAL boundary. Axis convention: direction 0 =
 radial, direction 1 = azimuthal (cf. PolarGeometry / assemble_rhs_polar on the C++ side).
 """
+from __future__ import annotations
+
+from typing import Any
+
 from ._descriptor import MeshDescriptor
 from ..descriptors_report import CapabilitySet
 from pops.runtime_environment import NATIVE_DIMENSION, validate_dimension
@@ -28,7 +32,8 @@ class PolarMesh(MeshDescriptor):
 
     category = "mesh"
 
-    def __init__(self, r_min, r_max, nr, ntheta, theta_boxes=1, *, dim=NATIVE_DIMENSION):
+    def __init__(self, r_min: Any, r_max: Any, nr: Any, ntheta: Any, theta_boxes: Any = 1,
+                 *, dim: Any = NATIVE_DIMENSION) -> None:
         self.dim = validate_dimension(dim, where="PolarMesh")
         if not (r_max > r_min >= 0.0):
             raise ValueError("PolarMesh: requires r_max > r_min >= 0 (ring)")
@@ -50,11 +55,11 @@ class PolarMesh(MeshDescriptor):
         self.ntheta = int(ntheta)
         self.theta_boxes = tb
 
-    def options(self):
+    def options(self) -> dict:
         return {"r_min": self.r_min, "r_max": self.r_max, "nr": self.nr,
                 "ntheta": self.ntheta, "theta_boxes": self.theta_boxes}
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({
             "geometry": "polar",
             "dim": self.dim,
@@ -66,7 +71,7 @@ class PolarMesh(MeshDescriptor):
             "multibox_transport": self.theta_boxes > 1,
         })
 
-    def _apply(self, config):
+    def _apply(self, config: Any) -> None:
         config.geometry = "polar"
         config.nr = self.nr
         config.ntheta = self.ntheta

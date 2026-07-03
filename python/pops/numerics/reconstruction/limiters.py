@@ -3,6 +3,8 @@
 Minmod / VanLeer have native types; MC / Superbee are catalogued but have no
 native type yet (available=False).
 """
+from __future__ import annotations
+
 from types import SimpleNamespace
 
 from pops.descriptors import _native, _planned

@@ -9,6 +9,9 @@ are added (mirrors the :mod:`pops.physics.board_handles` pattern for the model b
 A handle owns NO runtime data and computes nothing: it is a typed name. Two handles compare equal
 when they name the same part of the same Problem (id + kind), so a handle can key a lookup.
 """
+from __future__ import annotations
+
+from typing import Any
 
 
 class ProblemHandle:
@@ -22,30 +25,30 @@ class ProblemHandle:
 
     kind = "handle"
 
-    def __init__(self, name, *, owner=None):
+    def __init__(self, name: Any, *, owner: Any = None) -> None:
         self._name = str(name)
         self._owner = owner
 
     @property
-    def name(self):
+    def name(self) -> Any:
         return self._name
 
     @property
-    def handle_id(self):
+    def handle_id(self) -> str:
         return "%s:%s" % (self.kind, self._name)
 
-    def inspect(self):
+    def inspect(self) -> Any:
         """A plain ``{kind, name, id}`` view of the handle (no build, no compile)."""
         return {"kind": self.kind, "name": self._name, "id": self.handle_id}
 
-    def __eq__(self, other):
+    def __eq__(self, other: Any) -> bool:
         return isinstance(other, ProblemHandle) and other.kind == self.kind \
             and other._name == self._name
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((self.kind, self._name))
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "%s(%r)" % (type(self).__name__, self._name)
 
 
@@ -54,7 +57,7 @@ class BlockHandle(ProblemHandle):
 
     kind = "block"
 
-    def state(self, name):
+    def state(self, name: Any) -> Any:
         """A :class:`StateHandle` for a named state component of this block (inert reference)."""
         return StateHandle("%s.%s" % (self._name, name), owner=self._owner)
 

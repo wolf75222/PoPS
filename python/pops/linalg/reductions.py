@@ -6,11 +6,15 @@ NAME the reduction and reference their operands; they do NOT compute (no numpy, 
 helpers :func:`dot` / :func:`norm2` build the descriptor referencing the operands -- they are
 authoring sugar, not a numeric kernel. The C++ runtime performs the reduction.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Descriptor
 from pops.descriptors_report import RequirementSet
 
 
-def _operand_name(operand):
+def _operand_name(operand: Any) -> Any:
     """A short, stable name for a reduction operand (its ``name`` attr, else its repr)."""
     if operand is None:
         return None
@@ -26,14 +30,14 @@ class Dot(Descriptor):
 
     category = "reduction"
 
-    def __init__(self, a, b):
+    def __init__(self, a: Any, b: Any) -> None:
         self.a = a
         self.b = b
 
-    def options(self):
+    def options(self) -> dict:
         return {"op": "dot", "a": _operand_name(self.a), "b": _operand_name(self.b)}
 
-    def requirements(self):
+    def requirements(self) -> Any:
         return RequirementSet({"operands": 2})
 
 
@@ -47,17 +51,17 @@ class Norm2(Descriptor):
 
     category = "reduction"
 
-    def __init__(self, x):
+    def __init__(self, x: Any) -> None:
         self.x = x
 
-    def options(self):
+    def options(self) -> dict:
         return {"op": "norm2", "x": _operand_name(self.x)}
 
-    def requirements(self):
+    def requirements(self) -> Any:
         return RequirementSet({"operands": 1})
 
 
-def dot(a, b):
+def dot(a: Any, b: Any) -> Any:
     """Build the :class:`Dot` reduction descriptor naming the inner product ``a . b``.
 
     This is inert authoring sugar -- it constructs a descriptor referencing @p a and @p b; it
@@ -66,7 +70,7 @@ def dot(a, b):
     return Dot(a, b)
 
 
-def norm2(x):
+def norm2(x: Any) -> Any:
     """Build the :class:`Norm2` reduction descriptor naming the 2-norm ``||x||_2``.
 
     This is inert authoring sugar -- it constructs a descriptor referencing @p x; it does NOT

@@ -7,10 +7,19 @@ inheritance; operates on ``self._s``. ``abi_key`` is the module ABI key, baked i
 metadata, re-exported through ``pops.runtime.bricks``.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from pops.runtime.bricks import abi_key
 
+if TYPE_CHECKING:
+    from pops.runtime._system_contract import _System
+else:
+    _System = object
 
-class _SystemIO:
+
+class _SystemIO(_System):
     """Output / checkpoint / restart methods of System."""
 
     def set_history_persistence(self, mapping):
@@ -33,7 +42,8 @@ class _SystemIO:
     # PR-IO-3. ATOMIC write (.tmp file then os.replace: a crash mid-write never
     # corrupts a previous checkpoint).
     # ------------------------------------------------------------------
-    def write(self, path, format="vtk", step=None, fields=None, parallel=False):
+    def write(self, path: Any, format: str = "vtk", step: Any = None, fields: Any = None,
+              parallel: bool = False) -> Any:
         """VISUALIZATION OUTPUT: writes the current state to an opened file (ParaView/numpy).
 
         - ``format="vtk"``: ImageData .vti ASCII (Cartesian; opened by ParaView / VisIt) -- one
@@ -132,7 +142,7 @@ class _SystemIO:
             if not rank0:
                 return target  # only rank 0 writes the file
             try:
-                import h5py
+                import h5py  # type: ignore[import]
             except ImportError:
                 raise RuntimeError(
                     "write(format='hdf5'): h5py missing (pip/conda install h5py); "
@@ -156,7 +166,7 @@ class _SystemIO:
             return target
         raise ValueError("write: format 'vtk' | 'npz' | 'hdf5' (received %r)" % (format,))
 
-    def _write_hdf5_parallel(self, target, blocks, nxv, nyv):
+    def _write_hdf5_parallel(self, target: Any, blocks: Any, nxv: Any, nyv: Any) -> Any:
         """PARALLEL HDF5 WRITE by hyperslabs (write(format='hdf5', parallel=True)) -- PR-IO-3.
 
         OPT-IN PATH, separate from the serial path (rank-0 gather) which stays untouched. Instead of
@@ -185,7 +195,7 @@ class _SystemIO:
         # h5py FIRST, THEN the MPI support test : an h5py present but WITHOUT MPI must give
         # the targeted error (remedy), independently of whether mpi4py is present.
         try:
-            import h5py
+            import h5py  # type: ignore[import]
         except ImportError:
             raise RuntimeError(
                 "write(format='hdf5', parallel=True) : h5py absent. Remedy : install h5py built with "
@@ -196,7 +206,7 @@ class _SystemIO:
                 "(h5py.get_config().mpi == False). Remedy : install h5py built with MPI (parallel "
                 "HDF5), or parallel=False (global gather + rank-0 write).")
         try:
-            from mpi4py import MPI
+            from mpi4py import MPI  # type: ignore[import]
         except ImportError:
             raise RuntimeError(
                 "write(format='hdf5', parallel=True) : mpi4py absent (required to open in mpio). "
@@ -250,7 +260,7 @@ class _SystemIO:
         comm.Barrier()  # the rename is visible (shared FS) before any return
         return target
 
-    def checkpoint(self, path, parallel=False):
+    def checkpoint(self, path: Any, parallel: bool = False) -> Any:
         """RESTARTABLE CHECKPOINT v1 (npz) : COMPLETE block state + clock (t, macro_step --
         MANDATORY for the stride cadence) + grid + provenance (abi_key). CONTRACT (cf.
         docs/IO_CHECKPOINT_PLAN.md) : restart does NOT rebuild the composition -- the user
@@ -345,7 +355,7 @@ class _SystemIO:
         os.replace(tmp, target)
         return target
 
-    def restart(self, path):
+    def restart(self, path: Any) -> Any:
         """RESUMES a v1 checkpoint : VERIFIES the composition (same blocks, same sizes -- explicit
         error otherwise, never a silently wrong resume), restores the state of each block
         then the clock (t, macro_step : the stride cadence resumes exactly). The COMPOSITION

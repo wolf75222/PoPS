@@ -8,9 +8,12 @@ module-level lowerers ``_lower_wall`` / ``_lower_bc`` that turn a typed
 
 Pure lowering: no ``_pops`` import, no numeric work.
 """
+from __future__ import annotations
+
+from typing import Any
 
 
-def _lower_wall(wall):
+def _lower_wall(wall: Any) -> Any:
     """Lower a Poisson ``wall`` to the native ``(wall_token, wall_radius)`` (Spec 5 sec.8.16).
 
     A typed :mod:`pops.mesh.geometry` wall lowers to its pair (``NoWall`` -> ``("none", 0.0)``,
@@ -28,7 +31,7 @@ def _lower_wall(wall):
     return lower_wall()
 
 
-def _lower_bc(bc):
+def _lower_bc(bc: Any) -> Any:
     """Lower a Poisson boundary condition to the native ``bc`` token (Spec 5 sec.14.2.6).
 
     A typed native boundary brick (``pops.Dirichlet()`` / ``pops.Neumann()`` / ``pops.Periodic()``)

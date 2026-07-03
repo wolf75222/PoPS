@@ -19,6 +19,10 @@ generated symbols. :func:`read_library_manifest` reads that descriptor back from
 (dlopen) and rejects an ABI / Kokkos mismatch as a HARD error. ``pops.codegen.compile_problem(...,
 libraries=[...])`` reads + validates the compiled ``.so`` (the consume path).
 """
+from __future__ import annotations
+
+from typing import Any
+
 import hashlib
 import json
 
@@ -34,7 +38,7 @@ _REQUIRED_KEYS = ("manifest_version", "name", "backend", "abi_key", "bricks",
                   "generated_symbols", "content_hash")
 
 
-def _lower_library_backend(backend):
+def _lower_library_backend(backend: Any) -> Any:
     """Lower a typed backend descriptor to its token, rejecting a bare string (Spec 5 sec.7).
 
     Mirrors ``pops.compile``'s typed-backend handling: ``backend`` is a typed
@@ -59,7 +63,7 @@ def _lower_library_backend(backend):
     return backend.lower()
 
 
-def _brick_entry(obj):
+def _brick_entry(obj: Any) -> dict:
     """The serializable manifest entry for one brick descriptor.
 
     Folds the descriptor's identity metadata (id, type, category, scheme, native
@@ -85,7 +89,7 @@ def _brick_entry(obj):
     }
 
 
-def _generated_symbols(bricks):
+def _generated_symbols(bricks: Any) -> Any:
     """The sorted ids of the GENERATED bricks -- the symbols the compiled ``.so``
     would export. Native bricks reference EXISTING ``pops::`` symbols (already in the
     loaded module) and external bricks reference a user ``.so``, so neither adds a
@@ -94,7 +98,7 @@ def _generated_symbols(bricks):
     return sorted({b["id"] for b in bricks if b["brick_type"] == "generated"})
 
 
-def _content_hash(name, backend, abi_key, bricks):
+def _content_hash(name: Any, backend: Any, abi_key: Any, bricks: Any) -> str:
     """Stable content hash of the manifest: sha256 over the name, backend, ABI key
     and the SORTED brick entries.
 
@@ -131,8 +135,8 @@ class LibraryManifest:
     ``.so`` path.
     """
 
-    def __init__(self, name, backend, abi_key, bricks, generated_symbols,
-                 content_hash, so_path=None):
+    def __init__(self, name: Any, backend: Any, abi_key: Any, bricks: Any, generated_symbols: Any,
+                 content_hash: Any, so_path: Any = None) -> None:
         self.name = str(name)
         self.backend = str(backend)
         self.abi_key = str(abi_key)
@@ -144,7 +148,7 @@ class LibraryManifest:
         # library compiled to two paths is the same library) but IS carried on to_dict.
         self.so_path = None if so_path is None else str(so_path)
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         """The serialized manifest (round-trips through :func:`read_library_manifest`)."""
         return {
             "manifest_version": _MANIFEST_VERSION,
@@ -157,23 +161,23 @@ class LibraryManifest:
             "so_path": self.so_path,
         }
 
-    def _identity(self):
+    def _identity(self) -> dict:
         """The manifest dict WITHOUT the so_path (the artifact path is provenance, not
         identity: the same library compiled to two paths compares equal)."""
         d = self.to_dict()
         d.pop("so_path", None)
         return d
 
-    def __eq__(self, other):
+    def __eq__(self, other: Any) -> bool:
         return isinstance(other, LibraryManifest) and self._identity() == other._identity()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "LibraryManifest(%r, bricks=%d, hash=%s)" % (
             self.name, len(self.bricks), self.content_hash[:12])
 
 
-def compile_library(name, objects, *, backend=None, emit=False, so_path=None,
-                    cxx=None, force=False):
+def compile_library(name: Any, objects: Any, *, backend: Any = None, emit: bool = False,
+                    so_path: Any = None, cxx: Any = None, force: bool = False) -> Any:
     """Build a reusable brick library from a set of brick descriptors.
 
     @p name is the library ``.so`` name; @p objects is a non-empty list of
@@ -214,7 +218,8 @@ def compile_library(name, objects, *, backend=None, emit=False, so_path=None,
     return manifest
 
 
-def _emit_and_compile(manifest, *, so_path=None, cxx=None, force=False):
+def _emit_and_compile(manifest: Any, *, so_path: Any = None, cxx: Any = None,
+                      force: bool = False) -> Any:
     """Emit @p manifest's C++ and compile the library ``.so``; return its path.
 
     Reuses the production toolchain helpers (:mod:`pops.codegen.toolchain`,
@@ -254,7 +259,7 @@ def _emit_and_compile(manifest, *, so_path=None, cxx=None, force=False):
     return so_path
 
 
-def read_library_manifest(manifest):
+def read_library_manifest(manifest: Any) -> Any:
     """Reconstruct a :class:`LibraryManifest` from a serialized dict, a compiled ``.so`` path,
     or a :class:`LibraryManifest` (idempotent).
 
@@ -294,7 +299,7 @@ def read_library_manifest(manifest):
         content_hash=manifest["content_hash"], so_path=manifest.get("so_path"))
 
 
-def _read_so_manifest(so_path):
+def _read_so_manifest(so_path: Any) -> Any:
     """Read a compiled library ``.so`` descriptor back into a :class:`LibraryManifest` (dlopen).
 
     Opens @p so_path with :func:`ctypes.CDLL` and reads the ``pops_library_*`` exports the
@@ -310,7 +315,7 @@ def _read_so_manifest(so_path):
 
     handle = ctypes.CDLL(str(so_path))  # raises OSError if the path is not a loadable library
 
-    def cstr(symbol):
+    def cstr(symbol: Any) -> str:
         try:
             fn = getattr(handle, symbol)
         except AttributeError as err:
@@ -321,12 +326,12 @@ def _read_so_manifest(so_path):
         raw = fn()
         return "" if raw is None else raw.decode("utf-8")
 
-    def cint(symbol):
+    def cint(symbol: Any) -> int:
         fn = getattr(handle, symbol)
         fn.restype = ctypes.c_int
         return int(fn())
 
-    def cstr_i(symbol, i):
+    def cstr_i(symbol: Any, i: Any) -> str:
         fn = getattr(handle, symbol)
         fn.restype = ctypes.c_char_p
         fn.argtypes = [ctypes.c_int]
@@ -368,7 +373,7 @@ def _read_so_manifest(so_path):
         content_hash=cstr("pops_library_content_hash"), so_path=so_path)
 
 
-def _abi_key():
+def _abi_key() -> str:
     """The loaded ``_pops`` module ABI key (header signature + compiler + std), or a
     stable placeholder when ``_pops`` is unavailable (a numpy-free / module-free
     interpreter exercising the pure-Python manifest layer). The key namespaces a

@@ -18,7 +18,12 @@ facade handles the user actually wrote via ``remap_lowering_error``.
 """
 
 
-def _module_to_model(module):
+from __future__ import annotations
+
+from typing import Any
+
+
+def _module_to_model(module: Any) -> Any:
     """Lower a :class:`pops.model.Module` to a :class:`pops.dsl.Model`
     (Spec 2, S2-11), reusing the dsl codegen engine -- a translation, NOT a
     second backend.  The Module's typed operators carry dsl ``Expr`` bodies;
@@ -52,7 +57,7 @@ def _module_to_model(module):
         m.param(p.name, p.default)  # (name, value) shorthand -> a const param (no kind= string)
     declared = set()
 
-    def _declare_aux(nm):
+    def _declare_aux(nm: Any) -> None:
         if nm in declared:
             return
         declared.add(nm)
@@ -102,7 +107,7 @@ def _module_to_model(module):
     return m
 
 
-def remap_lowering_error(exc, facade):
+def remap_lowering_error(exc: Any, facade: Any) -> None:
     """Re-raise a lowering ``ValueError`` citing the user's facade handles, not internal dsl symbols.
 
     When the user authored a physics :class:`pops.physics.Model` and the internal Module -> dsl
@@ -130,7 +135,7 @@ def remap_lowering_error(exc, facade):
         % (name, exc, sorted(states) or "(none)", sorted(ops) or "(none)")) from exc
 
 
-def lower_and_validate(model, facade=None):
+def lower_and_validate(model: Any, facade: Any = None) -> Any:
     """The SINGLE validate + lower entry of the compile pipeline (ADC-557).
 
     Validates @p model ONCE and returns ``(emit_model, source_module)``:

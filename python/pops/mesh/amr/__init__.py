@@ -9,6 +9,10 @@ criteria: ``Refine.on(block.role(Density)).above(0.05)`` and ``TagUnion(...)``.
 
 Everything here is an inert descriptor; nothing tags a cell in Python.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from .._descriptor import Availability, MeshDescriptor
 
 # Current native AMR capability envelope (Spec 5 sec.8.7): the production AMR route
@@ -18,7 +22,7 @@ NATIVE_MAX_LEVELS = 2
 NATIVE_RATIOS = (2,)
 
 
-def _subject_name(subject):
+def _subject_name(subject: Any) -> Any:
     """The plain string name of a Refine subject (a string, or an object carrying ``.name``)."""
     if isinstance(subject, str):
         return subject
@@ -26,7 +30,7 @@ def _subject_name(subject):
     return name if isinstance(name, str) else None
 
 
-def _declared_subjects(model_or_context):
+def _declared_subjects(model_or_context: Any) -> Any:
     """The set of subject names a model / context legitimately declares (duck-typed).
 
     A Refine subject is a state component, a physical role, or a named aux / field. This reads
@@ -40,7 +44,7 @@ def _declared_subjects(model_or_context):
     names = set()
     found_surface = False
 
-    def add_iter(value):
+    def add_iter(value: Any) -> None:
         nonlocal found_surface
         if value is None:
             return
@@ -98,35 +102,35 @@ class Refine(MeshDescriptor):
 
     category = "refinement_criterion"
 
-    def __init__(self, subject, predicate=None, threshold=None):
+    def __init__(self, subject: Any, predicate: Any = None, threshold: Any = None) -> None:
         self.subject = subject
         self.predicate = predicate
         self.threshold = threshold
 
     @classmethod
-    def on(cls, subject):
+    def on(cls, subject: Any) -> Refine:
         return cls(subject)
 
-    def _with(self, predicate, threshold):
+    def _with(self, predicate: Any, threshold: Any) -> Refine:
         return Refine(self.subject, predicate, float(threshold))
 
-    def above(self, threshold):
+    def above(self, threshold: Any) -> Refine:
         return self._with("above", threshold)
 
-    def below(self, threshold):
+    def below(self, threshold: Any) -> Refine:
         return self._with("below", threshold)
 
-    def gradient_above(self, threshold):
+    def gradient_above(self, threshold: Any) -> Refine:
         return self._with("gradient_above", threshold)
 
-    def magnitude_above(self, threshold):
+    def magnitude_above(self, threshold: Any) -> Refine:
         return self._with("magnitude_above", threshold)
 
-    def options(self):
+    def options(self) -> dict:
         subj = getattr(self.subject, "name", None) or repr(self.subject)
         return {"subject": subj, "predicate": self.predicate, "threshold": self.threshold}
 
-    def validate(self, context=None):
+    def validate(self, context: Any = None) -> bool:
         """Validate the criterion shape and -- when a model context is given -- its subject.
 
         With no @p context this self-validates the predicate / threshold only and DEFERS the
@@ -159,7 +163,7 @@ class TagUnion(MeshDescriptor):
 
     category = "refinement_criterion"
 
-    def __init__(self, *criteria):
+    def __init__(self, *criteria: Any) -> None:
         flat = []
         for c in criteria:
             if not isinstance(c, (Refine, TagUnion)):
@@ -167,10 +171,10 @@ class TagUnion(MeshDescriptor):
             flat.append(c)
         self.criteria = flat
 
-    def options(self):
+    def options(self) -> dict:
         return {"n_criteria": len(self.criteria)}
 
-    def validate(self, context=None):
+    def validate(self, context: Any = None) -> bool:
         for c in self.criteria:
             c.validate(context)
         return True
@@ -181,12 +185,12 @@ class RegridEvery(MeshDescriptor):
 
     category = "regrid_policy"
 
-    def __init__(self, steps):
+    def __init__(self, steps: Any) -> None:
         self.steps = int(steps)
         if self.steps <= 0:
             raise ValueError("RegridEvery: steps must be > 0 (use FrozenRegrid for no regrid)")
 
-    def options(self):
+    def options(self) -> dict:
         return {"steps": self.steps}
 
 
@@ -195,7 +199,7 @@ class FrozenRegrid(MeshDescriptor):
 
     category = "regrid_policy"
 
-    def options(self):
+    def options(self) -> dict:
         return {"frozen": True}
 
 
@@ -204,11 +208,11 @@ class PatchLayout(MeshDescriptor):
 
     category = "patch_layout"
 
-    def __init__(self, distribute_coarse=False, coarse_max_grid=32):
+    def __init__(self, distribute_coarse: Any = False, coarse_max_grid: Any = 32) -> None:
         self.distribute_coarse = bool(distribute_coarse)
         self.coarse_max_grid = int(coarse_max_grid)
 
-    def options(self):
+    def options(self) -> dict:
         return {"distribute_coarse": self.distribute_coarse,
                 "coarse_max_grid": self.coarse_max_grid}
 
@@ -218,12 +222,12 @@ class ProperNesting(MeshDescriptor):
 
     category = "nesting_policy"
 
-    def __init__(self, buffer=1):
+    def __init__(self, buffer: Any = 1) -> None:
         self.buffer = int(buffer)
         if self.buffer < 0:
             raise ValueError("ProperNesting: buffer must be >= 0")
 
-    def options(self):
+    def options(self) -> dict:
         return {"buffer": self.buffer}
 
 
@@ -232,10 +236,10 @@ class BufferCells(MeshDescriptor):
 
     category = "tag_policy"
 
-    def __init__(self, cells=1):
+    def __init__(self, cells: Any = 1) -> None:
         self.cells = int(cells)
 
-    def options(self):
+    def options(self) -> dict:
         return {"cells": self.cells}
 
 
@@ -243,24 +247,24 @@ class BufferCells(MeshDescriptor):
 class AllLevels(MeshDescriptor):
     category = "level_policy"
 
-    def options(self):
+    def options(self) -> dict:
         return {"levels": "all"}
 
 
 class CoarseOnly(MeshDescriptor):
     category = "level_policy"
 
-    def options(self):
+    def options(self) -> dict:
         return {"levels": "coarse"}
 
 
 class SelectedLevels(MeshDescriptor):
     category = "level_policy"
 
-    def __init__(self, *levels):
+    def __init__(self, *levels: Any) -> None:
         self.levels = tuple(int(l) for l in levels)
 
-    def options(self):
+    def options(self) -> dict:
         return {"levels": self.levels}
 
 
@@ -275,11 +279,11 @@ class CheckpointPolicy(MeshDescriptor):
 
     category = "checkpoint_policy"
 
-    def __init__(self, restartable=False, require_bit_identical=False):
+    def __init__(self, restartable: Any = False, require_bit_identical: Any = False) -> None:
         self.restartable = bool(restartable)
         self.require_bit_identical = bool(require_bit_identical)
 
-    def options(self):
+    def options(self) -> dict:
         return {"restartable": self.restartable,
                 "require_bit_identical": self.require_bit_identical}
 
@@ -289,12 +293,13 @@ class AMROutput(MeshDescriptor):
 
     category = "amr_output"
 
-    def __init__(self, fields=(), levels=None, include_patch_boxes=False):
+    def __init__(self, fields: Any = (), levels: Any = None,
+                 include_patch_boxes: Any = False) -> None:
         self.fields = list(fields)
         self.levels = levels if levels is not None else AllLevels()
         self.include_patch_boxes = bool(include_patch_boxes)
 
-    def options(self):
+    def options(self) -> dict:
         return {"n_fields": len(self.fields),
                 "levels": self.levels.options().get("levels"),
                 "include_patch_boxes": self.include_patch_boxes}
@@ -313,7 +318,7 @@ class IgnoreAMRCriteria(MeshDescriptor):
 
     category = "amr_override"
 
-    def options(self):
+    def options(self) -> dict:
         return {"ignore_amr_criteria": True}
 
 

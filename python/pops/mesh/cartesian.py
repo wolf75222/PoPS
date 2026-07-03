@@ -5,6 +5,10 @@ stays reconstruction + Riemann flux + variables (no geometry argument). The mesh
 passed to the system via ``pops.runtime.system.System(mesh=...) (advanced seam)``. ``CartesianMesh`` is the implicit
 default (square domain, numerics STRICTLY unchanged, bit-identical).
 """
+from __future__ import annotations
+
+from typing import Any
+
 from ._descriptor import MeshDescriptor
 from ..descriptors_report import CapabilitySet
 from pops.runtime_environment import NATIVE_DIMENSION, validate_dimension
@@ -20,20 +24,21 @@ class CartesianMesh(MeshDescriptor):
 
     category = "mesh"
 
-    def __init__(self, n=64, L=1.0, periodic=True, *, dim=NATIVE_DIMENSION):
+    def __init__(self, n: Any = 64, L: Any = 1.0, periodic: Any = True,
+                 *, dim: Any = NATIVE_DIMENSION) -> None:
         self.dim = validate_dimension(dim, where="CartesianMesh")
         self.n = int(n)
         self.L = float(L)
         self.periodic = bool(periodic)
 
-    def options(self):
+    def options(self) -> dict:
         return {"n": self.n, "L": self.L, "periodic": self.periodic}
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"geometry": "cartesian", "dim": self.dim,
                               "periodic": self.periodic, "supports_amr": True})
 
-    def _apply(self, config):
+    def _apply(self, config: Any) -> None:
         config.geometry = "cartesian"
         config.n = self.n
         config.L = self.L

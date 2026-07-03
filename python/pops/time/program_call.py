@@ -9,14 +9,23 @@ same methods and the IR built by ``P.call`` is byte-identical.
 Like ``program_core``, this stays free of any ``pops.codegen`` / ``_pops`` module-scope edge: the
 ``pops.model`` import is function-local.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from pops.time.schedule import Schedule
 from pops.time.values import Value, _CoupledResult
 
+if TYPE_CHECKING:
+    from pops.time._program_contract import _ProgramBase
+else:
+    _ProgramBase = object
 
-class _ProgramCall:
+
+class _ProgramCall(_ProgramBase):
     """Typed operator-call lowering (``P.call`` and its internal ``_call`` path)."""
 
-    def call(self, operator, *args, name=None, schedule=None):
+    def call(self, operator: Any, *args: Any, name: Any = None, schedule: Any = None) -> Any:
         """Call a typed operator by HANDLE (the operator-first level, Spec 5 sec.14.2.3).
 
         ``operator`` MUST be the :class:`pops.model.OperatorHandle` a declarer (``m.rate`` /
@@ -49,7 +58,7 @@ class _ProgramCall:
                 % (operator,))
         return self._call(operator, *args, name=name, schedule=schedule)
 
-    def _call(self, operator, *args, name=None, schedule=None):
+    def _call(self, operator: Any, *args: Any, name: Any = None, schedule: Any = None) -> Any:
         """Internal operator-first call: resolve, type-check and lower an operator (str name OR
         handle). NOT a public surface -- it is the byte-identical lowering the public typed
         :meth:`call` delegates to, and the path the ``pops.lib.time`` macros, the board/operator
@@ -81,7 +90,7 @@ class _ProgramCall:
             result.attrs["schedule"] = schedule
         return result
 
-    def _operator_call_name(self, operator):
+    def _operator_call_name(self, operator: Any) -> Any:
         """Normalize an internal :meth:`_call` operator selector to its registry name.
 
         Accepts EITHER a plain ``str`` (an internal selector token, returned unchanged) OR an
@@ -98,7 +107,7 @@ class _ProgramCall:
             "_call: operator must be a str name or an pops.model.OperatorHandle, got %r"
             % (operator,))
 
-    def _validate_schedule(self, op, schedule):
+    def _validate_schedule(self, op: Any, schedule: Any) -> Any:
         """A schedule= on P.call must be a Schedule; a caching policy (hold / accumulate_dt)
         requires the operator to be cacheable (Spec 3 criterion 27)."""
         if not isinstance(schedule, Schedule):
@@ -111,7 +120,7 @@ class _ProgramCall:
                 "m.operator_capabilities(%r, cacheable=True)"
                 % (op.name, schedule.policy, op.name))
 
-    def _lower_call(self, op, operator_name, args, name):
+    def _lower_call(self, op: Any, operator_name: Any, args: Any, name: Any) -> Any:
         # A typed call lowers THROUGH the PRIVATE RHS builder (self._rhs_legacy(flux=...) /
         # self.source / ...): the public P.rhs reject never sees this internal lowering (the user
         # already used the typed P.call front door), so there is one public path and no re-entrancy
@@ -157,7 +166,7 @@ class _ProgramCall:
         raise NotImplementedError(
             "P.call: operator kind %r is not yet lowerable (operator %r)" % (kind, operator_name))
 
-    def _lower_coupled_rate(self, op, operator_name, args, name):
+    def _lower_coupled_rate(self, op: Any, operator_name: Any, args: Any, name: Any) -> Any:
         """Lower a coupled_rate operator to a coupled node plus one per-block rate projection.
 
         A coupled operator (collisions, ionization, ...) of arbitrary arity returns a typed
@@ -182,7 +191,7 @@ class _ProgramCall:
             outs[blk] = out
         return _CoupledResult(outs)
 
-    def _check_call_args(self, op, args):
+    def _check_call_args(self, op: Any, args: Any) -> Any:
         """Type-check ``P.call`` arguments against an operator's Signature: arity plus the vtype of
         each space-typed input (a StateSpace input wants a 'state' value, a FieldSpace input a
         'fields' value). Operator-valued inputs are not passed positionally. Clear error on mismatch.

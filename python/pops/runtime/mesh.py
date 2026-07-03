@@ -5,6 +5,8 @@ Spec 5 lifts the mesh descriptors out of the runtime layer into the top-level
 form). This module re-exports them so the runtime facade (``pops.System``,
 ``pops.CartesianMesh``) keeps working unchanged while consumers migrate to ``pops.mesh``.
 """
+from __future__ import annotations
+
 from pops.mesh.cartesian import CartesianMesh  # noqa: F401
 from pops.mesh.polar import PolarMesh  # noqa: F401
 from pops.mesh.aux import AuxHalo  # noqa: F401

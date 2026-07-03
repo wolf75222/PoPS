@@ -19,6 +19,10 @@ the platform does not change the lowered backend string (the device is selected 
 runtime, not by the backend token). The :mod:`platform <pops.runtime.platforms>` descriptors live
 in the runtime layer (they introspect the compiled ``_pops`` build flags).
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Availability, Descriptor
 
 # The canonical backend string each typed descriptor lowers to (the token the compile drivers'
@@ -44,9 +48,9 @@ class _Backend(Descriptor):
 
     category = "backend"
     #: The canonical backend string this descriptor lowers to. Subclasses override.
-    _string = None
+    _string: Any = None
 
-    def __init__(self, platform=None):
+    def __init__(self, platform: Any = None) -> None:
         if isinstance(platform, str):
             raise TypeError(
                 "%s(platform=%r): platform must be a typed pops.runtime.platforms descriptor "
@@ -54,12 +58,12 @@ class _Backend(Descriptor):
         self.platform = platform
 
     @property
-    def scheme(self):
+    def scheme(self) -> Any:
         """The canonical backend token (alias of :meth:`lower`; mirrors the brick ``scheme``)."""
         return self._string
 
     @property
-    def tier(self):
+    def tier(self) -> Any:
         """The route TIER (ADC-600): ``"production"`` | ``"prototype"`` | ``"internal"``.
 
         Read from the single native ``_BACKEND_CAPS`` table so a report can name plainly whether
@@ -70,7 +74,7 @@ class _Backend(Descriptor):
         """
         return self.capabilities().get("tier")
 
-    def lower(self, context=None):
+    def lower(self, context: Any = None) -> Any:
         """The backend string the compile drivers consume (Spec 5 sec.6/7: inert metadata).
 
         Returns the canonical token (``"production"`` / ``"aot"`` / ``"prototype"``) so a caller
@@ -80,11 +84,11 @@ class _Backend(Descriptor):
         """
         return self._string
 
-    def options(self):
+    def options(self) -> dict:
         return {"backend": self._string,
                 "platform": self.platform.name if self.platform is not None else None}
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         """The honest backend characteristics (cpu / mpi / amr / gpu) from the native table."""
         # Imported lazily to keep this module dependency-light and avoid an import cycle with the
         # compile pipeline (which imports the backend descriptors back).
@@ -92,7 +96,7 @@ class _Backend(Descriptor):
         from pops.descriptors_report import CapabilitySet
         return CapabilitySet(dict(_BACKEND_CAPS.get(self._string, {})))
 
-    def available(self, context=None):
+    def available(self, context: Any = None) -> Any:
         """Available when the recorded platform (if any) is available; else explain why not."""
         if self.platform is not None and hasattr(self.platform, "available"):
             status = self.platform.available(context)
@@ -104,7 +108,7 @@ class _Backend(Descriptor):
                     alternatives=getattr(status, "alternatives", None))
         return Availability.yes()
 
-    def inspect(self):
+    def inspect(self) -> Any:
         record = super().inspect()
         record["platform"] = self.platform.inspect() if self.platform is not None else None
         return record
@@ -145,7 +149,7 @@ class JIT(_Backend):
 BACKEND_DESCRIPTORS = {_PRODUCTION: Production, _AOT: AOT, _JIT: JIT}
 
 
-def lower_backend(backend):
+def lower_backend(backend: Any) -> Any:
     """Lower a backend selector to its canonical string (accept BOTH a string and a descriptor).
 
     The ADDITIVE coercion the compile entry points wire on their ``backend=`` parameter: a plain

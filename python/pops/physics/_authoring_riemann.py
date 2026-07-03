@@ -7,10 +7,19 @@ Methods only; the touched attributes (``_hllc`` / ``_roe`` / ``_roe_rows`` /
 module scope: ``_roe_validate`` (a pure marker validator) is imported LAZILY
 inside ``roe_dissipation``.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from pops.ir import Expr, _wrap  # noqa: F401  -- _wrap in roe_dissipation, Expr in hook checks
 
+if TYPE_CHECKING:
+    from ._model_contract import _HyperbolicModel
+else:
+    _HyperbolicModel = object
 
-class _RiemannMixin:
+
+class _RiemannMixin(_HyperbolicModel):
     """HLLC / Roe capability emission and arbitrary-formula hook overrides."""
 
     # Riemann capability hooks whose body is a SINGLE-state formula (signature ``hook(U)``) and so
@@ -20,7 +29,7 @@ class _RiemannMixin:
     # role-derived default (selected by a capability-hook descriptor).
     _FORMULA_HOOKS = ("pressure",)
 
-    def enable_hllc(self):
+    def enable_hllc(self) -> Any:
         """Emits the HLLC CAPABILITY (audit wave 3): ``contact_speed`` (Toro) + ``hllc_star_state``
         GENERATED from the block's ROLES (Density / MomentumX / MomentumY, Energy optional) and the
         primitive 'p' -- the core's contact-resolving HLLC solver (C++ trait HasHLLCStructure)
@@ -31,7 +40,7 @@ class _RiemannMixin:
         self._hllc = True
         return self
 
-    def set_riemann_hooks(self, **forms):
+    def set_riemann_hooks(self, **forms: Any) -> Any:
         """Record ARBITRARY-formula overrides of the role-derived Riemann hooks (ADC-456, Spec 3
         section 11). Each keyword is a hook name; the value is an :class:`Expr` (an ``pops.math`` /
         dsl formula) that REPLACES the canonical role-derived body at codegen, or ``None`` to keep
@@ -58,7 +67,7 @@ class _RiemannMixin:
             self._riemann_hook_forms[name] = form
         return self
 
-    def enable_roe(self):
+    def enable_roe(self) -> None:
         """Emits the ROE CAPABILITY (audit balance, GENERICITY_2026-06.md point 11):
         ``roe_dissipation(UL, AL, UR, AR, dir)`` = ``|A_roe| (UR - UL)`` GENERATED from the block's
         ROLES -- the core's Roe-like solver (C++ trait HasRoeDissipation, F = 1/2(FL+FR) - 1/2 d)
@@ -87,7 +96,7 @@ class _RiemannMixin:
                              "of the roe_dissipation hook")
         self._roe = True
 
-    def roe_dissipation(self, x, y):
+    def roe_dissipation(self, x: Any, y: Any) -> None:
         """Roe dissipation PROVIDED by the user (outside the fluid-role families): n_vars
         expressions per direction (rows d_i), emitted as the C++ hook
         ``roe_dissipation(UL, AL, UR, AR, dir)`` = d (HasRoeDissipation trait; the core does
@@ -124,7 +133,7 @@ class _RiemannMixin:
                 _roe_validate(e, False)  # rejects any variable outside a left()/right() marker
         self._roe_rows = rows
 
-    def roe_from_jacobian(self):
+    def roe_from_jacobian(self) -> None:
         """Generic moment Roe: emit the hook ``roe_dissipation(UL, AL, UR, AR, dir)`` =
         ``|A| (UR - UL)`` with ``A = dF_dir/dU`` the flux Jacobian (m.flux_jacobian, autodiff)
         evaluated at the ARITHMETIC MEAN interface state ``Uavg = 1/2 (UL + UR)``, and ``|A|`` via

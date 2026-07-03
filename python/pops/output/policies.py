@@ -4,6 +4,10 @@ Typed replacements for ``output(format="hdf5", every=20)`` / ``checkpoint(mode=.
 output or checkpoint policy declares its format, cadence, fields, diagnostics and level
 selection; the runtime performs the I/O. Inert descriptors.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Descriptor
 
 
@@ -12,20 +16,20 @@ class _LevelPolicy(Descriptor):
 
 
 class AllLevels(_LevelPolicy):
-    def options(self):
+    def options(self) -> dict:
         return {"levels": "all"}
 
 
 class CoarseOnly(_LevelPolicy):
-    def options(self):
+    def options(self) -> dict:
         return {"levels": "coarse"}
 
 
 class SelectedLevels(_LevelPolicy):
-    def __init__(self, *levels):
+    def __init__(self, *levels: Any) -> None:
         self.levels = tuple(int(l) for l in levels)
 
-    def options(self):
+    def options(self) -> dict:
         return {"levels": self.levels}
 
 
@@ -39,8 +43,9 @@ class OutputPolicy(Descriptor):
 
     category = "output_policy"
 
-    def __init__(self, format=None, cadence=None, fields=(), diagnostics=(),
-                 levels=None, require_parallel=False, prefix=None):
+    def __init__(self, format: Any = None, cadence: Any = None, fields: Any = (),
+                 diagnostics: Any = (), levels: Any = None, require_parallel: bool = False,
+                 prefix: Any = None) -> None:
         self.format = format
         self.cadence = cadence
         self.fields = list(fields)
@@ -50,14 +55,14 @@ class OutputPolicy(Descriptor):
         #: Optional file-name prefix the run-loop driver writes under output_dir (default "output").
         self.prefix = prefix
 
-    def options(self):
+    def options(self) -> dict:
         return {"format": getattr(self.format, "name", self.format),
                 "cadence": getattr(self.cadence, "name", self.cadence),
                 "n_fields": len(self.fields), "n_diagnostics": len(self.diagnostics),
                 "levels": self.levels.options().get("levels"),
                 "require_parallel": self.require_parallel, "prefix": self.prefix}
 
-    def requirements(self):
+    def requirements(self) -> Any:
         from pops.descriptors_report import RequirementSet
         req = {}
         if self.require_parallel:
@@ -78,15 +83,15 @@ class CheckpointPolicy(Descriptor):
 
     category = "checkpoint_policy"
 
-    def __init__(self, cadence=None, restartable=False, require_bit_identical=False,
-                 prefix=None):
+    def __init__(self, cadence: Any = None, restartable: bool = False,
+                 require_bit_identical: bool = False, prefix: Any = None) -> None:
         self.cadence = cadence
         self.restartable = bool(restartable)
         self.require_bit_identical = bool(require_bit_identical)
         #: Optional file-name prefix the run-loop driver writes under output_dir (default "checkpoint").
         self.prefix = prefix
 
-    def options(self):
+    def options(self) -> dict:
         return {"cadence": getattr(self.cadence, "name", self.cadence),
                 "restartable": self.restartable,
                 "require_bit_identical": self.require_bit_identical,

@@ -15,6 +15,9 @@ The sidecar and its ``.cachekey`` companion are written atomically (temp file + 
 crashed / concurrent compile never leaves a half-written provenance file that the cache-HIT guard
 would then read.
 """
+from __future__ import annotations
+
+from typing import Any
 
 import json
 import os
@@ -26,12 +29,12 @@ import os
 CACHEKEY_SUFFIX = ".cachekey"
 
 
-def cachekey_path(so_path):
+def cachekey_path(so_path: Any) -> Any:
     """The ``<so-name>.cachekey`` sidecar path next to @p so_path (ADC-536 stale/ABI guard)."""
     return so_path + CACHEKEY_SUFFIX
 
 
-def _atomic_write(path, text):
+def _atomic_write(path: Any, text: Any) -> None:
     """Write @p text to @p path atomically (temp file in the same dir + ``os.replace``).
 
     Same-directory temp keeps the replace atomic (a cross-filesystem rename is not). A failed write
@@ -44,7 +47,7 @@ def _atomic_write(path, text):
     os.replace(tmp, path)
 
 
-def write_cachekey_sidecar(so_path, *, cache_key, abi_key, toolchain):
+def write_cachekey_sidecar(so_path: Any, *, cache_key: Any, abi_key: Any, toolchain: Any) -> None:
     """Atomically write the ``<so>.cachekey`` sidecar the cache-HIT guard re-verifies (ADC-536).
 
     Records the full ``cache_key``, the ``abi_key`` and a single ``toolchain`` line (compiler + std),
@@ -55,7 +58,7 @@ def write_cachekey_sidecar(so_path, *, cache_key, abi_key, toolchain):
     _atomic_write(cachekey_path(so_path), text)
 
 
-def read_cachekey_sidecar(so_path):
+def read_cachekey_sidecar(so_path: Any) -> Any:
     """Read the ``<so>.cachekey`` sidecar into a dict, or ``None`` when it is absent (ADC-536).
 
     ``None`` means the ``.so`` predates the sidecar (a legacy artifact); the caller treats that as a
@@ -79,7 +82,7 @@ class StaleArtifactError(RuntimeError):
     """A cached ``.so`` whose sidecar is missing or disagrees with the freshly computed keys."""
 
 
-def verify_cached_program_so(so_path, *, cache_key, abi_key):
+def verify_cached_program_so(so_path: Any, *, cache_key: Any, abi_key: Any) -> None:
     """Fail LOUD on a cache HIT whose sidecar is missing or disagrees with the fresh keys (ADC-536).
 
     On a cache HIT the ``.so`` is reused WITHOUT recompiling, so nothing else re-checks that the
@@ -115,8 +118,9 @@ def verify_cached_program_so(so_path, *, cache_key, abi_key):
                so_path, cachekey_path(so_path)))
 
 
-def build_debug_banner(program, model, *, program_hash, abi_key, cache_key, cflags, lflags,
-                       cxx, std, command, registry):
+def build_debug_banner(program: Any, model: Any, *, program_hash: Any, abi_key: Any,
+                       cache_key: Any, cflags: Any, lflags: Any, cxx: Any, std: Any,
+                       command: Any, registry: Any) -> str:
     """Return the C++ block-comment provenance banner for the persisted debug ``.cpp`` (ADC-536).
 
     The banner documents WHAT the ``.so`` was built from and HOW: the serialized Program IR (the

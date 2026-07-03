@@ -4,9 +4,12 @@ Split out of :mod:`pops.codegen.program_codegen` so that module stays under the 
 budget. ``_emit_amr_install`` is the only public name; ``program_codegen`` re-imports it and calls
 it from ``emit_cpp_program`` when ``target='amr_system'``.
 """
+from __future__ import annotations
+
+from typing import Any
 
 
-def _emit_amr_install(program, target, prelude, body):
+def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any) -> str:
     """C++ source of the AMR install entry the .so exports (epic ADC-511 / ADC-508, Spec 6).
 
     ``target='system'`` emits NOTHING (a System-only .so carries only ``pops_install_program``).

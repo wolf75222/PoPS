@@ -9,6 +9,10 @@ so the historical ``from pops.codegen.loader import CompiledModel`` path is
 unchanged. It imports neither ``pops.dsl`` nor ``pops.physics`` at module level.
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 
 class CompiledModel:
     """Result of ``m.compile(...)``: packages the produced ``.so`` + EVERYTHING
@@ -22,10 +26,11 @@ class CompiledModel:
     diagnostics. cf. DSL_MODEL_DESIGN.md section 3.
     """
 
-    def __init__(self, so_path, backend, adder, cons_names, cons_roles, prim_names, n_vars,
-                 gamma, n_aux, params, caps, abi_key, model_hash, cxx, std, target="system",
-                 hllc=False, roe=False, aux_extra_names=None, wave_speeds=False,
-                 elliptic_field_names=None):
+    def __init__(self, so_path: Any, backend: Any, adder: Any, cons_names: Any, cons_roles: Any,
+                 prim_names: Any, n_vars: Any, gamma: Any, n_aux: Any, params: Any, caps: Any,
+                 abi_key: Any, model_hash: Any, cxx: Any, std: Any, target: Any = "system",
+                 hllc: Any = False, roe: Any = False, aux_extra_names: Any = None,
+                 wave_speeds: Any = False, elliptic_field_names: Any = None) -> None:
         self.has_hllc = bool(hllc)   # HLLC capability emitted (enable_hllc): hllc available beyond 4-var Euler
         self.has_roe = bool(roe)     # ROE hook emitted (enable_roe roles OR m.roe_dissipation provided): roe available beyond 4-var Euler
         self.has_wave_speeds = bool(wave_speeds)  # wave_speeds emitted (explicit pair OR 'p'): hll available
@@ -57,7 +62,7 @@ class CompiledModel:
         self.std = std
 
     @property
-    def capabilities(self):
+    def capabilities(self) -> Any:
         """Typed capability handles of this compiled model (ADC-552): ``compiled.capabilities.
         wave_speeds`` returns the artifact's :class:`~pops.numerics.riemann.waves.WaveSpeedProvider`.
         Derived from the carried authoring model when present, else from ``has_wave_speeds`` (a
@@ -67,18 +72,19 @@ class CompiledModel:
         return _CapabilityHandles(self)
 
     @property
-    def runtime_param_names(self):
+    def runtime_param_names(self) -> list:
         """Names of the model's RUNTIME parameters (kind='runtime'), SORTED: this is the ORDER of
         the indices on the C++ side (RuntimeParams) AND the order expected by
         System.set_block_params(name, values) (P7-b). Empty if the model has only const params."""
         return sorted(k for k, p in self.params.items() if getattr(p, "kind", "const") == "runtime")
 
-    def runtime_param_values(self):
+    def runtime_param_values(self) -> list:
         """DECLARATION values of the runtime params, parallel to runtime_param_names (default as
         long as no set_block_params has been called)."""
         return [self.params[k].value for k in self.runtime_param_names]
 
-    def check_runtime(self, n=16, state=None, raise_on_error=True, rtol=1e-8, atol=1e-10):
+    def check_runtime(self, n: Any = 16, state: Any = None, raise_on_error: Any = True,
+                      rtol: Any = 1e-8, atol: Any = 1e-10) -> Any:
         """RUNTIME re-verification of a CompiledModel ALONE (audit balance, GENERICITY pt 9):
         without the original dsl.Model, the FORMULAS are no longer re-verifiable (symbolic
         check_model), but the .so itself is -- we install it in an EPHEMERAL System (n x n
@@ -124,7 +130,7 @@ class CompiledModel:
         sim._s.set_state("check", np.stack(comps).ravel())
         return sim.check_model("check", raise_on_error=raise_on_error, rtol=rtol, atol=atol)
 
-    def inspect_amr(self, layout=None):
+    def inspect_amr(self, layout: Any = None) -> Any:
         """STATIC AMR report on this compiled MODEL (Spec 5 sec.8.12 / sec.8.4).
 
         A ``CompiledModel`` produced off the AMR route (``pops.compile(problem, layout=AMR(...))``)
@@ -141,7 +147,7 @@ class CompiledModel:
             layout = getattr(self, "_layout", None)
         return inspect_amr(layout)
 
-    def capability_matrix(self):
+    def capability_matrix(self) -> Any:
         """The ADC-549 native route matrix for this compiled model handle."""
         from pops._capabilities import native_capability_matrix
         flags = {
@@ -160,7 +166,7 @@ class CompiledModel:
             layout="amr" if getattr(self, "target", "system") == "amr_system" else "system",
             flags=flags, source="manifest")
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return ("CompiledModel(backend=%r, target=%r, so_path=%r, n_vars=%d, gamma=%r, n_aux=%d, "
                 "adder=%r, runtime_params=%r, abi_key=%.12s..., model_hash=%.12s...)"
                 % (self.backend, self.target, self.so_path, self.n_vars, self.gamma, self.n_aux,

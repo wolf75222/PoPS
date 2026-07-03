@@ -7,7 +7,10 @@ in :mod:`pops.numerics.reconstruction.limiters`.
 pops::Weno5 IS the WENO5-Z reconstruction (it wraps weno5z()); WENO5 and WENO5Z both
 select it. MUSCL is reconstruction-by-limiter; its native limiter type is pops::Minmod.
 """
+from __future__ import annotations
+
 from types import SimpleNamespace
+from typing import Any
 
 from pops.descriptors import _native, _external_descriptor
 from .limiters import limiters
@@ -51,7 +54,7 @@ reconstruction = SimpleNamespace(
 )
 
 
-def required_ghost_depth(reconstruction_or_token):
+def required_ghost_depth(reconstruction_or_token: Any) -> Any:
     """The ghost depth a reconstruction NEEDS (Spec 5 sec.7 / criterion 11).
 
     Accepts a reconstruction descriptor (reads its declared ``ghost_depth`` option / scheme) or a
@@ -65,10 +68,12 @@ def required_ghost_depth(reconstruction_or_token):
     declared = (getattr(descriptor, "options", None) or {}).get("ghost_depth")
     if isinstance(declared, int) and not isinstance(declared, bool):
         return declared
-    return REQUIRED_GHOST_DEPTH.get(getattr(descriptor, "scheme", None))
+    scheme: Any = getattr(descriptor, "scheme", None)
+    return REQUIRED_GHOST_DEPTH.get(scheme)
 
 
-def validate_ghost_depth(reconstruction_or_token, available=None, block=None):
+def validate_ghost_depth(reconstruction_or_token: Any, available: Any = None,
+                         block: Any = None) -> bool:
     """Reject a reconstruction whose DECLARED ghost depth exceeds an EXPLICIT block depth.
 
     Spec 5 sec.7 / criterion 11: a high-order stencil (WENO5 needs 3 ghost cells) reading past a

@@ -6,6 +6,10 @@ by a local-linear or Krylov solve), and the named :class:`Operator` that pairs a
 kind with a :class:`pops.model.signatures.Signature`. Carries no numerics; the body
 lives in the model / codegen.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from .signatures import Signature
 from .spaces import Space, _as_signature_inputs
 
@@ -45,7 +49,7 @@ OPERATOR_FAMILIES = {
 }
 
 
-def operator_family(kind):
+def operator_family(kind: Any) -> str:
     """The mathematical family of an operator ``kind`` (ADC-559): a readable label
     (``rate`` / ``field_solve`` / ``local_linear_map`` / ``matrix_free_map`` / ``projection`` /
     ``coupled_rate`` / ``diagnostic`` / ``residual``) for introspection. An unknown kind maps to
@@ -74,25 +78,25 @@ class LocalLinearOperator:
     ``linear_source`` operators and to check ``solve_local_linear(I - dt*L, rhs)``.
     """
 
-    def __init__(self, domain, range_):
+    def __init__(self, domain: Any, range_: Any) -> None:
         self.domain_name = domain.name if isinstance(domain, Space) else str(domain)
         self.range_name = range_.name if isinstance(range_, Space) else str(range_)
 
-    def _key(self):
+    def _key(self) -> Any:
         return ("local_linear_operator", self.domain_name, self.range_name)
 
-    def __eq__(self, other):
+    def __eq__(self, other: Any) -> bool:
         return (isinstance(other, LocalLinearOperator)
                 and self._key() == other._key())
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(self._key())
 
-    def __rrshift__(self, inputs):
+    def __rrshift__(self, inputs: Any) -> Any:
         """``(fields,) >> LocalLinearOperator(U, U)`` signature sugar."""
         return Signature(_as_signature_inputs(inputs), self)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "LocalLinearOperator(%r, %r)" % (self.domain_name, self.range_name)
 
 
@@ -100,25 +104,25 @@ class MatrixFreeOperator:
     """Operator-valued type ``VectorSpace -> VectorSpace`` usable by a Krylov solve
     (``solve_linear``). Identity is by ``(domain_name, range_name)``."""
 
-    def __init__(self, domain, range_):
+    def __init__(self, domain: Any, range_: Any) -> None:
         self.domain_name = domain.name if isinstance(domain, Space) else str(domain)
         self.range_name = range_.name if isinstance(range_, Space) else str(range_)
 
-    def _key(self):
+    def _key(self) -> Any:
         return ("matrix_free_operator", self.domain_name, self.range_name)
 
-    def __eq__(self, other):
+    def __eq__(self, other: Any) -> bool:
         return (isinstance(other, MatrixFreeOperator)
                 and self._key() == other._key())
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(self._key())
 
-    def __rrshift__(self, inputs):
+    def __rrshift__(self, inputs: Any) -> Any:
         """``(v,) >> MatrixFreeOperator(V, V)`` signature sugar."""
         return Signature(_as_signature_inputs(inputs), self)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "MatrixFreeOperator(%r, %r)" % (self.domain_name, self.range_name)
 
 
@@ -128,8 +132,9 @@ class Operator:
     tag naming the API that created it (for debug / introspection). Carries no
     numerics; the body lives in the model / codegen."""
 
-    def __init__(self, name, kind, signature, capabilities=None,
-                 requirements=None, source=None, lowering=None, body=None):
+    def __init__(self, name: Any, kind: Any, signature: Any, capabilities: Any = None,
+                 requirements: Any = None, source: Any = None, lowering: Any = None,
+                 body: Any = None) -> None:
         if kind not in OPERATOR_KINDS:
             raise ValueError("operator %r: unknown kind %r (expected one of %s)"
                              % (name, kind, ", ".join(OPERATOR_KINDS)))
@@ -148,6 +153,6 @@ class Operator:
         # operator is declared via Module.operator; None for a derived dsl operator.
         self.body = body
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "Operator(%r, kind=%r, %r)" % (
             self.name, self.kind, self.signature)

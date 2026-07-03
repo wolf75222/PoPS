@@ -25,6 +25,9 @@ This module imports only the standard library (and the sibling ``pops.model`` ty
 methods) so it stays codegen-free and ``_pops``-free and keeps the ``pops.time`` import graph acyclic
 (``pops.time`` already imports ``pops.model``; ``pops.model`` never imports ``pops.time``).
 """
+from __future__ import annotations
+
+from typing import Any
 
 
 class OperatorHandle:
@@ -44,7 +47,8 @@ class OperatorHandle:
 
     __slots__ = ("name", "kind", "signature", "category")
 
-    def __init__(self, name, kind=None, signature=None, category=None):
+    def __init__(self, name: Any, kind: Any = None, signature: Any = None,
+                 category: Any = None) -> None:
         if not isinstance(name, str) or not name:
             raise ValueError("OperatorHandle: name must be a non-empty string")
         object.__setattr__(self, "name", name)
@@ -55,7 +59,7 @@ class OperatorHandle:
             category = operator_family(kind)
         object.__setattr__(self, "category", category)
 
-    def inspect(self):
+    def inspect(self) -> Any:
         """A structured, inert view of the operator this handle names (ADC-559).
 
         Returns a plain dict ``{name, kind, category, signature}`` -- the readable identity a user
@@ -66,14 +70,14 @@ class OperatorHandle:
         return {"name": self.name, "kind": self.kind, "category": self.category,
                 "signature": repr(self.signature) if self.signature is not None else None}
 
-    def __eq__(self, other):
+    def __eq__(self, other: Any) -> bool:
         return (isinstance(other, OperatorHandle)
                 and self.name == other.name and self.kind == other.kind)
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((self.name, self.kind))
 
-    def __call__(self, *args, name=None):
+    def __call__(self, *args: Any, name: Any = None) -> Any:
         """Call the operator inside a time Program (ADC-560): the tableau-style facade over ``P.call``.
 
         Locates the Program from the first Value argument that carries a ``.prog`` back-reference and
@@ -87,7 +91,7 @@ class OperatorHandle:
         prog = self._program_from_args(args)
         return prog._call(self.name, *args, name=name)
 
-    def _program_from_args(self, args):
+    def _program_from_args(self, args: Any) -> Any:
         """Find the time-Program to build IR into from the call arguments (ADC-560).
 
         The Program is the ``.prog`` back-reference on the first :class:`pops.time.values.Value`
@@ -103,7 +107,7 @@ class OperatorHandle:
                 "Program explicitly." % (self.name, args, self.name))
         return prog
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         if self.kind is None:
             return "OperatorHandle(%r)" % (self.name,)
         return "OperatorHandle(%r, kind=%r)" % (self.name, self.kind)
