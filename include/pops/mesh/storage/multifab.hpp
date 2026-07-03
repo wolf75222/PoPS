@@ -20,6 +20,7 @@
 #include <pops/mesh/storage/fab2d.hpp>
 #include <pops/mesh/execution/for_each.hpp>       // device_fence, sync_host, sync_device
 #include <pops/mesh/boundary/halo_schedule.hpp>  // memoized fill_boundary schedule (ADC-260)
+#include <pops/mesh/layout/copy_schedule.hpp>    // memoized parallel_copy schedule (ADC-607)
 #include <pops/parallel/comm.hpp>
 
 #include <memory>
@@ -125,6 +126,21 @@ class MultiFab {
     return *halo_cache_;
   }
 
+  /// Internal (ADC-607): memoized redistribution schedule used by parallel_copy when THIS MultiFab
+  /// is the DESTINATION. Lazily created on first use. Unlike halo_cache_ the schedule depends on the
+  /// SRC layout too, so each entry is keyed on a src-layout fingerprint (src BoxArray +
+  /// DistributionMapping); the DST layout is implicit (this fab's ba_/dm_). Since none of ba_/dm_ has
+  /// an in-place setter, the cache can only go stale for the DST through whole-object (re)assignment
+  /// (e.g. AMR regrid builds a fresh dst and move-assigns it), which drops the cache with the object;
+  /// a changed SRC is caught by the fingerprint. Shared on copy (a copy has the same dst layout, and
+  /// the src-fingerprint keys still discriminate). Not part of the public numerical API. Returned by
+  /// reference so parallel_copy can populate it.
+  CopyScheduleCache& copy_cache() const {
+    if (!copy_cache_)
+      copy_cache_ = std::make_shared<CopyScheduleCache>();
+    return *copy_cache_;
+  }
+
  private:
   BoxArray ba_{};
   DistributionMapping dm_{};
@@ -135,6 +151,9 @@ class MultiFab {
   std::vector<int> global_of_local_{};  // local index -> global box
   // Memoized fill_boundary schedule (ADC-260). mutable: caching is logically const; lazily built.
   mutable std::shared_ptr<HaloScheduleCache> halo_cache_{};
+  // Memoized parallel_copy schedule (ADC-607), keyed per src layout. mutable: caching is logically
+  // const; lazily built. This MultiFab is the DST; the SRC layout rides in the entry key.
+  mutable std::shared_ptr<CopyScheduleCache> copy_cache_{};
 
   void validate_layout() const {
     if (ncomp_ < 1)

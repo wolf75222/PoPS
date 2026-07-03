@@ -286,6 +286,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_brick_catalog
   test_fill_boundary
   test_fill_boundary_cache
+  test_copy_schedule_cache
   test_physical_bc
   test_geometry
   test_refinement
@@ -602,6 +603,9 @@ if(POPS_HAS_MPI)
   endforeach()
   foreach(_np 1 2 4)
     pops_add_mpi_rank_test(test_fill_boundary_cache ${_np})
+  endforeach()
+  foreach(_np 1 2 4)
+    pops_add_mpi_rank_test(test_copy_schedule_cache ${_np})
   endforeach()
   foreach(_np 2 4)
     pops_add_mpi_rank_test(test_amr_system_bz_multibox ${_np})

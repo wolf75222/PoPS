@@ -52,19 +52,19 @@ _ADVANCED_COUNTERS = ("cache_hits", "cache_misses", "nodes_due", "nodes_skipped"
 _ELLIPTIC_COUNTERS = ("mg_cycles", "krylov_iters", "mg_levels")
 _ELLIPTIC_TIME_SCOPE = "elliptic_bottom"
 
-# AMR / MPI phase timings + counters (Spec 5 sec.12.5, ADC-479 criterion 43). The distributed AMR
-# runtime spends its non-numeric time in a handful of named phases: regrid (rebuild the patch
-# hierarchy), halo exchange (fill_boundary / fill_ghosts across ranks), reflux (correct coarse-fine
-# flux mismatch), and average_down (restrict fine onto coarse). MPI collectives add reduction calls.
-# These are TIMING SCOPES (chrono self-time, like elliptic_bottom) plus integer COUNTERS (how many
-# regrids / halo exchanges / reductions ran). The names are matched flexibly: a scope/counter whose
-# name contains any of these tokens is attributed to the AMR/MPI dimension, so the C++ profiler may
-# emit "fill_boundary" or "halo_exchange" and both land in the halo bucket. On a host / non-AMR build
-# none of these scopes or counters exist, so the view declares itself unavailable (never a faked 0).
+# AMR / MPI phase timings + counters (Spec 5 sec.12.5, ADC-479 criterion 43): regrid, halo exchange
+# (fill_boundary / fill_ghosts), reflux, average_down, plus MPI reduction/message counts -- TIMING
+# SCOPES (chrono self-time, like elliptic_bottom) and integer COUNTERS. Names are matched flexibly:
+# a scope/counter whose name CONTAINS a token lands in that bucket ("fill_boundary" and
+# "halo_exchange" both count as halo). On a host / non-AMR build none of these scopes or counters
+# exist, so the view declares itself unavailable (never a faked 0).
 _AMR_MPI_TIME_TOKENS = ("regrid", "fill_boundary", "halo_exchange", "reflux", "average_down")
 _AMR_MPI_COUNTER_TOKENS = (
     "regrid", "fill_boundary", "halo_exchange", "halo_exchanges", "reflux", "average_down",
-    "mpi_reductions", "mpi_messages")
+    "mpi_reductions", "mpi_messages",
+    # ADC-607 data-structure counters: tag_density = tagged/total permille of the dense TagBox
+    # (dense-vs-sparse measured); the others = copy-schedule cache engagement.
+    "tag_density", "box_hash_rebuilds", "copy_cache_hits", "copy_cache_misses")
 
 # POPS_PROFILE: map sim.profile() called with NO argument to a default level.
 _ENV_VAR = "POPS_PROFILE"
