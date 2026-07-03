@@ -56,9 +56,9 @@ class _AmrSystemEquation:
     def add_equation(self, name, model, spatial=None, time=None, substeps=None):
         """Add the SINGLE AMR equation/block by dispatching on the TYPE of @p model (DSL Phase D).
 
-        Low-level runtime seam. The documented PUBLIC path is the typed
-        ``pops.Problem(layout=AMR(...))`` assembly lowered by ``pops.compile`` and wired by
-        ``pops.bind``; ``add_equation`` stays for that seam and the tests.
+        Low-level runtime seam. The documented PUBLIC path is the typed ``pops.Problem`` assembly
+        lowered by ``pops.compile(problem, layout=AMR(...))`` and wired by ``pops.bind``;
+        ``add_equation`` stays for that seam and the tests.
 
         Dispatch:
 

@@ -85,10 +85,18 @@ class Descriptor:
         return type(self).__name__
 
     def requirements(self):
-        return {}
+        """What the route NEEDS from context, as a :class:`~pops.descriptors_report.RequirementSet`.
+
+        The default is empty. The typed set is Mapping-compatible (it subclasses ``dict``), so a
+        caller that treats it as a plain dict is unchanged (ADC-527).
+        """
+        from pops.descriptors_report import RequirementSet
+        return RequirementSet()
 
     def capabilities(self):
-        return {}
+        """What the route PROVIDES, as a :class:`~pops.descriptors_report.CapabilitySet` (ADC-527)."""
+        from pops.descriptors_report import CapabilitySet
+        return CapabilitySet()
 
     def options(self):
         return {}
@@ -97,21 +105,39 @@ class Descriptor:
         return Availability.yes()
 
     def validate(self, context=None):
+        """Return a :class:`~pops.descriptors_report.ValidationReport`, raising loud on error.
+
+        ADC-527: ``validate`` accumulates structured issues into a report; for the strict callers
+        that expect an exception, it also raises via ``report.raise_if_error()`` at the end, so both
+        "accumulate" and "fail loud" are honoured. The historical ``True`` return is preserved for
+        the callers that only check the boolean.
+        """
         status = self.available(context)
         if not status.ok:
             raise ValueError("%s is not available for this route:\n%s" % (self.name, status))
         return True
 
-    def lower(self, context=None):
-        """Return the inert lowering record for this route (Spec 5 sec.6 / sec.7).
+    def validate_report(self, context=None):
+        """Return the accumulated :class:`~pops.descriptors_report.ValidationReport` (no raise)."""
+        from pops.descriptors_report import ValidationReport
+        report = ValidationReport(subject=self)
+        status = self.available(context)
+        if not status.ok:
+            report.error(self.category, "unavailable", str(status),
+                         alternatives=status.alternatives)
+        return report
 
-        The lowering is metadata ONLY -- the name, the category, the native id and the
-        chosen options the C++ runtime will materialise. It NEVER runs a numeric loop, opens
-        an extension or touches a cell; a descriptor computes nothing. Subclasses that carry a
-        richer payload may extend the dict, but the contract stays inert.
+    def lower(self, context=None):
+        """Return the inert :class:`~pops.descriptors_report.LoweredDescriptor` for this route.
+
+        The lowering is metadata ONLY -- the name, the category, the native id and the chosen
+        options the C++ runtime will materialise. It NEVER runs a numeric loop, opens an extension or
+        touches a cell; a descriptor computes nothing. The typed record subclasses ``dict``, so a
+        caller that read the old ``lower()`` dict is unchanged (ADC-527).
         """
-        return {"name": self.name, "category": self.category,
-                "native_id": self.native_id, "options": self.options()}
+        from pops.descriptors_report import LoweredDescriptor
+        return LoweredDescriptor(name=self.name, category=self.category,
+                                 native_id=self.native_id, options=self.options())
 
     def inspect(self):
         return {"name": self.name, "category": self.category, "native_id": self.native_id,
@@ -124,14 +150,20 @@ class Descriptor:
         status_obj = self.available(context)
         status = {"yes": "available", "no": "unavailable",
                   "partial": "partial"}.get(status_obj.status, "unknown")
+        # capabilities() returns a typed CapabilitySet (Mapping-compatible): read the mpi/gpu route
+        # support through the typed .supports() accessor (ADC-527), falling back to a plain-dict get
+        # only for a not-yet-migrated family that still returns a bare dict.
         caps = self.capabilities()
+        supports = getattr(caps, "supports", None)
+        mpi = supports("mpi") if callable(supports) else (
+            caps.get("supports_mpi") if isinstance(caps, dict) else None)
+        gpu = supports("gpu") if callable(supports) else (
+            caps.get("supports_gpu") if isinstance(caps, dict) else None)
         row = CapabilityRouteRow(
             "%s:%s" % (self.category, self.name),
             layout=caps.get("layout", "context") if isinstance(caps, dict) else "context",
             backend="native" if self.native_id else "context",
-            platform="context",
-            mpi=caps.get("supports_mpi") if isinstance(caps, dict) else None,
-            gpu=caps.get("supports_gpu") if isinstance(caps, dict) else None,
+            platform="context", mpi=mpi, gpu=gpu,
             status=status, limitation=status_obj.reason,
             error_message="" if status_obj.ok else str(status_obj), source="descriptor")
         return CapabilityRouteMatrix(self.name, row.layout, [row])
@@ -168,30 +200,36 @@ class DescriptorProtocol(typing.Protocol):
             route with no compiled symbol.
 
     Methods:
-        requirements(): What the route NEEDS from the context (a plain dict).
-        capabilities(): What the route PROVIDES / supports (a plain dict).
+        requirements(): What the route NEEDS from the context (a ``RequirementSet``; Mapping-like).
+        capabilities(): What the route PROVIDES / supports (a ``CapabilitySet``; Mapping-like).
         options(): The configured knobs and their chosen values (a plain dict).
         available(context): An :class:`Availability` (yes / no / partial), never a bare bool.
-        validate(context): Raise a clear error when the route cannot be used in @p context.
-        lower(context): The inert lowering record (metadata only, no computation).
+        validate(context): A ``ValidationReport`` of accumulated errors (also raises for strict
+            callers via ``raise_if_error``).
+        lower(context): The inert ``LoweredDescriptor`` record (metadata only, no computation).
         inspect(): A plain-dict view of the descriptor for tooling and printing.
+
+    ADC-527: the result objects (``RequirementSet`` / ``CapabilitySet`` / ``LoweredDescriptor`` /
+    ``ValidationReport``) are typed but Mapping-compatible -- they subclass ``dict`` so a caller that
+    treated the old returns as plain dicts is unchanged. A family that still returns a bare dict is
+    wrapped by the base :class:`Descriptor`, so it is conform the moment it inherits it.
     """
 
     name: str
     category: str
     native_id: str | None
 
-    def requirements(self) -> dict: ...
+    def requirements(self) -> "RequirementSet": ...
 
-    def capabilities(self) -> dict: ...
+    def capabilities(self) -> "CapabilitySet": ...
 
     def options(self) -> dict: ...
 
     def available(self, context=None) -> "Availability": ...
 
-    def validate(self, context=None): ...
+    def validate(self, context=None) -> "ValidationReport": ...
 
-    def lower(self, context=None) -> dict: ...
+    def lower(self, context=None) -> "LoweredDescriptor": ...
 
     def inspect(self) -> dict: ...
 

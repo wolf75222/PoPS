@@ -34,6 +34,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   a bad field / output policy, a missing layout, and a layout that disagrees with a constructor
   layout are all refused early. A constructor `layout=` stays accepted (back-compat) and must agree
   with the layout passed at compile.
+- ADC-527 Stabilised the typed `DescriptorProtocol` result objects in a new
+  `pops.descriptors_report`: `RequirementSet` / `CapabilitySet` / `LoweredDescriptor` (the typed
+  requirements / capabilities / lowering records) and `ValidationReport` / `ValidationIssue` /
+  `Requirement`, re-exported from `pops.descriptors`. The base `Descriptor` now returns these typed
+  objects (so every subclass is auto-conform) and `validate()` can accumulate a report while still
+  failing loud; the result objects stay Mapping-compatible (they subclass `dict` with an explicit
+  `to_dict()`) so existing dict-consuming callers are unchanged. `BrickDescriptor.lower()` returns a
+  `LoweredDescriptor` and it gains an explainable `availability(context) -> Availability`. Added the
+  stable `pops.inspect(obj)` dispatcher (distinct from `pops.inspect_capabilities` /
+  `pops.inspect_amr`), and unified `pops.problem`'s report with the descriptor `ValidationReport`.
 - ADC-523 `pops.compile` / `pops.bind` are the only public front doors; the low-level
   `compile_problem` driver and the concrete `CompiledProblem` loader class leave the top-level
   surface (still reachable as `pops.codegen.compile_problem` / `pops.codegen.CompiledProblem` for

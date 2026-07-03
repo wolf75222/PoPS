@@ -204,14 +204,18 @@ class Problem:
                 "has_time": self._time_registry.program is not None}
 
     def requirements(self):
-        req = dict(self._layout.requirements()) if self._layout is not None else {}
+        """The route's requirements as a typed :class:`~pops.descriptors_report.RequirementSet`."""
+        from pops.descriptors_report import RequirementSet
+        req = RequirementSet(dict(self._layout.requirements()) if self._layout is not None else {})
         if len(self._field_registry):
-            req["elliptic_solve"] = True
-        req["time_scheme"] = True
+            req.add("elliptic_solve")
+        req.add("time_scheme")
         return req
 
     def capabilities(self):
-        caps = dict(self._layout.capabilities()) if self._layout is not None else {}
+        """The route's capabilities as a typed :class:`~pops.descriptors_report.CapabilitySet`."""
+        from pops.descriptors_report import CapabilitySet
+        caps = CapabilitySet(dict(self._layout.capabilities()) if self._layout is not None else {})
         caps["blocks"] = sorted(self._block_registry.names())
         caps["fields"] = sorted(self._field_registry.names())
         return caps

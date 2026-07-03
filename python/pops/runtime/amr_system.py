@@ -188,9 +188,9 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
     def add_block(self, name, model, spatial=None, time=None):
         """Installs an evolved block composed of NATIVE BRICKS on the shared AMR hierarchy.
 
-        Low-level runtime seam. The documented PUBLIC path is the typed
-        ``pops.Problem(layout=AMR(...))`` assembly lowered by ``pops.compile`` and wired by
-        ``pops.bind`` (which calls this internally); ``add_block`` stays for that seam and the tests.
+        Low-level runtime seam. The documented PUBLIC path is the typed ``pops.Problem`` assembly
+        lowered by ``pops.compile(problem, layout=AMR(...))`` and wired by ``pops.bind`` (which calls
+        this internally); ``add_block`` stays for that seam and the tests.
 
         Refined counterpart of System.add_block. The 1st add_block opens the single-block path
         (AmrCouplerMP : dynamic regrid, reflux) ; each subsequent add_block co-locates one more block

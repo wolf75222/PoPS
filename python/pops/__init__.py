@@ -74,7 +74,7 @@ __all__ = [
     "numerical_defaults_report", "fallback_diagnostics_report", "reset_fallback_diagnostics",
     "time", "model", "math", "physics", "lib", "mesh",
     "params", "output", "external", "fields", "linalg", "solvers", "experimental",
-    "abi_key", "capabilities", "inspect_capabilities", "inspect_amr", "native_capability_report",
+    "abi_key", "capabilities", "inspect", "inspect_capabilities", "inspect_amr", "native_capability_report",
     "runtime_environment_report", "validate_runtime_environment", "RuntimeCapabilityError",
     "set_threads", "has_kokkos", "parallel_info", "doctor",
     "CompiledArtifact", "CompiledTime",
@@ -87,8 +87,7 @@ __all__ = [
 from pops.runtime import integrate  # noqa: E402,F401  (pops.integrate name preserved; without numpy)
 from . import time, model, math, lib, physics, mesh  # noqa: E402  (Spec 2/3 operator-first + board authoring + IR)
 from . import params, output, external, fields, linalg, solvers  # noqa: E402  (Spec 5 typed params/output/fields/algebra/solvers)
-# pops.experimental (numpy-host, TESTS-ONLY) is NOT eagerly imported onto the root (ADC-600): it
-# stays a lazily-reachable submodule so PythonFlux is never bound as pops.PythonFlux.
+# pops.experimental (numpy-host, TESTS-ONLY) stays a lazily-reachable submodule (ADC-600), never bound.
 from .problem import Problem  # noqa: E402,F401  (Spec 5 sec.5.16: top-level compilable assembly; pure stdlib)
 from pops.physics import PhysicsModel  # noqa: E402,F401  (Spec 5 sec.11: alias of pops.physics.Model)
 from .codegen.library import (  # noqa: E402,F401  (re-export: brick-library manifest API, Spec 3 section 21)
@@ -96,6 +95,7 @@ from .codegen.library import (  # noqa: E402,F401  (re-export: brick-library man
 from .time import CompiledTime  # noqa: E402,F401  (re-export: compiled-Program time policy)
 from ._capabilities import (  # noqa: E402,F401  (Spec 5: descriptor-sourced matrix + native reports)
     inspect_capabilities, inspect_amr, native_capability_report)
+from ._inspect import inspect  # noqa: E402,F401  (ADC-527: stable per-object inspect dispatcher)
 from .runtime_environment import (  # noqa: E402,F401
     RuntimeCapabilityError, runtime_environment_report, validate_runtime_environment)
 
