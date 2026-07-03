@@ -15,6 +15,9 @@ source level, and the C++ static_asserts lock route_ids.hpp against the historic
 (kLimiters / kRiemanns / kTransports / kSources / kElliptics). Deliberately IMPORT-FREE (stdlib
 only): the architecture gate loads it standalone, without the compiled ``_pops`` module.
 """
+from __future__ import annotations
+
+from typing import Any
 
 
 class Route(str):
@@ -40,7 +43,8 @@ class Route(str):
     requirements: tuple
     limitations: tuple
 
-    def __new__(cls, family, token, native_entry, requirements=(), limitations=()):
+    def __new__(cls, family: str, token: str, native_entry: str,
+                requirements: Any = (), limitations: Any = ()) -> Route:
         self = super().__new__(cls, token)
         self.family = family
         self.id = "%s.%s" % (family, token)
@@ -50,11 +54,11 @@ class Route(str):
         return self
 
     @property
-    def token(self):
+    def token(self) -> str:
         """The legacy wire token (the ``str`` value itself; debug / ABI / messages only)."""
         return str(self)
 
-    def manifest(self):
+    def manifest(self) -> dict:
         """The structured manifest row of this route (inspection / reports)."""
         return {
             "family": self.family,
@@ -65,11 +69,11 @@ class Route(str):
             "limitations": list(self.limitations),
         }
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "Route(%s)" % self.id
 
 
-def _split(csv):
+def _split(csv: str) -> tuple:
     return tuple(s for s in csv.split(",") if s) if csv else ()
 
 
@@ -192,7 +196,7 @@ _REGISTRY = {
 }
 
 
-def resolve(family, token, context="routes"):
+def resolve(family: str, token: str, context: str = "routes") -> Route:
     """Resolve a wire @p token to its typed :class:`Route` -- refuse an unknown one, never default.
 
     The refusal cites the requested descriptor token, the family and the valid route set
@@ -211,12 +215,12 @@ def resolve(family, token, context="routes"):
     return route
 
 
-def routes_of(family):
+def routes_of(family: str) -> tuple:
     """The ordered typed routes of @p family (registry order = route_ids.hpp order)."""
     return tuple(_REGISTRY[family].values())
 
 
-def route_manifest():
+def route_manifest() -> list:
     """The full structured route manifest (every family, registry order) -- inspection surface."""
     return [route.manifest() for family in _TABLES for route in _REGISTRY[family].values()]
 
@@ -233,7 +237,7 @@ ROUTE_REGISTRY_VERSION = 1
 CAPABILITY_VOCAB_VERSION = 0
 
 
-def route_registry_signature():
+def route_registry_signature() -> str:
     """Compact per-family signature "family:count,..." (registry order) -- the embedded form.
 
     MIRROR of pops::route_registry_signature() (route_ids.hpp); the two strings must stay equal
@@ -243,7 +247,7 @@ def route_registry_signature():
     return ",".join("%s:%d" % (family, len(_TABLES[family])) for family in _TABLES)
 
 
-def route_registry_hash():
+def route_registry_hash() -> str:
     """Stable hash of the FULL route registry (tokens, entries, requirements, limitations).
 
     Enters every compiled-artifact cache key (ADC-599): any registry change -- a new route, a
@@ -318,7 +322,7 @@ POISSON_RHS_COMPOSITE = _REGISTRY["poisson_rhs"]["composite"]
 WALL_NONE = _REGISTRY["wall"]["none"]
 WALL_CIRCLE = _REGISTRY["wall"]["circle"]
 
-def euler_layout_ok(compiled, flux):
+def euler_layout_ok(compiled: Any, flux: Any) -> bool:
     """True when @p compiled is a canonical 4-variable Euler transport (n_vars == 4 + primitive 'p')
     that did NOT emit the generic capability for @p flux -- the acceptance test for the explicit
     euler_hllc / euler_roe routes (ADC-590). Shared by the System and unified install guards."""
@@ -327,7 +331,7 @@ def euler_layout_ok(compiled, flux):
             and "p" in getattr(compiled, "prim_names", []) and not emitted)
 
 
-def check_riemann_capability(flux, compiled, ctx):
+def check_riemann_capability(flux: Any, compiled: Any, ctx: Any) -> None:
     """Gate the selected Riemann flux against the model's emitted capabilities (ADC-590).
 
     Shared by System.add_equation and AmrSystem.add_equation (@p flux is a Route or a bare wire
@@ -340,7 +344,7 @@ def check_riemann_capability(flux, compiled, ctx):
     rides through :func:`pops.numerics.riemann.waves.check_hll_waves` at the call site (routes.py
     stays import-free of the pops package).
     """
-    def _tail():
+    def _tail() -> str:
         return ("[requested route %s -> %s; requires: %s]"
                 % (getattr(flux, "id", flux), getattr(flux, "native_entry", "?"),
                    ", ".join(getattr(flux, "requirements", ()))))
@@ -364,7 +368,8 @@ def check_riemann_capability(flux, compiled, ctx):
             % (ctx, flux, generic, _tail()))
 
 
-def check_wave_speed_provider(requested_kind, compiled, ctx, actual_provider=None):
+def check_wave_speed_provider(requested_kind: Any, compiled: Any, ctx: Any,
+                              actual_provider: Any = None) -> None:
     """Cross-check an HLL(waves=<provider>) request against the compiled model's source (ADC-552).
 
     @p requested_kind is the provider kind an ``HLL(waves=...)`` descriptor pinned (a signed-pair
@@ -396,7 +401,7 @@ def check_wave_speed_provider(requested_kind, compiled, ctx, actual_provider=Non
                                     _provider_factory(actual_provider)))
 
 
-def _provider_factory(kind):
+def _provider_factory(kind: Any) -> str:
     """The typed factory name for a provider @p kind (used in the mismatch message)."""
     return {"explicit_pair": "ExplicitPair()", "jacobian": "FromJacobian()",
             "pressure_derived": "FromPressure()", "einfeldt": "Einfeldt()",

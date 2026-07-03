@@ -4,6 +4,10 @@ A :class:`Constant` is a named, optionally-dimensioned compile-time value. It is
 "valeur dimensionnee" of Spec 5 sec.5.12 -- a :class:`pops.params.ConstParam` that also
 carries a unit string for documentation / dimensional bookkeeping. Inert.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.params.runtime import ConstParam
 
 
@@ -12,12 +16,13 @@ class Constant(ConstParam):
 
     category = "constant"
 
-    def __init__(self, name, value, unit=None, dtype=None):
+    def __init__(self, name: str, value: Any, unit: str | None = None,
+                 dtype: Any = None) -> None:
         from pops.math import Real
         super().__init__(name, value, dtype=dtype if dtype is not None else Real)
         self.unit = unit
 
-    def options(self):
+    def options(self) -> dict:
         opt = super().options()
         opt["unit"] = self.unit
         return opt

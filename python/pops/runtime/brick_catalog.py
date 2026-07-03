@@ -18,6 +18,7 @@ The alias source spellings (``lorentz`` / ``potential_lorentz``) are PARSE-ONLY 
 ``pops.runtime.routes`` (``_ALIASES``); they are never catalog rows, so each catalog entry is one
 canonical brick.
 """
+from __future__ import annotations
 
 # --- The catalog table: MIRROR of kBrickCatalog (brick_catalog.hpp), one row per line, same order.
 # (category, id, route_index, native_entry, params_csv, n_vars, polar_ok, requirements_csv,
@@ -54,7 +55,7 @@ _FIELDS = ("category", "id", "route_index", "native_entry", "params", "n_vars", 
            "requirements", "capabilities", "summary")
 
 
-def _row_dict(row):
+def _row_dict(row: tuple) -> dict:
     """One catalog row as a plain dict; the CSV columns become lists (JSON-ready)."""
     entry = dict(zip(_FIELDS, row, strict=True))
     entry["params"] = [p for p in entry["params"].split(",") if p]
@@ -63,7 +64,7 @@ def _row_dict(row):
     return entry
 
 
-def brick_catalog():
+def brick_catalog() -> list:
     """The full builtin brick catalog: an ordered list of dicts (one per canonical brick).
 
     Registry order (3 transports, 5 canonical sources, 3 elliptics). Each dict carries the id,
@@ -73,12 +74,12 @@ def brick_catalog():
     return [_row_dict(row) for row in _TABLE]
 
 
-def catalog_ids(category):
+def catalog_ids(category: str) -> list:
     """The ordered canonical ids of @p category (mirror of C++ catalog_csv, as a list)."""
     return [row[1] for row in _TABLE if row[0] == category]
 
 
-def resolve(category, id, context="brick catalog"):
+def resolve(category: str, id: str, context: str = "brick catalog") -> dict:
     """Resolve (@p category, @p id) to its catalog entry -- refuse an unknown one, never default.
 
     The refusal lists the catalog entries of that category (derived from the table, never
