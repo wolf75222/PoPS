@@ -17,6 +17,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 ## [Unreleased]
 
 ### Changed
+- ADC-628 Completed the ADC-550 cleanup: dropped the three remaining byte-identical `to_json`
+  overrides (Arguments / MemoryEstimate / CompiledReport now inherit the `Report` base), cleaned
+  the last baseline ruff findings, rolled `from __future__ import annotations` plus parameter and
+  return annotations out over every `python/pops` package (mixins gain TYPE_CHECKING-only contract
+  bases; `pyrightconfig.json` now includes the whole package at zero pyright-basic errors), and
+  added the missing docstrings on the non-trivial public surface.
 - ADC-550 Cleanup pass on `python/pops`: removed a dead scratch-plan helper and three redundant
   `to_json` overrides (now inherited from the `Report` base, proven byte-identical by a new report
   round-trip test), and split the at-budget central modules (profile / system-install /

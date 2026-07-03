@@ -53,21 +53,27 @@ class Schedule:
         return Schedule(self.kind, policy=policy, **self.params)
 
     def recompute(self) -> Any:
+        """A copy whose off-cadence policy re-evaluates the node (the default)."""
         return self._with_policy("recompute")
 
     def hold(self) -> Any:
+        """A copy whose off-cadence policy reuses the cached value (needs a cacheable op)."""
         return self._with_policy("hold")
 
     def skip(self) -> Any:
+        """A copy whose off-cadence policy skips the node entirely."""
         return self._with_policy("skip")
 
     def zero(self) -> Any:
+        """A copy whose off-cadence policy substitutes a zero value."""
         return self._with_policy("zero")
 
     def accumulate_dt(self) -> Any:
+        """A copy whose off-cadence policy accumulates dt until the node is next due."""
         return self._with_policy("accumulate_dt")
 
     def error(self) -> Any:
+        """A copy whose off-cadence policy raises: the node must never run off cadence."""
         return self._with_policy("error")
 
     def __repr__(self) -> str:

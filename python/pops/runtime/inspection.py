@@ -121,6 +121,11 @@ class RuntimeInspectionReport(Report):
 
 
 def build_runtime_inspection(sim: Any, *, runtime: Any) -> Any:
+    """Build the :class:`RuntimeInspectionReport` of a bound simulation (inert, no numerics).
+
+    Reads the carried metadata of @p sim (blocks, clock, capabilities, program, profile,
+    history, cache, diagnostics) plus the native capability report; @p runtime names the
+    runtime kind ("System" / "AmrSystem"). It runs no step and touches no field data."""
     cap_report = native_capability_report()
     cap_dict = cap_report.to_dict()
     options = _options(sim, runtime)

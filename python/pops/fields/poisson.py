@@ -32,11 +32,13 @@ class PoissonProblem(FieldProblem):
     category = "poisson_problem"
 
     def capabilities(self) -> Any:
+        """The FieldProblem capabilities plus the ``poisson`` family tag."""
         caps = super().capabilities().to_dict()
         caps["poisson"] = True
         return CapabilitySet(caps)
 
     def validate(self, context: Any = None) -> bool:
+        """Additionally refuse an equation whose principal operator is not elliptic."""
         super().validate(context)
         if isinstance(self.equation, Equation):
             if not (principal_kinds(self.equation.lhs) & _PRINCIPAL_OPERATORS):
@@ -56,11 +58,13 @@ class ScreenedPoissonProblem(PoissonProblem):
     category = "screened_poisson_problem"
 
     def capabilities(self) -> Any:
+        """The Poisson capabilities plus the ``screened`` family tag."""
         caps = super().capabilities().to_dict()
         caps["screened"] = True
         return CapabilitySet(caps)
 
     def validate(self, context: Any = None) -> bool:
+        """Additionally require the reaction term and a screened-capable solver."""
         super().validate(context)
         if isinstance(self.equation, Equation):
             if "reaction" not in principal_kinds(self.equation.lhs):
@@ -86,11 +90,13 @@ class AnisotropicPoissonProblem(PoissonProblem):
     category = "anisotropic_poisson_problem"
 
     def capabilities(self) -> Any:
+        """The Poisson capabilities plus the ``anisotropic`` family tag."""
         caps = super().capabilities().to_dict()
         caps["anisotropic"] = True
         return CapabilitySet(caps)
 
     def validate(self, context: Any = None) -> bool:
+        """Additionally require div(coeff*grad) and an anisotropic-capable solver."""
         super().validate(context)
         if isinstance(self.equation, Equation):
             if "div_coeff_grad" not in principal_kinds(self.equation.lhs):

@@ -280,6 +280,7 @@ class Problem:
         return self._layout.name if self._layout is not None else None
 
     def options(self) -> Any:
+        """The authoring summary: name, layout and the per-registry counts (a plain dict)."""
         return {"name": self._name, "layout": self._layout_name(),
                 "n_blocks": len(self._block_registry), "n_fields": len(self._field_registry),
                 "n_params": len(self._param_registry), "n_aux": len(self._runtime_registry.aux),

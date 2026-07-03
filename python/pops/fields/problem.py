@@ -152,6 +152,7 @@ class FieldProblem(Descriptor):
         return CapabilitySet({"elliptic": True})
 
     def available(self, context: Any = None) -> Any:
+        """Explain whether this field problem can lower: needs an Equation and a solver."""
         if not isinstance(self.equation, Equation):
             return Availability.no(
                 "%s needs a pops.math.Equation; got %r" % (self.name, type(self.equation).__name__),
@@ -161,6 +162,7 @@ class FieldProblem(Descriptor):
         return Availability.yes()
 
     def validate(self, context: Any = None) -> bool:
+        """Refuse a malformed field problem loudly (non-Equation, missing solver, bad cadence)."""
         if isinstance(self.equation, bool):
             raise TypeError(
                 "%s: equation must be a pops.math.Equation built from PoPS operators "
@@ -395,7 +397,7 @@ class FieldProblem(Descriptor):
                 "use pops.solvers.elliptic.%s."
                 % (self.name, solver_name, operator, tag, alternative))
 
-    def solve(self, schedule: Any, policy: Any) -> "FieldProblem":
+    def solve(self, schedule: Any, policy: Any) -> FieldProblem:
         """Record an inert field-solve cadence (a schedule + a not-due policy).
 
         Pairs a typed :class:`pops.time.Schedule` (WHEN to solve -- e.g. ``every(4)`` to

@@ -40,15 +40,18 @@ class Availability:
 
     @classmethod
     def yes(cls, reason: str = "") -> Availability:
+        """An available status (truthy), with an optional reason."""
         return cls("yes", reason)
 
     @classmethod
     def no(cls, reason: str, *, missing: Any = None, alternatives: Any = None) -> Availability:
+        """An unavailable status (falsy) carrying the reason, what is missing and alternatives."""
         return cls("no", reason, missing=missing, alternatives=alternatives)
 
     @classmethod
     def partial(cls, reason: str, *, missing: Any = None,
                 alternatives: Any = None) -> Availability:
+        """A partially-available status (falsy): usable with limitations named in the reason."""
         return cls("partial", reason, missing=missing, alternatives=alternatives)
 
     @property
@@ -139,6 +142,7 @@ class Descriptor:
         return {}
 
     def available(self, context: Any = None) -> Availability:
+        """The default contract: unconditionally available (a refusing route overrides this)."""
         return Availability.yes()
 
     def validate(self, context: Any = None) -> bool:
@@ -177,6 +181,7 @@ class Descriptor:
                                  native_id=self.native_id, options=self.options())
 
     def inspect(self) -> dict:
+        """A plain-dict view of the descriptor: identity, options, requirements, capabilities."""
         return {"name": self.name, "category": self.category, "native_id": self.native_id,
                 "options": self.options(), "requirements": self.requirements().to_dict(),
                 "capabilities": self.capabilities().to_dict()}
