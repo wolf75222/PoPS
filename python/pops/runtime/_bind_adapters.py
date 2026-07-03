@@ -45,13 +45,13 @@ class _RuntimeAdapter:
         """Construct and return the internal engine (System / AmrSystem). Overridden per adapter."""
         raise NotImplementedError
 
-    def install(self, engine: Any, compiled: Any, *, instances: Any, params: Any, aux: Any,
-                solvers: Any, cadence: Any, outputs: Any) -> Any:
+    def install(self, engine, compiled, *, instances, params, aux, solvers, cadence, outputs,
+                diagnostics):
         """Lower the bind inputs onto @p engine's internal ``_install_compiled`` seam. Overridden."""
         raise NotImplementedError
 
-    def build(self, compiled: Any, *, layout: Any, instances: Any, params: Any, aux: Any,
-              solvers: Any, cadence: Any, outputs: Any) -> Any:
+    def build(self, compiled, *, layout, instances, params, aux, solvers, cadence, outputs,
+              diagnostics=()):
         """Build the engine, install the compiled Problem onto it, wrap it in a bound-simulation view.
 
         This is the one place Uniform and AMR share: the adapter-specific ``build_engine`` /
@@ -62,7 +62,7 @@ class _RuntimeAdapter:
 
         engine = self.build_engine(layout)
         self.install(engine, compiled, instances=instances, params=params, aux=aux,
-                     solvers=solvers, cadence=cadence, outputs=outputs)
+                     solvers=solvers, cadence=cadence, outputs=outputs, diagnostics=diagnostics)
         return BoundSimulation(engine)
 
 
@@ -87,10 +87,11 @@ class _UniformRuntimeAdapter(_RuntimeAdapter):
             return System()
         return System(_system_config_from_layout(layout))
 
-    def install(self, engine: Any, compiled: Any, *, instances: Any, params: Any, aux: Any,
-                solvers: Any, cadence: Any, outputs: Any) -> Any:
+    def install(self, engine, compiled, *, instances, params, aux, solvers, cadence, outputs,
+                diagnostics):
         engine._install_compiled(compiled, instances=instances, params=params, aux=aux,
-                                 solvers=solvers, cadence=cadence, outputs=outputs)
+                                 solvers=solvers, cadence=cadence, outputs=outputs,
+                                 diagnostics=diagnostics)
 
 
 class _AmrRuntimeAdapter(_RuntimeAdapter):
@@ -123,13 +124,14 @@ class _AmrRuntimeAdapter(_RuntimeAdapter):
         _flow_amr_layout(engine, layout, n_blocks=self._n_blocks)
         return engine
 
-    def install(self, engine: Any, compiled: Any, *, instances: Any, params: Any, aux: Any,
-                solvers: Any, cadence: Any, outputs: Any) -> Any:
+    def install(self, engine, compiled, *, instances, params, aux, solvers, cadence, outputs,
+                diagnostics):
         # AMR installs via the NATIVE path (compiled=None): each instance carries its OWN
         # target='amr_system' CompiledModel, wired with add_equation -> add_native_block. There is
         # NO whole-system time Program install on AMR (AmrSystem rejects compiled != None).
         engine._install_compiled(compiled=None, instances=instances, params=params, aux=aux,
-                                 solvers=solvers, cadence=cadence, outputs=outputs)
+                                 solvers=solvers, cadence=cadence, outputs=outputs,
+                                 diagnostics=diagnostics)
 
 
 def adapter_for(target: Any, layout: Any, n_blocks: Any = 1) -> Any:

@@ -140,11 +140,14 @@ PYBIND_LEGACY_NAMES = {
 # a duplicate subsystem should require an intentional split or a reviewed budget.
 LARGE_RUNTIME_FILE_BUDGETS = {
     "python/bindings/system/base/system.cpp": 3200,
-    "python/bindings/amr/amr_system.cpp": 2200,
+    # ADC-542: the AMR composite_reduce + rebuild_hierarchy (v3 restart) + level_owner_ranks facade
+    # seams (native diagnostics / restartable-under-regridding) grew this by ~100 lines.
+    "python/bindings/amr/amr_system.cpp": 2320,
     "include/pops/runtime/amr/amr_runtime.hpp": 1850,
     "include/pops/runtime/system/system_field_solver.hpp": 1100,
     "python/pops/runtime/_system_unified_install.py": 550,
-    "python/pops/runtime/system.py": 260,
+    # ADC-542: the run-loop diagnostics firing (run / _fire_diagnostics) added to System.run.
+    "python/pops/runtime/system.py": 285,
     "python/pops/runtime/amr_system.py": 560,
 }
 
