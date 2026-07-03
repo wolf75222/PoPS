@@ -25,6 +25,7 @@ import numpy as np
 
 import pops
 from pops.physics.multispecies import CoupledSource
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def chk(cond, msg, fails):
@@ -55,7 +56,7 @@ def density_block(alpha=1.0, n0=1.0):
 
 
 def make_system(n, ne0, ni0, ng0):
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     # n0 = densite uniforme de chaque bloc : f = alpha (n - n0) = 0 a l'init (phi uniforme -> derive nulle)
     sim.add_block("electrons", model=density_block(n0=ne0), spatial=pops.Spatial(none=True))
     sim.add_block("ions", model=density_block(n0=ni0), spatial=pops.Spatial(none=True))

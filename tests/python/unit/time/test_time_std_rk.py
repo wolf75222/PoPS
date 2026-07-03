@@ -21,6 +21,7 @@ Pure-Python IR construction is always available; the compiled section gates on t
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _pops_time():
@@ -123,7 +124,7 @@ def _run_section_b(t):
     except Exception as exc:  # noqa: BLE001
         print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+    if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
         print("-- (B) skipped: _pops lacks install_program (rebuild _pops) --")
         return
 
@@ -149,7 +150,7 @@ def _run_section_b(t):
     rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
 
     def run(handle):
-        sim = pops.System(n=n, L=1.0, periodic=True)
+        sim = System(n=n, L=1.0, periodic=True)
         try:
             cm = _passive_model("rk_block").compile(backend="production")
         except RuntimeError as exc:

@@ -18,6 +18,7 @@ import sys
 import numpy as np
 
 import pops
+from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 fails = 0
 
@@ -46,7 +47,7 @@ def smooth(n, L=1.0):
 
 
 def build(n=20, B0=4.0, schur=None, steps=4):
-    sim = pops.System(n=n, L=1.0, periodic=False)
+    sim = System(n=n, L=1.0, periodic=False)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="dirichlet")
     sim.set_magnetic_field(B0 * np.ones((n, n)))
     sim.add_equation("e", model=iso_model(),
@@ -79,7 +80,7 @@ except RuntimeError as e:
 
 # --- (3) overrides sur l'etage POLAIRE : ACCEPTES depuis la vague 3 -----------------
 print("== (3) polaire : overrides cables (ctor a composantes explicites) ==")
-psim = pops.System(mesh=pops.PolarMesh(r_min=0.5, r_max=1.0, nr=16, ntheta=16))
+psim = System(mesh=pops.PolarMesh(r_min=0.5, r_max=1.0, nr=16, ntheta=16))
 psim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="dirichlet")
 psim.set_magnetic_field(4.0 * np.ones(16 * 16))
 psim.add_equation("e", model=iso_model(),
@@ -96,7 +97,7 @@ chk(np.all(np.isfinite(np.asarray(psim.get_state("e")))),
 
 # --- (4) overrides sur amr-schur : ACCEPTES depuis la vague 3 (krylov + roles) -------
 print("== (4) amr-schur : descripteurs + krylov transportes ==")
-amr = pops.AmrSystem(n=16, L=1.0, periodic=False, regrid_every=0)
+amr = AmrSystem(n=16, L=1.0, periodic=False, regrid_every=0)
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="dirichlet")
 amr.set_refinement(1e30)
 amr.set_magnetic_field(4.0 * np.ones((16, 16)))
@@ -114,7 +115,7 @@ amr.step(1e-3)
 chk(np.all(np.isfinite(np.asarray(amr.density("e")))),
     "amr-schur + descripteurs par nom + krylov : un pas fini")
 # magnetic_field reste fige sur le tampon B_z grossier dedie -> rejet explicite.
-amr2 = pops.AmrSystem(n=16, L=1.0, periodic=False, regrid_every=0)
+amr2 = AmrSystem(n=16, L=1.0, periodic=False, regrid_every=0)
 amr2.set_poisson(rhs="charge_density", solver="geometric_mg", bc="dirichlet")
 amr2.set_refinement(1e30)
 amr2.set_magnetic_field(4.0 * np.ones((16, 16)))

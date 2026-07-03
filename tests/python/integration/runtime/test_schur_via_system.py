@@ -12,8 +12,8 @@ la volee, aucune dependance au compilateur C++, CI-safe.
 MODELE NATIF : pops.FluidState(isothermal) + pops.IsothermalFlux() expose les roles
 Density / MomentumX / MomentumY -- exactement ceux requis par set_source_stage.
 Le chemin est :
-  pops.System.add_equation (time=pops.Split(source=pops.CondensedSchur(...)))
-    -> pops.System.add_equation (time=time.hyperbolic = pops.Explicit())   # transport
+  System.add_equation (time=pops.Split(source=pops.CondensedSchur(...)))
+    -> System.add_equation (time=time.hyperbolic = pops.Explicit())   # transport
       -> _s.add_block (ModelSpec -> dispatch_model -> IsothermalFlux)
     -> _s.set_source_stage (name, kind, theta, alpha)                    # etage Schur
   sim.step(dt)
@@ -44,6 +44,7 @@ import numpy as np
 
 try:
     import pops
+    from pops.runtime.system import System  # ADC-545 advanced runtime seam
 except ImportError as e:
     print("skip  module pops absent (PYTHONPATH ?) : %s" % e)
     sys.exit(0)
@@ -88,7 +89,7 @@ def build_system(n=24, L=1.0, B0=4.0, alpha=3.0, theta=1.0, with_schur=True,
     Chemin de reference quand with_schur=False :
       add_equation (Explicit) -> add_block (IsothermalFlux), sans set_source_stage
     """
-    sim = pops.System(n=n, L=L, periodic=False)
+    sim = System(n=n, L=L, periodic=False)
     sim.set_poisson(bc="dirichlet")
     sim.set_magnetic_field(B0 * np.ones((n, n)))
     if with_schur:

@@ -22,6 +22,7 @@ import numpy as np
 
 import pops
 from test_dsl_hybrid import build_iso_transport, CS2
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 RATE = 3.0
 from tests.python.support.requirements import repo_include
@@ -64,7 +65,7 @@ def main():
             backend="production", so_path=os.path.join(tmp, "ions_hybrid.so"), include=INCLUDE)
 
         def run(add_ions, collision=True):
-            s = pops.System(n=n, L=L, periodic=True)
+            s = System(n=n, L=L, periodic=True)
             s.add_block("electrons", spec_e, spatial=spatial, time=pops.Explicit())
             add_ions(s)
             s.set_poisson(rhs="charge_density", solver="geometric_mg")

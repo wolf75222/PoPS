@@ -29,6 +29,7 @@ from pops.physics.facade import Model
 from pops.physics.model import HyperbolicModel
 
 from tests.python.support.requirements import repo_include
+from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 INCLUDE = repo_include()
 
 
@@ -109,7 +110,7 @@ def test_form():
 def test_facade_rejects():
     """Rejets de la FACADE qui ne demandent aucun bloc compile (resolution avant la table) : B_z / T_e
     rediriges vers leur chemin dedie, nom canonique non fixable, bloc inconnu."""
-    sim = pops.System(n=8, L=1.0, periodic=True)
+    sim = System(n=8, L=1.0, periodic=True)
     field = np.ones((8, 8))
     # B_z -> set_magnetic_field (message redirigeant)
     try:
@@ -158,7 +159,7 @@ def test_end_to_end():
         assert compiled.aux_extra_names == ["kappa"], "aux_extra_names attendu ['kappa']"
         assert compiled.n_aux == 6, "n_aux=6 attendu (5 + 1 champ nomme)"
 
-        sim = pops.System(n=n, L=L, periodic=True)
+        sim = System(n=n, L=L, periodic=True)
         sim.set_poisson(rhs="charge_density", solver="geometric_mg")
         sim.add_equation("decay", model=compiled,
                          spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
@@ -222,7 +223,7 @@ def _have_compiler():
 
 
 def test_polar_named_aux():
-    """ADC-291 phase 2 : un aux NOMME (aux_field) lu en geometrie POLAIRE via pops.System(PolarMesh).
+    """ADC-291 phase 2 : un aux NOMME (aux_field) lu en geometrie POLAIRE via System(PolarMesh).
     Avant ADC-291, le chemin polaire n'elargissait pas le canal aux (System::add_block polaire sans
     ensure_aux_width) -> set_aux_field('kappa') aurait leve 'canal a 3 composantes' (ou lu hors borne).
     On verifie set + lecture + eval_rhs = source = -kappa*n exact sur l'anneau."""
@@ -234,7 +235,7 @@ def test_polar_named_aux():
         m = build_decay_model()
         compiled = m.compile(os.path.join(tmp, "kpolar.so"), include=INCLUDE, backend="aot")
         nr, nth = 16, 16
-        sim = pops.System(mesh=pops.PolarMesh(r_min=0.3, r_max=1.0, nr=nr, ntheta=nth))
+        sim = System(mesh=pops.PolarMesh(r_min=0.3, r_max=1.0, nr=nr, ntheta=nth))
         sim.add_equation("decay", model=compiled,
                          spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                          time=pops.Explicit())
@@ -290,7 +291,7 @@ def test_amr_named_aux_single_block_regrid():
         lo, hi = n // 3, 2 * n // 3  # central bump [8, 16)^2
 
         # (a) reference : SANS set_aux_field -> kappa=0 -> masse inchangee (meme avec raffinement).
-        ref = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
+        ref = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
         ref.add_equation("decay", model=_compile_amr_decay(tmp, "amr0.so"), spatial=sp, time=pops.Explicit())
         ref.set_poisson(rhs="charge_density", solver="geometric_mg")
         ref.set_refinement(2.0)  # refine where density (comp 0) > 2 -> tags the bump
@@ -301,7 +302,7 @@ def test_amr_named_aux_single_block_regrid():
         assert abs(ref.mass("decay") - m0) < 1e-10, "sans kappa la masse AMR devrait etre inchangee"
 
         # (b) AVEC kappa uniforme + raffinement + regrid : decroissance persistante ET uniforme.
-        sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
+        sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
         sim.add_equation("decay", model=_compile_amr_decay(tmp, "amr1.so"), spatial=sp, time=pops.Explicit())
         sim.set_poisson(rhs="charge_density", solver="geometric_mg")
         sim.set_refinement(2.0)
@@ -358,7 +359,7 @@ def test_amr_named_aux_multiblock_regrid():
         c0 = 1.0
         plain_so = build_const_decay_model("plaindecay", c0).compile(
             os.path.join(tmp, "amrplain.so"), include=INCLUDE, backend="production", target="amr_system")
-        sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
+        sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
         sim.add_equation("decay", model=decay_so, spatial=sp, time=pops.Explicit())
         sim.add_equation("plain", model=plain_so, spatial=sp, time=pops.Explicit())
         sim.set_poisson(rhs="charge_density", solver="geometric_mg")
@@ -389,7 +390,7 @@ def test_amr_named_aux_multiblock_regrid():
 def test_amr_named_aux_rejections():
     """ADC-291 : rejets de la facade AMR set_aux_field (parite avec System) : canal canonique redirige,
     bloc inconnu, champ non declare. Aucun compilateur requis (resolution AVANT le build)."""
-    sim = pops.AmrSystem(n=8, L=1.0, periodic=True)
+    sim = AmrSystem(n=8, L=1.0, periodic=True)
     field = np.ones((8, 8))
     for nm, redirect in (("B_z", "set_magnetic_field"), ("phi", "CANONICAL")):
         try:

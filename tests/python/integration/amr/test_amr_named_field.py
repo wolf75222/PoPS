@@ -20,6 +20,7 @@ import sys
 
 
 from tests.python.support.assertions import _check
+from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 
 
 def _raises(exc_types, fn):
@@ -171,7 +172,7 @@ def _run_section_b():
         return True
 
     # _pops must expose the AMR named-field read-back binding (rebuild _pops if not).
-    if not hasattr(pops.AmrSystem(n=8, L=1.0, periodic=True), "named_field_values"):
+    if not hasattr(AmrSystem(n=8, L=1.0, periodic=True), "named_field_values"):
         print("-- (B) skipped: _pops lacks AmrSystem.named_field_values (rebuild _pops) --")
         return True
 
@@ -200,7 +201,7 @@ def _run_section_b():
     # first, then the named field), and sim.field("psi") reads the solved coarse potential.
     from pops.runtime._bind_adapters import _amr_config_from_layout  # ADC-583: moved from codegen
     layout = AMR(CartesianMesh(n=N, L=1.0, periodic=True))
-    sim = pops.AmrSystem(_amr_config_from_layout(layout))
+    sim = AmrSystem(_amr_config_from_layout(layout))
     sim.set_poisson("charge_density", "geometric_mg")
     sim.add_equation("plasma", compiled,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),

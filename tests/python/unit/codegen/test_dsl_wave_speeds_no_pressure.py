@@ -39,6 +39,7 @@ import pops
 from pops.codegen.toolchain import _default_cxx
 from pops.physics.bricks import HyperbolicBrick
 from pops.physics.facade import Model
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
 from tests.python.support.requirements import missing_aot_requirement, repo_include
@@ -161,7 +162,7 @@ chk(dis > 1e-3, f"les references HLL et Rusanov DIFFERENT (dmax = {dis:.3e}) : l
 _RIEMANN = {"hll": HLL(), "rusanov": Rusanov()}
 for label, riemann in (("(3) riemann='hll'", "hll"), ("(4) riemann='rusanov'", "rusanov")):
     print(f"== {label} : eval_rhs == reference numpy ==")
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     sim.add_equation("toy", model=compiled,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=_RIEMANN[riemann]),
                      time=pops.Explicit())
@@ -182,7 +183,7 @@ m_eig.primitive_vars(e1, e2)
 m_eig.conservative_from([e1, e2])
 c_eig = m_eig.compile(os.path.join(tmp, "eigonly.so"), INCLUDE, backend="aot")
 chk(not getattr(c_eig, "has_wave_speeds", True), "has_wave_speeds faux (eigenvalues sans 'p')")
-sim = pops.System(n=16, L=1.0, periodic=True)
+sim = System(n=16, L=1.0, periodic=True)
 msg = err_msg(lambda: sim.add_equation(
     "eig", model=c_eig, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL()),
     time=pops.Explicit()))
@@ -203,7 +204,7 @@ m_p.primitive_vars(rho, u, v)
 m_p.conservative_from([rho, rho * u, rho * v])
 c_p = m_p.compile(os.path.join(tmp, "withp.so"), INCLUDE, backend="aot")
 chk(getattr(c_p, "has_wave_speeds", False), "has_wave_speeds vrai (chemin historique 'p' + eigenvalues)")
-sim = pops.System(n=16, L=1.0, periodic=True)
+sim = System(n=16, L=1.0, periodic=True)
 msg = err_msg(lambda: sim.add_equation(
     "gasp", model=c_p, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL()),
     time=pops.Explicit()))

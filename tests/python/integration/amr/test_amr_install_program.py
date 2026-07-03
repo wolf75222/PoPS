@@ -37,6 +37,7 @@ try:
     from pops.physics.facade import Model
     from pops.ir.ops import sqrt
     from pops.physics.model import RuntimeParam
+    from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
     print("skip test_amr_install_program (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -121,7 +122,7 @@ def test_amr_program_seam_validates_arguments():
     arguments. set_program_cadence rejects substeps/stride < 1; set_program_params rejects an unseeded
     program block (no compiled Program installed -> no block has runtime params)."""
     print("== AmrSystem program seam validates its arguments (no Kokkos run) ==")
-    amr = pops.AmrSystem(n=N, L=1.0)
+    amr = AmrSystem(n=N, L=1.0)
     if not hasattr(amr, "set_program_cadence"):
         print("skip (_pops lacks the AMR program seam; rebuild _pops)")
         return
@@ -150,7 +151,7 @@ def test_amr_install_program_end_to_end_kokkos():
     key + name binding + param seed + the per-level macro-step -- is wired). Self-skips without a
     compiler / Kokkos. The CUDA run is the ROMEO step; bit-identical parity is test_amr_program_parity."""
     print("== AMR install_program installs + runs the per-level driver ==")
-    amr = pops.AmrSystem(n=N, L=1.0, regrid_every=0)
+    amr = AmrSystem(n=N, L=1.0, regrid_every=0)
     if not hasattr(amr, "install_program"):
         print("skip (_pops lacks AmrSystem.install_program; rebuild _pops)")
         return
@@ -193,7 +194,7 @@ def test_multi_block_amr_program_install_fails_loud():
     self-skips otherwise. The 2-block .so carries pops_program_block_count == 2, the signal the C++
     install_program guard checks."""
     print("== a multi-block AMR Program install fails loud (fix 2: v1 single-block-AMR limit) ==")
-    amr = pops.AmrSystem(n=N, L=1.0, regrid_every=0)
+    amr = AmrSystem(n=N, L=1.0, regrid_every=0)
     if not hasattr(amr, "install_program"):
         print("skip (_pops lacks AmrSystem.install_program; rebuild _pops)")
         return

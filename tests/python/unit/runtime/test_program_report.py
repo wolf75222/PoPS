@@ -33,6 +33,7 @@ except Exception as exc:  # noqa: BLE001
 
 
 from tests.python.support.assertions import _check
+from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 
 def _isothermal_model():
@@ -45,7 +46,7 @@ def _isothermal_model():
 
 def _fresh_system(n=8):
     """Un System n x n periodique avec UN bloc natif (aucun program installe)."""
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     sim.add_block("ions", _isothermal_model(),
                   spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
@@ -150,7 +151,7 @@ def test_inspection_program_section_from_report():
 
 def test_amr_report_shares_the_contract():
     """AmrSystem.program_report renvoie le MEME value object (sous-systeme partage, ADC-594)."""
-    sim = pops.AmrSystem(n=8, L=1.0)
+    sim = AmrSystem(n=8, L=1.0)
     if not hasattr(sim, "program_report"):
         print("skip test_amr_report_shares_the_contract (pops lacks program_report; rebuild pops)")
         return

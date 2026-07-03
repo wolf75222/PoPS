@@ -27,6 +27,7 @@ from pops.physics.aux import roles_for
 from pops.physics.model import HyperbolicModel
 
 from tests.python.support.requirements import repo_include
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
 # global 300 s process-isolation budget (ADC-627, same class as test_compile_cache_backend).
 POPS_PROCESS_TIMEOUT = 900
@@ -158,7 +159,7 @@ def test_end_to_end():
         for backend in ("aot", "production"):
             so = e.compile(os.path.join(tmp, "facade_%s.so" % backend), INCLUDE,
                            backend=backend, require_metadata=True)
-            s = pops.System(n=n, L=L, periodic=True)
+            s = System(n=n, L=L, periodic=True)
             adder = getattr(s, HyperbolicModel.adder_for(backend))
             kw = dict(gamma=GAMMA) if backend == "production" else {}
             adder("gas", so, limiter="minmod", riemann="hllc", recon="primitive", **kw)
@@ -181,9 +182,9 @@ def test_end_to_end():
         b = e.compile_or_jit(os.path.join(tmp, "via_legacy.so"), INCLUDE, mode="compile")
         # la SOURCE generee est identique (le binaire peut differer par des chemins temporaires)
         assert e.emit_cpp_aot_source() == e.emit_cpp_aot_source(), "source non deterministe"
-        s1 = pops.System(n=n, L=L, periodic=True)
+        s1 = System(n=n, L=L, periodic=True)
         s1.add_compiled_block("g", a, limiter="minmod", riemann="hllc", recon="primitive")
-        s2 = pops.System(n=n, L=L, periodic=True)
+        s2 = System(n=n, L=L, periodic=True)
         s2.add_compiled_block("g", b, limiter="minmod", riemann="hllc", recon="primitive")
         assert s1.variable_names("g") == s2.variable_names("g")
         assert s1.variable_roles("g") == s2.variable_roles("g")
@@ -192,7 +193,7 @@ def test_end_to_end():
 
         # --- prototype : JIT (add_dynamic_block), roles/gamma transportes aussi (sans require_metadata) ---
         sop = e.compile(os.path.join(tmp, "facade_proto.so"), INCLUDE, backend="prototype")
-        sp = pops.System(n=n, L=L, periodic=True)
+        sp = System(n=n, L=L, periodic=True)
         getattr(sp, HyperbolicModel.adder_for("prototype"))("gas", sop, recon="minmod")
         assert sp.variable_names("gas") == ["rho", "rho_u", "rho_v", "E"], \
             "prototype : noms != metadonnees : %r" % sp.variable_names("gas")
@@ -206,7 +207,7 @@ def test_end_to_end():
         m = build_bz_scalar()
         c = 0.7
         so_bz = m.compile(os.path.join(tmp, "facade_bz.so"), INCLUDE, backend="aot")
-        sb = pops.System(n=n, L=L, periodic=True)
+        sb = System(n=n, L=L, periodic=True)
         sb.add_compiled_block("bz", so_bz, limiter="none", riemann="rusanov",
                               recon="conservative", names=["n"])
         sb.set_poisson(rhs="charge_density", solver="geometric_mg")

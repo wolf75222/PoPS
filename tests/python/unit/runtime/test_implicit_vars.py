@@ -26,6 +26,7 @@ Verifie :
 import sys
 import numpy as np
 import pops
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
 
@@ -53,7 +54,7 @@ def electron_model():
 
 def run(policy, n=24, dt=0.002, nsteps=4):
     """Avance le bloc electron avec la politique temporelle @p policy ; renvoie l'etat final (4, n, n)."""
-    s = pops.System(n=n, periodic=False)
+    s = System(n=n, periodic=False)
     s.add_block("ne", electron_model(), spatial=pops.Spatial(minmod=True), time=policy)
     s.set_poisson(bc="dirichlet")
     xs = meshx(n)
@@ -143,7 +144,7 @@ print("== 5. masque rejete sur une politique non-IMEX ==")
 # pops.Explicit ne porte pas implicit_vars ; on simule un appel direct add_block avec un masque
 # sur une politique explicite : le C++ doit lever (le masque n'a de sens qu'en IMEX).
 try:
-    s = pops.System(n=16, periodic=False)
+    s = System(n=16, periodic=False)
     s._s.add_block("ne", electron_model(), "minmod", "rusanov", "conservative",
                    "explicit", 1, True, 1, ["rho_u"], [])
     chk(False, "add_block(time='explicit', implicit_vars=['rho_u']) doit lever")

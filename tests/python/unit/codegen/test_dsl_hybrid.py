@@ -26,6 +26,7 @@ import numpy as np
 import pops
 from pops.ir.ops import sqrt
 from pops.physics.bricks import HyperbolicBrick, SourceBrick
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 CS2 = 1.0     # vitesse du son au carre (isotherme)
 QOM = -1.0    # q/m de la force du potentiel (non trivial : exerce le cuisson du parametre natif)
@@ -91,7 +92,7 @@ def main():
                      elliptic=pops.ChargeDensity(charge=Q))
 
     def fields(setup):
-        s = pops.System(n=n, L=L, periodic=True)
+        s = System(n=n, L=L, periodic=True)
         setup(s)
         s.set_poisson(rhs="charge_density", solver="geometric_mg")
         s.set_state("gas", Uflat)
@@ -138,7 +139,7 @@ def main():
               % max(dphi2, dres2))
 
         # --- (C) le bloc hybride AVANCE dans le System (masse conservee en periodique) ---
-        adv = pops.System(n=n, L=L, periodic=True)
+        adv = System(n=n, L=L, periodic=True)
         adv.add_equation("gas", co1, spatial=spatial, names=names)
         adv.set_poisson(rhs="charge_density", solver="geometric_mg")
         adv.set_state("gas", Uflat)
@@ -167,7 +168,7 @@ def main():
         # (schema host order 1 != production, donc smoke physique : tourne, fini, masse conservee).
         co1j = m1.compile(backend="prototype", so_path=os.path.join(tmp, "h1j.so"), include=INCLUDE)
         assert co1j.adder == "add_dynamic_block"
-        jit = pops.System(n=n, L=L, periodic=True)
+        jit = System(n=n, L=L, periodic=True)
         jit.add_equation("gas", co1j, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov()),
                          names=names)
         jit.set_poisson(rhs="charge_density", solver="geometric_mg")

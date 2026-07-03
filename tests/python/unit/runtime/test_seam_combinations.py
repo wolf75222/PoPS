@@ -8,7 +8,7 @@ System (and AmrSystem) add_block for EVERY (transport, flux) combination the man
 asserts a CFL step advances by a finite, positive dt. If a generated seam were mis-wired (wrong ctor,
 wrong flux maker), the block would fail to build or the step would not advance.
 
-It never fakes the engine: it builds a real pops.System / pops.AmrSystem via the public brick API and
+It never fakes the engine: it builds a real System / AmrSystem via the public brick API and
 skips cleanly if _pops (or numpy) is unavailable. Runs under pytest AND as a script (has __main__).
 """
 import math
@@ -19,6 +19,7 @@ try:
     import pops
     from pops.numerics.riemann import HLL, HLLC, Roe, Rusanov
     from pops.numerics.reconstruction.limiters import Minmod
+    from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 except Exception as exc:  # noqa: BLE001
     print("skip test_seam_combinations (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -86,7 +87,7 @@ def test_system_seam_combinations():
     n = 32
     for transport, flux in _SYSTEM_COMBOS:
         label = "System %s/%s" % (transport, flux or "-")
-        sim = pops.System(n=n, L=1.0, periodic=True)
+        sim = System(n=n, L=1.0, periodic=True)
         sim.add_block("blk", model=_model(transport), spatial=_spatial(transport, flux))
         _seed_density(sim, "blk", n)
         dt = sim.step_cfl(0.4)
@@ -98,7 +99,7 @@ def test_amr_seam_combinations():
     nb = 32
     for transport, flux in _AMR_COMBOS:
         label = "AmrSystem %s/%s" % (transport, flux or "-")
-        amr = pops.AmrSystem(n=nb, regrid_every=0, periodic=True)
+        amr = AmrSystem(n=nb, regrid_every=0, periodic=True)
         amr.add_block("blk", model=_model(transport), spatial=_spatial(transport, flux))
         # AmrSystem seeds its coarse density through the same brick facade as System.
         _seed_density(amr, "blk", nb)

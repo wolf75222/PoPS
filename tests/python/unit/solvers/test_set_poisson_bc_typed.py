@@ -17,6 +17,7 @@ from pops.runtime._system_install import _lower_bc
 
 try:
     import pops._pops  # noqa: F401
+    from pops.runtime.system import System  # ADC-545 advanced runtime seam
     _HAVE_ENGINE = True
 except Exception:  # pragma: no cover - exercised only without a built extension
     _HAVE_ENGINE = False
@@ -44,7 +45,7 @@ def _poisson_system(bc):
     from pops.numerics.reconstruction.limiters import Minmod
     from pops.numerics.riemann import Rusanov
     from pops.numerics.variables import Conservative
-    s = pops.System(n=32, L=1.0, periodic=False)
+    s = System(n=32, L=1.0, periodic=False)
     s.set_poisson(rhs="charge_density", solver="geometric_mg", bc=bc,
                   wall="circle", wall_radius=0.4)
     model = pops.Model(state=pops.FluidState(kind="isothermal", cs2=1.0),

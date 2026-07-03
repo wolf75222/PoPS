@@ -134,7 +134,7 @@ target_link_libraries(my_app PRIVATE pops::pops)
 ```
 
 Define a type that satisfies the `PhysicalModel` concept and compose it with the C++ coupling and
-time machinery. This is the low-level engine path. Most users should author a typed Python `Case`
+time machinery. This is the low-level engine path. Most users should author a typed Python `Problem`
 and let PoPS generate and bind the corresponding C++ artifact.
 
 ### From Python

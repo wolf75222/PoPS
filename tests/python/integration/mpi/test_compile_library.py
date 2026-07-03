@@ -1,10 +1,10 @@
-"""Spec 3 pops.compile_library: the library manifest / ABI / descriptor layer + the real ``.so``.
+"""Spec 3 pops.codegen.compile_library: the library manifest / ABI / descriptor layer + the real ``.so``.
 
-``pops.compile_library`` collects generated/macro/native brick objects into a
+``pops.codegen.compile_library`` collects generated/macro/native brick objects into a
 reusable-library MANIFEST (name, abi_key, brick list, requirements, capabilities,
 generated symbols) plus a stable content hash. With ``emit=True`` it ALSO emits the
 library C++ and compiles a REAL ``.so`` (same Kokkos toolchain a problem ``.so`` uses),
-which :func:`pops.read_library_manifest` reads back (dlopen) with a HARD ABI / Kokkos guard;
+which :func:`pops.codegen.read_library_manifest` reads back (dlopen) with a HARD ABI / Kokkos guard;
 ``pops.codegen.compile_problem(..., libraries=[...])`` reads + validates it. These tests pin the
 manifest shape, the hash stability/sensitivity, the reader round-trip, and -- when Kokkos
 is visible -- the real emit + compile + read-back + the ABI-mismatch hard error.
@@ -62,7 +62,7 @@ def _toolchain_or_skip():
 
 # --- manifest shape --------------------------------------------------------
 def test_compile_library_builds_a_manifest():
-    man = pops.compile_library("my_numerics.so", objects=_objects())
+    man = pops.codegen.compile_library("my_numerics.so", objects=_objects())
     assert man.name == "my_numerics.so"
     assert man.backend == "production"
     assert isinstance(man.bricks, list) and len(man.bricks) == 2
@@ -74,7 +74,7 @@ def test_compile_library_builds_a_manifest():
 
 
 def test_each_brick_carries_its_metadata():
-    man = pops.compile_library("lib.so", objects=_objects())
+    man = pops.codegen.compile_library("lib.so", objects=_objects())
     by_id = {b["id"]: b for b in man.bricks}
     assert set(by_id) == {"gmres", "hllc"}
     gmres = by_id["gmres"]
@@ -95,7 +95,7 @@ def test_generated_symbols_collects_generated_bricks():
         x = ctx.zeros_like(b)
         return ctx.combine(x + b)
 
-    man = pops.compile_library("lib.so", objects=[lib.solvers.custom("my_richardson")])
+    man = pops.codegen.compile_library("lib.so", objects=[lib.solvers.custom("my_richardson")])
     assert man.bricks[0]["brick_type"] == "generated"
     # A generated brick contributes a symbol the (future) .so would export.
     assert "my_richardson" in man.generated_symbols
@@ -103,36 +103,36 @@ def test_generated_symbols_collects_generated_bricks():
 
 # --- content hash: stable + sensitive --------------------------------------
 def test_content_hash_is_stable():
-    a = pops.compile_library("lib.so", objects=_objects())
-    b = pops.compile_library("lib.so", objects=_objects())
+    a = pops.codegen.compile_library("lib.so", objects=_objects())
+    b = pops.codegen.compile_library("lib.so", objects=_objects())
     assert a.content_hash == b.content_hash
 
 
 def test_content_hash_is_sensitive_to_objects():
-    base = pops.compile_library("lib.so", objects=[lib.solvers.GMRES(max_iter=200)])
-    more = pops.compile_library("lib.so",
+    base = pops.codegen.compile_library("lib.so", objects=[lib.solvers.GMRES(max_iter=200)])
+    more = pops.codegen.compile_library("lib.so",
                                 objects=[lib.solvers.GMRES(max_iter=200), lib.riemann.HLLC()])
     assert base.content_hash != more.content_hash
 
 
 def test_content_hash_is_sensitive_to_name():
-    a = pops.compile_library("a.so", objects=_objects())
-    b = pops.compile_library("b.so", objects=_objects())
+    a = pops.codegen.compile_library("a.so", objects=_objects())
+    b = pops.codegen.compile_library("b.so", objects=_objects())
     assert a.content_hash != b.content_hash
 
 
 def test_content_hash_is_order_insensitive():
-    fwd = pops.compile_library("lib.so",
+    fwd = pops.codegen.compile_library("lib.so",
                                objects=[lib.solvers.GMRES(max_iter=200), lib.riemann.HLLC()])
-    rev = pops.compile_library("lib.so",
+    rev = pops.codegen.compile_library("lib.so",
                                objects=[lib.riemann.HLLC(), lib.solvers.GMRES(max_iter=200)])
     assert fwd.content_hash == rev.content_hash
 
 
 # --- round-trip through the reader -----------------------------------------
 def test_manifest_round_trips_through_reader():
-    man = pops.compile_library("lib.so", objects=_objects())
-    restored = pops.read_library_manifest(man.to_dict())
+    man = pops.codegen.compile_library("lib.so", objects=_objects())
+    restored = pops.codegen.read_library_manifest(man.to_dict())
     assert restored.name == man.name
     assert restored.abi_key == man.abi_key
     assert restored.content_hash == man.content_hash
@@ -142,38 +142,38 @@ def test_manifest_round_trips_through_reader():
 
 def test_reader_rejects_a_corrupt_manifest():
     with pytest.raises((KeyError, ValueError, TypeError)):
-        pops.read_library_manifest({"name": "lib.so"})  # missing required keys
+        pops.codegen.read_library_manifest({"name": "lib.so"})  # missing required keys
 
 
 # --- input validation ------------------------------------------------------
 def test_empty_objects_is_rejected():
     with pytest.raises(ValueError):
-        pops.compile_library("lib.so", objects=[])
+        pops.codegen.compile_library("lib.so", objects=[])
 
 
 def test_non_descriptor_object_is_rejected():
     with pytest.raises(TypeError):
-        pops.compile_library("lib.so", objects=[object()])
+        pops.codegen.compile_library("lib.so", objects=[object()])
 
 
 def test_non_production_backend_is_rejected():
     from pops.codegen import JIT
     with pytest.raises(ValueError):
-        pops.compile_library("lib.so", objects=_objects(), backend=JIT())
+        pops.codegen.compile_library("lib.so", objects=_objects(), backend=JIT())
 
 
 def test_string_backend_is_rejected():
     # Spec 5 sec.7: the public backend= takes a TYPED descriptor; a bare string is rejected and
     # the error names the typed alternative (mirrors pops.compile).
     with pytest.raises(TypeError) as exc:
-        pops.compile_library("lib.so", objects=_objects(), backend="production")
+        pops.codegen.compile_library("lib.so", objects=_objects(), backend="production")
     assert "Production" in str(exc.value)
 
 
 def test_typed_production_backend_is_byte_identical():
     from pops.codegen import Production
-    a = pops.compile_library("lib.so", objects=_objects())  # default None -> Production()
-    b = pops.compile_library("lib.so", objects=_objects(), backend=Production())
+    a = pops.codegen.compile_library("lib.so", objects=_objects())  # default None -> Production()
+    b = pops.codegen.compile_library("lib.so", objects=_objects(), backend=Production())
     assert a.backend == "production" == b.backend
     assert a.content_hash == b.content_hash
     assert a == b
@@ -194,11 +194,11 @@ def test_compile_problem_rejects_a_corrupt_library():
 def test_emit_compiles_a_real_so_and_reads_it_back(tmp_path):
     _toolchain_or_skip()
     so = str(tmp_path / "my_numerics.so")
-    src = pops.compile_library("my_numerics.so", objects=_objects(), emit=True, so_path=so)
+    src = pops.codegen.compile_library("my_numerics.so", objects=_objects(), emit=True, so_path=so)
     import os
     assert src.so_path == so and os.path.isfile(so)
     # Read the descriptor BACK from the compiled .so (dlopen + exported metadata).
-    back = pops.read_library_manifest(so)
+    back = pops.codegen.read_library_manifest(so)
     assert back.name == "my_numerics.so"
     assert back.backend == "production"
     # The .so carries the SOURCE content hash and the SOURCE ABI key.
@@ -215,7 +215,7 @@ def test_emit_compiles_a_real_so_and_reads_it_back(tmp_path):
 def test_emit_exports_the_brick_manifest_for_load_cpp_library(tmp_path):
     _toolchain_or_skip()
     so = str(tmp_path / "lib.so")
-    pops.compile_library("lib.so", objects=_objects(), emit=True, so_path=so)
+    pops.codegen.compile_library("lib.so", objects=_objects(), emit=True, so_path=so)
     # The library .so is ALSO a self-describing external-brick .so: pops.lib.load_cpp_library
     # reads its pops_brick_manifest() JSON and registers the ids in the in-process catalog.
     lib._clear_external_catalog()
@@ -235,9 +235,9 @@ def test_emit_exports_generated_symbols(tmp_path):
         return ctx.combine(x + b)
 
     so = str(tmp_path / "gen.so")
-    pops.compile_library("gen.so", objects=[lib.solvers.custom("my_richardson")],
+    pops.codegen.compile_library("gen.so", objects=[lib.solvers.custom("my_richardson")],
                         emit=True, so_path=so)
-    back = pops.read_library_manifest(so)
+    back = pops.codegen.read_library_manifest(so)
     assert "my_richardson" in back.generated_symbols
     assert back.bricks[0]["brick_type"] == "generated"
 
@@ -254,7 +254,7 @@ def test_read_back_rejects_an_abi_mismatch(tmp_path):
     import subprocess
     import tempfile
 
-    man = pops.compile_library("mismatch.so", objects=_objects())
+    man = pops.codegen.compile_library("mismatch.so", objects=_objects())
     src = emit_library_cpp(man)
     include = pops_include()
     eff_std = _probe_cxx_std(cc, loader_cxx_std())
@@ -272,7 +272,7 @@ def test_read_back_rejects_an_abi_mismatch(tmp_path):
             pytest.skip("could not compile the mismatched .so: %s"
                         % (r.stderr or b"").decode(errors="replace")[:160])
     with pytest.raises(RuntimeError) as exc:
-        pops.read_library_manifest(so)
+        pops.codegen.read_library_manifest(so)
     assert "ABI" in str(exc.value)
 
 
@@ -283,7 +283,7 @@ def test_compile_problem_consumes_a_compiled_library_so(tmp_path):
     from pops.codegen.compile import compile_problem
     time = pytest.importorskip("pops.time")
     so = str(tmp_path / "consumed.so")
-    pops.compile_library("consumed.so", objects=_objects(), emit=True, so_path=so)
+    pops.codegen.compile_library("consumed.so", objects=_objects(), emit=True, so_path=so)
     # A real Forward-Euler Program so the problem lowers; libraries=[.so] is read + ABI-checked.
     P = time.Program("consume")
     dt = P.dt

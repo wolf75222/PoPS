@@ -24,6 +24,7 @@ import sys
 import numpy as np
 
 import pops
+from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 fails = 0
 
@@ -51,7 +52,7 @@ def gaussian(n):
 # --- 1. System : hll + minmod + primitive sur isotherme 3 var (non Euler) -------
 print("== System : FiniteVolume(minmod, hll, primitive) sur isotherme 3 var ==")
 n = 32
-sim = pops.System(n=n, L=1.0, periodic=True)
+sim = System(n=n, L=1.0, periodic=True)
 sim.add_block("ions", iso_model(),
               spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLL(), variables=Primitive()),
               time=pops.Explicit())
@@ -68,7 +69,7 @@ chk(abs(sim.mass("ions") - m0) < 1e-10 * abs(m0), "masse conservee (periodique)"
 
 # --- 2. hll sur scalaire ExB (pas de wave_speeds) -> erreur explicite ------------
 print("== hll sans wave_speeds (scalaire ExB) : rejet explicite ==")
-sim2 = pops.System(n=16, L=1.0, periodic=True)
+sim2 = System(n=16, L=1.0, periodic=True)
 scal = pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0), source=pops.NoSource(),
                  elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
 try:
@@ -79,7 +80,7 @@ except RuntimeError as e:
 
 # --- 3. hllc sur isotherme 3 var -> rejet explicite (Euler 2D seulement) ---------
 print("== hllc sur isotherme 3 var natif : rejet explicite (ni capability HLLC, ni Euler 2D) ==")
-sim3 = pops.System(n=16, L=1.0, periodic=True)
+sim3 = System(n=16, L=1.0, periodic=True)
 try:
     sim3.add_block("ions", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC()))
     chk(False, "hllc sur isotherme 3 var aurait du lever")
@@ -88,7 +89,7 @@ except RuntimeError as e:
 
 # --- 4. AmrSystem : hll + minmod accepte (alignement de surface System/AMR) ------
 print("== AmrSystem : add_block(riemann='hll') accepte sur isotherme ==")
-amr = pops.AmrSystem(n=32, L=1.0, periodic=True, regrid_every=0)
+amr = AmrSystem(n=32, L=1.0, periodic=True, regrid_every=0)
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 amr.set_refinement(1e30)  # aucun raffinement : hierarchie mono-niveau (le sujet est le ROUTAGE hll)
 amr.add_block("ions", iso_model(),

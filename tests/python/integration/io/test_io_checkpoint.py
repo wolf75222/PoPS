@@ -20,6 +20,7 @@ import tempfile
 import numpy as np
 
 import pops
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
 
@@ -34,7 +35,7 @@ def chk(cond, label):
 def build(n=16):
     """Deux blocs couples par le Poisson, le second a STRIDE=2 (cadence hold-then-catch-up) :
     le restart doit reprendre la fenetre stride exactement (macro_step restaure)."""
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     sim.add_block("ions",
                   pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
@@ -87,7 +88,7 @@ chk(abs(sim2.time() - ref_t) < 1e-15, "temps final identique")
 
 # --- (2) rejets explicites -----------------------------------------------------------
 print("== (2) rejets explicites ==")
-bad = pops.System(n=16, L=1.0, periodic=True)
+bad = System(n=16, L=1.0, periodic=True)
 bad.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 bad.add_block("autre",
               pops.Model(state=pops.FluidState("isothermal", cs2=0.5),

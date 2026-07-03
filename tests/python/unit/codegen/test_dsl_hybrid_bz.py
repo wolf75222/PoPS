@@ -21,6 +21,7 @@ import pops
 from pops.physics.bricks import SourceBrick
 
 from tests.python.support.requirements import repo_include
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 INCLUDE = repo_include()
 
 
@@ -56,7 +57,7 @@ def main():
         X, Y = np.meshgrid(xs, xs)
         dens = 1.0 + 0.2 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / 0.03)  # non uniforme -> derive
 
-        sim = pops.System(n=n, L=L, periodic=True)
+        sim = System(n=n, L=L, periodic=True)
         sim.add_equation("bz", co, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                          names=["n"])
         sim.set_poisson(rhs="charge_density", solver="geometric_mg")

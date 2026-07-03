@@ -23,6 +23,7 @@ pre-rebuild module emits no ``mg_cycles``): the test is written to run POST-rebu
 (engine present, counters expected) fails loudly rather than masquerading as a skip.
 """
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):
@@ -55,7 +56,7 @@ def _zero_mean_bump(n, amp):
 
 
 def _build(n=32):
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     sim.add_block("ne", model=_charge_model(q=1.0), spatial=pops.Spatial(minmod=True))
     sim.set_poisson(bc="periodic")  # default solver = geometric_mg -> multigrid V-cycles
     sim.set_density("ne", _zero_mean_bump(n, 0.40))

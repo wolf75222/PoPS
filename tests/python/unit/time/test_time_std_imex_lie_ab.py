@@ -20,6 +20,7 @@ All three LOWER to the existing Program IR (no new C++ stepper):
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _pops_time():
@@ -226,7 +227,7 @@ def _run_ab3(t):
     except Exception as exc:  # noqa: BLE001
         print("-- (B AB3) skipped: pops/numpy unavailable: %s --" % exc)
         return
-    sim = pops.System(n=16, L=1.0, periodic=True)
+    sim = System(n=16, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
         print("-- (B AB3) skipped: _pops lacks install_program (rebuild _pops) --")
         return
@@ -268,7 +269,7 @@ def _run_imex(t):
     except Exception as exc:  # noqa: BLE001
         print("-- (B imex) skipped: pops/numpy unavailable: %s --" % exc)
         return
-    sim = pops.System(n=16, L=1.0, periodic=True)
+    sim = System(n=16, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
         print("-- (B imex) skipped: _pops lacks install_program (rebuild _pops) --")
         return
@@ -320,7 +321,7 @@ def _run_lie(t):
     except Exception as exc:  # noqa: BLE001
         print("-- (B lie) skipped: pops/numpy unavailable: %s --" % exc)
         return
-    sim = pops.System(n=16, L=1.0, periodic=True)
+    sim = System(n=16, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
         print("-- (B lie) skipped: _pops lacks install_program (rebuild _pops) --")
         return

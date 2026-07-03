@@ -21,6 +21,7 @@ import sys
 import numpy as np
 
 import pops
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
 
@@ -46,7 +47,7 @@ def gaussian(n):
 
 
 def run(n=24, steps=4, **imex_kw):
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     sim.add_block("e", fluid(), spatial=pops.FiniteVolume(limiter=Minmod()),
                   time=pops.IMEX(**imex_kw))
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
@@ -113,7 +114,7 @@ chk(np.allclose(u1, u_def, rtol=1e-12, atol=1e-13),
 
 # --- 5. Rejets explicites ---------------------------------------------------------
 print("== rejets explicites ==")
-sim5 = pops.System(n=16, L=1.0, periodic=True)
+sim5 = System(n=16, L=1.0, periodic=True)
 try:
     sim5.add_block("e", fluid(), time=pops.Explicit(),
                    spatial=pops.FiniteVolume())

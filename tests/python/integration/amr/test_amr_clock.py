@@ -26,6 +26,7 @@ from pops.numerics.riemann import Rusanov
 import numpy as np
 
 import pops
+from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 
 
 def _bump(n, amp):
@@ -42,7 +43,7 @@ def _scalar_charge(q, B0=1.0):
 def _build_stride(n=32):
     """AMR multi-blocs : un bloc a stride=2 (cadence hold-then-catch-up) -> la cadence depend du
     compteur de macro-pas, ce que macro_step()/set_clock() exposent et restaurent."""
-    sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
+    sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
     sim.add_block("ions", _scalar_charge(+1.0),
                   spatial=pops.Spatial(limiter=FirstOrder(), flux=Rusanov()))
     sim.add_block("slow", _scalar_charge(-1.0),

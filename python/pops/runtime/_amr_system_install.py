@@ -47,7 +47,7 @@ class _AmrSystemInstall:
         @param aux dict {field_name: array}: "B_z" -> set_magnetic_field, "T_e" rejected (derived),
             any other -> set_aux_field on the declaring block.
         @param solvers dict {field: <solver>}: lowered to set_poisson (default Poisson field only).
-        @param cadence optional pops.CompiledTime(substeps=, stride=): the compiled Program's GLOBAL
+        @param cadence optional pops.time.CompiledTime(substeps=, stride=): the compiled Program's GLOBAL
             macro-step cadence, applied with ``set_program_cadence`` AFTER install_program. A native
             AMR install has no Program, so a non-None cadence there raises (set substeps / stride on
             the native time policy instead).

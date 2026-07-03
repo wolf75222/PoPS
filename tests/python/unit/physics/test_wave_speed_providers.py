@@ -11,6 +11,7 @@ authoring model carried on a REAL CompiledModel (the accepted pattern of test_eu
 never a fake/mock pops object). Runs under pytest and as ``python tests/...``.
 """
 import pytest
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 pytest.importorskip("pops")
 import pops  # noqa: E402
@@ -211,7 +212,7 @@ def test_no_silent_flux_swap_on_missing_wave_speeds():
     spatial = pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL())
     assert spatial.flux == "hll"  # the descriptor stays HLL, no silent swap
     with pytest.raises(RuntimeError, match="wave_speeds"):
-        pops.System(n=8, L=1.0, periodic=True)._validate_riemann_capability(
+        System(n=8, L=1.0, periodic=True)._validate_riemann_capability(
             _compiled(wave_speeds=False), spatial)
 
 

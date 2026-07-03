@@ -24,6 +24,7 @@ MUST be added in the SAME order the Program declares them via ``P.state``.
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):
@@ -193,7 +194,7 @@ def section_b(t):
         print("-- (B) skipped: pops/numpy unavailable (%s) --" % exc)
         return
 
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+    if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
         print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return
 
@@ -223,7 +224,7 @@ def section_b(t):
     chk(comp_ab.program_name == "two_block_passive", "the 2-block handle carries the program name")
 
     def make_sim(blocks):
-        sim = pops.System(n=n, L=1.0, periodic=True)
+        sim = System(n=n, L=1.0, periodic=True)
         for blk in blocks:
             try:
                 cm = passive_model("blk_" + blk).compile(backend="production")

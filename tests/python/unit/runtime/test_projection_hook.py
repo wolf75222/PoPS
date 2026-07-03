@@ -44,6 +44,7 @@ from pops.physics.aux import AUX_NAMED_BASE
 from pops.physics.model import HyperbolicModel
 
 from tests.python.support.requirements import repo_include
+from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 INCLUDE = repo_include()
 A_X, A_Y = 1.0, 0.5  # vitesses d'advection constantes du transport jouet
 N, L, DT, NSTEPS = 32, 1.0, 1e-3, 3
@@ -102,7 +103,7 @@ def initial_state(n):
 
 
 def make_sys(so, adder):
-    s = pops.System(n=N, L=L, periodic=True)
+    s = System(n=N, L=L, periodic=True)
     if adder == "native":
         s._s.add_native_block("toy", so, limiter="minmod", riemann="rusanov",
                               recon="conservative", time="explicit", gamma=1.4, substeps=1)
@@ -242,7 +243,7 @@ def main():
         # apres reflux). add_native_block d'un loader avec projection n'est donc PLUS rejete.
         so_amr = m_clamp.compile(os.path.join(tmp, "toy_amr.so"), INCLUDE,
                                  backend="production", target="amr_system")
-        s_amr = pops.AmrSystem(n=N, L=L, periodic=True)
+        s_amr = AmrSystem(n=N, L=L, periodic=True)
         amr_err = err_msg(lambda: s_amr._s.add_native_block(
             "toy", so_amr, limiter="minmod", riemann="rusanov", recon="conservative",
             time="explicit", gamma=1.4, substeps=1))

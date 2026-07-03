@@ -1,12 +1,13 @@
 """ADC-605 release-active validation errors on public runtime paths."""
 
 import pytest
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
 
 
 def _make_system():
-    sim = pops.System(n=4, L=1.0, periodic=True)
+    sim = System(n=4, L=1.0, periodic=True)
     sim.add_block(
         "ne",
         pops.Model(

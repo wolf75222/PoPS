@@ -35,6 +35,7 @@ import sys
 import numpy as np
 
 import pops
+from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 
 CS2 = 0.25       # isothermal sound speed^2 (p = cs2 rho): flooring rho floors the pressure
 n = 48
@@ -79,7 +80,7 @@ def smooth_state():
 
 
 def build(pf, regrid_every=0, refine=1e30):
-    s = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every)
+    s = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every)
     s.set_refinement(refine)
     s.add_block("gas", iso_spec(),
                 spatial=pops.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=pf),
@@ -143,7 +144,7 @@ chk(s_rg.n_patches() >= 1, "fine patch created (C/F interface exercised)")
 print("== (4) multi-block: positivity_floor accepted + threaded through dispatch_amr_block ==")
 band = np.full((n, n), 1e-6)
 band[:, n // 3:2 * n // 3] = 1.0  # contrast-1e6 band (Density role, component 0)
-sm = pops.AmrSystem(n=n, L=1.0, periodic=True)
+sm = AmrSystem(n=n, L=1.0, periodic=True)
 sm.set_refinement(1e30)
 sm.add_block("a", iso_spec(),
              spatial=pops.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=1e-8))

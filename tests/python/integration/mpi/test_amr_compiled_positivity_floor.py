@@ -44,6 +44,7 @@ import pops
 from pops.codegen.loader import CompiledModel
 from pops.ir.ops import sqrt
 from pops.physics.facade import Model
+from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 
 CS2 = 0.25       # isothermal sound speed^2 (p = cs2 rho): flooring rho floors the pressure
 N = 48
@@ -108,7 +109,7 @@ def smooth_state():
 def compiled_single(cm, pf, state):
     """Single compiled block (add_equation -> add_native_block) with positivity_floor=pf, seeded with
     the full conservative state, stepped 38 times. Returns the coarse density (flat array)."""
-    s = pops.AmrSystem(n=N, L=1.0, periodic=True)
+    s = AmrSystem(n=N, L=1.0, periodic=True)
     s.set_refinement(1e30)
     s.add_equation("gas", cm,
                    spatial=pops.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=pf),
@@ -163,7 +164,7 @@ def main():
         print("== (3) multi-block compiled: positivity_floor threaded through AmrCompiledBlockBuilder ==")
         band = np.full((N, N), 1e-6)
         band[:, N // 3:2 * N // 3] = 1.0
-        sm = pops.AmrSystem(n=N, L=1.0, periodic=True)
+        sm = AmrSystem(n=N, L=1.0, periodic=True)
         sm.set_refinement(1e30)
         sm.add_equation("a", cm, spatial=pops.Spatial(limiter=WENO5(), flux=Rusanov(),
                                                      positivity_floor=1e-8))

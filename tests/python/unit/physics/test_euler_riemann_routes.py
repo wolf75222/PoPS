@@ -12,6 +12,7 @@ test_no_fallback_compliance_matrix.py) enforces the ADC-590 acceptance matrix on
 CompiledModel objects.
 """
 import pytest
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
 from pops.codegen.loader import CompiledModel  # noqa: E402
@@ -32,7 +33,7 @@ def _compiled(*, n_vars, prim_names, hllc=False, roe=False):
 
 def _validate(model, flux_desc):
     """Run the unified-install riemann capability gate on a fake compiled model."""
-    pops.System(n=8, L=1.0, periodic=True)._validate_riemann_capability(
+    System(n=8, L=1.0, periodic=True)._validate_riemann_capability(
         model, pops.FiniteVolume(riemann=flux_desc))
 
 

@@ -43,6 +43,7 @@ from pops.codegen.toolchain import _default_cxx
 from pops.moments import (bgk_source, build_moment_model, gaussian_closure,
                          lorentz_sources, maxwellian_moments, moment_indices,
                          moment_names)
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
 from tests.python.support.requirements import repo_include
@@ -314,7 +315,7 @@ except RuntimeError as ex:
         sys.exit(1 if fails else 0)
     raise
 n = 16
-sim = pops.System(n=n, L=1.0, periodic=True)
+sim = System(n=n, L=1.0, periodic=True)
 sim.add_equation("mom", model=compiled,
                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL()),
                  time=pops.Explicit())

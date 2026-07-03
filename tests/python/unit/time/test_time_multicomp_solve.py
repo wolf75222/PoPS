@@ -28,6 +28,7 @@ from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 from pops.solvers import krylov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _pops_time():
@@ -226,7 +227,7 @@ def _run_one(t, pops, np, ncomp, init):
     offline numpy CG on the SAME discrete operator. @p init is (ncomp, n, n) the initial state. Returns
     (out, phi_ref, iters) or None if the toolchain is unavailable."""
     n = init.shape[1]
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
         print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None

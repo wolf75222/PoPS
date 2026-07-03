@@ -5,7 +5,7 @@ Pendant AMR de test_schur_via_system.py. L'etage AmrCondensedSchurSourceStepper 
 STANDALONE (parite mono-niveau) dans test_amr_condensed_schur_source_stepper (C++) ; ici on exerce
 le chemin FACADE de bout en bout :
 
-  pops.AmrSystem.add_equation(time=pops.Strang(source=pops.CondensedSchur(...)))
+  AmrSystem.add_equation(time=pops.Strang(source=pops.CondensedSchur(...)))
     -> add_equation(time=time.hyperbolic = pops.Explicit())   # transport SOURCE-FREE (NoSource)
       -> _s.add_block (ModelSpec -> dispatch_amr_compiled -> AmrCouplerMP)
     -> _s.set_source_stage(name, kind, theta, alpha)          # etage condense GLOBAL
@@ -36,6 +36,7 @@ import numpy as np
 
 try:
     import pops
+    from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 except ImportError as e:
     print("skip  module pops absent (PYTHONPATH ?) : %s" % e)
     sys.exit(0)
@@ -68,7 +69,7 @@ def build_amr(n=24, L=1.0, B0=4.0, alpha=3.0, theta=1.0, with_schur=True, strang
 
     with_schur=True : add_equation(pops.Strang/Split(source=CondensedSchur)) -> etage condense GLOBAL.
     with_schur=False : add_equation(pops.Explicit()) -> transport seul (reference sans source)."""
-    sim = pops.AmrSystem(n=n, L=L, periodic=False, regrid_every=0)
+    sim = AmrSystem(n=n, L=L, periodic=False, regrid_every=0)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="dirichlet")
     sim.set_refinement(1e30)  # aucun raffinement -> hierarchie MONO-NIVEAU (niveau fin seed vide)
     if set_bz:
@@ -173,7 +174,7 @@ def main():
 
     # E2 : add_block(time=Strang) -> rejet (le splitting passe par add_equation).
     def add_block_strang():
-        s = pops.AmrSystem(n=n, L=L, periodic=False)
+        s = AmrSystem(n=n, L=L, periodic=False)
         s.add_block("e", iso_model(),
                     time=pops.Strang(hyperbolic=pops.Explicit(),
                                     source=pops.CondensedSchur(theta=0.5, alpha=alpha)))

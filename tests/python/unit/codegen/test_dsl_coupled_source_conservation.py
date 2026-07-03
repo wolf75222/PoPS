@@ -21,6 +21,7 @@ import numpy as np
 
 import pops
 from pops.physics.multispecies import CoupledSource
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def chk(cond, msg, fails):
@@ -49,7 +50,7 @@ def density_block(n0=1.0):
 
 
 def make_system(n, na0, nb0):
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     sim.add_block("alpha", model=density_block(n0=na0), spatial=pops.Spatial(none=True))
     sim.add_block("beta", model=density_block(n0=nb0), spatial=pops.Spatial(none=True))
     sim.set_poisson(rhs="charge_density", solver="geometric_mg")

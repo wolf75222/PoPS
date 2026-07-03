@@ -31,6 +31,7 @@ import numpy as np
 
 try:
     import pops
+    from pops.runtime.system import System  # ADC-545 advanced runtime seam
 except ImportError as e:  # pragma: no cover - environnement sans build
     print("skip  module pops absent (PYTHONPATH ? build ?) : %s" % e)
     sys.exit(0)
@@ -68,7 +69,7 @@ def ring(n, L, cx=0.5, cy=0.5):
 # ---------------------------------------------------------------------------
 
 def _build(n, L):
-    sim = pops.System(n=n, L=L, periodic=True)
+    sim = System(n=n, L=L, periodic=True)
     sim.set_poisson(bc="periodic")
     rho0 = ring(n, L)
     sim.add_equation("s", model=iso_model(n0=float(rho0.mean())),
@@ -162,7 +163,7 @@ def test_guards():
     # Polaire : l'anneau est deja borne par ses parois radiales -> set_disc_domain doit lever.
     raised_polar = False
     try:
-        simp = pops.System(mesh=pops.PolarMesh(nr=16, ntheta=16, r_min=0.2, r_max=1.0))
+        simp = System(mesh=pops.PolarMesh(nr=16, ntheta=16, r_min=0.2, r_max=1.0))
         simp.set_disc_domain(0.0, 0.0, 0.5)
     except Exception:
         raised_polar = True

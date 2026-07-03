@@ -30,6 +30,7 @@ try:
                              AllLevels, CoarseOnly)
     from pops.time.schedule import every, always
     from pops.runtime._output_driver import policy_due, _format_token, fire_output_policies
+    from pops.runtime.system import System  # ADC-545 advanced runtime seam
 except Exception as exc:  # noqa: BLE001
     print("skip test_output_policy_run (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -46,7 +47,7 @@ def chk(cond, label):
 
 def build(n=16):
     """A real native single-block System (no DSL compile): isothermal fluid + shared Poisson."""
-    sim = pops.System(n=n, L=1.0, periodic=True)
+    sim = System(n=n, L=1.0, periodic=True)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     sim.add_block("ions",
                   pops.Model(state=pops.FluidState("isothermal", cs2=0.5),

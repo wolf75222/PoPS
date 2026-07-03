@@ -43,6 +43,7 @@ Run with python3 (PYTHONPATH = built pops package).
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):
@@ -149,7 +150,7 @@ print("  (A) PASS")
 # ============================ (B) native bit-parity: skip without the toolchain ================
 if pops is None:
     _skip("pops/numpy unavailable (A passed)")
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
     _skip("_pops lacks the install_program binding (rebuild _pops) (A passed)")
 
 N = 24
@@ -168,7 +169,7 @@ def chk_b(cond, label):
 
 def make_sim():
     """A System with ONE uncoupled isothermal block (Forward Euler hyperbolic stage) + inert Poisson."""
-    sim = pops.System(n=N, L=1.0, periodic=True)
+    sim = System(n=N, L=1.0, periodic=True)
     sim.add_block("ions", transport_model(),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                   time=pops.Explicit(method="euler"))

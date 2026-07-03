@@ -33,6 +33,7 @@ import numpy as np
 
 import pops
 from pops.codegen.loader import CompiledModel
+from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 
 fails = 0
 
@@ -62,7 +63,7 @@ def gaussian(n):
 def mono_imex(time):
     """Construit un AmrSystem MONO-BLOC IMEX (iso_model) avec le traitement temporel @p time, seede
     d'une gaussienne, et avance d'un pas. Renvoie la densite grossiere apres le pas."""
-    s = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+    s = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
     s.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     s.set_refinement(1e30)
     s.add_block("e", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()), time=time)
@@ -90,7 +91,7 @@ chk(np.all(np.isfinite(d_a)),
 
 # ---- (b) NEWTON_DIAGNOSTICS MULTI-BLOCS : newton_report dict coherent ---------------------------
 print("== (b) multi-blocs IMEX + newton_diagnostics : newton_report('e1') coherent ==")
-amr = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+amr = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 amr.set_refinement(1e30)
 amr.add_block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
@@ -134,7 +135,7 @@ chk(dmax == 0.0, f"options Newton par defaut explicites : dmax == 0 (bit-identiq
 
 # ---- (d) LOADER .so + OPTIONS/DIAGNOSTICS : rejet explicite -------------------------------------
 print("== (d) production AMR (.so) : options/diagnostics Newton rejetes explicitement ==")
-sim_opt = pops.AmrSystem(n=16, periodic=True)
+sim_opt = AmrSystem(n=16, periodic=True)
 try:
     sim_opt.add_equation("gas", fake_production_amr(), spatial=pops.FiniteVolume(),
                          time=pops.IMEX(newton_max_iters=5))
@@ -142,7 +143,7 @@ try:
 except ValueError as ex:
     chk("Newton" in str(ex) and "production" in str(ex),
         "options Newton sur .so production AMR : ValueError claire (Newton/production)")
-sim_diag = pops.AmrSystem(n=16, periodic=True)
+sim_diag = AmrSystem(n=16, periodic=True)
 try:
     sim_diag.add_equation("gas", fake_production_amr(), spatial=pops.FiniteVolume(),
                           time=pops.IMEX(newton_diagnostics=True))

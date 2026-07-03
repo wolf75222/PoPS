@@ -1,4 +1,4 @@
-"""Phase 2b grille polaire : chemin POLAIRE complet a travers pops.System(mesh=pops.PolarMesh(...)).
+"""Phase 2b grille polaire : chemin POLAIRE complet a travers System(mesh=pops.PolarMesh(...)).
 
 Valide le LIVRABLE Python : un System polaire se construit (anneau global r x theta), recoit un bloc
 ExB scalaire + un Poisson polaire, une densite annulaire, puis avance par step() ET step_cfl() en
@@ -18,6 +18,7 @@ import math
 import numpy as np
 
 import pops
+from pops.runtime.system import System, SystemConfig  # ADC-545 advanced runtime seam
 
 
 def _annular_density(nr, nth, rmin, rmax):
@@ -42,7 +43,7 @@ def _flat(field):
 
 def test_polar_system_step_and_cfl_conserve_mass():
     rmin, rmax, nr, nth = 0.30, 1.00, 48, 48
-    sim = pops.System(mesh=pops.PolarMesh(r_min=rmin, r_max=rmax, nr=nr, ntheta=nth))
+    sim = System(mesh=pops.PolarMesh(r_min=rmin, r_max=rmax, nr=nr, ntheta=nth))
     sim.add_block(
         "ne",
         model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
@@ -91,12 +92,12 @@ def test_polar_rejects_nr_below_3():
 
     # (2) Un appelant qui construit le SystemConfig a la main (contourne PolarMesh) doit aussi etre
     # protege par check_geometry cote C++.
-    cfg = pops.SystemConfig()
+    cfg = SystemConfig()
     cfg.geometry = "polar"
     cfg.r_min, cfg.r_max, cfg.nr, cfg.ntheta = 0.3, 1.0, 2, 8
     raised = False
     try:
-        pops.System(config=cfg)
+        System(config=cfg)
     except Exception:
         raised = True
     assert raised, "System(geometry='polar', nr=2) doit lever cote C++ (check_geometry)"
