@@ -630,8 +630,13 @@ Implementation:
   labels, and emits either selected CTest targets/regex or the full C++ suite.
 - `scripts/ci_select_tests.py python` reads the same manifest, excludes
   architecture suites owned by the source-only quality job, maps changed Python
-  package paths to suite labels, shards the selected file list, and emits the
-  pytest files for the shard.
+  package paths to suite labels, and emits the pytest files for a shard.
+  `scripts/ci_shard_binpack.py` packs the selected files onto shards by measured
+  duration (`tests/python/test_durations.json`, greedy longest-processing-time) so
+  the slowest shard is minimized; the multi-compile DSL compile-cache test runs in a
+  dedicated cached job and is excluded from the shard partition. `ci_select_tests.py
+  verify` reconstructs every shard and fails CI unless they exactly cover the
+  selection (no test dropped or duplicated).
 - CI stores each selector decision as an uploaded JSON artifact so selection
   errors can be reviewed like build or test failures.
 
