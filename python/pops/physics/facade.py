@@ -208,6 +208,57 @@ class Model(_FacadeCompileMixin):
         which a Program can pass to ``P.call`` in place of the string name."""
         return self._m.rate_operator(name, flux=flux, sources=sources, fluxes=fluxes)
 
+    # --- mathematically explicit operator declarers (ADC-559) ------------------------------
+    # `m.rate` / `m.field_solve` / `m.local_linear_map` are thin MATHEMATICAL aliases: each funnels
+    # into ONE of the existing typed declarers (rate_operator / elliptic_field / linear_source) so the
+    # registry, the module hash and the codegen are UNCHANGED (no parallel facade registry), and each
+    # returns the canonical `pops.model.OperatorHandle` -- re-stamped with the operator's derived
+    # `Signature` and mathematical `category` so a handle reads as the math object it names:
+    #   m.rate(...)             ->  (U, Fields) -> Rate(U)                  category "rate"
+    #   m.field_solve(...)      ->  U -> Fields                            category "field_solve"
+    #   m.local_linear_map(...) ->  Fields -> LocalLinearOperator(U, U)    category "local_linear_map"
+    def _typed_handle(self, name):
+        """Re-stamp the derived Signature + category onto operator ``name``'s canonical handle.
+
+        Reads the operator's typed :class:`pops.model.Operator` from the DERIVED registry (the single
+        source of the signature; see :meth:`operator_registry`) and returns an inspectable
+        :class:`pops.model.OperatorHandle` carrying ``(name, kind, signature, category)``. Pure view:
+        the operator was already registered by the underlying declarer; this only enriches the handle.
+        """
+        from pops.model import OperatorHandle
+        op = self._m.operator_registry().get(name)
+        return OperatorHandle(op.name, kind=op.kind, signature=op.signature)
+
+    def rate(self, name, *, flux=True, sources=("default",), fluxes=None):
+        """Declare a RATE operator ``R: (U, Fields) -> Rate(U)`` (ADC-559): the mathematical spelling of
+        :meth:`rate_operator`. ``R = -div F + sum(sources)``; the returned inspectable handle carries
+        the derived ``Signature`` and ``category == "rate"``. Funnels into the ONE typed registry (no
+        parallel surface); ``P.call(R, U[, fields])`` / ``R(U[, fields])`` (ADC-560) lower identically.
+        """
+        self._m.rate_operator(name, flux=flux, sources=sources, fluxes=fluxes)
+        return self._typed_handle(name)
+
+    def field_solve(self, name, rhs, *, operator="poisson", aux=None):
+        """Declare a FIELD-SOLVE operator ``F: U -> Fields`` (ADC-559): the mathematical spelling of
+        :meth:`elliptic_field`. Solves ``operator(field) = rhs(U)`` populating the named ``aux`` fields
+        (default the electrostatic triple); the returned inspectable handle carries the derived
+        ``Signature`` and ``category == "field_solve"``. The multi-field RUNTIME stays deferred (see
+        :meth:`elliptic_field`); the IR / validation / typed handle land here.
+        """
+        self._m.elliptic_field(name, rhs, operator=operator, aux=aux)
+        return self._typed_handle(name)
+
+    def local_linear_map(self, name, matrix):
+        """Declare a LOCAL LINEAR MAP ``L: Fields -> LocalLinearOperator(U, U)`` (ADC-559): the
+        mathematical spelling of :meth:`linear_source`. ``L`` is an ``n_cons x n_cons`` matrix whose
+        coefficients read only aux/params (never U/primitives), so ``S = L U`` is linear in ``U``; the
+        returned inspectable handle carries the derived ``Signature`` and ``category ==
+        "local_linear_map"``. Used explicitly by a Program (``P.apply`` / ``solve_local_linear``),
+        never folded into ``m.source`` / ``P.rhs``.
+        """
+        self._m.linear_source(name, matrix)
+        return self._typed_handle(name)
+
     def source_frequency(self, expr_mu):
         """Local frequency mu(U, aux) [1/s] of the source -- the 'source' step bound from the meeting
         (dt <= cfl*substeps/(stride*max mu), without a space step). Emitted on the generated SOURCE
