@@ -286,41 +286,16 @@ class Spatial:
         return validate_ghost_depth(self.limiter, available=available, block=block)
 
 
-def FiniteVolume(limiter=None, riemann=None, variables=None,
-                 positivity_floor=None, wave_speed_cache=False, *, reconstruction=None,
-                 none=False, minmod=False, vanleer=False, weno5=False, primitive=False):
-    """Finite-volume scheme (stable surface Phase A): remaps onto the existing Spatial object.
+def FiniteVolume(*args, **kwargs):
+    """Re-export of the composite finite-volume surface homed in ``pops.numerics.spatial`` (ADC-533).
 
-    The NUMERICAL Riemann flux is named ``riemann`` (NOT ``flux``, reserved for the PHYSICAL flux of the
-    DSL model m.flux) so the two meanings do not collide. Spec 5 sec.7: each argument is a TYPED
-    ``pops.numerics`` descriptor (a bare string raises, pointing at the typed object). Argument mapping:
-
-    - ``limiter`` (Spec 5 sec.14.1 alias: ``reconstruction``; a reconstruction / limiter descriptor) ->
-      Spatial.limiter (``pops.numerics.reconstruction.FirstOrder()`` -> none, ``.limiters.Minmod()`` /
-      ``.VanLeer()``, ``.WENO5()``, ``.MUSCL(limiter=...)``)
-    - ``riemann`` (``pops.numerics.riemann`` descriptor) -> Spatial.flux (Rusanov()/HLL()/HLLC()/Roe());
-      HLL() is the generic signed-wave path (requires model.wave_speeds), HLLC()/Roe() run on the
-      canonical Euler 2D layout or generically via the model hooks HasHLLCStructure / HasRoeDissipation
-    - ``variables`` (``pops.numerics.variables`` descriptor) -> Spatial.recon (Conservative()/Primitive())
-
-    The boolean-flag shortcuts of ``Spatial`` are forwarded identically:
-    ``none=/minmod=/vanleer=/weno5=`` select the limiter and ``primitive=`` selects the variable set, so
-    ``FiniteVolume(minmod=True)`` and ``FiniteVolume(primitive=True)`` mean the same as on ``Spatial``.
-
-    cf. docs/DSL_MODEL_DESIGN.md section 6. Returns a Spatial (consumed as-is by add_block /
-    add_equation). pops.Spatial stays available identically. ``positivity_floor`` (ADC-76):
-    density floor of the face states (Zhang-Shu limiter), None/0 = inactive.
-    ``wave_speed_cache``: HLL wave speed cache (riemann=HLL() + explicit), cf. Spatial."""
-    # Reject a bare string at THIS boundary so the message names the FiniteVolume parameter
-    # (``riemann`` / ``variables``), not the internal Spatial slot (``flux`` / ``recon``).
-    from pops.descriptors import reject_string_selector
-    if isinstance(riemann, str):
-        reject_string_selector(riemann, "riemann", _FLUX_SUGGEST)
-    if isinstance(variables, str):
-        reject_string_selector(variables, "variables", _RECON_SUGGEST)
-    return Spatial(limiter=limiter, flux=riemann, recon=variables, reconstruction=reconstruction,
-                   none=none, minmod=minmod, vanleer=vanleer, weno5=weno5, primitive=primitive,
-                   positivity_floor=positivity_floor, wave_speed_cache=wave_speed_cache)
+    Spec 5 criterion 7 homes the ``FiniteVolume(riemann=HLL(...), reconstruction=MUSCL(...))``
+    composite in :mod:`pops.numerics.spatial`; this site re-exports it so every existing
+    ``pops.FiniteVolume`` / ``pops.runtime._bricks_scheme.FiniteVolume`` import path keeps working.
+    It returns a :class:`Spatial` (consumed as-is by add_block / add_equation). The lazy import
+    keeps ``pops.numerics`` free of a module-scope ``pops.runtime`` edge (acyclic layering)."""
+    from pops.numerics.spatial import FiniteVolume as _FiniteVolume
+    return _FiniteVolume(*args, **kwargs)
 
 
 class Explicit:

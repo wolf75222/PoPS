@@ -16,6 +16,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ## [Unreleased]
 
+### Added
+- ADC-533 `pops.numerics.spatial.FiniteVolume(riemann=, reconstruction=)` composite is homed under
+  `pops.numerics` (re-exported at its historical `pops.FiniteVolume` path), and the HLL/HLLC/Roe and
+  explicit-Euler route refusals plus the WENO5 ghost-depth check are surfaced through the descriptor
+  `available(context)` / `validate(context)` protocol, delegating to the install-time predicates.
+
 ### Changed
 - ADC-553 Renamed `pops.Case` to `pops.Problem` (no back-compat alias; `pops.Case` raises
   `AttributeError` pointing at `pops.Problem`) and split the flat assembly monolith into a

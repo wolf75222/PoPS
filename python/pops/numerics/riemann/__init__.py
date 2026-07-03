@@ -81,6 +81,15 @@ _attach_capabilities(riemann)
 # (the real submodule exposes the factories) so ``HLL(waves=riemann.waves.ExplicitPair())`` works.
 riemann.waves = waves
 
+# Pre-runtime capability refusals (ADC-533): the model-aware available/validate that surface the
+# HLL/HLLC/Roe/Euler route refusals through the descriptor surface. They DELEGATE to the exact
+# install-time predicates in pops.runtime.routes (single source), so a mismatch is testable before
+# any compile. Reachable as riemann.available(HLL(), context) / riemann.validate(...).
+from .availability import flux_available as available, flux_validate as validate  # noqa: E402
+
+riemann.available = available
+riemann.validate = validate
+
 # Spec 5: expose the fluxes at module scope so ``from pops.numerics.riemann import HLL``
 # works (the namespace stays for ``riemann.HLL`` and the attached capability hooks).
 Rusanov = riemann.Rusanov
@@ -93,4 +102,4 @@ User = riemann.User
 
 __all__ = ["riemann", "waves", "Rusanov", "HLL", "HLLC", "Roe", "EulerHLLC2D", "EulerRoe2D",
            "User", "WaveSpeedProvider", "ExplicitPair", "FromJacobian", "FromPressure",
-           "Einfeldt", "Davis", "MaxWaveSpeed", "provider_of"]
+           "Einfeldt", "Davis", "MaxWaveSpeed", "provider_of", "available", "validate"]
