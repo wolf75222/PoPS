@@ -134,6 +134,19 @@ class Problem:
         self._runtime_registry.add_output(policy)
         return self
 
+    def runtime(self, policies):
+        """Attach a typed :class:`pops.output.RuntimePolicies` bundle (ADC-562). Chains.
+
+        Groups the runtime concerns (output / checkpoint / diagnostics / schedules) out of the
+        physics script: ``problem.runtime(pops.RuntimePolicies(output=..., checkpoint=...))``. The
+        bundle's typed members are unpacked into the runtime registry (its output / checkpoint
+        policies feed ``run(output_dir=...)`` exactly like :meth:`output`), and the bundle is retained
+        so its self-contained ``validate`` runs with the compile context. ``output()`` / ``aux()``
+        stay the granular primitives the bundle composes.
+        """
+        self._runtime_registry.set_policies(policies)
+        return self
+
     def time(self, program):
         """Attach the time scheme (a ``pops.time.Program``) used at compile. Chains."""
         self._time_registry.set(program)

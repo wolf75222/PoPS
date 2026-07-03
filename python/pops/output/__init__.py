@@ -9,9 +9,11 @@ the I/O. The level policies are the canonical home shared with :mod:`pops.mesh.a
 from .policies import (OutputPolicy, CheckpointPolicy,
                        AllLevels, CoarseOnly, SelectedLevels)
 from .formats import HDF5, Plotfile
-from . import policies, formats
+from .runtime_policies import RuntimePolicies, RuntimePoliciesReport
+from . import policies, formats, runtime_policies
 
 __all__ = [
     "OutputPolicy", "CheckpointPolicy", "AllLevels", "CoarseOnly", "SelectedLevels",
-    "HDF5", "Plotfile", "policies", "formats",
+    "HDF5", "Plotfile", "RuntimePolicies", "RuntimePoliciesReport",
+    "policies", "formats", "runtime_policies",
 ]

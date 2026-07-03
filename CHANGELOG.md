@@ -17,6 +17,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 ## [Unreleased]
 
 ### Added
+- ADC-562 `pops.RuntimePolicies(output=..., checkpoint=..., diagnostics=..., schedules=...)` groups
+  the runtime descriptors as TYPED members (no options bag, no string keys; a non-descriptor argument
+  raises) and `problem.runtime(policies)` attaches them, so output/checkpoint/diagnostics live
+  outside the physics script; the bundle is inspectable and validatable on its own and refuses a
+  parallel-only policy on an explicitly serial/non-MPI backend before the runtime is touched.
 - ADC-537 `pops.bind` refuses an initial state of the wrong shape/dtype/components/ghost depth, a
   runtime param outside its typed domain, an aux field a lowered operator requires but the state
   omits, and an ABI/Kokkos/MPI/layout manifest mismatch, all as hard errors with precise context

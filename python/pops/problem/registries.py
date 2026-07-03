@@ -267,6 +267,9 @@ class RuntimePolicyRegistry:
     def __init__(self):
         self._aux = {}
         self._outputs = []
+        # The typed RuntimePolicies bundle (ADC-562), retained so its self-contained validate runs
+        # with the compile context; its output / checkpoint members are ALSO unpacked into _outputs.
+        self._policies = None
 
     def add_aux(self, name, value=None):
         """Declare a static aux input ``name`` (e.g. a background field)."""
@@ -275,6 +278,26 @@ class RuntimePolicyRegistry:
     def add_output(self, policy):
         """Attach an output / checkpoint policy descriptor."""
         self._outputs.append(policy)
+
+    def set_policies(self, policies):
+        """Record a typed :class:`pops.output.RuntimePolicies` bundle (ADC-562).
+
+        Unpacks the bundle's output / checkpoint members into ``_outputs`` (so ``run(output_dir=...)``
+        fires them exactly like :meth:`add_output`) and retains the bundle for its self-contained
+        :meth:`validate`. A non-bundle argument is refused loudly (no options bag)."""
+        from pops.output.runtime_policies import RuntimePolicies
+        if not isinstance(policies, RuntimePolicies):
+            raise TypeError(
+                "problem.runtime(...) expects a typed pops.RuntimePolicies bundle; got %r. Group the "
+                "runtime concerns with pops.RuntimePolicies(output=..., checkpoint=..., "
+                "diagnostics=..., schedules=...)." % (type(policies).__name__,))
+        self._policies = policies
+        for policy in policies.outputs():
+            self._outputs.append(policy)
+
+    @property
+    def policies(self):
+        return self._policies
 
     @property
     def aux(self):
@@ -291,7 +314,12 @@ class RuntimePolicyRegistry:
         return iter(self._outputs)
 
     def validate(self, context=None):
-        """Refuse an output entry that is not a real output / checkpoint policy descriptor."""
+        """Refuse a bad output entry and run the RuntimePolicies bundle's self-contained validate.
+
+        Each ``_outputs`` entry must be a real output / checkpoint policy descriptor. When a typed
+        :class:`pops.output.RuntimePolicies` bundle was attached (``problem.runtime(...)``), its OWN
+        ``validate(context)`` runs too, so an AMR / MPI / backend-incompatible policy is refused
+        before the runtime -- with the resolved layout / backend @p context (ADC-562)."""
         report = ProblemValidationReport()
         for policy in self._outputs:
             cat = getattr(policy, "category", None)
@@ -301,11 +329,16 @@ class RuntimePolicyRegistry:
                     "output() expects a pops.output.OutputPolicy / CheckpointPolicy; got %r "
                     "(category %r)" % (type(policy).__name__, cat),
                     context={"policy": type(policy).__name__, "category": cat})
+        if self._policies is not None:
+            report.extend(self._policies.validate(context))
         return report
 
     def inspect(self):
-        return {"aux": sorted(self._aux),
+        info = {"aux": sorted(self._aux),
                 "outputs": [getattr(p, "name", repr(p)) for p in self._outputs]}
+        if self._policies is not None:
+            info["policies"] = self._policies.inspect().to_dict()
+        return info
 
 
 class ConstraintRegistry:
