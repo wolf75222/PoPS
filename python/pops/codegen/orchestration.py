@@ -76,13 +76,18 @@ def compile(problem, layout=None, backend=None, time=None, **kwargs):
     from pops.codegen.backends import Production, _Backend
 
     # ADC-545: backend is a TYPED descriptor (None -> Production(), byte-identical lowering to the
-    # same "production" token). A bare string is refused; the public string form was removed.
+    # same "production" token). A bare string is refused; the public string form was removed. The
+    # descriptor is LOWERED to its canonical token right here: the internal drivers (Model.compile,
+    # compile_problem) speak tokens, and the per-block dsl.compiled record keeps its historical
+    # ("production", target) shape.
     if backend is None:
         backend = Production()
     elif not isinstance(backend, _Backend):
         raise TypeError(
             "pops.compile: backend must be a typed pops.codegen backend descriptor "
             "(pops.codegen.Production() -- the default), not %r" % (backend,))
+    from pops.codegen.backends import lower_backend
+    backend = lower_backend(backend)
 
     # ADC-526: resolve + validate the effective layout FIRST (the Problem no longer carries a
     # mandatory layout); a missing / disagreeing layout, or an AMR envelope / Uniform-with-AMR-tags
