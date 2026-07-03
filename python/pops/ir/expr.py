@@ -182,6 +182,15 @@ class Equation:
         self.lhs = lhs
         self.rhs = rhs
 
+    def __bool__(self):
+        # An Equation is an inspectable lhs == rhs, NOT a truth value: ``if ddt(U) == R:`` or
+        # ``bool(ddt(U) == R)`` is almost always a mistaken comparison. Refuse it loudly (ADC-529)
+        # and name the consuming APIs that lower it (m.rate / m.solve_field / T.define / T.solve).
+        raise TypeError(
+            "an Equation (lhs == rhs) is not a boolean: it is an inspectable board equation, not a "
+            "comparison. Pass it to m.rate / m.solve_field / T.define / T.solve to lower it; use "
+            "'is' for identity or compare the sides explicitly.")
+
     def __repr__(self):
         return "Equation(%r == %r)" % (self.lhs, self.rhs)
 
@@ -191,6 +200,14 @@ class _BoardNode:
 
     def __eq__(self, other):  # noqa: D105 -- equation builder, not a comparison
         return Equation(self, other)
+
+    def __bool__(self):
+        # A board node builds an Equation on ``==``, so ``if U == V:`` yields an Equation, not a
+        # bool: refuse the truthiness of the node itself too (ADC-529), catching e.g. a stray
+        # ``if ddt(U):`` before it silently reads as True.
+        raise TypeError(
+            "a board node is not a boolean: '==' on it builds an inspectable Equation (lhs == rhs), "
+            "not a comparison. Lower it via m.rate / m.solve_field / T.define / T.solve.")
 
     # board nodes are not hashable (they define a non-identity ``__eq__``)
     __hash__ = None

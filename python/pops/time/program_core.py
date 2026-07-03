@@ -5,7 +5,8 @@ State / field / RHS / source / apply construction (the operator-first builder co
 from pops.time.program_base import _ProgramConstants
 from pops.time.schedule import Schedule
 from pops.time.values import (
-    Value, _Coeff, _CoupledResult, _Operator, _resolve_handle, _state_base_name, _to_affine,
+    Value, _Coeff, _CoupledResult, _Operator, _authoring_source_location, _resolve_handle,
+    _state_base_name, _to_affine,
 )
 
 
@@ -21,6 +22,8 @@ class _ProgramCore(_ProgramConstants):
         self._next_id += 1
         v = Value(self, vid, vtype, op, [i for i in inputs if isinstance(i, Value)],
                   attrs, name or ("%s%d" % (op, vid)), block)
+        if self._capture_source:
+            v.source_location = _authoring_source_location()
         # Inside a control-flow recording scope (cond_fn / body_fn of a while_), ops go into the active
         # sub-block, NOT the flat self._values: a while body must RE-EXECUTE each iteration, so its ops
         # are owned by the while op and re-emitted in the loop, never walked once at the top level.
@@ -439,12 +442,19 @@ LocalTerm`, an :class:`pops.model.OperatorHandle` from ``m.source_term``, or a p
         linear source). Consumed by `solve_local_linear`."""
         return _Operator(_Coeff({0: 1.0}), [])
 
-    def linear_source(self, name):
-        """Reference a model linear-source operator ``L_name`` (declared via ``m.linear_source``).
-        Use it in operator algebra (``self.I - a * P.linear_source('lorentz')``) or `apply`. The
-        coefficients of L are the model's; the Program only names it (resolved at compile time)."""
+    def linear_source(self, operator):
+        """Reference a model linear-source operator ``L`` (declared via ``m.linear_source`` /
+        ``m.local_linear_map``). Use it in operator algebra (``self.I - a * P.linear_source(L)``) or
+        `apply`. The coefficients of L are the model's; the Program only names it (resolved at compile
+        time).
+
+        ``operator`` is the typed :class:`pops.model.OperatorHandle` the declarer returned (ADC-532).
+        A handle unwraps to its ``.name`` internally, so the IR is byte-identical to the historical
+        string form; the internal lowering / lib.time macros may still pass the bare name as an
+        internal selector (undocumented)."""
+        name = self._operator_call_name(operator) if not isinstance(operator, str) else operator
         if not isinstance(name, str) or not name:
-            raise ValueError("linear_source: name must be a non-empty string")
+            raise ValueError("linear_source: a non-empty operator name or OperatorHandle is required")
         return self._new("operator", "linear_source", (), {"linear_source": name}, name, None)
 
     def source(self, name, state=None, fields=None):

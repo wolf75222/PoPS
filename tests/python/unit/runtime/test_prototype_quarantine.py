@@ -16,10 +16,17 @@ try:
     import pops
     from pops.codegen.backends import JIT, AOT, Production
     from pops.codegen.compile_drivers import compile_problem
+    from pops.model import OperatorHandle
     from pops import time as adctime
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_prototype_quarantine (pops unavailable: %s)" % exc)
     sys.exit(0)
+
+
+def _op(m, name):
+    """A typed OperatorHandle for a registered operator (the de-stringed macro selector, ADC-532)."""
+    op = m.operator_registry().get(name)
+    return OperatorHandle(op.name, kind=op.kind, signature=op.signature)
 
 
 PRODUCTION_ONLY = "require backend='production'"
@@ -80,8 +87,8 @@ def _program_source():
     m.rate_operator("explicit_rhs", flux=True, sources=["electric"])
     P = adctime.Program("pc").bind_operators(m)
     libtime.predictor_corrector_local_linear(
-        P, "plasma", fields_operator="fields_from_state",
-        explicit_rate_operator="explicit_rhs", implicit_operator="lorentz")
+        P, "plasma", fields_operator=_op(m, "fields_from_state"),
+        explicit_rate_operator=_op(m, "explicit_rhs"), implicit_operator=_op(m, "lorentz"))
     return P.emit_cpp_program(model=m)
 
 

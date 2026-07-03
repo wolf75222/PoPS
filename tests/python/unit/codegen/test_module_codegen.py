@@ -10,12 +10,19 @@ import sys
 
 try:
     from pops.ir.expr import Const
+    from pops.model import OperatorHandle
     from pops.physics.facade import Model
     from pops import time as adctime
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_module_codegen (pops unavailable: %s)" % exc)
     sys.exit(0)
+
+
+def _op(m, name):
+    """A typed OperatorHandle for a registered operator (the de-stringed macro selector, ADC-532)."""
+    op = m.operator_registry().get(name)
+    return OperatorHandle(op.name, kind=op.kind, signature=op.signature)
 
 
 def _model():
@@ -36,8 +43,8 @@ def test_metadata_block_emitted():
     m = _model()
     P = adctime.Program("pc").bind_operators(m)
     libtime.predictor_corrector_local_linear(
-        P, "plasma", fields_operator="fields_from_state",
-        explicit_rate_operator="explicit_rhs", implicit_operator="lorentz")
+        P, "plasma", fields_operator=_op(m, "fields_from_state"),
+        explicit_rate_operator=_op(m, "explicit_rhs"), implicit_operator=_op(m, "lorentz"))
     src = P.emit_cpp_program(model=m)
     # GeneratedModule descriptor + GeneratedProgram coexist in the one .so.
     assert "pops_install_program" in src
@@ -64,8 +71,8 @@ def test_metadata_not_in_step_body():
     m = _model()
     P = adctime.Program("pc").bind_operators(m)
     libtime.predictor_corrector_local_linear(
-        P, "plasma", fields_operator="fields_from_state",
-        explicit_rate_operator="explicit_rhs", implicit_operator="lorentz")
+        P, "plasma", fields_operator=_op(m, "fields_from_state"),
+        explicit_rate_operator=_op(m, "explicit_rhs"), implicit_operator=_op(m, "lorentz"))
     src = P.emit_cpp_program(model=m)
     body = src.split("pops_install_program", 1)[1]
     assert "pops_module_" not in body, \

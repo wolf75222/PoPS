@@ -3,7 +3,7 @@
 Exports: imex_local, imex_local_linear.
 """
 
-from ._helpers import _opcall, program_macro
+from ._helpers import _opcall, _operator_handle, program_macro
 
 
 @program_macro
@@ -21,10 +21,9 @@ def imex_local(P, block, *, linear_source, sources=("default",), flux=True, thet
     via `P.solve_local_linear`, exactly the predictor half of the codebase's predictor-corrector
     pattern (``test_time_local_solve``). At ``theta == 1`` this is backward Euler on the L term and
     forward Euler on R; ``theta == 0`` would drop the implicit solve (use `forward_euler` instead) and
-    is rejected. @p linear_source is the name of the model ``m.linear_source``; @p theta the
-    implicitness of the L term (0 < theta <= 1)."""
-    if not (isinstance(linear_source, str) and linear_source):
-        raise ValueError("imex_local: linear_source must be a non-empty m.linear_source name")
+    is rejected. @p linear_source is the typed handle of the model ``m.linear_source`` /
+    ``m.local_linear_map``; @p theta the implicitness of the L term (0 < theta <= 1)."""
+    linear_source = _operator_handle(linear_source, "linear_source")
     if not (0.0 < float(theta) <= 1.0):
         raise ValueError(
             "imex_local: theta must be in (0, 1] (got %r); theta == 0 is fully explicit -- use "
@@ -48,11 +47,16 @@ def imex_local_linear(P, block, *, explicit_operator, implicit_operator, fields_
 
         U^{n+1} = (I - theta dt L)^{-1} (U^n + dt R)
 
-    composing the typed ``explicit_operator`` and ``implicit_operator`` (and an optional
-    ``fields_operator``) by name. Requires ``P.bind_operators(module)``.
+    composing the typed ``explicit_operator`` and ``implicit_operator`` handles (and an optional
+    ``fields_operator`` handle). Each is a :class:`pops.model.OperatorHandle` from an ``m.*``
+    declarer, not a name string. Requires ``P.bind_operators(module)``.
     """
     if not (0.0 < theta <= 1.0):
         raise ValueError("imex_local_linear: theta must be in (0, 1]")
+    explicit_operator = _operator_handle(explicit_operator, "explicit_operator")
+    implicit_operator = _operator_handle(implicit_operator, "implicit_operator")
+    if fields_operator is not None:
+        fields_operator = _operator_handle(fields_operator, "fields_operator")
     u = P.state(block)
     fields = _opcall(P, fields_operator, u, value_name="fields") if fields_operator else None
     r = _opcall(P, explicit_operator, u, fields, value_name="R")
