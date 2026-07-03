@@ -6,6 +6,10 @@ fits the Spec-4 file-size budget.  These three leaf emitters (called from
 ops) build install-time apply lambdas + the Krylov solve calls; they never recurse back
 into the op dispatcher.  They reuse the shared primitives in ``program_emit_kernels``.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.codegen.program_emit_kernels import (
     _apply_in_arg,
     _coeff_cpp,
@@ -13,7 +17,7 @@ from pops.codegen.program_emit_kernels import (
 )
 
 
-def _emit_schur_coeffs(program, v, var, lines, prelude):
+def _emit_schur_coeffs(program: Any, v: Any, var: Any, lines: Any, prelude: Any) -> None:
     """Lower a schur_coeffs bundle (ADC-421): allocate the four 1-component coefficient fields
     (eps_x, eps_y, a_xy, a_yx) ONCE as persistent shared_ptrs (prelude, alloc-once, captured by the
     step closure and by the apply lambda that consumes them) and FILL them per step in the body from
@@ -36,7 +40,8 @@ def _emit_schur_coeffs(program, v, var, lines, prelude):
            _coeff_cpp(v.attrs["th_dt"]), v.attrs["c_rho"], v.attrs["c_bz"]))
 
 
-def _emit_matrix_free_operator(program, v, var, prelude, lines=None):
+def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
+                               lines: Any = None) -> None:
     """Lower a matrix_free_operator to an INSTALL-TIME C++ apply lambda ``apply_A{id}`` (appended to
     @p prelude). The lambda has the pops::ApplyFn signature ``(pops::MultiFab& out, const pops::MultiFab&
     in)``; its body re-emits the apply sub-block:
@@ -207,7 +212,7 @@ def _emit_matrix_free_operator(program, v, var, prelude, lines=None):
     prelude.append("};")
 
 
-def _precond_applyfn(v, prelude):
+def _precond_applyfn(v: Any, prelude: Any) -> str:
     """Return the C++ expression for the preconditioner ApplyFn of a solve_linear node @p v, emitting any
     real callback into @p prelude (install-time, captured by the step closure -- alloc-once, like the
     operator apply lambda).
@@ -247,7 +252,8 @@ def _precond_applyfn(v, prelude):
         "geometric_mg)" % scheme)
 
 
-def _emit_solve_linear(program, v, base, var, prelude, lines):
+def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
+                       lines: Any) -> None:
     """Lower solve_linear to a call into the runtime's matrix-free Krylov loop. The solution field
     ``sf_sol{id}`` is a PERSISTENT shared_ptr (prelude, captured by the step closure); the step body
     seeds the initial guess (zero, or a copy of the supplied guess), then calls

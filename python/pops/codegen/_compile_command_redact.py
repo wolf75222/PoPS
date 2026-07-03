@@ -5,8 +5,12 @@ budget. ``_redact_compile_command`` is a pure function (no codegen state) re-imp
 ``compile_drivers`` and called once per fresh compile.
 """
 
+from __future__ import annotations
 
-def _redact_compile_command(cmd, *, tmp_cpp, gen_src):
+from typing import Any
+
+
+def _redact_compile_command(cmd: Any, *, tmp_cpp: Any, gen_src: Any) -> str:
     """Return a redacted compile-command STRING for introspection (Spec 5 sec.12.4, #49).
 
     The raw argv is safe to surface (it is a compiler invocation, not a credential), but two things

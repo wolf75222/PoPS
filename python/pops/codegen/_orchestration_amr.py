@@ -11,6 +11,10 @@ this module adds no new codegen and no forbidden cross-layer import (the runtime
 types are reached only through those reused helpers).
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 from pops.codegen.orchestration import (
     _freeze_and_snapshot,
     _problem_field_solvers,
@@ -18,7 +22,7 @@ from pops.codegen.orchestration import (
 )
 
 
-def _compile_amr(problem, layout, backend, target, **kwargs):
+def _compile_amr(problem: Any, layout: Any, backend: Any, target: Any, **kwargs: Any) -> Any:
     """Compile each AMR block to a ``target='amr_system'`` ``CompiledModel`` (single AND multi block).
 
     There is no whole-system time Program on AMR: each block's resolved physics model is compiled to a
@@ -62,7 +66,7 @@ def _compile_amr(problem, layout, backend, target, **kwargs):
     return compiled
 
 
-def _compile_block_amr(name, physics, backend, compile_kwargs):
+def _compile_block_amr(name: Any, physics: Any, backend: Any, compile_kwargs: Any) -> Any:
     """Compile one AMR block's physics to a ``target='amr_system'`` ``CompiledModel``.
 
     Resolves the block's physics to the underlying engine model (``_resolve_problem_model``: a

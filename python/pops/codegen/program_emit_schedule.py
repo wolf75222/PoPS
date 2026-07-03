@@ -6,12 +6,15 @@ emitted in its schedule's due-test guard + policy branch; ``program_emit_ops._em
 calls it after each op lowers itself.  ``_schedule_due_test`` / ``_split_output_decl`` are
 its helpers.  Reuses the op tables in ``program_emit_kernels``.
 """
+from __future__ import annotations
+
 import json
+from typing import Any
 
 from pops.codegen.program_emit_kernels import _AUX_OUTPUT_OPS, Value
 
 
-def _schedule_due_test(program, v, sched):
+def _schedule_due_test(program: Any, v: Any, sched: Any) -> str:
     """The C++ boolean 'is this node due this step' for a non-subcycle schedule kind. Reused as the
     guard of the policy branch. Raises (naming ADC-458) for a kind that needs a runtime primitive the
     compiled .so does not have (on_end: no end-of-run signal reaches a sim.step(dt) loop)."""
@@ -40,7 +43,7 @@ def _schedule_due_test(program, v, sched):
         "compiled sim.step(dt) loop never sees (the .so cannot know the last step); use on_start()/"
         "every()/when()/subcycle() or an on_end host hook (ADC-458)." % (kind, v.name))
 
-def _emit_schedule_wrap(program, v, var, lines, start):
+def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) -> None:
     """Wrap the C++ statements node @p v emitted (``lines[start:]``) in its schedule's due-test guard
     + policy branch (ADC-458, Spec 3 sections 17-18). Generic over the op: a field solve caches the
     System aux, any other node caches its named scratch (var[v.id]). An always()/absent schedule
@@ -201,7 +204,7 @@ def _emit_schedule_wrap(program, v, var, lines, start):
     raise NotImplementedError(
         "schedule policy %r on node %r is not lowerable (ADC-458)" % (policy, v.name))
 
-def _split_output_decl(program, body, out, v):
+def _split_output_decl(program: Any, body: Any, out: Any, v: Any) -> tuple:
     """Split a scratch node's emitted @p body into (declaration_line, rest): the OUTPUT scratch
     ``out`` must be declared OUTSIDE the policy guard so both branches see it, while the fill stays
     inside. The op declares its output as its FIRST emitted line (``pops::MultiFab <out> = ...;``);

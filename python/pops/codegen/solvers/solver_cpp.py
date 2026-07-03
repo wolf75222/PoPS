@@ -9,7 +9,10 @@ authoring IR :mod:`pops.codegen.solvers.dsl`. Lowering an authored IR to C++ tex
 codegen concern, so the emitter now lives in the codegen layer (Spec 5 criterion 19: a
 solver-gen DSL, if any, lives in ``pops.codegen.solvers``).
 """
+from __future__ import annotations
+
 import json
+from typing import Any
 
 from .dsl import build_solver_ir, _as_descriptor, _SOLVER_MAX_ITERS
 
@@ -17,7 +20,7 @@ from .dsl import build_solver_ir, _as_descriptor, _SOLVER_MAX_ITERS
 __experimental__ = True
 
 
-def generate_solver_cpp(solver_brick, func=None):
+def generate_solver_cpp(solver_brick: Any, func: Any = None) -> str:
     """Lower a custom solver IR to GENERATED C++ that RUNS (Spec 3 section 20, criterion 23).
 
     @p solver_brick is a ``@pops.codegen.solvers.solver`` descriptor (or its registered name).
@@ -57,7 +60,7 @@ class _SolverCppLowering:
     with the shared ``pops::dot`` / ``pops::saxpy`` / ``pops::lincomb`` primitives. It is a
     self-contained codegen path that does not perturb the shared time/dsl codegen."""
 
-    def __init__(self, ir, func):
+    def __init__(self, ir: Any, func: Any) -> None:
         self._ir = ir
         self._func = str(func)
         self._var = {}          # IR value id -> C++ token (a MultiFab lvalue or a scalar / bool expr)
@@ -83,7 +86,7 @@ class _SolverCppLowering:
                 "solver IR has no solution iterate to lower (the result must fold onto a "
                 "warm-start State distinct from the rhs); cannot generate C++")
 
-    def emit(self):
+    def emit(self) -> str:
         """The full C++ translation unit: the templated kernel + an explicit-double ABI wrapper."""
         body = self._emit_kernel_body()
         scratch = "\n".join("  " + ln for ln in self._scratch)
@@ -93,7 +96,7 @@ class _SolverCppLowering:
             scratch=scratch, body=body_src, max_iters=_SOLVER_MAX_ITERS)
 
     # --- top-level walk ----------------------------------------------------
-    def _emit_kernel_body(self):
+    def _emit_kernel_body(self) -> list:
         """Lower the top-level SSA list into the kernel body lines (the while op recurses).
 
         ``r`` (the result iterate) is the function's output ``x``; the warm start (``zeros_like``)
@@ -105,7 +108,7 @@ class _SolverCppLowering:
             self._emit_op(v, lines, result_id)
         return lines
 
-    def _emit_op(self, v, lines, result_id):
+    def _emit_op(self, v: Any, lines: Any, result_id: Any) -> None:
         """Lower a SINGLE solver-IR op to C++, appending statements to @p lines and recording its
         C++ token in ``self._var``. Shared by the top-level walk and the while sub-blocks."""
         op = v.op
@@ -145,7 +148,7 @@ class _SolverCppLowering:
                 "scalar_int / logical_and / while_ (Spec 3 section 20)" % (op, v.name))
 
     # --- per-op lowering ---------------------------------------------------
-    def _emit_reduce(self, v, lines):
+    def _emit_reduce(self, v: Any, lines: Any) -> None:
         """A collective reduction -> a C++ scalar local. ``norm2 = sqrt(pops::dot(u,u))``;
         ``dot`` calls ``pops::dot`` directly (the SAME shared primitive the native Krylov uses)."""
         tok = "s%d" % v.id
@@ -164,20 +167,20 @@ class _SolverCppLowering:
                 "generate_solver_cpp: reduction kind %r is not lowerable in a custom solver "
                 "(use norm2 / dot)" % (kind,))
 
-    def _emit_apply(self, v, lines):
+    def _emit_apply(self, v: Any, lines: Any) -> None:
         """``A(x)`` -> the matrix-free matvec: call the template-parameter operator into an
         alloc-once scratch field. NO std::function -- ``A`` is the inlined template callable."""
         operator = v.inputs[0]
-        state = v.inputs[1] if len(v.inputs) > 1 else None
+        state: Any = v.inputs[1] if len(v.inputs) > 1 else None
         # The solver context records apply inputs as (state[, fields]); the operator name is in
         # attrs. The first State input is the vector A is applied to.
-        x_in = next((inp for inp in v.inputs if getattr(inp, "vtype", None) == "state"), state)
+        x_in: Any = next((inp for inp in v.inputs if getattr(inp, "vtype", None) == "state"), state)
         out = self._alloc_field(None, v)
         self._var[v.id] = out
         lines.append("A(%s, %s);" % (out, self._var[x_in.id]))
         _ = operator  # the operator is the single template callable A (no per-name dispatch)
 
-    def _emit_combine(self, v, lines, result_id):
+    def _emit_combine(self, v: Any, lines: Any, result_id: Any) -> None:
         """An affine combine ``sum_k c_k * field_k`` -> a scratch field (or the in-place iterate
         update). ``c_k`` are IR literal coefficients.
 
@@ -208,7 +211,7 @@ class _SolverCppLowering:
             lines.append("pops::saxpy(%s, static_cast<pops::Real>(%s), %s);"
                          % (target, repr(float(coeff.get(0, 0.0))), tok))
 
-    def _emit_scalar_op(self, v, lines):
+    def _emit_scalar_op(self, v: Any, lines: Any) -> None:
         """Scalar arithmetic (add/sub/mul/div). The bound iteration counter lowers to the real C++
         loop counter ``pops_iters`` (so ``it < max_iter`` is a genuine trip bound); the counter's
         ``it = it + 1`` increment is the loop's own ``++pops_iters`` and emits nothing. A pure-literal
@@ -233,7 +236,7 @@ class _SolverCppLowering:
         cppop = {"add": "+", "sub": "-", "mul": "*", "div": "/"}[fn]
         self._var[v.id] = "(%s %s %s)" % (toks[0], cppop, toks[1])
 
-    def _counter_alias_ids(self):
+    def _counter_alias_ids(self) -> Any:
         """The set of scalar_op ids that alias the loop counter: the base ``it`` plus every
         ``it + literal`` increment (transitively). All lower to the live C++ ``pops_iters``."""
         if self._counter_id is None:
@@ -252,7 +255,7 @@ class _SolverCppLowering:
                     changed = True
         return frozenset(aliases)
 
-    def _find_counter(self):
+    def _find_counter(self) -> Any:
         """The IR id of the iteration counter: a top-level literal ``scalar_int`` (built as ``n+0``)
         that a body ``scalar_op`` reads to increment it (the ``it = it + scalar_int(1)`` idiom). Bound
         to the live C++ loop counter so the authored ``it < max_iter`` cap actually bounds the
@@ -273,7 +276,7 @@ class _SolverCppLowering:
                     return rid
         return None
 
-    def _emit_compare(self, v):
+    def _emit_compare(self, v: Any) -> None:
         """A scalar predicate -> an inline C++ boolean expression (no statement; the while op embeds
         it in ``if (!(<expr>)) break;``)."""
         lhs = v.inputs[0]
@@ -283,7 +286,7 @@ class _SolverCppLowering:
             rhs_tok = "static_cast<pops::Real>(%s)" % repr(float(v.attrs["rhs"]))
         self._var[v.id] = "(%s %s %s)" % (self._var[lhs.id], v.attrs["cmp"], rhs_tok)
 
-    def _emit_while(self, v, lines, result_id):
+    def _emit_while(self, v: Any, lines: Any, result_id: Any) -> None:
         """Lower the convergence loop to a REAL C++ ``for (;;)`` with a break: the cond sub-block is
         re-emitted each pass (the predicate re-evaluates against the loop-updated iterate), then the
         body sub-block runs. The C++ loop counter ``pops_iters`` is the authored iteration counter (so
@@ -312,7 +315,7 @@ class _SolverCppLowering:
         lines.append("}")
 
     # --- helpers -----------------------------------------------------------
-    def _alloc_field(self, fixed, v):
+    def _alloc_field(self, fixed: Any, v: Any) -> str:
         """The C++ token of a vector field for IR value @p v. ``fixed="x"`` is the kernel output (no
         new scratch); otherwise allocate an ALLOC-ONCE scratch field shaped like the rhs ``b`` (one
         ghost, ncomp(b)) before the loop -- never inside it (no heap churn in the kernel)."""
@@ -322,7 +325,7 @@ class _SolverCppLowering:
         self._scratch.append("pops::MultiFab %s(b.box_array(), b.dmap(), b.ncomp(), 1);" % tok)
         return tok
 
-    def _first_state_id(self):
+    def _first_state_id(self) -> Any:
         """The id of the rhs ``b`` IR State: the first State the builder receives (build_solver_ir
         binds it as ``ctx.unknown('b')`` right after the operator linear_source 'A')."""
         for v in self._ir.program._values:
@@ -330,7 +333,7 @@ class _SolverCppLowering:
                 return v.id
         return None
 
-    def _find_iterate_id(self):
+    def _find_iterate_id(self) -> Any:
         """The id of the solution iterate ``x``: the warm-start State the result folds back onto. The
         result is either a State (the warm start returned directly) or a ``linear_combine`` whose State
         input (not the rhs ``b``) is the iterate base (the ``x`` of ``x + omega*r``)."""
@@ -353,7 +356,7 @@ class _SolverCppLowering:
         return None
 
 
-def _fold_scalar_literal(operands, fn):
+def _fold_scalar_literal(operands: Any, fn: Any) -> float:
     """Fold a pure-literal scalar_op (the ``scalar_int(n) = n + 0.0`` idiom) to its constant float."""
     a = float(operands[0][1])
     b = float(operands[1][1]) if len(operands) > 1 else 0.0
@@ -366,7 +369,7 @@ def _fold_scalar_literal(operands, fn):
     return a / b
 
 
-def _iter_all_nodes(values):
+def _iter_all_nodes(values: Any) -> Any:
     """Yield @p values and the ops in any ``while`` cond/body sub-blocks, depth-first (build order)."""
     for v in values:
         yield v

@@ -12,6 +12,9 @@ _emit_roe_roles      -- m.enable_roe : roe_dissipation |A_roe| dU from roles
 _emit_roe_provided   -- m.roe_dissipation : user rows via left()/right()
 _emit_roe_jacobian   -- m.roe_from_jacobian : d = |A| (UR-UL), A = dF/dU at Uavg
 """
+from __future__ import annotations
+
+from typing import Any
 
 from pops.codegen.cpp_writer import _cpp_roe
 from pops.codegen.module_emit_helpers import (
@@ -22,7 +25,7 @@ from pops.codegen.module_emit_helpers import (
 )
 
 
-def _emit_hllc(model, nc):
+def _emit_hllc(model: Any, nc: Any) -> list:
     """CAPABILITY HLLC (m.enable_hllc, audit wave 3): contact_speed (Toro) + hllc_star_state
     GENERATED from the block ROLES (no literal index: Density/MomentumX/MomentumY
     resolved, Energy optional, any other component advected passively Us[c]=fac*U[c]/r).
@@ -70,7 +73,7 @@ def _emit_hllc(model, nc):
     return out
 
 
-def _emit_roe_roles(model, nc):
+def _emit_roe_roles(model: Any, nc: Any) -> list:
     """CAPABILITY ROE (m.enable_roe, audit balance): roe_dissipation = |A_roe| (UR - UL)
     GENERATED from the ROLES. With Energy: exact TRANSCRIPTION of the core canonical Euler
     algebra (numerical_flux.hpp), gamma-1 deduced from p/(E - 1/2 rho |v|^2) -- numerical
@@ -157,7 +160,7 @@ def _emit_roe_roles(model, nc):
     return out
 
 
-def _emit_roe_provided(model, nc):
+def _emit_roe_provided(model: Any, nc: Any) -> list:
     """CAPABILITY ROE PROVIDED (m.roe_dissipation): 'user' counterpart of enable_roe. The d_i
     rows come from the user (their eigenstructure), written with left()/right() of both states.
     We emit the SAME hook roe_dissipation(UL, AL, UR, AR, dir) as the roles path (trait
@@ -190,7 +193,7 @@ def _emit_roe_provided(model, nc):
     return out
 
 
-def _emit_roe_jacobian(model, nc, cse):
+def _emit_roe_jacobian(model: Any, nc: Any, cse: Any) -> list:
     """CAPABILITY ROE FROM THE FLUX JACOBIAN (m.roe_from_jacobian): generic moment Roe. The hook
     builds A = dF_dir/dU at Uavg = 1/2(UL+UR) (cons locals bound to the mean, like the
     wave_speeds-from-jacobian path binds them to U), then d = |A| (UR-UL) via pops::roe_abs_apply

@@ -42,6 +42,8 @@ budget, and every name re-imported below so the public surface of
 ``pops_cache_dir`` is re-exported for callers that read it off this module.
 """
 
+from __future__ import annotations
+
 # Re-export every moved name so the public surface of this module is unchanged.
 # The original compile.py imported these toolchain/cache/abi helpers at module
 # scope, so they were attributes of ``pops.codegen.compile``; preserve that surface.

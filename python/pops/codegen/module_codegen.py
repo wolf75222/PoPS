@@ -25,6 +25,9 @@ Internal helpers (emit-only)
 _codegen_exprs, _live_prims, _prim_block, _jac_entries
 _emit_bricks, _elliptic_field_registrations, _emit_metadata
 """
+from __future__ import annotations
+
+from typing import Any
 
 # Re-export the moved helpers + the brick emitter so the public surface of
 # ``pops.codegen.module_codegen`` is unchanged (every name resolves here).
@@ -47,7 +50,7 @@ from pops.codegen.module_emit_brick import emit_cpp_brick  # noqa: F401
 # emit_cpp
 # ---------------------------------------------------------------------------
 
-def emit_cpp(model, func=None, cse=True):
+def emit_cpp(model: Any, func: Any = None, cse: bool = True) -> str:
     """Generates a compilable C++ function computing the physical flux from the symbolic
     tree (each Expr node knows how to write itself in C++ via to_cpp).
 
@@ -85,8 +88,8 @@ def emit_cpp(model, func=None, cse=True):
 # emit_cpp_source
 # ---------------------------------------------------------------------------
 
-def emit_cpp_source(model, name=None, namespace="pops_generated", cse=True,
-                    hoist_reciprocals=False):
+def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generated", cse: bool = True,
+                    hoist_reciprocals: bool = False) -> str:
     """Generate a composable C++ SOURCE BRICK (in the pops sense) from model._source.
 
     The produced struct exposes apply(U, a) returning the source term S(U, aux), with one line per
@@ -111,14 +114,14 @@ def emit_cpp_source(model, name=None, namespace="pops_generated", cse=True,
     nm = name or (model.name.capitalize() + "Source")
     nc = model.n_vars
 
-    def cons_locals():
+    def cons_locals() -> list:
         return ["    const pops::Real %s = U[%d];" % (c, i) for i, c in enumerate(model.cons_names)]
 
-    def prim_locals(live=None):
+    def prim_locals(live: Any = None) -> list:
         # FILTER on the live primitives (live) + OPT-IN hoist; without live, full output.
         return _prim_block(model, live, hoist_reciprocals)
 
-    def aux_locals():
+    def aux_locals() -> list:
         return model._aux_locals_lines()  # canonical (a.<n>) + named (a.extra_field(k)), ADC-70
 
     na = model._total_n_aux()  # required aux width (B_z / T_e / named fields -> > 3)
@@ -190,7 +193,7 @@ def emit_cpp_source(model, name=None, namespace="pops_generated", cse=True,
 # _emit_bricks
 # ---------------------------------------------------------------------------
 
-def _emit_bricks(model, name=None, hoist_reciprocals=False):
+def _emit_bricks(model: Any, name: Any = None, hoist_reciprocals: bool = False) -> tuple:
     """Generate the bricks (hyperbolic + source + elliptic) and the CompositeModel<...> type
     shared by BOTH backends (JIT IModel and AOT). Source / elliptic OPTIONAL: without
     set_source -> pops::NoSource; without set_elliptic_rhs -> zero rhs (no Poisson coupling).
@@ -237,14 +240,14 @@ def _emit_bricks(model, name=None, hoist_reciprocals=False):
 # _elliptic_field_registrations
 # ---------------------------------------------------------------------------
 
-def _elliptic_field_registrations(model, nm):
+def _elliptic_field_registrations(model: Any, nm: Any) -> list:
     """Per named elliptic field (ADC-428): (field, brick_struct, phi_comp, gx_comp, gy_comp) for the
     native loader. The aux component of each output name is its channel index: a CANONICAL name
     (phi/grad_x/...) maps via AUX_CANONICAL; a model-named aux (aux_field) maps to
     AUX_NAMED_BASE + its position in aux_extra_names. A name the model never declared as an aux is
     rejected (the solve would write a component no source can read). gx/gy default to -1 (phi only)
     when the field lists fewer than 3 aux names."""
-    def comp(name):
+    def comp(name: Any) -> int:
         if name in _AUX_CANONICAL:
             return _AUX_CANONICAL[name]
         if name in model.aux_extra_names:
@@ -266,7 +269,7 @@ def _elliptic_field_registrations(model, nm):
 # _emit_metadata
 # ---------------------------------------------------------------------------
 
-def _emit_metadata(model, model_alias):
+def _emit_metadata(model: Any, model_alias: Any) -> str:
     """OPTIONAL metadata symbols of the .so block, read by dlsym on the System side. SHARED by both
     backends (JIT and AOT). The NAMES + ROLES are always emitted (POPS_EXPORT_BLOCK_METADATA):
     they come from the model's VariableSet (single source of truth), the System reads them instead of
@@ -295,8 +298,8 @@ def _emit_metadata(model, model_alias):
 # emit_cpp_elliptic
 # ---------------------------------------------------------------------------
 
-def emit_cpp_elliptic(model, name=None, namespace="pops_generated", cse=True,
-                      hoist_reciprocals=False):
+def emit_cpp_elliptic(model: Any, name: Any = None, namespace: str = "pops_generated", cse: bool = True,
+                      hoist_reciprocals: bool = False) -> str:
     """Generates a composable elliptic RIGHT-HAND SIDE BRICK from model._elliptic.
 
     The produced struct exposes rhs(U) -> Real (charge density, background, gravity...), same shape as
@@ -337,8 +340,8 @@ def emit_cpp_elliptic(model, name=None, namespace="pops_generated", cse=True,
 # emit_cpp_elliptic_field
 # ---------------------------------------------------------------------------
 
-def emit_cpp_elliptic_field(model, field, struct_name, namespace="pops_generated",
-                            hoist_reciprocals=False, cse=True):
+def emit_cpp_elliptic_field(model: Any, field: Any, struct_name: Any, namespace: str = "pops_generated",
+                            hoist_reciprocals: bool = False, cse: bool = True) -> str:
     """Generates a SELF-CONTAINED elliptic RHS brick for the NAMED field @p field (ADC-428).
 
     Unlike emit_cpp_elliptic (which emits only ``rhs(U)``, consumed by CompositeModel), this brick

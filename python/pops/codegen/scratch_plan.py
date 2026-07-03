@@ -26,8 +26,10 @@ Nothing here binds, dlopens, allocates or reads a runtime array: the builder rea
 imports ``pops.time`` lazily (in-function) so the codegen layering stays acyclic and the module is
 ``numpy`` / ``_pops``-free at module scope (cf. tests/python/architecture/test_import_graph.py).
 """
+from __future__ import annotations
 
 import json
+from typing import Any
 
 # Scratch-allocating op families. A scratch buffer is owned by one flat node; we bucket each by the
 # vtype of the buffer it stages so a caller sees the state / rhs / scalar-field split the spec asks
@@ -77,8 +79,8 @@ class ScratchPlan:
       notes: inspectable assumptions -- exactly which figures are exact vs conservative.
     """
 
-    def __init__(self, *, program_name, categories, scratch_count, buffer_count, reused, rejected,
-                 persistent, notes, conservative):
+    def __init__(self, *, program_name: Any, categories: Any, scratch_count: Any, buffer_count: Any,
+                 reused: Any, rejected: Any, persistent: Any, notes: Any, conservative: Any) -> None:
         self.program_name = program_name
         self.categories = dict(categories)
         self.scratch_count = int(scratch_count)
@@ -90,11 +92,11 @@ class ScratchPlan:
         self.conservative = bool(conservative)
 
     @property
-    def buffers_saved(self):
+    def buffers_saved(self) -> Any:
         """How many step-body buffers the sound reuse eliminates (scratch_count - buffer_count)."""
         return self.scratch_count - self.buffer_count
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         """A plain-dict view of every field (JSON-ready)."""
         return {"program": self.program_name,
                 "categories": dict(self.categories),
@@ -107,7 +109,7 @@ class ScratchPlan:
                 "conservative": self.conservative,
                 "notes": list(self.notes)}
 
-    def to_json(self, path=None, *, indent=2):
+    def to_json(self, path: Any = None, *, indent: Any = 2) -> Any:
         """Serialise :meth:`to_dict` to JSON; write to ``path`` if given, else return the string."""
         text = json.dumps(self.to_dict(), indent=indent, sort_keys=True)
         if path is not None:
@@ -116,7 +118,7 @@ class ScratchPlan:
             return path
         return text
 
-    def __str__(self):
+    def __str__(self) -> str:
         lines = ["scratch plan for Program %r (liveness, %s)"
                  % (self.program_name or "problem",
                     "conservative on persistent buffers" if self.conservative else "exact")]
@@ -148,13 +150,13 @@ class ScratchPlan:
                 lines.append("    - %s" % note)
         return "\n".join(lines)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return ("ScratchPlan(scratch=%d, buffers=%d, reused=%d, rejected=%d, persistent=%d)"
                 % (self.scratch_count, self.buffer_count, len(self.reused), len(self.rejected),
                    len(self.persistent)))
 
 
-def _scratch_family(op, vtype):
+def _scratch_family(op: Any, vtype: Any) -> str:
     """The category a scratch-allocating node belongs to: ``state`` / ``rhs`` / ``scalar_field``.
 
     Bucket by the buffer family the op stages. The rhs family (rate buffers) and the state-scratch
@@ -176,7 +178,7 @@ def _scratch_family(op, vtype):
     return "state"
 
 
-def build_scratch_plan(program, model=None):
+def build_scratch_plan(program: Any, model: Any = None) -> ScratchPlan:
     """Build the :class:`ScratchPlan` of a lowered ``pops.time.Program`` (Spec 5 sec.13.11.3, #38).
 
     Runs the liveness / buffer-reuse analysis the Program already exposes
@@ -260,7 +262,8 @@ def build_scratch_plan(program, model=None):
                        persistent=persistent, notes=notes, conservative=conservative)
 
 
-def _rejected_reuse(ranges_in_order, assignment, op_of, by_name, program):
+def _rejected_reuse(ranges_in_order: Any, assignment: Any, op_of: Any, by_name: Any,
+                    program: Any) -> list:
     """The scratches that could not reuse an earlier buffer, each with an inspectable reason.
 
     Walk the scratches in def order, tracking the live range currently on each buffer (the greedy
@@ -288,7 +291,8 @@ def _rejected_reuse(ranges_in_order, assignment, op_of, by_name, program):
     return rejected
 
 
-def _reject_reason(name, r, op_of, field_barriers, blockers, by_name, assignment):
+def _reject_reason(name: Any, r: Any, op_of: Any, field_barriers: Any, blockers: Any, by_name: Any,
+                   assignment: Any) -> str:
     """A human reason a scratch landed on a fresh buffer instead of reusing one.
 
     Primary reason: every already-allocated buffer's occupant was still live at this scratch's def
@@ -310,7 +314,7 @@ def _reject_reason(name, r, op_of, field_barriers, blockers, by_name, assignment
     return ("a fresh buffer was required at def index %d%s" % (r["def_index"], aux_note))
 
 
-def _field_solve_indices(program):
+def _field_solve_indices(program: Any) -> list:
     """Flat indices of the field-solve nodes (the aux/field barriers) in the step body."""
     out = []
     for i, v in enumerate(getattr(program, "_values", [])):
@@ -319,7 +323,7 @@ def _field_solve_indices(program):
     return out
 
 
-def _persistent_solver_buffers(program):
+def _persistent_solver_buffers(program: Any) -> list:
     """The Krylov work vectors + multigrid hierarchies that live for a whole solve (CONSERVATIVE).
 
     A ``solve_linear`` node runs a dynamic Krylov loop that keeps ~``_KRYLOV_WORK_VECTORS`` work
@@ -340,7 +344,7 @@ def _persistent_solver_buffers(program):
     return persistent
 
 
-def _vtype_of(program, scratch_name):
+def _vtype_of(program: Any, scratch_name: Any) -> Any:
     """The vtype of a scratch node by name (for the residual family bucketing). 'state' if absent."""
     for v in getattr(program, "_values", []):
         if v.name == scratch_name:
@@ -348,7 +352,7 @@ def _vtype_of(program, scratch_name):
     return "state"
 
 
-def _resolve_program(handle):
+def _resolve_program(handle: Any) -> Any:
     """Return a ``pops.time.Program`` from a Program or a ``CompiledProblem`` carrying one, else None.
 
     Lazy ``pops.time`` import keeps the codegen layering acyclic and the module ``_pops``-free at

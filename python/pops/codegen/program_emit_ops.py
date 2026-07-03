@@ -8,7 +8,10 @@ the per-cell model kernels (``program_emit_model_kernels``), the matrix-free / S
 emitters (``program_emit_solve``), the control-flow emitters (``program_emit_control``)
 and the schedule wrap (``program_emit_schedule``).
 """
+from __future__ import annotations
+
 import json
+from typing import Any
 
 from pops.codegen.program_emit_kernels import (
     _PROFILE_SKIP_OPS,
@@ -40,7 +43,8 @@ from pops.codegen.program_emit_solve import (
 from pops.codegen.program_emit_schedule import _emit_schedule_wrap
 
 
-def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, block_idx=None):
+def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, model: Any, lines: Any,
+             prelude: Any = None, block_idx: Any = None) -> None:
     """Lower a SINGLE op to C++, appending to @p lines and recording its C++ token in @p var. Shared
     by the top-level walk and the while sub-blocks (a while body re-runs this per op each pass), so
     reductions / compares / linear_combine all lower identically inside the loop. @p base is the

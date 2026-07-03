@@ -10,15 +10,19 @@ Python-side metadata only. ``pops.time`` / the runtime are imported lazily to ke
 the codegen import graph acyclic (cf. tests/python/architecture/test_import_graph.py).
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 from pops._report import Report
 
 
-def _short(value, width=12):
+def _short(value: Any, width: int = 12) -> str:
     """A short prefix of a hash-like string, or ``"none"`` when absent."""
     return (value or "")[:width] or "none"
 
 
-def _abi_token(abi_key, name):
+def _abi_token(abi_key: Any, name: str) -> Any:
     prefix = name + "="
     for part in str(abi_key or "").split(";"):
         if part.startswith(prefix):
@@ -40,9 +44,10 @@ class CompiledReport(Report):
     report_type = "compiled"
     schema_version = 1
 
-    def __init__(self, *, name, backend, platform, layout, blocks, fields, program, inputs,
-                 artifacts, status, env=None, runtime=None, capabilities=None, options=None,
-                 module_manifest=None):
+    def __init__(self, *, name: Any, backend: Any, platform: Any, layout: Any, blocks: Any,
+                 fields: Any, program: Any, inputs: Any, artifacts: Any, status: Any,
+                 env: Any = None, runtime: Any = None, capabilities: Any = None,
+                 options: Any = None, module_manifest: Any = None) -> None:
         self.name = name
         self.backend = backend
         self.platform = platform
@@ -67,7 +72,7 @@ class CompiledReport(Report):
         # carries a bare dsl.Model with no backing Module -- absent, never fabricated.
         self.module_manifest = dict(module_manifest) if module_manifest else None
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         """A plain-dict view of the whole report (JSON-ready)."""
         return {"name": self.name, "backend": self.backend, "platform": self.platform,
                 "layout": self.layout, "blocks": [dict(b) for b in self.blocks],
@@ -78,7 +83,7 @@ class CompiledReport(Report):
                 "capabilities": dict(self.capabilities), "options": dict(self.options),
                 "module_manifest": dict(self.module_manifest) if self.module_manifest else None}
 
-    def __str__(self):
+    def __str__(self) -> str:
         lines = ["compiled problem %r" % self.name]
         lines.append("  backend  : %s" % self.backend)
         lines.append("  platform : %s" % self.platform)
@@ -170,12 +175,12 @@ class CompiledReport(Report):
         lines.append("  status   : %s" % self.status)
         return "\n".join(lines)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return ("CompiledReport(name=%r, backend=%r, blocks=%d, fields=%d)"
                 % (self.name, self.backend, len(self.blocks), len(self.fields)))
 
 
-def build_compiled_report(compiled):
+def build_compiled_report(compiled: Any) -> CompiledReport:
     """Build the :class:`CompiledReport` of a compiled artifact (sec.12.1).
 
     AGGREGATES the metadata already carried (no compile / bind / runtime read):
@@ -256,7 +261,7 @@ def build_compiled_report(compiled):
         module_manifest=module_manifest)
 
 
-def _compiled_options(compiled):
+def _compiled_options(compiled: Any) -> dict:
     """Effective defaults/options visible before bind; inert metadata-only."""
     from pops.runtime.defaults import PHYSICAL_DEFAULT_GAMMA, numerical_defaults_report
 
@@ -323,7 +328,7 @@ def _compiled_options(compiled):
     }
 
 
-def _route_registry_components():
+def _route_registry_components() -> dict:
     """The route-registry / vocabulary cache-key components (ADC-599), inspectable."""
     from pops.runtime.routes import (CAPABILITY_VOCAB_VERSION, ROUTE_REGISTRY_VERSION,
                                      route_registry_hash, route_registry_signature)

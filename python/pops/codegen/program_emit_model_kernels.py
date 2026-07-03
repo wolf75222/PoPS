@@ -6,6 +6,10 @@ kernel over the VALID cells of each local fab from a physical model's symbolic c
 (source_term / flux_term / linear_source).  They reuse the shared primitives in
 ``program_emit_kernels`` (``_kernel_open`` / ``_cell_locals`` / ``_coeff_cpp`` / ...).
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.codegen.program_emit_kernels import (
     _aux_comp,  # noqa: F401
     _cell_locals,
@@ -17,7 +21,7 @@ from pops.codegen.program_emit_kernels import (
 )
 
 
-def _emit_source_kernel(model, name, state_var, out_var, block_idx=0):
+def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, block_idx: Any = 0) -> list:
     """Lower ``source`` (a named ``m.source_term``): outA(i,j,c) = S_c(U, prims, aux, params) per cell.
 
     @p block_idx (ADC-510): the PROGRAM block index whose RuntimeParams the kernel reads when a source
@@ -41,7 +45,7 @@ def _emit_source_kernel(model, name, state_var, out_var, block_idx=0):
     return body
 
 
-def _emit_coupled_rate_kernel(components, by_block, var, scratch):
+def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch: Any) -> list:
     """Lower a ``coupled_rate`` (Spec 3 criterion 27, ADC-457) to ONE multi-state for_each_cell kernel
     filling every participating block's rate scratch at once.
 
@@ -79,7 +83,7 @@ def _emit_coupled_rate_kernel(components, by_block, var, scratch):
                     "coupled states (rename one of them)" % (c,))
             cons_source[c] = (var[st.id], idx)
 
-    def state_handle(token):
+    def state_handle(token: Any) -> str:
         return "%sA" % token                     # read handle for an input state token (u0A / u1A)
 
     lines = ["for (int li = 0; li < %s.local_size(); ++li) {" % driver]
@@ -107,7 +111,8 @@ def _emit_coupled_rate_kernel(components, by_block, var, scratch):
     return lines
 
 
-def _emit_flux_kernel(model, names, state_var, fx_var, fy_var, block_idx=0):
+def _emit_flux_kernel(model: Any, names: Any, state_var: Any, fx_var: Any, fy_var: Any,
+                      block_idx: Any = 0) -> list:
     """Lower NAMED fluxes (ADC-419): fxA(i,j,c) = sum_k F^k_x[c](U, prims, aux, params),
     fyA(i,j,c) = sum_k F^k_y[c](U, prims, aux, params) over the selected named fluxes @p names. ONE
     kernel evaluates the SUM per direction into the two n_cons flux fields (the subsequent
@@ -141,7 +146,7 @@ def _emit_flux_kernel(model, names, state_var, fx_var, fy_var, block_idx=0):
     return body
 
 
-def _emit_apply_kernel(model, name, state_var, out_var, block_idx=0):
+def _emit_apply_kernel(model: Any, name: Any, state_var: Any, out_var: Any, block_idx: Any = 0) -> list:
     """Lower ``apply`` (a named ``m.linear_source`` L): outA(i,j,r) = sum_c L[r][c](aux, params) *
     U(i,j,c). @p block_idx (ADC-510): the PROGRAM block whose RuntimeParams the L coefficients read
     when one references a runtime parameter (L may depend on aux / const / params, never on U)."""
@@ -162,7 +167,8 @@ def _emit_apply_kernel(model, name, state_var, out_var, block_idx=0):
     return body
 
 
-def _emit_solve_local_linear_kernel(model, name, a_coeff, rhs_var, out_var, block_idx=0):
+def _emit_solve_local_linear_kernel(model: Any, name: Any, a_coeff: Any, rhs_var: Any, out_var: Any,
+                                    block_idx: Any = 0) -> list:
     """Lower ``solve_local_linear``: per cell M = I - a*L (a = a_coeff(dt)), invert M (dense N x N
     via pops::detail::mat_inverse) and set outA(i,j,r) = sum_c Minv[r][c] * q(i,j,c), q = the rhs state.
     L's coefficients depend on aux / const / params only, so M is assembled from the aux / param locals +
@@ -195,7 +201,7 @@ def _emit_solve_local_linear_kernel(model, name, a_coeff, rhs_var, out_var, bloc
     return body
 
 
-def _residual_term_exprs(impl, w):
+def _residual_term_exprs(impl: Any, w: Any) -> list:
     """The per-component Expr list of one LOCAL residual sub-block op @p w, as a function of the bare
     conservative-variable names (which the Newton kernel binds to the iterate stack ``Ueval[c]``):
 
@@ -222,7 +228,7 @@ def _residual_term_exprs(impl, w):
         "emit_cpp_program: residual op '%s' is not a per-cell Expr term (source / apply only)" % w.op)
 
 
-def _emit_residual_eval(impl, v, n):
+def _emit_residual_eval(impl: Any, v: Any, n: Any) -> list:
     """Build the device residual-evaluation lambda body for ``solve_local_nonlinear``: lines computing
     ``rout[0..n-1] = r(Ueval)`` from the iterate stack ``Ueval`` (bound to the conservative names), the
     frozen guess stack ``Gval`` (the initial-guess State, read as a per-cell constant) and the captured
@@ -271,7 +277,8 @@ def _emit_residual_eval(impl, v, n):
     return lines
 
 
-def _emit_solve_local_nonlinear_kernel(model, v, guess_var, out_var, block_idx=0):
+def _emit_solve_local_nonlinear_kernel(model: Any, v: Any, guess_var: Any, out_var: Any,
+                                       block_idx: Any = 0) -> list:
     """Lower ``solve_local_nonlinear`` (spec op 10) to a per-cell Newton kernel: from the initial guess
     U0 (the @p guess_var state), iterate ``J dU = -r``, ``U -= dU`` until ``max_c |r_c| < tol`` or the
     fixed budget, then write the converged U into @p out_var. Reuses ``pops::for_each_cell`` + the SAME
@@ -355,7 +362,7 @@ def _emit_solve_local_nonlinear_kernel(model, v, guess_var, out_var, block_idx=0
     return body
 
 
-def _linear_source_rows(impl, name):
+def _linear_source_rows(impl: Any, name: Any) -> Any:
     """The n_cons x n_cons matrix of Expr of a model linear source @p name (m.linear_source).
     @p impl is the HyperbolicModel."""
     if name not in impl._linear_sources:

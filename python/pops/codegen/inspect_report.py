@@ -22,6 +22,9 @@ Nothing here compiles, binds, dlopens or allocates: the builders read Python-sid
 The module imports ``pops.time`` / the runtime lazily (in-function) to keep the codegen import
 graph acyclic (cf. tests/python/architecture/test_import_graph.py).
 """
+from __future__ import annotations
+
+from typing import Any
 
 from pops._report import Report
 
@@ -62,18 +65,19 @@ class RequirementsReport(Report):
     report_type = "requirements"
     schema_version = 1
 
-    def __init__(self, *, capabilities, descriptors, constraints, unknown):
+    def __init__(self, *, capabilities: Any, descriptors: Any, constraints: Any,
+                 unknown: Any) -> None:
         self.capabilities = list(capabilities)  # [{capability, used_by, provided}]
         self.descriptors = list(descriptors)    # [{slot, name}]
         self.constraints = dict(constraints)    # {backend, layout, abi_key, ...}
         self.unknown = list(unknown)            # honestly-deferred pieces
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {"capabilities": [dict(c) for c in self.capabilities],
                 "descriptors": [dict(d) for d in self.descriptors],
                 "constraints": dict(self.constraints), "unknown": list(self.unknown)}
 
-    def __str__(self):
+    def __str__(self) -> str:
         lines = ["compile-time requirements:"]
         lines.append("  model capabilities (the lowered flux relies on):")
         if self.capabilities:
@@ -97,12 +101,12 @@ class RequirementsReport(Report):
                 lines.append("    - %s" % note)
         return "\n".join(lines)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return ("RequirementsReport(capabilities=%d, descriptors=%d, unknown=%d)"
                 % (len(self.capabilities), len(self.descriptors), len(self.unknown)))
 
 
-def build_requirements(compiled):
+def build_requirements(compiled: Any) -> Any:
     """Build the :class:`RequirementsReport` of a compiled artifact (sec.12.1).
 
     Reads the carried model + metadata only (no compile / bind):
@@ -193,24 +197,24 @@ class BindReport(Report):
     report_type = "bind"
     schema_version = 1
 
-    def __init__(self, *, program_name, provided, required, missing):
+    def __init__(self, *, program_name: Any, provided: Any, required: Any, missing: Any) -> None:
         self.program_name = program_name
         self.provided = dict(provided)   # group -> sorted [names]
         self.required = dict(required)   # group -> sorted [names]
         self.missing = list(missing)     # actionable lines (ADC-463)
 
     @property
-    def ready(self):
+    def ready(self) -> bool:
         """True when every REQUIRED bind input is already provided (no missing line)."""
         return not self.missing
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {"program": self.program_name,
                 "provided": {k: list(v) for k, v in self.provided.items()},
                 "required": {k: list(v) for k, v in self.required.items()},
                 "missing": list(self.missing), "ready": self.ready}
 
-    def __str__(self):
+    def __str__(self) -> str:
         lines = ["bind plan for compiled artifact %r" % (self.program_name or "problem")]
         for group in ("instances", "params", "aux", "solvers"):
             req = self.required.get(group, [])
@@ -226,12 +230,12 @@ class BindReport(Report):
             lines.append("  ready: every required bind input is provided")
         return "\n".join(lines)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return ("BindReport(program=%r, ready=%s, missing=%d)"
                 % (self.program_name, self.ready, len(self.missing)))
 
 
-def build_bind_report(sim, compiled):
+def build_bind_report(sim: Any, compiled: Any) -> Any:
     """Build a :class:`BindReport` of @p compiled against @p sim (System or AmrSystem) -- sec.12.1.
 
     INERT: reads ``compiled.arguments()`` (the DECLARED bind inputs) and the sim's already-wired

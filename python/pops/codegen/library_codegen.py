@@ -26,12 +26,16 @@ to the generated-symbol table; lowering its kernel body to a callable C++ symbol
 deferred ADC-462 codegen follow-up and is recorded here as a metadata-only entry, never a
 fabricated symbol.
 """
+from __future__ import annotations
+
+from typing import Any
+
 import json
 
 __all__ = ["emit_library_cpp"]
 
 
-def _str_table(accessor, values):
+def _str_table(accessor: Any, values: Any) -> str:
     """A ``const char* pops_library_<accessor>(int i)`` switch over @p values (JSON-escaped
     C string literals), returning ``""`` out of range. Mirrors the program codegen's table()
     so the read-back side is a uniform ``(count, name)`` string-table scan."""
@@ -41,7 +45,7 @@ def _str_table(accessor, values):
             '  switch (i) {\n%s    default: return "";\n  }\n}\n' % (accessor, cases))
 
 
-def _requirements_json(brick):
+def _requirements_json(brick: Any) -> str:
     """The brick's requirements as compact JSON (the wire form the reader parses back).
 
     Mirrors :meth:`pops.codegen.library.LibraryManifest` entries: a dict of named requirement lists
@@ -49,12 +53,12 @@ def _requirements_json(brick):
     return json.dumps(brick.get("requirements", {}), sort_keys=True)
 
 
-def _capabilities_json(brick):
+def _capabilities_json(brick: Any) -> str:
     """The brick's capabilities as compact JSON (the wire form the reader parses back)."""
     return json.dumps(brick.get("capabilities", {}), sort_keys=True)
 
 
-def _manifest_csv(value_map, key):
+def _manifest_csv(value_map: Any, key: Any) -> str:
     """Flatten a requirements/capabilities dict's lists into the CSV the external-brick
     manifest (``BrickRegistry`` / ``pops_brick_manifest``) uses. The native bricks carry
     ``{"capabilities": [...]}`` (required model capabilities) and the external bricks carry
@@ -69,7 +73,7 @@ def _manifest_csv(value_map, key):
     return ",".join(tokens)
 
 
-def _register_brick_lines(bricks):
+def _register_brick_lines(bricks: Any) -> str:
     """``BrickRegistry::instance().register_brick({...})`` calls at static-init time, one per
     brick, so the library ``.so`` IS a self-describing external-brick ``.so`` (its bricks are
     catalogued the same way a hand-written external brick is). The id / category / requirement
@@ -87,7 +91,7 @@ def _register_brick_lines(bricks):
     return "\n".join(lines)
 
 
-def _brick_manifest_json(name, bricks):
+def _brick_manifest_json(name: Any, bricks: Any) -> str:
     """The JSON ``pops_brick_manifest()`` returns -- the SAME STRICT versioned contract
     :func:`pops.lib.load_cpp_library` -> :func:`pops.descriptors.parse_brick_manifest` parses
     (ADC-611): ``{"schema_version", "bricks": [{"id", "category", "requirements" CSV,
@@ -108,7 +112,7 @@ def _brick_manifest_json(name, bricks):
                       sort_keys=True)
 
 
-def emit_library_cpp(manifest):
+def emit_library_cpp(manifest: Any) -> str:
     """C++ source of a compiled brick library ``.so`` for @p manifest (a
     :class:`pops.codegen.library.LibraryManifest`).
 

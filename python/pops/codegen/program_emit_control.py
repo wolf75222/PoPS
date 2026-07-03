@@ -8,10 +8,14 @@ resolve and scan a coupled_rate node.  The op dispatcher ``_emit_op`` lives in
 ``program_emit_ops`` and is imported LAZILY inside the functions below to break the
 ``ops`` <-> ``control`` recursion cycle at import time (it resolves fine at call time).
 """
+from __future__ import annotations
+
+from typing import Any
+
 import json
 
 
-def _coupled_rate_components(program, v):
+def _coupled_rate_components(program: Any, v: Any) -> dict:
     """Resolve a ``coupled_rate`` node @p v to its per-block component formulas (Spec 3 criterion
     27, ADC-457), validated for the cons-only MVP. Returns ``{block: [Expr, ...]}`` (one formula
     per component of that block's StateSpace).
@@ -79,7 +83,7 @@ def _coupled_rate_components(program, v):
             % (op_name, sorted(missing), v.name))
     return components
 
-def _walk_expr(e):
+def _walk_expr(e: Any) -> Any:
     """Yield every node of a dsl Expr tree (used to scan a coupled_rate formula for non-cons Vars)."""
     from pops.ir.visitors import _children
     stack = [e]
@@ -88,7 +92,7 @@ def _walk_expr(e):
         yield node
         stack.extend(_children(node))
 
-def _emit_body(program, model=None):
+def _emit_body(program: Any, model: Any = None) -> tuple:
     """Generate the C++ of the install function in TWO phases (each list indented uniformly by the
     template). Assumes `_check_lowerable` has passed. @p model supplies the symbolic coefficients of
     the Phase-4b source / apply / solve_local_linear ops. Returns ``(prelude, body)``:
@@ -146,7 +150,7 @@ def _emit_body(program, model=None):
     body_src = "\n".join("    " + ln for ln in lines)
     return prelude_src, body_src
 
-def _emit_while(program, v, base, var, model, lines, block_idx=None):
+def _emit_while(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any, block_idx: Any = None) -> None:
     """Lower a while op to an infinite C++ loop with a break (the condition re-evaluates each pass).
     The loop variable is a single MultiFab mutated IN PLACE across iterations; the cond / body sub-
     blocks re-run the per-op lowering each pass, with the loop-variable value id seeded to the loop
@@ -178,7 +182,7 @@ def _emit_while(program, v, base, var, model, lines, block_idx=None):
     lines += ["  " + ln for ln in body_lines]
     lines.append("}")
 
-def _emit_range(program, v, base, var, model, lines, block_idx=None):
+def _emit_range(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any, block_idx: Any = None) -> None:
     """Lower a range op to a C++ ``for`` over a fixed count. Like a while, the loop variable is one
     MultiFab mutated in place and the body sub-block is emitted ONCE inside the loop (re-run each
     pass at runtime); the loop-variable value id is seeded to the loop var for the sub-block."""
@@ -201,7 +205,7 @@ def _emit_range(program, v, base, var, model, lines, block_idx=None):
     lines += ["  " + ln for ln in body_lines]
     lines.append("}")
 
-def _emit_if(program, v, base, var, model, lines, block_idx=None):
+def _emit_if(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any, block_idx: Any = None) -> None:
     """Lower an if op to a C++ branch. @p cond was emitted at the top level (its boolean expression
     is var[cond.id]); the loop variable is a copy of the input state, overwritten in place only when
     the branch is taken (so the result is the input state when the condition is false at runtime)."""

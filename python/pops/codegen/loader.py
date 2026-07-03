@@ -8,6 +8,9 @@ it (adder, names, roles, gamma, n_aux, params, caps, abi_key, model_hash).
 
 Neither class imports ``pops.dsl`` or ``pops.physics`` at module level.
 """
+from __future__ import annotations
+
+from typing import Any
 
 
 class CompiledProblem:
@@ -36,9 +39,11 @@ class CompiledProblem:
     line. A failed compile raises before any handle exists.
     """
 
-    def __init__(self, so_path, program, model, abi_key, cxx, std, libraries=None,
-                 problem_hash=None, cache_key=None, compile_command=None, generated_sources=None,
-                 codegen_env=None, module_manifest=None, module_hash=None, external_bricks=None):
+    def __init__(self, so_path: Any, program: Any, model: Any, abi_key: Any, cxx: Any, std: Any,
+                 libraries: Any = None, problem_hash: Any = None, cache_key: Any = None,
+                 compile_command: Any = None, generated_sources: Any = None,
+                 codegen_env: Any = None, module_manifest: Any = None,
+                 module_hash: Any = None, external_bricks: Any = None) -> None:
         self.so_path = so_path
         self.program = program          # the pops.time.Program that was lowered
         self.model = model              # the physical model (optional; added as a block in the MVP)
@@ -89,14 +94,14 @@ class CompiledProblem:
         # resolved -- a documented absence, not a fabricated default).
         self._codegen_env = codegen_env
 
-    def _seal(self):
+    def _seal(self) -> None:
         """Make this handle immutable (ADC-563): ``pops.compile`` seals it after its last attach.
 
         The advanced ``pops.codegen.compile_problem`` route returns an unsealed handle (its callers
         legitimately attach orchestration metadata); the PUBLIC artifact is sealed."""
         object.__setattr__(self, "_sealed", True)
 
-    def __setattr__(self, name, value):
+    def __setattr__(self, name: Any, value: Any) -> None:
         if getattr(self, "_sealed", False):
             raise AttributeError(
                 "CompiledProblem is immutable after pops.compile (ADC-563): cannot set %r. The "
@@ -104,12 +109,12 @@ class CompiledProblem:
                 "change it." % (name,))
         object.__setattr__(self, name, value)
 
-    def __fspath__(self):
+    def __fspath__(self) -> Any:
         return self.so_path
 
     # --- compiled-artifact metadata (Spec 5 sec.12.4, #48-49) ----------------
     @property
-    def codegen_dir(self):
+    def codegen_dir(self) -> Any:
         """Directory the compiled ``.so`` (and any generated source) lives in (sec.12.4, #48).
 
         The out-of-source cache directory the .so was written to (``os.path.dirname(so_path)``);
@@ -119,7 +124,7 @@ class CompiledProblem:
         return os.path.dirname(self.so_path) if self.so_path else None
 
     @property
-    def problem_hash(self):
+    def problem_hash(self) -> Any:
         """Stable hash of the program SOURCE the ``.so`` was compiled from (sec.12.4, #48).
 
         The sha256 of the emitted C++ program text -- the cache identity (the WHAT). ``None`` for a
@@ -128,7 +133,7 @@ class CompiledProblem:
         return self._problem_hash
 
     @property
-    def cache_key(self):
+    def cache_key(self) -> Any:
         """The (problem source | abi_key | backend/target) cache key of the ``.so`` (sec.12.4, #48).
 
         The sha256 the out-of-source build cache keys the artifact on; reproducing it requires the
@@ -136,7 +141,7 @@ class CompiledProblem:
         return self._cache_key
 
     @property
-    def compile_command(self):
+    def compile_command(self) -> Any:
         """The REDACTED compiler invocation that built the ``.so`` (sec.12.4, #49).
 
         A single command string with the ephemeral temp source replaced by the generated-source
@@ -147,7 +152,7 @@ class CompiledProblem:
         return self._compile_command
 
     @property
-    def generated_sources(self):
+    def generated_sources(self) -> Any:
         """The generated source files written for inspection (sec.12.4, #49).
 
         The ``.cpp`` files ``compile_problem(debug=True)`` (or ``POPS_KEEP_GENERATED``) persisted next
@@ -156,7 +161,7 @@ class CompiledProblem:
         return list(self._generated_sources)
 
     @property
-    def codegen_env(self):
+    def codegen_env(self) -> Any:
         """The resolved codegen ``POPS_*`` environment snapshot that governed this compile (sec.12.4).
 
         A :class:`pops.codegen.env.CodegenEnv` recording the EFFECTIVE settings (env defaults already
@@ -166,7 +171,7 @@ class CompiledProblem:
         ``None`` for a handle built outside ``compile_problem``."""
         return self._codegen_env
 
-    def module_hash(self):
+    def module_hash(self) -> Any:
         """The compile-time hash of the operator-first Module (ADC-557 I5), or ``None``.
 
         The stable ``pops.model.Module.module_hash`` captured at compile time: the identity of the
@@ -176,7 +181,7 @@ class CompiledProblem:
         change what bind lowers). ``None`` for a model with no backing Module."""
         return self._module_hash
 
-    def runtime_param_routes(self):
+    def runtime_param_routes(self) -> Any:
         """``(per_block, defaults)`` routing the Program's RUNTIME parameters to the per-PROGRAM-block
         ``set_program_params`` vectors (ADC-510): per_block maps a program block index to its param names
         in within-block index order (matching the ``.so`` metadata + the lowered read), defaults a name to
@@ -186,40 +191,40 @@ class CompiledProblem:
 
     # --- operator introspection (Spec 2, S2-5): metadata read from the carried model,
     # no need to load or run the .so.
-    def _intro_model(self):
+    def _intro_model(self) -> Any:
         if self.model is None:
             raise ValueError("this CompiledProblem carries no model; operator introspection "
                              "is unavailable")
         return self.model
 
-    def list_operators(self):
+    def list_operators(self) -> Any:
         """Names of the typed operators of the compiled module (registration order)."""
         return self._intro_model().operator_registry().names()
 
-    def list_state_spaces(self):
+    def list_state_spaces(self) -> Any:
         """Names of the compiled module's state spaces."""
         return self._intro_model().list_state_spaces()
 
-    def list_field_spaces(self):
+    def list_field_spaces(self) -> Any:
         """Names of the compiled module's field spaces."""
         return self._intro_model().list_field_spaces()
 
-    def operator_signature(self, name):
+    def operator_signature(self, name: Any) -> Any:
         """The pops.model.Signature of operator ``name`` in the compiled module."""
         return self._intro_model().operator_registry().get(name).signature
 
-    def operator_requirements(self, name):
+    def operator_requirements(self, name: Any) -> dict:
         """The requirements dict of operator ``name``."""
         return dict(self._intro_model().operator_registry().get(name).requirements)
 
-    def operator_capabilities(self, name):
+    def operator_capabilities(self, name: Any) -> dict:
         """The capabilities dict of operator ``name``."""
         return dict(self._intro_model().operator_registry().get(name).capabilities)
 
     # --- bind-input + memory introspection (Spec 5 sec.12.2 / 12.3, #44-46) ---
     # These read the carried metadata (the lowered Program + the physical model); they do NOT
     # compile, bind, dlopen or read any runtime array.
-    def arguments(self):
+    def arguments(self) -> Any:
         """The runtime inputs this artifact expects at ``System.install`` (Spec 5 sec.12.2, #44-45).
 
         Returns an :class:`pops.codegen.inspect_compiled.Arguments` listing -- WITHOUT any bind or
@@ -232,7 +237,7 @@ class CompiledProblem:
         from pops.codegen.inspect_compiled import build_arguments
         return build_arguments(self)
 
-    def manifest(self):
+    def manifest(self) -> Any:
         """The RICH self-describing manifest of this artifact (Spec 5 sec.13.12, #36).
 
         Returns a :class:`pops.external.CompiledArtifactManifest`: the ABI identity (``abi_key`` /
@@ -247,7 +252,7 @@ class CompiledProblem:
         from pops.external.artifact_manifest import build_compiled_manifest
         return build_compiled_manifest(self)
 
-    def estimate_memory(self, mesh, *, platform=None, layout=None):
+    def estimate_memory(self, mesh: Any, *, platform: Any = None, layout: Any = None) -> Any:
         """A FORMULA-based memory estimate on ``mesh`` (Spec 5 sec.12.3, #46).
 
         Returns an :class:`pops.codegen.inspect_compiled.MemoryEstimate`: the state /
@@ -262,7 +267,7 @@ class CompiledProblem:
         from pops.codegen.inspect_compiled import build_memory_estimate
         return build_memory_estimate(self, mesh, platform=platform, layout=layout)
 
-    def scratch_plan(self):
+    def scratch_plan(self) -> Any:
         """The scratch-buffer liveness plan of this artifact's time Program (Spec 5 sec.13.11.3, #38).
 
         Returns a :class:`pops.codegen.scratch_plan.ScratchPlan`: the per-category scratch counts
@@ -281,7 +286,7 @@ class CompiledProblem:
     # The print(compiled) reports + the codegen/IR dumps. All INERT metadata-reading (they aggregate
     # the carried Program + model + compile artifacts), EXCEPT dump_cpp which REUSES the existing
     # emit_cpp_program codegen. None binds, dlopens, allocates or runs.
-    def inspect(self):
+    def inspect(self) -> Any:
         """A printable :class:`pops.codegen.inspect_report.CompiledReport` of this artifact (sec.12.1).
 
         The ``print(compiled.inspect())`` summary: name, backend, platform, layout, blocks (+ state /
@@ -292,7 +297,7 @@ class CompiledProblem:
         from pops.codegen.inspect_report import build_compiled_report
         return build_compiled_report(self)
 
-    def requirements(self):
+    def requirements(self) -> Any:
         """The COMPILE-TIME constraints of this artifact (sec.12.1), DISTINCT from :meth:`arguments`.
 
         Returns a :class:`pops.codegen.inspect_report.RequirementsReport`: the model capabilities the
@@ -305,7 +310,7 @@ class CompiledProblem:
         from pops.codegen.inspect_report import build_requirements
         return build_requirements(self)
 
-    def inspect_capabilities(self):
+    def inspect_capabilities(self) -> Any:
         """The descriptor capability rows relevant to THIS compiled artifact (sec.12.1).
 
         Delegates to the top-level :func:`pops.inspect_capabilities` machinery (the descriptor-sourced
@@ -319,7 +324,7 @@ class CompiledProblem:
         scoped = [e for e in matrix if e.category in self._CAPABILITY_CATEGORIES]
         return CapabilityMatrix(scoped)
 
-    def capability_matrix(self):
+    def capability_matrix(self) -> Any:
         """The ADC-549 native route matrix for this compiled artifact.
 
         Unlike :meth:`inspect_capabilities`, which scopes the descriptor catalog, this reports the
@@ -343,7 +348,7 @@ class CompiledProblem:
     _CAPABILITY_CATEGORIES = ("riemann", "reconstruction", "limiter", "projection", "layout",
                               "solver", "field")
 
-    def dump_ir(self, path=None):
+    def dump_ir(self, path: Any = None) -> Any:
         """Write the serialized Program IR (JSON) -- the SAME serialization ``_ir_hash`` digests.
 
         EXPOSES the existing codegen: the lowered ``pops.time.Program``'s ``_serialize()`` blob (its
@@ -359,7 +364,7 @@ class CompiledProblem:
             return path
         return blob
 
-    def dump_cpp(self, target):
+    def dump_cpp(self, target: Any) -> Any:
         """Write the generated C++ source of the problem ``.so`` (REUSES the existing emit).
 
         Calls the EXISTING ``Program.emit_cpp_program(model=...)`` codegen (the same source
@@ -387,7 +392,7 @@ class CompiledProblem:
             handle.write(src)
         return out_path
 
-    def dump_schedule(self, path=None):
+    def dump_schedule(self, path: Any = None) -> Any:
         """Write the schedule / commit order of the Program (the block advance order).
 
         EXPOSES the lowered schedule WITHOUT running it: the committed blocks in the runtime block
@@ -413,7 +418,7 @@ class CompiledProblem:
             return path
         return text
 
-    def _require_program(self, who):
+    def _require_program(self, who: Any) -> Any:
         """Return the carried Program, or raise a clear error naming what is missing (never fake)."""
         program = self.program
         if program is None:
@@ -421,7 +426,7 @@ class CompiledProblem:
                 "%s: this CompiledProblem carries no Program (the lowered pops.time.Program is "
                 "unavailable on this handle), so the IR / C++ / schedule cannot be dumped." % who)
         return program
-    def inspect_amr(self, layout=None):
+    def inspect_amr(self, layout: Any = None) -> Any:
         """STATIC AMR report on this compiled artifact (Spec 5 sec.8.12 / sec.8.4).
 
         A compiled time ``Program`` carries NO AMR layout descriptor (it lowers a whole-system time
@@ -434,7 +439,7 @@ class CompiledProblem:
         from pops import inspect_amr
         return inspect_amr(layout)
 
-    def __str__(self):
+    def __str__(self) -> str:
         """A short, deterministic, array-free summary (Spec 5 sec.12.1, #40-41).
 
         Prints the program name, a short program-source/IR hash, a short ABI key and the validated
@@ -445,7 +450,7 @@ class CompiledProblem:
         return ("CompiledProblem(name=%s, hash=%s, backend=%s, libraries=%d)"
                 % (self.program_name or "problem", short_hash, short_abi, len(self.libraries)))
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "<CompiledProblem %r -> %s>" % (self.program_name, self.so_path)
 
 

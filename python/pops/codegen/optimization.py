@@ -7,6 +7,10 @@ redundant-solve elimination, local fusion, reciprocal hoisting) and the numeric 
 codegen consumes it. A non-strict numeric transform is never implicit -- it must be selected
 here (Spec 5 sec.13.10).
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.descriptors import Descriptor, reject_string_selector
 from pops.descriptors_report import CapabilitySet
 from .math_options import StrictMath, _MathMode
@@ -19,25 +23,25 @@ class _Fusion(Descriptor):
 class Disabled(_Fusion):
     """No kernel fusion / no fast-math (explicit off-switch)."""
 
-    def options(self):
+    def options(self) -> dict:
         return {"enabled": False}
 
 
 class ConservativeFusion(_Fusion):
     """Fuse only safe local operations; never across a solve / reduction / halo refresh."""
 
-    def __init__(self, local_sources=True, projections=True,
-                 flux_divergence=False, field_solves=False):
+    def __init__(self, local_sources: bool = True, projections: bool = True,
+                 flux_divergence: bool = False, field_solves: bool = False) -> None:
         self.local_sources = bool(local_sources)
         self.projections = bool(projections)
         self.flux_divergence = bool(flux_divergence)
         self.field_solves = bool(field_solves)
 
-    def options(self):
+    def options(self) -> dict:
         return {"local_sources": self.local_sources, "projections": self.projections,
                 "flux_divergence": self.flux_divergence, "field_solves": self.field_solves}
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         # Fusion across an elliptic solve / global reduction / halo refresh is never allowed.
         return CapabilitySet({"crosses_solve": False, "crosses_reduction": False})
 
@@ -47,7 +51,7 @@ _MATH_SUGGEST = ('a typed StrictMath()/FastMath()/DebugMath()/GpuRegisterAware()
 _FUSE_SUGGEST = "a typed ConservativeFusion()/Disabled(), not a string"
 
 
-def _check_math(math):
+def _check_math(math: Any) -> Any:
     """Validate the ``math`` selector: a typed math mode, never a bare string (Spec 5 sec.14.2).
 
     ``None`` keeps the conservative :class:`StrictMath` default. A bare ``str`` is REJECTED via
@@ -65,7 +69,7 @@ def _check_math(math):
     return math
 
 
-def _check_fuse(fuse):
+def _check_fuse(fuse: Any) -> Any:
     """Validate the ``fuse`` selector: a typed fusion policy, never a bare string (sec.14.2).
 
     ``None`` means no fusion policy attached. A bare ``str`` is REJECTED via
@@ -97,8 +101,10 @@ class Optimization(Descriptor):
 
     category = "optimization"
 
-    def __init__(self, cse=True, eliminate_dead_nodes=True, eliminate_redundant_solves=True,
-                 fuse_local_ops=True, hoist_reciprocals=True, fuse=None, math=None):
+    def __init__(self, cse: bool = True, eliminate_dead_nodes: bool = True,
+                 eliminate_redundant_solves: bool = True,
+                 fuse_local_ops: bool = True, hoist_reciprocals: bool = True,
+                 fuse: Any = None, math: Any = None) -> None:
         self.cse = bool(cse)
         self.eliminate_dead_nodes = bool(eliminate_dead_nodes)
         self.eliminate_redundant_solves = bool(eliminate_redundant_solves)
@@ -107,7 +113,7 @@ class Optimization(Descriptor):
         self.fuse = _check_fuse(fuse)
         self.math = _check_math(math)
 
-    def options(self):
+    def options(self) -> dict:
         return {"cse": self.cse, "eliminate_dead_nodes": self.eliminate_dead_nodes,
                 "eliminate_redundant_solves": self.eliminate_redundant_solves,
                 "fuse_local_ops": self.fuse_local_ops,
@@ -115,15 +121,15 @@ class Optimization(Descriptor):
                 "fuse": self.fuse.name if self.fuse is not None else None,
                 "math": self.math.name}
 
-    def capabilities(self):
+    def capabilities(self) -> Any:
         return CapabilitySet({"strict_math": isinstance(self.math, StrictMath)})
 
-    def to_emit_kwargs(self):
+    def to_emit_kwargs(self) -> dict:
         """Map this policy onto the existing ``emit_cpp*`` knobs (cse / hoist_reciprocals)."""
         return {"cse": self.cse, "hoist_reciprocals": self.hoist_reciprocals}
 
     @classmethod
-    def default(cls):
+    def default(cls) -> Any:
         """The recommended conservative default (StrictMath, CSE on, no risky fusion)."""
         return cls()
 

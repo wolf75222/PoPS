@@ -10,7 +10,8 @@
     "python/pops/params/constants.py",
     "python/pops/solvers/options.py",
     "python/pops/solvers/tolerances.py",
-    "python/pops/time"
+    "python/pops/time",
+    "python/pops/codegen"
   ],
   "exclude": [
     "**/__pycache__",

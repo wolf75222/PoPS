@@ -3,13 +3,16 @@
 Extracted verbatim from pops.dsl (bodies byte-for-byte); only import lines adjusted.
 Public API re-exported from pops.codegen.__init__.
 """
+from __future__ import annotations
+
 import os
 import shutil
 import sys
+from typing import Any
 
 
 # --- _pops access (mirrors dsl.py: try top-level then relative) ---
-def _pops_module():
+def _pops_module() -> Any:
     """The _pops extension module if it is loadable, otherwise None (dsl.py stays usable alone)."""
     try:
         import _pops
@@ -30,7 +33,7 @@ def _pops_module():
 # module build bakes it (CMake) and compile_native re-bakes it (-D flag) by computing it IDENTICALLY.
 # The computation MUST be bit-for-bit identical on the CMake side (python/CMakeLists.txt) and here : sha256 of the
 # sorted concatenation "<relpath>\n<sha256(content)>\n" of each .hpp/.h under include/. cf. abi_key.hpp.
-def pops_header_signature(include):
+def pops_header_signature(include: Any) -> str:
     """Stable signature of the pops header tree under @p include : sha256 of the sorted concatenation
     "<relative path>\\n<sha256 of content>\\n" of each .hpp/.h. EXACT MIRROR of the CMake computation
     (python/CMakeLists.txt) : if a header changes, the signature changes on both sides, so the ABI
@@ -57,7 +60,7 @@ def pops_header_signature(include):
 # pops/ -> ../../../include), then the neighboring repo ../PoPS/include. Validity criterion : the
 # canonical file pops/mesh/multifab.hpp exists. No hard import of pops here (the dsl module may be loaded
 # outside the package) : we resolve `pops.__file__` lazily.
-def pops_include():
+def pops_include() -> str:
     """include/ directory of PoPS (header-only headers of the core), auto-detected.
 
     Priority : $POPS_INCLUDE (override), otherwise from the installed `pops` package
@@ -95,7 +98,7 @@ def pops_include():
 # has no -std=c++23, 23 otherwise) and exposes it as _pops.__cxx_std__. We derive the expected -std flag of the
 # native model from it INSTEAD OF freezing c++23 (which broke the native path under Kokkos/GH200, where the module is
 # in c++20). Direct MIRROR of the build, so never a silent gap between loader and model.
-def loader_cxx_std():
+def loader_cxx_std() -> str:
     """Flag '-std=c++NN' that the native model (backend="production") MUST use to share the ABI
     of the loaded _pops module. Source of truth : _pops.__cxx_std__ (integer 20/23 baked by the build, =
     POPS_CXX_STD : 20 under Kokkos, 23 otherwise). Graceful fallbacks if the attribute is missing (old module) :
@@ -112,7 +115,7 @@ def loader_cxx_std():
     return std or "c++23"
 
 
-def _pops_cxx_std_from_module(mod):
+def _pops_cxx_std_from_module(mod: Any) -> Any:
     """C++ standard of the module @p mod as 'c++NN', or None if undeterminable. Priority to the integer
     __cxx_std__ (baked by the build) ; otherwise we extract std=<__cplusplus> from the ABI key."""
     n = getattr(mod, "__cxx_std__", None)
@@ -141,7 +144,7 @@ def _pops_cxx_std_from_module(mod):
 # cf. abi_key.hpp) would reject the .so ("incompatible ABI"). The ONLY guaranteed-compatible compiler
 # is the one from the _pops build : CMake bakes it (POPS_CXX_COMPILER -> _pops.__cxx_compiler__) and we
 # prefer it here over the PATH. $POPS_CXX remains the conscious override (chosen conda toolchain, wrapper...).
-def loader_cxx_compiler():
+def loader_cxx_compiler() -> Any:
     """Path of the compiler that BUILT the _pops module (baked by CMake as __cxx_compiler__),
     or None if it is unknown (old module, manual build) or absent from this machine.
 
@@ -161,7 +164,7 @@ def loader_cxx_compiler():
     return cc
 
 
-def _check_headers_match_module(include):
+def _check_headers_match_module(include: Any) -> str:
     """PRE-DLOPEN GUARD of the native path (real bug) : if the headers under @p include have changed since
     the build of _pops (recent pull, another clone...), the loader compiled against them references
     C++ signatures that the OLD module does not export -> the dlopen of add_native_block fails BEFORE the
@@ -189,7 +192,7 @@ def _check_headers_match_module(include):
     return current  # signature of the @p include tree, reusable (avoids a 2nd walk+sha256)
 
 
-def resolve_auto_backend(include=None):
+def resolve_auto_backend(include: Any = None) -> tuple:
     """DEFAULT backend policy (backend='auto', decision recorded -- ADC-63).
 
     'production' (zero-copy native loader, strict add_block parity) AS SOON AS the
@@ -218,7 +221,7 @@ def resolve_auto_backend(include=None):
     return "production", "toolchain parity established (module + baked compiler + matching headers)"
 
 
-def _default_cxx(cxx=None):
+def _default_cxx(cxx: Any = None) -> Any:
     """CENTRALIZED resolution of the DSL .so compiler (all backends). Priority :
       1. explicit cxx (caller argument) ;
       2. $POPS_CXX (conscious environment override) ;
@@ -234,7 +237,7 @@ def _default_cxx(cxx=None):
 _STD_ALIAS = {"c++23": "c++2b", "c++20": "c++2a"}
 
 
-def _run_compile(cmd, what):
+def _run_compile(cmd: Any, what: Any) -> None:
     """Run the compilation command @p cmd CAPTURING stderr : on failure, raises a
     SELF-CONTAINED RuntimeError (command + compiler output + remedies) instead of the raw
     CalledProcessError whose message contains only the command line (real bug : the user sees
@@ -257,7 +260,7 @@ def _run_compile(cmd, what):
 _probe_cache = {}  # (cc, std) -> effective std: avoids re-probing repeatedly (N compiled models)
 
 
-def _probe_cxx_std(cc, std):
+def _probe_cxx_std(cc: Any, std: Any) -> str:
     """Checks BEFORE compilation that @p cc accepts -std=@p std (probe -fsyntax-only on empty source).
 
     Returns the EFFECTIVE std: @p std if it passes, otherwise its historical alias (c++23 -> c++2b) if
@@ -274,7 +277,7 @@ def _probe_cxx_std(cc, std):
     if cached is not None:
         return cached
 
-    def accepts(s):
+    def accepts(s: Any) -> tuple:
         try:
             r = subprocess.run([cc, "-x", "c++", "-std=" + s, "-fsyntax-only", "-"],
                                input=b"", capture_output=True, timeout=60)
@@ -309,7 +312,7 @@ def _probe_cxx_std(cc, std):
            baked or "<path/to/build/compiler>"))
 
 
-def _native_kokkos_root():
+def _native_kokkos_root() -> Any:
     """Kokkos root to compile the DSL loaders with the SAME backend as the _pops module.
 
     PoPS is KOKKOS-ONLY: every DSL .so that includes the pops headers (aot, native) MUST be compiled
@@ -322,7 +325,7 @@ def _native_kokkos_root():
     return None
 
 
-def _libomp_prefix():
+def _libomp_prefix() -> Any:
     """Homebrew libomp prefix on macOS (for -Xpreprocessor -fopenmp), or None. AppleClang does not
     handle `-fopenmp` alone: it needs -Xpreprocessor -fopenmp + the libomp include/lib (cf. CMakeLists)."""
     if sys.platform != "darwin":
@@ -338,7 +341,7 @@ def _libomp_prefix():
     return None
 
 
-def _native_feature_key():
+def _native_feature_key() -> str:
     """Traits that change the inline code of the native loader and must therefore enter the cache (else
     a cached SERIAL .so would be reused on a Kokkos module -> silent serial fallback).
 
@@ -367,7 +370,7 @@ def _native_feature_key():
     return "%s;%s" % (kk, mpi)
 
 
-def _warn_kokkos_parity():
+def _warn_kokkos_parity() -> None:
     """Warns (without blocking) when the BACKEND of the native loader would diverge from that of the _pops
     module:
     - Kokkos module + serial loader (POPS_KOKKOS_ROOT missing) -> the DSL block falls back to the
@@ -395,11 +398,11 @@ def _warn_kokkos_parity():
             RuntimeWarning, stacklevel=3)
 
 
-def _env_truthy(value):
+def _env_truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in ("1", "on", "true", "yes", "y")
 
 
-def _native_kokkos_compiler(cxx):
+def _native_kokkos_compiler(cxx: Any) -> Any:
     """Effective compiler of the native loader. CUDA must be EXPLICIT (POPS_KOKKOS_CXX=<nvcc_wrapper>
     or POPS_KOKKOS_USE_NVCC_WRAPPER=1): many Kokkos OpenMP installs also provide a
     nvcc_wrapper, choosing it by default would break CPU jobs without nvcc. For Kokkos OpenMP, the host suffices."""
@@ -417,7 +420,7 @@ def _native_kokkos_compiler(cxx):
     return _default_cxx(None)
 
 
-def _pops_import_lib():
+def _pops_import_lib() -> Any:
     """(Windows, ADC-100) Path of the import library _pops.lib (System POPS_EXPORT symbols) against
     which to link the DSL .dll. Searched next to the _pops module. None if absent."""
     mod = _pops_module()
@@ -428,7 +431,7 @@ def _pops_import_lib():
     return cand if os.path.exists(cand) else None
 
 
-def _native_kokkos_flags():
+def _native_kokkos_flags() -> tuple:
     """Compile/link flags so the production DSL loader instantiates add_compiled_model WITH Kokkos.
 
     The loader contains the header-only templates (make_block / assemble_rhs / for_each_cell). Compiled
@@ -472,7 +475,7 @@ def _native_kokkos_flags():
     return compile_flags, link_flags
 
 
-def pops_loader_build_flags(cxx=None):
+def pops_loader_build_flags(cxx: Any = None) -> tuple:
     """Flags to compile OUTSIDE CMake a .so that INCLUDES the pops headers and will be loaded into the
     _pops module (DSL loaders, ABI tests). PoPS being Kokkos-only, the .so MUST be compiled with
     Kokkos (for_each.hpp #error otherwise). Returns (compiler, compile_flags, link_flags): Kokkos +

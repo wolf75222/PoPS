@@ -29,8 +29,13 @@ lib at module scope. The runtime (System / AmrSystem), the runtime adapters, mes
 types are pulled LAZILY inside the function bodies, so this module adds no forbidden cross-layer edge.
 """
 
+from __future__ import annotations
 
-def compile(problem, layout=None, backend=None, time=None, **kwargs):
+from typing import Any
+
+
+def compile(problem: Any, layout: Any = None, backend: Any = None, time: Any = None,
+            **kwargs: Any) -> Any:
     """Lower a :class:`pops.problem.Problem` to a compiled handle.
 
     Validates @p problem, derives the compile target from the LAYOUT (``Uniform`` -> system,
@@ -145,7 +150,7 @@ def compile(problem, layout=None, backend=None, time=None, **kwargs):
     return compiled
 
 
-def _freeze_and_snapshot(problem, time, compiled):
+def _freeze_and_snapshot(problem: Any, time: Any, compiled: Any) -> None:
     """Freeze the compiled Problem + Program and fold the snapshot hash into the cache key (ADC-563).
 
     Delegates to :func:`pops.problem._snapshot.freeze_compiled` (bind-owned, lazy import to keep the
@@ -157,8 +162,8 @@ def _freeze_and_snapshot(problem, time, compiled):
     freeze_compiled(problem, time, compiled)
 
 
-def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
-         solvers=None, cadence=None):
+def bind(compiled: Any, *, initial_state: Any = None, state: Any = None, params: Any = None,
+         aux: Any = None, solvers: Any = None, cadence: Any = None) -> Any:
     """Wire a compiled handle onto the runtime: the PUBLIC bind entry point.
 
     ``pops.bind`` is THE documented way to instantiate a runnable simulation from a compiled handle
@@ -210,17 +215,19 @@ def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
 
     # Field solvers from the COMPILE-TIME snapshot (compiled._field_solvers), NOT a live re-read; an
     # explicit @p solvers still overrides (documented user input).
-    field_solvers = dict(getattr(compiled, "_field_solvers", None)
-                         if getattr(compiled, "_field_solvers", None) is not None
-                         else _problem_field_solvers(problem))
+    field_solvers_src: Any = (getattr(compiled, "_field_solvers", None)
+                              if getattr(compiled, "_field_solvers", None) is not None
+                              else _problem_field_solvers(problem))
+    field_solvers = dict(field_solvers_src)
     field_solvers.update(solvers or {})
 
     # OUTPUT / CHECKPOINT policies (C4 / ADC-509) from the COMPILE-TIME snapshot (compiled._outputs),
     # so the bound sim's run() fires exactly the policies the compile saw. Empty for a Problem with no
     # .output(...) -- the install is unchanged.
-    outputs = list(getattr(compiled, "_outputs", None)
-                   if getattr(compiled, "_outputs", None) is not None
-                   else (getattr(problem, "_outputs", []) or []))
+    outputs_src: Any = (getattr(compiled, "_outputs", None)
+                        if getattr(compiled, "_outputs", None) is not None
+                        else (getattr(problem, "_outputs", []) or []))
+    outputs = list(outputs_src)
 
     # The AMR install goes through the NATIVE per-block path (each instance carries its OWN
     # target='amr_system' CompiledModel from compile()'s _block_compiled_models); the Uniform install
@@ -255,7 +262,7 @@ def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
                          aux=aux or {}, solvers=field_solvers, cadence=cadence, outputs=outputs)
 
 
-def _validate_layout_for_compile(problem, layout):
+def _validate_layout_for_compile(problem: Any, layout: Any) -> None:
     """Validate the resolved layout at compile, once the layout is finally known (ADC-526).
 
     The Problem's ``validate()`` is layout-agnostic (it defers layout-specific checks to compile), so
@@ -285,7 +292,7 @@ def _validate_layout_for_compile(problem, layout):
         field[1].validate(context)
 
 
-def _resolve_layout(problem, layout):
+def _resolve_layout(problem: Any, layout: Any) -> Any:
     """Resolve the effective compile layout, then apply the problem's AMR criteria (ADC-526).
 
     The layout lives on ``pops.compile(problem, layout=...)``: explicit @p layout wins, else a
@@ -322,7 +329,7 @@ def _resolve_layout(problem, layout):
     return resolved
 
 
-def _resolve_problem_model(physics):
+def _resolve_problem_model(physics: Any) -> Any:
     """Resolve a block's physics to the model ``compile_problem`` accepts.
 
     A blackboard :class:`pops.physics.Model` exposes the underlying ``pops.dsl`` engine model
@@ -345,7 +352,8 @@ def _resolve_problem_model(physics):
     return physics
 
 
-def _assemble_instances(problem, initial, block_specs=None, models=None):
+def _assemble_instances(problem: Any, initial: Any, block_specs: Any = None,
+                        models: Any = None) -> dict:
     """Build the ``sim.install`` instances mapping from the COMPILE-TIME block specs + initial state.
 
     Each block becomes ``{name: {"model": <model>, "spatial": spatial, "initial": state}}`` -- the
@@ -365,7 +373,8 @@ def _assemble_instances(problem, initial, block_specs=None, models=None):
     if problem is None and block_specs is None:
         raise TypeError("pops.bind: the compiled handle carries no problem assembly "
                         "(was it produced by pops.compile?)")
-    declared = set(block_specs) if block_specs is not None else set(problem._blocks)
+    prob: Any = problem
+    declared = set(block_specs) if block_specs is not None else set(prob._blocks)
     unknown = sorted(set(initial) - declared)
     if unknown:
         raise ValueError("pops.bind: initial state for unknown block(s) %s; declared blocks: %s"
@@ -379,7 +388,7 @@ def _assemble_instances(problem, initial, block_specs=None, models=None):
             instances[name] = entry
         return instances
     # Legacy fallback (no compile-time snapshot on the handle): live re-read of the problem blocks.
-    for name, spec in problem._blocks.items():
+    for name, spec in prob._blocks.items():
         if models is not None:
             if name not in models:
                 raise ValueError(
@@ -395,7 +404,7 @@ def _assemble_instances(problem, initial, block_specs=None, models=None):
     return instances
 
 
-def _check_case_not_mutated(problem, block_specs):
+def _check_case_not_mutated(problem: Any, block_specs: Any) -> None:
     """Raise a LOUD error when the LIVE Problem's blocks diverge from the compile-time snapshot (ADC-592).
 
     ``compiled._block_specs`` is the block-name set the compile FROZE; if the live ``problem._blocks``
@@ -417,7 +426,7 @@ def _check_case_not_mutated(problem, block_specs):
             % (added, removed))
 
 
-def _problem_field_solvers(problem):
+def _problem_field_solvers(problem: Any) -> dict:
     """The {field_name: solver} mapping derived from the problem's field problems."""
     if problem is None:
         return {}
@@ -433,7 +442,7 @@ _MOVED_TO_BIND_ADAPTERS = (
     "_refine_subject_name", "_is_default_density_subject")
 
 
-def __getattr__(name):
+def __getattr__(name: str) -> Any:
     if name in _MOVED_TO_BIND_ADAPTERS:
         from pops.runtime import _bind_adapters
         return getattr(_bind_adapters, name)

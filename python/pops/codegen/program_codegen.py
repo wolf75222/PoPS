@@ -26,6 +26,10 @@ emitters + the lowerability checks) stays here.
 The emission-only tables (_MODEL_OPS / _ALLOWED_OPS / _PROFILE_SKIP_OPS / _AUX_OUTPUT_OPS)
 are module-level constants in ``program_emit_kernels``, re-exported here.
 """
+from __future__ import annotations
+
+from typing import Any
+
 import json  # noqa: F401  (kept for any external reference to program_codegen.json)
 
 # Re-export every moved name so the public surface of this module is unchanged.
@@ -92,7 +96,7 @@ from pops.codegen.compile_emit import _emit_route_manifest  # noqa: F401 (ADC-59
 
 # --- Program -> C++ lowering (free functions taking `program`) ------------------------------
 # --- C++ codegen (Phase 2c-ii / Phase 4b): lower the IR to a problem.so source ---
-def emit_cpp_program(program, model=None, target="system"):
+def emit_cpp_program(program: Any, model: Any = None, target: str = "system") -> str:
     """Generate the C++ source of a problem.so implementing this Program (codegen).
 
     Exports the stable .so ABI -- ``pops_program_abi_key`` (the ``POPS_ABI_KEY_LITERAL``
@@ -187,7 +191,7 @@ def emit_cpp_program(program, model=None, target="system"):
         schur_include=_schur_include(program),
         amr_install=_emit_amr_install(program, target, prelude, body))
 
-def _emit_block_names(program):
+def _emit_block_names(program: Any) -> str:
     """C++ source of the NAME-based block-binding ABI the .so exports (Spec 3 criterion 23, ADC-457):
     ``pops_program_block_count()`` and ``pops_program_block_name(int)`` -- the Program's block names in
     ``_block_indices`` order (P.state declaration order, the order the step body's ``ctx.state(idx)``
@@ -207,7 +211,7 @@ def _emit_block_names(program):
         'extern "C" const char* pops_program_block_name(int i) {\n'
         '  switch (i) {\n%s    default: return "";\n  }\n}\n' % cases)
 
-def _emit_module_metadata(program, model=None):
+def _emit_module_metadata(program: Any, model: Any = None) -> str:
     """C++ source of the GeneratedModule metadata the .so exports (Spec 2 / ADC-442).
 
     A combined model+program .so carries, alongside ``GeneratedProgram`` (the step), a
@@ -228,13 +232,13 @@ def _emit_module_metadata(program, model=None):
         if hasattr(model, "field_space"):
             fields = [model.field_space().name]
 
-    def table(accessor, values):
+    def table(accessor: Any, values: Any) -> str:
         cases = "".join('    case %d: return %s;\n' % (i, json.dumps(v))
                         for i, v in enumerate(values))
         return ('extern "C" const char* pops_module_%s(int i) {\n'
                 '  switch (i) {\n%s    default: return "";\n  }\n}\n' % (accessor, cases))
 
-    def req_json(op):
+    def req_json(op: Any) -> str:
         # The operator's own kind always wins (a requirements dict must not shadow it).
         return json.dumps({**op.requirements, "kind": op.kind})
 
@@ -254,7 +258,7 @@ def _emit_module_metadata(program, model=None):
     ]
     return "".join(parts)
 
-def _emit_dt_bound(program, model=None):
+def _emit_dt_bound(program: Any, model: Any = None) -> tuple:
     """Lower the optional dt bound (spec s18 / ADC-417) to ``(has_dt_bound, body)``: the bool literal
     pops_program_has_dt_bound returns and the C++ body of pops_program_dt_bound. No bound -> ("false",
     a +inf return that is never reached). The bound is a READ-ONLY scalar sub-program: it reuses the
@@ -280,7 +284,7 @@ def _emit_dt_bound(program, model=None):
 
 
 
-def _check_lowerable(program, model=None):
+def _check_lowerable(program: Any, model: Any = None) -> None:
     """Raise NotImplementedError if the IR uses a construct the current codegen cannot lower yet,
     naming the offending construct (never a silent mis-lowering). @p model: the physical model that
     declares the named sources / linear sources; required for the Phase-4b ops.
@@ -309,7 +313,7 @@ def _check_lowerable(program, model=None):
             raise ValueError(
                 "local dense fallback currently supports n_cons <= 8 (got %d)" % n_cons)
 
-def _check_schedules_lowerable(program):
+def _check_schedules_lowerable(program: Any) -> None:
     """Gate the unified Program scheduler lowering (ADC-458, Spec 3 sections 17-18). EVERY kind/policy
     now lowers (``_emit_schedule_wrap``) EXCEPT the two that need a runtime primitive the compiled
     .so does not have, which still fail loud (never a silent no-op):
@@ -362,7 +366,7 @@ def _check_schedules_lowerable(program):
 # sim.profile_report(). Every other op that emits a statement is wrapped (rhs / solve_fields /
 # linear_combine / source / apply / reductions / loops / Schur kernels / ...).
 
-def _all_ops(program):
+def _all_ops(program: Any) -> Any:
     """Iterate over every op of the Program, descending into control-flow + apply sub-blocks (a flat
     view used by the lowerability guards: the sub-block ops are not in program._values). Nested control
     flow is disallowed, so the sub-blocks are flat (one level)."""
@@ -373,7 +377,7 @@ def _all_ops(program):
             if isinstance(blk, list):
                 yield from blk
 
-def _check_op_lowerable(program, v, model):
+def _check_op_lowerable(program: Any, v: Any, model: Any) -> None:
     """Lowerability check for a single op (used for both the top-level walk and a while sub-block).
     Raises NotImplementedError / ValueError naming the offending construct (never a mis-lowering)."""
     if v.op in _MODEL_OPS:
