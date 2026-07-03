@@ -23,6 +23,10 @@ evaluating ``S`` (frozen-register additive split), whereas the helper folded ``d
 Import-graph rule (Spec 4): pure ``pops.ir`` / ``pops.physics.multispecies`` + stdlib. No codegen /
 ``_pops`` import; the preset only BUILDS a CoupledSource, the install layer compiles and registers it.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.physics.multispecies import CoupledSource
 
 
@@ -38,14 +42,16 @@ class ContractedCoupling:
 
     __slots__ = ("source", "conserved", "created", "frequency")
 
-    def __init__(self, source, conserved=(), created=(), frequency=0.0):
+    def __init__(self, source: Any, conserved: Any = (), created: Any = (),
+                 frequency: float = 0.0) -> None:
         self.source = source
         self.conserved = list(conserved)
         self.created = list(created)
         self.frequency = float(frequency)
 
 
-def ionization_preset(electron, ion, neutral, rate, name="ionization"):
+def ionization_preset(electron: Any, ion: Any, neutral: Any, rate: Any,
+                      name: str = "ionization") -> Any:
     """Ionization ``n_g -> n_i + n_e`` at rate ``r = k * n_e * n_g`` (ADC-595 preset).
 
     Reproduces ``System::add_ionization`` (deleted): one neutral disappears, one ion and one electron
@@ -72,7 +78,7 @@ def ionization_preset(electron, ion, neutral, rate, name="ionization"):
     return ContractedCoupling(src, created=["density"])
 
 
-def collision_preset(a, b, rate, name="collision"):
+def collision_preset(a: Any, b: Any, rate: Any, name: str = "collision") -> Any:
     """Inter-species friction ``F = k * (u_a - u_b)`` on the momentum (ADC-595 preset).
 
     Reproduces ``System::add_collision`` (deleted): the force is applied with OPPOSITE sign on each
@@ -101,7 +107,8 @@ def collision_preset(a, b, rate, name="collision"):
     return ContractedCoupling(src, conserved=["momentum_x", "momentum_y"])
 
 
-def thermal_exchange_preset(a, b, rate, gamma_a, gamma_b, name="thermal_exchange"):
+def thermal_exchange_preset(a: Any, b: Any, rate: Any, gamma_a: Any, gamma_b: Any,
+                            name: str = "thermal_exchange") -> Any:
     """Inter-species thermal exchange ``q = k * (T_a - T_b)`` on the energy (ADC-595 preset).
 
     Reproduces ``System::add_thermal_exchange`` (deleted): the heat flux is applied with OPPOSITE sign on
@@ -136,7 +143,8 @@ def thermal_exchange_preset(a, b, rate, gamma_a, gamma_b, name="thermal_exchange
     return ContractedCoupling(src, conserved=["energy"])
 
 
-def coupling_operator_args(compiled, conserved=(), created=(), frequency=None):
+def coupling_operator_args(compiled: Any, conserved: Any = (), created: Any = (),
+                           frequency: Any = None) -> Any:
     """Positional args for ``System.add_coupling_operator`` from a compiled coupled source (ADC-595).
 
     Marshals the flat bytecode program of @p compiled PLUS the declared conservation contract
@@ -152,7 +160,7 @@ def coupling_operator_args(compiled, conserved=(), created=(), frequency=None):
             getattr(compiled, "freq_prog_args", []), list(conserved), list(created))
 
 
-def lower_named_coupling(coupling, gamma_of):
+def lower_named_coupling(coupling: Any, gamma_of: Any) -> Any:
     """Lower a named coupling object to its :class:`ContractedCoupling` preset, or ``None`` (ADC-595).
 
     Dispatches ``pops.Ionization`` / ``Collision`` / ``ThermalExchange`` (duck-typed by their fields, to

@@ -9,6 +9,10 @@ symbolic expressions; ``compile(backend)`` lowers each expr to postfix BYTECODE
 Import-graph rule (Spec 4): pure :mod:`pops.ir` + stdlib. The compile path is a
 pure-Python bytecode emitter, so no codegen / ``_pops`` import is needed at all.
 """
+from __future__ import annotations
+
+from typing import Any
+
 from pops.ir import Var, _wrap, Expr, Const, Add, Sub, Mul, Div, Pow, Neg, Sqrt, sqrt  # noqa: F401
 from pops.ir.visitors import _key  # noqa: F401
 
@@ -16,7 +20,6 @@ from .model import Param  # CoupledSource.param wraps a const Param (acyclic: mo
 
 
 # --- Generic COUPLED inter-species source (P5 phase 1, EXPLICIT splitting) -----------------------
-#
 # pops.dsl.CoupledSource describes an ARBITRARY coupling between species as FORMULAS, beyond the named
 # couplings (Ionization / Collision / ThermalExchange) which freeze a formula. We read fields (block,
 # role) as INPUT and WRITE source terms (block, role) given by symbolic expressions
@@ -35,7 +38,7 @@ _ROLE_TO_CANONICAL = {
 }
 
 
-def _role_canonical(role):
+def _role_canonical(role: Any) -> Any:
     """Canonical role name (lowercase, C++ boundary) for a DSL role. Accepts already-canonical."""
     if role in _ROLE_TO_CANONICAL:
         return _ROLE_TO_CANONICAL[role]
@@ -69,23 +72,23 @@ class _CsField(Var):
     bytecode codegen. Subclassing Var directly gives operators / _wrap / to_cpp / eval / deps, so
     `+k * ne * ng` builds the expected Expr tree without delegation."""
 
-    def __init__(self, block, role):
+    def __init__(self, block: Any, role: Any) -> None:
         super().__init__("%s::%s" % (block, role), "coupled_field")
         self.block = block
         self.role = role
 
-    def __repr__(self): return "_CsField(%r, %r)" % (self.block, self.role)
+    def __repr__(self) -> str: return "_CsField(%r, %r)" % (self.block, self.role)
 
 
 class _CsBlock:
     """Construction helper: `src.block("electrons").role("density")` -> _CsField. Records the
     (block, role) requested on the source to fix the order of the input registers."""
 
-    def __init__(self, src, name):
+    def __init__(self, src: Any, name: Any) -> None:
         self._src = src
         self.name = name
 
-    def role(self, role):
+    def role(self, role: Any) -> Any:
         return self._src._field(self.name, role)
 
 
@@ -94,9 +97,10 @@ class CompiledCoupledSource:
     System.add_coupled_source, + the REFERENCE numpy evaluator (same Expr) for tests / a Python
     integrator. No .so: the coupling is interpreted on the C++ side (device stack machine)."""
 
-    def __init__(self, name, backend, in_blocks, in_roles, consts, out_blocks, out_roles,
-                 prog_ops, prog_args, prog_lens, terms, reg_order, frequency=0.0,
-                 freq_prog_ops=None, freq_prog_args=None, frequency_expr=None):
+    def __init__(self, name: Any, backend: Any, in_blocks: Any, in_roles: Any, consts: Any,
+                 out_blocks: Any, out_roles: Any, prog_ops: Any, prog_args: Any, prog_lens: Any,
+                 terms: Any, reg_order: Any, frequency: float = 0.0, freq_prog_ops: Any = None,
+                 freq_prog_args: Any = None, frequency_expr: Any = None) -> None:
         self.name = name
         self.backend = backend
         self.frequency = float(frequency)  # mu [1/s] declared CONSTANT (0 = no constant bound)
@@ -116,12 +120,12 @@ class CompiledCoupledSource:
         self._terms = list(terms)             # [(block, role_canonical, Expr)]: numpy reference
         self._reg_order = list(reg_order)     # env names '<block>::<role>' in register order
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return ("CompiledCoupledSource(name=%r, backend=%r, n_in=%d, n_const=%d, n_terms=%d)"
                 % (self.name, self.backend, len(self.in_blocks), len(self.consts),
                    len(self.out_blocks)))
 
-    def utilization(self):
+    def utilization(self) -> Any:
         """Capacity utilization of the compiled coupling against the FROZEN kCsMax* bounds (ADC-610):
         {registers, terms, program} each a {count, limit} pair. Surfaces the previously-hidden C++
         fixed-array capacities (coupled_source_program.hpp) so the headroom of a coupling is
@@ -131,7 +135,7 @@ class CompiledCoupledSource:
                 "terms": {"count": len(self.out_blocks), "limit": _CS_MAX_TERMS},
                 "program": {"count": len(self.prog_ops), "limit": _CS_MAX_PROG}}
 
-    def reference_terms(self, fields):
+    def reference_terms(self, fields: Any) -> Any:
         """Evaluates the source terms on numpy arrays (REFERENCE for tests). @p fields:
         dict (block, role_canonical) -> array; returns [(block, role_canonical, dS)] with dS = S
         (the evaluated symbolic term), BEFORE multiplication by dt. Same Expr as the C++ codegen."""
@@ -140,7 +144,7 @@ class CompiledCoupledSource:
             env["%s::%s" % (block, _role_canonical(role))] = arr
         return [(b, r, e.eval(env)) for (b, r, e) in self._terms]
 
-    def reference_frequency(self, fields):
+    def reference_frequency(self, fields: Any) -> Any:
         """Evaluates the PER-CELL frequency mu(U) on numpy arrays (REFERENCE for tests):
         same Expr / register table as the C++ bytecode. @p fields: dict (block, role_canonical) ->
         array; returns the mu array (same formulas). Returns None if the frequency is CONSTANT
@@ -171,7 +175,7 @@ class CoupledSource:
     interpreted on the C++ side in both cases (no .so per coupling); it is kept for introspection
     and API parity with the models DSL."""
 
-    def __init__(self, name="coupled_source"):
+    def __init__(self, name: str = "coupled_source") -> None:
         self.name = name
         self._fields = {}    # '<block>::<role>' -> _CsField (single input register per (block, role))
         self._reg_order = []  # order of appearance of the input fields (-> register order)
@@ -187,7 +191,7 @@ class CoupledSource:
         # param()) emitted into bytecode at compile() against the SAME register table. None = constant.
         self._frequency_expr = None
 
-    def frequency(self, mu):
+    def frequency(self, mu: Any) -> Any:
         """Declared coupling FREQUENCY mu [1/s] (vague 3 audit): step bound dt <= cfl / mu
         aggregated by System/AmrSystem::step_cfl (reason 'coupled_source:<name>'). Couplings are
         applied ONCE per MACRO-step (splitting, apply_couplings(dt)): the bound applies to the
@@ -212,11 +216,11 @@ class CoupledSource:
         return self
 
     # --- symbolic construction ----------------------------------------------------------------
-    def block(self, name):
+    def block(self, name: Any) -> Any:
         """Handle of a block: .role(role) derives a symbolic field (block, role) from it."""
         return _CsBlock(self, name)
 
-    def _field(self, block, role):
+    def _field(self, block: Any, role: Any) -> Any:
         canon = _role_canonical(role)
         key = "%s::%s" % (block, canon)
         if key not in self._fields:
@@ -225,13 +229,13 @@ class CoupledSource:
             self._reg_order.append(key)
         return self._fields[key]
 
-    def param(self, name, value):
+    def param(self, name: Any, value: Any) -> Any:
         """NAMED constant parameter, usable like an Expr (inlines as a real in the bytecode)."""
         p = Param(name, value, kind="const")
         self._params[name] = p
         return p
 
-    def add(self, block, role=None, expr=None):
+    def add(self, block: Any, role: Any = None, expr: Any = None) -> Any:
         """Adds a source TERM: d_t (block.role) += expr. @p expr is an Expr / _CsField / Param /
         number. Several adds on the same (block, role) ADD UP (sum of source terms)."""
         if role is None:
@@ -242,7 +246,7 @@ class CoupledSource:
         self._terms.append((block, _role_canonical(role), e))
         return self
 
-    def add_pair(self, block_a, block_b, role=None, expr=None):
+    def add_pair(self, block_a: Any, block_b: Any, role: Any = None, expr: Any = None) -> Any:
         """Adds a CONSERVATIVE EXCHANGE of the quantity @p role between @p block_a and @p block_b, described
         by a SINGLE expression @p expr (Expr / _CsField / Param / number).
 
@@ -285,7 +289,7 @@ class CoupledSource:
         return self
 
     # --- bytecode codegen -----------------------------------------------------------------------
-    def _emit_program(self, expr, reg_index):
+    def _emit_program(self, expr: Any, reg_index: Any) -> Any:
         """Compile @p expr (Expr tree) into postfix bytecode (parallel ops/args lists) against the
         register table @p reg_index (env name '<bloc>::<role>' OR constant value -> register index).
         Constants (Const / inline Param) become a dedicated constant register. Postfix traversal
@@ -293,7 +297,7 @@ class CoupledSource:
         subtrees then the opcode, etc. -- exactly the semantics of CsProgram::eval on the C++ side."""
         ops, args = [], []
 
-        def emit(node):
+        def emit(node: Any) -> None:
             if isinstance(node, Var):
                 if node.name not in reg_index:
                     raise ValueError("CoupledSource: field %r used without .block(...).role(...)"
@@ -344,7 +348,7 @@ class CoupledSource:
         emit(expr)
         return ops, args
 
-    def _const_reg(self, value, reg_index):
+    def _const_reg(self, value: Any, reg_index: Any) -> Any:
         """Register index of a constant @p value (deduplicated). Constants occupy the
         registers AFTER the input fields (cf. CoupledSourceKernel: r[n_in + c] = consts[c])."""
         key = ("const", float(value))
@@ -354,7 +358,7 @@ class CoupledSource:
         return reg_index[key]
 
     @staticmethod
-    def _signed_key(expr):
+    def _signed_key(expr: Any) -> Any:
         """SIGNED STRUCTURAL key of @p expr: (sign, body_key), where sign is +1 / -1 and
         body_key is the structural key (_key) of the expression stripped of ALL its leading Neg
         (the sign folds in each peeled Neg). Two expressions are structurally OPPOSITE iff they have
@@ -369,7 +373,7 @@ class CoupledSource:
             expr = expr.a
         return (sign, _key(expr))
 
-    def _role_net_bodies(self):
+    def _role_net_bodies(self) -> Any:
         """Per-role signed structural balance of the source terms (shared by the conservation checks).
 
         Returns ``{role: {body_key: net_sign}}``: +1 for a ``+E`` term, -1 for a ``-E`` term, summed
@@ -382,7 +386,7 @@ class CoupledSource:
             per_role.setdefault(role, Counter())[body] += sign
         return per_role
 
-    def _verify_conservation(self):
+    def _verify_conservation(self) -> None:
         """Verify that, role by role, the sum of the source terms CANCELS structurally: each
         contribution +E on one block is compensated by a contribution -E (same structural body) on
         another block. Raises an EXPLICIT ValueError otherwise. This is exactly the property add_pair
@@ -405,7 +409,7 @@ class CoupledSource:
                 "on another block (use add_pair to guarantee it). Uncompensated terms: "
                 + details)
 
-    def verify_declared_contract(self, conserved=(), created=()):
+    def verify_declared_contract(self, conserved: Any = (), created: Any = ()) -> None:
         """Validate a named preset's DECLARED conservation contract against its terms (ADC-595).
 
         Promotes ``_verify_conservation`` from an opt-in flag to a CHECKED contract: a declared
@@ -430,7 +434,7 @@ class CoupledSource:
                     "must be balanced by -E on another block; use add_pair). Uncompensated: %s"
                     % (role, "; ".join("term %r (net=%+d)" % (b, n) for (b, n) in offenders)))
 
-    def compile(self, backend="production", verify_conservation=False):
+    def compile(self, backend: str = "production", verify_conservation: bool = False) -> Any:
         """Compile the source into a CompiledCoupledSource (flat bytecode ABI). @p backend documents
         the intent (API parity with the model DSL); the numerics are identical (C++ interpreter).
 

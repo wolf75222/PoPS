@@ -6,17 +6,26 @@ Methods only; the instance attributes (``_flux`` / ``_flux_terms`` / ``_eig`` /
 the one pure codegen helper used (``_dir_key``) is imported LAZILY inside the
 method body, mirroring how the compile wrappers delegate to ``pops.codegen``.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from pops.ir import _wrap, diff
 from pops.ir.ops import left, right
 
+if TYPE_CHECKING:
+    from ._model_contract import _HyperbolicModel
+else:
+    _HyperbolicModel = object
 
-class _FluxMixin:
+
+class _FluxMixin(_HyperbolicModel):
     """Physical flux, eigenvalues, signed wave speeds, and the flux Jacobian."""
 
-    def set_flux(self, x, y): self._flux = {"x": list(x), "y": list(y)}
-    def set_eigenvalues(self, x, y): self._eig = {"x": list(x), "y": list(y)}
+    def set_flux(self, x: Any, y: Any) -> None: self._flux = {"x": list(x), "y": list(y)}
+    def set_eigenvalues(self, x: Any, y: Any) -> None: self._eig = {"x": list(x), "y": list(y)}
 
-    def flux_term(self, name, x, y):
+    def flux_term(self, name: str, x: Any, y: Any) -> None:
         """Declare a NAMED physical flux F_name(U, primitives, aux, params): exactly n_cons
         expressions per direction (x= the x-flux, y= the y-flux), free to depend on cons / primitives /
         aux / aux_field / params / constants -- the same dependency surface as set_flux. A named flux is
@@ -47,7 +56,7 @@ class _FluxMixin:
             raise ValueError("flux_term('%s'): already declared" % name)
         self._flux_terms[name] = {"x": x, "y": y}
 
-    def set_wave_speeds(self, x, y):
+    def set_wave_speeds(self, x: Any, y: Any) -> None:
         """Explicit SIGNED wave speeds per direction: x = (smin_x, smax_x), y = (smin_y,
         smax_y), expressions of cons / prims / aux. Emits ``wave_speeds(U, aux, dir, smin, smax)``
         on the generated brick WITHOUT requiring a primitive 'p': riemann='hll' becomes available for
@@ -68,7 +77,8 @@ class _FluxMixin:
         self._wave_speeds = {"x": (_wrap(x[0]), _wrap(x[1])),
                              "y": (_wrap(y[0]), _wrap(y[1]))}
 
-    def set_wave_speeds_from_jacobian(self, x=None, y=None, eig="numeric", blocks=None):
+    def set_wave_speeds_from_jacobian(self, x: Any = None, y: Any = None,
+                                      eig: str = "numeric", blocks: Any = None) -> None:
         """EXACT signed wave speeds: smin/smax = extremes of the flux jacobian's eigenvalues
         A = dF/dU, computed NUMERICALLY per cell (pops::real_eig_minmax, Francis QR
         on a stack buffer, Gershgorin fallback on non-convergence = safe outer bound). Emits
@@ -127,7 +137,7 @@ class _FluxMixin:
                         raise ValueError("set_wave_speeds_from_jacobian : jacobian %s expected "
                                          "%d x %d" % (key, nv, nv))
                     rows[key] = [[_wrap(e) for e in r] for r in mat]
-        def norm_blocks(blk, label):
+        def norm_blocks(blk: Any, label: str) -> list:
             blk = [list(int(i) for i in b) for b in blk]
             seen = set()
             for b in blk:
@@ -161,7 +171,7 @@ class _FluxMixin:
         self._ws_jacobian = {"rows": rows or None, "eig": eig, "blocks": per_dir,
                              "explicit": x is not None}
 
-    def flux_jacobian(self, dir):
+    def flux_jacobian(self, dir: Any) -> list:
         """Flux jacobian A = dF_dir/dU : n_vars x n_vars matrix of expressions, A[i][j] =
         d(flux_dir[i])/d(cons[j]), auto-derived from the declared fluxes (via dsl.diff with primitive
         substitution). CONSTRUCTION HELPER (the user uses it to write m.roe_dissipation):
@@ -182,15 +192,15 @@ class _FluxMixin:
         return [[diff(comps[i], self.cons_names[j], defs) for j in range(self.n_vars)]
                 for i in range(self.n_vars)]
 
-    def left(self, expr):
+    def left(self, expr: Any) -> Any:
         """Marks @p expr as evaluated on the LEFT state UL (sugar for dsl.left, m.roe_dissipation)."""
         return left(expr)
 
-    def right(self, expr):
+    def right(self, expr: Any) -> Any:
         """Marks @p expr as evaluated on the RIGHT state UR (sugar for dsl.right, m.roe_dissipation)."""
         return right(expr)
 
-    def set_gamma(self, gamma):
+    def set_gamma(self, gamma: Any) -> None:
         """Adiabatic index of the block (compressible EOS). Carried by the generated .so via the
         optional symbol pops_compiled_gamma, so that the System's inter-species couplings (collision,
         thermal exchange, T_e) use the RIGHT gamma instead of the historical default 1.4. Without a call,

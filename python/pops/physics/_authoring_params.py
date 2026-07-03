@@ -5,17 +5,26 @@ indices, and emits the generated ``pops::RuntimeParams`` member; also validates
 arbitrary Riemann hook formulas. Methods only; touched attributes come from
 ``HyperbolicModel.__init__``. Codegen-free and ``_pops``-free.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from pops.ir import Expr, _wrap  # noqa: F401  -- _validate_hook_form isinstance checks
 from pops.ir.values import RuntimeParamRef  # noqa: F401
 from pops.ir.visitors import _children  # noqa: F401
 
 from .aux import _K_MAX_RUNTIME_PARAMS, max_runtime_params  # noqa: F401 -- literal + _pops-preferring
 
+if TYPE_CHECKING:
+    from ._model_contract import _HyperbolicModel
+else:
+    _HyperbolicModel = object
 
-class _RuntimeParamsMixin:
+
+class _RuntimeParamsMixin(_HyperbolicModel):
     """Runtime parameter discovery, index assignment, and hook validation."""
 
-    def _all_exprs(self):
+    def _all_exprs(self) -> Any:
         """All the Expr of the model (primitives, flux, eigenvalues, source, elliptic,
         cons_from). Used to discover the RuntimeParamRef nodes hidden in the tree."""
         out = list(self.prim_defs.values())
@@ -49,13 +58,13 @@ class _RuntimeParamsMixin:
             out += self._roe_rows["x"] + self._roe_rows["y"]
         return out
 
-    def runtime_param_nodes(self):
+    def runtime_param_nodes(self) -> Any:
         """RuntimeParamRef nodes PRESENT in the formulas, deduplicated by name (the same param may
         appear several times but shares the SAME node object). Order SORTED by name (stable index
         = position in this list, mirror of RuntimeParams on the C++ side)."""
         seen = {}
 
-        def walk(e):
+        def walk(e: Any) -> None:
             if isinstance(e, RuntimeParamRef):
                 seen.setdefault(e.name, e)
                 return
@@ -66,7 +75,7 @@ class _RuntimeParamsMixin:
             walk(e)
         return [seen[k] for k in sorted(seen)]
 
-    def assign_runtime_indices(self):
+    def assign_runtime_indices(self) -> Any:
         """Assigns to each RuntimeParamRef its STABLE index (sorted order of names) and returns the
         ordered list of nodes. CALLED before any brick codegen: without this call, to_cpp() would raise
         (index -1). Idempotent (reassigns the same indices). Rejects a model exceeding the C++ bound
@@ -87,7 +96,7 @@ class _RuntimeParamsMixin:
             node.index = k
         return nodes
 
-    def _runtime_params_member(self):
+    def _runtime_params_member(self) -> str:
         """C++ line declaring the RuntimeParams member of a generated brick, initialized to the
         DECLARATION values (default without a runtime set call). Empty string if the model has no runtime
         param (brick strictly identical to history -> bit-identity of const params preserved)."""
@@ -98,11 +107,11 @@ class _RuntimeParamsMixin:
         return ("  pops::RuntimeParams params{%d, {%s}};  // params RUNTIME (P7-b) : ecrasables a "
                 "l'execution\n" % (len(nodes), vals))
 
-    def has_runtime_params(self):
+    def has_runtime_params(self) -> bool:
         """True if at least one formula reads a runtime parameter (kind='runtime')."""
         return bool(self.runtime_param_nodes())
 
-    def _validate_hook_form(self, hook, form, allow_aux=True):
+    def _validate_hook_form(self, hook: Any, form: Any, allow_aux: bool = True) -> None:
         """Reject an arbitrary-formula Riemann hook (ADC-456) that references a quantity the model
         cannot provide -- the same dependency rule as :meth:`check`, surfaced as a clear capability
         error. @p allow_aux: a single-state hook (e.g. pressure(U)) takes no Aux parameter, so an

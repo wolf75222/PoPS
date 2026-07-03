@@ -9,6 +9,10 @@ Import-graph rule (Spec 4): module-scope imports stay within :mod:`pops.physics`
 all toolchain/cache/abi/loader names are imported LAZILY inside ``compile`` /
 ``_compiled_model`` (no codegen at ``pops.physics`` load).
 """
+from __future__ import annotations
+
+from typing import Any
+
 from .aux import roles_for
 from .bricks import CompiledBrick, NativeBrick
 from .model import HyperbolicModel
@@ -24,7 +28,7 @@ class HybridModel:
     DSL source/elliptic brick must declare the SAME n_vars ; a templated native brick (source/
     elliptic) only needs to satisfy its min_vars (e.g. PotentialForce requires >= 3 variables)."""
 
-    def __init__(self, transport, source, elliptic, name="hybrid"):
+    def __init__(self, transport: Any, source: Any, elliptic: Any, name: str = "hybrid") -> None:
         self.name = name
         hyp = self._norm(transport, "hyperbolic", "NatHyp")
         src = self._norm(source, "source", "NatSrc")
@@ -55,13 +59,13 @@ class HybridModel:
         self._slots = (hyp, src, ell)
 
     @staticmethod
-    def _norm(prov, role, native_struct_name):
+    def _norm(prov: Any, role: Any, native_struct_name: Any) -> Any:
         """Normalize a slot (DSL CompiledBrick or NativeBrick) into a common dict."""
         if isinstance(prov, CompiledBrick):
             if prov.kind != role:
                 raise ValueError("HybridModel: DSL brick of type %r placed in slot %r"
                                  % (prov.kind, role))
-            d = dict(provider="dsl", struct_text=prov.struct_src, type_name=prov.type_name,
+            d: dict[str, Any] = dict(provider="dsl", struct_text=prov.struct_src, type_name=prov.type_name,
                      n_vars=prov.n_vars, min_vars=prov.n_vars, n_aux=prov.n_aux)
             if role == "hyperbolic":
                 d.update(cons_names=prov.cons_names, cons_roles=prov.cons_roles,
@@ -72,7 +76,7 @@ class HybridModel:
             if prov.kind != role:
                 raise ValueError("HybridModel: native brick of type %r placed in slot %r"
                                  % (prov.kind, role))
-            d = dict(provider="native", struct_text=prov.emit(native_struct_name),
+            d: dict[str, Any] = dict(provider="native", struct_text=prov.emit(native_struct_name),
                      type_name="pops_generated::" + native_struct_name,
                      n_vars=prov.n_vars, min_vars=prov.min_vars, n_aux=prov.n_aux)
             if role == "hyperbolic":
@@ -84,7 +88,7 @@ class HybridModel:
         raise TypeError("HybridModel: slot %r must be a native brick (pops.* / NativeBrick) or a "
                         "compiled DSL brick (CompiledBrick) ; got %r" % (role, type(prov).__name__))
 
-    def _emit_aot_source(self):
+    def _emit_aot_source(self) -> str:
         """C++ source of the hybrid composite .so, behind the extern \"C\" ABI of compiled_block_abi.hpp
         (aot backend: same flat ABI as emit_cpp_aot_source). The bricks (generated DSL or native binding
         structs) are stitched together, then assembled into pops::CompositeModel<...>."""
@@ -103,7 +107,7 @@ class HybridModel:
             parts.append('POPS_EXPORT_BLOCK_GAMMA(%r)\n' % self.gamma)
         return "".join(parts)
 
-    def _model_hash(self):
+    def _model_hash(self) -> Any:
         """Stable hash of the composite: provider + type + generated text of each slot (the text encodes
         the DSL formulas and the baked native parameters). Used as a cache key."""
         import hashlib
@@ -112,7 +116,7 @@ class HybridModel:
             parts.append("%s|%s|%s" % (slot["provider"], slot["type_name"], slot.get("struct_text", "")))
         return hashlib.sha256("\n".join(parts).encode()).hexdigest()
 
-    def _bricks_and_composite(self):
+    def _bricks_and_composite(self) -> Any:
         """C++ text of the stitched bricks (generated DSL + native binding structs) + composite type."""
         hyp, src, ell = self._slots
         bricks = "".join(s["struct_text"] for s in self._slots if s["struct_text"])
@@ -120,7 +124,7 @@ class HybridModel:
                      % (hyp["type_name"], src["type_name"], ell["type_name"]))
         return bricks, composite
 
-    def _emit_metadata(self, alias):
+    def _emit_metadata(self, alias: Any) -> str:
         """ABI metadata symbols (names/roles from conservative_vars, optional gamma), SHARED
         by the backends. @p alias: an alias WITHOUT a top-level comma (the preprocessor splits
         macro arguments on commas)."""
@@ -129,7 +133,7 @@ class HybridModel:
             out += 'POPS_EXPORT_BLOCK_GAMMA(%r)\n' % self.gamma
         return out
 
-    def _emit_jit_source(self):
+    def _emit_jit_source(self) -> str:
         """Source of the JIT library (backend 'prototype'): the hybrid composite behind an
         extern \"C\" factory (pops_make_model via pops::ModelAdapter). Host VIRTUAL dispatch (order-1
         Rusanov residual): fast iteration, to be plugged via System.add_dynamic_block. Hybrid
@@ -146,7 +150,7 @@ class HybridModel:
                 % self.n_vars
                 + self._emit_metadata("pops_generated::JitModel"))
 
-    def _emit_native_source(self, target="system"):
+    def _emit_native_source(self, target: str = "system") -> str:
         """C++ source of the NATIVE LOADER (backend 'production'): the hybrid composite as CompositeModel<...>
         behind a THIN extern \"C\" ABI. Like emit_cpp_native_loader, the .so does NOT carry the
         numerics: it INSTALLS the generated model as a native block of the facade via add_compiled_model<>,
@@ -207,8 +211,8 @@ class HybridModel:
                 + '\nnamespace pops_generated { using ProdModel = %s; }\n' % composite
                 + key + install + self._emit_metadata("pops_generated::ProdModel"))
 
-    def compile(self, backend="aot", so_path=None, include=None, name=None, cxx=None, std=None,
-                target="system"):
+    def compile(self, backend: str = "aot", so_path: Any = None, include: Any = None, name: Any = None,
+                cxx: Any = None, std: Any = None, target: str = "system") -> Any:
         """Compile the hybrid composite into a CompiledModel.
 
         ``backend`` :
@@ -325,7 +329,8 @@ class HybridModel:
         _record_so_backend(so_path, "hybrid-" + backend)
         return self._compiled_model(so_path, backend, target, abi_key, model_hash, eff_cxx, std)
 
-    def _compiled_model(self, so_path, backend, target, abi_key, model_hash, cxx, std):
+    def _compiled_model(self, so_path: Any, backend: Any, target: Any, abi_key: Any, model_hash: Any,
+                        cxx: Any, std: Any) -> Any:
         from pops.codegen.loader import CompiledModel  # lazy: physics stays codegen-free
         from pops.codegen.compile import _BACKEND_CAPS
         return CompiledModel(

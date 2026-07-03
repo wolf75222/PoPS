@@ -5,6 +5,10 @@ Methods only; the touched attributes (``_source`` / ``_elliptic`` /
 / ``_stab_dt`` / ``_src_freq`` / ``_proj`` / ``_src_jac`` / ``_rate_operators``)
 are created by ``HyperbolicModel.__init__``. Codegen-free and ``_pops``-free.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 import numpy as np
 
 from pops.ir import _wrap
@@ -13,14 +17,19 @@ from pops.model import OperatorHandle
 
 from .aux import AUX_CANONICAL
 
+if TYPE_CHECKING:
+    from ._model_contract import _HyperbolicModel
+else:
+    _HyperbolicModel = object
 
-class _SourceMixin:
+
+class _SourceMixin(_HyperbolicModel):
     """Source, elliptic, named operators, projection and stability declarations."""
 
-    def set_source(self, s): self._source = [_wrap(e) for e in s]
-    def set_elliptic_rhs(self, e): self._elliptic = _wrap(e)
+    def set_source(self, s: Any) -> None: self._source = [_wrap(e) for e in s]
+    def set_elliptic_rhs(self, e: Any) -> None: self._elliptic = _wrap(e)
 
-    def elliptic_field(self, name, rhs, operator="poisson", aux=None):
+    def elliptic_field(self, name: Any, rhs: Any, operator: str = "poisson", aux: Any = None) -> None:
         """Declare a NAMED elliptic field (ADC-419): an elliptic solve ``operator(field) = rhs(U)``
         whose solution + derived quantities populate the NAMED aux fields @p aux (default
         ``["phi", "grad_x", "grad_y"]``, the canonical electrostatic triple). @p rhs is an Expr of
@@ -74,7 +83,7 @@ class _SourceMixin:
                              % (name, sorted(rhs_aux)))
         self._elliptic_fields[name] = {"rhs": rhs, "operator": operator, "aux": aux}
 
-    def source_term(self, name, exprs):
+    def source_term(self, name: Any, exprs: Any) -> Any:
         """Declare a NAMED local source S_name(U, primitives, aux, params): exactly n_cons
         expressions, free to depend on cons / primitives / aux / aux_field / params / constants. A
         named source is OPT-IN -- it is emitted only when a compiled time Program asks for it
@@ -108,7 +117,7 @@ class _SourceMixin:
         self._source_terms[name] = exprs
         return OperatorHandle(name, kind="local_source")
 
-    def linear_source(self, name, matrix):
+    def linear_source(self, name: Any, matrix: Any) -> Any:
         """Declare a NAMED local linear operator L_name(aux, params): an n_cons x n_cons matrix whose
         coefficients may depend on constants / params / aux / aux_field ONLY -- NOT on conservative or
         primitive variables (otherwise S(U) = L U is not linear in U and could not be treated as a
@@ -145,7 +154,8 @@ class _SourceMixin:
         self._linear_sources[name] = wrapped
         return OperatorHandle(name, kind="local_linear_operator")
 
-    def rate_operator(self, name, *, flux=True, sources=("default",), fluxes=None):
+    def rate_operator(self, name: Any, *, flux: bool = True, sources: Any = ("default",),
+                      fluxes: Any = None) -> Any:
         """Declare a NAMED composite rate operator ``R_name = -div F + sum(sources)`` (Spec 2,
         operator-first). It is a Program-side ALIAS for ``ctx.rhs(flux=, sources=, fluxes=)``: a typed
         ``P.call(name, U[, fields])`` lowers to the SAME rhs IR as the explicit ``P.rhs(...)`` shortcut,
@@ -176,7 +186,7 @@ class _SourceMixin:
         self._rate_operators[name] = {"flux": bool(flux), "sources": srcs, "fluxes": flx}
         return OperatorHandle(name, kind="local_rate")
 
-    def stability_speed(self, expr):
+    def stability_speed(self, expr: Any) -> None:
         """STABILITY speed lambda* (expression of cons / prims / aux): drives the block CFL
         instead of ``max(|eigenvalues|)``. Emitted as ``stability_speed(U, aux, dir)`` (C++ trait
         ``HasStabilitySpeed``): System::step_cfl then uses it for the transport bound
@@ -187,7 +197,7 @@ class _SourceMixin:
         multi-block; on the AMR side the reduction is evaluated on the COARSE level, where the CFL lives)."""
         self._stab_speed = _wrap(expr)
 
-    def stability_dt(self, expr_dt):
+    def stability_dt(self, expr_dt: Any) -> None:
         """Direct ADMISSIBLE step dt(U, aux) (expression > 0, in time units): local step
         bound, emitted as ``stability_dt(U, aux)`` (C++ trait ``HasStabilityDt``). System::step_cfl
         imposes dt <= min_cells(stability_dt) * substeps / stride (the cfl is NOT applied: the
@@ -197,7 +207,7 @@ class _SourceMixin:
         AmrSystem (mono and multi-block; on the AMR side evaluated on the COARSE level)."""
         self._stab_dt = _wrap(expr_dt)
 
-    def source_frequency(self, expr_mu):
+    def source_frequency(self, expr_mu: Any) -> None:
         """Local FREQUENCY mu(U, aux) [1/time] of the SOURCE (relaxation, collision, reaction):
         the 'second CFL' of the meeting -- bound dt <= cfl * substeps / (stride * max_cells(mu)),
         WITHOUT a space step (a source bounded in 1/time). Emitted as ``frequency(U, aux)`` on the
@@ -207,7 +217,7 @@ class _SourceMixin:
         WITHOUT a call, the source does not constrain the step (historical). Compiled (GPU/MPI production)."""
         self._src_freq = _wrap(expr_mu)
 
-    def projection(self, exprs):
+    def projection(self, exprs: Any) -> None:
         """PROJECTION PONCTUELLE post-pas (ADC-177) : U <- P(U, aux), une expression par composante
         conservative (en fonction des cons / prims / aux). Emise comme ``project(U, aux)`` sur la
         brique hyperbolique generee (trait C++ ``HasPointwiseProjection``) ; le System l'applique sur
@@ -226,7 +236,7 @@ class _SourceMixin:
                              "conservative), recu %d" % (self.n_vars, len(exprs)))
         self._proj = exprs
 
-    def projection_value(self, U, aux=None):
+    def projection_value(self, U: Any, aux: Any = None) -> Any:
         """EVALUATEUR numpy de la projection ponctuelle emise (miroir exact du project(U, aux) C++) :
         U (n_vars, ...) -> U projete. Reference de test / prototypage hote. ValueError si
         projection([...]) n'a pas ete appelee."""
@@ -236,7 +246,7 @@ class _SourceMixin:
         shape = np.asarray(U[0]).shape
         return np.stack([np.broadcast_to(e.eval(env), shape) for e in self._proj], axis=0)
 
-    def source_jacobian(self, rows):
+    def source_jacobian(self, rows: Any) -> None:
         """ANALYTICAL JACOBIAN of the source: dS/dU, n_vars x n_vars matrix of expressions
         (rows[r][c] = dS_r/dU_c, as a function of cons / prims / aux). Emitted as
         ``jacobian(U, aux, J)`` on the generated SOURCE brick, forwarded by CompositeModel

@@ -7,14 +7,23 @@ bound. Methods only; they operate on the board ``Model`` instance attributes
 (``_multi_module`` / ``_species`` / ``_states`` / ``_dsl`` / ...). Lowers to the
 operator-first multi-block IR (:mod:`pops.model`); codegen-free, ``_pops``-free.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from .board_handles import (CallableOperator, FieldsHandle, StateHandle,
                             _canon_role, _safe_name)
 
+if TYPE_CHECKING:
+    from ._model_contract import _BoardModel
+else:
+    _BoardModel = object
 
-class _MultiSpeciesMixin:
+
+class _MultiSpeciesMixin(_BoardModel):
     """Multi-species promotion, coupled_rate, field-solve, and inspection dumps."""
 
-    def _promote_to_multispecies(self):
+    def _promote_to_multispecies(self) -> None:
         """Build the multi-block :class:`pops.model.Module` and migrate the first species into it.
 
         The single-state dsl model authored the first species; multi-species mode realizes every
@@ -29,7 +38,8 @@ class _MultiSpeciesMixin:
         for nm, h in self._species.items():
             self._add_species(nm, components=h.components, roles=h.roles, handle=h)
 
-    def _add_species(self, name, components=(), roles=None, handle=None):
+    def _add_species(self, name: Any, components: Any = (), roles: Any = None,
+                     handle: Any = None) -> Any:
         """Add one typed StateSpace to the multi-block Module and return its StateHandle.
 
         ``handle`` updates an existing :class:`StateHandle` in place (promotion of the first
@@ -50,7 +60,8 @@ class _MultiSpeciesMixin:
 
     # --- quantities ---
 
-    def coupled_rate(self, name, inputs=(), outputs=None, preserves=None, dissipates=None):
+    def coupled_rate(self, name: Any, inputs: Any = (), outputs: Any = None, preserves: Any = None,
+                     dissipates: Any = None) -> Any:
         """Declare a coupled rate over several species (collisions, ionization, radiation).
 
         ``inputs`` is the ordered list of participating species (:class:`StateHandle`); a species
@@ -97,7 +108,8 @@ class _MultiSpeciesMixin:
                                     capabilities=caps or None, expr=expr)
         return CallableOperator(reg, self)
 
-    def solve_fields_from_species(self, name, inputs=(), equation=None, outputs=None, solver=None):
+    def solve_fields_from_species(self, name: Any, inputs: Any = (), equation: Any = None,
+                                  outputs: Any = None, solver: Any = None) -> Any:
         """Declare a coupled field solve over several species (multi-block Poisson).
 
         ``inputs`` is the ordered list of contributing species; the field RHS reads every listed
@@ -127,13 +139,13 @@ class _MultiSpeciesMixin:
             self._field_solvers[name] = solver
         return h
 
-    def _as_species_list(self, op, name, items):
+    def _as_species_list(self, op: Any, name: Any, items: Any) -> Any:
         """Resolve a list of species handles / names to StateHandles (multi-species mode)."""
         if not items:
             raise ValueError("%s(%r) requires inputs=[species, ...]" % (op, name))
         return [self._species_handle(op, name, s) for s in self._as_iter(items)]
 
-    def _species_handle(self, op, name, sp):
+    def _species_handle(self, op: Any, name: Any, sp: Any) -> Any:
         """Resolve one species (a StateHandle or a species name) to its StateHandle."""
         if isinstance(sp, StateHandle):
             handle = self._species.get(sp.name)
@@ -146,24 +158,24 @@ class _MultiSpeciesMixin:
         return handle
 
     @staticmethod
-    def _as_iter(x):
+    def _as_iter(x: Any) -> Any:
         """A list view of a single item or an iterable (so inputs=e and inputs=[e, i] both work)."""
         if isinstance(x, (list, tuple)):
             return list(x)
         return [x]
 
 
-    def list_operators(self):
+    def list_operators(self) -> Any:
         if self._multi_module is not None:
             return self._multi_module.list_operators()
         return self._dsl.list_operators()
 
-    def operator_alias(self, name):
+    def operator_alias(self, name: Any) -> Any:
         """The registered operator name for a board role name (``operator(...)``)."""
         return self._aliases.get(name, name)
 
     # --- inspection / debug (Spec 3 section 33): show the lowering ---
-    def dump_physics(self):
+    def dump_physics(self) -> str:
         """A board-level view of what was declared (states, params, fields, fluxes,
         sources, operators) -- the layer-1 surface."""
         lines = ["# physics.Model %s" % self.name]
@@ -176,7 +188,7 @@ class _MultiSpeciesMixin:
         lines.append("operators: %s" % self.list_operators())
         return "\n".join(lines)
 
-    def dump_module_ir(self):
+    def dump_module_ir(self) -> str:
         """The operator-first :class:`pops.model.Module` this model lowers to: the typed
         spaces and operators with signatures (layer 2)."""
         mod = self.module
@@ -190,7 +202,7 @@ class _MultiSpeciesMixin:
             lines.append("Operator %s [%s]: %r" % (op, reg.get(op).kind, mod.operator_signature(op)))
         return "\n".join(lines)
 
-    def dump_capabilities(self):
+    def dump_capabilities(self) -> str:
         """The requirements / capabilities declared by each typed operator."""
         mod = self.module
         lines = ["# capabilities / requirements of %s" % mod.name]
