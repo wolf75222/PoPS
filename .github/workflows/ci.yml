@@ -494,9 +494,13 @@ jobs:
       fail-fast: false
       matrix:
         # Shard ids MUST stay contiguous 0..N-1: the harness pairs SHARD_INDEX=matrix.shard with
-        # SHARD_TOTAL=strategy.job-total and selects files by (index % total) == shard. Non-contiguous
-        # ids (e.g. [1,2,3]) would silently drop coverage -- to rebalance, change the COUNT here only.
-        shard: [0, 1, 2]
+        # SHARD_TOTAL=strategy.job-total. ADC-623: files are packed by MEASURED DURATION
+        # (scripts/ci_shard_binpack.py, greedy LPT over tests/python/test_durations.json), not by a
+        # modulo of the file list, so the slowest shard -- the gate critical path -- is minimized.
+        # 5 shards (was 3): the ADC-621 cached _pops.so makes the marginal shard cheap. To rebalance,
+        # change the COUNT here only (job names stay "... shard N"; the required `gate` aggregates
+        # them via a single matrix entry in its `needs`).
+        shard: [0, 1, 2, 3, 4]
 
     env:
       # ccache reste utile aux tests DSL qui compilent des loaders/.so a runtime dans chaque shard.
@@ -558,6 +562,23 @@ jobs:
         with:
           name: gate-python-test-plan-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/python-test-plan.json
+
+      # ADC-623 SAFETY: reconstruct EVERY shard from the same selection and fail loudly unless
+      # they exactly cover it (minus the dedicated compile-cache file). This catches a broken
+      # duration binpacking BEFORE any test runs, so a rebalance can never silently drop or
+      # duplicate a test file. Cheap (source-only, no build) and runs in every shard job.
+      - name: Verify shard partition is exact
+        run: |
+          force_args=()
+          if [ "${{ github.event_name }}" = "pull_request" ] \
+             && { [ "${{ contains(github.event.pull_request.labels.*.name, 'ci-kokkos') }}" = "true" ] \
+                  || [ "${{ contains(github.event.pull_request.labels.*.name, 'ci-full') }}" = "true" ]; }; then
+            force_args+=(--force-all)
+          fi
+          python3 scripts/ci_select_tests.py verify \
+            --changed-files "${{ steps.changed-files.outputs.path }}" \
+            --shard-total "$SHARD_TOTAL" \
+            "${force_args[@]}"
 
       - id: kokkos
         if: steps.test-plan.outputs.python_shard_count != '0'
@@ -657,6 +678,117 @@ jobs:
         if: always() && steps.test-plan.outputs.python_shard_count != '0'
         run: ccache -s
 
+  # GATE PYTHON COMPILE-CACHE (ADC-623). The DSL compile-cache test compiles ~8 native .so
+  # back-to-back at runtime (POPS_PROCESS_TIMEOUT = 900) -- on its own it was ~5 min of one
+  # shard's critical path plus its per-file process-isolation overhead. Isolated here into a
+  # DEDICATED job so it no longer weighs on the sharded suite (scripts/ci_shard_binpack.py
+  # excludes it from the shard partition; the exactness check accounts for the exclusion).
+  # A DSL out-of-source compile cache (POPS_CACHE_DIR) is persisted with actions/cache, keyed
+  # on the SAME inputs as the ADC-621 _pops.so module cache PLUS python/pops/** (the DSL
+  # codegen) and the test file, so a warm run skips the recompiles. Same routing/`if:` as
+  # gate-python: it runs whenever the sharded Python gate runs.
+  gate-python-compile-cache:
+    name: ubuntu-latest / Kokkos Serial (Python) compile-cache
+    runs-on: ubuntu-latest
+    needs: [changes, gate-python-build]
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.cpp == 'true' || needs.changes.outputs.python == 'true' || contains(github.event.pull_request.labels.*.name, 'ci-kokkos') || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache-py
+      CCACHE_MAXSIZE: 2G
+      KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_SLOPPINESS: locale,time_macros
+      # The DSL out-of-source compile cache lives here; persisted across runs by actions/cache.
+      POPS_CACHE_DIR: ${{ github.workspace }}/.pops-dsl-cache
+      COMPILE_CACHE_TEST: tests/python/integration/mpi/test_compile_cache_backend.py
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - id: kokkos
+        uses: ./.github/actions/setup-kokkos
+        with:
+          extra-apt: mold
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Download Python module artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: gate-python-build-kokkos-py
+          path: build-kokkos-py/python
+
+      - name: Verify Python module artifact
+        run: |
+          test -d build-kokkos-py/python/pops
+          test -n "$(find build-kokkos-py/python/pops -maxdepth 1 -name '_pops*.so' -print -quit)"
+
+      - name: Compiler key component
+        id: cxxkey
+        run: echo "gcc=$(gcc -dumpversion | cut -d. -f1)" >> "$GITHUB_OUTPUT"
+
+      # Warm the DSL runtime .so cache. Key = the ADC-621 module-cache inputs (headers, bindings,
+      # build graph, Kokkos, gcc) PLUS python/pops/** (the DSL codegen that emits the .so) and the
+      # test file itself, since any of those changes the compiled artifact. restore-keys let a
+      # near-miss reuse a warm cache as a starting point (a stale .so is re-keyed by content in the
+      # out-of-source cache, so reuse is safe) instead of a fully cold recompile.
+      - name: Cache DSL compile artifacts (POPS_CACHE_DIR)
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.POPS_CACHE_DIR }}
+          key: pops-dslcache-${{ runner.os }}-${{ hashFiles('include/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'python/pops/**', 'tests/python/integration/mpi/test_compile_cache_backend.py') }}-kokkos4.4.01-15dc143e-gcc${{ steps.cxxkey.outputs.gcc }}
+          restore-keys: |
+            pops-dslcache-${{ runner.os }}-
+
+      - name: Cache ccache (Python runtime loaders)
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-python-compile-cache-${{ github.ref }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-python-compile-cache-${{ github.ref }}-
+            ccache-${{ runner.os }}-python-compile-cache-refs/heads/master-
+            ccache-${{ runner.os }}-python-build-${{ github.ref }}-
+            ccache-${{ runner.os }}-python-build-refs/heads/master-
+            ccache-${{ runner.os }}-python-
+
+      - name: Test DSL compile-cache (Kokkos Serial)
+        run: |
+          pip install --upgrade pip numpy pytest
+          export PYTHONPATH="$PWD/build-kokkos-py/python"
+          export Kokkos_ROOT="${KOKKOS_PREFIX}" POPS_KOKKOS_ROOT="${KOKKOS_PREFIX}"
+          mkdir -p "$POPS_CACHE_DIR"
+          SECONDS=0
+          set +e
+          python3 -m pytest -q -ra "$COMPILE_CACHE_TEST"
+          rc=$?
+          set -e
+          test_s=$SECONDS
+          {
+            echo "### gate-python-compile-cache (module _pops, Kokkos Serial)"
+            echo ""
+            echo "| Phase | Duree (s) |"
+            echo "| --- | --- |"
+            echo "| tests (compile-cache) | ${test_s} |"
+            echo ""
+            echo "Hit-rate ccache :"
+            echo '```'
+            ccache -s | grep -i hits || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      - name: ccache stats (Python compile-cache)
+        if: always()
+        run: ccache -s
+
   # Agregation REQUISE : l'UNIQUE check a referencer dans la branch protection (ADC-166). Resout
   # trois faiblesses structurelles du routage par chemins (findings revue ADC-171) :
   #  (1) GitHub traite un required check SKIPPED comme PASSANT -> sans agregateur, une PR touchant
@@ -668,17 +800,17 @@ jobs:
   gate:
     name: gate (agregation requise)
     runs-on: ubuntu-latest
-    needs: [changes, gate-cpp, gate-python-architecture, gate-python-build, gate-python]
+    needs: [changes, gate-cpp, gate-python-architecture, gate-python-build, gate-python, gate-python-compile-cache]
     if: always()
     steps:
       - name: Verdict
         run: |
-          echo "changes=${{ needs.changes.result }} gate-cpp=${{ needs.gate-cpp.result }} gate-python-architecture=${{ needs.gate-python-architecture.result }} gate-python-build=${{ needs.gate-python-build.result }} gate-python=${{ needs.gate-python.result }}"
+          echo "changes=${{ needs.changes.result }} gate-cpp=${{ needs.gate-cpp.result }} gate-python-architecture=${{ needs.gate-python-architecture.result }} gate-python-build=${{ needs.gate-python-build.result }} gate-python=${{ needs.gate-python.result }} gate-python-compile-cache=${{ needs.gate-python-compile-cache.result }}"
           if [ "${{ needs.changes.result }}" != "success" ]; then
             echo "::error::routage (job changes) en echec : impossible de garantir quels gates devaient tourner"
             exit 1
           fi
-          for r in "${{ needs.gate-cpp.result }}" "${{ needs.gate-python-architecture.result }}" "${{ needs.gate-python-build.result }}" "${{ needs.gate-python.result }}"; do
+          for r in "${{ needs.gate-cpp.result }}" "${{ needs.gate-python-architecture.result }}" "${{ needs.gate-python-build.result }}" "${{ needs.gate-python.result }}" "${{ needs.gate-python-compile-cache.result }}"; do
             case "$r" in
               success|skipped) ;;
               *) echo "::error::un gate obligatoire a echoue ou ete annule ($r)" ; exit 1 ;;

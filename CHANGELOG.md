@@ -27,6 +27,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   missing required output or a missing nullspace on a singular operator before the runtime is touched.
 
 ### Changed
+- ADC-623 Rebalanced the CI pytest gate: the selected test files are now packed onto shards by
+  measured duration (greedy longest-processing-time over a committed `tests/python/test_durations.json`)
+  instead of a modulo of the file list, so the slowest shard is minimized; grew the Python shards from
+  3 to 5; and isolated the multi-compile DSL compile-cache test into its own cached job so it no longer
+  sits on a shard's critical path. A verify step fails the gate if the shard partition is not an exact
+  cover of the selection.
 - ADC-553 Renamed `pops.Case` to `pops.Problem` (no back-compat alias; `pops.Case` raises
   `AttributeError` pointing at `pops.Problem`) and split the flat assembly monolith into a
   `pops.problem` package of typed internal registries (blocks / fields / time / params / runtime
