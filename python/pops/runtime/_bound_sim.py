@@ -80,11 +80,22 @@ class BoundSimulation:
         # Store on the instance dict directly so __getattr__ is not consulted for _engine itself.
         object.__setattr__(self, "_engine", engine)
 
+    # The IO capabilities whose engine support is gated at access (ADC-537 gate e / G5): a bound
+    # simulation forwards restart / checkpoint only when its engine actually provides them. An engine
+    # that does not declare the method is refused with a precise "does not declare <cap>" error rather
+    # than raising a cryptic AttributeError from deep inside the forward.
+    _GATED_IO = frozenset({"restart", "checkpoint"})
+
     def __getattr__(self, attr):
         # __getattr__ runs only when normal lookup fails, so _engine (set in __init__) never
         # reaches here. Dunder names raise normally so copy / pickle / inspect do not loop.
         if attr.startswith("__") and attr.endswith("__"):
             raise AttributeError(attr)
+        if attr in self._GATED_IO and not hasattr(self._engine, attr):
+            raise AttributeError(
+                "pops.bind: this bound simulation does not declare %r; the compiled artifact / "
+                "runtime engine (%s) exposes no %r capability, so a %s cannot be requested here."
+                % (attr, type(self._engine).__name__, attr, attr))
         if attr in _ALLOWED:
             return getattr(self._engine, attr)
         if attr in _BLOCKED:

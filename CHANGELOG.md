@@ -17,6 +17,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 ## [Unreleased]
 
 ### Added
+- ADC-537 `pops.bind` refuses an initial state of the wrong shape/dtype/components/ghost depth, a
+  runtime param outside its typed domain, an aux field a lowered operator requires but the state
+  omits, and an ABI/Kokkos/MPI/layout manifest mismatch, all as hard errors with precise context
+  before the native artifact is loaded; the artifact loads only via its manifest/ABI and there is no
+  Python-runtime fallback when the native load fails.
 - ADC-538 Native ProgramContext execution contract is fenced by tests: the host-validatable
   compiled-Program call path (per-stage `solve_fields_from_state`, `rhs_into` /
   `neg_div_flux_default_into` / `source_default_into`, `lincomb` / `axpy`, `fill_boundary`,

@@ -188,6 +188,10 @@ class ParamRegistry:
 
     def __init__(self):
         self._params = {}
+        # The TYPED declaration object per name (a pops.params RuntimeParam / ConstParam carrying its
+        # domain), retained so the bind-time domain check (ADC-541) can call decl.check_bind(value).
+        # A bare (name, default) declaration has no typed object -> None.
+        self._declarations = {}
 
     def add(self, name, default=None, *, kind=_NO_KIND):
         """Declare a parameter. A bare ``kind=`` string is rejected (Spec 5 sec.7)."""
@@ -197,12 +201,27 @@ class ParamRegistry:
                 "(pops.physics.RuntimeParam(name, value) or pops.physics.ConstParam(name, value)) "
                 "instead of kind=%r" % (kind,))
         if hasattr(name, "kind") and hasattr(name, "name") and hasattr(name, "value"):
+            # A pops.physics RuntimeParam/ConstParam (Param): kind + value carried directly.
             if default is not None:
                 raise TypeError(
                     "param: a typed param was given; do not also pass a default (%r)" % (default,))
             self._params[str(name.name)] = {"default": name.value, "kind": str(name.kind)}
+            self._declarations[str(name.name)] = name
+        elif getattr(name, "category", None) in ("runtime_param", "const_param") \
+                and hasattr(name, "name"):
+            # A pops.params typed param carrying a DOMAIN (RuntimeParam(domain=...) / ConstParam):
+            # retain it as the declaration so the bind-time domain check (ADC-541) can call
+            # check_bind(value); its kind is derived from the category.
+            if default is not None:
+                raise TypeError(
+                    "param: a typed param was given; do not also pass a default (%r)" % (default,))
+            kind_of = {"runtime_param": "runtime", "const_param": "const"}[name.category]
+            declared = getattr(name, "default", getattr(name, "value", None))
+            self._params[str(name.name)] = {"default": declared, "kind": kind_of}
+            self._declarations[str(name.name)] = name
         else:
             self._params[str(name)] = {"default": default, "kind": "const"}
+            self._declarations[str(name)] = None
 
     def get(self, name):
         return self._params.get(str(name))
@@ -212,6 +231,14 @@ class ParamRegistry:
 
     def items(self):
         return self._params.items()
+
+    def declarations(self):
+        """The ``{name: typed declaration}`` map (a ``RuntimeParam``/``ConstParam`` or ``None``).
+
+        The bind-time domain check (ADC-541) reads it to call ``decl.check_bind(value)`` on each
+        supplied runtime param. A name declared without a typed object maps to ``None``.
+        """
+        return dict(self._declarations)
 
     def __iter__(self):
         return iter(self._params)

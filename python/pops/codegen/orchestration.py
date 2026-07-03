@@ -277,6 +277,14 @@ def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
     instances = _assemble_instances(problem, initial or {}, block_specs=block_specs,
                                     models=amr_models)
 
+    # HARD REFUSAL GATES (ADC-537): reject a bad install with precise context BEFORE the native
+    # artifact is loaded -- an initial state of the wrong shape/dtype/components/ghost depth, a
+    # runtime param outside its typed domain, an aux a lowered operator requires but the state omits,
+    # and an ABI/Kokkos/MPI/layout manifest mismatch. run_bind_gates raises ONE aggregated error on
+    # any violation; there is no Python-runtime fallback when the native load fails.
+    from pops.runtime._bind_validation import run_bind_gates
+    run_bind_gates(compiled, problem, layout, initial or {}, params or {}, aux or {})
+
     # Delegate to the internal runtime adapter (lazy import: runtime edge, kept in-function so the
     # codegen module-scope import graph stays clean). adapter_for selects Uniform vs AMR from the
     # target the layout produced; the adapter builds the engine, installs, and wraps it in a

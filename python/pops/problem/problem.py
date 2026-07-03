@@ -154,6 +154,11 @@ class Problem:
         return dict(self._param_registry.items())
 
     @property
+    def _param_declarations(self):
+        """The ``{name: typed declaration}`` map for the bind-time domain check (ADC-541)."""
+        return self._param_registry.declarations()
+
+    @property
     def _aux(self):
         return self._runtime_registry.aux
 
