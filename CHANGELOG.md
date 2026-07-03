@@ -54,6 +54,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   alongside `inspect()` / `requirements()`.
 
 ### Changed
+- ADC-563 Descriptors freeze after their assembly is sealed, `pops.compile` freezes the `Problem`
+  (via `problem.freeze()` -> a `ProblemSnapshot` with a stable `.hash`) and the time `Program`; a
+  mutation after freeze raises an explicit error naming the frozen object (no warning, no
+  shallow-copy escape). The snapshot hash folds into the compile cache key so a post-compile Problem
+  mutation cannot change a bound artifact.
 - ADC-557 `pops.compile` lowers a physics `Model` through its operator-first `pops.model.Module`
   as the canonical compile IR and validates ONCE via a single `lower_and_validate` step (the
   divergent standalone `model.check()` compile call is gone). A lowering / dependency error is

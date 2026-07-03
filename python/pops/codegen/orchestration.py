@@ -132,6 +132,7 @@ def compile(problem, layout=None, backend="production", time=None, **kwargs):
     # settings) and flows the typed refinement. A handle NOT produced here carries no layout and
     # binds on the bare System() defaults.
     compiled._layout = layout
+    _freeze_and_snapshot(problem, time, compiled)
     return compiled
 
 
@@ -175,6 +176,7 @@ def _compile_amr(problem, layout, backend, target, **kwargs):
     # Carry the AMR layout so bind() can rebuild the AmrSystemConfig (n / L / periodic / regrid /
     # patch settings) and flow the typed refinement + field problem onto the AmrSystem.
     compiled._layout = layout
+    _freeze_and_snapshot(problem, None, compiled)
     return compiled
 
 
@@ -196,6 +198,18 @@ def _compile_block_amr(name, physics, backend, compile_kwargs):
             "pops.physics.Model physics (a raw pops.model.Module has no per-block AMR loader)."
             % (name, type(model).__name__))
     return block_compile(backend=backend, target="amr_system", **compile_kwargs)
+
+
+def _freeze_and_snapshot(problem, time, compiled):
+    """Freeze the compiled Problem + Program and fold the snapshot hash into the cache key (ADC-563).
+
+    Delegates to :func:`pops.problem._snapshot.freeze_compiled` (bind-owned, lazy import to keep the
+    codegen module-scope import graph clean). ``pops.compile``'s last authoring act: freeze the
+    Problem (-> a stable ProblemSnapshot on ``compiled._problem_snapshot``), freeze the time Program,
+    and fold ``snapshot.hash`` into the handle's cache key (composing with the compile stream's
+    tokens, never replacing) so a mutated Problem cannot rebind a compiled artifact."""
+    from pops.problem._snapshot import freeze_compiled
+    freeze_compiled(problem, time, compiled)
 
 
 def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,

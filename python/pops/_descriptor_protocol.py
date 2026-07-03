@@ -80,6 +80,31 @@ class Descriptor:
     #: native brick set this (as a class or instance attribute).
     native_id = None
 
+    def freeze(self):
+        """Freeze this descriptor: a later attribute mutation RAISES (ADC-563). Returns ``self``.
+
+        A descriptor is mutable while it is authored / composed; once the assembly that holds it is
+        frozen (``pops.compile`` freezes the ``Problem``, which cascades ``freeze`` to its member
+        descriptors), the descriptor is sealed so a post-freeze edit to a route the artifact already
+        committed cannot silently diverge from what was compiled. Idempotent."""
+        object.__setattr__(self, "_frozen", True)
+        return self
+
+    def __setattr__(self, key, value):
+        """Refuse an attribute mutation after :meth:`freeze` (ADC-563), naming the frozen descriptor.
+
+        Before freeze (the ``_frozen`` flag is unset / False) every assignment passes -- construction
+        and fluent-builder edits are unaffected. After freeze, any assignment RAISES a
+        ``RuntimeError`` naming the descriptor and the reason; there is no warning and no
+        shallow-copy escape (a copy is a fresh, unfrozen object, which is the point)."""
+        if getattr(self, "_frozen", False):
+            raise RuntimeError(
+                "%s [%s] is frozen (ADC-563): cannot set %r after the assembly was frozen by "
+                "pops.compile. A compiled artifact is frozen to exactly the routes it was compiled "
+                "from; author a fresh descriptor / Problem and recompile instead of mutating this one."
+                % (getattr(self, "name", type(self).__name__), self.category, key))
+        object.__setattr__(self, key, value)
+
     @property
     def name(self):
         return type(self).__name__
