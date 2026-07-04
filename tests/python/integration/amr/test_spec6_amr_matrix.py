@@ -75,11 +75,11 @@ def test_every_layout_is_amr_and_the_pending_rows_are_named():
     # the shipping Spec 5 coverage the cited rows point at).
     for key, cell in matrix.MATRIX.items():
         assert cell.layout == "amr", "cell %r is not an AMR-layout cell" % key
-    # The pending rows are exactly the multistep-on-AMR (ADC-631) + the compiled condensed-Schur
-    # hierarchy Program (ADC-633) cells -- nothing else is silently deferred. The clean-route explicit /
-    # SSPRK Program row flipped to green_live when ADC-634 landed.
+    # The pending rows are exactly the compiled condensed-Schur hierarchy Program (ADC-633) cell --
+    # nothing else is silently deferred. Multistep-on-AMR (ab2/bdf2) flipped to exists when ADC-631
+    # merged; the clean-route explicit / SSPRK Program row flipped to green_live with ADC-634.
     pending = {k for k, c in matrix.MATRIX.items() if c.kind == "pending"}
-    assert pending == {"ab2.amr.mono", "bdf2.amr.mono", "clean_schur_program.amr.mono"}, pending
+    assert pending == {"clean_schur_program.amr.mono"}, pending
 
 
 if __name__ == "__main__":
