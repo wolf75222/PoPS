@@ -268,6 +268,17 @@ class AmrProgramContext {
   MultiFab& history(const std::string& name, int lag = 1) const {
     return pops::detail::AmrHistoryOps::read_history(*eng_, name, lag, level_);
   }
+  // ZERO COLD-START read (ADC-427), mirroring ProgramContext::history_zero_start so the SAME lowered
+  // body compiles on both contexts: a read-first cross-step carry reads the zero-filled slots on its
+  // very first read instead of failing loud. @p ncomp is accepted-and-ignored like register_history
+  // above (the AMR narrow ring lands with the ADC-427 AMR commits; block-0 width until then).
+  MultiFab& history_zero_start(const std::string& name, int lag, int ncomp = -1) const {
+    (void)ncomp;
+    pops::detail::AmrHistoryOps::register_history(*eng_, name, lag);
+    if (!pops::detail::AmrHistoryOps::initialized(*eng_, name))
+      pops::detail::AmrHistoryOps::set_initialized(*eng_, name, true);
+    return pops::detail::AmrHistoryOps::read_history(*eng_, name, lag, level_);
+  }
   void store_history(const std::string& name, const MultiFab& value) const {
     pops::detail::AmrHistoryOps::store_history(*eng_, name, level_, value, facade_->program_last_dt());
   }

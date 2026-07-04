@@ -146,10 +146,19 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         var[v.id] = program._coupled_scratch[(coupled_in.id, v.attrs["out_block"])]
     elif v.op == "history":
         # Read the SYSTEM-OWNED history slot (a MultiFab&, ADC-406a): lag steps back. The reference
-        # is bound to a C++ name the affine combine then reads like any other state/RHS term.
+        # is bound to a C++ name the affine combine then reads like any other state/RHS term. An
+        # explicit-ncomp read (ADC-427: the read-first 1-component cross-step carry) lowers to the
+        # ZERO COLD-START variant -- its very first read (before any store) returns the zero-filled
+        # slot, the declared step-0 value -- while the default multistep read keeps the fail-loud
+        # ctx.history byte-identical (a store-first scheme reading before its store is a config error).
         var[v.id] = "h%d" % v.id
-        lines.append("pops::MultiFab& %s = ctx.history(%s, %d);"
-                     % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"])))
+        if "ncomp" in v.attrs:
+            lines.append("pops::MultiFab& %s = ctx.history_zero_start(%s, %d, %d);"
+                         % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"]),
+                            int(v.attrs["ncomp"])))
+        else:
+            lines.append("pops::MultiFab& %s = ctx.history(%s, %d);"
+                         % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"])))
     elif v.op == "store_history":
         # Side-effect: copy the value into the current slot of the history (the cold-start fill on
         # the first store happens System-side). store_history is a State-typed node but carries no

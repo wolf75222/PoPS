@@ -192,11 +192,14 @@ class _ProgramSolve(_ProgramConstants, _ProgramBase):
         a Python int >= 1.
 
         @p ncomp (ADC-427) sizes the ring's slots. ``None`` (the default) reads a STATE-typed value over
-        block 0's ncomp -- the full-state multistep ring, byte-identical to the historical IR. An
-        explicit ``ncomp=1`` reads a SCALAR_FIELD-typed value from a 1-component ring: the persistent
-        1-component carry the condensed-Schur theta<1 stage needs for its cross-step phi^n (a lag-1
-        potential kept across steps, not a full state). The narrower ring is declared with this ncomp in
-        the codegen prelude, so a bare ``ctx.history`` read never widens it."""
+        block 0's ncomp -- the full-state multistep ring, byte-identical to the historical IR, including
+        its fail-loud read-before-store above. An explicit ``ncomp=1`` reads a SCALAR_FIELD-typed value
+        from a 1-component ring: the persistent 1-component carry the condensed-Schur theta<1 stage
+        needs for its cross-step phi^n (a lag-1 potential kept across steps, not a full state). That
+        carry is READ-FIRST (read at the top of the step, store at the end), so it lowers to the ZERO
+        COLD-START runtime read: the very first read -- before any store -- returns the zero-filled slot
+        (the declared step-0 value), never the fail-loud error. The narrower ring is declared with this
+        ncomp in the codegen prelude, so a bare ``ctx.history`` read never widens it."""
         if not isinstance(name, str) or not name:
             raise ValueError("history: name must be a non-empty string")
         if isinstance(lag, bool) or not isinstance(lag, int) or lag < 1:

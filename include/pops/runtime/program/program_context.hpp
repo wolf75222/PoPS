@@ -322,6 +322,20 @@ class ProgramContext {
     return sys_->read_history(name, lag);
   }
 
+  /// ZERO COLD-START history read (ADC-427): like @ref history, but a read BEFORE the first store
+  /// returns the zero-filled slot instead of failing loud. A read-first carry (the cross-step
+  /// potential: read the previous step's value at the TOP of the step, store the new one at the END)
+  /// has no store before its very first read; its declared step-0 value IS zero (the slots are
+  /// zero-initialized at registration), so the first read marks the ring initialized and reads it.
+  /// The multistep store-first pattern keeps the fail-loud @ref history read unchanged. @p ncomp
+  /// mirrors register_history (binds the slot width at the first register; -1 = block 0's ncomp).
+  MultiFab& history_zero_start(const std::string& name, int lag, int ncomp = -1) const {
+    sys_->register_history(name, lag, ncomp);  // idempotent; ncomp binds at the first register
+    if (!sys_->history_initialized(name))
+      sys_->set_history_initialized(name, true);  // the zero-filled slots ARE the declared cold start
+    return sys_->read_history(name, lag);
+  }
+
   /// Store @p value into the CURRENT slot of history @p name (ADC-406a). Registers the ring on first
   /// use (at least a current slot; the lag the program reads via @ref history sets the real depth) and
   /// forwards to System::store_history (which fills every slot on the first store -- the cold start).
