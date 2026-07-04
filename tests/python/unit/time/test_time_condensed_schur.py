@@ -53,6 +53,10 @@ fakes the engine (project policy: no fake pops in tests).
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
+
+# ADC-427: section B compiles several .so variants (golden, theta sweep, dt-refinement order
+# study); a cold CI compile cache blows the default 300 s process budget (ADC-627 idiom).
+POPS_PROCESS_TIMEOUT = 1200
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
