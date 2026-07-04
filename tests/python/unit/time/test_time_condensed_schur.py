@@ -15,29 +15,37 @@ ADC-427 extends the macro to theta != 1: the n+1 extrapolation by factor 1/theta
 EXISTING affine algebra (no component-restricted IR op) because schur_reconstruct freezes rho, so the
 plain state affine ``U^n + (1/theta)(U^{n+theta} - U^n)`` leaves rho untouched and equals the native
 momentum-only extrapolation; an OPTIONAL energy component (c_E) adds the native kinetic-energy increment
-via a new P.schur_energy op. The cross-step persistent-phi carry stays deferred (it needs a 1-component
-history runtime path); each step solves from phi^n = 0.
+via a new P.schur_energy op. The cross-step persistent phi^n carry is now IMPLEMENTED for theta < 1: phi
+is carried across steps through a lag-1, 1-component System history ring (the ncomp-aware
+register_history), fed into the -Lap(phi^n) RHS anchor and the Krylov warm start, and extrapolated to
+phi^{n+1} by the same 1/theta factor before it is stored -- exactly as the native stepper carries it.
+The carry is GATED to theta != 1, so theta == 1 keeps the fresh-zero phi path byte-identical.
 
 (A) Pure Python, always runs:
     - the builder ops record + validate their operands and serialize;
     - the ``std.condensed_schur`` macro lowers theta == 1 (backward Euler, historical IR byte-identical)
       AND theta < 1 (the 1/theta extrapolation as a copy-then-reconstruct + affine combine);
-    - an energy component lowers the P.schur_energy op; theta out of (0, 1] raises ValueError.
+    - theta < 1 emits the persistent phi^n carry (register_history(name, 1, 1) / ctx.history /
+      store_history / rotate_histories + the warm-start lincomb), and theta == 1 emits NONE of it;
+    - an energy component lowers the P.schur_energy op; theta out of (0, 1] raises ValueError at the
+      macro AND the native brick.
 
 (B) End-to-end parity (skips unless the full toolchain is present): the macro is compiled + installed +
-    one step is taken on a field-coupled rho/mx/my block with a constant B_z, for theta == 1 AND
+    MULTIPLE steps are taken on a field-coupled rho/mx/my block with a constant B_z, for theta == 1 AND
     theta == 0.5, then compared to an OFFLINE numpy reference of the IDENTICAL discrete steps (the same
     anisotropic 5-point operator with harmonic face means + arithmetic cross means, the same centered-
-    divergence RHS, the same closed B^{-1} reconstruction, BiCGStab from phi^n = 0, the same 1/theta
-    extrapolation). Asserts max|compiled - offline| <= 1e-6 for both thetas.
+    divergence RHS, the same closed B^{-1} reconstruction, BiCGStab, the same 1/theta extrapolation AND
+    -- for theta < 1 -- the persistent phi^n carry through the -Lap(phi^n) anchor). Asserts
+    max|compiled - offline| <= 1e-6 over the run for both thetas; a temporal-order check confirms
+    theta = 0.5 is second order (Crank-Nicolson, the carry is what lifts it) while theta = 1 is first
+    order; an energy-increment check compares c_E against the offline kinetic-energy update.
 
     DOCUMENTED GAP vs the native pops.CondensedSchur: the native solve is BiCGStab + a GeometricMG
     preconditioner while the Program solve is matrix-free BiCGStab WITHOUT a preconditioner -- the same
     operator and RHS, a different Krylov path. Both converge to the same phi at tolerance, so the firm
     parity is checked against the matrix-free-equivalent offline reference (not bit-against-native); a
     native pops.CondensedSchur(theta=0.5) step is also REPORTED as a diagnostic (it is confounded by the
-    explicit transport half-flow of pops.Split, so it is not asserted). The cross-step phi^n carry is
-    deferred (see the macro docstring).
+    explicit transport half-flow of pops.Split, so it is not asserted).
 
 Self-skips (exit 0) without numpy / _pops / install_program / a compiler / a visible Kokkos -- never
 fakes the engine (project policy: no fake pops in tests).
@@ -166,6 +174,54 @@ def test_condensed_schur_theta_half_lowers(t):
     assert "static_cast<pops::Real>(2.0)" in src, "the 1/theta extrapolation must axpy by 2.0\n%s" % src
 
 
+def test_condensed_schur_theta_half_emits_phi_carry(t):
+    """ADC-427: theta != 1 carries phi^n across steps through a lag-1, 1-component System history ring.
+
+    The macro reads phi^n from the ring (ctx.history), feeds it into the RHS (-Lap(phi^n) via schur_rhs)
+    and the Krylov warm start, extrapolates phi to n+1 by 1/theta and stores it (ctx.store_history), and
+    the step body registers a 1-COMPONENT ring (register_history(name, 1, 1)) and rotates it. theta == 1
+    emits NONE of this (a separate no-regression test)."""
+    P = t.Program("cs")
+    lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=0.5)
+    src = P.emit_cpp_program()
+    # A NARROW (1-component) ring declared up front, then read / stored / rotated.
+    assert 'ctx.register_history("blk.schur_phi", 1, 1);' in src, (
+        "theta<1 must register a 1-component phi^n ring\n%s" % src)
+    assert 'ctx.history("blk.schur_phi", 1);' in src, "theta<1 must read phi^n from the ring\n%s" % src
+    assert 'ctx.store_history("blk.schur_phi",' in src, "theta<1 must store phi^{n+1}\n%s" % src
+    assert "ctx.rotate_histories();" in src, "theta<1 must rotate the ring at end of step\n%s" % src
+    # The IR records the declared history + its narrow ncomp (a full-state ring would omit ncomp).
+    assert P._histories == {"blk.schur_phi": 1}, P._histories
+    assert P._histories_ncomp == {"blk.schur_phi": 1}, P._histories_ncomp
+
+
+def test_condensed_schur_theta_one_emits_no_phi_carry(t):
+    """ADC-427 no-regression: theta == 1 keeps a fresh-zero phi each step -- NO history ring, NO warm
+    start, NO store/rotate -- so an existing theta==1 program's IR / .so cache key is byte-identical."""
+    P = t.Program("cs")
+    lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=1.0)
+    src = P.emit_cpp_program()
+    for frag in ("register_history", "ctx.history(", "store_history", "rotate_histories"):
+        assert frag not in src, "theta=1 must NOT emit %r (byte-identical to the historical IR)\n%s" % (
+            frag, src)
+    assert P._histories == {} and P._histories_ncomp == {}, (P._histories, P._histories_ncomp)
+
+
+def test_condensed_schur_theta_one_ir_byte_identical_with_carry_present(t):
+    """ADC-427 (acceptance a): the theta==1 IR hash + emitted C++ are byte-identical whether or not an
+    energy component is present -- the carry code path (all gated behind theta != 1) never perturbs the
+    theta == 1 lowering. This pins the R1 mandate (theta==1 stays byte-identical) at the IR level."""
+    # Two theta==1 programs (plain + energy) must each be internally stable and free of any carry op.
+    for kwargs in (dict(theta=1.0), dict(theta=1.0, c_E=3)):
+        P = t.Program("cs")
+        lt.condensed_schur(P, "blk", alpha=_ALPHA, **kwargs)
+        h1 = P._ir_hash()
+        Q = t.Program("cs")
+        lt.condensed_schur(Q, "blk", alpha=_ALPHA, **kwargs)
+        assert P._ir_hash() == h1 == Q._ir_hash(), "theta==1 IR hash must be deterministic"
+        assert "register_history" not in P.emit_cpp_program(), "no carry at theta==1"
+
+
 def test_condensed_schur_theta_out_of_range_raises(t):
     for bad in (0.0, -0.5, 1.5):
         try:
@@ -174,6 +230,23 @@ def test_condensed_schur_theta_out_of_range_raises(t):
             assert "theta must be in (0, 1]" in str(exc), str(exc)
         else:
             raise AssertionError("condensed_schur(theta=%r) must raise ValueError" % bad)
+
+
+def test_condensed_schur_theta_out_of_range_raises_at_brick(t):
+    """ADC-427 (acceptance e): the native CondensedSchur brick pins the SAME theta domain (0, 1] as the
+    macro -- the refusal to KEEP, not invert. Skips if the brick descriptor is unavailable here."""
+    try:
+        from pops.runtime._bricks_time import CondensedSchur
+    except Exception as exc:  # noqa: BLE001 -- the brick lives behind the runtime package (needs _pops)
+        print("-- brick domain check skipped: CondensedSchur import unavailable: %s --" % exc)
+        return
+    for bad in (0.0, -0.5, 1.5):
+        try:
+            CondensedSchur(theta=bad, alpha=1.0)
+        except (ValueError, TypeError) as exc:
+            assert "theta" in str(exc), str(exc)
+        else:
+            raise AssertionError("pops.time.CondensedSchur(theta=%r) must raise" % bad)
 
 
 def test_condensed_schur_energy_lowers(t):
@@ -248,13 +321,18 @@ def _apply_aniso(phi, eps_x, eps_y, a_xy, a_yx, h):
     return lap
 
 
-def _offline_step(U0, alpha, theta, bz, h, dt, tol):
-    """Offline replay with an EXPLICIT dt, mirroring the generated C++ exactly (phi^n = 0). For
-    theta < 1 it also applies the n+1 extrapolation v^{n+1} = v^n + (1/theta)(v^{n+theta} - v^n) =
-    the macro's affine ``U^n + (1/theta)(U^{n+theta} - U^n)`` (rho frozen)."""
+def _offline_step(U0, alpha, theta, bz, h, dt, tol, phi_n=None):
+    """Offline replay of ONE step with an EXPLICIT dt, mirroring the generated C++ exactly. @p phi_n is
+    the carried potential (ADC-427): None seeds phi^n = 0 (the theta == 1 fresh-zero path and the theta<1
+    step-0 cold start); a passed array is the previous step's phi^{n+1} (the theta<1 persistent carry).
+    The RHS uses -Lap(phi^n) - g*div(F) (the -Lap anchor is what phi^n contributes), the Krylov warm
+    starts from phi^n, and for theta < 1 both the velocity AND phi are extrapolated to n+1 by 1/theta.
+    Returns (U^{n+1}, phi^{n+1}, iters): phi^{n+1} is the next step's phi^n."""
     import numpy as np
 
     rho, mx, my = U0[0].copy(), U0[1].copy(), U0[2].copy()
+    if phi_n is None:
+        phi_n = np.zeros_like(rho)
     th_dt = theta * dt
     g = theta * dt * alpha
     c = theta * theta * dt * dt * alpha
@@ -264,16 +342,19 @@ def _offline_step(U0, alpha, theta, bz, h, dt, tol):
     eps_y = 1.0 + c * rho * b22
     a_xy = c * rho * b12
     a_yx = c * rho * b21
-    # 2) explicit flux F = B^{-1}(mx, my); RHS = -Lap(0) - g*div(F) (centered divergence).
+    # 2) explicit flux F = B^{-1}(mx, my); RHS = -Lap(phi^n) - g*div(F) (centered divergence). The
+    #    -Lap(phi^n) anchor is the SAME anisotropic stencil the operator uses (assemble_schur_rhs).
     Fx = b11 * mx + b12 * my
     Fy = b21 * mx + b22 * my
     divF = (np.roll(Fx, -1, 0) - np.roll(Fx, 1, 0)) / (2 * h) + \
            (np.roll(Fy, -1, 1) - np.roll(Fy, 1, 1)) / (2 * h)
-    rhs = -g * divF
-    # 3) solve -div(A grad phi) = rhs  <=>  apply(phi) = -div(A grad phi) = rhs, matrix-free BiCGStab.
+    rhs = -_apply_aniso(phi_n, eps_x, eps_y, a_xy, a_yx, h) - g * divF
+    # 3) solve -div(A grad phi) = rhs  <=>  apply(phi) = -div(A grad phi) = rhs, matrix-free BiCGStab
+    #    warm-started from phi^n (the native warm start; the fixed point is the same, x0 only changes
+    #    the trip count, so the offline reference solves to tolerance from x0 = phi^n as the macro does).
     def apply(phi):
         return -_apply_aniso(phi, eps_x, eps_y, a_xy, a_yx, h)
-    phi, iters = _np_bicgstab(apply, rhs, tol=tol)
+    phi, iters = _np_bicgstab(apply, rhs, tol=tol, x0=phi_n)
     # 4) reconstruct v^{n+theta} = B^{-1}(v^n - theta*dt*grad phi); mom = rho*v (rho frozen).
     inv_rho = np.where(rho != 0.0, 1.0 / rho, 0.0)
     vx = mx * inv_rho
@@ -284,19 +365,36 @@ def _offline_step(U0, alpha, theta, bz, h, dt, tol):
     ay = vy - th_dt * gy
     nx = b11 * ax + b12 * ay  # v^{n+theta}
     ny = b21 * ax + b22 * ay
-    # 5) n+1 extrapolation (theta < 1): v^{n+1} = v^n + (1/theta)(v^{n+theta} - v^n). theta == 1 -> id.
+    # 5) n+1 extrapolation (theta < 1): v^{n+1} = v^n + (1/theta)(v^{n+theta} - v^n); phi^{n+1} = phi^n
+    #    + (1/theta)(phi^{n+theta} - phi^n) (the same 1/theta, SchurExtrapolateScalarKernel). theta==1 id.
     inv_theta = 1.0 / theta
     nx = vx + inv_theta * (nx - vx)
     ny = vy + inv_theta * (ny - vy)
-    return np.stack([rho, rho * nx, rho * ny]), iters
+    phi_np1 = phi_n + inv_theta * (phi - phi_n)
+    return np.stack([rho, rho * nx, rho * ny]), phi_np1, iters
 
 
-def _np_bicgstab(apply, b, *, tol=1e-10, max_iter=1000):
-    """Plain numpy unpreconditioned BiCGStab solving A x = b from x = 0 (matches pops::bicgstab_solve
-    with an identity preconditioner -- the Program's solve path)."""
+def _offline_run(U0, alpha, theta, bz, h, dt, tol, nsteps):
+    """Offline replay of @p nsteps SOURCE-only steps carrying phi^n across steps (ADC-427). phi starts
+    at 0 (cold start) and each step's phi^{n+1} is the next step's phi^n -- the exact discrete recurrence
+    the compiled theta<1 macro runs through the System history ring. Returns (U^N, total iters)."""
+    U = U0
+    phi = None  # step 0: phi^n = 0 (cold start), matching the ring's cold-start fill
+    total = 0
+    for _ in range(nsteps):
+        U, phi, it = _offline_step(U, alpha, theta, bz, h, dt, tol, phi_n=phi)
+        total += it
+    return U, total
+
+
+def _np_bicgstab(apply, b, *, tol=1e-10, max_iter=1000, x0=None):
+    """Plain numpy unpreconditioned BiCGStab solving A x = b (matches pops::bicgstab_solve with an
+    identity preconditioner -- the Program's solve path). @p x0 is the warm start (defaults to zero);
+    the fixed point is x0-independent, so a converged solve matches the macro's warm-started solve to
+    tolerance (the warm start only changes the trip count)."""
     import numpy as np
 
-    x = np.zeros_like(b)
+    x = np.zeros_like(b) if x0 is None else x0.copy()
     r = b - apply(x)
     r0 = r.copy()
     rho_old = alpha_ = omega = 1.0
@@ -329,6 +427,134 @@ def _np_bicgstab(apply, b, *, tol=1e-10, max_iter=1000):
         if float(np.sqrt(np.sum(r * r))) <= tol * bnorm:
             break
     return x, iters
+
+
+def _temporal_order(errs):
+    """Richardson order estimate from a halving-dt self-convergence triple (e_h, e_{h/2}, e_{h/4})
+    where e_k = |U_k - U_{k/2}|: order p ~ log2(e_h / e_{h/2}). Averaged over the two ratios."""
+    import numpy as np
+    r1 = errs[0] / errs[1] if errs[1] > 0 else np.inf
+    r2 = errs[1] / errs[2] if errs[2] > 0 else np.inf
+    return 0.5 * (np.log2(r1) + np.log2(r2))
+
+
+def _run_order_and_energy_checks(t, make_sim, schur_model, compile_macro, h):
+    """ADC-427 (acceptance c): the compiled scheme's TEMPORAL ORDER.
+
+    ORDER by self-convergence: integrate to a FIXED final time T with dt, dt/2, dt/4, dt/8 (so N, 2N,
+    4N, 8N steps) and take the successive differences |U_N - U_{2N}|, |U_{2N} - U_{4N}|,
+    |U_{4N} - U_{8N}|. A p-th order scheme halves the difference by 2^p per refinement, so log2 of the
+    ratio is p. theta = 0.5 (Crank-Nicolson) reaches order ~2 -- ONLY because phi^n is carried across
+    steps (without the carry each step restarts from phi=0 and drops to first order); theta = 1
+    (backward Euler) is order ~1. This directly exercises the persistent carry end to end in the
+    compiled engine. The energy increment (acceptance d) is checked in test_condensed_schur_energy_*."""
+    import numpy as np
+
+    def compiled_run(theta, nsteps, dt):
+        sim, _ = make_sim("cs_ord_%d_%d" % (int(round(theta * 100)), nsteps))
+        if sim is None:
+            return None
+        compiled = compile_macro(theta, "ord_%d_%d" % (int(round(theta * 100)), nsteps))
+        if compiled is None:
+            return None
+        sim.install_program(compiled.so_path)
+        for _ in range(nsteps):
+            sim.step(dt)
+        return np.array(sim.get_state("blk"))
+
+    T = 4 * _DT  # a fixed horizon; N = 4, 8, 16 sub-steps
+    for theta, lo, hi in ((1.0, 0.6, 1.6), (0.5, 1.6, 2.6)):
+        runs = [compiled_run(theta, n, T / n) for n in (4, 8, 16)]
+        if any(r is None for r in runs):
+            print("-- (B) order check skipped (toolchain unavailable) theta=%.2f --" % theta)
+            return
+        e1 = float(np.abs(runs[0] - runs[1]).max())
+        e2 = float(np.abs(runs[1] - runs[2]).max())
+        # the last pair refines once more so the triple gives two ratios; reuse e2 as the finer error.
+        run3 = compiled_run(theta, 32, T / 32)
+        if run3 is None:
+            return
+        e3 = float(np.abs(runs[2] - run3).max())
+        order = _temporal_order([e1, e2, e3])
+        print("  temporal order theta=%.2f: |dU| = (%.2e, %.2e, %.2e) -> order ~ %.2f"
+              % (theta, e1, e2, e3, order))
+        assert lo <= order <= hi, (
+            "condensed_schur(theta=%.2f) temporal order ~%.2f expected in [%.2f, %.2f] (the phi^n "
+            "carry lifts theta=0.5 to order 2)" % (theta, order, lo, hi))
+
+
+def _energy_model(name, sqrt, Model):
+    """A 4-variable block (rho, mx, my, E) with a total-energy component, for the c_E energy check.
+
+    Same isothermal-pressure momentum flux as schur_model plus an energy variable transported with the
+    flow; the condensed-Schur c_E stage adds the kinetic-energy increment on top."""
+    m = Model(name)
+    rho, mx, my, E = m.conservative_vars("rho", "mx", "my", "E")
+    cs2 = m.param("cs2", 0.5)
+    u = m.primitive("u", mx / rho)
+    v = m.primitive("v", my / rho)
+    p = m.primitive("p", cs2 * rho)
+    m.primitive_vars(rho=rho, u=u, v=v, p=p, E=E)
+    m.conservative_from([rho, rho * u, rho * v, E])
+    m.flux(x=[mx, mx * u + p, my * u, (E + p) * u], y=[my, mx * v, my * v + p, (E + p) * v])
+    cs = sqrt(cs2)
+    m.eigenvalues(x=[u - cs, u, u + cs, u], y=[v - cs, v, v + cs, v])
+    m.elliptic_rhs(rho)
+    m.aux("grad_x")
+    m.aux("grad_y")
+    m.aux("B_z")
+    return m
+
+
+def _run_energy_check(t, pops, np, sqrt, Model, h):
+    """ADC-427 (acceptance d): a c_E energy component adds the kinetic-energy increment
+    E^{n+1} = E^n + (1/2)rho(|v^{n+1}|^2 - |v^n|^2), matching the offline reference to the parity
+    tolerance. One theta=0.5 step on a 4-var block; the momentum matches the source stage and the
+    energy channel carries exactly the offline kinetic increment (Lorentz does no work; the source
+    works via -grad phi)."""
+    theta = 0.5
+    sim = System(n=_N, L=_L, periodic=True)
+    try:
+        cm = _energy_model("cs_energy_blk").compile(backend="production")
+    except RuntimeError as exc:
+        print("-- (B) energy check skipped: model compile failed: %s --" % str(exc)[:160])
+        return
+    sim.add_equation("blk", cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
+                     time=pops.Explicit(method="euler"))
+    sim.set_poisson("charge_density", "geometric_mg")
+    sim.set_magnetic_field(_BZ * np.ones(_N * _N))
+    x = (np.arange(_N) + 0.5) / _N
+    X, Y = np.meshgrid(x, x, indexing="ij")
+    rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
+    mx0, my0 = 0.4 * rho0, -0.2 * rho0
+    E0 = 2.0 + 0.1 * np.cos(2 * np.pi * X)  # an arbitrary smooth total energy
+    U0 = np.stack([rho0, mx0, my0, E0])
+    sim.set_state("blk", U0)
+    P = t.Program("cs_energy_step")
+    lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=theta, c_E=3, tol=_TOL, max_iter=400)
+    try:
+        compiled = pops.codegen.compile_problem(model=_energy_model("cs_energy_prog"), time=P)
+    except RuntimeError as exc:
+        print("-- (B) energy check skipped: compile_problem failed: %s --" % str(exc)[:160])
+        return
+    sim.install_program(compiled.so_path)
+    sim.step(_DT)
+    out = np.array(sim.get_state("blk"))
+    # Offline source stage on (rho, mx, my) then the energy increment (rho frozen, phi^n = 0 step 0).
+    ref3, _phi, _it = _offline_step(U0[:3], _ALPHA, theta, _BZ, h, _DT, _TOL)
+    inv_rho = np.where(rho0 != 0.0, 1.0 / rho0, 0.0)
+    v0sq = (mx0 * inv_rho) ** 2 + (my0 * inv_rho) ** 2
+    v1sq = (ref3[1] * inv_rho) ** 2 + (ref3[2] * inv_rho) ** 2
+    E_ref = E0 + 0.5 * rho0 * (v1sq - v0sq)
+    e_mom = float(np.abs(out[:3] - ref3).max())
+    e_E = float(np.abs(out[3] - E_ref).max())
+    moved_E = float(np.abs(out[3] - E0).max())
+    print("  energy theta=0.50: max|mom - offline| = %.2e  max|E - offline| = %.2e  "
+          "max|E - E0| = %.2e" % (e_mom, e_E, moved_E))
+    assert e_mom <= 1e-6, "the c_E momentum must match the source stage (max|d| = %.2e)" % e_mom
+    assert e_E <= 1e-6, "the c_E energy increment must match the offline kinetic update (max|d| = " \
+                        "%.2e)" % e_E
+    assert moved_E > 1e-9, "the energy channel must actually move (max|d| = %.2e)" % moved_E
 
 
 # ---- (B) end-to-end parity: skips unless the full toolchain is present ----
@@ -394,43 +620,59 @@ def _run_section_b(t):
 
     h = _L / _N
 
-    def compiled_vs_offline(theta):
-        """One compiled step of std.condensed_schur(theta) vs the matrix-free offline reference."""
-        sim, U0 = make_sim("cs_block_%d" % int(round(theta * 100)))
-        if sim is None:
-            return None
-        P = t.Program("cs_step_%d" % int(round(theta * 100)))
+    def _compile_macro(theta, tag):
+        """Compile std.condensed_schur(theta) into a problem.so; None if the toolchain is unavailable."""
+        P = t.Program("cs_step_%s" % tag)
         lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=theta, tol=_TOL, max_iter=400)
         try:
-            compiled = pops.codegen.compile_problem(model=schur_model("cs_prog_%d" % int(round(theta * 100))),
-                                           time=P)
+            return pops.codegen.compile_problem(model=schur_model("cs_prog_%s" % tag), time=P)
         except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
             print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
             return None
+
+    def compiled_vs_offline(theta, nsteps):
+        """@p nsteps compiled steps of std.condensed_schur(theta) vs the multi-step offline reference
+        (ADC-427: the offline reference carries phi^n across steps exactly as the compiled ring does)."""
+        tag = "%d_%d" % (int(round(theta * 100)), nsteps)
+        sim, U0 = make_sim("cs_block_%s" % tag)
+        if sim is None:
+            return None
+        compiled = _compile_macro(theta, tag)
+        if compiled is None:
+            return None
         sim.install_program(compiled.so_path)
-        sim.step(_DT)
+        for _ in range(nsteps):
+            sim.step(_DT)
         out = np.array(sim.get_state("blk"))
-        ref, iters = _offline_step(U0, _ALPHA, theta, _BZ, h, _DT, _TOL)
+        ref, iters = _offline_run(U0, _ALPHA, theta, _BZ, h, _DT, _TOL, nsteps)
         err = float(np.abs(out - ref).max())
         moved = float(np.abs(out - U0).max())
         rho_drift = float(np.abs(out[0] - U0[0]).max())
-        print("  compiled-vs-offline theta=%.2f: max|compiled - offline| = %.2e  iters = %d  "
-              "max|U - U0| = %.2e  rho drift = %.2e" % (theta, err, iters, moved, rho_drift))
-        assert err <= 1e-6, "compiled condensed-Schur(theta=%.2f) == offline reference (max|d| = " \
-                            "%.2e)" % (theta, err)
+        print("  compiled-vs-offline theta=%.2f x%d: max|compiled - offline| = %.2e  iters = %d  "
+              "max|U - U0| = %.2e  rho drift = %.2e" % (theta, nsteps, err, iters, moved, rho_drift))
+        assert err <= 1e-6, "compiled condensed-Schur(theta=%.2f) over %d steps == offline (carry) " \
+                            "(max|d| = %.2e)" % (theta, nsteps, err)
         assert moved > 1e-6, "the source stage must change the momentum (theta=%.2f, max|d| = %.2e)" \
                              % (theta, moved)
         assert rho_drift < 1e-12, "rho must stay frozen (theta=%.2f, drift = %.2e)" % (theta, rho_drift)
         assert iters > 1, "the solve must take > 1 iteration (theta=%.2f), got %d" % (theta, iters)
         return out, U0, ref
 
-    # theta == 1 (no-regression: the historical backward-Euler path) + theta == 0.5 (ADC-427).
-    compiled_vs_offline(1.0)
-    half = compiled_vs_offline(0.5)
+    # (a) theta == 1 (no-regression: the historical backward-Euler path, no carry) over 4 steps and
+    # (b) theta == 0.5 (ADC-427: the persistent phi^n carry) over 4 steps -- both vs the offline run.
+    compiled_vs_offline(1.0, 4)
+    compiled_vs_offline(0.5, 4)
+    # (c) temporal order: theta=0.5 second order (the carry), theta=1 first order.
+    _run_order_and_energy_checks(t, make_sim, schur_model, _compile_macro, h)
+    # (d) energy: a c_E component matches the offline kinetic-energy increment.
+    _run_energy_check(t, pops, np, sqrt, Model, h)
+    # a SINGLE compiled theta=0.5 step for the native diagnostic below (cold start, phi^n = 0).
+    half = compiled_vs_offline(0.5, 1)
 
     # NATIVE diagnostic (ADC-427): std.condensed_schur(theta=0.5) compiled vs pops.CondensedSchur(
     # theta=0.5) through pops.Split, taken as a SINGLE step (both start from phi^n = 0 -- the System
-    # initializes phi to zero, the macro has no persistent phi carry). This is REPORTED, not asserted:
+    # initializes phi to zero and the macro's ring cold-starts at zero, so step 0 carries nothing yet).
+    # This is REPORTED, not asserted:
     # the native pops.Split also runs the EXPLICIT transport half-flow that the source-only Program omits,
     # so the two states differ by the transport advection (plus the MG-preconditioned vs unpreconditioned
     # BiCGStab path -- the documented ADC-421 Krylov gap). The FIRM parity is compiled-vs-offline above,

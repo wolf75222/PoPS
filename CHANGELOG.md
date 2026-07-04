@@ -54,6 +54,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   unregistered `test_coupling_operator_contract` into the standard C++ test list.
 
 ### Added
+- ADC-427 condensed_schur (pops.lib.time) now lowers theta in (0, 1): the theta-stage solve, the
+  1/theta n+1 extrapolation, the optional kinetic-energy update, and a cross-step persistent phi^n
+  carried through an ncomp-aware System history ring (register_history gains an optional ncomp; the
+  warm start and the -Lap(phi^n) RHS anchor read it), matching the native CondensedSchur source stage
+  to the documented BiCGStab tolerance and reaching second-order temporal accuracy at theta = 0.5.
+  theta == 1 stays byte-identical (the fresh-zero phi path is preserved: IR hash and emitted C++
+  unchanged).
 - ADC-631 Multistep history rings (`keep_history` / `T.prev`, Adams-Bashforth / BDF) on the
   compiled-Program AMR route: per-level ring slots remapped through regrid (R6/R7), the v3 checkpoint
   with the ADC-626 persistence policies (Dense / Interval / Revolve) and native replay across regrids

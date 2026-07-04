@@ -469,7 +469,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             var[v.id] = var[base.id]  # the commit wrote the block state in place (no final copy)
         else:
             var[v.id] = "u%d" % v.id  # an intermediate stage state (scratch, zero-initialized)
-            lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);" % (var[v.id], var[base.id]))
+            # A scalar_field combine (ADC-427: the phi^{n+1} extrapolation) has no block, so it has no
+            # base block-state to shape the scratch: template it on the FIRST scalar input instead (a
+            # 1-component field, same (ba, dm)). A State combine shapes it on the block base as before.
+            template = var[terms[0][0].id] if v.vtype == "scalar_field" else var[base.id]
+            lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);" % (var[v.id], template))
             for inp, coeff in terms:
                 lines.append("ctx.axpy(%s, %s, %s);" % (var[v.id], _coeff_cpp(coeff), var[inp.id]))
     # UNIFIED SCHEDULER (ADC-458, Spec 3 sections 17-18): if this op carries a non-always schedule,
