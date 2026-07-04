@@ -11,6 +11,7 @@
 #include <pops/numerics/time/integrators/time_steppers.hpp>      // SSPRK2Step / SSPRK3Step (core RK math)
 #include <pops/parallel/comm.hpp>   // all_reduce_max (MPI-safe collective reduction)
 #include <pops/physics/bricks/bricks.hpp>  // ExBVelocityPolar, CompositeModel, source/elliptic bricks
+#include <pops/runtime/builders/scheme_dispatch.hpp>  // dispatch_limiter: ONE limiter-route dispatch generator (ADC-640)
 #include <pops/runtime/config/dispatch_tags.hpp>  // UNIQUE registry of tags (validate_limiter/riemann)
 #include <pops/runtime/context/grid_context.hpp>   // BlockClosures (light header)
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_source / dispatch_elliptic (REUSED)
@@ -68,16 +69,24 @@ namespace detail {
 /// and curvature term do not yet have a polar brick -> EXPLICIT error.
 template <class Visitor>
 void dispatch_transport_polar(const ModelSpec& m, Visitor&& v) {
-  if (m.transport == "exb")
-    return v(ExBVelocityPolar{Real(m.B0)});
-  if (m.transport == "isothermal")
-    return v(IsothermalFluxPolar{IsothermalFlux{Real(m.cs2), Real(m.vacuum_floor)}});
   // Wired polar transports = the registry rows with polar_ok (model_registry.hpp); the list is
-  // single-sourced via transport_tags_csv(/*polar=*/true). 'compressible' (Euler with energy) has no
-  // polar brick yet -> not polar_ok -> rejected here with the same explicit "unsupported" message.
-  throw std::runtime_error("polar transport '" + m.transport +
-                           "' unsupported (wired in polar: " + transport_tags_csv(/*polar=*/true) +
-                           "; 'compressible' (Euler with energy) in polar is a later phase)");
+  // single-sourced via transport_tags_csv(/*polar=*/true). An unknown tag OR 'compressible' (Euler with
+  // energy, no polar brick yet) is rejected here with the same explicit "unsupported" message,
+  // byte-identical. ADC-641: guard on the typed TransportRouteId, then switch (the compressible case is
+  // unreachable past the guard but kept for -Wswitch completeness).
+  if (!is_transport(m.transport) ||
+      parse_transport_route(m.transport) == TransportRouteId::kCompressible)
+    throw std::runtime_error("polar transport '" + m.transport + "' unsupported (wired in polar: " +
+                             transport_tags_csv(/*polar=*/true) +
+                             "; 'compressible' (Euler with energy) in polar is a later phase)");
+  switch (parse_transport_route(m.transport)) {
+    case TransportRouteId::kExb:
+      return v(ExBVelocityPolar{Real(m.B0)});
+    case TransportRouteId::kIsothermal:
+      return v(IsothermalFluxPolar{IsothermalFlux{Real(m.cs2), Real(m.vacuum_floor)}});
+    case TransportRouteId::kCompressible:
+      break;  // unreachable (guarded above); kept for switch completeness
+  }
 }
 
 /// Assembles the POLAR CompositeModel designated by @p m and calls visitor(model). REUSES
@@ -266,15 +275,21 @@ BlockClosures build_block_polar(const Model& m, const PolarGridContext& ctx, boo
                                 const std::string& method, bool wall_radial,
                                 Real pos_floor = Real(0)) {
   BlockClosures bc;
-  if (method == "ssprk3") {
-    bc.advance = detail::PolarAdvanceExplicit<Limiter, Flux, Model, SSPRK3Step>{
-        m, ctx, recon_prim, wall_radial, pos_floor};
-  } else if (method == "ssprk2") {
-    bc.advance = detail::PolarAdvanceExplicit<Limiter, Flux, Model, SSPRK2Step>{
-        m, ctx, recon_prim, wall_radial, pos_floor};
-  } else {
-    throw std::runtime_error("System (polar): unknown explicit time method '" + method +
-                             "' (ssprk2|ssprk3)");
+  // Decode @p method ONCE through the typed TimeRouteId (ADC-641): polar wires only ssprk2 / ssprk3, so
+  // the switch has two arms plus a default. Any other route (euler / imex / imexrk_ars222) keeps the
+  // historical "unknown explicit time method" throw, byte-identical.
+  switch (parse_time_route(method, "System (polar)")) {
+    case TimeRouteId::kSsprk3:
+      bc.advance = detail::PolarAdvanceExplicit<Limiter, Flux, Model, SSPRK3Step>{
+          m, ctx, recon_prim, wall_radial, pos_floor};
+      break;
+    case TimeRouteId::kExplicitSsprk2:
+      bc.advance = detail::PolarAdvanceExplicit<Limiter, Flux, Model, SSPRK2Step>{
+          m, ctx, recon_prim, wall_radial, pos_floor};
+      break;
+    default:
+      throw std::runtime_error("System (polar): unknown explicit time method '" + method +
+                               "' (ssprk2|ssprk3)");
   }
   bc.rhs_into =
       detail::PolarRhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, wall_radial, pos_floor};
@@ -305,52 +320,43 @@ BlockClosures make_block_polar(const Model& m, const std::string& lim, const std
   // `if constexpr` PER MODEL below, with its dedicated "requires ..." message.
   validate_riemann(riem, /*polar=*/true, "System (polar)");
   validate_limiter(lim, "System (polar)");
-  if (riem == "rusanov") {
-    if (lim == "none")
-      return build_block_polar<NoSlope, RusanovFlux>(m, ctx, recon_prim, method, wall_radial,
-                                                     pos_floor);
-    if (lim == "minmod")
-      return build_block_polar<Minmod, RusanovFlux>(m, ctx, recon_prim, method, wall_radial,
-                                                    pos_floor);
-    if (lim == "vanleer")
-      return build_block_polar<VanLeer, RusanovFlux>(m, ctx, recon_prim, method, wall_radial,
-                                                     pos_floor);
-    if (lim == "weno5")
-      return build_block_polar<Weno5, RusanovFlux>(m, ctx, recon_prim, method, wall_radial,
-                                                   pos_floor);
-    throw_registry_dispatch_mismatch("System (polar)", "limiter", lim);
+  // Parse the validated tag ONCE (ADC-641): only rusanov / hll are wired in polar, so the switch has two
+  // arms plus a default. The default keeps the historical "valid tag, not wired in polar" path (hllc /
+  // roe / euler_* -- already rejected by validate_riemann(polar=true) above, so it is defense in depth);
+  // it also suppresses -Wswitch on the 2-of-6 partial switch.
+  switch (parse_riemann_route(riem, "System (polar)")) {
+    case RiemannRouteId::kRusanov:
+      return dispatch_limiter(parse_limiter_route(lim, "System (polar)"), "System (polar)",
+                              [&](auto tag) {
+                                using L = typename decltype(tag)::type;
+                                return build_block_polar<L, RusanovFlux>(m, ctx, recon_prim, method,
+                                                                         wall_radial, pos_floor);
+                              });
+    case RiemannRouteId::kHll:
+      // GATE IDENTICAL TO THE CARTESIAN ONE (block_builder.hpp make_block, 'hll' branch): HLL is
+      // available as soon as a model exposes its SIGNED wave speeds model.wave_speeds (the polar
+      // isothermal fluid inherits them from IsothermalFlux). No pressure required (unlike HLLC/Roe). A
+      // SCALAR transport without signed wave (ExBVelocityPolar) does NOT satisfy the requires -> CLEAR
+      // error (not a compilation failure for a scalar model). assemble_rhs_polar<Limiter, HLLFlux> is
+      // already device-clean (named functors, flux REUSED verbatim from the cartesian one).
+      if constexpr (requires(const Model mm, typename Model::State s, Aux a, Real r) {
+                      mm.wave_speeds(s, a, 0, r, r);
+                    }) {
+        return dispatch_limiter(parse_limiter_route(lim, "System (polar)"), "System (polar)",
+                                [&](auto tag) {
+                                  using L = typename decltype(tag)::type;
+                                  return build_block_polar<L, HLLFlux>(m, ctx, recon_prim, method,
+                                                                       wall_radial, pos_floor);
+                                });
+      } else {
+        throw std::runtime_error(
+            "System (polar): flux 'hll' requires signed wave speeds (model.wave_speeds); "
+            "the scalar ExB transport does not provide them -> 'rusanov'. The polar isothermal fluid "
+            "(transport='isothermal') declares them and accepts 'hll'.");
+      }
+    default:
+      throw_registry_dispatch_mismatch("System (polar)", "Riemann flux", riem);
   }
-  if (riem == "hll") {
-    // GATE IDENTICAL TO THE CARTESIAN ONE (block_builder.hpp make_block, 'hll' branch): HLL is available
-    // as soon as a model exposes its SIGNED wave speeds model.wave_speeds (the polar isothermal fluid
-    // inherits them from IsothermalFlux). No pressure required (unlike HLLC/Roe). A SCALAR transport
-    // without signed wave (ExBVelocityPolar) does NOT satisfy the requires -> CLEAR error
-    // (not a compilation failure for a scalar model). assemble_rhs_polar<Limiter, HLLFlux>
-    // is already device-clean (named functors, flux REUSED verbatim from the cartesian one).
-    if constexpr (requires(const Model mm, typename Model::State s, Aux a, Real r) {
-                    mm.wave_speeds(s, a, 0, r, r);
-                  }) {
-      if (lim == "none")
-        return build_block_polar<NoSlope, HLLFlux>(m, ctx, recon_prim, method, wall_radial,
-                                                   pos_floor);
-      if (lim == "minmod")
-        return build_block_polar<Minmod, HLLFlux>(m, ctx, recon_prim, method, wall_radial,
-                                                  pos_floor);
-      if (lim == "vanleer")
-        return build_block_polar<VanLeer, HLLFlux>(m, ctx, recon_prim, method, wall_radial,
-                                                   pos_floor);
-      if (lim == "weno5")
-        return build_block_polar<Weno5, HLLFlux>(m, ctx, recon_prim, method, wall_radial,
-                                                 pos_floor);
-      throw_registry_dispatch_mismatch("System (polar)", "limiter", lim);
-    } else {
-      throw std::runtime_error(
-          "System (polar): flux 'hll' requires signed wave speeds (model.wave_speeds); "
-          "the scalar ExB transport does not provide them -> 'rusanov'. The polar isothermal fluid "
-          "(transport='isothermal') declares them and accepts 'hll'.");
-    }
-  }
-  throw_registry_dispatch_mismatch("System (polar)", "Riemann flux", riem);
 }
 
 /// Max wave-speed closure of the POLAR block (for the CFL step). @p aux points to the System's aux

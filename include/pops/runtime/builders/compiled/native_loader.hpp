@@ -446,18 +446,18 @@ void add_dynamic_block(System* self, ImplT* P, const std::string& name, const st
   (void)self;
   if (substeps < 1)
     throw std::runtime_error("System::add_dynamic_block: substeps >= 1");
-  int recon_id = 0;  // MUSCL reconstruction order of the face states (conservative)
-  if (recon == "none")
-    recon_id = 0;
-  else if (recon == "minmod")
-    recon_id = 1;
-  else if (recon == "vanleer")
-    recon_id = 2;
-  else
-    throw std::runtime_error(
-        "System::add_dynamic_block: recon 'none' | 'minmod' | 'vanleer' "
-        "(got '" +
-        recon + "')");
+  // recon_id: reconstruction order of the dynamic host residual, single-sourced from the limiter route
+  // table (LimiterRouteId) so it cannot drift from kLimiters (ADC-641). The host MUSCL residual
+  // (limited_slope) has no WENO5 stencil, so weno5 -- a valid limiter route -- is refused here via its
+  // route limitation, not a silently shorter private ladder. ctx carries "recon" so the historical grep
+  // pin holds (parse_limiter_route's message contains "recon").
+  const LimiterRouteId lr = parse_limiter_route(recon, "System::add_dynamic_block: recon");
+  if (lr == LimiterRouteId::kWeno5)
+    throw std::runtime_error("System::add_dynamic_block: recon 'weno5' unsupported (" +
+                             std::string(route_info(lr).limitations) +
+                             "); use 'none' | 'minmod' | 'vanleer', or a compiled/native block for "
+                             "weno5");
+  const int recon_id = static_cast<int>(lr);  // 0 none, 1 minmod, 2 vanleer
   pops::dynlib::handle h = pops::dynlib::open(so_path);
   if (!h) {
     const std::string e = pops::dynlib::last_error();

@@ -148,7 +148,10 @@ LARGE_RUNTIME_FILE_BUDGETS = {
     # (fields / io / profiling / program) sit well under the default. Budgeted with headroom.
     # ADC-644/645: the knob wiring (coarse_threshold validation, weno_epsilon guards, source-stage
     # n_precond_vcycles/polar_precond resolution + effective-report rows) adds ~50 inline lines.
-    "python/bindings/system/base/system_install.cpp": 1300,
+    # ADC-641: re-measured after typing the add_block transport/flux dispatch as parse_transport_route +
+    # per-transport parse_riemann_route switches (the case/break scaffolding is a few lines longer than
+    # the flat if/else it replaces); 1302 lines + ~15 headroom.
+    "python/bindings/system/base/system_install.cpp": 1317,
     # ADC-542: the AMR composite_reduce + rebuild_hierarchy (v3 restart) + level_owner_ranks facade
     # seams (native diagnostics / restartable-under-regridding) grew this by ~100 lines.
     # ADC-514: the native per-block runtime-param carrier residue (Impl members, make_build_params /
@@ -170,7 +173,10 @@ LARGE_RUNTIME_FILE_BUDGETS = {
     # + out-of-scope refusals, effective-options report rows) and the source-stage/speed_floor
     # threading add ~68 lines here (they read the TU-local private Impl) and +1 to amr_runtime.hpp
     # (the speed_floor forward in the CFL reduction seam).
-    "python/bindings/amr/amr_system.cpp": 2600,
+    # ADC-641: re-measured after typing the two transport dispatch sites (build_multi + single-block
+    # compiled) as validate_transport + parse_transport_route switches; the case/break scaffolding is a
+    # few lines longer than the flat if/else it replaces; 2612 lines + ~15 headroom.
+    "python/bindings/amr/amr_system.cpp": 2627,
     "include/pops/runtime/amr/amr_runtime.hpp": 1868,
     "include/pops/runtime/system/system_field_solver.hpp": 1100,
     "python/pops/runtime/_system_unified_install.py": 550,

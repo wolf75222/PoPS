@@ -9,6 +9,7 @@
 // native_loader.hpp templates instantiate on Impl (add_dynamic/compiled/native_block); included
 // AFTER system_impl.hpp per the historical "templates instantiated lower down" per-TU ordering.
 #include <pops/runtime/builders/compiled/native_loader.hpp>  // .so loading (JIT/AOT/native) + ABI guard
+#include <pops/runtime/config/route_ids.hpp>  // ADC-641: parse_{transport,riemann,time}_route typed switches
 
 namespace pops {
 
@@ -83,10 +84,11 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
           "wired on the full Cartesian advance (remove wave_speed_cache or mode='none')");
     P->ws_cache_block_ = true;  // a block requested the cache -> locks the switch to disc mode
   }
-  const std::string method = imexrk ? std::string("imexrk_ars222")
-                                    : ((time == "ssprk3")  ? std::string("ssprk3")
-                                       : (time == "euler") ? std::string("euler")
-                                                           : std::string("ssprk2"));
+  // The EXPLICIT RK scheme threaded to build_block: the ONE canonical spelling of the typed route
+  // (ADC-641), replacing the imexrk?...:(ssprk3?...) string ladder. build_block decodes it once via
+  // parse_time_route ("explicit" resolves to the SSPRK2 advance, "imex" is ignored past the imex flag),
+  // so the advance selected is bit-identical.
+  const std::string method = route_token(parse_time_route(time, "System::add_block"));
   // The implicit mask (implicit_vars / implicit_roles) applies only to the IMEX source step. Requesting
   // it in explicit is an ERROR (no silent ignore): the explicit has no implicit step.
   if (!imex && (!implicit_vars.empty() || !implicit_roles.empty()))
@@ -198,46 +200,66 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
                                       static_cast<Real>(positivity_floor),
                                       wave_speed_cache,
                                       static_cast<Real>(weno_epsilon)};
-    if (model.transport == "exb") {
-      bb = detail::build_block_exb(model, args);
-    } else if (model.transport == "compressible") {
-      // Compressible/Euler is flux-subdivided (ADC-335): all four fluxes are valid (4-var + pressure),
-      // so we run the SAME validation as make_block (validate_riemann then validate_limiter, identical
-      // messages) and dispatch the riemann string to the matching per-flux sub-TU. An unknown flux hits
-      // the same registry throw as make_block's tail (validate_riemann already rejected it).
-      validate_riemann(riemann, /*polar=*/false, "System");
-      validate_limiter(limiter, "System");
-      if (riemann == "rusanov") {
-        bb = detail::build_block_compressible_rusanov(model, args);
-      } else if (riemann == "hll") {
-        bb = detail::build_block_compressible_hll(model, args);
-      } else if (riemann == "hllc" || riemann == "euler_hllc") {
-        // On the true Euler brick the EXPLICIT euler_hllc route and the generic hllc route are the
-        // SAME arithmetic (the native Euler now provides HasHLLCStructure with the canonical-Euler
-        // formulas, so HLLCFlux == the former EulerHLLCFlux2D fallback bit-for-bit): both share this
-        // seam leaf (ADC-590). euler_hllc's 4-var+pressure gate is satisfied by CompressibleFlux.
-        bb = detail::build_block_compressible_hllc(model, args);
-      } else if (riemann == "roe" || riemann == "euler_roe") {
-        bb = detail::build_block_compressible_roe(model, args);
-      } else {
-        throw_registry_dispatch_mismatch("System", "flux", riemann);
+    // Transport dispatch mirrors detail::dispatch_transport (ADC-641): validate_transport preserves the
+    // unknown_transport_msg byte-for-byte, then the switch on the typed TransportRouteId routes to the
+    // per-transport seam. Every case terminates (assigns bb); the compressible/isothermal flux ladders
+    // are their own switch on parse_riemann_route (default -> the registry/dispatch guard).
+    validate_transport(model.transport);
+    switch (parse_transport_route(model.transport)) {
+      case TransportRouteId::kExb:
+        bb = detail::build_block_exb(model, args);
+        break;
+      case TransportRouteId::kCompressible: {
+        // Compressible/Euler is flux-subdivided (ADC-335): all four fluxes are valid (4-var + pressure),
+        // so we run the SAME validation as make_block (validate_riemann then validate_limiter, identical
+        // messages) and dispatch the riemann route to the matching per-flux sub-TU. An unknown flux hits
+        // the same registry throw as make_block's tail (validate_riemann already rejected it).
+        validate_riemann(riemann, /*polar=*/false, "System");
+        validate_limiter(limiter, "System");
+        switch (parse_riemann_route(riemann, "System")) {
+          case RiemannRouteId::kRusanov:
+            bb = detail::build_block_compressible_rusanov(model, args);
+            break;
+          case RiemannRouteId::kHll:
+            bb = detail::build_block_compressible_hll(model, args);
+            break;
+          // On the true Euler brick the EXPLICIT euler_hllc route and the generic hllc route are the
+          // SAME arithmetic (the native Euler now provides HasHLLCStructure with the canonical-Euler
+          // formulas, so HLLCFlux == the former EulerHLLCFlux2D fallback bit-for-bit): both share this
+          // seam leaf (ADC-590). euler_hllc's 4-var+pressure gate is satisfied by CompressibleFlux.
+          case RiemannRouteId::kHllc:
+          case RiemannRouteId::kEulerHllc:
+            bb = detail::build_block_compressible_hllc(model, args);
+            break;
+          case RiemannRouteId::kRoe:
+          case RiemannRouteId::kEulerRoe:
+            bb = detail::build_block_compressible_roe(model, args);
+            break;
+          default:
+            throw_registry_dispatch_mismatch("System", "flux", riemann);
+        }
+        break;
       }
-    } else if (model.transport == "isothermal") {
-      // Isothermal is flux-subdivided (ADC-342): only rusanov + hll are reachable (3-var, no pressure
-      // for hllc/roe). The per-flux seams call make_block_<flux> directly, so -- like compressible --
-      // we run make_block's validation here (validate_riemann then validate_limiter, identical messages)
-      // before dispatching; hllc/roe and any unknown flux hit the registry throw (explicit, no UB).
-      validate_riemann(riemann, /*polar=*/false, "System");
-      validate_limiter(limiter, "System");
-      if (riemann == "rusanov") {
-        bb = detail::build_block_isothermal_rusanov(model, args);
-      } else if (riemann == "hll") {
-        bb = detail::build_block_isothermal_hll(model, args);
-      } else {
-        throw_registry_dispatch_mismatch("System", "flux", riemann);
+      case TransportRouteId::kIsothermal: {
+        // Isothermal is flux-subdivided (ADC-342): only rusanov + hll are reachable (3-var, no pressure
+        // for hllc/roe). The per-flux seams call make_block_<flux> directly, so -- like compressible --
+        // we run make_block's validation here (validate_riemann then validate_limiter, identical
+        // messages) before dispatching; hllc/roe and any unknown flux hit the registry throw (explicit,
+        // no UB). The default preserves isothermal+hllc -> registry-mismatch throw exactly.
+        validate_riemann(riemann, /*polar=*/false, "System");
+        validate_limiter(limiter, "System");
+        switch (parse_riemann_route(riemann, "System")) {
+          case RiemannRouteId::kRusanov:
+            bb = detail::build_block_isothermal_rusanov(model, args);
+            break;
+          case RiemannRouteId::kHll:
+            bb = detail::build_block_isothermal_hll(model, args);
+            break;
+          default:
+            throw_registry_dispatch_mismatch("System", "flux", riemann);
+        }
+        break;
       }
-    } else {
-      throw std::runtime_error(unknown_transport_msg(model.transport));
     }
     P->ensure_aux_width(bb.aux_width);
   }
@@ -490,14 +512,10 @@ void System::add_native_block(const std::string& name, const std::string& so_pat
   opt.riemann = riemann;
   opt.recon = recon;
   opt.time = time;
-  if (time == "imex")
-    opt.time_method = "imex";
-  else if (time == "ssprk3")
-    opt.time_method = "ssprk3";
-  else if (time == "euler")
-    opt.time_method = "euler";
-  else
-    opt.time_method = "ssprk2";
+  // The canonical spelling of the typed route (ADC-641), replacing the if (time=="imex")...else "ssprk2"
+  // string ladder. Diagnostic-only (EffectiveBlockOptions.time_method); the advance is selected by the
+  // native loader from @p time itself.
+  opt.time_method = route_token(parse_time_route(time, "System::add_native_block"));
   opt.imex = (time == "imex");
   opt.substeps = substeps;
   opt.stride = stride;

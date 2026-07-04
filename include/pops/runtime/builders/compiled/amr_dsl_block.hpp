@@ -19,6 +19,7 @@
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/builders/block/block_builder.hpp>  // detail::make_poisson_rhs (rhs += elliptic_rhs(U))
 #include <pops/runtime/builders/compiled/compiled_block_abi.hpp>  // model_nparams / model_param_defaults (ADC-514)
+#include <pops/runtime/builders/scheme_dispatch.hpp>  // dispatch_limiter: ONE limiter-route dispatch generator (ADC-640)
 #include <pops/runtime/config/dispatch_tags.hpp>  // UNIQUE tag registry (validate_limiter/riemann)
 
 #include <algorithm>  // std::find, std::sort (resolving the partial IMEX mask of a compiled block)
@@ -871,27 +872,14 @@ AmrRuntimeBlock dispatch_amr_block_rusanov(
     const NewtonOptions& nopts, const std::vector<double>* state, bool newton_diagnostics,
     AmrTimeMethod time_method, double pos_floor,
     std::shared_ptr<std::vector<double>> runtime_params = {}) {
-  if (lim == "none")
-    return build_amr_block<Model, NoSlope, RusanovFlux>(
-        m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-        implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-        runtime_params);
-  if (lim == "minmod")
-    return build_amr_block<Model, Minmod, RusanovFlux>(
-        m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-        implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-        runtime_params);
-  if (lim == "vanleer")
-    return build_amr_block<Model, VanLeer, RusanovFlux>(
-        m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-        implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-        runtime_params);
-  if (lim == "weno5")
-    return build_amr_block<Model, Weno5, RusanovFlux>(
-        m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-        implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-        runtime_params);
-  throw_registry_dispatch_mismatch("add_block(AmrSystem, multi-block)", "limiteur", lim);
+  return dispatch_limiter(parse_limiter_route(lim, "add_block(AmrSystem, multi-block)"),
+                          "add_block(AmrSystem, multi-block)", [&](auto tag) {
+                            using L = typename decltype(tag)::type;
+                            return build_amr_block<Model, L, RusanovFlux>(
+                                m, S, name, density, has_density, gamma, substeps, recon_prim, imex,
+                                stride, implicit_components, nopts, state, newton_diagnostics,
+                                time_method, pos_floor, runtime_params);
+                          });
 }
 
 template <class Model>
@@ -907,27 +895,14 @@ AmrRuntimeBlock dispatch_amr_block_hll(const Model& m, const std::string& lim,
   if constexpr (requires(const Model mm, typename Model::State s, Aux a, Real r) {
                   mm.wave_speeds(s, a, 0, r, r);
                 }) {
-    if (lim == "none")
-      return build_amr_block<Model, NoSlope, HLLFlux>(
-          m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-          implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-          runtime_params);
-    if (lim == "minmod")
-      return build_amr_block<Model, Minmod, HLLFlux>(
-          m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-          implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-          runtime_params);
-    if (lim == "vanleer")
-      return build_amr_block<Model, VanLeer, HLLFlux>(
-          m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-          implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-          runtime_params);
-    if (lim == "weno5")
-      return build_amr_block<Model, Weno5, HLLFlux>(
-          m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-          implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-          runtime_params);
-    throw_registry_dispatch_mismatch("add_block(AmrSystem, multi-block)", "limiteur", lim);
+    return dispatch_limiter(parse_limiter_route(lim, "add_block(AmrSystem, multi-block)"),
+                            "add_block(AmrSystem, multi-block)", [&](auto tag) {
+                              using L = typename decltype(tag)::type;
+                              return build_amr_block<Model, L, HLLFlux>(
+                                  m, S, name, density, has_density, gamma, substeps, recon_prim,
+                                  imex, stride, implicit_components, nopts, state,
+                                  newton_diagnostics, time_method, pos_floor, runtime_params);
+                            });
   } else {
     throw std::runtime_error(
         "add_block(AmrSystem, multi-block): flux 'hll' requires signed wave "
@@ -949,50 +924,24 @@ AmrRuntimeBlock dispatch_amr_block_hllc(const Model& m, const std::string& lim,
   // capability-only (static_assert without HasHLLCStructure); the canonical Euler layout routes the
   // explicit EulerHLLCFlux2D (bit-identical on the true Euler brick).
   if constexpr (HasHLLCStructure<Model>) {
-    if (lim == "none")
-      return build_amr_block<Model, NoSlope, HLLCFlux>(
-          m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-          implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-          runtime_params);
-    if (lim == "minmod")
-      return build_amr_block<Model, Minmod, HLLCFlux>(
-          m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-          implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-          runtime_params);
-    if (lim == "vanleer")
-      return build_amr_block<Model, VanLeer, HLLCFlux>(
-          m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-          implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-          runtime_params);
-    if (lim == "weno5")
-      return build_amr_block<Model, Weno5, HLLCFlux>(
-          m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-          implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-          runtime_params);
-    throw_registry_dispatch_mismatch("add_block(AmrSystem, multi-block)", "limiteur", lim);
+    return dispatch_limiter(parse_limiter_route(lim, "add_block(AmrSystem, multi-block)"),
+                            "add_block(AmrSystem, multi-block)", [&](auto tag) {
+                              using L = typename decltype(tag)::type;
+                              return build_amr_block<Model, L, HLLCFlux>(
+                                  m, S, name, density, has_density, gamma, substeps, recon_prim,
+                                  imex, stride, implicit_components, nopts, state,
+                                  newton_diagnostics, time_method, pos_floor, runtime_params);
+                            });
   } else if constexpr (Model::n_vars == 4 &&
                        requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
-    if (lim == "none")
-      return build_amr_block<Model, NoSlope, EulerHLLCFlux2D>(
-          m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-          implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-          runtime_params);
-    if (lim == "minmod")
-      return build_amr_block<Model, Minmod, EulerHLLCFlux2D>(
-          m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-          implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-          runtime_params);
-    if (lim == "vanleer")
-      return build_amr_block<Model, VanLeer, EulerHLLCFlux2D>(
-          m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-          implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-          runtime_params);
-    if (lim == "weno5")
-      return build_amr_block<Model, Weno5, EulerHLLCFlux2D>(
-          m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-          implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-          runtime_params);
-    throw_registry_dispatch_mismatch("add_block(AmrSystem, multi-block)", "limiteur", lim);
+    return dispatch_limiter(parse_limiter_route(lim, "add_block(AmrSystem, multi-block)"),
+                            "add_block(AmrSystem, multi-block)", [&](auto tag) {
+                              using L = typename decltype(tag)::type;
+                              return build_amr_block<Model, L, EulerHLLCFlux2D>(
+                                  m, S, name, density, has_density, gamma, substeps, recon_prim,
+                                  imex, stride, implicit_components, nopts, state,
+                                  newton_diagnostics, time_method, pos_floor, runtime_params);
+                            });
   } else {
     throw std::runtime_error(
         "add_block(AmrSystem, multi-block): flux 'hllc' requires a "
@@ -1016,50 +965,24 @@ AmrRuntimeBlock dispatch_amr_block_roe(const Model& m, const std::string& lim,
   // ADC-590 split, same rationale as dispatch_amr_compiled_roe: generic RoeFlux is capability-only;
   // the canonical Euler layout routes the explicit EulerRoeFlux2D.
   if constexpr (HasRoeDissipation<Model>) {
-    if (lim == "none")
-      return build_amr_block<Model, NoSlope, RoeFlux>(
-          m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-          implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-          runtime_params);
-    if (lim == "minmod")
-      return build_amr_block<Model, Minmod, RoeFlux>(
-          m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-          implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-          runtime_params);
-    if (lim == "vanleer")
-      return build_amr_block<Model, VanLeer, RoeFlux>(
-          m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-          implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-          runtime_params);
-    if (lim == "weno5")
-      return build_amr_block<Model, Weno5, RoeFlux>(
-          m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-          implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-          runtime_params);
-    throw_registry_dispatch_mismatch("add_block(AmrSystem, multi-block)", "limiteur", lim);
+    return dispatch_limiter(parse_limiter_route(lim, "add_block(AmrSystem, multi-block)"),
+                            "add_block(AmrSystem, multi-block)", [&](auto tag) {
+                              using L = typename decltype(tag)::type;
+                              return build_amr_block<Model, L, RoeFlux>(
+                                  m, S, name, density, has_density, gamma, substeps, recon_prim,
+                                  imex, stride, implicit_components, nopts, state,
+                                  newton_diagnostics, time_method, pos_floor, runtime_params);
+                            });
   } else if constexpr (Model::n_vars == 4 &&
                        requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
-    if (lim == "none")
-      return build_amr_block<Model, NoSlope, EulerRoeFlux2D>(
-          m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-          implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-          runtime_params);
-    if (lim == "minmod")
-      return build_amr_block<Model, Minmod, EulerRoeFlux2D>(
-          m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-          implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-          runtime_params);
-    if (lim == "vanleer")
-      return build_amr_block<Model, VanLeer, EulerRoeFlux2D>(
-          m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-          implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-          runtime_params);
-    if (lim == "weno5")
-      return build_amr_block<Model, Weno5, EulerRoeFlux2D>(
-          m, S, name, density, has_density, gamma, substeps, recon_prim, imex, stride,
-          implicit_components, nopts, state, newton_diagnostics, time_method, pos_floor,
-          runtime_params);
-    throw_registry_dispatch_mismatch("add_block(AmrSystem, multi-block)", "limiteur", lim);
+    return dispatch_limiter(parse_limiter_route(lim, "add_block(AmrSystem, multi-block)"),
+                            "add_block(AmrSystem, multi-block)", [&](auto tag) {
+                              using L = typename decltype(tag)::type;
+                              return build_amr_block<Model, L, EulerRoeFlux2D>(
+                                  m, S, name, density, has_density, gamma, substeps, recon_prim,
+                                  imex, stride, implicit_components, nopts, state,
+                                  newton_diagnostics, time_method, pos_floor, runtime_params);
+                            });
   } else {
     throw std::runtime_error(
         "add_block(AmrSystem, multi-block): flux 'roe' requires a "
@@ -1091,28 +1014,34 @@ AmrRuntimeBlock dispatch_amr_block(
   // ADC-359: delegate to the flux-pinned dispatch_amr_block_<flux> helpers above (factored so the
   // compressible seam compiles one flux per TU). Behavior is unchanged: same leaves, same hllc/roe
   // capability guards, same throws. exb/isothermal route here as before (their guards prune hllc/roe).
-  // runtime_params (ADC-514) threads through to build_amr_block (nullptr for a param-free model).
-  if (riem == "rusanov")
-    return dispatch_amr_block_rusanov(m, lim, S, name, density, has_density, gamma, substeps,
-                                      recon_prim, imex, stride, implicit_components, nopts, state,
-                                      newton_diagnostics, time_method, pos_floor, runtime_params);
-  if (riem == "hll")
-    return dispatch_amr_block_hll(m, lim, S, name, density, has_density, gamma, substeps,
-                                  recon_prim, imex, stride, implicit_components, nopts, state,
-                                  newton_diagnostics, time_method, pos_floor, runtime_params);
-  // hllc / euler_hllc share the leaf: on the true Euler brick the generic HLLCFlux (via
-  // HasHLLCStructure) and the explicit EulerHLLCFlux2D are bit-identical (ADC-590). The native
-  // compressible transport that reaches AMR carries the capability, so both route here; euler_hllc
-  // on a non-Euler transport is refused by the dispatch_amr_block_hllc capability guard (same
-  // message). Same for roe / euler_roe.
-  if (riem == "hllc" || riem == "euler_hllc")
-    return dispatch_amr_block_hllc(m, lim, S, name, density, has_density, gamma, substeps,
-                                   recon_prim, imex, stride, implicit_components, nopts, state,
-                                   newton_diagnostics, time_method, pos_floor, runtime_params);
-  if (riem == "roe" || riem == "euler_roe")
-    return dispatch_amr_block_roe(m, lim, S, name, density, has_density, gamma, substeps,
-                                  recon_prim, imex, stride, implicit_components, nopts, state,
-                                  newton_diagnostics, time_method, pos_floor, runtime_params);
+  // ADC-641: parse the validated tag ONCE into the typed RiemannRouteId; the switch decodes it and the
+  // euler_* fall-through keeps the fusion self-documenting. runtime_params (ADC-514) threads through to
+  // build_amr_block (nullptr for a param-free model). The default is the defense-in-depth guard.
+  switch (parse_riemann_route(riem, "add_block(AmrSystem, multi-block)")) {
+    case RiemannRouteId::kRusanov:
+      return dispatch_amr_block_rusanov(m, lim, S, name, density, has_density, gamma, substeps,
+                                        recon_prim, imex, stride, implicit_components, nopts, state,
+                                        newton_diagnostics, time_method, pos_floor, runtime_params);
+    case RiemannRouteId::kHll:
+      return dispatch_amr_block_hll(m, lim, S, name, density, has_density, gamma, substeps,
+                                    recon_prim, imex, stride, implicit_components, nopts, state,
+                                    newton_diagnostics, time_method, pos_floor, runtime_params);
+    // hllc / euler_hllc share the leaf: on the true Euler brick the generic HLLCFlux (via
+    // HasHLLCStructure) and the explicit EulerHLLCFlux2D are bit-identical (ADC-590). The native
+    // compressible transport that reaches AMR carries the capability, so both route here; euler_hllc
+    // on a non-Euler transport is refused by the dispatch_amr_block_hllc capability guard (same
+    // message). Same for roe / euler_roe.
+    case RiemannRouteId::kHllc:
+    case RiemannRouteId::kEulerHllc:
+      return dispatch_amr_block_hllc(m, lim, S, name, density, has_density, gamma, substeps,
+                                     recon_prim, imex, stride, implicit_components, nopts, state,
+                                     newton_diagnostics, time_method, pos_floor, runtime_params);
+    case RiemannRouteId::kRoe:
+    case RiemannRouteId::kEulerRoe:
+      return dispatch_amr_block_roe(m, lim, S, name, density, has_density, gamma, substeps,
+                                    recon_prim, imex, stride, implicit_components, nopts, state,
+                                    newton_diagnostics, time_method, pos_floor, runtime_params);
+  }
   throw_registry_dispatch_mismatch("add_block(AmrSystem, multi-block)", "flux", riem);
 }
 
@@ -1123,15 +1052,11 @@ AmrRuntimeBlock dispatch_amr_block(
 template <class Model>
 AmrCompiledHooks dispatch_amr_compiled_rusanov(const Model& m, const std::string& lim,
                                                const AmrBuildParams& bp) {
-  if (lim == "none")
-    return build_amr_compiled<Model, NoSlope, RusanovFlux>(m, bp);
-  if (lim == "minmod")
-    return build_amr_compiled<Model, Minmod, RusanovFlux>(m, bp);
-  if (lim == "vanleer")
-    return build_amr_compiled<Model, VanLeer, RusanovFlux>(m, bp);
-  if (lim == "weno5")
-    return build_amr_compiled<Model, Weno5, RusanovFlux>(m, bp);
-  throw_registry_dispatch_mismatch("add_compiled_model(AmrSystem)", "limiteur", lim);
+  return dispatch_limiter(parse_limiter_route(lim, "add_compiled_model(AmrSystem)"),
+                          "add_compiled_model(AmrSystem)", [&](auto tag) {
+                            using L = typename decltype(tag)::type;
+                            return build_amr_compiled<Model, L, RusanovFlux>(m, bp);
+                          });
 }
 
 template <class Model>
@@ -1140,15 +1065,11 @@ AmrCompiledHooks dispatch_amr_compiled_hll(const Model& m, const std::string& li
   if constexpr (requires(const Model mm, typename Model::State s, Aux a, Real r) {
                   mm.wave_speeds(s, a, 0, r, r);
                 }) {
-    if (lim == "none")
-      return build_amr_compiled<Model, NoSlope, HLLFlux>(m, bp);
-    if (lim == "minmod")
-      return build_amr_compiled<Model, Minmod, HLLFlux>(m, bp);
-    if (lim == "vanleer")
-      return build_amr_compiled<Model, VanLeer, HLLFlux>(m, bp);
-    if (lim == "weno5")
-      return build_amr_compiled<Model, Weno5, HLLFlux>(m, bp);
-    throw_registry_dispatch_mismatch("add_compiled_model(AmrSystem)", "limiteur", lim);
+    return dispatch_limiter(parse_limiter_route(lim, "add_compiled_model(AmrSystem)"),
+                            "add_compiled_model(AmrSystem)", [&](auto tag) {
+                              using L = typename decltype(tag)::type;
+                              return build_amr_compiled<Model, L, HLLFlux>(m, bp);
+                            });
   } else {
     throw std::runtime_error(
         "add_compiled_model(AmrSystem): flux 'hll' requires signed wave "
@@ -1169,26 +1090,18 @@ AmrCompiledHooks dispatch_amr_compiled_hllc(const Model& m, const std::string& l
   // EulerHLLCFlux2D (the ADC-590 canonical route, bit-identical on the true Euler brick); anything
   // else keeps the runtime refusal.
   if constexpr (HasHLLCStructure<Model>) {
-    if (lim == "none")
-      return build_amr_compiled<Model, NoSlope, HLLCFlux>(m, bp);
-    if (lim == "minmod")
-      return build_amr_compiled<Model, Minmod, HLLCFlux>(m, bp);
-    if (lim == "vanleer")
-      return build_amr_compiled<Model, VanLeer, HLLCFlux>(m, bp);
-    if (lim == "weno5")
-      return build_amr_compiled<Model, Weno5, HLLCFlux>(m, bp);
-    throw_registry_dispatch_mismatch("add_compiled_model(AmrSystem)", "limiteur", lim);
+    return dispatch_limiter(parse_limiter_route(lim, "add_compiled_model(AmrSystem)"),
+                            "add_compiled_model(AmrSystem)", [&](auto tag) {
+                              using L = typename decltype(tag)::type;
+                              return build_amr_compiled<Model, L, HLLCFlux>(m, bp);
+                            });
   } else if constexpr (Model::n_vars == 4 &&
                        requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
-    if (lim == "none")
-      return build_amr_compiled<Model, NoSlope, EulerHLLCFlux2D>(m, bp);
-    if (lim == "minmod")
-      return build_amr_compiled<Model, Minmod, EulerHLLCFlux2D>(m, bp);
-    if (lim == "vanleer")
-      return build_amr_compiled<Model, VanLeer, EulerHLLCFlux2D>(m, bp);
-    if (lim == "weno5")
-      return build_amr_compiled<Model, Weno5, EulerHLLCFlux2D>(m, bp);
-    throw_registry_dispatch_mismatch("add_compiled_model(AmrSystem)", "limiteur", lim);
+    return dispatch_limiter(parse_limiter_route(lim, "add_compiled_model(AmrSystem)"),
+                            "add_compiled_model(AmrSystem)", [&](auto tag) {
+                              using L = typename decltype(tag)::type;
+                              return build_amr_compiled<Model, L, EulerHLLCFlux2D>(m, bp);
+                            });
   } else {
     throw std::runtime_error(
         "add_compiled_model(AmrSystem): flux 'hllc' requires a "
@@ -1205,26 +1118,18 @@ AmrCompiledHooks dispatch_amr_compiled_roe(const Model& m, const std::string& li
   // ADC-590 split, same rationale as dispatch_amr_compiled_hllc above: generic RoeFlux is
   // capability-only; the canonical Euler layout routes the explicit EulerRoeFlux2D.
   if constexpr (HasRoeDissipation<Model>) {
-    if (lim == "none")
-      return build_amr_compiled<Model, NoSlope, RoeFlux>(m, bp);
-    if (lim == "minmod")
-      return build_amr_compiled<Model, Minmod, RoeFlux>(m, bp);
-    if (lim == "vanleer")
-      return build_amr_compiled<Model, VanLeer, RoeFlux>(m, bp);
-    if (lim == "weno5")
-      return build_amr_compiled<Model, Weno5, RoeFlux>(m, bp);
-    throw_registry_dispatch_mismatch("add_compiled_model(AmrSystem)", "limiteur", lim);
+    return dispatch_limiter(parse_limiter_route(lim, "add_compiled_model(AmrSystem)"),
+                            "add_compiled_model(AmrSystem)", [&](auto tag) {
+                              using L = typename decltype(tag)::type;
+                              return build_amr_compiled<Model, L, RoeFlux>(m, bp);
+                            });
   } else if constexpr (Model::n_vars == 4 &&
                        requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
-    if (lim == "none")
-      return build_amr_compiled<Model, NoSlope, EulerRoeFlux2D>(m, bp);
-    if (lim == "minmod")
-      return build_amr_compiled<Model, Minmod, EulerRoeFlux2D>(m, bp);
-    if (lim == "vanleer")
-      return build_amr_compiled<Model, VanLeer, EulerRoeFlux2D>(m, bp);
-    if (lim == "weno5")
-      return build_amr_compiled<Model, Weno5, EulerRoeFlux2D>(m, bp);
-    throw_registry_dispatch_mismatch("add_compiled_model(AmrSystem)", "limiteur", lim);
+    return dispatch_limiter(parse_limiter_route(lim, "add_compiled_model(AmrSystem)"),
+                            "add_compiled_model(AmrSystem)", [&](auto tag) {
+                              using L = typename decltype(tag)::type;
+                              return build_amr_compiled<Model, L, EulerRoeFlux2D>(m, bp);
+                            });
   } else {
     throw std::runtime_error(
         "add_compiled_model(AmrSystem): flux 'roe' requires a "
@@ -1246,16 +1151,22 @@ AmrCompiledHooks dispatch_amr_compiled(const Model& m, const std::string& lim,
   validate_limiter(lim, "add_compiled_model(AmrSystem)");
   // ADC-359: delegate to the flux-pinned dispatch_amr_compiled_<flux> helpers above. Behavior unchanged
   // (same leaves, guards, throws); exb/isothermal route here as before (their guards prune hllc/roe).
-  if (riem == "rusanov")
-    return dispatch_amr_compiled_rusanov(m, lim, bp);
-  if (riem == "hll")
-    return dispatch_amr_compiled_hll(m, lim, bp);
-  // hllc / euler_hllc (and roe / euler_roe) share the leaf: bit-identical on the true Euler brick
-  // (ADC-590); euler_* on a non-Euler transport is refused by the same capability guard.
-  if (riem == "hllc" || riem == "euler_hllc")
-    return dispatch_amr_compiled_hllc(m, lim, bp);
-  if (riem == "roe" || riem == "euler_roe")
-    return dispatch_amr_compiled_roe(m, lim, bp);
+  // ADC-641: parse the validated tag ONCE into the typed RiemannRouteId; the euler_* fall-through keeps
+  // the fusion self-documenting. The default is the defense-in-depth registry/dispatch guard.
+  switch (parse_riemann_route(riem, "add_compiled_model(AmrSystem)")) {
+    case RiemannRouteId::kRusanov:
+      return dispatch_amr_compiled_rusanov(m, lim, bp);
+    case RiemannRouteId::kHll:
+      return dispatch_amr_compiled_hll(m, lim, bp);
+    // hllc / euler_hllc (and roe / euler_roe) share the leaf: bit-identical on the true Euler brick
+    // (ADC-590); euler_* on a non-Euler transport is refused by the same capability guard.
+    case RiemannRouteId::kHllc:
+    case RiemannRouteId::kEulerHllc:
+      return dispatch_amr_compiled_hllc(m, lim, bp);
+    case RiemannRouteId::kRoe:
+    case RiemannRouteId::kEulerRoe:
+      return dispatch_amr_compiled_roe(m, lim, bp);
+  }
   throw_registry_dispatch_mismatch("add_compiled_model(AmrSystem)", "flux", riem);
 }
 

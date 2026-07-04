@@ -13,6 +13,7 @@
 #include <pops/numerics/spatial/embedded_boundary/operator.hpp>  // assemble_rhs_eb (cut-cell EB) + detail::DiscLevelSet (T5-PR2)
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/numerics/time/integrators/time_steppers.hpp>
+#include <pops/runtime/builders/scheme_dispatch.hpp>  // dispatch_limiter: ONE limiter-route dispatch generator (ADC-640)
 #include <pops/runtime/config/dispatch_tags.hpp>  // UNIQUE registry of tags (validate_limiter/riemann, limiter_n_ghost)
 #include <pops/runtime/context/grid_context.hpp>  // GridContext + BlockClosures (shared lightweight header)
 #include <pops/numerics/spatial/embedded_boundary/domain.hpp>  // detail::DiscDomain (built-in level-set domain instance)
@@ -503,8 +504,13 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
   // per-face path (bit-identical). Allocated at the real layout on the first call (cf. BlockRhsEval).
   std::shared_ptr<MultiFab> ws_cache =
       wave_speed_cache ? std::make_shared<MultiFab>() : std::shared_ptr<MultiFab>{};
+  // Decode @p method ONCE through the typed TimeRouteId (ADC-641): the imex branch keeps its
+  // imexrk_ars222-vs-historical split and the explicit branch is a switch; both are bit-identical to the
+  // old method=="..." string ladder (parse_time_route("explicit")==parse_time_route("ssprk2")==
+  // kExplicitSsprk2, so a compiled Program crossing "explicit" decodes to the SSPRK2 advance).
+  const TimeRouteId time_route = parse_time_route(method, "System");
   if (imex) {
-    if (method == "imexrk_ars222") {
+    if (time_route == TimeRouteId::kImexRkArs222) {
       // IMEX-RK FAMILY, ARS(2,2,2) scheme (order 2): advance PARALLEL to AdvanceImex, FULLY implicit
       // source (impl_mask ignored: the facade already rejects a partial mask with this scheme). FULL
       // CARTESIAN ONLY: we do NOT build an embedded-boundary advance (advance_masked / advance_eb stay
@@ -523,7 +529,7 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
         bc.advance_eb = detail::AdvanceImexEb<Limiter, Flux, Model>{
             m, ctx, eb_domain, recon_prim, impl_mask, newton_opts, newton_report, pos_floor};
     }
-  } else if (method == "euler") {
+  } else if (time_route == TimeRouteId::kForwardEuler) {
     bc.advance = detail::AdvanceExplicit<Limiter, Flux, Model, ForwardEuler>{
         m, ctx, recon_prim, pos_floor, ws_cache, weno_eps};
     if (domain_mask)
@@ -532,7 +538,7 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
     if (eb_domain)
       bc.advance_eb = detail::AdvanceExplicitEb<Limiter, Flux, Model, ForwardEuler>{
           m, ctx, eb_domain, recon_prim, pos_floor};
-  } else if (method == "ssprk3") {
+  } else if (time_route == TimeRouteId::kSsprk3) {
     bc.advance = detail::AdvanceExplicit<Limiter, Flux, Model, SSPRK3Step>{
         m, ctx, recon_prim, pos_floor, ws_cache, weno_eps};
     if (domain_mask)
@@ -541,7 +547,7 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
     if (eb_domain)
       bc.advance_eb = detail::AdvanceExplicitEb<Limiter, Flux, Model, SSPRK3Step>{
           m, ctx, eb_domain, recon_prim, pos_floor};
-  } else if (method == "ssprk2") {
+  } else if (time_route == TimeRouteId::kExplicitSsprk2) {
     bc.advance = detail::AdvanceExplicit<Limiter, Flux, Model, SSPRK2Step>{
         m, ctx, recon_prim, pos_floor, ws_cache, weno_eps};
     if (domain_mask)
@@ -551,6 +557,8 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
       bc.advance_eb = detail::AdvanceExplicitEb<Limiter, Flux, Model, SSPRK2Step>{
           m, ctx, eb_domain, recon_prim, pos_floor};
   } else {
+    // kImex reaches here only when imex==false (a compiled Program's hyperbolic stage never asks for the
+    // implicit source); every other explicit route was handled above. Message preserved verbatim.
     throw std::runtime_error("System: unknown explicit time method '" + method +
                              "' (euler|ssprk2|ssprk3)");
   }
@@ -610,23 +618,12 @@ POPS_COLD_FN BlockClosures make_block_rusanov(const Model& m, const std::string&
                                              const NewtonOptions& newton_opts,
                                              NewtonReport* newton_report, Real pos_floor,
                                              Real weno_eps = kWenoEpsilon) {
-  if (lim == "none")
-    return build_block<NoSlope, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                             newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-  if (lim == "minmod")
-    return build_block<Minmod, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                            newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-  if (lim == "vanleer")
-    return build_block<VanLeer, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                             newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-  if (lim == "weno5")
-    return build_block<Weno5, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                           newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-  throw_registry_dispatch_mismatch("System", "limiteur", lim);
+  return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
+    using L = typename decltype(tag)::type;
+    return build_block<L, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components,
+                                       newton_opts, newton_report, pos_floor,
+                                       /*wave_speed_cache=*/false, weno_eps);
+  });
 }
 
 template <class Model>
@@ -651,23 +648,12 @@ POPS_COLD_FN BlockClosures make_block_hll(const Model& m, const std::string& lim
                 }) {
     // wave_speed_cache (opt-in) forwarded ONLY here: the wave speed cache only engages for the HLL
     // flux (BlockRhsEval guarded by Flux == HLLFlux). rusanov/hllc/roe ignore it.
-    if (lim == "none")
-      return build_block<NoSlope, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                           newton_opts, newton_report, pos_floor, wave_speed_cache,
-                              weno_eps);
-    if (lim == "minmod")
-      return build_block<Minmod, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                          newton_opts, newton_report, pos_floor, wave_speed_cache,
-                              weno_eps);
-    if (lim == "vanleer")
-      return build_block<VanLeer, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                           newton_opts, newton_report, pos_floor, wave_speed_cache,
-                              weno_eps);
-    if (lim == "weno5")
-      return build_block<Weno5, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                         newton_opts, newton_report, pos_floor, wave_speed_cache,
-                              weno_eps);
-    throw_registry_dispatch_mismatch("System", "limiteur", lim);
+    return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
+      using L = typename decltype(tag)::type;
+      return build_block<L, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components,
+                                     newton_opts, newton_report, pos_floor, wave_speed_cache,
+                                     weno_eps);
+    });
   } else {
     throw std::runtime_error(
         "System: flux 'hll' requires signed wave speeds "
@@ -690,23 +676,12 @@ POPS_COLD_FN BlockClosures make_block_hllc(const Model& m, const std::string& li
   // is refused here (no more implicit fallback): the canonical Euler layout is served by the explicit
   // euler_hllc route (make_block_euler_hllc / EulerHLLCFlux2D).
   if constexpr (HasHLLCStructure<Model>) {
-    if (lim == "none")
-      return build_block<NoSlope, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                            newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "minmod")
-      return build_block<Minmod, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                           newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "vanleer")
-      return build_block<VanLeer, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                            newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "weno5")
-      return build_block<Weno5, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                          newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-    throw_registry_dispatch_mismatch("System", "limiteur", lim);
+    return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
+      using L = typename decltype(tag)::type;
+      return build_block<L, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components,
+                                      newton_opts, newton_report, pos_floor,
+                                      /*wave_speed_cache=*/false, weno_eps);
+    });
   } else {
     throw std::runtime_error(
         "System: flux 'hllc' requires the model's HLLC capability "
@@ -729,23 +704,12 @@ POPS_COLD_FN BlockClosures make_block_euler_hllc(const Model& m, const std::stri
   // this is the SAME arithmetic as the generic hllc path (HLLCFlux via HasHLLCStructure).
   if constexpr (Model::n_vars == 4 &&
                 requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
-    if (lim == "none")
-      return build_block<NoSlope, EulerHLLCFlux2D>(m, ctx, imex, recon_prim, method,
-                                                   implicit_components, newton_opts, newton_report,
-                                                   pos_floor, /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "minmod")
-      return build_block<Minmod, EulerHLLCFlux2D>(m, ctx, imex, recon_prim, method,
-                                                  implicit_components, newton_opts, newton_report,
-                                                  pos_floor, /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "vanleer")
-      return build_block<VanLeer, EulerHLLCFlux2D>(m, ctx, imex, recon_prim, method,
-                                                   implicit_components, newton_opts, newton_report,
-                                                   pos_floor, /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "weno5")
-      return build_block<Weno5, EulerHLLCFlux2D>(m, ctx, imex, recon_prim, method,
-                                                 implicit_components, newton_opts, newton_report,
-                                                 pos_floor, /*wave_speed_cache=*/false, weno_eps);
-    throw_registry_dispatch_mismatch("System", "limiteur", lim);
+    return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
+      using L = typename decltype(tag)::type;
+      return build_block<L, EulerHLLCFlux2D>(m, ctx, imex, recon_prim, method, implicit_components,
+                                             newton_opts, newton_report, pos_floor,
+                                             /*wave_speed_cache=*/false, weno_eps);
+    });
   } else {
     throw std::runtime_error(
         "System: flux 'euler_hllc' requires a canonical compressible Euler 2D transport "
@@ -768,23 +732,12 @@ POPS_COLD_FN BlockClosures make_block_roe(const Model& m, const std::string& lim
   // is refused here: the canonical Euler layout is served by the explicit euler_roe route
   // (make_block_euler_roe / EulerRoeFlux2D).
   if constexpr (HasRoeDissipation<Model>) {
-    if (lim == "none")
-      return build_block<NoSlope, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                           newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "minmod")
-      return build_block<Minmod, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                          newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "vanleer")
-      return build_block<VanLeer, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                           newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "weno5")
-      return build_block<Weno5, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                         newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-    throw_registry_dispatch_mismatch("System", "limiteur", lim);
+    return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
+      using L = typename decltype(tag)::type;
+      return build_block<L, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components,
+                                     newton_opts, newton_report, pos_floor,
+                                     /*wave_speed_cache=*/false, weno_eps);
+    });
   } else {
     throw std::runtime_error(
         "System: flux 'roe' requires the model's Roe capability "
@@ -807,23 +760,12 @@ POPS_COLD_FN BlockClosures make_block_euler_roe(const Model& m, const std::strin
   // Euler brick this is the SAME arithmetic as the generic roe path (RoeFlux via HasRoeDissipation).
   if constexpr (Model::n_vars == 4 &&
                 requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
-    if (lim == "none")
-      return build_block<NoSlope, EulerRoeFlux2D>(m, ctx, imex, recon_prim, method,
-                                                  implicit_components, newton_opts, newton_report,
-                                                  pos_floor, /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "minmod")
-      return build_block<Minmod, EulerRoeFlux2D>(m, ctx, imex, recon_prim, method,
-                                                 implicit_components, newton_opts, newton_report,
-                                                 pos_floor, /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "vanleer")
-      return build_block<VanLeer, EulerRoeFlux2D>(m, ctx, imex, recon_prim, method,
-                                                  implicit_components, newton_opts, newton_report,
-                                                  pos_floor, /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "weno5")
-      return build_block<Weno5, EulerRoeFlux2D>(m, ctx, imex, recon_prim, method,
-                                                implicit_components, newton_opts, newton_report,
-                                                pos_floor, /*wave_speed_cache=*/false, weno_eps);
-    throw_registry_dispatch_mismatch("System", "limiteur", lim);
+    return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
+      using L = typename decltype(tag)::type;
+      return build_block<L, EulerRoeFlux2D>(m, ctx, imex, recon_prim, method, implicit_components,
+                                            newton_opts, newton_report, pos_floor,
+                                            /*wave_speed_cache=*/false, weno_eps);
+    });
   } else {
     throw std::runtime_error(
         "System: flux 'euler_roe' requires a canonical compressible Euler 2D transport "
@@ -848,27 +790,30 @@ POPS_COLD_FN BlockClosures make_block(const Model& m, const std::string& lim,
   // guard (unreachable after validate_riemann).
   validate_riemann(riem, /*polar=*/false, "System");
   validate_limiter(lim, "System");
-  if (riem == "rusanov")
-    return make_block_rusanov(m, lim, ctx, imex, recon_prim, method, implicit_components,
-                              newton_opts, newton_report, pos_floor,
-                              weno_eps);
-  if (riem == "hll")
-    return make_block_hll(m, lim, ctx, imex, recon_prim, method, implicit_components, newton_opts,
-                          newton_report, pos_floor, wave_speed_cache, weno_eps);
-  if (riem == "hllc")
-    return make_block_hllc(m, lim, ctx, imex, recon_prim, method, implicit_components, newton_opts,
-                           newton_report, pos_floor, weno_eps);
-  if (riem == "roe")
-    return make_block_roe(m, lim, ctx, imex, recon_prim, method, implicit_components, newton_opts,
-                          newton_report, pos_floor, weno_eps);
-  if (riem == "euler_hllc")
-    return make_block_euler_hllc(m, lim, ctx, imex, recon_prim, method, implicit_components,
-                                 newton_opts, newton_report, pos_floor,
-                              weno_eps);
-  if (riem == "euler_roe")
-    return make_block_euler_roe(m, lim, ctx, imex, recon_prim, method, implicit_components,
-                                newton_opts, newton_report, pos_floor,
-                              weno_eps);
+  // Parse the validated tag ONCE into the typed RiemannRouteId (ADC-641): the switch decodes it. The
+  // euler_hllc / euler_roe arms are NOT fused with hllc / roe here (System routes each to its own
+  // make_block_<flux> helper, unlike the AMR seam), mirroring the historical System behavior exactly.
+  // The default is the defense-in-depth registry/dispatch guard (unreachable past validate_riemann).
+  switch (parse_riemann_route(riem, "System")) {
+    case RiemannRouteId::kRusanov:
+      return make_block_rusanov(m, lim, ctx, imex, recon_prim, method, implicit_components,
+                                newton_opts, newton_report, pos_floor, weno_eps);
+    case RiemannRouteId::kHll:
+      return make_block_hll(m, lim, ctx, imex, recon_prim, method, implicit_components, newton_opts,
+                            newton_report, pos_floor, wave_speed_cache, weno_eps);
+    case RiemannRouteId::kHllc:
+      return make_block_hllc(m, lim, ctx, imex, recon_prim, method, implicit_components,
+                             newton_opts, newton_report, pos_floor, weno_eps);
+    case RiemannRouteId::kRoe:
+      return make_block_roe(m, lim, ctx, imex, recon_prim, method, implicit_components, newton_opts,
+                            newton_report, pos_floor, weno_eps);
+    case RiemannRouteId::kEulerHllc:
+      return make_block_euler_hllc(m, lim, ctx, imex, recon_prim, method, implicit_components,
+                                   newton_opts, newton_report, pos_floor, weno_eps);
+    case RiemannRouteId::kEulerRoe:
+      return make_block_euler_roe(m, lim, ctx, imex, recon_prim, method, implicit_components,
+                                  newton_opts, newton_report, pos_floor, weno_eps);
+  }
   throw_registry_dispatch_mismatch("System", "flux", riem);
 }
 

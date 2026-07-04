@@ -352,6 +352,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_amr_condensed_schur_source_stepper
   test_amr_condensed_schur_composite
   test_dispatch_tags
+  test_scheme_dispatch
   test_model_registry
   test_spatial_discretisation
   test_primitive_recon
