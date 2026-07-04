@@ -210,12 +210,13 @@ def _refuse_imexrk_on_amr():
                            ("imexrk_ars222", "not wired on AMR", "Cartesian System"), call)
 
 
-def _refuse_runtime_params_on_amr():
-    def call():
-        AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)._finish_program_install(
-            compiled=None, so_path=None, params={"alpha": 1.0}, cadence=None)
-    return _expect_refusal(NotImplementedError,
-                           ("not wired on a NATIVE AMR install", "per-block param seam"), call)
+def _exists_native_runtime_params():
+    # Cited: tests/python/integration/amr/test_amr_native_params (ADC-514 wired set_block_params:
+    # a native AMR block's runtime param changes the run without recompiling; params={} is
+    # bit-identical). The blanket NotImplementedError refusal is gone; the residual precise
+    # refusal (a name declared by no instance) lives in test_amr_refusals.
+    assert callable(getattr(AmrSystem, "set_block_params", None))
+    return "exists:test_amr_native_params"
 
 
 def _refuse_multiblock_source_stage():
@@ -328,8 +329,8 @@ MATRIX = {
     "program_ssprk2.amr.mono": Cell("program_ssprk2", "amr", "mono", "exists",
                                     _exists_ssprk2_program_parity),
     # runtime params on AMR -- precise refusal (mono + multi share the native no-param seam)
-    "runtime_params.amr.mono": Cell("runtime_params", "amr", "mono", "refuse",
-                                    _refuse_runtime_params_on_amr),
+    "runtime_params.amr.mono": Cell("runtime_params", "amr", "mono", "exists",
+                                    _exists_native_runtime_params),
     # runtime CFL + profile -- AMR green live
     "cfl_profile.amr.mono": Cell("cfl_profile", "amr", "mono", "green_live", _run_profile_cfl),
     # named elliptic field / .field -- cite the dedicated suite
