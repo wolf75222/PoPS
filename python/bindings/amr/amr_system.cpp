@@ -464,10 +464,24 @@ struct AmrSystem::Impl {
             b.name + "') in multi-block ; use a native block pops.Model(...), or set_density.");
     AmrBuildParams bp = make_build_params();  // geometry + poisson_bc + wall + common ownership
     // SINGLE-LEVEL Program layout (epic ADC-508): a compiled time Program forced onto the runtime engine
-    // for a SINGLE block builds a coarse-only hierarchy, so a single-level AMR Program is BIT-IDENTICAL
-    // to the same Program on System (the must-pass parity gate). force_runtime_ is set only by
-    // install_program; a genuine multi-block (>= 2) AMR keeps the historical 2-level seed.
-    const bool program_single_level = force_runtime_ && blocks.size() == 1;
+    // for a SINGLE block builds a coarse-only hierarchy WHEN NO REFINEMENT IS CONFIGURED, so a
+    // no-refinement single-block AMR Program is BIT-IDENTICAL to the same Program on System (the
+    // must-pass parity gate). force_runtime_ is set only by install_program; a genuine multi-block
+    // (>= 2) AMR keeps the historical 2-level seed.
+    //
+    // REFINEMENT WINS OVER THE COARSE-ONLY OPT-IN (ADC-634): a coarse-only layout has a single-level
+    // template (make_shared_amr_layout single_level -> S.ba == {coarse}), so the regrid has NO fine
+    // BoxArray to grow into and the hierarchy stays nlev == 1 FOREVER, even with a tag predicate armed.
+    // When the user configured refinement (set_refinement -> refine_threshold below the disabled
+    // sentinel, or set_phi_refinement -> phi_grad_threshold > 0), the single-block Program must get the
+    // 2-level template so an active regrid can seed / retain the fine level. Independent of
+    // regrid_every so a regrid_every == 0 frozen-seed run and a regrid_every > 0 run at the same
+    // threshold keep the SAME level count (the null-regrid parity channel). No set_refinement call ->
+    // refine_threshold stays the sentinel -> coarse-only -> the System parity gate is untouched.
+    const bool refinement_active =
+        refine_threshold < static_cast<double>(kAmrRefinementDisabledThreshold) ||
+        phi_grad_threshold > 0.0;
+    const bool program_single_level = force_runtime_ && blocks.size() == 1 && !refinement_active;
     const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp, program_single_level);
     std::vector<pops::AmrRuntimeBlock> rblocks;
     rblocks.reserve(blocks.size());
