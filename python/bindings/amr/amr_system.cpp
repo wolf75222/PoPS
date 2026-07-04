@@ -287,8 +287,12 @@ struct AmrSystem::Impl {
       return;
     const double eff_dt = dt * static_cast<double>(program_.stride_);  // catch-up effective step
     const double h = eff_dt / static_cast<double>(program_.substeps_);
-    for (int s = 0; s < program_.substeps_; ++s)
+    for (int s = 0; s < program_.substeps_; ++s) {
+      // ADC-626/ADC-631: tag the dt that produced this macro-step so a history ring's store_history
+      // records the per-slot dt (variable-dt replay). Parity with SystemStepper::run_program_cadence.
+      program_.last_dt_ = h;
       program_.step_(h);
+    }
   }
 
   // Pushes macro_step_ to the engine's cadence counter (regrid/stride): multi-block runtime OR
@@ -1695,6 +1699,12 @@ const std::vector<int>& AmrSystem::program_block_map() const {
 }
 std::string AmrSystem::installed_program_hash() const {
   return p_->program_.installed_hash_;
+}
+// ADC-631: the last macro-step dt handed to the installed Program (set by run_program_cadence_ before
+// each step_). The AmrProgramContext reads it so a history ring's store_history tags the per-slot dt
+// (variable-dt replay). Parity with ProgramRuntimeState::last_dt_ on the Uniform side.
+double AmrSystem::program_last_dt() const {
+  return static_cast<double>(p_->program_.last_dt_);
 }
 // RUNTIME FREEZE LIFECYCLE (ADC-592, parity with System). mark_bound() is the ONE transition into the
 // frozen state; the Python bind flow calls it LAST (after every install call), so the install sequence

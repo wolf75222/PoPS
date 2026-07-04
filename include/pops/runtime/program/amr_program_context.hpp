@@ -36,7 +36,8 @@
 /// coarse -> fine; solve_fields() runs exactly once per macro-step (a level-0 guard). DEFERRED (fail-loud
 /// or documented): Berger-Oliger subcycling under a Program, conservative reflux at coarse-fine interfaces
 /// (v1 ships average_down-only), multi-block AMR Program coupling, named multi-elliptic fields, per-stage
-/// field re-solve at FINE levels, AMR history rings. GPU (CUDA) run is the ROMEO step (device-clean by
+/// field re-solve at FINE levels. Multistep history rings (keep_history / T.prev) ARE supported (ADC-631:
+/// per-level ring slots remapped through regrid + v3 checkpoint with native replay). GPU (CUDA) run is the ROMEO step (device-clean by
 /// construction: every per-cell op is for_each_cell / a POPS_HD named functor reused from the engine).
 namespace pops {
 namespace runtime {
@@ -251,15 +252,24 @@ class AmrProgramContext {
     fill_ghosts(x, g.domain, eng_->transport_bc());
   }
 
-  // --- history (DEFERRED on AMR: fail loud rather than an unvalidated coarse-only ring) -------------
-  void register_history(const std::string& name, int /*lag*/) const { history_deferred(name); }
-  MultiFab& history(const std::string& name, int /*lag*/ = 1) const {
-    history_deferred(name);
+  // --- history (ADC-631): per-level ring slots on the AmrRuntime engine, driven by the SAME lowered
+  // body as Uniform (the level index is the driver's set_level cursor -- no scheme dispatch, no new IR).
+  // register/read/store address the CURRENT level; rotate fires ONCE per macro-step, guarded to the LAST
+  // level -- the body's terminal rotate_histories() runs once per level in the AMR per-level loop, so
+  // the level_==nlev-1 guard is the AMR analogue of the Uniform once-per-step rotate (design plan sec.2).
+  void register_history(const std::string& name, int lag) const {
+    pops::detail::AmrHistoryOps::register_history(*eng_, name, lag);  // idempotent; allocates every level
   }
-  void store_history(const std::string& name, const MultiFab& /*value*/) const {
-    history_deferred(name);
+  MultiFab& history(const std::string& name, int lag = 1) const {
+    return pops::detail::AmrHistoryOps::read_history(*eng_, name, lag, level_);
   }
-  void rotate_histories() const {}  // no-op: no history ring on AMR (v1)
+  void store_history(const std::string& name, const MultiFab& value) const {
+    pops::detail::AmrHistoryOps::store_history(*eng_, name, level_, value, facade_->program_last_dt());
+  }
+  void rotate_histories() const {
+    if (level_ == nlev() - 1)
+      pops::detail::AmrHistoryOps::rotate_histories(*eng_);
+  }
 
   // --- diagnostics / runtime params (forward to the facade store) -----------------------------------
   void record_scalar(const std::string& name, Real value) const {
@@ -393,12 +403,6 @@ class AmrProgramContext {
   }
 
  private:
-  [[noreturn]] static void history_deferred(const std::string& name) {
-    throw std::runtime_error(
-        "AmrProgramContext history '" + name +
-        "': multistep history rings under a compiled Program on AMR are deferred (v1, to avoid an "
-        "unvalidated coarse-only ring). Use System for an Adams-Bashforth-style Program.");
-  }
   /// Fail loud for an op the codegen can emit but the v1 AMR Program path does not yet wire (Schur /
   /// named-flux / scheduled Programs). [[noreturn]] so a non-void stub needs no dummy return -- the
   /// caller's signature stays byte-faithful to ProgramContext (the duck-typing requirement) without

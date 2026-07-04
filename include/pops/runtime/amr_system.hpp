@@ -690,6 +690,10 @@ class AmrSystem {
   /// IR hash of the installed compiled Program (the string returned by the .so's pops_program_hash), or
   /// "" if no program is installed. Parity with System::installed_program_hash (checkpoint guard).
   POPS_EXPORT std::string installed_program_hash() const;
+  /// The last macro-step dt handed to the installed Program (ADC-631): the AmrProgramContext reads it
+  /// so a history ring's store_history tags the per-slot dt (variable-dt replay). POPS_EXPORT for the
+  /// dlopen boundary (the generated AMR Program .so reads it via the AmrProgramContext).
+  POPS_EXPORT double program_last_dt() const;
 
   /// @name Runtime freeze lifecycle (ADC-592, parity with System)
   /// Assembly mutable BEFORE bind, composition FROZEN once pops.bind completes. mark_bound() is
