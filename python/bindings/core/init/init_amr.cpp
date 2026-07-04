@@ -579,7 +579,8 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def("restore_history_slot_dt", &AmrSystem::restore_history_slot_dt, py::arg("name"),
            py::arg("slot"), py::arg("dt"))
       .def("rebuild_history_slots", &AmrSystem::rebuild_history_slots, py::arg("name"),
-           py::arg("stored_slots"));
+           py::arg("stored_slots"))
+      .def("last_replay_regrid_steps", &AmrSystem::last_replay_regrid_steps);
 }
 
 }  // namespace

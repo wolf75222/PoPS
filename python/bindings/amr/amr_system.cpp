@@ -272,6 +272,9 @@ struct AmrSystem::Impl {
   // NATIVE per-block RUNTIME params (ADC-514, AMR mirror of System::Impl::block_params_): block name ->
   // SHARED value vector set_block_params retargets WITHOUT recompiling; SEPARATE from program_.block_params_.
   std::map<std::string, std::shared_ptr<std::vector<double>>> block_params_;
+  // ADC-635: the in-window regrid schedule the LAST rebuild_history_slots fired (for the v3 reader's
+  // coherence assertion against the checkpoint fingerprint). Reset each rebuild; empty on a clean window.
+  std::vector<int> last_replay_regrid_steps_;
 
   explicit Impl(const AmrSystemConfig& c) : cfg(c) {}
 
@@ -2486,14 +2489,30 @@ int AmrSystem::rebuild_history_slots(const std::string& name,
     throw std::runtime_error(
         "AmrSystem::rebuild_history_slots : no compiled Program is installed; the ring cannot be "
         "replayed (install_program before restart, or checkpoint the ring with Dense())");
-  // The replay re-steps the installed Program closure with regrid frozen inside the engine bracket.
-  // Setting last_dt_ per step keeps the per-slot dt tagging consistent (bracketed away by the engine).
+  // ADC-635: the replay re-steps the installed Program with regrid ACTIVE. The head-of-step
+  // ctx.regrid_if_due(ctx.macro_step()) reads THIS facade's macro_step_: the closure drives it to the
+  // engine-supplied per-re-step cursor (m-1-j) so the original in-window regrid schedule fires. m is
+  // the facade cursor (primed by the v3 reader); it is restored on every exit, coherence failure too.
   Impl* imp = p_.get();
-  return detail::AmrHistoryOps::rebuild_slots(
-      *p_->runtime, name, stored_slots, [imp](double dt) {
-        imp->program_.last_dt_ = static_cast<Real>(dt);
-        imp->program_.step_(dt);
-      });
+  const int m = p_->macro_step_;
+  detail::AmrHistoryOps::ReplayOutcome outcome;
+  try {
+    outcome = detail::AmrHistoryOps::rebuild_slots(
+        *p_->runtime, name, stored_slots, m, [imp](double dt, int cursor) {
+          imp->macro_step_ = cursor;  // ctx.macro_step() -> facade cursor -> regrid_if_due schedule
+          imp->program_.last_dt_ = static_cast<Real>(dt);
+          imp->program_.step_(dt);
+        });
+  } catch (...) {
+    p_->macro_step_ = m;
+    throw;
+  }
+  p_->macro_step_ = m;
+  p_->last_replay_regrid_steps_ = outcome.fired_regrid_steps;
+  return outcome.recomputed;
+}
+std::vector<int> AmrSystem::last_replay_regrid_steps() const {
+  return p_->last_replay_regrid_steps_;
 }
 
 }  // namespace pops
