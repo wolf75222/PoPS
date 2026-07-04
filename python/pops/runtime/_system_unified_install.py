@@ -35,9 +35,8 @@ else:
 class _SystemUnifiedInstall(_System):
     """The internal ``_install_compiled`` lowering seam of System (driven by ``pops.bind``)."""
 
-    def _install_compiled(self, compiled: Any = None, *, instances: Any = None, params: Any = None,
-                          aux: Any = None, solvers: Any = None, cadence: Any = None,
-                          outputs: Any = None) -> Any:
+    def _install_compiled(self, compiled=None, *, instances=None, params=None, aux=None,
+                          solvers=None, cadence=None, outputs=None, diagnostics=None):
         """INTERNAL low-level install seam (Spec 5 sec.11): wire a compiled handle + per-instance
         state/spatial + params + aux + field solvers in ONE call, then install the compiled time
         Program. NOT the public entry point: author the run with ``pops.bind(compiled, state=,
@@ -193,6 +192,8 @@ class _SystemUnifiedInstall(_System):
 
         if outputs:  # (7) OUTPUT / CHECKPOINT policies (C4): run() fires each at its cadence
             self._output_policies = list(outputs)
+        if diagnostics:  # (7b) DIAGNOSTIC measures (ADC-542): run() fires each at its cadence
+            self._diagnostic_measures = list(diagnostics)
 
         # (8) FREEZE (ADC-592): the composition is fully lowered -- snapshot WHAT was bound, then
         # _finalize_bind marks the runtime 'bound' as the LAST act (nothing above ran frozen, so the

@@ -240,9 +240,11 @@ class AmrProgramContext {
   Real sum_component(const MultiFab& u, int comp) const { return pops::reduce_sum(u, comp); }
   Real max_component(const MultiFab& u, int comp) const { return pops::reduce_max(u, comp); }
   Real min_component(const MultiFab& u, int comp) const { return pops::reduce_min(u, comp); }
+  Real abs_sum_component(const MultiFab& u, int comp) const { return pops::reduce_abs_sum(u, comp); }
   Real sum(const MultiFab& u) const { return pops::reduce_sum(u, 0); }
   Real max(const MultiFab& u) const { return pops::reduce_max(u, 0); }
   Real min(const MultiFab& u) const { return pops::reduce_min(u, 0); }
+  Real abs_sum(const MultiFab& u) const { return pops::reduce_abs_sum(u, 0); }
 
   void fill_boundary(MultiFab& x) const {
     const Geometry g = eng_->level_geom(level_);

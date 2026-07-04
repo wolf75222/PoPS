@@ -2179,6 +2179,54 @@ Real System::cfl_min_dx() const {
   return p_->polar_ ? std::min(p_->pgeom_.dr(), p_->pgeom_.r_min * p_->pgeom_.dtheta())
                     : std::min(p_->geom.dx(), p_->geom.dy());
 }
+// Collective scalar reduction over a NAMED block's state -- the native seam the Python diagnostics
+// driver (ADC-542) drives to fire a declared typed measure (Norm / Integral / MinMax) each cadence
+// tick. Resolves the block by name (Impl::find, insertion order) and folds its U with the pops::
+// free functions. Per-component kinds read component @p comp; the full-state "_all" kinds fold over
+// EVERY component. Unknown kind -> throw (fail loud, no silent 0). COLLECTIVE like dot.
+double System::reduce_component(const std::string& block, const std::string& kind, int comp) const {
+  const Impl::Species& s = p_->find(block);
+  const MultiFab& u = s.U;
+  const int nc = s.ncomp;
+  if (kind == "sum")
+    return static_cast<double>(pops::reduce_sum(u, comp));
+  if (kind == "min")
+    return static_cast<double>(pops::reduce_min(u, comp));
+  if (kind == "max")
+    return static_cast<double>(pops::reduce_max(u, comp));
+  if (kind == "abs_sum")
+    return static_cast<double>(pops::reduce_abs_sum(u, comp));
+  if (kind == "sum_sq")  // L2 squared: dot(u, u, comp); the driver takes sqrt
+    return static_cast<double>(pops::dot(u, u, comp));
+  if (kind == "abs_max")  // LInf: collective max |u(.,.,comp)|
+    return all_reduce_max(static_cast<double>(pops::norm_inf(u, comp)));
+  // Full-state (unscoped) folds over ALL components -- host O(ncomp) composition of the native
+  // per-component collectives (no field leaves the ranks; only ncomp scalars).
+  if (kind == "sum_all") {
+    double acc = 0.0;
+    for (int c = 0; c < nc; ++c)
+      acc += static_cast<double>(pops::reduce_sum(u, c));
+    return acc;
+  }
+  if (kind == "abs_sum_all") {
+    double acc = 0.0;
+    for (int c = 0; c < nc; ++c)
+      acc += static_cast<double>(pops::reduce_abs_sum(u, c));
+    return acc;
+  }
+  if (kind == "sum_sq_all")
+    return static_cast<double>(pops::dot_all(u, u));
+  if (kind == "abs_max_all") {
+    double m = 0.0;
+    for (int c = 0; c < nc; ++c)
+      m = std::max(m, all_reduce_max(static_cast<double>(pops::norm_inf(u, c))));
+    return m;
+  }
+  throw std::runtime_error(
+      "System::reduce_component: unknown reduction kind '" + kind + "' for block '" + block +
+      "' (expected one of: sum, min, max, abs_sum, sum_sq, abs_max, "
+      "sum_all, abs_sum_all, sum_sq_all, abs_max_all)");
+}
 MultiFab System::alloc_scalar_field(int n_comp, int n_ghost) {
   // Co-distributed with the block storage (Impl::ba / Impl::dm -- the same (ba, dm) every block U is
   // built with, P->ba/P->dm above), so a matrix-free apply pairs this field with the state/aux by

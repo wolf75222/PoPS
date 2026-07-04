@@ -140,6 +140,9 @@ def compile(problem: Any, layout: Any = None, backend: Any = None, time: Any = N
                              for name, spec in problem._blocks.items()}
     compiled._field_solvers = _problem_field_solvers(problem)
     compiled._outputs = list(problem._outputs or [])
+    # Declared diagnostic measures (ADC-542): carried on the compile-time snapshot exactly like the
+    # output policies so bind() flows them onto the engine and run() fires them each cadence tick.
+    compiled._diagnostics = list(problem._diagnostics or [])
     # Carry the layout so bind()'s runtime adapter can derive the engine config from the mesh: the
     # Uniform adapter builds the System's SystemConfig (n / L / periodic) from the Uniform mesh,
     # mirroring how the AMR adapter derives the AmrSystemConfig (n / L / periodic / regrid / patch
@@ -224,10 +227,14 @@ def bind(compiled: Any, *, initial_state: Any = None, state: Any = None, params:
     # OUTPUT / CHECKPOINT policies (C4 / ADC-509) from the COMPILE-TIME snapshot (compiled._outputs),
     # so the bound sim's run() fires exactly the policies the compile saw. Empty for a Problem with no
     # .output(...) -- the install is unchanged.
-    outputs_src: Any = (getattr(compiled, "_outputs", None)
-                        if getattr(compiled, "_outputs", None) is not None
-                        else (getattr(problem, "_outputs", []) or []))
-    outputs = list(outputs_src)
+    _outputs_src = getattr(compiled, "_outputs", None)
+    outputs = list(_outputs_src if _outputs_src is not None
+                   else (getattr(problem, "_outputs", []) or []))
+    # Declared diagnostic measures (ADC-542) from the same compile-time snapshot, flowed onto the
+    # engine so run() fires each at its cadence via the native reductions.
+    _diag_src = getattr(compiled, "_diagnostics", None)
+    diagnostics = list(_diag_src if _diag_src is not None
+                       else (getattr(problem, "_diagnostics", []) or []))
 
     # The AMR install goes through the NATIVE per-block path (each instance carries its OWN
     # target='amr_system' CompiledModel from compile()'s _block_compiled_models); the Uniform install
@@ -259,7 +266,8 @@ def bind(compiled: Any, *, initial_state: Any = None, state: Any = None, params:
 
     adapter = adapter_for(target, layout, n_blocks=n_blocks)
     return adapter.build(compiled, layout=layout, instances=instances, params=params or {},
-                         aux=aux or {}, solvers=field_solvers, cadence=cadence, outputs=outputs)
+                         aux=aux or {}, solvers=field_solvers, cadence=cadence, outputs=outputs,
+                         diagnostics=diagnostics)
 
 
 def _validate_layout_for_compile(problem: Any, layout: Any) -> None:

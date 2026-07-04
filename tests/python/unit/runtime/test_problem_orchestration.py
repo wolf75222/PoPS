@@ -499,10 +499,10 @@ class _RecordingSim:
     last = {}
 
     def _install_compiled(self, compiled=None, *, instances=None, params=None, aux=None,
-                          solvers=None, cadence=None, outputs=None):
+                          solvers=None, cadence=None, outputs=None, diagnostics=None):
         _RecordingSim.last = {"compiled": compiled, "instances": instances, "params": params,
                               "aux": aux, "solvers": solvers, "cadence": cadence,
-                              "outputs": outputs}
+                              "outputs": outputs, "diagnostics": diagnostics}
 
 
 def _bind_with_stub_runtime(target, layout=None, blocks=("ne",), initial=None):

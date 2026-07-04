@@ -35,6 +35,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   unregistered `test_coupling_operator_contract` into the standard C++ test list.
 
 ### Added
+- ADC-542 Native diagnostics, output and checkpoint execution: declared typed diagnostic measures
+  (`pops.diagnostics.Norm` / `Integral` / `MinMax` / `ConservationCheck`) on a
+  `RuntimePolicies(diagnostics=...)` bundle now FIRE on the run loop through native collective
+  reductions (a new `pops::reduce_abs_sum` L1 kernel plus the existing dot / norm_inf seams, exposed
+  as `System.reduce_component` and the level-composite `AmrSystem.composite_reduce`), on Uniform AND
+  AMR (masked level sums, extrema folded exact under average_down) -- previously the measures were
+  inert metadata dropped by the registry. Output policies gain `on_start` / `on_end` / `when`
+  cadences, AMR per-level selection (`AllLevels` / `CoarseOnly` / `SelectedLevels`) and a Plotfile
+  writer. The AMR checkpoint format bumps to v3 (additive; reader accepts {1, 2, 3}): per-level
+  distribution mappings, regrid metadata and a program-hash guard, and restart REBUILDS the hierarchy
+  from the manifest (`AmrRuntime::rebuild_hierarchy`), making `CheckpointPolicy(restartable=True)` real
+  under ACTIVE regridding (bit-identical resume proven mid-cycle in a fresh system). The restartable
+  gate now refuses only cross-rank-count bit-identity (IEEE754 reassociation).
 - ADC-626 `T.keep_history(..., checkpoint_policy=)` now runs: typed history-persistence policies
   (`pops.time.Dense` / `Interval(k)` / `Revolve(snapshots)`) select which ring slots a checkpoint
   stores, and the restart replays the gaps by deterministic re-stepping of the installed compiled

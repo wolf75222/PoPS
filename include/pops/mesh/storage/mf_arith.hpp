@@ -96,6 +96,19 @@ struct MinKernel {
       acc = v;
   }
 };
+
+// Reducer |f(i,j,comp)| -> sum over one component -- the L1 (absolute-sum) reduction. Same
+// device-clean named functor recipe as SumKernel / NormInfKernel (first instantiated from a generated
+// problem.so, an external TU). The abs is a branch (v < 0 ? -v : v), NOT std::fabs, for bit-parity
+// with NormInfKernel above (identical magnitude rounding, none, on every backend).
+struct AbsSumKernel {
+  ConstArray4 a;
+  int comp;
+  POPS_HD void operator()(int i, int j, Real& acc) const {
+    const Real v = a(i, j, comp);
+    acc += v < 0 ? -v : v;
+  }
+};
 }  // namespace detail
 
 /// y <- y + a x over ALL components of the valid cells. Identical layouts required.
@@ -227,6 +240,22 @@ inline Real reduce_min(const MultiFab& mf, int comp = 0) {
     m = std::min(m, reduce_min_cell(mf.box(li), detail::MinKernel{a, comp}));
   }
   return static_cast<Real>(all_reduce_min(static_cast<double>(m)));
+}
+
+/// Absolute sum Sum_cells |f(.,.,comp)| over component comp, reduced over ALL ranks (all_reduce_sum)
+/// -- the L1 reduction (compiled-Program P.norm1 / the Norm(L1) measure). reduce_sum is SIGNED; this
+/// folds magnitudes. COLLECTIVE, MANDATORY UNDER MPI: called on every rank (an empty rank contributes
+/// 0), like dot. Same per-tile Kokkos::Sum FP guarantees as dot/reduce_sum (deterministic/idempotent,
+/// not bit-identical to a lexicographic sum across backends). Ghost exclusion is the valid-box
+/// contract: the reduction domain is mf.box(li) (the VALID box), never the grown fab box, exactly as
+/// reduce_sum excludes ghosts -- no mask needed.
+inline Real reduce_abs_sum(const MultiFab& mf, int comp = 0) {
+  Real s = 0;
+  for (int li = 0; li < mf.local_size(); ++li) {
+    const ConstArray4 a = mf.fab(li).const_array();
+    s += reduce_sum_cell(mf.box(li), detail::AbsSumKernel{a, comp});
+  }
+  return static_cast<Real>(all_reduce_sum(static_cast<double>(s)));
 }
 
 }  // namespace pops

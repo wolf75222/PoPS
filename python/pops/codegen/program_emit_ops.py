@@ -388,7 +388,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         elif kind == "norm_inf":
             (u,) = v.inputs
             lines.append("const pops::Real %s = pops::norm_inf(%s);" % (var[v.id], var[u.id]))
-        elif kind in ("sum", "max", "min"):
+        elif kind in ("sum", "max", "min", "abs_sum"):
+            # abs_sum -> pops::reduce_abs_sum (the L1 reduction; P.norm1 / Norm(L1)); the reduce_<kind>
+            # naming matches the free-function name exactly, like sum/max/min.
             (u,) = v.inputs
             comp = int(v.attrs.get("comp", 0))
             lines.append("const pops::Real %s = pops::reduce_%s(%s, %d);"

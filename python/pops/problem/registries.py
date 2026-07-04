@@ -312,16 +312,22 @@ class RuntimePolicyRegistry(_FreezableRegistry):
 
     family = "runtime"
     _POLICY_CATEGORIES = ("output_policy", "checkpoint_policy")
+    _DIAGNOSTIC_CATEGORIES = ("diagnostic_norm", "diagnostic_integral", "diagnostic_minmax",
+                              "conservation_check")
 
     def __init__(self) -> None:
         self._aux = {}
         self._outputs = []
+        # Declared typed diagnostic measures (ADC-542). The bundle drops them nowhere now: they are
+        # unpacked here so the run loop FIRES them via the native reductions (registries used to
+        # unpack only output / checkpoint, silently dropping diagnostics).
+        self._diagnostics = []
         # The typed RuntimePolicies bundle (ADC-562), retained so its self-contained validate runs
         # with the compile context; its output / checkpoint members are ALSO unpacked into _outputs.
         self._policies = None
 
     def _freezable_members(self) -> Any:
-        return list(self._outputs)
+        return list(self._outputs) + list(self._diagnostics)
 
     def add_aux(self, name: Any, value: Any = None) -> None:
         """Declare a static aux input ``name`` (e.g. a background field)."""
@@ -349,6 +355,8 @@ class RuntimePolicyRegistry(_FreezableRegistry):
         self._policies = policies
         for policy in policies.outputs():
             self._outputs.append(policy)
+        for measure in policies.diagnostics:
+            self._diagnostics.append(measure)
 
     @property
     def policies(self) -> Any:
@@ -361,6 +369,10 @@ class RuntimePolicyRegistry(_FreezableRegistry):
     @property
     def outputs(self) -> Any:
         return list(self._outputs)
+
+    @property
+    def diagnostics(self) -> Any:
+        return list(self._diagnostics)
 
     def names(self) -> Any:
         return sorted(self._aux) + [getattr(p, "name", repr(p)) for p in self._outputs]
@@ -384,13 +396,23 @@ class RuntimePolicyRegistry(_FreezableRegistry):
                     "output() expects a pops.output.OutputPolicy / CheckpointPolicy; got %r "
                     "(category %r)" % (type(policy).__name__, cat),
                     context={"policy": type(policy).__name__, "category": cat})
+        for measure in self._diagnostics:
+            cat = getattr(measure, "category", None)
+            if cat not in self._DIAGNOSTIC_CATEGORIES:
+                report.error(
+                    self.family, "bad_diagnostic_measure",
+                    "diagnostics=[...] expects a pops.diagnostics measure (Norm / Integral / "
+                    "MinMax / ConservationCheck); got %r (category %r)"
+                    % (type(measure).__name__, cat),
+                    context={"measure": type(measure).__name__, "category": cat})
         if self._policies is not None:
             report.extend(self._policies.validate(context))
         return report
 
     def inspect(self) -> Any:
-        info: dict[str, Any] = {"aux": sorted(self._aux),
-                "outputs": [getattr(p, "name", repr(p)) for p in self._outputs]}
+        info = {"aux": sorted(self._aux),
+                "outputs": [getattr(p, "name", repr(p)) for p in self._outputs],
+                "diagnostics": [getattr(m, "name", repr(m)) for m in self._diagnostics]}
         if self._policies is not None:
             info["policies"] = self._policies.inspect().to_dict()
         return info

@@ -122,6 +122,44 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         # what was bound (None until bind).
         self._lifecycle = "assembling"
         self._bound_snapshot = None
+        # OUTPUT / CHECKPOINT policies + DIAGNOSTIC measures (ADC-542, parity with System) flowed by
+        # pops.bind. Empty until install; run() fires each at its cadence via the AMR per-level output
+        # driver and the composite-reduction diagnostics path.
+        self._output_policies = []
+        self._diagnostic_measures = []
+
+    def run(self, t_end, cfl=0.4, max_steps=1_000_000, output_dir=None):
+        """Advance up to t_end by CFL steps, firing declared output / diagnostic policies (ADC-542).
+
+        AMR parity with ``System.run``: each step advances by ``step_cfl(cfl)`` then fires the DUE
+        output policies (per-level AMR writer) and diagnostic measures (composite-reduction path). @p
+        output_dir is the directory the outputs land in (defaults to the current directory when
+        policies are present). ``on_end`` fires on the last step actually taken (CFL-driven dt).
+        Returns the number of steps taken."""
+        policies = getattr(self, "_output_policies", [])
+        measures = getattr(self, "_diagnostic_measures", [])
+        out_dir = output_dir if output_dir is not None else "."
+        baselines = {}
+        steps = 0
+        while self._s.time() < t_end and steps < max_steps:
+            self._s.step_cfl(cfl)
+            steps += 1
+            last_step = steps if (not (self._s.time() < t_end) or steps >= max_steps) else None
+            if policies:
+                self._fire_outputs(policies, steps, out_dir, last_step)
+            if measures:
+                self._fire_diagnostics(measures, steps, last_step, baselines)
+        return steps
+
+    def _fire_outputs(self, policies, step, output_dir, last_step=None):
+        """Fire the DUE AMR output / checkpoint policies at macro-step @p step (per-level writer)."""
+        from pops.runtime._amr_output_driver import fire_amr_output_policies
+        return fire_amr_output_policies(self, policies, step, output_dir, last_step=last_step)
+
+    def _fire_diagnostics(self, measures, step, last_step, baselines):
+        """Fire the DUE declared diagnostic measures at macro-step @p step (composite reductions)."""
+        from pops.runtime._diagnostics_driver import fire_diagnostics
+        return fire_diagnostics(self, measures, step, last_step, baselines)
 
     def profile(self, profile: Any = None) -> Any:
         """Typed AMR / MPI profiling context manager (Spec 5 sec.12.5, criterion 43).

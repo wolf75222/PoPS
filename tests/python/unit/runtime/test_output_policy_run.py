@@ -71,11 +71,17 @@ chk(policy_due(always(), 1) and policy_due(None, 1), "always()/None due every st
 chk(not policy_due(every(2), 0), "no policy fires at step 0")
 chk(_format_token(HDF5()) == "hdf5" and _format_token(None) == "npz",
     "HDF5 -> hdf5, default -> npz")
-try:
-    _format_token(Plotfile())
-    chk(False, "Plotfile should reject")
-except NotImplementedError as e:
-    chk("ADC-511" in str(e), f"Plotfile precise reject names ADC-511: {str(e)[:50]}")
+# ADC-542: Plotfile is no longer refused -- it lowers to the plotfile token (the writer produces a
+# single-level plotfile on a Uniform System). The former ADC-511 refusal is deleted.
+chk(_format_token(Plotfile()) == "plotfile", "Plotfile -> plotfile (no refusal, ADC-542)")
+# ADC-542: on_start / on_end / when land in the shared cadence interpreter.
+from pops.time.schedule import on_start, on_end, when
+chk(policy_due(on_start(), 1) and not policy_due(on_start(), 2), "on_start fires at step 1 only")
+chk(policy_due(on_end(), 5, last_step=5) and not policy_due(on_end(), 4, last_step=5),
+    "on_end fires at the last step only")
+chk(not policy_due(on_end(), 5), "on_end never fires when last_step is unknown (honest silence)")
+chk(policy_due(when(lambda s, step: step == 3), 3) and
+    not policy_due(when(lambda s, step: step == 3), 2), "when(callable) fires when the callable is True")
 
 # --- (1) OutputPolicy(npz) fires at the right cadence with the right contents ----------
 print("== (1) OutputPolicy(npz, every(2)) cadence + contents ==")

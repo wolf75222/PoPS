@@ -244,6 +244,10 @@ class Problem:
     def _outputs(self) -> Any:
         return self._runtime_registry.outputs
 
+    @property
+    def _diagnostics(self):
+        return self._runtime_registry.diagnostics
+
     # --- layout / amr access -------------------------------------------------
     @property
     def layout(self) -> Any:

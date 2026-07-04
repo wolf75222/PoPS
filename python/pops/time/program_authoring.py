@@ -83,10 +83,8 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
             def _(P):
                 pops.lib.time.forward_euler(P, "plasma")
 
-        produces byte-identical IR (same ``_ir_hash``) to calling
-        ``pops.lib.time.forward_euler(P, "plasma")`` inline. Returns the Program so a one-liner
-        ``P = pops.time.Program("p").step(build)`` also reads
-        cleanly. @p fn must be callable; it is invoked with the Program as its single argument."""
+        produces byte-identical IR (same ``_ir_hash``) to calling the macro inline. Returns the
+        Program (one-liner friendly); @p fn is invoked with the Program as its single argument."""
         if not callable(fn):
             raise TypeError("Program.step expects a callable build_fn(P); got %r" % (fn,))
         fn(self)
@@ -94,10 +92,9 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
 
     # --- ghost fill / positivity projection (spec ops 22 / 21) ---
     def fill_boundary(self, x: Any) -> Any:
-        """Fill the ghost cells (halos) of a State/scalar_field @p x in place: the transport BC
-        (periodic by default), the same exchange `laplacian` / `gradient` / `divergence` do internally
-        before differencing (spec op 22). Returns @p x (the SAME value -- a side effect on its ghosts,
-        the valid cells are untouched). Lowered to ``ctx.fill_boundary(x)``."""
+        """Fill the ghost cells of a State/scalar_field @p x in place (spec op 22): the transport
+        BC exchange laplacian/gradient/divergence run internally. Returns @p x (side effect on
+        ghosts; valid cells untouched). Lowered to ``ctx.fill_boundary(x)``."""
         if not _is_field_value(x):
             raise ValueError("fill_boundary: a State/RHS/scalar_field value is required (got %r)"
                              % (x,))
@@ -203,36 +200,34 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
 
     # --- reductions / comparisons / control flow (ADC-404a) ---
     def norm2(self, state: Any) -> Any:
-        """The Euclidean norm ``||u||_2`` of a State (a collective all_reduce). Returns a Scalar value.
-        Lowered as ``sqrt(pops::dot(u, u))`` -- the same collective reduction every rank must run. NOTE:
-        ``pops::dot`` reduces COMPONENT 0 only, so for a multi-component State this is the L2 norm of the
-        first conserved variable, not the full state norm; a full multi-component reduction is a later
-        phase (the convergence loops this enables are single-residual-component for now)."""
+        """The Euclidean norm ``||u||_2`` of a State (collective all_reduce; Scalar). Lowered as
+        ``sqrt(pops::dot(u, u))``. NOTE (holds for every component-0 reduction below): it reduces
+        COMPONENT 0 only and MUST run on every rank; use the ``*_component`` forms for a role."""
         if not (isinstance(state, Value) and state.is_field()):
             raise ValueError("norm2: a State/RHS value is required")
         return self._new("scalar", "reduce", (state,), {"kind": "norm2"}, None, state.block)
 
     def dot(self, a: Any, b: Any) -> Any:
-        """The inner product ``<a, b>`` of two State values (a collective all_reduce). Returns a Scalar.
-        Lowered as ``pops::dot(a, b)`` -- COLLECTIVE, called on every rank (empty ranks included)."""
+        """The inner product ``<a, b>`` of two States (collective, Scalar): ``pops::dot(a, b)``."""
         if not (isinstance(a, Value) and a.is_field() and isinstance(b, Value) and b.is_field()):
             raise ValueError("dot: two State/RHS values are required")
         return self._new("scalar", "reduce", (a, b), {"kind": "dot"}, None, a.block)
 
     def norm_inf(self, state: Any) -> Any:
-        """The infinity norm ``max|u|`` of a State (a collective all_reduce). Returns a Scalar value.
-        Lowered as ``pops::norm_inf(u)``. Like norm2/dot it reduces COMPONENT 0 only (a multi-component
-        reduction is a later phase) and MUST run on every rank (it goes through the collective seam)."""
+        """The infinity norm ``max|u|`` (collective, component 0, Scalar): ``pops::norm_inf(u)``."""
         if not (isinstance(state, Value) and state.is_field()):
             raise ValueError("norm_inf: a State/RHS value is required")
         return self._new("scalar", "reduce", (state,), {"kind": "norm_inf"}, None, state.block)
 
+    def norm1(self, state: Any) -> Any:
+        """The 1-norm ``sum|u|`` (collective, component 0, Scalar): ``pops::reduce_abs_sum(u, 0)``."""
+        if not (isinstance(state, Value) and state.is_field()):
+            raise ValueError("norm1: a State/RHS value is required")
+        return self._new("scalar", "reduce", (state,), {"kind": "abs_sum", "comp": 0}, None,
+                         state.block)
+
     def sum(self, state: Any) -> Any:
-        """The sum ``sum_cells u`` of a State over component 0 (a collective all_reduce). Returns a
-        Scalar value. Lowered as ``pops::reduce_sum(u, 0)`` -- COLLECTIVE, called on every rank (empty
-        ranks included), the same seam pops::dot uses. Like norm2/dot it reduces COMPONENT 0 only (a
-        full multi-component reduction is a later phase). For a specific component use
-        `sum_component`."""
+        """The sum over component 0 (collective, Scalar): ``pops::reduce_sum(u, 0)``; cf sum_component."""
         if not (isinstance(state, Value) and state.is_field()):
             raise ValueError("sum: a State/RHS value is required")
         return self._new("scalar", "reduce", (state,), {"kind": "sum", "comp": 0}, None, state.block)
@@ -262,6 +257,16 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
         if isinstance(comp, bool) or not isinstance(comp, int) or comp < 0:
             raise ValueError("sum_component: comp must be a Python int >= 0 (got %r)" % (comp,))
         return self._new("scalar", "reduce", (state,), {"kind": "sum", "comp": int(comp)}, None,
+                         state.block)
+
+    def abs_sum_component(self, state: Any, comp: Any) -> Any:
+        """The role-selected L1 ``sum_cells |u(.,comp)|`` (collective all_reduce). Lowered as
+        ``pops::reduce_abs_sum(u, comp)``. @p comp must be a Python int >= 0."""
+        if not (isinstance(state, Value) and state.is_field()):
+            raise ValueError("abs_sum_component: a State/RHS value is required")
+        if isinstance(comp, bool) or not isinstance(comp, int) or comp < 0:
+            raise ValueError("abs_sum_component: comp must be a Python int >= 0 (got %r)" % (comp,))
+        return self._new("scalar", "reduce", (state,), {"kind": "abs_sum", "comp": int(comp)}, None,
                          state.block)
 
     def record_scalar(self, name: Any, value: Any) -> Any:

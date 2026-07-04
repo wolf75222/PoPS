@@ -97,5 +97,59 @@ class CheckpointPolicy(Descriptor):
                 "require_bit_identical": self.require_bit_identical,
                 "prefix": self.prefix}
 
+    def capabilities(self):
+        """The checkpoint route's declared capabilities (parity with every other typed route).
+
+        ``amr_compatible`` is True: the AMR checkpoint restarts a hierarchy under ACTIVE regridding
+        (format v3 rebuilds the hierarchy from the manifest), so a restartable checkpoint is honest on
+        an AMR route now (ADC-542). ``device_host_sync`` is True: the checkpoint gathers to the host
+        (rank-0) writer.
+        """
+        from pops.descriptors_report import CapabilitySet
+        return CapabilitySet({"restartable": self.restartable,
+                              "require_bit_identical": self.require_bit_identical,
+                              "cadence_slot": "checkpoint",
+                              "amr_compatible": True,
+                              "device_host_sync": True})
+
+    def requirements(self):
+        """What the checkpoint route needs of the resolved runtime (a restartable / bit-identical route)."""
+        from pops.descriptors_report import RequirementSet
+        req = {}
+        if self.restartable:
+            req["restartable_route"] = True
+        if self.require_bit_identical:
+            req["bit_identical_route"] = True
+        return RequirementSet(req)
+
+    def validate(self, context=None):
+        """Refuse ONLY the physically / correctness-impossible residue (ADC-542 addendum B.8).
+
+        Restartable checkpoints WORK under active regridding (v3 rebuilds the hierarchy), so
+        ``restartable=True`` is never refused for being AMR. The honest residue the gate still refuses:
+
+        (r1) ``require_bit_identical=True`` when the resolved @p context declares a restart that
+             CHANGES the rank count (``restart_ranks`` != the compiled ``ranks``): per-rank partial
+             sums re-associate (IEEE754 non-associativity), so a BIT guarantee across a rank-count
+             change is physically impossible. The restart itself is still CORRECT (values restored
+             exactly); only the bit guarantee is refused. Absent that explicit context, never refused.
+
+        A mismatched-identity restore (r2) is a RESTART-time guard (program-hash / abi_key / grid),
+        not a compile-time policy concern; it is enforced by the v3 reader, not here.
+        """
+        ctx = context or {}
+        if self.require_bit_identical and isinstance(ctx, dict):
+            ranks = ctx.get("ranks")
+            restart_ranks = ctx.get("restart_ranks")
+            if (ranks is not None and restart_ranks is not None and int(ranks) != int(restart_ranks)):
+                raise ValueError(
+                    "CheckpointPolicy(require_bit_identical=True) cannot be honored across a rank-count "
+                    "change (compiled ranks=%d, restart ranks=%d): per-rank partial sums re-associate "
+                    "(IEEE754 non-associativity), so a bit-identical guarantee is physically impossible "
+                    "across a different rank count. The restart is still correct (values restored "
+                    "exactly); declare require_bit_identical=False for a cross-rank restart, or restart "
+                    "on the same rank count." % (int(ranks), int(restart_ranks)))
+        return True
+
 
 __all__ = ["OutputPolicy", "CheckpointPolicy", "AllLevels", "CoarseOnly", "SelectedLevels"]

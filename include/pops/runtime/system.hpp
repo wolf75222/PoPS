@@ -745,6 +745,17 @@ class System {
   /// (ProgramContext::hmin) to express its own dt bound (epic ADC-399 / ADC-417, spec s18). POPS_EXPORT:
   /// resolved by the generated problem.so across the dlopen boundary.
   POPS_EXPORT Real cfl_min_dx() const;
+  /// A collective scalar reduction over a NAMED block's state -- the native seam the Python diagnostics
+  /// driver drives to fire a declared typed measure (Norm / Integral / MinMax) each cadence tick
+  /// (ADC-542). @p kind selects the reduction over the block's U: per-component
+  /// "sum" / "min" / "max" / "abs_sum" (L1) / "sum_sq" (L2 squared, dot(u,u)) / "abs_max" (LInf); the
+  /// full-state variants "sum_all" / "abs_sum_all" / "sum_sq_all" / "abs_max_all" fold over ALL
+  /// components. @p comp is the component for the per-component kinds (ignored by the _all kinds). An
+  /// unknown @p block or @p kind throws (fail loud, never a silent 0). COLLECTIVE, MANDATORY UNDER MPI:
+  /// called on every rank (empty ranks included), like dot. POPS_EXPORT: resolved across the dlopen
+  /// boundary like the other seam accessors.
+  POPS_EXPORT double reduce_component(const std::string& block, const std::string& kind,
+                                      int comp) const;
   /// A fresh scalar field co-distributed with the System mesh: block 0's BoxArray and
   /// DistributionMapping, @p n_comp components, @p n_ghost ghost layers, zero-initialized. Scratch a
   /// compiled time Program allocates for a matrix-free Krylov solve (the residual / search-direction

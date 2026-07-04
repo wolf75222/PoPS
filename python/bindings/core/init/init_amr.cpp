@@ -351,6 +351,18 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       // IR hash of the installed compiled Program (the .so's pops_program_hash), or "" if none. Parity
       // System::installed_program_hash (the checkpoint guard).
       .def("installed_program_hash", &AmrSystem::installed_program_hash)
+      // ADC-414 / ADC-542: scalar Program diagnostics (parity System). program_diagnostic(name) reads
+      // one, program_diagnostics() the whole map; record_program_diagnostic is the sink the diagnostics
+      // driver records a measured scalar into each cadence tick.
+      .def("program_diagnostic", &AmrSystem::program_diagnostic, py::arg("name"))
+      .def("program_diagnostics", &AmrSystem::program_diagnostics)
+      .def("record_program_diagnostic", &AmrSystem::record_program_diagnostic, py::arg("name"),
+           py::arg("value"))
+      // ADC-542: the level-composite collective reduction over a named block the AMR diagnostics
+      // path drives -- volume-weighted sums with covered-cell exclusion, extrema folded over all
+      // levels (a covered coarse cell is the average of its children, provably inside their extrema).
+      .def("composite_reduce", &AmrSystem::composite_reduce, py::arg("block"), py::arg("kind"),
+           py::arg("comp") = 0)
       // ADC-592: runtime freeze lifecycle (parity with System). mark_bound() (called LAST by the
       // Python bind flow) freezes the composition; lifecycle_state() reports assembling / bound /
       // running (running derived from macro_step()).
@@ -483,7 +495,42 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
             s.set_block_level_state(name, k, flat(arr));
           },
-          py::arg("name"), py::arg("k"), py::arg("state"));
+          py::arg("name"), py::arg("k"), py::arg("state"))
+      // ADC-542: owner rank per box of a level (the shared DistributionMapping), for the v3 checkpoint
+      // to reproduce the local-fab iteration order at restart. Empty on the single-block coupler path.
+      .def(
+          "level_owner_ranks", [](AmrSystem& s, int k) { return s.level_owner_ranks(k); },
+          py::arg("k"))
+      // ADC-542: the FULL shared aux of a level (ALL components, flat c*nf*nf+j*nf+i) -- the v3
+      // checkpoint aux payload. _global gathers under np>1 (COLLECTIVE); the setter restores the
+      // valid cells owner-rank. Empty read / throwing write on the single-block coupler path.
+      .def(
+          "level_aux_flat", [](AmrSystem& s, int k) { return s.level_aux_flat(k); }, py::arg("k"))
+      .def(
+          "level_aux_flat_global", [](AmrSystem& s, int k) { return s.level_aux_flat_global(k); },
+          py::arg("k"))
+      .def(
+          "set_level_aux_flat",
+          [](AmrSystem& s, int k,
+             py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
+            s.set_level_aux_flat(k, flat(arr));
+          },
+          py::arg("k"), py::arg("aux"))
+      // ADC-542: impose a mid-run MULTI-BLOCK hierarchy from a v3 checkpoint. @p boxes are the
+      // level-tagged patch signatures (level, ilo, jlo, ihi, jhi); @p owner_ranks is the per-box owner
+      // rank aligned with @p boxes. Routes to AmrRuntime::rebuild_hierarchy (all levels rebuilt).
+      .def(
+          "rebuild_hierarchy",
+          [](AmrSystem& s, const std::vector<std::tuple<int, int, int, int, int>>& boxes,
+             const std::vector<int>& owner_ranks) {
+            std::vector<pops::PatchBox> bx;
+            bx.reserve(boxes.size());
+            for (const auto& b : boxes)
+              bx.push_back(pops::PatchBox{std::get<0>(b), std::get<1>(b), std::get<2>(b),
+                                         std::get<3>(b), std::get<4>(b)});
+            s.rebuild_hierarchy(bx, owner_ranks);
+          },
+          py::arg("boxes"), py::arg("owner_ranks"));
 }
 
 }  // namespace
