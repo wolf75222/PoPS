@@ -7,7 +7,8 @@
 #ifndef POPS_PYTHON_BINDINGS_AMR_AMR_SYSTEM_PARAMS_HPP_
 #define POPS_PYTHON_BINDINGS_AMR_AMR_SYSTEM_PARAMS_HPP_
 
-namespace pops {
+// NO namespace wrapper: the include site in amr_system.cpp is already INSIDE `namespace pops`
+// (re-opening it here would define pops::pops::AmrSystem and fail to compile).
 
 // Register block @p name's SHARED runtime-param vector so set_block_params resolves it by name
 // pre-build; the build closures capture the vector and re-inject it each macro-step (ADC-514).
@@ -33,7 +34,5 @@ void AmrSystem::set_block_params(const std::string& name, const std::vector<doub
                              std::to_string(values.size()));
   pv = values;  // shared with the closures (shared_ptr): effect at the next step
 }
-
-}  // namespace pops
 
 #endif  // POPS_PYTHON_BINDINGS_AMR_AMR_SYSTEM_PARAMS_HPP_
