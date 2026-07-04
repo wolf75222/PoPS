@@ -86,6 +86,12 @@ struct AmrSystemConfig {
   /// Coarse tile size when distribute_coarse=true (BoxArray::from_domain). 0 => n/2
   /// (minimal 2x2 split, least aggressive for the MG). Ignored if distribute_coarse=false.
   int coarse_max_grid = 0;
+  /// ADC-616: Berger-Rigoutsos clustering params of the regrid layout. <= 0 (default) keeps the
+  /// historical ClusterParams {0.7, 1, 32}, bit-identical. min_efficiency in (0,1], sizes >= 1,
+  /// min_box_size <= max_box_size (validated at set_clustering / the facade descriptor).
+  double cluster_min_efficiency = 0.0;
+  int cluster_min_box_size = 0;
+  int cluster_max_box_size = 0;
 };
 
 /// Frozen parameters passed to the deferred build of the compiled path (add_compiled_model). Materialized
@@ -159,6 +165,14 @@ struct AmrBuildParams {
         bz_field;              ///< coarse B_z(x,y) field, n*n row-major (required by the stage)
     double krylov_tol = 0.0;   ///< tolerance of the coarse Krylov solve (<= 0 = default 1e-10)
     int krylov_max_iters = 0;  ///< iteration budget (<= 0 = default 400)
+    // ADC-614: composite-FAC knobs of the MULTI-LEVEL condensed Schur solve (<= 0 = the kFAC* default,
+    // bit-identical). Threaded to AmrCondensedSchurSourceStepper::set_fac_options -> the FAC solver.
+    int fac_max_iters = 0;       ///< FAC outer iterations (<= 0 = default kFACDefaultMaxIters=30)
+    int fac_fine_sweeps = 0;     ///< SOR sweeps per fine solve (<= 0 = default kFACDefaultFineSweeps=400)
+    double fac_tol = 0.0;        ///< composite-residual stop (<= 0 = default kFACDefaultTol=1e-9)
+    double fac_coarse_rel_tol = 0.0;  ///< internal coarse rel_tol (<= 0 = default 1e-12)
+    int fac_coarse_cycles = 0;   ///< internal coarse cycles (<= 0 = default 100)
+    bool fac_verbose = false;    ///< record the FAC per-iteration residual trace
     // Field descriptors ("" = canonical role, bit-identical; otherwise stable role name OR block
     // variable name).
     std::string density, momentum_x, momentum_y, energy;

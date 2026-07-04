@@ -292,6 +292,23 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
                                     : kKrylovDefaultRelTol,
           bp.schur.krylov_max_iters > 0 ? bp.schur.krylov_max_iters
                                         : kSchurKrylovCartesianMaxIters);
+    // ADC-614: composite-FAC knobs of the multi-level condensed Schur solve. Each <= 0 field falls
+    // back to its kFAC* constant, so an unconfigured stage drives the historical composite solve.
+    {
+      CompositeFacOptions fo;
+      if (bp.schur.fac_max_iters > 0)
+        fo.max_iters = bp.schur.fac_max_iters;
+      if (bp.schur.fac_fine_sweeps > 0)
+        fo.fine_sweeps = bp.schur.fac_fine_sweeps;
+      if (bp.schur.fac_tol > 0.0)
+        fo.tol = static_cast<Real>(bp.schur.fac_tol);
+      if (bp.schur.fac_coarse_rel_tol > 0.0)
+        fo.coarse_rel_tol = static_cast<Real>(bp.schur.fac_coarse_rel_tol);
+      if (bp.schur.fac_coarse_cycles > 0)
+        fo.coarse_cycles = bp.schur.fac_coarse_cycles;
+      fo.verbose = bp.schur.fac_verbose;
+      schur->set_fac_options(fo);
+    }
     auto bz_coarse = std::make_shared<MultiFab>(bac, dm, 1, 1);
     amr_write_coarse_bz(*bz_coarse, bp.schur.bz_field, bp.mesh.n);
     auto phi_coarse = std::make_shared<MultiFab>(bac, dm, 1, 1);

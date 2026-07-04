@@ -107,6 +107,13 @@ struct AmrSystem::Impl {
     double schur_theta = 0.5, schur_alpha = 1.0;
     double schur_krylov_tol = 0.0;   // <= 0 = historical default (1e-10)
     int schur_krylov_max_iters = 0;  // <= 0 = historical default (400)
+    // ADC-614: composite-FAC knobs of the multi-level condensed Schur solve (<= 0 = kFAC* default).
+    int schur_fac_max_iters = 0;
+    int schur_fac_fine_sweeps = 0;
+    double schur_fac_tol = 0.0;
+    double schur_fac_coarse_rel_tol = 0.0;
+    int schur_fac_coarse_cycles = 0;
+    bool schur_fac_verbose = false;
     std::string schur_density, schur_momentum_x, schur_momentum_y, schur_energy;  // "" = canonical
     NewtonOptions newton{};  // IMEX source Newton options (wave 3; single-block AND multi-block)
     bool newton_non_default = false;  // true -> non-default options (.so loader REJECTED: flat ABI)
@@ -378,6 +385,12 @@ struct AmrSystem::Impl {
     bp.schur.alpha = b.schur_alpha;
     bp.schur.krylov_tol = b.schur_krylov_tol;
     bp.schur.krylov_max_iters = b.schur_krylov_max_iters;
+    bp.schur.fac_max_iters = b.schur_fac_max_iters;  // ADC-614 composite-FAC knobs
+    bp.schur.fac_fine_sweeps = b.schur_fac_fine_sweeps;
+    bp.schur.fac_tol = b.schur_fac_tol;
+    bp.schur.fac_coarse_rel_tol = b.schur_fac_coarse_rel_tol;
+    bp.schur.fac_coarse_cycles = b.schur_fac_coarse_cycles;
+    bp.schur.fac_verbose = b.schur_fac_verbose;
     bp.schur.density = b.schur_density;
     bp.schur.momentum_x = b.schur_momentum_x;
     bp.schur.momentum_y = b.schur_momentum_y;
@@ -1370,6 +1383,21 @@ void AmrSystem::set_source_stage(const std::string& name, const std::string& kin
     throw std::runtime_error("AmrSystem::set_source_stage : krylov_tol must be in (0, 1)");
   b.schur_krylov_tol = krylov_tol;
   b.schur_krylov_max_iters = krylov_max_iters;
+  // ADC-614: composite-FAC knobs (multi-level Schur). Validate the FORM here (positive when set);
+  // <= 0 keeps the kFAC* default (bit-identical). Values reach the FAC solver via SchurStage at build.
+  if (opts.fac_tol > 0.0 && !(opts.fac_tol < 1.0))
+    throw std::runtime_error("AmrSystem::set_source_stage : fac_tol must be in (0, 1)");
+  if (opts.fac_coarse_rel_tol > 0.0 && !(opts.fac_coarse_rel_tol < 1.0))
+    throw std::runtime_error("AmrSystem::set_source_stage : fac_coarse_rel_tol must be in (0, 1)");
+  if (opts.fac_max_iters < 0 || opts.fac_fine_sweeps < 0 || opts.fac_coarse_cycles < 0)
+    throw std::runtime_error("AmrSystem::set_source_stage : fac_max_iters / fac_fine_sweeps / "
+                             "fac_coarse_cycles must be >= 0");
+  b.schur_fac_max_iters = opts.fac_max_iters;
+  b.schur_fac_fine_sweeps = opts.fac_fine_sweeps;
+  b.schur_fac_tol = opts.fac_tol;
+  b.schur_fac_coarse_rel_tol = opts.fac_coarse_rel_tol;
+  b.schur_fac_coarse_cycles = opts.fac_coarse_cycles;
+  b.schur_fac_verbose = opts.fac_verbose;
   b.schur_density = density;
   b.schur_momentum_x = momentum_x;
   b.schur_momentum_y = momentum_y;
@@ -2122,6 +2150,21 @@ EffectiveOptionsReport AmrSystem::effective_options_report() const {
       stage.momentum_y = b.schur_momentum_y;
       stage.energy = b.schur_energy;
       stage.bz_aux_component = kAuxBaseComps;
+      // ADC-614: effective composite-FAC knobs (default kFAC* unless overridden by set_source_stage).
+      stage.requested_fac_tol = b.schur_fac_tol;
+      stage.requested_fac_max_iters = b.schur_fac_max_iters;
+      stage.effective_fac_max_iters =
+          b.schur_fac_max_iters > 0 ? b.schur_fac_max_iters : kFACDefaultMaxIters;
+      stage.effective_fac_fine_sweeps =
+          b.schur_fac_fine_sweeps > 0 ? b.schur_fac_fine_sweeps : kFACDefaultFineSweeps;
+      stage.effective_fac_tol =
+          b.schur_fac_tol > 0.0 ? b.schur_fac_tol : static_cast<double>(kFACDefaultTol);
+      stage.effective_fac_coarse_rel_tol =
+          b.schur_fac_coarse_rel_tol > 0.0 ? b.schur_fac_coarse_rel_tol
+                                           : static_cast<double>(kFACInitialCoarseRelTol);
+      stage.effective_fac_coarse_cycles =
+          b.schur_fac_coarse_cycles > 0 ? b.schur_fac_coarse_cycles : kFACInitialCoarseMaxCycles;
+      stage.fac_verbose = b.schur_fac_verbose;
       report.source_stages.push_back(std::move(stage));
     }
   }

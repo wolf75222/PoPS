@@ -88,6 +88,20 @@ inline const char* newton_fail_policy_name(int policy) {
   return "invalid";
 }
 
+/// The composite FAC Poisson knobs (ADC-614): the AMR composite elliptic solver's outer iteration
+/// budget, per-fine-patch SOR sweeps, composite-residual tolerance, the internal coarse-level
+/// GeometricMG tolerance/cycles, and the verbose diagnostics flag. Defaults are the kFAC* constants,
+/// so a CompositeFacPoisson driven with a default-constructed options struct reproduces today's
+/// composite solve bit-for-bit.
+struct CompositeFacOptions {
+  int max_iters = kFACDefaultMaxIters;               ///< FAC two-way iterations.
+  int fine_sweeps = kFACDefaultFineSweeps;           ///< SOR sweeps per fine-patch solve.
+  Real tol = kFACDefaultTol;                         ///< composite-residual stop.
+  Real coarse_rel_tol = kFACInitialCoarseRelTol;     ///< internal coarse GeometricMG rel_tol.
+  int coarse_cycles = kFACInitialCoarseMaxCycles;    ///< internal coarse GeometricMG max_cycles.
+  bool verbose = false;                              ///< record the per-iteration residual trace.
+};
+
 struct EffectiveNewtonOptions {
   int max_iters = kNewtonDefaultMaxIters;
   double rel_tol = static_cast<double>(kNewtonDefaultRelTol);
@@ -175,6 +189,17 @@ struct EffectiveSourceStageOptions {
   std::string momentum_y;
   std::string energy;
   int bz_aux_component = -1;
+  // ADC-614: the EFFECTIVE composite-FAC knobs of a MULTI-LEVEL condensed Schur stage (default or
+  // overridden). Defaults are the kFAC* constants; requested_* mirror what set_source_stage received
+  // (0 = "left default"). Present for every AMR source stage (inert on the uniform System stage).
+  double requested_fac_tol = 0.0;
+  int requested_fac_max_iters = 0;
+  int effective_fac_max_iters = kFACDefaultMaxIters;
+  int effective_fac_fine_sweeps = kFACDefaultFineSweeps;
+  double effective_fac_tol = static_cast<double>(kFACDefaultTol);
+  double effective_fac_coarse_rel_tol = static_cast<double>(kFACInitialCoarseRelTol);
+  int effective_fac_coarse_cycles = kFACInitialCoarseMaxCycles;
+  bool fac_verbose = false;
 };
 
 struct EffectiveRefinementOptions {

@@ -316,6 +316,18 @@ inline py::dict effective_source_stage_options_to_dict(const EffectiveSourceStag
   d["momentum_y"] = s.momentum_y;
   d["energy"] = s.energy;
   d["bz_aux_component"] = s.bz_aux_component;
+  // ADC-614: effective composite-FAC knobs of the multi-level condensed Schur solve.
+  d["requested_fac_tol"] = s.requested_fac_tol;
+  d["requested_fac_max_iters"] = s.requested_fac_max_iters;
+  d["effective_fac_max_iters"] = s.effective_fac_max_iters;
+  d["effective_fac_fine_sweeps"] = s.effective_fac_fine_sweeps;
+  d["effective_fac_tol"] = s.effective_fac_tol;
+  d["effective_fac_coarse_rel_tol"] = s.effective_fac_coarse_rel_tol;
+  d["effective_fac_coarse_cycles"] = s.effective_fac_coarse_cycles;
+  d["fac_verbose"] = s.fac_verbose;
+  return d;
+}
+
   return d;
 }
 

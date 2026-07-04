@@ -177,11 +177,24 @@ class CompositeFacPoisson {
   /// ONE-WAY path (coarse solve + fine solve with bilinear C-F ghosts) -- the patch refines locally.
   void set_two_way(bool v) { two_way_ = v; }
 
+  /// ADC-614: install the composite-FAC knobs (outer iterations / fine sweeps / composite tol /
+  /// internal coarse GeometricMG rel_tol+cycles / verbose). Defaults are the kFAC* constants so the
+  /// no-argument solve() below is bit-identical to today. verbose maps onto the diagnostics flag.
+  void set_options(const CompositeFacOptions& o) {
+    options_ = o;
+    verbose_ = o.verbose;
+  }
+  const CompositeFacOptions& options() const { return options_; }
+
+  /// Solves the composite system with the INSTALLED options (ADC-614). The couplers call this
+  /// no-argument form; with default-constructed options it is bit-identical to the historical solve.
+  Real solve() { return solve(options_.max_iters, options_.fine_sweeps, options_.tol); }
+
   /// Solves the composite system. @return the final max composite residual.
   /// @p max_iters FAC iterations (two-way); @p fine_sweeps SOR sweeps per fine solve; @p tol tolerance.
-  Real solve(int max_iters = kFACDefaultMaxIters,
-             int fine_sweeps = kFACDefaultFineSweeps,
-             Real tol = kFACDefaultTol) {
+  Real solve(int max_iters,
+             int fine_sweeps,
+             Real tol) {
     // VARIABLE COEFFICIENT (condensed Schur operator B_z=0): sets eps on the coarse solver and
     // fills the eps ghosts PER LEVEL. eps_c ghosts = zero-gradient (coeff_bc Foextrap, like the
     // Schur builder); eps_f C-F ghosts = bilerp of eps_c (consistency of the coefficient flux across
@@ -200,10 +213,11 @@ class CompositeFacPoisson {
       fill_cf_coarse_to_fine(ayx_c_, ayx_f_);
       mg_.set_cross_terms(axy_c_, ayx_c_);
     }
-    // 0) initial coarse solve (gives a phi_c for the 1st C-F ghost).
+    // 0) initial coarse solve (gives a phi_c for the 1st C-F ghost). ADC-614: the internal coarse
+    // GeometricMG rel_tol / max_cycles come from the installed options (default = kFAC* constants).
     copy0(mg_.rhs(), f_c_);
     mg_.phi().set_val(Real(0));
-    mg_.solve(kFACInitialCoarseRelTol, kFACInitialCoarseMaxCycles);
+    mg_.solve(options_.coarse_rel_tol, options_.coarse_cycles);
     copy0(phi_c_, mg_.phi());
 
     // 1) bilinear C-F ghosts + fine solve (base ONE-WAY).
@@ -221,10 +235,11 @@ class CompositeFacPoisson {
     for (int it = 0; it < max_iters; ++it) {
       if (rnorm < tol)
         break;
-      // coarse correction: Lap e_c = r_c (homogeneous Dirichlet), phi_c += e_c (non covered).
+      // coarse correction: Lap e_c = r_c (homogeneous Dirichlet), phi_c += e_c (non covered). The
+      // correction solve uses the SAME internal coarse tolerance/cycles as the initial solve (ADC-614).
       copy0(mg_.rhs(), res_c_);
       mg_.phi().set_val(Real(0));
-      mg_.solve(Real(1e-12), 100);
+      mg_.solve(options_.coarse_rel_tol, options_.coarse_cycles);
       add_uncovered(phi_c_, mg_.phi());
       // re-ghost + re-solve fine on the corrected phi_c.
       refresh_fine(fine_sweeps);
@@ -537,6 +552,7 @@ class CompositeFacPoisson {
   bool has_cross_ = false;  ///< true: adds the cross terms a_xy/a_yx (full tensor, Schur B_z!=0)
   bool verbose_ = false;
   bool two_way_ = true;
+  CompositeFacOptions options_;  ///< ADC-614: installed FAC knobs; defaults = kFAC* (bit-identical).
   static constexpr Real kPi_ = Real(3.14159265358979323846);
 };
 

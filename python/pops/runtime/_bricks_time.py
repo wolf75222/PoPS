@@ -100,13 +100,36 @@ class CondensedSchur:
                  alpha: Any = PHYSICAL_DEFAULT_ALPHA,
                  density: Any = Role.Density, momentum: Any = (Role.MomentumX, Role.MomentumY),
                  energy: Any = None, magnetic_field: str = "B_z", potential: str = "phi",
-                 krylov_tol: Any = None, krylov_max_iters: Any = None) -> None:
+                 krylov_tol: Any = None, krylov_max_iters: Any = None,
+                 fac_max_iters: Any = None, fac_fine_sweeps: Any = None, fac_tol: Any = None,
+                 fac_coarse_rel_tol: Any = None, fac_coarse_cycles: Any = None,
+                 fac_verbose: bool = False) -> None:
         self.krylov_tol = float(krylov_tol) if krylov_tol is not None else 0.0
         self.krylov_max_iters = int(krylov_max_iters) if krylov_max_iters is not None else 0
         if krylov_tol is not None and not (0.0 < self.krylov_tol < 1.0):
             raise ValueError("CondensedSchur: krylov_tol must be in (0, 1) (got %r)" % (krylov_tol,))
         if krylov_max_iters is not None and self.krylov_max_iters < 1:
             raise ValueError("CondensedSchur: krylov_max_iters >= 1 (got %r)" % (krylov_max_iters,))
+        # ADC-614: composite-FAC knobs of the MULTI-LEVEL condensed Schur solve on AMR (the coarse
+        # uniform stage uses only the Krylov knobs above). None (defaults) = the kFAC* constants,
+        # bit-identical; refused out-of-domain (never silently clamped). Inert on the uniform System.
+        self.fac_max_iters = int(fac_max_iters) if fac_max_iters is not None else 0
+        self.fac_fine_sweeps = int(fac_fine_sweeps) if fac_fine_sweeps is not None else 0
+        self.fac_tol = float(fac_tol) if fac_tol is not None else 0.0
+        self.fac_coarse_rel_tol = float(fac_coarse_rel_tol) if fac_coarse_rel_tol is not None else 0.0
+        self.fac_coarse_cycles = int(fac_coarse_cycles) if fac_coarse_cycles is not None else 0
+        self.fac_verbose = bool(fac_verbose)
+        if fac_max_iters is not None and self.fac_max_iters < 1:
+            raise ValueError("CondensedSchur: fac_max_iters >= 1 (got %r)" % (fac_max_iters,))
+        if fac_fine_sweeps is not None and self.fac_fine_sweeps < 1:
+            raise ValueError("CondensedSchur: fac_fine_sweeps >= 1 (got %r)" % (fac_fine_sweeps,))
+        if fac_tol is not None and not (0.0 < self.fac_tol < 1.0):
+            raise ValueError("CondensedSchur: fac_tol must be in (0, 1) (got %r)" % (fac_tol,))
+        if fac_coarse_rel_tol is not None and not (0.0 < self.fac_coarse_rel_tol < 1.0):
+            raise ValueError(
+                "CondensedSchur: fac_coarse_rel_tol must be in (0, 1) (got %r)" % (fac_coarse_rel_tol,))
+        if fac_coarse_cycles is not None and self.fac_coarse_cycles < 1:
+            raise ValueError("CondensedSchur: fac_coarse_cycles >= 1 (got %r)" % (fac_coarse_cycles,))
         if kind != "electrostatic_lorentz":
             raise ValueError(
                 "CondensedSchur: kind 'electrostatic_lorentz' (only one supported); got %r" % (kind,))

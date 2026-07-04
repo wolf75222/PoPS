@@ -143,7 +143,14 @@ class _AmrSystemEquation(_AmrSystem):
                                      getattr(src, "density_spec", ""),
                                      getattr(src, "momentum_x_spec", ""),
                                      getattr(src, "momentum_y_spec", ""),
-                                     getattr(src, "energy_spec", ""))
+                                     getattr(src, "energy_spec", ""),
+                                     # ADC-614: composite-FAC knobs of the multi-level Schur solve.
+                                     getattr(src, "fac_max_iters", 0),
+                                     getattr(src, "fac_fine_sweeps", 0),
+                                     getattr(src, "fac_tol", 0.0),
+                                     getattr(src, "fac_coarse_rel_tol", 0.0),
+                                     getattr(src, "fac_coarse_cycles", 0),
+                                     getattr(src, "fac_verbose", False))
             self._s.set_time_scheme(time.scheme)  # "lie" (Split) or "strang" (Strang)
             return
 

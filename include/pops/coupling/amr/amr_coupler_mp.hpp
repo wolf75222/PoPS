@@ -484,6 +484,14 @@ class AmrCouplerMP {
   void set_composite_poisson(bool v) { composite_poisson_ = v; }
   bool composite_poisson() const { return composite_poisson_; }
 
+  /// ADC-614: install the composite-FAC knobs applied to fac_ when the composite path builds it
+  /// (compute_aux_composite). Defaults = kFAC* -> bit-identical. Applied to an already-built solver.
+  void set_fac_options(const CompositeFacOptions& o) {
+    fac_options_ = o;
+    if (fac_)
+      fac_->set_options(o);
+  }
+
   void compute_aux() {  // coarse Poisson + grad phi + injection to the fine levels
     auto& L = stack_.L();
     const Box2D& dom = stack_.domain();
@@ -657,6 +665,7 @@ class AmrCouplerMP {
     const Box2D fine_box = L[1].U.box_array()[0];
     if (!fac_built_ || !same_box(fac_fine_box_, fine_box)) {
       fac_ = std::make_shared<CompositeFacPoisson>(geom_, mg_.box_array(), mg_.bc(), fine_box, 2);
+      fac_->set_options(fac_options_);  // ADC-614: apply the installed FAC knobs (default = kFAC*).
       fac_fine_box_ = fine_box;
       fac_built_ = true;
     }
@@ -708,6 +717,7 @@ class AmrCouplerMP {
   bool composite_poisson_ = false;
   bool fac_built_ = false;
   std::shared_ptr<CompositeFacPoisson> fac_;
+  CompositeFacOptions fac_options_;  ///< ADC-614: FAC knobs applied at build (default = kFAC*).
   Box2D fac_fine_box_{};
   // Model-NAMED aux fields (ADC-291): component (>= kAuxNamedBase) -> coarse base-level field
   // (n*n row-major). STATIC user fields re-applied by compute_aux each update (so they persist across
