@@ -139,7 +139,14 @@ PYBIND_LEGACY_NAMES = {
 # fallback/runtime routes.  They sit slightly above the current line counts; adding
 # a duplicate subsystem should require an intentional split or a reviewed budget.
 LARGE_RUNTIME_FILE_BUDGETS = {
-    "python/bindings/system/base/system.cpp": 3200,
+    # ADC-632: system.cpp is now the CORE facade TU only (ctor/dtor, abi_key, step forwards,
+    # mark_bound / lifecycle_state); the bulk moved into the sibling TUs below. Budget lowered
+    # from 3200 to a small ceiling so any regrowth requires an intentional split.
+    "python/bindings/system/base/system.cpp": 350,
+    # ADC-632: the install/composition seam (structural setters + install_program + native_loader
+    # instantiation) is the one sibling TU that legitimately stays over 1000 lines; the rest
+    # (fields / io / profiling / program) sit well under the default. Budgeted with headroom.
+    "python/bindings/system/base/system_install.cpp": 1250,
     # ADC-542: the AMR composite_reduce + rebuild_hierarchy (v3 restart) + level_owner_ranks facade
     # seams (native diagnostics / restartable-under-regridding) grew this by ~100 lines.
     "python/bindings/amr/amr_system.cpp": 2320,

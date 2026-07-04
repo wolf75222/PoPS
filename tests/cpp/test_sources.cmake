@@ -185,6 +185,7 @@ set(POPS_CPP_TEST_SOURCE_test_sync_residence "tests/cpp/unit/mesh/test_sync_resi
 set(POPS_CPP_TEST_SOURCE_test_system_abstraction "tests/cpp/integration/runtime/test_system_abstraction.cpp")
 set(POPS_CPP_TEST_SOURCE_test_system_coupler "tests/cpp/integration/runtime/test_system_coupler.cpp")
 set(POPS_CPP_TEST_SOURCE_test_system_hardening "tests/cpp/integration/runtime/test_system_hardening.cpp")
+set(POPS_CPP_TEST_SOURCE_test_system_registries "tests/cpp/unit/runtime/test_system_registries.cpp")
 set(POPS_CPP_TEST_SOURCE_test_system_two_explicit "tests/cpp/integration/runtime/test_system_two_explicit.cpp")
 set(POPS_CPP_TEST_SOURCE_test_two_species_minimal "tests/cpp/unit/physics/test_two_species_minimal.cpp")
 set(POPS_CPP_TEST_SOURCE_test_user_time_integrator "tests/cpp/unit/physics/test_user_time_integrator.cpp")

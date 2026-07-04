@@ -20,6 +20,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 
 ### Changed
+- ADC-578 Decompose System::Impl into typed runtime registries (runtime params, diagnostics,
+  coupling, geometry/layout) under `include/pops/runtime/system/` and an explicit lifecycle state
+  machine (assembling/bound/running/checkpointed/finalized) that is the single native source the
+  Python freeze gates query; pure refactor, production trajectories bit-identical, MockImpl unchanged.
+- ADC-632 Split the `python/bindings/system/base/system.cpp` implementation monolith by
+  responsibility (install / fields / io / profiling / program) into sibling TUs sharing a private
+  `system_impl.hpp`; pybind registration order unchanged (all `.def` live in `init_system.cpp`);
+  system.cpp file-size budget lowered from 3200.
 - ADC-628 Completed the ADC-550 cleanup: dropped the three remaining byte-identical `to_json`
   overrides (Arguments / MemoryEstimate / CompiledReport now inherit the `Report` base), cleaned
   the last baseline ruff findings, rolled `from __future__ import annotations` plus parameter and

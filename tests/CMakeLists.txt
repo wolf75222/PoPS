@@ -230,7 +230,15 @@ foreach(_seam_row ${POPS_SEAM_COMBINATIONS})
   endif()
 endforeach()
 
+# ADC-632: system.cpp is split by responsibility into sibling TUs sharing the binding-private
+# system_impl.hpp (install / fields / io / profiling / program); the OBJECT lib compiles the same
+# six TUs the _pops module does, so every consumer keeps the full System facade symbol set.
 add_library(pops_runtime_system OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system_install.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system_fields.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system_io.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system_profiling.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system_program.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system_polar.cpp
             ${POPS_SYSTEM_GENERATED_SEAMS})
 # ADC-335: the AMR transport-seam TUs (multi-block build_amr_block_<t> + single-block
@@ -407,6 +415,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_field_context
   test_field_problem_registry
   test_field_registry_uniform_amr
+  test_system_registries
 )
 
 foreach(_test IN LISTS POPS_CPP_STANDARD_TESTS)
