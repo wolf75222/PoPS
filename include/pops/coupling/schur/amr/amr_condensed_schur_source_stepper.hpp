@@ -86,9 +86,18 @@ class AmrCondensedSchurSourceStepper {
                 n_precond_vcycles) {}
 
   /// Tolerance / budget of the COARSE stage Krylov solve (delegated to the uniform stage #126;
-  /// historical defaults 1e-10 / 400). The COMPOSITE multi-level solve (FAC, Phase 3c) keeps its
-  /// own tolerances (Phase 4 follow-up).
+  /// historical defaults 1e-10 / 400). The COMPOSITE multi-level solve (FAC) is configured
+  /// separately by set_fac_options.
   void set_krylov(Real tol, int max_iters) { coarse_.set_krylov(tol, max_iters); }
+
+  /// ADC-614: install the composite-FAC knobs (outer iters / fine sweeps / composite tol / internal
+  /// coarse GeometricMG rel_tol+cycles / verbose) applied to the composite solver when the multi-level
+  /// path builds it (ensure_fac). Defaults are the kFAC* constants -> bit-identical composite solve.
+  void set_fac_options(const CompositeFacOptions& o) {
+    fac_options_ = o;
+    if (fac_)
+      fac_->set_options(o);  // already-built solver picks up the new knobs on the next solve
+  }
 
   /// true if the model carries an Energy role (energy update active in the coarse stage).
   bool has_energy() const { return coarse_.energy_comp() >= 0; }
@@ -276,6 +285,7 @@ class AmrCondensedSchurSourceStepper {
       return;
     fac_ = std::make_unique<CompositeFacPoisson>(coarse_geom_, coarse_ba_, bcPhi_, fine_ba,
                                                  kAmrRefRatio);
+    fac_->set_options(fac_options_);  // ADC-614: apply the installed FAC knobs (default = kFAC*).
     fac_fine_boxes_ = fine_ba.boxes();
   }
 
@@ -340,6 +350,8 @@ class AmrCondensedSchurSourceStepper {
   CondensedSchurSourceStepper coarse_;
   /// Composite elliptic solver (MULTI-LEVEL path), built lazily on the fine patches.
   std::unique_ptr<CompositeFacPoisson> fac_;
+  /// ADC-614: FAC knobs applied to the composite solver at build; defaults = kFAC* (bit-identical).
+  CompositeFacOptions fac_options_;
   /// Fine tiling (boxes + order) of the last built FAC: used to detect a hierarchy change.
   std::vector<Box2D> fac_fine_boxes_;
 };

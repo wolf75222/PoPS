@@ -177,3 +177,60 @@ TEST(CompositeFacPoissonTest, fine_patch_improves_accuracy_over_coarse_only) {
     std::printf("OK test_composite_fac_poisson\n");
   comm_finalize();
 }
+
+// ADC-614: set_options(CompositeFacOptions{}) + no-argument solve() is BIT-IDENTICAL to the explicit
+// solve(kFACDefaultMaxIters, kFACDefaultFineSweeps, kFACDefaultTol) -- the installed-options path
+// defaults to the kFAC* constants. An override changes the composite residual (the knobs are read).
+TEST(CompositeFacPoissonTest, installed_options_default_matches_explicit_solve) {
+  comm_init();
+  const int n = 32, r = 2;
+  Box2D dom = Box2D::from_extents(n, n);
+  Geometry geom_c{dom, 0.0, 1.0, 0.0, 1.0};
+  BoxArray ba_c = BoxArray::from_domain(dom, n);
+  DistributionMapping dm_c(ba_c.size(), n_ranks());
+  BCRec bc;
+  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
+  const int Ic0 = n / 4, Ic1 = 3 * n / 4 - 1;
+  Box2D fine_box{{r * Ic0, r * Ic0}, {r * Ic1 + r - 1, r * Ic1 + r - 1}};
+  Geometry geom_f = geom_c.refine(r);
+
+  auto fill = [&](CompositeFacPoisson& fac) {
+    for (int li = 0; li < fac.rhs_coarse().local_size(); ++li) {
+      Array4 a = fac.rhs_coarse().fab(li).array();
+      const Box2D b = fac.rhs_coarse().box(li);
+      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+        for (int i = b.lo[0]; i <= b.hi[0]; ++i)
+          a(i, j, 0) = f_rhs(geom_c.x_cell(i), geom_c.y_cell(j));
+    }
+    Array4 af = fac.rhs_fine().fab(0).array();
+    const Box2D bf = fac.rhs_fine().box(0);
+    for (int j = bf.lo[1]; j <= bf.hi[1]; ++j)
+      for (int i = bf.lo[0]; i <= bf.hi[0]; ++i)
+        af(i, j, 0) = f_rhs(geom_f.x_cell(i), geom_f.y_cell(j));
+  };
+
+  CompositeFacPoisson explicit_fac(geom_c, ba_c, bc, fine_box, r);
+  fill(explicit_fac);
+  const Real r_explicit =
+      explicit_fac.solve(kFACDefaultMaxIters, kFACDefaultFineSweeps, kFACDefaultTol);
+
+  CompositeFacPoisson installed_fac(geom_c, ba_c, bc, fine_box, r);
+  fill(installed_fac);
+  installed_fac.set_options(CompositeFacOptions{});  // defaults = kFAC*
+  const Real r_installed = installed_fac.solve();     // no-argument overload reads the options
+
+  EXPECT_EQ(r_explicit, r_installed) << "default installed options must match the explicit solve";
+
+  // A tighter composite tolerance + more iterations reaches a strictly smaller residual (knobs read).
+  CompositeFacPoisson tuned_fac(geom_c, ba_c, bc, fine_box, r);
+  fill(tuned_fac);
+  CompositeFacOptions tuned;
+  tuned.max_iters = 60;
+  tuned.tol = Real(1e-12);
+  tuned_fac.set_options(tuned);
+  const Real r_tuned = tuned_fac.solve();
+  EXPECT_TRUE(std::isfinite(r_tuned));
+  EXPECT_LE(r_tuned, r_explicit) << "a tighter tol / more iters cannot worsen the residual";
+
+  comm_finalize();
+}

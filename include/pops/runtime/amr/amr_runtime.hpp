@@ -296,8 +296,7 @@ class AmrRuntime {
     // AmrSystemCoupler::system_aux_comps: a block reading an extra field (B_z, T_e) has the room at
     // each level, a base block ignores the extra components. PR1 does not POPULATE multi-block B_z (no
     // bz_ here), but we size the channel to the widest anyway so that load_aux<aux_comps<Model>> never
-    // reads out of bounds. Without an extra-field block -> kAuxBaseComps (3) -> allocation strictly
-    // identical to the base case.
+    // reads out of bounds. Without an extra-field block -> kAuxBaseComps (3), identical to the base case.
     aux_ncomp_ = kAuxBaseComps;
     for (const auto& b : blocks_)
       if (b.aux_ncomp > aux_ncomp_)
@@ -315,8 +314,8 @@ class AmrRuntime {
         (*b.levels)[k].aux = &aux_[k];
 
     // Tag predicates of the union regrid: one empty slot per block (set_block_tag_predicate fills
-    // them). Empty by default -> no tag -> frozen hierarchy (regrid is not called anyway as long as
-    // set_regrid has not activated regrid_every_ > 0).
+    // them). Empty by default -> no tag -> frozen hierarchy (regrid is not called anyway until
+    // set_regrid activates regrid_every_ > 0).
     block_tag_.resize(blocks_.size());
   }
 
@@ -324,8 +323,7 @@ class AmrRuntime {
   std::size_t n_blocks() const { return blocks_.size(); }
   /// Conservative VariableSet (names + physical roles, Model::conservative_vars()) of block @p b. The
   /// SAME cons_vars that add_coupled_source resolves (block, role) against; exposed read-only so the
-  /// facade can resolve a name/role-selected regrid variable into a component per block (ADC-296).
-  /// @throws if @p b is out of bounds.
+  /// facade resolves a name/role-selected regrid variable into a component (ADC-296). @throws OOB @p b.
   const VariableSet& block_cons_vars(std::size_t b) const {
     if (b >= blocks_.size())
       throw std::runtime_error("AmrRuntime::block_cons_vars : block index out of bounds");
@@ -335,7 +333,7 @@ class AmrRuntime {
   /// Read-only view of the registered coupling operators (ADC-595, parity with System): label plus the
   /// declared conservation / frequency contracts, in registration order, so a Program or a runtime
   /// report enumerates the AMR couplings as typed operators. A raw add_coupled_source registers an
-  /// "unchecked" entry (empty contract); add_coupling_operator records the declared contract.
+  /// "unchecked" (empty-contract) entry; add_coupling_operator records the declared contract.
   const std::vector<CouplingOperatorView>& coupled_operators() const { return coupled_operators_; }
   MultiFab& phi() { return mg_.phi(); }
   // System Poisson right-hand side after the last solve_fields: f = Sum_b elliptic_rhs_b(U_b) on the
@@ -474,14 +472,12 @@ class AmrRuntime {
   /// blocks + phi. @p every == 0 (DEFAULT) -> FROZEN hierarchy, regrid never called -> BIT-IDENTICAL
   /// trajectory to the historical one (the feature is opt-in). @p grow: tag dilation (nesting +
   /// anticipation); @p margin: nesting (clamp the patches to the boundaries). Must be called BEFORE
-  /// the first step.
-  void set_regrid(int every, int grow = 2, int margin = 2) {
-    if (every < 0)
-      throw std::runtime_error("AmrRuntime::set_regrid : regrid_every >= 0");
-    regrid_every_ = every;
-    regrid_grow_ = grow;
-    regrid_margin_ = margin;
-  }
+  /// the first step. Body in amr_restore.hpp.
+  void set_regrid(int every, int grow = 2, int margin = 2);
+
+  /// ADC-616: Berger-Rigoutsos clustering params (min_efficiency in (0,1], sizes > 0, min <= max).
+  /// Defaults reproduce {0.7, 1, 32}; refuses out-of-domain values STRUCTURALLY. Body in amr_restore.hpp.
+  void set_clustering(double min_efficiency, int min_box_size, int max_box_size);
 
   /// Registers the TAG PREDICATE of block @p b (D1: PER-BLOCK union criterion). The predicate is
   /// evaluated on the block U (component 0 = density, or a discrete gradient at the caller's charge) at
@@ -536,8 +532,8 @@ class AmrRuntime {
   /// Registers named @c field's aux output components: @p phi_comp where the solved potential lands, @p
   /// gx_comp / @p gy_comp where its centered gradient lands. @p gx_comp / @p gy_comp < 0 => only phi is
   /// written (the field declared fewer than 3 aux slots). Idempotent (re-register overwrites the
-  /// components and drops the lazily-built solver so the next solve rebuilds it). The dedicated solver is
-  /// built on the first solve, never here.
+  /// components and drops the lazily-built solver so the next solve rebuilds it). The dedicated solver
+  /// is built on the first solve, never here.
   void register_named_field(const std::string& field, int phi_comp, int gx_comp, int gy_comp) {
     NamedField nf;
     nf.phi_comp = phi_comp;
@@ -741,8 +737,7 @@ class AmrRuntime {
   /// PER-CELL CONSERVATION: at a given level, each term writes out(i,j,comp) += dt * S(reg(i,j)) on
   /// the SAME cell (i,j) read by the inputs; an add_pair exchange lays +S on one block and -S on the
   /// other AT THE SAME (i,j), so the sum of the two blocks is unchanged cell by cell. Without a
-  /// registered source (coupled_sources_ empty): total no-op -> bit-identical trajectory to the
-  /// historical one.
+  /// registered source (coupled_sources_ empty): total no-op -> bit-identical trajectory.
   void coupled_source_step(Real dt) {
     if (coupled_sources_.empty())
       return;        // opt-in: no source -> bit-identical path
@@ -792,8 +787,7 @@ class AmrRuntime {
 
   /// sync_down (per block) + system coarse Poisson (CO-LOCATED SUMMED RHS) + coarse aux + fine
   /// injection. Reproduces AmrSystemCoupler::solve_fields identically, but the system RHS is assembled
-  /// by the blocks' add_elliptic_rhs closures (Sum_b elliptic_rhs_b(U_b)) instead of a compile-time
-  /// RhsAssembler.
+  /// by the blocks' add_elliptic_rhs closures (Sum_b elliptic_rhs_b(U_b)) not a compile-time RhsAssembler.
   void solve_fields() {
     ++solve_count_;
     // 1. average_down per block (fine -> coarse) over the whole hierarchy. AMR PROFILING (Spec 5
@@ -848,8 +842,8 @@ class AmrRuntime {
   /// Solves every registered NAMED elliptic field (ADC-428) on the coarse, writes phi (+ centered grad)
   /// into the field's own aux components, ghost-fills them and injects coarse->fine. Mirror of the
   /// default Poisson block above (steps 2-4) but per named field, reusing a DEDICATED GeometricMG. The
-  /// default phi/grad (comps 0..2) are never touched. No-op (early return) without a named field, so the
-  /// default-only path stays bit-identical.
+  /// default phi/grad (comps 0..2) are never touched. No-op without a named field (default-only path
+  /// stays bit-identical).
   void solve_named_fields() {
     if (named_fields_.empty())
       return;
@@ -974,8 +968,8 @@ class AmrRuntime {
     // fine layout. all_reduce_or_inplace is called INSIDE regrid_compute_fine_layout for distributed
     // pk==0: all ranks start from the SAME tag grid -> IDENTICAL fb/dmap per rank (otherwise MPI
     // desync).
-    auto [fb, dmap] =
-        regrid_compute_fine_layout(std::move(grown), pdom, pk, regrid_margin_, replicated_coarse_);
+    auto [fb, dmap] = regrid_compute_fine_layout(std::move(grown), pdom, pk, regrid_margin_,
+                                                 replicated_coarse_, cluster_);  // ADC-616 params
 #ifdef POPS_HAS_MPI
     // MPI COLLECTIVE COUNT (Spec 5 criterion 43): regrid_compute_fine_layout issues ONE
     // all_reduce_or_inplace over the tag grid when the coarse is distributed (multi-rank) -- every rank
@@ -1778,6 +1772,7 @@ class AmrRuntime {
   int regrid_every_ = 0;
   int regrid_grow_ = 2;
   int regrid_margin_ = 2;
+  ClusterParams cluster_{};  ///< ADC-616: Berger-Rigoutsos params; default {0.7,1,32} (bit-identical).
   int aux_ncomp_ = kAuxBaseComps;
   int nlev_ = 0;
   int macro_step_ = 0;

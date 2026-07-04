@@ -293,6 +293,11 @@ def _emit_solve_local_nonlinear_kernel(model: Any, v: Any, guess_var: Any, out_v
     n = len(impl.cons_names)
     tol = repr(float(v.attrs["tol"]))
     max_iter = int(v.attrs["max_iter"])
+    # ADC-617: the FD Jacobian relative step. None on the node -> the historical "1e-7" literal
+    # VERBATIM (so the emitted kernel and its program hash stay byte-identical to before). A configured
+    # fd_eps replaces the literal, and since fd_eps is a hashed node attribute the cache busts.
+    fd_eps = v.attrs.get("fd_eps")
+    fd_eps_lit = "1e-7" if fd_eps is None else repr(float(fd_eps))
     # The aux fields the residual reads: bind them once per cell (constant across the Newton iterates),
     # so the residual lambda captures them by reference. Gather the dependency set over every term Expr.
     term_exprs = []
@@ -341,8 +346,8 @@ def _emit_solve_local_nonlinear_kernel(model: Any, v: Any, guess_var: Any, out_v
     body.append("      pops::Real rp_[%d];" % n)
     body.append("      for (int j_ = 0; j_ < %d; ++j_) {" % n)
     body.append("        for (int k_ = 0; k_ < %d; ++k_) Up_[k_] = U_[k_];" % n)
-    body.append("        const pops::Real eps_ = static_cast<pops::Real>(1e-7) "
-                "* std::fmax(std::fabs(U_[j_]), static_cast<pops::Real>(1));")
+    body.append("        const pops::Real eps_ = static_cast<pops::Real>(%s) "
+                "* std::fmax(std::fabs(U_[j_]), static_cast<pops::Real>(1));" % fd_eps_lit)
     body.append("        Up_[j_] += eps_;")
     body.append("        residual_eval(Up_, rp_);")
     body.append("        for (int i_ = 0; i_ < %d; ++i_) J_[i_][j_] = (rp_[i_] - r_[i_]) / eps_;" % n)

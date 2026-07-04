@@ -4,6 +4,68 @@ from __future__ import annotations
 from typing import Any
 
 
+# ADC-618: the classification of EVERY user-visible native numeric constant. This is the single
+# Python-side source of truth (mirrored by numerical_defaults_report_to_dict in C++). The
+# source-scanning fence test asserts no inline constexpr numeric constant of numerical_defaults.hpp /
+# types.hpp / runtime_params.hpp is missing here. Classes: public_knob (configurable end to end),
+# internal_default (fixed but inspectable), diagnostic_only (a counter / instrumented fact),
+# hard_limit (a fixed cap enforced fail-fast).
+_CONSTANT_CLASSIFICATION: dict = {
+    "kNewtonFailNone": "internal_default",
+    "kNewtonFailWarn": "internal_default",
+    "kNewtonFailThrow": "internal_default",
+    "kNewtonDefaultMaxIters": "public_knob",
+    "kNewtonDefaultRelTol": "public_knob",
+    "kNewtonDefaultAbsTol": "public_knob",
+    "kNewtonDefaultFdEps": "public_knob",
+    "kNewtonDefaultDamping": "public_knob",
+    "kNewtonDefaultFailPolicy": "public_knob",
+    "kNewtonFiniteAbsLimit": "internal_default",
+    "kKrylovDefaultRelTol": "public_knob",
+    "kTensorKrylovDefaultMaxIters": "internal_default",
+    "kSchurKrylovCartesianMaxIters": "public_knob",
+    "kSchurKrylovPolarMaxIters": "public_knob",
+    "kKrylovBreakdownTiny": "internal_default",
+    "kMGDefaultRelTol": "public_knob",
+    "kMGDefaultMaxCycles": "public_knob",
+    "kMGDefaultAbsTol": "public_knob",
+    "kMGDefaultMinCoarse": "public_knob",
+    "kMGDefaultPreSmooth": "public_knob",
+    "kMGDefaultPostSmooth": "public_knob",
+    "kMGDefaultBottomSweeps": "public_knob",
+    "kFACDefaultMaxIters": "public_knob",
+    "kFACDefaultFineSweeps": "public_knob",
+    "kFACDefaultTol": "public_knob",
+    "kFACInitialCoarseRelTol": "public_knob",
+    "kFACInitialCoarseMaxCycles": "public_knob",
+    "kFFTDefaultSpectral": "public_knob",
+    "kFFTZeroMeanGauge": "internal_default",
+    "kFFTDirectDftFallback": "diagnostic_only",
+    "kEbCutFractionFloor": "public_knob",
+    "kWenoEpsilon": "internal_default",
+    "kEbFaceOpenEps": "public_knob",
+    "kEbKappaMin": "public_knob",
+    "kAmrDefaultMaxLevels": "internal_default",
+    "kAmrRefinementDisabledThreshold": "internal_default",
+    "kAmrPhiRefinementDisabledThreshold": "internal_default",
+    "kAdaptiveNoEvolvingBlockSentinel": "diagnostic_only",
+    "kPhysicalDefaultB0": "public_knob",
+    "kPhysicalDefaultGamma": "public_knob",
+    "kPhysicalDefaultFluidStateCs2": "public_knob",
+    "kPhysicalDefaultNativeIsothermalCs2": "internal_default",
+    "kPhysicalDefaultVacuumFloor": "public_knob",
+    "kPhysicalDefaultQOverM": "public_knob",
+    "kPhysicalDefaultChargeQ": "public_knob",
+    "kPhysicalDefaultAlpha": "public_knob",
+    "kPhysicalDefaultBackgroundN0": "public_knob",
+    "kPhysicalDefaultGravitySign": "public_knob",
+    "kPhysicalDefaultFourPiG": "public_knob",
+    "kPhysicalDefaultGravityRho0": "public_knob",
+    "kCflSpeedFloor": "internal_default",
+    "kMaxRuntimeParams": "hard_limit",
+}
+
+
 def _static_report() -> dict:
     return {
         "schema_version": 1,
@@ -45,7 +107,7 @@ def _static_report() -> dict:
             "zero_mean_gauge": True,
             "direct_dft_fallback": True,
         },
-        "eb": {"cut_fraction_floor": 1e-3},
+        "eb": {"cut_fraction_floor": 1e-3, "face_open_eps": 1e-6, "kappa_min": 1e-2},
         "weno": {"epsilon": 1e-40},
         "performance": {
             "cfl_speed_floor": 1e-30,
@@ -57,6 +119,12 @@ def _static_report() -> dict:
             "refinement_disabled_threshold": 1e30,
             "phi_refinement_disabled_threshold": 0.0,
         },
+        "runtime": {"max_runtime_params": 32},
+        "diagnostics": {"fft_direct_dft_fallback_count": 0},
+        # ADC-618: the classification fence (mirror of numerical_defaults_report_to_dict). The
+        # source-scanning architecture test asserts every user-visible inline constexpr numeric
+        # constant of numerical_defaults.hpp / types.hpp / runtime_params.hpp appears here.
+        "classification": _CONSTANT_CLASSIFICATION,
         "physical": {
             "preset": "legacy_native_brick_defaults",
             "B0": 1.0,

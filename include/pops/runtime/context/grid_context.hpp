@@ -46,6 +46,13 @@ struct GridContext {
   const MultiFab* domain_mask = nullptr;  ///< 0/1 domain mask (Impl::domain_mask_); NOT owned
   const detail::DiscDomain* eb_domain =
       nullptr;  ///< level-set domain descriptor (Impl::eb_domain_); NOT owned
+  // ADC-615: cut-cell / EB thresholds (kappa_min, face_open_eps, cut_theta_min), by value so this
+  // header stays light. Defaults are the historical constants (kEbKappaMin / kEbFaceOpenEps /
+  // kEbCutFractionFloor), so an unconfigured context builds the bit-identical EB advance. Set from
+  // Impl::eb_thresholds_ at grid_ctx() time; read when building the EB transport advance.
+  Real eb_kappa_min = Real(1e-2);
+  Real eb_face_open_eps = Real(1e-6);
+  Real eb_cut_theta_min = Real(1e-3);
 };
 
 /// Compiled block closures, frozen at add time.

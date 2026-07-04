@@ -345,8 +345,11 @@ struct BlockRhsEvalEb {
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
   void operator()(MultiFab& U, MultiFab& R) const {
     fill_ghosts(U, ctx->dom, ctx->bc);
+    // ADC-615: the cut-cell thresholds flow from the GridContext (resolved by set_disc_domain);
+    // defaults = kEb* so an unconfigured EB run is bit-identical, and cut_theta_min matches the wall.
     assemble_rhs_eb<Limiter, Flux>(model, U, *ctx->aux, disc_level_set(*eb_domain), ctx->geom, R,
-                                   recon_prim, kEbKappaMin, pos_floor);
+                                   recon_prim, ctx->eb_kappa_min, pos_floor, ctx->eb_face_open_eps,
+                                   ctx->eb_cut_theta_min);
   }
 };
 

@@ -54,9 +54,52 @@ class Staircase(_TransportMask):
 
 
 class CutCell(_TransportMask):
-    """Cut-cell masking: conservative masked transport on cut cells (mode='cutcell')."""
+    """Cut-cell masking: conservative masked transport on cut cells (mode='cutcell').
+
+    ADC-615 exposes the cut-cell numeric thresholds, previously hardcoded native constants:
+
+    * ``kappa_min`` -- small-cell volume-fraction floor (default 1e-2): bounds the 1/kappa
+      amplification so an arbitrarily cut cell keeps a finite, stable explicit step;
+    * ``face_open_eps`` -- aperture below which a face is treated as CLOSED (default 1e-6);
+    * ``cut_theta_min`` -- the cut-fraction clamp (default 1e-3) SHARED with the elliptic
+      Shortley-Weller wall, so the finite-volume aperture stays bit-consistent with the wall.
+
+    ``None`` for any keyword keeps the native default (bit-identical). Out-of-domain values are
+    refused STRUCTURALLY (never silently clamped)."""
 
     mode_token = "cutcell"
+
+    def __init__(self, kappa_min: Any = None, face_open_eps: Any = None,
+                 cut_theta_min: Any = None) -> None:
+        self.kappa_min = self._check(kappa_min, "kappa_min", unit_interval=True)
+        self.face_open_eps = self._check(face_open_eps, "face_open_eps", unit_interval=False)
+        self.cut_theta_min = self._check(cut_theta_min, "cut_theta_min", unit_interval=True)
+
+    @staticmethod
+    def _check(value: Any, name: str, unit_interval: bool) -> float:
+        """Validate a threshold: None -> 0.0 (native default); else positive, and in (0, 1] when
+        ``unit_interval``. Rejects out-of-domain values (a degenerate clamp is a structural error)."""
+        if value is None:
+            return 0.0
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError("CutCell(%s=) must be a number or None; got %r" % (name, value))
+        v = float(value)
+        if v <= 0.0:
+            raise ValueError("CutCell(%s=) must be > 0 (or None for the default); got %r"
+                             % (name, value))
+        if unit_interval and v > 1.0:
+            raise ValueError("CutCell(%s=) must be in (0, 1]; got %r" % (name, value))
+        return v
+
+    def options(self) -> dict:
+        opt = {"mode": self.mode_token}
+        opt.update(self.thresholds())
+        return opt
+
+    def thresholds(self) -> dict:
+        """The resolved native cut-cell thresholds (0.0 = keep the native default). ADC-615."""
+        return {"kappa_min": self.kappa_min, "face_open_eps": self.face_open_eps,
+                "cut_theta_min": self.cut_theta_min}
 
     def requirements(self) -> Any:
         return RequirementSet({"embedded_boundary_support": True})
@@ -96,4 +139,26 @@ def lower_disc_mode(mode: Any) -> Any:
     return token
 
 
-__all__ = ["NoMask", "Staircase", "CutCell", "DISC_MODE_TOKENS", "lower_disc_mode"]
+def disc_mode_thresholds(mode: Any) -> dict:
+    """The resolved cut-cell numeric thresholds carried by a disc-transport ``mode`` (ADC-615).
+
+    A typed :class:`CutCell` returns its ``kappa_min`` / ``face_open_eps`` / ``cut_theta_min`` (0.0 =
+    keep the native default). Any other mask, a legacy string, or a non-mask returns ``{}`` (the
+    native ``set_disc_domain`` then keeps every kEb* default, bit-identical).
+
+    Args:
+        mode: A ``pops.mesh.masks`` descriptor or a legacy disc-mode string.
+
+    Returns:
+        A dict with ``kappa_min`` / ``face_open_eps`` / ``cut_theta_min``, or ``{}``.
+    """
+    thresholds = getattr(mode, "thresholds", None)
+    if callable(thresholds):
+        resolved = thresholds()
+        if isinstance(resolved, dict):
+            return resolved
+    return {}
+
+
+__all__ = ["NoMask", "Staircase", "CutCell", "DISC_MODE_TOKENS", "lower_disc_mode",
+           "disc_mode_thresholds"]

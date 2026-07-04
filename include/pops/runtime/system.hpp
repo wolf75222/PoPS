@@ -295,10 +295,23 @@ class System {
   ///                residual). Default 0: purely relative criterion, historical behavior unchanged.
   ///                Set > 0 (problem scale), it makes solve_fields exit without cycling OUT OF
   ///                STEP on an already-converged state. No effect on the FFT solver (direct).
+  /// @param rel_tol RELATIVE residual stop of the GeometricMG V-cycle (residual <= max(rel_tol*r0,
+  ///                abs_tol)). Default kMGDefaultRelTol (1e-8): the historical V-cycle criterion.
+  /// @param max_cycles V-cycle cap. Default kMGDefaultMaxCycles (50).
+  /// @param min_coarse Stop coarsening below this per-axis cell count. Default kMGDefaultMinCoarse (2).
+  /// @param pre_smooth Pre-smoothing Gauss-Seidel sweeps (nu1). Default kMGDefaultPreSmooth (2).
+  /// @param post_smooth Post-smoothing Gauss-Seidel sweeps (nu2). Default kMGDefaultPostSmooth (2).
+  /// @param bottom_sweeps Coarsest-grid Gauss-Seidel sweeps (nbottom). Default kMGDefaultBottomSweeps (50).
+  ///                The GeometricMG knobs (ADC-613) default to the kMG* constants, so a call that
+  ///                omits them builds and drives the historical V-cycle bit-for-bit; they are inert
+  ///                for the FFT solver (direct, no iterative tolerance).
   void set_poisson(const std::string& rhs = "charge_density",
                    const std::string& solver = "geometric_mg", const std::string& bc = "auto",
                    const std::string& wall = "none", double wall_radius = 0.0, double epsilon = 1.0,
-                   double abs_tol = 0.0);
+                   double abs_tol = 0.0, double rel_tol = static_cast<double>(kMGDefaultRelTol),
+                   int max_cycles = kMGDefaultMaxCycles, int min_coarse = kMGDefaultMinCoarse,
+                   int pre_smooth = kMGDefaultPreSmooth, int post_smooth = kMGDefaultPostSmooth,
+                   int bottom_sweeps = kMGDefaultBottomSweeps);
 
   /// Configured field (Poisson) solver token, e.g. "geometric_mg" | "fft" | "fft_spectral"
   /// (the @p solver of the last set_poisson; default "geometric_mg"). Read by install_program for the
@@ -324,7 +337,14 @@ class System {
   /// cartesian block raises an EXPLICIT error at the step (never a silent full transport). Unknown mode
   /// -> error. R > 0 required; cartesian only (polar already bounds the ring by its radial
   /// walls -> explicit error).
-  void set_disc_domain(double cx, double cy, double R, const std::string& mode = "none");
+  ///
+  /// ADC-615: @p kappa_min (small-cell volume-fraction floor), @p face_open_eps (closed-face aperture
+  /// threshold) and @p cut_theta_min (cut-fraction clamp shared with the elliptic wall) tune the
+  /// cut-cell scheme. Each <= 0 keeps the kEb* default (bit-identical). cut_theta_min flows to BOTH
+  /// the EB transport and the elliptic Shortley-Weller wall so the aperture geometry stays consistent.
+  void set_disc_domain(double cx, double cy, double R, const std::string& mode = "none",
+                       double kappa_min = 0.0, double face_open_eps = 0.0,
+                       double cut_theta_min = 0.0);
 
   /// Sets ONLY the disc transport mode (without (re)defining the disc): "none" | "staircase" |
   /// "cutcell". Useful to toggle the mode after set_disc_domain, or to reset it to "none"

@@ -102,12 +102,14 @@ class GeometricMG {
               int min_coarse = kMGDefaultMinCoarse, int nu1 = kMGDefaultPreSmooth,
               int nu2 = kMGDefaultPostSmooth, int nbottom = kMGDefaultBottomSweeps,
               bool cut_cell = false,
-              std::function<Real(Real, Real)> levelset = {})
+              std::function<Real(Real, Real)> levelset = {},
+              Real cut_theta_min = kEbCutFractionFloor)
       : bc_(bc),
         active_(std::move(active)),
         nu1_(nu1),
         nu2_(nu2),
         nbottom_(nbottom),
+        cut_theta_min_(cut_theta_min),  // ADC-615: cut-fraction clamp shared with the EB transport
         replicated_(replicated),
         cut_cell_(cut_cell),
         levelset_(std::move(levelset)) {
@@ -198,7 +200,7 @@ class GeometricMG {
                 continue;
               }
               const detail::CutFraction cf =
-                  detail::cut_fraction(ls, g.x_cell(i), g.y_cell(j), dx, dy);
+                  detail::cut_fraction(ls, g.x_cell(i), g.y_cell(j), dx, dy, cut_theta_min_);
               const detail::ShortleyWellerWeights w = detail::shortley_weller(cf);
               c(i, j, 0) = w.w_xm;    // w_xm on p(i-1)
               c(i, j, 1) = w.w_xp;    // w_xp on p(i+1)
@@ -706,6 +708,7 @@ class GeometricMG {
   BCRec bc_;
   std::function<bool(Real, Real)> active_;
   int nu1_, nu2_, nbottom_;
+  Real cut_theta_min_ = kEbCutFractionFloor;  ///< ADC-615: cut-fraction clamp (default 1e-3).
   bool replicated_ = false;
   bool cut_cell_ = false;
   bool has_eps_ = false;

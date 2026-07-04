@@ -171,6 +171,7 @@ struct EbFaceFluxXKernel {
   bool recon_prim;
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
   int pos_comp = 0;          ///< component of the Density role (resolved by the host caller)
+  Real face_open_eps = kEbFaceOpenEps;  ///< ADC-615: closed-face aperture threshold (default 1e-6).
   POPS_HD void operator()(int i, int j) const {
     const Real xL = geom.x_cell(i - 1), xR = geom.x_cell(i), yc = geom.y_cell(j);
     const Real lL = ls(xL, yc), lR = ls(xR, yc);
@@ -185,7 +186,7 @@ struct EbFaceFluxXKernel {
     } else {
       alpha = Real(0);  // both inactive: face outside the active domain
     }
-    if (alpha < kEbFaceOpenEps) {  // closed face (immersed wall): zero normal flux
+    if (alpha < face_open_eps) {  // closed face (immersed wall): zero normal flux
       for (int c = 0; c < Model::n_vars; ++c)
         fx(i, j, c) = Real(0);
       return;
@@ -216,6 +217,7 @@ struct EbFaceFluxYKernel {
   bool recon_prim;
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
   int pos_comp = 0;          ///< component of the Density role (resolved by the host caller)
+  Real face_open_eps = kEbFaceOpenEps;  ///< ADC-615: closed-face aperture threshold (default 1e-6).
   POPS_HD void operator()(int i, int j) const {
     const Real xc = geom.x_cell(i), yL = geom.y_cell(j - 1), yR = geom.y_cell(j);
     const Real lL = ls(xc, yL), lR = ls(xc, yR);
@@ -230,7 +232,7 @@ struct EbFaceFluxYKernel {
     } else {
       alpha = Real(0);
     }
-    if (alpha < kEbFaceOpenEps) {
+    if (alpha < face_open_eps) {
       for (int c = 0; c < Model::n_vars; ++c)
         fy(i, j, c) = Real(0);
       return;
@@ -261,6 +263,7 @@ struct EbAssembleRhsKernel {
   Geometry geom;
   LevelSet ls;
   Real kappa_min;
+  Real cut_theta_min = kEbCutFractionFloor;  ///< ADC-615: cut-fraction clamp (default 1e-3).
   POPS_HD void operator()(int i, int j) const {
     const Real xc = geom.x_cell(i), yc = geom.y_cell(j);
     if (!eb_cell_active(ls, xc, yc)) {  // outside the disc: zero residual, not advanced (cf. T2)
@@ -269,8 +272,9 @@ struct EbAssembleRhsKernel {
       return;
     }
     // Volume fraction kappa derived EXACTLY from the same cut_fraction as the elliptic wall: the
-    // cut geometry is the single source of truth (face apertures AND volume). kappa in (0, 1].
-    const CutFraction cf = cut_fraction(ls, xc, yc, dx, dy);
+    // cut geometry is the single source of truth (face apertures AND volume). kappa in (0, 1]. The
+    // cut_theta_min flows from the same CutCell descriptor as the elliptic wall (bit consistency).
+    const CutFraction cf = cut_fraction(ls, xc, yc, dx, dy, cut_theta_min);
     // SMALL-CELL CLAMP: bounds 1/kappa to 1/kappa_min -> finite residual, stable fixed step. Acts ONLY on
     // the denominator (volume); the fluxes (numerator) are unchanged -> GLOBAL conservation preserved.
     const Real kappa_eff = cf.kappa > kappa_min ? cf.kappa : kappa_min;
@@ -308,6 +312,11 @@ struct EbAssembleRhsKernel {
 /// @tparam NumericalFlux  flux policy (RusanovFlux by default).
 /// @param  ls             POPS_HD callable level set (e.g. detail::DiscDomain): ls < 0 inside.
 /// @param  kappa_min      volume fraction floor (small-cell clamp), default kEbKappaMin.
+/// @param  face_open_eps  aperture below which a face is CLOSED (immersed wall), default
+///                        kEbFaceOpenEps (ADC-615). @param cut_theta_min cut-fraction clamp shared
+///                        with the elliptic wall, default kEbCutFractionFloor (ADC-615). The three
+///                        thresholds flow from the SAME typed CutCell descriptor, so the FV aperture
+///                        stays bit-consistent with the elliptic Shortley-Weller wall.
 ///
 /// IMPLEMENTATION in TWO PASSES (structure REUSED from the polar operator): pass 1 computes the
 /// FACE fluxes weighted by alpha_f into temporary MultiFabs; pass 2 differences and divides by
@@ -323,7 +332,9 @@ struct EbAssembleRhsKernel {
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model, class LevelSet>
 void assemble_rhs_eb(const Model& model, const MultiFab& U, const MultiFab& aux, const LevelSet& ls,
                      const Geometry& geom, MultiFab& R, bool recon_prim = false,
-                     Real kappa_min = detail::kEbKappaMin, Real pos_floor = Real(0)) {
+                     Real kappa_min = detail::kEbKappaMin, Real pos_floor = Real(0),
+                     Real face_open_eps = detail::kEbFaceOpenEps,
+                     Real cut_theta_min = kEbCutFractionFloor) {
   // STATE-GHOST WIDTH: exactly Limiter::n_ghost, like the Cartesian operator. The EB face kernels
   // (EbFaceFluxXKernel / EbFaceFluxYKernel) reuse reconstruct_pp<> VERBATIM at the SAME i-1/i
   // offsets over the SAME face boxes (xface_box/yface_box, up to hi+1) as compute_face_fluxes ->
@@ -356,10 +367,12 @@ void assemble_rhs_eb(const Model& model, const MultiFab& U, const MultiFab& aux,
     const Box2D v = R.box(li);
     for_each_cell(xface_box(v),
                   detail::EbFaceFluxXKernel<Limiter, NumericalFlux, Model, LevelSet>{
-                      model, u, ax, fx, dx, geom, ls, lim, nflux, recon_prim, pos_floor, pos_comp});
+                      model, u, ax, fx, dx, geom, ls, lim, nflux, recon_prim, pos_floor, pos_comp,
+                      face_open_eps});
     for_each_cell(yface_box(v),
                   detail::EbFaceFluxYKernel<Limiter, NumericalFlux, Model, LevelSet>{
-                      model, u, ax, fy, dy, geom, ls, lim, nflux, recon_prim, pos_floor, pos_comp});
+                      model, u, ax, fy, dy, geom, ls, lim, nflux, recon_prim, pos_floor, pos_comp,
+                      face_open_eps});
   }
   // PASS 2: EB divergence / kappa_eff + source; inactive cell -> residual 0.
   for (int li = 0; li < U.local_size(); ++li) {
@@ -369,8 +382,8 @@ void assemble_rhs_eb(const Model& model, const MultiFab& U, const MultiFab& aux,
     const ConstArray4 fy = Fy.fab(li).const_array();
     Array4 r = R.fab(li).array();
     const Box2D v = R.box(li);
-    for_each_cell(v, detail::EbAssembleRhsKernel<Model, LevelSet>{model, u, ax, fx, fy, r, dx, dy,
-                                                                  geom, ls, kappa_min});
+    for_each_cell(v, detail::EbAssembleRhsKernel<Model, LevelSet>{
+                         model, u, ax, fx, fy, r, dx, dy, geom, ls, kappa_min, cut_theta_min});
   }
 }
 

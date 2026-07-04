@@ -171,8 +171,9 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
           "set_source_stage",
           [](AmrSystem& s, const std::string& name, const std::string& kind, double theta,
              double alpha, double krylov_tol, int krylov_max_iters, const std::string& density,
-             const std::string& momentum_x, const std::string& momentum_y,
-             const std::string& energy) {
+             const std::string& momentum_x, const std::string& momentum_y, const std::string& energy,
+             int fac_max_iters, int fac_fine_sweeps, double fac_tol, double fac_coarse_rel_tol,
+             int fac_coarse_cycles, bool fac_verbose) {
             SourceStageOptions opts;
             opts.krylov_tol = krylov_tol;
             opts.krylov_max_iters = krylov_max_iters;
@@ -180,13 +181,23 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
             opts.momentum_x = momentum_x;
             opts.momentum_y = momentum_y;
             opts.energy = energy;
+            opts.fac_max_iters = fac_max_iters;  // ADC-614 composite-FAC knobs
+            opts.fac_fine_sweeps = fac_fine_sweeps;
+            opts.fac_tol = fac_tol;
+            opts.fac_coarse_rel_tol = fac_coarse_rel_tol;
+            opts.fac_coarse_cycles = fac_coarse_cycles;
+            opts.fac_verbose = fac_verbose;
             s.set_source_stage(name, kind, theta, alpha, opts);
           },
           py::arg("name"), py::arg("kind"), py::arg("theta"), py::arg("alpha"),
           // Carried settings (wave 3, System parity): Krylov tolerances of the coarse solve
-          // (<= 0 = defaults 1e-10/400) + field descriptors ("" = canonical role).
+          // (<= 0 = defaults 1e-10/400) + field descriptors ("" = canonical role) + composite-FAC
+          // knobs of the multi-level Schur solve (ADC-614; <= 0 = the kFAC* defaults).
           py::arg("krylov_tol") = 0.0, py::arg("krylov_max_iters") = 0, py::arg("density") = "",
-          py::arg("momentum_x") = "", py::arg("momentum_y") = "", py::arg("energy") = "")
+          py::arg("momentum_x") = "", py::arg("momentum_y") = "", py::arg("energy") = "",
+          py::arg("fac_max_iters") = 0, py::arg("fac_fine_sweeps") = 0, py::arg("fac_tol") = 0.0,
+          py::arg("fac_coarse_rel_tol") = 0.0, py::arg("fac_coarse_cycles") = 0,
+          py::arg("fac_verbose") = false)
       .def("set_time_scheme", &AmrSystem::set_time_scheme, py::arg("scheme"))
       .def(
           "set_density",
@@ -558,7 +569,11 @@ void init_amr(py::module_& m) {
       .def_readwrite("regrid_every", &AmrSystemConfig::regrid_every)
       .def_readwrite("periodic", &AmrSystemConfig::periodic)
       .def_readwrite("distribute_coarse", &AmrSystemConfig::distribute_coarse)
-      .def_readwrite("coarse_max_grid", &AmrSystemConfig::coarse_max_grid);
+      .def_readwrite("coarse_max_grid", &AmrSystemConfig::coarse_max_grid)
+      // ADC-616: Berger-Rigoutsos clustering params (<= 0 = the historical {0.7, 1, 32} default).
+      .def_readwrite("cluster_min_efficiency", &AmrSystemConfig::cluster_min_efficiency)
+      .def_readwrite("cluster_min_box_size", &AmrSystemConfig::cluster_min_box_size)
+      .def_readwrite("cluster_max_box_size", &AmrSystemConfig::cluster_max_box_size);
 
   // AmrSystem: generic single-species composition on AMR.
   py::class_<AmrSystem> cls(m, "AmrSystem");

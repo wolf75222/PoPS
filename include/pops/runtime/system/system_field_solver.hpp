@@ -14,6 +14,7 @@
 #include <pops/runtime/builders/block/block_builder_polar.hpp>  // derive_aux_polar (polar aux in local basis)
 #include <pops/runtime/context/wall_predicate.hpp>       // detail::wall_predicate
 #include <pops/runtime/system/field_problem_registry.hpp>  // FieldProblemRegistry (ADC-596 descriptor)
+#include <pops/runtime/system/system_poisson_options.hpp>  // GeometricMgOptions (ADC-613 V-cycle knobs)
 
 #include <cstdlib>  // getenv
 #include <functional>
@@ -139,6 +140,13 @@ class SystemFieldSolver {
   // it makes the off-step solve_fields exit WITHOUT cycling on an already converged state (diagnostics, oracles,
   // restart). Inert for the FFT solver (direct, without iterative tolerance).
   Real p_abs_tol_ = 0;
+  // GeometricMG V-cycle knobs (ADC-613): rel_tol / max_cycles / min_coarse / nu1 / nu2 / nbottom,
+  // resolved from the pops.solvers.elliptic.GeometricMG descriptor by set_poisson. Defaults are the
+  // kMG* constants, so an unconfigured System builds and solves the historical V-cycle bit-for-bit
+  // (rel_tol 1e-8, max_cycles 50, min_coarse 2, nu 2/2, nbottom 50). p_abs_tol_ above is kept as the
+  // pre-613 absolute-floor field and mirrored into p_mg_opts_.abs_tol at set_poisson time (single
+  // source: the resolved options struct feeds both the ctor and the solve call).
+  GeometricMgOptions p_mg_opts_;
   bool has_eps_field_ = false;  // VARIABLE permittivity eps(x) provided (carried by the operator)
   std::vector<double> p_eps_field_;  // field eps(x), n*n row-major (if has_eps_field_)
   bool has_eps_xy_field_ =
@@ -417,10 +425,14 @@ class SystemFieldSolver {
                      spectral);
       }
     } else if (p_solver == "geometric_mg") {
-      ell_.emplace(std::in_place_type<GeometricMG>, owner_->geom, owner_->ba, pbc,
-                   std::move(active));
+      // ADC-613: build the V-cycle with the resolved GeometricMG knobs (min_coarse / nu1 / nu2 /
+      // nbottom from the Python descriptor) instead of the ctor defaults. replicated=false: System
+      // distributes ONE box round-robin (the replicated hierarchy is the AMR coupler's contract).
+      ell_.emplace(std::in_place_type<GeometricMG>, owner_->geom, owner_->ba, pbc, std::move(active),
+                   /*replicated=*/false, p_mg_opts_.min_coarse, p_mg_opts_.nu1, p_mg_opts_.nu2,
+                   p_mg_opts_.nbottom);
       std::get<GeometricMG>(*ell_).set_abs_tol(
-          p_abs_tol_);  // absolute floor of the V-cycle (0 = relative only)
+          p_mg_opts_.abs_tol);  // absolute floor of the V-cycle (0 = relative only)
       if (has_eps_field_)
         apply_epsilon_field();  // operator div(eps grad phi) with variable eps(x)
       if (has_eps_xy_field_)
@@ -536,9 +548,17 @@ class SystemFieldSolver {
     std::visit(
         [this](auto& e) {
           using T = std::decay_t<decltype(e)>;
-          trace_mark(std::is_same_v<T, GeometricMG> ? "ell_solve: GeometricMG::solve() start"
-                                                     : "ell_solve: FFT solver::solve() start");
-          e.solve();
+          if constexpr (std::is_same_v<T, GeometricMG>) {
+            // ADC-613: drive the V-cycle with the resolved rel_tol / max_cycles / abs_tol from the
+            // Python descriptor instead of the no-argument solve() default (1e-8 / 50). The defaults
+            // of p_mg_opts_ ARE those constants, so an unconfigured System is bit-identical.
+            trace_mark("ell_solve: GeometricMG::solve() start");
+            e.solve(p_mg_opts_.rel_tol, p_mg_opts_.max_cycles, p_mg_opts_.abs_tol);
+          } else {
+            // Direct FFT solver: no iterative tolerance, keep the concept-level no-argument solve().
+            trace_mark("ell_solve: FFT solver::solve() start");
+            e.solve();
+          }
           trace_mark("ell_solve: solve() return");
         },
         *ell_);
@@ -925,9 +945,12 @@ class SystemFieldSolver {
         nf.ell.emplace(std::in_place_type<PoissonFFTSolver>, owner_->geom, owner_->ba, pbc, active,
                        spectral);
     } else if (p_solver == "geometric_mg") {
+      // ADC-613: a named elliptic field reuses the SAME resolved V-cycle knobs as the default
+      // Poisson (its own per-field solver tuning is a future extension); bit-identical by default.
       nf.ell.emplace(std::in_place_type<GeometricMG>, owner_->geom, owner_->ba, pbc,
-                     std::move(active));
-      std::get<GeometricMG>(*nf.ell).set_abs_tol(p_abs_tol_);
+                     std::move(active), /*replicated=*/false, p_mg_opts_.min_coarse, p_mg_opts_.nu1,
+                     p_mg_opts_.nu2, p_mg_opts_.nbottom);
+      std::get<GeometricMG>(*nf.ell).set_abs_tol(p_mg_opts_.abs_tol);
     } else {
       throw std::runtime_error("System: named elliptic field solver '" + p_solver +
                                "' unsupported (geometric_mg|fft|fft_spectral)");
@@ -1000,7 +1023,17 @@ class SystemFieldSolver {
             r(i, j, 0) *= inv;
       }
     }
-    std::visit([](auto& e) { e.solve(); }, *nf.ell);
+    // ADC-613: same resolved rel_tol / max_cycles / abs_tol as the default Poisson for GeometricMG;
+    // FFT keeps the concept-level no-argument solve(). Bit-identical under the default knobs.
+    std::visit(
+        [this](auto& e) {
+          using T = std::decay_t<decltype(e)>;
+          if constexpr (std::is_same_v<T, GeometricMG>)
+            e.solve(p_mg_opts_.rel_tol, p_mg_opts_.max_cycles, p_mg_opts_.abs_tol);
+          else
+            e.solve();
+        },
+        *nf.ell);
     device_fence();  // CRITICAL: the V-cycle must finish before phi is read (same invariant as ell_)
     MultiFab& phi_mf = std::visit([](auto& e) -> MultiFab& { return e.phi(); }, *nf.ell);
     const Real dx = owner_->geom.dx(), dy = owner_->geom.dy();

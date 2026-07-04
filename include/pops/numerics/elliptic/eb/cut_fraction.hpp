@@ -29,14 +29,20 @@ namespace detail {
 ///   - INTERIOR neighbor (ln < 0): no cut, the face is full -> distance = h;
 ///   - the level-set changes sign (ln >= 0): linear fraction theta = lc / (lc - ln) (linear
 ///     crossing between the center lc < 0 and the neighbor ln >= 0), distance = theta * h;
-///   - anti division-by-zero guard: theta is clamped to [1e-3, 1] (theta -> 0 would make the weight diverge).
+///   - anti division-by-zero guard: theta is clamped to [theta_min, 1] (theta -> 0 would make the
+///     weight diverge). @p theta_min defaults to kEbCutFractionFloor (1e-3) -> bit-identical.
 /// lc is assumed < 0 (active cell); the clamp bounds are the original ones.
-POPS_HD inline Real cut_distance(Real lc, Real ln, Real h) {
+///
+/// ADC-615: @p theta_min is a PARAMETER (not the hardcoded constant) so the typed pops.numerics
+/// CutCell(cut_theta_min=...) reaches this shared primitive; the default keeps the historical clamp
+/// and BOTH consumers (the elliptic Shortley-Weller wall and the EB transport) pass the SAME value,
+/// preserving the Cartesian-ring-edge bit-consistency lock.
+POPS_HD inline Real cut_distance(Real lc, Real ln, Real h, Real theta_min = kEbCutFractionFloor) {
   if (ln < Real(0))
     return h;                // interior neighbor: no cut (full face)
   Real th = lc / (lc - ln);  // ls changes sign: linear cut fraction
-  if (th < kEbCutFractionFloor)
-    th = kEbCutFractionFloor;  // anti division-by-zero guard (theta -> 0)
+  if (th < theta_min)
+    th = theta_min;  // anti division-by-zero guard (theta -> 0)
   if (th > Real(1))
     th = Real(1);
   return th * h;
@@ -74,12 +80,13 @@ struct CutFraction {
 /// boundary (all apertures = 1) kappa = 1; near the boundary kappa < 1. kappa does NOT alter the
 /// elliptic (which only uses axm/axp/aym/ayp); it is provided for the upcoming EB transport.
 template <class LevelSet>
-POPS_HD inline CutFraction cut_fraction(const LevelSet& ls, Real xc, Real yc, Real dx, Real dy) {
+POPS_HD inline CutFraction cut_fraction(const LevelSet& ls, Real xc, Real yc, Real dx, Real dy,
+                                        Real theta_min = kEbCutFractionFloor) {
   const Real lc = ls(xc, yc);
-  const Real axm = cut_distance(lc, ls(xc - dx, yc), dx);
-  const Real axp = cut_distance(lc, ls(xc + dx, yc), dx);
-  const Real aym = cut_distance(lc, ls(xc, yc - dy), dy);
-  const Real ayp = cut_distance(lc, ls(xc, yc + dy), dy);
+  const Real axm = cut_distance(lc, ls(xc - dx, yc), dx, theta_min);
+  const Real axp = cut_distance(lc, ls(xc + dx, yc), dx, theta_min);
+  const Real aym = cut_distance(lc, ls(xc, yc - dy), dy, theta_min);
+  const Real ayp = cut_distance(lc, ls(xc, yc + dy), dy, theta_min);
   const Real alpha_xm = axm / dx;
   const Real alpha_xp = axp / dx;
   const Real alpha_ym = aym / dy;

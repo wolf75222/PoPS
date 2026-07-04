@@ -84,3 +84,30 @@ TEST(test_cluster, l_shape_fully_covered_within_domain) {
   for (const auto& b : boxes)
     EXPECT_TRUE(dom.contains(b)) << "L_in_domain";
 }
+
+// ADC-616: the full ClusterParams set the pops.mesh.amr.PatchClustering descriptor forwards is
+// honored -- default {0.7, 1, 32} clusters a solid block into one box, and a lower min_efficiency
+// still covers every tag while a smaller max_box_size chops as above. Pins the params end to end.
+TEST(test_cluster, custom_params_are_honored) {
+  TagBox tb(Box2D::from_extents(16, 16));
+  // A SPARSE tag pattern: a lower min_efficiency accepts a looser box, a higher one splits more.
+  tag_block(tb, Box2D{{2, 2}, {5, 5}});
+  tag_block(tb, Box2D{{10, 10}, {13, 13}});
+
+  ClusterParams loose;
+  loose.min_efficiency = 0.3;
+  auto loose_boxes = berger_rigoutsos(tb, loose);
+  EXPECT_TRUE(covers_all_tags(tb, loose_boxes)) << "loose_cover";
+
+  ClusterParams tight;
+  tight.min_efficiency = 0.95;
+  auto tight_boxes = berger_rigoutsos(tb, tight);
+  EXPECT_TRUE(covers_all_tags(tb, tight_boxes)) << "tight_cover";
+  // A stricter efficiency never accepts FEWER boxes than a loose one (it splits to hit the target).
+  EXPECT_GE(tight_boxes.size(), loose_boxes.size()) << "tight_splits_at_least_as_much";
+
+  // Default {0.7, 1, 32}: a single solid block is one box (bit-identical historical behavior).
+  TagBox solid(Box2D::from_extents(16, 16));
+  tag_block(solid, Box2D::from_extents(16, 16));
+  EXPECT_EQ(berger_rigoutsos(solid, ClusterParams{}).size(), 1u) << "default_one_box";
+}

@@ -5,6 +5,11 @@ identity / jacobi / block-jacobi have none yet (the polar solver has its own Pol
 enum), so they are catalogued as PLANNED descriptors. :func:`User` surfaces a loaded external
 preconditioner brick. This is the ONE public home of the catalog formerly parked under
 ``pops.lib.solvers.preconditioners`` (that re-export shim is removed; no second public path).
+
+ADC-502 RATIFIES ``pops.solvers.preconditioners`` as that single home: a preconditioner configures
+a solver, so it lives with the solver descriptors (not under ``pops.linalg``); no move, no shim. The
+invariant is pinned by ``tests/python/architecture/test_spec5_public_api.py`` (``pops.linalg`` has
+NO ``preconditioners`` submodule).
 """
 from __future__ import annotations
 

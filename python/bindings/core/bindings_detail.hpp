@@ -15,6 +15,8 @@
 #include <pops/diagnostics/fallback_diagnostics.hpp>
 #include <pops/parallel/comm.hpp>  // pops::my_rank / n_ranks: rank-0 guard of the multi-rank IO facade
 #include <pops/runtime/dynamic/abi_key.hpp>  // pops::abi_key: ABI key exposed to the DSL ("production" path)
+#include <pops/runtime/config/runtime_params.hpp>  // kMaxRuntimeParams (ADC-618 hard_limit)
+#include <pops/numerics/elliptic/poisson/poisson_fft.hpp>  // DFT-fallback counter (ADC-618 diagnostic)
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/program/profiler.hpp>
 #include <pops/runtime/system.hpp>
@@ -143,6 +145,8 @@ inline py::dict numerical_defaults_report_to_dict() {
 
   py::dict eb;
   eb["cut_fraction_floor"] = static_cast<double>(kEbCutFractionFloor);
+  eb["face_open_eps"] = static_cast<double>(kEbFaceOpenEps);  // ADC-615/618
+  eb["kappa_min"] = static_cast<double>(kEbKappaMin);
 
   py::dict weno;
   weno["epsilon"] = static_cast<double>(kWenoEpsilon);
@@ -178,6 +182,79 @@ inline py::dict numerical_defaults_report_to_dict() {
   physical["cs2_note"] =
       "FluidState defaults to 0.5 while the raw native IsothermalFlux brick defaults to 1.0.";
 
+  // ADC-618: hard limits + diagnostics. kMaxRuntimeParams is a fixed-size device carrier bound
+  // (native_loader fails fast above it); the DFT-fallback counter records each time the FFT Poisson
+  // falls back to the O(n^2) direct DFT on a non-power-of-two grid.
+  py::dict runtime;
+  runtime["max_runtime_params"] = kMaxRuntimeParams;
+
+  py::dict diagnostics;
+  diagnostics["fft_direct_dft_fallback_count"] =
+      static_cast<int>(poisson_fft_direct_dft_fallback_count());
+
+  // ADC-618: the CLASSIFICATION fence. EVERY user-visible inline constexpr numeric constant of
+  // numerical_defaults.hpp / types.hpp / runtime_params.hpp appears here with an explicit class:
+  //   public_knob     -- configurable end to end (a typed descriptor / setter reaches the native use);
+  //   internal_default -- a fixed default not (yet) user-configurable, but inspectable;
+  //   diagnostic_only  -- a counter / instrumented fact, not a tuning knob;
+  //   hard_limit       -- a fixed cap enforced fail-fast (changing it needs a header rebuild).
+  // The source-scanning architecture test (tests/python/architecture/test_numeric_constant_fence.py)
+  // asserts no constant is missing from this map -> a new user-visible constant cannot ship unclassified.
+  py::dict classification;
+  auto klass = [&classification](const char* name, const char* cls) { classification[name] = cls; };
+  klass("kNewtonFailNone", "internal_default");
+  klass("kNewtonFailWarn", "internal_default");
+  klass("kNewtonFailThrow", "internal_default");
+  klass("kNewtonDefaultMaxIters", "public_knob");
+  klass("kNewtonDefaultRelTol", "public_knob");
+  klass("kNewtonDefaultAbsTol", "public_knob");
+  klass("kNewtonDefaultFdEps", "public_knob");
+  klass("kNewtonDefaultDamping", "public_knob");
+  klass("kNewtonDefaultFailPolicy", "public_knob");
+  klass("kNewtonFiniteAbsLimit", "internal_default");
+  klass("kKrylovDefaultRelTol", "public_knob");
+  klass("kTensorKrylovDefaultMaxIters", "internal_default");
+  klass("kSchurKrylovCartesianMaxIters", "public_knob");
+  klass("kSchurKrylovPolarMaxIters", "public_knob");
+  klass("kKrylovBreakdownTiny", "internal_default");
+  klass("kMGDefaultRelTol", "public_knob");
+  klass("kMGDefaultMaxCycles", "public_knob");
+  klass("kMGDefaultAbsTol", "public_knob");
+  klass("kMGDefaultMinCoarse", "public_knob");
+  klass("kMGDefaultPreSmooth", "public_knob");
+  klass("kMGDefaultPostSmooth", "public_knob");
+  klass("kMGDefaultBottomSweeps", "public_knob");
+  klass("kFACDefaultMaxIters", "public_knob");
+  klass("kFACDefaultFineSweeps", "public_knob");
+  klass("kFACDefaultTol", "public_knob");
+  klass("kFACInitialCoarseRelTol", "public_knob");
+  klass("kFACInitialCoarseMaxCycles", "public_knob");
+  klass("kFFTDefaultSpectral", "public_knob");
+  klass("kFFTZeroMeanGauge", "internal_default");
+  klass("kFFTDirectDftFallback", "diagnostic_only");
+  klass("kEbCutFractionFloor", "public_knob");
+  klass("kWenoEpsilon", "internal_default");
+  klass("kEbFaceOpenEps", "public_knob");
+  klass("kEbKappaMin", "public_knob");
+  klass("kAmrDefaultMaxLevels", "internal_default");
+  klass("kAmrRefinementDisabledThreshold", "internal_default");
+  klass("kAmrPhiRefinementDisabledThreshold", "internal_default");
+  klass("kAdaptiveNoEvolvingBlockSentinel", "diagnostic_only");
+  klass("kPhysicalDefaultB0", "public_knob");
+  klass("kPhysicalDefaultGamma", "public_knob");
+  klass("kPhysicalDefaultFluidStateCs2", "public_knob");
+  klass("kPhysicalDefaultNativeIsothermalCs2", "internal_default");
+  klass("kPhysicalDefaultVacuumFloor", "public_knob");
+  klass("kPhysicalDefaultQOverM", "public_knob");
+  klass("kPhysicalDefaultChargeQ", "public_knob");
+  klass("kPhysicalDefaultAlpha", "public_knob");
+  klass("kPhysicalDefaultBackgroundN0", "public_knob");
+  klass("kPhysicalDefaultGravitySign", "public_knob");
+  klass("kPhysicalDefaultFourPiG", "public_knob");
+  klass("kPhysicalDefaultGravityRho0", "public_knob");
+  klass("kCflSpeedFloor", "internal_default");
+  klass("kMaxRuntimeParams", "hard_limit");
+
   py::dict out;
   out["schema_version"] = 1;
   out["source"] = "pops.runtime.numerical_defaults";
@@ -191,6 +268,9 @@ inline py::dict numerical_defaults_report_to_dict() {
   out["performance"] = performance;
   out["amr"] = amr;
   out["physical"] = physical;
+  out["runtime"] = runtime;
+  out["diagnostics"] = diagnostics;
+  out["classification"] = classification;
   return out;
 }
 
@@ -285,7 +365,15 @@ inline py::dict effective_poisson_options_to_dict(const EffectivePoissonOptions&
   d["wall"] = p.wall;
   d["wall_radius"] = p.wall_radius;
   d["epsilon"] = p.epsilon;
+  d["rel_tol"] = p.rel_tol;  // ADC-613: effective GeometricMG V-cycle knobs
   d["abs_tol"] = p.abs_tol;
+  d["max_cycles"] = p.max_cycles;
+  d["min_coarse"] = p.min_coarse;
+  d["pre_smooth"] = p.pre_smooth;
+  d["post_smooth"] = p.post_smooth;
+  d["bottom_sweeps"] = p.bottom_sweeps;
+  d["smoother"] = p.smoother;
+  d["coarse"] = p.coarse;
   d["has_epsilon_field"] = p.has_epsilon_field;
   d["has_anisotropic_epsilon"] = p.has_anisotropic_epsilon;
   d["has_reaction_field"] = p.has_reaction_field;
@@ -308,6 +396,25 @@ inline py::dict effective_source_stage_options_to_dict(const EffectiveSourceStag
   d["momentum_y"] = s.momentum_y;
   d["energy"] = s.energy;
   d["bz_aux_component"] = s.bz_aux_component;
+  // ADC-614: effective composite-FAC knobs of the multi-level condensed Schur solve.
+  d["requested_fac_tol"] = s.requested_fac_tol;
+  d["requested_fac_max_iters"] = s.requested_fac_max_iters;
+  d["effective_fac_max_iters"] = s.effective_fac_max_iters;
+  d["effective_fac_fine_sweeps"] = s.effective_fac_fine_sweeps;
+  d["effective_fac_tol"] = s.effective_fac_tol;
+  d["effective_fac_coarse_rel_tol"] = s.effective_fac_coarse_rel_tol;
+  d["effective_fac_coarse_cycles"] = s.effective_fac_coarse_cycles;
+  d["fac_verbose"] = s.fac_verbose;
+  return d;
+}
+
+inline py::dict effective_eb_options_to_dict(const EffectiveEbOptions& e) {
+  py::dict d;
+  d["enabled"] = e.enabled;
+  d["geometry_mode"] = e.geometry_mode;
+  d["kappa_min"] = e.kappa_min;
+  d["face_open_eps"] = e.face_open_eps;
+  d["cut_theta_min"] = e.cut_theta_min;
   return d;
 }
 
@@ -320,6 +427,10 @@ inline py::dict effective_refinement_options_to_dict(const EffectiveRefinementOp
   d["role"] = r.role;
   d["phi_grad_threshold"] = r.phi_grad_threshold;
   d["phi_refinement_enabled"] = r.phi_refinement_enabled;
+  // ADC-616: effective Berger-Rigoutsos clustering params.
+  d["cluster_min_efficiency"] = r.cluster_min_efficiency;
+  d["cluster_min_box_size"] = r.cluster_min_box_size;
+  d["cluster_max_box_size"] = r.cluster_max_box_size;
   return d;
 }
 
@@ -340,6 +451,7 @@ inline py::dict effective_options_report_to_dict(const EffectiveOptionsReport& r
   d["blocks"] = blocks;
   d["poisson"] = effective_poisson_options_to_dict(report.poisson);
   d["source_stages"] = source_stages;
+  d["eb"] = effective_eb_options_to_dict(report.eb);  // ADC-615
   d["time"] = time;
   if (report.has_amr)
     d["amr"] = effective_refinement_options_to_dict(report.amr_refinement);

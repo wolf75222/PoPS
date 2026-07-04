@@ -53,6 +53,14 @@ struct SourceStageOptions {
   std::string momentum_y = "";
   std::string energy = "";
   int bz_aux_component = -1;
+  // ADC-614: composite-FAC knobs of the MULTI-LEVEL AMR condensed Schur solve. <= 0 (default) = the
+  // kFAC* stepper constants, bit-identical. Ignored on the uniform System stage (no composite solve).
+  int fac_max_iters = 0;
+  int fac_fine_sweeps = 0;
+  double fac_tol = 0.0;
+  double fac_coarse_rel_tol = 0.0;
+  int fac_coarse_cycles = 0;
+  bool fac_verbose = false;
 };
 
 /// @brief BYTECODE description of a generic inter-species COUPLED SOURCE (cf.

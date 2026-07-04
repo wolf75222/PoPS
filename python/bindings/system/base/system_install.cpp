@@ -481,13 +481,26 @@ void System::add_native_block(const std::string& name, const std::string& so_pat
 }
 
 void System::set_poisson(const std::string& rhs, const std::string& solver, const std::string& bc,
-                         const std::string& wall, double wall_radius, double epsilon,
-                         double abs_tol) {
+                         const std::string& wall, double wall_radius, double epsilon, double abs_tol,
+                         double rel_tol, int max_cycles, int min_coarse, int pre_smooth,
+                         int post_smooth, int bottom_sweeps) {
   require_assembling(p_->lifecycle_, "set_poisson");  // frozen once pops.bind completes (ADC-592)
   if (epsilon == 0.0)
     throw std::runtime_error("System::set_poisson : epsilon != 0 required");
   if (abs_tol < 0.0)
     throw std::runtime_error("System::set_poisson : abs_tol >= 0 required");
+  // ADC-613: the GeometricMG V-cycle knobs. Refuse out-of-domain values STRUCTURALLY here (the
+  // Python descriptor already refuses, but the native seam is a public API in its own right and
+  // must never silently accept a degenerate cycle). Defaults are the kMG* constants -> historical.
+  if (rel_tol <= 0.0)
+    throw std::runtime_error("System::set_poisson : rel_tol > 0 required");
+  if (max_cycles < 1)
+    throw std::runtime_error("System::set_poisson : max_cycles >= 1 required");
+  if (min_coarse < 1)
+    throw std::runtime_error("System::set_poisson : min_coarse >= 1 required");
+  if (pre_smooth < 0 || post_smooth < 0 || bottom_sweeps < 0)
+    throw std::runtime_error("System::set_poisson : pre_smooth/post_smooth/bottom_sweeps >= 0 "
+                             "required");
   p_->fields_.p_rhs = rhs;
   p_->fields_.p_solver = solver;
   p_->fields_.p_bc = bc;
@@ -496,6 +509,15 @@ void System::set_poisson(const std::string& rhs, const std::string& solver, cons
   p_->fields_.p_eps_ = static_cast<Real>(epsilon);
   p_->fields_.p_abs_tol_ =
       static_cast<Real>(abs_tol);  // absolute floor of the V-cycle (0 = relative only)
+  // Resolve the V-cycle knobs into the options POD the field solver forwards to GeometricMG (ctor
+  // args + solve(rel, cyc, abs)). abs_tol feeds both p_abs_tol_ (the pre-613 field) and the POD.
+  p_->fields_.p_mg_opts_.rel_tol = static_cast<Real>(rel_tol);
+  p_->fields_.p_mg_opts_.abs_tol = static_cast<Real>(abs_tol);
+  p_->fields_.p_mg_opts_.max_cycles = max_cycles;
+  p_->fields_.p_mg_opts_.min_coarse = min_coarse;
+  p_->fields_.p_mg_opts_.nu1 = pre_smooth;
+  p_->fields_.p_mg_opts_.nu2 = post_smooth;
+  p_->fields_.p_mg_opts_.nbottom = bottom_sweeps;
   p_->fields_.ell_.reset();
 }
 
@@ -514,9 +536,17 @@ GeometryMode parse_geometry_mode(const std::string& mode, const char* err_contex
 }
 }  // namespace
 
-void System::set_disc_domain(double cx, double cy, double R, const std::string& mode) {
+void System::set_disc_domain(double cx, double cy, double R, const std::string& mode,
+                             double kappa_min, double face_open_eps, double cut_theta_min) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "set_disc_domain");  // frozen once pops.bind completes (ADC-592)
+  // ADC-615: resolve the cut-cell thresholds (each <= 0 keeps the kEb* default). Refuse out-of-domain
+  // values STRUCTURALLY -- a degenerate clamp is a structural error, never a silent fallback.
+  if (kappa_min < 0.0 || face_open_eps < 0.0 || cut_theta_min < 0.0)
+    throw std::runtime_error("System::set_disc_domain : kappa_min / face_open_eps / cut_theta_min "
+                             ">= 0 required (0 = keep the default)");
+  if (kappa_min > 1.0 || cut_theta_min > 1.0)
+    throw std::runtime_error("System::set_disc_domain : kappa_min / cut_theta_min must be in (0, 1]");
   // CARTESIAN only: polar already bounds the ring by its radial walls (r_min / r_max,
   // zero radial flux) -> a Cartesian disc mask makes no sense on the (r, theta) grid.
   if (P->polar_)
@@ -537,6 +567,14 @@ void System::set_disc_domain(double cx, double cy, double R, const std::string& 
         "or use mode='none')");
   P->eb_domain_ = detail::DiscDomain{cx, cy, R};
   P->eb_set_ = true;
+  // ADC-615: store the resolved thresholds (0 -> keep the kEb* default). Consumed by the EB transport
+  // (assemble_rhs_eb) and the elliptic Shortley-Weller wall (cut_theta_min), single source of truth.
+  if (kappa_min > 0.0)
+    P->eb_thresholds_.kappa_min = static_cast<Real>(kappa_min);
+  if (face_open_eps > 0.0)
+    P->eb_thresholds_.face_open_eps = static_cast<Real>(face_open_eps);
+  if (cut_theta_min > 0.0)
+    P->eb_thresholds_.cut_theta_min = static_cast<Real>(cut_theta_min);
   // Materializes the 0/1 cell-centered mask (1 ghost, so the mask-aware transport reads the
   // i-1/i+1/j-1/j+1 neighbors up to the edge). Same layout as the blocks (ba/dm). Cell active when
   // its CENTER is inside the disc (level set < 0, SAME convention as the conducting wall).

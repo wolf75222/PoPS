@@ -23,6 +23,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 
 ### Changed
+- ADC-618 Classify remaining internal numeric constants (WENO eps, CFL floor, FFT DFT
+  fallback, runtime-param cap) and fence new user-visible constants behind the effective
+  options report.
+- ADC-502 Ratify pops.solvers.preconditioners as the single preconditioner home (no move,
+  no shim); pinned by an architecture test.
 - ADC-578 Decompose System::Impl into typed runtime registries (runtime params, diagnostics,
   coupling, geometry/layout) under `include/pops/runtime/system/` and an explicit lifecycle state
   machine (assembling/bound/running/checkpointed/finalized) that is the single native source the
@@ -49,6 +54,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   unregistered `test_coupling_operator_contract` into the standard C++ test list.
 
 ### Added
+- ADC-613 Propagate GeometricMG Python options (rel_tol, max_cycles, min_coarse,
+  pre/post/bottom sweeps) end to end to the native V-cycle; defaults reproduce the
+  historical 1e-8 / 50-cycle trajectory bit-for-bit; unsupported smoother/coarse types
+  refuse loud.
+- ADC-614 Expose FAC Poisson AMR options (max_iters, fine_sweeps, tol, coarse rel_tol,
+  coarse cycles, verbosity) from Python; defaults bit-identical.
+- ADC-615 Add typed CutCell(kappa_min, face_open_eps, cut_theta_min) EB/cut-cell thresholds;
+  defaults bit-identical.
+- ADC-616 Expose Berger-Rigoutsos clustering params (min_efficiency, min_box_size,
+  max_box_size) with domain validation; defaults bit-identical.
+- ADC-617 Parametrize codegen finite-difference epsilons (fd_eps) for solve_local_nonlinear
+  and wave_speeds_from_jacobian; participates in the compile cache key; defaults unchanged.
 - ADC-514 Native AMR runtime params: per-block RuntimeParams carrier plus AmrSystem.set_block_params, append-only AmrBuildParams/AmrCompiledHooks ABI and pops_* metadata export, so pops.bind(compiled=None, params={...}) changes a native AMR block result without recompiling the .so; default (no params) trajectories stay bit-identical.
 - ADC-515 Native `estimate_memory` / `arguments` introspection on the AMR-compiled artifact: the
   `CompiledModel` handle `pops.compile(layout=AMR(...))` returns now exposes the same bind-input and
