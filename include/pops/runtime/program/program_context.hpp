@@ -184,6 +184,15 @@ class ProgramContext {
   /// System::Impl -- the SAME channel geom() / aux() expose, bundled.
   GridContext grid_context() const { return sys_->grid_context(); }
 
+  /// The MultiFab a condensed-Schur assembly kernel should WRITE its per-level coefficient / RHS field
+  /// into (ADC-633). On the uniform System the answer is always the passed field itself -- an IDENTITY
+  /// hook, so the templated free functions (condensed_schur_operator.hpp) write straight into the
+  /// level-0-bound scratch the codegen allocated, byte-for-byte as before. The @p role tag (a Schur
+  /// field id) is ignored here; it exists so the AMR ProgramContext can, on a refined hierarchy,
+  /// redirect the write to a per-level composite buffer instead. Kept trivial + inline so the uniform
+  /// .so is unchanged.
+  MultiFab& schur_target(MultiFab& field, int /*role*/) const { return field; }
+
   /// A fresh scalar field co-distributed with the System mesh (block 0's box array / distribution),
   /// @p n_comp components, @p n_ghost ghost layers, zero-initialized. Forwards to
   /// System::alloc_scalar_field. The scratch fields (residual, search direction, solution) a

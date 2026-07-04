@@ -28,10 +28,15 @@
 /// includes ``coupling/schur/**`` / ``geometric_mg.hpp`` / ``lorentz_eliminator.hpp``. The codegen
 /// emits calls to these functions ONLY when the Program's IR carries a Schur op.
 ///
-/// Each function takes the generic ``ProgramContext`` by const reference and reaches the runtime
-/// through its PUBLIC seam accessors (``geom`` / ``aux`` / ``alloc_scalar_field`` / ``lincomb`` /
-/// ``count_kernel``) plus the System grid context -- it REIMPLEMENTS NOTHING, exactly as the methods
-/// did when they lived on ProgramContext.
+/// Each function is a TEMPLATE on the runtime facade type ``Ctx`` (ADC-633) and reaches the runtime
+/// through its PUBLIC seam accessors (``grid_context`` / ``alloc_scalar_field`` / ``lincomb`` /
+/// ``count_kernel`` / ``schur_target``) -- it REIMPLEMENTS NOTHING, exactly as the methods did when
+/// they lived on ProgramContext. Instantiating ``Ctx = ProgramContext`` reproduces the pre-template
+/// bodies BYTE-FOR-BYTE (the ``schur_target`` hook is the identity on the uniform System), so a uniform
+/// Program's generated .so and trajectory are unchanged. Instantiating ``Ctx = AmrProgramContext`` runs
+/// the SAME assembly per AMR level (the ctx's ``grid_context()`` returns the current level's geom / aux
+/// / bc, and ``schur_target`` redirects the coefficient / RHS writes to per-level composite buffers on a
+/// refined hierarchy). No arithmetic is duplicated: the kernels, BC policy and stencils are shared.
 
 namespace pops {
 namespace coupling {
@@ -39,6 +44,18 @@ namespace schur {
 namespace program {
 
 using pops::runtime::program::ProgramContext;
+
+/// Schur field-role ids for the ``ctx.schur_target(field, role)`` write-redirection hook (ADC-633).
+/// The uniform ProgramContext ignores the role (identity, byte-preserving); the AMR ProgramContext uses
+/// it to route each assembled field to the matching per-level composite buffer on a refined hierarchy.
+enum SchurTargetRole {
+  kSchurEpsX = 0,  ///< diagonal coefficient eps_x (A_op(0,0))
+  kSchurEpsY = 1,  ///< diagonal coefficient eps_y (A_op(1,1))
+  kSchurAxy = 2,   ///< cross coefficient a_xy (A_op(0,1))
+  kSchurAyx = 3,   ///< cross coefficient a_yx (A_op(1,0))
+  kSchurRhs = 4,   ///< condensed right-hand side -Lap phi^n - g div(F)
+  kSchurFlux = 5,  ///< explicit flux F = B^{-1}(mx, my)
+};
 
 /// @name Anisotropic Schur condensation (epic ADC-399 / ADC-421)
 /// The full condensed-Schur operator is L_schur(phi) = -div((I + c*rho*B^{-1}) grad phi), a tensor
@@ -58,12 +75,19 @@ using pops::runtime::program::ProgramContext;
 /// GeometricMG / native assembly use, so the face mean at the boundary is consistent. @p c =
 /// theta^2 dt^2 alpha, @p th_dt = theta*dt. Assembled ONCE per step (rho / B_z frozen in the source),
 /// then reused across every Krylov iteration of the matrix-free phi solve.
-inline void assemble_schur_coeffs(const ProgramContext& ctx, MultiFab& eps_x, MultiFab& eps_y,
-                                  MultiFab& a_xy, MultiFab& a_yx, const MultiFab& state, Real c,
+template <class Ctx>
+inline void assemble_schur_coeffs(const Ctx& ctx, MultiFab& eps_x_in, MultiFab& eps_y_in,
+                                  MultiFab& a_xy_in, MultiFab& a_yx_in, const MultiFab& state, Real c,
                                   Real th_dt, int c_rho, int c_bz) {
   ctx.count_kernel();
   const GridContext gc = ctx.grid_context();
-  const MultiFab& aux = *ctx.grid_context().aux;
+  const MultiFab& aux = *gc.aux;
+  // schur_target is the identity on a uniform System (byte-for-byte the pre-template body); on a refined
+  // AMR hierarchy it redirects the per-cell write into that level's composite coefficient buffer.
+  MultiFab& eps_x = ctx.schur_target(eps_x_in, kSchurEpsX);
+  MultiFab& eps_y = ctx.schur_target(eps_y_in, kSchurEpsY);
+  MultiFab& a_xy = ctx.schur_target(a_xy_in, kSchurAxy);
+  MultiFab& a_yx = ctx.schur_target(a_yx_in, kSchurAyx);
   for (int li = 0; li < eps_x.local_size(); ++li) {
     const ConstArray4 s = state.fab(li).const_array();
     const ConstArray4 b = aux.fab(li).const_array();
@@ -86,7 +110,8 @@ inline void assemble_schur_coeffs(const ProgramContext& ctx, MultiFab& eps_x, Mu
 /// The condensed operator is L_schur(phi) = -div(A grad phi) = -out, so a matrix-free apply forms
 /// it as ``ctx.apply_laplacian_coeff(out, in, ...); out *= -1`` via the affine algebra. The
 /// coefficient fields are the ones assemble_schur_coeffs filled (1 ghost each).
-inline void apply_laplacian_coeff(const ProgramContext& ctx, MultiFab& out, MultiFab& in,
+template <class Ctx>
+inline void apply_laplacian_coeff(const Ctx& ctx, MultiFab& out, MultiFab& in,
                                   const MultiFab& eps_x, const MultiFab& eps_y,
                                   const MultiFab& a_xy, const MultiFab& a_yx) {
   ctx.count_kernel();
@@ -102,11 +127,13 @@ inline void apply_laplacian_coeff(const ProgramContext& ctx, MultiFab& out, Mult
 /// B_z from the aux at @p c_bz; @p th_dt = theta*dt (w = th_dt*B_z). Reuses the native
 /// detail::SchurExplicitFluxKernel. The condensed RHS is then -Lap phi^n - theta*dt*alpha*div(F),
 /// assembled with ctx.laplacian + ctx.divergence + the affine algebra.
-inline void schur_explicit_flux(const ProgramContext& ctx, MultiFab& out, const MultiFab& state,
-                                Real th_dt, int c_mx, int c_my, int c_bz) {
+template <class Ctx>
+inline void schur_explicit_flux(const Ctx& ctx, MultiFab& out_in, const MultiFab& state, Real th_dt,
+                                int c_mx, int c_my, int c_bz) {
   ctx.count_kernel();
   const GridContext gc = ctx.grid_context();
-  const MultiFab& aux = *ctx.grid_context().aux;
+  const MultiFab& aux = *gc.aux;
+  MultiFab& out = ctx.schur_target(out_in, kSchurFlux);  // identity on uniform; per-level on AMR
   for (int li = 0; li < out.local_size(); ++li) {
     const ConstArray4 s = state.fab(li).const_array();
     const ConstArray4 b = aux.fab(li).const_array();
@@ -125,12 +152,16 @@ inline void schur_explicit_flux(const ProgramContext& ctx, MultiFab& out, const 
 /// Mirrors native assemble_rhs step-for-step (bare apply_laplacian + NegateKernel + the explicit flux
 /// + SchurRhsAssembleKernel), so the top-level RHS assembly is a SINGLE op (no scalar-field affine
 /// combine at IR level): the same fused -Lap - g*div(F) the native source stepper assembles.
-inline void assemble_schur_rhs(const ProgramContext& ctx, MultiFab& rhs, MultiFab& phi_n,
+template <class Ctx>
+inline void assemble_schur_rhs(const Ctx& ctx, MultiFab& rhs_in, MultiFab& phi_n,
                                const MultiFab& state, Real th_dt, Real g, int c_mx, int c_my,
                                int c_bz) {
   ctx.count_kernel();
   const GridContext gc = ctx.grid_context();
-  const MultiFab& aux = *ctx.grid_context().aux;
+  const MultiFab& aux = *gc.aux;
+  // Redirect first: on a refined AMR hierarchy the RHS (and its transient Lap / flux scratch, sized
+  // from its layout) must live on the current level, not the level-0-bound field. Identity on uniform.
+  MultiFab& rhs = ctx.schur_target(rhs_in, kSchurRhs);
   const BoxArray& ba = rhs.box_array();
   const DistributionMapping& dm = rhs.dmap();
   // 1) -Lap phi^n (bare 5-point Laplacian of the warm-started potential, negated).
@@ -165,11 +196,12 @@ inline void assemble_schur_rhs(const ProgramContext& ctx, MultiFab& rhs, MultiFa
 /// centered gradient); B_z from the aux at @p c_bz; @p th_dt = theta*dt. v^n is read from the state
 /// (mx/my / rho), the same closed B^{-1} (LorentzEliminator) the native reconstruction uses. The
 /// final n+1 extrapolation (factor 1/theta) is left to the caller's affine algebra.
-inline void schur_reconstruct(const ProgramContext& ctx, MultiFab& state, MultiFab& phi, Real th_dt,
-                              int c_rho, int c_mx, int c_my, int c_bz) {
+template <class Ctx>
+inline void schur_reconstruct(const Ctx& ctx, MultiFab& state, MultiFab& phi, Real th_dt, int c_rho,
+                              int c_mx, int c_my, int c_bz) {
   ctx.count_kernel();
   const GridContext gc = ctx.grid_context();
-  const MultiFab& aux = *ctx.grid_context().aux;
+  const MultiFab& aux = *gc.aux;
   fill_ghosts(phi, gc.geom.domain, gc.bc);
   const Real half_idx = Real(1) / (Real(2) * gc.geom.dx());
   const Real half_idy = Real(1) / (Real(2) * gc.geom.dy());
@@ -188,8 +220,9 @@ inline void schur_reconstruct(const ProgramContext& ctx, MultiFab& state, MultiF
 /// extrapolation) and v^n from @p state_old (U^n). rho is frozen (read from @p state). Reuses the
 /// native energy formula (detail::SchurEnergyKernel). Applied only when the model carries an energy
 /// component (the macro passes c_E only for an energy block).
-inline void schur_energy(const ProgramContext& ctx, MultiFab& state, const MultiFab& state_old,
-                         int c_rho, int c_mx, int c_my, int c_E) {
+template <class Ctx>
+inline void schur_energy(const Ctx& ctx, MultiFab& state, const MultiFab& state_old, int c_rho,
+                         int c_mx, int c_my, int c_E) {
   ctx.count_kernel();
   for (int li = 0; li < state.local_size(); ++li) {
     Array4 st = state.fab(li).array();
@@ -233,7 +266,8 @@ struct GeometricMgPreconditioner {
   /// Krylov scratch so its level-0 phi/rhs pair @p in / @p out by local fab index. @p in is the Krylov
   /// vector (logically read-only); @p out is fully overwritten. The matvec budget is decided C++-side
   /// inside the Krylov loop, so this apply is invisible to the IR.
-  void apply(const ProgramContext& ctx, MultiFab& out, const MultiFab& in) {
+  template <class Ctx>
+  void apply(const Ctx& ctx, MultiFab& out, const MultiFab& in) {
     ctx.count_kernel();
     if (!mg) {
       // Build once, on the System mesh: a scratch scalar field exposes block 0's BoxArray /
