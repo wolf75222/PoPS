@@ -174,10 +174,12 @@ LARGE_RUNTIME_FILE_BUDGETS = {
     # threading add ~68 lines here (they read the TU-local private Impl) and +1 to amr_runtime.hpp
     # (the speed_floor forward in the CFL reduction seam).
     # ADC-641: re-measured after typing the two transport dispatch sites (build_multi + single-block
-    # compiled) as validate_transport + parse_transport_route switches; the case/break scaffolding is a
-    # few lines longer than the flat if/else it replaces; 2612 lines + ~15 headroom.
+    # add + native) -- the switch scaffolding is a few lines longer than the flat if/else.
     "python/bindings/amr/amr_system.cpp": 2627,
-    "include/pops/runtime/amr/amr_runtime.hpp": 1868,
+    # ADC-639: conservative reflux for a whole-system Program on AMR adds, to amr_runtime.hpp, the two
+    # flux-materialising per-level residual std::function members on AmrRuntimeBlock (level_flux_capture
+    # / level_flux_capture_neg_div) + their forwarding decls + the amr_program_reflux.hpp tail include.
+    "include/pops/runtime/amr/amr_runtime.hpp": 1896,
     "include/pops/runtime/system/system_field_solver.hpp": 1100,
     "python/pops/runtime/_system_unified_install.py": 550,
     # ADC-542: the run-loop diagnostics firing (run / _fire_diagnostics) added to System.run.
