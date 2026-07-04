@@ -1,10 +1,10 @@
-"""pops.codegen.program_emit_solve : matrix-free Krylov + condensed-Schur op emitters.
+"""pops.codegen.program_emit_solve : matrix-free Krylov op emitters.
 
 Extracted verbatim from ``pops.codegen.program_codegen`` so the Program -> C++ lowering
-fits the Spec-4 file-size budget.  These three leaf emitters (called from
-``program_emit_ops._emit_op`` for the schur_coeffs / matrix_free_operator / solve_linear
-ops) build install-time apply lambdas + the Krylov solve calls; they never recurse back
-into the op dispatcher.  They reuse the shared primitives in ``program_emit_kernels``.
+fits the Spec-4 file-size budget.  These leaf emitters (called from
+``program_emit_ops._emit_op`` for the matrix_free_operator / solve_linear ops) build
+install-time apply lambdas + the Krylov solve calls; they never recurse back into the op
+dispatcher.  They reuse the shared primitives in ``program_emit_kernels``.
 """
 from __future__ import annotations
 
@@ -15,29 +15,6 @@ from pops.codegen.program_emit_kernels import (
     _coeff_cpp,
     _emit_field_combine,
 )
-
-
-def _emit_schur_coeffs(program: Any, v: Any, var: Any, lines: Any, prelude: Any) -> None:
-    """Lower a schur_coeffs bundle (ADC-421): allocate the four 1-component coefficient fields
-    (eps_x, eps_y, a_xy, a_yx) ONCE as persistent shared_ptrs (prelude, alloc-once, captured by the
-    step closure and by the apply lambda that consumes them) and FILL them per step in the body from
-    the live state + B_z aux via ``pops::coupling::schur::program::assemble_schur_coeffs`` (the SAME native
-    detail::SchurOperatorCoeffKernel). The bundle's token is the tuple of the four shared_ptr names;
-    ``apply_laplacian_coeff`` dereferences them inside the matrix-free apply."""
-    (state_in,) = v.inputs
-    ex = "ceps_x%d" % v.id
-    ey = "ceps_y%d" % v.id
-    axy = "ca_xy%d" % v.id
-    ayx = "ca_yx%d" % v.id
-    for sp in (ex, ey, axy, ayx):
-        prelude.append(
-            "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(1, 1));" % sp)
-    var[v.id] = (ex, ey, axy, ayx)  # the bundle token: the four coefficient shared_ptr names
-    lines.append(
-        "pops::coupling::schur::program::assemble_schur_coeffs("
-        "ctx, *%s, *%s, *%s, *%s, %s, %s, %s, %d, %d);"
-        % (ex, ey, axy, ayx, var[state_in.id], _coeff_cpp(v.attrs["c"]),
-           _coeff_cpp(v.attrs["th_dt"]), v.attrs["c_rho"], v.attrs["c_bz"]))
 
 
 def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
@@ -93,9 +70,9 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, 1));"
         % (acc_sp, op_ncomp))
     captures.append(acc_sp)
-    # A coefficiented apply (apply_laplacian_coeff) reads an OUTER schur_coeffs bundle (assembled in
+    # A coefficiented apply (apply_laplacian_coeff) reads an OUTER condensed_coeffs bundle (assembled in
     # the step body, before the operator): capture its four coefficient shared_ptrs (already
-    # allocated in the prelude by _emit_schur_coeffs) so the lambda can dereference them.
+    # allocated in the prelude by emit_condensed_op) so the lambda can dereference them.
     for w in block:
         if w.op == "apply_laplacian_coeff":
             coeffs = w.inputs[2]
@@ -158,26 +135,18 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             body.append("ctx.divergence(*%s, %s, %s);"
                         % (sub[o.id], _apply_in_arg(sub, fx), _apply_in_arg(sub, fy)))
         elif w.op == "apply_laplacian_coeff":
-            # out = div(A grad in), A the coefficient tensor: forwards to the native apply_laplacian
-            # coefficient path. eps_x/eps_y/a_xy/a_yx are the captured coeff fields. The lowering
-            # follows the BUNDLE: a schur_coeffs bundle keeps the brick's coupling/schur free function
-            # (which pulls its header via _needs_schur_program_header); a condensed_coeffs bundle
-            # (ADC-637, the GENERIC route) emits the SAME two steps inline through Schur-free seams --
-            # ctx.fill_boundary(in) (identical to the wrapper's fill_ghosts(in, domain, transport bc))
-            # then the pops::apply_laplacian coefficient floor the wrapper itself forwarded to --
-            # so a generic-only Program compiles without coupling/schur/** and stays bit-identical.
+            # out = div(A grad in), A the coefficient tensor of a condensed_coeffs bundle (ADC-637): the
+            # SAME two steps the retired brick wrapper did, emitted INLINE through Schur-free seams --
+            # ctx.fill_boundary(in) (the transport-BC ghost fill) then the pops::apply_laplacian
+            # coefficient floor -- so a generated .so compiles without coupling/schur/** and the operator
+            # arithmetic is bit-identical (eps_x/eps_y/a_xy/a_yx are the captured coeff fields).
             o, i, coeffs = w.inputs
             ex, ey, axy, ayx = var[coeffs.id]
             sub[w.id] = sub[o.id]
-            if coeffs.vtype == "condensed_coeffs":
-                body.append("ctx.fill_boundary(%s);" % _apply_in_arg(sub, i))
-                body.append("pops::apply_laplacian(%s, ctx.geom(), *%s, nullptr, %s.get(), "
-                            "nullptr, %s.get(), %s.get(), %s.get());"
-                            % (_apply_in_arg(sub, i), sub[o.id], ex, ey, axy, ayx))
-            else:
-                body.append("pops::coupling::schur::program::apply_laplacian_coeff("
-                            "ctx, *%s, %s, *%s, *%s, *%s, *%s);"
-                            % (sub[o.id], _apply_in_arg(sub, i), ex, ey, axy, ayx))
+            body.append("ctx.fill_boundary(%s);" % _apply_in_arg(sub, i))
+            body.append("pops::apply_laplacian(%s, ctx.geom(), *%s, nullptr, %s.get(), "
+                        "nullptr, %s.get(), %s.get(), %s.get());"
+                        % (_apply_in_arg(sub, i), sub[o.id], ex, ey, axy, ayx))
         elif w.op == "rhs_jacvec":
             # out = J(U^k) in = in - (c*dt/h)(rhs(U^k + h*in) - rhs(U^k)), the finite-difference
             # Jacobian-vector product of the implicit-flux BDF residual (ADC-431). h is a relatively
@@ -232,9 +201,9 @@ def _precond_applyfn(v: Any, prelude: Any) -> str:
       - ``"identity"`` -> ``pops::ApplyFn{}`` (an EMPTY std::function = unpreconditioned; the historical
         path, byte-identical);
       - ``"geometric_mg"`` -> a named ``pops::ApplyFn precond_mg{id}`` lambda capturing a persistent
-        ``pops::coupling::schur::program::GeometricMgPreconditioner`` (the V-cycle cache, ADC-587) whose
-        ``apply(ctx, out, in)`` runs ONE V-cycle of the already-wired pops::GeometricMG (the field-solve
-        multigrid), no new numerical kernel (ADC-516).
+        ``pops::runtime::program::GeometricMgPreconditioner`` (the V-cycle cache, coeff_elliptic_ops.hpp)
+        whose ``apply(ctx, out, in)`` runs ONE V-cycle of the already-wired pops::GeometricMG (the
+        field-solve multigrid), no new numerical kernel (ADC-516).
 
     A scheme other than these two never reaches here: the Python layer
     (pops.time.program_solve.solve_linear) lowers only identity / geometric_mg for gmres / bicgstab and
@@ -244,11 +213,11 @@ def _precond_applyfn(v: Any, prelude: Any) -> str:
         return "pops::ApplyFn{}"
     if scheme == "geometric_mg":
         name = "precond_mg%d" % v.id
-        # The GeometricMG V-cycle cache lives on a PERSISTENT GeometricMgPreconditioner (ADC-587: it
-        # moved off ProgramContext when the Schur/Lorentz module split out). Allocate ONE (alloc-once,
-        # like the matrix-free scratch), capture it by shared_ptr into the ApplyFn lambda: the MG is
-        # built once on the first apply and reused across every Krylov iteration / step. ctx is captured
-        # by value too (it forwards the seam ops the apply reuses).
+        # The GeometricMG V-cycle cache lives on a PERSISTENT GeometricMgPreconditioner (re-homed to the
+        # Schur-free coeff_elliptic_ops.hpp, ADC-637; it moved off ProgramContext with the Schur/Lorentz
+        # module split). Allocate ONE (alloc-once, like the matrix-free scratch), capture it by shared_ptr
+        # into the ApplyFn lambda: the MG is built once on the first apply and reused across every Krylov
+        # iteration / step. ctx is captured by value too (it forwards the seam ops the apply reuses).
         pc = "precond_mg_state%d" % v.id
         # ADC-644: a configured GeometricMG preconditioner carries V-cycle-shape knobs
         # (pre/post/bottom sweeps, min_coarse, n_vcycles). When absent (a default GeometricMG()) emit
@@ -266,7 +235,7 @@ def _precond_applyfn(v: Any, prelude: Any) -> str:
             n_vcycles = int(opts.get("n_vcycles", 1))
             ctor_args = "%d, %d, %d, %d, %d" % (nu1, nu2, nbottom, min_coarse, n_vcycles)
         prelude.append(
-            "auto %s = std::make_shared<pops::coupling::schur::program::GeometricMgPreconditioner>(%s);"
+            "auto %s = std::make_shared<pops::runtime::program::GeometricMgPreconditioner>(%s);"
             % (pc, ctor_args))
         prelude.append(
             "pops::ApplyFn %s = [ctx, %s](pops::MultiFab& out, const pops::MultiFab& in) {"

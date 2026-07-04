@@ -58,6 +58,21 @@ enum LinearSolveMethod {
   kLinearSolveRichardson = 3,  ///< pops::richardson_solve (omega = 1)
 };
 
+/// Assembly field-role id for the ``ctx.assembly_target(field, role)`` / ``assembly_source(field, role)``
+/// write/read-redirection seam (ADC-633 / ADC-637). The codegen emits the id by NAME; the uniform
+/// ProgramContext ignores it (identity, byte-preserving), the AMR ProgramContext routes the field to the
+/// matching per-level composite buffer of AmrCondensedElliptic on a refined hierarchy. Declared on the
+/// always-included facade so every generated .so sees it (the emitted condensed redirect names kEpsX..kPhi).
+enum AssemblyFieldRole {
+  kEpsX = 0,  ///< diagonal coefficient eps_x (A_op(0,0))
+  kEpsY = 1,  ///< diagonal coefficient eps_y (A_op(1,1))
+  kAxy = 2,   ///< cross coefficient a_xy (A_op(0,1))
+  kAyx = 3,   ///< cross coefficient a_yx (A_op(1,0))
+  kRhs = 4,   ///< condensed right-hand side
+  kFlux = 5,  ///< explicit flux F
+  kPhi = 6,   ///< solved potential phi^{n+theta} (READ role for the reconstruction)
+};
+
 class ProgramContext {
  public:
   explicit ProgramContext(System* sys) : sys_(sys) {}

@@ -30,50 +30,43 @@ _ALLOWED_OPS = frozenset({"state", "solve_fields", "solve_fields_from_blocks", "
                           "apply_in", "apply_out", "history", "store_history",
                           "fill_boundary", "project", "record_scalar",
                           "cell_compare", "where", "rhs_jacvec",
-                          "schur_coeffs", "apply_laplacian_coeff", "schur_explicit_flux",
-                          "schur_rhs", "schur_reconstruct", "schur_energy",
+                          "apply_laplacian_coeff",
                           "condensed_coeffs", "condensed_rhs", "condensed_reconstruct",
+                          "condensed_energy",
                           "coupled_rate", "coupled_rate_out"})
 
 _PROFILE_SKIP_OPS = frozenset({"state", "history", "hmin", "cfl"})
 
 _AUX_OUTPUT_OPS = frozenset({"solve_fields", "solve_fields_from_blocks"})
 
-# Ops that lower to the native condensed-Schur / Lorentz operator module (ADC-587,
-# include/pops/coupling/schur/program/condensed_schur_operator.hpp). A generated .so pulls that header
-# in ONLY when the IR carries one of these -- a Schur-free Program's source must not include
-# coupling/schur/** (the module split keeps program_context.hpp itself Schur-token-free).
-_SCHUR_PROGRAM_OPS = frozenset({"schur_coeffs", "apply_laplacian_coeff", "schur_explicit_flux",
-                                "schur_rhs", "schur_reconstruct", "schur_energy"})
-
-# The header the schur-program ops lower into (a single #include line + trailing newline, so the
-# template's next #include stays on its own line). Empty string when the Program needs no Schur op.
-_SCHUR_PROGRAM_INCLUDE = ("#include <pops/coupling/schur/program/condensed_schur_operator.hpp>"
-                          "  // native condensed-Schur / Lorentz operator (ADC-587)\n")
+# The Schur-free tensor-coefficient elliptic infrastructure (ADC-637,
+# include/pops/runtime/program/coeff_elliptic_ops.hpp): the GeometricMgPreconditioner V-cycle cache. A
+# generated .so pulls that header in ONLY when the IR carries a solve_linear that requests the
+# geometric_mg preconditioner -- a Program that uses no elliptic preconditioner must not include it.
+_COEFF_ELLIPTIC_INCLUDE = ("#include <pops/runtime/program/coeff_elliptic_ops.hpp>"
+                           "  // Schur-free tensor-coefficient elliptic ops (ADC-637)\n")
 
 
-def _needs_schur_program_header(program: Any) -> bool:
-    """True iff @p program's IR lowers to the native condensed-Schur / Lorentz operator module -- a
-    flat op in _SCHUR_PROGRAM_OPS, OR a solve_linear that requests the geometric_mg preconditioner
-    (its GeometricMgPreconditioner also lives in that header, ADC-587). Sub-block ops (a matrix-free
-    apply carrying apply_laplacian_coeff, a Newton residual) are covered because their apply/residual
-    ops are recorded on the flat _values too (the schur_coeffs bundle + the coefficiented apply)."""
+def _needs_coeff_elliptic_header(program: Any) -> bool:
+    """True iff @p program's IR lowers to the Schur-free coeff-elliptic module -- a solve_linear that
+    requests the geometric_mg preconditioner (its GeometricMgPreconditioner lives in that header,
+    ADC-637 re-home). The generic condensed_* ops emit their coefficiented apply INLINE (block_inverse
+    + pops::apply_laplacian), so they need no coeff-elliptic include; only the MG preconditioner does."""
     for v in program._values:
-        if v.op in _SCHUR_PROGRAM_OPS:
-            return True
         if v.op == "solve_linear" and v.attrs.get("preconditioner") == "geometric_mg":
             return True
     return False
 
 
-def _schur_include(program: Any) -> str:
-    """The condensed-Schur operator #include for @p program's generated .so, or "" when it carries no
-    Schur op (ADC-587): a Schur-free Program's source must not include coupling/schur/**."""
-    return _SCHUR_PROGRAM_INCLUDE if _needs_schur_program_header(program) else ""
+def _coeff_elliptic_include(program: Any) -> str:
+    """The coeff-elliptic #include for @p program's generated .so, or "" when it uses no geometric_mg
+    preconditioner (ADC-637): a Program with no elliptic preconditioner must not include it."""
+    return _COEFF_ELLIPTIC_INCLUDE if _needs_coeff_elliptic_header(program) else ""
 
 
 # Ops whose emitted kernels call pops::detail::block_inverse<N> (ADC-637): the GENERIC condensed-implicit
 # emitters. A generated .so pulls block_inverse.hpp in ONLY when the IR carries one of these.
+# condensed_energy is a pure-kinematic in-place kernel (no block inverse), so it is NOT listed here.
 _CONDENSED_OPS = frozenset({"condensed_coeffs", "condensed_rhs", "condensed_reconstruct"})
 
 _BLOCK_INVERSE_INCLUDE = ("#include <pops/numerics/linalg/block_inverse.hpp>"
@@ -338,7 +331,7 @@ _PROGRAM_CPP_TEMPLATE = '''\
 // A compiled time Program installed across the stable .so ABI: it drives sim.step(dt) entirely in
 // C++ via ProgramContext, reusing the PoPS runtime (no MultiFab / flux / solver reimplementation).
 #include <pops/runtime/program/program_context.hpp>
-{schur_include}{block_inverse_include}#include <pops/runtime/dynamic/abi_key.hpp>
+{coeff_elliptic_include}{block_inverse_include}#include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/storage/fab2d.hpp>          // Array4 / ConstArray4 (per-cell handles)
 #include <pops/mesh/execution/for_each.hpp>     // for_each_cell (Phase-4b per-cell kernels)
