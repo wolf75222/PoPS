@@ -80,10 +80,15 @@ def test_typed_cutcell_thresholds_reach_the_report():
 
 
 def test_native_set_disc_domain_refuses_out_of_domain():
-    with pytest.raises((RuntimeError, ValueError)):
-        _sim().set_disc_domain(0.5, 0.5, 0.3, mode="cutcell", kappa_min=2.0)
-    with pytest.raises((RuntimeError, ValueError)):
-        _sim().set_disc_domain(0.5, 0.5, 0.3, mode="cutcell", cut_theta_min=-1.0)
+    """Out-of-domain thresholds refuse BEFORE the native call: set_disc_domain carries no loose
+    threshold kwargs; the typed CutCell descriptor validates at construction, so the inline
+    route can never reach C++ with a bad value (validate-early by design)."""
+    with pytest.raises(ValueError):
+        _sim().set_disc_domain(DiscDomain(center=(0.5, 0.5), radius=0.3,
+                                          mode=CutCell(kappa_min=2.0)))
+    with pytest.raises(ValueError):
+        _sim().set_disc_domain(DiscDomain(center=(0.5, 0.5), radius=0.3,
+                                          mode=CutCell(cut_theta_min=-1.0)))
 
 
 def main():
