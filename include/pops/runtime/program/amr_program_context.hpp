@@ -20,7 +20,7 @@
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>             // GeometricMG (Krylov precond)
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>    // apply_laplacian
 #include <pops/runtime/amr/amr_runtime.hpp>     // AmrRuntime (the engine the driver wraps)
-#include <pops/runtime/amr/amr_schur.hpp>       // AmrSchurElliptic (the composite tensor elliptic, ADC-633)
+#include <pops/runtime/amr/amr_condensed_elliptic.hpp>       // AmrCondensedElliptic (the composite tensor elliptic, ADC-633)
 #include <pops/runtime/context/grid_context.hpp>  // GridContext (per-level Schur assembly seam, ADC-633)
 #include <pops/runtime/amr_system.hpp>          // AmrSystem (the facade: params / block map / engine)
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams
@@ -226,11 +226,11 @@ class AmrProgramContext {
 
   /// The grid context of the CURRENT level (ADC-633): the AMR counterpart of System::grid_context(),
   /// per level. It bundles the transport BC + the level geometry + the live level aux pointer, exactly
-  /// what System::grid_context() returns for the uniform mesh. Used by the context-generic condensed-
-  /// Schur free functions (condensed_schur_operator.hpp) so their per-cell assembly reads the CURRENT
-  /// level's geom / aux / BC as direct body calls (they read the level_ cursor live). transport_bc()
-  /// (not poisson_bc()) matches the uniform Program's gc.bc, so the flat-hierarchy phi-ghost fill is
-  /// byte-identical to the uniform Program (the flat bit-parity gate). BY VALUE, like ProgramContext.
+  /// what System::grid_context() returns for the uniform mesh. Used by the emitted condensed-implicit
+  /// assembly kernels so their per-cell assembly reads the CURRENT level's geom / aux / BC as direct
+  /// body calls (they read the level_ cursor live). transport_bc() (not poisson_bc()) matches the
+  /// uniform Program's gc.bc, so the flat-hierarchy phi-ghost fill is byte-identical to the uniform
+  /// Program (the flat bit-parity gate). BY VALUE, like ProgramContext.
   GridContext grid_context() const {
     const Geometry g = eng_->level_geom(level_);
     GridContext gc;
@@ -406,57 +406,55 @@ class AmrProgramContext {
 
   int macro_step() const { return facade_->macro_step(); }
 
-  // --- condensed-Schur primitives on the hierarchy (ADC-633): WIRED per level -----------------------
-  // The codegen lowers a condensed-Schur (ADC-421/422) Program against the context-generic free kernels
-  // pops::coupling::schur::program::<op>(ctx, ...) (condensed_schur_operator.hpp), templated on Ctx. With
-  // this context's grid_context() (per level) + assembly_target / assembly_source (write/read redirect),
-  // those kernels run the SAME assembly PER LEVEL as direct body calls (they read the level_ cursor
-  // live). On a FLAT hierarchy the emitted matrix-free BiCGStab runs on level 0, bit-identical to the
-  // uniform Program; on a REFINED hierarchy the tensor elliptic is solved compositely (AmrSchurElliptic
-  // + CompositeFacPoisson). The former vestigial deferred_op stubs (and their delegating free-function
-  // overloads) are GONE -- the templated kernels bind directly to this context.
+  // --- condensed-implicit elliptic primitives on the hierarchy (ADC-633 / ADC-637): WIRED per level ---
+  // The codegen lowers a condensed-implicit (ADC-637) Program to inline block-inverse assembly kernels
+  // referencing ONLY the variable `ctx`, so the SAME emitted body compiles against this context. With its
+  // grid_context() (per level) + assembly_target / assembly_source (write/read redirect), those kernels
+  // run the SAME assembly PER LEVEL as direct body calls (they read the level_ cursor live). On a FLAT
+  // hierarchy the emitted matrix-free BiCGStab runs on level 0, bit-identical to the uniform Program; on a
+  // REFINED hierarchy the tensor elliptic is solved compositely (AmrCondensedElliptic + CompositeFacPoisson).
+  // No coupling/schur call remains on any path -- the generated .so carries all scheme kernels.
 
-  /// Schur assembly WRITE redirection (ADC-633). On a REFINED hierarchy each assembled coefficient /
-  /// RHS / flux field must live on the CURRENT level, not the level-0-bound emitted scratch: the kernel
-  /// writes THROUGH here into AmrSchurElliptic's per-level buffer. On a FLAT hierarchy (no fine patch)
-  /// the emitted level-0 field IS the whole system, so this is the identity (byte-for-byte the uniform
-  /// path -- the flat bit-parity gate). @p role is a SchurTargetRole (eps_x / eps_y / a_xy / a_yx / rhs
-  /// / flux).
+  /// Assembly WRITE redirection (ADC-633). On a REFINED hierarchy each assembled coefficient / RHS / flux
+  /// field must live on the CURRENT level, not the level-0-bound emitted scratch: the kernel writes
+  /// THROUGH here into AmrCondensedElliptic's per-level buffer. On a FLAT hierarchy (no fine patch) the
+  /// emitted level-0 field IS the whole system, so this is the identity (byte-for-byte the uniform path --
+  /// the flat bit-parity gate). @p role is an AssemblyFieldRole (eps_x / eps_y / a_xy / a_yx / rhs / flux).
   MultiFab& assembly_target(MultiFab& field, int role) const {
-    AmrSchurElliptic& s = schur();
+    AmrCondensedElliptic& s = condensed_elliptic();
     if (!s.has_fine_patches())
       return field;  // flat / no fine patch: the emitted level-0 field is correct as-is.
     return s.target(role, level_);
   }
-  /// Schur reconstruction READ redirection (ADC-633): the fine-level reconstruction reads the level's
-  /// published composite potential (the emitted level-0 solution cannot hold a fine level's phi). Flat /
-  /// no fine patch: identity (returns the emitted solution). @p role is kSchurPhi.
+  /// Reconstruction READ redirection (ADC-633): the fine-level reconstruction reads the level's published
+  /// composite potential (the emitted level-0 solution cannot hold a fine level's phi). Flat / no fine
+  /// patch: identity (returns the emitted solution). @p role is kPhi.
   MultiFab& assembly_source(MultiFab& field, int /*role*/) const {
-    AmrSchurElliptic& s = schur();
+    AmrCondensedElliptic& s = condensed_elliptic();
     if (!s.has_fine_patches())
       return field;
     return s.phi(level_);
   }
-  /// Solve the matrix-free condensed-Schur linear system A(phi) = rhs on the hierarchy (ADC-633). FLAT
-  /// (no fine patch): the SAME matrix-free Krylov call as the uniform Program (identical numerics, the
-  /// flat bit-parity path -- the load-bearing acceptance). REFINED (>= one fine patch): drive
-  /// AmrSchurElliptic::solve_composite (the composite FAC over the tower), which reads the per-level
+  /// Solve the matrix-free condensed-implicit linear system A(phi) = rhs on the hierarchy (ADC-633).
+  /// FLAT (no fine patch): the SAME matrix-free Krylov call as the uniform Program (identical numerics,
+  /// the flat bit-parity path -- the load-bearing acceptance). REFINED (>= one fine patch): drive
+  /// AmrCondensedElliptic::solve_composite (the composite FAC over the tower), which reads the per-level
   /// coefficients / RHS the emitted assembly already wrote through assembly_target and publishes each
   /// level's potential for assembly_source to read; the emitted @p apply / @p precond are UNUSED on this
-  /// branch (the FAC has its own operator). @p method is a SchurSolveMethod id (program_context.hpp).
+  /// branch (the FAC has its own operator). @p method is a LinearSolveMethod id (program_context.hpp).
   ///
-  /// REFINED-HIERARCHY ORDERING (documented limitation). The emitted per-level loop interleaves
-  /// assemble / solve / reconstruct per level, while a composite solve wants every level's coefficients
-  /// assembled BEFORE it solves. The composite path is therefore correct for the coarse-only / flat
-  /// layout the Program driver ships (the tested acceptance); a genuinely refined Schur Program (a real
-  /// fine patch under a Program) needs the native AMR source-stage route (add_equation(Strang(source=
-  /// CondensedSchur)), which assembles the whole tower then solves once) for a conservative, order-exact
-  /// result. This branch is the composite-solve scaffold, not a bit-exact multilevel driver.
+  /// REFINED-HIERARCHY ORDER-EXACTNESS is ADC-648 (documented limitation). The emitted per-level loop
+  /// interleaves assemble / solve / reconstruct per level, while a composite solve wants every level's
+  /// coefficients assembled BEFORE it solves. The composite path is therefore correct for the coarse-only
+  /// / flat layout the Program driver ships (the tested acceptance); a genuinely refined condensed Program
+  /// (a real fine patch under a Program) needs the ADC-648 gather-then-solve (on these same generic ops)
+  /// -- or the native AMR source-stage route -- for a conservative, order-exact result. This branch is
+  /// the composite-solve scaffold, not a bit-exact multilevel driver.
   void solve_linear_matfree(MultiFab& sol, const MultiFab& rhs, const ApplyFn& apply,
                           const ApplyFn& precond, int method, Real tol, int max_iter,
                           int restart) const {
     (void)restart;
-    AmrSchurElliptic& s = schur();
+    AmrCondensedElliptic& s = condensed_elliptic();
     if (!s.has_fine_patches()) {
       switch (method) {
         case kLinearSolveCg:
@@ -474,7 +472,7 @@ class AmrProgramContext {
       }
       return;
     }
-    // Refined: the per-level coefficients / RHS are already assembled into AmrSchurElliptic (through
+    // Refined: the per-level coefficients / RHS are already assembled into AmrCondensedElliptic (through
     // assembly_target on the prior per-level assembly calls); drive the composite FAC over the whole tower.
     s.solve_composite();
   }
@@ -549,15 +547,15 @@ class AmrProgramContext {
                              " is not wired on the AMR Program path (v1); " + detail);
   }
 
-  /// The block-0 composite tensor-elliptic driver a condensed-Schur Program routes to on a REFINED
+  /// The block-0 composite tensor-elliptic driver a condensed-implicit Program routes to on a REFINED
   /// hierarchy (ADC-633). Lazily created (a flat Program never touches it beyond has_fine_patches()).
   /// Held via shared_ptr so a copy of the context (the install closure captures ctx BY VALUE) SHARES
-  /// the same per-Program elliptic driver -- AmrSchurElliptic owns a unique_ptr (move-only), so a bare
+  /// the same per-Program elliptic driver -- AmrCondensedElliptic owns a unique_ptr (move-only), so a bare
   /// value member would delete the context copy constructor the [=] install lambda needs.
-  AmrSchurElliptic& schur() const {
-    if (!schur_)
-      schur_ = std::make_shared<AmrSchurElliptic>(eng_, sys_block(0));
-    return *schur_;
+  AmrCondensedElliptic& condensed_elliptic() const {
+    if (!condensed_elliptic_)
+      condensed_elliptic_ = std::make_shared<AmrCondensedElliptic>(eng_, sys_block(0));
+    return *condensed_elliptic_;
   }
 
   // --- ADC-639 conservative-reflux helpers ---------------------------------------------------------
@@ -716,7 +714,7 @@ class AmrProgramContext {
   mutable int level_ = 0;
   mutable bool solved_this_step_ = false;
   mutable std::optional<GeometricMG> mg_precond_;
-  mutable std::shared_ptr<AmrSchurElliptic> schur_;
+  mutable std::shared_ptr<AmrCondensedElliptic> condensed_elliptic_;
 
   // --- ADC-639 conservative-reflux state -----------------------------------------------------------
   // The effective-flux LEDGER: for each tracked MultiFab (keyed by (level, address)) the interface-strip
@@ -750,8 +748,8 @@ class AmrProgramContext {
 }  // namespace program
 }  // namespace runtime
 
-// ADC-633: the former AmrProgramContext overloads of the condensed-Schur FREE kernels are GONE. The
-// kernels (condensed_schur_operator.hpp) are now TEMPLATES on the context type Ctx, so they instantiate
-// directly for AmrProgramContext -- reaching this context's grid_context() / assembly_target / assembly_source
-// per level. No delegating overload is needed (and a non-templated one would ambiguate the template).
+// ADC-637: the condensed-implicit assembly kernels are emitted INLINE (block_inverse + pops::apply_laplacian)
+// referencing only the variable `ctx`, so the SAME generated body instantiates directly against
+// AmrProgramContext -- reaching this context's grid_context() / assembly_target / assembly_source per level.
+// No coupling/schur free function or delegating overload remains on any path.
 }  // namespace pops
