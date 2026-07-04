@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <functional>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -65,8 +67,21 @@ class AmrProgramContext {
   void set_level(int k) const { level_ = k; }
   int level() const { return level_; }
   int nlev() const { return eng_->nlev(); }
-  /// Reset the per-macro-step flags (called by the install wrapper at the top of each macro-step).
-  void reset_step() const { solved_this_step_ = false; }
+  /// Reset the per-macro-step flags (called by the install wrapper at the top of each macro-step). Also
+  /// clears the per-step effective-flux ledger + the live-state-ring record (ADC-639); the PERSISTENT
+  /// per-ring flux strips (ring_flux_) survive across steps, as the multistep ring itself does.
+  void reset_step() const {
+    solved_this_step_ = false;
+    flux_ledger_.clear();
+    live_state_rings_.clear();
+  }
+  /// True iff a genuine coarse-fine interface exists (nlev > 1): the reflux capture path activates. On a
+  /// coarse-only / flat Program (nlev == 1) this is false, the capture code is never reached, and the
+  /// trajectory is byte-identical to System / Uniform (the load-bearing bit-parity gate).
+  bool capturing() const { return eng_->nlev() > 1; }
+  /// Number of populated ledger entries (test seam): the parity gate unit-asserts this is 0 on a
+  /// coarse-only / flat Program (the capture path is unreachable at nlev == 1).
+  std::size_t ledger_size() const { return flux_ledger_.size(); }
 
   /// Register the macro-step body (forwards to AmrSystem::install_program_step). @p step is the per-level
   /// loop wrapper the codegen emits; it runs ONE macro-step over dt.
@@ -85,19 +100,38 @@ class AmrProgramContext {
   /// fine -> coarse average_down over ALL blocks (covered coarse cell <- 2x2 fine average), then a fresh
   /// coarse Poisson + injection so every level's aux is consistent for the next macro-step.
   ///
-  /// CONSERVATION LIMITATION (v1, conservation-affecting -- NOT a cosmetic deferral). This ships
-  /// average_down ONLY, with NO conservative reflux at coarse-fine interfaces. average_down corrects the
-  /// covered coarse CELL VALUES (fine -> coarse restriction) but does NOT correct the coarse FLUX at the
-  /// C/F boundary by the sum of the fine face fluxes (a reflux). So on a GENUINELY MULTILEVEL Program run
-  /// (a real fine patch under the coarse), the total conserved quantity (mass / momentum / energy) is NOT
-  /// conserved across the C/F interface -- it drifts by the un-refluxed face-flux mismatch. This is exact
-  /// only for the single-LEVEL (coarse-only) Program layout, where there is no C/F interface (the
-  /// bit-identical parity gate). A multilevel Program that must conserve at the C/F interface needs the
-  /// native AMR route (reflux + average_down) -- pops.compile(Case(layout=AMR(...))) -- or System.
+  /// CONSERVATIVE C/F COUPLING (ADC-639). Per interface, finest first: average_down (fine k -> coarse k-1)
+  /// THEN conservative reflux (route the effective-flux mismatch into the bordering coarse cells), the
+  /// native Berger-Oliger order. The effective flux at each level was captured through the Program's own
+  /// linear combination (the flux ledger, section 2b), so the coarse cell's flux at the C/F interface is
+  /// corrected by exactly (fine effective flux - coarse effective flux) -- the total conserved quantity
+  /// (mass / momentum / energy) is now conserved across the interface to ROUND-OFF, matching the native
+  /// reflux. After the reflux, ADC-631 history rings stay consistent: slot 0 of any ring that stored the
+  /// COMMITTED live state (no live-state write followed the store) is re-synced from the now-corrected
+  /// state, then the deferred macro-step rotate fires (it was withheld from the body so the reflux runs
+  /// against the right live state). A ring storing the RHS (AB2) or a pre-commit state (BDF2) is untouched.
+  /// On a
+  /// coarse-only / flat Program (nlev == 1) the loop is empty, the ledger is empty, and the deferred
+  /// rotate collapses to the original store->rotate order -> the trajectory is bit-identical (the parity
+  /// gate). A multilevel run that needs the native subcycled reflux still uses the native AMR route
+  /// (pops.compile(Case(layout=AMR(...)))) -- this is the SYNCHRONOUS (same-dt) driver's conservative sync.
   void couple_levels() const {
     for (int k = nlev() - 1; k >= 1; --k)
-      for (int b = 0; b < n_blocks(); ++b)
-        eng_->average_down_level(static_cast<std::size_t>(b), k);
+      for (int b = 0; b < n_blocks(); ++b) {
+        const std::size_t sb = static_cast<std::size_t>(sys_block(b));
+        eng_->average_down_level(sb, k);
+        if (capturing()) {
+          const EdgeFlux& coarse_role = ledger_at_(k - 1, &eng_->level_state(sb, k - 1));
+          const EdgeFlux& fine_role = ledger_at_(k, &eng_->level_state(sb, k));
+          pops::detail::route_reflux_program(*eng_, sb, k, coarse_role, fine_role);
+        }
+      }
+    if (capturing() && rotate_pending_) {
+      resync_history_slot0_();  // re-copy the corrected live state into any live-state ring's slot 0
+      rotate_ring_flux_();      // rotate the persistent flux strips in lockstep with the ring
+      pops::detail::AmrHistoryOps::rotate_histories(*eng_);
+      rotate_pending_ = false;
+    }
   }
   /// Head-of-step regrid at the engine's cadence (the SAME union-tags regrid the native step runs).
   void regrid_if_due(int macro_step) const { eng_->regrid_if_due(macro_step); }
@@ -108,10 +142,18 @@ class AmrProgramContext {
   }
   void rhs_into(int b, MultiFab& u, MultiFab& r) const {
     count_kernel();
+    if (capturing()) {
+      capture_into_(b, u, r, /*flux_only=*/false);  // materialise the flux + sample the interface strip
+      return;
+    }
     eng_->level_rhs_into(static_cast<std::size_t>(sys_block(b)), level_, u, r);
   }
   void neg_div_flux_default_into(int b, MultiFab& u, MultiFab& r) const {
     count_kernel();
+    if (capturing()) {
+      capture_into_(b, u, r, /*flux_only=*/true);
+      return;
+    }
     eng_->level_neg_div_flux_into(static_cast<std::size_t>(sys_block(b)), level_, u, r);
   }
   void source_default_into(int b, MultiFab& u, MultiFab& r) const {
@@ -214,10 +256,18 @@ class AmrProgramContext {
   void axpy(MultiFab& u, Real a, const MultiFab& r) const {
     count_kernel();
     pops::saxpy(u, a, r);
+    if (capturing()) {
+      ledger_axpy_(u, a, r);  // shadow the state combine on the effective-flux strip: ledger[u] += a*ledger[r]
+      note_live_write_(&u);   // a write to the live state invalidates any earlier live-state ring snapshot
+    }
   }
   void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b, const MultiFab& y) const {
     count_kernel();
     pops::lincomb(z, a, x, b, y);
+    if (capturing()) {
+      ledger_lincomb_(z, a, x, b, y);  // ledger[z] = a*ledger[x] + b*ledger[y]
+      note_live_write_(&z);
+    }
   }
 
   // --- matrix-free elliptic primitives over the CURRENT level (parity with ProgramContext) ----------
@@ -286,7 +336,10 @@ class AmrProgramContext {
     pops::detail::AmrHistoryOps::register_history(*eng_, name, lag);  // idempotent; allocates every level
   }
   MultiFab& history(const std::string& name, int lag = 1) const {
-    return pops::detail::AmrHistoryOps::read_history(*eng_, name, lag, level_);
+    MultiFab& mf = pops::detail::AmrHistoryOps::read_history(*eng_, name, lag, level_);
+    if (capturing())
+      restore_ring_flux_(name, lag, mf);  // re-publish the lagged buffer's flux strip into the live ledger
+    return mf;
   }
   // ZERO COLD-START read (ADC-427), mirroring ProgramContext::history_zero_start so the SAME lowered
   // body compiles on both contexts: a read-first cross-step carry reads the zero-filled slots on its
@@ -297,14 +350,28 @@ class AmrProgramContext {
     pops::detail::AmrHistoryOps::register_history(*eng_, name, lag);
     if (!pops::detail::AmrHistoryOps::initialized(*eng_, name))
       pops::detail::AmrHistoryOps::set_initialized(*eng_, name, true);
-    return pops::detail::AmrHistoryOps::read_history(*eng_, name, lag, level_);
+    MultiFab& mf = pops::detail::AmrHistoryOps::read_history(*eng_, name, lag, level_);
+    if (capturing())
+      restore_ring_flux_(name, lag, mf);
+    return mf;
   }
   void store_history(const std::string& name, const MultiFab& value) const {
     pops::detail::AmrHistoryOps::store_history(*eng_, name, level_, value, facade_->program_last_dt());
+    if (capturing())
+      save_ring_flux_(name, value);  // persist the stored buffer's flux strip (slot 0) for a later lag read
   }
   void rotate_histories() const {
-    if (level_ == nlev() - 1)
-      pops::detail::AmrHistoryOps::rotate_histories(*eng_);
+    // ADC-631/639: DEFER the rotate. The body's terminal rotate fires inside the per-level loop, before
+    // couple_levels reflux touches the coarse live state; deferring it to couple_levels keeps a multistep
+    // Program's lag read consistent with the refluxed live state. On nlev==1 (or no reflux) the deferral
+    // collapses to the original store->rotate order -> bit-identical. Guarded to the last level like v1.
+    if (level_ != nlev() - 1)
+      return;
+    if (capturing()) {
+      rotate_pending_ = true;  // couple_levels executes it after the reflux + slot-0 resync
+      return;
+    }
+    pops::detail::AmrHistoryOps::rotate_histories(*eng_);
   }
 
   // --- diagnostics / runtime params (forward to the facade store) -----------------------------------
@@ -493,12 +560,191 @@ class AmrProgramContext {
     return *schur_;
   }
 
+  // --- ADC-639 conservative-reflux helpers ---------------------------------------------------------
+  /// The flux-materialising residual + interface-strip sampling of the CURRENT level (the reflux capture
+  /// branch of rhs_into / neg_div_flux_default_into). Sizes the transient level face fluxes Fx/Fy from the
+  /// level box_array (xface_box/yface_box), computes R == the fused residual bit-for-bit via the engine
+  /// capture seam, then samples the coarse-role strip (if a child level exists) and the fine-role strip (if
+  /// level_ >= 1) and OVERWRITE-SETS the ledger for R. The source S is cell-local (never in Fx/Fy), so it
+  /// is correctly excluded from the strip -- the native reflux invariant.
+  void capture_into_(int b, MultiFab& u, MultiFab& r, bool flux_only) const {
+    const std::size_t sb = static_cast<std::size_t>(sys_block(b));
+    const MultiFab& ref = eng_->level_state(sb, level_);  // the level grid (state layout)
+    const int nc = ref.ncomp();
+    // One face box per LOCAL level box, co-distributed with the level state (parity with the native path).
+    std::vector<Box2D> fxb, fyb;
+    const BoxArray& ba = ref.box_array();
+    for (int g = 0; g < ba.size(); ++g) {
+      fxb.push_back(pops::xface_box(ba[g]));
+      fyb.push_back(pops::yface_box(ba[g]));
+    }
+    MultiFab Fx(BoxArray(std::move(fxb)), ref.dmap(), nc, 0);
+    MultiFab Fy(BoxArray(std::move(fyb)), ref.dmap(), nc, 0);
+    if (flux_only)
+      eng_->level_neg_div_flux_capture_into(sb, level_, u, r, Fx, Fy);
+    else
+      eng_->level_rhs_capture_into(sb, level_, u, r, Fx, Fy);
+    EdgeFlux ef;
+    // COARSE role: the level-k coarse flux at the faces bordering each level-(k+1) patch (a child exists).
+    if (level_ + 1 < nlev())
+      pops::detail::sample_coarse_role_strip(Fx, Fy,
+                                             eng_->level_state(sb, level_ + 1).box_array(), nc, ef);
+    // FINE role: the coarse-face-averaged level-k flux at level-k's own patch edges (level_ borders k-1).
+    if (level_ >= 1)
+      pops::detail::sample_fine_role_strip(Fx, Fy, ba, nc, ef);
+    flux_ledger_[key_(&r)] = std::move(ef);  // OVERWRITE-set (a residual op initialises the strip)
+  }
+
+  std::pair<int, const void*> key_(const MultiFab* mf) const {
+    return {level_, static_cast<const void*>(mf)};
+  }
+
+  /// ledger[u] += a * ledger[r] (component-wise on the interface strips), skipping if &r is absent (zero
+  /// flux). The native lockstep discipline: the register accumulates sum_i w_i F_i with the SAME weights
+  /// the state combine applies, reproduced through the Program's axpy without any scheme dispatch.
+  void ledger_axpy_(MultiFab& u, Real a, const MultiFab& r) const {
+    const auto it = flux_ledger_.find(key_(&r));
+    if (it == flux_ledger_.end())
+      return;
+    pops::detail::edge_flux_axpy(flux_ledger_[key_(&u)], a, it->second);
+  }
+  /// ledger[z] = a*ledger[x] + b*ledger[y] (overwrite-set; missing operand = zero flux).
+  void ledger_lincomb_(MultiFab& z, Real a, const MultiFab& x, Real b, const MultiFab& y) const {
+    EdgeFlux out;
+    const auto itx = flux_ledger_.find(key_(&x));
+    if (itx != flux_ledger_.end())
+      pops::detail::edge_flux_axpy(out, a, itx->second);
+    const auto ity = flux_ledger_.find(key_(&y));
+    if (ity != flux_ledger_.end())
+      pops::detail::edge_flux_axpy(out, b, ity->second);
+    flux_ledger_[key_(&z)] = std::move(out);
+  }
+
+  /// Persist the stored buffer's flux strip into ring_flux_[name] slot 0 at the current level, so a later
+  /// lag read (history()) can re-publish it. Also record whether the stored value ALIASES the live level
+  /// state (a state ring), for the couple_levels slot-0 resync after reflux.
+  void save_ring_flux_(const std::string& name, const MultiFab& value) const {
+    std::vector<std::vector<EdgeFlux>>& ring = ring_flux_[name];
+    const int depth = pops::detail::AmrHistoryOps::depth(*eng_, name);
+    if (static_cast<int>(ring.size()) != depth)
+      ring.assign(static_cast<std::size_t>(depth < 1 ? 1 : depth), {});
+    for (auto& slot : ring)
+      if (static_cast<int>(slot.size()) < nlev())
+        slot.assign(static_cast<std::size_t>(nlev()), {});
+    const auto it = flux_ledger_.find(key_(&value));
+    EdgeFlux ef = (it != flux_ledger_.end()) ? it->second : EdgeFlux{};
+    // PER-RING PER-LEVEL COLD START (mirror of AmrHistoryOps::store_history): the FIRST store of a (name,
+    // level) broadcasts into EVERY deeper slot, so a multistep step 0 reads the same flux at each lag; from
+    // then on only slot 0 is written (the ring rotate carries the older slots). Tracked with our own flag
+    // set, independent of the engine's hist_init_ (which is already set by the engine store above).
+    std::vector<char>& init = ring_flux_init_[name];
+    if (static_cast<int>(init.size()) < nlev())
+      init.assign(static_cast<std::size_t>(nlev()), 0);
+    ring[0][static_cast<std::size_t>(level_)] = ef;
+    if (!init[static_cast<std::size_t>(level_)]) {
+      for (std::size_t s = 1; s < ring.size(); ++s)
+        ring[s][static_cast<std::size_t>(level_)] = ef;
+      init[static_cast<std::size_t>(level_)] = 1;
+    }
+    // Record a live-state-aliasing ring for the post-reflux slot-0 resync (AB2 stores the RHS -> absent).
+    if (&value == &eng_->level_state(static_cast<std::size_t>(sys_block(0)), level_))
+      live_state_rings_.emplace_back(level_, name);
+  }
+  /// Re-publish ring_flux_[name][lag][level] into the live ledger for the ring buffer @p mf, so the commit
+  /// combine carries the lagged flux's weight (acceptance e). Absent = zero flux (no ring strip recorded).
+  void restore_ring_flux_(const std::string& name, int lag, MultiFab& mf) const {
+    const auto it = ring_flux_.find(name);
+    if (it == ring_flux_.end())
+      return;
+    const std::vector<std::vector<EdgeFlux>>& ring = it->second;
+    if (lag < 0 || lag >= static_cast<int>(ring.size()) ||
+        level_ >= static_cast<int>(ring[static_cast<std::size_t>(lag)].size()))
+      return;
+    flux_ledger_[key_(&mf)] = ring[static_cast<std::size_t>(lag)][static_cast<std::size_t>(level_)];
+  }
+  /// Rotate ring_flux_ one slot in lockstep with the ADC-631 history ring (called by couple_levels when
+  /// the deferred rotate fires). O(1) vector-of-strip swaps, the exact chain AmrHistoryOps::rotate uses.
+  void rotate_ring_flux_() const {
+    for (auto& [name, ring] : ring_flux_)
+      for (std::size_t s = ring.size(); s-- > 1;)
+        std::swap(ring[s], ring[s - 1]);
+  }
+  /// The ledger entry for (level, &mf), or a static empty EdgeFlux (zero flux) if absent -- used by
+  /// couple_levels to fetch the coarse-role / fine-role strips of a level's committed buffer.
+  const EdgeFlux& ledger_at_(int level, const MultiFab* mf) const {
+    static const EdgeFlux kEmpty;
+    const auto it = flux_ledger_.find({level, static_cast<const void*>(mf)});
+    return it == flux_ledger_.end() ? kEmpty : it->second;
+  }
+  /// A live-state write (a stage axpy or the terminal commit lincomb into level state) INVALIDATES any
+  /// earlier ring snapshot of that level's live state: after such a write the stored slot-0 no longer
+  /// equals the live state, so it must NOT be resynced from the corrected state at couple_levels. BDF2
+  /// stores U^n BEFORE its commit, so the commit clears its record -> no resync (correct). A scheme that
+  /// stores the COMMITTED state (store after the commit) keeps its record -> the reflux correction reaches
+  /// slot 0. Cheap: an erase of the (level, *) records after every live-state write.
+  void note_live_write_(const MultiFab* dst) const {
+    if (live_state_rings_.empty())
+      return;
+    for (int k = 0; k < nlev(); ++k) {
+      if (dst != &eng_->level_state(static_cast<std::size_t>(sys_block(0)), k))
+        continue;
+      live_state_rings_.erase(
+          std::remove_if(live_state_rings_.begin(), live_state_rings_.end(),
+                         [k](const std::pair<int, std::string>& e) { return e.first == k; }),
+          live_state_rings_.end());
+      return;
+    }
+  }
+  /// After the reflux corrects the coarse live state, re-copy it into slot 0 of any ring that stored the
+  /// COMMITTED live state this step (still recorded in live_state_rings_ -- i.e. no live-state write
+  /// followed the store), so the stored state and the live state stay consistent for a multistep Program's
+  /// next-step lag read (ADC-631 consistency, section 2c). AB2 stores the RHS (never the live state) and
+  /// BDF2's commit clears its pre-commit U^n record, so neither is touched -- the resync fires only for a
+  /// scheme that genuinely stores the post-commit state.
+  void resync_history_slot0_() const {
+    const std::size_t sb = static_cast<std::size_t>(sys_block(0));
+    for (const auto& [lvl, name] : live_state_rings_) {
+      if (lvl >= nlev())
+        continue;
+      pops::detail::AmrHistoryOps::store_history(*eng_, name, lvl, eng_->level_state(sb, lvl),
+                                                 facade_->program_last_dt());
+    }
+  }
+
   AmrSystem* facade_;
   AmrRuntime* eng_;
   mutable int level_ = 0;
   mutable bool solved_this_step_ = false;
   mutable std::optional<GeometricMG> mg_precond_;
   mutable std::shared_ptr<AmrSchurElliptic> schur_;
+
+  // --- ADC-639 conservative-reflux state -----------------------------------------------------------
+  // The effective-flux LEDGER: for each tracked MultiFab (keyed by (level, address)) the interface-strip
+  // effective flux (EdgeFlux: coarse-role per child patch + fine-role per this-level patch). The Program's
+  // linear combination is SHADOWED on these strips (axpy / lincomb mirror), so a commit's strip holds
+  // dt * Feff = dt * sum_i w_i F_i -- the native effective flux reproduced from the Program text. Cleared
+  // per macro-step by reset_step(); populated ONLY when capturing() (nlev > 1). On a coarse-only / flat
+  // Program it stays EMPTY (the capture branch is never reached) -- the bit-identical parity gate.
+  mutable std::map<std::pair<int, const void*>, EdgeFlux> flux_ledger_;
+  // PERSISTENT per-history-ring flux strips (NOT cleared per step): name -> [slot][level] -> EdgeFlux. A
+  // multistep scheme (AB2 / BDF2) reads a lagged RHS / state from the ring; store_history saves that
+  // buffer's ledger strip here (slot 0), rotate_histories rotates it in lockstep with the ring, and
+  // history() restores it into the live ledger so the commit combine carries the lagged flux's weight --
+  // the reflux stays conservative for a multistep Program across steps (acceptance e).
+  mutable std::map<std::string, std::vector<std::vector<EdgeFlux>>> ring_flux_;
+  // Per-ring per-level cold-start flags for ring_flux_ (mirror of the engine hist_init_), so the first
+  // store of a (name, level) broadcasts its strip into every slot. PERSISTENT (not cleared per step).
+  mutable std::map<std::string, std::vector<char>> ring_flux_init_;
+  // Deferred-rotate flag (ADC-631 consistency, section 2c): the body's terminal rotate_histories() fires
+  // INSIDE the per-level loop, before couple_levels reflux modifies the coarse live state. We defer the
+  // rotate to couple_levels (after the reflux + slot-0 resync), so a multistep Program never reads a
+  // pre-reflux ring slot against a post-reflux live state. On nlev==1 the deferral collapses to the
+  // original store->rotate order -> bit-identical to Uniform / v1.
+  mutable bool rotate_pending_ = false;
+  // Per-step record of (level, ring name) whose slot-0 was written FROM the live level state this step:
+  // after the reflux corrects that live state, couple_levels re-copies it into slot 0 so the stored state
+  // and the live state stay consistent. A ring storing a non-live buffer (AB2 stores the RHS) is absent.
+  mutable std::vector<std::pair<int, std::string>> live_state_rings_;
 };
 
 }  // namespace program
