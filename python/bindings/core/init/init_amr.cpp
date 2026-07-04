@@ -367,6 +367,10 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       // IR hash of the installed compiled Program (the .so's pops_program_hash), or "" if none. Parity
       // System::installed_program_hash (the checkpoint guard).
       .def("installed_program_hash", &AmrSystem::installed_program_hash)
+      // ADC-631: True on the multi-block AmrRuntime engine (a compiled Program forces it even for ONE
+      // block), False on the single-block coupler. The v3 checkpoint routes per-block vs mono state I/O
+      // on this (n_blocks()==1 does not imply the coupler under a Program).
+      .def("uses_runtime_engine", &AmrSystem::uses_runtime_engine)
       // ADC-414 / ADC-542: scalar Program diagnostics (parity System). program_diagnostic(name) reads
       // one, program_diagnostics() the whole map; record_program_diagnostic is the sink the diagnostics
       // driver records a measured scalar into each cadence tick.
@@ -546,7 +550,36 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
                                          std::get<3>(b), std::get<4>(b)});
             s.rebuild_hierarchy(bx, owner_ranks);
           },
-          py::arg("boxes"), py::arg("owner_ranks"));
+          py::arg("boxes"), py::arg("owner_ranks"))
+      // ADC-631 multistep history rings on the compiled-Program AMR route: the SAME seam names as
+      // System (init_system.cpp) so _system_io_history.py serialize/restore is reused verbatim.
+      // history_global returns the per-level slices concatenated into ONE flat buffer (level axis
+      // hidden inside the facade, parity level_aux_flat); restore_history flattens any C-contiguous
+      // array and scatters it back per level; rebuild_history_slots replays the recomputed slots.
+      .def("history_names", &AmrSystem::history_names)
+      .def("history_depth", &AmrSystem::history_depth, py::arg("name"))
+      .def("history_ncomp", &AmrSystem::history_ncomp, py::arg("name"))
+      .def(
+          "history_global",
+          [](const AmrSystem& s, const std::string& name, int slot) {
+            return s.history_global(name, slot);
+          },
+          py::arg("name"), py::arg("slot"))
+      .def("history_initialized", &AmrSystem::history_initialized, py::arg("name"))
+      .def(
+          "restore_history",
+          [](AmrSystem& s, const std::string& name, int slot,
+             py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
+            s.restore_history(name, slot, flat(arr));
+          },
+          py::arg("name"), py::arg("slot"), py::arg("values"))
+      .def("set_history_initialized", &AmrSystem::set_history_initialized, py::arg("name"),
+           py::arg("initialized"))
+      .def("history_slot_dt", &AmrSystem::history_slot_dt, py::arg("name"), py::arg("slot"))
+      .def("restore_history_slot_dt", &AmrSystem::restore_history_slot_dt, py::arg("name"),
+           py::arg("slot"), py::arg("dt"))
+      .def("rebuild_history_slots", &AmrSystem::rebuild_history_slots, py::arg("name"),
+           py::arg("stored_slots"));
 }
 
 }  // namespace

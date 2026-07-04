@@ -1758,6 +1758,14 @@ RuntimeParams AmrSystem::program_params(int prog_block) const {
 AmrRuntime* AmrSystem::engine() const {
   return p_->runtime.get();
 }
+// True on the multi-block AmrRuntime engine (a compiled Program forces it even for ONE block), false on
+// the single-block AmrCouplerMP coupler. The v3 checkpoint routes state I/O on this (n_blocks()==1 does
+// NOT imply the coupler): the per-block accessors work for any block count on the runtime engine, while
+// n_vars / level_state throw there (kAmrCkptMonoOnly).
+bool AmrSystem::uses_runtime_engine() const {
+  p_->ensure_built();
+  return p_->runtime != nullptr;
+}
 // The facade-owned Profiler (parity System), forwarded to by the AmrProgramContext's profiling seam.
 pops::runtime::program::Profiler& AmrSystem::profiler_handle() {
   return p_->program_.profiler_;
@@ -2410,6 +2418,82 @@ void AmrSystem::set_level_aux_flat(int k, const std::vector<double>& v) {
         "AmrSystem::set_level_aux_flat : MULTI-BLOCK / runtime engine only (the coupler aux is "
         "derived and re-applied by solve_fields; restore phi via set_level_potential)");
   p_->runtime->set_level_aux_flat(k, v);
+}
+
+// --- ADC-631 multistep history-ring checkpoint / replay seam (Uniform System seam names) -----------
+// Thin facade wrappers over detail::AmrHistoryOps on the built AmrRuntime engine, so the SHARED
+// python/pops/runtime/_system_io_history.py serialize/restore is reused verbatim: history_global
+// returns the per-level slices concatenated into ONE flat buffer (the level axis hidden inside the
+// accessor, parity with level_aux_flat), restore_history scatters it back per level. The engine is the
+// multi-block AmrRuntime (install_program forces its build); an engine-less coupler has no rings ->
+// history_names() is empty and serialize_histories is a no-op. rebuild_history_slots replays the
+// policy-recomputed slots by re-stepping the installed Program closure (owned by this facade).
+namespace {
+const char* const kAmrHistNoEngine =
+    "AmrSystem : multistep history rings require the multi-block AmrRuntime engine (a compiled AMR "
+    "Program forces its build via install_program); this system has none.";
+}  // namespace
+
+std::vector<std::string> AmrSystem::history_names() const {
+  return p_->runtime ? detail::AmrHistoryOps::names(*p_->runtime) : std::vector<std::string>{};
+}
+int AmrSystem::history_depth(const std::string& name) const {
+  if (!p_->runtime)
+    throw std::runtime_error(kAmrHistNoEngine);
+  return detail::AmrHistoryOps::depth(*p_->runtime, name);
+}
+int AmrSystem::history_ncomp(const std::string& name) const {
+  if (!p_->runtime)
+    throw std::runtime_error(kAmrHistNoEngine);
+  return detail::AmrHistoryOps::ncomp(*p_->runtime, name);
+}
+bool AmrSystem::history_initialized(const std::string& name) const {
+  if (!p_->runtime)
+    throw std::runtime_error(kAmrHistNoEngine);
+  return detail::AmrHistoryOps::initialized(*p_->runtime, name);
+}
+void AmrSystem::set_history_initialized(const std::string& name, bool initialized) {
+  if (!p_->runtime)
+    throw std::runtime_error(kAmrHistNoEngine);
+  detail::AmrHistoryOps::set_initialized(*p_->runtime, name, initialized);
+}
+std::vector<double> AmrSystem::history_global(const std::string& name, int slot) const {
+  if (!p_->runtime)
+    throw std::runtime_error(kAmrHistNoEngine);
+  return detail::AmrHistoryOps::global(*p_->runtime, name, slot, pops::n_ranks() != 1);
+}
+void AmrSystem::restore_history(const std::string& name, int slot,
+                                const std::vector<double>& values) {
+  if (!p_->runtime)
+    throw std::runtime_error(kAmrHistNoEngine);
+  detail::AmrHistoryOps::restore(*p_->runtime, name, slot, values);
+}
+double AmrSystem::history_slot_dt(const std::string& name, int slot) const {
+  if (!p_->runtime)
+    throw std::runtime_error(kAmrHistNoEngine);
+  return detail::AmrHistoryOps::slot_dt(*p_->runtime, name, slot);
+}
+void AmrSystem::restore_history_slot_dt(const std::string& name, int slot, double dt) {
+  if (!p_->runtime)
+    throw std::runtime_error(kAmrHistNoEngine);
+  detail::AmrHistoryOps::restore_slot_dt(*p_->runtime, name, slot, dt);
+}
+int AmrSystem::rebuild_history_slots(const std::string& name,
+                                     const std::vector<int>& stored_slots) {
+  if (!p_->runtime)
+    throw std::runtime_error(kAmrHistNoEngine);
+  if (!p_->program_.step_)
+    throw std::runtime_error(
+        "AmrSystem::rebuild_history_slots : no compiled Program is installed; the ring cannot be "
+        "replayed (install_program before restart, or checkpoint the ring with Dense())");
+  // The replay re-steps the installed Program closure with regrid frozen inside the engine bracket.
+  // Setting last_dt_ per step keeps the per-slot dt tagging consistent (bracketed away by the engine).
+  Impl* imp = p_.get();
+  return detail::AmrHistoryOps::rebuild_slots(
+      *p_->runtime, name, stored_slots, [imp](double dt) {
+        imp->program_.last_dt_ = static_cast<Real>(dt);
+        imp->program_.step_(dt);
+      });
 }
 
 }  // namespace pops
