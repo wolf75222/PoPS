@@ -206,6 +206,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [4]
 
 [[cpp.suite]]
+name = "test_mpi_composite_fac"
+sources = ["tests/cpp/integration/mpi/test_mpi_composite_fac.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
 name = "test_mpi_coupled_source"
 sources = ["tests/cpp/integration/mpi/test_mpi_coupled_source.cpp"]
 labels = ["backend", "mpi", "medium"]

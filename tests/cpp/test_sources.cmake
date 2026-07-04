@@ -122,6 +122,7 @@ set(POPS_CPP_TEST_SOURCE_test_mpi_amr_compiled_parity "tests/cpp/integration/mpi
 set(POPS_CPP_TEST_SOURCE_test_mpi_amr_distributed_coarse "tests/cpp/integration/mpi/test_mpi_amr_distributed_coarse.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_amr_twoblock_parity "tests/cpp/integration/mpi/test_mpi_amr_twoblock_parity.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_array_reduce "tests/cpp/integration/mpi/test_mpi_array_reduce.cpp")
+set(POPS_CPP_TEST_SOURCE_test_mpi_composite_fac "tests/cpp/integration/mpi/test_mpi_composite_fac.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_coupled_source "tests/cpp/integration/mpi/test_mpi_coupled_source.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_coupler_inject "tests/cpp/integration/mpi/test_mpi_coupler_inject.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_cutcell_multibox "tests/cpp/integration/mpi/test_mpi_cutcell_multibox.cpp")

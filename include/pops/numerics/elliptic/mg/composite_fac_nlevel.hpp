@@ -38,8 +38,26 @@ inline void CompositeFacPoisson::build_extra_levels_(const std::vector<BoxArray>
   const int L = n_levels_;  // = 1 + level_boxes.size()
   for (int k = 2; k < L; ++k) {
     const Geometry gk = geom_c_.refine(1 << k);
-    const BoxArray& bak = level_boxes[k - 1];        // level_boxes[k-1] is the level-k tiling
-    DistributionMapping dmk(bak.size(), n_ranks());  // co-location with the parent = ADC-636 commit 4
+    const BoxArray& bak = level_boxes[k - 1];  // level_boxes[k-1] is the level-k tiling
+    // CO-LOCATION (ADC-636 MPI): place each level-k patch on the rank owning its PARENT (level k-1)
+    // patch, so the C/F bilerp reads a LOCAL parent fab (no inter-rank read inside the bilerp). The
+    // parent of child g is the level-(k-1) patch whose footprint contains the child's grown footprint
+    // (validate_nesting_ guarantees a single parent). Level 1 reads the replicated coarse (local
+    // everywhere), so only k >= 2 needs this.
+    const BoxArray& parent_ba = (k == 2) ? ba_f_ : ba_lv_[(k - 1) - 2];
+    const DistributionMapping& parent_dm = (k == 2) ? dm_f_ : dm_lv_[(k - 1) - 2];
+    std::vector<int> ranks(bak.size(), 0);
+    for (int g = 0; g < bak.size(); ++g) {
+      const Box2D foot = PatchRange(bak[g]).box();  // child footprint on level k-1
+      int owner = 0;
+      for (int p = 0; p < parent_ba.size(); ++p)
+        if (parent_ba[p].contains(foot)) {
+          owner = parent_dm.ranks()[p];
+          break;
+        }
+      ranks[g] = owner;
+    }
+    DistributionMapping dmk(std::move(ranks));
     geom_lv_.push_back(gk);
     ba_lv_.push_back(bak);
     dm_lv_.push_back(dmk);
@@ -166,15 +184,35 @@ inline void CompositeFacPoisson::setup_level_coeffs_() {
   }
 }
 
+namespace detail {
+// Find the local parent fab whose GROWN box covers the coarsened footprint the child's ghost ring
+// reads. Level 0 (parent) is mono-box replicated -> fab(0) on every rank. For k >= 2 the child is
+// CO-LOCATED with its parent (build_extra_levels_), so the covering parent fab is LOCAL. Returns a
+// null array (ptr == nullptr) if no local parent covers it (a rank that owns neither -> nothing to do).
+inline ConstArray4 parent_array_for_(const MultiFab& parent, const Box2D& child_valid, int r,
+                                     int ng) {
+  // the ghost ring reads coarse cells around the coarsened child box; grow by 1 coarse cell for the
+  // bilerp stencil, on the coarsened (child-grown) footprint.
+  const Box2D need = Box2D{{(child_valid.lo[0] - ng) / r - 1, (child_valid.lo[1] - ng) / r - 1},
+                           {(child_valid.hi[0] + ng) / r + 1, (child_valid.hi[1] + ng) / r + 1}};
+  for (int li = 0; li < parent.local_size(); ++li)
+    if (parent.fab(li).grown_box().contains(need))
+      return parent.fab(li).const_array();
+  return ConstArray4{};
+}
+}  // namespace detail
+
 // fill_cf_field_ : ghosts of a level-k COEFFICIENT field by bilerp of the parent (level k-1). Generic
-// (eps, a_xy, a_yx); same as the legacy fill_cf_coarse_to_fine with an arbitrary parent.
+// (eps, a_xy, a_yx); reads the CO-LOCATED local parent fab (mono-box replicated at level 0).
 inline void CompositeFacPoisson::fill_cf_field_(int /*k*/, MultiFab& fine, const MultiFab& parent) {
   device_fence();
-  const ConstArray4 C = parent.fab(0).const_array();  // parent mono-box (replicated at level 0)
   const int ng = fine.n_grow();
   for (int li = 0; li < fine.local_size(); ++li) {
     Array4 F = fine.fab(li).array();
     const Box2D vb = fine.box(li);
+    const ConstArray4 C = detail::parent_array_for_(parent, vb, ratio_, ng);
+    if (C.p == nullptr)
+      continue;  // no local parent (should not happen under co-location); skip
     for (int j = vb.lo[1] - ng; j <= vb.hi[1] + ng; ++j)
       for (int i = vb.lo[0] - ng; i <= vb.hi[0] + ng; ++i) {
         const bool inside = (i >= vb.lo[0] && i <= vb.hi[0] && j >= vb.lo[1] && j <= vb.hi[1]);
@@ -193,11 +231,14 @@ inline void CompositeFacPoisson::fill_cf_field_(int /*k*/, MultiFab& fine, const
 inline void CompositeFacPoisson::fill_cf_phi_(int k) {
   device_fence();
   MultiFab& phik = phi_level(k);
-  const ConstArray4 C = phi_level(k - 1).fab(0).const_array();  // parent mono-box / replicated at 0
+  const MultiFab& parent = phi_level(k - 1);
   const int ng = phik.n_grow();
   for (int li = 0; li < phik.local_size(); ++li) {
     Array4 F = phik.fab(li).array();
     const Box2D vb = phik.box(li);
+    const ConstArray4 C = detail::parent_array_for_(parent, vb, ratio_, ng);  // co-located parent fab
+    if (C.p == nullptr)
+      continue;
     for (int j = vb.lo[1] - ng; j <= vb.hi[1] + ng; ++j)
       for (int i = vb.lo[0] - ng; i <= vb.hi[0] + ng; ++i) {
         const bool inside = (i >= vb.lo[0] && i <= vb.hi[0] && j >= vb.lo[1] && j <= vb.hi[1]);
@@ -530,7 +571,54 @@ inline void CompositeFacPoisson::correct_level_(int m) {
     return;
   }
   GeometricMG& mgk = *level_mg_[m];
-  // the intermediate correction inherits the same coefficients as its level (eps + cross carried).
+  const BoxArray& bam = (m == 1) ? ba_f_ : ba_lv_[m - 2];
+  const bool single_patch_replicated = (bam.size() == 1);  // the mg is replicated (finalize_...)
+  if (single_patch_replicated && n_ranks() > 1) {
+    // MPI: the level-m patch is co-located on ONE rank but the correction mg is REPLICATED (every rank
+    // solves it). Broadcast the distributed patch's residual + coefficients to a replicated copy on
+    // every rank (single owner -> all_reduce_sum of the owner's data + 0 elsewhere = an exact
+    // broadcast), solve the replicated mg identically on all ranks, then write the correction back to
+    // the distributed patch on the owning rank. Deterministic + bit-identical across np.
+    const BoxArray& rba = mgk.rhs().box_array();
+    const DistributionMapping& rdm = mgk.rhs().dmap();  // replicated (every rank owns the box)
+    auto broadcast = [&](const MultiFab& dist) {
+      MultiFab rep(rba, rdm, 1, dist.n_grow());
+      rep.set_val(Real(0));
+      // the owner writes its patch cells; others contribute 0.
+      for (int li = 0; li < dist.local_size(); ++li) {
+        Array4 R = rep.fab(0).array();
+        const ConstArray4 S = dist.fab(li).const_array();
+        const Box2D b = dist.box(li);
+        for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+          for (int i = b.lo[0]; i <= b.hi[0]; ++i)
+            R(i, j, 0) = S(i, j, 0);
+      }
+      all_reduce_sum_inplace(rep.fab(0).array().p, static_cast<int>(rep.fab(0).size()));
+      return rep;
+    };
+    MultiFab res_rep = broadcast(res_level_(m));
+    if (has_eps_)
+      mgk.set_epsilon(broadcast(eps_level(m)));
+    if (has_cross_)
+      mgk.set_cross_terms(broadcast(a_xy_level(m)), broadcast(a_yx_level(m)));
+    copy0_(mgk.rhs(), res_rep);
+    mgk.phi().set_val(Real(0));
+    mgk.solve(options_.coarse_rel_tol, options_.coarse_cycles);
+    // write the correction back to the distributed patch on its owner (add_uncovered on the local fab).
+    const CoverageMask& cov = cov_of_[m];
+    MultiFab& phim = phi_level(m);
+    const ConstArray4 E = mgk.phi().fab(0).const_array();
+    for (int li = 0; li < phim.local_size(); ++li) {
+      Array4 P = phim.fab(li).array();
+      const Box2D b = phim.box(li);
+      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+        for (int i = b.lo[0]; i <= b.hi[0]; ++i)
+          if (!cov.covered(i, j))
+            P(i, j, 0) += E(i, j, 0);
+    }
+    return;
+  }
+  // serial (or a distributed multi-patch mg): feed the level fields directly.
   if (has_eps_)
     mgk.set_epsilon(eps_level(m));
   if (has_cross_)
