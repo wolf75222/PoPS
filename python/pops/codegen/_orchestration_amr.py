@@ -105,7 +105,9 @@ def _compile_amr_program(problem: Any, layout: Any, backend: Any, target: Any, t
 
     program_kwargs = {k: v for k, v in kwargs.items()
                       if k in ("so_path", "force", "cxx", "include", "std", "debug", "libraries")}
-    first_spec = next(iter(problem._blocks.values()))
+    # problem._blocks is a BlockRegistry (an items()-style mapping with no .values()); take the
+    # FIRST block's spec as the codegen representative, exactly like the Uniform route.
+    _, first_spec = next(iter(problem._blocks.items()))
     first_model = _resolve_problem_model(first_spec["model"])
     compiled = compile_problem(model=first_model, time=time, backend=backend,
                                target="amr_system", **program_kwargs)
