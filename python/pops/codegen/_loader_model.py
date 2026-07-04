@@ -130,6 +130,36 @@ class CompiledModel:
         sim._s.set_state("check", np.stack(comps).ravel())
         return sim.check_model("check", raise_on_error=raise_on_error, rtol=rtol, atol=atol)
 
+    def arguments(self) -> Any:
+        """The runtime inputs this AMR-route artifact expects at bind (Spec 5 sec.12.2, ADC-515).
+
+        The AMR route of ``pops.compile(problem, layout=AMR(...))`` returns the first block's
+        ``CompiledModel`` (there is no whole-system ``CompiledProblem`` on AMR: each block is a native
+        ``add_native_block`` loader). So the ``arguments()`` seam ``CompiledProblem`` exposes on the
+        Uniform route lives HERE too, built from the SAME :func:`~pops.codegen.inspect_compiled.
+        build_arguments` via the model-as-handle path (the handle IS its own physical model). It lists
+        -- WITHOUT any bind or runtime read -- the block instance (state space / components /
+        required), the model's declared params (type / kind / required), its named aux (layout /
+        required) and the runtime layout the artifact targets (``layout='amr'`` for this handle). It
+        allocates and reads nothing."""
+        from pops.codegen.inspect_compiled import build_arguments
+        return build_arguments(self)
+
+    def estimate_memory(self, mesh: Any, *, platform: Any = None, layout: Any = None) -> Any:
+        """A FORMULA-based memory estimate for this AMR-route artifact on ``mesh`` (sec.12.3, ADC-515).
+
+        The AMR counterpart of ``CompiledProblem.estimate_memory``: a pure FORMULA over the mesh shape
+        and the model's component counts (state / aux / halo, plus the conservative AMR patch budget),
+        via the SAME :func:`~pops.codegen.inspect_compiled.build_memory_estimate` with no Program (the
+        no-Program branch skips Program-only scratch and solver categories). @p layout defaults to the
+        AMR layout this handle carries on ``_layout`` (``pops.compile``'s AMR route attaches it), so a
+        bare ``estimate_memory(mesh)`` auto-reports the AMR hierarchy budget (``layout='amr'``,
+        conservative full-refinement worst case); an explicit @p layout / @p platform still wins. It
+        NEVER allocates a ``MultiFab``; every assumption is in ``MemoryEstimate.assumptions``."""
+        from pops.codegen.inspect_compiled import build_memory_estimate
+        return build_memory_estimate(self, mesh, platform=platform,
+                                     layout=layout or getattr(self, "_layout", None))
+
     def inspect_amr(self, layout: Any = None) -> Any:
         """STATIC AMR report on this compiled MODEL (Spec 5 sec.8.12 / sec.8.4).
 
