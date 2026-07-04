@@ -55,6 +55,14 @@ def emit_condensed_op(v: Any, var: Any, model: Any, lines: Any, prelude: Any) ->
             v.id, model, v.attrs["linear_operator"], v.attrs["subset"], v.attrs["c"],
             v.attrs["th_dt"], v.attrs["c_rho"], "(*%s)" % ex, "(*%s)" % ey, "(*%s)" % axy,
             "(*%s)" % ayx, var[state_in.id])
+        # Coefficient halos: the apply_laplacian face means read eps at i+-1, so the four fields need
+        # their ghosts filled after assembly, exactly as the brick's assemble_schur_coeffs did. The ctx
+        # fill_boundary seam (the transport BC) is bit-identical to the brick's coefficient BC on
+        # periodic and zero-gradient (Foextrap) sides -- the whole sanctioned condensed envelope. A
+        # Dirichlet transport side would differ (the brick forces Foextrap on the coefficients); lifting
+        # that needs a ctx coefficient-BC seam, batched with the brick retirement (header change).
+        for sp in (ex, ey, axy, ayx):
+            lines.append("ctx.fill_boundary(*%s);" % sp)
     elif v.op == "condensed_rhs":
         out_in, phi_in, state_in = v.inputs
         lines += _emit_condensed_rhs_kernel(
@@ -85,12 +93,11 @@ def _subset_block_rows(impl: Any, op_name: Any, subset: Any) -> Any:
     return [[rows[r][c] for c in subset] for r in subset]
 
 
-def _emit_block_inverse(body: Any, impl: Any, jblock: Any, th_dt_cpp: Any, indent: Any) -> Any:
-    """Emit ``M = I - th_dt*J`` from the subset block @p jblock (n x n Expr) and its inverse via
-    ``pops::detail::block_inverse<n>``, into @p body (each line prefixed with @p indent). Binds the aux /
-    param locals the J entries reference FIRST (via _cell_locals, cons/prim-free), then M_ / Mi_ and the
-    th_dt_ scalar. Returns the block size n so the caller reads Mi_[r][c]. block_inverse computes the
-    inverse ONCE per cell; the caller reuses Mi_ for every coefficient / apply entry (the brick's fusion).
+def _emit_block_M(body: Any, impl: Any, jblock: Any, th_dt_cpp: Any, indent: Any) -> Any:
+    """Emit ``M = I - th_dt*J`` from the subset block @p jblock (n x n Expr) into the local ``M_[n][n]``,
+    each line prefixed with @p indent. Binds the aux / param locals the J entries reference FIRST (via
+    _cell_locals, cons/prim-free) and the th_dt_ scalar. Returns n. Shared by the coefficient path (which
+    then inverts M with block_inverse) and the vector-apply paths (which call block_apply_inverse on M_).
     """
     n = len(jblock)
     flat = [e for row in jblock for e in row]
@@ -105,12 +112,40 @@ def _emit_block_inverse(body: Any, impl: Any, jblock: Any, th_dt_cpp: Any, inden
             ident = "pops::Real(1)" if r == c else "pops::Real(0)"
             body.append("%sM_[%d][%d] = %s - th_dt_ * (%s);"
                         % (indent, r, c, ident, jblock[r][c].to_cpp()))
+    return n
+
+
+def _emit_block_inverse(body: Any, impl: Any, jblock: Any, th_dt_cpp: Any, indent: Any) -> Any:
+    """Emit ``M = I - th_dt*J`` (via _emit_block_M) and its four ENTRIES ``Mi_ = M^{-1}`` via
+    ``pops::detail::block_inverse<n>``, into @p body. Returns n so the caller reads Mi_[r][c]. This is the
+    COEFFICIENT primitive: the tensor ``A = I + c*rho*M^{-1}`` reads the entries directly, and each
+    block_inverse<2> entry is a DIRECT division (bit-identical to LorentzEliminator's binv_11..22). The
+    VECTOR applies (flux, reconstruct) do NOT use this -- they call block_apply_inverse on M_ so the
+    single reciprocal is factored out of the bracket (apply_Binv order, bit-exact); see _emit_apply_minv.
+    block_inverse computes the inverse ONCE per cell; the caller reuses Mi_ for all four entries."""
+    n = _emit_block_M(body, impl, jblock, th_dt_cpp, indent)
     body.append("%spops::Real Mi_[%d][%d];" % (indent, n, n))
     # block_inverse returns false on a singular M; we do not branch in the device kernel (no throw on
     # device). M = I - th_dt*J is invertible for a well-posed eliminable source (Lorentz: det = 1 + w^2
     # > 0); a singular authored block yields a non-finite result surfacing downstream, not a wrong one.
     body.append("%spops::detail::block_inverse<%d>(M_, Mi_);" % (indent, n))
     return n
+
+
+def _emit_apply_minv(body: Any, n: Any, vx_cpp: Any, vy_cpp: Any, out_x: Any, out_y: Any,
+                     indent: Any) -> None:
+    """Emit ``(out_x, out_y) = M^{-1} . (vx, vy)`` in the FACTORED order via
+    ``pops::detail::block_apply_inverse<n>`` on the local ``M_`` (emitted by _emit_block_M): one
+    reciprocal ``1/det`` factored out of the adjugate-vector bracket. For the Lorentz block this is
+    ``LorentzEliminator::apply_Binv`` bit-for-bit -- the flux / reconstruct parity the retirement gate
+    rests on. Summing the pre-divided block_inverse entries would round differently (a per-step ULP
+    drift). The input vector and the outputs are named C++ scalars; the block-inverse local M_ is reused
+    for every apply in the same cell (the brick's fusion)."""
+    body.append("%spops::Real cond_v_[%d] = {%s, %s};" % (indent, n, vx_cpp, vy_cpp))
+    body.append("%spops::Real cond_mv_[%d];" % (indent, n))
+    body.append("%spops::detail::block_apply_inverse<%d>(M_, cond_v_, cond_mv_);" % (indent, n))
+    body.append("%sconst pops::Real %s = cond_mv_[0];" % (indent, out_x))
+    body.append("%sconst pops::Real %s = cond_mv_[1];" % (indent, out_y))
 
 
 def _emit_condensed_coeffs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any, c_coeff: Any,
@@ -172,10 +207,12 @@ def _emit_condensed_flux_kernel(body: Any, uid: Any, impl: Any, jblock: Any, th_
         "    const pops::Real mx_ = stateA(i, j, %d);" % int(subset[0]),
         "    const pops::Real my_ = stateA(i, j, %d);" % int(subset[1]),
     ]
-    _emit_block_inverse(body, impl, jblock, th_dt_cpp, "    ")
-    # F = M^{-1} (mx, my): the matrix-vector apply of the block inverse to the momentum subset.
-    body.append("    fA(i, j, 0) = Mi_[0][0] * mx_ + Mi_[0][1] * my_;")
-    body.append("    fA(i, j, 1) = Mi_[1][0] * mx_ + Mi_[1][1] * my_;")
+    n = _emit_block_M(body, impl, jblock, th_dt_cpp, "    ")
+    # F = M^{-1} (mx, my): the FACTORED matrix-vector apply (block_apply_inverse) -- one reciprocal out of
+    # the bracket, bit-for-bit the brick's LorentzEliminator::apply_Binv (not the pre-divided entries).
+    _emit_apply_minv(body, n, "mx_", "my_", "cond_fx_", "cond_fy_", "    ")
+    body.append("    fA(i, j, 0) = cond_fx_;")
+    body.append("    fA(i, j, 1) = cond_fy_;")
     body += ["  });", "}"]
 
 
@@ -264,15 +301,18 @@ def _emit_condensed_reconstruct_kernel(uid: Any, model: Any, jblock_op: Any, sub
         % int(subset[0]),
         "    const pops::Real vy_ = stateA(i, j, %d) * inv_rho;" % int(subset[1]),
     ]
-    # block_inverse FIRST: it binds th_dt_ and the aux J locals the residual reads below.
-    _emit_block_inverse(body, impl, jblock, th_dt_cpp, "    ")
+    # M = I - th_dt*J FIRST: _emit_block_M binds th_dt_ and the aux J locals the residual reads below.
+    n = _emit_block_M(body, impl, jblock, th_dt_cpp, "    ")
     body += [
         "    const pops::Real gx_ = (phiA(i + 1, j, 0) - phiA(i - 1, j, 0)) * cond%s_hx;" % uid,
         "    const pops::Real gy_ = (phiA(i, j + 1, 0) - phiA(i, j - 1, 0)) * cond%s_hy;" % uid,
         "    const pops::Real rx_ = vx_ - th_dt_ * gx_;  // (v^n - theta dt grad phi)_x",
         "    const pops::Real ry_ = vy_ - th_dt_ * gy_;",
-        "    const pops::Real nx_ = Mi_[0][0] * rx_ + Mi_[0][1] * ry_;  // M^-1(v^n - theta dt grad phi)",
-        "    const pops::Real ny_ = Mi_[1][0] * rx_ + Mi_[1][1] * ry_;",
+    ]
+    # v^{n+theta} = M^{-1}(v^n - theta dt grad phi): the FACTORED apply (block_apply_inverse), bit-for-bit
+    # the brick's apply_Binv(rx_, ry_) -- one reciprocal out of the bracket, not the pre-divided entries.
+    _emit_apply_minv(body, n, "rx_", "ry_", "nx_", "ny_", "    ")
+    body += [
         "    stateA(i, j, %d) = rho * nx_;  // mom = rho v^{n+theta}" % int(subset[0]),
         "    stateA(i, j, %d) = rho * ny_;" % int(subset[1]),
         "  });",

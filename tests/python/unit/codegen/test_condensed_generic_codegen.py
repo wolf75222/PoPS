@@ -113,29 +113,46 @@ def test_r2_rho_split_out_of_M():
     print("OK  R2: rho is the outer c*rho factor; M = I - th_dt*J is J-only")
 
 
-def test_rhs_and_reconstruct_use_block_inverse():
-    """The fused RHS flux and the velocity reconstruction both invert M with block_inverse<2> and apply
-    it as a matrix-vector product; the RHS fuses -Lap phi^n with the centered divergence of M^{-1}(m)."""
+def test_rhs_and_reconstruct_use_block_apply_inverse():
+    """The fused RHS flux and the velocity reconstruction apply M^{-1} to a VECTOR with the FACTORED
+    ``block_apply_inverse<2>`` (one reciprocal out of the bracket, bit-for-bit the retiring brick's
+    LorentzEliminator::apply_Binv), NOT the pre-divided block_inverse entries -- that spelling would
+    round differently and drift the trajectory off np.array_equal (ADC-637 PR-2 parity crux). The RHS
+    fuses -Lap phi^n with the centered divergence of M^{-1}(m)."""
     src = _emit()
-    assert "fA(i, j, 0) = Mi_[0][0] * mx_ + Mi_[0][1] * my_;" in src, "flux M^-1 apply missing\n%s" % src
+    assert "pops::detail::block_apply_inverse<2>(M_, cond_v_, cond_mv_);" in src, \
+        "vector apply must use the factored block_apply_inverse\n%s" % src
+    assert "fA(i, j, 0) = cond_fx_;" in src, "flux M^-1 apply write missing\n%s" % src
     assert "rhsA(i, j, 0) = nlA(i, j, 0) - " in src, "fused -Lap - g*div(F) missing\n%s" % src
-    assert "const pops::Real nx_ = Mi_[0][0] * rx_ + Mi_[0][1] * ry_;" in src, \
-        "reconstruct M^-1 apply missing\n%s" % src
     assert "stateA(i, j, 1) = rho * nx_;" in src, "mom = rho*v write missing\n%s" % src
-    # exactly three block_inverse<2> sites (coeffs, rhs flux, reconstruct).
-    assert src.count("pops::detail::block_inverse<2>(M_, Mi_);") == 3, \
-        "expected 3 block_inverse sites\n%s" % src
-    print("OK  condensed_rhs + condensed_reconstruct invert M with block_inverse<2>")
+    # exactly one block_inverse<2> site (coeffs: A reads the entries directly) and two factored
+    # block_apply_inverse<2> sites (flux + reconstruct: the vector apply).
+    assert src.count("pops::detail::block_inverse<2>(M_, Mi_);") == 1, \
+        "expected 1 block_inverse (coeffs) site\n%s" % src
+    assert src.count("pops::detail::block_apply_inverse<2>(M_, cond_v_, cond_mv_);") == 2, \
+        "expected 2 block_apply_inverse (flux + reconstruct) sites\n%s" % src
+    print("OK  condensed_rhs + condensed_reconstruct apply M^{-1} with the factored block_apply_inverse")
 
 
 def test_block_inverse_header_included_and_no_schur_tokens():
     """The generated .so includes block_inverse.hpp (only when a condensed op is present) and carries NO
-    coupling/schur token: the generic path is physics-vocabulary-free."""
+    coupling/schur token -- neither the include path NOR the C++ namespace: a generic-only Program must
+    compile without coupling/schur/** (its matrix-free apply lowers the condensed bundle to
+    ctx.fill_boundary + the pops::apply_laplacian coefficient floor, and the coefficient halos are
+    filled through the ctx seam, as the brick's assemble_schur_coeffs did natively)."""
     src = _emit()
     assert "#include <pops/numerics/linalg/block_inverse.hpp>" in src, "block_inverse include missing"
-    for forbidden in ("coupling/schur", "LorentzEliminator", "assemble_schur", "SchurOperator",
-                      "schur_reconstruct"):
+    for forbidden in ("coupling/schur", "coupling::schur", "LorentzEliminator", "assemble_schur",
+                      "SchurOperator", "schur_reconstruct"):
         assert forbidden not in src, "generic condensed path must not name %r\n%s" % (forbidden, src)
+    # The generic coefficiented apply: in-halos via the ctx seam, then the SAME apply_laplacian floor
+    # the brick's wrapper forwarded to (bit-identical operator arithmetic).
+    assert "pops::apply_laplacian(" in src, "generic apply must call the apply_laplacian floor\n%s" % src
+    assert "ctx.fill_boundary(const_cast<pops::MultiFab&>(in));" in src, \
+        "generic apply must fill the in-halos via the ctx seam\n%s" % src
+    # The four coefficient fields get their halos filled after assembly (the brick's eps_bc fill).
+    assert src.count("ctx.fill_boundary(*ceps_x") == 1 and src.count("ctx.fill_boundary(*ca_yx") == 1, \
+        "condensed_coeffs must fill the coefficient halos\n%s" % src
     print("OK  block_inverse.hpp included; no coupling/schur vocabulary in the generic path")
 
 
@@ -153,7 +170,7 @@ def _run():
     fns = [test_coeffs_emit_block_inverse_reduction,
            test_j_entries_lower_through_shared_expr_machinery,
            test_r2_rho_split_out_of_M,
-           test_rhs_and_reconstruct_use_block_inverse,
+           test_rhs_and_reconstruct_use_block_apply_inverse,
            test_block_inverse_header_included_and_no_schur_tokens,
            test_schur_free_program_omits_block_inverse_header]
     for fn in fns:
