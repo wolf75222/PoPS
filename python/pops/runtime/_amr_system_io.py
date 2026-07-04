@@ -21,6 +21,20 @@ else:
 class _AmrSystemIO(_AmrSystem):
     """Output / checkpoint / restart methods of AmrSystem."""
 
+    def set_history_persistence(self, mapping: Any) -> Any:
+        """Attach the per-history persistence policies (ADC-631, parity with System): @p mapping is
+        ``name -> policy`` (a :class:`pops.time.history_persistence.HistoryPersistence`). The v3
+        checkpoint reads it to store only the policy-selected ring slots; a ring absent from the map
+        persists Dense (the whole ring). Idempotent; ``None`` clears it. Forwarded at install."""
+        self._history_persistence = dict(mapping or {})
+        return self
+
+    def last_restart_report(self) -> Any:
+        """The typed :class:`~pops.time.history_persistence_report.HistoryReplayReport` of the last
+        restart (stored-vs-recomputed ring slots + replay steps), or ``None`` if no restart with rings
+        has run. Metadata-only (parity System.last_restart_report); populated by :meth:`restart`."""
+        return getattr(self, "_last_restart_report", None)
+
     def write(self, path: Any, format: str = "npz", step: Any = None) -> Any:
         """AMR VISUALIZATION OUTPUT (wave 3) : COARSE fields per block + phi + footprints of the
         fine patches. format='npz' (per-block densities, phi, patch_rectangles, t) or 'vtk' (.vti of
@@ -110,7 +124,8 @@ class _AmrSystemIO(_AmrSystem):
         # (back-compat, zero behaviour change) so existing v2 readers still work.
         if self._regrid_every != 0:
             from pops.runtime._amr_checkpoint_v3 import write_v3
-            return write_v3(self._s, path, self._L, self._regrid_every)
+            return write_v3(self._s, path, self._L, self._regrid_every,
+                            getattr(self, "_history_persistence", None) or {})
         gather = _pops.n_ranks() != 1  # np>1 : COLLECTIVE _global accessors (every rank gathers)
         multi = self._s.n_blocks() != 1
         nlev = int(self._s.n_levels())
@@ -184,9 +199,10 @@ class _AmrSystemIO(_AmrSystem):
                              % (d["pops_amr_checkpoint_version"],))
         if version == 3:
             # ADC-542: v3 rebuilds the mid-run hierarchy from the manifest (restartable under active
-            # regridding). The frozen-hierarchy requirement does NOT apply to v3.
+            # regridding). The frozen-hierarchy requirement does NOT apply to v3. ADC-631: restart_v3
+            # also restores + replays the multistep history rings and returns the HistoryReplayReport.
             from pops.runtime._amr_checkpoint_v3 import restart_v3
-            restart_v3(self._s, d, self._L)
+            self._last_restart_report = restart_v3(self._s, d, self._L)
             return
         if self._regrid_every != 0:
             raise ValueError(

@@ -42,6 +42,16 @@ class _AmrSystemProgram(_AmrSystem):
         """
         if so_path is not None:
             self.install_program(so_path)
+            # (5a) HISTORY-PERSISTENCE POLICIES (ADC-631, parity with the uniform step-5a): the compiled
+            # Program records a per-ring persistence policy (Dense / Interval / Revolve) on
+            # program._history_persistence. Attach the name -> policy map so the v3 checkpoint stores
+            # only the policy-selected slots and the restart replays the gaps. Absent -> Dense.
+            program = getattr(compiled, "program", None)
+            persistence = getattr(program, "_history_persistence", None) if program else None
+            set_persistence = getattr(self, "set_history_persistence", None)
+            if persistence and set_persistence is not None:
+                set_persistence(
+                    {name: policy for name, (_depth, policy) in persistence.items()})
             if params:
                 self._install_program_params(compiled, params)
 
