@@ -17,7 +17,8 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
                        const std::string& time, int substeps, bool evolve, int stride,
                        const std::vector<std::string>& implicit_vars,
                        const std::vector<std::string>& implicit_roles, const NewtonOptions& newton,
-                       bool newton_diagnostics, double positivity_floor, bool wave_speed_cache) {
+                       bool newton_diagnostics, double positivity_floor, bool wave_speed_cache,
+                       double weno_epsilon) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "add_block");  // frozen once pops.bind completes (ADC-592)
   // Completeness contract of the model (ADC-290): transport / elliptic must be chosen explicitly.
@@ -110,6 +111,30 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
         "abs_tol/fd_eps/diagnostics) require time='imex' (received time='" +
         time + "')");
 
+  // ADC-645: the WENO-Z regulariser. Only meaningful with limiter='weno5'; on any other limiter a
+  // non-default value would be silently ignored -> refuse loud. The POLAR path keeps the default
+  // Weno5 (its builder is not threaded); refuse a non-default eps there too rather than drop it.
+  if (weno_epsilon <= 0.0)
+    throw std::runtime_error("System::add_block : weno_epsilon > 0 required");
+  if (weno_epsilon != static_cast<double>(kWenoEpsilon)) {
+    if (limiter != "weno5")
+      throw std::runtime_error(
+          "System::add_block : weno_epsilon applies to limiter='weno5' only (received limiter='" +
+          limiter + "')");
+    if (P->polar_)
+      throw std::runtime_error(
+          "System::add_block : weno_epsilon is wired on the cartesian path only (the polar "
+          "builder keeps the default kWenoEpsilon; wiring it is a follow-up)");
+    // The masked/EB advances keep the default-constructed Weno5 (mirror of the wave_speed_cache
+    // guard above): requesting a non-default eps with an active disc transport mode would be
+    // WITHOUT EFFECT on those closures -> explicit rejection, never a silent drop.
+    if (P->eb_set_ && P->geometry_mode_ != GeometryMode::None)
+      throw std::runtime_error(
+          "System::add_block : weno_epsilon incompatible with an active embedded-boundary "
+          "transport mode (staircase/cutcell) ; it is only wired on the full Cartesian advance "
+          "(leave weno_epsilon default or mode='none')");
+  }
+
   int ncomp = 1;
   BlockClosures clo;
   std::function<Real(const MultiFab&)> max_speed;
@@ -171,7 +196,8 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
                                       nopts,
                                       nreport,
                                       static_cast<Real>(positivity_floor),
-                                      wave_speed_cache};
+                                      wave_speed_cache,
+                                      static_cast<Real>(weno_epsilon)};
     if (model.transport == "exb") {
       bb = detail::build_block_exb(model, args);
     } else if (model.transport == "compressible") {
@@ -483,7 +509,7 @@ void System::add_native_block(const std::string& name, const std::string& so_pat
 void System::set_poisson(const std::string& rhs, const std::string& solver, const std::string& bc,
                          const std::string& wall, double wall_radius, double epsilon, double abs_tol,
                          double rel_tol, int max_cycles, int min_coarse, int pre_smooth,
-                         int post_smooth, int bottom_sweeps) {
+                         int post_smooth, int bottom_sweeps, int coarse_threshold) {
   require_assembling(p_->lifecycle_, "set_poisson");  // frozen once pops.bind completes (ADC-592)
   if (epsilon == 0.0)
     throw std::runtime_error("System::set_poisson : epsilon != 0 required");
@@ -501,6 +527,10 @@ void System::set_poisson(const std::string& rhs, const std::string& solver, cons
   if (pre_smooth < 0 || post_smooth < 0 || bottom_sweeps < 0)
     throw std::runtime_error("System::set_poisson : pre_smooth/post_smooth/bottom_sweeps >= 0 "
                              "required");
+  // ADC-644: the total-cell coarsening ceiling. 0 (the default sentinel) = disabled (only min_coarse
+  // governs); a positive value stops coarsening at that unknown count. Negative is refused.
+  if (coarse_threshold < 0)
+    throw std::runtime_error("System::set_poisson : coarse_threshold >= 0 required (0 = disabled)");
   p_->fields_.p_rhs = rhs;
   p_->fields_.p_solver = solver;
   p_->fields_.p_bc = bc;
@@ -518,6 +548,7 @@ void System::set_poisson(const std::string& rhs, const std::string& solver, cons
   p_->fields_.p_mg_opts_.nu1 = pre_smooth;
   p_->fields_.p_mg_opts_.nu2 = post_smooth;
   p_->fields_.p_mg_opts_.nbottom = bottom_sweeps;
+  p_->fields_.p_mg_opts_.coarse_threshold = coarse_threshold;  // ADC-644: total-cell coarsening ceiling.
   p_->fields_.ell_.reset();
 }
 
@@ -1039,6 +1070,17 @@ void System::set_source_stage(const std::string& name, const std::string& kind, 
   const std::string& momentum_y = opts.momentum_y;
   const std::string& energy = opts.energy;
   const int bz_aux_component = opts.bz_aux_component;
+  // ADC-645: Krylov-preconditioner knobs of the stage. 0/"" = the historical stepper defaults
+  // (ONE V-cycle; RadialLine on polar), bit-identical; out-of-domain values refuse loud here.
+  const int n_precond_vcycles = opts.n_precond_vcycles;
+  const std::string& polar_precond = opts.polar_precond;
+  if (n_precond_vcycles < 0 || n_precond_vcycles > 2)
+    throw std::runtime_error(
+        "System::set_source_stage : n_precond_vcycles must be 1 or 2 (0 = default)");
+  if (!polar_precond.empty() && polar_precond != "radial_line" && polar_precond != "jacobi")
+    throw std::runtime_error(
+        "System::set_source_stage : polar_precond must be 'radial_line' or 'jacobi' ('' = "
+        "default RadialLine)");
   Impl* P = p_.get();
   Impl::Species& s = P->find(name);  // raises if unknown block
   // ONLY kind wired for now: ElectrostaticLorentzCondensation (cf. CondensedSchurSourceStepper).
@@ -1144,18 +1186,32 @@ void System::set_source_stage(const std::string& name, const std::string& kind, 
     // schur stays nullptr (Cartesian path untouched). EXPLICIT components resolved above
     // (empty descriptors -> canonical roles -> bit-identical): the POLAR stepper accepts the
     // overrides since wave 3 (ctor with explicit components, Cartesian parity).
+    // ADC-645: the polar stage's preconditioner is the PolarPrecond enum, not MG V-cycles; a
+    // cartesian-only n_precond_vcycles here would be silently ignored -> refuse loud instead.
+    if (n_precond_vcycles > 0)
+      throw std::runtime_error(
+          "System::set_source_stage : n_precond_vcycles applies to the CARTESIAN stage only (the "
+          "polar preconditioner is selected by polar_precond='radial_line'|'jacobi')");
+    const PolarPrecond precond =
+        polar_precond == "jacobi" ? PolarPrecond::Jacobi : PolarPrecond::RadialLine;
     s.schur_polar = std::make_shared<PolarCondensedSchurSourceStepper>(
         vs, c_rho, c_mx, c_my, c_E, P->pgeom_, P->ba, P->fields_.poisson_bc(),
-        static_cast<Real>(alpha));
+        static_cast<Real>(alpha), precond);
     if (krylov_tol > 0.0 || krylov_max_iters > 0)
       s.schur_polar->set_krylov(static_cast<Real>(effective_krylov_tol),
                                 effective_krylov_max_iters);
   } else {
     // CARTESIAN (#126): EXPLICIT components resolved above (empty descriptors -> canonical
     // roles -> same indices as the historical, bit-identical).
-    s.schur = std::make_shared<CondensedSchurSourceStepper>(vs, c_rho, c_mx, c_my, c_E, P->geom,
-                                                            P->ba, P->fields_.poisson_bc(),
-                                                            static_cast<Real>(alpha));
+    // ADC-645: polar_precond names the POLAR preconditioner; on cartesian it would be silently
+    // ignored -> refuse loud. n_precond_vcycles 0 = the historical ctor default (ONE V-cycle).
+    if (!polar_precond.empty())
+      throw std::runtime_error(
+          "System::set_source_stage : polar_precond applies to the POLAR stage only (the "
+          "cartesian preconditioner is the MG V-cycle; tune it with n_precond_vcycles)");
+    s.schur = std::make_shared<CondensedSchurSourceStepper>(
+        vs, c_rho, c_mx, c_my, c_E, P->geom, P->ba, P->fields_.poisson_bc(),
+        static_cast<Real>(alpha), n_precond_vcycles > 0 ? n_precond_vcycles : 1);
     if (krylov_tol > 0.0 || krylov_max_iters > 0)
       s.schur->set_krylov(static_cast<Real>(effective_krylov_tol), effective_krylov_max_iters);
   }
@@ -1176,6 +1232,11 @@ void System::set_source_stage(const std::string& name, const std::string& kind, 
   stage.momentum_y = momentum_y;
   stage.energy = energy;
   stage.bz_aux_component = c_bz;
+  // ADC-645: the stage's Krylov-preconditioner knobs (requested vs effective).
+  stage.requested_n_precond_vcycles = n_precond_vcycles;
+  stage.effective_n_precond_vcycles = polar ? 1 : (n_precond_vcycles > 0 ? n_precond_vcycles : 1);
+  stage.polar_precond =
+      polar ? (polar_precond.empty() ? std::string("radial_line") : polar_precond) : "";
   P->diagnostics_.source_stage_options[name] = std::move(stage);
 }
 

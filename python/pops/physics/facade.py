@@ -153,15 +153,20 @@ class Model(_FacadeCompileMixin):
         self._m.set_wave_speeds(x, y)
 
     def wave_speeds_from_jacobian(self, x: Any = None, y: Any = None, eig: str = "numeric",
-                                  blocks: Any = None, fd_eps: Any = None) -> None:
+                                  blocks: Any = None, fd_eps: Any = None,
+                                  eig_max_iter: Any = None, im_tol: Any = None) -> None:
         """EXACT signed wave speeds from the eigenvalues of the flux jacobian (delegates to
         set_wave_speeds_from_jacobian, see its full contract): x/y = dF/dU as Expr (None =
         AUTODIFF of the declared flux via flux_jacobian); eig = 'numeric' | 'fd' (finite differences
         of the compiled flux, debug); blocks = lists of indices of the diagonal sub-blocks (None = full
         block, the only unconditionally correct mode -- the blocks ASSERT a
         block-triangular structure); fd_eps = the eig='fd' relative FD step (ADC-617; None = 1e-6, and
-        it participates in the compile cache key)."""
-        self._m.set_wave_speeds_from_jacobian(x=x, y=y, eig=eig, blocks=blocks, fd_eps=fd_eps)
+        it participates in the compile cache key); eig_max_iter / im_tol (ADC-645) = the Francis-QR
+        per-eigenvalue iteration cap of the emitted real_eig_minmax and the imaginary-part tolerance
+        of the Roe |A| real-spectrum gate (None = the native defaults, byte-identical emission; both
+        participate in the compile cache key when set)."""
+        self._m.set_wave_speeds_from_jacobian(x=x, y=y, eig=eig, blocks=blocks, fd_eps=fd_eps,
+                                              eig_max_iter=eig_max_iter, im_tol=im_tol)
 
     def eval_wave_speeds(self, U: Any, aux: Any, dir: Any) -> Any:
         """numpy EVALUATOR of the emitted signed speeds (smin, smax) (delegates to

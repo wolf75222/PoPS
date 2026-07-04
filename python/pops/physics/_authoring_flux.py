@@ -79,7 +79,8 @@ class _FluxMixin(_HyperbolicModel):
 
     def set_wave_speeds_from_jacobian(self, x: Any = None, y: Any = None,
                                       eig: str = "numeric", blocks: Any = None,
-                                      fd_eps: Any = None) -> None:
+                                      fd_eps: Any = None, eig_max_iter: Any = None,
+                                      im_tol: Any = None) -> None:
         """EXACT signed wave speeds: smin/smax = extremes of the flux jacobian's eigenvalues
         A = dF/dU, computed NUMERICALLY per cell (pops::real_eig_minmax, Francis QR
         on a stack buffer, Gershgorin fallback on non-convergence = safe outer bound). Emits
@@ -129,6 +130,22 @@ class _FluxMixin(_HyperbolicModel):
             if eig != "fd":
                 raise ValueError("set_wave_speeds_from_jacobian : fd_eps only applies to eig='fd' (the "
                                  "finite-difference jacobian); the numeric path uses exact formulas")
+        # ADC-645: eig_max_iter caps the per-eigenvalue Francis-QR iterations of the emitted
+        # pops::real_eig_minmax (None = the native default 100, emitted with NO 2nd argument --
+        # byte-identical); im_tol is the imaginary-part tolerance of the Roe |A| real-spectrum gate
+        # (None = the native default 1e-5). Both are numerical-robustness knobs of the compiled
+        # kernels; the check_model numpy oracle uses exact np.linalg.eigvals, unaffected.
+        if eig_max_iter is not None:
+            if isinstance(eig_max_iter, bool) or not isinstance(eig_max_iter, int) \
+                    or eig_max_iter <= 0:
+                raise ValueError("set_wave_speeds_from_jacobian : eig_max_iter must be a positive "
+                                 "int or None (got %r)" % (eig_max_iter,))
+        if im_tol is not None:
+            import math as _math
+            if isinstance(im_tol, bool) or not isinstance(im_tol, (int, float)) \
+                    or not (im_tol > 0.0) or not _math.isfinite(im_tol):
+                raise ValueError("set_wave_speeds_from_jacobian : im_tol must be a finite positive "
+                                 "number or None (got %r)" % (im_tol,))
         nv = self.n_vars
         if (x is None) != (y is None):
             raise ValueError("set_wave_speeds_from_jacobian : provide x AND y, or neither (autodiff)")
@@ -183,7 +200,11 @@ class _FluxMixin(_HyperbolicModel):
                              "explicit": x is not None,
                              # ADC-617: None -> the historical 1e-6 literal, emitted verbatim (byte-
                              # identical). Enters model_hash's ws_jac part so a change busts the cache.
-                             "fd_eps": (None if fd_eps is None else float(fd_eps))}
+                             "fd_eps": (None if fd_eps is None else float(fd_eps)),
+                             # ADC-645: eig knobs, None -> the native defaults emitted with NO extra
+                             # argument (byte-identical); enter model_hash ONLY when set (fd_eps rule).
+                             "eig_max_iter": (None if eig_max_iter is None else int(eig_max_iter)),
+                             "im_tol": (None if im_tol is None else float(im_tol))}
 
     def flux_jacobian(self, dir: Any) -> list:
         """Flux jacobian A = dF_dir/dU : n_vars x n_vars matrix of expressions, A[i][j] =

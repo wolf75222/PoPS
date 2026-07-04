@@ -74,7 +74,7 @@ POPS_HD inline typename Model::State reconstruct(const Model& model, const Const
         const Prim Pp2 = model.to_primitive(
             load_state<Model>(u, dir == 0 ? i + 2 * d : i, dir == 0 ? j : j + 2 * d));
         for (int c = 0; c < Model::n_vars; ++c)
-          Pf[c] = weno5z(Pm2[c], Pm1[c], P0[c], Pp1[c], Pp2[c]);
+          Pf[c] = weno5z(Pm2[c], Pm1[c], P0[c], Pp1[c], Pp2[c], lim.eps);
       }
       return model.to_conservative(Pf);
     }
@@ -97,10 +97,10 @@ POPS_HD inline typename Model::State reconstruct(const Model& model, const Const
     for (int c = 0; c < Model::n_vars; ++c) {
       if (dir == 0)
         s[c] = weno5z(u(i - 2 * d, j, c), u(i - d, j, c), u(i, j, c), u(i + d, j, c),
-                      u(i + 2 * d, j, c));
+                      u(i + 2 * d, j, c), lim.eps);
       else
         s[c] = weno5z(u(i, j - 2 * d, c), u(i, j - d, c), u(i, j, c), u(i, j + d, c),
-                      u(i, j + 2 * d, c));
+                      u(i, j + 2 * d, c), lim.eps);
     }
   }
   return s;

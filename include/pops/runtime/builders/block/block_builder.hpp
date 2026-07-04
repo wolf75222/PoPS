@@ -63,6 +63,7 @@ struct BlockRhsEval {
   /// unchanged. Non-null ONLY for the HLL flux (cf. build_block): the cached branch is instantiated
   /// only for Flux == HLLFlux, so model.wave_speeds is always present there.
   std::shared_ptr<MultiFab> ws_cache;
+  Real weno_eps = kWenoEpsilon;  ///< ADC-645: WENO-Z regulariser (default = historical, bit-identical)
   void operator()(MultiFab& U, MultiFab& R) const {
     fill_ghosts(U, ctx->dom, ctx->bc);
     if constexpr (std::is_same_v<Flux, HLLFlux>) {
@@ -72,11 +73,11 @@ struct BlockRhsEval {
         if (ws_cache->local_size() != U.local_size() || ws_cache->ncomp() != 4)
           *ws_cache = MultiFab(U.box_array(), U.dmap(), 4, 1);
         assemble_rhs_hll_cached<Limiter>(model, U, *ctx->aux, ctx->geom, R, *ws_cache, recon_prim,
-                                         pos_floor);
+                                         pos_floor, weno_eps);
         return;
       }
     }
-    assemble_rhs<Limiter, Flux>(model, U, *ctx->aux, ctx->geom, R, recon_prim, pos_floor);
+    assemble_rhs<Limiter, Flux>(model, U, *ctx->aux, ctx->geom, R, recon_prim, pos_floor, weno_eps);
   }
 };
 
@@ -91,9 +92,11 @@ struct AdvanceExplicit {
   bool recon_prim;
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
   std::shared_ptr<MultiFab> ws_cache;  ///< HLL wave speed cache (opt-in); nullptr -> per-face path
+  Real weno_eps = kWenoEpsilon;  ///< ADC-645: WENO-Z regulariser (default = historical)
   void operator()(MultiFab& U, Real dt, int n) const {
     const Real h = dt / static_cast<Real>(n);
-    const BlockRhsEval<Limiter, Flux, Model> rhs{m, &ctx, recon_prim, pos_floor, ws_cache};
+    const BlockRhsEval<Limiter, Flux, Model> rhs{m, &ctx, recon_prim, pos_floor, ws_cache,
+                                                 weno_eps};
     run_explicit_substeps<Stepper>(rhs, U, h, n);
   }
 };
@@ -111,10 +114,11 @@ struct AdvanceImex {
   NewtonOptions nopts{};            // block Newton options (defaults = historical: 2 iters, 1e-7)
   NewtonReport* nreport = nullptr;  // OPT-IN diagnostics (stable address, owned by System::Impl)
   Real pos_floor = Real(0);         ///< Zhang-Shu positivity limiter (<= 0: inactive)
+  Real weno_eps = kWenoEpsilon;     ///< ADC-645: WENO-Z regulariser (default = historical)
   void operator()(MultiFab& U, Real dt, int n) const {
     const Real h = dt / static_cast<Real>(n);
-    const BlockRhsEval<Limiter, Flux, SourceFreeModel<Model>> rhs{SourceFreeModel<Model>{m}, &ctx,
-                                                                  recon_prim, pos_floor};
+    const BlockRhsEval<Limiter, Flux, SourceFreeModel<Model>> rhs{
+        SourceFreeModel<Model>{m}, &ctx, recon_prim, pos_floor, {}, weno_eps};
     if (nreport)
       nreport->reset();  // report AGGREGATED over the n substeps of THIS advance
     for (int s = 0; s < n; ++s) {
@@ -168,6 +172,7 @@ struct AdvanceImexRkArs222 {
   NewtonOptions nopts{};            // Newton options of the stage solves (defaults = historical)
   NewtonReport* nreport = nullptr;  // OPT-IN diagnostics (stable address, owned by System::Impl)
   Real pos_floor = Real(0);         ///< Zhang-Shu positivity limiter (<= 0: inactive)
+  Real weno_eps = kWenoEpsilon;     ///< ADC-645: WENO-Z regulariser (default = historical)
   void operator()(MultiFab& U, Real dt, int n) const {
     const Real h = dt / static_cast<Real>(n);
     const Real gamma = Real(1) - Real(1) / std::sqrt(Real(2));
@@ -175,8 +180,8 @@ struct AdvanceImexRkArs222 {
     const Real cS2 = (Real(1) - gamma) / gamma;  // factor of (U^(2) - base2) at stage 3
     const ImplicitMask<Model::n_vars> mask{};    // FULLY implicit source (inactive mask)
     // Source-free transport residual (L = -div F): SAME mechanism as the explicit half-step of AdvanceImex.
-    const BlockRhsEval<Limiter, Flux, SourceFreeModel<Model>> rhs{SourceFreeModel<Model>{m}, &ctx,
-                                                                  recon_prim, pos_floor};
+    const BlockRhsEval<Limiter, Flux, SourceFreeModel<Model>> rhs{
+        SourceFreeModel<Model>{m}, &ctx, recon_prim, pos_floor, {}, weno_eps};
     const int nc = U.ncomp();
     MultiFab Un(U.box_array(), U.dmap(), nc, 0);             // U^n
     MultiFab L1(U.box_array(), U.dmap(), nc, 0);             // L(U^n)
@@ -258,9 +263,10 @@ struct RhsInto {
   bool recon_prim;
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
   std::shared_ptr<MultiFab> ws_cache;  ///< HLL wave speed cache (opt-in); nullptr -> per-face path
+  Real weno_eps = kWenoEpsilon;  ///< ADC-645: WENO-Z regulariser (default = historical)
   void operator()(MultiFab& U, MultiFab& R) const {
     // Delegates to BlockRhsEval (fill_ghosts + assemble_rhs OR cached path): single source of the residual.
-    BlockRhsEval<Limiter, Flux, Model>{m, &ctx, recon_prim, pos_floor, ws_cache}(U, R);
+    BlockRhsEval<Limiter, Flux, Model>{m, &ctx, recon_prim, pos_floor, ws_cache, weno_eps}(U, R);
   }
 };
 
@@ -480,9 +486,15 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
                                       const std::vector<int>& implicit_components = {},
                                       const NewtonOptions& newton_opts = {},
                                       NewtonReport* newton_report = nullptr,
-                                      Real pos_floor = Real(0), bool wave_speed_cache = false) {
+                                      Real pos_floor = Real(0), bool wave_speed_cache = false,
+                                      Real weno_eps = kWenoEpsilon) {
   const MultiFab* domain_mask = ctx.domain_mask;
   const detail::DiscDomain* eb_domain = ctx.eb_domain;
+  // ADC-645: the per-block WENO-Z regulariser (weno_eps) is threaded through the FULL-cartesian
+  // closures (advance / rhs_into) only; the masked (disc staircase) and EB (cutcell) advances keep
+  // the default-constructed Weno5. System::add_block refuses a non-default eps when an
+  // embedded-boundary transport mode is active (mirror of the wave_speed_cache guard), so the eps
+  // can never be silently dropped by those closures.
   BlockClosures bc;
   const ImplicitMask<Model::n_vars> impl_mask =
       make_implicit_mask<Model::n_vars>(implicit_components);
@@ -499,11 +511,11 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
       // empty) -> an embedded-boundary geometry mode on this block throws an EXPLICIT error at step time
       // (SystemStepper::advance_transport_n), never a silent cartesian.
       bc.advance = detail::AdvanceImexRkArs222<Limiter, Flux, Model>{
-          m, ctx, recon_prim, newton_opts, newton_report, pos_floor};
+          m, ctx, recon_prim, newton_opts, newton_report, pos_floor, weno_eps};
     } else {
       // Historical IMEX (local backward-Euler, order 1): UNTOUCHED, bit-identical.
       bc.advance = detail::AdvanceImex<Limiter, Flux, Model>{
-          m, ctx, recon_prim, impl_mask, newton_opts, newton_report, pos_floor};
+          m, ctx, recon_prim, impl_mask, newton_opts, newton_report, pos_floor, weno_eps};
       if (domain_mask)
         bc.advance_masked = detail::AdvanceImexMasked<Limiter, Flux, Model>{
             m, ctx, domain_mask, recon_prim, impl_mask, newton_opts, newton_report, pos_floor};
@@ -512,8 +524,8 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
             m, ctx, eb_domain, recon_prim, impl_mask, newton_opts, newton_report, pos_floor};
     }
   } else if (method == "euler") {
-    bc.advance = detail::AdvanceExplicit<Limiter, Flux, Model, ForwardEuler>{m, ctx, recon_prim,
-                                                                             pos_floor, ws_cache};
+    bc.advance = detail::AdvanceExplicit<Limiter, Flux, Model, ForwardEuler>{
+        m, ctx, recon_prim, pos_floor, ws_cache, weno_eps};
     if (domain_mask)
       bc.advance_masked = detail::AdvanceExplicitMasked<Limiter, Flux, Model, ForwardEuler>{
           m, ctx, domain_mask, recon_prim, pos_floor};
@@ -521,8 +533,8 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
       bc.advance_eb = detail::AdvanceExplicitEb<Limiter, Flux, Model, ForwardEuler>{
           m, ctx, eb_domain, recon_prim, pos_floor};
   } else if (method == "ssprk3") {
-    bc.advance = detail::AdvanceExplicit<Limiter, Flux, Model, SSPRK3Step>{m, ctx, recon_prim,
-                                                                           pos_floor, ws_cache};
+    bc.advance = detail::AdvanceExplicit<Limiter, Flux, Model, SSPRK3Step>{
+        m, ctx, recon_prim, pos_floor, ws_cache, weno_eps};
     if (domain_mask)
       bc.advance_masked = detail::AdvanceExplicitMasked<Limiter, Flux, Model, SSPRK3Step>{
           m, ctx, domain_mask, recon_prim, pos_floor};
@@ -530,8 +542,8 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
       bc.advance_eb = detail::AdvanceExplicitEb<Limiter, Flux, Model, SSPRK3Step>{
           m, ctx, eb_domain, recon_prim, pos_floor};
   } else if (method == "ssprk2") {
-    bc.advance = detail::AdvanceExplicit<Limiter, Flux, Model, SSPRK2Step>{m, ctx, recon_prim,
-                                                                           pos_floor, ws_cache};
+    bc.advance = detail::AdvanceExplicit<Limiter, Flux, Model, SSPRK2Step>{
+        m, ctx, recon_prim, pos_floor, ws_cache, weno_eps};
     if (domain_mask)
       bc.advance_masked = detail::AdvanceExplicitMasked<Limiter, Flux, Model, SSPRK2Step>{
           m, ctx, domain_mask, recon_prim, pos_floor};
@@ -542,7 +554,8 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
     throw std::runtime_error("System: unknown explicit time method '" + method +
                              "' (euler|ssprk2|ssprk3)");
   }
-  bc.rhs_into = detail::RhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, pos_floor, ws_cache};
+  bc.rhs_into =
+      detail::RhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, pos_floor, ws_cache, weno_eps};
   // FLUX-ONLY residual R <- -div F(U) (ADC-425): the SAME RhsInto path on SourceFreeModel<Model> (the
   // canonical zero-source adapter the IMEX explicit half-step already uses, state_access.hpp), so the
   // flux / ghost / geometry / positivity handling is bit-identical to rhs_into -- only the model's
@@ -555,7 +568,7 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
   // differ from the per-face reconstruction, so for a compiled Program the cache is a perf scratch,
   // not a numerics change.
   bc.rhs_flux_only = detail::RhsInto<Limiter, Flux, SourceFreeModel<Model>>{
-      SourceFreeModel<Model>{m}, ctx, recon_prim, pos_floor, nullptr};
+      SourceFreeModel<Model>{m}, ctx, recon_prim, pos_floor, nullptr, weno_eps};
   // SOURCE-ONLY residual R <- S(U, aux) (ADC-430): the exact MIRROR of rhs_flux_only. SourceInto
   // evaluates m.source per cell (the SAME source term assemble_rhs / rhs_into add) with no numerical-flux
   // dispatch, so it is bit-identical to the source half of rhs_into and flux-template agnostic (a
@@ -595,19 +608,24 @@ POPS_COLD_FN BlockClosures make_block_rusanov(const Model& m, const std::string&
                                              const std::string& method,
                                              const std::vector<int>& implicit_components,
                                              const NewtonOptions& newton_opts,
-                                             NewtonReport* newton_report, Real pos_floor) {
+                                             NewtonReport* newton_report, Real pos_floor,
+                                             Real weno_eps = kWenoEpsilon) {
   if (lim == "none")
     return build_block<NoSlope, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                             newton_opts, newton_report, pos_floor);
+                                             newton_opts, newton_report, pos_floor,
+                              /*wave_speed_cache=*/false, weno_eps);
   if (lim == "minmod")
     return build_block<Minmod, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                            newton_opts, newton_report, pos_floor);
+                                            newton_opts, newton_report, pos_floor,
+                              /*wave_speed_cache=*/false, weno_eps);
   if (lim == "vanleer")
     return build_block<VanLeer, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                             newton_opts, newton_report, pos_floor);
+                                             newton_opts, newton_report, pos_floor,
+                              /*wave_speed_cache=*/false, weno_eps);
   if (lim == "weno5")
     return build_block<Weno5, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                           newton_opts, newton_report, pos_floor);
+                                           newton_opts, newton_report, pos_floor,
+                              /*wave_speed_cache=*/false, weno_eps);
   throw_registry_dispatch_mismatch("System", "limiteur", lim);
 }
 
@@ -618,7 +636,7 @@ POPS_COLD_FN BlockClosures make_block_hll(const Model& m, const std::string& lim
                                          const std::vector<int>& implicit_components,
                                          const NewtonOptions& newton_opts,
                                          NewtonReport* newton_report, Real pos_floor,
-                                         bool wave_speed_cache) {
+                                         bool wave_speed_cache, Real weno_eps = kWenoEpsilon) {
   // HLL (Harten-Lax-van Leer, 2 waves): less diffusive than Rusanov (dissipation ~ signed |sR-sL|
   // instead of symmetric 2*max|v|), but does NOT require pressure (unlike HLLC/Roe) -- only SIGNED
   // wave speeds model.wave_speeds. Available as soon as a model exposes its signed eigenvalues (the
@@ -635,16 +653,20 @@ POPS_COLD_FN BlockClosures make_block_hll(const Model& m, const std::string& lim
     // flux (BlockRhsEval guarded by Flux == HLLFlux). rusanov/hllc/roe ignore it.
     if (lim == "none")
       return build_block<NoSlope, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                           newton_opts, newton_report, pos_floor, wave_speed_cache);
+                                           newton_opts, newton_report, pos_floor, wave_speed_cache,
+                              weno_eps);
     if (lim == "minmod")
       return build_block<Minmod, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                          newton_opts, newton_report, pos_floor, wave_speed_cache);
+                                          newton_opts, newton_report, pos_floor, wave_speed_cache,
+                              weno_eps);
     if (lim == "vanleer")
       return build_block<VanLeer, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                           newton_opts, newton_report, pos_floor, wave_speed_cache);
+                                           newton_opts, newton_report, pos_floor, wave_speed_cache,
+                              weno_eps);
     if (lim == "weno5")
       return build_block<Weno5, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                         newton_opts, newton_report, pos_floor, wave_speed_cache);
+                                         newton_opts, newton_report, pos_floor, wave_speed_cache,
+                              weno_eps);
     throw_registry_dispatch_mismatch("System", "limiteur", lim);
   } else {
     throw std::runtime_error(
@@ -660,7 +682,8 @@ POPS_COLD_FN BlockClosures make_block_hllc(const Model& m, const std::string& li
                                           const std::string& method,
                                           const std::vector<int>& implicit_components,
                                           const NewtonOptions& newton_opts,
-                                          NewtonReport* newton_report, Real pos_floor) {
+                                          NewtonReport* newton_report, Real pos_floor,
+                                             Real weno_eps = kWenoEpsilon) {
   // HLLC (generic, ADC-590): GENERIC-ONLY -- the model MUST supply HasHLLCStructure (contact_speed +
   // hllc_star_state). The native Euler brick now provides the capability, so the canonical Euler 2D
   // transport still reaches this path (bit-identical). A 4-var-pressure model WITHOUT the capability
@@ -669,16 +692,20 @@ POPS_COLD_FN BlockClosures make_block_hllc(const Model& m, const std::string& li
   if constexpr (HasHLLCStructure<Model>) {
     if (lim == "none")
       return build_block<NoSlope, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                            newton_opts, newton_report, pos_floor);
+                                            newton_opts, newton_report, pos_floor,
+                              /*wave_speed_cache=*/false, weno_eps);
     if (lim == "minmod")
       return build_block<Minmod, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                           newton_opts, newton_report, pos_floor);
+                                           newton_opts, newton_report, pos_floor,
+                              /*wave_speed_cache=*/false, weno_eps);
     if (lim == "vanleer")
       return build_block<VanLeer, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                            newton_opts, newton_report, pos_floor);
+                                            newton_opts, newton_report, pos_floor,
+                              /*wave_speed_cache=*/false, weno_eps);
     if (lim == "weno5")
       return build_block<Weno5, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                          newton_opts, newton_report, pos_floor);
+                                          newton_opts, newton_report, pos_floor,
+                              /*wave_speed_cache=*/false, weno_eps);
     throw_registry_dispatch_mismatch("System", "limiteur", lim);
   } else {
     throw std::runtime_error(
@@ -695,7 +722,8 @@ POPS_COLD_FN BlockClosures make_block_euler_hllc(const Model& m, const std::stri
                                                  const std::string& method,
                                                  const std::vector<int>& implicit_components,
                                                  const NewtonOptions& newton_opts,
-                                                 NewtonReport* newton_report, Real pos_floor) {
+                                                 NewtonReport* newton_report, Real pos_floor,
+                                             Real weno_eps = kWenoEpsilon) {
   // EXPLICIT canonical Euler 2D HLLC (ADC-590): the euler_hllc route pins EulerHLLCFlux2D directly.
   // Gated on the canonical layout (n_vars == 4 + pressure); never a fallback. On the true Euler brick
   // this is the SAME arithmetic as the generic hllc path (HLLCFlux via HasHLLCStructure).
@@ -704,19 +732,19 @@ POPS_COLD_FN BlockClosures make_block_euler_hllc(const Model& m, const std::stri
     if (lim == "none")
       return build_block<NoSlope, EulerHLLCFlux2D>(m, ctx, imex, recon_prim, method,
                                                    implicit_components, newton_opts, newton_report,
-                                                   pos_floor);
+                                                   pos_floor, /*wave_speed_cache=*/false, weno_eps);
     if (lim == "minmod")
       return build_block<Minmod, EulerHLLCFlux2D>(m, ctx, imex, recon_prim, method,
                                                   implicit_components, newton_opts, newton_report,
-                                                  pos_floor);
+                                                  pos_floor, /*wave_speed_cache=*/false, weno_eps);
     if (lim == "vanleer")
       return build_block<VanLeer, EulerHLLCFlux2D>(m, ctx, imex, recon_prim, method,
                                                    implicit_components, newton_opts, newton_report,
-                                                   pos_floor);
+                                                   pos_floor, /*wave_speed_cache=*/false, weno_eps);
     if (lim == "weno5")
       return build_block<Weno5, EulerHLLCFlux2D>(m, ctx, imex, recon_prim, method,
                                                  implicit_components, newton_opts, newton_report,
-                                                 pos_floor);
+                                                 pos_floor, /*wave_speed_cache=*/false, weno_eps);
     throw_registry_dispatch_mismatch("System", "limiteur", lim);
   } else {
     throw std::runtime_error(
@@ -732,7 +760,8 @@ POPS_COLD_FN BlockClosures make_block_roe(const Model& m, const std::string& lim
                                          const std::string& method,
                                          const std::vector<int>& implicit_components,
                                          const NewtonOptions& newton_opts,
-                                         NewtonReport* newton_report, Real pos_floor) {
+                                         NewtonReport* newton_report, Real pos_floor,
+                                             Real weno_eps = kWenoEpsilon) {
   // ROE (generic, ADC-590): GENERIC-ONLY -- the model MUST supply HasRoeDissipation (full
   // d = |A_roe| dU). The native Euler brick now provides the capability, so the canonical Euler 2D
   // transport still reaches this path (bit-identical). A 4-var-pressure model WITHOUT the capability
@@ -741,16 +770,20 @@ POPS_COLD_FN BlockClosures make_block_roe(const Model& m, const std::string& lim
   if constexpr (HasRoeDissipation<Model>) {
     if (lim == "none")
       return build_block<NoSlope, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                           newton_opts, newton_report, pos_floor);
+                                           newton_opts, newton_report, pos_floor,
+                              /*wave_speed_cache=*/false, weno_eps);
     if (lim == "minmod")
       return build_block<Minmod, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                          newton_opts, newton_report, pos_floor);
+                                          newton_opts, newton_report, pos_floor,
+                              /*wave_speed_cache=*/false, weno_eps);
     if (lim == "vanleer")
       return build_block<VanLeer, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                           newton_opts, newton_report, pos_floor);
+                                           newton_opts, newton_report, pos_floor,
+                              /*wave_speed_cache=*/false, weno_eps);
     if (lim == "weno5")
       return build_block<Weno5, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                         newton_opts, newton_report, pos_floor);
+                                         newton_opts, newton_report, pos_floor,
+                              /*wave_speed_cache=*/false, weno_eps);
     throw_registry_dispatch_mismatch("System", "limiteur", lim);
   } else {
     throw std::runtime_error(
@@ -767,7 +800,8 @@ POPS_COLD_FN BlockClosures make_block_euler_roe(const Model& m, const std::strin
                                                 const std::string& method,
                                                 const std::vector<int>& implicit_components,
                                                 const NewtonOptions& newton_opts,
-                                                NewtonReport* newton_report, Real pos_floor) {
+                                                NewtonReport* newton_report, Real pos_floor,
+                                             Real weno_eps = kWenoEpsilon) {
   // EXPLICIT canonical ideal-gas Euler 2D Roe (ADC-590): the euler_roe route pins EulerRoeFlux2D
   // directly. Gated on the canonical layout (n_vars == 4 + pressure); never a fallback. On the true
   // Euler brick this is the SAME arithmetic as the generic roe path (RoeFlux via HasRoeDissipation).
@@ -776,19 +810,19 @@ POPS_COLD_FN BlockClosures make_block_euler_roe(const Model& m, const std::strin
     if (lim == "none")
       return build_block<NoSlope, EulerRoeFlux2D>(m, ctx, imex, recon_prim, method,
                                                   implicit_components, newton_opts, newton_report,
-                                                  pos_floor);
+                                                  pos_floor, /*wave_speed_cache=*/false, weno_eps);
     if (lim == "minmod")
       return build_block<Minmod, EulerRoeFlux2D>(m, ctx, imex, recon_prim, method,
                                                  implicit_components, newton_opts, newton_report,
-                                                 pos_floor);
+                                                 pos_floor, /*wave_speed_cache=*/false, weno_eps);
     if (lim == "vanleer")
       return build_block<VanLeer, EulerRoeFlux2D>(m, ctx, imex, recon_prim, method,
                                                   implicit_components, newton_opts, newton_report,
-                                                  pos_floor);
+                                                  pos_floor, /*wave_speed_cache=*/false, weno_eps);
     if (lim == "weno5")
       return build_block<Weno5, EulerRoeFlux2D>(m, ctx, imex, recon_prim, method,
                                                 implicit_components, newton_opts, newton_report,
-                                                pos_floor);
+                                                pos_floor, /*wave_speed_cache=*/false, weno_eps);
     throw_registry_dispatch_mismatch("System", "limiteur", lim);
   } else {
     throw std::runtime_error(
@@ -805,7 +839,8 @@ POPS_COLD_FN BlockClosures make_block(const Model& m, const std::string& lim,
                                      const std::vector<int>& implicit_components = {},
                                      const NewtonOptions& newton_opts = {},
                                      NewtonReport* newton_report = nullptr,
-                                     Real pos_floor = Real(0), bool wave_speed_cache = false) {
+                                     Real pos_floor = Real(0), bool wave_speed_cache = false,
+                                     Real weno_eps = kWenoEpsilon) {
   // CENTRALIZED VALIDATION (registry dispatch_tags.hpp) BEFORE the dispatch: same tag acceptances /
   // rejections as before, identical messages (validate_* keeps the historical wording). The flux
   // dispatch now forwards to the per-flux helpers above (each holds the unchanged capability
@@ -815,22 +850,25 @@ POPS_COLD_FN BlockClosures make_block(const Model& m, const std::string& lim,
   validate_limiter(lim, "System");
   if (riem == "rusanov")
     return make_block_rusanov(m, lim, ctx, imex, recon_prim, method, implicit_components,
-                              newton_opts, newton_report, pos_floor);
+                              newton_opts, newton_report, pos_floor,
+                              weno_eps);
   if (riem == "hll")
     return make_block_hll(m, lim, ctx, imex, recon_prim, method, implicit_components, newton_opts,
-                          newton_report, pos_floor, wave_speed_cache);
+                          newton_report, pos_floor, wave_speed_cache, weno_eps);
   if (riem == "hllc")
     return make_block_hllc(m, lim, ctx, imex, recon_prim, method, implicit_components, newton_opts,
-                           newton_report, pos_floor);
+                           newton_report, pos_floor, weno_eps);
   if (riem == "roe")
     return make_block_roe(m, lim, ctx, imex, recon_prim, method, implicit_components, newton_opts,
-                          newton_report, pos_floor);
+                          newton_report, pos_floor, weno_eps);
   if (riem == "euler_hllc")
     return make_block_euler_hllc(m, lim, ctx, imex, recon_prim, method, implicit_components,
-                                 newton_opts, newton_report, pos_floor);
+                                 newton_opts, newton_report, pos_floor,
+                              weno_eps);
   if (riem == "euler_roe")
     return make_block_euler_roe(m, lim, ctx, imex, recon_prim, method, implicit_components,
-                                newton_opts, newton_report, pos_floor);
+                                newton_opts, newton_report, pos_floor,
+                              weno_eps);
   throw_registry_dispatch_mismatch("System", "flux", riem);
 }
 

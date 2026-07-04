@@ -250,9 +250,24 @@ def _precond_applyfn(v: Any, prelude: Any) -> str:
         # built once on the first apply and reused across every Krylov iteration / step. ctx is captured
         # by value too (it forwards the seam ops the apply reuses).
         pc = "precond_mg_state%d" % v.id
+        # ADC-644: a configured GeometricMG preconditioner carries V-cycle-shape knobs
+        # (pre/post/bottom sweeps, min_coarse, n_vcycles). When absent (a default GeometricMG()) emit
+        # the no-arg ctor -- byte-identical to the pre-644 source. When present, emit the explicit ctor
+        # in the fixed positional order (nu1, nu2, nbottom, min_coarse, n_vcycles), each defaulting to
+        # the native kMG* value so an omitted knob keeps its historical default.
+        opts = v.attrs.get("precond_options")
+        if not opts:
+            ctor_args = ""
+        else:
+            nu1 = int(opts.get("pre_sweeps", 2))
+            nu2 = int(opts.get("post_sweeps", 2))
+            nbottom = int(opts.get("bottom_sweeps", 50))
+            min_coarse = int(opts.get("min_coarse", 2))
+            n_vcycles = int(opts.get("n_vcycles", 1))
+            ctor_args = "%d, %d, %d, %d, %d" % (nu1, nu2, nbottom, min_coarse, n_vcycles)
         prelude.append(
-            "auto %s = std::make_shared<pops::coupling::schur::program::GeometricMgPreconditioner>();"
-            % pc)
+            "auto %s = std::make_shared<pops::coupling::schur::program::GeometricMgPreconditioner>(%s);"
+            % (pc, ctor_args))
         prelude.append(
             "pops::ApplyFn %s = [ctx, %s](pops::MultiFab& out, const pops::MultiFab& in) {"
             % (name, pc))
@@ -313,8 +328,13 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         restart = int(v.attrs["restart"])
         lines.append("pops::KrylovResult %s = pops::gmres_solve(%s, %s, *%s, %s, %s, "
                      "%d, %d);" % (kr, lam, precond_arg, sol_sp, rhs_tok, tol, max_iter, restart))
-    else:  # richardson: omega = 1 (the operator is expected to be pre-scaled / well-conditioned)
+    else:  # richardson: omega defaults to 1 (pre-scaled / well-conditioned operator)
+        # ADC-645: an omega set on the Richardson() descriptor is baked as the literal; absent
+        # (the default) emits the EXACT historical "static_cast<pops::Real>(1)" text, byte-identical.
+        omega = v.attrs.get("omega")
+        omega_tok = ("static_cast<pops::Real>(1)" if omega is None
+                     else "static_cast<pops::Real>(%s)" % repr(float(omega)))
         lines.append("pops::KrylovResult %s = pops::richardson_solve(%s, *%s, %s, "
-                     "static_cast<pops::Real>(1), %s, %d);"
-                     % (kr, lam, sol_sp, rhs_tok, tol, max_iter))
+                     "%s, %s, %d);"
+                     % (kr, lam, sol_sp, rhs_tok, omega_tok, tol, max_iter))
     lines.append("(void)%s;" % kr)

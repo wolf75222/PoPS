@@ -33,7 +33,7 @@ else:
 # ADC-613: the GeometricMG V-cycle kwargs set_poisson accepts, minus abs_tol (routed separately so
 # the historical abs_tol path keeps working when no typed descriptor is present).
 _MG_SET_POISSON_KEYS = ("rel_tol", "max_cycles", "min_coarse", "pre_smooth", "post_smooth",
-                        "bottom_sweeps")
+                        "bottom_sweeps", "coarse_threshold")
 
 
 def _mg_set_poisson_kwargs(mg_options: Any) -> Any:

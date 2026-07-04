@@ -96,6 +96,37 @@ def test_solve_local_nonlinear_fd_eps_rejected_out_of_domain():
         P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U, fd_eps=0.0)
 
 
+# --- ADC-645: eig_max_iter / im_tol cache-key parity (the fd_eps rule) ------------------------
+
+def test_eig_knobs_default_hash_stable_and_override_busts():
+    default_a = model_hash(_fd_model()._m)
+    # Setting eig_max_iter / im_tol busts the model hash (they are emitted into the kernels).
+    m_iter = _fd_model()
+    m_iter._m._ws_jacobian["eig_max_iter"] = 50  # authoring-equivalent override for the hash check
+    m_tol = _fd_model()
+    m_tol._m._ws_jacobian["im_tol"] = 1e-7
+    assert model_hash(m_iter._m) != default_a
+    assert model_hash(m_tol._m) != default_a
+    # Two default models (knobs None) hash identically -- the pre-645 hash is unchanged.
+    assert model_hash(_fd_model()._m) == default_a
+
+
+def test_eig_knobs_validated_and_carried():
+    m = Model("eigk")
+    q1, q2 = m.conservative_vars("q1", "q2")
+    m.flux(x=[0.5 * q1 * q1, 0.5 * q2 * q2], y=[0.5 * q2 * q2, 0.5 * q1 * q1])
+    m.wave_speeds_from_jacobian(eig_max_iter=50, im_tol=1e-7)
+    ws = m._m._ws_jacobian
+    assert ws["eig_max_iter"] == 50 and ws["im_tol"] == 1e-7
+    m2 = Model("eigd")
+    q1, q2 = m2.conservative_vars("q1", "q2")
+    m2.flux(x=[q1, q2], y=[q2, q1])
+    with pytest.raises(ValueError, match="eig_max_iter"):
+        m2.wave_speeds_from_jacobian(eig_max_iter=0)
+    with pytest.raises(ValueError, match="im_tol"):
+        m2.wave_speeds_from_jacobian(im_tol=-1e-7)
+
+
 def main():
     test_wave_speeds_default_fd_eps_emits_historical_literal()
     test_wave_speeds_fd_eps_override_changes_literal_and_hash()
@@ -103,6 +134,8 @@ def main():
     test_wave_speeds_fd_eps_rejected_on_numeric_path()
     test_solve_local_nonlinear_fd_eps_changes_program_ir_hash()
     test_solve_local_nonlinear_fd_eps_rejected_out_of_domain()
+    test_eig_knobs_default_hash_stable_and_override_busts()
+    test_eig_knobs_validated_and_carried()
     print("OK  ADC-617 fd_eps cache key")
 
 

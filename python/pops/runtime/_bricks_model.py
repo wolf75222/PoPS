@@ -97,7 +97,22 @@ class CompressibleFlux:
 
 
 class IsothermalFlux:
-    """Isothermal Euler flux (cs2 comes from the FluidState state)."""
+    """Isothermal Euler flux (compiled/DSL transport brick).
+
+    On the native ``pops.Model(...)`` path ``cs2`` / ``vacuum_floor`` (ADC-77) come from the
+    :class:`FluidState` state. On the compiled/hybrid ``pops.CompositeModel(transport=...)`` path the
+    state is not threaded into the AOT struct, so this brick carries them itself:
+    ``pops.CompositeModel(transport=pops.IsothermalFlux(cs2=..., vacuum_floor=...), ...)``. Both default
+    to the native constants, so an unconfigured ``IsothermalFlux()`` bakes the historical isothermal
+    flux bit-for-bit (``vacuum_floor`` 0 = the quasi-vacuum velocity clamp inactive).
+    """
+
+    def __init__(self, cs2: Any = PHYSICAL_DEFAULT_NATIVE_ISOTHERMAL_CS2,
+                 vacuum_floor: Any = PHYSICAL_DEFAULT_VACUUM_FLOOR) -> None:
+        self.cs2 = float(cs2)
+        if not (float(vacuum_floor) >= 0.0):
+            raise ValueError("IsothermalFlux: vacuum_floor >= 0 (0 = inactive)")
+        self.vacuum_floor = float(vacuum_floor)
 
 
 # --- Source bricks ------------------------------------------------------
@@ -266,7 +281,15 @@ def _native_to_brick(obj: Any, role: Any) -> Any:
                                    prim_names=["rho", "u", "v", "p"], gamma=g)
         if isinstance(obj, IsothermalFlux):
             cs2 = float(getattr(obj, "cs2", PHYSICAL_DEFAULT_NATIVE_ISOTHERMAL_CS2))
-            return NativeBrick("pops::IsothermalFlux", "hyperbolic", fields={"cs2": cs2},
+            # ADC-644: carry vacuum_floor into the baked struct ONLY when active. The native
+            # pops::IsothermalFlux has both members (cs2, vacuum_floor); NativeBrick.emit writes the
+            # fields in insertion order, so omitting vacuum_floor when 0 keeps the generated struct
+            # (and module_hash) byte-identical to today's quasi-vacuum-inactive isothermal flux.
+            vf = float(getattr(obj, "vacuum_floor", PHYSICAL_DEFAULT_VACUUM_FLOOR))
+            fields = {"cs2": cs2}
+            if vf != 0.0:
+                fields["vacuum_floor"] = vf
+            return NativeBrick("pops::IsothermalFlux", "hyperbolic", fields=fields,
                                    var_names=["rho", "rho_u", "rho_v"], n_vars=3,
                                    prim_names=["rho", "u", "v"])
         raise ValueError("pops.CompositeModel transport: ExB | CompressibleFlux | IsothermalFlux "

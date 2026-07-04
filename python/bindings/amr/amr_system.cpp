@@ -114,6 +114,8 @@ struct AmrSystem::Impl {
     double schur_fac_coarse_rel_tol = 0.0;
     int schur_fac_coarse_cycles = 0;
     bool schur_fac_verbose = false;
+    // ADC-645: MG V-cycles per BiCGStab-preconditioner application (0 = the historical ONE).
+    int schur_n_precond_vcycles = 0;
     std::string schur_density, schur_momentum_x, schur_momentum_y, schur_energy;  // "" = canonical
     NewtonOptions newton{};  // IMEX source Newton options (wave 3; single-block AND multi-block)
     bool newton_non_default = false;  // true -> non-default options (.so loader REJECTED: flat ABI)
@@ -199,6 +201,16 @@ struct AmrSystem::Impl {
 
   std::string p_rhs = "charge_density", p_solver = "geometric_mg", p_bc = "auto", p_wall = "none";
   double p_wall_radius = 0.0;
+  // ADC-645: opt-in composite FAC FIELD solve (set_poisson(composite=true)). Default false =
+  // the historical Option A coarse solve + gradient injection, bit-identical. The fac knobs follow
+  // the <= 0 = kFAC*-default convention (same as the SchurStage block).
+  bool p_composite = false;
+  int p_fac_max_iters = 0;
+  int p_fac_fine_sweeps = 0;
+  double p_fac_tol = 0.0;
+  double p_fac_coarse_rel_tol = 0.0;
+  int p_fac_coarse_cycles = 0;
+  bool p_fac_verbose = false;
 
   bool built = false;
   // RUNTIME FREEZE LIFECYCLE (ADC-592, parity System::Impl::bound_): false while assembling, true once
@@ -381,6 +393,14 @@ struct AmrSystem::Impl {
     // POISSON group: coarse Poisson BC + conductive wall.
     bp.poisson.bc = poisson_bc();
     bp.poisson.wall = wall_active();
+    // ADC-645: opt-in composite FAC field solve + its knobs (default false/0 -> Option A, inert).
+    bp.poisson.composite = p_composite;
+    bp.poisson.fac_max_iters = p_fac_max_iters;
+    bp.poisson.fac_fine_sweeps = p_fac_fine_sweeps;
+    bp.poisson.fac_tol = p_fac_tol;
+    bp.poisson.fac_coarse_rel_tol = p_fac_coarse_rel_tol;
+    bp.poisson.fac_coarse_cycles = p_fac_coarse_cycles;
+    bp.poisson.fac_verbose = p_fac_verbose;
     // INITIAL DATA group: density (historical) OR full conservative state (priority at seed).
     bp.initial.has_density = b.has_density;
     bp.initial.density = b.density;
@@ -398,6 +418,7 @@ struct AmrSystem::Impl {
     bp.schur.fac_coarse_rel_tol = b.schur_fac_coarse_rel_tol;
     bp.schur.fac_coarse_cycles = b.schur_fac_coarse_cycles;
     bp.schur.fac_verbose = b.schur_fac_verbose;
+    bp.schur.n_precond_vcycles = b.schur_n_precond_vcycles;  // ADC-645 (0 = historical ONE)
     bp.schur.density = b.schur_density;
     bp.schur.momentum_x = b.schur_momentum_x;
     bp.schur.momentum_y = b.schur_momentum_y;
@@ -462,6 +483,14 @@ struct AmrSystem::Impl {
             "AmrSystem::set_conservative_state : not transported by the compiled .so loader (block "
             "'" +
             b.name + "') in multi-block ; use a native block pops.Model(...), or set_density.");
+    // ADC-645: the composite FAC FIELD solve lives on the single-block coupler (AmrCouplerMP); the
+    // multi-block AmrRuntime engine has no composite elliptic path. Refuse loud, never a silent
+    // fallback to the Option A solve the caller explicitly opted out of.
+    if (p_composite)
+      throw std::runtime_error(
+          "AmrSystem::set_poisson : composite=true is single-block only (the composite FAC field "
+          "solve lives on the AmrCouplerMP coupler) ; the multi-block AmrRuntime engine solves the "
+          "shared coarse Poisson (Option A). Use one block, or composite=false.");
     AmrBuildParams bp = make_build_params();  // geometry + poisson_bc + wall + common ownership
     // SINGLE-LEVEL Program layout (epic ADC-508): a compiled time Program forced onto the runtime engine
     // for a SINGLE block builds a coarse-only hierarchy WHEN NO REFINEMENT IS CONFIGURED, so a
@@ -1227,7 +1256,9 @@ void AmrSystem::set_phi_refinement(double grad_threshold) {
 }
 
 void AmrSystem::set_poisson(const std::string& rhs, const std::string& solver,
-                            const std::string& bc, const std::string& wall, double wall_radius) {
+                            const std::string& bc, const std::string& wall, double wall_radius,
+                            bool composite, int fac_max_iters, int fac_fine_sweeps, double fac_tol,
+                            double fac_coarse_rel_tol, int fac_coarse_cycles, bool fac_verbose) {
   require_assembling_amr(p_->bound_, "set_poisson");  // frozen once pops.bind completes (ADC-592)
   // single-block/explicit CONTRACT (cf. set_compiled_block): AMR wires a SINGLE elliptic
   // solver (GeometricMG, the AmrCouplerMP template default) and a SINGLE right-hand side
@@ -1243,11 +1274,27 @@ void AmrSystem::set_poisson(const std::string& rhs, const std::string& solver,
     throw std::runtime_error("AmrSystem::set_poisson : solver '" + solver +
                              "' unsupported on AMR (only 'geometric_mg' is wired on the "
                              "hierarchy ; 'fft' only exists on a single-level grid, cf. System)");
+  // ADC-645: composite-FAC knobs (inert when composite is false; validated like set_source_stage's
+  // fac_* -- a knob is either the <= 0/0 default sentinel or in its domain, never silently clamped).
+  if (fac_max_iters < 0 || fac_fine_sweeps < 0 || fac_coarse_cycles < 0)
+    throw std::runtime_error(
+        "AmrSystem::set_poisson : fac_max_iters/fac_fine_sweeps/fac_coarse_cycles >= 0 required "
+        "(0 = default)");
+  if (fac_tol < 0.0 || fac_tol >= 1.0 || fac_coarse_rel_tol < 0.0 || fac_coarse_rel_tol >= 1.0)
+    throw std::runtime_error(
+        "AmrSystem::set_poisson : fac_tol/fac_coarse_rel_tol in [0, 1) required (0 = default)");
   p_->p_rhs = rhs;
   p_->p_solver = solver;
   p_->p_bc = bc;
   p_->p_wall = wall;
   p_->p_wall_radius = wall_radius;
+  p_->p_composite = composite;
+  p_->p_fac_max_iters = fac_max_iters;
+  p_->p_fac_fine_sweeps = fac_fine_sweeps;
+  p_->p_fac_tol = fac_tol;
+  p_->p_fac_coarse_rel_tol = fac_coarse_rel_tol;
+  p_->p_fac_coarse_cycles = fac_coarse_cycles;
+  p_->p_fac_verbose = fac_verbose;
 }
 
 void AmrSystem::set_density(const std::string& name, const std::vector<double>& rho) {
@@ -1428,6 +1475,16 @@ void AmrSystem::set_source_stage(const std::string& name, const std::string& kin
   b.schur_fac_coarse_rel_tol = opts.fac_coarse_rel_tol;
   b.schur_fac_coarse_cycles = opts.fac_coarse_cycles;
   b.schur_fac_verbose = opts.fac_verbose;
+  // ADC-645: preconditioner knobs. The AMR stage is CARTESIAN (coarse-level condensed solve), so
+  // polar_precond has no consumer here -> refuse loud rather than silently ignore it.
+  if (opts.n_precond_vcycles < 0 || opts.n_precond_vcycles > 2)
+    throw std::runtime_error(
+        "AmrSystem::set_source_stage : n_precond_vcycles must be 1 or 2 (0 = default)");
+  if (!opts.polar_precond.empty())
+    throw std::runtime_error(
+        "AmrSystem::set_source_stage : polar_precond does not apply to the (cartesian) AMR "
+        "condensed stage ; use n_precond_vcycles");
+  b.schur_n_precond_vcycles = opts.n_precond_vcycles;
   b.schur_density = density;
   b.schur_momentum_x = momentum_x;
   b.schur_momentum_y = momentum_y;
@@ -1522,7 +1579,7 @@ void AmrSystem::advance(double dt, int nsteps) {
   for (int s = 0; s < nsteps; ++s)
     step(dt);
 }
-double AmrSystem::step_cfl(double cfl) {
+double AmrSystem::step_cfl(double cfl, double speed_floor) {
   p_->ensure_built();
   if (p_->clock_restore_pending_) {  // pending phase restoration (cf. step)
     p_->push_macro_step_to_engine();
@@ -1538,8 +1595,8 @@ double AmrSystem::step_cfl(double cfl) {
   // installed Program was SILENTLY bypassed and the native engine advanced instead -- a silent-wrong step
   // contradicting AmrSystem::step / System::step_cfl. The native paths below stay UNCHANGED.
   if (p_->program_.step_) {
-    const double dt =
-        static_cast<double>(p_->runtime->cfl_dt(static_cast<Real>(cfl), static_cast<Real>(hx)));
+    const double dt = static_cast<double>(p_->runtime->cfl_dt(
+        static_cast<Real>(cfl), static_cast<Real>(hx), static_cast<Real>(speed_floor)));
     p_->run_program_cadence_(dt);
     p_->t += dt;
     ++p_->macro_step_;  // authoritative counter (parity System: one macro-step = one increment)
@@ -1554,8 +1611,8 @@ double AmrSystem::step_cfl(double cfl) {
     // advances by a step(dt) which re-applies stride and substeps. BACKWARD-COMPAT: with substeps=1 and
     // stride=1 everywhere, dt = cfl*h*min_b(1/w_b) = cfl*h/w_max, identical to the old formula
     // (max_speed = max_b w_b) -> multi-block facade substeps=1/stride=1 bit-identical.
-    const double dt =
-        static_cast<double>(p_->runtime->step_cfl(static_cast<Real>(cfl), static_cast<Real>(hx)));
+    const double dt = static_cast<double>(p_->runtime->step_cfl(
+        static_cast<Real>(cfl), static_cast<Real>(hx), static_cast<Real>(speed_floor)));
     p_->t += dt;
     ++p_->macro_step_;  // authoritative counter (parity System: one macro-step = one increment)
     return dt;
@@ -1566,6 +1623,13 @@ double AmrSystem::step_cfl(double cfl) {
   //    to the effective SUB-STEP dt/substeps (step_fn splits dt into substeps pieces; no stride
   //    in single-block): dt <= cfl*substeps/mu and dt <= dt_adm*substeps;
   //  - GLOBAL bounds (add_dt_bound), all_reduce_min like System (identical dt on all ranks).
+  // ADC-645: the single-block coupler CFL divides by the RAW max speed (no historical floor
+  // site); a non-default speed_floor here would be silently ignored -> refuse loud instead.
+  if (speed_floor != static_cast<double>(kCflSpeedFloor))
+    throw std::runtime_error(
+        "AmrSystem::step_cfl : speed_floor is wired on the multi-block runtime engine only (the "
+        "single-block AmrCouplerMP CFL divides by the raw max speed) ; leave it default, or use "
+        "the multi-block runtime path");
   double h = cfl * hx / p_->max_speed_fn();
   p_->last_dt_reason = "transport:" + p_->blocks[0].name;
   const double sub = static_cast<double>(p_->blocks[0].substeps);
@@ -2217,6 +2281,10 @@ EffectiveOptionsReport AmrSystem::effective_options_report() const {
       stage.effective_fac_coarse_cycles =
           b.schur_fac_coarse_cycles > 0 ? b.schur_fac_coarse_cycles : kFACInitialCoarseMaxCycles;
       stage.fac_verbose = b.schur_fac_verbose;
+      // ADC-645: preconditioner V-cycle knob (requested vs effective; the AMR stage is cartesian).
+      stage.requested_n_precond_vcycles = b.schur_n_precond_vcycles;
+      stage.effective_n_precond_vcycles =
+          b.schur_n_precond_vcycles > 0 ? b.schur_n_precond_vcycles : 1;
       report.source_stages.push_back(std::move(stage));
     }
   }

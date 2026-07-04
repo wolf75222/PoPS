@@ -146,7 +146,9 @@ LARGE_RUNTIME_FILE_BUDGETS = {
     # ADC-632: the install/composition seam (structural setters + install_program + native_loader
     # instantiation) is the one sibling TU that legitimately stays over 1000 lines; the rest
     # (fields / io / profiling / program) sit well under the default. Budgeted with headroom.
-    "python/bindings/system/base/system_install.cpp": 1250,
+    # ADC-644/645: the knob wiring (coarse_threshold validation, weno_epsilon guards, source-stage
+    # n_precond_vcycles/polar_precond resolution + effective-report rows) adds ~50 inline lines.
+    "python/bindings/system/base/system_install.cpp": 1300,
     # ADC-542: the AMR composite_reduce + rebuild_hierarchy (v3 restart) + level_owner_ranks facade
     # seams (native diagnostics / restartable-under-regridding) grew this by ~100 lines.
     # ADC-514: the native per-block runtime-param carrier residue (Impl members, make_build_params /
@@ -164,8 +166,12 @@ LARGE_RUNTIME_FILE_BUDGETS = {
     # !refinement_active + the two-level layout template plumbing) adds ~14 lines here, and the
     # per-level C/F ghost refill seam (fill_level_state_cf_ghosts, called before both per-level
     # residual paths of the synchronous Program driver) adds ~17 lines to amr_runtime.hpp.
-    "python/bindings/amr/amr_system.cpp": 2532,
-    "include/pops/runtime/amr/amr_runtime.hpp": 1867,
+    # ADC-645: the composite-FAC facade (set_poisson composite params, build wiring, multi-block
+    # + out-of-scope refusals, effective-options report rows) and the source-stage/speed_floor
+    # threading add ~68 lines here (they read the TU-local private Impl) and +1 to amr_runtime.hpp
+    # (the speed_floor forward in the CFL reduction seam).
+    "python/bindings/amr/amr_system.cpp": 2600,
+    "include/pops/runtime/amr/amr_runtime.hpp": 1868,
     "include/pops/runtime/system/system_field_solver.hpp": 1100,
     "python/pops/runtime/_system_unified_install.py": 550,
     # ADC-542: the run-loop diagnostics firing (run / _fire_diagnostics) added to System.run.

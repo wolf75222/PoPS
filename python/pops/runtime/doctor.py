@@ -441,7 +441,8 @@ def capabilities() -> Any:
             "followups": "per-field CONFIGURABLE aux halo radius (today fixed at 1) ; named aux on the "
                          "AMR path needs backend='production' target='amr_system', on polar a "
                          "System+AOT compiled block (the in-AMR compiled .so is mono-level) ; the "
-                         "opt-in single-block composite-FAC Poisson path (set_composite_poisson, not "
-                         "facade-reachable) does not yet carry named aux to the fine level",
+                         "opt-in single-block composite-FAC Poisson path (facade-reachable via "
+                         "GeometricMG(amr_composite=CompositeFAC(...)), ADC-645) does not yet carry "
+                         "named aux to the fine level",
         },
     }

@@ -103,12 +103,14 @@ class GeometricMG {
               int nu2 = kMGDefaultPostSmooth, int nbottom = kMGDefaultBottomSweeps,
               bool cut_cell = false,
               std::function<Real(Real, Real)> levelset = {},
-              Real cut_theta_min = kEbCutFractionFloor)
+              Real cut_theta_min = kEbCutFractionFloor,
+              int coarse_threshold = kMGDefaultCoarseThreshold)
       : bc_(bc),
         active_(std::move(active)),
         nu1_(nu1),
         nu2_(nu2),
         nbottom_(nbottom),
+        coarse_threshold_(coarse_threshold),  // ADC-644: total-cell coarsening ceiling (0 = disabled)
         cut_theta_min_(cut_theta_min),  // ADC-615: cut-fraction clamp shared with the EB transport
         replicated_(replicated),
         cut_cell_(cut_cell),
@@ -118,6 +120,13 @@ class GeometricMG {
     add_level(geom, ba);
     while (true) {
       const Geometry g = lev_.back().geom;
+      // ADC-644: an explicit total-cell coarsening ceiling. STOP coarsening once the current level's
+      // total unknown count (nx*ny) is at or below coarse_threshold_ (a direct-small-grid stand-in:
+      // the nbottom Gauss-Seidel bottom solve then runs on this level). Distinct from min_coarse (a
+      // PER-AXIS lower bound); when both are active coarsening halts at whichever is reached first.
+      // Sentinel 0 = disabled (only min_coarse governs) -> the guard is inert, hierarchy unchanged.
+      if (coarse_threshold_ > 0 && g.domain.nx() * g.domain.ny() <= coarse_threshold_)
+        break;
       if (g.domain.nx() % 2 || g.domain.ny() % 2)
         break;
       if (g.domain.nx() / 2 < min_coarse || g.domain.ny() / 2 < min_coarse)
@@ -708,6 +717,7 @@ class GeometricMG {
   BCRec bc_;
   std::function<bool(Real, Real)> active_;
   int nu1_, nu2_, nbottom_;
+  int coarse_threshold_ = kMGDefaultCoarseThreshold;  ///< ADC-644: total-cell coarsening ceiling (0 = off).
   Real cut_theta_min_ = kEbCutFractionFloor;  ///< ADC-615: cut-fraction clamp (default 1e-3).
   bool replicated_ = false;
   bool cut_cell_ = false;

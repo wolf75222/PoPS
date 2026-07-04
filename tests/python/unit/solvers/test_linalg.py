@@ -164,8 +164,9 @@ def test_linear_problem_lower_matches_program_solve_linear_attrs():
     p = LinearProblem(operator=M, unknown="x", rhs=_Handle("b"),
                       method=method, preconditioner=precond, tol=1e-7, max_iter=80)
     rec = p.lower().to_dict()
-    assert rec["method"] == _lower_krylov_method(method)
-    assert rec["preconditioner"] == _lower_preconditioner(precond)
+    # ADC-644/645: the shared lowerings return (scheme, options); the record carries the scheme.
+    assert rec["method"] == _lower_krylov_method(method)[0]
+    assert rec["preconditioner"] == _lower_preconditioner(precond)[0]
 
 
 def test_linear_problem_lower_requires_a_method():

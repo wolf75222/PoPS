@@ -32,7 +32,9 @@ from pops.runtime.routes import (
 
 # The Poisson wall / bc lowerers are split into ``_system_install_lowering`` for the 500-line cap
 # (ADC-550) and re-imported so ``set_poisson`` below and the direct-import tests are unchanged.
-from pops.runtime._system_install_lowering import _lower_bc, _lower_wall  # noqa: F401
+from pops.runtime._system_install_lowering import (  # noqa: F401
+    _lower_bc, _lower_wall, _mg_kwargs, _weno_kwargs,
+)
 
 if TYPE_CHECKING:
     from pops.runtime._system_contract import _System
@@ -99,7 +101,7 @@ class _SystemInstall(_System):
                           getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING),
                           getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
                           getattr(spatial, "positivity_floor", 0.0),
-                          getattr(spatial, "wave_speed_cache", False))
+                          getattr(spatial, "wave_speed_cache", False), **_weno_kwargs(spatial))
 
     def add_equation(self, name: Any, model: Any, spatial: Any = None, time: Any = None,
                      substeps: Any = None, names: Any = None, evolve: bool = True,
@@ -153,7 +155,10 @@ class _SystemInstall(_System):
                                      getattr(src, "momentum_x_spec", ""),
                                      getattr(src, "momentum_y_spec", ""),
                                      getattr(src, "energy_spec", ""),
-                                     getattr(src, "bz_aux_component", -1))
+                                     getattr(src, "bz_aux_component", -1),
+                                     # ADC-645: preconditioner knobs (0/"" = historical defaults).
+                                     getattr(src, "n_precond_vcycles", 0),
+                                     getattr(src, "polar_precond", ""))
             self._s.set_time_scheme(time.scheme)  # "lie" (Split) or "strang" (Strang)
             return
 
@@ -175,7 +180,7 @@ class _SystemInstall(_System):
                           getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING),
                           getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
                           getattr(spatial, "positivity_floor", 0.0),
-                          getattr(spatial, "wave_speed_cache", False))
+                          getattr(spatial, "wave_speed_cache", False), **_weno_kwargs(spatial))
             return
 
         # Implicit mask (IMEX): only the composed native path (ModelSpec -> add_block) wires it. The .so
@@ -352,7 +357,8 @@ class _SystemInstall(_System):
     def set_source_stage(self, name: Any, kind: Any, theta: Any, alpha: Any,
                          krylov_tol: float = 0.0, krylov_max_iters: int = 0,
                          density: str = "", momentum_x: str = "", momentum_y: str = "",
-                         energy: str = "", bz_aux_component: int = -1) -> Any:
+                         energy: str = "", bz_aux_component: int = -1,
+                         n_precond_vcycles: int = 0, polar_precond: str = "") -> Any:
         """Attach a Schur-condensed source stage to an already-added block (ADC-308).
 
         Thin public pass-through to the C++ binding (_pops.System.set_source_stage): same flat
@@ -361,11 +367,15 @@ class _SystemInstall(_System):
         transport time scheme, so cases configure the stage without reaching into the private _s.
         @p name: block; @p kind: 'electrostatic_lorentz'; @p theta in (0, 1]; @p alpha: stage
         coupling. The krylov_* / field descriptors / bz_aux_component defaults reproduce the historical
-        bit-identical behavior. Prerequisite: B_z set via set_magnetic_field beforehand.
+        bit-identical behavior. ADC-645 adds @p n_precond_vcycles (cartesian stage, 1|2; 0 = the
+        historical ONE MG V-cycle per preconditioner application) and @p polar_precond (polar stage,
+        'radial_line'|'jacobi'; '' = the historical RadialLine); cross-geometry misuse refuses at the
+        native seam. Prerequisite: B_z set via set_magnetic_field beforehand.
         """
         _guard_assembling(self, "set_source_stage")  # frozen once pops.bind completes (ADC-592)
         self._s.set_source_stage(name, kind, theta, alpha, krylov_tol, krylov_max_iters,
-                                 density, momentum_x, momentum_y, energy, bz_aux_component)
+                                 density, momentum_x, momentum_y, energy, bz_aux_component,
+                                 n_precond_vcycles, polar_precond)
 
     def add_background(self, name: Any, model: Any, density: Any, spatial: Any = None) -> Any:
         """FROZEN species (not advanced): a fixed background that contributes to the system Poisson (and,
@@ -378,7 +388,8 @@ class _SystemInstall(_System):
                     bc: Any = "auto", wall: Any = "none", wall_radius: float = 0.0,
                     epsilon: float = 1.0, abs_tol: float = 0.0, rel_tol: Any = None,
                     max_cycles: Any = None, min_coarse: Any = None, pre_smooth: Any = None,
-                    post_smooth: Any = None, bottom_sweeps: Any = None) -> Any:
+                    post_smooth: Any = None, bottom_sweeps: Any = None,
+                    coarse_threshold: Any = None) -> Any:
         """Configure the shared system Poisson solve (thin wrapper over the native binding).
 
         Low-level runtime seam. The documented PUBLIC elliptic surface is the typed
@@ -404,10 +415,11 @@ class _SystemInstall(_System):
         native ``set_poisson`` defaults verbatim.
 
         ADC-613 adds the GeometricMG V-cycle knobs ``rel_tol`` / ``max_cycles`` / ``min_coarse`` /
-        ``pre_smooth`` / ``post_smooth`` / ``bottom_sweeps``. Left ``None`` they are NOT forwarded,
-        so the native solver keeps its ``kMG*`` defaults (bit-identical historical V-cycle); the
-        typed :class:`pops.solvers.elliptic.GeometricMG` descriptor lowers its resolved scalars
-        through here. They are inert for the FFT solver (direct, no iterative tolerance).
+        ``pre_smooth`` / ``post_smooth`` / ``bottom_sweeps``; ADC-644 adds ``coarse_threshold`` (a
+        total-cell coarsening ceiling, distinct from the per-axis ``min_coarse``). Left ``None`` they
+        are NOT forwarded, so the native solver keeps its ``kMG*`` defaults (bit-identical historical
+        V-cycle); the typed :class:`pops.solvers.elliptic.GeometricMG` descriptor lowers its resolved
+        scalars through here. They are inert for the FFT solver (direct, no iterative tolerance).
         """
         _guard_assembling(self, "set_poisson")  # frozen once pops.bind completes (ADC-592)
         bc = _lower_bc(bc)
@@ -421,24 +433,10 @@ class _SystemInstall(_System):
         solver = _resolve_route("field_solver", solver, context="set_poisson")
         bc = _resolve_route("poisson_bc", bc, context="set_poisson")
         wall = _resolve_route("wall", wall, context="set_poisson")
-        # ADC-613: forward the GeometricMG V-cycle knobs ONLY when the caller (or the lowered typed
-        # descriptor) set them, so the native set_poisson keeps its kMG*-sourced defaults otherwise
-        # (bit-identical). A None means "unspecified" -> not passed -> native default.
-        mg_kwargs = {}
-        if rel_tol is not None:
-            mg_kwargs["rel_tol"] = float(rel_tol)
-        if max_cycles is not None:
-            mg_kwargs["max_cycles"] = int(max_cycles)
-        if min_coarse is not None:
-            mg_kwargs["min_coarse"] = int(min_coarse)
-        if pre_smooth is not None:
-            mg_kwargs["pre_smooth"] = int(pre_smooth)
-        if post_smooth is not None:
-            mg_kwargs["post_smooth"] = int(post_smooth)
-        if bottom_sweeps is not None:
-            mg_kwargs["bottom_sweeps"] = int(bottom_sweeps)
         self._s.set_poisson(rhs=rhs, solver=solver, bc=bc, wall=wall,
-                            wall_radius=wall_radius, epsilon=epsilon, abs_tol=abs_tol, **mg_kwargs)
+                            wall_radius=wall_radius, epsilon=epsilon, abs_tol=abs_tol,
+                            **_mg_kwargs(rel_tol, max_cycles, min_coarse, pre_smooth,
+                                         post_smooth, bottom_sweeps, coarse_threshold))
 
     def add_elliptic_model(self, name: Any, model: Any, solver: Any = None, bc: Any = "auto",
                            wall: Any = "none", wall_radius: float = 0.0) -> Any:

@@ -1128,8 +1128,8 @@ class AmrRuntime {
   /// requires the aux up to date), compute dt, then advance by one step(dt). @p h = coarse mesh spacing
   /// (dx_coarse). Returns the dt used. Single-block (a single block, stride=1): if w_b is the only
   /// constraining one, dt = cfl*h*substeps/w (identical to System::step_cfl single-block).
-  Real step_cfl(Real cfl, Real h) {
-    const Real dt = cfl_dt(cfl, h);
+  Real step_cfl(Real cfl, Real h, Real speed_floor = kCflSpeedFloor) {
+    const Real dt = cfl_dt(cfl, h, speed_floor);
     step(dt);
     return dt;
   }
@@ -1140,7 +1140,7 @@ class AmrRuntime {
   /// out so an installed compiled Program can take the SAME CFL dt and drive the macro-step itself
   /// (AmrSystem::step_cfl's Program route, parity SystemStepper::step_cfl) instead of the native step.
   /// The native @ref step_cfl path is byte-identical (it is this body + step(dt)).
-  Real cfl_dt(Real cfl, Real h) {
+  Real cfl_dt(Real cfl, Real h, Real speed_floor = kCflSpeedFloor) {
     // NOTE (ADC-318): this pre-solve plus step(dt)'s own head solve below is a DOUBLE Poisson solve on
     // the SAME unchanged state (regrid_every=0 freezes the grid in between). It looks redundant but is
     // NOT, and is INTENTIONALLY kept. GeometricMG::solve() is warm-started and iterates to a RELATIVE
@@ -1154,7 +1154,8 @@ class AmrRuntime {
     Real dt = std::numeric_limits<Real>::infinity();
     last_dt_reason_ = "degenerate";
     for (auto& b : blocks_) {
-      const Real w = std::max(b.max_speed((*b.levels)[0].U, aux_[0]), kCflSpeedFloor);
+      // ADC-645: caller-facing speed floor (default = the historical kCflSpeedFloor, bit-identical).
+      const Real w = std::max(b.max_speed((*b.levels)[0].U, aux_[0]), speed_floor);
       Real dt_b = cfl * h * static_cast<Real>(b.substeps) / (static_cast<Real>(b.stride) * w);
       const char* why = "transport";
       // OPTIONAL block BOUNDS (AMR StabilityPolicy, audit 2026-06): same substeps/stride formulas as

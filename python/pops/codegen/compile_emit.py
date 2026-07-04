@@ -182,6 +182,13 @@ def model_hash(model: Any, params: Any = None) -> str:
         # byte-identical (no spurious cache miss for existing models).
         if ws.get("fd_eps") is not None:
             parts.append("ws_jac_fd_eps=%s" % repr(float(ws["fd_eps"])))
+        # ADC-645: eig_max_iter / im_tol are EMITTED into the eig kernels (real_eig_minmax /
+        # roe_abs_apply args), so they enter the hash -- but ONLY when set, keeping the default
+        # model_hash byte-identical (the fd_eps rule).
+        if ws.get("eig_max_iter") is not None:
+            parts.append("ws_jac_eig_max_iter=%d" % int(ws["eig_max_iter"]))
+        if ws.get("im_tol") is not None:
+            parts.append("ws_jac_im_tol=%s" % repr(float(ws["im_tol"])))
     parts.append("n_aux=%d" % _aux_total_n_aux(m.aux_names, m.aux_extra_names))
     if m.aux_extra_names:
         parts.append("aux_extra=%s" % ",".join(m.aux_extra_names))

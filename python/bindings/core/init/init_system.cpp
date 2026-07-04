@@ -27,7 +27,7 @@ void bind_system_assembly(py::class_<System>& cls) {
              const std::vector<std::string>& implicit_roles, int newton_max_iters,
              double newton_rel_tol, double newton_abs_tol, double newton_fd_eps,
              bool newton_diagnostics, double newton_damping, const std::string& newton_fail_policy,
-             double positivity_floor, bool wave_speed_cache) {
+             double positivity_floor, bool wave_speed_cache, double weno_epsilon) {
             NewtonOptions newton;
             newton.max_iters = newton_max_iters;
             newton.rel_tol = static_cast<Real>(newton_rel_tol);
@@ -38,7 +38,7 @@ void bind_system_assembly(py::class_<System>& cls) {
                 newton_fail_policy_from_string(newton_fail_policy, "System::add_block");
             s.add_block(name, model, limiter, riemann, recon, time, substeps, evolve, stride,
                         implicit_vars, implicit_roles, newton, newton_diagnostics, positivity_floor,
-                        wave_speed_cache);
+                        wave_speed_cache, weno_epsilon);
           },
           py::arg("name"), py::arg("model"), py::arg("limiter") = "minmod",
           py::arg("riemann") = "rusanov", py::arg("recon") = "conservative",
@@ -65,7 +65,10 @@ void bind_system_assembly(py::class_<System>& cls) {
           // HLL wave speed cache (opt-in): evaluates model.wave_speeds once per cell instead of per
           // face. riemann='hll' + explicit only (explicit error otherwise). NoSlope + conservative
           // recon -> bit-identical to the per-face path. False (default) = path unchanged.
-          py::arg("wave_speed_cache") = false)
+          py::arg("wave_speed_cache") = false,
+          // ADC-645: the WENO-Z smoothness regulariser of limiter='weno5' (default = the historical
+          // kWenoEpsilon literal, bit-identical; refused on another limiter / the polar path).
+          py::arg("weno_epsilon") = static_cast<double>(kWenoEpsilon))
       // Newton report (IMEX diagnostics OPT-IN): dict {enabled, converged, max_residual,
       // max_iters_used, n_failed, failed_cell, failed_component}, aggregated over the substeps of the
       // LAST advance of the block. failed_cell = (i, j) of ONE faulty cell or None.
@@ -252,7 +255,8 @@ void bind_system_physics(py::class_<System>& cls) {
           [](System& s, const std::string& name, const std::string& kind, double theta,
              double alpha, double krylov_tol, int krylov_max_iters, const std::string& density,
              const std::string& momentum_x, const std::string& momentum_y,
-             const std::string& energy, int bz_aux_component) {
+             const std::string& energy, int bz_aux_component, int n_precond_vcycles,
+             const std::string& polar_precond) {
             SourceStageOptions opts;
             opts.krylov_tol = krylov_tol;
             opts.krylov_max_iters = krylov_max_iters;
@@ -261,6 +265,8 @@ void bind_system_physics(py::class_<System>& cls) {
             opts.momentum_y = momentum_y;
             opts.energy = energy;
             opts.bz_aux_component = bz_aux_component;
+            opts.n_precond_vcycles = n_precond_vcycles;  // ADC-645 (0 = default: ONE V-cycle)
+            opts.polar_precond = polar_precond;          // ADC-645 ("" = default: RadialLine)
             s.set_source_stage(name, kind, theta, alpha, opts);
           },
           py::arg("name"), py::arg("kind"), py::arg("theta"), py::arg("alpha"),
@@ -271,7 +277,10 @@ void bind_system_physics(py::class_<System>& cls) {
           // role (bit-identical); otherwise a stable role name or a block variable name.
           // bz_aux_component < 0 = canonical B_z channel. Honored in Cartesian as in polar.
           py::arg("density") = "", py::arg("momentum_x") = "", py::arg("momentum_y") = "",
-          py::arg("energy") = "", py::arg("bz_aux_component") = -1)
+          py::arg("energy") = "", py::arg("bz_aux_component") = -1,
+          // ADC-645: Krylov-preconditioner knobs. n_precond_vcycles (cartesian, 1|2; 0 = the
+          // historical ONE V-cycle) ; polar_precond 'radial_line'|'jacobi' (polar; '' = RadialLine).
+          py::arg("n_precond_vcycles") = 0, py::arg("polar_precond") = "")
       // Time splitting policy: "lie" (default, bit-identical) or "strang" (H(dt/2) S(dt)
       // H(dt/2), 2nd order). Cf. System::set_time_scheme / SystemStepper::step_strang.
       .def("set_time_scheme", &System::set_time_scheme, py::arg("scheme"))
@@ -398,7 +407,10 @@ void bind_system_physics(py::class_<System>& cls) {
            "historical; no effect on FFT). rel_tol / max_cycles / min_coarse / pre_smooth / "
            "post_smooth / bottom_sweeps: the GeometricMG V-cycle knobs (ADC-613); they default to "
            "the native kMG* constants so an omitting call is bit-identical to the historical "
-           "V-cycle, and are inert for the FFT solver.",
+           "V-cycle, and are inert for the FFT solver. coarse_threshold (ADC-644): a total-cell "
+           "coarsening ceiling -- coarsening stops once a level's nx*ny is at or below it; distinct "
+           "from the per-axis min_coarse. Default 0 = disabled (only min_coarse governs), "
+           "bit-identical to the historical hierarchy; inert for the FFT solver.",
            py::arg("rhs") = "charge_density", py::arg("solver") = "geometric_mg",
            py::arg("bc") = "auto", py::arg("wall") = "none", py::arg("wall_radius") = 0.0,
            py::arg("epsilon") = 1.0, py::arg("abs_tol") = 0.0,
@@ -406,7 +418,8 @@ void bind_system_physics(py::class_<System>& cls) {
            py::arg("max_cycles") = kMGDefaultMaxCycles,
            py::arg("min_coarse") = kMGDefaultMinCoarse, py::arg("pre_smooth") = kMGDefaultPreSmooth,
            py::arg("post_smooth") = kMGDefaultPostSmooth,
-           py::arg("bottom_sweeps") = kMGDefaultBottomSweeps)
+           py::arg("bottom_sweeps") = kMGDefaultBottomSweeps,
+           py::arg("coarse_threshold") = kMGDefaultCoarseThreshold)
       // DISC transport domain (T2 / T5-PR3 work): materializes a cell-centered 0/1 mask (cell
       // active if its center is in hypot(x-cx, y-cy) - R < 0) and WIRES the transport according to
       // mode=: 'none' (default, full Cartesian transport, bit-identical even with the disc set),
@@ -504,9 +517,10 @@ void bind_system_stepping(py::class_<System>& cls) {
       .def("step_cfl", &System::step_cfl,
            "Advances by ONE step at dt = cfl * h / max wave speed of the system (also honors the "
            "optional bounds: substeps, stride, source_frequency, couplings, add_dt_bound). Returns "
-           "the dt "
-           "used.",
-           py::arg("cfl"))
+           "the dt used. speed_floor (ADC-645): the floor applied to the reduced max wave speed "
+           "(w = max(w, speed_floor), so a quiescent system cannot divide by zero); defaults to "
+           "the historical kCflSpeedFloor (1e-30), bit-identical.",
+           py::arg("cfl"), py::arg("speed_floor") = static_cast<double>(kCflSpeedFloor))
       .def("enable_profiling", &System::enable_profiling,
            "Spec 3 profiling (ADC-459): start timing the step phases (step, field_solve). Disabled "
            "by default; off the hot path when off.")

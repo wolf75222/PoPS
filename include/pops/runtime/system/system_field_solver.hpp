@@ -428,9 +428,13 @@ class SystemFieldSolver {
       // ADC-613: build the V-cycle with the resolved GeometricMG knobs (min_coarse / nu1 / nu2 /
       // nbottom from the Python descriptor) instead of the ctor defaults. replicated=false: System
       // distributes ONE box round-robin (the replicated hierarchy is the AMR coupler's contract).
+      // ADC-644: the trailing cut_cell / levelset / cut_theta_min are spelled at their defaults so the
+      // new coarse_threshold (total-cell coarsening ceiling; 0 = disabled = the historical hierarchy)
+      // reaches the ctor. Passing the EB defaults keeps this construction byte-identical.
       ell_.emplace(std::in_place_type<GeometricMG>, owner_->geom, owner_->ba, pbc, std::move(active),
                    /*replicated=*/false, p_mg_opts_.min_coarse, p_mg_opts_.nu1, p_mg_opts_.nu2,
-                   p_mg_opts_.nbottom);
+                   p_mg_opts_.nbottom, /*cut_cell=*/false, /*levelset=*/std::function<Real(Real, Real)>{},
+                   kEbCutFractionFloor, p_mg_opts_.coarse_threshold);
       std::get<GeometricMG>(*ell_).set_abs_tol(
           p_mg_opts_.abs_tol);  // absolute floor of the V-cycle (0 = relative only)
       if (has_eps_field_)
@@ -949,7 +953,9 @@ class SystemFieldSolver {
       // Poisson (its own per-field solver tuning is a future extension); bit-identical by default.
       nf.ell.emplace(std::in_place_type<GeometricMG>, owner_->geom, owner_->ba, pbc,
                      std::move(active), /*replicated=*/false, p_mg_opts_.min_coarse, p_mg_opts_.nu1,
-                     p_mg_opts_.nu2, p_mg_opts_.nbottom);
+                     p_mg_opts_.nu2, p_mg_opts_.nbottom, /*cut_cell=*/false,
+                     /*levelset=*/std::function<Real(Real, Real)>{}, kEbCutFractionFloor,
+                     p_mg_opts_.coarse_threshold);  // ADC-644: coarse_threshold (0 = disabled).
       std::get<GeometricMG>(*nf.ell).set_abs_tol(p_mg_opts_.abs_tol);
     } else {
       throw std::runtime_error("System: named elliptic field solver '" + p_solver +

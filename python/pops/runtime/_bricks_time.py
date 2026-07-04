@@ -103,13 +103,27 @@ class CondensedSchur:
                  krylov_tol: Any = None, krylov_max_iters: Any = None,
                  fac_max_iters: Any = None, fac_fine_sweeps: Any = None, fac_tol: Any = None,
                  fac_coarse_rel_tol: Any = None, fac_coarse_cycles: Any = None,
-                 fac_verbose: bool = False) -> None:
+                 fac_verbose: bool = False, n_precond_vcycles: Any = None,
+                 polar_precond: Any = None) -> None:
         self.krylov_tol = float(krylov_tol) if krylov_tol is not None else 0.0
         self.krylov_max_iters = int(krylov_max_iters) if krylov_max_iters is not None else 0
         if krylov_tol is not None and not (0.0 < self.krylov_tol < 1.0):
             raise ValueError("CondensedSchur: krylov_tol must be in (0, 1) (got %r)" % (krylov_tol,))
         if krylov_max_iters is not None and self.krylov_max_iters < 1:
             raise ValueError("CondensedSchur: krylov_max_iters >= 1 (got %r)" % (krylov_max_iters,))
+        # ADC-645: Krylov-preconditioner knobs of the stage. n_precond_vcycles = MG V-cycles per
+        # BiCGStab-preconditioner application on the CARTESIAN (and AMR) stage; the steppers accept
+        # 1 or 2 (None = the historical ONE V-cycle, wire sentinel 0). polar_precond selects the
+        # POLAR stage's preconditioner ('radial_line' | 'jacobi'; None = the historical RadialLine,
+        # wire sentinel ""). Cross-geometry misuse refuses at the native seam, never silently.
+        self.n_precond_vcycles = int(n_precond_vcycles) if n_precond_vcycles is not None else 0
+        if n_precond_vcycles is not None and self.n_precond_vcycles not in (1, 2):
+            raise ValueError("CondensedSchur: n_precond_vcycles must be 1 or 2 (got %r)"
+                             % (n_precond_vcycles,))
+        self.polar_precond = str(polar_precond) if polar_precond is not None else ""
+        if polar_precond is not None and self.polar_precond not in ("radial_line", "jacobi"):
+            raise ValueError("CondensedSchur: polar_precond must be 'radial_line' or 'jacobi' "
+                             "(got %r)" % (polar_precond,))
         # ADC-614: composite-FAC knobs of the MULTI-LEVEL condensed Schur solve on AMR (the coarse
         # uniform stage uses only the Krylov knobs above). None (defaults) = the kFAC* constants,
         # bit-identical; refused out-of-domain (never silently clamped). Inert on the uniform System.

@@ -186,6 +186,39 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
   auto crit = [thr](const ConstArray4& a, int i, int j) { return a(i, j, 0) > thr; };
   if (cpl->levels().size() > 1)
     cpl->regrid(crit);  // no regrid on a mono-level hierarchy (amr-schur)
+  // ADC-645: opt-in COMPOSITE FAC field solve (set_poisson(composite=true)). The coupler's
+  // compute_aux gate (2 levels, ONE mono-box fine patch, replicated coarse) silently falls back to
+  // Option A outside its scope; surface it HERE, at build (before the first update), as a loud
+  // refusal instead -- the caller explicitly opted out of the Option A solve. Checked after the
+  // initial regrid so the mono-box condition sees the materialized fine patch. composite=false
+  // (default) skips all of this: Option A, bit-identical.
+  if (bp.poisson.composite) {
+    const bool replicated = !bp.mesh.distribute_coarse;
+    const bool two_levels = cpl->levels().size() == 2;
+    const bool mono_box_fine = two_levels && cpl->levels()[1].U.box_array().size() == 1;
+    if (!replicated || !two_levels || !mono_box_fine)
+      throw std::runtime_error(
+          "AmrSystem::set_poisson : composite=true requires the coupler's composite scope (2 "
+          "levels, ONE mono-box fine patch, replicated coarse) ; got levels=" +
+          std::to_string(cpl->levels().size()) + (replicated ? "" : ", distributed coarse") +
+          (two_levels && !mono_box_fine ? ", multi-box fine patch" : "") +
+          ". Use composite=false (the Option A coarse solve + gradient injection).");
+    cpl->set_composite_poisson(true);
+    // Composite-FAC knobs: the <= 0 -> kFAC*-default idiom shared with the Schur stage below.
+    CompositeFacOptions fo;
+    if (bp.poisson.fac_max_iters > 0)
+      fo.max_iters = bp.poisson.fac_max_iters;
+    if (bp.poisson.fac_fine_sweeps > 0)
+      fo.fine_sweeps = bp.poisson.fac_fine_sweeps;
+    if (bp.poisson.fac_tol > 0.0)
+      fo.tol = static_cast<Real>(bp.poisson.fac_tol);
+    if (bp.poisson.fac_coarse_rel_tol > 0.0)
+      fo.coarse_rel_tol = static_cast<Real>(bp.poisson.fac_coarse_rel_tol);
+    if (bp.poisson.fac_coarse_cycles > 0)
+      fo.coarse_cycles = bp.poisson.fac_coarse_cycles;
+    fo.verbose = bp.poisson.fac_verbose;
+    cpl->set_fac_options(fo);
+  }
   // model-NAMED aux (ADC-291): seed the static named fields onto the coupler's shared aux BEFORE the
   // first update/step (like density/B_z seeding). The coupler re-applies them in compute_aux each
   // update, so they persist across regrid and reach every level via the aux injection. Empty -> no-op.
@@ -285,7 +318,9 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
                                 : resolve_schur(bp.schur.energy, VariableRole::Energy, "Energy"));
     auto schur = std::make_shared<AmrCondensedSchurSourceStepper>(
         schur_vs, sc_rho, sc_mx, sc_my, sc_E, g, bac, bp.poisson.bc,
-        static_cast<Real>(bp.schur.alpha));
+        static_cast<Real>(bp.schur.alpha),
+        // ADC-645: MG V-cycles per preconditioner application (0 = the historical ctor default 1).
+        bp.schur.n_precond_vcycles > 0 ? bp.schur.n_precond_vcycles : 1);
     if (bp.schur.krylov_tol > 0.0 || bp.schur.krylov_max_iters > 0)
       schur->set_krylov(
           bp.schur.krylov_tol > 0.0 ? static_cast<Real>(bp.schur.krylov_tol)

@@ -499,9 +499,12 @@ POPS_HD inline Real mat_norm_inf(const Real (&A)[N][N]) {
 /// POPS_HD, no allocation, N <= 16 (the dense-eig stack-buffer limit).
 template <int N>
 POPS_HD inline bool roe_abs_apply(const Real (&A)[N][N], const Real (&dU)[N], Real (&out)[N],
-                                 int max_iter = 80, Real tol = Real(1e-13)) {
+                                 int max_iter = 80, Real tol = Real(1e-13),
+                                 Real im_tol = Real(1e-5), int max_iter_per_eig = 100) {
+  // ADC-645: im_tol / max_iter_per_eig forward to the real-spectrum gate (defaults = the
+  // real_spectrum defaults, so an unconfigured call is bit-identical).
   static_assert(N >= 1 && N <= 16, "roe_abs_apply: 1 <= N <= 16");
-  if (real_spectrum(A) != Spectrum::kReal)
+  if (real_spectrum(A, im_tol, max_iter_per_eig) != Spectrum::kReal)
     return false;  // complex/unknown -> caller falls back
   Real S[N][N], Sinv[N][N];
   for (int i = 0; i < N; ++i)

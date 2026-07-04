@@ -16,6 +16,7 @@ solvers = pytest.importorskip("pops.solvers")
 
 from pops.solvers import elliptic, krylov, nonlinear, schur
 from pops.solvers.options import Chebyshev, DirectSmallGrid, RedBlackGaussSeidel
+from pops.solvers.preconditioners import preconditioners
 from pops.solvers.tolerances import Absolute, AbsoluteFloor, Relative
 
 
@@ -350,6 +351,136 @@ def test_install_path_token_resolution_for_rich_descriptor():
     from pops.runtime._system_unified_install import _SystemUnifiedInstall
     assert _SystemUnifiedInstall._solver_token(elliptic.GeometricMG()) == "geometric_mg"
     assert _SystemUnifiedInstall._solver_token(pops.fields.catalog.GeometricMG()) == "geometric_mg"
+
+
+# --- ADC-644: the wired GeometricMG preconditioner option surface -----------------------------
+def test_precond_geometric_mg_default_has_no_options():
+    # A default GeometricMG() preconditioner carries an EMPTY options dict, so the lowering returns
+    # None and the emitted V-cycle stays byte-identical to the historical single-cycle preconditioner.
+    d = preconditioners.GeometricMG()
+    assert d.category == "preconditioner"
+    assert d.scheme == "geometric_mg"
+    assert d.options == {}
+
+
+def test_precond_geometric_mg_carries_validated_shape_knobs():
+    d = preconditioners.GeometricMG(n_vcycles=3, pre_sweeps=1, post_sweeps=1, bottom_sweeps=80,
+                                    min_coarse=4)
+    assert d.options == {"n_vcycles": 3, "pre_sweeps": 1, "post_sweeps": 1, "bottom_sweeps": 80,
+                         "min_coarse": 4}
+
+
+@pytest.mark.parametrize("kw", [{"tolerance": 1e-6}, {"max_cycles": 10}])
+def test_precond_geometric_mg_refuses_iterative_knobs(kw):
+    # A Krylov preconditioner must be a FIXED linear map; tolerance/max_cycles describe an iterative
+    # solve-to-convergence and are refused loud (never swallowed).
+    with pytest.raises(ValueError, match="FIXED linear map"):
+        preconditioners.GeometricMG(**kw)
+
+
+def test_precond_geometric_mg_refuses_unknown_kwarg():
+    with pytest.raises(TypeError, match="unknown option"):
+        preconditioners.GeometricMG(bogus=1)
+
+
+@pytest.mark.parametrize("kw", [{"n_vcycles": 0}, {"min_coarse": 0}, {"pre_sweeps": -1}])
+def test_precond_geometric_mg_refuses_out_of_domain(kw):
+    with pytest.raises((ValueError, TypeError)):
+        preconditioners.GeometricMG(**kw)
+
+
+# --- ADC-644: DirectSmallGrid threshold is None by default (wired, not dropped) -----------------
+def test_direct_small_grid_default_is_disabled():
+    # The default threshold is None ("governed by min_coarse"), lowering to the disabled sentinel 0
+    # so an unconfigured GeometricMG() keeps today's coarsening hierarchy bit-for-bit.
+    assert DirectSmallGrid().threshold is None
+    assert elliptic.GeometricMG().mg_options()["coarse_threshold"] == 0
+
+
+def test_direct_small_grid_explicit_threshold_reaches_mg_options():
+    assert DirectSmallGrid(64).threshold == 64
+    opts = elliptic.GeometricMG(coarse=DirectSmallGrid(64)).mg_options()
+    assert opts["coarse_threshold"] == 64
+
+
+@pytest.mark.parametrize("bad", [0, -3])
+def test_direct_small_grid_refuses_non_positive(bad):
+    with pytest.raises(ValueError):
+        DirectSmallGrid(bad)
+
+
+# --- ADC-645: CompositeFAC / Richardson omega / Krylov rel_tol --------------------------------
+def test_composite_fac_defaults_and_domain():
+    from pops.solvers.options import CompositeFAC
+    d = CompositeFAC()
+    # None -> the 0 wire sentinels (native kFAC* defaults), the CondensedSchur fac_* convention.
+    assert d.options() == {"max_iters": 0, "fine_sweeps": 0, "tol": 0.0, "coarse_rel_tol": 0.0,
+                           "coarse_cycles": 0, "verbose": False}
+    kw = d.set_poisson_kwargs()
+    assert kw["composite"] is True and kw["fac_max_iters"] == 0
+    cfg = CompositeFAC(max_iters=10, fine_sweeps=200, tol=1e-8, coarse_rel_tol=1e-11,
+                       coarse_cycles=50, verbose=True)
+    assert cfg.set_poisson_kwargs() == {"composite": True, "fac_max_iters": 10,
+                                        "fac_fine_sweeps": 200, "fac_tol": 1e-8,
+                                        "fac_coarse_rel_tol": 1e-11, "fac_coarse_cycles": 50,
+                                        "fac_verbose": True}
+    for bad in ({"max_iters": 0}, {"fine_sweeps": -1}, {"tol": 1.5}, {"coarse_rel_tol": 0.0},
+                {"coarse_cycles": 0}):
+        with pytest.raises(ValueError):
+            CompositeFAC(**bad)
+
+
+def test_geometric_mg_amr_composite_slot():
+    from pops.solvers.options import CompositeFAC
+    # Default None: the options view is UNCHANGED (omit-when-default, byte-identity).
+    g = elliptic.GeometricMG()
+    assert g.amr_composite is None
+    assert "amr_composite" not in g.options()
+    # Typed slot: a CompositeFAC is carried; a bare bool/string refuses.
+    g2 = elliptic.GeometricMG(amr_composite=CompositeFAC())
+    assert g2.options()["amr_composite"] == "composite_fac"
+    with pytest.raises(TypeError, match="CompositeFAC"):
+        elliptic.GeometricMG(amr_composite=True)
+
+
+def test_richardson_omega_and_krylov_rel_tol():
+    # omega: carried only when set (omit-when-default keeps the descriptor identity unchanged).
+    d = krylov.Richardson(max_iter=100)
+    assert "omega" not in d.options and "rel_tol" not in d.options
+    d2 = krylov.Richardson(max_iter=100, omega=0.8)
+    assert d2.options["omega"] == 0.8
+    with pytest.raises(ValueError, match="omega"):
+        krylov.Richardson(max_iter=100, omega=0.0)
+    # rel_tol on every factory; out-of-domain refuses.
+    for factory in (krylov.CG, krylov.BiCGStab, krylov.GMRES, krylov.Richardson):
+        assert factory(max_iter=10, rel_tol=1e-9).options["rel_tol"] == 1e-9
+        with pytest.raises(ValueError, match="rel_tol"):
+            factory(max_iter=10, rel_tol=2.0)
+
+
+def test_condensed_schur_precond_knobs():
+    # ADC-645: n_precond_vcycles in {1, 2}; polar_precond in {radial_line, jacobi}; defaults 0/"".
+    cs = pops.CondensedSchur()
+    assert cs.n_precond_vcycles == 0 and cs.polar_precond == ""
+    cs2 = pops.CondensedSchur(n_precond_vcycles=2, polar_precond="jacobi")
+    assert cs2.n_precond_vcycles == 2 and cs2.polar_precond == "jacobi"
+    with pytest.raises(ValueError, match="n_precond_vcycles"):
+        pops.CondensedSchur(n_precond_vcycles=3)
+    with pytest.raises(ValueError, match="polar_precond"):
+        pops.CondensedSchur(polar_precond="bogus")
+
+
+def test_weno5_epsilon_descriptor():
+    from pops.numerics.reconstruction import reconstruction
+    # Default: no epsilon option (omit-when-default; the native kWenoEpsilon literal governs).
+    assert "epsilon" not in reconstruction.WENO5().options
+    assert reconstruction.WENO5(epsilon=1e-30).options["epsilon"] == 1e-30
+    with pytest.raises(ValueError, match="epsilon"):
+        reconstruction.WENO5(epsilon=-1.0)
+    # The Spatial ride-along (mirror of waves_provider).
+    sp = pops.Spatial(reconstruction=reconstruction.WENO5(epsilon=1e-30))
+    assert sp.weno_epsilon == 1e-30
+    assert pops.Spatial(reconstruction=reconstruction.WENO5()).weno_epsilon is None
 
 
 if __name__ == "__main__":

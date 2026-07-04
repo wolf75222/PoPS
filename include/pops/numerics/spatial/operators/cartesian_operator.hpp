@@ -105,10 +105,15 @@ struct AssembleRhsKernel {
 /// INVARIANT: the operator does not modify U, aux -- it only writes R. No ghost fill.
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void assemble_rhs(const Model& model, const MultiFab& U, const MultiFab& aux, const Geometry& geom,
-                  MultiFab& R, bool recon_prim = false, Real pos_floor = Real(0)) {
+                  MultiFab& R, bool recon_prim = false, Real pos_floor = Real(0),
+                  Real weno_eps = kWenoEpsilon) {
   detail::require_reconstruction_ghosts<Limiter>(U);  // state ghosts >= stencil (otherwise OOB)
   const Real dx = geom.dx(), dy = geom.dy();
-  const Limiter lim{};
+  // ADC-645: the per-block WENO-Z regulariser (only Weno5 carries an eps member; the default value
+  // IS kWenoEpsilon, so every existing call site is bit-identical).
+  Limiter lim{};
+  if constexpr (Limiter::n_ghost >= 3)
+    lim.eps = weno_eps;
   const NumericalFlux nflux{};
   const int pos_comp = detail::positivity_comp<Model>(pos_floor);
   for (int li = 0; li < U.local_size(); ++li) {
@@ -204,9 +209,12 @@ struct AssembleRhsHllCachedKernel {
 template <class Limiter = NoSlope, class Model>
 void assemble_rhs_hll_cached(const Model& model, const MultiFab& U, const MultiFab& aux,
                              const Geometry& geom, MultiFab& R, MultiFab& cache,
-                             bool recon_prim = false, Real pos_floor = Real(0)) {
+                             bool recon_prim = false, Real pos_floor = Real(0),
+                             Real weno_eps = kWenoEpsilon) {
   const Real dx = geom.dx(), dy = geom.dy();
-  const Limiter lim{};
+  Limiter lim{};  // ADC-645: per-block WENO-Z regulariser (default kWenoEpsilon, bit-identical)
+  if constexpr (Limiter::n_ghost >= 3)
+    lim.eps = weno_eps;
   const int pos_comp = detail::positivity_comp<Model>(pos_floor);
   fill_wave_speed_cache(model, U, aux, cache);
   for (int li = 0; li < U.local_size(); ++li) {

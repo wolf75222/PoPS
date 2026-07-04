@@ -54,6 +54,10 @@ def test_numerical_defaults_report_classifies_every_constant():
     assert d["diagnostics"]["fft_direct_dft_fallback_count"] == 0
     assert classification["kMaxRuntimeParams"] == "hard_limit"
     assert classification["kNewtonDefaultFdEps"] == "public_knob"
+    # ADC-644/645: the newly wired knobs are public.
+    assert classification["kMGDefaultCoarseThreshold"] == "public_knob"
+    assert classification["kWenoEpsilon"] == "public_knob"
+    assert classification["kCflSpeedFloor"] == "public_knob"
 
 
 def test_system_inspect_reports_effective_block_and_solver_options():

@@ -16,7 +16,7 @@ else:
 
 
 def _lower_krylov_method(method: Any) -> Any:
-    """Lower a typed Krylov descriptor to its internal scheme token (Spec 5 sec.7).
+    """Lower a typed Krylov descriptor to ``(scheme, options)`` (Spec 5 sec.7).
 
     ``method`` is a :mod:`pops.solvers.krylov` descriptor (``CG()`` / ``GMRES()`` /
     ``BiCGStab()`` / ``Richardson()``); its ``scheme`` is the C++ token (``"cg"`` ...) the
@@ -24,13 +24,14 @@ def _lower_krylov_method(method: Any) -> Any:
     bare algorithm-selector string is REJECTED (Spec 5 forbids keeping the string form on the
     public surface); ``None`` defaults to the ``cg`` scheme.
 
-    Only the ``scheme`` is read here: the descriptor's own ``max_iter`` (mandatory at descriptor
-    construction, ADC-535) is metadata for the LinearProblem-lowering path; the program's
-    ``P.solve_linear(max_iter=...)`` argument is the authoritative budget for THIS op, so the
-    ``None`` default returns the ``cg`` token directly without constructing a budgeted descriptor.
+    The descriptor's own ``max_iter`` (mandatory at descriptor construction, ADC-535) is metadata
+    for the LinearProblem-lowering path; the program's ``P.solve_linear(max_iter=...)`` argument is
+    the authoritative budget for THIS op. ADC-645: ``options`` carries the descriptor's optional
+    ``rel_tol`` (supplies ``tol`` when the call site leaves it default) and ``omega`` (Richardson
+    relaxation, baked at emit) -- absent when unset, so a default descriptor lowers as before.
     """
     if method is None:
-        return "cg"
+        return "cg", {}
     if isinstance(method, str):
         raise TypeError(
             "solve_linear: method must be a typed pops.solvers.krylov descriptor "
@@ -41,7 +42,12 @@ def _lower_krylov_method(method: Any) -> Any:
         raise TypeError(
             "solve_linear: method must be a pops.solvers.krylov descriptor "
             "(CG() / GMRES() / BiCGStab() / Richardson()); got %r" % (method,))
-    return scheme
+    options = dict(getattr(method, "options", None) or {})
+    if "omega" in options and scheme != "richardson":
+        raise ValueError(
+            "solve_linear: omega only applies to Richardson() (the relaxation factor of "
+            "pops::richardson_solve); got method %r" % (scheme,))
+    return scheme, options
 
 
 # Preconditioner schemes that lower to REAL C++ in the matrix-free Krylov path (Spec 5 sec.7, ADC-516):
@@ -54,7 +60,7 @@ _WIRED_PRECOND_SCHEMES = frozenset({"identity", "geometric_mg"})
 
 
 def _lower_preconditioner(preconditioner: Any) -> Any:
-    """Lower a typed preconditioner descriptor to its scheme token (Spec 5 sec.7).
+    """Lower a typed preconditioner descriptor to ``(scheme, precond_options|None)`` (Spec 5 sec.7).
 
     ``preconditioner`` is a :mod:`pops.solvers.preconditioners` descriptor
     (``preconditioners.Identity()`` / ``preconditioners.GeometricMG()`` ...); its ``scheme`` is the
@@ -62,6 +68,9 @@ def _lower_preconditioner(preconditioner: Any) -> Any:
     default). The geometric-multigrid preconditioner lowers to a real V-cycle ApplyFn; the planned
     jacobi / block_jacobi descriptors have no native kernel yet and are rejected with an honest
     "planned, not wired" message (out of scope -- a separate issue).
+
+    ADC-644: a ``GeometricMG(...)`` with validated V-cycle-shape knobs returns its option dict; a
+    default one returns ``None`` (the IR omits ``precond_options`` -> emitted V-cycle byte-identical).
     """
     if preconditioner is None:
         preconditioner = _preconditioners().Identity()
@@ -81,7 +90,9 @@ def _lower_preconditioner(preconditioner: Any) -> Any:
         raise NotImplementedError(
             "solve_linear: the %r preconditioner is planned, not wired yet (it needs a native C++ "
             "kernel); use preconditioners.Identity() or preconditioners.GeometricMG()" % (scheme,))
-    return scheme
+    options = getattr(preconditioner, "options", None)
+    precond_options = dict(options) if options else None
+    return scheme, precond_options
 
 
 def _preconditioners() -> Any:
@@ -95,7 +106,7 @@ class _ProgramSolve(_ProgramConstants, _ProgramBase):
 
     def solve_linear(self, name: Any = None, operator: Any = None, rhs: Any = None,
                      initial_guess: Any = None, method: Any = None, preconditioner: Any = None,
-                     tol: Any = 1e-8, max_iter: Any = None, restart: Any = None) -> Any:
+                     tol: Any = None, max_iter: Any = None, restart: Any = None) -> Any:
         """Solve the matrix-free linear system ``operator x = rhs`` with the runtime's Krylov loop and
         return the solution as a scalar_field. The iteration is DYNAMIC (C++-side, inside the loop):
         the IR only carries the operator (its apply lambda), the rhs, the initial guess, and the
@@ -123,8 +134,13 @@ class _ProgramSolve(_ProgramConstants, _ProgramBase):
         # pops.solvers.preconditioners). They lower to the SAME internal scheme tokens the runtime
         # always keyed on, so the IR / emitted C++ stay byte-identical to the historical string path;
         # a bare algorithm-selector string is rejected (the public string form is removed).
-        method = _lower_krylov_method(method)
-        preconditioner = _lower_preconditioner(preconditioner)
+        method, method_options = _lower_krylov_method(method)
+        preconditioner, precond_options = _lower_preconditioner(preconditioner)
+        # ADC-645: the call-site tol stays the authoritative per-op budget; left default (None) it
+        # falls back to the descriptor's optional rel_tol, then to the historical 1e-8 -- so a
+        # default program resolves tol to the same 1e-8 and the IR node is byte-identical.
+        if tol is None:
+            tol = method_options.get("rel_tol", 1e-8)
         if not (isinstance(operator, Value) and operator.vtype == "matrix_free_op"):
             raise ValueError("solve_linear: operator must be a matrix_free_operator value")
         if operator.attrs["apply_block"] is None:
@@ -176,11 +192,19 @@ class _ProgramSolve(_ProgramConstants, _ProgramBase):
         # restart is a positive int on the gmres path (validated above); the None union member the
         # checker infers is from the non-gmres branch, which takes the else arm of the ternary.
         restart_int = int(restart) if method == "gmres" else None  # pyright: ignore[reportArgumentType]
-        return self._new("scalar_field", "solve_linear", inputs,
-                         {"method": method, "preconditioner": preconditioner, "tol": float(tol),
-                          "max_iter": int(max_iter), "has_guess": initial_guess is not None,
-                          "ncomp": op_ncomp,
-                          "restart": restart_int}, name, rhs.block)
+        attrs = {"method": method, "preconditioner": preconditioner, "tol": float(tol),
+                 "max_iter": int(max_iter), "has_guess": initial_guess is not None,
+                 "ncomp": op_ncomp, "restart": restart_int}
+        # ADC-644: the resolved V-cycle-shape options of a configured GeometricMG preconditioner. Added
+        # ONLY when non-None (a default GeometricMG() lowers to None), so an unconfigured program's IR
+        # hash / emitted source stays byte-identical (the attr is JSON-dumped into _serialize_node).
+        if precond_options is not None:
+            attrs["precond_options"] = precond_options
+        # ADC-645: Richardson relaxation factor, added ONLY when the descriptor set it (a default
+        # Richardson() program's IR hash / emitted source stays byte-identical: omega = 1 literal).
+        if "omega" in method_options:
+            attrs["omega"] = float(method_options["omega"])
+        return self._new("scalar_field", "solve_linear", inputs, attrs, name, rhs.block)
 
     # --- multistep histories (ADC-406a) ---
     def history(self, name: Any, lag: Any = 1, ncomp: Any = None) -> Any:

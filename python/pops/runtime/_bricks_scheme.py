@@ -195,6 +195,12 @@ class Spatial:
         self.waves_provider = None
         if _tokens is None and flux is not None and not isinstance(flux, str):
             self.waves_provider = getattr(flux, "options", {}).get("waves")
+        # ADC-645 ride-along (mirror of waves_provider): a reconstruction descriptor built with
+        # WENO5(epsilon=...) carries the WENO-Z regulariser in options["epsilon"]. None (the default)
+        # keeps the native kWenoEpsilon -> nothing forwarded, byte-identical.
+        self.weno_epsilon = None
+        if _tokens is None and limiter is not None and not isinstance(limiter, str):
+            self.weno_epsilon = getattr(limiter, "options", {}).get("epsilon")
         # Boolean shortcuts (typed flags, not strings): override the limiter / recon slot. They
         # stay as convenience sugar -- only the bare-string selectors are forbidden (Spec 5 sec.7).
         if none:

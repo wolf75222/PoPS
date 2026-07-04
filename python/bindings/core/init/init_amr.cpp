@@ -129,9 +129,18 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           "solver is ALWAYS GeometricMG and the right-hand side ALWAYS the sum of the elliptic "
           "bricks. rhs: 'charge_density' | 'composite'. solver: 'geometric_mg' only (no "
           "FFT on the hierarchy). bc: 'auto' | 'periodic' | 'dirichlet' | 'neumann'. wall: "
-          "'none' | 'circle' (circular conducting wall, requires wall_radius > 0).",
+          "'none' | 'circle' (circular conducting wall, requires wall_radius > 0). "
+          "composite (ADC-645): True opts the FIELD solve into the composite FAC path (the fine "
+          "patch refines the elliptic); scope = single block, 2 levels, one mono-box fine patch, "
+          "replicated coarse -- out of scope REFUSES at build (never a silent fallback). The fac_* "
+          "knobs (<= 0 = the kFAC* defaults, same convention as set_source_stage) tune that solve; "
+          "inert when composite is False (the historical Option A solve, bit-identical).",
           py::arg("rhs") = "charge_density", py::arg("solver") = "geometric_mg",
-          py::arg("bc") = "auto", py::arg("wall") = "none", py::arg("wall_radius") = 0.0);
+          py::arg("bc") = "auto", py::arg("wall") = "none", py::arg("wall_radius") = 0.0,
+          py::arg("composite") = false, py::arg("fac_max_iters") = 0,
+          py::arg("fac_fine_sweeps") = 0, py::arg("fac_tol") = 0.0,
+          py::arg("fac_coarse_rel_tol") = 0.0, py::arg("fac_coarse_cycles") = 0,
+          py::arg("fac_verbose") = false);
 }
 
 // Physics wiring: dt bounds, GLOBAL Schur/coupled source stages, and time-splitting policy.
@@ -173,7 +182,8 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
              double alpha, double krylov_tol, int krylov_max_iters, const std::string& density,
              const std::string& momentum_x, const std::string& momentum_y, const std::string& energy,
              int fac_max_iters, int fac_fine_sweeps, double fac_tol, double fac_coarse_rel_tol,
-             int fac_coarse_cycles, bool fac_verbose) {
+             int fac_coarse_cycles, bool fac_verbose, int n_precond_vcycles,
+             const std::string& polar_precond) {
             SourceStageOptions opts;
             opts.krylov_tol = krylov_tol;
             opts.krylov_max_iters = krylov_max_iters;
@@ -187,17 +197,21 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
             opts.fac_coarse_rel_tol = fac_coarse_rel_tol;
             opts.fac_coarse_cycles = fac_coarse_cycles;
             opts.fac_verbose = fac_verbose;
+            opts.n_precond_vcycles = n_precond_vcycles;  // ADC-645 (0 = historical ONE V-cycle)
+            opts.polar_precond = polar_precond;          // ADC-645 (refused: AMR is cartesian)
             s.set_source_stage(name, kind, theta, alpha, opts);
           },
           py::arg("name"), py::arg("kind"), py::arg("theta"), py::arg("alpha"),
           // Carried settings (wave 3, System parity): Krylov tolerances of the coarse solve
           // (<= 0 = defaults 1e-10/400) + field descriptors ("" = canonical role) + composite-FAC
-          // knobs of the multi-level Schur solve (ADC-614; <= 0 = the kFAC* defaults).
+          // knobs of the multi-level Schur solve (ADC-614; <= 0 = the kFAC* defaults) +
+          // n_precond_vcycles (ADC-645; 0 = the historical ONE MG V-cycle per precond application).
           py::arg("krylov_tol") = 0.0, py::arg("krylov_max_iters") = 0, py::arg("density") = "",
           py::arg("momentum_x") = "", py::arg("momentum_y") = "", py::arg("energy") = "",
           py::arg("fac_max_iters") = 0, py::arg("fac_fine_sweeps") = 0, py::arg("fac_tol") = 0.0,
           py::arg("fac_coarse_rel_tol") = 0.0, py::arg("fac_coarse_cycles") = 0,
-          py::arg("fac_verbose") = false)
+          py::arg("fac_verbose") = false, py::arg("n_precond_vcycles") = 0,
+          py::arg("polar_precond") = "")
       .def("set_time_scheme", &AmrSystem::set_time_scheme, py::arg("scheme"))
       .def(
           "set_density",
@@ -308,9 +322,11 @@ void bind_amr_stepping(py::class_<AmrSystem>& cls) {
       .def("advance", &AmrSystem::advance, py::arg("dt"), py::arg("nsteps"))
       .def("step_cfl", &AmrSystem::step_cfl,
            "Advances by one AMR macro-step at dt = cfl * dx_coarse / max wave speed (also honors "
-           "the "
-           "substeps/stride cadence in multi-block and the optional bounds). Returns the dt used.",
-           py::arg("cfl"))
+           "the substeps/stride cadence in multi-block and the optional bounds). Returns the dt "
+           "used. speed_floor (ADC-645): the floor applied to the reduced max wave speed on the "
+           "multi-block runtime engine (default = the historical kCflSpeedFloor, bit-identical); "
+           "refused non-default on the single-block coupler (no historical floor site there).",
+           py::arg("cfl"), py::arg("speed_floor") = static_cast<double>(kCflSpeedFloor))
       // AMR / MPI profiling (Spec 5 criterion 43, ADC-479): the multi-block engine times its
       // non-numeric phases (regrid / fill_boundary / average_down) + MPI counters into the
       // facade-owned Profiler. PerformanceSummary.by_amr_mpi() surfaces them. Off by default.

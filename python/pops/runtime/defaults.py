@@ -33,6 +33,7 @@ _CONSTANT_CLASSIFICATION: dict = {
     "kMGDefaultPreSmooth": "public_knob",
     "kMGDefaultPostSmooth": "public_knob",
     "kMGDefaultBottomSweeps": "public_knob",
+    "kMGDefaultCoarseThreshold": "public_knob",
     "kFACDefaultMaxIters": "public_knob",
     "kFACDefaultFineSweeps": "public_knob",
     "kFACDefaultTol": "public_knob",
@@ -42,7 +43,7 @@ _CONSTANT_CLASSIFICATION: dict = {
     "kFFTZeroMeanGauge": "internal_default",
     "kFFTDirectDftFallback": "diagnostic_only",
     "kEbCutFractionFloor": "public_knob",
-    "kWenoEpsilon": "internal_default",
+    "kWenoEpsilon": "public_knob",
     "kEbFaceOpenEps": "public_knob",
     "kEbKappaMin": "public_knob",
     "kAmrDefaultMaxLevels": "internal_default",
@@ -65,7 +66,7 @@ _CONSTANT_CLASSIFICATION: dict = {
     "kPhysicalDefaultGravitySign": "public_knob",
     "kPhysicalDefaultFourPiG": "public_knob",
     "kPhysicalDefaultGravityRho0": "public_knob",
-    "kCflSpeedFloor": "internal_default",
+    "kCflSpeedFloor": "public_knob",
     "kMaxRuntimeParams": "hard_limit",
 }
 
@@ -98,6 +99,7 @@ def _static_report() -> dict:
             "pre_smooth": 2,
             "post_smooth": 2,
             "bottom_sweeps": 50,
+            "coarse_threshold": 0,
         },
         "fac": {
             "max_iters": 30,

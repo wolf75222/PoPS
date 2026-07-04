@@ -143,6 +143,17 @@ struct AmrBuildParams {
   struct Poisson {
     BCRec bc;                              ///< coarse Poisson BC
     std::function<bool(Real, Real)> wall;  ///< conductive wall predicate (empty = none)
+    // ADC-645: opt-in COMPOSITE FAC field solve (the fine patch refines the elliptic;
+    // AmrCouplerMP::set_composite_poisson). false (default) = the historical Option A coarse solve +
+    // gradient injection, bit-identical. The fac_* knobs mirror the SchurStage block below (<= 0 =
+    // the kFAC* default, same convention).
+    bool composite = false;           ///< true: composite FAC field solve (single-block coupler)
+    int fac_max_iters = 0;            ///< FAC outer iterations (<= 0 = default kFACDefaultMaxIters)
+    int fac_fine_sweeps = 0;          ///< SOR sweeps per fine solve (<= 0 = kFACDefaultFineSweeps)
+    double fac_tol = 0.0;             ///< composite-residual stop (<= 0 = kFACDefaultTol)
+    double fac_coarse_rel_tol = 0.0;  ///< internal coarse rel_tol (<= 0 = kFACInitialCoarseRelTol)
+    int fac_coarse_cycles = 0;        ///< internal coarse cycles (<= 0 = kFACInitialCoarseMaxCycles)
+    bool fac_verbose = false;         ///< record the FAC per-iteration residual trace
   } poisson;
   /// Initial coarse seed: density only (historical) OR the FULL conservative state (priority).
   struct InitialData {
@@ -173,6 +184,9 @@ struct AmrBuildParams {
     double fac_coarse_rel_tol = 0.0;  ///< internal coarse rel_tol (<= 0 = default 1e-12)
     int fac_coarse_cycles = 0;   ///< internal coarse cycles (<= 0 = default 100)
     bool fac_verbose = false;    ///< record the FAC per-iteration residual trace
+    // ADC-645: MG V-cycles per BiCGStab-preconditioner application (0 = the historical ONE; the
+    // stepper accepts 1 or 2). Threaded to the AmrCondensedSchurSourceStepper ctor at build.
+    int n_precond_vcycles = 0;
     // Field descriptors ("" = canonical role, bit-identical; otherwise stable role name OR block
     // variable name).
     std::string density, momentum_x, momentum_y, energy;
@@ -498,10 +512,21 @@ class AmrSystem {
   /// @param solver "geometric_mg" only (the only one wired on the hierarchy; no FFT)
   /// @param bc     "auto" | "periodic" | "dirichlet" | "neumann"
   /// @param wall   "none" | "circle" (circular conductive wall, requires wall_radius > 0)
-  /// @throws std::runtime_error if rhs, solver, bc or wall is outside the supported domain.
+  /// @param composite ADC-645: true opts the FIELD solve into the composite FAC path (the fine patch
+  ///                  refines the elliptic; AmrCouplerMP::set_composite_poisson). Supported scope =
+  ///                  the coupler's: single block, 2 levels, ONE mono-box fine patch, replicated
+  ///                  coarse -- an out-of-scope hierarchy REFUSES at build (never a silent fallback).
+  ///                  false (default) = the historical Option A solve, bit-identical.
+  /// @param fac_max_iters / fac_fine_sweeps / fac_tol / fac_coarse_rel_tol / fac_coarse_cycles /
+  ///        fac_verbose the composite-FAC knobs (<= 0 = the kFAC* default, same convention as
+  ///        set_source_stage); inert when composite is false.
+  /// @throws std::runtime_error if rhs, solver, bc, wall or a FAC knob is outside the supported domain.
   void set_poisson(const std::string& rhs = "charge_density",
                    const std::string& solver = "geometric_mg", const std::string& bc = "auto",
-                   const std::string& wall = "none", double wall_radius = 0.0);
+                   const std::string& wall = "none", double wall_radius = 0.0,
+                   bool composite = false, int fac_max_iters = 0, int fac_fine_sweeps = 0,
+                   double fac_tol = 0.0, double fac_coarse_rel_tol = 0.0,
+                   int fac_coarse_cycles = 0, bool fac_verbose = false);
 
   /// Sets the initial density on the coarse level (component 0), n*n row-major.
   /// @param name cosmetic label (mono-block AMR: the density targets the single block).
@@ -644,7 +669,7 @@ class AmrSystem {
   void step(double dt);  ///< one AMR macro-step (periodic regrid included)
   void advance(double dt, int nsteps);
   /// Advances at dt = cfl * coarse_dx / max wave speed. @return the dt used.
-  double step_cfl(double cfl);
+  double step_cfl(double cfl, double speed_floor = static_cast<double>(kCflSpeedFloor));
 
   /// @name Compiled time-program install seam on the AMR hierarchy (epic ADC-511 / ADC-508, Spec 6)
   /// AMR counterpart of System::install_program: load a generated problem.so and install its compiled
