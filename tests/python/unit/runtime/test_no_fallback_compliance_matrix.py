@@ -215,12 +215,15 @@ def test_refusal_matrix_checks_error_type_reason_and_no_warning():
             ("RegridEvery", "steps must be > 0", "FrozenRegrid"),
         ),
         (
-            "AMR dynamic-regrid checkpoint unsupported",
+            # ADC-542 made dynamic-regrid checkpoints a real feature (format v3), so the old
+            # "regrid_every == 0" refusal is gone BY DESIGN; the still-valid refusal on this
+            # route is a checkpoint on a block-less engine.
+            "AMR checkpoint before any block",
             ValueError,
             lambda: AmrSystem(n=8, L=1.0, periodic=True, regrid_every=3).checkpoint(
                 "/tmp/adc597_unwritten_checkpoint"
             ),
-            ("AmrSystem.checkpoint", "regrid_every == 0", "regrid_every=3"),
+            ("AmrSystem.checkpoint", "no blocks installed", "pops.bind"),
         ),
         (
             "program route incompatible with AMR target",

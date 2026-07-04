@@ -39,6 +39,14 @@ def write_v3(sim, path, L, regrid_every):
     from pops import _pops
     from pops.runtime.bricks import abi_key
 
+    # Controlled refusal (ADC-597 matrix standard): a block-less engine cannot describe a
+    # hierarchy; refuse HERE with the route-specific reason instead of surfacing the raw engine
+    # error from n_levels().
+    if int(sim.n_blocks()) == 0:
+        raise ValueError(
+            "AmrSystem.checkpoint: no blocks installed (nothing to checkpoint); bind a compiled "
+            "problem with pops.bind(...) before checkpointing")
+
     gather = _pops.n_ranks() != 1
     multi = sim.n_blocks() != 1
     nlev = int(sim.n_levels())
