@@ -23,6 +23,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 
 ### Changed
+- ADC-618 Classify remaining internal numeric constants (WENO eps, CFL floor, FFT DFT
+  fallback, runtime-param cap) and fence new user-visible constants behind the effective
+  options report.
 - ADC-578 Decompose System::Impl into typed runtime registries (runtime params, diagnostics,
   coupling, geometry/layout) under `include/pops/runtime/system/` and an explicit lifecycle state
   machine (assembling/bound/running/checkpointed/finalized) that is the single native source the

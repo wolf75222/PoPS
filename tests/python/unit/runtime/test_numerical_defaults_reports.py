@@ -30,12 +30,30 @@ def test_numerical_defaults_report_is_structured():
     assert d["fac"]["initial_coarse_max_cycles"] == 100
     assert d["fft"]["zero_mean_gauge"] is True
     assert d["eb"]["cut_fraction_floor"] == pytest.approx(1e-3)
+    assert d["eb"]["face_open_eps"] == pytest.approx(1e-6)  # ADC-615
+    assert d["eb"]["kappa_min"] == pytest.approx(1e-2)
     assert d["weno"]["epsilon"] == pytest.approx(1e-40)
     assert d["physical"]["gamma"] == pytest.approx(1.4)
     assert d["physical"]["B0"] == pytest.approx(1.0)
     assert d["physical"]["charge_q"] == pytest.approx(1.0)
     assert d["physical"]["fluid_state_cs2"] == pytest.approx(0.5)
     assert d["physical"]["native_brick_isothermal_cs2"] == pytest.approx(1.0)
+
+
+def test_numerical_defaults_report_classifies_every_constant():
+    """ADC-618: the C++ report agrees with the Python-side classification single source of truth."""
+    from pops.runtime.defaults import _CONSTANT_CLASSIFICATION
+
+    d = pops.numerical_defaults_report()
+    classification = d["classification"]
+    allowed = {"public_knob", "internal_default", "diagnostic_only", "hard_limit"}
+    assert all(v in allowed for v in classification.values())
+    # The native (C++) classification and the Python fallback map must be identical (single truth).
+    assert dict(classification) == dict(_CONSTANT_CLASSIFICATION)
+    assert d["runtime"]["max_runtime_params"] == 32
+    assert d["diagnostics"]["fft_direct_dft_fallback_count"] == 0
+    assert classification["kMaxRuntimeParams"] == "hard_limit"
+    assert classification["kNewtonDefaultFdEps"] == "public_knob"
 
 
 def test_system_inspect_reports_effective_block_and_solver_options():
