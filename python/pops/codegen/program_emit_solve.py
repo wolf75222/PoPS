@@ -158,14 +158,26 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             body.append("ctx.divergence(*%s, %s, %s);"
                         % (sub[o.id], _apply_in_arg(sub, fx), _apply_in_arg(sub, fy)))
         elif w.op == "apply_laplacian_coeff":
-            # out = div(A grad in), A the schur_coeffs tensor: forwards to the native
-            # apply_laplacian coefficient path. eps_x/eps_y/a_xy/a_yx are the captured coeff fields.
+            # out = div(A grad in), A the coefficient tensor: forwards to the native apply_laplacian
+            # coefficient path. eps_x/eps_y/a_xy/a_yx are the captured coeff fields. The lowering
+            # follows the BUNDLE: a schur_coeffs bundle keeps the brick's coupling/schur free function
+            # (which pulls its header via _needs_schur_program_header); a condensed_coeffs bundle
+            # (ADC-637, the GENERIC route) emits the SAME two steps inline through Schur-free seams --
+            # ctx.fill_boundary(in) (identical to the wrapper's fill_ghosts(in, domain, transport bc))
+            # then the pops::apply_laplacian coefficient floor the wrapper itself forwarded to --
+            # so a generic-only Program compiles without coupling/schur/** and stays bit-identical.
             o, i, coeffs = w.inputs
             ex, ey, axy, ayx = var[coeffs.id]
             sub[w.id] = sub[o.id]
-            body.append("pops::coupling::schur::program::apply_laplacian_coeff("
-                        "ctx, *%s, %s, *%s, *%s, *%s, *%s);"
-                        % (sub[o.id], _apply_in_arg(sub, i), ex, ey, axy, ayx))
+            if coeffs.vtype == "condensed_coeffs":
+                body.append("ctx.fill_boundary(%s);" % _apply_in_arg(sub, i))
+                body.append("pops::apply_laplacian(%s, ctx.geom(), *%s, nullptr, %s.get(), "
+                            "nullptr, %s.get(), %s.get(), %s.get());"
+                            % (_apply_in_arg(sub, i), sub[o.id], ex, ey, axy, ayx))
+            else:
+                body.append("pops::coupling::schur::program::apply_laplacian_coeff("
+                            "ctx, *%s, %s, *%s, *%s, *%s, *%s);"
+                            % (sub[o.id], _apply_in_arg(sub, i), ex, ey, axy, ayx))
         elif w.op == "rhs_jacvec":
             # out = J(U^k) in = in - (c*dt/h)(rhs(U^k + h*in) - rhs(U^k)), the finite-difference
             # Jacobian-vector product of the implicit-flux BDF residual (ADC-431). h is a relatively
