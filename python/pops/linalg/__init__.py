@@ -8,9 +8,10 @@ norms (:class:`L1` / :class:`L2` / :class:`LInf`) and the scalar reductions (:cl
 
 It does NOT solve and it does NOT compute in Python -- everything is an inert typed descriptor;
 the C++ runtime applies the operators, forms the residual and evaluates the norms/reductions.
-The solvers live in :mod:`pops.solvers` (forthcoming) and the preconditioners in
-``pops.linalg.preconditioners`` (forthcoming with the ``lib -> solvers`` relocation, Spec 5
-Phase A2 -- not created here).
+The solvers AND the preconditioners live in :mod:`pops.solvers` (ADC-502 ratifies
+:mod:`pops.solvers.preconditioners` as their single home); ``pops.linalg`` deliberately exposes
+NO ``preconditioners`` submodule -- a preconditioner configures a solver, so it belongs with the
+solver descriptors, and the no-retro-compat regime forbids a second public path / shim.
 """
 from .operator import LinearOperator, MatrixFreeOperator
 from .problem import LinearProblem, Residual

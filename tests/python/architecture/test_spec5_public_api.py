@@ -155,6 +155,24 @@ def test_solvers_have_one_public_home_no_lib_shim():
         assert hasattr(pops.solvers, name), "pops.solvers is the one public home (missing %r)" % name
 
 
+def test_preconditioners_home_ratified_in_solvers_not_linalg():
+    # ADC-502: the preconditioner catalog lives in exactly ONE public home,
+    # pops.solvers.preconditioners (a preconditioner configures a solver). pops.linalg exposes NO
+    # preconditioners submodule and no shim exists -- no second public path, no move.
+    import importlib  # noqa: PLC0415
+
+    import pops.linalg  # noqa: PLC0415
+    from pops.solvers.preconditioners import preconditioners  # noqa: PLC0415
+
+    # The one public home resolves the catalog.
+    assert hasattr(preconditioners, "GeometricMG"), "pops.solvers.preconditioners is the one home"
+    # pops.linalg must NOT expose (or re-export) a preconditioners catalog.
+    assert not hasattr(pops.linalg, "preconditioners"), (
+        "pops.linalg must not expose preconditioners (ADC-502: they live under pops.solvers)")
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("pops.linalg.preconditioners")
+
+
 def test_no_public_target_kwarg_on_compile_or_bind():
     # Spec 5 sec.11 (#5): the LAYOUT (Uniform / AMR) chooses the runtime; a user never passes
     # target=. The public lowering entry points pops.compile / pops.bind take no target kwarg.
