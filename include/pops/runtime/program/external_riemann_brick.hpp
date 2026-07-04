@@ -29,6 +29,7 @@
 
 #include <pops/runtime/builders/compiled/compiled_block_abi.hpp>  // compiled_block::{make_grid,...}
 #include <pops/runtime/builders/block/block_builder.hpp>  // build_block<Limiter, Flux>, block_n_ghost
+#include <pops/runtime/builders/scheme_dispatch.hpp>  // dispatch_limiter: ONE limiter-route dispatch generator (ADC-640)
 #include <pops/runtime/config/dispatch_tags.hpp>          // validate_limiter
 #include <pops/numerics/fv/reconstruction.hpp>            // NoSlope / Minmod / VanLeer / Weno5
 
@@ -50,19 +51,12 @@ template <class Model, class Flux>
 BlockClosures external_make_block(const Model& m, const std::string& lim, const GridContext& ctx,
                                   bool recon_prim, Real pos_floor) {
   validate_limiter(lim, "external riemann brick");
-  if (lim == "none")
-    return build_block<NoSlope, Flux>(m, ctx, /*imex=*/false, recon_prim, "ssprk2", {}, {}, nullptr,
-                                      pos_floor);
-  if (lim == "minmod")
-    return build_block<Minmod, Flux>(m, ctx, /*imex=*/false, recon_prim, "ssprk2", {}, {}, nullptr,
-                                     pos_floor);
-  if (lim == "vanleer")
-    return build_block<VanLeer, Flux>(m, ctx, /*imex=*/false, recon_prim, "ssprk2", {}, {}, nullptr,
-                                      pos_floor);
-  if (lim == "weno5")
-    return build_block<Weno5, Flux>(m, ctx, /*imex=*/false, recon_prim, "ssprk2", {}, {}, nullptr,
-                                    pos_floor);
-  throw_registry_dispatch_mismatch("external riemann brick", "limiteur", lim);
+  return dispatch_limiter(parse_limiter_route(lim, "external riemann brick"),
+                          "external riemann brick", [&](auto tag) {
+                            using L = typename decltype(tag)::type;
+                            return build_block<L, Flux>(m, ctx, /*imex=*/false, recon_prim, "ssprk2",
+                                                        {}, {}, nullptr, pos_floor);
+                          });
 }
 
 // One explicit residual R = -div F(U) + S evaluated with the external flux @p Flux on @p Model. Same

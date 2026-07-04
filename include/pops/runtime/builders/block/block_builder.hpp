@@ -13,6 +13,7 @@
 #include <pops/numerics/spatial/embedded_boundary/operator.hpp>  // assemble_rhs_eb (cut-cell EB) + detail::DiscLevelSet (T5-PR2)
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/numerics/time/integrators/time_steppers.hpp>
+#include <pops/runtime/builders/scheme_dispatch.hpp>  // dispatch_limiter: ONE limiter-route dispatch generator (ADC-640)
 #include <pops/runtime/config/dispatch_tags.hpp>  // UNIQUE registry of tags (validate_limiter/riemann, limiter_n_ghost)
 #include <pops/runtime/context/grid_context.hpp>  // GridContext + BlockClosures (shared lightweight header)
 #include <pops/numerics/spatial/embedded_boundary/domain.hpp>  // detail::DiscDomain (built-in level-set domain instance)
@@ -610,23 +611,12 @@ POPS_COLD_FN BlockClosures make_block_rusanov(const Model& m, const std::string&
                                              const NewtonOptions& newton_opts,
                                              NewtonReport* newton_report, Real pos_floor,
                                              Real weno_eps = kWenoEpsilon) {
-  if (lim == "none")
-    return build_block<NoSlope, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                             newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-  if (lim == "minmod")
-    return build_block<Minmod, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                            newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-  if (lim == "vanleer")
-    return build_block<VanLeer, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                             newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-  if (lim == "weno5")
-    return build_block<Weno5, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                           newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-  throw_registry_dispatch_mismatch("System", "limiteur", lim);
+  return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
+    using L = typename decltype(tag)::type;
+    return build_block<L, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components,
+                                       newton_opts, newton_report, pos_floor,
+                                       /*wave_speed_cache=*/false, weno_eps);
+  });
 }
 
 template <class Model>
@@ -651,23 +641,12 @@ POPS_COLD_FN BlockClosures make_block_hll(const Model& m, const std::string& lim
                 }) {
     // wave_speed_cache (opt-in) forwarded ONLY here: the wave speed cache only engages for the HLL
     // flux (BlockRhsEval guarded by Flux == HLLFlux). rusanov/hllc/roe ignore it.
-    if (lim == "none")
-      return build_block<NoSlope, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                           newton_opts, newton_report, pos_floor, wave_speed_cache,
-                              weno_eps);
-    if (lim == "minmod")
-      return build_block<Minmod, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                          newton_opts, newton_report, pos_floor, wave_speed_cache,
-                              weno_eps);
-    if (lim == "vanleer")
-      return build_block<VanLeer, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                           newton_opts, newton_report, pos_floor, wave_speed_cache,
-                              weno_eps);
-    if (lim == "weno5")
-      return build_block<Weno5, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                         newton_opts, newton_report, pos_floor, wave_speed_cache,
-                              weno_eps);
-    throw_registry_dispatch_mismatch("System", "limiteur", lim);
+    return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
+      using L = typename decltype(tag)::type;
+      return build_block<L, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components,
+                                     newton_opts, newton_report, pos_floor, wave_speed_cache,
+                                     weno_eps);
+    });
   } else {
     throw std::runtime_error(
         "System: flux 'hll' requires signed wave speeds "
@@ -690,23 +669,12 @@ POPS_COLD_FN BlockClosures make_block_hllc(const Model& m, const std::string& li
   // is refused here (no more implicit fallback): the canonical Euler layout is served by the explicit
   // euler_hllc route (make_block_euler_hllc / EulerHLLCFlux2D).
   if constexpr (HasHLLCStructure<Model>) {
-    if (lim == "none")
-      return build_block<NoSlope, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                            newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "minmod")
-      return build_block<Minmod, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                           newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "vanleer")
-      return build_block<VanLeer, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                            newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "weno5")
-      return build_block<Weno5, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                          newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-    throw_registry_dispatch_mismatch("System", "limiteur", lim);
+    return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
+      using L = typename decltype(tag)::type;
+      return build_block<L, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components,
+                                      newton_opts, newton_report, pos_floor,
+                                      /*wave_speed_cache=*/false, weno_eps);
+    });
   } else {
     throw std::runtime_error(
         "System: flux 'hllc' requires the model's HLLC capability "
@@ -729,23 +697,12 @@ POPS_COLD_FN BlockClosures make_block_euler_hllc(const Model& m, const std::stri
   // this is the SAME arithmetic as the generic hllc path (HLLCFlux via HasHLLCStructure).
   if constexpr (Model::n_vars == 4 &&
                 requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
-    if (lim == "none")
-      return build_block<NoSlope, EulerHLLCFlux2D>(m, ctx, imex, recon_prim, method,
-                                                   implicit_components, newton_opts, newton_report,
-                                                   pos_floor, /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "minmod")
-      return build_block<Minmod, EulerHLLCFlux2D>(m, ctx, imex, recon_prim, method,
-                                                  implicit_components, newton_opts, newton_report,
-                                                  pos_floor, /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "vanleer")
-      return build_block<VanLeer, EulerHLLCFlux2D>(m, ctx, imex, recon_prim, method,
-                                                   implicit_components, newton_opts, newton_report,
-                                                   pos_floor, /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "weno5")
-      return build_block<Weno5, EulerHLLCFlux2D>(m, ctx, imex, recon_prim, method,
-                                                 implicit_components, newton_opts, newton_report,
-                                                 pos_floor, /*wave_speed_cache=*/false, weno_eps);
-    throw_registry_dispatch_mismatch("System", "limiteur", lim);
+    return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
+      using L = typename decltype(tag)::type;
+      return build_block<L, EulerHLLCFlux2D>(m, ctx, imex, recon_prim, method, implicit_components,
+                                             newton_opts, newton_report, pos_floor,
+                                             /*wave_speed_cache=*/false, weno_eps);
+    });
   } else {
     throw std::runtime_error(
         "System: flux 'euler_hllc' requires a canonical compressible Euler 2D transport "
@@ -768,23 +725,12 @@ POPS_COLD_FN BlockClosures make_block_roe(const Model& m, const std::string& lim
   // is refused here: the canonical Euler layout is served by the explicit euler_roe route
   // (make_block_euler_roe / EulerRoeFlux2D).
   if constexpr (HasRoeDissipation<Model>) {
-    if (lim == "none")
-      return build_block<NoSlope, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                           newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "minmod")
-      return build_block<Minmod, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                          newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "vanleer")
-      return build_block<VanLeer, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                           newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "weno5")
-      return build_block<Weno5, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                         newton_opts, newton_report, pos_floor,
-                              /*wave_speed_cache=*/false, weno_eps);
-    throw_registry_dispatch_mismatch("System", "limiteur", lim);
+    return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
+      using L = typename decltype(tag)::type;
+      return build_block<L, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components,
+                                     newton_opts, newton_report, pos_floor,
+                                     /*wave_speed_cache=*/false, weno_eps);
+    });
   } else {
     throw std::runtime_error(
         "System: flux 'roe' requires the model's Roe capability "
@@ -807,23 +753,12 @@ POPS_COLD_FN BlockClosures make_block_euler_roe(const Model& m, const std::strin
   // Euler brick this is the SAME arithmetic as the generic roe path (RoeFlux via HasRoeDissipation).
   if constexpr (Model::n_vars == 4 &&
                 requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
-    if (lim == "none")
-      return build_block<NoSlope, EulerRoeFlux2D>(m, ctx, imex, recon_prim, method,
-                                                  implicit_components, newton_opts, newton_report,
-                                                  pos_floor, /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "minmod")
-      return build_block<Minmod, EulerRoeFlux2D>(m, ctx, imex, recon_prim, method,
-                                                 implicit_components, newton_opts, newton_report,
-                                                 pos_floor, /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "vanleer")
-      return build_block<VanLeer, EulerRoeFlux2D>(m, ctx, imex, recon_prim, method,
-                                                  implicit_components, newton_opts, newton_report,
-                                                  pos_floor, /*wave_speed_cache=*/false, weno_eps);
-    if (lim == "weno5")
-      return build_block<Weno5, EulerRoeFlux2D>(m, ctx, imex, recon_prim, method,
-                                                implicit_components, newton_opts, newton_report,
-                                                pos_floor, /*wave_speed_cache=*/false, weno_eps);
-    throw_registry_dispatch_mismatch("System", "limiteur", lim);
+    return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
+      using L = typename decltype(tag)::type;
+      return build_block<L, EulerRoeFlux2D>(m, ctx, imex, recon_prim, method, implicit_components,
+                                            newton_opts, newton_report, pos_floor,
+                                            /*wave_speed_cache=*/false, weno_eps);
+    });
   } else {
     throw std::runtime_error(
         "System: flux 'euler_roe' requires a canonical compressible Euler 2D transport "

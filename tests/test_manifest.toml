@@ -737,6 +737,11 @@ sources = ["tests/cpp/unit/mesh/test_dispatch_tags.cpp"]
 labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]
+name = "test_scheme_dispatch"
+sources = ["tests/cpp/unit/runtime/test_scheme_dispatch.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
 name = "test_fab2d"
 sources = ["tests/cpp/unit/mesh/test_fab2d.cpp"]
 labels = ["unit", "mesh", "fast"]

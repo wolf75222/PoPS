@@ -11,6 +11,7 @@
 #include <pops/numerics/time/integrators/time_steppers.hpp>      // SSPRK2Step / SSPRK3Step (core RK math)
 #include <pops/parallel/comm.hpp>   // all_reduce_max (MPI-safe collective reduction)
 #include <pops/physics/bricks/bricks.hpp>  // ExBVelocityPolar, CompositeModel, source/elliptic bricks
+#include <pops/runtime/builders/scheme_dispatch.hpp>  // dispatch_limiter: ONE limiter-route dispatch generator (ADC-640)
 #include <pops/runtime/config/dispatch_tags.hpp>  // UNIQUE registry of tags (validate_limiter/riemann)
 #include <pops/runtime/context/grid_context.hpp>   // BlockClosures (light header)
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_source / dispatch_elliptic (REUSED)
@@ -306,19 +307,12 @@ BlockClosures make_block_polar(const Model& m, const std::string& lim, const std
   validate_riemann(riem, /*polar=*/true, "System (polar)");
   validate_limiter(lim, "System (polar)");
   if (riem == "rusanov") {
-    if (lim == "none")
-      return build_block_polar<NoSlope, RusanovFlux>(m, ctx, recon_prim, method, wall_radial,
-                                                     pos_floor);
-    if (lim == "minmod")
-      return build_block_polar<Minmod, RusanovFlux>(m, ctx, recon_prim, method, wall_radial,
-                                                    pos_floor);
-    if (lim == "vanleer")
-      return build_block_polar<VanLeer, RusanovFlux>(m, ctx, recon_prim, method, wall_radial,
-                                                     pos_floor);
-    if (lim == "weno5")
-      return build_block_polar<Weno5, RusanovFlux>(m, ctx, recon_prim, method, wall_radial,
-                                                   pos_floor);
-    throw_registry_dispatch_mismatch("System (polar)", "limiter", lim);
+    return dispatch_limiter(parse_limiter_route(lim, "System (polar)"), "System (polar)",
+                            [&](auto tag) {
+                              using L = typename decltype(tag)::type;
+                              return build_block_polar<L, RusanovFlux>(m, ctx, recon_prim, method,
+                                                                       wall_radial, pos_floor);
+                            });
   }
   if (riem == "hll") {
     // GATE IDENTICAL TO THE CARTESIAN ONE (block_builder.hpp make_block, 'hll' branch): HLL is available
@@ -330,19 +324,12 @@ BlockClosures make_block_polar(const Model& m, const std::string& lim, const std
     if constexpr (requires(const Model mm, typename Model::State s, Aux a, Real r) {
                     mm.wave_speeds(s, a, 0, r, r);
                   }) {
-      if (lim == "none")
-        return build_block_polar<NoSlope, HLLFlux>(m, ctx, recon_prim, method, wall_radial,
-                                                   pos_floor);
-      if (lim == "minmod")
-        return build_block_polar<Minmod, HLLFlux>(m, ctx, recon_prim, method, wall_radial,
-                                                  pos_floor);
-      if (lim == "vanleer")
-        return build_block_polar<VanLeer, HLLFlux>(m, ctx, recon_prim, method, wall_radial,
-                                                   pos_floor);
-      if (lim == "weno5")
-        return build_block_polar<Weno5, HLLFlux>(m, ctx, recon_prim, method, wall_radial,
-                                                 pos_floor);
-      throw_registry_dispatch_mismatch("System (polar)", "limiter", lim);
+      return dispatch_limiter(parse_limiter_route(lim, "System (polar)"), "System (polar)",
+                              [&](auto tag) {
+                                using L = typename decltype(tag)::type;
+                                return build_block_polar<L, HLLFlux>(m, ctx, recon_prim, method,
+                                                                     wall_radial, pos_floor);
+                              });
     } else {
       throw std::runtime_error(
           "System (polar): flux 'hll' requires signed wave speeds (model.wave_speeds); "

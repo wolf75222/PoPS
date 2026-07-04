@@ -179,6 +179,7 @@ set(POPS_CPP_TEST_SOURCE_test_riemann_capabilities "tests/cpp/unit/numerics/test
 set(POPS_CPP_TEST_SOURCE_test_roe_flux "tests/cpp/unit/numerics/test_roe_flux.cpp")
 set(POPS_CPP_TEST_SOURCE_test_route_ids "tests/cpp/integration/runtime/test_route_ids.cpp")
 set(POPS_CPP_TEST_SOURCE_test_runtime_environment "tests/cpp/integration/runtime/test_runtime_environment.cpp")
+set(POPS_CPP_TEST_SOURCE_test_scheme_dispatch "tests/cpp/unit/runtime/test_scheme_dispatch.cpp")
 set(POPS_CPP_TEST_SOURCE_test_schur_condensation "tests/cpp/unit/elliptic/test_schur_condensation.cpp")
 set(POPS_CPP_TEST_SOURCE_test_screened_poisson "tests/cpp/unit/elliptic/test_screened_poisson.cpp")
 set(POPS_CPP_TEST_SOURCE_test_solve_robust "tests/cpp/unit/elliptic/test_solve_robust.cpp")
