@@ -13,7 +13,7 @@ Three single sources of truth, none duplicated here:
 
   1. Op enumeration is the Program's own IR (``Program.ir_nodes()`` -- the ``_pops``-free op walk);
   2. the op -> capability-group map reuses the codegen's OWN op-group vocabulary
-     (``program_emit_kernels._SCHUR_PROGRAM_OPS`` et al.), imported lazily -- not a hand list;
+     (``program_emit_kernels._CONDENSED_OPS`` et al.), imported lazily -- not a hand list;
   3. the AMR support status derives from the ONE C++ source of truth,
      ``include/pops/runtime/program/amr_program_context.hpp``: every deferral there (a
      ``deferred_op(...)`` op, a ``history_deferred`` method, an inline-throw method) is mirrored in
@@ -46,15 +46,14 @@ from typing import Any
 # ir_ops against those codegen sets is asserted by the support parity test, so the emit vocabulary
 # stays the single source and this table cannot silently drift from it).
 DEFERRED_GROUPS: dict = {
-    "schur": {
-        # ADC-633 WIRED the condensed-Schur Program on the hierarchy: the operators are context-generic
-        # (per-level assembly through AmrProgramContext::grid_context / assembly_target / assembly_source)
-        # and solve_linear_matfree dispatches flat->matrix-free BiCGStab / refined->composite FAC. No throw
-        # stub remains, so header_methods is EMPTY -> the group is GREEN.
+    "condensed": {
+        # ADC-633 WIRED the condensed-implicit Program on the hierarchy and ADC-637 made the generic
+        # condensed_* ops the sole route: per-level assembly runs through AmrProgramContext::grid_context /
+        # assembly_target / assembly_source, and solve_linear_matfree dispatches flat->matrix-free BiCGStab
+        # / refined->composite FAC. No throw stub remains, so header_methods is EMPTY -> the group is GREEN.
         "issue": "ADC-633",
-        "op_source": "program_emit_kernels._SCHUR_PROGRAM_OPS",
-        "ir_ops": frozenset({"schur_coeffs", "apply_laplacian_coeff", "schur_explicit_flux",
-                             "schur_rhs", "schur_reconstruct", "schur_energy"}),
+        "op_source": "program_emit_kernels._CONDENSED_OPS",
+        "ir_ops": frozenset({"condensed_coeffs", "condensed_rhs", "condensed_reconstruct"}),
         "header_methods": frozenset(),
     },
     "named_flux": {
