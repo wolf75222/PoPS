@@ -39,13 +39,14 @@ class _AmrSystemInstall(_AmrSystem):
             bricks / a CompiledModel target='amr_system'), sets the field solvers (``set_poisson``),
             the aux inputs (``set_magnetic_field`` / ``set_aux_field``) and each instance's initial
             density (``set_density``). This is the real AMR add path; a full run is Kokkos-gated.
-          - COMPILED install (a ``compiled`` handle carrying a time Program, epic ADC-511 / ADC-508):
-            the same wiring, then ``install_program(so_path)`` installs the compiled Program on the AMR
-            hierarchy (the .so must export ``pops_install_program_amr``: compile it with
+          - COMPILED install (a ``compiled`` handle carrying a time Program, epic ADC-511 / ADC-508 /
+            ADC-634): the same wiring, then ``install_program(so_path)`` installs the compiled Program
+            on the AMR hierarchy (the .so must export ``pops_install_program_amr``: compile it with
             ``target='amr_system'``). The runtime params (``params=``) route to ``set_program_params``
             and the cadence (``cadence=``) to ``set_program_cadence`` -- the AMR counterparts of the
-            System routes. The per-level Lie/Strang macro-step DRIVER is Kokkos-gated (the .so fails
-            loud at install until the AmrProgramContext seam lands), so a full run is a ROMEO step.
+            System routes. The per-level macro-step driver is the AmrProgramContext seam (ADC-508); a
+            Program using a deferred op (Schur / history / named-flux) compiles against it and throws
+            the honest AmrProgramContext backstop only when that op is reached at run.
 
         @param compiled a compiled time-Program handle, or ``None`` for a native AMR install.
         @param instances dict {name: {"initial": array, "spatial": <brick>, "model": <model>,
