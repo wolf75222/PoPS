@@ -79,10 +79,11 @@ def test_out_of_domain_cycles_and_tolerance_refuse():
 # --- runtime tier (needs _pops) ----------------------------------------------
 
 pops = pytest.importorskip("pops")
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _sim(**poisson):
-    sim = pops.System(n=16, L=1.0, periodic=True)
+    sim = System(n=16, L=1.0, periodic=True)
     sim.add_block(
         "ion",
         pops.Model(pops.FluidState.isothermal(cs2=0.7), pops.IsothermalFlux(), pops.NoSource(),

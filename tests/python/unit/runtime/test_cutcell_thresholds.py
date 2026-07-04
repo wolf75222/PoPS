@@ -46,10 +46,11 @@ def test_disc_mode_thresholds_empty_for_string_and_nomask():
 # --- runtime tier (needs _pops) ----------------------------------------------
 
 pops = pytest.importorskip("pops")
+from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 def _sim():
-    sim = pops.System(n=16, L=1.0, periodic=False)
+    sim = System(n=16, L=1.0, periodic=False)
     sim.add_block("ion", pops.Model(pops.FluidState.isothermal(cs2=0.7), pops.IsothermalFlux(),
                                     pops.NoSource(), pops.ChargeDensity(charge=1.0)),
                   spatial=pops.Spatial())
