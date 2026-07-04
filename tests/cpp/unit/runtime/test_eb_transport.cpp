@@ -209,7 +209,7 @@ TEST(EbTransport, MassConservedToMachinePrecisionOnDisc) {
             continue;  // inactive : hors masse
           detail::CutFraction cf = detail::cut_fraction(detail::disc_level_set(disc), Real(x),
                                                         Real(y), Real(dx), Real(dy));
-          const double kappa_eff = std::max(double(cf.kappa), double(detail::kEbKappaMin));
+          const double kappa_eff = std::max(double(cf.kappa), double(kEbKappaMin));
           s += double(f(i, j, 0)) * kappa_eff * dx * dy;
         }
       return s;
@@ -367,9 +367,9 @@ TEST(EbTransport, SmallCellClampBoundsResidualAmplification) {
     detail::CutFraction cf =
         detail::cut_fraction(ls, Real(geom.x_cell(n / 2)), Real(yc), Real(geom.dx()), Real(dy));
     const double kappa_raw = double(cf.kappa);
-    ASSERT_TRUE(kappa_raw < double(detail::kEbKappaMin))
+    ASSERT_TRUE(kappa_raw < double(kEbKappaMin))
         << "la dalle mince produit bien kappa < kappa_min (le clamp DOIT agir : test non vide); "
-           "kappa_brut=" << kappa_raw << " kappa_min=" << double(detail::kEbKappaMin);
+           "kappa_brut=" << kappa_raw << " kappa_min=" << double(kEbKappaMin);
 
     // Etat variant en X (les faces y de la rangee coupee sont FERMEES : seul le flux x compte ; il faut
     // donc une variation en x pour que div_x != 0 -> residu non nul a amplifier par 1/kappa).
@@ -388,7 +388,7 @@ TEST(EbTransport, SmallCellClampBoundsResidualAmplification) {
     // Residu CLAMPE (defaut) vs NON clampe (kappa_min = kappa_raw -> clamp inactif sur cette cellule).
     MultiFab R_clamp(ba, dm, 1, 0), R_raw(ba, dm, 1, 0);
     assemble_rhs_eb<Minmod, RusanovFlux>(model, U, aux, ls, geom, R_clamp, false,
-                                         detail::kEbKappaMin);
+                                         kEbKappaMin);
     assemble_rhs_eb<Minmod, RusanovFlux>(model, U, aux, ls, geom, R_raw, false, Real(kappa_raw));
     sync_host();
 
@@ -397,7 +397,7 @@ TEST(EbTransport, SmallCellClampBoundsResidualAmplification) {
     // Sur la rangee centrale coupee, le residu clampe doit etre FINI et, terme a terme, valoir
     // (kappa_raw / kappa_min) fois le residu non clampe (meme flux au numerateur, denominateur clampe).
     const double ratio_expected =
-        kappa_raw / double(detail::kEbKappaMin);  // < 1 : le clamp ATTENUE
+        kappa_raw / double(kEbKappaMin);  // < 1 : le clamp ATTENUE
     double max_rel_err = 0.0, max_abs_clamp = 0.0, max_abs_raw = 0.0;
     bool clamp_finite = true;
     for (int i = dom.lo[0]; i <= dom.hi[0]; ++i) {

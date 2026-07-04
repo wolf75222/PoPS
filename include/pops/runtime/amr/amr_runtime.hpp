@@ -1408,7 +1408,7 @@ class AmrRuntime {
   /// Max SYSTEM wave speed (max over the blocks) on the current coarse. Requires the aux up to date.
   Real max_speed() {
     solve_fields();
-    Real w = Real(1e-12);
+    Real w = kAmrDriftSpeedFloor;
     for (auto& b : blocks_) {
       const Real wb = b.max_speed((*b.levels)[0].U, aux_[0]);
       if (wb > w)

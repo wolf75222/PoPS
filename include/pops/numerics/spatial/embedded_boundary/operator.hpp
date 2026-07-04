@@ -98,15 +98,8 @@ namespace pops {
 
 namespace detail {
 
-/// Default aperture below which a face is treated as CLOSED (immersed wall). Below
-/// this threshold the linear aperture is numerically zero (the face barely crosses the disc);
-/// the anti-division clamp of cut_distance already stops at 1e-3, this threshold aligns it with the FV closure.
-constexpr Real kEbFaceOpenEps = Real(1e-6);
-
-/// Volume fraction floor (small-cell clamp). kappa_eff = max(kappa, kEbKappaMin) bounds
-/// the 1/kappa amplification to 1/kEbKappaMin = 100 -> finite residual on an arbitrarily cut cell,
-/// stable fixed explicit step. See the SMALL-CELL STABILITY note of @file.
-constexpr Real kEbKappaMin = Real(1e-2);
+// EB thresholds kEbFaceOpenEps / kEbKappaMin / kEbCutFractionFloor come from
+// numerical_defaults.hpp (via cut_fraction.hpp) -- single source, ADC-643.
 
 /// Device-safe adapter wrapping a DiscDomain as the Real(Real, Real) callable expected by cut_fraction
 /// and the EB operator. Since ADC-327 DiscDomain is itself callable (operator() forwards to level_set),
@@ -332,8 +325,8 @@ struct EbAssembleRhsKernel {
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model, class LevelSet>
 void assemble_rhs_eb(const Model& model, const MultiFab& U, const MultiFab& aux, const LevelSet& ls,
                      const Geometry& geom, MultiFab& R, bool recon_prim = false,
-                     Real kappa_min = detail::kEbKappaMin, Real pos_floor = Real(0),
-                     Real face_open_eps = detail::kEbFaceOpenEps,
+                     Real kappa_min = kEbKappaMin, Real pos_floor = Real(0),
+                     Real face_open_eps = kEbFaceOpenEps,
                      Real cut_theta_min = kEbCutFractionFloor) {
   // STATE-GHOST WIDTH: exactly Limiter::n_ghost, like the Cartesian operator. The EB face kernels
   // (EbFaceFluxXKernel / EbFaceFluxYKernel) reuse reconstruct_pp<> VERBATIM at the SAME i-1/i

@@ -357,7 +357,7 @@ TEST(EmbeddedBoundaryGeneric, MassConservationOnBoundedNonDiscGeometry) {
             continue;  // inactive : hors masse
           const detail::CutFraction cf =
               detail::cut_fraction(ls, Real(x), Real(y), Real(dx), Real(dy));
-          const double kappa_eff = std::max(double(cf.kappa), double(detail::kEbKappaMin));
+          const double kappa_eff = std::max(double(cf.kappa), double(kEbKappaMin));
           s += double(f(i, j, 0)) * kappa_eff * dx * dy;
         }
       return s;

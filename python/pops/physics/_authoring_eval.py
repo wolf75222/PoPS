@@ -22,6 +22,15 @@ else:
     _HyperbolicModel = object
 
 
+def _fd_step(u: Any, rel: float, floor: float) -> Any:
+    """Relative finite-difference step ``rel*|u| + floor`` -- the single source of the FD-step SHAPE
+    used by both Jacobian oracles. The per-site ``rel``/``floor`` stay EXPLICIT arguments: the
+    wave-speed FD mirror passes the declared fd_eps and 1e-30 (to match module_emit_brick's emitted
+    kernel bit-for-bit), while the non-circular spectral-radius reference passes its own 1e-6 / 1e-7.
+    Single-sourcing the shape must not move either value (would shift FD-based goldens)."""
+    return rel * np.abs(u) + floor
+
+
 class _EvalMixin(_HyperbolicModel):
     """numpy evaluators and the numerical model self-check."""
 
@@ -75,7 +84,7 @@ class _EvalMixin(_HyperbolicModel):
             # so this numpy oracle stays consistent with the compiled wave speeds. None -> 1e-6.
             fd_rel = 1e-6 if ws.get("fd_eps") is None else float(ws["fd_eps"])
             for k in range(nv):
-                eps = fd_rel * np.abs(Uflat[0]) + 1e-30
+                eps = _fd_step(Uflat[0], fd_rel, 1e-30)
                 Up = Uflat.copy()
                 Up[k] += eps
                 envp = self._env(Up, {n: env[n] for n in self.aux_names} if self.aux_names else None)
@@ -109,7 +118,7 @@ class _EvalMixin(_HyperbolicModel):
         nsmp = U.shape[1]
         J = np.empty((nsmp, nv, nv))
         for j in range(nv):
-            eps = 1e-6 * np.abs(U[j]) + 1e-7
+            eps = _fd_step(U[j], 1e-6, 1e-7)
             Up = U.copy()
             Up[j] = Up[j] + eps
             Um = U.copy()

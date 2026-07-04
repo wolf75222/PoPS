@@ -240,6 +240,10 @@ inline py::dict numerical_defaults_report_to_dict() {
   klass("kAmrRefinementDisabledThreshold", "internal_default");
   klass("kAmrPhiRefinementDisabledThreshold", "internal_default");
   klass("kAdaptiveNoEvolvingBlockSentinel", "diagnostic_only");
+  klass("kAmrClusterMinEfficiency", "public_knob");
+  klass("kAmrClusterMinBoxSize", "public_knob");
+  klass("kAmrClusterMaxBoxSize", "public_knob");
+  klass("kAmrDriftSpeedFloor", "internal_default");
   klass("kPhysicalDefaultB0", "public_knob");
   klass("kPhysicalDefaultGamma", "public_knob");
   klass("kPhysicalDefaultFluidStateCs2", "public_knob");

@@ -57,9 +57,10 @@ inline constexpr bool kFFTDirectDftFallback = true;
 // FV / EB numerics.
 inline constexpr Real kEbCutFractionFloor = Real(1e-3);
 inline constexpr Real kWenoEpsilon = Real(1e-40);
-// EB face-open / small-cell thresholds (mirror include/pops/numerics/spatial/embedded_boundary/
-// operator.hpp detail::kEbFaceOpenEps / kEbKappaMin; kept here too so the report and the typed
-// pops.numerics.CutCell descriptor have a single default source). ADC-615.
+// EB face-open / small-cell thresholds (ADC-615/643). SINGLE SOURCE: the numerics EB operator
+// (numerics/spatial/embedded_boundary/operator.hpp) consumes these via cut_fraction.hpp, exactly
+// like kEbCutFractionFloor above, so the report, the typed pops.numerics.CutCell descriptor and the
+// FV kernels share one default.
 inline constexpr Real kEbFaceOpenEps = Real(1e-6);
 inline constexpr Real kEbKappaMin = Real(1e-2);
 
@@ -68,6 +69,12 @@ inline constexpr int kAmrDefaultMaxLevels = 2;
 inline constexpr Real kAmrRefinementDisabledThreshold = Real(1e30);
 inline constexpr Real kAmrPhiRefinementDisabledThreshold = Real(0);
 inline constexpr Real kAdaptiveNoEvolvingBlockSentinel = Real(1e30);
+
+// ADC-616/643: Berger-Rigoutsos clustering defaults -- SINGLE SOURCE shared with pops::ClusterParams
+// (amr/tagging/cluster.hpp) and EffectiveRefinementOptions below.
+inline constexpr double kAmrClusterMinEfficiency = 0.7;
+inline constexpr int kAmrClusterMinBoxSize = 1;
+inline constexpr int kAmrClusterMaxBoxSize = 32;
 
 // Physical defaults carried by the native brick facades.
 inline constexpr Real kPhysicalDefaultB0 = Real(1);
@@ -226,9 +233,9 @@ struct EffectiveRefinementOptions {
   double phi_grad_threshold = static_cast<double>(kAmrPhiRefinementDisabledThreshold);
   bool phi_refinement_enabled = false;
   // ADC-616: effective Berger-Rigoutsos clustering params (default {0.7, 1, 32} unless overridden).
-  double cluster_min_efficiency = 0.7;
-  int cluster_min_box_size = 1;
-  int cluster_max_box_size = 32;
+  double cluster_min_efficiency = kAmrClusterMinEfficiency;
+  int cluster_min_box_size = kAmrClusterMinBoxSize;
+  int cluster_max_box_size = kAmrClusterMaxBoxSize;
 };
 
 /// The EFFECTIVE embedded-boundary thresholds (ADC-615): default or overridden. enabled=false when
