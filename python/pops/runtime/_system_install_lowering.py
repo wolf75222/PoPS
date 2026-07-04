@@ -51,3 +51,25 @@ def _lower_bc(bc: Any) -> Any:
 
 
 __all__ = ["_lower_wall", "_lower_bc"]
+
+
+def _weno_kwargs(spatial):
+    """ADC-645: WENO5(epsilon=...) rides along the Spatial; None (the default) forwards NOTHING so
+    the native add_block keeps its kWenoEpsilon default (byte-identical historical call)."""
+    weps = getattr(spatial, "weno_epsilon", None)
+    return {} if weps is None else {"weno_epsilon": float(weps)}
+
+
+def _mg_kwargs(rel_tol, max_cycles, min_coarse, pre_smooth, post_smooth, bottom_sweeps,
+               coarse_threshold):
+    """ADC-613/644: the GeometricMG V-cycle knobs, forwarded ONLY when set (None = unspecified ->
+    not passed -> the native kMG*-sourced default, bit-identical); coarse_threshold is the ADC-644
+    total-cell coarsening ceiling (0 = disabled)."""
+    out = {}
+    for key, val, cast in (("rel_tol", rel_tol, float), ("max_cycles", max_cycles, int),
+                           ("min_coarse", min_coarse, int), ("pre_smooth", pre_smooth, int),
+                           ("post_smooth", post_smooth, int), ("bottom_sweeps", bottom_sweeps, int),
+                           ("coarse_threshold", coarse_threshold, int)):
+        if val is not None:
+            out[key] = cast(val)
+    return out

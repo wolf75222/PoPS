@@ -166,8 +166,12 @@ LARGE_RUNTIME_FILE_BUDGETS = {
     # !refinement_active + the two-level layout template plumbing) adds ~14 lines here, and the
     # per-level C/F ghost refill seam (fill_level_state_cf_ghosts, called before both per-level
     # residual paths of the synchronous Program driver) adds ~17 lines to amr_runtime.hpp.
-    "python/bindings/amr/amr_system.cpp": 2532,
-    "include/pops/runtime/amr/amr_runtime.hpp": 1867,
+    # ADC-645: the composite-FAC facade (set_poisson composite params, build wiring, multi-block
+    # + out-of-scope refusals, effective-options report rows) and the source-stage/speed_floor
+    # threading add ~68 lines here (they read the TU-local private Impl) and +1 to amr_runtime.hpp
+    # (the speed_floor forward in the CFL reduction seam).
+    "python/bindings/amr/amr_system.cpp": 2600,
+    "include/pops/runtime/amr/amr_runtime.hpp": 1868,
     "include/pops/runtime/system/system_field_solver.hpp": 1100,
     "python/pops/runtime/_system_unified_install.py": 550,
     # ADC-542: the run-loop diagnostics firing (run / _fire_diagnostics) added to System.run.

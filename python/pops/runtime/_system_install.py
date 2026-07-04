@@ -32,7 +32,9 @@ from pops.runtime.routes import (
 
 # The Poisson wall / bc lowerers are split into ``_system_install_lowering`` for the 500-line cap
 # (ADC-550) and re-imported so ``set_poisson`` below and the direct-import tests are unchanged.
-from pops.runtime._system_install_lowering import _lower_bc, _lower_wall  # noqa: F401
+from pops.runtime._system_install_lowering import (  # noqa: F401
+    _lower_bc, _lower_wall, _mg_kwargs, _weno_kwargs,
+)
 
 if TYPE_CHECKING:
     from pops.runtime._system_contract import _System
@@ -88,12 +90,6 @@ class _SystemInstall(_System):
         # Implicit mask + Newton options carried by the temporal policy (IMEX/SourceImplicit);
         # neutral defaults on the other policies (Explicit). Resolved/validated on the C++ side
         # (System::add_block) against the block's names/roles.
-        # ADC-645: the WENO-Z regulariser rides along the Spatial (WENO5(epsilon=...)); None (the
-        # default) forwards NOTHING so the native add_block keeps its kWenoEpsilon default.
-        weno_kwargs = {}
-        weps = getattr(spatial, "weno_epsilon", None)
-        if weps is not None:
-            weno_kwargs["weno_epsilon"] = float(weps)
         self._s.add_block(name, model, spatial.limiter, spatial.flux, spatial.recon, time.kind,
                           getattr(time, "substeps", 1), evolve, getattr(time, "stride", 1),
                           getattr(time, "implicit_vars", []), getattr(time, "implicit_roles", []),
@@ -105,7 +101,7 @@ class _SystemInstall(_System):
                           getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING),
                           getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
                           getattr(spatial, "positivity_floor", 0.0),
-                          getattr(spatial, "wave_speed_cache", False), **weno_kwargs)
+                          getattr(spatial, "wave_speed_cache", False), **_weno_kwargs(spatial))
 
     def add_equation(self, name: Any, model: Any, spatial: Any = None, time: Any = None,
                      substeps: Any = None, names: Any = None, evolve: bool = True,
@@ -173,12 +169,6 @@ class _SystemInstall(_System):
         # NB: we call _s.add_block DIRECTLY with nsub/nstride (not self.add_block, whose
         # signature has no substeps -> it would use time.substeps and IGNORE the overrides).
         if isinstance(model, ModelSpec):
-            # ADC-645: the WENO-Z regulariser rides along the Spatial (WENO5(epsilon=...)); None (the
-            # default) forwards NOTHING so the native add_block keeps its kWenoEpsilon default.
-            weno_kwargs = {}
-            weps = getattr(spatial, "weno_epsilon", None)
-            if weps is not None:
-                weno_kwargs["weno_epsilon"] = float(weps)
             self._s.add_block(name, model, spatial.limiter, spatial.flux, spatial.recon, time.kind,
                               nsub, evolve, nstride,
                               getattr(time, "implicit_vars", []), getattr(time, "implicit_roles", []),
@@ -190,7 +180,7 @@ class _SystemInstall(_System):
                           getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING),
                           getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
                           getattr(spatial, "positivity_floor", 0.0),
-                          getattr(spatial, "wave_speed_cache", False), **weno_kwargs)
+                          getattr(spatial, "wave_speed_cache", False), **_weno_kwargs(spatial))
             return
 
         # Implicit mask (IMEX): only the composed native path (ModelSpec -> add_block) wires it. The .so
@@ -443,26 +433,10 @@ class _SystemInstall(_System):
         solver = _resolve_route("field_solver", solver, context="set_poisson")
         bc = _resolve_route("poisson_bc", bc, context="set_poisson")
         wall = _resolve_route("wall", wall, context="set_poisson")
-        # ADC-613: forward the GeometricMG V-cycle knobs ONLY when the caller (or the lowered typed
-        # descriptor) set them, so the native set_poisson keeps its kMG*-sourced defaults otherwise
-        # (bit-identical). A None means "unspecified" -> not passed -> native default.
-        mg_kwargs = {}
-        if rel_tol is not None:
-            mg_kwargs["rel_tol"] = float(rel_tol)
-        if max_cycles is not None:
-            mg_kwargs["max_cycles"] = int(max_cycles)
-        if min_coarse is not None:
-            mg_kwargs["min_coarse"] = int(min_coarse)
-        if pre_smooth is not None:
-            mg_kwargs["pre_smooth"] = int(pre_smooth)
-        if post_smooth is not None:
-            mg_kwargs["post_smooth"] = int(post_smooth)
-        if bottom_sweeps is not None:
-            mg_kwargs["bottom_sweeps"] = int(bottom_sweeps)
-        if coarse_threshold is not None:  # ADC-644: total-cell coarsening ceiling (0 = disabled).
-            mg_kwargs["coarse_threshold"] = int(coarse_threshold)
         self._s.set_poisson(rhs=rhs, solver=solver, bc=bc, wall=wall,
-                            wall_radius=wall_radius, epsilon=epsilon, abs_tol=abs_tol, **mg_kwargs)
+                            wall_radius=wall_radius, epsilon=epsilon, abs_tol=abs_tol,
+                            **_mg_kwargs(rel_tol, max_cycles, min_coarse, pre_smooth,
+                                         post_smooth, bottom_sweeps, coarse_threshold))
 
     def add_elliptic_model(self, name: Any, model: Any, solver: Any = None, bc: Any = "auto",
                            wall: Any = "none", wall_radius: float = 0.0) -> Any:

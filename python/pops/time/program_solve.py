@@ -26,10 +26,9 @@ def _lower_krylov_method(method: Any) -> Any:
 
     The descriptor's own ``max_iter`` (mandatory at descriptor construction, ADC-535) is metadata
     for the LinearProblem-lowering path; the program's ``P.solve_linear(max_iter=...)`` argument is
-    the authoritative budget for THIS op. ADC-645: the returned ``options`` dict carries the
-    descriptor's optional ``rel_tol`` (supplies ``tol`` when the call site leaves it default) and
-    ``omega`` (Richardson relaxation; baked at emit) -- both absent when unset, so a default
-    descriptor lowers exactly as before.
+    the authoritative budget for THIS op. ADC-645: ``options`` carries the descriptor's optional
+    ``rel_tol`` (supplies ``tol`` when the call site leaves it default) and ``omega`` (Richardson
+    relaxation, baked at emit) -- absent when unset, so a default descriptor lowers as before.
     """
     if method is None:
         return "cg", {}
@@ -70,9 +69,8 @@ def _lower_preconditioner(preconditioner: Any) -> Any:
     jacobi / block_jacobi descriptors have no native kernel yet and are rejected with an honest
     "planned, not wired" message (out of scope -- a separate issue).
 
-    ADC-644: a ``GeometricMG(...)`` carrying validated V-cycle-shape knobs returns its resolved option
-    dict as the second tuple member; a default ``GeometricMG()`` (empty option set) returns ``None`` so
-    the emitted V-cycle stays byte-identical (the IR node then omits the ``precond_options`` attr).
+    ADC-644: a ``GeometricMG(...)`` with validated V-cycle-shape knobs returns its option dict; a
+    default one returns ``None`` (the IR omits ``precond_options`` -> emitted V-cycle byte-identical).
     """
     if preconditioner is None:
         preconditioner = _preconditioners().Identity()
