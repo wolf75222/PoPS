@@ -215,7 +215,8 @@ def _exists_native_runtime_params():
     # a native AMR block's runtime param changes the run without recompiling; params={} is
     # bit-identical). The blanket NotImplementedError refusal is gone; the residual precise
     # refusal (a name declared by no instance) lives in test_amr_refusals.
-    assert callable(getattr(AmrSystem, "set_block_params", None))
+    sim = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+    assert callable(getattr(sim, "set_block_params", None))
     return "exists:test_amr_native_params"
 
 
