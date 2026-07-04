@@ -48,6 +48,7 @@ set(POPS_CPP_TEST_SOURCE_test_aux_single_source "tests/cpp/unit/physics/test_aux
 set(POPS_CPP_TEST_SOURCE_test_aux_system_bz "tests/cpp/integration/runtime/test_aux_system_bz.cpp")
 set(POPS_CPP_TEST_SOURCE_test_aux_te "tests/cpp/unit/physics/test_aux_te.cpp")
 set(POPS_CPP_TEST_SOURCE_test_block_builder "tests/cpp/unit/codegen/test_block_builder.cpp")
+set(POPS_CPP_TEST_SOURCE_test_block_inverse "tests/cpp/unit/numerics/test_block_inverse.cpp")
 set(POPS_CPP_TEST_SOURCE_test_box2d "tests/cpp/unit/mesh/test_box2d.cpp")
 set(POPS_CPP_TEST_SOURCE_test_box_array "tests/cpp/unit/mesh/test_box_array.cpp")
 set(POPS_CPP_TEST_SOURCE_test_brick_catalog "tests/cpp/integration/runtime/test_brick_catalog.cpp")
