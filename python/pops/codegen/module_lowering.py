@@ -35,6 +35,7 @@ def _module_to_model(module: Any) -> Any:
     # compile_problem time, not at import time).
     from pops.physics.facade import Model  # noqa: PLC0415
     from pops.physics.aux import AUX_CANONICAL  # noqa: PLC0415
+    from pops.model.operators import OPERATOR_KINDS  # noqa: PLC0415
     states = module.state_spaces()
     if len(states) != 1:
         raise ValueError("compile_problem: a Module must declare exactly one StateSpace to compile "
@@ -75,35 +76,54 @@ def _module_to_model(module: Any) -> Any:
         m.eigenvalues(x=module._eigenvalues["x"], y=module._eigenvalues["y"])
     _CODEGEN_KINDS = ("grid_operator", "local_source", "local_linear_operator", "field_operator",
                       "projection")
-    n_field_ops = 0
+    # ADC-642: one decode -- a {kind: builder} dispatch over the shared OPERATOR_KINDS vocabulary.
+    # Each builder holds its arm body verbatim; n_field_ops is a one-cell counter the field_operator
+    # builder mutates (the single-field guard). _CODEGEN_KINDS is the body-requirement set (local_rate
+    # lowers from op.lowering, not a body, so it stays out); the assert makes an unwired kind loud.
+    n_field_ops = [0]
+
+    def _b_grid_operator(op: Any) -> None:
+        if op.name in ("flux", "flux_default"):
+            m.flux(x=op.body["x"], y=op.body["y"])
+        else:
+            m.flux_term(op.name, x=op.body["x"], y=op.body["y"])
+
+    def _b_local_source(op: Any) -> None:
+        m.source_term(op.name, op.body)
+
+    def _b_local_linear_operator(op: Any) -> None:
+        m.linear_source(op.name, op.body)
+
+    def _b_field_operator(op: Any) -> None:
+        n_field_ops[0] += 1
+        if n_field_ops[0] > 1:
+            raise ValueError(
+                "compile_problem: a Module currently supports one field_operator (the default "
+                "elliptic solve); multiple solved fields are deferred (operator %r)" % op.name)
+        m.elliptic_rhs(op.body)
+
+    def _b_local_rate(op: Any) -> None:
+        low = op.lowering
+        m.rate_operator(op.name, flux=low.get("flux", True),
+                        sources=low.get("sources"), fluxes=low.get("fluxes"))
+
+    def _b_projection(op: Any) -> None:
+        m.projection(op.body)
+
+    builders = {"grid_operator": _b_grid_operator, "local_source": _b_local_source,
+                "local_linear_operator": _b_local_linear_operator,
+                "field_operator": _b_field_operator, "local_rate": _b_local_rate,
+                "projection": _b_projection}
+    assert set(_CODEGEN_KINDS) <= set(OPERATOR_KINDS) and set(builders) <= set(OPERATOR_KINDS)
     for op in module.operator_registry():
         body = op.body
         if op.kind in _CODEGEN_KINDS and (body is None or callable(body)):
             raise ValueError(
                 "compile_problem: operator %r (%s) has no IR body; a compilable Module operator "
                 "needs an expression body (Module.operator(..., expr=...))" % (op.name, op.kind))
-        if op.kind == "grid_operator":
-            if op.name in ("flux", "flux_default"):
-                m.flux(x=body["x"], y=body["y"])
-            else:
-                m.flux_term(op.name, x=body["x"], y=body["y"])
-        elif op.kind == "local_source":
-            m.source_term(op.name, body)
-        elif op.kind == "local_linear_operator":
-            m.linear_source(op.name, body)
-        elif op.kind == "field_operator":
-            n_field_ops += 1
-            if n_field_ops > 1:
-                raise ValueError(
-                    "compile_problem: a Module currently supports one field_operator (the default "
-                    "elliptic solve); multiple solved fields are deferred (operator %r)" % op.name)
-            m.elliptic_rhs(body)
-        elif op.kind == "local_rate":
-            low = op.lowering
-            m.rate_operator(op.name, flux=low.get("flux", True),
-                            sources=low.get("sources"), fluxes=low.get("fluxes"))
-        elif op.kind == "projection":
-            m.projection(body)
+        builder = builders.get(op.kind)
+        if builder is not None:
+            builder(op)
     return m
 
 

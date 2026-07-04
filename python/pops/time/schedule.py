@@ -29,6 +29,19 @@ class Schedule:
     _POLICIES = ("recompute", "hold", "skip", "zero", "accumulate_dt", "error")
     # policies that reuse a stored value, so the operator must be cacheable
     _CACHING = ("hold", "accumulate_dt")
+    # ADC-642: each kind decoded ONCE. so_lowerable = a compiled sim.step(dt) loop can evaluate the
+    # due-test (on_end cannot: no end-of-run signal reaches the .so). host_cadence = the host output
+    # driver can fire it (subcycles are internal to the native macro step, invisible to the run-loop
+    # hook). Codegen and the output driver READ these instead of re-listing kind strings; the per-kind
+    # C++ / host bodies stay in their own layers.
+    _KIND_FACTS = {
+        "always":   {"so_lowerable": True,  "host_cadence": True},
+        "every":    {"so_lowerable": True,  "host_cadence": True},
+        "when":     {"so_lowerable": True,  "host_cadence": True},
+        "on_start": {"so_lowerable": True,  "host_cadence": True},
+        "on_end":   {"so_lowerable": False, "host_cadence": True},
+        "subcycle": {"so_lowerable": True,  "host_cadence": False},
+    }
 
     def __init__(self, kind: Any, policy: Any = "recompute", **params: Any) -> None:
         if kind not in Schedule._KINDS:
@@ -48,6 +61,14 @@ class Schedule:
     def needs_cache(self) -> Any:
         """True if the policy reuses a stored value (so the operator must be cacheable)."""
         return self.policy in Schedule._CACHING
+
+    def so_lowerable(self) -> bool:
+        """True when a compiled sim.step(dt) loop can evaluate this kind's due-test (ADC-642)."""
+        return Schedule._KIND_FACTS[self.kind]["so_lowerable"]
+
+    def host_cadence(self) -> bool:
+        """True when the host output run-loop can honor this kind's cadence (ADC-642)."""
+        return Schedule._KIND_FACTS[self.kind]["host_cadence"]
 
     def _with_policy(self, policy: Any) -> Any:
         return Schedule(self.kind, policy=policy, **self.params)
@@ -86,6 +107,10 @@ class Schedule:
         else:
             base = "%s()" % self.kind
         return base if self.policy == "recompute" else "%s.%s()" % (base, self.policy)
+
+
+# A new kind that forgets its facts row fails loudly at import, not silently at a consumer (ADC-642).
+assert set(Schedule._KIND_FACTS) == set(Schedule._KINDS)
 
 
 def always() -> Any:

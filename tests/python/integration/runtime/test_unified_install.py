@@ -112,23 +112,24 @@ def test_install_solver_sets_poisson():
 
 
 def test_riemann_capability_verbatim():
-    """Section 24: the selected Riemann flux must be backed by the model capability, with the
-    VERBATIM spec message. A compiled model WITHOUT the HLLC capability and WITHOUT a pressure
-    rejects riemann='hllc'."""
+    """Section 24: the selected Riemann flux must be backed by the model capability. The install
+    check now delegates to the shared gate (ADC-642), so it raises ValueError naming the missing
+    capability. A compiled model WITHOUT the HLLC capability and WITHOUT a pressure rejects
+    riemann='hllc'."""
     sim = System(n=N, L=1.0, periodic=True)
     model = _fake_compiled(hllc=False, prim_names=("rho", "u", "v"))
     try:
         sim._validate_riemann_capability(model, pops.FiniteVolume(riemann=HLLC()))
         raise AssertionError("MISMATCH: hllc without capability should raise")
-    except RuntimeError as exc:
-        assert str(exc) == "riemann HLLC requires capability 'hllc_star_state'", \
-            "verbatim message (got %r)" % str(exc)
+    except ValueError as exc:
+        assert "hllc_star_state" in str(exc), \
+            "names the missing capability (got %r)" % str(exc)
         print("OK  riemann HLLC requires capability 'hllc_star_state'")
     # Roe without capability / pressure rejects too.
     try:
         sim._validate_riemann_capability(model, pops.FiniteVolume(riemann=Roe()))
         raise AssertionError("MISMATCH: roe without capability should raise")
-    except RuntimeError as exc:
+    except ValueError as exc:
         assert "roe_dissipation" in str(exc).lower() or "Roe requires capability" in str(exc), \
             "roe capability message (got %r)" % str(exc)
         print("OK  riemann Roe requires its capability")

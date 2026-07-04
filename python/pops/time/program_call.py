@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pops.model.operators import OPERATOR_KINDS
 from pops.time.schedule import Schedule
 from pops.time.values import Value, _CoupledResult
 
@@ -124,47 +125,56 @@ class _ProgramCall(_ProgramBase):
         # A typed call lowers THROUGH the PRIVATE RHS builder (self._rhs_legacy(flux=...) /
         # self.source / ...): the public P.rhs reject never sees this internal lowering (the user
         # already used the typed P.call front door), so there is one public path and no re-entrancy
-        # flag to keep.
+        # flag to keep. ADC-642: one decode -- a keyed dispatch over the shared OPERATOR_KINDS
+        # vocabulary; each handler holds its arm body verbatim (grid_operator/local_rate share one).
         kind = op.kind
-        if kind == "field_operator":
-            # A multi-input field operator (e.g. fields_from_species over N species) is the COUPLED
-            # multi-block field solve: every input species contributes to the one shared elliptic RHS
-            # (Sum_s elliptic_rhs_s, the default phi). Route it to solve_fields_from_blocks so no
-            # species is dropped -- a single-input field operator stays the historical single-block
-            # solve_fields (named-field routing via the operator name as before).
-            state_args = [a for a in args if getattr(a, "vtype", None) == "state"]
-            if len(state_args) > 1:
-                return self.solve_fields_from_blocks(state_args, name=name)
-            field = None if operator_name == "fields_from_state" else operator_name
-            return self.solve_fields(name=name, state=args[0], field=field)
-        if kind == "local_source":
-            fields = args[1] if len(args) > 1 else None
-            if operator_name == "source_default":
-                # The default source lives in m._source, not as a named source_term; reach it
-                # through the source-only RHS path (byte-identical to flux=False,
-                # sources=["default"]), since ctx.source(name) only resolves named source_terms.
-                return self._rhs_legacy(name=name, state=args[0], fields=fields, flux=False,
-                                        sources=["default"])
-            return self.source(operator_name, state=args[0], fields=fields)
-        if kind in ("grid_operator", "local_rate"):
-            fields = args[1] if len(args) > 1 else None
-            if kind == "grid_operator":
-                # Flux divergence only (no source): the default flux or a named flux_term.
-                fluxes = None if operator_name == "flux_default" else [operator_name]
-                return self._rhs_legacy(name=name, state=args[0], fields=fields, flux=True,
-                                        sources=[], fluxes=fluxes)
-            low = op.lowering
-            return self._rhs_legacy(name=name, state=args[0], fields=fields,
-                                    flux=low.get("flux", True), sources=low.get("sources"),
-                                    fluxes=low.get("fluxes"))
-        if kind == "local_linear_operator":
-            return self._linear_source(operator_name)
-        if kind == "projection":
-            return self.project(name=name, state=args[0])
-        if kind == "coupled_rate":
-            return self._lower_coupled_rate(op, operator_name, args, name)
-        raise NotImplementedError(
-            "P.call: operator kind %r is not yet lowerable (operator %r)" % (kind, operator_name))
+        handler = _LOWER_CALL_HANDLERS.get(kind)
+        if handler is None:
+            raise NotImplementedError(
+                "P.call: operator kind %r is not yet lowerable (operator %r)" % (kind, operator_name))
+        return handler(self, op, operator_name, args, name)
+
+    def _lower_field_operator(self, op: Any, operator_name: Any, args: Any, name: Any) -> Any:
+        # A multi-input field operator (e.g. fields_from_species over N species) is the COUPLED
+        # multi-block field solve: every input species contributes to the one shared elliptic RHS
+        # (Sum_s elliptic_rhs_s, the default phi). Route it to solve_fields_from_blocks so no
+        # species is dropped -- a single-input field operator stays the historical single-block
+        # solve_fields (named-field routing via the operator name as before).
+        state_args = [a for a in args if getattr(a, "vtype", None) == "state"]
+        if len(state_args) > 1:
+            return self.solve_fields_from_blocks(state_args, name=name)
+        field = None if operator_name == "fields_from_state" else operator_name
+        return self.solve_fields(name=name, state=args[0], field=field)
+
+    def _lower_local_source(self, op: Any, operator_name: Any, args: Any, name: Any) -> Any:
+        fields = args[1] if len(args) > 1 else None
+        if operator_name == "source_default":
+            # The default source lives in m._source, not as a named source_term; reach it
+            # through the source-only RHS path (byte-identical to flux=False,
+            # sources=["default"]), since ctx.source(name) only resolves named source_terms.
+            return self._rhs_legacy(name=name, state=args[0], fields=fields, flux=False,
+                                    sources=["default"])
+        return self.source(operator_name, state=args[0], fields=fields)
+
+    def _lower_rate(self, op: Any, operator_name: Any, args: Any, name: Any) -> Any:
+        # grid_operator (flux divergence only) and local_rate (flux + sources per op.lowering).
+        fields = args[1] if len(args) > 1 else None
+        if op.kind == "grid_operator":
+            # Flux divergence only (no source): the default flux or a named flux_term.
+            fluxes = None if operator_name == "flux_default" else [operator_name]
+            return self._rhs_legacy(name=name, state=args[0], fields=fields, flux=True,
+                                    sources=[], fluxes=fluxes)
+        low = op.lowering
+        return self._rhs_legacy(name=name, state=args[0], fields=fields,
+                                flux=low.get("flux", True), sources=low.get("sources"),
+                                fluxes=low.get("fluxes"))
+
+    def _lower_local_linear_operator(self, op: Any, operator_name: Any, args: Any,
+                                     name: Any) -> Any:
+        return self._linear_source(operator_name)
+
+    def _lower_projection(self, op: Any, operator_name: Any, args: Any, name: Any) -> Any:
+        return self.project(name=name, state=args[0])
 
     def _lower_coupled_rate(self, op: Any, operator_name: Any, args: Any, name: Any) -> Any:
         """Lower a coupled_rate operator to a coupled node plus one per-block rate projection.
@@ -219,5 +229,21 @@ class _ProgramCall(_ProgramBase):
                     "operator %r expects %s %r but got a value over %r"
                     % (op.name, t.kind, t.name, arg_name))
 
+
+# ADC-642: the one operator-kind -> lowering dispatch, keyed on the shared OPERATOR_KINDS
+# vocabulary. grid_operator and local_rate share _lower_rate (it inspects op.kind internally, as
+# before). The intentionally-unlowered kinds (diagnostic / matrix_free_operator / the residuals) have
+# no row and fall through _lower_call's NotImplementedError catch-all. The assert makes an unwired
+# kind fail loudly at import, not silently at runtime.
+_LOWER_CALL_HANDLERS = {
+    "field_operator": _ProgramCall._lower_field_operator,
+    "local_source": _ProgramCall._lower_local_source,
+    "grid_operator": _ProgramCall._lower_rate,
+    "local_rate": _ProgramCall._lower_rate,
+    "local_linear_operator": _ProgramCall._lower_local_linear_operator,
+    "projection": _ProgramCall._lower_projection,
+    "coupled_rate": _ProgramCall._lower_coupled_rate,
+}
+assert set(_LOWER_CALL_HANDLERS) <= set(OPERATOR_KINDS)
 
 __all__ = ["_ProgramCall"]

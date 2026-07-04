@@ -168,7 +168,7 @@ def test_refusal_matrix_checks_error_type_reason_and_no_warning():
         ),
         (
             "HLLC without contact/star-state capability",
-            RuntimeError,
+            ValueError,
             lambda: System(n=8, L=1.0, periodic=True)._validate_riemann_capability(
                 _compiled_model(hllc=False, prim_names=("rho", "u", "v")),
                 pops.FiniteVolume(riemann=HLLC()),
@@ -177,7 +177,7 @@ def test_refusal_matrix_checks_error_type_reason_and_no_warning():
         ),
         (
             "Roe without dissipation capability",
-            RuntimeError,
+            ValueError,
             lambda: System(n=8, L=1.0, periodic=True)._validate_riemann_capability(
                 _compiled_model(roe=False, prim_names=("rho", "u", "v")),
                 pops.FiniteVolume(riemann=Roe()),

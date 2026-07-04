@@ -331,7 +331,7 @@ def _check_schedules_lowerable(program: Any) -> None:
         sched = v.attrs.get("schedule")
         if sched is None or sched.is_always():
             continue
-        if sched.kind == "on_end":
+        if not sched.so_lowerable():
             raise NotImplementedError(
                 "schedule on_end() on node %r (op '%s') is not lowerable: a compiled sim.step(dt) "
                 "loop never sees an end-of-run signal, so the .so cannot know the last step. Use "

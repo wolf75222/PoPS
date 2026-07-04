@@ -30,6 +30,12 @@ from .board_handles import (CallableOperator, FieldHandle, FieldsHandle, FluxHan
 from ._board_multispecies import _MultiSpeciesMixin
 from .model import _NO_KIND
 
+# ADC-642: the Riemann-flux vocabulary decoded ONCE (a new capability-backed generic flux is one
+# row). The enabler maps a generic flux to its dsl hook; euler_hllc/euler_roe pin the explicit C++
+# flux and emit no generic hook. The frozensets are the authoring-validation sets (was inline tuples).
+_GENERIC_CAPABILITY_ENABLERS = {"hllc": "enable_hllc", "roe": "enable_roe"}
+_PRESSURE_ROLE_FLUXES = frozenset({"hllc", "roe", "euler_hllc", "euler_roe"})
+_EULER_LAYOUT_FLUXES = frozenset({"euler_hllc", "euler_roe"})
 
 
 class Model(_MultiSpeciesMixin):
@@ -50,7 +56,6 @@ class Model(_MultiSpeciesMixin):
         self._field_problems = {}   # name -> inert pops.fields field problem (Spec 5 sec.5.1/9.6)
         self._riemann = None        # selected Riemann descriptor (board surface)
         self._reconstruction = None
-        self._riemann_hooks = {}    # capability formulas for the native-hook codegen (ADC-456)
         self._field_solvers = {}    # field-operator name -> solver descriptor
         # Multi-species mode (Spec 3 sections 12, 16): once a SECOND species is declared the model owns
         # a multi-block pops.model.Module directly (N StateSpaces + a coupled_rate + a multi-block field
@@ -346,19 +351,13 @@ class Model(_MultiSpeciesMixin):
         still raises the clear capability error at codegen.
         """
         self._riemann = name
-        self._riemann_hooks = {
-            "flux": flux, "pressure": pressure, "velocity": velocity,
-            "sound_speed": sound_speed, "wave_speeds": wave_speeds,
-            "contact_speed": contact_speed, "star_state": star_state,
-        }
-        kind = str(name).lower()
+        kind = str(getattr(name, "scheme", name)).lower()
         self._validate_riemann_capabilities(kind, pressure, wave_speeds)
-        # Only generic hllc/roe emit the capability; euler_hllc/euler_roe (ADC-590) pin the explicit
-        # EulerHLLCFlux2D / EulerRoeFlux2D on C++ and do NOT emit the generic hook.
-        if kind == "hllc":
-            self._dsl.enable_hllc()
-        elif kind == "roe":
-            self._dsl.enable_roe()
+        # Only generic hllc/roe emit the capability hook; euler_hllc/euler_roe pin the explicit
+        # EulerHLLCFlux2D / EulerRoeFlux2D and emit no generic hook (ADC-590/ADC-642, one table).
+        enabler = _GENERIC_CAPABILITY_ENABLERS.get(kind)
+        if enabler is not None:
+            getattr(self._dsl, enabler)()
         # Wire any ARBITRARY board formula through to the dsl codegen (ADC-456). Resolve board nodes
         # to dsl Exprs; the dsl method codegen's the Expr ones and ignores descriptors / None (the
         # role-derived default stands). Off the hot path for the role-derived case (no Expr -> no-op).
@@ -378,7 +377,7 @@ class Model(_MultiSpeciesMixin):
         roles = set(_roles_for(hyp))
         has_pressure = ("p" in hyp.prim_defs) or (pressure is not None)
         fluid = {"Density", "MomentumX", "MomentumY"}
-        if kind in ("hllc", "roe", "euler_hllc", "euler_roe"):
+        if kind in _PRESSURE_ROLE_FLUXES:
             if not has_pressure:
                 raise ValueError(
                     "riemann %s requires model capability 'pressure' for state %r: declare a "
@@ -390,7 +389,7 @@ class Model(_MultiSpeciesMixin):
                     "riemann %s requires model capability 'hllc_star_state' for state %r: the "
                     "fluid roles %s are needed (declare m.state(..., roles={...})); missing %s"
                     % (kind.upper(), self._state_name(), sorted(fluid), sorted(missing)))
-            if kind in ("euler_hllc", "euler_roe") and len(hyp.cons_names) != 4:
+            if kind in _EULER_LAYOUT_FLUXES and len(hyp.cons_names) != 4:
                 raise ValueError(
                     "riemann %s requires a canonical 4-variable Euler layout (rho, rho_u, rho_v, E) "
                     "for state %r; use riemann='hllc'/'roe' for a generic model"
