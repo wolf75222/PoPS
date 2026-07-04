@@ -56,6 +56,17 @@ def test_sweep_knobs_pass_through():
     assert opts["bottom_sweeps"] == 80
 
 
+def test_coarse_threshold_default_disabled_and_override(caplog=None):
+    """ADC-644: DirectSmallGrid threshold reaches mg_options as coarse_threshold (0 = disabled)."""
+    from pops.solvers.options import DirectSmallGrid
+
+    # Default coarse solver -> None -> disabled sentinel 0 (bit-identical hierarchy).
+    assert GeometricMG().mg_options()["coarse_threshold"] == 0
+    # An explicit threshold reaches the resolved options.
+    opts = GeometricMG(coarse=DirectSmallGrid(64)).mg_options()
+    assert opts["coarse_threshold"] == 64
+
+
 def test_chebyshev_smoother_refuses_structurally():
     report = GeometricMG(smoother=Chebyshev()).validate()
     assert not report.ok
@@ -107,12 +118,14 @@ def test_effective_default_equals_numerical_defaults_report():
     assert poisson["pre_smooth"] == mg["pre_smooth"]
     assert poisson["post_smooth"] == mg["post_smooth"]
     assert poisson["bottom_sweeps"] == mg["bottom_sweeps"]
+    # ADC-644: coarse_threshold defaults to the disabled sentinel 0 (bit-identical hierarchy).
+    assert poisson["coarse_threshold"] == mg["coarse_threshold"] == 0
     assert poisson["smoother"] == "red_black_gauss_seidel"
 
 
 def test_override_visible_in_effective_report():
     sim = _sim(rel_tol=1e-4, max_cycles=7, min_coarse=4, pre_smooth=3, post_smooth=1,
-               bottom_sweeps=80)
+               bottom_sweeps=80, coarse_threshold=16)
     poisson = sim.inspect().to_dict()["options"]["poisson"]
     assert poisson["rel_tol"] == pytest.approx(1e-4)
     assert poisson["max_cycles"] == 7
@@ -120,6 +133,7 @@ def test_override_visible_in_effective_report():
     assert poisson["pre_smooth"] == 3
     assert poisson["post_smooth"] == 1
     assert poisson["bottom_sweeps"] == 80
+    assert poisson["coarse_threshold"] == 16  # ADC-644
 
 
 def test_override_changes_the_v_cycle_count():
@@ -143,6 +157,28 @@ def test_override_changes_the_v_cycle_count():
     assert capped["options"]["poisson"]["max_cycles"] == 1
 
 
+def test_coarse_threshold_changes_the_hierarchy():
+    """ADC-644 live behavior: a positive coarse_threshold actually stops coarsening.
+
+    With ONE V-cycle (max_cycles=1) the result depends on the hierarchy depth; a ceiling of n*n
+    (coarsening fully disabled) must produce a different phi than the default deep hierarchy. The
+    default (0 = disabled ceiling) is the byte-identity baseline of the goldens."""
+    import numpy as np
+
+    def _phi(**poisson):
+        sim = _sim(max_cycles=1, **poisson)
+        rho = np.zeros((16, 16))
+        rho[8, 8] = 1.0
+        rho[4, 4] = -1.0
+        sim.set_density("ion", rho)
+        sim.solve_fields()
+        return np.array(sim.potential(), copy=True)
+
+    deep = _phi()  # default: coarsen down to min_coarse
+    shallow = _phi(coarse_threshold=16 * 16)  # ceiling at the root level: no coarsening at all
+    assert np.max(np.abs(deep - shallow)) > 0.0, "coarse_threshold must reach the native hierarchy"
+
+
 def test_native_set_poisson_refuses_out_of_domain():
     with pytest.raises((RuntimeError, ValueError)):
         _sim(rel_tol=0.0)
@@ -150,6 +186,9 @@ def test_native_set_poisson_refuses_out_of_domain():
         _sim(max_cycles=0)
     with pytest.raises((RuntimeError, ValueError)):
         _sim(min_coarse=0)
+    # ADC-644: a negative coarse_threshold is refused (0 = disabled is valid).
+    with pytest.raises((RuntimeError, ValueError)):
+        _sim(coarse_threshold=-1)
 
 
 def main():
@@ -157,11 +196,13 @@ def main():
     test_relative_tolerance_maps_rel_and_floor()
     test_absolute_tolerance_keeps_native_rel_and_sets_floor()
     test_sweep_knobs_pass_through()
+    test_coarse_threshold_default_disabled_and_override()
     test_chebyshev_smoother_refuses_structurally()
     test_out_of_domain_cycles_and_tolerance_refuse()
     test_effective_default_equals_numerical_defaults_report()
     test_override_visible_in_effective_report()
     test_override_changes_the_v_cycle_count()
+    test_coarse_threshold_changes_the_hierarchy()
     test_native_set_poisson_refuses_out_of_domain()
     print("OK  ADC-613 GeometricMG options")
 

@@ -33,6 +33,7 @@ _CONSTANT_CLASSIFICATION: dict = {
     "kMGDefaultPreSmooth": "public_knob",
     "kMGDefaultPostSmooth": "public_knob",
     "kMGDefaultBottomSweeps": "public_knob",
+    "kMGDefaultCoarseThreshold": "public_knob",
     "kFACDefaultMaxIters": "public_knob",
     "kFACDefaultFineSweeps": "public_knob",
     "kFACDefaultTol": "public_knob",
@@ -98,6 +99,7 @@ def _static_report() -> dict:
             "pre_smooth": 2,
             "post_smooth": 2,
             "bottom_sweeps": 50,
+            "coarse_threshold": 0,
         },
         "fac": {
             "max_iters": 30,

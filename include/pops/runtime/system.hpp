@@ -311,7 +311,8 @@ class System {
                    double abs_tol = 0.0, double rel_tol = static_cast<double>(kMGDefaultRelTol),
                    int max_cycles = kMGDefaultMaxCycles, int min_coarse = kMGDefaultMinCoarse,
                    int pre_smooth = kMGDefaultPreSmooth, int post_smooth = kMGDefaultPostSmooth,
-                   int bottom_sweeps = kMGDefaultBottomSweeps);
+                   int bottom_sweeps = kMGDefaultBottomSweeps,
+                   int coarse_threshold = kMGDefaultCoarseThreshold);
 
   /// Configured field (Poisson) solver token, e.g. "geometric_mg" | "fft" | "fft_spectral"
   /// (the @p solver of the last set_poisson; default "geometric_mg"). Read by install_program for the

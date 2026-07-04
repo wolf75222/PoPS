@@ -120,6 +120,10 @@ class GeometricMG(Descriptor):
         sweep knobs pass straight through. Values here reproduce today's V-cycle for the defaults.
         """
         rel_tol, abs_tol = self._resolved_tolerance()
+        # ADC-644: the coarse solver's total-cell coarsening ceiling. None ("governed by min_coarse")
+        # lowers to the native disabled sentinel 0, so a default DirectSmallGrid() keeps the historical
+        # hierarchy bit-for-bit; a positive threshold enables the ceiling.
+        coarse_threshold = 0 if self.coarse.threshold is None else int(self.coarse.threshold)
         return {
             "rel_tol": rel_tol,
             "abs_tol": abs_tol,
@@ -128,6 +132,7 @@ class GeometricMG(Descriptor):
             "pre_smooth": self.pre_sweeps,
             "post_smooth": self.post_sweeps,
             "bottom_sweeps": self.bottom_sweeps,
+            "coarse_threshold": coarse_threshold,
         }
 
     def _resolved_tolerance(self) -> Any:

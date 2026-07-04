@@ -16,6 +16,7 @@ solvers = pytest.importorskip("pops.solvers")
 
 from pops.solvers import elliptic, krylov, nonlinear, schur
 from pops.solvers.options import Chebyshev, DirectSmallGrid, RedBlackGaussSeidel
+from pops.solvers.preconditioners import preconditioners
 from pops.solvers.tolerances import Absolute, AbsoluteFloor, Relative
 
 
@@ -350,6 +351,62 @@ def test_install_path_token_resolution_for_rich_descriptor():
     from pops.runtime._system_unified_install import _SystemUnifiedInstall
     assert _SystemUnifiedInstall._solver_token(elliptic.GeometricMG()) == "geometric_mg"
     assert _SystemUnifiedInstall._solver_token(pops.fields.catalog.GeometricMG()) == "geometric_mg"
+
+
+# --- ADC-644: the wired GeometricMG preconditioner option surface -----------------------------
+def test_precond_geometric_mg_default_has_no_options():
+    # A default GeometricMG() preconditioner carries an EMPTY options dict, so the lowering returns
+    # None and the emitted V-cycle stays byte-identical to the historical single-cycle preconditioner.
+    d = preconditioners.GeometricMG()
+    assert d.category == "preconditioner"
+    assert d.scheme == "geometric_mg"
+    assert d.options == {}
+
+
+def test_precond_geometric_mg_carries_validated_shape_knobs():
+    d = preconditioners.GeometricMG(n_vcycles=3, pre_sweeps=1, post_sweeps=1, bottom_sweeps=80,
+                                    min_coarse=4)
+    assert d.options == {"n_vcycles": 3, "pre_sweeps": 1, "post_sweeps": 1, "bottom_sweeps": 80,
+                         "min_coarse": 4}
+
+
+@pytest.mark.parametrize("kw", [{"tolerance": 1e-6}, {"max_cycles": 10}])
+def test_precond_geometric_mg_refuses_iterative_knobs(kw):
+    # A Krylov preconditioner must be a FIXED linear map; tolerance/max_cycles describe an iterative
+    # solve-to-convergence and are refused loud (never swallowed).
+    with pytest.raises(ValueError, match="FIXED linear map"):
+        preconditioners.GeometricMG(**kw)
+
+
+def test_precond_geometric_mg_refuses_unknown_kwarg():
+    with pytest.raises(TypeError, match="unknown option"):
+        preconditioners.GeometricMG(bogus=1)
+
+
+@pytest.mark.parametrize("kw", [{"n_vcycles": 0}, {"min_coarse": 0}, {"pre_sweeps": -1}])
+def test_precond_geometric_mg_refuses_out_of_domain(kw):
+    with pytest.raises((ValueError, TypeError)):
+        preconditioners.GeometricMG(**kw)
+
+
+# --- ADC-644: DirectSmallGrid threshold is None by default (wired, not dropped) -----------------
+def test_direct_small_grid_default_is_disabled():
+    # The default threshold is None ("governed by min_coarse"), lowering to the disabled sentinel 0
+    # so an unconfigured GeometricMG() keeps today's coarsening hierarchy bit-for-bit.
+    assert DirectSmallGrid().threshold is None
+    assert elliptic.GeometricMG().mg_options()["coarse_threshold"] == 0
+
+
+def test_direct_small_grid_explicit_threshold_reaches_mg_options():
+    assert DirectSmallGrid(64).threshold == 64
+    opts = elliptic.GeometricMG(coarse=DirectSmallGrid(64)).mg_options()
+    assert opts["coarse_threshold"] == 64
+
+
+@pytest.mark.parametrize("bad", [0, -3])
+def test_direct_small_grid_refuses_non_positive(bad):
+    with pytest.raises(ValueError):
+        DirectSmallGrid(bad)
 
 
 if __name__ == "__main__":

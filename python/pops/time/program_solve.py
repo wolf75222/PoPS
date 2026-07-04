@@ -54,7 +54,7 @@ _WIRED_PRECOND_SCHEMES = frozenset({"identity", "geometric_mg"})
 
 
 def _lower_preconditioner(preconditioner: Any) -> Any:
-    """Lower a typed preconditioner descriptor to its scheme token (Spec 5 sec.7).
+    """Lower a typed preconditioner descriptor to ``(scheme, precond_options|None)`` (Spec 5 sec.7).
 
     ``preconditioner`` is a :mod:`pops.solvers.preconditioners` descriptor
     (``preconditioners.Identity()`` / ``preconditioners.GeometricMG()`` ...); its ``scheme`` is the
@@ -62,6 +62,10 @@ def _lower_preconditioner(preconditioner: Any) -> Any:
     default). The geometric-multigrid preconditioner lowers to a real V-cycle ApplyFn; the planned
     jacobi / block_jacobi descriptors have no native kernel yet and are rejected with an honest
     "planned, not wired" message (out of scope -- a separate issue).
+
+    ADC-644: a ``GeometricMG(...)`` carrying validated V-cycle-shape knobs returns its resolved option
+    dict as the second tuple member; a default ``GeometricMG()`` (empty option set) returns ``None`` so
+    the emitted V-cycle stays byte-identical (the IR node then omits the ``precond_options`` attr).
     """
     if preconditioner is None:
         preconditioner = _preconditioners().Identity()
@@ -81,7 +85,9 @@ def _lower_preconditioner(preconditioner: Any) -> Any:
         raise NotImplementedError(
             "solve_linear: the %r preconditioner is planned, not wired yet (it needs a native C++ "
             "kernel); use preconditioners.Identity() or preconditioners.GeometricMG()" % (scheme,))
-    return scheme
+    options = getattr(preconditioner, "options", None)
+    precond_options = dict(options) if options else None
+    return scheme, precond_options
 
 
 def _preconditioners() -> Any:
@@ -124,7 +130,7 @@ class _ProgramSolve(_ProgramConstants, _ProgramBase):
         # always keyed on, so the IR / emitted C++ stay byte-identical to the historical string path;
         # a bare algorithm-selector string is rejected (the public string form is removed).
         method = _lower_krylov_method(method)
-        preconditioner = _lower_preconditioner(preconditioner)
+        preconditioner, precond_options = _lower_preconditioner(preconditioner)
         if not (isinstance(operator, Value) and operator.vtype == "matrix_free_op"):
             raise ValueError("solve_linear: operator must be a matrix_free_operator value")
         if operator.attrs["apply_block"] is None:
@@ -176,11 +182,15 @@ class _ProgramSolve(_ProgramConstants, _ProgramBase):
         # restart is a positive int on the gmres path (validated above); the None union member the
         # checker infers is from the non-gmres branch, which takes the else arm of the ternary.
         restart_int = int(restart) if method == "gmres" else None  # pyright: ignore[reportArgumentType]
-        return self._new("scalar_field", "solve_linear", inputs,
-                         {"method": method, "preconditioner": preconditioner, "tol": float(tol),
-                          "max_iter": int(max_iter), "has_guess": initial_guess is not None,
-                          "ncomp": op_ncomp,
-                          "restart": restart_int}, name, rhs.block)
+        attrs = {"method": method, "preconditioner": preconditioner, "tol": float(tol),
+                 "max_iter": int(max_iter), "has_guess": initial_guess is not None,
+                 "ncomp": op_ncomp, "restart": restart_int}
+        # ADC-644: the resolved V-cycle-shape options of a configured GeometricMG preconditioner. Added
+        # ONLY when non-None (a default GeometricMG() lowers to None), so an unconfigured program's IR
+        # hash / emitted source stays byte-identical (the attr is JSON-dumped into _serialize_node).
+        if precond_options is not None:
+            attrs["precond_options"] = precond_options
+        return self._new("scalar_field", "solve_linear", inputs, attrs, name, rhs.block)
 
     # --- multistep histories (ADC-406a) ---
     def history(self, name: Any, lag: Any = 1, ncomp: Any = None) -> Any:

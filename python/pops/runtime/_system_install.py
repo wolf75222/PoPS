@@ -378,7 +378,8 @@ class _SystemInstall(_System):
                     bc: Any = "auto", wall: Any = "none", wall_radius: float = 0.0,
                     epsilon: float = 1.0, abs_tol: float = 0.0, rel_tol: Any = None,
                     max_cycles: Any = None, min_coarse: Any = None, pre_smooth: Any = None,
-                    post_smooth: Any = None, bottom_sweeps: Any = None) -> Any:
+                    post_smooth: Any = None, bottom_sweeps: Any = None,
+                    coarse_threshold: Any = None) -> Any:
         """Configure the shared system Poisson solve (thin wrapper over the native binding).
 
         Low-level runtime seam. The documented PUBLIC elliptic surface is the typed
@@ -404,10 +405,11 @@ class _SystemInstall(_System):
         native ``set_poisson`` defaults verbatim.
 
         ADC-613 adds the GeometricMG V-cycle knobs ``rel_tol`` / ``max_cycles`` / ``min_coarse`` /
-        ``pre_smooth`` / ``post_smooth`` / ``bottom_sweeps``. Left ``None`` they are NOT forwarded,
-        so the native solver keeps its ``kMG*`` defaults (bit-identical historical V-cycle); the
-        typed :class:`pops.solvers.elliptic.GeometricMG` descriptor lowers its resolved scalars
-        through here. They are inert for the FFT solver (direct, no iterative tolerance).
+        ``pre_smooth`` / ``post_smooth`` / ``bottom_sweeps``; ADC-644 adds ``coarse_threshold`` (a
+        total-cell coarsening ceiling, distinct from the per-axis ``min_coarse``). Left ``None`` they
+        are NOT forwarded, so the native solver keeps its ``kMG*`` defaults (bit-identical historical
+        V-cycle); the typed :class:`pops.solvers.elliptic.GeometricMG` descriptor lowers its resolved
+        scalars through here. They are inert for the FFT solver (direct, no iterative tolerance).
         """
         _guard_assembling(self, "set_poisson")  # frozen once pops.bind completes (ADC-592)
         bc = _lower_bc(bc)
@@ -437,6 +439,8 @@ class _SystemInstall(_System):
             mg_kwargs["post_smooth"] = int(post_smooth)
         if bottom_sweeps is not None:
             mg_kwargs["bottom_sweeps"] = int(bottom_sweeps)
+        if coarse_threshold is not None:  # ADC-644: total-cell coarsening ceiling (0 = disabled).
+            mg_kwargs["coarse_threshold"] = int(coarse_threshold)
         self._s.set_poisson(rhs=rhs, solver=solver, bc=bc, wall=wall,
                             wall_radius=wall_radius, epsilon=epsilon, abs_tol=abs_tol, **mg_kwargs)
 

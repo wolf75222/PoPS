@@ -120,6 +120,7 @@ EffectiveOptionsReport System::effective_options_report() const {
   report.poisson.pre_smooth = p_->fields_.p_mg_opts_.nu1;
   report.poisson.post_smooth = p_->fields_.p_mg_opts_.nu2;
   report.poisson.bottom_sweeps = p_->fields_.p_mg_opts_.nbottom;
+  report.poisson.coarse_threshold = p_->fields_.p_mg_opts_.coarse_threshold;  // ADC-644
   report.poisson.has_epsilon_field = p_->fields_.has_eps_field_;
   report.poisson.has_anisotropic_epsilon = p_->fields_.has_eps_xy_field_;
   report.poisson.has_reaction_field = p_->fields_.has_kappa_field_;

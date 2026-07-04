@@ -60,19 +60,30 @@ class RedBlackGaussSeidel(Descriptor):
 class DirectSmallGrid(Descriptor):
     """A direct coarse-grid solve for hierarchies whose coarse level is below ``threshold``.
 
-    ``threshold`` is the coarse-grid unknown count under which a dense direct solve replaces
-    further coarsening. Inert: the C++ multigrid kernel performs the coarse solve.
+    ``threshold`` is the coarse-grid TOTAL unknown count (nx*ny) at or below which coarsening STOPS
+    and the bottom (Gauss-Seidel) solve -- the native direct-small-grid stand-in -- runs. Distinct from
+    :class:`pops.solvers.elliptic.GeometricMG`'s per-axis ``min_coarse``; when both are active,
+    coarsening halts at whichever is reached first. Inert: the C++ multigrid kernel performs the coarse
+    solve.
+
+    ADC-644: ``threshold`` is now wired end to end (before, it was recorded but silently dropped). The
+    default is ``None`` = "governed by min_coarse" (the native disabled sentinel 0), so an
+    unconfigured ``DirectSmallGrid()`` keeps today's hierarchy bit-for-bit. A positive int enables the
+    ceiling. (The old default ``100`` was never honoured, so no recorded run ever depended on it.)
     """
 
     category = "coarse_solver"
     native_id = None
 
-    def __init__(self, threshold: int = 100) -> None:
+    def __init__(self, threshold: Any = None) -> None:
+        if threshold is None:
+            self.threshold = None
+            return
         if isinstance(threshold, bool) or not isinstance(threshold, int):
             raise TypeError(
-                "DirectSmallGrid(threshold=) must be a Python int; got %r" % (threshold,))
+                "DirectSmallGrid(threshold=) must be a Python int or None; got %r" % (threshold,))
         if threshold < 1:
-            raise ValueError("DirectSmallGrid(threshold=) must be >= 1; got %d" % threshold)
+            raise ValueError("DirectSmallGrid(threshold=) must be >= 1 (or None); got %d" % threshold)
         self.threshold = int(threshold)
 
     @property

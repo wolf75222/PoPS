@@ -41,6 +41,10 @@ inline constexpr int kMGDefaultMinCoarse = 2;
 inline constexpr int kMGDefaultPreSmooth = 2;
 inline constexpr int kMGDefaultPostSmooth = 2;
 inline constexpr int kMGDefaultBottomSweeps = 50;
+// ADC-644: the total-cell coarsening ceiling. Coarsening STOPS once a level's total unknown count
+// (nx*ny) is at or below this; distinct from kMGDefaultMinCoarse (a per-axis floor). Default sentinel
+// 0 = disabled (only min_coarse governs) -> the historical V-cycle hierarchy, bit-identical.
+inline constexpr int kMGDefaultCoarseThreshold = 0;
 
 // Composite FAC defaults.
 inline constexpr int kFACDefaultMaxIters = 30;
@@ -189,6 +193,7 @@ struct EffectivePoissonOptions {
   int pre_smooth = kMGDefaultPreSmooth;
   int post_smooth = kMGDefaultPostSmooth;
   int bottom_sweeps = kMGDefaultBottomSweeps;
+  int coarse_threshold = kMGDefaultCoarseThreshold;  ///< ADC-644: total-cell coarsening ceiling (0 = off).
   std::string smoother = "red_black_gauss_seidel";
   std::string coarse = "direct_small_grid";
   bool has_epsilon_field = false;

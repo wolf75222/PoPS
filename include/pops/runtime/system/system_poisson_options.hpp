@@ -29,6 +29,7 @@ struct GeometricMgOptions {
   int nu1 = kMGDefaultPreSmooth;         ///< pre-smoothing Gauss-Seidel sweeps.
   int nu2 = kMGDefaultPostSmooth;        ///< post-smoothing Gauss-Seidel sweeps.
   int nbottom = kMGDefaultBottomSweeps;  ///< coarsest-grid (bottom) Gauss-Seidel sweeps.
+  int coarse_threshold = kMGDefaultCoarseThreshold;  ///< ADC-644: total-cell coarsening ceiling (0 = off).
 };
 
 }  // namespace pops

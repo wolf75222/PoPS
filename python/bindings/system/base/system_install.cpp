@@ -483,7 +483,7 @@ void System::add_native_block(const std::string& name, const std::string& so_pat
 void System::set_poisson(const std::string& rhs, const std::string& solver, const std::string& bc,
                          const std::string& wall, double wall_radius, double epsilon, double abs_tol,
                          double rel_tol, int max_cycles, int min_coarse, int pre_smooth,
-                         int post_smooth, int bottom_sweeps) {
+                         int post_smooth, int bottom_sweeps, int coarse_threshold) {
   require_assembling(p_->lifecycle_, "set_poisson");  // frozen once pops.bind completes (ADC-592)
   if (epsilon == 0.0)
     throw std::runtime_error("System::set_poisson : epsilon != 0 required");
@@ -501,6 +501,10 @@ void System::set_poisson(const std::string& rhs, const std::string& solver, cons
   if (pre_smooth < 0 || post_smooth < 0 || bottom_sweeps < 0)
     throw std::runtime_error("System::set_poisson : pre_smooth/post_smooth/bottom_sweeps >= 0 "
                              "required");
+  // ADC-644: the total-cell coarsening ceiling. 0 (the default sentinel) = disabled (only min_coarse
+  // governs); a positive value stops coarsening at that unknown count. Negative is refused.
+  if (coarse_threshold < 0)
+    throw std::runtime_error("System::set_poisson : coarse_threshold >= 0 required (0 = disabled)");
   p_->fields_.p_rhs = rhs;
   p_->fields_.p_solver = solver;
   p_->fields_.p_bc = bc;
@@ -518,6 +522,7 @@ void System::set_poisson(const std::string& rhs, const std::string& solver, cons
   p_->fields_.p_mg_opts_.nu1 = pre_smooth;
   p_->fields_.p_mg_opts_.nu2 = post_smooth;
   p_->fields_.p_mg_opts_.nbottom = bottom_sweeps;
+  p_->fields_.p_mg_opts_.coarse_threshold = coarse_threshold;  // ADC-644: total-cell coarsening ceiling.
   p_->fields_.ell_.reset();
 }
 

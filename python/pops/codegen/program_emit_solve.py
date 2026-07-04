@@ -250,9 +250,24 @@ def _precond_applyfn(v: Any, prelude: Any) -> str:
         # built once on the first apply and reused across every Krylov iteration / step. ctx is captured
         # by value too (it forwards the seam ops the apply reuses).
         pc = "precond_mg_state%d" % v.id
+        # ADC-644: a configured GeometricMG preconditioner carries V-cycle-shape knobs
+        # (pre/post/bottom sweeps, min_coarse, n_vcycles). When absent (a default GeometricMG()) emit
+        # the no-arg ctor -- byte-identical to the pre-644 source. When present, emit the explicit ctor
+        # in the fixed positional order (nu1, nu2, nbottom, min_coarse, n_vcycles), each defaulting to
+        # the native kMG* value so an omitted knob keeps its historical default.
+        opts = v.attrs.get("precond_options")
+        if not opts:
+            ctor_args = ""
+        else:
+            nu1 = int(opts.get("pre_sweeps", 2))
+            nu2 = int(opts.get("post_sweeps", 2))
+            nbottom = int(opts.get("bottom_sweeps", 50))
+            min_coarse = int(opts.get("min_coarse", 2))
+            n_vcycles = int(opts.get("n_vcycles", 1))
+            ctor_args = "%d, %d, %d, %d, %d" % (nu1, nu2, nbottom, min_coarse, n_vcycles)
         prelude.append(
-            "auto %s = std::make_shared<pops::coupling::schur::program::GeometricMgPreconditioner>();"
-            % pc)
+            "auto %s = std::make_shared<pops::coupling::schur::program::GeometricMgPreconditioner>(%s);"
+            % (pc, ctor_args))
         prelude.append(
             "pops::ApplyFn %s = [ctx, %s](pops::MultiFab& out, const pops::MultiFab& in) {"
             % (name, pc))

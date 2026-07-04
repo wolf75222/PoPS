@@ -398,7 +398,10 @@ void bind_system_physics(py::class_<System>& cls) {
            "historical; no effect on FFT). rel_tol / max_cycles / min_coarse / pre_smooth / "
            "post_smooth / bottom_sweeps: the GeometricMG V-cycle knobs (ADC-613); they default to "
            "the native kMG* constants so an omitting call is bit-identical to the historical "
-           "V-cycle, and are inert for the FFT solver.",
+           "V-cycle, and are inert for the FFT solver. coarse_threshold (ADC-644): a total-cell "
+           "coarsening ceiling -- coarsening stops once a level's nx*ny is at or below it; distinct "
+           "from the per-axis min_coarse. Default 0 = disabled (only min_coarse governs), "
+           "bit-identical to the historical hierarchy; inert for the FFT solver.",
            py::arg("rhs") = "charge_density", py::arg("solver") = "geometric_mg",
            py::arg("bc") = "auto", py::arg("wall") = "none", py::arg("wall_radius") = 0.0,
            py::arg("epsilon") = 1.0, py::arg("abs_tol") = 0.0,
@@ -406,7 +409,8 @@ void bind_system_physics(py::class_<System>& cls) {
            py::arg("max_cycles") = kMGDefaultMaxCycles,
            py::arg("min_coarse") = kMGDefaultMinCoarse, py::arg("pre_smooth") = kMGDefaultPreSmooth,
            py::arg("post_smooth") = kMGDefaultPostSmooth,
-           py::arg("bottom_sweeps") = kMGDefaultBottomSweeps)
+           py::arg("bottom_sweeps") = kMGDefaultBottomSweeps,
+           py::arg("coarse_threshold") = kMGDefaultCoarseThreshold)
       // DISC transport domain (T2 / T5-PR3 work): materializes a cell-centered 0/1 mask (cell
       // active if its center is in hypot(x-cx, y-cy) - R < 0) and WIRES the transport according to
       // mode=: 'none' (default, full Cartesian transport, bit-identical even with the disc set),
