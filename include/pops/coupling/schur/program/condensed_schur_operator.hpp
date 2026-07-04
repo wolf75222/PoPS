@@ -45,7 +45,7 @@ namespace program {
 
 using pops::runtime::program::ProgramContext;
 
-/// Schur field-role ids for the ``ctx.schur_target(field, role)`` write-redirection hook (ADC-633).
+/// Schur field-role ids for the ``ctx.assembly_target(field, role)`` write-redirection hook (ADC-633).
 /// The uniform ProgramContext ignores the role (identity, byte-preserving); the AMR ProgramContext uses
 /// it to route each assembled field to the matching per-level composite buffer on a refined hierarchy.
 enum SchurTargetRole {
@@ -85,10 +85,10 @@ inline void assemble_schur_coeffs(const Ctx& ctx, MultiFab& eps_x_in, MultiFab& 
   const MultiFab& aux = *gc.aux;
   // schur_target is the identity on a uniform System (byte-for-byte the pre-template body); on a refined
   // AMR hierarchy it redirects the per-cell write into that level's composite coefficient buffer.
-  MultiFab& eps_x = ctx.schur_target(eps_x_in, kSchurEpsX);
-  MultiFab& eps_y = ctx.schur_target(eps_y_in, kSchurEpsY);
-  MultiFab& a_xy = ctx.schur_target(a_xy_in, kSchurAxy);
-  MultiFab& a_yx = ctx.schur_target(a_yx_in, kSchurAyx);
+  MultiFab& eps_x = ctx.assembly_target(eps_x_in, kSchurEpsX);
+  MultiFab& eps_y = ctx.assembly_target(eps_y_in, kSchurEpsY);
+  MultiFab& a_xy = ctx.assembly_target(a_xy_in, kSchurAxy);
+  MultiFab& a_yx = ctx.assembly_target(a_yx_in, kSchurAyx);
   for (int li = 0; li < eps_x.local_size(); ++li) {
     const ConstArray4 s = state.fab(li).const_array();
     const ConstArray4 b = aux.fab(li).const_array();
@@ -134,7 +134,7 @@ inline void schur_explicit_flux(const Ctx& ctx, MultiFab& out_in, const MultiFab
   ctx.count_kernel();
   const GridContext gc = ctx.grid_context();
   const MultiFab& aux = *gc.aux;
-  MultiFab& out = ctx.schur_target(out_in, kSchurFlux);  // identity on uniform; per-level on AMR
+  MultiFab& out = ctx.assembly_target(out_in, kSchurFlux);  // identity on uniform; per-level on AMR
   for (int li = 0; li < out.local_size(); ++li) {
     const ConstArray4 s = state.fab(li).const_array();
     const ConstArray4 b = aux.fab(li).const_array();
@@ -162,7 +162,7 @@ inline void assemble_schur_rhs(const Ctx& ctx, MultiFab& rhs_in, MultiFab& phi_n
   const MultiFab& aux = *gc.aux;
   // Redirect first: on a refined AMR hierarchy the RHS (and its transient Lap / flux scratch, sized
   // from its layout) must live on the current level, not the level-0-bound field. Identity on uniform.
-  MultiFab& rhs = ctx.schur_target(rhs_in, kSchurRhs);
+  MultiFab& rhs = ctx.assembly_target(rhs_in, kSchurRhs);
   const BoxArray& ba = rhs.box_array();
   const DistributionMapping& dm = rhs.dmap();
   // 1) -Lap phi^n (bare 5-point Laplacian of the warm-started potential, negated).
@@ -207,7 +207,7 @@ inline void schur_reconstruct(const Ctx& ctx, MultiFab& state, MultiFab& phi, Re
   // potential; schur_source redirects the READ to the level's published composite phi. Identity on the
   // uniform System and the flat AMR branch (returns the passed field), so the reconstruction is
   // byte-for-byte unchanged there.
-  MultiFab& phi_lvl = ctx.schur_source(phi, kSchurPhi);
+  MultiFab& phi_lvl = ctx.assembly_source(phi, kSchurPhi);
   fill_ghosts(phi_lvl, gc.geom.domain, gc.bc);
   const Real half_idx = Real(1) / (Real(2) * gc.geom.dx());
   const Real half_idy = Real(1) / (Real(2) * gc.geom.dy());

@@ -1,7 +1,7 @@
 """ADC-633: the compiled condensed-Schur Program routes solve_linear through the ctx on the AMR target.
 
 Source-only codegen check (host-side, no compiler / no _pops run): a condensed-Schur Program lowered
-for ``target='amr_system'`` emits ``ctx.solve_linear_schur(...)`` for its elliptic solve, while the
+for ``target='amr_system'`` emits ``ctx.solve_linear_matfree(...)`` for its elliptic solve, while the
 same Program lowered for ``target='system'`` keeps emitting the verbatim ``pops::bicgstab_solve(...)``.
 This pins the target-conditional seam (the System body -- and hence the uniform trajectory + IR hash --
 is byte-untouched; only the AMR body gains the hierarchy-aware solve).
@@ -19,11 +19,11 @@ def _emit(target):
 
 
 def test_amr_target_routes_solve_linear_through_ctx():
-    """The AMR .so emits ctx.solve_linear_schur (the hierarchy-aware seam), NOT the bare Krylov call."""
+    """The AMR .so emits ctx.solve_linear_matfree (the hierarchy-aware seam), NOT the bare Krylov call."""
     src = _emit("amr_system")
-    assert "ctx.solve_linear_schur(" in src, (
+    assert "ctx.solve_linear_matfree(" in src, (
         "a condensed-Schur Program on the AMR target must route solve_linear through the ctx seam "
-        "(ctx.solve_linear_schur) so the flat/composite dispatch runs per hierarchy"
+        "(ctx.solve_linear_matfree) so the flat/composite dispatch runs per hierarchy"
     )
 
 
@@ -34,7 +34,7 @@ def test_system_target_keeps_verbatim_bicgstab():
         "the System target must keep emitting the verbatim matrix-free Krylov call -- the uniform "
         "trajectory (and the IR hash) are unchanged by ADC-633"
     )
-    assert "ctx.solve_linear_schur(" not in src, (
+    assert "ctx.solve_linear_matfree(" not in src, (
         "the System target must NOT emit the AMR hierarchy seam"
     )
 

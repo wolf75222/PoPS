@@ -291,7 +291,7 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
 
     TARGET SEAM (ADC-633). ``target='system'`` emits the verbatim ``pops::<method>_solve(...)`` call
     (the uniform trajectory + the golden emitted-C++ text are byte-untouched). ``target='amr_system'``
-    routes it through ``ctx.solve_linear_schur(sol, rhs, apply, precond, method_id, tol, max_iter,
+    routes it through ``ctx.solve_linear_matfree(sol, rhs, apply, precond, method_id, tol, max_iter,
     restart)``: a FLAT hierarchy dispatches to the SAME Krylov call (identical numerics), a REFINED
     hierarchy to the composite FAC. The seam exists on BOTH ProgramContext (uniform) and
     AmrProgramContext (hierarchy) with byte-identical uniform numerics, so the AMR .so's shared body
@@ -333,7 +333,7 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         # method id (SchurSolveMethod) is 0 = cg, 1 = bicgstab, 2 = gmres, 3 = richardson.
         method_id = {"cg": 0, "bicgstab": 1, "gmres": 2, "richardson": 3}[method]
         precond_expr = precond_arg if method in ("bicgstab", "gmres") else "pops::ApplyFn{}"
-        lines.append("ctx.solve_linear_schur(*%s, %s, %s, %s, %d, %s, %d, %d);"
+        lines.append("ctx.solve_linear_matfree(*%s, %s, %s, %s, %d, %s, %d, %d);"
                      % (sol_sp, rhs_tok, lam, precond_expr, method_id, tol, max_iter, restart))
     elif method == "cg":
         lines.append("pops::KrylovResult %s = pops::cg_solve(%s, *%s, %s, %s, %d);"

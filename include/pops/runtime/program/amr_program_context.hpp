@@ -14,7 +14,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>      // saxpy / lincomb
 #include <pops/mesh/storage/multifab.hpp>      // MultiFab
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess
-#include <pops/numerics/elliptic/linear/generic_krylov.hpp>  // ApplyFn / cg / bicgstab / gmres / richardson (flat solve_linear_schur)
+#include <pops/numerics/elliptic/linear/generic_krylov.hpp>  // ApplyFn / cg / bicgstab / gmres / richardson (flat solve_linear_matfree)
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>             // GeometricMG (Krylov precond)
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>    // apply_laplacian
 #include <pops/runtime/amr/amr_runtime.hpp>     // AmrRuntime (the engine the driver wraps)
@@ -342,7 +342,7 @@ class AmrProgramContext {
   // --- condensed-Schur primitives on the hierarchy (ADC-633): WIRED per level -----------------------
   // The codegen lowers a condensed-Schur (ADC-421/422) Program against the context-generic free kernels
   // pops::coupling::schur::program::<op>(ctx, ...) (condensed_schur_operator.hpp), templated on Ctx. With
-  // this context's grid_context() (per level) + schur_target / schur_source (write / read redirection),
+  // this context's grid_context() (per level) + assembly_target / assembly_source (write/read redirect),
   // those kernels run the SAME assembly PER LEVEL as direct body calls (they read the level_ cursor
   // live). On a FLAT hierarchy the emitted matrix-free BiCGStab runs on level 0, bit-identical to the
   // uniform Program; on a REFINED hierarchy the tensor elliptic is solved compositely (AmrSchurElliptic
@@ -355,7 +355,7 @@ class AmrProgramContext {
   /// the emitted level-0 field IS the whole system, so this is the identity (byte-for-byte the uniform
   /// path -- the flat bit-parity gate). @p role is a SchurTargetRole (eps_x / eps_y / a_xy / a_yx / rhs
   /// / flux).
-  MultiFab& schur_target(MultiFab& field, int role) const {
+  MultiFab& assembly_target(MultiFab& field, int role) const {
     AmrSchurElliptic& s = schur();
     if (!s.has_fine_patches())
       return field;  // flat / no fine patch: the emitted level-0 field is correct as-is.
@@ -364,7 +364,7 @@ class AmrProgramContext {
   /// Schur reconstruction READ redirection (ADC-633): the fine-level reconstruction reads the level's
   /// published composite potential (the emitted level-0 solution cannot hold a fine level's phi). Flat /
   /// no fine patch: identity (returns the emitted solution). @p role is kSchurPhi.
-  MultiFab& schur_source(MultiFab& field, int /*role*/) const {
+  MultiFab& assembly_source(MultiFab& field, int /*role*/) const {
     AmrSchurElliptic& s = schur();
     if (!s.has_fine_patches())
       return field;
@@ -374,8 +374,8 @@ class AmrProgramContext {
   /// (no fine patch): the SAME matrix-free Krylov call as the uniform Program (identical numerics, the
   /// flat bit-parity path -- the load-bearing acceptance). REFINED (>= one fine patch): drive
   /// AmrSchurElliptic::solve_composite (the composite FAC over the tower), which reads the per-level
-  /// coefficients / RHS the emitted assembly already wrote through schur_target and publishes each
-  /// level's potential for schur_source to read; the emitted @p apply / @p precond are UNUSED on this
+  /// coefficients / RHS the emitted assembly already wrote through assembly_target and publishes each
+  /// level's potential for assembly_source to read; the emitted @p apply / @p precond are UNUSED on this
   /// branch (the FAC has its own operator). @p method is a SchurSolveMethod id (program_context.hpp).
   ///
   /// REFINED-HIERARCHY ORDERING (documented limitation). The emitted per-level loop interleaves
@@ -385,30 +385,30 @@ class AmrProgramContext {
   /// fine patch under a Program) needs the native AMR source-stage route (add_equation(Strang(source=
   /// CondensedSchur)), which assembles the whole tower then solves once) for a conservative, order-exact
   /// result. This branch is the composite-solve scaffold, not a bit-exact multilevel driver.
-  void solve_linear_schur(MultiFab& sol, const MultiFab& rhs, const ApplyFn& apply,
+  void solve_linear_matfree(MultiFab& sol, const MultiFab& rhs, const ApplyFn& apply,
                           const ApplyFn& precond, int method, Real tol, int max_iter,
                           int restart) const {
     (void)restart;
     AmrSchurElliptic& s = schur();
     if (!s.has_fine_patches()) {
       switch (method) {
-        case kSchurSolveCg:
+        case kLinearSolveCg:
           (void)pops::cg_solve(apply, sol, rhs, tol, max_iter);
           break;
-        case kSchurSolveGmres:
+        case kLinearSolveGmres:
           (void)pops::gmres_solve(apply, precond, sol, rhs, tol, max_iter, restart);
           break;
-        case kSchurSolveRichardson:
+        case kLinearSolveRichardson:
           (void)pops::richardson_solve(apply, sol, rhs, static_cast<Real>(1), tol, max_iter);
           break;
-        default:  // kSchurSolveBicgstab
+        default:  // kLinearSolveBicgstab
           (void)pops::bicgstab_solve(apply, precond, sol, rhs, tol, max_iter);
           break;
       }
       return;
     }
     // Refined: the per-level coefficients / RHS are already assembled into AmrSchurElliptic (through
-    // schur_target on the prior per-level assembly calls); drive the composite FAC over the whole tower.
+    // assembly_target on the prior per-level assembly calls); drive the composite FAC over the whole tower.
     s.solve_composite();
   }
 
@@ -506,6 +506,6 @@ class AmrProgramContext {
 
 // ADC-633: the former AmrProgramContext overloads of the condensed-Schur FREE kernels are GONE. The
 // kernels (condensed_schur_operator.hpp) are now TEMPLATES on the context type Ctx, so they instantiate
-// directly for AmrProgramContext -- reaching this context's grid_context() / schur_target / schur_source
+// directly for AmrProgramContext -- reaching this context's grid_context() / assembly_target / assembly_source
 // per level. No delegating overload is needed (and a non-templated one would ambiguate the template).
 }  // namespace pops

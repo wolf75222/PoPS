@@ -48,8 +48,8 @@ from typing import Any
 DEFERRED_GROUPS: dict = {
     "schur": {
         # ADC-633 WIRED the condensed-Schur Program on the hierarchy: the operators are context-generic
-        # (per-level assembly through AmrProgramContext::grid_context / schur_target / schur_source) and
-        # solve_linear_schur dispatches flat->matrix-free BiCGStab / refined->composite FAC. No throwing
+        # (per-level assembly through AmrProgramContext::grid_context / assembly_target / assembly_source)
+        # and solve_linear_matfree dispatches flat->matrix-free BiCGStab / refined->composite FAC. No throw
         # stub remains, so header_methods is EMPTY -> the group is GREEN.
         "issue": "ADC-633",
         "op_source": "program_emit_kernels._SCHUR_PROGRAM_OPS",
