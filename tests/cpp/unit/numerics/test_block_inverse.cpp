@@ -63,9 +63,45 @@ TEST(test_block_inverse, RotationBlockMatchesLorentzBitForBit) {
     EXPECT_EQ(Mi[0][1], le.binv_12()) << "binv_12 [" << c.name << "]";
     EXPECT_EQ(Mi[1][0], le.binv_21()) << "binv_21 [" << c.name << "]";
     EXPECT_EQ(Mi[1][1], le.binv_22()) << "binv_22 [" << c.name << "]";
-    // And the determinant reduces to LorentzEliminator's 1 + w*w bit-for-bit.
-    const Real det = M[0][0] * M[1][1] - M[0][1] * M[1][0];
+    // And the determinant reduces to LorentzEliminator's 1 + w*w bit-for-bit -- in the intrinsic's
+    // PINNED shape (hoist a*d, subtract b*c). Written as one `a*d - b*c` expression the frontend may
+    // fma-contract the WRONG product (clang contracts at EVERY -O level) and drift a ULP.
+    const Real t = M[0][0] * M[1][1];
+    const Real det = t - M[0][1] * M[1][0];
     EXPECT_EQ(det, le.det) << "det [" << c.name << "]";
+  }
+}
+
+// Test 1b (the contraction sweep): the bit-parity holds on RUNTIME values, not only compile-time
+// constants. A fixed-value table can pass by constant folding while the fma-contraction of the
+// runtime code pairs a product differently (measured: ~7% of random w one ULP off before the det /
+// bracket shapes were pinned); a pseudo-random volatile sweep defeats the folding.
+TEST(test_block_inverse, RotationBlockMatchesLorentzOnRuntimeValues) {
+  unsigned s = 12345u;
+  auto next = [&s]() {  // xorshift; volatile write defeats constant propagation
+    s ^= s << 13;
+    s ^= s >> 17;
+    s ^= s << 5;
+    volatile Real r = Real(s) / Real(4294967295.0) * Real(12) - Real(6);
+    return Real(r);
+  };
+  for (int k = 0; k < 10000; ++k) {
+    const Real w = next();
+    const LorentzEliminator le(w, Real(1), Real(1));
+    const Real M[2][2] = {{Real(1), -w}, {w, Real(1)}};
+    Real Mi[2][2];
+    ASSERT_TRUE(block_inverse<2>(M, Mi));
+    ASSERT_EQ(Mi[0][0], le.binv_11()) << "w=" << w;
+    ASSERT_EQ(Mi[0][1], le.binv_12()) << "w=" << w;
+    ASSERT_EQ(Mi[1][0], le.binv_21()) << "w=" << w;
+    ASSERT_EQ(Mi[1][1], le.binv_22()) << "w=" << w;
+    const Real v[2] = {next(), next()};
+    Real got[2];
+    ASSERT_TRUE(pops::detail::block_apply_inverse<2>(M, v, got));
+    Real ex, ey;
+    le.apply_Binv(v[0], v[1], ex, ey);
+    ASSERT_EQ(got[0], ex) << "apply x, w=" << w;
+    ASSERT_EQ(got[1], ey) << "apply y, w=" << w;
   }
 }
 
@@ -146,4 +182,56 @@ TEST(test_block_inverse, SingularReturnsFalse) {
   Real Mi[2][2] = {{Real(-1), Real(-1)}, {Real(-1), Real(-1)}};   // sentinel
   EXPECT_FALSE(block_inverse<2>(M, Mi)) << "singular 2x2 -> false";
   EXPECT_EQ(Mi[0][0], Real(-1)) << "inv untouched on singular";
+}
+
+// Test 6 (THE APPLY GATE): block_apply_inverse<2> of the Lorentz rotation block applied to an arbitrary
+// vector == LorentzEliminator::apply_Binv, BIT-EXACT. The condensed RHS-flux and reconstruct kernels
+// apply M^{-1} to a VECTOR (F = M^{-1}(mx,my); v = M^{-1}(v^n - theta dt grad phi)); the retiring Schur
+// brick applied it with apply_Binv = inv*(vx + w*vy) -- ONE reciprocal factored out of the bracket.
+// block_apply_inverse reproduces that factored order; summing the pre-divided block_inverse<2> entries
+// (1/det)*vx + (w/det)*vy would round differently (a per-step ULP drift off np.array_equal). == is the
+// point.
+TEST(test_block_inverse, ApplyInverseMatchesApplyBinvBitForBit) {
+  using pops::detail::block_apply_inverse;
+  // A spread of input vectors: axis-aligned, mixed sign, and large magnitude.
+  const Real vs[][2] = {{Real(1), Real(0)},       {Real(0), Real(1)},   {Real(0.4), Real(-0.2)},
+                        {Real(-3.7), Real(2.1)},  {Real(1e3), Real(-7)}};
+  for (const auto& cc : kBz) {
+    const Real th_dt = cc.theta * cc.dt;
+    const LorentzEliminator le(th_dt, Real(1), cc.Bz);
+    const Real w = th_dt * cc.Bz;
+    const Real M[2][2] = {{Real(1), -w}, {w, Real(1)}};
+    for (const auto& v : vs) {
+      Real got[2];
+      ASSERT_TRUE(block_apply_inverse<2>(M, v, got)) << "non-singular [" << cc.name << "]";
+      Real wx, wy;
+      le.apply_Binv(v[0], v[1], wx, wy);
+      EXPECT_EQ(got[0], wx) << "apply_Binv x [" << cc.name << "] v=(" << v[0] << "," << v[1] << ")";
+      EXPECT_EQ(got[1], wy) << "apply_Binv y [" << cc.name << "] v=(" << v[0] << "," << v[1] << ")";
+    }
+  }
+}
+
+// Test 7 : block_apply_inverse<3> of a general 3x3 equals inv * (adj . v) to round-off (round-trip via
+// the block inverse), and a singular block returns false without touching out.
+TEST(test_block_inverse, ApplyInverse3x3AndSingular) {
+  using pops::detail::block_apply_inverse;
+  const Real M[3][3] = {{Real(4.0), Real(1.0), Real(-2.0)},
+                        {Real(0.5), Real(3.0), Real(1.5)},
+                        {Real(-1.0), Real(2.0), Real(5.0)}};
+  const Real v[3] = {Real(1.3), Real(-0.7), Real(2.2)};
+  Real got[3];
+  ASSERT_TRUE(block_apply_inverse<3>(M, v, got));
+  Real Mi[3][3];
+  ASSERT_TRUE(block_inverse<3>(M, Mi));
+  for (int r = 0; r < 3; ++r) {
+    Real ref = Real(0);
+    for (int c = 0; c < 3; ++c) ref += Mi[r][c] * v[c];
+    const Real scale = Real(1) + dabs(ref);
+    EXPECT_TRUE(dabs(got[r] - ref) < EPS_MACHINE * scale) << "apply vs Minv.v [" << r << "]";
+  }
+  const Real S[3][3] = {{Real(1), Real(2), Real(3)}, {Real(2), Real(4), Real(6)}, {Real(0), Real(1), Real(1)}};
+  Real out[3] = {Real(-9), Real(-9), Real(-9)};  // sentinel
+  EXPECT_FALSE(block_apply_inverse<3>(S, v, out)) << "singular 3x3 -> false";
+  EXPECT_EQ(out[0], Real(-9)) << "out untouched on singular";
 }
