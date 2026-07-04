@@ -53,7 +53,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
 
     def solve_local_nonlinear(self, name: Any = None, residual: Any = None,
                               initial_guess: Any = None, method: Any = "newton",
-                              tol: Any = 1e-12, max_iter: Any = 20) -> Any:
+                              tol: Any = 1e-12, max_iter: Any = 20, fd_eps: Any = None) -> Any:
         """Solve a LOCAL non-linear system ``residual(U) = 0`` cell by cell with a per-cell Newton
         iteration (spec op 10). Returns the converged solution State.
 
@@ -73,6 +73,12 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         method). @p tol is the convergence threshold on ``max_c |r_c|`` (per cell) and @p max_iter the
         iteration budget (the kernel runs a fixed C++ ``for`` bounded by @p max_iter, breaking early
         once ``|r| < tol``).
+
+        @p fd_eps (ADC-617) is the RELATIVE finite-difference step of the in-kernel Jacobian columns:
+        the perturbation is ``fd_eps * max(|U_j|, 1)``. ``None`` keeps the historical ``1e-7``. Because
+        the value is EMITTED into the C++ kernel, it is stored on the IR node and so participates in
+        the program hash / compile cache key -- two programs differing only in ``fd_eps`` never share a
+        cached ``.so``. Must be a positive number when given.
 
         The Jacobian is formed in-kernel by finite differences (``J_ij = (r_i(U+eps e_j) - r_i(U))/eps``)
         and the Newton step ``J dU = -r`` is solved with the SAME stack-only dense inverse
@@ -94,6 +100,10 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         if isinstance(max_iter, bool) or not isinstance(max_iter, int) or max_iter <= 0:
             raise ValueError(
                 "solve_local_nonlinear: max_iter must be a positive int (got %r)" % (max_iter,))
+        if fd_eps is not None and (isinstance(fd_eps, bool) or not isinstance(fd_eps, (int, float))
+                                   or fd_eps <= 0):
+            raise ValueError(
+                "solve_local_nonlinear: fd_eps must be a positive number or None (got %r)" % (fd_eps,))
         if self._recording:
             raise NotImplementedError(
                 "solve_local_nonlinear: recording a residual inside another sub-block (apply / while "
@@ -126,7 +136,10 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         return self._new(
             "state", "solve_local_nonlinear", (initial_guess,),
             {"residual_block": sub, "residual": r, "iterate": iterate, "guess": guess_ph,
-             "tol": float(tol), "max_iter": int(max_iter), "method": method}, name, block)
+             "tol": float(tol), "max_iter": int(max_iter), "method": method,
+             # ADC-617: the FD Jacobian relative step. None -> the historical 1e-7 literal. Stored on
+             # the node so the generic attrs hash (_ir_hash) busts the compile cache when it changes.
+             "fd_eps": (None if fd_eps is None else float(fd_eps))}, name, block)
 
     def _linear_source_name(self, operator: Any, where: Any) -> Any:
         """Resolve `operator` to the linear-source name.

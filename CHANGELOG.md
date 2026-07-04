@@ -59,6 +59,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   defaults bit-identical.
 - ADC-616 Expose Berger-Rigoutsos clustering params (min_efficiency, min_box_size,
   max_box_size) with domain validation; defaults bit-identical.
+- ADC-617 Parametrize codegen finite-difference epsilons (fd_eps) for solve_local_nonlinear
+  and wave_speeds_from_jacobian; participates in the compile cache key; defaults unchanged.
 - ADC-514 Native AMR runtime params: per-block RuntimeParams carrier plus AmrSystem.set_block_params, append-only AmrBuildParams/AmrCompiledHooks ABI and pops_* metadata export, so pops.bind(compiled=None, params={...}) changes a native AMR block result without recompiling the .so; default (no params) trajectories stay bit-identical.
 - ADC-515 Native `estimate_memory` / `arguments` introspection on the AMR-compiled artifact: the
   `CompiledModel` handle `pops.compile(layout=AMR(...))` returns now exposes the same bind-input and

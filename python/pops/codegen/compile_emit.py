@@ -176,6 +176,12 @@ def model_hash(model: Any, params: Any = None) -> str:
                       for k in ("x", "y")),
             ";".join(repr(e) for k in ("x", "y") for row in ws["rows"][k] for e in row)
             if ws["rows"] is not None else ""))
+        # ADC-617: fd_eps is EMITTED into the eig='fd' Jacobian, so it MUST enter the model hash or two
+        # models differing only in fd_eps would collide on the same cached .so and serve wrong numerics.
+        # Appended ONLY when set, so the default (None -> the historical 1e-6 literal) leaves the hash
+        # byte-identical (no spurious cache miss for existing models).
+        if ws.get("fd_eps") is not None:
+            parts.append("ws_jac_fd_eps=%s" % repr(float(ws["fd_eps"])))
     parts.append("n_aux=%d" % _aux_total_n_aux(m.aux_names, m.aux_extra_names))
     if m.aux_extra_names:
         parts.append("aux_extra=%s" % ",".join(m.aux_extra_names))

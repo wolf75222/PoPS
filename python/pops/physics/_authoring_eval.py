@@ -71,8 +71,11 @@ class _EvalMixin(_HyperbolicModel):
             J = np.empty((nsmp, nv, nv))
             Uflat = np.stack([np.broadcast_to(np.asarray(env[c], dtype=float), (nsmp,))
                               for c in self.cons_names], axis=0)
+            # ADC-617: use the SAME relative FD step as the emitted C++ kernel (module_emit_brick),
+            # so this numpy oracle stays consistent with the compiled wave speeds. None -> 1e-6.
+            fd_rel = 1e-6 if ws.get("fd_eps") is None else float(ws["fd_eps"])
             for k in range(nv):
-                eps = 1e-6 * np.abs(Uflat[0]) + 1e-30
+                eps = fd_rel * np.abs(Uflat[0]) + 1e-30
                 Up = Uflat.copy()
                 Up[k] += eps
                 envp = self._env(Up, {n: env[n] for n in self.aux_names} if self.aux_names else None)

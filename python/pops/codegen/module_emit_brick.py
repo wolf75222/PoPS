@@ -125,12 +125,17 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         # (chooses the block partition).
         ws = model._ws_jacobian
         nv = model.n_vars
+        # ADC-617: the FD wave-speed Jacobian relative step. None -> the historical "1e-6" literal
+        # VERBATIM (emitted C++ + model_hash byte-identical); a configured fd_eps replaces it and, since
+        # fd_eps enters the ws_jac part of model_hash, the compiled-module cache busts. The 1e-30 term
+        # stays a fixed division-by-zero floor (a guard, not a tuning knob).
+        fd_eps_lit = "1e-6" if ws.get("fd_eps") is None else repr(float(ws["fd_eps"]))
         L = []
         if ws["eig"] == "fd":
             L.append("%sconst State F0_ = flux(U, a, dir);" % ind)
             L.append("%spops::Real Jf_[%d][%d];" % (ind, nv, nv))
-            L.append("%sconst pops::Real eps_ = pops::Real(1e-6) * (U[0] < 0 ? -U[0] : U[0])"
-                     " + pops::Real(1e-30);" % ind)
+            L.append("%sconst pops::Real eps_ = pops::Real(%s) * (U[0] < 0 ? -U[0] : U[0])"
+                     " + pops::Real(1e-30);" % (ind, fd_eps_lit))
             L.append("%sfor (int k_ = 0; k_ < %d; ++k_) {" % (ind, nv))
             L.append("%s  State Up_ = U;" % ind)
             L.append("%s  Up_[k_] += eps_;" % ind)

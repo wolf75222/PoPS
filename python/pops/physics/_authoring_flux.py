@@ -78,7 +78,8 @@ class _FluxMixin(_HyperbolicModel):
                              "y": (_wrap(y[0]), _wrap(y[1]))}
 
     def set_wave_speeds_from_jacobian(self, x: Any = None, y: Any = None,
-                                      eig: str = "numeric", blocks: Any = None) -> None:
+                                      eig: str = "numeric", blocks: Any = None,
+                                      fd_eps: Any = None) -> None:
         """EXACT signed wave speeds: smin/smax = extremes of the flux jacobian's eigenvalues
         A = dF/dU, computed NUMERICALLY per cell (pops::real_eig_minmax, Francis QR
         on a stack buffer, Gershgorin fallback on non-convergence = safe outer bound). Emits
@@ -118,6 +119,16 @@ class _FluxMixin(_HyperbolicModel):
                              "single wave_speeds provider")
         if eig not in ("numeric", "fd"):
             raise ValueError("set_wave_speeds_from_jacobian : eig 'numeric' | 'fd' (got %r)" % (eig,))
+        # ADC-617: fd_eps tunes the RELATIVE step of the eig='fd' column jacobian (default 1e-6). It
+        # only applies to the finite-difference build; refuse it on the numeric (formula) path so it is
+        # never silently ignored.
+        if fd_eps is not None:
+            if isinstance(fd_eps, bool) or not isinstance(fd_eps, (int, float)) or fd_eps <= 0:
+                raise ValueError("set_wave_speeds_from_jacobian : fd_eps must be a positive number or "
+                                 "None (got %r)" % (fd_eps,))
+            if eig != "fd":
+                raise ValueError("set_wave_speeds_from_jacobian : fd_eps only applies to eig='fd' (the "
+                                 "finite-difference jacobian); the numeric path uses exact formulas")
         nv = self.n_vars
         if (x is None) != (y is None):
             raise ValueError("set_wave_speeds_from_jacobian : provide x AND y, or neither (autodiff)")
@@ -169,7 +180,10 @@ class _FluxMixin(_HyperbolicModel):
             shared = norm_blocks(blocks, "x and y")
             per_dir = {"x": shared, "y": [list(b) for b in shared]}
         self._ws_jacobian = {"rows": rows or None, "eig": eig, "blocks": per_dir,
-                             "explicit": x is not None}
+                             "explicit": x is not None,
+                             # ADC-617: None -> the historical 1e-6 literal, emitted verbatim (byte-
+                             # identical). Enters model_hash's ws_jac part so a change busts the cache.
+                             "fd_eps": (None if fd_eps is None else float(fd_eps))}
 
     def flux_jacobian(self, dir: Any) -> list:
         """Flux jacobian A = dF_dir/dU : n_vars x n_vars matrix of expressions, A[i][j] =
