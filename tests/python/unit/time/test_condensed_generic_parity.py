@@ -4,7 +4,7 @@
 ``pops.lib.time.condensed_schur`` gained a ``route`` selector: ``"brick"`` (the historical hand-written
 ``P.schur_*`` ops -> ``coupling/schur/**``) and ``"generic"`` (the DSL ``P.condensed_*`` ops on the
 electrostatic-Lorentz linearization ``J = [[0, B_z], [-B_z, 0]]``, authored via
-``pops.lib.physics.author_electrostatic_lorentz`` and emitted INLINE through the closed-form
+``pops.lib.models.author_electrostatic_lorentz`` and emitted INLINE through the closed-form
 ``block_inverse`` intrinsic with no Schur vocabulary). This test proves the two routes produce the SAME
 trajectory to the LAST BIT.
 
@@ -56,7 +56,7 @@ def _imports():
         from pops import time as adctime
         import pops.lib.time as lt
         from pops.ir.ops import sqrt
-        from pops.lib.physics import author_electrostatic_lorentz
+        from pops.lib.models import author_electrostatic_lorentz
         from pops.numerics.reconstruction import FirstOrder
         from pops.numerics.riemann import Rusanov
         from pops.physics.facade import Model

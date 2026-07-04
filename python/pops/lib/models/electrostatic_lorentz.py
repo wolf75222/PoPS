@@ -1,4 +1,4 @@
-"""pops.lib.physics.electrostatic_lorentz -- the electrostatic-Lorentz source linearization (ADC-637).
+"""pops.lib.models.electrostatic_lorentz -- the electrostatic-Lorentz source linearization (ADC-637).
 
 The condensed-implicit electrostatic push eliminates the implicit Lorentz rotation of the momentum
 against a gradient-linear Poisson coupling. Its per-cell block linearization is the ROTATION GENERATOR

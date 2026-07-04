@@ -10,10 +10,10 @@ from ._helpers import program_macro
 
 #: The two condensed-Schur lowering routes (ADC-637). ``"brick"`` (default, unchanged) lowers the
 #: hand-written ``P.schur_*`` ops -> ``coupling/schur/**``; ``"generic"`` lowers the DSL-authored
-#: ``P.condensed_*`` ops on the electrostatic-Lorentz linearization (``pops.lib.physics``), emitted
+#: ``P.condensed_*`` ops on the electrostatic-Lorentz linearization (``pops.lib.models``), emitted
 #: inline via ``block_inverse`` with no Schur vocabulary. Both are bit-identical (golden); the brick is
 #: retired in a follow-up (PR-3). The compiling model of the generic route must carry the Lorentz J
-#: (author it with ``pops.lib.physics.author_electrostatic_lorentz``).
+#: (author it with ``pops.lib.models.author_electrostatic_lorentz``).
 _CONDENSED_ROUTES = ("brick", "generic")
 
 
@@ -114,8 +114,8 @@ def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1.0, c_rho: 
         ops on the electrostatic-Lorentz linearization ``J = [[0, B_z], [-B_z, 0]]`` (the coupled
         momentum subset ``(c_mx, c_my)``), emitted INLINE via the closed-form ``block_inverse`` intrinsic
         with NO Schur vocabulary. The compiling model MUST carry the Lorentz J -- author it with
-        ``pops.lib.physics.author_electrostatic_lorentz(m)`` (canonical name
-        ``pops.lib.physics.LORENTZ_J_NAME``, referenced by default) -- so the generic ``coeffs`` op can
+        ``pops.lib.models.author_electrostatic_lorentz(m)`` (canonical name
+        ``pops.lib.models.LORENTZ_J_NAME``, referenced by default) -- so the generic ``coeffs`` op can
         resolve the block. @p linear_operator overrides the operator name / handle.
 
     The two routes are BIT-IDENTICAL on the trajectory (theta == 1 AND theta == 0.5): the coefficient
@@ -133,7 +133,7 @@ def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1.0, c_rho: 
         raise ValueError("condensed_schur: c_E must be None or a Python int >= 0 (got %r)" % (c_E,))
     generic = route == "generic"
     if generic and linear_operator is None:
-        from pops.lib.physics import LORENTZ_J_NAME
+        from pops.lib.models import LORENTZ_J_NAME
         linear_operator = LORENTZ_J_NAME
     subset = (c_mx, c_my)  # the coupled momentum block the generic solve eliminates (2D core invariant)
     U = P.state(block)
