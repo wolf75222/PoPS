@@ -157,8 +157,11 @@ def test_geometric_mg_defaults():
     assert g.native_id == "pops::GeometricMG"
     assert g.category == "elliptic_solver"
     opts = g.options()
-    assert opts == {"smoother": "chebyshev", "coarse": "direct_small_grid",
-                    "tolerance": "relative", "max_cycles": 20}
+    # ADC-613 reconciled the descriptor defaults to the native kMG* constants (the values the
+    # V-cycle actually used): Gauss-Seidel smoother, 50 cycles, explicit sweep counts.
+    assert opts == {"smoother": "red_black_gauss_seidel", "coarse": "direct_small_grid",
+                    "tolerance": "relative", "max_cycles": 50, "min_coarse": 2,
+                    "pre_sweeps": 2, "post_sweeps": 2, "bottom_sweeps": 50}
 
 
 def test_geometric_mg_rich_surface():
@@ -189,7 +192,9 @@ def test_geometric_mg_capabilities():
 
 
 def test_geometric_mg_inspect_and_lower():
-    g = elliptic.GeometricMG(smoother=Chebyshev(degree=3))
+    # Chebyshev is structurally refused since ADC-613 (covered in test_geometric_mg_options);
+    # the round-trip uses the natively wired Gauss-Seidel smoother.
+    g = elliptic.GeometricMG(smoother=RedBlackGaussSeidel())
     view = g.inspect()
     assert view["name"] == "geometric_mg"
     assert view["native_id"] == "pops::GeometricMG"
@@ -199,10 +204,10 @@ def test_geometric_mg_inspect_and_lower():
     rec = g.lower().to_dict()
     assert rec["native_id"] == "pops::GeometricMG"
     assert rec["scheme"] == "geometric_mg"
-    assert rec["smoother"] == {"kind": "chebyshev", "degree": 3}
+    assert rec["smoother"] == {"kind": "red_black_gauss_seidel"}
     assert rec["coarse"]["kind"] == "direct_small_grid"
     assert rec["tolerance"]["kind"] == "relative"
-    assert rec["max_cycles"] == 20
+    assert rec["max_cycles"] == 50
 
 
 def test_geometric_mg_rejects_string_for_typed_subdescriptor():
