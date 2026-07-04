@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""Generic condensed-implicit-solve codegen (ADC-637).
+
+The condensed-implicit pattern authors a source's per-cell block linearization ``J`` (via
+``m.local_linear_operator`` / ``m.local_linear_map`` on a coupled momentum subset) and a gradient-linear
+elliptic coupling, and the codegen emits the three condensed stages -- the tensor coefficient assembly
+``A = I + c*rho*M^{-1}`` (M = I - theta*dt*J), the fused RHS ``-Lap(phi^n) - g*div(M^{-1}(mx,my))`` and
+the velocity reconstruction ``v = M^{-1}(v^n - theta*dt*grad phi)`` -- as INLINE ``for_each_cell``
+kernels that invert M once per cell with ``pops::detail::block_inverse<2>`` (block_inverse.hpp). No call
+into ``coupling/schur/**``; the block inverse is computed from the AUTHORED J, generic in the operator.
+
+This is a SOURCE-ONLY golden of the emitted C++ (no compile, no _pops runtime call): it pins the
+block_inverse reduction text (``M_ = I - th_dt*J``, ``block_inverse<2>``, ``A = 1 + cr*Mi_``), that the
+Lorentz J entries lower through the shared Expr.to_cpp machinery (``B_z = auxA(i, j, 3)``,
+``- th_dt_ * (B_z)`` / ``(-B_z)``), the R2 rho/M split (rho in the outer factor, never in M), and the
+block_inverse.hpp include gating. Real engine only; skips (exit 0) if pops is not importable, never
+faking. Runs under pytest and as a script.
+"""
+import sys
+
+try:
+    from pops.physics.facade import Model
+    from pops.solvers.krylov import BiCGStab
+    from pops import time as adctime
+except Exception as exc:  # pops not importable here (no built extension) -> skip, never fake
+    print("skip test_condensed_generic_codegen (pops unavailable: %s)" % exc)
+    sys.exit(0)
+
+
+def _lorentz_condensed_program():
+    """A rho/mx/my block with the Lorentz linearization J = [[0,B_z],[-B_z,0]] authored on the momentum
+    subset and a Poisson coupling, lowered through the generic condensed_* ops -- the codegen instance
+    the emitters lower (the PR-2 macro will author this same IR ergonomically)."""
+    m = Model("lorentz_condensed")
+    rho, mx, my = m.conservative_vars("rho", "mx", "my")
+    m.aux("phi")
+    m.aux("grad_x")
+    m.aux("grad_y")
+    bz = m.aux("B_z")
+    m.flux(x=[mx, mx * mx / rho, mx * my / rho], y=[my, mx * my / rho, my * my / rho])
+    # J on the full state; the coupled block is the momentum subset (1, 2). Coefficients are aux-only
+    # (B_z), so the block is constant in U|_K -- the eliminable class.
+    m.local_linear_map("lorentz_J", [[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
+    m.elliptic_rhs(rho - 1.0)
+
+    P = adctime.Program("cs_generic")
+    U = P.state("blk")
+    P.solve_fields(U)
+    coeffs = P._new("condensed_coeffs", "condensed_coeffs", (U,),
+                    {"linear_operator": "lorentz_J", "subset": (1, 2), "c": {2: 1.0},
+                     "th_dt": {1: 1.0}, "c_rho": 0}, "cs_coeffs", "blk")
+    phi_n = P.scalar_field("blk.phi_n")
+    rhs = P.scalar_field("blk.rhs")
+    P._new("scalar_field", "condensed_rhs", (rhs, phi_n, U),
+           {"linear_operator": "lorentz_J", "subset": (1, 2), "th_dt": {1: 1.0}, "g": {1: 1.0}},
+           "cs_rhs", None)
+    rhs2 = P._values[-1]
+    A = P.matrix_free_operator("blk.op")
+
+    def apply(P, out, x):
+        lap = P.scalar_field("lap")
+        P.apply_laplacian_coeff(lap, x, coeffs)
+        return -1.0 * lap
+
+    P.set_apply(A, apply)
+    phi = P.solve_linear(operator=A, rhs=rhs2, method=BiCGStab(max_iter=50), tol=1e-10, max_iter=50)
+    out = P._new("state", "condensed_reconstruct", (U, phi),
+                 {"linear_operator": "lorentz_J", "subset": (1, 2), "th_dt": {1: 1.0}, "c_rho": 0},
+                 "cs_recon", "blk")
+    P.commit("blk", out)
+    return P, m
+
+
+def _emit():
+    P, m = _lorentz_condensed_program()
+    return P.emit_cpp_program(model=m)
+
+
+def test_coeffs_emit_block_inverse_reduction():
+    """The coefficient assembly builds M = I - th_dt*J from the authored J, inverts it with
+    block_inverse<2>, and writes A = I + c*rho*M^{-1} into the four tensor fields."""
+    src = _emit()
+    for frag in ("pops::Real M_[2][2];",
+                 "M_[0][0] = pops::Real(1) - th_dt_ * (0.0);",
+                 "M_[0][1] = pops::Real(0) - th_dt_ * (B_z);",
+                 "M_[1][0] = pops::Real(0) - th_dt_ * ((-B_z));",
+                 "M_[1][1] = pops::Real(1) - th_dt_ * (0.0);",
+                 "pops::detail::block_inverse<2>(M_, Mi_);",
+                 "exA(i, j, 0) = pops::Real(1) + cr * Mi_[0][0];",
+                 "eyA(i, j, 0) = pops::Real(1) + cr * Mi_[1][1];",
+                 "axyA(i, j, 0) = cr * Mi_[0][1];",
+                 "ayxA(i, j, 0) = cr * Mi_[1][0];"):
+        assert frag in src, "condensed_coeffs must emit %r\n%s" % (frag, src)
+    print("OK  condensed_coeffs emits M = I - th_dt*J, block_inverse<2>, A = I + c*rho*M^-1")
+
+
+def test_j_entries_lower_through_shared_expr_machinery():
+    """The authored Lorentz J references aux('B_z'), lowered by the SAME Expr.to_cpp + _cell_locals
+    machinery the model kernels use: B_z is bound from the aux at its canonical component 3."""
+    src = _emit()
+    assert "const pops::Real B_z = auxA(i, j, 3);" in src, "B_z aux binding missing\n%s" % src
+    print("OK  the authored J lowers via the shared Expr machinery (B_z from aux component 3)")
+
+
+def test_r2_rho_split_out_of_M():
+    """R2: rho (a conservative var) enters only the OUTER factor cr = c*rho, never the block M (which
+    is J-only). The coeff kernel reads rho from the state and builds cr; M has no stateA read."""
+    src = _emit()
+    assert "const pops::Real cr = (" in src and ") * rho;" in src, "cr = c*rho missing\n%s" % src
+    # M assembly references only th_dt_ and the aux J locals -- never rho or a stateA read.
+    coeff = src.split("pops::Real M_[2][2];", 1)[1].split("block_inverse<2>", 1)[0]
+    assert "rho" not in coeff and "stateA" not in coeff, "M must not read rho / state (R2)\n%s" % coeff
+    print("OK  R2: rho is the outer c*rho factor; M = I - th_dt*J is J-only")
+
+
+def test_rhs_and_reconstruct_use_block_inverse():
+    """The fused RHS flux and the velocity reconstruction both invert M with block_inverse<2> and apply
+    it as a matrix-vector product; the RHS fuses -Lap phi^n with the centered divergence of M^{-1}(m)."""
+    src = _emit()
+    assert "fA(i, j, 0) = Mi_[0][0] * mx_ + Mi_[0][1] * my_;" in src, "flux M^-1 apply missing\n%s" % src
+    assert "rhsA(i, j, 0) = nlA(i, j, 0) - " in src, "fused -Lap - g*div(F) missing\n%s" % src
+    assert "const pops::Real nx_ = Mi_[0][0] * rx_ + Mi_[0][1] * ry_;" in src, \
+        "reconstruct M^-1 apply missing\n%s" % src
+    assert "stateA(i, j, 1) = rho * nx_;" in src, "mom = rho*v write missing\n%s" % src
+    # exactly three block_inverse<2> sites (coeffs, rhs flux, reconstruct).
+    assert src.count("pops::detail::block_inverse<2>(M_, Mi_);") == 3, \
+        "expected 3 block_inverse sites\n%s" % src
+    print("OK  condensed_rhs + condensed_reconstruct invert M with block_inverse<2>")
+
+
+def test_block_inverse_header_included_and_no_schur_tokens():
+    """The generated .so includes block_inverse.hpp (only when a condensed op is present) and carries NO
+    coupling/schur token: the generic path is physics-vocabulary-free."""
+    src = _emit()
+    assert "#include <pops/numerics/linalg/block_inverse.hpp>" in src, "block_inverse include missing"
+    for forbidden in ("coupling/schur", "LorentzEliminator", "assemble_schur", "SchurOperator",
+                      "schur_reconstruct"):
+        assert forbidden not in src, "generic condensed path must not name %r\n%s" % (forbidden, src)
+    print("OK  block_inverse.hpp included; no coupling/schur vocabulary in the generic path")
+
+
+def test_schur_free_program_omits_block_inverse_header():
+    """A Program with no condensed op does NOT include block_inverse.hpp (the include is gated)."""
+    P = adctime.Program("plain")
+    U = P.state("blk")
+    P.commit("blk", P.linear_combine("id", 1.0 * U))
+    src = P.emit_cpp_program()
+    assert "block_inverse.hpp" not in src, "a condensed-free Program must not include block_inverse.hpp"
+    print("OK  block_inverse.hpp is gated: absent from a condensed-free Program")
+
+
+def _run():
+    fns = [test_coeffs_emit_block_inverse_reduction,
+           test_j_entries_lower_through_shared_expr_machinery,
+           test_r2_rho_split_out_of_M,
+           test_rhs_and_reconstruct_use_block_inverse,
+           test_block_inverse_header_included_and_no_schur_tokens,
+           test_schur_free_program_omits_block_inverse_header]
+    for fn in fns:
+        fn()
+    print("PASS test_condensed_generic_codegen (%d checks)" % len(fns))
+
+
+if __name__ == "__main__":
+    _run()
+    sys.exit(0)

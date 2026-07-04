@@ -506,6 +506,11 @@ sources = ["tests/cpp/unit/codegen/test_block_builder.cpp"]
 labels = ["unit", "codegen", "fast"]
 
 [[cpp.suite]]
+name = "test_block_inverse"
+sources = ["tests/cpp/unit/numerics/test_block_inverse.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
 name = "test_dynamic_model"
 sources = ["tests/cpp/unit/codegen/test_dynamic_model.cpp"]
 labels = ["unit", "codegen", "fast"]

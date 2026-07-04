@@ -387,9 +387,12 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             raise ValueError("apply_laplacian_coeff: out must be a scalar_field value")
         if not (isinstance(in_, Value) and in_.vtype == "scalar_field"):
             raise ValueError("apply_laplacian_coeff: in_ must be a scalar_field value")
-        if not (isinstance(coeffs, Value) and coeffs.vtype == "schur_coeffs"):
-            raise ValueError("apply_laplacian_coeff: coeffs must be a schur_coeffs bundle "
-                             "(P.schur_coeffs(...))")
+        # The coefficient bundle is either the Schur bundle (P.schur_coeffs) or the GENERIC condensed
+        # bundle (P.condensed_coeffs, ADC-637) -- both carry the same four tensor-coefficient fields
+        # (eps_x, eps_y, a_xy, a_yx), so the coefficiented apply consumes either.
+        if not (isinstance(coeffs, Value) and coeffs.vtype in ("schur_coeffs", "condensed_coeffs")):
+            raise ValueError("apply_laplacian_coeff: coeffs must be a coefficient bundle "
+                             "(P.schur_coeffs(...) or P.condensed_coeffs(...))")
         return self._new("scalar_field", "apply_laplacian_coeff", (out, in_, coeffs), {}, out.name,
                          None)
 

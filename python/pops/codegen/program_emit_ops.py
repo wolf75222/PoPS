@@ -29,6 +29,7 @@ from pops.codegen.program_emit_model_kernels import (
     _emit_solve_local_nonlinear_kernel,
     _emit_source_kernel,
 )
+from pops.codegen.program_emit_condensed import emit_condensed_op
 from pops.codegen.program_emit_control import (
     _coupled_rate_components,
     _emit_if,
@@ -358,6 +359,13 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                      % (var[state_in.id], var[old_in.id], v.attrs["c_rho"], v.attrs["c_mx"],
                         v.attrs["c_my"], v.attrs["c_E"]))
         var[v.id] = var[state_in.id]
+    elif v.op in ("condensed_coeffs", "condensed_rhs", "condensed_reconstruct"):
+        # GENERIC condensed-implicit solve (ADC-637): the tensor coefficient A = I + c*rho*M^{-1} bundle,
+        # the fused RHS -Lap(phi^n) - g*div(M^{-1}(m)) and the velocity reconstruction, emitted INLINE
+        # via pops::detail::block_inverse<2> from an authored J (M = I - th_dt*J) on a momentum subset --
+        # no coupling/schur call. The thin dispatch lives in program_emit_condensed to keep this router
+        # (and its budget) small; condensed_coeffs allocates its four persistent coeff fields there.
+        emit_condensed_op(v, var, model, lines, prelude)
     elif v.op == "matrix_free_operator":
         # Install-time: emit the apply lambda `apply_A{id}` into the prelude. Its persistent scratch
         # (the scalar_field ops of the apply sub-block) are shared_ptr fields, captured by value so
