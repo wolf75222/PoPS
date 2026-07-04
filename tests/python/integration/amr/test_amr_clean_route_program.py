@@ -54,6 +54,10 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 import test_amr_program_parity as parity  # noqa: E402
 
+# ADC-627 idiom: this file AOT-compiles several Program/.so artifacts; give the
+# process-isolated runner headroom over the default (CI runner speed varies 3-4x).
+POPS_PROCESS_TIMEOUT = 1200
+
 N = parity.N
 NSTEPS = parity.NSTEPS
 DT = parity.DT
