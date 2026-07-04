@@ -14,8 +14,9 @@ AmrSystem.add_equation + install_program), and composes correctly:
   (b) a flat AMR hierarchy (FrozenRegrid, single level, no C/F interface): the clean AMR route ==
       the Uniform clean route BIT-FOR-BIT on the density (mean-removed phi to the MG tolerance);
   (d) a Program reading a dsl.Param(kind='runtime'): pops.bind(params={...}) reaches
-      set_program_params -- the run DIFFERS from the declaration-default run and MATCHES a direct
-      set_program_params run;
+      set_program_params -- the run DIFFERS from the k=2.0 (declaration-default value) run and
+      MATCHES a direct set_program_params run; a bind WITHOUT params= refuses with the actionable
+      message (the Uniform-mirrored Spec 5 arguments() contract);
   composition: amr_program_op_support(ssprk2) is all-green; amr_program_op_support(condensed_schur)
       reports pending:ADC-633; the clean route still COMPILES + INSTALLS the Schur Program and the
       deferred op throws the honest AmrProgramContext backstop at RUN (pinned by the stable
@@ -191,6 +192,29 @@ def test_clean_amr_custom_midpoint_equals_direct():
 # --------------------------------------------------------------------------------------------------
 # (b) flat AMR clean route == Uniform clean route, bit-for-bit on the density.
 # --------------------------------------------------------------------------------------------------
+def _lift_density(model, u0, block="plasma"):
+    """The native set_density lift (rho -> [rho, 0, 0, E(rho)]) READ BACK from a scratch System.
+
+    The Uniform clean route binds the FULL conservative state (install writes set_state), while the
+    AMR clean route seeds the density (install writes set_density, the native lift fills the other
+    components). Reading the lift back from a System seeded with the same u0 makes the Uniform bind
+    state BITWISE the AMR seed (the System and AMR set_density lifts are bit-identical, pinned by
+    test_amr_program_parity's single-level parity), so leg (b) stays a bit-identity. Returns the
+    (components, n, n) state, or (None, reason) when the block .so cannot build (honest skip)."""
+    from pops.runtime.system import System
+    sim = System(n=N, L=1.0)
+    try:
+        block_cm = model.compile(backend="production")
+    except RuntimeError as exc:
+        return None, "compile (lift scratch System): %s" % str(exc)[:160]
+    try:
+        sim.add_equation(block, block_cm, spatial=_spatial(), time=pops.Explicit(method="ssprk2"))
+        sim.set_density(block, u0)
+        return np.array(sim.get_state(block)), None
+    except RuntimeError as exc:
+        return None, "seed (lift scratch System): %s" % str(exc)[:160]
+
+
 def test_clean_flat_amr_equals_clean_uniform():
     """(b) On a FLAT hierarchy (FrozenRegrid, single level, no C/F interface so couple_levels is exact),
     the clean AMR route and the clean Uniform route drive the SAME SSPRK2 Program to the BIT-IDENTICAL
@@ -200,7 +224,14 @@ def test_clean_flat_amr_equals_clean_uniform():
     print("== (b) clean flat AMR route == clean Uniform route (bit-identical density) ==")
     u0 = parity._init_density()
 
-    uni, uerr = _clean_uniform_run(parity._ssprk2_program(), parity._euler_model("adc634_flat"), u0)
+    # The Uniform bind takes the FULL conservative state: read the native set_density lift back
+    # from a scratch System so the Uniform initial state is BITWISE the AMR set_density seed.
+    u0_full, lerr = _lift_density(parity._euler_model("adc634_flat"), u0)
+    if u0_full is None:
+        print("skip (%s)" % lerr)
+        return
+    uni, uerr = _clean_uniform_run(parity._ssprk2_program(), parity._euler_model("adc634_flat"),
+                                   u0_full)
     if uni is None:
         print("skip (%s)" % uerr)
         return
@@ -268,7 +299,9 @@ def _direct_decay_amr(u0, set_k=None, nsteps=1, dt=1e-2):
     except RuntimeError as exc:
         return None, "compile (direct decay AMR): %s" % str(exc)[:160]
     try:
-        amr.add_equation("gas", block_cm, spatial=_spatial(), time=pops.Explicit(method="euler"))
+        # The installed Program drives the stepping (forward Euler from its text); the loader
+        # block's nominal policy only needs an AMR-accepted kind ('explicit' | 'imex').
+        amr.add_equation("gas", block_cm, spatial=_spatial(), time=pops.Explicit(method="ssprk2"))
         amr.set_density("gas", u0)
         amr.install_program(compiled.so_path)
         if set_k is not None:
@@ -299,13 +332,29 @@ def _clean_decay_amr(u0, params=None, nsteps=1, dt=1e-2):
 
 def test_clean_amr_bind_params_reach_set_program_params():
     """(d) A Program reading dsl.Param(kind='runtime'): the clean route's pops.bind(params={'k': 6.0})
-    routes k to set_program_params, so the run DIFFERS from the declaration-default (k=2.0) run and
-    MATCHES a direct set_program_params(0, [6.0]) run. S = k*rho, no flux -> the step scales linearly
-    in k, so k=6 gives 3x the increment of k=2."""
+    routes k to set_program_params, so the run DIFFERS from the k=2.0 (the declaration-default value)
+    run and MATCHES a direct set_program_params(0, [6.0]) run. S = k*rho, no flux -> the step scales
+    linearly in k, so k=6 gives 3x the increment of k=2. The clean AMR bind also enforces the SAME
+    Spec 5 contract as the clean Uniform bind: arguments() marks kind='runtime' params required
+    (inspect_compiled), so a bind WITHOUT params= refuses with the actionable message -- the
+    declaration default reaches the kernel only on the DIRECT install_program route, via
+    route_program_params' fallback."""
     print("== (d) clean-route bind(params=) reaches set_program_params ==")
     u0 = _decay_ic()
 
-    default_rho, derr = _clean_decay_amr(u0, params=None)      # k = 2.0 (declaration default)
+    # Uniform-mirrored bind contract: a runtime-param Program refuses to bind without params=.
+    try:
+        res, rerr = _clean_decay_amr(u0, params=None)
+    except ValueError as exc:
+        chk("runtime param 'k'" in str(exc),
+            "bind without params= refuses with the actionable runtime-param message (Uniform parity)")
+    else:
+        if res is None:  # no compiler / Kokkos: the .so did not build -- an honest skip, not a fail
+            print("skip (%s)" % rerr)
+            return
+        chk(False, "bind without params= must refuse a runtime-param Program (Uniform-mirrored)")
+
+    default_rho, derr = _clean_decay_amr(u0, params={"k": 2.0})  # the declaration-default value
     if default_rho is None:
         print("skip (%s)" % derr)
         return
