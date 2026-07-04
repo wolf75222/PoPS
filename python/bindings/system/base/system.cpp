@@ -18,6 +18,7 @@
 #include <pops/runtime/system/system_block_store.hpp>  // SystemBlockStore: block management (BlockState + registry + index/copy/write) (Batch B.3)
 #include <pops/runtime/system/system_runtime_params.hpp>  // SystemRuntimeParamsRegistry: per-AOT-block runtime params (ADC-578)
 #include <pops/runtime/system/system_diagnostics_registry.hpp>  // SystemDiagnosticsRegistry: block/stage options + Newton reports (ADC-578)
+#include <pops/runtime/system/system_coupling_registry.hpp>  // SystemCouplingRegistry: couplings + dt bounds + frequency bounds (ADC-578)
 #include <pops/runtime/builders/block/block_builder_polar.hpp>  // POLAR block closures (assemble_rhs_polar, REUSED)
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // backward_euler_source
 #include <pops/numerics/time/integrators/time_steppers.hpp>  // ForwardEuler, SSPRK2Step (core RK math)
@@ -257,47 +258,23 @@ struct System::Impl {
   // program_.installed_hash_ / program_.block_map_), and false for a direct engine script that never
   // binds (the 159 C++/low-level tests) -> historical behavior unchanged.
   bool bound_ = false;
-  std::vector<std::function<void(Real)>> couplings;  // inter-species coupled sources (splitting)
-  // GLOBAL time-step bounds (System::add_dt_bound): evaluated ONCE per step (host) by
-  // step_cfl / step_adaptive. Hook for non-cell-local constraints (multi-block coupling,
-  // Schur/Poisson, scheduler). Empty (default) -> historical step policy, bit-identical.
-  struct GlobalDtBound {
-    std::string label;
-    std::function<double()> fn;
-  };
-  std::vector<GlobalDtBound> dt_bounds_;
-  // DECLARED frequencies of coupled sources (CoupledSource.frequency, audit wave 3): the
-  // couplings apply ONCE per MACRO-step (apply_couplings(dt)), so the bound is on the
-  // macro-dt: dt <= cfl / mu, WITHOUT a substeps/stride factor. Empty (default) -> no bound.
-  struct CoupledFreq {
-    std::string label;
-    double mu;
-  };
-  std::vector<CoupledFreq> coupled_freqs_;
-  // PER-CELL frequencies of coupled sources (CoupledSource.frequency with an Expr, refinement
-  // of the CONSTANT frequency above): a bytecode program mu(U) evaluated per cell at EVERY
-  // step (MAX reduction, global all_reduce_max), bound dt <= cfl / max(mu). The inputs REUSE the
-  // resolve() resolution of the input registers (sidx, comp); the constants are the same as the
-  // source. Empty (default) -> no per-cell bound (historical path). Stored AFTER full
-  // validation (same anti-phantom-bound rule as the scalar).
-  struct CoupledFreqExpr {
-    std::string label;
-    CsProgram prog;
-    struct In {
-      int sidx, comp;
-    };
-    std::vector<In> ins;  // (species, component) of the inputs (same as the source; resolved once)
-    int n_in = 0;
-    std::vector<Real> kconsts;  // constants loaded into r[n_in ..] (same as the source)
-  };
-  std::vector<CoupledFreqExpr> coupled_freq_exprs_;
-  // TYPED coupling operator inspect metadata (ADC-595): one read-only view (label + declared
-  // conservation / frequency contracts) per registered coupled source, in registration order. Populated
-  // by add_coupled_source (an "unchecked" entry, empty contract) and by add_coupling_operator (the
-  // declared contract). It is METADATA ONLY: the SystemStepper never reads it (unlike couplings /
-  // coupled_freqs_ / coupled_freq_exprs_), so it is MockImpl-safe like dt_bounds_ / bound_. Exposed
-  // read-only via coupled_operators() so a Program / runtime report enumerates couplings as operators.
-  std::vector<CouplingOperatorView> coupled_operators_;
+  // INTER-SPECIES COUPLING SUBSYSTEM, EXTRACTED into SystemCouplingRegistry (ADC-578,
+  // include/pops/runtime/system/system_coupling_registry.hpp): the splitting-source operators, the
+  // GLOBAL host dt bounds, the constant / per-cell coupled-source frequency bounds, and the typed
+  // coupling-operator inspect views. The stepper reads couplings / dt_bounds_ / coupled_freqs_ /
+  // coupled_freq_exprs_, so those keep their exact names via REFERENCE ALIASES into the registry
+  // (SAME objects) -> system_stepper.hpp and the MockImpl stay byte-unchanged. coupled_operators_ is
+  // METADATA ONLY (never stepper-read) -> accessed registry-direct. The GlobalDtBound / CoupledFreq /
+  // CoupledFreqExpr struct types now live in the registry header; the `using` aliases below keep the
+  // `Impl::GlobalDtBound{...}` construction sites in this TU unchanged.
+  pops::runtime::system::SystemCouplingRegistry coupling_;
+  using GlobalDtBound = pops::runtime::system::GlobalDtBound;
+  using CoupledFreq = pops::runtime::system::CoupledFreq;
+  using CoupledFreqExpr = pops::runtime::system::CoupledFreqExpr;
+  std::vector<std::function<void(Real)>>& couplings = coupling_.operators;
+  std::vector<GlobalDtBound>& dt_bounds_ = coupling_.dt_bounds;
+  std::vector<CoupledFreq>& coupled_freqs_ = coupling_.coupled_freqs;
+  std::vector<CoupledFreqExpr>& coupled_freq_exprs_ = coupling_.coupled_freq_exprs;
 
   // stride_due (hold-then-catch-up cadence filter) EXTRACTED into stepper_ (SystemStepper, Batch B):
   // it serves exclusively the time advance. macro_step_ (above) stays a SHARED member of Impl
@@ -1609,7 +1586,7 @@ void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double fr
   view.label = label;
   view.frequency.constant_mu = frequency;
   view.frequency.per_cell = has_freq_expr;
-  P->coupled_operators_.push_back(std::move(view));
+  P->coupling_.coupled_operators.push_back(std::move(view));
 }
 
 void System::add_coupling_operator(const CouplingOperator& op) {
@@ -1622,11 +1599,11 @@ void System::add_coupling_operator(const CouplingOperator& op) {
   // at its tail. We then replace that view's contract with the DECLARED one so coupled_operators()
   // reports the typed contract rather than "unchecked".
   add_coupled_source(op.program, op.frequency.constant_mu, op.label);
-  p_->coupled_operators_.back().conservation = op.conservation;
+  p_->coupling_.coupled_operators.back().conservation = op.conservation;
 }
 
 const std::vector<CouplingOperatorView>& System::coupled_operators() const {
-  return p_->coupled_operators_;
+  return p_->coupling_.coupled_operators;
 }
 
 void System::set_source_stage(const std::string& name, const std::string& kind, double theta,
