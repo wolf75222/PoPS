@@ -154,7 +154,10 @@ LARGE_RUNTIME_FILE_BUDGETS = {
     # methods and the loader guard to amr_system_params.hpp / amr_native_param_guard.hpp adds ~25 lines.
     # ADC-612: the effective-options audit (FAC + Berger-Rigoutsos knobs in effective_options_report)
     # adds ~60 lines; the report reads the TU-local private Impl, so it cannot move to a sibling TU.
-    "python/bindings/amr/amr_system.cpp": 2405,
+    # ADC-631: the multistep history-ring facade seams (program_last_dt + uses_runtime_engine +
+    # history accessors mirroring the System names so _system_io_history.py is reused verbatim)
+    # add ~95 thin engine forwards.
+    "python/bindings/amr/amr_system.cpp": 2499,
     "include/pops/runtime/amr/amr_runtime.hpp": 1850,
     "include/pops/runtime/system/system_field_solver.hpp": 1100,
     "python/pops/runtime/_system_unified_install.py": 550,

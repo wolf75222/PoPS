@@ -54,6 +54,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   unregistered `test_coupling_operator_contract` into the standard C++ test list.
 
 ### Added
+- ADC-631 Multistep history rings (`keep_history` / `T.prev`, Adams-Bashforth / BDF) on the
+  compiled-Program AMR route: per-level ring slots remapped through regrid (R6/R7), the v3 checkpoint
+  with the ADC-626 persistence policies (Dense / Interval / Revolve) and native replay across regrids
+  (deterministic hierarchy bracket, regrid frozen for the internal re-step); a flat AMR hierarchy is
+  bit-identical to the Uniform trajectories, and replaying a non-Dense ring across a rank-count change
+  is refused.
 - ADC-613 Propagate GeometricMG Python options (rel_tol, max_cycles, min_coarse,
   pre/post/bottom sweeps) end to end to the native V-cycle; defaults reproduce the
   historical 1e-8 / 50-cycle trajectory bit-for-bit; unsupported smoother/coarse types
