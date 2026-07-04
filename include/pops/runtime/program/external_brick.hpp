@@ -10,6 +10,7 @@
 // and requirements; the brick's numerical kernel stays a separate concern wired by the codegen.
 
 #include <pops/runtime/dynamic/abi_key.hpp>  // POPS_ABI_KEY_LITERAL: brick .so's own ABI key (ADC-611)
+#include <pops/runtime/export.hpp>  // POPS_BRICK_LOCAL: hidden visibility, per-.so registry (ADC-622)
 
 #include <cstddef>
 #include <string>
@@ -137,15 +138,31 @@ struct BrickManifestEntry {
   std::string exported_symbols;      // CSV of extern "C" symbols the .so MUST export, or ""
 };
 
-// A process-global catalog of registered external bricks, keyed by id. Populated at static-init
-// time by `POPS_REGISTER_BRICK` (in the user's `.so`) and read by the host's `pops_brick_manifest()`
-// exporter. Construction order across translation units is unspecified, so the registry is a
-// function-local static (the Meyers singleton) -- it is constructed on first use, before any
-// `POPS_REGISTER_BRICK` static initializer can run against it.
-class BrickRegistry {
+// A PER-IMAGE catalog of registered external bricks, keyed by id. Populated at static-init time by
+// `POPS_REGISTER_BRICK` (in the user's `.so`) and read by the host's `pops_brick_manifest()` exporter.
+// Construction order across translation units is unspecified, so the registry is a function-local
+// static (the Meyers singleton) -- it is constructed on first use, before any `POPS_REGISTER_BRICK`
+// static initializer can run against it.
+//
+// PER-.so ISOLATION (ADC-622). The class AND instance() are POPS_BRICK_LOCAL (hidden visibility): the
+// registry symbol stays out of the dynamic symbol table, so it is PRIVATE to each dlopen'd image. Two
+// levels of guarantee, enumerated per platform (the contract external_riemann_brick.hpp documents:
+// "RTLD_LOCAL keeps the .so's statics private"):
+//   * Linux / GCC: WITHOUT hidden visibility the local static is emitted STB_GNU_UNIQUE, which glibc's
+//     loader UNIFIES across every dlopen'd .so even under RTLD_LOCAL -- one brick .so's manifest would
+//     then list the whole process's bricks. Hidden visibility suppresses GNU_UNIQUE (the symbol is not
+//     dynamic), so each .so's registry is private. The brick .so builds also pass -fno-gnu-unique
+//     (belt-and-suspenders for odd toolchains); see tests/CMakeLists.txt and the user recipe.
+//   * Linux / Clang: no GNU_UNIQUE by default; hidden visibility keeps the isolation regardless.
+//   * macOS: the two-level namespace already isolates a bundle's symbols; the test passes trivially.
+//   * Windows: no GNU_UNIQUE; per-.dll symbols are isolated (POPS_BRICK_LOCAL is empty there).
+// Comdat folding still merges the copies WITHIN one .so (a multi-TU brick shares ONE registry per
+// image); the isolation is only ACROSS images -- exactly the intended contract. The exported extern "C"
+// pops_brick_manifest() reader stays default-visibility (dlsym-able) and reads its OWN image's registry.
+class POPS_BRICK_LOCAL BrickRegistry {
  public:
-  // The single process-global instance.
-  static BrickRegistry& instance() {
+  // The single PER-IMAGE instance (hidden: not unified across dlopen'd .so, ADC-622).
+  POPS_BRICK_LOCAL static BrickRegistry& instance() {
     static BrickRegistry registry;
     return registry;
   }

@@ -89,6 +89,7 @@ set(POPS_CPP_TEST_SOURCE_test_embedded_boundary_generic "tests/cpp/unit/runtime/
 set(POPS_CPP_TEST_SOURCE_test_exb_seam "tests/cpp/integration/runtime/test_exb_seam.cpp")
 set(POPS_CPP_TEST_SOURCE_test_external_brick "tests/cpp/integration/runtime/test_external_brick.cpp")
 set(POPS_CPP_TEST_SOURCE_test_external_brick_json "tests/cpp/integration/runtime/test_external_brick_json.cpp")
+set(POPS_CPP_TEST_SOURCE_test_external_brick_isolation "tests/cpp/integration/runtime/test_external_brick_isolation.cpp")
 set(POPS_CPP_TEST_SOURCE_test_external_riemann_dispatch "tests/cpp/integration/native_loader/test_external_riemann_dispatch.cpp")
 set(POPS_CPP_TEST_SOURCE_test_fab2d "tests/cpp/unit/mesh/test_fab2d.cpp")
 set(POPS_CPP_TEST_SOURCE_test_facade_routing "tests/cpp/integration/runtime/test_facade_routing.cpp")

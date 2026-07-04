@@ -54,6 +54,13 @@ def _compile_brick_so(workdir):
     with open(src, "w") as f:
         f.write(_BRICK_SRC)
     flags = ["-shared", "-fPIC", "-std=c++20", "-O0", "-I", _INCLUDE]
+    # ADC-622: on GCC compile the brick .so with -fno-gnu-unique so the header-only BrickRegistry
+    # singleton is never emitted STB_GNU_UNIQUE (the loader would otherwise unify it across every
+    # dlopen'd brick .so). Belt-and-suspenders behind the hidden-visibility BrickRegistry; harmless on
+    # a compiler that already isolates (Clang / AppleClang reject the flag, so gate it on g++).
+    cxx_name = os.path.basename(cxx)
+    if "g++" in cxx_name and "clang" not in cxx_name:
+        flags.append("-fno-gnu-unique")
     if os.uname().sysname == "Darwin":
         flags.append("-undefined")
         flags.append("dynamic_lookup")
@@ -162,12 +169,13 @@ def test_load_cpp_library_dlopens_a_real_so_and_surfaces_the_descriptor(tmp_path
         pytest.skip("no C++ compiler or pops headers to build the brick .so")
     # The registry .so is header-light (only external_brick.hpp): plain flags, no Kokkos needed.
     n = lib.load_cpp_library(so)
-    # NOT n == 1: the BrickRegistry singleton is a function-local static in a header-only class,
-    # emitted STB_GNU_UNIQUE by gcc, so on Linux it UNIFIES across every brick .so dlopen'd by this
-    # process -- when a sibling test in the same pytest process loaded brick libraries first, this
-    # .so's pops_brick_manifest() lists THEIR bricks too (ADC-622 tracks the unification itself).
-    # The load contract this test locks is proven by the surfaced descriptor below.
-    assert n >= 1
+    # ADC-622: this .so's manifest describes exactly ITS OWN one brick. The BrickRegistry singleton is
+    # now hidden-visibility (POPS_BRICK_LOCAL, + -fno-gnu-unique on the GCC compile above), so it is
+    # per-image: a sibling brick .so loaded earlier in this process no longer leaks its ids into this
+    # manifest (before the fix, gcc emitted the registry STB_GNU_UNIQUE and glibc unified it across the
+    # dlopen'd .so, so n was the process-wide count). The C++ two-fixture proof is
+    # test_external_brick_isolation.cpp.
+    assert n == 1
     d = lib.riemann.User("my_so_riemann")
     assert d.brick_type == "external_cpp"
     assert d.category == "riemann"

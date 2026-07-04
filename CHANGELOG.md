@@ -15,6 +15,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `[x.y.z] - YYYY-MM-DD`.
 
 ## [Unreleased]
+### Fixed
+- ADC-622 External brick registry is now per-.so (hidden-visibility BrickRegistry plus -fno-gnu-unique on brick builds), so pops_brick_manifest() of a .so describes only that .so even on Linux/glibc where STB_GNU_UNIQUE unified it across dlopen; a two-fixture C++ test proves isolation.
+
 ### Removed
 - routes: the 24 unreferenced symmetric route-id constants (ADC-630); named constants remain only for identifiers with a live consumer.
 

@@ -24,3 +24,22 @@
 #else
 #define POPS_EXPORT __attribute__((visibility("default")))
 #endif
+
+/// @brief POPS_BRICK_LOCAL: force HIDDEN VISIBILITY on a symbol so it is NOT unified across
+///        independently dlopen'd shared objects, even under RTLD_LOCAL (ADC-622).
+///
+/// The DUAL of POPS_EXPORT. It exists for the external-brick registry (external_brick.hpp): each
+/// user brick .so registers its manifest into a header-only Meyers singleton (BrickRegistry). On
+/// Linux/GCC that function-local static gets DEFAULT visibility + vague linkage, which the compiler
+/// emits as STB_GNU_UNIQUE; glibc's loader then UNIFIES it across every dlopen'd image (even under
+/// RTLD_LOCAL), so one brick .so's pops_brick_manifest() would report the whole process's bricks.
+/// Marking the class/method hidden keeps the symbol out of the dynamic symbol table -> GCC does NOT
+/// emit STB_GNU_UNIQUE and the loader cannot unify or RTLD_GLOBAL-interpose it, so each .so keeps a
+/// PRIVATE registry (comdat still folds copies WITHIN one .so; each .so is isolated ACROSS images).
+/// GCC / Clang: __attribute__((visibility("hidden"))). MSVC / Windows: empty (the two-level
+/// namespace / .dll model already isolates per-module symbols, and there is no GNU_UNIQUE).
+#if defined(_WIN32)
+#define POPS_BRICK_LOCAL
+#else
+#define POPS_BRICK_LOCAL __attribute__((visibility("hidden")))
+#endif
