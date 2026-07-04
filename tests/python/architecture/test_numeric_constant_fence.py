@@ -12,6 +12,7 @@ checks the two agree at runtime.
 """
 
 import ast
+import math  # noqa: F401  (kept for future tolerance-based value fences)
 import re
 from pathlib import Path
 
@@ -98,10 +99,137 @@ def test_classification_has_no_stale_entries():
         "from _CONSTANT_CLASSIFICATION (ADC-618 fence)." % stale)
 
 
+def _load_static_report() -> dict:
+    """Parse the dict returned by _static_report() from defaults.py SOURCE (no pops import). The only
+    non-literal top-level value is "classification": _CONSTANT_CLASSIFICATION (a Name), skipped here."""
+    src = (_ROOT / "python/pops/runtime/defaults.py").read_text()
+    tree = ast.parse(src)
+    fn = next((n for n in tree.body
+               if isinstance(n, ast.FunctionDef) and n.name == "_static_report"), None)
+    assert fn is not None, "_static_report not found in defaults.py"
+    ret = next((n for n in ast.walk(fn) if isinstance(n, ast.Return)), None)
+    assert ret is not None and isinstance(ret.value, ast.Dict), "_static_report return dict not found"
+    report = {}
+    for k_node, v_node in zip(ret.value.keys, ret.value.values):
+        key = ast.literal_eval(k_node)
+        if key == "classification":
+            continue
+        report[key] = ast.literal_eval(v_node)
+    return report
+
+
+_CONSTEXPR_VALUE_RE = re.compile(
+    r"inline\s+constexpr\s+(?:Real|int|double|float|bool|std::size_t|size_t|unsigned)\s+"
+    r"(k[A-Za-z0-9_]+)\s*=\s*(.+?);")
+
+
+def _parse_cpp_value(rhs: str):
+    rhs = rhs.strip()
+    m = re.fullmatch(r"Real\((.*)\)", rhs)
+    if m:
+        rhs = m.group(1).strip()
+    if rhs in ("true", "false"):
+        return rhs == "true"
+    try:
+        return int(rhs)
+    except ValueError:
+        pass
+    try:
+        return float(rhs)
+    except ValueError:
+        return None  # non-literal RHS (references another constant) -> not value-fenced
+
+
+def _scan_constant_values() -> dict:
+    values = {}
+    for rel in _SCANNED_HEADERS:
+        for line in (_ROOT / rel).read_text().splitlines():
+            stripped = line.strip()
+            if stripped.startswith("//") or stripped.startswith("*"):
+                continue
+            m = _CONSTEXPR_VALUE_RE.search(line)
+            if m:
+                values[m.group(1)] = _parse_cpp_value(m.group(2))
+    return values
+
+
+# Report (section, key) -> the scanned constant whose value it must equal. String-valued keys
+# (newton.fail_policy), the unscanned kAmrRefRatio (amr.refinement_ratio, defined in
+# amr/hierarchy/refinement_ratio.hpp), and runtime counters (diagnostics.*) are intentionally omitted.
+_REPORT_VALUE_TO_CONSTANT = {
+    ("newton", "max_iters"): "kNewtonDefaultMaxIters",
+    ("newton", "rel_tol"): "kNewtonDefaultRelTol",
+    ("newton", "abs_tol"): "kNewtonDefaultAbsTol",
+    ("newton", "fd_eps"): "kNewtonDefaultFdEps",
+    ("newton", "damping"): "kNewtonDefaultDamping",
+    ("newton", "finite_abs_limit"): "kNewtonFiniteAbsLimit",
+    ("krylov", "rel_tol"): "kKrylovDefaultRelTol",
+    ("krylov", "tensor_max_iters"): "kTensorKrylovDefaultMaxIters",
+    ("krylov", "schur_cartesian_max_iters"): "kSchurKrylovCartesianMaxIters",
+    ("krylov", "schur_polar_max_iters"): "kSchurKrylovPolarMaxIters",
+    ("krylov", "breakdown_tiny"): "kKrylovBreakdownTiny",
+    ("mg", "rel_tol"): "kMGDefaultRelTol",
+    ("mg", "max_cycles"): "kMGDefaultMaxCycles",
+    ("mg", "abs_tol"): "kMGDefaultAbsTol",
+    ("mg", "min_coarse"): "kMGDefaultMinCoarse",
+    ("mg", "pre_smooth"): "kMGDefaultPreSmooth",
+    ("mg", "post_smooth"): "kMGDefaultPostSmooth",
+    ("mg", "bottom_sweeps"): "kMGDefaultBottomSweeps",
+    ("fac", "max_iters"): "kFACDefaultMaxIters",
+    ("fac", "fine_sweeps"): "kFACDefaultFineSweeps",
+    ("fac", "tol"): "kFACDefaultTol",
+    ("fac", "initial_coarse_rel_tol"): "kFACInitialCoarseRelTol",
+    ("fac", "initial_coarse_max_cycles"): "kFACInitialCoarseMaxCycles",
+    ("fft", "spectral_default"): "kFFTDefaultSpectral",
+    ("fft", "zero_mean_gauge"): "kFFTZeroMeanGauge",
+    ("fft", "direct_dft_fallback"): "kFFTDirectDftFallback",
+    ("eb", "cut_fraction_floor"): "kEbCutFractionFloor",
+    ("eb", "face_open_eps"): "kEbFaceOpenEps",
+    ("eb", "kappa_min"): "kEbKappaMin",
+    ("weno", "epsilon"): "kWenoEpsilon",
+    ("performance", "cfl_speed_floor"): "kCflSpeedFloor",
+    ("performance", "adaptive_no_evolving_block_sentinel"): "kAdaptiveNoEvolvingBlockSentinel",
+    ("amr", "max_levels"): "kAmrDefaultMaxLevels",
+    ("amr", "refinement_disabled_threshold"): "kAmrRefinementDisabledThreshold",
+    ("amr", "phi_refinement_disabled_threshold"): "kAmrPhiRefinementDisabledThreshold",
+    ("runtime", "max_runtime_params"): "kMaxRuntimeParams",
+    ("physical", "B0"): "kPhysicalDefaultB0",
+    ("physical", "gamma"): "kPhysicalDefaultGamma",
+    ("physical", "fluid_state_cs2"): "kPhysicalDefaultFluidStateCs2",
+    ("physical", "native_brick_isothermal_cs2"): "kPhysicalDefaultNativeIsothermalCs2",
+    ("physical", "vacuum_floor"): "kPhysicalDefaultVacuumFloor",
+    ("physical", "qom"): "kPhysicalDefaultQOverM",
+    ("physical", "charge_q"): "kPhysicalDefaultChargeQ",
+    ("physical", "alpha"): "kPhysicalDefaultAlpha",
+    ("physical", "n0"): "kPhysicalDefaultBackgroundN0",
+    ("physical", "gravity_sign"): "kPhysicalDefaultGravitySign",
+    ("physical", "four_pi_G"): "kPhysicalDefaultFourPiG",
+    ("physical", "gravity_rho0"): "kPhysicalDefaultGravityRho0",
+}
+
+
+def test_static_report_values_match_parsed_constants():
+    report = _load_static_report()
+    values = _scan_constant_values()
+    for (section, key), cname in _REPORT_VALUE_TO_CONSTANT.items():
+        assert section in report and key in report[section], (
+            "report key %s.%s missing -- _static_report drifted from the fence map" % (section, key))
+        assert cname in values, (
+            "constant %s not found in the scanned headers (renamed/moved?) -- update the fence map"
+            % cname)
+        con = values[cname]
+        assert con is not None, "constant %s RHS is not a numeric literal the fence can parse" % cname
+        rep = report[section][key]
+        assert rep == con, (
+            "value drift: _static_report %s.%s = %r but %s = %r -- single-source the literal via "
+            "the header constant (ADC-643 value fence)" % (section, key, rep, cname, con))
+
+
 def main():
     test_every_native_numeric_constant_is_classified()
     test_classification_values_are_valid()
     test_classification_has_no_stale_entries()
+    test_static_report_values_match_parsed_constants()
     print("OK  ADC-618 numeric-constant fence")
 
 
