@@ -138,24 +138,50 @@ def test_divgrad_codegen(t):
         assert frag in src, "the div(grad) solve must contain %r\n%s" % (frag, src)
 
 
+def _lorentz_model(name):
+    """A rho/mx/my block carrying the electrostatic-Lorentz linearization J the generic condensed
+    route (ADC-637) resolves at emit time."""
+    from pops.ir.ops import sqrt
+    from pops.lib.models import author_electrostatic_lorentz
+    from pops.physics.facade import Model
+    m = Model(name)
+    rho, mx, my = m.conservative_vars("rho", "mx", "my")
+    cs2 = m.param("cs2", 0.5)
+    u = m.primitive("u", mx / rho)
+    v = m.primitive("v", my / rho)
+    p = m.primitive("p", cs2 * rho)
+    m.primitive_vars(rho=rho, u=u, v=v, p=p)
+    m.conservative_from([rho, rho * u, rho * v])
+    m.flux(x=[mx, mx * u + p, my * u], y=[my, mx * v, my * v + p])
+    cs = sqrt(cs2)
+    m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
+    m.elliptic_rhs(rho)
+    m.aux("grad_x")
+    m.aux("grad_y")
+    m.aux("B_z")
+    author_electrostatic_lorentz(m)
+    return m
+
+
 def test_condensed_schur_macro_lowers(t):
-    # ADC-421 + ADC-427: the condensed-Schur macro lowers for any theta in (0, 1]. theta == 1 lowers to
-    # the full anisotropic assemble / solve / reconstruct chain (historical IR byte-identical); theta != 1
-    # adds the n+1 momentum extrapolation by factor 1/theta on top (no longer a deferred stub). theta out
-    # of (0, 1] raises ValueError. The end-to-end parity lives in test_time_condensed_schur.py.
+    # ADC-421 + ADC-427 + ADC-637: the condensed-implicit macro (generic-only route) lowers for any theta
+    # in (0, 1]. theta == 1 lowers the full anisotropic assemble / solve / reconstruct chain; theta != 1
+    # adds the n+1 momentum extrapolation by factor 1/theta on top. theta out of (0, 1] raises ValueError.
+    # The end-to-end parity lives in test_time_condensed_schur.py.
     P = t.Program("p")
     lt.condensed_schur(P, "blk", alpha=1.0, theta=1.0)
-    assert P.validate() is True, "the condensed-Schur macro must validate"
-    src = P.emit_cpp_program()
-    # ADC-587: the Schur ops lower to the native operator module (pops::coupling::schur::program::).
-    assert ("pops::coupling::schur::program::assemble_schur_coeffs" in src
-            and "pops::coupling::schur::program::schur_reconstruct" in src), src
+    assert P.validate() is True, "the condensed macro must validate"
+    src = P.emit_cpp_program(model=_lorentz_model("div_m1"))
+    # ADC-637: the condensed ops lower INLINE via the block_inverse intrinsic; NO coupling/schur.
+    assert "pops::detail::block_inverse<2>(M_, Mi_);" in src, src
+    assert "pops::detail::block_apply_inverse<2>(M_, cond_v_, cond_mv_);" in src, src
+    assert "coupling/schur" not in src and "coupling::schur" not in src, src
     # ADC-427: theta != 1 now lowers (the extrapolation is plain affine algebra), no longer raises.
     P2 = t.Program("p2")
     lt.condensed_schur(P2, "blk", alpha=1.0, theta=0.5)
     assert P2.validate() is True, "condensed_schur(theta != 1) must validate (ADC-427)"
-    assert "pops::coupling::schur::program::schur_reconstruct" in P2.emit_cpp_program(), (
-        "theta=0.5 must lower the reconstruct chain")
+    assert "pops::detail::block_apply_inverse<2>" in P2.emit_cpp_program(model=_lorentz_model("div_m2")), (
+        "theta=0.5 must lower the reconstruct chain (inline block_apply_inverse)")
     # theta out of (0, 1] is still rejected (loud).
     try:
         lt.condensed_schur(t.Program("p3"), "blk", alpha=1.0, theta=1.5)

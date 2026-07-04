@@ -142,17 +142,44 @@ def test_cse_never_collapses_reduce_or_buffer_writer():
     assert Q._ir_hash() == P._ir_hash()
 
 
-def test_cse_condensed_schur_buffer_writers_untouched():
-    """REGRESSION: condensed_schur assembles its RHS with buffer-writer ops (schur_rhs, etc.) whose
-    result is discarded but whose buffer a later solve reads by identity. CSE must be a no-op here --
-    none of those ops is pure, so the emitted C++ is byte-identical (still has assemble_schur_rhs)."""
+def _lorentz_model(name):
+    """A rho/mx/my block with the electrostatic-Lorentz linearization J the generic condensed route
+    (ADC-637) resolves at emit time."""
+    from pops.ir.ops import sqrt
+    from pops.lib.models import author_electrostatic_lorentz
+    from pops.physics.facade import Model
+    m = Model(name)
+    rho, mx, my = m.conservative_vars("rho", "mx", "my")
+    cs2 = m.param("cs2", 0.5)
+    u = m.primitive("u", mx / rho)
+    v = m.primitive("v", my / rho)
+    p = m.primitive("p", cs2 * rho)
+    m.primitive_vars(rho=rho, u=u, v=v, p=p)
+    m.conservative_from([rho, rho * u, rho * v])
+    m.flux(x=[mx, mx * u + p, my * u], y=[my, mx * v, my * v + p])
+    cs = sqrt(cs2)
+    m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
+    m.elliptic_rhs(rho)
+    m.aux("grad_x")
+    m.aux("grad_y")
+    m.aux("B_z")
+    author_electrostatic_lorentz(m)
+    return m
+
+
+def test_cse_condensed_buffer_writers_untouched():
+    """REGRESSION: condensed_schur assembles its RHS with a buffer-writer op (condensed_rhs, ADC-637)
+    whose result is discarded but whose buffer a later solve reads by identity. CSE must be a no-op
+    here -- the op is not pure -- so the emitted C++ is byte-identical (still has the fused RHS write)."""
+    RHS_MARKER = "rhsA(i, j, 0) = nlA(i, j, 0)"  # the generic fused -Lap - g*div(F) write
     P = adctime.Program("cs")
     libtime.condensed_schur(P, "blk", alpha=1.0, theta=1.0)
-    before = P.emit_cpp_program()
-    assert "assemble_schur_rhs" in before, "fixture lost its schur RHS assembly"
+    model = _lorentz_model("cs_opt")
+    before = P.emit_cpp_program(model=model)
+    assert RHS_MARKER in before, "fixture lost its condensed RHS assembly"
     Q = adctime.eliminate_common_subexpressions(P)
-    assert "assemble_schur_rhs" in Q.emit_cpp_program(), "CSE dropped a buffer-writer (unsound)"
-    assert Q.emit_cpp_program() == before, "CSE corrupted the condensed_schur C++"
+    assert RHS_MARKER in Q.emit_cpp_program(model=model), "CSE dropped a buffer-writer (unsound)"
+    assert Q.emit_cpp_program(model=model) == before, "CSE corrupted the condensed_schur C++"
     assert Q._ir_hash() == P._ir_hash()
 
 

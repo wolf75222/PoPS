@@ -12,10 +12,35 @@ pops_time = pytest.importorskip("pops.time", exc_type=ImportError)
 pops_lib_time = pytest.importorskip("pops.lib.time", exc_type=ImportError)
 
 
+def _lorentz_model(name):
+    """The canonical condensed block (rho / mx / my + grad_x / grad_y / B_z) carrying the
+    electrostatic-Lorentz linearization J the generic condensed route (ADC-637) resolves."""
+    from pops.ir.ops import sqrt
+    from pops.lib.models import author_electrostatic_lorentz
+    from pops.physics.facade import Model
+    m = Model(name)
+    rho, mx, my = m.conservative_vars("rho", "mx", "my")
+    cs2 = m.param("cs2", 0.5)
+    u = m.primitive("u", mx / rho)
+    v = m.primitive("v", my / rho)
+    p = m.primitive("p", cs2 * rho)
+    m.primitive_vars(rho=rho, u=u, v=v, p=p)
+    m.conservative_from([rho, rho * u, rho * v])
+    m.flux(x=[mx, mx * u + p, my * u], y=[my, mx * v, my * v + p])
+    cs = sqrt(cs2)
+    m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
+    m.elliptic_rhs(rho)
+    m.aux("grad_x")
+    m.aux("grad_y")
+    m.aux("B_z")
+    author_electrostatic_lorentz(m)
+    return m
+
+
 def _emit(target):
     P = pops_time.Program("adc633_schur_emit")
-    pops_lib_time.condensed_schur(P, "gas", alpha=1.0, theta=1.0)
-    return P.emit_cpp_program(target=target)
+    pops_lib_time.condensed_schur(P, "blk", alpha=1.0, theta=1.0)
+    return P.emit_cpp_program(model=_lorentz_model("adc633_emit_model"), target=target)
 
 
 def test_amr_target_routes_solve_linear_through_ctx():

@@ -71,9 +71,9 @@ def _lorentz_condensed_program():
     return P, m
 
 
-def _emit():
+def _emit(target="system"):
     P, m = _lorentz_condensed_program()
-    return P.emit_cpp_program(model=m)
+    return P.emit_cpp_program(model=m, target=target)
 
 
 def test_coeffs_emit_block_inverse_reduction():
@@ -166,13 +166,38 @@ def test_schur_free_program_omits_block_inverse_header():
     print("OK  block_inverse.hpp is gated: absent from a condensed-free Program")
 
 
+def test_assembly_redirect_present_on_both_targets_and_no_schur():
+    """The per-level write/read redirect (ADC-637 section 2) emits ctx.assembly_target /
+    ctx.assembly_source on BOTH the System and the AMR target -- IDENTITY at runtime on System / flat
+    AMR (the seam returns the field unchanged), per-level on a refined hierarchy. The emitted C++ text
+    is the same; the divergence is a runtime property of the two contexts. Neither target names
+    coupling/schur (the brick is retired)."""
+    for target in ("system", "amr_system"):
+        src = _emit(target)
+        assert "ctx.assembly_target(" in src, (
+            "the condensed emitters must redirect their coefficient / RHS / flux writes through "
+            "ctx.assembly_target on target=%r" % target)
+        assert "ctx.assembly_source(" in src, (
+            "the condensed reconstruction must redirect its potential read through ctx.assembly_source "
+            "on target=%r" % target)
+        assert "pops::runtime::program::kEpsX" in src, (
+            "the redirect must name the AssemblyFieldRole roles on target=%r" % target)
+        assert "coupling/schur" not in src and "coupling::schur" not in src, (
+            "no coupling/schur include or namespace on target=%r (the brick is retired)" % target)
+    # The AMR target routes the elliptic solve through the ctx seam (flat/composite dispatch).
+    assert "ctx.solve_linear_matfree(" in _emit("amr_system"), \
+        "the AMR target must route solve_linear through the ctx seam"
+    print("OK  assembly_target/assembly_source redirect on both targets; no coupling/schur")
+
+
 def _run():
     fns = [test_coeffs_emit_block_inverse_reduction,
            test_j_entries_lower_through_shared_expr_machinery,
            test_r2_rho_split_out_of_M,
            test_rhs_and_reconstruct_use_block_apply_inverse,
            test_block_inverse_header_included_and_no_schur_tokens,
-           test_schur_free_program_omits_block_inverse_header]
+           test_schur_free_program_omits_block_inverse_header,
+           test_assembly_redirect_present_on_both_targets_and_no_schur]
     for fn in fns:
         fn()
     print("PASS test_condensed_generic_codegen (%d checks)" % len(fns))
