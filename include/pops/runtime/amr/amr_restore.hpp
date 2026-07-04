@@ -255,6 +255,12 @@ inline void AmrRuntime::rebuild_hierarchy(const std::vector<std::vector<PatchBox
     aux_[k] = MultiFab(fb, dmap, aux_ncomp_, 1);
     for (auto& b : blocks_)
       (*b.levels)[k].aux = &aux_[k];
+
+    // (R7b, ADC-631) reallocate every history ring's level-k slot on the imposed (fb, dmap) WITHOUT
+    // interpolation: rebuild_hierarchy imposes both layout AND data (the per-slot restore overwrites
+    // every valid cell afterwards). At a v3 restart the rings are registered lazily AFTER this, so
+    // this is a no-op there; it holds the invariant when rings already exist at a rebuild.
+    remap_history_rings_(fb, dmap, k, k - 1, /*prolong=*/false);
   }
 
   // (V3) shared-layout invariant: every block on the SAME (boxes, order, rank) after the rebuild.

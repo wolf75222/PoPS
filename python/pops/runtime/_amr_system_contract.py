@@ -22,6 +22,10 @@ class _AmrSystem:
     _regrid_every: int
     _aux_field_index: dict
     _program_cadence_cfl: Any
+    _history_persistence: dict  # ADC-631: name -> HistoryPersistence policy (forwarded at install)
+    _last_restart_report: Any   # ADC-631: HistoryReplayReport of the last restart with rings
+
+    def set_history_persistence(self, *args: Any, **kwargs: Any) -> Any: ...
 
     def add_equation(self, *args: Any, **kwargs: Any) -> Any: ...
     def add_block(self, *args: Any, **kwargs: Any) -> Any: ...

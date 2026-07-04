@@ -10,6 +10,7 @@ set(POPS_CPP_TEST_SOURCE_test_amr_diagnostics "tests/cpp/integration/amr/test_am
 set(POPS_CPP_TEST_SOURCE_test_amr_diffusion "tests/cpp/integration/amr/test_amr_diffusion.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_distribute_coarse_serial "tests/cpp/integration/amr/test_amr_distribute_coarse_serial.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_hierarchy "tests/cpp/integration/amr/test_amr_hierarchy.cpp")
+set(POPS_CPP_TEST_SOURCE_test_amr_history_ring "tests/cpp/integration/amr/test_amr_history_ring.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_imex_native "tests/cpp/integration/native_loader/test_amr_imex_native.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_layout_guard "tests/cpp/integration/amr/test_amr_layout_guard.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_multiblock_compiled "tests/cpp/integration/amr/test_amr_multiblock_compiled.cpp")

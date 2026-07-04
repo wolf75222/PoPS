@@ -690,6 +690,10 @@ class AmrSystem {
   /// IR hash of the installed compiled Program (the string returned by the .so's pops_program_hash), or
   /// "" if no program is installed. Parity with System::installed_program_hash (checkpoint guard).
   POPS_EXPORT std::string installed_program_hash() const;
+  /// The last macro-step dt handed to the installed Program (ADC-631): the AmrProgramContext reads it
+  /// so a history ring's store_history tags the per-slot dt (variable-dt replay). POPS_EXPORT for the
+  /// dlopen boundary (the generated AMR Program .so reads it via the AmrProgramContext).
+  POPS_EXPORT double program_last_dt() const;
 
   /// @name Runtime freeze lifecycle (ADC-592, parity with System)
   /// Assembly mutable BEFORE bind, composition FROZEN once pops.bind completes. mark_bound() is
@@ -750,6 +754,12 @@ class AmrSystem {
   /// before the lazy build. install_program forces the build so the .so's pops_install_program_amr gets
   /// a live engine. POPS_EXPORT: the generated AMR Program .so resolves it across the dlopen boundary.
   POPS_EXPORT AmrRuntime* engine() const;
+  /// True when the built system runs on the multi-block AmrRuntime engine (shared layout + per-block
+  /// level stacks), as opposed to the single-block AmrCouplerMP coupler. A compiled Program forces the
+  /// runtime engine even for ONE block, so `n_blocks() == 1` does NOT imply the coupler: the v3
+  /// checkpoint routes state I/O on THIS predicate (per-block accessors on the runtime engine, the
+  /// mono-block level_state path on the coupler). POPS_EXPORT for the dlopen boundary parity.
+  POPS_EXPORT bool uses_runtime_engine() const;
   /// The facade-owned Profiler (the AmrProgramContext forwards count_kernel / profile_record to it).
   /// POPS_EXPORT for the dlopen boundary. Disabled by default -> zero hot-path cost.
   POPS_EXPORT runtime::program::Profiler& profiler_handle();
@@ -881,6 +891,26 @@ class AmrSystem {
   std::vector<double> level_aux_flat(int k);
   std::vector<double> level_aux_flat_global(int k);
   void set_level_aux_flat(int k, const std::vector<double>& v);
+
+  /// @name Multistep history-ring checkpoint / replay (ADC-631, Uniform System seam names)
+  /// The compiled-Program AMR route carries per-level `keep_history` / `T.prev` ring slots on the
+  /// AmrRuntime engine (remapped through regrid). These wrappers expose the SAME seam names as System
+  /// so the shared _system_io_history.py serialize/restore is reused verbatim: history_global returns
+  /// the per-level slices concatenated into ONE flat buffer (level axis hidden, parity level_aux_flat),
+  /// restore_history scatters it back per level, rebuild_history_slots replays the policy-recomputed
+  /// slots by re-stepping the installed Program. Engine-less coupler -> history_names() is empty.
+  /// @{
+  std::vector<std::string> history_names() const;
+  int history_depth(const std::string& name) const;
+  int history_ncomp(const std::string& name) const;
+  bool history_initialized(const std::string& name) const;
+  void set_history_initialized(const std::string& name, bool initialized);
+  std::vector<double> history_global(const std::string& name, int slot) const;
+  void restore_history(const std::string& name, int slot, const std::vector<double>& values);
+  double history_slot_dt(const std::string& name, int slot) const;
+  void restore_history_slot_dt(const std::string& name, int slot, double dt);
+  int rebuild_history_slots(const std::string& name, const std::vector<int>& stored_slots);
+  /// @}
 
   double mass();  ///< mass of the 1st block on the coarse (conserved at reflux)
   double mass(
