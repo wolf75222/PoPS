@@ -92,7 +92,7 @@ def _walk_expr(e: Any) -> Any:
         yield node
         stack.extend(_children(node))
 
-def _emit_body(program: Any, model: Any = None) -> tuple:
+def _emit_body(program: Any, model: Any = None, target: Any = "system") -> tuple:
     """Generate the C++ of the install function in TWO phases (each list indented uniformly by the
     template). Assumes `_check_lowerable` has passed. @p model supplies the symbolic coefficients of
     the Phase-4b source / apply / solve_local_linear ops. Returns ``(prelude, body)``:
@@ -142,7 +142,7 @@ def _emit_body(program: Any, model: Any = None) -> tuple:
                          % (json.dumps(name), int(lag), int(ncomp)))
     for v in program._values:
         base = bases.get(v.block)  # the block-state value of THIS op's block (None: a scalar op)
-        _emit_op(program, v, base, committed_ids, var, model, lines, prelude, block_idx)
+        _emit_op(program, v, base, committed_ids, var, model, lines, prelude, block_idx, target=target)
     # Each committed block: a scratch commit (solve_local_linear / solve_linear / a non-base
     # linear_combine wrote a scratch) is copied into the block state; a linear_combine commit already
     # wrote ctx.state(idx) in place (var == base), so its copy is a no-op (skipped).

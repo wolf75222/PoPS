@@ -16,6 +16,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>   // saxpy (linear combine over a MultiFab)
 #include <pops/mesh/storage/multifab.hpp>   // MultiFab
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess (centered gradient)
+#include <pops/numerics/elliptic/linear/generic_krylov.hpp>  // ApplyFn / cg / bicgstab / gmres / richardson (solve_linear_matfree seam)
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian (shared 5-point matvec)
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params, ADC-510)
 #include <pops/runtime/context/grid_context.hpp>   // GridContext (System aux seam)
@@ -47,6 +48,15 @@
 namespace pops {
 namespace runtime {
 namespace program {
+
+/// Krylov method id for the ``ctx.solve_linear_matfree(...)`` seam (ADC-633). The codegen emits the id
+/// as a plain int; both ProgramContext (uniform) and AmrProgramContext (hierarchy) dispatch on it.
+enum LinearSolveMethod {
+  kLinearSolveCg = 0,          ///< pops::cg_solve (SPD, no preconditioner parameter)
+  kLinearSolveBicgstab = 1,    ///< pops::bicgstab_solve (the matrix-free default)
+  kLinearSolveGmres = 2,       ///< pops::gmres_solve (restarted; @p restart = basis size)
+  kLinearSolveRichardson = 3,  ///< pops::richardson_solve (omega = 1)
+};
 
 class ProgramContext {
  public:
@@ -183,6 +193,49 @@ class ProgramContext {
   /// modules) that assemble coefficient / flux halos from the transport BC without reaching into
   /// System::Impl -- the SAME channel geom() / aux() expose, bundled.
   GridContext grid_context() const { return sys_->grid_context(); }
+
+  /// The MultiFab a per-level coefficient / RHS assembly kernel should WRITE its field into (ADC-633).
+  /// On the uniform System the answer is always the passed field itself -- an IDENTITY hook, so a
+  /// templated assembly free function writes straight into the level-0-bound scratch the codegen
+  /// allocated, byte-for-byte as before. The @p role tag (a field id defined by the assembly module) is
+  /// ignored here; it exists so the AMR ProgramContext can, on a refined hierarchy, redirect the write
+  /// to a per-level composite buffer instead. Kept trivial + inline so the uniform .so is unchanged.
+  MultiFab& assembly_target(MultiFab& field, int /*role*/) const { return field; }
+
+  /// The MultiFab a per-level reconstruction should READ its solved field from (ADC-633). Identity on
+  /// the uniform System (the field passed is the level-0 solution the emitted solve wrote); the AMR
+  /// ProgramContext redirects the READ to the current level's published composite field on a refined
+  /// hierarchy. Trivial + inline so the uniform .so is byte-for-byte unchanged.
+  MultiFab& assembly_source(MultiFab& field, int /*role*/) const { return field; }
+
+  /// Solve the matrix-free linear system A(phi) = rhs of a compiled Program (ADC-633). On the uniform
+  /// System this dispatches by @p method to the SAME matrix-free Krylov call the codegen used to emit
+  /// INLINE (cg / bicgstab / gmres / richardson) with byte-identical arguments, so a uniform Program's
+  /// trajectory is unchanged; only the emission indirects through this seam. The AMR ProgramContext
+  /// OVERRIDES this method to route a refined hierarchy through its composite elliptic. @p method:
+  /// 0 = cg, 1 = bicgstab, 2 = gmres, 3 = richardson (LinearSolveMethod). @p precond is the
+  /// preconditioner ApplyFn (empty = unpreconditioned); @p restart is the GMRES basis size (ignored by
+  /// the others). The KrylovResult is discarded (the trip count is a C++-side detail, invisible to the
+  /// IR), matching the old inline emission.
+  void solve_linear_matfree(MultiFab& sol, const MultiFab& rhs, const ApplyFn& apply,
+                            const ApplyFn& precond, int method, Real tol, int max_iter,
+                            int restart) const {
+    (void)restart;
+    switch (method) {
+      case kLinearSolveCg:
+        (void)pops::cg_solve(apply, sol, rhs, tol, max_iter);
+        break;
+      case kLinearSolveGmres:
+        (void)pops::gmres_solve(apply, precond, sol, rhs, tol, max_iter, restart);
+        break;
+      case kLinearSolveRichardson:
+        (void)pops::richardson_solve(apply, sol, rhs, static_cast<Real>(1), tol, max_iter);
+        break;
+      default:  // kLinearSolveBicgstab
+        (void)pops::bicgstab_solve(apply, precond, sol, rhs, tol, max_iter);
+        break;
+    }
+  }
 
   /// A fresh scalar field co-distributed with the System mesh (block 0's box array / distribution),
   /// @p n_comp components, @p n_ghost ghost layers, zero-initialized. Forwards to

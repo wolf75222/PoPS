@@ -47,13 +47,15 @@ from typing import Any
 # stays the single source and this table cannot silently drift from it).
 DEFERRED_GROUPS: dict = {
     "schur": {
+        # ADC-633 WIRED the condensed-Schur Program on the hierarchy: the operators are context-generic
+        # (per-level assembly through AmrProgramContext::grid_context / assembly_target / assembly_source)
+        # and solve_linear_matfree dispatches flat->matrix-free BiCGStab / refined->composite FAC. No throw
+        # stub remains, so header_methods is EMPTY -> the group is GREEN.
         "issue": "ADC-633",
         "op_source": "program_emit_kernels._SCHUR_PROGRAM_OPS",
         "ir_ops": frozenset({"schur_coeffs", "apply_laplacian_coeff", "schur_explicit_flux",
                              "schur_rhs", "schur_reconstruct", "schur_energy"}),
-        "header_methods": frozenset({"assemble_schur_coeffs", "apply_laplacian_coeff",
-                                    "schur_explicit_flux", "assemble_schur_rhs",
-                                    "schur_reconstruct", "schur_energy"}),
+        "header_methods": frozenset(),
     },
     "named_flux": {
         "issue": None,

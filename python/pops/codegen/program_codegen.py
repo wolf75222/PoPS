@@ -176,7 +176,7 @@ def emit_cpp_program(program: Any, model: Any = None, target: str = "system") ->
         raise ValueError("emit_cpp_program: target 'system' | 'amr_system' (got %r)" % (target,))
     program.validate()
     _check_lowerable(program, model)
-    prelude, body = _emit_body(program, model)
+    prelude, body = _emit_body(program, model, target=target)
     # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_program_has_dt_bound()
     # (true iff a bound was set) and pops_program_dt_bound(ProgramContext*, cfl) (the lowered scalar
     # expression). Without a bound, has_dt_bound() returns false and the dt_bound function returns a

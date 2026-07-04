@@ -44,7 +44,7 @@ from pops.codegen.program_emit_schedule import _emit_schedule_wrap
 
 
 def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, model: Any, lines: Any,
-             prelude: Any = None, block_idx: Any = None) -> None:
+             prelude: Any = None, block_idx: Any = None, target: Any = "system") -> None:
     """Lower a SINGLE op to C++, appending to @p lines and recording its C++ token in @p var. Shared
     by the top-level walk and the while sub-blocks (a while body re-runs this per op each pass), so
     reductions / compares / linear_combine all lower identically inside the loop. @p base is the
@@ -382,7 +382,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             "emit_cpp_program: op '%s' (value '%s') is only lowerable inside a matrix_free_operator "
             "apply sub-block" % (v.op, v.name))
     elif v.op == "solve_linear":
-        _emit_solve_linear(program, v, base, var, prelude, lines)
+        _emit_solve_linear(program, v, base, var, prelude, lines, target=target)
     elif v.op == "reduce":
         # A collective all_reduce -> a C++ scalar. norm2 = sqrt(dot(u, u)); dot(a, b) directly;
         # sum/max/min (over a component) via the matching pops reduction. All MUST run on every rank

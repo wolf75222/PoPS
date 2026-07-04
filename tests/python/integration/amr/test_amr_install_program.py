@@ -250,8 +250,12 @@ def test_amr_program_context_fail_loud_stubs_exist():
         print("skip (header not found at %s; running from an installed wheel?)" % hdr_path)
         return
     hdr = open(hdr_path).read()
-    deferred = ["assemble_schur_coeffs", "apply_laplacian_coeff", "schur_explicit_flux",
-                "assemble_schur_rhs", "schur_reconstruct", "schur_energy", "neg_div_flux_into",
+    # ADC-633 WIRED the condensed-Schur ops on the hierarchy (assemble_schur_coeffs /
+    # apply_laplacian_coeff / schur_explicit_flux / assemble_schur_rhs / schur_reconstruct /
+    # schur_energy) -- they are gone from BOTH the header stubs and the codegen emission (routed
+    # through the generic condensed ops + solve_linear_matfree), so they are no longer deferred.
+    # The genuinely-deferred remainder is the named-flux and scheduler-cache surface.
+    deferred = ["neg_div_flux_into",
                 "cache_should_update", "cache_store_aux", "cache_restore_aux", "cache_store_scratch",
                 "cache_restore_scratch", "cache_accumulate_dt", "cache_effective_dt", "scheduler_error"]
     for op in deferred:
