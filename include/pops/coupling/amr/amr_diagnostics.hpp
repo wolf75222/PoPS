@@ -66,11 +66,11 @@ inline Real amr_mass(const MultiFab& coarse, const Box2D& dom, Real dx, Real dy)
   return amr_mass_mb(coarse, dx, dy);
 }
 
-// max drift speed on the coarse level (single box) + floor 1e-12 (CFL guard).
-/// Mono-box max drift speed + floor 1e-12 (CFL guard). @p dom ignored (kept for the API).
+// max drift speed on the coarse level (single box) + floor kAmrDriftSpeedFloor (CFL guard).
+/// Mono-box max drift speed + floor kAmrDriftSpeedFloor (CFL guard). @p dom ignored (kept for the API).
 inline Real amr_max_drift_speed(const MultiFab& aux0, const Box2D& dom, Real B0) {
   (void)dom;
-  return std::max(amr_max_drift_speed_mb(aux0, B0), Real(1e-12));
+  return std::max(amr_max_drift_speed_mb(aux0, B0), kAmrDriftSpeedFloor);
 }
 
 }  // namespace pops

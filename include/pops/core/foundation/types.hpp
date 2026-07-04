@@ -37,4 +37,11 @@ using Real = double;
 /// "degenerate" on the System side. Shared by System::step_cfl/step_adaptive and AmrRuntime::step_cfl.
 inline constexpr Real kCflSpeedFloor = Real(1e-30);
 
+/// Speed FLOOR for the AMR drift / wave-speed reductions (ADC-643, single source of the scattered
+/// 1e-12): the seed and post-reduction clamp of amr_max_drift_speed / AmrCouplerMP::max_drift_speed /
+/// AmrCouplerMP::max_wave_speed / AmrRuntime::max_speed, so a level with no wave still yields a finite
+/// CFL speed. DISTINCT from kCflSpeedFloor (1e-30): this is the reduction seed/clamp, not the
+/// dt = cfl*h/w division floor -- kept separate so neither value moves.
+inline constexpr Real kAmrDriftSpeedFloor = Real(1e-12);
+
 }  // namespace pops

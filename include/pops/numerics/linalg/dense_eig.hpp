@@ -49,6 +49,12 @@
 
 namespace pops {
 
+/// Default RELATIVE imaginary tolerance for the small-block spectrum classifier (all_real /
+/// has_complex_pair / real_spectrum). Covers a real multiplicity up to m=3 (eps^(1/3) ~ 6e-6); see
+/// EigBounds::all_real for the tolerance contract. ADC-643 single-sources the default; ADC-645 will
+/// later promote it to a DSL knob.
+inline constexpr Real kEigImagTol = Real(1e-5);
+
 /// Result of real_eig_minmax: real-part extremes + diagnostic. The consumer (DSL codegen
 /// wave_speeds_from_jacobian, ADC-87) receives the WHOLE structure: converged and max_im are part
 /// of the safety contract, no overload silently drops them.
@@ -75,7 +81,7 @@ struct EigBounds {
   /// never read as a real spectrum; a non-finite (NaN) max_im likewise makes this false (so a NaN block
   /// is reported has_complex_pair, NOT kUnknown). POPS_HD, no allocation (only std::fabs and comparisons,
   /// like the rest of this header).
-  POPS_HD bool all_real(Real im_tol = Real(1e-5)) const {
+  POPS_HD bool all_real(Real im_tol = kEigImagTol) const {
     const Real rho = std::fabs(lmin) > std::fabs(lmax) ? std::fabs(lmin) : std::fabs(lmax);
     const Real scale = rho > Real(1) ? rho : Real(1);
     return converged && max_im <= im_tol * scale;
@@ -83,7 +89,7 @@ struct EigBounds {
   /// Complement of all_real RESTRICTED to converged blocks: true iff the spectrum was computed AND
   /// carries a complex conjugate pair beyond @p im_tol. NON-CONVERGENCE => false (NOT a complex signal:
   /// nothing was computed -- tell it apart via converged, or via pops::real_spectrum's kUnknown).
-  POPS_HD bool has_complex_pair(Real im_tol = Real(1e-5)) const {
+  POPS_HD bool has_complex_pair(Real im_tol = kEigImagTol) const {
     return converged && !all_real(im_tol);
   }
 };
@@ -398,7 +404,7 @@ POPS_HD inline EigBounds real_eig_minmax(const Real (&A)[N][N], int max_iter_per
 /// free of any model specifics. Need the extremes too? Call real_eig_minmax and use the EigBounds
 /// predicates directly.
 template <int N>
-POPS_HD inline Spectrum real_spectrum(const Real (&A)[N][N], Real im_tol = Real(1e-5),
+POPS_HD inline Spectrum real_spectrum(const Real (&A)[N][N], Real im_tol = kEigImagTol,
                                      int max_iter_per_eig = 100) {
   const EigBounds b = real_eig_minmax(A, max_iter_per_eig);
   if (!b.converged)

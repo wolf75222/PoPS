@@ -26,6 +26,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 
 ### Changed
+- ADC-643 Single-source the remaining duplicated numeric literals (EB face-open/small-cell
+  thresholds, the AMR drift/wave-speed floor, the small-block eigen imaginary tolerance, and the
+  Berger-Rigoutsos clustering defaults) onto named constants, and extend the numeric-constant fence
+  with a value check that ties each _static_report entry to its parsed header constant. Every value
+  stays byte-identical; only POPS_HEADER_SIG shifts.
 - ADC-642 Route the remaining Python dispatch stragglers through single-source tables: the per-flux Riemann capability gate is one catalog in pops.runtime.routes that the System, AMR and unified-install guards plus the availability report all read (the unified install now delegates to the shared check_riemann_capability, raising ValueError not RuntimeError); the board decodes its Riemann flux through board-local enabler/validation tables and accepts a typed descriptor; the schedule kind is classified once into so_lowerable/host_cadence facts; and the operator-kind lowering in program_call and module_lowering dispatches through a keyed table anchored on OPERATOR_KINDS. Emitted C++ is byte-identical.
 - ADC-646 Made the CI C++ test selection (scripts/ci_select_tests.py, cpp mode) compositional per
   file: each changed file contributes its own impact and the selection is their union, instead of

@@ -19,6 +19,7 @@
 #include <pops/amr/tagging/tag_box.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
+#include <pops/runtime/numerical_defaults.hpp>   // ADC-643: shared clustering defaults
 
 #include <algorithm>
 #include <climits>
@@ -29,9 +30,9 @@ namespace pops {
 
 /// Berger-Rigoutsos clustering parameters (configuration object).
 struct ClusterParams {
-  double min_efficiency = 0.7;  ///< efficiency threshold (tagged fraction) to accept a box.
-  int min_box_size = 1;         ///< minimal size of a box; bounds the admissible cuts.
-  int max_box_size = 32;        ///< max size of a box; accepted boxes are chopped to this size.
+  double min_efficiency = kAmrClusterMinEfficiency;  ///< efficiency threshold to accept a box.
+  int min_box_size = kAmrClusterMinBoxSize;          ///< minimal size of a box; bounds admissible cuts.
+  int max_box_size = kAmrClusterMaxBoxSize;          ///< max size of a box; accepted boxes chopped to this.
 };
 
 namespace detail {

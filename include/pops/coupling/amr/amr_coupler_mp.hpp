@@ -619,7 +619,7 @@ class AmrCouplerMP {
   // distributed, we take the max of the parts.
   Real max_drift_speed() const {
     const Real v = amr_max_drift_speed_mb(stack_.aux(0), model_.B0);
-    return all_reduce_max(std::max(v, Real(1e-12)));
+    return all_reduce_max(std::max(v, kAmrDriftSpeedFloor));
   }
 
   /// @brief Max wave speed on the coarse level via `model.max_wave_speed`.
@@ -631,7 +631,7 @@ class AmrCouplerMP {
   /// @return the max over the coarse cells and the two directions, reduced over the ranks.
   /// @note `update()` must have run so that `aux(0)` carries the current `grad phi`.
   Real max_wave_speed() {
-    Real w = Real(1e-12);
+    Real w = kAmrDriftSpeedFloor;
     MultiFab& U = stack_.coarse();
     MultiFab& A = stack_.aux(0);
     for (int li = 0; li < U.local_size(); ++li) {
