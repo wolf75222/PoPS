@@ -26,6 +26,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 
 ### Changed
+- ADC-646 Made the CI C++ test selection (scripts/ci_select_tests.py, cpp mode) compositional per
+  file: each changed file contributes its own impact and the selection is their union, instead of
+  the previous all-or-nothing rule where any non-header file collapsed the whole change to coarse
+  manifest labels. An include/pops header adds its include-closure suites, a python/bindings TU adds
+  the test targets that compile it (its runtime OBJECT-lib consumers, read from tests/CMakeLists.txt),
+  a python/pops/codegen emitter adds the codegen/native-loader group, a tests/cpp source adds its own
+  target, and docs / non-codegen python/pops / tests/python add nothing; a global-includer or missing
+  header and any unmapped build input still fail safe to ALL. The --explain-file plan now records a
+  per-file impact map (file -> kind -> targets). The ci.yml gate interface is unchanged.
 - ADC-636 Generalized the composite FAC elliptic solver (CompositeFacPoisson) from its inherited
   2-level, non-adjacent, mono-rank envelope to an arbitrary nested hierarchy: N levels via a
   multiplicative FAC cascade reusing the per-pair kernels level by level, adjacent fine patches via
