@@ -13,6 +13,7 @@
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>  // coarse solver (geometric multigrid)
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian (residual, reads the already-filled ghosts)
 #include <pops/numerics/time/amr/levels/amr_patch_range.hpp>  // PatchRange, CoverageMask (coarse footprint of a patch)
+#include <pops/parallel/comm.hpp>  // my_rank / n_ranks (replicated coarse dmap, MPI dispatch + gather)
 #include <pops/runtime/numerical_defaults.hpp>
 
 #include <algorithm>
@@ -44,21 +45,21 @@
 ///      5. coarse correction: GeometricMG(Lap e_c = r_c, homogeneous Dirichlet); phi_c += e_c (non covered);
 ///   until ||r_c|| (composite residual norm) below tolerance.
 ///
-/// SCOPE (Phase 4a, multi fine patch). Cartesian, 2 levels, 1..N disjoint fine patches strictly
-/// interior, aligned (lo even / hi odd) and SEPARATED by at least one coarse cell (NON adjacent),
-/// ratio 2, REPLICATED MONO-BOX coarse (serial / single-rank). N == 1 -> mono-patch path bit-identical to
-/// Phase 1 (ctor delegates, per-patch loops degenerate to a single patch). The fine-fine join (ADJACENT
-/// patches), MPI and > 2 levels are Phase 4b. The MMS test validates that the fine patch REDUCES the
-/// elliptic error near the patch vs coarse-only.
+/// SCOPE (ADC-636, generalized envelope). Cartesian, ratio 2, an arbitrary NESTED hierarchy: N
+/// levels, 1..N fine patches per level, ADJACENT (edge/corner-touching) patches allowed, and MPI
+/// (REPLICATED coarse + DISTRIBUTED fine). The 2-level non-adjacent mono-rank case is dispatched to
+/// the VERBATIM legacy body (solve_two_level_legacy_) and is byte-for-byte unchanged; the general
+/// path (composite_fac_nlevel.hpp) serves every other shape. Distributed equals replicated
+/// bit-identically at fixed np by construction. Only ratio != 2 (ADC-602 declared capability) and
+/// overlapping / non-nested / misaligned patches (semantically impossible) are refused.
 ///
-/// MULTI-PATCH (Phase 4a). Each fine patch has its own box (fine BoxArray); the FINE operations (bilinear
-/// C-F ghosts, SOR, C-F flux correction) loop OVER EACH local patch. The coarse coverage
-/// (CoverageMask) is the UNION of the coarse footprints of all patches: it tells which
-/// coarse cells are shadowed (residual set to 0, average_down) and lets us skip a bordering
-/// cell covered by ANOTHER patch. The separation of at least one coarse cell (ctor guard)
-/// guarantees that no fine face is SHARED between two patches: each patch border is a true
-/// coarse-fine join, so the bilinear C-F ghost (read from the coarse) and the flux correction are
-/// exact patch by patch -- no fine-fine exchange needed.
+/// MULTI-PATCH. Each fine patch has its own box (fine BoxArray); the FINE operations (bilinear C-F
+/// ghosts, SOR, C-F flux correction) loop OVER EACH local patch. The coarse coverage (CoverageMask)
+/// is the UNION of the coarse footprints of all patches: it tells which coarse cells are shadowed
+/// (residual set to 0, average_down) and lets the flux correction skip a face covered on both sides.
+/// Adjacent patches share a fine face: the fine-fine join is realized by fill_boundary before the C/F
+/// bilerp (the shared ghost takes the sibling's valid data), and the two-way flux correction is
+/// enumerated from the uncovered coarse side so a shared interior face gets no correction.
 
 namespace pops {
 
@@ -105,7 +106,11 @@ class CompositeFacPoisson {
       : geom_c_(geom_c),
         geom_f_(geom_c.refine(ratio)),
         ba_c_(ba_c),
-        dm_c_(ba_c.size(), n_ranks()),
+        // REPLICATED coarse (ADC-636): the mono-box coarse lives on EVERY rank (each rank owns
+        // fab(0)), which is what all the .fab(0) coarse reads assume and what GeometricMG(replicated)
+        // expects. At np=1 my_rank()==0 -> identical to the historical round-robin (size, n_ranks())
+        // that also placed the single box on rank 0: MONO-RANK bit-identical.
+        dm_c_(std::vector<int>(static_cast<std::size_t>(ba_c.size()), my_rank())),
         bc_(bc),
         ratio_(ratio),
         ba_f_(fine_boxes),
@@ -123,8 +128,13 @@ class CompositeFacPoisson {
         axy_f_(ba_f_, dm_f_, 1, 1),
         ayx_f_(ba_f_, dm_f_, 1, 1),
         cov_(Box2D::from_extents(geom_c.domain.nx(), geom_c.domain.ny())) {
-    require_separated_patches(
-        fine_boxes);  // guard: NON adjacent patches (fine-fine join = Phase 4b)
+    // ADC-636: validate the level-1 patches (aligned lo-even/hi-odd, non-overlapping) and DETECT
+    // adjacency. Adjacent (edge/corner-touching) patches are now legal -- the fine-fine join is
+    // handled by fill_boundary before the C/F bilerp with an uncovered-side flux ownership rule
+    // (composite_fac_nlevel.hpp), and a touching hierarchy routes solve() to the general path. Only
+    // overlapping/misaligned patches are refused (validate_level_patches_); inter-level nesting is
+    // checked by the N-level ctor (validate_nesting_).
+    validate_level_patches_(fine_boxes);
     // coarse footprints (covered cells) PER PATCH: PatchRange (lo/2 .. (hi-1)/2). The global coarse
     // coverage = UNION of the footprints (any gap between disjoint patches stays NON covered).
     for (int g = 0; g < fine_boxes.size(); ++g)
@@ -139,6 +149,30 @@ class CompositeFacPoisson {
     ayx_c_.set_val(Real(0));
     axy_f_.set_val(Real(0));
     ayx_f_.set_val(Real(0));
+    // ADC-636: build the uniform per-level metadata (coverage / footprints / intermediate mg) so the
+    // general path is reachable for a 2-level input too (the cross-check hook and the MPI path). The
+    // legacy 2-level dispatch does not use it -- it keeps cov_/patch_coarse_ as before, untouched.
+    finalize_hierarchy_metadata_();
+  }
+
+  /// N-LEVEL CTOR (ADC-636). @p level_boxes[k] = the fine BoxArray of level k+1 (in that level's index
+  /// space, ratio 2 over level k), so level_boxes[0] = the level-1 patches (== the 2-level fine_boxes),
+  /// level_boxes[1] = the level-2 patches, ... The 2-level ctor is the level_boxes.size() == 1 case;
+  /// for it this DELEGATES to the multi-patch ctor above (identical level-0/1 allocation), so a
+  /// single-patch-level hierarchy stays bit-identical. For deeper hierarchies the extra levels are
+  /// allocated here (geom refined per level, per-level coverage and parent footprints).
+  CompositeFacPoisson(const Geometry& geom_c, const BoxArray& ba_c, const BCRec& bc,
+                      const std::vector<BoxArray>& level_boxes, int ratio = 2)
+      : CompositeFacPoisson(geom_c, ba_c, bc,
+                            level_boxes.empty() ? BoxArray(std::vector<Box2D>{}) : level_boxes[0],
+                            ratio) {
+    if (level_boxes.empty())
+      throw std::runtime_error(
+          "CompositeFacPoisson: the N-level ctor needs at least one patch level (level_boxes "
+          "non-empty).");
+    n_levels_ = 1 + static_cast<int>(level_boxes.size());
+    build_extra_levels_(level_boxes);
+    validate_nesting_(level_boxes);  // refuse non-nested patches (C/F bilerp source undefined)
   }
 
   MultiFab& rhs_coarse() {
@@ -169,6 +203,22 @@ class CompositeFacPoisson {
   const Box2D& patch_coarse(int g) const { return patch_coarse_[g]; }
   /// Number of fine patches (size of the fine BoxArray).
   int n_fine_patches() const { return ba_f_.size(); }
+  /// Number of levels in the composite hierarchy. The historical 2-level ctors give 2; the N-level
+  /// ctor (ADC-636, composite_fac_nlevel.hpp) gives 1 + number of patch levels.
+  int n_levels() const { return n_levels_; }
+
+  /// N-LEVEL ACCESSORS (ADC-636). Uniform field access by level index k (0 = coarse, 1 = first patch
+  /// level, ...). The 2-level accessors above alias _level(0)/_level(1) so callers can use either. For
+  /// k >= 2 the fields live in the per-level vectors allocated by the N-level ctor.
+  MultiFab& rhs_level(int k) { return k == 0 ? f_c_ : (k == 1 ? f_f_ : f_lv_[k - 2]); }
+  MultiFab& phi_level(int k) { return k == 0 ? phi_c_ : (k == 1 ? phi_f_ : phi_lv_[k - 2]); }
+  MultiFab& eps_level(int k) { return k == 0 ? eps_c_ : (k == 1 ? eps_f_ : eps_lv_[k - 2]); }
+  MultiFab& a_xy_level(int k) { return k == 0 ? axy_c_ : (k == 1 ? axy_f_ : axy_lv_[k - 2]); }
+  MultiFab& a_yx_level(int k) { return k == 0 ? ayx_c_ : (k == 1 ? ayx_f_ : ayx_lv_[k - 2]); }
+  /// Geometry of level k (k == 0 coarse, k == 1 fine, k >= 2 refined 2^k over the coarse).
+  const Geometry& geom_level(int k) const {
+    return k == 0 ? geom_c_ : (k == 1 ? geom_f_ : geom_lv_[k - 2]);
+  }
 
   void set_verbose(bool v) { verbose_ = v; }
   const RuntimeDiagnosticsReport& diagnostics_report() const { return diagnostics_; }
@@ -192,9 +242,27 @@ class CompositeFacPoisson {
 
   /// Solves the composite system. @return the final max composite residual.
   /// @p max_iters FAC iterations (two-way); @p fine_sweeps SOR sweeps per fine solve; @p tol tolerance.
-  Real solve(int max_iters,
-             int fine_sweeps,
-             Real tol) {
+  ///
+  /// DISPATCH (ADC-636). The 2-level, NON adjacent, MONO-RANK envelope routes to the VERBATIM legacy
+  /// body (solve_two_level_legacy_ below) -- same bytes, hence same bits, gated by the golden. Every
+  /// genuinely new shape (N > 2 levels, adjacent fine patches, or n_ranks() > 1) routes to the general
+  /// FAC (solve_composite_nlevel_, composite_fac_nlevel.hpp). At L == 2 / non-adjacent / mono-rank the
+  /// general path reduces algebraically to the legacy loop (cross-checked, not gated on).
+  Real solve(int max_iters, int fine_sweeps, Real tol) {
+    if (!force_general_ && n_levels_ == 2 && !adjacent_ && n_ranks() == 1)
+      return solve_two_level_legacy_(max_iters, fine_sweeps, tol);
+    return solve_composite_nlevel_(max_iters, fine_sweeps, tol);
+  }
+
+  /// TEST HOOK (ADC-636): route a 2-level non-adjacent mono-rank input through the GENERAL path so the
+  /// cross-check test can assert general == legacy (array_equal). Never set in production; the
+  /// shipping 2-level path always dispatches to the verbatim legacy body.
+  void force_general_path_for_test(bool v) { force_general_ = v; }
+
+ private:
+  /// VERBATIM historical 2-level FAC driver (moved unchanged from solve(); ADC-636 dispatch). This is
+  /// the non-regression anchor: the 2-level non-adjacent mono-rank path executes exactly these bytes.
+  Real solve_two_level_legacy_(int max_iters, int fine_sweeps, Real tol) {
     // VARIABLE COEFFICIENT (condensed Schur operator B_z=0): sets eps on the coarse solver and
     // fills the eps ghosts PER LEVEL. eps_c ghosts = zero-gradient (coeff_bc Foextrap, like the
     // Schur builder); eps_f C-F ghosts = bilerp of eps_c (consistency of the coefficient flux across
@@ -250,6 +318,7 @@ class CompositeFacPoisson {
     return rnorm;
   }
 
+ public:
   Real last_residual() const { return last_residual_; }
 
  private:
@@ -280,22 +349,55 @@ class CompositeFacPoisson {
     }
   }
 
-  /// Phase 4a guard: the fine patches must be disjoint AND separated by at least ONE coarse
-  /// cell (PatchRange coarse footprints not even adjacent). Otherwise a fine face would be
-  /// SHARED between two patches and wrongly treated as a coarse-fine border (bilinear C-F ghost +
-  /// flux correction): the fine-fine join (ADJACENT multi-patch) is Phase 4b. We test: coarse
-  /// footprint of patch g GROWN by one cell intersects footprint of patch h -> insufficient separation.
-  static void require_separated_patches(const BoxArray& fine_boxes) {
-    const int N = fine_boxes.size();
+  /// ADC-636 ctor validation of a level's patch tiling. Refuses only the semantically impossible:
+  /// MISALIGNED patches (not lo-even / hi-odd under ratio 2) and OVERLAPPING same-level patches
+  /// (footprints intersect). Adjacent (edge/corner-touching) patches are ALLOWED and set adjacent_ so
+  /// solve() takes the general path (fill_boundary fine-fine join + uncovered-side flux ownership).
+  void validate_level_patches_(const BoxArray& boxes) {
+    const int N = boxes.size();
     for (int g = 0; g < N; ++g) {
-      const Box2D ag = PatchRange(fine_boxes[g]).box();
+      const Box2D& fb = boxes[g];
+      if ((fb.lo[0] % ratio_) != 0 || (fb.lo[1] % ratio_) != 0 ||
+          ((fb.hi[0] + 1) % ratio_) != 0 || ((fb.hi[1] + 1) % ratio_) != 0)
+        throw std::runtime_error(
+            "CompositeFacPoisson: misaligned fine patch (require lo even / hi odd under ratio 2).");
+    }
+    for (int g = 0; g < N; ++g) {
+      const Box2D ag = PatchRange(boxes[g]).box();
       for (int h = g + 1; h < N; ++h) {
-        const Box2D bh = PatchRange(fine_boxes[h]).box();
-        if (!ag.grow(1).intersect(bh).empty())
+        const Box2D bh = PatchRange(boxes[h]).box();
+        if (!ag.intersect(bh).empty())
           throw std::runtime_error(
-              "CompositeFacPoisson: adjacent or overlapping fine patches (coarse footprints "
-              "separated by less than one cell); the multi-patch fine-fine join is Phase 4b -- "
-              "require disjoint patches separated by at least one coarse cell.");
+              "CompositeFacPoisson: overlapping fine patches (coarse footprints intersect).");
+        // touching (grown-by-one footprints intersect but the footprints themselves do not) = adjacent.
+        if (!ag.grow(1).intersect(bh).empty())
+          adjacent_ = true;
+      }
+    }
+  }
+
+  /// ADC-636 inter-level nesting check (design 4a). Refuses a NON-NESTED patch: a level-(k+1) patch
+  /// whose GROWN level-k footprint is not contained in the covered/footprint region of a single
+  /// level-k patch, so its C/F ghosts have no parent to bilerp. Called by the N-level ctor.
+  void validate_nesting_(const std::vector<BoxArray>& level_boxes) {
+    const int L = n_levels_;
+    for (int k = 1; k + 1 < L; ++k) {
+      // parents = level-k patches (level_boxes[k-1]); children = level-(k+1) patches (level_boxes[k]).
+      const BoxArray& parents = level_boxes[k - 1];
+      const BoxArray& children = level_boxes[k];
+      for (int g = 0; g < children.size(); ++g) {
+        // child footprint on level k = PatchRange(child) grown by one (the C/F ghost ring reads it).
+        const Box2D foot = PatchRange(children[g]).box().grow(1);
+        bool nested = false;
+        for (int p = 0; p < parents.size(); ++p)
+          if (parents[p].contains(foot)) {
+            nested = true;
+            break;
+          }
+        if (!nested)
+          throw std::runtime_error(
+              "CompositeFacPoisson: non-nested fine patch (a level-(k+1) patch grown footprint is "
+              "not contained in a single parent patch; its coarse-fine bilerp has no source).");
       }
     }
   }
@@ -553,7 +655,68 @@ class CompositeFacPoisson {
   bool verbose_ = false;
   bool two_way_ = true;
   CompositeFacOptions options_;  ///< ADC-614: installed FAC knobs; defaults = kFAC* (bit-identical).
+  int n_levels_ = 2;      ///< ADC-636: hierarchy depth; 2 for the historical ctors, 1+patch-levels for N-level.
+  bool adjacent_ = false;  ///< ADC-636: true when the hierarchy has edge/corner-touching fine patches (general path).
+  bool force_general_ = false;  ///< ADC-636 test hook: route the 2-level input through the general path.
   static constexpr Real kPi_ = Real(3.14159265358979323846);
+
+  // ADC-636 N-level storage (levels k >= 2; levels 0/1 keep the members above). One entry per
+  // extra patch level, index 0 == level 2. Allocated by the N-level ctor; empty on the 2-level path
+  // so the historical allocation is untouched. geom_lv_[k-2] = geom_c_.refine(2^k); cov_lv_[k-2] is
+  // the coverage of level k by level k+1 (empty for the finest); foot_lv_[k-2][g] is the coarse
+  // (level k-1) footprint of patch g. mg_lv_[k-2] serves the intermediate-level correction solve.
+  MultiFab res_f_;  ///< ADC-636: level-1 composite residual buffer (the N-level driver needs a res per level)
+  std::vector<Geometry> geom_lv_;   ///< geom_lv_[k-2] = geom_c_.refine(2^k) for level k >= 2
+  std::vector<BoxArray> ba_lv_;     ///< ba_lv_[k-2] = the level-k patch tiling
+  std::vector<DistributionMapping> dm_lv_;
+  std::vector<MultiFab> phi_lv_, f_lv_, res_lv_, eps_lv_, axy_lv_, ayx_lv_;
+  // Uniform per-level metadata, index m in [0, L-1] (covers level 0/1 as well as k >= 2 so the driver
+  // loops without special-casing). cov_of_[m] = coverage of level m by level m+1 (finest: none).
+  // foot_of_[m][g] = PatchRange of patch g of level m on level m-1 (empty at m == 0).
+  std::vector<CoverageMask> cov_of_;
+  std::vector<std::vector<Box2D>> foot_of_;
+  // Intermediate-level correction multigrid: level_mg_[m] serves level m for 1 <= m <= L-2 (the
+  // finest patch level is relaxed by SOR only). [0] (base mg_) and [L-1] stay null.
+  std::vector<std::unique_ptr<GeometricMG>> level_mg_;
+
+  // ADC-636: the general FAC (N levels / adjacent patches / MPI). Declared here; DEFINED out-of-line
+  // in composite_fac_nlevel.hpp (tail-included below) so composite_fac_poisson.hpp keeps the legacy
+  // body + dispatch and the general machinery lives in the mg/ layer per ADC-334.
+  Real solve_composite_nlevel_(int max_iters, int fine_sweeps, Real tol);
+  void build_extra_levels_(const std::vector<BoxArray>& level_boxes);
+  // Build the uniform per-level metadata (cov_of_[m] = level m covered by level m+1, foot_of_[m][g] =
+  // level-(m-1) footprint of patch g, level_mg_[m] = intermediate correction multigrid) from the
+  // current hierarchy. Called by EVERY ctor (the 2-level ctor too) so the general path can be reached
+  // for any shape, including a 2-level input via the test hook.
+  void finalize_hierarchy_metadata_();
+  void setup_level_coeffs_();
+  void fill_cf_field_(int k, MultiFab& fine, const MultiFab& parent);  // C-F bilerp parent -> level k
+  void fill_cf_phi_(int k);                       // ghost order 3b for phi_level(k)
+  void relax_level_(int m, int sweeps);           // C-F ghost + fill_boundary + SOR (no avgdown)
+  void cascade_avgdown_();                         // fine-to-coarse average-down of the whole tower
+  void correct_level_(int m);                     // L_m e_m = res_m; phi_m += e_m on uncovered
+  Real composite_residual_(int m);                // res_m + C/F flux correction; return ||.||_inf
+  void fine_sor_level_(int m, const MultiFab& f_eff, int sweeps);  // red-black SOR on level m
+  // Accumulate the level-m/level-(m+1) two-way C-F flux correction into dst (level-m residual or
+  // effective RHS), enumerated from the uncovered coarse side (design 4c). single_writer_gather
+  // routes remote fine fluxes through a per-face FluxRegister (ADC-636 commit 4) for MPI bit-identity.
+  void add_flux_correction_(int m, MultiFab& dst);
+  MultiFab& res_level_(int m) { return m == 0 ? res_c_ : (m == 1 ? res_f_ : res_lv_[m - 2]); }
+  void add_uncovered_level_(int m, MultiFab& phi, const MultiFab& e);  // phi += e on uncovered cells
+  void copy0_(MultiFab& dst, const MultiFab& src);                     // dst <- src (comp 0, valid)
+  // Average-down phi_level(m) -> phi_level(m-1). When the parent (m-1) is the REPLICATED coarse under
+  // MPI, parallel_copy would only update the src-owner rank; this routes the covered-cell averages
+  // through a single-writer FluxRegister so every rank's replicated parent gets the same values
+  // (identity at np=1, so mono-rank stays bit-identical to the legacy average_down).
+  void average_down_level_(int m);
+  Real sor_omega_(const Box2D& b) const {         // per-patch over-relaxation (== legacy sor_omega)
+    const int N = std::max(b.nx(), b.ny());
+    return Real(2) / (Real(1) + std::sin(Real(kPi_) / Real(N)));
+  }
 };
 
 }  // namespace pops
+
+// ADC-636: the general N-level / adjacent / MPI FAC lives here (mg/ layering, ADC-334). Tail-included
+// so composite_fac_poisson.hpp above keeps only the legacy body + dispatch + N-level ctor/accessors.
+#include <pops/numerics/elliptic/mg/composite_fac_nlevel.hpp>  // solve_composite_nlevel_ + helpers

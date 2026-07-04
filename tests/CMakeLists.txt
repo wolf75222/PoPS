@@ -317,6 +317,8 @@ set(POPS_CPP_STANDARD_TESTS
   test_elliptic_operator
   test_elliptic_problem
   test_elliptic_composite_rhs
+  test_composite_fac_adjacent
+  test_composite_fac_nlevel
   test_composite_fac_poisson
   test_composite_fac_variable_eps
   test_composite_fac_tensor
@@ -607,6 +609,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_amr_compiled_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_twoblock_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_distributed_coarse 1 2 4)
+  set(POPS_MPI_RANKS_test_mpi_composite_fac 1 2 4)
   set(POPS_MPI_RANKS_test_amr_regrid_mpi_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_solve_fields 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_fft 1 2 4)
@@ -629,6 +632,7 @@ if(POPS_HAS_MPI)
     test_mpi_amr_compiled_parity
     test_mpi_amr_twoblock_parity
     test_mpi_amr_distributed_coarse
+    test_mpi_composite_fac
     test_amr_regrid_mpi_parity
     test_mpi_system_solve_fields
     test_mpi_system_fft

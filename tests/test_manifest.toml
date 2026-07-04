@@ -206,6 +206,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [4]
 
 [[cpp.suite]]
+name = "test_mpi_composite_fac"
+sources = ["tests/cpp/integration/mpi/test_mpi_composite_fac.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
 name = "test_mpi_coupled_source"
 sources = ["tests/cpp/integration/mpi/test_mpi_coupled_source.cpp"]
 labels = ["backend", "mpi", "medium"]
@@ -523,6 +529,16 @@ labels = ["unit", "codegen", "fast"]
 [[cpp.suite]]
 name = "test_anisotropic_epsilon"
 sources = ["tests/cpp/unit/elliptic/test_anisotropic_epsilon.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_composite_fac_adjacent"
+sources = ["tests/cpp/unit/elliptic/test_composite_fac_adjacent.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_composite_fac_nlevel"
+sources = ["tests/cpp/unit/elliptic/test_composite_fac_nlevel.cpp"]
 labels = ["unit", "elliptic", "fast"]
 
 [[cpp.suite]]

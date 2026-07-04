@@ -13,7 +13,8 @@
 //   (B) RELATION IMPLICITE : v^{n+1} de l'etage AMR satisfait B v^{n+1} = v^n - dt grad phi^{n+1}
 //       (B = I - dt [Omega], grad CENTRE) a la tolerance du solve -> l'etage resout le BON systeme.
 //   (C) SOURCE NON TRIVIALE : la quantite de mouvement a CHANGE (la source a bien agi).
-//   (D) GARDE Phase 4b : une hierarchie a > 2 niveaux leve une erreur claire.
+//   (D) N NIVEAUX (ADC-636) : une hierarchie imbriquee a > 2 niveaux est ACCEPTEE (le composite FAC
+//       couvre N niveaux) -- step() ne leve plus d'erreur et l'etat reste fini sur les 3 niveaux.
 //
 // Verifs MULTI-PATCH (Phase 4a) : 2 niveaux + 2 patchs fins disjoints NON ADJACENTS, dynamique confinee
 // dans UN patch (bump gaussien), l'autre distant et quiet :
@@ -22,7 +23,8 @@
 //               perturbe < 5%, seuil RELATIF car le couplage elliptique est GLOBAL -- pas bit-a-bit).
 //   (multi-iii) MASSE CONSERVEE : rho gelee sur le grossier + les 2 patchs.
 //   (multi-iv)  CHEMIN MONO-PATCH INTACT : average_down coherent (grossier couvert = moyenne 2x2 fine).
-//   (multi-v)   REJET du raccord fin-fin : 2 patchs ADJACENTS -> erreur claire (Phase 4b).
+//   (multi-v)   RACCORD FIN-FIN (ADC-636) : 2 patchs ADJACENTS acceptes (fill_boundary + possession
+//               de face cote grossier) -- step() ne leve plus d'erreur, etat fini.
 //
 // Serie (Kokkos OFF) : n_ranks() == 1. L'etage uniforme est par ailleurs deja rejoue MPI np=1/2/4 par
 // son propre test ; la parite mono-niveau est une propriete de composition, independante du rang.
@@ -296,21 +298,43 @@ TEST(test_amr_condensed_schur_source_stepper, Runs) {
   EXPECT_TRUE(std::isfinite(dmom) && dmom > 1e-6)
       << "la source modifie l'etat (dmom > 1e-6), dmom=" << dmom;
 
-  // (D) GARDE Phase 4b : > 2 niveaux -> erreur claire (l'etage composite est cable pour 2 niveaux ;
-  // > 2 niveaux / MPI / multi-blocs sont la Phase 4b). Le multi-patch fin (Phase 4a) est desormais
-  // ACCEPTE (cf. section MULTI-PATCH ci-dessous) ; le cas 2-niveaux-1-patch VALIDE est exerce a part
-  // dans test_amr_condensed_schur_composite.
+  // (D) ADC-636 : une hierarchie a > 2 niveaux (tour imbriquee) est desormais ACCEPTEE (le composite
+  // FAC couvre N niveaux). On construit un niveau 1 (empreinte grossiere [8,23]^2) et un niveau 2
+  // imbrique (empreinte grossiere [12,19]^2 -> index niveau-2 raffine x4), avec leurs propres aux
+  // phi^n ; step() ne leve PLUS d'erreur et produit un etat FINI (le cas 2-niveaux reste la reference
+  // de test_amr_condensed_schur_composite).
   {
-    MultiFab f1(S.ba, S.dm, vars.size, 1), f2(S.ba, S.dm, vars.size, 1), cphi(S.ba, S.dm, 1, 1);
-    copy_all(f1, mom0, vars.size);
-    copy_all(f2, mom0, vars.size);
+    const Geometry geom_c = S.geom;
+    const Geometry geom_1 = geom_c.refine(2);
+    const Geometry geom_2 = geom_c.refine(4);
+    Box2D b1{{16, 16}, {47, 47}};  // empreinte grossiere [8,23]^2 (niveau-1, index x2)
+    Box2D b2{{48, 48}, {79, 79}};  // empreinte grossiere [12,19]^2 (niveau-2, index x4, imbrique)
+    BoxArray ba1(std::vector<Box2D>{b1}), ba2(std::vector<Box2D>{b2});
+    DistributionMapping dm1(ba1.size(), n_ranks()), dm2(ba2.size(), n_ranks());
+    MultiFab U0(S.ba, S.dm, vars.size, 1), U1(ba1, dm1, vars.size, 1), U2(ba2, dm2, vars.size, 1);
+    copy_all(U0, mom0, vars.size);
+    for (int li = 0; li < U1.local_size(); ++li)
+      for_each_cell(U1.box(li), LocalizedInitKernel{geom_1, U1.fab(li).array(), Real(1.5), Real(0.5),
+                                                    Real(0.5), Real(0.1), c_rho, c_mx, c_my, c_E});
+    for (int li = 0; li < U2.local_size(); ++li)
+      for_each_cell(U2.box(li), LocalizedInitKernel{geom_2, U2.fab(li).array(), Real(1.5), Real(0.5),
+                                                    Real(0.5), Real(0.1), c_rho, c_mx, c_my, c_E});
+    MultiFab cphi(S.ba, S.dm, 1, 1), a1(ba1, dm1, 1, 1), a2(ba2, dm2, 1, 1);
+    MultiFab bz1(ba1, dm1, 1, 1), bz2(ba2, dm2, 1, 1);
     copy_all(cphi, phi_ref, 1);
-    std::vector<AmrLevelMP> three;  // 3 niveaux -> hors du cadre 2-niveaux du composite
-    three.push_back(AmrLevelMP{std::move(levels[0].U), &bz, S.geom.dx(), S.geom.dy()});
-    three.push_back(AmrLevelMP{std::move(f1), &bz, S.geom.dx() / 2, S.geom.dy() / 2});
-    three.push_back(AmrLevelMP{std::move(f2), &bz, S.geom.dx() / 4, S.geom.dy() / 4});
-    EXPECT_THROW(amr.step(three, cphi, bz, 0, theta, dt), std::runtime_error)
-        << "hierarchie > 2 niveaux -> erreur claire (>2 niveaux / MPI / multi-blocs = Phase 4b)";
+    a1.set_val(0.0);
+    a2.set_val(0.0);
+    bz1.set_val(4.0);
+    bz2.set_val(4.0);
+    std::vector<AmrLevelMP> three;
+    three.push_back(AmrLevelMP{std::move(U0), &bz, geom_c.dx(), geom_c.dy()});
+    three.push_back(AmrLevelMP{std::move(U1), &a1, geom_1.dx(), geom_1.dy()});
+    three.push_back(AmrLevelMP{std::move(U2), &a2, geom_2.dx(), geom_2.dy()});
+    EXPECT_NO_THROW(amr.step(three, cphi, bz, 0, theta, dt))
+        << "hierarchie > 2 niveaux acceptee (composite FAC N-niveaux)";
+    EXPECT_TRUE(all_finite(three[0].U, vars.size) && all_finite(three[1].U, vars.size) &&
+                all_finite(three[2].U, vars.size))
+        << "etat fini sur les 3 niveaux apres l'etage source composite";
   }
 
   // =========================== MULTI-PATCH FIN (Phase 4a) ===========================
@@ -439,12 +463,13 @@ TEST(test_amr_condensed_schur_source_stepper, Runs) {
           << dcov;
     }
 
-    // (v) REJET du raccord fin-fin (Phase 4b) : deux patchs ADJACENTS (empreintes grossieres [8,15] et
-    // [16,23], separation NULLE) -> le ctor du FAC leve une erreur claire. On ne tente PAS de coupler des
-    // faces fines partagees en silence.
+    // (v) ADC-636 : deux patchs fins ADJACENTS (le raccord fin-fin est desormais gere par la FAC via
+    // fill_boundary + la regle de possession de face cote grossier). L'empreinte grossiere de A est
+    // [8,23]x[8,15] et celle de B [8,23]x[16,23] : elles partagent une FACE. step() ne leve PLUS
+    // d'erreur et produit un etat FINI.
     {
-      Box2D adjA{{16, 16}, {31, 31}};  // empreinte [8,15]
-      Box2D adjB{{32, 32}, {47, 47}};  // empreinte [16,23] -> ADJACENTE a adjA
+      Box2D adjA{{16, 16}, {47, 31}};  // empreinte [8,23]x[8,15]
+      Box2D adjB{{16, 32}, {47, 47}};  // empreinte [8,23]x[16,23] -> partage la face y=16 avec A
       BoxArray ba_adj(std::vector<Box2D>{adjA, adjB});
       DistributionMapping dm_adj(ba_adj.size(), n_ranks());
       MultiFab Uc(S.ba, S.dm, vars.size, 1), Uf(ba_adj, dm_adj, vars.size, 1);
@@ -459,8 +484,10 @@ TEST(test_amr_condensed_schur_source_stepper, Runs) {
       lv.push_back(AmrLevelMP{std::move(Uc), &cphi, geom_c.dx(), geom_c.dy()});
       lv.push_back(AmrLevelMP{std::move(Uf), &faux, geom_f.dx(), geom_f.dy()});
       AmrCondensedSchurSourceStepper st(vars, geom_c, S.ba, S.bc, alpha);
-      EXPECT_THROW(st.step(lv, cphi, cbz, /*c_bz=*/0, theta, dt), std::runtime_error)
-          << "(multi-v) patchs fins ADJACENTS -> erreur claire (raccord fin-fin = Phase 4b)";
+      EXPECT_NO_THROW(st.step(lv, cphi, cbz, /*c_bz=*/0, theta, dt))
+          << "(multi-v) patchs fins ADJACENTS acceptes (raccord fin-fin gere par la FAC)";
+      EXPECT_TRUE(all_finite(lv[0].U, vars.size) && all_finite(lv[1].U, vars.size))
+          << "(multi-v) etat fini apres l'etage source composite avec patchs adjacents";
     }
   }
 

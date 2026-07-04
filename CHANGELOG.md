@@ -26,6 +26,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 
 ### Changed
+- ADC-636 Generalized the composite FAC elliptic solver (CompositeFacPoisson) from its inherited
+  2-level, non-adjacent, mono-rank envelope to an arbitrary nested hierarchy: N levels via a
+  multiplicative FAC cascade reusing the per-pair kernels level by level, adjacent fine patches via
+  intra-level fill_boundary before the coarse-fine interpolation with an uncovered-side face-ownership
+  rule for the two-way flux correction, and MPI via a replicated coarse plus distributed fine levels
+  with a per-face FluxRegister gather. The 2-level non-adjacent mono-rank path is byte-for-byte
+  unchanged (dispatched to the verbatim legacy solve); distributed equals replicated bit-identically
+  at fixed np; ratio != 2 stays the one declared capability refusal (ADC-602). The AMR condensed-Schur
+  source stepper inherits the lifted envelope; only overlapping, non-nested or misaligned patches
+  remain refused.
 - ADC-618 Classify remaining internal numeric constants (WENO eps, CFL floor, FFT DFT
   fallback, runtime-param cap) and fence new user-visible constants behind the effective
   options report.
