@@ -475,6 +475,97 @@ def test_clean_amr_schur_program_compiles_installs_and_runs():
         % abs(mass - m0))
 
 
+def _clean_amr_schur_run(theta, name):
+    """Drive a condensed-Schur Program at @p theta through the clean AMR (flat / FrozenRegrid) route.
+    Seeds B_z through bind(aux=). Returns (coarse density, coarse potential) after NSTEPS, or
+    (None, reason) on an honest skip. The theta < 1 path exercises the ncomp=1 phi^n history ring
+    (ADC-427): last step's phi^{n+1} is this step's phi^n on the per-level ring."""
+    u0 = parity._init_density()
+    bz0 = 4.0 * np.ones((N, N))
+    model = _schur_model(name)
+    schur = lib_time.condensed_schur("plasma", alpha=1.0, theta=theta)
+    problem = _problem(model, schur)
+    try:
+        compiled = pops.compile(problem, layout=_amr_layout())
+    except RuntimeError as exc:
+        return None, "compile (clean AMR schur theta=%s): %s" % (theta, str(exc)[:180])
+    if getattr(compiled, "program", None) is None:
+        return None, "clean AMR schur compile carried no Program"
+    try:
+        sim = pops.bind(compiled, initial_state={"plasma": u0}, aux={"B_z": bz0})
+    except RuntimeError as exc:
+        return None, "bind (clean AMR schur theta=%s): %s" % (theta, str(exc)[:220])
+    for _ in range(NSTEPS):
+        sim.step(DT)
+    return (np.array(sim.density("plasma")), np.array(sim.potential())), None
+
+
+def _lift_schur_density(model, u0, block="plasma"):
+    """The native set_density lift of the isothermal Schur block (rho -> [rho, 0, 0]) read back from a
+    scratch System, so the Uniform bind seeds the FULL conservative state BITWISE identically to the
+    AMR set_density seed (mirror of _lift_density for the compressible model). Returns the (3, n, n)
+    state or (None, reason)."""
+    from pops.runtime.system import System
+    sim = System(n=N, L=1.0)
+    try:
+        block_cm = model.compile(backend="production")
+    except RuntimeError as exc:
+        return None, "compile (lift scratch Schur System): %s" % str(exc)[:160]
+    try:
+        sim.add_equation(block, block_cm, spatial=_spatial(), time=pops.Explicit(method="ssprk2"))
+        sim.set_density(block, u0)
+        return np.array(sim.get_state(block)), None
+    except RuntimeError as exc:
+        return None, "seed (lift scratch Schur System): %s" % str(exc)[:160]
+
+
+def _clean_uniform_schur_run(theta, name):
+    """The Uniform counterpart of _clean_amr_schur_run: same Program at @p theta, layout=Uniform.
+    The Uniform bind takes the FULL conservative state, so the AMR set_density seed is lifted back
+    from a scratch System (bit-identically) before binding. Returns (density comp-0, potential), or
+    (None, reason) on an honest skip."""
+    u0 = parity._init_density()
+    bz0 = 4.0 * np.ones((N, N))
+    model = _schur_model(name)
+    lifted, lerr = _lift_schur_density(_schur_model(name + "_lift"), u0)
+    if lifted is None:
+        return None, lerr
+    schur = lib_time.condensed_schur("plasma", alpha=1.0, theta=theta)
+    problem = _problem(model, schur)
+    try:
+        compiled = pops.compile(problem, layout=_uniform_layout())
+    except RuntimeError as exc:
+        return None, "compile (clean Uniform schur theta=%s): %s" % (theta, str(exc)[:180])
+    try:
+        sim = pops.bind(compiled, initial_state={"plasma": lifted}, aux={"B_z": bz0})
+    except RuntimeError as exc:
+        return None, "bind (clean Uniform schur theta=%s): %s" % (theta, str(exc)[:220])
+    for _ in range(NSTEPS):
+        sim.step(DT)
+    state = np.array(sim.get_state("plasma"))
+    return (state[0], np.array(sim.potential())), None
+
+
+def test_clean_flat_amr_schur_theta_one_equals_uniform():
+    """ADC-427 (theta == 1, byte-identity): the condensed-Schur Program at theta = 1 (the fresh-zero
+    phi path, NO history carry) drives the SAME evolved density on a flat AMR hierarchy as on Uniform.
+    The flat AMR emitted body runs level 0 bit-identically to Uniform (the ADC-633 flat-parity path);
+    theta == 1 emits no history op, so the ring is untouched. np.array_equal on the density."""
+    print("== (c) clean flat-AMR Schur theta=1 == clean Uniform theta=1 (bit-identical density) ==")
+    amr, aerr = _clean_amr_schur_run(1.0, "adc427_schur_t1")
+    if amr is None:
+        print("skip (%s)" % aerr)
+        return
+    uni, uerr = _clean_uniform_schur_run(1.0, "adc427_schur_t1")
+    if uni is None:
+        print("skip (%s)" % uerr)
+        return
+    amr_rho, uni_rho = amr[0], uni[0]
+    chk(np.array_equal(uni_rho, amr_rho),
+        "clean flat-AMR Schur theta=1 density is BIT-IDENTICAL to Uniform (max|diff| = %.3e)"
+        % float(np.abs(uni_rho - amr_rho).max()))
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

@@ -72,7 +72,7 @@ struct AmrHistoryOps {
 
   // --- AmrProgramContext-facing seams (register / read / store / rotate) --------------------------
 
-  static void register_history(AmrRuntime& eng, const std::string& name, int lag) {
+  static void register_history(AmrRuntime& eng, const std::string& name, int lag, int ncomp = -1) {
     if (lag < 1)
       throw std::runtime_error("AmrRuntime::register_history: lag must be >= 1 (got " +
                                std::to_string(lag) + ") for history '" + name + "'");
@@ -81,11 +81,13 @@ struct AmrHistoryOps {
     if (it != eng.hist_rings_.end()) {
       // Idempotent re-registration: the ring depth is the MAX lag any caller requests. A larger lag
       // grows the ring (append zero-filled deeper slots on the CURRENT layout, all levels); a smaller
-      // one is a no-op. The already-stored slots and the current slot [0] are preserved.
+      // one is a no-op. The already-stored slots and the current slot [0] are preserved. The @p ncomp
+      // request is IGNORED on re-registration: a name binds one component count at its first register
+      // (parity with System::register_history).
       if (want_depth > eng.hist_depth_[name]) {
-        const int ncomp = it->second[0][0].ncomp();
+        const int slot_ncomp = it->second[0][0].ncomp();
         for (int s = eng.hist_depth_[name]; s < want_depth; ++s)
-          it->second.push_back(alloc_slot(eng, ncomp));
+          it->second.push_back(alloc_slot(eng, slot_ncomp));
         eng.hist_depth_[name] = want_depth;
         std::vector<Real>& dts = eng.hist_slot_dt_[name];
         if (static_cast<int>(dts.size()) < want_depth)
@@ -93,11 +95,18 @@ struct AmrHistoryOps {
       }
       return;
     }
-    const int ncomp = eng.blocks_[0].ncomp;
+    // @p ncomp < 0 (the default) resolves to block 0's ncomp -- byte-identical to the historical
+    // full-state multistep ring (ADC-631); a caller that needs a narrower ring (ADC-427: the
+    // 1-component condensed-Schur phi^n carry) passes an explicit ncomp >= 1. The narrow ring rides the
+    // same alloc_slot / remap / replay machinery (each slot is sized by ncomp internally).
+    const int resolved_ncomp = ncomp < 0 ? eng.blocks_[0].ncomp : ncomp;
+    if (resolved_ncomp < 1)
+      throw std::runtime_error("AmrRuntime::register_history: ncomp must be >= 1 (got " +
+                               std::to_string(ncomp) + ") for history '" + name + "'");
     std::vector<std::vector<MultiFab>> ring;
     ring.reserve(static_cast<std::size_t>(want_depth));
     for (int s = 0; s < want_depth; ++s)
-      ring.push_back(alloc_slot(eng, ncomp));
+      ring.push_back(alloc_slot(eng, resolved_ncomp));
     eng.hist_rings_.emplace(name, std::move(ring));
     eng.hist_depth_[name] = want_depth;
     eng.hist_init_[name] = std::vector<char>(static_cast<std::size_t>(eng.nlev_), 0);
