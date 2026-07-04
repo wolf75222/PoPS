@@ -9,7 +9,7 @@
 #include <pops/runtime/program/module_metadata.hpp>  // read_module_metadata / required_blocks / required_solver: install-time validation (ADC-508)
 #include <pops/runtime/builders/block/amr_block_seam.hpp>  // ADC-335: per-transport AMR build seam (build_amr_block/_compiled_<transport>)
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model + compiled bricks
-#include <pops/runtime/dynamic/model_registry.hpp>  // unknown_transport_msg: single-source transport rejection (ADC-331)
+#include <pops/runtime/dynamic/model_registry.hpp>  // validate_transport: single-source transport rejection (ADC-331)
 #include <pops/runtime/context/wall_predicate.hpp>  // detail::wall_predicate (wall shared System/AmrSystem)
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions + validate_newton_options (shared range check)
 
@@ -588,14 +588,20 @@ struct AmrSystem::Impl {
                                          b.newton_diagnostics,
                                          b.time_method,
                                          b.pos_floor};
-      if (b.spec.transport == "exb") {
-        rblocks.push_back(detail::build_amr_block_exb(ba, S));
-      } else if (b.spec.transport == "compressible") {
-        rblocks.push_back(detail::build_amr_block_compressible(ba, S));
-      } else if (b.spec.transport == "isothermal") {
-        rblocks.push_back(detail::build_amr_block_isothermal(ba, S));
-      } else {
-        throw std::runtime_error(unknown_transport_msg(b.spec.transport));
+      // Transport dispatch mirrors detail::dispatch_transport (ADC-641): validate_transport preserves
+      // the unknown_transport_msg byte-for-byte, then the switch on the typed TransportRouteId routes to
+      // the per-transport seam.
+      validate_transport(b.spec.transport);
+      switch (parse_transport_route(b.spec.transport)) {
+        case TransportRouteId::kExb:
+          rblocks.push_back(detail::build_amr_block_exb(ba, S));
+          break;
+        case TransportRouteId::kCompressible:
+          rblocks.push_back(detail::build_amr_block_compressible(ba, S));
+          break;
+        case TransportRouteId::kIsothermal:
+          rblocks.push_back(detail::build_amr_block_isothermal(ba, S));
+          break;
       }
     }
     runtime =
@@ -774,14 +780,20 @@ struct AmrSystem::Impl {
     // Transport-axis seam (ADC-335): the single-block (AmrCouplerMP) build, one per-transport TU
     // (python/amr_compiled_<transport>.cpp). bp already bundles every single-block parameter. Same
     // unknown-transport message as detail::dispatch_transport.
-    if (b.spec.transport == "exb") {
-      install(detail::build_amr_compiled_exb(b.spec, b.limiter, b.riemann, bp));
-    } else if (b.spec.transport == "compressible") {
-      install(detail::build_amr_compiled_compressible(b.spec, b.limiter, b.riemann, bp));
-    } else if (b.spec.transport == "isothermal") {
-      install(detail::build_amr_compiled_isothermal(b.spec, b.limiter, b.riemann, bp));
-    } else {
-      throw std::runtime_error(unknown_transport_msg(b.spec.transport));
+    // Transport dispatch mirrors detail::dispatch_transport (ADC-641): validate_transport preserves the
+    // unknown_transport_msg byte-for-byte, then the switch on the typed TransportRouteId routes to the
+    // per-transport single-block seam.
+    validate_transport(b.spec.transport);
+    switch (parse_transport_route(b.spec.transport)) {
+      case TransportRouteId::kExb:
+        install(detail::build_amr_compiled_exb(b.spec, b.limiter, b.riemann, bp));
+        break;
+      case TransportRouteId::kCompressible:
+        install(detail::build_amr_compiled_compressible(b.spec, b.limiter, b.riemann, bp));
+        break;
+      case TransportRouteId::kIsothermal:
+        install(detail::build_amr_compiled_isothermal(b.spec, b.limiter, b.riemann, bp));
+        break;
     }
   }
 };

@@ -75,14 +75,13 @@ void add_compiled_model(System& sys, const std::string& name, Model model,
   const bool imex = (time_route == TimeRouteId::kImex);
   const bool recon_prim = (parse_recon_route(recon, "add_compiled_model") ==
                            ReconRouteId::kPrimitive);
-  // EXPLICIT RK scheme marshaled by the production path (add_native_block -> pops_install_native
-  // -> this template): "ssprk3" (3 stages, order 3, less dissipative, to pair with weno5), "euler"
-  // (ForwardEuler, order 1: fidelity to first-order references, validation) vs "ssprk2"
-  // (historical default for "explicit", bit-identical). Has effect ONLY on the explicit advance --
-  // IMEX keeps its ForwardEuler half-step + implicit source, so method is ignored when imex.
-  const std::string method = (time_route == TimeRouteId::kSsprk3)         ? "ssprk3"
-                             : (time_route == TimeRouteId::kForwardEuler) ? "euler"
-                                                                          : "ssprk2";
+  // EXPLICIT RK scheme marshaled by the production path (add_native_block -> pops_install_native ->
+  // this template): the ONE canonical spelling of the typed route (ADC-641), replacing the enum ->
+  // string round-trip. route_token(kSsprk3)=="ssprk3", route_token(kForwardEuler)=="euler",
+  // route_token(kExplicitSsprk2)=="explicit", route_token(kImex)=="imex" -- and build_block decodes it
+  // once via parse_time_route ("explicit" and "ssprk2" both resolve to the SSPRK2 advance, "imex" is
+  // ignored past the imex flag), so the advance selected is bit-identical to the old ternary.
+  const std::string method = route_token(time_route);
   // The block may read extra auxiliary fields (aux_comps<Model> > 3, e.g. B_z of a magnetized
   // source): we widen the System's SHARED aux channel BEFORE capturing its address, so that the
   // closure reads a wide enough aux. Base model (3) -> no-op, unchanged.

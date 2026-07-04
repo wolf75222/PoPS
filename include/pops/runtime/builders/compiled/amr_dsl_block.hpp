@@ -1014,28 +1014,34 @@ AmrRuntimeBlock dispatch_amr_block(
   // ADC-359: delegate to the flux-pinned dispatch_amr_block_<flux> helpers above (factored so the
   // compressible seam compiles one flux per TU). Behavior is unchanged: same leaves, same hllc/roe
   // capability guards, same throws. exb/isothermal route here as before (their guards prune hllc/roe).
-  // runtime_params (ADC-514) threads through to build_amr_block (nullptr for a param-free model).
-  if (riem == "rusanov")
-    return dispatch_amr_block_rusanov(m, lim, S, name, density, has_density, gamma, substeps,
-                                      recon_prim, imex, stride, implicit_components, nopts, state,
-                                      newton_diagnostics, time_method, pos_floor, runtime_params);
-  if (riem == "hll")
-    return dispatch_amr_block_hll(m, lim, S, name, density, has_density, gamma, substeps,
-                                  recon_prim, imex, stride, implicit_components, nopts, state,
-                                  newton_diagnostics, time_method, pos_floor, runtime_params);
-  // hllc / euler_hllc share the leaf: on the true Euler brick the generic HLLCFlux (via
-  // HasHLLCStructure) and the explicit EulerHLLCFlux2D are bit-identical (ADC-590). The native
-  // compressible transport that reaches AMR carries the capability, so both route here; euler_hllc
-  // on a non-Euler transport is refused by the dispatch_amr_block_hllc capability guard (same
-  // message). Same for roe / euler_roe.
-  if (riem == "hllc" || riem == "euler_hllc")
-    return dispatch_amr_block_hllc(m, lim, S, name, density, has_density, gamma, substeps,
-                                   recon_prim, imex, stride, implicit_components, nopts, state,
-                                   newton_diagnostics, time_method, pos_floor, runtime_params);
-  if (riem == "roe" || riem == "euler_roe")
-    return dispatch_amr_block_roe(m, lim, S, name, density, has_density, gamma, substeps,
-                                  recon_prim, imex, stride, implicit_components, nopts, state,
-                                  newton_diagnostics, time_method, pos_floor, runtime_params);
+  // ADC-641: parse the validated tag ONCE into the typed RiemannRouteId; the switch decodes it and the
+  // euler_* fall-through keeps the fusion self-documenting. runtime_params (ADC-514) threads through to
+  // build_amr_block (nullptr for a param-free model). The default is the defense-in-depth guard.
+  switch (parse_riemann_route(riem, "add_block(AmrSystem, multi-block)")) {
+    case RiemannRouteId::kRusanov:
+      return dispatch_amr_block_rusanov(m, lim, S, name, density, has_density, gamma, substeps,
+                                        recon_prim, imex, stride, implicit_components, nopts, state,
+                                        newton_diagnostics, time_method, pos_floor, runtime_params);
+    case RiemannRouteId::kHll:
+      return dispatch_amr_block_hll(m, lim, S, name, density, has_density, gamma, substeps,
+                                    recon_prim, imex, stride, implicit_components, nopts, state,
+                                    newton_diagnostics, time_method, pos_floor, runtime_params);
+    // hllc / euler_hllc share the leaf: on the true Euler brick the generic HLLCFlux (via
+    // HasHLLCStructure) and the explicit EulerHLLCFlux2D are bit-identical (ADC-590). The native
+    // compressible transport that reaches AMR carries the capability, so both route here; euler_hllc
+    // on a non-Euler transport is refused by the dispatch_amr_block_hllc capability guard (same
+    // message). Same for roe / euler_roe.
+    case RiemannRouteId::kHllc:
+    case RiemannRouteId::kEulerHllc:
+      return dispatch_amr_block_hllc(m, lim, S, name, density, has_density, gamma, substeps,
+                                     recon_prim, imex, stride, implicit_components, nopts, state,
+                                     newton_diagnostics, time_method, pos_floor, runtime_params);
+    case RiemannRouteId::kRoe:
+    case RiemannRouteId::kEulerRoe:
+      return dispatch_amr_block_roe(m, lim, S, name, density, has_density, gamma, substeps,
+                                    recon_prim, imex, stride, implicit_components, nopts, state,
+                                    newton_diagnostics, time_method, pos_floor, runtime_params);
+  }
   throw_registry_dispatch_mismatch("add_block(AmrSystem, multi-block)", "flux", riem);
 }
 
@@ -1145,16 +1151,22 @@ AmrCompiledHooks dispatch_amr_compiled(const Model& m, const std::string& lim,
   validate_limiter(lim, "add_compiled_model(AmrSystem)");
   // ADC-359: delegate to the flux-pinned dispatch_amr_compiled_<flux> helpers above. Behavior unchanged
   // (same leaves, guards, throws); exb/isothermal route here as before (their guards prune hllc/roe).
-  if (riem == "rusanov")
-    return dispatch_amr_compiled_rusanov(m, lim, bp);
-  if (riem == "hll")
-    return dispatch_amr_compiled_hll(m, lim, bp);
-  // hllc / euler_hllc (and roe / euler_roe) share the leaf: bit-identical on the true Euler brick
-  // (ADC-590); euler_* on a non-Euler transport is refused by the same capability guard.
-  if (riem == "hllc" || riem == "euler_hllc")
-    return dispatch_amr_compiled_hllc(m, lim, bp);
-  if (riem == "roe" || riem == "euler_roe")
-    return dispatch_amr_compiled_roe(m, lim, bp);
+  // ADC-641: parse the validated tag ONCE into the typed RiemannRouteId; the euler_* fall-through keeps
+  // the fusion self-documenting. The default is the defense-in-depth registry/dispatch guard.
+  switch (parse_riemann_route(riem, "add_compiled_model(AmrSystem)")) {
+    case RiemannRouteId::kRusanov:
+      return dispatch_amr_compiled_rusanov(m, lim, bp);
+    case RiemannRouteId::kHll:
+      return dispatch_amr_compiled_hll(m, lim, bp);
+    // hllc / euler_hllc (and roe / euler_roe) share the leaf: bit-identical on the true Euler brick
+    // (ADC-590); euler_* on a non-Euler transport is refused by the same capability guard.
+    case RiemannRouteId::kHllc:
+    case RiemannRouteId::kEulerHllc:
+      return dispatch_amr_compiled_hllc(m, lim, bp);
+    case RiemannRouteId::kRoe:
+    case RiemannRouteId::kEulerRoe:
+      return dispatch_amr_compiled_roe(m, lim, bp);
+  }
   throw_registry_dispatch_mismatch("add_compiled_model(AmrSystem)", "flux", riem);
 }
 

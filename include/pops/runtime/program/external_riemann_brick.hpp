@@ -51,12 +51,12 @@ template <class Model, class Flux>
 BlockClosures external_make_block(const Model& m, const std::string& lim, const GridContext& ctx,
                                   bool recon_prim, Real pos_floor) {
   validate_limiter(lim, "external riemann brick");
-  return dispatch_limiter(parse_limiter_route(lim, "external riemann brick"),
-                          "external riemann brick", [&](auto tag) {
-                            using L = typename decltype(tag)::type;
-                            return build_block<L, Flux>(m, ctx, /*imex=*/false, recon_prim, "ssprk2",
-                                                        {}, {}, nullptr, pos_floor);
-                          });
+  const char* kCtx = "external riemann brick";
+  return dispatch_limiter(parse_limiter_route(lim, kCtx), kCtx, [&](auto tag) {
+    using L = typename decltype(tag)::type;
+    return build_block<L, Flux>(m, ctx, /*imex=*/false, recon_prim, "ssprk2", {}, {}, nullptr,
+                                pos_floor);
+  });
 }
 
 // One explicit residual R = -div F(U) + S evaluated with the external flux @p Flux on @p Model. Same

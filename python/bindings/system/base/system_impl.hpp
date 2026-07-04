@@ -16,7 +16,7 @@
 #include <pops/runtime/builders/block/block_builder.hpp>  // GridContext + make_block/make_max_speed (compiled closures)
 #include <pops/runtime/builders/block/block_seam.hpp>  // ADC-335: per-transport build seam (build_block_exb/.../polar)
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model + compiled bricks
-#include <pops/runtime/dynamic/model_registry.hpp>  // unknown_transport_msg: single-source transport rejection (ADC-331)
+#include <pops/runtime/dynamic/model_registry.hpp>  // validate_transport: single-source transport rejection (ADC-331)
 #include <pops/coupling/schur/source/condensed_schur_source_stepper.hpp>  // Schur-condensed source stage (pops.Split / CondensedSchur, #126)
 #include <pops/coupling/schur/source/polar_condensed_schur_source_stepper.hpp>  // POLAR counterpart of the condensed source stage (Path A step 2c, #212)
 #include <pops/coupling/source/coupled_source_program.hpp>  // CoupledSourceKernel: generic coupled source (DSL P5, bytecode)

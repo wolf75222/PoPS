@@ -31,6 +31,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 
 ### Changed
+- ADC-641 Type the runtime dispatch on the ADC-584 route ids: the Riemann flux, transport and time-method string ladders across the System, polar and AMR builders and the System/AmrSystem binding seams now parse the (already validated) tag once into its RiemannRouteId / TransportRouteId / TimeRouteId and switch on the enum (the euler_hllc/euler_roe fall-through mirrors the existing fusion; the validate_* functions and their refusal messages stay in front, so parse_*_route's own throw is unreachable defense in depth). The native add_dynamic_block loader drops its private 0/1/2 reconstruction table for the shared LimiterRouteId (weno5 is now refused via its route limitation, ctx "recon"), and the enum->string time round-trips in dsl_block and the two system_install time_method normalizations collapse to route_token(parse_time_route(...)). Emitted numerics are byte-identical (same build_block/build_amr leaf instantiations); only the time_method diagnostic string canonicalizes (explicit -> "explicit").
 - ADC-644 DirectSmallGrid(threshold) default changed from 100 to None ("governed by min_coarse").
   The old 100 was recorded but never honoured (the threshold was silently dropped before it reached
   the runtime), so no recorded trajectory depended on it; None lowers to the native disabled sentinel
