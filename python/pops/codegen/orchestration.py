@@ -227,13 +227,13 @@ def bind(compiled: Any, *, initial_state: Any = None, state: Any = None, params:
     # OUTPUT / CHECKPOINT policies (C4 / ADC-509) from the COMPILE-TIME snapshot (compiled._outputs),
     # so the bound sim's run() fires exactly the policies the compile saw. Empty for a Problem with no
     # .output(...) -- the install is unchanged.
-    outputs = list(getattr(compiled, "_outputs", None)
-                   if getattr(compiled, "_outputs", None) is not None
+    _outputs_src = getattr(compiled, "_outputs", None)
+    outputs = list(_outputs_src if _outputs_src is not None
                    else (getattr(problem, "_outputs", []) or []))
     # Declared diagnostic measures (ADC-542) from the same compile-time snapshot, flowed onto the
     # engine so run() fires each at its cadence via the native reductions.
-    diagnostics = list(getattr(compiled, "_diagnostics", None)
-                       if getattr(compiled, "_diagnostics", None) is not None
+    _diag_src = getattr(compiled, "_diagnostics", None)
+    diagnostics = list(_diag_src if _diag_src is not None
                        else (getattr(problem, "_diagnostics", []) or []))
 
     # The AMR install goes through the NATIVE per-block path (each instance carries its OWN

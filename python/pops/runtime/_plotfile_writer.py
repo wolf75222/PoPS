@@ -24,7 +24,8 @@ def write_plotfile(sim, prefix, step=None, levels=None):
     if levels is None:
         levels = list(range(n_levels))
     n = int(sim.nx())
-    L = float(getattr(sim, "_L", None) if getattr(sim, "_L", None) is not None else n)
+    _L_attr = getattr(sim, "_L", None)
+    L = float(_L_attr if _L_attr is not None else n)
     t = float(sim.time())
     suffix = ("_%06d" % int(step)) if step is not None else ""
     root = prefix + suffix
