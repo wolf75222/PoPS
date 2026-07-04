@@ -13,6 +13,7 @@
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>  // coarse solver (geometric multigrid)
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian (residual, reads the already-filled ghosts)
 #include <pops/numerics/time/amr/levels/amr_patch_range.hpp>  // PatchRange, CoverageMask (coarse footprint of a patch)
+#include <pops/parallel/comm.hpp>  // my_rank / n_ranks (replicated coarse dmap, MPI dispatch + gather)
 #include <pops/runtime/numerical_defaults.hpp>
 
 #include <algorithm>
@@ -105,7 +106,11 @@ class CompositeFacPoisson {
       : geom_c_(geom_c),
         geom_f_(geom_c.refine(ratio)),
         ba_c_(ba_c),
-        dm_c_(ba_c.size(), n_ranks()),
+        // REPLICATED coarse (ADC-636): the mono-box coarse lives on EVERY rank (each rank owns
+        // fab(0)), which is what all the .fab(0) coarse reads assume and what GeometricMG(replicated)
+        // expects. At np=1 my_rank()==0 -> identical to the historical round-robin (size, n_ranks())
+        // that also placed the single box on rank 0: MONO-RANK bit-identical.
+        dm_c_(std::vector<int>(static_cast<std::size_t>(ba_c.size()), my_rank())),
         bc_(bc),
         ratio_(ratio),
         ba_f_(fine_boxes),
@@ -169,6 +174,9 @@ class CompositeFacPoisson {
   const Box2D& patch_coarse(int g) const { return patch_coarse_[g]; }
   /// Number of fine patches (size of the fine BoxArray).
   int n_fine_patches() const { return ba_f_.size(); }
+  /// Number of levels in the composite hierarchy. The historical 2-level ctors give 2; the N-level
+  /// ctor (ADC-636, composite_fac_nlevel.hpp) gives 1 + number of patch levels.
+  int n_levels() const { return n_levels_; }
 
   void set_verbose(bool v) { verbose_ = v; }
   const RuntimeDiagnosticsReport& diagnostics_report() const { return diagnostics_; }
@@ -192,9 +200,22 @@ class CompositeFacPoisson {
 
   /// Solves the composite system. @return the final max composite residual.
   /// @p max_iters FAC iterations (two-way); @p fine_sweeps SOR sweeps per fine solve; @p tol tolerance.
-  Real solve(int max_iters,
-             int fine_sweeps,
-             Real tol) {
+  ///
+  /// DISPATCH (ADC-636). The 2-level, NON adjacent, MONO-RANK envelope routes to the VERBATIM legacy
+  /// body (solve_two_level_legacy_ below) -- same bytes, hence same bits, gated by the golden. Every
+  /// genuinely new shape (N > 2 levels, adjacent fine patches, or n_ranks() > 1) routes to the general
+  /// FAC (solve_composite_nlevel_, composite_fac_nlevel.hpp). At L == 2 / non-adjacent / mono-rank the
+  /// general path reduces algebraically to the legacy loop (cross-checked, not gated on).
+  Real solve(int max_iters, int fine_sweeps, Real tol) {
+    if (n_levels_ == 2 && !adjacent_ && n_ranks() == 1)
+      return solve_two_level_legacy_(max_iters, fine_sweeps, tol);
+    return solve_composite_nlevel_(max_iters, fine_sweeps, tol);
+  }
+
+ private:
+  /// VERBATIM historical 2-level FAC driver (moved unchanged from solve(); ADC-636 dispatch). This is
+  /// the non-regression anchor: the 2-level non-adjacent mono-rank path executes exactly these bytes.
+  Real solve_two_level_legacy_(int max_iters, int fine_sweeps, Real tol) {
     // VARIABLE COEFFICIENT (condensed Schur operator B_z=0): sets eps on the coarse solver and
     // fills the eps ghosts PER LEVEL. eps_c ghosts = zero-gradient (coeff_bc Foextrap, like the
     // Schur builder); eps_f C-F ghosts = bilerp of eps_c (consistency of the coefficient flux across
@@ -250,6 +271,7 @@ class CompositeFacPoisson {
     return rnorm;
   }
 
+ public:
   Real last_residual() const { return last_residual_; }
 
  private:
@@ -553,7 +575,24 @@ class CompositeFacPoisson {
   bool verbose_ = false;
   bool two_way_ = true;
   CompositeFacOptions options_;  ///< ADC-614: installed FAC knobs; defaults = kFAC* (bit-identical).
+  int n_levels_ = 2;      ///< ADC-636: hierarchy depth; 2 for the historical ctors, 1+patch-levels for N-level.
+  bool adjacent_ = false;  ///< ADC-636: true when the hierarchy has edge/corner-touching fine patches (general path).
   static constexpr Real kPi_ = Real(3.14159265358979323846);
+
+  // ADC-636: the general FAC (N levels / adjacent patches / MPI). Declared here; DEFINED out-of-line
+  // in composite_fac_nlevel.hpp (tail-included below) so composite_fac_poisson.hpp keeps the legacy
+  // body + dispatch and the general machinery lives in the mg/ layer per ADC-334.
+  Real solve_composite_nlevel_(int max_iters, int fine_sweeps, Real tol);
 };
+
+// ADC-636 commit 1: the general FAC path is introduced in commit 2 (composite_fac_nlevel.hpp). Until
+// then no ctor produces a hierarchy that reaches it (require_separated_patches still refuses adjacency,
+// the N-level ctor does not exist yet, and MPI is refused upstream), so this stub is unreachable; it
+// keeps commit 1 self-contained and gated purely by the 2-level golden. Commit 2 replaces it.
+inline Real CompositeFacPoisson::solve_composite_nlevel_(int, int, Real) {
+  throw std::runtime_error(
+      "CompositeFacPoisson: the general N-level/adjacent/MPI FAC path is not yet linked (ADC-636 "
+      "commit 2); only the 2-level non-adjacent mono-rank legacy path is available at this stage.");
+}
 
 }  // namespace pops
