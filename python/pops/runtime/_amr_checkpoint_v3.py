@@ -200,38 +200,45 @@ def restart_v3(sim, d, L):
     for k in range(nlev):
         sim.set_level_potential(k, np.asarray(d["phi_%d" % k], dtype=np.float64).ravel())
 
-    # (6) MULTISTEP HISTORY RINGS (ADC-631): restore the policy-stored slots + per-slot dt, then replay
-    # the recomputed gaps (restore_histories drives rebuild_history_slots, which re-steps the installed
-    # Program with regrid frozen). Runs AFTER state/aux/phi (the replay seeds from a ring slot and is
-    # SAVE/RESTORE bracketed) and BEFORE the clock. The SHARED restore_histories is reused verbatim.
+    # (6) MULTISTEP HISTORY RINGS (ADC-631/ADC-635): restore the policy-stored slots + per-slot dt, then
+    # replay the recomputed gaps (restore_histories drives rebuild_history_slots, which re-steps the
+    # installed Program with regrid ACTIVE, reproducing the original in-window regrid schedule and its
+    # incremental remap chain). Runs AFTER state/aux/phi (the replay seeds from a ring slot and is
+    # SAVE/RESTORE bracketed) and BEFORE the clock. _restore_histories_v3 primes the facade cursor to m.
     report = _restore_histories_v3(sim, d)
 
-    # (8) CLOCK LAST (macro_step advances the regrid cadence phase).
+    # (8) CLOCK LAST (macro_step advances the regrid cadence phase; idempotent with the replay's prime).
     sim.set_clock(float(d["t"]), int(d["macro_step"]))
     return report
 
 
 def _restore_histories_v3(sim, d):
-    """Restore + replay the v3 history rings, refusing the two genuinely new AMR impossible cases.
+    """Restore + replay the v3 history rings THROUGH in-window regrids (ADC-635), refusing the one
+    genuinely impossible AMR case.
 
-    (1) RANK-COUNT CHANGE: replaying a NON-Dense ring re-steps the installed Program whose regrids are
-    collective, so a different rank count from the checkpoint would desync the deterministic regrid --
-    refuse LOUD (Dense rings need no replay -> they restart across any np).
-    (2) REGRID BETWEEN THE SEED ANCHOR'S ERA AND THE CHECKPOINT: ring slots are stored REMAPPED onto
-    the checkpoint hierarchy. A head-of-step regrid due at any original macro-step from the seed
-    anchor's re-step on breaks bit-exactness two ways: a regrid INSIDE the replayed steps is one the
-    frozen re-step skips (and its remap destroyed the pre-regrid fine data an exact re-step needs), and
-    a regrid AFTER them remapped the stored targets while the replay steps the REMAPPED seed (step and
-    remap do not commute). Both are unreconstructable from the checkpoint -- refuse LOUD. Outside these
-    two cases the replay re-executes the ORIGINAL regrid-free step sequence on the checkpoint hierarchy
-    (the engine freezes the regrid cadence for the internal re-step; the original steps of a clean
-    window saw the SAME empty regrid schedule), so the reconstruction is bit-exact.
+    RANK-COUNT CHANGE (kept): replaying a NON-Dense ring re-steps the installed Program whose regrids
+    are collective, so a different rank count from the checkpoint would desync the deterministic regrid
+    -- refuse LOUD (Dense rings need no replay -> they restart across any np).
+
+    The ADC-631 straddle refusal is LIFTED: the replay now re-steps with regrid ACTIVE, driving the
+    facade cursor so the ORIGINAL in-window regrid schedule fires and each recomputed slot rides the
+    same incremental remap chain the stored anchors rode (rebuild_history_slots). The facade cursor is
+    primed to the checkpoint macro-step m BEFORE the replay (the replay reads it as the anchor for the
+    per-re-step cursor m-1-j and restores it afterwards; the final set_clock re-imposes m regardless).
+
+    COHERENCE GUARD (replaces the refusal): the engine refuses a regrid completed OFF the due schedule
+    derived from (depth, m, regrid_every); here we additionally assert the checkpoint's recorded
+    fingerprint history_regrid_steps_<name> matches the schedule re-derived from the manifest's own
+    scalars, and that every completed replay regrid sits on it (an old ADC-631 v3 file without the key
+    DERIVES the schedule from m + regrid_every -- back-compat; a non-straddling old file has an empty
+    schedule, identical to the clean-window path). A mismatch fails LOUD; a due step whose regrid
+    no-ops deterministically (single-level hierarchy, empty tags) is legitimate on both runs.
     Returns the typed HistoryReplayReport, or ``None`` when the checkpoint has no rings.
     """
     if "history_names" not in d or not len(list(d["history_names"])):
         return None
     from pops import _pops
-    from pops.runtime._system_io_history import restore_histories
+    from pops.runtime._system_io_history import replay_regrid_steps, restore_histories
     chk_ranks = int(d["n_ranks"]) if "n_ranks" in d else 1
     cur_ranks = int(_pops.n_ranks())
     m = int(d["macro_step"])
@@ -241,7 +248,7 @@ def _restore_histories_v3(sim, d):
         key = "history_stored_slots_" + hname
         stored = sorted(int(s) for s in d[key]) if key in d else list(range(depth))
         if len(stored) >= depth:
-            continue  # Dense (every slot stored): no replay -> neither refusal applies.
+            continue  # Dense (every slot stored): no replay -> the refusal does not apply.
         if chk_ranks != cur_ranks:
             raise ValueError(
                 "restart : history '%s' uses a non-Dense persistence policy that must REPLAY the "
@@ -250,25 +257,46 @@ def _restore_histories_v3(sim, d):
                 "the rank-count change. Restart under %d rank(s), or checkpoint the ring with "
                 "Dense() (Dense needs no replay and restarts across any np)."
                 % (hname, chk_ranks, cur_ranks, chk_ranks))
-        if regrid_every > 0:
-            # The replay of gap (newer=a, older=b) re-executes the original macro-steps from the seed
-            # anchor's era (step m-b) forward; ANY head-of-step regrid due at s in [m-b, m-1] breaks
-            # bit-exactness (skipped-regrid re-step, or a stored-value remap the re-step cannot
-            # commute with). Due when s > 0 and s % regrid_every == 0.
-            for a, b in zip(stored, stored[1:]):
-                if b - a < 2:
-                    continue  # adjacent anchors: no missing slot in this gap
-                for s in range(m - b, m):
-                    if s > 0 and s % regrid_every == 0:
-                        raise ValueError(
-                            "restart : history '%s' cannot be replayed: a regrid was due at "
-                            "macro-step %d, between the era of stored slot %d and the checkpoint "
-                            "(macro-step %d, regrid_every=%d); the regrid remap makes the "
-                            "recomputed slots of gap %d..%d unreconstructable bit-exactly. "
-                            "Checkpoint the ring with Dense(), or checkpoint at a step whose "
-                            "replay windows cross no regrid boundary."
-                            % (hname, s, b, m, regrid_every, a, b))
-    return restore_histories(sim, d, ckpt_version=3)
+
+    # Prime the facade cursor to the checkpoint macro-step so the replay's per-re-step cursor (m-1-j)
+    # reproduces the ORIGINAL in-window regrid schedule. The engine bracket saves/restores it; the
+    # final set_clock in restart_v3 re-imposes m (idempotent, the uninterrupted-clock invariant holds).
+    if hasattr(sim, "set_clock"):
+        sim.set_clock(float(d["t"]), m)
+
+    fired = {}
+    report = restore_histories(sim, d, ckpt_version=3, fired_out=fired)
+
+    # Fingerprint assertion (ADC-635). Two sound checks per replayed ring:
+    # (1) the recorded fingerprint history_regrid_steps_<name> must equal the schedule re-derived from
+    #     the manifest's own (depth, macro_step, regrid_every) -- pure arithmetic on the same scalars,
+    #     so any corruption of the fingerprint, the cadence or the clock fails LOUD;
+    # (2) every regrid the replay actually COMPLETED must sit on that schedule (an off-schedule firing
+    #     means broken cursor driving / a divergent restart composition). A due step that completed
+    #     NOTHING is legitimate: regrid() no-ops deterministically (single-level hierarchy, no wired
+    #     predicate, empty tags) and by determinism the original run no-oped there identically.
+    # An OLDER v3 file lacks the fingerprint key -> derive it (back-compat; empty for a clean window).
+    for hname, got in fired.items():
+        derived = replay_regrid_steps(int(d["history_depth_" + hname]), m, regrid_every)
+        key = "history_regrid_steps_" + hname
+        if key in d:
+            recorded = sorted(int(s) for s in d[key])
+            if recorded != derived:
+                raise ValueError(
+                    "restart : history '%s' checkpoint records the in-window regrid schedule %r but "
+                    "its own macro_step=%d / regrid_every=%d derive %r; the manifest is corrupted or "
+                    "inconsistent with the recorded in-window regrid schedule."
+                    % (hname, recorded, m, regrid_every, derived))
+        else:
+            recorded = derived
+        off = sorted(set(int(s) for s in got) - set(recorded))
+        if off:
+            raise ValueError(
+                "restart : history '%s' replay completed regrids at macro-steps %r which are OFF the "
+                "recorded in-window regrid schedule %r (checkpoint macro-step %d, regrid_every=%d); "
+                "the restart composition is inconsistent with the recorded in-window regrid schedule."
+                % (hname, off, recorded, m, regrid_every))
+    return report
 
 
 def _owner_ranks_for_boxes(d, boxes, nlev):
