@@ -31,6 +31,19 @@ if TYPE_CHECKING:
 else:
     _System = object
 
+# ADC-613: the GeometricMG V-cycle kwargs set_poisson accepts, minus abs_tol (routed separately so
+# the historical abs_tol path keeps working when no typed descriptor is present).
+_MG_SET_POISSON_KEYS = ("rel_tol", "max_cycles", "min_coarse", "pre_smooth", "post_smooth",
+                        "bottom_sweeps")
+
+
+def _mg_set_poisson_kwargs(mg_options: Any) -> Any:
+    """Translate a GeometricMG.mg_options() dict into set_poisson keyword args (ADC-613).
+
+    Empty in -> empty out, so a string-token / lib-descriptor solver selection leaves set_poisson at
+    its native V-cycle defaults (bit-identical). Only the keys the resolver produced are forwarded."""
+    return {k: mg_options[k] for k in _MG_SET_POISSON_KEYS if k in mg_options}
+
 
 class _SystemUnifiedInstall(_System):
     """The internal ``_install_compiled`` lowering seam of System (driven by ``pops.bind``)."""
@@ -333,12 +346,40 @@ class _SystemUnifiedInstall(_System):
                 "Declare it with m.elliptic_field(%r, rhs=...), or fix the field name."
                 % (field, ", ".join(self._DEFAULT_POISSON_FIELDS), declared, field))
         token = self._solver_token(solver_brick)
-        opts = getattr(solver_brick, "options", {}) or {}
+        opts = self._solver_option_dict(solver_brick)
+        mg = self._solver_mg_options(solver_brick)  # ADC-613: resolved V-cycle scalars (or {})
         self.set_poisson(rhs=opts.get("rhs", "charge_density"), solver=token,
                          bc=opts.get("bc", "auto"), wall=opts.get("wall", "none"),
                          wall_radius=float(opts.get("wall_radius", 0.0)),
                          epsilon=float(opts.get("epsilon", 1.0)),
-                         abs_tol=float(opts.get("abs_tol", 0.0)))
+                         abs_tol=float(mg.get("abs_tol", opts.get("abs_tol", 0.0))),
+                         **_mg_set_poisson_kwargs(mg))
+
+    @staticmethod
+    def _solver_option_dict(solver_brick: Any) -> Any:
+        """The plain-dict option bag of a solver selection, or ``{}``.
+
+        A lib BrickDescriptor carries scheme options as a ``.options`` DICT ATTRIBUTE; a typed
+        pops.solvers descriptor exposes ``options`` as a METHOD (a bound method is not a mapping),
+        so only a genuine dict is read here -- never the method object (the pre-613 code read the
+        bound method by mistake, so no typed knob ever flowed)."""
+        opts = getattr(solver_brick, "options", None)
+        return opts if isinstance(opts, dict) else {}
+
+    @staticmethod
+    def _solver_mg_options(solver_brick: Any) -> Any:
+        """The RESOLVED native GeometricMG V-cycle scalars of a typed descriptor (ADC-613), or ``{}``.
+
+        A typed pops.solvers.elliptic.GeometricMG exposes ``mg_options()`` (rel_tol / max_cycles /
+        min_coarse / pre_smooth / post_smooth / bottom_sweeps, tolerance descriptor already mapped).
+        A string token or a lib descriptor has none -> ``{}`` -> set_poisson keeps its native
+        defaults, bit-identical."""
+        mg_fn = getattr(solver_brick, "mg_options", None)
+        if callable(mg_fn):
+            resolved = mg_fn()
+            if isinstance(resolved, dict):
+                return resolved
+        return {}
 
     @staticmethod
     def _declared_elliptic_fields(compiled: Any, instances: Any) -> Any:

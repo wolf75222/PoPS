@@ -395,17 +395,26 @@ void bind_system_physics(py::class_<System>& cls) {
            "set_epsilon_field). "
            "abs_tol: absolute floor of the GeometricMG V-cycle stopping criterion (0 = relative "
            "criterion, "
-           "historical; no effect on FFT).",
+           "historical; no effect on FFT). rel_tol / max_cycles / min_coarse / pre_smooth / "
+           "post_smooth / bottom_sweeps: the GeometricMG V-cycle knobs (ADC-613); they default to "
+           "the native kMG* constants so an omitting call is bit-identical to the historical "
+           "V-cycle, and are inert for the FFT solver.",
            py::arg("rhs") = "charge_density", py::arg("solver") = "geometric_mg",
            py::arg("bc") = "auto", py::arg("wall") = "none", py::arg("wall_radius") = 0.0,
-           py::arg("epsilon") = 1.0, py::arg("abs_tol") = 0.0)
+           py::arg("epsilon") = 1.0, py::arg("abs_tol") = 0.0,
+           py::arg("rel_tol") = static_cast<double>(kMGDefaultRelTol),
+           py::arg("max_cycles") = kMGDefaultMaxCycles,
+           py::arg("min_coarse") = kMGDefaultMinCoarse, py::arg("pre_smooth") = kMGDefaultPreSmooth,
+           py::arg("post_smooth") = kMGDefaultPostSmooth,
+           py::arg("bottom_sweeps") = kMGDefaultBottomSweeps)
       // DISC transport domain (T2 / T5-PR3 work): materializes a cell-centered 0/1 mask (cell
       // active if its center is in hypot(x-cx, y-cy) - R < 0) and WIRES the transport according to
       // mode=: 'none' (default, full Cartesian transport, bit-identical even with the disc set),
       // 'staircase' (assemble_rhs_masked, 0/1 face gate), 'cutcell' (assemble_rhs_eb, cut-cell EB,
       // apertures + kappa). Honored under Lie AND Strang (set_time_scheme). cf. System::set_disc_domain.
       .def("set_disc_domain", &System::set_disc_domain, py::arg("cx"), py::arg("cy"), py::arg("R"),
-           py::arg("mode") = "none")
+           py::arg("mode") = "none", py::arg("kappa_min") = 0.0, py::arg("face_open_eps") = 0.0,
+           py::arg("cut_theta_min") = 0.0)
       // Toggles ONLY the disc transport mode ('none'|'staircase'|'cutcell') without (re)defining the
       // disc. A mode != 'none' requires a disc already set (set_disc_domain) -> error otherwise.
       .def("set_geometry_mode", &System::set_geometry_mode, py::arg("mode"))

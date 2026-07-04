@@ -380,7 +380,9 @@ class _SystemInstall(_System):
 
     def set_poisson(self, rhs: Any = "charge_density", solver: Any = "geometric_mg",
                     bc: Any = "auto", wall: Any = "none", wall_radius: float = 0.0,
-                    epsilon: float = 1.0, abs_tol: float = 0.0) -> Any:
+                    epsilon: float = 1.0, abs_tol: float = 0.0, rel_tol: Any = None,
+                    max_cycles: Any = None, min_coarse: Any = None, pre_smooth: Any = None,
+                    post_smooth: Any = None, bottom_sweeps: Any = None) -> Any:
         """Configure the shared system Poisson solve (thin wrapper over the native binding).
 
         Low-level runtime seam. The documented PUBLIC elliptic surface is the typed
@@ -404,6 +406,12 @@ class _SystemInstall(_System):
         :class:`pops.mesh.geometry.NoWall` lowers to ``wall="none"``. The legacy string forms are
         passed through unchanged (byte-identical native call). All the other arguments mirror the
         native ``set_poisson`` defaults verbatim.
+
+        ADC-613 adds the GeometricMG V-cycle knobs ``rel_tol`` / ``max_cycles`` / ``min_coarse`` /
+        ``pre_smooth`` / ``post_smooth`` / ``bottom_sweeps``. Left ``None`` they are NOT forwarded,
+        so the native solver keeps its ``kMG*`` defaults (bit-identical historical V-cycle); the
+        typed :class:`pops.solvers.elliptic.GeometricMG` descriptor lowers its resolved scalars
+        through here. They are inert for the FFT solver (direct, no iterative tolerance).
         """
         _guard_assembling(self, "set_poisson")  # frozen once pops.bind completes (ADC-592)
         bc = _lower_bc(bc)
@@ -417,8 +425,24 @@ class _SystemInstall(_System):
         solver = _resolve_route("field_solver", solver, context="set_poisson")
         bc = _resolve_route("poisson_bc", bc, context="set_poisson")
         wall = _resolve_route("wall", wall, context="set_poisson")
+        # ADC-613: forward the GeometricMG V-cycle knobs ONLY when the caller (or the lowered typed
+        # descriptor) set them, so the native set_poisson keeps its kMG*-sourced defaults otherwise
+        # (bit-identical). A None means "unspecified" -> not passed -> native default.
+        mg_kwargs = {}
+        if rel_tol is not None:
+            mg_kwargs["rel_tol"] = float(rel_tol)
+        if max_cycles is not None:
+            mg_kwargs["max_cycles"] = int(max_cycles)
+        if min_coarse is not None:
+            mg_kwargs["min_coarse"] = int(min_coarse)
+        if pre_smooth is not None:
+            mg_kwargs["pre_smooth"] = int(pre_smooth)
+        if post_smooth is not None:
+            mg_kwargs["post_smooth"] = int(post_smooth)
+        if bottom_sweeps is not None:
+            mg_kwargs["bottom_sweeps"] = int(bottom_sweeps)
         self._s.set_poisson(rhs=rhs, solver=solver, bc=bc, wall=wall,
-                            wall_radius=wall_radius, epsilon=epsilon, abs_tol=abs_tol)
+                            wall_radius=wall_radius, epsilon=epsilon, abs_tol=abs_tol, **mg_kwargs)
 
     def add_elliptic_model(self, name: Any, model: Any, solver: Any = None, bc: Any = "auto",
                            wall: Any = "none", wall_radius: float = 0.0) -> Any:

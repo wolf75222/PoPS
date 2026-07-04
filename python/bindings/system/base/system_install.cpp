@@ -481,13 +481,26 @@ void System::add_native_block(const std::string& name, const std::string& so_pat
 }
 
 void System::set_poisson(const std::string& rhs, const std::string& solver, const std::string& bc,
-                         const std::string& wall, double wall_radius, double epsilon,
-                         double abs_tol) {
+                         const std::string& wall, double wall_radius, double epsilon, double abs_tol,
+                         double rel_tol, int max_cycles, int min_coarse, int pre_smooth,
+                         int post_smooth, int bottom_sweeps) {
   require_assembling(p_->lifecycle_, "set_poisson");  // frozen once pops.bind completes (ADC-592)
   if (epsilon == 0.0)
     throw std::runtime_error("System::set_poisson : epsilon != 0 required");
   if (abs_tol < 0.0)
     throw std::runtime_error("System::set_poisson : abs_tol >= 0 required");
+  // ADC-613: the GeometricMG V-cycle knobs. Refuse out-of-domain values STRUCTURALLY here (the
+  // Python descriptor already refuses, but the native seam is a public API in its own right and
+  // must never silently accept a degenerate cycle). Defaults are the kMG* constants -> historical.
+  if (rel_tol <= 0.0)
+    throw std::runtime_error("System::set_poisson : rel_tol > 0 required");
+  if (max_cycles < 1)
+    throw std::runtime_error("System::set_poisson : max_cycles >= 1 required");
+  if (min_coarse < 1)
+    throw std::runtime_error("System::set_poisson : min_coarse >= 1 required");
+  if (pre_smooth < 0 || post_smooth < 0 || bottom_sweeps < 0)
+    throw std::runtime_error("System::set_poisson : pre_smooth/post_smooth/bottom_sweeps >= 0 "
+                             "required");
   p_->fields_.p_rhs = rhs;
   p_->fields_.p_solver = solver;
   p_->fields_.p_bc = bc;
@@ -496,6 +509,15 @@ void System::set_poisson(const std::string& rhs, const std::string& solver, cons
   p_->fields_.p_eps_ = static_cast<Real>(epsilon);
   p_->fields_.p_abs_tol_ =
       static_cast<Real>(abs_tol);  // absolute floor of the V-cycle (0 = relative only)
+  // Resolve the V-cycle knobs into the options POD the field solver forwards to GeometricMG (ctor
+  // args + solve(rel, cyc, abs)). abs_tol feeds both p_abs_tol_ (the pre-613 field) and the POD.
+  p_->fields_.p_mg_opts_.rel_tol = static_cast<Real>(rel_tol);
+  p_->fields_.p_mg_opts_.abs_tol = static_cast<Real>(abs_tol);
+  p_->fields_.p_mg_opts_.max_cycles = max_cycles;
+  p_->fields_.p_mg_opts_.min_coarse = min_coarse;
+  p_->fields_.p_mg_opts_.nu1 = pre_smooth;
+  p_->fields_.p_mg_opts_.nu2 = post_smooth;
+  p_->fields_.p_mg_opts_.nbottom = bottom_sweeps;
   p_->fields_.ell_.reset();
 }
 

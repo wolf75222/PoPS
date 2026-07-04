@@ -285,7 +285,15 @@ inline py::dict effective_poisson_options_to_dict(const EffectivePoissonOptions&
   d["wall"] = p.wall;
   d["wall_radius"] = p.wall_radius;
   d["epsilon"] = p.epsilon;
+  d["rel_tol"] = p.rel_tol;  // ADC-613: effective GeometricMG V-cycle knobs
   d["abs_tol"] = p.abs_tol;
+  d["max_cycles"] = p.max_cycles;
+  d["min_coarse"] = p.min_coarse;
+  d["pre_smooth"] = p.pre_smooth;
+  d["post_smooth"] = p.post_smooth;
+  d["bottom_sweeps"] = p.bottom_sweeps;
+  d["smoother"] = p.smoother;
+  d["coarse"] = p.coarse;
   d["has_epsilon_field"] = p.has_epsilon_field;
   d["has_anisotropic_epsilon"] = p.has_anisotropic_epsilon;
   d["has_reaction_field"] = p.has_reaction_field;

@@ -144,7 +144,17 @@ struct EffectivePoissonOptions {
   std::string wall = "none";
   double wall_radius = 0.0;
   double epsilon = 1.0;
+  // GeometricMG V-cycle knobs (ADC-613): defaults are the kMG* constants, so an unconfigured System
+  // reports (and runs) the historical V-cycle. Populated from the resolved GeometricMgOptions.
+  double rel_tol = static_cast<double>(kMGDefaultRelTol);
   double abs_tol = static_cast<double>(kMGDefaultAbsTol);
+  int max_cycles = kMGDefaultMaxCycles;
+  int min_coarse = kMGDefaultMinCoarse;
+  int pre_smooth = kMGDefaultPreSmooth;
+  int post_smooth = kMGDefaultPostSmooth;
+  int bottom_sweeps = kMGDefaultBottomSweeps;
+  std::string smoother = "red_black_gauss_seidel";
+  std::string coarse = "direct_small_grid";
   bool has_epsilon_field = false;
   bool has_anisotropic_epsilon = false;
   bool has_reaction_field = false;

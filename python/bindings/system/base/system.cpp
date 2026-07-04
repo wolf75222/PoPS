@@ -110,7 +110,16 @@ EffectiveOptionsReport System::effective_options_report() const {
   report.poisson.wall = p_->fields_.p_wall;
   report.poisson.wall_radius = p_->fields_.p_wall_radius;
   report.poisson.epsilon = static_cast<double>(p_->fields_.p_eps_);
-  report.poisson.abs_tol = static_cast<double>(p_->fields_.p_abs_tol_);
+  // ADC-613: surface the effective GeometricMG V-cycle knobs (default or overridden). smoother /
+  // coarse are the native realisation the descriptor maps onto (Gauss-Seidel bottom-solve MG); the
+  // descriptor refuses the un-wired Chebyshev smoother upstream, so the report is always honest.
+  report.poisson.rel_tol = static_cast<double>(p_->fields_.p_mg_opts_.rel_tol);
+  report.poisson.abs_tol = static_cast<double>(p_->fields_.p_mg_opts_.abs_tol);
+  report.poisson.max_cycles = p_->fields_.p_mg_opts_.max_cycles;
+  report.poisson.min_coarse = p_->fields_.p_mg_opts_.min_coarse;
+  report.poisson.pre_smooth = p_->fields_.p_mg_opts_.nu1;
+  report.poisson.post_smooth = p_->fields_.p_mg_opts_.nu2;
+  report.poisson.bottom_sweeps = p_->fields_.p_mg_opts_.nbottom;
   report.poisson.has_epsilon_field = p_->fields_.has_eps_field_;
   report.poisson.has_anisotropic_epsilon = p_->fields_.has_eps_xy_field_;
   report.poisson.has_reaction_field = p_->fields_.has_kappa_field_;

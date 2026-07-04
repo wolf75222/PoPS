@@ -49,6 +49,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   unregistered `test_coupling_operator_contract` into the standard C++ test list.
 
 ### Added
+- ADC-613 Propagate GeometricMG Python options (rel_tol, max_cycles, min_coarse,
+  pre/post/bottom sweeps) end to end to the native V-cycle; defaults reproduce the
+  historical 1e-8 / 50-cycle trajectory bit-for-bit; unsupported smoother/coarse types
+  refuse loud.
 - ADC-514 Native AMR runtime params: per-block RuntimeParams carrier plus AmrSystem.set_block_params, append-only AmrBuildParams/AmrCompiledHooks ABI and pops_* metadata export, so pops.bind(compiled=None, params={...}) changes a native AMR block result without recompiling the .so; default (no params) trajectories stay bit-identical.
 - ADC-515 Native `estimate_memory` / `arguments` introspection on the AMR-compiled artifact: the
   `CompiledModel` handle `pops.compile(layout=AMR(...))` returns now exposes the same bind-input and
