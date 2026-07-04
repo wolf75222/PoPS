@@ -26,6 +26,8 @@
 #include <string>
 #include <vector>
 
+#include "amr_native_param_guard.hpp"  // detail::reject_excessive_amr_runtime_params (ADC-514 loader guard)
+
 namespace pops {
 
 namespace {
@@ -119,11 +121,8 @@ struct AmrSystem::Impl {
     // COMPILED blocks carry it too (ADC-322): set_compiled_block stores it here from the regenerated
     // .so loader (pops_install_native_amr -> add_compiled_model), so both routings floor like a native block.
     double pos_floor = 0.0;
-    // NATIVE per-block RUNTIME parameters (ADC-514): the SHARED value vector the block's bricks read via
-    // apply_runtime_params. Set by set_compiled_block from add_compiled_model when the model declares
-    // dsl.Param(kind="runtime"). Threaded to make_build_params -> AmrBuildParams::runtime (mono path,
-    // build_amr_compiled) and to the AmrCompiledBlockBuilder (multi path). Empty for a param-free model
-    // -> no injection, byte-identical build.
+    // NATIVE per-block RUNTIME params (ADC-514): SHARED value vector the bricks read; empty -> no
+    // injection, byte-identical. See AmrSystem::set_block_params (amr_system_params.hpp).
     std::shared_ptr<std::vector<double>> runtime_params;
   };
 
@@ -263,12 +262,8 @@ struct AmrSystem::Impl {
   // address stays stable (program_ is a stable Impl member). AmrSystem::step routes through
   // run_program_cadence_ (reading program_.step_ / substeps_ / stride_) when a program is installed.
   pops::runtime::program::ProgramRuntimeState program_;
-  // NATIVE per-block RUNTIME parameters (ADC-514, AMR mirror of System::Impl::block_params_): block name
-  // -> SHARED value vector the block's bricks read via apply_runtime_params. Re-injected each macro-step
-  // (build_amr_compiled / the multi-block builder capture it), so set_block_params changes the trajectory
-  // WITHOUT recompiling. SEPARATE from program_.block_params_ (that keys the compiled Program). Absent for
-  // a block without a runtime param -> empty map, historical build byte-identical. NOT read by any
-  // SystemStepper template (AmrSystem has none), so the C++ MockImpl is unaffected.
+  // NATIVE per-block RUNTIME params (ADC-514, AMR mirror of System::Impl::block_params_): block name ->
+  // SHARED value vector set_block_params retargets WITHOUT recompiling; SEPARATE from program_.block_params_.
   std::map<std::string, std::shared_ptr<std::vector<double>>> block_params_;
 
   explicit Impl(const AmrSystemConfig& c) : cfg(c) {}
@@ -392,9 +387,8 @@ struct AmrSystem::Impl {
     // NAMED AUX group: model-named aux fields (ADC-291) + per-field halo policies (ADC-369).
     bp.named_aux.fields = named_aux_;
     bp.named_aux.halo_policies = named_aux_bc_;
-    // RUNTIME group (ADC-514): the SHARED runtime-param vector of the single block. Empty vector -> count
-    // 0 -> build_amr_compiled emits no injection (byte-identical historical path). The mono-block coupler
-    // reads bp.runtime and re-injects it into cpl->model_ each macro-step (set_block_params -> new values).
+    // RUNTIME group (ADC-514): the single block's SHARED param vector; empty -> count 0 -> no injection
+    // (byte-identical). The mono coupler re-injects it into cpl->model_ each macro-step.
     bp.runtime.values = b.runtime_params;
     bp.runtime.count = b.runtime_params ? static_cast<int>(b.runtime_params->size()) : 0;
     return bp;
@@ -497,7 +491,7 @@ struct AmrSystem::Impl {
         // block (forwarded to dispatch_amr_block -> build_amr_block). b.pos_floor == 0 for an OLDER .so
         // (it never marshals the field) -> inactive, bit-identical. No reject.
         // Runtime params (ADC-514): thread the SHARED vector so the multi-block builder re-injects it
-        // into the block's model each macro-step. Empty for a param-free model -> no injection.
+        // each macro-step (empty for a param-free model -> no injection).
         rblocks.push_back(b.compiled_block_builder(S, b.name, b.density, b.has_density, b.gamma,
                                                    b.substeps, b.recon_prim, b.imex, b.stride,
                                                    b.implicit_vars, b.implicit_roles, b.pos_floor,
@@ -933,8 +927,7 @@ POPS_EXPORT void AmrSystem::set_compiled_block(
   // AmrBuildParams::pos_floor, and the MULTI path forwards it through the AmrCompiledBlockBuilder.
   b.pos_floor = pos_floor;
   // NATIVE per-block runtime params (ADC-514): the SHARED vector add_compiled_model seeded from the
-  // model's declaration defaults (empty for a param-free model -> no injection, byte-identical). Stored
-  // on the block so make_build_params (mono) reads it and the AmrCompiledBlockBuilder (multi) threads it.
+  // model defaults (empty -> no injection); make_build_params (mono) reads it and the builder (multi) threads it.
   b.runtime_params = std::move(runtime_params);
   b.compiled_hooks_builder = std::move(mono_builder);   // single-block path (AmrCouplerMP)
   b.compiled_block_builder = std::move(multi_builder);  // multi-block path (AmrRuntime)
@@ -1134,21 +1127,9 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
         "(loader generated for System, or regenerate via "
         "dsl.compile_native(target='amr_system'))");
   }
-  // DEFENSE IN DEPTH (ADC-514): the codegen bounds a model to kMaxRuntimeParams runtime params, but a
-  // hand-built .so could declare a bogus pops_compiled_nparams. Reject it EARLY, before add_compiled_model
-  // seeds a value block the fixed-size device RuntimeParams cannot hold (mirror of native_loader.hpp's
-  // guard). The symbol is OPTIONAL: an older AMR loader (no runtime-param metadata) does not export it ->
-  // nparams stays 0, bit-identical. The `_p` injection itself happens type-safely inside add_compiled_model.
-  auto nparams_fn = reinterpret_cast<int (*)()>(dlsym(h, "pops_compiled_nparams"));
-  const int nparams = nparams_fn ? nparams_fn() : 0;
-  if (nparams > kMaxRuntimeParams) {
-    dlclose(h);
-    throw std::runtime_error(
-        "AmrSystem::add_native_block : the .so declares " + std::to_string(nparams) +
-        " runtime parameters > kMaxRuntimeParams=" + std::to_string(kMaxRuntimeParams) +
-        " (include/pops/runtime/config/runtime_params.hpp); regenerate the compiled module with the "
-        "current headers (the codegen enforces the same bound).");
-  }
+  // DEFENSE IN DEPTH (ADC-514): reject a bogus pops_compiled_nparams before add_compiled_model seeds
+  // the value block (closes h on overflow; 0 for an older loader without the symbol, bit-identical).
+  (void)detail::reject_excessive_amr_runtime_params(h);
   install(static_cast<void*>(this), name.c_str(), limiter.c_str(), riemann.c_str(), recon.c_str(),
           time.c_str(), gamma, substeps, positivity_floor);
   // The .so stays loaded (RTLD_GLOBAL) for the duration of the process: the type-erasing builder
@@ -1722,30 +1703,9 @@ RuntimeParams AmrSystem::program_params(int prog_block) const {
   // Unseeded block (no runtime param) -> default RuntimeParams (count 0). Shared subsystem (ADC-594).
   return p_->program_.params(prog_block);
 }
-// NATIVE per-block RUNTIME parameters (ADC-514, VERBATIM mirror of System::set_block_params). Overwrite
-// the SHARED value vector add_compiled_model registered for block @p name via register_block_params: the
-// build_amr_compiled / multi-block closures capture that vector and re-inject it into the block's model
-// each macro-step, so a write here changes the trajectory at the next step WITHOUT recompiling the .so.
-void AmrSystem::register_block_params(const std::string& name,
-                                      std::shared_ptr<std::vector<double>> values) {
-  p_->block_params_[name] = std::move(values);  // keyed by name so set_block_params resolves pre-build
-}
-void AmrSystem::set_block_params(const std::string& name, const std::vector<double>& values) {
-  // block_index raises the SAME "no block named" diagnostic as density(name)/mass(name) everywhere.
-  (void)p_->block_index_or_throw(name);
-  auto it = p_->block_params_.find(name);
-  if (it == p_->block_params_.end())
-    throw std::runtime_error(
-        "AmrSystem::set_block_params : block '" + name +
-        "' has no runtime parameter (declare dsl.Param(..., kind='runtime') and wire via a "
-        "production block ; const params are frozen at compile time)");
-  std::vector<double>& pv = *it->second;
-  if (values.size() != pv.size())
-    throw std::runtime_error("AmrSystem::set_block_params : block '" + name + "' expects " +
-                             std::to_string(pv.size()) + " runtime parameters, received " +
-                             std::to_string(values.size()));
-  pv = values;  // the vector is SHARED with the closures (shared_ptr): effect at the next step
-}
+// NATIVE per-block RUNTIME parameters (ADC-514): register_block_params + set_block_params are defined in
+// this binding-private header, split out to keep the TU on budget; it sees the complete Impl here.
+#include "amr_system_params.hpp"
 // The built multi-block AMR engine the AmrProgramContext driver wraps (nullptr before the lazy build /
 // on the single-block coupler path). install_program forces the runtime build so this is live there.
 AmrRuntime* AmrSystem::engine() const {

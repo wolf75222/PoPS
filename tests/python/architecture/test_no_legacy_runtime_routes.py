@@ -149,7 +149,10 @@ LARGE_RUNTIME_FILE_BUDGETS = {
     "python/bindings/system/base/system_install.cpp": 1250,
     # ADC-542: the AMR composite_reduce + rebuild_hierarchy (v3 restart) + level_owner_ranks facade
     # seams (native diagnostics / restartable-under-regridding) grew this by ~100 lines.
-    "python/bindings/amr/amr_system.cpp": 2320,
+    # ADC-514: the native per-block runtime-param carrier residue (Impl members, make_build_params /
+    # builder wiring, set_compiled_block signature) that stays inline after hoisting the two facade
+    # methods and the loader guard to amr_system_params.hpp / amr_native_param_guard.hpp adds ~25 lines.
+    "python/bindings/amr/amr_system.cpp": 2345,
     "include/pops/runtime/amr/amr_runtime.hpp": 1850,
     "include/pops/runtime/system/system_field_solver.hpp": 1100,
     "python/pops/runtime/_system_unified_install.py": 550,
