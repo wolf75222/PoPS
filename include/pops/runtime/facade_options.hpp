@@ -61,6 +61,11 @@ struct SourceStageOptions {
   double fac_coarse_rel_tol = 0.0;
   int fac_coarse_cycles = 0;
   bool fac_verbose = false;
+  // ADC-645: preconditioner knobs of the stage's Krylov solve. n_precond_vcycles = MG V-cycles per
+  // BiCGStab-preconditioner application (0 = the historical ctor default 1; the steppers accept 1 or
+  // 2). polar_precond = "radial_line" | "jacobi" (POLAR stage only; "" = the historical RadialLine).
+  int n_precond_vcycles = 0;
+  std::string polar_precond = "";
 };
 
 /// @brief BYTECODE description of a generic inter-species COUPLED SOURCE (cf.

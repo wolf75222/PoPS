@@ -183,9 +183,9 @@ class LinearProblem(Descriptor):
         # Delegate the method / preconditioner scheme resolution to the SINGLE source the Program
         # op uses (lazy import: keep pops.linalg free of a module-scope pops.time edge).
         from pops.time.program_solve import _lower_krylov_method, _lower_preconditioner
-        # ADC-644: _lower_preconditioner now returns (scheme, options); this record keeps naming
-        # the scheme token only (the options travel on the Program IR node, not here).
-        scheme = _lower_krylov_method(self.method)
+        # ADC-644/645: the shared lowerings now return (scheme, options) tuples; this record keeps
+        # naming the scheme tokens only (the options travel on the Program IR node, not here).
+        scheme, _method_options = _lower_krylov_method(self.method)
         precond, _precond_options = _lower_preconditioner(self.preconditioner)
         if self.max_iter is None or isinstance(self.max_iter, bool) or \
                 not isinstance(self.max_iter, int) or self.max_iter <= 0:

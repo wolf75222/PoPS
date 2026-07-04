@@ -227,6 +227,11 @@ struct EffectiveSourceStageOptions {
   double effective_fac_coarse_rel_tol = static_cast<double>(kFACInitialCoarseRelTol);
   int effective_fac_coarse_cycles = kFACInitialCoarseMaxCycles;
   bool fac_verbose = false;
+  // ADC-645: the stage's Krylov-preconditioner knobs. requested 0/"" = left default; the effective
+  // values are the historical stepper defaults (ONE MG V-cycle; RadialLine on polar).
+  int requested_n_precond_vcycles = 0;
+  int effective_n_precond_vcycles = 1;
+  std::string polar_precond;  ///< effective polar preconditioner ("" on a cartesian stage)
 };
 
 struct EffectiveRefinementOptions {

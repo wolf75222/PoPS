@@ -23,7 +23,7 @@ from typing import Any
 
 from pops.descriptors import Availability, Descriptor
 from pops.descriptors_report import CapabilitySet, ValidationReport
-from pops.solvers.options import Chebyshev, DirectSmallGrid, RedBlackGaussSeidel
+from pops.solvers.options import Chebyshev, CompositeFAC, DirectSmallGrid, RedBlackGaussSeidel
 from pops.solvers.requirements import capability_map
 from pops.solvers.tolerances import Absolute, Relative
 
@@ -71,7 +71,8 @@ class GeometricMG(Descriptor):
                  max_cycles: int = _MG_DEFAULT_MAX_CYCLES, min_coarse: int = _MG_DEFAULT_MIN_COARSE,
                  pre_sweeps: int = _MG_DEFAULT_PRE_SMOOTH,
                  post_sweeps: int = _MG_DEFAULT_POST_SMOOTH,
-                 bottom_sweeps: int = _MG_DEFAULT_BOTTOM_SWEEPS) -> None:
+                 bottom_sweeps: int = _MG_DEFAULT_BOTTOM_SWEEPS,
+                 amr_composite: Any = None) -> None:
         # Default smoother is the natively-wired RedBlackGaussSeidel (ADC-613): the native V-cycle
         # uses a Gauss-Seidel smoother, so this keeps GeometricMG() working. Chebyshev stays a
         # selectable descriptor but validate() refuses it (no native Chebyshev smoother yet).
@@ -89,6 +90,14 @@ class GeometricMG(Descriptor):
         self.pre_sweeps = _check_positive_int(pre_sweeps, "pre_sweeps", minimum=0)
         self.post_sweeps = _check_positive_int(post_sweeps, "post_sweeps", minimum=0)
         self.bottom_sweeps = _check_positive_int(bottom_sweeps, "bottom_sweeps", minimum=0)
+        # ADC-645: opt-in composite FAC AMR FIELD solve. None (default) = the Option A coarse solve +
+        # gradient injection, bit-identical; a typed CompositeFAC opts the AMR set_poisson into the
+        # native composite path. A bare bool/string is rejected (typed slot, Spec 5 sec.7).
+        if amr_composite is not None and not isinstance(amr_composite, CompositeFAC):
+            raise TypeError(
+                "GeometricMG(amr_composite=) must be a pops.solvers.options.CompositeFAC "
+                "descriptor or None, not %r; use CompositeFAC()." % (amr_composite,))
+        self.amr_composite = amr_composite
 
     @property
     def name(self) -> str:
@@ -99,7 +108,7 @@ class GeometricMG(Descriptor):
                                             variable_epsilon=True, periodic_bc=True, wall_bc=True))
 
     def options(self) -> dict:
-        return {
+        view = {
             "smoother": self.smoother.name,
             "coarse": self.coarse.name,
             "tolerance": self.tolerance.name,
@@ -109,6 +118,11 @@ class GeometricMG(Descriptor):
             "post_sweeps": self.post_sweeps,
             "bottom_sweeps": self.bottom_sweeps,
         }
+        # ADC-645: present ONLY when set (omit-when-default), so an unconfigured GeometricMG()
+        # options view -- and everything hashed from it -- is unchanged.
+        if self.amr_composite is not None:
+            view["amr_composite"] = self.amr_composite.name
+        return view
 
     def mg_options(self) -> dict:
         """The RESOLVED native V-cycle scalars set_poisson forwards to C++ (ADC-613).
@@ -184,7 +198,10 @@ class GeometricMG(Descriptor):
             extra={"smoother": self.smoother.lower(context),
                    "coarse": self.coarse.lower(context),
                    "tolerance": self.tolerance.lower(context),
-                   "mg_options": self.mg_options()})
+                   "mg_options": self.mg_options(),
+                   # ADC-645: the composite-FAC selection (None = Option A, omitted downstream).
+                   "amr_composite": (self.amr_composite.lower(context)
+                                     if self.amr_composite is not None else None)})
 
     def inspect(self) -> Any:
         view = super().inspect()

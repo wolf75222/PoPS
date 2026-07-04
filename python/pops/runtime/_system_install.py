@@ -88,6 +88,12 @@ class _SystemInstall(_System):
         # Implicit mask + Newton options carried by the temporal policy (IMEX/SourceImplicit);
         # neutral defaults on the other policies (Explicit). Resolved/validated on the C++ side
         # (System::add_block) against the block's names/roles.
+        # ADC-645: the WENO-Z regulariser rides along the Spatial (WENO5(epsilon=...)); None (the
+        # default) forwards NOTHING so the native add_block keeps its kWenoEpsilon default.
+        weno_kwargs = {}
+        weps = getattr(spatial, "weno_epsilon", None)
+        if weps is not None:
+            weno_kwargs["weno_epsilon"] = float(weps)
         self._s.add_block(name, model, spatial.limiter, spatial.flux, spatial.recon, time.kind,
                           getattr(time, "substeps", 1), evolve, getattr(time, "stride", 1),
                           getattr(time, "implicit_vars", []), getattr(time, "implicit_roles", []),
@@ -99,7 +105,7 @@ class _SystemInstall(_System):
                           getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING),
                           getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
                           getattr(spatial, "positivity_floor", 0.0),
-                          getattr(spatial, "wave_speed_cache", False))
+                          getattr(spatial, "wave_speed_cache", False), **weno_kwargs)
 
     def add_equation(self, name: Any, model: Any, spatial: Any = None, time: Any = None,
                      substeps: Any = None, names: Any = None, evolve: bool = True,
@@ -153,7 +159,10 @@ class _SystemInstall(_System):
                                      getattr(src, "momentum_x_spec", ""),
                                      getattr(src, "momentum_y_spec", ""),
                                      getattr(src, "energy_spec", ""),
-                                     getattr(src, "bz_aux_component", -1))
+                                     getattr(src, "bz_aux_component", -1),
+                                     # ADC-645: preconditioner knobs (0/"" = historical defaults).
+                                     getattr(src, "n_precond_vcycles", 0),
+                                     getattr(src, "polar_precond", ""))
             self._s.set_time_scheme(time.scheme)  # "lie" (Split) or "strang" (Strang)
             return
 
@@ -164,6 +173,12 @@ class _SystemInstall(_System):
         # NB: we call _s.add_block DIRECTLY with nsub/nstride (not self.add_block, whose
         # signature has no substeps -> it would use time.substeps and IGNORE the overrides).
         if isinstance(model, ModelSpec):
+            # ADC-645: the WENO-Z regulariser rides along the Spatial (WENO5(epsilon=...)); None (the
+            # default) forwards NOTHING so the native add_block keeps its kWenoEpsilon default.
+            weno_kwargs = {}
+            weps = getattr(spatial, "weno_epsilon", None)
+            if weps is not None:
+                weno_kwargs["weno_epsilon"] = float(weps)
             self._s.add_block(name, model, spatial.limiter, spatial.flux, spatial.recon, time.kind,
                               nsub, evolve, nstride,
                               getattr(time, "implicit_vars", []), getattr(time, "implicit_roles", []),
@@ -175,7 +190,7 @@ class _SystemInstall(_System):
                           getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING),
                           getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
                           getattr(spatial, "positivity_floor", 0.0),
-                          getattr(spatial, "wave_speed_cache", False))
+                          getattr(spatial, "wave_speed_cache", False), **weno_kwargs)
             return
 
         # Implicit mask (IMEX): only the composed native path (ModelSpec -> add_block) wires it. The .so
@@ -352,7 +367,8 @@ class _SystemInstall(_System):
     def set_source_stage(self, name: Any, kind: Any, theta: Any, alpha: Any,
                          krylov_tol: float = 0.0, krylov_max_iters: int = 0,
                          density: str = "", momentum_x: str = "", momentum_y: str = "",
-                         energy: str = "", bz_aux_component: int = -1) -> Any:
+                         energy: str = "", bz_aux_component: int = -1,
+                         n_precond_vcycles: int = 0, polar_precond: str = "") -> Any:
         """Attach a Schur-condensed source stage to an already-added block (ADC-308).
 
         Thin public pass-through to the C++ binding (_pops.System.set_source_stage): same flat
@@ -361,11 +377,15 @@ class _SystemInstall(_System):
         transport time scheme, so cases configure the stage without reaching into the private _s.
         @p name: block; @p kind: 'electrostatic_lorentz'; @p theta in (0, 1]; @p alpha: stage
         coupling. The krylov_* / field descriptors / bz_aux_component defaults reproduce the historical
-        bit-identical behavior. Prerequisite: B_z set via set_magnetic_field beforehand.
+        bit-identical behavior. ADC-645 adds @p n_precond_vcycles (cartesian stage, 1|2; 0 = the
+        historical ONE MG V-cycle per preconditioner application) and @p polar_precond (polar stage,
+        'radial_line'|'jacobi'; '' = the historical RadialLine); cross-geometry misuse refuses at the
+        native seam. Prerequisite: B_z set via set_magnetic_field beforehand.
         """
         _guard_assembling(self, "set_source_stage")  # frozen once pops.bind completes (ADC-592)
         self._s.set_source_stage(name, kind, theta, alpha, krylov_tol, krylov_max_iters,
-                                 density, momentum_x, momentum_y, energy, bz_aux_component)
+                                 density, momentum_x, momentum_y, energy, bz_aux_component,
+                                 n_precond_vcycles, polar_precond)
 
     def add_background(self, name: Any, model: Any, density: Any, spatial: Any = None) -> Any:
         """FROZEN species (not advanced): a fixed background that contributes to the system Poisson (and,

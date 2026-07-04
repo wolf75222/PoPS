@@ -232,10 +232,26 @@ def _emit_roe_jacobian(model: Any, nc: Any, cse: Any) -> list:
     out.append("    pops::Real dU[%d], out[%d];" % (nc, nc))
     out += ["    dU[%d] = UR[%d] - UL[%d];" % (i, i, i) for i in range(nc)]
     out.append("    State d{};")
-    out.append("    if (pops::roe_abs_apply(A, dU, out)) {")
+    # ADC-645: eig knobs set via m.wave_speeds_from_jacobian(eig_max_iter=, im_tol=) are baked into
+    # the Roe |A| gate (roe_abs_apply forwards them to real_spectrum) and the spectral-radius
+    # fallback; absent (the default) both calls emit the EXACT historical text, byte-identical.
+    ws = getattr(model, "_ws_jacobian", None) or {}
+    eig_max_iter = ws.get("eig_max_iter")
+    im_tol = ws.get("im_tol")
+    if eig_max_iter is not None or im_tol is not None:
+        roe_args = ", 80, static_cast<pops::Real>(1e-13), static_cast<pops::Real>(%s), %d" % (
+            repr(float(im_tol)) if im_tol is not None else "1e-5",
+            int(eig_max_iter) if eig_max_iter is not None else 100)
+    else:
+        roe_args = ""
+    out.append("    if (pops::roe_abs_apply(A, dU, out%s)) {" % roe_args)
     out += ["      d[%d] = out[%d];" % (i, i) for i in range(nc)]
     out.append("    } else {  // spectre complexe/singulier : repli rayon spectral (Rusanov)")
-    out.append("      const pops::EigBounds eb_ = pops::real_eig_minmax(A);")
+    if eig_max_iter is not None:
+        out.append("      const pops::EigBounds eb_ = pops::real_eig_minmax(A, %d);"
+                   % int(eig_max_iter))
+    else:
+        out.append("      const pops::EigBounds eb_ = pops::real_eig_minmax(A);")
     out.append("      const pops::Real al_ = eb_.lmin < pops::Real(0) ? -eb_.lmin : eb_.lmin;")
     out.append("      const pops::Real ah_ = eb_.lmax < pops::Real(0) ? -eb_.lmax : eb_.lmax;")
     out.append("      const pops::Real rho_ = al_ > ah_ ? al_ : ah_;")

@@ -245,7 +245,14 @@ class _AmrSystemInstall(_AmrSystem):
             raise TypeError("pops.bind: solver must be a token string or an "
                             "pops.solvers.<Solver>(...) descriptor; got %r"
                             % type(solver_brick).__name__)
-        self.set_poisson(solver=token)
+        # ADC-645: GeometricMG(amr_composite=CompositeFAC(...)) opts the AMR FIELD solve into the
+        # native composite FAC path. None (default) forwards NOTHING extra, so the native call is
+        # byte-identical to the historical set_poisson(solver=token) (Option A).
+        composite = getattr(solver_brick, "amr_composite", None)
+        if composite is not None:
+            self.set_poisson(solver=token, **composite.set_poisson_kwargs())
+        else:
+            self.set_poisson(solver=token)
 
     @staticmethod
     def _declared_elliptic_fields(instances: Any) -> Any:

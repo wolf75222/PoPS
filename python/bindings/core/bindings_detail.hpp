@@ -235,7 +235,7 @@ inline py::dict numerical_defaults_report_to_dict() {
   klass("kFFTZeroMeanGauge", "internal_default");
   klass("kFFTDirectDftFallback", "diagnostic_only");
   klass("kEbCutFractionFloor", "public_knob");
-  klass("kWenoEpsilon", "internal_default");
+  klass("kWenoEpsilon", "public_knob");  // ADC-645: WENO5(epsilon=) is wired end to end
   klass("kEbFaceOpenEps", "public_knob");
   klass("kEbKappaMin", "public_knob");
   klass("kAmrDefaultMaxLevels", "internal_default");
@@ -258,7 +258,7 @@ inline py::dict numerical_defaults_report_to_dict() {
   klass("kPhysicalDefaultGravitySign", "public_knob");
   klass("kPhysicalDefaultFourPiG", "public_knob");
   klass("kPhysicalDefaultGravityRho0", "public_knob");
-  klass("kCflSpeedFloor", "internal_default");
+  klass("kCflSpeedFloor", "public_knob");  // ADC-645: step_cfl(speed_floor=) is wired end to end
   klass("kMaxRuntimeParams", "hard_limit");
 
   py::dict out;
@@ -412,6 +412,10 @@ inline py::dict effective_source_stage_options_to_dict(const EffectiveSourceStag
   d["effective_fac_coarse_rel_tol"] = s.effective_fac_coarse_rel_tol;
   d["effective_fac_coarse_cycles"] = s.effective_fac_coarse_cycles;
   d["fac_verbose"] = s.fac_verbose;
+  // ADC-645: the stage's Krylov-preconditioner knobs (requested vs effective).
+  d["requested_n_precond_vcycles"] = s.requested_n_precond_vcycles;
+  d["effective_n_precond_vcycles"] = s.effective_n_precond_vcycles;
+  d["polar_precond"] = s.polar_precond;
   return d;
 }
 

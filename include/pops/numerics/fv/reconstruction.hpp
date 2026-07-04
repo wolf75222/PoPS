@@ -68,8 +68,10 @@ struct VanLeer {
 /// ternary (device-safe, avoids std::abs).
 /// Must NOT be called directly by a mesh user: go through the Weno5 policy and the reconstruct
 /// function of spatial_operator.hpp.
-POPS_HD inline Real weno5z(Real vm2, Real vm1, Real v0, Real vp1, Real vp2) {
-  const Real eps = kWenoEpsilon;
+POPS_HD inline Real weno5z(Real vm2, Real vm1, Real v0, Real vp1, Real vp2,
+                          Real eps = kWenoEpsilon) {
+  // ADC-645: eps is the WENO-Z smoothness regulariser (default = the historical kWenoEpsilon
+  // literal, bit-identical); a per-block override reaches here through Weno5::eps.
   // three third-order reconstructions of the +x face of v0
   const Real q0 = (Real(2) * vm2 - Real(7) * vm1 + Real(11) * v0) / Real(6);
   const Real q1 = (-vm1 + Real(5) * v0 + Real(2) * vp1) / Real(6);
@@ -98,6 +100,9 @@ POPS_HD inline Real weno5z(Real vm2, Real vm1, Real v0, Real vp1, Real vp2) {
 /// template functions that expect a limiter).
 struct Weno5 {
   static constexpr int n_ghost = 3;
+  // ADC-645: the WENO-Z smoothness regulariser (default = the historical kWenoEpsilon, so a
+  // default-constructed Weno5 is bit-identical); the reconstruction passes it to weno5z.
+  Real eps = kWenoEpsilon;
   POPS_HD Real operator()(Real, Real) const { return Real(0); }
 };
 

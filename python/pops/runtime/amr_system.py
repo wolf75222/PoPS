@@ -283,6 +283,14 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
                 "AmrSystem.add_block : wave_speed_cache not supported on the AMR path (separate "
                 "work item) ; remove wave_speed_cache, or declare layout=Uniform(...) on the "
                 "pops.Problem (the uniform route wires the cache).")
+        # weno_epsilon (ADC-645) is NOT wired on the AMR transport (AmrSystem::add_block does not
+        # transport it; the AMR advance keeps the default kWenoEpsilon): explicit rejection rather
+        # than a silently ignored regulariser. The uniform System path wires it.
+        if getattr(spatial, "weno_epsilon", None) is not None:
+            raise ValueError(
+                "AmrSystem.add_block : weno_epsilon (WENO5(epsilon=...)) not supported on the AMR "
+                "path (separate work item) ; remove epsilon, or declare layout=Uniform(...) on the "
+                "pops.Problem (the uniform route wires it).")
         # We thread substeps/stride (multirate, capstone iv), the partial IMEX mask, the Newton OPTIONS
         # AND newton_diagnostics (wave 3, settle). Resolved / validated on the C++ side (AmrSystem::add_block)
         # against the block names/roles : empty -> full backward-Euler. The options are wired in single-block

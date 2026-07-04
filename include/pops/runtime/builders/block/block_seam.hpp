@@ -61,6 +61,7 @@ struct BlockBuildArgs {
   NewtonReport* nreport;  // non-owning (report lives in System::Impl::newton_reports_)
   Real positivity_floor;
   bool wave_speed_cache;
+  Real weno_epsilon = kWenoEpsilon;  ///< ADC-645: WENO-Z regulariser (default = historical)
 };
 
 /// VERBATIM Cartesian visitor body of the former dispatch_model lambda (system.cpp), with the transport
@@ -103,7 +104,8 @@ BuiltBlock build_block_for(TR tr, const ModelSpec& model, const BlockBuildArgs& 
   return build_block_for_make(
       std::move(tr), model, a, [](auto m, const std::vector<int>& impl, const BlockBuildArgs& aa) {
         return make_block(m, aa.limiter, aa.riemann, aa.ctx, aa.imex, aa.recon_prim, aa.method,
-                          impl, aa.nopts, aa.nreport, aa.positivity_floor, aa.wave_speed_cache);
+                          impl, aa.nopts, aa.nreport, aa.positivity_floor, aa.wave_speed_cache,
+                          aa.weno_epsilon);
       });
 }
 

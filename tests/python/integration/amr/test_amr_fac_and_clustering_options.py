@@ -109,6 +109,44 @@ def test_fac_options_override_visible_and_refused_out_of_domain():
         bad.set_source_stage("ion", "electrostatic_lorentz", 0.5, 1.0, fac_tol=2.0)
 
 
+def test_n_precond_vcycles_on_the_amr_source_stage():
+    """ADC-645: n_precond_vcycles reaches the AMR stage report; polar_precond refuses (cartesian)."""
+    amr = AmrSystem(n=16, L=1.0, periodic=True)
+    amr.add_block("ion", model=pops.Model(state=pops.FluidState.compressible(gamma=1.4),
+                                          transport=pops.CompressibleFlux(),
+                                          source=pops.NoSource(),
+                                          elliptic=pops.ChargeDensity(charge=1.0)),
+                  spatial=pops.Spatial(), time=pops.Explicit())
+    amr.set_magnetic_field(np.ones((16, 16)))
+    amr.set_source_stage("ion", "electrostatic_lorentz", 0.5, 1.0, n_precond_vcycles=2)
+    st = amr.inspect().to_dict()["options"]["source_stages"][0]
+    assert st["requested_n_precond_vcycles"] == 2
+    assert st["effective_n_precond_vcycles"] == 2
+
+    dflt = AmrSystem(n=16, L=1.0, periodic=True)
+    dflt.add_block("ion", model=pops.Model(state=pops.FluidState.compressible(gamma=1.4),
+                                           transport=pops.CompressibleFlux(),
+                                           source=pops.NoSource(),
+                                           elliptic=pops.ChargeDensity(charge=1.0)),
+                   spatial=pops.Spatial(), time=pops.Explicit())
+    dflt.set_magnetic_field(np.ones((16, 16)))
+    dflt.set_source_stage("ion", "electrostatic_lorentz", 0.5, 1.0)
+    st0 = dflt.inspect().to_dict()["options"]["source_stages"][0]
+    assert st0["requested_n_precond_vcycles"] == 0  # left default
+    assert st0["effective_n_precond_vcycles"] == 1  # the historical ONE V-cycle
+
+    bad = AmrSystem(n=16, L=1.0, periodic=True)
+    bad.add_block("ion", model=pops.Model(state=pops.FluidState.compressible(gamma=1.4),
+                                          transport=pops.CompressibleFlux(), source=pops.NoSource(),
+                                          elliptic=pops.ChargeDensity(charge=1.0)),
+                  spatial=pops.Spatial(), time=pops.Explicit())
+    bad.set_magnetic_field(np.ones((16, 16)))
+    with pytest.raises((RuntimeError, ValueError)):
+        bad.set_source_stage("ion", "electrostatic_lorentz", 0.5, 1.0, n_precond_vcycles=3)
+    with pytest.raises((RuntimeError, ValueError), match="polar_precond"):
+        bad.set_source_stage("ion", "electrostatic_lorentz", 0.5, 1.0, polar_precond="jacobi")
+
+
 def test_condensed_schur_descriptor_refuses_out_of_domain_fac():
     from pops.runtime._bricks_time import CondensedSchur
     with pytest.raises(ValueError):
@@ -125,6 +163,7 @@ def main():
     test_clustering_descriptor_refuses_out_of_domain()
     test_fac_options_default_reported_on_schur_stage()
     test_fac_options_override_visible_and_refused_out_of_domain()
+    test_n_precond_vcycles_on_the_amr_source_stage()
     test_condensed_schur_descriptor_refuses_out_of_domain_fac()
     print("OK  ADC-614 + ADC-616")
 

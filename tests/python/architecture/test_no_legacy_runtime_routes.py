@@ -146,7 +146,9 @@ LARGE_RUNTIME_FILE_BUDGETS = {
     # ADC-632: the install/composition seam (structural setters + install_program + native_loader
     # instantiation) is the one sibling TU that legitimately stays over 1000 lines; the rest
     # (fields / io / profiling / program) sit well under the default. Budgeted with headroom.
-    "python/bindings/system/base/system_install.cpp": 1250,
+    # ADC-644/645: the knob wiring (coarse_threshold validation, weno_epsilon guards, source-stage
+    # n_precond_vcycles/polar_precond resolution + effective-report rows) adds ~50 inline lines.
+    "python/bindings/system/base/system_install.cpp": 1300,
     # ADC-542: the AMR composite_reduce + rebuild_hierarchy (v3 restart) + level_owner_ranks facade
     # seams (native diagnostics / restartable-under-regridding) grew this by ~100 lines.
     # ADC-514: the native per-block runtime-param carrier residue (Impl members, make_build_params /

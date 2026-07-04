@@ -54,49 +54,83 @@ def _check_max_iter(name: str, max_iter: Any) -> int:
     return int(max_iter)
 
 
-def _solver(name: str, native_id: str, factory: str, max_iter: Any, **options: Any) -> Any:
+def _check_rel_tol(name: str, rel_tol: Any) -> Any:
+    """Validate an optional per-descriptor relative tolerance (ADC-645): a finite number in (0, 1).
+
+    ``None`` (the default) means "no descriptor tolerance" -- the ``P.solve_linear(tol=)`` call-site
+    default stays authoritative and the descriptor identity is unchanged (omit-when-default)."""
+    if rel_tol is None:
+        return None
+    if isinstance(rel_tol, bool) or not isinstance(rel_tol, (int, float)) or not (0.0 < rel_tol < 1.0):
+        raise ValueError("%s: rel_tol must be a number in (0, 1) or None; got %r" % (name, rel_tol))
+    return float(rel_tol)
+
+
+def _solver(name: str, native_id: str, factory: str, max_iter: Any, rel_tol: Any = None,
+            **options: Any) -> Any:
     """A native Krylov-solver descriptor in the ``solver`` category (scheme == @p name).
 
     ``max_iter`` is validated (positive int, mandatory) and folded into the descriptor options so
-    the budget travels with the route and is inspectable pre-runtime. @p factory is the public
+    the budget travels with the route and is inspectable pre-runtime. ``rel_tol`` (ADC-645) is an
+    optional per-descriptor tolerance folded in ONLY when set (omit-when-default), consumed by
+    ``P.solve_linear`` when the call-site ``tol`` is left default. @p factory is the public
     factory name used in the refusal message.
     """
     options["max_iter"] = _check_max_iter(factory, max_iter)
+    rel = _check_rel_tol(factory, rel_tol)
+    if rel is not None:
+        options["rel_tol"] = rel
     return _native(name, native_id, name, category="solver",
                    capabilities=_KRYLOV_CAPABILITIES, **options)
 
 
-def CG(max_iter: Any = None, **options: Any) -> Any:
+def CG(max_iter: Any = None, rel_tol: Any = None, **options: Any) -> Any:
     """The conjugate-gradient Krylov solver (``pops::cg_solve``; scheme ``"cg"``). Inert.
 
     ``max_iter`` is a MANDATORY positive int (the iteration budget); a missing / non-positive
-    budget is refused at construction (see the module docstring).
+    budget is refused at construction (see the module docstring). ``rel_tol`` (ADC-645, optional)
+    supplies the ``P.solve_linear`` tolerance when the call-site ``tol`` is left default.
     """
-    return _solver("cg", "pops::cg_solve", "CG", max_iter, **options)
+    return _solver("cg", "pops::cg_solve", "CG", max_iter, rel_tol, **options)
 
 
-def BiCGStab(max_iter: Any = None, **options: Any) -> Any:
+def BiCGStab(max_iter: Any = None, rel_tol: Any = None, **options: Any) -> Any:
     """The stabilised bi-CG Krylov solver (``pops::bicgstab_solve``; scheme ``"bicgstab"``).
 
     ``max_iter`` is a MANDATORY positive int; a missing / non-positive budget is refused.
+    ``rel_tol`` (ADC-645, optional) supplies the ``P.solve_linear`` tolerance when the call-site
+    ``tol`` is left default.
     """
-    return _solver("bicgstab", "pops::bicgstab_solve", "BiCGStab", max_iter, **options)
+    return _solver("bicgstab", "pops::bicgstab_solve", "BiCGStab", max_iter, rel_tol, **options)
 
 
-def GMRES(max_iter: Any = None, **options: Any) -> Any:
+def GMRES(max_iter: Any = None, rel_tol: Any = None, **options: Any) -> Any:
     """The GMRES Krylov solver (``pops::gmres_solve``; scheme ``"gmres"``). Inert.
 
     ``max_iter`` is a MANDATORY positive int; a missing / non-positive budget is refused.
+    ``rel_tol`` (ADC-645, optional) supplies the ``P.solve_linear`` tolerance when the call-site
+    ``tol`` is left default.
     """
-    return _solver("gmres", "pops::gmres_solve", "GMRES", max_iter, **options)
+    return _solver("gmres", "pops::gmres_solve", "GMRES", max_iter, rel_tol, **options)
 
 
-def Richardson(max_iter: Any = None, **options: Any) -> Any:
+def Richardson(max_iter: Any = None, rel_tol: Any = None, omega: Any = None,
+               **options: Any) -> Any:
     """The Richardson iteration (``pops::richardson_solve``; scheme ``"richardson"``). Inert.
 
     ``max_iter`` is a MANDATORY positive int; a missing / non-positive budget is refused.
+    ``rel_tol`` (ADC-645, optional) supplies the ``P.solve_linear`` tolerance when the call-site
+    ``tol`` is left default. ``omega`` (ADC-645, optional) is the Richardson relaxation factor:
+    ``None`` (the default) emits the historical ``omega = 1`` literal byte-identically; a finite
+    positive value is baked into the generated ``pops::richardson_solve`` call.
     """
-    return _solver("richardson", "pops::richardson_solve", "Richardson", max_iter, **options)
+    if omega is not None:
+        if isinstance(omega, bool) or not isinstance(omega, (int, float)) or not (omega > 0.0):
+            raise ValueError("Richardson: omega must be a positive number or None; got %r"
+                             % (omega,))
+        options["omega"] = float(omega)
+    return _solver("richardson", "pops::richardson_solve", "Richardson", max_iter, rel_tol,
+                   **options)
 
 
 __all__ = ["CG", "BiCGStab", "GMRES", "Richardson"]

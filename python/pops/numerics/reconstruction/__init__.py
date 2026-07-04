@@ -40,16 +40,30 @@ REQUIRED_GHOST_DEPTH = {
 #: FALSE POSITIVE that breaks a working problem.
 INSPECT_GHOST_DEPTH_ASSUMPTION = 2
 
+def _weno5(name: str, epsilon: Any = None) -> Any:
+    """The WENO5(-Z) descriptor with an optional smoothness regulariser ``epsilon`` (ADC-645).
+
+    ``None`` (the default) keeps the native ``kWenoEpsilon`` literal -- the descriptor options are
+    unchanged (omit-when-default) and the emitted stencil is bit-identical. A finite positive value
+    is carried in the descriptor options and threaded to the native ``Weno5::eps`` by ``add_block``
+    (cartesian System path; refused loud on the polar / disc / AMR paths, never silently dropped)."""
+    if epsilon is None:
+        return _native(name, "pops::Weno5", "weno5", category="reconstruction", ghost_depth=3)
+    if isinstance(epsilon, bool) or not isinstance(epsilon, (int, float)) or not (epsilon > 0.0):
+        raise ValueError("reconstruction.%s(epsilon=) must be a positive number or None; got %r"
+                         % ("WENO5" if name == "weno5" else "WENO5Z", epsilon))
+    return _native(name, "pops::Weno5", "weno5", category="reconstruction", ghost_depth=3,
+                   epsilon=float(epsilon))
+
+
 reconstruction = SimpleNamespace(
     FirstOrder=lambda: _native("firstorder", "pops::NoSlope", "firstorder",
                                category="reconstruction", ghost_depth=1),
     MUSCL=lambda limiter="minmod": _native(
         "muscl", "pops::Minmod", limiter, category="reconstruction", limiter=limiter,
         ghost_depth=2),
-    WENO5=lambda: _native("weno5", "pops::Weno5", "weno5", category="reconstruction",
-                          ghost_depth=3),
-    WENO5Z=lambda: _native("weno5z", "pops::Weno5", "weno5", category="reconstruction",
-                           ghost_depth=3),
+    WENO5=lambda epsilon=None: _weno5("weno5", epsilon),
+    WENO5Z=lambda epsilon=None: _weno5("weno5z", epsilon),
     User=lambda brick_id: _external_descriptor(brick_id, expect_category="reconstruction"),
 )
 

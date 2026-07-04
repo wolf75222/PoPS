@@ -409,6 +409,80 @@ def test_direct_small_grid_refuses_non_positive(bad):
         DirectSmallGrid(bad)
 
 
+# --- ADC-645: CompositeFAC / Richardson omega / Krylov rel_tol --------------------------------
+def test_composite_fac_defaults_and_domain():
+    from pops.solvers.options import CompositeFAC
+    d = CompositeFAC()
+    # None -> the 0 wire sentinels (native kFAC* defaults), the CondensedSchur fac_* convention.
+    assert d.options() == {"max_iters": 0, "fine_sweeps": 0, "tol": 0.0, "coarse_rel_tol": 0.0,
+                           "coarse_cycles": 0, "verbose": False}
+    kw = d.set_poisson_kwargs()
+    assert kw["composite"] is True and kw["fac_max_iters"] == 0
+    cfg = CompositeFAC(max_iters=10, fine_sweeps=200, tol=1e-8, coarse_rel_tol=1e-11,
+                       coarse_cycles=50, verbose=True)
+    assert cfg.set_poisson_kwargs() == {"composite": True, "fac_max_iters": 10,
+                                        "fac_fine_sweeps": 200, "fac_tol": 1e-8,
+                                        "fac_coarse_rel_tol": 1e-11, "fac_coarse_cycles": 50,
+                                        "fac_verbose": True}
+    for bad in ({"max_iters": 0}, {"fine_sweeps": -1}, {"tol": 1.5}, {"coarse_rel_tol": 0.0},
+                {"coarse_cycles": 0}):
+        with pytest.raises(ValueError):
+            CompositeFAC(**bad)
+
+
+def test_geometric_mg_amr_composite_slot():
+    from pops.solvers.options import CompositeFAC
+    # Default None: the options view is UNCHANGED (omit-when-default, byte-identity).
+    g = elliptic.GeometricMG()
+    assert g.amr_composite is None
+    assert "amr_composite" not in g.options()
+    # Typed slot: a CompositeFAC is carried; a bare bool/string refuses.
+    g2 = elliptic.GeometricMG(amr_composite=CompositeFAC())
+    assert g2.options()["amr_composite"] == "composite_fac"
+    with pytest.raises(TypeError, match="CompositeFAC"):
+        elliptic.GeometricMG(amr_composite=True)
+
+
+def test_richardson_omega_and_krylov_rel_tol():
+    # omega: carried only when set (omit-when-default keeps the descriptor identity unchanged).
+    d = krylov.Richardson(max_iter=100)
+    assert "omega" not in d.options and "rel_tol" not in d.options
+    d2 = krylov.Richardson(max_iter=100, omega=0.8)
+    assert d2.options["omega"] == 0.8
+    with pytest.raises(ValueError, match="omega"):
+        krylov.Richardson(max_iter=100, omega=0.0)
+    # rel_tol on every factory; out-of-domain refuses.
+    for factory in (krylov.CG, krylov.BiCGStab, krylov.GMRES, krylov.Richardson):
+        assert factory(max_iter=10, rel_tol=1e-9).options["rel_tol"] == 1e-9
+        with pytest.raises(ValueError, match="rel_tol"):
+            factory(max_iter=10, rel_tol=2.0)
+
+
+def test_condensed_schur_precond_knobs():
+    # ADC-645: n_precond_vcycles in {1, 2}; polar_precond in {radial_line, jacobi}; defaults 0/"".
+    cs = pops.CondensedSchur()
+    assert cs.n_precond_vcycles == 0 and cs.polar_precond == ""
+    cs2 = pops.CondensedSchur(n_precond_vcycles=2, polar_precond="jacobi")
+    assert cs2.n_precond_vcycles == 2 and cs2.polar_precond == "jacobi"
+    with pytest.raises(ValueError, match="n_precond_vcycles"):
+        pops.CondensedSchur(n_precond_vcycles=3)
+    with pytest.raises(ValueError, match="polar_precond"):
+        pops.CondensedSchur(polar_precond="bogus")
+
+
+def test_weno5_epsilon_descriptor():
+    from pops.numerics.reconstruction import reconstruction
+    # Default: no epsilon option (omit-when-default; the native kWenoEpsilon literal governs).
+    assert "epsilon" not in reconstruction.WENO5().options
+    assert reconstruction.WENO5(epsilon=1e-30).options["epsilon"] == 1e-30
+    with pytest.raises(ValueError, match="epsilon"):
+        reconstruction.WENO5(epsilon=-1.0)
+    # The Spatial ride-along (mirror of waves_provider).
+    sp = pops.Spatial(reconstruction=reconstruction.WENO5(epsilon=1e-30))
+    assert sp.weno_epsilon == 1e-30
+    assert pops.Spatial(reconstruction=reconstruction.WENO5()).weno_epsilon is None
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-q"]))

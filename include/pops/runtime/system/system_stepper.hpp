@@ -485,7 +485,7 @@ class SystemStepper {
   /// sum. In unsplit 2D the effective Courant number thus reaches 2*cfl when wx ~ wy:
   /// cfl = 0.4 (case default) stays < 1 (safe), this is also the convention of the sweep
   /// references (HLL step); cfl >= 0.5 in unsplit 2D is MARGINAL -- to avoid without study.
-  double step_cfl(double cfl) {
+  double step_cfl(double cfl, double speed_floor = static_cast<double>(kCflSpeedFloor)) {
     Impl* P = owner_;
     P->solve_fields();
     // MIN physical step of the grid (Cartesian min(dx,dy) / polar min(dr, r_min*dtheta), cf.
@@ -510,7 +510,9 @@ class SystemStepper {
     for (auto& s : P->sp) {
       if (!s.evolve)
         continue;  // frozen block: does not constrain the step
-      const Real w = std::max(s.max_speed(s.U), kCflSpeedFloor);
+      // ADC-645: the caller-facing speed floor (default = the historical kCflSpeedFloor literal,
+      // bit-identical): w floors the reduced wave speed so a quiescent block cannot divide by zero.
+      const Real w = std::max(s.max_speed(s.U), static_cast<Real>(speed_floor));
       double dt_b = cfl * static_cast<double>(h) * static_cast<double>(s.substeps) /
                     (static_cast<double>(s.stride) * static_cast<double>(w));
       const char* why = "transport";

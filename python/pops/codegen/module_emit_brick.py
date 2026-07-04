@@ -154,7 +154,13 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
             else:
                 for (r, c, cpp) in sorted(fill.get(bi, [])):
                     L.append("%s  Jb_[%d][%d] = %s;" % (ind, r, c, cpp))
-            L.append("%s  const pops::EigBounds eb_ = pops::real_eig_minmax(Jb_);" % ind)
+            # ADC-645: an eig_max_iter set on the model is baked as the 2nd argument; absent
+            # (the default) emits the EXACT historical no-argument call, byte-identical.
+            if ws.get("eig_max_iter") is not None:
+                L.append("%s  const pops::EigBounds eb_ = pops::real_eig_minmax(Jb_, %d);"
+                         % (ind, int(ws["eig_max_iter"])))
+            else:
+                L.append("%s  const pops::EigBounds eb_ = pops::real_eig_minmax(Jb_);" % ind)
             if bi == 0:
                 L.append("%s  %s = eb_.lmin; %s = eb_.lmax;" % (ind, lo, hi))
             else:

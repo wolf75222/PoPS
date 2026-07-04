@@ -49,3 +49,22 @@ TEST(test_weno_convergence, fifth_order_on_smooth_function) {
   }
   EXPECT_GE(last_order, 4.5) << "ordre WENO5 mesure < 4.5";
 }
+
+// ADC-645: the WENO-Z regulariser eps is a real weno5z parameter now.
+//   - the DEFAULT argument is the historical kWenoEpsilon literal, so an argument-less call is
+//     bit-identical to the explicit-default call (the byte-identity golden of the knob);
+//   - a materially different eps changes the nonlinear weights on a NON-smooth stencil (live proof
+//     the parameter reaches the weights, not just the signature);
+//   - a default-constructed Weno5 carries eps == kWenoEpsilon (the operator threading contract).
+TEST(test_weno_convergence, epsilon_default_bit_identical_and_override_live) {
+  // Discontinuous stencil (top-hat edge): the smoothness indicators differ per sub-stencil, so the
+  // eps in a_k = d_k (1 + (tau5/(eps+b_k))^2) matters.
+  const Real vm2 = Real(1), vm1 = Real(1), v0 = Real(1), vp1 = Real(0), vp2 = Real(0);
+  const Real dflt = weno5z(vm2, vm1, v0, vp1, vp2);
+  const Real expl = weno5z(vm2, vm1, v0, vp1, vp2, kWenoEpsilon);
+  EXPECT_EQ(dflt, expl) << "default eps argument must be bit-identical to the explicit default";
+  const Real fat = weno5z(vm2, vm1, v0, vp1, vp2, Real(1e-2));
+  EXPECT_NE(dflt, fat) << "a materially different eps must change the WENO-Z weights";
+  const Weno5 lim{};
+  EXPECT_EQ(lim.eps, kWenoEpsilon) << "default-constructed Weno5 carries the historical eps";
+}

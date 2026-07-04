@@ -160,7 +160,8 @@ class System {
                  const std::vector<std::string>& implicit_vars = {},
                  const std::vector<std::string>& implicit_roles = {},
                  const NewtonOptions& newton = {}, bool newton_diagnostics = false,
-                 double positivity_floor = 0.0, bool wave_speed_cache = false);
+                 double positivity_floor = 0.0, bool wave_speed_cache = false,
+                 double weno_epsilon = static_cast<double>(kWenoEpsilon));
 
   /// Report of the implicit source Newton (IMEX) of a block, AGGREGATED over the substeps of the
   /// LAST advance of the block. Only exists if the block was added with newton_diagnostics=true
@@ -625,7 +626,7 @@ class System {
   void advance(double dt, int nsteps);
 
   /// Advances one step at dt = cfl * h / max wave speed of the system. @return the dt used.
-  double step_cfl(double cfl);
+  double step_cfl(double cfl, double speed_floor = static_cast<double>(kCflSpeedFloor));
   /// Diagnostic (ADC-182): {w, i, j} of the GLOBAL cell that dominates the transport
   /// CFL bound of the block -- to locate a realizability erosion / a collapsing dt.
   /// On demand, off the hot path (step/step_cfl unchanged).

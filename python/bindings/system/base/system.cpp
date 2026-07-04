@@ -42,8 +42,8 @@ void System::step(double dt) {
 void System::advance(double dt, int nsteps) {
   p_->stepper_.advance(dt, nsteps);
 }
-double System::step_cfl(double cfl) {
-  return p_->stepper_.step_cfl(cfl);
+double System::step_cfl(double cfl, double speed_floor) {
+  return p_->stepper_.step_cfl(cfl, speed_floor);
 }
 double System::step_adaptive(double cfl) {
   return p_->stepper_.step_adaptive(cfl);
