@@ -4,13 +4,17 @@ These are the Spec 5 sec.11 lowering entry points for a :class:`pops.problem.Pro
 
 * :func:`compile` validates the assembly, picks the compile target from the LAYOUT
   (``Uniform`` -> ``"system"``, ``AMR`` -> ``"amr_system"``; no user ``target=`` string),
-  resolves each block's physics to the model the runtime wants, and compiles it. The TWO routes
-  differ in WHAT is compiled: a ``Uniform`` layout compiles the whole-system time ``Program`` once
-  (``compile_problem``, BYTE-IDENTICAL to before); an ``AMR`` layout (single OR multi block)
-  compiles EACH block to a ``target='amr_system'`` production ``CompiledModel`` (the native AMR
-  ``.so`` loader, ``add_native_block``) and carries the ``{block: CompiledModel}`` table on the
-  handle -- there is NO whole-system time Program on AMR (``AmrSystem`` has no ``install_program``
-  seam; the native blocks carry their own time policy).
+  resolves each block's physics to the model the runtime wants, and compiles it. Both routes
+  compile EACH block to its native ``.so`` loader; they differ in whether a whole-system time
+  ``Program`` is ALSO compiled. A ``Uniform`` layout compiles the whole-system time ``Program`` once
+  (``compile_problem``, BYTE-IDENTICAL to before). An ``AMR`` layout (single OR multi block) compiles
+  EACH block to a ``target='amr_system'`` production ``CompiledModel`` (the native AMR ``.so``
+  loader, ``add_native_block``) and carries the ``{block: CompiledModel}`` table on the handle; when
+  the effective time is a whole-system ``Program`` it ALSO compiles that Program with
+  ``compile_problem(target='amr_system')`` (ADC-634) -- the ``AmrSystem.install_program`` seam drives
+  it per level over the hierarchy -- and returns the resulting ``CompiledProblem``. Without a
+  Program (native per-block time policy) the AMR route stays byte-identical and returns the first
+  block's ``CompiledModel``.
 * :func:`bind` assembles the per-instance state mapping + field solvers + output policies, then
   delegates to an internal RUNTIME ADAPTER (:mod:`pops.runtime._bind_adapters`) selected from the
   carried target: ``layout=Uniform`` -> the Uniform adapter (``System``), ``layout=AMR`` -> the AMR
@@ -54,9 +58,13 @@ def compile(problem: Any, layout: Any = None, backend: Any = None, time: Any = N
     - ``AMR`` (single OR multi block): compiles EACH block's resolved model to a
       ``target='amr_system'`` production ``CompiledModel`` (native AMR ``.so`` loader,
       ``add_native_block``) and carries ``{block: CompiledModel}`` on ``_block_compiled_models``.
-      There is NO whole-system time Program on AMR (no ``install_program`` seam), so @p time is not
-      required (native blocks carry their own time policy). The handle returned is the FIRST block's
-      ``CompiledModel``; ``_target`` / ``_layout`` / ``_problem`` are attached for bind's dispatch.
+      When the effective time is a whole-system ``Program`` (@p time, else ``problem._time``), it
+      ALSO compiles that Program with ``compile_problem(target='amr_system')`` and returns the
+      resulting ``CompiledProblem`` (ADC-634: ``AmrSystem.install_program`` drives it per level over
+      the hierarchy). Without a Program the AMR route is byte-identical to before and returns the
+      FIRST block's ``CompiledModel`` (native per-block time policy; @p time is not required).
+      ``_target`` / ``_layout`` / ``_problem`` / ``_block_compiled_models`` are attached for bind's
+      dispatch on both shapes.
 
     Args:
         problem: The :class:`pops.problem.Problem` assembly to lower.
@@ -67,14 +75,18 @@ def compile(problem: Any, layout: Any = None, backend: Any = None, time: Any = N
             backend string was removed -- a bare ``backend="production"`` raises ``TypeError``). It
             lowers to the same token the driver always consumed, so the artifact is byte-identical.
             The AMR route requires ``Production()`` (``Model.compile`` enforces it).
-        time: The ``pops.time.Program`` time scheme (Uniform route only); falls back to
-            ``problem._time``. Ignored on the AMR route (the native blocks carry their own time policy).
+        time: The ``pops.time.Program`` time scheme; falls back to ``problem._time``. On the Uniform
+            route a missing scheme raises. On the AMR route it is OPTIONAL: given, the whole-system
+            Program is compiled for ``target='amr_system'`` and installed on the hierarchy (ADC-634);
+            omitted, each native block carries its own time policy.
         **kwargs: Extra keyword args forwarded verbatim to the compile driver (so_path / force / cxx /
-            include / std / debug / libraries on the Uniform route; include / cxx / std on the AMR route).
+            include / std / debug / libraries on the Uniform route and the AMR whole-system Program;
+            include / cxx / std on the AMR per-block loaders).
 
     Returns:
-        The compiled handle (a ``CompiledProblem`` on the Uniform route, the first block's
-        ``CompiledModel`` on the AMR route), with ``._problem`` / ``._target`` / ``._layout`` set.
+        The compiled handle: a ``CompiledProblem`` on the Uniform route and on the AMR route WITH a
+        whole-system Program (ADC-634), the first block's ``CompiledModel`` on the AMR route WITHOUT
+        one. ``._problem`` / ``._target`` / ``._layout`` are set on every shape.
     """
     # Lazy imports keep the codegen layer's module-scope import graph clean (no mesh / runtime).
     from pops.mesh.layouts import AMR
@@ -103,16 +115,24 @@ def compile(problem: Any, layout: Any = None, backend: Any = None, time: Any = N
     is_amr = isinstance(layout, AMR)
     target = "amr_system" if is_amr else "system"
 
-    if is_amr:
-        # AMR route (single AND multi block): no whole-system time Program. Each block lowers to a
-        # target='amr_system' production CompiledModel installed via the NATIVE add_native_block path
-        # at bind; time= is NOT required (per-block time policy set at bind). compile_problem is NOT
-        # called (the byte-identical Uniform path is untouched). The AMR branch is split into
-        # ``_orchestration_amr`` (ADC-550); import it lazily to keep the module load order acyclic.
-        from pops.codegen._orchestration_amr import _compile_amr
-        return _compile_amr(problem, layout, backend, target, **kwargs)
+    # Resolve the EFFECTIVE time scheme BEFORE the branch so the AMR route can read it too (ADC-634):
+    # explicit @p time wins, else the Problem's recorded scheme. The Uniform route still REQUIRES one
+    # (raise below); the AMR route treats it as optional (a whole-system Program to install on the
+    # hierarchy when present, else the native per-block time policy).
+    eff_time = time if time is not None else problem._time
 
-    time = time if time is not None else problem._time
+    if is_amr:
+        # AMR route (single AND multi block): each block lowers to a target='amr_system' production
+        # CompiledModel installed via the NATIVE add_native_block path at bind. When eff_time is a
+        # whole-system Program, _compile_amr ALSO compiles it with compile_problem(target='amr_system')
+        # and returns the CompiledProblem (ADC-634: AmrSystem.install_program drives it per level);
+        # without one the byte-identical no-Program path returns the first block's CompiledModel. The
+        # AMR branch is split into ``_orchestration_amr`` (ADC-550); import it lazily to keep the
+        # module load order acyclic.
+        from pops.codegen._orchestration_amr import _compile_amr
+        return _compile_amr(problem, layout, backend, target, eff_time, **kwargs)
+
+    time = eff_time
     if time is None:
         raise NotImplementedError(
             "pops.compile: a time scheme is required; pass time=pops.time.Program(...) or set "
