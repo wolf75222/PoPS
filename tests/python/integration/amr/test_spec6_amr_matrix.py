@@ -13,9 +13,9 @@ its ``kind``, so one honest verdict per (operation x layout x block-count) cell:
     already-covered cell is pointed at, not duplicated.
   * ``pending``  -- the cell CONSTRUCTS its authoring object (proving the row is structurally real),
     then this runner ``pytest.skip``s it with the pending marker; it flips to a live cell when the
-    named issue (ADC-631 multistep history ring, ADC-633 compiled Schur hierarchy) lands -- no
-    structural change, only the cell ``kind`` flips. The clean-compile AMR Program row is now
-    green_live (ADC-634 implemented).
+    named issue lands. No row is pending now: the multistep history rings flipped to exists with
+    ADC-631, the clean-compile AMR explicit / SSPRK Program row to green_live with ADC-634, and the
+    compiled condensed-Schur hierarchy Program row to green_live with ADC-633.
 
 ``test_matrix_is_complete`` pins ``set(MATRIX) == EXPECTED_KEYS`` so a dropped cell fails loud: a
 future layout gap cannot hide. ``importorskip('pops')`` skips the whole suite on a bare box (this
@@ -70,16 +70,16 @@ def test_matrix_is_complete():
             "cell %r has an unknown kind %r" % (key, cell.kind))
 
 
-def test_every_layout_is_amr_and_the_pending_rows_are_named():
+def test_every_layout_is_amr_and_no_row_is_pending():
     # The AMR column is the ADC-515 focus: every cell targets the AMR layout (the Uniform baseline is
     # the shipping Spec 5 coverage the cited rows point at).
     for key, cell in matrix.MATRIX.items():
         assert cell.layout == "amr", "cell %r is not an AMR-layout cell" % key
-    # The pending rows are exactly the compiled condensed-Schur hierarchy Program (ADC-633) cell --
-    # nothing else is silently deferred. Multistep-on-AMR (ab2/bdf2) flipped to exists when ADC-631
-    # merged; the clean-route explicit / SSPRK Program row flipped to green_live with ADC-634.
+    # NO row is pending: multistep-on-AMR (ab2/bdf2) flipped to exists when ADC-631 merged, the
+    # clean-route explicit / SSPRK Program row to green_live with ADC-634, and the compiled
+    # condensed-Schur hierarchy Program row to green_live with ADC-633.
     pending = {k for k, c in matrix.MATRIX.items() if c.kind == "pending"}
-    assert pending == {"clean_schur_program.amr.mono"}, pending
+    assert pending == set(), pending
 
 
 if __name__ == "__main__":

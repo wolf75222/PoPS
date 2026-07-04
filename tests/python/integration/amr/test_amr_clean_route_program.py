@@ -18,9 +18,9 @@ AmrSystem.add_equation + install_program), and composes correctly:
       MATCHES a direct set_program_params run; a bind WITHOUT params= refuses with the actionable
       message (the Uniform-mirrored Spec 5 arguments() contract);
   composition: amr_program_op_support(ssprk2) is all-green; amr_program_op_support(condensed_schur)
-      reports pending:ADC-633; the clean route still COMPILES + INSTALLS the Schur Program and the
-      deferred op throws the honest AmrProgramContext backstop at RUN (pinned by the stable
-      "AmrProgramContext" prefix only -- ADC-631/633 are rewriting the exact text).
+      is now GREEN (ADC-633 wired the per-level Schur assembly + the flat/composite solve), and the
+      clean route COMPILES + INSTALLS + RUNS the Schur Program on a flat hierarchy (finite, coarse-mass
+      conserved) instead of throwing the old deferral backstop.
 
 WHAT NEEDS WHICH RUNNER. The composition query is pure Python (any interpreter with pops). The
 bit-identity acceptances need a compiler + a visible Kokkos (POPS_KOKKOS_ROOT) to build the .so;
@@ -397,48 +397,82 @@ def test_composition_query_ssprk2_all_green():
     chk(not pending, "no pending group for an SSPRK2 Program (support = %r)" % support)
 
 
-def test_composition_query_condensed_schur_pending_633():
-    """A condensed-Schur Program uses the Schur ops -> the capability query reports pending:ADC-633 (the
-    honest boundary until ADC-633 wires the per-level Schur assembly). Pure Python."""
-    print("== composition: amr_program_op_support(condensed_schur) is pending:ADC-633 ==")
+def test_composition_query_condensed_schur_green_633():
+    """A condensed-Schur Program uses the Schur ops -> the capability query reports schur=green now that
+    ADC-633 wired the per-level Schur assembly + the flat/composite solve. Pure Python."""
+    print("== composition: amr_program_op_support(condensed_schur) is green (ADC-633) ==")
     schur = lib_time.condensed_schur("plasma", alpha=1.0)
     support = amr_program_op_support(schur)
-    chk(support.get("schur") == "pending:ADC-633",
-        "the Schur Program reports schur=pending:ADC-633 (support = %r)" % support)
+    chk(support.get("schur") == "green",
+        "the Schur Program reports schur=green after ADC-633 (support = %r)" % support)
 
 
-def test_clean_amr_schur_program_compiles_installs_and_backstops_at_run():
-    """The clean route COMPILES + INSTALLS a condensed-Schur Program on AMR (no compile-time refusal --
-    the deferred op's signature matches, so the .so builds), and the deferred Schur op throws the honest
-    AmrProgramContext backstop only when it is REACHED at run. Pin ONLY the stable 'AmrProgramContext'
-    prefix (ADC-631/633 are rewriting the exact text). Flips to a live run when ADC-633 lands."""
-    print("== composition: clean-route Schur Program compiles+installs, backstops at run ==")
+def _schur_model(name="adc633_schur"):
+    """Isothermal 2D fluid block (rho, mx, my) with a Poisson coupling + a B_z aux: the canonical
+    condensed-Schur block (Density / MomentumX / MomentumY roles + B_z at the c_bz=3 aux slot the
+    condensed_schur macro reads). Mirror of test_time_condensed_schur's schur_model."""
+    from pops.ir.ops import sqrt
+    from pops.physics.facade import Model
+    m = Model(name)
+    rho, mx, my = m.conservative_vars("rho", "mx", "my")
+    cs2 = m.param("cs2", 0.5)
+    u = m.primitive("u", mx / rho)
+    v = m.primitive("v", my / rho)
+    p = m.primitive("p", cs2 * rho)
+    m.primitive_vars(rho=rho, u=u, v=v, p=p)
+    m.conservative_from([rho, rho * u, rho * v])
+    m.flux(x=[mx, mx * u + p, my * u], y=[my, mx * v, my * v + p])
+    cs = sqrt(cs2)
+    m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
+    m.elliptic_rhs(rho)
+    m.aux("grad_x")
+    m.aux("grad_y")
+    m.aux("B_z")
+    m.rate_operator("explicit_rhs", flux=True)
+    return m
+
+
+def test_clean_amr_schur_program_compiles_installs_and_runs():
+    """ADC-633: the clean route COMPILES + INSTALLS a condensed-Schur Program on AMR and RUNS it on a
+    flat hierarchy (FrozenRegrid): the Schur ops are wired (per-level assembly + flat matrix-free
+    BiCGStab through ctx.solve_linear_schur), so the step advances instead of throwing the old deferral
+    backstop. B_z is seeded through bind(aux={'B_z': ...}). Assert finite + coarse-mass conserved (rho
+    frozen by the Schur reconstruction). Self-skips without a compiler / Kokkos (never a fake engine)."""
+    print("== composition: clean-route Schur Program compiles+installs+runs (ADC-633) ==")
     u0 = parity._init_density()
-    model = parity._euler_model("adc634_schur")
-    schur = lib_time.condensed_schur("plasma", alpha=1.0, c_E=3)
+    bz0 = 4.0 * np.ones((N, N))
+    model = _schur_model("adc633_schur")
+    schur = lib_time.condensed_schur("plasma", alpha=1.0)
     problem = _problem(model, schur)
     try:
         compiled = pops.compile(problem, layout=_amr_layout())
     except RuntimeError as exc:
-        # A build the deferred op cannot even COMPILE would be a real regression (the signatures match,
-        # so it must compile); but no compiler / Kokkos still legitimately skips.
         print("skip (compile: %s)" % str(exc)[:200])
         return
     if getattr(compiled, "program", None) is None:
         print("skip (clean AMR Schur compile carried no Program)")
         return
     try:
-        sim = pops.bind(compiled, initial_state={"plasma": u0})
+        sim = pops.bind(compiled, initial_state={"plasma": u0}, aux={"B_z": bz0})
     except RuntimeError as exc:
         print("skip (bind: %s)" % str(exc)[:240])
         return
-    # The Program installed; the deferred Schur op throws the honest backstop when the step reaches it.
+    m0 = float(u0.mean())  # coarse mass / area (L=1); rho is frozen by the Schur reconstruction
     try:
-        sim.step(DT)
-        chk(False, "a deferred Schur op on AMR must throw at run, but the step succeeded")
+        for _ in range(NSTEPS):
+            sim.step(DT)
     except RuntimeError as exc:
-        chk("AmrProgramContext" in str(exc),
-            "the deferred Schur op throws the honest AmrProgramContext backstop (msg prefix pinned)")
+        chk(False, "the wired condensed-Schur Program on AMR must run, but the step threw: %s"
+            % str(exc)[:200])
+        return
+    rho = np.asarray(sim.density("plasma"))
+    chk(np.isfinite(rho).all() and float(rho.min()) > 0.0,
+        "the condensed-Schur Program on AMR keeps a finite, strictly-positive density (min = %.4f)"
+        % float(rho.min()))
+    mass = float(sim.mass("plasma"))
+    chk(abs(mass - m0) < 1e-9,
+        "the condensed-Schur Program on AMR conserves the coarse mass (|m - m0| = %.2e)"
+        % abs(mass - m0))
 
 
 def _run_all():

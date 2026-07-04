@@ -14,13 +14,11 @@ each cell by its ``kind``:
   * ``exists``       -- asserts the CITED existing coverage still holds (a thin route-fact / import
     check), so an already-covered cell is pointed at, not duplicated.
   * ``pending``      -- CONSTRUCTS the row's authoring object (proving it is structurally real) then
-    ``pytest.skip`` with the pending marker; it flips to ``green_live`` when the named issue lands.
-    The multistep-on-AMR rows are pending ADC-631 (the AMR history-ring seam being rewritten now); the
-    compiled condensed-Schur hierarchy Program is pending ADC-633 (the per-level Schur assembly): the
-    ADC-634 clean route compiles + installs it, but the deferred Schur op throws the honest
-    AmrProgramContext backstop until ADC-633 lands. The clean-``compile(layout=AMR)`` whole-system
-    explicit / SSPRK Program row is now GREEN LIVE (ADC-634 implemented). A pending cell NEVER executes
-    the deferred path and NEVER pins today's transitional behavior.
+    ``pytest.skip`` with the pending marker; it flips to ``green_live`` when the named issue lands. No
+    pending row remains: the multistep-on-AMR rows flipped to ``exists`` when ADC-631 merged, the
+    clean-``compile(layout=AMR)`` explicit / SSPRK Program row to ``green_live`` with ADC-634, and the
+    compiled condensed-Schur hierarchy Program row to ``green_live`` with ADC-633 (the per-level Schur
+    assembly + the flat/composite solve).
 
 Importing this module requires ``pops`` (the AMR-route handle + bricks); ``test_spec6_amr_matrix``
 importorskips it so the suite is green on a bare box. ASCII only.
@@ -244,6 +242,67 @@ def _run_clean_route_program(n=16, nsteps=4, dt=1.0e-3):
     return "green_live:clean_program_ssprk3"
 
 
+def _schur_facade_model(name="spec6_clean_schur"):
+    """Isothermal 2D fluid block (rho, mx, my) with a Poisson coupling + a B_z aux: the canonical
+    condensed-Schur block a Program lowers on the hierarchy. m.aux("B_z") makes B_z the canonical c_bz=3
+    aux slot the condensed_schur macro reads; elliptic_rhs = rho drives the field solve. Needs the DSL
+    compiler + Kokkos to build the .so (the cell skips cleanly without them). Mirror of
+    test_time_condensed_schur's schur_model."""
+    m = FacadeModel(name)
+    rho, mx, my = m.conservative_vars("rho", "mx", "my")
+    cs2 = m.param("cs2", 0.5)
+    u = m.primitive("u", mx / rho)
+    v = m.primitive("v", my / rho)
+    p = m.primitive("p", cs2 * rho)
+    m.primitive_vars(rho=rho, u=u, v=v, p=p)
+    m.conservative_from([rho, rho * u, rho * v])
+    m.flux(x=[mx, mx * u + p, my * u], y=[my, mx * v, my * v + p])
+    cs = sqrt(cs2)
+    m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
+    m.elliptic_rhs(rho)
+    m.aux("grad_x")
+    m.aux("grad_y")
+    m.aux("B_z")
+    m.rate_operator("explicit_rhs", flux=True)
+    return m
+
+
+def _run_clean_schur_program(n=16, nsteps=4, dt=5.0e-4):
+    """ADC-633: build a real AmrSystem via the clean pops.compile(layout=AMR(FrozenRegrid))+pops.bind
+    route with a condensed-Schur whole-system Program (theta=1), step it, and assert finite +
+    coarse-mass-conserved (rho frozen by the Schur reconstruction). The flat hierarchy runs the emitted
+    matrix-free BiCGStab through ctx.solve_linear_schur. B_z is seeded through bind(aux={'B_z': ...}).
+    Skips cleanly (never a fake engine) when the .so cannot build (no compiler / no Kokkos)."""
+    program = lib_time.condensed_schur("plasma", alpha=1.0, theta=1.0)
+    u0 = _clean_density(n)
+    bz0 = 4.0 * np.ones((n, n))
+    problem = (pops.Problem()
+               .block("plasma", physics=_schur_facade_model(),
+                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()))
+               .time(program))
+    layout = AMR(base=CartesianMesh(n=n, L=1.0, periodic=True), regrid=FrozenRegrid())
+    try:
+        compiled = pops.compile(problem, layout=layout)
+    except RuntimeError as exc:
+        pytest.skip("clean-route AMR Schur Program .so could not build (no compiler / Kokkos): %s"
+                    % str(exc)[:160])
+    assert getattr(compiled, "program", None) is not None, \
+        "the clean AMR route must carry the compiled Schur Program (ADC-634 route, ADC-633 ops)"
+    try:
+        sim = pops.bind(compiled, initial_state={"plasma": u0}, aux={"B_z": bz0})
+    except RuntimeError as exc:
+        pytest.skip("clean-route AMR Schur Program bind/install could not run: %s" % str(exc)[:200])
+    m0 = float(u0.mean())  # coarse mass / area (L=1); rho is frozen by the Schur reconstruction
+    for _ in range(nsteps):
+        sim.step(dt)
+    rho = np.asarray(sim.density("plasma"))
+    assert np.isfinite(rho).all() and float(rho.min()) > 0.0, "schur density not finite/positive"
+    assert np.isfinite(np.asarray(sim.potential())).all(), "schur potential not finite"
+    mass = float(sim.mass("plasma"))
+    assert abs(mass - m0) < 1e-9, "schur coarse mass drift (|m - m0| = %.2e)" % abs(mass - m0)
+    return "green_live:clean_schur_program"
+
+
 # --------------------------------------------------------------------------------------------------
 # green_inert: introspection on the AMR-route handle (no run, no dlopen).
 # --------------------------------------------------------------------------------------------------
@@ -359,24 +418,9 @@ def _exists_multistep(builder):
     return run
 
 
-def _pending_clean_route_program(builder, marker):
-    """A clean-``compile(layout=AMR)`` whole-system Program pending row: build the Program object, then
-    defer to ADC-634 (the route being implemented). Do NOT call ``pops.compile(layout=AMR, time=...)``
-    (its behavior is being changed by ADC-634); only prove the authoring object is real."""
-    def run():
-        program = builder()
-        assert isinstance(program, pops.time.Program)
-        return "pending:%s" % marker
-    return run
-
-
-def _condensed_schur_program():
-    return lib_time.condensed_schur("plasma", alpha=1.0)
-
-
 # --------------------------------------------------------------------------------------------------
 # THE MATRIX -- keyed "op.layout.blocks". Uniform baseline cells cite the shipping Spec 5 coverage;
-# the AMR column is the ADC-515 focus (green live / inert, precise refusals, pending rows).
+# the AMR column is the ADC-515 focus (green live / inert, precise refusals -- no pending row remains).
 # --------------------------------------------------------------------------------------------------
 MATRIX = {
     # explicit family -- AMR green live (mono + multi)
@@ -424,12 +468,12 @@ MATRIX = {
     # clean pops.compile(layout=AMR)+pops.bind SSPRK3 Program builds a real AmrSystem, runs, conserves.
     "clean_program.amr.mono": Cell("clean_program", "amr", "mono", "green_live",
                                    _run_clean_route_program),
-    # compiled condensed-Schur hierarchy Program -- PENDING ADC-633 (the per-level Schur assembly): the
-    # ADC-634 route COMPILES + INSTALLS it (proven in test_amr_clean_route_program), but the deferred
-    # Schur op throws the honest AmrProgramContext backstop until ADC-633 wires the hierarchy elliptic.
-    "clean_schur_program.amr.mono": Cell("clean_schur_program", "amr", "mono", "pending",
-                                         _pending_clean_route_program(
-                                             _condensed_schur_program, "ADC-633")),
+    # compiled condensed-Schur hierarchy Program -- GREEN LIVE (ADC-633): the per-level Schur assembly +
+    # the flat/composite solve are wired, so the clean pops.compile(layout=AMR)+pops.bind condensed-Schur
+    # Program builds a real AmrSystem, runs (flat matrix-free BiCGStab through ctx.solve_linear_schur),
+    # and conserves the coarse mass.
+    "clean_schur_program.amr.mono": Cell("clean_schur_program", "amr", "mono", "green_live",
+                                         _run_clean_schur_program),
 }
 
 # The full grid -- test_matrix_is_complete pins set(MATRIX) == EXPECTED_KEYS so a dropped (op x
