@@ -194,8 +194,8 @@ class _AmrSystemInstall(_AmrSystem):
         routes_fn = getattr(compiled, "runtime_param_routes", None)
         if not callable(routes_fn):
             return set()
-        _routes, defaults = routes_fn()
-        return set(defaults or {})
+        routed: Any = routes_fn()  # (routes, defaults); typed Any: callable() narrows to -> object
+        return set(routed[1] or {})
 
     def _install_block_params(self, resolved_models: Any, params: Any,
                               reject_unknown: bool = True) -> Any:
