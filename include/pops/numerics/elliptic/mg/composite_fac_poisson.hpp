@@ -45,21 +45,21 @@
 ///      5. coarse correction: GeometricMG(Lap e_c = r_c, homogeneous Dirichlet); phi_c += e_c (non covered);
 ///   until ||r_c|| (composite residual norm) below tolerance.
 ///
-/// SCOPE (Phase 4a, multi fine patch). Cartesian, 2 levels, 1..N disjoint fine patches strictly
-/// interior, aligned (lo even / hi odd) and SEPARATED by at least one coarse cell (NON adjacent),
-/// ratio 2, REPLICATED MONO-BOX coarse (serial / single-rank). N == 1 -> mono-patch path bit-identical to
-/// Phase 1 (ctor delegates, per-patch loops degenerate to a single patch). The fine-fine join (ADJACENT
-/// patches), MPI and > 2 levels are Phase 4b. The MMS test validates that the fine patch REDUCES the
-/// elliptic error near the patch vs coarse-only.
+/// SCOPE (ADC-636, generalized envelope). Cartesian, ratio 2, an arbitrary NESTED hierarchy: N
+/// levels, 1..N fine patches per level, ADJACENT (edge/corner-touching) patches allowed, and MPI
+/// (REPLICATED coarse + DISTRIBUTED fine). The 2-level non-adjacent mono-rank case is dispatched to
+/// the VERBATIM legacy body (solve_two_level_legacy_) and is byte-for-byte unchanged; the general
+/// path (composite_fac_nlevel.hpp) serves every other shape. Distributed equals replicated
+/// bit-identically at fixed np by construction. Only ratio != 2 (ADC-602 declared capability) and
+/// overlapping / non-nested / misaligned patches (semantically impossible) are refused.
 ///
-/// MULTI-PATCH (Phase 4a). Each fine patch has its own box (fine BoxArray); the FINE operations (bilinear
-/// C-F ghosts, SOR, C-F flux correction) loop OVER EACH local patch. The coarse coverage
-/// (CoverageMask) is the UNION of the coarse footprints of all patches: it tells which
-/// coarse cells are shadowed (residual set to 0, average_down) and lets us skip a bordering
-/// cell covered by ANOTHER patch. The separation of at least one coarse cell (ctor guard)
-/// guarantees that no fine face is SHARED between two patches: each patch border is a true
-/// coarse-fine join, so the bilinear C-F ghost (read from the coarse) and the flux correction are
-/// exact patch by patch -- no fine-fine exchange needed.
+/// MULTI-PATCH. Each fine patch has its own box (fine BoxArray); the FINE operations (bilinear C-F
+/// ghosts, SOR, C-F flux correction) loop OVER EACH local patch. The coarse coverage (CoverageMask)
+/// is the UNION of the coarse footprints of all patches: it tells which coarse cells are shadowed
+/// (residual set to 0, average_down) and lets the flux correction skip a face covered on both sides.
+/// Adjacent patches share a fine face: the fine-fine join is realized by fill_boundary before the C/F
+/// bilerp (the shared ghost takes the sibling's valid data), and the two-way flux correction is
+/// enumerated from the uncovered coarse side so a shared interior face gets no correction.
 
 namespace pops {
 

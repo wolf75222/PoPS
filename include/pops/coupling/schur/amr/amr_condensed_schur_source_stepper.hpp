@@ -33,14 +33,14 @@
 /// (invariant #169). A spatially constant state (mono-level) degenerates EXACTLY into the uniform stage:
 /// this is the parity criterion (Step 2).
 ///
-/// SCOPE (updated Phase 4a, multi-patch fine). The MONO-LEVEL path is complete and bit-identical
-/// to the uniform stage #126. The MULTI-LEVEL path is IMPLEMENTED (COMPOSITE condensed source stage:
-/// the tensor Schur elliptic is solved by FAC on coarse + fine, velocity reconstruction
-/// PER LEVEL then the average_down cascade -- cf. step_multilevel), in the FRAME of 2 levels + 1..N fine
-/// patches that are disjoint NON ADJACENT (separated by at least one coarse cell) + coarse replicated mono-block
-/// (mono-rank). ONE patch (N == 1) degenerates EXACTLY into Phase 3c (bit-identical). Beyond that (ADJACENT
-/// patches / fine-fine join, > 2 levels, MPI, multi-block), step() explicitly REFUSES (clear error)
-/// rather than silently applying a partial source: this is Phase 4b.
+/// SCOPE (ADC-636, generalized envelope). The MONO-LEVEL path is complete and bit-identical to the
+/// uniform stage #126. The MULTI-LEVEL path is IMPLEMENTED as a COMPOSITE condensed source stage: the
+/// tensor Schur elliptic is solved by the composite FAC over the WHOLE nested tower, velocity
+/// reconstruction PER LEVEL, then the fine->coarse average_down cascade (cf. step_multilevel). It
+/// inherits the lifted FAC envelope: an arbitrary nested hierarchy (N levels, adjacent fine patches,
+/// MPI with a replicated coarse + distributed fine). ONE patch, 2 levels, mono-rank degenerates
+/// EXACTLY into Phase 3c (bit-identical). Only ratio != 2 (ADC-602) and overlapping / non-nested /
+/// misaligned patches are refused, precisely, by the FAC ctor.
 ///
 /// LIFE CYCLE / DEVICE / MPI. Built ONCE on the COARSE layout (BoxArray + Geometry + Poisson BC);
 /// all buffers of the coarse uniform stage are allocated at construction and reused
@@ -129,17 +129,12 @@ class AmrCondensedSchurSourceStepper {
       coarse_.step(levels[0].U, coarse_phi, coarse_bz, c_bz, theta, dt);
       return;
     }
-    // MULTI-LEVEL (Phase 4a): COMPOSITE condensed source stage -- the fine patches REALLY refine
-    // the elliptic (tensor Schur operator solved by FAC on coarse + fine), then velocity
-    // reconstruction PER LEVEL and average_down cascade. Phase 4a frame: 2 levels, 1..N fine patches
-    // disjoint NON ADJACENT (separated by at least one coarse cell -- guard imposed by the FAC),
-    // coarse replicated mono-block, MONO-RANK. Beyond that -> clear error (> 2 levels / MPI / multi-block
-    // = Phase 4b). The fine-fine join between adjacent patches is rejected at the FAC ctor (Phase 4b).
-    if (levels.size() != 2 || n_ranks() != 1)
-      throw std::runtime_error(
-          "AmrCondensedSchurSourceStepper: COMPOSITE condensed source stage wired for 2 levels + "
-          "NON ADJACENT multi-box fine patches, mono-rank ; > 2 levels / MPI / multi-block = Phase "
-          "4b.");
+    // MULTI-LEVEL: COMPOSITE condensed source stage -- the fine patches REALLY refine the elliptic
+    // (tensor Schur operator solved by FAC over the whole tower), then velocity reconstruction PER
+    // LEVEL and the fine->coarse average_down cascade. ADC-636 lifted the FAC envelope, so the
+    // hierarchy may be an arbitrary NESTED tower (N levels, adjacent fine patches, MPI: replicated
+    // coarse + distributed fine). Only ratio != 2 (ADC-602) and overlapping/non-nested/misaligned
+    // patches are refused, precisely, by the FAC ctor. step_multilevel loops over the levels.
     step_multilevel(levels, coarse_phi, coarse_bz, c_bz, theta, dt);
   }
 
@@ -152,87 +147,82 @@ class AmrCondensedSchurSourceStepper {
   int energy_comp() const { return coarse_.energy_comp(); }
 
  private:
-  /// COMPOSITE 2-level condensed source stage (1 mono-box fine patch). Assembles the Schur condensed
-  /// operator (A = I + c rho B^{-1}, full tensor) + the condensed RHS PER LEVEL (ElectrostaticLorentzCondensation),
-  /// solves the COMPOSITE elliptic (CompositeFacPoisson: the fine patch refines the elliptic), reconstructs
-  /// the velocity PER LEVEL (v^{n+theta} = B^{-1}(v^n - theta dt grad phi^{n+theta})), extrapolates phi/v to
-  /// the full step, updates the energy, then cascades fine -> coarse (average_down, covered cells).
+  /// COMPOSITE N-level condensed source stage (ADC-636). Builds the composite elliptic over the whole
+  /// nested tower (levels[1..L-1] patches), assembles the Schur condensed operator (A = I + c rho
+  /// B^{-1}, full tensor) + the condensed RHS PER LEVEL (ElectrostaticLorentzCondensation), solves the
+  /// COMPOSITE elliptic (CompositeFacPoisson: every level refines the elliptic), reconstructs the
+  /// velocity PER LEVEL (v^{n+theta} = B^{-1}(v^n - theta dt grad phi^{n+theta})), extrapolates phi/v to
+  /// the full step, updates the energy, then cascades fine -> coarse (average_down, covered cells). The
+  /// coarse (level 0) stays replicated; the fine levels are distributed (MPI). Only ratio != 2 and
+  /// overlapping/non-nested/misaligned patches are refused, precisely, at the FAC ctor.
   void step_multilevel(std::vector<AmrLevelMP>& levels, MultiFab& coarse_phi,
                        const MultiFab& coarse_bz, int c_bz, Real theta, Real dt) {
-    // COMPLETE fine BoxArray (1..N patches): the FAC is built on this tiling; the patches being separated
-    // by at least one coarse cell (FAC ctor guard), each edge is a true C-F join.
-    const BoxArray& fine_ba = levels[1].U.box_array();
-    ensure_fac(fine_ba);
-    const Geometry geom_c = coarse_geom_;
-    const Geometry geom_f = coarse_geom_.refine(kAmrRefRatio);
+    const int L = static_cast<int>(levels.size());
+    // Fine-level tilings (levels[1..L-1]); build/rebuild the composite FAC on the whole tower.
+    std::vector<BoxArray> level_boxes;
+    for (int k = 1; k < L; ++k)
+      level_boxes.push_back(levels[k].U.box_array());
+    ensure_fac(level_boxes);
     ElectrostaticLorentzCondensation builder(vars_, alpha_, theta, dt);
 
-    MultiFab& Uc = levels[0].U;
-    MultiFab& Uf = levels[1].U;
-    const BoxArray bac = Uc.box_array();
-    const DistributionMapping dmc = Uc.dmap();
-    const BoxArray baf = Uf.box_array();
-    const DistributionMapping dmf = Uf.dmap();
-
-    // --- B_z 1-component per level (coarse: extracted from coarse_bz; fine: bilerp of the coarse) ---
-    MultiFab bz_c(bac, dmc, 1, 1), bz_f(baf, dmf, 1, 1);
-    copy_comp(bz_c, coarse_bz, c_bz);
-    device_fence();
-    fill_ghosts(bz_c, geom_c.domain, coeff_bc(bcPhi_));
-    bilerp_coarse_to_fine(bz_f, bz_c);  // fine B_z from the coarse (B0 uniform -> exact)
-
-    // --- phi^n per level (coarse = coarse_phi; fine = injected aux, levels[1].aux comp 0) ---
-    MultiFab phi_n_c(bac, dmc, 1, 1), phi_n_f(baf, dmf, 1, 1);
-    copy0(phi_n_c, coarse_phi);
-    copy0(phi_n_f, *levels[1].aux);
-
-    // --- v^n per level (before the solve: the reconstruction overwrites mom) ---
-    MultiFab vx_n_c(bac, dmc, 1, 0), vy_n_c(bac, dmc, 1, 0);
-    MultiFab vx_n_f(baf, dmf, 1, 0), vy_n_f(baf, dmf, 1, 0);
-    extract_v(Uc, vx_n_c, vy_n_c);
-    extract_v(Uf, vx_n_f, vy_n_f);
-
-    // --- operator + condensed RHS assembly PER LEVEL, into the composite solver fields ---
-    // eps_x == eps_y for the Schur (A_xx = A_yy = 1 + c rho/det): we write eps_x into the single eps of the
-    // composite and eps_y into a discarded scratch. f_composite = -rhs_schur (sign convention #126).
-    MultiFab eps_y_c(bac, dmc, 1, 1), eps_y_f(baf, dmf, 1, 1);
-    MultiFab rhs_c(bac, dmc, 1, 0), rhs_f(baf, dmf, 1, 0);
-    builder.assemble_operator(Uc, bz_c, geom_c, bcPhi_, fac_->eps_coarse(), eps_y_c,
-                              fac_->a_xy_coarse(), fac_->a_yx_coarse());
-    builder.assemble_operator(Uf, bz_f, geom_f, bcPhi_, fac_->eps_fine(), eps_y_f,
-                              fac_->a_xy_fine(), fac_->a_yx_fine());
-    {
-      MultiFab pn(bac, dmc, 1, 1);
-      copy0(pn, phi_n_c);
-      builder.assemble_rhs(pn, Uc, bz_c, geom_c, bcPhi_, rhs_c);
-      negate_into(fac_->rhs_coarse(), rhs_c);
-    }
-    {
-      MultiFab pn(baf, dmf, 1, 1);
-      copy0(pn, phi_n_f);
-      builder.assemble_rhs(pn, Uf, bz_f, geom_f, bcPhi_, rhs_f);
-      negate_into(fac_->rhs_fine(), rhs_f);
+    // Per-level geometry, B_z, phi^n, v^n. bz/phi/v are needed by the reconstruction after the solve.
+    std::vector<Geometry> geom(L);
+    std::vector<MultiFab> bz(L), phi_n(L), vx_n(L), vy_n(L);
+    for (int k = 0; k < L; ++k) {
+      geom[k] = (k == 0) ? coarse_geom_ : coarse_geom_.refine(1 << k);
+      const BoxArray ba = levels[k].U.box_array();
+      const DistributionMapping dm = levels[k].U.dmap();
+      bz[k] = MultiFab(ba, dm, 1, 1);
+      phi_n[k] = MultiFab(ba, dm, 1, 1);
+      vx_n[k] = MultiFab(ba, dm, 1, 0);
+      vy_n[k] = MultiFab(ba, dm, 1, 0);
+      if (k == 0) {
+        copy_comp(bz[0], coarse_bz, c_bz);
+        device_fence();
+        fill_ghosts(bz[0], geom[0].domain, coeff_bc(bcPhi_));
+        copy0(phi_n[0], coarse_phi);
+      } else {
+        bilerp_coarse_to_fine(bz[k], bz[k - 1]);  // fine B_z from the parent (B0 uniform -> exact)
+        copy0(phi_n[k], *levels[k].aux);          // injected phi^n aux (comp 0)
+      }
+      extract_v(levels[k].U, vx_n[k], vy_n[k]);
     }
 
-    // --- COMPOSITE SOLVE: phi^{n+theta} per level (the fine patch refines the elliptic) ---
+    // Operator + condensed RHS assembly PER LEVEL, into the composite solver's per-level fields.
+    // eps_x == eps_y for the Schur (A_xx = A_yy = 1 + c rho/det): eps_x -> the composite eps, eps_y ->
+    // a discarded scratch. f_composite = -rhs_schur (sign convention #126).
     fac_->use_variable_coefficient(true);
     fac_->use_cross_terms(true);
+    for (int k = 0; k < L; ++k) {
+      const BoxArray ba = levels[k].U.box_array();
+      const DistributionMapping dm = levels[k].U.dmap();
+      MultiFab eps_y(ba, dm, 1, 1), rhs(ba, dm, 1, 0), pn(ba, dm, 1, 1);
+      builder.assemble_operator(levels[k].U, bz[k], geom[k], bcPhi_, fac_->eps_level(k), eps_y,
+                                fac_->a_xy_level(k), fac_->a_yx_level(k));
+      copy0(pn, phi_n[k]);
+      builder.assemble_rhs(pn, levels[k].U, bz[k], geom[k], bcPhi_, rhs);
+      negate_into(fac_->rhs_level(k), rhs);
+    }
+
+    // COMPOSITE SOLVE: phi^{n+theta} per level (every level refines the elliptic).
     fac_->solve();
 
-    // --- velocity reconstruction + phi/v extrapolation + energy, PER LEVEL ---
-    reconstruct_level(Uc, fac_->phi_coarse(), phi_n_c, bz_c, vx_n_c, vy_n_c, geom_c, theta, dt,
-                      /*fill_phi_ghosts=*/true);
-    reconstruct_level(Uf, fac_->phi_fine(), phi_n_f, bz_f, vx_n_f, vy_n_f, geom_f, theta, dt,
-                      /*fill_phi_ghosts=*/false);  // C-F ghosts already set by the composite solve
+    // Velocity reconstruction + phi/v extrapolation + energy, PER LEVEL. Only the coarse level fills
+    // its physical phi ghosts; the finer levels keep the C/F ghosts the composite solve set.
+    for (int k = 0; k < L; ++k)
+      reconstruct_level(levels[k].U, fac_->phi_level(k), phi_n[k], bz[k], vx_n[k], vy_n[k], geom[k],
+                        theta, dt, /*fill_phi_ghosts=*/k == 0);
 
-    // coarse phi^{n+1} (extrapolated in place into fac_->phi_coarse()) -> published into coarse_phi.
-    copy0(coarse_phi, fac_->phi_coarse());
+    // coarse phi^{n+1} (extrapolated in place into fac_->phi_level(0)) -> published into coarse_phi.
+    copy0(coarse_phi, fac_->phi_level(0));
 
-    // --- fine -> coarse cascade: the COVERED coarse cells = 2x2 average of the fine cells (#169) ---
+    // fine -> coarse cascade (finest to coarsest): each covered parent cell = 2x2 average of the child
+    // (invariant #169). At L == 2 this is the single average_down of the historical path.
     device_fence();
-    mf_average_down_mb(Uf, Uc);
+    for (int k = L - 1; k >= 1; --k)
+      mf_average_down_mb(levels[k].U, levels[k - 1].U);
     device_fence();
-    fill_ghosts(coarse_phi, geom_c.domain, bcPhi_);
+    fill_ghosts(coarse_phi, geom[0].domain, bcPhi_);
   }
 
   /// Reconstructs v^{n+theta} = B^{-1}(v^n - theta dt grad phi^{n+theta}) (CENTERED grad), writes mom = rho v;
@@ -277,16 +267,25 @@ class AmrCondensedSchurSourceStepper {
     fill_ghosts(state, geom.domain, coeff_bc(bcPhi_));
   }
 
-  /// Builds (or rebuilds if the fine tiling changes) the composite elliptic solver on the fine
-  /// patches. We compare the current fine BoxArray to the previous one (same boxes AND same order) to avoid an
-  /// unnecessary rebuild (the FAC is reused as long as the hierarchy does not change).
-  void ensure_fac(const BoxArray& fine_ba) {
-    if (fac_ && fac_fine_boxes_ == fine_ba.boxes())
+  /// Builds (or rebuilds if the tower changes) the composite elliptic solver over ALL fine levels
+  /// (ADC-636). The rebuild key is the FULL per-level box set (boxes AND order at every level), so a
+  /// regrid that changes any level's tiling rebuilds; an unchanged tower reuses the FAC. A
+  /// single-patch-level tower uses the 2-level ctor (bit-identical); deeper towers use the N-level
+  /// ctor. The FAC ctor refuses ratio != 2 and overlapping/non-nested/misaligned patches, precisely.
+  void ensure_fac(const std::vector<BoxArray>& level_boxes) {
+    std::vector<std::vector<Box2D>> key;
+    for (const BoxArray& ba : level_boxes)
+      key.push_back(ba.boxes());
+    if (fac_ && fac_level_boxes_ == key)
       return;
-    fac_ = std::make_unique<CompositeFacPoisson>(coarse_geom_, coarse_ba_, bcPhi_, fine_ba,
-                                                 kAmrRefRatio);
+    if (level_boxes.size() == 1)
+      fac_ = std::make_unique<CompositeFacPoisson>(coarse_geom_, coarse_ba_, bcPhi_, level_boxes[0],
+                                                   kAmrRefRatio);
+    else
+      fac_ = std::make_unique<CompositeFacPoisson>(coarse_geom_, coarse_ba_, bcPhi_, level_boxes,
+                                                   kAmrRefRatio);
     fac_->set_options(fac_options_);  // ADC-614: apply the installed FAC knobs (default = kFAC*).
-    fac_fine_boxes_ = fine_ba.boxes();
+    fac_level_boxes_ = std::move(key);
   }
 
   /// BC of the coefficients (eps/B_z) and of the published state: periodic preserved, physical edge zero-gradient.
@@ -352,8 +351,9 @@ class AmrCondensedSchurSourceStepper {
   std::unique_ptr<CompositeFacPoisson> fac_;
   /// ADC-614: FAC knobs applied to the composite solver at build; defaults = kFAC* (bit-identical).
   CompositeFacOptions fac_options_;
-  /// Fine tiling (boxes + order) of the last built FAC: used to detect a hierarchy change.
-  std::vector<Box2D> fac_fine_boxes_;
+  /// Per-level tiling (boxes + order at each fine level) of the last built FAC: detects a tower change
+  /// (ADC-636: the rebuild key spans the whole tower, not just level 1).
+  std::vector<std::vector<Box2D>> fac_level_boxes_;
 };
 
 }  // namespace pops
