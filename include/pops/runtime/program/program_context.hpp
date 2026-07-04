@@ -302,26 +302,45 @@ class ProgramContext {
   /// Register (idempotent) the history @p name with maximum lag @p lag, allocating the ring buffer
   /// WITHOUT reading it. The codegen emits this ONCE at the top of the step body for each declared
   /// history, so the ring depth is locked before the first store (the cold-start fill then broadcasts
-  /// the first stored value into every -- already allocated -- slot). Forwards to
-  /// System::register_history. A read-only counterpart of @ref history (no fail-loud on uninitialized).
-  void register_history(const std::string& name, int lag) const {
-    sys_->register_history(name, lag);
+  /// the first stored value into every -- already allocated -- slot). @p ncomp is the slot component
+  /// count: the default -1 resolves to block 0's ncomp (the multistep ring, byte-identical), and an
+  /// explicit @p ncomp >= 1 sizes a narrower ring (ADC-427: a 1-component cross-step potential carry).
+  /// Forwards to System::register_history. A read-only counterpart of @ref history.
+  void register_history(const std::string& name, int lag, int ncomp = -1) const {
+    sys_->register_history(name, lag, ncomp);
   }
 
   /// The history slot @p lag macro-steps back (the SYSTEM-OWNED ring buffer, ADC-406a): lag 1 = the
   /// previous step's stored value (e.g. R_{n-1} for Adams-Bashforth), lag 0 = the current slot. The
   /// codegen emits ``ctx.history("<name>", <lag>)``; the read registers the ring on first use
   /// (idempotent) and forwards to System::read_history, which throws if the history was never stored
-  /// (spec error 17). @p lag defaults to 1 (the common one-step-back read).
+  /// (spec error 17). The register uses the DEFAULT ncomp (block 0's ncomp) so a bare read never
+  /// changes an already-declared ring's width; a narrower ring (ADC-427) is declared by the prelude
+  /// register_history(name, lag, ncomp) the codegen emits before any read. @p lag defaults to 1.
   MultiFab& history(const std::string& name, int lag = 1) const {
     sys_->register_history(name, lag);  // idempotent: allocate the ring on first use
+    return sys_->read_history(name, lag);
+  }
+
+  /// ZERO COLD-START history read (ADC-427): like @ref history, but a read BEFORE the first store
+  /// returns the zero-filled slot instead of failing loud. A read-first carry (the cross-step
+  /// potential: read the previous step's value at the TOP of the step, store the new one at the END)
+  /// has no store before its very first read; its declared step-0 value IS zero (the slots are
+  /// zero-initialized at registration), so the first read marks the ring initialized and reads it.
+  /// The multistep store-first pattern keeps the fail-loud @ref history read unchanged. @p ncomp
+  /// mirrors register_history (binds the slot width at the first register; -1 = block 0's ncomp).
+  MultiFab& history_zero_start(const std::string& name, int lag, int ncomp = -1) const {
+    sys_->register_history(name, lag, ncomp);  // idempotent; ncomp binds at the first register
+    if (!sys_->history_initialized(name))
+      sys_->set_history_initialized(name, true);  // the zero-filled slots ARE the declared cold start
     return sys_->read_history(name, lag);
   }
 
   /// Store @p value into the CURRENT slot of history @p name (ADC-406a). Registers the ring on first
   /// use (at least a current slot; the lag the program reads via @ref history sets the real depth) and
   /// forwards to System::store_history (which fills every slot on the first store -- the cold start).
-  /// The codegen emits ``ctx.store_history("<name>", <value>)`` near the end of the step body.
+  /// The codegen emits ``ctx.store_history("<name>", <value>)`` near the end of the step body. Uses the
+  /// default ncomp on register (the width is fixed by the prelude register_history the codegen emits).
   void store_history(const std::string& name, const MultiFab& value) const {
     sys_->register_history(name, 1);  // idempotent: at least a current slot exists before the store
     sys_->store_history(name, value);

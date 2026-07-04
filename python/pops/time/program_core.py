@@ -227,12 +227,29 @@ LocalTerm`, an :class:`pops.model.OperatorHandle` from ``m.source_term``, or a p
     def linear_combine(self, name: Any = None, expr: Any = None) -> Any:
         """Materialize an affine combination of State/RHS values into a new State. Accepts
         ``linear_combine(name, expr)`` or ``linear_combine(expr)``. The per-input coefficient
-        polynomials in ``dt`` are recorded in ``attrs['coeffs']`` (aligned with ``inputs``)."""
+        polynomials in ``dt`` are recorded in ``attrs['coeffs']`` (aligned with ``inputs``).
+
+        A combination whose terms are ALL ``scalar_field`` values materializes a ``scalar_field``
+        instead (ADC-427: the condensed-Schur phi^{n+1} = phi^n + (1/theta)(phi^{n+theta} - phi^n)
+        extrapolation over 1-component potentials). The State path is unchanged -- the scalar branch
+        activates only when no State/RHS term is present, so an existing all-State combine serializes
+        and hashes byte-identically. The two vtypes never mix in one affine (a scalar_field and a State
+        are different grid shapes); the codegen lowers both through the same axpy/lincomb idiom."""
         if expr is None and not isinstance(name, str):
             name, expr = None, name
         aff = _to_affine(expr)._merge()
         if not aff:
             raise ValueError("linear_combine: empty combination")
+        # ADC-427: an affine whose terms are ALL scalar_field yields a scalar_field (block=None, like
+        # P.scalar_field) -- the condensed-Schur phi^{n+1} extrapolation over 1-component potentials.
+        # A combine that contains ANY State/RHS term keeps the historical State result (the state branch
+        # below picks its block/space), so a mixed State+scalar_field combine -- the BDF Newton update
+        # 1.0*Uk + 1.0*dU, where dU is a solve_linear scalar_field iterate over an n-component state --
+        # is byte-identical to before. The scalar branch fires ONLY for a pure scalar_field affine.
+        if all(v.vtype == "scalar_field" for v, _ in aff):
+            inputs = tuple(v for v, _ in aff)
+            coeffs = [c.as_dict() for _, c in aff]
+            return self._new("scalar_field", "linear_combine", inputs, {"coeffs": coeffs}, name, None)
         block = None
         state_space = None
         for v, _ in aff:

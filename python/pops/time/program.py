@@ -42,6 +42,10 @@ class Program(_ProgramCore, _ProgramLocal, _ProgramCondensed, _ProgramSolve, _Pr
         self._commits = {}      # block -> State value
         self._recording = []    # stack of sub-block lists (a control-flow body); see _new / while_
         self._histories = {}    # name -> max declared lag (multistep histories; ADC-406a)
+        # name -> slot ncomp for a NARROW (non-full-state) history ring (ADC-427). Only names read with
+        # an explicit P.history(ncomp=1) appear here (the condensed-Schur phi^n carry); a full-state
+        # multistep ring is absent (the codegen emits the historical 2-arg register_history for it).
+        self._histories_ncomp = {}
         # name -> (depth, HistoryPersistence) per keep_history ring (ADC-626). The checkpoint persists
         # the policy-selected slots; the compile-time pass validates coherence + program-determinism per
         # ring. Empty -> every ring persists Dense (the historical whole ring, no recomputation).

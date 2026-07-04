@@ -257,10 +257,26 @@ class AmrProgramContext {
   // register/read/store address the CURRENT level; rotate fires ONCE per macro-step, guarded to the LAST
   // level -- the body's terminal rotate_histories() runs once per level in the AMR per-level loop, so
   // the level_==nlev-1 guard is the AMR analogue of the Uniform once-per-step rotate (design plan sec.2).
-  void register_history(const std::string& name, int lag) const {
+  // @p ncomp mirrors ProgramContext::register_history so the SAME lowered body (a single problem.so)
+  // compiles against BOTH contexts. The narrow-ring AMR phi^n carry (ADC-427 commit 3) threads @p ncomp
+  // into AmrHistoryOps; until then the AMR ring keeps block 0's width (the multistep ring, unchanged),
+  // so @p ncomp is accepted-and-ignored here -- a signature-only addition, no AMR semantics change.
+  void register_history(const std::string& name, int lag, int ncomp = -1) const {
+    (void)ncomp;
     pops::detail::AmrHistoryOps::register_history(*eng_, name, lag);  // idempotent; allocates every level
   }
   MultiFab& history(const std::string& name, int lag = 1) const {
+    return pops::detail::AmrHistoryOps::read_history(*eng_, name, lag, level_);
+  }
+  // ZERO COLD-START read (ADC-427), mirroring ProgramContext::history_zero_start so the SAME lowered
+  // body compiles on both contexts: a read-first cross-step carry reads the zero-filled slots on its
+  // very first read instead of failing loud. @p ncomp is accepted-and-ignored like register_history
+  // above (the AMR narrow ring lands with the ADC-427 AMR commits; block-0 width until then).
+  MultiFab& history_zero_start(const std::string& name, int lag, int ncomp = -1) const {
+    (void)ncomp;
+    pops::detail::AmrHistoryOps::register_history(*eng_, name, lag);
+    if (!pops::detail::AmrHistoryOps::initialized(*eng_, name))
+      pops::detail::AmrHistoryOps::set_initialized(*eng_, name, true);
     return pops::detail::AmrHistoryOps::read_history(*eng_, name, lag, level_);
   }
   void store_history(const std::string& name, const MultiFab& value) const {

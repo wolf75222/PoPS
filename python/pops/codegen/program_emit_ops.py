@@ -1,12 +1,11 @@
 """pops.codegen.program_emit_ops : the per-op SSA -> C++ dispatcher.
 
-Extracted verbatim from ``pops.codegen.program_codegen`` so the Program -> C++ lowering
-fits the Spec-4 file-size budget.  ``_emit_op`` lowers a SINGLE SSA op to C++ (appending
-to the line list and recording its token), shared by the top-level body walk
-(``program_emit_control._emit_body``) and the control-flow sub-blocks.  It dispatches to
-the per-cell model kernels (``program_emit_model_kernels``), the matrix-free / Schur
-emitters (``program_emit_solve``), the control-flow emitters (``program_emit_control``)
-and the schedule wrap (``program_emit_schedule``).
+Extracted verbatim from ``pops.codegen.program_codegen`` (Spec-4 file-size budget).
+``_emit_op`` lowers a SINGLE SSA op to C++ (appending to the line list, recording its
+token), shared by the top-level body walk (``program_emit_control._emit_body``) and the
+control-flow sub-blocks; it dispatches to the model kernels, the matrix-free / Schur /
+condensed emitters, control flow and the schedule wrap
+(``program_emit_{model_kernels,solve,condensed,control,schedule}``).
 """
 from __future__ import annotations
 
@@ -56,27 +55,23 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     now). @p block_idx maps a block name to its runtime index (ADC-426); None inside a sub-block,
     where every op shares the single enclosing block, so a missing map resolves to index 0."""
     bidx = (block_idx or {}).get(v.block, 0)  # this op's runtime block index (0 single-block)
-    # PER-NODE PROFILING (ADC-459, Spec 3 section 29): bracket the C++ this op emits with a
-    # steady_clock pair recorded under "node:<v.name>", so sim.profile_report() shows each Program
-    # node's wall time next to the coarse step / field_solve phases. A steady_clock now() + a
-    # ctx.profile_record (NOT a RAII ProfileScope block) is used so the node's emitted C++
-    # declarations stay at the step-body scope -- a surrounding { } would hide them from later
-    # nodes (e.g. r2 / acc3 read across ops). The timing is additive and ~free when profiling is
-    # off (ctx.profile_record early-returns inside Profiler::record); it changes no numerics. Ops
-    # that emit no statement (a pure inline token: cfl / compare) are not wrapped (the len guard
-    # below skips them). _start marks where this op's lines begin so the open line can be inserted.
+    # PER-NODE PROFILING (ADC-459): bracket this op's emitted C++ with a steady_clock pair
+    # recorded under "node:<v.name>" (shown by sim.profile_report next to the coarse phases). A
+    # now() + ctx.profile_record pair (NOT a RAII ProfileScope { }) keeps the emitted declarations
+    # at step-body scope -- later nodes read them (e.g. r2 / acc3). Additive, ~free when profiling
+    # is off (record early-returns), changes no numerics; ops emitting no statement (pure inline
+    # token: cfl / compare) are skipped by the len guard below. _start marks this op's first line.
     _profile_start = len(lines)
     if v.op == "state":
         var[v.id] = "u%d" % v.id
         lines.append("pops::MultiFab& %s = ctx.state(%d);" % (var[v.id], bidx))
     elif v.op == "solve_fields":
-        # Per-stage field solve (ADC-409): solve from the EXPLICIT stage state recorded by
-        # P.solve_fields(state=...) so a field-coupled multi-stage scheme re-solves phi from each
-        # stage's own state (the shared aux is re-filled before this stage's RHS reads it). For the
-        # first stage state == U^n, so this is identical to the old ctx.solve_fields(). Multi-block
-        # (ADC-426): solve_fields_from_state(idx, U_stage) is a genuinely COUPLED solve -- the system
-        # Poisson RHS is Sum_s elliptic_rhs_s(U_s) (assemble_poisson_rhs), so block idx reads its
-        # stage state while every OTHER block contributes its live state into the shared phi/aux.
+        # Per-stage field solve (ADC-409): P.solve_fields(state=...) re-solves phi from THIS
+        # stage's explicit state (the shared aux is re-filled before the stage's RHS reads it; the
+        # first stage state == U^n == the old ctx.solve_fields()). Multi-block (ADC-426):
+        # solve_fields_from_state(idx, U_stage) is a genuinely COUPLED solve -- the Poisson RHS is
+        # Sum_s elliptic_rhs_s(U_s), block idx at its stage state, every other block contributing
+        # its live state into the shared phi/aux.
         (state_in,) = v.inputs  # solve_fields inputs = (state,)
         field = v.attrs.get("field")
         if field is not None:
@@ -90,17 +85,13 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             solve_stmt = "ctx.solve_fields_from_state(%d, %s);" % (bidx, var[state_in.id])
         lines.append(solve_stmt)
     elif v.op == "solve_fields_from_blocks":
-        # Coupled multi-block field solve (Spec 3 criterion 24, ADC-457): a SIMULTANEOUS solve where
-        # EVERY listed block reads its OWN stage state at once -- the system Poisson RHS is
-        # Sum_s elliptic_rhs_s(U_s) over all coupled blocks (assemble_poisson_rhs_from_blocks), not a
-        # single-target override. Lowers to ctx.solve_fields_from_blocks(u_stages), a vector indexed
-        # BY BLOCK INDEX (size == ctx.n_blocks(); a nullptr entry uses the block's live state). The
-        # listed states are slotted at their block index, so the runtime sees each coupled block at
-        # its stage state and every other (unlisted) block at its live state -- the seam a multi-
-        # species step uses (the IR commit_many guarantee: no operator observes a partial group).
-        # Each input is routed to the slot of ITS OWN block index (not its position in the list), so
-        # a reordered list still solves correctly; an input whose block was never declared via
-        # P.state has no slot -> fail loud at emit rather than silently mis-route to index 0.
+        # Coupled multi-block field solve (ADC-457): a SIMULTANEOUS solve, EVERY listed block at
+        # its OWN stage state -- the Poisson RHS is Sum_s elliptic_rhs_s(U_s) over all coupled
+        # blocks, not a single-target override. Lowers to ctx.solve_fields_from_blocks(u_stages),
+        # a vector indexed BY BLOCK INDEX (size == ctx.n_blocks(); nullptr = the block's live
+        # state) -- the multi-species seam (IR commit_many: no operator observes a partial group).
+        # Inputs slot at their OWN block index (not list position), so a reordered list still
+        # solves right; an input whose block was never declared via P.state fails loud at emit.
         bmap = block_idx or {}
         vec = "u_stages_%d" % v.id
         lines.append("std::vector<const pops::MultiFab*> %s(ctx.n_blocks(), nullptr);" % vec)
@@ -146,10 +137,19 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         var[v.id] = program._coupled_scratch[(coupled_in.id, v.attrs["out_block"])]
     elif v.op == "history":
         # Read the SYSTEM-OWNED history slot (a MultiFab&, ADC-406a): lag steps back. The reference
-        # is bound to a C++ name the affine combine then reads like any other state/RHS term.
+        # is bound to a C++ name the affine combine then reads like any other state/RHS term. An
+        # explicit-ncomp read (ADC-427: the read-first 1-component cross-step carry) lowers to the
+        # ZERO COLD-START variant -- its very first read (before any store) returns the zero-filled
+        # slot, the declared step-0 value -- while the default multistep read keeps the fail-loud
+        # ctx.history byte-identical (a store-first scheme reading before its store is a config error).
         var[v.id] = "h%d" % v.id
-        lines.append("pops::MultiFab& %s = ctx.history(%s, %d);"
-                     % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"])))
+        if "ncomp" in v.attrs:
+            lines.append("pops::MultiFab& %s = ctx.history_zero_start(%s, %d, %d);"
+                         % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"]),
+                            int(v.attrs["ncomp"])))
+        else:
+            lines.append("pops::MultiFab& %s = ctx.history(%s, %d);"
+                         % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"])))
     elif v.op == "store_history":
         # Side-effect: copy the value into the current slot of the history (the cold-start fill on
         # the first store happens System-side). store_history is a State-typed node but carries no
@@ -469,7 +469,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             var[v.id] = var[base.id]  # the commit wrote the block state in place (no final copy)
         else:
             var[v.id] = "u%d" % v.id  # an intermediate stage state (scratch, zero-initialized)
-            lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);" % (var[v.id], var[base.id]))
+            # A scalar_field combine (ADC-427: the phi^{n+1} extrapolation) has no block, so it has no
+            # base block-state to shape the scratch: template it on the FIRST scalar input instead (a
+            # 1-component field, same (ba, dm)). A State combine shapes it on the block base as before.
+            template = var[terms[0][0].id] if v.vtype == "scalar_field" else var[base.id]
+            lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);" % (var[v.id], template))
             for inp, coeff in terms:
                 lines.append("ctx.axpy(%s, %s, %s);" % (var[v.id], _coeff_cpp(coeff), var[inp.id]))
     # UNIFIED SCHEDULER (ADC-458, Spec 3 sections 17-18): if this op carries a non-always schedule,

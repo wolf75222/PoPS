@@ -791,11 +791,15 @@ class System {
   /// @{
   /// Register (idempotent) a history named @p name with maximum lag @p lag (>= 1): a ring buffer of
   /// depth @p lag + 1 (slot 0 = the CURRENT value, slot k = the value k macro-steps back after the
-  /// rotates), each slot a MultiFab co-distributed with block 0 (the block state's ncomp, so it can
-  /// hold a full RHS / state) and zero-initialized. Re-registering with the SAME lag returns the
-  /// existing current slot; a DIFFERENT lag throws (a name binds one depth). Returns the current slot
-  /// [0] -- the read target for lag = 1 after one rotate. @throws if @p lag < 1 or no block exists yet.
-  POPS_EXPORT MultiFab& register_history(const std::string& name, int lag);
+  /// rotates), each slot a MultiFab co-distributed with block 0 and zero-initialized. @p ncomp is the
+  /// slot component count: the default -1 resolves to block 0's ncomp (the historical multistep ring,
+  /// so a slot can hold a full RHS / state -- byte-identical to the pre-ADC-427 signature), while an
+  /// explicit @p ncomp >= 1 sizes a narrower ring (ADC-427: the 1-component condensed-Schur phi^n
+  /// carry). The component count binds at the FIRST register; a later re-register ignores @p ncomp.
+  /// Re-registering returns the existing current slot and grows the ring for a larger @p lag. Returns
+  /// the current slot [0] -- the read target for lag = 1 after one rotate. @throws if @p lag < 1,
+  /// @p ncomp == 0, or no block exists yet.
+  POPS_EXPORT MultiFab& register_history(const std::string& name, int lag, int ncomp = -1);
   /// The history slot @p lag macro-steps back (lag 0 = the current slot, lag 1 = the previous step's
   /// stored value, ...). @throws if @p name is unknown, @p lag exceeds the registered depth, or the
   /// history has not been stored yet ("history '<name>' with lag=<lag> was requested but not

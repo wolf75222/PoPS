@@ -60,39 +60,35 @@ def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1.0, c_rho: 
       6. (``c_E`` given) update the total energy ``E^{n+1} = E^n + (1/2)rho(|v^{n+1}|^2 - |v^n|^2)``
          (``P.schur_energy``, the native kinetic-energy increment).
 
-    phi^n is a fresh zero scalar field each step (NO persistent history -- see the cross-step carry note
-    under DEFERRED below). The phi solve runs to tolerance and the velocity reconstruction reads only the
-    solved phi^{n+theta}, so a single step matches the native single step taken from ``phi^n = 0`` (the
-    System also initializes phi to zero). Every numerical kernel REUSES a native primitive (no stencil /
-    B^{-1} / elimination reimplementation); the native ``pops.CondensedSchur`` stepper is untouched.
+    phi^n handling depends on theta. At ``theta == 1`` (the sanctioned backward-Euler electrostatic
+    push) phi^n is a fresh ZERO scalar field each step: the ``-Lap(phi^n)`` RHS term vanishes and the
+    solve warm starts from zero, so a step matches the native step from ``phi^n = 0`` and the historical
+    IR / trajectory is byte-identical. At ``theta < 1`` phi^n is CARRIED across steps (ADC-427): last
+    step's phi^{n+1} is this step's phi^n, kept in a lag-1, 1-component System history ring (the
+    ncomp-aware ``register_history``), exactly as the native stepper carries it via ``ell_phi`` + the
+    ``-Lap(phi^n)`` anchor. The ring's cold-start fill seeds phi^n = 0 at step 0, so the FIRST theta<1
+    step still matches native. Every numerical kernel REUSES a native primitive (no stencil / B^{-1} /
+    elimination reimplementation); the native ``pops.CondensedSchur`` stepper is untouched.
 
-    THETA != 1 (ADC-427). The native stepper takes the implicit stage at ``n+theta`` and extrapolates phi
-    and the MOMENTUM (not rho) to ``n+1`` by the factor ``1/theta``. This macro lowers that extrapolation
-    with the EXISTING affine algebra, no component-restricted IR op: ``schur_reconstruct`` freezes rho
+    THETA != 1 (ADC-427). The native stepper takes the implicit stage at ``n+theta`` and extrapolates
+    phi AND the MOMENTUM (not rho) to ``n+1`` by the factor ``1/theta``. This macro lowers BOTH with the
+    EXISTING affine algebra, no component-restricted IR op. State: ``schur_reconstruct`` freezes rho
     (and energy), so ``rho^{n+theta} = rho^n`` and ``mom^{n+theta} = rho v^{n+theta}``,
     ``mom^n = rho v^n``. The plain STATE affine ``U^n + (1/theta)(U^{n+theta} - U^n)`` therefore leaves
     rho (and a yet-unwritten energy) untouched -- ``rho^{n+1} = (1-1/theta)rho^n + (1/theta)rho^n =
     rho^n`` -- and on the momentum it equals the native ``mom^{n+1} = mom^n + (1/theta)(mom^{n+theta} -
-    mom^n) = rho(v^n + (1/theta)(v^{n+theta} - v^n))``. The phi extrapolation is a no-op here because
-    phi^n = 0 (no carry) and the reconstruction already read phi^{n+theta}; phi^{n+1} would only matter
-    as the NEXT step's warm start (the deferred persistent-phi carry).
+    mom^n) = rho(v^n + (1/theta)(v^{n+theta} - v^n))``. Phi: the SCALAR affine ``phi^n + (1/theta)(
+    phi^{n+theta} - phi^n)`` (a ``linear_combine`` of 1-component fields) equals the native
+    ``SchurExtrapolateScalarKernel``; the result is stored into the history ring so it is the NEXT step's
+    phi^n. This carry is what lifts theta = 0.5 to second-order (Crank-Nicolson) temporal accuracy. It is
+    GATED to ``theta != 1`` so the theta == 1 golden (the fresh-zero phi path) stays byte-identical;
+    a user selects theta = 1 or theta = 0.5, never sweeps continuously through 1.
 
     @p alpha is the electrostatic coupling constant; @p theta the theta-scheme implicitness in ``(0, 1]``;
     @p c_rho / @p c_mx / @p c_my the conserved-variable components, @p c_bz the aux component of B_z
     (canonical 3, filled by ``solve_fields``) and @p c_E the OPTIONAL energy component (None = no energy
     update, like a rho/mx/my isothermal block). @p method (a TYPED pops.solvers.krylov descriptor;
     None defaults to BiCGStab()) / @p tol / @p max_iter configure the Krylov phi solve.
-
-    DEFERRED (documented partial, spec's "if too large" clause):
-      - **cross-step phi^n carry**. The native stepper freezes phi^n (the previous stage's potential)
-        and keeps it in the RHS (``-Lap(phi^n)``) and as the solve warm start. The System history ring
-        is sized to the block's ncomp (a full state) and stores via ``pops::lincomb`` (matching ncomp), so
-        a 1-component phi cannot be carried through it without a scalar-history runtime path (a new
-        ncomp-aware ``register_history`` + scalar-typed history IR ops + the extrapolated-phi store/read
-        dataflow) -- a runtime change too large for this slice. This macro therefore solves each step
-        from ``phi^n = 0`` (a fresh zero scalar field). At theta != 1 the FIRST step still matches the
-        native first step (both start from phi = 0); the cross-step difference is the warm-start /
-        ``-Lap(phi^n)`` term the native stepper carries (a smoother convergence, the same fixed point).
 
     NEAR-MATCH to native, not bit-exact: the native solve is BiCGStab + GeometricMG preconditioner while
     the Program solve is matrix-free BiCGStab WITHOUT a preconditioner -- the SAME operator and RHS, a
@@ -105,9 +101,17 @@ def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1.0, c_rho: 
         raise ValueError("condensed_schur: c_E must be None or a Python int >= 0 (got %r)" % (c_E,))
     U = P.state(block)
     P.solve_fields(U)  # fill the shared aux (B_z at c_bz) from the current state, like the native stage
-    # phi^n = 0 (a fresh zero scalar field): the RHS Laplacian term -Lap(phi^n) vanishes and the solve
-    # warm starts from zero. Cross-step phi^n carry is deferred (see the docstring).
-    phi_n = P.scalar_field(block + ".schur_phi_n")
+    # phi^n. theta == 1 (the sanctioned backward-Euler push) keeps a fresh ZERO scalar field each step:
+    # the -Lap(phi^n) RHS term vanishes and the solve warm starts from zero, so the historical IR /
+    # trajectory is byte-identical. theta < 1 CARRIES phi^n across steps through a lag-1, 1-component
+    # System history ring (ADC-427): last step's phi^{n+1} is this step's phi^n, exactly as the native
+    # CondensedSchurSourceStepper carries it (via ell_phi + the -Lap(phi^n) anchor). The ring's
+    # cold-start fill seeds phi^n = 0 at step 0, so the FIRST theta<1 step still matches native.
+    carry = float(theta) != 1.0
+    if carry:
+        phi_n = P.history(block + ".schur_phi", lag=1, ncomp=1)  # scalar read; cold-start = 0
+    else:
+        phi_n = P.scalar_field(block + ".schur_phi_n")           # UNCHANGED: fresh zero each step
     c_coeff = (float(theta) * float(theta) * float(alpha)) * P.dt * P.dt  # c = theta^2 dt^2 alpha
     th_dt = float(theta) * P.dt  # theta dt
     g = (float(theta) * float(alpha)) * P.dt  # theta dt alpha (coefficient of the div(F) term)
@@ -129,7 +133,10 @@ def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1.0, c_rho: 
         from pops.solvers.krylov import BiCGStab
         method = BiCGStab(max_iter=max_iter)
     P.set_apply(A, apply)
-    phi = P.solve_linear(operator=A, rhs=rhs, method=method, tol=tol, max_iter=max_iter)
+    # theta < 1 warm-starts the Krylov solve from phi^n (the carried potential), like the native stepper;
+    # theta == 1 keeps the zero warm start (initial_guess=None) so the IR is byte-identical.
+    phi = P.solve_linear(operator=A, rhs=rhs, method=method, tol=tol, max_iter=max_iter,
+                         initial_guess=phi_n if carry else None)
     # The reconstruction overwrites the MOMENTUM in place. theta == 1 with no energy keeps the historical
     # IR byte-identical (reconstruct directly on U). For theta < 1 OR an energy update we need U^n
     # (mom^n / E^n) AFTER the reconstruction, so reconstruct on a fresh COPY of U^n and keep U^n intact.
@@ -148,6 +155,15 @@ def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1.0, c_rho: 
     # for an isothermal rho/mx/my block (c_E is None).
     if c_E is not None:
         out = P.schur_energy(state=out, state_old=U, c_rho=c_rho, c_mx=c_mx, c_my=c_my, c_E=c_E)
+    # PERSISTENT phi^n carry (ADC-427, theta < 1 only). Extrapolate phi to n+1 by the SAME 1/theta
+    # factor as the state (the native SchurExtrapolateScalarKernel: phi^{n+1} = phi^n + (1/theta)(
+    # phi^{n+theta} - phi^n)) and store it so the next step reads it as phi^n. A scalar-field affine
+    # (all terms 1-component), lowered through the same axpy/lincomb idiom as a State combine. Every op
+    # here is gated by `carry`, so theta == 1 emits none of it and stays byte-identical.
+    if carry:
+        inv_theta = 1.0 / float(theta)
+        phi_np1 = P.linear_combine(block + ".schur_phi_np1", phi_n + inv_theta * (phi - phi_n))
+        P.store_history(block + ".schur_phi", phi_np1)  # rotated to lag 1 for the next step
     if commit:
         P.commit(block, out)
     return out
