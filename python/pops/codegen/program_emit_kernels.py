@@ -32,6 +32,7 @@ _ALLOWED_OPS = frozenset({"state", "solve_fields", "solve_fields_from_blocks", "
                           "cell_compare", "where", "rhs_jacvec",
                           "schur_coeffs", "apply_laplacian_coeff", "schur_explicit_flux",
                           "schur_rhs", "schur_reconstruct", "schur_energy",
+                          "condensed_coeffs", "condensed_rhs", "condensed_reconstruct",
                           "coupled_rate", "coupled_rate_out"})
 
 _PROFILE_SKIP_OPS = frozenset({"state", "history", "hmin", "cfl"})
@@ -69,6 +70,21 @@ def _schur_include(program: Any) -> str:
     """The condensed-Schur operator #include for @p program's generated .so, or "" when it carries no
     Schur op (ADC-587): a Schur-free Program's source must not include coupling/schur/**."""
     return _SCHUR_PROGRAM_INCLUDE if _needs_schur_program_header(program) else ""
+
+
+# Ops whose emitted kernels call pops::detail::block_inverse<N> (ADC-637): the GENERIC condensed-implicit
+# emitters. A generated .so pulls block_inverse.hpp in ONLY when the IR carries one of these.
+_CONDENSED_OPS = frozenset({"condensed_coeffs", "condensed_rhs", "condensed_reconstruct"})
+
+_BLOCK_INVERSE_INCLUDE = ("#include <pops/numerics/linalg/block_inverse.hpp>"
+                          "  // pops::detail::block_inverse (condensed-implicit solve, ADC-637)\n")
+
+
+def _block_inverse_include(program: Any) -> str:
+    """The closed-form block-inverse #include for @p program's generated .so, or "" when it carries no
+    condensed-implicit op (ADC-637): only a Program using condensed_* emits pops::detail::block_inverse.
+    (block_inverse.hpp itself includes dense_eig.hpp, already pulled in by the template.)"""
+    return _BLOCK_INVERSE_INCLUDE if any(v.op in _CONDENSED_OPS for v in program._values) else ""
 
 
 # --- module-level emission helpers (per-cell kernels, coeff rendering, the .so template) ---
@@ -322,7 +338,7 @@ _PROGRAM_CPP_TEMPLATE = '''\
 // A compiled time Program installed across the stable .so ABI: it drives sim.step(dt) entirely in
 // C++ via ProgramContext, reusing the PoPS runtime (no MultiFab / flux / solver reimplementation).
 #include <pops/runtime/program/program_context.hpp>
-{schur_include}#include <pops/runtime/dynamic/abi_key.hpp>
+{schur_include}{block_inverse_include}#include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/storage/fab2d.hpp>          // Array4 / ConstArray4 (per-cell handles)
 #include <pops/mesh/execution/for_each.hpp>     // for_each_cell (Phase-4b per-cell kernels)
