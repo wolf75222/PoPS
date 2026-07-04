@@ -1,8 +1,9 @@
 /// @file
 /// @brief Out-of-line AmrRuntime member definitions kept out of amr_runtime.hpp (its line budget):
-/// the ADC-542 level-composite reductions (composite_reduce + its folds) and the checkpoint
-/// hierarchy-rebuild seam (rebuild_hierarchy). Included at the END of amr_runtime.hpp, so the full
-/// AmrRuntime class is visible; NOT a standalone header (it defines AmrRuntime members).
+/// the ADC-542 level-composite reductions (composite_reduce + its folds), the checkpoint
+/// hierarchy-rebuild seam (rebuild_hierarchy), and the regrid / clustering config setters
+/// (set_regrid, set_clustering). Included at the END of amr_runtime.hpp, so the full AmrRuntime class
+/// is visible; NOT a standalone header (it defines AmrRuntime members).
 ///
 /// rebuild_hierarchy imposes a mid-run hierarchy from a v3 checkpoint by REUSING the regrid R6/R7
 /// machinery (amr_runtime.hpp regrid()) MINUS tagging / clustering / prolong: the checkpoint supplies
@@ -264,6 +265,28 @@ inline void AmrRuntime::rebuild_hierarchy(const std::vector<std::vector<PatchBox
       ref.push_back(*b.levels);
     detail::same_layout_or_throw(ref);
   }
+}
+
+// --- regrid / clustering config setters (declared in amr_runtime.hpp) -----------------------------
+
+inline void AmrRuntime::set_regrid(int every, int grow, int margin) {
+  if (every < 0)
+    throw std::runtime_error("AmrRuntime::set_regrid : regrid_every >= 0");
+  regrid_every_ = every;
+  regrid_grow_ = grow;
+  regrid_margin_ = margin;
+}
+
+inline void AmrRuntime::set_clustering(double min_efficiency, int min_box_size, int max_box_size) {
+  if (!(min_efficiency > 0.0 && min_efficiency <= 1.0))
+    throw std::runtime_error("AmrRuntime::set_clustering : min_efficiency must be in (0, 1]");
+  if (min_box_size < 1 || max_box_size < 1)
+    throw std::runtime_error("AmrRuntime::set_clustering : box sizes must be >= 1");
+  if (min_box_size > max_box_size)
+    throw std::runtime_error("AmrRuntime::set_clustering : min_box_size <= max_box_size required");
+  cluster_.min_efficiency = min_efficiency;
+  cluster_.min_box_size = min_box_size;
+  cluster_.max_box_size = max_box_size;
 }
 
 }  // namespace pops

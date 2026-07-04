@@ -152,7 +152,9 @@ LARGE_RUNTIME_FILE_BUDGETS = {
     # ADC-514: the native per-block runtime-param carrier residue (Impl members, make_build_params /
     # builder wiring, set_compiled_block signature) that stays inline after hoisting the two facade
     # methods and the loader guard to amr_system_params.hpp / amr_native_param_guard.hpp adds ~25 lines.
-    "python/bindings/amr/amr_system.cpp": 2345,
+    # ADC-612: the effective-options audit (FAC + Berger-Rigoutsos knobs in effective_options_report)
+    # adds ~60 lines; the report reads the TU-local private Impl, so it cannot move to a sibling TU.
+    "python/bindings/amr/amr_system.cpp": 2405,
     "include/pops/runtime/amr/amr_runtime.hpp": 1850,
     "include/pops/runtime/system/system_field_solver.hpp": 1100,
     "python/pops/runtime/_system_unified_install.py": 550,

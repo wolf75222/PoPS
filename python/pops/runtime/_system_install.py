@@ -178,9 +178,9 @@ class _SystemInstall(_System):
                           getattr(spatial, "wave_speed_cache", False))
             return
 
-        # Implicit mask (IMEX): only the composed native path (ModelSpec -> add_block) wires it. The
-        # compiled backends (.so: dynamic/aot/production) do not expose the argument -> we REJECT a
-        # non-empty mask rather than ignore it silently (cf. the stride rejection on backend 'aot').
+        # Implicit mask (IMEX): only the composed native path (ModelSpec -> add_block) wires it. The .so
+        # backends (dynamic/aot/production) lack the argument -> REJECT a non-empty mask rather than
+        # ignore it silently (cf. the stride rejection on backend 'aot').
         if getattr(time, "implicit_vars", []) or getattr(time, "implicit_roles", []):
             raise ValueError(
                 "add_equation: implicit_vars / implicit_roles (per-block IMEX mask) are carried "
@@ -213,16 +213,16 @@ class _SystemInstall(_System):
                             "CompiledModel (m.compile(...)); got %r" % type(model).__name__)
 
         compiled = model
-        # Names guard: explicit length checked early (the C++ also raises, but we diagnose here).
+        # Names guard: length checked early (the C++ also raises, but we diagnose here).
         if names is not None and len(names) != compiled.n_vars:
             raise ValueError("add_equation: names= has %d names but block '%s' has %d variables"
                              % (len(names), name, compiled.n_vars))
         names_arg = list(names) if names is not None else []
 
-        # NAMED aux fields (ADC-70 phase 1): table name -> block component, from the ORDERED names
-        # of the compiled model (the k-th name = component dsl.AUX_NAMED_BASE + k, mirror of the C++ emission).
-        # Consumed by set_aux_field / aux_field. add_compiled_block / add_native_block / add_dynamic_block
-        # have already widened the aux channel (pops_compiled_naux -> ensure_aux_width), so the component exists.
+        # NAMED aux fields (ADC-70 phase 1): table name -> block component, from the ORDERED names of
+        # the compiled model (k-th name = component dsl.AUX_NAMED_BASE + k, mirror of the C++ emission).
+        # Consumed by set_aux_field / aux_field; the adders have already widened the aux channel
+        # (pops_compiled_naux -> ensure_aux_width), so the component exists.
         extra = list(getattr(compiled, "aux_extra_names", []) or [])
         self._aux_field_index[name] = {nm: AUX_NAMED_BASE + k for k, nm in enumerate(extra)}
 
@@ -237,9 +237,9 @@ class _SystemInstall(_System):
             check_hll_waves(spatial.waves_provider, compiled, "add_equation")
         # HLL emits wave_speeds from the EXPLICIT pair m.wave_speeds(x=, y=) (without primitive 'p':
         # moments / isothermal, cf. has_wave_speeds) OR as soon as a primitive 'p' is declared. EARLY
-        # guard (like hllc/roe): the C++ requires-gate of make_block only triggers at the first use, so
-        # we diagnose at install. getattr default True = belt-and-suspenders (CompiledModel ALWAYS sets
-        # has_wave_speeds; the default only applies to a foreign object, which falls back on the C++ gate).
+        # guard (like hllc/roe): the C++ requires-gate of make_block only triggers at first use, so we
+        # diagnose at install. getattr default True (CompiledModel ALWAYS sets has_wave_speeds; only a
+        # foreign object hits the default and falls back on the C++ gate).
         if spatial.flux == RIEMANN_HLL and not getattr(compiled, "has_wave_speeds", True):
             raise ValueError(
                 "add_equation: riemann 'hll' requires signed wave speeds: declare "
@@ -249,14 +249,13 @@ class _SystemInstall(_System):
                 % (getattr(RIEMANN_HLL, "id", "riemann.hll"), RIEMANN_HLL.native_entry))
 
         # AUTHORITATIVE dispatch by the CompiledModel adder (fixed by the backend, cf. dsl._BACKENDS):
-        # prototype -> add_dynamic_block, aot -> add_compiled_block, production -> add_native_block (#85).
+        # prototype->add_dynamic_block, aot->add_compiled_block, production->add_native_block (#85).
         adder = compiled.adder
         if adder == "add_dynamic_block":
             # JIT, HOST Rusanov order-1 residual: takes only the MUSCL LIMITER (none/minmod/vanleer)
             # + substeps; no HLLC/Roe flux, no primitive recon. WENO5 (5-point stencil) is
             # NOT a MUSCL limiter and this path does not run assemble_rhs: we reject it HERE (the
-            # aot/production paths, on the other hand, accept weno5 -- the .so grid / native block allocate
-            # block_n_ghost(limiter) = 3 ghosts).
+            # aot/production paths accept weno5 -- the .so grid / native block allocate 3 ghosts).
             if spatial.limiter == "weno5":
                 raise ValueError(
                     "add_equation: limiter 'weno5' not supported on backend 'prototype' (JIT, host "
@@ -270,24 +269,23 @@ class _SystemInstall(_System):
                     "HLLC/Roe" % spatial.flux)
             # evolve=False (FROZEN block / fixed background) is NOT wired: the add_dynamic_block ABI does
             # not carry evolve (push_dynamic forces it to true on the C++ side) -> the block would be
-            # advanced SILENTLY. We REJECT it (rejection rather than silent ignore). For a frozen field,
-            # use a native/production block (add_background -> add_block(..., evolve=False)).
+            # advanced SILENTLY. We REJECT it (rather than silent ignore); for a frozen field, use a
+            # native/production block (add_background -> add_block(..., evolve=False)).
             if not evolve:
                 raise ValueError(
                     "add_equation: evolve=False not supported on backend 'prototype' (the JIT .so ABI "
                     "does not carry evolve; the block would be advanced silently). A frozen field "
                     "(evolve=False / background) is available only on the internal native engine API "
                     "(a composed native model, pops.Model(...)), not part of the pops.bind surface.")
-            # positivity_floor (ADC-76) is NOT wired on the host JIT path (no assemble_rhs,
-            # dedicated Rusanov order-1 residual): explicit rejection rather than a silently ignored floor.
+            # positivity_floor (ADC-76) is NOT wired on the host JIT path (no assemble_rhs, dedicated
+            # Rusanov order-1 residual): reject rather than silently ignore the floor.
             if getattr(spatial, "positivity_floor", 0.0) > 0.0:
                 raise ValueError(
                     "add_equation: positivity_floor not supported on backend 'prototype' (dedicated "
                     "host residual, without high-order reconstruction); use backend='aot'/'production' "
                     "or a composed native model (pops.Model(...)) on the internal native engine API.")
             # NB wave_speed_cache (ADC-199): no dedicated guard here -- the cache requires riemann='hll',
-            # already rejected above on 'prototype' (rusanov order 1 only) -> never silently ignored on
-            # this backend.
+            # already rejected above on 'prototype' (rusanov order 1 only) -> never silently ignored here.
             self._s.add_dynamic_block(name, compiled.so_path, nsub, names_arg, spatial.limiter)
             return
         if adder == "add_compiled_block":
@@ -314,8 +312,7 @@ class _SystemInstall(_System):
                     "backend='production' (native path, evolve wired) or a composed native model "
                     "(pops.Model(...)) on the internal native engine API for a frozen field.")
             # wave_speed_cache (ADC-199): the AOT .so ABI does not carry the wave speed cache -> it would
-            # be silently ignored. Explicit rejection (the cache is only wired on the composed native
-            # add_block).
+            # be silently ignored. Reject it (the cache is only wired on the composed native add_block).
             if getattr(spatial, "wave_speed_cache", False):
                 raise ValueError(
                     "add_equation: wave_speed_cache not supported on backend 'aot' (the AOT .so ABI does "
@@ -336,9 +333,8 @@ class _SystemInstall(_System):
             # PRE-DLOPEN guard at plug time: ALSO covers the cache HIT (where compile_native does not
             # run) -- a stale _pops module would otherwise give a cryptic dlopen 'symbol not found'.
             # wave_speed_cache (ADC-199): the add_native_block ABI does not (yet) carry the wave speed
-            # cache -> it would be silently ignored. Explicit rejection BEFORE the C++ boundary (and
-            # before the ABI check: a clear message rather than a dlopen error). The cache is wired on
-            # the composed native add_block path (System.add_block).
+            # cache -> it would be silently ignored. Reject BEFORE the C++ boundary (and before the ABI
+            # check: a clear message rather than a dlopen error); the cache is wired on add_block.
             if getattr(spatial, "wave_speed_cache", False):
                 raise ValueError(
                     "add_equation: wave_speed_cache not supported on backend 'production' (the "
@@ -364,8 +360,8 @@ class _SystemInstall(_System):
         this internally; this method exposes the same control for a block added with a plain
         transport time scheme, so cases configure the stage without reaching into the private _s.
         @p name: block; @p kind: 'electrostatic_lorentz'; @p theta in (0, 1]; @p alpha: stage
-        coupling. The krylov_* / field descriptors / bz_aux_component defaults reproduce the
-        historical bit-identical behavior. Prerequisite: B_z set via set_magnetic_field beforehand.
+        coupling. The krylov_* / field descriptors / bz_aux_component defaults reproduce the historical
+        bit-identical behavior. Prerequisite: B_z set via set_magnetic_field beforehand.
         """
         _guard_assembling(self, "set_source_stage")  # frozen once pops.bind completes (ADC-592)
         self._s.set_source_stage(name, kind, theta, alpha, krylov_tol, krylov_max_iters,
@@ -373,8 +369,8 @@ class _SystemInstall(_System):
 
     def add_background(self, name: Any, model: Any, density: Any, spatial: Any = None) -> Any:
         """FROZEN species (not advanced): a fixed background that contributes to the system Poisson (and,
-        in the future, to coupled sources). density: n*n array. Equivalent to add_block(evolve=False)
-        followed by set_density (freeze ADC-592 enforced by the delegated, guarded add_block)."""
+        later, to coupled sources). density: n*n array. Equivalent to add_block(evolve=False) then
+        set_density (freeze ADC-592 enforced by the delegated, guarded add_block)."""
         self.add_block(name, model, spatial=spatial, evolve=False)
         self.set_density(name, density)
 
@@ -495,8 +491,8 @@ class _SystemInstall(_System):
         if preset is None:
             raise TypeError("add_coupling expects pops.Ionization / Collision / ThermalExchange or a "
                             "CompiledCoupledSource (pops.dsl.CoupledSource(...).compile(...))")
-        # Validate the DECLARED contract symbolically (Python); the C++ side revalidates at
-        # registration. A created role (ionization) may net-source, so compile without verify_conservation.
+        # Validate the DECLARED contract symbolically (Python); the C++ revalidates at registration. A
+        # created role (ionization) may net-source, so compile without verify_conservation.
         preset.source.verify_declared_contract(conserved=preset.conserved, created=preset.created)
         args = coupling_operator_args(preset.source.compile(), preset.conserved, preset.created,
                                       frequency=preset.frequency)
