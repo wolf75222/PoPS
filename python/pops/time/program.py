@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from pops.time.program_authoring import _ProgramAuthoring
+from pops.time.program_condensed import _ProgramCondensed
 from pops.time.program_core import _ProgramCore
 from pops.time.program_inspect import _ProgramInspect
 from pops.time.program_local import _ProgramLocal
@@ -21,7 +22,7 @@ from pops.time.program_solve import _ProgramSolve
 from pops.time.values import _Coeff, Value  # noqa: F401  (Value used by mixins via prog ref)
 
 
-class Program(_ProgramCore, _ProgramLocal, _ProgramSolve, _ProgramAuthoring,
+class Program(_ProgramCore, _ProgramLocal, _ProgramCondensed, _ProgramSolve, _ProgramAuthoring,
               _ProgramPasses, _ProgramInspect):
     """A compiled time program (builder mode). Holds the SSA value list and the committed
     blocks. The Python object only BUILDS the IR; it is never executed numerically during
