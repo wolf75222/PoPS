@@ -101,10 +101,8 @@ def flux_available(flux: Any, context: Any = None) -> Any:
     try:
         flux_validate(flux, context)
     except ValueError as err:
-        scheme = _scheme_of(flux)
-        missing = {"hllc": ["hllc_star_state"], "roe": ["roe_dissipation"],
-                   "euler_hllc": ["euler_2d_layout"], "euler_roe": ["euler_2d_layout"],
-                   "hll": ["wave_speeds"]}.get(scheme, [])
+        from pops.runtime.routes import riemann_missing_capabilities
+        missing = riemann_missing_capabilities(_scheme_of(flux))
         alternatives = ["pops.numerics.riemann.Rusanov()"]
         return Availability.no(str(err), missing=missing, alternatives=alternatives)
     return Availability.yes()

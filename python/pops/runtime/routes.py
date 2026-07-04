@@ -303,6 +303,17 @@ def euler_layout_ok(compiled: Any, flux: Any) -> bool:
             and "p" in getattr(compiled, "prim_names", []) and not emitted)
 
 
+# ADC-642: the ONE per-flux capability-gate catalog. A generic capability-backed Riemann flux is
+# one row {token: (model_flag, capability_token, enable_hint, euler_route)}; the explicit canonical-
+# Euler routes map to their generic counterpart. check_riemann_capability, the System / AMR / unified
+# install guards and pops.numerics.riemann.availability all read THIS -- no per-flux branch re-listing.
+_RIEMANN_CAPABILITY_GATES = {
+    "hllc": ("has_hllc", "hllc_star_state", "m.enable_hllc()", "EulerHLLC2D()"),
+    "roe": ("has_roe", "roe_dissipation", "m.enable_roe()", "EulerRoe2D()"),
+}
+_EULER_ROUTE_GENERIC = {"euler_hllc": "hllc", "euler_roe": "roe"}
+
+
 def check_riemann_capability(flux: Any, compiled: Any, ctx: Any) -> None:
     """Gate the selected Riemann flux against the model's emitted capabilities (ADC-590).
 
@@ -312,32 +323,49 @@ def check_riemann_capability(flux: Any, compiled: Any, ctx: Any) -> None:
     layout is served by the EXPLICIT euler_hllc / euler_roe routes, which require n_vars == 4 +
     primitive 'p' and REFUSE a model that emitted the generic capability (no ambiguity). Raises
     ``ValueError`` with a @p ctx-prefixed message that names the missing capability and both
-    remedies. HLL keeps its own wave-speeds guard at the call-site; the ADC-552 provider cross-check
-    rides through :func:`pops.numerics.riemann.waves.check_hll_waves` at the call site (routes.py
-    stays import-free of the pops package).
+    remedies. Reads the ADC-642 :data:`_RIEMANN_CAPABILITY_GATES` catalog (one row per flux). HLL
+    keeps its own wave-speeds guard at the call-site; the ADC-552 provider cross-check rides through
+    :func:`pops.numerics.riemann.waves.check_hll_waves` at the call site (routes.py stays import-free
+    of the pops package).
     """
     def _tail() -> str:
         return ("[requested route %s -> %s; requires: %s]"
                 % (getattr(flux, "id", flux), getattr(flux, "native_entry", "?"),
                    ", ".join(getattr(flux, "requirements", ()))))
-    if ((flux == "hllc" and not getattr(compiled, "has_hllc", False))
-            or (flux == "roe" and not getattr(compiled, "has_roe", False))):
-        cap = "hllc_star_state" if flux == "hllc" else "roe_dissipation"
-        enable = "m.enable_hllc()" if flux == "hllc" else "m.enable_roe()"
-        euler = "EulerHLLC2D()" if flux == "hllc" else "EulerRoe2D()"
-        raise ValueError(
-            "%s: riemann '%s' requires the model capability '%s': call %s on a generic model "
-            "(roles + primitive 'p'), or select the explicit canonical Euler route riemann=%s for "
-            "a 4-variable Euler (rho,rho_u,rho_v,E) transport; otherwise use riemann='rusanov' %s"
-            % (ctx, flux, cap, enable, euler, _tail()))
-    if flux in ("euler_hllc", "euler_roe") and not euler_layout_ok(compiled, flux):
-        generic = "hllc" if flux == "euler_hllc" else "roe"
+    gate = _RIEMANN_CAPABILITY_GATES.get(flux)
+    if gate is not None:
+        model_flag, cap, enable, euler = gate
+        if not getattr(compiled, model_flag, False):
+            raise ValueError(
+                "%s: riemann '%s' requires the model capability '%s': call %s on a generic model "
+                "(roles + primitive 'p'), or select the explicit canonical Euler route riemann=%s "
+                "for a 4-variable Euler (rho,rho_u,rho_v,E) transport; otherwise use "
+                "riemann='rusanov' %s" % (ctx, flux, cap, enable, euler, _tail()))
+    if flux in _EULER_ROUTE_GENERIC and not euler_layout_ok(compiled, flux):
+        generic = _EULER_ROUTE_GENERIC[flux]
         raise ValueError(
             "%s: riemann '%s' requires a canonical 4-variable Euler transport (n_vars == 4, "
             "primitive 'p', layout rho/rho_u/rho_v/E) and NO emitted generic capability; for a "
             "generic model that called m.enable_hllc()/m.enable_roe() use riemann='%s' instead; "
             "for a non-Euler model use riemann='rusanov'/'hll' %s"
             % (ctx, flux, generic, _tail()))
+
+
+def riemann_missing_capabilities(flux) -> list:
+    """The capability token(s) a model must emit for @p flux (report / availability surface).
+
+    Reads the ADC-642 :data:`_RIEMANN_CAPABILITY_GATES` catalog; the availability report
+    (:func:`pops.numerics.riemann.availability.flux_available`) reads this instead of re-listing the
+    per-flux capability strings.
+    """
+    gate = _RIEMANN_CAPABILITY_GATES.get(flux)
+    if gate is not None:
+        return [gate[1]]
+    if flux in _EULER_ROUTE_GENERIC:
+        return ["euler_2d_layout"]
+    if flux == "hll":
+        return ["wave_speeds"]
+    return []
 
 
 def check_wave_speed_provider(requested_kind: Any, compiled: Any, ctx: Any,
@@ -381,4 +409,4 @@ def _provider_factory(kind: Any) -> str:
 
 
 __all__ = ["Route", "resolve", "routes_of", "route_manifest", "check_riemann_capability",
-           "check_wave_speed_provider", "euler_layout_ok"]
+           "check_wave_speed_provider", "euler_layout_ok", "riemann_missing_capabilities"]
