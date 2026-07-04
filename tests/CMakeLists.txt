@@ -407,6 +407,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_field_context
   test_field_problem_registry
   test_field_registry_uniform_amr
+  test_system_registries
 )
 
 foreach(_test IN LISTS POPS_CPP_STANDARD_TESTS)
