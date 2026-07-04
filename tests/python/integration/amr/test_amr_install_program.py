@@ -244,7 +244,7 @@ def test_amr_program_context_fail_loud_stubs_exist():
     print("== AmrProgramContext declares fail-loud stubs for the deferred ctx ops (fix 3) ==")
     import os
     here = os.path.dirname(os.path.abspath(__file__))
-    hdr_path = os.path.join(here, "..", "..", "include", "pops", "runtime", "program",
+    hdr_path = os.path.join(here, "..", "..", "..", "..", "include", "pops", "runtime", "program",
                             "amr_program_context.hpp")
     if not os.path.exists(hdr_path):
         print("skip (header not found at %s; running from an installed wheel?)" % hdr_path)
@@ -262,7 +262,7 @@ def test_amr_program_context_fail_loud_stubs_exist():
     # no raw 'no member named X' compile error for an AMR-target Program.
     import glob
     emit = ""
-    for f in glob.glob(os.path.join(here, "..", "..", "python", "pops", "codegen",
+    for f in glob.glob(os.path.join(here, "..", "..", "..", "..", "python", "pops", "codegen",
                                     "program_emit_*.py")):
         emit += open(f).read()
     import re
