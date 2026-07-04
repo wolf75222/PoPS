@@ -211,7 +211,7 @@ def test_no_silent_flux_swap_on_missing_wave_speeds():
     # HLL on a model without wave speeds is REFUSED; the flux token is never swapped to rusanov.
     spatial = pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL())
     assert spatial.flux == "hll"  # the descriptor stays HLL, no silent swap
-    with pytest.raises(RuntimeError, match="wave_speeds"):
+    with pytest.raises(ValueError, match="wave_speeds"):
         System(n=8, L=1.0, periodic=True)._validate_riemann_capability(
             _compiled(wave_speeds=False), spatial)
 

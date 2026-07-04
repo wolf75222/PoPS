@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Any
 from pops._bootstrap import ModelSpec
 from pops.runtime._install_param_routing import route_block_params, route_program_params
 from pops.runtime.bricks import Spatial
-from pops.runtime.routes import euler_layout_ok as _euler_layout_ok
 
 # The two sec.10 install-argument validators moved to ``_bind_validation`` (ADC-550), their natural
 # home beside the other bind-time gates, and are re-imported so the historical
@@ -306,24 +305,26 @@ class _SystemUnifiedInstall(_System):
 
     def _validate_riemann_capability(self, model: Any, spatial: Any) -> Any:
         """Section 24 capability check: reject the selected Riemann flux when a compiled model does
-        not back it (verbatim spec message ``riemann <FLUX> requires capability '<cap>'``), lowered
-        from CompiledModel.has_hllc / has_roe / has_wave_speeds. A composed native pops.Model(...)
-        carries it in its bricks (the C++ requires-gate is the backstop), so only the .so path here."""
+        not back it. Delegates to the SHARED gate pops.runtime.routes.check_riemann_capability
+        (ADC-642) -- the SAME predicate System.add_equation / AmrSystem.add_equation call -- plus the
+        HLL wave-speed cross-checks; one source, three call sites, zero divergence. A composed native
+        pops.Model(...) skips (the C++ requires-gate validates at first use)."""
         from pops.codegen.loader import CompiledModel  # late import (codegen <-> __init__ cycle)
-        flux = getattr(spatial, "flux", "rusanov")
         if not isinstance(model, CompiledModel):
-            return  # native composed model: the C++ requires-gate validates at first use
-        # ADC-590: generic hllc/roe require the emitted capability; euler_hllc/euler_roe are explicit.
-        if flux == "hllc" and not getattr(model, "has_hllc", False):
-            raise RuntimeError("riemann HLLC requires capability 'hllc_star_state'")
-        if flux == "roe" and not getattr(model, "has_roe", False):
-            raise RuntimeError("riemann Roe requires capability 'roe_dissipation'")
-        if flux in ("euler_hllc", "euler_roe") and not _euler_layout_ok(model, flux):
-            raise RuntimeError("riemann %s requires a canonical 4-variable Euler layout (n_vars == 4,"
-                               " primitive 'p') and no emitted generic capability; use riemann %s"
-                               % (flux, "HLLC" if flux == "euler_hllc" else "Roe"))
-        if flux == "hll" and not getattr(model, "has_wave_speeds", True):
-            raise RuntimeError("riemann HLL requires capability 'wave_speeds'")
+            return
+        from pops.runtime.routes import check_riemann_capability
+        check_riemann_capability(spatial.flux, model, "install")
+        flux = getattr(spatial, "flux", "rusanov")
+        if flux == "hll":
+            provider = getattr(spatial, "waves_provider", None)
+            if provider is not None:
+                from pops.numerics.riemann.waves import check_hll_waves
+                check_hll_waves(provider, model, "install")
+            if not getattr(model, "has_wave_speeds", True):
+                raise ValueError(
+                    "install: riemann 'hll' requires signed wave speeds: declare "
+                    "m.wave_speeds(x=(smin, smax), y=(smin, smax)) (without pressure), or a primitive "
+                    "'p' (m.primitive('p', ...)); otherwise use riemann='rusanov'.")
 
     # Field names the default native Poisson route already serves (the shared system elliptic solve).
     _DEFAULT_POISSON_FIELDS = ("phi", "poisson", "charge_density", "default")
