@@ -55,6 +55,7 @@ enum SchurTargetRole {
   kSchurAyx = 3,   ///< cross coefficient a_yx (A_op(1,0))
   kSchurRhs = 4,   ///< condensed right-hand side -Lap phi^n - g div(F)
   kSchurFlux = 5,  ///< explicit flux F = B^{-1}(mx, my)
+  kSchurPhi = 6,   ///< solved potential phi^{n+theta} (READ role for schur_reconstruct / schur_source)
 };
 
 /// @name Anisotropic Schur condensation (epic ADC-399 / ADC-421)
@@ -202,11 +203,16 @@ inline void schur_reconstruct(const Ctx& ctx, MultiFab& state, MultiFab& phi, Re
   ctx.count_kernel();
   const GridContext gc = ctx.grid_context();
   const MultiFab& aux = *gc.aux;
-  fill_ghosts(phi, gc.geom.domain, gc.bc);
+  // On a refined AMR hierarchy the emitted (level-0-bound) solution field cannot hold a fine level's
+  // potential; schur_source redirects the READ to the level's published composite phi. Identity on the
+  // uniform System and the flat AMR branch (returns the passed field), so the reconstruction is
+  // byte-for-byte unchanged there.
+  MultiFab& phi_lvl = ctx.schur_source(phi, kSchurPhi);
+  fill_ghosts(phi_lvl, gc.geom.domain, gc.bc);
   const Real half_idx = Real(1) / (Real(2) * gc.geom.dx());
   const Real half_idy = Real(1) / (Real(2) * gc.geom.dy());
   for (int li = 0; li < state.local_size(); ++li) {
-    const ConstArray4 ph = phi.fab(li).const_array();
+    const ConstArray4 ph = phi_lvl.fab(li).const_array();
     const ConstArray4 b = aux.fab(li).const_array();
     Array4 st = state.fab(li).array();
     for_each_cell(state.box(li),
