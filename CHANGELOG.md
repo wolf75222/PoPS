@@ -15,6 +15,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `[x.y.z] - YYYY-MM-DD`.
 
 ## [Unreleased]
+### Removed
+- routes: the 24 unreferenced symmetric route-id constants (ADC-630); named constants remain only for identifiers with a live consumer.
+
 
 ### Changed
 - ADC-628 Completed the ADC-550 cleanup: dropped the three remaining byte-identical `to_json`

@@ -287,40 +287,12 @@ TIME_IMEXRK_ARS222 = _REGISTRY["time"]["imexrk_ars222"]
 SPLITTING_LIE = _REGISTRY["splitting"]["lie"]
 SPLITTING_STRANG = _REGISTRY["splitting"]["strang"]
 
-FIELD_SOLVER_GEOMETRIC_MG = _REGISTRY["field_solver"]["geometric_mg"]
-FIELD_SOLVER_FFT = _REGISTRY["field_solver"]["fft"]
-FIELD_SOLVER_FFT_SPECTRAL = _REGISTRY["field_solver"]["fft_spectral"]
-FIELD_SOLVER_POLAR = _REGISTRY["field_solver"]["polar"]
-
-POISSON_BC_AUTO = _REGISTRY["poisson_bc"]["auto"]
-POISSON_BC_PERIODIC = _REGISTRY["poisson_bc"]["periodic"]
-POISSON_BC_DIRICHLET = _REGISTRY["poisson_bc"]["dirichlet"]
-POISSON_BC_NEUMANN = _REGISTRY["poisson_bc"]["neumann"]
-
-LAYOUT_UNIFORM = _REGISTRY["layout"]["uniform"]
-LAYOUT_AMR = _REGISTRY["layout"]["amr"]
-
-TRANSPORT_EXB = _REGISTRY["transport"]["exb"]
-TRANSPORT_COMPRESSIBLE = _REGISTRY["transport"]["compressible"]
-TRANSPORT_ISOTHERMAL = _REGISTRY["transport"]["isothermal"]
-
-SOURCE_NONE = _REGISTRY["source"]["none"]
-SOURCE_POTENTIAL = _REGISTRY["source"]["potential"]
-SOURCE_GRAVITY = _REGISTRY["source"]["gravity"]
+# Named route-id constants exist ONLY for identifiers with a live consumer (ADC-630: the
+# symmetric-per-family constant surface was dead code and was deleted; read _REGISTRY["<family>"]
+# ["<name>"] directly where a one-off id is needed).
 SOURCE_MAGNETIC = _REGISTRY["source"]["magnetic"]
-SOURCE_POTENTIAL_MAGNETIC = _REGISTRY["source"]["potential_magnetic"]
-
-ELLIPTIC_CHARGE = _REGISTRY["elliptic"]["charge"]
-ELLIPTIC_BACKGROUND = _REGISTRY["elliptic"]["background"]
-ELLIPTIC_GRAVITY = _REGISTRY["elliptic"]["gravity"]
 
 SOURCE_STAGE_ELECTROSTATIC_LORENTZ = _REGISTRY["source_stage"]["electrostatic_lorentz"]
-
-POISSON_RHS_CHARGE_DENSITY = _REGISTRY["poisson_rhs"]["charge_density"]
-POISSON_RHS_COMPOSITE = _REGISTRY["poisson_rhs"]["composite"]
-
-WALL_NONE = _REGISTRY["wall"]["none"]
-WALL_CIRCLE = _REGISTRY["wall"]["circle"]
 
 def euler_layout_ok(compiled: Any, flux: Any) -> bool:
     """True when @p compiled is a canonical 4-variable Euler transport (n_vars == 4 + primitive 'p')
