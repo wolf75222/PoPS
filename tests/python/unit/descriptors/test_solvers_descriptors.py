@@ -207,7 +207,8 @@ def test_geometric_mg_inspect_and_lower():
     assert rec["smoother"] == {"kind": "red_black_gauss_seidel"}
     assert rec["coarse"]["kind"] == "direct_small_grid"
     assert rec["tolerance"]["kind"] == "relative"
-    assert rec["max_cycles"] == 50
+    assert rec["mg_options"]["max_cycles"] == 50
+    assert rec["mg_options"]["rel_tol"] == 1e-8
 
 
 def test_geometric_mg_rejects_string_for_typed_subdescriptor():
