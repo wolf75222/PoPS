@@ -22,14 +22,18 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any) -> str
     only the variable ``ctx`` (never the type), so it compiles against ``AmrProgramContext``'s method
     surface exactly as against ``ProgramContext``'s.
 
-    Shape (v1, SYNCHRONOUS, NON-subcycled): one macro-step regrids at its head (engine cadence), then
-    advances EVERY level with the SAME dt by running the body once per level (``ctx.set_level(k)``), then
-    couples the levels (``ctx.couple_levels()`` = fine->coarse average_down). The body's head-of-step
-    ``ctx.solve_fields()`` fires EXACTLY ONCE per macro-step (a level-0 / not-yet-solved guard inside the
-    context), so the coarse Poisson is OncePerStep and injected to every level -- parity with the native
-    AMR cadence. Berger-Oliger subcycling + conservative reflux under a Program are DEFERRED (documented);
-    the per-stage fine-level field re-solve falls back to the injected aux (exact for the SSPRK2 parity
-    Program, whose coupling is frozen across the RK stages)."""
+    Shape (SYNCHRONOUS, NON-subcycled): one macro-step regrids at its head (engine cadence), then advances
+    EVERY level with the SAME dt by running the body once per level (``ctx.set_level(k)``), then couples the
+    levels (``ctx.couple_levels()`` = fine->coarse average_down THEN conservative reflux, ADC-639). The
+    body's head-of-step ``ctx.solve_fields()`` fires EXACTLY ONCE per macro-step (a level-0 / not-yet-solved
+    guard inside the context), so the coarse Poisson is OncePerStep and injected to every level -- parity
+    with the native AMR cadence. The C/F interface is now conservative to round-off: the per-level effective
+    flux is captured through the Program's own linear combination and routed through the native
+    ``route_reflux`` at level sync (ADC-639), so mass/momentum/energy are conserved across the interface on a
+    genuinely multilevel run; a coarse-only / flat Program stays bit-identical. Berger-Oliger SUBCYCLING
+    under a Program is still DEFERRED (the driver stays synchronous, same dt every level); the per-stage
+    fine-level field re-solve falls back to the injected aux (exact for the SSPRK2 parity Program, whose
+    coupling is frozen across the RK stages)."""
     if target != "amr_system":
         return ""
     return (
@@ -45,13 +49,13 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any) -> str
         '  pops::runtime::program::AmrProgramContext ctx(sys);\n'
         + prelude +
         '\n  ctx.install([=](double dt) {\n'
-        '    ctx.reset_step();                       // clear the once-per-step solve_fields guard\n'
+        '    ctx.reset_step();                       // clear the solve_fields guard + the reflux ledger\n'
         '    ctx.regrid_if_due(ctx.macro_step());    // head-of-step union-tags regrid (engine cadence)\n'
         '    const int _nlev = ctx.nlev();\n'
         '    for (int _k = 0; _k < _nlev; ++_k) {\n'
         '      ctx.set_level(_k);                     // the body addresses block b at the CURRENT level\n'
         + body +
         '\n    }\n'
-        '    ctx.couple_levels();                     // (B) fine->coarse average_down (v1: no reflux)\n'
+        '    ctx.couple_levels();                     // (B) average_down + conservative reflux (ADC-639)\n'
         '  });\n'
         '}\n')
