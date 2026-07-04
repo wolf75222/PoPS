@@ -160,8 +160,12 @@ LARGE_RUNTIME_FILE_BUDGETS = {
     # ADC-635: the replay-through-regrids facade adds ~19 lines (the (dt, cursor) closure driving
     # the facade macro_step_ per re-step, its save/restore, and the last_replay_regrid_steps
     # accessor the v3 reader asserts); it reads the TU-local private Impl, so it cannot move.
-    "python/bindings/amr/amr_system.cpp": 2518,
-    "include/pops/runtime/amr/amr_runtime.hpp": 1850,
+    # ADC-634: keeping the refined level under a Program install (program_single_level gated on
+    # !refinement_active + the two-level layout template plumbing) adds ~14 lines here, and the
+    # per-level C/F ghost refill seam (fill_level_state_cf_ghosts, called before both per-level
+    # residual paths of the synchronous Program driver) adds ~17 lines to amr_runtime.hpp.
+    "python/bindings/amr/amr_system.cpp": 2532,
+    "include/pops/runtime/amr/amr_runtime.hpp": 1867,
     "include/pops/runtime/system/system_field_solver.hpp": 1100,
     "python/pops/runtime/_system_unified_install.py": 550,
     # ADC-542: the run-loop diagnostics firing (run / _fire_diagnostics) added to System.run.
