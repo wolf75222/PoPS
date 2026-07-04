@@ -212,9 +212,9 @@ def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any
     body.append("ctx.fill_boundary(%s);" % fx)
     # rhs = -Lap phi^n - g*div(F): centered FV divergence (Fx comp 0, Fy comp 1), fused with -Lap.
     body += [
-        "const pops::Real cond%s_hx = pops::Real(1) / (pops::Real(2) * ctx.grid_context().geom.dx());"
+        "const pops::Real cond%s_hx = pops::Real(1) / (pops::Real(2) * ctx.geom().dx());"
         % uid,
-        "const pops::Real cond%s_hy = pops::Real(1) / (pops::Real(2) * ctx.grid_context().geom.dy());"
+        "const pops::Real cond%s_hy = pops::Real(1) / (pops::Real(2) * ctx.geom().dy());"
         % uid,
         "const pops::Real cond%s_g = %s;" % (uid, g_cpp),
         "for (int li = 0; li < %s.local_size(); ++li) {" % rhs,
@@ -248,9 +248,9 @@ def _emit_condensed_reconstruct_kernel(uid: Any, model: Any, jblock_op: Any, sub
     body = [
         "ctx.fill_boundary(%s);" % phi,
         "pops::MultiFab& %s = ctx.aux();" % aux,
-        "const pops::Real cond%s_hx = pops::Real(1) / (pops::Real(2) * ctx.grid_context().geom.dx());"
+        "const pops::Real cond%s_hx = pops::Real(1) / (pops::Real(2) * ctx.geom().dx());"
         % uid,
-        "const pops::Real cond%s_hy = pops::Real(1) / (pops::Real(2) * ctx.grid_context().geom.dy());"
+        "const pops::Real cond%s_hy = pops::Real(1) / (pops::Real(2) * ctx.geom().dy());"
         % uid,
         "for (int li = 0; li < %s.local_size(); ++li) {" % state,
         "  const pops::Array4 stateA = %s.fab(li).array();" % state,
