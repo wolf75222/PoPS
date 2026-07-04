@@ -429,14 +429,18 @@ class CompiledProblem:
     def inspect_amr(self, layout: Any = None) -> Any:
         """STATIC AMR report on this compiled artifact (Spec 5 sec.8.12 / sec.8.4).
 
-        A compiled time ``Program`` carries NO AMR layout descriptor (it lowers a whole-system time
-        program, a single-level ``System`` concept today -- ``AmrSystem`` has no ``install_program``
-        seam). So this delegates to the top-level :func:`pops.inspect_amr` on an EXPLICIT ``layout``
-        argument (an ``pops.mesh.layouts.AMR`` / ``Uniform`` descriptor), and with ``layout=None``
-        returns the native AMR envelope report -- never a fabricated hierarchy the artifact does not
-        carry. @p layout an optional AMR / Uniform layout descriptor (default: the native envelope).
+        A whole-system Program compiled for the AMR target (``pops.compile(problem, layout=AMR(...))``,
+        ADC-634) carries its compile-time layout on ``self._layout``, so a bare call with no argument
+        reports THAT hierarchy (its refine / regrid / patches tags), mirroring
+        ``CompiledModel.inspect_amr``. An explicit @p layout argument always wins; a handle with no
+        ``_layout`` (a ``target='system'`` Program, or one built outside ``pops.compile``) falls back
+        to the native AMR envelope report -- never a fabricated hierarchy the artifact does not carry.
+        Delegates to the top-level :func:`pops.inspect_amr`. @p layout an optional AMR / Uniform layout
+        descriptor (default: the carried ``_layout``, else the native envelope).
         """
         from pops import inspect_amr
+        if layout is None:
+            layout = getattr(self, "_layout", None)
         return inspect_amr(layout)
 
     def __str__(self) -> str:

@@ -358,22 +358,45 @@ class AmrRuntime {
     f.set_val(Real(0));
     return f;
   }
+  /// COARSE-FINE GHOST FILL for a per-level Program residual (ADC-634). A fine level (@p k >= 1) has a
+  /// C/F interface whose ghosts sit UNDER the coarse level; the native Berger-Oliger step fills them by
+  /// time-interpolation between the coarse old/new states (mf_fill_fine_ghosts_mb). The SYNCHRONOUS
+  /// Program driver (program_emit_amr) advances every level with the SAME dt and has no coarse sub-time,
+  /// so it fills @p U's fine ghosts from the CURRENT coarse state (old == new -> the frac drops out ->
+  /// piecewise-constant spatial injection of the coarse mean). Without it the fine flux reads
+  /// UNINITIALIZED C/F ghosts -> a zero/negative density -> a NaN pressure at the very first stage. The
+  /// coarse level (@p k == 0) has base-domain physical ghosts only; the block's own level_rhs closure
+  /// fills those (fill_boundary), so this is a fine-level-only pre-pass. Frozen-coupling approximation:
+  /// exact for a OncePerStep Program (the coupling is constant across the stage), the documented v1
+  /// synchronous-driver semantics (parity with the head-of-step aux injection).
+  void fill_level_state_cf_ghosts(std::size_t b, int k, MultiFab& U) {
+    if (k < 1 || U.n_grow() == 0)
+      return;
+    const MultiFab& Uc = (*blocks_[b].levels)[k - 1].U;  // the parent (coarse) level state
+    mf_fill_fine_ghosts_mb(U, Uc, Uc, Real(0),
+                           /*replicated_parent=*/(k == 1) && replicated_coarse_);
+  }
   /// R <- -div F(U) + S(U, aux_[k]) for block @p b on level @p k (the per-level analogue of
   /// System::block_rhs_into). Forwards to the block's level_rhs closure with the level metric + shared
-  /// aux; fails loud if the block built no such closure (a host .so prototype).
+  /// aux; fails loud if the block built no such closure (a host .so prototype). A fine level's C/F
+  /// ghosts are refreshed from the coarse state first (ADC-634, the synchronous Program driver has no
+  /// native FillPatch), so the fine flux never reads an uninitialized interface ghost.
   void level_rhs_into(std::size_t b, int k, MultiFab& U, MultiFab& R) {
     if (!blocks_[b].level_rhs)
       throw std::runtime_error(
           "AmrRuntime::level_rhs_into: block '" + blocks_[b].name +
           "' has no per-level residual closure (rebuild the AMR block via the production DSL "
           "target='amr_system')");
+    fill_level_state_cf_ghosts(b, k, U);
     blocks_[b].level_rhs(U, aux_[k], level_geom(k), R);
   }
-  /// R <- -div F(U) only (NO default source) for block @p b on level @p k (SourceFreeModel path).
+  /// R <- -div F(U) only (NO default source) for block @p b on level @p k (SourceFreeModel path). Same
+  /// fine-level C/F ghost refresh as level_rhs_into (ADC-634).
   void level_neg_div_flux_into(std::size_t b, int k, MultiFab& U, MultiFab& R) {
     if (!blocks_[b].level_neg_div_flux)
       throw std::runtime_error("AmrRuntime::level_neg_div_flux_into: block '" + blocks_[b].name +
                                "' has no flux-only per-level residual closure");
+    fill_level_state_cf_ghosts(b, k, U);
     blocks_[b].level_neg_div_flux(U, aux_[k], level_geom(k), R);
   }
   /// R <- S(U, aux_[k]) only (NO flux) for block @p b on level @p k (the source half of level_rhs).

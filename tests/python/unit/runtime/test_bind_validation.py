@@ -46,6 +46,13 @@ class _Uniform:
         self.mesh = _Mesh(n)
 
 
+class _AMR:
+    """An AMR layout stand-in: carries .base (the coarse mesh), like pops.mesh.layouts.AMR."""
+
+    def __init__(self, n):
+        self.base = _Mesh(n)
+
+
 class _Array:
     """A duck-typed array carrying only .shape / .dtype (no numpy dependency)."""
 
@@ -73,6 +80,23 @@ def test_haloed_initial_state_shape_passes():
     # A ghost-ringed (4, 68, 68) array is accepted alongside the valid (4, 64, 64).
     assert bv.validate_initial_state(manifest, args, layout, {"ne": _Array((4, 68, 68))}) == []
     assert bv.validate_initial_state(manifest, args, layout, {"ne": _Array((4, 64, 64))}) == []
+
+
+def test_amr_density_initial_state_passes():
+    # The AMR install seeds the per-block coarse DENSITY via set_density (ADC-634): a 2D (n, n)
+    # density (or the flat (n*n,)) is accepted whatever the model's component count.
+    manifest, args, layout = _Manifest(), _one_block_args(4), _AMR(64)
+    assert bv.validate_initial_state(manifest, args, layout, {"ne": _Array((64, 64))}) == []
+    assert bv.validate_initial_state(manifest, args, layout, {"ne": _Array((64 * 64,))}) == []
+
+
+def test_amr_full_state_is_refused_with_set_density_pointer():
+    # A full (components, n, n) state on AMR is refused: set_density consumes a density, and the
+    # message names the seeding contract.
+    manifest, args, layout = _Manifest(), _one_block_args(4), _AMR(64)
+    lines = bv.validate_initial_state(manifest, args, layout, {"ne": _Array((4, 64, 64))})
+    assert len(lines) == 1
+    assert "set_density" in lines[0]
 
 
 def test_wrong_shape_is_refused():

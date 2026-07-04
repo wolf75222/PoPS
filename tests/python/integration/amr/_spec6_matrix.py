@@ -15,10 +15,12 @@ each cell by its ``kind``:
     check), so an already-covered cell is pointed at, not duplicated.
   * ``pending``      -- CONSTRUCTS the row's authoring object (proving it is structurally real) then
     ``pytest.skip`` with the pending marker; it flips to ``green_live`` when the named issue lands.
-    The multistep-on-AMR rows are pending ADC-631 (the AMR history-ring seam being rewritten now);
-    the clean-``compile(layout=AMR)`` whole-system Program rows are pending ADC-634 (the route being
-    implemented now), the compiled condensed-Schur hierarchy Program pending ADC-634 + ADC-633. A
-    pending cell NEVER executes the deferred path and NEVER pins today's transitional behavior.
+    The multistep-on-AMR rows are pending ADC-631 (the AMR history-ring seam being rewritten now); the
+    compiled condensed-Schur hierarchy Program is pending ADC-633 (the per-level Schur assembly): the
+    ADC-634 clean route compiles + installs it, but the deferred Schur op throws the honest
+    AmrProgramContext backstop until ADC-633 lands. The clean-``compile(layout=AMR)`` whole-system
+    explicit / SSPRK Program row is now GREEN LIVE (ADC-634 implemented). A pending cell NEVER executes
+    the deferred path and NEVER pins today's transitional behavior.
 
 Importing this module requires ``pops`` (the AMR-route handle + bricks); ``test_spec6_amr_matrix``
 importorskips it so the suite is green on a bare box. ASCII only.
@@ -27,13 +29,18 @@ import warnings
 from collections import namedtuple
 
 import numpy as np
+import pytest
 
 import pops
 import pops.lib.time as lib_time
 from pops.codegen.loader import CompiledModel
+from pops.ir.ops import sqrt
 from pops.mesh import CartesianMesh
-from pops.mesh.amr import Refine, RegridEvery
+from pops.mesh.amr import FrozenRegrid, Refine, RegridEvery
 from pops.mesh.layouts import AMR, Uniform
+from pops.numerics.reconstruction import FirstOrder
+from pops.numerics.riemann import Rusanov
+from pops.physics.facade import Model as FacadeModel
 from pops.physics.model import Param
 from pops.runtime.system import AmrSystem
 
@@ -173,6 +180,71 @@ def _run_profile_cfl(n=32):
 
 
 # --------------------------------------------------------------------------------------------------
+# green_live: the clean pops.compile(layout=AMR)+pops.bind whole-system Program route (ADC-634).
+# --------------------------------------------------------------------------------------------------
+def _euler_facade_model(name="spec6_clean_euler"):
+    """A compressible Euler facade model (elliptic_rhs = rho so a field solve runs): the physics the
+    clean-route Program lowers AND the block the AMR instance carries. Mirror of the ADC-634 acceptance
+    model. Needs the DSL compiler + Kokkos to build the .so (the cell skips cleanly without them)."""
+    g = 1.4
+    m = FacadeModel(name)
+    rho, rhou, rhov, E = m.conservative_vars("rho", "rho_u", "rho_v", "E")
+    u, v = rhou / rho, rhov / rho
+    p = (g - 1.0) * (E - 0.5 * rho * (u * u + v * v))
+    pu, pv, pp = m.primitive("u", u), m.primitive("v", v), m.primitive("p", p)
+    H = (E + pp) / rho
+    c = sqrt(g * pp / rho)
+    m.flux(x=[rhou, rhou * pu + pp, rhou * pv, rho * H * pu],
+           y=[rhov, rhov * pu, rhov * pv + pp, rho * H * pv])
+    m.eigenvalues(x=[pu - c, pu, pu + c], y=[pv - c, pv, pv + c])
+    m.primitive_vars(rho, pu, pv, pp)
+    m.conservative_from([rho, rho * pu, rho * pv,
+                        pp / (g - 1.0) + 0.5 * rho * (pu * pu + pv * pv)])
+    m.gamma(g)
+    m.elliptic_rhs(rho)
+    m.rate_operator("explicit_rhs", flux=True)
+    return m
+
+
+def _clean_density(n=16):
+    x = (np.arange(n) + 0.5) / n
+    xx, yy = np.meshgrid(x, x, indexing="ij")
+    return 1.0 + 0.3 * np.sin(2 * np.pi * xx) * np.cos(2 * np.pi * yy)
+
+
+def _run_clean_route_program(n=16, nsteps=4, dt=1.0e-3):
+    """Build a real AmrSystem via the clean pops.compile(layout=AMR(FrozenRegrid))+pops.bind route with
+    an SSPRK3 whole-system Program (ADC-634), step it, and assert finite + coarse-mass-conserved. Skips
+    cleanly (pytest.skip, never a fake engine) when the .so cannot build (no compiler / no Kokkos)."""
+    program = lib_time.ssprk3("plasma")
+    u0 = _clean_density(n)
+    problem = (pops.Problem()
+               .block("plasma", physics=_euler_facade_model(),
+                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()))
+               .time(program))
+    layout = AMR(base=CartesianMesh(n=n, L=1.0, periodic=True), regrid=FrozenRegrid())
+    try:
+        compiled = pops.compile(problem, layout=layout)
+    except RuntimeError as exc:
+        pytest.skip("clean-route AMR Program .so could not build (no compiler / Kokkos): %s"
+                    % str(exc)[:160])
+    assert getattr(compiled, "program", None) is not None, \
+        "the clean AMR route must carry the compiled Program (ADC-634)"
+    try:
+        sim = pops.bind(compiled, initial_state={"plasma": u0})
+    except RuntimeError as exc:
+        pytest.skip("clean-route AMR Program bind/install could not run: %s" % str(exc)[:200])
+    m0 = float(u0.mean())  # coarse mass / area (L=1)
+    for _ in range(nsteps):
+        sim.step(dt)
+    rho = np.asarray(sim.density("plasma"))
+    assert np.isfinite(rho).all() and float(rho.min()) > 0.0, "clean-route density not finite/positive"
+    mass = float(sim.mass("plasma"))
+    assert abs(mass - m0) < 1e-9, "clean-route coarse mass drift (|m - m0| = %.2e)" % abs(mass - m0)
+    return "green_live:clean_program_ssprk3"
+
+
+# --------------------------------------------------------------------------------------------------
 # green_inert: introspection on the AMR-route handle (no run, no dlopen).
 # --------------------------------------------------------------------------------------------------
 def _inert_arguments():
@@ -276,16 +348,14 @@ def _exists_named_field():
 # pending: construct the authoring object (structurally real), then skip with the pending marker.
 # A pending cell NEVER executes the deferred path and NEVER pins transitional behavior.
 # --------------------------------------------------------------------------------------------------
-def _pending_multistep(builder):
-    """A multistep-on-AMR pending row: build the whole-system Program (with its history ring ops) to
-    prove the authoring is real, then defer to ADC-631 (the AMR history-ring seam under rewrite)."""
+def _exists_multistep(builder):
+    # Cited: tests/python/integration/amr/test_amr_history_parity (ADC-631, MERGED): AB2 on a flat
+    # 2-block AMR hierarchy is bit-identical to Uniform, ring slots byte-identical; regrid remap +
+    # v3 replay covered by test_amr_history_regrid / test_amr_history_checkpoint. The authoring
+    # object stays structurally real here.
     def run():
-        program = builder("plasma")
-        assert isinstance(program, pops.time.Program)
-        # The multistep Program carries a history ring (store_history / history); the AMR seam that
-        # serves it is what ADC-631 is rewriting. Do NOT execute it on an AmrSystem here.
-        assert any(v.op in ("store_history", "history") for v in program._values)
-        return "pending:ADC-631"
+        assert isinstance(builder("plasma"), pops.time.Program)
+        return "exists:test_amr_history_parity"
     return run
 
 
@@ -345,19 +415,21 @@ MATRIX = {
     "fft_field.amr.mono": Cell("fft_field", "amr", "mono", "exists", _exists_fft_on_amr_refused),
     # IMEXRK / ARS222 on AMR -- precise Cartesian-scope refusal
     "imexrk.amr.mono": Cell("imexrk", "amr", "mono", "refuse", _refuse_imexrk_on_amr),
-    # multistep AB2 / BDF2 on AMR -- PENDING ADC-631 (history ring under rewrite)
-    "ab2.amr.mono": Cell("ab2", "amr", "mono", "pending",
-                         _pending_multistep(lib_time.adams_bashforth2)),
-    "bdf2.amr.mono": Cell("bdf2", "amr", "mono", "pending",
-                          _pending_multistep(lambda block: lib_time.bdf(block, order=2))),
-    # clean-compile(layout=AMR) whole-system Program -- PENDING ADC-634 (route being implemented)
-    "clean_program.amr.mono": Cell("clean_program", "amr", "mono", "pending",
-                                   _pending_clean_route_program(
-                                       lambda: lib_time.ssprk3("plasma"), "ADC-634")),
-    # compiled condensed-Schur hierarchy Program -- PENDING ADC-634 + ADC-633 (hierarchy elliptic)
+    # multistep AB2 / BDF2 on AMR -- LANDED (ADC-631 merged): cite the ring parity coverage.
+    "ab2.amr.mono": Cell("ab2", "amr", "mono", "exists",
+                         _exists_multistep(lib_time.adams_bashforth2)),
+    "bdf2.amr.mono": Cell("bdf2", "amr", "mono", "exists",
+                          _exists_multistep(lambda block: lib_time.bdf(block, order=2))),
+    # clean-compile(layout=AMR) whole-system Program -- GREEN LIVE (ADC-634 route implemented): the
+    # clean pops.compile(layout=AMR)+pops.bind SSPRK3 Program builds a real AmrSystem, runs, conserves.
+    "clean_program.amr.mono": Cell("clean_program", "amr", "mono", "green_live",
+                                   _run_clean_route_program),
+    # compiled condensed-Schur hierarchy Program -- PENDING ADC-633 (the per-level Schur assembly): the
+    # ADC-634 route COMPILES + INSTALLS it (proven in test_amr_clean_route_program), but the deferred
+    # Schur op throws the honest AmrProgramContext backstop until ADC-633 wires the hierarchy elliptic.
     "clean_schur_program.amr.mono": Cell("clean_schur_program", "amr", "mono", "pending",
                                          _pending_clean_route_program(
-                                             _condensed_schur_program, "ADC-634 + ADC-633")),
+                                             _condensed_schur_program, "ADC-633")),
 }
 
 # The full grid -- test_matrix_is_complete pins set(MATRIX) == EXPECTED_KEYS so a dropped (op x

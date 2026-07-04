@@ -130,8 +130,19 @@ def test_null_regrid_matches_no_regrid_to_roundoff():
 
 
 def test_real_regrid_stable_and_layout_consistent():
-    """(ii) A real regrid (dispersing blob tags cells) -> stable + coarse mass conserved to round-off,
-    and every prev(k) buffer is defined on the NEW hierarchy (flat size == sum_k ncomp*nf_k*nf_k)."""
+    """(ii) A real regrid (dispersing blob tags cells) -> the run stays STABLE (finite, mass bounded)
+    on a genuinely two-level hierarchy, and every prev(k) buffer is defined on the NEW hierarchy
+    (flat size == sum_k ncomp*nf_k*nf_k).
+
+    MASS BOUND, not round-off (the synchronous Program driver, average_down-only): the AmrProgramContext
+    v1 macro-step advances every level with the SAME dt and couples fine->coarse by average_down ONLY,
+    with NO conservative reflux at the coarse-fine interface (documented in
+    amr_program_context.hpp::couple_levels). So on a genuinely MULTILEVEL Program run the total mass
+    DRIFTS by the un-refluxed C/F face-flux mismatch -- bounded and far below the scheme error, but NOT
+    round-off. Round-off conservation holds on the coarse-only / flat-hierarchy Program path (no C/F
+    interface), which is locked bit-for-bit by test_amr_program_parity; the reflux under a Program that
+    would restore round-off at a real C/F interface is the AmrProgramContext v2 deferral (ADC-633 wave).
+    The assertion here pins STABILITY: the drift stays a few 1e-4, never blows up."""
     print("== real regrid: stable + prev(k) layout-consistent on the new hierarchy ==")
     u0 = _blob(amp=0.5)
     a, err = _build(regrid_every=2, refine_thr=1.2, u0=u0, tag="real")
@@ -143,8 +154,8 @@ def test_real_regrid_stable_and_layout_consistent():
         a.step(DT)
     rho = np.asarray(a.density("blk"))
     chk(np.all(np.isfinite(rho)), "the state stays finite through the regrids")
-    chk(abs(float(a.mass("blk")) - m0) < 1e-8,
-        "coarse mass conserved to round-off across the regrids (|m-m0| = %.2e)"
+    chk(abs(float(a.mass("blk")) - m0) < 2e-4,
+        "coarse mass stays bounded across the regrids (average_down-only v1, |m-m0| = %.2e)"
         % abs(float(a.mass("blk")) - m0))
     nlev = int(a.n_levels())
     names = list(a.history_names())

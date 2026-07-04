@@ -12,8 +12,9 @@ The Problem's ``layout`` descriptor is the selector carried by ``pops.compile``:
 ``layout=Uniform(...)`` selects :class:`_UniformRuntimeAdapter` (target ``"system"``),
 ``layout=AMR(...)`` selects :class:`_AmrRuntimeAdapter` (target ``"amr_system"``). Both share the
 bind logic in :class:`_RuntimeAdapter`; only ``build_engine`` / ``install`` differ (the AMR adapter
-derives the ``AmrSystemConfig`` from the layout, flows the typed refinement and installs through the
-native per-block path).
+derives the ``AmrSystemConfig`` from the layout, flows the typed refinement, installs the native
+per-block loaders and -- when the handle carries a whole-system compiled time Program (ADC-634) --
+that Program on the hierarchy via ``install_program``).
 
 The engines stay first-class C++ runtimes reachable for low-level / internal tests (they are still
 importable from :mod:`pops.runtime.system`); they are simply no longer the recommended route. This
@@ -99,10 +100,13 @@ class _AmrRuntimeAdapter(_RuntimeAdapter):
 
     Builds a :class:`pops.runtime.amr_system.AmrSystem` from an ``AmrSystemConfig`` DERIVED from the
     AMR layout (:func:`_amr_config_from_layout`), flows the typed refinement onto it
-    (:func:`_flow_amr_layout`) BEFORE the blocks are installed, then installs through the NATIVE
-    per-block path (``_install_compiled(compiled=None, ...)`` with each instance carrying its own
-    ``target='amr_system'`` ``CompiledModel``): the AMR runtime has no whole-system
-    ``install_program`` seam, so the compiled Program handle is not installed.
+    (:func:`_flow_amr_layout`) BEFORE the blocks are installed, then installs through the
+    ``_install_compiled`` seam. Each instance carries its own ``target='amr_system'``
+    ``CompiledModel``. When the handle carries a whole-system compiled time ``Program``
+    (``compiled.program is not None``, ADC-634) it is passed through so
+    ``AmrSystem._install_compiled`` -> ``_finish_program_install`` installs it on the hierarchy
+    (``install_program`` + ``set_program_params`` + ``set_program_cadence``); a native per-block
+    handle passes ``compiled=None``.
     """
 
     target = "amr_system"
@@ -126,10 +130,15 @@ class _AmrRuntimeAdapter(_RuntimeAdapter):
 
     def install(self, engine, compiled, *, instances, params, aux, solvers, cadence, outputs,
                 diagnostics):
-        # AMR installs via the NATIVE path (compiled=None): each instance carries its OWN
-        # target='amr_system' CompiledModel, wired with add_equation -> add_native_block. There is
-        # NO whole-system time Program install on AMR (AmrSystem rejects compiled != None).
-        engine._install_compiled(compiled=None, instances=instances, params=params, aux=aux,
+        # A whole-system compiled time Program (compiled.program is not None, ADC-634) installs on the
+        # AMR hierarchy via AmrSystem._install_compiled -> _finish_program_install -> install_program
+        # (the ADC-508 per-level driver); a native per-block handle (compiled.program is None) installs
+        # with compiled=None, each instance carrying its OWN target='amr_system' CompiledModel wired
+        # with add_equation -> add_native_block. Discriminate by the duck-typed getattr signal, exactly
+        # like System._install_compiled -- never by the handle class. A native CompiledModel has no
+        # .program attribute, so getattr(..., None) selects compiled=None for it.
+        program = compiled if getattr(compiled, "program", None) is not None else None
+        engine._install_compiled(compiled=program, instances=instances, params=params, aux=aux,
                                  solvers=solvers, cadence=cadence, outputs=outputs,
                                  diagnostics=diagnostics)
 

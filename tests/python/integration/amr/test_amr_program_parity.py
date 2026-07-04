@@ -29,6 +29,10 @@ without pops / a built _pops / a compiler. Pytest + ``__main__`` guard (CI runs 
 """
 import sys
 
+# ADC-627 idiom: this file AOT-compiles several Program/.so artifacts; give the
+# process-isolated runner headroom over the default (CI runner speed varies 3-4x).
+POPS_PROCESS_TIMEOUT = 1200
+
 try:
     import numpy as np
 

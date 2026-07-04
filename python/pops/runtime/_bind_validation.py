@@ -5,7 +5,6 @@
 This module is the PURE core of those gates: each function takes plain metadata (manifest / arguments / layout / declared params / supplied state) and returns one actionable refusal line per violation (empty list = ok). No ``_pops`` and no numpy at module scope (arrays are duck-typed via ``.shape`` / ``.dtype``), so the whole refusal surface is host-testable with plain dicts; :func:`aggregate_bind_refusals` folds the per-gate lines into one error.
 
 Per the phase-6 cross-stream contract (decisions 4-5): per-block ghost depth and the ABI / Kokkos / MPI feature tokens come from the compiled MANIFEST; a fresh artifact always carries them, and a manifest lacking a field it must carry is refused as ABI-incomplete (fail loud, never skipped).
-
 The ABI comparison is LIKE-WITH-LIKE: the artifact key (``<headers-sha>|<cxx>|<std>``) and the runtime env key (``compiler=..;std=..;headers=..;kokkos=..;stdlib=..``) are parsed into components and only the comparable ones are compared -- the headers signature (the real header-ABI anchor) and the normalized C++ standard (``c++20`` == ``202002L``). Incomparable tokens (compiler path vs version) are never compared; a token spelled ``unknown`` is an honest-unknown, skipped like ``None``.
 """
 from __future__ import annotations
@@ -97,18 +96,15 @@ def validate_initial_state(manifest: Any, arguments: Any, layout: Any,
                            initial_state: Any) -> Any:
     """Refuse an initial state that does not match the artifact + mesh (ADC-537 gate d / G4).
 
-    For each supplied block array, check -- against the MANIFEST (the ABI truth) and the mesh
-    LAYOUT -- the mesh shape (n x n cells, optionally with a ghost ring), the dtype (the artifact's
-    declared real precision), the component count (the model's conservative variable count) and the
-    ghost depth. A supplied block name the artifact does not declare is also refused. Returns one
-    actionable line per mismatch (empty list = ok).
-
-    Sourcing:
-      - the declared blocks + component count come from @p arguments (``instances``);
-      - the mesh extent comes from @p layout (``Uniform.mesh`` / ``AMR.base`` -> a 2D n x n grid);
-      - the ghost depth + real precision come from @p manifest (``ghost_depth`` / ``precision``);
-        a manifest that carries no ``ghost_depth`` is refused as ABI-incomplete (never guessed).
-    """
+    Per supplied block array, check -- against the MANIFEST (ABI truth) and the mesh LAYOUT --
+    shape, dtype (declared real precision), component count and ghost depth; an undeclared block
+    name is also refused. One actionable line per mismatch (empty list = ok). Sourcing: blocks +
+    components from @p arguments (``instances``); mesh extent from @p layout (``Uniform.mesh`` /
+    ``AMR.base``); ghost depth + precision from @p manifest (no ``ghost_depth`` = ABI-incomplete,
+    refused, never guessed). The expected shape follows what the install CONSUMES per layout:
+    Uniform writes the FULL conservative state (``set_state`` -> ``(components, n, n)``, valid or
+    ghost-ringed); AMR seeds the per-block coarse DENSITY (``set_density`` -> ``(n, n)`` or flat
+    ``(n*n,)``; the native lift fills the other components, like direct ``set_density``)."""
     lines = []
     if not initial_state:
         return lines
@@ -118,6 +114,8 @@ def validate_initial_state(manifest: Any, arguments: Any, layout: Any,
         lines.append("initial state for unknown block %r; the artifact declares block(s) %s"
                      % (name, sorted(declared) or "(none)"))
     mesh = _layout_mesh(layout)
+    # AMR seeds via set_density, Uniform via set_state; like _layout_mesh, AMR layouts carry .base.
+    amr = getattr(layout, "base", None) is not None
     ghost = getattr(manifest, "ghost_depth", None)
     if ghost is None and initial_state:
         lines.append("the compiled manifest carries no ghost_depth; it is ABI-incomplete and cannot "
@@ -126,25 +124,33 @@ def validate_initial_state(manifest: Any, arguments: Any, layout: Any,
     for name in sorted(set(initial_state) & declared):
         array = initial_state[name]
         spec = instances[name]
-        _check_one_initial_state(lines, name, array, spec, mesh, ghost, accepted_dtypes)
+        _check_one_initial_state(lines, name, array, spec, mesh, ghost, accepted_dtypes, amr)
     return lines
 
 
 def _check_one_initial_state(lines: Any, name: Any, array: Any, spec: Any, mesh: Any, ghost: Any,
-                             accepted_dtypes: Any) -> Any:
+                             accepted_dtypes: Any, amr: Any = False) -> Any:
     """Append the shape / dtype / component refusals for ONE block's supplied @p array."""
     components = int(spec.get("components", 0) or 0)
     shape = _shape_of(array)
     if shape is None:
         lines.append("initial state for block %r is not an array (no .shape); pass a numpy array of "
-                     "shape (%s, n, n)" % (name, components or "n_components"))
+                     "shape (%s, n, n)" % (name, "n, n" if amr else (components or "n_components")))
         return
     if mesh is not None and ghost is not None:
-        expected = _expected_shapes(components, mesh, ghost)
-        if shape not in expected:
-            lines.append("initial state for block %r has shape %s; expected one of %s (n=%d cells "
-                         "per axis, %d component(s), ghost depth %d)"
-                         % (name, shape, sorted(expected), mesh, components, ghost))
+        if amr:
+            expected = {(mesh, mesh), (mesh * mesh,)}
+            if shape not in expected:
+                lines.append("initial state for block %r has shape %s; the AMR install seeds the "
+                             "per-block coarse DENSITY via set_density: expected (%d, %d) or the "
+                             "flat (%d,) (the native lift fills the other component(s))"
+                             % (name, shape, mesh, mesh, mesh * mesh))
+        else:
+            expected = _expected_shapes(components, mesh, ghost)
+            if shape not in expected:
+                lines.append("initial state for block %r has shape %s; expected one of %s (n=%d "
+                             "cells per axis, %d component(s), ghost depth %d)"
+                             % (name, shape, sorted(expected), mesh, components, ghost))
     dtype = _dtype_name(array)
     if dtype is not None and dtype not in accepted_dtypes:
         lines.append("initial state for block %r has dtype %r; the artifact's declared precision "

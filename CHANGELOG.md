@@ -19,6 +19,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - ADC-635 Replay AMR history rings through in-window regrids: re-step with regridding active, reproduce the incremental remap chain on the rebuilt slots, lift the ADC-631 straddle refusal, and add a coherence guard on the replayed regrid schedule (bit-identical restart, np.array_equal).
 
 ### Fixed
+- ADC-634 A single-block compiled time Program on AMR now keeps its refined fine level: install_program no longer forces a coarse-only layout when a refinement criterion is configured (set_refinement / set_phi_refinement), so an active regrid can seed and retain nlev>=2, and the synchronous per-level Program driver refills each fine level's coarse-fine ghosts from the coarse state before the flux (previously an uninitialized C/F ghost gave a NaN pressure). A no-refinement single-block Program stays coarse-only and bit-identical to the same Program on System.
 - ADC-622 External brick registry is now per-.so (hidden-visibility BrickRegistry plus -fno-gnu-unique on brick builds), so pops_brick_manifest() of a .so describes only that .so even on Linux/glibc where STB_GNU_UNIQUE unified it across dlopen; a two-fixture C++ test proves isolation.
 
 ### Removed
@@ -77,6 +78,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   unregistered `test_coupling_operator_contract` into the standard C++ test list.
 
 ### Added
+- ADC-634 Route a whole-system time Program (explicit / SSPRK2 / condensed-Schur) through
+  `pops.compile(layout=AMR)` + `pops.bind` onto `AmrSystem.install_program`, with a capability query
+  over the `AmrProgramContext` op-support surface; the clean AMR route no longer silently drops
+  `problem._time`.
 - ADC-427 condensed_schur (pops.lib.time) now lowers theta in (0, 1): the theta-stage solve, the
   1/theta n+1 extrapolation, the optional kinetic-energy update, and a cross-step persistent phi^n
   carried through an ncomp-aware System history ring (register_history gains an optional ncomp; the

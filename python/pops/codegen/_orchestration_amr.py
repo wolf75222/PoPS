@@ -1,14 +1,18 @@
-"""AMR compile branch of ``pops.compile`` -- one native loader per block, no time Program.
+"""AMR compile branch of ``pops.compile`` -- one native loader per block, plus an optional Program.
 
 Split out of :mod:`pops.codegen.orchestration` for the 500-line cap (ADC-550): the two AMR
 helpers ``_compile_amr`` / ``_compile_block_amr`` that lower each block of an ``AMR`` layout to a
 ``target='amr_system'`` production ``CompiledModel`` (the native ``add_native_block`` loader),
-carrying the ``{block: CompiledModel}`` table on the handle. ``orchestration.compile`` imports
-``_compile_amr`` lazily (like its other in-function imports) so the module load order stays acyclic.
+carrying the ``{block: CompiledModel}`` table on the handle. When the effective time is a
+whole-system ``Program``, ``_compile_amr`` ALSO compiles it with
+``compile_problem(target='amr_system')`` and returns the resulting ``CompiledProblem`` (ADC-634:
+``AmrSystem.install_program`` drives it per level over the hierarchy). ``orchestration.compile``
+imports ``_compile_amr`` lazily (like its other in-function imports) so the module load order stays
+acyclic.
 
 The shared resolve / field-solver / snapshot helpers stay in ``orchestration`` and are reused here;
 this module adds no new codegen and no forbidden cross-layer import (the runtime / mesh / problem
-types are reached only through those reused helpers).
+types are reached only through those reused helpers and the ``compile_problem`` driver).
 """
 
 from __future__ import annotations
@@ -22,31 +26,49 @@ from pops.codegen.orchestration import (
 )
 
 
-def _compile_amr(problem: Any, layout: Any, backend: Any, target: Any, **kwargs: Any) -> Any:
-    """Compile each AMR block to a ``target='amr_system'`` ``CompiledModel`` (single AND multi block).
+def _compile_amr(problem: Any, layout: Any, backend: Any, target: Any, time: Any = None,
+                 **kwargs: Any) -> Any:
+    """Compile each AMR block to a ``target='amr_system'`` ``CompiledModel``, plus an optional Program.
 
-    There is no whole-system time Program on AMR: each block's resolved physics model is compiled to a
-    production native loader (``Model.compile(backend='production', target='amr_system')`` -> a
-    ``CompiledModel`` whose adder is ``add_native_block``), and the ``{block: CompiledModel}`` table is
-    carried on ``_block_compiled_models`` for bind's ``_assemble_instances`` to install each block via
-    ``add_equation``. The returned handle is the FIRST block's ``CompiledModel`` -- it carries a real
-    ``.so_path`` so bind's so_path guard passes, and ``_target`` / ``_layout`` / ``_problem`` /
-    ``_block_compiled_models`` are attached for the AMR dispatch.
+    Each block's resolved physics model is compiled to a production native loader
+    (``Model.compile(backend='production', target='amr_system')`` -> a ``CompiledModel`` whose adder is
+    ``add_native_block``), and the ``{block: CompiledModel}`` table is carried on
+    ``_block_compiled_models`` for bind's ``_assemble_instances`` to install each block via
+    ``add_equation`` (single AND multi block).
 
-    Only the compile-driver kwargs ``Model.compile`` accepts are forwarded (include / cxx / std /
-    name / require_metadata / hoist_reciprocals); a whole-system kwarg like ``force`` / ``debug`` /
-    ``libraries`` has no per-block-loader equivalent and is dropped (the AMR route does not build a
-    Program .so). An explicit ``so_path`` is forwarded ONLY for a single block: pinning the SAME path
-    for several blocks would make their loaders collide (one .so per block), so a multi-block Problem lets
-    each block fall back to its model-hash-keyed cache path.
+    When @p time is a whole-system ``Program`` (ADC-634), the Program is ALSO compiled for the AMR
+    target -- ``compile_problem(model=<first block engine model>, time=time, target='amr_system')`` ->
+    a ``CompiledProblem`` whose ``.so`` exports ``pops_install_program_amr`` -- and THAT handle is
+    returned, with the per-block loaders on ``_block_compiled_models`` (symmetric to the Uniform route,
+    which returns a CompiledProblem carrying ``_block_models``). Bind installs it on the hierarchy via
+    ``AmrSystem.install_program`` (the seam ``_finish_program_install`` already drives). Without a
+    Program (native per-block time policy) the returned handle is the FIRST block's ``CompiledModel``,
+    byte-identical to before. Either shape carries a real ``.so_path`` (so bind's so_path guard passes)
+    and ``_target`` / ``_layout`` / ``_problem`` / ``_block_compiled_models`` for the AMR dispatch;
+    bind discriminates the two by the duck-typed ``getattr(compiled, "program", None)`` signal.
+
+    Only the compile-driver kwargs ``Model.compile`` accepts are forwarded to the per-block loaders
+    (include / cxx / std / name / require_metadata / hoist_reciprocals). The whole-system Program .so
+    additionally takes the ``compile_problem`` subset (so_path / force / debug / libraries) via
+    @p program_kwargs. An explicit per-block ``so_path`` is forwarded ONLY for a single block: pinning
+    the SAME path for several blocks would make their loaders collide (one .so per block), so a
+    multi-block Problem lets each block fall back to its model-hash-keyed cache path. On the Program
+    shape ``so_path`` pins the PROGRAM artifact (a single .so), not a per-block loader.
     """
     compile_kwargs = {k: v for k, v in kwargs.items()
                       if k in ("include", "cxx", "std", "name", "require_metadata",
                                "hoist_reciprocals")}
-    if "so_path" in kwargs and len(problem._blocks) == 1:
+    if "so_path" in kwargs and len(problem._blocks) == 1 and time is None:
+        # A single per-block loader may pin its path (the no-Program shape). With a Program present,
+        # so_path pins the PROGRAM artifact instead (below), so the per-block loaders fall back to
+        # their model-hash-keyed cache paths and do not collide with it.
         compile_kwargs["so_path"] = kwargs["so_path"]
     block_compiled = {name: _compile_block_amr(name, spec["model"], backend, compile_kwargs)
                       for name, spec in problem._blocks.items()}
+
+    if time is not None:
+        return _compile_amr_program(problem, layout, backend, target, time, block_compiled, kwargs)
+
     _, compiled = next(iter(block_compiled.items()))
     compiled._problem = problem
     compiled._target = target
@@ -63,6 +85,48 @@ def _compile_amr(problem: Any, layout: Any, backend: Any, target: Any, **kwargs:
     # patch settings) and flow the typed refinement + field problem onto the AmrSystem.
     compiled._layout = layout
     _freeze_and_snapshot(problem, None, compiled)
+    return compiled
+
+
+def _compile_amr_program(problem: Any, layout: Any, backend: Any, target: Any, time: Any,
+                         block_compiled: Any, kwargs: Any) -> Any:
+    """Compile the whole-system time Program for the AMR target and attach the AMR snapshot (ADC-634).
+
+    Compiles @p time with ``compile_problem(model=<first block engine model>, target='amr_system')`` --
+    the SAME driver + single lowering the Uniform route uses, folding ``target`` into the cache key --
+    then attaches the per-block loaders and the compile-time snapshot (block specs / field solvers /
+    outputs / diagnostics / layout) so bind lowers from the frozen truth and installs the Program on
+    the hierarchy. Symmetric to the Uniform branch of ``orchestration.compile``.
+
+    Only the ``compile_problem`` kwargs are forwarded (so_path / force / cxx / include / std / debug /
+    libraries); the per-block ``Model.compile`` kwargs were already consumed by the loaders above.
+    """
+    from pops.codegen.compile_drivers import compile_problem
+
+    program_kwargs = {k: v for k, v in kwargs.items()
+                      if k in ("so_path", "force", "cxx", "include", "std", "debug", "libraries")}
+    # problem._blocks is a BlockRegistry (an items()-style mapping with no .values()); take the
+    # FIRST block's spec as the codegen representative, exactly like the Uniform route.
+    _, first_spec = next(iter(problem._blocks.items()))
+    first_model = _resolve_problem_model(first_spec["model"])
+    compiled = compile_problem(model=first_model, time=time, backend=backend,
+                               target="amr_system", **program_kwargs)
+    compiled._problem = problem
+    compiled._target = target
+    compiled._block_compiled_models = block_compiled
+    # COMPILE-TIME SNAPSHOT AUTHORITY (ADC-592), symmetric to the Uniform route: freeze the per-block
+    # models (their target='amr_system' loaders) + spatial, the field solvers, the output policies and
+    # the declared diagnostics so bind lowers from the compile-time truth and a Problem mutated between
+    # compile and bind is caught by bind()'s drift check.
+    compiled._block_specs = {name: {"model": block_compiled[name], "spatial": spec["spatial"]}
+                             for name, spec in problem._blocks.items()}
+    compiled._field_solvers = _problem_field_solvers(problem)
+    compiled._outputs = list(problem._outputs or [])
+    compiled._diagnostics = list(problem._diagnostics or [])
+    # Carry the AMR layout so bind() rebuilds the AmrSystemConfig and flows the typed refinement, and
+    # so the introspection (arguments / estimate_memory / inspect_amr) reports the AMR hierarchy.
+    compiled._layout = layout
+    _freeze_and_snapshot(problem, time, compiled)
     return compiled
 
 
@@ -86,4 +150,4 @@ def _compile_block_amr(name: Any, physics: Any, backend: Any, compile_kwargs: An
     return block_compile(backend=backend, target="amr_system", **compile_kwargs)
 
 
-__all__ = ["_compile_amr", "_compile_block_amr"]
+__all__ = ["_compile_amr", "_compile_amr_program", "_compile_block_amr"]

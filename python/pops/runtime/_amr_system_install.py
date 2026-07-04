@@ -39,13 +39,14 @@ class _AmrSystemInstall(_AmrSystem):
             bricks / a CompiledModel target='amr_system'), sets the field solvers (``set_poisson``),
             the aux inputs (``set_magnetic_field`` / ``set_aux_field``) and each instance's initial
             density (``set_density``). This is the real AMR add path; a full run is Kokkos-gated.
-          - COMPILED install (a ``compiled`` handle carrying a time Program, epic ADC-511 / ADC-508):
-            the same wiring, then ``install_program(so_path)`` installs the compiled Program on the AMR
-            hierarchy (the .so must export ``pops_install_program_amr``: compile it with
+          - COMPILED install (a ``compiled`` handle carrying a time Program, epic ADC-511 / ADC-508 /
+            ADC-634): the same wiring, then ``install_program(so_path)`` installs the compiled Program
+            on the AMR hierarchy (the .so must export ``pops_install_program_amr``: compile it with
             ``target='amr_system'``). The runtime params (``params=``) route to ``set_program_params``
             and the cadence (``cadence=``) to ``set_program_cadence`` -- the AMR counterparts of the
-            System routes. The per-level Lie/Strang macro-step DRIVER is Kokkos-gated (the .so fails
-            loud at install until the AmrProgramContext seam lands), so a full run is a ROMEO step.
+            System routes. The per-level macro-step driver is the AmrProgramContext seam (ADC-508); a
+            Program using a deferred op (Schur / history / named-flux) compiles against it and throws
+            the honest AmrProgramContext backstop only when that op is reached at run.
 
         @param compiled a compiled time-Program handle, or ``None`` for a native AMR install.
         @param instances dict {name: {"initial": array, "spatial": <brick>, "model": <model>,
@@ -150,7 +151,19 @@ class _AmrSystemInstall(_AmrSystem):
         # install (a name declared by no instance is a loud error, no silent drop); on the COMPILED-Program
         # install it is False -- an unconsumed name may be a Program-lowered param routed in step 5b, so the
         # remainder is threaded to _finish_program_install. Returns the names consumed by an instance.
-        consumed = self._install_block_params(resolved_models, params,
+        #
+        # PROGRAM PARAMS WIN ON A COMPILED-PROGRAM INSTALL (ADC-634): each AMR block is a target='amr_system'
+        # CompiledModel that ALSO declares the model's runtime params, so route_block_params would GREEDILY
+        # consume a name the installed whole-system Program reads through ctx.program_params (a name declared
+        # by BOTH). But with a Program installed the native per-block time policy is superseded -- the
+        # Program's lowered kernels read the PROGRAM RuntimeParams (set_program_params), NOT the native
+        # set_block_params store -- so a Program-declared name MUST reach step 5b. Withhold those names from
+        # the native route (they still reach set_program_params below); a name declared ONLY by an instance
+        # (no Program kernel reads it) still routes natively. The Uniform route never hit this: its instances
+        # carry the physical Model (no runtime_param_names), so nothing was consumed there.
+        program_names = self._program_param_names(compiled)
+        native_params = {k: v for k, v in params.items() if k not in program_names}
+        consumed = self._install_block_params(resolved_models, native_params,
                                               reject_unknown=(compiled is None))
         program_params = {k: v for k, v in params.items() if k not in consumed}
 
@@ -167,6 +180,22 @@ class _AmrSystemInstall(_AmrSystem):
         from pops.runtime._bound_snapshot import build_amr_snapshot
         snapshot = build_amr_snapshot(instances, solvers, aux, params)
         self._finalize_bind(snapshot)  # freeze (ADC-592): _finalize_bind lives on _LifecycleMixin
+
+    @staticmethod
+    def _program_param_names(compiled: Any) -> Any:
+        """The runtime-parameter names the compiled whole-system Program reads (ADC-634).
+
+        Read from the handle's declared routing (``runtime_param_routes`` -> ``(routes, defaults)``, the
+        SAME metadata step 5b routes to ``set_program_params``); ``defaults`` keys ARE the Program-declared
+        names. On the AMR compiled-Program install these names win over the native per-block route (each
+        block is a CompiledModel that also declares them), so they are withheld from ``_install_block_params``
+        and reach ``set_program_params``. Empty set when the handle carries no Program or no runtime param
+        (a native install, or a param-free Program): the native route then behaves exactly as before."""
+        routes_fn = getattr(compiled, "runtime_param_routes", None)
+        if not callable(routes_fn):
+            return set()
+        routed: Any = routes_fn()  # (routes, defaults); typed Any: callable() narrows to -> object
+        return set(routed[1] or {})
 
     def _install_block_params(self, resolved_models: Any, params: Any,
                               reject_unknown: bool = True) -> Any:

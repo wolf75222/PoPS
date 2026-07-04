@@ -321,12 +321,13 @@ class AmrProgramContext {
 
   // --- condensed-Schur / named-flux primitives: DEFERRED on AMR (v1), fail loud ---------------------
   // The codegen can lower a condensed-Schur (ADC-421/422) or named-flux (ADC-419) Program against these
-  // seams. ProgramContext implements them on the single-level System (coefficiented matrix-free elliptic
-  // + the fused Schur RHS / reconstruct / energy + the named-flux divergence); AMR v1 does NOT wire them
-  // (they would need the per-level coefficient assembly + the coarse-fine elliptic coupling). A SILENT
-  // lower would produce an AMR .so that either does not compile (a missing member) or runs the WRONG
-  // arithmetic. The signatures match ProgramContext EXACTLY (const-ness, return type, args) so the SAME
-  // lowered body still type-checks against AmrProgramContext (the duck-typing contract); each one throws.
+  // seams. On the single-level System the Schur ops are FREE kernels in pops::coupling::schur::program
+  // (condensed_schur_operator.hpp) typed on const ProgramContext&; the named-flux divergence is a
+  // ProgramContext method. AMR v1 does NOT wire them (they would need the per-level coefficient
+  // assembly + the coarse-fine elliptic coupling). A SILENT lower would produce an AMR .so that either
+  // does not compile or runs the WRONG arithmetic. These methods carry the deferred throws; the
+  // AmrProgramContext OVERLOADS of the free Schur kernels (end of this header) delegate here so the
+  // SAME lowered body still compiles on target='amr_system' and fails loud only when REACHED at run.
   void assemble_schur_coeffs(MultiFab& /*eps_x*/, MultiFab& /*eps_y*/, MultiFab& /*a_xy*/,
                              MultiFab& /*a_yx*/, const MultiFab& /*state*/, Real /*c*/,
                              Real /*th_dt*/, int /*c_rho*/, int /*c_bz*/) const {
@@ -438,4 +439,48 @@ class AmrProgramContext {
 
 }  // namespace program
 }  // namespace runtime
+
+// AmrProgramContext overloads of the condensed-Schur FREE kernels (condensed_schur_operator.hpp
+// types them on const ProgramContext&). The codegen emits the QUALIFIED calls
+// pops::coupling::schur::program::<op>(ctx, ...) for every target, so a condensed-Schur Program
+// lowered for target='amr_system' needs these overloads to COMPILE; each one delegates to the
+// matching deferred AmrProgramContext method above, so the .so builds and the honest
+// "AmrProgramContext: <op> is not wired" backstop throws only when the op is REACHED at run.
+// ADC-633 (per-level Schur assembly + coarse-fine elliptic coupling) replaces the delegates'
+// targets; these overloads then become live without an emit change.
+namespace coupling {
+namespace schur {
+namespace program {
+
+inline void assemble_schur_coeffs(const runtime::program::AmrProgramContext& ctx, MultiFab& eps_x,
+                                  MultiFab& eps_y, MultiFab& a_xy, MultiFab& a_yx,
+                                  const MultiFab& state, Real c, Real th_dt, int c_rho, int c_bz) {
+  ctx.assemble_schur_coeffs(eps_x, eps_y, a_xy, a_yx, state, c, th_dt, c_rho, c_bz);
+}
+inline void apply_laplacian_coeff(const runtime::program::AmrProgramContext& ctx, MultiFab& out,
+                                  MultiFab& in, const MultiFab& eps_x, const MultiFab& eps_y,
+                                  const MultiFab& a_xy, const MultiFab& a_yx) {
+  ctx.apply_laplacian_coeff(out, in, eps_x, eps_y, a_xy, a_yx);
+}
+inline void schur_explicit_flux(const runtime::program::AmrProgramContext& ctx, MultiFab& out,
+                                const MultiFab& state, Real th_dt, int c_mx, int c_my, int c_bz) {
+  ctx.schur_explicit_flux(out, state, th_dt, c_mx, c_my, c_bz);
+}
+inline void assemble_schur_rhs(const runtime::program::AmrProgramContext& ctx, MultiFab& rhs,
+                               MultiFab& phi_n, const MultiFab& state, Real th_dt, Real g,
+                               int c_mx, int c_my, int c_bz) {
+  ctx.assemble_schur_rhs(rhs, phi_n, state, th_dt, g, c_mx, c_my, c_bz);
+}
+inline void schur_reconstruct(const runtime::program::AmrProgramContext& ctx, MultiFab& state,
+                              MultiFab& phi, Real th_dt, int c_rho, int c_mx, int c_my, int c_bz) {
+  ctx.schur_reconstruct(state, phi, th_dt, c_rho, c_mx, c_my, c_bz);
+}
+inline void schur_energy(const runtime::program::AmrProgramContext& ctx, MultiFab& state,
+                         const MultiFab& state_old, int c_rho, int c_mx, int c_my, int c_E) {
+  ctx.schur_energy(state, state_old, c_rho, c_mx, c_my, c_E);
+}
+
+}  // namespace program
+}  // namespace schur
+}  // namespace coupling
 }  // namespace pops

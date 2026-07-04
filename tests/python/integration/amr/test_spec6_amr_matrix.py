@@ -13,8 +13,9 @@ its ``kind``, so one honest verdict per (operation x layout x block-count) cell:
     already-covered cell is pointed at, not duplicated.
   * ``pending``  -- the cell CONSTRUCTS its authoring object (proving the row is structurally real),
     then this runner ``pytest.skip``s it with the pending marker; it flips to a live cell when the
-    named issue (ADC-631 multistep history ring, ADC-634 clean-compile AMR Program, ADC-633 compiled
-    Schur hierarchy) lands -- no structural change, only the cell ``kind`` flips.
+    named issue (ADC-631 multistep history ring, ADC-633 compiled Schur hierarchy) lands -- no
+    structural change, only the cell ``kind`` flips. The clean-compile AMR Program row is now
+    green_live (ADC-634 implemented).
 
 ``test_matrix_is_complete`` pins ``set(MATRIX) == EXPECTED_KEYS`` so a dropped cell fails loud: a
 future layout gap cannot hide. ``importorskip('pops')`` skips the whole suite on a bare box (this
@@ -74,11 +75,11 @@ def test_every_layout_is_amr_and_the_pending_rows_are_named():
     # the shipping Spec 5 coverage the cited rows point at).
     for key, cell in matrix.MATRIX.items():
         assert cell.layout == "amr", "cell %r is not an AMR-layout cell" % key
-    # The pending rows are exactly the multistep-on-AMR (ADC-631) + clean-route Program (ADC-634 /
-    # ADC-633) cells -- nothing else is silently deferred.
+    # The pending rows are exactly the compiled condensed-Schur hierarchy Program (ADC-633) cell --
+    # nothing else is silently deferred. Multistep-on-AMR (ab2/bdf2) flipped to exists when ADC-631
+    # merged; the clean-route explicit / SSPRK Program row flipped to green_live with ADC-634.
     pending = {k for k, c in matrix.MATRIX.items() if c.kind == "pending"}
-    assert pending == {"ab2.amr.mono", "bdf2.amr.mono",
-                       "clean_program.amr.mono", "clean_schur_program.amr.mono"}, pending
+    assert pending == {"clean_schur_program.amr.mono"}, pending
 
 
 if __name__ == "__main__":
