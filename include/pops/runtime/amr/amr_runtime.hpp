@@ -69,31 +69,21 @@
 /// source, carried by the AMR step) OR IMEX (stiff source treated IMPLICITLY by
 /// backward_euler_source, transport staying explicit; capstone vii), selected in step().
 ///
-/// IMEX SEMANTICS UNDER substeps (integration decision, follow-up review #184). At substeps=1 AND
-/// stride=1 the runtime IMEX branch COINCIDES with the IMEX branch of the compile-time engine
-/// AmrSystemCoupler::step (a SOURCE-FREE transport + a backward_euler_source over the effective step).
-/// FOR substeps>1 the two paths DIVERGE DELIBERATELY:
-///   - the COMPILE-TIME engine IGNORES substeps on the IMEX branch: it does ONE single source-free
-///     transport then ONE single implicit_advance over the whole effective step bdt (cf.
-///     amr_system_coupler.hpp: the substep loop exists only in the Explicit branch);
-///   - the RUNTIME SUB-CYCLES the IMEX splitting: it applies imex_advance K=substeps times, each over
-///     bdt/K, i.e. K Lie steps [transport(dt/K); implicit source(dt/K)].
-/// This choice is INTENTIONAL and SOUND (it is NOT a bug): (a) the source-free explicit transport
-/// becomes SAFER in CFL (each substep carries dt/K, so a wave speed K times larger stays
-/// admissible); (b) backward-Euler is UNCONDITIONALLY STABLE whatever the step, so sub-cycling never
-/// destabilizes the source; (c) refining the backward-Euler step BRINGS the stiff relaxation CLOSER
-/// to its continuous trajectory (splitting error and implicit temporal error both O(dt), both
-/// reduced). The runtime thus does NOT mirror the compile-time bit-for-bit once substeps>1; it
-/// honors substeps CONSISTENTLY with the explicit branch (same split into K equal substeps), which is
-/// the behavior expected by a user setting substeps. Non-regression guard:
-/// test_amr_multiblock_imex compares a substeps=4 trajectory to substeps=1 and requires them to
-/// DIFFER (the sub-cycling is intentional, not accidental).
-///
-/// The union-tags regrid and the compiled multi-block production DSL remain LATER PRs. The runtime
-/// facade (AmrSystem) explicitly REFUSES multi-block + regrid_every > 0 as long as the union regrid
-/// does not exist.
+/// IMEX SEMANTICS UNDER substeps (integration decision, follow-up review #184). At substeps=1 &&
+/// stride=1 the runtime IMEX branch COINCIDES with AmrSystemCoupler::step (source-free transport + one
+/// backward_euler_source over the effective step). FOR substeps>1 the paths DIVERGE DELIBERATELY: the
+/// compile-time engine ignores substeps on its IMEX branch (one transport + one implicit_advance over
+/// bdt), while the RUNTIME sub-cycles the Lie splitting K=substeps times over bdt/K. This is sound, not
+/// a bug: the source-free transport gets CFL-safer, backward-Euler is unconditionally stable at any
+/// step, and refining the implicit step brings the stiff relaxation closer to its trajectory. So the
+/// runtime is NOT bit-identical to the compile-time engine once substeps>1; it honors substeps like
+/// the explicit branch (test_amr_multiblock_imex guards that substeps=4 DIFFERS from substeps=1).
 
 namespace pops {
+
+namespace detail {
+struct AmrHistoryOps;  // ADC-631 multistep history-ring operations (friend of AmrRuntime; amr_history.hpp)
+}  // namespace detail
 
 /// Type-erased closures of ONE AMR block, placed on the shared hierarchy. AMR counterpart of the
 /// Species struct of System::Impl: a name + its level stack (on the shared layout) + its closures
@@ -108,15 +98,12 @@ struct AmrRuntimeBlock {
   /// is split into substeps equal pieces and each piece is advanced by ONE advance_amr (cf.
   /// AmrRuntime::step). substeps=1 => a single advance_amr over the whole effective step (bit-identical).
   int substeps = 1;
-  /// HOLD-THEN-CATCH-UP cadence of the block (multirate). stride=1 (default): the block advances at
-  /// EVERY macro-step (bit-identical). stride=M>1: the block is HELD at macro-steps 0..M-2 (not
-  /// advanced) then CATCHES UP at macro-step M-1, where (macro_step+1)%M==0, by an effective step
-  /// M*dt. Same semantics as block_stride_v / AmrSystemCoupler::step (#140). The INVARIANT of the
-  /// end-of-window catch-up: at macro-step k the system time is (k+1)*dt and the block that catches
-  /// up has then accumulated (k+1)*dt, so it stays temporally CONSISTENT with the fast blocks (never
-  /// "in the future"), which keeps the Poisson coupling (summed RHS) meaningful: a held block
-  /// contributes with its FROZEN state (its last advance), not with an anticipated state that would
-  /// falsify q_b n_b in the sum.
+  /// HOLD-THEN-CATCH-UP cadence of the block (multirate). stride=1 (default): advances EVERY macro-step
+  /// (bit-identical). stride=M>1: HELD at macro-steps 0..M-2 then CATCHES UP at M-1 ((macro_step+1)%M==0)
+  /// by an effective step M*dt. Same semantics as block_stride_v / AmrSystemCoupler::step (#140). The
+  /// end-of-window catch-up keeps the block temporally CONSISTENT with the fast blocks (never "in the
+  /// future"), so the summed-RHS Poisson coupling stays meaningful: a held block contributes with its
+  /// FROZEN state (its last advance), not an anticipated state that would falsify q_b n_b in the sum.
   int stride = 1;
   /// Width of the aux channel READ by the block model (aux_comps<Model>(); >= kAuxBaseComps). The aux
   /// channel SHARED per level is sized to the MAX of this width over all blocks, so that a block
@@ -153,23 +140,14 @@ struct AmrRuntimeBlock {
   /// to the historical one.
   bool imex = false;
 
-  /// IMEX advance of the block by ONE substep of size dt: (1) EXPLICIT TRANSPORT on the SOURCE-FREE
-  /// model (-div F only, SourceFreeModel<Model>) by the AMR engine (Berger-Oliger + conservative
-  /// reflux + average_down), then (2) IMPLICIT STIFF SOURCE backward_euler_source AT EACH LEVEL (local
-  /// Newton, finite-difference jacobian; implicit mask CARRIED BY THE BLOCK for partial IMEX),
-  /// followed by a fine -> coarse cascade (mf_average_down_mb). ONE call = ONE Lie step [transport;
-  /// implicit source] over dt. The SEMANTICS of this splitting (source-free transport then
-  /// backward-Euler) mirror the IMEX branch of AmrSystemCoupler::step (SourceFreeModel +
-  /// AmrImplicitSourceStepper); at substeps=1 it is IDENTICAL to it. But step() calls THIS closure
-  /// substeps times (over dt = effective step / substeps), so for substeps>1 the runtime SUB-CYCLES the
-  /// IMEX splitting where the compile-time applies it once over the whole effective step: DIVERGENCE
-  /// INTENTIONAL (cf. IMEX SEMANTICS UNDER substeps, file header). Captures the CONCRETE
-  /// Model/Limiter/Flux + the mask (build_amr_block); the kernel stays COMPILED, only the block
-  /// registry is type-erased. CONSERVATION INVARIANT (LOCAL source): the source is cell-local (outside
-  /// face fluxes), so OUTSIDE the reflux registers -> conservation at coarse-fine interfaces stays
-  /// intact; a COVERED coarse cell becomes again the 2x2 average of its children through the final
-  /// cascade (otherwise the mass diagnostic, sum of the coarse only, would count a phantom source).
-  /// Empty for an explicit block (imex == false): step() never calls it.
+  /// IMEX advance of the block by ONE substep of size dt = ONE Lie step [transport; implicit source]:
+  /// (1) EXPLICIT SOURCE-FREE transport (-div F only, SourceFreeModel) via the AMR engine (Berger-
+  /// Oliger + reflux + average_down), then (2) IMPLICIT stiff source backward_euler_source AT EACH
+  /// LEVEL (local Newton, FD jacobian, block-carried partial-IMEX mask) + a fine -> coarse cascade.
+  /// Mirrors the IMEX branch of AmrSystemCoupler::step; at substeps=1 IDENTICAL to it, at substeps>1 the
+  /// runtime sub-cycles it (divergence intentional, cf. file header). CONSERVATION: the source is
+  /// cell-local (outside the reflux registers) so C/F conservation holds, and the final cascade restores
+  /// each covered coarse cell to the 2x2 average of its children. Empty for an explicit block.
   std::function<void(std::vector<AmrLevelMP>&, const Box2D&, Real, Periodicity, bool)> imex_advance;
 
   /// POINTWISE PROJECTION post-pas (ADC-177) : U <- project(U, aux) appliquee PAR NIVEAU a la FIN
@@ -999,6 +977,10 @@ class AmrRuntime {
     for (auto& b : blocks_)
       (*b.levels)[fk].aux = &aux_[fk];
 
+    // (R7b, ADC-631) remap every history ring's fine slot onto the new (fb, dmap) with the SAME
+    // machinery the live U uses, so prev(k) reads stay layout-consistent with U across the regrid.
+    remap_history_rings_(fb, dmap, fk, pk, /*prolong=*/true);
+
     // (V3) SHARED-LAYOUT INVARIANT: all blocks MUST live on EXACTLY the same fb/dmap (boxes, order,
     // rank per box) after the regrid. Collective guard (cross-block); catches any inconsistent
     // reconstruction before it corrupts the shared aux / the summed Poisson.
@@ -1555,6 +1537,19 @@ class AmrRuntime {
   }
 
  private:
+  // ADC-631 multistep history rings (compiled-Program AMR route): name -> [slot][level] = block 0's
+  // level state at lag slot, + depth / per-level stored-once flag / per-slot dt. Data-only (MockImpl-
+  // safe); all logic in detail::AmrHistoryOps (amr_history.hpp), a friend taking the engine by ref.
+  friend struct detail::AmrHistoryOps;
+  std::map<std::string, std::vector<std::vector<MultiFab>>> hist_rings_;
+  std::map<std::string, int> hist_depth_;
+  std::map<std::string, std::vector<char>> hist_init_;
+  std::map<std::string, std::vector<Real>> hist_slot_dt_;
+  // Regrid / rebuild_hierarchy ring remap hook (member so the INLINE regrid() can call it before
+  // detail::AmrHistoryOps is complete); body in amr_history.hpp forwards to AmrHistoryOps::remap_rings.
+  void remap_history_rings_(const BoxArray& fb, const DistributionMapping& dmap, int fk, int pk,
+                            bool prolong);
+
   // Fills @p out (zero-initialized, size nc*nf*nf) from the LOCAL valid cells of @p U at GLOBAL
   // component-major indices c*nf*nf + j*nf + i. Shared by block_level_state and its _global gather
   // variant (the loop is verbatim with AmrCouplerMP::level_state -> bit-identical layout).
@@ -1842,4 +1837,8 @@ class AmrRuntime {
 // Out-of-line AmrRuntime member definitions kept OUT of this header (its line budget): the
 // composite-reduction folds and the checkpoint hierarchy-rebuild seam (ADC-542). Included last so
 // the full AmrRuntime class is visible.
+// ADC-631 multistep history rings (detail::AmrHistoryOps): store/register/read/rotate, per-level flat
+// checkpoint accessors, the regrid remap hook and the native selective-persistence replay. Included
+// BEFORE amr_restore.hpp so rebuild_hierarchy can call the ring realloc hook (AmrHistoryOps defined).
+#include <pops/runtime/amr/amr_history.hpp>   // NOLINT(build/include_order)
 #include <pops/runtime/amr/amr_restore.hpp>  // NOLINT(build/include_order)

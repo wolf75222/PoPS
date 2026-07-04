@@ -51,6 +51,11 @@ sources = ["tests/cpp/integration/amr/test_amr_hierarchy.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
+name = "test_amr_history_ring"
+sources = ["tests/cpp/integration/amr/test_amr_history_ring.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
 name = "test_amr_layout_guard"
 sources = ["tests/cpp/integration/amr/test_amr_layout_guard.cpp"]
 labels = ["integration", "amr", "medium"]
