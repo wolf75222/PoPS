@@ -198,6 +198,10 @@ struct System::Impl {
   detail::DiscDomain& eb_domain_ = domain_.eb_domain_;
   bool& eb_set_ = domain_.eb_set_;
   MultiFab& domain_mask_ = domain_.domain_mask_;
+  // ADC-615: the cut-cell / EB thresholds (kappa_min, face_open_eps, cut_theta_min) resolved by
+  // set_disc_domain. Defaults are the kEb* constants, so an unconfigured EB run is bit-identical AND
+  // the cut_theta_min is passed to BOTH the EB transport (assemble_rhs_eb) and the elliptic wall.
+  EbThresholds eb_thresholds_;
   bool& ws_cache_block_ = domain_.ws_cache_block_;
   GeometryMode& geometry_mode_ = domain_.geometry_mode_;
   // aux APPLICATION fields (bz_field_, te_src_) and apply_bz/apply_te buffers EXTRACTED into
@@ -392,7 +396,19 @@ struct System::Impl {
   // each step, so the add_block / set_disc_domain order is irrelevant (the mask is materialized / the
   // descriptor set before the 1st step; as long as !eb_set_ the stepper does not select the
   // embedded-boundary advance).
-  GridContext grid_ctx() { return GridContext{dom, bc_, geom, &aux, &domain_mask_, &eb_domain_}; }
+  GridContext grid_ctx() {
+    // ADC-615: carry the resolved cut-cell / EB thresholds into the context so the EB transport
+    // advance (BlockRhsEvalEb -> assemble_rhs_eb) uses them; defaults = kEb* (bit-identical).
+    return GridContext{dom,
+                       bc_,
+                       geom,
+                       &aux,
+                       &domain_mask_,
+                       &eb_domain_,
+                       eb_thresholds_.kappa_min,
+                       eb_thresholds_.face_open_eps,
+                       eb_thresholds_.cut_theta_min};
+  }
 
   // POLAR grid context (ring pgeom_ + r/theta BC + aux) for the polar block closures
   // (block_builder_polar.hpp). Counterpart of grid_ctx(); never called in Cartesian.

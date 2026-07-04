@@ -123,6 +123,15 @@ EffectiveOptionsReport System::effective_options_report() const {
   report.poisson.has_epsilon_field = p_->fields_.has_eps_field_;
   report.poisson.has_anisotropic_epsilon = p_->fields_.has_eps_xy_field_;
   report.poisson.has_reaction_field = p_->fields_.has_kappa_field_;
+  // ADC-615: effective cut-cell / EB thresholds (default kEb* unless overridden by set_disc_domain).
+  report.eb.enabled = p_->eb_set_ && p_->geometry_mode_ == GeometryMode::CutCell;
+  report.eb.geometry_mode = (p_->geometry_mode_ == GeometryMode::CutCell)
+                                ? "cutcell"
+                                : (p_->geometry_mode_ == GeometryMode::Staircase ? "staircase"
+                                                                                 : "none");
+  report.eb.kappa_min = static_cast<double>(p_->eb_thresholds_.kappa_min);
+  report.eb.face_open_eps = static_cast<double>(p_->eb_thresholds_.face_open_eps);
+  report.eb.cut_theta_min = static_cast<double>(p_->eb_thresholds_.cut_theta_min);
 
   for (const Impl::Species& s : p_->sp) {
     EffectiveBlockOptions row;

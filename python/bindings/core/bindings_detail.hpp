@@ -143,6 +143,8 @@ inline py::dict numerical_defaults_report_to_dict() {
 
   py::dict eb;
   eb["cut_fraction_floor"] = static_cast<double>(kEbCutFractionFloor);
+  eb["face_open_eps"] = static_cast<double>(kEbFaceOpenEps);  // ADC-615/618
+  eb["kappa_min"] = static_cast<double>(kEbKappaMin);
 
   py::dict weno;
   weno["epsilon"] = static_cast<double>(kWenoEpsilon);
@@ -328,6 +330,13 @@ inline py::dict effective_source_stage_options_to_dict(const EffectiveSourceStag
   return d;
 }
 
+inline py::dict effective_eb_options_to_dict(const EffectiveEbOptions& e) {
+  py::dict d;
+  d["enabled"] = e.enabled;
+  d["geometry_mode"] = e.geometry_mode;
+  d["kappa_min"] = e.kappa_min;
+  d["face_open_eps"] = e.face_open_eps;
+  d["cut_theta_min"] = e.cut_theta_min;
   return d;
 }
 
@@ -360,6 +369,7 @@ inline py::dict effective_options_report_to_dict(const EffectiveOptionsReport& r
   d["blocks"] = blocks;
   d["poisson"] = effective_poisson_options_to_dict(report.poisson);
   d["source_stages"] = source_stages;
+  d["eb"] = effective_eb_options_to_dict(report.eb);  // ADC-615
   d["time"] = time;
   if (report.has_amr)
     d["amr"] = effective_refinement_options_to_dict(report.amr_refinement);

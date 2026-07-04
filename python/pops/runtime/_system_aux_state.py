@@ -108,7 +108,7 @@ class _SystemAuxState(_System):
         from pops.runtime._lifecycle import guard_assembling
         guard_assembling(self, "set_disc_domain")  # frozen once pops.bind completes (ADC-592)
         from pops.mesh.geometry import DiscDomain
-        from pops.mesh.masks import lower_disc_mode
+        from pops.mesh.masks import disc_mode_thresholds, lower_disc_mode
         if isinstance(cx, DiscDomain):
             # Typed DiscDomain positional (Spec 5 sec.8.16): it carries center + radius + mode.
             # cy / R / mode keywords must NOT be doubled up with the typed object.
@@ -116,6 +116,7 @@ class _SystemAuxState(_System):
                 raise TypeError(
                     "set_disc_domain: pass EITHER a typed DiscDomain (center+radius+mode carried "
                     "by the object) OR the legacy (cx, cy, R, mode=) scalars, not both")
+            mode_obj = cx.mode  # keep the mode object for its ADC-615 cut-cell thresholds
             cx, cy, R, mode = cx.lower()
         else:
             if cy is None or R is None:
@@ -123,8 +124,14 @@ class _SystemAuxState(_System):
                     "set_disc_domain: the legacy form needs (cx, cy, R[, mode]); pass a typed "
                     "pops.mesh.geometry.DiscDomain(center=..., radius=..., mode=...) otherwise")
             # mode= may be the legacy string OR a typed pops.mesh.masks descriptor.
+            mode_obj = mode
             mode = lower_disc_mode(mode)
-        self._s.set_disc_domain(cx, cy, R, mode)
+        # ADC-615: forward the typed CutCell numeric thresholds (kappa_min / face_open_eps /
+        # cut_theta_min). 0.0 = keep the native default -> bit-identical for the string / NoMask path.
+        th = disc_mode_thresholds(mode_obj)
+        self._s.set_disc_domain(cx, cy, R, mode, kappa_min=th.get("kappa_min", 0.0),
+                                face_open_eps=th.get("face_open_eps", 0.0),
+                                cut_theta_min=th.get("cut_theta_min", 0.0))
 
     def set_geometry_mode(self, mode: Any) -> Any:
         """Switch ONLY the disc transport mode ('none'|'staircase'|'cutcell') without (re)defining the
