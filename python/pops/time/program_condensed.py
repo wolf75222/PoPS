@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pops.runtime_environment import NATIVE_DIMENSION
+from pops._native_facts import NATIVE_DIMENSION
 from pops.time.program_base import _ProgramConstants
 from pops.time.values import Value, _Coeff, _is_field_value
 
