@@ -19,6 +19,7 @@
 #include <pops/runtime/system/system_runtime_params.hpp>  // SystemRuntimeParamsRegistry: per-AOT-block runtime params (ADC-578)
 #include <pops/runtime/system/system_diagnostics_registry.hpp>  // SystemDiagnosticsRegistry: block/stage options + Newton reports (ADC-578)
 #include <pops/runtime/system/system_coupling_registry.hpp>  // SystemCouplingRegistry: couplings + dt bounds + frequency bounds (ADC-578)
+#include <pops/runtime/system/system_domain.hpp>  // SystemDomain: geometry/layout + shared aux + embedded-boundary (ADC-578)
 #include <pops/runtime/builders/block/block_builder_polar.hpp>  // POLAR block closures (assemble_rhs_polar, REUSED)
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // backward_euler_source
 #include <pops/numerics/time/integrators/time_steppers.hpp>  // ForwardEuler, SSPRK2Step (core RK math)
@@ -176,49 +177,31 @@ struct System::Impl {
   //  - `sp` = a REFERENCE to the store registry (same object, same iteration, same indexing).
   using Species = SystemBlockStore::BlockState;
 
-  SystemConfig cfg;
-  Geometry geom;
-  // POLAR GEOMETRY (diocotron polar-grid project, Phase 2b). polar_ == true when
-  // cfg.geometry == "polar": the System then runs on a global ring (r, theta), with the polar
-  // transport (assemble_rhs_polar) and the polar Poisson (PolarPoissonSolver) instead of the Cartesian path.
-  // pgeom_ is the ring (r_min, r_max, nr, ntheta); INERT (never read) in Cartesian -> bit-identical
-  // path. dom/ba/dm always cover the INDEX space (nx() x ny()), common to both
-  // geometries: only the indices -> physical space mapping (geom vs pgeom_) changes.
-  bool polar_;
-  PolarGeometry pgeom_;
-  BoxArray ba;
-  DistributionMapping dm;
-  BCRec
-      bc_;  // transport BC (periodic or Foextrap per cfg.periodic; polar: physical r, periodic theta)
-  Box2D dom;
-  Periodicity per_;
-  bool periodic_;
-  MultiFab aux;
-  int aux_ncomp_ = kAuxBaseComps;  // width of the SHARED aux channel (max over blocks; >= 3)
-
-  // EMBEDDED-BOUNDARY / LEVEL-SET DOMAIN (T2 + T5-PR3, contract inert by default). eb_set_ == false:
-  // no fixed domain -> the mask is "all active" and the transport path stays BIT-IDENTICAL. When
-  // set_disc_domain is called, eb_domain_ carries the descriptor (the disc instance of the level-set
-  // contract, numerics/embedded_boundary.hpp, reusing the conducting-wall level set) and domain_mask_
-  // materializes the 0/1 cell-centered field (1 ghost, so the mask-aware transport reads neighbors).
-  // The mask is queryable (disc_mask()) and consumed by assemble_rhs_masked.
-  detail::DiscDomain eb_domain_;
-  bool eb_set_ = false;
-  MultiFab
-      domain_mask_;  // 0/1 cell-centered, same layout as the blocks (ba/dm), 1 ghost; empty as long as !eb_set_
-  // At least one block requested wave_speed_cache (ADC-199, opt-in HLL cache). The cache is only wired
-  // on the FULL Cartesian advance (advance); the embedded-boundary advances (advance_masked /
-  // advance_eb) do not carry it. This flag locks the switch to an embedded-boundary transport mode
-  // (staircase/cutcell) -> explicit rejection in set_disc_domain / set_geometry_mode rather than a
-  // silently ignored cache.
-  bool ws_cache_block_ = false;
-  // TRANSPORT GEOMETRY MODE (T5-PR3, wiring the embedded boundary into step()). None (default):
-  // full Cartesian transport (assemble_rhs) -> BIT-IDENTICAL. Staircase: assemble_rhs_masked (0/1
-  // mask). CutCell: assemble_rhs_eb (cut-cell EB). The stepper reads this mode to ROUTE the transport
-  // advance of each block (advance vs advance_masked vs advance_eb). Set by set_disc_domain(mode=)
-  // / set_geometry_mode; has effect only if a domain is fixed (eb_set_) AND the block carries the
-  // matching embedded-boundary advance. None as long as no embedded-boundary mode is requested.
-  GeometryMode geometry_mode_ = GeometryMode::None;
+  // GEOMETRY / LAYOUT + SHARED aux + embedded-boundary domain, EXTRACTED into SystemDomain (ADC-578,
+  // include/pops/runtime/system/system_domain.hpp). domain_ is constructed FIRST (before fields_ /
+  // stepper_) so its exact historical init-list (cfg, geom, polar_, pgeom_, ba, dm, bc_, dom, per_,
+  // periodic_, aux) runs before any back-pointer reads it. Every member is re-exposed under its exact
+  // historical name via a REFERENCE ALIAS (the proven `sp = blocks_.blocks` idiom): SystemStepper /
+  // SystemFieldSolver / native_loader read them via owner_-> / P-> unchanged, and the block closures
+  // capture a stable `&aux == &domain_.aux` -> those headers and the MockImpl stay byte-unchanged.
+  pops::runtime::system::SystemDomain domain_;
+  SystemConfig& cfg = domain_.cfg;
+  Geometry& geom = domain_.geom;
+  bool& polar_ = domain_.polar_;
+  PolarGeometry& pgeom_ = domain_.pgeom_;
+  BoxArray& ba = domain_.ba;
+  DistributionMapping& dm = domain_.dm;
+  BCRec& bc_ = domain_.bc_;
+  Box2D& dom = domain_.dom;
+  Periodicity& per_ = domain_.per_;
+  bool& periodic_ = domain_.periodic_;
+  MultiFab& aux = domain_.aux;
+  int& aux_ncomp_ = domain_.aux_ncomp_;
+  detail::DiscDomain& eb_domain_ = domain_.eb_domain_;
+  bool& eb_set_ = domain_.eb_set_;
+  MultiFab& domain_mask_ = domain_.domain_mask_;
+  bool& ws_cache_block_ = domain_.ws_cache_block_;
+  GeometryMode& geometry_mode_ = domain_.geometry_mode_;
   // aux APPLICATION fields (bz_field_, te_src_) and apply_bz/apply_te buffers EXTRACTED into
   // fields_ (SystemFieldSolver, Batch B); the SHARED aux and its width stay here (common channel).
   // Block registry OWNED by the store (Batch B.3). `sp` is a REFERENCE to blocks_.blocks: same
@@ -287,62 +270,27 @@ struct System::Impl {
   // now. fields_ reads the SHARED aux/sp/cfg/geom/pgeom_/ba/dm/bc_/dom/per_ of Impl via its
   // back-pointer. Declared after the shared members it captures (initialized in the constructor).
 
-  // Number of radial / azimuthal cells in POLAR (0 => fall back to cfg.n, cf. SystemConfig).
-  static int polar_nr(const SystemConfig& c) { return c.nr > 0 ? c.nr : c.n; }
-  static int polar_ntheta(const SystemConfig& c) { return c.ntheta > 0 ? c.ntheta : c.n; }
-  // INDEX domain: n x n square in Cartesian; nr x ntheta in polar (i = r, j = theta).
+  // Geometry/layout helpers moved to SystemDomain (ADC-578); thin static forwarders keep the
+  // Impl::polar_nr(cfg) / Impl::polar_ntheta(cfg) call sites in this TU unchanged.
+  static int polar_nr(const SystemConfig& c) {
+    return pops::runtime::system::SystemDomain::polar_nr(c);
+  }
+  static int polar_ntheta(const SystemConfig& c) {
+    return pops::runtime::system::SystemDomain::polar_ntheta(c);
+  }
   static Box2D index_domain(const SystemConfig& c) {
-    if (c.geometry == "polar")
-      return Box2D::from_extents(polar_nr(c), polar_ntheta(c));
-    return Box2D::from_extents(c.n, c.n);
+    return pops::runtime::system::SystemDomain::index_domain(c);
   }
   // Number of cells of a cell-defined field (n*n Cartesian / nr*ntheta polar), for the
   // size check of named aux fields (set_aux_field).
   std::size_t aux_field_cell_count() const;
-  // BoxArray of the INDEX domain. Cartesian (and polar mono-box, theta_boxes <= 1): ONE box covering
-  // the whole domain -> STRICTLY bit-identical to the historical (ba = {index_domain}). Polar with
-  // theta_boxes > 1: split into theta BANDS -- each box covers the whole radius [0, nr-1] and one
-  // contiguous azimuthal band (same bounds as theta_split in test_polar_schur_multibox). The bands
-  // tile [0, ntheta-1] EXACTLY (base + remainder lengths, but theta_boxes divides ntheta -> equal
-  // bands). check_geometry already validates 1 <= theta_boxes <= ntheta and the divisibility.
-  static BoxArray index_boxarray(const SystemConfig& c) {
-    if (c.geometry != "polar" || c.theta_boxes <= 1)
-      return BoxArray(std::vector<Box2D>{index_domain(c)});
-    const int nr = polar_nr(c), nth = polar_ntheta(c), nseg = c.theta_boxes;
-    std::vector<Box2D> boxes;
-    boxes.reserve(static_cast<std::size_t>(nseg));
-    int base = nth / nseg, rem = nth % nseg, cur = 0;
-    for (int k = 0; k < nseg; ++k) {
-      const int len = base + (k < rem ? 1 : 0);
-      boxes.push_back(Box2D{{0, cur}, {nr - 1, cur + len - 1}});
-      cur += len;
-    }
-    return BoxArray(std::move(boxes));
-  }
 
+  // domain_ (SystemDomain) is constructed FIRST from the config: it owns the exact historical
+  // geometry/layout init-list (cfg, geom, polar_, pgeom_, ba, dm, bc_, dom, per_, periodic_, aux) so
+  // fields_ / stepper_ back-pointers read a fully-built layout. The reference aliases above then bind
+  // to domain_.*, and fields_(this) / stepper_(this) capture Impl (bit-identical addresses).
   explicit Impl(const SystemConfig& c)
-      : cfg(c),
-        geom{Box2D::from_extents(c.n, c.n), 0.0, c.L, 0.0, c.L},
-        polar_(c.geometry == "polar"),
-        pgeom_{index_domain(c), Real(c.r_min), Real(c.r_max)},
-        // ba: ONE box (Cartesian or polar mono-box); theta bands if polar theta_boxes > 1
-        // (TRANSPORT split). dm: round-robin (nboxes, nranks) -- 1 box -> dm(1, n_ranks())
-        // bit-identical to the historical.
-        // SINGLE-BOX INVARIANT (Cartesian): ba.size()==1 with the round-robin dm puts box 0 on rank
-        // dm[0] (the owner), so under MPI (n_ranks()>1) every other rank holds an empty fab
-        // (local_size()==0). RemappedFFTSolver -- the "fft"/"fft_spectral" Poisson under MPI -- is
-        // COUPLED to exactly this layout: it presents rhs()/phi() on this same ba/dm outward and hides
-        // the box<->slab scatter/gather inside solve(), so the field-solve path stays layout-agnostic
-        // (np==1 uses the single-rank PoissonFFTSolver; a genuinely slab-distributed domain would use
-        // DistributedFFTSolver instead). Stated here so the coupling is visible at the layout's source;
-        // see include/pops/numerics/elliptic/poisson_fft_solver.hpp (RemappedFFTSolver CONTRACT).
-        ba(index_boxarray(c)),
-        dm(ba.size(), n_ranks()),
-        bc_(make_bc(c)),
-        dom(index_domain(c)),
-        per_{!polar_ && c.periodic, !polar_ && c.periodic},
-        periodic_(!polar_ && c.periodic),
-        aux(ba, dm, kAuxBaseComps, 1),
+      : domain_(c),
         fields_(this),
         stepper_(this) {}
 
