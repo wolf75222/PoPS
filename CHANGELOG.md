@@ -16,6 +16,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ## [Unreleased]
 ### Added
+- ADC-637 condensed_schur gained a generic lowering route: the electrostatic-Lorentz linearization J = [[0, B_z], [-B_z, 0]] is authored in the DSL (pops.lib.physics.author_electrostatic_lorentz, an m.local_linear_map on the momentum subset) and the macro (route="generic") lowers the condensed tensor coefficient A = I + c*rho*(I - theta*dt*J)^-1, the fused RHS and the velocity reconstruction through the closed-form block_inverse codegen, with no coupling/schur vocabulary. Bit-identical to the retiring hand-written Schur brick over a multi-step trajectory at theta == 1 and theta == 0.5 (golden, np.array_equal): the coefficient tensor reuses block_inverse<2> (== LorentzEliminator's binv entries) and the flux/reconstruct vector applies reuse a new factored block_apply_inverse intrinsic reproducing apply_Binv's operation order. The brick route stays the default until it is retired.
 - ADC-635 Replay AMR history rings through in-window regrids: re-step with regridding active, reproduce the incremental remap chain on the rebuilt slots, lift the ADC-631 straddle refusal, and add a coherence guard on the replayed regrid schedule (bit-identical restart, np.array_equal).
 
 ### Fixed

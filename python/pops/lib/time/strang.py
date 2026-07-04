@@ -8,6 +8,14 @@ from typing import Any
 
 from ._helpers import program_macro
 
+#: The two condensed-Schur lowering routes (ADC-637). ``"brick"`` (default, unchanged) lowers the
+#: hand-written ``P.schur_*`` ops -> ``coupling/schur/**``; ``"generic"`` lowers the DSL-authored
+#: ``P.condensed_*`` ops on the electrostatic-Lorentz linearization (``pops.lib.physics``), emitted
+#: inline via ``block_inverse`` with no Schur vocabulary. Both are bit-identical (golden); the brick is
+#: retired in a follow-up (PR-3). The compiling model of the generic route must carry the Lorentz J
+#: (author it with ``pops.lib.physics.author_electrostatic_lorentz``).
+_CONDENSED_ROUTES = ("brick", "generic")
+
 
 @program_macro
 def strang(P: Any, block: Any, half_flow: Any, source: Any, *, commit: Any = True) -> Any:
@@ -44,6 +52,7 @@ def lie(P: Any, block: Any, half_flow: Any, source: Any, *, commit: Any = True) 
 def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1.0, c_rho: Any = 0,
                     c_mx: Any = 1, c_my: Any = 2, c_bz: Any = 3, c_E: Any = None,
                     method: Any = None, tol: Any = 1e-10, max_iter: Any = 400,
+                    route: Any = "brick", linear_operator: Any = None,
                     commit: Any = True) -> Any:
     """Condensed-Schur implicit electrostatic-Lorentz SOURCE stage as a compiled Program (epic ADC-399,
     acceptance 32), mirroring the native ``pops.CondensedSchur`` (CondensedSchurSourceStepper) sequence:
@@ -94,11 +103,39 @@ def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1.0, c_rho: 
     the Program solve is matrix-free BiCGStab WITHOUT a preconditioner -- the SAME operator and RHS, a
     different Krylov path (both converge to the same phi at tolerance).
     ``tests/python/unit/time/test_time_condensed_schur.py`` checks against an offline reference of the identical assemble / solve
-    / reconstruct / extrapolate steps and documents the gap vs native (theta == 1 and theta == 0.5)."""
+    / reconstruct / extrapolate steps and documents the gap vs native (theta == 1 and theta == 0.5).
+
+    ROUTE (ADC-637). @p route selects the LOWERING of the three per-cell stages, everything else (the
+    theta / carry / energy scaffolding, the Krylov solve, the IR shape) identical:
+
+      - ``"brick"`` (DEFAULT, unchanged): the hand-written ``P.schur_coeffs`` / ``P.schur_rhs`` /
+        ``P.schur_reconstruct`` ops, lowering to ``coupling/schur/**`` (the ``LorentzEliminator`` B^{-1}).
+      - ``"generic"``: the DSL ``P.condensed_coeffs`` / ``P.condensed_rhs`` / ``P.condensed_reconstruct``
+        ops on the electrostatic-Lorentz linearization ``J = [[0, B_z], [-B_z, 0]]`` (the coupled
+        momentum subset ``(c_mx, c_my)``), emitted INLINE via the closed-form ``block_inverse`` intrinsic
+        with NO Schur vocabulary. The compiling model MUST carry the Lorentz J -- author it with
+        ``pops.lib.physics.author_electrostatic_lorentz(m)`` (canonical name
+        ``pops.lib.physics.LORENTZ_J_NAME``, referenced by default) -- so the generic ``coeffs`` op can
+        resolve the block. @p linear_operator overrides the operator name / handle.
+
+    The two routes are BIT-IDENTICAL on the trajectory (theta == 1 AND theta == 0.5): the coefficient
+    tensor ``A = I + c*rho*M^{-1}`` reproduces the brick's entries exactly (block_inverse<2> ==
+    LorentzEliminator's binv_11..22), and the RHS flux / velocity reconstruction apply ``M^{-1}`` to a
+    vector in the SAME factored order the brick's ``apply_Binv`` used (``block_apply_inverse``, one
+    reciprocal out of the bracket), so no per-step ULP drift accumulates. ``route="generic"`` is the
+    forward path; the brick is retired in a follow-up (ADC-637 PR-3)."""
+    if route not in _CONDENSED_ROUTES:
+        raise ValueError("condensed_schur: route must be one of %r (got %r)"
+                         % (list(_CONDENSED_ROUTES), route))
     if not (0.0 < float(theta) <= 1.0):
         raise ValueError("condensed_schur: theta must be in (0, 1] (got %r)" % (theta,))
     if c_E is not None and (isinstance(c_E, bool) or not isinstance(c_E, int) or c_E < 0):
         raise ValueError("condensed_schur: c_E must be None or a Python int >= 0 (got %r)" % (c_E,))
+    generic = route == "generic"
+    if generic and linear_operator is None:
+        from pops.lib.physics import LORENTZ_J_NAME
+        linear_operator = LORENTZ_J_NAME
+    subset = (c_mx, c_my)  # the coupled momentum block the generic solve eliminates (2D core invariant)
     U = P.state(block)
     P.solve_fields(U)  # fill the shared aux (B_z at c_bz) from the current state, like the native stage
     # phi^n. theta == 1 (the sanctioned backward-Euler push) keeps a fresh ZERO scalar field each step:
@@ -115,9 +152,20 @@ def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1.0, c_rho: 
     c_coeff = (float(theta) * float(theta) * float(alpha)) * P.dt * P.dt  # c = theta^2 dt^2 alpha
     th_dt = float(theta) * P.dt  # theta dt
     g = (float(theta) * float(alpha)) * P.dt  # theta dt alpha (coefficient of the div(F) term)
-    coeffs = P.schur_coeffs(state=U, c=c_coeff, th_dt=th_dt, c_rho=c_rho, c_bz=c_bz)
+    # The three per-cell stages (coeffs / rhs / reconstruct) switch on the route; the coefficient bundle,
+    # the fused RHS and the in-place reconstruction have the SAME shape either way, so the surrounding
+    # theta / carry / energy scaffolding below is route-agnostic. The generic ops carry the authored J +
+    # the momentum subset; B_z enters through J's aux (not a separate c_bz), so c_bz is brick-only.
+    if generic:
+        coeffs = P.condensed_coeffs(state=U, linear_operator=linear_operator, subset=subset,
+                                    c=c_coeff, th_dt=th_dt, c_rho=c_rho)
+    else:
+        coeffs = P.schur_coeffs(state=U, c=c_coeff, th_dt=th_dt, c_rho=c_rho, c_bz=c_bz)
     rhs = P.scalar_field(block + ".schur_rhs")
-    P.schur_rhs(rhs, phi_n, U, th_dt, g, c_mx=c_mx, c_my=c_my, c_bz=c_bz)
+    if generic:
+        P.condensed_rhs(rhs, phi_n, U, linear_operator=linear_operator, subset=subset, th_dt=th_dt, g=g)
+    else:
+        P.schur_rhs(rhs, phi_n, U, th_dt, g, c_mx=c_mx, c_my=c_my, c_bz=c_bz)
     A = P.matrix_free_operator(block + ".schur_op")
 
     def apply(P: Any, out: Any, x: Any) -> Any:  # out <- A(x) = -div((I + c rho B^{-1}) grad x) = -apply_laplacian_coeff(x)
@@ -142,8 +190,12 @@ def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1.0, c_rho: 
     # (mom^n / E^n) AFTER the reconstruction, so reconstruct on a fresh COPY of U^n and keep U^n intact.
     needs_un = float(theta) != 1.0 or c_E is not None
     target = P.linear_combine(block + ".schur_un_copy", 1.0 * U) if needs_un else U
-    out = P.schur_reconstruct(state=target, phi=phi, th_dt=th_dt, c_rho=c_rho, c_mx=c_mx, c_my=c_my,
-                              c_bz=c_bz)
+    if generic:
+        out = P.condensed_reconstruct(state=target, phi=phi, linear_operator=linear_operator,
+                                      subset=subset, th_dt=th_dt, c_rho=c_rho)
+    else:
+        out = P.schur_reconstruct(state=target, phi=phi, th_dt=th_dt, c_rho=c_rho, c_mx=c_mx, c_my=c_my,
+                                  c_bz=c_bz)
     # 5) theta-stage -> n+1 extrapolation (ADC-427). theta < 1 lowers U^n + (1/theta)(U^{n+theta} - U^n)
     # with the affine algebra (out is the theta-stage on the copy, U^n is the untouched original). rho is
     # frozen by the reconstruction, so this affine leaves rho (and the not-yet-written energy) at U^n.
