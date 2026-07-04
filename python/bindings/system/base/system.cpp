@@ -16,6 +16,8 @@
 #include <pops/runtime/system/system_field_solver.hpp>  // SystemFieldSolver: elliptic solve + field derivation (Batch B)
 #include <pops/runtime/system/system_stepper.hpp>  // SystemStepper: time advance (step/advance/step_cfl/step_adaptive) (Batch B)
 #include <pops/runtime/system/system_block_store.hpp>  // SystemBlockStore: block management (BlockState + registry + index/copy/write) (Batch B.3)
+#include <pops/runtime/system/system_runtime_params.hpp>  // SystemRuntimeParamsRegistry: per-AOT-block runtime params (ADC-578)
+#include <pops/runtime/system/system_diagnostics_registry.hpp>  // SystemDiagnosticsRegistry: block/stage options + Newton reports (ADC-578)
 #include <pops/runtime/builders/block/block_builder_polar.hpp>  // POLAR block closures (assemble_rhs_polar, REUSED)
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // backward_euler_source
 #include <pops/numerics/time/integrators/time_steppers.hpp>  // ForwardEuler, SSPRK2Step (core RK math)
@@ -222,21 +224,20 @@ struct System::Impl {
   // object (no copy), so owner_->sp / P->sp in the header templates stay bit-identical.
   SystemBlockStore blocks_;
   std::vector<Species>& sp = blocks_.blocks;
-  // P7-b: RUNTIME parameter values per AOT block (block name -> vector of current values).
-  // The vector is SHARED (shared_ptr) with the compiled block closures: writing into it
-  // (set_block_params) changes the block behavior at the next step WITHOUT recompiling. Absent for a
-  // block without runtime param or for the other paths (native / dynamic). Set by add_compiled_block.
-  std::map<std::string, std::shared_ptr<std::vector<double>>> block_params_;
-  // Effective numerical/physical options captured at configuration time. The closures themselves are
-  // opaque, so inspection stores the user-facing route decisions here when the block/stage is added.
-  std::map<std::string, EffectiveBlockOptions> block_options_;
-  std::map<std::string, EffectiveSourceStageOptions> source_stage_options_;
+  // P7-b: RUNTIME parameter values per AOT block, EXTRACTED into SystemRuntimeParamsRegistry
+  // (ADC-578, include/pops/runtime/system/system_runtime_params.hpp). The vector is SHARED
+  // (shared_ptr) with the compiled block closures: writing into it (set_block_params) changes the
+  // block behavior at the next step WITHOUT recompiling. `block_params_` is a REFERENCE ALIAS to the
+  // registry's map (SAME object): native_loader.hpp registers into `P->block_params_[name]`, so the
+  // exact name is kept and the loader header stays byte-unchanged.
+  pops::runtime::system::SystemRuntimeParamsRegistry params_;
+  std::map<std::string, std::shared_ptr<std::vector<double>>>& block_params_ = params_.block_params;
+  // Effective numerical/physical block/stage options + OPT-IN IMEX Newton reports, EXTRACTED into
+  // SystemDiagnosticsRegistry (ADC-578, include/pops/runtime/system/system_diagnostics_registry.hpp).
+  // Stepper-invisible: accessed only here via diagnostics_.* (no alias needed, no MockImpl impact).
+  pops::runtime::system::SystemDiagnosticsRegistry diagnostics_;
   std::string time_scheme_ = "lie";
   std::string gauss_policy_ = "restart";
-  // Newton diagnostics (IMEX, OPT-IN): per-block report, owned HERE in shared_ptr (STABLE address
-  // even when sp reallocates); the block AdvanceImex* closures write into it via raw pointer.
-  // Absent (missing key) for a block without newton_diagnostics -> newton_report raises a clear error.
-  std::map<std::string, std::shared_ptr<NewtonReport>> newton_reports_;
   double t = 0;
   int macro_step_ = 0;  // macro-step counter (0-indexed): feeds the per-block stride filter
   // COMPILED TIME-PROGRAM RUNTIME STATE (ADC-594): the whole compiled-Program subsystem -- installed
@@ -780,15 +781,15 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   } else {
     const GridContext ctx = P->grid_ctx();
     // Newton options of the IMEX implicit source (defaults = historical constants, bit-identical).
-    // The report lives in Impl::newton_reports_ in a shared_ptr -> STABLE address captured by the
-    // closures even when the map reallocates at a later add_block. It is allocated for explicit
+    // The report lives in diagnostics_.newton_reports in a shared_ptr -> STABLE address captured by
+    // the closures even when the map reallocates at a later add_block. It is allocated for explicit
     // diagnostics and for fail_policy warn/throw, because those policies must surface as structured
     // report events rather than stderr text.
     const NewtonOptions& nopts = newton;
     NewtonReport* nreport = nullptr;
     if (newton_diagnostics || nopts.fail_policy != NewtonOptions::kFailNone) {
       auto rep = std::make_shared<NewtonReport>();
-      P->newton_reports_[name] = rep;
+      P->diagnostics_.newton_reports[name] = rep;
       nreport = rep.get();
     }
     // Transport-axis seam (ADC-335): each per-transport TU (python/system_<transport>.cpp) runs the
@@ -876,7 +877,7 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   block_options.ncomp = ncomp;
   block_options.conservative_vars = cons_vs.names;
   block_options.primitive_vars = prim_vs.names;
-  P->block_options_[name] = std::move(block_options);
+  P->diagnostics_.block_options[name] = std::move(block_options);
   set_block_conversion(name, std::move(prim_to_cons), std::move(cons_to_prim));
   set_block_dt_bounds(name, std::move(src_freq), std::move(stab_dt));
   // SCHEME GHOSTS: WENO5 reads a 5-point stencil (3 ghosts) > the 2 allocated by default in
@@ -927,7 +928,7 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
   // SourceInto<Model>); empty for paths that do not (the host .so prototype loader) ->
   // block_source_into fails loud rather than silently leaking the flux.
   P->sp.back().source_only = std::move(closures.source_only);
-  EffectiveBlockOptions& opt = P->block_options_[name];
+  EffectiveBlockOptions& opt = P->diagnostics_.block_options[name];
   opt.name = name;
   if (opt.route.empty())
     opt.route = "closure_install";
@@ -946,9 +947,8 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
 // widen the compiled block to block_n_ghost(limiter) -- 3 for weno5 -- as add_block does.
 POPS_EXPORT void System::set_block_ghosts(const std::string& name, int n_ghost) {
   p_->set_block_ghosts(name, n_ghost);
-  auto it = p_->block_options_.find(name);
-  if (it != p_->block_options_.end())
-    it->second.n_ghost = p_->find(name).U.n_grow();
+  if (EffectiveBlockOptions* opt = p_->diagnostics_.block_options_ptr(name))
+    opt->n_ghost = p_->find(name).U.n_grow();
 }
 
 // OPTIONAL step bounds of a block (model traits): set after install_block, read by
@@ -995,14 +995,14 @@ std::array<double, 3> System::dt_hotspot(const std::string& name) {
 // not enable newton_diagnostics (no silently empty report).
 System::SourceNewtonReport System::newton_report(const std::string& name) const {
   p_->index(name);  // raises if unknown block
-  const auto it = p_->newton_reports_.find(name);
-  if (it == p_->newton_reports_.end())
+  const NewtonReport* rp = p_->diagnostics_.newton_report_ptr(name);
+  if (rp == nullptr)
     throw std::runtime_error(
         "System::newton_report : Newton diagnostics not enabled for block '" + name +
         "' ; add the block with newton_diagnostics=true "
         "(pops.IMEX(newton_diagnostics=True) / pops.SourceImplicit(newton_diagnostics=True)) "
         "or newton_fail_policy='warn'/'throw'");
-  const NewtonReport& r = *it->second;
+  const NewtonReport& r = *rp;
   return SourceNewtonReport{r.enabled,
                             r.converged,
                             static_cast<double>(r.max_residual),
@@ -1020,7 +1020,7 @@ void System::add_dynamic_block(const std::string& name, const std::string& so_pa
                                const std::vector<std::string>& names, const std::string& recon) {
   require_assembling(p_->bound_, "add_dynamic_block");  // frozen once pops.bind completes (ADC-592)
   native_loader::add_dynamic_block(this, p_.get(), name, so_path, substeps, names, recon);
-  EffectiveBlockOptions& opt = p_->block_options_[name];
+  EffectiveBlockOptions& opt = p_->diagnostics_.block_options[name];
   opt.route = "dynamic_loader";
   opt.compiled = false;
   opt.transport = "dynamic_model";
@@ -1045,7 +1045,7 @@ void System::add_compiled_block(const std::string& name, const std::string& so_p
         "System::add_compiled_block : positivity_floor >= 0 and finite (0 = inactive)");
   native_loader::add_compiled_block(this, p_.get(), name, so_path, limiter, riemann, recon, time,
                                     substeps, names, positivity_floor);
-  EffectiveBlockOptions& opt = p_->block_options_[name];
+  EffectiveBlockOptions& opt = p_->diagnostics_.block_options[name];
   opt.route = "aot_loader";
   opt.compiled = true;
   opt.transport = "compiled_artifact";
@@ -1094,7 +1094,7 @@ void System::add_native_block(const std::string& name, const std::string& so_pat
         "System::add_native_block : positivity_floor >= 0 and finite (0 = inactive)");
   native_loader::add_native_block(this, p_.get(), name, so_path, limiter, riemann, recon, time,
                                   gamma, substeps, evolve, stride, positivity_floor);
-  EffectiveBlockOptions& opt = p_->block_options_[name];
+  EffectiveBlockOptions& opt = p_->diagnostics_.block_options[name];
   opt.route = "native_loader";
   opt.compiled = true;
   opt.transport = "compiled_artifact";
@@ -1778,7 +1778,7 @@ void System::set_source_stage(const std::string& name, const std::string& kind, 
   stage.momentum_y = momentum_y;
   stage.energy = energy;
   stage.bz_aux_component = c_bz;
-  P->source_stage_options_[name] = std::move(stage);
+  P->diagnostics_.source_stage_options[name] = std::move(stage);
 }
 
 void System::set_time_scheme(const std::string& scheme) {
@@ -2963,9 +2963,8 @@ EffectiveOptionsReport System::effective_options_report() const {
 
   for (const Impl::Species& s : p_->sp) {
     EffectiveBlockOptions row;
-    auto it = p_->block_options_.find(s.name);
-    if (it != p_->block_options_.end())
-      row = it->second;
+    if (const EffectiveBlockOptions* opt = p_->diagnostics_.block_options_ptr(s.name))
+      row = *opt;
     row.name = s.name;
     row.ncomp = s.ncomp;
     row.n_ghost = s.U.n_grow();
@@ -2978,7 +2977,7 @@ EffectiveOptionsReport System::effective_options_report() const {
     report.blocks.push_back(std::move(row));
   }
 
-  for (const auto& kv : p_->source_stage_options_)
+  for (const auto& kv : p_->diagnostics_.source_stage_options)
     report.source_stages.push_back(kv.second);
   return report;
 }
