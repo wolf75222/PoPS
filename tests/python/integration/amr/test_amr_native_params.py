@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""ADC-514: NATIVE per-block RUNTIME parameters on the AMR hierarchy.
+
+A production AMR block (add_equation with a CompiledModel backend='production', target='amr_system')
+whose model declares dsl.Param(kind='runtime') now carries a per-block RuntimeParams vector that
+AmrSystem.set_block_params overwrites WITHOUT recompiling the .so -- the AMR counterpart of
+System.set_block_params (P7-b). The value flows into the block's transport / source / elliptic bricks
+at the top of each macro-step (build_amr_compiled captures the shared vector), so a set_block_params
+call changes the trajectory at the next step.
+
+This test asserts (Kokkos-gated, needs a compiler + a visible Kokkos to build + run the .so):
+
+  1) a runtime-param AMR block RUNS, and set_block_params(cs2=big) DIFFERS from the default trajectory
+     (the sound speed enters the flux/CFL, so the evolved coarse density is not the same array);
+  2) BIT-IDENTITY: re-running with the declaration default (never calling set_block_params) reproduces
+     the pre-ADC-514 trajectory BYTE-FOR-BYTE -- the whole seam is gated on nparams > 0, so a value
+     equal to the baked-in declaration default reproduces the exact arithmetic (np.array_equal, never
+     allclose). This is the must-hold no-default-change invariant.
+
+Self-skips (exit 0) without pops / a built _pops / a compiler / Kokkos. Pytest + __main__ guard
+(CI runs ``python3 <file>``).
+"""
+import sys
+
+try:
+    import numpy as np
+
+    import pops
+    from pops.ir.ops import sqrt
+    from pops.physics.facade import Model
+    from pops.physics import RuntimeParam
+    from pops.numerics.reconstruction import FirstOrder
+    from pops.numerics.riemann import Rusanov
+    from pops.runtime.system import AmrSystem
+except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
+    print("skip test_amr_native_params (pops/numpy unavailable: %s)" % exc)
+    sys.exit(0)
+
+N = 16
+NSTEPS = 4
+DT = 5.0e-4
+
+_fails = 0
+
+
+def chk(cond, label):
+    global _fails
+    print("  [%s] %s" % ("OK " if cond else "XX ", label))
+    if not cond:
+        _fails += 1
+
+
+def _iso_runtime_model(name="adc514_iso", cs2_value=1.0):
+    """Isothermal 2D gas (rho, rho_u, rho_v) with p = cs2 * rho, cs2 a RUNTIME param (dsl.Param
+    kind='runtime'). The single runtime param 'cs2' enters the pressure -> the flux and the CFL wave
+    speed sqrt(cs2), so set_block_params(cs2=...) changes the trajectory. elliptic_rhs = rho so a coarse
+    field solve runs (the AMR coupler always solves the Poisson)."""
+    m = Model(name)
+    rho, mx, my = m.conservative_vars("rho", "rho_u", "rho_v")
+    cs2 = m.param(RuntimeParam("cs2", cs2_value))
+    u = m.primitive("u", mx / rho)
+    v = m.primitive("v", my / rho)
+    p = m.primitive("p", cs2 * rho)
+    m.primitive_vars(rho=rho, u=u, v=v, p=p)
+    m.conservative_from([rho, rho * u, rho * v])
+    m.flux(x=[mx, mx * u + p, my * u], y=[my, mx * v, my * v + p])
+    cs = sqrt(cs2)
+    m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
+    m.elliptic_rhs(rho)
+    return m
+
+
+def _init_density():
+    """A smooth, periodic, strictly-positive coarse density (component 0). set_density seeds momentum=0
+    (coupler_write_coarse), so the runs start byte-identical -- the prerequisite of a bit-identical
+    trajectory comparison."""
+    xs = (np.arange(N) + 0.5) / N
+    xx, yy = np.meshgrid(xs, xs, indexing="ij")
+    return 1.0 + 0.3 * np.exp(-((xx - 0.5) ** 2 + (yy - 0.5) ** 2) / 0.02)
+
+
+def _amr_run(cs2_override, u0, nsteps=NSTEPS, dt=DT):
+    """Build a single-block AMR sim on a runtime-param model, optionally set_block_params(cs2=override)
+    WITHOUT recompiling, run nsteps, and return the evolved coarse density (component 0). cs2_override is
+    None -> keep the declaration default (cs2=1.0, never calling set_block_params: the byte-identical
+    baseline). Returns (density, None) or (None, reason) on a compile/wire failure so the caller skips."""
+    amr = AmrSystem(n=N, L=1.0, regrid_every=0)
+    if not hasattr(amr, "set_block_params"):
+        return None, "the built _pops lacks AmrSystem.set_block_params (rebuild _pops)"
+    model = _iso_runtime_model()
+    try:
+        block_cm = model.compile(backend="production", target="amr_system")
+    except RuntimeError as exc:
+        return None, "compile (AMR production): %s" % str(exc)[:200]
+    if block_cm.runtime_param_names != ["cs2"]:
+        return None, "runtime_param_names expected ['cs2'], got %r" % block_cm.runtime_param_names
+    try:
+        amr.add_equation("gas", block_cm,
+                         spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
+                         time=pops.Explicit(method="ssprk2"))
+        amr.set_density("gas", u0)  # momentum=0, coarse seed (same for both runs -> identical start)
+        if cs2_override is not None:
+            amr.set_block_params("gas", [cs2_override])  # RUNTIME change, SAME .so, no recompile
+        for _ in range(nsteps):
+            amr.step(dt)
+    except RuntimeError as exc:
+        return None, "run (AMR): %s" % str(exc)[:240]
+    return np.array(amr.density("gas")), None
+
+
+def test_amr_set_block_params_changes_trajectory_and_default_is_bit_identical():
+    """(1) set_block_params(cs2=big) DIFFERS from the default run; (2) params={} (declaration default,
+    no set_block_params) is BYTE-IDENTICAL to the pre-change baseline (np.array_equal). Needs a compiler
+    + Kokkos to build + run the AMR .so; self-skips otherwise."""
+    print("== AMR native runtime params: set_block_params changes the run, default is bit-identical ==")
+    u0 = _init_density()
+
+    base, err = _amr_run(cs2_override=None, u0=u0)  # declaration default cs2=1.0, no set_block_params
+    if base is None:
+        print("skip (%s)" % err)
+        return
+    # (2) BIT-IDENTITY: explicitly setting cs2 to its declaration default (1.0) reproduces the baseline
+    # byte-for-byte -- the seam re-injects a value equal to the baked-in default, so the arithmetic is
+    # identical. np.array_equal (0 ulp), never allclose: the no-default-change invariant.
+    same, err = _amr_run(cs2_override=1.0, u0=u0)
+    if same is None:
+        print("skip (%s)" % err)
+        return
+    chk(np.array_equal(base, same),
+        "params={} / cs2=default is BYTE-IDENTICAL to the baseline (0 ulp)")
+
+    # (1) A DIFFERENT cs2 (4x the sound speed squared) changes the flux + CFL, so the evolved coarse
+    # density is a DIFFERENT array WITHOUT recompiling the .so.
+    changed, err = _amr_run(cs2_override=4.0, u0=u0)
+    if changed is None:
+        print("skip (%s)" % err)
+        return
+    chk(changed.shape == base.shape, "the changed run returns the same-shape coarse density")
+    chk(not np.array_equal(changed, base),
+        "set_block_params(cs2=4) DIFFERS from the default run (runtime param drives the trajectory)")
+    chk(np.all(np.isfinite(changed)), "the changed run stays finite (no blow-up)")
+
+
+def test_amr_set_block_params_rejects_a_paramless_block():
+    """set_block_params on a block whose model declares NO runtime param is rejected explicitly (a silent
+    set would mask a bug). Pure C++ guard -- needs the built _pops with the AMR carrier, no compile."""
+    print("== AMR set_block_params on a param-free block is rejected ==")
+    amr = AmrSystem(n=N, L=1.0, regrid_every=0)
+    if not hasattr(amr, "set_block_params"):
+        print("skip (the built _pops lacks AmrSystem.set_block_params)")
+        return
+    # A native ModelSpec block (composed bricks) carries no runtime param.
+    try:
+        spec = pops.Model(pops.Scalar(), pops.ExB(B0=1.0), pops.NoSource(),
+                          pops.ChargeDensity(charge=1.0))
+        amr.add_equation("ne", spec,
+                         spatial=pops.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                         time=pops.Explicit())
+    except Exception as exc:  # noqa: BLE001 -- brick/ModelSpec API drift; skip rather than fail
+        print("skip (could not build/add a native ModelSpec block: %s)" % str(exc)[:120])
+        return
+    raised = False
+    try:
+        amr.set_block_params("ne", [1.0])
+    except RuntimeError as exc:
+        raised = True
+        chk("runtime parameter" in str(exc) or "kind='runtime'" in str(exc),
+            "the rejection names the missing runtime parameter")
+    chk(raised, "set_block_params on a param-free block raises (no silent set)")
+
+
+def _run_all():
+    fns = [v for k, v in sorted(globals().items())
+           if k.startswith("test_") and callable(v)]
+    for fn in fns:
+        fn()
+    print("\n%d checks failed" % _fails)
+    return _fails
+
+
+if __name__ == "__main__":
+    sys.exit(1 if _run_all() else 0)

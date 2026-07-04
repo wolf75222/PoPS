@@ -30,11 +30,12 @@ class _AmrSystemProgram(_AmrSystem):
             runs the section-24 .so requirement validation: block instance / solver). The .so must
             export pops_install_program_amr (target='amr_system'); a target='system' .so is rejected
             at the C++ loader with an actionable message. NATIVE mode (so_path is None) has no Program
-            -- the step-2 blocks drive the native AMR loop, so a non-empty params= raises (the native
-            AMR .so loader does not transport runtime params, and AmrSystem has no set_block_params).
-          - (5b) COMPILED-PROGRAM RUNTIME PARAMS (parity ADC-510): route params to the per-PROGRAM-block
-            set_program_params, AFTER install_program seeded each block's declaration defaults. A name
-            declared by no Program kernel raises (no silent drop).
+            -- the step-2 blocks drive the native AMR loop, and the native per-block runtime params were
+            already routed to set_block_params in step 4b (ADC-514), so @p params here holds only the
+            names NOT consumed by an instance (empty on a native install, since step 4b rejected any).
+          - (5b) COMPILED-PROGRAM RUNTIME PARAMS (parity ADC-510): route the remaining params to the
+            per-PROGRAM-block set_program_params, AFTER install_program seeded each block's declaration
+            defaults. A name declared by no Program kernel raises (no silent drop).
           - (6) PROGRAM CADENCE (substeps / stride): a compiled Program is ONE whole-system closure, so
             its macro-step cadence is GLOBAL. Apply it AFTER install_program. A native AMR install has no
             Program -- set substeps / stride on the native time policy instead.
@@ -43,13 +44,6 @@ class _AmrSystemProgram(_AmrSystem):
             self.install_program(so_path)
             if params:
                 self._install_program_params(compiled, params)
-        elif params:
-            raise NotImplementedError(
-                "pops.bind: runtime params (params=%s) are not wired on a NATIVE AMR install (the AMR "
-                "native .so loader does not transport runtime params, and the AMR runtime has no "
-                "per-block param seam); set them as const on the block's model in the pops.Problem, or "
-                "declare layout=Uniform(...) (the uniform route carries runtime params=)."
-                % sorted(params))
 
         if cadence is not None:
             if so_path is None:
