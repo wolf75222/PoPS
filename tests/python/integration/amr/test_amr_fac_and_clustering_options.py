@@ -63,8 +63,8 @@ def test_clustering_descriptor_refuses_out_of_domain():
 def test_fac_options_default_reported_on_schur_stage():
     """A default condensed Schur AMR stage reports the kFAC* defaults in its effective report."""
     amr = AmrSystem(n=16, L=1.0, periodic=True)
-    amr.add_block("ion", model=pops.Model(state=pops.Compressible(gamma=1.4),
-                                          transport=pops.EulerFlux(),
+    amr.add_block("ion", model=pops.Model(state=pops.FluidState.compressible(gamma=1.4),
+                                          transport=pops.CompressibleFlux(),
                                           source=pops.NoSource(),
                                           elliptic=pops.ChargeDensity(charge=1.0)),
                   spatial=pops.Spatial(), time=pops.Explicit())
@@ -82,8 +82,8 @@ def test_fac_options_default_reported_on_schur_stage():
 
 def test_fac_options_override_visible_and_refused_out_of_domain():
     amr = AmrSystem(n=16, L=1.0, periodic=True)
-    amr.add_block("ion", model=pops.Model(state=pops.Compressible(gamma=1.4),
-                                          transport=pops.EulerFlux(),
+    amr.add_block("ion", model=pops.Model(state=pops.FluidState.compressible(gamma=1.4),
+                                          transport=pops.CompressibleFlux(),
                                           source=pops.NoSource(),
                                           elliptic=pops.ChargeDensity(charge=1.0)),
                   spatial=pops.Spatial(), time=pops.Explicit())
@@ -100,8 +100,8 @@ def test_fac_options_override_visible_and_refused_out_of_domain():
     assert st["fac_verbose"] is True
 
     bad = AmrSystem(n=16, L=1.0, periodic=True)
-    bad.add_block("ion", model=pops.Model(state=pops.Compressible(gamma=1.4),
-                                          transport=pops.EulerFlux(), source=pops.NoSource(),
+    bad.add_block("ion", model=pops.Model(state=pops.FluidState.compressible(gamma=1.4),
+                                          transport=pops.CompressibleFlux(), source=pops.NoSource(),
                                           elliptic=pops.ChargeDensity(charge=1.0)),
                   spatial=pops.Spatial(), time=pops.Explicit())
     bad.set_magnetic_field(np.ones((16, 16)))
