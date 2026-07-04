@@ -198,6 +198,19 @@ struct AmrRuntimeBlock {
   /// level_neg_div_flux (ADC-430). Same signature / device contract as @ref level_rhs.
   std::function<void(MultiFab&, const MultiFab&, const Geometry&, MultiFab&)> level_source;
 
+  /// FLUX-MATERIALISING per-level residual for conservative reflux (ADC-639): computes R <- -div F + S
+  /// EXACTLY as @ref level_rhs, but FIRST writes the face fluxes Fx/Fy (compute_face_fluxes) then derives
+  /// R from them (mf_eval_rhs), so the divergence uses the SAME flux the reflux register samples --
+  /// bit-consistent with the fused @ref level_rhs by construction (face_flux.hpp:236-238). Signature
+  /// (U, aux, geom, Fx, Fy, R): Fx/Fy sized by the caller (xface_box/yface_box of the level box_array).
+  /// Captures the SAME <Limiter, Flux, Model> as @ref level_rhs. Read ONLY by the reflux capture path
+  /// (nlev>1); the coarse-only / flat / native paths never touch it. EMPTY for a pre-seam host .so.
+  std::function<void(MultiFab&, const MultiFab&, const Geometry&, MultiFab&, MultiFab&, MultiFab&)>
+      level_flux_capture;
+  /// FLUX-ONLY (SourceFreeModel) counterpart of @ref level_flux_capture (the neg_div_flux capture path).
+  std::function<void(MultiFab&, const MultiFab&, const Geometry&, MultiFab&, MultiFab&, MultiFab&)>
+      level_flux_capture_neg_div;
+
   /// Speed driving the block CFL on the coarse. By default max_wave_speed (historical); when the
   /// model declares the HasStabilitySpeed trait, it is lambda* (stability_speed) that the closure
   /// reduces -- SAME policy as System (make_max_speed), cf. build_amr_block.
@@ -406,6 +419,17 @@ class AmrRuntime {
                                "' has no source-only per-level residual closure");
     blocks_[b].level_source(U, aux_[k], level_geom(k), R);
   }
+  /// CONSERVATIVE-REFLUX capture (ADC-639): R <- -div F + S for block @p b on level @p k, materialising
+  /// the face fluxes into @p Fx / @p Fy (sized here from the level box_array's xface_box/yface_box) so a
+  /// reflux register can sample them. R is bit-consistent with the fused level_rhs_into by construction.
+  /// The fine-level C/F ghost refresh matches level_rhs_into. Bodies in amr_program_reflux.hpp (the tail
+  /// header keeps amr_runtime.hpp at its line budget). Used ONLY by the reflux path (AmrProgramContext,
+  /// nlev>1); the native step and the coarse-only / flat Program never call it.
+  void level_rhs_capture_into(std::size_t b, int k, MultiFab& U, MultiFab& R, MultiFab& Fx,
+                              MultiFab& Fy);
+  /// FLUX-ONLY (SourceFreeModel) counterpart of level_rhs_capture_into (the neg_div_flux capture path).
+  void level_neg_div_flux_capture_into(std::size_t b, int k, MultiFab& U, MultiFab& R, MultiFab& Fx,
+                                       MultiFab& Fy);
   /// Max |wave speed| of block @p b on @p U (the SAME closure step_cfl reads). Evaluated on the aux of
   /// level @p k. A Program dt bound reads it as cfl*hmin/max_wave_speed.
   Real level_max_speed(std::size_t b, int k, const MultiFab& U) const {
@@ -1866,3 +1890,7 @@ class AmrRuntime {
 // BEFORE amr_restore.hpp so rebuild_hierarchy can call the ring realloc hook (AmrHistoryOps defined).
 #include <pops/runtime/amr/amr_history.hpp>   // NOLINT(build/include_order)
 #include <pops/runtime/amr/amr_restore.hpp>  // NOLINT(build/include_order)
+// ADC-639 conservative-reflux capture: the flux-materialising per-level residual seams
+// (level_rhs_capture_into / level_neg_div_flux_capture_into) + the strip samplers + route_reflux_program.
+// Included last (the full AmrRuntime class + the reflux types from amr_reflux_mf.hpp are visible).
+#include <pops/runtime/amr/amr_program_reflux.hpp>  // NOLINT(build/include_order)

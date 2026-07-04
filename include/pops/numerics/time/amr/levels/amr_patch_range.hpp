@@ -229,6 +229,31 @@ struct CoarseFineInterface {
                   +(g.fT[(I - g.I0) * nc + k] - g.cT[(I - g.I0) * nc + k] * dt) / dy);
       }
   }
+
+  // ADC-639 variant of route_reflux for the compiled-Program driver: BOTH the coarse side (g.c*) and the
+  // fine side (g.f*) are ALREADY dt-integrated (the effective-flux ledger carries dt through the Program's
+  // linear combination -- g.cL = dt*Feff_coarse, g.fL = dt*Feff_fine), so the correction is
+  // -(g.fL - g.cL)/dx with NO *dt. Dropping the /dt*dt round-trip keeps the coarse-fine cancellation exact
+  // to round-off (a *dt then implicit /dt would re-introduce a rounding step). Same coverage guard, same
+  // face order (left/right in x, bottom/top in y), same FluxRegister.add as route_reflux -- only the *dt is
+  // gone. @c Reg is EdgeStrip / RegMP-shaped (I0..J1 + the eight flat strip arrays).
+  template <class Reg>
+  void route_reflux_integrated(const Reg& g, Real dx, Real dy, FluxRegister& ref, int nc) const {
+    for (int J = g.J0; J <= g.J1; ++J)
+      for (int k = 0; k < nc; ++k) {
+        if (!covered(g.I0 - 1, J))
+          ref.add(g.I0 - 1, J, k, -(g.fL[(J - g.J0) * nc + k] - g.cL[(J - g.J0) * nc + k]) / dx);
+        if (!covered(g.I1 + 1, J))
+          ref.add(g.I1 + 1, J, k, +(g.fR[(J - g.J0) * nc + k] - g.cR[(J - g.J0) * nc + k]) / dx);
+      }
+    for (int I = g.I0; I <= g.I1; ++I)
+      for (int k = 0; k < nc; ++k) {
+        if (!covered(I, g.J0 - 1))
+          ref.add(I, g.J0 - 1, k, -(g.fB[(I - g.I0) * nc + k] - g.cB[(I - g.I0) * nc + k]) / dy);
+        if (!covered(I, g.J1 + 1))
+          ref.add(I, g.J1 + 1, k, +(g.fT[(I - g.I0) * nc + k] - g.cT[(I - g.I0) * nc + k]) / dy);
+      }
+  }
 };
 
 }  // namespace pops
