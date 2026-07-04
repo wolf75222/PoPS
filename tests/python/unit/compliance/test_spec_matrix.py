@@ -10,8 +10,8 @@ runner iterates every cell and fails loudly if any regresses:
   * ``test_every_negative_cell_refuses_with_stable_message`` -- each negative cell raises the expected
     exception type with exact, stable message needles and emits NO warning (a warning + fallback is
     exactly what the matrix catches).
-  * ``test_matrix_is_complete`` -- the 8 positive + 11 negative cell ids are ALL present (a hard-coded
-    expected set), so a dropped cell fails here.
+  * ``test_matrix_is_complete`` -- the 10 positive + 11 negative cell ids are ALL present (a
+    hard-coded expected set), so a dropped cell fails here.
 
 The phase-6 lesson is honored: every cell runs its full PRE-compile decision path locally (the
 install-time route predicates over a ``CompiledModel`` stub and ``run_bind_gates`` over a
@@ -37,6 +37,8 @@ _EXPECTED_POSITIVE = {
     "pos.params_runtime_const_bind",
     "pos.diagnostics_output_ckpt",
     "pos.amr_route_when_capable",
+    "pos.amr_arguments_inert",
+    "pos.amr_estimate_memory_inert",
 }
 
 _EXPECTED_NEGATIVE = {
@@ -79,8 +81,8 @@ def test_matrix_is_complete():
     assert negative == _EXPECTED_NEGATIVE, (
         "negative cell set drifted: missing %s, unexpected %s"
         % (sorted(_EXPECTED_NEGATIVE - negative), sorted(negative - _EXPECTED_NEGATIVE)))
-    assert len(positive) == 8 and len(negative) == 11, (
-        "the matrix must have 8 positive + 11 negative cells, got %d + %d"
+    assert len(positive) == 10 and len(negative) == 11, (
+        "the matrix must have 10 positive + 11 negative cells, got %d + %d"
         % (len(positive), len(negative)))
     # No id collides between the two halves.
     assert not (positive & negative), "a cell_id appears in both halves: %s" % sorted(positive & negative)

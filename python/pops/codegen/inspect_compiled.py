@@ -114,15 +114,29 @@ class Arguments(Report):
                 % (len(self.instances), len(self.params), len(self.aux), len(self.solvers)))
 
 
+def _metadata_source(compiled: Any) -> Any:
+    """The object carrying the (cons_names / n_vars / params / aux) metadata.
+
+    A :class:`CompiledProblem` carries its model on ``.model``. A bare :class:`CompiledModel` -- the
+    handle ``pops.compile(layout=AMR(...))`` returns (its first block's model, ADC-515) -- has no
+    ``.model`` but IS the model (it exposes ``cons_names`` / ``aux_extra_names`` directly), so when
+    ``.model`` is absent we fall back to the handle if it duck-types a model, else ``None`` (a
+    Program-only handle). The model-as-handle path the AMR-route introspection reuses."""
+    model = getattr(compiled, "model", None)
+    if model is not None:
+        return model
+    return compiled if getattr(compiled, "cons_names", None) is not None else None
+
+
 def _model_metadata(compiled: Any) -> tuple:
     """Read the carried model's (name -> ...) metadata WITHOUT loading the .so.
 
     Returns ``(cons_names, n_cons, params, aux_names, n_aux, state_space)`` from the physical model
-    a :class:`CompiledProblem` carries (a ``pops.physics.facade.Model`` or a ``CompiledModel``).
-    Either exposes ``cons_names`` / ``n_vars`` / ``params``; the named-aux table is
-    ``aux_extra_names`` (CompiledModel) and the count is ``n_aux``. A handle that carries no model
-    yields empty metadata (the Program structure is still introspectable)."""
-    model = getattr(compiled, "model", None)
+    a :class:`CompiledProblem` carries OR from the bare :class:`CompiledModel` handle itself (the AMR
+    route, ADC-515) via :func:`_metadata_source`. Either exposes ``cons_names`` / ``n_vars`` /
+    ``params``; the named-aux table is ``aux_extra_names`` and the count is ``n_aux``. A handle that
+    is neither yields empty metadata (the Program structure is still introspectable)."""
+    model = _metadata_source(compiled)
     if model is None:
         return [], 0, {}, [], 0, "U"
     cons = list(getattr(model, "cons_names", []) or [])
@@ -188,11 +202,13 @@ def build_arguments(compiled: Any) -> Arguments:
         instances[block] = {"state": state_space, "components": n_cons,
                             "required": True, "conservative": list(cons)}
     if not instances and n_cons:
-        # A Program that commits no block (pure field/diagnostic) still needs the physics block the
-        # model describes; surface it under the model name so the table is never silently empty.
-        instances[getattr(compiled, "program_name", None) or "block"] = {
-            "state": state_space, "components": n_cons, "required": True,
-            "conservative": list(cons)}
+        # No Program commits (a bare CompiledModel: the AMR route, or a pure field/diagnostic Program)
+        # still needs the physics block the model describes; surface it under the model name (the AMR
+        # blocks bind by name) so the table is never silently empty.
+        block_name = (getattr(compiled, "program_name", None)
+                      or getattr(compiled, "name", None) or "block")
+        instances[block_name] = {"state": state_space, "components": n_cons, "required": True,
+                                 "conservative": list(cons)}
 
     param_args = {}
     for name, param in params.items():
@@ -213,16 +229,20 @@ def build_arguments(compiled: Any) -> Arguments:
             elif value.op == "record" or value.op == "record_scalar":
                 outputs[value.name or "diagnostic"] = {"kind": "diagnostic"}
 
-    caps = getattr(getattr(compiled, "model", None), "caps", {}) or {}
+    caps = getattr(_metadata_source(compiled), "caps", {}) or {}
     ghost_depth = _ghost_depth(compiled)
-    # Per-block ghost depth (ADC-536 / CONTRACTS6 decision 4): the bind stream validates each
-    # block's initial-state ghosts against the MANIFEST value, so the manifest must carry the depth
-    # keyed by block, not just a single scalar. Every committed instance shares the model's stencil
-    # width today (one physics model per Program), so each block maps to the same conservative
-    # depth; a heterogeneous per-block stencil would populate distinct values here without changing
-    # the shape the bind validator reads.
+    # Per-block ghost depth (ADC-536 / CONTRACTS6 decision 4): the bind stream validates each block's
+    # initial-state ghosts against the MANIFEST value keyed by block. Every instance shares the model's
+    # stencil width today (one physics model per Program); a heterogeneous per-block stencil would
+    # populate distinct values here without changing the shape the bind validator reads.
     ghost_depth_by_block = {name: ghost_depth for name in instances}
-    layout_runtime = {"layout": "system", "requires_mpi": False,
+    # The runtime LAYOUT the artifact targets: "amr" for an AMR-route CompiledModel (target=
+    # 'amr_system', ADC-515) so ``arguments()`` reports the native per-block AMR loader; a whole-system
+    # Program handle stays "system" (its only target today).
+    _amr = (getattr(compiled, "_target", None) == "amr_system"
+            or getattr(compiled, "target", "system") == "amr_system")
+    layout_kind = "amr" if _amr else "system"
+    layout_runtime = {"layout": layout_kind, "requires_mpi": False,
                       "ghost_depth": ghost_depth,
                       "ghost_depth_by_block": ghost_depth_by_block,
                       "supports_mpi": bool(caps.get("mpi", False))}
@@ -373,6 +393,13 @@ def build_memory_estimate(compiled: Any, mesh: Any, *, platform: Any = None,
     cells, shape = _mesh_shape(mesh)
     _cons, n_cons, _params, _aux_names, n_aux, _space = _model_metadata(compiled)
     n_cons = max(n_cons, 1)  # a degenerate empty model still stages 1 component (never 0 bytes)
+
+    # ADC-515: on the AMR route ``compiled`` is a bare CompiledModel carrying the AMR layout on
+    # ``_layout`` and no Program, so a bare ``estimate_memory(mesh)`` defaults @p layout to it (the AMR
+    # patch budget without re-passing layout=; explicit @p layout wins). A Program handle has no
+    # ``_layout``, so this is a no-op there (the Uniform estimate stays byte-identical).
+    if layout is None:
+        layout = getattr(compiled, "_layout", None)
 
     est = program.estimate() if (program is not None and hasattr(program, "estimate")) \
         else {"buffer_count": 1, "heavy_kernels": 0}

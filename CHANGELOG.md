@@ -38,6 +38,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   unregistered `test_coupling_operator_contract` into the standard C++ test list.
 
 ### Added
+- ADC-515 Native `estimate_memory` / `arguments` introspection on the AMR-compiled artifact: the
+  `CompiledModel` handle `pops.compile(layout=AMR(...))` returns now exposes the same bind-input and
+  memory-formula surface as the Uniform `CompiledProblem` (model-as-handle path, `layout='amr'`,
+  conservative patch budget), plus an end-to-end Spec 6 sec.20 Uniform x AMR test matrix with a
+  completeness lock.
 - ADC-542 Native diagnostics, output and checkpoint execution: declared typed diagnostic measures
   (`pops.diagnostics.Norm` / `Integral` / `MinMax` / `ConservationCheck`) on a
   `RuntimePolicies(diagnostics=...)` bundle now FIRE on the run loop through native collective
