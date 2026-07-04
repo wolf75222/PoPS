@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Select affected tests for CI.
 
-The policy is intentionally conservative. C++ selection is manifest-driven over the
-GoogleTest targets. Python selection is manifest-driven too, with a static
-import-closure for ``python/pops/**`` changes so pure Python edits can run only the
-tests that import the changed module.
+The policy is intentionally conservative. C++ selection is COMPOSITIONAL per file (ADC-646):
+each changed file contributes its own impact and the selection is their union -- an
+``include/pops/`` header adds its include-closure suites, a ``python/bindings`` translation
+unit adds the test targets that compile it, a ``python/pops/codegen`` emitter adds the
+codegen / native-loader group, a ``tests/cpp`` source adds its own target, and docs / non-codegen
+``python/pops`` / ``tests/python`` add nothing. A global-includer or missing header, or any
+unmapped build input (cmake / workflows / scripts / CMakeLists / the manifest), fails safe to ALL.
+Python selection is manifest-driven with a static import-closure for ``python/pops/**`` changes so
+pure Python edits can run only the tests that import the changed module.
 
 The module is stdlib-only and runs before any ``pip install`` in CI.
 """
@@ -116,11 +121,50 @@ AREA_LABEL_ALIASES: dict[str, tuple[str, ...]] = {
     "validation": ("validation", "physics", "runtime"),
 }
 
-# A changed file is HEADER-IMPACT ELIGIBLE only if it is a project header under this prefix.
-# These are the only paths the include-graph impact selection reasons about; anything else in
-# the changeset makes the whole change fall through to the coarser label logic or force-full.
+# A changed file is a HEADER-IMPACT node only if it is a project header under this prefix.
+# ADC-646: header impact is now assessed PER FILE (compositional union), so a header no longer
+# needs the WHOLE changeset to be header-only -- its include-closure targets join the union.
 CPP_INCLUDE_PREFIX = "include/pops/"
 CPP_HEADER_SUFFIXES = (".hpp", ".h", ".hh", ".hxx", ".inc", ".ipp", ".tpp")
+
+# ADC-646 per-file C++ impact classification.
+# A ``python/bindings/**`` C++ translation unit is compiled into the shared runtime OBJECT libs
+# (``pops_runtime_system`` / ``pops_runtime_amr``) that most test targets link. The precise
+# per-target linkage is not encoded in the sanctioned target-source knowledge (test manifest,
+# tests/cpp/test_sources.cmake, seam_combinations.cmake), so a binding-TU edit maps to the
+# bindings LABEL GROUP -- the same areas the coarse logic already used for bindings -- NOT
+# select-all. The ``.cpp``/``.hpp`` suffixes below are the compiled units; any other binding
+# artifact (cmake fragment, ``.cpp.in`` seam template) is a build input and fails open to ALL.
+CPP_BINDING_PREFIX = "python/bindings/"
+CPP_BINDING_TU_SUFFIXES = (".cpp", ".hpp", ".h", ".hh", ".hxx")
+CPP_BINDING_AREAS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (("python/bindings/amr/",), ("amr", "runtime", "codegen")),
+    (("python/bindings/system/",), ("runtime", "physics", "codegen")),
+    # The ``_pops`` module entry TUs (``core/init/init_*.cpp`` / ``core/bindings.cpp``) wire the
+    # whole binding surface; when one is the ONLY match it feeds only ``_pops``, so it maps to the
+    # broad bindings label group (its documented fallback), not a raw select-all.
+    (("python/bindings/core/",), ("runtime", "physics", "amr", "codegen")),
+)
+# ADC-646: a DSL codegen emitter under ``python/pops/codegen/**`` only changes the C++ that is
+# EMITTED into generated translation units (the native_loader / compiled-model path), so it maps
+# to the ``codegen`` label group ONLY -- never the whole physics/runtime blast radius.
+CPP_CODEGEN_PREFIX = "python/pops/codegen/"
+CPP_CODEGEN_AREAS = ("codegen",)
+
+# ADC-646: paths with ZERO C++ test impact -- a change limited to these never selects a C++ suite.
+CPP_ZERO_IMPACT_PREFIXES = (
+    "docs/",
+    "tutorials/",
+    "tests/python/",
+    "python/pops/",  # non-codegen pops python; codegen is handled before this prefix is tested
+)
+CPP_ZERO_IMPACT_FILES = {
+    "README.md",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    ".gitignore",
+}
 
 CPP_SMOKE_TARGETS = (
     "test_box2d",
@@ -221,16 +265,6 @@ def manifest_python_suites(manifest: dict) -> list[dict]:
     return sorted(suites, key=lambda item: item["name"])
 
 
-def direct_cpp_targets(changed: Iterable[str], all_targets: set[str]) -> set[str]:
-    targets: set[str] = set()
-    for path in changed:
-        if path.startswith("tests/cpp/") and path.endswith(".cpp"):
-            target = Path(path).stem
-            if target in all_targets:
-                targets.add(target)
-    return targets
-
-
 def direct_python_tests(changed: Iterable[str], all_tests: set[str]) -> set[str]:
     return {path for path in changed if path in all_tests}
 
@@ -240,66 +274,122 @@ def is_cpp_header(path: str) -> bool:
     return path.startswith(CPP_INCLUDE_PREFIX) and path.endswith(CPP_HEADER_SUFFIXES)
 
 
-def changed_header_nodes(changed: Iterable[str]) -> set[str]:
-    """Map the changed ``include/pops/`` headers to graph nodes (``pops/...`` identifiers)."""
-    return {path[len("include/") :] for path in changed if is_cpp_header(path)}
+def is_cpp_binding_tu(path: str) -> bool:
+    """True if ``path`` is a compiled ``python/bindings/**`` C++ translation unit."""
+    return path.startswith(CPP_BINDING_PREFIX) and path.endswith(CPP_BINDING_TU_SUFFIXES)
 
 
-def header_impact_eligible(changed: Iterable[str]) -> bool:
-    """True iff EVERY changed file is a project header under ``include/pops/``.
+# tests/CMakeLists.txt is the target-source map for the shared runtime OBJECT libs.
+TESTS_CMAKE = ROOT / "tests" / "CMakeLists.txt"
+# The heavy binding TUs are compiled ONCE into these OBJECT libs (ADC-336 / ADC-632 / ADC-335)
+# and spliced into every consuming test target. A change to a TU in one of them impacts exactly
+# that lib's consumers, so we read both the lib's source list and its consumers from the one file.
+_BINDING_OBJECT_LIBS = ("pops_runtime_system", "pops_runtime_amr")
 
-    Header-impact selection is scoped to pure-header changesets: a single non-header C++
-    concern (cmake, a ``.cpp``, tests support, a python binding) means the include graph does
-    not capture the whole blast radius, so the caller keeps the coarser label logic instead.
-    This predicate is only consulted after the broad-file force-full guards, so ``core`` /
-    ``parallel`` header changes never reach it.
+
+def _cmake_object_lib_sources(text: str, libname: str) -> set[str]:
+    """Repo-relative ``python/bindings/**`` sources listed in ``add_library(<lib> OBJECT ...)``.
+
+    Also folds in the ``POPS_AMR_SEAM`` list variable spliced into ``pops_runtime_amr`` (the two
+    hand-written riemann dispatchers). Generated ``.cpp`` seams live under the build tree, not the
+    repo, so they are not source paths a changeset can name -- their source-of-truth is the seam
+    ``.cpp.in`` template, handled by the broad-file / unmapped guards.
     """
-    changed = list(changed)
-    return bool(changed) and all(is_cpp_header(path) for path in changed)
+    sources: set[str] = set()
+    match = re.search(
+        r"add_library\(\s*" + re.escape(libname) + r"\s+OBJECT\b(.*?)\)", text, re.DOTALL
+    )
+    if match:
+        for hit in re.finditer(r"\.\./(python/bindings/[^\s)]+\.(?:cpp|hpp|h|hh|hxx))", match.group(1)):
+            sources.add(hit.group(1))
+    if libname == "pops_runtime_amr":
+        seam = re.search(r"set\(\s*POPS_AMR_SEAM\b(.*?)\)", text, re.DOTALL)
+        if seam:
+            for hit in re.finditer(r"\.\./(python/bindings/[^\s)]+\.(?:cpp|hpp|h|hh|hxx))", seam.group(1)):
+                sources.add(hit.group(1))
+    return sources
 
 
-def select_cpp_by_include_impact(
-    suites: Iterable[dict],
-    changed_headers: set[str],
-    reasons: dict[str, set[str]],
-) -> tuple[set[str], list[str]]:
-    """Select the suites whose source include-closure intersects ``changed_headers``.
+def _cmake_object_lib_consumers(text: str, libname: str) -> set[str]:
+    """Test-target NAMEs whose ``pops_add_gtest_suite(...)`` call links ``libname``.
 
-    Returns ``(selected, full_reasons)``. ``full_reasons`` is non-empty when the include graph
-    forces a FULL selection instead of a subset -- either a changed header is a global includer
-    (in the transitive closure of the heavy shared TUs / seams / emitter / cpp support, so it is
-    compiled into or linked by every target) or an anomaly is hit (a changed header absent from
-    the tree, or a suite source that cannot be read). Fail-open: any doubt escalates to FULL.
+    The consumers reference the OBJECT lib through ``EXTRA_LIBS``; the serial-target filter is
+    applied by the caller (an MPI-only consumer never reaches the serial selection).
     """
-    try:
-        global_closure = ci_include_graph.global_includer_closure()
-    except ci_include_graph.GraphError as exc:
-        return set(), [f"include-graph-unreadable:{exc}"]
+    consumers: set[str] = set()
+    for body in re.findall(r"pops_add_gtest_suite\((.*?)\)", text, re.DOTALL):
+        if libname not in body:
+            continue
+        name = re.search(r"\bNAME\s+(\S+)", body)
+        if name:
+            consumers.add(name.group(1))
+    return consumers
 
-    # SOUNDNESS: a changed header reachable from the heavy shared TUs / seams / emitter / cpp
-    # support is linked into effectively every test -> select ALL suites.
-    global_hits = sorted(changed_headers & global_closure)
-    if global_hits:
-        return set(), ["header-in-global-includer-closure:" + ",".join(global_hits)]
 
-    # FAIL-OPEN: a changed header that does not exist on disk cannot be reasoned about.
-    missing = sorted(h for h in changed_headers if not ci_include_graph.header_exists(h))
-    if missing:
-        return set(), ["changed-header-not-in-tree:" + ",".join(missing)]
+_binding_map_cache: dict[str, tuple[dict[str, set[str]], dict[str, set[str]]]] = {}
 
-    selected: set[str] = set()
-    for suite in suites:
-        closure: set[str] = set()
-        try:
-            for source in suite["sources"]:
-                closure |= ci_include_graph.source_closure(source)
-        except ci_include_graph.GraphError as exc:
-            return set(), [f"suite-source-missing:{suite['name']}:{exc}"]
-        hits = sorted(closure & changed_headers)
-        if hits:
-            selected.add(suite["name"])
-            add_reason(reasons, suite["name"], "include-impact:" + ",".join(hits))
-    return selected, []
+
+def _binding_object_lib_map() -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """Return ``(lib_sources, lib_consumers)`` parsed from ``tests/CMakeLists.txt`` (memoized).
+
+    ``lib_sources[lib]`` is the set of ``python/bindings/**`` ``.cpp``/``.hpp`` compiled into the
+    OBJECT lib; ``lib_consumers[lib]`` is the set of test-target names that link it. A change to
+    ``tests/CMakeLists.txt`` is a broad-file force-all (``CPP_BROAD_FILES``), so a stale parse can
+    never under-select on a changeset that edited the map.
+    """
+    key = str(TESTS_CMAKE)
+    if key not in _binding_map_cache:
+        text = TESTS_CMAKE.read_text(encoding="utf-8", errors="ignore") if TESTS_CMAKE.is_file() else ""
+        sources = {lib: _cmake_object_lib_sources(text, lib) for lib in _BINDING_OBJECT_LIBS}
+        consumers = {lib: _cmake_object_lib_consumers(text, lib) for lib in _BINDING_OBJECT_LIBS}
+        _binding_map_cache[key] = (sources, consumers)
+    return _binding_map_cache[key]
+
+
+def _binding_header_included_by(path: str, lib_sources: set[str]) -> bool:
+    """True if the binding header ``path`` is ``#include``d by any ``.cpp`` TU in ``lib_sources``.
+
+    Binding TUs include their private headers with quoted RELATIVE paths (e.g. ``system_impl.hpp``
+    next to ``system_fields.cpp``), so a change to that header impacts the same OBJECT lib as the
+    TUs. Matched by basename against each TU's quoted includes -- best-effort source parse, safe:
+    a miss falls back to the bindings label group (a superset), never under-selection.
+    """
+    target_base = Path(path).name
+    for source in lib_sources:
+        if not source.endswith(".cpp"):
+            continue
+        src_path = ROOT / source
+        if not src_path.is_file():
+            continue
+        text = src_path.read_text(encoding="utf-8", errors="ignore")
+        for quoted in re.finditer(r'#\s*include\s*"([^"]+)"', text):
+            if Path(quoted.group(1)).name == target_base:
+                return True
+    return False
+
+
+def binding_tu_targets(path: str, all_target_set: set[str]) -> tuple[set[str], list[str]]:
+    """Map a ``python/bindings/**`` C++ file to the serial test targets that compile it.
+
+    Resolves ``path`` to the runtime OBJECT lib(s) it belongs to -- either it IS one of the lib's
+    listed ``.cpp``/``.hpp`` sources, or (for a private header) it is ``#include``d by one of the
+    lib's ``.cpp`` TUs -- and returns that lib's serial consumer targets. Returns
+    ``(targets, matched_libs)``. An empty ``matched_libs`` means the TU feeds only the ``_pops``
+    module entry TUs (``init_*.cpp`` / ``bindings.cpp``), not any test target: the caller then
+    falls back to the bindings LABEL GROUP (never select-all).
+    """
+    lib_sources, lib_consumers = _binding_object_lib_map()
+    matched: list[str] = []
+    targets: set[str] = set()
+    for lib in _BINDING_OBJECT_LIBS:
+        sources = lib_sources[lib]
+        belongs = path in sources or (
+            path.endswith((".hpp", ".h", ".hh", ".hxx")) and _binding_header_included_by(path, sources)
+        )
+        if belongs:
+            matched.append(lib)
+            targets |= {t for t in lib_consumers[lib] if t in all_target_set}
+    return targets, matched
 
 
 def select_cpp_by_labels(suites: Iterable[dict], areas: Iterable[str], reasons: dict[str, set[str]]) -> set[str]:
@@ -370,6 +460,154 @@ def write_explain_file(path: str | None, payload: dict) -> None:
     Path(path).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def classify_cpp_impact(
+    changed: list[str],
+    suites: list[dict],
+    all_target_set: set[str],
+    reasons: dict[str, set[str]],
+) -> tuple[set[str], list[str], set[str], dict[str, dict]]:
+    """Union the per-file C++ impact of every changed file (ADC-646).
+
+    Each file is classified independently and its impact joins the union, instead of the old
+    all-or-nothing rule where a single non-header file collapsed the whole change to coarse
+    labels. Returns ``(selected, full_reasons, areas, impact)``:
+
+    * ``selected`` -- the union of every file's include-closure / binding-label / codegen-label /
+      direct-test targets;
+    * ``full_reasons`` -- non-empty iff some file forces a FULL selection (a global-includer or
+      missing header, or an unmapped build-input path); the caller then escalates to ALL;
+    * ``areas`` -- the label areas contributed by binding / codegen files (for the summary line);
+    * ``impact`` -- ``{file: {"kind": ..., "targets": [...]/"labels": [...]/...}}`` for the
+      ``--explain-file`` plan, so every file's reason is auditable.
+
+    The per-file kinds:
+
+    * ``include/pops/**`` header -> ``include-impact`` (its source-closure suites) or, when the
+      header is a global includer / absent, ``all`` (soundness / fail-open);
+    * ``python/bindings/**`` ``.cpp``/``.hpp`` -> ``binding-tu-targets`` (the serial consumers of
+      the runtime OBJECT lib that compiles it) or, when it feeds only ``_pops``, ``binding-labels``
+      (the bindings label group); any other ``python/bindings/**`` artifact (seam template, cmake
+      fragment) -> ``all`` (build input, fail-open);
+    * ``tests/cpp/**`` ``.cpp`` -> ``test-target`` (that one suite, when it is a serial target);
+    * ``python/pops/codegen/**`` -> ``codegen-labels`` (the native_loader / compiled-model group);
+    * other ``python/pops/**``, ``docs/**``, ``tutorials/**``, ``tests/python/**``, top-level
+      docs/CHANGELOG -> ``none`` (zero C++ impact);
+    * everything else (cmake, workflows, scripts, CMakeLists, ``*.cmake``, the manifest) ->
+      ``all`` (unmapped build input, fail-safe).
+    """
+    selected: set[str] = set()
+    areas: set[str] = set()
+    impact: dict[str, dict] = {}
+    full_reasons: list[str] = []
+
+    # The include-graph global-includer closure is read once (fail-open on any graph error).
+    try:
+        global_closure = ci_include_graph.global_includer_closure()
+        graph_error: str | None = None
+    except ci_include_graph.GraphError as exc:
+        global_closure = set()
+        graph_error = f"include-graph-unreadable:{exc}"
+
+    for path in changed:
+        if is_cpp_header(path):
+            node = path[len("include/") :]
+            if graph_error is not None:
+                impact[path] = {"kind": "all", "reason": graph_error}
+                full_reasons.append(f"{path}:{graph_error}")
+                continue
+            if node in global_closure:
+                impact[path] = {"kind": "all", "reason": "header-in-global-includer-closure"}
+                full_reasons.append(f"{path}:header-in-global-includer-closure")
+                continue
+            if not ci_include_graph.header_exists(node):
+                impact[path] = {"kind": "all", "reason": "changed-header-not-in-tree"}
+                full_reasons.append(f"{path}:changed-header-not-in-tree")
+                continue
+            hit_targets: set[str] = set()
+            try:
+                for suite in suites:
+                    closure: set[str] = set()
+                    for source in suite["sources"]:
+                        closure |= ci_include_graph.source_closure(source)
+                    if node in closure:
+                        hit_targets.add(suite["name"])
+                        add_reason(reasons, suite["name"], f"include-impact:{node}")
+            except ci_include_graph.GraphError as exc:
+                impact[path] = {"kind": "all", "reason": f"suite-source-missing:{exc}"}
+                full_reasons.append(f"{path}:suite-source-missing:{exc}")
+                continue
+            selected.update(hit_targets)
+            impact[path] = {"kind": "include-impact", "targets": sorted(hit_targets)}
+            continue
+
+        if path.startswith(CPP_BINDING_PREFIX):
+            if is_cpp_binding_tu(path):
+                tu_targets, matched_libs = binding_tu_targets(path, all_target_set)
+                if matched_libs:
+                    # The TU is compiled into a runtime OBJECT lib: select exactly that lib's
+                    # test consumers (the precise "targets that compile this TU").
+                    selected.update(tu_targets)
+                    for target in tu_targets:
+                        add_reason(reasons, target, "binding-tu:" + ",".join(sorted(matched_libs)))
+                    impact[path] = {
+                        "kind": "binding-tu-targets",
+                        "object_libs": sorted(matched_libs),
+                        "targets": sorted(tu_targets),
+                    }
+                else:
+                    # The TU feeds only the ``_pops`` module (an ``init_*.cpp`` entry / private
+                    # header of the module glue), not any test target -> bindings label group.
+                    file_areas = areas_for(path, CPP_BINDING_AREAS)
+                    areas.update(file_areas)
+                    hit = select_cpp_by_labels(suites, file_areas, reasons)
+                    selected.update(hit)
+                    impact[path] = {
+                        "kind": "binding-labels",
+                        "labels": sorted(expand_area_labels(file_areas)),
+                        "targets": sorted(hit),
+                    }
+            else:
+                # A ``python/bindings`` build input (seam template, cmake fragment): the include
+                # graph does not model it -> fail open to ALL.
+                impact[path] = {"kind": "all", "reason": "binding-build-input"}
+                full_reasons.append(f"{path}:binding-build-input")
+            continue
+
+        if path.startswith("tests/cpp/") and path.endswith(".cpp"):
+            target = Path(path).stem
+            if target in all_target_set:
+                selected.add(target)
+                add_reason(reasons, target, "direct-test-edit")
+                impact[path] = {"kind": "test-target", "targets": [target]}
+            else:
+                # A test source not in the serial manifest (MPI-only, or a support file that
+                # slipped the broad guard) has no serial target to build.
+                impact[path] = {"kind": "none", "reason": "non-serial-test-source"}
+            continue
+
+        if path.startswith(CPP_CODEGEN_PREFIX):
+            areas.update(CPP_CODEGEN_AREAS)
+            hit = select_cpp_by_labels(suites, CPP_CODEGEN_AREAS, reasons)
+            selected.update(hit)
+            impact[path] = {
+                "kind": "codegen-labels",
+                "labels": sorted(expand_area_labels(CPP_CODEGEN_AREAS)),
+                "targets": sorted(hit),
+            }
+            continue
+
+        if path in CPP_ZERO_IMPACT_FILES or startswith_any(path, CPP_ZERO_IMPACT_PREFIXES):
+            impact[path] = {"kind": "none", "reason": "zero-cpp-impact"}
+            continue
+
+        # Unmapped: cmake, workflows, scripts, CMakeLists, ``*.cmake``, the manifest, or any path
+        # this classifier does not recognise -> fail-safe ALL.
+        impact[path] = {"kind": "all", "reason": "unmapped-path"}
+        full_reasons.append(f"{path}:unmapped-path")
+
+    return selected, full_reasons, areas, impact
+
+
 def plan_cpp(args: argparse.Namespace) -> int:
     changed = read_changed_files(Path(args.changed_files))
     manifest = load_manifest()
@@ -383,6 +621,9 @@ def plan_cpp(args: argparse.Namespace) -> int:
     full_reasons: list[str] = []
     if args.force_all:
         full_reasons.append("force-all")
+    # Broad build / support / core / parallel changes still short-circuit to ALL before the
+    # compositional pass: a change to those touches the shared build or every target's headers,
+    # so per-file impact cannot bound it (kept from the pre-ADC-646 guards).
     if force_full_from_changed(changed, CPP_BROAD_FILES, CPP_BROAD_PREFIXES):
         full_reasons.append("broad-build-or-support-change")
     full = bool(full_reasons)
@@ -390,47 +631,28 @@ def plan_cpp(args: argparse.Namespace) -> int:
     selected: set[str] = set()
     areas: set[str] = set()
     reasons: dict[str, set[str]] = {}
-    # ADC-629: a pure ``include/pops/`` header changeset (after the broad guards, so never
-    # core/parallel) is narrowed by the include graph -- each suite is selected iff its source
-    # include-closure reaches a changed header. A global-includer header or any graph anomaly
-    # fails open to FULL; the coarser label logic below handles every non-pure-header change.
-    if not full and header_impact_eligible(changed):
-        changed_headers = changed_header_nodes(changed)
-        impacted, impact_full = select_cpp_by_include_impact(suites, changed_headers, reasons)
-        if impact_full:
+    impact: dict[str, dict] = {}
+    # ADC-646: compositional per-file impact. Each changed file contributes its own C++ impact
+    # (include-closure / binding-label group / direct test / codegen-label group / nothing), and
+    # the selection is their UNION. A global-includer or missing header, or an unmapped build
+    # input, escalates the whole change to ALL (soundness / fail-safe); everything else prunes.
+    if not full:
+        selected, per_file_full, areas, impact = classify_cpp_impact(
+            changed, suites, all_target_set, reasons
+        )
+        if per_file_full:
             full = True
-            full_reasons.extend(impact_full)
-        else:
-            # ``impacted`` may be empty: a pure-header change that reaches NO suite closure is a
-            # header no test includes (and not a global includer). Selecting nothing would be
-            # sound, but the smoke backstop keeps a conservative floor either way.
-            selected.update(impacted)
+            full_reasons.extend(per_file_full)
+        elif selected:
             for target in CPP_SMOKE_TARGETS:
                 if target in all_target_set:
                     selected.add(target)
                     add_reason(reasons, target, "smoke-backstop")
-    elif not full and any(path.startswith("include/pops/") for path in changed):
-        # Mixed change touching headers: the include graph does not capture the non-header
-        # blast radius, so fall through to labels but keep the unknown-path force-full guard.
-        known_include = any(areas_for(path, CPP_PATH_AREAS) for path in changed if path.startswith("include/pops/"))
-        if not known_include:
-            full = True
-            full_reasons.append("unknown-cpp-public-api-path")
-
-    if not full and not selected and not header_impact_eligible(changed):
-        direct = direct_cpp_targets(changed, all_target_set)
-        selected.update(direct)
-        for target in direct:
-            add_reason(reasons, target, "direct-test-edit")
-        for path in changed:
-            areas.update(areas_for(path, CPP_PATH_AREAS))
-        selected.update(select_cpp_by_labels(suites, areas, reasons))
-        if selected:
-            for target in CPP_SMOKE_TARGETS:
-                if target in all_target_set:
-                    selected.add(target)
-                    add_reason(reasons, target, "smoke-backstop")
-        elif not only_meta(changed):
+        elif not only_meta(changed) and not all(
+            entry.get("kind") == "none" for entry in impact.values()
+        ):
+            # No file forced ALL, yet nothing was selected and the change is not pure-meta and not
+            # purely zero-impact: an area we recognise contributed no suite. Fail safe to ALL.
             full = True
             full_reasons.append("no-manifest-match-for-non-meta-change")
 
@@ -477,6 +699,9 @@ def plan_cpp(args: argparse.Namespace) -> int:
             "total_count": len(all_targets),
             "selected": targets,
             "selected_reasons": {key: sorted(value) for key, value in sorted(reasons.items()) if key in targets},
+            # ADC-646: per-file impact -- {file: {kind, targets/labels/reason}} -- so the plan
+            # spells out why each changed file did (or did not) pull suites into the selection.
+            "impact": {key: impact[key] for key in sorted(impact)},
         },
     )
     return 0
