@@ -76,6 +76,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   unregistered `test_coupling_operator_contract` into the standard C++ test list.
 
 ### Added
+- ADC-634 Route a whole-system time Program (explicit / SSPRK2 / condensed-Schur) through
+  `pops.compile(layout=AMR)` + `pops.bind` onto `AmrSystem.install_program`, with a capability query
+  over the `AmrProgramContext` op-support surface; the clean AMR route no longer silently drops
+  `problem._time`.
 - ADC-427 condensed_schur (pops.lib.time) now lowers theta in (0, 1): the theta-stage solve, the
   1/theta n+1 extrapolation, the optional kinetic-energy update, and a cross-step persistent phi^n
   carried through an ncomp-aware System history ring (register_history gains an optional ncomp; the
