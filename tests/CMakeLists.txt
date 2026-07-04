@@ -307,6 +307,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_coverage_mask
   test_patch_range
   test_cf_interface
+  test_program_reflux_ledger
   test_amr_diagnostics
   test_load_balance
   test_poisson_smoother

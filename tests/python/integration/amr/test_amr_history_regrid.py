@@ -130,20 +130,21 @@ def test_null_regrid_matches_no_regrid_to_roundoff():
 
 
 def test_real_regrid_stable_and_layout_consistent():
-    """(ii) A real regrid (dispersing blob tags cells) -> the run stays STABLE (finite, mass bounded)
-    on a genuinely two-level hierarchy, and every prev(k) buffer is defined on the NEW hierarchy
-    (flat size == sum_k ncomp*nf_k*nf_k).
+    """(ii) A real regrid (dispersing blob tags cells) -> the run stays STABLE (finite) on a genuinely
+    two-level hierarchy, CONSERVES the total mass to ROUND-OFF across the regrids, and every prev(k) buffer
+    is defined on the NEW hierarchy (flat size == sum_k ncomp*nf_k*nf_k).
 
-    MASS BOUND, not round-off (the synchronous Program driver, average_down-only): the AmrProgramContext
-    v1 macro-step advances every level with the SAME dt and couples fine->coarse by average_down ONLY,
-    with NO conservative reflux at the coarse-fine interface (documented in
-    amr_program_context.hpp::couple_levels). So on a genuinely MULTILEVEL Program run the total mass
-    DRIFTS by the un-refluxed C/F face-flux mismatch -- bounded and far below the scheme error, but NOT
-    round-off. Round-off conservation holds on the coarse-only / flat-hierarchy Program path (no C/F
-    interface), which is locked bit-for-bit by test_amr_program_parity; the reflux under a Program that
-    would restore round-off at a real C/F interface is the AmrProgramContext v2 deferral (ADC-633 wave).
-    The assertion here pins STABILITY: the drift stays a few 1e-4, never blows up."""
-    print("== real regrid: stable + prev(k) layout-consistent on the new hierarchy ==")
+    ROUND-OFF conservation (ADC-639): the synchronous Program driver now couples fine->coarse by
+    average_down THEN conservative REFLUX at the coarse-fine interface (amr_program_context.hpp::
+    couple_levels + amr_program_reflux.hpp). The per-level effective flux is captured through the AB2
+    Program's own linear combination (1.5 R_n - 0.5 R_{n-1}, the flux ledger + the persistent per-ring
+    strip that carries R_{n-1}'s flux across steps), so the coarse cell's flux at the interface is
+    corrected by exactly (fine effective flux - coarse effective flux). The total mass is therefore
+    conserved to round-off on a genuinely MULTILEVEL run -- matching the native reflux -- INCLUDING across
+    an in-window regrid (the deferred-rotate + slot-0 resync keeps the multistep ring consistent with the
+    refluxed live state, ADC-631 x ADC-639, acceptance e). This is the tracked concession: the tolerance
+    was 2e-4 (average_down-only v1) and is tightened to 1e-8 with the reflux."""
+    print("== real regrid: conservative (mass 1e-8) + prev(k) layout-consistent on the new hierarchy ==")
     u0 = _blob(amp=0.5)
     a, err = _build(regrid_every=2, refine_thr=1.2, u0=u0, tag="real")
     if a is None:
@@ -154,8 +155,8 @@ def test_real_regrid_stable_and_layout_consistent():
         a.step(DT)
     rho = np.asarray(a.density("blk"))
     chk(np.all(np.isfinite(rho)), "the state stays finite through the regrids")
-    chk(abs(float(a.mass("blk")) - m0) < 2e-4,
-        "coarse mass stays bounded across the regrids (average_down-only v1, |m-m0| = %.2e)"
+    chk(abs(float(a.mass("blk")) - m0) < 1e-8,
+        "coarse mass is conserved to round-off across the regrids (AB2 + reflux, |m-m0| = %.2e)"
         % abs(float(a.mass("blk")) - m0))
     nlev = int(a.n_levels())
     names = list(a.history_names())

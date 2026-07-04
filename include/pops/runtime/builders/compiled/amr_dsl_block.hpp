@@ -811,6 +811,30 @@ AmrRuntimeBlock build_amr_block(
                                                                   rprim, Real(0), nullptr}(U, Rf);
       pops::saxpy(R, Real(-1), Rf);  // R <- (-div F + S) - (-div F) = S
     };
+    // CONSERVATIVE-REFLUX CAPTURE (ADC-639): the flux-materialising twin of level_rhs / level_neg_div_flux.
+    // Instead of the fused assemble_rhs (which computes -div F and DISCARDS the face fluxes), it writes the
+    // face fluxes with compute_face_fluxes<Limiter, Flux> THEN derives R with mf_eval_rhs from those SAME
+    // fluxes. compute_face_fluxes uses the identical reconstruction + numerical flux as assemble_rhs, so R
+    // == the fused level_rhs residual bit-for-bit (face_flux.hpp:236-238) while Fx/Fy stay visible to the
+    // reflux register. The physical ghost fill (fill_ghosts, the SAME BlockRhsEval does before assembling)
+    // is done here first so the flux at the domain boundary matches the fused path; the fine-level C/F ghost
+    // refresh is done by the caller (AmrRuntime::level_rhs_capture_into, like level_rhs_into). Fx/Fy are
+    // sized by the caller (xface_box/yface_box, ncomp = Model::n_vars, 0 ghost). recon_prim + the level
+    // metric match level_rhs. Read ONLY on the reflux path (nlev>1). Same <Limiter, Flux, Model> capture.
+    b.level_flux_capture = [model, rprim, tbc](MultiFab& U, const MultiFab& aux, const Geometry& geom,
+                                               MultiFab& Fx, MultiFab& Fy, MultiFab& R) {
+      pops::fill_ghosts(U, geom.domain, tbc);  // same physical-BC ghost fill BlockRhsEval does
+      pops::compute_face_fluxes<Limiter, Flux>(model, U, aux, Fx, Fy, geom.dx(), geom.dy(), rprim);
+      pops::mf_eval_rhs(model, U, aux, Fx, Fy, geom.dx(), geom.dy(), R);
+    };
+    b.level_flux_capture_neg_div = [model, rprim, tbc](MultiFab& U, const MultiFab& aux,
+                                                       const Geometry& geom, MultiFab& Fx, MultiFab& Fy,
+                                                       MultiFab& R) {
+      const SourceFreeModel<Model> sm{model};
+      pops::fill_ghosts(U, geom.domain, tbc);
+      pops::compute_face_fluxes<Limiter, Flux>(sm, U, aux, Fx, Fy, geom.dx(), geom.dy(), rprim);
+      pops::mf_eval_rhs(sm, U, aux, Fx, Fy, geom.dx(), geom.dy(), R);
+    };
   }
   // CFL SPEED of the block: SAME policy as System (make_max_speed) -- stability lambda*
   // (HasStabilitySpeed trait) if the model declares it, otherwise max_wave_speed (historical fallback,
