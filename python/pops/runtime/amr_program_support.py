@@ -55,14 +55,6 @@ DEFERRED_GROUPS: dict = {
                                     "schur_explicit_flux", "assemble_schur_rhs",
                                     "schur_reconstruct", "schur_energy"}),
     },
-    "history": {
-        "issue": "ADC-631",
-        # The IR ops the history-ring nodes carry (program_solve.history / store_history); the C++
-        # register_history is EMITTED from the history op, so it is a header method, not an IR op.
-        "op_source": "program_solve.history / store_history",
-        "ir_ops": frozenset({"history", "store_history"}),
-        "header_methods": frozenset({"register_history", "history", "store_history"}),
-    },
     "named_flux": {
         "issue": None,
         "op_source": "program_emit_kernels._named_fluxes (rhs with named fluxes)",

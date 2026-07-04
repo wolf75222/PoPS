@@ -348,6 +348,17 @@ def _exists_named_field():
 # pending: construct the authoring object (structurally real), then skip with the pending marker.
 # A pending cell NEVER executes the deferred path and NEVER pins transitional behavior.
 # --------------------------------------------------------------------------------------------------
+def _exists_multistep(builder):
+    # Cited: tests/python/integration/amr/test_amr_history_parity (ADC-631, MERGED): AB2 on a flat
+    # 2-block AMR hierarchy is bit-identical to Uniform, ring slots byte-identical; regrid remap +
+    # v3 replay covered by test_amr_history_regrid / test_amr_history_checkpoint. The authoring
+    # object stays structurally real here.
+    def run():
+        assert isinstance(builder("plasma"), pops.time.Program)
+        return "exists:test_amr_history_parity"
+    return run
+
+
 def _pending_multistep(builder):
     """A multistep-on-AMR pending row: build the whole-system Program (with its history ring ops) to
     prove the authoring is real, then defer to ADC-631 (the AMR history-ring seam under rewrite)."""
@@ -417,11 +428,11 @@ MATRIX = {
     "fft_field.amr.mono": Cell("fft_field", "amr", "mono", "exists", _exists_fft_on_amr_refused),
     # IMEXRK / ARS222 on AMR -- precise Cartesian-scope refusal
     "imexrk.amr.mono": Cell("imexrk", "amr", "mono", "refuse", _refuse_imexrk_on_amr),
-    # multistep AB2 / BDF2 on AMR -- PENDING ADC-631 (history ring under rewrite)
-    "ab2.amr.mono": Cell("ab2", "amr", "mono", "pending",
-                         _pending_multistep(lib_time.adams_bashforth2)),
-    "bdf2.amr.mono": Cell("bdf2", "amr", "mono", "pending",
-                          _pending_multistep(lambda block: lib_time.bdf(block, order=2))),
+    # multistep AB2 / BDF2 on AMR -- LANDED (ADC-631 merged): cite the ring parity coverage.
+    "ab2.amr.mono": Cell("ab2", "amr", "mono", "exists",
+                         _exists_multistep(lib_time.adams_bashforth2)),
+    "bdf2.amr.mono": Cell("bdf2", "amr", "mono", "exists",
+                          _exists_multistep(lambda block: lib_time.bdf(block, order=2))),
     # clean-compile(layout=AMR) whole-system Program -- GREEN LIVE (ADC-634 route implemented): the
     # clean pops.compile(layout=AMR)+pops.bind SSPRK3 Program builds a real AmrSystem, runs, conserves.
     "clean_program.amr.mono": Cell("clean_program", "amr", "mono", "green_live",

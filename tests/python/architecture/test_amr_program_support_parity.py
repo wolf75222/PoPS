@@ -232,8 +232,7 @@ def test_parser_finds_the_known_deferral_families():
     families in the header (so a silently-empty parse cannot make the equality above vacuously pass)."""
     header = _parse_header_deferred_set(CONTEXT_HPP.read_text(encoding="utf-8"))
     for needle in ("assemble_schur_coeffs", "schur_reconstruct",   # Schur (deferred_op)
-                   "store_history", "history",                       # history (history_deferred)
-                   "cache_should_update", "cache_effective_dt",      # scheduler cache (deferred_op)
+                                      "cache_should_update", "cache_effective_dt",      # scheduler cache (deferred_op)
                    "neg_div_flux_into",                              # named flux (deferred_op)
                    "apply_projection", "solve_fields_from_blocks"):  # inline-throw seams
         assert needle in header, (
