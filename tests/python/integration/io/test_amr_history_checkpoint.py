@@ -15,9 +15,12 @@ BIT-IDENTICALLY (np.array_equal, no tolerance -- extends the ADC-542 acceptance 
       re-executes the ORIGINAL (regrid-free) steps; assert the post-restart ring (every slot,
       recomputed included) equals the uninterrupted run's ring at the same macro-step bit-for-bit,
       and the continuation stays bit-identical;
-  (3) REFUSAL: the same non-Dense ring checkpointed at m=6 has a regrid due (step 4) between the seed
-      anchor's era and the checkpoint -> restart refuses LOUD (the remap destroyed the pre-regrid
-      data; bit-exact reconstruction is provably impossible).
+  (3) ADC-635: the same non-Dense ring checkpointed at m=6 has a regrid DUE (step 4) INSIDE the replay
+      window; the ADC-631 refusal is lifted -- the restart replays the ring with regrid ACTIVE. On this
+      single-block Program layout the hierarchy is coarse-only (ADC-508 parity), so the due regrid is a
+      deterministic structural no-op on BOTH the original run and the replay; the reconstruction is
+      bit-identical (np.array_equal). Real COMPLETING in-window regrids are covered by
+      test_amr_history_regrid_replay.py (two-block 2-level composition).
 
 Self-skips (exit 0) without pops / a built _pops / a compiler / a visible Kokkos. Pytest + __main__.
 """
@@ -208,29 +211,28 @@ def test_state3_interval_replay_bit_identical():
         % float(np.abs(ref - got).max()))
 
 
-def test_state3_replay_window_straddling_regrid_refused():
-    print("== (3) refusal: ckpt at m=6 puts a regrid (step 4) inside the seed-to-ckpt span ==")
-    run, err = _build(_state3_program(), regrid_every=4)
-    if run is None:
-        print("skip (%s)" % (err or "no engine"))
+def test_state3_replay_window_straddling_regrid_bit_identical():
+    print("== (3) ADC-635: ckpt at m=6 puts a regrid (step 4) INSIDE the replay window -> replay it ==")
+    out, err = _run_case(_state3_program, nsteps=10, half=6, label="straddle", regrid_every=4)
+    if out is None:
+        print("skip (%s)" % err)
         return
-    for _ in range(6):
-        run.step(DT)
-    with tempfile.TemporaryDirectory() as tmp:
-        ckpt = run.checkpoint(os.path.join(tmp, "refuse"))
-        fresh, _ = _build(_state3_program(), regrid_every=4)
-        raised = ""
-        try:
-            fresh.restart(ckpt)
-        except ValueError as exc:
-            raised = str(exc)
-    chk("regrid" in raised and "cannot be replayed" in raised,
-        "a replay window straddling a regrid is REFUSED loud (got: %s)" % (raised[:120] or "<none>"))
+    ref, got, cont_rings, rest_rings, stored_info, report = out
+    chk(bool(stored_info) and all(len(s) < depth for depth, s in stored_info.values()),
+        "Interval(2) stores a SUBSET; the straddling gap is replayed THROUGH the in-window regrid: %r"
+        % stored_info)
+    ok_rings = all(np.array_equal(a, b) for h in cont_rings
+                   for a, b in zip(cont_rings[h], rest_rings.get(h, [])))
+    chk(ok_rings,
+        "EVERY post-restart ring slot (recomputed through the in-window regrid) equals uninterrupted")
+    chk(np.array_equal(ref, got),
+        "the straddling-window replay continuation is BIT-IDENTICAL to uninterrupted (max|d| = %.3e)"
+        % float(np.abs(ref - got).max()))
 
 
 if __name__ == "__main__":
     test_ab2_dense_checkpoint_bit_identical()
     test_state3_interval_replay_bit_identical()
-    test_state3_replay_window_straddling_regrid_refused()
+    test_state3_replay_window_straddling_regrid_bit_identical()
     print("FAILURES:", _fails)
     sys.exit(1 if _fails else 0)

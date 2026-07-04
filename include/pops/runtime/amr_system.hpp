@@ -910,6 +910,10 @@ class AmrSystem {
   double history_slot_dt(const std::string& name, int slot) const;
   void restore_history_slot_dt(const std::string& name, int slot, double dt);
   int rebuild_history_slots(const std::string& name, const std::vector<int>& stored_slots);
+  /// The sorted macro-step cursors at which the LAST rebuild_history_slots fired an in-window regrid
+  /// (ADC-635). The v3 reader asserts it against the checkpoint's recorded schedule fingerprint; empty
+  /// after a Dense / clean-window / no-regrid replay.
+  std::vector<int> last_replay_regrid_steps() const;
   /// @}
 
   double mass();  ///< mass of the 1st block on the coarse (conserved at reflux)

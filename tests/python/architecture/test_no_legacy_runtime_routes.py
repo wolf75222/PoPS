@@ -157,7 +157,10 @@ LARGE_RUNTIME_FILE_BUDGETS = {
     # ADC-631: the multistep history-ring facade seams (program_last_dt + uses_runtime_engine +
     # history accessors mirroring the System names so _system_io_history.py is reused verbatim)
     # add ~95 thin engine forwards.
-    "python/bindings/amr/amr_system.cpp": 2499,
+    # ADC-635: the replay-through-regrids facade adds ~19 lines (the (dt, cursor) closure driving
+    # the facade macro_step_ per re-step, its save/restore, and the last_replay_regrid_steps
+    # accessor the v3 reader asserts); it reads the TU-local private Impl, so it cannot move.
+    "python/bindings/amr/amr_system.cpp": 2518,
     "include/pops/runtime/amr/amr_runtime.hpp": 1850,
     "include/pops/runtime/system/system_field_solver.hpp": 1100,
     "python/pops/runtime/_system_unified_install.py": 550,

@@ -15,6 +15,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `[x.y.z] - YYYY-MM-DD`.
 
 ## [Unreleased]
+### Added
+- ADC-635 Replay AMR history rings through in-window regrids: re-step with regridding active, reproduce the incremental remap chain on the rebuilt slots, lift the ADC-631 straddle refusal, and add a coherence guard on the replayed regrid schedule (bit-identical restart, np.array_equal).
+
 ### Fixed
 - ADC-622 External brick registry is now per-.so (hidden-visibility BrickRegistry plus -fno-gnu-unique on brick builds), so pops_brick_manifest() of a .so describes only that .so even on Linux/glibc where STB_GNU_UNIQUE unified it across dlopen; a two-fixture C++ test proves isolation.
 
