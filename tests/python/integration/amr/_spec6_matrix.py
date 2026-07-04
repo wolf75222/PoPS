@@ -359,19 +359,6 @@ def _exists_multistep(builder):
     return run
 
 
-def _pending_multistep(builder):
-    """A multistep-on-AMR pending row: build the whole-system Program (with its history ring ops) to
-    prove the authoring is real, then defer to ADC-631 (the AMR history-ring seam under rewrite)."""
-    def run():
-        program = builder("plasma")
-        assert isinstance(program, pops.time.Program)
-        # The multistep Program carries a history ring (store_history / history); the AMR seam that
-        # serves it is what ADC-631 is rewriting. Do NOT execute it on an AmrSystem here.
-        assert any(v.op in ("store_history", "history") for v in program._values)
-        return "pending:ADC-631"
-    return run
-
-
 def _pending_clean_route_program(builder, marker):
     """A clean-``compile(layout=AMR)`` whole-system Program pending row: build the Program object, then
     defer to ADC-634 (the route being implemented). Do NOT call ``pops.compile(layout=AMR, time=...)``
