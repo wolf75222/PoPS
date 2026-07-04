@@ -9,8 +9,9 @@ carries the operator NAME + the coupled ``subset`` + the scalar coefficients, an
 the P.schur_* ops.
 
 Compile-time refusals (design section 5), fail-loud at build, never a silent partial:
-  - N > 8: the dense block-inverse bound (mat_inverse cap);
-  - the coefficient assembly requires a 2D momentum subset (the eps_x/eps_y/a_xy/a_yx tensor);
+  - the subset is the SPATIAL velocity block eliminated against grad(phi)/div(F), so its size
+    must equal the native spatial dimension (NATIVE_DIMENSION, the ADC-294 2D core invariant);
+    the J machinery itself (block_inverse<N> / mat_inverse<N>) is unbounded in N;
   - subset must be distinct non-negative component indices;
   - the coefficients must be numbers or dt-polynomials, c_rho a non-negative int.
 The block-local-linearization contract (J must not depend on U|_K) is enforced UPSTREAM at
@@ -21,6 +22,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pops._native_facts import NATIVE_DIMENSION
 from pops.time.program_base import _ProgramConstants
 from pops.time.values import Value, _Coeff, _is_field_value
 
@@ -28,10 +30,6 @@ if TYPE_CHECKING:
     from pops.time._program_contract import _ProgramBase
 else:
     _ProgramBase = object
-
-# The dense block-inverse bound (pops::detail::mat_inverse<N> stack cap): a coupled subset larger than
-# this cannot be eliminated by the closed form or the generic fallback.
-_MAX_BLOCK = 8
 
 
 class _ProgramCondensed(_ProgramConstants, _ProgramBase):
@@ -52,10 +50,12 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
             "condensed op: linear_operator must be an authored local linear operator "
             "(m.local_linear_operator(...) or its OperatorHandle / name)")
 
-    def _condensed_subset(self, subset: Any, where: Any, *, require_2d: Any = False) -> tuple:
+    def _condensed_subset(self, subset: Any, where: Any) -> tuple:
         """Validate + normalize the coupled component @p subset (the momentum block the solve
-        eliminates): a tuple of DISTINCT non-negative ints, size 2..8 (the dense block-inverse bound).
-        @p require_2d demands exactly a 2D subset (the tensor elliptic coefficient path)."""
+        eliminates): a tuple of DISTINCT non-negative ints whose size equals the native spatial
+        dimension -- the subset IS the velocity vector eliminated against grad(phi)/div(F), so its
+        length is set by the space the elliptic coupling lives in (ADC-294 2D core invariant), not
+        by any dense-inverse capacity (block_inverse<N>/mat_inverse<N> are unbounded in N)."""
         if not isinstance(subset, (tuple, list)) or not subset:
             raise ValueError("%s: subset must be a non-empty tuple of component indices" % where)
         sub = tuple(subset)
@@ -65,15 +65,12 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
                                  % (where, c))
         if len(set(sub)) != len(sub):
             raise ValueError("%s: subset components must be distinct (got %r)" % (where, sub))
-        if len(sub) > _MAX_BLOCK:
+        if len(sub) != NATIVE_DIMENSION:
             raise ValueError(
-                "%s: subset size N=%d exceeds the dense block-inverse bound (%d); a larger coupled "
-                "block cannot be eliminated in closed form" % (where, len(sub), _MAX_BLOCK))
-        if require_2d and len(sub) != 2:
-            raise NotImplementedError(
-                "%s: the tensor elliptic coefficient path supports a 2D momentum subset "
-                "(eps_x/eps_y/a_xy/a_yx); got subset size %d. A 3D coupled block needs the "
-                "N-component elliptic tensor (a later phase)." % (where, len(sub)))
+                "%s: the condensed subset is the spatial velocity block eliminated against "
+                "grad(phi)/div(F), so its size must equal the native spatial dimension "
+                "(dimension=%d, the 2D core invariant); got %d components %r"
+                % (where, NATIVE_DIMENSION, len(sub), sub))
         return sub
 
     @staticmethod
@@ -103,7 +100,7 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         if not (isinstance(state, Value) and state.vtype == "state"):
             raise ValueError("condensed_coeffs: a State value is required (state=...)")
         opname = self._condensed_operator_name(linear_operator)
-        sub = self._condensed_subset(subset, "condensed_coeffs", require_2d=True)
+        sub = self._condensed_subset(subset, "condensed_coeffs")
         c_d = self._coeff_dict(c, "c", "condensed_coeffs")
         th_d = self._coeff_dict(th_dt, "th_dt", "condensed_coeffs")
         return self._new("condensed_coeffs", "condensed_coeffs", (state,),

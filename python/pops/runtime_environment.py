@@ -9,11 +9,15 @@ from __future__ import annotations
 
 from typing import Any
 
-NATIVE_DIMENSION = 2
-NATIVE_AMR_REFINEMENT_RATIO = 2
-NATIVE_PRECISION = "double"
-NATIVE_REAL_BYTES = 8
-NATIVE_COMMUNICATOR = "MPI_COMM_WORLD"
+# The declared native-core facts live in the dependency-free leaf pops._native_facts (so the
+# runtime-fenced layers can read them); this module re-exports them as the public spelling.
+from pops._native_facts import (  # noqa: F401  (re-export)
+    NATIVE_AMR_REFINEMENT_RATIO,
+    NATIVE_COMMUNICATOR,
+    NATIVE_DIMENSION,
+    NATIVE_PRECISION,
+    NATIVE_REAL_BYTES,
+)
 
 
 class RuntimeCapabilityError(ValueError):

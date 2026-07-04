@@ -8,7 +8,8 @@ parallel to the P.schur_* ops.
 
 This test pins the authoring surface + the design-section-5 refusals (pure Python, no compile): the
 builders record + validate their operands, produce the right vtype, and serialize; a subset that is not
-distinct / not a tuple / exceeds the dense block-inverse bound (8) / is not 2D for the coefficient tensor
+distinct / not a tuple / whose size differs from the native spatial dimension (the subset IS the
+velocity vector eliminated against grad(phi)/div(F); dimension=2, the ADC-294 core invariant)
 raises with a precise message; a non-operator handle raises; a cons/prim-dependent J is refused UPSTREAM
 at m.local_linear_map registration (the block-local-linearization contract). Real engine only; skips
 (exit 0) if pops is unavailable, never faking. Runs under pytest and as a script.
@@ -61,27 +62,31 @@ def test_builders_record_the_condensed_ops():
     print("OK  condensed_coeffs/rhs/reconstruct record + validate + hash")
 
 
-def test_subset_must_be_2d_for_the_coefficient_tensor():
-    """The coefficient assembly needs a 2D momentum subset (the eps_x/eps_y/a_xy/a_yx tensor); a 3D
-    subset raises NotImplementedError naming the N-component tensor as the later phase."""
+def test_subset_size_must_equal_the_spatial_dimension():
+    """The subset is the spatial velocity block, so its size must equal the native dimension (2,
+    the ADC-294 core invariant) on EVERY condensed op -- a 3-component subset in a 2D engine is
+    ill-posed, not unimplemented (ValueError, never NotImplementedError)."""
     m, _, jh = _model()
     P = adctime.Program("cs")
     U = P.state("blk")
-    with pytest.raises(NotImplementedError, match="2D momentum subset"):
+    with pytest.raises(ValueError, match="spatial velocity block"):
         P.condensed_coeffs(state=U, linear_operator=jh, subset=(0, 1, 2), c=1.0, th_dt=1.0)
-    print("OK  condensed_coeffs refuses a non-2D subset with the N-component-tensor message")
+    print("OK  condensed_coeffs refuses a size-3 subset via the spatial-dimension contract")
 
 
-def test_subset_exceeding_the_block_inverse_bound_is_refused():
-    """A coupled subset larger than the dense block-inverse bound (8) is refused on any condensed op."""
+def test_no_dense_capacity_bound_only_the_dimension_contract():
+    """There is NO dense-inverse capacity bound (block_inverse<N>/mat_inverse<N> are unbounded in
+    N): a size-9 subset is refused by the SAME spatial-dimension contract as size 3, and the
+    message must not invent a capacity."""
     m, _, jh = _model()
     P = adctime.Program("cs")
     U = P.state("blk")
-    big = tuple(range(9))  # N = 9 > 8
-    with pytest.raises(ValueError, match=r"exceeds the dense block-inverse bound \(8\)"):
+    big = tuple(range(9))
+    with pytest.raises(ValueError, match="dimension=2") as excinfo:
         P.condensed_reconstruct(state=U, phi=P.scalar_field("p"), linear_operator=jh, subset=big,
                                 th_dt=1.0)
-    print("OK  a subset of size N > 8 is refused (dense block-inverse bound)")
+    assert "bound" not in str(excinfo.value)
+    print("OK  size-9 refused by the dimension contract, no invented capacity bound")
 
 
 def test_subset_must_be_distinct_nonnegative_ints():
@@ -135,8 +140,8 @@ def test_cons_or_prim_dependent_J_refused_upstream():
 
 def _run():
     fns = [test_builders_record_the_condensed_ops,
-           test_subset_must_be_2d_for_the_coefficient_tensor,
-           test_subset_exceeding_the_block_inverse_bound_is_refused,
+           test_subset_size_must_equal_the_spatial_dimension,
+           test_no_dense_capacity_bound_only_the_dimension_contract,
            test_subset_must_be_distinct_nonnegative_ints,
            test_non_operator_handle_is_refused,
            test_scalar_coeffs_and_c_rho_are_validated,

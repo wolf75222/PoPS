@@ -124,10 +124,11 @@ def _emit_condensed_coeffs_kernel(uid: Any, model: Any, jblock_op: Any, subset: 
     (the elliptic coefficient tensor apply_laplacian consumes exactly eps_x/eps_y/a_xy/a_yx)."""
     impl = _model_impl(model)
     if len(subset) != 2:
-        raise NotImplementedError(
-            "condensed_coeffs: the tensor elliptic coefficient path supports a 2D momentum subset "
-            "(eps_x/eps_y/a_xy/a_yx); got subset size %d. A 3D coupled block needs the N-component "
-            "elliptic tensor (a later phase)." % len(subset))
+        raise ValueError(
+            "condensed_coeffs: the subset is the spatial velocity block and the native core is "
+            "dimension=2 (the eps_x/eps_y/a_xy/a_yx tensor), so it has exactly 2 components; got "
+            "%d. Authoring validates this upstream (_condensed_subset); reaching here is an IR "
+            "bypass." % len(subset))
     jblock = _subset_block_rows(impl, jblock_op, subset)
     c_cpp = _coeff_cpp(c_coeff)
     th_dt_cpp = _coeff_cpp(th_dt)
