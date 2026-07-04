@@ -434,12 +434,29 @@ inline void CompositeFacPoisson::relax_level_(int m, int sweeps) {
   device_fence();
   if (m - 1 == 0)
     fill_ghosts(phi_c_, geom_c_.domain, bc_);  // parent physical ghosts (bilerp reads to the border)
-  fill_cf_phi_(m);                             // canonical ghost order (bilerp + fine-fine)
-  // SOR with plain f_m and frozen bilerp C/F ghosts (== the legacy fine_sor at every level). The
-  // two-way coupling of the level-m/level-(m+1) interface is carried by the level-m composite residual
-  // + correction (correct_level_), exactly as level 0 carries the 0-1 interface -- the same mechanism
-  // at every interface, so conservation holds to ulp at all of them.
-  fine_sor_level_(m, rhs_level(m), sweeps);
+  const MultiFab& phim = phi_level(m);
+  const bool multibox = phim.box_array().size() > 1;  // adjacency: fine-fine sibling ghosts matter
+  if (!multibox) {
+    // single patch: bilerp C/F ghosts once, then SOR with frozen ghosts. Bit-identical to the legacy
+    // refresh_fine (fill_cf_ghosts + fine_sor) at L == 2, non-adjacent.
+    fill_cf_phi_(m);
+    fine_sor_level_(m, rhs_level(m), sweeps);
+  } else {
+    // ADJACENT patches: the shared fine-fine ghost must be RE-EXCHANGED between sweep batches so the
+    // patches couple Gauss-Seidel (not once-per-relax block-Jacobi, which is unstable across a shared
+    // face). Re-run the canonical ghost order (bilerp + fill_boundary) between short SOR batches. The
+    // C/F bilerp ghosts at the outer boundary are re-derived from the (unchanged) parent each batch --
+    // idempotent -- while the shared-face ghosts pick up the sibling's freshest interior.
+    const int nbatch = 8;
+    const int per = std::max(1, sweeps / nbatch);
+    int done = 0;
+    while (done < sweeps) {
+      const int s = std::min(per, sweeps - done);
+      fill_cf_phi_(m);
+      fine_sor_level_(m, rhs_level(m), s);
+      done += s;
+    }
+  }
   // NB: the average-down is NOT done here. It is a SEPARATE fine-to-coarse cascade (cascade_avgdown_)
   // run after ALL levels are relaxed, so a coarser parent's covered cells reflect the FINAL finer
   // values (avoids the staleness of avgdown m->m-1 before level m+1 updated level m).

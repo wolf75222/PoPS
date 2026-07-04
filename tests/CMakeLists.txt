@@ -317,6 +317,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_elliptic_operator
   test_elliptic_problem
   test_elliptic_composite_rhs
+  test_composite_fac_adjacent
   test_composite_fac_nlevel
   test_composite_fac_poisson
   test_composite_fac_variable_eps

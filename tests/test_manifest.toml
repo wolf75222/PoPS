@@ -526,6 +526,11 @@ sources = ["tests/cpp/unit/elliptic/test_anisotropic_epsilon.cpp"]
 labels = ["unit", "elliptic", "fast"]
 
 [[cpp.suite]]
+name = "test_composite_fac_adjacent"
+sources = ["tests/cpp/unit/elliptic/test_composite_fac_adjacent.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
 name = "test_composite_fac_nlevel"
 sources = ["tests/cpp/unit/elliptic/test_composite_fac_nlevel.cpp"]
 labels = ["unit", "elliptic", "fast"]
