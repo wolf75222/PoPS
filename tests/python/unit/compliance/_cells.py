@@ -225,6 +225,36 @@ def _pos_amr_route_when_capable():
     return _assert_route_available("layout:AMR")
 
 
+def _amr_route_handle():
+    """A stub AMR-route CompiledModel (target='amr_system' + AMR _layout): what pops.compile(layout=
+    AMR(...)) returns. Drives the ADC-515 inert introspection cells (no .so dlopen)."""
+    handle = CompiledModel(
+        so_path="<stub-amr>", backend="production", adder="add_native_block",
+        cons_names=["rho", "mx", "my"], cons_roles=["Density", "MomentumX", "MomentumY"],
+        prim_names=["rho", "mx", "my"], n_vars=3, gamma=1.4, n_aux=1, params={},
+        caps={"cpu": True, "amr": True, "mpi": True}, abi_key=_abi(), model_hash="h", cxx="c++",
+        std="c++23", target="amr_system", aux_extra_names=["B_z"])
+    handle._layout = AMR(base=CartesianMesh(n=64), max_levels=2, ratio=2, regrid=RegridEvery(4))
+    return handle
+
+
+def _pos_amr_arguments_inert():
+    # ADC-515: arguments() on the AMR-route handle reports layout='amr' + the block instance (inert,
+    # no .so). Agrees with the integration sec.20 matrix's arguments.amr.mono green_inert cell.
+    args = _amr_route_handle().arguments()
+    assert args.layout_runtime["layout"] == "amr"
+    assert next(iter(args.instances.values()))["components"] == 3
+    return _assert_route_available("layout:AMR")
+
+
+def _pos_amr_estimate_memory_inert():
+    # ADC-515: estimate_memory(mesh) on the AMR-route handle is a conservative patch-budget FORMULA
+    # (layout='amr', amr_patch > 0) that defaults the AMR layout from the carried _layout. Inert.
+    est = _amr_route_handle().estimate_memory(_CartesianMesh(n=64, periodic=True))
+    assert est.layout == "amr" and est.categories.get("amr_patch", 0) > 0
+    return _assert_route_available("layout:AMR")
+
+
 POSITIVE = {
     "pos.uniform_fv_typed_riemann": PositiveCell(
         ("spatial:finite_volume", "riemann:hll"), _pos_uniform_fv_typed_riemann),
@@ -242,6 +272,10 @@ POSITIVE = {
         ("output:npz_vtk_hdf5", "checkpoint:system_v1"), _pos_diagnostics_output_ckpt),
     "pos.amr_route_when_capable": PositiveCell(
         ("layout:AMR",), _pos_amr_route_when_capable),
+    "pos.amr_arguments_inert": PositiveCell(
+        ("layout:AMR",), _pos_amr_arguments_inert),
+    "pos.amr_estimate_memory_inert": PositiveCell(
+        ("layout:AMR",), _pos_amr_estimate_memory_inert),
 }
 
 
