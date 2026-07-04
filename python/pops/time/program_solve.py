@@ -183,19 +183,41 @@ class _ProgramSolve(_ProgramConstants, _ProgramBase):
                           "restart": restart_int}, name, rhs.block)
 
     # --- multistep histories (ADC-406a) ---
-    def history(self, name: Any, lag: Any = 1) -> Any:
+    def history(self, name: Any, lag: Any = 1, ncomp: Any = None) -> Any:
         """Read a SYSTEM-OWNED history field carried across macro-steps: the value stored @p lag steps
-        back (e.g. ``P.history("plasma.R", lag=1)`` is R_{n-1} for Adams-Bashforth). Returns a
-        State-typed value usable in the affine algebra. The history is owned by the System (a
-        HistoryManager), not the Program, so a later checkpoint slice can serialize it; reading it
-        before it has ever been stored is a fail-loud runtime error (it must be written by
-        `store_history` every step). @p lag must be a Python int >= 1."""
+        back (e.g. ``P.history("plasma.R", lag=1)`` is R_{n-1} for Adams-Bashforth). Returns a value
+        usable in the affine algebra. The history is owned by the System (a HistoryManager), not the
+        Program, so a later checkpoint slice can serialize it; reading it before it has ever been stored
+        is a fail-loud runtime error (it must be written by `store_history` every step). @p lag must be
+        a Python int >= 1.
+
+        @p ncomp (ADC-427) sizes the ring's slots. ``None`` (the default) reads a STATE-typed value over
+        block 0's ncomp -- the full-state multistep ring, byte-identical to the historical IR. An
+        explicit ``ncomp=1`` reads a SCALAR_FIELD-typed value from a 1-component ring: the persistent
+        1-component carry the condensed-Schur theta<1 stage needs for its cross-step phi^n (a lag-1
+        potential kept across steps, not a full state). The narrower ring is declared with this ncomp in
+        the codegen prelude, so a bare ``ctx.history`` read never widens it."""
         if not isinstance(name, str) or not name:
             raise ValueError("history: name must be a non-empty string")
         if isinstance(lag, bool) or not isinstance(lag, int) or lag < 1:
             raise ValueError("history: lag must be a Python int >= 1 (got %r)" % (lag,))
         self._histories[name] = max(self._histories.get(name, 0), lag)
-        return self._new("state", "history", (), {"history": name, "lag": int(lag)}, name, None)
+        if ncomp is None:
+            # DEFAULT: a full-state ring, State-typed. attrs unchanged from ADC-406a so every existing
+            # multistep history node serializes and hashes byte-identically (no ncomp key).
+            return self._new("state", "history", (), {"history": name, "lag": int(lag)}, name, None)
+        if isinstance(ncomp, bool) or not isinstance(ncomp, int) or ncomp < 1:
+            raise ValueError("history: ncomp must be None or a Python int >= 1 (got %r)" % (ncomp,))
+        # An explicit ncomp: a scalar-field ring (block=None, like P.scalar_field). Only ncomp=1 is a
+        # meaningful narrow carry today (the phi^n potential); a wider explicit ncomp is a State the
+        # default already covers, so require 1 here (fail loud rather than silently alias the state ring).
+        if ncomp != 1:
+            raise ValueError(
+                "history: an explicit ncomp must be 1 (the 1-component carry); the full-state ring is "
+                "the default ncomp=None (got %r)" % (ncomp,))
+        self._histories_ncomp[name] = int(ncomp)
+        return self._new("scalar_field", "history", (),
+                         {"history": name, "lag": int(lag), "ncomp": int(ncomp)}, name, None)
 
     def store_history(self, name: Any, value: Any) -> Any:
         """Store @p value (a State/RHS field) into the CURRENT slot of history @p name at the end of the

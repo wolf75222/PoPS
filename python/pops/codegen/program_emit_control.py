@@ -128,8 +128,18 @@ def _emit_body(program: Any, model: Any = None) -> tuple:
     # depth is locked before any store. The first ctx.store_history then cold-start-fills every
     # (already-allocated) slot -- step 0 reads the same value at every lag and the scheme degenerates
     # to a one-step method. register_history is idempotent (no-op once registered).
+    # A NARROW ring (ADC-427: the 1-component condensed-Schur phi^n carry) declares its slot ncomp here
+    # via the 3-arg register_history so the width is locked BEFORE any read; a full-state multistep ring
+    # (ncomp absent) emits the historical 2-arg form -- byte-identical IR and compatible with the AMR
+    # ProgramContext (which added the ncomp param defaulted, ADC-631 rings unchanged).
+    histories_ncomp = getattr(program, "_histories_ncomp", {})
     for name, lag in sorted(program._histories.items()):
-        lines.append("ctx.register_history(%s, %d);" % (json.dumps(name), int(lag)))
+        ncomp = histories_ncomp.get(name)
+        if ncomp is None:
+            lines.append("ctx.register_history(%s, %d);" % (json.dumps(name), int(lag)))
+        else:
+            lines.append("ctx.register_history(%s, %d, %d);"
+                         % (json.dumps(name), int(lag), int(ncomp)))
     for v in program._values:
         base = bases.get(v.block)  # the block-state value of THIS op's block (None: a scalar op)
         _emit_op(program, v, base, committed_ids, var, model, lines, prelude, block_idx)

@@ -1,8 +1,7 @@
 """pops.time Program IR passes + serialization (authoring mixin).
 
-Optimization passes (dead-node / CSE / redundant-solve elimination), IR serialization
-(``_serialize`` / ``_ir_hash``), ``validate`` and ``_block_indices``; static cost inspection
-lives in ``_ProgramInspect``. Pure IR analysis: no codegen, no _pops."""
+Optimization passes (dead-node / CSE / redundant-solve elimination), IR serialization (``_serialize``
+/ ``_ir_hash``), ``validate``, ``_block_indices``; cost inspection is ``_ProgramInspect``. No _pops."""
 from __future__ import annotations
 
 import hashlib
@@ -166,6 +165,7 @@ class _ProgramPasses(_ProgramConstants, _ProgramBase):
         out = type(self)(self.name)
         out.dt = self.dt
         out._histories = dict(self._histories)
+        out._histories_ncomp = dict(getattr(self, "_histories_ncomp", {}))
         out._registry = self._registry
         idmap = {}  # old Value -> new Value
         by_id = {v.id: v for v in self._values}

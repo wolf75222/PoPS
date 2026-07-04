@@ -33,6 +33,7 @@ class _ProgramBase:
     _commits: dict
     _recording: list
     _histories: dict
+    _histories_ncomp: dict
     _dt_bound: Any
     _registry: Any
     _capture_source: bool

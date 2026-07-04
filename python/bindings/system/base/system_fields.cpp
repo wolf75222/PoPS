@@ -294,7 +294,7 @@ MultiFab System::alloc_scalar_field(int n_comp, int n_ghost) {
 // field across macro-steps (Adams-Bashforth), reaching the SYSTEM-OWNED ring buffers through these
 // accessors. The rings live in Impl::program_.hist_ (the extracted Program subsystem, ADC-594) so a
 // later checkpoint slice (ADC-406b) can serialize them without touching the .so ABI.
-MultiFab& System::register_history(const std::string& name, int lag) {
+MultiFab& System::register_history(const std::string& name, int lag, int ncomp) {
   if (lag < 1)
     throw std::runtime_error("System::register_history: lag must be >= 1 (got " +
                              std::to_string(lag) + ") for history '" + name + "'");
@@ -310,11 +310,12 @@ MultiFab& System::register_history(const std::string& name, int lag) {
     // can register in EITHER order without conflict -- a smaller request is a no-op (returns the
     // existing current slot), a larger one grows the ring (appending zero-filled deeper slots; the
     // current slot [0] and the already-stored slots are preserved). A program reads each name at one
-    // fixed lag, so the depth converges in the first step and never changes again.
+    // fixed lag, so the depth converges in the first step and never changes again. The @p ncomp
+    // request is ignored on re-registration: a name binds one component count at its first register.
     if (want_depth > p_->program_.hist_.depth[name]) {
-      const int ncomp = it->second[0].ncomp();
+      const int slot_ncomp = it->second[0].ncomp();
       for (int k = p_->program_.hist_.depth[name]; k < want_depth; ++k) {
-        MultiFab slot(p_->ba, p_->dm, ncomp, 1);
+        MultiFab slot(p_->ba, p_->dm, slot_ncomp, 1);
         slot.set_val(Real(0));
         it->second.push_back(std::move(slot));
       }
@@ -322,15 +323,21 @@ MultiFab& System::register_history(const std::string& name, int lag) {
     }
     return it->second[0];
   }
-  // The ring holds the block's ncomp (so a slot can carry a full RHS / state), co-distributed with the
-  // block storage (ba/dm) so a per-cell kernel and the arithmetic pair it with the state by local fab
-  // index. One ghost layer like a block state; zero-initialized (the cold-start fill happens on the
-  // first store, but a never-stored read still fails loud on the !initialized flag below).
-  const int ncomp = p_->sp[0].ncomp;
+  // The ring holds @p ncomp components, co-distributed with the block storage (ba/dm) so a per-cell
+  // kernel and the arithmetic pair it with the state by local fab index. One ghost layer like a block
+  // state; zero-initialized (the cold-start fill happens on the first store, but a never-stored read
+  // still fails loud on the !initialized flag below). @p ncomp < 0 (the default) resolves to block 0's
+  // ncomp -- so a slot can carry a full RHS / state, byte-identical to the historical multistep ring
+  // (ADC-406a); a caller that needs a narrower ring (ADC-427: the 1-component condensed-Schur phi^n
+  // carry) passes an explicit ncomp >= 1.
+  const int resolved_ncomp = ncomp < 0 ? p_->sp[0].ncomp : ncomp;
+  if (resolved_ncomp < 1)
+    throw std::runtime_error("System::register_history: ncomp must be >= 1 (got " +
+                             std::to_string(ncomp) + ") for history '" + name + "'");
   std::vector<MultiFab> ring;
   ring.reserve(static_cast<std::size_t>(want_depth));
   for (int k = 0; k < want_depth; ++k) {
-    MultiFab slot(p_->ba, p_->dm, ncomp, 1);
+    MultiFab slot(p_->ba, p_->dm, resolved_ncomp, 1);
     slot.set_val(Real(0));
     ring.push_back(std::move(slot));
   }
