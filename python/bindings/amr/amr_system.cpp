@@ -603,6 +603,15 @@ struct AmrSystem::Impl {
     // set_regrid(0) -> FROZEN hierarchy, bit-identical to before this PR.
     const Real thr = static_cast<Real>(refine_threshold);
     runtime->set_regrid(cfg.regrid_every);
+    // ADC-616: Berger-Rigoutsos clustering params. Each <= 0 keeps the ClusterParams default (0.7 /
+    // 1 / 32), so an unconfigured AMR run clusters bit-identically. Applied only when set.
+    if (cfg.cluster_min_efficiency > 0.0 || cfg.cluster_min_box_size > 0 ||
+        cfg.cluster_max_box_size > 0) {
+      const double eff = cfg.cluster_min_efficiency > 0.0 ? cfg.cluster_min_efficiency : 0.7;
+      const int minb = cfg.cluster_min_box_size > 0 ? cfg.cluster_min_box_size : 1;
+      const int maxb = cfg.cluster_max_box_size > 0 ? cfg.cluster_max_box_size : 32;
+      runtime->set_clustering(eff, minb, maxb);
+    }
     if (cfg.regrid_every > 0) {
       const bool selected = !refine_var_name.empty() || !refine_var_role.empty();
       for (std::size_t b = 0; b < blocks.size(); ++b) {
@@ -2093,6 +2102,14 @@ EffectiveOptionsReport AmrSystem::effective_options_report() const {
   report.amr_refinement.phi_grad_threshold = p_->phi_grad_threshold;
   report.amr_refinement.phi_refinement_enabled =
       p_->phi_grad_threshold > static_cast<double>(kAmrPhiRefinementDisabledThreshold);
+  // ADC-616: effective Berger-Rigoutsos clustering params (default {0.7, 1, 32} unless overridden by
+  // the AmrSystemConfig cluster_* fields, which mirror the pops.mesh.amr.PatchClustering descriptor).
+  report.amr_refinement.cluster_min_efficiency =
+      p_->cfg.cluster_min_efficiency > 0.0 ? p_->cfg.cluster_min_efficiency : 0.7;
+  report.amr_refinement.cluster_min_box_size =
+      p_->cfg.cluster_min_box_size > 0 ? p_->cfg.cluster_min_box_size : 1;
+  report.amr_refinement.cluster_max_box_size =
+      p_->cfg.cluster_max_box_size > 0 ? p_->cfg.cluster_max_box_size : 32;
 
   for (const Impl::BlockSpec& b : p_->blocks) {
     EffectiveBlockOptions row;

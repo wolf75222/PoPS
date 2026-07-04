@@ -205,7 +205,7 @@ def _amr_config_from_layout(layout: Any) -> Any:
     flowed as config knobs. Imported lazily so the runtime module stays import-light.
     """
     from pops._bootstrap import AmrSystemConfig
-    from pops.mesh.amr import FrozenRegrid, PatchLayout, RegridEvery
+    from pops.mesh.amr import FrozenRegrid, PatchClustering, PatchLayout, RegridEvery
 
     base = layout.base
     cfg: Any = AmrSystemConfig()
@@ -231,6 +231,18 @@ def _amr_config_from_layout(layout: Any) -> Any:
         raise TypeError(
             "pops.bind: AMR.patches must be a pops.mesh.amr.PatchLayout(...) (got %r)"
             % type(patches).__name__)
+
+    # ADC-616: Berger-Rigoutsos clustering params. None -> the native ClusterParams default (0.7 / 1 /
+    # 32), left as 0 on the config so the C++ keeps that default (bit-identical).
+    clustering = getattr(layout, "clustering", None)
+    if isinstance(clustering, PatchClustering):
+        cfg.cluster_min_efficiency = float(clustering.min_efficiency)
+        cfg.cluster_min_box_size = int(clustering.min_box_size)
+        cfg.cluster_max_box_size = int(clustering.max_box_size)
+    elif clustering is not None:
+        raise TypeError(
+            "pops.bind: AMR.clustering must be a pops.mesh.amr.PatchClustering(...) (got %r)"
+            % type(clustering).__name__)
     return cfg
 
 

@@ -483,6 +483,20 @@ class AmrRuntime {
     regrid_margin_ = margin;
   }
 
+  /// ADC-616: Berger-Rigoutsos clustering params (min_efficiency in (0,1], sizes > 0, min <= max).
+  /// Defaults reproduce the historical {0.7, 1, 32}. Refuses out-of-domain values STRUCTURALLY.
+  void set_clustering(double min_efficiency, int min_box_size, int max_box_size) {
+    if (!(min_efficiency > 0.0 && min_efficiency <= 1.0))
+      throw std::runtime_error("AmrRuntime::set_clustering : min_efficiency must be in (0, 1]");
+    if (min_box_size < 1 || max_box_size < 1)
+      throw std::runtime_error("AmrRuntime::set_clustering : box sizes must be >= 1");
+    if (min_box_size > max_box_size)
+      throw std::runtime_error("AmrRuntime::set_clustering : min_box_size <= max_box_size required");
+    cluster_.min_efficiency = min_efficiency;
+    cluster_.min_box_size = min_box_size;
+    cluster_.max_box_size = max_box_size;
+  }
+
   /// Registers the TAG PREDICATE of block @p b (D1: PER-BLOCK union criterion). The predicate is
   /// evaluated on the block U (component 0 = density, or a discrete gradient at the caller's charge) at
   /// the PARENT level during the regrid; the UNION (OR) of the predicates of all blocks + the phi
@@ -974,8 +988,8 @@ class AmrRuntime {
     // fine layout. all_reduce_or_inplace is called INSIDE regrid_compute_fine_layout for distributed
     // pk==0: all ranks start from the SAME tag grid -> IDENTICAL fb/dmap per rank (otherwise MPI
     // desync).
-    auto [fb, dmap] =
-        regrid_compute_fine_layout(std::move(grown), pdom, pk, regrid_margin_, replicated_coarse_);
+    auto [fb, dmap] = regrid_compute_fine_layout(std::move(grown), pdom, pk, regrid_margin_,
+                                                 replicated_coarse_, cluster_);  // ADC-616 params
 #ifdef POPS_HAS_MPI
     // MPI COLLECTIVE COUNT (Spec 5 criterion 43): regrid_compute_fine_layout issues ONE
     // all_reduce_or_inplace over the tag grid when the coarse is distributed (multi-rank) -- every rank
@@ -1778,6 +1792,7 @@ class AmrRuntime {
   int regrid_every_ = 0;
   int regrid_grow_ = 2;
   int regrid_margin_ = 2;
+  ClusterParams cluster_{};  ///< ADC-616: Berger-Rigoutsos params; default {0.7,1,32} (bit-identical).
   int aux_ncomp_ = kAuxBaseComps;
   int nlev_ = 0;
   int macro_step_ = 0;

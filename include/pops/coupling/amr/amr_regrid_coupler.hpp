@@ -51,7 +51,8 @@ namespace pops {
 /// to refine (the caller then keeps the current grid). MPI-safe: under a distributed coarse level, the global OR
 /// of the tags (all_reduce_or) guarantees IDENTICAL patches on all ranks (otherwise incompatible dmaps).
 inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout(
-    TagBox grown, const Box2D& pdom, int pk, int margin, bool coarse_replicated = true) {
+    TagBox grown, const Box2D& pdom, int pk, int margin, bool coarse_replicated = true,
+    const ClusterParams& cluster = ClusterParams{}) {
   const int PNX = pdom.nx(), PNY = pdom.ny();
   // DISTRIBUTED COARSE (pk == 0 && !coarse_replicated): each rank only tagged its LOCAL boxes.
   // Global OR before the clustering -> all ranks start from the SAME tag grid (otherwise the
@@ -59,7 +60,9 @@ inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout(
   // grid is already complete on each rank (no-op, all_reduce_or would be the identity).
   if (pk == 0 && !coarse_replicated)
     all_reduce_or_inplace(grown.t.data(), static_cast<int>(grown.t.size()));
-  std::vector<Box2D> cl = berger_rigoutsos(grown, ClusterParams{});
+  // ADC-616: the Berger-Rigoutsos clustering params (min_efficiency / min_box_size / max_box_size)
+  // are a PARAMETER now. Default ClusterParams{} == the historical {0.7, 1, 32} -> bit-identical.
+  std::vector<Box2D> cl = berger_rigoutsos(grown, cluster);
   std::vector<Box2D> fb;  // fine patches (fine level coords = parent x2)
   for (Box2D b : cl) {
     b.lo[0] = std::max(b.lo[0], margin);

@@ -225,6 +225,12 @@ struct EffectiveRefinementOptions {
   std::string role;
   double phi_grad_threshold = static_cast<double>(kAmrPhiRefinementDisabledThreshold);
   bool phi_refinement_enabled = false;
+  // ADC-616: effective Berger-Rigoutsos clustering params (default {0.7, 1, 32} unless overridden).
+  double cluster_min_efficiency = 0.7;
+  int cluster_min_box_size = 1;
+  int cluster_max_box_size = 32;
+};
+
 /// The EFFECTIVE embedded-boundary thresholds (ADC-615): default or overridden. enabled=false when
 /// no cut-cell domain is configured (the fields then carry the kEb* defaults, inert). geometry_mode
 /// mirrors the disc transport routing ("none" / "staircase" / "cutcell").

@@ -139,7 +139,7 @@ class AMR(MeshDescriptor):
 
     def __init__(self, base: Any, max_levels: Any = 2, ratio: Any = 2, regrid: Any = None,
                  patches: Any = None, refine: Any = None, nesting: Any = None,
-                 checkpoint: Any = None, output: Any = None) -> None:
+                 checkpoint: Any = None, output: Any = None, clustering: Any = None) -> None:
         self.base = base
         self.max_levels = int(max_levels)
         self.ratio = int(ratio)
@@ -149,6 +149,9 @@ class AMR(MeshDescriptor):
         self.nesting = nesting
         self.checkpoint = checkpoint
         self.output = output
+        # ADC-616: optional pops.mesh.amr.PatchClustering(...) tuning the Berger-Rigoutsos layout.
+        # None -> the native ClusterParams default (bit-identical).
+        self.clustering = clustering
 
     def options(self) -> dict:
         return {"base": self.base.name, "max_levels": self.max_levels, "ratio": self.ratio,
@@ -183,7 +186,7 @@ class AMR(MeshDescriptor):
         validate_amr_refinement_ratio(self.ratio, where="AMR")
         # Validate the attached policies, then the route availability.
         for policy in (self.regrid, self.patches, self.refine, self.nesting,
-                       self.checkpoint, self.output):
+                       self.checkpoint, self.output, self.clustering):
             if policy is not None and hasattr(policy, "validate"):
                 policy.validate(context)
         return super().validate(context)

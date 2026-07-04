@@ -57,6 +57,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   coarse cycles, verbosity) from Python; defaults bit-identical.
 - ADC-615 Add typed CutCell(kappa_min, face_open_eps, cut_theta_min) EB/cut-cell thresholds;
   defaults bit-identical.
+- ADC-616 Expose Berger-Rigoutsos clustering params (min_efficiency, min_box_size,
+  max_box_size) with domain validation; defaults bit-identical.
 - ADC-514 Native AMR runtime params: per-block RuntimeParams carrier plus AmrSystem.set_block_params, append-only AmrBuildParams/AmrCompiledHooks ABI and pops_* metadata export, so pops.bind(compiled=None, params={...}) changes a native AMR block result without recompiling the .so; default (no params) trajectories stay bit-identical.
 - ADC-515 Native `estimate_memory` / `arguments` introspection on the AMR-compiled artifact: the
   `CompiledModel` handle `pops.compile(layout=AMR(...))` returns now exposes the same bind-input and

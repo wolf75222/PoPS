@@ -349,6 +349,10 @@ inline py::dict effective_refinement_options_to_dict(const EffectiveRefinementOp
   d["role"] = r.role;
   d["phi_grad_threshold"] = r.phi_grad_threshold;
   d["phi_refinement_enabled"] = r.phi_refinement_enabled;
+  // ADC-616: effective Berger-Rigoutsos clustering params.
+  d["cluster_min_efficiency"] = r.cluster_min_efficiency;
+  d["cluster_min_box_size"] = r.cluster_min_box_size;
+  d["cluster_max_box_size"] = r.cluster_max_box_size;
   return d;
 }
 

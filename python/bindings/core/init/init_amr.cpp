@@ -569,6 +569,11 @@ void init_amr(py::module_& m) {
       .def_readwrite("regrid_every", &AmrSystemConfig::regrid_every)
       .def_readwrite("periodic", &AmrSystemConfig::periodic)
       .def_readwrite("distribute_coarse", &AmrSystemConfig::distribute_coarse)
+      .def_readwrite("coarse_max_grid", &AmrSystemConfig::coarse_max_grid)
+      // ADC-616: Berger-Rigoutsos clustering params (<= 0 = the historical {0.7, 1, 32} default).
+      .def_readwrite("cluster_min_efficiency", &AmrSystemConfig::cluster_min_efficiency)
+      .def_readwrite("cluster_min_box_size", &AmrSystemConfig::cluster_min_box_size)
+      .def_readwrite("cluster_max_box_size", &AmrSystemConfig::cluster_max_box_size);
 
   // AmrSystem: generic single-species composition on AMR.
   py::class_<AmrSystem> cls(m, "AmrSystem");

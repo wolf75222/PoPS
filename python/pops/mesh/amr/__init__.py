@@ -217,6 +217,48 @@ class PatchLayout(MeshDescriptor):
                 "coarse_max_grid": self.coarse_max_grid}
 
 
+class PatchClustering(MeshDescriptor):
+    """Berger-Rigoutsos clustering policy of the regrid layout (ADC-615/616).
+
+    Tunes how tagged coarse cells are grouped into fine patches:
+
+    * ``min_efficiency`` in (0, 1] -- the tagged fraction a candidate box must reach to be accepted
+      (higher = tighter, more patches; default 0.7);
+    * ``min_box_size`` -- the smallest admissible patch side (default 1);
+    * ``max_box_size`` -- the largest patch side; accepted boxes are chopped to it (default 32).
+
+    Defaults reproduce the historical native ``ClusterParams{0.7, 1, 32}`` bit-for-bit. Out-of-domain
+    values (efficiency outside (0, 1], sizes < 1, min > max) are refused STRUCTURALLY at construction.
+    """
+
+    category = "clustering_policy"
+
+    def __init__(self, min_efficiency: Any = 0.7, min_box_size: Any = 1,
+                 max_box_size: Any = 32) -> None:
+        if isinstance(min_efficiency, bool) or not isinstance(min_efficiency, (int, float)):
+            raise TypeError("PatchClustering: min_efficiency must be a number (got %r)"
+                            % (min_efficiency,))
+        self.min_efficiency = float(min_efficiency)
+        if not (0.0 < self.min_efficiency <= 1.0):
+            raise ValueError("PatchClustering: min_efficiency must be in (0, 1] (got %r)"
+                             % (min_efficiency,))
+        if isinstance(min_box_size, bool) or not isinstance(min_box_size, int) or min_box_size < 1:
+            raise ValueError("PatchClustering: min_box_size must be an int >= 1 (got %r)"
+                             % (min_box_size,))
+        if isinstance(max_box_size, bool) or not isinstance(max_box_size, int) or max_box_size < 1:
+            raise ValueError("PatchClustering: max_box_size must be an int >= 1 (got %r)"
+                             % (max_box_size,))
+        if min_box_size > max_box_size:
+            raise ValueError("PatchClustering: min_box_size <= max_box_size required (got %d > %d)"
+                             % (min_box_size, max_box_size))
+        self.min_box_size = int(min_box_size)
+        self.max_box_size = int(max_box_size)
+
+    def options(self) -> dict:
+        return {"min_efficiency": self.min_efficiency, "min_box_size": self.min_box_size,
+                "max_box_size": self.max_box_size}
+
+
 class ProperNesting(MeshDescriptor):
     """Proper-nesting policy with a buffer (cells of guaranteed coarse padding)."""
 
@@ -323,7 +365,7 @@ class IgnoreAMRCriteria(MeshDescriptor):
 
 
 __all__ = [
-    "Refine", "TagUnion", "RegridEvery", "FrozenRegrid", "PatchLayout",
+    "Refine", "TagUnion", "RegridEvery", "FrozenRegrid", "PatchLayout", "PatchClustering",
     "ProperNesting", "BufferCells", "AllLevels", "CoarseOnly", "SelectedLevels",
     "CheckpointPolicy", "AMROutput", "IgnoreAMRCriteria", "NATIVE_MAX_LEVELS",
     "NATIVE_RATIOS", "Availability",
