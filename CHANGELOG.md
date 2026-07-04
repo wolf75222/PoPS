@@ -104,6 +104,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   to the documented BiCGStab tolerance and reaching second-order temporal accuracy at theta = 0.5.
   theta == 1 stays byte-identical (the fresh-zero phi path is preserved: IR hash and emitted C++
   unchanged).
+- ADC-427 The condensed_schur theta < 1 phi^n carry now composes on the AMR hierarchy: the AMR history
+  rings are ncomp-aware (AmrHistoryOps::register_history / AmrProgramContext::register_history /
+  history_zero_start thread ncomp, ncomp < 0 keeps block 0's width so the multistep rings stay
+  byte-identical), so the same lowered body carries the 1-component phi^n through a per-level ring.
+  Each level's -Lap(phi^n) RHS anchor feeds the composite Schur elliptic through the ADC-633
+  assembly_target machinery, and phi is extrapolated and stored per level. On a flat hierarchy the
+  per-level ring degenerates to the level-0 carry, so flat-AMR theta = 0.5 is bit-identical to Uniform
+  level-0 (np.array_equal) and theta = 1 stays byte-identical to Uniform. The genuinely-refined Schur
+  Program remains the ADC-648 best-effort composite scaffold (the per-level assemble/solve interleave).
 - ADC-631 Multistep history rings (`keep_history` / `T.prev`, Adams-Bashforth / BDF) on the
   compiled-Program AMR route: per-level ring slots remapped through regrid (R6/R7), the v3 checkpoint
   with the ADC-626 persistence policies (Dense / Interval / Revolve) and native replay across regrids

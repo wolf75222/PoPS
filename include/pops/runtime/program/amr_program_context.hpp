@@ -278,23 +278,23 @@ class AmrProgramContext {
   // level -- the body's terminal rotate_histories() runs once per level in the AMR per-level loop, so
   // the level_==nlev-1 guard is the AMR analogue of the Uniform once-per-step rotate (design plan sec.2).
   // @p ncomp mirrors ProgramContext::register_history so the SAME lowered body (a single problem.so)
-  // compiles against BOTH contexts. The narrow-ring AMR phi^n carry (ADC-427 commit 3) threads @p ncomp
-  // into AmrHistoryOps; until then the AMR ring keeps block 0's width (the multistep ring, unchanged),
-  // so @p ncomp is accepted-and-ignored here -- a signature-only addition, no AMR semantics change.
+  // compiles against BOTH contexts. The narrow-ring AMR phi^n carry (ADC-427) threads @p ncomp into
+  // AmrHistoryOps: ncomp < 0 (the default) keeps block 0's width (the multistep ring, unchanged); an
+  // explicit ncomp >= 1 (the 1-component condensed-Schur phi^n carry) narrows the per-level ring, which
+  // rides the same alloc / remap / replay machinery (each slot is sized by ncomp internally).
   void register_history(const std::string& name, int lag, int ncomp = -1) const {
-    (void)ncomp;
-    pops::detail::AmrHistoryOps::register_history(*eng_, name, lag);  // idempotent; allocates every level
+    pops::detail::AmrHistoryOps::register_history(*eng_, name, lag, ncomp);  // allocates every level
   }
   MultiFab& history(const std::string& name, int lag = 1) const {
     return pops::detail::AmrHistoryOps::read_history(*eng_, name, lag, level_);
   }
   // ZERO COLD-START read (ADC-427), mirroring ProgramContext::history_zero_start so the SAME lowered
   // body compiles on both contexts: a read-first cross-step carry reads the zero-filled slots on its
-  // very first read instead of failing loud. @p ncomp is accepted-and-ignored like register_history
-  // above (the AMR narrow ring lands with the ADC-427 AMR commits; block-0 width until then).
+  // very first read instead of failing loud. @p ncomp binds the ring width at the first register (the
+  // codegen prelude locks it before any read), exactly like register_history above: ncomp < 0 keeps
+  // block 0's width, an explicit ncomp >= 1 narrows the ring (the phi^n carry is 1-component).
   MultiFab& history_zero_start(const std::string& name, int lag, int ncomp = -1) const {
-    (void)ncomp;
-    pops::detail::AmrHistoryOps::register_history(*eng_, name, lag);
+    pops::detail::AmrHistoryOps::register_history(*eng_, name, lag, ncomp);
     if (!pops::detail::AmrHistoryOps::initialized(*eng_, name))
       pops::detail::AmrHistoryOps::set_initialized(*eng_, name, true);
     return pops::detail::AmrHistoryOps::read_history(*eng_, name, lag, level_);
