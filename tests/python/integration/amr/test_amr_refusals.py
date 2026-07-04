@@ -49,19 +49,17 @@ def test_imexrk_ars222_on_amr_is_refused_with_precise_message():
         assert needle in msg, "IMEXRK-on-AMR refusal missing %r; got %r" % (needle, msg)
 
 
-def test_native_runtime_params_on_amr_are_refused_with_precise_message():
-    """AMR native install x runtime params: refused with the "no per-block param seam" message.
-
-    The native AMR ``.so`` loader does not transport runtime params (there is no ``set_block_params``
-    on the AMR path), so a non-empty ``params=`` on the NATIVE AMR install seam (``so_path=None``) is
-    refused loudly rather than silently dropped, steering to a const model param or the Uniform route.
-    """
+def test_unknown_runtime_params_on_amr_are_refused_with_precise_message():
+    """AMR native install x runtime params: the blanket refusal is GONE (ADC-514 wired
+    set_block_params), so the remaining precise refusal is the routing one -- a param name
+    declared by NO instance's runtime parameters is rejected, never silently dropped.
+    Positive coverage of the live route: test_amr_native_params.py."""
     sim = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-    with pytest.raises(NotImplementedError) as excinfo:
-        sim._finish_program_install(compiled=None, so_path=None, params={"alpha": 1.0}, cadence=None)
+    with pytest.raises(ValueError) as excinfo:
+        sim._install_block_params({}, {"alpha": 1.0})
     msg = str(excinfo.value)
-    for needle in ("not wired on a NATIVE AMR install", "per-block param seam"):
-        assert needle in msg, "native runtime-params refusal missing %r; got %r" % (needle, msg)
+    for needle in ("declared by no instance", "kind='runtime'"):
+        assert needle in msg, "unknown runtime-params refusal missing %r; got %r" % (needle, msg)
 
 
 if __name__ == "__main__":

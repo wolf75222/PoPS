@@ -282,6 +282,7 @@ def _stub_amr_lower_layer(amr, record):
     record.setdefault("blocks", [])
     record.setdefault("installed", False)
     record.setdefault("params", [])
+    record.setdefault("block_params", [])
     record.setdefault("cadence", None)
     amr.add_equation = lambda name, model, **k: record["blocks"].append(name)
     amr.set_density = lambda *a, **k: None
@@ -289,6 +290,8 @@ def _stub_amr_lower_layer(amr, record):
     amr._install_aux = lambda *a, **k: None
     amr.install_program = lambda *a, **k: record.__setitem__("installed", True)
     amr.set_program_params = lambda blk, values: record["params"].append((blk, list(values)))
+    # ADC-514: the native per-block runtime-param route (step 4b) pushes to set_block_params.
+    amr.set_block_params = lambda name, values: record["block_params"].append((name, list(values)))
     amr.set_program_cadence = lambda substeps, stride: record.__setitem__("cadence", (substeps, stride))
     amr.block_names = lambda: list(record["blocks"])
 
@@ -331,18 +334,37 @@ def test_amr_compiled_params_and_cadence_route():
     chk(record["cadence"] == (2, 3), "cadence= routed to set_program_cadence (substeps=2, stride=3)")
 
 
-def test_amr_native_params_and_cadence_rejected():
-    """A NATIVE AMR install (compiled=None) still honestly rejects params= (the native AMR .so loader
-    transports no runtime params) and cadence= (no Program to wrap) rather than dropping them."""
-    print("== AmrSystem._install_compiled rejects un-wired native params / cadence ==")
+def test_amr_native_params_route():
+    """A NATIVE AMR install (compiled=None) now ROUTES params= to set_block_params per instance (ADC-514:
+    the production AMR path carries per-block runtime params). The instance model declares the runtime
+    param 'nu', so the flat params={'nu': 2.0} lands as a per-block vector; cadence= is still honestly
+    rejected on a native install (no Program to wrap)."""
+    print("== AmrSystem._install_compiled routes native params to set_block_params ==")
     amr = AmrSystem(n=N, L=1.0)
+    record = {}
+    _stub_amr_lower_layer(amr, record)
+    model = _model(aux_names=(), params={"nu": Param("nu", 1.0, kind="runtime")})
+    amr._install_compiled(None,
+                          instances={"plasma": {"model": model, "initial": np.ones((3, N, N))}},
+                          params={"nu": 2.0})
+    chk(record["block_params"] == [("plasma", [2.0])],
+        "params= routed to set_block_params (block 'plasma', [2.0])")
+    # A param declared by NO instance is a loud error (no silent drop).
     try:
-        amr._install_compiled(None, params={"nu": 1.0})
-        chk(False, "params= should raise on a native AMR install")
-    except NotImplementedError as exc:
-        chk("set_block_params" in str(exc) or "params" in str(exc), "params rejection is explicit")
+        amr2 = AmrSystem(n=N, L=1.0)
+        _stub_amr_lower_layer(amr2, {})
+        model2 = _model(aux_names=(), params={"nu": Param("nu", 1.0, kind="runtime")})
+        amr2._install_compiled(None,
+                               instances={"plasma": {"model": model2, "initial": np.ones((3, N, N))}},
+                               params={"nu": 2.0, "bogus": 9.0})
+        chk(False, "a param declared by no instance should raise")
+    except ValueError as exc:
+        chk("bogus" in str(exc), "the unknown-param rejection names 'bogus'")
+    # cadence= is still rejected on a native install (no Program).
     try:
-        amr._install_compiled(None, cadence=adctime.CompiledTime(substeps=2))
+        amr3 = AmrSystem(n=N, L=1.0)
+        _stub_amr_lower_layer(amr3, {})
+        amr3._install_compiled(None, cadence=adctime.CompiledTime(substeps=2))
         chk(False, "cadence= should raise on a native AMR install")
     except ValueError as exc:
         chk("cadence" in str(exc) or "Program" in str(exc), "cadence rejection is explicit")

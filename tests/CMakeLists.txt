@@ -568,6 +568,32 @@ pops_add_gtest_suite(NAME test_native_loader_param_overflow SOURCES "${_src}" EX
 pops_test_source(_src test_module_metadata)
 pops_add_gtest_suite(NAME test_module_metadata SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS})
 
+# ADC-622: external-brick registry PER-.so ISOLATION. TWO fixture .so, each registering DISJOINT brick
+# ids from external_brick.hpp (header-light, NO Kokkos / _pops), are dlopen'd in one process by
+# test_external_brick_isolation, which asserts each .so's manifest lists only ITS OWN bricks. The fix
+# under test is the hidden-visibility BrickRegistry (POPS_BRICK_LOCAL): without it, on Linux/GCC the
+# header-only registry singleton is STB_GNU_UNIQUE and the loader unifies it across the two .so.
+# -fno-gnu-unique on the fixture .so is the belt-and-suspenders backstop (GCC only; guarded).
+function(pops_add_brick_fixture_so name source)
+  add_library(${name} SHARED "${CMAKE_CURRENT_SOURCE_DIR}/${source}")
+  target_link_libraries(${name} PRIVATE pops::pops)
+  target_compile_features(${name} PRIVATE cxx_std_${POPS_CXX_STD})
+  set_target_properties(${name} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+  # Reproduce a REAL brick .so build: -fno-gnu-unique so GCC never emits the registry singleton as
+  # STB_GNU_UNIQUE (defense in depth behind the hidden-visibility fix). GCC only -- Clang / MSVC reject
+  # the flag and never emit GNU_UNIQUE anyway.
+  target_compile_options(${name} PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fno-gnu-unique>)
+endfunction()
+pops_add_brick_fixture_so(pops_iso_fixture_a cpp/integration/runtime/external_brick_fixture_a.cpp)
+pops_add_brick_fixture_so(pops_iso_fixture_b cpp/integration/runtime/external_brick_fixture_b.cpp)
+
+pops_test_source(_src test_external_brick_isolation)
+pops_add_gtest_suite(NAME test_external_brick_isolation SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS}
+  COMPILE_DEFINITIONS
+    POPS_ISO_FIXTURE_A_SO="$<TARGET_FILE:pops_iso_fixture_a>"
+    POPS_ISO_FIXTURE_B_SO="$<TARGET_FILE:pops_iso_fixture_b>")
+add_dependencies(test_external_brick_isolation pops_iso_fixture_a pops_iso_fixture_b)
+
 
 if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_polar_schur 1 2 4)

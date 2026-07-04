@@ -15,6 +15,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `[x.y.z] - YYYY-MM-DD`.
 
 ## [Unreleased]
+### Fixed
+- ADC-622 External brick registry is now per-.so (hidden-visibility BrickRegistry plus -fno-gnu-unique on brick builds), so pops_brick_manifest() of a .so describes only that .so even on Linux/glibc where STB_GNU_UNIQUE unified it across dlopen; a two-fixture C++ test proves isolation.
+
 ### Removed
 - routes: the 24 unreferenced symmetric route-id constants (ADC-630); named constants remain only for identifiers with a live consumer.
 
@@ -46,6 +49,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   unregistered `test_coupling_operator_contract` into the standard C++ test list.
 
 ### Added
+- ADC-514 Native AMR runtime params: per-block RuntimeParams carrier plus AmrSystem.set_block_params, append-only AmrBuildParams/AmrCompiledHooks ABI and pops_* metadata export, so pops.bind(compiled=None, params={...}) changes a native AMR block result without recompiling the .so; default (no params) trajectories stay bit-identical.
 - ADC-515 Native `estimate_memory` / `arguments` introspection on the AMR-compiled artifact: the
   `CompiledModel` handle `pops.compile(layout=AMR(...))` returns now exposes the same bind-input and
   memory-formula surface as the Uniform `CompiledProblem` (model-as-handle path, `layout='amr'`,

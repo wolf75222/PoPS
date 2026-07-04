@@ -363,6 +363,17 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
                    '                                                    /*implicit_roles=*/{}, pos_floor);\n'
                    + ell_field_lines +
                    '}\n')
+        # NATIVE per-block RUNTIME PARAMS metadata (ADC-514): the AMR loader exports pops_compiled_nparams
+        # (read by AmrSystem::add_native_block for the kMaxRuntimeParams defence-in-depth guard, mirror of
+        # the AOT path) and pops_compiled_param_names (the CSV of declared runtime-param names, in the
+        # sorted order add_compiled_model seeds them, so the Python route validates set_block_params names
+        # against the .so). Both stay extern "C" default-visibility (dlsym-able). A param-free model emits
+        # nparams 0 + an empty CSV -> the guard is inert and the route reads no names (byte-identical).
+        install += ('extern "C" int pops_compiled_nparams() {\n'
+                    '  return pops::compiled_block::model_nparams<pops_generated::ProdModel>();\n'
+                    '}\n'
+                    'extern "C" const char* pops_compiled_param_names() { return "%s"; }\n'
+                    % ",".join(node.name for node in m.runtime_param_nodes()))
     return (head
             + bricks
             + '\nnamespace pops_generated { using ProdModel = %s; }\n' % composite

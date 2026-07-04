@@ -411,6 +411,11 @@ sources = ["tests/cpp/integration/runtime/test_external_brick_json.cpp"]
 labels = ["integration", "runtime", "medium"]
 
 [[cpp.suite]]
+name = "test_external_brick_isolation"
+sources = ["tests/cpp/integration/runtime/test_external_brick_isolation.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
 name = "test_field_context"
 sources = ["tests/cpp/unit/runtime/test_field_context.cpp"]
 labels = ["unit", "runtime", "small"]

@@ -348,6 +348,11 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       // here. cf. AmrSystem::set_program_params.
       .def("set_program_params", &AmrSystem::set_program_params, py::arg("prog_block"),
            py::arg("values"))
+      // Changes the NATIVE per-block RUNTIME parameters of a production block WITHOUT recompiling the
+      // .so (ADC-514, parity System.set_block_params). name = the block name; values = that block's
+      // params in the model's runtime_param_names order. Python's step-4b route in _amr_system_install
+      // sends params={name: value} here after validating the names against pops_compiled_param_names.
+      .def("set_block_params", &AmrSystem::set_block_params, py::arg("name"), py::arg("values"))
       // IR hash of the installed compiled Program (the .so's pops_program_hash), or "" if none. Parity
       // System::installed_program_hash (the checkpoint guard).
       .def("installed_program_hash", &AmrSystem::installed_program_hash)

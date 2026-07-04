@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pops._bootstrap import ModelSpec
-from pops.runtime._install_param_routing import route_program_params
+from pops.runtime._install_param_routing import route_block_params, route_program_params
 from pops.runtime.bricks import Spatial
 from pops.runtime.routes import euler_layout_ok as _euler_layout_ok
 
@@ -399,35 +399,10 @@ class _SystemUnifiedInstall(_System):
                 return block
         return None
 
-    @staticmethod
-    def _route_block_params(resolved_models: Any, params: Any) -> Any:
-        """Pure routing core of _install_params (no engine call -> host-testable). Map a flat
-        {param_name: value} to {block: sorted runtime-param value vector} using each RESOLVED model's
-        runtime_param_names (declaration defaults for unspecified names), and return the param names
-        declared by no instance. @p resolved_models maps each instance name to its RESOLVED
-        CompiledModel: the raw dsl.Model has no runtime_param_names accessor, so a model passed
-        UNRESOLVED here contributes no params (the bug install's resolve step prevents -- see
-        install step (2)). @return (per_block, unknown), per_block only listing blocks with params."""
-        consumed = set()
-        per_block = {}
-        for name, model in resolved_models.items():
-            # runtime_param_names is a @property (list); runtime_param_values is a method.
-            rt_names = list(getattr(model, "runtime_param_names", []) or [])
-            if not rt_names:
-                continue
-            values_fn = getattr(model, "runtime_param_values", None)
-            raw_defaults: Any = values_fn() if callable(values_fn) else [None] * len(rt_names)
-            defaults: Any = list(raw_defaults)
-            values = []
-            for k, pname in enumerate(rt_names):
-                if pname in params:
-                    values.append(float(params[pname]))
-                    consumed.add(pname)
-                else:
-                    values.append(float(defaults[k]) if defaults[k] is not None else 0.0)
-            per_block[name] = values
-        unknown = sorted(set(params) - consumed)
-        return per_block, unknown
+    # Host-testable pure core (P7-b block-param routing, ADC-514 shares it with the AMR path): callable
+    # as System._route_block_params without building a System. Extracted to _install_param_routing so the
+    # Uniform and AMR install seams both delegate to ONE routing implementation.
+    _route_block_params = staticmethod(route_block_params)
 
     def _install_params(self, resolved_models: Any, params: Any,
                         reject_unknown: bool = True) -> Any:

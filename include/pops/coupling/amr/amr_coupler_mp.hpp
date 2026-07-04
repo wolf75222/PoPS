@@ -20,6 +20,7 @@
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/mesh/layout/refinement.hpp>  // coarsen_index
 #include <pops/parallel/comm.hpp>    // all_reduce_sum / all_reduce_max (distributed mass/drift)
+#include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams: NATIVE per-block runtime params (ADC-514)
 
 #include <algorithm>   // std::max
 #include <cmath>       // std::hypot
@@ -27,6 +28,7 @@
 #include <functional>  // std::function (conducting-wall predicate passed to the MG)
 #include <map>  // named_aux_: model-named aux fields (comp -> coarse field), re-applied by compute_aux
 #include <stdexcept>  // std::runtime_error (density size guard)
+#include <type_traits>  // std::void_t / if constexpr detection of a brick's runtime-param member (ADC-514)
 #include <utility>    // std::pair, std::move
 #include <vector>
 
@@ -576,6 +578,17 @@ class AmrCouplerMP {
         recon_prim, /*imex=*/false, NewtonOptions{}, AmrTimeMethod::kEuler, pos_floor);
   }
 
+  /// Injects the CURRENT native runtime-param values @p rp into the model's bricks (ADC-514): every
+  /// brick (hyp / src / ell) carrying a `pops::RuntimeParams params` member takes @p rp in place of its
+  /// declaration defaults, so the NEXT update() / advance reads the new values -- no recompile. A brick
+  /// without such a member is a no-op (the SAME apply_runtime_params contract as the AOT ABI). Called at
+  /// the top of each macro-step by the build_amr_compiled closure when the block declares a runtime param.
+  void set_params(const RuntimeParams& rp) {
+    apply_params_to_brick(model_.hyp, rp);
+    apply_params_to_brick(model_.src, rp);
+    apply_params_to_brick(model_.ell, rp);
+  }
+
   // Regrid of the FINE level by Berger-Rigoutsos (delegated to amr_regrid_finest):
   // rebuilds the patches (carry over fine data, otherwise parent interp) + the aux.
   // margin = nesting. The coupler only orders the call.
@@ -667,7 +680,24 @@ class AmrCouplerMP {
     return a.lo[0] == b.lo[0] && a.lo[1] == b.lo[1] && a.hi[0] == b.hi[0] && a.hi[1] == b.hi[1];
   }
 
-  Model model_;
+  // Detect whether brick @p B carries a `pops::RuntimeParams params` member (ADC-514). A native brick or
+  // a brick without a runtime param has none -> apply_params_to_brick is then a no-op (bit-identity). SAME
+  // shape as compiled_block::HasRuntimeParams, reproduced here to keep this header off the heavy AOT ABI.
+  template <class B, class = void>
+  struct HasParamsMember : std::false_type {};
+  template <class B>
+  struct HasParamsMember<B, std::void_t<decltype(std::declval<B&>().params)>>
+      : std::is_same<std::decay_t<decltype(std::declval<B&>().params)>, RuntimeParams> {};
+
+  template <class B>
+  static void apply_params_to_brick(B& b, const RuntimeParams& rp) {
+    if constexpr (HasParamsMember<B>::value)
+      b.params = rp;
+  }
+
+  // NATIVE per-block runtime params (ADC-514) mutate the model between macro-steps (set_params), so model_
+  // is mutable. For a param-free model set_params is never called -> no mutation, bit-identical.
+  mutable Model model_;
   Geometry geom_;
   Elliptic mg_;
   AmrLevelStack<AmrLevelMP> stack_;
