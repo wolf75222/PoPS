@@ -566,6 +566,28 @@ def test_clean_flat_amr_schur_theta_one_equals_uniform():
         % float(np.abs(uni_rho - amr_rho).max()))
 
 
+def test_clean_flat_amr_schur_theta_half_equals_uniform():
+    """ADC-427 (theta = 0.5, the phi^n carry): the condensed-Schur Program at theta = 0.5 CARRIES phi^n
+    across steps through the ncomp=1 System / AMR history ring (the -Lap(phi^n) RHS anchor + the warm
+    start + the 1/theta phi extrapolation). On a flat AMR hierarchy the per-level ring degenerates to
+    the level-0 ring, so the emitted body runs bit-identically to the Uniform level-0 carry. This gate
+    is the load-bearing acceptance for the ncomp-aware AMR history ring: it FAILS if the AMR ring
+    ignores the ncomp=1 request (a block-ncomp ring would carry the wrong phi^n slot). np.array_equal."""
+    print("== (c') clean flat-AMR Schur theta=0.5 == clean Uniform theta=0.5 (bit-identical density) ==")
+    amr, aerr = _clean_amr_schur_run(0.5, "adc427_schur_t05")
+    if amr is None:
+        print("skip (%s)" % aerr)
+        return
+    uni, uerr = _clean_uniform_schur_run(0.5, "adc427_schur_t05")
+    if uni is None:
+        print("skip (%s)" % uerr)
+        return
+    amr_rho, uni_rho = amr[0], uni[0]
+    chk(np.array_equal(uni_rho, amr_rho),
+        "clean flat-AMR Schur theta=0.5 density is BIT-IDENTICAL to Uniform level-0 "
+        "(the ncomp=1 phi^n carry; max|diff| = %.3e)" % float(np.abs(uni_rho - amr_rho).max()))
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]
