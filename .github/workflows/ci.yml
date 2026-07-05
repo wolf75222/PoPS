@@ -109,7 +109,7 @@ jobs:
         with:
           fetch-depth: 1
       - id: filter
-        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
         with:
           filters: |
             cpp:
@@ -643,7 +643,7 @@ jobs:
 
       - name: Download Python module artifact
         if: steps.test-plan.outputs.python_shard_count != '0'
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: gate-python-build-kokkos-py
           path: build-kokkos-py/python
@@ -792,7 +792,7 @@ jobs:
           cache: pip
 
       - name: Download Python module artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: gate-python-build-kokkos-py
           path: build-kokkos-py/python
