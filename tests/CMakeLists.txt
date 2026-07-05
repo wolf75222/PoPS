@@ -348,7 +348,6 @@ set(POPS_CPP_STANDARD_TESTS
   test_generic_krylov
   test_solver_codegen_generated
   test_schur_condensation
-  test_condensed_schur_operator
   test_condensed_schur_source_stepper
   test_amr_condensed_schur_source_stepper
   test_amr_condensed_schur_composite

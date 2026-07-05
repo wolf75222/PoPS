@@ -397,21 +397,24 @@ def test_composition_query_ssprk2_all_green():
     chk(not pending, "no pending group for an SSPRK2 Program (support = %r)" % support)
 
 
-def test_composition_query_condensed_schur_green_633():
-    """A condensed-Schur Program uses the Schur ops -> the capability query reports schur=green now that
-    ADC-633 wired the per-level Schur assembly + the flat/composite solve. Pure Python."""
-    print("== composition: amr_program_op_support(condensed_schur) is green (ADC-633) ==")
+def test_composition_query_condensed_green_633():
+    """A condensed-implicit Program uses the generic condensed_* ops -> the capability query reports
+    condensed=green now that ADC-633 wired the per-level assembly + the flat/composite solve and ADC-637
+    made the generic route the sole route. Pure Python."""
+    print("== composition: amr_program_op_support(condensed_schur) is green (condensed group) ==")
     schur = lib_time.condensed_schur("plasma", alpha=1.0)
     support = amr_program_op_support(schur)
-    chk(support.get("schur") == "green",
-        "the Schur Program reports schur=green after ADC-633 (support = %r)" % support)
+    chk(support.get("condensed") == "green",
+        "the condensed Program reports condensed=green (support = %r)" % support)
 
 
 def _schur_model(name="adc633_schur"):
     """Isothermal 2D fluid block (rho, mx, my) with a Poisson coupling + a B_z aux: the canonical
-    condensed-Schur block (Density / MomentumX / MomentumY roles + B_z at the c_bz=3 aux slot the
-    condensed_schur macro reads). Mirror of test_time_condensed_schur's schur_model."""
+    condensed block (Density / MomentumX / MomentumY roles + B_z at the c_bz=3 aux slot). The generic
+    condensed route (ADC-637) requires the electrostatic-Lorentz linearization J on the momentum subset,
+    authored here."""
     from pops.ir.ops import sqrt
+    from pops.lib.models import author_electrostatic_lorentz
     from pops.physics.facade import Model
     m = Model(name)
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
@@ -429,6 +432,7 @@ def _schur_model(name="adc633_schur"):
     m.aux("grad_y")
     m.aux("B_z")
     m.rate_operator("explicit_rhs", flux=True)
+    author_electrostatic_lorentz(m)
     return m
 
 
@@ -586,6 +590,57 @@ def test_clean_flat_amr_schur_theta_half_equals_uniform():
     chk(np.array_equal(uni_rho, amr_rho),
         "clean flat-AMR Schur theta=0.5 density is BIT-IDENTICAL to Uniform level-0 "
         "(the ncomp=1 phi^n carry; max|diff| = %.3e)" % float(np.abs(uni_rho - amr_rho).max()))
+def test_flat_amr_condensed_program_matches_system_bit_for_bit():
+    """ADC-637 retirement precondition on AMR: the generic condensed-implicit Program on a FLAT AMR
+    hierarchy (FrozenRegrid, no fine patch) evolves the density BIT-FOR-BIT identically to the same
+    Program on the Uniform layout. assembly_target / assembly_source are the identity when
+    !has_fine_patches(), and solve_linear_matfree dispatches flat->the SAME matrix-free BiCGStab -- so
+    the flat-AMR trajectory transfers the proven System trajectory to the last bit (the acceptance the
+    brick retirement rests on for AMR). Self-skips without a compiler / Kokkos (never a fake engine)."""
+    print("== retirement precondition: flat-AMR condensed Program == System condensed Program ==")
+    u0 = parity._init_density()  # density-only 2D seed; the AMR route lifts (momentum=0), Uniform binds
+    bz0 = 4.0 * np.ones((N, N))   # the full conservative state, so read the lift back for the Uniform seed.
+
+    # The Uniform bind takes the FULL conservative state; read the native set_density lift back from a
+    # scratch System so the Uniform seed is BITWISE the AMR set_density seed (same pattern as leg (b)).
+    u0_full, lerr = _lift_density(_schur_model("adc637_lift"), u0)
+    if u0_full is None:
+        print("skip (%s)" % lerr)
+        return
+
+    def _run(layout, seed, seed_as_density):
+        model = _schur_model("adc637_flat")
+        schur = lib_time.condensed_schur("plasma", alpha=1.0)
+        problem = _problem(model, schur)
+        try:
+            compiled = pops.compile(problem, layout=layout)
+        except RuntimeError as exc:
+            return None, "compile: %s" % str(exc)[:200]
+        if getattr(compiled, "program", None) is None:
+            return None, "compile carried no Program"
+        try:
+            sim = pops.bind(compiled, initial_state={"plasma": seed}, aux={"B_z": bz0})
+        except RuntimeError as exc:
+            return None, "bind: %s" % str(exc)[:240]
+        try:
+            for _ in range(NSTEPS):
+                sim.step(DT)
+        except RuntimeError as exc:
+            return None, "step: %s" % str(exc)[:200]
+        return np.asarray(sim.density("plasma")), None
+
+    amr_rho, aerr = _run(_amr_layout(), u0, True)
+    if amr_rho is None:
+        print("skip (flat AMR %s)" % aerr)
+        return
+    sys_rho, serr = _run(_uniform_layout(), u0_full, False)
+    if sys_rho is None:
+        print("skip (Uniform %s)" % serr)
+        return
+    dmax = float(np.abs(amr_rho - sys_rho).max())
+    chk(np.array_equal(amr_rho, sys_rho),
+        "the flat-AMR condensed Program density is BIT-IDENTICAL to the System condensed Program "
+        "(max|diff| = %.3e)" % dmax)
 
 
 def _run_all():

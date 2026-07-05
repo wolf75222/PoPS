@@ -36,10 +36,10 @@ from pops.codegen.program_emit_model_kernels import _linear_source_rows
 
 
 def emit_condensed_op(v: Any, var: Any, model: Any, lines: Any, prelude: Any) -> None:
-    """Dispatch a condensed_coeffs / condensed_rhs / condensed_reconstruct op to its inline emitter
-    (ADC-637), keeping program_emit_ops.py a thin router. Records the op's C++ token in @p var and
-    appends its kernel to @p lines (the coefficient bundle also allocates four persistent coefficient
-    shared_ptrs in @p prelude, alloc-once, captured by the apply lambda -- like schur_coeffs)."""
+    """Dispatch a condensed_coeffs / condensed_rhs / condensed_reconstruct / condensed_energy op to its
+    inline emitter (ADC-637), keeping program_emit_ops.py a thin router. Records the op's C++ token in
+    @p var and appends its kernel to @p lines (the coefficient bundle also allocates four persistent
+    coefficient shared_ptrs in @p prelude, alloc-once, captured by the apply lambda)."""
     if v.op == "condensed_coeffs":
         if prelude is None:
             raise NotImplementedError(
@@ -69,11 +69,17 @@ def emit_condensed_op(v: Any, var: Any, model: Any, lines: Any, prelude: Any) ->
             v.id, model, v.attrs["linear_operator"], v.attrs["subset"], v.attrs["th_dt"],
             v.attrs["g"], var[out_in.id], var[phi_in.id], var[state_in.id])
         var[v.id] = var[out_in.id]
-    else:  # condensed_reconstruct
+    elif v.op == "condensed_reconstruct":
         state_in, phi_in = v.inputs
         lines += _emit_condensed_reconstruct_kernel(
             v.id, model, v.attrs["linear_operator"], v.attrs["subset"], v.attrs["th_dt"],
             v.attrs["c_rho"], var[state_in.id], var[phi_in.id])
+        var[v.id] = var[state_in.id]
+    else:  # condensed_energy
+        state_in, old_in = v.inputs
+        lines += _emit_condensed_energy_kernel(
+            v.id, v.attrs["c_rho"], v.attrs["c_mx"], v.attrs["c_my"], v.attrs["c_E"],
+            var[state_in.id], var[old_in.id])
         var[v.id] = var[state_in.id]
 
 
@@ -168,16 +174,27 @@ def _emit_condensed_coeffs_kernel(uid: Any, model: Any, jblock_op: Any, subset: 
     c_cpp = _coeff_cpp(c_coeff)
     th_dt_cpp = _coeff_cpp(th_dt)
     aux = "cond%s_aux" % uid
+    # PER-LEVEL WRITE REDIRECT (ADC-637 / ADC-633 section 2). Bind each coefficient's WRITE target through
+    # ctx.assembly_target(field, role): the IDENTITY on the uniform System and the flat AMR branch (returns
+    # the passed field, so the kernel writes straight into the level-0-bound scratch -- byte-for-byte the
+    # pre-redirect emission), the per-level composite buffer on a REFINED hierarchy (the level-0 scratch
+    # cannot address a fine level). Exactly parallel to the retired brick's assemble_schur_coeffs.
+    exW, eyW, axyW, ayxW = ("cond%s_exW" % uid, "cond%s_eyW" % uid, "cond%s_axyW" % uid,
+                            "cond%s_ayxW" % uid)
     body = [
         "pops::MultiFab& %s = ctx.aux();" % aux,
-        "for (int li = 0; li < %s.local_size(); ++li) {" % ex,
-        "  const pops::Array4 exA = %s.fab(li).array();" % ex,
-        "  const pops::Array4 eyA = %s.fab(li).array();" % ey,
-        "  const pops::Array4 axyA = %s.fab(li).array();" % axy,
-        "  const pops::Array4 ayxA = %s.fab(li).array();" % ayx,
+        "pops::MultiFab& %s = ctx.assembly_target(%s, pops::runtime::program::kEpsX);" % (exW, ex),
+        "pops::MultiFab& %s = ctx.assembly_target(%s, pops::runtime::program::kEpsY);" % (eyW, ey),
+        "pops::MultiFab& %s = ctx.assembly_target(%s, pops::runtime::program::kAxy);" % (axyW, axy),
+        "pops::MultiFab& %s = ctx.assembly_target(%s, pops::runtime::program::kAyx);" % (ayxW, ayx),
+        "for (int li = 0; li < %s.local_size(); ++li) {" % exW,
+        "  const pops::Array4 exA = %s.fab(li).array();" % exW,
+        "  const pops::Array4 eyA = %s.fab(li).array();" % eyW,
+        "  const pops::Array4 axyA = %s.fab(li).array();" % axyW,
+        "  const pops::Array4 ayxA = %s.fab(li).array();" % ayxW,
         "  const pops::ConstArray4 stateA = %s.fab(li).const_array();" % state_var,
         "  const pops::ConstArray4 auxA = %s.fab(li).const_array();" % aux,
-        "  pops::for_each_cell(%s.box(li), [=] POPS_HD(int i, int j) {" % ex,
+        "  pops::for_each_cell(%s.box(li), [=] POPS_HD(int i, int j) {" % exW,
         "    const pops::Real rho = stateA(i, j, %d);" % int(c_rho),
     ]
     _emit_block_inverse(body, impl, jblock, th_dt_cpp, "    ")
@@ -231,6 +248,13 @@ def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any
     lap = "cond%s_lap" % uid
     negl = "cond%s_neglap" % uid
     fx = "cond%s_flux" % uid
+    fxW = "cond%s_fluxW" % uid
+    rhsW = "cond%s_rhsW" % uid
+    # PER-LEVEL WRITE REDIRECT (ADC-637 / ADC-633 section 2). The explicit flux F and the fused RHS write
+    # THROUGH ctx.assembly_target: IDENTITY on the uniform System and flat AMR (byte-for-byte the level-0
+    # scratch), the per-level composite buffer on a refined hierarchy (so the composite FAC reads the
+    # level's own RHS). The transient bare Laplacian scratch (lap / neg_lap) stays on the RHS layout,
+    # which alloc_scalar_field already shapes PER LEVEL on AmrProgramContext -- no redirect needed there.
     body = [
         "ctx.fill_boundary(%s);" % _deref(phi_n_var),
         "pops::MultiFab %s = ctx.alloc_scalar_field(1, 0);" % lap,
@@ -245,21 +269,23 @@ def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any
         "  });",
         "}",
         "pops::MultiFab %s = ctx.alloc_scalar_field(2, 1);  // F = M^-1 (mx, my), 1 ghost for div" % fx,
+        "pops::MultiFab& %s = ctx.assembly_target(%s, pops::runtime::program::kFlux);" % (fxW, fx),
     ]
-    _emit_condensed_flux_kernel(body, uid, impl, jblock, th_dt_cpp, subset, fx, state_var)
-    body.append("ctx.fill_boundary(%s);" % fx)
+    _emit_condensed_flux_kernel(body, uid, impl, jblock, th_dt_cpp, subset, fxW, state_var)
+    body.append("ctx.fill_boundary(%s);" % fxW)
     # rhs = -Lap phi^n - g*div(F): centered FV divergence (Fx comp 0, Fy comp 1), fused with -Lap.
     body += [
+        "pops::MultiFab& %s = ctx.assembly_target(%s, pops::runtime::program::kRhs);" % (rhsW, rhs),
         "const pops::Real cond%s_hx = pops::Real(1) / (pops::Real(2) * ctx.geom().dx());"
         % uid,
         "const pops::Real cond%s_hy = pops::Real(1) / (pops::Real(2) * ctx.geom().dy());"
         % uid,
         "const pops::Real cond%s_g = %s;" % (uid, g_cpp),
-        "for (int li = 0; li < %s.local_size(); ++li) {" % rhs,
-        "  const pops::Array4 rhsA = %s.fab(li).array();" % rhs,
+        "for (int li = 0; li < %s.local_size(); ++li) {" % rhsW,
+        "  const pops::Array4 rhsA = %s.fab(li).array();" % rhsW,
         "  const pops::ConstArray4 nlA = %s.fab(li).const_array();" % negl,
-        "  const pops::ConstArray4 fA = %s.fab(li).const_array();" % fx,
-        "  pops::for_each_cell(%s.box(li), [=] POPS_HD(int i, int j) {" % rhs,
+        "  const pops::ConstArray4 fA = %s.fab(li).const_array();" % fxW,
+        "  pops::for_each_cell(%s.box(li), [=] POPS_HD(int i, int j) {" % rhsW,
         "    const pops::Real divF = (fA(i + 1, j, 0) - fA(i - 1, j, 0)) * cond%s_hx + "
         "(fA(i, j + 1, 1) - fA(i, j - 1, 1)) * cond%s_hy;" % (uid, uid),
         "    rhsA(i, j, 0) = nlA(i, j, 0) - cond%s_g * divF;" % uid,
@@ -283,8 +309,14 @@ def _emit_condensed_reconstruct_kernel(uid: Any, model: Any, jblock_op: Any, sub
     state = state_var
     phi = _deref(phi_var)
     aux = "cond%s_aux" % uid
+    phiR = "cond%s_phiR" % uid
+    # PER-LEVEL READ REDIRECT (ADC-637 / ADC-633 section 2). The reconstruction reads the solved potential
+    # THROUGH ctx.assembly_source: IDENTITY on the uniform System and flat AMR (the emitted level-0
+    # solution), the current level's PUBLISHED composite potential on a refined hierarchy (the level-0
+    # solution cannot hold a fine level's phi). Byte-for-byte unchanged on System / flat.
     body = [
-        "ctx.fill_boundary(%s);" % phi,
+        "pops::MultiFab& %s = ctx.assembly_source(%s, pops::runtime::program::kPhi);" % (phiR, phi),
+        "ctx.fill_boundary(%s);" % phiR,
         "pops::MultiFab& %s = ctx.aux();" % aux,
         "const pops::Real cond%s_hx = pops::Real(1) / (pops::Real(2) * ctx.geom().dx());"
         % uid,
@@ -292,7 +324,7 @@ def _emit_condensed_reconstruct_kernel(uid: Any, model: Any, jblock_op: Any, sub
         % uid,
         "for (int li = 0; li < %s.local_size(); ++li) {" % state,
         "  const pops::Array4 stateA = %s.fab(li).array();" % state,
-        "  const pops::ConstArray4 phiA = %s.fab(li).const_array();" % phi,
+        "  const pops::ConstArray4 phiA = %s.fab(li).const_array();" % phiR,
         "  const pops::ConstArray4 auxA = %s.fab(li).const_array();" % aux,
         "  pops::for_each_cell(%s.box(li), [=] POPS_HD(int i, int j) {" % state,
         "    const pops::Real rho = stateA(i, j, %d);" % int(c_rho),
@@ -319,3 +351,33 @@ def _emit_condensed_reconstruct_kernel(uid: Any, model: Any, jblock_op: Any, sub
         "}",
     ]
     return body
+
+
+def _emit_condensed_energy_kernel(uid: Any, c_rho: Any, c_mx: Any, c_my: Any, c_E: Any,
+                                  state_var: Any, old_var: Any) -> list:
+    """Emit the kinetic-energy increment ``E^{n+1} = E^n + (1/2)*rho*(|v^{n+1}|^2 - |v^n|^2)`` IN PLACE
+    on @p state_var (E overwritten, rho / mom untouched), into ONE fused ``for_each_cell``. v^{n+1} is
+    read from @p state_var (after the velocity update + extrapolation), v^n from @p old_var (U^n); rho is
+    frozen (same value in both states), read from @p state_var. Generic counterpart of the retired
+    SchurEnergyKernelC: pure kinematics, no block inverse / aux / model coefficient, so it lowers to a
+    self-contained inline kernel with NO coupling/schur call. @p uid disambiguates the loop (unused in the
+    body -- the kernel binds only local scalars)."""
+    del uid  # the energy kernel binds only local scalars; no per-op unique identifier is needed
+    return [
+        "for (int li = 0; li < %s.local_size(); ++li) {" % state_var,
+        "  const pops::Array4 stateA = %s.fab(li).array();" % state_var,
+        "  const pops::ConstArray4 oldA = %s.fab(li).const_array();" % old_var,
+        "  pops::for_each_cell(%s.box(li), [=] POPS_HD(int i, int j) {" % state_var,
+        "    const pops::Real rho = stateA(i, j, %d);" % int(c_rho),
+        "    const pops::Real inv_rho = rho != pops::Real(0) ? pops::Real(1) / rho : pops::Real(0);",
+        "    const pops::Real vx_new = stateA(i, j, %d) * inv_rho;" % int(c_mx),
+        "    const pops::Real vy_new = stateA(i, j, %d) * inv_rho;" % int(c_my),
+        "    const pops::Real vx_old = oldA(i, j, %d) * inv_rho;  // rho frozen: rho^n == rho^{n+1}"
+        % int(c_mx),
+        "    const pops::Real vy_old = oldA(i, j, %d) * inv_rho;" % int(c_my),
+        "    const pops::Real ke_new = pops::Real(0.5) * rho * (vx_new * vx_new + vy_new * vy_new);",
+        "    const pops::Real ke_old = pops::Real(0.5) * rho * (vx_old * vx_old + vy_old * vy_old);",
+        "    stateA(i, j, %d) += ke_new - ke_old;" % int(c_E),
+        "  });",
+        "}",
+    ]

@@ -151,3 +151,27 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
                          {"linear_operator": opname, "subset": sub, "th_dt": th_d,
                           "c_rho": self._comp_index(c_rho, "c_rho", "condensed_reconstruct")}, name,
                          state.block)
+
+    def condensed_energy(self, name: Any = None, state: Any = None, state_old: Any = None,
+                         c_rho: Any = 0, c_mx: Any = 1, c_my: Any = 2, c_E: Any = 3) -> Any:
+        """Record the kinetic-energy increment IN PLACE on @p state (ADC-427):
+        ``E^{n+1} = E^n + (1/2)*rho*(|v^{n+1}|^2 - |v^n|^2)``, ``v = (mx, my)/rho`` -- the generic
+        counterpart of the retired ``P.schur_energy``. @p state carries ``rho`` / ``mx`` / ``my`` / ``E``
+        at @p c_rho / @p c_mx / @p c_my / @p c_E AFTER the velocity update (mom = rho*v^{n+1}); @p
+        state_old is U^n (read for v^n = mom^n/rho^n and the base energy E^n). rho is frozen, so the same
+        rho is read from both. Returns @p state (E overwritten in place). Emitted as a self-contained
+        inline kernel (no block inverse, no coupling/schur)."""
+        if isinstance(name, Value) and state is None:
+            name, state = None, name
+        if not (isinstance(state, Value) and state.vtype == "state"):
+            raise ValueError("condensed_energy: a State value is required (state=...)")
+        if not (isinstance(state_old, Value) and state_old.vtype == "state"):
+            raise ValueError("condensed_energy: a State value is required (state_old=U^n)")
+        if state_old.block != state.block:
+            raise ValueError("condensed_energy: state and state_old must belong to the same block")
+        for nm, ci in (("c_rho", c_rho), ("c_mx", c_mx), ("c_my", c_my), ("c_E", c_E)):
+            if isinstance(ci, bool) or not isinstance(ci, int) or ci < 0:
+                raise ValueError("condensed_energy: %s must be a Python int >= 0 (got %r)" % (nm, ci))
+        return self._new("state", "condensed_energy", (state, state_old),
+                         {"c_rho": int(c_rho), "c_mx": int(c_mx), "c_my": int(c_my), "c_E": int(c_E)},
+                         name, state.block)

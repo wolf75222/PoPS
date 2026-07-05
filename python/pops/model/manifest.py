@@ -311,46 +311,46 @@ def build_module_manifest(module: Any) -> Any:
         abi_requirements=abi_requirements, params_utilization=_params_utilization(params))
 
 
-# Program IR ops that lower to the native condensed-Schur / Lorentz operator module (ADC-587,
-# include/pops/coupling/schur/program/condensed_schur_operator.hpp). Kept in lock-step with
-# pops.codegen.program_emit_kernels._SCHUR_PROGRAM_OPS (the codegen include gate); duplicated here (not
-# imported) so the manifest stays buildable without pulling the codegen package.
-_SCHUR_ROUTE_OPS = ("schur_coeffs", "apply_laplacian_coeff", "schur_explicit_flux", "schur_rhs",
-                    "schur_reconstruct", "schur_energy")
+# Program IR ops that lower to the GENERIC condensed-implicit solve (ADC-637): the inline block_inverse
+# emitters (block_inverse.hpp), NO coupling/schur call. Kept in lock-step with
+# pops.codegen.program_emit_kernels._CONDENSED_OPS (the codegen block_inverse include gate); duplicated
+# here (not imported) so the manifest stays buildable without pulling the codegen package.
+_CONDENSED_ROUTE_OPS = ("condensed_coeffs", "condensed_rhs", "condensed_reconstruct")
 
 
-def schur_route_manifest(program: Any) -> Any:
-    """The STRUCTURED condensed-Schur / Lorentz route descriptor of a compiled time @p program, or
-    ``None`` when its IR carries no Schur op (ADC-587, plan decision 5).
+def condensed_route_manifest(program: Any) -> Any:
+    """The STRUCTURED condensed-implicit route descriptor of a compiled time @p program, or ``None``
+    when its IR carries no condensed op (ADC-637).
 
-    A compiled Program that lowers the ``pops.lib.time.condensed_schur`` macro drives the native
-    condensed-Schur / Lorentz operator module. This descriptor makes that route -- and its documented
-    LIMITATION -- machine-visible in the manifest instead of buried in the macro docstring: a reader can
-    tell from the manifest alone that the .so pulls ``coupling/schur/program`` and that the route is a
-    documented near-match to the native ``pops.CondensedSchur`` stepper (bit-exact only at ``theta == 1``
-    for the FIRST step; the cross-step ``phi^n`` warm-start carry is deferred). Purely-additive, JSON-
-    ready; a Schur-free Program yields ``None`` (the route is honestly absent, never fabricated).
+    A compiled Program that lowers the ``pops.lib.time.condensed_schur`` macro drives the generic
+    condensed-implicit electrostatic-Lorentz push, authored entirely in the DSL and emitted inline via
+    ``pops::detail::block_inverse`` -- no coupling/schur call. This descriptor makes that route -- and its
+    documented LIMITATION -- machine-visible in the manifest instead of buried in the macro docstring: a
+    reader can tell from the manifest alone that the .so pulls ``numerics/linalg/block_inverse.hpp`` and
+    that the route is a documented near-match to the native ``pops.CondensedSchur`` stepper (bit-exact
+    only at ``theta == 1`` for the FIRST step; the cross-step ``phi^n`` warm-start carry is deferred).
+    Purely-additive, JSON-ready; a condensed-free Program yields ``None`` (the route is honestly absent).
 
-    ``ops`` lists the Schur op names actually present (id-stable IR op tags); ``operator_header`` is the
-    native module the .so includes; ``limitations`` is a structured record of the theta constraint so a
+    ``ops`` lists the condensed op names actually present (id-stable IR op tags); ``operator_header`` is
+    the intrinsic the .so includes; ``limitations`` is a structured record of the theta constraint so a
     tool can gate on it without parsing prose.
     """
     values = getattr(program, "_values", None)
     if values is None:
         return None
-    present = [v.op for v in values if v.op in _SCHUR_ROUTE_OPS]
+    present = [v.op for v in values if v.op in _CONDENSED_ROUTE_OPS]
     if not present:
         return None
-    # De-duplicate while preserving first-seen order (a Program may carry several schur ops).
+    # De-duplicate while preserving first-seen order (a Program may carry several condensed ops).
     seen = []
     for op in present:
         if op not in seen:
             seen.append(op)
     return {
-        "route": "condensed_schur",
+        "route": "condensed_implicit",
         "ops": seen,
-        "operator_module": "pops::coupling::schur::program",
-        "operator_header": "pops/coupling/schur/program/condensed_schur_operator.hpp",
+        "operator_module": "pops::detail (block_inverse)",
+        "operator_header": "pops/numerics/linalg/block_inverse.hpp",
         "native_reference": "pops.CondensedSchur",
         "limitations": {
             "bit_exact_theta": 1.0,
@@ -371,7 +371,7 @@ def coupling_operator_manifest(compiled: Any, conserved: Any = (), created: Any 
     :class:`~pops.physics.multispecies.CompiledCoupledSource` lowers to the ONE generic coupled-source
     representation. This row makes that operator -- its declared CONSERVATION contract, its FREQUENCY
     bound and its capacity UTILIZATION against the frozen ``kCsMax*`` bounds -- machine-visible in the
-    ModuleManifest / report, exactly as :func:`schur_route_manifest` surfaces the condensed-Schur route.
+    ModuleManifest / report, exactly as :func:`condensed_route_manifest` surfaces the condensed-implicit route.
     Purely additive, JSON-ready; reads @p compiled through its public attributes only (no mutation, no
     ``_pops`` import).
 
@@ -425,5 +425,5 @@ def module_manifest_of(model_or_module: Any) -> Any:
 
 
 __all__ = ["OperatorManifestEntry", "OperatorRegistryManifest", "ModuleManifest",
-           "build_module_manifest", "module_manifest_of", "schur_route_manifest",
+           "build_module_manifest", "module_manifest_of", "condensed_route_manifest",
            "coupling_operator_manifest", "SCHEMA_VERSION"]

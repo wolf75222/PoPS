@@ -3,8 +3,8 @@
 Extracted verbatim from ``pops.codegen.program_codegen`` (Spec-4 file-size budget).
 ``_emit_op`` lowers a SINGLE SSA op to C++ (appending to the line list, recording its
 token), shared by the top-level body walk (``program_emit_control._emit_body``) and the
-control-flow sub-blocks; it dispatches to the model kernels, the matrix-free / Schur /
-condensed emitters, control flow and the schedule wrap
+control-flow sub-blocks; it dispatches to the model kernels, the matrix-free / generic
+condensed-implicit emitters, control flow and the schedule wrap
 (``program_emit_{model_kernels,solve,condensed,control,schedule}``).
 """
 from __future__ import annotations
@@ -37,7 +37,6 @@ from pops.codegen.program_emit_control import (
 )
 from pops.codegen.program_emit_solve import (
     _emit_matrix_free_operator,
-    _emit_schur_coeffs,
     _emit_solve_linear,
 )
 from pops.codegen.program_emit_schedule import _emit_schedule_wrap
@@ -286,16 +285,6 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);"
                      % (var[v.id], var[base.id]))
         lines += _emit_solve_local_nonlinear_kernel(model, v, var[guess_in.id], var[v.id], bidx)
-    elif v.op == "schur_coeffs":
-        # Anisotropic condensed-Schur coefficient bundle (ADC-421): allocate the four 1-component
-        # coefficient fields ONCE (persistent shared_ptr in the prelude, captured by the apply
-        # lambda) and FILL them per step in the body from the live state + B_z aux. The bundle's var
-        # is the 4 shared_ptr names; apply_laplacian_coeff dereferences them inside the apply.
-        if prelude is None:
-            raise NotImplementedError(
-                "schur_coeffs is only lowerable at the top level / step body, not inside a "
-                "control-flow (if/while/range) body")
-        _emit_schur_coeffs(program, v, var, lines, prelude)
     elif v.op == "scalar_field":
         # A step-body scratch scalar field (e.g. the explicit-flux buffer the RHS assembly fills):
         # a persistent shared_ptr (prelude, alloc-once) reused every step. Inside an apply sub-block
@@ -310,24 +299,6 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         ncomp = int(v.attrs.get("ncomp", 1))
         prelude.append("auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, 1));"
                        % (sp, ncomp))
-    elif v.op == "schur_explicit_flux":
-        # F = B^{-1} (mx, my) per cell into a 2-component scalar field (Fx comp 0, Fy comp 1): the
-        # explicit condensed-Schur flux, a step-body one-shot (not a per-iteration apply).
-        out_in, state_in = v.inputs
-        lines.append("pops::coupling::schur::program::schur_explicit_flux(ctx, %s, %s, %s, %d, %d, %d);"
-                     % (_deref(var[out_in.id]), var[state_in.id], _coeff_cpp(v.attrs["th_dt"]),
-                        v.attrs["c_mx"], v.attrs["c_my"], v.attrs["c_bz"]))
-        var[v.id] = var[out_in.id]
-    elif v.op == "schur_rhs":
-        # Fused condensed-Schur RHS = -Lap(phi^n) - g*div(F) into a 1-component scalar field: the
-        # native assemble_rhs in one ctx call (no scalar-field affine combine at IR level).
-        out_in, phi_in, state_in = v.inputs
-        lines.append(
-            "pops::coupling::schur::program::assemble_schur_rhs(ctx, %s, %s, %s, %s, %s, %d, %d, %d);"
-            % (_deref(var[out_in.id]), _deref(var[phi_in.id]), var[state_in.id],
-               _coeff_cpp(v.attrs["th_dt"]), _coeff_cpp(v.attrs["g"]), v.attrs["c_mx"],
-               v.attrs["c_my"], v.attrs["c_bz"]))
-        var[v.id] = var[out_in.id]
     elif v.op == "laplacian":
         # Step-body bare Laplacian (e.g. Lap phi^n for the condensed RHS). Inside an apply sub-block
         # this op is handled by _emit_matrix_free_operator; here it is the top-level path.
@@ -343,28 +314,13 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines.append("ctx.divergence(%s, %s, %s);"
                      % (_deref(var[o.id]), _deref(var[fx.id]), _deref(var[fy.id])))
         var[v.id] = var[o.id]
-    elif v.op == "schur_reconstruct":
-        # In-place velocity reconstruction v = B^{-1}(v^n - theta dt grad phi); mom = rho v. Result
-        # aliases the input state (mx/my overwritten). phi is a scalar_field / 1-comp State token.
-        state_in, phi_in = v.inputs
-        lines.append("pops::coupling::schur::program::schur_reconstruct(ctx, %s, %s, %s, %d, %d, %d, %d);"
-                     % (var[state_in.id], _deref(var[phi_in.id]), _coeff_cpp(v.attrs["th_dt"]),
-                        v.attrs["c_rho"], v.attrs["c_mx"], v.attrs["c_my"], v.attrs["c_bz"]))
-        var[v.id] = var[state_in.id]
-    elif v.op == "schur_energy":
-        # In-place energy increment E += (1/2) rho (|v^{n+1}|^2 - |v^n|^2) (ADC-427). Reads v^{n+1}
-        # from the updated state and v^n / E^n from state_old (U^n); rho frozen (same in both).
-        state_in, old_in = v.inputs
-        lines.append("pops::coupling::schur::program::schur_energy(ctx, %s, %s, %d, %d, %d, %d);"
-                     % (var[state_in.id], var[old_in.id], v.attrs["c_rho"], v.attrs["c_mx"],
-                        v.attrs["c_my"], v.attrs["c_E"]))
-        var[v.id] = var[state_in.id]
-    elif v.op in ("condensed_coeffs", "condensed_rhs", "condensed_reconstruct"):
+    elif v.op in ("condensed_coeffs", "condensed_rhs", "condensed_reconstruct", "condensed_energy"):
         # GENERIC condensed-implicit solve (ADC-637): the tensor coefficient A = I + c*rho*M^{-1} bundle,
-        # the fused RHS -Lap(phi^n) - g*div(M^{-1}(m)) and the velocity reconstruction, emitted INLINE
-        # via pops::detail::block_inverse<2> from an authored J (M = I - th_dt*J) on a momentum subset --
-        # no coupling/schur call. The thin dispatch lives in program_emit_condensed to keep this router
-        # (and its budget) small; condensed_coeffs allocates its four persistent coeff fields there.
+        # the fused RHS -Lap(phi^n) - g*div(M^{-1}(m)), the velocity reconstruction and the kinetic-energy
+        # increment, emitted INLINE via pops::detail::block_inverse<2> from an authored J (M = I -
+        # th_dt*J) on a momentum subset -- no coupling/schur call. The thin dispatch lives in
+        # program_emit_condensed to keep this router (and its budget) small; condensed_coeffs allocates
+        # its four persistent coeff fields there.
         emit_condensed_op(v, var, model, lines, prelude)
     elif v.op == "matrix_free_operator":
         # Install-time: emit the apply lambda `apply_A{id}` into the prelude. Its persistent scratch

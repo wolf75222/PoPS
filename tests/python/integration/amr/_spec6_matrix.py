@@ -244,10 +244,11 @@ def _run_clean_route_program(n=16, nsteps=4, dt=1.0e-3):
 
 def _schur_facade_model(name="spec6_clean_schur"):
     """Isothermal 2D fluid block (rho, mx, my) with a Poisson coupling + a B_z aux: the canonical
-    condensed-Schur block a Program lowers on the hierarchy. m.aux("B_z") makes B_z the canonical c_bz=3
-    aux slot the condensed_schur macro reads; elliptic_rhs = rho drives the field solve. Needs the DSL
-    compiler + Kokkos to build the .so (the cell skips cleanly without them). Mirror of
-    test_time_condensed_schur's schur_model."""
+    condensed block a Program lowers on the hierarchy. m.aux("B_z") makes B_z the canonical aux slot;
+    elliptic_rhs = rho drives the field solve. The generic condensed route (ADC-637) requires the
+    electrostatic-Lorentz linearization J on the momentum subset, authored here. Needs the DSL compiler +
+    Kokkos to build the .so (the cell skips cleanly without them)."""
+    from pops.lib.models import author_electrostatic_lorentz
     m = FacadeModel(name)
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
     cs2 = m.param("cs2", 0.5)
@@ -264,6 +265,7 @@ def _schur_facade_model(name="spec6_clean_schur"):
     m.aux("grad_y")
     m.aux("B_z")
     m.rate_operator("explicit_rhs", flux=True)
+    author_electrostatic_lorentz(m)
     return m
 
 

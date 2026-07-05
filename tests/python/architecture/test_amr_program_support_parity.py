@@ -231,9 +231,10 @@ def test_parser_finds_the_known_deferral_families():
     """Guard the parser itself: it must see the Schur, history, scheduler-cache and inline-throw
     families in the header (so a silently-empty parse cannot make the equality above vacuously pass)."""
     header = _parse_header_deferred_set(CONTEXT_HPP.read_text(encoding="utf-8"))
-    # NB: the Schur deferral family (assemble_schur_coeffs / schur_reconstruct / ...) is GONE (ADC-633
-    # wired it); the remaining families guard the parser: scheduler cache (deferred_op), named flux
-    # (deferred_op), and the inline-throw seams (apply_projection / solve_fields_from_blocks).
+    # NB: the condensed-implicit family is GREEN (ADC-633 wired it, ADC-637 made it the sole route), so it
+    # contributes no deferral method; the remaining families guard the parser: scheduler cache
+    # (deferred_op), named flux (deferred_op), and the inline-throw seams (apply_projection /
+    # solve_fields_from_blocks).
     for needle in ("cache_should_update", "cache_effective_dt",      # scheduler cache (deferred_op)
                    "neg_div_flux_into",                              # named flux (deferred_op)
                    "apply_projection", "solve_fields_from_blocks"):  # inline-throw seams
@@ -247,18 +248,19 @@ def test_parser_finds_the_known_deferral_families():
 
 
 def test_ir_ops_mirror_the_codegen_op_group_sets():
-    """The mirror's Schur ir_ops must EQUAL the codegen's own ``_SCHUR_PROGRAM_OPS`` (the single op-group
-    source), so the capability query maps ops with the emit vocabulary, never a hand-drifted copy."""
+    """The mirror's condensed ir_ops must EQUAL the codegen's own ``_CONDENSED_OPS`` (the single op-group
+    source, ADC-637), so the capability query maps ops with the emit vocabulary, never a hand-drifted
+    copy."""
     module = _load_support_module()
     kernels = (REPO_ROOT / "python" / "pops" / "codegen"
                / "program_emit_kernels.py").read_text(encoding="utf-8")
-    m = re.search(r"_SCHUR_PROGRAM_OPS\s*=\s*frozenset\(\{([^}]*)\}\)", kernels, re.S)
-    assert m is not None, "could not find _SCHUR_PROGRAM_OPS in program_emit_kernels.py"
-    codegen_schur = set(re.findall(r'"([A-Za-z_]\w*)"', m.group(1)))
-    assert set(module.DEFERRED_GROUPS["schur"]["ir_ops"]) == codegen_schur, (
-        "amr_program_support schur ir_ops drifted from codegen _SCHUR_PROGRAM_OPS:\n"
+    m = re.search(r"_CONDENSED_OPS\s*=\s*frozenset\(\{([^}]*)\}\)", kernels, re.S)
+    assert m is not None, "could not find _CONDENSED_OPS in program_emit_kernels.py"
+    codegen_condensed = set(re.findall(r'"([A-Za-z_]\w*)"', m.group(1)))
+    assert set(module.DEFERRED_GROUPS["condensed"]["ir_ops"]) == codegen_condensed, (
+        "amr_program_support condensed ir_ops drifted from codegen _CONDENSED_OPS:\n"
         "  mirror : %s\n  codegen: %s"
-        % (sorted(module.DEFERRED_GROUPS["schur"]["ir_ops"]), sorted(codegen_schur)))
+        % (sorted(module.DEFERRED_GROUPS["condensed"]["ir_ops"]), sorted(codegen_condensed)))
 
 
 if __name__ == "__main__":

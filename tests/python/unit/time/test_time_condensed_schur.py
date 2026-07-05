@@ -1,34 +1,37 @@
 #!/usr/bin/env python3
-"""pops.time condensed-Schur implicit source stage as a compiled Program (epic ADC-399 / ADC-421).
+"""pops.time condensed-Schur implicit source stage as a compiled Program (epic ADC-399 / ADC-637).
 
-ADC-421 adds the anisotropic position-dependent operator-coefficient assembly the condensed-Schur
-operator needs: ``P.schur_coeffs`` assembles the per-cell tensor ``A = I + c*rho*B^{-1}`` (the native
-detail::SchurOperatorCoeffKernel), ``P.apply_laplacian_coeff`` applies ``div(A grad phi)`` matrix-free
-(pops::apply_laplacian's coefficient path), ``P.schur_rhs`` assembles the fused RHS
-``-Lap(phi^n) - theta*dt*alpha*div(B^{-1}(mx,my))`` (the native assemble_rhs), and
-``P.schur_reconstruct`` reconstructs ``v = B^{-1}(v^n - theta*dt*grad phi)`` (the closed B^{-1}). The
-``pops.lib.time.condensed_schur`` macro composes them with ``P.solve_linear`` (matrix-free BiCGStab) into
-the same assemble / solve / reconstruct sequence as the native CondensedSchurSourceStepper (epic
-acceptance 32). The native ``pops.CondensedSchur`` stepper is untouched.
+ADC-637 lowers the condensed source stage through the GENERIC condensed route: the
+``pops.lib.time.condensed_schur`` macro emits ``P.condensed_coeffs`` (the per-cell tensor
+``A = I + c*rho*B^{-1}``), ``P.condensed_rhs`` (the fused RHS ``-Lap(phi^n) - theta*dt*alpha*div(F)``)
+and ``P.condensed_reconstruct`` (``v = B^{-1}(v^n - theta*dt*grad phi)``), all lowered INLINE via
+``pops::detail::block_inverse<2>`` / ``block_apply_inverse<2>`` -- there is NO ``coupling/schur``
+operator module in the generated C++. The block 2x2 inverse the coefficients / flux / reconstruct need
+is the electrostatic-Lorentz linearization ``J`` the COMPILING MODEL carries: it is authored with
+``pops.lib.models.author_electrostatic_lorentz(m)`` on a rho/mx/my block with a ``B_z`` aux, and the
+generic route resolves it at emit time (``P.emit_cpp_program(model=...)`` reads the model's linear
+source). The macro composes the three ops with ``P.solve_linear`` (matrix-free BiCGStab) into the same
+assemble / solve / reconstruct sequence as the native CondensedSchurSourceStepper. The native
+``pops.CondensedSchur`` source stepper is untouched.
 
-ADC-427 extends the macro to theta != 1: the n+1 extrapolation by factor 1/theta is lowered with the
-EXISTING affine algebra (no component-restricted IR op) because schur_reconstruct freezes rho, so the
+The macro also supports theta != 1: the n+1 extrapolation by factor 1/theta is lowered with the
+EXISTING affine algebra (no component-restricted IR op) because the reconstruction freezes rho, so the
 plain state affine ``U^n + (1/theta)(U^{n+theta} - U^n)`` leaves rho untouched and equals the native
 momentum-only extrapolation; an OPTIONAL energy component (c_E) adds the native kinetic-energy increment
-via a new P.schur_energy op. The cross-step persistent phi^n carry is now IMPLEMENTED for theta < 1: phi
-is carried across steps through a lag-1, 1-component System history ring (the ncomp-aware
+via the generic ``condensed_energy`` op. The cross-step persistent phi^n carry is IMPLEMENTED for
+theta < 1: phi is carried across steps through a lag-1, 1-component System history ring (the ncomp-aware
 register_history), fed into the -Lap(phi^n) RHS anchor and the Krylov warm start, and extrapolated to
 phi^{n+1} by the same 1/theta factor before it is stored -- exactly as the native stepper carries it.
 The carry is GATED to theta != 1, so theta == 1 keeps the fresh-zero phi path byte-identical.
 
 (A) Pure Python, always runs:
-    - the builder ops record + validate their operands and serialize;
+    - the condensed_coeffs / apply_laplacian_coeff ops record + validate their operands and serialize;
     - the ``std.condensed_schur`` macro lowers theta == 1 (backward Euler, historical IR byte-identical)
       AND theta < 1 (the 1/theta extrapolation as a copy-then-reconstruct + affine combine);
     - theta < 1 emits the persistent phi^n carry (register_history(name, 1, 1) / ctx.history /
       store_history / rotate_histories + the warm-start lincomb), and theta == 1 emits NONE of it;
-    - an energy component lowers the P.schur_energy op; theta out of (0, 1] raises ValueError at the
-      macro AND the native brick.
+    - an energy component lowers the generic condensed_energy op; theta out of (0, 1] raises ValueError
+      at the macro AND the native brick.
 
 (B) End-to-end parity (skips unless the full toolchain is present): the macro is compiled + installed +
     MULTIPLE steps are taken on a field-coupled rho/mx/my block with a constant B_z, for theta == 1 AND
@@ -45,7 +48,8 @@ The carry is GATED to theta != 1, so theta == 1 keeps the fresh-zero phi path by
     operator and RHS, a different Krylov path. Both converge to the same phi at tolerance, so the firm
     parity is checked against the matrix-free-equivalent offline reference (not bit-against-native); a
     native pops.CondensedSchur(theta=0.5) step is also REPORTED as a diagnostic (it is confounded by the
-    explicit transport half-flow of pops.Split, so it is not asserted).
+    explicit transport half-flow of pops.Split, so it is not asserted). The compiling model carries the
+    electrostatic-Lorentz J (via author_electrostatic_lorentz) the generic route resolves at emit time.
 
 Self-skips (exit 0) without numpy / _pops / install_program / a compiler / a visible Kokkos -- never
 fakes the engine (project policy: no fake pops in tests).
@@ -80,42 +84,56 @@ _THETA = 1.0
 _TOL = 1e-10
 
 
+def _lorentz_model(name):
+    """A rho/mx/my block carrying the electrostatic-Lorentz linearization J the generic condensed
+    route (ADC-637) resolves at emit time."""
+    from pops.ir.ops import sqrt
+    from pops.lib.models import author_electrostatic_lorentz
+    from pops.physics.facade import Model
+    m = Model(name)
+    rho, mx, my = m.conservative_vars("rho", "mx", "my")
+    cs2 = m.param("cs2", 0.5)
+    u = m.primitive("u", mx / rho); v = m.primitive("v", my / rho); p = m.primitive("p", cs2 * rho)
+    m.primitive_vars(rho=rho, u=u, v=v, p=p)
+    m.conservative_from([rho, rho * u, rho * v])
+    m.flux(x=[mx, mx * u + p, my * u], y=[my, mx * v, my * v + p])
+    cs = sqrt(cs2); m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
+    m.elliptic_rhs(rho); m.aux("grad_x"); m.aux("grad_y"); m.aux("B_z")
+    author_electrostatic_lorentz(m)
+    return m
+
+
+def _lorentz_energy_model(name):
+    """A 4-variable (rho, mx, my, E) electrostatic-Lorentz block for the c_E energy variant of the
+    generic condensed route (ADC-637): E is a 4th conservative var (component 3), the rest matches
+    _lorentz_model. The compiling model carries J (author_electrostatic_lorentz)."""
+    from pops.ir.ops import sqrt
+    from pops.lib.models import author_electrostatic_lorentz
+    from pops.physics.facade import Model
+    m = Model(name)
+    rho, mx, my, E = m.conservative_vars("rho", "mx", "my", "E")
+    cs2 = m.param("cs2", 0.5)
+    u = m.primitive("u", mx / rho); v = m.primitive("v", my / rho); p = m.primitive("p", cs2 * rho)
+    m.primitive_vars(rho=rho, u=u, v=v, p=p, E=E)
+    m.conservative_from([rho, rho * u, rho * v, E])
+    m.flux(x=[mx, mx * u + p, my * u, (E + p) * u], y=[my, mx * v, my * v + p, (E + p) * v])
+    cs = sqrt(cs2); m.eigenvalues(x=[u - cs, u, u + cs, u], y=[v - cs, v, v + cs, v])
+    m.elliptic_rhs(rho); m.aux("grad_x"); m.aux("grad_y"); m.aux("B_z")
+    author_electrostatic_lorentz(m)
+    return m
+
+
 # ---- (A) builder ops + macro lowering: pure Python, always runs ----
-def test_schur_coeffs_records_and_validates(t):
-    P = t.Program("p")
-    U = P.state("blk")
-    coeffs = P.schur_coeffs(state=U, c=0.25, th_dt=0.5, c_rho=0, c_bz=3)
-    assert coeffs.vtype == "schur_coeffs", "schur_coeffs yields a schur_coeffs bundle value"
-    assert coeffs.attrs["c_rho"] == 0 and coeffs.attrs["c_bz"] == 3
-    # a number c / th_dt are stored as dt-polynomials (power 0).
-    assert coeffs.attrs["c"] == {0: 0.25} and coeffs.attrs["th_dt"] == {0: 0.5}
-
-
-def test_schur_coeffs_operand_types(t):
-    P = t.Program("p")
-    U = P.state("blk")
-    g = P.scalar_field("g")
-    bad = []
-    for kw in (dict(state=g, c=1.0, th_dt=1.0),           # a scalar_field is not a State
-               dict(state=U, c="x", th_dt=1.0),           # c not a number / dt-poly
-               dict(state=U, c=1.0, th_dt=1.0, c_rho=-1)):  # negative component
-        try:
-            P.schur_coeffs(**kw)
-        except ValueError:
-            bad.append(True)
-        else:
-            bad.append(False)
-    assert all(bad), "schur_coeffs must reject a non-State, a non-numeric coeff and a negative comp"
-
-
 def test_apply_laplacian_coeff_operand_types(t):
     P = t.Program("p")
     U = P.state("blk")
     A = P.matrix_free_operator("A")
+    from pops.lib.models import LORENTZ_J_NAME
     seen = []
 
     def apply(P, out, x):
-        coeffs = P.schur_coeffs(state=U, c=1.0, th_dt=1.0)
+        coeffs = P.condensed_coeffs(state=U, linear_operator=LORENTZ_J_NAME, subset=(1, 2),
+                                    c=1.0, th_dt=1.0, c_rho=0)
         try:
             P.apply_laplacian_coeff(out, U, coeffs)  # in_ must be a scalar_field, not a State
         except ValueError:
@@ -130,34 +148,23 @@ def test_apply_laplacian_coeff_operand_types(t):
     assert seen and all(seen), "apply_laplacian_coeff rejects a non-scalar_field in_"
 
 
-def test_schur_rhs_and_reconstruct_record(t):
-    P = t.Program("p")
-    U = P.state("blk")
-    phi_n = P.scalar_field("phi_n")
-    rhs = P.scalar_field("rhs")
-    r = P.schur_rhs(rhs, phi_n, U, th_dt=0.5, g=0.25, c_mx=1, c_my=2, c_bz=3)
-    assert r.vtype == "scalar_field" and r.attrs["g"] == {0: 0.25}
-    out = P.schur_reconstruct(state=U, phi=phi_n, th_dt=0.5, c_rho=0, c_mx=1, c_my=2, c_bz=3)
-    assert out.vtype == "state" and out.block == "blk"
-
-
 def test_condensed_schur_macro_lowers(t):
     P = t.Program("cs")
     lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=1.0)
     assert P.validate() is True, "the condensed-Schur macro must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
-    src = P.emit_cpp_program()
-    # ADC-587: the Schur ops lower to the native condensed-Schur operator module (free functions in
-    # pops::coupling::schur::program taking ctx), not to ProgramContext methods; solve_fields stays a
-    # ctx seam. The .so also pulls the operator module header.
+    src = P.emit_cpp_program(model=_lorentz_model("cs_macro"))
+    # ADC-637: the generic condensed route lowers coeffs / flux / reconstruct INLINE via
+    # pops::detail::block_inverse<2> / block_apply_inverse<2> -- NO coupling/schur operator module.
+    # solve_fields stays a ctx seam and the Krylov solve is still pops::bicgstab_solve.
     for frag in ("ctx.solve_fields_from_state",
-                 "pops::coupling::schur::program::assemble_schur_coeffs",
-                 "pops::coupling::schur::program::assemble_schur_rhs",
-                 "pops::coupling::schur::program::apply_laplacian_coeff",
+                 "pops::detail::block_inverse<2>(M_, Mi_);",
+                 "pops::detail::block_apply_inverse<2>",
+                 "rhsA(i, j, 0) = nlA(i, j, 0)",
                  "pops::bicgstab_solve",
-                 "pops::coupling::schur::program::schur_reconstruct",
-                 "coupling/schur/program/condensed_schur_operator.hpp"):
+                 "#include <pops/numerics/linalg/block_inverse.hpp>"):
         assert frag in src, "the condensed-Schur macro must contain %r\n%s" % (frag, src)
+    assert "coupling/schur" not in src, "the generic route must not pull the coupling/schur module\n%s" % src
 
 
 def test_condensed_schur_theta_half_lowers(t):
@@ -168,10 +175,10 @@ def test_condensed_schur_theta_half_lowers(t):
     lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=0.5)
     assert P.validate() is True, "the theta=0.5 condensed-Schur macro must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
-    src = P.emit_cpp_program()
-    for frag in ("pops::coupling::schur::program::assemble_schur_coeffs",
-                 "pops::coupling::schur::program::assemble_schur_rhs", "pops::bicgstab_solve",
-                 "pops::coupling::schur::program::schur_reconstruct"):
+    src = P.emit_cpp_program(model=_lorentz_model("cs_half"))
+    for frag in ("pops::detail::block_inverse<2>(M_, Mi_);",
+                 "pops::detail::block_apply_inverse<2>", "pops::bicgstab_solve",
+                 "rhsA(i, j, 0) = nlA(i, j, 0)"):
         assert frag in src, "the theta=0.5 macro must contain %r\n%s" % (frag, src)
     # th_dt = theta*dt is lowered into the reconstruction; the extrapolation is an axpy(2.0, ...) (1/0.5).
     assert "0.5 * dt" in src, "th_dt = theta*dt must reach the reconstruction\n%s" % src
@@ -181,13 +188,13 @@ def test_condensed_schur_theta_half_lowers(t):
 def test_condensed_schur_theta_half_emits_phi_carry(t):
     """ADC-427: theta != 1 carries phi^n across steps through a lag-1, 1-component System history ring.
 
-    The macro reads phi^n from the ring (ctx.history), feeds it into the RHS (-Lap(phi^n) via schur_rhs)
+    The macro reads phi^n from the ring (ctx.history), feeds it into the RHS (-Lap(phi^n) via condensed_rhs)
     and the Krylov warm start, extrapolates phi to n+1 by 1/theta and stores it (ctx.store_history), and
     the step body registers a 1-COMPONENT ring (register_history(name, 1, 1)) and rotates it. theta == 1
     emits NONE of this (a separate no-regression test)."""
     P = t.Program("cs")
     lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=0.5)
-    src = P.emit_cpp_program()
+    src = P.emit_cpp_program(model=_lorentz_model("cs_phi_carry"))
     # A NARROW (1-component) ring declared up front, then read / stored / rotated. The read is the
     # ZERO COLD-START variant: the carry reads phi^n at the TOP of the step (before any store), so its
     # very first read returns the zero-filled slot (the declared step-0 value), never the fail-loud
@@ -208,7 +215,7 @@ def test_condensed_schur_theta_one_emits_no_phi_carry(t):
     start, NO store/rotate -- so an existing theta==1 program's IR / .so cache key is byte-identical."""
     P = t.Program("cs")
     lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=1.0)
-    src = P.emit_cpp_program()
+    src = P.emit_cpp_program(model=_lorentz_model("cs_no_carry"))
     for frag in ("register_history", "ctx.history(", "store_history", "rotate_histories"):
         assert frag not in src, "theta=1 must NOT emit %r (byte-identical to the historical IR)\n%s" % (
             frag, src)
@@ -227,7 +234,8 @@ def test_condensed_schur_theta_one_ir_byte_identical_with_carry_present(t):
         Q = t.Program("cs")
         lt.condensed_schur(Q, "blk", alpha=_ALPHA, **kwargs)
         assert P._ir_hash() == h1 == Q._ir_hash(), "theta==1 IR hash must be deterministic"
-        assert "register_history" not in P.emit_cpp_program(), "no carry at theta==1"
+        model = _lorentz_energy_model("cs_bi") if "c_E" in kwargs else _lorentz_model("cs_bi")
+        assert "register_history" not in P.emit_cpp_program(model=model), "no carry at theta==1"
 
 
 def test_condensed_schur_theta_out_of_range_raises(t):
@@ -258,16 +266,16 @@ def test_condensed_schur_theta_out_of_range_raises_at_brick(t):
 
 
 def test_condensed_schur_energy_lowers(t):
-    """ADC-427: an energy component (c_E) adds the native kinetic-energy increment via P.schur_energy.
+    """ADC-427: an energy component (c_E) adds the kinetic-energy increment.
 
-    ADC-587: the op lowers to the native operator module free function
-    pops::coupling::schur::program::schur_energy(ctx, ...), not a ProgramContext method."""
+    ADC-637: the op lowers to the generic condensed_energy inline kernel (not a coupling/schur free
+    function), ending in the kinetic-increment write stateA(i, j, 3) += ke_new - ke_old."""
     P = t.Program("cs")
     lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=0.5, c_E=3)
     assert P.validate() is True
-    src = P.emit_cpp_program()
-    assert "pops::coupling::schur::program::schur_energy(ctx," in src, (
-        "the energy variant must emit the native schur_energy operator call\n%s" % src)
+    src = P.emit_cpp_program(model=_lorentz_energy_model("cs_energy"))
+    assert "stateA(i, j, 3) += ke_new - ke_old;" in src, (
+        "the energy variant must emit the generic condensed_energy kinetic increment\n%s" % src)
 
 
 def test_condensed_schur_theta_one_ir_unchanged(t):
@@ -275,10 +283,10 @@ def test_condensed_schur_theta_one_ir_unchanged(t):
     extrapolation / energy op), so an existing theta==1 program's .so cache key is byte-identical."""
     P = t.Program("cs")
     lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=1.0)
-    src = P.emit_cpp_program()
-    assert "schur_energy" not in src, "theta=1 must NOT emit an energy op"
+    src = P.emit_cpp_program(model=_lorentz_model("cs_unchanged"))
+    assert "ke_new - ke_old" not in src, "theta=1 must NOT emit an energy op"
     # No copy-then-reconstruct: the reconstruction writes U^n in place, the commit is the reconstruction.
-    assert src.count("pops::coupling::schur::program::schur_reconstruct(ctx,") == 1, src
+    assert src.count("stateA(i, j, 1) = rho * nx_;") == 1, src
     assert "static_cast<pops::Real>(2.0)" not in src, "theta=1 must NOT emit a 1/theta extrapolation"
 
 
@@ -351,7 +359,7 @@ def _offline_step(U0, alpha, theta, bz, h, dt, tol, phi_n=None):
     a_xy = c * rho * b12
     a_yx = c * rho * b21
     # 2) explicit flux F = B^{-1}(mx, my); RHS = -Lap(phi^n) - g*div(F) (centered divergence). The
-    #    -Lap(phi^n) anchor is the SAME anisotropic stencil the operator uses (assemble_schur_rhs).
+    #    -Lap(phi^n) anchor is the SAME anisotropic stencil the operator uses (the emitted condensed_rhs).
     Fx = b11 * mx + b12 * my
     Fy = b21 * mx + b22 * my
     divF = (np.roll(Fx, -1, 0) - np.roll(Fx, 1, 0)) / (2 * h) + \
@@ -499,6 +507,7 @@ def _energy_model(name, sqrt, Model):
 
     Same isothermal-pressure momentum flux as schur_model plus an energy variable transported with the
     flow; the condensed-Schur c_E stage adds the kinetic-energy increment on top."""
+    from pops.lib.models import author_electrostatic_lorentz
     m = Model(name)
     rho, mx, my, E = m.conservative_vars("rho", "mx", "my", "E")
     cs2 = m.param("cs2", 0.5)
@@ -514,6 +523,7 @@ def _energy_model(name, sqrt, Model):
     m.aux("grad_x")
     m.aux("grad_y")
     m.aux("B_z")
+    author_electrostatic_lorentz(m)
     return m
 
 
@@ -576,6 +586,7 @@ def _run_section_b(t):
 
         import pops
         from pops.ir.ops import sqrt
+        from pops.lib.models import author_electrostatic_lorentz
         from pops.physics.facade import Model
     except Exception as exc:  # noqa: BLE001  -- numpy / _pops unavailable here
         print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
@@ -607,6 +618,7 @@ def _run_section_b(t):
         m.aux("grad_x")
         m.aux("grad_y")
         m.aux("B_z")
+        author_electrostatic_lorentz(m)
         return m
 
     def make_sim(name):

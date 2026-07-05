@@ -163,27 +163,55 @@ def test_chained_dead_nodes_removed():
 _ALPHA = 1.0
 
 
-def test_condensed_schur_buffer_writers_never_removed():
-    """REGRESSION (the safe-by-default whitelist). ``pops.lib.time.condensed_schur`` assembles its RHS with
-    ``P.schur_rhs(rhs, phi_n, U, ...)`` -- a top-level op whose RESULT is DISCARDED. Its real effect is
-    filling the caller-allocated ``rhs`` scalar_field buffer, which ``P.solve_linear(rhs=rhs)`` then
-    reads BY BUFFER IDENTITY, not via a dataflow input edge. A blacklist marks ``schur_rhs`` dead and
-    drops it -> the emitted C++ loses ``assemble_schur_rhs`` and the Schur solve runs on a zero RHS
-    (silent corruption, ``validate()`` stays True). Under the allow-list ``schur_rhs`` (and every other
-    buffer-writer) is NOT removable, so the pass is a no-op: the emitted C++ is byte-identical and still
-    contains ``assemble_schur_rhs``. Covers theta == 1 (historical IR) and theta < 1 + energy (the
-    extra linear_combine copy / extrapolation / schur_energy buffer-writers)."""
+def _lorentz_energy_model(name):
+    """A rho/mx/my/E block (energy at component 3) with the electrostatic-Lorentz linearization J the
+    generic condensed route (ADC-637) resolves. The energy component lets the c_E=3 variant emit the
+    condensed_energy kernel; the c_E=None variant simply omits it."""
+    from pops.ir.ops import sqrt
+    from pops.lib.models import author_electrostatic_lorentz
+    from pops.physics.facade import Model
+    m = Model(name)
+    rho, mx, my, E = m.conservative_vars("rho", "mx", "my", "E")
+    cs2 = m.param("cs2", 0.5)
+    u = m.primitive("u", mx / rho)
+    v = m.primitive("v", my / rho)
+    p = m.primitive("p", cs2 * rho)
+    m.primitive_vars(rho=rho, u=u, v=v, p=p)
+    m.conservative_from([rho, rho * u, rho * v, E])
+    m.flux(x=[mx, mx * u + p, my * u, (E + p) * u], y=[my, mx * v, my * v + p, (E + p) * v])
+    cs = sqrt(cs2)
+    m.eigenvalues(x=[u - cs, u, u + cs, u], y=[v - cs, v, v + cs, v])
+    m.elliptic_rhs(rho)
+    m.aux("grad_x")
+    m.aux("grad_y")
+    m.aux("B_z")
+    author_electrostatic_lorentz(m)
+    return m
+
+
+def test_condensed_buffer_writers_never_removed():
+    """REGRESSION (the safe-by-default whitelist). ``pops.lib.time.condensed_schur`` assembles its RHS
+    with ``P.condensed_rhs(rhs, phi_n, U, ...)`` (ADC-637) -- a top-level op whose RESULT is DISCARDED.
+    Its real effect is filling the caller-allocated ``rhs`` scalar_field buffer, which
+    ``P.solve_linear(rhs=rhs)`` then reads BY BUFFER IDENTITY, not via a dataflow input edge. A blacklist
+    marks ``condensed_rhs`` dead and drops it -> the emitted C++ loses the fused RHS write and the solve
+    runs on a zero RHS (silent corruption, ``validate()`` stays True). Under the allow-list every
+    buffer-writer is NOT removable, so the pass is a no-op: the emitted C++ is byte-identical and still
+    contains the fused RHS write. Covers theta == 1 (historical IR) and theta < 1 + energy (the extra
+    linear_combine copy / extrapolation / condensed_energy buffer-writers)."""
+    RHS_MARKER = "rhsA(i, j, 0) = nlA(i, j, 0)"  # the generic fused -Lap - g*div(F) write
     for theta, c_E in ((1.0, None), (0.5, None), (0.5, 3), (1.0, 3)):
         P = adctime.Program("cs")
         libtime.condensed_schur(P, "blk", alpha=_ALPHA, theta=theta, c_E=c_E)
-        before = P.emit_cpp_program()
-        assert "assemble_schur_rhs" in before, "fixture lost its schur RHS assembly"
+        model = _lorentz_energy_model("cs_ir_%d_%s" % (int(round(theta * 100)), c_E))
+        before = P.emit_cpp_program(model=model)
+        assert RHS_MARKER in before, "fixture lost its condensed RHS assembly"
 
         Q = adctime.eliminate_dead_nodes(P)
 
-        after = Q.emit_cpp_program()
+        after = Q.emit_cpp_program(model=model)
         msg = "theta=%r c_E=%r" % (theta, c_E)
-        assert "assemble_schur_rhs" in after, "schur_rhs wrongly dropped (%s)" % msg
+        assert RHS_MARKER in after, "condensed_rhs wrongly dropped (%s)" % msg
         # Nothing is dead: a pure no-op, byte-for-byte (the buffer-writers + solve are all live).
         assert after == before, "pass corrupted the condensed_schur C++ (%s)" % msg
         assert Q._ir_hash() == P._ir_hash(), "no-op pass changed the IR hash (%s)" % msg

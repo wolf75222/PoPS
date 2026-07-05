@@ -40,7 +40,7 @@ from pops.codegen.program_emit_kernels import (  # noqa: F401
     _PROFILE_SKIP_OPS,
     _PROGRAM_CPP_TEMPLATE,
     _block_inverse_include,
-    _schur_include,
+    _coeff_elliptic_include,
     Value,
     _apply_in_arg,
     _aux_comp,
@@ -70,7 +70,6 @@ from pops.codegen.program_emit_model_kernels import (  # noqa: F401
 )
 from pops.codegen.program_emit_solve import (  # noqa: F401
     _emit_matrix_free_operator,
-    _emit_schur_coeffs,
     _emit_solve_linear,
 )
 from pops.codegen.program_emit_schedule import (  # noqa: F401
@@ -189,7 +188,7 @@ def emit_cpp_program(program: Any, model: Any = None, target: str = "system") ->
         program_params=_emit_program_params(program, model),
         block_names=_emit_block_names(program),
         route_manifest=_emit_route_manifest("pops_program_route_manifest"),
-        schur_include=_schur_include(program),
+        coeff_elliptic_include=_coeff_elliptic_include(program),
         block_inverse_include=_block_inverse_include(program),
         amr_install=_emit_amr_install(program, target, prelude, body))
 

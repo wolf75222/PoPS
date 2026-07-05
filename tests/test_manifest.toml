@@ -552,11 +552,6 @@ sources = ["tests/cpp/unit/elliptic/test_composite_fac_tensor.cpp"]
 labels = ["unit", "elliptic", "fast"]
 
 [[cpp.suite]]
-name = "test_condensed_schur_operator"
-sources = ["tests/cpp/unit/elliptic/test_condensed_schur_operator.cpp"]
-labels = ["unit", "elliptic", "fast"]
-
-[[cpp.suite]]
 name = "test_condensed_schur_source_stepper"
 sources = ["tests/cpp/unit/elliptic/test_condensed_schur_source_stepper.cpp"]
 labels = ["unit", "elliptic", "fast"]

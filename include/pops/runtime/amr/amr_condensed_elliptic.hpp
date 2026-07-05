@@ -14,25 +14,25 @@
 #include <pops/runtime/amr/amr_runtime.hpp>          // AmrRuntime (the engine this helper reads)
 
 /// @file
-/// @brief AmrSchurElliptic -- the composite tensor-coefficient elliptic driver a compiled condensed-
-///        Schur time Program routes to on a REFINED AMR hierarchy (ADC-633).
+/// @brief AmrCondensedElliptic -- the composite tensor-coefficient elliptic driver a compiled
+///        condensed-implicit time Program routes to on a REFINED AMR hierarchy (ADC-633 / ADC-637).
 ///
-/// The compiled condensed-Schur Program lowers, per AMR level, to the context-generic assembly free
-/// functions (coupling/schur/program/condensed_schur_operator.hpp). On a FLAT hierarchy those run the
-/// emitted matrix-free BiCGStab on level 0 -- bit-identical to the uniform Program. On a REFINED
-/// hierarchy (>= one fine patch) the single-level matrix-free solve cannot address the fine levels, so
-/// the tensor elliptic is solved COMPOSITELY: this helper owns per-level tensor-coefficient buffers
-/// (eps_x / eps_y / a_xy / a_yx), a per-level right-hand side and a per-level potential, plus a lazily
-/// built, box-cached pops::CompositeFacPoisson (two-way, variable coefficient + cross terms). The
-/// emitted assembly ops write THROUGH AmrProgramContext::schur_target into these level-shaped buffers
-/// (the level-0-bound emitted scratch is unusable on a fine level); solve_composite() copies them into
-/// the FAC's per-level fields, solves, and publishes each level's potential for the emitted
-/// reconstruction to READ through AmrProgramContext::schur_source.
+/// The compiled condensed-implicit Program lowers, per AMR level, to inline block-inverse assembly
+/// kernels (no coupling/schur call, ADC-637). On a FLAT hierarchy those run the emitted matrix-free
+/// BiCGStab on level 0 -- bit-identical to the uniform Program. On a REFINED hierarchy (>= one fine
+/// patch) the single-level matrix-free solve cannot address the fine levels, so the tensor elliptic is
+/// solved COMPOSITELY: this helper owns per-level tensor-coefficient buffers (eps_x / eps_y / a_xy /
+/// a_yx), a per-level right-hand side and a per-level potential, plus a lazily built, box-cached
+/// pops::CompositeFacPoisson (two-way, variable coefficient + cross terms). The emitted assembly ops
+/// write THROUGH AmrProgramContext::assembly_target into these level-shaped buffers (the level-0-bound
+/// emitted scratch is unusable on a fine level); solve_composite() copies them into the FAC's per-level
+/// fields, solves, and publishes each level's potential for the emitted reconstruction to READ through
+/// AmrProgramContext::assembly_source.
 ///
-/// GENERIC LAYER (owner directive, ADC-637 forward-compat): this driver names ONLY mathematical objects
-/// -- tensor coefficients, right-hand side, potential, composite FAC. No B_z / Lorentz / electrostatic
-/// vocabulary: the physics lives entirely in the brick free functions the emitted body calls; this
-/// helper just co-distributes the level buffers and drives the composite solve.
+/// GENERIC LAYER (owner directive, ADC-637): this driver names ONLY mathematical objects -- tensor
+/// coefficients, right-hand side, potential, composite FAC. No B_z / Lorentz / electrostatic / Schur
+/// vocabulary: the physics is authored in the DSL and emitted inline; this helper just co-distributes
+/// the level buffers and drives the composite solve.
 ///
 /// SCOPE. Inherited verbatim from pops::CompositeFacPoisson (ADC-636 generalized envelope): N levels,
 /// 1..N disjoint fine patches (nested, ratio 2), replicated mono-box coarse. MPI multilevel is refused
@@ -47,12 +47,12 @@ namespace program {
 /// Per-level tensor-coefficient buffers + a cached composite FAC solve, for one AMR block's condensed
 /// tensor elliptic on a refined hierarchy. Owned by AmrProgramContext (one per installed Program on the
 /// refined path); rebuilt lazily when the fine tiling changes. Indexed by AMR level (0 = coarse).
-class AmrSchurElliptic {
+class AmrCondensedElliptic {
  public:
   /// @p eng: the AMR engine (levels / geom / bc); @p block: the AMR block index (sys_block-resolved by
   /// the caller). Buffers are allocated lazily on ensure_level_buffers() so a flat hierarchy (never
   /// refined) allocates nothing.
-  AmrSchurElliptic(AmrRuntime* eng, int block) : eng_(eng), block_(block) {}
+  AmrCondensedElliptic(AmrRuntime* eng, int block) : eng_(eng), block_(block) {}
 
   /// True iff there is >= one populated fine level (level 1 carries >= one patch for this block). The
   /// AmrProgramContext gates the flat (matrix-free BiCGStab) vs composite (FAC) branch on this.
@@ -62,25 +62,25 @@ class AmrSchurElliptic {
     return eng_->level_state(static_cast<std::size_t>(block_), 1).box_array().size() > 0;
   }
 
-  /// The level-shaped WRITE target for a Schur assembly field of @p role at level @p k. The emitted
-  /// assembly free function reaches it via AmrProgramContext::schur_target so its per-cell kernel writes
-  /// into the composite buffer instead of the level-0-bound emitted scratch. Roles map to the enum in
-  /// condensed_schur_operator.hpp (eps_x / eps_y / a_xy / a_yx / rhs / flux).
+  /// The level-shaped WRITE target for an assembly field of @p role at level @p k. The emitted
+  /// assembly kernel reaches it via AmrProgramContext::assembly_target so its per-cell write lands in
+  /// the composite buffer instead of the level-0-bound emitted scratch. Roles map to the AssemblyFieldRole
+  /// enum in coeff_elliptic_ops.hpp (eps_x / eps_y / a_xy / a_yx / rhs / flux).
   MultiFab& target(int role, int k) {
     ensure_level_buffers(k);
     LevelBuffers& lb = levels_[static_cast<std::size_t>(k)];
     switch (role) {
-      case 0: return lb.eps_x;   // kSchurEpsX
-      case 1: return lb.eps_y;   // kSchurEpsY
-      case 2: return lb.a_xy;    // kSchurAxy
-      case 3: return lb.a_yx;    // kSchurAyx
-      case 4: return lb.rhs;     // kSchurRhs
-      default: return lb.flux;   // kSchurFlux (transient explicit-flux scratch)
+      case 0: return lb.eps_x;   // kEpsX
+      case 1: return lb.eps_y;   // kEpsY
+      case 2: return lb.a_xy;    // kAxy
+      case 3: return lb.a_yx;    // kAyx
+      case 4: return lb.rhs;     // kRhs
+      default: return lb.flux;   // kFlux (transient explicit-flux scratch)
     }
   }
 
   /// The published composite potential of level @p k (filled by solve_composite): the emitted
-  /// reconstruction reads it as phi^{n+theta} on that level (via AmrProgramContext::schur_source).
+  /// reconstruction reads it as phi^{n+theta} on that level (via AmrProgramContext::assembly_source).
   MultiFab& phi(int k) {
     ensure_level_buffers(k);
     return levels_[static_cast<std::size_t>(k)].phi;
@@ -99,9 +99,9 @@ class AmrSchurElliptic {
       return;  // flat: the caller never reaches this branch (has_fine_patches() is false).
     if (pops::n_ranks() != 1)
       throw std::runtime_error(
-          "AmrSchurElliptic::solve_composite: the composite condensed-Schur elliptic on a refined "
-          "hierarchy is mono-rank (the inherited CompositeFacPoisson envelope); MPI multilevel is "
-          "deferred (use System, or the native AMR source-stage route).");
+          "AmrCondensedElliptic::solve_composite: the composite condensed-implicit elliptic on a "
+          "refined hierarchy is mono-rank (the inherited CompositeFacPoisson envelope); MPI multilevel "
+          "is deferred pending ADC-648 (use System, or the native AMR source-stage route).");
     for (int k = 0; k < L; ++k)
       ensure_level_buffers(k);
 
@@ -117,12 +117,12 @@ class AmrSchurElliptic {
     for (int k = 0; k < L; ++k) {
       LevelBuffers& lb = levels_[static_cast<std::size_t>(k)];
       // The tensor coefficient A = [[eps_x, a_xy], [a_yx, eps_y]] per level (the FAC diagonal block uses
-      // eps_x; eps_y is symmetric for the Schur operator and folded into the diagonal by the FAC).
+      // eps_x; eps_y is symmetric for the condensed operator and folded into the diagonal by the FAC).
       copy0(fac_->eps_level(k), lb.eps_x);
       copy0(fac_->a_xy_level(k), lb.a_xy);
       copy0(fac_->a_yx_level(k), lb.a_yx);
-      // assemble_schur_rhs builds -Lap phi^n - g div(F): the matrix-free operator sign is -div(A grad);
-      // the FAC solves div(eps grad phi) = f, so f = -rhs (the source-stage sign convention #126).
+      // the emitted condensed_rhs builds -Lap phi^n - g div(F): the matrix-free operator sign is
+      // -div(A grad); the FAC solves div(eps grad phi) = f, so f = -rhs (the sign convention #126).
       negate_into(fac_->rhs_level(k), lb.rhs);
     }
 

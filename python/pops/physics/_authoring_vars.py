@@ -47,8 +47,14 @@ class _VariablesMixin(_HyperbolicModel):
 
     def aux(self, name: Any) -> Any:
         """CANONICAL auxiliary field (e.g. grad_x, grad_y, B_z, T_e) provided at execution. The name
-        MUST be a key of AUX_CANONICAL. For an arbitrary NAMED field, see aux_field."""
-        self.aux_names.append(name)
+        MUST be a key of AUX_CANONICAL. For an arbitrary NAMED field, see aux_field.
+
+        IDEMPOTENT: declaring the SAME canonical aux twice (e.g. the model declares ``B_z`` and
+        ``author_electrostatic_lorentz`` also reads it) reserves the channel ONCE. Re-appending would
+        emit the per-cell binding ``const pops::Real B_z = a.B_z;`` twice in one kernel scope (a C++
+        redefinition), so the second declaration returns the Var without re-registering."""
+        if name not in self.aux_names:
+            self.aux_names.append(name)
         return Var(name, "aux")
 
     def aux_field(self, name: Any) -> Any:

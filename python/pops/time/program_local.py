@@ -1,6 +1,6 @@
 """pops.time Program authoring mixin -- local + matrix-free ops.
 
-Local solves, matrix-free operators, laplacian/gradient/divergence and the Schur helpers.
+Local solves, matrix-free operators, laplacian/gradient/divergence and the coefficiented apply.
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ else:
 
 
 class _ProgramLocal(_ProgramConstants, _ProgramBase):
-    """Local solves, matrix-free operators, laplacian/gradient/divergence and the Schur helpers."""
+    """Local solves, matrix-free operators, laplacian/gradient/divergence and the coefficiented apply."""
 
     def solve_local_linear(self, name: Any = None, operator: Any = None, rhs: Any = None,
                            fields: Any = None) -> Any:
@@ -347,139 +347,24 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
                          {"c_dt": c_d, "eps": float(eps), "flux": bool(flux), "sources": src},
                          out.name, None)
 
-    # --- anisotropic condensed-Schur coefficient assembly + coefficiented apply (ADC-399 / ADC-421) ---
-    def schur_coeffs(self, name: Any = None, state: Any = None, c: Any = None, th_dt: Any = None,
-                     c_rho: Any = 0, c_bz: Any = 3) -> Any:
-        """Assemble the per-cell tensor coefficient ``A = I + c*rho*B^{-1}`` of the condensed-Schur
-        operator from a State (rho at component @p c_rho) and the B_z aux field (component @p c_bz,
-        canonical B_z=3). Returns a ``schur_coeffs`` bundle value carrying the four coefficient fields
-        (eps_x, eps_y, a_xy, a_yx) -- pass it to ``P.apply_laplacian_coeff`` inside a matrix-free apply.
-
-        @p c = theta^2 * dt^2 * alpha and @p th_dt = theta*dt are scalar coefficients (numbers or
-        dt-polynomials via the affine ``P.dt`` algebra; ``B^{-1}`` depends only on ``w = th_dt*B_z``).
-        The assembly runs ONCE per step (rho / B_z frozen in the source) and the bundle is reused across
-        every Krylov iteration of the phi solve. Lowered to ``pops::coupling::schur::program::assemble_schur_coeffs`` -- the SAME
-        native detail::SchurOperatorCoeffKernel + apply_laplacian coefficient path, no reimplementation.
-        """
-        if not (isinstance(state, Value) and state.vtype == "state"):
-            raise ValueError("schur_coeffs: a State value is required (state=...)")
-        for nm, sc in (("c", c), ("th_dt", th_dt)):
-            if not isinstance(sc, (int, float, _Coeff)):
-                raise ValueError("schur_coeffs: %s must be a number or a dt-polynomial (got %r)"
-                                 % (nm, sc))
-        for nm, ci in (("c_rho", c_rho), ("c_bz", c_bz)):
-            if isinstance(ci, bool) or not isinstance(ci, int) or ci < 0:
-                raise ValueError("schur_coeffs: %s must be a Python int >= 0 (got %r)" % (nm, ci))
-        c_d = (c if isinstance(c, _Coeff) else _Coeff({0: float(c)})).as_dict()
-        th_d = (th_dt if isinstance(th_dt, _Coeff) else _Coeff({0: float(th_dt)})).as_dict()
-        return self._new("schur_coeffs", "schur_coeffs", (state,),
-                         {"c": c_d, "th_dt": th_d, "c_rho": int(c_rho), "c_bz": int(c_bz)}, name,
-                         state.block)
-
+    # --- tensor-coefficient matrix-free apply of the generic condensed-implicit route (ADC-637) --------
     def apply_laplacian_coeff(self, out: Any, in_: Any, coeffs: Any) -> Any:
-        """Record ``out = div(A grad in_)`` with the tensor ``A`` of a @ref schur_coeffs bundle (the
-        coefficiented matrix-free matvec of the condensed-Schur operator, ``pops::apply_laplacian``'s
-        coefficient path). @p out and @p in_ are scalar_field values; @p coeffs is a ``schur_coeffs``
-        value. Used inside a matrix-free apply: the condensed operator ``L_schur(phi) = -div(A grad
-        phi) = -out``, so build it as ``-1 * P.apply_laplacian_coeff(out, in_, A)`` via the affine
-        algebra. Lowered to ``pops::coupling::schur::program::apply_laplacian_coeff(ctx, out, in_, eps_x, eps_y, a_xy, a_yx)``."""
+        """Record ``out = div(A grad in_)`` with the tensor ``A`` of a @ref condensed_coeffs bundle (the
+        coefficiented matrix-free matvec of the condensed-implicit elliptic operator,
+        ``pops::apply_laplacian``'s coefficient path). @p out and @p in_ are scalar_field values; @p
+        coeffs is a ``condensed_coeffs`` value. Used inside a matrix-free apply: the condensed operator
+        ``L(phi) = -div(A grad phi) = -out``, so build it as ``-1 * P.apply_laplacian_coeff(out, in_,
+        A)`` via the affine algebra. Emitted INLINE (ctx.fill_boundary + pops::apply_laplacian), no
+        coupling/schur call."""
         if not (isinstance(out, Value) and out.vtype == "scalar_field"):
             raise ValueError("apply_laplacian_coeff: out must be a scalar_field value")
         if not (isinstance(in_, Value) and in_.vtype == "scalar_field"):
             raise ValueError("apply_laplacian_coeff: in_ must be a scalar_field value")
-        # The coefficient bundle is either the Schur bundle (P.schur_coeffs) or the GENERIC condensed
-        # bundle (P.condensed_coeffs, ADC-637) -- both carry the same four tensor-coefficient fields
-        # (eps_x, eps_y, a_xy, a_yx), so the coefficiented apply consumes either.
-        if not (isinstance(coeffs, Value) and coeffs.vtype in ("schur_coeffs", "condensed_coeffs")):
+        # The GENERIC condensed bundle (P.condensed_coeffs, ADC-637) carries the four tensor-coefficient
+        # fields (eps_x, eps_y, a_xy, a_yx) the coefficiented apply consumes.
+        if not (isinstance(coeffs, Value) and coeffs.vtype == "condensed_coeffs"):
             raise ValueError("apply_laplacian_coeff: coeffs must be a coefficient bundle "
-                             "(P.schur_coeffs(...) or P.condensed_coeffs(...))")
+                             "(P.condensed_coeffs(...))")
         return self._new("scalar_field", "apply_laplacian_coeff", (out, in_, coeffs), {}, out.name,
                          None)
-
-    def schur_explicit_flux(self, out: Any, state: Any, th_dt: Any, c_mx: Any = 1, c_my: Any = 2,
-                            c_bz: Any = 3) -> Any:
-        """Record ``out = B^{-1} (mx, my)`` per cell -- the explicit condensed-Schur flux
-        ``F = rho*B^{-1}*v^n`` (Fx in component 0, Fy in component 1). @p out is a scalar_field (>= 2
-        components), @p state a State (mx / my at @p c_mx / @p c_my), B_z the aux field at @p c_bz.
-        @p th_dt = theta*dt. Chain ``P.divergence(d, out, out)`` for the centered divergence of F.
-        Lowered to ``pops::coupling::schur::program::schur_explicit_flux`` (native detail::SchurExplicitFluxKernel)."""
-        if not (isinstance(out, Value) and out.vtype == "scalar_field"):
-            raise ValueError("schur_explicit_flux: out must be a scalar_field value (ncomp >= 2)")
-        if not (isinstance(state, Value) and state.vtype == "state"):
-            raise ValueError("schur_explicit_flux: a State value is required")
-        th_d = (th_dt if isinstance(th_dt, _Coeff) else _Coeff({0: float(th_dt)})).as_dict()
-        return self._new("scalar_field", "schur_explicit_flux", (out, state),
-                         {"th_dt": th_d, "c_mx": int(c_mx), "c_my": int(c_my), "c_bz": int(c_bz)},
-                         out.name, None)
-
-    def schur_rhs(self, out: Any, phi_n: Any, state: Any, th_dt: Any, g: Any, c_mx: Any = 1,
-                  c_my: Any = 2, c_bz: Any = 3) -> Any:
-        """Record the FUSED condensed-Schur right-hand side ``out = -Lap(phi_n) - g*div(F)`` with
-        ``F = B^{-1}(mx, my)`` -- the native ElectrostaticLorentzCondensation::assemble_rhs in one op.
-        @p out is a 1-component scalar_field, @p phi_n a scalar_field (phi^n warm start; its ghosts are
-        filled for the Laplacian), @p state a State (mx / my at @p c_mx / @p c_my). @p th_dt = theta*dt
-        and @p g = theta*dt*alpha are scalar coefficients (numbers or dt-polynomials). Lowered to
-        ``pops::coupling::schur::program::assemble_schur_rhs``. A single op because there is no scalar-field affine combine at the
-        IR level -- the fused C++ assembler mirrors the native one (bare Lap + explicit flux + the
-        SchurRhsAssemble divergence)."""
-        if not (isinstance(out, Value) and out.vtype == "scalar_field"):
-            raise ValueError("schur_rhs: out must be a scalar_field value")
-        if not (isinstance(phi_n, Value) and phi_n.vtype == "scalar_field"):
-            raise ValueError("schur_rhs: phi_n must be a scalar_field value")
-        if not (isinstance(state, Value) and state.vtype == "state"):
-            raise ValueError("schur_rhs: a State value is required (state=...)")
-        for nm, sc in (("th_dt", th_dt), ("g", g)):
-            if not isinstance(sc, (int, float, _Coeff)):
-                raise ValueError("schur_rhs: %s must be a number or a dt-polynomial (got %r)"
-                                 % (nm, sc))
-        th_d = (th_dt if isinstance(th_dt, _Coeff) else _Coeff({0: float(th_dt)})).as_dict()
-        g_d = (g if isinstance(g, _Coeff) else _Coeff({0: float(g)})).as_dict()
-        return self._new("scalar_field", "schur_rhs", (out, phi_n, state),
-                         {"th_dt": th_d, "g": g_d, "c_mx": int(c_mx), "c_my": int(c_my),
-                          "c_bz": int(c_bz)}, out.name, None)
-
-    def schur_reconstruct(self, name: Any = None, state: Any = None, phi: Any = None,
-                          th_dt: Any = None, c_rho: Any = 0, c_mx: Any = 1, c_my: Any = 2,
-                          c_bz: Any = 3) -> Any:
-        """Record the condensed-Schur velocity reconstruction ``v^{n+theta} = B^{-1}(v^n - theta*dt*
-        grad phi)`` IN PLACE on @p state (rho frozen; mom = rho*v written back). @p phi is the solved
-        potential (a scalar_field or 1-component State), @p th_dt = theta*dt; B_z the aux at @p c_bz.
-        Returns the updated State. Lowered to ``pops::coupling::schur::program::schur_reconstruct`` (the native centered gradient +
-        closed B^{-1}). The final n+1 extrapolation (factor 1/theta) is the caller's affine algebra."""
-        if isinstance(name, Value) and state is None:
-            name, state = None, name
-        if not (isinstance(state, Value) and state.vtype == "state"):
-            raise ValueError("schur_reconstruct: a State value is required (state=...)")
-        if not _is_field_value(phi):
-            raise ValueError("schur_reconstruct: phi must be a scalar_field or State value (phi=...)")
-        if not isinstance(th_dt, (int, float, _Coeff)):
-            raise ValueError("schur_reconstruct: th_dt must be a number or a dt-polynomial (got %r)"
-                             % (th_dt,))
-        th_d = (th_dt if isinstance(th_dt, _Coeff) else _Coeff({0: float(th_dt)})).as_dict()
-        return self._new("state", "schur_reconstruct", (state, phi),
-                         {"th_dt": th_d, "c_rho": int(c_rho), "c_mx": int(c_mx), "c_my": int(c_my),
-                          "c_bz": int(c_bz)}, name, state.block)
-
-    def schur_energy(self, name: Any = None, state: Any = None, state_old: Any = None, c_rho: Any = 0,
-                     c_mx: Any = 1, c_my: Any = 2, c_E: Any = 3) -> Any:
-        """Record the condensed-Schur kinetic-energy increment IN PLACE on @p state (ADC-427):
-        ``E^{n+1} = E^n + (1/2)*rho*(|v^{n+1}|^2 - |v^n|^2)``, ``v = (mx, my)/rho`` (the native
-        SchurEnergyKernel). @p state carries ``rho`` / ``mx`` / ``my`` / ``E`` at @p c_rho / @p c_mx /
-        @p c_my / @p c_E AFTER the velocity update (mom = rho*v^{n+1}); @p state_old is U^n (read for
-        v^n = mom^n/rho^n and the base energy E^n). rho is frozen, so the same rho is read from both.
-        Returns @p state (E overwritten in place). Lowered to ``pops::coupling::schur::program::schur_energy``."""
-        if isinstance(name, Value) and state is None:
-            name, state = None, name
-        if not (isinstance(state, Value) and state.vtype == "state"):
-            raise ValueError("schur_energy: a State value is required (state=...)")
-        if not (isinstance(state_old, Value) and state_old.vtype == "state"):
-            raise ValueError("schur_energy: a State value is required (state_old=U^n)")
-        if state_old.block != state.block:
-            raise ValueError("schur_energy: state and state_old must belong to the same block")
-        for nm, ci in (("c_rho", c_rho), ("c_mx", c_mx), ("c_my", c_my), ("c_E", c_E)):
-            if isinstance(ci, bool) or not isinstance(ci, int) or ci < 0:
-                raise ValueError("schur_energy: %s must be a Python int >= 0 (got %r)" % (nm, ci))
-        return self._new("state", "schur_energy", (state, state_old),
-                         {"c_rho": int(c_rho), "c_mx": int(c_mx), "c_my": int(c_my), "c_E": int(c_E)},
-                         name, state.block)
 
