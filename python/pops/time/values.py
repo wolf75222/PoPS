@@ -110,13 +110,13 @@ class _Coeff(ImmutableSymbolic):
 
 
 def _resolve_handle(x: Any) -> Any:
-    """Unwrap a typed temporal-version handle to its resolved :class:`ProgramValue`, else return ``x``.
+    """Resolve a typed temporal handle to its owning :class:`ProgramValue`.
 
-    A readable ``StageHandle`` / ``HistoryHandle`` exposes ``_as_value()`` and asks its Program-owned
-    resolution table for the ProgramValue (raising clearly on use-before-define). Anything else -- a plain
-    ProgramValue, a string, ``None`` -- is returned unchanged, so the legacy positional paths are
-    byte-identical. Used at the State-accepting boundaries (``state=`` / ``fields=``) so a defined
-    handle composes wherever a ProgramValue does, without any new IR.
+    ``StageHandle`` and ``HistoryHandle`` expose ``_as_value()`` and ask their Program-owned
+    resolution table for the value, raising clearly on use-before-define. Already-resolved values
+    and non-temporal arguments pass through unchanged. State-accepting boundaries use this helper
+    so temporal handles compose wherever a ``ProgramValue`` is expected without weakening the
+    typed block/state-reference contract or introducing a second IR representation.
     """
     from pops.time.handles import HistoryHandle, StageHandle
     return x._as_value() if isinstance(x, (StageHandle, HistoryHandle)) else x
@@ -284,8 +284,9 @@ class ProgramValue(ImmutableSymbolic):
 
     def __init__(self, prog: Any, vid: Any, vtype: Any, op: Any, inputs: Any, attrs: Any,
                  name: Any, block: Any, *, space: Any = None, source_location: Any = None,
-                 field_context: Any = None, region: int = 0) -> None:
-        inputs = validate_program_value_identity(vid, vtype, op, inputs, name, block, region)
+                 field_context: Any = None, region: int = 0, state_ref: Any = None) -> None:
+        inputs = validate_program_value_identity(
+            vid, vtype, op, inputs, name, block, region, state_ref)
         self.prog = prog
         self.id = vid
         self.vtype = vtype
@@ -294,9 +295,10 @@ class ProgramValue(ImmutableSymbolic):
         self.attrs = _freeze_attr(dict(attrs))
         self.name = name
         self.block = block
+        self.state_ref = state_ref
         self.region = region
         # Operator-first type tag (Spec 2): the pops.model space/operator-type this value lives over
-        # (a StateSpace / RateSpace / FieldSpace / LocalLinearOperator), set by P.state(space=) and
+        # (a StateSpace / RateSpace / FieldSpace / LocalLinearOperator), set by T.state(block, U) and
         # P.call. It is serialized structurally because component order can change lowering. None =
         # untyped, in which case all space checks are skipped.
         if space is not None and getattr(space, "__pops_ir_immutable__", False) is not True:

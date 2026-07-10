@@ -110,7 +110,7 @@ def _load_static_report() -> dict:
     ret = next((n for n in ast.walk(fn) if isinstance(n, ast.Return)), None)
     assert ret is not None and isinstance(ret.value, ast.Dict), "_static_report return dict not found"
     report = {}
-    for k_node, v_node in zip(ret.value.keys, ret.value.values):
+    for k_node, v_node in zip(ret.value.keys, ret.value.values, strict=True):
         key = ast.literal_eval(k_node)
         if key == "classification":
             continue

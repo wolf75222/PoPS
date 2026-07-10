@@ -17,16 +17,30 @@ from collections.abc import Iterable
 from typing import Any
 
 
-def _bound_registry(program: Any, where: str) -> tuple[Any, Any]:
-    """Return ``(registry, owner)`` or fail before a selector loses identity."""
-    registry = getattr(program, "_registry", None)
-    if registry is None:
+def _bound_registry(program: Any, where: str, owner: Any = None) -> tuple[Any, Any]:
+    """Return the exact ``(registry, owner)`` selected by semantic provenance."""
+    registries = getattr(program, "_operator_registries", None) or {}
+    if not registries:
         raise ValueError(
             "%s: no operators are bound; call P.bind_operators(the_declaring_model) first"
             % where)
-    owner = getattr(program, "_registry_owner", None)
+    if owner is None:
+        if len(registries) != 1:
+            raise ValueError(
+                "%s: operator owner is ambiguous across %d bound model registries; pass an "
+                "OperatorHandle or provide block-qualified Program values"
+                % (where, len(registries)))
+        owner, registry = next(iter(registries.items()))
+    else:
+        try:
+            registry = registries[owner]
+        except KeyError:
+            known = ", ".join(str(item) for item in registries) or "<none>"
+            raise ValueError(
+                "%s: no operator registry is bound for owner %s (bound owners: %s)"
+                % (where, owner, known)) from None
     registry_owner = getattr(registry, "owner_path", None)
-    if owner is None or registry_owner is None:
+    if registry_owner is None:
         raise ValueError(
             "%s: the bound operator registry has no qualified owner; bind the declaring "
             "Module or physics Model instead of an ownerless registry" % where)
@@ -35,6 +49,21 @@ def _bound_registry(program: Any, where: str) -> tuple[Any, Any]:
             "%s: the bound source owner %s does not match its registry owner %s"
             % (where, owner, registry_owner))
     return registry, owner
+
+
+def _owner_from_values(values: Any, where: str) -> Any:
+    """Infer exactly one model owner from block-qualified Program arguments."""
+    owners = {
+        value.block.model_owner_path
+        for value in values
+        if getattr(value, "block", None) is not None
+    }
+    if len(owners) > 1:
+        raise ValueError(
+            "%s: arguments span multiple model owners %s; select a typed cross-model operator "
+            "whose protocol explicitly supports that join"
+            % (where, sorted(str(owner) for owner in owners)))
+    return next(iter(owners)) if owners else None
 
 
 def _normalize_kinds(expected_kinds: Any) -> frozenset[str] | None:
@@ -56,6 +85,7 @@ def resolve_registered_operator(
     *,
     where: str,
     expected_kinds: Any = None,
+    values: Any = (),
 ) -> Any:
     """Resolve a registry-local name and enforce its expected operator kind.
 
@@ -66,7 +96,7 @@ def resolve_registered_operator(
     """
     if not isinstance(name, str) or not name:
         raise TypeError("%s: operator name must be a non-empty string" % where)
-    registry, _ = _bound_registry(program, where)
+    registry, _ = _bound_registry(program, where, _owner_from_values(values, where))
     operator = registry.get(name)
     kinds = _normalize_kinds(expected_kinds)
     if kinds is not None and operator.kind not in kinds:
@@ -83,6 +113,7 @@ def resolve_operator_handle(
     where: str,
     expected_kinds: Any = None,
     expected_signature: Any = None,
+    values: Any = (),
 ) -> Any:
     """Resolve and validate one public :class:`OperatorHandle` selector.
 
@@ -96,11 +127,17 @@ def resolve_operator_handle(
     if not isinstance(handle, OperatorHandle):
         raise TypeError(
             "%s: expected a pops.model.OperatorHandle, got %r" % (where, handle))
-    registry, owner = _bound_registry(program, where)
+    registry, owner = _bound_registry(program, where, handle.owner_path)
     if handle.owner_path != owner:
         raise ValueError(
             "%s: operator handle %r belongs to owner %s, but this Program is bound to %s"
             % (where, handle.name, handle.owner_path, owner))
+    argument_owner = _owner_from_values(values, where)
+    if argument_owner is not None and argument_owner != owner:
+        raise ValueError(
+            "%s: operator handle %r belongs to owner %s, but its block-qualified arguments "
+            "instantiate model owner %s"
+            % (where, handle.name, owner, argument_owner))
     registry_name = registry.target_for_handle(handle.name)
     if handle.registered_operator_name != registry_name:
         raise ValueError(

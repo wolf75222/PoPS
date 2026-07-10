@@ -216,11 +216,15 @@ def build_compiled_report(compiled: Any) -> CompiledReport:
                if spec.get("required")]
 
     program = getattr(compiled, "program", None)
+    from pops.time.references import block_name, handle_data
+    commit_handles = (sorted(program.commits(), key=lambda item: item.qualified_id)
+                      if (program is not None and hasattr(program, "commits")) else [])
+    commit_names = sorted(block_name(state_ref.block_ref) for state_ref in commit_handles)
     prog_summary = {
         "name": getattr(compiled, "program_name", None) or "problem",
         "ops": len(getattr(program, "_values", [])) if program is not None else 0,
-        "commits": sorted(program.commits()) if (program is not None
-                                                  and hasattr(program, "commits")) else [],
+        "commits": commit_names,
+        "commit_identities": [handle_data(state_ref) for state_ref in commit_handles],
         "hash": _short(getattr(compiled, "program_hash", None)),
     }
 
@@ -304,10 +308,13 @@ def _compiled_options(compiled: Any) -> dict:
             "cache_key": getattr(compiled, "cache_key", None),
             "problem_hash": getattr(compiled, "problem_hash", None),
             "program_hash": getattr(compiled, "program_hash", None),
+            "problem_snapshot_hash": getattr(
+                getattr(compiled, "_problem_snapshot", None), "hash", None),
             "model_hash": getattr(model, "model_hash", None),
             "abi_key": getattr(compiled, "abi_key", None),
             "participates": [
                 "program_source",
+                "problem_snapshot",
                 "model_hash",
                 "abi_key",
                 "compiler",

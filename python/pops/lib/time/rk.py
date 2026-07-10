@@ -9,16 +9,18 @@ from fractions import Fraction
 from typing import Any
 
 from ._helpers import (
-    _exact_coefficient, _exact_fraction, _opcall, _operator_handle, _stage_rhs,
-    program_macro,
+    _DEFAULT_SOURCES, _commit, _exact_coefficient, _exact_fraction, _opcall, _operator_handle,
+    _stage_rhs, _time_state, program_macro,
 )
 
 
 @program_macro
-def rk4(P: Any, block: Any, *, sources: Any = ("default",), flux: Any = True) -> Any:
+def rk4(P: Any, block: Any, state: Any = None, *,
+        sources: Any = _DEFAULT_SOURCES, flux: Any = True) -> Any:
     """Classic RK4, expressed with NO special RK4 class (spec acceptance 29):
     U^{n+1} = U0 + dt/6 (k1 + 2 k2 + 2 k3 + k4)."""
-    U0 = P.state(block)
+    temporal = _time_state(P, block, state)
+    U0 = temporal.n
     k1 = _stage_rhs(P, U0, sources, flux)
     U1 = P.linear_combine("rk4_U1", U0 + Fraction(1, 2) * P.dt * k1)
     k2 = _stage_rhs(P, U1, sources, flux)
@@ -26,7 +28,7 @@ def rk4(P: Any, block: Any, *, sources: Any = ("default",), flux: Any = True) ->
     k3 = _stage_rhs(P, U2, sources, flux)
     U3 = P.linear_combine("rk4_U3", U0 + P.dt * k3)
     k4 = _stage_rhs(P, U3, sources, flux)
-    P._commit_block(block, P.linear_combine(
+    _commit(P, temporal, P.linear_combine(
         "rk4_step",
         U0 + Fraction(1, 6) * P.dt * k1 + Fraction(1, 3) * P.dt * k2
         + Fraction(1, 3) * P.dt * k3 + Fraction(1, 6) * P.dt * k4))
@@ -138,7 +140,8 @@ SSPRK2_TABLEAU = ButcherTableau(
 
 
 @program_macro
-def rk(P: Any, block: Any, tableau: Any, *, sources: Any = ("default",), flux: Any = True) -> Any:
+def rk(P: Any, block: Any, state: Any = None, tableau: Any = None, *,
+       sources: Any = _DEFAULT_SOURCES, flux: Any = True) -> Any:
     """Generic explicit Runge-Kutta from a Butcher @p tableau (ADC-423), lowered to the SAME stage chain
     the hard-coded `rk4` macro emits -- ``solve_fields`` + ``rhs`` + ``linear_combine``, no RK class:
 
@@ -150,11 +153,14 @@ def rk(P: Any, block: Any, tableau: Any, *, sources: Any = ("default",), flux: A
     constants: ``rk(P, blk, RK4_TABLEAU)`` builds the identical final affine combination as
     ``rk4(P, blk)`` (a permutation of the same ``U0 + dt(1/6 k1 + 1/3 k2 + 1/3 k3 + 1/6 k4)`` inputs),
     and ``rk(P, blk, SSPRK2_TABLEAU)`` matches Heun's ``U + dt(1/2 k1 + 1/2 k2)``."""
+    if tableau is None:
+        raise TypeError("rk: tableau is required")
     if not isinstance(tableau, ButcherTableau):
         A, b, c = tableau if len(tableau) == 3 else (tableau[0], tableau[1], None)
         tableau = ButcherTableau(A, b, c)
     tag = (tableau.name + "_") if tableau.name else "rk_"
-    U0 = P.state(block)
+    temporal = _time_state(P, block, state)
+    U0 = temporal.n
     ks: list[Any] = []
     for i in range(tableau.stages):
         if i == 0:
@@ -172,13 +178,14 @@ def rk(P: Any, block: Any, tableau: Any, *, sources: Any = ("default",), flux: A
         bi = tableau.b[i]
         if bi != 0:
             final = final + (P.dt * bi) * ks[i]
-    P._commit_block(block, P.linear_combine("%sstep" % tag, final))
+    _commit(P, temporal, P.linear_combine("%sstep" % tag, final))
 
 
 @program_macro
-def explicit_rk(P: Any, block: Any, *, rhs_operator: Any, fields_operator: Any = None,
+def explicit_rk(P: Any, block: Any, state: Any = None, *,
+                rhs_operator: Any, fields_operator: Any = None,
                 tableau: Any = None, A: Any = None, b: Any = None, c: Any = None,
-                state_space: Any = "U") -> Any:
+                ) -> Any:
     """Generic explicit Runge-Kutta over a typed rate operator (Spec 2, operator-first).
 
     Each stage is ``k_i = rhs_operator(U_i[, fields_operator(U_i)])``; the tableau lowers to the same
@@ -198,7 +205,8 @@ def explicit_rk(P: Any, block: Any, *, rhs_operator: Any, fields_operator: Any =
         ta, tb, tc = tableau if len(tableau) == 3 else (tableau[0], tableau[1], None)
         tableau = ButcherTableau(ta, tb, tc)
     tag = (tableau.name + "_") if tableau.name else "rk_"
-    u0 = P.state(block)
+    temporal = _time_state(P, block, state)
+    u0 = temporal.n
     ks: list[Any] = []
     for i in range(tableau.stages):
         if i == 0:
@@ -220,4 +228,4 @@ def explicit_rk(P: Any, block: Any, *, rhs_operator: Any, fields_operator: Any =
         bi = tableau.b[i]
         if bi != 0:
             final = final + (P.dt * bi) * ks[i]
-    P._commit_block(block, P.linear_combine("%sstep" % tag, final))
+    _commit(P, temporal, P.linear_combine("%sstep" % tag, final))

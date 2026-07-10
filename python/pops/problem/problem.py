@@ -1,25 +1,9 @@
-"""pops.problem.problem -- the top-level compilable assembly (Spec 5 sec.5.16 / sec.11).
+"""The inert, typed, top-level Problem assembly.
 
-:class:`Problem` is the inert, typed top-level assembly a user authors before lowering: physics
-``block`` declarations, elliptic ``field`` problems, runtime ``param`` declarations, static ``aux``
-inputs, ``output`` policies and the ``time`` scheme. It is an ASSEMBLY that CONTAINS descriptors; it
-is NOT itself a :class:`pops.descriptors.Descriptor` (Spec 5 sec.6 / sec.15: an assemblage of
-descriptors, not a descriptor). It answers the same inspectable surface -- it declares its
-requirements / capabilities / options and answers ``available(context)`` / :meth:`validate` with an
-EXPLAINABLE status before the runtime is ever touched. It computes nothing.
-
-ADC-553 splits the assembly internals into TYPED registries (:mod:`pops.problem.registries`): the
-facade owns one registry per family (blocks / fields / time / params / runtime policies /
-constraints) and DELEGATES to them; it holds no flat dict and no inline subsystem logic. The
-:meth:`validate` aggregates the child registries' per-family reports into ONE
-:class:`~pops.problem.report.ProblemValidationReport`.
-
-``pops.compile(problem, layout=..., time=...)`` -- the public front door -- lowers the assembly
-through the existing codegen; ``pops.bind(compiled, ...)`` wires it onto the runtime. The Problem
-here owns no codegen and no runtime of its own; it never imports ``_pops``. The Problem does NOT
-choose the layout (ADC-526): the layout (``Uniform`` / ``AMR``) is supplied at
-``pops.compile(problem, layout=...)``, so ONE Problem compiles under either. A layout given to the
-constructor is still accepted (back-compat) and must agree with the one passed at compile.
+Problem owns exactly one registry per declaration family and aggregates their inspectable
+validation reports.  It computes nothing and imports neither the native extension nor runtime or
+codegen.  ``pops.compile(problem, layout=..., time=...)`` is the lowering boundary; one assembly can
+therefore be compiled against different compatible layout descriptors.
 """
 from __future__ import annotations
 
@@ -31,9 +15,9 @@ from pops.problem.amr_handle import ProblemAmrHandle
 from pops.problem.registries import (
     _NO_KIND, BlockRegistry, ConstraintRegistry, FieldRegistry, ParamRegistry,
     RuntimePolicyRegistry, TimeRegistry)
-from pops.problem._registry_freeze import inspection_copy
+from pops.problem._inspection import inspect_payload, serialization_payload
 from pops.problem.report import ProblemValidationReport
-from pops.model import OwnerPath
+from pops.model import OwnerKind, OwnerPath
 
 
 class Problem:
@@ -80,7 +64,7 @@ class Problem:
         if not isinstance(name, str) or not name:
             raise TypeError("Problem: name must be a non-empty string")
         self._name = name
-        self._owner_path = OwnerPath.fresh("problem", self._name)
+        self._owner_path = OwnerPath.fresh(OwnerKind.CASE, self._name)
         # ADC-563 freeze: a Problem is MUTABLE during assembly and FROZEN by pops.compile. After
         # freeze every mutating setter RAISES (naming the Problem) and freeze() returns a stable
         # ProblemSnapshot the compile cache keys on.
@@ -229,10 +213,11 @@ class Problem:
 
         Groups the runtime concerns (output / checkpoint / diagnostics / schedules) out of the
         physics script: ``problem.runtime(pops.RuntimePolicies(output=..., checkpoint=...))``. The
-        bundle's typed members are unpacked into the runtime registry (its output / checkpoint
-        policies feed ``run(output_dir=...)`` exactly like :meth:`output`), and the bundle is retained
-        so its self-contained ``validate`` runs with the compile context. ``output()`` / ``aux()``
-        stay the granular primitives the bundle composes.
+        bundle's typed members are unpacked exactly once into the runtime registry (its output /
+        checkpoint policies feed ``run(output_dir=...)`` exactly like :meth:`output`). The input
+        bundle is not retained as a second declaration authority: validation, inspection and the
+        compile snapshot consume only those flattened members. ``output()`` / ``aux()`` stay the
+        granular primitives the bundle composes.
         """
         self._guard_mutable("attach runtime policies")
         self._runtime_registry.set_policies(policies)
@@ -299,15 +284,48 @@ class Problem:
 
     def blocks(self) -> Any:
         """The declared blocks as ``{name: BlockHandle}`` (ADC-526 stable-handle accessor)."""
-        from pops.problem.handles import BlockHandle
-        return {name: BlockHandle(name, owner=self.owner_path)
-                for name in self._block_registry.names()}
+        return self._block_registry.handles()
 
     def fields(self) -> Any:
         """The declared field problems as ``{name: FieldHandle}`` (ADC-526 stable-handle accessor)."""
-        from pops.problem.handles import FieldHandle
-        return {name: FieldHandle(name, owner=self.owner_path)
-                for name in self._field_registry.names()}
+        return self._field_registry.handles()
+
+    def qualify(self, declaration: Any, *, block: Any = None) -> Any:
+        """Resolve a model-local handle to one block-qualified instance handle.
+
+        ``block`` is a :class:`BlockHandle`, never a string.  Omitting it is accepted only when one
+        and only one registered block instantiates the declaration owner; ambiguity reports every
+        candidate owner before lowering.
+        """
+        return self._block_registry.qualify(declaration, block=block)
+
+    def resolve(self, declaration: Any, *, block: Any = None) -> Any:
+        """Return the canonical identity of one authenticated declaration reference.
+
+        Model-local references are first qualified to exactly one block.  A local reference used by
+        multiple blocks is therefore rejected with all candidate owners instead of being guessed.
+        """
+        from pops.model import Handle
+        from pops.problem.handles import BlockHandle, FieldHandle
+
+        case_root_owned = (
+            isinstance(declaration, Handle)
+            and len(declaration.owner_path.nodes) == 1
+            and declaration.owner_path.nodes[0].kind is OwnerKind.CASE
+        )
+        if isinstance(declaration, BlockHandle) or (
+            case_root_owned and declaration.kind == "block"
+        ):
+            if block is not None:
+                raise TypeError("block declarations do not accept block=")
+            return self._block_registry.canonical_block(declaration)
+        if isinstance(declaration, FieldHandle) or (
+            case_root_owned and declaration.kind == "field"
+        ):
+            if block is not None:
+                raise TypeError("case-owned fields do not accept block=")
+            return self._field_registry.canonicalize(declaration)
+        return self._block_registry.canonicalize(declaration, block=block)
 
     # --- DescriptorProtocol surface (pure Python; no runtime, no codegen) ----
     def _layout_name(self) -> Any:
@@ -355,11 +373,6 @@ class Problem:
             status = field[1].available(context)
             if not status.ok:
                 return status
-        collisions = set(self._block_registry.names()) & set(self._field_registry.names())
-        if collisions:
-            return Availability.no(
-                "block and field share name(s): %s" % ", ".join(sorted(collisions)),
-                missing=list(collisions))
         return Availability.yes()
 
     def validate(self, context: Any = None) -> Any:
@@ -394,13 +407,10 @@ class Problem:
         # layout it cannot serve (Spec 6 sec.8/9), precisely, before any compile.
         report.extend(self._field_registry.validate(self._field_validation_context(context)))
         report.extend(self._param_registry.validate(context))
-        report.extend(self._runtime_registry.validate(context))
+        runtime_context: dict[str, Any] = dict(context) if isinstance(context, dict) else {}
+        runtime_context["declaration_resolver"] = self.resolve
+        report.extend(self._runtime_registry.validate(runtime_context))
         report.extend(self._constraint_registry.validate(context))
-        collisions = set(self._block_registry.names()) & set(self._field_registry.names())
-        if collisions:
-            report.error("field", "name_collision",
-                         "block and field share name(s): %s" % ", ".join(sorted(collisions)),
-                         context={"names": sorted(collisions)})
         return report
 
     def _refuse_uniform_with_amr_criteria(self, report: Any) -> None:
@@ -424,6 +434,7 @@ class Problem:
         """The validation context handed to each field problem, carrying the mesh layout."""
         merged: dict[str, Any] = dict(context) if isinstance(context, dict) else {}
         merged["layout"] = self._layout
+        merged["declaration_resolver"] = self.resolve
         return merged
 
     def explain_routes(self) -> Any:
@@ -451,19 +462,7 @@ class Problem:
 
     def _inspect_payload(self) -> Any:
         """The ordered inspection dict (the historical inspect() shape) the ProblemReport wraps."""
-        info: dict[str, Any] = {"name": self._name, "category": self.category, "native_id": self.native_id,
-                "options": self.options(), "requirements": self.requirements().to_dict(),
-                "capabilities": self.capabilities().to_dict()}
-        info["layout"] = self._layout.inspect() if self._layout is not None else None
-        info["blocks"] = self._block_registry.inspect()
-        info["fields"] = self._field_registry.inspect()
-        info["params"] = self._param_registry.inspect()
-        runtime = self._runtime_registry.inspect()
-        info["aux"] = runtime["aux"]
-        info["outputs"] = runtime["outputs"]
-        info["constraints"] = self._constraint_registry.inspect()
-        info["time"] = self._time_registry.inspect()["program"]
-        return inspection_copy(info)
+        return inspect_payload(self)
 
     def to_dict(self) -> Any:
         """A JSON-ready, array-free inspection serialisation for codegen / debug.
@@ -474,12 +473,7 @@ class Problem:
         The compile-cache snapshot reads the raw typed registries instead, because display summaries
         here intentionally abbreviate descriptors and are not a complete structural identity.
         """
-        info = self._inspect_payload()
-        info["handles"] = {
-            "blocks": [h.canonical_identity() for h in self.blocks().values()],
-            "fields": [h.canonical_identity() for h in self.fields().values()],
-        }
-        return info
+        return serialization_payload(self)
 
     def __str__(self) -> str:
         return ("%s [%s] layout=%s | blocks=%d | fields=%d | params=%d | aux=%d | time=%s"

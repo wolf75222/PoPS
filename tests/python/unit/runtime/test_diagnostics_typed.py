@@ -19,6 +19,12 @@ from pops.descriptors import Descriptor  # noqa: E402
 from pops.diagnostics import (ConservationCheck, Integral, MinMax,  # noqa: E402
                              Norm)
 from pops.linalg.norms import L1, L2, LInf  # noqa: E402
+from pops.model import Module  # noqa: E402
+from pops.problem import Problem  # noqa: E402
+
+
+_DIAGNOSTIC_PROBLEM = Problem(name="diagnostic-measures")
+_NE_BLOCK = _DIAGNOSTIC_PROBLEM.add_block("ne", Module("diagnostic-model"))
 
 
 class _Role:
@@ -43,7 +49,7 @@ def test_typed_measures_exported():
 # --- Norm: typed norm kind, string rejected ---------------------------------------------
 @pytest.mark.parametrize("cls,kind", [(L1, "l1"), (L2, "l2"), (LInf, "linf")])
 def test_norm_accepts_typed_norm_kind(cls, kind):
-    n = Norm(cls(), block="ne", role=_Role("Density"))
+    n = Norm(cls(), block=_NE_BLOCK, role=_Role("Density"))
     assert isinstance(n, Descriptor)
     assert n.category == "diagnostic_norm"
     assert n.options()["norm"] == kind
@@ -57,7 +63,14 @@ def test_norm_rejects_string_kind():
     with pytest.raises(TypeError):
         Norm("l2")
     with pytest.raises(TypeError):
-        Norm("l2", block="ne")
+        Norm("l2", block=_NE_BLOCK)
+
+
+def test_measures_reject_string_block_references():
+    with pytest.raises(TypeError, match="BlockHandle"):
+        Integral(block="ne")
+    with pytest.raises(TypeError, match="BlockHandle"):
+        MinMax(block="ne")
 
 
 def test_norm_rejects_non_norm_object():
@@ -79,7 +92,7 @@ def test_integral_is_a_sum_reduction():
 
 
 def test_minmax_is_a_minmax_reduction():
-    mm = MinMax(block="ne")
+    mm = MinMax(block=_NE_BLOCK)
     assert mm.category == "diagnostic_minmax"
     assert mm.options()["scheme"] == "min_max"
     assert mm.options()["block"] == "ne"
@@ -103,7 +116,7 @@ def test_conservation_check_default_tolerance():
 
 
 def test_conservation_check_accepts_a_norm():
-    chk = ConservationCheck(Norm(L2(), block="ne"))
+    chk = ConservationCheck(Norm(L2(), block=_NE_BLOCK))
     assert chk.validate() is True
     assert chk.options()["quantity"] == "Norm"
 
@@ -125,7 +138,7 @@ def test_conservation_check_rejects_non_descriptor():
 
 # --- metadata: reduction kind, MPI reduction, cadence, AMR/multi-level ------------------
 @pytest.mark.parametrize("measure", [
-    Norm(L2(), block="ne"), Integral(role="Density"), MinMax(block="ne"),
+    Norm(L2(), block=_NE_BLOCK), Integral(role="Density"), MinMax(block=_NE_BLOCK),
 ])
 def test_measures_declare_reduction_metadata(measure):
     caps = measure.capabilities().to_dict()
@@ -148,9 +161,9 @@ def test_conservation_check_declares_metadata():
 
 # --- inspect() / options() / __repr__ (Spec 5 sec.12.1 printable rule) ------------------
 @pytest.mark.parametrize("measure,cls_name,category", [
-    (Norm(L2(), block="ne"), "Norm", "diagnostic_norm"),
+    (Norm(L2(), block=_NE_BLOCK), "Norm", "diagnostic_norm"),
     (Integral(role="Density"), "Integral", "diagnostic_integral"),
-    (MinMax(block="ne"), "MinMax", "diagnostic_minmax"),
+    (MinMax(block=_NE_BLOCK), "MinMax", "diagnostic_minmax"),
     (ConservationCheck(Integral()), "ConservationCheck", "conservation_check"),
 ])
 def test_inspect_options_and_repr(measure, cls_name, category):

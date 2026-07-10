@@ -4,8 +4,9 @@ from typing import TYPE_CHECKING, Any
 from pops.ir.literals import scalar_literal
 from pops.time.program_base import _ProgramConstants
 from pops.time.program_transaction import atomic_authoring
+from pops.time.references import block_name, state_name
 from pops.time.program_value_validation import (
-    require_compatible_spaces, require_owned, require_region, require_top_level,
+    require_compatible_spaces, require_region, require_top_level,
     validate_input_regions,
 )
 from pops.time.values import ProgramValue, _is_field_value, _resolve_handle
@@ -35,9 +36,10 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
         lines = ["# operator-first Program IR: %s" % self.name]
         for v in self._values:
             lines.append("  " + self._render_node(v))
-        for block, st in self._commits.items():
+        for state_ref, st in self._commits.items():
             lines.append(
-                "  P.commit(P.state('U', block=%r).next, %s)" % (block, st.name))
+                "  T.commit(T.state(%s, %s).next, %s)"
+                % (block_name(state_ref.block_ref), state_name(state_ref), st.name))
         return "\n".join(lines)
 
     def dump_board(self) -> Any:
@@ -54,7 +56,7 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
             if v.op == "coupled_rate":
                 # the coupled-rate kernel lowers to ONE multi-state for_each_cell filling every block's
                 # rate scratch at once (ADC-457); there is no single ctx.coupled_rate(...) call.
-                blks = ", ".join(v.attrs.get("blocks", []))
+                blks = ", ".join(block_name(block) for block in v.attrs.get("blocks", []))
                 lines.append("  // %s: multi-state for_each_cell rate kernel over (%s) for blocks "
                              "[%s];  // ADC-457" % (v.name, ins, blks))
             elif v.op == "coupled_rate_out":
@@ -63,8 +65,10 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
                              % (v.name, ins, v.attrs.get("out_block")))
             else:
                 lines.append("  ctx.%s(%s);  // -> %s" % (v.op, ins, v.name))
-        for block, st in self._commits.items():
-            lines.append("  ctx.commit(%r, %s);" % (block, st.name))
+        for state_ref, st in self._commits.items():
+            lines.append(
+                "  ctx.commit(%r, %s);"
+                % (block_name(state_ref.block_ref), st.name))
         return "\n".join(lines)
 
     # --- decorator mode (ADC-423): record the step body from a function ---

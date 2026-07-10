@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from pops.ir.literals import exact_numeric_scalar
-from pops.model.handles import OwnerPath
+from pops.model.ownership import OwnerKind, OwnerPath
 from pops.time.program_authoring import _ProgramAuthoring
 from pops.time.program_condensed import _ProgramCondensed
 from pops.time.program_core import _ProgramCore
@@ -24,6 +24,7 @@ from pops.time.program_local import _ProgramLocal
 from pops.time.program_passes import _ProgramPasses
 from pops.time.program_solve import _ProgramSolve
 from pops.time.program_time_handles import _ProgramTimeHandles
+from pops.time.references import bind_program_block, block_name
 from pops.time.values import _Coeff, ProgramValue  # noqa: F401  (ProgramValue used by mixins via prog ref)
 
 
@@ -59,7 +60,10 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         if not isinstance(name, str) or not name:
             raise ValueError("Program name must be a non-empty string")
         self.name = name
-        self._owner_path = OwnerPath.fresh("program", name)
+        self._owner_path = OwnerPath.fresh(OwnerKind.CONSUMER, name)
+        # Exact live CASE authority selected by the first block. Runtime block indices have meaning
+        # only inside that one assembly; equal local names from another Case must never alias them.
+        self._case_owner_path = None
         self._init_time_handle_tables()
         # De-stringing is the ONE public path (Spec 5 sec.15, ADC-479 criteria 23 + 27): the public
         # P.call requires a typed operator handle and the public P.rhs requires the typed terms= list
@@ -69,7 +73,7 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         self._values = []
         self._issued_values = {}  # id -> strong identity, including stale immutable replacement records
         self._next_id = 0
-        self._commits = {}      # block -> State value
+        self._commits = {}      # qualified state Handle -> State value
         self._recording = []    # stack of sub-block lists (a control-flow body); see _new / while_
         self._next_region = 1
         self._recording_regions = {}  # id(list) -> (strong list ref, exact authoring-region token)
@@ -78,6 +82,7 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         self._histories = {}    # name -> max declared lag (multistep histories; ADC-406a)
         self._history_spaces = {}  # full-state history name -> StateSpace or None
         self._history_blocks = {}  # full-state history name -> qualified block or None
+        self._history_state_refs = {}  # full-state history name -> qualified state Handle
         # name -> slot ncomp for a NARROW (non-full-state) history ring (ADC-427). Only names read with
         # an explicit P.history(ncomp=1) appear here (the condensed-Schur phi^n carry); a full-state
         # multistep ring is absent (the codegen emits the historical 2-arg register_history for it).
@@ -90,12 +95,11 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         # generated .so exports as pops_program_dt_bound; None = no bound (the native CFL is used).
         self._dt_bound = None        # (block, scalar_value) once set; the block is the scalar sub-block
         self.dt = _Coeff({1: 1})     # symbolic time step; participates in coefficient arithmetic
-        # OPTIONAL bound operator registry (Spec 2, operator-first): set by bind_operators so P.call
-        # can resolve and type-check operators at build time. None = legacy PDE-shortcut-only Program.
-        self._registry = None
-        self._registry_owner = None
-        self._default_state_space = None  # unique StateSpace inferred structurally from a registry
-        self._default_field_space = None  # unique FieldSpace inferred structurally from a registry
+        # Operator registries are indexed by their exact authoring OwnerPath. A coupled Program may
+        # bind several models with homonymous operators; there is deliberately no "current" registry.
+        self._operator_registries = {}
+        self._default_state_spaces = {}
+        self._default_field_spaces = {}
         # OPTIONAL debug capture of the authoring source location per IR node (ADC-530). DEFAULT OFF:
         # a stack walk per node is too costly for the normal build path, and the location is
         # INSPECTION-ONLY (never serialized into the IR / the hash). Toggle with
@@ -154,6 +158,8 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
              **metadata: Any) -> Any:
         """Guard the single IR-append choke point against a post-freeze mutation (ADC-563)."""
         self._guard_mutable("add IR node %r" % op)
+        if block is not None:
+            bind_program_block(self, block, where="IR op %r" % op)
         return super()._new(vtype, op, inputs, attrs, name, block, **metadata)
 
     def capture_source_locations(self, enabled: Any = True) -> Any:
@@ -175,7 +181,8 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         a one-line header, not a node-by-node dump.
         """
         return "Program(name=%r, ops=%d, blocks=%s)" % (
-            self.name, len(self._values), sorted(self._commits))
+            self.name, len(self._values),
+            sorted(block_name(state.block_ref) for state in self._commits))
 
     # --- C++ codegen (lowering to a problem.so source) lives in pops.codegen; the authoring
     # Program delegates via a LAZY import so pops.time stays free of any codegen/_pops edge. ---

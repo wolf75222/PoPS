@@ -207,20 +207,26 @@ def test_lib_time_exports_are_macros_not_stepper_classes():
 def test_lib_time_macro_returns_the_same_program_handle():
     """Functional (skip-clean): a lib.time macro RETURNS a pops.time.Program, one handle, no stepper.
 
-    Reuses the ADC-554 program_macro contract (``forward_euler("plasma")`` -> Program). The macro
-    produces the canonical Program; it never mints a second stepper object.
+    Reuses the ADC-554 program_macro contract with an authoritative BlockHandle and state Handle.
+    The macro produces the canonical Program; it never mints a second stepper object or promotes a
+    free block/state name into semantic ownership.
     """
     try:
         import pops.lib.time as lib_time
+        from pops.model import Module
+        from pops.problem import Problem
         from pops.time import Program
     except Exception as exc:  # pragma: no cover - bare source tree without importable pops.
         pytest.skip("pops import unavailable: %s" % exc)
 
-    # Only the block-name-only macros are exercised here (forward_euler / ssprk2 / ssprk3 / rk4);
-    # strang / imex / bdf / predictor_corrector need extra scheme arguments and are covered by the
+    module = Module("architecture-time-schemes")
+    state_space = module.state_space("U", ("u",))
+    state = module.state_handle(state_space)
+    block = Problem(name="architecture-time-case").add_block("plasma", module)
+    # Strang / imex / bdf / predictor_corrector need extra scheme arguments and are covered by the
     # ADC-566 boundary proof through their in-place form.
     for name in ("forward_euler", "ssprk2", "ssprk3", "rk4"):
-        result = getattr(lib_time, name)("plasma")
+        result = getattr(lib_time, name)(block, state, sources=(), flux=False)
         assert isinstance(result, Program), (
             "pops.lib.time.%s must return a pops.time.Program, got %r" % (name, type(result)))
 
@@ -282,14 +288,21 @@ def test_field_facade_and_direct_lowering_share_one_ir_hash():
     no second field-lowering path.
     """
     try:
+        from pops.model import Module
+        from pops.problem import Problem
         from pops.time import Program
     except Exception as exc:  # pragma: no cover - bare source tree without importable pops.
         pytest.skip("pops import unavailable: %s" % exc)
 
+    module = Module("field-parity-model")
+    state_space = module.state_space("U", ("u",))
+    state_handle = module.state_handle(state_space)
+    block = Problem(name="field-parity-case").add_block("gas", module)
+
     def _direct():
         program = Program("field_parity")
-        state = program.state("gas")
-        program.solve_fields(state)
+        state = program.state(block, state_handle)
+        program.solve_fields(state.n)
         return program
 
     def _facade():
@@ -297,7 +310,8 @@ def test_field_facade_and_direct_lowering_share_one_ir_hash():
 
         @program.step
         def _(prog):
-            prog.solve_fields(prog.state("gas"))
+            state = prog.state(block, state_handle)
+            prog.solve_fields(state.n)
 
         return program
 
@@ -333,8 +347,10 @@ def test_no_public_function_takes_an_amr_config_string_kwarg():
             if node.name.startswith("_"):
                 continue
             args = node.args
-            pairs = list(zip(args.args[len(args.args) - len(args.defaults):], args.defaults))
-            pairs += list(zip(args.kwonlyargs, args.kw_defaults))
+            pairs = list(
+                zip(args.args[len(args.args) - len(args.defaults):], args.defaults, strict=True)
+            )
+            pairs += list(zip(args.kwonlyargs, args.kw_defaults, strict=True))
             for arg, default in pairs:
                 if default is None or arg.arg not in _AMR_CONFIG_STRING_ARGS:
                     continue

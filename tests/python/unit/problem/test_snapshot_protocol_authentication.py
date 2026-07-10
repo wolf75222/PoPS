@@ -4,6 +4,7 @@ import pytest
 pops = pytest.importorskip("pops", exc_type=ImportError)
 
 from pops.ir.literals import ScalarLiteral as PopsScalarLiteral  # noqa: E402
+from pops.model import DeclarationIndex, MissingOwnershipError, OwnerKind  # noqa: E402
 from pops.model.handles import Handle, OwnerPath  # noqa: E402
 from pops.problem._snapshot import ProblemSnapshot  # noqa: E402
 
@@ -22,7 +23,7 @@ def test_same_named_scalar_literal_cannot_collide_with_real_literal():
 
 
 def test_duck_typed_handle_cannot_collide_with_authenticated_handle():
-    real_handle = Handle("rho", kind="state", owner=OwnerPath("model", "fluid"))
+    real_handle = Handle("rho", kind="state", owner=OwnerPath.model("fluid"))
 
     class FakeHandle:
         def __init__(self):
@@ -51,8 +52,60 @@ def test_authenticated_handle_canonical_identity_is_strictly_validated():
             identity["kind"] = 42
             return identity
 
-    handle = CoercibleHandle("rho", kind="state", owner=OwnerPath("model", "fluid"))
+    handle = CoercibleHandle("rho", kind="state", owner=OwnerPath.model("fluid"))
 
     with pytest.raises(TypeError, match="schema_version"):
         ProblemSnapshot({"handle": handle})
 
+
+def test_authoring_handle_requires_an_authoritative_snapshot_resolver():
+    owner = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, "fluid")
+    handle = Handle("rho", kind="state", owner=owner)
+
+    with pytest.raises(TypeError, match="authoritative resolver"):
+        ProblemSnapshot({"handle": handle})
+
+    index = DeclarationIndex(owner=owner, handles=(handle,))
+    resolved = ProblemSnapshot(
+        {"handle": handle},
+        handle_resolver=lambda value: index.authenticate(value)._resolved(),
+    )
+    identity = resolved.to_dict()["handle"]["$handle"]
+    assert Handle.from_canonical_identity(identity).canonical_identity() == identity
+
+
+def test_snapshot_resolver_must_reauthenticate_canonical_identity_without_rewriting_it():
+    authored = Handle("rho", kind="state", owner=OwnerPath.model("fluid"))
+    rewritten = Handle("rho", kind="state", owner=OwnerPath.model("other"))
+
+    with pytest.raises(ValueError, match="changed an already canonical identity"):
+        ProblemSnapshot({"handle": authored}, handle_resolver=lambda value: rewritten)
+
+
+def test_problem_freeze_reauthenticates_already_canonical_handles():
+    from pops.model import Module
+    from pops.output import OutputPolicy
+
+    module = Module("transport")
+    state = module.state_space("U", components=("rho",))
+    problem = pops.Problem(name="snapshot-owner")
+    block = problem.add_block("fluid", module)
+    problem.output(OutputPolicy(fields=[problem.resolve(block[module.state_handle(state)])]))
+
+    snapshot = problem.freeze()
+    assert snapshot.hash
+
+
+def test_problem_freeze_rejects_canonical_foreign_handle_without_sealing_source():
+    from pops.model import Module
+    from pops.output import OutputPolicy
+
+    module = Module("transport")
+    problem = pops.Problem(name="snapshot-owner")
+    problem.add_block("fluid", module)
+    foreign = Handle("ghost", kind="state", owner=OwnerPath.model("foreign"))
+    problem.output(OutputPolicy(fields=[foreign]))
+
+    with pytest.raises(MissingOwnershipError, match="no block in this case instantiates"):
+        problem.freeze()
+    assert problem._frozen is False

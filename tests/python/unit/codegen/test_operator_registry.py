@@ -144,7 +144,7 @@ def test_registry_ids_and_errors():
         assert "unknown operator" in str(exc)
 
     state = m.state_space()
-    reg2 = model.OperatorRegistry()
+    reg2 = model.OperatorRegistry(owner=m.owner_path)
     op = model.Operator("a", "local_source", model.Signature([state], model.Rate(state)))
     reg2.register(op)
     try:

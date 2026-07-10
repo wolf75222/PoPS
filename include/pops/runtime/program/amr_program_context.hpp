@@ -89,10 +89,27 @@ class AmrProgramContext {
     facade_->install_program_step(std::move(step));
   }
 
-  /// Translate a PROGRAM block index to its AMR block index (Spec 3 criterion 23). Empty map = identity.
+  /// Translate a PROGRAM block index to its explicit, name-matched AMR block index (Spec 3 criterion
+  /// 23). Empty, incomplete and invalid maps fail before any hierarchy storage is accessed; positional
+  /// block identity is never inferred.
   int sys_block(int b) const {
     const std::vector<int>& m = facade_->program_block_map();
-    return (b >= 0 && b < static_cast<int>(m.size())) ? m[static_cast<std::size_t>(b)] : b;
+    if (m.empty())
+      throw block_map_error_(
+          "AmrProgramContext::sys_block: no explicit program-to-AMR block map is installed; "
+          "positional block identity is not supported");
+    if (b < 0 || b >= static_cast<int>(m.size()))
+      throw block_map_error_(
+          "AmrProgramContext::sys_block: program block index " + std::to_string(b) +
+          " is outside the explicit block map [0, " + std::to_string(m.size()) + ")");
+    const int mapped = m[static_cast<std::size_t>(b)];
+    const int count = static_cast<int>(eng_->n_blocks());
+    if (mapped < 0 || mapped >= count)
+      throw block_map_error_(
+          "AmrProgramContext::sys_block: program block index " + std::to_string(b) +
+          " maps to invalid AMR block index " + std::to_string(mapped) +
+          " for an AmrRuntime with " + std::to_string(count) + " blocks");
+    return mapped;
   }
   int n_blocks() const { return static_cast<int>(eng_->n_blocks()); }
 
@@ -537,6 +554,10 @@ class AmrProgramContext {
   }
 
  private:
+  static std::runtime_error block_map_error_(std::string message) {
+    return std::runtime_error(std::move(message));
+  }
+
   /// Fail loud for an op the codegen can emit but the v1 AMR Program path does not yet wire (named-flux /
   /// scheduled Programs). [[noreturn]] so a non-void stub needs no dummy return -- the caller's signature
   /// stays byte-faithful to ProgramContext (the duck-typing requirement) without fabricating a value. @p

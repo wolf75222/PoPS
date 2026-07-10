@@ -60,6 +60,10 @@ class _OperatorViewMixin(_HyperbolicModel):
         ``(State) -> State``. The implicit defaults surface as ``flux_default`` /
         ``source_default`` / ``fields_from_state``. Pure view: no hash / codegen impact.
         """
+        cache = self._operator_registry_cache
+        cached = cache.get(state_name)
+        if cached is not None:
+            return cached
         reg = _model.OperatorRegistry(owner=self.owner_path)
         state = self.state_space(state_name)
         fields = self.field_space()
@@ -178,4 +182,8 @@ class _OperatorViewMixin(_HyperbolicModel):
                 lowering={"flux": cfg["flux"], "sources": cfg["sources"],
                           "fluxes": cfg["fluxes"]},
                 source="dsl.rate_operator"))
+        # Deep-freeze seals derived caches as mapping proxies. A missing view remains computable
+        # after freeze, but must not mutate the sealed model merely to memoize it.
+        if isinstance(cache, dict):
+            cache[state_name] = reg
         return reg

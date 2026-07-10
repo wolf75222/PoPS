@@ -20,6 +20,11 @@ from pops.mesh.layouts import AMR, Uniform  # noqa: E402
 from pops.mesh.amr import (  # noqa: E402
     Refine, TagUnion, RegridEvery, ProperNesting, PatchLayout, CheckpointPolicy,
     AMROutput, AllLevels, NATIVE_MAX_LEVELS, NATIVE_RATIOS)
+from pops.model import Handle, OwnerPath  # noqa: E402
+
+
+def _ref(name, kind="state"):
+    return Handle(name, kind=kind, owner=OwnerPath.shared("inspect-amr"))
 
 
 def _full_amr():
@@ -28,11 +33,12 @@ def _full_amr():
         base=CartesianMesh(n=128), max_levels=NATIVE_MAX_LEVELS, ratio=NATIVE_RATIOS[0],
         regrid=RegridEvery(20),
         patches=PatchLayout(distribute_coarse=True, coarse_max_grid=32),
-        refine=TagUnion(Refine.on("rho").above(0.05),
-                        Refine.on("phi").gradient_above(0.5)),
+        refine=TagUnion(Refine.on(_ref("rho")).above(0.05),
+                        Refine.on(_ref("phi", kind="field")).gradient_above(0.5)),
         nesting=ProperNesting(buffer=1),
         checkpoint=CheckpointPolicy(restartable=True),
-        output=AMROutput(fields=["phi"], levels=AllLevels(), include_patch_boxes=True))
+        output=AMROutput(fields=[_ref("phi", kind="field")], levels=AllLevels(),
+                         include_patch_boxes=True))
 
 
 def test_inspect_amr_is_exported_at_top_level():

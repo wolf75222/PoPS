@@ -2078,55 +2078,59 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
   // NAME-based block binding (Spec 3 criterion 23, ADC-457). The Program numbers its blocks in P.state
   // declaration order (the .so's pops_program_block_name table); the AMR facade numbers its blocks in
   // add order (block_names). Bind by NAME, store the program-index -> AMR-block-index map (read by the
-  // AmrProgramContext). A Program block whose name has no AMR block fails loud. A pre-Spec-3 .so (the
-  // count symbol absent) -> identity. VERBATIM mirror of System::install_program.
+  // AmrProgramContext). A Program block whose name has no AMR block fails loud. The explicit block
+  // identity table is REQUIRED; positional binding is unsupported.
   {
     using count_t = int (*)();
     using name_t = const char* (*)(int);
     auto block_count = reinterpret_cast<count_t>(pops::dynlib::sym(h, "pops_program_block_count"));
     auto block_name = reinterpret_cast<name_t>(pops::dynlib::sym(h, "pops_program_block_name"));
-    if (block_count && block_name) {
-      const std::vector<std::string> amr_names = block_names();
-      const int n = block_count();
-      // FAIL LOUD (ADC-508 v1): the per-level AmrProgramContext driver supports a SINGLE-block AMR
-      // Program only. A Program binding >= 2 blocks would lower to the per-level solve_fields_from_state
-      // clobber path with no coupled coarse-fine re-solve -- a silently-wrong multilevel coupling. Reject
-      // it here with an actionable remedy rather than installing a half-wired multi-block driver. (The
-      // single-block AMR Program is the bit-identical parity gate; a genuine multi-block AMR runs the
-      // per-block NATIVE route -- pops.compile(Case(layout=AMR(...)), multi-block), ADC-503 -- or a
-      // multi-block Program on System.)
-      if (n > 1) {
-        pops::dynlib::close(h);
-        throw std::runtime_error(
-            "AmrSystem::install_program : the installed compiled time Program binds " +
-            std::to_string(n) +
-            " blocks, but a multi-block AMR Program is not supported in v1 (the per-level "
-            "AmrProgramContext driver wires a SINGLE block only). Use the per-block NATIVE AMR "
-            "route (pops.compile(Case(layout=AMR(...))) with a multi-block layout, ADC-503), or "
-            "install the multi-block Program on System (System.install_program). A single-block "
-            "AMR Program is supported.");
-      }
-      std::vector<int> prog_to_sys(static_cast<std::size_t>(n), -1);
-      for (int p = 0; p < n; ++p) {
-        const std::string want = block_name(p);
-        int found = -1;
-        for (std::size_t s = 0; s < amr_names.size(); ++s)
-          if (amr_names[s] == want) {
-            found = static_cast<int>(s);
-            break;
-          }
-        if (found < 0) {
-          pops::dynlib::close(h);
-          throw std::runtime_error("Program requires block instance '" + want +
-                                   "', but simulation did not instantiate it");
-        }
-        prog_to_sys[static_cast<std::size_t>(p)] = found;
-      }
-      set_program_block_map(prog_to_sys);
-    } else {
-      set_program_block_map(
-          {});  // pre-Spec-3 .so: no name table -> identity (positional convention)
+    if (!block_count || !block_name) {
+      pops::dynlib::close(h);
+      throw std::runtime_error(
+          "AmrSystem::install_program: compiled Program '" + so_path +
+          "' does not export the required block identity table "
+          "(pops_program_block_count + pops_program_block_name). Positional Program-to-AmrSystem "
+          "binding has been removed; regenerate the Program library with the current PoPS "
+          "codegen and headers.");
     }
+    const std::vector<std::string> amr_names = block_names();
+    const int n = block_count();
+    // FAIL LOUD (ADC-508 v1): the per-level AmrProgramContext driver supports a SINGLE-block AMR
+    // Program only. A Program binding >= 2 blocks would lower to the per-level solve_fields_from_state
+    // clobber path with no coupled coarse-fine re-solve -- a silently-wrong multilevel coupling. Reject
+    // it here with an actionable remedy rather than installing a half-wired multi-block driver. (The
+    // single-block AMR Program is the bit-identical parity gate; a genuine multi-block AMR runs the
+    // per-block NATIVE route -- pops.compile(Case(layout=AMR(...)), multi-block), ADC-503 -- or a
+    // multi-block Program on System.)
+    if (n > 1) {
+      pops::dynlib::close(h);
+      throw std::runtime_error(
+          "AmrSystem::install_program : the installed compiled time Program binds " +
+          std::to_string(n) +
+          " blocks, but a multi-block AMR Program is not supported in v1 (the per-level "
+          "AmrProgramContext driver wires a SINGLE block only). Use the per-block NATIVE AMR "
+          "route (pops.compile(Case(layout=AMR(...))) with a multi-block layout, ADC-503), or "
+          "install the multi-block Program on System (System.install_program). A single-block "
+          "AMR Program is supported.");
+    }
+    std::vector<int> prog_to_sys(static_cast<std::size_t>(n), -1);
+    for (int p = 0; p < n; ++p) {
+      const std::string want = block_name(p);
+      int found = -1;
+      for (std::size_t s = 0; s < amr_names.size(); ++s)
+        if (amr_names[s] == want) {
+          found = static_cast<int>(s);
+          break;
+        }
+      if (found < 0) {
+        pops::dynlib::close(h);
+        throw std::runtime_error("Program requires block instance '" + want +
+                                 "', but simulation did not instantiate it");
+      }
+      prog_to_sys[static_cast<std::size_t>(p)] = found;
+    }
+    set_program_block_map(prog_to_sys);
   }
   // RUNTIME PARAMETERS (ADC-508, parity ADC-510). Seed each PROGRAM block's RuntimeParams to the .so
   // pops_program_param_* declaration defaults so an install WITHOUT a runtime set behaves as with a const

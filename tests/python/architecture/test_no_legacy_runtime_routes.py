@@ -276,7 +276,7 @@ def _string_defaults(function):
         arg = args[offset + index]
         if isinstance(default, ast.Constant) and isinstance(default.value, str):
             yield arg.arg, default.value, default.lineno
-    for arg, default in zip(function.args.kwonlyargs, function.args.kw_defaults):
+    for arg, default in zip(function.args.kwonlyargs, function.args.kw_defaults, strict=True):
         if isinstance(default, ast.Constant) and isinstance(default.value, str):
             yield arg.arg, default.value, default.lineno
 
@@ -401,20 +401,35 @@ def test_public_program_surface_does_not_call_runtime_directly():
 
 def test_field_solve_facade_lowers_to_program_ir_and_context():
     try:
+        from pops.model import Module
+        from pops.numerics.terms import DefaultSource, Flux
+        from pops.problem import Problem
         from pops.time import Program
     except Exception as exc:  # pragma: no cover - bare source tree without importable pops.
         pytest.skip("pops import unavailable: %s" % exc)
 
+    module = Module("architecture-field-model")
+    state_space = module.state_space("U", ("u",))
+    state_handle = module.state_handle(state_space)
+    block = Problem(name="architecture-field-case").add_block("gas", module)
     program = Program("arch_field_gate")
-    state = program.state("gas")
+    temporal = program.state(block, state_handle)
+    state = temporal.n
     fields = program.solve_fields(state)
 
     assert fields.op == "solve_fields"
     assert fields.vtype == "fields"
     assert any(value.op == "solve_fields" for value in program._values)
 
-    rhs = program._rhs_legacy(state=state, fields=fields, flux=True, sources=["default"])
-    program.commit(program.state("U", block="gas").next, program.linear_combine("U_next", state + program.dt * rhs))
+    rhs = program.rhs(
+        state=state,
+        fields=fields,
+        terms=(Flux(), DefaultSource()),
+    )
+    program.commit(
+        temporal.next,
+        program.linear_combine("U_next", state + program.dt * rhs),
+    )
     source = program.emit_cpp_program(model=None)
 
     assert "ProgramContext" in source
@@ -436,19 +451,22 @@ def test_amr_route_lowers_through_typed_layout_policy_manifest():
             TagUnion,
         )
         from pops.mesh.layouts import AMR
+        from pops.model import Handle, OwnerPath
     except Exception as exc:  # pragma: no cover - bare source tree without importable pops.
         pytest.skip("pops import unavailable: %s" % exc)
 
+    rho = Handle("rho", kind="state", owner=OwnerPath.shared("architecture.amr"))
+    phi = Handle("phi", kind="field", owner=OwnerPath.shared("architecture.amr"))
     layout = AMR(
         base=CartesianMesh(n=16, L=1.0),
         max_levels=2,
         ratio=2,
         regrid=RegridEvery(4),
         patches=PatchLayout(distribute_coarse=True, coarse_max_grid=16),
-        refine=TagUnion(Refine.on("rho").above(0.1), Refine.on("phi").gradient_above(0.2)),
+        refine=TagUnion(Refine.on(rho).above(0.1), Refine.on(phi).gradient_above(0.2)),
         nesting=ProperNesting(buffer=1),
         checkpoint=CheckpointPolicy(restartable=True),
-        output=AMROutput(fields=("rho",), levels=AllLevels(), include_patch_boxes=True),
+        output=AMROutput(fields=(rho,), levels=AllLevels(), include_patch_boxes=True),
     )
 
     assert layout.validate() is True
@@ -484,8 +502,14 @@ def test_amr_route_lowers_through_typed_layout_policy_manifest():
 class _FakeAmrRefineModel:
     """A minimal model advertising its declared subjects (mirrors HyperbolicModel's surface)."""
 
-    cons_names = ["rho"]
-    cons_roles = None
+    def __init__(self):
+        from pops.model import OwnerKind, OwnerPath
+        self.name = "architecture-amr-model"
+        self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, self.name)
+
+    def declaration_index(self):
+        from pops.model import DeclarationIndex
+        return DeclarationIndex(owner=self.owner_path, handles=())
 
 
 def test_uniform_plus_amr_tags_refused_by_default():
@@ -494,10 +518,12 @@ def test_uniform_plus_amr_tags_refused_by_default():
         from pops.mesh import CartesianMesh
         from pops.mesh.amr import Refine
         from pops.mesh.layouts import Uniform
+        from pops.model import Handle, OwnerPath
     except Exception as exc:  # pragma: no cover - bare source tree without importable pops.
         pytest.skip("pops import unavailable: %s" % exc)
 
-    layout = Uniform(CartesianMesh(n=16), refine=Refine.on("rho").above(0.1))
+    rho = Handle("rho", kind="state", owner=OwnerPath.shared("architecture.uniform"))
+    layout = Uniform(CartesianMesh(n=16), refine=Refine.on(rho).above(0.1))
     case = pops.Problem(layout=layout).block("ne", physics=_FakeAmrRefineModel())
     with pytest.raises(ValueError, match="carries active AMR criteria"):
         case.validate()
@@ -509,12 +535,14 @@ def test_ignore_amr_criteria_escape():
         from pops.mesh import CartesianMesh
         from pops.mesh.amr import IgnoreAMRCriteria, Refine
         from pops.mesh.layouts import Uniform
+        from pops.model import Handle, OwnerPath
     except Exception as exc:  # pragma: no cover - bare source tree without importable pops.
         pytest.skip("pops import unavailable: %s" % exc)
 
+    rho = Handle("rho", kind="state", owner=OwnerPath.shared("architecture.uniform"))
     layout = Uniform(
         CartesianMesh(n=16),
-        refine=Refine.on("rho").above(0.1),
+        refine=Refine.on(rho).above(0.1),
         ignore_amr=IgnoreAMRCriteria())
     case = pops.Problem(layout=layout).block("ne", physics=_FakeAmrRefineModel())
     # The explicit escape is honoured: no refusal.

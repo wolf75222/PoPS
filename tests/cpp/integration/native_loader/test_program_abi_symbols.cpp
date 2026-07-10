@@ -10,6 +10,8 @@
 // Contract symbols asserted present on the stub .so:
 //  - pops_program_abi_key  (REQUIRED: install_program fails loud if missing);
 //  - pops_install_program  (REQUIRED: the macro-step installer);
+//  - pops_program_block_count + pops_program_block_name (REQUIRED: explicit block identities;
+//    positional binding is forbidden);
 //  - pops_program_hash     (optional: the IR key recorded for the checkpoint restart guard);
 //  - pops_program_name     (optional diagnostic name);
 //  - pops_module_operator_count + the pops_module_operator_{name,kind,signature,requirements}
@@ -50,6 +52,8 @@ std::string stub_source() {
 extern "C" const char* pops_program_abi_key() { return POPS_ABI_KEY_LITERAL; }
 extern "C" const char* pops_program_name() { return "abi_symbol_stub"; }
 extern "C" const char* pops_program_hash() { return "deadbeef"; }
+extern "C" int pops_program_block_count() { return 1; }
+extern "C" const char* pops_program_block_name(int i) { return i == 0 ? "gas" : ""; }
 extern "C" void pops_install_program(void* /*sys*/) { /* no-op: symbol presence only */ }
 extern "C" int  pops_module_operator_count() { return 1; }
 extern "C" const char* pops_module_operator_name(int) { return "rhs"; }
@@ -115,7 +119,8 @@ static int pops_run_test_program_abi_symbols(int argc, char** argv) {
 
   int fails = 0;
   // REQUIRED symbols: install_program hard-fails without these.
-  const char* required[] = {"pops_program_abi_key", "pops_install_program"};
+  const char* required[] = {"pops_program_abi_key", "pops_install_program",
+                            "pops_program_block_count", "pops_program_block_name"};
   for (const char* name : required) {
     if (!pops::dynlib::sym(h, name)) {
       std::printf("FAIL required ABI symbol '%s' absent from the stub .so\n", name);

@@ -72,6 +72,10 @@ class Model(PhysicsFreezable, _RateAuthoringMixin, _RiemannAuthoringMixin,
         # dsl.Model.module); _multi_module is None until N > 1.
         self._multi_module = None
         self._species = {}          # species name -> StateHandle (multi-species mode)
+        self._module_cache = None
+
+    def _invalidate_authoring_views(self) -> None:
+        self._module_cache = None
 
     @property
     def owner_path(self) -> Any:
@@ -91,12 +95,15 @@ class Model(PhysicsFreezable, _RateAuthoringMixin, _RiemannAuthoringMixin,
         directly (N StateSpaces, a ``coupled_rate`` operator, a multi-block field operator) -- the SAME
         operator-first IR a hand-written :class:`pops.model.Module` would build.
         """
+        if self._module_cache is not None:
+            return self._module_cache
         module = self._multi_module if self._multi_module is not None else self._dsl.module
         registry = module.operator_registry()
         for handle in self._fields.values():
             target = getattr(handle, "registered_operator_name", None)
             if target is not None and target != handle.name:
                 registry.register_alias(handle.name, target)
+        self._module_cache = module
         return module
 
     # --- state / species ---
@@ -355,13 +362,40 @@ class Model(PhysicsFreezable, _RateAuthoringMixin, _RiemannAuthoringMixin,
         """Return the one immutable handle for an operator already in this model's registry."""
         from pops.model import OperatorHandle
         name = require_name(name, "registered operator name")
-        op = self.module.operator_registry().get(name)
+        module = self._multi_module if self._multi_module is not None else self._dsl.module
+        op = module.operator_registry().get(name)
         return OperatorHandle(
             op.name,
             kind=op.kind,
             owner=self.owner_path,
             signature=op.signature,
         )
+
+    def declaration_index(self) -> Any:
+        """Read-only membership index spanning the model's small family registries."""
+        from pops.model import DeclarationIndex
+
+        records = {}
+        for family in (self._states, self._fields, self._fluxes, self._sources):
+            for handle in family.values():
+                if not hasattr(handle, "kind"):
+                    continue
+                key = (handle.kind, handle.local_id)
+                previous = records.get(key)
+                if previous is not None and previous != handle:
+                    raise ValueError(
+                        "model %r exposes conflicting %s declaration %r"
+                        % (self.name, handle.kind, handle.local_id))
+                records[key] = handle
+        for handle in self.module.declaration_index().records():
+            key = (handle.kind, handle.local_id)
+            previous = records.get(key)
+            if previous is not None and previous != handle:
+                raise ValueError(
+                    "model %r exposes conflicting %s declaration %r"
+                    % (self.name, handle.kind, handle.local_id))
+            records[key] = handle
+        return DeclarationIndex(owner=self.owner_path, handles=records.values())
 
     def invariant(self, name: Any, expression: Any = None, over: Any = None) -> Any:
         """Declare a generic invariant ``StateSet -> Scalar`` from an ``integral(...)``."""

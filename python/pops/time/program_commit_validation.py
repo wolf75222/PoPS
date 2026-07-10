@@ -9,14 +9,14 @@ from pops.time.values import ProgramValue
 from pops.time.program_value_validation import require_compatible_spaces, require_top_level
 
 
-def validate_commit_many(program: Any, mapping: Any) -> list[tuple[str, Any]]:
-    """Return validated ``(block, value)`` pairs without mutating ``program``."""
+def validate_commit_many(program: Any, mapping: Any) -> list[tuple[Any, Any]]:
+    """Return validated ``(qualified_state, value)`` pairs without mutating ``program``."""
     if not isinstance(mapping, Mapping) or not mapping:
         raise ValueError(
             "commit_many: a non-empty {StateEndpointHandle: ProgramValue} mapping is required")
 
-    validated: list[tuple[str, Any]] = []
-    blocks: set[str] = set()
+    validated: list[tuple[Any, Any]] = []
+    blocks: set[Any] = set()
     for endpoint, state in mapping.items():
         if not isinstance(endpoint, StateEndpointHandle):
             raise TypeError(
@@ -40,7 +40,9 @@ def validate_commit_many(program: Any, mapping: Any) -> list[tuple[str, Any]]:
             raise ValueError(
                 "commit_many: endpoint for block %r cannot receive a value owned by block %r"
                 % (block, state.block))
-        if block in program._commits:
-            raise ValueError("block '%s' committed more than once" % block)
-        validated.append((block, state))
+        if endpoint.state in program._commits:
+            raise ValueError("state %s committed more than once" % endpoint.state.qualified_id)
+        if any(committed.block_ref is block for committed in program._commits):
+            raise ValueError("block %r already has a committed state" % block.local_id)
+        validated.append((endpoint.state, state))
     return validated

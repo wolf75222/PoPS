@@ -20,14 +20,15 @@ from __future__ import annotations
 from typing import Any
 
 from pops.codegen.orchestration import (
-    _freeze_and_snapshot,
+    _attach_problem_snapshot,
+    _capture_runtime_declarations,
     _problem_field_solvers,
     _resolve_problem_model,
 )
 
 
-def _compile_amr(problem: Any, layout: Any, backend: Any, target: Any, time: Any = None,
-                 **kwargs: Any) -> Any:
+def _compile_amr(problem: Any, layout: Any, backend: Any, target: Any, time: Any = None, *,
+                 problem_snapshot: Any, **kwargs: Any) -> Any:
     """Compile each AMR block to a ``target='amr_system'`` ``CompiledModel``, plus an optional Program.
 
     Each block's resolved physics model is compiled to a production native loader
@@ -67,7 +68,8 @@ def _compile_amr(problem: Any, layout: Any, backend: Any, target: Any, time: Any
                       for name, spec in problem._blocks.items()}
 
     if time is not None:
-        return _compile_amr_program(problem, layout, backend, target, time, block_compiled, kwargs)
+        return _compile_amr_program(
+            problem, layout, backend, target, time, block_compiled, problem_snapshot, kwargs)
 
     _, compiled = next(iter(block_compiled.items()))
     compiled._problem = problem
@@ -80,16 +82,16 @@ def _compile_amr(problem: Any, layout: Any, backend: Any, target: Any, time: Any
     compiled._block_specs = {name: {"model": block_compiled[name], "spatial": spec["spatial"]}
                              for name, spec in problem._blocks.items()}
     compiled._field_solvers = _problem_field_solvers(problem)
-    compiled._outputs = list(problem._outputs or [])
+    compiled._outputs, compiled._diagnostics = _capture_runtime_declarations(problem)
     # Carry the AMR layout so bind() can rebuild the AmrSystemConfig (n / L / periodic / regrid /
     # patch settings) and flow the typed refinement + field problem onto the AmrSystem.
     compiled._layout = layout
-    _freeze_and_snapshot(problem, None, compiled)
+    _attach_problem_snapshot(compiled, problem_snapshot)
     return compiled
 
 
 def _compile_amr_program(problem: Any, layout: Any, backend: Any, target: Any, time: Any,
-                         block_compiled: Any, kwargs: Any) -> Any:
+                         block_compiled: Any, problem_snapshot: Any, kwargs: Any) -> Any:
     """Compile the whole-system time Program for the AMR target and attach the AMR snapshot (ADC-634).
 
     Compiles @p time with ``compile_problem(model=<first block engine model>, target='amr_system')`` --
@@ -110,7 +112,8 @@ def _compile_amr_program(problem: Any, layout: Any, backend: Any, target: Any, t
     _, first_spec = next(iter(problem._blocks.items()))
     first_model = _resolve_problem_model(first_spec["model"])
     compiled = compile_problem(model=first_model, time=time, backend=backend,
-                               target="amr_system", **program_kwargs)
+                               target="amr_system", problem_snapshot=problem_snapshot,
+                               **program_kwargs)
     compiled._problem = problem
     compiled._target = target
     compiled._block_compiled_models = block_compiled
@@ -121,12 +124,11 @@ def _compile_amr_program(problem: Any, layout: Any, backend: Any, target: Any, t
     compiled._block_specs = {name: {"model": block_compiled[name], "spatial": spec["spatial"]}
                              for name, spec in problem._blocks.items()}
     compiled._field_solvers = _problem_field_solvers(problem)
-    compiled._outputs = list(problem._outputs or [])
-    compiled._diagnostics = list(problem._diagnostics or [])
+    compiled._outputs, compiled._diagnostics = _capture_runtime_declarations(problem)
     # Carry the AMR layout so bind() rebuilds the AmrSystemConfig and flows the typed refinement, and
     # so the introspection (arguments / estimate_memory / inspect_amr) reports the AMR hierarchy.
     compiled._layout = layout
-    _freeze_and_snapshot(problem, time, compiled)
+    _attach_problem_snapshot(compiled, problem_snapshot)
     return compiled
 
 

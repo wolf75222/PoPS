@@ -13,13 +13,12 @@ import pytest
 
 pops = pytest.importorskip("pops")
 
-from pops.mesh.cartesian import CartesianMesh  # noqa: E402
-from pops.mesh.layouts import Uniform  # noqa: E402
+from pops.model import Module  # noqa: E402
 
 
-class _StubModel:
-    def __init__(self, name="stub"):
-        self.name = name
+def _model(name="stub"):
+    """Return a real model declaration authority for Problem assembly tests."""
+    return Module(name)
 
 
 def _poisson():
@@ -39,7 +38,7 @@ def test_problem_has_no_constructor_layout():
 
 
 def test_chaining_setters_return_the_problem():
-    model = _StubModel("ne")
+    model = _model("ne")
     program = type("Prog", (), {"name": "euler"})()
     prob = (pops.Problem(name="plasma")
             .block("ne", physics=model)
@@ -57,12 +56,12 @@ def test_chaining_setters_return_the_problem():
 
 def test_add_block_returns_a_stable_handle():
     prob = pops.Problem()
-    handle = prob.add_block("ne", _StubModel(), time=object(), diagnostics=object())
+    handle = prob.add_block("ne", _model("electron"), time=object(), diagnostics=object())
     assert handle.name == "ne"
     assert handle.qualified_id.endswith("::block::ne")
     qualified_id = handle.qualified_id
     # The handle is stable as more blocks are added.
-    prob.add_block("ni", _StubModel())
+    prob.add_block("ni", _model("ion"))
     assert prob.add_block.__self__ is prob or True  # add_block returns a handle, not self
     assert handle.qualified_id == qualified_id
     # blocks() exposes the stable handles keyed by name.
@@ -79,9 +78,9 @@ def test_add_field_returns_a_stable_handle():
 
 
 def test_duplicate_block_is_refused_early():
-    prob = pops.Problem().block("ne", physics=_StubModel())
+    prob = pops.Problem().block("ne", physics=_model())
     with pytest.raises(ValueError, match="already exists"):
-        prob.block("ne", physics=_StubModel())
+        prob.block("ne", physics=_model())
 
 
 def test_missing_physics_is_refused_early():
@@ -105,7 +104,7 @@ def test_no_block_reports_a_structured_error():
 def test_bad_output_policy_reports_runtime_family():
     class _NotAPolicy:
         name = "nope"
-    prob = pops.Problem().block("ne", physics=_StubModel()).output(_NotAPolicy())
+    prob = pops.Problem().block("ne", physics=_model()).output(_NotAPolicy())
     report = prob.validate_report()
     assert not report.ok
     assert "runtime" in report.by_family()
@@ -113,7 +112,7 @@ def test_bad_output_policy_reports_runtime_family():
 
 def test_to_dict_is_json_ready_and_array_free():
     import json
-    prob = (pops.Problem(name="plasma").block("ne", physics=_StubModel())
+    prob = (pops.Problem(name="plasma").block("ne", physics=_model())
             .param(pops.physics.ConstParam("alpha", 1.0)))
     data = prob.to_dict()
     # Round-trips through JSON (no runtime object, no numpy array).
@@ -134,7 +133,7 @@ def test_problem_has_no_run_install_or_compile_method():
 
 def test_problem_holds_no_array_attribute():
     # A Problem owns no runtime data: no attribute is a list/array of numbers.
-    prob = pops.Problem().block("ne", physics=_StubModel())
+    prob = pops.Problem().block("ne", physics=_model())
     for name, value in vars(prob).items():
         assert not isinstance(value, (list, tuple)) or not value or not isinstance(
             value[0], (int, float)), "Problem attribute %r looks like array data" % name
@@ -145,7 +144,7 @@ def test_available_is_explainable():
     status = prob.available()
     assert not status.ok
     assert "block" in status.reason
-    prob.block("ne", physics=_StubModel())
+    prob.block("ne", physics=_model())
     assert prob.available().ok
 
 

@@ -18,7 +18,7 @@ from pops.ir.ops import left, right  # noqa: F401  -- Model.left / Model.right s
 
 from ._modelpkg import model as _model
 from .aux import aux_total_n_aux, roles_for  # noqa: F401  -- used in Model.compile
-from .model import HyperbolicModel, Param, _NO_KIND, _coerce_param
+from .model import HyperbolicModel, _NO_KIND, _coerce_param
 from ._facade_compile import _FacadeCompileMixin
 from ._freeze import PhysicsFreezable
 
@@ -54,9 +54,14 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         self._init_physics_freeze()
         self._m = HyperbolicModel(name)
         self.params = {}   # name -> Param (introspection / reproducibility)
+        self._module_cache = None
 
+    def _invalidate_authoring_views(self) -> None: self._module_cache = None
     @property
     def name(self) -> Any: return self._m.name
+    @property
+    def owner_path(self) -> Any: return self._m.owner_path
+    def declaration_index(self) -> Any: return self.module.declaration_index()
 
     @property
     def capabilities(self) -> Any:
@@ -457,6 +462,8 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         elliptic_field / flux / rate_operator populate. dsl.Model is the PDE convenience
         facade; the Module is the model-free view a generic Program binds to (P.bind_operators).
         The Module carries no numerics; codegen still reads this Model via compile_problem."""
+        if self._module_cache is not None:
+            return self._module_cache
         mod = _model.Module(self.name, owner=self._m.owner_path)
         st = self._m.state_space()
         mod.state_space(st.name, st.components, roles=st.roles, layout=st.layout,
@@ -464,6 +471,7 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         fs = self._m.field_space()
         mod.field_space(fs.name, fs.components, layout=fs.layout)
         mod.adopt_registry(self._m.operator_registry())
+        self._module_cache = mod
         return mod
 
     # --- operator introspection (Spec 2, S2-5) ---

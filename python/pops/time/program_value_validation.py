@@ -144,7 +144,7 @@ def validate_input_regions(program: Any, inputs: Any, region: int, where: str) -
             % (where, value.name, value.region, region))
 
 
-def require_declared_state_space(program: Any, block: str, space: Any) -> None:
+def require_declared_state_space(program: Any, block: Any, space: Any) -> None:
     """Enforce one typed-or-untyped StateSpace contract for every declared block."""
     require_state_space(space, "state")
     missing = object()

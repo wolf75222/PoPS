@@ -2,7 +2,7 @@
 
 A Problem is MUTABLE while authored and FROZEN by pops.compile. After freeze, every mutating setter
 RAISES (naming the frozen object), the member descriptors are sealed, and Problem.freeze() returns a
-stable ProblemSnapshot whose .hash the compile cache key folds in. There is NO warning, NO
+stable ProblemSnapshot whose .hash enters the real compile cache identity. There is NO warning, NO
 shallow-copy escape. Pure Python; needs only ``import pops``.
 """
 import pytest
@@ -14,11 +14,45 @@ pops = pytest.importorskip("pops", exc_type=ImportError)
 from pops.problem._snapshot import ProblemSnapshot, build_problem_snapshot  # noqa: E402
 from pops.numerics.riemann import HLL  # noqa: E402
 from pops.descriptors import BrickDescriptor  # noqa: E402
+from pops.math import ddt, div  # noqa: E402
+from pops.model import DeclarationIndex, Handle, OwnerKind, OwnerPath  # noqa: E402
+from pops.physics import Model as PhysicsModel  # noqa: E402
 
 
-def _model():
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5), transport=pops.IsothermalFlux(),
-                      source=pops.PotentialForce(charge=1.0), elliptic=pops.ChargeDensity(charge=1.0))
+def _model_and_state(name="isothermal", *, speed=1):
+    """Return a small owner-qualified model and its public state declaration."""
+    model = PhysicsModel(name)
+    state = model.state("U", components=["u"])
+    flux = model.flux(
+        "F", on=state, x=[speed * state[0]], y=[state[0]],
+        waves={"x": [speed], "y": [1]},
+    )
+    model.rate("A", ddt(state) == -div(flux))
+    return model, state
+
+
+def _model(name="isothermal", *, speed=1):
+    return _model_and_state(name, speed=speed)[0]
+
+
+def _state_handle(model, name="U"):
+    """Read the registry-issued state handle without reaching into model internals."""
+    return next(
+        handle for handle in model.declaration_index().records()
+        if handle.kind == "state" and handle.local_id == name
+    )
+
+
+class _OwnedBrickModel(BrickDescriptor):
+    """Minimal typed model used where the freeze test specifically needs a mutable brick."""
+
+    def __init__(self, name):
+        super().__init__(name, "native")
+        self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, name)
+        self.state_handle = Handle("U", kind="state", owner=self.owner_path)
+
+    def declaration_index(self):
+        return DeclarationIndex(owner=self.owner_path, handles=(self.state_handle,))
 
 
 def _problem(name="plasma"):
@@ -48,7 +82,7 @@ def test_snapshot_hash_changes_on_a_different_assembly():
 def test_snapshot_is_json_ready():
     import json
     d = build_problem_snapshot(_problem()).to_dict()
-    assert d["schema_version"] == 3
+    assert d["schema_version"] == 4
     assert json.loads(json.dumps(d, sort_keys=True)) == d  # no runtime object, no numpy array
 
 
@@ -106,6 +140,11 @@ def test_problem_cache_identity_does_not_collapse_same_named_models():
 
         def __init__(self, coefficient):
             self.coefficient = coefficient
+            self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, self.name)
+            self.state = Handle("U", kind="state", owner=self.owner_path)
+
+        def declaration_index(self):
+            return DeclarationIndex(owner=self.owner_path, handles=(self.state,))
 
     first = pops.Problem(name="first").block("u", physics=C(1))
     second = pops.Problem(name="first").block("u", physics=C(2))
@@ -114,12 +153,8 @@ def test_problem_cache_identity_does_not_collapse_same_named_models():
 
 
 def test_problem_cache_identity_covers_composed_model_formulas():
-    from pops.physics.facade import Model
-
     def scalar_problem(speed):
-        model = Model("same-model-name")
-        (u,) = model.conservative_vars("u")
-        model.flux(x=[speed * u], y=[u])
+        model = _model("same-model-name", speed=speed)
         return pops.Problem(name="same-problem-name").block("u", physics=model)
 
     first = build_problem_snapshot(scalar_problem(1))
@@ -212,15 +247,20 @@ def test_failed_freeze_is_atomic_and_problem_can_be_edited_then_retried():
             _require_freeze_capability(capability)
             self.name, self.frozen = state
 
-    class BrokenOptions:
+    class RepairableOptions:
+        ready = False
+
         def options(self):
-            raise RuntimeError("not serializable yet")
+            if not self.ready:
+                raise RuntimeError("not serializable yet")
+            return {"value": 2}
 
     layout = Freezable("layout")
     spatial = Freezable("spatial")
+    repairable = RepairableOptions()
     p = (pops.Problem(layout=layout, name="atomic")
          .block("ne", physics=_model(), spatial=spatial)
-         .param("bad", BrokenOptions()))
+         .param("bad", repairable))
 
     with pytest.raises(RuntimeError, match="not serializable yet"):
         p.freeze()
@@ -230,10 +270,10 @@ def test_failed_freeze_is_atomic_and_problem_can_be_edited_then_retried():
     assert not layout.frozen
     assert not spatial.frozen
     # Neither the Problem facade, its registries nor its member descriptors/layout were sealed.
-    p.block("ion", physics=_model())
+    p.block("ion", physics=_model("isothermal-ion"))
     spatial.name = "repaired-spatial"
     layout.name = "repaired-layout"
-    p.param("bad", 2)
+    repairable.ready = True
     snapshot = p.freeze()
     assert p.frozen
     assert layout.frozen
@@ -257,8 +297,9 @@ def test_freeze_rolls_back_every_prior_member_when_a_later_member_raises():
     first = FailingBrick("first")
     second = FailingBrick("second", fail=True)
     program = pops.time.Program("rollback-program")
+    model = _model("rollback-u")
     p = pops.Problem(name="rollback")
-    p.add_block("u", _model(), spatial=first, time=program, diagnostics=[second])
+    block = p.add_block("u", model, spatial=first, time=program, diagnostics=[second])
 
     with pytest.raises(RuntimeError, match="second member failed"):
         p.freeze()
@@ -268,9 +309,9 @@ def test_freeze_rolls_back_every_prior_member_when_a_later_member_raises():
     assert not getattr(second, "_frozen", False)
     assert not program._frozen
     assert not p._block_registry._frozen
-    p.block("v", physics=_model())  # the registry is editable after exact rollback
+    p.block("v", physics=_model("rollback-v"))  # registry editable after exact rollback
     first.scheme = "edited-after-rollback"
-    program.state("editable-after-rollback")
+    program.state(block, _state_handle(model))
     second.fail = False
     snapshot = p.freeze()
     assert snapshot is p.snapshot
@@ -298,18 +339,18 @@ def test_opaque_irreversible_freezer_is_refused_before_any_member_mutates():
     assert not getattr(first, "_frozen", False)
     assert not opaque.frozen
     assert not p.frozen and p.snapshot is None
-    p.block("still-editable", physics=_model())
+    p.block("still-editable", physics=_model("still-editable"))
 
 
 def test_deep_freeze_covers_block_members_and_global_program_without_stale_snapshot():
-    model = BrickDescriptor("model", "native")
+    model = _OwnedBrickModel("model")
     spatial = BrickDescriptor("spatial", "native")
     diagnostic = BrickDescriptor("diagnostic", "native")
     block_time = pops.time.Program("block-time")
     global_time = pops.time.Program("global-time")
     p = pops.Problem(name="deep-freeze")
-    p.add_block("u", model, spatial=spatial, time=block_time,
-                diagnostics=[diagnostic])
+    block = p.add_block(
+        "u", model, spatial=spatial, time=block_time, diagnostics=[diagnostic])
     p.time(global_time)
 
     snapshot = p.freeze()
@@ -319,39 +360,31 @@ def test_deep_freeze_covers_block_members_and_global_program_without_stale_snaps
             descriptor.scheme = "mutated"
     for program in (block_time, global_time):
         with pytest.raises(RuntimeError, match="frozen"):
-            program.state("late")
+            program.state(block, model.state_handle)
     assert build_problem_snapshot(p).hash == snapshot.hash
 
 
 def test_python_physics_model_is_deeply_frozen_without_changing_snapshot_identity():
-    from pops.physics.facade import Model
-
-    model = Model("frozen-scalar")
-    (u,) = model.conservative_vars("u")
-    model.flux(x=[u], y=[u])
+    model, state = _model_and_state("frozen-scalar")
     p = pops.Problem(name="physics-freeze").block("u", physics=model)
 
     snapshot = p.freeze()
 
-    assert model.frozen and model._m.frozen
+    assert model.frozen and model.dsl.frozen and model.dsl._m.frozen
     with pytest.raises(RuntimeError, match="frozen"):
-        model.flux(x=[2 * u], y=[u])
+        model.scalar("twice_u", 2 * state[0])
     with pytest.raises(RuntimeError, match="frozen"):
-        model._m.gamma = 1.2
+        model.dsl._m.gamma = 1.2
     assert build_problem_snapshot(p).hash == snapshot.hash
 
 
 def test_later_freeze_failure_restores_python_physics_cascade_exactly():
-    from pops.physics.facade import Model
-
     class FailingSpatial(BrickDescriptor):
         def freeze(self):
             super().freeze()
             raise RuntimeError("spatial freeze failed")
 
-    model = Model("rollback-scalar")
-    (u,) = model.conservative_vars("u")
-    model.flux(x=[u], y=[u])
+    model, state = _model_and_state("rollback-scalar")
     p = pops.Problem(name="physics-rollback").block(
         "u", physics=model, spatial=FailingSpatial("bad", "native"))
     before = build_problem_snapshot(p).hash
@@ -359,9 +392,10 @@ def test_later_freeze_failure_restores_python_physics_cascade_exactly():
     with pytest.raises(RuntimeError, match="spatial freeze failed"):
         p.freeze()
 
-    assert not model.frozen and not model._m.frozen
+    assert not model.frozen and not model.dsl.frozen and not model.dsl._m.frozen
     assert build_problem_snapshot(p).hash == before
-    model.flux(x=[2 * u], y=[u])  # complex child/container state was restored, not merely the facade bit
+    # Complex child/container state was restored, not merely the facade bit.
+    model.scalar("twice_u", 2 * state[0])
 
 
 @pytest.mark.parametrize("mutate", [
@@ -419,7 +453,9 @@ def test_brick_descriptor_freeze_raises():
 def test_fluent_builder_still_mutates_before_freeze():
     # A descriptor is mutable while authored (no freeze on validate); a fluent builder is unaffected.
     from pops.mesh.amr import Refine
-    r = Refine.on("rho").above(0.05)  # mutates during build
+    from pops.model import Handle, OwnerPath
+    rho = Handle("rho", kind="state", owner=OwnerPath.shared("freeze-test"))
+    r = Refine.on(rho).above(0.05)  # mutates during build
     assert r.validate() is True
 
 
@@ -428,11 +464,14 @@ def test_problem_freeze_seals_member_descriptors():
     # problem's typed solver). The block's runtime spatial brick is not a typed Descriptor, so the
     # cascade seals what it can: the field registry's FieldProblem descriptors.
     from pops.math import unknown, laplacian
-    from pops.ir.expr import Var
+    from pops.ir import ValueExpr
     from pops.fields import PoissonProblem
+    model = _model("field-freeze")
+    state = _state_handle(model)
     field = PoissonProblem(unknown=unknown("phi"),
-                           equation=(-laplacian(unknown("phi")) == Var("rho", "cons")))
-    p = pops.Problem(name="plasma").block("ne", physics=_model()).field(field)
+                           equation=(-laplacian(unknown("phi")) == ValueExpr(state)),
+                           inputs=(state,))
+    p = pops.Problem(name="plasma").block("ne", physics=model).field(field)
     p.freeze()
     # The FieldProblem descriptor is sealed: a post-freeze attribute mutation raises.
     with pytest.raises(RuntimeError, match="frozen"):
@@ -440,28 +479,32 @@ def test_problem_freeze_seals_member_descriptors():
 
 
 # ---------------------------------------------------------------------------
-# Program freeze (via compile) + cache-key fold.
+# Program freeze (via compile) + snapshot authentication.
 # ---------------------------------------------------------------------------
 
 def test_program_freeze_raises_on_new_node():
+    model = _model("program-freeze")
+    problem = pops.Problem(name="program-freeze")
+    block = problem.add_block("ne", model)
+    state = _state_handle(model)
     prog = pops.time.Program("t")
-    prog.state("ne")
+    prog.state(block, state)
     prog.freeze()
     with pytest.raises(RuntimeError, match="frozen"):
-        prog.state("ne2")
+        prog.state(block, state)
 
 
-def test_cache_key_fold_composes_not_replaces():
-    from pops.problem._snapshot import fold_snapshot_hash
+def test_snapshot_validator_authenticates_type_hash_and_payload():
+    from pops.problem._snapshot import validate_problem_snapshot
 
-    class _Handle:
-        _cache_key = "model=abc|kokkos=1|mpi=0|precision=double"
+    snapshot = ProblemSnapshot({"problem": "cache-identity"})
+    assert validate_problem_snapshot(snapshot) == snapshot.hash
+    with pytest.raises(TypeError, match="ProblemSnapshot"):
+        validate_problem_snapshot(snapshot.hash)
 
-    h = _Handle()
-    fold_snapshot_hash(h, "a" * 64)
-    # The base key (with the compile stream's tokens) is PRESERVED; the snapshot hash is appended.
-    assert h._cache_key.startswith("model=abc|kokkos=1|mpi=0|precision=double|")
-    assert "problem_snapshot=" + "a" * 64 in h._cache_key
+    object.__setattr__(snapshot, "_hash", "a" * 64)
+    with pytest.raises(ValueError, match="canonical payload"):
+        validate_problem_snapshot(snapshot)
 
 
 def test_compiled_handle_is_sealed_after_public_compile():

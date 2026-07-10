@@ -1,18 +1,15 @@
 """pops.codegen.inspect_compiled -- INERT introspection of a compiled artifact (Spec 5 sec.12).
 
-The compiled-artifact introspection surface (criteria #44-49, epic ADC-479): three value
-classes and the pure builders that populate them from the metadata a
-:class:`pops.codegen.loader.CompiledProblem` ALREADY carries (its lowered ``pops.time.Program``
-and its physical model), plus the compile artifacts on disk.
+The compiled-artifact introspection surface (criteria #44-49, epic ADC-479): value classes and pure
+builders populated from metadata already carried by :class:`pops.codegen.loader.CompiledProblem`
+(its lowered ``pops.time.Program`` and physical model), plus the compile artifacts on disk.
 
-  - :class:`Arguments` (sec.12.2, #44-45) lists the RUNTIME inputs the artifact expects at
-    :meth:`pops.System.install` (instances / params / aux / solvers / outputs / layout), WITHOUT
-    binding or reading any runtime array. It mirrors ``System.install``'s five keyword groups.
+  - :class:`Arguments` (sec.12.2, #44-45) lists the RUNTIME inputs expected by
+    :meth:`pops.System.install`, without binding or reading a runtime array.
   - :class:`MemoryEstimate` (sec.12.3, #46) turns the Program's GRID-RELATIVE static cost
     (``Program.estimate``: field-sized passes) into an ABSOLUTE byte estimate over a mesh shape,
     as a FORMULA -- it allocates nothing (no ``MultiFab``). Every assumption is inspectable.
-  - the metadata attributes (sec.12.4, #48-49) live on :class:`CompiledProblem` itself; the
-    helpers here only feed its ``arguments`` / ``estimate_memory`` methods.
+  - metadata attributes live on :class:`CompiledProblem`; helpers feed its report methods.
 
 Nothing here compiles, binds, dlopens or allocates: the builders read Python-side metadata only.
 The module imports ``pops.mesh`` lazily (in-function) to respect the codegen layering (a codegen
@@ -198,9 +195,12 @@ def build_arguments(compiled: Any) -> Arguments:
     if program is not None and hasattr(program, "commits"):
         commits = program.commits()
     instances = {}
-    for block in sorted(commits):
-        instances[block] = {"state": state_space, "components": n_cons,
-                            "required": True, "conservative": list(cons)}
+    from pops.time.references import block_name as _block_name, handle_data
+    for state_ref in sorted(commits, key=lambda item: item.qualified_id):
+        instances[_block_name(state_ref.block_ref)] = {"state": state_space, "components": n_cons,
+                            "required": True, "conservative": list(cons),
+                            "block_identity": handle_data(state_ref.block_ref),
+                            "state_identity": handle_data(state_ref)}
     if not instances and n_cons:
         # No Program commits (a bare CompiledModel: the AMR route, or a pure field/diagnostic Program)
         # still needs the physics block the model describes; surface it under the model name (the AMR

@@ -1,0 +1,135 @@
+"""ProblemSnapshot participates in the real compiled-Program cache identity."""
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+
+import pytest
+
+pops = pytest.importorskip("pops", exc_type=ImportError)
+
+from pops.codegen.compile_provenance import read_cachekey_sidecar  # noqa: E402
+from pops.model import DeclarationIndex, OwnerKind, OwnerPath  # noqa: E402
+
+
+class _SnapshotModel:
+    """Small structural model shared by the two Problem snapshots."""
+
+    def __init__(self) -> None:
+        self.name = "same-model"
+        self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, self.name)
+
+    def declaration_index(self):
+        return DeclarationIndex(owner=self.owner_path, handles=())
+
+
+class _Program:
+    name = "same-program"
+    source = 'extern "C" void pops_install_program(void*) {}\n'
+
+    def emit_cpp_program(self, *, model, target):
+        del model, target
+        return self.source
+
+
+class _Compiled:
+    def __init__(self, so_path, program, model, abi_key, cxx, std, **metadata):
+        self.so_path = so_path
+        self.program = program
+        self.model = model
+        self.abi_key = abi_key
+        self.cxx = cxx
+        self.std = std
+        self.problem_hash = metadata["problem_hash"]
+        self.cache_key = metadata["cache_key"]
+        self._problem_snapshot = metadata.get("problem_snapshot")
+
+
+def _install_fake_toolchain(monkeypatch, tmp_path):
+    """Exercise the production driver and real sidecar writer without invoking a compiler."""
+    import pops.codegen.compile_drivers as drivers
+    import pops.codegen.loader as loader
+    import pops.codegen.module_lowering as lowering
+    import pops.model.manifest as manifest
+
+    monkeypatch.setattr(lowering, "lower_and_validate", lambda model, facade: (model, None))
+    monkeypatch.setattr(manifest, "module_manifest_of", lambda model: None)
+    monkeypatch.setattr(loader, "CompiledProblem", _Compiled)
+    monkeypatch.setattr(drivers, "pops_include", lambda: str(tmp_path))
+    monkeypatch.setattr(drivers, "pops_header_signature", lambda include: "HEADER")
+    monkeypatch.setattr(
+        drivers, "pops_loader_build_flags", lambda cxx: ("fake-c++", [], []))
+    monkeypatch.setattr(drivers, "_probe_cxx_std", lambda cxx, std: "c++23")
+    monkeypatch.setattr(drivers, "_native_feature_key", lambda: "kokkos=fake;mpi=off")
+    monkeypatch.setattr(
+        drivers, "_precision_cache_key", lambda: "precision=double;real_bytes=8")
+    monkeypatch.setattr(drivers, "_registry_cache_key", lambda: "routes=fake;capvocab=1")
+    monkeypatch.setattr(drivers, "_dsl_optflags", lambda: [])
+    monkeypatch.setattr(drivers, "deterministic_program_link_flags", lambda flags: list(flags))
+    monkeypatch.setattr(
+        drivers,
+        "_cache_so_path",
+        lambda artifact_hash, abi, backend, target, name: str(
+            tmp_path / (artifact_hash + ".so")),
+    )
+
+    compiled_paths = []
+
+    def fake_compile(command, context):
+        del context
+        out = Path(command[command.index("-o") + 1])
+        out.write_bytes(b"fake shared object")
+        compiled_paths.append(str(out))
+
+    monkeypatch.setattr(drivers, "_run_compile", fake_compile)
+    for name in (
+        "POPS_CODEGEN_DIR", "POPS_DUMP_IR", "POPS_DUMP_CPP", "POPS_KEEP_GENERATED",
+        "POPS_CODEGEN_LOG", "POPS_LOG",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    return drivers, compiled_paths
+
+
+def test_distinct_problem_snapshots_get_distinct_paths_keys_and_matching_sidecars(
+        monkeypatch, tmp_path):
+    drivers, compiled_paths = _install_fake_toolchain(monkeypatch, tmp_path)
+    model = _SnapshotModel()
+    program = _Program()
+    first_problem = pops.Problem(name="first-problem").block("u", physics=model)
+    second_problem = pops.Problem(name="second-problem").block("u", physics=model)
+    first_snapshot = first_problem.freeze()
+    second_snapshot = second_problem.freeze()
+
+    assert first_snapshot.hash != second_snapshot.hash
+    first = drivers.compile_problem(
+        time=program, model=model, problem_snapshot=first_snapshot)
+    second = drivers.compile_problem(
+        time=program, model=model, problem_snapshot=second_snapshot)
+
+    source_hash = hashlib.sha256(program.source.encode()).hexdigest()
+    expected_first = hashlib.sha256(
+        (source_hash + "|problem_snapshot=" + first_snapshot.hash).encode()).hexdigest()
+    expected_second = hashlib.sha256(
+        (source_hash + "|problem_snapshot=" + second_snapshot.hash).encode()).hexdigest()
+    assert first.problem_hash == expected_first
+    assert second.problem_hash == expected_second
+    assert first.so_path != second.so_path
+    assert first.cache_key != second.cache_key
+    assert first._problem_snapshot is first_snapshot
+    assert second._problem_snapshot is second_snapshot
+    assert read_cachekey_sidecar(first.so_path)["cache_key"] == first.cache_key
+    assert read_cachekey_sidecar(second.so_path)["cache_key"] == second.cache_key
+    assert compiled_paths == [first.so_path, second.so_path]
+
+    hit = drivers.compile_problem(time=program, model=model, problem_snapshot=first_snapshot)
+    assert hit.so_path == first.so_path and hit.cache_key == first.cache_key
+    assert compiled_paths == [first.so_path, second.so_path]
+
+
+def test_advanced_compile_problem_without_snapshot_keeps_source_identity(monkeypatch, tmp_path):
+    drivers, _ = _install_fake_toolchain(monkeypatch, tmp_path)
+    program = _Program()
+    compiled = drivers.compile_problem(time=program, model=_SnapshotModel())
+
+    assert compiled.problem_hash == hashlib.sha256(program.source.encode()).hexdigest()
+    assert compiled._problem_snapshot is None

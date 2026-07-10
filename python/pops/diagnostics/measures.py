@@ -53,6 +53,12 @@ class _Measure(Descriptor):
     reduction = None
 
     def __init__(self, block: Any = None, role: Any = None, cadence: Any = None) -> None:
+        if block is not None:
+            from pops.problem.handles import BlockHandle
+            if not isinstance(block, BlockHandle):
+                raise TypeError(
+                    "diagnostic block must be a BlockHandle; names/strings are not references "
+                    "(got %r)" % type(block).__name__)
         self.block = block
         self.role = role
         self.cadence = cadence
@@ -60,6 +66,24 @@ class _Measure(Descriptor):
     def options(self) -> dict:
         return {"scheme": self.scheme, "block": _ref_name(self.block),
                 "role": _ref_name(self.role), "cadence": _ref_name(self.cadence)}
+
+    def resolve_references(self, resolver: Any) -> Any:
+        """Return a detached measure whose optional block reference is canonical.
+
+        The authoring descriptor is never mutated. External diagnostic consumers can rely on this
+        small protocol instead of branching on every concrete measure subclass.
+        """
+        if not callable(resolver):
+            raise TypeError("diagnostic reference resolver must be callable")
+        from copy import copy
+        from pops.problem.handles import BlockHandle
+        resolved = copy(self)
+        if self.block is not None:
+            block = resolver(self.block)
+            if not isinstance(block, BlockHandle):
+                raise TypeError("diagnostic block resolver must return a BlockHandle")
+            resolved.block = block
+        return resolved
 
     def requirements(self) -> Any:
         from pops.descriptors_report import RequirementSet
@@ -167,6 +191,19 @@ class ConservationCheck(Descriptor):
     def options(self) -> dict:
         return {"scheme": self.scheme, "quantity": _ref_name(self.quantity),
                 "tolerance": self.tolerance}
+
+    def resolve_references(self, resolver: Any) -> Any:
+        """Return a detached check containing a reference-resolved diagnostic quantity."""
+        if not callable(resolver):
+            raise TypeError("diagnostic reference resolver must be callable")
+        resolve_quantity = getattr(self.quantity, "resolve_references", None)
+        if not callable(resolve_quantity):
+            raise TypeError(
+                "ConservationCheck quantity must implement resolve_references(resolver)")
+        from copy import copy
+        resolved = copy(self)
+        resolved.quantity = resolve_quantity(resolver)
+        return resolved
 
     def requirements(self) -> Any:
         from pops.descriptors_report import RequirementSet

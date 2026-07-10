@@ -84,8 +84,9 @@ def test_field_problem_with_coefficients_is_a_field_problem():
 
     m, U, phi = _model_with_state()
     rho, mx, my = U
+    eps = m.field("eps")
     prob = m.field_problem("screened", equation=(-laplacian(phi) == rho),
-                           solver="geometric_mg", coefficients=ScalarCoefficient("eps"))
+                           solver="geometric_mg", coefficients=ScalarCoefficient(eps))
     # With coefficients present the descriptor is the general FieldProblem (not a PoissonProblem).
     assert isinstance(prob, fields.FieldProblem)
     assert not isinstance(prob, fields.PoissonProblem)

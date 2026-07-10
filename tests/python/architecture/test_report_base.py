@@ -66,7 +66,7 @@ def test_report_module_imports_no_pops_extension():
 
 
 def test_reports_adopt_the_base_and_are_not_dicts():
-    pops = pytest.importorskip("pops", exc_type=ImportError)
+    pytest.importorskip("pops", exc_type=ImportError)
     from pops._report import Report
     from pops.problem.report_view import ProblemReport
     from pops.time.program_inspect import ProgramReport
@@ -86,9 +86,14 @@ def test_reports_adopt_the_base_and_are_not_dicts():
 def test_problem_and_program_inspect_return_typed_reports_and_do_not_compile():
     pops = pytest.importorskip("pops", exc_type=ImportError)
     from pops._report import Report
+    from pops.model import Module
 
     # Problem.inspect() -> a typed report; building it triggers no compile / bind (it reads metadata).
-    prob = pops.Problem(name="p").block("ne", physics=type("M", (), {"name": "m"})())
+    model = Module("m")
+    state_space = model.state_space("U", ("u",))
+    state = model.state_handle(state_space)
+    prob = pops.Problem(name="p")
+    block = prob.add_block("ne", model)
     prob_report = prob.inspect()
     assert isinstance(prob_report, Report) and not isinstance(prob_report, dict)
     assert prob_report.category == "problem"
@@ -96,7 +101,7 @@ def test_problem_and_program_inspect_return_typed_reports_and_do_not_compile():
     assert pops.inspect(prob) == prob_report.to_dict()
 
     prog = pops.time.Program("t")
-    prog.state("ne")
+    prog.state(block, state)
     prog_report = prog.inspect()
     assert isinstance(prog_report, Report) and prog_report.report_type == "program"
 

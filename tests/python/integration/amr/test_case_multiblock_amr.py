@@ -17,6 +17,7 @@ try:
     from pops.codegen import orchestration
     from pops.mesh.cartesian import CartesianMesh
     from pops.mesh.layouts import AMR
+    from pops.model import DeclarationIndex, OwnerKind, OwnerPath
     import pops.codegen.compile_drivers as compile_drivers
 except Exception as exc:  # noqa: BLE001
     print("skip test_case_multiblock_amr (pops unavailable: %s)" % exc)
@@ -51,7 +52,11 @@ class _StubDsl:
 class _StubModel:
     def __init__(self, name="stub"):
         self.name = name
+        self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, name)
         self.dsl = _StubDsl(name)
+
+    def declaration_index(self):
+        return DeclarationIndex(owner=self.owner_path, handles=())
 
 
 class _StubCompiled:
@@ -124,7 +129,8 @@ def test_single_block_amr_still_lowers():
                "the single block compiled for target='amr_system'")
         _check(set(compiled._block_compiled_models) == {"ne"},
                "the handle carries the single block's CompiledModel")
-        _check(compiled._layout is layout, "AMR layout carried on the handle for bind()")
+        _check(compiled._layout is not layout and compiled._layout.base is layout.base,
+               "a detached AMR layout is carried on the handle for bind()")
     finally:
         _unpatch()
     print("ok test_single_block_amr_still_lowers")

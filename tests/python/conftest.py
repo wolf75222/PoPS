@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Iterator
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 
 import pytest
@@ -206,7 +206,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
                 item.add_marker(pytest.mark.skip(reason=compiler_missing))
 
 
-@lru_cache(maxsize=None)
+@cache
 def _process_timeout(path: Path) -> int:
     """Timeout for one process-isolated test file, in seconds.
 
@@ -233,17 +233,32 @@ def _process_timeout(path: Path) -> int:
     return PROCESS_TEST_TIMEOUT
 
 
-@lru_cache(maxsize=None)
+@cache
 def _process_test_dirs() -> tuple[str, ...]:
     dirs = {str(path.parent) for path in (REPO_ROOT / "tests" / "python").rglob("test_*.py")}
     return tuple(sorted(dirs))
 
 
 def _process_pythonpath(existing: str | None) -> str:
+    """Build a subprocess path without masking an installed native package.
+
+    A source checkout contains ``pops/__init__.py`` but normally not ``pops._pops``. Putting that
+    directory ahead of site-packages makes process-isolated integration tests import a package that
+    can never load its native extension, even immediately after ``scripts/build_python.sh`` installed
+    a coherent wheel. Use the source package only when it carries a compatible extension itself;
+    otherwise exercise the freshly installed wheel while keeping the repository/test helpers visible.
+    """
+    source_usable = _source_python_has_native_extension()
     entries: list[str] = []
     if existing:
-        entries.extend(part for part in existing.split(os.pathsep) if part)
-    entries.extend([str(REPO_ROOT), str(SOURCE_PYTHON), *_process_test_dirs()])
+        entries.extend(
+            part for part in existing.split(os.pathsep)
+            if part and (source_usable or Path(part).resolve() != SOURCE_PYTHON.resolve())
+        )
+    entries.append(str(REPO_ROOT))
+    if source_usable:
+        entries.append(str(SOURCE_PYTHON))
+    entries.extend(_process_test_dirs())
     deduped: list[str] = []
     seen: set[str] = set()
     for entry in entries:
@@ -253,7 +268,17 @@ def _process_pythonpath(existing: str | None) -> str:
     return os.pathsep.join(deduped)
 
 
-@lru_cache(maxsize=None)
+@cache
+def _source_python_has_native_extension() -> bool:
+    package = SOURCE_PYTHON / "pops"
+    suffixes = (".so", ".dylib", ".pyd")
+    return any(
+        path.name.startswith("_pops.") and path.suffix in suffixes
+        for path in package.iterdir()
+    )
+
+
+@cache
 def _compiler_gate_reason() -> str | None:
     """Return why a compiler-gated test cannot run here, or None if it can.
 
@@ -308,7 +333,7 @@ def _missing_process_requirement(output: str) -> str | None:
     return None
 
 
-@lru_cache(maxsize=None)
+@cache
 def _requires_process_collection(path: Path) -> bool:
     if "architecture" in path.parts:
         return False

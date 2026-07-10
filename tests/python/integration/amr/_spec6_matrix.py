@@ -36,6 +36,7 @@ from pops.ir.ops import sqrt
 from pops.mesh import CartesianMesh
 from pops.mesh.amr import FrozenRegrid, Refine, RegridEvery
 from pops.mesh.layouts import AMR, Uniform
+from pops.model import Handle, OwnerPath
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 from pops.physics.facade import Model as FacadeModel
@@ -104,8 +105,9 @@ def _amr_route_handle(*, n_aux=1, mpi=True):
         params={"alpha": Param("alpha", 1.0, kind="runtime")},
         caps={"cpu": True, "amr": True, "mpi": mpi}, abi_key="k", model_hash="h", cxx="c++",
         std="c++23", target="amr_system", aux_extra_names=["B_z"][:n_aux])
+    rho = Handle("rho", kind="state", owner=OwnerPath.shared("spec6-matrix"))
     handle._layout = AMR(base=CartesianMesh(n=64, periodic=True), max_levels=2, ratio=2,
-                         regrid=RegridEvery(4), refine=Refine.on("rho").above(0.1))
+                         regrid=RegridEvery(4), refine=Refine.on(rho).above(0.1))
     return handle
 
 

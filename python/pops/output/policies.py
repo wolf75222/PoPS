@@ -11,6 +11,23 @@ from typing import Any
 from pops.descriptors import Descriptor
 
 
+_WRITABLE_HANDLE_KINDS = frozenset({"aux", "field", "state"})
+
+
+def _require_writable_handle(reference: Any, *, where: str) -> None:
+    """Reject control/configuration handles at the output declaration boundary."""
+    from pops.model import Handle
+
+    if not isinstance(reference, Handle):
+        raise TypeError(
+            "%s must be declaration Handle values; names/strings are not references "
+            "(got %r)" % (where, type(reference).__name__))
+    if reference.kind not in _WRITABLE_HANDLE_KINDS:
+        raise TypeError(
+            "%s accepts only writable state/field/aux handles; got kind %r"
+            % (where, reference.kind))
+
+
 class _LevelPolicy(Descriptor):
     category = "level_policy"
 
@@ -46,10 +63,21 @@ class OutputPolicy(Descriptor):
     def __init__(self, format: Any = None, cadence: Any = None, fields: Any = (),
                  diagnostics: Any = (), levels: Any = None, require_parallel: bool = False,
                  prefix: Any = None) -> None:
+        field_refs = list(fields)
+        for reference in field_refs:
+            _require_writable_handle(reference, where="OutputPolicy fields")
+        diagnostic_refs = list(diagnostics)
+        invalid_diagnostics = [
+            value for value in diagnostic_refs
+            if not _is_diagnostic_category(getattr(value, "category", None))]
+        if invalid_diagnostics:
+            raise TypeError(
+                "OutputPolicy diagnostics must be typed pops.diagnostics measures; names/strings "
+                "are not references (got %r)" % type(invalid_diagnostics[0]).__name__)
         self.format = format
         self.cadence = cadence
-        self.fields = list(fields)
-        self.diagnostics = list(diagnostics)
+        self.fields = field_refs
+        self.diagnostics = diagnostic_refs
         self.levels = levels if levels is not None else AllLevels()
         self.require_parallel = bool(require_parallel)
         #: Optional file-name prefix the run-loop driver writes under output_dir (default "output").
@@ -62,6 +90,26 @@ class OutputPolicy(Descriptor):
                 "levels": self.levels.options().get("levels"),
                 "require_parallel": self.require_parallel, "prefix": self.prefix}
 
+    def resolve_references(self, resolver: Any) -> Any:
+        """Return a detached policy with canonical field and diagnostic references."""
+        if not callable(resolver):
+            raise TypeError("OutputPolicy reference resolver must be callable")
+        from copy import copy
+        resolved = copy(self)
+        resolved.fields = [resolver(reference) for reference in self.fields]
+        for reference in resolved.fields:
+            _require_writable_handle(
+                reference, where="OutputPolicy resolved fields")
+        resolved.diagnostics = []
+        for measure in self.diagnostics:
+            resolve_measure = getattr(measure, "resolve_references", None)
+            if not callable(resolve_measure):
+                raise TypeError(
+                    "%s must implement resolve_references(resolver) to be used by OutputPolicy"
+                    % type(measure).__name__)
+            resolved.diagnostics.append(resolve_measure(resolver))
+        return resolved
+
     def requirements(self) -> Any:
         from pops.descriptors_report import RequirementSet
         req = {}
@@ -71,6 +119,12 @@ class OutputPolicy(Descriptor):
         if self.format is not None and hasattr(self.format, "requirements"):
             req.update(self.format.requirements().to_dict())
         return RequirementSet(req)
+
+
+def _is_diagnostic_category(category: Any) -> bool:
+    """Whether a descriptor category participates in the diagnostic-measure protocol."""
+    return isinstance(category, str) and (
+        category.startswith("diagnostic_") or category == "conservation_check")
 
 
 class CheckpointPolicy(Descriptor):
@@ -96,6 +150,13 @@ class CheckpointPolicy(Descriptor):
                 "restartable": self.restartable,
                 "require_bit_identical": self.require_bit_identical,
                 "prefix": self.prefix}
+
+    def resolve_references(self, resolver: Any) -> Any:
+        """Return a detached snapshot declaration (checkpoint policies retain no references)."""
+        if not callable(resolver):
+            raise TypeError("CheckpointPolicy reference resolver must be callable")
+        from copy import copy
+        return copy(self)
 
     def capabilities(self):
         """The checkpoint route's declared capabilities (parity with every other typed route).

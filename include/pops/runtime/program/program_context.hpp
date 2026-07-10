@@ -86,14 +86,29 @@ class ProgramContext {
   }
 
   /// Translate a PROGRAM block index @p b (P.state declaration order, what the codegen emits) to the
-  /// SYSTEM block index it names (Spec 3 criterion 23, ADC-457). install_program stored the map after
-  /// matching the .so's block names to the instantiated System blocks; an EMPTY map is the identity
-  /// (single-block / order-matching Program, or a ProgramContext built directly in a C++ test), so the
-  /// historical positional convention is byte-identical. Every seam method taking a block index routes
-  /// through here, so the System blocks may be added in ANY order vs the Program's P.state declarations.
+  /// SYSTEM block index it names (Spec 3 criterion 23, ADC-457). install_program stores the explicit
+  /// name-matched map before the generated entry point constructs this context. Direct C++ users must
+  /// install the same explicit map themselves: an empty, incomplete or invalid map is never interpreted
+  /// positionally. Every seam method taking a block index routes through here, so the System blocks may
+  /// be added in ANY order vs the Program's P.state declarations.
   int sys_block(int b) const {
     const std::vector<int>& m = sys_->program_block_map();
-    return (b >= 0 && b < static_cast<int>(m.size())) ? m[static_cast<std::size_t>(b)] : b;
+    if (m.empty())
+      throw block_map_error_(
+          "ProgramContext::sys_block: no explicit program-to-system block map is installed; "
+          "positional block identity is not supported");
+    if (b < 0 || b >= static_cast<int>(m.size()))
+      throw block_map_error_(
+          "ProgramContext::sys_block: program block index " + std::to_string(b) +
+          " is outside the explicit block map [0, " + std::to_string(m.size()) + ")");
+    const int mapped = m[static_cast<std::size_t>(b)];
+    const int count = sys_->n_blocks();
+    if (mapped < 0 || mapped >= count)
+      throw block_map_error_(
+          "ProgramContext::sys_block: program block index " + std::to_string(b) +
+          " maps to invalid system block index " + std::to_string(mapped) +
+          " for a System with " + std::to_string(count) + " blocks");
+    return mapped;
   }
 
   void solve_fields() const {
@@ -134,21 +149,29 @@ class ProgramContext {
     // The codegen builds @p u_stages indexed BY PROGRAM block index (a stage state slotted at its own
     // Program index, the rest nullptr). The System solver expects it indexed by SYSTEM block index, so
     // re-slot each Program entry p at its name-matched System index sys_block(p) (Spec 3 criterion 23,
-    // ADC-457). Identity map -> the vector is copied unchanged (order-matching Program, byte-identical).
+    // ADC-457). Even an order-matching Program carries an explicit identity map.
     const std::vector<int>& m = sys_->program_block_map();
-    if (m.empty()) {
-      sys_->solve_fields_from_blocks(u_stages);
-      return;
-    }
+    if (m.empty())
+      throw block_map_error_(
+          "ProgramContext::solve_fields_from_blocks: no explicit program-to-system block map is "
+          "installed; positional block identity is not supported");
+    if (u_stages.size() < m.size())
+      throw block_map_error_(
+          "ProgramContext::solve_fields_from_blocks: received " +
+          std::to_string(u_stages.size()) + " Program stage slots for an explicit block map with " +
+          std::to_string(m.size()) + " entries");
     std::vector<const MultiFab*> remapped(static_cast<std::size_t>(sys_->n_blocks()), nullptr);
     // Iterate the PROGRAM block indices [0, m.size()) -- NOT u_stages.size(), which is the larger
     // SYSTEM block count. The codegen sizes u_stages to ctx.n_blocks() but only fills Program slots
     // [0, n_program_blocks); when the System has MORE blocks than the Program declares (a subset
     // install), walking the System-sized range would re-map the nullptr padding through the identity
     // fallthrough and clobber real entries. m[p] is Program block p's System index (install-validated
-    // in range); the unlisted System slots stay nullptr = their live state.
-    for (std::size_t p = 0; p < m.size(); ++p)
-      remapped[static_cast<std::size_t>(m[p])] = u_stages[p];
+    // in range); the unlisted System slots stay nullptr = their live state. sys_block validates every
+    // mapped value before it is used as a vector index.
+    for (std::size_t p = 0; p < m.size(); ++p) {
+      const int mapped = sys_block(static_cast<int>(p));
+      remapped[static_cast<std::size_t>(mapped)] = u_stages[p];
+    }
     sys_->solve_fields_from_blocks(remapped);
   }
   int n_blocks() const { return sys_->n_blocks(); }
@@ -604,6 +627,10 @@ class ProgramContext {
   /// @}
 
  private:
+  static std::runtime_error block_map_error_(std::string message) {
+    return std::runtime_error(std::move(message));
+  }
+
   System* sys_;
 };
 

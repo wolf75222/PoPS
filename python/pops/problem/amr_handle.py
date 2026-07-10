@@ -5,11 +5,9 @@ patches) and returns the :class:`~pops.problem.problem.Problem` so calls chain. 
 runtime and no layout; the policies it records (``pops.mesh.amr.Refine`` / ``TagUnion`` /
 ``RegridEvery`` ...) are inert descriptors the deferred AMR route materialises at compile.
 
-The criteria live on the Problem's layout-free constraint registry (ADC-526) and are applied to the
-``AMR`` layout passed to ``pops.compile(problem, layout=...)``, so ONE Problem compiles under a plain
-``Uniform`` or under an ``AMR`` that receives its refine / regrid / nesting / patches. When a Problem
-WAS built with a constructor ``AMR`` layout (back-compat), the handle also mirrors the criteria onto
-that layout so the pre-existing layout-at-construction tests keep passing.
+The criteria live only on the Problem's layout-free constraint registry (ADC-526) and are merged
+into a detached ``AMR`` layout by ``pops.compile(problem, layout=...)``. The user-owned layout is
+never a second authority and is never mutated by this authoring handle.
 """
 from __future__ import annotations
 
@@ -22,45 +20,30 @@ class ProblemAmrHandle:
     def __init__(self, problem: Any) -> None:
         self._problem = problem
 
-    def _refine_context(self) -> Any:
-        """The single block's physics model the refine subject is checked against, or ``None``.
-
-        Returns ``None`` when there is not exactly one block (the subject would be ambiguous across
-        blocks) so the subject check DEFERS rather than guesses -- no false positive.
-        """
-        blocks = self._problem._blocks
-        if len(blocks) != 1:
-            return None
-        (name,) = blocks.names()
-        spec = blocks.spec(name)
-        return spec.get("model") if spec else None
-
     def refine(self, criterion: Any = None, *, regrid: Any = None, nesting: Any = None,
                patches: Any = None) -> Any:
         """Record the refinement criterion / regrid / nesting / patch policies (chains).
 
-        When a @p criterion is recorded, its subject (role / state component / named aux) is
-        validated against the Problem's block model HERE -- the one place the model is available --
-        so a refinement on a bogus role is refused before runtime. The discipline is NO FALSE
-        POSITIVE: the subject check only runs when exactly one block model is present.
+        A criterion resolves every Handle leaf through :meth:`Problem.resolve` before it enters the
+        registry. Therefore a model-local Handle used directly or inside an indicator expression by
+        several blocks is rejected as ambiguous with every candidate owner, an explicit
+        ``block[handle]`` is accepted, and a foreign / forged Handle is refused. No name matching and
+        no single-block special case exists here.
         """
-        if criterion is not None and hasattr(criterion, "validate"):
-            criterion.validate(self._refine_context())
-        # Record on the layout-free constraint registry (the ADC-526 home for the criteria).
+        if criterion is not None:
+            from pops.mesh.amr import Refine, TagUnion
+
+            if not isinstance(criterion, (Refine, TagUnion)):
+                raise TypeError(
+                    "problem.amr.refine criterion must be a pops.mesh.amr.Refine / TagUnion, "
+                    "got %r" % type(criterion).__name__)
+            criterion.validate()
+            criterion = criterion.resolve_references(self._problem.resolve)
+
+        # The constraint registry is the sole authoring authority. Layout resolution later makes
+        # a detached AMR value and explicitly rejects a layout-vs-Problem policy conflict.
         self._problem._constraints.set_refinement(
             refine=criterion, regrid=regrid, nesting=nesting, patches=patches)
-        # Back-compat: while the Problem still carries an AMR layout (pre-ADC-526), mirror the
-        # criteria onto it so the existing compile path keeps seeing them.
-        layout = getattr(self._problem, "_layout", None)
-        if layout is not None:
-            if criterion is not None:
-                layout.refine = criterion
-            if regrid is not None:
-                layout.regrid = regrid
-            if nesting is not None:
-                layout.nesting = nesting
-            if patches is not None:
-                layout.patches = patches
         return self._problem
 
 

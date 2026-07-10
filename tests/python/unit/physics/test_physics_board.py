@@ -9,6 +9,7 @@ compiled time-program run, so they pass without a freshly built _pops beyond wha
 import pytest
 
 from pops import model as _model
+from pops.problem import Problem
 
 physics = pytest.importorskip("pops.physics")
 amath = pytest.importorskip("pops.math")
@@ -160,7 +161,8 @@ def test_rate_and_operator_return_callables_usable_in_a_program():
     assert callable(explicit_rate) and callable(implicit_operator)
 
     P = Program("board_calls").bind_operators(m.module)
-    U_n = P.state("plasma")
+    plasma = Problem(name="board_calls").add_block("plasma", m)
+    U_n = P.state(plasma, U).n
     f_n = P.solve_fields("f_n", U_n)
     R = explicit_rate(U_n, f_n)         # -> P._call("explicit_rate", U_n, f_n)
     L = implicit_operator(f_n)          # -> P._call("implicit_operator", f_n)
@@ -180,7 +182,9 @@ def test_board_module_is_consumable_by_operator_first_program():
     m = _euler_poisson_lorentz()
     P = Program("operator_first")
     P.bind_operators(m.module)
-    U = P.state("plasma")
+    plasma = Problem(name="operator_first").add_block("plasma", m)
+    state = m.module.state_handle(m.module.state_spaces()["U"])
+    U = P.state(plasma, state).n
     fields = P._call("fields_from_state", U)            # field_operator -> solve_fields
     R = P._call("explicit_rate", U, fields)             # local_rate (U, fields) -> Rate(U)
     assert fields.vtype == "fields"

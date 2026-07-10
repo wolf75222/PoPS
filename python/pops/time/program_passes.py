@@ -137,6 +137,7 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
         out._histories_ncomp = dict(getattr(self, "_histories_ncomp", {}))
         out._history_spaces = dict(getattr(self, "_history_spaces", {}))
         out._history_blocks = dict(getattr(self, "_history_blocks", {}))
+        out._history_state_refs = dict(getattr(self, "_history_state_refs", {}))
         from pops.time.history_persistence import HistoryPersistence
         out._history_persistence = {}
         for name, (depth, policy) in getattr(self, "_history_persistence", {}).items():
@@ -144,10 +145,9 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
             if hasattr(copied, "freeze"):
                 copied.freeze()
             out._history_persistence[name] = (depth, copied)
-        out._registry = self._registry
-        out._registry_owner = getattr(self, "_registry_owner", None)
-        out._default_state_space = getattr(self, "_default_state_space", None)
-        out._default_field_space = getattr(self, "_default_field_space", None)
+        out._operator_registries = dict(self._operator_registries)
+        out._default_state_spaces = dict(self._default_state_spaces)
+        out._default_field_spaces = dict(self._default_field_spaces)
         # ProgramValue deliberately has no hash: equality authors an Equation.  Every rewrite map is
         # therefore indexed by the stable SSA id, never by a symbolic object (which would otherwise
         # make dict membership invoke forbidden symbolic equality/truth semantics).
@@ -275,6 +275,7 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
                 source_location=v.source_location,
                 field_context=field_context,
                 region=mapped_region(v.region),
+                state_ref=v.state_ref,
             )
             out._issued_values[id(nv)] = nv
             idmap[v.id] = nv
@@ -287,7 +288,8 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
         for v in kept:
             clone(v)
         out._values = [idmap[v.id] for v in kept]
-        out._commits = {b: idmap[rep(s).id] for b, s in self._commits.items()}
+        out._commits = {state_ref: idmap[rep(value).id]
+                        for state_ref, value in self._commits.items()}
         out._region_imports = {
             mapped_region(destination): {mapped_region(source) for source in sources}
             for destination, sources in getattr(self, "_region_imports", {}).items()

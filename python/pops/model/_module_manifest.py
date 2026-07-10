@@ -1,0 +1,269 @@
+"""Authenticated immutable module manifest payload."""
+from __future__ import annotations
+
+import hashlib
+import json
+from collections.abc import Mapping
+from typing import Any
+
+from ._operator_manifest import (
+    OperatorRegistryManifest,
+    canonical_owner,
+    require_exact_keys,
+    validate_handle_identity,
+)
+from .manifest_data import (
+    freeze_json as _freeze_json,
+    require_manifest_name,
+    strict_json_loads as _strict_json_loads,
+    thaw_json as _thaw_json,
+)
+from .manifest_support import params_utilization as _params_utilization
+from .ownership import OwnerPath
+
+
+SCHEMA_VERSION = 4
+
+_DECLARATION_ROW_KEYS = {
+    "state": ({"components", "roles", "layout", "storage", "qid", "handle"},),
+    "field": ({"components", "layout", "qid", "handle"},),
+    "parameter": (
+        {"default", "dtype", "qid", "handle"},
+        {"default", "dtype", "kind", "qid", "handle"},
+    ),
+    "aux": ({"aux_kind", "qid", "handle"},),
+}
+
+
+def _validate_declaration_rows(
+    rows: Any,
+    *,
+    owner: OwnerPath,
+    kind: str,
+    where: str,
+) -> None:
+    if not isinstance(rows, Mapping):
+        raise TypeError("%s must be a mapping" % where)
+    allowed_shapes = _DECLARATION_ROW_KEYS[kind]
+    for name, row in rows.items():
+        if not isinstance(name, str) or not name:
+            raise ValueError("%s names must be non-empty strings" % where)
+        if not isinstance(row, Mapping) or set(row) not in allowed_shapes:
+            got = (
+                sorted(repr(key) for key in row)
+                if isinstance(row, Mapping)
+                else type(row).__name__
+            )
+            raise TypeError("%s %r has unsupported keys %s" % (where, name, got))
+        validate_handle_identity(
+            row["handle"],
+            row["qid"],
+            owner=owner,
+            local_id=name,
+            kind=kind,
+            where="%s %s" % (where, name),
+        )
+
+
+class ModuleManifest:
+    """Self-describing, canonical manifest of a model Module."""
+
+    __slots__ = (
+        "schema_version",
+        "name",
+        "owner_path",
+        "state_spaces",
+        "field_spaces",
+        "params",
+        "aux",
+        "has_eigenvalues",
+        "operators",
+        "capabilities",
+        "native_routes",
+        "native_catalog",
+        "abi_requirements",
+        "params_utilization",
+    )
+
+    def __init__(
+        self,
+        *,
+        name: Any,
+        owner_path: Any,
+        state_spaces: Any,
+        field_spaces: Any,
+        params: Any,
+        aux: Any,
+        has_eigenvalues: Any,
+        operators: Any,
+        capabilities: Any,
+        native_routes: Any,
+        native_catalog: Any,
+        abi_requirements: Any,
+        params_utilization: Any = None,
+    ) -> None:
+        if not isinstance(operators, OperatorRegistryManifest):
+            raise TypeError("ModuleManifest operators must be an OperatorRegistryManifest")
+        require_manifest_name(name)
+        owner = canonical_owner(owner_path, where="ModuleManifest owner_path")
+        if owner.name != name:
+            raise ValueError(
+                "ModuleManifest name %r does not match owner_path name %r" % (name, owner.name)
+            )
+        if operators.owner_path != owner:
+            raise ValueError("ModuleManifest operator registry has a different owner_path")
+        _validate_declaration_rows(
+            state_spaces, owner=owner, kind="state", where="module state_spaces"
+        )
+        _validate_declaration_rows(
+            field_spaces, owner=owner, kind="field", where="module field_spaces"
+        )
+        _validate_declaration_rows(params, owner=owner, kind="parameter", where="module params")
+        _validate_declaration_rows(aux, owner=owner, kind="aux", where="module aux")
+        object.__setattr__(self, "schema_version", SCHEMA_VERSION)
+        object.__setattr__(self, "name", name)
+        object.__setattr__(
+            self, "owner_path", _freeze_json(owner.to_data(), where="module owner_path")
+        )
+        for attr, value in (
+            ("state_spaces", state_spaces),
+            ("field_spaces", field_spaces),
+            ("params", params),
+            ("aux", aux),
+            ("has_eigenvalues", has_eigenvalues),
+            ("capabilities", capabilities),
+            ("native_routes", native_routes),
+            ("native_catalog", native_catalog),
+            ("abi_requirements", abi_requirements),
+        ):
+            object.__setattr__(self, attr, _freeze_json(value, where="module %s" % attr))
+        object.__setattr__(self, "operators", operators)
+        object.__setattr__(
+            self,
+            "params_utilization",
+            _freeze_json(
+                params_utilization or _params_utilization(self.params),
+                where="module params_utilization",
+            ),
+        )
+
+    def __setattr__(self, name: Any, value: Any) -> None:
+        raise AttributeError("ModuleManifest is immutable")
+
+    def __delattr__(self, name: Any) -> None:
+        raise AttributeError("ModuleManifest is immutable")
+
+    def with_abi_key(self, abi_key: Any) -> ModuleManifest:
+        requirements = _thaw_json(self.abi_requirements)
+        requirements["abi_key"] = abi_key
+        return ModuleManifest(
+            name=self.name,
+            owner_path=_thaw_json(self.owner_path),
+            state_spaces=_thaw_json(self.state_spaces),
+            field_spaces=_thaw_json(self.field_spaces),
+            params=_thaw_json(self.params),
+            aux=_thaw_json(self.aux),
+            has_eigenvalues=_thaw_json(self.has_eigenvalues),
+            operators=self.operators,
+            capabilities=_thaw_json(self.capabilities),
+            native_routes=_thaw_json(self.native_routes),
+            native_catalog=_thaw_json(self.native_catalog),
+            abi_requirements=requirements,
+            params_utilization=_thaw_json(self.params_utilization),
+        )
+
+    def to_dict(self) -> Any:
+        return {
+            "schema_version": self.schema_version,
+            "name": self.name,
+            "owner_path": _thaw_json(self.owner_path),
+            "state_spaces": _thaw_json(self.state_spaces),
+            "field_spaces": _thaw_json(self.field_spaces),
+            "params": _thaw_json(self.params),
+            "params_utilization": _thaw_json(self.params_utilization),
+            "aux": _thaw_json(self.aux),
+            "has_eigenvalues": _thaw_json(self.has_eigenvalues),
+            "operators": self.operators.to_dict(),
+            "operator_aliases": self.operators.aliases(),
+            "capabilities": _thaw_json(self.capabilities),
+            "native_routes": _thaw_json(self.native_routes),
+            "native_catalog": _thaw_json(self.native_catalog),
+            "abi_requirements": _thaw_json(self.abi_requirements),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> ModuleManifest:
+        expected = {
+            "schema_version",
+            "name",
+            "owner_path",
+            "state_spaces",
+            "field_spaces",
+            "params",
+            "params_utilization",
+            "aux",
+            "has_eigenvalues",
+            "operators",
+            "operator_aliases",
+            "capabilities",
+            "native_routes",
+            "native_catalog",
+            "abi_requirements",
+        }
+        row = require_exact_keys(data, expected, where="ModuleManifest")
+        version = row["schema_version"]
+        if isinstance(version, bool) or not isinstance(version, int):
+            raise TypeError("ModuleManifest schema_version must be an integer")
+        if version != SCHEMA_VERSION:
+            raise ValueError(
+                "unsupported ModuleManifest schema_version %r (expected %d)"
+                % (version, SCHEMA_VERSION)
+            )
+        owner = canonical_owner(row["owner_path"], where="ModuleManifest owner_path")
+        operators = OperatorRegistryManifest.from_dict(
+            row["operators"], row["operator_aliases"], owner=owner
+        )
+        result = cls(
+            name=row["name"],
+            owner_path=owner,
+            state_spaces=row["state_spaces"],
+            field_spaces=row["field_spaces"],
+            params=row["params"],
+            aux=row["aux"],
+            has_eigenvalues=row["has_eigenvalues"],
+            operators=operators,
+            capabilities=row["capabilities"],
+            native_routes=row["native_routes"],
+            native_catalog=row["native_catalog"],
+            abi_requirements=row["abi_requirements"],
+            params_utilization=row["params_utilization"],
+        )
+        if result.to_dict() != dict(row):
+            raise ValueError("ModuleManifest is not in canonical form")
+        return result
+
+    @classmethod
+    def from_json(cls, text: Any) -> ModuleManifest:
+        return cls.from_dict(_strict_json_loads(text))
+
+    def to_json(self, path: Any = None, *, indent: int = 2) -> Any:
+        text = json.dumps(self.to_dict(), indent=indent, sort_keys=True, allow_nan=False)
+        if path is not None:
+            with open(str(path), "w", encoding="utf-8") as handle:
+                handle.write(text)
+            return path
+        return text
+
+    @property
+    def hash(self) -> str:
+        blob = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False)
+        return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+    def __repr__(self) -> str:
+        return "ModuleManifest(name=%r, operators=[%s])" % (
+            self.name,
+            ", ".join(self.operators.names()),
+        )
+
+
+__all__ = ["ModuleManifest", "SCHEMA_VERSION"]

@@ -28,7 +28,9 @@ try:
     from pops.numerics.reconstruction.limiters import Minmod
     from pops.output import (OutputPolicy, CheckpointPolicy, HDF5, Plotfile,
                              AllLevels, CoarseOnly)
-    from pops.time.schedule import every, always
+    from pops.model import Module
+    from pops.problem import Problem
+    from pops.time.schedule import always, every, on_end, on_start, when
     from pops.runtime._output_driver import policy_due, _format_token, fire_output_policies
     from pops.runtime.system import System  # ADC-545 advanced runtime seam
 except Exception as exc:  # noqa: BLE001
@@ -36,6 +38,13 @@ except Exception as exc:  # noqa: BLE001
     sys.exit(0)
 
 fails = 0
+
+_OUTPUT_MODULE = Module("runtime-output-model")
+_OUTPUT_STATE = _OUTPUT_MODULE.state_space("U", components=("rho",))
+_OUTPUT_STATE_REF = _OUTPUT_MODULE.state_handle(_OUTPUT_STATE)
+_OUTPUT_PROBLEM = Problem(name="runtime-output")
+_IONS_BLOCK = _OUTPUT_PROBLEM.add_block("ions", _OUTPUT_MODULE)
+_IONS_STATE = _IONS_BLOCK[_OUTPUT_STATE_REF]
 
 
 def chk(cond, label):
@@ -75,7 +84,6 @@ chk(_format_token(HDF5()) == "hdf5" and _format_token(None) == "npz",
 # single-level plotfile on a Uniform System). The former ADC-511 refusal is deleted.
 chk(_format_token(Plotfile()) == "plotfile", "Plotfile -> plotfile (no refusal, ADC-542)")
 # ADC-542: on_start / on_end / when land in the shared cadence interpreter.
-from pops.time.schedule import on_start, on_end, when
 chk(policy_due(on_start(), 1) and not policy_due(on_start(), 2), "on_start fires at step 1 only")
 chk(policy_due(on_end(), 5, last_step=5) and not policy_due(on_end(), 4, last_step=5),
     "on_end fires at the last step only")
@@ -102,7 +110,7 @@ print("== (1b) fields= selection ==")
 tmp_f = tempfile.mkdtemp()
 sim_f = build()
 sim_f._output_policies = [OutputPolicy(format=None, cadence=every(1),
-                                       fields=["ions"], prefix="sel")]
+                                       fields=[_IONS_STATE], prefix="sel")]
 sim_f.run(t_end=1.0, cfl=0.4, max_steps=1, output_dir=tmp_f)
 df = np.load(os.path.join(tmp_f, "sel_000001.npz"))
 chk("state_ions" in df, "field-selected npz includes the requested block")

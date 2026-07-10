@@ -62,7 +62,7 @@ def _scalar(name="scalar"):
 
 
 def test_handle_constructors_never_coerce_names_or_boolean_flags():
-    owner = OwnerPath("test", "board-strict")
+    owner = OwnerPath.descriptor("board-strict")
     with pytest.raises(TypeError, match="non-empty string"):
         _safe_name(object())
     with pytest.raises(ValueError, match="non-empty string"):

@@ -43,6 +43,7 @@ from pops.mesh.amr import (  # noqa: E402
     TagUnion,
 )
 from pops.mesh.layouts import AMR  # noqa: E402
+from pops.model import Handle, Module, OwnerPath  # noqa: E402
 from pops.numerics.reconstruction import WENO5, validate_ghost_depth  # noqa: E402
 from pops.numerics.reconstruction.limiters import Minmod  # noqa: E402
 from pops.numerics.riemann import HLL, HLLC, Roe, Rusanov  # noqa: E402
@@ -52,6 +53,10 @@ from pops.solvers.elliptic import FFT, GeometricMG  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[4]
+
+
+def _amr_ref(name, kind="state"):
+    return Handle(name, kind=kind, owner=OwnerPath.shared("no-fallback-matrix"))
 
 
 def _expect_refusal(label, exc_type, fn, needles):
@@ -115,11 +120,19 @@ def _compiled_model(*, target="system", hllc=False, roe=False, wave_speeds=False
 
 
 def _program_with_context():
+    module = Module("adc597-context-model")
+    state_space = module.state_space("U", components=("rho",))
+    state_handle = module.state_handle(state_space)
+    problem = pops.Problem(name="adc597-context-case")
+    block = problem.add_block("gas", module)
     program = adctime.Program("adc597_context")
     dt = program.dt
-    state = program.state("gas")
-    rhs = program._rhs_legacy(state=state, flux=True, sources=["default"])
-    program.commit(program.state("U", block="gas").next, program.linear_combine("U1", state + dt * rhs))
+    state = program.state(block, state_handle)
+    rhs = program._rhs_legacy(state=state.n, flux=True, sources=["default"])
+    program.commit(
+        state.next,
+        program.linear_combine("U1", state.n + dt * rhs),
+    )
     return program
 
 
@@ -141,7 +154,7 @@ def _compile_bad_program_abi_so():
     if sys.platform == "darwin":
         cmd[1:1] = ["-undefined", "dynamic_lookup"]
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
     except (OSError, subprocess.CalledProcessError) as exc:
         tmp.cleanup()
         pytest.skip("could not compile bad-ABI program route: %s" % exc)
@@ -328,10 +341,12 @@ def test_positive_matrix_keeps_supported_native_routes_available():
         ratio=2,
         regrid=RegridEvery(4),
         patches=PatchLayout(distribute_coarse=True),
-        refine=TagUnion(Refine.on("rho").above(0.05), Refine.on("phi").gradient_above(0.5)),
+        refine=TagUnion(Refine.on(_amr_ref("rho")).above(0.05),
+                        Refine.on(_amr_ref("phi", kind="field")).gradient_above(0.5)),
         nesting=ProperNesting(buffer=1),
         checkpoint=CheckpointPolicy(restartable=True),
-        output=AMROutput(fields=["phi"], levels=AllLevels(), include_patch_boxes=True),
+        output=AMROutput(fields=[_amr_ref("phi", kind="field")], levels=AllLevels(),
+                         include_patch_boxes=True),
     )
     amr_layout.validate()
     amr_report = amr_layout.inspect()

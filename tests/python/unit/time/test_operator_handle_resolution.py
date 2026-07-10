@@ -5,10 +5,12 @@ import pytest
 
 from pops import time as adctime
 from pops.model import (
-    LocalLinearOperator, Module, OperatorHandle, RateSpace, Signature, StateSpace,
+    DoubleOwnershipError, Handle, LocalLinearOperator, Module, OperatorHandle,
+    RateSpace, Signature,
 )
 from pops.numerics.terms import Flux, SourceTerm
 from pops.physics.facade import Model
+from pops.problem import Problem
 
 
 def _model(name: str):
@@ -20,9 +22,26 @@ def _model(name: str):
     return model, source, linear
 
 
+def _references(model: Model | Module, *, case_name: str | None = None):
+    """Return the exact block/state declarations consumed by ``Program.state``.
+
+    A facade's Module is the authoritative declaration provider: the state handle
+    and its StateSpace come from that Module, while the Problem qualifies the
+    declaration into one concrete block instance.
+    """
+    module = model.module if isinstance(model, Model) else model
+    state_spaces = module.state_spaces()
+    assert tuple(state_spaces) == ("U",)
+    state = module.state_handle(state_spaces["U"])
+    case = Problem(name=case_name or "%s-case" % module.name)
+    block = case.add_block("block", module)
+    return module, block, state
+
+
 def _program(model: Model):
-    program = adctime.Program("handles").bind_operators(model)
-    return program, program.state("block")
+    module, block, state = _references(model)
+    program = adctime.Program("handles").bind_operators(module)
+    return program, program.state(block, state).n
 
 
 def _rate_model(name: str):
@@ -47,7 +66,7 @@ def test_homonymous_foreign_handles_are_rejected_on_every_route():
         lambda: program.condensed_coeffs(
             state=state, linear_operator=second_linear, subset=(0, 1), c=1, th_dt=1),
     ):
-        with pytest.raises(ValueError, match="belongs to owner"):
+        with pytest.raises(ValueError, match="no operator registry is bound for owner"):
             build()
 
     # The handles from the bound model remain valid on the same public routes.
@@ -105,8 +124,9 @@ def test_forged_alias_target_cannot_route_to_another_compatible_operator():
     assert hash(legitimate) != hash(forged)
     assert legitimate.qualified_id != forged.qualified_id
 
+    _, block, state_declaration = _references(module)
     program = adctime.Program("alias-forgery").bind_operators(module)
-    state = program.state("block", space=state_space)
+    state = program.state(block, state_declaration).n
     assert program.call(legitimate, state).attrs["source"] == "first"
     with pytest.raises(ValueError, match="authenticates target.*first"):
         program.call(forged, state)
@@ -124,9 +144,12 @@ def test_registry_aliases_are_collision_safe_and_cannot_be_retargeted():
     registry = module.operator_registry()
 
     assert registry.register_alias("readable", "first") == "readable"
-    assert registry.register_alias("readable", "first") == "readable"
-    with pytest.raises(ValueError, match="cannot retarget"):
+    with pytest.raises(ValueError, match="register-once"):
+        registry.register_alias("readable", "first")
+    with pytest.raises(ValueError, match="register-once"):
         registry.register_alias("readable", "second")
+    assert registry.target_for_handle("readable") == "first"
+    assert registry.target_for_handle("readable") == "first"
     with pytest.raises(ValueError, match="collides with a registered operator"):
         registry.register_alias("first", "second")
     with pytest.raises(ValueError, match="collides with registered alias"):
@@ -140,11 +163,16 @@ def test_typed_rhs_descriptors_resolve_presence_and_kind_and_strings_are_private
     program, state = _program(model)
 
     assert program.rhs(
-        state=state, terms=[SourceTerm(source.name)]).attrs["sources"] == (source.name,)
+        state=state, terms=[SourceTerm(source)]).attrs["sources"] == (source.name,)
+    missing = OperatorHandle(
+        "missing", kind=source.kind, owner=source.owner_path,
+        signature=source.signature)
     with pytest.raises(KeyError, match="unknown operator"):
-        program.rhs(state=state, terms=[SourceTerm("missing")])
+        program.rhs(state=state, terms=[SourceTerm(missing)])
     with pytest.raises(ValueError, match="expected one of"):
-        program.rhs(state=state, terms=[SourceTerm(linear.name)])
+        program.rhs(state=state, terms=[SourceTerm(linear)])
+    with pytest.raises(TypeError, match="typed OperatorHandle"):
+        SourceTerm(source.name)
     with pytest.raises(TypeError, match="free source name"):
         program.rhs(state=state, terms=[source.name])
 
@@ -154,8 +182,9 @@ def test_readable_default_source_alias_has_an_explicit_registered_target():
     (u,) = model.conservative_vars("u")
     model.flux(x=[u], y=[u])
     source = model.source_term("default", [-u])
-    program = adctime.Program("default-source").bind_operators(model)
-    state = program.state("block")
+    module, block, state_declaration = _references(model)
+    program = adctime.Program("default-source").bind_operators(module)
+    state = program.state(block, state_declaration).n
 
     assert source.name == "default"
     assert source.registered_operator_name == "source_default"
@@ -166,8 +195,9 @@ def test_readable_default_source_alias_has_an_explicit_registered_target():
 
 def test_public_handle_routes_require_a_bound_registry():
     model, source, linear = _model("unbound")
+    _, block, state_declaration = _references(model)
     program = adctime.Program("unbound")
-    state = program.state("block")
+    state = program.state(block, state_declaration).n
 
     for build in (
         lambda: program.linear_source(linear),
@@ -186,15 +216,16 @@ def test_lib_time_helpers_preserve_handle_identity_until_resolution():
 
     first, first_rate = _rate_model("macro-first")
     _, foreign_rate = _rate_model("macro-second")
-    program = adctime.Program("macro").bind_operators(first)
-    with pytest.raises(ValueError, match="belongs to owner"):
+    module, block, state_declaration = _references(first)
+    program = adctime.Program("macro").bind_operators(module)
+    with pytest.raises(ValueError, match="no operator registry is bound for owner"):
         libtime.explicit_rk(
-            program, "block", rhs_operator=foreign_rate,
+            program, block, state_declaration, rhs_operator=foreign_rate,
             tableau=libtime.SSPRK2_TABLEAU)
 
-    valid = adctime.Program("macro").bind_operators(first)
+    valid = adctime.Program("macro").bind_operators(module)
     libtime.explicit_rk(
-        valid, "block", rhs_operator=first_rate,
+        valid, block, state_declaration, rhs_operator=first_rate,
         tableau=libtime.SSPRK2_TABLEAU)
     assert valid.validate() is True
 
@@ -215,44 +246,59 @@ def test_public_operator_routes_reject_free_string_selectors():
             build()
 
 
-def test_local_linear_state_compatibility_is_structural_not_name_only():
+def test_state_space_is_derived_from_the_model_declaration_not_the_call_site():
     module = Module("spaces")
     operator_space = module.state_space("U", ("a", "b"))
     operator = module.operator(
         name="L", kind="local_linear_operator",
         signature=Signature((), LocalLinearOperator(operator_space, operator_space)),
-        expr=object())
-    # One rate declaration makes the registry expose the state input too; the
-    # explicit state below still uses a deliberately different same-named space.
+        expr="linear-map")
+    # The rate declaration makes the Module's sole state descriptor available
+    # to Program binding; callers cannot replace it with an ad-hoc same-named space.
     module.operator(
         name="R", kind="local_rate",
-        signature=Signature((operator_space,), RateSpace(operator_space)), expr=object())
+        signature=Signature((operator_space,), RateSpace(operator_space)), expr="rate")
     handle = OperatorHandle(
         operator.name, kind=operator.kind, owner=module.owner_path,
         signature=operator.signature)
+    _, block, state_declaration = _references(module)
     program = adctime.Program("spaces").bind_operators(module)
-    same_name_different_shape = StateSpace("U", ("x", "y"))
-    state = program.state("block", space=same_name_different_shape)
+    temporal = program.state(block, state_declaration)
+    state = temporal.n
     linear = program.call(handle)
 
-    with pytest.raises(ValueError, match="structural, not name-based"):
-        program.apply(linear, state=state)
+    assert temporal.space is operator_space
+    assert state.space is operator_space
+    assert program.apply(linear, state=state).space == RateSpace(operator_space)
+    with pytest.raises(TypeError, match="unexpected keyword argument 'space'"):
+        program.state(block, state_declaration, space=operator_space)
 
 
-@pytest.mark.parametrize(
-    ("name", "block", "message"),
-    [
-        ("U", True, "block must be a non-empty string"),
-        ("U", "", "block must be a non-empty string"),
-        (True, "block", "name must be a non-empty string"),
-        ("", "block", "name must be a non-empty string"),
-    ],
-)
-def test_invalid_state_identity_does_not_leave_partial_space_declarations(name, block, message):
+def test_invalid_typed_state_identity_is_atomic():
+    module = Module("invalid-state-model")
+    state_space = module.state_space("U", ("u",))
+    state_declaration = module.state_handle(state_space)
+    _, block, _ = _references(module)
+    qualified = block[state_declaration]
+    wrong_kind = Handle("phi", kind="field", owner=module.owner_path)
     program = adctime.Program("invalid-state")
-    spaces_before = dict(program._state_spaces)
-    values_before = tuple(program._values)
-    with pytest.raises(ValueError, match=message):
-        program.state(name, block=block)
-    assert program._state_spaces == spaces_before
-    assert tuple(program._values) == values_before
+
+    def snapshot():
+        return (
+            dict(program._state_spaces),
+            tuple(program._values),
+            dict(program._time_states),
+            program._case_owner_path,
+        )
+
+    invalid_calls = (
+        (lambda: program.state("block", state_declaration), TypeError, "BlockHandle"),
+        (lambda: program.state(block, "U"), TypeError, "declared Handle"),
+        (lambda: program.state(block, wrong_kind), TypeError, "expected 'state'"),
+        (lambda: program.state(block, qualified), DoubleOwnershipError, "already-qualified"),
+    )
+    for invoke, error, message in invalid_calls:
+        before = snapshot()
+        with pytest.raises(error, match=message):
+            invoke()
+        assert snapshot() == before

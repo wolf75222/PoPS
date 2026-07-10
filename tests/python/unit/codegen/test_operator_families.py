@@ -16,6 +16,7 @@ try:
         OPERATOR_FAMILIES, OPERATOR_KINDS, OperatorHandle, operator_family,
     )
     from pops.physics.facade import Model
+    from pops.problem import Problem
     from pops import time as adctime
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_operator_families (pops unavailable: %s)" % exc)
@@ -35,6 +36,15 @@ def build_model():
     m.source_term("electric", [Const(0.0), rho * (-gx), rho * (-gy)])
     m.elliptic_rhs(rho - 1.0)
     return m, rho, bz
+
+
+def _program_state(model, name):
+    """Create a concrete block and bind the model-declared state by typed handle."""
+    module = model.module
+    block = Problem(name="%s-case" % name).add_block("plasma", model)
+    state = module.state_handle(module.state_spaces()["U"])
+    program = adctime.Program(name).bind_operators(module)
+    return program, program.state(block, state)
 
 
 def test_operator_family_is_total_over_kinds():
@@ -88,7 +98,7 @@ def test_field_solve_signature():
 
 def test_declarers_funnel_into_one_registry():
     """The mathematical declarers register into the SAME typed registry as the classic ones (no
-    parallel facade registry) and are P.call-resolvable by handle -- identical IR to the classic path.
+    parallel facade registry) and return the exact registry-issued typed identity.
     """
     m, _, bz = build_model()
     r_math = m.rate("rate_math", flux=True, sources=["electric"])
@@ -100,21 +110,29 @@ def test_declarers_funnel_into_one_registry():
     assert reg.get("rate_math").kind == reg.get("rate_classic").kind == "local_rate"
     assert reg.get("rate_math").signature == reg.get("rate_classic").signature
 
-    fields_h = OperatorHandle(
-        "fields_from_state", kind="field_operator", owner=reg.owner_path,
-        signature=reg.get("fields_from_state").signature)
+    fields_h = m.module.operator_handle("fields_from_state")
+    registered_math = m.module.operator_handle("rate_math")
+    registered_classic = m.module.operator_handle("rate_classic")
+    assert r_math == registered_math
+    assert r_classic == registered_classic
+    assert r_math.qualified_id == registered_math.qualified_id
+    assert r_classic.qualified_id == registered_classic.qualified_id
 
     def prog(handle):
-        P = adctime.Program("p").bind_operators(m)
-        U = P.state("plasma")
+        P, state = _program_state(m, "p")
+        U = state.n
         f = P.call(fields_h, U)
         R = P.call(handle, U, f)
-        P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", U + P.dt * R))
+        P.commit(state.next, P.linear_combine("u1", U + P.dt * R))
         return P
 
-    assert prog(r_math)._ir_hash() == prog(r_classic)._ir_hash(), (
-        "m.rate and m.rate_operator must lower to the byte-identical IR")
-    print("OK  m.rate funnels into the one registry; IR identical to m.rate_operator")
+    assert prog(r_math)._ir_hash() == prog(registered_math)._ir_hash()
+    assert prog(r_classic)._ir_hash() == prog(registered_classic)._ir_hash()
+    # Two distinct declarations keep distinct qualified identities even when their
+    # implementations and signatures are structurally equal.
+    assert r_math != r_classic
+    assert prog(r_math)._ir_hash() != prog(r_classic)._ir_hash()
+    print("OK  both declarers funnel into one registry with distinct qualified identities")
 
 
 def test_bare_math_object_raises_when_called():
@@ -136,7 +154,7 @@ def test_fields_handle_still_field_solve_category():
     from pops.physics.board_handles import FieldsHandle
     fh = FieldsHandle(
         "E", outputs={"E": object()}, solver=None,
-        owner=OwnerPath("test", "fields-handle"))
+        owner=OwnerPath.descriptor("fields-handle"))
     assert isinstance(fh, OperatorHandle)
     assert fh.kind == "field_operator" and fh.category == "field_solve"
     # inspect() works on the subtype (its signature is None: FieldsHandle carries no Signature).

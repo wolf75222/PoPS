@@ -14,11 +14,13 @@ from __future__ import annotations
 import hashlib
 import json
 from typing import Any
+from weakref import ref
 
 from .hash_data import body_identity as _body_identity, canonical_hash_data as _canonical_hash_data
 from .operators import Operator, validate_operator_signature
-from .handles import OperatorHandle, OwnerPath
-from .registry import OperatorRegistry
+from .handles import Handle, OperatorHandle
+from .ownership import OwnerKind, OwnerPath
+from .registry import DeclarationIndex, OperatorRegistry
 from .signatures import Signature
 from .spaces import (
     AuxSpace,
@@ -46,17 +48,35 @@ class Module:
         if not isinstance(name, str) or not name:
             raise ValueError("Module name must be a non-empty string")
         self.name = name
-        self._owner_path = (OwnerPath.coerce(owner) if owner is not None
-                            else OwnerPath.fresh("module", self.name))
+        candidate_owner = (OwnerPath.coerce(owner) if owner is not None
+                           else OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, self.name))
+        self._owner_path = candidate_owner.require_authoring_root(
+            OwnerKind.MODEL_DEFINITION, name=self.name, where="Module owner")
         self._state_spaces = {}
         self._field_spaces = {}
         self._params = {}
         self._aux = {}
+        self._state_handles = {}
+        self._field_handles = {}
+        self._param_handles = {}
+        self._aux_handles = {}
         self._registry = OperatorRegistry(owner=self.owner_path)
         # Wave speeds for the Riemann solver of a compilable Module: {"x": [Expr], "y": [Expr]}
         # eigenvalues, or None (set via eigenvalues()). Carried so a pure Module is self-contained;
         # lowered to dsl.Model.eigenvalues by compile_problem.
         self._eigenvalues = None
+        # The canonical model owner is content-addressed by the complete definition. module_hash()
+        # deliberately excludes OwnerPath/Handle identities, so this provider cannot recurse into
+        # the identity it stabilizes. It supersedes OperatorRegistry's standalone fallback.
+        module_ref = ref(self)
+
+        def module_fingerprint() -> str | None:
+            module = module_ref()
+            return (None if module is None
+                    else "pops.module:sha256:%s" % module.module_hash())
+
+        self._owner_path._bind_definition_fingerprint_provider(
+            module_fingerprint, priority=100)
 
     @property
     def owner_path(self) -> OwnerPath:
@@ -68,18 +88,21 @@ class Module:
                     storage: str = "multifab") -> Any:
         """Declare and return a :class:`StateSpace`."""
         space = StateSpace(name, components, roles, layout, storage)
-        return self._declare_descriptor(self._state_spaces, space, "StateSpace")
+        return self._declare_descriptor(
+            self._state_spaces, self._state_handles, space, "StateSpace", "state")
 
     def field_space(self, name: Any, components: Any = (), layout: str = "cell") -> Any:
         """Declare and return a :class:`FieldSpace`."""
         space = FieldSpace(name, components, layout)
-        return self._declare_descriptor(self._field_spaces, space, "FieldSpace")
+        return self._declare_descriptor(
+            self._field_spaces, self._field_handles, space, "FieldSpace", "field")
 
     # --- parameters / aux ---
     def param(self, name: Any, default: Any = 0.0, dtype: str = "real") -> Any:
         """Declare and return one :class:`ParameterSpace`."""
         p = ParameterSpace(name, default, dtype)
-        return self._declare_descriptor(self._params, p, "parameter")
+        return self._declare_descriptor(
+            self._params, self._param_handles, p, "parameter", "parameter")
 
     def parameters(self, **defaults: Any) -> Any:
         """Declare several parameters by keyword; return ``{name: ParameterSpace}``."""
@@ -88,7 +111,8 @@ class Module:
     def aux_field(self, name: Any, kind: str = "cell_scalar") -> Any:
         """Declare and return one :class:`AuxSpace`."""
         a = AuxSpace(name, kind)
-        return self._declare_descriptor(self._aux, a, "aux field")
+        return self._declare_descriptor(
+            self._aux, self._aux_handles, a, "aux field", "aux")
 
     def aux_fields(self, **kinds: Any) -> Any:
         """Declare several aux fields by keyword; return ``{name: AuxSpace}``."""
@@ -132,38 +156,37 @@ class Module:
 
         return decorator
 
-    def rate_operator(self, name: Any, state_space: Any = "U", flux: bool = True,
-                      sources: Any = ("default",), fluxes: Any = None) -> Any:
-        """Register a composite ``local_rate`` operator ``R = -div F + sum(sources)`` from named
-        sub-operators (the flux and the listed source operators). Mirrors ``dsl.rate_operator``; the
-        ``lowering`` carries the flux/sources/fluxes so ``P.call`` and the codegen compose it."""
-        if isinstance(state_space, StateSpace):
-            u = state_space
-        else:
-            u = self._state_spaces.get(state_space)
-        if u is None:
-            raise ValueError(
-                "rate_operator(%r): state_space must name a declared StateSpace" % name)
+    def rate_operator(self, name: Any, state_space: Any, flux: bool = True,
+                      sources: Any = (), fluxes: Any = None) -> Any:
+        """Register ``R = -div F + sum(sources)`` from typed declaration references.
+
+        ``state_space`` is the declared :class:`StateSpace` (or its registry-issued state
+        :class:`Handle`). ``sources`` and ``fluxes`` contain :class:`OperatorHandle` values issued by
+        this Module. Names remain only in the private lowering payload; public semantic references
+        are never looked up from strings.
+        """
+        state_ref = self.state_handle(state_space)
+        u = self._state_spaces[state_ref.local_id]
         if not isinstance(flux, bool):
             raise TypeError("rate_operator(%r): flux must be a Python bool" % name)
-        srcs = list(sources) if sources is not None else None
-        flxs = list(fluxes) if fluxes else None
-        if not flux and flxs:
+        source_refs = list(sources) if sources is not None else []
+        flux_refs = list(fluxes) if fluxes is not None else []
+        if not flux and flux_refs:
             raise ValueError("rate_operator(%r): named fluxes require flux=True" % name)
         inputs = [u]
         selected = []
-        for source_name in srcs or ():
-            if not isinstance(source_name, str) or not source_name:
-                raise TypeError("rate_operator(%r): source names must be non-empty strings" % name)
-            if source_name == "default" and source_name not in self._registry:
-                continue
-            target = self._registry.target_for_handle(source_name)
-            selected.append(self._registry.get(target))
-        for flux_name in flxs or ():
-            if not isinstance(flux_name, str) or not flux_name:
-                raise TypeError("rate_operator(%r): flux names must be non-empty strings" % name)
-            target = self._registry.target_for_handle(flux_name)
-            selected.append(self._registry.get(target))
+        source_names = []
+        for source_ref in source_refs:
+            target, operator = self._operator_reference(
+                source_ref, expected_kind="local_source", label="source")
+            source_names.append(target)
+            selected.append(operator)
+        flux_names = []
+        for flux_ref in flux_refs:
+            target, operator = self._operator_reference(
+                flux_ref, expected_kind="grid_operator", label="flux")
+            flux_names.append(target)
+            selected.append(operator)
         field_inputs = []
         for selected_op in selected:
             for input_space in selected_op.signature.inputs:
@@ -182,8 +205,8 @@ class Module:
         op = Operator(name, "local_rate", Signature(tuple(inputs), RateSpace(u)),
                       capabilities={"local": False, "requires_fields": bool(field_inputs),
                                     "produces_rate": True, "supports_device": True},
-                      lowering={"flux": bool(flux), "sources": srcs,
-                                "fluxes": flxs},
+                      lowering={"flux": flux, "sources": source_names,
+                                "fluxes": flux_names or None},
                       source="module")
         self._registry.register(op)
         return self.operator_handle(op.name)
@@ -200,8 +223,6 @@ class Module:
         the derived registry of its HyperbolicModel). Returns ``self``."""
         if not isinstance(registry, OperatorRegistry):
             raise TypeError("adopt_registry expects an OperatorRegistry")
-        if registry.owner_path is None:
-            raise ValueError("adopt_registry requires an owner-qualified OperatorRegistry")
         if registry.owner_path != self.owner_path:
             raise ValueError("adopt_registry cannot adopt a registry owned by another Module")
         self._registry = registry
@@ -223,6 +244,36 @@ class Module:
         return OperatorHandle(
             name, kind=operator.kind, owner=self._registry.owner_path,
             signature=operator.signature, registered_operator_name=target)
+
+    def state_handle(self, state: Any) -> Handle:
+        """Return the registry-issued handle of a declared :class:`StateSpace`."""
+        return self._descriptor_handle(
+            state, self._state_spaces, self._state_handles, "StateSpace")
+
+    def field_handle(self, field: Any) -> Handle:
+        """Return the registry-issued handle of a declared :class:`FieldSpace`."""
+        return self._descriptor_handle(
+            field, self._field_spaces, self._field_handles, "FieldSpace")
+
+    def param_handle(self, parameter: Any) -> Handle:
+        """Return the registry-issued handle of a declared parameter."""
+        return self._descriptor_handle(
+            parameter, self._params, self._param_handles, "parameter")
+
+    def aux_handle(self, aux: Any) -> Handle:
+        """Return the registry-issued handle of a declared auxiliary field."""
+        return self._descriptor_handle(aux, self._aux, self._aux_handles, "aux field")
+
+    def declaration_index(self) -> DeclarationIndex:
+        """Read-only union of the Module's authoritative family registries."""
+        handles = [
+            *self._state_handles.values(),
+            *self._field_handles.values(),
+            *self._param_handles.values(),
+            *self._aux_handles.values(),
+            *self._registry.declaration_index().records(),
+        ]
+        return DeclarationIndex(owner=self.owner_path, handles=handles)
 
     def manifest(self) -> Any:
         """The self-describing :class:`pops.model.manifest.ModuleManifest` of this Module (ADC-585).
@@ -363,17 +414,74 @@ class Module:
     def __repr__(self) -> str:
         return "Module(%r, operators=[%s])" % (self.name, ", ".join(self._registry.names()))
 
-    @staticmethod
-    def _declare_descriptor(registry: Any, descriptor: Any, label: str) -> Any:
-        """Install one immutable descriptor, making compatible repeats idempotent."""
+    def _declare_descriptor(
+        self,
+        registry: Any,
+        handles: Any,
+        descriptor: Any,
+        label: str,
+        kind: str,
+    ) -> Any:
+        """Install one descriptor exactly once under its semantic name."""
         existing = registry.get(descriptor.name)
         if existing is None:
             registry[descriptor.name] = descriptor
+            handles[descriptor.name] = Handle(
+                descriptor.name, kind=kind, owner=self.owner_path)
             return descriptor
         old_data = existing.to_data()
         new_data = descriptor.to_data()
-        if old_data == new_data:
-            return existing
         raise ValueError(
-            "%s %r is already declared incompatibly: existing %r, requested %r"
+            "%s %r is already declared; declarations are register-once: "
+            "existing %r, requested %r"
             % (label, descriptor.name, old_data, new_data))
+
+    @staticmethod
+    def _descriptor_handle(
+        descriptor_or_name: Any,
+        descriptors: Any,
+        handles: Any,
+        label: str,
+    ) -> Handle:
+        if isinstance(descriptor_or_name, str):
+            raise TypeError(
+                "%s handle lookup requires the declared descriptor object or its Handle; "
+                "a name string is not a semantic reference" % label)
+        if isinstance(descriptor_or_name, Handle):
+            registered = handles.get(descriptor_or_name.local_id)
+            if registered is None:
+                raise KeyError("unknown %s %r" % (label, descriptor_or_name.local_id))
+            if registered != descriptor_or_name:
+                raise ValueError(
+                    "%s handle %s belongs to another Module registry"
+                    % (label, descriptor_or_name.qualified_id))
+            return registered
+        name = getattr(descriptor_or_name, "name", None)
+        if not isinstance(name, str) or not name:
+            raise TypeError("%s handle lookup requires the declared descriptor object" % label)
+        descriptor = descriptors.get(name)
+        if descriptor is None:
+            raise KeyError("unknown %s %r" % (label, name))
+        if descriptor is not descriptor_or_name:
+            raise ValueError("%s %r belongs to another Module registry" % (label, name))
+        return handles[name]
+
+    def _operator_reference(
+        self,
+        reference: Any,
+        *,
+        expected_kind: str,
+        label: str,
+    ) -> tuple[str, Operator]:
+        """Authenticate one typed operator reference and expose its private registry target."""
+        if not isinstance(reference, OperatorHandle):
+            raise TypeError(
+                "rate_operator %s references must be OperatorHandle values, not %r"
+                % (label, type(reference).__name__))
+        registered = self._registry.declaration_index().authenticate(reference)
+        if registered.kind != expected_kind:
+            raise TypeError(
+                "rate_operator %s reference %s has kind %r; expected %r"
+                % (label, reference.qualified_id, registered.kind, expected_kind))
+        target = registered.registered_operator_name
+        return target, self._registry.get(target)

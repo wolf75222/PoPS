@@ -116,19 +116,27 @@ def _hdf5_parallel(fmt: Any) -> Any:
 def _field_names(fields: Any) -> Any:
     """Resolve an OutputPolicy ``fields=[...]`` list to the block-name subset ``write`` wants.
 
-    Each entry is a block name string or a typed handle carrying ``.name`` (a field / state
-    handle). An empty list means "all blocks" -> ``None`` (``write``'s all-fields sentinel).
+    Each entry is an authenticated declaration Handle. A block-qualified state/field projects to
+    its owning block only at this explicit legacy-writer boundary; a case/shared field projects to
+    its own local id. An empty list means "all blocks" -> ``None`` (``write``'s all-fields
+    sentinel). Flat strings are never accepted by the public policy and are not reintroduced here.
     """
     if not fields:
         return None
     names = []
-    for f in fields:
-        if isinstance(f, str):
-            names.append(f)
-        else:
-            name = getattr(f, "name", None)
-            if name is not None:
-                names.append(str(name))
+    for reference in fields:
+        if getattr(reference, "kind", None) not in {"aux", "field", "state"}:
+            raise TypeError(
+                "OutputPolicy field entries must be writable state/field/aux Handles; got kind %r"
+                % getattr(reference, "kind", None))
+        block_ref = getattr(reference, "block_ref", None)
+        local_id = (getattr(block_ref, "local_id", None)
+                    if block_ref is not None else getattr(reference, "local_id", None))
+        if local_id is None:
+            raise TypeError(
+                "OutputPolicy field entries must be declaration Handles; got %r"
+                % type(reference).__name__)
+        names.append(str(local_id))
     return names or None
 
 

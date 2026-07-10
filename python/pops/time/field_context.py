@@ -24,8 +24,8 @@ class FieldContext:
     """Provenance + validity token for one field solve.
 
     Attributes:
-        field_problem: the field problem's name (``"phi"`` for the default shared Poisson, or a
-            named elliptic field). Never ``None`` -- the default resolves to
+        field_problem: ``"phi"`` for the default shared Poisson, otherwise the exact typed field
+            selector retained by the Program. Never ``None`` -- the default resolves to
             :data:`DEFAULT_FIELD_PROBLEM` so a report always names a problem.
         stage_sources: the ordered, immutable ``((block, state_id), ...)`` provenance of every
             stage state this solve consumed. A single-block solve has one entry; a simultaneous
@@ -44,8 +44,15 @@ class FieldContext:
     def __init__(self, field_problem: Any, stage_sources: Any, outputs: Any = ()) -> None:
         if field_problem is None:
             field_problem = DEFAULT_FIELD_PROBLEM
-        elif not isinstance(field_problem, str) or not field_problem:
-            raise TypeError("FieldContext field_problem must be a non-empty string or None")
+        elif isinstance(field_problem, str):
+            if not field_problem:
+                raise TypeError("FieldContext field_problem cannot be an empty string")
+        else:
+            from pops.model import Handle
+            if not isinstance(field_problem, Handle) or field_problem.kind not in (
+                    "field", "field_operator"):
+                raise TypeError(
+                    "FieldContext field_problem must be a typed field handle, 'phi', or None")
         if isinstance(stage_sources, Mapping):
             entries = tuple(stage_sources.items())
         else:
@@ -63,8 +70,9 @@ class FieldContext:
                 raise ValueError(
                     "FieldContext stage_sources entries must be (block, state_id) pairs")
             block, state_id = entry
-            if not isinstance(block, str) or not block:
-                raise TypeError("FieldContext block names must be non-empty strings")
+            from pops.problem.handles import BlockHandle
+            if not isinstance(block, BlockHandle):
+                raise TypeError("FieldContext blocks must be BlockHandle values")
             if isinstance(state_id, bool) or not isinstance(state_id, int) or state_id < 0:
                 raise TypeError("FieldContext state ids must be non-negative Python ints")
             if block in seen:

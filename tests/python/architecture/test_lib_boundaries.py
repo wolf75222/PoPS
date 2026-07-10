@@ -231,19 +231,27 @@ def test_lib_init_stays_thin():
 
 
 def test_lib_time_macros_return_a_core_program():
-    """Functional (skip-clean): each block-name-only lib.time macro produces a pops.time.Program.
+    """Functional (skip-clean): each typed lib.time macro produces a pops.time.Program.
 
     The remaining macros (strang / imex / bdf / predictor_corrector) require extra scheme arguments;
-    they share the same @program_macro dispatch (lib/time/_helpers.py), so the four block-name-only
-    schemes are a representative proof that lib.time lowers to the core Program, not a lib stepper."""
+    they share the same @program_macro dispatch (lib/time/_helpers.py), so these four schemes are a
+    representative proof that lib.time lowers to the core Program, not a lib stepper.  The fixture
+    deliberately supplies the authoritative BlockHandle and model state Handle: a display label is
+    never promoted into semantic ownership."""
     try:
         import pops.lib.time as lib_time
+        from pops.model import Module
+        from pops.problem import Problem
         from pops.time import Program
     except Exception as exc:  # pragma: no cover - bare source tree without importable pops.
         pytest.skip("pops import unavailable: %s" % exc)
 
+    module = Module("architecture-time-schemes")
+    state_space = module.state_space("U", ("u",))
+    state = module.state_handle(state_space)
+    block = Problem(name="architecture-time-case").add_block("plasma", module)
     for name in ("forward_euler", "ssprk2", "ssprk3", "rk4"):
-        program = getattr(lib_time, name)("plasma")
+        program = getattr(lib_time, name)(block, state, sources=(), flux=False)
         assert isinstance(program, Program), (
             "pops.lib.time.%s must return a pops.time.Program, got %r" % (name, type(program)))
 

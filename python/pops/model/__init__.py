@@ -22,6 +22,16 @@ compiled ``_pops`` extension.
 """
 from .bundles import RateBundle
 from .handles import Handle, OperatorHandle, OwnerPath
+from .ownership import (
+    AmbiguousReferenceError,
+    DoubleOwnershipError,
+    IdentityCollisionError,
+    MissingOwnershipError,
+    OwnerKind,
+    OwnerSegment,
+    OwnershipError,
+    UnresolvedOwnershipError,
+)
 from .manifest import (
     ModuleManifest,
     OperatorManifestEntry,
@@ -41,7 +51,7 @@ from .operators import (
     operator_family,
     validate_operator_signature,
 )
-from .registry import OperatorRegistry
+from .registry import DeclarationIndex, OperatorRegistry
 from .signatures import Signature
 from .spaces import (
     AuxSpace,
@@ -64,11 +74,15 @@ __all__ = [
     "Signature",
     "Operator",
     "OperatorRegistry",
+    "DeclarationIndex",
     "ParameterSpace",
     "AuxSpace",
     "Module",
     "RateBundle",
-    "Handle", "OperatorHandle", "OwnerPath",
+    "Handle", "OperatorHandle", "OwnerPath", "OwnerKind", "OwnerSegment",
+    "OwnershipError", "MissingOwnershipError", "DoubleOwnershipError",
+    "AmbiguousReferenceError", "IdentityCollisionError",
+    "UnresolvedOwnershipError",
     "OPERATOR_KINDS",
     "OPERATOR_FAMILIES",
     "OPERATOR_REQUIREMENT_KEYS",

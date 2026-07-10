@@ -152,19 +152,35 @@ class SolverContext:
     the residual ``r`` and the operator apply ``A(x)`` are IR values, not arrays.
     """
 
-    def __init__(self, program: Any, block: Any = "solve") -> None:
+    def __init__(self, program: Any, temporal_state: Any = None) -> None:
         self._p = program
-        self._block = block
+        if temporal_state is not None:
+            from pops.time.handles import TimeState
+            if not isinstance(temporal_state, TimeState):
+                raise TypeError("SolverContext temporal_state must be a TimeState")
+            temporal_state = program._require_time_state(temporal_state, "SolverContext")
+        self._state = temporal_state
+        self._block = temporal_state.block if temporal_state is not None else None
 
     # --- operands -----------------------------------------------------------
     def unknown(self, name: Any = None) -> Any:
         """A fresh solver unknown (the iterate ``x`` / the rhs ``b``): a State IR value."""
-        return self._p.state(self._block)
+        if self._state is None:
+            raise ValueError(
+                "SolverContext.unknown requires a typed TimeState; construct the context from "
+                "Program.state(block_handle, state_handle)")
+        return self._state.n
 
     def zeros_like(self, value: Any) -> Any:
         """A zero-initialized iterate over the same block as @p value (the warm start)."""
         _require_field(value, "zeros_like")
-        return self._p.state(value.block or self._block)
+        if value.block is None or value.state_ref is None:
+            raise ValueError("zeros_like requires block-qualified State provenance")
+        return self._p._new(
+            "state", "state", (),
+            {"state": value.state_ref, "solver_role": "zero"},
+            "solver_zero", value.block, space=value.space,
+            state_ref=value.state_ref)
 
     def scalar_int(self, n: Any) -> Any:
         """A COMPILE-TIME integer literal as a Scalar IR value (a loop count / index). It
@@ -302,7 +318,23 @@ def build_solver_ir(solver_brick: Any) -> SolverIR:
     from pops import time as _time
     desc = _as_descriptor(solver_brick)
     program = _time.Program("solver_" + desc.name)
-    ctx = SolverContext(program)
+    from pops.model import DeclarationIndex, Handle, OwnerKind, OwnerPath
+    from pops.problem import Problem
+
+    class _SolverStateModel:
+        def __init__(self) -> None:
+            self.name = "solver_state:" + desc.name
+            self.owner_path = OwnerPath.fresh(
+                OwnerKind.MODEL_DEFINITION, self.name)
+            self.state = Handle("x", kind="state", owner=self.owner_path)
+
+        def declaration_index(self) -> Any:
+            return DeclarationIndex(owner=self.owner_path, handles=(self.state,))
+
+    state_model = _SolverStateModel()
+    block = Problem(name="solver_case:" + desc.name).add_block("solve", state_model)
+    temporal = program.state(block, state_model.state)
+    ctx = SolverContext(program, temporal)
     a_op = program._linear_source("A")   # the matrix-free operator A, an IR operator value
     b_rhs = ctx.unknown("b")             # the right-hand side b, an IR State value
     result = desc.builder(ctx, a_op, b_rhs)

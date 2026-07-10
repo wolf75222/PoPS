@@ -13,6 +13,7 @@ from pops.time.program_base import _ProgramConstants
 from pops.time.program_commit_validation import validate_commit_many
 from pops.time.program_diagnostics import _ProgramDiagnostics
 from pops.time.program_transaction import atomic_authoring
+from pops.time.references import block_name
 from pops.time.program_value_validation import (
     require_compatible_spaces, require_top_level, structural_state_space,
 )
@@ -271,58 +272,73 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             )
         require_top_level(self, state, "commit")
         require_compatible_spaces(endpoint.space, state.space, "commit", typed_pair=True)
-        return self._commit_block(endpoint.block, state)
+        return self._commit_state(endpoint.state, state)
 
-    def _commit_block(self, block: str, state: ProgramValue) -> None:
-        """Lower one validated block commit for built-in Program macros.
-
-        This is deliberately private: public authoring owns destinations through
-        :class:`StateEndpointHandle`, while built-in presets still construct the lower-level IR from
-        block names internally.
-        """
+    def _commit_state(self, state_ref: Any, state: ProgramValue) -> None:
+        """Record one validated qualified-state commit."""
         self._guard_mutable("commit a state")
-        if not isinstance(block, str) or not block:
-            raise TypeError("_commit_block: block must be a non-empty internal block name")
+        from pops.model.handles import Handle
+        if not isinstance(state_ref, Handle) or state_ref.kind != "state" \
+                or not state_ref.is_instance:
+            raise TypeError("_commit_state: target must be a block-qualified state Handle")
+        block = state_ref.block_ref
         if not (isinstance(state, ProgramValue) and state.vtype in ("state", "scalar_field")):
-            raise TypeError("_commit_block: a State (or scalar_field) ProgramValue is required")
+            raise TypeError("_commit_state: a State (or scalar_field) ProgramValue is required")
         if state.prog is not self:
-            raise ValueError("_commit_block: the State value belongs to a different Program")
-        require_top_level(self, state, "_commit_block")
+            raise ValueError("_commit_state: the State value belongs to a different Program")
+        require_top_level(self, state, "_commit_state")
         if state.block != block:
             raise ValueError(
-                "_commit_block: block %r cannot receive a value owned by block %r"
-                % (block, state.block))
+                "_commit_state: block %r cannot receive a value owned by block %r"
+                % (block_name(block), block_name(state.block)))
+        if state.state_ref is not None and state.state_ref != state_ref:
+            raise ValueError(
+                "_commit_state: state %s cannot receive a value derived from %s"
+                % (state_ref.qualified_id, state.state_ref.qualified_id))
         if block not in self._state_spaces:
-            raise ValueError("_commit_block: block %r has no declared StateSpace" % block)
+            raise ValueError(
+                "_commit_state: block %r has no declared StateSpace" % block_name(block))
         require_compatible_spaces(
-            self._state_spaces[block], state.space, "_commit_block", typed_pair=True)
-        if block in self._commits:
-            raise ValueError("block '%s' committed more than once" % block)
-        self._commits[block] = state
+            self._state_spaces[block], state.space, "_commit_state", typed_pair=True)
+        if state_ref in self._commits:
+            raise ValueError("state %s committed more than once" % state_ref.qualified_id)
+        if any(committed.block_ref is block for committed in self._commits):
+            raise ValueError(
+                "block %r already has a committed state; multi-state block storage is not "
+                "supported by the current runtime" % block_name(block))
+        self._commits[state_ref] = state
 
     def commits(self) -> Any:
-        """Map of committed block -> committed State value (copy)."""
+        """Map of qualified state Handle -> committed State value (copy)."""
         return dict(self._commits)
 
     # --- board-like sugar (Spec 3): T.define / T.fields / T.solve / T.commit_many ---
     # These lower to the SAME primitive ops as the P.call / linear_combine /
     # solve_local_linear / commit style; they are blackboard notation, not a new IR.
-    def op(self, name: Any) -> Any:
-        """Return a callable board handle for a bound operator: ``expl = P.op("explicit_rate")``
-        then ``expl(U, fields)`` builds the same IR as ``P.call(rate_handle, U, fields)``. The
-        board handle names the operator at creation (``P.op(name)``), so its call lowers through the
-        INTERNAL ``P._call`` -- the name is an internal selector, not the public handle-only path."""
+    def op(self, operator: Any) -> Any:
+        """Return callable board sugar for an exact typed operator handle.
+
+        ``expl = P.op(explicit_rate)`` followed by ``expl(U, fields)`` builds the same IR as
+        ``P.call(explicit_rate, U, fields)``. A free name is refused at creation; the closure retains
+        the handle's owner, kind and signature until the ordinary typed call boundary.
+        """
+        from pops.time.operator_resolution import resolve_operator_handle
+        resolve_operator_handle(self, operator, where="P.op")
+
         def _handle(*args: Any, value_name: Any = None) -> Any:
-            return self._call(name, *args, name=value_name)
-        _handle.__name__ = str(name)
+            return self.call(operator, *args, name=value_name)
+
+        _handle.__name__ = operator.name
         return _handle
 
     def fields(self, name: Any, from_state: Any = None, from_states: Any = None,
                from_state_set: Any = None, operator: Any = None) -> Any:
-        """Board sugar for a field solve. Lowers through the internal ``P._call(operator, ...)`` when
-        a named operator is bound, else to ``P.solve_fields`` (single state) or
-        ``P.solve_fields_from_blocks`` (the board names the operator here; ``_call`` is the internal
-        selector path, not the public handle-only ``P.call``)."""
+        """Board sugar for a field solve selected by an optional typed operator handle.
+
+        With ``operator=None`` this uses the generic default field solve. Otherwise ``operator`` must
+        be the exact ``field_operator`` handle returned by the declaring model; strings never select
+        a field route.
+        """
         if from_state_set is not None:
             states = from_state_set.states()
         elif from_states is not None:
@@ -331,13 +347,13 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             states = [from_state]
         else:
             raise ValueError("fields: provide from_state=, from_states= or from_state_set=")
-        named = operator is not None and operator != "fields_from_state"
+        if operator is not None:
+            from pops.time.operator_resolution import resolve_operator_handle
+            resolve_operator_handle(
+                self, operator, where="P.fields", expected_kinds="field_operator", values=states)
+            return self.call(operator, *states, name=name)
         if len(states) == 1:
-            if named and self._registry is not None:
-                return self._call(operator, states[0], name=name)
             return self.solve_fields(name, states[0])
-        if named and self._registry is not None:
-            return self._call(operator, *states, name=name)
         return self.solve_fields_from_blocks(states, name=name)
 
     def value(self, name: Any, expr: Any) -> Any:

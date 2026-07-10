@@ -11,7 +11,6 @@ Everything here is an inert descriptor; nothing tags a cell in Python.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any
 
 from .._descriptor import Availability, MeshDescriptor
@@ -23,97 +22,187 @@ NATIVE_MAX_LEVELS = 2
 NATIVE_RATIOS = (2,)
 
 
-def _subject_name(subject: Any) -> Any:
-    """The plain string name of a Refine subject (a string, or an object carrying ``.name``)."""
-    if isinstance(subject, str):
+def _require_handle(reference: Any, where: str) -> Any:
+    """Require one typed declaration reference without adding a mesh -> model import edge."""
+    from pops.model import Handle
+
+    if not isinstance(reference, Handle):
+        raise TypeError(
+            "%s requires a pops.model.Handle declaration reference, got %r; names and strings "
+            "are not declaration identities" % (where, type(reference).__name__))
+    return reference
+
+
+def _require_value_handle(reference: Any, where: str) -> Any:
+    """Require a Handle that represents a readable scientific value."""
+    reference = _require_handle(reference, where)
+    if getattr(reference, "expression_readable", None) is not True:
+        raise TypeError(
+            "%s requires a value-readable Handle, got %s(kind=%r); block, operator, endpoint, "
+            "and other control identities are not scientific values"
+            % (where, type(reference).__name__, reference.kind))
+    return reference
+
+
+def _resolve_handle_reference(reference: Any, resolver: Any, where: str) -> Any:
+    """Resolve an authoring handle through the owning assembly's small resolver protocol."""
+    reference = _require_value_handle(reference, where)
+    resolve = resolver if callable(resolver) else getattr(resolver, "resolve", None)
+    if not callable(resolve):
+        raise TypeError(
+            "%s reference resolution requires a callable resolver or an object exposing "
+            "resolve(handle), got %r"
+            % (where, type(resolver).__name__))
+    resolved = _require_value_handle(resolve(reference), where)
+    if not resolved.is_resolved:
+        raise ValueError(
+            "%s resolver returned an authoring-owned Handle; references must be canonical before "
+            "compile" % where)
+    return resolved
+
+
+def _require_refine_subject(subject: Any) -> Any:
+    """Require a typed Handle or a semantic expression with reference resolution."""
+    from pops.ir import Expr
+    from pops.model import Handle
+
+    if isinstance(subject, Handle):
+        return _require_value_handle(subject, "Refine.on(...)")
+    if isinstance(subject, Expr):
+        references = subject.declaration_references()
+        if not references:
+            raise TypeError(
+                "Refine.on(...) expression has no typed declaration Handle leaves; build it from "
+                "ValueExpr(handle), not Var/free names or strings")
+        for reference in references:
+            _require_value_handle(reference, "Refine.on(...) expression")
         return subject
-    name = getattr(subject, "name", None)
-    return name if isinstance(name, str) else None
+    if isinstance(subject, str) or not callable(getattr(subject, "resolve_references", None)):
+        raise TypeError(
+            "Refine.on(...) requires a pops.model.Handle or a semantic expression exposing "
+            "resolve_references(resolver), got %r; names and strings are not declaration "
+            "identities" % type(subject).__name__)
+    return subject
 
 
-def _declared_subjects(model_or_context: Any) -> Any:
-    """The set of subject names a model / context legitimately declares (duck-typed).
+def _resolve_refine_subject(subject: Any, resolver: Any) -> Any:
+    """Resolve every declaration leaf without lowering the scientific indicator."""
+    from pops.model import Handle
 
-    A Refine subject is a state component, a physical role, or a named aux / field. This reads
-    those names off whatever ``model_or_context`` is passed WITHOUT importing the physics / model
-    layers (the mesh layer imports nothing else in pops): it tries the documented surfaces in
-    turn -- conservative + primitive component names, explicit / canonical roles, named aux
-    fields, and a typed ``state_space()`` view's components / role values. Returns ``None`` when
-    the context exposes NONE of these surfaces, so the caller can DEFER (not falsely reject) a
-    context that simply does not advertise its names.
-    """
-    names = set()
-    found_surface = False
+    subject = _require_refine_subject(subject)
+    if isinstance(subject, Handle):
+        return _resolve_handle_reference(subject, resolver, "Refine.on(...)")
+    resolved = subject.resolve_references(resolver)
+    return _require_refine_subject(resolved)
 
-    def add_iter(value: Any) -> None:
-        nonlocal found_surface
-        if value is None:
-            return
-        try:
-            items = list(value)
-        except TypeError:
-            return
-        found_surface = True
-        for item in items:
-            text = item if isinstance(item, str) else getattr(item, "name", None)
-            if isinstance(text, str):
-                names.add(text)
 
-    for attr in ("cons_names", "prim_names", "aux_extra_names", "aux_names"):
-        if hasattr(model_or_context, attr):
-            add_iter(getattr(model_or_context, attr))
+def _refine_subject_options(subject: Any) -> dict:
+    """Structured inspection that keeps a semantic expression distinct from a Handle."""
+    from pops.model import Handle
 
-    # Explicit role overrides (cons_roles / prim_roles) name roles directly.
-    for attr in ("cons_roles", "prim_roles"):
-        value = getattr(model_or_context, attr, None)
-        if value is not None:
-            add_iter(value)
+    if isinstance(subject, Handle):
+        return {"reference_type": "handle", "handle": _stable_handle_projection(subject)}
+    return {
+        "reference_type": "expression",
+        "expression_type": "%s.%s" % (type(subject).__module__, type(subject).__qualname__),
+        "expression": _semantic_projection(subject, set()),
+    }
 
-    # A typed StateSpace view: its components AND its role values are both legal subjects.
-    space = getattr(model_or_context, "state_space", None)
-    if callable(space):
-        try:
-            view = space()
-        except Exception:  # pragma: no cover - a view that needs args is just skipped.
-            view = None
-        if view is not None:
-            add_iter(getattr(view, "components", None))
-            roles = getattr(view, "roles", None)
-            if isinstance(roles, Mapping):
-                found_surface = True
-                names.update(k for k in roles if isinstance(k, str))
-                names.update(v for v in roles.values() if isinstance(v, str))
 
-    # A bare mapping / collection of declared subject names (a lightweight context).
-    if isinstance(model_or_context, Mapping):
-        for key in ("roles", "subjects", "variables", "components"):
-            if key in model_or_context:
-                add_iter(model_or_context[key])
+def _stable_handle_projection(handle: Any) -> dict:
+    """Deterministic Handle inspection that never exposes an authoring capability token."""
+    canonical_owner = handle.owner_path.canonical()
+    return {
+        "kind": handle.kind,
+        "local_id": handle.local_id,
+        "owner_path": str(canonical_owner),
+    }
 
-    return names if found_surface else None
+
+def _semantic_projection(value: Any, active: set[int]) -> Any:
+    """Project an indicator graph structurally without repr() or local-authority text."""
+    from collections.abc import Mapping
+    from decimal import Decimal
+    from fractions import Fraction
+    from pops.model import Handle
+
+    if isinstance(value, Handle):
+        return {"handle": _stable_handle_projection(value)}
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (Decimal, Fraction)):
+        return {"type": type(value).__name__, "value": str(value)}
+    if isinstance(value, (tuple, list)):
+        return [_semantic_projection(item, active) for item in value]
+    if isinstance(value, Mapping):
+        entries = [
+            {"key": _semantic_projection(key, active),
+             "value": _semantic_projection(item, active)}
+            for key, item in value.items()
+        ]
+        return {"entries": sorted(entries, key=repr)}
+    if isinstance(value, (set, frozenset)):
+        projected = [_semantic_projection(item, active) for item in value]
+        return sorted(projected, key=repr)
+
+    object_id = id(value)
+    if object_id in active:
+        return {"type": "%s.%s" % (type(value).__module__, type(value).__qualname__),
+                "cycle": True}
+    active.add(object_id)
+    try:
+        to_data = getattr(value, "to_data", None)
+        if callable(to_data):
+            return {
+                "type": "%s.%s" % (type(value).__module__, type(value).__qualname__),
+                "data": _semantic_projection(to_data(), active),
+            }
+        names = set(getattr(value, "__dict__", {}))
+        for cls in type(value).__mro__:
+            slots = cls.__dict__.get("__slots__", ())
+            if isinstance(slots, str):
+                slots = (slots,)
+            names.update(slots)
+        fields = {}
+        for name in sorted(names):
+            if not isinstance(name, str) or name.startswith("_") \
+                    or name in ("__dict__", "__weakref__") or not hasattr(value, name):
+                continue
+            fields[name] = _semantic_projection(getattr(value, name), active)
+        return {
+            "type": "%s.%s" % (type(value).__module__, type(value).__qualname__),
+            "fields": fields,
+        }
+    finally:
+        active.remove(object_id)
 
 
 class Refine(MeshDescriptor):
     """A typed refinement criterion (Spec 5 sec.8.6).
 
-    Build with the fluent form ``Refine.on(subject).above(threshold)``. ``subject`` is a
-    state component, a role handle, or a field expression (e.g. ``phi.gradient_norm()``);
-    it is carried opaquely here and checked against the model / route at validation time.
+    Build with the fluent form ``Refine.on(subject).above(threshold)``. ``subject`` is either a real
+    declaration :class:`pops.model.Handle` or a semantic expression (for example a gradient-norm
+    indicator) implementing ``resolve_references(resolver)``. Bare strings are deliberately
+    refused. Every Handle leaf is authenticated and block-qualified by the Problem before compile;
+    the expression itself stays symbolic until a backend explicitly lowers or refuses it.
     """
 
     category = "refinement_criterion"
 
     def __init__(self, subject: Any, predicate: Any = None, threshold: Any = None) -> None:
-        self.subject = subject
+        self.subject = _require_refine_subject(subject)
         self.predicate = predicate
         self.threshold = threshold
+        self._references_authenticated = False
 
     @classmethod
     def on(cls, subject: Any) -> Refine:
         return cls(subject)
 
     def _with(self, predicate: Any, threshold: Any) -> Refine:
-        return Refine(self.subject, predicate, float(threshold))
+        result = Refine(self.subject, predicate, float(threshold))
+        result._references_authenticated = self._references_authenticated
+        return result
 
     def above(self, threshold: Any) -> Refine:
         return self._with("above", threshold)
@@ -128,34 +217,31 @@ class Refine(MeshDescriptor):
         return self._with("magnitude_above", threshold)
 
     def options(self) -> dict:
-        subj = getattr(self.subject, "name", None) or repr(self.subject)
-        return {"subject": subj, "predicate": self.predicate, "threshold": self.threshold}
+        return {"subject": _refine_subject_options(self.subject), "predicate": self.predicate,
+                "threshold": self.threshold}
+
+    def resolve_references(self, resolver: Any) -> Refine:
+        """Return a detached criterion with canonical, authenticated Handle leaves."""
+        result = Refine(
+            _resolve_refine_subject(self.subject, resolver),
+            self.predicate,
+            self.threshold,
+        )
+        result._references_authenticated = True
+        return result
+
+    @property
+    def references_authenticated(self) -> bool:
+        """Whether an authoritative assembly resolved every declaration leaf."""
+        return self._references_authenticated is True
 
     def validate(self, context: Any = None) -> bool:
-        """Validate the criterion shape and -- when a model context is given -- its subject.
-
-        With no @p context this self-validates the predicate / threshold only and DEFERS the
-        subject check to where the model is available (``problem.amr.refine`` / compile); the
-        role-existence check is wired there so it happens SOMEWHERE before runtime, never never.
-
-        When @p context is a model / context that advertises its declared subjects (state
-        components, roles, named aux), a subject that is NOT among them raises a clear error
-        listing the declared names. The discipline is NO FALSE POSITIVE: a context that exposes
-        no subject surface (``_declared_subjects`` returns ``None``) is NOT rejected, and a
-        non-string subject (a field-expression handle) is carried opaquely and skipped.
-        """
+        """Validate the criterion shape; ownership is validated by ``resolve_references``."""
         if self.predicate is None or self.threshold is None:
             raise ValueError(
                 "Refine criterion is incomplete: use Refine.on(subject).above(value) "
                 "(or .below / .gradient_above / .magnitude_above)")
-        if context is not None:
-            declared = _declared_subjects(context)
-            subject = _subject_name(self.subject)
-            if declared is not None and subject is not None and subject not in declared:
-                raise ValueError(
-                    "Refine.on(%r): %r is not a declared subject of the model; declared "
-                    "subjects are %s (a role / state component / named aux). Refine on one of "
-                    "those." % (subject, subject, sorted(declared) or "none"))
+        _require_refine_subject(self.subject)
         return True
 
 
@@ -179,6 +265,17 @@ class TagUnion(MeshDescriptor):
         for c in self.criteria:
             c.validate(context)
         return True
+
+    def resolve_references(self, resolver: Any) -> TagUnion:
+        """Return a detached union whose indicator graphs carry canonical Handle leaves."""
+        return TagUnion(*(criterion.resolve_references(resolver)
+                          for criterion in self.criteria))
+
+    @property
+    def references_authenticated(self) -> bool:
+        """Whether every leaf criterion crossed an authoritative resolver boundary."""
+        return all(getattr(criterion, "references_authenticated", False)
+                   for criterion in self.criteria)
 
 
 class RegridEvery(MeshDescriptor):
@@ -338,14 +435,25 @@ class AMROutput(MeshDescriptor):
 
     def __init__(self, fields: Any = (), levels: Any = None,
                  include_patch_boxes: Any = False) -> None:
-        self.fields = list(fields)
+        self.fields = tuple(
+            _require_value_handle(field, "AMROutput(fields=...)") for field in fields)
         self.levels = levels if levels is not None else AllLevels()
         self.include_patch_boxes = bool(include_patch_boxes)
 
     def options(self) -> dict:
         return {"n_fields": len(self.fields),
+                "fields": [_stable_handle_projection(field) for field in self.fields],
                 "levels": self.levels.options().get("levels"),
                 "include_patch_boxes": self.include_patch_boxes}
+
+    def resolve_references(self, resolver: Any) -> AMROutput:
+        """Return a detached output policy with canonical, authenticated field Handles."""
+        return AMROutput(
+            fields=tuple(_resolve_handle_reference(field, resolver, "AMROutput(fields=...)")
+                         for field in self.fields),
+            levels=self.levels,
+            include_patch_boxes=self.include_patch_boxes,
+        )
 
 
 class IgnoreAMRCriteria(MeshDescriptor):

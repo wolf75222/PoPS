@@ -13,7 +13,7 @@ The sub-packages form a directed acyclic dependency stack:
     moments   -> ir                              (Spec 5: moment-model toolkit)
     diagnostics -> linalg                        (Spec 5: Norm takes a typed norm kind)
     params / output / external -> (nothing)      (Spec 5: inert descriptors)
-    lib       -> ir, model, time, physics, moments, solvers
+    lib       -> ir, model, time, physics, moments, numerics
     codegen   -> ir, model, physics, time, lib, solvers   (lowering + solver-gen DSL; no _pops)
     runtime   -> everything, and is the ONLY layer allowed to import _pops
 
@@ -67,7 +67,9 @@ ALLOWED = {
     # solver-gen DSL is in codegen, not here. lib.presets (ADC-524) composes a lib.models model with
     # a lib.time scheme (same-layer, no edge) and must NOT reach up into codegen / runtime; the graph
     # keeps it inside these allowed lower layers.
-    "lib": {"ir", "model", "time", "physics", "moments"},
+    # Ready time presets compose the public P.rhs(terms=...) protocol from typed numerics terms;
+    # numerics is a descriptor-only sink, so this remains acyclic and keeps free selector tokens out.
+    "lib": {"ir", "model", "time", "physics", "moments", "numerics"},
     # codegen.solvers (the solver-gen DSL, criterion 19) imports pops.solvers at module scope to
     # attach the custom-solver registry hooks -> codegen -> solvers (solvers is a sink: acyclic).
     "codegen": {"ir", "model", "physics", "time", "lib", "solvers"},

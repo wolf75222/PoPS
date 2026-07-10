@@ -238,13 +238,15 @@ def test_compiled_inspect_amr_surfaces_the_carried_layout_by_default():
     from pops.mesh import CartesianMesh
     from pops.mesh.amr import Refine, RegridEvery
     from pops.mesh.layouts import AMR
+    from pops.model import Handle, OwnerPath
 
     cm = CompiledModel(
         so_path="<stub>", backend="aot", adder="add_native_block", cons_names=["rho"],
         cons_roles=["Density"], prim_names=["rho"], n_vars=1, gamma=None, n_aux=0, params={},
         caps={}, abi_key="k", model_hash="h", cxx="c++", std="23", target="amr_system")
+    rho = Handle("rho", kind="state", owner=OwnerPath.shared("amr-runtime-inspect"))
     carried = AMR(base=CartesianMesh(n=64), regrid=RegridEvery(4),
-                  refine=Refine.on("rho").above(0.1))
+                  refine=Refine.on(rho).above(0.1))
     cm._layout = carried  # what pops.codegen.orchestration._compile_amr attaches
 
     rep = cm.inspect_amr()

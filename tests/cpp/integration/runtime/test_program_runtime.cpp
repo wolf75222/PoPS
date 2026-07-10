@@ -92,6 +92,7 @@ TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsK
   System sim(cfg);
   add_gas(sim, gamma);
   sim.set_state("gas", U0);
+  sim.set_program_block_map({0});
 
   runtime::program::ProgramContext ctx(&sim);
   ctx.install([ctx](double h) {

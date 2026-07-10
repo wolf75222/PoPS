@@ -30,6 +30,7 @@ from pops.codegen.loader import CompiledModel  # noqa: E402
 from pops.mesh import CartesianMesh  # noqa: E402
 from pops.mesh.amr import Refine, RegridEvery  # noqa: E402
 from pops.mesh.layouts import AMR, Uniform  # noqa: E402
+from pops.model import Handle, OwnerPath  # noqa: E402
 from pops.physics.model import Param  # noqa: E402
 from pops.runtime.system import AmrSystem  # noqa: E402  (ADC-545 advanced runtime seam)
 
@@ -49,8 +50,9 @@ def _amr_route_handle():
         params={"alpha": Param("alpha", 1.0, kind="runtime")},
         caps={"cpu": True, "amr": True, "mpi": True}, abi_key="k", model_hash="h", cxx="c++",
         std="c++23", target="amr_system", aux_extra_names=["B_z"])
+    rho = Handle("rho", kind="state", owner=OwnerPath.shared("amr-introspection"))
     handle._layout = AMR(base=CartesianMesh(n=64, periodic=True), max_levels=2, ratio=2,
-                         regrid=RegridEvery(4), refine=Refine.on("rho").above(0.1))
+                         regrid=RegridEvery(4), refine=Refine.on(rho).above(0.1))
     return handle
 
 

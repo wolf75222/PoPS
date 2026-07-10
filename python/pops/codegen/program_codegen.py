@@ -29,6 +29,7 @@ are module-level constants in ``program_emit_kernels``, re-exported here.
 from __future__ import annotations
 
 from typing import Any
+from pops.time.references import block_name
 
 import json  # noqa: F401  (kept for any external reference to program_codegen.json)
 
@@ -93,6 +94,11 @@ from pops.codegen.program_emit_params import (  # noqa: F401
 )
 from pops.codegen.program_emit_amr import _emit_amr_install  # noqa: F401
 from pops.codegen.compile_emit import _emit_route_manifest  # noqa: F401 (ADC-599 embedded manifest)
+from pops.codegen.program_lowerability import (
+    all_ops as _all_ops,
+    check_model_owner_dispatch as _check_model_owner_dispatch,
+    check_schedules_lowerable as _check_schedules_lowerable,
+)
 from pops.time.program_space_resolution import resolve_program_spaces
 
 
@@ -121,16 +127,16 @@ def emit_cpp_program(program: Any, model: Any = None, target: str = "system") ->
     with ``axpy``; the committed combine writes the block state via ``lincomb``. Forward Euler,
     SSPRK2/SSPRK3 and RK4 all lower this way -- no per-scheme class.
 
-    Multi-block (ADC-426): N ``P.state(\"a\")`` / ``P.state(\"b\")`` declarations + N ``P.commit``
+    Multi-block (ADC-426): N typed ``T.state(block, U)`` declarations + N ``T.commit``
     are lowered -- each op routes to its own block's runtime index (``_block_indices``, in the order
-    the blocks are first declared via ``P.state``). The .so also exports its block NAMES in that
+    the blocks are first declared via ``T.state``). The .so also exports its block NAMES in that
     order (``pops_program_block_count`` / ``pops_program_block_name``); ``System::install_program``
     binds them to the instantiated System blocks BY NAME (Spec 3 criterion 23, ADC-457), so the
     System blocks (``sim.add_equation`` / ``sim.add_block``) may be added in ANY order -- a Program
     block whose name has no instantiated System block fails loud (``Program requires block instance
     '<name>', but simulation did not instantiate it``). A block declared but never committed is a
     READ-ONLY block (allowed; e.g. a passive field whose charge couples the others through the shared
-    Poisson). A commit of a block no ``P.state`` declares is rejected. A single-block Program lowers
+    Poisson). A commit of a block no ``T.state`` declares is rejected. A single-block Program lowers
     byte-identically (its one block is index 0; an order-matching multi-block Program too -- the
     name map is the identity).
 
@@ -155,7 +161,7 @@ def emit_cpp_program(program: Any, model: Any = None, target: str = "system") ->
     ``flux=False,sources=["default"]`` is the default source only, ``flux=False,sources=["s"]`` is
     just ``s`` -- the named ones never double-count the default (it is folded in iff "default" was
     listed). More than one block now lowers (ADC-426): each op routes to its block's runtime index
-    (``_block_indices``, in P.state declaration order) and control flow (while/range/if) inside a
+    (``_block_indices``, in T.state declaration order) and control flow (while/range/if) inside a
     block lowers per block; a SIMULTANEOUS multi-target coupled field solve
     (``solve_fields_from_blocks([Ua, Ub])``) lowers to ``ctx.solve_fields_from_blocks`` (see below).
 
@@ -198,18 +204,20 @@ def emit_cpp_program(program: Any, model: Any = None, target: str = "system") ->
 def _emit_block_names(program: Any) -> str:
     """C++ source of the NAME-based block-binding ABI the .so exports (Spec 3 criterion 23, ADC-457):
     ``pops_program_block_count()`` and ``pops_program_block_name(int)`` -- the Program's block names in
-    ``_block_indices`` order (P.state declaration order, the order the step body's ``ctx.state(idx)``
+    ``_block_indices`` order (T.state declaration order, the order the step body's ``ctx.state(idx)``
     addresses). System::install_program reads them, matches each to the instantiated System block of
     that name, and stores the program-index -> system-index map (read by ProgramContext), so the
-    System blocks may be added in ANY order vs the Program's P.state declarations -- a Program block
+    System blocks may be added in ANY order vs the Program's T.state declarations -- a Program block
     whose name has no System block fails loud. The block names are also part of the IR identity (the
-    block_order field of _serialize feeds the IR hash), so reordering P.state changes the hash."""
+    block_order field of _serialize feeds the IR hash), so reordering T.state changes the hash."""
     order = program._block_indices()  # name -> index, declaration order
     names = sorted(order, key=order.get)
-    cases = "".join('    case %d: return %s;\n' % (order[nm], json.dumps(nm)) for nm in names)
+    cases = "".join(
+        '    case %d: return %s;\n' % (order[block], json.dumps(block_name(block)))
+        for block in names)
     return (
         "// NAME-based block binding (Spec 3 criterion 23, ADC-457): the Program's block names in\n"
-        "// P.state declaration order. install_program matches each to a System block BY NAME (not\n"
+        "// T.state declaration order. install_program matches each to a System block BY NAME (not\n"
         "// add-order) and builds the program-index -> system-index map ProgramContext resolves.\n"
         'extern "C" int pops_program_block_count() { return %d; }\n' % len(names) +
         'extern "C" const char* pops_program_block_name(int i) {\n'
@@ -293,17 +301,20 @@ def _check_lowerable(program: Any, model: Any = None) -> None:
     naming the offending construct (never a silent mis-lowering). @p model: the physical model that
     declares the named sources / linear sources; required for the Phase-4b ops.
 
-    Multi-block (ADC-426): N ``P.state`` blocks + N ``P.commit`` are supported -- each op routes to
+    Multi-block (ADC-426): N ``T.state`` blocks + N ``T.commit`` are supported -- each op routes to
     its block's index (``_block_indices``). Validation: a block is committed AT MOST once (enforced
-    at ``commit`` time); a read-only block (declared via ``P.state`` but never committed) is allowed
+    at ``commit`` time); a read-only block (declared via ``T.state`` but never committed) is allowed
     (e.g. a passive field whose charge couples the others); a commit of a block that was never
-    declared by ``P.state`` is rejected (an unknown-block commit cannot route to an index)."""
+    declared by ``T.state`` is rejected (an unknown-block commit cannot route to an index)."""
+    _check_model_owner_dispatch(program, model)
     blocks = program._block_indices()
-    for b in program._commits:
-        if b not in blocks:
+    for state_ref in program._commits:
+        block = state_ref.block_ref
+        if block not in blocks:
             raise ValueError(
-                "commit of unknown block '%s': no P.state('%s') declares it (declared blocks: %s)"
-                % (b, b, sorted(blocks)))
+                "commit of unknown block %r: no T.state(block, U) declares it "
+                "(declared blocks: %s)"
+                % (block_name(block), sorted(block_name(item) for item in blocks)))
     _check_schedules_lowerable(program)
     for v in program._values:
         _check_op_lowerable(program, v, model)
@@ -317,45 +328,6 @@ def _check_lowerable(program: Any, model: Any = None) -> None:
             raise ValueError(
                 "local dense fallback currently supports n_cons <= 8 (got %d)" % n_cons)
 
-def _check_schedules_lowerable(program: Any) -> None:
-    """Gate the unified Program scheduler lowering (ADC-458, Spec 3 sections 17-18). EVERY kind/policy
-    now lowers (``_emit_schedule_wrap``) EXCEPT the two that need a runtime primitive the compiled
-    .so does not have, which still fail loud (never a silent no-op):
-
-      - ``on_end()``: a compiled ``sim.step(dt)`` loop carries no end-of-run signal, so the .so cannot
-        know which step is the last. (Use an on_end host hook instead.)
-      - ``when(cond)`` whose cond is a bare Python callable, not a Program Bool predicate: a callable
-        is not a Program value and cannot be lowered to C++.
-
-    The cadence RUNTIME (the cache cadence in a stepping .so) is exercised on ROMEO; the cache
-    MANAGER is unit-tested by tests/cpp/integration/runtime/test_cache_manager.cpp."""
-    for v in _all_ops(program):
-        sched = v.attrs.get("schedule")
-        if sched is None or sched.is_always():
-            continue
-        if not sched.so_lowerable():
-            raise NotImplementedError(
-                "schedule on_end() on node %r (op '%s') is not lowerable: a compiled sim.step(dt) "
-                "loop never sees an end-of-run signal, so the .so cannot know the last step. Use "
-                "on_start()/every()/when()/subcycle(), or an on_end host hook (ADC-458)."
-                % (v.name, v.op))
-        if sched.kind == "when":
-            cond = sched.params.get("cond")
-            if not (isinstance(cond, ProgramValue) and cond.vtype == "bool"):
-                raise NotImplementedError(
-                    "schedule when(cond) on node %r lowers only a Program Bool predicate (e.g. "
-                    "P.norm2(r) < tol), not a Python callable (ADC-458)." % v.name)
-        if sched.kind == "subcycle" and v.op not in _AUX_OUTPUT_OPS:
-            # subcycle re-runs the body COUNT times in a for-loop scope. A node whose output is a
-            # step-body scratch (rhs / source / linear_combine / ...) would declare that scratch
-            # INSIDE the loop, leaving it out of scope for any downstream consumer -- broken C++. Only
-            # an aux-output op (a field solve, which writes the persistent System aux) is well-defined
-            # under sub-cycling; a scratch sub-step has no single 'result' to consume. Fail loud.
-            raise NotImplementedError(
-                "schedule subcycle on node %r (op '%s') is lowerable only for a field solve (its "
-                "output is the persistent System aux); a scratch-output op sub-cycled has no single "
-                "result a downstream node can read (ADC-458). Sub-cycle the field solve, or express "
-                "the inner steps explicitly." % (v.name, v.op))
 
 # 'linear_source' is a pure NAME-reference SSA node (vtype 'operator'): it carries no runtime work
 # (consumed by apply / solve_local_linear, which read the model coefficients), so it lowers to
@@ -369,17 +341,6 @@ def _check_schedules_lowerable(program: Any) -> None:
 # scalar and do no per-step numerical work, so timing them only adds always-zero noise to
 # sim.profile_report(). Every other op that emits a statement is wrapped (rhs / solve_fields /
 # linear_combine / source / apply / reductions / loops / Schur kernels / ...).
-
-def _all_ops(program: Any) -> Any:
-    """Iterate over every op of the Program, descending into control-flow + apply sub-blocks (a flat
-    view used by the lowerability guards: the sub-block ops are not in program._values). Nested control
-    flow is disallowed, so the sub-blocks are flat (one level)."""
-    for v in program._values:
-        yield v
-        for key in ("cond_block", "body_block", "apply_block", "residual_block"):
-            blk = v.attrs.get(key)
-            if isinstance(blk, (list, tuple)):
-                yield from blk
 
 def _check_op_lowerable(program: Any, v: Any, model: Any) -> None:
     """Lowerability check for a single op (used for both the top-level walk and a while sub-block).
@@ -432,8 +393,10 @@ def _check_op_lowerable(program: Any, v: Any, model: Any) -> None:
         # channel. The runtime now hosts it (System::solve_fields_from_state(field, ...) via
         # ProgramContext); lowering needs the model so the field name can be validated against the
         # declared m.elliptic_field set (the codegen emits the named ctx call).
-        field = v.attrs.get("field")
-        if field is not None:
+        field_ref = v.attrs.get("field")
+        if field_ref is not None:
+            from pops.time.references import field_name
+            field = field_name(field_ref)
             if model is None:
                 raise NotImplementedError(
                     "emit_cpp_program cannot lower solve_fields with a named elliptic field "

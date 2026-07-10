@@ -1,4 +1,5 @@
 """Immutable JSON-tree helpers shared by model manifest value objects."""
+
 from __future__ import annotations
 
 import json
@@ -25,8 +26,12 @@ def freeze_json(value: Any, *, where: str = "manifest") -> Any:
         return tuple(freeze_json(item, where=where) for item in value)
     if isinstance(value, (set, frozenset)):
         items = [freeze_json(item, where=where) for item in value]
-        return tuple(sorted(items, key=lambda item: json.dumps(
-            thaw_json(item), sort_keys=True, separators=(",", ":"))))
+        return tuple(
+            sorted(
+                items,
+                key=lambda item: json.dumps(thaw_json(item), sort_keys=True, separators=(",", ":")),
+            )
+        )
     if isinstance(value, float):
         if not math.isfinite(value):
             raise ValueError("%s contains a non-finite float" % where)
@@ -37,8 +42,8 @@ def freeze_json(value: Any, *, where: str = "manifest") -> Any:
     if callable(hook):
         return freeze_json(hook(), where=where)
     raise TypeError(
-        "%s contains non-JSON value %r; implement to_data() on descriptor metadata"
-        % (where, value))
+        "%s contains non-JSON value %r; implement to_data() on descriptor metadata" % (where, value)
+    )
 
 
 def thaw_json(value: Any) -> Any:
@@ -62,4 +67,34 @@ def require_manifest_name(value: Any) -> None:
         raise ValueError("ModuleManifest name must be a non-empty string")
 
 
-__all__ = ["freeze_json", "require_manifest_id", "require_manifest_name", "thaw_json"]
+def strict_json_loads(text: Any) -> Any:
+    """Decode one manifest JSON document without JSON's permissive fallbacks.
+
+    Python's default decoder accepts duplicate object keys and the non-standard
+    ``NaN`` / ``Infinity`` constants.  Both would make a signed manifest
+    ambiguous, so the manifest protocol rejects them before schema validation.
+    """
+    if not isinstance(text, (str, bytes, bytearray)):
+        raise TypeError("manifest JSON must be str, bytes, or bytearray")
+
+    def _object(pairs: Any) -> dict[str, Any]:
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("manifest JSON contains duplicate object key %r" % key)
+            result[key] = value
+        return result
+
+    def _constant(value: str) -> Any:
+        raise ValueError("manifest JSON contains non-finite constant %s" % value)
+
+    return json.loads(text, object_pairs_hook=_object, parse_constant=_constant)
+
+
+__all__ = [
+    "freeze_json",
+    "require_manifest_id",
+    "require_manifest_name",
+    "strict_json_loads",
+    "thaw_json",
+]

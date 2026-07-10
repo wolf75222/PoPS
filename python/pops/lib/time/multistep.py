@@ -8,13 +8,22 @@ from __future__ import annotations
 from fractions import Fraction
 from typing import Any
 
-from ._helpers import _operator_handle, _stage_rhs, program_macro
+from ._helpers import (
+    _DEFAULT_SOURCES, _block_label, _commit, _operator_handle, _source_names, _stage_rhs,
+    _time_state, _typed_rhs, program_macro,
+)
 from .euler import forward_euler as _forward_euler_macro
 
 
-def _forward_euler(P: Any, block: Any, sources: Any, flux: Any) -> None:
+def _forward_euler(P: Any, temporal: Any, sources: Any, flux: Any) -> None:
     # AB1 degenerates to Forward Euler; reuse the local euler macro for byte-identical IR.
-    _forward_euler_macro(P, block, sources=sources, flux=flux)
+    _forward_euler_macro(P, temporal, sources=sources, flux=flux)
+
+
+def _history(P: Any, name: Any, lag: Any, temporal: Any, space: Any) -> Any:
+    """Read one typed full-state/rate history slot for a preset."""
+    return P.history(
+        name, lag=lag, space=space, block=temporal.block, state_ref=temporal.state)
 
 
 # Adams-Bashforth weights b_j on R_{n-j} (j = 0..order-1), per order (ADC-423). AB1 is Forward Euler.
@@ -26,7 +35,8 @@ _AB_WEIGHTS = {
 
 
 @program_macro
-def adams_bashforth(P: Any, block: Any, order: Any, *, sources: Any = ("default",),
+def adams_bashforth(P: Any, block: Any, state: Any = None, order: Any = None, *,
+                    sources: Any = _DEFAULT_SOURCES,
                     flux: Any = True) -> Any:
     """Adams-Bashforth, explicit ``order``-step, over the System-owned history ring (ADC-406a / ADC-423):
 
@@ -48,35 +58,38 @@ def adams_bashforth(P: Any, block: Any, order: Any, *, sources: Any = ("default"
 
     AB1 keeps Forward Euler's exact IR (no history op); AB2 keeps the historical ``"ab2_step"`` combine
     so a pre-ADC-423 AB2 program's ``.so`` cache key is byte-identical."""
+    temporal = _time_state(P, block, state)
+    label = _block_label(temporal)
     if isinstance(order, bool) or not isinstance(order, int) or order not in _AB_WEIGHTS:
         raise ValueError("adams_bashforth: order must be an int in %s (got %r)"
                          % (sorted(_AB_WEIGHTS), order))
     b = _AB_WEIGHTS[order]
     if order == 1:  # AB1 == Forward Euler: no history, identical IR to forward_euler.
-        _forward_euler(P, block, sources, flux)
+        _forward_euler(P, temporal, sources, flux)
         return
-    name = block + ".R"
+    name = label + ".R"
     step_name = "ab2_step" if order == 2 else ("ab%d_step" % order)
-    U = P.state(block)
+    U = temporal.n
     R_n = _stage_rhs(P, U, sources, flux)
     # Store R_n FIRST (so the first store cold-start-fills the ring), then read R_{n-j} = lag j.
     P.store_history(name, R_n)
     expr = U + (P.dt * b[0]) * R_n
     for j in range(1, order):
-        expr = expr + (P.dt * b[j]) * P.history(name, lag=j)
-    P._commit_block(block, P.linear_combine(step_name, expr))
+        expr = expr + (P.dt * b[j]) * _history(P, name, j, temporal, R_n.space)
+    _commit(P, temporal, P.linear_combine(step_name, expr))
 
 
 @program_macro
-def adams_bashforth2(P: Any, block: Any, *, sources: Any = ("default",), flux: Any = True) -> Any:
+def adams_bashforth2(P: Any, block: Any, state: Any = None, *,
+                     sources: Any = _DEFAULT_SOURCES, flux: Any = True) -> Any:
     """Adams-Bashforth 2, a thin back-compat alias for ``adams_bashforth(P, block, 2)`` (ADC-423).
 
     Kept so existing callers and the historical ``"ab2_step"`` IR are unchanged: this lowers to the
     SAME IR as before (R_n stored first, R_{n-1} read at lag 1, weights 3/2 / -1/2)."""
-    adams_bashforth(P, block, 2, sources=sources, flux=flux)
+    adams_bashforth(P, block, state, order=2, sources=sources, flux=flux)
 
 
-def _bdf_local_linear(P: Any, block: Any, order: Any, linear_source: Any, sources: Any,
+def _bdf_local_linear(P: Any, temporal: Any, order: Any, linear_source: Any, sources: Any,
                       flux: Any) -> Any:
     """The cell-LOCAL linear-source BDF fast path (the historical lowering): the BDF system is
     block-diagonal, so ``(c0*I - dt*L) U^{n+1} = rhs`` is solved per cell by `P.solve_local_linear`.
@@ -84,36 +97,39 @@ def _bdf_local_linear(P: Any, block: Any, order: Any, linear_source: Any, source
       - **BDF1** (backward Euler): ``(I - dt*L) U^{n+1} = U^n [+ dt R]``;
       - **BDF2**: ``(I - (2/3) dt L) U^{n+1} = (2/3)(2 U^n - 1/2 U^{n-1}) [+ dt R]`` over the System
         history ring, with a BDF1 cold start (the first store fills every slot -> U^{n-1} = U^n)."""
-    U = P.state(block)
+    label = _block_label(temporal)
+    U = temporal.n
     fields = P.solve_fields(U) if flux else None
     # Optional EXPLICIT flux/source RHS folded into the BDF right-hand side (lagged at U^n).
-    R = (P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
+    R = (_typed_rhs(P, U, fields=fields, sources=sources, flux=flux)
          if (flux or sources) else None)
 
     def _with_explicit(expr: Any) -> Any:
         return (expr + P.dt * R) if R is not None else expr
 
     if order == 1:  # (I - dt*L) U^{n+1} = U^n [+ dt R]
-        rhs = P.linear_combine(block + "_bdf1_rhs", _with_explicit(1 * U))
+        rhs = P.linear_combine(label + "_bdf1_rhs", _with_explicit(1 * U))
         operator = P.I - P.dt * P.linear_source(linear_source)
-        out = P.solve_local_linear(name=block + "_bdf1_step", operator=operator, rhs=rhs, fields=fields)
-        P._commit_block(block, out)
+        out = P.solve_local_linear(
+            name=label + "_bdf1_step", operator=operator, rhs=rhs, fields=fields)
+        _commit(P, temporal, out)
         return out
     # BDF2: (3/2 I - dt*L) U^{n+1} = 2 U^n - 1/2 U^{n-1} [+ dt R], over the history ring.
-    name = block + ".U"
+    name = label + ".U"
     P.store_history(name, U)                       # store U^n first (cold-start fills the ring)
-    U_nm1 = P.history(name, lag=1)                 # U^{n-1} (== U^n on step 0 -> BDF1 cold start)
+    U_nm1 = _history(P, name, 1, temporal, U.space)
     rhs = P.linear_combine(
-        block + "_bdf2_rhs", _with_explicit(2 * U - Fraction(1, 2) * U_nm1))
+        label + "_bdf2_rhs", _with_explicit(2 * U - Fraction(1, 2) * U_nm1))
     operator = P.I - (P.dt * Fraction(2, 3)) * P.linear_source(linear_source)
     # Divide both sides by 3/2: (I - (2/3) dt L) U^{n+1} = (2/3)(2 U^n - 1/2 U^{n-1} [+ dt R]).
-    rhs = P.linear_combine(block + "_bdf2_rhs_scaled", Fraction(2, 3) * rhs)
-    out = P.solve_local_linear(name=block + "_bdf2_step", operator=operator, rhs=rhs, fields=fields)
-    P._commit_block(block, out)
+    rhs = P.linear_combine(label + "_bdf2_rhs_scaled", Fraction(2, 3) * rhs)
+    out = P.solve_local_linear(
+        name=label + "_bdf2_step", operator=operator, rhs=rhs, fields=fields)
+    _commit(P, temporal, out)
     return out
 
 
-def _bdf_implicit_flux(P: Any, block: Any, order: Any, sources: Any, flux: Any, ncomp: Any,
+def _bdf_implicit_flux(P: Any, temporal: Any, order: Any, sources: Any, flux: Any, ncomp: Any,
                        newton_max: Any, krylov_tol: Any,
                        krylov_max: Any, krylov_restart: Any, eps: Any) -> Any:
     """The IMPLICIT-FLUX BDF lowering (ADC-431): a matrix-free Newton-Krylov solve of the coupled
@@ -145,16 +161,17 @@ def _bdf_implicit_flux(P: Any, block: Any, order: Any, sources: Any, flux: Any, 
     ``sim.program_diagnostic``). @p ncomp is the block component count (1 by default -- a scalar model
     like inviscid Burgers / linear advection; pass the model's n_cons for a multi-component block)."""
     c = 1 if order == 1 else Fraction(2, 3)
-    U0 = P.state(block)
+    label = _block_label(temporal)
+    U0 = temporal.n
     # Snapshot U^n into a scratch: the commit writes this block's runtime state IN PLACE at the very
     # end, so the lagged term must read this frozen copy (not the live state) -- otherwise the post-commit residual
     # diagnostic would read U^{n+1} as U^n. The Newton-loop residuals (before the commit) would be correct
     # either way; the snapshot keeps every residual (loop + diagnostic) reading the true U^n.
-    Un = P.linear_combine(block + "_bdf_Un", 1 * U0)
+    Un = P.linear_combine(label + "_bdf_Un", 1 * U0)
     if order == 2:
-        name = block + ".U"
+        name = label + ".U"
         P.store_history(name, U0)                   # store U^n (cold-start fills the ring)
-        U_nm1 = P.history(name, lag=1)              # U^{n-1} (== U^n on step 0 -> BDF1 cold start)
+        U_nm1 = _history(P, name, 1, temporal, U0.space)
 
     def _un_terms() -> Any:
         # The lagged (constant-in-Newton) part of the residual: U^n for BDF1, (4/3)U^n - (1/3)U^{n-1}
@@ -179,7 +196,7 @@ def _bdf_implicit_flux(P: Any, block: Any, order: Any, sources: Any, flux: Any, 
         return Fk, Rk
 
     def _newton_step(P: Any, Uk: Any, k: Any) -> Any:
-        tag = "%s_bdf%d_n%d" % (block, order, k)
+        tag = "%s_bdf%d_n%d" % (label, order, k)
         Fk, Rk = _residual(P, Uk, tag)
         negF = P.linear_combine("%s_negF" % tag, -1 * Fk)
         A = P.matrix_free_operator("%s_J" % tag, domain=kind, range_=kind,
@@ -202,15 +219,16 @@ def _bdf_implicit_flux(P: Any, block: Any, order: Any, sources: Any, flux: Any, 
     for k in range(newton_max):
         Uk = _newton_step(P, Uk, k)
     # Record the final residual norm for diagnostics (sim.program_diagnostic("<block>.bdf_residual")).
-    Ffinal, _ = _residual(P, Uk, "%s_bdf%d_final" % (block, order))
-    P.record_scalar(block + ".bdf_residual", P.norm2(Ffinal))
-    P._commit_block(block, Uk)
+    Ffinal, _ = _residual(P, Uk, "%s_bdf%d_final" % (label, order))
+    P.record_scalar(label + ".bdf_residual", P.norm2(Ffinal))
+    _commit(P, temporal, Uk)
     return Uk
 
 
 @program_macro
-def bdf(P: Any, block: Any, order: Any, *, linear_source: Any = None,
-        sources: Any = ("default",), flux: Any = True, ncomp: Any = 1,
+def bdf(P: Any, block: Any, state: Any = None, order: Any = None, *,
+        linear_source: Any = None,
+        sources: Any = _DEFAULT_SOURCES, flux: Any = True, ncomp: Any = 1,
         newton_max: Any = 20, krylov_tol: Any = 1e-10,
         krylov_max: Any = 200, krylov_restart: Any = None, eps: Any = 1e-7) -> Any:
     """Backward Differentiation Formula, IMPLICIT ``order``-step (ADC-423 / ADC-431).
@@ -244,21 +262,22 @@ def bdf(P: Any, block: Any, order: Any, *, linear_source: Any = None,
     The implicit-flux Jacobian currently linearizes only the default flux with either its default source
     (``sources=None`` / ``["default"]``) or no source (``sources=[]``); named source terms are rejected
     until the matrix-free apply can emit their perturbed-state kernels."""
+    temporal = _time_state(P, block, state)
     if isinstance(order, bool) or not isinstance(order, int) or order not in (1, 2):
         raise ValueError("bdf: order must be the int 1 or 2 (got %r)" % (order,))
     if linear_source is not None:
         # ADC-532: linear_source is a typed OperatorHandle (m.linear_source / m.local_linear_map),
         # not a name string. _bdf_local_linear passes it to P.linear_source, which accepts a handle.
         linear_source = _operator_handle(linear_source, "linear_source")
-        return _bdf_local_linear(P, block, order, linear_source, sources, flux)
+        return _bdf_local_linear(P, temporal, order, linear_source, sources, flux)
     # The implicit-flux Newton-Krylov path (ADC-431): a flux-less BDF with no implicit term is a no-op.
     if not flux:
         raise ValueError(
             "bdf with flux=False needs a cell-local implicit linear_source (there is no implicit term to "
             "solve); pass linear_source=<m.linear_source handle> for the relaxation BDF, or flux=True "
             "for the implicit-flux Newton-Krylov BDF")
-    implicit_sources = list(sources) if sources is not None else None
-    named_sources = [source for source in (implicit_sources or ()) if source != "default"]
+    implicit_sources = _source_names(P, temporal.n, sources)
+    named_sources = [source for source in implicit_sources if source != "default"]
     if named_sources:
         raise NotImplementedError(
             "bdf implicit-flux Jacobian cannot linearize named sources %r yet; use sources=[] for "
@@ -269,5 +288,5 @@ def bdf(P: Any, block: Any, order: Any, *, linear_source: Any = None,
                          % (ncomp,))
     if isinstance(newton_max, bool) or not isinstance(newton_max, int) or newton_max < 1:
         raise ValueError("bdf: newton_max must be a positive int (got %r)" % (newton_max,))
-    return _bdf_implicit_flux(P, block, order, implicit_sources, flux, ncomp, newton_max,
+    return _bdf_implicit_flux(P, temporal, order, implicit_sources, flux, ncomp, newton_max,
                               krylov_tol, krylov_max, krylov_restart, eps)

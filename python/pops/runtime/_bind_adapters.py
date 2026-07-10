@@ -294,10 +294,24 @@ def _apply_refine_criterion(sim: Any, criterion: Any, is_multiblock: bool = Fals
         raise TypeError(
             "pops.bind: AMR refine criterion must be a pops.mesh.amr.Refine / TagUnion (got %r)"
             % type(criterion).__name__)
+    if not getattr(criterion, "references_authenticated", False):
+        raise ValueError(
+            "pops.bind: Refine criterion references were not authenticated by Problem.resolve; "
+            "run it through pops.compile(problem, layout=...) instead of attaching a raw or "
+            "canonical-looking Handle directly to a compiled/runtime layout")
     threshold = criterion.threshold
     if threshold is None:
         raise ValueError("pops.bind: Refine criterion has no threshold "
                          "(use Refine.on(subject).above(value))")
+    from pops.model import Handle
+    if not isinstance(criterion.subject, Handle):
+        raise NotImplementedError(
+            "pops.bind: [amr:expression_indicator unavailable] Refine subject %s is a semantic "
+            "indicator expression. Its Handle leaves were validated and resolved at compile, but "
+            "the current native AMR runtime only lowers direct declaration Handle selectors and "
+            "the dedicated potential-gradient predicate. Add the expression-indicator backend "
+            "capability before running this criterion; it is never flattened to a variable name."
+            % type(criterion.subject).__name__)
     subject = _refine_subject_name(criterion.subject)
     # The potential-gradient tag (|grad phi| > threshold) is the AMR-specific ring-edge criterion.
     if criterion.predicate == "gradient_above" and subject in ("phi", "grad phi", "potential"):
@@ -323,11 +337,18 @@ def _apply_refine_criterion(sim: Any, criterion: Any, is_multiblock: bool = Fals
 
 
 def _refine_subject_name(subject: Any) -> Any:
-    """The plain string name of a Refine subject (a string, or an object carrying ``.name``)."""
-    if isinstance(subject, str):
-        return subject
-    name = getattr(subject, "name", None)
-    return name if isinstance(name, str) else None
+    """Lower one canonical Handle to the native variable token at the runtime boundary."""
+    from pops.model import Handle
+
+    if not isinstance(subject, Handle):
+        raise TypeError(
+            "pops.bind: Refine subject must be a resolved pops.model.Handle, got %r; strings "
+            "are not declaration identities" % type(subject).__name__)
+    if not subject.is_resolved:
+        raise ValueError(
+            "pops.bind: Refine subject %s is still authoring-owned; compile must resolve every "
+            "reference through Problem.resolve before runtime lowering" % subject.qualified_id)
+    return subject.local_id
 
 
 def _is_default_density_subject(subject: Any) -> Any:

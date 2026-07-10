@@ -8,43 +8,49 @@ from fractions import Fraction
 from typing import Any
 
 from ._helpers import (
-    _exact_coefficient, _exact_product, _exact_reciprocal, _operator_handle, program_macro,
+    _block_label, _commit, _exact_coefficient, _exact_product, _exact_reciprocal,
+    _operator_handle, _time_state, program_macro,
 )
 
 
 @program_macro
-def strang(P: Any, block: Any, half_flow: Any, source: Any, *, commit: Any = True) -> Any:
+def strang(P: Any, block: Any, state: Any = None, *, half_flow: Any, source: Any,
+           commit: Any = True) -> Any:
     """Strang splitting macro H(dt/2); S(dt); H(dt/2), the macro form of pops.Strang (lowers to the SAME
     IR, no special class). @p half_flow and @p source are IR-building callables (prog, state, frac) ->
     state that advance the hyperbolic flow and the source by a fraction @p frac of dt. Returns the final
     state (committed when @p commit)."""
-    U = P.state(block)
+    temporal = _time_state(P, block, state)
+    U = temporal.n
     U1 = half_flow(P, U, Fraction(1, 2))
     U2 = source(P, U1, 1)
     U3 = half_flow(P, U2, Fraction(1, 2))
     if commit:
-        P._commit_block(block, U3)
+        _commit(P, temporal, U3)
     return U3
 
 
 @program_macro
-def lie(P: Any, block: Any, half_flow: Any, source: Any, *, commit: Any = True) -> Any:
+def lie(P: Any, block: Any, state: Any = None, *, half_flow: Any, source: Any,
+        commit: Any = True) -> Any:
     """Lie (Godunov) splitting macro H(dt); S(dt) -- the sequential first-order sibling of `strang`
     (ADC-423). @p half_flow and @p source are the SAME IR-building callables `strang` takes
     ``(prog, state, frac) -> state`` (each advances its sub-flow by a fraction @p frac of dt); Lie
     just composes them sequentially over the FULL step (H over dt, then S over dt) with no half-steps.
     Lowers to the SAME IR primitives as `strang` (no scheme-specific class). Returns the final state
     (committed when @p commit)."""
-    U = P.state(block)
+    temporal = _time_state(P, block, state)
+    U = temporal.n
     U1 = half_flow(P, U, 1)
     U2 = source(P, U1, 1)
     if commit:
-        P._commit_block(block, U2)
+        _commit(P, temporal, U2)
     return U2
 
 
 @program_macro
-def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1, c_rho: Any = 0,
+def condensed_schur(P: Any, block: Any, state: Any = None, *,
+                    alpha: Any, theta: Any = 1, c_rho: Any = 0,
                     c_mx: Any = 1, c_my: Any = 2, c_E: Any = None,
                     method: Any = None, tol: Any = 1e-10, max_iter: Any = 400,
                     linear_operator: Any, commit: Any = True) -> Any:
@@ -116,7 +122,9 @@ def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1, c_rho: An
         raise ValueError("condensed_schur: c_E must be None or a Python int >= 0 (got %r)" % (c_E,))
     linear_operator = _operator_handle(linear_operator, "linear_operator")
     subset = (c_mx, c_my)  # the coupled momentum block the condensed solve eliminates (2D core invariant)
-    U = P.state(block)
+    temporal = _time_state(P, block, state)
+    label = _block_label(temporal)
+    U = temporal.n
     P.solve_fields(U)  # fill the shared aux (B_z at component 3) from the current state, like the native stage
     # phi^n. theta == 1 (the sanctioned backward-Euler push) keeps a fresh ZERO scalar field each step:
     # the -Lap(phi^n) RHS term vanishes and the solve warm starts from zero, so the historical IR /
@@ -126,9 +134,9 @@ def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1, c_rho: An
     # cold-start fill seeds phi^n = 0 at step 0, so the FIRST theta<1 step still matches native.
     carry = theta != 1
     if carry:
-        phi_n = P.history(block + ".schur_phi", lag=1, ncomp=1)  # scalar read; cold-start = 0
+        phi_n = P.history(label + ".schur_phi", lag=1, ncomp=1)  # scalar read; cold-start = 0
     else:
-        phi_n = P.scalar_field(block + ".schur_phi_n")           # UNCHANGED: fresh zero each step
+        phi_n = P.scalar_field(label + ".schur_phi_n")           # UNCHANGED: fresh zero each step
     theta_alpha = _exact_product(theta, alpha, where="condensed_schur: theta * alpha")
     c_coeff = _exact_product(
         theta, theta_alpha, where="condensed_schur: theta^2 * alpha") * P.dt * P.dt
@@ -138,9 +146,9 @@ def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1, c_rho: An
     # aux, emitted inline via the closed-form block_inverse intrinsic with no Schur vocabulary.
     coeffs = P.condensed_coeffs(state=U, linear_operator=linear_operator, subset=subset,
                                 c=c_coeff, th_dt=th_dt, c_rho=c_rho)
-    rhs = P.scalar_field(block + ".schur_rhs")
+    rhs = P.scalar_field(label + ".schur_rhs")
     P.condensed_rhs(rhs, phi_n, U, linear_operator=linear_operator, subset=subset, th_dt=th_dt, g=g)
-    A = P.matrix_free_operator(block + ".schur_op")
+    A = P.matrix_free_operator(label + ".schur_op")
 
     def apply(P: Any, out: Any, x: Any) -> Any:  # out <- A(x) = -div((I + c rho M^{-1}) grad x) = -apply_laplacian_coeff(x)
         lap = P.scalar_field("schur_lap")
@@ -163,7 +171,7 @@ def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1, c_rho: An
     # IR byte-identical (reconstruct directly on U). For theta < 1 OR an energy update we need U^n
     # (mom^n / E^n) AFTER the reconstruction, so reconstruct on a fresh COPY of U^n and keep U^n intact.
     needs_un = theta != 1 or c_E is not None
-    target = P.linear_combine(block + ".schur_un_copy", 1 * U) if needs_un else U
+    target = P.linear_combine(label + ".schur_un_copy", 1 * U) if needs_un else U
     out = P.condensed_reconstruct(state=target, phi=phi, linear_operator=linear_operator,
                                   subset=subset, th_dt=th_dt, c_rho=c_rho)
     # 5) theta-stage -> n+1 extrapolation (ADC-427). theta < 1 lowers U^n + (1/theta)(U^{n+theta} - U^n)
@@ -171,7 +179,7 @@ def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1, c_rho: An
     # frozen by the reconstruction, so this affine leaves rho (and the not-yet-written energy) at U^n.
     if theta != 1:
         inv_theta = _exact_reciprocal(theta, "condensed_schur: theta")
-        out = P.linear_combine(block + ".schur_extrap", U + inv_theta * (out - U))
+        out = P.linear_combine(label + ".schur_extrap", U + inv_theta * (out - U))
     # 6) energy role (ADC-427). E^{n+1} = E^n + (1/2)rho(|v^{n+1}|^2 - |v^n|^2): the kinetic-energy
     # increment from v^n (= mom^n/rho, read from U^n) to v^{n+1} (= mom^{n+1}/rho, in `out`). Skipped
     # for an isothermal rho/mx/my block (c_E is None). Emitted generically (no Schur kernel).
@@ -184,8 +192,8 @@ def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1, c_rho: An
     # here is gated by `carry`, so theta == 1 emits none of it and stays byte-identical.
     if carry:
         inv_theta = _exact_reciprocal(theta, "condensed_schur: theta")
-        phi_np1 = P.linear_combine(block + ".schur_phi_np1", phi_n + inv_theta * (phi - phi_n))
-        P.store_history(block + ".schur_phi", phi_np1)  # rotated to lag 1 for the next step
+        phi_np1 = P.linear_combine(label + ".schur_phi_np1", phi_n + inv_theta * (phi - phi_n))
+        P.store_history(label + ".schur_phi", phi_np1)  # rotated to lag 1 for the next step
     if commit:
-        P._commit_block(block, out)
+        _commit(P, temporal, out)
     return out

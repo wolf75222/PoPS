@@ -16,33 +16,10 @@ from typing import Any
 from pops.descriptors import Availability, Descriptor, reject_string_selector
 from pops.math import Equation
 
+from ._references import collect_references, reference_label, resolve_handle, resolve_value
+from ._solver_lowering import lower_field_solver
+from ._validation_context import context_flag, context_is_amr_layout, context_value
 from .policies import FieldSolvePolicy
-
-# The legacy elliptic-solver tokens the board facade still accepts, lowered to the typed
-# descriptor factory name so the string is turned into a real descriptor before it reaches the
-# FieldProblem constructor (which rejects a bare string). Spec 5 sec.7: strings are not a public
-# API, but the board shortcut lowers them here rather than propagating an untyped selector.
-_LEGACY_SOLVER_TOKENS = {"geometric_mg": "GeometricMG", "fft": "FFT", "fft_spectral": "FFT"}
-
-
-def lower_field_solver(solver: Any) -> Any:
-    """Lower a legacy string solver token to its typed elliptic descriptor (Spec 5 sec.7).
-
-    A descriptor / ``None`` passes through unchanged. A recognised legacy token
-    (``"geometric_mg"`` / ``"fft"`` / ``"fft_spectral"``) is turned into the matching typed
-    :mod:`pops.solvers.elliptic` descriptor (``fft_spectral`` -> ``FFT(spectral=True)``). An
-    unrecognised string is rejected, naming the typed factory. The board facade calls this so its
-    string shortcut yields a typed solver instead of propagating an untyped selector.
-    """
-    if not isinstance(solver, str):
-        return solver
-    factory = _LEGACY_SOLVER_TOKENS.get(solver)
-    if factory is None:
-        reject_string_selector(solver, "solver", "pops.solvers.GeometricMG() / pops.solvers.FFT()")
-    from pops.solvers.elliptic import FFT, GeometricMG  # lazy: fields must not import solvers.
-    if factory == "FFT":
-        return FFT(spectral=(solver == "fft_spectral"))
-    return GeometricMG()
 
 
 def _summarize(side: Any, limit: Any = 60) -> str:
@@ -107,7 +84,13 @@ class FieldProblem(Descriptor):
         self._name = None if name is None else str(name)
         self.unknown = unknown
         self.equation = equation
+        from pops.model import Handle
         self.inputs = tuple(inputs)
+        invalid_inputs = [item for item in self.inputs if not isinstance(item, Handle)]
+        if invalid_inputs:
+            raise TypeError(
+                "FieldProblem inputs must be declaration Handle values; names/strings are not "
+                "references (got %r)" % type(invalid_inputs[0]).__name__)
         self.coefficients = coefficients
         self.bcs = tuple(bcs)
         self.nullspace = nullspace
@@ -130,6 +113,9 @@ class FieldProblem(Descriptor):
         return self._name if self._name is not None else type(self).__name__
 
     def options(self) -> dict:
+        references = [
+            reference_label(reference, where="FieldProblem reference")
+            for reference in self.declaration_references()]
         return {"name": self._name,
                 "unknown": getattr(self.unknown, "name", repr(self.unknown))
                 if self.unknown is not None else None,
@@ -138,11 +124,17 @@ class FieldProblem(Descriptor):
                 "has_coefficients": self.coefficients is not None,
                 "has_nullspace": self.nullspace is not None,
                 "solver": getattr(self.solver, "name", self.solver),
-                "has_cadence": self.cadence is not None}
+                "has_cadence": self.cadence is not None,
+                "references": references}
 
     def requirements(self) -> Any:
         from pops.descriptors_report import RequirementSet
         req: dict = {"equation": True, "solver": True}
+        references = [
+            reference_label(reference, where="FieldProblem reference")
+            for reference in self.declaration_references()]
+        if references:
+            req["declaration_references"] = references
         if self.nullspace is not None:
             req["nullspace"] = getattr(self.nullspace, "name", repr(self.nullspace))
         return RequirementSet(req)
@@ -177,8 +169,82 @@ class FieldProblem(Descriptor):
         self._require_periodic_compatible_solver()
         self._require_layout_compatible_solver(context)
         self._require_declared_nullspace(context)
+        self._require_owned_references(context)
         self._require_declared_outputs(context)
         return True
+
+    def resolve_references(self, resolver: Any) -> FieldProblem:
+        """Return a detached field problem with every declaration reference authenticated."""
+        from copy import copy
+        from pops.model import Handle
+
+        resolved = copy(self)
+        if isinstance(self.unknown, Handle):
+            resolved.unknown = resolve_handle(
+                self.unknown, resolver, where="FieldProblem unknown")
+        resolved.inputs = tuple(
+            resolve_handle(reference, resolver, where="FieldProblem inputs[%d]" % index)
+            for index, reference in enumerate(self.inputs))
+        resolved.coefficients = resolve_value(
+            self.coefficients, resolver, where="FieldProblem coefficients")
+        resolved.outputs = resolve_value(
+            self.outputs, resolver, where="FieldProblem outputs")
+        resolved.postprocess = resolve_value(
+            self.postprocess, resolver, where="FieldProblem postprocess")
+        resolved.equation = self._resolved_equation(resolver)
+        return resolved
+
+    def declaration_references(self) -> tuple[Any, ...]:
+        values = (
+            self.unknown,
+            self.inputs,
+            self.coefficients,
+            getattr(self.equation, "lhs", None),
+            getattr(self.equation, "rhs", None),
+            self.outputs,
+            self.postprocess,
+        )
+        return collect_references(values)
+
+    def _resolved_equation(self, resolver: Any) -> Any:
+        if not isinstance(self.equation, Equation):
+            return self.equation
+
+        def side(value: Any, where: str) -> Any:
+            from pops.ir import Expr
+            from pops.model import Handle
+
+            if isinstance(value, Handle):
+                return resolve_handle(value, resolver, where=where)
+            if isinstance(value, Expr):
+                references = value.declaration_references()
+                return value.resolve_references(resolver) if references else value
+            protocol = getattr(value, "resolve_references", None)
+            return protocol(resolver) if callable(protocol) else value
+
+        return Equation(
+            side(self.equation.lhs, "FieldProblem equation.lhs"),
+            side(self.equation.rhs, "FieldProblem equation.rhs"),
+        )
+
+    def _require_owned_references(self, context: Any) -> None:
+        """Authenticate every retained declaration without mutating this authoring descriptor."""
+        resolver = context_value(context, "declaration_resolver")
+        if callable(resolver):
+            self.resolve_references(resolver)
+
+        outputs = self.outputs
+        output_items = (outputs.values() if isinstance(outputs, dict)
+                        else outputs if isinstance(outputs, (list, tuple, set))
+                        else () if outputs is None else (outputs,))
+        seen = set()
+        for output in output_items:
+            name = getattr(output, "name", None)
+            if name is not None:
+                if name in seen:
+                    raise ValueError(
+                        "%s: duplicate field output declaration %r" % (self.name, name))
+                seen.add(name)
 
     def _require_declared_nullspace(self, context: Any) -> None:
         """Refuse a singular field solve that declares no nullspace (Spec 5 sec.7, criterion 11).
@@ -190,7 +256,7 @@ class FieldProblem(Descriptor):
         refuse before the runtime hits an inconsistent system. Opt-in via the context flag, so a
         problem whose singularity is not known is never falsely rejected.
         """
-        if not self._context_flag(context, "requires_nullspace"):
+        if not context_flag(context, "requires_nullspace"):
             return
         if self.nullspace is None:
             raise ValueError(
@@ -206,7 +272,7 @@ class FieldProblem(Descriptor):
         refuse with the missing name so the gap is caught before a stage reads a field that was
         never produced. Opt-in via the context flag (no false positive on an unspecified context).
         """
-        required = self._context_value(context, "required_outputs")
+        required = context_value(context, "required_outputs")
         if not required:
             return
         produced = self._declared_output_names()
@@ -227,47 +293,11 @@ class FieldProblem(Descriptor):
         for item in items:
             name = getattr(item, "name", None)
             if name is not None:
+                if name in names:
+                    raise ValueError(
+                        "%s: duplicate field output declaration %r" % (self.name, name))
                 names.add(name)
         return names
-
-    @staticmethod
-    def _context_flag(context: Any, key: Any) -> bool:
-        """True when @p context (a dict or attribute-bearing object) sets @p key truthy."""
-        return bool(FieldProblem._context_value(context, key))
-
-    @staticmethod
-    def _context_value(context: Any, key: Any) -> Any:
-        """The value @p context carries under @p key (dict or attribute), or ``None``."""
-        if context is None:
-            return None
-        if isinstance(context, dict):
-            return context.get(key)
-        return getattr(context, key, None)
-
-    @staticmethod
-    def _context_is_amr_layout(context: Any) -> bool:
-        """True when @p context names an AMR mesh layout (duck-typed; no mesh import).
-
-        ``Problem.validate`` passes the layout under the ``"layout"`` key; a layout advertises its
-        kind through ``capabilities()["layout"]`` (``"amr"`` / ``"uniform"``), so AMR is detected
-        without importing :mod:`pops.mesh` into the fields layer. Defensive: a context with no
-        layout, or a layout whose ``capabilities`` is absent / non-callable / raises, is "not AMR".
-        """
-        if context is None:
-            return False
-        layout = context.get("layout") if isinstance(context, dict) else getattr(context, "layout",
-                                                                                 None)
-        if layout is None:
-            layout = context  # the context may itself be the layout descriptor
-        caps = getattr(layout, "capabilities", None)
-        if not callable(caps):
-            return False
-        try:
-            declared: Any = caps()
-        except Exception:
-            return False
-        # ``declared`` is a typed CapabilitySet (or a plain dict): both expose ``.get`` (ADC-625).
-        return hasattr(declared, "get") and declared.get("layout") == "amr"
 
     def _require_layout_compatible_solver(self, context: Any) -> None:
         """Refuse a solver that cannot serve an AMR mesh layout (Spec 6 sec.8/9, #11).
@@ -286,7 +316,7 @@ class FieldProblem(Descriptor):
           incompatibility, so validate never propagates an unexpected exception;
         * only a hard ``no`` on the AMR route is refused, surfacing the solver's own reason.
         """
-        if not self._context_is_amr_layout(context):
+        if not context_is_amr_layout(context):
             return
         available = getattr(self.solver, "available", None)
         if not callable(available):

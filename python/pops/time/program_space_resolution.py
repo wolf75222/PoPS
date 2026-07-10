@@ -99,8 +99,13 @@ def resolve_program_spaces(program: Any, model: Any) -> Any:
     state_space, field_space = _defaults(registry)
 
     def field_for(value: Any) -> Any:
-        name = value.attrs.get("field")
-        operator = _operator(registry, name) if isinstance(name, str) else None
+        field = value.attrs.get("field")
+        if field is not None:
+            from pops.time.references import field_name
+            name = field_name(field)
+        else:
+            name = None
+        operator = _operator(registry, name) if name is not None else None
         if operator is not None:
             output = operator.signature.output
             if getattr(output, "kind", None) == "field":

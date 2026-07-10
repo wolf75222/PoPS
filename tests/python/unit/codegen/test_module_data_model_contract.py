@@ -32,13 +32,17 @@ def test_authoring_identities_refuse_implicit_stringification(bad):
 def test_manifest_constructors_do_not_coerce_identity_fields(bad_id):
     state = model.StateSpace("U", ("rho",))
     operator = model.Operator("rate", "local_rate", (state,) >> model.Rate(state))
+    owner = model.OwnerPath.model("manifest-constructor")
+    handle = model.OperatorHandle(
+        "rate", kind="local_rate", owner=owner, signature=operator.signature)
     with pytest.raises(ValueError):
-        model.OperatorManifestEntry(operator, bad_id)
+        model.OperatorManifestEntry(operator, bad_id, handle)
 
     valid = model.Module("valid").manifest()
     with pytest.raises(ValueError):
         model.ModuleManifest(
-            name=bad_id, state_spaces={}, field_spaces={}, params={}, aux={},
+            name=bad_id, owner_path=model.OwnerPath.model("valid"),
+            state_spaces={}, field_spaces={}, params={}, aux={},
             has_eigenvalues={}, operators=valid.operators, capabilities={},
             native_routes={}, native_catalog={}, abi_requirements={})
 
@@ -46,8 +50,11 @@ def test_manifest_constructors_do_not_coerce_identity_fields(bad_id):
 def test_operator_manifest_id_refuses_numeric_string():
     state = model.StateSpace("U", ("rho",))
     operator = model.Operator("rate", "local_rate", (state,) >> model.Rate(state))
+    owner = model.OwnerPath.model("manifest-constructor")
+    handle = model.OperatorHandle(
+        "rate", kind="local_rate", owner=owner, signature=operator.signature)
     with pytest.raises(ValueError):
-        model.OperatorManifestEntry(operator, "0")
+        model.OperatorManifestEntry(operator, "0", handle)
 
 
 def test_operator_signature_contract_refuses_malformed_output_and_dropped_input():
@@ -71,7 +78,7 @@ def test_operator_signature_contract_refuses_malformed_output_and_dropped_input(
         "source", "local_source", (state,) >> model.Rate(state))
     operator.signature = (state,) >> fields
     with pytest.raises(TypeError, match="incompatible signature"):
-        model.OperatorRegistry().register(operator)
+        model.OperatorRegistry(owner=module.owner_path).register(operator)
 
 
 def test_signature_extension_is_a_small_structural_protocol():
@@ -97,26 +104,30 @@ def test_signature_extension_is_a_small_structural_protocol():
         model.Signature((object(),), foreign)
 
 
-def test_incompatible_redeclarations_are_rejected_and_compatible_ones_are_idempotent():
+def test_all_descriptor_redeclarations_are_rejected_even_when_identical():
     module = model.Module("declarations")
-    state = module.state_space("U", ("rho",), layout="face")
-    assert module.state_space("U", ("rho",), layout="face") is state
-    with pytest.raises(ValueError, match="already declared incompatibly"):
+    module.state_space("U", ("rho",), layout="face")
+    with pytest.raises(ValueError, match="already declared"):
+        module.state_space("U", ("rho",), layout="face")
+    with pytest.raises(ValueError, match="already declared"):
         module.state_space("U", ("rho", "energy"), layout="face")
 
-    fields = module.field_space("fields", ("phi",))
-    assert module.field_space("fields", ("phi",)) is fields
-    with pytest.raises(ValueError, match="already declared incompatibly"):
+    module.field_space("fields", ("phi",))
+    with pytest.raises(ValueError, match="already declared"):
+        module.field_space("fields", ("phi",))
+    with pytest.raises(ValueError, match="already declared"):
         module.field_space("fields", ("grad_phi",))
 
-    param = module.param("alpha", 1.0)
-    assert module.param("alpha", 1.0) is param
-    with pytest.raises(ValueError, match="already declared incompatibly"):
+    module.param("alpha", 1.0)
+    with pytest.raises(ValueError, match="already declared"):
+        module.param("alpha", 1.0)
+    with pytest.raises(ValueError, match="already declared"):
         module.param("alpha", 2.0)
 
-    aux = module.aux_field("mask", "cell_scalar")
-    assert module.aux_field("mask", "cell_scalar") is aux
-    with pytest.raises(ValueError, match="already declared incompatibly"):
+    module.aux_field("mask", "cell_scalar")
+    with pytest.raises(ValueError, match="already declared"):
+        module.aux_field("mask", "cell_scalar")
+    with pytest.raises(ValueError, match="already declared"):
         module.aux_field("mask", "face_vector")
 
 
@@ -135,7 +146,8 @@ def test_pure_module_declarers_return_canonical_operator_handles():
     def source(_state):
         return "source"
 
-    rate = module.rate_operator("rate", state_space=state, sources=[])
+    rate = module.rate_operator(
+        "rate", state_space=module.state_handle(state), sources=[])
     for handle in (field_handle, source, rate):
         assert isinstance(handle, model.OperatorHandle)
         assert module.operator_handle(handle.name) == handle
@@ -143,19 +155,72 @@ def test_pure_module_declarers_return_canonical_operator_handles():
     assert module.operator_registry().get("source").body.__name__ == "source"
 
 
+def test_module_family_registries_issue_and_authenticate_all_declaration_handles():
+    module = model.Module("all-handles")
+    state = module.state_space("U", ("rho",))
+    field = module.field_space("fields", ("phi",))
+    parameter = module.param("alpha", 1.0)
+    aux = module.aux_field("mask")
+
+    handles = (
+        module.state_handle(state),
+        module.field_handle(field),
+        module.param_handle(parameter),
+        module.aux_handle(aux),
+    )
+    index = module.declaration_index()
+    assert [handle.kind for handle in handles] == ["state", "field", "parameter", "aux"]
+    assert all(index.authenticate(handle) is handle for handle in handles)
+    assert all(handle.owner_path == module.owner_path for handle in handles)
+
+    foreign = model.Module("all-handles")
+    foreign_state = foreign.state_space("U", ("rho",))
+    with pytest.raises(ValueError, match="another Module"):
+        module.state_handle(foreign_state)
+
+
 def test_composite_rate_infers_the_field_context_required_by_its_sources():
     module = model.Module("rate-fields")
     state = module.state_space("U", ("rho",))
     fields = module.field_space("fields", ("phi",))
-    module.operator(
+    source = module.operator(
         "electric", signature=(state, fields) >> model.Rate(state),
         kind="local_source", expr="electric")
 
     rate = module.rate_operator(
-        "explicit_rhs", state_space=state, flux=False, sources=["electric"])
+        "explicit_rhs",
+        state_space=module.state_handle(state),
+        flux=False,
+        sources=[source],
+    )
 
     assert rate.signature.inputs == (state, fields)
     assert module.operator_registry().get("explicit_rhs").capabilities["requires_fields"] is True
+
+
+def test_module_composite_rate_rejects_string_and_foreign_references():
+    module = model.Module("typed-rate")
+    state = module.state_space("U", ("rho",))
+    source = module.operator(
+        "source", signature=(state,) >> model.Rate(state),
+        kind="local_source", expr="source")
+
+    with pytest.raises(TypeError, match="name string is not a semantic reference"):
+        module.state_handle("U")
+    with pytest.raises(TypeError, match="OperatorHandle"):
+        module.rate_operator("bad", state_space=state, sources=["source"])
+
+    foreign = model.Module("typed-rate")
+    foreign_state = foreign.state_space("U", ("rho",))
+    foreign_source = foreign.operator(
+        "source", signature=(foreign_state,) >> model.Rate(foreign_state),
+        kind="local_source", expr="source")
+    with pytest.raises((ValueError, model.MissingOwnershipError), match="another Module|owned by"):
+        module.rate_operator(
+            "foreign", state_space=state, sources=[foreign_source])
+
+    rate = module.rate_operator("good", state_space=state, sources=[source])
+    assert rate.registered_operator_name == "good"
 
 
 def test_module_and_registry_owner_anchors_are_read_only():
@@ -164,12 +229,13 @@ def test_module_and_registry_owner_anchors_are_read_only():
     original = module.owner_path
     assert registry.owner_path == original
     with pytest.raises(AttributeError):
-        module.owner_path = model.OwnerPath("other")
+        module.owner_path = model.OwnerPath.model("other")
     with pytest.raises(AttributeError):
-        registry.owner_path = model.OwnerPath("other")
+        registry.owner_path = model.OwnerPath.model("other")
     assert module.owner_path == registry.owner_path == original
 
-    foreign = model.OperatorRegistry(owner=model.OwnerPath("foreign"))
+    foreign = model.OperatorRegistry(
+        owner=model.OwnerPath.fresh(model.OwnerKind.MODEL_DEFINITION, "foreign"))
     with pytest.raises(ValueError, match="another Module"):
         module.adopt_registry(foreign)
 
@@ -185,7 +251,7 @@ def test_manifest_is_structured_deeply_frozen_json_and_copy_out():
 
     manifest = module.manifest()
     entry = manifest.operators.describe("fields_from_state")
-    assert manifest.schema_version == 3
+    assert manifest.schema_version == 4
     assert entry.to_dict()["signature"] == model.Signature((state,), fields).to_data()
     assert json.loads(manifest.to_json()) == manifest.to_dict()
 
@@ -240,11 +306,14 @@ def test_manifest_preserves_boolean_metadata_and_exposes_alias_identity():
     manifest = aliased.manifest()
 
     assert manifest.operators.describe("source").capabilities["enabled"] is True
-    assert manifest.to_dict()["operator_aliases"] == {"readable": "source"}
+    alias_row = manifest.to_dict()["operator_aliases"]["readable"]
+    assert alias_row["target"] == "source"
+    assert alias_row["handle"]["registered_operator_name"] == "source"
+    assert alias_row["target_handle"]["registered_operator_name"] == "source"
     assert manifest.hash != plain_manifest.hash
     aliases = manifest.to_dict()["operator_aliases"]
-    aliases["readable"] = "forged"
-    assert manifest.to_dict()["operator_aliases"] == {"readable": "source"}
+    aliases["readable"]["target"] = "forged"
+    assert manifest.to_dict()["operator_aliases"]["readable"]["target"] == "source"
 
 
 def test_manifest_abi_binding_is_functional_and_rate_inherits_base_layout():
@@ -253,9 +322,15 @@ def test_manifest_abi_binding_is_functional_and_rate_inherits_base_layout():
     rate = model.Rate(state)
     assert rate.layout == "face"
     assert rate.components == state.components
+    module.operator(
+        "shape_rate", signature=(state,) >> rate,
+        kind="local_rate", expr="shape")
     from pops.time import Program
-    program = Program("rate_shape")
-    value = program.state("fluid", space=state)
+    from pops.problem import Problem
+
+    block = Problem(name="shape-case").add_block("fluid", module)
+    program = Program("rate_shape").bind_operators(module)
+    value = program.state(block, module.state_handle(state)).n
     rate_value = program._rhs_legacy(state=value, sources=[])
     assert rate_value.logical_shape == {
         "vtype": "rhs", "space": "Rate(U)", "n_comp": 2, "layout": "face"}

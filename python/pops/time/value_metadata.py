@@ -43,6 +43,7 @@ def positive_scalar_literal(value: Any, *, where: str) -> Any:
 
 def validate_program_value_identity(
     vid: Any, vtype: Any, op: Any, inputs: Any, name: Any, block: Any, region: Any,
+    state_ref: Any = None,
 ) -> tuple[Any, ...]:
     """Validate direct SSA-node construction and return immutable inputs."""
     if isinstance(vid, bool) or not isinstance(vid, int) or vid < 0:
@@ -50,8 +51,18 @@ def validate_program_value_identity(
     for label, value in (("vtype", vtype), ("op", op), ("name", name)):
         if not isinstance(value, str) or not value:
             raise ValueError("ProgramValue %s must be a non-empty string" % label)
-    if block is not None and (not isinstance(block, str) or not block):
-        raise ValueError("ProgramValue block must be a non-empty string or None")
+    if block is not None:
+        from pops.problem.handles import BlockHandle
+        if not isinstance(block, BlockHandle):
+            raise TypeError("ProgramValue block must be a BlockHandle or None")
+    if state_ref is not None:
+        from pops.model.handles import Handle
+        if not isinstance(state_ref, Handle) or state_ref.kind != "state" \
+                or not state_ref.is_instance:
+            raise TypeError(
+                "ProgramValue state_ref must be a block-qualified state Handle or None")
+        if block is None or state_ref.block_ref is not block:
+            raise ValueError("ProgramValue state_ref belongs to a different block")
     if isinstance(region, bool) or not isinstance(region, int) or region < 0:
         raise ValueError("ProgramValue region must be a non-negative integer")
     frozen_inputs = tuple(inputs)

@@ -43,7 +43,8 @@ class CompiledProblem:
                  libraries: Any = None, problem_hash: Any = None, cache_key: Any = None,
                  compile_command: Any = None, generated_sources: Any = None,
                  codegen_env: Any = None, module_manifest: Any = None,
-                 module_hash: Any = None, external_bricks: Any = None) -> None:
+                 module_hash: Any = None, external_bricks: Any = None,
+                 problem_snapshot: Any = None) -> None:
         self.so_path = so_path
         from pops.time.program_space_resolution import resolve_program_spaces
         self.program = resolve_program_spaces(program, model)  # the exact Program that was lowered
@@ -83,14 +84,15 @@ class CompiledProblem:
         # passed. manifest() lists them so the artifact self-describes its external dependencies.
         self.external_bricks = [dict(r) for r in external_bricks] if external_bricks else []
         # Compiled-artifact metadata (Spec 5 sec.12.4, #48-49): set by compile_problem. The
-        # problem hash is the program-SOURCE hash (the WHAT the .so was built from -- distinct from
-        # program_hash, the IR hash of the in-memory Program); cache_key is the (problem_hash|abi)
-        # identity the out-of-source cache file name carries; compile_command is the redacted
+        # problem hash is the artifact-input hash (program source plus an optional frozen Problem
+        # snapshot -- distinct from program_hash, the in-memory Program IR hash); cache_key is the
+        # identity the out-of-source cache file name/sidecar carries; compile_command is the redacted
         # compiler invocation; generated_sources are the .cpp files written for inspection (debug=).
         # None on a route that does not record a value (e.g. an externally constructed handle) -- a
         # documented absence, not a fabricated value (cf. the property accessors below).
         self._problem_hash = problem_hash
         self._cache_key = cache_key
+        self._problem_snapshot = problem_snapshot
         self._compile_command = compile_command
         self._generated_sources = list(generated_sources) if generated_sources else []
         # Active codegen POPS_* environment snapshot (Spec 5 sec.12.4, #47-48): the resolved
@@ -131,10 +133,10 @@ class CompiledProblem:
 
     @property
     def problem_hash(self) -> Any:
-        """Stable hash of the program SOURCE the ``.so`` was compiled from (sec.12.4, #48).
+        """Stable hash of the artifact inputs the ``.so`` was compiled for (sec.12.4, #48).
 
-        The sha256 of the emitted C++ program text -- the cache identity (the WHAT). ``None`` for a
-        handle built outside ``compile_problem`` (it records no source hash); use
+        The sha256 of the emitted C++ source plus the optional frozen ProblemSnapshot identity --
+        the cache identity (the WHAT). ``None`` for a handle built outside ``compile_problem``; use
         :attr:`program_hash` for the in-memory Program's IR hash, which is always available."""
         return self._problem_hash
 
@@ -403,18 +405,21 @@ class CompiledProblem:
 
         EXPOSES the lowered schedule WITHOUT running it: the committed blocks in the runtime block
         index order (``_block_indices``: the order the Program first declares each block via
-        ``P.state``, the order ``install_program`` binds them), each with the IR id of its committed
+        ``T.state``, the order ``install_program`` binds them), each with the IR id of its committed
         State value. A plain, deterministic text listing. Writes to @p path if given (returns the
         path), else returns the string. Raises a clear error if this handle carries no Program."""
         program = self._require_program("dump_schedule")
         commits = program.commits()
         order = program._block_indices() if hasattr(program, "_block_indices") else {}
-        ordered = sorted(commits, key=lambda b: order.get(b, len(order)))
+        ordered = sorted(
+            commits, key=lambda state_ref: order.get(state_ref.block_ref, len(order)))
         lines = ["schedule for Program %r (block commit order):" % (self.program_name or "problem")]
-        for block in ordered:
-            state = commits[block]
+        from pops.time.references import block_name
+        for state_ref in ordered:
+            state = commits[state_ref]
+            block = state_ref.block_ref
             lines.append("  %2d  commit %-14s <- %s"
-                         % (order.get(block, -1), block, getattr(state, "name", "?")))
+                         % (order.get(block, -1), block_name(block), getattr(state, "name", "?")))
         if not ordered:
             lines.append("  (no committed block)")
         text = "\n".join(lines)

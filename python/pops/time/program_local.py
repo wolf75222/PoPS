@@ -15,8 +15,7 @@ from pops.time.program_value_validation import (
 from pops.time.operator_resolution import resolve_operator_handle
 from pops.time.value_metadata import positive_scalar_literal
 from pops.time.values import (
-    ProgramValue, _Affine, _Coeff, _Operator, _exact_number, _is_field_value,
-    _residual_wants_guess, _resolve_handle)
+    ProgramValue, _Coeff, _Operator, _exact_number, _residual_wants_guess, _resolve_handle)
 
 if TYPE_CHECKING:
     from pops.time._program_contract import _ProgramBase
@@ -171,7 +170,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
              "fd_eps": fd_eps_literal}, name, block,
             space=initial_guess.space)
 
-    def _linear_source_name(self, operator: Any, where: Any) -> Any:
+    def _linear_source_name(self, operator: Any, where: Any, values: Any = ()) -> Any:
         """Resolve `operator` to the linear-source name.
 
         Accepts a typed :class:`pops.model.OperatorHandle` (resolved against the exact bound registry),
@@ -181,7 +180,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         if isinstance(operator, OperatorHandle):
             return resolve_operator_handle(
                 self, operator, where=where,
-                expected_kinds="local_linear_operator").name
+                expected_kinds="local_linear_operator", values=values).name
         if isinstance(operator, str) and operator:
             return operator
         if isinstance(operator, ProgramValue) and operator.op == "linear_source":
@@ -213,11 +212,12 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         NOT a public surface -- the public :meth:`apply` refuses a bare-name string and delegates
         here; the solver-DSL and other internal callers pass the name selector directly."""
         state, fields = _resolve_handle(state), _resolve_handle(fields)
-        lname = self._linear_source_name(operator, "apply")
         if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("apply: a State value is required (state=...)")
         if fields is not None and not (isinstance(fields, ProgramValue) and fields.vtype == "fields"):
             raise ValueError("apply: fields must be a FieldContext from solve_fields")
+        lname = self._linear_source_name(
+            operator, "apply", tuple(value for value in (state, fields) if value is not None))
         field_context = None
         if fields is not None:
             from pops.time.field_context import require_field_read

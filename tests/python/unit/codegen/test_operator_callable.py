@@ -16,6 +16,7 @@ try:
     from pops.ir.expr import Const
     from pops.model import OperatorHandle
     from pops.physics.facade import Model
+    from pops.problem import Problem
     from pops import time as adctime
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_operator_callable (pops unavailable: %s)" % exc)
@@ -41,11 +42,18 @@ def build_model():
 
 
 def _operator_handle(model, name):
-    registry = model.operator_registry()
-    operator = registry.get(name)
-    return OperatorHandle(
-        operator.name, kind=operator.kind, owner=registry.owner_path,
-        signature=operator.signature)
+    """Return the registry-issued handle, preserving its declaring owner."""
+    return model.module.operator_handle(name)
+
+
+def _program_state(model, name):
+    """Create one typed block instance and bind its declared state to ``Program``."""
+    module = model.module
+    case = Problem(name="%s-case" % name)
+    block = case.add_block("plasma", model)
+    state = module.state_handle(module.state_spaces()["U"])
+    program = adctime.Program(name).bind_operators(module)
+    return program, program.state(block, state)
 
 
 def test_callable_handle_ir_byte_identical_to_pcall():
@@ -53,19 +61,19 @@ def test_callable_handle_ir_byte_identical_to_pcall():
     m, h = build_model()
 
     def via_pcall():
-        P = adctime.Program("prog").bind_operators(m)
-        U = P.state("plasma")
+        P, state = _program_state(m, "prog")
+        U = state.n
         f = P.call(_operator_handle(m, "fields_from_state"), U)
         R = P.call(h["explicit_rhs"], U, f)
-        P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", U + P.dt * R))
+        P.commit(state.next, P.linear_combine("u1", U + P.dt * R))
         return P
 
     def via_callable():
-        P = adctime.Program("prog").bind_operators(m)
-        U = P.state("plasma")
+        P, state = _program_state(m, "prog")
+        U = state.n
         f = _operator_handle(m, "fields_from_state")(U)  # callable facade
         R = h["explicit_rhs"](U, f)          # callable facade
-        P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", U + P.dt * R))
+        P.commit(state.next, P.linear_combine("u1", U + P.dt * R))
         return P
 
     a, b = via_pcall(), via_callable()
@@ -82,22 +90,22 @@ def test_callable_facade_across_all_kinds():
     m, h = build_model()
 
     def src(via_callable):
-        P = adctime.Program("p").bind_operators(m)
-        U = P.state("plasma")
+        P, state = _program_state(m, "p")
+        U = state.n
         fields = _operator_handle(m, "fields_from_state")
         f = fields(U) if via_callable else P.call(fields, U)
         s = h["electric"](U, f) if via_callable else P.call(h["electric"], U, f)
-        P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", U + P.dt * s))
+        P.commit(state.next, P.linear_combine("u1", U + P.dt * s))
         return P
 
     def lin(via_callable):
-        P = adctime.Program("p").bind_operators(m)
-        U = P.state("plasma")
+        P, state = _program_state(m, "p")
+        U = state.n
         fields = _operator_handle(m, "fields_from_state")
         f = fields(U) if via_callable else P.call(fields, U)
         L = h["lorentz"](f) if via_callable else P.call(h["lorentz"], f)
         U1 = P.solve_local_linear("u1", operator=P.I - P.dt * L, rhs=U, fields=f)
-        P.commit(P.state("U", block="plasma").next, U1)
+        P.commit(state.next, U1)
         return P
 
     assert src(True)._ir_hash() == src(False)._ir_hash()
@@ -108,8 +116,8 @@ def test_callable_facade_across_all_kinds():
 def test_callable_facade_same_signature_errors():
     """Signature errors are identical between the callable facade and P.call (same _call path)."""
     m, h = build_model()
-    P = adctime.Program("p").bind_operators(m)
-    U = P.state("plasma")
+    P, state = _program_state(m, "p")
+    U = state.n
     f = _operator_handle(m, "fields_from_state")(U)
 
     # arity: electric needs (state, fields)
@@ -129,7 +137,7 @@ def test_call_outside_program_refused():
     """A callable handle with no Program value cannot find a Program to build into -> clear error."""
     from pops.model import OwnerPath
     h_rate = OperatorHandle(
-        "explicit_rhs", kind="local_rate", owner=OwnerPath("test", "outside-program"))
+        "explicit_rhs", kind="local_rate", owner=OwnerPath.descriptor("outside-program"))
     with pytest.raises(ValueError, match="must be called with time-Program values"):
         h_rate("not a value", 3)
     print("OK  calling a handle outside a Program is refused with a clear message")
@@ -138,8 +146,8 @@ def test_call_outside_program_refused():
 def test_callable_does_no_numerics():
     """__call__ only builds IR: the result is an IR ProgramValue, never a numpy array."""
     m, h = build_model()
-    P = adctime.Program("p").bind_operators(m)
-    U = P.state("plasma")
+    _, state = _program_state(m, "p")
+    U = state.n
     f = _operator_handle(m, "fields_from_state")(U)
     R = h["explicit_rhs"](U, f)
     from pops.time.values import ProgramValue

@@ -2,9 +2,10 @@
 
 ``Problem.freeze()`` returns a :class:`ProblemSnapshot`: an inert, JSON-ready, array-free capture of
 the whole assembly (blocks / fields / params / aux / outputs / constraints / time / layout) with a
-stable ``.hash`` (sha256 over the canonical ``to_dict``). ``pops.compile`` freezes the Problem it
-compiles and folds ``snapshot.hash`` into the compile cache key, so a post-compile Problem mutation
-cannot change a bound artifact -- the snapshot is the FROZEN identity the compile stream keys on.
+stable ``.hash`` (sha256 over the canonical ``to_dict``). ``pops.compile`` freezes the Problem
+before invoking the compiler and passes ``snapshot.hash`` into the real cache lookup, so a
+post-compile mutation cannot change a bound artifact -- the snapshot is the FROZEN identity the
+compile stream keys on.
 
 The snapshot holds PLAIN values only: no runtime object, no numpy array, no live descriptor. Objects
 must expose structural data (``to_data`` / ``to_dict`` / ``options`` and/or public fields); an
@@ -29,10 +30,16 @@ from pops.model.handles import Handle, OperatorHandle as ModelOperatorHandle, Ow
 
 #: Bumped only when the snapshot's canonical shape changes (a field rename / removal); an additive
 #: field keeps version 1 so an old hash and a new hash of the SAME assembly stay comparable.
-SNAPSHOT_SCHEMA_VERSION = 3
+SNAPSHOT_SCHEMA_VERSION = 4
 
 
-def _canonical(value: Any, *, path: str = "$", active: set[int] | None = None) -> Any:
+def _canonical(
+    value: Any,
+    *,
+    path: str = "$",
+    active: set[int] | None = None,
+    handle_resolver: Any = None,
+) -> Any:
     """Return a strict, deterministic JSON view of ``value``.
 
     No lossy fallback exists.  An object is encoded from structural projections and its qualified
@@ -63,53 +70,102 @@ def _canonical(value: Any, *, path: str = "$", active: set[int] | None = None) -
         raise ValueError("ProblemSnapshot cannot encode a reference cycle at %s" % path)
     active.add(marker)
     try:
-        return _canonical_compound(value, path=path, active=active)
+        return _canonical_compound(
+            value, path=path, active=active, handle_resolver=handle_resolver)
     finally:
         active.remove(marker)
 
 
-def _canonical_compound(value: Any, *, path: str, active: set[int]) -> Any:
+def _canonical_compound(
+    value: Any,
+    *,
+    path: str,
+    active: set[int],
+    handle_resolver: Any,
+) -> Any:
     """Canonicalise a container, handle, literal or structural Python object."""
     if type(value).__module__.split(".", 1)[0] == "numpy":
         raise TypeError(
             "ProblemSnapshot cannot encode numpy runtime data at %s; declare metadata, not arrays"
             % path)
     if isinstance(value, (list, tuple)):
-        return [_canonical(item, path="%s[%d]" % (path, index), active=active)
+        return [_canonical(
+                    item, path="%s[%d]" % (path, index), active=active,
+                    handle_resolver=handle_resolver)
                 for index, item in enumerate(value)]
     if isinstance(value, (set, frozenset)):
-        items = [_canonical(item, path="%s{item}" % path, active=active) for item in value]
+        items = [_canonical(
+                    item, path="%s{item}" % path, active=active,
+                    handle_resolver=handle_resolver)
+                 for item in value]
         return {"$set": sorted(items, key=lambda item: json.dumps(
             item, sort_keys=True, separators=(",", ":"), allow_nan=False))}
     if isinstance(value, Mapping):
         if all(isinstance(key, str) for key in value):
-            return {key: _canonical(item, path="%s.%s" % (path, key), active=active)
+            return {key: _canonical(
+                        item, path="%s.%s" % (path, key), active=active,
+                        handle_resolver=handle_resolver)
                     for key, item in value.items()}
         entries = [
-            (_canonical(key, path="%s{key}" % path, active=active),
-             _canonical(item, path="%s{%r}" % (path, key), active=active))
+            (_canonical(
+                key, path="%s{key}" % path, active=active,
+                handle_resolver=handle_resolver),
+             _canonical(
+                 item, path="%s{%r}" % (path, key), active=active,
+                 handle_resolver=handle_resolver))
             for key, item in value.items()
         ]
         entries.sort(key=lambda pair: json.dumps(
             pair[0], sort_keys=True, separators=(",", ":"), allow_nan=False))
         return {"$map": [[key, item] for key, item in entries]}
     if isinstance(value, OwnerPath):
-        owner = _call_projection(
-            value, "canonical_declaration_path", value.canonical_declaration_path, path)
-        if not isinstance(owner, OwnerPath):
-            raise TypeError("OwnerPath.canonical_declaration_path() must return OwnerPath at %s"
-                            % path)
-        return {"$owner_path": list(owner.segments)}
+        canonical_owner = value.canonical()
+        data = _call_projection(canonical_owner, "to_data", canonical_owner.to_data, path)
+        if OwnerPath.from_data(data) != canonical_owner:
+            raise ValueError("OwnerPath.to_data() does not round-trip at %s" % path)
+        return {"$owner_path": data}
     if isinstance(value, Handle):
-        return {"$handle": _canonical_handle_identity(value, path)}
+        return {"$handle": _canonical_handle_identity(
+            value, path, handle_resolver=handle_resolver)}
     if isinstance(value, ScalarLiteral):
         data = _call_projection(value, "to_data", value.to_data, path)
         return {"$scalar": _canonical_literal_data(data, path="%s.to_data()" % path)}
-    return _canonical_object(value, path=path, active=active)
+    return _canonical_object(
+        value, path=path, active=active, handle_resolver=handle_resolver)
 
 
-def _canonical_handle_identity(value: Handle, path: str) -> dict[str, Any]:
+def _canonical_handle_identity(
+    value: Handle,
+    path: str,
+    *,
+    handle_resolver: Any = None,
+) -> dict[str, Any]:
     """Validate an authenticated Handle projection without lossy coercion or duck typing."""
+    if callable(handle_resolver):
+        authored = value
+        resolved = handle_resolver(value)
+        if not isinstance(resolved, Handle) or not resolved.is_resolved:
+            raise TypeError(
+                "ProblemSnapshot handle resolver must return a canonical Handle at %s" % path)
+        if (resolved.schema_version, resolved.kind, resolved.local_id) != (
+                authored.schema_version, authored.kind, authored.local_id):
+            raise ValueError(
+                "ProblemSnapshot handle resolver changed declaration identity at %s" % path)
+        if isinstance(authored, ModelOperatorHandle) and (
+                not isinstance(resolved, ModelOperatorHandle)
+                or resolved.registered_operator_name != authored.registered_operator_name):
+            raise ValueError(
+                "ProblemSnapshot handle resolver changed operator target at %s" % path)
+        if authored.is_resolved \
+                and resolved.canonical_identity() != authored.canonical_identity():
+            raise ValueError(
+                "ProblemSnapshot handle resolver changed an already canonical identity at %s"
+                % path)
+        value = resolved
+    elif not value.is_resolved:
+        raise TypeError(
+            "ProblemSnapshot cannot serialize unresolved handle %s at %s without an "
+            "authoritative resolver" % (value.qualified_id, path))
     identity = _call_projection(value, "canonical_identity", value.canonical_identity, path)
     if not isinstance(identity, Mapping):
         raise TypeError("Handle.canonical_identity() must return a mapping at %s" % path)
@@ -117,16 +173,20 @@ def _canonical_handle_identity(value: Handle, path: str) -> dict[str, Any]:
     allowed = set(required)
     if isinstance(value, ModelOperatorHandle):
         allowed.add("registered_operator_name")
+    from pops.problem.handles import BlockHandle
+    if isinstance(value, BlockHandle):
+        allowed.update(("handle_type", "model_owner_path"))
+    if value.is_instance:
+        allowed.update(("declaration_ref", "block_ref"))
     if set(identity) != allowed:
         raise TypeError(
             "Handle.canonical_identity() keys at %s must be exactly %s (got %s)"
             % (path, sorted(allowed), sorted(identity)))
-
     schema_version = identity["schema_version"]
     kind = identity["kind"]
     local_id = identity["local_id"]
     qualified_id = identity["qualified_id"]
-    owner_segments = identity["owner_path"]
+    owner_data = identity["owner_path"]
     if isinstance(schema_version, bool) or not isinstance(schema_version, int) \
             or schema_version < 1:
         raise TypeError("Handle canonical schema_version must be an integer >= 1 at %s" % path)
@@ -134,15 +194,14 @@ def _canonical_handle_identity(value: Handle, path: str) -> dict[str, Any]:
                        ("qualified_id", qualified_id)):
         if not isinstance(item, str) or not item:
             raise TypeError("Handle canonical %s must be a non-empty string at %s" % (name, path))
-    if not isinstance(owner_segments, tuple) or not owner_segments \
-            or any(not isinstance(segment, str) or not segment for segment in owner_segments):
-        raise TypeError(
-            "Handle canonical owner_path must be a tuple of non-empty strings at %s" % path)
     if not isinstance(value.owner_path, OwnerPath):
         raise TypeError("Handle owner_path must be an authenticated OwnerPath at %s" % path)
-    owner = value.owner_path.canonical_declaration_path()
-    if (schema_version, kind, local_id, owner_segments) != (
-            value.schema_version, value.kind, value.local_id, owner.segments):
+    try:
+        owner = OwnerPath.from_data(owner_data)
+    except (TypeError, ValueError) as exc:
+        raise TypeError("Handle canonical owner_path is invalid at %s" % path) from exc
+    if (schema_version, kind, local_id, owner) != (
+            value.schema_version, value.kind, value.local_id, value.owner_path):
         raise ValueError("Handle.canonical_identity() disagrees with its immutable fields at %s"
                          % path)
 
@@ -158,16 +217,48 @@ def _canonical_handle_identity(value: Handle, path: str) -> dict[str, Any]:
         expected_qualified = "%s::target::%s" % (expected_qualified, quote(target, safe=""))
     if qualified_id != expected_qualified:
         raise ValueError("Handle.canonical_identity() has an invalid qualified_id at %s" % path)
-    return {
+    result = {
         "qualified_id": qualified_id,
         "schema_version": schema_version,
         "kind": kind,
-        "owner_path": list(owner_segments),
+        "owner_path": owner_data,
         "local_id": local_id,
     }
+    if isinstance(value, ModelOperatorHandle):
+        result["registered_operator_name"] = identity["registered_operator_name"]
+    if isinstance(value, BlockHandle):
+        if identity["handle_type"] != "block":
+            raise ValueError("BlockHandle canonical handle_type must be 'block' at %s" % path)
+        try:
+            model_owner = OwnerPath.from_data(identity["model_owner_path"])
+        except (TypeError, ValueError) as exc:
+            raise TypeError("BlockHandle model_owner_path is invalid at %s" % path) from exc
+        if model_owner != value.model_owner_path:
+            raise ValueError(
+                "BlockHandle canonical model_owner_path disagrees with its immutable field at %s"
+                % path)
+        result["handle_type"] = "block"
+        result["model_owner_path"] = identity["model_owner_path"]
+    if value.is_instance:
+        for ref_name in ("declaration_ref", "block_ref"):
+            ref_identity = identity[ref_name]
+            decoded = Handle.from_canonical_identity(ref_identity)
+            if decoded.canonical_identity() != ref_identity:
+                raise ValueError(
+                    "Handle canonical %s does not round-trip at %s" % (ref_name, path))
+            result[ref_name] = ref_identity
+    if Handle.from_canonical_identity(result).canonical_identity() != result:
+        raise ValueError("Handle canonical identity does not round-trip at %s" % path)
+    return result
 
 
-def _canonical_object(value: Any, *, path: str, active: set[int]) -> Any:
+def _canonical_object(
+    value: Any,
+    *,
+    path: str,
+    active: set[int],
+    handle_resolver: Any,
+) -> Any:
     """Encode a non-container from explicit projections and/or public structural fields."""
     projections: dict[str, Any] = {}
     for accessor in ("to_data", "to_dict", "options"):
@@ -196,8 +287,12 @@ def _canonical_object(value: Any, *, path: str, active: set[int]) -> Any:
             "options(), or public structural fields" % (_qualified_type(value), path))
     return {"$object": {
         "type": _qualified_type(value),
-        "projections": _canonical(projections, path="%s<%s>" % (path, _qualified_type(value)),
-                                  active=active),
+        "projections": _canonical(
+            projections,
+            path="%s<%s>" % (path, _qualified_type(value)),
+            active=active,
+            handle_resolver=handle_resolver,
+        ),
     }}
 
 
@@ -293,17 +388,17 @@ class ProblemSnapshot:
     A plain inert value: :attr:`to_dict` is the canonical dict (deep, array-free, no runtime object)
     and :attr:`hash` is its stable sha256. Two snapshots of the same assembly have the same hash; a
     mutation before freeze changes it, a mutation after freeze is impossible (the Problem raises).
-    ``pops.compile`` attaches it to the compiled handle (``compiled._problem_snapshot``) and folds
-    :attr:`hash` into the cache key.
+    ``pops.compile`` attaches it to the compiled handle (``compiled._problem_snapshot``) after the
+    compile driver has included :attr:`hash` in the artifact hash, cache key, path and sidecar.
     """
 
     schema_version = SNAPSHOT_SCHEMA_VERSION
     __slots__ = ("_canonical_json", "_hash")
 
-    def __init__(self, payload: Any) -> None:
+    def __init__(self, payload: Any, *, handle_resolver: Any = None) -> None:
         # A deep, canonical, JSON-ready copy: no shared reference to a live registry, no runtime
         # object -- so there is no shallow-copy escape from the frozen identity.
-        canonical_payload = _canonical(payload)
+        canonical_payload = _canonical(payload, handle_resolver=handle_resolver)
         if not isinstance(canonical_payload, dict):
             raise TypeError("ProblemSnapshot payload must be a mapping")
         if "schema_version" in canonical_payload:
@@ -348,50 +443,58 @@ def build_problem_snapshot(problem: Any) -> Any:
 
     Reads the Problem's raw typed registries (not its intentionally concise inspection view) and
     canonicalises them into a JSON-ready, deep, inert payload. It computes nothing on a grid and
-    imports no ``_pops``; the resulting ``.hash`` is the stable identity the compile stream folds
-    into the cache key so a mutated Problem cannot silently rebind a compiled artifact."""
+    imports no ``_pops``; the resulting ``.hash`` is an input to the driver-owned artifact hash,
+    path and cache sidecar so a mutated Problem cannot silently rebind a compiled artifact."""
     from pops.problem._snapshot_payload import problem_snapshot_payload
 
     payload = problem_snapshot_payload(problem)
-    return ProblemSnapshot(payload)
+    return ProblemSnapshot(payload, handle_resolver=problem.resolve)
 
 
-def freeze_compiled(problem: Any, time: Any, compiled: Any) -> None:
-    """Freeze the compiled Problem + time Program and fold the snapshot hash into the cache key.
+def validate_problem_snapshot(snapshot: Any) -> str:
+    """Return the authenticated 64-hex hash of an exact :class:`ProblemSnapshot` value."""
+    if type(snapshot) is not ProblemSnapshot:
+        raise TypeError(
+            "problem_snapshot must be a pops.problem.ProblemSnapshot, not %r"
+            % type(snapshot).__name__)
+    snapshot_hash = snapshot.hash
+    if not isinstance(snapshot_hash, str) or len(snapshot_hash) != 64 \
+            or any(char not in "0123456789abcdef" for char in snapshot_hash):
+        raise ValueError("ProblemSnapshot.hash must be exactly 64 lowercase hexadecimal characters")
+    canonical_json = json.dumps(
+        snapshot.to_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False)
+    expected = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+    if snapshot_hash != expected:
+        raise ValueError("ProblemSnapshot.hash does not match its canonical payload")
+    return snapshot_hash
 
-    ``pops.compile``'s LAST authoring act (ADC-563): freeze the ``Problem`` (-> a stable
-    ``ProblemSnapshot`` whose ``.hash`` is the frozen identity), attach it on the handle
-    (``compiled._problem_snapshot``), freeze the time ``Program`` so a post-compile IR edit RAISES,
-    and FOLD ``snapshot.hash`` into the handle's cache key so a mutated Problem cannot silently rebind
-    a compiled artifact. A degraded / externally built handle with no writable cache-key slot keeps
-    its base key (never a crash)."""
-    snapshot = problem.freeze() if hasattr(problem, "freeze") else None
-    compiled._problem_snapshot = snapshot
-    if time is not None and hasattr(time, "freeze"):
-        time.freeze()
-    if snapshot is not None:
-        fold_snapshot_hash(compiled, snapshot.hash)
-    # ADC-563: the handle is complete -- seal it so the PUBLIC artifact is immutable (the advanced
-    # compile_problem route stays unsealed for its callers' legitimate metadata attaches).
+
+def prepare_compile_snapshot(problem: Any, time: Any) -> ProblemSnapshot:
+    """Freeze the public authoring graph before cache lookup and return its validated snapshot."""
+    freeze = getattr(problem, "freeze", None)
+    if not callable(freeze):
+        raise TypeError("pops.compile requires a Problem exposing freeze()")
+    snapshot = freeze()
+    validate_problem_snapshot(snapshot)
+    time_freeze = getattr(time, "freeze", None) if time is not None else None
+    if callable(time_freeze):
+        time_freeze()
+    return snapshot
+
+
+def attach_problem_snapshot(compiled: Any, snapshot: Any) -> None:
+    """Attach an already-keyed snapshot and seal the completed public artifact."""
+    validate_problem_snapshot(snapshot)
+    existing = getattr(compiled, "_problem_snapshot", None)
+    if existing is not None and existing is not snapshot:
+        raise ValueError("compiled artifact carries a different ProblemSnapshot than its cache key")
+    if existing is None:
+        compiled._problem_snapshot = snapshot
     if hasattr(compiled, "_seal"):
         compiled._seal()
 
 
-def fold_snapshot_hash(compiled: Any, snapshot_hash: Any) -> None:
-    """Compose @p snapshot_hash into the handle's cache key (APPEND, never replace; ADC-563).
-
-    The compile stream (536) owns the base cache key (model / program IR / registry / platform +
-    kokkos/mpi/precision tokens); this fold APPENDS the frozen ProblemSnapshot hash so the identity
-    also covers the whole assembly. It composes with whatever the compile stream produced -- the
-    ladder rebase keeps both. A handle exposing no writable ``_cache_key`` slot is left untouched."""
-    base = getattr(compiled, "_cache_key", None)
-    folded = "%s|problem_snapshot=%s" % (base, snapshot_hash) if base else \
-        "problem_snapshot=%s" % snapshot_hash
-    try:
-        compiled._cache_key = folded
-    except Exception:  # noqa: BLE001 -- a sealed / read-only handle keeps its base key (never a crash)
-        pass
-
-
-__all__ = ["ProblemSnapshot", "build_problem_snapshot", "freeze_compiled", "fold_snapshot_hash",
-           "SNAPSHOT_SCHEMA_VERSION"]
+__all__ = [
+    "ProblemSnapshot", "build_problem_snapshot", "validate_problem_snapshot",
+    "prepare_compile_snapshot", "attach_problem_snapshot", "SNAPSHOT_SCHEMA_VERSION",
+]

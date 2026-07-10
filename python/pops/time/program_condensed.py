@@ -38,11 +38,11 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
     """The generic condensed-implicit-solve authoring ops (ADC-637): condensed_coeffs / condensed_rhs /
     condensed_reconstruct, carrying an authored linear operator + a coupled momentum subset."""
 
-    def _condensed_operator_name(self, operator: Any) -> str:
+    def _condensed_operator_name(self, operator: Any, state: Any) -> str:
         """Resolve the exact authored local-linear handle retained by the bound registry."""
         resolved = resolve_operator_handle(
             self, operator, where="condensed op: linear_operator",
-            expected_kinds="local_linear_operator")
+            expected_kinds="local_linear_operator", values=(state,))
         return resolved.name
 
     def _condensed_subset(self, subset: Any, where: Any) -> tuple:
@@ -100,7 +100,7 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         (a conservative var) enters only the outer c*rho factor, never M (R2)."""
         if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("condensed_coeffs: a State value is required (state=...)")
-        opname = self._condensed_operator_name(linear_operator)
+        opname = self._condensed_operator_name(linear_operator, state)
         sub = self._condensed_subset(subset, "condensed_coeffs")
         c_d = self._coeff_dict(c, "c", "condensed_coeffs")
         th_d = self._coeff_dict(th_dt, "th_dt", "condensed_coeffs")
@@ -123,7 +123,7 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
             raise ValueError("condensed_rhs: phi_n must be a scalar_field value")
         if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("condensed_rhs: a State value is required (state=...)")
-        opname = self._condensed_operator_name(linear_operator)
+        opname = self._condensed_operator_name(linear_operator, state)
         sub = self._condensed_subset(subset, "condensed_rhs")
         th_d = self._coeff_dict(th_dt, "th_dt", "condensed_rhs")
         g_d = self._coeff_dict(g, "g", "condensed_rhs")
@@ -150,7 +150,7 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         if phi.vtype in ("state", "rhs"):
             require_compatible_spaces(
                 state.space, phi.space, "condensed_reconstruct phi", typed_pair=True)
-        opname = self._condensed_operator_name(linear_operator)
+        opname = self._condensed_operator_name(linear_operator, state)
         sub = self._condensed_subset(subset, "condensed_reconstruct")
         th_d = self._coeff_dict(th_dt, "th_dt", "condensed_reconstruct")
         return self._new("state", "condensed_reconstruct", (state, phi),

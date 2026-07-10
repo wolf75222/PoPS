@@ -22,7 +22,7 @@ from typing import Any
 from pops.ir import (  # noqa: F401  -- node classes used by Param's operator overloads
     _wrap, Const, Add, Sub, Mul, Div, Pow, Neg, Var)
 from pops.ir.values import RuntimeParamRef
-from pops.model.handles import OwnerPath
+from pops.model.ownership import OwnerKind, OwnerPath
 
 from ._authoring_vars import _VariablesMixin
 from ._authoring_flux import _FluxMixin
@@ -75,7 +75,8 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixi
             raise TypeError("HyperbolicModel: name must be a non-empty string")
         self._init_physics_freeze()
         self.name = name
-        self._owner_path = OwnerPath.fresh("model", name)
+        self._owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, name)
+        self._operator_registry_cache = {}
         self.cons_names = []
         self.prim_defs = {}     # name -> Expr (in terms of the cons / previous prims / aux)
         self.aux_names = []      # CANONICAL aux fields read (phi/grad/B_z/T_e), cf. AUX_CANONICAL
@@ -138,6 +139,10 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixi
     def owner_path(self) -> OwnerPath:
         """Immutable qualified identity anchor for every symbol declared by this model."""
         return self._owner_path
+
+    def _invalidate_authoring_views(self) -> None:
+        """Discard derived registry views after one successful physics declaration."""
+        self._operator_registry_cache = {}
 
 
 class Param(PhysicsFreezable):

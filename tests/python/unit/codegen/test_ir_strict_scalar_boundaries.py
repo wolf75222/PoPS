@@ -78,7 +78,7 @@ def test_runtime_parameter_identity_and_index_are_never_coerced():
 
 
 def test_rate_expr_requires_matching_handle_payload_and_finite_exact_sign():
-    owner = OwnerPath("model", "transport")
+    owner = OwnerPath.model("transport")
     flux = Handle("F", kind="flux", owner=owner)
     source = Handle("S", kind="source", owner=owner)
 
@@ -94,5 +94,5 @@ def test_rate_expr_requires_matching_handle_payload_and_finite_exact_sign():
 
 
 def test_exact_board_repr_never_formats_rationals_through_float():
-    flux = Handle("F", kind="flux", owner=OwnerPath("model", "transport"))
+    flux = Handle("F", kind="flux", owner=OwnerPath.model("transport"))
     assert "1/3" in repr(Divergence(flux, Fraction(1, 3)))

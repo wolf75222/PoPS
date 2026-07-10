@@ -52,8 +52,12 @@ def _objects():
     """
     mesh = pops.CartesianMesh(n=8, L=1.0)
     phi = pmath.Unknown("phi")
+    module = pops.model.Module("print-demo-model")
+    state_space = module.state_space("U", ("u",))
+    state = module.state_handle(state_space)
+    block = pops.Problem(name="print-demo-case").add_block("plasma", module)
     prog = pops.time.Program("demo")
-    prog.state("plasma")  # one op so the summary reports a non-zero op count
+    prog.state(block, state)  # one typed op so the summary reports a non-zero op count
     return {
         # numerics scheme bricks (runtime layer).
         "Spatial": pops.Spatial(),

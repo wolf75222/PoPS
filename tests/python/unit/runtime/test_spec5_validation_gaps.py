@@ -13,9 +13,8 @@ must still pass):
   block halo is refused (WENO5 needs 3; an explicit depth-2 block is too thin). The native
   runtime grows the halo to match the scheme, so WENO5 with no explicit constraint -- and MUSCL
   at depth 2 -- pass.
-* GAP 3 (sec.8.6, criterion 31): a :class:`pops.mesh.amr.Refine` validated against a model
-  rejects a bogus subject and lists the declared subjects; a real declared role / component
-  validates, and a context that advertises no subjects (or no context) is not rejected.
+* GAP 3 (sec.8.6, criterion 31): :class:`pops.mesh.amr.Refine` accepts only real Handle
+  declarations; the Problem registry authenticates and canonicalises them before runtime.
 
 Pure Python; needs only ``import pops`` (nothing computes on a grid). The validations read
 descriptor metadata and run nothing.
@@ -34,10 +33,12 @@ from pops.solvers.elliptic import FFT, GeometricMG  # noqa: E402
 from pops.numerics.reconstruction import (  # noqa: E402
     FirstOrder, MUSCL, WENO5, required_ghost_depth, validate_ghost_depth)
 from pops.runtime._bricks_scheme import FiniteVolume  # noqa: E402
-from pops.mesh.amr import Refine, TagUnion, _declared_subjects  # noqa: E402
+from pops.mesh.amr import Refine, TagUnion  # noqa: E402
 from pops.mesh.layouts import AMR  # noqa: E402
 from pops.mesh import CartesianMesh  # noqa: E402
 from pops.fields.bcs import Periodic, Dirichlet  # noqa: E402
+from pops.model import (  # noqa: E402
+    DeclarationIndex, Handle, MissingOwnershipError, OwnerKind, OwnerPath)
 
 
 # ----------------------------------------------------------------------------------------
@@ -54,7 +55,8 @@ def _screened_problem(solver):
 def _anisotropic_problem(solver):
     phi = unknown("phi")
     rho = Var("rho", "cons")
-    eps = ScalarCoefficient("eps")
+    eps_field = Handle("eps", kind="field", owner=OwnerPath.shared("validation.coefficient"))
+    eps = ScalarCoefficient(eps_field)
     return AnisotropicPoissonProblem(
         unknown=phi, equation=(-div(eps * grad(phi)) == rho), solver=solver)
 
@@ -185,80 +187,53 @@ def test_undeclared_reconstruction_is_not_rejected():
 
 
 # ----------------------------------------------------------------------------------------
-# GAP 3 -- Refine role-existence validation (sec.8.6, criterion 31)
+# GAP 3 -- typed Refine references + registry authentication (sec.8.6, criterion 31)
 # ----------------------------------------------------------------------------------------
 
 class _FakeModel:
-    """A minimal model advertising its declared subjects the way HyperbolicModel does."""
+    """Minimal model with an authoritative declaration index."""
 
-    cons_names = ["rho", "rho_u", "rho_v", "E"]
-    cons_roles = None
-    aux_extra_names = ["B_z"]
+    def __init__(self):
+        self.name = "validation-model"
+        self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, self.name)
+        self.rho = Handle("rho", kind="state", owner=self.owner_path)
+        self.density = Handle("Density", kind="role", owner=self.owner_path)
+        self.b_z = Handle("B_z", kind="aux", owner=self.owner_path)
 
-    def state_space(self):
-        from pops.model.spaces import StateSpace
-        return StateSpace(components=self.cons_names,
-                          roles={"rho": "Density", "E": "Energy"})
-
-
-def test_declared_subjects_collects_components_roles_and_aux():
-    subjects = _declared_subjects(_FakeModel())
-    # Components, the named aux, and BOTH the role keys and role values are legal subjects.
-    for name in ("rho", "rho_u", "E", "B_z", "Density", "Energy"):
-        assert name in subjects, "%r missing from declared subjects %s" % (name, sorted(subjects))
+    def declaration_index(self):
+        return DeclarationIndex(
+            owner=self.owner_path, handles=(self.rho, self.density, self.b_z))
 
 
-def test_refine_on_declared_role_validates():
+def test_refine_rejects_flat_names_at_construction():
+    with pytest.raises(TypeError, match="names and strings"):
+        Refine.on("rho")
+
+
+def test_refine_on_real_handles_self_validates_its_shape():
     model = _FakeModel()
-    # A real state component and a real physical role both validate.
-    assert Refine.on("rho").above(0.05).validate(model) is True
-    assert Refine.on("Density").above(0.05).validate(model) is True
-    assert Refine.on("B_z").above(0.05).validate(model) is True
-
-
-def test_refine_on_bogus_role_is_rejected_listing_declared_subjects():
-    model = _FakeModel()
-    with pytest.raises(ValueError) as exc:
-        Refine.on("bogus_role").above(0.05).validate(model)
-    msg = str(exc.value)
-    assert "bogus_role" in msg
-    assert "is not a declared subject" in msg
-    # The message lists the real declared subjects so the user can fix it.
-    assert "rho" in msg and "Density" in msg
-
-
-def test_refine_without_context_self_validates_only():
-    # NO FALSE POSITIVE: with no model the subject check DEFERS (it cannot know the roles);
-    # only the predicate/threshold shape is checked here.
-    assert Refine.on("bogus_role").above(0.05).validate() is True
-    # An incomplete criterion is still rejected on shape, with or without a context.
+    assert Refine.on(model.rho).above(0.05).validate() is True
+    assert Refine.on(model.density).above(0.05).validate() is True
+    assert Refine.on(model.b_z).above(0.05).validate() is True
     with pytest.raises(ValueError, match="incomplete"):
-        Refine.on("rho").validate()
+        Refine.on(model.rho).validate()
 
 
-def test_refine_against_surfaceless_context_is_not_rejected():
-    # NO FALSE POSITIVE: a context that advertises no subject surface is not rejected.
-    assert Refine.on("bogus_role").above(0.05).validate(object()) is True
-
-
-def test_tag_union_forwards_the_model_context():
+def test_problem_amr_refine_authenticates_and_canonicalizes_the_handle():
     model = _FakeModel()
-    # A union of REAL subjects validates against the model.
-    assert TagUnion(Refine.on("rho").above(0.05),
-                    Refine.on("Density").gradient_above(0.5)).validate(model) is True
-    # A union containing a bogus subject is rejected through the forwarded context.
-    with pytest.raises(ValueError, match="is not a declared subject"):
-        TagUnion(Refine.on("rho").above(0.05),
-                 Refine.on("nope").below(0.1)).validate(model)
-
-
-def test_problem_amr_refine_validates_the_subject_against_the_block_model():
-    model = _FakeModel()
-    # The role check fires where the model IS available: problem.amr.refine.
     prob = pops.Problem(layout=AMR(base=CartesianMesh(n=64))).block("plasma", physics=model)
-    # A real role passes and the call chains back to the problem.
-    assert prob.amr.refine(Refine.on("rho").above(0.05)) is prob
-    # A bogus role is refused before runtime.
-    prob2 = pops.Problem(layout=AMR(base=CartesianMesh(n=64))).block("plasma", physics=model)
-    with pytest.raises(ValueError, match="is not a declared subject"):
-        prob2.amr.refine(Refine.on("definitely_not_a_role").above(0.05))
+    union = TagUnion(
+        Refine.on(model.rho).above(0.05),
+        Refine.on(model.density).gradient_above(0.5),
+    )
+    assert prob.amr.refine(union) is prob
+    stored = prob._constraints.refinement["refine"]
+    assert all(item.subject.is_resolved for item in stored.criteria)
+
+
+def test_problem_amr_refine_rejects_same_owner_handle_missing_from_index():
+    model = _FakeModel()
+    prob = pops.Problem(layout=AMR(base=CartesianMesh(n=64))).block("plasma", physics=model)
+    bogus = Handle("definitely_not_a_role", kind="role", owner=model.owner_path)
+    with pytest.raises(MissingOwnershipError, match="not registered"):
+        prob.amr.refine(Refine.on(bogus).above(0.05))

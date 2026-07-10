@@ -256,7 +256,11 @@ class PhysicsFreezable:
             def guarded(self: Any, *args: Any, __method: Any = method,
                         __name: str = method_name, **method_kwargs: Any) -> Any:
                 self._guard_mutable("call authoring method %s()" % __name)
-                return __method(self, *args, **method_kwargs)
+                result = __method(self, *args, **method_kwargs)
+                invalidate = getattr(self, "_invalidate_authoring_views", None)
+                if callable(invalidate):
+                    invalidate()
+                return result
 
             guarded._pops_freeze_guarded = True
             setattr(cls, method_name, guarded)

@@ -14,6 +14,7 @@ from pops.output import (  # noqa: E402
     RuntimePolicies, RuntimePoliciesReport, OutputPolicy, CheckpointPolicy, HDF5)
 from pops.diagnostics.measures import Integral, Norm  # noqa: E402
 from pops.linalg.norms import L2  # noqa: E402
+from pops.model import Module  # noqa: E402
 from pops.time.schedule import every  # noqa: E402
 
 
@@ -50,6 +51,11 @@ def test_wrong_category_output_is_refused():
 def test_non_diagnostic_is_refused():
     with pytest.raises(TypeError, match="pops.diagnostics measures"):
         RuntimePolicies(diagnostics=[OutputPolicy()])
+
+
+def test_output_policy_rejects_untyped_diagnostics():
+    with pytest.raises(TypeError, match="typed pops.diagnostics measures"):
+        OutputPolicy(diagnostics=["mass"])
 
 
 def test_non_schedule_is_refused():
@@ -115,8 +121,10 @@ def test_problem_runtime_unpacks_output_and_checkpoint():
     assert problem._outputs == [out, chk]
     insp = problem._runtime_registry.inspect()
     assert insp["outputs"] == ["OutputPolicy", "CheckpointPolicy"]
-    # The bundle report is surfaced in the runtime registry inspection.
-    assert insp["policies"]["report_type"] == "runtime_policies"
+    # RuntimePolicies is an input bundle; the registry owns each flattened declaration once.
+    assert insp["bundle_declared"] is True
+    assert "policies" not in insp
+    assert not hasattr(problem._runtime_registry, "_policies")
 
 
 def test_problem_runtime_refuses_a_non_bundle():
@@ -127,10 +135,130 @@ def test_problem_runtime_refuses_a_non_bundle():
 def test_problem_validate_runs_the_bundle_validate():
     # An incompatible policy is refused through problem.validate given a serial-declaring context.
     rp = RuntimePolicies(output=OutputPolicy(format=HDF5(parallel=True), require_parallel=True))
-    problem = pops.Problem(name="p").block("ne", physics=type("M", (), {"name": "m"})())
+    problem = pops.Problem(name="p").block("ne", physics=Module("m"))
     problem.runtime(rp)
     report = problem.validate_report({"parallel": False})
     assert any(i.family == "runtime_policies" for i in report.issues)
+
+
+def test_runtime_bundle_is_flattened_once_in_problem_snapshot():
+    output = OutputPolicy(cadence=every(20))
+    diagnostic = Integral()
+    schedule = every(5)
+    bundle = RuntimePolicies(
+        output=output, diagnostics=[diagnostic], schedules=[schedule])
+    problem = pops.Problem(name="runtime-snapshot")
+    problem.add_block("fluid", Module("runtime-model"))
+    problem.runtime(bundle)
+
+    payload = problem.freeze().to_dict()
+    assert "runtime_policies" not in payload
+    assert len(payload["outputs"]) == 1
+    assert len(payload["diagnostics"]) == 1
+    assert len(payload["schedules"]) == 1
+    assert not hasattr(problem._runtime_registry, "_policies")
+
+
+def test_problem_validates_output_field_ownership_before_lowering():
+    module = Module("transport-output")
+    state = module.state_space("U", components=("rho",))
+    state_ref = module.state_handle(state)
+
+    ambiguous = pops.Problem(name="ambiguous-output")
+    block_a = ambiguous.add_block("a", module)
+    block_b = ambiguous.add_block("b", module)
+    ambiguous.output(OutputPolicy(fields=[state_ref]))
+    report = ambiguous.validate_report()
+    issue = next(item for item in report if item.code == "ambiguous_declaration_reference")
+    assert str(block_a.instance_owner_path) in issue.message
+    assert str(block_b.instance_owner_path) in issue.message
+
+    resolved = pops.Problem(name="resolved-output")
+    block = resolved.add_block("a", module)
+    resolved.output(OutputPolicy(fields=[block[state_ref]]))
+    assert resolved.validate_report().ok
+
+
+def test_runtime_registry_rejects_non_writable_output_handle_kind():
+    module = Module("bad-output-kind")
+    state = module.state_space("U", components=("rho",))
+    module.operator(
+        "rhs", signature=(state,) >> pops.model.Rate(state),
+        kind="local_rate", expr="rhs")
+    operator = module.operator_handle("rhs")
+
+    # Mutate after construction to exercise the registry trust boundary too; the
+    # OutputPolicy constructor independently rejects this public misuse.
+    policy = OutputPolicy()
+    policy.fields = [operator]
+    problem = pops.Problem(name="bad-output-kind")
+    problem.add_block("fluid", module)
+    problem.output(policy)
+    issue = next(
+        item for item in problem.validate_report()
+        if item.code == "invalid_output_field_kind")
+    assert "local_rate" in issue.message
+
+
+def test_problem_validates_diagnostic_block_ownership_before_lowering():
+    module = Module("transport-diagnostic")
+    owner = pops.Problem(name="diagnostic-owner")
+    local_block = owner.add_block("local", module)
+    owner.runtime(RuntimePolicies(diagnostics=[Integral(block=local_block)]))
+    assert owner.validate_report().ok
+
+    foreign = pops.Problem(name="diagnostic-foreign")
+    foreign.add_block("other", module)
+    foreign.runtime(RuntimePolicies(diagnostics=[Integral(block=local_block)]))
+    report = foreign.validate_report()
+    issue = next(item for item in report if item.code == "invalid_declaration_reference")
+    assert "not registered by this case" in issue.message
+
+
+def test_compiled_runtime_snapshot_detaches_and_canonicalizes_references():
+    from pops.codegen.orchestration import _capture_runtime_declarations
+    from pops.runtime._output_driver import _field_names
+
+    module = Module("snapshot-output")
+    state = module.state_space("U", components=("rho",))
+    state_ref = module.state_handle(state)
+    problem = pops.Problem(name="snapshot-output")
+    block = problem.add_block("transport", module)
+    measure = Integral(block=block)
+    policy = OutputPolicy(fields=[state_ref], diagnostics=[measure])
+    problem.output(policy)
+    problem.runtime(RuntimePolicies(diagnostics=[Norm(L2(), block=block)]))
+
+    outputs, diagnostics = _capture_runtime_declarations(problem)
+    captured = outputs[0]
+    assert captured is not policy
+    assert captured.fields[0].is_resolved
+    assert captured.fields[0].block_ref.local_id == "transport"
+    assert captured.fields[0].owner_path.is_canonical
+    assert captured.diagnostics[0].block.owner_path.is_canonical
+    assert diagnostics[0].block.owner_path.is_canonical
+    assert _field_names(captured.fields) == ["transport"]
+
+    # Snapshot capture never rewrites user authoring objects.
+    assert policy.fields == [state_ref]
+    assert policy.fields[0].owner_path.is_authoring
+    assert policy.diagnostics[0] is measure
+    assert measure.block is block
+
+
+def test_runtime_snapshot_capture_refuses_ambiguous_model_local_reference():
+    from pops.codegen.orchestration import _capture_runtime_declarations
+    from pops.model import AmbiguousReferenceError
+
+    module = Module("ambiguous-snapshot")
+    state = module.state_space("U", components=("rho",))
+    state_ref = module.state_handle(state)
+    problem = pops.Problem(name="ambiguous-snapshot")
+    problem.add_block("a", module)
+    problem.add_block("b", module)
+    problem.output(OutputPolicy(fields=[state_ref]))
+    with pytest.raises(AmbiguousReferenceError, match="candidates"):
+        _capture_runtime_declarations(problem)
 
 
 def test_runtime_policies_exported_on_root():

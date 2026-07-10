@@ -8,10 +8,9 @@ introspect the Program-bound registry for the operator-first macros
 calls with the correct arity.
 
 The ``@program_macro`` decorator (ADC-554) makes a scheme builder ONE IR route with
-the manual Program: called with a live ``Program`` first argument it is the historical
-in-place builder (unchanged, returns the final state / value); called WITHOUT one (block
-name first) it builds a fresh ``Program``, lowers into it and RETURNS that Program, so
-``isinstance(pops.lib.time.forward_euler("plasma"), Program)`` holds.
+the manual Program: called with a live ``Program`` first argument it mutates that Program;
+called WITHOUT one (``BlockHandle, state Handle`` first) it builds a fresh ``Program`` and
+returns it. Free block/state strings are never accepted.
 
 The stage helpers take the live ``pops.time.Program`` instance as their first argument,
 so they need no ``pops.time`` import; the decorator imports ``pops.time.Program`` LAZILY
@@ -24,6 +23,13 @@ import functools
 from decimal import Decimal
 from fractions import Fraction
 from typing import Any
+
+from pops.numerics.terms import DefaultSource, Flux, LocalTerm, SourceTerm
+
+
+# Ready schemes explicitly include the block model's default/composite source. The selector is a
+# typed semantic term; the historical free token ``"default"`` never appears at their public edge.
+_DEFAULT_SOURCES = (DefaultSource(),)
 
 
 def _exact_coefficient(value: Any, where: str) -> Any:
@@ -113,15 +119,15 @@ def _exact_fraction(value: Any, where: str) -> Fraction:
 def program_macro(build: Any) -> Any:
     """Make a scheme builder both an in-place mutator AND a Program factory (ADC-554).
 
-    ``build(P, block, ...)`` is the historical in-place builder. The wrapper dispatches on the FIRST
+    ``build(P, block, state, ...)`` is the in-place builder. The wrapper dispatches on the FIRST
     positional argument:
 
-      - a live ``pops.time.Program`` -> the legacy path, called unchanged, returning ``build``'s own
+      - a live ``pops.time.Program`` -> the in-place path, returning ``build``'s own
         result (the final state / value / ``None``) so every existing ``macro(P, block, ...)`` caller
         is byte-identical;
-      - anything else (the block name) -> a fresh ``Program`` (named after the scheme) is created, the
-        builder lowers into it, and the PROGRAM is returned -- so a macro invoked as ``macro(block,
-        ...)`` yields an inspectable Program, the same type the manual route produces.
+      - anything else -> a fresh ``Program`` (named after the scheme) is created, the builder lowers
+        into it, and the PROGRAM is returned. The builder itself validates the required typed
+        ``BlockHandle`` and state declaration.
 
     The two forms lower through the SAME builder into the SAME IR (only the Program's ``name`` differs
     between an explicit ``Program("x")`` and the fresh default), so a macro and the equivalent manual
@@ -139,15 +145,80 @@ def program_macro(build: Any) -> Any:
     return macro
 
 
+def _time_state(P: Any, block: Any, state: Any = None) -> Any:
+    """Return the Program-owned TimeState selected by typed preset arguments.
+
+    Presets accept either ``(block_handle, model_state_handle)`` or a ``TimeState`` already issued
+    by ``P``. The latter is convenient when one explicit program composes several preset fragments.
+    """
+    from pops.time.handles import TimeState
+    if isinstance(block, TimeState):
+        if state is not None:
+            raise TypeError(
+                "time preset: pass either a TimeState or (BlockHandle, state Handle), not both")
+        return P._require_time_state(block, "time preset")
+    if state is None:
+        raise TypeError(
+            "time preset: provide (BlockHandle, state Handle); free block names are not accepted")
+    return P.state(block, state)
+
+
+def _block_label(state: Any) -> str:
+    """Display/runtime label derived from a typed TimeState."""
+    from pops.time.references import block_name
+    return block_name(state.block)
+
+
+def _commit(P: Any, state: Any, value: Any) -> Any:
+    """Commit through the typed endpoint retained by a preset."""
+    return P.commit(state.next, value)
+
+
 def _stage_rhs(P: Any, U: Any, sources: Any, flux: Any) -> Any:
     """Solve the elliptic fields from U and assemble its RHS for one stage. The FieldContext is
     distinct per stage (no stale global aux). flux=False builds a source-only sub-flow (e.g. Strang S).
 
-    Uses the PRIVATE ``P._rhs_legacy`` builder: the macros author the RHS from the (flux, sources)
-    pair, which is the internal lowering of the public typed ``P.rhs(terms=[...])`` -- not a second
-    public path."""
+    Ready schemes lower through the same public typed ``P.rhs(terms=[...])`` route as an explicit
+    Program. Named sources remain owner-qualified ``OperatorHandle`` values until that boundary."""
     fields = P.solve_fields(U) if flux else None
-    return P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
+    return _typed_rhs(P, U, fields=fields, sources=sources, flux=flux)
+
+
+def _typed_rhs(P: Any, U: Any, *, fields: Any, sources: Any, flux: Any) -> Any:
+    """Build one preset RHS from typed source selections and an explicit flux switch."""
+    terms = _rhs_terms(sources, flux)
+    return P.rhs(state=U, fields=fields, terms=terms)
+
+
+def _rhs_terms(sources: Any, flux: Any) -> list[Any]:
+    """Validate a preset's public source protocol and return typed ``P.rhs`` terms."""
+    from pops.model import OperatorHandle
+
+    if not isinstance(flux, bool):
+        raise TypeError("time preset: flux must be a Python bool")
+    if not isinstance(sources, (list, tuple)):
+        raise TypeError(
+            "time preset: sources must be a list/tuple of OperatorHandle or typed RHS terms")
+    terms: list[Any] = [Flux()] if flux else []
+    for source in sources:
+        if isinstance(source, str):
+            raise TypeError(
+                "time preset: source names are not accepted; pass the OperatorHandle returned by "
+                "m.source_term(...), SourceTerm(handle), or DefaultSource()")
+        if not isinstance(source, (OperatorHandle, DefaultSource, SourceTerm, LocalTerm)):
+            raise TypeError(
+                "time preset: invalid source selection %r; expected OperatorHandle, "
+                "SourceTerm(handle), LocalTerm(handle), or DefaultSource()" % (source,))
+        terms.append(source)
+    return terms
+
+
+def _source_names(P: Any, U: Any, sources: Any) -> list[str]:
+    """Project typed preset sources to private registry-local lowering names."""
+    from pops.time._rhs_terms import terms_to_flux_sources
+
+    _, names, _ = terms_to_flux_sources(P, _rhs_terms(sources, False), state=U)
+    return names
 
 
 def _operator_handle(operator: Any, kwarg: Any) -> Any:

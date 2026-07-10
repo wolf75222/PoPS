@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from pops.model.operators import OPERATOR_KINDS
 from pops.time.operator_resolution import resolve_operator_handle
 from pops.time.schedule import Schedule
+from pops.time.references import block_name
 from pops.time.program_value_validation import require_owned, require_top_level
 from pops.time.values import ProgramValue, _CoupledResult
 
@@ -69,15 +70,16 @@ class _ProgramCall(_ProgramBase):
         handles and the re-entrant typed lowering use directly (a string token survives here only as
         an internal selector, undocumented in the public API)."""
         from pops.model import OperatorHandle
+        operator_handle = None
         if isinstance(operator, OperatorHandle):
-            op = resolve_operator_handle(self, operator, where="P.call")
+            op = resolve_operator_handle(self, operator, where="P.call", values=args)
             operator_name = op.name
+            operator_handle = operator
         else:
             operator_name = self._operator_call_name(operator)
-            if self._registry is None:
-                raise ValueError("P._call(%r): no operators bound; call P.bind_operators(model) first"
-                                 % (operator_name,))
-            op = self._registry.get(operator_name)  # clear KeyError on an unknown operator
+            from pops.time.operator_resolution import resolve_registered_operator
+            op = resolve_registered_operator(
+                self, operator_name, where="P._call", values=args)
         self._check_call_args(op, args)
         if schedule is not None:
             self._validate_schedule(op, schedule)
@@ -90,14 +92,40 @@ class _ProgramCall(_ProgramBase):
                 raise ValueError(
                     "schedule= is not supported on a coupled_rate operator (%r) yet; schedule its "
                     "per-block consumers instead (ADC-457/458)" % (operator_name,))
-            return result
+            if operator_handle is None:
+                return result
+            tagged = {}
+            coupled = None
+            for block, value in result.items():
+                if value.inputs:
+                    coupled = value.inputs[0]
+                attrs = dict(value.attrs)
+                attrs["operator_handle"] = operator_handle
+                tagged[block] = self._replace_value(value, attrs=attrs)
+            if coupled is not None:
+                attrs = dict(coupled.attrs)
+                attrs["operator_handle"] = operator_handle
+                self._replace_value(coupled, attrs=attrs)
+            return _CoupledResult(tagged)
         # Tag the result with the operator's declared output type (a Rate / FieldSpace /
         # LocalLinearOperator / StateSpace) so downstream ops can type-check the composition
         # (a Rate(U) cannot be combined with a State(V); an L: U -> U cannot drive a State(V)).
         attrs = dict(result.attrs)
+        if operator_handle is not None:
+            attrs["operator_handle"] = operator_handle
+        field_context = result.field_context
+        if (operator_handle is not None and result.op == "solve_fields"
+                and attrs.get("field") is not None):
+            # _lower_field_operator authenticated a registry-issued field selector. Retain the exact
+            # public handle (including an alias identity) in both node attrs and field provenance.
+            attrs["field"] = operator_handle
+            from pops.time.field_context import FieldContext
+            field_context = FieldContext(
+                operator_handle, field_context.stage_sources, field_context.outputs)
         if schedule is not None:
             attrs["schedule"] = schedule
-        return self._replace_value(result, attrs=attrs, space=op.signature.output)
+        return self._replace_value(
+            result, attrs=attrs, space=op.signature.output, field_context=field_context)
 
     def _operator_call_name(self, operator: Any) -> Any:
         """Normalize an internal :meth:`_call` operator selector to its registry name.
@@ -154,8 +182,13 @@ class _ProgramCall(_ProgramBase):
         if len(state_args) > 1:
             result = self.solve_fields_from_blocks(state_args, name=name)
             return self._replace_value(result, space=op.signature.output)
-        field = None if operator_name == "fields_from_state" else operator_name
-        result = self.solve_fields(name=name, state=args[0], field=field)
+        field = None
+        if operator_name != "fields_from_state":
+            registry = self._operator_registries[args[0].block.model_owner_path]
+            field = next(
+                handle for handle in registry.declaration_index().records()
+                if handle.local_id == operator_name)
+        result = self._solve_fields(name=name, state=args[0], field=field)
         return self._replace_value(result, space=op.signature.output)
 
     def _lower_local_source(self, op: Any, operator_name: Any, args: Any, name: Any) -> Any:
@@ -207,16 +240,26 @@ class _ProgramCall(_ProgramBase):
         projects its block's rate scratch.
         """
         bundle = op.signature.output                 # a model.RateBundle: block -> RateSpace
-        blocks = bundle.keys()
+        input_blocks = {
+            block_name(argument.block): argument.block
+            for argument in args if getattr(argument, "block", None) is not None
+        }
+        missing = [name for name in bundle.keys() if name not in input_blocks]
+        if missing:
+            raise ValueError(
+                "coupled operator %r outputs blocks %s but no matching typed input BlockHandle "
+                "was supplied" % (operator_name, missing))
+        blocks = [input_blocks[name] for name in bundle.keys()]
         base = name or operator_name
         coupled = self._new("rhs", "coupled_rate", tuple(args),
                             {"operator": operator_name, "blocks": list(blocks)},
                             base, args[0].block)
         outs = {}
-        for blk in blocks:
+        for output_name, blk in zip(bundle.keys(), blocks, strict=True):
             out = self._new("rhs", "coupled_rate_out", (coupled,),
                             {"operator": operator_name, "out_block": blk},
-                            "%s_%s" % (base, blk), blk, space=bundle[blk])
+                            "%s_%s" % (base, output_name), blk,
+                            space=bundle[output_name])
             outs[blk] = out
         return _CoupledResult(outs)
 
@@ -246,8 +289,8 @@ class _ProgramCall(_ProgramBase):
             arg_space = getattr(self._canonical_value(a), "space", None)
             if arg_space is None:
                 raise ValueError(
-                    "operator %r requires a typed %s %r; declare the state with space= or bind "
-                    "a registry with one unambiguous StateSpace before P.state"
+                    "operator %r requires a typed %s %r; bind its owner registry before "
+                    "T.state(block, U), or declare typed state metadata"
                     % (op.name, t.kind, t.name))
             if arg_space != t:
                 raise ValueError(

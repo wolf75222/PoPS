@@ -18,9 +18,15 @@ try:
     from pops.fields import FieldProblem
     from pops.math import laplacian
     from pops.codegen import orchestration
+    from pops.model import DeclarationIndex, Handle, OwnerKind, OwnerPath
+    from tests.python.support.assertions import _check
 except Exception as exc:  # noqa: BLE001
     print("skip test_problem_orchestration (pops unavailable: %s)" % exc)
     sys.exit(0)
+
+
+def _ref(name, kind="state"):
+    return Handle(name, kind=kind, owner=OwnerPath.shared("problem-orchestration"))
 
 
 # --- tiny stand-ins (no compiler / no runtime) -----------------------------
@@ -60,7 +66,11 @@ class _StubModel:
 
     def __init__(self, name="stub"):
         self.name = name
+        self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, name)
         self.dsl = _StubDsl(name)  # what _resolve_problem_model returns
+
+    def declaration_index(self):
+        return DeclarationIndex(owner=self.owner_path, handles=())
 
 
 class _StubSolver:
@@ -97,9 +107,6 @@ def _poisson_problem():
     return FieldProblem(name="phi", unknown="phi",
                         equation=(-laplacian("phi") == "charge_density"),
                         solver=_StubSolver())
-
-
-from tests.python.support.assertions import _check
 
 
 # --- assembly + chaining + inspect -----------------------------------------
@@ -154,7 +161,7 @@ def test_amr_property():
     # ADC-526: a layout-free Problem exposes .amr (criteria applied at compile). A CONSTRUCTOR
     # Uniform layout still refuses .amr (no level to refine onto).
     try:
-        pops.Problem(layout=Uniform(CartesianMesh())).amr
+        _ = pops.Problem(layout=Uniform(CartesianMesh())).amr
         raise AssertionError("amr on a Uniform constructor layout must raise")
     except ValueError:
         pass
@@ -164,10 +171,14 @@ def test_amr_property():
     _check(returned is prob, "amr.refine chains back to the problem")
     _check(prob._constraints.refinement.get("regrid") is not None,
            "refine recorded the regrid policy on the constraint registry")
-    # AMR constructor layout -> back-compat: criteria also mirror onto the layout.
+    # A constructor AMR layout is not a second authority: the registry records the policy and
+    # compile-time resolution materialises it on a detached layout.
     prob2 = pops.Problem(layout=AMR(CartesianMesh()))
     prob2.amr.refine(regrid=RegridEvery(20))
-    _check(prob2.layout.regrid is not None, "refine mirrors onto a constructor AMR layout")
+    _check(prob2.layout.regrid is None, "problem.amr never mutates the constructor layout")
+    resolved = orchestration._resolve_layout(prob2, None)
+    _check(resolved is not prob2.layout and resolved.regrid.steps == 20,
+           "layout resolution creates the detached merged AMR layout")
     print("ok test_amr_property")
 
 
@@ -191,8 +202,8 @@ def test_validate_requires_a_block():
 def test_validate_multi_block_uniform_lowers():
     # C3: a multi-block assembly on a Uniform layout now VALIDATES (the >1-block reject is removed);
     # each block lowers as its own instance at bind.
-    prob = (pops.Problem().block("ne", physics=_StubModel())
-            .block("ni", physics=_StubModel()))
+    prob = (pops.Problem().block("ne", physics=_StubModel("ne"))
+            .block("ni", physics=_StubModel("ni")))
     _check(prob.validate() is True, "a multi-block Uniform Problem validates (C3)")
     _check(prob.options()["n_blocks"] == 2, "options report two blocks")
     print("ok test_validate_multi_block_uniform_lowers")
@@ -231,15 +242,14 @@ def test_validate_outputs_lower():
     print("ok test_validate_outputs_lower")
 
 
-def test_validate_name_collision():
+def test_validate_cross_family_homonym_is_typed():
     field = _poisson_problem()
     prob = pops.Problem().block("phi", physics=_StubModel()).field(field)
-    try:
-        prob.validate()
-        raise AssertionError("a block/field name collision must raise")
-    except ValueError as exc:
-        _check("share name" in str(exc), "collision message is explicit")
-    print("ok test_validate_name_collision")
+    _check(prob.validate() is True,
+           "block and field display-name homonyms validate because their handle kinds differ")
+    _check(prob.blocks()["phi"] != prob.fields()["phi"],
+           "block and field homonyms retain distinct typed identities")
+    print("ok test_validate_cross_family_homonym_is_typed")
 
 
 # --- PhysicsModel alias identity -------------------------------------------
@@ -311,7 +321,8 @@ def test_compile_amr_routes_to_amr_system():
         _check(model.dsl.compiled == [("production", "amr_system")],
                "the block was compiled once for target='amr_system'")
         _check(compiled._target == "amr_system", "amr_system target carried on the handle")
-        _check(compiled._layout is layout, "AMR layout carried on the handle for bind()")
+        _check(compiled._layout is not layout and compiled._layout.base is layout.base,
+               "a detached AMR layout is carried on the handle for bind()")
         _check(set(compiled._block_compiled_models) == {"ne"},
                "compile carries one CompiledModel per block (_block_compiled_models)")
         _check(getattr(compiled, "so_path", None) is not None,
@@ -472,8 +483,8 @@ def test_compile_multi_block_uniform_lowers(monkeypatch=None):
 
     _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _fake_compile_problem)
     try:
-        prob = (pops.Problem().block("ne", physics=_StubModel())
-                .block("ni", physics=_StubModel()))
+        prob = (pops.Problem().block("ne", physics=_StubModel("ne"))
+                .block("ni", physics=_StubModel("ni")))
         compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=_StubTime())
         _check(compiled._target == "system", "multi-block Uniform routes to target='system'")
         _check(set(compiled._block_models) == {"ne", "ni"},
@@ -489,6 +500,12 @@ def test_compile_amr_module_without_compile_raises():
     # cryptic AttributeError. _resolve_problem_model returns the physics as-is when it has no .dsl.
     class _NoCompilePhysics:
         name = "raw"  # no .dsl, no .compile
+
+        def __init__(self):
+            self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, self.name)
+
+        def declaration_index(self):
+            return DeclarationIndex(owner=self.owner_path, handles=())
 
     prob = pops.Problem(layout=AMR(CartesianMesh())).block("ne", physics=_NoCompilePhysics())
     try:
@@ -554,7 +571,9 @@ def _bind_with_stub_runtime(target, layout=None, blocks=("ne",), initial=None):
         block_compiled = None
         if target == "amr_system":
             block_compiled = {name: _StubCompiledModel(name) for name in blocks}
-        compiled = _StubCompiled(target=target, problem=prob, layout=layout,
+        effective_layout = (orchestration._resolve_layout(prob, layout)
+                            if layout is not None else None)
+        compiled = _StubCompiled(target=target, problem=prob, layout=effective_layout,
                                  block_compiled=block_compiled)
         if initial is None:
             initial = {name: [1.0] for name in blocks}
@@ -610,7 +629,7 @@ def test_bind_returns_bound_simulation_view():
         _check(isinstance(sim._engine, _StubSystem), "sim._engine is the internal engine (escape hatch)")
         # A hidden assembly setter raises a clear, engine-vocabulary-free AttributeError.
         try:
-            sim.add_equation
+            _ = sim.add_equation
             raise AssertionError("add_equation must be hidden on the bound simulation")
         except AttributeError as exc:
             msg = str(exc)
@@ -653,7 +672,7 @@ def test_bind_amr_dispatch():
     layout = AMR(CartesianMesh(n=48, L=2.0, periodic=False), max_levels=2, ratio=2,
                  regrid=RegridEvery(4), patches=PatchLayout(distribute_coarse=True,
                                                             coarse_max_grid=16))
-    layout.refine = Refine.on("density").above(1.5)
+    layout.refine = Refine.on(_ref("density")).above(1.5)
     sim_class, last, _, stub_amr, sim = _bind_with_stub_runtime("amr_system", layout=layout)
     _check(sim_class is stub_amr, "target='amr_system' binds an AmrSystem")
     cfg = sim.config
@@ -701,8 +720,8 @@ def test_bind_multi_block_amr_native_install():
 def test_bind_amr_frozen_and_phi_refinement():
     from pops.mesh.amr import FrozenRegrid, TagUnion, Refine
     layout = AMR(CartesianMesh(n=32), regrid=FrozenRegrid())
-    layout.refine = TagUnion(Refine.on("Density").above(2.0),
-                             Refine.on("phi").gradient_above(0.5))
+    layout.refine = TagUnion(Refine.on(_ref("Density", kind="role")).above(2.0),
+                             Refine.on(_ref("phi", kind="field")).gradient_above(0.5))
     _, _, _, _, sim = _bind_with_stub_runtime("amr_system", layout=layout)
     _check(sim.config.regrid_every == 0, "FrozenRegrid -> regrid_every == 0")
     _check(sim.refinement == (2.0, "", ""),
@@ -717,7 +736,7 @@ def test_bind_multi_block_amr_variable_refinement():
     # (the union-of-tags engine resolves it per block); in single-block the same subject is refused.
     from pops.mesh.amr import RegridEvery, Refine
     layout = AMR(CartesianMesh(n=32), regrid=RegridEvery(2))
-    layout.refine = Refine.on("ni").above(3.0)
+    layout.refine = Refine.on(_ref("ni")).above(3.0)
     _, _, _, _, sim = _bind_with_stub_runtime("amr_system", layout=layout, blocks=("ne", "ni"),
                                               initial={"ne": [1.0], "ni": [2.0]})
     _check(sim.refinement == (3.0, "ni", ""),
@@ -730,13 +749,54 @@ def test_bind_single_block_amr_variable_refinement_rejected():
     # path refines on component 0 only); the multi-block selector needs >= 2 blocks.
     from pops.mesh.amr import RegridEvery, Refine
     layout = AMR(CartesianMesh(n=32), regrid=RegridEvery(2))
-    layout.refine = Refine.on("ne_velocity").above(3.0)
+    layout.refine = Refine.on(_ref("ne_velocity")).above(3.0)
     try:
         _bind_with_stub_runtime("amr_system", layout=layout, blocks=("ne",))
         raise AssertionError("a non-density single-block AMR refine subject must raise")
     except NotImplementedError as exc:
         _check("multi-block" in str(exc), "the reject names the multi-block requirement")
     print("ok test_bind_single_block_amr_variable_refinement_rejected")
+
+
+def test_bind_refuses_unavailable_expression_indicator_without_flattening_it():
+    from pops.ir import ValueExpr
+    from pops.ir.ops import dx, dy, sqrt
+    from pops.mesh.amr import Refine
+
+    rho = _ref("rho")
+    indicator = sqrt(dx(ValueExpr(rho)) ** 2 + dy(ValueExpr(rho)) ** 2)
+    layout = AMR(CartesianMesh(n=32), refine=Refine.on(indicator).above(0.2))
+    try:
+        _bind_with_stub_runtime("amr_system", layout=layout)
+        raise AssertionError("an unavailable expression-indicator backend must raise")
+    except NotImplementedError as exc:
+        message = str(exc)
+        _check("amr:expression_indicator unavailable" in message,
+               "the refusal names the missing expression-indicator capability")
+        _check("never flattened" in message,
+               "the refusal guarantees that the expression was not converted to a name")
+    print("ok test_bind_refuses_unavailable_expression_indicator_without_flattening_it")
+
+
+def test_runtime_rejects_an_unauthenticated_canonical_looking_refine_handle():
+    from pops.mesh.amr import Refine
+    from pops.runtime import _bind_adapters
+
+    class _MustNotReceiveSelector:
+        def set_refinement(self, *args, **kwargs):
+            raise AssertionError("unauthenticated selector reached the native runtime")
+
+        def set_phi_refinement(self, *args, **kwargs):
+            raise AssertionError("unauthenticated selector reached the native runtime")
+
+    raw = Refine.on(_ref("rho")).above(0.1)
+    try:
+        _bind_adapters._apply_refine_criterion(_MustNotReceiveSelector(), raw)
+        raise AssertionError("an unauthenticated Refine must be refused")
+    except ValueError as exc:
+        _check("not authenticated by Problem.resolve" in str(exc),
+               "the runtime refusal names the missing Problem authentication boundary")
+    print("ok test_runtime_rejects_an_unauthenticated_canonical_looking_refine_handle")
 
 
 def test_bind_rejects_non_compiled():
@@ -779,7 +839,8 @@ def test_compile_freezes_snapshot_authority(monkeypatch=None):
     try:
         prob = (pops.Problem().block("ne", physics=_StubModel("ne"))
                 .block("ni", physics=_StubModel("ni")).field(_poisson_problem()))
-        compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=_StubTime())
+        compiled = orchestration.compile(
+            prob, layout=Uniform(CartesianMesh()), time=_StubTime())
         _check(set(compiled._block_specs) == {"ne", "ni"},
                "compile freezes a per-block spec (model + spatial) on the handle")
         _check(all("model" in s and "spatial" in s for s in compiled._block_specs.values()),
@@ -803,7 +864,7 @@ def test_bind_rejects_case_mutated_after_compile(monkeypatch=None):
     _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _fake_compile_problem)
     try:
         prob = pops.Problem().block("ne", physics=_StubModel("ne")).field(_poisson_problem())
-        compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=_StubTime())
+        orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=_StubTime())
         _check(prob.frozen, "pops.compile froze the Problem")
         # MUTATE the Problem after compile: adding a block the snapshot never saw is refused here.
         try:

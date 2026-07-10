@@ -10,9 +10,11 @@ condensed-implicit emitters, control flow and the schedule wrap
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
 from pops.ir.literals import scalar_cpp
+from pops.time.references import block_name, field_name
 from pops.codegen.program_emit_kernels import (
     _PROFILE_SKIP_OPS,
     _coeff_cpp,
@@ -43,6 +45,25 @@ from pops.codegen.program_emit_solve import (
 from pops.codegen.program_emit_schedule import _emit_schedule_wrap
 
 
+def _required_block_index(block_idx: Any, block: Any, where: str) -> int:
+    """Return an explicitly declared runtime block index, never an index-0 fallback."""
+    if not isinstance(block_idx, Mapping):
+        raise ValueError(
+            "%s: runtime block routing is unavailable; lowering requires Program._block_indices()"
+            % where)
+    if block is None:
+        raise ValueError("%s: a block-qualified Program value is required" % where)
+    try:
+        index = block_idx[block]
+    except KeyError:
+        raise ValueError(
+            "%s: block %r is not declared in the Program block-index map"
+            % (where, block)) from None
+    if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+        raise ValueError("%s: invalid runtime block index %r" % (where, index))
+    return index
+
+
 def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, model: Any, lines: Any,
              prelude: Any = None, block_idx: Any = None, target: Any = "system") -> None:
     """Lower a SINGLE op to C++, appending to @p lines and recording its C++ token in @p var. Shared
@@ -52,9 +73,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     @p committed_ids is the set of committed value ids (empty inside a sub-block: a body combine is
     never a commit). @p prelude collects INSTALL-TIME lines (persistent scratch + apply lambdas) for
     the matrix-free Krylov ops; None inside a sub-block (those ops only appear at the top level for
-    now). @p block_idx maps a block name to its runtime index (ADC-426); None inside a sub-block,
-    where every op shares the single enclosing block, so a missing map resolves to index 0."""
-    bidx = (block_idx or {}).get(v.block, 0)  # this op's runtime block index (0 single-block)
+    now). @p block_idx maps exact ``BlockHandle`` identities to runtime indices (ADC-426). Missing
+    routing is always an error; even a one-block Program reaches index 0 through an explicit map."""
+    bidx = (_required_block_index(block_idx, v.block, "emit op %r" % v.name)
+            if v.block is not None else None)
     # PER-NODE PROFILING (ADC-459): bracket this op's emitted C++ with a steady_clock pair
     # recorded under "node:<v.name>" (shown by sim.profile_report next to the coarse phases). A
     # now() + ctx.profile_record pair (NOT a RAII ProfileScope { }) keeps the emitted declarations
@@ -73,8 +95,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # Sum_s elliptic_rhs_s(U_s), block idx at its stage state, every other block contributing
         # its live state into the shared phi/aux.
         (state_in,) = v.inputs  # solve_fields inputs = (state,)
-        field = v.attrs.get("field")
-        if field is not None:
+        field_ref = v.attrs.get("field")
+        if field_ref is not None:
+            field = field_name(field_ref)
             # NAMED multi-elliptic field (ADC-428): a SECOND elliptic solve into the field's OWN aux
             # channel (distinct from the shared phi/grad). Lowers to the named overload
             # ctx.solve_fields_from_state(field, block, U) -- block from block_idx (ADC-426); the
@@ -91,17 +114,17 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # a vector indexed BY BLOCK INDEX (size == ctx.n_blocks(); nullptr = the block's live
         # state) -- the multi-species seam (IR commit_many: no operator observes a partial group).
         # Inputs slot at their OWN block index (not list position), so a reordered list still
-        # solves right; an input whose block was never declared via P.state fails loud at emit.
-        bmap = block_idx or {}
+        # solves right; an input whose block was never declared via T.state fails loud at emit.
+        if not isinstance(block_idx, Mapping):
+            raise ValueError(
+                "solve_fields_from_blocks: runtime block routing is unavailable")
+        bmap = block_idx
         vec = "u_stages_%d" % v.id
         lines.append("std::vector<const pops::MultiFab*> %s(ctx.n_blocks(), nullptr);" % vec)
         for st in v.inputs:  # inputs = the N state values, slotted by their own block index
-            if st.block not in bmap:
-                raise ValueError(
-                    "solve_fields_from_blocks: input node %r has block %r, which is not a "
-                    "declared program block %r -- cannot route it to a coupled slot"
-                    % (st.id, st.block, sorted(bmap)))
-            lines.append("%s[%d] = &%s;" % (vec, bmap[st.block], var[st.id]))
+            index = _required_block_index(
+                bmap, st.block, "solve_fields_from_blocks input node %r" % st.id)
+            lines.append("%s[%d] = &%s;" % (vec, index, var[st.id]))
         lines.append("ctx.solve_fields_from_blocks(%s);" % vec)
         # solve_fields_from_blocks returns a FieldContext (the shared aux); its var aliases the first
         # listed state so a downstream rhs(state, fields) reads the refreshed shared aux like any
@@ -121,7 +144,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         by_block = {s.block: s for s in v.inputs}
         scratch = {}
         for blk in components:                       # bundle / expr block order
-            scratch[blk] = "cr%d_%s" % (v.id, blk)
+            scratch[blk] = "cr%d_%s" % (v.id, block_name(blk))
             lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);"
                          % (scratch[blk], var[by_block[blk].id]))
         lines += _emit_coupled_rate_kernel(components, by_block, var, scratch)
@@ -379,7 +402,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         (u,) = v.inputs
         var[v.id] = "s%d" % v.id
         lines.append("const pops::Real %s = ctx.max_wave_speed(%d, %s);"
-                     % (var[v.id], (block_idx or {}).get(u.block, 0), var[u.id]))
+                     % (var[v.id], _required_block_index(
+                         block_idx, u.block, "max_wave_speed input"), var[u.id]))
     elif v.op == "scalar_op":
         # Scalar arithmetic (add/sub/mul/div) over scalar locals / literal constants -> a new scalar
         # local. Used by the dt_bound expression cfl * hmin / max_wave_speed (spec s18).

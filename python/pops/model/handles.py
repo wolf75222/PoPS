@@ -27,98 +27,22 @@ methods) so it stays codegen-free and ``_pops``-free and keeps the ``pops.time``
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from itertools import count
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import quote
 
+from .ownership import OwnerPath, UnresolvedOwnershipError
 
-_OWNER_SEQUENCE = count()
 
-
-@dataclass(frozen=True, slots=True, init=False)
-class OwnerPath:
-    """Structured, immutable owner identity for a declared object.
-
-    Segments are never flattened for equality/hashing, so ``("a", "b.c")``
-    cannot collide with ``("a.b", "c")``.  ADC-653 extends qualification
-    across Case/block registries; this value type is the invariant those
-    registries share.
-    """
-
-    segments: tuple[str, ...]
-    _authoring_token: int | None
-
-    def __init__(self, *segments: Any, _authoring_token: int | None = None) -> None:
-        if len(segments) == 1 and isinstance(segments[0], (tuple, list)):
-            segments = tuple(segments[0])
-        if not segments or any(not isinstance(segment, str) or not segment for segment in segments):
-            raise ValueError("OwnerPath requires one or more non-empty string segments")
-        normalized = tuple(segments)
-        if (_authoring_token is not None
-                and (isinstance(_authoring_token, bool)
-                     or not isinstance(_authoring_token, int)
-                     or _authoring_token < 0)):
-            raise ValueError("OwnerPath authoring token must be a non-negative integer")
-        object.__setattr__(self, "segments", normalized)
-        object.__setattr__(self, "_authoring_token", _authoring_token)
-
-    @classmethod
-    def coerce(cls, owner: Any) -> "OwnerPath":
-        if isinstance(owner, cls):
-            return owner
-        path = getattr(owner, "owner_path", None)
-        if isinstance(path, cls):
-            return path
-        raise TypeError(
-            "owner must be an OwnerPath or expose an OwnerPath owner_path (got %r)" % (owner,))
-
-    @classmethod
-    def model(cls, name: Any) -> "OwnerPath":
-        return cls("model", name)
-
-    @classmethod
-    def problem(cls, name: Any) -> "OwnerPath":
-        return cls("problem", name)
-
-    @classmethod
-    def program(cls, name: Any) -> "OwnerPath":
-        return cls("program", name)
-
-    @classmethod
-    def fresh(cls, kind: Any, name: Any) -> "OwnerPath":
-        """Create a distinct authoring owner before ADC-653 snapshot qualification.
-
-        The token is process-local authoring identity, never a manifest digest.  ADC-653
-        replaces it with registry/snapshot qualification before canonical encoding.
-        """
-        return cls(kind, name, _authoring_token=next(_OWNER_SEQUENCE))
-
-    def child(self, *segments: Any) -> "OwnerPath":
-        if not segments or any(not isinstance(segment, str) or not segment for segment in segments):
-            raise ValueError("OwnerPath.child requires non-empty string segments")
-        return OwnerPath(
-            self.segments + tuple(segments),
-            _authoring_token=self._authoring_token,
-        )
-
-    def canonical_declaration_path(self) -> "OwnerPath":
-        """Drop the process-local authoring token for manifest/snapshot identity."""
-        return OwnerPath(self.segments) if self._authoring_token is not None else self
-
-    def __str__(self) -> str:
-        path = "/".join(quote(segment, safe="") for segment in self.segments)
-        # ``#`` is always percent-encoded inside a user segment, so this structural suffix cannot
-        # collide with a legitimate path. It is intentionally absent from canonical manifests.
-        if self._authoring_token is not None:
-            path += "#authoring=%d" % self._authoring_token
-        return path
-
+_KEEP_REFERENCE = object()
 
 class Handle:
     """Immutable, owner-qualified identity of one declared object."""
 
-    __slots__ = ("owner_path", "local_id", "kind", "schema_version")
+    __slots__ = (
+        "owner_path", "local_id", "kind", "schema_version",
+        "_declaration_ref", "_block_ref",
+    )
     __pops_ir_immutable__ = True
 
     def __init__(
@@ -140,6 +64,8 @@ class Handle:
         object.__setattr__(self, "local_id", local_id)
         object.__setattr__(self, "kind", kind)
         object.__setattr__(self, "schema_version", schema_version)
+        object.__setattr__(self, "_declaration_ref", None)
+        object.__setattr__(self, "_block_ref", None)
 
     @property
     def name(self) -> str:
@@ -149,6 +75,26 @@ class Handle:
     def expression_readable(self) -> bool:
         """Whether an explicit ValueExpr may read this declaration as a symbolic value."""
         return True
+
+    @property
+    def is_resolved(self) -> bool:
+        """Whether this handle carries canonical, serialisable ownership."""
+        return self.owner_path.is_canonical
+
+    @property
+    def is_instance(self) -> bool:
+        """Whether this is a block-qualified projection of a model declaration."""
+        return self._declaration_ref is not None
+
+    @property
+    def declaration_ref(self) -> Handle | None:
+        """Original scientific declaration for a block-qualified handle."""
+        return self._declaration_ref
+
+    @property
+    def block_ref(self) -> Handle | None:
+        """Block declaration selecting this instance, when qualified."""
+        return self._block_ref
 
     @property
     def qualified_id(self) -> str:
@@ -163,24 +109,139 @@ class Handle:
         )
 
     def inspect(self) -> dict[str, Any]:
-        return {
+        # Inspection removes the opaque authoring capability but is not an authentication event.
+        # A newly authored model may not have built its declaration index yet, so use the explicit
+        # presentation projection rather than inventing or requiring a canonical fingerprint.
+        inspection_owner = self.owner_path.presentation()
+        result = {
             "kind": self.kind,
             "local_id": self.local_id,
-            "owner_path": self.owner_path.segments,
-            "qualified_id": self.qualified_id,
+            "owner_path": inspection_owner.to_data(),
+            "ownership_phase": "canonical" if self.is_resolved else "authoring",
+            "qualified_id": self._qualified_id(inspection_owner),
             "schema_version": self.schema_version,
         }
+        if self.is_instance:
+            result["declaration_ref"] = self.declaration_ref.inspect()
+            result["block_ref"] = self.block_ref.inspect()
+        return result
 
     def canonical_identity(self) -> dict[str, Any]:
-        """JSON-ready declaration identity with ephemeral authoring tokens removed."""
-        owner = self.owner_path.canonical_declaration_path()
-        return {
+        """JSON-ready declaration identity with its complete typed owner path."""
+        owner = self.owner_path
+        if owner.is_authoring:
+            raise UnresolvedOwnershipError(
+                "handle %s is still authoring-owned; resolve it through its authoritative "
+                "registry before canonical serialization" % self.qualified_id)
+        result = {
             "kind": self.kind,
             "local_id": self.local_id,
-            "owner_path": owner.segments,
+            "owner_path": owner.to_data(),
             "qualified_id": self._qualified_id(owner),
             "schema_version": self.schema_version,
         }
+        if self.is_instance:
+            if not self.declaration_ref.is_resolved or not self.block_ref.is_resolved:
+                raise UnresolvedOwnershipError(
+                    "instance handle %s retains unresolved declaration/block references"
+                    % self.qualified_id)
+            result["declaration_ref"] = self.declaration_ref.canonical_identity()
+            result["block_ref"] = self.block_ref.canonical_identity()
+        return result
+
+    @classmethod
+    def from_canonical_identity(cls, data: Any) -> Handle:
+        """Rebuild and authenticate the identity emitted by :meth:`canonical_identity`."""
+        if not isinstance(data, Mapping):
+            raise TypeError("Handle canonical identity must be a mapping")
+        required = {"kind", "local_id", "owner_path", "qualified_id", "schema_version"}
+        operator_keys = required | {"registered_operator_name"}
+        block_keys = required | {"handle_type", "model_owner_path"}
+        instance_keys = required | {"declaration_ref", "block_ref"}
+        operator_instance_keys = operator_keys | {"declaration_ref", "block_ref"}
+        allowed_shapes = (
+            required,
+            operator_keys,
+            block_keys,
+            instance_keys,
+            operator_instance_keys,
+        )
+        if set(data) not in allowed_shapes:
+            raise TypeError(
+                "Handle canonical identity has an unsupported key set %s"
+                % sorted(data))
+        owner = OwnerPath.from_data(data["owner_path"])
+        if "handle_type" in data:
+            if data["handle_type"] != "block" or data["kind"] != "block":
+                raise ValueError(
+                    "BlockHandle canonical identity requires handle_type='block' and kind='block'"
+                )
+            from pops.problem.handles import BlockHandle
+
+            result = BlockHandle(
+                data["local_id"],
+                owner=owner,
+                model_owner=OwnerPath.from_data(data["model_owner_path"]),
+                schema_version=data["schema_version"],
+            )
+        elif "registered_operator_name" in data:
+            result: Handle = OperatorHandle(
+                data["local_id"], kind=data["kind"], owner=owner,
+                schema_version=data["schema_version"],
+                registered_operator_name=data["registered_operator_name"])
+        else:
+            result = Handle(
+                data["local_id"], kind=data["kind"], owner=owner,
+                schema_version=data["schema_version"])
+        if "declaration_ref" in data:
+            declaration_ref = cls.from_canonical_identity(data["declaration_ref"])
+            block_ref = cls.from_canonical_identity(data["block_ref"])
+            object.__setattr__(result, "_declaration_ref", declaration_ref)
+            object.__setattr__(result, "_block_ref", block_ref)
+        if result.canonical_identity() != dict(data):
+            raise ValueError("Handle canonical identity has an invalid qualified_id or payload")
+        return result
+
+    def _with_owner(
+        self,
+        owner: Any,
+        *,
+        declaration_ref: Any = _KEEP_REFERENCE,
+        block_ref: Any = _KEEP_REFERENCE,
+    ) -> Handle:
+        """Internal immutable requalification preserving the concrete handle metadata."""
+        qualified_owner = OwnerPath.coerce(owner)
+        clone = object.__new__(type(self))
+        for base in reversed(type(self).__mro__):
+            slots = base.__dict__.get("__slots__", ())
+            if isinstance(slots, str):
+                slots = (slots,)
+            for slot in slots:
+                if slot in ("__dict__", "__weakref__") or not hasattr(self, slot):
+                    continue
+                object.__setattr__(clone, slot, getattr(self, slot))
+        object.__setattr__(clone, "owner_path", qualified_owner)
+        if declaration_ref is not _KEEP_REFERENCE:
+            if declaration_ref is not None and not isinstance(declaration_ref, Handle):
+                raise TypeError("declaration_ref must be a Handle or None")
+            object.__setattr__(clone, "_declaration_ref", declaration_ref)
+        if block_ref is not _KEEP_REFERENCE:
+            if block_ref is not None and not isinstance(block_ref, Handle):
+                raise TypeError("block_ref must be a Handle or None")
+            object.__setattr__(clone, "_block_ref", block_ref)
+        return clone
+
+    def _resolved(self, owner: Any = None) -> Handle:
+        """Return a canonical copy; authoritative registries call this after authentication."""
+        resolved_owner = (self.owner_path.canonical() if owner is None
+                          else OwnerPath.coerce(owner))
+        if resolved_owner.is_authoring:
+            raise UnresolvedOwnershipError("resolved handle owner must be canonical")
+        declaration_ref = (self.declaration_ref._resolved()
+                           if self.declaration_ref is not None else None)
+        block_ref = self.block_ref._resolved() if self.block_ref is not None else None
+        return self._with_owner(
+            resolved_owner, declaration_ref=declaration_ref, block_ref=block_ref)
 
     def _identity(self) -> tuple[Any, ...]:
         return (self.schema_version, self.owner_path, self.kind, self.local_id)
@@ -202,7 +263,7 @@ class Handle:
 
     def __repr__(self) -> str:
         return "%s(local_id=%r, kind=%r, owner=%r)" % (
-            type(self).__name__, self.local_id, self.kind, self.owner_path.segments)
+            type(self).__name__, self.local_id, self.kind, str(self.owner_path))
 
 
 class OperatorHandle(Handle):
@@ -280,7 +341,7 @@ class OperatorHandle(Handle):
 
     def canonical_identity(self) -> dict[str, Any]:
         """JSON-ready identity with both public alias and authenticated target."""
-        owner = self.owner_path.canonical_declaration_path()
+        owner = self.owner_path
         result = super().canonical_identity()
         result["registered_operator_name"] = self.registered_operator_name
         result["qualified_id"] = self._qualified_operator_id(owner)
@@ -333,7 +394,7 @@ class OperatorHandle(Handle):
 
     def __repr__(self) -> str:
         return "OperatorHandle(%r, kind=%r, owner=%r)" % (
-            self.name, self.kind, self.owner_path.segments)
+            self.name, self.kind, str(self.owner_path))
 
 
 __all__ = ["Handle", "OperatorHandle", "OwnerPath"]

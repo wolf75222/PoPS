@@ -6,19 +6,8 @@ from typing import Any
 from .literals import exact_numeric_scalar, exact_scale_prefix, multiply_exact_scalars, scalar_literal
 from .symbolic import ImmutableSymbolic, freeze_symbolic_metadata
 
-# NumPy is imported lazily by host-only eval() methods so codegen stays dependency-free.
-
-
-# SECTION 1 -- FLUX-DSL NODES  (from pops.dsl)
-
 class Expr(ImmutableSymbolic):
-    """Symbolic expression node with small opt-in extension protocols.
-
-    Operators build the tree; ``eval(env)`` applies it to numpy arrays.  An
-    external node can participate in generic traversal/CSE/differentiation by
-    implementing ``__pops_ir_children__``, ``__pops_ir_key__`` and optionally
-    ``__pops_ir_diff__``.  Unknown differentiation remains fail-loud.
-    """
+    """Symbolic tree node with fail-loud extension protocols."""
 
     def __pops_ir_children__(self) -> Any:
         """Return child Expr nodes, or ``NotImplemented`` for built-in dispatch."""
@@ -31,6 +20,19 @@ class Expr(ImmutableSymbolic):
     def __pops_ir_diff__(self, *, recurse: Any, target: Any, definitions: Any) -> Any:
         """Return a symbolic derivative, or ``NotImplemented`` when unsupported."""
         return NotImplemented
+
+    def resolve_references(self, resolver: Any) -> Expr:
+        """Return a detached graph whose declaration Handle leaves are canonical."""
+        from .expr_references import resolve_expr_references
+        return resolve_expr_references(self, resolver, {})
+
+    def declaration_references(self) -> tuple[Any, ...]:
+        """Return the typed Handle leaves carried by this immutable graph."""
+        from .expr_references import collect_expr_references
+
+        references = []
+        collect_expr_references(self, references, set())
+        return tuple(references)
 
     def __add__(self, o: Any) -> Any: return Add(self, _wrap(o))
     def __radd__(self, o: Any) -> Any: return Add(_wrap(o), self)
@@ -60,9 +62,7 @@ class Expr(ImmutableSymbolic):
 def _wrap(o: Any) -> Any:
     if isinstance(o, Expr):
         return o
-    # A Param exposes its internal tree NODE (_node: Const for 'const', RuntimeParamRef for
-    # 'runtime'). We promote it via that node, NOT via float(o): otherwise sqrt(param_runtime) /
-    # dsl.sqrt(param) would inline the declaration value (Const) instead of emitting params.get(...).
+    # Promote a Param through its symbolic node; float(param) would erase runtime identity.
     node = getattr(o, "_node", None)
     if isinstance(node, Expr):
         return node

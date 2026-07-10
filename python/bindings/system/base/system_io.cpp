@@ -387,37 +387,43 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
   // block names, map each Program block index to the System block of that name, and store the
   // program-index -> system-index map (read by ProgramContext to resolve every ctx.state / rhs_into /
   // commit). A Program block whose name has no instantiated System block fails loud with the spec
-  // message. A pre-Spec-3 .so (the count symbol absent) carries no table -> clear the map (identity),
-  // i.e. the historical positional convention. Built BEFORE install() so the step closure (which
-  // captures a ProgramContext) sees the map on its first run.
+  // message. The table is REQUIRED: a library without explicit block identities is ambiguous and
+  // must be regenerated; the historical positional convention is no longer a binding contract.
+  // Built BEFORE install() so the step closure (which captures a ProgramContext) sees the map on its
+  // first run.
   {
     using count_t = int (*)();
     using name_t = const char* (*)(int);
     auto block_count = reinterpret_cast<count_t>(pops::dynlib::sym(h, "pops_program_block_count"));
     auto block_name = reinterpret_cast<name_t>(pops::dynlib::sym(h, "pops_program_block_name"));
-    if (block_count && block_name) {
-      const std::vector<std::string> sys_names = block_names();
-      const int n = block_count();
-      std::vector<int> prog_to_sys(static_cast<std::size_t>(n), -1);
-      for (int p = 0; p < n; ++p) {
-        const std::string want = block_name(p);
-        int found = -1;
-        for (std::size_t s = 0; s < sys_names.size(); ++s)
-          if (sys_names[s] == want) {
-            found = static_cast<int>(s);
-            break;
-          }
-        if (found < 0) {
-          pops::dynlib::close(h);
-          throw std::runtime_error("Program requires block instance '" + want +
-                                   "', but simulation did not instantiate it");
-        }
-        prog_to_sys[static_cast<std::size_t>(p)] = found;
-      }
-      set_program_block_map(prog_to_sys);
-    } else {
-      set_program_block_map({});  // pre-Spec-3 .so: no name table -> identity (positional convention)
+    if (!block_count || !block_name) {
+      pops::dynlib::close(h);
+      throw std::runtime_error(
+          "System::install_program: compiled Program '" + so_path +
+          "' does not export the required block identity table "
+          "(pops_program_block_count + pops_program_block_name). Positional Program-to-System "
+          "binding has been removed; regenerate the Program library with the current PoPS "
+          "codegen and headers.");
     }
+    const std::vector<std::string> sys_names = block_names();
+    const int n = block_count();
+    std::vector<int> prog_to_sys(static_cast<std::size_t>(n), -1);
+    for (int p = 0; p < n; ++p) {
+      const std::string want = block_name(p);
+      int found = -1;
+      for (std::size_t s = 0; s < sys_names.size(); ++s)
+        if (sys_names[s] == want) {
+          found = static_cast<int>(s);
+          break;
+        }
+      if (found < 0) {
+        pops::dynlib::close(h);
+        throw std::runtime_error("Program requires block instance '" + want +
+                                 "', but simulation did not instantiate it");
+      }
+      prog_to_sys[static_cast<std::size_t>(p)] = found;
+    }
+    set_program_block_map(prog_to_sys);
   }
   // RUNTIME PARAMETERS (ADC-510, Spec 5 C5). A Program whose physics reads dsl.Param(..., kind="runtime")
   // exports a pops_program_param_* table: per flat parameter, its PROGRAM block index, its stable index

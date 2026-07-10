@@ -6,13 +6,13 @@ import pytest
 
 pops = pytest.importorskip("pops", exc_type=ImportError)
 
-from pops.descriptors import BrickDescriptor  # noqa: E402
+from pops.model import Module  # noqa: E402
 from pops.problem._snapshot import build_problem_snapshot  # noqa: E402
 
 
 def test_problem_freeze_detaches_stale_registry_views_and_keeps_hash_stable():
     problem = pops.Problem(name="deep-storage")
-    problem.add_block("u", BrickDescriptor("model", "native"))
+    problem.add_block("u", Module("model"))
     problem.param("alpha", {"weights": [1, 2]})
 
     stale_block = problem._block_registry.spec("u")
@@ -45,4 +45,3 @@ def test_problem_freeze_detaches_stale_registry_views_and_keeps_hash_stable():
         del problem._block_registry._blocks
     with pytest.raises(AttributeError, match="identity"):
         del problem._name
-

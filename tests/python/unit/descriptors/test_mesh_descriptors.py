@@ -20,6 +20,13 @@ from pops.mesh.amr import (  # noqa: E402
 from pops.mesh.geometry import Disc, EmbeddedBoundary  # noqa: E402
 from pops.mesh.masks import CutCell, NoMask, Staircase  # noqa: E402
 from pops.mesh.boundaries import Periodic, Physical, FaceBC, XMin  # noqa: E402
+from pops.model import Handle, OwnerPath  # noqa: E402
+from pops.ir.ops import dx, dy, sqrt  # noqa: E402
+from pops.ir import ValueExpr, Var  # noqa: E402
+
+
+def _handle(name, kind="state"):
+    return Handle(name, kind=kind, owner=OwnerPath.model("mesh-descriptor-tests"))
 
 
 def test_back_compat_and_package_export():
@@ -84,15 +91,42 @@ def test_amr_route_limits_are_explainable():
 
 
 def test_typed_refinement_criteria():
-    c = Refine.on("rho").above(0.05)
+    rho = _handle("rho")
+    phi = _handle("phi", kind="field")
+    c = Refine.on(rho).above(0.05)
     assert c.options()["predicate"] == "above" and c.threshold == 0.05
+    assert c.options()["subject"]["handle"]["local_id"] == "rho"
     c.validate()
     with pytest.raises(ValueError):
-        Refine.on("rho").validate()  # incomplete: no predicate/threshold
-    TagUnion(Refine.on("rho").above(0.05),
-             Refine.on("phi").gradient_above(0.5)).validate()
+        Refine.on(rho).validate()  # incomplete: no predicate/threshold
+    TagUnion(Refine.on(rho).above(0.05),
+             Refine.on(phi).gradient_above(0.5)).validate()
+    with pytest.raises(TypeError, match="Handle"):
+        Refine.on("rho")
     with pytest.raises(TypeError):
         TagUnion("not-a-criterion")
+
+
+def test_refine_accepts_a_reference_aware_symbolic_indicator_without_flattening_it():
+    rho = _handle("rho")
+    indicator = sqrt(dx(ValueExpr(rho)) ** 2 + dy(ValueExpr(rho)) ** 2)
+    criterion = Refine.on(indicator).above(0.05)
+    resolved = criterion.resolve_references(lambda handle: handle)
+    assert resolved.subject is not indicator
+    assert resolved.subject.a.a.a.field.handle is rho
+    options = resolved.options()["subject"]
+    assert options["reference_type"] == "expression"
+    assert options["expression_type"].endswith(".Sqrt")
+
+
+def test_refine_expression_rejects_free_name_var_provenance():
+    with pytest.raises(TypeError, match=r"ValueExpr\(handle\)"):
+        Refine.on(Var("rho", "cons"))
+
+    rho = _handle("rho")
+    mixed = ValueExpr(rho) + Var("legacy_rho", "cons")
+    with pytest.raises(TypeError, match="free-name Var"):
+        Refine.on(mixed).above(0.1).resolve_references(lambda handle: handle)
 
 
 def test_boundaries_and_masks():
@@ -113,16 +147,20 @@ def test_amr_policies():
     assert RegridEvery(20).options()["steps"] == 20
     with pytest.raises(ValueError):
         RegridEvery(0)
-    out = AMROutput(fields=["phi"], levels=AllLevels(), include_patch_boxes=True)
+    phi = _handle("phi", kind="field")
+    out = AMROutput(fields=[phi], levels=AllLevels(), include_patch_boxes=True)
     assert out.options()["levels"] == "all"
     assert out.options()["include_patch_boxes"] is True
+    assert out.options()["fields"][0]["local_id"] == "phi"
+    with pytest.raises(TypeError, match="Handle"):
+        AMROutput(fields=["phi"])
 
 
 def test_printable_summaries_are_short_and_stable():
     s = str(AMR(base=CartesianMesh()))
     assert s.startswith("AMR") and len(s) < 200
     assert "CartesianMesh" in repr(CartesianMesh())
-    assert str(Refine.on("rho").above(0.05)).startswith("Refine")
+    assert str(Refine.on(_handle("rho")).above(0.05)).startswith("Refine")
     assert str(AuxHalo("foextrap")) == "AuxHalo('foextrap', value=0)"
 
 

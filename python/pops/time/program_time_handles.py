@@ -9,6 +9,7 @@ from pops.time.handles import (
 from pops.time.program_value_validation import (
     merge_state_spaces, require_compatible_spaces, require_owned,
 )
+from pops.time.references import block_name, state_name
 from pops.time.values import ProgramValue, _Affine, _resolve_handle
 
 
@@ -27,17 +28,17 @@ class _ProgramTimeHandles:
         self._time_endpoint_handles = {}
 
     @staticmethod
-    def _time_state_key(block: str, state_name: str) -> tuple[str, str]:
-        return block, state_name
+    def _time_state_key(block: Any, state: Any) -> tuple[Any, Any]:
+        return block, state
 
-    def _time_state(self, block: str, state_name: str, space: Any) -> TimeState:
-        key = self._time_state_key(block, state_name)
+    def _time_state(self, block: Any, state: Any, space: Any) -> TimeState:
+        key = self._time_state_key(block, state)
         current = self._time_states.get(key)
         if current is not None:
             require_compatible_spaces(
                 current.space, space, "TimeState declaration", typed_pair=True)
             return current
-        handle = TimeState(self, block, state_name, space=space)
+        handle = TimeState(self, block, state, space=space)
         self._time_states[key] = handle
         return handle
 
@@ -46,7 +47,7 @@ class _ProgramTimeHandles:
             raise TypeError("%s: a TimeState handle is required" % where)
         if state.owner_path != self.owner_path:
             raise ValueError("%s: the TimeState belongs to a different Program" % where)
-        issued = self._time_states.get(self._time_state_key(state.block, state.state_name))
+        issued = self._time_states.get(self._time_state_key(state.block, state.state))
         if issued is not state:
             raise ValueError("%s: the TimeState was not issued by this Program" % where)
         return state
@@ -56,7 +57,8 @@ class _ProgramTimeHandles:
         value = self._time_current_values.get(state)
         if value is None:
             value = self._new(
-                "state", "state", (), {}, state.block, state.block, space=state.space)
+                "state", "state", (), {"state": state.state}, block_name(state.block),
+                state.block, space=state.space, state_ref=state.state)
             self._time_current_values[state] = value
         else:
             value = self._canonical_value(value)
@@ -73,7 +75,7 @@ class _ProgramTimeHandles:
         if handle is None:
             self._guard_mutable("declare a temporal stage")
             handle = StageHandle(
-                program=self, block=state.block, state_name=state.state_name,
+                program=self, block=state.block, state=state.state,
                 key=key, space=state.space)
             self._time_stage_handles[cache_key] = handle
         return handle
@@ -84,7 +86,7 @@ class _ProgramTimeHandles:
         if handle.owner_path != self.owner_path:
             raise ValueError("%s: the StageHandle belongs to a different Program" % where)
         state = self._time_states.get(
-            self._time_state_key(handle.block, handle.state_name))
+            self._time_state_key(handle.block, handle.state))
         issued = self._time_stage_handles.get((state, handle.key)) if state is not None else None
         if issued is not handle:
             raise ValueError("%s: the StageHandle was not issued by this Program" % where)
@@ -126,7 +128,8 @@ class _ProgramTimeHandles:
         require_compatible_spaces(
             handle.space, candidate_space, "T.define stage", typed_pair=True)
         out = self.define(
-            "%s_%s_%s" % (handle.block, handle.state_name, handle.key), value)
+            "%s_%s_%s" % (
+                block_name(handle.block), state_name(handle.state), handle.key), value)
         self._time_stage_values[handle] = out
         return out
 
@@ -152,7 +155,7 @@ class _ProgramTimeHandles:
             self._guard_mutable("declare a state endpoint")
             handle = StateEndpointHandle(
                 owner=self.owner_path, block=state.block,
-                state_name=state.state_name, space=state.space)
+                state=state.state, space=state.space)
             self._time_endpoint_handles[state] = handle
         return handle
 
@@ -162,7 +165,7 @@ class _ProgramTimeHandles:
         if endpoint.owner_path != self.owner_path:
             raise ValueError("%s: the StateEndpointHandle belongs to a different Program" % where)
         state = self._time_states.get(
-            self._time_state_key(endpoint.block, endpoint.state_name))
+            self._time_state_key(endpoint.block, endpoint.state))
         issued = self._time_endpoint_handles.get(state) if state is not None else None
         if issued is not endpoint:
             raise ValueError("%s: the StateEndpointHandle was not issued by this Program" % where)
@@ -177,7 +180,7 @@ class _ProgramTimeHandles:
         if handle is None:
             self._guard_mutable("declare a history handle")
             handle = HistoryHandle(
-                program=self, block=state.block, state_name=state.state_name,
+                program=self, block=state.block, state=state.state,
                 lag=lag, space=state.space)
             self._time_history_handles[cache_key] = handle
         return handle
@@ -188,7 +191,7 @@ class _ProgramTimeHandles:
         if handle.owner_path != self.owner_path:
             raise ValueError("%s: the HistoryHandle belongs to a different Program" % where)
         state = self._time_states.get(
-            self._time_state_key(handle.block, handle.state_name))
+            self._time_state_key(handle.block, handle.state))
         issued = self._time_history_handles.get((state, handle.lag)) if state is not None else None
         if issued is not handle:
             raise ValueError("%s: the HistoryHandle was not issued by this Program" % where)
@@ -206,11 +209,12 @@ class _ProgramTimeHandles:
         if config is None:
             raise ValueError(
                 "%s.prev requires keep_history first: declare T.keep_history(%s, depth=...) "
-                "before reading a lagged state" % (state.block, state.state_name))
+                "before reading a lagged state"
+                % (block_name(state.block), state_name(state.state)))
         if lag > config[0]:
             raise ValueError(
                 "%s.prev(%d) exceeds the kept history depth %d; raise the keep_history depth"
-                % (state.block, lag, config[0]))
+                % (block_name(state.block), lag, config[0]))
         return config
 
     def _resolve_history_handle(self, handle: Any) -> ProgramValue:
@@ -219,8 +223,8 @@ class _ProgramTimeHandles:
         value = self._time_history_values.get(handle)
         if value is None:
             value = self.history(
-                "%s.%s" % (state.block, state.state_name), handle.lag,
-                space=state.space, block=state.block)
+                "%s.%s" % (block_name(state.block), state_name(state.state)), handle.lag,
+                space=state.space, block=state.block, state_ref=state.state)
             self._time_history_values[handle] = value
         else:
             value = self._canonical_value(value)
@@ -256,8 +260,8 @@ class _ProgramTimeHandles:
         config = (depth, cold_start, policy)
         if prior is not None:
             raise ValueError("keep_history: history for %s.%s is already configured"
-                             % (state.block, state.state_name))
-        name = "%s.%s" % (state.block, state.state_name)
+                             % (block_name(state.block), state_name(state.state)))
+        name = "%s.%s" % (block_name(state.block), state_name(state.state))
         if name in self._histories_ncomp:
             raise ValueError(
                 "keep_history: %r is already a narrow scalar history ring, not a State ring"
@@ -289,7 +293,7 @@ class _ProgramTimeHandles:
         state_map = {}
         for old_state in self._time_states.values():
             new_state = out._time_state(
-                old_state.block, old_state.state_name, old_state.space)
+                old_state.block, old_state.state, old_state.space)
             state_map[old_state] = new_state
             old_current = self._time_current_values.get(old_state)
             if old_current is not None:
@@ -315,7 +319,8 @@ class _ProgramTimeHandles:
 
         for old_state, (depth, cold_start, _policy) in self._time_history_configs.items():
             new_state = state_map[old_state]
-            name = "%s.%s" % (new_state.block, new_state.state_name)
+            name = "%s.%s" % (
+                block_name(new_state.block), state_name(new_state.state))
             copied_policy = out._history_persistence[name][1]
             out._time_history_configs[new_state] = (depth, cold_start, copied_policy)
             old_store = self._time_history_stores.get(old_state)

@@ -2,10 +2,9 @@
 
 A user-facing operator declarer (``m.rate_operator`` / ``m.source_term`` /
 ``m.linear_source``) returns an inert :class:`pops.model.OperatorHandle` carrying the
-operator ``name`` (and ``kind``). The PUBLIC ``P.call`` requires the handle (a bare string is
-refused); the INTERNAL ``P._call`` resolves a name token. Both follow the IDENTICAL registry
-lookup + lowering, so ``P.call(handle, ...)`` builds the BYTE-IDENTICAL IR (same ``_ir_hash``) as
-``P._call(name, ...)``.
+operator ``name`` (and ``kind``). The PUBLIC ``P.call`` requires the owner-qualified handle (a bare
+string is refused). A declarer-returned handle and the authoritative registry-issued handle are the
+same identity and therefore build BYTE-IDENTICAL IR (same ``_ir_hash``).
 
 Pure Python (``_ir_hash`` is the IR fingerprint; no compilation); skips cleanly if pops is
 not importable. Never fakes the engine.
@@ -17,6 +16,7 @@ try:
     from pops.ir.expr import Const
     from pops.model import OperatorHandle
     from pops.physics.facade import Model
+    from pops.problem import Problem
     from pops import time as adctime
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_operator_handles (pops unavailable: %s)" % exc)
@@ -64,81 +64,81 @@ def test_declarers_return_operator_handles():
 
 def _operator_handle(model, name):
     """Return the owner-qualified handle for an operator declared by ``model``."""
-    registry = model.operator_registry()
-    operator = registry.get(name)
-    return OperatorHandle(
-        operator.name, kind=operator.kind, owner=registry.owner_path,
-        signature=operator.signature)
+    return model.module.operator_handle(name)
 
 
-def _select(P, selector, *args, name=None):
-    """Dispatch a selector: a handle goes through the PUBLIC P.call, a bare name through the
-    INTERNAL P._call (the private name-token path the macros / lowering use)."""
-    if isinstance(selector, OperatorHandle):
-        return P.call(selector, *args, name=name)
-    return P._call(selector, *args, name=name)
+def _program_state(model, name):
+    """Create one typed block instance and bind its declared state to a Program."""
+    module = model.module
+    block = Problem(name="%s-case" % name).add_block("plasma", model)
+    state = module.state_handle(module.state_spaces()["U"])
+    program = adctime.Program(name).bind_operators(module)
+    return program, program.state(block, state)
 
 
 def _rate_program(m, selector):
-    """Build a one-step predictor Program calling the rate operator via ``selector`` (a name or
-    a handle). Returns the Program (its ``_ir_hash`` is the IR fingerprint)."""
-    P = adctime.Program("prog").bind_operators(m)
-    U = P.state("plasma")
+    """Build a one-step predictor through the public typed operator path."""
+    P, state = _program_state(m, "prog")
+    U = state.n
     f = P.call(_operator_handle(m, "fields_from_state"), U)
-    R = _select(P, selector, U, f)
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", U + P.dt * R))
+    R = P.call(selector, U, f)
+    P.commit(state.next, P.linear_combine("u1", U + P.dt * R))
     return P
 
 
-def test_call_handle_byte_identical_to_name():
-    """P.call(handle) lowers to the byte-identical IR as the internal P._call(name) -- same _ir_hash."""
+def test_declarer_handle_byte_identical_to_registry_handle():
+    """Declarer and registry handles are one identity and lower to byte-identical IR."""
     m, h = build_model()
-    prog_name = _rate_program(m, "explicit_rhs")          # internal _call(name)
-    prog_handle = _rate_program(m, h["explicit_rhs"])     # public call(handle)
-    assert prog_name._ir_hash() == prog_handle._ir_hash(), (
-        "P.call(handle) must lower to the byte-identical IR as the internal P._call(name)")
-    print("OK  P.call(handle) IR hash == P._call(name) IR hash: %s" % prog_name._ir_hash())
+    registry_handle = _operator_handle(m, "explicit_rhs")
+    assert h["explicit_rhs"] == registry_handle
+    assert h["explicit_rhs"].qualified_id == registry_handle.qualified_id
+    declared = _rate_program(m, h["explicit_rhs"])
+    registered = _rate_program(m, registry_handle)
+    assert declared._ir_hash() == registered._ir_hash()
+    print("OK  declarer handle IR == authoritative registry handle IR: %s" % declared._ir_hash())
 
 
-def test_name_path_byte_identical_across_models():
-    """The internal name path P._call('name') is deterministic and equals the handle path for each
-    declarer kind (rate / source / linear)."""
-    m_a, _ = build_model()
-    m_b, _ = build_model()
-    h_a = _rate_program(m_a, "explicit_rhs")._ir_hash()
-    h_b = _rate_program(m_b, "explicit_rhs")._ir_hash()
-    assert h_a == h_b, "the internal P._call name path must be deterministic / unperturbed"
+def test_typed_path_is_deterministic_and_complete_across_models():
+    """Qualified handles distinguish live declarations while structural IR stays deterministic."""
+    m_a, handles_a = build_model()
+    m_b, handles_b = build_model()
+    assert handles_a["explicit_rhs"] != handles_b["explicit_rhs"]
+    h_a = _rate_program(m_a, handles_a["explicit_rhs"])._ir_hash()
+    h_b = _rate_program(m_b, handles_b["explicit_rhs"])._ir_hash()
+    assert h_a == h_b
     m, h = build_model()
 
     def src_prog(selector):
-        P = adctime.Program("p").bind_operators(m)
-        U = P.state("plasma")
+        P, state = _program_state(m, "p")
+        U = state.n
         f = P.call(_operator_handle(m, "fields_from_state"), U)
-        s = _select(P, selector, U, f)
-        P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", U + P.dt * s))
+        s = P.call(selector, U, f)
+        P.commit(state.next, P.linear_combine("u1", U + P.dt * s))
         return P
 
-    assert src_prog("electric")._ir_hash() == src_prog(h["electric"])._ir_hash()
+    assert src_prog(_operator_handle(m, "electric"))._ir_hash() == src_prog(
+        h["electric"])._ir_hash()
 
     def lin_prog(selector):
-        P = adctime.Program("p").bind_operators(m)
-        U = P.state("plasma")
+        P, state = _program_state(m, "p")
+        U = state.n
         f = P.call(_operator_handle(m, "fields_from_state"), U)
-        L = _select(P, selector, f)
+        L = P.call(selector, f)
         U1 = P.solve_local_linear("u1", operator=P.I - P.dt * L, rhs=U, fields=f)
-        P.commit(P.state("U", block="plasma").next, U1)
+        P.commit(state.next, U1)
         return P
 
-    assert lin_prog("lorentz")._ir_hash() == lin_prog(h["lorentz"])._ir_hash()
-    print("OK  internal name path byte-identical (rate / source / linear all match handle path)")
+    assert lin_prog(_operator_handle(m, "lorentz"))._ir_hash() == lin_prog(
+        h["lorentz"])._ir_hash()
+    print("OK  typed rate / source / linear paths preserve qualified identity and deterministic IR")
 
 
 def test_public_call_rejects_a_string():
     """The PUBLIC P.call refuses a bare string operator NAME with a clear TypeError naming the
     handle path (the one public path is the typed handle)."""
     m, _ = build_model()
-    P = adctime.Program("p").bind_operators(m)
-    U = P.state("plasma")
+    P, state = _program_state(m, "p")
+    U = state.n
     with pytest.raises(TypeError, match="typed operator handle"):
         P.call("explicit_rhs", U)
     print("OK  public P.call('explicit_rhs') -> TypeError naming the handle path")
@@ -147,8 +147,8 @@ def test_public_call_rejects_a_string():
 def test_bad_type_rejected():
     """A non-handle selector is a clear TypeError on the public surface (typed handle required)."""
     m, _ = build_model()
-    P = adctime.Program("p").bind_operators(m)
-    U = P.state("plasma")
+    P, state = _program_state(m, "p")
+    U = state.n
     with pytest.raises(TypeError, match="OperatorHandle"):
         P.call(123, U)
     with pytest.raises(TypeError, match="OperatorHandle"):
@@ -156,42 +156,48 @@ def test_bad_type_rejected():
     print("OK  P.call(non-handle) -> clear TypeError")
 
 
-def test_foreign_handle_rejected():
-    """A handle whose name is not in the bound registry is rejected like an unknown string name."""
+def test_foreign_and_unknown_handles_rejected():
+    """Neither a foreign owner nor an unknown local declaration can fall back by name."""
     m, _ = build_model()
-    P = adctime.Program("p").bind_operators(m)
-    U = P.state("plasma")
-    foreign = OperatorHandle(
+    foreign_model, foreign_handles = build_model()
+    P, state = _program_state(m, "p")
+    U = state.n
+    with pytest.raises(ValueError, match="no operator registry is bound for owner"):
+        P.call(foreign_handles["explicit_rhs"], U)
+
+    unknown = OperatorHandle(
         "not_declared_here", kind="local_rate",
         owner=m.operator_registry().owner_path)
     with pytest.raises(KeyError, match="unknown operator"):
-        P.call(foreign, U)
-    print("OK  foreign handle (name not in registry) rejected like an unknown name")
+        P.call(unknown, U)
+    assert foreign_model.operator_registry().owner_path != m.operator_registry().owner_path
+    print("OK  foreign-owner and unknown-local handles are rejected without name fallback")
 
 
 def test_handle_equality_and_repr():
     """OperatorHandle equality and hashing use the complete qualified identity."""
     from pops.model import OwnerPath
-    owner = OwnerPath("test", "operator-handles")
+    owner = OwnerPath.descriptor("operator-handles")
     a = OperatorHandle("r", kind="local_rate", owner=owner)
     b = OperatorHandle("r", kind="local_rate", owner=owner)
     c = OperatorHandle("r", kind="local_source", owner=owner)
     assert a == b and hash(a) == hash(b)
     assert a != c and a != "r"
     assert repr(a) == (
-        "OperatorHandle('r', kind='local_rate', owner=('test', 'operator-handles'))")
+        "OperatorHandle('r', kind='local_rate', owner='descriptor:operator-handles')")
     assert repr(OperatorHandle("s", kind="local_source", owner=owner)) == (
-        "OperatorHandle('s', kind='local_source', owner=('test', 'operator-handles'))")
+        "OperatorHandle('s', kind='local_source', owner='descriptor:operator-handles')")
+    assert a.inspect()["owner_path"] == owner.to_data()
     print("OK  OperatorHandle equality / hash / repr")
 
 
 def main():
     test_declarers_return_operator_handles()
-    test_call_handle_byte_identical_to_name()
-    test_name_path_byte_identical_across_models()
+    test_declarer_handle_byte_identical_to_registry_handle()
+    test_typed_path_is_deterministic_and_complete_across_models()
     test_public_call_rejects_a_string()
     test_bad_type_rejected()
-    test_foreign_handle_rejected()
+    test_foreign_and_unknown_handles_rejected()
     test_handle_equality_and_repr()
     print("OK  test_operator_handles")
 

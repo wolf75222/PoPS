@@ -21,9 +21,14 @@ Usage::
     from pops.mesh.cartesian import CartesianMesh
 
     preset = vlasov_poisson_magnetic_euler()
-    problem = (pops.Problem(name="plasma")
-               .block("f", physics=preset.model())
-               .time(preset.time_scheme("f")))
+    model = preset.model()
+    problem = pops.Problem(name="plasma")
+    block = problem.add_block("f", model)
+    state = next(
+        handle for handle in model.module.declaration_index().records()
+        if handle.kind == "state"
+    )
+    problem.time(preset.time_scheme(block, state))
     compiled = pops.compile(problem, layout=Uniform(CartesianMesh(n=96)))
 """
 from __future__ import annotations
@@ -35,14 +40,16 @@ class Preset:
     """A ready-to-run pairing of a provided model factory and a provided time-scheme macro.
 
     ``model()`` builds the provided physics model (a ``pops.physics`` / ``pops.lib.models``
-    composition ready for a Problem block); ``time_scheme(block)`` builds the matching
-    ``pops.time.Program`` for that block name. Both are DESCRIPTOR-level authoring objects the user
-    hands to a :class:`pops.Problem`; the preset carries no mesh, no runtime, and no compiled ``.so``.
+    composition ready for a Problem block); ``time_scheme(block, state)`` builds the matching
+    ``pops.time.Program`` from the authoritative ``BlockHandle`` and model state ``Handle``. Both
+    are DESCRIPTOR-level authoring objects the user hands to a :class:`pops.Problem`; the preset
+    carries no mesh, no runtime, and no compiled ``.so``.
 
     Args:
         name: The preset's identifier (shown in ``repr`` and ``inspect()``).
         model_factory: A zero-argument callable returning the provided model.
-        time_factory: A callable ``block -> pops.time.Program`` building the time scheme for a block.
+        time_factory: A callable ``(block, state) -> pops.time.Program`` building the time scheme
+            from typed semantic references.
         description: A one-line human summary of what the bundle solves.
     """
 
@@ -63,9 +70,13 @@ class Preset:
         """Build the provided model for a Case block (``.block(name, physics=preset.model())``)."""
         return self._model_factory()
 
-    def time_scheme(self, block: Any) -> Any:
-        """Build the matching ``pops.time.Program`` for @p block (``.time(preset.time_scheme(name))``)."""
-        return self._time_factory(block)
+    def time_scheme(self, block: Any, state: Any) -> Any:
+        """Build the matching Program from a BlockHandle and model state Handle.
+
+        Free block/state names are intentionally not accepted: the delegated ``pops.lib.time``
+        builder authenticates both references against the Case registry before producing IR.
+        """
+        return self._time_factory(block, state)
 
     def inspect(self) -> dict:
         """An inert ``{name, category, description}`` view of the bundle (no build, no compile)."""
@@ -81,8 +92,8 @@ def vlasov_poisson_magnetic_euler(*, order: Any = 4) -> Any:
     Composes :meth:`pops.lib.models.moments.HyQMOM15.vlasov_poisson_magnetic` (transport flux +
     Poisson coupling + Vlasov electric source + magnetic Lorentz source) with the forward-Euler macro
     (``pops.lib.time.forward_euler``), which builds a fresh, inspectable ``pops.time.Program`` from the
-    block name alone. The user picks the layout (Uniform / AMR) on the Case; nothing here is mesh- or
-    runtime-bound.
+    typed block and state references. The user picks the layout (Uniform / AMR) on the Case; nothing
+    here is mesh- or runtime-bound.
     """
     from pops.lib.models import HyQMOM15
     from pops.lib.time import forward_euler
@@ -90,7 +101,7 @@ def vlasov_poisson_magnetic_euler(*, order: Any = 4) -> Any:
     return Preset(
         "vlasov_poisson_magnetic_euler",
         model_factory=lambda: HyQMOM15.vlasov_poisson_magnetic(order=order),
-        time_factory=lambda block: forward_euler(block),
+        time_factory=lambda block, state: forward_euler(block, state),
         description="HyQMOM15 Vlasov-Poisson-magnetic with a forward-Euler time step.")
 
 

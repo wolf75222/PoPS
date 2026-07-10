@@ -37,6 +37,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops.codegen._orchestration_instances import (
+    assemble_instances as _assemble_instances,
+    check_problem_not_mutated as _check_case_not_mutated,
+    problem_field_solvers as _problem_field_solvers,
+)
+
 
 def compile(problem: Any, layout: Any = None, backend: Any = None, time: Any = None,
             **kwargs: Any) -> Any:
@@ -121,6 +127,16 @@ def compile(problem: Any, layout: Any = None, backend: Any = None, time: Any = N
     # hierarchy when present, else the native per-block time policy).
     eff_time = time if time is not None else problem._time
 
+    if not is_amr and eff_time is None:
+        raise NotImplementedError(
+            "pops.compile: a time scheme is required; pass time=pops.time.Program(...) or set "
+            "it on the problem with problem.time(...). There is no default time scheme.")
+    if "problem_snapshot" in kwargs:
+        raise TypeError(
+            "pops.compile computes and freezes its own ProblemSnapshot; problem_snapshot= is only "
+            "accepted by the advanced pops.codegen.compile_problem driver")
+    problem_snapshot = _prepare_problem_snapshot(problem, eff_time)
+
     if is_amr:
         # AMR route (single AND multi block): each block lowers to a target='amr_system' production
         # CompiledModel installed via the NATIVE add_native_block path at bind. When eff_time is a
@@ -130,13 +146,11 @@ def compile(problem: Any, layout: Any = None, backend: Any = None, time: Any = N
         # AMR branch is split into ``_orchestration_amr`` (ADC-550); import it lazily to keep the
         # module load order acyclic.
         from pops.codegen._orchestration_amr import _compile_amr
-        return _compile_amr(problem, layout, backend, target, eff_time, **kwargs)
+        return _compile_amr(
+            problem, layout, backend, target, eff_time,
+            problem_snapshot=problem_snapshot, **kwargs)
 
     time = eff_time
-    if time is None:
-        raise NotImplementedError(
-            "pops.compile: a time scheme is required; pass time=pops.time.Program(...) or set "
-            "it on the problem with problem.time(...). There is no default time scheme.")
 
     # Resolve every block's physics model (C3): the whole-system time Program is compiled once with the
     # first block as the codegen representative (compiled.model -- the per-instance default at bind),
@@ -147,7 +161,9 @@ def compile(problem: Any, layout: Any = None, backend: Any = None, time: Any = N
     _, model = next(iter(block_models.items()))
 
     from pops.codegen.compile_drivers import compile_problem
-    compiled = compile_problem(time=time, model=model, backend=backend, target=target, **kwargs)
+    compiled = compile_problem(
+        time=time, model=model, backend=backend, target=target,
+        problem_snapshot=problem_snapshot, **kwargs)
     compiled._problem = problem
     compiled._target = target
     compiled._block_models = block_models
@@ -159,30 +175,45 @@ def compile(problem: Any, layout: Any = None, backend: Any = None, time: Any = N
     compiled._block_specs = {name: {"model": block_models[name], "spatial": spec["spatial"]}
                              for name, spec in problem._blocks.items()}
     compiled._field_solvers = _problem_field_solvers(problem)
-    compiled._outputs = list(problem._outputs or [])
+    compiled._outputs, compiled._diagnostics = _capture_runtime_declarations(problem)
     # Declared diagnostic measures (ADC-542): carried on the compile-time snapshot exactly like the
     # output policies so bind() flows them onto the engine and run() fires them each cadence tick.
-    compiled._diagnostics = list(problem._diagnostics or [])
     # Carry the layout so bind()'s runtime adapter can derive the engine config from the mesh: the
     # Uniform adapter builds the System's SystemConfig (n / L / periodic) from the Uniform mesh,
     # mirroring how the AMR adapter derives the AmrSystemConfig (n / L / periodic / regrid / patch
     # settings) and flows the typed refinement. A handle NOT produced here carries no layout and
     # binds on the bare System() defaults.
     compiled._layout = layout
-    _freeze_and_snapshot(problem, time, compiled)
+    _attach_problem_snapshot(compiled, problem_snapshot)
     return compiled
 
 
-def _freeze_and_snapshot(problem: Any, time: Any, compiled: Any) -> None:
-    """Freeze the compiled Problem + Program and fold the snapshot hash into the cache key (ADC-563).
+def _capture_runtime_declarations(problem: Any) -> tuple[list[Any], list[Any]]:
+    """Detach and canonicalize output/diagnostic declarations for the compiled snapshot."""
+    def resolved(value: Any, family: str) -> Any:
+        resolve_references = getattr(value, "resolve_references", None)
+        if not callable(resolve_references):
+            raise TypeError(
+                "%s declaration %r must implement resolve_references(resolver)"
+                % (family, type(value).__name__))
+        return resolve_references(problem.resolve)
 
-    Delegates to :func:`pops.problem._snapshot.freeze_compiled` (bind-owned, lazy import to keep the
-    codegen module-scope import graph clean). ``pops.compile``'s last authoring act: freeze the
-    Problem (-> a stable ProblemSnapshot on ``compiled._problem_snapshot``), freeze the time Program,
-    and fold ``snapshot.hash`` into the handle's cache key (composing with the compile stream's
-    tokens, never replacing) so a mutated Problem cannot rebind a compiled artifact."""
-    from pops.problem._snapshot import freeze_compiled
-    freeze_compiled(problem, time, compiled)
+    outputs = [resolved(value, "runtime output") for value in (problem._outputs or [])]
+    diagnostics = [
+        resolved(value, "runtime diagnostic") for value in (problem._diagnostics or [])]
+    return outputs, diagnostics
+
+
+def _prepare_problem_snapshot(problem: Any, time: Any) -> Any:
+    """Freeze authoring before the driver computes or looks up an artifact identity."""
+    from pops.problem._snapshot import prepare_compile_snapshot
+    return prepare_compile_snapshot(problem, time)
+
+
+def _attach_problem_snapshot(compiled: Any, snapshot: Any) -> None:
+    """Attach the snapshot already used by the driver, then seal the public artifact."""
+    from pops.problem._snapshot import attach_problem_snapshot
+    attach_problem_snapshot(compiled, snapshot)
 
 
 def bind(compiled: Any, *, initial_state: Any = None, state: Any = None, params: Any = None,
@@ -321,16 +352,18 @@ def _validate_layout_for_compile(problem: Any, layout: Any) -> None:
 
 
 def _resolve_layout(problem: Any, layout: Any) -> Any:
-    """Resolve the effective compile layout, then apply the problem's AMR criteria (ADC-526).
+    """Resolve the effective compile layout into a detached compile-owned value (ADC-526/653).
 
     The layout lives on ``pops.compile(problem, layout=...)``: explicit @p layout wins, else a
     constructor layout the Problem may still carry; neither present is a loud error naming the
     spelling, and a disagreement between the two is refused (an artifact is frozen to one layout).
-    The AMR criteria recorded via ``problem.amr.refine(...)`` sit layout-free on the constraint
-    registry and are applied HERE, once the layout is known, so ONE Problem compiles under Uniform
-    or under an AMR that receives its refine / regrid / nesting / patches.
+    The AMR criteria recorded via ``problem.amr.refine(...)`` sit only on the constraint registry.
+    They are merged HERE into a fresh AMR descriptor, once the layout is known. If the layout and
+    the Problem both declare the same policy slot, the two-authority configuration is rejected even
+    when the values look equal: the user must choose exactly one declaration site. No user-owned
+    layout is mutated or retained as the effective compile layout.
     """
-    from pops.mesh.layouts import AMR
+    from pops.mesh.layouts import AMR, Uniform
 
     problem_layout = getattr(problem, "layout", None)
     if layout is None:
@@ -346,15 +379,61 @@ def _resolve_layout(problem: Any, layout: Any) -> Any:
                 "(%r); a compiled artifact is frozen to one layout." % (layout, problem_layout))
         resolved = layout
 
-    # Apply the layout-free AMR criteria recorded on the Problem's constraint registry to the AMR
-    # layout (ADC-526). A Uniform layout ignores them (its own validate refuses active criteria);
-    # criteria the constructor-layout path already wrote are re-applied idempotently.
+    def resolve_references(value: Any) -> Any:
+        protocol = getattr(value, "resolve_references", None)
+        return protocol(problem.resolve) if callable(protocol) else value
+
+    # A Uniform layout has no merge slots, but its optional refine descriptor still follows the same
+    # typed-reference resolution protocol (including explicit IgnoreAMRCriteria authoring). Return a
+    # fresh value so compile never retains a caller-owned mutable layout object.
+    if isinstance(resolved, Uniform):
+        return Uniform(
+            mesh=resolved.mesh,
+            embedded_boundary=resolved.embedded_boundary,
+            refine=(resolve_references(resolved.refine)
+                    if resolved.refine is not None else None),
+            ignore_amr=resolved.ignore_amr,
+        )
+
+    if not isinstance(resolved, AMR):
+        return resolved
+
+    # Merge each layout-free Problem slot into a detached AMR descriptor. A double declaration is
+    # an error, not last-writer-wins and not an idempotent special case.
     criteria = getattr(getattr(problem, "_constraints", None), "refinement", {}) or {}
-    if criteria and isinstance(resolved, AMR):
-        for slot in ("refine", "regrid", "nesting", "patches"):
-            if criteria.get(slot) is not None:
-                setattr(resolved, slot, criteria[slot])
-    return resolved
+    policies = {}
+    for slot in ("refine", "regrid", "nesting", "patches"):
+        layout_value = getattr(resolved, slot)
+        problem_value = criteria.get(slot)
+        if layout_value is not None and problem_value is not None:
+            raise ValueError(
+                "pops.compile: AMR %s is declared both on layout=AMR(%s=...) and through "
+                "problem.amr.refine(..., %s=...); these are competing authorities. Keep the "
+                "policy in exactly one place." % (slot, slot, slot))
+        policies[slot] = problem_value if problem_value is not None else layout_value
+
+    refine = policies["refine"]
+    # ProblemAmrHandle already authenticated and canonicalised a registry-owned criterion exactly
+    # once. A layout-owned criterion has not crossed that boundary yet and must be resolved here.
+    if refine is not None and criteria.get("refine") is None:
+        refine = resolve_references(refine)
+    elif refine is not None and not getattr(refine, "references_authenticated", False):
+        raise ValueError(
+            "pops.compile: the ConstraintRegistry contains an unauthenticated AMR criterion; "
+            "record it through problem.amr.refine(...) so every Handle leaf is resolved")
+    output = resolved.output
+    return AMR(
+        base=resolved.base,
+        max_levels=resolved.max_levels,
+        ratio=resolved.ratio,
+        regrid=policies["regrid"],
+        patches=policies["patches"],
+        refine=refine,
+        nesting=policies["nesting"],
+        checkpoint=resolved.checkpoint,
+        output=resolve_references(output) if output is not None else None,
+        clustering=resolved.clustering,
+    )
 
 
 def _resolve_problem_model(physics: Any) -> Any:
@@ -378,87 +457,6 @@ def _resolve_problem_model(physics: Any) -> Any:
     if dsl_model is not None:
         return dsl_model
     return physics
-
-
-def _assemble_instances(problem: Any, initial: Any, block_specs: Any = None,
-                        models: Any = None) -> dict:
-    """Build the ``sim.install`` instances mapping from the COMPILE-TIME block specs + initial state.
-
-    Each block becomes ``{name: {"model": <model>, "spatial": spatial, "initial": state}}`` -- the
-    shape the unified install consumes. The per-block model + spatial come from @p block_specs, the
-    COMPILE-TIME snapshot (``compiled._block_specs``, ADC-592): the model is the resolved engine model
-    (Uniform, handed to the compiled time Program) OR the block's own ``target='amr_system'``
-    CompiledModel (AMR), captured at compile so a post-compile Problem mutation cannot change it. The
-    per-block initial state comes from @p initial (keyed by block name); an unknown key raises so a
-    typo is not silently dropped.
-
-    @p block_specs of ``None`` is a legacy/degraded handle (produced without the ADC-592 snapshot):
-    fall back to a LIVE re-read of ``problem._blocks`` (byte-identical to before for a non-mutated
-    Problem). On that fallback path, @p models -- when given (the AMR route's
-    ``compiled._block_compiled_models`` table) -- supplies each block's own ``target='amr_system'``
-    CompiledModel (installed via ``add_native_block``) instead of the resolved engine model.
-    """
-    if problem is None and block_specs is None:
-        raise TypeError("pops.bind: the compiled handle carries no problem assembly "
-                        "(was it produced by pops.compile?)")
-    prob: Any = problem
-    declared = set(block_specs) if block_specs is not None else set(prob._blocks)
-    unknown = sorted(set(initial) - declared)
-    if unknown:
-        raise ValueError("pops.bind: initial state for unknown block(s) %s; declared blocks: %s"
-                         % (unknown, sorted(declared)))
-    instances = {}
-    if block_specs is not None:
-        for name, snap in block_specs.items():
-            entry = {"model": snap["model"], "spatial": snap["spatial"]}
-            if name in initial:
-                entry["initial"] = initial[name]
-            instances[name] = entry
-        return instances
-    # Legacy fallback (no compile-time snapshot on the handle): live re-read of the problem blocks.
-    for name, spec in prob._blocks.items():
-        if models is not None:
-            if name not in models:
-                raise ValueError(
-                    "pops.bind: block %r has no compiled model on the handle; the AMR handle must "
-                    "carry one CompiledModel per block (was it produced by pops.compile?)" % (name,))
-            model = models[name]
-        else:
-            model = _resolve_problem_model(spec["model"])
-        entry = {"model": model, "spatial": spec["spatial"]}
-        if name in initial:
-            entry["initial"] = initial[name]
-        instances[name] = entry
-    return instances
-
-
-def _check_case_not_mutated(problem: Any, block_specs: Any) -> None:
-    """Raise a LOUD error when the LIVE Problem's blocks diverge from the compile-time snapshot (ADC-592).
-
-    ``compiled._block_specs`` is the block-name set the compile FROZE; if the live ``problem._blocks``
-    no longer matches (a block added / removed after ``pops.compile``), bind would silently bind a
-    stale composition. We refuse it, naming the drift, and point at a recompile. A degraded handle
-    (no snapshot, ``block_specs is None``) or a handle with no live problem is skipped (nothing to
-    compare -- the legacy live-read path stays byte-identical for a non-mutated Problem)."""
-    if block_specs is None or problem is None:
-        return
-    live = set(getattr(problem, "_blocks", {}) or {})
-    frozen = set(block_specs)
-    if live != frozen:
-        added = sorted(live - frozen)
-        removed = sorted(frozen - live)
-        raise ValueError(
-            "pops.bind: the Problem was mutated after pops.compile (blocks changed: added=%s removed=%s);"
-            " a compiled artifact is frozen at compile time and is not affected by a later Problem "
-            "mutation -- recompile the Problem (pops.compile(...)) before pops.bind(...)."
-            % (added, removed))
-
-
-def _problem_field_solvers(problem: Any) -> dict:
-    """The {field_name: solver} mapping derived from the problem's field problems."""
-    if problem is None:
-        return {}
-    return {name: fp.solver for name, fp in problem._fields.items() if fp.solver is not None}
 
 
 # The AMR layout-lowering helpers moved to pops.runtime._bind_adapters (ADC-583): lowering a layout

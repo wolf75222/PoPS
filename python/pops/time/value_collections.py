@@ -20,8 +20,9 @@ class StageStateSet:
             raise TypeError("StageStateSet mapping must be a block-to-State mapping")
         states = {}
         for block, state in mapping.items():
-            if not isinstance(block, str) or not block:
-                raise TypeError("StageStateSet block names must be non-empty strings")
+            from pops.problem.handles import BlockHandle
+            if not isinstance(block, BlockHandle):
+                raise TypeError("StageStateSet keys must be BlockHandle values")
             if not (isinstance(state, ProgramValue) and state.vtype == "state"):
                 raise ValueError("StageStateSet[%r] must be a State value" % (block,))
             if state.block != block:
@@ -40,9 +41,9 @@ class StageStateSet:
         return self._states[block]
 
     def __contains__(self, block: Any) -> bool:
-        return isinstance(block, str) and block in self._states
+        return block in self._states
 
-    def keys(self) -> list[str]:
+    def keys(self) -> list[Any]:
         return list(self._states)
 
     def items(self) -> list[tuple[str, Any]]:
@@ -62,8 +63,10 @@ class _CoupledResult:
     __pops_ir_immutable__ = True
 
     def __init__(self, outs: Any) -> None:
-        if not isinstance(outs, Mapping) or any(not isinstance(k, str) or not k for k in outs):
-            raise TypeError("coupled result must be a non-empty-string block mapping")
+        from pops.problem.handles import BlockHandle
+        if not isinstance(outs, Mapping) or not outs \
+                or any(not isinstance(key, BlockHandle) for key in outs):
+            raise TypeError("coupled result must be a non-empty BlockHandle mapping")
         object.__setattr__(self, "_outs", MappingProxyType(dict(outs)))
 
     def __setattr__(self, name: str, value: Any) -> None:

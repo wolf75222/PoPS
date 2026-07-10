@@ -43,13 +43,19 @@ try:
                                NATIVE_MAX_LEVELS, NATIVE_RATIOS)
     from pops.mesh.cartesian import CartesianMesh
     from pops.mesh.layouts import AMR
+    from pops.model import DeclarationIndex, Handle, OwnerKind, OwnerPath
 except Exception as exc:  # noqa: BLE001
     print("skip test_spec5_amr_e2e (pops unavailable: %s)" % exc)
     sys.exit(0)
 
 
 from tests.python.support.assertions import _check
+from tests.python.support.initial_states import bubble_amr as _bubble
 from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
+
+
+def _ref(name, kind="state"):
+    return Handle(name, kind=kind, owner=OwnerPath.shared("spec5-amr-e2e"))
 
 
 class _StubCompiledModel:
@@ -79,7 +85,11 @@ class _StubModel:
 
     def __init__(self, name="ne"):
         self.name = name
+        self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, name)
         self.dsl = _StubDsl(name)
+
+    def declaration_index(self):
+        return DeclarationIndex(owner=self.owner_path, handles=())
 
 
 # --- monkeypatch helpers (work under pytest fixture OR the bare __main__ runner) ---
@@ -127,7 +137,8 @@ def test_amr_layout_drives_compile_target(monkeypatch=None):
         _check(model.dsl.compiled == [("production", "amr_system")],
                "the block is compiled once with backend='production', target='amr_system'")
         _check(compiled._target == "amr_system", "amr_system target carried on the handle")
-        _check(compiled._layout is layout, "the AMR layout is carried for bind()")
+        _check(compiled._layout is not layout and compiled._layout.base is layout.base,
+               "the detached AMR layout is carried for bind()")
         _check(set(compiled._block_compiled_models) == {"ne"},
                "the {block: CompiledModel} table is carried on the handle")
     finally:
@@ -189,7 +200,8 @@ def test_amr_non_default_refine_selector_rejected():
             raise AssertionError("set_phi_refinement must not be called here")
 
     layout = AMR(CartesianMesh(n=32))
-    layout.refine = Refine.on("MomentumX").above(0.5)
+    layout.refine = Refine.on(_ref("MomentumX", kind="role")).above(0.5).resolve_references(
+        pops.Problem(name="native-refine-test").resolve)
     try:
         _bind_adapters._flow_amr_layout(_Recorder(), layout)
         raise AssertionError("a non-density selector must raise on the single-block route")
@@ -206,9 +218,6 @@ def _native_compressible_model():
                       elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0))
 
 
-from tests.python.support.initial_states import bubble_amr as _bubble
-
-
 def test_native_amr_from_layout_runs():
     """A native AmrSystem built from a layout's derived config + set_refinement + set_poisson runs.
 
@@ -220,8 +229,10 @@ def test_native_amr_from_layout_runs():
     n = 48
     layout = AMR(CartesianMesh(n=n, L=1.0, periodic=True), max_levels=2, ratio=2,
                  regrid=RegridEvery(4), patches=PatchLayout(coarse_max_grid=32))
-    layout.refine = TagUnion(Refine.on("Density").above(1.2),
-                             Refine.on("phi").gradient_above(0.5))
+    layout.refine = TagUnion(
+        Refine.on(_ref("Density", kind="role")).above(1.2),
+        Refine.on(_ref("phi", kind="field")).gradient_above(0.5),
+    ).resolve_references(pops.Problem(name="native-refine-test").resolve)
 
     cfg = _bind_adapters._amr_config_from_layout(layout)
     _check(cfg.n == n and cfg.regrid_every == 4, "config derived from the layout")
@@ -270,7 +281,11 @@ def test_production_so_compile_is_romeo_gated():
     class _RomeoModel:
         def __init__(self):
             self.name = "ne"
+            self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, self.name)
             self.dsl = _RomeoDsl()
+
+        def declaration_index(self):
+            return DeclarationIndex(owner=self.owner_path, handles=())
 
     layout = AMR(CartesianMesh(n=32), max_levels=2, ratio=2)
     prob = pops.Problem(layout=layout).block("ne", physics=_RomeoModel())

@@ -21,6 +21,11 @@ from pops.ir.expr import Var, RateTerm  # noqa: E402
 from pops.fields.coefficients import ScalarCoefficient, ReactionCoefficient  # noqa: E402
 from pops.fields import (  # noqa: E402
     PoissonProblem, ScreenedPoissonProblem, AnisotropicPoissonProblem)
+from pops.model import Handle, OwnerPath  # noqa: E402
+
+
+def _coefficient_field(name):
+    return Handle(name, kind="field", owner=OwnerPath.shared("mesh.field_equation"))
 
 
 def test_reaction_term_constructs():
@@ -29,13 +34,13 @@ def test_reaction_term_constructs():
     assert isinstance(react, Reaction)
     assert principal_kinds(react) == {"reaction"}
     # coefficient (not just a scalar) is accepted
-    react2 = ReactionCoefficient("kappa") * phi
+    react2 = ReactionCoefficient(_coefficient_field("kappa")) * phi
     assert isinstance(react2, Reaction)
 
 
 def test_coeff_gradient_and_div():
     phi = unknown("phi")
-    eps = ScalarCoefficient("eps")
+    eps = ScalarCoefficient(_coefficient_field("eps"))
     cg = eps * grad(phi)
     assert isinstance(cg, CoeffGradient)
     op = div(cg)
@@ -71,8 +76,8 @@ def test_screened_form_constructs_and_inspects():
 def test_spec_9_2_headline_form_constructs():
     # -div(eps*grad(phi)) + kappa*phi == charge  (Spec 5 sec.9.2 headline)
     phi = unknown("phi")
-    eps = ScalarCoefficient("eps")
-    kappa = ReactionCoefficient("kappa")
+    eps = ScalarCoefficient(_coefficient_field("eps"))
+    kappa = ReactionCoefficient(_coefficient_field("kappa"))
     charge = Var("charge", "cons")
     eq = (-div(eps * grad(phi)) + kappa * phi == charge)
     assert isinstance(eq, Equation)
@@ -83,7 +88,7 @@ def test_poisson_accepts_principal_operator():
     phi = unknown("phi")
     rhs = Var("charge", "cons")
     PoissonProblem(unknown=phi, equation=(-laplacian(phi) == rhs), solver=object()).validate()
-    eps = ScalarCoefficient("eps")
+    eps = ScalarCoefficient(_coefficient_field("eps"))
     PoissonProblem(unknown=phi, equation=(-div(eps * grad(phi)) == rhs),
                    solver=object()).validate()
 
@@ -104,7 +109,7 @@ def test_screened_requires_reaction():
 def test_anisotropic_requires_div_coeff_grad():
     phi = unknown("phi")
     rhs = Var("charge", "cons")
-    eps = ScalarCoefficient("eps")
+    eps = ScalarCoefficient(_coefficient_field("eps"))
     # plain laplacian -> rejected (no variable-coefficient principal operator)
     bad = AnisotropicPoissonProblem(unknown=phi, equation=(-laplacian(phi) == rhs),
                                     solver=object())
@@ -119,7 +124,7 @@ def test_anisotropic_requires_div_coeff_grad():
 def test_terms_are_inert_no_runtime_data():
     # The elliptic nodes carry references/coefficients, not arrays; they compute nothing.
     phi = unknown("phi")
-    react = ScalarCoefficient("eps") * phi
+    react = ScalarCoefficient(_coefficient_field("eps")) * phi
     with pytest.raises(NotImplementedError):
         react.eval({})                           # generic Expr protocol, no host implementation
     assert react.field is phi                   # a reference, not a value

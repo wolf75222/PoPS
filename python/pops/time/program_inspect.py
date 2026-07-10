@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from pops._report import Report
 from pops.time.program_base import _ProgramConstants
+from pops.time.references import block_name, handle_data
 from pops.time.values import ProgramValue, _Affine  # noqa: F401
 
 if TYPE_CHECKING:
@@ -22,9 +23,9 @@ else:
 class ProgramReport(Report):
     """The typed inspection report of a :class:`pops.time.Program` (ADC-564).
 
-    Attributes: ``name`` / ``ops`` (node count) / ``commits`` (committed block names) / ``hash``
-    (the IR hash) / ``histories`` / ``dt_bound`` / ``scratch`` (the static buffer estimate). Inert:
-    built from the IR, it runs no codegen and mutates nothing. :meth:`to_dict` is the JSON bridge.
+    Attributes: ``name`` / ``ops`` (node count) / ``commits`` (qualified committed state handles) /
+    ``hash`` (the IR hash) / ``histories`` / ``dt_bound`` / ``scratch``. The JSON bridge serializes
+    every commit with its complete Case, block, model and state identity.
     """
 
     report_type = "program"
@@ -41,7 +42,9 @@ class ProgramReport(Report):
         self.scratch = dict(scratch)
 
     def to_dict(self) -> Any:
-        return self._stamp({"name": self.name, "ops": self.ops, "commits": list(self.commits),
+        commits = [handle_data(item) if hasattr(item, "canonical_identity") else item
+                   for item in self.commits]
+        return self._stamp({"name": self.name, "ops": self.ops, "commits": commits,
                             "hash": self.hash, "histories": dict(self.histories),
                             "dt_bound": self.dt_bound, "scratch": dict(self.scratch)})
 
@@ -61,7 +64,8 @@ class _ProgramInspect(_ProgramConstants, _ProgramBase):
         dt_bound = self._dt_bound[0] if getattr(self, "_dt_bound", None) else None
         return ProgramReport(
             name=getattr(self, "name", None), ops=len(getattr(self, "_values", [])),
-            commits=sorted(getattr(self, "_commits", {})), hash=ir_hash,
+            commits=sorted(getattr(self, "_commits", {}), key=lambda item: item.qualified_id),
+            hash=ir_hash,
             histories=dict(getattr(self, "_histories", {})), dt_bound=dt_bound,
             scratch=dict(estimate))
 
@@ -93,7 +97,9 @@ class _ProgramInspect(_ProgramConstants, _ProgramBase):
             # never serialized into the IR / the hash, so surfacing them here cannot change a .so cache
             # key. source_location is None unless the Program enabled capture_source_locations().
             nodes.append({
-                "name": v.name, "op": v.op, "vtype": v.vtype, "block": v.block,
+                "name": v.name, "op": v.op, "vtype": v.vtype,
+                "block": handle_data(v.block) if v.block is not None else None,
+                "state": handle_data(v.state_ref) if v.state_ref is not None else None,
                 "inputs": [self._canonical_value(i).name for i in v.inputs],
                 "attrs": {k: _attr(val) for k, val in v.attrs.items()},
                 "field_context": (_serialize_field_context(v.field_context)
@@ -101,9 +107,11 @@ class _ProgramInspect(_ProgramConstants, _ProgramBase):
                 "logical_shape": v.logical_shape,
                 "source_location": v.source_location,
             })
-        for block, st in self._commits.items():
+        for state_ref, st in self._commits.items():
             nodes.append({"name": st.name, "op": "commit", "vtype": st.vtype,
-                          "block": block, "inputs": [st.name], "attrs": {},
+                          "block": handle_data(state_ref.block_ref),
+                          "state": handle_data(state_ref),
+                          "inputs": [st.name], "attrs": {},
                           "field_context": (_serialize_field_context(st.field_context)
                                             if st.field_context is not None else None),
                           "logical_shape": st.logical_shape, "source_location": st.source_location})
@@ -152,7 +160,8 @@ class _ProgramInspect(_ProgramConstants, _ProgramBase):
                 continue
             d = order[v.id]
             lu = last_use.get(v.id, d)  # an unused scratch is live only at its own def
-            out.append({"name": v.name, "op": v.op, "block": v.block,
+            out.append({"name": v.name, "op": v.op,
+                        "block": block_name(v.block) if v.block is not None else None,
                         "def_index": d, "last_use_index": lu, "live_span": lu - d})
         return out
 

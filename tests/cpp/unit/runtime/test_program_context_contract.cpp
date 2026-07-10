@@ -121,6 +121,7 @@ TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
   System sim(cfg);
   add_gas(sim);
   sim.set_state("gas", U0);
+  sim.set_program_block_map({0});
   ProgramContext ctx(&sim);
   ctx.install([ctx](double h) {
     for (int b = 0; b < ctx.n_blocks(); ++b) {
@@ -179,6 +180,7 @@ TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
   System sim(cfg);
   add_gas(sim);
   sim.set_state("gas", U0);
+  sim.set_program_block_map({0});
   ProgramContext ctx(&sim);
   ctx.install([ctx, dt](double /*h*/) {
     for (int b = 0; b < ctx.n_blocks(); ++b) {
@@ -221,6 +223,7 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   System sim(cfg);
   add_gas(sim);
   sim.set_state("gas", U0);
+  sim.set_program_block_map({0});
   ProgramContext ctx(&sim);
   ctx.solve_fields();
 
@@ -304,6 +307,33 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   EXPECT_TRUE(sc.ncomp() == U.ncomp()) << "scratch_state_like ncomp";
   MultiFab sf = ctx.alloc_scalar_field(1, 1);
   EXPECT_TRUE(sf.ncomp() == 1) << "alloc_scalar_field ncomp";
+}
+
+TEST(ProgramContextContract, BlockResolutionRequiresACompleteExplicitMap) {
+#if defined(POPS_HAS_KOKKOS)
+  static Kokkos::ScopeGuard guard;
+#endif
+  SystemConfig cfg;
+  cfg.n = 8;
+  System sim(cfg);
+  add_gas(sim);
+  ProgramContext ctx(&sim);
+  const std::vector<const MultiFab*> stages{&sim.block_state(0)};
+
+  EXPECT_THROW(ctx.sys_block(0), std::runtime_error) << "an empty map must not imply identity";
+  EXPECT_THROW(ctx.solve_fields_from_blocks(stages), std::runtime_error)
+      << "the coupled solve must not treat an empty map as identity";
+
+  sim.set_program_block_map({0});
+  EXPECT_EQ(ctx.sys_block(0), 0);
+  EXPECT_THROW(ctx.sys_block(-1), std::runtime_error) << "negative Program index must fail";
+  EXPECT_THROW(ctx.sys_block(1), std::runtime_error) << "Program index outside the map must fail";
+
+  sim.set_program_block_map({-1});
+  EXPECT_THROW(ctx.sys_block(0), std::runtime_error) << "negative mapped System index must fail";
+  sim.set_program_block_map({1});
+  EXPECT_THROW(ctx.sys_block(0), std::runtime_error)
+      << "mapped System index outside n_blocks must fail";
 }
 
 // The per-stage FieldContext.matches() guard rejects a context read at the wrong (problem, block,

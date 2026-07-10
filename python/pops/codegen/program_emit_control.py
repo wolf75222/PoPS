@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 import json
+from pops.time.references import block_name
 
 
 def _coupled_rate_components(program: Any, v: Any) -> dict:
@@ -23,17 +24,21 @@ def _coupled_rate_components(program: Any, v: Any) -> dict:
     The component formulas live in the BOUND operator's body (``op.body`` = the ``expr=`` dict
     passed to ``Module.operator``), reachable through the registry the node's ``operator`` attr
     names; the input states' cons names come from each input value's StateSpace (set by
-    ``P.state(space=...)``). Raises a clear NotImplementedError naming ADC-457 when a coupled_rate
+    ``T.state(block, U)``). Raises a clear NotImplementedError naming ADC-457 when a coupled_rate
     cannot lower in this MVP: no bound registry, no operator body, a block whose component count
     does not match its StateSpace, or a formula referencing a non-cons (prim / aux) Var."""
     from pops.ir.expr import Var
     op_name = v.attrs["operator"]
-    if program._registry is None:
-        raise NotImplementedError(
-            "the coupled_rate kernel codegen (ADC-457) needs the bound operator registry to reach "
-            "operator %r's component formulas; call P.bind_operators(module) before emitting "
-            "(node %r)" % (op_name, v.name))
-    op = program._registry.get(op_name)
+    from pops.time.operator_resolution import (
+        resolve_operator_handle, resolve_registered_operator,
+    )
+    operator_handle = v.attrs.get("operator_handle")
+    if operator_handle is not None:
+        op = resolve_operator_handle(
+            program, operator_handle, where="coupled_rate codegen", values=v.inputs)
+    else:
+        op = resolve_registered_operator(
+            program, op_name, where="coupled_rate codegen", values=v.inputs)
     expr = op.body
     if not isinstance(expr, dict):
         raise NotImplementedError(
@@ -42,15 +47,15 @@ def _coupled_rate_components(program: Any, v: Any) -> dict:
             "coupled_rate is a later phase (node %r)" % (op_name, type(expr).__name__, v.name))
     # Each coupled_rate_out block must own one input state (its rate scratch is shaped like that
     # block's state) whose StateSpace gives the component count + cons names.
-    by_block = {s.block: s for s in v.inputs}
+    by_block = {block_name(state.block): state for state in v.inputs}
     components = {}
     for blk, comps in expr.items():
         state_in = by_block.get(blk)
         if state_in is None or getattr(state_in, "space", None) is None:
             raise NotImplementedError(
                 "the coupled_rate kernel codegen (ADC-457) needs every output block to map to an "
-                "input State declared with a StateSpace (P.state(%r, space=...)); operator %r "
-                "block %r has none (node %r)" % (blk, op_name, blk, v.name))
+                "input State declared through T.state(block, U) with typed space metadata; operator %r "
+                "block %r has none (node %r)" % (op_name, blk, v.name))
         ncons = len(state_in.space.components)
         if len(comps) != ncons:
             raise NotImplementedError(
@@ -64,10 +69,10 @@ def _coupled_rate_components(program: Any, v: Any) -> dict:
                         "coupled_rate formulas referencing prim/aux vars are deferred (ADC-457): "
                         "operator %r block %r references %s var %r; the MVP per-cell binding is "
                         "cons-only (node %r)" % (op_name, blk, node.kind, node.name, v.name))
-        components[blk] = list(comps)
+        components[state_in.block] = list(comps)
     # Every cons var a formula references must be a component of SOME input state (an output block
     # OR a read-only catalyst input). A name in no input state -- a typo, or a name the author
-    # forgot to add to a P.state(space=...) -- would emit an undefined C++ identifier that only
+    # forgot to add as a typed temporal state -- would emit an undefined C++ identifier that only
     # fails at the AOT compile, far from the authoring site; reject it loud here, like prim/aux.
     all_cons = {c for s in v.inputs if getattr(s, "space", None) is not None
                 for c in s.space.components}
@@ -79,7 +84,7 @@ def _coupled_rate_components(program: Any, v: Any) -> dict:
     if missing:
         raise NotImplementedError(
             "coupled_rate operator %r references cons var(s) %s that are a component of no input "
-            "state; declare them via P.state(space=...) or fix the formula (ADC-457, node %r)"
+            "state; declare them via T.state(block, U) or fix the formula (ADC-457, node %r)"
             % (op_name, sorted(missing), v.name))
     return components
 
@@ -145,7 +150,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system") -> tuple
     # Each committed block: a scratch commit (solve_local_linear / solve_linear / a non-base
     # linear_combine wrote a scratch) is copied into the block state; a linear_combine commit already
     # wrote ctx.state(idx) in place (var == base), so its copy is a no-op (skipped).
-    for block, committed in program._commits.items():
+    for state_ref, committed in program._commits.items():
+        block = state_ref.block_ref
         base = bases[block]
         if var[committed.id] != var[base.id]:
             lines.append(

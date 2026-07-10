@@ -271,12 +271,11 @@ def compile_model(model: Any, so_path: Any = None, include: Any = None, backend:
     return out_path
 
 
-# ---------------------------------------------------------------------------
 # compile_problem -- compile a pops.time.Program into a problem.so
 def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
                     backend: Any = "production", target: Any = "system", force: Any = False,
                     cxx: Any = None, include: Any = None, std: Any = None, debug: Any = False,
-                    libraries: Any = None) -> Any:
+                    libraries: Any = None, problem_snapshot: Any = None) -> Any:
     """Compile a ``pops.time.Program`` into a ``problem.so`` the runtime loads
     via ``sim.install_program``.
 
@@ -293,16 +292,19 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
     must be "production"; ``target`` is "system" (the .so exports
     ``pops_install_program``) or "amr_system" (it ALSO exports
     ``pops_install_program_amr``, the AMR install entry, epic ADC-511 / ADC-508).
-    Without an explicit ``so_path``
-    the ``.so`` is cached out-of-source keyed by [program source + header
-    signature + compiler + std]; ``force=True`` recompiles. ``debug=True`` also
+    Without an explicit ``so_path`` the ``.so`` is cached out-of-source keyed by [program source +
+    optional ProblemSnapshot + header signature + compiler + std]; ``force=True`` recompiles.
+    ``debug=True`` also
     writes the generated ``.cpp`` next to the ``.so`` for inspection.
     """
     import hashlib
     import tempfile
     from pops.codegen.loader import CompiledProblem
     from pops.codegen.env import CodegenEnv
-
+    snapshot_hash = None
+    if problem_snapshot is not None:
+        from pops.problem._snapshot import validate_problem_snapshot
+        snapshot_hash = validate_problem_snapshot(problem_snapshot)
     # ADDITIVE (Spec 5 sec.12.4, #47-48): resolve the codegen POPS_* environment ONCE. An explicit
     # argument wins over the env -- debug=True forces keep-generated regardless of POPS_KEEP_GENERATED,
     # and the resolver leaves the JIT-backdoor gate OFF unless POPS_JIT_BACKDOOR is itself set (loud
@@ -374,23 +376,19 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
     # the WHAT, the cache key combines it with the abi_key (the HOW) -- the same identity the
     # out-of-source .so cache file name carries. Computed unconditionally so the metadata is present
     # on BOTH the cache-hit and the fresh-compile path (and even when an explicit so_path is given).
-    # The route registry / report vocabulary component (ADC-599) enters the key too: a native
-    # route change invalidates cached Programs exactly like model .so files. Numerics DESCRIPTOR
-    # changes are already covered by program_hash (they change the emitted source).
-    # ADC-536: the native Kokkos/MPI feature-key and the precision token join the PROGRAM cache key
-    # (the model .so path already folds the feature-key via _native_feature_key; the program key
-    # omitted both). A SERIAL-stub .so must not be reused on an MPI module, a .so built against a
-    # different Kokkos must be a MISS, and a future precision switch must not reuse a double .so.
-    # These tokens were NOT in the key before, so adding them is a ONE-TIME cache invalidation (the
-    # .so BYTES are unchanged -- the emitted source is byte-identical; only the keyed file name and
-    # the manifest cache_key move once). The same tokens enter _cache_so_path below.
+    # Registry, feature and precision identities join the key; the frozen ProblemSnapshot joins both
+    # the artifact hash (and therefore .so path) and the final cache-key preimage.
     feature_key = _native_feature_key()
     precision_key = _precision_cache_key()
-    program_hash = hashlib.sha256(src.encode()).hexdigest()
-    cache_key = hashlib.sha256(("%s|%s|program-production|%s|%s|%s|%s"
-                                % (program_hash, abi_key, target, _registry_cache_key(),
-                                   feature_key, precision_key))
-                               .encode()).hexdigest()
+    source_hash = hashlib.sha256(src.encode()).hexdigest()
+    snapshot_component = "problem_snapshot=%s" % snapshot_hash if snapshot_hash else None
+    program_hash = (hashlib.sha256((source_hash + "|" + snapshot_component).encode()).hexdigest()
+                    if snapshot_component else source_hash)
+    cache_components = [program_hash, abi_key, "program-production", target,
+                        _registry_cache_key(), feature_key, precision_key]
+    if snapshot_component:
+        cache_components.append(snapshot_component)
+    cache_key = hashlib.sha256("|".join(cache_components).encode()).hexdigest()
 
     # The Module manifest (ADC-585): attached on BOTH the cache-hit and fresh-compile path; its
     # abi_key slot is bound in CompiledProblem. None for a bare dsl.Model with no backing Module.
@@ -428,7 +426,8 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
                                        libraries=library_manifests, problem_hash=program_hash,
                                        cache_key=cache_key, codegen_env=cenv,
                                        module_manifest=module_manifest, module_hash=module_hash,
-                                       external_bricks=external_brick_records)
+                                       external_bricks=external_brick_records,
+                                       problem_snapshot=problem_snapshot)
             cenv.run_dumps(compiled)
             return compiled
 
@@ -495,6 +494,7 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
                                cache_key=cache_key, compile_command=compile_command,
                                generated_sources=[gen_src_path] if gen_src_path else [],
                                codegen_env=cenv, module_manifest=module_manifest,
-                               module_hash=module_hash, external_bricks=external_brick_records)
+                               module_hash=module_hash, external_bricks=external_brick_records,
+                               problem_snapshot=problem_snapshot)
     cenv.run_dumps(compiled)
     return compiled

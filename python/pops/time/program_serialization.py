@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from typing import Any
 
 from pops.ir.literals import scalar_data
+from pops.model.handles import Handle
+from pops.time.references import handle_data
 from pops.time.values import ProgramValue, _Affine, _affine_ids
 
 
@@ -33,11 +35,18 @@ def _serialize_schedule(schedule: Any) -> dict[str, Any]:
 
 
 def _json_ready(value: Any) -> Any:
+    if isinstance(value, Handle):
+        return {"handle": handle_data(value)}
     hook = getattr(value, "to_data", None)
     if callable(hook):
         return _json_ready(hook())
     if isinstance(value, Mapping):
-        return {str(key): _json_ready(item) for key, item in value.items()}
+        if all(isinstance(key, str) and key for key in value):
+            return {key: _json_ready(item) for key, item in value.items()}
+        entries = [[_json_ready(key), _json_ready(item)] for key, item in value.items()]
+        entries.sort(key=lambda item: json.dumps(
+            item[0], sort_keys=True, separators=(",", ":")))
+        return {"mapping_entries": entries}
     if isinstance(value, (list, tuple)):
         return [_json_ready(item) for item in value]
     if isinstance(value, (set, frozenset)):
@@ -52,8 +61,8 @@ def _serialize_field_context(context: Any) -> dict[str, Any]:
     if isinstance(context, FieldReadProvenance):
         return {"reads": [_serialize_field_context(item) for item in context.contexts]}
     return {
-        "field_problem": context.field_problem,
-        "stage_sources": [list(item) for item in context.stage_sources],
+        "field_problem": _json_ready(context.field_problem),
+        "stage_sources": [[_json_ready(item[0]), item[1]] for item in context.stage_sources],
         "outputs": list(context.outputs),
     }
 
@@ -98,7 +107,8 @@ class _ProgramSerialization:
             for key in ("residual", "iterate", "guess"):
                 attrs[key] = attrs[key].id
         node = {"id": value.id, "name": value.name, "vtype": value.vtype, "op": value.op,
-                "block": value.block,
+                "block": handle_data(value.block) if value.block is not None else None,
+                "state": handle_data(value.state_ref) if value.state_ref is not None else None,
                 "inputs": [item.id for item in value.inputs], "attrs": _json_ready(attrs)}
         if value.space is not None:
             node["space"] = _json_ready(value.space)
@@ -114,10 +124,18 @@ class _ProgramSerialization:
         order = self._block_indices()
         result = {
             "name": self.name,
-            "version": 2,
+            "version": 3,
             "nodes": [self._serialize_node(value) for value in self._values],
-            "commits": sorted((block, state.id) for block, state in self._commits.items()),
-            "block_order": sorted(order, key=order.get),
+            "commits": [
+                {
+                    "state": handle_data(state_ref),
+                    "block": handle_data(state_ref.block_ref),
+                    "value": value.id,
+                }
+                for state_ref, value in sorted(
+                    self._commits.items(), key=lambda item: item[0].qualified_id)
+            ],
+            "block_order": [handle_data(block) for block in sorted(order, key=order.get)],
         }
         if self._histories:
             result["histories"] = [
@@ -125,6 +143,8 @@ class _ProgramSerialization:
                     "name": name,
                     "lag": lag,
                     "ncomp": getattr(self, "_histories_ncomp", {}).get(name),
+                    "state": (handle_data(self._history_state_refs[name])
+                              if name in self._history_state_refs else None),
                 }
                 for name, lag in sorted(self._histories.items())
             ]
@@ -148,7 +168,7 @@ class _ProgramSerialization:
         blob = json.dumps(self._serialize(), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode()).hexdigest()
 
-    def _block_indices(self) -> dict[str, int]:
+    def _block_indices(self) -> dict[Any, int]:
         order = {}
         for value in self._values:
             if value.op == "state" and value.block not in order:

@@ -10,9 +10,8 @@ import sys
 
 try:
     from pops import model
-    from pops.ir.expr import Const, Expr, Var
+    from pops.ir.expr import Const, Var
     from pops.ir.ops import sqrt
-    from pops.physics.facade import Model
     from pops import time as adctime
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
 except Exception as exc:  # pops not importable here -> skip, never fake
@@ -46,12 +45,13 @@ def pure_module():
                        "y": [my, mx * my / rho, my * my / rho + 0.5 * rho]})
     mod.eigenvalues(x=[mx / rho - cs, mx / rho, mx / rho + cs],
                     y=[my / rho - cs, my / rho, my / rho + cs])
-    mod.operator(name="electric", signature=(u, fields) >> model.Rate(u),
-                 kind="local_source", expr=[Const(0.0), -rho * gx, -rho * gy])
+    electric = mod.operator(name="electric", signature=(u, fields) >> model.Rate(u),
+                            kind="local_source", expr=[Const(0.0), -rho * gx, -rho * gy])
     mod.operator(name="lorentz", signature=(fields,) >> model.LocalLinearOperator(u, u),
                  kind="local_linear_operator",
                  expr=[[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
-    mod.rate_operator("explicit_rhs", flux=True, sources=["electric"])
+    mod.rate_operator(
+        "explicit_rhs", state_space=mod.state_handle(u), flux=True, sources=[electric])
     return mod
 
 
@@ -75,8 +75,12 @@ def test_module_lowers_to_dsl():
 def test_pure_module_program_emits():
     mod = pure_module()
     P = adctime.Program("pc").bind_operators(mod)
+    from pops.problem import Problem
+    problem = Problem(name="module-compile")
+    block = problem.add_block("plasma", mod)
+    state = mod.state_handle(mod.state_spaces()["U"])
     libtime.predictor_corrector_local_linear(
-        P, "plasma", fields_operator=_op(mod, "fields_from_state"),
+        P, block, state, fields_operator=_op(mod, "fields_from_state"),
         explicit_rate_operator=_op(mod, "explicit_rhs"), implicit_operator=_op(mod, "lorentz"))
     # compile_problem(model=Module) lowers the Module internally; emit the .so source (no compile).
     src = P.emit_cpp_program(model=mod.to_dsl())

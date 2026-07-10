@@ -7,7 +7,7 @@ import pytest
 
 from pops.ir import Divergence, Equation, RateExpr, TimeDerivative
 from pops.math import ddt, div
-from pops.model import OperatorHandle
+from pops.model import OperatorHandle, OwnerKind
 from pops.physics import Model
 
 
@@ -83,7 +83,7 @@ def test_physics_model_owner_anchor_is_read_only():
     model, _, _ = _scalar_advection_model()
 
     with pytest.raises(AttributeError):
-        model.owner_path = model.owner_path.child("other")
+        model.owner_path = model.owner_path.child(OwnerKind.DESCRIPTOR, "other")
 
 
 @pytest.mark.parametrize("name", ["", 3, object()])

@@ -19,6 +19,7 @@ from pops.codegen import orchestration  # noqa: E402
 import pops.codegen.compile_drivers as compile_drivers  # noqa: E402
 from pops.mesh.cartesian import CartesianMesh  # noqa: E402
 from pops.mesh.layouts import AMR, Uniform  # noqa: E402
+from pops.model import DeclarationIndex, Handle, OwnerKind, OwnerPath  # noqa: E402
 
 
 class _StubCompiledModel:
@@ -40,7 +41,12 @@ class _StubDsl:
 class _StubModel:
     def __init__(self, name="stub"):
         self.name = name
+        self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, name)
+        self.rho = Handle("rho", kind="state", owner=self.owner_path)
         self.dsl = _StubDsl(name)
+
+    def declaration_index(self):
+        return DeclarationIndex(owner=self.owner_path, handles=(self.rho,))
 
 
 class _StubCompiled:
@@ -61,6 +67,10 @@ def _fresh_problem():
     """One Problem, no layout -- the subject of the two-layouts proof."""
     return pops.Problem(name="plasma").block(
         "ne", physics=_StubModel("ne")).program(_StubTime())
+
+
+def _rho(problem):
+    return problem._blocks.spec("ne")["model"].rho
 
 
 def _patched_uniform(captured):
@@ -130,8 +140,10 @@ def test_recorded_amr_criteria_apply_to_the_amr_layout():
     try:
         compiled = orchestration.compile(prob, layout=layout)
         assert compiled._target == "amr_system"
-        # The recorded regrid criterion was applied to the AMR layout at compile.
-        assert layout.regrid is not None and layout.regrid.steps == 7
+        # Compile owns a detached merged layout; the caller's reusable descriptor is untouched.
+        assert compiled._layout is not layout
+        assert compiled._layout.regrid.steps == 7
+        assert layout.regrid is None
     finally:
         compile_drivers.compile_problem = saved
 
@@ -139,9 +151,94 @@ def test_recorded_amr_criteria_apply_to_the_amr_layout():
 def test_recorded_amr_criteria_refused_on_a_uniform_compile():
     from pops.mesh.amr import Refine
     prob = _fresh_problem()
-    prob.amr.refine(Refine.on("rho").above(0.1))
+    prob.amr.refine(Refine.on(_rho(prob)).above(0.1))
     with pytest.raises(ValueError, match="no level to refine onto"):
         orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=_StubTime())
+
+
+def test_layout_and_problem_cannot_both_author_the_same_amr_slot():
+    from pops.mesh.amr import RegridEvery
+
+    prob = _fresh_problem()
+    prob.amr.refine(regrid=RegridEvery(7))
+    layout = AMR(base=CartesianMesh(), regrid=RegridEvery(7))
+    with pytest.raises(ValueError, match="competing authorities"):
+        orchestration._resolve_layout(prob, layout)
+    assert layout.regrid.steps == 7
+
+
+def test_reusing_one_layout_across_problems_does_not_leak_criteria():
+    from pops.mesh.amr import RegridEvery
+
+    layout = AMR(base=CartesianMesh())
+    tagged = _fresh_problem()
+    tagged.amr.refine(regrid=RegridEvery(5))
+    plain = _fresh_problem()
+
+    tagged_layout = orchestration._resolve_layout(tagged, layout)
+    plain_layout = orchestration._resolve_layout(plain, layout)
+    assert tagged_layout is not layout and plain_layout is not layout
+    assert tagged_layout.regrid.steps == 5
+    assert plain_layout.regrid is None
+    assert layout.regrid is None
+
+
+def test_direct_layout_refine_and_output_handles_are_resolved_on_the_detached_copy():
+    from pops.mesh.amr import AMROutput, Refine
+    from pops.ir import ValueExpr
+    from pops.ir.ops import dx, dy, sqrt
+
+    prob = _fresh_problem()
+    rho = _rho(prob)
+    indicator = sqrt(dx(ValueExpr(rho)) ** 2 + dy(ValueExpr(rho)) ** 2)
+    layout = AMR(
+        base=CartesianMesh(),
+        refine=Refine.on(indicator).above(0.1),
+        output=AMROutput(fields=(rho,)),
+    )
+    resolved = orchestration._resolve_layout(prob, layout)
+
+    assert resolved is not layout
+    assert resolved.refine.subject.a.a.a.field.handle.is_resolved
+    assert resolved.output.fields[0].is_resolved
+    assert not layout.refine.subject.a.a.a.field.handle.is_resolved
+    assert not layout.output.fields[0].is_resolved
+
+
+def test_expression_indicator_snapshot_is_deterministic_and_leaks_no_authoring_token():
+    import json
+    from pops.ir import ValueExpr
+    from pops.ir.ops import dx, dy, sqrt
+    from pops.mesh.amr import Refine
+    from pops.problem._snapshot import build_problem_snapshot
+
+    def authored_problem():
+        model = _StubModel("same-model")
+        value = ValueExpr(model.rho)
+        indicator = sqrt(dx(value) ** 2 + dy(value) ** 2)
+        layout = AMR(
+            base=CartesianMesh(),
+            refine=Refine.on(indicator).above(0.1),
+        )
+        return pops.Problem(name="same-case", layout=layout).block("ne", physics=model)
+
+    left = build_problem_snapshot(authored_problem())
+    right = build_problem_snapshot(authored_problem())
+    assert left.hash == right.hash
+    encoded = json.dumps(left.to_dict(), sort_keys=True)
+    assert "#authoring=" not in encoded
+
+
+def test_amr_output_rejects_a_canonical_ghost_during_layout_resolution():
+    from pops.mesh.amr import AMROutput
+    from pops.model import MissingOwnershipError
+
+    prob = _fresh_problem()
+    model = prob._blocks.spec("ne")["model"]
+    ghost = Handle("ghost", kind="state", owner=model.owner_path.canonical())
+    layout = AMR(base=CartesianMesh(), output=AMROutput(fields=(ghost,)))
+    with pytest.raises(MissingOwnershipError):
+        orchestration._resolve_layout(prob, layout)
 
 
 if __name__ == "__main__":

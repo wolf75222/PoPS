@@ -10,7 +10,7 @@ from pops.ir import (
     ValueExpr, Var, diff,
 )
 from pops.ir.visitors import _children, _key
-from pops.model import Handle, OwnerPath
+from pops.model import Handle, OwnerKind, OwnerPath, UnresolvedOwnershipError
 
 
 def test_symbolic_operators_build_graph_nodes_without_python_evaluation():
@@ -73,10 +73,10 @@ def test_chained_comparison_fails_instead_of_building_a_partial_graph():
 
 
 def test_value_expr_uses_the_generic_traversal_cse_and_diff_protocols():
-    owner = OwnerPath("model", "transport")
+    owner = OwnerPath.model("transport")
     tracer = Handle("u", kind="state", owner=owner)
     same = Handle("u", kind="state", owner=owner)
-    foreign = Handle("u", kind="state", owner=OwnerPath("model", "other"))
+    foreign = Handle("u", kind="state", owner=OwnerPath.model("other"))
     value = ValueExpr(tracer)
 
     assert _children(value) == ()
@@ -89,11 +89,18 @@ def test_value_expr_uses_the_generic_traversal_cse_and_diff_protocols():
 
 
 def test_value_expr_cse_keeps_distinct_live_authoring_owners():
-    left = Handle("u", kind="state", owner=OwnerPath.fresh("model", "same"))
-    right = Handle("u", kind="state", owner=OwnerPath.fresh("model", "same"))
+    left = Handle(
+        "u", kind="state", owner=OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, "same"))
+    right = Handle(
+        "u", kind="state", owner=OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, "same"))
 
-    assert left.canonical_identity() == right.canonical_identity()
+    with pytest.raises(UnresolvedOwnershipError, match="definition fingerprint"):
+        left.owner_path.canonical()
+    with pytest.raises(UnresolvedOwnershipError, match="definition fingerprint"):
+        right.owner_path.canonical()
     assert left != right
+    with pytest.raises(UnresolvedOwnershipError, match="authoring-owned"):
+        left.canonical_identity()
     assert _key(ValueExpr(left)) != _key(ValueExpr(right))
     assert diff(ValueExpr(left), right).value == 0
 

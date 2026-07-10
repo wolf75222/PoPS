@@ -15,6 +15,7 @@ from pops.params import (RuntimeParam, ConstParam, DerivedParam,  # noqa: E402
 from pops.output import (OutputPolicy, CheckpointPolicy, HDF5, Plotfile,  # noqa: E402
                          AllLevels, CoarseOnly, SelectedLevels)
 from pops.external import CompiledBrickRef, ExternalBrick  # noqa: E402
+from pops.model import Handle, OperatorHandle, OwnerPath  # noqa: E402
 import pops.descriptors as _desc  # noqa: E402
 
 
@@ -118,7 +119,9 @@ def test_constant_with_unit():
 
 
 def test_output_and_checkpoint_policies():
-    out = OutputPolicy(format=HDF5(parallel=True), cadence=20, fields=["phi", "E"],
+    phi = Handle("phi", kind="field", owner=OwnerPath.shared("runtime.output-policy"))
+    electric = Handle("E", kind="field", owner=OwnerPath.shared("runtime.output-policy"))
+    out = OutputPolicy(format=HDF5(parallel=True), cadence=20, fields=[phi, electric],
                        levels=AllLevels(), require_parallel=True)
     assert out.options()["format"] == "HDF5" and out.options()["levels"] == "all"
     assert out.requirements().to_dict()["parallel_io"] is True
@@ -128,6 +131,24 @@ def test_output_and_checkpoint_policies():
     assert CoarseOnly().options()["levels"] == "coarse"
     chk = CheckpointPolicy(restartable=True, require_bit_identical=True)
     assert chk.options()["restartable"] is True
+
+
+def test_output_policy_rejects_string_field_references():
+    with pytest.raises(TypeError, match="declaration Handle"):
+        OutputPolicy(fields=["phi"])
+
+
+def test_output_policy_rejects_non_writable_semantic_handles():
+    owner = OwnerPath.shared("runtime.output-policy-kinds")
+    operator = OperatorHandle("rhs", kind="local_rate", owner=owner)
+    parameter = Handle("alpha", kind="parameter", owner=owner)
+    for reference in (operator, parameter, Handle("block", kind="block", owner=owner)):
+        with pytest.raises(TypeError, match="writable state/field/aux"):
+            OutputPolicy(fields=[reference])
+
+    from pops.runtime._output_driver import _field_names
+    with pytest.raises(TypeError, match="writable state/field/aux"):
+        _field_names([operator])
 
 
 def test_external_brick_ref_resolves_from_json_manifest(tmp_path):

@@ -14,13 +14,25 @@ pops = pytest.importorskip("pops")
 from pops.mesh.amr import IgnoreAMRCriteria, Refine, TagUnion  # noqa: E402
 from pops.mesh.cartesian import CartesianMesh  # noqa: E402
 from pops.mesh.layouts import AMR, Uniform  # noqa: E402
+from pops.model import DeclarationIndex, Handle, OwnerKind, OwnerPath  # noqa: E402
+
+
+_RHO = Handle("rho", kind="state", owner=OwnerPath.shared("mesh.uniform_refine"))
+
+
+def _refine():
+    return Refine.on(_RHO)
 
 
 class _FakeModel:
     """A minimal model advertising its declared subjects (mirrors HyperbolicModel's surface)."""
 
-    cons_names = ["rho"]
-    cons_roles = None
+    def __init__(self):
+        self.name = "uniform-model"
+        self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, self.name)
+
+    def declaration_index(self):
+        return DeclarationIndex(owner=self.owner_path, handles=())
 
 
 def _case(layout):
@@ -35,7 +47,7 @@ def test_uniform_without_refine_validates():
 
 
 def test_uniform_plus_refine_is_refused_by_default():
-    layout = Uniform(CartesianMesh(n=16), refine=Refine.on("rho").above(0.1))
+    layout = Uniform(CartesianMesh(n=16), refine=_refine().above(0.1))
     case = _case(layout)
     with pytest.raises(ValueError, match="carries active AMR criteria"):
         case.validate()
@@ -44,7 +56,7 @@ def test_uniform_plus_refine_is_refused_by_default():
 def test_uniform_plus_tag_union_is_refused_by_default():
     layout = Uniform(
         CartesianMesh(n=16),
-        refine=TagUnion(Refine.on("rho").above(0.1), Refine.on("rho").below(-0.1)))
+        refine=TagUnion(_refine().above(0.1), _refine().below(-0.1)))
     case = _case(layout)
     with pytest.raises(ValueError) as exc:
         case.validate()
@@ -56,7 +68,7 @@ def test_uniform_plus_tag_union_is_refused_by_default():
 def test_uniform_plus_refine_with_ignore_amr_criteria_passes():
     layout = Uniform(
         CartesianMesh(n=16),
-        refine=Refine.on("rho").above(0.1),
+        refine=_refine().above(0.1),
         ignore_amr=IgnoreAMRCriteria())
     case = _case(layout)
     # No raise: the explicit escape is honoured.
@@ -69,7 +81,7 @@ def test_uniform_plus_refine_with_ignore_amr_criteria_passes():
 
 def test_amr_layout_is_unaffected_by_the_uniform_refusal():
     # An AMR layout with a refine criterion is the actual target route: never refused here.
-    layout = AMR(base=CartesianMesh(n=16), refine=Refine.on("rho").above(0.1))
+    layout = AMR(base=CartesianMesh(n=16), refine=_refine().above(0.1))
     case = _case(layout)
     case.validate()
 
@@ -78,7 +90,12 @@ def test_ignore_amr_requires_the_typed_marker():
     # The escape is the typed descriptor, never a free truthy value: ignore_amr=True would be
     # an untyped opt-out and is refused at construction.
     with pytest.raises(TypeError, match="IgnoreAMRCriteria"):
-        Uniform(CartesianMesh(n=16), refine=Refine.on("rho").above(0.1), ignore_amr=True)
+        Uniform(CartesianMesh(n=16), refine=_refine().above(0.1), ignore_amr=True)
+
+
+def test_refine_subject_rejects_a_string():
+    with pytest.raises(TypeError, match="names and strings"):
+        Refine.on("rho")
 
 
 def test_ignore_amr_criteria_is_a_plain_marker_descriptor():

@@ -19,6 +19,22 @@ from typing import Any
 from pops.codegen.program_emit_kernels import _has_runtime_param, _model_impl
 
 
+def _required_param_block_index(block_idx: Any, block: Any, value: Any) -> int:
+    """Route a parameter-reading node through an exact Program block declaration."""
+    if block is None:
+        raise ValueError(
+            "runtime parameter node %r is not block-qualified" % getattr(value, "name", value))
+    try:
+        index = block_idx[block]
+    except KeyError:
+        raise ValueError(
+            "runtime parameter node %r references block %r outside Program._block_indices()"
+            % (getattr(value, "name", value), block)) from None
+    if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+        raise ValueError("invalid runtime parameter block index %r" % index)
+    return index
+
+
 def _op_model_exprs(impl: Any, v: Any) -> list:
     """The model coefficient Expr a model-kernel op @p v lowers, so the param routing can detect which
     runtime parameters it reads (ADC-510). Mirrors the kernel emitters' expr selection:
@@ -93,7 +109,7 @@ def program_param_entries(program: Any, model: Any) -> list:
         exprs = _op_model_exprs(impl, v)
         if not exprs or not _has_runtime_param(exprs):
             continue
-        blk = block_idx.get(v.block, 0)
+        blk = _required_param_block_index(block_idx, v.block, v)
         for name in _runtime_param_names_in(exprs):
             indexed_node = by_name.get(name)
             if indexed_node is None or (blk, name) in seen:

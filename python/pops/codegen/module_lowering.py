@@ -42,6 +42,12 @@ def _module_to_model(module: Any) -> Any:
                          "(got %s)" % sorted(states))
     state = next(iter(states.values()))
     m = Model(module.name)
+    # The facade is a lowering view of THIS Module, not a newly declared model. Re-anchor its empty
+    # backing model before the first declaration so every derived operator registry retains the
+    # Module's exact authoring authority. Without this, owner-qualified Program nodes would be
+    # rejected (correctly) as belonging to a different model during codegen.
+    object.__setattr__(m._m, "_owner_path", module.owner_path)
+    m._m._invalidate_authoring_views()
     _spec_role = {"density": "Density", "momentum_x": "MomentumX", "momentum_y": "MomentumY",
                   "momentum_z": "MomentumZ", "energy": "Energy", "pressure": "Pressure",
                   "velocity_x": "VelocityX", "velocity_y": "VelocityY", "velocity_z": "VelocityZ",

@@ -108,13 +108,14 @@ def test_problem_is_not_a_descriptor():
     # (it duck-types the inspectable surface), and the parts it holds ARE descriptors.
     import pops
     from pops.descriptors import Descriptor, DescriptorProtocol
+    from pops.model import Module
 
     from pops.mesh.cartesian import CartesianMesh
     from pops.mesh.layouts import Uniform
     # A constructor layout is still accepted (ADC-526 back-compat); give the fixture one so the
     # "the assembly holds descriptors" assertion below has a layout descriptor to check.
     prob = (pops.Problem(name="arch", layout=Uniform(CartesianMesh(n=8)))
-            .block("ne", physics=type("M", (), {"name": "m"})()))
+            .block("ne", physics=Module("m")))
     assert not isinstance(prob, Descriptor), (
         "Spec 5 sec.6: a Problem must NOT be a pops.descriptors.Descriptor (it is an assembly "
         "that contains descriptors, not one itself)")

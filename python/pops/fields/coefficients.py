@@ -14,6 +14,8 @@ from typing import Any
 from pops.descriptors import Descriptor
 from pops.descriptors_report import RequirementSet
 
+from ._references import reference_label, resolve_handle
+
 
 class _ImmutableCoefficient(Descriptor):
     """Strict value descriptor safe to retain inside an immutable symbolic graph."""
@@ -22,20 +24,35 @@ class _ImmutableCoefficient(Descriptor):
     category = "coefficient"
     _role = ""
 
-    def __init__(self, name: Any) -> None:
-        if not isinstance(name, str) or not name:
-            raise TypeError("coefficient name must be a non-empty string")
-        object.__setattr__(self, "_name", name)
+    def __init__(self, field: Any) -> None:
+        from pops.model import Handle
+        if not isinstance(field, Handle):
+            raise TypeError(
+                "coefficient field must be a declaration Handle; names/strings are not references")
+        object.__setattr__(self, "_field", field)
 
     @property
     def name(self) -> str:
-        return self._name
+        return self._field.local_id
+
+    @property
+    def field(self) -> Any:
+        return self._field
 
     def options(self) -> dict:
-        return {"name": self._name, "role": self._role}
+        return {"field": reference_label(self._field, where="coefficient field"),
+                "role": self._role}
 
     def requirements(self) -> Any:
-        return RequirementSet({"aux_field": self._name})
+        return RequirementSet({
+            "aux_field": reference_label(self._field, where="coefficient field")})
+
+    def resolve_references(self, resolver: Any) -> _ImmutableCoefficient:
+        return type(self)(resolve_handle(
+            self._field, resolver, where="coefficient field"))
+
+    def declaration_references(self) -> tuple[Any, ...]:
+        return (self._field,)
 
     def freeze(self) -> Any:
         """Already immutable; participate idempotently in Problem freeze."""
