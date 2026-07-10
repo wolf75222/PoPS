@@ -70,7 +70,7 @@ def _solve_program(adctime, fd_eps=None):
 
     W = P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U, tol=1e-12,
                                 max_iter=20, fd_eps=fd_eps)
-    P.commit("blk", W)
+    P.commit(P.state("U", block="blk").next, W)
     return P
 
 

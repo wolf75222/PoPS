@@ -59,14 +59,15 @@ def test_add_block_returns_a_stable_handle():
     prob = pops.Problem()
     handle = prob.add_block("ne", _StubModel(), time=object(), diagnostics=object())
     assert handle.name == "ne"
-    assert handle.handle_id == "block:ne"
+    assert handle.qualified_id.endswith("::block::ne")
+    qualified_id = handle.qualified_id
     # The handle is stable as more blocks are added.
     prob.add_block("ni", _StubModel())
     assert prob.add_block.__self__ is prob or True  # add_block returns a handle, not self
-    assert handle.handle_id == "block:ne"
+    assert handle.qualified_id == qualified_id
     # blocks() exposes the stable handles keyed by name.
     assert set(prob.blocks()) == {"ne", "ni"}
-    assert prob.blocks()["ne"].handle_id == "block:ne"
+    assert prob.blocks()["ne"].qualified_id == qualified_id
 
 
 def test_add_field_returns_a_stable_handle():
@@ -118,7 +119,10 @@ def test_to_dict_is_json_ready_and_array_free():
     # Round-trips through JSON (no runtime object, no numpy array).
     dumped = json.dumps(data)
     assert "plasma" in dumped
-    assert data["handles"]["blocks"] == ["block:ne"]
+    assert len(data["handles"]["blocks"]) == 1
+    block_handle = data["handles"]["blocks"][0]
+    assert block_handle["kind"] == "block" and block_handle["local_id"] == "ne"
+    assert block_handle["qualified_id"].endswith("::block::ne")
 
 
 def test_problem_has_no_run_install_or_compile_method():

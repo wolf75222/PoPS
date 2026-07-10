@@ -33,6 +33,12 @@ from pops.solvers.requirements import capability_map
 _KRYLOV_CAPABILITIES = capability_map(uniform=True, amr=True, mpi=True, gpu=True)
 
 
+def _exact_control(value: Any, where: str) -> Any:
+    # Lazy to keep the catalog-layer import graph (solvers -> no symbolic implementation module).
+    from pops.ir.literals import exact_numeric_scalar
+    return exact_numeric_scalar(value, where=where)
+
+
 def _check_max_iter(name: str, max_iter: Any) -> int:
     """Refuse a missing / non-positive Krylov iteration budget at descriptor construction.
 
@@ -61,9 +67,14 @@ def _check_rel_tol(name: str, rel_tol: Any) -> Any:
     default stays authoritative and the descriptor identity is unchanged (omit-when-default)."""
     if rel_tol is None:
         return None
-    if isinstance(rel_tol, bool) or not isinstance(rel_tol, (int, float)) or not (0.0 < rel_tol < 1.0):
+    try:
+        value = _exact_control(rel_tol, "%s rel_tol" % name)
+        valid = 0 < value < 1
+    except (TypeError, ValueError):
+        valid = False
+    if not valid:
         raise ValueError("%s: rel_tol must be a number in (0, 1) or None; got %r" % (name, rel_tol))
-    return float(rel_tol)
+    return value
 
 
 def _solver(name: str, native_id: str, factory: str, max_iter: Any, rel_tol: Any = None,
@@ -125,10 +136,15 @@ def Richardson(max_iter: Any = None, rel_tol: Any = None, omega: Any = None,
     positive value is baked into the generated ``pops::richardson_solve`` call.
     """
     if omega is not None:
-        if isinstance(omega, bool) or not isinstance(omega, (int, float)) or not (omega > 0.0):
+        try:
+            omega_value = _exact_control(omega, "Richardson omega")
+            valid = omega_value > 0
+        except (TypeError, ValueError):
+            valid = False
+        if not valid:
             raise ValueError("Richardson: omega must be a positive number or None; got %r"
                              % (omega,))
-        options["omega"] = float(omega)
+        options["omega"] = omega_value
     return _solver("richardson", "pops::richardson_solve", "Richardson", max_iter, rel_tol,
                    **options)
 

@@ -29,7 +29,7 @@ def _forward_euler(t):
     U = P.state("plasma")
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
     return P
 
 
@@ -42,7 +42,7 @@ def _ssprk2(t):
     U1 = P.linear_combine("U1", U0 + dt * k0)
     f1 = P.solve_fields(U1)
     k1 = P._rhs_legacy(state=U1, fields=f1, flux=True, sources=["default"])
-    P.commit("plasma", P.linear_combine("U2", 0.5 * U0 + 0.5 * (U1 + dt * k1)))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("U2", 0.5 * U0 + 0.5 * (U1 + dt * k1)))
     return P
 
 
@@ -100,7 +100,7 @@ def test_named_source_refused(t):
     U = P.state("plasma")
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["electric"])
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
     try:
         P.emit_cpp_program()
     except NotImplementedError as exc:
@@ -120,7 +120,7 @@ def test_multiblock_lowers(t):
         U = P.state(blk)
         f = P.solve_fields(U)
         R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-        P.commit(blk, P.linear_combine(blk + "_next", U + dt * R))
+        P.commit(P.state("U", block=blk).next, P.linear_combine(blk + "_next", U + dt * R))
     src = P.emit_cpp_program()
     assert "ctx.state(0)" in src, "block a should bind ctx.state(0)"
     assert "ctx.state(1)" in src, "block b should bind ctx.state(1)"
@@ -135,11 +135,11 @@ def test_unknown_block_commit_refused(t):
     U = P.state("a")
     Ua = P.linear_combine("a_next", U + P.dt * P._rhs_legacy(state=U, fields=P.solve_fields(U),
                                                      sources=["default"]))
-    P.commit("ghost", Ua)  # 'ghost' was never declared by P.state
+    # Invalid ownership is rejected while authoring; it never enters the IR.
     try:
-        P.emit_cpp_program()
+        P.commit(P.state("U", block="ghost").next, Ua)  # 'ghost' was never declared by P.state
     except ValueError as exc:
-        assert "unknown block" in str(exc).lower()
+        assert "cross-block" in str(exc).lower()
     else:
         raise AssertionError("expected ValueError for a commit of an undeclared block")
 
@@ -152,8 +152,8 @@ def test_solve_fields_from_blocks_lowers(t):
     Ua = P.state("a")
     Ub = P.state("b")
     P.solve_fields_from_blocks([Ua, Ub])
-    P.commit("a", P.linear_combine("a1", Ua + P.dt * P._rhs_legacy(state=Ua, sources=["default"])))
-    P.commit("b", P.linear_combine("b1", Ub + P.dt * P._rhs_legacy(state=Ub, sources=["default"])))
+    P.commit(P.state("U", block="a").next, P.linear_combine("a1", Ua + P.dt * P._rhs_legacy(state=Ua, sources=["default"])))
+    P.commit(P.state("U", block="b").next, P.linear_combine("b1", Ub + P.dt * P._rhs_legacy(state=Ub, sources=["default"])))
     src = P.emit_cpp_program()
     assert "ctx.solve_fields_from_blocks(" in src
     assert "std::vector<const pops::MultiFab*>" in src

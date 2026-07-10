@@ -14,6 +14,7 @@ imex_local, imex_local_linear, predictor_corrector_local_linear, adams_bashforth
 Pure Python IR construction (no numerics / no _pops); collected as pytest functions.
 """
 import sys
+from fractions import Fraction
 
 import pytest
 
@@ -40,7 +41,9 @@ def _model(name="ep"):
 
 def _op(m, name):
     op = m.operator_registry().get(name)
-    return OperatorHandle(op.name, kind=op.kind, signature=op.signature)
+    return OperatorHandle(
+        op.name, kind=op.kind, owner=m.operator_registry().owner_path,
+        signature=op.signature)
 
 
 def _assert_parity(macro_prog, manual_prog):
@@ -60,7 +63,7 @@ def test_forward_euler_parity():
     manual = adctime.Program("forward_euler")
     U = manual.state("plasma")
     R = _stage(manual, U)
-    manual.commit("plasma", manual.linear_combine("fe_step", U + manual.dt * R))
+    manual.commit(manual.state("U", block="plasma").next, manual.linear_combine("fe_step", U + manual.dt * R))
     _assert_parity(macro, manual)
 
 
@@ -71,7 +74,13 @@ def test_ssprk2_parity():
     k0 = _stage(manual, U0)
     U1 = manual.linear_combine("ssprk2_U1", U0 + manual.dt * k0)
     k1 = _stage(manual, U1)
-    manual.commit("plasma", manual.linear_combine("ssprk2_step", 0.5 * U0 + 0.5 * (U1 + manual.dt * k1)))
+    manual.commit(
+        manual.state("U", block="plasma").next,
+        manual.linear_combine(
+            "ssprk2_step",
+            Fraction(1, 2) * U0 + Fraction(1, 2) * (U1 + manual.dt * k1),
+        ),
+    )
     _assert_parity(macro, manual)
 
 
@@ -82,10 +91,14 @@ def test_ssprk3_parity():
     k0 = _stage(manual, U0)
     U1 = manual.linear_combine("ssprk3_U1", U0 + manual.dt * k0)
     k1 = _stage(manual, U1)
-    U2 = manual.linear_combine("ssprk3_U2", 0.75 * U0 + 0.25 * (U1 + manual.dt * k1))
+    U2 = manual.linear_combine(
+        "ssprk3_U2",
+        Fraction(3, 4) * U0 + Fraction(1, 4) * (U1 + manual.dt * k1),
+    )
     k2 = _stage(manual, U2)
-    manual.commit("plasma", manual.linear_combine(
-        "ssprk3_step", (1.0 / 3.0) * U0 + (2.0 / 3.0) * (U2 + manual.dt * k2)))
+    manual.commit(manual.state("U", block="plasma").next, manual.linear_combine(
+        "ssprk3_step",
+        Fraction(1, 3) * U0 + Fraction(2, 3) * (U2 + manual.dt * k2)))
     _assert_parity(macro, manual)
 
 
@@ -95,14 +108,16 @@ def test_rk4_parity():
     dt = manual.dt
     U0 = manual.state("plasma")
     k1 = _stage(manual, U0)
-    U1 = manual.linear_combine("rk4_U1", U0 + 0.5 * dt * k1)
+    U1 = manual.linear_combine("rk4_U1", U0 + Fraction(1, 2) * dt * k1)
     k2 = _stage(manual, U1)
-    U2 = manual.linear_combine("rk4_U2", U0 + 0.5 * dt * k2)
+    U2 = manual.linear_combine("rk4_U2", U0 + Fraction(1, 2) * dt * k2)
     k3 = _stage(manual, U2)
     U3 = manual.linear_combine("rk4_U3", U0 + dt * k3)
     k4 = _stage(manual, U3)
-    manual.commit("plasma", manual.linear_combine(
-        "rk4_step", U0 + dt / 6.0 * k1 + dt / 3.0 * k2 + dt / 3.0 * k3 + dt / 6.0 * k4))
+    manual.commit(manual.state("U", block="plasma").next, manual.linear_combine(
+        "rk4_step",
+        U0 + Fraction(1, 6) * dt * k1 + Fraction(1, 3) * dt * k2
+        + Fraction(1, 3) * dt * k3 + Fraction(1, 6) * dt * k4))
     _assert_parity(macro, manual)
 
 
@@ -127,11 +142,12 @@ def test_explicit_rk_parity():
     u0 = manual.state("plasma")
     f0 = manual._call("fields_from_state", u0)
     k0 = manual._call("explicit_rhs", u0, f0, name="ssprk2_k0")
-    u1 = manual.linear_combine("ssprk2_U1", u0 + (dt * 1.0) * k0)
+    u1 = manual.linear_combine("ssprk2_U1", u0 + dt * k0)
     f1 = manual._call("fields_from_state", u1)
     k1 = manual._call("explicit_rhs", u1, f1, name="ssprk2_k1")
-    manual.commit("plasma", manual.linear_combine(
-        "ssprk2_step", u0 + (dt * 0.5) * k0 + (dt * 0.5) * k1))
+    manual.commit(manual.state("U", block="plasma").next, manual.linear_combine(
+        "ssprk2_step",
+        u0 + (dt * Fraction(1, 2)) * k0 + (dt * Fraction(1, 2)) * k1))
     _assert_parity(macro, manual)
 
 
@@ -149,7 +165,7 @@ def test_imex_local_linear_parity():
     q = manual.linear_combine("imex_rhs", u + manual.dt * r)
     u1 = manual.solve_local_linear("imex_step", operator=manual.I - 1.0 * manual.dt * lin,
                                    rhs=q, fields=fields)
-    manual.commit("plasma", u1)
+    manual.commit(manual.state("U", block="plasma").next, u1)
     _assert_parity(macro, manual)
 
 
@@ -163,9 +179,9 @@ def test_imex_local_parity():
     fields = manual.solve_fields(U)
     R = manual._rhs_legacy(state=U, fields=fields, flux=True, sources=["default"])
     rhs = manual.linear_combine("plasma_imex_rhs", U + manual.dt * R)
-    operator = manual.I - (1.0 * manual.dt) * manual.linear_source(lorentz)
+    operator = manual.I - manual.dt * manual.linear_source(lorentz)
     out = manual.solve_local_linear(name="plasma_imex_step", operator=operator, rhs=rhs, fields=fields)
-    manual.commit("plasma", out)
+    manual.commit(manual.state("U", block="plasma").next, out)
     _assert_parity(macro, manual)
 
 
@@ -188,10 +204,12 @@ def test_predictor_corrector_parity():
     r_star = manual._call("explicit_rhs", u_star, fields_star, name="R_star")
     l_star = manual._call("lorentz", fields_star, name="L_star")
     c_star = manual.apply(l_star, u_star, fields=fields_star, name="C_star")
-    q = manual.linear_combine("Q", u_n + 0.5 * dt * r_n + 0.5 * dt * r_star + 0.5 * dt * c_star)
-    u_np1 = manual.solve_local_linear("U_np1", operator=manual.I - 0.5 * dt * l_star, rhs=q,
+    half = Fraction(1, 2)
+    q = manual.linear_combine(
+        "Q", u_n + half * dt * r_n + half * dt * r_star + half * dt * c_star)
+    u_np1 = manual.solve_local_linear("U_np1", operator=manual.I - half * dt * l_star, rhs=q,
                                       fields=fields_star)
-    manual.commit("plasma", u_np1)
+    manual.commit(manual.state("U", block="plasma").next, u_np1)
     _assert_parity(macro, manual)
 
 
@@ -203,8 +221,11 @@ def test_adams_bashforth2_parity():
     U = manual.state("plasma")
     R_n = manual._rhs_legacy(state=U, fields=manual.solve_fields(U), flux=True, sources=["default"])
     manual.store_history("plasma.R", R_n)
-    expr = U + (manual.dt * 1.5) * R_n + (manual.dt * -0.5) * manual.history("plasma.R", lag=1)
-    manual.commit("plasma", manual.linear_combine("ab2_step", expr))
+    expr = (
+        U + (manual.dt * Fraction(3, 2)) * R_n
+        + (manual.dt * Fraction(-1, 2)) * manual.history("plasma.R", lag=1)
+    )
+    manual.commit(manual.state("U", block="plasma").next, manual.linear_combine("ab2_step", expr))
     _assert_parity(macro, manual)
 
 
@@ -217,10 +238,10 @@ def test_bdf1_linear_source_parity():
     U = manual.state("plasma")
     fields = manual.solve_fields(U)
     R = manual._rhs_legacy(state=U, fields=fields, flux=True, sources=["default"])
-    rhs = manual.linear_combine("plasma_bdf1_rhs", 1.0 * U + manual.dt * R)
+    rhs = manual.linear_combine("plasma_bdf1_rhs", U + manual.dt * R)
     operator = manual.I - manual.dt * manual.linear_source(lorentz)
     out = manual.solve_local_linear(name="plasma_bdf1_step", operator=operator, rhs=rhs, fields=fields)
-    manual.commit("plasma", out)
+    manual.commit(manual.state("U", block="plasma").next, out)
     _assert_parity(macro, manual)
 
 

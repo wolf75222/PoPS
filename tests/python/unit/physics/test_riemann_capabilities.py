@@ -121,9 +121,9 @@ def test_finite_volume_rate_validates_riemann():
     rho, mx, my, E = U
     u, v = mx / rho, my / rho
     c = sqrt(1.4)
-    m.flux("F", on=U, x=[mx, mx * u, mx * v, E], y=[my, my * u, my * v, E],
-           waves={"x": [u - c, u, u, u + c], "y": [v - c, v, v, v + c]})
-    m.finite_volume_rate("explicit_rate", flux="F",
+    flux = m.flux("F", on=U, x=[mx, mx * u, mx * v, E], y=[my, my * u, my * v, E],
+                  waves={"x": [u - c, u, u, u + c], "y": [v - c, v, v, v + c]})
+    m.finite_volume_rate("explicit_rate", flux=flux,
                          riemann=lib.riemann.HLLC(),
                          reconstruction=lib.reconstruction.WENO5Z())
     assert "explicit_rate" in m.list_operators()

@@ -120,7 +120,8 @@ def test_terms_are_inert_no_runtime_data():
     # The elliptic nodes carry references/coefficients, not arrays; they compute nothing.
     phi = unknown("phi")
     react = ScalarCoefficient("eps") * phi
-    assert not hasattr(react, "eval")           # no host evaluator
+    with pytest.raises(NotImplementedError):
+        react.eval({})                           # generic Expr protocol, no host implementation
     assert react.field is phi                   # a reference, not a value
     assert react.coeff.name == "eps"            # the coefficient descriptor, not an array
     assert "Reaction" in repr(react)            # inspectable

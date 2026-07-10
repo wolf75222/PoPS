@@ -34,13 +34,15 @@ def _pops_time():
     return t
 
 
-def _llop(name):
-    """A bare local-linear-operator OperatorHandle, the de-stringed macro selector (ADC-532).
-
-    The section-A imex/bdf IR tests bind no module, so a handle is built directly from the operator
-    name (the model still resolves it by name at compile time in section B)."""
+def _linear_handle(model, name="lorentz"):
+    """The exact owner/kind/signature handle of ``model``'s registered local map."""
     from pops.model import OperatorHandle
-    return OperatorHandle(name, kind="local_linear_operator")
+
+    registry = model.operator_registry()
+    operator = registry.get(name)
+    return OperatorHandle(
+        operator.name, kind=operator.kind, owner=registry.owner_path,
+        signature=operator.signature)
 
 
 _C = 0.75  # AB linear-source coefficient: S(rho) = _C*rho
@@ -105,23 +107,27 @@ def _lorentz_model(name):
 
 # ============================ (A) IR + codegen: pure Python =============================
 def test_imex_local_builds_and_lowers(t):
-    P = t.Program("imex")
-    out = lt.imex_local(P, "plasma", linear_source=_llop("lorentz"))
+    model = _lorentz_model("imex_m")
+    P = t.Program("imex").bind_operators(model)
+    out = lt.imex_local(P, "plasma", linear_source=_linear_handle(model))
     assert P.validate() is True and P.commits()["plasma"] is out
     try:
         from pops.physics.facade import Model
     except Exception as exc:  # noqa: BLE001
         print("  (imex codegen skipped: pops.dsl unavailable: %s)" % exc)
         return
-    src = P.emit_cpp_program(model=_lorentz_model("imex_m"))
+    src = P.emit_cpp_program(model=model)
     assert "pops::detail::mat_inverse<3>(" in src, "imex implicit term is a per-cell dense solve"
     assert "rhs_into" in src, "imex explicit term assembles an RHS"
 
 
 def test_imex_local_theta_guard(t):
     for bad in (0.0, -0.5, 1.5):
+        model = _lorentz_model("theta_%s" % str(bad).replace(".", "_"))
+        program = t.Program("x").bind_operators(model)
         try:
-            lt.imex_local(t.Program("x"), "plasma", linear_source=_llop("lorentz"), theta=bad)
+            lt.imex_local(
+                program, "plasma", linear_source=_linear_handle(model), theta=bad)
         except ValueError as exc:
             assert "theta" in str(exc)
         else:
@@ -199,9 +205,13 @@ def test_ab3_lowers_with_two_history_reads(t):
     assert 'ctx.history("plasma.R", 1)' in src and 'ctx.history("plasma.R", 2)' in src, \
         "AB3 reads R_{n-1} (lag 1) AND R_{n-2} (lag 2)"
     assert "ctx.store_history" in src and "ctx.rotate_histories();" in src, "AB3 stores + rotates"
-    # AB3 weights 23/12, -16/12, 5/12 on dt.
-    for w in ("1.9166", "-1.3333", "0.41666"):
-        assert w in src.replace("e+00", ""), "AB3 weight %s must appear in the lowered combine" % w
+    # AB3 coefficients stay exact through IR and C++ lowering.
+    for w in (
+        "pops::Real(23) / pops::Real(12)",
+        "pops::Real(-4) / pops::Real(3)",
+        "pops::Real(5) / pops::Real(12)",
+    ):
+        assert w in src, "exact AB3 weight %s must appear in the lowered combine" % w
 
 
 # ============================ (B) offline parity: skips without the toolchain ===================
@@ -273,11 +283,12 @@ def _run_imex(t):
     if not hasattr(sim, "install_program"):
         print("-- (B imex) skipped: _pops lacks install_program (rebuild _pops) --")
         return
-    P = t.Program("imex_step")
-    lt.imex_local(P, "plasma", linear_source=_llop("lorentz"), flux=True, sources=["default"],
+    model = _lorentz_model("imex_prog")
+    P = t.Program("imex_step").bind_operators(model)
+    lt.imex_local(P, "plasma", linear_source=_linear_handle(model), flux=True, sources=["default"],
                   theta=1.0)
     try:
-        compiled = pops.codegen.compile_problem(model=_lorentz_model("imex_prog"), time=P)
+        compiled = pops.codegen.compile_problem(model=model, time=P)
         cm = _lorentz_model("imex_block").compile(backend="production")
     except RuntimeError as exc:
         print("-- (B imex) skipped: compile could not build the .so: %s --" % str(exc)[:160])

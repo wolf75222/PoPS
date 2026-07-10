@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """ADC-588: the typed FieldContext a Program field solve carries.
 
-``P.solve_fields(...)`` now returns a Value tagged with a real
+``P.solve_fields(...)`` now returns a ProgramValue tagged with a real
 :class:`pops.time.field_context.FieldContext` (previously a docstring-only concept). This pins:
   - the default solve is tagged with the ``phi`` problem and the historical phi/grad outputs;
   - a named field solve is tagged with that field's problem and its single output;
-  - the context identifies the (problem, block, stage-source) triple and rejects a cross-context
-    read with a structured error;
-  - the default ``solve_fields`` IR stays byte-identical (empty ``attrs``) so the compiled-Program
-    cache key is unchanged (parity: the context is build-time metadata, never serialized).
+  - the context identifies every exact (block, stage-source) pair and rejects a cross-context read;
+  - coupled field solves retain all block sources, never an arbitrary first-block projection;
+  - every field-reading Program op enforces the token, while a local solve accepts a RHS whose
+    provenance was explicitly propagated from the same token.
 
 Pure Python (no _pops numerics beyond importing the package); no compilation.
 """
@@ -16,22 +16,25 @@ import sys
 
 import pytest
 
-from pops.time.field_context import DEFAULT_FIELD_PROBLEM, FieldContext
+from pops.time.field_context import DEFAULT_FIELD_PROBLEM, FieldContext, FieldReadProvenance
 from pops.time.program import Program
 
 
 def test_field_context_matches_and_rejects_triple():
     layout_outputs = ("phi", "grad_x", "grad_y")
-    ctx = FieldContext("phi", "plasma", 7, layout_outputs)
+    ctx = FieldContext("phi", (("plasma", 7),), layout_outputs)
     assert ctx.matches("phi", "plasma", 7)
     assert ctx.matches(None, "plasma", 7)  # None problem matches any (default case)
     assert not ctx.matches("phi", "plasma", 8)  # stage mismatch
     assert not ctx.matches("phi", "other", 7)  # block mismatch
     assert not ctx.matches("psi", "plasma", 7)  # problem mismatch
+    assert hash(ctx)
+    with pytest.raises((AttributeError, TypeError)):
+        ctx.stage_sources = (("plasma", 8),)
 
 
 def test_require_read_raises_structured_error():
-    ctx = FieldContext("phi", "plasma", 7)
+    ctx = FieldContext("phi", (("plasma", 7),))
     with pytest.raises(ValueError) as exc:
         ctx.require_read("phi", "other_block", 7)
     msg = str(exc.value)
@@ -40,7 +43,7 @@ def test_require_read_raises_structured_error():
 
 
 def test_output_lookup_names_known_outputs():
-    ctx = FieldContext("phi", "plasma", 0, ("phi", "grad_x", "grad_y"))
+    ctx = FieldContext("phi", (("plasma", 0),), ("phi", "grad_x", "grad_y"))
     assert ctx.output("grad_y") == "grad_y"
     with pytest.raises(KeyError) as exc:
         ctx.output("E")
@@ -49,8 +52,35 @@ def test_output_lookup_names_known_outputs():
 
 
 def test_default_field_problem_sentinel():
-    ctx = FieldContext(None, "plasma", 0)
+    ctx = FieldContext(None, (("plasma", 0),))
     assert ctx.field_problem == DEFAULT_FIELD_PROBLEM == "phi"
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"field_problem": object(), "stage_sources": (("plasma", 0),)},
+        {"field_problem": "phi", "stage_sources": ((object(), 0),)},
+        {"field_problem": "phi", "stage_sources": (("plasma", []),)},
+        {"field_problem": "phi", "stage_sources": (("plasma", True),)},
+        {"field_problem": "phi", "stage_sources": (("plasma", 0),), "outputs": [object()]},
+    ],
+)
+def test_field_context_rejects_mutable_or_unstable_identity_leaves(kwargs):
+    with pytest.raises(TypeError):
+        FieldContext(**kwargs)
+
+
+def test_field_context_detaches_container_inputs_and_remains_hashable():
+    sources = [["plasma", 0]]
+    outputs = ["phi"]
+    context = FieldContext("phi", sources, outputs)
+    sources[0][0] = "other"
+    outputs.append("grad_x")
+
+    assert context.stage_sources == (("plasma", 0),)
+    assert context.outputs == ("phi",)
+    assert hash(context)
 
 
 def test_solve_fields_tags_default_context():
@@ -60,10 +90,9 @@ def test_solve_fields_tags_default_context():
     assert f.vtype == "fields"
     ctx = f.field_context
     assert ctx.field_problem == "phi"
-    assert ctx.block == "plasma"
-    assert ctx.stage_source == U.id
+    assert ctx.stage_sources == (("plasma", U.id),)
     assert ctx.outputs == ("phi", "grad_x", "grad_y")
-    # PARITY: the default op keeps empty attrs -> byte-identical .so cache key.
+    # The default op keeps empty physics attrs; provenance has its own canonical IR field.
     assert f.attrs == {}
 
 
@@ -87,9 +116,100 @@ def test_solves_from_different_states_have_distinct_stage_sources():
     # Each call carries its OWN context object; solves from different stage states are distinct
     # (different block AND different stage source), so one cannot be read as the other.
     assert fa.field_context is not fb.field_context
-    assert fa.field_context.stage_source == Ua.id
-    assert fb.field_context.stage_source == Ub.id
+    assert fa.field_context.stage_sources == (("blockA", Ua.id),)
+    assert fb.field_context.stage_sources == (("blockB", Ub.id),)
     assert not fa.field_context.matches("phi", "blockB", Ub.id)
+
+
+def test_coupled_context_tracks_every_block_source_and_rejects_stale_stage():
+    P = Program("coupled")
+    Ua = P.state("a")
+    Ub = P.state("b")
+    fields = P.solve_fields_from_blocks((Ua, Ub))
+
+    assert fields.block is None
+    assert fields.field_context.stage_sources == (("a", Ua.id), ("b", Ub.id))
+    assert P._rhs_legacy(state=Ua, fields=fields, sources=[]).block == "a"
+    assert P._rhs_legacy(state=Ub, fields=fields, sources=[]).block == "b"
+
+    Ua_stage = P.linear_combine("a_stage", Ua)
+    with pytest.raises(ValueError, match="incompatible field context"):
+        P._rhs_legacy(state=Ua_stage, fields=fields, sources=[])
+
+
+def test_field_consumers_reject_stale_state_but_local_solve_accepts_derived_rhs():
+    P = Program("derived")
+    U0 = P.state("plasma")
+    fields0 = P.solve_fields(U0)
+    R0 = P._rhs_legacy(state=U0, fields=fields0, sources=[])
+    q = P.linear_combine("q", U0 + P.dt * R0)
+    linear = P._linear_source("relax")
+
+    # q carries the exact context through the RHS graph, so the implicit local solve is valid.
+    solved = P.solve_local_linear(
+        "solved", operator=P.I - P.dt * linear, rhs=q, fields=fields0)
+    assert q.field_context == fields0.field_context
+    assert solved.field_context == fields0.field_context
+
+    # Physics evaluation is stricter: q is a new stage State and must first get its own field solve.
+    with pytest.raises(ValueError, match="incompatible field context"):
+        P._rhs_legacy(state=q, fields=fields0, sources=[])
+    with pytest.raises(ValueError, match="incompatible field context"):
+        P._source("reaction", state=q, fields=fields0)
+    with pytest.raises(ValueError, match="incompatible field context"):
+        P._apply(linear, state=q, fields=fields0)
+
+    plain_stage = P.linear_combine("plain_stage", U0)
+    with pytest.raises(ValueError, match="incompatible field context"):
+        P.solve_local_linear(
+            "stale", operator=P.I - P.dt * linear, rhs=plain_stage, fields=fields0)
+
+
+def test_multistage_provenance_is_explicit_and_operator_context_cannot_be_substituted():
+    P = Program("multistage")
+    U0 = P.state("plasma")
+    fields0 = P.solve_fields(U0)
+    R0 = P._rhs_legacy(state=U0, fields=fields0, sources=[])
+    U1 = P.linear_combine("U1", U0 + P.dt * R0)
+    fields1 = P.solve_fields(U1)
+    R1 = P._rhs_legacy(state=U1, fields=fields1, sources=[])
+    q = P.linear_combine("q", U0 + P.dt * R0 + P.dt * R1)
+
+    assert isinstance(q.field_context, FieldReadProvenance)
+    assert q.field_context.contexts == (fields0.field_context, fields1.field_context)
+
+    # Typed P.call(L, fields1) carries this validation witness. The runtime semantics still live on
+    # solve_local_linear's explicit fields input, but substituting fields0 now fails at authoring.
+    linear = P._replace_value(
+        P._linear_source("relax"), field_context=fields1.field_context)
+    solved = P.solve_local_linear(
+        "solved", operator=P.I - P.dt * linear, rhs=q, fields=fields1)
+    assert isinstance(solved.field_context, FieldReadProvenance)
+    with pytest.raises(ValueError, match="operator was authored for field provenance"):
+        P.solve_local_linear(
+            "wrong_fields", operator=P.I - P.dt * linear, rhs=q, fields=fields0)
+
+
+def test_rk4_final_combine_retains_all_stage_contexts_without_rejection():
+    from pops.lib import time as libtime
+
+    program = libtime.rk4("plasma")
+    final = program._commits["plasma"]
+    assert isinstance(final.field_context, FieldReadProvenance)
+    assert len(final.field_context.contexts) == 4
+    serialized = program._serialize()
+    final_data = next(node for node in serialized["nodes"] if node["id"] == final.id)
+    reads = final_data["field_context"]["reads"]
+    assert len(reads) == 4
+    assert program._serialize() == serialized
+    inspected = next(node for node in program.ir_nodes() if node["name"] == final.name)
+    assert inspected["field_context"] == final_data["field_context"]
+
+    rebuilt = program.eliminate_dead_nodes()
+    rebuilt_final = rebuilt._commits["plasma"]
+    source_ids = {source for context in rebuilt_final.field_context.contexts
+                  for _, source in context.stage_sources}
+    assert source_ids <= {value.id for value in rebuilt._values}
 
 
 if __name__ == "__main__":

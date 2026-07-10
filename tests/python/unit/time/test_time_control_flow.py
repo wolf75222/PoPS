@@ -51,7 +51,7 @@ def _convergence_program(t, *, name="fixed_point", omega=0.5, tol=1e-10):
         return P.linear_combine("x_next", (1.0 - omega) * x + omega * target)
 
     x_final = P.while_(U0, cond, body)
-    P.commit("blk", x_final)
+    P.commit(P.state("U", block="blk").next, x_final)
     return P
 
 
@@ -84,7 +84,8 @@ def test_scalar_not_python_bool(t):
     try:
         bool(s)
     except TypeError as exc:
-        assert "cannot be used as a Python bool" in str(exc), str(exc)
+        assert "[symbolic_truth_value]" in str(exc), str(exc)
+        assert "has no Python truth value" in str(exc), str(exc)
     else:
         raise AssertionError("a Scalar must not silently collapse to a Python bool")
 
@@ -96,7 +97,8 @@ def test_bool_not_python_bool(t):
     try:
         bool(b)
     except TypeError as exc:
-        assert "cannot be used as a Python bool" in str(exc), str(exc)
+        assert "[symbolic_truth_value]" in str(exc), str(exc)
+        assert "has no Python truth value" in str(exc), str(exc)
     else:
         raise AssertionError("a Bool must not silently collapse to a Python bool")
 

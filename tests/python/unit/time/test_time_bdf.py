@@ -46,11 +46,15 @@ def _pops_time():
     return t
 
 
-def _llop(name):
-    """A bare local-linear-operator OperatorHandle, the de-stringed bdf linear_source selector
-    (ADC-532). The IR tests bind no module; the model resolves the operator by name at compile time."""
-    from pops.model import OperatorHandle
-    return OperatorHandle(name, kind="local_linear_operator")
+def _bound_local_program(t, name):
+    """A Program plus the exact local-linear handle of its bound model."""
+    from pops.physics.facade import Model
+
+    model = Model(name + "_model")
+    (u,) = model.conservative_vars("u")
+    model.flux(x=[u], y=[u])
+    linear = model.local_linear_map("lorentz", [[-1]])
+    return t.Program(name).bind_operators(model), linear
 
 
 # ---- (A) codegen + IR validation: pure Python, always runs ----
@@ -63,6 +67,8 @@ def test_implicit_flux_bdf1_codegen(t):
     assert src.count("pops::gmres_solve") == 3, ("one GMRES per Newton iteration\n%s" % src)
     # the rhs-inside-apply enabler: rhs_into called inside the matrix-free apply lambda + the scratch
     assert "ctx.rhs_into(0" in src, "rhs(U^k + eps*v) inside the matrix-free apply\n%s" % src
+    assert src.count("ctx.solve_fields_from_state(0, *jac_up") == 3, \
+        "every Jv must solve fields from its own perturbed state\n%s" % src
     assert "jac_uk" in src and "jac_r0" in src and "jac_cdt" in src, "the FD-Jacobian scratch\n%s" % src
     assert 'ctx.record_scalar("blk.bdf_residual"' in src, "the residual diagnostic\n%s" % src
 
@@ -76,7 +82,8 @@ def test_implicit_flux_bdf2_codegen(t):
     assert 'ctx.register_history("blk.U"' in src and 'ctx.store_history("blk.U"' in src, \
         "BDF2 reads U^{n-1} from the history ring\n%s" % src
     # the BDF2 implicit coefficient is c*dt = (2/3) dt
-    assert any("0.6666" in ln for ln in src.splitlines() if "jac_cdt" in ln), \
+    assert any("pops::Real(2) / pops::Real(3)" in ln
+               for ln in src.splitlines() if "jac_cdt" in ln), \
         "the BDF2 Jacobian coefficient c = 2/3\n%s" % src
 
 
@@ -87,6 +94,8 @@ def test_flux_only_uses_source_free_rhs(t):
     src = P.emit_cpp_program(model=None)
     assert "ctx.neg_div_flux_default_into(0" in src, "flux-only rhs inside the apply\n%s" % src
     assert "ctx.rhs_into(0" not in src, "no default source in the flux-only jacvec\n%s" % src
+    assert "ctx.solve_fields_from_state" not in src, \
+        "a flux-only BDF must not impose an unused elliptic solve\n%s" % src
 
 
 def test_multicomponent_operator(t):
@@ -99,11 +108,51 @@ def test_multicomponent_operator(t):
     assert "ctx.alloc_scalar_field(2, 1)" in src, "2-component apply buffers\n%s" % src
 
 
+def test_jacvec_uses_the_iterate_block_index(t):
+    P = t.Program("bdf_second_block")
+    P.state("first")
+    lt.bdf(P, "second", 1, sources=["default"], newton_max=1, krylov_max=10)
+
+    src = P.emit_cpp_program(model=None)
+    assert "ctx.state(1).n_grow()" in src
+    assert "ctx.rhs_into(1," in src
+    assert "ctx.solve_fields_from_state(1, *jac_up" in src
+    assert "ctx.rhs_into(0," not in src
+    assert "ctx.solve_fields_from_state(0, *jac_up" not in src
+
+
+def test_every_bdf_residual_solves_fields_from_its_own_iterate(t):
+    P = t.Program("bdf_field_provenance")
+    lt.bdf(P, "blk", 1, sources=["default"], newton_max=2, krylov_max=10)
+
+    residuals = [value for value in P._values
+                 if value.op == "rhs" and value.name.startswith("blk_bdf1_")]
+    assert len(residuals) == 3, "two Newton residuals plus the final diagnostic residual"
+    for residual in residuals:
+        state, fields = residual.inputs
+        assert fields.op == "solve_fields" and fields.inputs == (state,)
+        assert fields.field_context.matches(None, state.block, state.id)
+
+
+def test_untyped_state_ncomp_is_checked_against_the_model_at_lowering(t):
+    class OneComponentModel:
+        n_cons = 1
+
+    P = t.Program("bdf_bad_ncomp")
+    lt.bdf(P, "blk", 1, sources=["default"], ncomp=2, newton_max=1, krylov_max=10)
+    try:
+        P.emit_cpp_program(model=OneComponentModel())
+    except ValueError as exc:
+        assert "ncomp=2" in str(exc) and "n_cons=1" in str(exc), str(exc)
+    else:
+        raise AssertionError("an untyped State/operator ncomp mismatch must fail at lowering")
+
+
 def test_cell_local_fast_path_unchanged(t):
     # The cell-local linear-source path stays the block-diagonal solve_local_linear: NO Newton/Krylov.
     for order in (1, 2):
-        P = t.Program("bdfL%d" % order)
-        lt.bdf(P, "blk", order, linear_source=_llop("lorentz"))
+        P, linear = _bound_local_program(t, "bdfL%d" % order)
+        lt.bdf(P, "blk", order, linear_source=linear)
         assert P.validate() is True
         ops = {v.op for v in P._values}
         assert "solve_local_linear" in ops, "the cell-local fast path uses solve_local_linear"
@@ -112,6 +161,16 @@ def test_cell_local_fast_path_unchanged(t):
 
 
 def test_argument_guards(t):
+    import inspect
+
+    assert "newton_tol" not in inspect.signature(lt.bdf).parameters, \
+        "BDF must not expose a silently-unused Newton tolerance"
+    try:
+        lt.bdf(t.Program("x"), "b", 1, newton_tol=1e-8)
+    except TypeError as exc:
+        assert "newton_tol" in str(exc), str(exc)
+    else:
+        raise AssertionError("the removed newton_tol keyword must fail loudly")
     for bad in (0, 3, True, 1.5, "1"):
         try:
             lt.bdf(t.Program("x"), "b", bad)
@@ -126,6 +185,13 @@ def test_argument_guards(t):
         assert "linear_source" in str(exc), str(exc)
     else:
         raise AssertionError("bdf(flux=False) with no linear_source must raise")
+    # Named source kernels are not emitted at the perturbed state inside rhs_jacvec yet.
+    try:
+        lt.bdf(t.Program("x"), "b", 1, sources=["chemistry"])
+    except NotImplementedError as exc:
+        assert "named sources" in str(exc) and "chemistry" in str(exc), str(exc)
+    else:
+        raise AssertionError("implicit-flux BDF must reject an unlinearized named source")
     # ncomp must be a positive int.
     for bad in (0, -1, True, 1.5):
         try:
@@ -141,11 +207,42 @@ def test_argument_guards(t):
     U = P.state("b")
     R = P._rhs_legacy(state=U, flux=True, sources=["default"])
     try:
-        P.rhs_jacvec(out_sf, in_sf, iterate=U, r0=R, c_dt=P.dt)  # not inside set_apply
+        P.rhs_jacvec(
+            out_sf, in_sf, iterate=U, r0=R, c_dt=P.dt,
+            field_coupled=True)  # not inside set_apply
     except ValueError as exc:
         assert "set_apply" in str(exc) or "apply" in str(exc), str(exc)
     else:
         raise AssertionError("rhs_jacvec outside a set_apply body must raise")
+
+
+def test_rhs_jacvec_rejects_unsupported_residual_modes(t):
+    def build(*, flux=True, sources=("default",)):
+        P = t.Program("jacvec_mode")
+        U = P.state("b")
+        fields = P.solve_fields(U)
+        R = P._rhs_legacy(state=U, fields=fields, flux=True, sources=["default"])
+        A = P.matrix_free_operator("A", domain="state", range_="state", ncomp=1)
+
+        def apply(builder, out, in_):
+            return builder.rhs_jacvec(
+                out, in_, iterate=U, r0=R, c_dt=builder.dt,
+                flux=flux, sources=sources, field_coupled=True)
+
+        P.set_apply(A, apply)
+
+    try:
+        build(flux=False)
+    except NotImplementedError as exc:
+        assert "flux=False" in str(exc), str(exc)
+    else:
+        raise AssertionError("rhs_jacvec(flux=False) must fail loudly")
+    try:
+        build(sources=["default", "chemistry"])
+    except NotImplementedError as exc:
+        assert "named sources" in str(exc) and "chemistry" in str(exc), str(exc)
+    else:
+        raise AssertionError("rhs_jacvec with a named source must fail loudly")
 
 
 # ---- (B) end-to-end parity: skips unless the full toolchain is present ----

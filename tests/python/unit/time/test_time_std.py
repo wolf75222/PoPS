@@ -10,6 +10,8 @@ and is deferred.
 
 Run with python3 (PYTHONPATH = built pops package).
 """
+from fractions import Fraction
+
 from pops import time as adctime
 import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
 
@@ -39,8 +41,8 @@ def test_forward_euler():
     libtime.forward_euler(P, "plasma")
     node, states, rhss = _committed(P, "plasma")
     assert len(states) == 1 and len(rhss) == 1
-    assert _coeff(node, states[0]) == {0: 1.0}     # U
-    assert _coeff(node, rhss[0]) == {1: 1.0}       # dt * R
+    assert _coeff(node, states[0]) == {0: 1}     # U
+    assert _coeff(node, rhss[0]) == {1: 1}       # dt * R
     print("OK  forward_euler -> U + dt*R")
 
 
@@ -51,8 +53,8 @@ def test_ssprk2():
     # U2 = 0.5*U0 + 0.5*U1 + 0.5*dt*k1
     assert len(states) == 2 and len(rhss) == 1
     for s in states:
-        assert _approx(_coeff(node, s), 0, 0.5)
-    assert _approx(_coeff(node, rhss[0]), 1, 0.5)
+        assert _coeff(node, s) == {0: Fraction(1, 2)}
+    assert _coeff(node, rhss[0]) == {1: Fraction(1, 2)}
     print("OK  ssprk2 -> 0.5 U0 + 0.5 U1 + 0.5 dt k1")
 
 
@@ -63,8 +65,8 @@ def test_ssprk3():
     # Shu-Osher final stage: U^{n+1} = 1/3 U0 + 2/3 U2 + 2/3 dt k2
     assert len(states) == 2 and len(rhss) == 1
     cs = sorted(_coeff(node, s)[0] for s in states)
-    assert abs(cs[0] - 1.0 / 3.0) < 1e-15 and abs(cs[1] - 2.0 / 3.0) < 1e-15
-    assert _approx(_coeff(node, rhss[0]), 1, 2.0 / 3.0)
+    assert cs == [Fraction(1, 3), Fraction(2, 3)]
+    assert _coeff(node, rhss[0]) == {1: Fraction(2, 3)}
     print("OK  ssprk3 -> 1/3 U0 + 2/3 U2 + 2/3 dt k2")
 
 
@@ -74,9 +76,11 @@ def test_rk4_no_special_class():
     node, states, rhss = _committed(P, "plasma")
     # Unp1 = U0 + dt/6 k1 + dt/3 k2 + dt/3 k3 + dt/6 k4
     assert len(states) == 1 and len(rhss) == 4
-    assert _coeff(node, states[0]) == {0: 1.0}
-    kcoeffs = sorted(round(_coeff(node, r)[1], 12) for r in rhss)
-    assert kcoeffs == sorted([round(1 / 6, 12), round(1 / 3, 12), round(1 / 3, 12), round(1 / 6, 12)])
+    assert _coeff(node, states[0]) == {0: 1}
+    kcoeffs = sorted(_coeff(node, r)[1] for r in rhss)
+    assert kcoeffs == sorted([
+        Fraction(1, 6), Fraction(1, 3), Fraction(1, 3), Fraction(1, 6),
+    ])
     print("OK  rk4 (no special RK4 class) -> U0 + dt(1/6 k1 + 1/3 k2 + 1/3 k3 + 1/6 k4)")
 
 

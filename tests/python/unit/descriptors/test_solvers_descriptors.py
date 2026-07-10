@@ -10,6 +10,8 @@ transitional pops.lib.solvers shim is removed). The descriptors compute nothing;
 metadata is asserted.
 """
 import pytest
+from decimal import Decimal
+from fractions import Fraction
 
 pops = pytest.importorskip("pops")
 solvers = pytest.importorskip("pops.solvers")
@@ -414,8 +416,8 @@ def test_composite_fac_defaults_and_domain():
     from pops.solvers.options import CompositeFAC
     d = CompositeFAC()
     # None -> the 0 wire sentinels (native kFAC* defaults), the CondensedSchur fac_* convention.
-    assert d.options() == {"max_iters": 0, "fine_sweeps": 0, "tol": 0.0, "coarse_rel_tol": 0.0,
-                           "coarse_cycles": 0, "verbose": False}
+    assert d.options() == {"max_iters": None, "fine_sweeps": None, "tol": None,
+                           "coarse_rel_tol": None, "coarse_cycles": None, "verbose": False}
     kw = d.set_poisson_kwargs()
     assert kw["composite"] is True and kw["fac_max_iters"] == 0
     cfg = CompositeFAC(max_iters=10, fine_sweeps=200, tol=1e-8, coarse_rel_tol=1e-11,
@@ -428,6 +430,30 @@ def test_composite_fac_defaults_and_domain():
                 {"coarse_cycles": 0}):
         with pytest.raises(ValueError):
             CompositeFAC(**bad)
+    for bad in ({"max_iters": 1.9}, {"max_iters": True}, {"fine_sweeps": False},
+                {"verbose": 1}):
+        with pytest.raises(TypeError):
+            CompositeFAC(**bad)
+
+
+def test_solver_tolerances_retain_exact_domains_until_native_lowering():
+    rel = Relative(Fraction(1, 3), AbsoluteFloor(Decimal("1e-30")))
+    absolute = Absolute(Decimal("1e-24"))
+
+    assert rel.rel == Fraction(1, 3)
+    assert rel.floor.abs_floor == Decimal("1e-30")
+    assert rel.options()["rel"] == Fraction(1, 3)
+    assert absolute.abs_tol == Decimal("1e-24")
+    mg = elliptic.GeometricMG(tolerance=rel).mg_options()
+    assert mg["rel_tol"] == Fraction(1, 3)
+    assert mg["abs_tol"] == Decimal("1e-30")
+
+
+@pytest.mark.parametrize("factory", [Relative, Absolute, AbsoluteFloor])
+@pytest.mark.parametrize("bad", [True, 0, -1, float("nan"), float("inf")])
+def test_solver_tolerances_reject_bool_nonpositive_and_nonfinite(factory, bad):
+    with pytest.raises((TypeError, ValueError)):
+        factory(bad)
 
 
 def test_geometric_mg_amr_composite_slot():
@@ -456,6 +482,26 @@ def test_richardson_omega_and_krylov_rel_tol():
         assert factory(max_iter=10, rel_tol=1e-9).options["rel_tol"] == 1e-9
         with pytest.raises(ValueError, match="rel_tol"):
             factory(max_iter=10, rel_tol=2.0)
+
+
+def test_krylov_descriptor_controls_preserve_exact_number_domains():
+    from decimal import Decimal
+    from fractions import Fraction
+
+    descriptor = krylov.Richardson(
+        max_iter=10, rel_tol=Decimal("1e-12"), omega=Fraction(2, 3))
+
+    assert descriptor.options["rel_tol"] == Decimal("1e-12")
+    assert isinstance(descriptor.options["rel_tol"], Decimal)
+    assert descriptor.options["omega"] == Fraction(2, 3)
+    assert isinstance(descriptor.options["omega"], Fraction)
+
+    from pops.ir import ScalarLiteral
+    annotated = ScalarLiteral.from_value(Fraction(1, 2), unit="s")
+    with pytest.raises(ValueError, match="rel_tol"):
+        krylov.CG(max_iter=10, rel_tol=annotated)
+    with pytest.raises(ValueError, match="omega"):
+        krylov.Richardson(max_iter=10, omega=annotated)
 
 
 def test_condensed_schur_precond_knobs():

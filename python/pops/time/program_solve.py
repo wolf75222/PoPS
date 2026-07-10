@@ -6,8 +6,18 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pops.time.handles import (
+    HistoryHandle, StageHandle, StateEndpointHandle, TimeState,
+)
 from pops.time.program_base import _ProgramConstants
-from pops.time.values import StageStateSet, Value, _Affine, _is_field_value, _resolve_handle
+from pops.time.program_commit_validation import validate_commit_many
+from pops.time.program_diagnostics import _ProgramDiagnostics
+from pops.time.program_transaction import atomic_authoring
+from pops.time.program_value_validation import (
+    require_compatible_spaces, require_top_level, structural_state_space,
+)
+from pops.time.value_metadata import positive_scalar_literal
+from pops.time.values import ProgramValue, _Affine, _is_field_value, _resolve_handle
 
 if TYPE_CHECKING:
     from pops.time._program_contract import _ProgramBase
@@ -101,19 +111,22 @@ def _preconditioners() -> Any:
     return preconditioners
 
 
-class _ProgramSolve(_ProgramConstants, _ProgramBase):
+class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
     """Krylov solve_linear, histories, commits, board sugar (fields/define/solve) and records."""
 
     def solve_linear(self, name: Any = None, operator: Any = None, rhs: Any = None,
                      initial_guess: Any = None, method: Any = None, preconditioner: Any = None,
                      tol: Any = None, max_iter: Any = None, restart: Any = None) -> Any:
         """Solve the matrix-free linear system ``operator x = rhs`` with the runtime's Krylov loop and
-        return the solution as a scalar_field. The iteration is DYNAMIC (C++-side, inside the loop):
+        return the solution as a field. A state-domain operator with a State rhs returns a State;
+        scratch/vector solves return a scalar_field. The iteration is DYNAMIC (C++-side, inside the loop):
         the IR only carries the operator (its apply lambda), the rhs, the initial guess, and the
         method / tolerance / iteration budget.
 
           - @p operator: a ``matrix_free_operator`` value (with a ``set_apply`` body);
-          - @p rhs: the right-hand side -- a scalar_field, or (MVP) a 1-component State value;
+          - @p rhs: the right-hand side -- a scalar_field or State value. A typed StateSpace must have
+            exactly the operator's ``ncomp``; an untyped State is checked against the physical model
+            component count during lowering;
           - @p initial_guess: warm start (defaults to zero);
           - @p method: a TYPED Krylov descriptor (``pops.solvers.krylov.CG()`` (SPD),
             ``BiCGStab()`` (general), ``Richardson()``, or ``GMRES()`` -- restarted GMRES(m), the
@@ -134,6 +147,7 @@ class _ProgramSolve(_ProgramConstants, _ProgramBase):
         # pops.solvers.preconditioners). They lower to the SAME internal scheme tokens the runtime
         # always keyed on, so the IR / emitted C++ stay byte-identical to the historical string path;
         # a bare algorithm-selector string is rejected (the public string form is removed).
+        operator = self._canonical_value(operator)
         method, method_options = _lower_krylov_method(method)
         preconditioner, precond_options = _lower_preconditioner(preconditioner)
         # ADC-645: the call-site tol stays the authoritative per-op budget; left default (None) it
@@ -141,7 +155,7 @@ class _ProgramSolve(_ProgramConstants, _ProgramBase):
         # default program resolves tol to the same 1e-8 and the IR node is byte-identical.
         if tol is None:
             tol = method_options.get("rel_tol", 1e-8)
-        if not (isinstance(operator, Value) and operator.vtype == "matrix_free_op"):
+        if not (isinstance(operator, ProgramValue) and operator.vtype == "matrix_free_op"):
             raise ValueError("solve_linear: operator must be a matrix_free_operator value")
         if operator.attrs["apply_block"] is None:
             raise ValueError("solve_linear: operator '%s' has no apply; call P.set_apply first"
@@ -150,12 +164,31 @@ class _ProgramSolve(_ProgramConstants, _ProgramBase):
             raise ValueError("solve_linear: rhs must be a scalar_field or State value (rhs=...)")
         if initial_guess is not None and not _is_field_value(initial_guess):
             raise ValueError("solve_linear: initial_guess must be a scalar_field or State value")
+        if initial_guess is not None:
+            unqualified_scratch = (
+                initial_guess.vtype == "scalar_field" and initial_guess.block is None
+                and initial_guess.space is None)
+            if initial_guess.block != rhs.block and not unqualified_scratch:
+                raise ValueError("solve_linear: rhs and initial_guess must belong to the same block")
+            if not unqualified_scratch:
+                require_compatible_spaces(
+                    rhs.space, initial_guess.space, "solve_linear initial_guess", typed_pair=True)
         op_ncomp = int(operator.attrs["ncomp"])
         # The rhs / initial guess must carry at least the operator's component count: the solve runs on
         # an op_ncomp buffer. A scalar_field exposes its ncomp here; a State's n_cons is only known at
         # compile (against the model), so a State is accepted now and checked there.
         for label, fld in (("rhs", rhs), ("initial_guess", initial_guess)):
-            if fld is None or fld.vtype != "scalar_field":
+            if fld is None:
+                continue
+            state_space = structural_state_space(fld.space)
+            if fld.vtype == "state" and state_space is not None:
+                fld_ncomp = len(state_space.components)
+                if fld_ncomp != op_ncomp:
+                    raise ValueError(
+                        "solve_linear: %s StateSpace has %d component(s) but the operator declares "
+                        "ncomp=%d" % (label, fld_ncomp, op_ncomp))
+                continue
+            if fld.vtype != "scalar_field":
                 continue
             fld_ncomp = int(fld.attrs.get("ncomp", 1))
             if fld_ncomp < op_ncomp:
@@ -173,9 +206,9 @@ class _ProgramSolve(_ProgramConstants, _ProgramBase):
             raise ValueError(
                 "solve_linear: preconditioning is not available for CG/Richardson in the matrix-free "
                 "Krylov path; use GMRES() or BiCGStab()")
-        if not isinstance(tol, (int, float)) or tol <= 0:
-            raise ValueError("solve_linear: tol must be a positive number (got %r)" % (tol,))
-        if max_iter is None or not isinstance(max_iter, int) or max_iter <= 0:
+        tol_literal = positive_scalar_literal(tol, where="solve_linear: tol")
+        if (max_iter is None or isinstance(max_iter, bool)
+                or not isinstance(max_iter, int) or max_iter <= 0):
             raise ValueError("dynamic solver loops require max_iter")
         # restart is a gmres-only knob; the GMRES(m) basis size. Other methods have no restart concept,
         # so passing one to them is a config error (fail loud rather than silently ignore it).
@@ -192,7 +225,7 @@ class _ProgramSolve(_ProgramConstants, _ProgramBase):
         # restart is a positive int on the gmres path (validated above); the None union member the
         # checker infers is from the non-gmres branch, which takes the else arm of the ternary.
         restart_int = int(restart) if method == "gmres" else None  # pyright: ignore[reportArgumentType]
-        attrs = {"method": method, "preconditioner": preconditioner, "tol": float(tol),
+        attrs = {"method": method, "preconditioner": preconditioner, "tol": tol_literal,
                  "max_iter": int(max_iter), "has_guess": initial_guess is not None,
                  "ncomp": op_ncomp, "restart": restart_int}
         # ADC-644: the resolved V-cycle-shape options of a configured GeometricMG preconditioner. Added
@@ -203,110 +236,66 @@ class _ProgramSolve(_ProgramConstants, _ProgramBase):
         # ADC-645: Richardson relaxation factor, added ONLY when the descriptor set it (a default
         # Richardson() program's IR hash / emitted source stays byte-identical: omega = 1 literal).
         if "omega" in method_options:
-            attrs["omega"] = float(method_options["omega"])
-        return self._new("scalar_field", "solve_linear", inputs, attrs, name, rhs.block)
+            attrs["omega"] = positive_scalar_literal(
+                method_options["omega"], where="solve_linear: Richardson omega")
+        # A state-domain solve over a State rhs returns a State, preserving the mathematical unknown's
+        # block and StateSpace. Scalar/vector scratch solves remain scalar_field values. This keeps a
+        # Newton update ``U + dU`` typed without an implicit scalar-field-to-State conversion.
+        result_type = (
+            "state" if operator.attrs["domain"] == "state" and rhs.vtype == "state"
+            else "scalar_field")
+        return self._new(
+            result_type, "solve_linear", inputs, attrs, name, rhs.block, space=rhs.space)
 
-    # --- multistep histories (ADC-406a) ---
-    def history(self, name: Any, lag: Any = 1, ncomp: Any = None) -> Any:
-        """Read a SYSTEM-OWNED history field carried across macro-steps: the value stored @p lag steps
-        back (e.g. ``P.history("plasma.R", lag=1)`` is R_{n-1} for Adams-Bashforth). Returns a value
-        usable in the affine algebra. The history is owned by the System (a HistoryManager), not the
-        Program, so a later checkpoint slice can serialize it; reading it before it has ever been stored
-        is a fail-loud runtime error (it must be written by `store_history` every step). @p lag must be
-        a Python int >= 1.
+    def commit(self, endpoint: StateEndpointHandle, state: ProgramValue) -> None:
+        """Commit ``state`` to ``endpoint``, at most once for its block.
 
-        @p ncomp (ADC-427) sizes the ring's slots. ``None`` (the default) reads a STATE-typed value over
-        block 0's ncomp -- the full-state multistep ring, byte-identical to the historical IR, including
-        its fail-loud read-before-store above. An explicit ``ncomp=1`` reads a SCALAR_FIELD-typed value
-        from a 1-component ring: the persistent 1-component carry the condensed-Schur theta<1 stage
-        needs for its cross-step phi^n (a lag-1 potential kept across steps, not a full state). That
-        carry is READ-FIRST (read at the top of the step, store at the end), so it lowers to the ZERO
-        COLD-START runtime read: the very first read -- before any store -- returns the zero-filled slot
-        (the declared step-0 value), never the fail-loud error. The narrower ring is declared with this
-        ncomp in the codegen prelude, so a bare ``ctx.history`` read never widens it."""
-        if not isinstance(name, str) or not name:
-            raise ValueError("history: name must be a non-empty string")
-        if isinstance(lag, bool) or not isinstance(lag, int) or lag < 1:
-            raise ValueError("history: lag must be a Python int >= 1 (got %r)" % (lag,))
-        self._histories[name] = max(self._histories.get(name, 0), lag)
-        if ncomp is None:
-            # DEFAULT: a full-state ring, State-typed. attrs unchanged from ADC-406a so every existing
-            # multistep history node serializes and hashes byte-identically (no ncomp key).
-            return self._new("state", "history", (), {"history": name, "lag": int(lag)}, name, None)
-        if isinstance(ncomp, bool) or not isinstance(ncomp, int) or ncomp < 1:
-            raise ValueError("history: ncomp must be None or a Python int >= 1 (got %r)" % (ncomp,))
-        # An explicit ncomp: a scalar-field ring (block=None, like P.scalar_field). Only ncomp=1 is a
-        # meaningful narrow carry today (the phi^n potential); a wider explicit ncomp is a State the
-        # default already covers, so require 1 here (fail loud rather than silently alias the state ring).
-        if ncomp != 1:
+        The public form is exactly ``P.commit(U.next, U_next)``. ``U.next`` is a
+        commit-only :class:`StateEndpointHandle`; a block-name string is not a public target and a
+        stage handle is not implicitly resolved. ``state`` must already be a ProgramValue owned by
+        this Program.
+
+        A 1-component model's conservative state may be represented by a ``scalar_field`` (for
+        example a ``solve_linear`` result); it is accepted and copied back into the block state by
+        the final runtime ``ctx.lincomb``."""
+        self._guard_mutable("commit a state")
+        if not isinstance(endpoint, StateEndpointHandle):
+            raise TypeError(
+                "commit: target must be U.next (a StateEndpointHandle); block-name strings and "
+                "stage handles are not public commit targets")
+        endpoint = self._require_endpoint(endpoint, "commit")
+        if isinstance(state, ProgramValue) and state.block != endpoint.block:
             raise ValueError(
-                "history: an explicit ncomp must be 1 (the 1-component carry); the full-state ring is "
-                "the default ncomp=None (got %r)" % (ncomp,))
-        self._histories_ncomp[name] = int(ncomp)
-        return self._new("scalar_field", "history", (),
-                         {"history": name, "lag": int(lag), "ncomp": int(ncomp)}, name, None)
+                "commit: cross-block write: endpoint for block %r cannot receive a value owned by block %r"
+                % (endpoint.block, state.block)
+            )
+        require_top_level(self, state, "commit")
+        require_compatible_spaces(endpoint.space, state.space, "commit", typed_pair=True)
+        return self._commit_block(endpoint.block, state)
 
-    def store_history(self, name: Any, value: Any) -> Any:
-        """Store @p value (a State/RHS field) into the CURRENT slot of history @p name at the end of the
-        step (rotated to lag 1 on the next step). A multistep scheme stores its current RHS so the next
-        step can read it back via `history`. The history is System-owned; this is a side-effecting op
-        (no value). @p value must be a State/RHS field of the Program."""
-        if not isinstance(name, str) or not name:
-            raise ValueError("store_history: name must be a non-empty string")
-        if not _is_field_value(value):
-            raise ValueError("store_history: value must be a State/RHS field (got %r)" % (value,))
-        if value.prog is not self:
-            raise ValueError("store_history: the value belongs to a different Program")
-        self._histories.setdefault(name, 1)
-        return self._new("state", "store_history", (value,), {"history": name}, name, value.block)
+    def _commit_block(self, block: str, state: ProgramValue) -> None:
+        """Lower one validated block commit for built-in Program macros.
 
-    def keep_history(self, timestate: Any, depth: Any, cold_start: Any = None,
-                     checkpoint_policy: Any = None) -> Any:
-        """Keep a ring of past states for a :class:`pops.time.handles.TimeState` (Spec 5 sec.5.3.1).
-
-        Records the ring ``depth`` and the ``cold_start`` policy on the handle and lowers a
-        ``store_history("<block>.<name>", U.n)`` so the System-owned ring is populated every step.
-        After this, ``U.prev(lag)`` (for ``lag <= depth``) reads the lagged state via ``P.history``.
-        ``cold_start`` defaults to :class:`pops.time.history.CopyCurrent` (seed every slot with the
-        current state on step 0, the historical behavior). Returns the lowered ``store_history`` node.
-
-        @p checkpoint_policy (ADC-626) is a typed history-persistence policy
-        (:class:`pops.time.Dense` / :class:`~pops.time.Interval` / :class:`~pops.time.Revolve`)
-        selecting which ring slots a checkpoint STORES; the remaining slots are recomputed at restart
-        by deterministic replay of the installed compiled Program (bit-identical to a dense-restored
-        ring). ``None`` (the default) resolves to :class:`~pops.time.Dense` (the whole-ring historical
-        behaviour). The policy is validated against @p depth at author time (loud on incoherence)."""
-        from pops.time.handles import TimeState
-        if not isinstance(timestate, TimeState):
-            raise ValueError(
-                "keep_history: a TimeState handle is required (P.state('U', block=...))")
-        if timestate.program is not self:
-            raise ValueError("keep_history: the TimeState belongs to a different Program")
-        return timestate._keep_history(depth, cold_start, checkpoint_policy)
-
-    def commit(self, block: Any, state: Any = None) -> Any:
-        """Replace the current state of ``block`` with ``state`` at the end of the step. Each block
-        is committed AT MOST once; read-only blocks need no commit.
-
-        Two forms (additive; the positional ``(block, state)`` form is unchanged):
-
-          - ``P.commit("plasma", U_next)`` (LEGACY) commits a State value to a named block;
-          - ``P.commit(U.next)`` (Spec 5 sec.5.3.1) commits a single typed version handle to its own
-            block (``commit(handle.block, handle.value)``). The version must have been defined
-            (``T.define(U.next, ...)``) first; an undefined handle raises.
-
-        @p state is normally a State value; a 1-component model's conservative state doubles as a
-        scalar field, so a ``scalar_field`` (e.g. a ``solve_linear`` solution) is also accepted and
-        copied back into the block state at commit (the final ``ctx.lincomb`` in the lowered body)."""
-        from pops.time.handles import _Version
-        if isinstance(block, _Version) and state is None:
-            version = block
-            return self.commit(version.block, version.value)  # version.value raises if undefined
-        state = _resolve_handle(state)  # P.commit("blk", U.next) also resolves a defined handle
-        if not (isinstance(state, Value) and state.vtype in ("state", "scalar_field")):
-            raise ValueError("commit: a State (or scalar_field) value is required")
+        This is deliberately private: public authoring owns destinations through
+        :class:`StateEndpointHandle`, while built-in presets still construct the lower-level IR from
+        block names internally.
+        """
+        self._guard_mutable("commit a state")
+        if not isinstance(block, str) or not block:
+            raise TypeError("_commit_block: block must be a non-empty internal block name")
+        if not (isinstance(state, ProgramValue) and state.vtype in ("state", "scalar_field")):
+            raise TypeError("_commit_block: a State (or scalar_field) ProgramValue is required")
         if state.prog is not self:
-            raise ValueError("commit: the State value belongs to a different Program")
+            raise ValueError("_commit_block: the State value belongs to a different Program")
+        require_top_level(self, state, "_commit_block")
+        if state.block != block:
+            raise ValueError(
+                "_commit_block: block %r cannot receive a value owned by block %r"
+                % (block, state.block))
+        if block not in self._state_spaces:
+            raise ValueError("_commit_block: block %r has no declared StateSpace" % block)
+        require_compatible_spaces(
+            self._state_spaces[block], state.space, "_commit_block", typed_pair=True)
         if block in self._commits:
             raise ValueError("block '%s' committed more than once" % block)
         self._commits[block] = state
@@ -359,57 +348,73 @@ class _ProgramSolve(_ProgramConstants, _ProgramBase):
             U_star = T.value("rhs_star", U.n + T.dt * R_n)
             Q      = T.value("Q", U.n + 0.5 * T.dt * R_n + 0.5 * T.dt * R_star)
 
-        Returns the named IR handle (a :class:`pops.time.values.Value`) so the value composes in the
+        Returns the named IR handle (a :class:`pops.time.values.ProgramValue`) so the value composes in the
         affine algebra. It lowers to the EXACT ``program.define(name, expr)`` path (an affine
         combination materializes via ``linear_combine``, a ``rate(U) == <expr>`` equation keeps its
-        right-hand side, any other Value is named in place), so ``T.value(name, expr)`` produces the
+        right-hand side, any other ProgramValue is named in place), so ``T.value(name, expr)`` produces the
         byte-identical IR as ``T.define(name, expr)`` -- and the SSA invariants (single definition, no
         redefine, use-before-define) are unchanged.
 
         ``name`` MUST be a non-empty string (an intermediate SSA value, never a mutation): the
-        temporal-VERSION handles (``U.stage(k)`` / ``U.next``) stay the ``T.define(handle, ...)`` door,
-        and ``T.define(U.next, value)`` remains the commit-facing definition. Passing a version handle
-        here is refused pointing at ``T.define``.
+        stage handles stay the ``T.define(U.stage(k), ...)`` door, while ``U.next`` is exclusively a
+        commit destination. Passing either kind here is refused with the corresponding final API.
         """
-        from pops.time.handles import TimeState, _Prev, _Version
-        if isinstance(name, (_Version, _Prev, TimeState)):
+        if isinstance(name, StateEndpointHandle):
+            self._require_endpoint(name, "T.value")
+            raise TypeError(
+                "T.value: U.next is a commit-only StateEndpointHandle; "
+                "use T.commit(U.next, value)")
+        if isinstance(name, StageHandle):
+            self._require_stage(name, "T.value")
+        elif isinstance(name, HistoryHandle):
+            self._require_history(name, "T.value")
+        elif isinstance(name, TimeState):
+            self._require_time_state(name, "T.value")
+        if isinstance(name, (StageHandle, HistoryHandle, TimeState)):
             raise TypeError(
                 "T.value(name, expr) names a free intermediate value: pass a string name. For a "
-                "temporal version use T.define(U.stage(k) / U.next, expr).")
+                "temporal stage use T.define(U.stage(k), expr).")
         if not isinstance(name, str) or not name:
             raise ValueError("T.value: name must be a non-empty string")
         return self.define(name, expr)
 
     def define(self, name: Any, value: Any = None) -> Any:
-        """Board sugar to name a value, or lower a typed temporal-version handle (Spec 5 sec.5.3.1).
+        """Name a value or assign a stage; a state endpoint is never definable.
 
         Two forms (additive; the ``(name, value)`` board form is unchanged):
 
           - ``P.define("U1", U0 + dt * k0)`` (board sugar) names a value: an affine combination of
             states materializes via ``linear_combine``, a ``rate(U) == <expr>`` equation keeps its
-            right-hand side, and any other Value is named in place;
-          - ``P.define(U.stage(1), U.n + dt * k0)`` / ``P.define(U.next, ...)`` (handle form) lowers
-            the same way through this method (with a generated name) and binds the resulting Value
-            onto the version handle, enforcing SSA single assignment. ``T.define(U.n, ...)`` raises
-            (the current state is read-only) and ``T.define(U.prev, ...)`` raises (history is
-            produced by the history policy).
+            right-hand side, and any other ProgramValue is named in place;
+          - ``P.define(U.stage(1), U.n + dt * k0)`` assigns a generated SSA name to the
+            stage and enforces single assignment. ``T.define(U.n, ...)`` raises because the
+            current state is read-only; ``T.define(U.prev, ...)`` raises because history is
+            policy-owned; and ``T.define(U.next, ...)`` raises because ``U.next`` is the
+            commit-only destination of ``T.commit(U.next, value)``.
 
         The handle form is detected by the FIRST argument being a version handle; the legacy form
         keeps a string name.
         """
-        from pops.time.handles import TimeState, _Prev, _Version
-        if isinstance(name, (_Version, _Prev)):
-            timestate = name._timestate
-            return timestate._define(name, value)
+        if isinstance(name, StateEndpointHandle):
+            self._require_endpoint(name, "T.define")
+            raise TypeError(
+                "T.define: U.next is a commit-only StateEndpointHandle; "
+                "use T.commit(U.next, value)")
+        if isinstance(name, StageHandle):
+            return self._define_stage(name, value)
+        if isinstance(name, HistoryHandle):
+            self._require_history(name, "T.define")
+            raise ValueError("history is produced by the history policy")
         if isinstance(name, TimeState):
+            self._require_time_state(name, "T.define")
             raise ValueError(
                 "T.define: pass a version handle (U.stage(k) / U.next), not the TimeState itself")
-        if isinstance(name, Value):
-            # The handle ``U.n`` is a State Value (the current state). No legacy define names a Value
-            # (the board form always passes a string name), so a Value target can only be a misuse of
+        if isinstance(name, ProgramValue):
+            # The handle ``U.n`` is a State ProgramValue (the current state). No legacy define names a ProgramValue
+            # (the board form always passes a string name), so a ProgramValue target can only be a misuse of
             # the read-only current state -- reject it with the spec message.
             raise ValueError("current state is read-only in Program")
-        value = _resolve_handle(value)  # a bare defined handle as the rhs names its resolved Value
+        value = _resolve_handle(value)  # a bare defined handle as the rhs names its resolved ProgramValue
         from pops import math as _bm
         if isinstance(value, _bm.Equation):
             if not isinstance(value.lhs, _bm.TimeDerivative):
@@ -418,13 +423,13 @@ class _ProgramSolve(_ProgramConstants, _ProgramBase):
             value = value.rhs
         if isinstance(value, _Affine):
             return self.linear_combine(name, value)
-        if isinstance(value, Value):
-            value.name = name
-            return value
+        if isinstance(value, ProgramValue):
+            return self._replace_value(value, name=name)
         raise TypeError(
-            "define(%r): expected a Value, an affine combination, or a rate equation; got %r"
+            "define(%r): expected a ProgramValue, an affine combination, or a rate equation; got %r"
             % (name, value))
 
+    @atomic_authoring
     def solve(self, name: Any, equation: Any) -> Any:
         """Board sugar for an implicit local solve ``(I -/+ a*L) @ unknown("x") == rhs``.
 
@@ -439,62 +444,17 @@ class _ProgramSolve(_ProgramConstants, _ProgramBase):
             raise ValueError("solve(%r): left-hand side must be 'operator @ unknown(name)'" % (name,))
         if isinstance(rhs, _Affine):
             rhs = self.linear_combine(name + "_rhs", rhs)
-        elif not (isinstance(rhs, Value) and rhs.vtype == "state"):
+        elif not (isinstance(rhs, ProgramValue) and rhs.vtype == "state"):
             raise ValueError("solve(%r): right-hand side must be a State or an affine of States"
                              % (name,))
         return self.solve_local_linear(name=name, operator=lhs.operator, rhs=rhs)
 
-    def commit_many(self, mapping: Any, fields: Any = None) -> Any:
-        """Atomically commit several coupled blocks (Spec 3). ALL entries are validated before any
-        commit, so a partial or double commit of a coupled group is rejected as a unit and no block
-        is left half-committed. ``fields`` (optional) is validated as a coherent FieldContext but is
-        RESERVED: the IR commit has no fields slot yet (the runtime association lands with ADC-457)."""
-        if not isinstance(mapping, dict) or not mapping:
-            raise ValueError("commit_many: a non-empty {block: State} mapping is required")
-        if fields is not None and not (isinstance(fields, Value) and fields.vtype == "fields"):
-            raise ValueError("commit_many: fields must be a FieldContext from solve_fields")
-        for block, state in mapping.items():
-            if not (isinstance(state, Value) and state.vtype in ("state", "scalar_field")):
-                raise ValueError("commit_many: block %r needs a State value" % (block,))
-            if state.prog is not self:
-                raise ValueError("commit_many: the State for %r belongs to a different Program"
-                                 % (block,))
-            if block in self._commits:
-                raise ValueError("block '%s' committed more than once" % (block,))
-        for block, state in mapping.items():
-            self._commits[block] = state
+    def commit_many(self, mapping: Any) -> None:
+        """Commit ``{Ua.next: Ua_next, Ub.next: Ub_next}`` as one atomic group.
 
-    def state_set(self, name: Any, mapping: Any) -> Any:
-        """Build a :class:`StageStateSet` -- a coherent set of stage states for a field solve."""
-        return StageStateSet(name, mapping)
-
-    def record(self, name: Any, value: Any) -> Any:
-        """Record a scalar diagnostic (board sugar over :meth:`record_scalar`).
-
-        ``value`` is a Program scalar -- a reduction result such as ``P.sum(U)`` or
-        ``P.norm2(U)`` (the runtime value of a generic invariant). The automatic
-        reduction of an arbitrary ``integral(expr)`` over a per-cell expression is a
-        follow-up (it needs the scheduler / a generated reduction kernel, ADC-458)."""
-        if not (isinstance(value, Value) and value.vtype == "scalar"):
-            raise ValueError(
-                "record(%r): value must be a Program scalar (e.g. P.sum / P.norm2); got %r"
-                % (name, value))
-        return self.record_scalar(name, value)
-
-    def check_invariant(self, name: Any, before: Any = None, after: Any = None,
-                        tolerance: Any = 1e-10) -> Any:
-        """Record the drift of a generic invariant between two stages (board diagnostic).
-
-        ``before`` / ``after`` are Program scalars (reduction results); the recorded
-        diagnostic ``"<name>_drift"`` is ``after - before``. ``tolerance`` is carried as
-        metadata for a later assertion stage (the scheduled runtime check is ADC-458)."""
-        if not (isinstance(before, Value) and before.vtype == "scalar"
-                and isinstance(after, Value) and after.vtype == "scalar"):
-            raise ValueError(
-                "check_invariant(%r): before/after must be Program scalars" % (name,))
-        drift = after - before
-        out = self.record_scalar(name + "_drift", drift)
-        out.attrs["tolerance"] = float(tolerance)
-        return out
+        Every endpoint/value owner and block is checked before ``_commits`` changes.
+        """
+        self._guard_mutable("commit a state group")
+        self._commits.update(validate_commit_many(self, mapping))
 
     # --- inspection / debug (Spec 3 section 33): show the lowering ---

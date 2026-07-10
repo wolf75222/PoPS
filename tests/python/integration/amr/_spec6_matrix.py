@@ -275,11 +275,20 @@ def _run_clean_schur_program(n=16, nsteps=4, dt=5.0e-4):
     coarse-mass-conserved (rho frozen by the Schur reconstruction). The flat hierarchy runs the emitted
     matrix-free BiCGStab through ctx.solve_linear_schur. B_z is seeded through bind(aux={'B_z': ...}).
     Skips cleanly (never a fake engine) when the .so cannot build (no compiler / no Kokkos)."""
-    program = lib_time.condensed_schur("plasma", alpha=1.0, theta=1.0)
+    from pops.model import OperatorHandle
+    model = _schur_facade_model()
+    registry = model.operator_registry()
+    operator = registry.operators_of_kind("local_linear_operator")[0]
+    linear = OperatorHandle(
+        operator.name, kind=operator.kind, owner=registry.owner_path,
+        signature=operator.signature)
+    program = pops.time.Program("condensed_schur").bind_operators(model)
+    lib_time.condensed_schur(
+        program, "plasma", alpha=1.0, theta=1.0, linear_operator=linear)
     u0 = _clean_density(n)
     bz0 = 4.0 * np.ones((n, n))
     problem = (pops.Problem()
-               .block("plasma", physics=_schur_facade_model(),
+               .block("plasma", physics=model,
                       spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()))
                .time(program))
     layout = AMR(base=CartesianMesh(n=n, L=1.0, periodic=True), regrid=FrozenRegrid())

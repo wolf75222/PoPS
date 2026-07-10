@@ -354,7 +354,7 @@ def _lie_program(block="ne", name="adc592_prog"):
     u = P.state(block)
     fields = P.solve_fields(u)
     r = P._rhs_legacy(state=u, fields=fields)
-    P.commit(block, P.linear_combine("u1", u + P.dt * r))
+    P.commit(P.state("U", block=block).next, P.linear_combine("u1", u + P.dt * r))
     return P
 
 

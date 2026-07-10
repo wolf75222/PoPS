@@ -11,6 +11,7 @@ Pure Python (``_ir_hash`` / ``ir_nodes`` are the IR fingerprints; no compilation
 pops is unavailable. Never fakes the engine.
 """
 import sys
+from fractions import Fraction
 
 try:
     import pytest
@@ -27,7 +28,9 @@ except Exception as exc:  # pops not importable here -> skip, never fake
 def _op(m, name):
     """A typed OperatorHandle for a registered operator (the de-stringed macro selector, ADC-532)."""
     op = m.operator_registry().get(name)
-    return OperatorHandle(op.name, kind=op.kind, signature=op.signature)
+    return OperatorHandle(
+        op.name, kind=op.kind, owner=m.operator_registry().owner_path,
+        signature=op.signature)
 
 
 def test_macro_without_program_returns_a_program():
@@ -101,8 +104,10 @@ def test_macro_and_manual_same_ir():
     k0 = manual._rhs_legacy(state=U0, fields=manual.solve_fields(U0), flux=True, sources=["default"])
     U1 = manual.linear_combine("ssprk2_U1", U0 + manual.dt * k0)
     k1 = manual._rhs_legacy(state=U1, fields=manual.solve_fields(U1), flux=True, sources=["default"])
-    manual.commit("plasma", manual.linear_combine(
-        "ssprk2_step", 0.5 * U0 + 0.5 * (U1 + manual.dt * k1)))
+    manual.commit(manual.state("U", block="plasma").next, manual.linear_combine(
+        "ssprk2_step",
+        Fraction(1, 2) * U0 + Fraction(1, 2) * (U1 + manual.dt * k1),
+    ))
 
     assert macro_prog._ir_hash() == manual._ir_hash(), (
         "the ssprk2 macro and the manual Program must share one IR\n"

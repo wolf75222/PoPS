@@ -32,7 +32,7 @@ def _solve_program(preconditioner=None):
     if preconditioner is not None:
         kw["preconditioner"] = preconditioner
     phi = P.solve_linear(**kw)
-    P.commit("blk", phi)
+    P.commit(P.state("U", block="blk").next, phi)
     return P
 
 

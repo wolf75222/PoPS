@@ -144,11 +144,11 @@ class MomentModel:
 
         def sources(m: Any, M: Any) -> Any:
             idx = moment_indices(order)
-            acc: list[Any] = [0.0] * len(idx)
+            acc: list[Any] = [None] * len(idx)
 
             def add(terms: Any) -> None:
                 for k, t in enumerate(terms):
-                    acc[k] = t if acc[k] == 0.0 else (acc[k] + t)
+                    acc[k] = t if acc[k] is None else (acc[k] + t)
 
             if electric is not None:
                 ex_name, ey_name, qom_name = electric
@@ -161,7 +161,7 @@ class MomentModel:
                 add(lorentz_sources(M, 0.0, 0.0, 1.0, omega_c))
             if extra is not None:
                 add(extra(m, M))
-            return acc
+            return [0.0 if term is None else term for term in acc]
 
         return sources
 

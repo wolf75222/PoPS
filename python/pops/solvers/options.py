@@ -11,6 +11,9 @@ from __future__ import annotations
 from typing import Any
 
 from pops.descriptors import Descriptor
+from pops.solvers._numeric import (
+    exact_open_unit_real, native_float, optional_positive_int, strict_bool,
+)
 
 
 class Chebyshev(Descriptor):
@@ -115,25 +118,17 @@ class CompositeFAC(Descriptor):
     def __init__(self, max_iters: Any = None, fine_sweeps: Any = None, tol: Any = None,
                  coarse_rel_tol: Any = None, coarse_cycles: Any = None,
                  verbose: bool = False) -> None:
-        # Mirror the CondensedSchur fac_* validation domains (pops/runtime/_bricks_time.py): a knob
-        # is either None (the kFAC* default, wire sentinel 0) or in its domain -- never clamped.
-        self.max_iters = int(max_iters) if max_iters is not None else 0
-        self.fine_sweeps = int(fine_sweeps) if fine_sweeps is not None else 0
-        self.tol = float(tol) if tol is not None else 0.0
-        self.coarse_rel_tol = float(coarse_rel_tol) if coarse_rel_tol is not None else 0.0
-        self.coarse_cycles = int(coarse_cycles) if coarse_cycles is not None else 0
-        self.verbose = bool(verbose)
-        if max_iters is not None and self.max_iters < 1:
-            raise ValueError("CompositeFAC: max_iters >= 1 (got %r)" % (max_iters,))
-        if fine_sweeps is not None and self.fine_sweeps < 1:
-            raise ValueError("CompositeFAC: fine_sweeps >= 1 (got %r)" % (fine_sweeps,))
-        if tol is not None and not (0.0 < self.tol < 1.0):
-            raise ValueError("CompositeFAC: tol must be in (0, 1) (got %r)" % (tol,))
-        if coarse_rel_tol is not None and not (0.0 < self.coarse_rel_tol < 1.0):
-            raise ValueError("CompositeFAC: coarse_rel_tol must be in (0, 1) (got %r)"
-                             % (coarse_rel_tol,))
-        if coarse_cycles is not None and self.coarse_cycles < 1:
-            raise ValueError("CompositeFAC: coarse_cycles >= 1 (got %r)" % (coarse_cycles,))
+        # ``None`` stays an explicit authoring default. The native 0 sentinel is introduced only by
+        # set_poisson_kwargs(), the actual Python/native boundary.
+        self.max_iters = optional_positive_int(max_iters, where="CompositeFAC(max_iters=)")
+        self.fine_sweeps = optional_positive_int(fine_sweeps, where="CompositeFAC(fine_sweeps=)")
+        self.tol = (None if tol is None else exact_open_unit_real(
+            tol, where="CompositeFAC(tol=)"))
+        self.coarse_rel_tol = (None if coarse_rel_tol is None else exact_open_unit_real(
+            coarse_rel_tol, where="CompositeFAC(coarse_rel_tol=)"))
+        self.coarse_cycles = optional_positive_int(
+            coarse_cycles, where="CompositeFAC(coarse_cycles=)")
+        self.verbose = strict_bool(verbose, where="CompositeFAC(verbose=)")
 
     @property
     def name(self) -> str:
@@ -146,9 +141,13 @@ class CompositeFAC(Descriptor):
 
     def set_poisson_kwargs(self) -> dict:
         """The AmrSystem.set_poisson keyword args this descriptor lowers to (0 = native default)."""
-        return {"composite": True, "fac_max_iters": self.max_iters,
-                "fac_fine_sweeps": self.fine_sweeps, "fac_tol": self.tol,
-                "fac_coarse_rel_tol": self.coarse_rel_tol, "fac_coarse_cycles": self.coarse_cycles,
+        return {"composite": True, "fac_max_iters": self.max_iters or 0,
+                "fac_fine_sweeps": self.fine_sweeps or 0,
+                "fac_tol": (0.0 if self.tol is None else native_float(
+                    self.tol, where="CompositeFAC(tol=)")),
+                "fac_coarse_rel_tol": (0.0 if self.coarse_rel_tol is None else native_float(
+                    self.coarse_rel_tol, where="CompositeFAC(coarse_rel_tol=)")),
+                "fac_coarse_cycles": self.coarse_cycles or 0,
                 "fac_verbose": self.verbose}
 
     def lower(self, context: Any = None) -> dict:

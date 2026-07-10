@@ -21,7 +21,93 @@ layering allowance.
 from __future__ import annotations
 
 import functools
+from decimal import Decimal
+from fractions import Fraction
 from typing import Any
+
+
+def _exact_coefficient(value: Any, where: str) -> Any:
+    """Return one finite, unannotated real coefficient without a float round-trip.
+
+    Ready-made schemes use the same accepted scalar domain as the symbolic IR:
+    ``int`` / ``Fraction`` / ``Decimal`` / binary64 ``float`` (or an equivalent
+    numeric ``ScalarLiteral``).  Units, target annotations and algebraic/custom
+    C++ spellings cannot participate in affine coefficient algebra and are
+    rejected here, at the preset boundary, with the preset argument name.
+    """
+    from pops.ir.literals import scalar_literal
+
+    try:
+        literal = scalar_literal(value)
+    except TypeError as exc:
+        raise TypeError(
+            "%s must be a finite real coefficient (int, Fraction, Decimal, or float); got %r"
+            % (where, value)
+        ) from exc
+    except ValueError as exc:
+        raise ValueError("%s must be a finite real coefficient; got %r" % (where, value)) from exc
+    if literal.unit is not None or literal.target is not None:
+        raise TypeError(
+            "%s cannot carry a unit or target annotation inside a time-scheme coefficient"
+            % where)
+    try:
+        return literal.to_python()
+    except TypeError as exc:
+        raise TypeError(
+            "%s must be numerically composable; algebraic/custom C++ literals belong in "
+            "Program scalar expressions, not affine time coefficients" % where
+        ) from exc
+
+
+def _exact_product(*values: Any, where: str) -> Any:
+    """Multiply coefficients without silently crossing numeric domains.
+
+    Integers are neutral in every exact domain.  Mixing Decimal, Fraction and
+    binary64 in one product requires an explicit conversion by the caller; this
+    mirrors Program coefficient algebra and prevents an implicit float fallback.
+    """
+    from pops.ir.literals import exact_decimal_multiply, numeric_domains_compatible
+
+    normalized = [_exact_coefficient(value, where) for value in values]
+    if not normalized:
+        return 1
+    result = normalized[0]
+    for value in normalized[1:]:
+        if not numeric_domains_compatible(result, value):
+            raise TypeError(
+                "%s cannot mix %s and %s without an explicit numeric conversion"
+                % (where, type(result).__name__, type(value).__name__))
+        if isinstance(result, Decimal) or isinstance(value, Decimal):
+            result = exact_decimal_multiply(result, value)
+        else:
+            result = result * value
+    return result
+
+
+def _exact_reciprocal(value: Any, where: str) -> Any:
+    """Return ``1/value`` in value's authoring domain, never via binary64."""
+    value = _exact_coefficient(value, where)
+    if value == 0:
+        raise ValueError("%s must be non-zero" % where)
+    if isinstance(value, Decimal):
+        from pops.ir.literals import exact_decimal_divide
+        result = exact_decimal_divide(1, value)
+        if result is None:
+            raise TypeError(
+                "%s has a non-terminating Decimal reciprocal; use Fraction for an exact ratio"
+                % where)
+        return result
+    if isinstance(value, float):
+        return 1.0 / value
+    return Fraction(1, 1) / value
+
+
+def _exact_fraction(value: Any, where: str) -> Fraction:
+    """Exact rational view used only to validate tableau identities."""
+    value = _exact_coefficient(value, where)
+    if isinstance(value, float):
+        return Fraction.from_float(value)
+    return Fraction(value)
 
 
 def program_macro(build: Any) -> Any:
@@ -86,10 +172,9 @@ def _operator_handle(operator: Any, kwarg: Any) -> Any:
 
 def _op_space_arity(P: Any, handle: Any) -> Any:
     """Number of space-typed inputs (State / FieldSpace) of @p handle's operator in the bound
-    registry. Accepts an :class:`pops.model.OperatorHandle` (resolved by its ``.name``)."""
-    if P._registry is None:
-        raise ValueError("operator-first macro: bind a module first (P.bind_operators(module))")
-    op = P._registry.get(handle.name)
+    registry. The handle keeps its complete owner/kind/signature identity until resolution."""
+    from pops.time.operator_resolution import resolve_operator_handle
+    op = resolve_operator_handle(P, handle, where="operator-first macro")
     return sum(1 for t in op.signature.inputs if getattr(t, "kind", None) in ("state", "field"))
 
 

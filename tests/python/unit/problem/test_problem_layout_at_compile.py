@@ -50,9 +50,17 @@ class _StubCompiled:
         self._target = target
 
 
+class _StubTime:
+    """A structural time test double; opaque ``object()`` is not a cache identity."""
+
+    def __init__(self, name="stub-time"):
+        self.name = name
+
+
 def _fresh_problem():
     """One Problem, no layout -- the subject of the two-layouts proof."""
-    return pops.Problem(name="plasma").block("ne", physics=_StubModel("ne")).program(object())
+    return pops.Problem(name="plasma").block(
+        "ne", physics=_StubModel("ne")).program(_StubTime())
 
 
 def _patched_uniform(captured):
@@ -69,7 +77,7 @@ def test_same_problem_compiles_uniform_and_amr():
     try:
         prob = _fresh_problem()
         # Under Uniform -> target='system' (the whole-system Program is compiled once).
-        compiled_u = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=object())
+        compiled_u = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=_StubTime())
         assert captured["target"] == "system"
         assert compiled_u._target == "system"
         # The SAME Problem under AMR -> target='amr_system' (per-block native loader; no Program).
@@ -86,7 +94,7 @@ def test_compile_without_layout_raises_pointing_at_layout_kwarg():
     compile_drivers.compile_problem = _patched_uniform({})
     try:
         with pytest.raises(ValueError, match=r"pops\.compile\(problem, layout="):
-            orchestration.compile(_fresh_problem(), time=object())
+            orchestration.compile(_fresh_problem(), time=_StubTime())
     finally:
         compile_drivers.compile_problem = saved
 
@@ -97,8 +105,9 @@ def test_constructor_layout_still_works_for_back_compat():
     compile_drivers.compile_problem = _patched_uniform(captured)
     try:
         prob = pops.Problem(layout=Uniform(CartesianMesh())).block(
-            "ne", physics=_StubModel()).program(object())
-        compiled = orchestration.compile(prob, time=object())  # no layout= : uses the constructor one
+            "ne", physics=_StubModel()).program(_StubTime())
+        compiled = orchestration.compile(
+            prob, time=_StubTime())  # no layout= : uses the constructor one
         assert compiled._target == "system"
     finally:
         compile_drivers.compile_problem = saved
@@ -106,9 +115,9 @@ def test_constructor_layout_still_works_for_back_compat():
 
 def test_explicit_layout_disagreeing_with_constructor_is_refused():
     prob = pops.Problem(layout=Uniform(CartesianMesh())).block(
-        "ne", physics=_StubModel()).program(object())
+        "ne", physics=_StubModel()).program(_StubTime())
     with pytest.raises(ValueError, match="disagrees"):
-        orchestration.compile(prob, layout=AMR(base=CartesianMesh()), time=object())
+        orchestration.compile(prob, layout=AMR(base=CartesianMesh()), time=_StubTime())
 
 
 def test_recorded_amr_criteria_apply_to_the_amr_layout():
@@ -132,7 +141,7 @@ def test_recorded_amr_criteria_refused_on_a_uniform_compile():
     prob = _fresh_problem()
     prob.amr.refine(Refine.on("rho").above(0.1))
     with pytest.raises(ValueError, match="no level to refine onto"):
-        orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=object())
+        orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=_StubTime())
 
 
 if __name__ == "__main__":

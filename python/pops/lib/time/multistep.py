@@ -5,6 +5,7 @@ Private helpers: _AB_WEIGHTS, _bdf_local_linear, _bdf_implicit_flux.
 """
 from __future__ import annotations
 
+from fractions import Fraction
 from typing import Any
 
 from ._helpers import _operator_handle, _stage_rhs, program_macro
@@ -18,9 +19,9 @@ def _forward_euler(P: Any, block: Any, sources: Any, flux: Any) -> None:
 
 # Adams-Bashforth weights b_j on R_{n-j} (j = 0..order-1), per order (ADC-423). AB1 is Forward Euler.
 _AB_WEIGHTS = {
-    1: (1.0,),
-    2: (1.5, -0.5),                       # 3/2, -1/2
-    3: (23.0 / 12.0, -16.0 / 12.0, 5.0 / 12.0),
+    1: (1,),
+    2: (Fraction(3, 2), Fraction(-1, 2)),
+    3: (Fraction(23, 12), Fraction(-16, 12), Fraction(5, 12)),
 }
 
 
@@ -63,7 +64,7 @@ def adams_bashforth(P: Any, block: Any, order: Any, *, sources: Any = ("default"
     expr = U + (P.dt * b[0]) * R_n
     for j in range(1, order):
         expr = expr + (P.dt * b[j]) * P.history(name, lag=j)
-    P.commit(block, P.linear_combine(step_name, expr))
+    P._commit_block(block, P.linear_combine(step_name, expr))
 
 
 @program_macro
@@ -93,26 +94,27 @@ def _bdf_local_linear(P: Any, block: Any, order: Any, linear_source: Any, source
         return (expr + P.dt * R) if R is not None else expr
 
     if order == 1:  # (I - dt*L) U^{n+1} = U^n [+ dt R]
-        rhs = P.linear_combine(block + "_bdf1_rhs", _with_explicit(1.0 * U))
+        rhs = P.linear_combine(block + "_bdf1_rhs", _with_explicit(1 * U))
         operator = P.I - P.dt * P.linear_source(linear_source)
         out = P.solve_local_linear(name=block + "_bdf1_step", operator=operator, rhs=rhs, fields=fields)
-        P.commit(block, out)
+        P._commit_block(block, out)
         return out
     # BDF2: (3/2 I - dt*L) U^{n+1} = 2 U^n - 1/2 U^{n-1} [+ dt R], over the history ring.
     name = block + ".U"
     P.store_history(name, U)                       # store U^n first (cold-start fills the ring)
     U_nm1 = P.history(name, lag=1)                 # U^{n-1} (== U^n on step 0 -> BDF1 cold start)
-    rhs = P.linear_combine(block + "_bdf2_rhs", _with_explicit(2.0 * U - 0.5 * U_nm1))
-    operator = P.I - (P.dt * (2.0 / 3.0)) * P.linear_source(linear_source)
+    rhs = P.linear_combine(
+        block + "_bdf2_rhs", _with_explicit(2 * U - Fraction(1, 2) * U_nm1))
+    operator = P.I - (P.dt * Fraction(2, 3)) * P.linear_source(linear_source)
     # Divide both sides by 3/2: (I - (2/3) dt L) U^{n+1} = (2/3)(2 U^n - 1/2 U^{n-1} [+ dt R]).
-    rhs = P.linear_combine(block + "_bdf2_rhs_scaled", (2.0 / 3.0) * rhs)
+    rhs = P.linear_combine(block + "_bdf2_rhs_scaled", Fraction(2, 3) * rhs)
     out = P.solve_local_linear(name=block + "_bdf2_step", operator=operator, rhs=rhs, fields=fields)
-    P.commit(block, out)
+    P._commit_block(block, out)
     return out
 
 
 def _bdf_implicit_flux(P: Any, block: Any, order: Any, sources: Any, flux: Any, ncomp: Any,
-                       newton_tol: Any, newton_max: Any, krylov_tol: Any,
+                       newton_max: Any, krylov_tol: Any,
                        krylov_max: Any, krylov_restart: Any, eps: Any) -> Any:
     """The IMPLICIT-FLUX BDF lowering (ADC-431): a matrix-free Newton-Krylov solve of the coupled
     nonlinear system, composed PURELY from existing IR primitives (no new C++ stepper).
@@ -124,7 +126,9 @@ def _bdf_implicit_flux(P: Any, block: Any, order: Any, sources: Any, flux: Any, 
 
     (BDF2 reads ``U^{n-1}`` from the System history ring with a BDF1 cold start.) ``rhs(U) = -div F(U)
     [+ sources]`` is the SAME hyperbolic residual the explicit schemes use, so the flux couples the
-    cells through its stencil and the Newton system is GLOBAL.
+    cells through its stencil and the Newton system is GLOBAL. Every residual re-solves the fields from
+    its own iterate; the finite-difference Jacobian likewise re-solves them from ``U^k + h v`` so field
+    coupling is part of the implicit operator, never a stale ``U^n`` side channel.
 
     Newton's method (the outer loop) is a fixed `static_range` unroll of @p newton_max iterations -- each
     iteration is independent IR (its own matrix-free operator + Krylov solve), which the codegen lowers
@@ -140,14 +144,13 @@ def _bdf_implicit_flux(P: Any, block: Any, order: Any, sources: Any, flux: Any, 
     The final residual norm ``||F||`` is recorded as the diagnostic ``"<block>.bdf_residual"`` (read via
     ``sim.program_diagnostic``). @p ncomp is the block component count (1 by default -- a scalar model
     like inviscid Burgers / linear advection; pass the model's n_cons for a multi-component block)."""
-    c = 1.0 if order == 1 else (2.0 / 3.0)
+    c = 1 if order == 1 else Fraction(2, 3)
     U0 = P.state(block)
-    fields = P.solve_fields(U0) if flux else None  # frozen-Poisson coupling, solved once from U^n
-    # Snapshot U^n into a scratch: the commit writes ctx.state(0) IN PLACE at the very end, so the lagged
-    # term must read this frozen copy (not the live state) -- otherwise the post-commit residual
+    # Snapshot U^n into a scratch: the commit writes this block's runtime state IN PLACE at the very
+    # end, so the lagged term must read this frozen copy (not the live state) -- otherwise the post-commit residual
     # diagnostic would read U^{n+1} as U^n. The Newton-loop residuals (before the commit) would be correct
     # either way; the snapshot keeps every residual (loop + diagnostic) reading the true U^n.
-    Un = P.linear_combine(block + "_bdf_Un", 1.0 * U0)
+    Un = P.linear_combine(block + "_bdf_Un", 1 * U0)
     if order == 2:
         name = block + ".U"
         P.store_history(name, U0)                   # store U^n (cold-start fills the ring)
@@ -157,36 +160,42 @@ def _bdf_implicit_flux(P: Any, block: Any, order: Any, sources: Any, flux: Any, 
         # The lagged (constant-in-Newton) part of the residual: U^n for BDF1, (4/3)U^n - (1/3)U^{n-1}
         # for BDF2 (the constant-state coefficients of the BDF residual normalized to a unit U^{n+1}).
         if order == 1:
-            return 1.0 * Un
-        return (4.0 / 3.0) * Un - (1.0 / 3.0) * U_nm1
+            return 1 * Un
+        return Fraction(4, 3) * Un - Fraction(1, 3) * U_nm1
 
     src = list(sources) if sources is not None else None
-    kind = "scalar" if ncomp == 1 else "state"
+    field_coupled = src is None or "default" in src
+    # The Newton unknown is physically a conservative State even for a one-component model. Runtime
+    # storage is still an ncomp-wide MultiFab; declaring the state domain preserves the Program type
+    # of the Krylov correction instead of relying on a hidden scalar_field -> State conversion.
+    kind = "state"
 
     def _residual(P: Any, Uk: Any, tag: Any) -> Any:
         # F^k = U^k - U^n_terms - c*dt*rhs(U^k); returns (F^k, R^k) so the matvec can reuse R^k.
-        Rk = P._rhs_legacy(name="%s_R" % tag, state=Uk, fields=fields, flux=flux, sources=src)
-        Fk = P.linear_combine("%s_F" % tag, _un_terms() * (-1.0) + 1.0 * Uk - (c * P.dt) * Rk)
+        fields_k = P.solve_fields(Uk) if field_coupled else None
+        Rk = P._rhs_legacy(
+            name="%s_R" % tag, state=Uk, fields=fields_k, flux=flux, sources=src)
+        Fk = P.linear_combine("%s_F" % tag, _un_terms() * -1 + Uk - (c * P.dt) * Rk)
         return Fk, Rk
 
     def _newton_step(P: Any, Uk: Any, k: Any) -> Any:
         tag = "%s_bdf%d_n%d" % (block, order, k)
         Fk, Rk = _residual(P, Uk, tag)
-        negF = P.linear_combine("%s_negF" % tag, -1.0 * Fk)
+        negF = P.linear_combine("%s_negF" % tag, -1 * Fk)
         A = P.matrix_free_operator("%s_J" % tag, domain=kind, range_=kind,
-                                   ncomp=(None if ncomp == 1 else ncomp))
+                                   ncomp=ncomp)
 
         def apply(P: Any, out: Any, v: Any) -> Any:
             # J v = v - c*dt * d(rhs)/dU v, matrix-free FD around the frozen iterate U^k (r0 = R^k).
             return P.rhs_jacvec(out, v, iterate=Uk, r0=Rk, c_dt=(c * P.dt), eps=eps, flux=flux,
-                                sources=sources)
+                                sources=sources, field_coupled=field_coupled)
 
         from pops.solvers import krylov
         P.set_apply(A, apply)
         dU = P.solve_linear(name="%s_dU" % tag, operator=A, rhs=negF,
                             method=krylov.GMRES(max_iter=krylov_max),
                             tol=krylov_tol, max_iter=krylov_max, restart=krylov_restart)
-        return P.linear_combine("%s_next" % tag, 1.0 * Uk + 1.0 * dU)
+        return P.linear_combine("%s_next" % tag, Uk + dU)
 
     # Outer Newton loop: a fixed unroll of newton_max iterations (each independent top-level IR).
     Uk = U0
@@ -195,14 +204,14 @@ def _bdf_implicit_flux(P: Any, block: Any, order: Any, sources: Any, flux: Any, 
     # Record the final residual norm for diagnostics (sim.program_diagnostic("<block>.bdf_residual")).
     Ffinal, _ = _residual(P, Uk, "%s_bdf%d_final" % (block, order))
     P.record_scalar(block + ".bdf_residual", P.norm2(Ffinal))
-    P.commit(block, Uk)
+    P._commit_block(block, Uk)
     return Uk
 
 
 @program_macro
 def bdf(P: Any, block: Any, order: Any, *, linear_source: Any = None,
         sources: Any = ("default",), flux: Any = True, ncomp: Any = 1,
-        newton_tol: Any = 1e-10, newton_max: Any = 20, krylov_tol: Any = 1e-10,
+        newton_max: Any = 20, krylov_tol: Any = 1e-10,
         krylov_max: Any = 200, krylov_restart: Any = None, eps: Any = 1e-7) -> Any:
     """Backward Differentiation Formula, IMPLICIT ``order``-step (ADC-423 / ADC-431).
 
@@ -213,8 +222,10 @@ def bdf(P: Any, block: Any, order: Any, *, linear_source: Any = None,
         solved by a matrix-free Newton-Krylov iteration -- ``rhs(U) = -div F [+ sources]`` couples the
         cells through the flux stencil, so the Jacobian ``J = I - c*dt*d(rhs)/dU`` is GLOBAL and applied
         matrix-free by a finite-difference Jacobian-vector product (`P.rhs_jacvec`); each Newton step
-        solves ``J dU = -F`` with GMRES (J nonsymmetric). The outer Newton loop is a fixed unroll of
-        @p newton_max iterations. The final ``||F||`` is recorded as ``"<block>.bdf_residual"``. This is
+        solves ``J dU = -F`` with GMRES (J nonsymmetric). The outer Newton loop is a fixed author-time
+        unroll of EXACTLY @p newton_max iterations: there is no runtime Newton convergence test and no
+        Newton tolerance parameter. The final ``||F||`` is recorded as ``"<block>.bdf_residual"`` so
+        callers can assess convergence honestly. This is
         a pure-macro composition of existing primitives (matrix_free_operator + solve_linear + the affine
         algebra + history) -- no new C++ runtime stepper.
 
@@ -227,9 +238,12 @@ def bdf(P: Any, block: Any, order: Any, *, linear_source: Any = None,
     @p order is 1 (backward Euler) or 2 (BDF2, over the System history ring with a BDF1 cold start).
     @p ncomp is the block component count for the implicit-flux path (1 for a scalar model such as
     inviscid Burgers / linear advection; pass the model's n_cons for a multi-component block).
-    @p newton_max / @p newton_tol bound the Newton iteration; @p krylov_tol / @p krylov_max /
-    @p krylov_restart configure each GMRES inner solve; @p eps is the relative finite-difference step of
-    the Jacobian-vector product."""
+    @p newton_max is the positive, fixed number of author-time-unrolled Newton updates (not a maximum
+    guarded by a hidden tolerance); @p krylov_tol / @p krylov_max / @p krylov_restart configure each
+    GMRES inner solve; @p eps is the relative finite-difference step of the Jacobian-vector product.
+    The implicit-flux Jacobian currently linearizes only the default flux with either its default source
+    (``sources=None`` / ``["default"]``) or no source (``sources=[]``); named source terms are rejected
+    until the matrix-free apply can emit their perturbed-state kernels."""
     if isinstance(order, bool) or not isinstance(order, int) or order not in (1, 2):
         raise ValueError("bdf: order must be the int 1 or 2 (got %r)" % (order,))
     if linear_source is not None:
@@ -243,10 +257,17 @@ def bdf(P: Any, block: Any, order: Any, *, linear_source: Any = None,
             "bdf with flux=False needs a cell-local implicit linear_source (there is no implicit term to "
             "solve); pass linear_source=<m.linear_source handle> for the relaxation BDF, or flux=True "
             "for the implicit-flux Newton-Krylov BDF")
+    implicit_sources = list(sources) if sources is not None else None
+    named_sources = [source for source in (implicit_sources or ()) if source != "default"]
+    if named_sources:
+        raise NotImplementedError(
+            "bdf implicit-flux Jacobian cannot linearize named sources %r yet; use sources=[] for "
+            "flux-only, sources=['default'] for the default composite RHS, or a cell-local "
+            "linear_source path" % named_sources)
     if isinstance(ncomp, bool) or not isinstance(ncomp, int) or ncomp < 1:
         raise ValueError("bdf: ncomp must be a positive int (the block component count); got %r"
                          % (ncomp,))
     if isinstance(newton_max, bool) or not isinstance(newton_max, int) or newton_max < 1:
         raise ValueError("bdf: newton_max must be a positive int (got %r)" % (newton_max,))
-    return _bdf_implicit_flux(P, block, order, sources, flux, ncomp, newton_tol, newton_max,
+    return _bdf_implicit_flux(P, block, order, implicit_sources, flux, ncomp, newton_max,
                               krylov_tol, krylov_max, krylov_restart, eps)

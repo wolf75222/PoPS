@@ -1,0 +1,117 @@
+"""Rate-equation authoring for the physics blackboard facade."""
+from __future__ import annotations
+
+from typing import Any
+
+from .. import math as _bm
+from ._board_contract import atomic_attrs, normalize_sequence, require_name
+from .board_handles import FluxHandle, SourceHandle, StateHandle, _safe_name
+
+
+class _RateAuthoringMixin:
+    """Build and validate explicit finite-volume/rate equations."""
+
+    def rate(self, name: Any, equation: Any) -> Any:
+        reg = _safe_name(name)
+        if not isinstance(equation, _bm.Equation):
+            raise TypeError("rate expects an equation 'ddt(U) == -div(F) + sources'")
+        if not isinstance(equation.lhs, _bm.TimeDerivative):
+            raise ValueError("rate left-hand side must be ddt(U) / rate(U)")
+        state = equation.lhs.state
+        if (not isinstance(state, StateHandle)
+                or state.owner_path != self.owner_path
+                or self._states.get(state.name) != state):
+            raise ValueError(
+                "rate left-hand side must reference a StateHandle declared by this physics model; "
+                "got %r" % (state,))
+        flux, sources = self._destructure_rate(equation.rhs)
+        hyp = self._dsl._m
+        with atomic_attrs((hyp, "_rate_operators")):
+            self._dsl.rate_operator(reg, flux=flux, sources=sources)
+            result = self._registered_operator_handle(reg)
+        return result
+
+    def finite_volume_rate(self, name: Any, flux: Any = None, riemann: Any = None,
+                           reconstruction: Any = None, sources: Any = ()) -> Any:
+        """Declare a native finite-volume rate with owner-checked physical terms."""
+        reg = _safe_name(name)
+        if flux is not None and (not isinstance(flux, FluxHandle)
+                or flux.owner_path != self.owner_path
+                or self._fluxes.get(flux.name) != flux):
+            raise ValueError(
+                "finite_volume_rate flux must be a FluxHandle declared by this physics model; "
+                "got %r" % (flux,))
+        src_names = []
+        for source in normalize_sequence(sources, "finite_volume_rate sources"):
+            if isinstance(source, SourceHandle):
+                if (source.owner_path != self.owner_path
+                        or self._sources.get(source.reg_name) != source):
+                    raise ValueError(
+                        "finite_volume_rate source handle %r belongs to another physics model"
+                        % (source.name,))
+                src_names.append(source.reg_name)
+            else:
+                source_name = _safe_name(source)
+                if source_name not in self._sources:
+                    raise ValueError(
+                        "finite_volume_rate source %r is not declared by this physics model"
+                        % (source,))
+                src_names.append(source_name)
+        if riemann is not None:
+            scheme = getattr(riemann, "scheme", riemann)
+            self._validate_riemann_capabilities(
+                require_name(scheme, "Riemann scheme").lower(), pressure=None, wave_speeds=None)
+
+        hyp = self._dsl._m
+        with atomic_attrs(
+                (hyp, "aux_names"), (hyp, "aux_extra_names"), (hyp, "_hllc"), (hyp, "_roe"),
+                (hyp, "_riemann_hook_forms"), (hyp, "_rate_operators"),
+                (self, "_riemann"), (self, "_reconstruction")):
+            if riemann is not None:
+                self.riemann(riemann)
+            self._reconstruction = reconstruction
+            self._dsl.rate_operator(reg, flux=True, sources=src_names)
+            result = self._registered_operator_handle(reg)
+        return result
+
+    def _destructure_rate(self, rhs: Any) -> Any:
+        terms = _bm._as_rate(rhs)._rate_terms()
+        flux = False
+        sources = []
+        for kind, payload, sign in terms:
+            if kind == "flux":
+                if (not isinstance(payload, FluxHandle)
+                        or payload.owner_path != self.owner_path
+                        or self._fluxes.get(payload.name) != payload):
+                    raise ValueError(
+                        "a rate equation flux must be a FluxHandle declared by this physics model; "
+                        "got %r" % (payload,))
+                if sign != -1:
+                    raise ValueError(
+                        "a rate equation flux term must be -div(F) with exact unit coefficient -1; "
+                        "the current finite-volume rate lowering cannot silently discard a scale "
+                        "%r (absorb it into the declared flux or author a distinct operator)" % sign)
+                if flux:
+                    raise ValueError(
+                        "a rate equation may contain one -div(F) term in the current finite-volume "
+                        "lowering; multiple divergence terms need an explicitly combined flux")
+                flux = True
+            elif kind == "source":
+                if (not isinstance(payload, SourceHandle)
+                        or payload.owner_path != self.owner_path
+                        or self._sources.get(payload.reg_name) != payload):
+                    raise ValueError(
+                        "a rate equation source must be a SourceHandle declared by this physics "
+                        "model; got %r" % (payload,))
+                if sign != 1:
+                    raise ValueError(
+                        "a rate equation source term %r must have the exact unit coefficient +1; "
+                        "the current source lowering cannot silently discard scale %r"
+                        % (payload.name, sign))
+                sources.append(payload.reg_name)
+            else:  # pragma: no cover
+                raise ValueError("unknown rate term kind %r" % (kind,))
+        return flux, sources
+
+
+__all__ = ["_RateAuthoringMixin"]

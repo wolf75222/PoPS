@@ -31,28 +31,17 @@ import hashlib
 import json
 from typing import Any
 
-SCHEMA_VERSION = 1
-
-
-def _space_name(item: Any) -> Any:
-    """The manifest name of a signature input / output item.
-
-    A :class:`~pops.model.spaces.Space` reports its ``name``; an operator-valued type
-    (``LocalLinearOperator`` / ``MatrixFreeOperator``) its ``domain -> range`` shape; a
-    :class:`~pops.model.bundles.RateBundle` its per-block names; anything else its ``repr``.
-    """
-    name = getattr(item, "name", None)
-    if name is not None:
-        return name
-    domain = getattr(item, "domain_name", None)
-    range_ = getattr(item, "range_name", None)
-    if domain is not None and range_ is not None:
-        return "%s->%s" % (domain, range_)
-    keys: Any = getattr(item, "keys", None)
-    if callable(keys):  # a RateBundle (multi-output): name it by its participating blocks
-        block_names: Any = keys()
-        return "RateBundle{%s}" % ", ".join(block_names)
-    return repr(item)
+from .manifest_data import freeze_json as _freeze_json, require_manifest_id, require_manifest_name, thaw_json as _thaw_json
+from .manifest_support import (
+    field_space_row as _field_space_row,
+    native_catalog as _native_catalog,
+    native_routes as _native_routes,
+    param_row as _param_row,
+    params_utilization as _params_utilization,
+    space_name as _space_name,
+    state_space_row as _state_space_row,
+)
+SCHEMA_VERSION = 3
 
 
 class OperatorManifestEntry:
@@ -70,27 +59,35 @@ class OperatorManifestEntry:
 
     def __init__(self, operator: Any, operator_id: Any) -> None:
         signature = operator.signature
-        object.__setattr__(self, "id", int(operator_id))
+        require_manifest_id(operator_id)
+        object.__setattr__(self, "id", operator_id)
         object.__setattr__(self, "name", operator.name)
         object.__setattr__(self, "kind", operator.kind)
-        object.__setattr__(self, "signature", repr(signature))
-        object.__setattr__(self, "inputs", [_space_name(i) for i in signature.inputs])
+        object.__setattr__(self, "signature", _freeze_json(
+            signature.to_data(), where="operator %s signature" % operator.name))
+        object.__setattr__(self, "inputs", tuple(_space_name(i) for i in signature.inputs))
         object.__setattr__(self, "output", _space_name(signature.output))
-        object.__setattr__(self, "capabilities", dict(operator.capabilities))
-        object.__setattr__(self, "requirements", dict(operator.requirements))
+        object.__setattr__(self, "capabilities", _freeze_json(
+            operator.capabilities, where="operator %s capabilities" % operator.name))
+        object.__setattr__(self, "requirements", _freeze_json(
+            operator.requirements, where="operator %s requirements" % operator.name))
         lowering = operator.lowering
-        object.__setattr__(self, "lowering_route", dict(lowering) if lowering else {})
+        object.__setattr__(self, "lowering_route", _freeze_json(
+            lowering or {}, where="operator %s lowering" % operator.name))
 
     def __setattr__(self, name: Any, value: Any) -> None:  # frozen
+        raise AttributeError("OperatorManifestEntry is immutable")
+
+    def __delattr__(self, name: Any) -> None:
         raise AttributeError("OperatorManifestEntry is immutable")
 
     def to_dict(self) -> Any:
         """A plain-dict view of this row (JSON-ready)."""
         return {"id": self.id, "name": self.name, "kind": self.kind,
-                "signature": self.signature, "inputs": list(self.inputs),
-                "output": self.output, "capabilities": dict(self.capabilities),
-                "requirements": dict(self.requirements),
-                "lowering_route": dict(self.lowering_route)}
+                "signature": _thaw_json(self.signature), "inputs": list(self.inputs),
+                "output": self.output, "capabilities": _thaw_json(self.capabilities),
+                "requirements": _thaw_json(self.requirements),
+                "lowering_route": _thaw_json(self.lowering_route)}
 
     def __repr__(self) -> str:
         return "OperatorManifestEntry(id=%d, name=%r, kind=%r)" % (self.id, self.name, self.kind)
@@ -105,8 +102,21 @@ class OperatorRegistryManifest:
     tag). :meth:`to_dict` / iteration expose the rows.
     """
 
-    def __init__(self, entries: Any) -> None:
-        self._entries = list(entries)
+    __slots__ = ("_entries", "_aliases")
+
+    def __init__(self, entries: Any, aliases: Any = None) -> None:
+        frozen = tuple(entries)
+        if any(not isinstance(entry, OperatorManifestEntry) for entry in frozen):
+            raise TypeError("OperatorRegistryManifest entries must be OperatorManifestEntry values")
+        object.__setattr__(self, "_entries", frozen)
+        object.__setattr__(self, "_aliases", _freeze_json(
+            aliases or {}, where="operator registry aliases"))
+
+    def __setattr__(self, name: Any, value: Any) -> None:
+        raise AttributeError("OperatorRegistryManifest is immutable")
+
+    def __delattr__(self, name: Any) -> None:
+        raise AttributeError("OperatorRegistryManifest is immutable")
 
     def __iter__(self) -> Any:
         return iter(self._entries)
@@ -137,10 +147,16 @@ class OperatorRegistryManifest:
         """A plain list-of-dicts view of the rows in id order (JSON-ready)."""
         return [entry.to_dict() for entry in self._entries]
 
+    def aliases(self) -> Any:
+        """Detached public-alias table included in module identity."""
+        return _thaw_json(self._aliases)
+
     @property
     def hash(self) -> str:
         """A stable sha256 over the ordered, canonically serialised entries."""
-        blob = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
+        blob = json.dumps(
+            {"entries": self.to_dict(), "aliases": self.aliases()},
+            sort_keys=True, separators=(",", ":"), allow_nan=False)
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
     def __repr__(self) -> str:
@@ -160,42 +176,92 @@ class ModuleManifest:
     compile seam fills it from the CompiledProblem handle. Every field is JSON-ready.
     """
 
+    __slots__ = (
+        "schema_version", "name", "state_spaces", "field_spaces", "params", "aux",
+        "has_eigenvalues", "operators", "capabilities", "native_routes", "native_catalog",
+        "abi_requirements", "params_utilization",
+    )
+
     def __init__(self, *, name: Any, state_spaces: Any, field_spaces: Any, params: Any, aux: Any,
                  has_eigenvalues: Any, operators: Any, capabilities: Any, native_routes: Any,
                  native_catalog: Any, abi_requirements: Any, params_utilization: Any = None) -> None:
-        self.schema_version = SCHEMA_VERSION
-        self.name = name
-        self.state_spaces = dict(state_spaces)
-        self.field_spaces = dict(field_spaces)
-        self.params = dict(params)
-        self.aux = dict(aux)
-        self.has_eigenvalues = dict(has_eigenvalues)
-        self.operators = operators              # OperatorRegistryManifest
-        self.capabilities = dict(capabilities)
-        self.native_routes = dict(native_routes)
-        self.native_catalog = dict(native_catalog)
-        self.abi_requirements = dict(abi_requirements)
+        if not isinstance(operators, OperatorRegistryManifest):
+            raise TypeError("ModuleManifest operators must be an OperatorRegistryManifest")
+        require_manifest_name(name)
+        object.__setattr__(self, "schema_version", SCHEMA_VERSION)
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "state_spaces", _freeze_json(
+            state_spaces, where="module state_spaces"))
+        object.__setattr__(self, "field_spaces", _freeze_json(
+            field_spaces, where="module field_spaces"))
+        object.__setattr__(self, "params", _freeze_json(params, where="module params"))
+        object.__setattr__(self, "aux", _freeze_json(aux, where="module aux"))
+        object.__setattr__(self, "has_eigenvalues", _freeze_json(
+            has_eigenvalues, where="module has_eigenvalues"))
+        object.__setattr__(self, "operators", operators)
+        object.__setattr__(self, "capabilities", _freeze_json(
+            capabilities, where="module capabilities"))
+        object.__setattr__(self, "native_routes", _freeze_json(
+            native_routes, where="module native_routes"))
+        object.__setattr__(self, "native_catalog", _freeze_json(
+            native_catalog, where="module native_catalog"))
+        object.__setattr__(self, "abi_requirements", _freeze_json(
+            abi_requirements, where="module abi_requirements"))
         # Runtime-param capacity utilization (ADC-610): {count, limit, status}. Additive; a reader that
-        # ignores it is unaffected (SCHEMA_VERSION unchanged for a purely-additive field).
-        self.params_utilization = dict(params_utilization or _params_utilization(self.params))
+        # ignores it is unaffected.
+        object.__setattr__(self, "params_utilization", _freeze_json(
+            params_utilization or _params_utilization(self.params),
+            where="module params_utilization"))
+
+    def __setattr__(self, name: Any, value: Any) -> None:
+        raise AttributeError("ModuleManifest is immutable")
+
+    def __delattr__(self, name: Any) -> None:
+        raise AttributeError("ModuleManifest is immutable")
+
+    def with_abi_key(self, abi_key: Any) -> "ModuleManifest":
+        """Return a new manifest with the compile-time ABI key bound.
+
+        The Module manifest remains an immutable build result; CompiledProblem
+        functionally derives its artifact-specific copy instead of mutating a
+        shared model manifest after hashing/introspection.
+        """
+        requirements = _thaw_json(self.abi_requirements)
+        requirements["abi_key"] = abi_key
+        return ModuleManifest(
+            name=self.name,
+            state_spaces=_thaw_json(self.state_spaces),
+            field_spaces=_thaw_json(self.field_spaces),
+            params=_thaw_json(self.params),
+            aux=_thaw_json(self.aux),
+            has_eigenvalues=_thaw_json(self.has_eigenvalues),
+            operators=self.operators,
+            capabilities=_thaw_json(self.capabilities),
+            native_routes=_thaw_json(self.native_routes),
+            native_catalog=_thaw_json(self.native_catalog),
+            abi_requirements=requirements,
+            params_utilization=_thaw_json(self.params_utilization),
+        )
 
     def to_dict(self) -> Any:
         """A plain-dict view of the whole manifest (JSON-ready)."""
         return {"schema_version": self.schema_version, "name": self.name,
-                "state_spaces": {n: dict(s) for n, s in self.state_spaces.items()},
-                "field_spaces": {n: dict(s) for n, s in self.field_spaces.items()},
-                "params": {n: dict(p) for n, p in self.params.items()},
-                "params_utilization": dict(self.params_utilization),
-                "aux": dict(self.aux), "has_eigenvalues": dict(self.has_eigenvalues),
+                "state_spaces": _thaw_json(self.state_spaces),
+                "field_spaces": _thaw_json(self.field_spaces),
+                "params": _thaw_json(self.params),
+                "params_utilization": _thaw_json(self.params_utilization),
+                "aux": _thaw_json(self.aux),
+                "has_eigenvalues": _thaw_json(self.has_eigenvalues),
                 "operators": self.operators.to_dict(),
-                "capabilities": dict(self.capabilities),
-                "native_routes": dict(self.native_routes),
-                "native_catalog": dict(self.native_catalog),
-                "abi_requirements": dict(self.abi_requirements)}
+                "operator_aliases": self.operators.aliases(),
+                "capabilities": _thaw_json(self.capabilities),
+                "native_routes": _thaw_json(self.native_routes),
+                "native_catalog": _thaw_json(self.native_catalog),
+                "abi_requirements": _thaw_json(self.abi_requirements)}
 
     def to_json(self, path: Any = None, *, indent: int = 2) -> Any:
         """Serialise :meth:`to_dict` to JSON; write to @p path if given, else return the string."""
-        text = json.dumps(self.to_dict(), indent=indent, sort_keys=True)
+        text = json.dumps(self.to_dict(), indent=indent, sort_keys=True, allow_nan=False)
         if path is not None:
             with open(str(path), "w", encoding="utf-8") as handle:
                 handle.write(text)
@@ -205,69 +271,13 @@ class ModuleManifest:
     @property
     def hash(self) -> str:
         """A stable sha256 over the canonically serialised manifest (adding an operator changes it)."""
-        blob = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
+        blob = json.dumps(
+            self.to_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False)
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
     def __repr__(self) -> str:
         return ("ModuleManifest(name=%r, operators=[%s])"
                 % (self.name, ", ".join(self.operators.names())))
-
-
-def _state_space_row(space: Any) -> Any:
-    """The manifest row of a state space: components / roles / layout / storage."""
-    return {"components": list(space.components), "roles": dict(getattr(space, "roles", {}) or {}),
-            "layout": getattr(space, "layout", "cell"),
-            "storage": getattr(space, "storage", "multifab")}
-
-
-def _field_space_row(space: Any) -> Any:
-    """The manifest row of a field space: components / layout."""
-    return {"components": list(space.components), "layout": getattr(space, "layout", "cell")}
-
-
-def _param_row(param: Any) -> Any:
-    """The manifest row of a parameter: default / dtype / kind (kind if the param carries one)."""
-    row = {"default": getattr(param, "default", getattr(param, "value", None)),
-           "dtype": getattr(param, "dtype", "real")}
-    kind = getattr(param, "kind", None)
-    if kind is not None:
-        row["kind"] = kind
-    return row
-
-
-def _params_utilization(params: Any) -> Any:
-    """Runtime-param capacity utilization row (ADC-610): {count, limit, status}. Surfaces the
-    previously-hidden kMaxRuntimeParams bound so an artifact's headroom is introspectable. @p params is
-    the already-built {name: row} map; count = number of kind='runtime' params. status is 'ok' below the
-    limit, 'at_limit' exactly at it, 'exceeded' above (the codegen would already have refused it -- the
-    row records the fact rather than fabricating a pass)."""
-    from pops.physics.aux import max_runtime_params  # lazy: keep manifest import-light
-    limit = max_runtime_params()
-    count = sum(1 for row in params.values() if row.get("kind") == "runtime")
-    status = "ok" if count < limit else ("at_limit" if count == limit else "exceeded")
-    return {"count": count, "limit": limit, "status": status}
-
-
-def _native_routes() -> Any:
-    """The native route-registry components (version / hash / signature) from pops.runtime.routes."""
-    from pops.runtime.routes import (ROUTE_REGISTRY_VERSION, route_registry_hash,
-                                      route_registry_signature)
-    return {"version": ROUTE_REGISTRY_VERSION, "hash": route_registry_hash(),
-            "signature": route_registry_signature()}
-
-
-def _native_catalog() -> Any:
-    """The builtin native brick catalog component (version + ids) from pops.runtime.brick_catalog.
-
-    The codegen-facing native-catalog manifest (ADC-586): the route-registry version pins the
-    catalog vocabulary, and the ids are the canonical native bricks a generated artifact can
-    reference. Imported in-builder (like the routes import) so the manifest stays buildable without
-    the compiled ``_pops`` extension.
-    """
-    from pops.runtime.brick_catalog import brick_catalog
-    from pops.runtime.routes import ROUTE_REGISTRY_VERSION
-    return {"version": ROUTE_REGISTRY_VERSION,
-            "bricks": [entry["id"] for entry in brick_catalog()]}
 
 
 def build_module_manifest(module: Any) -> Any:
@@ -282,7 +292,7 @@ def build_module_manifest(module: Any) -> Any:
     """
     registry = module.operator_registry()
     entries = [OperatorManifestEntry(op, registry.id_of(op.name)) for op in registry]
-    operators = OperatorRegistryManifest(entries)
+    operators = OperatorRegistryManifest(entries, aliases=registry.aliases())
 
     state_spaces = {n: _state_space_row(s) for n, s in module.state_spaces().items()}
     field_spaces = {n: _field_space_row(s) for n, s in module.field_spaces().items()}
@@ -380,8 +390,9 @@ def coupling_operator_manifest(compiled: Any, conserved: Any = (), created: Any 
     is carried; ``utilization`` is the compiled source's ``utilization()`` (registers / terms / program
     against the C++ fixed-array capacities).
     """
+    from pops.ir.literals import scalar_data
     conserved, created = list(conserved), list(created)
-    freq = getattr(compiled, "frequency", 0.0) if frequency is None else float(frequency)
+    freq = getattr(compiled, "frequency", 0.0) if frequency is None else frequency
     per_cell = bool(getattr(compiled, "freq_prog_ops", []) or getattr(compiled, "freq_prog_args", []))
     return {
         "route": "coupled_source",
@@ -394,7 +405,7 @@ def coupling_operator_manifest(compiled: Any, conserved: Any = (), created: Any 
                               strict=True)),
         "conservation": {"conserved_roles": conserved, "created_roles": created,
                          "unchecked": not (conserved or created)},
-        "frequency": {"constant_mu": freq, "per_cell": per_cell},
+        "frequency": {"constant_mu": scalar_data(freq), "per_cell": per_cell},
         "utilization": compiled.utilization() if hasattr(compiled, "utilization") else None,
     }
 

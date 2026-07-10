@@ -37,10 +37,22 @@ def _lorentz_model(name):
     return m
 
 
+def _linear_handle(model):
+    from pops.model import OperatorHandle
+    registry = model.operator_registry()
+    operator = registry.operators_of_kind("local_linear_operator")[0]
+    return OperatorHandle(
+        operator.name, kind=operator.kind, owner=registry.owner_path,
+        signature=operator.signature)
+
+
 def _emit(target):
-    P = pops_time.Program("adc633_schur_emit")
-    pops_lib_time.condensed_schur(P, "blk", alpha=1.0, theta=1.0)
-    return P.emit_cpp_program(model=_lorentz_model("adc633_emit_model"), target=target)
+    model = _lorentz_model("adc633_emit_model")
+    P = pops_time.Program("adc633_schur_emit").bind_operators(model)
+    pops_lib_time.condensed_schur(
+        P, "blk", alpha=1.0, theta=1.0,
+        linear_operator=_linear_handle(model))
+    return P.emit_cpp_program(model=model, target=target)
 
 
 def test_amr_target_routes_solve_linear_through_ctx():
@@ -67,8 +79,11 @@ def test_system_target_keeps_verbatim_bicgstab():
 def test_ir_hash_is_target_independent():
     """The IR identity is the same for both targets (the hash is of the IR, not the emitted C++): the
     AMR seam is an emission-time branch, not an IR change, so the uniform IR-hash is untouched."""
-    P = pops_time.Program("adc633_schur_hash")
-    pops_lib_time.condensed_schur(P, "gas", alpha=1.0, theta=1.0)
+    model = _lorentz_model("adc633_hash_model")
+    P = pops_time.Program("adc633_schur_hash").bind_operators(model)
+    pops_lib_time.condensed_schur(
+        P, "gas", alpha=1.0, theta=1.0,
+        linear_operator=_linear_handle(model))
     h_sys = P._ir_hash()
     h_amr = P._ir_hash()
     assert h_sys == h_amr, "the IR hash must not depend on the codegen target"

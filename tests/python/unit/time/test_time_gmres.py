@@ -72,7 +72,7 @@ def _spd_program(t, *, name="gmres_spd", method="gmres", tol=1e-9, max_iter=300,
     P.set_apply(A, apply)
     phi = P.solve_linear(operator=A, rhs=U, method=_krylov(method), tol=tol, max_iter=max_iter,
                          restart=restart)
-    P.commit("blk", phi)
+    P.commit(P.state("U", block="blk").next, phi)
     return P
 
 
@@ -104,7 +104,7 @@ def _nonsym_program(t, *, name="gmres_nonsym", tol=1e-9, max_iter=300, restart=3
     if method == "gmres":
         kw["restart"] = restart  # restart is gmres-only (rejected for cg/bicgstab)
     phi = P.solve_linear(**kw)
-    P.commit("blk", phi)
+    P.commit(P.state("U", block="blk").next, phi)
     return P
 
 

@@ -12,9 +12,12 @@ imported lazily inside :meth:`Module.to_dsl` to avoid an import cycle.
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any
 
-from .operators import Operator
+from .hash_data import body_identity as _body_identity, canonical_hash_data as _canonical_hash_data
+from .operators import Operator, validate_operator_signature
+from .handles import OperatorHandle, OwnerPath
 from .registry import OperatorRegistry
 from .signatures import Signature
 from .spaces import (
@@ -39,38 +42,44 @@ class Module:
     any Module that provides operators with the expected signatures.
     """
 
-    def __init__(self, name: Any) -> None:
-        self.name = str(name)
+    def __init__(self, name: Any, *, owner: Any = None) -> None:
+        if not isinstance(name, str) or not name:
+            raise ValueError("Module name must be a non-empty string")
+        self.name = name
+        self._owner_path = (OwnerPath.coerce(owner) if owner is not None
+                            else OwnerPath.fresh("module", self.name))
         self._state_spaces = {}
         self._field_spaces = {}
         self._params = {}
         self._aux = {}
-        self._registry = OperatorRegistry()
+        self._registry = OperatorRegistry(owner=self.owner_path)
         # Wave speeds for the Riemann solver of a compilable Module: {"x": [Expr], "y": [Expr]}
         # eigenvalues, or None (set via eigenvalues()). Carried so a pure Module is self-contained;
         # lowered to dsl.Model.eigenvalues by compile_problem.
         self._eigenvalues = None
+
+    @property
+    def owner_path(self) -> OwnerPath:
+        """Immutable declaration owner anchoring all handles and registries."""
+        return self._owner_path
 
     # --- spaces ---
     def state_space(self, name: Any = "U", components: Any = (), roles: Any = None, layout: str = "cell",
                     storage: str = "multifab") -> Any:
         """Declare and return a :class:`StateSpace`."""
         space = StateSpace(name, components, roles, layout, storage)
-        self._state_spaces[space.name] = space
-        return space
+        return self._declare_descriptor(self._state_spaces, space, "StateSpace")
 
     def field_space(self, name: Any, components: Any = (), layout: str = "cell") -> Any:
         """Declare and return a :class:`FieldSpace`."""
         space = FieldSpace(name, components, layout)
-        self._field_spaces[space.name] = space
-        return space
+        return self._declare_descriptor(self._field_spaces, space, "FieldSpace")
 
     # --- parameters / aux ---
     def param(self, name: Any, default: Any = 0.0, dtype: str = "real") -> Any:
         """Declare and return one :class:`ParameterSpace`."""
         p = ParameterSpace(name, default, dtype)
-        self._params[p.name] = p
-        return p
+        return self._declare_descriptor(self._params, p, "parameter")
 
     def parameters(self, **defaults: Any) -> Any:
         """Declare several parameters by keyword; return ``{name: ParameterSpace}``."""
@@ -79,8 +88,7 @@ class Module:
     def aux_field(self, name: Any, kind: str = "cell_scalar") -> Any:
         """Declare and return one :class:`AuxSpace`."""
         a = AuxSpace(name, kind)
-        self._aux[a.name] = a
-        return a
+        return self._declare_descriptor(self._aux, a, "aux field")
 
     def aux_fields(self, **kinds: Any) -> Any:
         """Declare several aux fields by keyword; return ``{name: AuxSpace}``."""
@@ -92,9 +100,9 @@ class Module:
                  expr: Any = None) -> Any:
         """Register a typed operator.
 
-        Builder mode (``expr`` given) registers the operator immediately and returns the
-        :class:`Operator`. Decorator mode (no ``expr``) returns a decorator that records
-        the decorated body as the operator and returns it unchanged::
+        Builder mode (``expr`` given) registers the operator immediately and returns its
+        public :class:`OperatorHandle`. Decorator mode records the decorated body internally
+        and replaces the decorated name with the same public handle::
 
             @module.operator(name="explicit_rhs",
                              signature=(U, Fields) >> Rate(U), kind="local_rate")
@@ -107,20 +115,20 @@ class Module:
             raise TypeError(
                 "module.operator(%r): signature must be a Signature (use the >> sugar or "
                 "Signature(inputs, output)); got %r" % (name, signature))
+        validate_operator_signature(kind, signature, operator_name=name)
 
         def _register(body: Any) -> Any:
             op = Operator(name, kind, signature, capabilities=capabilities,
                           requirements=requirements, lowering=lowering, source="module",
                           body=body)
             self._registry.register(op)
-            return op
+            return self.operator_handle(op.name)
 
         if expr is not None:
             return _register(expr)
 
         def decorator(func: Any) -> Any:
-            _register(func)
-            return func
+            return _register(func)
 
         return decorator
 
@@ -129,15 +137,56 @@ class Module:
         """Register a composite ``local_rate`` operator ``R = -div F + sum(sources)`` from named
         sub-operators (the flux and the listed source operators). Mirrors ``dsl.rate_operator``; the
         ``lowering`` carries the flux/sources/fluxes so ``P.call`` and the codegen compose it."""
-        u = self._state_spaces.get(state_space) or StateSpace(state_space)
+        if isinstance(state_space, StateSpace):
+            u = state_space
+        else:
+            u = self._state_spaces.get(state_space)
+        if u is None:
+            raise ValueError(
+                "rate_operator(%r): state_space must name a declared StateSpace" % name)
+        if not isinstance(flux, bool):
+            raise TypeError("rate_operator(%r): flux must be a Python bool" % name)
         srcs = list(sources) if sources is not None else None
-        op = Operator(name, "local_rate", Signature((u,), RateSpace(u)),
-                      capabilities={"local": False, "produces_rate": True, "supports_device": True},
+        flxs = list(fluxes) if fluxes else None
+        if not flux and flxs:
+            raise ValueError("rate_operator(%r): named fluxes require flux=True" % name)
+        inputs = [u]
+        selected = []
+        for source_name in srcs or ():
+            if not isinstance(source_name, str) or not source_name:
+                raise TypeError("rate_operator(%r): source names must be non-empty strings" % name)
+            if source_name == "default" and source_name not in self._registry:
+                continue
+            target = self._registry.target_for_handle(source_name)
+            selected.append(self._registry.get(target))
+        for flux_name in flxs or ():
+            if not isinstance(flux_name, str) or not flux_name:
+                raise TypeError("rate_operator(%r): flux names must be non-empty strings" % name)
+            target = self._registry.target_for_handle(flux_name)
+            selected.append(self._registry.get(target))
+        field_inputs = []
+        for selected_op in selected:
+            for input_space in selected_op.signature.inputs:
+                input_kind = getattr(input_space, "kind", None)
+                if input_kind == "state" and input_space != u:
+                    raise ValueError(
+                        "rate_operator(%r): operator %r consumes incompatible StateSpace %r"
+                        % (name, selected_op.name, getattr(input_space, "name", input_space)))
+                if input_kind == "field" and input_space not in field_inputs:
+                    field_inputs.append(input_space)
+        if len(field_inputs) > 1:
+            raise ValueError(
+                "rate_operator(%r): composed sources require multiple incompatible FieldSpaces; "
+                "declare one compatible field context or separate the rates" % name)
+        inputs.extend(field_inputs)
+        op = Operator(name, "local_rate", Signature(tuple(inputs), RateSpace(u)),
+                      capabilities={"local": False, "requires_fields": bool(field_inputs),
+                                    "produces_rate": True, "supports_device": True},
                       lowering={"flux": bool(flux), "sources": srcs,
-                                "fluxes": list(fluxes) if fluxes else None},
+                                "fluxes": flxs},
                       source="module")
         self._registry.register(op)
-        return op
+        return self.operator_handle(op.name)
 
     def eigenvalues(self, x: Any, y: Any) -> Any:
         """Declare the per-direction wave speeds (eigenvalues) the Riemann solver needs, as lists of
@@ -151,12 +200,29 @@ class Module:
         the derived registry of its HyperbolicModel). Returns ``self``."""
         if not isinstance(registry, OperatorRegistry):
             raise TypeError("adopt_registry expects an OperatorRegistry")
+        if registry.owner_path is None:
+            raise ValueError("adopt_registry requires an owner-qualified OperatorRegistry")
+        if registry.owner_path != self.owner_path:
+            raise ValueError("adopt_registry cannot adopt a registry owned by another Module")
         self._registry = registry
         return self
 
     def operator_registry(self) -> Any:
         """The Module's :class:`OperatorRegistry` (bind it to a Program with P.bind_operators)."""
         return self._registry
+
+    def operator_handle(self, name: Any) -> OperatorHandle:
+        """Return the canonical public handle for one registered operator.
+
+        ``Operator`` is the registry/codegen record.  User programs retain this
+        immutable owner-qualified reference instead, so pure ``Module`` authoring
+        has the same clean path as the physics facade.
+        """
+        target = self._registry.target_for_handle(name)
+        operator = self._registry.get(target)
+        return OperatorHandle(
+            name, kind=operator.kind, owner=self._registry.owner_path,
+            signature=operator.signature, registered_operator_name=target)
 
     def manifest(self) -> Any:
         """The self-describing :class:`pops.model.manifest.ModuleManifest` of this Module (ADC-585).
@@ -264,42 +330,50 @@ class Module:
         body, else its repr). Sensitive to an operator body, signature, capability or space change;
         deterministic for an identical module. A spec2 tag namespaces it away from any spec1 key.
         """
-        parts = ["spec2-module", self.name]
-        for nm in sorted(self._state_spaces):
-            s = self._state_spaces[nm]
-            parts.append("state:%s:%s:%s" % (
-                s.name, ",".join(s.components), sorted(s.roles.items())))
-        for nm in sorted(self._field_spaces):
-            f = self._field_spaces[nm]
-            parts.append("field:%s:%s" % (f.name, ",".join(f.components)))
-        for nm in sorted(self._params):
-            p = self._params[nm]
-            parts.append("param:%s:%r:%s" % (p.name, p.default, p.dtype))
-        for nm in sorted(self._aux):
-            a = self._aux[nm]
-            parts.append("aux:%s:%s" % (a.name, a.kind))
-        if self._eigenvalues is not None:
-            for direction in ("x", "y"):
-                parts.append("eig_%s:%s" % (
-                    direction, ";".join(repr(e) for e in self._eigenvalues[direction])))
-        for op in self._registry:  # registration (id) order
-            parts.append("op:%s:%s:%s:caps=%s:reqs=%s:body=%s" % (
-                op.name, op.kind, repr(op.signature),
-                sorted(op.capabilities.items()), sorted(op.requirements.items()),
-                _body_identity(op.body)))
-        return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+        payload = {
+            "schema": "spec2-module",
+            "name": self.name,
+            "state_spaces": [
+                self._state_spaces[name].to_data() for name in sorted(self._state_spaces)
+            ],
+            "field_spaces": [
+                self._field_spaces[name].to_data() for name in sorted(self._field_spaces)
+            ],
+            "parameters": [self._params[name].to_data() for name in sorted(self._params)],
+            "aux": [self._aux[name].to_data() for name in sorted(self._aux)],
+            "eigenvalues": None if self._eigenvalues is None else {
+                direction: [_canonical_hash_data(value) for value in self._eigenvalues[direction]]
+                for direction in ("x", "y")
+            },
+            # Registry order is semantic: it determines stable OperatorId values.
+            "operators": [{
+                "name": op.name,
+                "kind": op.kind,
+                "signature": op.signature.to_data(),
+                "capabilities": op.capabilities,
+                "requirements": op.requirements,
+                "lowering": op.lowering,
+                "body": _body_identity(op.body),
+            } for op in self._registry],
+        }
+        canonical = json.dumps(
+            _canonical_hash_data(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     def __repr__(self) -> str:
         return "Module(%r, operators=[%s])" % (self.name, ", ".join(self._registry.names()))
 
-
-def _body_identity(body: Any) -> str:
-    """A stable string identifying an operator body for the module hash: the source of a callable
-    (so editing it invalidates the cache), else its repr; never raises."""
-    if body is None:
-        return "none"
-    try:
-        import inspect
-        return inspect.getsource(body)
-    except (OSError, TypeError):
-        return repr(body)
+    @staticmethod
+    def _declare_descriptor(registry: Any, descriptor: Any, label: str) -> Any:
+        """Install one immutable descriptor, making compatible repeats idempotent."""
+        existing = registry.get(descriptor.name)
+        if existing is None:
+            registry[descriptor.name] = descriptor
+            return descriptor
+        old_data = existing.to_data()
+        new_data = descriptor.to_data()
+        if old_data == new_data:
+            return existing
+        raise ValueError(
+            "%s %r is already declared incompatibly: existing %r, requested %r"
+            % (label, descriptor.name, old_data, new_data))

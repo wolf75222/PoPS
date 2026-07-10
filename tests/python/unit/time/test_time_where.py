@@ -42,7 +42,7 @@ def _clamp_program(t, *, name="where_clamp", floor=0.5):
     half = P.linear_combine("half", 0.5 * U)        # the 'b' branch: 0.5 * U
     mask = P.cell_ge(U, floor, name="mask")          # 1 where U >= floor, else 0
     clamped = P.where(mask, U, half, name="clamped")  # per-cell: U if mask else 0.5*U
-    P.commit("blk", clamped)
+    P.commit(P.state("U", block="blk").next, clamped)
     return P
 
 
@@ -52,7 +52,7 @@ def test_cell_ge_is_scalar_field(t):
     U = P.state("blk")
     m = P.cell_ge(U, 0.5)
     assert m.vtype == "scalar_field", "cell_ge returns a 1-component mask scalar_field (got %r)" % m.vtype
-    assert m.attrs["cmp"] == ">=" and m.attrs["value"] == 0.5, m.attrs
+    assert m.attrs["cmp"] == ">=" and m.attrs["value"].to_python() == 0.5, m.attrs
     assert P._ncomp(m) == 1, "the mask is 1-component"
 
 
@@ -83,7 +83,7 @@ def test_where_codegen(t):
     src = P.emit_cpp_program()
     for frag in ("ctx.alloc_scalar_field(1, 1)",          # the mask field
                  "pops::for_each_cell",                      # the per-cell select kernel
-                 "static_cast<pops::Real>(0.5))",            # the threshold in the compare kernel
+                 "fieldA(i, j, 0) >= 0.5",                   # exact threshold lowering
                  "? static_cast<pops::Real>(1) : static_cast<pops::Real>(0)",  # 0/1 mask
                  "for (int c = 0; c < ncomp_; ++c)",        # component-wise select
                  "(mask_ncomp_ == 1) ? 0 : c",              # shared vs per-component mask
@@ -148,15 +148,15 @@ def test_where_rejects_mismatched_vtype(t):
         raise AssertionError("where must reject a / b of different value types")
 
 
-def test_cell_compare_rejects_non_float_threshold(t):
+def test_cell_compare_rejects_non_scalar_threshold(t):
     P = t.Program("p")
     U = P.state("blk")
     try:
         P.cell_ge(U, U)  # a per-cell field threshold is a later phase
     except TypeError as exc:
-        assert "float threshold" in str(exc), str(exc)
+        assert "exact scalar threshold" in str(exc), str(exc)
     else:
-        raise AssertionError("cell_compare must reject a non-float threshold")
+        raise AssertionError("cell_compare must reject a non-scalar threshold")
 
 
 def test_cell_compare_rejects_bad_cmp(t):

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .operators import Operator
+from .operators import Operator, validate_operator_signature
 
 
 class OperatorRegistry:
@@ -18,19 +18,82 @@ class OperatorRegistry:
     debug / validation only. Re-registering an existing name raises.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, owner: Any = None) -> None:
+        from .handles import OwnerPath
+        self._owner_path = OwnerPath.coerce(owner) if owner is not None else None
         self._by_name = {}
         self._order = []
+        self._aliases = {}
+
+    @property
+    def owner_path(self) -> Any:
+        """Read-only declaration owner shared by every handle in the registry."""
+        return self._owner_path
 
     def register(self, operator: Any) -> Any:
         """Register ``operator`` and return it; its id is its insertion index."""
         if not isinstance(operator, Operator):
             raise TypeError("register expects an Operator, got %r" % (operator,))
+        # Registry is a trust boundary too: Operator remains an internal mutable
+        # record for codegen, so revalidate in case a record was modified between
+        # construction and registration.
+        validate_operator_signature(
+            operator.kind, operator.signature, operator_name=operator.name)
+        if operator.name in self._aliases:
+            raise ValueError(
+                "operator %r collides with registered alias targeting %r"
+                % (operator.name, self._aliases[operator.name]))
         if operator.name in self._by_name:
             raise ValueError("operator %r already registered" % (operator.name,))
         self._by_name[operator.name] = operator
         self._order.append(operator.name)
         return operator
+
+    def register_alias(self, alias: Any, target: Any) -> str:
+        """Declare one immutable public alias for an existing registry operator.
+
+        Alias resolution is registry-authenticated: carrying a different target
+        inside an :class:`OperatorHandle` never grants access by itself. Compatible
+        repeats are idempotent; a collision or retarget attempt fails loudly.
+        """
+        if not isinstance(alias, str) or not alias:
+            raise ValueError("operator alias must be a non-empty string")
+        if not isinstance(target, str) or not target:
+            raise ValueError("operator alias target must be a non-empty string")
+        if target not in self._by_name:
+            known = ", ".join(self._order) or "<none>"
+            raise ValueError(
+                "operator alias %r targets unknown operator %r (registered: %s)"
+                % (alias, target, known))
+        if alias in self._by_name:
+            raise ValueError("operator alias %r collides with a registered operator" % alias)
+        existing = self._aliases.get(alias)
+        if existing is not None:
+            if existing == target:
+                return alias
+            raise ValueError(
+                "operator alias %r is already registered for %r, cannot retarget it to %r"
+                % (alias, existing, target))
+        self._aliases[alias] = target
+        return alias
+
+    def aliases(self) -> Any:
+        """Detached ``{public_alias: registered_target}`` declaration table."""
+        return dict(self._aliases)
+
+    def target_for_handle(self, public_name: Any) -> str:
+        """Authenticated registry target for a handle's public local identity."""
+        if not isinstance(public_name, str) or not public_name:
+            raise TypeError("operator handle name must be a non-empty string")
+        if public_name in self._by_name:
+            return public_name
+        try:
+            return self._aliases[public_name]
+        except KeyError:
+            known = self._order + list(self._aliases)
+            raise KeyError(
+                "unknown operator handle %r (registered operators/aliases: %s)"
+                % (public_name, ", ".join(known) or "<none>")) from None
 
     def get(self, name: Any) -> Any:
         """Return the operator named ``name`` or raise a clear KeyError."""
@@ -84,7 +147,7 @@ class OperatorRegistry:
         return self._by_name[self._order[operator_id]]
 
     def __contains__(self, name: Any) -> bool:
-        return name in self._by_name
+        return name in self._by_name or name in self._aliases
 
     def __iter__(self) -> Any:
         return (self._by_name[n] for n in self._order)

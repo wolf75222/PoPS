@@ -41,7 +41,11 @@ def _mg_set_poisson_kwargs(mg_options: Any) -> Any:
 
     Empty in -> empty out, so a string-token / lib-descriptor solver selection leaves set_poisson at
     its native V-cycle defaults (bit-identical). Only the keys the resolver produced are forwarded."""
-    return {k: mg_options[k] for k in _MG_SET_POISSON_KEYS if k in mg_options}
+    from pops.solvers._numeric import native_float
+    result = {k: mg_options[k] for k in _MG_SET_POISSON_KEYS if k in mg_options}
+    if "rel_tol" in result:
+        result["rel_tol"] = native_float(result["rel_tol"], where="GeometricMG relative tolerance")
+    return result
 
 
 class _SystemUnifiedInstall(_System):
@@ -250,9 +254,11 @@ class _SystemUnifiedInstall(_System):
         if not isinstance(cadence, CompiledTime):
             raise TypeError("install(cadence=): expected a pops.CompiledTime(substeps=, stride=), "
                             "got %r" % type(cadence).__name__)
-        if isinstance(cadence.cfl, (int, float)):
+        if cadence.cfl != "default":
             # Pin the numeric cfl so run() with no explicit cfl= uses it (not a silent no-op).
-            self._program_cadence_cfl = float(cadence.cfl)
+            from pops.solvers._numeric import native_float
+            self._program_cadence_cfl = native_float(
+                cadence.cfl, where="CompiledTime cfl")
         self.set_program_cadence(cadence.substeps, cadence.stride)
 
     def _lower_spatial(self, spatial: Any) -> Any:
@@ -349,11 +355,14 @@ class _SystemUnifiedInstall(_System):
         token = self._solver_token(solver_brick)
         opts = self._solver_option_dict(solver_brick)
         mg = self._solver_mg_options(solver_brick)  # ADC-613: resolved V-cycle scalars (or {})
+        from pops.solvers._numeric import native_float
         self.set_poisson(rhs=opts.get("rhs", "charge_density"), solver=token,
                          bc=opts.get("bc", "auto"), wall=opts.get("wall", "none"),
                          wall_radius=float(opts.get("wall_radius", 0.0)),
                          epsilon=float(opts.get("epsilon", 1.0)),
-                         abs_tol=float(mg.get("abs_tol", opts.get("abs_tol", 0.0))),
+                         abs_tol=native_float(
+                             mg.get("abs_tol", opts.get("abs_tol", 0.0)),
+                             where="GeometricMG absolute tolerance"),
                          **_mg_set_poisson_kwargs(mg))
 
     @staticmethod

@@ -59,12 +59,20 @@ def test_spaces():
     fields = m.field_space()
     assert isinstance(fields, model.FieldSpace)
     assert fields.components == ("phi", "grad_x", "grad_y", "B_z")
-    # Rate identity is by base name: Rate("U") == Rate(state space U).
-    assert model.Rate("U") == model.Rate(state)
-    assert model.Rate("V") != model.Rate("U")
-    # LocalLinearOperator identity is by (domain, range) name.
-    assert model.LocalLinearOperator("U", "U") == model.LocalLinearOperator(state, state)
-    assert model.LocalLinearOperator("U", "U") != model.LocalLinearOperator("U", "V")
+    # A Rate retains the complete immutable StateSpace structure (no name-only wildcard).
+    assert model.Rate(state) == model.Rate(state)
+    assert model.Rate(model.StateSpace("U", ("rho",))) != model.Rate(state)
+    # Operator-valued types retain the full StateSpace; a shared name is not compatibility proof.
+    assert model.LocalLinearOperator(state, state) == model.LocalLinearOperator(state, state)
+    same_name_other_shape = model.StateSpace("U", ("energy",))
+    assert model.LocalLinearOperator(state, state) != model.LocalLinearOperator(
+        same_name_other_shape, same_name_other_shape)
+    try:
+        model.LocalLinearOperator("U", "U")
+    except TypeError as exc:
+        assert "typed Space descriptors" in str(exc)
+    else:
+        raise AssertionError("a name-only local operator must not masquerade as a typed map")
     print("OK  spaces: StateSpace / FieldSpace / Rate / LocalLinearOperator")
 
 
@@ -77,7 +85,7 @@ def test_registry_signatures():
     flux = reg.get("flux_default")
     assert flux.kind == "grid_operator"
     assert flux.signature.inputs == (state,)
-    assert flux.signature.output == model.Rate("U")
+    assert flux.signature.output == model.Rate(state)
     assert flux.capabilities["requires_ghosts"] == 1
 
     electric = reg.get("electric")
@@ -96,7 +104,7 @@ def test_registry_signatures():
     lorentz = reg.get("lorentz")
     assert lorentz.kind == "local_linear_operator"
     assert lorentz.signature.inputs == (fields,)
-    assert lorentz.signature.output == model.LocalLinearOperator("U", "U")
+    assert lorentz.signature.output == model.LocalLinearOperator(state, state)
     assert lorentz.capabilities["linear"] is True
     assert lorentz.capabilities["solve_i_minus_a"] is True
     assert lorentz.requirements["aux"] == ["B_z"]

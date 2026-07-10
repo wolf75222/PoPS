@@ -42,7 +42,9 @@ def _model(name, gain=1.0):
 def _handle(m, name):
     """A typed OperatorHandle for a registered operator (the selector the de-stringed macros take)."""
     op = m.operator_registry().get(name)
-    return OperatorHandle(op.name, kind=op.kind, signature=op.signature)
+    return OperatorHandle(
+        op.name, kind=op.kind, owner=m.operator_registry().owner_path,
+        signature=op.signature)
 
 
 def test_macros_are_model_free():
@@ -121,7 +123,7 @@ def test_handle_macro_ir_parity_with_name_call():
     q = P_manual.linear_combine("imex_rhs", u + P_manual.dt * r)
     u1 = P_manual.solve_local_linear("imex_step", operator=P_manual.I - 1.0 * P_manual.dt * lin,
                                      rhs=q, fields=fields)
-    P_manual.commit("plasma", u1)
+    P_manual.commit(P_manual.state("U", block="plasma").next, u1)
     assert P_handles._ir_hash() == P_manual._ir_hash(), (
         "handle-built macro IR must be byte-identical to the manual _call lowering\n"
         "  handles: %s\n  manual : %s" % (P_handles._ir_hash(), P_manual._ir_hash()))

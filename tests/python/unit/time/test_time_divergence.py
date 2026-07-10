@@ -67,7 +67,7 @@ def _divgrad_program(t, *, name="divgrad", method=None, tol=1e-10, max_iter=200,
         method = BiCGStab(max_iter=max_iter)  # ADC-535: max_iter is mandatory on the descriptor
     P.set_apply(A, apply)
     phi = P.solve_linear(operator=A, rhs=U, method=method, tol=tol, max_iter=max_iter)
-    P.commit("blk", phi)
+    P.commit(P.state("U", block="blk").next, phi)
     return P
 
 
@@ -88,7 +88,7 @@ def test_divergence_records_and_validates(t):
     P.set_apply(A, apply)
     U = P.state("blk")
     phi = P.solve_linear(operator=A, rhs=U, method=BiCGStab(max_iter=50), tol=1e-8, max_iter=50)
-    P.commit("blk", phi)
+    P.commit(P.state("U", block="blk").next, phi)
     assert P.validate() is True, "the div(grad) Program must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
 
@@ -120,7 +120,7 @@ def test_divergence_operand_types(t):
 
 def test_scalar_field_ncomp_validates(t):
     P = t.Program("p")
-    for bad in (0, -1, 1.5):
+    for bad in (0, -1, 1.5, True):
         try:
             P.scalar_field("g", ncomp=bad)
         except ValueError as exc:
@@ -163,28 +163,46 @@ def _lorentz_model(name):
     return m
 
 
+def _linear_handle(model):
+    from pops.model import OperatorHandle
+    registry = model.operator_registry()
+    operator = registry.operators_of_kind("local_linear_operator")[0]
+    return OperatorHandle(
+        operator.name, kind=operator.kind, owner=registry.owner_path,
+        signature=operator.signature)
+
+
 def test_condensed_schur_macro_lowers(t):
     # ADC-421 + ADC-427 + ADC-637: the condensed-implicit macro (generic-only route) lowers for any theta
     # in (0, 1]. theta == 1 lowers the full anisotropic assemble / solve / reconstruct chain; theta != 1
     # adds the n+1 momentum extrapolation by factor 1/theta on top. theta out of (0, 1] raises ValueError.
     # The end-to-end parity lives in test_time_condensed_schur.py.
-    P = t.Program("p")
-    lt.condensed_schur(P, "blk", alpha=1.0, theta=1.0)
+    model1 = _lorentz_model("div_m1")
+    P = t.Program("p").bind_operators(model1)
+    lt.condensed_schur(
+        P, "blk", alpha=1.0, theta=1.0,
+        linear_operator=_linear_handle(model1))
     assert P.validate() is True, "the condensed macro must validate"
-    src = P.emit_cpp_program(model=_lorentz_model("div_m1"))
+    src = P.emit_cpp_program(model=model1)
     # ADC-637: the condensed ops lower INLINE via the block_inverse intrinsic; NO coupling/schur.
     assert "pops::detail::block_inverse<2>(M_, Mi_);" in src, src
     assert "pops::detail::block_apply_inverse<2>(M_, cond_v_, cond_mv_);" in src, src
     assert "coupling/schur" not in src and "coupling::schur" not in src, src
     # ADC-427: theta != 1 now lowers (the extrapolation is plain affine algebra), no longer raises.
-    P2 = t.Program("p2")
-    lt.condensed_schur(P2, "blk", alpha=1.0, theta=0.5)
+    model2 = _lorentz_model("div_m2")
+    P2 = t.Program("p2").bind_operators(model2)
+    lt.condensed_schur(
+        P2, "blk", alpha=1.0, theta=0.5,
+        linear_operator=_linear_handle(model2))
     assert P2.validate() is True, "condensed_schur(theta != 1) must validate (ADC-427)"
-    assert "pops::detail::block_apply_inverse<2>" in P2.emit_cpp_program(model=_lorentz_model("div_m2")), (
+    assert "pops::detail::block_apply_inverse<2>" in P2.emit_cpp_program(model=model2), (
         "theta=0.5 must lower the reconstruct chain (inline block_apply_inverse)")
     # theta out of (0, 1] is still rejected (loud).
+    invalid_model = _lorentz_model("div_invalid")
     try:
-        lt.condensed_schur(t.Program("p3"), "blk", alpha=1.0, theta=1.5)
+        lt.condensed_schur(
+            t.Program("p3").bind_operators(invalid_model), "blk", alpha=1.0, theta=1.5,
+            linear_operator=_linear_handle(invalid_model))
     except ValueError as exc:
         assert "theta must be in (0, 1]" in str(exc), str(exc)
     else:

@@ -34,15 +34,25 @@ class AmrSystemConfig:
 
 
 class ModelSpec:
-    state: str
     transport: str
     source: str
     elliptic: str
-    scheme: str
-    time: str
-    name: str
+    B0: float
     gamma: float
+    cs2: float
+    vacuum_floor: float
+    qom: float
+    q: float
+    alpha: float
+    n0: float
+    sign: float
+    four_pi_G: float
+    rho0: float
+    frozen: bool
     def __init__(self) -> None: ...
+    def freeze(self) -> None: ...
+    def _pops_freeze_snapshot(self, capability: Any) -> bool: ...
+    def _pops_freeze_restore(self, capability: Any, state: bool) -> None: ...
     def __getattr__(self, name: str) -> Any: ...
 
 

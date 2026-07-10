@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops.runtime._numeric import exact_real, positive_int, strict_bool
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
     NEWTON_DEFAULT_DAMPING,
@@ -20,6 +21,34 @@ from pops.runtime.defaults import (
     NEWTON_DEFAULT_REL_TOL,
 )
 from pops.runtime.routes import TIME_IMEX, TIME_IMEXRK_ARS222
+
+
+def _cadence(label: str, substeps: Any, stride: Any) -> tuple[int, int]:
+    return (
+        positive_int(substeps, where=label + ".substeps"),
+        positive_int(stride, where=label + ".stride"),
+    )
+
+
+def _newton_controls(
+    label: str, max_iters: Any, rel_tol: Any, abs_tol: Any, fd_eps: Any,
+    diagnostics: Any, damping: Any, fail_policy: Any,
+) -> tuple[Any, ...]:
+    if not isinstance(fail_policy, str) or fail_policy not in ("none", "warn", "throw"):
+        raise ValueError(
+            "%s.newton_fail_policy must be 'none'|'warn'|'throw' (got %r)"
+            % (label, fail_policy))
+    return (
+        positive_int(max_iters, where=label + ".newton_max_iters"),
+        exact_real(rel_tol, where=label + ".newton_rel_tol", minimum=0),
+        exact_real(abs_tol, where=label + ".newton_abs_tol", minimum=0),
+        exact_real(fd_eps, where=label + ".newton_fd_eps", minimum=0, minimum_open=True),
+        strict_bool(diagnostics, where=label + ".newton_diagnostics"),
+        exact_real(
+            damping, where=label + ".newton_damping", minimum=0, minimum_open=True,
+            maximum=1),
+        fail_policy,
+    )
 
 
 def _role_to_stable(name: Any) -> Any:
@@ -111,27 +140,13 @@ class IMEX:
                  newton_diagnostics: bool = False,
                  newton_damping: Any = NEWTON_DEFAULT_DAMPING,
                  newton_fail_policy: Any = NEWTON_DEFAULT_FAIL_POLICY) -> None:
-        if int(substeps) < 1:
-            raise ValueError("IMEX: substeps >= 1 (got %r)" % (substeps,))
-        if int(stride) < 1:
-            raise ValueError("IMEX: stride >= 1 (got %r)" % (stride,))
-        if int(newton_max_iters) < 1:
-            raise ValueError("IMEX: newton_max_iters >= 1 (got %r)" % (newton_max_iters,))
-        if not (0.0 < float(newton_damping) <= 1.0):
-            raise ValueError("IMEX: newton_damping in (0, 1] (got %r)" % (newton_damping,))
-        if newton_fail_policy not in ("none", "warn", "throw"):
-            raise ValueError("IMEX: newton_fail_policy 'none'|'warn'|'throw' (got %r)"
-                             % (newton_fail_policy,))
-        self.substeps = int(substeps)
-        self.stride = int(stride)
+        self.substeps, self.stride = _cadence("IMEX", substeps, stride)
         self.implicit_vars, self.implicit_roles = _norm_implicit("IMEX", implicit_vars, implicit_roles)
-        self.newton_max_iters = int(newton_max_iters)
-        self.newton_rel_tol = float(newton_rel_tol)
-        self.newton_abs_tol = float(newton_abs_tol)
-        self.newton_fd_eps = float(newton_fd_eps)
-        self.newton_diagnostics = bool(newton_diagnostics)
-        self.newton_damping = float(newton_damping)
-        self.newton_fail_policy = str(newton_fail_policy)
+        (self.newton_max_iters, self.newton_rel_tol, self.newton_abs_tol,
+         self.newton_fd_eps, self.newton_diagnostics, self.newton_damping,
+         self.newton_fail_policy) = _newton_controls(
+             "IMEX", newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps,
+             newton_diagnostics, newton_damping, newton_fail_policy)
 
 
 class SourceImplicit:
@@ -174,29 +189,14 @@ class SourceImplicit:
                  newton_diagnostics: bool = False,
                  newton_damping: Any = NEWTON_DEFAULT_DAMPING,
                  newton_fail_policy: Any = NEWTON_DEFAULT_FAIL_POLICY) -> None:
-        if int(substeps) < 1:
-            raise ValueError("SourceImplicit: substeps >= 1 (got %r)" % (substeps,))
-        if int(stride) < 1:
-            raise ValueError("SourceImplicit: stride >= 1 (got %r)" % (stride,))
-        if int(newton_max_iters) < 1:
-            raise ValueError("SourceImplicit: newton_max_iters >= 1 (got %r)" % (newton_max_iters,))
-        if not (0.0 < float(newton_damping) <= 1.0):
-            raise ValueError("SourceImplicit: newton_damping in (0, 1] (got %r)"
-                             % (newton_damping,))
-        if newton_fail_policy not in ("none", "warn", "throw"):
-            raise ValueError("SourceImplicit: newton_fail_policy 'none'|'warn'|'throw' (got %r)"
-                             % (newton_fail_policy,))
-        self.substeps = int(substeps)
-        self.stride = int(stride)
+        self.substeps, self.stride = _cadence("SourceImplicit", substeps, stride)
         self.implicit_vars, self.implicit_roles = _norm_implicit(
             "SourceImplicit", implicit_vars, implicit_roles)
-        self.newton_max_iters = int(newton_max_iters)
-        self.newton_rel_tol = float(newton_rel_tol)
-        self.newton_abs_tol = float(newton_abs_tol)
-        self.newton_fd_eps = float(newton_fd_eps)
-        self.newton_diagnostics = bool(newton_diagnostics)
-        self.newton_damping = float(newton_damping)
-        self.newton_fail_policy = str(newton_fail_policy)
+        (self.newton_max_iters, self.newton_rel_tol, self.newton_abs_tol,
+         self.newton_fd_eps, self.newton_diagnostics, self.newton_damping,
+         self.newton_fail_policy) = _newton_controls(
+             "SourceImplicit", newton_max_iters, newton_rel_tol, newton_abs_tol,
+             newton_fd_eps, newton_diagnostics, newton_damping, newton_fail_policy)
 
 
 # PRECISE name of the scheme wired by IMEX / SourceImplicit (audit 2026-06): ForwardEuler transport
@@ -244,30 +244,16 @@ class IMEXRK:
                  newton_diagnostics: bool = False,
                  newton_damping: Any = NEWTON_DEFAULT_DAMPING,
                  newton_fail_policy: Any = NEWTON_DEFAULT_FAIL_POLICY) -> None:
-        if scheme != "ars222":
+        if not isinstance(scheme, str) or scheme != "ars222":
             raise ValueError("IMEXRK: scheme 'ars222' (only wired IMEX-RK scheme; got %r)"
                              % (scheme,))
-        if int(substeps) < 1:
-            raise ValueError("IMEXRK: substeps >= 1 (got %r)" % (substeps,))
-        if int(stride) < 1:
-            raise ValueError("IMEXRK: stride >= 1 (got %r)" % (stride,))
-        if int(newton_max_iters) < 1:
-            raise ValueError("IMEXRK: newton_max_iters >= 1 (got %r)" % (newton_max_iters,))
-        if not (0.0 < float(newton_damping) <= 1.0):
-            raise ValueError("IMEXRK: newton_damping in (0, 1] (got %r)" % (newton_damping,))
-        if newton_fail_policy not in ("none", "warn", "throw"):
-            raise ValueError("IMEXRK: newton_fail_policy 'none'|'warn'|'throw' (got %r)"
-                             % (newton_fail_policy,))
-        self.scheme = str(scheme)
-        self.substeps = int(substeps)
-        self.stride = int(stride)
-        self.newton_max_iters = int(newton_max_iters)
-        self.newton_rel_tol = float(newton_rel_tol)
-        self.newton_abs_tol = float(newton_abs_tol)
-        self.newton_fd_eps = float(newton_fd_eps)
-        self.newton_diagnostics = bool(newton_diagnostics)
-        self.newton_damping = float(newton_damping)
-        self.newton_fail_policy = str(newton_fail_policy)
+        self.scheme = scheme
+        self.substeps, self.stride = _cadence("IMEXRK", substeps, stride)
+        (self.newton_max_iters, self.newton_rel_tol, self.newton_abs_tol,
+         self.newton_fd_eps, self.newton_diagnostics, self.newton_damping,
+         self.newton_fail_policy) = _newton_controls(
+             "IMEXRK", newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps,
+             newton_diagnostics, newton_damping, newton_fail_policy)
 
 
 __all__ = ["_role_to_stable", "_norm_implicit", "IMEX", "SourceImplicit", "SourceImplicitBE",

@@ -163,6 +163,7 @@ if(DEFINED ENV{PYTHONPATH} AND NOT "$ENV{PYTHONPATH}" STREQUAL "")
 endif()
 set(_pops_py_test_env
     "PYTHONPATH=${_pops_py_test_pythonpath}"
+    "POPS_INCLUDE=${CMAKE_SOURCE_DIR}/include"
     "POPS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
     "POPS_TEST_SOURCE_DIR=${CMAKE_SOURCE_DIR}")
 

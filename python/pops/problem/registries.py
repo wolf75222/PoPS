@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops.problem._registry_freeze import (
+    FreezableRegistry as _FreezableRegistry, flatten_freeze_members)
 from pops.problem.handles import BlockHandle, FieldHandle
 from pops.problem.report import ProblemValidationReport
 
@@ -30,35 +32,10 @@ from pops.problem.report import ProblemValidationReport
 _NO_KIND = object()
 
 
-class _FreezableRegistry:
-    """Shared freeze mixin (ADC-563): a frozen registry refuses ``add`` / ``set`` and seals members.
-
-    ``pops.compile`` freezes the Problem, which cascades :meth:`freeze` to each registry. After
-    freeze, :meth:`_guard_frozen` raises in every mutating method, and any contained typed descriptor
-    (a field problem's solver, a param declaration) is sealed via its own ``freeze``. The Problem's
-    own setters guard first, so this is the belt-and-suspenders backstop against a direct registry
-    edit."""
-
-    _frozen = False
-
-    def freeze(self) -> Any:
-        """Freeze the registry and its member descriptors (idempotent). Returns ``self``."""
-        for member in self._freezable_members():
-            member_freeze = getattr(member, "freeze", None)
-            if callable(member_freeze):
-                member_freeze()
-        self._frozen = True
-        return self
-
-    def _freezable_members(self) -> Any:
-        """The contained descriptors to seal on freeze (override; default: none)."""
-        return ()
-
-    def _guard_frozen(self, what: Any) -> None:
-        if self._frozen:
-            raise RuntimeError(
-                "pops.Problem registry is frozen (ADC-563): cannot %s after pops.compile froze the "
-                "Problem; author a fresh Problem and recompile." % what)
+def _strict_name(value: Any, where: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise TypeError("%s must be a non-empty string" % where)
+    return value
 
 
 class BlockRegistry(_FreezableRegistry):
@@ -71,34 +48,42 @@ class BlockRegistry(_FreezableRegistry):
 
     family = "block"
 
-    def __init__(self) -> None:
+    def __init__(self, owner: Any) -> None:
+        from pops.model import OwnerPath
+        self._owner_path = OwnerPath.coerce(owner)
         self._blocks = {}
 
+    @property
+    def owner_path(self) -> Any:
+        return self._owner_path
+
     def _freezable_members(self) -> Any:
-        return [spec.get("spatial") for spec in self._blocks.values()]
+        return flatten_freeze_members(*(
+            value for spec in self._blocks.values()
+            for value in (spec["model"], spec["spatial"], spec["time"], spec["diagnostics"])))
 
     def add(self, name: Any, model: Any, *, spatial: Any = None, time: Any = None,
             diagnostics: Any = None) -> Any:
         """Record a block ``name`` with its ``model`` (required). Returns a stable :class:`BlockHandle`."""
         self._guard_frozen("add a block")
-        key = str(name)
+        key = _strict_name(name, "block name")
         if model is None:
             raise ValueError("add_block(%r): a physics model is required" % key)
         if key in self._blocks:
             raise ValueError("add_block(%r): a block of that name already exists" % key)
         self._blocks[key] = {"model": model, "spatial": spatial, "time": time,
                              "diagnostics": diagnostics}
-        return BlockHandle(key)
+        return BlockHandle(key, owner=self.owner_path)
 
     def get(self, name: Any) -> Any:
-        return self._blocks.get(str(name))
+        return self._blocks.get(_strict_name(name, "block name"))
 
     def names(self) -> Any:
         return list(self._blocks)
 
     def spec(self, name: Any) -> Any:
         """The full ``{model, spatial, time, diagnostics}`` record for @p name (or ``None``)."""
-        return self._blocks.get(str(name))
+        return self._blocks.get(_strict_name(name, "block name"))
 
     def items(self) -> Any:
         return self._blocks.items()
@@ -110,7 +95,7 @@ class BlockRegistry(_FreezableRegistry):
         return len(self._blocks)
 
     def __contains__(self, name: Any) -> bool:
-        return str(name) in self._blocks
+        return isinstance(name, str) and name in self._blocks
 
     def validate(self, context: Any = None) -> Any:
         """Report a structured error when there is no block, or a block has no model."""
@@ -139,8 +124,14 @@ class FieldRegistry(_FreezableRegistry):
 
     family = "field"
 
-    def __init__(self) -> None:
+    def __init__(self, owner: Any) -> None:
+        from pops.model import OwnerPath
+        self._owner_path = OwnerPath.coerce(owner)
         self._fields = {}
+
+    @property
+    def owner_path(self) -> Any:
+        return self._owner_path
 
     def _freezable_members(self) -> Any:
         return list(self._fields.values())
@@ -152,14 +143,14 @@ class FieldRegistry(_FreezableRegistry):
         if not isinstance(field_problem, FieldProblem):
             raise TypeError("field: expected a pops.fields.FieldProblem; got %r"
                             % type(field_problem).__name__)
-        key = field_problem.name
+        key = _strict_name(field_problem.name, "field name")
         if key in self._fields:
             raise ValueError("field: a field named %r already exists" % key)
         self._fields[key] = field_problem
-        return FieldHandle(key)
+        return FieldHandle(key, owner=self.owner_path)
 
     def get(self, name: Any) -> Any:
-        return self._fields.get(str(name))
+        return self._fields.get(_strict_name(name, "field name"))
 
     def names(self) -> Any:
         return list(self._fields)
@@ -178,7 +169,7 @@ class FieldRegistry(_FreezableRegistry):
         return len(self._fields)
 
     def __contains__(self, name: Any) -> bool:
-        return str(name) in self._fields
+        return isinstance(name, str) and name in self._fields
 
     def validate(self, context: Any = None) -> Any:
         """Report each field problem's own validation failure (structured, never a bare raise)."""
@@ -201,6 +192,9 @@ class TimeRegistry(_FreezableRegistry):
 
     def __init__(self) -> None:
         self._program = None
+
+    def _freezable_members(self) -> Any:
+        return flatten_freeze_members(self._program)
 
     def set(self, program: Any) -> None:
         """Record the time scheme (the whole-system Program). Overwrites a prior one."""
@@ -254,8 +248,10 @@ class ParamRegistry(_FreezableRegistry):
             if default is not None:
                 raise TypeError(
                     "param: a typed param was given; do not also pass a default (%r)" % (default,))
-            self._params[str(name.name)] = {"default": name.value, "kind": str(name.kind)}
-            self._declarations[str(name.name)] = name
+            key = _strict_name(name.name, "parameter name")
+            kind_name = _strict_name(name.kind, "parameter kind")
+            self._params[key] = {"default": name.value, "kind": kind_name}
+            self._declarations[key] = name
         elif getattr(name, "category", None) in ("runtime_param", "const_param") \
                 and hasattr(name, "name"):
             # A pops.params typed param carrying a DOMAIN (RuntimeParam(domain=...) / ConstParam):
@@ -266,14 +262,16 @@ class ParamRegistry(_FreezableRegistry):
                     "param: a typed param was given; do not also pass a default (%r)" % (default,))
             kind_of = {"runtime_param": "runtime", "const_param": "const"}[name.category]
             declared = getattr(name, "default", getattr(name, "value", None))
-            self._params[str(name.name)] = {"default": declared, "kind": kind_of}
-            self._declarations[str(name.name)] = name
+            key = _strict_name(name.name, "parameter name")
+            self._params[key] = {"default": declared, "kind": kind_of}
+            self._declarations[key] = name
         else:
-            self._params[str(name)] = {"default": default, "kind": "const"}
-            self._declarations[str(name)] = None
+            key = _strict_name(name, "parameter name")
+            self._params[key] = {"default": default, "kind": "const"}
+            self._declarations[key] = None
 
     def get(self, name: Any) -> Any:
-        return self._params.get(str(name))
+        return self._params.get(_strict_name(name, "parameter name"))
 
     def names(self) -> Any:
         return list(self._params)
@@ -299,7 +297,7 @@ class ParamRegistry(_FreezableRegistry):
         return ProblemValidationReport()
 
     def inspect(self) -> Any:
-        return dict(self._params)
+        return {name: dict(spec) for name, spec in self._params.items()}
 
 
 class RuntimePolicyRegistry(_FreezableRegistry):
@@ -327,12 +325,12 @@ class RuntimePolicyRegistry(_FreezableRegistry):
         self._policies = None
 
     def _freezable_members(self) -> Any:
-        return list(self._outputs) + list(self._diagnostics)
+        return flatten_freeze_members(self._outputs, self._diagnostics, self._policies)
 
     def add_aux(self, name: Any, value: Any = None) -> None:
         """Declare a static aux input ``name`` (e.g. a background field)."""
         self._guard_frozen("declare an aux input")
-        self._aux[str(name)] = value
+        self._aux[_strict_name(name, "aux name")] = value
 
     def add_output(self, policy: Any) -> None:
         """Attach an output / checkpoint policy descriptor."""
@@ -431,6 +429,9 @@ class ConstraintRegistry(_FreezableRegistry):
 
     def __init__(self) -> None:
         self._criteria = {}  # refine / regrid / nesting / patches -> descriptor
+
+    def _freezable_members(self) -> Any:
+        return flatten_freeze_members(self._criteria)
 
     def set_refinement(self, *, refine: Any = None, regrid: Any = None, nesting: Any = None,
                        patches: Any = None) -> None:

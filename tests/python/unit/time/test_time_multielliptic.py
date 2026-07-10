@@ -126,7 +126,7 @@ def _prog(name, field=None):
     else:
         f = P.solve_fields("f_" + field, U, field=field)
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True)
-    P.commit("plasma", P.linear_combine("U1", U + P.dt * R))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + P.dt * R))
     return P
 
 

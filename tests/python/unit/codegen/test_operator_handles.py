@@ -62,9 +62,13 @@ def test_declarers_return_operator_handles():
     print("OK  declarers return typed OperatorHandle(name, kind)")
 
 
-# A handle for the built-in default-Poisson field operator; the public P.call needs it (a bare
-# string field name is refused). Internally _call resolves the name token identically.
-_FIELDS = OperatorHandle("fields_from_state", kind="field_operator")
+def _operator_handle(model, name):
+    """Return the owner-qualified handle for an operator declared by ``model``."""
+    registry = model.operator_registry()
+    operator = registry.get(name)
+    return OperatorHandle(
+        operator.name, kind=operator.kind, owner=registry.owner_path,
+        signature=operator.signature)
 
 
 def _select(P, selector, *args, name=None):
@@ -80,9 +84,9 @@ def _rate_program(m, selector):
     a handle). Returns the Program (its ``_ir_hash`` is the IR fingerprint)."""
     P = adctime.Program("prog").bind_operators(m)
     U = P.state("plasma")
-    f = P.call(_FIELDS, U)
+    f = P.call(_operator_handle(m, "fields_from_state"), U)
     R = _select(P, selector, U, f)
-    P.commit("plasma", P.linear_combine("u1", U + P.dt * R))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", U + P.dt * R))
     return P
 
 
@@ -109,9 +113,9 @@ def test_name_path_byte_identical_across_models():
     def src_prog(selector):
         P = adctime.Program("p").bind_operators(m)
         U = P.state("plasma")
-        f = P.call(_FIELDS, U)
+        f = P.call(_operator_handle(m, "fields_from_state"), U)
         s = _select(P, selector, U, f)
-        P.commit("plasma", P.linear_combine("u1", U + P.dt * s))
+        P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", U + P.dt * s))
         return P
 
     assert src_prog("electric")._ir_hash() == src_prog(h["electric"])._ir_hash()
@@ -119,10 +123,10 @@ def test_name_path_byte_identical_across_models():
     def lin_prog(selector):
         P = adctime.Program("p").bind_operators(m)
         U = P.state("plasma")
-        f = P.call(_FIELDS, U)
+        f = P.call(_operator_handle(m, "fields_from_state"), U)
         L = _select(P, selector, f)
         U1 = P.solve_local_linear("u1", operator=P.I - P.dt * L, rhs=U, fields=f)
-        P.commit("plasma", U1)
+        P.commit(P.state("U", block="plasma").next, U1)
         return P
 
     assert lin_prog("lorentz")._ir_hash() == lin_prog(h["lorentz"])._ir_hash()
@@ -157,21 +161,27 @@ def test_foreign_handle_rejected():
     m, _ = build_model()
     P = adctime.Program("p").bind_operators(m)
     U = P.state("plasma")
-    foreign = OperatorHandle("not_declared_here", kind="local_rate")
+    foreign = OperatorHandle(
+        "not_declared_here", kind="local_rate",
+        owner=m.operator_registry().owner_path)
     with pytest.raises(KeyError, match="unknown operator"):
         P.call(foreign, U)
     print("OK  foreign handle (name not in registry) rejected like an unknown name")
 
 
 def test_handle_equality_and_repr():
-    """OperatorHandle is value-like: equal by (name, kind), hashable, with a clear repr."""
-    a = OperatorHandle("r", kind="local_rate")
-    b = OperatorHandle("r", kind="local_rate")
-    c = OperatorHandle("r", kind="local_source")
+    """OperatorHandle equality and hashing use the complete qualified identity."""
+    from pops.model import OwnerPath
+    owner = OwnerPath("test", "operator-handles")
+    a = OperatorHandle("r", kind="local_rate", owner=owner)
+    b = OperatorHandle("r", kind="local_rate", owner=owner)
+    c = OperatorHandle("r", kind="local_source", owner=owner)
     assert a == b and hash(a) == hash(b)
     assert a != c and a != "r"
-    assert repr(a) == "OperatorHandle('r', kind='local_rate')"
-    assert repr(OperatorHandle("s")) == "OperatorHandle('s')"
+    assert repr(a) == (
+        "OperatorHandle('r', kind='local_rate', owner=('test', 'operator-handles'))")
+    assert repr(OperatorHandle("s", kind="local_source", owner=owner)) == (
+        "OperatorHandle('s', kind='local_source', owner=('test', 'operator-handles'))")
     print("OK  OperatorHandle equality / hash / repr")
 
 

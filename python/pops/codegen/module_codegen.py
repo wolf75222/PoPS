@@ -29,6 +29,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops.ir.literals import scalar_cpp
+
 # Re-export the moved helpers + the brick emitter so the public surface of
 # ``pops.codegen.module_codegen`` is unchanged (every name resolves here).
 from pops.codegen.module_emit_helpers import (  # noqa: F401
@@ -280,7 +282,7 @@ def _emit_metadata(model: Any, model_alias: Any) -> str:
     macro arguments on commas): callers pass a `using ... = CompositeModel<...>`."""
     out = "\nPOPS_EXPORT_BLOCK_METADATA(%s)\n" % model_alias
     if model.gamma is not None:
-        out += "POPS_EXPORT_BLOCK_GAMMA(%r)\n" % model.gamma
+        out += "POPS_EXPORT_BLOCK_GAMMA(%s)\n" % scalar_cpp(model.gamma)
     # Table of NAMED aux names (aux_field, ADC-70), ordered CSV (order = AUX_NAMED_BASE +
     # k index). OPTIONAL symbol, names/roles pattern: makes the .so SELF-DESCRIBING (a C++ loader
     # could resolve name -> component; on the Python side the table already lives in CompiledModel).

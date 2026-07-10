@@ -73,7 +73,7 @@ POPS_COLD_FN void dispatch_transport(const ModelSpec& m, Visitor&& v) {
   }
   // Reached only if a registry route is not routed by the switch (a registry/dispatch inconsistency,
   // i.e. a programming bug); user typos were already rejected by validate_transport above.
-  throw std::runtime_error("transport '" + m.transport +
+  throw std::runtime_error("transport '" + m.transport.get() +
                            "' valid in registry but not routed (add the dispatch case)");
 }
 
@@ -119,7 +119,7 @@ POPS_COLD_FN void dispatch_source(const ModelSpec& m, Visitor&& v) {
       }
     }
   }
-  throw std::runtime_error("source '" + m.source +
+  throw std::runtime_error("source '" + m.source.get() +
                            "' invalid here (requires a fluid transport >= 3 variables, or 'none')");
 }
 
@@ -141,7 +141,7 @@ POPS_COLD_FN void dispatch_elliptic(const ModelSpec& m, Visitor&& v) {
   }
   // Reached only on a registry/dispatch inconsistency (see dispatch_transport): unknown user tags
   // were already rejected by validate_elliptic above.
-  throw std::runtime_error("elliptic '" + m.elliptic +
+  throw std::runtime_error("elliptic '" + m.elliptic.get() +
                            "' valid in registry but not routed (add the dispatch case)");
 }
 
@@ -289,9 +289,9 @@ inline POPS_COLD_FN std::vector<int> resolve_implicit_components(
 /// bit-identical). At most one of name/role may be set. @p origin labels the error (e.g.
 /// "AmrSystem::set_refinement").
 inline POPS_COLD_FN int resolve_selected_component(const std::string& origin,
-                                                  const std::string& block, const VariableSet& cons,
-                                                  const std::string& name,
-                                                  const std::string& role) {
+                                                   const std::string& block,
+                                                   const VariableSet& cons, const std::string& name,
+                                                   const std::string& role) {
   if (name.empty() && role.empty())
     return -1;  // default selector -> caller's component 0
   if (!name.empty() && !role.empty())

@@ -17,7 +17,7 @@ from pops.ir.expr import _wrap
 def _cpp_expand(e: Any, cse_map: Any) -> str:
     """C++ of node e expanding ITS level; the children go through _cpp_cse (-> CSE locals)."""
     if isinstance(e, Const):
-        return repr(e.value)
+        return e.to_cpp()
     if isinstance(e, RuntimeParamRef):
         return e.to_cpp()  # params.get(<index>): reads the brick's RuntimeParams member
     if isinstance(e, Var):
@@ -236,7 +236,7 @@ def _cpp_roe(e: Any, prefix: Any) -> str:
             raise ValueError("m.roe_dissipation: nested left()/right() marker forbidden")
         return _cpp_roe(e.expr, e.side + "_")
     if isinstance(e, Const):
-        return repr(e.value)
+        return e.to_cpp()
     if isinstance(e, RuntimeParamRef):
         return e.to_cpp()
     if isinstance(e, Var):

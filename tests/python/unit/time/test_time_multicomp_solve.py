@@ -64,7 +64,7 @@ def _mc_program(t, ncomp, *, name="mc_solve", method=None, tol=1e-10, max_iter=2
         method = CG(max_iter=max_iter)  # ADC-535: max_iter is mandatory on the descriptor
     P.set_apply(A, apply)
     phi = P.solve_linear(operator=A, rhs=U, method=method, tol=tol, max_iter=max_iter)
-    P.commit("blk", phi)
+    P.commit(P.state("U", block="blk").next, phi)
     return P
 
 
@@ -85,8 +85,9 @@ def test_state_operator_builds(t):
     P.set_apply(A, apply)
     U = P.state("blk")
     phi = P.solve_linear(operator=A, rhs=U, method=CG(max_iter=50), tol=1e-10, max_iter=50)
+    assert phi.vtype == "state", "a state-domain solve over a State rhs returns a State"
     assert phi.attrs["ncomp"] == 2, "the solution carries the operator ncomp"
-    P.commit("blk", phi)
+    P.commit(P.state("U", block="blk").next, phi)
     assert P.validate() is True, "the multi-component Program must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
 
@@ -146,6 +147,21 @@ def test_solve_rhs_component_count(t):
     phi = P.solve_linear(operator=A, rhs=P.scalar_field("rhs3", ncomp=3), max_iter=10)
     assert phi.attrs["ncomp"] == 3
     P.solve_linear(operator=A, rhs=P.state("blk"), max_iter=10)  # State deferred -> accepted
+
+
+def test_typed_state_component_count_is_checked_at_author_time(t):
+    from pops.model import StateSpace
+
+    P = t.Program("typed_ncomp")
+    rhs = P.state("blk", space=StateSpace("U", ("rho", "momentum")))
+    A = P.matrix_free_operator("A", domain="state", range_="state", ncomp=3)
+    P.set_apply(A, lambda _P, _out, x: x)
+    try:
+        P.solve_linear(operator=A, rhs=rhs, max_iter=10)
+    except ValueError as exc:
+        assert "StateSpace" in str(exc) and "2 component" in str(exc) and "ncomp=3" in str(exc), str(exc)
+    else:
+        raise AssertionError("typed StateSpace/operator ncomp mismatch must fail at author time")
 
 
 def test_multicomp_codegen(t):

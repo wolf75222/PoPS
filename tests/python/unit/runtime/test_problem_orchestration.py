@@ -85,6 +85,13 @@ class _StubCompiled:
             self._block_compiled_models = block_compiled
 
 
+class _StubTime:
+    """Strict inert time descriptor accepted by the structural Problem snapshot."""
+
+    def to_data(self):
+        return {"kind": "stub_time"}
+
+
 def _poisson_problem():
     """A minimal valid Poisson FieldProblem named 'phi' (the default-served field)."""
     return FieldProblem(name="phi", unknown="phi",
@@ -261,7 +268,7 @@ def test_compile_layout_drives_target(monkeypatch=None):
     _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _fake_compile_problem)
     try:
         prob = pops.Problem(name="u").block("ne", physics=_StubModel())
-        compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=object())
+        compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=_StubTime())
         _check(captured["target"] == "system", "Uniform layout routes to target='system'")
         _check(captured["backend"] == "production", "default backend forwarded (typed Production() lowered)")
         _check(compiled._target == "system", "target carried on the handle")
@@ -356,7 +363,7 @@ def test_compile_amr_max_levels_beyond_native_raises():
     prob = (pops.Problem(layout=AMR(CartesianMesh(), max_levels=NATIVE_MAX_LEVELS + 1))
             .block("ne", physics=_StubModel()))
     try:
-        orchestration.compile(prob, time=object())
+        orchestration.compile(prob, time=_StubTime())
         raise AssertionError("AMR(max_levels beyond native) must be refused")
     except ValueError as exc:
         _check("max_levels" in str(exc), "max-levels message is explicit")
@@ -447,7 +454,7 @@ def test_compile_problem_time_setter_honored(monkeypatch=None):
 
     _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _fake_compile_problem)
     try:
-        sentinel = object()
+        sentinel = _StubTime()
         prob = pops.Problem().block("ne", physics=_StubModel()).time(sentinel)
         orchestration.compile(prob, layout=Uniform(CartesianMesh()))  # time taken from problem._time
         _check(captured["time"] is sentinel, "problem.time(...) is honored when time= omitted")
@@ -467,7 +474,7 @@ def test_compile_multi_block_uniform_lowers(monkeypatch=None):
     try:
         prob = (pops.Problem().block("ne", physics=_StubModel())
                 .block("ni", physics=_StubModel()))
-        compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=object())
+        compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=_StubTime())
         _check(compiled._target == "system", "multi-block Uniform routes to target='system'")
         _check(set(compiled._block_models) == {"ne", "ni"},
                "compile carries a model per block (_block_models)")
@@ -772,7 +779,7 @@ def test_compile_freezes_snapshot_authority(monkeypatch=None):
     try:
         prob = (pops.Problem().block("ne", physics=_StubModel("ne"))
                 .block("ni", physics=_StubModel("ni")).field(_poisson_problem()))
-        compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=object())
+        compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=_StubTime())
         _check(set(compiled._block_specs) == {"ne", "ni"},
                "compile freezes a per-block spec (model + spatial) on the handle")
         _check(all("model" in s and "spatial" in s for s in compiled._block_specs.values()),
@@ -796,7 +803,7 @@ def test_bind_rejects_case_mutated_after_compile(monkeypatch=None):
     _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _fake_compile_problem)
     try:
         prob = pops.Problem().block("ne", physics=_StubModel("ne")).field(_poisson_problem())
-        compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=object())
+        compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=_StubTime())
         _check(prob.frozen, "pops.compile froze the Problem")
         # MUTATE the Problem after compile: adding a block the snapshot never saw is refused here.
         try:
@@ -834,11 +841,15 @@ def test_bind_uses_snapshot_not_live_physics(monkeypatch=None):
         try:
             m0 = _StubModel("ne")
             prob = pops.Problem().block("ne", physics=m0).field(_poisson_problem())
-            compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=object())
+            stale_spec = prob._blocks.spec("ne")
+            compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=_StubTime())
             frozen_model = compiled._block_specs["ne"]["model"]
-            # Swap the block's physics AFTER compile (same block name -> no drift). Poke the block
-            # registry's backing spec directly (the registry keys the model under "model").
-            prob._blocks.spec("ne")["model"] = _StubModel("ne_swapped")
+            # A reference obtained before compile is deliberately detached by freeze. Mutating that
+            # stale authoring dictionary must not alter the frozen registry or compiled snapshot.
+            swapped_model = _StubModel("ne_swapped")
+            stale_spec["model"] = swapped_model
+            _check(prob._blocks.spec("ne")["model"] is not swapped_model,
+                   "freeze detaches stale registry dictionaries")
             sim = orchestration.bind(compiled, initial_state={"ne": [1.0]})
             _check(_RecordingSim.last["instances"]["ne"]["model"] is frozen_model,
                    "bind installs the COMPILE-TIME frozen model, not the live-swapped physics")

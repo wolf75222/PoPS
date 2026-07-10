@@ -46,13 +46,13 @@ from .board import Model
 PhysicsModel = Model
 from .board_handles import (
     Invariant, FluxHandle, SourceHandle, FieldsHandle, FieldHandle,
-    LocalLinearOperatorExpr, CallableOperator, StateHandle, VectorHandle,
+    LocalLinearOperatorExpr, StateHandle, VectorHandle,
     _roles_for)  # restore the flat physics.py module-level access (test_riemann_capabilities)
 
 __all__ = [
     # board surface (the historical pops.physics public names)
     "Model", "PhysicsModel", "Invariant", "FluxHandle", "SourceHandle", "FieldsHandle", "FieldHandle",
-    "LocalLinearOperatorExpr", "CallableOperator", "StateHandle", "VectorHandle",
+    "LocalLinearOperatorExpr", "StateHandle", "VectorHandle",
     # aux + roles
     "AUX_CANONICAL", "AUX_BASE_COMPS", "AUX_NAMED_BASE", "AUX_NAMED_MAX", "CANONICAL_ROLES",
     "aux_n_aux", "aux_total_n_aux", "role_of", "roles_for",

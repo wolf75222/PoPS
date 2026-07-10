@@ -11,10 +11,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from pops.codegen.program_emit_kernels import _AUX_OUTPUT_OPS, Value
+from pops.codegen.program_emit_kernels import _AUX_OUTPUT_OPS, ProgramValue
+from pops.ir.literals import scalar_cpp
 
 
-def _schedule_due_test(program: Any, v: Any, sched: Any) -> str:
+def _schedule_due_test(program: Any, v: Any, sched: Any, var: Any = None) -> str:
     """The C++ boolean 'is this node due this step' for a non-subcycle schedule kind. Reused as the
     guard of the policy branch. Raises (naming ADC-458) for a kind that needs a runtime primitive the
     compiled .so does not have (on_end: no end-of-run signal reaches a sim.step(dt) loop)."""
@@ -28,16 +29,18 @@ def _schedule_due_test(program: Any, v: Any, sched: Any) -> str:
         # A runtime predicate: a Program Bool value already lowered to a parenthesized C++ expr token
         # (a compare over reductions). A bare Python callable cannot lower (it is not a Program value).
         cond = sched.params.get("cond")
-        if not (isinstance(cond, Value) and cond.vtype == "bool"):
+        if not (isinstance(cond, ProgramValue) and cond.vtype == "bool"):
             raise NotImplementedError(
                 "when(cond) lowers only a Program Bool predicate (e.g. P.norm2(r) < tol), not a "
                 "Python callable: node %r (ADC-458). Build the condition with Program compares."
                 % v.name)
-        if cond.id not in program._when_tokens:
+        tokens = var if var is not None else {}
+        key = ("when_predicate", cond.id)
+        if key not in tokens:
             raise ValueError(
                 "when(cond) on node %r references a Bool value not emitted before it; build the "
                 "predicate earlier in the Program (ADC-458)" % v.name)
-        return program._when_tokens[cond.id]
+        return tokens[key]
     raise NotImplementedError(
         "schedule kind %r on node %r is not lowerable: on_end() needs an end-of-run signal that a "
         "compiled sim.step(dt) loop never sees (the .so cannot know the last step); use on_start()/"
@@ -65,14 +68,13 @@ def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) 
         if sub_dt is None:
             lines.append("const pops::Real %s = dt / static_cast<pops::Real>(%d);" % (sd, count))
         else:
-            lines.append("const pops::Real %s = static_cast<pops::Real>(%s);"
-                         % (sd, repr(float(sub_dt))))
+            lines.append("const pops::Real %s = %s;" % (sd, scalar_cpp(sub_dt)))
         lines.append("(void)%s;" % sd)  # the MVP body is self-contained; sd documents the cadence
         lines.append("for (int _sub%d = 0; _sub%d < %d; ++_sub%d) {" % (v.id, v.id, count, v.id))
         lines += ["  " + ln for ln in body]
         lines.append("}")
         return
-    due = _schedule_due_test(program, v, sched)
+    due = _schedule_due_test(program, v, sched, var)
     policy = sched.policy
     is_aux = v.op in _AUX_OUTPUT_OPS
     # The scratch node's output token (the MultiFab the policy holds / zeroes). A field solve writes

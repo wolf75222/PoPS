@@ -38,8 +38,7 @@ bool amr_newton_options_non_default(const NewtonOptions& newton, bool diagnostic
          newton.fail_policy != kNewtonDefaultFailPolicy;
 }
 
-EffectiveNewtonOptions amr_effective_newton_options(const NewtonOptions& newton,
-                                                    bool diagnostics) {
+EffectiveNewtonOptions amr_effective_newton_options(const NewtonOptions& newton, bool diagnostics) {
   EffectiveNewtonOptions out;
   out.max_iters = newton.max_iters;
   out.rel_tol = static_cast<double>(newton.rel_tol);
@@ -555,10 +554,9 @@ struct AmrSystem::Impl {
         // (it never marshals the field) -> inactive, bit-identical. No reject.
         // Runtime params (ADC-514): thread the SHARED vector so the multi-block builder re-injects it
         // each macro-step (empty for a param-free model -> no injection).
-        rblocks.push_back(b.compiled_block_builder(S, b.name, b.density, b.has_density, b.gamma,
-                                                   b.substeps, b.recon_prim, b.imex, b.stride,
-                                                   b.implicit_vars, b.implicit_roles, b.pos_floor,
-                                                   b.runtime_params));
+        rblocks.push_back(b.compiled_block_builder(
+            S, b.name, b.density, b.has_density, b.gamma, b.substeps, b.recon_prim, b.imex,
+            b.stride, b.implicit_vars, b.implicit_roles, b.pos_floor, b.runtime_params));
         continue;
       }
       // Native ModelSpec path: model dispatch -> concrete type, then spatial scheme dispatch
@@ -606,7 +604,7 @@ struct AmrSystem::Impl {
     }
     runtime =
         std::make_shared<pops::AmrRuntime>(S.geom, S.ba_coarse, S.poisson_bc, std::move(rblocks),
-                                          S.base_per, S.replicated_coarse, S.wall);
+                                           S.base_per, S.replicated_coarse, S.wall);
     // AMR / MPI PROFILING (Spec 5 criterion 43, ADC-479): wire the facade-owned Profiler into the
     // engine so it times its AMR phases (regrid / fill_boundary / average_down) into the SAME table
     // profile_report() renders. Non-owning: program_.profiler_ outlives runtime (both live on the
@@ -763,7 +761,8 @@ struct AmrSystem::Impl {
           "for the full report.");
     if (b.newton.fail_policy == NewtonOptions::kFailWarn)
       throw std::runtime_error(
-          "AmrSystem : newton_fail_policy='warn' requires a structured Newton report, which is only "
+          "AmrSystem : newton_fail_policy='warn' requires a structured Newton report, which is "
+          "only "
           "wired in MULTI-BLOCK (AmrRuntime runtime engine). Add a 2nd block for newton_report, "
           "use newton_fail_policy='throw', or use a single-level System for warn diagnostics.");
     const AmrBuildParams bp = make_build_params();
@@ -967,7 +966,8 @@ POPS_EXPORT void AmrSystem::set_compiled_block(
     std::shared_ptr<std::vector<double>> runtime_params) {
   (void)ncomp;  // the number of variables is carried by the concrete Model (Model::n_vars) in the
                 // type-erasing builders; the parameter stays for API symmetry with System.
-  require_assembling_amr(p_->bound_, "set_compiled_block");  // frozen once pops.bind completes (ADC-592)
+  require_assembling_amr(p_->bound_,
+                         "set_compiled_block");  // frozen once pops.bind completes (ADC-592)
   if (p_->built)
     throw std::runtime_error("AmrSystem::set_compiled_block : the system is already built");
   if (substeps < 1)
@@ -1073,7 +1073,8 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
                                  const std::string& limiter, const std::string& riemann,
                                  const std::string& recon, const std::string& time, double gamma,
                                  int substeps, double positivity_floor) {
-  require_assembling_amr(p_->bound_, "add_native_block");  // frozen once pops.bind completes (ADC-592)
+  require_assembling_amr(p_->bound_,
+                         "add_native_block");  // frozen once pops.bind completes (ADC-592)
   if (substeps < 1)
     throw std::runtime_error("AmrSystem::add_native_block : substeps >= 1");
   // Zhang-Shu positivity floor (ADC-322): eager validation (parity with add_block). 0 = inactive,
@@ -1234,7 +1235,8 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
 
 void AmrSystem::set_refinement(double threshold, const std::string& variable,
                                const std::string& role) {
-  require_assembling_amr(p_->bound_, "set_refinement");  // frozen once pops.bind completes (ADC-592)
+  require_assembling_amr(p_->bound_,
+                         "set_refinement");  // frozen once pops.bind completes (ADC-592)
   // Reject the ambiguous double selector immediately (fast feedback); cons_vars is only known at the
   // lazy build, so an absent name/role is caught there (build_multi -> resolve_selected_component).
   if (!variable.empty() && !role.empty())
@@ -1418,7 +1420,8 @@ void AmrSystem::set_aux_field_halo_component(int comp, int bc_type, double value
 
 void AmrSystem::set_source_stage(const std::string& name, const std::string& kind, double theta,
                                  double alpha, const SourceStageOptions& opts) {
-  require_assembling_amr(p_->bound_, "set_source_stage");  // frozen once pops.bind completes (ADC-592)
+  require_assembling_amr(p_->bound_,
+                         "set_source_stage");  // frozen once pops.bind completes (ADC-592)
   // Settings grouped into a POD (ADC-214): local aliases to keep the body readable (same names /
   // semantics as the old flat parameters). bz_aux_component of the POD is ignored here (the single-block
   // AMR stage reads the canonical B_z channel, cf. set_source_stage in amr_system.hpp).
@@ -1479,8 +1482,9 @@ void AmrSystem::set_source_stage(const std::string& name, const std::string& kin
   if (opts.fac_coarse_rel_tol > 0.0 && !(opts.fac_coarse_rel_tol < 1.0))
     throw std::runtime_error("AmrSystem::set_source_stage : fac_coarse_rel_tol must be in (0, 1)");
   if (opts.fac_max_iters < 0 || opts.fac_fine_sweeps < 0 || opts.fac_coarse_cycles < 0)
-    throw std::runtime_error("AmrSystem::set_source_stage : fac_max_iters / fac_fine_sweeps / "
-                             "fac_coarse_cycles must be >= 0");
+    throw std::runtime_error(
+        "AmrSystem::set_source_stage : fac_max_iters / fac_fine_sweeps / "
+        "fac_coarse_cycles must be >= 0");
   b.schur_fac_max_iters = opts.fac_max_iters;
   b.schur_fac_fine_sweeps = opts.fac_fine_sweeps;
   b.schur_fac_tol = opts.fac_tol;
@@ -1504,7 +1508,8 @@ void AmrSystem::set_source_stage(const std::string& name, const std::string& kin
 }
 
 void AmrSystem::set_time_scheme(const std::string& scheme) {
-  require_assembling_amr(p_->bound_, "set_time_scheme");  // frozen once pops.bind completes (ADC-592)
+  require_assembling_amr(p_->bound_,
+                         "set_time_scheme");  // frozen once pops.bind completes (ADC-592)
   if (p_->built)
     throw std::runtime_error(
         "AmrSystem::set_time_scheme : the system is already built "
@@ -1837,7 +1842,8 @@ void AmrSystem::set_program_params(int prog_block, const std::vector<double>& va
                              std::to_string(prog_block) + " expects " + std::to_string(rp.count) +
                              " runtime parameters, received " + std::to_string(values.size()));
   for (int k = 0; k < rp.count; ++k)
-    rp.values[k] = static_cast<Real>(values[static_cast<std::size_t>(k)]);  // current value, next step
+    rp.values[k] =
+        static_cast<Real>(values[static_cast<std::size_t>(k)]);  // current value, next step
 }
 RuntimeParams AmrSystem::program_params(int prog_block) const {
   // Unseeded block (no runtime param) -> default RuntimeParams (count 0). Shared subsystem (ADC-594).
@@ -1901,13 +1907,16 @@ double AmrSystem::composite_reduce(const std::string& block, const std::string& 
   const int n = p_->cfg.n;  // coarse cells per direction
   const double L = p_->cfg.L;
   const bool is_sum = (base == "sum" || base == "abs_sum" || base == "sum_sq");
-  double acc = is_sum ? 0.0 : (base == "min" ? std::numeric_limits<double>::infinity()
-                               : (base == "max" ? -std::numeric_limits<double>::infinity() : 0.0));
+  double acc =
+      is_sum ? 0.0
+             : (base == "min" ? std::numeric_limits<double>::infinity()
+                              : (base == "max" ? -std::numeric_limits<double>::infinity() : 0.0));
   for (int k = 0; k < nlev; ++k) {
     const std::size_t nf = static_cast<std::size_t>(n) << k;
-    std::vector<double> st = (gather && p_->level_state_global_fn)
-                                 ? p_->level_state_global_fn(k)
-                                 : (p_->level_state_fn ? p_->level_state_fn(k) : std::vector<double>());
+    std::vector<double> st =
+        (gather && p_->level_state_global_fn)
+            ? p_->level_state_global_fn(k)
+            : (p_->level_state_fn ? p_->level_state_fn(k) : std::vector<double>());
     if (st.empty())
       continue;
     // Covered cells of level k: the level-(k+1) patches coarsened by 2 (from patch_boxes()).
@@ -1948,9 +1957,8 @@ double AmrSystem::composite_reduce(const std::string& block, const std::string& 
       }
   }
   if (!is_sum && base != "min" && base != "max" && base != "abs_max")
-    throw std::runtime_error(
-        "AmrSystem::composite_reduce : unknown reduction kind '" + kind + "' for block '" + block +
-        "'");
+    throw std::runtime_error("AmrSystem::composite_reduce : unknown reduction kind '" + kind +
+                             "' for block '" + block + "'");
   return acc;
 }
 
@@ -1961,7 +1969,8 @@ double AmrSystem::composite_reduce(const std::string& block, const std::string& 
 // frozen at the first lazy build); install_program runs BEFORE the first step so the .so's
 // pops_install_program_amr captures an AmrProgramContext over THIS AmrSystem. The .so stays loaded.
 POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
-  require_assembling_amr(p_->bound_, "install_program");  // frozen once pops.bind completes (ADC-592)
+  require_assembling_amr(p_->bound_,
+                         "install_program");  // frozen once pops.bind completes (ADC-592)
 #if defined(_WIN32)
   // Windows: the generated .dll links against _pops.lib at compile time; no global promotion needed.
   pops::dynlib::handle h = pops::dynlib::open(so_path);
@@ -2007,11 +2016,11 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
   // (pops_program_route_manifest) disagrees with the current registry, right after the ABI-key
   // check. Optional symbol: a pre-ADC-599 .so carries nothing -> verify_route_manifest("") no-op.
   {
-    auto manifest_fn = reinterpret_cast<const char* (*)()>(
-        pops::dynlib::sym(h, "pops_program_route_manifest"));
+    auto manifest_fn =
+        reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_route_manifest"));
     try {
-      pops::verify_route_manifest(
-          manifest_fn ? std::string(manifest_fn()) : std::string(), "install_program");
+      pops::verify_route_manifest(manifest_fn ? std::string(manifest_fn()) : std::string(),
+                                  "install_program");
     } catch (...) {
       pops::dynlib::close(h);
       throw;
@@ -2024,7 +2033,8 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
     throw std::runtime_error(
         "AmrSystem::install_program : pops_install_program_amr missing from '" + so_path +
         "' (regenerate the time Program with target='amr_system' : a target='system' .so exports "
-        "pops_install_program, installable only on System -- use System for that, or AmrSystem with "
+        "pops_install_program, installable only on System -- use System for that, or AmrSystem "
+        "with "
         "an AMR-target Program)");
   }
 #if !defined(_WIN32)
@@ -2059,8 +2069,8 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
       const std::string need_solver = pops::runtime::program::required_solver(op.requirements);
       if (!need_solver.empty() && need_solver != "geometric_mg") {
         pops::dynlib::close(h);
-        throw std::runtime_error("field operator '" + op.name + "' requires solver '" + need_solver +
-                                 "'");
+        throw std::runtime_error("field operator '" + op.name + "' requires solver '" +
+                                 need_solver + "'");
       }
     }
   }
@@ -2114,7 +2124,8 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
       }
       set_program_block_map(prog_to_sys);
     } else {
-      set_program_block_map({});  // pre-Spec-3 .so: no name table -> identity (positional convention)
+      set_program_block_map(
+          {});  // pre-Spec-3 .so: no name table -> identity (positional convention)
     }
   }
   // RUNTIME PARAMETERS (ADC-508, parity ADC-510). Seed each PROGRAM block's RuntimeParams to the .so
@@ -2131,7 +2142,8 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
     auto pdef = reinterpret_cast<dval_t>(pops::dynlib::sym(h, "pops_program_param_default"));
     if (pcount && pblock && pindex && pdef) {
       const int np = pcount();
-      std::map<int, std::vector<double>> defaults_by_block;  // program block -> defaults in index order
+      std::map<int, std::vector<double>>
+          defaults_by_block;  // program block -> defaults in index order
       for (int i = 0; i < np; ++i) {
         const int blk = pblock(i);
         const int idx = pindex(i);
@@ -2227,9 +2239,9 @@ EffectiveOptionsReport AmrSystem::effective_options_report() const {
     row.name = b.name;
     row.route = b.is_compiled ? "native_loader" : "native_model";
     row.compiled = b.is_compiled;
-    row.transport = b.is_compiled ? "compiled_artifact" : b.spec.transport;
-    row.source = b.is_compiled ? "compiled_artifact" : b.spec.source;
-    row.elliptic = b.is_compiled ? "compiled_artifact" : b.spec.elliptic;
+    row.transport = b.is_compiled ? "compiled_artifact" : b.spec.transport.get();
+    row.source = b.is_compiled ? "compiled_artifact" : b.spec.source.get();
+    row.elliptic = b.is_compiled ? "compiled_artifact" : b.spec.elliptic.get();
     row.limiter = b.limiter;
     row.riemann = b.riemann;
     row.recon = b.recon_prim ? "primitive" : "conservative";
@@ -2268,11 +2280,9 @@ EffectiveOptionsReport AmrSystem::effective_options_report() const {
       stage.requested_krylov_tol = b.schur_krylov_tol;
       stage.requested_krylov_max_iters = b.schur_krylov_max_iters;
       stage.effective_krylov_tol =
-          b.schur_krylov_tol > 0.0 ? b.schur_krylov_tol
-                                   : static_cast<double>(kKrylovDefaultRelTol);
+          b.schur_krylov_tol > 0.0 ? b.schur_krylov_tol : static_cast<double>(kKrylovDefaultRelTol);
       stage.effective_krylov_max_iters =
-          b.schur_krylov_max_iters > 0 ? b.schur_krylov_max_iters
-                                       : kSchurKrylovCartesianMaxIters;
+          b.schur_krylov_max_iters > 0 ? b.schur_krylov_max_iters : kSchurKrylovCartesianMaxIters;
       stage.density = b.schur_density;
       stage.momentum_x = b.schur_momentum_x;
       stage.momentum_y = b.schur_momentum_y;
@@ -2287,9 +2297,9 @@ EffectiveOptionsReport AmrSystem::effective_options_report() const {
           b.schur_fac_fine_sweeps > 0 ? b.schur_fac_fine_sweeps : kFACDefaultFineSweeps;
       stage.effective_fac_tol =
           b.schur_fac_tol > 0.0 ? b.schur_fac_tol : static_cast<double>(kFACDefaultTol);
-      stage.effective_fac_coarse_rel_tol =
-          b.schur_fac_coarse_rel_tol > 0.0 ? b.schur_fac_coarse_rel_tol
-                                           : static_cast<double>(kFACInitialCoarseRelTol);
+      stage.effective_fac_coarse_rel_tol = b.schur_fac_coarse_rel_tol > 0.0
+                                               ? b.schur_fac_coarse_rel_tol
+                                               : static_cast<double>(kFACInitialCoarseRelTol);
       stage.effective_fac_coarse_cycles =
           b.schur_fac_coarse_cycles > 0 ? b.schur_fac_coarse_cycles : kFACInitialCoarseMaxCycles;
       stage.fac_verbose = b.schur_fac_verbose;
@@ -2435,7 +2445,8 @@ void AmrSystem::rebuild_hierarchy(const std::vector<PatchBox>& boxes,
   p_->ensure_built();
   if (!p_->runtime)
     throw std::runtime_error(
-        "AmrSystem::rebuild_hierarchy : MULTI-BLOCK / runtime engine only (the single-block coupler "
+        "AmrSystem::rebuild_hierarchy : MULTI-BLOCK / runtime engine only (the single-block "
+        "coupler "
         "uses set_hierarchy). This system has no AmrRuntime engine.");
   if (owner_ranks.size() != boxes.size())
     throw std::runtime_error(

@@ -23,7 +23,9 @@ except Exception as exc:  # pops not importable here -> skip, never fake
 def _op(mod, name):
     """A typed OperatorHandle for a registered operator (the de-stringed macro selector, ADC-532)."""
     op = mod.operator_registry().get(name)
-    return model.OperatorHandle(op.name, kind=op.kind, signature=op.signature)
+    return model.OperatorHandle(
+        op.name, kind=op.kind, owner=mod.operator_registry().owner_path,
+        signature=op.signature)
 
 
 def pure_module():

@@ -41,7 +41,7 @@ def _solve_program(method, *, restart=None, preconditioner=None):
     if restart is not None:
         kw["restart"] = restart
     phi = P.solve_linear(**kw)
-    P.commit("blk", phi)
+    P.commit(P.state("U", block="blk").next, phi)
     return P
 
 

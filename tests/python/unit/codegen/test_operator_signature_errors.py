@@ -68,7 +68,7 @@ def test_rate_combined_with_wrong_state_message():
         P.linear_combine("bad", u_n + P.dt * rate + wrong)
         raise AssertionError("expected a Rate/State space combination error")
     except ValueError as exc:
-        assert "different state spaces" in str(exc), str(exc)
+        assert "incompatible state spaces" in str(exc), str(exc)
     print("OK  Rate combined with a State over another space is rejected")
 
 
@@ -125,11 +125,11 @@ def test_local_linear_operator_domain_mismatch_message():
     lin = P._call("lorentz", fields)  # LocalLinearOperator(U, U)
     rhs_v = P.state("other", space=_OTHER)
     try:
-        P.solve_local_linear("bad", operator=P.I - P.dt * lin, rhs=rhs_v, fields=fields)
+        P.solve_local_linear("bad", operator=P.I - P.dt * lin, rhs=rhs_v)
         raise AssertionError("expected an operator/state domain error")
     except ValueError as exc:
         msg = str(exc)
-        assert "maps U -> U" in msg and "State over 'V'" in msg, msg
+        assert "operator maps StateSpace('U'" in msg and "State over StateSpace('V'" in msg, msg
     print("OK  LocalLinearOperator L: U->U rejects a State over another space")
 
 

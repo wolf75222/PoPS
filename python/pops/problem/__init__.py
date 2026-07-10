@@ -8,9 +8,9 @@ lowering. The stable authoring handles (:mod:`pops.problem.handles`) and the agg
 :class:`~pops.problem.report.ProblemValidationReport` complete the surface.
 """
 from pops.problem.handles import (
-    BlockHandle, FieldHandle, OperatorHandle, ProblemHandle, StateHandle)
+    BlockHandle, FieldHandle, OperatorHandle, StateHandle)
 from pops.problem.problem import Problem
 from pops.problem.report import ProblemValidationIssue, ProblemValidationReport
 
-__all__ = ["Problem", "ProblemHandle", "BlockHandle", "StateHandle", "FieldHandle",
+__all__ = ["Problem", "BlockHandle", "StateHandle", "FieldHandle",
            "OperatorHandle", "ProblemValidationReport", "ProblemValidationIssue"]

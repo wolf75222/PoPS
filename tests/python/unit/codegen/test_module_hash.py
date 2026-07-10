@@ -9,6 +9,8 @@ Pure Python; skips if pops is not importable.
 """
 import sys
 
+import pytest
+
 try:
     from pops import model
     from pops.ir.expr import Const, Var
@@ -87,6 +89,74 @@ def test_callable_body_change_invalidates():
     print("OK  a decorated-body source change invalidates module_hash")
 
 
+def test_callable_instances_hash_by_code_and_strict_state_not_address_repr():
+    class Scale:
+        def __init__(self, factor):
+            self.factor = factor
+
+        def __call__(self, state):
+            return self.factor, state
+
+    def build(body):
+        mod = model.Module("callable-instance")
+        state = mod.state_space("U", ("rho",))
+        mod.operator(
+            "source", signature=(state,) >> model.Rate(state),
+            kind="local_source", expr=body)
+        return mod.module_hash()
+
+    assert build(Scale(2)) == build(Scale(2))
+    assert build(Scale(2)) != build(Scale(3))
+
+
+def test_callable_private_slots_and_referenced_globals_invalidate_hash():
+    class SlottedScale:
+        __slots__ = ("__factor",)
+
+        def __init__(self, factor):
+            self.__factor = factor
+
+        def __call__(self, state):
+            return self.__factor, state
+
+    def build(body):
+        mod = model.Module("callable-dependencies")
+        state = mod.state_space("U", ("rho",))
+        mod.operator(
+            "source", signature=(state,) >> model.Rate(state),
+            kind="local_source", expr=body)
+        return mod.module_hash()
+
+    assert build(SlottedScale(2)) != build(SlottedScale(3))
+
+    namespace = {"__name__": __name__, "FACTOR": 2}
+    exec("def source(state):\n    return FACTOR, state\n", namespace)
+    source = namespace["source"]
+    first = build(source)
+    namespace["FACTOR"] = 3
+    assert first != build(source)
+
+
+def test_opaque_body_and_opaque_hash_metadata_fail_loud_without_repr_fallback():
+    state = model.StateSpace("U", ("rho",))
+
+    opaque_body = model.Module("opaque-body")
+    opaque_body.state_space("U", ("rho",))
+    opaque_body.operator(
+        "source", signature=(state,) >> model.Rate(state),
+        kind="local_source", expr=object())
+    with pytest.raises(TypeError, match="opaque.*to_data"):
+        opaque_body.module_hash()
+
+    opaque_metadata = model.Module("opaque-metadata")
+    opaque_metadata.state_space("U", ("rho",))
+    opaque_metadata.operator(
+        "source", signature=(state,) >> model.Rate(state),
+        kind="local_source", capabilities={"opaque": object()}, expr="source")
+    with pytest.raises(TypeError, match="opaque.*to_data"):
+        opaque_metadata.module_hash()
+
+
 def test_capability_and_space_change_invalidate():
     u = model.StateSpace("U", ("rho", "mx"))
     base = model.Module("m")
@@ -108,6 +178,31 @@ def test_capability_and_space_change_invalidate():
                          capabilities={"produces_rate": True}, expr="E")
     assert base.module_hash() != other_space.module_hash()
     print("OK  a capability or a state-space change invalidates module_hash")
+
+
+def test_layout_storage_roles_and_typed_signature_change_invalidate():
+    def build(*, layout="cell", storage="multifab", roles=None, operator_components=("rho",)):
+        mod = model.Module("m")
+        u = mod.state_space(
+            "U", ("rho",), roles=roles or {"rho": "Density"},
+            layout=layout, storage=storage,
+        )
+        op_space = model.StateSpace(
+            "U", operator_components, roles=roles or {"rho": "Density"},
+            layout=layout, storage=storage,
+        )
+        mod.operator(
+            name="L", signature=() >> model.LocalLinearOperator(op_space, op_space),
+            kind="local_linear_operator", expr="L",
+        )
+        return mod.module_hash()
+
+    baseline = build()
+    assert baseline != build(layout="face")
+    assert baseline != build(storage="array")
+    assert baseline != build(roles={"rho": "Mass"})
+    assert baseline != build(operator_components=("energy",))
+    print("OK  layout/storage/roles and full operator spaces invalidate module_hash")
 
 
 def test_requirements_change_invalidates():
@@ -155,7 +250,11 @@ def main():
     test_signature_change_invalidates()
     test_expr_body_change_invalidates()
     test_callable_body_change_invalidates()
+    test_callable_instances_hash_by_code_and_strict_state_not_address_repr()
+    test_callable_private_slots_and_referenced_globals_invalidate_hash()
+    test_opaque_body_and_opaque_hash_metadata_fail_loud_without_repr_fallback()
     test_capability_and_space_change_invalidate()
+    test_layout_storage_roles_and_typed_signature_change_invalidate()
     test_requirements_change_invalidates()
     test_eigenvalues_change_invalidates()
     test_dsl_backed_module_hashes()

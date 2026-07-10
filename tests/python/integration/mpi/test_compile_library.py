@@ -289,7 +289,7 @@ def test_compile_problem_consumes_a_compiled_library_so(tmp_path):
     dt = P.dt
     U = P.state("ions")
     R = P._rhs_legacy(state=U, flux=True, sources=[])
-    P.commit("ions", P.linear_combine("U1", U + dt * R))
+    P.commit(P.state("U", block="ions").next, P.linear_combine("U1", U + dt * R))
     try:
         compiled = compile_problem(time=P, libraries=[so])
     except RuntimeError as exc:  # .so compile of the PROBLEM failed (toolchain), not the library

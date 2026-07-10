@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from pops.ir.literals import scalar_cpp
+
 from .dsl import build_solver_ir, _as_descriptor, _SOLVER_MAX_ITERS
 
 # This emitter is internal / experimental, not a stable public API (Spec 5 criterion 19).
@@ -200,16 +202,16 @@ class _SolverCppLowering:
         if self_term is None:
             lines.append("%s.set_val(static_cast<pops::Real>(0));" % target)
         else:
-            scale = float(self_term.get(0, 0.0))
-            if scale != 1.0:
-                lines.append("pops::saxpy(%s, static_cast<pops::Real>(%s), %s);  // scale self term"
-                             % (target, repr(scale - 1.0), target))
+            scale = self_term.get(0, 0)
+            if scale != 1:
+                lines.append("pops::saxpy(%s, %s, %s);  // scale self term"
+                             % (target, scalar_cpp(scale - 1), target))
         for inp, coeff in terms:
             tok = self._var[inp.id]
             if tok == target:
                 continue
-            lines.append("pops::saxpy(%s, static_cast<pops::Real>(%s), %s);"
-                         % (target, repr(float(coeff.get(0, 0.0))), tok))
+            lines.append("pops::saxpy(%s, %s, %s);"
+                         % (target, scalar_cpp(coeff.get(0, 0)), tok))
 
     def _emit_scalar_op(self, v: Any, lines: Any) -> None:
         """Scalar arithmetic (add/sub/mul/div). The bound iteration counter lowers to the real C++
@@ -223,16 +225,20 @@ class _SolverCppLowering:
             return
         operands = v.attrs["operands"]
         fn = v.attrs["fn"]
-        # A literal-only scalar_int (scalar_int(n) is built as n + 0.0): fold to its constant value.
+        # Keep literal structure intact until C++ target lowering; in particular a rational or a
+        # decimal must not be folded through Python ``float`` merely because both operands are
+        # compile-time constants.
         if all(kind == "c" for kind, _ in operands):
-            self._var[v.id] = "static_cast<pops::Real>(%s)" % repr(_fold_scalar_literal(operands, fn))
+            cppop = {"add": "+", "sub": "-", "mul": "*", "div": "/"}[fn]
+            self._var[v.id] = "(%s %s %s)" % (
+                scalar_cpp(operands[0][1]), cppop, scalar_cpp(operands[1][1]))
             return
         toks = []
         for kind, val in operands:
             if kind == "v":
                 toks.append(self._var[v.inputs[val].id])
             else:
-                toks.append("static_cast<pops::Real>(%s)" % repr(float(val)))
+                toks.append(scalar_cpp(val))
         cppop = {"add": "+", "sub": "-", "mul": "*", "div": "/"}[fn]
         self._var[v.id] = "(%s %s %s)" % (toks[0], cppop, toks[1])
 
@@ -283,7 +289,7 @@ class _SolverCppLowering:
         if len(v.inputs) == 2:
             rhs_tok = self._var[v.inputs[1].id]
         else:
-            rhs_tok = "static_cast<pops::Real>(%s)" % repr(float(v.attrs["rhs"]))
+            rhs_tok = scalar_cpp(v.attrs["rhs"])
         self._var[v.id] = "(%s %s %s)" % (self._var[lhs.id], v.attrs["cmp"], rhs_tok)
 
     def _emit_while(self, v: Any, lines: Any, result_id: Any) -> None:
@@ -356,26 +362,13 @@ class _SolverCppLowering:
         return None
 
 
-def _fold_scalar_literal(operands: Any, fn: Any) -> float:
-    """Fold a pure-literal scalar_op (the ``scalar_int(n) = n + 0.0`` idiom) to its constant float."""
-    a = float(operands[0][1])
-    b = float(operands[1][1]) if len(operands) > 1 else 0.0
-    if fn == "add":
-        return a + b
-    if fn == "sub":
-        return a - b
-    if fn == "mul":
-        return a * b
-    return a / b
-
-
 def _iter_all_nodes(values: Any) -> Any:
     """Yield @p values and the ops in any ``while`` cond/body sub-blocks, depth-first (build order)."""
     for v in values:
         yield v
         for key in ("cond_block", "body_block"):
             blk = v.attrs.get(key) if hasattr(v, "attrs") else None
-            if isinstance(blk, list):
+            if isinstance(blk, (list, tuple)):
                 yield from _iter_all_nodes(blk)
 
 

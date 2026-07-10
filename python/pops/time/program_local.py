@@ -7,8 +7,16 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pops.time.program_base import _ProgramConstants
+from pops.time.program_transaction import atomic_authoring
+from pops.time.program_value_validation import (
+    rate_space_for, require_affine_region, require_compatible_spaces, require_region,
+    require_owned, require_top_level,
+)
+from pops.time.operator_resolution import resolve_operator_handle
+from pops.time.value_metadata import positive_scalar_literal
 from pops.time.values import (
-    Value, _Affine, _Coeff, _Operator, _is_field_value, _residual_wants_guess, _resolve_handle)
+    ProgramValue, _Affine, _Coeff, _Operator, _exact_number, _is_field_value,
+    _residual_wants_guess, _resolve_handle)
 
 if TYPE_CHECKING:
     from pops.time._program_contract import _ProgramBase
@@ -25,25 +33,39 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         ``operator = self.I +/- a*L`` for a single model linear source ``L`` (``a`` may depend on dt
         / constants). Returns the solution State. A non-local or non-linear operator is rejected; the
         per-cell dense fallback bound (n_cons <= 8) is enforced by the codegen (a later phase)."""
-        if not isinstance(operator, _Operator) or operator.identity.as_dict() != {0: 1.0}:
+        if not isinstance(operator, _Operator) or operator.identity.as_dict() != {0: 1}:
             raise ValueError("solve_local_linear currently supports local linear operators only")
         if len(operator.terms) != 1:
             raise NotImplementedError(
                 "solve_local_linear currently supports a single linear source (I +/- a*L); got %d "
                 "term(s)" % len(operator.terms))
-        if not (isinstance(rhs, Value) and rhs.vtype == "state"):
+        if not (isinstance(rhs, ProgramValue) and rhs.vtype == "state"):
             raise ValueError("solve_local_linear: rhs must be a State value (rhs=...)")
-        if fields is not None and not (isinstance(fields, Value) and fields.vtype == "fields"):
+        if fields is not None and not (isinstance(fields, ProgramValue) and fields.vtype == "fields"):
             raise ValueError("solve_local_linear: fields must be a FieldContext from solve_fields")
+        field_context = getattr(rhs, "field_context", None)
+        if fields is not None:
+            from pops.time.field_context import (
+                field_provenance_contains, merge_field_provenance, require_field_read,
+            )
+            required_context = require_field_read(
+                fields, rhs, "solve_local_linear", allow_derived=True)
+            field_context = merge_field_provenance(field_context, required_context)
         op_value, l_coeff = operator.terms[0]
+        require_owned(self, op_value, "solve_local_linear operator")
+        if fields is not None and op_value.field_context is not None and not (
+                field_provenance_contains(op_value.field_context, required_context)):
+            raise ValueError(
+                "solve_local_linear: operator was authored for field provenance %r, not the "
+                "explicit fields context %r" % (op_value.field_context, required_context))
         self._check_operator_state(op_value, rhs, "solve_local_linear")
         lname = op_value.attrs["linear_source"]
-        a = (-l_coeff).as_dict()  # operator = I - a*L, so the L term carries the coefficient -a
+        a = (-l_coeff).to_polynomial()  # operator = I - a*L, so L carries coefficient -a
         inputs = (rhs, op_value, fields) if fields is not None else (rhs, op_value)
-        out = self._new("state", "solve_local_linear", inputs,
-                        {"linear_source": lname, "a_coeff": a}, name, rhs.block)
-        out.space = rhs.space  # the solution is a State over the same space as the rhs
-        return out
+        return self._new(
+            "state", "solve_local_linear", inputs,
+            {"linear_source": lname, "a_coeff": a}, name, rhs.block, space=rhs.space,
+            field_context=field_context)
 
     # The LOCAL per-cell ops a solve_local_nonlinear residual sub-block may use: the iterate / guess
     # State placeholders, named per-cell sources / linear-source applies, and the affine combine of
@@ -51,6 +73,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
     # non-local op (rhs / divergence / solve_fields / a nested solve) is allowed (it would need a halo
     # / global solve, which a per-cell Newton kernel cannot evaluate at a perturbed stack state).
 
+    @atomic_authoring
     def solve_local_nonlinear(self, name: Any = None, residual: Any = None,
                               initial_guess: Any = None, method: Any = "newton",
                               tol: Any = 1e-12, max_iter: Any = 20, fd_eps: Any = None) -> Any:
@@ -89,21 +112,19 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             raise ValueError(
                 "solve_local_nonlinear: residual must be an IR-building callable "
                 "residual_fn(P, U, U0) returning the residual State r(U)")
-        if not (isinstance(initial_guess, Value) and initial_guess.vtype == "state"):
+        if not (isinstance(initial_guess, ProgramValue) and initial_guess.vtype == "state"):
             raise ValueError(
                 "solve_local_nonlinear: initial_guess must be a State value (initial_guess=...)")
+        require_top_level(self, initial_guess, "solve_local_nonlinear")
         if method != "newton":
             raise NotImplementedError(
                 "solve_local_nonlinear: only method='newton' is supported (got %r)" % (method,))
-        if not isinstance(tol, (int, float)) or tol <= 0:
-            raise ValueError("solve_local_nonlinear: tol must be a positive number (got %r)" % (tol,))
+        tol_literal = positive_scalar_literal(tol, where="solve_local_nonlinear: tol")
         if isinstance(max_iter, bool) or not isinstance(max_iter, int) or max_iter <= 0:
             raise ValueError(
                 "solve_local_nonlinear: max_iter must be a positive int (got %r)" % (max_iter,))
-        if fd_eps is not None and (isinstance(fd_eps, bool) or not isinstance(fd_eps, (int, float))
-                                   or fd_eps <= 0):
-            raise ValueError(
-                "solve_local_nonlinear: fd_eps must be a positive number or None (got %r)" % (fd_eps,))
+        fd_eps_literal = (None if fd_eps is None else positive_scalar_literal(
+            fd_eps, where="solve_local_nonlinear: fd_eps"))
         if self._recording:
             raise NotImplementedError(
                 "solve_local_nonlinear: recording a residual inside another sub-block (apply / while "
@@ -117,15 +138,22 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         sub = []
         self._recording.append(sub)
         try:
-            iterate = self._new("state", "state", (), {}, "newton_iterate", block)
-            guess_ph = self._new("state", "state", (), {}, "newton_guess", block)
+            iterate = self._new(
+                "state", "state", (), {}, "newton_iterate", block, space=initial_guess.space)
+            guess_ph = self._new(
+                "state", "state", (), {}, "newton_guess", block, space=initial_guess.space)
             # residual_fn(P, U, U0); a two-arg residual_fn(P, U) (ignoring the guess) is also accepted.
             r = residual(self, iterate, guess_ph) if wants_guess else residual(self, iterate)
         finally:
             self._recording.pop()
-        if not (isinstance(r, Value) and r.vtype == "state"):
+        if not (isinstance(r, ProgramValue) and r.vtype == "state"):
             raise ValueError(
                 "solve_local_nonlinear: residual_fn must return the residual State r(U) (got %r)" % (r,))
+        residual_region = self._region_for_block(sub)
+        require_region(self, r, residual_region, "solve_local_nonlinear residual",
+                       vtype="state")
+        require_compatible_spaces(
+            initial_guess.space, r.space, "solve_local_nonlinear residual", typed_pair=True)
         for w in sub:
             if w.op not in self._RESIDUAL_LOCAL_OPS:
                 raise ValueError(
@@ -135,28 +163,35 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
                     % (w.op, sorted(self._RESIDUAL_LOCAL_OPS)))
         return self._new(
             "state", "solve_local_nonlinear", (initial_guess,),
-            {"residual_block": sub, "residual": r, "iterate": iterate, "guess": guess_ph,
-             "tol": float(tol), "max_iter": int(max_iter), "method": method,
+            {"residual_block": sub, "residual_region": residual_region,
+             "residual": r, "iterate": iterate, "guess": guess_ph,
+             "tol": tol_literal, "max_iter": int(max_iter), "method": method,
              # ADC-617: the FD Jacobian relative step. None -> the historical 1e-7 literal. Stored on
              # the node so the generic attrs hash (_ir_hash) busts the compile cache when it changes.
-             "fd_eps": (None if fd_eps is None else float(fd_eps))}, name, block)
+             "fd_eps": fd_eps_literal}, name, block,
+            space=initial_guess.space)
 
     def _linear_source_name(self, operator: Any, where: Any) -> Any:
         """Resolve `operator` to the linear-source name.
 
-        Accepts a typed :class:`pops.model.OperatorHandle` (ADC-532; unwrapped to its ``.name``, so the
-        IR is byte-identical to the historical string form), a `linear_source` Value, a single
-        unit-coefficient ``_Operator`` term, or a bare name string (an internal selector)."""
+        Accepts a typed :class:`pops.model.OperatorHandle` (resolved against the exact bound registry),
+        a validated `linear_source` ProgramValue, a single unit-coefficient ``_Operator`` term, or a
+        bare name string on this private internal seam."""
         from pops.model import OperatorHandle
         if isinstance(operator, OperatorHandle):
-            return operator.name
+            return resolve_operator_handle(
+                self, operator, where=where,
+                expected_kinds="local_linear_operator").name
         if isinstance(operator, str) and operator:
             return operator
-        if isinstance(operator, Value) and operator.op == "linear_source":
-            return operator.attrs["linear_source"]
+        if isinstance(operator, ProgramValue) and operator.op == "linear_source":
+            require_owned(self, operator, "%s operator" % where)
+            return self._canonical_value(operator).attrs["linear_source"]
         if (isinstance(operator, _Operator) and not operator.identity.as_dict()
-                and len(operator.terms) == 1 and operator.terms[0][1].as_dict() == {0: 1.0}):
-            return operator.terms[0][0].attrs["linear_source"]
+                and len(operator.terms) == 1 and operator.terms[0][1].as_dict() == {0: 1}):
+            value = operator.terms[0][0]
+            require_owned(self, value, "%s operator" % where)
+            return self._canonical_value(value).attrs["linear_source"]
         raise ValueError(
             "%s: operator must be a linear source (P.linear_source(handle) or its OperatorHandle)"
             % where)
@@ -179,14 +214,20 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         here; the solver-DSL and other internal callers pass the name selector directly."""
         state, fields = _resolve_handle(state), _resolve_handle(fields)
         lname = self._linear_source_name(operator, "apply")
-        if not (isinstance(state, Value) and state.vtype == "state"):
+        if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("apply: a State value is required (state=...)")
-        if fields is not None and not (isinstance(fields, Value) and fields.vtype == "fields"):
+        if fields is not None and not (isinstance(fields, ProgramValue) and fields.vtype == "fields"):
             raise ValueError("apply: fields must be a FieldContext from solve_fields")
+        field_context = None
+        if fields is not None:
+            from pops.time.field_context import require_field_read
+            field_context = require_field_read(fields, state, "apply")
         self._check_operator_state(operator, state, "apply")
         inputs = (state, fields) if fields is not None else (state,)
-        return self._new("rhs", "apply", inputs, {"linear_source": lname},
-                         name or ("apply_" + lname), state.block)
+        return self._new(
+            "rhs", "apply", inputs, {"linear_source": lname},
+            name or ("apply_" + lname), state.block, space=rate_space_for(state.space),
+            field_context=field_context)
 
     # --- matrix-free operators / dynamic linear solve (ADC-405 Phase 6b) ----------------------------
     # A ``matrix_free_op`` names a GLOBAL matrix-free operator A : scalar_field -> scalar_field whose
@@ -199,7 +240,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         """A fresh, zero-initialized scalar field: scratch the apply sub-block uses (e.g. the Laplacian
         output, or a 2-component gradient buffer). @p ncomp is the component count (1 by default; 2 for a
         gradient field consumed by ``P.divergence``). Lowered to ``ctx.alloc_scalar_field(ncomp, 1)``."""
-        if not isinstance(ncomp, int) or ncomp < 1:
+        if isinstance(ncomp, bool) or not isinstance(ncomp, int) or ncomp < 1:
             raise ValueError("scalar_field: ncomp must be a positive integer (got %r)" % (ncomp,))
         return self._new("scalar_field", "scalar_field", (), {"ncomp": int(ncomp)}, name, None)
 
@@ -236,6 +277,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
                          {"domain": domain, "range": range_, "ncomp": int(ncomp), "apply_block": None,
                           "apply_result": None, "apply_in": None, "apply_out": None}, name, None)
 
+    @atomic_authoring
     def set_apply(self, operator: Any, body_fn: Any) -> Any:
         """Record the apply ``out <- A(in)`` of a ``matrix_free_operator``. @p body_fn(P, out, in) is an
         IR-building callable: @p in and @p out are scalar_field values (the operator's argument and
@@ -243,8 +285,10 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         ``P.laplacian`` + the affine algebra and RETURNS the result scalar_field (the value written into
         @p out). The ops are captured into a separate sub-block (like a while body) and re-emitted as a
         C++ lambda the Krylov loop calls."""
-        if not (isinstance(operator, Value) and operator.vtype == "matrix_free_op"):
+        operator = self._canonical_value(operator)
+        if not (isinstance(operator, ProgramValue) and operator.vtype == "matrix_free_op"):
             raise ValueError("set_apply: operator must be a matrix_free_operator value")
+        require_top_level(self, operator, "set_apply")
         if operator.attrs["apply_block"] is not None:
             raise ValueError("set_apply: operator '%s' already has an apply" % operator.name)
         if self._recording:
@@ -266,30 +310,36 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             self._recording.pop()
         block = sub
         result = result if result is not None else out_sf
-        if not (isinstance(result, (Value, _Affine)) or _is_field_value(result)):
+        if isinstance(result, ProgramValue) and result.vtype != "scalar_field":
             raise ValueError("set_apply: body_fn must return the result scalar_field (out <- A(in))")
-        operator.attrs["apply_block"] = block
-        operator.attrs["apply_result"] = result
-        operator.attrs["apply_in"] = in_sf
-        operator.attrs["apply_out"] = out_sf
-        return operator
+        apply_region = self._region_for_block(sub)
+        require_affine_region(self, result, apply_region, "set_apply")
+        attrs = dict(operator.attrs)
+        attrs.update({
+            "apply_block": block,
+            "apply_region": apply_region,
+            "apply_result": result,
+            "apply_in": in_sf,
+            "apply_out": out_sf,
+        })
+        return self._replace_value(operator, attrs=attrs)
 
     def laplacian(self, out: Any, in_: Any) -> Any:
         """Record ``out = Lap(in_)`` (the shared discrete 5-point Laplacian). @p out and @p in_ are
         scalar_field values. Lowered to ``ctx.laplacian(out, in_)``. Used inside an apply sub-block to
         form a Helmholtz operator ``A(in) = in - alpha*Lap(in)`` via the affine algebra."""
-        if not (isinstance(out, Value) and out.vtype == "scalar_field"):
+        if not (isinstance(out, ProgramValue) and out.vtype == "scalar_field"):
             raise ValueError("laplacian: out must be a scalar_field value")
-        if not (isinstance(in_, Value) and in_.vtype == "scalar_field"):
+        if not (isinstance(in_, ProgramValue) and in_.vtype == "scalar_field"):
             raise ValueError("laplacian: in must be a scalar_field value")
         return self._new("scalar_field", "laplacian", (out, in_), {}, out.name, None)
 
     def gradient(self, out: Any, phi: Any) -> Any:
         """Record ``out = grad(phi)`` (centered differences; @p out has >= 2 components). @p out and
         @p phi are scalar_field values. Lowered to ``ctx.gradient(out, phi)``."""
-        if not (isinstance(out, Value) and out.vtype == "scalar_field"):
+        if not (isinstance(out, ProgramValue) and out.vtype == "scalar_field"):
             raise ValueError("gradient: out must be a scalar_field value")
-        if not (isinstance(phi, Value) and phi.vtype == "scalar_field"):
+        if not (isinstance(phi, ProgramValue) and phi.vtype == "scalar_field"):
             raise ValueError("gradient: phi must be a scalar_field value")
         return self._new("scalar_field", "gradient", (out, phi), {}, out.name, None)
 
@@ -300,13 +350,14 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         5-point Laplacian, so a matrix-free apply ``phi - alpha*div(grad phi)`` is the Schur-like flux
         operator ``phi - alpha*Lap(phi)``."""
         for nm, val in (("out", out), ("fx", fx), ("fy", fy)):
-            if not (isinstance(val, Value) and val.vtype == "scalar_field"):
+            if not (isinstance(val, ProgramValue) and val.vtype == "scalar_field"):
                 raise ValueError("divergence: %s must be a scalar_field value" % nm)
         return self._new("scalar_field", "divergence", (out, fx, fy), {}, out.name, None)
 
     # --- finite-difference Jacobian-vector product (ADC-431: implicit-flux BDF Newton-Krylov) --------
     def rhs_jacvec(self, out: Any, in_: Any, *, iterate: Any, r0: Any, c_dt: Any, eps: Any = 1e-7,
-                   flux: Any = True, sources: Any = ("default",)) -> Any:
+                   flux: Any = True, sources: Any = ("default",),
+                   field_coupled: Any) -> Any:
         """Record the finite-difference Jacobian-vector product of an implicit-flux residual, INSIDE a
         matrix_free_operator apply sub-block (ADC-431). It lowers to ``out <- J(@p iterate) @p in`` where
         the Newton-system Jacobian is ``J = I - c*dt * d(rhs)/dU`` and the matvec is formed matrix-free by
@@ -319,9 +370,12 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         apply, captured into the apply lambda); @p r0 is the precomputed ``rhs(U^k)`` (a State/RHS value,
         also captured) so the perturbation cost is one ``rhs`` per matvec. @p c_dt is the BDF coefficient
         ``c*dt`` (a number or a dt-polynomial: ``c == 1`` for BDF1, ``c == 2/3`` for BDF2). @p eps is the
-        relative FD step (scaled by ``||U^k|| / ||in||`` inside the kernel). @p flux / @p sources select
-        the same residual the outer ``rhs`` uses (so the linearized operator is consistent with the
-        residual). The op may ONLY appear inside ``set_apply`` (it captures the apply's in/out buffers).
+        relative FD step (scaled by ``||U^k|| / ||in||`` inside the kernel). The implemented codegen
+        linearizes the default flux with either its default/composite source (``sources=None`` or
+        ``["default"]``) or no source (``sources=[]``). ``flux=False`` and named source terms are
+        rejected rather than silently emitting a different Jacobian. The op may ONLY appear inside
+        ``set_apply`` (it captures the apply's in/out buffers). ``field_coupled`` states explicitly
+        whether both the base residual and every perturbed residual solve fields from their own state.
 
         Unlike the cell-local FD Jacobian of `solve_local_nonlinear` (a per-cell dense inverse), this is a
         GLOBAL operator: ``rhs`` couples the cells through the flux stencil, so the matvec is dense over
@@ -329,22 +383,48 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         if not self._recording:
             raise ValueError("rhs_jacvec may only be recorded inside a matrix_free_operator apply "
                              "(call it from the set_apply body_fn)")
-        if not (isinstance(out, Value) and out.vtype == "scalar_field"):
+        if not (isinstance(out, ProgramValue) and out.vtype == "scalar_field"):
             raise ValueError("rhs_jacvec: out must be the apply sub-block's out scalar_field value")
-        if not (isinstance(in_, Value) and in_.vtype == "scalar_field"):
+        if not (isinstance(in_, ProgramValue) and in_.vtype == "scalar_field"):
             raise ValueError("rhs_jacvec: in_ must be the apply sub-block's in scalar_field value")
-        if not (isinstance(iterate, Value) and iterate.vtype == "state"):
+        if not (isinstance(iterate, ProgramValue) and iterate.vtype == "state"):
             raise ValueError("rhs_jacvec: iterate must be the frozen Newton-iterate State (iterate=...)")
-        if not (isinstance(r0, Value) and r0.is_field()):
+        if not (isinstance(r0, ProgramValue) and r0.is_field()):
             raise ValueError("rhs_jacvec: r0 must be the precomputed rhs(U^k) State/RHS value (r0=...)")
-        if not isinstance(c_dt, (int, float, _Coeff)):
-            raise ValueError("rhs_jacvec: c_dt must be a number or a dt-polynomial (got %r)" % (c_dt,))
-        if not isinstance(eps, (int, float)) or eps <= 0:
-            raise ValueError("rhs_jacvec: eps must be a positive number (got %r)" % (eps,))
-        c_d = (c_dt if isinstance(c_dt, _Coeff) else _Coeff({0: float(c_dt)})).as_dict()
+        if not isinstance(field_coupled, bool):
+            raise TypeError("rhs_jacvec: field_coupled must be a bool")
+        context = getattr(r0, "field_context", None)
+        context_matches = (context is not None
+                           and context.matches(None, iterate.block, iterate.id))
+        if field_coupled and not context_matches:
+            raise ValueError(
+                "rhs_jacvec: field_coupled=True requires r0 computed with fields solved from "
+                "the exact Newton iterate")
+        if not field_coupled and context is not None:
+            raise ValueError(
+                "rhs_jacvec: field_coupled=False requires an r0 with no field-solve provenance")
+        if flux is not True:
+            raise NotImplementedError(
+                "rhs_jacvec cannot linearize flux=False: the matrix-free kernel currently requires "
+                "the default flux divergence")
         src = list(sources) if sources is not None else None
+        named_sources = [source for source in (src or ()) if source != "default"]
+        if named_sources:
+            raise NotImplementedError(
+                "rhs_jacvec cannot linearize named sources %r yet; use sources=[] (flux-only) or "
+                "sources=['default']" % named_sources)
+        if not isinstance(c_dt, _Coeff):
+            try:
+                c_dt = _Coeff({0: _exact_number(c_dt)})
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "rhs_jacvec: c_dt must be a number or a dt-polynomial (got %r)" % (c_dt,)
+                ) from exc
+        eps_literal = positive_scalar_literal(eps, where="rhs_jacvec: eps")
+        c_d = c_dt.to_polynomial()
         return self._new("scalar_field", "rhs_jacvec", (out, in_, iterate, r0),
-                         {"c_dt": c_d, "eps": float(eps), "flux": bool(flux), "sources": src},
+                         {"c_dt": c_d, "eps": eps_literal, "flux": True, "sources": src,
+                          "field_coupled": field_coupled},
                          out.name, None)
 
     # --- tensor-coefficient matrix-free apply of the generic condensed-implicit route (ADC-637) --------
@@ -356,15 +436,14 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         ``L(phi) = -div(A grad phi) = -out``, so build it as ``-1 * P.apply_laplacian_coeff(out, in_,
         A)`` via the affine algebra. Emitted INLINE (ctx.fill_boundary + pops::apply_laplacian), no
         coupling/schur call."""
-        if not (isinstance(out, Value) and out.vtype == "scalar_field"):
+        if not (isinstance(out, ProgramValue) and out.vtype == "scalar_field"):
             raise ValueError("apply_laplacian_coeff: out must be a scalar_field value")
-        if not (isinstance(in_, Value) and in_.vtype == "scalar_field"):
+        if not (isinstance(in_, ProgramValue) and in_.vtype == "scalar_field"):
             raise ValueError("apply_laplacian_coeff: in_ must be a scalar_field value")
         # The GENERIC condensed bundle (P.condensed_coeffs, ADC-637) carries the four tensor-coefficient
         # fields (eps_x, eps_y, a_xy, a_yx) the coefficiented apply consumes.
-        if not (isinstance(coeffs, Value) and coeffs.vtype == "condensed_coeffs"):
+        if not (isinstance(coeffs, ProgramValue) and coeffs.vtype == "condensed_coeffs"):
             raise ValueError("apply_laplacian_coeff: coeffs must be a coefficient bundle "
                              "(P.condensed_coeffs(...))")
         return self._new("scalar_field", "apply_laplacian_coeff", (out, in_, coeffs), {}, out.name,
                          None)
-

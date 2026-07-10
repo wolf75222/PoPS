@@ -1,35 +1,36 @@
-"""pops.ir.expr -- symbolic node classes for the flux-DSL and board AST.
-
-Two clearly delimited sections:
-
-  1. FLUX-DSL NODES  (originally in pops.dsl)
-     Expr, _wrap, Const, Var, _Bin, Add, Sub, Mul, Div, Pow, Neg, Sqrt, Abs, Sign.
-
-  2. BOARD AST NODES  (originally in pops.math)
-     _BoardNode, Equation, Partial, Gradient, Laplacian, RateTerm, _as_rate,
-     RateExpr, Divergence, TimeDerivative, Unknown, OpApply, Integral.
-
-No C++ emission lives here: the to_cpp() methods on the flux-DSL nodes are
-the canonical symbolic representation; helpers that *emit* C++ source strings
-(_cpp_expand, _cse_emit, _cpp_roe, etc.) remain in pops.dsl.
-"""
+"""Symbolic node classes shared by the flux DSL and board AST."""
 from __future__ import annotations
 
 from typing import Any
 
-# numpy backs only the .eval() host interpreter (Sqrt/Abs/Sign below); IR construction and the
-# to_cpp() codegen never touch it. It is imported lazily inside eval() so pops.ir stays importable
-# in a bare interpreter -- e.g. the build-time scripts/gen_solver_kernel.py codegen, which emits
-# C++ from the IR and never evaluates it (so numpy need not be installed for the C++ build).
+from .literals import exact_numeric_scalar, exact_scale_prefix, multiply_exact_scalars, scalar_literal
+from .symbolic import ImmutableSymbolic, freeze_symbolic_metadata
+
+# NumPy is imported lazily by host-only eval() methods so codegen stays dependency-free.
 
 
-# =============================================================================
 # SECTION 1 -- FLUX-DSL NODES  (from pops.dsl)
-# =============================================================================
 
-class Expr:
-    """Symbolic expression node. Operators build the tree; eval(env) applies it to
-    numpy arrays (env: name -> array or scalar)."""
+class Expr(ImmutableSymbolic):
+    """Symbolic expression node with small opt-in extension protocols.
+
+    Operators build the tree; ``eval(env)`` applies it to numpy arrays.  An
+    external node can participate in generic traversal/CSE/differentiation by
+    implementing ``__pops_ir_children__``, ``__pops_ir_key__`` and optionally
+    ``__pops_ir_diff__``.  Unknown differentiation remains fail-loud.
+    """
+
+    def __pops_ir_children__(self) -> Any:
+        """Return child Expr nodes, or ``NotImplemented`` for built-in dispatch."""
+        return NotImplemented
+
+    def __pops_ir_key__(self, recurse: Any) -> Any:
+        """Return a structural CSE key, or ``NotImplemented`` for built-in dispatch."""
+        return NotImplemented
+
+    def __pops_ir_diff__(self, *, recurse: Any, target: Any, definitions: Any) -> Any:
+        """Return a symbolic derivative, or ``NotImplemented`` when unsupported."""
+        return NotImplemented
 
     def __add__(self, o: Any) -> Any: return Add(self, _wrap(o))
     def __radd__(self, o: Any) -> Any: return Add(_wrap(o), self)
@@ -43,6 +44,12 @@ class Expr:
     def __pos__(self) -> Any: return self  # +expr = identity (the CoupledSource API writes +k*ne*ng)
     def __abs__(self) -> Any: return Abs(self)  # abs(expr) -> |expr| (absolute value, e.g. |lambda| of Roe)
     def __pow__(self, o: Any) -> Any: return Pow(self, _wrap(o))
+    def __eq__(self, o: Any) -> Any: return Compare("eq", self, _wrap(o))
+    def __ne__(self, o: Any) -> Any: return Compare("ne", self, _wrap(o))
+    def __lt__(self, o: Any) -> Any: return Compare("lt", self, _wrap(o))
+    def __le__(self, o: Any) -> Any: return Compare("le", self, _wrap(o))
+    def __gt__(self, o: Any) -> Any: return Compare("gt", self, _wrap(o))
+    def __ge__(self, o: Any) -> Any: return Compare("ge", self, _wrap(o))
 
     def eval(self, env: Any) -> Any: raise NotImplementedError
     def deps(self) -> Any: return set()
@@ -59,20 +66,31 @@ def _wrap(o: Any) -> Any:
     node = getattr(o, "_node", None)
     if isinstance(node, Expr):
         return node
-    return Const(float(o))
+    return Const(o)
 
 
 class Const(Expr):
-    def __init__(self, value: Any) -> None: self.value = float(value)
+    def __init__(self, value: Any) -> None:
+        self.literal = scalar_literal(value)
+
+    @property
+    def value(self) -> Any:
+        """The exact Python value when numerically representable (never coerced to float)."""
+        return self.literal.to_python()
+
     def eval(self, env: Any) -> Any: return self.value
-    def to_cpp(self) -> str: return repr(self.value)
-    def _str(self) -> str: return repr(self.value)
+    def to_cpp(self) -> str: return self.literal.to_cpp()
+    def _str(self) -> str: return repr(self.literal)
 
 
 class Var(Expr):
     """Named variable: conservative, primitive, auxiliary (field) or constant."""
 
     def __init__(self, name: Any, kind: Any) -> None:
+        if not isinstance(name, str) or not name:
+            raise TypeError("Var: name must be a non-empty string")
+        if not isinstance(kind, str) or not kind:
+            raise TypeError("Var: kind must be a non-empty string")
         self.name = name
         self.kind = kind
     def eval(self, env: Any) -> Any:
@@ -86,7 +104,12 @@ class Var(Expr):
 
 class _Bin(Expr):
     op = "?"
+    semantic_operation = None
     def __init__(self, a: Any, b: Any) -> None:
+        if self.semantic_operation is not None and isinstance(a, Const) and isinstance(b, Const):
+            # Local import avoids the expr <-> lowering cycle; both paths preserve annotations.
+            from .lowering import _combined_annotations
+            _combined_annotations(a, b, operation=self.semantic_operation)
         self.a = a
         self.b = b
     def deps(self) -> Any: return self.a.deps() | self.b.deps()
@@ -96,28 +119,62 @@ class _Bin(Expr):
 
 class Add(_Bin):
     op = "+"
+    semantic_operation = "add"
     def eval(self, env: Any) -> Any: return self.a.eval(env) + self.b.eval(env)
 
 
 class Sub(_Bin):
     op = "-"
+    semantic_operation = "sub"
     def eval(self, env: Any) -> Any: return self.a.eval(env) - self.b.eval(env)
 
 
 class Mul(_Bin):
     op = "*"
+    semantic_operation = "mul"
     def eval(self, env: Any) -> Any: return self.a.eval(env) * self.b.eval(env)
 
 
 class Div(_Bin):
     op = "/"
+    semantic_operation = "div"
     def eval(self, env: Any) -> Any: return self.a.eval(env) / self.b.eval(env)
 
 
 class Pow(_Bin):
     op = "**"
+    semantic_operation = "pow"
     def eval(self, env: Any) -> Any: return self.a.eval(env) ** self.b.eval(env)
     def to_cpp(self) -> str: return "std::pow(%s, %s)" % (self.a.to_cpp(), self.b.to_cpp())
+
+
+class Compare(_Bin):
+    """A scalar symbolic comparison; Python never evaluates it as a bool."""
+
+    _OPS = {
+        "eq": "==", "ne": "!=", "lt": "<", "le": "<=", "gt": ">", "ge": ">=",
+    }
+
+    def __init__(self, comparison: Any, a: Any, b: Any) -> None:
+        if comparison not in self._OPS:
+            raise ValueError("unknown symbolic comparison %r" % (comparison,))
+        self.comparison = comparison
+        super().__init__(a, b)
+
+    @property
+    def op(self) -> str:
+        return self._OPS[self.comparison]
+
+    def eval(self, env: Any) -> Any:
+        a, b = self.a.eval(env), self.b.eval(env)
+        return {
+            "eq": lambda: a == b,
+            "ne": lambda: a != b,
+            "lt": lambda: a < b,
+            "le": lambda: a <= b,
+            "gt": lambda: a > b,
+            "ge": lambda: a >= b,
+        }[self.comparison]()
 
 
 class Neg(Expr):
@@ -151,10 +208,8 @@ class Abs(Expr):
 
 
 class Sign(Expr):
-    """Signe de a : -1, 0 ou 1 (np.sign cote interprete). Emis au codegen comme le ternaire SANS
-    branche (a > 0) - (a < 0) (exact en pops::Real). Sert aux selections par masques des branches par
-    cellule (ADC-177 : clamps de projection en max/min via abs/sign, sans if). Derivee nulle presque
-    partout (saut en 0, mesure nulle), cf. dsl.diff."""
+    """Sign of ``a`` (-1, 0 or 1), emitted branch-free as ``(a > 0) - (a < 0)``.
+    Its derivative is zero almost everywhere; see ``dsl.diff``."""
     def __init__(self, a: Any) -> None: self.a = a
     def eval(self, env: Any) -> Any:
         import numpy as np
@@ -166,18 +221,13 @@ class Sign(Expr):
     def _str(self) -> str: return "sign(%s)" % self.a
 
 
-# =============================================================================
 # SECTION 2 -- BOARD AST NODES  (from pops.math)
-# =============================================================================
 
-class Equation:
+class Equation(Expr):
     """A board equation ``lhs == rhs``.
 
     Produced by ``ddt(U) == ...``, ``-laplacian(phi) == rhs`` or
-    ``(I - dt*C) @ unknown("x") == rhs``. Carries the two sides verbatim; the
-    consuming API (``Model.rate`` / ``Model.solve_field`` / ``Program.solve``)
-    decides how to lower it.
-    """
+    ``(I - dt*C) @ unknown("x") == rhs``. The consuming API owns lowering."""
 
     __slots__ = ("lhs", "rhs")
 
@@ -185,41 +235,29 @@ class Equation:
         self.lhs = lhs
         self.rhs = rhs
 
-    def __bool__(self) -> Any:
-        # An Equation is an inspectable lhs == rhs, NOT a truth value: ``if ddt(U) == R:`` or
-        # ``bool(ddt(U) == R)`` is almost always a mistaken comparison. Refuse it loudly (ADC-529)
-        # and name the consuming APIs that lower it (m.rate / m.solve_field / T.define / T.solve).
-        raise TypeError(
-            "an Equation (lhs == rhs) is not a boolean: it is an inspectable board equation, not a "
-            "comparison. Pass it to m.rate / m.solve_field / T.define / T.solve to lower it; use "
-            "'is' for identity or compare the sides explicitly.")
-
     def __repr__(self) -> str:
         return "Equation(%r == %r)" % (self.lhs, self.rhs)
 
+    def eval(self, env: Any) -> Any:
+        raise TypeError("an Equation is a declarative graph node and cannot be numerically evaluated")
 
-class _BoardNode:
+    def _str(self) -> str:
+        return repr(self)
+
+
+class _BoardNode(Expr):
     """Base of every board node: owns ``==`` (build an :class:`Equation`)."""
 
     def __eq__(self, other: Any) -> Any:  # noqa: D105 -- equation builder, not a comparison
         return Equation(self, other)
 
-    def __bool__(self) -> Any:
-        # A board node builds an Equation on ``==``, so ``if U == V:`` yields an Equation, not a
-        # bool: refuse the truthiness of the node itself too (ADC-529), catching e.g. a stray
-        # ``if ddt(U):`` before it silently reads as True.
-        raise TypeError(
-            "a board node is not a boolean: '==' on it builds an inspectable Equation (lhs == rhs), "
-            "not a comparison. Lower it via m.rate / m.solve_field / T.define / T.solve.")
-
-    # board nodes are not hashable (they define a non-identity ``__eq__``)
-    __hash__ = None  # type: ignore[assignment]
+    def __ne__(self, other: Any) -> Any:
+        # Board equality has equation semantics.  ``!=`` is not a different equation spelling;
+        # require an explicit symbolic comparison instead of asking Python to negate Equation.
+        return Compare("ne", self, _wrap(other))
 
 
-# --- elliptic field-operator algebra base (Spec 5 sec.9.2, ADC-491) -----------------------
-# Laplacian inherits this base; the concrete terms (Reaction / CoeffGradient / DivCoeffGrad /
-# EllipticSum) and the helpers (_as_elliptic / principal_kinds) live in pops.ir.elliptic to
-# keep this file within the size budget. Inert IR only; the C++ elliptic solver executes.
+# Elliptic concrete terms and helpers live in pops.ir.elliptic; this is inert IR.
 class _EllipticTerm(_BoardNode):
     """A summand of an elliptic field-operator left-hand side.
 
@@ -261,22 +299,25 @@ class Partial(_BoardNode):
     """
 
     def __init__(self, field: Any, axis: Any, scale: Any = 1.0) -> None:
+        if isinstance(axis, bool) or not isinstance(axis, int) or axis not in (0, 1):
+            raise ValueError("Partial: axis must be the integer 0 or 1")
         self.field = field
-        self.axis = int(axis)
-        self.scale = float(scale)
+        self.axis = axis
+        self.scale = exact_numeric_scalar(scale, where="Partial scale")
 
     def __neg__(self) -> Any:
         return Partial(self.field, self.axis, -self.scale)
 
     def __mul__(self, k: Any) -> Any:
-        return Partial(self.field, self.axis, self.scale * float(k))
+        return Partial(
+            self.field, self.axis,
+            multiply_exact_scalars(self.scale, k, where="Partial scale"))
 
     __rmul__ = __mul__
 
     def __repr__(self) -> str:
         d = "x" if self.axis == 0 else "y"
-        return "Partial(%s%r.d%s)" % (
-            ("" if self.scale == 1.0 else "%g*" % self.scale), self.field, d)
+        return "Partial(%s%r.d%s)" % (exact_scale_prefix(self.scale), self.field, d)
 
 
 class Gradient(_BoardNode):
@@ -284,7 +325,7 @@ class Gradient(_BoardNode):
 
     def __init__(self, field: Any, scale: Any = 1.0) -> None:
         self.field = field
-        self.scale = float(scale)
+        self.scale = exact_numeric_scalar(scale, where="Gradient scale")
 
     @property
     def x(self) -> Any:
@@ -313,7 +354,7 @@ class Laplacian(_EllipticTerm):
 
     def __init__(self, field: Any, scale: Any = 1.0) -> None:
         self.field = field
-        self.scale = float(scale)
+        self.scale = exact_numeric_scalar(scale, where="Laplacian scale")
 
     def _kind(self) -> Any:
         return "laplacian"
@@ -322,17 +363,14 @@ class Laplacian(_EllipticTerm):
         return Laplacian(self.field, -self.scale)
 
     def __repr__(self) -> str:
-        return "Laplacian(%s%r)" % (
-            ("" if self.scale == 1.0 else "%g*" % self.scale), self.field)
+        return "Laplacian(%s%r)" % (exact_scale_prefix(self.scale), self.field)
 
 
 class RateTerm(_BoardNode):
     """A summand of a rate equation right-hand side.
 
-    Both :class:`Divergence` (a ``-div F`` flux contribution) and a model's
-    source handle are :class:`RateTerm`; ``+`` / ``-`` / unary ``-`` build a
-    :class:`RateExpr` that the model destructures into ``flux`` and ``sources``.
-    """
+    Divergences and source handles compose through ``+`` / ``-`` into a
+    :class:`RateExpr`, which the model splits into flux and source terms."""
 
     def _rate_terms(self) -> Any:
         """Return ``[(kind, payload, sign)]`` -- one entry per primitive summand."""
@@ -355,6 +393,12 @@ def _as_rate(x: Any) -> Any:
     """Coerce ``x`` to a :class:`RateTerm` or raise a clear error."""
     if isinstance(x, RateTerm):
         return x
+    coercion = getattr(x, "__pops_rate_term__", None)
+    if callable(coercion):
+        term = coercion()
+        if isinstance(term, RateTerm):
+            return term
+        raise TypeError("__pops_rate_term__() must return a RateTerm expression")
     raise TypeError(
         "a rate equation right-hand side must be a sum of -div(flux) and source "
         "terms; got %r" % (x,))
@@ -364,7 +408,18 @@ class RateExpr(RateTerm):
     """An accumulated sum of rate terms (flux contributions and source handles)."""
 
     def __init__(self, terms: Any) -> None:
-        self.terms = list(terms)
+        normalized = []
+        for term in terms:
+            if not isinstance(term, (tuple, list)) or len(term) != 3:
+                raise TypeError("a rate term must be a (kind, payload, sign) triple")
+            kind, payload, sign = term
+            if kind not in ("flux", "source"):
+                raise ValueError("unknown rate term kind %r" % (kind,))
+            if getattr(payload, "kind", None) != kind:
+                raise TypeError("rate term %s payload must be a matching declaration Handle" % kind)
+            sign = exact_numeric_scalar(sign, where="rate term sign")
+            normalized.append((kind, payload, sign))
+        self.terms = tuple(normalized)
 
     def _rate_terms(self) -> Any:
         return list(self.terms)
@@ -374,22 +429,17 @@ class RateExpr(RateTerm):
 
 
 class Divergence(RateTerm):
-    """``scale * div(flux)`` -- a flux contribution to a rate equation.
-
-    Written ``-div(F)`` for the standard hyperbolic ``-div F``. ``flux`` is the
-    model's flux handle (or ``None`` for the model's default flux).
-    """
+    """``scale * div(flux)``; usually written ``-div(F)`` for a hyperbolic rate."""
 
     def __init__(self, flux: Any, scale: Any = 1.0) -> None:
         self.flux = flux
-        self.scale = float(scale)
+        self.scale = exact_numeric_scalar(scale, where="Divergence scale")
 
     def _rate_terms(self) -> Any:
         return [("flux", self.flux, self.scale)]
 
     def __repr__(self) -> str:
-        return "Divergence(%s%r)" % (
-            ("" if self.scale == 1.0 else "%g*" % self.scale), self.flux)
+        return "Divergence(%s%r)" % (exact_scale_prefix(self.scale), self.flux)
 
 
 class TimeDerivative(_BoardNode):
@@ -406,7 +456,9 @@ class Unknown(_BoardNode):
     """A solve unknown: ``unknown("U*")`` in ``(I - dt*C) @ unknown("U*") == rhs``."""
 
     def __init__(self, name: Any) -> None:
-        self.name = str(name)
+        if not isinstance(name, str) or not name:
+            raise TypeError("Unknown: name must be a non-empty string")
+        self.name = name
 
     def __rmatmul__(self, operator: Any) -> Any:
         """``operator @ unknown("U*")`` -- the left-hand side of an implicit solve."""
@@ -437,13 +489,12 @@ class OpApply(_BoardNode):
     def __repr__(self) -> str:
         return "OpApply(%r @ %r)" % (self.operator, self.unknown)
 
-
 class Integral(_BoardNode):
     """A spatial integral of an expression -- the value of a generic invariant."""
 
     def __init__(self, expr: Any, over: Any = None) -> None:
         self.expr = expr
-        self.over = over
+        self.over = freeze_symbolic_metadata(over)
 
     def __repr__(self) -> str:
         return "integral(%r)" % (self.expr,)

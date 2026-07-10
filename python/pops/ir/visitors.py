@@ -8,13 +8,24 @@ Originally in pops.dsl.
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
-from .expr import Const, Var, _Bin, Neg, Sqrt, Abs, Sign
+from .expr import Const, Expr, Var, _Bin, Neg, Sqrt, Abs, Sign
 from .values import EigWitness, StateRef, RuntimeParamRef
 
 
 def _children(e: Any) -> Any:
+    protocol = getattr(e, "__pops_ir_children__", None)
+    if callable(protocol):
+        children = protocol()
+        if children is not NotImplemented:
+            children = tuple(children)
+            if any(not isinstance(child, Expr) for child in children):
+                raise TypeError(
+                    "%s.__pops_ir_children__() must return only Expr nodes"
+                    % type(e).__name__)
+            return children
     if isinstance(e, _Bin):
         return (e.a, e.b)
     if isinstance(e, (Neg, Sqrt, Abs, Sign)):
@@ -40,12 +51,19 @@ def _expr_uses_cons_or_prim(e: Any) -> bool:
 
 
 def _key(e: Any) -> Any:
+    protocol = getattr(e, "__pops_ir_key__", None)
+    if callable(protocol):
+        key = protocol(_key)
+        if key is not NotImplemented:
+            return key
     if isinstance(e, Const):
-        return ("const", e.value)
+        return ("const", json.dumps(e.literal.to_data(), sort_keys=True, separators=(",", ":")))
     if isinstance(e, RuntimeParamRef):
         return ("rparam", e.name)  # key = name: two refs to the same runtime param share the CSE local
     if isinstance(e, Var):
-        return ("var", e.name)
+        # Conservative/primitive/aux namespaces can legally reuse a display name;
+        # the declared kind is part of symbolic identity, not presentation metadata.
+        return ("var", e.kind, e.name)
     if isinstance(e, Neg):
         return ("neg", _key(e.a))
     if isinstance(e, Sqrt):
@@ -63,4 +81,8 @@ def _key(e: Any) -> Any:
         return ("eig", e.field, e.k, tuple(_key(c) for c in e.entries()))
     if isinstance(e, StateRef):
         return ("state", e.side, _key(e.expr))  # defensive: the Roe lines do not go through CSE
-    return (e.op, tuple(_key(c) for c in _children(e)))  # _Bin (Add/Sub/Mul/Div/Pow)
+    if isinstance(e, _Bin):
+        return (e.op, tuple(_key(c) for c in _children(e)))
+    raise TypeError(
+        "Expr extension %s has no structural CSE key; implement "
+        "__pops_ir_key__(recurse)" % type(e).__name__)

@@ -30,13 +30,16 @@ Pure-symbolic helpers
 # -- node classes ---------------------------------------------------------
 from .expr import (
     Expr, _wrap,
-    Const, Var, _Bin, Add, Sub, Mul, Div, Pow, Neg, Sqrt, Abs, Sign,
+    Const, Var, _Bin, Add, Sub, Mul, Div, Pow, Compare, Neg, Sqrt, Abs, Sign,
     # board nodes
     Equation, _BoardNode,
     Partial, Gradient, Laplacian,
     RateTerm, _as_rate, RateExpr, Divergence,
     TimeDerivative, Unknown, OpApply, Integral,
 )
+from .handle_expr import ValueExpr
+from .literals import ScalarLiteral, scalar_cpp, scalar_data, scalar_literal, scalar_to_native
+from .symbolic import SourceLocation, SymbolicTruthValueError
 
 # -- reference / witness values -------------------------------------------
 from .values import (
@@ -64,7 +67,7 @@ from .lowering import (
 
 __all__ = [
     # node classes
-    "Expr", "Const", "Var", "_Bin", "Add", "Sub", "Mul", "Div", "Pow",
+    "Expr", "Const", "Var", "ValueExpr", "_Bin", "Add", "Sub", "Mul", "Div", "Pow", "Compare",
     "Neg", "Sqrt", "Abs", "Sign",
     # board nodes
     "Equation", "_BoardNode",
@@ -81,4 +84,7 @@ __all__ = [
     "board_sqrt",
     # helpers
     "diff",
+    # exact constants and structured symbolic diagnostics
+    "ScalarLiteral", "scalar_literal", "scalar_data", "scalar_cpp", "scalar_to_native",
+    "SourceLocation", "SymbolicTruthValueError",
 ]

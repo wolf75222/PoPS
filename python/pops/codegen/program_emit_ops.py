@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from pops.ir.literals import scalar_cpp
 from pops.codegen.program_emit_kernels import (
     _PROFILE_SKIP_OPS,
     _coeff_cpp,
@@ -124,16 +125,16 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);"
                          % (scratch[blk], var[by_block[blk].id]))
         lines += _emit_coupled_rate_kernel(components, by_block, var, scratch)
-        # Per-block scratch names keyed by (coupled node id, block) so each coupled_rate_out aliases
-        # its block's scratch (the projection emits no code of its own).
-        program._coupled_scratch.update({(v.id, blk): scratch[blk] for blk in scratch})
+        # Per-block names live in this emission's local token table. Codegen is a pure read of the
+        # Program: repeated emission never writes scratch metadata back into frozen authoring state.
+        var.update({("coupled_scratch", v.id, blk): scratch[blk] for blk in scratch})
         var[v.id] = scratch[next(iter(scratch))]     # a stable alias (the bundle has no single value)
     elif v.op == "coupled_rate_out":
         # Pure projection of one block out of the coupled bundle: its var aliases that block's rate
         # scratch (filled by the coupled_rate kernel above). Emits nothing -- like the FieldContext
         # alias of solve_fields_from_blocks. The producing coupled_rate is the node's sole input.
         (coupled_in,) = v.inputs
-        var[v.id] = program._coupled_scratch[(coupled_in.id, v.attrs["out_block"])]
+        var[v.id] = var[("coupled_scratch", coupled_in.id, v.attrs["out_block"])]
     elif v.op == "history":
         # Read the SYSTEM-OWNED history slot (a MultiFab&, ADC-406a): lag steps back. The reference
         # is bound to a C++ name the affine combine then reads like any other state/RHS term. An
@@ -388,7 +389,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             if kind == "v":
                 toks.append(var[v.inputs[val].id])
             else:  # a literal constant
-                toks.append("static_cast<pops::Real>(%s)" % repr(float(val)))
+                toks.append(scalar_cpp(val))
         cppop = {"add": "+", "sub": "-", "mul": "*", "div": "/"}[v.attrs["fn"]]
         lines.append("const pops::Real %s = (%s %s %s);"
                      % (var[v.id], toks[0], cppop, toks[1]))
@@ -399,9 +400,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         if len(v.inputs) == 2:  # scalar vs scalar
             rhs_tok = var[v.inputs[1].id]
         else:  # scalar vs float tolerance
-            rhs_tok = "static_cast<pops::Real>(%s)" % repr(float(v.attrs["rhs"]))
+            rhs_tok = scalar_cpp(v.attrs["rhs"])
         var[v.id] = "(%s %s %s)" % (var[lhs.id], v.attrs["cmp"], rhs_tok)
-        program._when_tokens[v.id] = var[v.id]  # reusable as a when(cond) due test (ADC-458)
+        var[("when_predicate", v.id)] = var[v.id]  # emission-local schedule predicate token
     elif v.op == "while":
         _emit_while(program, v, base, var, model, lines, block_idx)
     elif v.op == "range":
@@ -412,7 +413,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         terms = list(zip(v.inputs, v.attrs["coeffs"], strict=True))
         if v.id in committed_ids:
             # Commit: block state <- c_base * base + sum(non-base coeff * term), in place.
-            c_base = {0: 0.0}
+            c_base = {0: 0}
             acc = "acc%d" % v.id
             lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);" % (acc, var[base.id]))
             for inp, coeff in terms:

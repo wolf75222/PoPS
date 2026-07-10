@@ -23,7 +23,7 @@ try:
     import pytest
     from pops.ir.expr import Const
     from pops.model import OperatorHandle
-    from pops.numerics.terms import Flux
+    from pops.numerics.terms import Flux, SourceTerm
     from pops.physics.facade import Model
     from pops import time as adctime
 except Exception as exc:  # pops not importable here -> skip, never fake
@@ -49,9 +49,13 @@ def build_model():
     return m, {"electric": h_src, "explicit_rhs": h_rate}
 
 
-# The built-in default-Poisson field operator, as a handle (the public P.call needs a handle; the
-# internal P._call resolves the same name token byte-identically).
-_FIELDS = OperatorHandle("fields_from_state", kind="field_operator")
+def _operator_handle(model, name):
+    """Return the owner-qualified handle for an operator declared by ``model``."""
+    registry = model.operator_registry()
+    operator = registry.get(name)
+    return OperatorHandle(
+        operator.name, kind=operator.kind, owner=registry.owner_path,
+        signature=operator.signature)
 
 
 # --- criterion 23: P.call requires a typed handle ------------------------------------------------
@@ -73,9 +77,9 @@ def test_call_accepts_an_operator_handle():
     m, h = build_model()
     P = adctime.Program("p").bind_operators(m)
     U = P.state("plasma")
-    f = P.call(_FIELDS, U)
+    f = P.call(_operator_handle(m, "fields_from_state"), U)
     R = P.call(h["explicit_rhs"], U, f)
-    P.commit("plasma", P.linear_combine("u1", U + P.dt * R))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", U + P.dt * R))
     P.validate()
     print("OK  P.call(handle) accepted + validates")
 
@@ -89,7 +93,7 @@ def _rate_program(m, *, selector, fields_selector):
          else P._call(fields_selector, U))
     R = (P.call(selector, U, f) if isinstance(selector, OperatorHandle)
          else P._call(selector, U, f))
-    P.commit("plasma", P.linear_combine("u1", U + P.dt * R))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", U + P.dt * R))
     return P
 
 
@@ -97,7 +101,9 @@ def test_call_handle_byte_identical_to_private_name():
     """The typed P.call(handle) path builds the BYTE-IDENTICAL IR as the internal P._call(name) path:
     the public reject changes only the spelling, never the lowering (criterion 23)."""
     m, h = build_model()
-    public = _rate_program(m, selector=h["explicit_rhs"], fields_selector=_FIELDS)._ir_hash()
+    public = _rate_program(
+        m, selector=h["explicit_rhs"],
+        fields_selector=_operator_handle(m, "fields_from_state"))._ir_hash()
     private = _rate_program(m, selector="explicit_rhs",
                             fields_selector="fields_from_state")._ir_hash()
     assert public == private, (public, private)
@@ -128,7 +134,8 @@ def test_rhs_rejects_legacy_flux_sources():
 def _rhs_program(*, terms=None, legacy=None):
     """A one-block Euler Program whose single rhs is built either via the public terms= (a list) or
     the INTERNAL _rhs_legacy (a (flux, sources) pair)."""
-    P = adctime.Program("rhs")
+    m, _ = build_model()
+    P = adctime.Program("rhs").bind_operators(m)
     U = P.state("plasma")
     f = P.solve_fields(U)
     if terms is not None:
@@ -136,21 +143,27 @@ def _rhs_program(*, terms=None, legacy=None):
     else:
         flux, sources = legacy
         R = P._rhs_legacy(name="R", state=U, fields=f, flux=flux, sources=sources)
-    P.commit("plasma", P.linear_combine("U1", U + P.dt * R))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + P.dt * R))
     return P
 
 
 def test_rhs_accepts_terms():
     """P.rhs(terms=[Flux(), source]) is the allowed typed spelling."""
-    P = _rhs_program(terms=[Flux(), "electric"])
+    P = _rhs_program(terms=[Flux(), SourceTerm("electric")])
     P.validate()
-    print("OK  P.rhs(terms=[Flux(), 'electric']) accepted + validates")
+    print("OK  P.rhs(terms=[Flux(), SourceTerm('electric')]) accepted + validates")
+
+
+def test_rhs_rejects_free_source_name():
+    """A public RHS source selector retains a typed descriptor/handle; strings stay private."""
+    with pytest.raises(TypeError, match="free source name"):
+        _rhs_program(terms=[Flux(), "electric"])
 
 
 def test_rhs_terms_byte_identical_to_private_legacy():
     """The typed terms= path builds the BYTE-IDENTICAL IR as the internal _rhs_legacy(flux=,sources=)
     path: the public reject changes only the spelling, never the lowering (criterion 27)."""
-    public = _rhs_program(terms=[Flux(), "electric"])._ir_hash()
+    public = _rhs_program(terms=[Flux(), SourceTerm("electric")])._ir_hash()
     private = _rhs_program(legacy=(True, ["electric"]))._ir_hash()
     assert public == private, (public, private)
     print("OK  P.rhs(terms=) IR == P._rhs_legacy(flux=,sources=) IR: %s" % public)
@@ -163,7 +176,9 @@ def test_typed_call_lowers_through_private_rhs():
     so the public reject never sees the internal lowering: the rate program (whose rhs is built by
     P.call) compiles cleanly and is byte-identical to the private name path."""
     m, h = build_model()
-    typed = _rate_program(m, selector=h["explicit_rhs"], fields_selector=_FIELDS)
+    typed = _rate_program(
+        m, selector=h["explicit_rhs"],
+        fields_selector=_operator_handle(m, "fields_from_state"))
     typed.validate()
     private = _rate_program(m, selector="explicit_rhs", fields_selector="fields_from_state")
     assert typed._ir_hash() == private._ir_hash()

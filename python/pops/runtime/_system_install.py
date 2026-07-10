@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from pops._bootstrap import ModelSpec
 from pops.runtime._lifecycle import guard_assembling as _guard_assembling
 from pops.runtime._lifecycle import reject_compiled_time_route as _reject_compiled_time_route
+from pops.runtime._numeric import native_block_scalars, native_real, native_schur_scalars, positive_int
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
     NEWTON_DEFAULT_DAMPING,
@@ -79,28 +80,24 @@ class _SystemInstall(_System):
         _reject_compiled_time_route(time, "System.add_block")  # ADC-554: no CompiledTime time= bypass
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
-        # pops.Split (condensed source stage) is only wired by add_equation (which plugs
-        # set_source_stage after adding the block): reject it HERE rather than running only the transport
-        # silently (the condensed source would be lost).
+        # Split is wired only by add_equation; never drop its source stage silently.
         if isinstance(time, Split):
             raise TypeError(
                 "System.add_block: pops.Split (Schur-condensed source stage) is not wired on this "
                 "native seam. Declare the splitting on the pops.Problem time scheme "
                 "(time=pops.Split(...)) and lower it with pops.compile(...) + pops.bind(...).")
-        # Implicit mask + Newton options carried by the temporal policy (IMEX/SourceImplicit);
-        # neutral defaults on the other policies (Explicit). Resolved/validated on the C++ side
-        # (System::add_block) against the block's names/roles.
+        # Native ABI conversion happens here; descriptors above this seam stay exact.
+        rel_tol, abs_tol, fd_eps, damping, positivity_floor = native_block_scalars(
+            time, spatial, where="System.add_block")
         self._s.add_block(name, model, spatial.limiter, spatial.flux, spatial.recon, time.kind,
                           getattr(time, "substeps", 1), evolve, getattr(time, "stride", 1),
                           getattr(time, "implicit_vars", []), getattr(time, "implicit_roles", []),
                           getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS),
-                          getattr(time, "newton_rel_tol", NEWTON_DEFAULT_REL_TOL),
-                          getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL),
-                          getattr(time, "newton_fd_eps", NEWTON_DEFAULT_FD_EPS),
+                          rel_tol, abs_tol, fd_eps,
                           getattr(time, "newton_diagnostics", False),
-                          getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING),
+                          damping,
                           getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
-                          getattr(spatial, "positivity_floor", 0.0),
+                          positivity_floor,
                           getattr(spatial, "wave_speed_cache", False), **_weno_kwargs(spatial))
 
     def add_equation(self, name: Any, model: Any, spatial: Any = None, time: Any = None,
@@ -148,8 +145,9 @@ class _SystemInstall(_System):
             self.add_equation(name, model, spatial=spatial, time=time.hyperbolic,
                               substeps=substeps, names=names, evolve=evolve, stride=stride)
             src = time.source
-            self._s.set_source_stage(name, src.kind, src.theta, src.alpha,
-                                     getattr(src, "krylov_tol", 0.0),
+            self._s.set_source_stage(name, src.kind, *native_schur_scalars(
+                                     src.theta, src.alpha, getattr(src, "krylov_tol", 0.0),
+                                     where="System.add_equation"),
                                      getattr(src, "krylov_max_iters", 0),
                                      getattr(src, "density_spec", ""),
                                      getattr(src, "momentum_x_spec", ""),
@@ -162,25 +160,23 @@ class _SystemInstall(_System):
             self._s.set_time_scheme(time.scheme)  # "lie" (Split) or "strang" (Strang)
             return
 
-        nsub = substeps if substeps is not None else getattr(time, "substeps", 1)
-        nstride = stride if stride is not None else getattr(time, "stride", 1)
+        nsub = positive_int(substeps if substeps is not None else getattr(time, "substeps", 1), where="System.add_equation.substeps")
+        nstride = positive_int(stride if stride is not None else getattr(time, "stride", 1), where="System.add_equation.stride")
 
-        # --- ModelSpec: composed native bricks -> add_block (existing path) ---
-        # NB: we call _s.add_block DIRECTLY with nsub/nstride (not self.add_block, whose
-        # signature has no substeps -> it would use time.substeps and IGNORE the overrides).
         if isinstance(model, ModelSpec):
+            rel_tol, abs_tol, fd_eps, damping, positivity_floor = native_block_scalars(
+                time, spatial, where="System.add_equation")
             self._s.add_block(name, model, spatial.limiter, spatial.flux, spatial.recon, time.kind,
                               nsub, evolve, nstride,
                               getattr(time, "implicit_vars", []), getattr(time, "implicit_roles", []),
                               getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS),
-                              getattr(time, "newton_rel_tol", NEWTON_DEFAULT_REL_TOL),
-                              getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL),
-                              getattr(time, "newton_fd_eps", NEWTON_DEFAULT_FD_EPS),
+                              rel_tol, abs_tol, fd_eps,
                               getattr(time, "newton_diagnostics", False),
-                          getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING),
-                          getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
-                          getattr(spatial, "positivity_floor", 0.0),
-                          getattr(spatial, "wave_speed_cache", False), **_weno_kwargs(spatial))
+                              damping,
+                              getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
+                              positivity_floor,
+                              getattr(spatial, "wave_speed_cache", False),
+                              **_weno_kwargs(spatial))
             return
 
         # Implicit mask (IMEX): only the composed native path (ModelSpec -> add_block) wires it. The .so
@@ -325,12 +321,12 @@ class _SystemInstall(_System):
                     "only on the internal native engine API (a composed native model, pops.Model(...)).")
             self._s.add_compiled_block(name, compiled.so_path, spatial.limiter, spatial.flux,
                                        spatial.recon, time.kind, nsub, names_arg,
-                                       getattr(spatial, "positivity_floor", 0.0))
+                                       native_real(
+                                           getattr(spatial, "positivity_floor", 0.0),
+                                           where="System.add_equation.positivity_floor"))
             return
         if adder == "add_native_block":
-            # NATIVE zero-copy (#85): block installed on the REAL System CONTEXT (same path as
-            # add_block). Takes a gamma, NO names= (the names/roles come from the .so metadata).
-            # End-to-end device/MPI validation from Python is a later dedicated PR.
+            # Native zero-copy block; names/roles come from the .so metadata.
             if names is not None:
                 raise ValueError(
                     "add_equation: names= not supported on the native path (production); the names and "
@@ -348,9 +344,11 @@ class _SystemInstall(_System):
                     "native model, pops.Model(...)).")
             check_compiled_matches_module(getattr(compiled, "abi_key", ""))
             gamma = compiled.gamma if compiled.gamma is not None else PHYSICAL_DEFAULT_GAMMA
+            gamma = native_real(gamma, where="System.add_equation.gamma")
             self._s.add_native_block(name, compiled.so_path, spatial.limiter, spatial.flux,
                                      spatial.recon, time.kind, gamma, nsub, evolve, nstride,
-                                     getattr(spatial, "positivity_floor", 0.0))
+                                     native_real(getattr(spatial, "positivity_floor", 0.0),
+                                                 where="System.add_equation.positivity_floor"))
             return
         raise ValueError("add_equation: adder %r unknown (backend %r)" % (adder, backend))
 
@@ -373,7 +371,9 @@ class _SystemInstall(_System):
         native seam. Prerequisite: B_z set via set_magnetic_field beforehand.
         """
         _guard_assembling(self, "set_source_stage")  # frozen once pops.bind completes (ADC-592)
-        self._s.set_source_stage(name, kind, theta, alpha, krylov_tol, krylov_max_iters,
+        self._s.set_source_stage(name, kind, *native_schur_scalars(
+                                 theta, alpha, krylov_tol, where="System.set_source_stage"),
+                                 krylov_max_iters,
                                  density, momentum_x, momentum_y, energy, bz_aux_component,
                                  n_precond_vcycles, polar_precond)
 
@@ -434,7 +434,10 @@ class _SystemInstall(_System):
         bc = _resolve_route("poisson_bc", bc, context="set_poisson")
         wall = _resolve_route("wall", wall, context="set_poisson")
         self._s.set_poisson(rhs=rhs, solver=solver, bc=bc, wall=wall,
-                            wall_radius=wall_radius, epsilon=epsilon, abs_tol=abs_tol,
+                            wall_radius=native_real(
+                                wall_radius, where="System.set_poisson.wall_radius"),
+                            epsilon=native_real(epsilon, where="System.set_poisson.epsilon"),
+                            abs_tol=native_real(abs_tol, where="System.set_poisson.abs_tol"),
                             **_mg_kwargs(rel_tol, max_cycles, min_coarse, pre_smooth,
                                          post_smooth, bottom_sweeps, coarse_threshold))
 

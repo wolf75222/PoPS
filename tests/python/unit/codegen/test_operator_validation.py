@@ -62,6 +62,28 @@ def test_call_input_space_mismatch():
     print("OK  P.call rejects an argument over the wrong StateSpace")
 
 
+def test_call_rejects_same_space_name_with_different_component_order():
+    m = _model()
+    declared = m.state_space("U")
+    permuted = model.StateSpace("U", tuple(reversed(declared.components)))
+    P = adctime.Program("permuted").bind_operators(m)
+    wrong = P.state("plasma", space=permuted)
+    try:
+        P._call("fields_from_state", wrong)
+        raise AssertionError("expected a structural state-space mismatch error")
+    except ValueError as exc:
+        assert "components" in str(exc) and "expects state 'U'" in str(exc), str(exc)
+
+
+def test_space_structure_participates_in_program_ir_identity():
+    first = adctime.Program("space_identity")
+    first.state("plasma", space=model.StateSpace("U", ("rho", "mx", "my")))
+    second = adctime.Program("space_identity")
+    second.state("plasma", space=model.StateSpace("U", ("rho", "my", "mx")))
+
+    assert first._ir_hash() != second._ir_hash()
+
+
 def test_combine_space_mismatch():
     m = _model()
     u = m.state_space("U")
@@ -73,7 +95,7 @@ def test_combine_space_mismatch():
         P.linear_combine("bad", u_n + P.dt * rate + wrong)  # mixes U and V
         raise AssertionError("expected a state-space combination error")
     except ValueError as exc:
-        assert "different state spaces" in str(exc), str(exc)
+        assert "incompatible state spaces" in str(exc), str(exc)
     print("OK  linear_combine rejects mixing two StateSpaces")
 
 
@@ -85,10 +107,11 @@ def test_solve_local_linear_domain_mismatch():
     lin = P._call("lorentz", fields)  # LocalLinearOperator(U, U)
     rhs_v = P.state("other", space=_OTHER)
     try:
-        P.solve_local_linear("bad", operator=P.I - P.dt * lin, rhs=rhs_v, fields=fields)
+        P.solve_local_linear("bad", operator=P.I - P.dt * lin, rhs=rhs_v)
         raise AssertionError("expected an operator/state domain error")
     except ValueError as exc:
-        assert "maps U -> U" in str(exc) and "State over 'V'" in str(exc), str(exc)
+        assert "operator maps StateSpace('U'" in str(exc) \
+            and "State over StateSpace('V'" in str(exc), str(exc)
     print("OK  solve_local_linear rejects L: U->U on a State(V)")
 
 
@@ -99,7 +122,7 @@ def test_legacy_untagged_unaffected():
     u = P.state("plasma")
     fields = P.solve_fields(u)
     r = P._rhs_legacy(state=u, fields=fields, sources=["electric"])
-    P.commit("plasma", P.linear_combine("u1", u + P.dt * r))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", u + P.dt * r))
     P.validate()
     print("OK  untagged (legacy) programs skip the space checks")
 
@@ -107,6 +130,8 @@ def test_legacy_untagged_unaffected():
 def main():
     test_well_typed_program_passes()
     test_call_input_space_mismatch()
+    test_call_rejects_same_space_name_with_different_component_order()
+    test_space_structure_participates_in_program_ir_identity()
     test_combine_space_mismatch()
     test_solve_local_linear_domain_mismatch()
     test_legacy_untagged_unaffected()

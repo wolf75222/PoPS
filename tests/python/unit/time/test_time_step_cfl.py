@@ -84,7 +84,7 @@ def fe_program(name="fe_stepcfl"):
     U = P.state("ions")
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit("ions", P.linear_combine("U1", U + P.dt * R))
+    P.commit(P.state("U", block="ions").next, P.linear_combine("U1", U + P.dt * R))
     return P
 
 

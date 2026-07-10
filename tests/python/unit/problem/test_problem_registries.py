@@ -17,6 +17,10 @@ from pops.problem.registries import (  # noqa: E402
     BlockRegistry, ConstraintRegistry, FieldRegistry, ParamRegistry,
     RuntimePolicyRegistry, TimeRegistry)
 from pops.problem.report import ProblemValidationReport  # noqa: E402
+from pops.model import OwnerPath  # noqa: E402
+
+
+_OWNER = OwnerPath("problem", "registry-tests")
 
 
 class _StubModel:
@@ -25,9 +29,11 @@ class _StubModel:
 
 
 def test_block_registry_add_get_names_and_duplicate():
-    reg = BlockRegistry()
+    reg = BlockRegistry(owner=_OWNER)
     handle = reg.add("ne", _StubModel(), spatial=None)
     assert handle.name == "ne"
+    assert handle.qualified_id == (
+        "pops.handle.v1::problem/registry-tests::block::ne")
     assert reg.names() == ["ne"]
     assert reg.get("ne")["model"].name == "stub"
     with pytest.raises(ValueError):
@@ -37,14 +43,14 @@ def test_block_registry_add_get_names_and_duplicate():
 
 
 def test_block_registry_validate_reports_no_block():
-    report = BlockRegistry().validate()
+    report = BlockRegistry(owner=_OWNER).validate()
     assert isinstance(report, ProblemValidationReport)
     assert not report.ok
     assert any(i.code == "no_block" for i in report)
 
 
 def test_field_registry_type_checks_and_names():
-    reg = FieldRegistry()
+    reg = FieldRegistry(owner=_OWNER)
     with pytest.raises(TypeError):
         reg.add("not a field")
     from pops.fields import PoissonProblem
@@ -53,7 +59,9 @@ def test_field_registry_type_checks_and_names():
     fp = PoissonProblem(name="phi", unknown="phi",
                         equation=(-laplacian("phi") == "charge_density"),
                         solver=GeometricMG())
-    reg.add(fp)
+    handle = reg.add(fp)
+    assert handle.qualified_id == (
+        "pops.handle.v1::problem/registry-tests::field::phi")
     assert reg.names() == ["phi"]
     assert reg.solvers()  # phi has a solver
 
@@ -72,6 +80,22 @@ def test_param_registry_rejects_kind_string():
     assert reg.get("alpha") == {"default": 1.0, "kind": "const"}
     with pytest.raises(TypeError, match="kind="):
         reg.add("beta", 1.0, kind="const")
+
+
+def test_registries_never_stringify_author_identity_objects():
+    block = BlockRegistry(owner=_OWNER)
+    params = ParamRegistry()
+    runtime = RuntimePolicyRegistry()
+
+    with pytest.raises(TypeError, match="block name"):
+        block.add(object(), _StubModel())
+    with pytest.raises(TypeError, match="parameter name"):
+        params.add(object(), 1.0)
+    with pytest.raises(TypeError, match="aux name"):
+        runtime.add_aux(object(), 1.0)
+    assert block.names() == []
+    assert params.names() == []
+    assert runtime.aux == {}
 
 
 def test_runtime_policy_registry_refuses_bad_output():

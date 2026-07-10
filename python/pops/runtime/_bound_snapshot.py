@@ -177,9 +177,14 @@ def _cadence_row(cadence: Any) -> Any:
     if cadence is None:
         return None
     cfl = getattr(cadence, "cfl", None)
+    if cfl not in (None, "default"):
+        from pops.solvers._numeric import native_float
+        cfl = native_float(cfl, where="CompiledTime cfl snapshot")
+    else:
+        cfl = None
     return {"substeps": getattr(cadence, "substeps", None),
             "stride": getattr(cadence, "stride", None),
-            "cfl": cfl if isinstance(cfl, (int, float)) else None}
+            "cfl": cfl}
 
 
 def build_uniform_snapshot(engine: Any, compiled: Any, resolved_models: Any, instances: Any,

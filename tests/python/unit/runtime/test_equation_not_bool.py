@@ -33,8 +33,9 @@ def test_bool_of_equation_raises():
         raise AssertionError("bool(Equation) must raise")
     except TypeError as exc:
         msg = str(exc)
-        assert "not a boolean" in msg and "m.rate" in msg, msg
-    print("OK  bool(Equation) raises pointing at the lowering APIs")
+        assert "[symbolic_truth_value]" in msg, msg
+        assert "Equation has no Python truth value" in msg, msg
+    print("OK  bool(Equation) raises a sourced symbolic-truth diagnostic")
 
 
 def test_if_equation_raises():
@@ -44,7 +45,7 @@ def test_if_equation_raises():
             pass
         raise AssertionError("if equation: must raise")
     except TypeError as exc:
-        assert "not a boolean" in str(exc), str(exc)
+        assert "[symbolic_truth_value]" in str(exc), str(exc)
     print("OK  'if equation:' raises")
 
 
@@ -55,7 +56,7 @@ def test_bare_board_node_bool_raises():
         bool(node)
         raise AssertionError("bool(board node) must raise")
     except TypeError as exc:
-        assert "not a boolean" in str(exc), str(exc)
+        assert "[symbolic_truth_value]" in str(exc), str(exc)
     print("OK  a bare board node refuses bool()")
 
 

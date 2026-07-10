@@ -21,12 +21,12 @@ except Exception as exc:  # pops not importable here -> skip, never fake
 def test_signature_sugar():
     u = model.StateSpace("U", ("rho", "mx", "my"))
     f = model.FieldSpace("fields", ("phi", "grad_x", "grad_y"))
-    assert ((u, f) >> model.Rate(u)) == model.Signature((u, f), model.Rate("U"))
+    assert ((u, f) >> model.Rate(u)) == model.Signature((u, f), model.Rate(u))
     assert (u >> f) == model.Signature((u,), f)
     assert ((f,) >> model.LocalLinearOperator(u, u)) \
-        == model.Signature((f,), model.LocalLinearOperator("U", "U"))
+        == model.Signature((f,), model.LocalLinearOperator(u, u))
     assert (() >> model.LocalLinearOperator(u, u)) \
-        == model.Signature((), model.LocalLinearOperator("U", "U"))
+        == model.Signature((), model.LocalLinearOperator(u, u))
     print("OK  >> signature sugar (single, tuple, empty inputs)")
 
 
@@ -39,13 +39,16 @@ def test_module_builder_and_decorator():
     assert params["alpha"].default == 1.0 and aux["B_z"].kind == "cell_scalar"
     assert "U" in mod.state_spaces() and "fields" in mod.field_spaces()
 
-    # Builder mode: expr given -> registers now, returns the Operator.
+    # Builder mode: expr given -> registers now, returns the public handle.
     op = mod.operator(name="fields_from_state", signature=(u,) >> f,
                       kind="field_operator", expr="<ir>")
-    assert isinstance(op, model.Operator) and op.kind == "field_operator"
-    assert op.signature.output == f and op.body == "<ir>"
+    assert isinstance(op, model.OperatorHandle) and op.kind == "field_operator"
+    assert op.signature.output == f
+    assert mod.operator_registry().get("fields_from_state").body == "<ir>"
+    assert mod.operator_handle("fields_from_state") == op
 
-    # Decorator mode: no expr -> registers the decorated body, returns the function.
+    # Decorator mode: the function is retained only as the registry body; the
+    # authored name becomes the public handle used by Programs.
     @mod.operator(name="explicit_rhs", signature=(u, f) >> model.Rate(u),
                   kind="local_rate")
     def explicit_rhs(state, fields):
@@ -56,10 +59,12 @@ def test_module_builder_and_decorator():
     def lorentz(fields):
         return "L"
 
-    assert explicit_rhs.__name__ == "explicit_rhs"  # decorator returns the function
+    assert isinstance(explicit_rhs, model.OperatorHandle)
+    assert isinstance(lorentz, model.OperatorHandle)
     reg = mod.operator_registry()
     assert reg.names() == ["fields_from_state", "explicit_rhs", "lorentz"]
-    assert reg.get("explicit_rhs").signature.output == model.Rate("U")
+    assert reg.get("explicit_rhs").signature.output == model.Rate(u)
+    assert reg.get("explicit_rhs").body.__name__ == "explicit_rhs"
     assert reg.get("lorentz").body.__name__ == "lorentz"
 
     try:
@@ -100,7 +105,7 @@ def _build_predictor(P, mdl):
     lin = P._call("lorentz", fields)
     rhs = P.linear_combine("rhs", u + P.dt * rate)
     ustar = P.solve_local_linear("ustar", operator=P.I - P.dt * lin, rhs=rhs, fields=fields)
-    P.commit("plasma", ustar)
+    P.commit(P.state("U", block="plasma").next, ustar)
 
 
 def _physics_model(name, gain):

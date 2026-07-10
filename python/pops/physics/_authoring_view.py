@@ -60,7 +60,7 @@ class _OperatorViewMixin(_HyperbolicModel):
         ``(State) -> State``. The implicit defaults surface as ``flux_default`` /
         ``source_default`` / ``fields_from_state``. Pure view: no hash / codegen impact.
         """
-        reg = _model.OperatorRegistry()
+        reg = _model.OperatorRegistry(owner=self.owner_path)
         state = self.state_space(state_name)
         fields = self.field_space()
         aux_set = self._aux_name_set()
@@ -95,7 +95,12 @@ class _OperatorViewMixin(_HyperbolicModel):
                               "produces_rate": True, "supports_device": True,
                               "default": True},
                 requirements=self._aux_requirements(self._source),
+                lowering={"source": "default"},
                 source="dsl.source"))
+            # ``source_term("default", ...)`` returns a readable ``default`` handle,
+            # while the lowering registry keeps the unambiguous ``source_default`` key.
+            # The alias is an explicit registry declaration, never inferred by resolution.
+            reg.register_alias("default", "source_default")
         for nm in sorted(self._source_terms):
             exprs = self._source_terms[nm]
             rf = reads_fields(exprs)
@@ -125,11 +130,11 @@ class _OperatorViewMixin(_HyperbolicModel):
         if self._elliptic is not None:
             reg.register(_model.Operator(
                 "fields_from_state", "field_operator",
-                # The Poisson solve PRODUCES the canonical electrostatic triple; an externally
-                # imposed aux (e.g. B_z) read by sources is part of field_space() but not produced
-                # here, so the produced FieldSpace is the triple, not the full read surface.
-                _model.Signature([state], _model.FieldSpace(
-                    "fields", components=("phi", "grad_x", "grad_y"))),
+                # FieldSpace types the complete context AVAILABLE to downstream operators after the
+                # solve, including imposed aux such as B_z.  FieldContext.outputs separately records
+                # the triple physically produced by this Poisson solve, so availability is never
+                # confused with ownership/production.
+                _model.Signature([state], fields),
                 capabilities={"requires_solver": True, "supports_device": True,
                               "default": True},
                 requirements={"elliptic_operator": "poisson"},
@@ -174,4 +179,3 @@ class _OperatorViewMixin(_HyperbolicModel):
                           "fluxes": cfg["fluxes"]},
                 source="dsl.rate_operator"))
         return reg
-

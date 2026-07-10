@@ -28,7 +28,15 @@ class _StubModel:
 
     def __init__(self, name="stub"):
         self.name = name
-        self.dsl = object()
+        self.dsl = _StubDescriptor("dsl")
+
+
+class _StubDescriptor:
+    def __init__(self, name):
+        self.name = name
+
+    def to_data(self):
+        return {"kind": "stub", "name": self.name}
 
 
 class _StubCompiled:
@@ -72,7 +80,8 @@ def test_multi_block_uniform_compiles_one_handle_per_block():
     try:
         case = (pops.Problem().block("ne", physics=_StubModel())
                 .block("ni", physics=_StubModel()))
-        compiled = orchestration.compile(case, layout=Uniform(CartesianMesh()), time=object())
+        compiled = orchestration.compile(
+            case, layout=Uniform(CartesianMesh()), time=_StubDescriptor("time"))
         _check(captured["target"] == "system", "Uniform multi-block routes to target='system'")
         _check(hasattr(compiled, "_block_models"), "the handle carries _block_models (C3)")
         _check(set(compiled._block_models) == {"ne", "ni"},
@@ -91,7 +100,8 @@ def test_single_block_uniform_still_lowers():
     _patch_compile_problem(_fake)
     try:
         case = pops.Problem().block("ne", physics=_StubModel())
-        compiled = orchestration.compile(case, layout=Uniform(CartesianMesh()), time=object())
+        compiled = orchestration.compile(
+            case, layout=Uniform(CartesianMesh()), time=_StubDescriptor("time"))
         _check(compiled._target == "system", "single-block Uniform routes to target='system'")
         _check(set(compiled._block_models) == {"ne"}, "one block carried")
     finally:

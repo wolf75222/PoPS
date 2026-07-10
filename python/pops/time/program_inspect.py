@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from pops._report import Report
 from pops.time.program_base import _ProgramConstants
-from pops.time.values import Value, _Affine  # noqa: F401
+from pops.time.values import ProgramValue, _Affine  # noqa: F401
 
 if TYPE_CHECKING:
     from pops.time._program_contract import _ProgramBase
@@ -78,7 +78,7 @@ class _ProgramInspect(_ProgramConstants, _ProgramBase):
         def _attr(val: Any) -> Any:
             # Keep the report array-free and JSON-friendly: reference Values / sub-blocks by name/id,
             # pass scalars through, summarize anything else by its type name.
-            if isinstance(val, Value):
+            if isinstance(val, ProgramValue):
                 return "#%d" % val.id
             if isinstance(val, (str, int, float, bool)) or val is None:
                 return val
@@ -86,6 +86,7 @@ class _ProgramInspect(_ProgramConstants, _ProgramBase):
                 return [_attr(x) for x in val]
             return type(val).__name__
 
+        from pops.time.program_serialization import _serialize_field_context
         nodes = []
         for v in self._values:
             # logical_shape / source_location are INSPECTION-ONLY (ADC-530): derived on demand and
@@ -93,14 +94,18 @@ class _ProgramInspect(_ProgramConstants, _ProgramBase):
             # key. source_location is None unless the Program enabled capture_source_locations().
             nodes.append({
                 "name": v.name, "op": v.op, "vtype": v.vtype, "block": v.block,
-                "inputs": [i.name for i in v.inputs],
+                "inputs": [self._canonical_value(i).name for i in v.inputs],
                 "attrs": {k: _attr(val) for k, val in v.attrs.items()},
+                "field_context": (_serialize_field_context(v.field_context)
+                                  if v.field_context is not None else None),
                 "logical_shape": v.logical_shape,
                 "source_location": v.source_location,
             })
         for block, st in self._commits.items():
             nodes.append({"name": st.name, "op": "commit", "vtype": st.vtype,
                           "block": block, "inputs": [st.name], "attrs": {},
+                          "field_context": (_serialize_field_context(st.field_context)
+                                            if st.field_context is not None else None),
                           "logical_shape": st.logical_shape, "source_location": st.source_location})
         return nodes
 
@@ -124,7 +129,7 @@ class _ProgramInspect(_ProgramConstants, _ProgramBase):
             for key in ("cond", "body", "residual", "iterate", "guess",
                         "apply_result", "apply_in", "apply_out"):
                 ref = v.attrs.get(key)
-                if isinstance(ref, Value):
+                if isinstance(ref, ProgramValue):
                     reads.add(ref.id)
                 elif isinstance(ref, _Affine):
                     reads.update(term.id for term, _ in ref.terms)
@@ -295,4 +300,3 @@ class _ProgramInspect(_ProgramConstants, _ProgramBase):
         else:
             lines.append("  GPU detectors  : none tripped (host-side heuristic)")
         return "\n".join(lines)
-

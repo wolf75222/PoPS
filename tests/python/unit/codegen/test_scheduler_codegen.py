@@ -54,7 +54,7 @@ def _field_program(schedule):
         P._call("fields_from_state", U)
     else:
         P._call("fields_from_state", U, schedule=schedule)
-    P.commit("plasma", U)
+    P.commit(P.state("U", block="plasma").next, U)
     return P
 
 
@@ -75,8 +75,8 @@ def _scratch_program(schedule):
     U = P.state("ions")
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    R.attrs["schedule"] = schedule
-    P.commit("ions", P.linear_combine("U1", U + dt * R))
+    R = P._replace_value(R, attrs={**R.attrs, "schedule": schedule})
+    P.commit(P.state("U", block="ions").next, P.linear_combine("U1", U + dt * R))
     return P
 
 
@@ -125,12 +125,36 @@ def test_when_reuses_program_predicate_token():
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     cond = P.norm2(R) < 1e-6  # a Program Bool predicate emitted before the scheduled node
     R2 = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    R2.attrs["schedule"] = adctime.when(cond).hold()
-    P.commit("ions", P.linear_combine("U1", U + dt * R2))
+    R2 = P._replace_value(
+        R2, attrs={**R2.attrs, "schedule": adctime.when(cond).hold()})
+    P.commit(P.state("U", block="ions").next, P.linear_combine("U1", U + dt * R2))
     P._check_schedules_lowerable()  # a Program Bool when() lowers
     cpp = P.emit_cpp_program(model=_transport_model())
-    assert "< static_cast<pops::Real>(1e-06)" in cpp  # the predicate is the due test
+    assert "< 1e-06" in cpp                           # exact predicate threshold
     assert "ctx.cache_should_update" not in cpp       # when() is a predicate, not a period
+
+
+def test_frozen_when_codegen_is_repeatable_and_keeps_tokens_emission_local():
+    P = adctime.Program("frozen_when_sched")
+    U = P.state("ions")
+    fields = P.solve_fields(U)
+    rate = P._rhs_legacy(state=U, fields=fields, flux=True, sources=["default"])
+    condition = P.norm2(rate) < 1e-6
+    scheduled = P._rhs_legacy(
+        state=U, fields=fields, flux=True, sources=["default"])
+    scheduled = P._replace_value(
+        scheduled, attrs={**scheduled.attrs, "schedule": adctime.when(condition).hold()})
+    P.commit(P.state("U", block="ions").next,
+             P.linear_combine("U1", U + P.dt * scheduled))
+    P.freeze()
+    before = P._ir_hash()
+
+    first = P.emit_cpp_program(model=_transport_model())
+    second = P.emit_cpp_program(model=_transport_model())
+
+    assert first == second
+    assert P._ir_hash() == before
+    assert not hasattr(P, "_when_tokens")
 
 
 def test_when_over_python_callable_refuses():

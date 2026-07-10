@@ -39,6 +39,21 @@ def test_rate_bundle_equality_and_hash():
     assert b1 != model.RateBundle({"electrons": model.Rate(e)})
 
 
+def test_rate_bundle_is_an_immutable_hash_stable_signature_value():
+    e = model.StateSpace("e", ("a",))
+    bundle = model.RateBundle({"electrons": model.Rate(e)})
+    signature = model.Signature((e,), bundle)
+    lookup = {bundle: "rate", signature: "signature"}
+
+    assert lookup[bundle] == "rate" and lookup[signature] == "signature"
+    assert not hasattr(bundle, "add")
+    with pytest.raises(TypeError):
+        bundle._rates["ions"] = model.Rate(model.StateSpace("i", ("b",)))
+    with pytest.raises(AttributeError, match="immutable"):
+        bundle._rates = {}
+    assert lookup[bundle] == "rate" and lookup[signature] == "signature"
+
+
 def test_coupled_rate_operator_registers_with_bundle_output():
     mod, _, _, bundle = _two_fluid_module()
     op = mod.operator_registry().get("collision")
@@ -115,8 +130,12 @@ def test_coupled_rate_now_lowers_to_cpp():
     P = adctime.Program("step").bind_operators(mod)
     e_n, i_n = P.state("electrons", space=e), P.state("ions", space=i)
     C = P._call("collision", e_n, i_n)
-    P.commit_many({"electrons": P.linear_combine("e1", e_n + P.dt * C["electrons"]),
-                   "ions": P.linear_combine("i1", i_n + P.dt * C["ions"])})
+    P.commit_many({
+        P.state("U", block="electrons").next:
+            P.linear_combine("e1", e_n + P.dt * C["electrons"]),
+        P.state("U", block="ions").next:
+            P.linear_combine("i1", i_n + P.dt * C["ions"]),
+    })
     P._check_lowerable(None)  # no longer raises for a cons-only coupled_rate
     src = P.emit_cpp_program(model=None)
     assert src.count("pops::for_each_cell") == 1

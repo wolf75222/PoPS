@@ -8,13 +8,9 @@ RateBundle / StageStateSet / atomic commit_many behaviour.
 import pytest
 
 from pops import model as _model
+from pops.ir import ScalarLiteral
 from pops.time import Program
 from pops.math import rate, unknown
-
-
-def _op(name):
-    """A typed OperatorHandle for the public linear_source route (ADC-625): unwraps to name."""
-    return _model.OperatorHandle(name)
 
 
 def _ir(P):
@@ -38,7 +34,7 @@ def test_fields_define_commit_match_primitive_ir():
             u1 = P.define("U1", u + dt * r)
         else:
             u1 = P.linear_combine("U1", u + dt * r)
-        P.commit("plasma", u1)
+        P.commit(P.state("U", block="plasma").next, u1)
         return P
 
     assert _ir(build(True)) == _ir(build(False))
@@ -53,13 +49,13 @@ def test_solve_matches_linear_combine_plus_solve_local_linear():
         if board:
             u1 = P.solve(
                 "U1",
-                (P.I - dt * P.linear_source(_op("lorentz"))) @ unknown("U1") == u + dt * r,
+                (P.I - dt * P._linear_source("lorentz")) @ unknown("U1") == u + dt * r,
             )
         else:
-            op = P.I - dt * P.linear_source(_op("lorentz"))  # build the operator first (board order)
+            op = P.I - dt * P._linear_source("lorentz")  # primitive private selector seam
             rhs = P.linear_combine("U1_rhs", u + dt * r)
             u1 = P.solve_local_linear(name="U1", operator=op, rhs=rhs)
-        P.commit("plasma", u1)
+        P.commit(P.state("U", block="plasma").next, u1)
         return P
 
     assert _ir(build(True)) == _ir(build(False))
@@ -68,19 +64,21 @@ def test_solve_matches_linear_combine_plus_solve_local_linear():
 def test_apply_operator_to_state_via_matmul():
     P = Program("apply")
     u = P.state("plasma")
-    lu_board = P.linear_source(_op("lorentz")) @ u
-    lu_manual = P.apply(operator=P.linear_source(_op("lorentz")), state=u)
+    lu_board = P._linear_source("lorentz") @ u
+    lu_manual = P.apply(operator=P._linear_source("lorentz"), state=u)
     assert lu_board.op == "apply" and lu_board.attrs["linear_source"] == "lorentz"
     assert lu_manual.op == "apply"
 
 
-def test_define_equation_keeps_and_renames_rhs():
+def test_define_equation_replaces_and_renames_rhs_immutably():
     P = Program("def")
     u = P.state("plasma")
     raw = P._rhs_legacy(name="tmp", state=u, flux=True, sources=["electric"])
     r = P.define("R^n", rate(u) == raw)
-    assert r is raw            # same IR node
+    assert r is not raw
+    assert r.id == raw.id      # same SSA identity, immutable replacement object
     assert r.name == "R^n"     # renamed to the board label
+    assert any(value is r for value in P._values)
 
 
 def test_commit_many_is_atomic():
@@ -89,7 +87,8 @@ def test_commit_many_is_atomic():
     i = P.state("ions")
     e1 = P.linear_combine("e1", 2.0 * e)
     i1 = P.linear_combine("i1", 2.0 * i)
-    P.commit_many({"electrons": e1, "ions": i1})
+    P.commit_many({P.state("U", block="electrons").next: e1,
+                   P.state("U", block="ions").next: i1})
     assert set(P.commits()) == {"electrons", "ions"}
 
 
@@ -99,9 +98,10 @@ def test_commit_many_rejects_double_commit_without_partial():
     i = P.state("ions")
     e1 = P.linear_combine("e1", 2.0 * e)
     i1 = P.linear_combine("i1", 2.0 * i)
-    P.commit("electrons", e1)
+    P.commit(P.state("U", block="electrons").next, e1)
     with pytest.raises(ValueError, match="committed more than once"):
-        P.commit_many({"electrons": e1, "ions": i1})
+        P.commit_many({P.state("U", block="electrons").next: e1,
+                       P.state("U", block="ions").next: i1})
     # atomic: 'ions' must NOT have been committed because validation failed first
     assert "ions" not in P.commits()
 
@@ -110,8 +110,8 @@ def test_commit_many_rejects_non_state():
     P = Program("ms")
     e = P.state("electrons")
     scalar = P.norm2(e)
-    with pytest.raises(ValueError, match="needs a State value"):
-        P.commit_many({"electrons": scalar})
+    with pytest.raises(TypeError, match="needs a State or scalar_field ProgramValue"):
+        P.commit_many({P.state("U", block="electrons").next: scalar})
 
 
 def test_state_set_drives_a_multi_block_field_solve():
@@ -126,11 +126,23 @@ def test_state_set_drives_a_multi_block_field_solve():
     assert len(f.inputs) == 3
 
 
+def test_state_set_rejects_stringified_or_mismatched_block_identity():
+    P = Program("strict_state_set")
+    state = P.state("electrons")
+
+    with pytest.raises(TypeError, match="name must be a non-empty string"):
+        P.state_set(object(), {"electrons": state})
+    with pytest.raises(TypeError, match="block names"):
+        P.state_set("stage", {object(): state})
+    with pytest.raises(ValueError, match="that block's State"):
+        P.state_set("stage", {"ions": state})
+
+
 def test_rate_bundle_typed_multi_output():
     e = _model.StateSpace("electron_state", ["ne", "mex", "mey"])
     i = _model.StateSpace("ion_state", ["ni", "mix", "miy"])
     rb = _model.RateBundle({"electrons": _model.Rate(e), "ions": _model.Rate(i)})
-    assert rb["electrons"] == _model.Rate("electron_state")
+    assert rb["electrons"] == _model.Rate(e)
     rb.require("electrons", e)  # correct StateSpace -> ok
     with pytest.raises(TypeError):
         rb.require("electrons", i)  # wrong Rate on wrong StateSpace -> rejected
@@ -145,7 +157,7 @@ def test_record_and_check_invariant_lower_to_record_scalar():
     after = P.sum(e1)
     out = P.check_invariant("mass", before=before, after=after, tolerance=1e-9)
     assert out.vtype == "scalar"
-    assert out.attrs.get("tolerance") == 1e-9
+    assert out.attrs.get("tolerance") == ScalarLiteral.from_value(1e-9)
     assert [v for v in P._values if v.op == "record_scalar"]  # both recorded
 
 

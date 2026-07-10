@@ -14,8 +14,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pops.model.operators import OPERATOR_KINDS
+from pops.time.operator_resolution import resolve_operator_handle
 from pops.time.schedule import Schedule
-from pops.time.values import Value, _CoupledResult
+from pops.time.program_value_validation import require_owned, require_top_level
+from pops.time.values import ProgramValue, _CoupledResult
 
 if TYPE_CHECKING:
     from pops.time._program_contract import _ProgramBase
@@ -35,10 +37,11 @@ class _ProgramCall(_ProgramBase):
         ``TypeError`` naming the handle path: a Program references an operator only by the typed
         handle, never by a free string (Spec 5 "one clean API", ADC-479 criterion 23).
 
-        The handle is a transparent alias for its ``.name``: it follows the EXACT same registry
-        resolution + lowering, so ``P.call(handle, ...)`` builds the byte-identical IR as the
-        INTERNAL ``P._call(handle.name, ...)`` path (used by the ``pops.lib.time`` macros and the
-        operator-first lowering). Resolves the name against the bound operator registry (see
+        The handle retains its owner, kind and optional structural signature through exact registry
+        resolution; only then does lowering use the registered operator name. Thus
+        ``P.call(handle, ...)`` builds the byte-identical IR as the
+        INTERNAL ``P._call(registered_name, ...)`` path (used by lowerers after validation and the
+        operator-first lowering). Resolves the handle against the bound operator registry (see
         :meth:`bind_operators`), type-checks the arguments against the operator's ``Signature``, then
         lowers to the equivalent primitive op so the result is IDENTICAL to the matching PDE shortcut:
         a ``field_operator`` to ``solve_fields``, a ``local_source`` to ``source``, a
@@ -65,16 +68,21 @@ class _ProgramCall(_ProgramBase):
         :meth:`call` delegates to, and the path the ``pops.lib.time`` macros, the board/operator
         handles and the re-entrant typed lowering use directly (a string token survives here only as
         an internal selector, undocumented in the public API)."""
-        operator_name = self._operator_call_name(operator)
-        if self._registry is None:
-            raise ValueError("P.call(%r): no operators bound; call P.bind_operators(model) first"
-                             % (operator_name,))
-        op = self._registry.get(operator_name)  # clear KeyError on an unknown operator
+        from pops.model import OperatorHandle
+        if isinstance(operator, OperatorHandle):
+            op = resolve_operator_handle(self, operator, where="P.call")
+            operator_name = op.name
+        else:
+            operator_name = self._operator_call_name(operator)
+            if self._registry is None:
+                raise ValueError("P._call(%r): no operators bound; call P.bind_operators(model) first"
+                                 % (operator_name,))
+            op = self._registry.get(operator_name)  # clear KeyError on an unknown operator
         self._check_call_args(op, args)
         if schedule is not None:
             self._validate_schedule(op, schedule)
         result = self._lower_call(op, operator_name, args, name)
-        # A coupled_rate has no single output Value (it returns a _CoupledResult): its per-block
+        # A coupled_rate has no single output ProgramValue (it returns a _CoupledResult): its per-block
         # spaces are tagged inside _lower_coupled_rate, and a schedule on the whole bundle is not
         # meaningful yet -- reject it with a clear message rather than leaking an AttributeError.
         if isinstance(result, _CoupledResult):
@@ -86,26 +94,21 @@ class _ProgramCall(_ProgramBase):
         # Tag the result with the operator's declared output type (a Rate / FieldSpace /
         # LocalLinearOperator / StateSpace) so downstream ops can type-check the composition
         # (a Rate(U) cannot be combined with a State(V); an L: U -> U cannot drive a State(V)).
-        result.space = op.signature.output
+        attrs = dict(result.attrs)
         if schedule is not None:
-            result.attrs["schedule"] = schedule
-        return result
+            attrs["schedule"] = schedule
+        return self._replace_value(result, attrs=attrs, space=op.signature.output)
 
     def _operator_call_name(self, operator: Any) -> Any:
         """Normalize an internal :meth:`_call` operator selector to its registry name.
 
-        Accepts EITHER a plain ``str`` (an internal selector token, returned unchanged) OR an
-        :class:`pops.model.OperatorHandle` (its ``.name`` is returned). A handle resolves through the
-        identical registry lookup + lowering as its name, so the IR is byte-identical. Any other type
-        is a clear ``TypeError``. The public string REJECT lives in :meth:`call`; this internal
-        normalizer accepts the string the lowering and the lib.time macros pass."""
-        from pops.model import OperatorHandle
-        if isinstance(operator, OperatorHandle):
-            return operator.name
-        if isinstance(operator, str):
+        Accepts only a plain ``str`` internal selector token. Handles are resolved by
+        :func:`resolve_operator_handle` before this private seam is reached, so no typed identity can
+        be reduced to a name here. The public string reject lives in :meth:`call`."""
+        if isinstance(operator, str) and operator:
             return operator
         raise TypeError(
-            "_call: operator must be a str name or an pops.model.OperatorHandle, got %r"
+            "_call: internal operator selector must be a non-empty string, got %r"
             % (operator,))
 
     def _validate_schedule(self, op: Any, schedule: Any) -> Any:
@@ -115,6 +118,13 @@ class _ProgramCall(_ProgramBase):
             raise TypeError(
                 "schedule= expects an pops.time Schedule (always()/every(n)/...), got %r"
                 % (schedule,))
+        if schedule.kind == "when":
+            cond = schedule.params.get("cond")
+            if isinstance(cond, ProgramValue):
+                require_top_level(self, cond, "schedule when(cond)")
+                if cond.vtype != "bool" or not any(v.id == cond.id for v in self._values):
+                    raise ValueError(
+                        "schedule when(cond): cond must be a previously authored Bool value")
         if schedule.needs_cache() and not op.capabilities.get("cacheable"):
             raise ValueError(
                 "operator %r is not cacheable; cannot use schedule %s -- declare it with "
@@ -142,19 +152,22 @@ class _ProgramCall(_ProgramBase):
         # solve_fields (named-field routing via the operator name as before).
         state_args = [a for a in args if getattr(a, "vtype", None) == "state"]
         if len(state_args) > 1:
-            return self.solve_fields_from_blocks(state_args, name=name)
+            result = self.solve_fields_from_blocks(state_args, name=name)
+            return self._replace_value(result, space=op.signature.output)
         field = None if operator_name == "fields_from_state" else operator_name
-        return self.solve_fields(name=name, state=args[0], field=field)
+        result = self.solve_fields(name=name, state=args[0], field=field)
+        return self._replace_value(result, space=op.signature.output)
 
     def _lower_local_source(self, op: Any, operator_name: Any, args: Any, name: Any) -> Any:
         fields = args[1] if len(args) > 1 else None
-        if operator_name == "source_default":
+        source_name = op.lowering.get("source", operator_name)
+        if source_name == "default":
             # The default source lives in m._source, not as a named source_term; reach it
             # through the source-only RHS path (byte-identical to flux=False,
             # sources=["default"]), since ctx.source(name) only resolves named source_terms.
             return self._rhs_legacy(name=name, state=args[0], fields=fields, flux=False,
                                     sources=["default"])
-        return self.source(operator_name, state=args[0], fields=fields)
+        return self._source(source_name, state=args[0], fields=fields)
 
     def _lower_rate(self, op: Any, operator_name: Any, args: Any, name: Any) -> Any:
         # grid_operator (flux divergence only) and local_rate (flux + sources per op.lowering).
@@ -171,7 +184,14 @@ class _ProgramCall(_ProgramBase):
 
     def _lower_local_linear_operator(self, op: Any, operator_name: Any, args: Any,
                                      name: Any) -> Any:
-        return self._linear_source(operator_name)
+        result = self._linear_source(operator_name)
+        contexts = [arg.field_context for arg in args
+                    if getattr(arg, "vtype", None) == "fields" and arg.field_context is not None]
+        if not contexts:
+            return result
+        from pops.time.field_context import merge_field_provenance
+        return self._replace_value(
+            result, field_context=merge_field_provenance(*contexts))
 
     def _lower_projection(self, op: Any, operator_name: Any, args: Any, name: Any) -> Any:
         return self.project(name=name, state=args[0])
@@ -181,7 +201,7 @@ class _ProgramCall(_ProgramBase):
 
         A coupled operator (collisions, ionization, ...) of arbitrary arity returns a typed
         ``RateBundle``; ``P.call`` returns a :class:`_CoupledResult` whose ``["electrons"]`` is the
-        per-block rate (an RHS Value over that block) so it composes like any other RHS. The
+        per-block rate (an RHS ProgramValue over that block) so it composes like any other RHS. The
         coupled-rate KERNEL codegen has landed (ADC-457): ``_emit_coupled_rate_kernel`` lowers the
         ``coupled_rate`` node to one multi-state ``for_each_cell`` and each ``coupled_rate_out``
         projects its block's rate scratch.
@@ -196,8 +216,7 @@ class _ProgramCall(_ProgramBase):
         for blk in blocks:
             out = self._new("rhs", "coupled_rate_out", (coupled,),
                             {"operator": operator_name, "out_block": blk},
-                            "%s_%s" % (base, blk), blk)
-            out.space = bundle[blk]                   # the per-block RateSpace, for type checks
+                            "%s_%s" % (base, blk), blk, space=bundle[blk])
             outs[blk] = out
         return _CoupledResult(outs)
 
@@ -215,19 +234,27 @@ class _ProgramCall(_ProgramBase):
         want_of = {"state": "state", "field": "fields"}
         for t, a in zip(expected, args, strict=True):
             want = want_of[t.kind]
-            if not (isinstance(a, Value) and a.vtype == want):
-                got = a.vtype if isinstance(a, Value) else type(a).__name__
+            if not (isinstance(a, ProgramValue) and a.vtype == want):
+                got = a.vtype if isinstance(a, ProgramValue) else type(a).__name__
                 raise ValueError(
                     "operator %r argument for %s %r expects a %s value, got %s"
                     % (op.name, t.kind, t.name, want, got))
-            # If the argument carries an operator-first space tag, its name must match the
-            # operator's declared input space (a value over 'V' cannot feed an input typed 'U').
-            arg_space = getattr(a, "space", None)
-            arg_name = getattr(arg_space, "name", None)
-            if arg_name is not None and arg_name != t.name:
+            require_owned(self, a, "operator %r argument" % op.name)
+            # If the argument carries an operator-first space tag, its COMPLETE structural space
+            # must match the declaration. Component order affects generated kernels, so name-only
+            # equality would permit two different C++ programs to share one cache identity.
+            arg_space = getattr(self._canonical_value(a), "space", None)
+            if arg_space is None:
                 raise ValueError(
-                    "operator %r expects %s %r but got a value over %r"
-                    % (op.name, t.kind, t.name, arg_name))
+                    "operator %r requires a typed %s %r; declare the state with space= or bind "
+                    "a registry with one unambiguous StateSpace before P.state"
+                    % (op.name, t.kind, t.name))
+            if arg_space != t:
+                raise ValueError(
+                    "operator %r expects %s %r with components %r but got a value over %r "
+                    "with components %r"
+                    % (op.name, t.kind, t.name, getattr(t, "components", ()),
+                       getattr(arg_space, "name", None), getattr(arg_space, "components", ())))
 
 
 # ADC-642: the one operator-kind -> lowering dispatch, keyed on the shared OPERATOR_KINDS

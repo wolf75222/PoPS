@@ -31,7 +31,9 @@ from pops.problem.amr_handle import ProblemAmrHandle
 from pops.problem.registries import (
     _NO_KIND, BlockRegistry, ConstraintRegistry, FieldRegistry, ParamRegistry,
     RuntimePolicyRegistry, TimeRegistry)
+from pops.problem._registry_freeze import inspection_copy
 from pops.problem.report import ProblemValidationReport
+from pops.model import OwnerPath
 
 
 class Problem:
@@ -57,8 +59,28 @@ class Problem:
     #: A Problem names a pure-Python assembly, not a single native C++ symbol.
     native_id = None
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name in ("_name", "_owner_path") and hasattr(self, name):
+            raise AttributeError("pops.Problem identity is immutable; construct a new Problem")
+        if getattr(self, "_frozen", False):
+            if name != "_frozen" or value is not True:
+                raise RuntimeError("pops.Problem is frozen: cannot change %s" % name)
+        object.__setattr__(self, name, value)
+
+    def __delattr__(self, name: str) -> None:
+        if name in ("_name", "_owner_path"):
+            raise AttributeError("pops.Problem identity is immutable; construct a new Problem")
+        if getattr(self, "_frozen", False):
+            raise RuntimeError("pops.Problem is frozen: cannot delete %s" % name)
+        object.__delattr__(self, name)
+
     def __init__(self, layout: Any = None, name: Any = None) -> None:
-        self._name = str(name) if name else "Problem"
+        if name is None:
+            name = "Problem"
+        if not isinstance(name, str) or not name:
+            raise TypeError("Problem: name must be a non-empty string")
+        self._name = name
+        self._owner_path = OwnerPath.fresh("problem", self._name)
         # ADC-563 freeze: a Problem is MUTABLE during assembly and FROZEN by pops.compile. After
         # freeze every mutating setter RAISES (naming the Problem) and freeze() returns a stable
         # ProblemSnapshot the compile cache keys on.
@@ -69,8 +91,8 @@ class Problem:
         # either. A constructor layout= is still accepted (back-compat) and, when given, is carried
         # here so pops.compile can cross-check it against the layout passed at compile.
         self._layout = layout
-        self._block_registry = BlockRegistry()
-        self._field_registry = FieldRegistry()
+        self._block_registry = BlockRegistry(self.owner_path)
+        self._field_registry = FieldRegistry(self.owner_path)
         self._time_registry = TimeRegistry()
         self._param_registry = ParamRegistry()
         self._runtime_registry = RuntimePolicyRegistry()
@@ -79,6 +101,11 @@ class Problem:
     @property
     def name(self) -> Any:
         return self._name
+
+    @property
+    def owner_path(self) -> OwnerPath:
+        """Immutable qualified identity anchor for every handle owned by this Problem."""
+        return self._owner_path
 
     # --- freeze lifecycle (ADC-563) -----------------------------------------------------
     def _guard_mutable(self, what: Any) -> None:
@@ -101,20 +128,21 @@ class Problem:
         if self._frozen:
             return self._snapshot
         from pops.problem._snapshot import build_problem_snapshot
+        # Two-phase commit: canonicalisation can call descriptor projections and therefore fail.
+        # Build and validate the complete inert snapshot while every authoring object is still
+        # mutable; only a successful candidate is followed by the irreversible registry/descriptor
+        # seal.  A serialization error leaves the Problem exactly as editable as it was before the
+        # call, so the user can repair the declaration and retry freeze().
+        candidate = build_problem_snapshot(self)
         self._freeze_registries()
-        self._snapshot = build_problem_snapshot(self)
+        self._snapshot = candidate
         self._frozen = True
         return self._snapshot
 
     def _freeze_registries(self) -> None:
         """Cascade freeze to each registry and the member descriptors (fields' solvers, layout)."""
-        for registry in (self._block_registry, self._field_registry, self._time_registry,
-                         self._param_registry, self._runtime_registry, self._constraint_registry):
-            freeze = getattr(registry, "freeze", None)
-            if callable(freeze):
-                freeze()
-        if self._layout is not None and hasattr(self._layout, "freeze"):
-            self._layout.freeze()
+        from pops.problem._freeze_transaction import freeze_problem_graph
+        freeze_problem_graph(self)
 
     @property
     def frozen(self) -> Any:
@@ -272,12 +300,14 @@ class Problem:
     def blocks(self) -> Any:
         """The declared blocks as ``{name: BlockHandle}`` (ADC-526 stable-handle accessor)."""
         from pops.problem.handles import BlockHandle
-        return {name: BlockHandle(name, owner=self) for name in self._block_registry.names()}
+        return {name: BlockHandle(name, owner=self.owner_path)
+                for name in self._block_registry.names()}
 
     def fields(self) -> Any:
         """The declared field problems as ``{name: FieldHandle}`` (ADC-526 stable-handle accessor)."""
         from pops.problem.handles import FieldHandle
-        return {name: FieldHandle(name, owner=self) for name in self._field_registry.names()}
+        return {name: FieldHandle(name, owner=self.owner_path)
+                for name in self._field_registry.names()}
 
     # --- DescriptorProtocol surface (pure Python; no runtime, no codegen) ----
     def _layout_name(self) -> Any:
@@ -433,19 +463,22 @@ class Problem:
         info["outputs"] = runtime["outputs"]
         info["constraints"] = self._constraint_registry.inspect()
         info["time"] = self._time_registry.inspect()["program"]
-        return info
+        return inspection_copy(info)
 
     def to_dict(self) -> Any:
-        """A JSON-ready, array-free serialisation of the assembly for cache / codegen / debug.
+        """A JSON-ready, array-free inspection serialisation for codegen / debug.
 
         A superset of :meth:`_inspect_payload` that also names each block's stable handle id, so the
         whole declaration round-trips through a plain dict with no runtime object and no numpy array
-        (ADC-526). It stays a plain dict (the snapshot / codegen consume it), distinct from the typed
-        :meth:`inspect` report.
+        (ADC-526). It stays a plain dict for codegen, distinct from the typed :meth:`inspect` report.
+        The compile-cache snapshot reads the raw typed registries instead, because display summaries
+        here intentionally abbreviate descriptors and are not a complete structural identity.
         """
         info = self._inspect_payload()
-        info["handles"] = {"blocks": [h.handle_id for h in self.blocks().values()],
-                           "fields": [h.handle_id for h in self.fields().values()]}
+        info["handles"] = {
+            "blocks": [h.canonical_identity() for h in self.blocks().values()],
+            "fields": [h.canonical_identity() for h in self.fields().values()],
+        }
         return info
 
     def __str__(self) -> str:

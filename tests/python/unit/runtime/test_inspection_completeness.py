@@ -47,7 +47,7 @@ def _program(name="intro_demo"):
     U = P.state("plasma")
     f = P.solve_fields("phi", U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
     return P
 
 

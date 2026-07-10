@@ -89,6 +89,22 @@ def _spatial():
     return pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov())
 
 
+def _condensed_program(model, *, block="plasma", theta=1.0):
+    """Author the condensed preset against the exact bound local-linear declaration."""
+    from pops.model import OperatorHandle
+    from pops.time import Program
+
+    registry = model.operator_registry()
+    operator = registry.operators_of_kind("local_linear_operator")[0]
+    handle = OperatorHandle(
+        operator.name, kind=operator.kind, owner=registry.owner_path,
+        signature=operator.signature)
+    program = Program("condensed_schur").bind_operators(model)
+    lib_time.condensed_schur(
+        program, block, alpha=1.0, theta=theta, linear_operator=handle)
+    return program
+
+
 def _problem(model, program, block="plasma"):
     """A single-block Problem carrying the model + spatial + the whole-system time Program. No explicit
     Poisson field: the model's elliptic_rhs drives the default AMR/System Poisson solve, matching the
@@ -279,8 +295,8 @@ def _decay_program(name="adc634_decay_prog", block="gas"):
     from pops import time as adctime
     P = adctime.Program(name)
     U = P.state(block)
-    S = P.source("decay", state=U)
-    P.commit(block, P.linear_combine("U1", U + P.dt * S))
+    S = P._source("decay", state=U)
+    P.commit(P.state("U", block=block).next, P.linear_combine("U1", U + P.dt * S))
     return P
 
 
@@ -402,7 +418,7 @@ def test_composition_query_condensed_green_633():
     condensed=green now that ADC-633 wired the per-level assembly + the flat/composite solve and ADC-637
     made the generic route the sole route. Pure Python."""
     print("== composition: amr_program_op_support(condensed_schur) is green (condensed group) ==")
-    schur = lib_time.condensed_schur("plasma", alpha=1.0)
+    schur = _condensed_program(_schur_model("adc633_support"))
     support = amr_program_op_support(schur)
     chk(support.get("condensed") == "green",
         "the condensed Program reports condensed=green (support = %r)" % support)
@@ -446,7 +462,7 @@ def test_clean_amr_schur_program_compiles_installs_and_runs():
     u0 = parity._init_density()
     bz0 = 4.0 * np.ones((N, N))
     model = _schur_model("adc633_schur")
-    schur = lib_time.condensed_schur("plasma", alpha=1.0)
+    schur = _condensed_program(model)
     problem = _problem(model, schur)
     try:
         compiled = pops.compile(problem, layout=_amr_layout())
@@ -487,7 +503,7 @@ def _clean_amr_schur_run(theta, name):
     u0 = parity._init_density()
     bz0 = 4.0 * np.ones((N, N))
     model = _schur_model(name)
-    schur = lib_time.condensed_schur("plasma", alpha=1.0, theta=theta)
+    schur = _condensed_program(model, theta=theta)
     problem = _problem(model, schur)
     try:
         compiled = pops.compile(problem, layout=_amr_layout())
@@ -534,7 +550,7 @@ def _clean_uniform_schur_run(theta, name):
     lifted, lerr = _lift_schur_density(_schur_model(name + "_lift"), u0)
     if lifted is None:
         return None, lerr
-    schur = lib_time.condensed_schur("plasma", alpha=1.0, theta=theta)
+    schur = _condensed_program(model, theta=theta)
     problem = _problem(model, schur)
     try:
         compiled = pops.compile(problem, layout=_uniform_layout())
@@ -610,7 +626,7 @@ def test_flat_amr_condensed_program_matches_system_bit_for_bit():
 
     def _run(layout, seed, seed_as_density):
         model = _schur_model("adc637_flat")
-        schur = lib_time.condensed_schur("plasma", alpha=1.0)
+        schur = _condensed_program(model)
         problem = _problem(model, schur)
         try:
             compiled = pops.compile(problem, layout=layout)

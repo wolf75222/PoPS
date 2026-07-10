@@ -104,14 +104,15 @@ def test_explicit_rate_is_a_local_rate_operator():
     op = m.module.operator_registry().get("explicit_rate")
     assert op.kind == "local_rate"
     # signature output is the tangent (Rate) of the state U
-    assert sig.output == _model.Rate("U")
+    assert sig.output == _model.Rate(m.module.state_spaces()["U"])
 
 
 def test_implicit_operator_is_a_local_linear_operator():
     m = _euler_poisson_lorentz()
     op = m.module.operator_registry().get("implicit_operator")
     assert op.kind == "local_linear_operator"
-    assert op.signature.output == _model.LocalLinearOperator("U", "U")
+    state = m.module.state_spaces()["U"]
+    assert op.signature.output == _model.LocalLinearOperator(state, state)
 
 
 def test_local_linear_operator_object_is_not_callable():
@@ -158,7 +159,7 @@ def test_rate_and_operator_return_callables_usable_in_a_program():
     implicit_operator = m.operator("implicit_operator", returns=c_b, inputs=["fields"])
     assert callable(explicit_rate) and callable(implicit_operator)
 
-    P = Program("board_calls")
+    P = Program("board_calls").bind_operators(m.module)
     U_n = P.state("plasma")
     f_n = P.solve_fields("f_n", U_n)
     R = explicit_rate(U_n, f_n)         # -> P._call("explicit_rate", U_n, f_n)

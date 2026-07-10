@@ -2,7 +2,7 @@
 """Optional per-Program dt bound (epic ADC-399 / ADC-417, spec section 18).
 
 A compiled time Program may OPTIONALLY provide a dt bound via ``@P.dt_bound`` (decorator) or
-``P.set_dt_bound(expr_or_fn)``. The bound builds an IR scalar sub-program (reading the live state +
+``P.set_dt_bound(builder)``. The bound builds an IR scalar sub-program (reading the live state +
 reductions + the geometry hmin + the per-block max wave speed); it is NOT run in Python during
 ``sim.step_cfl``. ``step_cfl`` then uses ``min(native CFL dt, program dt bound)``: a program bound
 SMALLER than the native CFL wins; a LARGER bound loses (native CFL wins); and a Program WITHOUT a dt
@@ -56,7 +56,7 @@ def _fe(name="fe_dtbound"):
     U = P.state("ions")
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit("ions", P.linear_combine("U1", U + P.dt * R))
+    P.commit(P.state("U", block="ions").next, P.linear_combine("U1", U + P.dt * R))
     return P
 
 
@@ -88,12 +88,12 @@ chk("ctx.hmin()" in src_dec, "dt_bound lowers P.hmin() -> ctx.hmin()")
 chk("ctx.max_wave_speed(0, " in src_dec, "dt_bound lowers P.max_wave_speed -> ctx.max_wave_speed(0, .)")
 chk("cfl" in src_dec.split("pops_program_dt_bound", 1)[1], "the cfl argument is used in the bound body")
 
-# (A3) P.set_dt_bound(expr) (the non-decorator form) records the same way; a different bound -> a
+# (A3) P.set_dt_bound(builder) (the non-decorator form) records the same way; a different bound -> a
 # different IR hash (the bound is part of the IR identity / cache key).
 P_set = _fe("fe_setter")
-Ub = P_set.state("ions")
-P_set.set_dt_bound(0.5 * P_set.hmin() / P_set.max_wave_speed(Ub))
-chk(P_set.has_dt_bound(), "P.set_dt_bound(expr) records the bound")
+P_set.set_dt_bound(
+    lambda P, _cfl: 0.5 * P.hmin() / P.max_wave_speed(P.state("ions")))
+chk(P_set.has_dt_bound(), "P.set_dt_bound(builder) records the bound")
 chk(P_no._ir_hash() != P_set._ir_hash(), "a dt bound changes the IR hash (distinct cache key)")
 
 # (A4) fail-loud: the body must return a Scalar, set at most once, and read only (no commit).
@@ -106,13 +106,22 @@ else:
     chk(False, "non-Scalar dt bound body should be rejected")
 
 P_twice = _fe("fe_twice")
-P_twice.set_dt_bound(P_twice.hmin())
+P_twice.set_dt_bound(lambda P, _cfl: P.hmin())
 try:
-    P_twice.set_dt_bound(P_twice.hmin())
+    P_twice.set_dt_bound(lambda P, _cfl: P.hmin())
 except ValueError as exc:
     chk("already set" in str(exc), "a second set_dt_bound is rejected")
 else:
     chk(False, "a second set_dt_bound should be rejected")
+
+P_prebuilt = _fe("fe_prebuilt")
+prebuilt = P_prebuilt.hmin()
+try:
+    P_prebuilt.set_dt_bound(prebuilt)
+except TypeError as exc:
+    chk("builder callable" in str(exc), "a pre-built top-level Scalar is rejected clearly")
+else:
+    chk(False, "a pre-built Scalar must not become an invalid isolated dt-bound DAG")
 
 # A runtime Scalar must never collapse to a Python bool / index (it is unknown until the step runs).
 try:
@@ -171,7 +180,7 @@ def fe_program(name, *, factor=None):
     U = P.state("ions")
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit("ions", P.linear_combine("U1", U + P.dt * R))
+    P.commit(P.state("U", block="ions").next, P.linear_combine("U1", U + P.dt * R))
     if factor is not None:
         @P.dt_bound
         def _b(Pr, cfl, _f=factor):

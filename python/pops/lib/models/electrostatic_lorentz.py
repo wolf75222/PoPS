@@ -17,7 +17,8 @@ from __future__ import annotations
 from typing import Any
 
 #: The canonical operator name the ``condensed_schur`` macro's generic route references. Authoring the
-#: J under this name lets the macro bind it without the caller passing an operator handle.
+#: Canonical readable name used by the provided authoring helper. The helper returns the typed
+#: handle; time macros never recover it from this string.
 LORENTZ_J_NAME = "electrostatic_lorentz_J"
 
 

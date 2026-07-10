@@ -10,11 +10,45 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops.ir.literals import scalar_cpp
+
 from pops.codegen.program_emit_kernels import (
     _apply_in_arg,
     _coeff_cpp,
     _emit_field_combine,
 )
+
+
+def _validate_matrix_free_contract(v: Any, model: Any) -> None:
+    """Validate matrix-free facts that need either the final node or physical model metadata."""
+    if v.op == "rhs_jacvec":
+        named = [source for source in (v.attrs.get("sources") or ()) if source != "default"]
+        if not isinstance(v.attrs.get("field_coupled"), bool):
+            raise ValueError("rhs_jacvec IR requires an explicit boolean field_coupled attribute")
+        if v.attrs.get("flux") is not True or named:
+            raise NotImplementedError(
+                "rhs_jacvec lowers only the default flux with sources=[] or ['default']; "
+                "got flux=%r, named_sources=%r" % (v.attrs.get("flux"), named))
+        return
+    if v.op != "solve_linear":
+        return
+    rhs = v.inputs[1]
+    if rhs.vtype != "state" or rhs.space is not None or model is None:
+        return
+    impl = getattr(model, "_m", model)
+    model_ncomp = getattr(impl, "n_cons", None)
+    if model_ncomp is None:
+        model_ncomp = getattr(impl, "n_vars", None)
+    if model_ncomp is None:
+        names = getattr(impl, "cons_names", None)
+        if names is None:  # opaque native ModelSpec: no truthful Python-side component metadata
+            return
+        model_ncomp = len(names)
+    declared = int(v.attrs["ncomp"])
+    if declared != int(model_ncomp):
+        raise ValueError(
+            "solve_linear: untyped State rhs uses operator ncomp=%d but the physical model "
+            "declares n_cons=%d" % (declared, int(model_ncomp)))
 
 
 def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
@@ -90,9 +124,16 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         raise NotImplementedError(
             "rhs_jacvec is only lowerable in a top-level / step-body matrix-free solve, not inside a "
             "control-flow (if/while/range) body (the Newton outer loop must be a static_range unroll)")
-    jac_scratch = {}  # jacvec op id -> (uk, r0, up, rp, cdt) names
-    ng_state = "ctx.state(0).n_grow()"  # the jacvec scratch needs the state's ghost count for rhs_into
+    jac_scratch = {}  # jacvec op id -> (uk, r0, up, rp, cdt, block_idx) names/provenance
     for w in jac_ops:
+        _validate_matrix_free_contract(w, None)
+        iterate_in, r0_in = w.inputs[2], w.inputs[3]
+        indices = program._block_indices()
+        if iterate_in.block not in indices:
+            raise ValueError(
+                "rhs_jacvec iterate block %r has no declared Program state" % iterate_in.block)
+        block_idx = indices[iterate_in.block]
+        ng_state = "ctx.state(%d).n_grow()" % block_idx
         uk = "jac_uk%d_%d" % (apply_id, w.id)
         r0 = "jac_r0%d_%d" % (apply_id, w.id)
         up = "jac_up%d_%d" % (apply_id, w.id)
@@ -108,9 +149,8 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         cdt = "jac_cdt%d_%d" % (apply_id, w.id)
         prelude.append("auto %s = std::make_shared<pops::Real>(static_cast<pops::Real>(0));" % cdt)
         captures.append(cdt)
-        jac_scratch[w.id] = (uk, r0, up, rp, cdt)
+        jac_scratch[w.id] = (uk, r0, up, rp, cdt, block_idx)
         # Step body: refresh the FROZEN captures from this iteration's live iterate / rhs(U^k) / dt.
-        iterate_in, r0_in = w.inputs[2], w.inputs[3]
         lines.append("ctx.lincomb(*%s, static_cast<pops::Real>(0), *%s, static_cast<pops::Real>(1), %s);"
                      % (uk, uk, var[iterate_in.id]))
         lines.append("ctx.lincomb(*%s, static_cast<pops::Real>(0), *%s, static_cast<pops::Real>(1), %s);"
@@ -154,15 +194,16 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             # captured jac_uk / jac_r0 hold U^k and rhs(U^k) (refreshed in the step body); jac_up /
             # jac_rp are per-matvec scratch; jac_cdt holds c*dt. The op writes directly into `out`.
             o, i = w.inputs[0], w.inputs[1]
-            uk, r0, up, rp, cdt = jac_scratch[w.id]
+            uk, r0, up, rp, cdt, block_idx = jac_scratch[w.id]
             in_arg = _apply_in_arg(sub, i)        # the Krylov vector v (the lambda's const `in`)
             out_tok = sub[o.id]                   # the apply out buffer (== "out")
-            eps = repr(float(w.attrs["eps"]))
+            eps = scalar_cpp(w.attrs["eps"])
             sub[w.id] = out_tok
             want_default = w.attrs.get("sources")
             want_default = want_default is None or "default" in want_default
-            rhs_call = ("ctx.rhs_into(0, *%s, *%s);" if (w.attrs["flux"] and want_default)
-                        else "ctx.neg_div_flux_default_into(0, *%s, *%s);") % (up, rp)
+            rhs_call = ("ctx.rhs_into(%d, *%%s, *%%s);" % block_idx
+                        if (w.attrs["flux"] and want_default)
+                        else "ctx.neg_div_flux_default_into(%d, *%%s, *%%s);" % block_idx) % (up, rp)
             body.append("{")
             # FD step norms via krylov_dot (all components when ncomp>1, component 0 otherwise --
             # the SAME reduction the Krylov loop uses for its residual norm).
@@ -173,8 +214,11 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             body.append("  const pops::Real jh = jvn > pops::Real(0) ? "
                         "static_cast<pops::Real>(%s) * (pops::Real(1) + jukn) / jvn "
                         ": static_cast<pops::Real>(%s);" % (eps, eps))
-            # U^k + h*v -> jac_up; rhs(U^k + h*v) -> jac_rp (one rhs per matvec, U^k / rhs(U^k) frozen).
+            # U^k + h*v -> jac_up; solve fields from that SAME perturbed state before evaluating rhs.
+            # This includes elliptic dependence in Jv instead of reusing stale U^n/U^k fields.
             body.append("  ctx.lincomb(*%s, pops::Real(1), *%s, jh, %s);" % (up, uk, in_arg))
+            if w.attrs["field_coupled"]:
+                body.append("  ctx.solve_fields_from_state(%d, *%s);" % (block_idx, up))
             body.append("  %s" % rhs_call)
             # out = v - (c*dt/h)(rhs(U^k + h*v) - rhs(U^k)): lincomb then axpy back the frozen rhs(U^k).
             body.append("  const pops::Real jc = *%s / jh;" % cdt)
@@ -283,7 +327,7 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     else:
         lines.append("ctx.lincomb(*%s, static_cast<pops::Real>(0), *%s, static_cast<pops::Real>(1), "
                      "%s);" % (sol_sp, sol_sp, var[guess_in.id]))
-    tol = "static_cast<pops::Real>(%s)" % repr(float(v.attrs["tol"]))
+    tol = "static_cast<pops::Real>(%s)" % scalar_cpp(v.attrs["tol"])
     max_iter = int(v.attrs["max_iter"])
     rhs_tok = var[rhs_in.id]
     method = v.attrs["method"]
@@ -322,7 +366,7 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         # (the default) emits the EXACT historical "static_cast<pops::Real>(1)" text, byte-identical.
         omega = v.attrs.get("omega")
         omega_tok = ("static_cast<pops::Real>(1)" if omega is None
-                     else "static_cast<pops::Real>(%s)" % repr(float(omega)))
+                     else "static_cast<pops::Real>(%s)" % scalar_cpp(omega))
         lines.append("pops::KrylovResult %s = pops::richardson_solve(%s, *%s, %s, "
                      "%s, %s, %d);"
                      % (kr, lam, sol_sp, rhs_tok, omega_tok, tol, max_iter))

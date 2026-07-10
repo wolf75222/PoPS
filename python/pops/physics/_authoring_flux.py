@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any
 from pops.ir import _wrap, diff
 from pops.ir.ops import left, right
 
+from ._scalars import exact_physics_scalar
+
 if TYPE_CHECKING:
     from ._model_contract import _HyperbolicModel
 else:
@@ -124,12 +126,14 @@ class _FluxMixin(_HyperbolicModel):
         # only applies to the finite-difference build; refuse it on the numeric (formula) path so it is
         # never silently ignored.
         if fd_eps is not None:
-            if isinstance(fd_eps, bool) or not isinstance(fd_eps, (int, float)) or fd_eps <= 0:
-                raise ValueError("set_wave_speeds_from_jacobian : fd_eps must be a positive number or "
-                                 "None (got %r)" % (fd_eps,))
             if eig != "fd":
                 raise ValueError("set_wave_speeds_from_jacobian : fd_eps only applies to eig='fd' (the "
                                  "finite-difference jacobian); the numeric path uses exact formulas")
+            fd_eps = exact_physics_scalar(
+                fd_eps,
+                where="set_wave_speeds_from_jacobian.fd_eps",
+                positive=True,
+            )
         # ADC-645: eig_max_iter caps the per-eigenvalue Francis-QR iterations of the emitted
         # pops::real_eig_minmax (None = the native default 100, emitted with NO 2nd argument --
         # byte-identical); im_tol is the imaginary-part tolerance of the Roe |A| real-spectrum gate
@@ -141,11 +145,11 @@ class _FluxMixin(_HyperbolicModel):
                 raise ValueError("set_wave_speeds_from_jacobian : eig_max_iter must be a positive "
                                  "int or None (got %r)" % (eig_max_iter,))
         if im_tol is not None:
-            import math as _math
-            if isinstance(im_tol, bool) or not isinstance(im_tol, (int, float)) \
-                    or not (im_tol > 0.0) or not _math.isfinite(im_tol):
-                raise ValueError("set_wave_speeds_from_jacobian : im_tol must be a finite positive "
-                                 "number or None (got %r)" % (im_tol,))
+            im_tol = exact_physics_scalar(
+                im_tol,
+                where="set_wave_speeds_from_jacobian.im_tol",
+                positive=True,
+            )
         nv = self.n_vars
         if (x is None) != (y is None):
             raise ValueError("set_wave_speeds_from_jacobian : provide x AND y, or neither (autodiff)")
@@ -200,11 +204,11 @@ class _FluxMixin(_HyperbolicModel):
                              "explicit": x is not None,
                              # ADC-617: None -> the historical 1e-6 literal, emitted verbatim (byte-
                              # identical). Enters model_hash's ws_jac part so a change busts the cache.
-                             "fd_eps": (None if fd_eps is None else float(fd_eps)),
+                             "fd_eps": fd_eps,
                              # ADC-645: eig knobs, None -> the native defaults emitted with NO extra
                              # argument (byte-identical); enter model_hash ONLY when set (fd_eps rule).
                              "eig_max_iter": (None if eig_max_iter is None else int(eig_max_iter)),
-                             "im_tol": (None if im_tol is None else float(im_tol))}
+                             "im_tol": im_tol}
 
     def flux_jacobian(self, dir: Any) -> list:
         """Flux jacobian A = dF_dir/dU : n_vars x n_vars matrix of expressions, A[i][j] =
@@ -240,5 +244,4 @@ class _FluxMixin(_HyperbolicModel):
         optional symbol pops_compiled_gamma, so that the System's inter-species couplings (collision,
         thermal exchange, T_e) use the RIGHT gamma instead of the historical default 1.4. Without a call,
         no gamma symbol is emitted (backward compat: the System keeps its default)."""
-        self.gamma = float(gamma)
-
+        self.gamma = exact_physics_scalar(gamma, where="set_gamma")

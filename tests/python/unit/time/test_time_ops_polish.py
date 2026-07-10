@@ -71,13 +71,13 @@ def test_solve_local_nonlinear_builds_newton_ir(t):
     U = P.state("blk")
 
     def residual(P, Uit, U0):
-        S = P.source("react", state=Uit)
+        S = P._source("react", state=Uit)
         return P.linear_combine("r", Uit - U0 - dt * S)
     W = P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U, tol=1e-10, max_iter=25)
     assert W.op == "solve_local_nonlinear" and W.vtype == "state", (W.op, W.vtype)
-    assert W.attrs["max_iter"] == 25 and W.attrs["tol"] == 1e-10
+    assert W.attrs["max_iter"] == 25 and W.attrs["tol"].to_python() == 1e-10
     assert len(W.attrs["residual_block"]) >= 3, "the residual sub-block holds the iterate/guess + ops"
-    P.commit("blk", W)
+    P.commit(P.state("U", block="blk").next, W)
     assert P.validate() is True, "the Newton IR must validate"
     assert P._ir_hash(), "the Newton IR must serialize to a stable hash"
 
@@ -106,9 +106,9 @@ def test_solve_local_nonlinear_refused_without_model(t):
     U = P.state("blk")
 
     def residual(P, Uit, U0):
-        S = P.source("react", state=Uit)
+        S = P._source("react", state=Uit)
         return P.linear_combine("r", Uit - U0 - dt * S)
-    P.commit("blk", P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U))
+    P.commit(P.state("U", block="blk").next, P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U))
     try:
         P.emit_cpp_program()  # no model
     except NotImplementedError as exc:
@@ -165,7 +165,7 @@ def test_reductions_lower_to_adc_reductions(t):
     P.record_scalar("s_max", s_max)
     P.record_scalar("s_min", s_min)
     P.record_scalar("s_c", s_c)
-    P.commit("blk", P.linear_combine(U + P.dt * R))
+    P.commit(P.state("U", block="blk").next, P.linear_combine(U + P.dt * R))
     src = P.emit_cpp_program()
     for frag in ("pops::reduce_sum(", "pops::reduce_max(", "pops::reduce_min("):
         assert frag in src, "the reduction codegen must contain %r\n%s" % (frag, src)
@@ -179,7 +179,7 @@ def test_fill_boundary_ir_and_codegen(t):
     Uf = P.fill_boundary(U)
     assert Uf.op == "fill_boundary" and Uf.vtype == "state", (Uf.op, Uf.vtype)
     R = P._rhs_legacy(state=Uf, sources=["default"])
-    P.commit("blk", P.linear_combine(Uf + P.dt * R))
+    P.commit(P.state("U", block="blk").next, P.linear_combine(Uf + P.dt * R))
     src = P.emit_cpp_program()
     assert "ctx.fill_boundary(" in src, "fill_boundary lowers to ctx.fill_boundary\n%s" % src
 
@@ -201,7 +201,7 @@ def test_project_ir_and_codegen(t):
     U1 = P.linear_combine(U + P.dt * R)
     Up = P.project(state=U1)
     assert Up.op == "project" and Up.vtype == "state", (Up.op, Up.vtype)
-    P.commit("blk", Up)
+    P.commit(P.state("U", block="blk").next, Up)
     src = P.emit_cpp_program()
     assert "ctx.apply_projection(0, " in src, "project lowers to ctx.apply_projection\n%s" % src
 
@@ -230,7 +230,7 @@ def test_record_scalar_ir_and_codegen(t):
     R = P._rhs_legacy(state=U, sources=["default"])
     rec = P.record_scalar("rhs_norm", P.norm2(R))
     assert rec.op == "record_scalar" and rec.attrs["diagnostic"] == "rhs_norm"
-    P.commit("blk", P.linear_combine(U + P.dt * R))
+    P.commit(P.state("U", block="blk").next, P.linear_combine(U + P.dt * R))
     src = P.emit_cpp_program()
     assert 'ctx.record_scalar("rhs_norm", ' in src, "record_scalar lowers to ctx.record_scalar\n%s" % src
 
@@ -259,7 +259,7 @@ def test_ir_hash_distinguishes_new_ops(t):
         U = P.state("blk")
         R = P._rhs_legacy(state=U, sources=["default"])
         build(P, U, R)
-        P.commit("blk", P.linear_combine(U + P.dt * R))
+        P.commit(P.state("U", block="blk").next, P.linear_combine(U + P.dt * R))
         return P._ir_hash()
 
     base = _h(lambda P, U, R: None)
@@ -297,7 +297,7 @@ def _reductions_program(t):
     P.record_scalar("state_max", P.max(U))
     P.record_scalar("state_min", P.min(U))
     P.record_scalar("state_sum_c0", P.sum_component(U, 0))
-    P.commit("blk", P.linear_combine(U + P.dt * R))
+    P.commit(P.state("U", block="blk").next, P.linear_combine(U + P.dt * R))
     return P
 
 
@@ -384,7 +384,7 @@ def _fill_project_program(t):
     Uf = P.fill_boundary(U)
     R = P._rhs_legacy(state=Uf, sources=["default"])
     U1 = P.linear_combine(Uf + P.dt * R)
-    P.commit("blk", P.project(state=U1))
+    P.commit(P.state("U", block="blk").next, P.project(state=U1))
     return P
 
 

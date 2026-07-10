@@ -17,6 +17,12 @@ from typing import Any
 
 from .aux import AUX_BASE_COMPS, aux_n_aux, roles_for
 from .model import HyperbolicModel
+from ._scalars import (
+    canonical_scalar_data,
+    codegen_physics_scalar,
+    exact_physics_scalar,
+    physics_scalar_cpp,
+)
 
 
 class NativeBrick:
@@ -42,11 +48,17 @@ class NativeBrick:
             raise ValueError("NativeBrick: kind 'hyperbolic' | 'source' | 'elliptic' (got %r)" % (kind,))
         self.cpp_type = cpp_type
         self.kind = kind
-        self.fields = dict(fields or {})
+        self.fields = {
+            name: codegen_physics_scalar(value, where="NativeBrick.fields[%r]" % name)
+            for name, value in dict(fields or {}).items()
+        }
         self.var_names = list(var_names) if var_names else None
         self.n_vars = n_vars
         self.prim_names = list(prim_names) if prim_names else (list(var_names) if var_names else None)
-        self.gamma = gamma
+        self.gamma = (
+            None if gamma is None
+            else exact_physics_scalar(gamma, where="NativeBrick.gamma")
+        )
         self.min_vars = min_vars
         self.n_aux = n_aux
 
@@ -56,9 +68,32 @@ class NativeBrick:
         (the values are WRITTEN HARD, like an inlined DSL constant)."""
         if not self.fields:
             return "namespace %s { using %s = %s; }\n" % (namespace, struct_name, self.cpp_type)
-        sets = " ".join("%s = pops::Real(%s);" % (k, repr(float(v))) for k, v in self.fields.items())
+        sets = " ".join(
+            "%s = pops::Real(%s);"
+            % (name, physics_scalar_cpp(value, where="NativeBrick.fields[%r]" % name))
+            for name, value in self.fields.items()
+        )
         return ("namespace %s { struct %s : %s { %s() { %s } }; }\n"
                 % (namespace, struct_name, self.cpp_type, struct_name, sets))
+
+    def to_data(self) -> dict[str, Any]:
+        """Detached JSON-ready descriptor retaining exact field identities."""
+        data = {
+            "cpp_type": self.cpp_type,
+            "kind": self.kind,
+            "fields": {
+                name: canonical_scalar_data(value, where="NativeBrick.fields[%r]" % name)
+                for name, value in self.fields.items()
+            },
+            "var_names": None if self.var_names is None else list(self.var_names),
+            "n_vars": self.n_vars,
+            "prim_names": None if self.prim_names is None else list(self.prim_names),
+            "min_vars": self.min_vars,
+            "n_aux": self.n_aux,
+        }
+        if self.gamma is not None:
+            data["gamma"] = canonical_scalar_data(self.gamma, where="NativeBrick.gamma")
+        return data
 
 
 class CompiledBrick:
@@ -78,7 +113,10 @@ class CompiledBrick:
         self.cons_names = list(cons_names) if cons_names else []
         self.cons_roles = list(cons_roles) if cons_roles else []
         self.prim_names = list(prim_names) if prim_names else []
-        self.gamma = gamma
+        self.gamma = (
+            None if gamma is None
+            else exact_physics_scalar(gamma, where="CompiledBrick.gamma")
+        )
         self.hash_part = hash_part       # stable hash slice (formulas) for the composite cache key
         # wave_speeds emitted by the struct (DSL hyperbolic brick: 'p' OR explicit pair); True by
         # default = unknown (native brick): we let the C++ requires-gate decide (historical).
@@ -202,4 +240,3 @@ class EllipticBrick:
         return CompiledEllipticBrick(
             struct_src=struct_src, type_name="pops_generated::" + struct_name,
             n_vars=self._m.n_vars, n_aux=AUX_BASE_COMPS, hash_part=self._m._model_hash())
-

@@ -22,7 +22,9 @@ except Exception as exc:  # pops not importable here -> skip, never fake
 def _op(m, name):
     """A typed OperatorHandle for a registered operator (the de-stringed macro selector, ADC-532)."""
     op = m.operator_registry().get(name)
-    return OperatorHandle(op.name, kind=op.kind, signature=op.signature)
+    return OperatorHandle(
+        op.name, kind=op.kind, owner=m.operator_registry().owner_path,
+        signature=op.signature)
 
 
 def _model():
@@ -83,7 +85,7 @@ def test_metadata_not_in_step_body():
 def test_no_model_empty_module():
     P = adctime.Program("fe")
     u = P.state("plasma")
-    P.commit("plasma", P.linear_combine("u1", u + P.dt * P._rhs_legacy(state=u, fields=P.solve_fields(u))))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", u + P.dt * P._rhs_legacy(state=u, fields=P.solve_fields(u))))
     src = P.emit_cpp_program(model=None)
     assert "pops_module_operator_count() { return 0; }" in src
     print("OK  model=None emits an empty GeneratedModule (count 0)")

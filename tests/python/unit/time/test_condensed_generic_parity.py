@@ -146,10 +146,19 @@ def _compile_generic(env, theta, tag, n):
     sim = _make_sim(env, "blk_%s" % tag, n)
     if sim is None:
         return None
-    P = adctime.Program("cs_%s" % tag)
-    lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=theta, tol=_TOL, max_iter=400)
+    from pops.model import OperatorHandle
+    model = _schur_model(env, "prog_%s" % tag, True)
+    registry = model.operator_registry()
+    operator = registry.operators_of_kind("local_linear_operator")[0]
+    linear = OperatorHandle(
+        operator.name, kind=operator.kind, owner=registry.owner_path,
+        signature=operator.signature)
+    P = adctime.Program("cs_%s" % tag).bind_operators(model)
+    lt.condensed_schur(
+        P, "blk", alpha=_ALPHA, theta=theta, tol=_TOL, max_iter=400,
+        linear_operator=linear)
     try:
-        compiled = pops.codegen.compile_problem(model=_schur_model(env, "prog_%s" % tag, True), time=P)
+        compiled = pops.codegen.compile_problem(model=model, time=P)
     except RuntimeError as exc:
         print("skip: compile_problem failed: %s" % str(exc)[:160])
         return None

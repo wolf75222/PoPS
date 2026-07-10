@@ -62,7 +62,7 @@ def _fe_program(name="forward_euler_parity"):
     U = P.state("ions")
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit("ions", P.linear_combine("U1", U + dt * R))
+    P.commit(P.state("U", block="ions").next, P.linear_combine("U1", U + dt * R))
     return P
 
 
@@ -157,7 +157,7 @@ def _fe_scaled(name, a):
     U = P.state("ions")
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit("ions", P.linear_combine("U1", U + a * P.dt * R))
+    P.commit(P.state("U", block="ions").next, P.linear_combine("U1", U + a * P.dt * R))
     return P
 
 

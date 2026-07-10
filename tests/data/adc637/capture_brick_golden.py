@@ -97,10 +97,19 @@ def _make_sim(env, name, n):
 
 def _compile_route(env, route, theta, tag, n):
     pops, adctime, lt = env["pops"], env["adctime"], env["lt"]
+    from pops.model import OperatorHandle
     sim = _make_sim(env, "blk_%s" % tag, n)
-    P = adctime.Program("cs_%s" % tag)
-    lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=theta, route=route, tol=_TOL, max_iter=400)
-    compiled = pops.codegen.compile_problem(model=_schur_model(env, "prog_%s" % tag, True), time=P)
+    model = _schur_model(env, "prog_%s" % tag, True)
+    registry = model.operator_registry()
+    operator = registry.operators_of_kind("local_linear_operator")[0]
+    linear = OperatorHandle(
+        operator.name, kind=operator.kind, owner=registry.owner_path,
+        signature=operator.signature)
+    P = adctime.Program("cs_%s" % tag).bind_operators(model)
+    lt.condensed_schur(
+        P, "blk", alpha=_ALPHA, theta=theta, tol=_TOL, max_iter=400,
+        linear_operator=linear)
+    compiled = pops.codegen.compile_problem(model=model, time=P)
     sim.install_program(compiled.so_path)
     return sim
 

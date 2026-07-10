@@ -42,6 +42,10 @@ def test_every_carries_n_and_is_not_always():
 def test_every_rejects_non_positive():
     with pytest.raises(ValueError):
         adctime.every(0)
+    with pytest.raises(ValueError):
+        adctime.every(True)
+    with pytest.raises(ValueError):
+        adctime.subcycle(False)
 
 
 def test_other_kinds_exist():
@@ -144,6 +148,10 @@ def test_when_python_callable_refuses_to_lower():
     U = P.state("plasma", space=u)
     # a when() over a bare Python callable is not a Program value -> cannot lower
     P._call("fields_from_state", U, schedule=adctime.when(lambda: True).hold())
+    serialized = P._serialize()
+    callable_token = serialized["nodes"][-1]["attrs"]["schedule"]["params"]["cond"]
+    assert "unsupported_python_callable" in callable_token
+    assert isinstance(P._ir_hash(), str)
     with pytest.raises(NotImplementedError, match="ADC-458"):
         P._check_schedules_lowerable()
 
@@ -189,3 +197,44 @@ def test_scheduled_node_serializes_for_codegen():
     U2 = P2.state("plasma", space=u)
     P2._call("fields_from_state", U2, schedule=adctime.every(10).skip())
     assert P2._ir_hash() != h
+
+
+def test_schedule_parameters_that_change_lowering_change_ir_identity():
+    mod, u, _ = _module(cacheable=True)
+
+    def build(schedule):
+        program = adctime.Program("p").bind_operators(mod)
+        state = program.state("plasma", space=u)
+        program._call("fields_from_state", state, schedule=schedule)
+        program.commit(program.state("U", block="plasma").next, state)
+        return program
+
+    short = build(adctime.subcycle(3, dt=0.01))
+    long = build(adctime.subcycle(3, dt=0.02))
+    assert short._ir_hash() != long._ir_hash()
+    assert short.emit_cpp_program() != long.emit_cpp_program()
+
+    first = adctime.Program("when_identity").bind_operators(mod)
+    first_state = first.state("plasma", space=u)
+    first_cond = first.norm2(first_state) < 1
+    _first_other = first.norm2(first_state) < 2
+    first._call("fields_from_state", first_state, schedule=adctime.when(first_cond))
+    second = adctime.Program("when_identity").bind_operators(mod)
+    second_state = second.state("plasma", space=u)
+    _second_other = second.norm2(second_state) < 1
+    second_cond = second.norm2(second_state) < 2
+    second._call("fields_from_state", second_state, schedule=adctime.when(second_cond))
+    assert first._ir_hash() != second._ir_hash()
+
+
+def test_when_rejects_bool_value_from_another_program_even_with_colliding_ssa_id():
+    mod, u, _ = _module(cacheable=True)
+    owner = adctime.Program("owner").bind_operators(mod)
+    foreign = adctime.Program("foreign").bind_operators(mod)
+    owner_state = owner.state("plasma", space=u)
+    foreign_state = foreign.state("plasma", space=u)
+    foreign_cond = foreign.norm2(foreign_state) > 0
+
+    with pytest.raises(ValueError, match="different Program"):
+        owner._call(
+            "fields_from_state", owner_state, schedule=adctime.when(foreign_cond))

@@ -82,9 +82,8 @@ def test_out_of_domain_cycles_and_tolerance_refuse():
         GeometricMG(max_cycles=0)
     with pytest.raises(ValueError):
         GeometricMG(min_coarse=0)
-    report = GeometricMG(tolerance=Relative(0.0)).validate()
-    assert not report.ok
-    assert "rel_tol_out_of_domain" in {i.code for i in report.issues}
+    with pytest.raises(ValueError, match="Relative"):
+        Relative(0.0)
 
 
 # --- runtime tier (needs _pops) ----------------------------------------------

@@ -23,8 +23,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pops._native_facts import NATIVE_DIMENSION
+from pops.time.operator_resolution import resolve_operator_handle
 from pops.time.program_base import _ProgramConstants
-from pops.time.values import Value, _Coeff, _is_field_value
+from pops.time.program_value_validation import require_compatible_spaces
+from pops.time.values import ProgramValue, _Coeff, _is_field_value
 
 if TYPE_CHECKING:
     from pops.time._program_contract import _ProgramBase
@@ -37,18 +39,11 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
     condensed_reconstruct, carrying an authored linear operator + a coupled momentum subset."""
 
     def _condensed_operator_name(self, operator: Any) -> str:
-        """Resolve @p operator to the authored linear-operator NAME: a typed OperatorHandle (unwrapped
-        to ``.name``, so the IR is byte-identical to the string form) or a non-empty name string. The
-        operator's block-local-linearization contract was validated at its m.local_linear_operator
-        registration; here we only bind its name into the IR."""
-        from pops.model import OperatorHandle
-        if isinstance(operator, OperatorHandle):
-            return operator.name
-        if isinstance(operator, str) and operator:
-            return operator
-        raise ValueError(
-            "condensed op: linear_operator must be an authored local linear operator "
-            "(m.local_linear_operator(...) or its OperatorHandle / name)")
+        """Resolve the exact authored local-linear handle retained by the bound registry."""
+        resolved = resolve_operator_handle(
+            self, operator, where="condensed op: linear_operator",
+            expected_kinds="local_linear_operator")
+        return resolved.name
 
     def _condensed_subset(self, subset: Any, where: Any) -> tuple:
         """Validate + normalize the coupled component @p subset (the momentum block the solve
@@ -74,11 +69,17 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         return sub
 
     @staticmethod
-    def _coeff_dict(sc: Any, name: Any, where: Any) -> dict:
-        """A scalar coefficient (number or dt-polynomial) as the IR power->float dict."""
-        if not isinstance(sc, (int, float, _Coeff)):
-            raise ValueError("%s: %s must be a number or a dt-polynomial (got %r)" % (where, name, sc))
-        return (sc if isinstance(sc, _Coeff) else _Coeff({0: float(sc)})).as_dict()
+    def _coeff_dict(sc: Any, name: Any, where: Any) -> Any:
+        """A scalar coefficient as an exact, immutable IR polynomial value."""
+        if isinstance(sc, _Coeff):
+            return sc.to_polynomial()
+        try:
+            return _Coeff({0: sc}).to_polynomial()
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "%s: %s must be an exact scalar or a dt-polynomial (got %r)"
+                % (where, name, sc)
+            ) from exc
 
     @staticmethod
     def _comp_index(ci: Any, name: Any, where: Any) -> int:
@@ -97,7 +98,7 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
 
         @p c = theta^2*dt^2*alpha and @p th_dt = theta*dt are scalars (numbers or dt-polynomials). rho
         (a conservative var) enters only the outer c*rho factor, never M (R2)."""
-        if not (isinstance(state, Value) and state.vtype == "state"):
+        if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("condensed_coeffs: a State value is required (state=...)")
         opname = self._condensed_operator_name(linear_operator)
         sub = self._condensed_subset(subset, "condensed_coeffs")
@@ -116,11 +117,11 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         scalar_field, @p phi_n the warm-start potential (its ghosts are filled for the Laplacian), @p
         state a State. @p th_dt = theta*dt, @p g = theta*dt*alpha (numbers or dt-polynomials). The
         codegen fuses the bare -Lap with the centered divergence of the block-inverse flux inline."""
-        if not (isinstance(out, Value) and out.vtype == "scalar_field"):
+        if not (isinstance(out, ProgramValue) and out.vtype == "scalar_field"):
             raise ValueError("condensed_rhs: out must be a scalar_field value")
-        if not (isinstance(phi_n, Value) and phi_n.vtype == "scalar_field"):
+        if not (isinstance(phi_n, ProgramValue) and phi_n.vtype == "scalar_field"):
             raise ValueError("condensed_rhs: phi_n must be a scalar_field value")
-        if not (isinstance(state, Value) and state.vtype == "state"):
+        if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("condensed_rhs: a State value is required (state=...)")
         opname = self._condensed_operator_name(linear_operator)
         sub = self._condensed_subset(subset, "condensed_rhs")
@@ -138,19 +139,24 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         ``P.schur_reconstruct``. @p phi is the solved potential (a scalar_field or 1-component State),
         @p th_dt = theta*dt. The final n+1 extrapolation (factor 1/theta) is the caller's affine
         algebra. Returns the updated State."""
-        if isinstance(name, Value) and state is None:
+        if isinstance(name, ProgramValue) and state is None:
             name, state = None, name
-        if not (isinstance(state, Value) and state.vtype == "state"):
+        if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("condensed_reconstruct: a State value is required (state=...)")
         if not _is_field_value(phi):
             raise ValueError("condensed_reconstruct: phi must be a scalar_field or State value (phi=...)")
+        if phi.block not in (None, state.block):
+            raise ValueError("condensed_reconstruct: state and phi must belong to the same block")
+        if phi.vtype in ("state", "rhs"):
+            require_compatible_spaces(
+                state.space, phi.space, "condensed_reconstruct phi", typed_pair=True)
         opname = self._condensed_operator_name(linear_operator)
         sub = self._condensed_subset(subset, "condensed_reconstruct")
         th_d = self._coeff_dict(th_dt, "th_dt", "condensed_reconstruct")
         return self._new("state", "condensed_reconstruct", (state, phi),
                          {"linear_operator": opname, "subset": sub, "th_dt": th_d,
                           "c_rho": self._comp_index(c_rho, "c_rho", "condensed_reconstruct")}, name,
-                         state.block)
+                         state.block, space=state.space)
 
     def condensed_energy(self, name: Any = None, state: Any = None, state_old: Any = None,
                          c_rho: Any = 0, c_mx: Any = 1, c_my: Any = 2, c_E: Any = 3) -> Any:
@@ -161,17 +167,19 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         state_old is U^n (read for v^n = mom^n/rho^n and the base energy E^n). rho is frozen, so the same
         rho is read from both. Returns @p state (E overwritten in place). Emitted as a self-contained
         inline kernel (no block inverse, no coupling/schur)."""
-        if isinstance(name, Value) and state is None:
+        if isinstance(name, ProgramValue) and state is None:
             name, state = None, name
-        if not (isinstance(state, Value) and state.vtype == "state"):
+        if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("condensed_energy: a State value is required (state=...)")
-        if not (isinstance(state_old, Value) and state_old.vtype == "state"):
+        if not (isinstance(state_old, ProgramValue) and state_old.vtype == "state"):
             raise ValueError("condensed_energy: a State value is required (state_old=U^n)")
         if state_old.block != state.block:
             raise ValueError("condensed_energy: state and state_old must belong to the same block")
+        require_compatible_spaces(
+            state.space, state_old.space, "condensed_energy", typed_pair=True)
         for nm, ci in (("c_rho", c_rho), ("c_mx", c_mx), ("c_my", c_my), ("c_E", c_E)):
             if isinstance(ci, bool) or not isinstance(ci, int) or ci < 0:
                 raise ValueError("condensed_energy: %s must be a Python int >= 0 (got %r)" % (nm, ci))
         return self._new("state", "condensed_energy", (state, state_old),
                          {"c_rho": int(c_rho), "c_mx": int(c_mx), "c_my": int(c_my), "c_E": int(c_E)},
-                         name, state.block)
+                         name, state.block, space=state.space)

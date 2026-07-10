@@ -1,6 +1,6 @@
 """pops.time value algebra -- typed SSA handles and the affine/operator algebra.
 
-A ``Value`` is a typed SSA node in a Program IR; field-like values support an affine algebra
+A ``ProgramValue`` is a typed SSA node in a Program IR; field-like values support an affine algebra
 (``U + dt * R``) and scalars compose into ``scalar_op`` nodes. ``_Coeff`` / ``_Affine`` /
 ``_Operator`` are the coefficient + linear-combination carriers; ``StageStateSet`` and
 ``_CoupledResult`` are multi-block grouping handles. Authoring + evaluation only: no codegen,
@@ -8,21 +8,42 @@ no _pops, no module-scope dsl import.
 """
 from __future__ import annotations
 
+from types import MappingProxyType
 from typing import Any
 
+from pops.ir import Equation
+from pops.ir.literals import scalar_data
+from pops.ir.symbolic import ImmutableSymbolic
+from pops.time.value_metadata import (
+    CoeffPolynomial, CoefficientLiteralError, _exact_add, _exact_divide, _exact_multiply,
+    _exact_negate, _exact_number, _freeze_attr, validate_program_value_identity,
+)
 
-class _Coeff:
-    """Scalar coefficient: a polynomial in the time step ``dt`` (dict ``power -> float``).
 
-    ``dt`` is ``_Coeff({1: 1.0})``; a plain number is ``_Coeff({0: c})``. Multiplying a coefficient by
+class _Coeff(ImmutableSymbolic):
+    """Scalar coefficient: an exact polynomial in ``dt`` (``power -> scalar``).
+
+    ``dt`` is ``_Coeff({1: 1})``; a plain number is ``_Coeff({0: c})``. Multiplying a coefficient by
     a State/RHS value yields an `_Affine` (one weighted term)."""
 
     def __init__(self, powers: Any) -> None:
-        # drop exact zeros so {0: 0.0} and {} hash identically
-        self.powers = {int(p): float(c) for p, c in powers.items() if c != 0.0}
+        # Drop exact zeros without ever routing an integer, rational, decimal or binary64
+        # authoring literal through ``float``.  Keeping the native exact Python value here lets
+        # serialization retain its literal kind and defers target conversion to C++ lowering.
+        exact = {}
+        for power, coeff in powers.items():
+            value = _exact_number(coeff)
+            if value != 0:
+                exact[int(power)] = value
+        self.powers = MappingProxyType(exact)
 
     def _binop_number(self, x: Any) -> Any:
-        return _Coeff({0: float(x)}) if isinstance(x, (int, float)) else None
+        try:
+            return _Coeff({0: _exact_number(x)})
+        except CoefficientLiteralError:
+            raise
+        except (TypeError, ValueError):
+            return None
 
     def __add__(self, other: Any) -> Any:
         o = self._binop_number(other) if not isinstance(other, _Coeff) else other
@@ -30,27 +51,35 @@ class _Coeff:
             return NotImplemented
         out = dict(self.powers)
         for p, c in o.powers.items():
-            out[p] = out.get(p, 0.0) + c
+            out[p] = _exact_add(out.get(p, 0), c)
         return _Coeff(out)
 
     __radd__ = __add__
 
     def __neg__(self) -> Any:
-        return _Coeff({p: -c for p, c in self.powers.items()})
+        return _Coeff({p: _exact_negate(c) for p, c in self.powers.items()})
 
     def __sub__(self, other: Any) -> Any:
-        return self.__add__(-(other if isinstance(other, _Coeff) else _Coeff({0: float(other)})))
+        return self.__add__(-(other if isinstance(other, _Coeff) else _Coeff({0: _exact_number(other)})))
 
     def __mul__(self, other: Any) -> Any:
-        if isinstance(other, (int, float)):
-            return _Coeff({p: c * other for p, c in self.powers.items()})
+        if not isinstance(other, (_Coeff, ProgramValue, _Affine)):
+            try:
+                exact = _exact_number(other)
+            except CoefficientLiteralError:
+                raise
+            except (TypeError, ValueError):
+                exact = None
+            if exact is not None:
+                return _Coeff({p: _exact_multiply(c, exact) for p, c in self.powers.items()})
         if isinstance(other, _Coeff):
             out = {}
             for p1, c1 in self.powers.items():
                 for p2, c2 in other.powers.items():
-                    out[p1 + p2] = out.get(p1 + p2, 0.0) + c1 * c2
+                    product = _exact_multiply(c1, c2)
+                    out[p1 + p2] = _exact_add(out.get(p1 + p2, 0), product)
             return _Coeff(out)
-        if isinstance(other, Value) and other.is_field():
+        if isinstance(other, ProgramValue) and other.is_field():
             return _Affine([(other, self)])
         if isinstance(other, _Affine):
             return other.__mul__(self)
@@ -59,35 +88,45 @@ class _Coeff:
     __rmul__ = __mul__
 
     def __truediv__(self, other: Any) -> Any:
-        if isinstance(other, (int, float)):
-            return _Coeff({p: c / other for p, c in self.powers.items()})
+        try:
+            exact = _exact_number(other)
+        except CoefficientLiteralError:
+            raise
+        except (TypeError, ValueError):
+            exact = None
+        if exact is not None:
+            return _Coeff({p: _exact_divide(c, exact) for p, c in self.powers.items()})
         return NotImplemented
 
     def as_dict(self) -> Any:
         return dict(self.powers)
 
+    def to_polynomial(self) -> CoeffPolynomial:
+        return CoeffPolynomial(self.powers)
+
     def _key(self) -> Any:
-        return tuple(sorted(self.powers.items()))
+        return tuple((p, tuple(sorted(scalar_data(c).items())))
+                     for p, c in sorted(self.powers.items()))
 
 
 def _resolve_handle(x: Any) -> Any:
-    """Unwrap a typed temporal-version handle to its resolved :class:`Value`, else return ``x``.
+    """Unwrap a typed temporal-version handle to its resolved :class:`ProgramValue`, else return ``x``.
 
-    A handle (``pops.time.handles._Version`` / ``_Prev``) exposes ``_as_value()`` returning the
-    Value it lowered to (raising a clear error if used before definition). Anything else -- a plain
-    Value, a string, ``None`` -- is returned unchanged, so the legacy positional paths are
+    A readable ``StageHandle`` / ``HistoryHandle`` exposes ``_as_value()`` and asks its Program-owned
+    resolution table for the ProgramValue (raising clearly on use-before-define). Anything else -- a plain
+    ProgramValue, a string, ``None`` -- is returned unchanged, so the legacy positional paths are
     byte-identical. Used at the State-accepting boundaries (``state=`` / ``fields=``) so a defined
-    handle composes wherever a Value does, without any new IR.
+    handle composes wherever a ProgramValue does, without any new IR.
     """
-    to_value = getattr(x, "_as_value", None)
-    return to_value() if callable(to_value) else x
+    from pops.time.handles import HistoryHandle, StageHandle
+    return x._as_value() if isinstance(x, (StageHandle, HistoryHandle)) else x
 
 
 def _authoring_source_location() -> Any:
     """The (file, line) of the first authoring frame outside pops.time (ADC-530, debug-only).
 
     Walks the current stack past the pops.time internals (this package builds the IR) to the first
-    caller frame -- a user script or a pops.lib.time macro -- so a captured ``Value.source_location``
+    caller frame -- a user script or a pops.lib.time macro -- so a captured ``ProgramValue.source_location``
     points at the line that authored the node, not at ``_new``. Returns ``"<file>:<line>"`` or ``None``
     if no such frame is found. Called only when a Program enabled ``capture_source_locations()``; it is
     never on the normal build path."""
@@ -104,21 +143,21 @@ def _to_affine(x: Any) -> Any:
     x = _resolve_handle(x)
     if isinstance(x, _Affine):
         return x
-    if isinstance(x, Value) and x.is_field():
-        return _Affine([(x, _Coeff({0: 1.0}))])
+    if isinstance(x, ProgramValue) and x.is_field():
+        return _Affine([(x, _Coeff({0: 1}))])
     raise TypeError("expected a State/RHS value or an affine combination, got %r" % (x,))
 
 
 def _is_field_value(x: Any) -> Any:
-    """True for a grid-field Value (State / RHS / scalar_field) -- the values that carry an
+    """True for a grid-field ProgramValue (State / RHS / scalar_field) -- the values that carry an
     pops::MultiFab and support the affine algebra."""
-    return isinstance(x, Value) and x.is_field()
+    return isinstance(x, ProgramValue) and x.is_field()
 
 
 def _affine_ids(aff: Any) -> Any:
     """Stable JSON-able form of an _Affine (the apply result of a matrix_free_operator): an ordered
     list of ``[value_id, sorted-coeff-powers]``."""
-    return [[v.id, sorted((int(p), c) for p, c in coeff.as_dict().items())]
+    return [[v.id, sorted((int(p), scalar_data(c)) for p, c in coeff.as_dict().items())]
             for v, coeff in aff._merge()]
 
 
@@ -138,23 +177,23 @@ def _residual_wants_guess(fn: Any) -> Any:
     return len(positional) >= 3
 
 
-class _Affine:
+class _Affine(ImmutableSymbolic):
     """Affine combination of State/RHS values: ordered ``[(value, _Coeff)]`` terms. Built by the
     operator overloads on field values; consumed by `Program.linear_combine`."""
 
     def __init__(self, terms: Any) -> None:
-        self.terms = list(terms)
+        self.terms = tuple(terms)
 
     def _merge(self) -> Any:
         # coalesce repeated values (sum their coefficient polynomials), preserve first-seen order
         order, acc = [], {}
         for v, c in self.terms:
-            if id(v) not in acc:
+            if v.id not in acc:
                 order.append(v)
-                acc[id(v)] = (v, c)
+                acc[v.id] = (v, c)
             else:
-                acc[id(v)] = (v, acc[id(v)][1] + c)
-        return [acc[id(v)] for v in order]
+                acc[v.id] = (v, acc[v.id][1] + c)
+        return [acc[v.id] for v in order]
 
     def __add__(self, other: Any) -> Any:
         return _Affine(self.terms + _to_affine(other).terms)
@@ -171,8 +210,13 @@ class _Affine:
         return _Affine((-self).terms + _to_affine(other).terms)
 
     def __mul__(self, other: Any) -> Any:
-        if isinstance(other, (int, float)):
-            other = _Coeff({0: float(other)})
+        if not isinstance(other, _Coeff):
+            try:
+                other = _Coeff({0: _exact_number(other)})
+            except CoefficientLiteralError:
+                raise
+            except (TypeError, ValueError):
+                pass
         if isinstance(other, _Coeff):
             return _Affine([(v, c * other) for v, c in self.terms])
         return NotImplemented
@@ -180,24 +224,24 @@ class _Affine:
     __rmul__ = __mul__
 
     def __truediv__(self, other: Any) -> Any:
-        if isinstance(other, (int, float)):
-            return _Affine([(v, c / other) for v, c in self.terms])
-        return NotImplemented
+        try:
+            exact = _exact_number(other)
+        except CoefficientLiteralError:
+            raise
+        except (TypeError, ValueError):
+            return NotImplemented
+        return _Affine([(v, c / exact) for v, c in self.terms])
 
-    def __bool__(self) -> Any:
-        raise TypeError("runtime affine combination cannot be used as a Python bool; "
-                        "use Program control flow")
 
-
-class _Operator:
+class _Operator(ImmutableSymbolic):
     """A LOCAL linear operator expression ``c_I * I + sum_k c_k * L_k`` (coefficients are `_Coeff`,
-    polynomials in dt). Built by ``Program.I`` and ``a * Program.linear_source(name)``; consumed by
+    polynomials in dt). Built by ``Program.I`` and ``a * Program.linear_source(handle)``; consumed by
     `Program.solve_local_linear` (operator ``I +/- a*L``). It is NOT a runtime field value -- it names
     the model linear source(s) and the scalar(s) that form the operator."""
 
     def __init__(self, identity: Any, terms: Any) -> None:
         self.identity = identity   # _Coeff: coefficient of the identity I
-        self.terms = list(terms)   # [(Value(op='linear_source'), _Coeff)]
+        self.terms = tuple(terms)   # [(ProgramValue(op='linear_source'), _Coeff)]
 
     def __add__(self, other: Any) -> Any:
         if not isinstance(other, _Operator):
@@ -208,14 +252,19 @@ class _Operator:
         if not isinstance(other, _Operator):
             return NotImplemented
         return _Operator(self.identity - other.identity,
-                         self.terms + [(v, -c) for v, c in other.terms])
+                         self.terms + tuple((v, -c) for v, c in other.terms))
 
     def __neg__(self) -> Any:
         return _Operator(-self.identity, [(v, -c) for v, c in self.terms])
 
     def __mul__(self, other: Any) -> Any:
-        if isinstance(other, (int, float)):
-            other = _Coeff({0: float(other)})
+        if not isinstance(other, _Coeff):
+            try:
+                other = _Coeff({0: _exact_number(other)})
+            except CoefficientLiteralError:
+                raise
+            except (TypeError, ValueError):
+                pass
         if isinstance(other, _Coeff):
             return _Operator(self.identity * other, [(v, c * other) for v, c in self.terms])
         return NotImplemented
@@ -223,7 +272,7 @@ class _Operator:
     __rmul__ = __mul__
 
 
-class Value:
+class ProgramValue(ImmutableSymbolic):
     """A typed SSA node in a Program IR. Field-like values (State, RHS, scalar_field) support affine
     arithmetic. A ``scalar_field`` is a single-component grid field (the unknown / residual of a
     matrix-free linear solve), DISTINCT from the n_cons conservative ``state`` even though both lower
@@ -234,39 +283,57 @@ class Value:
     _SCALAR = ("scalar", "bool")  # runtime scalars / predicates: never a Python bool / index
 
     def __init__(self, prog: Any, vid: Any, vtype: Any, op: Any, inputs: Any, attrs: Any,
-                 name: Any, block: Any) -> None:
+                 name: Any, block: Any, *, space: Any = None, source_location: Any = None,
+                 field_context: Any = None, region: int = 0) -> None:
+        inputs = validate_program_value_identity(vid, vtype, op, inputs, name, block, region)
         self.prog = prog
         self.id = vid
         self.vtype = vtype
         self.op = op
-        self.inputs = tuple(inputs)
-        self.attrs = dict(attrs)
+        self.inputs = inputs
+        self.attrs = _freeze_attr(dict(attrs))
         self.name = name
         self.block = block
+        self.region = region
         # Operator-first type tag (Spec 2): the pops.model space/operator-type this value lives over
         # (a StateSpace / RateSpace / FieldSpace / LocalLinearOperator), set by P.state(space=) and
-        # P.call. Used only for build-time type checks; NEVER serialized into the IR. None = untyped
-        # (legacy), and all the space checks are skipped (backward compatible).
-        self.space = None
+        # P.call. It is serialized structurally because component order can change lowering. None =
+        # untyped, in which case all space checks are skipped.
+        if space is not None and getattr(space, "__pops_ir_immutable__", False) is not True:
+            raise TypeError("ProgramValue space must be an immutable typed Space or None")
+        self.space = space
         # OPTIONAL authoring source location (ADC-530): the (file, line) of the call that built this
         # node, populated by _new only when the Program has capture_source_locations() enabled. A pure
         # debug aid, INSPECTION-ONLY -- NEVER serialized into the IR / the hash. None by default.
-        self.source_location = None
+        if source_location is not None \
+                and (not isinstance(source_location, str) or not source_location):
+            raise TypeError("ProgramValue source_location must be a non-empty string or None")
+        self.source_location = source_location
+        if field_context is not None:
+            from pops.time.field_context import FieldContext, FieldReadProvenance
+            if not isinstance(field_context, (FieldContext, FieldReadProvenance)):
+                raise TypeError("ProgramValue field_context must be typed immutable provenance")
+        self.field_context = field_context
 
     def is_field(self) -> Any:
-        return self.vtype in Value._FIELD
+        return self.vtype in ProgramValue._FIELD
 
-    def __bool__(self) -> Any:
-        # A runtime Scalar/Bool is decided at step time, not at IR-build time: it must NEVER silently
-        # collapse to a Python bool (which would make `while P.norm2(d) > tol:` loop in Python). Fields
-        # (State/RHS) keep their own loud refusal too.
-        if self.vtype in Value._SCALAR:
-            raise TypeError(
-                "a Program %s (%r) cannot be used as a Python bool; use P.while_ / P.if_ for runtime "
-                "control flow" % (self.vtype, self.name))
+    def __eq__(self, other: Any) -> Any:
+        if self.vtype == "scalar":
+            return self.prog._compare(self, other, "==")
+        # Field-value equality is equation authoring syntax, never Python identity. Cross-Program
+        # operands still build an Equation and are rejected by the consuming Program boundary.
+        return Equation(self, other)
+
+    def __ne__(self, other: Any) -> Any:
+        if self.vtype == "scalar":
+            return self.prog._compare(self, other, "!=")
+        # ``==`` has equation-building semantics for fields.  There is no meaningful
+        # field-wide ``!=`` predicate in the Program IR; require the explicit per-cell reduction /
+        # selection APIs instead of letting Python negate the Equation and truth-test it.
         raise TypeError(
-            "a Program %s value (%r) cannot be used as a Python bool; it is a runtime field, not a "
-            "compile-time condition" % (self.vtype, self.name))
+            "field ProgramValue inequality is not a Python comparison; use P.cell_compare(...) "
+            "for a per-cell predicate or compare an explicit scalar reduction")
 
     def __index__(self) -> Any:
         # range(scalar) / using a Scalar as a Python index is just as loud: the value is unknown until
@@ -276,7 +343,7 @@ class Value:
             "control flow" % (self.vtype, self.name))
 
     def __len__(self) -> Any:
-        # An IR Value has no Python length: its component / cell shape is a runtime grid property, not a
+        # An IR ProgramValue has no Python length: its component / cell shape is a runtime grid property, not a
         # compile-time count. len(value) / iterating it would silently mis-read the grid, so refuse it
         # loudly (ADC-530) and point at the inspection-only logical_shape for the component layout.
         raise TypeError(
@@ -290,15 +357,16 @@ class Value:
 
         A plain dict ``{"vtype", "space", "n_comp", "layout"}`` naming the value's operator-first space
         (a StateSpace / RateSpace / FieldSpace) and its component count / storage layout when a space
-        tag is present, else ``n_comp``/``layout`` = ``None`` (an untyped legacy value). It is DERIVED
-        (never stored, never serialized): it does not appear in ``_serialize`` / ``_ir_hash``, so two
-        Programs differing only in a value's space tag hash identically and every ``.so`` cache key is
-        unchanged. Purely a debug view."""
+        tag is present, else ``n_comp``/``layout`` = ``None`` (an untyped value). It is DERIVED rather
+        than independently stored; the underlying immutable space does participate in the IR identity
+        because its component order affects generated kernels. Purely a debug view."""
         space = self.space
         n_comp = None
         layout = None
         space_name = getattr(space, "name", None)
         components = getattr(space, "components", None)
+        if getattr(space, "kind", None) == "rate":
+            components = space.base_space.components
         if components is not None:
             n_comp = len(components)
         layout = getattr(space, "layout", None)
@@ -352,7 +420,7 @@ class Value:
 
     def __neg__(self) -> Any:
         if self.vtype == "scalar":
-            return self._scalar_op(-1.0, "mul")
+            return self._scalar_op(-1, "mul")
         return -self._affine()
 
     def __sub__(self, other: Any) -> Any:
@@ -369,13 +437,24 @@ class Value:
         if self.vtype == "scalar":
             return self._scalar_op(other, "mul")
         if self.vtype == "operator":  # a linear-source operator: scalar/dt * L -> an _Operator term
-            if isinstance(other, (int, float)):
-                other = _Coeff({0: float(other)})
+            if not isinstance(other, _Coeff):
+                try:
+                    other = _Coeff({0: _exact_number(other)})
+                except CoefficientLiteralError:
+                    raise
+                except (TypeError, ValueError):
+                    pass
             if isinstance(other, _Coeff):
                 return _Operator(_Coeff({}), [(self, other)])
             return NotImplemented
-        if isinstance(other, (int, float, _Coeff)):
+        if isinstance(other, _Coeff):
             return self._affine() * other
+        try:
+            return self._affine() * _Coeff({0: _exact_number(other)})
+        except CoefficientLiteralError:
+            raise
+        except (TypeError, ValueError):
+            pass
         return NotImplemented
 
     def __rmul__(self, other: Any) -> Any:
@@ -386,9 +465,13 @@ class Value:
     def __truediv__(self, other: Any) -> Any:
         if self.vtype == "scalar":
             return self._scalar_op(other, "div")
-        if isinstance(other, (int, float)):
-            return self._affine() * _Coeff({0: 1.0 / other})
-        return NotImplemented
+        try:
+            exact = _exact_number(other)
+        except CoefficientLiteralError:
+            raise
+        except (TypeError, ValueError):
+            return NotImplemented
+        return self._affine() * (_Coeff({0: 1}) / exact)
 
     def __rtruediv__(self, other: Any) -> Any:
         if self.vtype == "scalar":
@@ -403,7 +486,7 @@ class Value:
         ``operator @ unknown(name)`` (a board solve), this returns ``NotImplemented``
         so :meth:`pops.math.Unknown.__rmatmul__` builds the solve left-hand side.
         """
-        if self.vtype == "operator" and isinstance(other, Value) and other.vtype == "state":
+        if self.vtype == "operator" and isinstance(other, ProgramValue) and other.vtype == "state":
             return self.prog.apply(operator=self, state=other)
         return NotImplemented
 
@@ -411,84 +494,4 @@ class Value:
         return "<%s %s #%d>" % (self.vtype, self.name, self.id)
 
 
-def _state_base_name(space: Any) -> Any:
-    """The StateSpace name a value lives over, for operator-first type checks: a StateSpace -> its
-    name; a Rate(state) -> the base state name; anything else (FieldSpace / operator-type / None) ->
-    None (not a state-like value)."""
-    kind = getattr(space, "kind", None)
-    if kind == "state":
-        return space.name
-    if kind == "rate":
-        return getattr(space, "base_name", None)
-    return None
-
-
-class StageStateSet:
-    """A coherent set of stage states (Spec 3): ``{block -> State value}``.
-
-    Built by :meth:`Program.state_set`; consumed by :meth:`Program.fields` to solve
-    fields from a chosen stage of several blocks at once, without ambiguity about
-    which version of each block is read. Every entry must be a State value.
-    """
-
-    def __init__(self, name: Any, mapping: Any) -> None:
-        self.name = str(name)
-        self._states = {}
-        for block, st in dict(mapping).items():
-            if not (isinstance(st, Value) and st.vtype == "state"):
-                raise ValueError("StageStateSet[%r] must be a State value" % (block,))
-            self._states[str(block)] = st
-
-    def states(self) -> Any:
-        """The stage states in insertion order."""
-        return list(self._states.values())
-
-    def __getitem__(self, block: Any) -> Any:
-        return self._states[str(block)]
-
-    def __contains__(self, block: Any) -> Any:
-        return str(block) in self._states
-
-    def keys(self) -> Any:
-        return list(self._states)
-
-    def items(self) -> Any:
-        return list(self._states.items())
-
-    def __len__(self) -> int:
-        return len(self._states)
-
-    def __repr__(self) -> str:
-        return "StageStateSet(%r, blocks=%s)" % (self.name, list(self._states))
-
-
-class _CoupledResult:
-    """The typed multi-output of a coupled_rate ``P.call``: a mapping ``block -> per-block rate``.
-
-    ``C = P.call(collision, e_n, i_n)`` returns this; ``C["electrons"]`` is the per-block rate
-    (an RHS Value) that composes like any other (``e_n + dt * C["electrons"]``). It is not itself
-    a Value: a coupled operator has no single output, so it cannot be combined as one.
-    """
-
-    def __init__(self, outs: Any) -> None:
-        self._outs = dict(outs)
-
-    def __getitem__(self, block: Any) -> Any:
-        return self._outs[block]
-
-    def __contains__(self, block: Any) -> Any:
-        return block in self._outs
-
-    def keys(self) -> Any:
-        return list(self._outs)
-
-    def items(self) -> Any:
-        return list(self._outs.items())
-
-    def __len__(self) -> int:
-        return len(self._outs)
-
-    def __repr__(self) -> str:
-        return "_CoupledResult(blocks=%s)" % list(self._outs)
-
-
+from pops.time.value_collections import StageStateSet, _CoupledResult  # noqa: E402,F401

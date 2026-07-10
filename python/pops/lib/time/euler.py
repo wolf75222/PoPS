@@ -19,4 +19,4 @@ def forward_euler(P: Any, block: Any, *, sources: Any = ("default",), flux: Any 
     with the block name (``forward_euler(block)``) it returns a fresh, inspectable Program (ADC-554)."""
     U = P.state(block)
     R = _stage_rhs(P, U, sources, flux)
-    P.commit(block, P.linear_combine("fe_step", U + P.dt * R))
+    P._commit_block(block, P.linear_combine("fe_step", U + P.dt * R))

@@ -91,6 +91,8 @@ class _AmrSystemProgram(_AmrSystem):
         if not isinstance(cadence, CompiledTime):
             raise TypeError("pops.bind(cadence=): expected a pops.time.CompiledTime(substeps=, stride=), "
                             "got %r" % type(cadence).__name__)
-        if isinstance(cadence.cfl, (int, float)):
-            self._program_cadence_cfl = float(cadence.cfl)
+        if cadence.cfl != "default":
+            from pops.solvers._numeric import native_float
+            self._program_cadence_cfl = native_float(
+                cadence.cfl, where="CompiledTime cfl")
         self.set_program_cadence(cadence.substeps, cadence.stride)

@@ -50,7 +50,7 @@ def _fe_program(name="stale_debug_probe"):
     U = P.state("ions")
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit("ions", P.linear_combine("U1", U + dt * R))
+    P.commit(P.state("U", block="ions").next, P.linear_combine("U1", U + dt * R))
     return P
 
 

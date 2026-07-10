@@ -1,27 +1,25 @@
-"""pops.time Program authoring mixin -- dumps + control flow + reductions + dt bound.
-
-IR dumps, decorator step(), control flow (while_/if_/range), reductions and the dt bound.
-"""
+"""Program dumps, control flow, reductions, decorators and optional dt bounds."""
 from __future__ import annotations
-
 from typing import TYPE_CHECKING, Any
-
+from pops.ir.literals import scalar_literal
 from pops.time.program_base import _ProgramConstants
-from pops.time.values import Value, _is_field_value, _resolve_handle
+from pops.time.program_transaction import atomic_authoring
+from pops.time.program_value_validation import (
+    require_compatible_spaces, require_owned, require_region, require_top_level,
+    validate_input_regions,
+)
+from pops.time.values import ProgramValue, _is_field_value, _resolve_handle
 
 if TYPE_CHECKING:
     from pops.time._program_contract import _ProgramBase
 else:
     _ProgramBase = object
-
-
 class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
     """IR dumps, decorator step(), control flow (while_/if_/range), reductions and the dt bound."""
 
-    @staticmethod
-    def _render_node(v: Any) -> Any:
+    def _render_node(self, v: Any) -> Any:
         """Render one IR value as an operator-first line (introspection, not codegen)."""
-        ins = ", ".join(i.name for i in v.inputs)
+        ins = ", ".join(self._canonical_value(i).name for i in v.inputs)
         extra = ""
         keys = {k: val for k, val in v.attrs.items() if k != "coeffs"}
         if "coeffs" in v.attrs:
@@ -38,7 +36,8 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
         for v in self._values:
             lines.append("  " + self._render_node(v))
         for block, st in self._commits.items():
-            lines.append("  P.commit(%r, %s)" % (block, st.name))
+            lines.append(
+                "  P.commit(P.state('U', block=%r).next, %s)" % (block, st.name))
         return "\n".join(lines)
 
     def dump_board(self) -> Any:
@@ -51,7 +50,7 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
         codegen -- it shows which ctx / GeneratedModule call each node lowers to."""
         lines = ["// C++ plan for GeneratedProgram step of %s" % self.name]
         for v in self._values:
-            ins = ", ".join(i.name for i in v.inputs)
+            ins = ", ".join(self._canonical_value(i).name for i in v.inputs)
             if v.op == "coupled_rate":
                 # the coupled-rate kernel lowers to ONE multi-state for_each_cell filling every block's
                 # rate scratch at once (ADC-457); there is no single ctx.coupled_rate(...) call.
@@ -69,6 +68,7 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
         return "\n".join(lines)
 
     # --- decorator mode (ADC-423): record the step body from a function ---
+    @atomic_authoring
     def step(self, fn: Any) -> Any:
         """Record this Program's IR by calling @p fn(self) ONCE, at build time (decorator mode).
 
@@ -98,7 +98,8 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
         if not _is_field_value(x):
             raise ValueError("fill_boundary: a State/RHS/scalar_field value is required (got %r)"
                              % (x,))
-        return self._new(x.vtype, "fill_boundary", (x,), {}, x.name, x.block)
+        return self._new(
+            x.vtype, "fill_boundary", (x,), {}, x.name, x.block, space=x.space)
 
     def project(self, name: Any = None, state: Any = None, projection: Any = "block") -> Any:
         """Apply the block's post-step positivity projection to @p state in place (spec op 21):
@@ -108,19 +109,18 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
         -- a custom projection is a later phase. Lowered to ``ctx.apply_projection(idx, state)`` for the
         state's own block (ADC-426)."""
         name, state = _resolve_handle(name), _resolve_handle(state)
-        if isinstance(name, Value) and state is None:
+        if isinstance(name, ProgramValue) and state is None:
             name, state = None, name
-        if not (isinstance(state, Value) and state.vtype == "state"):
+        if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("project: a State value is required (state=...)")
         if projection != "block":
             raise NotImplementedError(
                 "project: only projection='block' (the block's own positivity projection) is "
                 "supported; a custom projection is a later phase (got %r)" % (projection,))
         return self._new("state", "project", (state,), {"projection": projection}, name,
-                         state.block)
+                         state.block, space=state.space)
 
     # --- per-cell conditional select (spec op 17, ADC-418) ---
-
     def cell_compare(self, field: Any, value: Any, cmp: Any, name: Any = None) -> Any:
         """A PER-CELL comparison ``field <cmp> value`` -> a fresh 1-component 0/1 mask scalar_field (1.0
         where the comparison holds, 0.0 otherwise), evaluated cell by cell on component 0 of @p field
@@ -132,14 +132,16 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
         if not _is_field_value(field):
             raise ValueError("cell_compare: a State/RHS/scalar_field value is required (got %r)"
                              % (field,))
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise TypeError("cell_compare: value must be a Python float threshold (a per-cell field "
-                            "threshold is a later phase); got %r" % (value,))
+        try:
+            threshold = scalar_literal(value)
+        except (TypeError, ValueError) as exc:
+            raise TypeError("cell_compare: value must be an exact scalar threshold (a per-cell field "
+                            "threshold is a later phase); got %r" % (value,)) from exc
         if cmp not in self._CELL_CMPS:
             raise ValueError("cell_compare: cmp must be one of %s; got %r"
                              % (sorted(self._CELL_CMPS), cmp))
         return self._new("scalar_field", "cell_compare", (field,),
-                         {"cmp": cmp, "value": float(value)}, name, field.block)
+                         {"cmp": cmp, "value": threshold}, name, field.block)
 
     def cell_gt(self, field: Any, value: Any, name: Any = None) -> Any:
         """Per-cell ``field > value`` mask (1.0 / 0.0). See `cell_compare`."""
@@ -179,6 +181,11 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
         if a.block != b.block:
             raise ValueError("where: a and b must belong to the same block (a is %r, b is %r)"
                              % (a.block, b.block))
+        if mask.block not in (None, a.block):
+            raise ValueError("where: mask and selected values must belong to the same block")
+        require_compatible_spaces(a.space, b.space, "where", typed_pair=True)
+        if mask.vtype in ("state", "rhs"):
+            require_compatible_spaces(a.space, mask.space, "where mask", typed_pair=True)
         na, nb, nm_ = self._ncomp(a), self._ncomp(b), self._ncomp(mask)
         if na is not None and nb is not None and na != nb:
             raise ValueError("where: a and b must have the same ncomp (a has %d, b has %d)" % (na, nb))
@@ -187,7 +194,8 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
             raise ValueError("where: mask must be 1-component or match a/b's ncomp (mask has %d, "
                              "a/b have %d)" % (nm_, ncomp))
         attrs = {"ncomp": ncomp} if ncomp is not None else {}
-        return self._new(a.vtype, "where", (mask, a, b), attrs, name, a.block)
+        return self._new(
+            a.vtype, "where", (mask, a, b), attrs, name, a.block, space=a.space)
 
     @staticmethod
     def _ncomp(value: Any) -> Any:
@@ -203,32 +211,37 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
         """The Euclidean norm ``||u||_2`` of a State (collective all_reduce; Scalar). Lowered as
         ``sqrt(pops::dot(u, u))``. NOTE (holds for every component-0 reduction below): it reduces
         COMPONENT 0 only and MUST run on every rank; use the ``*_component`` forms for a role."""
-        if not (isinstance(state, Value) and state.is_field()):
+        if not (isinstance(state, ProgramValue) and state.is_field()):
             raise ValueError("norm2: a State/RHS value is required")
         return self._new("scalar", "reduce", (state,), {"kind": "norm2"}, None, state.block)
 
     def dot(self, a: Any, b: Any) -> Any:
         """The inner product ``<a, b>`` of two States (collective, Scalar): ``pops::dot(a, b)``."""
-        if not (isinstance(a, Value) and a.is_field() and isinstance(b, Value) and b.is_field()):
+        if not (isinstance(a, ProgramValue) and a.is_field() and isinstance(b, ProgramValue) and b.is_field()):
             raise ValueError("dot: two State/RHS values are required")
+        if a.block != b.block:
+            raise ValueError("dot: both fields must belong to the same block")
+        require_compatible_spaces(a.space, b.space, "dot", typed_pair=True)
+        if self._ncomp(a) != self._ncomp(b):
+            raise ValueError("dot: both fields must have the same known component count")
         return self._new("scalar", "reduce", (a, b), {"kind": "dot"}, None, a.block)
 
     def norm_inf(self, state: Any) -> Any:
         """The infinity norm ``max|u|`` (collective, component 0, Scalar): ``pops::norm_inf(u)``."""
-        if not (isinstance(state, Value) and state.is_field()):
+        if not (isinstance(state, ProgramValue) and state.is_field()):
             raise ValueError("norm_inf: a State/RHS value is required")
         return self._new("scalar", "reduce", (state,), {"kind": "norm_inf"}, None, state.block)
 
     def norm1(self, state: Any) -> Any:
         """The 1-norm ``sum|u|`` (collective, component 0, Scalar): ``pops::reduce_abs_sum(u, 0)``."""
-        if not (isinstance(state, Value) and state.is_field()):
+        if not (isinstance(state, ProgramValue) and state.is_field()):
             raise ValueError("norm1: a State/RHS value is required")
         return self._new("scalar", "reduce", (state,), {"kind": "abs_sum", "comp": 0}, None,
                          state.block)
 
     def sum(self, state: Any) -> Any:
         """The sum over component 0 (collective, Scalar): ``pops::reduce_sum(u, 0)``; cf sum_component."""
-        if not (isinstance(state, Value) and state.is_field()):
+        if not (isinstance(state, ProgramValue) and state.is_field()):
             raise ValueError("sum: a State/RHS value is required")
         return self._new("scalar", "reduce", (state,), {"kind": "sum", "comp": 0}, None, state.block)
 
@@ -236,7 +249,7 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
         """The maximum ``max_cells u`` of a State over component 0 (a collective all_reduce). Returns a
         Scalar value. Lowered as ``pops::reduce_max(u, 0)`` (the SIGNED max, not the magnitude -- use
         `norm_inf` for max|u|). COLLECTIVE: called on every rank. Component 0 only."""
-        if not (isinstance(state, Value) and state.is_field()):
+        if not (isinstance(state, ProgramValue) and state.is_field()):
             raise ValueError("max: a State/RHS value is required")
         return self._new("scalar", "reduce", (state,), {"kind": "max", "comp": 0}, None, state.block)
 
@@ -244,7 +257,7 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
         """The minimum ``min_cells u`` of a State over component 0 (a collective all_reduce). Returns a
         Scalar value. Lowered as ``pops::reduce_min(u, 0)``. COLLECTIVE: called on every rank.
         Component 0 only."""
-        if not (isinstance(state, Value) and state.is_field()):
+        if not (isinstance(state, ProgramValue) and state.is_field()):
             raise ValueError("min: a State/RHS value is required")
         return self._new("scalar", "reduce", (state,), {"kind": "min", "comp": 0}, None, state.block)
 
@@ -252,7 +265,7 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
         """The sum ``sum_cells u(.,comp)`` of a State over conservative component @p comp (a collective
         all_reduce). Returns a Scalar value. Lowered as ``pops::reduce_sum(u, comp)``. COLLECTIVE:
         called on every rank. @p comp must be a Python int >= 0 (a runtime component is meaningless)."""
-        if not (isinstance(state, Value) and state.is_field()):
+        if not (isinstance(state, ProgramValue) and state.is_field()):
             raise ValueError("sum_component: a State/RHS value is required")
         if isinstance(comp, bool) or not isinstance(comp, int) or comp < 0:
             raise ValueError("sum_component: comp must be a Python int >= 0 (got %r)" % (comp,))
@@ -262,7 +275,7 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
     def abs_sum_component(self, state: Any, comp: Any) -> Any:
         """The role-selected L1 ``sum_cells |u(.,comp)|`` (collective all_reduce). Lowered as
         ``pops::reduce_abs_sum(u, comp)``. @p comp must be a Python int >= 0."""
-        if not (isinstance(state, Value) and state.is_field()):
+        if not (isinstance(state, ProgramValue) and state.is_field()):
             raise ValueError("abs_sum_component: a State/RHS value is required")
         if isinstance(comp, bool) or not isinstance(comp, int) or comp < 0:
             raise ValueError("abs_sum_component: comp must be a Python int >= 0 (got %r)" % (comp,))
@@ -278,7 +291,7 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
         to ``ctx.record_scalar("<name>", <scalar>)``."""
         if not isinstance(name, str) or not name:
             raise ValueError("record_scalar: name must be a non-empty string")
-        if not (isinstance(value, Value) and value.vtype == "scalar"):
+        if not (isinstance(value, ProgramValue) and value.vtype == "scalar"):
             raise ValueError("record_scalar: value must be a Scalar value (e.g. P.norm2(R)); got %r"
                              % (value,))
         return self._new("scalar", "record_scalar", (value,), {"diagnostic": name}, name,
@@ -286,23 +299,25 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
 
     def _scalar_binop(self, a: Any, b: Any, fn: Any) -> Any:
         """Build a Scalar arithmetic node ``a <fn> b`` (fn in add/sub/mul/div). Each operand is a Scalar
-        Value or a Python number (a literal constant, stored in attrs). Used by the Value scalar dunders
+        ProgramValue or a Python number (a literal constant, stored in attrs). Used by the ProgramValue scalar dunders
         so a dt_bound can express cfl * hmin / max_wave_speed (spec s18); never evaluated in Python."""
         inputs = []
-        operands = []  # per operand: ("v", index-into-inputs) or ("c", literal float)
+        operands = []  # per operand: ("v", index-into-inputs) or ("c", exact scalar literal)
         for x in (a, b):
-            if isinstance(x, Value):
+            if isinstance(x, ProgramValue):
                 if x.vtype != "scalar":
                     raise TypeError("scalar arithmetic operands must be Scalar values or numbers; got "
                                     "a %s value %r" % (x.vtype, x.name))
                 operands.append(("v", len(inputs)))
                 inputs.append(x)
-            elif isinstance(x, (int, float)) and not isinstance(x, bool):
-                operands.append(("c", float(x)))
             else:
-                raise TypeError("scalar arithmetic operands must be Scalar values or numbers; got %r"
-                                % (x,))
-        block = next((x.block for x in (a, b) if isinstance(x, Value)), None)
+                try:
+                    operands.append(("c", scalar_literal(x)))
+                except (TypeError, ValueError) as exc:
+                    raise TypeError(
+                        "scalar arithmetic operands must be Scalar values or numbers; got %r" % (x,)
+                    ) from exc
+        block = next((x.block for x in (a, b) if isinstance(x, ProgramValue)), None)
         return self._new("scalar", "scalar_op", tuple(inputs), {"fn": fn, "operands": operands}, None,
                          block)
 
@@ -312,7 +327,7 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
         ``ctx.max_wave_speed(idx, u)`` for @p state's own block (ADC-426). The denominator of a
         CFL-style dt bound cfl * hmin / w (spec s18). REUSES the block's wave-speed closure -- it does
         not recompute the speed."""
-        if not (isinstance(state, Value) and state.vtype == "state"):
+        if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("max_wave_speed: a State value is required")
         return self._new("scalar", "max_wave_speed", (state,), {}, None, state.block)
 
@@ -326,14 +341,19 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
         """Build a Bool predicate ``s_lhs <cmp> rhs`` (re-evaluated each loop pass). @p rhs is a Python
         float tolerance (stored as a literal) or another Scalar value (compared at runtime). Inputs are
         the Scalar operand(s); the float bound lives in attrs['rhs']."""
-        if isinstance(rhs, (int, float)):
-            return self._new("bool", "compare", (lhs,), {"cmp": cmp, "rhs": float(rhs)}, None,
-                             lhs.block)
-        if isinstance(rhs, Value) and rhs.vtype == "scalar":
+        if isinstance(rhs, ProgramValue) and rhs.vtype == "scalar":
             return self._new("bool", "compare", (lhs, rhs), {"cmp": cmp}, None, lhs.block)
-        raise TypeError("compare: the right-hand side must be a float tolerance or a Scalar value, "
-                        "got %r" % (rhs,))
+        try:
+            tolerance = scalar_literal(rhs)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                "compare: the right-hand side must be a scalar tolerance or a Scalar value, got %r"
+                % (rhs,)
+            ) from exc
+        return self._new("bool", "compare", (lhs,), {"cmp": cmp, "rhs": tolerance}, None,
+                         lhs.block)
 
+    @atomic_authoring
     def while_(self, state: Any, cond_fn: Any, body_fn: Any) -> Any:
         """A convergence loop: starting from @p state, while ``cond_fn(self, x)`` holds, replace x by
         ``body_fn(self, x)``; return the final State.
@@ -344,26 +364,34 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
 
           - ``cond_fn(self, x)`` must return a Bool value (e.g. ``self.norm2(diff) > tol``);
           - ``body_fn(self, x)`` must return the next-iteration State (e.g. a linear_combine)."""
-        if not (isinstance(state, Value) and state.vtype == "state"):
+        if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("while_: the loop variable must be a State value")
+        require_top_level(self, state, "while_")
         if self._recording:
             raise NotImplementedError(
                 "while_: nested control flow is a later phase; a while_ body cannot itself open a "
                 "while_ yet")
         cond_block, cond_val = self._record(cond_fn, state)
-        if not (isinstance(cond_val, Value) and cond_val.vtype == "bool"):
-            raise ValueError("while_: cond_fn must return a Bool value (e.g. P.norm2(d) > tol)")
+        cond_region = self._region_for_block(cond_block)
+        require_region(
+            self, cond_val, cond_region, "while_ cond", vtype="bool")
         body_block, next_state = self._record(body_fn, state)
-        if not (isinstance(next_state, Value) and next_state.vtype == "state"):
+        body_region = self._region_for_block(body_block)
+        if not (isinstance(next_state, ProgramValue) and next_state.vtype == "state"):
             raise ValueError("while_: body_fn must return the next-iteration State value")
         if next_state.block != state.block:
             raise ValueError("while_: body_fn must return a State of the same block as the loop "
                              "variable")
+        require_region(
+            self, next_state, body_region, "while_ body", vtype="state",
+            allow=(state,))
+        require_compatible_spaces(state.space, next_state.space, "while_ body", typed_pair=True)
         return self._new("state", "while", (state,),
-                         {"cond_block": cond_block, "cond": cond_val,
-                          "body_block": body_block, "body": next_state},
-                         None, state.block)
+                         {"cond_block": cond_block, "cond_region": cond_region, "cond": cond_val,
+                          "body_block": body_block, "body_region": body_region, "body": next_state},
+                         None, state.block, space=state.space)
 
+    @atomic_authoring
     def static_range(self, state: Any, count: Any, body_fn: Any) -> Any:
         """A COMPILE-TIME (unrolled) loop: apply ``body_fn(self, x)`` to the State @p count times,
         threading the result, and return the final State. @p count must be a Python int known at IR
@@ -374,23 +402,28 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
                             "a runtime / C++-loop count")
         if count < 0:
             raise ValueError("static_range count must be non-negative")
-        if not (isinstance(state, Value) and state.vtype == "state"):
+        if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("static_range: the loop variable must be a State value")
+        region = self._current_region()
+        validate_input_regions(self, (state,), region, "static_range")
         x = state
         for _ in range(count):
             x = body_fn(self, x)
-            if not (isinstance(x, Value) and x.vtype == "state" and x.block == state.block):
+            if not (isinstance(x, ProgramValue) and x.vtype == "state" and x.block == state.block):
                 raise ValueError("static_range: body_fn must return a State of the loop variable's "
                                  "block")
+            require_region(self, x, region, "static_range body", vtype="state", allow=(state,))
+            require_compatible_spaces(state.space, x.space, "static_range body", typed_pair=True)
         return x
 
+    @atomic_authoring
     def range(self, state: Any, count: Any, body_fn: Any) -> Any:
         """A C++ ``for`` loop over a FIXED count: from @p state, apply ``body_fn(self, x)`` @p count
         times, threading the loop-variable State in place, and return the final State. @p count must be
         a Python int (a runtime/Scalar count is a later phase). The body is RE-EXECUTED each pass, so
         its ops are captured into a recording sub-block (NOT the flat SSA list) and emitted ONCE inside
         the loop. Use `static_range` to unroll instead."""
-        if isinstance(count, Value):
+        if isinstance(count, ProgramValue):
             if count.vtype == "scalar":
                 raise NotImplementedError("range with a runtime Scalar count is deferred; use a "
                                           "Python int")
@@ -399,38 +432,56 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
             raise TypeError("range count must be a Python int")
         if count < 0:
             raise ValueError("range count must be non-negative")
-        if not (isinstance(state, Value) and state.vtype == "state"):
+        if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("range: the loop variable must be a State value")
+        require_top_level(self, state, "range")
         if self._recording:
             raise NotImplementedError("range: nested control flow is a later phase; a control-flow "
                                       "body cannot itself open a range yet")
         body_block, next_state = self._record(body_fn, state)
-        if not (isinstance(next_state, Value) and next_state.vtype == "state"
+        body_region = self._region_for_block(body_block)
+        if not (isinstance(next_state, ProgramValue) and next_state.vtype == "state"
                 and next_state.block == state.block):
             raise ValueError("range: body_fn must return the next-iteration State of the same block")
+        require_region(
+            self, next_state, body_region, "range body", vtype="state",
+            allow=(state,))
+        require_compatible_spaces(state.space, next_state.space, "range body", typed_pair=True)
         return self._new("state", "range", (state,),
-                         {"count": int(count), "body_block": body_block, "body": next_state},
-                         None, state.block)
+                         {"count": int(count), "body_block": body_block,
+                          "body_region": body_region, "body": next_state},
+                         None, state.block, space=state.space)
 
+    @atomic_authoring
     def if_(self, state: Any, cond: Any, body_fn: Any) -> Any:
         """A C++ ``if`` branch: from @p state, if the runtime Bool @p cond holds, replace the state by
         ``body_fn(self, x)``; otherwise leave it unchanged. Returns the (possibly updated) State. @p
         cond is a Bool value built BEFORE if_ (e.g. ``P.norm2(d) > tol``), evaluated ONCE. The body ops
         are captured into a recording sub-block and emitted inside the branch."""
-        if not (isinstance(state, Value) and state.vtype == "state"):
+        if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("if_: the state must be a State value")
-        if not (isinstance(cond, Value) and cond.vtype == "bool"):
+        if not (isinstance(cond, ProgramValue) and cond.vtype == "bool"):
             raise ValueError("if_: cond must be a Bool value (e.g. P.norm2(d) > tol)")
+        require_top_level(self, state, "if_")
+        require_top_level(self, cond, "if_ cond")
         if self._recording:
             raise NotImplementedError("if_: nested control flow is a later phase; a control-flow body "
                                       "cannot itself open an if_ yet")
         body_block, next_state = self._record(body_fn, state)
-        if not (isinstance(next_state, Value) and next_state.vtype == "state"
+        body_region = self._region_for_block(body_block)
+        if not (isinstance(next_state, ProgramValue) and next_state.vtype == "state"
                 and next_state.block == state.block):
             raise ValueError("if_: body_fn must return a State of the same block as the input state")
+        require_region(
+            self, next_state, body_region, "if_ body", vtype="state",
+            allow=(state,))
+        require_compatible_spaces(state.space, next_state.space, "if_ body", typed_pair=True)
         return self._new("state", "if", (state, cond),
-                         {"body_block": body_block, "body": next_state}, None, state.block)
+                         {"body_block": body_block, "body_region": body_region,
+                          "body": next_state}, None, state.block,
+                         space=state.space)
 
+    @atomic_authoring
     def _record(self, fn: Any, x: Any) -> Any:
         """Run a control-flow callable ``fn(self, x)`` with a fresh recording scope active, capturing the
         ops it builds into a sub-block (returned with the value fn produced). The sub-block ops are NOT
@@ -442,59 +493,3 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
         finally:
             self._recording.pop()
         return sub, out
-
-    # --- optional dt bound (spec s18 / ADC-417) ----------------------------------------------------
-    def set_dt_bound(self, expr_or_fn: Any) -> Any:
-        """Set an OPTIONAL dt bound for this Program (spec s18). The generated .so exports it as a
-        SECOND ABI function (``pops_program_dt_bound``) alongside the macro step; ``step_cfl`` then uses
-        ``min(native CFL dt, program dt bound)``. Without a dt bound the native CFL is UNCHANGED.
-
-        @p expr_or_fn is either a callable ``f(P, cfl)`` returning a Scalar (the common form -- it reads
-        the runtime ``cfl`` to build e.g. ``cfl * P.hmin() / P.max_wave_speed(U)``), or a Scalar Value
-        already built (a fixed bound, cfl-independent). The body is recorded as a scalar sub-program; it
-        is NOT run in Python during ``sim.step_cfl`` -- it lowers to C++ that reads the live state /
-        reductions. The dt_bound body may read state / fields / scalars only (no commit, no field write):
-        a State / RHS / field op in it is rejected."""
-        if self._dt_bound is not None:
-            raise ValueError("set_dt_bound: a dt bound is already set (set it at most once)")
-        if self._recording:
-            raise NotImplementedError("set_dt_bound: a dt bound cannot be set inside a control-flow body")
-        sub = []
-        self._recording.append(sub)
-        try:
-            if callable(expr_or_fn):
-                # The cfl placeholder is a runtime Scalar the body composes with (cfl * hmin / w).
-                cfl = self._new("scalar", "cfl", (), {}, "cfl", None)
-                result = expr_or_fn(self, cfl)
-            else:
-                result = expr_or_fn
-        finally:
-            self._recording.pop()
-        if not (isinstance(result, Value) and result.vtype == "scalar"):
-            raise ValueError("set_dt_bound: the body must return a Scalar value (e.g. "
-                             "cfl * P.hmin() / P.max_wave_speed(U)); got %r" % (result,))
-        # The dt_bound is a READ-ONLY scalar program: it may READ state / fields (P.state, P.solve_fields)
-        # and produce scalars (reductions, hmin, max_wave_speed, cfl, scalar arithmetic, comparisons),
-        # but it must NOT write a field or commit -- a flux / linear_combine / source / projection in it
-        # is rejected fail-loud (it would mutate the state during the CFL dt evaluation).
-        _DT_BOUND_OPS = frozenset({"state", "solve_fields", "reduce", "compare", "cfl", "hmin",
-                                   "max_wave_speed", "scalar_op"})
-        for v in sub:
-            if v.op not in _DT_BOUND_OPS:
-                raise ValueError("set_dt_bound: the dt bound body may read state / fields and compute "
-                                 "scalars only (no field write / commit); op '%s' (value '%s') is not "
-                                 "allowed" % (v.op, v.name))
-        self._dt_bound = (sub, result)
-        return result
-
-    def dt_bound(self, fn: Any) -> Any:
-        """Decorator form of `set_dt_bound`: ``@P.dt_bound`` over ``def f(P, cfl): return ...`` records
-        the dt bound (spec s18) and returns the function unchanged (so the name stays usable)."""
-        self.set_dt_bound(fn)
-        return fn
-
-    def has_dt_bound(self) -> Any:
-        """True iff an optional dt bound was set (spec s18)."""
-        return self._dt_bound is not None
-
-

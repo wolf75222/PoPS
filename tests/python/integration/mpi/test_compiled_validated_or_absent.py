@@ -47,7 +47,7 @@ def _fe_program(name="validated_probe"):
     U = P.state("ions")
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit("ions", P.linear_combine("U1", U + dt * R))
+    P.commit(P.state("U", block="ions").next, P.linear_combine("U1", U + dt * R))
     return P
 
 
@@ -97,7 +97,7 @@ def _broken_program():
     # A Program that commits a block never declared: emit's program.validate() must reject it, so
     # compile raises before any handle exists.
     P = adctime.Program("broken_probe")
-    P.commit("never_declared", P.linear_combine("U1", P.state("ions")))
+    P.commit(P.state("U", block="never_declared").next, P.linear_combine("U1", P.state("ions")))
     return P
 
 

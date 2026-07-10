@@ -44,12 +44,12 @@ def test_program_dump_operator_ir_shows_the_lowering():
     f = P.solve_fields("f", u)
     r = P._rhs_legacy(name="R", state=u, fields=f, flux=True, sources=["electric"])
     u1 = P.linear_combine("U1", u + dt * r)
-    P.commit("plasma", u1)
+    P.commit(P.state("U", block="plasma").next, u1)
     txt = P.dump_operator_ir()
     assert "operator-first Program IR" in txt
     assert "solve_fields" in txt
     assert "linear_combine" in txt
-    assert "P.commit('plasma'" in txt
+    assert "P.commit(P.state('U', block='plasma').next" in txt
 
 
 def test_program_dump_board_and_cpp_plan():
@@ -72,9 +72,9 @@ def test_model_dump_module_ir_lists_spaces_and_operators():
     assert "implicit_operator" in txt and "local_linear_operator" in txt
 
 
-def test_callable_operator_rebinds_for_out_of_order_registration():
-    # A callable operator used before a LATER operator is registered must still resolve
-    # the later one: CallableOperator rebinds the model's fresh module when needed.
+def test_explicit_program_binding_refreshes_out_of_order_registration():
+    # Handles carry declaration identity, not a hidden Program binding. A Program binds the model
+    # explicitly and refreshes that binding after a later operator declaration.
     from pops.math import sqrt, grad, div, laplacian, ddt
     m = physics.Model("ep")
     U = m.state("U", components=["rho", "mx", "my"])
@@ -92,15 +92,16 @@ def test_callable_operator_rebinds_for_out_of_order_registration():
     a_src = m.source("electric", on=U, value=[0.0 * rho, rho * e_field.x, rho * e_field.y])
     explicit_rate = m.rate("explicit_rate", ddt(U) == -div(flux) + a_src)
 
-    P = Program("late")
+    P = Program("late").bind_operators(m.module)
     u_n = P.state("plasma")
     f_n = P.solve_fields("f", u_n)
-    explicit_rate(u_n, f_n)                      # binds the module (no implicit_operator yet)
+    explicit_rate(u_n, f_n)
     bz = m.aux("B_z")
     c_b = m.local_linear_operator("C(B)", on=U,
                                   matrix=[[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
     implicit_operator = m.operator("implicit_operator", returns=c_b, inputs=["fields"])
-    L = implicit_operator(f_n)                   # rebinds the fresh module -> resolves
+    P.bind_operators(m.module)                   # refresh after the later declaration
+    L = implicit_operator(f_n)
     assert L.vtype == "operator"
 
 

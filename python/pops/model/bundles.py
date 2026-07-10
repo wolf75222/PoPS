@@ -6,6 +6,7 @@ over the expected :class:`pops.model.spaces.StateSpace`.
 """
 from __future__ import annotations
 
+from types import MappingProxyType
 from typing import Any
 
 from .spaces import Rate, RateSpace, Space
@@ -22,20 +23,26 @@ class RateBundle:
     A coupled rate (``collisions(e, i, n) -> RateBundle``) returns one tangent per
     participating block; ``bundle["electrons"]`` is the :class:`RateSpace` of that
     block. The arity is arbitrary (2, 3, 4, ... species). :meth:`require` enforces
-    that a block's rate lives over the expected StateSpace, so adding a
-    ``Rate(electron_state)`` where a ``Rate(ion_state)`` is expected is rejected.
+    that a block's rate lives over the expected StateSpace. The full mapping is supplied at
+    construction and then frozen, so a bundle remains a hash-stable Signature value.
     """
 
-    def __init__(self, entries: Any = None) -> None:
-        self._rates = {}
-        for block, rate in (entries or {}).items():
-            self.add(block, rate)
+    __slots__ = ("_rates",)
 
-    def add(self, block: Any, rate: Any) -> Any:
-        """Bind ``block`` to ``rate`` (a :class:`RateSpace`, a :class:`StateSpace`, or a name)."""
-        rs = rate if isinstance(rate, RateSpace) else Rate(rate)
-        self._rates[_block_name(block)] = rs
-        return self
+    def __init__(self, entries: Any = None) -> None:
+        rates = {}
+        for block, rate in (entries or {}).items():
+            name = _block_name(block)
+            if name in rates:
+                raise ValueError("RateBundle contains duplicate block %r" % (name,))
+            rates[name] = rate if isinstance(rate, RateSpace) else Rate(rate)
+        object.__setattr__(self, "_rates", MappingProxyType(rates))
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("RateBundle is immutable")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("RateBundle is immutable")
 
     def require(self, block: Any, state: Any) -> Any:
         """Return the block's rate, raising if it is not ``Rate(state)`` (typed multi-output check)."""
@@ -58,17 +65,17 @@ class RateBundle:
         return _block_name(block) in self._rates
 
     def keys(self) -> Any:
-        return list(self._rates)
+        return tuple(self._rates)
 
     def items(self) -> Any:
-        return list(self._rates.items())
+        return tuple(self._rates.items())
 
     def __len__(self) -> int:
         return len(self._rates)
 
     def _key(self) -> Any:
         # order-independent identity so a Signature output compares structurally
-        return tuple(sorted((k, repr(v)) for k, v in self._rates.items()))
+        return tuple(sorted(self._rates.items()))
 
     def __eq__(self, other: Any) -> bool:
         return isinstance(other, RateBundle) and self._key() == other._key()
@@ -79,3 +86,8 @@ class RateBundle:
     def __repr__(self) -> str:
         return "RateBundle({%s})" % ", ".join(
             "%r: %r" % (k, v) for k, v in self._rates.items())
+
+    def to_data(self) -> dict[str, Any]:
+        return {"kind": "rate_bundle", "rates": [
+            {"block": block, "rate": rate.to_data()} for block, rate in sorted(self._rates.items())
+        ]}

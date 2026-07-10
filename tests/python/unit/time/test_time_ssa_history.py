@@ -38,8 +38,9 @@ def test_keep_history_default_resolves_to_dense():
     node = P.keep_history(U, depth=2)
     assert node.op == "store_history"
     # The historical whole-ring behaviour: cold start defaults to CopyCurrent, persistence to Dense.
-    assert isinstance(U._cold_start, CopyCurrent)
-    assert isinstance(U._checkpoint_policy, Dense)
+    _, cold_start, configured_policy = P._time_history_configs[U]
+    assert isinstance(cold_start, CopyCurrent)
+    assert isinstance(configured_policy, Dense)
     # The resolved policy is recorded on the Program keyed by the ring name (depth, policy).
     depth, policy = P._history_persistence["plasma.U"]
     assert depth == 2 and isinstance(policy, Dense)
@@ -51,7 +52,8 @@ def test_keep_history_accepts_typed_policy():
     # depth 4 with Interval(3): (depth-1)=3 divisible by 3 -> stores {0, 3}, coherent.
     node = P.keep_history(U, depth=4, checkpoint_policy=Interval(3))
     assert node.op == "store_history"
-    assert isinstance(U._checkpoint_policy, Interval) and U._checkpoint_policy.k == 3
+    _, _, configured_policy = P._time_history_configs[U]
+    assert isinstance(configured_policy, Interval) and configured_policy.k == 3
     depth, policy = P._history_persistence["plasma.U"]
     assert depth == 4 and policy.stored_slots(4) == (0, 3)
 
@@ -117,9 +119,15 @@ def test_commit_many_atomic_double_commit_rejected():
     Ub = P.state("b")
     a1 = P.linear_combine("a1", 1.0 * Ua)
     b1 = P.linear_combine("b1", 1.0 * Ub)
-    P.commit("a", a1)  # 'a' already committed
+    P.commit(P.state("U", block="a").next, a1)  # 'a' already committed
     # commit_many of {a, b} must be rejected as a UNIT (a is double), and b must NOT be committed.
-    _expect(ValueError, lambda: P.commit_many({"a": a1, "b": b1}), "committed more than once")
+    a_next = P.state("U", block="a").next
+    b_next = P.state("U", block="b").next
+    _expect(
+        ValueError,
+        lambda: P.commit_many({a_next: a1, b_next: b1}),
+        "committed more than once",
+    )
     assert "b" not in P.commits(), "commit_many must be atomic: no partial commit of the group"
 
 
@@ -129,7 +137,13 @@ def test_commit_many_foreign_value_rejected_atomically():
     Ua = P.state("a")
     a1 = P.linear_combine("a1", 1.0 * Ua)
     foreign = other.linear_combine("z", 1.0 * other.state("a"))
-    _expect(ValueError, lambda: P.commit_many({"a": a1, "z": foreign}), "different Program")
+    a_next = P.state("U", block="a").next
+    z_next = P.state("U", block="z").next
+    _expect(
+        ValueError,
+        lambda: P.commit_many({a_next: a1, z_next: foreign}),
+        "different Program",
+    )
     assert P.commits() == {}, "no block committed when the group is rejected"
 
 
@@ -139,7 +153,8 @@ def test_commit_many_success_commits_all():
     Ub = P.state("b")
     a1 = P.linear_combine("a1", 1.0 * Ua)
     b1 = P.linear_combine("b1", 1.0 * Ub)
-    P.commit_many({"a": a1, "b": b1})
+    P.commit_many({P.state("U", block="a").next: a1,
+                   P.state("U", block="b").next: b1})
     assert P.commits() == {"a": a1, "b": b1}
 
 

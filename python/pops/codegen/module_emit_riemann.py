@@ -23,6 +23,7 @@ from pops.codegen.module_emit_helpers import (
     _prim_block,
     _roles_for,
 )
+from pops.ir.literals import scalar_cpp
 
 
 def _emit_hllc(model: Any, nc: Any) -> list:
@@ -240,7 +241,7 @@ def _emit_roe_jacobian(model: Any, nc: Any, cse: Any) -> list:
     im_tol = ws.get("im_tol")
     if eig_max_iter is not None or im_tol is not None:
         roe_args = ", 80, static_cast<pops::Real>(1e-13), static_cast<pops::Real>(%s), %d" % (
-            repr(float(im_tol)) if im_tol is not None else "1e-5",
+            scalar_cpp(im_tol) if im_tol is not None else "1e-5",
             int(eig_max_iter) if eig_max_iter is not None else 100)
     else:
         roe_args = ""

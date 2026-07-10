@@ -61,7 +61,7 @@ def test_static_range_unrolls(t):
     P = t.Program("sr")
     U = P.state("blk")
     Uf = P.static_range(U, 3, _fe_body())
-    P.commit("blk", Uf)
+    P.commit(P.state("U", block="blk").next, Uf)
     src = P.emit_cpp_program()
     assert src.count("ctx.rhs_into") == 3, "static_range(3) unrolls the body 3 times\n%s" % src
     assert "for (" not in src, "static_range must NOT emit a C++ loop (it is unrolled)\n%s" % src
@@ -71,7 +71,7 @@ def test_range_emits_for(t):
     P = t.Program("rg")
     U = P.state("blk")
     Uf = P.range(U, 3, _fe_body())
-    P.commit("blk", Uf)
+    P.commit(P.state("U", block="blk").next, Uf)
     src = P.emit_cpp_program()
     assert "for (int i" in src, "range must emit a C++ for loop\n%s" % src
     assert src.count("ctx.rhs_into") == 1, "range emits the body ONCE (inside the loop)\n%s" % src
@@ -82,7 +82,7 @@ def test_if_emits_branch(t):
     U = P.state("blk")
     cond = P.norm_inf(U) > 0.0
     Uf = P.if_(U, cond, _fe_body())
-    P.commit("blk", Uf)
+    P.commit(P.state("U", block="blk").next, Uf)
     src = P.emit_cpp_program()
     assert "pops::norm_inf" in src, "norm_inf must lower to pops::norm_inf\n%s" % src
     assert "if (" in src, "if_ must emit a C++ if branch\n%s" % src
@@ -115,7 +115,7 @@ def test_range_count_changes_hash(t):
     def prog(count):
         P = t.Program("rg")
         U = P.state("blk")
-        P.commit("blk", P.range(U, count, _fe_body()))
+        P.commit(P.state("U", block="blk").next, P.range(U, count, _fe_body()))
         return P._ir_hash()
     assert prog(3) != prog(4), "a different range count must change the IR hash (cache key)"
 
@@ -125,7 +125,7 @@ def test_static_range_body_changes_hash(t):
         P = t.Program("sr")
         U = P.state("blk")
         target = P.linear_combine("target", 2.0 * U)
-        P.commit("blk", P.static_range(U, 2, lambda _P, x: _P.linear_combine(c * x + 0.5 * target)))
+        P.commit(P.state("U", block="blk").next, P.static_range(U, 2, lambda _P, x: _P.linear_combine(c * x + 0.5 * target)))
         return P._ir_hash()
     assert prog(0.5) != prog(0.25), "a different unrolled body must change the IR hash"
 
@@ -138,7 +138,7 @@ def _contraction_program(t, kind, count, *, name):
     target = P.linear_combine("target", 2.0 * U0)
     body = _contraction_body(target)
     xf = P.range(U0, count, body) if kind == "range" else P.static_range(U0, count, body)
-    P.commit("blk", xf)
+    P.commit(P.state("U", block="blk").next, xf)
     return P
 
 
@@ -150,7 +150,7 @@ def _if_program(t, *, name, threshold):
     diff = P.linear_combine("diff", target - U0)
     cond = P.norm_inf(diff) > threshold
     xf = P.if_(U0, cond, _contraction_body(target))
-    P.commit("blk", xf)
+    P.commit(P.state("U", block="blk").next, xf)
     return P
 
 

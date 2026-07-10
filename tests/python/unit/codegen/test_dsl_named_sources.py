@@ -19,10 +19,10 @@ import numpy as np
 from pops.ir.expr import Var
 from pops.physics.facade import Model
 
-# Golden hashes computed on master BEFORE this feature (build() / build(with_source=False)
-# below). The feature must NOT perturb the cache key of a model that uses only m.source(...).
-GOLDEN_WITH_SOURCE = "bde07b2a0b83e85e65a2c73e839b0abfbb38eae0572fbfddd359a2ac9a92c89e"
-GOLDEN_NO_SOURCE = "0bcb5c54153956f207d0d2ff7e2a6c542c6f0cf1741aee03e49bc35daacbe3d1"
+# Golden hashes for the ADC-652 exact-literal model-hash schema. Named-source declarations must
+# not perturb the corresponding default-source/no-source identities inside this schema.
+GOLDEN_WITH_SOURCE = "923ae2f52bd906ac062072365590235c674187869c4e5fcea3dc351569c0af0e"
+GOLDEN_NO_SOURCE = "81405d8bc86a9e86f232ca4a73162d9a140aa17aeb3b225c40adcfb73ce5be0a"
 
 
 def build(with_source=True):
@@ -118,8 +118,7 @@ def test_linear_source_depends_on_prim():
 
 
 def test_source_backward_compat():
-    # Existing m.source(...) path is untouched: a model using only m.source keeps the byte-identical
-    # golden hash, and check() still passes.
+    # Existing m.source(...) stays stable inside the exact-literal hash schema, and check() passes.
     m = build(with_source=True)
     assert m.check()
     assert m._model_hash() == GOLDEN_WITH_SOURCE, m._model_hash()

@@ -5,7 +5,40 @@
 #include <pops/runtime/module_capabilities.hpp>  // ADC-479 (#36/#37): authoritative static capability facts
 #include <pops/runtime/runtime_environment.hpp>  // ADC-609: runtime environment/precision/communicator report
 
+#include <utility>
+
+namespace pops::detail {
+
+/// Binding-only friend used by the capability-gated Python freeze transaction.
+///
+/// The public C++ ModelSpec API deliberately has no restore operation: freeze() is irreversible
+/// for native callers.  This access type is defined only in the binding translation unit, so an
+/// ordinary consumer of the public header cannot name or invoke a rollback operation.
+struct ModelSpecFreezeTransactionAccess {
+  [[nodiscard]] static bool snapshot(const ModelSpec& spec) noexcept { return spec.frozen_; }
+  static void restore(ModelSpec& spec, bool state) noexcept { spec.frozen_ = state; }
+};
+
+}  // namespace pops::detail
+
 namespace {
+
+void require_freeze_transaction_capability(const py::handle& capability) {
+  const py::object expected =
+      py::module_::import("pops.problem._freeze_transaction").attr("_FREEZE_CAPABILITY");
+  if (!capability.is(expected))
+    throw std::runtime_error(
+        "ModelSpec freeze rollback requires the private PoPS transaction capability");
+}
+
+template <typename Field>
+void bind_model_spec_property(py::class_<pops::ModelSpec>& binding, const char* name,
+                              Field pops::ModelSpec::* member) {
+  using T = typename Field::value_type;
+  binding.def_property(
+      name, [member](const pops::ModelSpec& spec) { return T((spec.*member).get()); },
+      [member](pops::ModelSpec& spec, T value) { spec.*member = std::move(value); });
+}
 
 pops::CapabilityTarget parse_capability_target(const std::string& target, const char* where) {
   if (target == "production")
@@ -210,29 +243,24 @@ void init_core(py::module_& m) {
             pops::native_capability_report(parse_capability_target(target, "capability_report")));
       },
       py::arg("target") = "module",
-      "Structured native capability report: schema_version, ABI, runtime facts, capability flags and "
-      "route rows. Pretty strings are views of this object; callers should not parse text reports.");
+      "Structured native capability report: schema_version, ABI, runtime facts, capability flags "
+      "and "
+      "route rows. Pretty strings are views of this object; callers should not parse text "
+      "reports.");
 
   m.def(
       "runtime_environment_report",
-      []() {
-        return runtime_environment_to_dict(pops::runtime_environment_report());
-      },
+      []() { return runtime_environment_to_dict(pops::runtime_environment_report()); },
       "Runtime environment facts: Kokkos lifecycle/ownership, MPI communicator, precision and "
       "allocator lifetime. Reading it does not initialize Kokkos or MPI.");
 
   m.def(
-      "numerical_defaults_report",
-      []() {
-        return numerical_defaults_report_to_dict();
-      },
+      "numerical_defaults_report", []() { return numerical_defaults_report_to_dict(); },
       "Structured native numerical/solver/physical defaults. Reading it is metadata-only.");
 
   m.def(
       "fallback_diagnostics_report",
-      []() {
-        return fallback_diagnostics_report_to_dict(pops::fallback_diagnostics_report());
-      },
+      []() { return fallback_diagnostics_report_to_dict(pops::fallback_diagnostics_report()); },
       "Structured fallback/degraded-route diagnostics and policies. Reading it is metadata-only.");
   m.def("reset_fallback_diagnostics", &pops::reset_fallback_diagnostics_counters,
         "Reset process-local fallback/degraded-route diagnostic counters.");
@@ -289,20 +317,37 @@ void init_core(py::module_& m) {
 
   // ModelSpec: composition of generic bricks (transport/source/elliptic + parameters).
   // No named scenario; the pops.Model(...) sugar on the Python side fills these fields.
-  py::class_<ModelSpec>(m, "ModelSpec")
-      .def(py::init<>())
-      .def_readwrite("transport", &ModelSpec::transport)
-      .def_readwrite("source", &ModelSpec::source)
-      .def_readwrite("elliptic", &ModelSpec::elliptic)
-      .def_readwrite("B0", &ModelSpec::B0)
-      .def_readwrite("gamma", &ModelSpec::gamma)
-      .def_readwrite("cs2", &ModelSpec::cs2)
-      .def_readwrite("vacuum_floor", &ModelSpec::vacuum_floor)
-      .def_readwrite("qom", &ModelSpec::qom)
-      .def_readwrite("q", &ModelSpec::q)
-      .def_readwrite("alpha", &ModelSpec::alpha)
-      .def_readwrite("n0", &ModelSpec::n0)
-      .def_readwrite("sign", &ModelSpec::sign)
-      .def_readwrite("four_pi_G", &ModelSpec::four_pi_G)
-      .def_readwrite("rho0", &ModelSpec::rho0);
+  auto model_spec = py::class_<ModelSpec>(m, "ModelSpec");
+  model_spec.def(py::init<>())
+      .def("freeze", &ModelSpec::freeze,
+           "Seal ModelSpec authoring; subsequent Python property writes fail.")
+      .def_property_readonly("frozen", &ModelSpec::frozen, "Whether ModelSpec authoring is sealed.")
+      .def(
+          "_pops_freeze_snapshot",
+          [](const ModelSpec& spec, const py::handle& capability) {
+            require_freeze_transaction_capability(capability);
+            return pops::detail::ModelSpecFreezeTransactionAccess::snapshot(spec);
+          },
+          py::arg("capability"))
+      .def(
+          "_pops_freeze_restore",
+          [](ModelSpec& spec, const py::handle& capability, bool state) {
+            require_freeze_transaction_capability(capability);
+            pops::detail::ModelSpecFreezeTransactionAccess::restore(spec, state);
+          },
+          py::arg("capability"), py::arg("state"));
+  bind_model_spec_property(model_spec, "transport", &ModelSpec::transport);
+  bind_model_spec_property(model_spec, "source", &ModelSpec::source);
+  bind_model_spec_property(model_spec, "elliptic", &ModelSpec::elliptic);
+  bind_model_spec_property(model_spec, "B0", &ModelSpec::B0);
+  bind_model_spec_property(model_spec, "gamma", &ModelSpec::gamma);
+  bind_model_spec_property(model_spec, "cs2", &ModelSpec::cs2);
+  bind_model_spec_property(model_spec, "vacuum_floor", &ModelSpec::vacuum_floor);
+  bind_model_spec_property(model_spec, "qom", &ModelSpec::qom);
+  bind_model_spec_property(model_spec, "q", &ModelSpec::q);
+  bind_model_spec_property(model_spec, "alpha", &ModelSpec::alpha);
+  bind_model_spec_property(model_spec, "n0", &ModelSpec::n0);
+  bind_model_spec_property(model_spec, "sign", &ModelSpec::sign);
+  bind_model_spec_property(model_spec, "four_pi_G", &ModelSpec::four_pi_G);
+  bind_model_spec_property(model_spec, "rho0", &ModelSpec::rho0);
 }

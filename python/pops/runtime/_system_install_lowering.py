@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops.runtime._numeric import native_real
+
 
 def _lower_wall(wall: Any) -> Any:
     """Lower a Poisson ``wall`` to the native ``(wall_token, wall_radius)`` (Spec 5 sec.8.16).
@@ -57,7 +59,8 @@ def _weno_kwargs(spatial):
     """ADC-645: WENO5(epsilon=...) rides along the Spatial; None (the default) forwards NOTHING so
     the native add_block keeps its kWenoEpsilon default (byte-identical historical call)."""
     weps = getattr(spatial, "weno_epsilon", None)
-    return {} if weps is None else {"weno_epsilon": float(weps)}
+    return {} if weps is None else {
+        "weno_epsilon": native_real(weps, where="System.add_block.weno_epsilon")}
 
 
 def _mg_kwargs(rel_tol, max_cycles, min_coarse, pre_smooth, post_smooth, bottom_sweeps,
@@ -66,10 +69,11 @@ def _mg_kwargs(rel_tol, max_cycles, min_coarse, pre_smooth, post_smooth, bottom_
     not passed -> the native kMG*-sourced default, bit-identical); coarse_threshold is the ADC-644
     total-cell coarsening ceiling (0 = disabled)."""
     out = {}
-    for key, val, cast in (("rel_tol", rel_tol, float), ("max_cycles", max_cycles, int),
+    for key, val, cast in (("rel_tol", rel_tol, native_real), ("max_cycles", max_cycles, int),
                            ("min_coarse", min_coarse, int), ("pre_smooth", pre_smooth, int),
                            ("post_smooth", post_smooth, int), ("bottom_sweeps", bottom_sweeps, int),
                            ("coarse_threshold", coarse_threshold, int)):
         if val is not None:
-            out[key] = cast(val)
+            out[key] = (cast(val, where="System.set_poisson.%s" % key)
+                        if cast is native_real else cast(val))
     return out

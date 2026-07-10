@@ -30,6 +30,7 @@ from pops.codegen.module_emit_riemann import (
     _emit_roe_roles,
 )
 from pops.ir.expr import Const
+from pops.ir.literals import scalar_cpp
 
 
 def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generated", cse: Any = True,
@@ -129,7 +130,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         # VERBATIM (emitted C++ + model_hash byte-identical); a configured fd_eps replaces it and, since
         # fd_eps enters the ws_jac part of model_hash, the compiled-module cache busts. The 1e-30 term
         # stays a fixed division-by-zero floor (a guard, not a tuning knob).
-        fd_eps_lit = "1e-6" if ws.get("fd_eps") is None else repr(float(ws["fd_eps"]))
+        fd_eps_lit = "1e-6" if ws.get("fd_eps") is None else scalar_cpp(ws["fd_eps"])
         L = []
         if ws["eig"] == "fd":
             L.append("%sconst State F0_ = flux(U, a, dir);" % ind)

@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from pops._bootstrap import ModelSpec
+from pops.runtime._numeric import exact_real, native_real
 from pops.runtime.defaults import (
     PHYSICAL_DEFAULT_ALPHA,
     PHYSICAL_DEFAULT_B0,
@@ -52,11 +53,10 @@ class FluidState:
                  cs2: Any = PHYSICAL_DEFAULT_FLUID_STATE_CS2,
                  vacuum_floor: Any = PHYSICAL_DEFAULT_VACUUM_FLOOR) -> None:
         self.kind = kind
-        self.gamma = float(gamma)
-        self.cs2 = float(cs2)
-        if not (float(vacuum_floor) >= 0.0):
-            raise ValueError("FluidState: vacuum_floor >= 0 (0 = inactive)")
-        self.vacuum_floor = float(vacuum_floor)
+        self.gamma = exact_real(gamma, where="FluidState.gamma")
+        self.cs2 = exact_real(cs2, where="FluidState.cs2")
+        self.vacuum_floor = exact_real(
+            vacuum_floor, where="FluidState.vacuum_floor", minimum=0)
 
     @classmethod
     def compressible(cls, gamma: Any = PHYSICAL_DEFAULT_GAMMA) -> Any:
@@ -89,7 +89,7 @@ class ExB:
     """Scalar advection by the E x B drift (magnetic field B0)."""
 
     def __init__(self, B0: Any = PHYSICAL_DEFAULT_B0) -> None:
-        self.B0 = float(B0)
+        self.B0 = exact_real(B0, where="ExB.B0")
 
 
 class CompressibleFlux:
@@ -109,10 +109,9 @@ class IsothermalFlux:
 
     def __init__(self, cs2: Any = PHYSICAL_DEFAULT_NATIVE_ISOTHERMAL_CS2,
                  vacuum_floor: Any = PHYSICAL_DEFAULT_VACUUM_FLOOR) -> None:
-        self.cs2 = float(cs2)
-        if not (float(vacuum_floor) >= 0.0):
-            raise ValueError("IsothermalFlux: vacuum_floor >= 0 (0 = inactive)")
-        self.vacuum_floor = float(vacuum_floor)
+        self.cs2 = exact_real(cs2, where="IsothermalFlux.cs2")
+        self.vacuum_floor = exact_real(
+            vacuum_floor, where="IsothermalFlux.vacuum_floor", minimum=0)
 
 
 # --- Source bricks ------------------------------------------------------
@@ -124,7 +123,7 @@ class PotentialForce:
     """Potential force (q/m) rho E on the momentum (+ work if 4 vars)."""
 
     def __init__(self, charge: Any = PHYSICAL_DEFAULT_QOM) -> None:
-        self.charge = float(charge)
+        self.charge = exact_real(charge, where="PotentialForce.charge")
 
 
 class GravityForce:
@@ -144,7 +143,7 @@ class MagneticLorentzForce:
     ``charge`` = q/m, sign included (same convention as PotentialForce)."""
 
     def __init__(self, charge: Any = PHYSICAL_DEFAULT_QOM) -> None:
-        self.charge = float(charge)
+        self.charge = exact_real(charge, where="MagneticLorentzForce.charge")
 
 
 class PotentialMagneticForce:
@@ -154,7 +153,7 @@ class PotentialMagneticForce:
     fluid transport >= 3 variables. ``charge`` = q/m, sign included."""
 
     def __init__(self, charge: Any = PHYSICAL_DEFAULT_QOM) -> None:
-        self.charge = float(charge)
+        self.charge = exact_real(charge, where="PotentialMagneticForce.charge")
 
 
 # --- Elliptic right-hand-side bricks ------------------------------------
@@ -162,7 +161,7 @@ class ChargeDensity:
     """Charge density f = q n."""
 
     def __init__(self, charge: Any = PHYSICAL_DEFAULT_CHARGE_Q) -> None:
-        self.charge = float(charge)
+        self.charge = exact_real(charge, where="ChargeDensity.charge")
 
 
 class BackgroundDensity:
@@ -171,8 +170,8 @@ class BackgroundDensity:
     def __init__(self,
                  alpha: Any = PHYSICAL_DEFAULT_ALPHA,
                  n0: Any = PHYSICAL_DEFAULT_BACKGROUND_N0) -> None:
-        self.alpha = float(alpha)
-        self.n0 = float(n0)
+        self.alpha = exact_real(alpha, where="BackgroundDensity.alpha")
+        self.n0 = exact_real(n0, where="BackgroundDensity.n0")
 
 
 class GravityCoupling:
@@ -182,9 +181,9 @@ class GravityCoupling:
                  sign: Any = PHYSICAL_DEFAULT_GRAVITY_SIGN,
                  four_pi_G: Any = PHYSICAL_DEFAULT_FOUR_PI_G,
                  rho0: Any = PHYSICAL_DEFAULT_GRAVITY_RHO0) -> None:
-        self.sign = float(sign)
-        self.four_pi_G = float(four_pi_G)
-        self.rho0 = float(rho0)
+        self.sign = exact_real(sign, where="GravityCoupling.sign")
+        self.four_pi_G = exact_real(four_pi_G, where="GravityCoupling.four_pi_G")
+        self.rho0 = exact_real(rho0, where="GravityCoupling.rho0")
 
 
 def Model(state: Any, transport: Any, source: Any, elliptic: Any) -> Any:
@@ -206,12 +205,13 @@ def Model(state: Any, transport: Any, source: Any, elliptic: Any) -> Any:
             raise ValueError("Scalar requires transport=ExB(...)")
     elif isinstance(state, FluidState):
         if state.kind == "compressible":
-            spec.gamma = state.gamma
+            spec.gamma = native_real(state.gamma, where="Model.gamma")
             if not isinstance(transport, CompressibleFlux):
                 raise ValueError("FluidState(compressible) requires transport=CompressibleFlux()")
         elif state.kind == "isothermal":
-            spec.cs2 = state.cs2
-            spec.vacuum_floor = getattr(state, "vacuum_floor", 0.0)  # ADC-77 quasi-vacuum velocity bound
+            spec.cs2 = native_real(state.cs2, where="Model.cs2")
+            spec.vacuum_floor = native_real(
+                getattr(state, "vacuum_floor", 0.0), where="Model.vacuum_floor")
             if not isinstance(transport, IsothermalFlux):
                 raise ValueError("FluidState(isothermal) requires transport=IsothermalFlux()")
         else:
@@ -220,7 +220,7 @@ def Model(state: Any, transport: Any, source: Any, elliptic: Any) -> Any:
         raise ValueError("state: pops.Scalar() | pops.FluidState(...)")
 
     if isinstance(transport, ExB):
-        spec.transport = "exb"; spec.B0 = transport.B0
+        spec.transport = "exb"; spec.B0 = native_real(transport.B0, where="Model.B0")
     elif isinstance(transport, CompressibleFlux):
         spec.transport = "compressible"
     elif isinstance(transport, IsothermalFlux):
@@ -231,24 +231,28 @@ def Model(state: Any, transport: Any, source: Any, elliptic: Any) -> Any:
     if isinstance(source, NoSource):
         spec.source = "none"
     elif isinstance(source, PotentialForce):
-        spec.source = "potential"; spec.qom = source.charge
+        spec.source = "potential"; spec.qom = native_real(source.charge, where="Model.qom")
     elif isinstance(source, GravityForce):
         spec.source = "gravity"
     elif isinstance(source, MagneticLorentzForce):
-        spec.source = "magnetic"; spec.qom = source.charge
+        spec.source = "magnetic"; spec.qom = native_real(source.charge, where="Model.qom")
     elif isinstance(source, PotentialMagneticForce):
-        spec.source = "potential_magnetic"; spec.qom = source.charge
+        spec.source = "potential_magnetic"; spec.qom = native_real(source.charge, where="Model.qom")
     else:
         raise ValueError("source: NoSource | PotentialForce | GravityForce | MagneticLorentzForce "
                          "| PotentialMagneticForce")
 
     if isinstance(elliptic, ChargeDensity):
-        spec.elliptic = "charge"; spec.q = elliptic.charge
+        spec.elliptic = "charge"; spec.q = native_real(elliptic.charge, where="Model.q")
     elif isinstance(elliptic, BackgroundDensity):
-        spec.elliptic = "background"; spec.alpha = elliptic.alpha; spec.n0 = elliptic.n0
+        spec.elliptic = "background"
+        spec.alpha = native_real(elliptic.alpha, where="Model.alpha")
+        spec.n0 = native_real(elliptic.n0, where="Model.n0")
     elif isinstance(elliptic, GravityCoupling):
-        spec.elliptic = "gravity"; spec.sign = elliptic.sign
-        spec.four_pi_G = elliptic.four_pi_G; spec.rho0 = elliptic.rho0
+        spec.elliptic = "gravity"
+        spec.sign = native_real(elliptic.sign, where="Model.sign")
+        spec.four_pi_G = native_real(elliptic.four_pi_G, where="Model.four_pi_G")
+        spec.rho0 = native_real(elliptic.rho0, where="Model.rho0")
     else:
         raise ValueError("elliptic: ChargeDensity | BackgroundDensity | GravityCoupling")
 
@@ -275,17 +279,22 @@ def _native_to_brick(obj: Any, role: Any) -> Any:
             return NativeBrick("pops::ExBVelocity", "hyperbolic", fields={"B0": obj.B0},
                                    var_names=["n"], n_vars=1, prim_names=["n"])
         if isinstance(obj, CompressibleFlux):
-            g = float(getattr(obj, "gamma", PHYSICAL_DEFAULT_GAMMA))
+            g = exact_real(
+                getattr(obj, "gamma", PHYSICAL_DEFAULT_GAMMA), where="CompressibleFlux.gamma")
             return NativeBrick("pops::CompressibleFlux", "hyperbolic", fields={"gamma": g},
                                    var_names=["rho", "rho_u", "rho_v", "E"], n_vars=4,
                                    prim_names=["rho", "u", "v", "p"], gamma=g)
         if isinstance(obj, IsothermalFlux):
-            cs2 = float(getattr(obj, "cs2", PHYSICAL_DEFAULT_NATIVE_ISOTHERMAL_CS2))
+            cs2 = exact_real(
+                getattr(obj, "cs2", PHYSICAL_DEFAULT_NATIVE_ISOTHERMAL_CS2),
+                where="IsothermalFlux.cs2")
             # ADC-644: carry vacuum_floor into the baked struct ONLY when active. The native
             # pops::IsothermalFlux has both members (cs2, vacuum_floor); NativeBrick.emit writes the
             # fields in insertion order, so omitting vacuum_floor when 0 keeps the generated struct
             # (and module_hash) byte-identical to today's quasi-vacuum-inactive isothermal flux.
-            vf = float(getattr(obj, "vacuum_floor", PHYSICAL_DEFAULT_VACUUM_FLOOR))
+            vf = exact_real(
+                getattr(obj, "vacuum_floor", PHYSICAL_DEFAULT_VACUUM_FLOOR),
+                where="IsothermalFlux.vacuum_floor", minimum=0)
             fields = {"cs2": cs2}
             if vf != 0.0:
                 fields["vacuum_floor"] = vf
@@ -369,7 +378,7 @@ class DivEpsGrad:
     other operators (diffusion, projection) are refinements (they would touch the solver)."""
 
     def __init__(self, epsilon: Any = 1.0) -> None:
-        self.epsilon = float(epsilon)
+        self.epsilon = exact_real(epsilon, where="DivEpsGrad.epsilon")
 
 
 class CompositeRhs:

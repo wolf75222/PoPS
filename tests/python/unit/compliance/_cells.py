@@ -112,7 +112,7 @@ def _program_with_context():
     dt = program.dt
     state = program.state("gas")
     rhs = program._rhs_legacy(state=state, flux=True, sources=["default"])
-    program.commit("gas", program.linear_combine("U1", state + dt * rhs))
+    program.commit(program.state("U", block="gas").next, program.linear_combine("U1", state + dt * rhs))
     return program
 
 
@@ -122,7 +122,7 @@ def _bindable_program(name="adc547_bind"):
     state = program.state("plasma")
     fields = program.solve_fields("phi", state)
     rhs = program._rhs_legacy(state=state, fields=fields, flux=True, sources=["default"])
-    program.commit("plasma", program.linear_combine("U1", state + dt * rhs))
+    program.commit(program.state("U", block="plasma").next, program.linear_combine("U1", state + dt * rhs))
     return program
 
 

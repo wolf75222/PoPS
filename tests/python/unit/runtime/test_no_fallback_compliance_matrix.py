@@ -119,7 +119,7 @@ def _program_with_context():
     dt = program.dt
     state = program.state("gas")
     rhs = program._rhs_legacy(state=state, flux=True, sources=["default"])
-    program.commit("gas", program.linear_combine("U1", state + dt * rhs))
+    program.commit(program.state("U", block="gas").next, program.linear_combine("U1", state + dt * rhs))
     return program
 
 

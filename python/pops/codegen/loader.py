@@ -45,7 +45,8 @@ class CompiledProblem:
                  codegen_env: Any = None, module_manifest: Any = None,
                  module_hash: Any = None, external_bricks: Any = None) -> None:
         self.so_path = so_path
-        self.program = program          # the pops.time.Program that was lowered
+        from pops.time.program_space_resolution import resolve_program_spaces
+        self.program = resolve_program_spaces(program, model)  # the exact Program that was lowered
         self.model = model              # the physical model (optional; added as a block in the MVP)
         # The self-describing Module manifest (ADC-585): the operator-first central representation of
         # the resolved model (spaces / params / aux / typed operators / native routes), superseding
@@ -55,13 +56,18 @@ class CompiledProblem:
         # open).
         self.module_manifest = module_manifest
         if module_manifest is not None and abi_key is not None:
-            module_manifest.abi_requirements["abi_key"] = abi_key
+            binder = getattr(module_manifest, "with_abi_key", None)
+            if not callable(binder):
+                raise TypeError(
+                    "CompiledProblem: module_manifest must provide with_abi_key() so ABI binding "
+                    "does not mutate shared manifest state")
+            self.module_manifest = binder(abi_key)
         # The operator-first Module hash (ADC-557 I5): the compile-time identity of the canonical
         # compile IR, frozen on the handle so a post-compile in-place model mutation can be DETECTED
         # loudly (parity with the block-name drift check). None for a model with no backing Module.
         self._module_hash = module_hash
-        self.program_name = getattr(program, "name", None)
-        self.program_hash = program._ir_hash() if hasattr(program, "_ir_hash") else None
+        self.program_name = getattr(self.program, "name", None)
+        self.program_hash = self.program._ir_hash() if hasattr(self.program, "_ir_hash") else None
         self.abi_key = abi_key          # cache key: header signature | compiler | C++ standard
         self.cxx = cxx
         self.std = std

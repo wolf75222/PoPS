@@ -123,16 +123,30 @@ def _lorentz_energy_model(name):
     return m
 
 
+def _linear_handle(model):
+    from pops.model import OperatorHandle
+    registry = model.operator_registry()
+    operator = registry.operators_of_kind("local_linear_operator")[0]
+    return OperatorHandle(
+        operator.name, kind=operator.kind, owner=registry.owner_path,
+        signature=operator.signature)
+
+
+def _bound_program(t, name, *, energy=False):
+    model = (_lorentz_energy_model(name + "_model") if energy
+             else _lorentz_model(name + "_model"))
+    return t.Program(name).bind_operators(model), model, _linear_handle(model)
+
+
 # ---- (A) builder ops + macro lowering: pure Python, always runs ----
 def test_apply_laplacian_coeff_operand_types(t):
-    P = t.Program("p")
+    P, _, linear = _bound_program(t, "p")
     U = P.state("blk")
     A = P.matrix_free_operator("A")
-    from pops.lib.models import LORENTZ_J_NAME
     seen = []
 
     def apply(P, out, x):
-        coeffs = P.condensed_coeffs(state=U, linear_operator=LORENTZ_J_NAME, subset=(1, 2),
+        coeffs = P.condensed_coeffs(state=U, linear_operator=linear, subset=(1, 2),
                                     c=1.0, th_dt=1.0, c_rho=0)
         try:
             P.apply_laplacian_coeff(out, U, coeffs)  # in_ must be a scalar_field, not a State
@@ -149,11 +163,12 @@ def test_apply_laplacian_coeff_operand_types(t):
 
 
 def test_condensed_schur_macro_lowers(t):
-    P = t.Program("cs")
-    lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=1.0)
+    P, model, linear = _bound_program(t, "cs")
+    lt.condensed_schur(
+        P, "blk", alpha=_ALPHA, theta=1.0, linear_operator=linear)
     assert P.validate() is True, "the condensed-Schur macro must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
-    src = P.emit_cpp_program(model=_lorentz_model("cs_macro"))
+    src = P.emit_cpp_program(model=model)
     # ADC-637: the generic condensed route lowers coeffs / flux / reconstruct INLINE via
     # pops::detail::block_inverse<2> / block_apply_inverse<2> -- NO coupling/schur operator module.
     # solve_fields stays a ctx seam and the Krylov solve is still pops::bicgstab_solve.
@@ -171,11 +186,12 @@ def test_condensed_schur_theta_half_lowers(t):
     """ADC-427: theta != 1 now lowers (the n+1 extrapolation by factor 1/theta is the affine algebra,
     no component-restricted IR op). The macro reconstructs on a COPY of U^n so the extrapolation can
     read mom^n, then commits U^n + (1/theta)(U^{n+theta} - U^n)."""
-    P = t.Program("cs")
-    lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=0.5)
+    P, model, linear = _bound_program(t, "cs")
+    lt.condensed_schur(
+        P, "blk", alpha=_ALPHA, theta=0.5, linear_operator=linear)
     assert P.validate() is True, "the theta=0.5 condensed-Schur macro must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
-    src = P.emit_cpp_program(model=_lorentz_model("cs_half"))
+    src = P.emit_cpp_program(model=model)
     for frag in ("pops::detail::block_inverse<2>(M_, Mi_);",
                  "pops::detail::block_apply_inverse<2>", "pops::bicgstab_solve",
                  "rhsA(i, j, 0) = nlA(i, j, 0)"):
@@ -192,9 +208,10 @@ def test_condensed_schur_theta_half_emits_phi_carry(t):
     and the Krylov warm start, extrapolates phi to n+1 by 1/theta and stores it (ctx.store_history), and
     the step body registers a 1-COMPONENT ring (register_history(name, 1, 1)) and rotates it. theta == 1
     emits NONE of this (a separate no-regression test)."""
-    P = t.Program("cs")
-    lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=0.5)
-    src = P.emit_cpp_program(model=_lorentz_model("cs_phi_carry"))
+    P, model, linear = _bound_program(t, "cs")
+    lt.condensed_schur(
+        P, "blk", alpha=_ALPHA, theta=0.5, linear_operator=linear)
+    src = P.emit_cpp_program(model=model)
     # A NARROW (1-component) ring declared up front, then read / stored / rotated. The read is the
     # ZERO COLD-START variant: the carry reads phi^n at the TOP of the step (before any store), so its
     # very first read returns the zero-filled slot (the declared step-0 value), never the fail-loud
@@ -213,9 +230,10 @@ def test_condensed_schur_theta_half_emits_phi_carry(t):
 def test_condensed_schur_theta_one_emits_no_phi_carry(t):
     """ADC-427 no-regression: theta == 1 keeps a fresh-zero phi each step -- NO history ring, NO warm
     start, NO store/rotate -- so an existing theta==1 program's IR / .so cache key is byte-identical."""
-    P = t.Program("cs")
-    lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=1.0)
-    src = P.emit_cpp_program(model=_lorentz_model("cs_no_carry"))
+    P, model, linear = _bound_program(t, "cs")
+    lt.condensed_schur(
+        P, "blk", alpha=_ALPHA, theta=1.0, linear_operator=linear)
+    src = P.emit_cpp_program(model=model)
     for frag in ("register_history", "ctx.history(", "store_history", "rotate_histories"):
         assert frag not in src, "theta=1 must NOT emit %r (byte-identical to the historical IR)\n%s" % (
             frag, src)
@@ -228,20 +246,24 @@ def test_condensed_schur_theta_one_ir_byte_identical_with_carry_present(t):
     theta == 1 lowering. This pins the R1 mandate (theta==1 stays byte-identical) at the IR level."""
     # Two theta==1 programs (plain + energy) must each be internally stable and free of any carry op.
     for kwargs in (dict(theta=1.0), dict(theta=1.0, c_E=3)):
-        P = t.Program("cs")
-        lt.condensed_schur(P, "blk", alpha=_ALPHA, **kwargs)
+        energy = "c_E" in kwargs
+        P, model, linear = _bound_program(t, "cs", energy=energy)
+        lt.condensed_schur(
+            P, "blk", alpha=_ALPHA, linear_operator=linear, **kwargs)
         h1 = P._ir_hash()
-        Q = t.Program("cs")
-        lt.condensed_schur(Q, "blk", alpha=_ALPHA, **kwargs)
+        Q = t.Program("cs").bind_operators(model)
+        lt.condensed_schur(
+            Q, "blk", alpha=_ALPHA, linear_operator=linear, **kwargs)
         assert P._ir_hash() == h1 == Q._ir_hash(), "theta==1 IR hash must be deterministic"
-        model = _lorentz_energy_model("cs_bi") if "c_E" in kwargs else _lorentz_model("cs_bi")
         assert "register_history" not in P.emit_cpp_program(model=model), "no carry at theta==1"
 
 
 def test_condensed_schur_theta_out_of_range_raises(t):
     for bad in (0.0, -0.5, 1.5):
+        P, _, linear = _bound_program(t, "p_%s" % str(bad).replace(".", "_"))
         try:
-            lt.condensed_schur(t.Program("p"), "blk", alpha=1.0, theta=bad)
+            lt.condensed_schur(
+                P, "blk", alpha=1.0, theta=bad, linear_operator=linear)
         except ValueError as exc:
             assert "theta must be in (0, 1]" in str(exc), str(exc)
         else:
@@ -270,10 +292,11 @@ def test_condensed_schur_energy_lowers(t):
 
     ADC-637: the op lowers to the generic condensed_energy inline kernel (not a coupling/schur free
     function), ending in the kinetic-increment write stateA(i, j, 3) += ke_new - ke_old."""
-    P = t.Program("cs")
-    lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=0.5, c_E=3)
+    P, model, linear = _bound_program(t, "cs", energy=True)
+    lt.condensed_schur(
+        P, "blk", alpha=_ALPHA, theta=0.5, c_E=3, linear_operator=linear)
     assert P.validate() is True
-    src = P.emit_cpp_program(model=_lorentz_energy_model("cs_energy"))
+    src = P.emit_cpp_program(model=model)
     assert "stateA(i, j, 3) += ke_new - ke_old;" in src, (
         "the energy variant must emit the generic condensed_energy kinetic increment\n%s" % src)
 
@@ -281,9 +304,10 @@ def test_condensed_schur_energy_lowers(t):
 def test_condensed_schur_theta_one_ir_unchanged(t):
     """ADC-427 no-regression: theta == 1 keeps its historical IR (reconstruct IN PLACE on U^n, no copy /
     extrapolation / energy op), so an existing theta==1 program's .so cache key is byte-identical."""
-    P = t.Program("cs")
-    lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=1.0)
-    src = P.emit_cpp_program(model=_lorentz_model("cs_unchanged"))
+    P, model, linear = _bound_program(t, "cs")
+    lt.condensed_schur(
+        P, "blk", alpha=_ALPHA, theta=1.0, linear_operator=linear)
+    src = P.emit_cpp_program(model=model)
     assert "ke_new - ke_old" not in src, "theta=1 must NOT emit an energy op"
     # No copy-then-reconstruct: the reconstruction writes U^n in place, the commit is the reconstruction.
     assert src.count("stateA(i, j, 1) = rho * nx_;") == 1, src
@@ -551,11 +575,13 @@ def _run_energy_check(t, pops, np, sqrt, Model, h):
     E0 = 2.0 + 0.1 * np.cos(2 * np.pi * X)  # an arbitrary smooth total energy
     U0 = np.stack([rho0, mx0, my0, E0])
     sim.set_state("blk", U0)
-    P = t.Program("cs_energy_step")
-    lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=theta, c_E=3, tol=_TOL, max_iter=400)
+    model = _energy_model("cs_energy_prog", sqrt, Model)
+    P = t.Program("cs_energy_step").bind_operators(model)
+    lt.condensed_schur(
+        P, "blk", alpha=_ALPHA, theta=theta, c_E=3, tol=_TOL, max_iter=400,
+        linear_operator=_linear_handle(model))
     try:
-        compiled = pops.codegen.compile_problem(model=_energy_model("cs_energy_prog", sqrt, Model),
-                                                time=P)
+        compiled = pops.codegen.compile_problem(model=model, time=P)
     except RuntimeError as exc:
         print("-- (B) energy check skipped: compile_problem failed: %s --" % str(exc)[:160])
         return
@@ -646,10 +672,13 @@ def _run_section_b(t):
 
     def _compile_macro(theta, tag):
         """Compile std.condensed_schur(theta) into a problem.so; None if the toolchain is unavailable."""
-        P = t.Program("cs_step_%s" % tag)
-        lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=theta, tol=_TOL, max_iter=400)
+        model = schur_model("cs_prog_%s" % tag)
+        P = t.Program("cs_step_%s" % tag).bind_operators(model)
+        lt.condensed_schur(
+            P, "blk", alpha=_ALPHA, theta=theta, tol=_TOL, max_iter=400,
+            linear_operator=_linear_handle(model))
         try:
-            return pops.codegen.compile_problem(model=schur_model("cs_prog_%s" % tag), time=P)
+            return pops.codegen.compile_problem(model=model, time=P)
         except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
             print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
             return None

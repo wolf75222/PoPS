@@ -43,6 +43,15 @@ def _lorentz_model(name):
     return m
 
 
+def _linear_handle(model):
+    from pops.model import OperatorHandle
+    registry = model.operator_registry()
+    operator = registry.operators_of_kind("local_linear_operator")[0]
+    return OperatorHandle(
+        operator.name, kind=operator.kind, owner=registry.owner_path,
+        signature=operator.signature)
+
+
 def test_forward_euler_program_excludes_schur_includes():
     """A condensed-free (Forward-Euler) Program's generated .so excludes coupling/schur/** AND
     block_inverse.hpp (both gated on the condensed ops, ADC-637)."""
@@ -62,9 +71,12 @@ def test_condensed_program_includes_block_inverse_and_no_schur():
     """A condensed-implicit Program's generated .so pulls the block_inverse intrinsic and the re-homed
     coeff-free apply, and carries NO coupling/schur token -- neither the include path NOR the C++
     namespace (ADC-637: the brick is retired, the generic route is the sole route)."""
-    P = pops_time.Program("cs")
-    pops_lib_time.condensed_schur(P, "blk", alpha=1.0, theta=1.0)
-    src = P.emit_cpp_program(model=_lorentz_model("cs_model"))
+    model = _lorentz_model("cs_model")
+    P = pops_time.Program("cs").bind_operators(model)
+    pops_lib_time.condensed_schur(
+        P, "blk", alpha=1.0, theta=1.0,
+        linear_operator=_linear_handle(model))
+    src = P.emit_cpp_program(model=model)
     assert "numerics/linalg/block_inverse.hpp" in src, (
         "a condensed-implicit Program must include the closed-form block-inverse intrinsic"
     )

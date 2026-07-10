@@ -22,6 +22,7 @@ try:
     from pops.physics.facade import Model
     from pops.solvers.krylov import BiCGStab
     from pops import time as adctime
+    from pops.time.value_metadata import CoeffPolynomial
 except Exception as exc:  # pops not importable here (no built extension) -> skip, never fake
     print("skip test_condensed_generic_codegen (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -47,12 +48,15 @@ def _lorentz_condensed_program():
     U = P.state("blk")
     P.solve_fields(U)
     coeffs = P._new("condensed_coeffs", "condensed_coeffs", (U,),
-                    {"linear_operator": "lorentz_J", "subset": (1, 2), "c": {2: 1.0},
-                     "th_dt": {1: 1.0}, "c_rho": 0}, "cs_coeffs", "blk")
+                    {"linear_operator": "lorentz_J", "subset": (1, 2),
+                     "c": CoeffPolynomial({2: 1.0}),
+                     "th_dt": CoeffPolynomial({1: 1.0}), "c_rho": 0},
+                    "cs_coeffs", "blk")
     phi_n = P.scalar_field("blk.phi_n")
     rhs = P.scalar_field("blk.rhs")
     P._new("scalar_field", "condensed_rhs", (rhs, phi_n, U),
-           {"linear_operator": "lorentz_J", "subset": (1, 2), "th_dt": {1: 1.0}, "g": {1: 1.0}},
+           {"linear_operator": "lorentz_J", "subset": (1, 2),
+            "th_dt": CoeffPolynomial({1: 1.0}), "g": CoeffPolynomial({1: 1.0})},
            "cs_rhs", None)
     rhs2 = P._values[-1]
     A = P.matrix_free_operator("blk.op")
@@ -65,9 +69,10 @@ def _lorentz_condensed_program():
     P.set_apply(A, apply)
     phi = P.solve_linear(operator=A, rhs=rhs2, method=BiCGStab(max_iter=50), tol=1e-10, max_iter=50)
     out = P._new("state", "condensed_reconstruct", (U, phi),
-                 {"linear_operator": "lorentz_J", "subset": (1, 2), "th_dt": {1: 1.0}, "c_rho": 0},
+                 {"linear_operator": "lorentz_J", "subset": (1, 2),
+                  "th_dt": CoeffPolynomial({1: 1.0}), "c_rho": 0},
                  "cs_recon", "blk")
-    P.commit("blk", out)
+    P.commit(P.state("U", block="blk").next, out)
     return P, m
 
 
@@ -160,7 +165,7 @@ def test_schur_free_program_omits_block_inverse_header():
     """A Program with no condensed op does NOT include block_inverse.hpp (the include is gated)."""
     P = adctime.Program("plain")
     U = P.state("blk")
-    P.commit("blk", P.linear_combine("id", 1.0 * U))
+    P.commit(P.state("U", block="blk").next, P.linear_combine("id", 1.0 * U))
     src = P.emit_cpp_program()
     assert "block_inverse.hpp" not in src, "a condensed-free Program must not include block_inverse.hpp"
     print("OK  block_inverse.hpp is gated: absent from a condensed-free Program")

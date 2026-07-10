@@ -84,8 +84,8 @@ def program_param_entries(program: Any, model: Any) -> list:
     impl = _model_impl(model)
     if not getattr(impl, "has_runtime_params", lambda: False)():
         return []
-    impl.assign_runtime_indices()  # stable indices + per-node value (matches the kernel emission)
-    by_name = {node.name: node for node in impl.runtime_param_nodes()}
+    nodes = impl.assign_runtime_indices()  # stable sorted order used by kernel emission
+    by_name = {node.name: (index, node) for index, node in enumerate(nodes)}
     block_idx = program._block_indices()
     seen = set()
     entries = []
@@ -95,11 +95,14 @@ def program_param_entries(program: Any, model: Any) -> list:
             continue
         blk = block_idx.get(v.block, 0)
         for name in _runtime_param_names_in(exprs):
-            node = by_name.get(name)
-            if node is None or (blk, name) in seen:
+            indexed_node = by_name.get(name)
+            if indexed_node is None or (blk, name) in seen:
                 continue
+            index, node = indexed_node
             seen.add((blk, name))
-            entries.append((blk, name, int(node.index), float(node.value)))
+            # The metadata ABI is explicitly double-valued; this is the target-precision
+            # lowering boundary, not a mutation/coercion of the authoring literal.
+            entries.append((blk, name, index, float(node.value)))
     entries.sort(key=lambda e: (e[0], e[2]))
     return entries
 
@@ -111,7 +114,7 @@ def _all_program_ops(program: Any) -> Any:
         yield v
         for key in ("cond_block", "body_block", "apply_block", "residual_block"):
             blk = v.attrs.get(key)
-            if isinstance(blk, list):
+            if isinstance(blk, (list, tuple)):
                 yield from blk
 
 

@@ -52,6 +52,7 @@ from pops.codegen.compile_emit import (
 )
 from pops.codegen.backends import lower_backend
 from pops.codegen._compile_command_redact import _redact_compile_command  # noqa: F401
+from pops.codegen.compile_link_flags import deterministic_program_link_flags
 # _module_to_model moved to module_lowering.py (500-line budget); re-exported here so
 # ``from pops.codegen.compile_drivers import _module_to_model`` (and pops.codegen.compile) is unchanged.
 from pops.codegen.module_lowering import _module_to_model  # noqa: F401
@@ -272,8 +273,6 @@ def compile_model(model: Any, so_path: Any = None, include: Any = None, backend:
 
 # ---------------------------------------------------------------------------
 # compile_problem -- compile a pops.time.Program into a problem.so
-# ---------------------------------------------------------------------------
-
 def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
                     backend: Any = "production", target: Any = "system", force: Any = False,
                     cxx: Any = None, include: Any = None, std: Any = None, debug: Any = False,
@@ -368,6 +367,7 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
     include = include or pops_include()
     sig = pops_header_signature(include)
     cc, cflags, lflags = pops_loader_build_flags(cxx)
+    lflags = deterministic_program_link_flags(lflags)
     eff_std = _probe_cxx_std(cc, std or loader_cxx_std())
     abi_key = "%s|%s|%s" % (sig, cc, eff_std)
     # Stable program (problem) hash + cache key (Spec 5 sec.12.4, #48): the program-source hash is

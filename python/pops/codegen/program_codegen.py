@@ -41,7 +41,7 @@ from pops.codegen.program_emit_kernels import (  # noqa: F401
     _PROGRAM_CPP_TEMPLATE,
     _block_inverse_include,
     _coeff_elliptic_include,
-    Value,
+    ProgramValue,
     _apply_in_arg,
     _aux_comp,
     _cell_locals,
@@ -71,6 +71,7 @@ from pops.codegen.program_emit_model_kernels import (  # noqa: F401
 from pops.codegen.program_emit_solve import (  # noqa: F401
     _emit_matrix_free_operator,
     _emit_solve_linear,
+    _validate_matrix_free_contract,
 )
 from pops.codegen.program_emit_schedule import (  # noqa: F401
     _emit_schedule_wrap,
@@ -92,6 +93,7 @@ from pops.codegen.program_emit_params import (  # noqa: F401
 )
 from pops.codegen.program_emit_amr import _emit_amr_install  # noqa: F401
 from pops.codegen.compile_emit import _emit_route_manifest  # noqa: F401 (ADC-599 embedded manifest)
+from pops.time.program_space_resolution import resolve_program_spaces
 
 
 # --- Program -> C++ lowering (free functions taking `program`) ------------------------------
@@ -171,6 +173,7 @@ def emit_cpp_program(program: Any, model: Any = None, target: str = "system") ->
     ``Sum_s elliptic_rhs_s(U_s)`` reading EVERY listed block's stage state at once
     (``assemble_poisson_rhs_from_blocks``), each slotted at its block index (nullptr = the block's
     live state) -- the coupled multi-species field solve."""
+    program = resolve_program_spaces(program, model)
     if target not in ("system", "amr_system"):
         raise ValueError("emit_cpp_program: target 'system' | 'amr_system' (got %r)" % (target,))
     program.validate()
@@ -338,7 +341,7 @@ def _check_schedules_lowerable(program: Any) -> None:
                 % (v.name, v.op))
         if sched.kind == "when":
             cond = sched.params.get("cond")
-            if not (isinstance(cond, Value) and cond.vtype == "bool"):
+            if not (isinstance(cond, ProgramValue) and cond.vtype == "bool"):
                 raise NotImplementedError(
                     "schedule when(cond) on node %r lowers only a Program Bool predicate (e.g. "
                     "P.norm2(r) < tol), not a Python callable (ADC-458)." % v.name)
@@ -375,12 +378,13 @@ def _all_ops(program: Any) -> Any:
         yield v
         for key in ("cond_block", "body_block", "apply_block", "residual_block"):
             blk = v.attrs.get(key)
-            if isinstance(blk, list):
+            if isinstance(blk, (list, tuple)):
                 yield from blk
 
 def _check_op_lowerable(program: Any, v: Any, model: Any) -> None:
     """Lowerability check for a single op (used for both the top-level walk and a while sub-block).
     Raises NotImplementedError / ValueError naming the offending construct (never a mis-lowering)."""
+    _validate_matrix_free_contract(v, model)
     if v.op in _MODEL_OPS:
         if model is None:
             raise NotImplementedError(

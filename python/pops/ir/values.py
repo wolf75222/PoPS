@@ -4,9 +4,27 @@ Originally in pops.dsl.
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import Any
 
 from .expr import Expr, _wrap
+from .literals import exact_numeric_scalar, scalar_cpp, scalar_literal
+
+
+_RUNTIME_PARAM_INDICES: ContextVar[dict[str, int]] = ContextVar(
+    "pops_runtime_param_indices", default={})
+
+
+def set_runtime_param_indices(indices: Any) -> None:
+    """Install the current model's immutable name-to-slot lowering table."""
+    normalized = {}
+    for name, index in dict(indices).items():
+        if not isinstance(name, str) or not name:
+            raise TypeError("runtime parameter names must be non-empty strings")
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            raise TypeError("runtime parameter indices must be non-negative Python ints")
+        normalized[name] = index
+    _RUNTIME_PARAM_INDICES.set(normalized)
 
 # numpy backs only the EigWitness host mirror (eval, and the im_tol validation of a predicate); it is
 # imported lazily where used so pops.ir stays importable in a bare interpreter (e.g. the build-time
@@ -51,6 +69,8 @@ class EigWitness(Expr):
     sur des matrices saines (cas vise) les deux chemins coincident a la tolerance QR (cf. dense_eig)."""
 
     def __init__(self, rows: Any, field: Any, im_tol: Any = None) -> None:
+        if not isinstance(field, str) or not field:
+            raise TypeError("EigWitness field must be a non-empty string")
         if field not in _EIG_FIELDS and field not in _EIG_PREDICATES:
             raise ValueError("EigWitness : field '%s' inconnu (attendu : %s)"
                              % (field, ", ".join(sorted({**_EIG_FIELDS, **_EIG_PREDICATES}))))
@@ -65,16 +85,16 @@ class EigWitness(Expr):
             if len(r) != k:
                 raise ValueError("EigWitness : matrice non carree (%d lignes, ligne de %d entrees)"
                                  % (k, len(r)))
-        self.rows = [[_wrap(e) for e in r] for r in rows]
+        self.rows = tuple(tuple(_wrap(e) for e in r) for r in rows)
         self.k = k
         self.field = field
         # im_tol : seuil RELATIF d'|Im| -- n'a de sens que pour un PREDICAT (all_real). Pour un champ
         # scalaire (max_im/lmin/lmax) il est rejete s'il est fourni, et reste None -> chemin scalaire
         # bit-identique a l'historique (cle CSE, codegen et eval inchanges).
         if field in _EIG_PREDICATES:
-            import numpy as np
-            tol = 1e-5 if im_tol is None else float(im_tol)
-            if not (tol > 0.0) or not np.isfinite(tol):
+            tol = 1e-5 if im_tol is None else exact_numeric_scalar(
+                im_tol, where="EigWitness im_tol")
+            if not tol > 0:
                 raise ValueError("EigWitness : im_tol doit etre fini et > 0 (recu %r)" % (im_tol,))
             self.im_tol = tol
         else:
@@ -94,7 +114,7 @@ class EigWitness(Expr):
     def _extra_args_cpp(self) -> Any:
         """Arguments scalaires C++ apres les entrees de la matrice : le seuil relatif im_tol pour un
         predicat (all_real), aucun pour un champ scalaire (chemin scalaire bit-identique)."""
-        return [repr(self.im_tol)] if self.is_predicate() else []
+        return [scalar_cpp(self.im_tol)] if self.is_predicate() else []
 
     def helper_name(self) -> str:
         """Nom du foncteur nomme emis dans la brique pour ce couple (field, taille)."""
@@ -125,7 +145,7 @@ class EigWitness(Expr):
             # numpy/LAPACK converge toujours -> PAS de kUnknown cote hote (le miroir definit le spectre
             # comme converge par construction) ; une non-convergence DEVICE rendrait 0.0 (= PAS reel),
             # jamais 1.0 : direction sure, coherente avec all_real (converged && max_im <= im_tol*scale).
-            out = (max_im <= self.im_tol * scale).astype(float)
+            out = (max_im <= float(self.im_tol) * scale).astype(float)
         return out if bshape else float(out)
 
     def deps(self) -> Any:
@@ -183,10 +203,15 @@ class RuntimeParamRef(Expr):
     Structural CSE key (cf. _key): the NAME (two refs to the same runtime param share the same
     CSE local); the declaration value does not enter the key (it is runtime, not structural)."""
 
-    def __init__(self, name: Any, value: Any, index: int = -1) -> None:
+    def __init__(self, name: Any, value: Any) -> None:
+        if not isinstance(name, str) or not name:
+            raise TypeError("RuntimeParamRef name must be a non-empty string")
         self.name = name
-        self.value = float(value)
-        self.index = index
+        self.literal = scalar_literal(value)
+
+    @property
+    def value(self) -> Any:
+        return self.literal.to_python()
 
     def eval(self, env: Any) -> Any:
         # Numpy interpreter (host proto / debug): the declaration value stands in for the current value
@@ -199,11 +224,18 @@ class RuntimeParamRef(Expr):
         return set()
 
     def to_cpp(self) -> str:
-        if self.index < 0:
+        index = _RUNTIME_PARAM_INDICES.get().get(self.name)
+        if index is None:
             raise RuntimeError(
                 "RuntimeParamRef('%s'): index not assigned at codegen (call the compilation via "
                 "dsl.Model which assigns the runtime indices)" % self.name)
-        return "params.get(%d)" % self.index
+        return "params.get(%d)" % index
 
     def _str(self) -> str:
         return "rparam(%s)" % self.name
+
+
+__all__ = [
+    "EigWitness", "RuntimeParamRef", "StateRef", "set_runtime_param_indices",
+    "_EIG_FIELDS", "_EIG_PREDICATES",
+]

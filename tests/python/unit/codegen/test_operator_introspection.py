@@ -22,7 +22,9 @@ except Exception as exc:  # pops not importable here -> skip, never fake
 def _op(m, name):
     """A typed OperatorHandle for a registered operator (the de-stringed macro selector, ADC-532)."""
     op = m.operator_registry().get(name)
-    return model.OperatorHandle(op.name, kind=op.kind, signature=op.signature)
+    return model.OperatorHandle(
+        op.name, kind=op.kind, owner=m.operator_registry().owner_path,
+        signature=op.signature)
 
 
 def _model():
@@ -43,7 +45,8 @@ def _model():
 def _check(obj):
     ops = obj.list_operators()
     assert "explicit_rhs" in ops and "fields_from_state" in ops and "lorentz" in ops
-    assert obj.operator_signature("explicit_rhs").output == model.Rate("U")
+    signature = obj.operator_signature("explicit_rhs")
+    assert signature.output == model.Rate(signature.inputs[0])
     assert obj.operator_capabilities("lorentz")["solve_i_minus_a"] is True
     assert obj.operator_requirements("lorentz")["aux"] == ["B_z"]
     assert "U" in obj.list_state_spaces()
@@ -73,7 +76,8 @@ def test_compiled_problem_introspection():
                                    abi_key="k", cxx="clang", std="c++23")
     _check(compiled)
     # The matching-the-spec assertion.
-    assert compiled.operator_signature("explicit_rhs").output == model.Rate("U")
+    signature = compiled.operator_signature("explicit_rhs")
+    assert signature.output == model.Rate(signature.inputs[0])
     # A CompiledProblem with no model raises a clear error rather than guessing.
     bare = CompiledProblem(so_path="x", program=P, model=None,
                                abi_key="k", cxx="c", std="s")

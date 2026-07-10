@@ -4,6 +4,7 @@ Exports: predictor_corrector_local_linear.
 """
 from __future__ import annotations
 
+from fractions import Fraction
 from typing import Any
 
 from ._helpers import _opcall, _operator_handle, program_macro
@@ -41,9 +42,11 @@ def predictor_corrector_local_linear(P: Any, block: Any, *, fields_operator: Any
     r_star = _opcall(P, explicit_rate_operator, u_star, fields_star, value_name="R_star")
     l_star = _opcall(P, implicit_operator, fields_star, value_name="L_star")
     c_star = P.apply(l_star, u_star, fields=fields_star, name="C_star")
-    q = P.linear_combine("Q", u_n + 0.5 * P.dt * r_n + 0.5 * P.dt * r_star + 0.5 * P.dt * c_star)
-    u_np1 = P.solve_local_linear("U_np1", operator=P.I - 0.5 * P.dt * l_star, rhs=q,
+    half = Fraction(1, 2)
+    q = P.linear_combine(
+        "Q", u_n + half * P.dt * r_n + half * P.dt * r_star + half * P.dt * c_star)
+    u_np1 = P.solve_local_linear("U_np1", operator=P.I - half * P.dt * l_star, rhs=q,
                                  fields=fields_star)
     if commit:
-        P.commit(block, u_np1)
+        P._commit_block(block, u_np1)
     return u_np1

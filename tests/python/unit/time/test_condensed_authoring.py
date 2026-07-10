@@ -42,7 +42,7 @@ def test_builders_record_the_condensed_ops():
     """The three builders produce the condensed_coeffs / condensed_rhs / condensed_reconstruct ops with
     the authored operator name + the coupled subset, and the program validates + hashes."""
     m, _, jh = _model()
-    P = adctime.Program("cs")
+    P = adctime.Program("cs").bind_operators(m)
     U = P.state("blk")
     P.solve_fields(U)
     coeffs = P.condensed_coeffs(state=U, linear_operator=jh, subset=(1, 2), c=1.0 * P.dt * P.dt,
@@ -51,13 +51,13 @@ def test_builders_record_the_condensed_ops():
     assert coeffs.attrs["linear_operator"] == "lorentz_J" and coeffs.attrs["subset"] == (1, 2)
     phi_n = P.scalar_field("blk.phi_n")
     rhs = P.scalar_field("blk.rhs")
-    r = P.condensed_rhs(out=rhs, phi_n=phi_n, state=U, linear_operator="lorentz_J", subset=(1, 2),
+    r = P.condensed_rhs(out=rhs, phi_n=phi_n, state=U, linear_operator=jh, subset=(1, 2),
                         th_dt=1.0 * P.dt, g=1.0 * P.dt)
     assert r.op == "condensed_rhs" and r.vtype == "scalar_field"
     recon = P.condensed_reconstruct(state=U, phi=phi_n, linear_operator=jh, subset=(1, 2),
                                     th_dt=1.0 * P.dt, c_rho=0)
     assert recon.vtype == "state" and recon.attrs["subset"] == (1, 2)
-    P.commit("blk", recon)
+    P.commit(P.state("U", block="blk").next, recon)
     assert P.validate() is True and P._ir_hash()
     print("OK  condensed_coeffs/rhs/reconstruct record + validate + hash")
 
@@ -67,7 +67,7 @@ def test_subset_size_must_equal_the_spatial_dimension():
     the ADC-294 core invariant) on EVERY condensed op -- a 3-component subset in a 2D engine is
     ill-posed, not unimplemented (ValueError, never NotImplementedError)."""
     m, _, jh = _model()
-    P = adctime.Program("cs")
+    P = adctime.Program("cs").bind_operators(m)
     U = P.state("blk")
     with pytest.raises(ValueError, match="spatial velocity block"):
         P.condensed_coeffs(state=U, linear_operator=jh, subset=(0, 1, 2), c=1.0, th_dt=1.0)
@@ -79,7 +79,7 @@ def test_no_dense_capacity_bound_only_the_dimension_contract():
     N): a size-9 subset is refused by the SAME spatial-dimension contract as size 3, and the
     message must not invent a capacity."""
     m, _, jh = _model()
-    P = adctime.Program("cs")
+    P = adctime.Program("cs").bind_operators(m)
     U = P.state("blk")
     big = tuple(range(9))
     with pytest.raises(ValueError, match="dimension=2") as excinfo:
@@ -92,7 +92,7 @@ def test_no_dense_capacity_bound_only_the_dimension_contract():
 def test_subset_must_be_distinct_nonnegative_ints():
     """A subset with a repeated / negative / non-int component raises a precise ValueError."""
     m, _, jh = _model()
-    P = adctime.Program("cs")
+    P = adctime.Program("cs").bind_operators(m)
     U = P.state("blk")
     with pytest.raises(ValueError, match="distinct"):
         P.condensed_reconstruct(state=U, phi=P.scalar_field("p"), linear_operator=jh, subset=(1, 1),
@@ -106,9 +106,9 @@ def test_subset_must_be_distinct_nonnegative_ints():
 def test_non_operator_handle_is_refused():
     """linear_operator must be an authored operator (handle or name), not an arbitrary object."""
     m, _, _ = _model()
-    P = adctime.Program("cs")
+    P = adctime.Program("cs").bind_operators(m)
     U = P.state("blk")
-    with pytest.raises(ValueError, match="authored local linear operator"):
+    with pytest.raises(TypeError, match="OperatorHandle"):
         P.condensed_coeffs(state=U, linear_operator=object(), subset=(1, 2), c=1.0, th_dt=1.0)
     print("OK  a non-operator linear_operator is refused")
 
@@ -116,9 +116,9 @@ def test_non_operator_handle_is_refused():
 def test_scalar_coeffs_and_c_rho_are_validated():
     """The coefficients must be numbers or dt-polynomials, c_rho a non-negative int."""
     m, _, jh = _model()
-    P = adctime.Program("cs")
+    P = adctime.Program("cs").bind_operators(m)
     U = P.state("blk")
-    with pytest.raises(ValueError, match="number or a dt-polynomial"):
+    with pytest.raises(ValueError, match=r"exact scalar or a dt-polynomial"):
         P.condensed_coeffs(state=U, linear_operator=jh, subset=(1, 2), c="not-a-number", th_dt=1.0)
     with pytest.raises(ValueError, match="c_rho"):
         P.condensed_coeffs(state=U, linear_operator=jh, subset=(1, 2), c=1.0, th_dt=1.0, c_rho=-1)

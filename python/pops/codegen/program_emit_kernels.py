@@ -16,7 +16,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from pops.time.values import Value, _to_affine  # noqa: F401
+from pops.ir.literals import scalar_cpp
+from pops.time.values import ProgramValue, _to_affine  # noqa: F401
 
 # Emission-only op tables (formerly Program class constants; the lowering owns them).
 # Ops the Phase-4b codegen lowers ONLY when a physical model is supplied (they read the model's
@@ -25,7 +26,8 @@ _MODEL_OPS = ("source", "apply", "solve_local_linear", "solve_local_nonlinear")
 
 _ALLOWED_OPS = frozenset({"state", "solve_fields", "solve_fields_from_blocks", "rhs",
                           "linear_combine", "linear_source",
-                          "reduce", "compare", "while", "range", "if", "matrix_free_operator",
+                          "reduce", "scalar_op", "compare", "hmin", "max_wave_speed", "cfl",
+                          "while", "range", "if", "matrix_free_operator",
                           "scalar_field", "laplacian", "gradient", "divergence", "solve_linear",
                           "apply_in", "apply_out", "history", "store_history",
                           "fill_boundary", "project", "record_scalar",
@@ -113,7 +115,7 @@ def _emit_field_combine(result: Any, target: Any, sub: Any, acc: Any) -> list:
     aff = _to_affine(result)._merge()
     terms = [(v, c.as_dict()) for v, c in aff]
     lines = ["%s->set_val(static_cast<pops::Real>(0));" % acc]
-    c_target = {0: 0.0}
+    c_target = {0: 0}
     for value, coeff in terms:
         tok = sub[value.id]
         ref = "const_cast<pops::MultiFab&>(in)" if tok == "in" else (
@@ -128,8 +130,11 @@ def _emit_field_combine(result: Any, target: Any, sub: Any, acc: Any) -> list:
 
 
 def _coeff_cpp(powers: Any) -> str:
-    """Render a dt-polynomial coefficient (``power -> float`` dict) as a C++ ``pops::Real`` expression
-    in the closure's ``dt`` parameter: ``{1: 1.0}`` -> ``static_cast<pops::Real>(dt)``,
+    """Render an exact dt-polynomial coefficient as a C++ ``pops::Real`` expression.
+
+    Literal kind is preserved until this target-lowering boundary: integer, rational, decimal and
+    binary64 inputs get distinct canonical spellings instead of a shared intermediate ``float``.
+    In the closure's ``dt`` parameter, ``{1: 1.0}`` -> ``static_cast<pops::Real>(dt)``,
     ``{1: 0.5}`` -> ``static_cast<pops::Real>(0.5 * dt)``, ``{0: 2.0}`` ->
     ``static_cast<pops::Real>(2.0)``. Drops a unit factor and a zero polynomial collapses to 0."""
     if not powers:
@@ -137,8 +142,8 @@ def _coeff_cpp(powers: Any) -> str:
     terms = []
     for power, coeff in sorted(powers.items()):
         factors = ["dt"] * int(power)
-        if float(coeff) != 1.0 or not factors:
-            factors = [repr(float(coeff))] + factors
+        if coeff != 1 or not factors:
+            factors = [scalar_cpp(coeff)] + factors
         terms.append(" * ".join(factors))
     return "static_cast<pops::Real>(%s)" % " + ".join(terms)
 
@@ -162,7 +167,7 @@ def _named_fluxes(v: Any) -> Any:
     named fluxes is rejected (the centered-FV named-flux stencil differs from the Riemann rhs_into
     stencil, so they cannot be summed)."""
     fluxes = v.attrs.get("fluxes")
-    if not fluxes or fluxes == ["default"]:
+    if not fluxes or tuple(fluxes) == ("default",):
         return None
     named = [f for f in fluxes if f != "default"]
     if len(named) != len(fluxes):
@@ -290,8 +295,8 @@ def _emit_cell_compare_kernel(field_var: Any, mask_var: Any, cmp: Any, value: An
         "  const pops::Array4 maskA = %s.fab(li).array();" % mask_var,
         "  const pops::ConstArray4 fieldA = %s.fab(li).const_array();" % field_var,
         "  pops::for_each_cell(%s.box(li), [=] POPS_HD(int i, int j) {" % mask_var,
-        "    maskA(i, j, 0) = (fieldA(i, j, 0) %s static_cast<pops::Real>(%s)) "
-        "? static_cast<pops::Real>(1) : static_cast<pops::Real>(0);" % (cmp, repr(float(value))),
+        "    maskA(i, j, 0) = (fieldA(i, j, 0) %s %s) "
+        "? static_cast<pops::Real>(1) : static_cast<pops::Real>(0);" % (cmp, scalar_cpp(value)),
         "  });",
         "}",
     ]

@@ -6,12 +6,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._helpers import _opcall, _operator_handle, program_macro
+from ._helpers import _exact_coefficient, _opcall, _operator_handle, program_macro
 
 
 @program_macro
 def imex_local(P: Any, block: Any, *, linear_source: Any, sources: Any = ("default",),
-               flux: Any = True, theta: Any = 1.0) -> Any:
+               flux: Any = True, theta: Any = 1) -> Any:
     """IMEX with an EXPLICIT flux/source and an IMPLICIT cell-local linear source (ADC-423).
 
     One step of a theta-implicit splitting of ``dU/dt = R_explicit(U) + L U`` where ``L`` is a named
@@ -28,7 +28,8 @@ def imex_local(P: Any, block: Any, *, linear_source: Any, sources: Any = ("defau
     is rejected. @p linear_source is the typed handle of the model ``m.linear_source`` /
     ``m.local_linear_map``; @p theta the implicitness of the L term (0 < theta <= 1)."""
     linear_source = _operator_handle(linear_source, "linear_source")
-    if not (0.0 < float(theta) <= 1.0):
+    theta = _exact_coefficient(theta, "imex_local: theta")
+    if not (0 < theta <= 1):
         raise ValueError(
             "imex_local: theta must be in (0, 1] (got %r); theta == 0 is fully explicit -- use "
             "forward_euler instead" % (theta,))
@@ -36,15 +37,15 @@ def imex_local(P: Any, block: Any, *, linear_source: Any, sources: Any = ("defau
     fields = P.solve_fields(U) if flux else None
     R = P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
     rhs = P.linear_combine(block + "_imex_rhs", U + P.dt * R)
-    operator = P.I - (float(theta) * P.dt) * P.linear_source(linear_source)
+    operator = P.I - (theta * P.dt) * P.linear_source(linear_source)
     out = P.solve_local_linear(name=block + "_imex_step", operator=operator, rhs=rhs, fields=fields)
-    P.commit(block, out)
+    P._commit_block(block, out)
     return out
 
 
 @program_macro
 def imex_local_linear(P: Any, block: Any, *, explicit_operator: Any, implicit_operator: Any,
-                      fields_operator: Any = None, theta: Any = 1.0,
+                      fields_operator: Any = None, theta: Any = 1,
                       state_space: Any = "U") -> Any:
     """Generic IMEX with an explicit rate and an implicit local linear operator (Spec 2).
 
@@ -56,7 +57,8 @@ def imex_local_linear(P: Any, block: Any, *, explicit_operator: Any, implicit_op
     ``fields_operator`` handle). Each is a :class:`pops.model.OperatorHandle` from an ``m.*``
     declarer, not a name string. Requires ``P.bind_operators(module)``.
     """
-    if not (0.0 < theta <= 1.0):
+    theta = _exact_coefficient(theta, "imex_local_linear: theta")
+    if not (0 < theta <= 1):
         raise ValueError("imex_local_linear: theta must be in (0, 1]")
     explicit_operator = _operator_handle(explicit_operator, "explicit_operator")
     implicit_operator = _operator_handle(implicit_operator, "implicit_operator")
@@ -68,5 +70,5 @@ def imex_local_linear(P: Any, block: Any, *, explicit_operator: Any, implicit_op
     lin = _opcall(P, implicit_operator, fields, value_name="L")
     q = P.linear_combine("imex_rhs", u + P.dt * r)
     u1 = P.solve_local_linear("imex_step", operator=P.I - theta * P.dt * lin, rhs=q, fields=fields)
-    P.commit(block, u1)
+    P._commit_block(block, u1)
     return u1

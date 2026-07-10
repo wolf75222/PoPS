@@ -38,6 +38,13 @@ cmake.version = ">=3.21"
 wheel.packages = ["python/pops"]
 build-dir = "build/{wheel_tag}"  # persistent build cache: fast reinstall/editable
 
+# Apple links Mach-O extensions with an ad-hoc signature.  ``cmake --install --strip`` rewrites the
+# binary after that signature was emitted, so macOS kills the installed module at import time.  Keep
+# the linker-signed image on Darwin; other platforms retain scikit-build-core's Release stripping.
+[[tool.scikit-build.overrides]]
+if.platform-system = "darwin"
+install.strip = false
+
 [tool.scikit-build.cmake.define]
 POPS_BUILD_PYTHON = "ON"
 POPS_BUILD_TESTS = "OFF"

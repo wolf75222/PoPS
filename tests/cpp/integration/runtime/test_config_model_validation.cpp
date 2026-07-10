@@ -37,6 +37,12 @@ using namespace pops;
 
 namespace {
 
+template <class T>
+concept HasPublicFreezeRestore = requires(T& value) { value.pops_freeze_restore(false); };
+
+static_assert(!HasPublicFreezeRestore<ModelSpec>,
+              "ModelSpec.freeze() must be irreversible through its public C++ API");
+
 // true si @p f leve un std::runtime_error DONT le message contient @p frag : on ne se contente pas du
 // refus, on verifie que c'est le BON refus (le champ manquant nomme), donc un message lisible.
 template <class F>
@@ -173,6 +179,79 @@ TEST(ConfigModelValidation, ValidateModelSpecNamesMissingField) {
       << "validate_model_spec : modele complet (exb/none/charge) accepte";
 }
 
+TEST(ConfigModelValidation, ModelSpecFreezeIsIrreversibleForNativeCallers) {
+  ModelSpec spec;
+  spec.transport = "exb";
+  spec.gamma = 1.25;
+  EXPECT_FALSE(spec.frozen());
+  spec.freeze();
+  EXPECT_TRUE(spec.frozen());
+  EXPECT_THROW(spec.require_mutable("transport"), std::runtime_error);
+  EXPECT_THROW(spec.transport = "compressible", std::runtime_error);
+  EXPECT_THROW(spec.gamma = 1.4, std::runtime_error);
+
+  ModelSpec frozen_copy = spec;
+  EXPECT_TRUE(frozen_copy.frozen());
+  EXPECT_THROW(frozen_copy.source = "gravity", std::runtime_error);
+
+  ModelSpec mutable_target;
+  mutable_target = spec;
+  EXPECT_TRUE(mutable_target.frozen());
+  EXPECT_THROW(mutable_target.q = 2.0, std::runtime_error);
+
+  ModelSpec move_target;
+  move_target.transport = std::move(spec.transport);
+  EXPECT_EQ(spec.transport.get(), "exb") << "a frozen source proxy is never drained by move";
+  EXPECT_TRUE(spec.frozen());
+  EXPECT_THROW(spec.require_mutable("transport"), std::runtime_error);
+  EXPECT_THROW(spec.transport = "compressible", std::runtime_error);
+  EXPECT_THROW(spec.gamma = 1.4, std::runtime_error);
+}
+
+TEST(ConfigModelValidation, ModelSpecCopyAndMoveRebindEveryProxyToItsDestination) {
+  ModelSpec copy_source;
+  copy_source.transport = "exb";
+  copy_source.gamma = 1.1;
+  ModelSpec copy_constructed(copy_source);
+  copy_constructed.freeze();
+  EXPECT_NO_THROW(copy_source.transport = "compressible");
+  EXPECT_NO_THROW(copy_source.gamma = 1.2);
+  EXPECT_THROW(copy_constructed.transport = "isothermal", std::runtime_error);
+  EXPECT_THROW(copy_constructed.gamma = 1.3, std::runtime_error);
+
+  ModelSpec move_source;
+  move_source.transport = "exb";
+  move_source.gamma = 1.1;
+  ModelSpec move_constructed(std::move(move_source));
+  move_constructed.freeze();
+  EXPECT_NO_THROW(move_source.transport = "compressible");
+  EXPECT_NO_THROW(move_source.gamma = 1.2);
+  EXPECT_THROW(move_constructed.transport = "isothermal", std::runtime_error);
+  EXPECT_THROW(move_constructed.gamma = 1.3, std::runtime_error);
+
+  ModelSpec copy_assignment_source;
+  copy_assignment_source.transport = "exb";
+  copy_assignment_source.gamma = 1.1;
+  ModelSpec copy_assigned;
+  copy_assigned = copy_assignment_source;
+  copy_assigned.freeze();
+  EXPECT_NO_THROW(copy_assignment_source.transport = "compressible");
+  EXPECT_NO_THROW(copy_assignment_source.gamma = 1.2);
+  EXPECT_THROW(copy_assigned.transport = "isothermal", std::runtime_error);
+  EXPECT_THROW(copy_assigned.gamma = 1.3, std::runtime_error);
+
+  ModelSpec move_assignment_source;
+  move_assignment_source.transport = "exb";
+  move_assignment_source.gamma = 1.1;
+  ModelSpec move_assigned;
+  move_assigned = std::move(move_assignment_source);
+  move_assigned.freeze();
+  EXPECT_NO_THROW(move_assignment_source.transport = "compressible");
+  EXPECT_NO_THROW(move_assignment_source.gamma = 1.2);
+  EXPECT_THROW(move_assigned.transport = "isothermal", std::runtime_error);
+  EXPECT_THROW(move_assigned.gamma = 1.3, std::runtime_error);
+}
+
 // ================================================================================================
 // ADC-290 (b)/(c) : la surface utilisateur (System / AmrSystem add_block) applique le meme contrat.
 // ================================================================================================
@@ -226,7 +305,8 @@ TEST(ConfigModelValidation, EveryBuiltinRegistryTagIsRouted) {
     }
     all_tr = all_tr && routed;
   }
-  EXPECT_TRUE(all_tr) << "ADC-331 : tout transport builtin de la registry est route (pas de derive)";
+  EXPECT_TRUE(all_tr)
+      << "ADC-331 : tout transport builtin de la registry est route (pas de derive)";
 
   bool all_el = true;
   for (const EllipticTag& t : kElliptics) {
@@ -258,5 +338,6 @@ TEST(ConfigModelValidation, EveryBuiltinRegistryTagIsRouted) {
     }
     all_src = all_src && routed;
   }
-  EXPECT_TRUE(all_src) << "ADC-331 : tout source builtin de la registry route a NV=4 (pas de derive)";
+  EXPECT_TRUE(all_src)
+      << "ADC-331 : tout source builtin de la registry route a NV=4 (pas de derive)";
 }

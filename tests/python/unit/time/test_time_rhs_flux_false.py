@@ -96,7 +96,7 @@ def one_step_program(name, sources, flux=True):
     U = P.state("plasma")
     fields = P.solve_fields(U) if flux else None
     R = P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
-    P.commit("plasma", P.linear_combine("%s_step" % name, U + P.dt * R))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("%s_step" % name, U + P.dt * R))
     return P
 
 
@@ -123,8 +123,8 @@ def two_block_noflux(name):
     Ub = P.state("b")
     Ra = P._rhs_legacy(state=Ua, fields=None, flux=False, sources=["default"])
     Rb = P._rhs_legacy(state=Ub, fields=None, flux=False, sources=["default"])
-    P.commit("a", P.linear_combine("%s_a" % name, Ua + P.dt * Ra))
-    P.commit("b", P.linear_combine("%s_b" % name, Ub + P.dt * Rb))
+    P.commit(P.state("U", block="a").next, P.linear_combine("%s_a" % name, Ua + P.dt * Ra))
+    P.commit(P.state("U", block="b").next, P.linear_combine("%s_b" % name, Ub + P.dt * Rb))
     return P
 
 
@@ -167,7 +167,7 @@ def _noflux_named_fluxes():
     P = adctime.Program("p_bad")
     U = P.state("plasma")
     P._rhs_legacy(state=U, fields=None, flux=False, sources=["default"], fluxes=["fx"])
-    P.commit("plasma", P.linear_combine("p_bad_step", U))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("p_bad_step", U))
     return P
 
 
@@ -251,7 +251,7 @@ def lie_split_program(name):
     H = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=[])   # flux only (-div F)
     U1 = P.linear_combine("%s_H" % name, U + P.dt * H)
     S = P._rhs_legacy(state=U1, fields=None, flux=False, sources=["default"])     # source only on U1
-    P.commit("plasma", P.linear_combine("%s_S" % name, U1 + P.dt * S))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("%s_S" % name, U1 + P.dt * S))
     return P
 
 

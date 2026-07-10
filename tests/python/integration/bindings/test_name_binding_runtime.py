@@ -72,7 +72,7 @@ def two_block_program(t, name="nb_two_block"):
     for blk in ("a", "b"):
         U = P.state(blk)
         R = P._rhs_legacy(name="R_" + blk, state=U, flux=True, sources=["decay"])
-        P.commit(blk, P.linear_combine(blk + "_next", U + P.dt * R))
+        P.commit(P.state("U", block=blk).next, P.linear_combine(blk + "_next", U + P.dt * R))
     return P
 
 

@@ -26,7 +26,7 @@ def _euler(scale=1.0):
     P = adctime.Program("forward_euler")
     U = P.state("plasma")
     R = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=["default"])
-    P.commit("plasma", P.linear_combine("U1", U + (scale * P.dt) * R))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + (scale * P.dt) * R))
     return P
 
 
@@ -61,7 +61,7 @@ def test_source_location_capture_is_opt_in_and_out_of_hash():
     on = adctime.Program("forward_euler").capture_source_locations(True)
     U = on.state("plasma")
     R = on._rhs_legacy(state=U, fields=on.solve_fields(U), flux=True, sources=["default"])
-    on.commit("plasma", on.linear_combine("U1", U + (1.0 * on.dt) * R))
+    on.commit(on.state("U", block="plasma").next, on.linear_combine("U1", U + (1.0 * on.dt) * R))
     located = [n for n in on.ir_nodes() if n["source_location"]]
     assert located, "capture ON must populate at least one source_location"
     loc = located[0]["source_location"]
@@ -72,17 +72,17 @@ def test_source_location_capture_is_opt_in_and_out_of_hash():
     print("OK  source_location is opt-in and excluded from the IR hash (bit-identity preserved)")
 
 
-def test_space_tag_does_not_change_the_hash():
-    # Two Programs differing ONLY in a value's space tag (build-time metadata) hash identically.
+def test_space_tag_changes_the_hash():
+    # A StateSpace controls component order/layout and therefore belongs to compiled identity.
     def build(tag):
         P = adctime.Program("forward_euler")
         u = model.StateSpace("U", ("rho", "mx", "my")) if tag else None
         U = P.state("plasma", space=u)
         R = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=["default"])
-        P.commit("plasma", P.linear_combine("U1", U + P.dt * R))
+        P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + P.dt * R))
         return P
-    assert build(True)._ir_hash() == build(False)._ir_hash()
-    print("OK  the operator-first space tag is excluded from the IR hash")
+    assert build(True)._ir_hash() != build(False)._ir_hash()
+    print("OK  the operator-first space tag participates in the IR hash")
 
 
 def test_missing_commit_rejected():
@@ -101,9 +101,9 @@ def test_double_commit_rejected():
     P = adctime.Program("p")
     U = P.state("plasma")
     U1 = P.linear_combine("U1", U + P.dt * P._rhs_legacy(state=U, fields=P.solve_fields(U)))
-    P.commit("plasma", U1)
+    P.commit(P.state("U", block="plasma").next, U1)
     try:
-        P.commit("plasma", U1)
+        P.commit(P.state("U", block="plasma").next, U1)
         raise AssertionError("a double commit must be rejected")
     except ValueError as exc:
         assert "committed more than once" in str(exc), str(exc)
@@ -118,7 +118,7 @@ def test_distinct_field_context_per_stage():
     f1 = P.solve_fields(U1)
     assert f0 is not f1 and f0.id != f1.id
     # Each stage's FieldContext is tagged with the state it was solved from (no stale global aux).
-    assert f0.field_context.stage_source != f1.field_context.stage_source, (
+    assert f0.field_context.stage_sources != f1.field_context.stage_sources, (
         "each stage gets a FieldContext keyed on its own stage state")
     print("OK  each stage's solve_fields is a distinct FieldContext keyed on its own state")
 
@@ -143,7 +143,7 @@ def main():
     test_ir_node_has_identity_and_inspection_fields()
     test_logical_shape_reflects_the_space_tag()
     test_source_location_capture_is_opt_in_and_out_of_hash()
-    test_space_tag_does_not_change_the_hash()
+    test_space_tag_changes_the_hash()
     test_missing_commit_rejected()
     test_double_commit_rejected()
     test_distinct_field_context_per_stage()

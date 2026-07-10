@@ -82,7 +82,13 @@ class CompiledBrickRef(Descriptor):
         symbol (:class:`ValueError`). A ``.json``-only manifest skips G4 (no ``.so`` to probe). A ref
         whose ``native_id`` is not in the manifest is left to :meth:`resolve`'s clear ``LookupError``.
         Returns ``True`` when every checkable gate passes."""
-        self._ensure_registered()
+        try:
+            self._ensure_registered()
+        except OSError as error:
+            raise ValueError(
+                "compiled brick %r manifest could not be loaded from %r: %s"
+                % (self.native_id, self.manifest, error)
+            ) from error
         if self._record is not None:
             validate_ref(self._record, manifest_abi_key=self._manifest_abi_key,
                          context=self._gate_context(context), handle=self._handle)

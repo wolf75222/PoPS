@@ -106,7 +106,9 @@ class _SourceMixin(_HyperbolicModel):
                              % (name, len(exprs), n))
         if name == "default":
             self._source = exprs   # equivalent to m.source([...]) -- the legacy default source
-            return OperatorHandle("default", kind="local_source")
+            return OperatorHandle(
+                "default", kind="local_source", owner=self.owner_path,
+                registered_operator_name="source_default")
         if not name.isidentifier():
             raise ValueError("source_term('%s'): name must be a valid identifier "
                              "(letters/digits/_, no leading digit)" % name)
@@ -115,7 +117,7 @@ class _SourceMixin(_HyperbolicModel):
         if name in self._linear_sources:
             raise ValueError("source_term('%s'): name collides with a linear_source" % name)
         self._source_terms[name] = exprs
-        return OperatorHandle(name, kind="local_source")
+        return OperatorHandle(name, kind="local_source", owner=self.owner_path)
 
     def linear_source(self, name: Any, matrix: Any) -> Any:
         """Declare a NAMED local linear operator L_name(aux, params): an n_cons x n_cons matrix whose
@@ -152,7 +154,7 @@ class _SourceMixin(_HyperbolicModel):
         if name in self._source_terms:
             raise ValueError("linear_source('%s'): name collides with a source_term" % name)
         self._linear_sources[name] = wrapped
-        return OperatorHandle(name, kind="local_linear_operator")
+        return OperatorHandle(name, kind="local_linear_operator", owner=self.owner_path)
 
     def rate_operator(self, name: Any, *, flux: bool = True, sources: Any = ("default",),
                       fluxes: Any = None) -> Any:
@@ -184,7 +186,7 @@ class _SourceMixin(_HyperbolicModel):
                              "(a source-only rate has no flux to divide)" % name)
         srcs = list(sources) if sources is not None else None
         self._rate_operators[name] = {"flux": bool(flux), "sources": srcs, "fluxes": flx}
-        return OperatorHandle(name, kind="local_rate")
+        return OperatorHandle(name, kind="local_rate", owner=self.owner_path)
 
     def stability_speed(self, expr: Any) -> None:
         """STABILITY speed lambda* (expression of cons / prims / aux): drives the block CFL

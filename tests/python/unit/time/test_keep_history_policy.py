@@ -2,7 +2,7 @@
 """ADC-626: keep_history accepts the typed persistence policy; compile-time coherence + determinism.
 
 The NotImplementedError gate is REMOVED: ``T.keep_history(U, depth, checkpoint_policy=...)`` accepts a
-typed history-persistence descriptor, records it on the handle and the Program, validates coherence at
+typed history-persistence descriptor, records it in the Program-owned history table, validates coherence at
 author time, and the compile-time gate (Program.validate) refuses a non-Dense policy whose replay would
 reach a non-deterministic op. Pure Python IR construction (no numerics / no _pops).
 """
@@ -75,7 +75,7 @@ def test_deterministic_program_with_non_dense_policy_passes_compile_gate():
     P.keep_history(U, depth=4, checkpoint_policy=Interval(3))
     # A deterministic combine reading the ring, committed as the new state (a valid State value).
     nxt = P.linear_combine("U_next", 1.0 * U.n + 0.5 * U.prev(1))
-    P.commit("plasma", nxt)
+    P.commit(P.state("U", block="plasma").next, nxt)
     check_program(P)  # no refusal: every op is on the vetted deterministic allow-list
 
 

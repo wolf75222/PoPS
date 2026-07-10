@@ -93,6 +93,7 @@ def test_operator_first_macros_coerce_operator_kwargs_to_handles():
         "rk.py": {"rhs_operator", "fields_operator"},
         "predictor_corrector.py": {"fields_operator", "explicit_rate_operator", "implicit_operator"},
         "multistep.py": {"linear_source"},
+        "strang.py": {"linear_operator"},
     }
     for fname, kwargs in expect.items():
         src = (LIB_TIME / fname).read_text(encoding="utf-8")

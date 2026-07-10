@@ -8,7 +8,8 @@ These tests pin that equivalence on the ``Program._ir_hash``:
   - ``terms=[Flux(), <source>]`` builds the byte-identical hash to the private
     ``_rhs_legacy(flux=True, sources=[<name>])``;
   - ``Flux()`` is a typed term, not a bool (a bare bool in terms= is a TypeError);
-  - every accepted source form (name str / SourceTerm / OperatorHandle) maps onto the same name;
+  - every accepted typed source form (SourceTerm / LocalTerm / OperatorHandle) maps onto the same
+    registered source, while a free string is refused;
   - a non-term object in terms= is a clear TypeError.
 
 Pure Python; no compilation, no ``_pops``. Run with python3 (PYTHONPATH = built pops package).
@@ -16,18 +17,30 @@ Pure Python; no compilation, no ``_pops``. Run with python3 (PYTHONPATH = built 
 import pytest
 
 from pops import time as adctime
-from pops.model import OperatorHandle
 from pops.numerics.terms import Flux, LocalTerm, SourceTerm
+from pops.physics.facade import Model
+
+
+_HANDLE = object()
+
+
+def _source_model():
+    model = Model("rhs_terms_model")
+    (u,) = model.conservative_vars("u")
+    model.elliptic_rhs(u)
+    return model, model.source_term("electric", [-u])
 
 
 def _terms_program(terms):
     """A one-block forward-Euler Program whose single rhs is built from ``terms=``."""
-    P = adctime.Program("rhs_terms")
+    model, source = _source_model()
+    terms = [source if term is _HANDLE else term for term in terms]
+    P = adctime.Program("rhs_terms").bind_operators(model)
     dt = P.dt
     U = P.state("plasma")
     f = P.solve_fields(U)
     R = P.rhs("R", state=U, fields=f, terms=terms)
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
     P.validate()
     return P
 
@@ -35,19 +48,20 @@ def _terms_program(terms):
 def _legacy_program(flux, sources):
     """The same Program built through the INTERNAL ``_rhs_legacy`` flux=/sources= builder (the typed
     terms= path lowers onto this private builder; it is the byte-identity target, not a public path)."""
-    P = adctime.Program("rhs_terms")
+    model, _ = _source_model()
+    P = adctime.Program("rhs_terms").bind_operators(model)
     dt = P.dt
     U = P.state("plasma")
     f = P.solve_fields(U)
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=flux, sources=sources)
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
     P.validate()
     return P
 
 
 def test_terms_flux_plus_source_is_byte_identical():
-    """terms=[Flux(), "electric"] == _rhs_legacy(flux=True, sources=["electric"]) (same _ir_hash)."""
-    h_terms = _terms_program([Flux(), "electric"])._ir_hash()
+    """A typed source term lowers byte-identically to the private name-token seam."""
+    h_terms = _terms_program([Flux(), SourceTerm("electric")])._ir_hash()
     h_legacy = _legacy_program(True, ["electric"])._ir_hash()
     assert h_terms == h_legacy, (h_terms, h_legacy)
     print("OK  1. terms=[Flux(), 'electric'] _ir_hash == _rhs_legacy(flux=True, sources=['electric'])")
@@ -60,20 +74,24 @@ def test_terms_flux_only_is_byte_identical():
 
 
 def test_terms_source_only_is_byte_identical():
-    """terms=["electric"] (no Flux) == _rhs_legacy(flux=False, sources=["electric"]) (source only)."""
-    assert _terms_program(["electric"])._ir_hash() == _legacy_program(False, ["electric"])._ir_hash()
-    print("OK  3. terms=['electric'] _ir_hash == _rhs_legacy(flux=False, sources=['electric'])")
+    """A typed source without Flux lowers to the private source-only path."""
+    assert _terms_program([SourceTerm("electric")])._ir_hash() == _legacy_program(False, ["electric"])._ir_hash()
+    print("OK  3. typed source-only term == private _rhs_legacy source selector")
 
 
 def test_source_forms_map_to_same_name():
-    """Every accepted source form (name str / SourceTerm / OperatorHandle) folds in the SAME
-    source name, so all three build the byte-identical IR."""
-    h_str = _terms_program([Flux(), "electric"])._ir_hash()
+    """Every accepted typed source form folds in the same registered source."""
     h_srcterm = _terms_program([Flux(), SourceTerm("electric")])._ir_hash()
-    h_handle = _terms_program([Flux(), OperatorHandle("electric", kind="local_source")])._ir_hash()
+    h_handle = _terms_program([Flux(), _HANDLE])._ir_hash()
     h_local = _terms_program([Flux(), LocalTerm("electric")])._ir_hash()
-    assert h_str == h_srcterm == h_handle == h_local, (h_str, h_srcterm, h_handle, h_local)
-    print("OK  5. source forms (str/SourceTerm/OperatorHandle/LocalTerm) -> same name -> same hash")
+    assert h_srcterm == h_handle == h_local, (h_srcterm, h_handle, h_local)
+    print("OK  5. typed source forms (SourceTerm/OperatorHandle/LocalTerm) -> same hash")
+
+
+def test_free_source_name_is_rejected():
+    """Public terms retain typed identity; bare source names are private lowering tokens only."""
+    with pytest.raises(TypeError, match="free source name"):
+        _terms_program([Flux(), "electric"])
 
 
 def test_flux_is_a_term_not_a_bool():

@@ -6,56 +6,285 @@ stable ``.hash`` (sha256 over the canonical ``to_dict``). ``pops.compile`` freez
 compiles and folds ``snapshot.hash`` into the compile cache key, so a post-compile Problem mutation
 cannot change a bound artifact -- the snapshot is the FROZEN identity the compile stream keys on.
 
-The snapshot holds PLAIN values only: no runtime object, no numpy array, no live descriptor. A value
-that is not a JSON scalar / list / dict is coerced to a stable string token (its ``name`` or repr),
-so the canonical serialisation is deterministic and there is no shallow-copy escape (the snapshot is
-a deep, inert copy). It is stdlib-only (``hashlib`` / ``json``); it imports no ``_pops`` / runtime.
+The snapshot holds PLAIN values only: no runtime object, no numpy array, no live descriptor. Objects
+must expose structural data (``to_data`` / ``to_dict`` / ``options`` and/or public fields); an
+opaque value is rejected instead of being collapsed to its class name.  Every object projection is
+qualified by its Python type, recursively canonicalised and deeply detached.  It imports only the
+pure-Python PoPS literal/handle value types used to authenticate special encodings, never ``_pops``
+or the runtime.
 """
 from __future__ import annotations
 
 import hashlib
 import json
-import re
+import math
+from collections.abc import Mapping
+from decimal import Decimal
+from fractions import Fraction
 from typing import Any
+from urllib.parse import quote
 
-# A default object repr carries a memory address ("<pops._pops.ModelSpec object at 0x10384f0f0>");
-# the address is per-instance and would make the hash non-reproducible. We strip the "at 0x..." tail
-# so a native model with no stable Python name still canonicalises to an address-free, type-stable
-# token (two instances of the same ModelSpec type hash identically).
-_ADDRESS_RE = re.compile(r" at 0x[0-9a-fA-F]+")
+from pops.ir.literals import ScalarLiteral
+from pops.model.handles import Handle, OperatorHandle as ModelOperatorHandle, OwnerPath
 
 #: Bumped only when the snapshot's canonical shape changes (a field rename / removal); an additive
 #: field keeps version 1 so an old hash and a new hash of the SAME assembly stay comparable.
-SNAPSHOT_SCHEMA_VERSION = 1
+SNAPSHOT_SCHEMA_VERSION = 3
 
 
-def _canonical(value: Any) -> Any:
-    """Coerce @p value to a JSON-ready, DETERMINISTIC form (a non-scalar becomes a stable token).
+def _canonical(value: Any, *, path: str = "$", active: set[int] | None = None) -> Any:
+    """Return a strict, deterministic JSON view of ``value``.
 
-    A JSON scalar / ``None`` passes through; a list / tuple / dict is canonicalised element-wise
-    (dict keys stringified, sorted at serialisation). A non-scalar object becomes a STABLE structural
-    token -- its ``name``, else its ``options()`` / ``to_dict()`` view, else its class name -- NEVER a
-    bare ``repr`` (which leaks a memory address and would make the hash non-reproducible). So two
-    structurally identical assemblies produce the same hash regardless of object identity."""
-    if value is None or isinstance(value, (bool, int, float)):
+    No lossy fallback exists.  An object is encoded from structural projections and its qualified
+    Python type, or the snapshot fails at the exact path.  ``active`` detects reference cycles while
+    still allowing the same immutable descriptor to appear in two independent branches.
+    """
+    if active is None:
+        active = set()
+    if value is None or isinstance(value, bool):
         return value
+    if isinstance(value, int):
+        return {"$scalar": {"kind": "integer", "value": str(value)}}
+    if isinstance(value, Fraction):
+        return {"$scalar": {"kind": "rational", "numerator": str(value.numerator),
+                            "denominator": str(value.denominator)}}
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError("ProblemSnapshot cannot encode a non-finite Decimal")
+        return {"$scalar": {"kind": "decimal", "value": str(value)}}
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("ProblemSnapshot cannot encode a non-finite float at %s" % path)
+        return {"$scalar": {"kind": "binary64", "value": value.hex()}}
     if isinstance(value, str):
-        return _ADDRESS_RE.sub("", value)  # a stringified repr may already carry an address
+        return value
+    marker = id(value)
+    if marker in active:
+        raise ValueError("ProblemSnapshot cannot encode a reference cycle at %s" % path)
+    active.add(marker)
+    try:
+        return _canonical_compound(value, path=path, active=active)
+    finally:
+        active.remove(marker)
+
+
+def _canonical_compound(value: Any, *, path: str, active: set[int]) -> Any:
+    """Canonicalise a container, handle, literal or structural Python object."""
+    if type(value).__module__.split(".", 1)[0] == "numpy":
+        raise TypeError(
+            "ProblemSnapshot cannot encode numpy runtime data at %s; declare metadata, not arrays"
+            % path)
     if isinstance(value, (list, tuple)):
-        return [_canonical(v) for v in value]
-    if isinstance(value, dict):
-        return {str(k): _canonical(v) for k, v in value.items()}
-    name = getattr(value, "name", None)
-    if isinstance(name, str):
-        return name
-    for accessor in ("options", "to_dict"):
-        fn = getattr(value, accessor, None)
-        if callable(fn):
+        return [_canonical(item, path="%s[%d]" % (path, index), active=active)
+                for index, item in enumerate(value)]
+    if isinstance(value, (set, frozenset)):
+        items = [_canonical(item, path="%s{item}" % path, active=active) for item in value]
+        return {"$set": sorted(items, key=lambda item: json.dumps(
+            item, sort_keys=True, separators=(",", ":"), allow_nan=False))}
+    if isinstance(value, Mapping):
+        if all(isinstance(key, str) for key in value):
+            return {key: _canonical(item, path="%s.%s" % (path, key), active=active)
+                    for key, item in value.items()}
+        entries = [
+            (_canonical(key, path="%s{key}" % path, active=active),
+             _canonical(item, path="%s{%r}" % (path, key), active=active))
+            for key, item in value.items()
+        ]
+        entries.sort(key=lambda pair: json.dumps(
+            pair[0], sort_keys=True, separators=(",", ":"), allow_nan=False))
+        return {"$map": [[key, item] for key, item in entries]}
+    if isinstance(value, OwnerPath):
+        owner = _call_projection(
+            value, "canonical_declaration_path", value.canonical_declaration_path, path)
+        if not isinstance(owner, OwnerPath):
+            raise TypeError("OwnerPath.canonical_declaration_path() must return OwnerPath at %s"
+                            % path)
+        return {"$owner_path": list(owner.segments)}
+    if isinstance(value, Handle):
+        return {"$handle": _canonical_handle_identity(value, path)}
+    if isinstance(value, ScalarLiteral):
+        data = _call_projection(value, "to_data", value.to_data, path)
+        return {"$scalar": _canonical_literal_data(data, path="%s.to_data()" % path)}
+    return _canonical_object(value, path=path, active=active)
+
+
+def _canonical_handle_identity(value: Handle, path: str) -> dict[str, Any]:
+    """Validate an authenticated Handle projection without lossy coercion or duck typing."""
+    identity = _call_projection(value, "canonical_identity", value.canonical_identity, path)
+    if not isinstance(identity, Mapping):
+        raise TypeError("Handle.canonical_identity() must return a mapping at %s" % path)
+    required = {"qualified_id", "schema_version", "kind", "owner_path", "local_id"}
+    allowed = set(required)
+    if isinstance(value, ModelOperatorHandle):
+        allowed.add("registered_operator_name")
+    if set(identity) != allowed:
+        raise TypeError(
+            "Handle.canonical_identity() keys at %s must be exactly %s (got %s)"
+            % (path, sorted(allowed), sorted(identity)))
+
+    schema_version = identity["schema_version"]
+    kind = identity["kind"]
+    local_id = identity["local_id"]
+    qualified_id = identity["qualified_id"]
+    owner_segments = identity["owner_path"]
+    if isinstance(schema_version, bool) or not isinstance(schema_version, int) \
+            or schema_version < 1:
+        raise TypeError("Handle canonical schema_version must be an integer >= 1 at %s" % path)
+    for name, item in (("kind", kind), ("local_id", local_id),
+                       ("qualified_id", qualified_id)):
+        if not isinstance(item, str) or not item:
+            raise TypeError("Handle canonical %s must be a non-empty string at %s" % (name, path))
+    if not isinstance(owner_segments, tuple) or not owner_segments \
+            or any(not isinstance(segment, str) or not segment for segment in owner_segments):
+        raise TypeError(
+            "Handle canonical owner_path must be a tuple of non-empty strings at %s" % path)
+    if not isinstance(value.owner_path, OwnerPath):
+        raise TypeError("Handle owner_path must be an authenticated OwnerPath at %s" % path)
+    owner = value.owner_path.canonical_declaration_path()
+    if (schema_version, kind, local_id, owner_segments) != (
+            value.schema_version, value.kind, value.local_id, owner.segments):
+        raise ValueError("Handle.canonical_identity() disagrees with its immutable fields at %s"
+                         % path)
+
+    expected_qualified = Handle._qualified_id(value, owner)
+    if isinstance(value, ModelOperatorHandle):
+        target = identity["registered_operator_name"]
+        if not isinstance(target, str) or not target:
+            raise TypeError(
+                "Handle canonical registered_operator_name must be a non-empty string at %s" % path)
+        if target != value.registered_operator_name:
+            raise ValueError(
+                "Handle.canonical_identity() disagrees with its registered target at %s" % path)
+        expected_qualified = "%s::target::%s" % (expected_qualified, quote(target, safe=""))
+    if qualified_id != expected_qualified:
+        raise ValueError("Handle.canonical_identity() has an invalid qualified_id at %s" % path)
+    return {
+        "qualified_id": qualified_id,
+        "schema_version": schema_version,
+        "kind": kind,
+        "owner_path": list(owner_segments),
+        "local_id": local_id,
+    }
+
+
+def _canonical_object(value: Any, *, path: str, active: set[int]) -> Any:
+    """Encode a non-container from explicit projections and/or public structural fields."""
+    projections: dict[str, Any] = {}
+    for accessor in ("to_data", "to_dict", "options"):
+        try:
+            member = getattr(value, accessor, None)
+        except Exception as exc:  # property access is part of the structural protocol
+            raise TypeError(
+                "ProblemSnapshot could not read %s.%s at %s" %
+                (_qualified_type(value), accessor, path)) from exc
+        if callable(member):
+            projections[accessor] = _call_projection(value, accessor, member, path)
+        elif member is not None:
+            if accessor == "options" and isinstance(member, Mapping):
+                projections[accessor] = member
+            else:
+                raise TypeError(
+                    "ProblemSnapshot expected %s.%s to be callable at %s" %
+                    (_qualified_type(value), accessor, path))
+
+    fields = _public_structural_fields(value, path)
+    if fields:
+        projections["fields"] = fields
+    if not projections:
+        raise TypeError(
+            "ProblemSnapshot cannot encode opaque %s at %s: expose to_data(), to_dict(), "
+            "options(), or public structural fields" % (_qualified_type(value), path))
+    return {"$object": {
+        "type": _qualified_type(value),
+        "projections": _canonical(projections, path="%s<%s>" % (path, _qualified_type(value)),
+                                  active=active),
+    }}
+
+
+def _call_projection(value: Any, name: str, fn: Any, path: str) -> Any:
+    """Call one structural projection without swallowing or replacing its exception."""
+    try:
+        return fn()
+    except Exception as exc:
+        if hasattr(exc, "add_note"):
+            exc.add_note("while ProblemSnapshot called %s.%s() at %s" %
+                         (_qualified_type(value), name, path))
+        raise
+
+
+def _public_structural_fields(value: Any, path: str) -> dict[str, Any]:
+    """Read stored Python state, or public native-extension data when no storage is exposed."""
+    fields: dict[str, Any] = {}
+    stored_names: set[str] = set()
+    try:
+        stored_names.update(vars(value))
+    except TypeError:
+        pass
+    for cls in type(value).__mro__:
+        slots = cls.__dict__.get("__slots__", ())
+        if isinstance(slots, str):
+            slots = (slots,)
+        for slot in slots:
+            if isinstance(slot, str) and slot.startswith("__") and not slot.endswith("__"):
+                slot = "_%s%s" % (cls.__name__.lstrip("_"), slot)
+            stored_names.add(slot)
+    stored_names.difference_update({"__dict__", "__weakref__", "_frozen", "_snapshot",
+                                    "_canonical_json", "_hash"})
+    if stored_names:
+        for name in sorted(stored_names):
+            if not isinstance(name, str) or name.startswith("__"):
+                continue
             try:
-                return _canonical(fn())
-            except Exception:  # noqa: BLE001 -- an accessor that raises is not a stable token
-                pass
-    return type(value).__name__  # stable, address-free (never a bare repr with a 0x... address)
+                fields[name] = getattr(value, name)
+            except AttributeError:
+                continue  # an unset optional slot carries no state
+            except Exception as exc:
+                raise TypeError("ProblemSnapshot could not read %s.%s at %s" %
+                                (_qualified_type(value), name, path)) from exc
+        return fields
+
+    # pybind/native records generally expose no ``__dict__`` or Python slots. Their documented
+    # public, non-callable attributes are their only structural projection (e.g. ModelSpec).
+    try:
+        names = sorted(name for name in dir(value) if isinstance(name, str) and not name.startswith("_"))
+    except Exception as exc:
+        raise TypeError("ProblemSnapshot could not inspect %s at %s" %
+                        (_qualified_type(value), path)) from exc
+    for name in names:
+        if name in ("to_data", "to_dict", "options", "frozen"):
+            continue
+        try:
+            member = getattr(value, name)
+        except Exception as exc:
+            raise TypeError("ProblemSnapshot could not read %s.%s at %s" %
+                            (_qualified_type(value), name, path)) from exc
+        if not callable(member):
+            fields[name] = member
+    return fields
+
+
+def _qualified_type(value: Any) -> str:
+    cls = type(value)
+    cls = getattr(cls, "_pops_unfrozen_type", cls)
+    return "%s.%s" % (cls.__module__, cls.__qualname__)
+
+
+def _canonical_literal_data(data: Any, *, path: str) -> Any:
+    """Canonicalize an already JSON-shaped ScalarLiteral view without re-tagging its integers."""
+    if isinstance(data, dict):
+        if not all(isinstance(key, str) for key in data):
+            raise TypeError("ScalarLiteral.to_data() requires string keys at %s" % path)
+        return {key: _canonical_literal_data(item, path="%s.%s" % (path, key))
+                for key, item in data.items()}
+    if isinstance(data, (list, tuple)):
+        return [_canonical_literal_data(item, path="%s[%d]" % (path, index))
+                for index, item in enumerate(data)]
+    if isinstance(data, float) and not math.isfinite(data):
+        raise ValueError("ScalarLiteral.to_data() contains a non-finite float at %s" % path)
+    if data is None or isinstance(data, (bool, int, float, str)):
+        return data
+    raise TypeError("ScalarLiteral.to_data() is not JSON-ready at %s (got %s)" %
+                    (path, _qualified_type(data)))
 
 
 class ProblemSnapshot:
@@ -69,25 +298,39 @@ class ProblemSnapshot:
     """
 
     schema_version = SNAPSHOT_SCHEMA_VERSION
+    __slots__ = ("_canonical_json", "_hash")
 
     def __init__(self, payload: Any) -> None:
         # A deep, canonical, JSON-ready copy: no shared reference to a live registry, no runtime
         # object -- so there is no shallow-copy escape from the frozen identity.
-        self._payload: Any = _canonical(payload)
-        self._hash: Any = None
+        canonical_payload = _canonical(payload)
+        if not isinstance(canonical_payload, dict):
+            raise TypeError("ProblemSnapshot payload must be a mapping")
+        if "schema_version" in canonical_payload:
+            raise ValueError("ProblemSnapshot payload cannot define reserved key 'schema_version'")
+        out = dict(canonical_payload)
+        out["schema_version"] = self.schema_version
+        canonical_json = json.dumps(
+            out, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        object.__setattr__(self, "_canonical_json", canonical_json)
+        object.__setattr__(
+            self, "_hash", hashlib.sha256(canonical_json.encode("utf-8")).hexdigest())
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("ProblemSnapshot is immutable")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("ProblemSnapshot is immutable")
 
     def to_dict(self) -> Any:
         """The canonical, JSON-ready dict of the frozen assembly (stamped with the schema version)."""
-        out: dict[str, Any] = {"schema_version": self.schema_version}
-        out.update(self._payload)
-        return out
+        # Decode afresh so callers receive an ordinary JSON-ready deep copy with no route back into
+        # the frozen cache identity.
+        return json.loads(self._canonical_json)
 
     @property
     def hash(self) -> Any:
         """The stable sha256 (64-hex) over the canonical ``to_dict`` (computed once, then cached)."""
-        if self._hash is None:
-            canonical = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
-            self._hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         return self._hash
 
     def __eq__(self, other: Any) -> bool:
@@ -103,11 +346,13 @@ class ProblemSnapshot:
 def build_problem_snapshot(problem: Any) -> Any:
     """Build the :class:`ProblemSnapshot` of @p problem (the frozen input to the compile cache key).
 
-    Reads the Problem's ``to_dict`` (the array-free, registry-sourced serialisation of the whole
-    assembly) and canonicalises it into a JSON-ready, deep, inert payload. It computes nothing on a
-    grid and imports no ``_pops``; the resulting ``.hash`` is the stable identity the compile stream
-    folds into the cache key so a mutated Problem cannot silently rebind a compiled artifact."""
-    payload = problem.to_dict() if hasattr(problem, "to_dict") else {}
+    Reads the Problem's raw typed registries (not its intentionally concise inspection view) and
+    canonicalises them into a JSON-ready, deep, inert payload. It computes nothing on a grid and
+    imports no ``_pops``; the resulting ``.hash`` is the stable identity the compile stream folds
+    into the cache key so a mutated Problem cannot silently rebind a compiled artifact."""
+    from pops.problem._snapshot_payload import problem_snapshot_payload
+
+    payload = problem_snapshot_payload(problem)
     return ProblemSnapshot(payload)
 
 

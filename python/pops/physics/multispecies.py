@@ -14,8 +14,24 @@ from __future__ import annotations
 from typing import Any
 
 from pops.ir import Var, _wrap, Expr, Const, Add, Sub, Mul, Div, Pow, Neg, Sqrt, sqrt  # noqa: F401
-from pops.ir.visitors import _key  # noqa: F401
+from pops.ir.visitors import _children, _key  # noqa: F401
 
+from ._coupled_abi import (
+    CS_ADD as _CS_ADD,
+    CS_DIV as _CS_DIV,
+    CS_MAX_PROG as _CS_MAX_PROG,
+    CS_MAX_REG as _CS_MAX_REG,
+    CS_MAX_TERMS as _CS_MAX_TERMS,
+    CS_MUL as _CS_MUL,
+    CS_NEG as _CS_NEG,
+    CS_POW as _CS_POW,
+    CS_PUSHREG as _CS_PUSHREG,
+    CS_SQRT as _CS_SQRT,
+    CS_SUB as _CS_SUB,
+    role_canonical as _role_canonical,
+)
+from ._coupled_compiled import CompiledCoupledSource
+from ._scalars import canonical_scalar_key, exact_physics_scalar
 from .model import Param  # CoupledSource.param wraps a const Param (acyclic: model never imports this)
 
 
@@ -26,45 +42,6 @@ from .model import Param  # CoupledSource.param wraps a const Param (acyclic: mo
 # (same Expr as the models DSL: +, *, -, /, **, sqrt, params). compile(backend) compiles each
 # expr into postfix BYTECODE (stack machine) that C++ evaluates in the same for_each_cell device as the
 # named couplings -- NO .so nor Python callback per cell. Applied AFTER transport (split).
-
-# Inverse of pops::role_name: DSL role name (CamelCase, cf. CANONICAL_ROLES) -> canonical lowercase
-# name expected by pops::role_from_name (C++ boundary). Single source of the correspondence.
-_ROLE_TO_CANONICAL = {
-    "Density": "density",
-    "MomentumX": "momentum_x", "MomentumY": "momentum_y", "MomentumZ": "momentum_z",
-    "Energy": "energy",
-    "VelocityX": "velocity_x", "VelocityY": "velocity_y", "VelocityZ": "velocity_z",
-    "Pressure": "pressure", "Temperature": "temperature", "Scalar": "scalar",
-}
-
-
-def _role_canonical(role: Any) -> Any:
-    """Canonical role name (lowercase, C++ boundary) for a DSL role. Accepts already-canonical."""
-    if role in _ROLE_TO_CANONICAL:
-        return _ROLE_TO_CANONICAL[role]
-    if role in _ROLE_TO_CANONICAL.values():
-        return role
-    raise ValueError("CoupledSource: unknown role %r (roles: %s)"
-                     % (role, ", ".join(sorted(_ROLE_TO_CANONICAL))))
-
-
-# Stack machine opcodes: MIRROR of pops::CsOp (coupled_source_program.hpp). FROZEN values
-# (transported as-is by the Python -> C++ ABI).
-_CS_PUSHREG = 0
-_CS_ADD = 1
-_CS_SUB = 2
-_CS_MUL = 3
-_CS_DIV = 4
-_CS_NEG = 5
-_CS_POW = 6
-_CS_SQRT = 7
-
-# FROZEN capacities, mirror of coupled_source_program.hpp (kCsMaxReg / kCsMaxTerms / kCsMaxProg). We
-# diagnose on the Python side (clear error) before reaching the C++ boundary.
-_CS_MAX_REG = 32
-_CS_MAX_TERMS = 16
-_CS_MAX_PROG = 256
-
 
 class _CsField(Var):
     """Symbolic handle of a (block, role): it is a Var (hence a full Expr) whose environment NAME
@@ -90,71 +67,6 @@ class _CsBlock:
 
     def role(self, role: Any) -> Any:
         return self._src._field(self.name, role)
-
-
-class CompiledCoupledSource:
-    """Result of CoupledSource.compile(...): packages the FLAT ABI (bytecode) ready for
-    System.add_coupled_source, + the REFERENCE numpy evaluator (same Expr) for tests / a Python
-    integrator. No .so: the coupling is interpreted on the C++ side (device stack machine)."""
-
-    def __init__(self, name: Any, backend: Any, in_blocks: Any, in_roles: Any, consts: Any,
-                 out_blocks: Any, out_roles: Any, prog_ops: Any, prog_args: Any, prog_lens: Any,
-                 terms: Any, reg_order: Any, frequency: float = 0.0, freq_prog_ops: Any = None,
-                 freq_prog_args: Any = None, frequency_expr: Any = None) -> None:
-        self.name = name
-        self.backend = backend
-        self.frequency = float(frequency)  # mu [1/s] declared CONSTANT (0 = no constant bound)
-        self.in_blocks = list(in_blocks)
-        self.in_roles = list(in_roles)        # canonical (lowercase, C++ boundary)
-        self.consts = list(consts)
-        self.out_blocks = list(out_blocks)
-        self.out_roles = list(out_roles)      # canonical
-        self.prog_ops = list(prog_ops)
-        self.prog_args = list(prog_args)
-        self.prog_lens = list(prog_lens)
-        # PER-CELL frequency mu(U): bytecode (same inputs/constants as the source). EMPTY =
-        # constant frequency only. Transported to System/AmrSystem.add_coupled_source.
-        self.freq_prog_ops = list(freq_prog_ops) if freq_prog_ops else []
-        self.freq_prog_args = list(freq_prog_args) if freq_prog_args else []
-        self._frequency_expr = frequency_expr  # reference Expr (numpy eval for tests); None if constant
-        self._terms = list(terms)             # [(block, role_canonical, Expr)]: numpy reference
-        self._reg_order = list(reg_order)     # env names '<block>::<role>' in register order
-
-    def __repr__(self) -> str:
-        return ("CompiledCoupledSource(name=%r, backend=%r, n_in=%d, n_const=%d, n_terms=%d)"
-                % (self.name, self.backend, len(self.in_blocks), len(self.consts),
-                   len(self.out_blocks)))
-
-    def utilization(self) -> Any:
-        """Capacity utilization of the compiled coupling against the FROZEN kCsMax* bounds (ADC-610):
-        {registers, terms, program} each a {count, limit} pair. Surfaces the previously-hidden C++
-        fixed-array capacities (coupled_source_program.hpp) so the headroom of a coupling is
-        introspectable. The compile() validation already refuses an overflow with a clear error; this
-        records the utilization rather than fabricating a pass."""
-        return {"registers": {"count": len(self._reg_order) + len(self.consts), "limit": _CS_MAX_REG},
-                "terms": {"count": len(self.out_blocks), "limit": _CS_MAX_TERMS},
-                "program": {"count": len(self.prog_ops), "limit": _CS_MAX_PROG}}
-
-    def reference_terms(self, fields: Any) -> Any:
-        """Evaluates the source terms on numpy arrays (REFERENCE for tests). @p fields:
-        dict (block, role_canonical) -> array; returns [(block, role_canonical, dS)] with dS = S
-        (the evaluated symbolic term), BEFORE multiplication by dt. Same Expr as the C++ codegen."""
-        env = {}
-        for (block, role), arr in fields.items():
-            env["%s::%s" % (block, _role_canonical(role))] = arr
-        return [(b, r, e.eval(env)) for (b, r, e) in self._terms]
-
-    def reference_frequency(self, fields: Any) -> Any:
-        """Evaluates the PER-CELL frequency mu(U) on numpy arrays (REFERENCE for tests):
-        same Expr / register table as the C++ bytecode. @p fields: dict (block, role_canonical) ->
-        array; returns the mu array (same formulas). Returns None if the frequency is CONSTANT
-        (no Expr) -- use .frequency in that case."""
-        if self._frequency_expr is None:
-            return None
-        env = {}
-        for (block, role), arr in fields.items():
-            env["%s::%s" % (block, _role_canonical(role))] = arr
-        return self._frequency_expr.eval(env)
 
 
 class CoupledSource:
@@ -186,7 +98,7 @@ class CoupledSource:
         # the other -expr (Neg) -> conservative exchange by construction. verify_conservation=True
         # revisits them at compile time to CHECK the property (and detect a breach on the manual add side).
         self._pairs = []
-        self._frequency = 0.0  # mu [1/s] declared CONSTANT (coupling step bound; 0 = no bound)
+        self._frequency = 0  # exact constant mu [1/s] (0 = no bound)
         # optional PER-CELL mu(U): an Expr (same vocabulary as the terms: block().role() +
         # param()) emitted into bytecode at compile() against the SAME register table. None = constant.
         self._frequency_expr = None
@@ -206,13 +118,14 @@ class CoupledSource:
             EXPLICIT ValueError (field used without .block(...).role(...)).
 
         Returns self (chainable)."""
-        # An Expr/_CsField/Param -> per-cell frequency (bytecode); a scalar -> constant.
-        if isinstance(mu, (int, float)) and not isinstance(mu, bool):
-            self._frequency = float(mu)
-            self._frequency_expr = None
+        # Expr/Param -> per-cell frequency; all supported scalar domains stay constant and exact.
+        if isinstance(mu, Expr) or isinstance(getattr(mu, "_node", None), Expr):
+            self._frequency_expr = self._validated_expr(
+                mu, where="CoupledSource.frequency")
+            self._frequency = 0               # bytecode carries the bound; no duplicate constant
         else:
-            self._frequency_expr = _wrap(mu)  # Expr / _CsField / Param -> tree node (cf. _wrap)
-            self._frequency = 0.0             # the bytecode carries the bound; no duplicate constant
+            self._frequency = exact_physics_scalar(mu, where="CoupledSource.frequency")
+            self._frequency_expr = None
         return self
 
     # --- symbolic construction ----------------------------------------------------------------
@@ -231,9 +144,22 @@ class CoupledSource:
 
     def param(self, name: Any, value: Any) -> Any:
         """NAMED constant parameter, usable like an Expr (inlines as a real in the bytecode)."""
-        p = Param(name, value, kind="const")
+        exact = exact_physics_scalar(value, where="CoupledSource.param(%r)" % name)
+        p = Param(name, exact, kind="const")
         self._params[name] = p
         return p
+
+    @staticmethod
+    def _validated_expr(value: Any, *, where: str) -> Expr:
+        """Promote a coupling formula and reject non-lowerable constants now."""
+        expr = value if isinstance(value, Expr) else _wrap(value)
+        stack = [expr]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, Const):
+                exact_physics_scalar(node.literal, where=where)
+            stack.extend(_children(node))
+        return expr
 
     def add(self, block: Any, role: Any = None, expr: Any = None) -> Any:
         """Adds a source TERM: d_t (block.role) += expr. @p expr is an Expr / _CsField / Param /
@@ -242,7 +168,7 @@ class CoupledSource:
             raise ValueError("CoupledSource.add: role= required")
         if expr is None:
             raise ValueError("CoupledSource.add: expr= required")
-        e = expr if isinstance(expr, Expr) else _wrap(expr)  # _CsField / Var are already Expr; Param/scalar -> _wrap
+        e = self._validated_expr(expr, where="CoupledSource.add")
         self._terms.append((block, _role_canonical(role), e))
         return self
 
@@ -279,7 +205,7 @@ class CoupledSource:
             raise ValueError("CoupledSource.add_pair: block_a and block_b must be distinct "
                              "(received %r for both)" % (block_a,))
         canon = _role_canonical(role)
-        gain = expr if isinstance(expr, Expr) else _wrap(expr)  # +expr (gaining leg)
+        gain = self._validated_expr(expr, where="CoupledSource.add_pair")
         loss = Neg(gain)                                        # -expr: SAME subtree, opposite sign
         idx_gain = len(self._terms)
         self._terms.append((block_a, canon, gain))
@@ -306,7 +232,7 @@ class CoupledSource:
                 args.append(reg_index[node.name])
             elif isinstance(node, Const):
                 ops.append(_CS_PUSHREG)
-                args.append(self._const_reg(node.value, reg_index))
+                args.append(self._const_reg(node.literal, reg_index))
             elif isinstance(node, Neg):
                 emit(node.a)
                 ops.append(_CS_NEG)
@@ -351,10 +277,11 @@ class CoupledSource:
     def _const_reg(self, value: Any, reg_index: Any) -> Any:
         """Register index of a constant @p value (deduplicated). Constants occupy the
         registers AFTER the input fields (cf. CoupledSourceKernel: r[n_in + c] = consts[c])."""
-        key = ("const", float(value))
+        exact = exact_physics_scalar(value, where="CoupledSource constant")
+        key = ("const", canonical_scalar_key(exact, where="CoupledSource constant"))
         if key not in reg_index:
             reg_index[key] = len(self._reg_order) + len(self._consts)
-            self._consts.append(float(value))
+            self._consts.append(exact)
         return reg_index[key]
 
     @staticmethod

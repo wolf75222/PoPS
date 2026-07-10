@@ -8,15 +8,22 @@ from typing import TYPE_CHECKING, Any
 
 from pops.time.program_base import _ProgramConstants
 from pops.time.program_call import _ProgramCall
+from pops.time.operator_resolution import resolve_operator_handle
+from pops.time.program_value_validation import (
+    merge_state_spaces, rate_space_for, require_declared_state_space, require_owned,
+    validate_input_regions,
+)
 from pops.time.values import (
-    Value, _Coeff, _Operator, _authoring_source_location, _resolve_handle,
-    _state_base_name, _to_affine,
+    ProgramValue, _Affine, _Coeff, _Operator, _authoring_source_location, _resolve_handle,
+    _to_affine,
 )
 
 if TYPE_CHECKING:
     from pops.time._program_contract import _ProgramBase
 else:
     _ProgramBase = object
+
+_UNCHANGED = object()
 
 
 class _ProgramCore(_ProgramCall, _ProgramConstants, _ProgramBase):
@@ -27,16 +34,22 @@ class _ProgramCore(_ProgramCall, _ProgramConstants, _ProgramBase):
     """
 
     # --- node construction ---
-    def _new(self, vtype: Any, op: Any, inputs: Any, attrs: Any, name: Any, block: Any) -> Any:
-        for v in inputs:
-            if isinstance(v, Value) and v.prog is not self:
-                raise ValueError("IR value %r belongs to a different Program" % (v,))
+    def _new(self, vtype: Any, op: Any, inputs: Any, attrs: Any, name: Any, block: Any, *,
+             space: Any = None, field_context: Any = None) -> Any:
+        region = self._current_region()
+        validate_input_regions(self, inputs, region, "IR op %r" % op)
         vid = self._next_id
+        if name is None:
+            name = "%s%d" % (op, vid)
+        elif not isinstance(name, str) or not name:
+            raise ValueError("IR op %r name must be a non-empty string or None" % op)
         self._next_id += 1
-        v = Value(self, vid, vtype, op, [i for i in inputs if isinstance(i, Value)],
-                  attrs, name or ("%s%d" % (op, vid)), block)
-        if self._capture_source:
-            v.source_location = _authoring_source_location()
+        source_location = _authoring_source_location() if self._capture_source else None
+        v = ProgramValue(self, vid, vtype, op, [i for i in inputs if isinstance(i, ProgramValue)],
+                         attrs, name, block,
+                         space=space, source_location=source_location,
+                         field_context=field_context, region=region)
+        self._issued_values[id(v)] = v
         # Inside a control-flow recording scope (cond_fn / body_fn of a while_), ops go into the active
         # sub-block, NOT the flat self._values: a while body must RE-EXECUTE each iteration, so its ops
         # are owned by the while op and re-emitted in the loop, never walked once at the top level.
@@ -46,13 +59,70 @@ class _ProgramCore(_ProgramCall, _ProgramConstants, _ProgramBase):
             self._values.append(v)
         return v
 
+    def _canonical_value(self, value: Any) -> Any:
+        """Return the current immutable record for ``value``'s SSA id.
+
+        Builder completion (a named view, a schedule or a matrix-free apply body) replaces a record
+        atomically instead of mutating it.  Existing external references remain usable because the
+        SSA id is stable and every completion boundary canonicalizes through this helper.
+        """
+        if (not isinstance(value, ProgramValue) or value.prog is not self
+                or self._issued_values.get(id(value)) is not value):
+            return value
+        for block in reversed(self._recording):
+            for current in reversed(block):
+                if current.id == value.id:
+                    return current
+        for current in reversed(self._values):
+            if current.id == value.id:
+                return current
+        return value
+
+    def _replace_value(self, value: Any, *, attrs: Any = _UNCHANGED, name: Any = _UNCHANGED,
+                       space: Any = _UNCHANGED, field_context: Any = _UNCHANGED) -> Any:
+        """Replace one builder-owned SSA record with a newly constructed immutable record."""
+        if getattr(self, "_frozen", False):
+            raise RuntimeError(
+                "pops.time.Program %r is frozen: cannot replace an authored IR record" % self.name)
+        if self._issued_values.get(id(value)) is not value:
+            raise ValueError("cannot replace a ProgramValue not authored by this Program")
+        current = self._canonical_value(value)
+        if not isinstance(current, ProgramValue) or current.prog is not self:
+            raise ValueError("cannot replace a ProgramValue owned by another Program")
+        replacement = ProgramValue(
+            self,
+            current.id,
+            current.vtype,
+            current.op,
+            current.inputs,
+            current.attrs if attrs is _UNCHANGED else attrs,
+            current.name if name is _UNCHANGED else name,
+            current.block,
+            space=current.space if space is _UNCHANGED else space,
+            source_location=current.source_location,
+            field_context=(current.field_context if field_context is _UNCHANGED else field_context),
+            region=current.region,
+        )
+        self._issued_values[id(replacement)] = replacement
+        for collection in list(reversed(self._recording)) + [self._values]:
+            for index, candidate in enumerate(collection):
+                if candidate.id == current.id:
+                    collection[index] = replacement
+                    for block, committed in tuple(self._commits.items()):
+                        if committed.id == current.id:
+                            self._commits[block] = replacement
+                    if self._dt_bound is not None and self._dt_bound[1].id == current.id:
+                        self._dt_bound = (self._dt_bound[0], replacement)
+                    return replacement
+        raise ValueError("ProgramValue #%d is not present in its Program" % current.id)
+
     def state(self, arg: Any = None, space: Any = None, *, block: Any = None) -> Any:
         """Reference the current conservative state of a block at the start of the step.
 
         Two forms (additive; the positional form is the historical one, byte-identical):
 
           - ``P.state("plasma")`` / ``P.state("plasma", space=...)`` (LEGACY) returns the State
-            :class:`pops.time.values.Value` of block ``"plasma"`` -- the positional argument is the
+            :class:`pops.time.values.ProgramValue` of block ``"plasma"`` -- the positional argument is the
             block name;
           - ``P.state("U", block="plasma")`` (Spec 5 sec.5.3.1) returns a
             :class:`pops.time.handles.TimeState` -- a family of typed temporal-version handles
@@ -63,16 +133,28 @@ class _ProgramCore(_ProgramCall, _ProgramConstants, _ProgramBase):
 
         @p space (Spec 2): the operator-first :class:`pops.model.StateSpace` this block instantiates.
         It is recorded for type checking (a State tagged with space U cannot be combined with a
-        Rate(V), and an operator expecting state U cannot be called on it) and is NOT serialized into
-        the IR. ``None`` keeps the legacy untyped state (no space checks)."""
+        Rate(V), and an operator expecting state U cannot be called on it) and in the canonical IR
+        identity because component order affects generated kernels. ``None`` keeps an untyped state
+        (no space checks)."""
+        self._guard_mutable("declare a state")
         if block is not None:
-            from pops.time.handles import TimeState
-            return TimeState(self, block, name=arg or "U")
+            if not isinstance(block, str) or not block:
+                raise ValueError("state: block must be a non-empty string")
+            state_name = "U" if arg is None else arg
+            if not isinstance(state_name, str) or not state_name:
+                raise ValueError("state: name must be a non-empty string")
+            if space is None and block in self._state_spaces:
+                space = self._state_spaces[block]
+            if space is None:
+                space = self._default_state_space
+            require_declared_state_space(self, block, space)
+            return self._time_state(block, state_name, space)
         if not isinstance(arg, str) or not arg:
             raise ValueError("state: block must be a non-empty string")
-        v = self._new("state", "state", (), {}, arg, arg)
-        v.space = space
-        return v
+        if space is None:
+            space = self._default_state_space
+        require_declared_state_space(self, arg, space)
+        return self._new("state", "state", (), {}, arg, arg, space=space)
 
     def solve_fields(self, name: Any = None, state: Any = None, field: Any = None) -> Any:
         """Solve the elliptic fields from ``state`` and return a FieldContext. Accepts
@@ -82,12 +164,12 @@ class _ProgramCore(_ProgramCall, _ProgramConstants, _ProgramBase):
         the default Poisson coupling; its derived aux populate that field's named aux channel. The
         multi-field RUNTIME is DEFERRED: a non-None @p field lowers to a clear NotImplementedError
         (the IR records it so a program reads cleanly when the runtime lands)."""
-        # A defined temporal-version handle (U.stage(k) / U.next / U.prev) resolves to its Value
-        # here so it composes wherever a State does; a plain Value / None / str is unchanged.
+        # A readable temporal handle (U.stage(k) / U.prev(lag)) resolves through Program-owned tables
+        # here so it composes wherever a State does; a plain ProgramValue / None / str is unchanged.
         name, state = _resolve_handle(name), _resolve_handle(state)
-        if isinstance(name, Value) and state is None:
+        if isinstance(name, ProgramValue) and state is None:
             name, state = None, name
-        if not (isinstance(state, Value) and state.vtype == "state"):
+        if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("solve_fields: a State value is required")
         if field is not None and not (isinstance(field, str) and field):
             raise ValueError("solve_fields: field must be a non-empty named elliptic field")
@@ -95,15 +177,17 @@ class _ProgramCore(_ProgramCall, _ProgramConstants, _ProgramBase):
         # (empty attrs) -> the .so cache key of an existing time program is byte-identical (no spurious
         # invalidation from this feature).
         attrs = {"field": field} if field is not None else {}
-        v = self._new("fields", "solve_fields", (state,), attrs, name, state.block)
         # ADC-588: tag the value with a typed FieldContext (the "solve_fields returns a FieldContext"
         # contract, now a real object). The default problem exposes the historical phi/grad outputs;
         # a named field exposes its own single output. The context is build-time metadata only, NEVER
-        # serialized into the IR -> the .so cache key stays byte-identical.
+        # serialized as canonical provenance so validation, rewrites and cache identity agree.
         from pops.time.field_context import DEFAULT_FIELD_PROBLEM, FieldContext
         outputs = ("phi", "grad_x", "grad_y") if field is None else (field,)
-        v.field_context = FieldContext(field or DEFAULT_FIELD_PROBLEM, state.block, state.id, outputs)
-        return v
+        context = FieldContext(
+            field or DEFAULT_FIELD_PROBLEM, ((state.block, state.id),), outputs)
+        return self._new(
+            "fields", "solve_fields", (state,), attrs, name, state.block,
+            field_context=context, space=(self._default_field_space if field is None else None))
 
     def solve_fields_from_blocks(self, states: Any, name: Any = None) -> Any:
         """Solve the elliptic fields from the SIMULTANEOUS stage states of MULTIPLE blocks (spec
@@ -126,19 +210,23 @@ class _ProgramCore(_ProgramCall, _ProgramConstants, _ProgramBase):
             raise ValueError("solve_fields_from_blocks: a non-empty list of State values is required")
         seen = set()
         for s in states:
-            if not (isinstance(s, Value) and s.vtype == "state"):
+            if not (isinstance(s, ProgramValue) and s.vtype == "state"):
                 raise ValueError("solve_fields_from_blocks: every entry must be a State value")
             if s.block in seen:
                 raise ValueError("solve_fields_from_blocks: block '%s' listed twice" % s.block)
             seen.add(s.block)
-        # The FieldContext is attached to the first listed block (an arbitrary but stable owner).
-        v = self._new("fields", "solve_fields_from_blocks", tuple(states), {}, name, states[0].block)
-        # ADC-588: typed FieldContext for the coupled solve -- the shared default Poisson, owned by
-        # the first listed block, stage-sourced by that block's state (build-time metadata only).
+        # A coupled solve carries EVERY exact block/state source. It has no singular block owner:
+        # projecting onto states[0] would allow only that block to be checked and silently discard
+        # the provenance of every other simultaneous override.
         from pops.time.field_context import DEFAULT_FIELD_PROBLEM, FieldContext
-        v.field_context = FieldContext(
-            DEFAULT_FIELD_PROBLEM, states[0].block, states[0].id, ("phi", "grad_x", "grad_y"))
-        return v
+        context = FieldContext(
+            DEFAULT_FIELD_PROBLEM,
+            tuple((state.block, state.id) for state in states),
+            ("phi", "grad_x", "grad_y"),
+        )
+        return self._new(
+            "fields", "solve_fields_from_blocks", tuple(states), {}, name, None,
+            field_context=context, space=self._default_field_space)
 
     # --- operator-first calls (Spec 2) -------------------------------------------
     def bind_operators(self, source: Any) -> Any:
@@ -150,11 +238,43 @@ class _ProgramCore(_ProgramCall, _ProgramConstants, _ProgramBase):
         the model passed to ``compile_problem``; operator-first Programs and the ``pops.lib.time``
         macros bind the module's operators here.
         """
+        self._guard_mutable("bind operators")
         reg = source.operator_registry() if hasattr(source, "operator_registry") else source
         if not (hasattr(reg, "get") and hasattr(reg, "names")):
             raise TypeError("bind_operators: expected an OperatorRegistry or an object exposing "
                             "operator_registry(); got %r" % (source,))
         self._registry = reg
+        inferred = []
+        inferred_fields = []
+        for operator_name in reg.names():
+            signature = reg.get(operator_name).signature
+            for candidate in signature.inputs:
+                if getattr(candidate, "kind", None) == "state" and candidate not in inferred:
+                    inferred.append(candidate)
+            output = signature.output
+            if getattr(output, "kind", None) == "field" and output not in inferred_fields:
+                inferred_fields.append(output)
+        self._default_state_space = inferred[0] if len(inferred) == 1 else None
+        self._default_field_space = inferred_fields[0] if len(inferred_fields) == 1 else None
+        # A model may finish declaring imposed aux fields after an early Program binding. Rebinding
+        # before freeze widens already-authored FieldContext values to the registry's now-authoritative
+        # complete FieldSpace by immutable SSA replacement; stale external references canonicalize by
+        # id. This changes the IR hash and never silently keeps the earlier partial type.
+        if self._default_field_space is not None:
+            for value in tuple(self._values):
+                if (value.vtype == "fields" and value.space != self._default_field_space
+                        and (value.space is None
+                             or value.space.name == self._default_field_space.name)):
+                    self._replace_value(value, space=self._default_field_space)
+        # Handles are scoped to the declaring model, not merely to a local operator name.  Retain
+        # the owner independently from the registry because several derived registry views are
+        # intentionally inert/name-keyed and do not carry their model facade themselves.
+        owner = getattr(source, "owner_path", None)
+        if owner is None:
+            owner = getattr(getattr(source, "_m", None), "owner_path", None)
+        if owner is None:
+            owner = getattr(reg, "owner_path", None)
+        self._registry_owner = owner
         return self
 
     def rhs(self, name: Any = None, state: Any = None, fields: Any = None, *,
@@ -170,8 +290,8 @@ class _ProgramCore(_ProgramCall, _ProgramConstants, _ProgramBase):
         ``fields`` is the explicit FieldContext any field-dependent source reads (no implicit global
         aux). A ``Flux()`` in the list adds the ``-div F`` base (its absence -> source only); every
         source term -- a :class:`pops.numerics.terms.SourceTerm` / :class:`~pops.numerics.terms.\
-LocalTerm`, an :class:`pops.model.OperatorHandle` from ``m.source_term``, or a plain source NAME
-        string -- appends its name to the folded sources. So ``terms=[Flux(), electric]`` is
+LocalTerm`, or the :class:`pops.model.OperatorHandle` returned by ``m.source_term`` -- appends its
+        registered name to the folded sources. So ``terms=[Flux(), electric]`` is
         ``-div F + electric``, ``terms=[Flux()]`` is flux only, ``terms=[electric]`` is the named
         source only, and ``terms=[]`` is the zero RHS.
 
@@ -191,7 +311,7 @@ LocalTerm`, an :class:`pops.model.OperatorHandle` from ``m.source_term``, or a p
                 "pass P.rhs(state=U, fields=f, terms=[Flux(), source]) (a pops.numerics.terms.Flux "
                 "plus the source terms to fold in)" % extra)
         from pops.time._rhs_terms import terms_to_flux_sources
-        flux, sources = terms_to_flux_sources(terms)
+        flux, sources = terms_to_flux_sources(self, terms)
         return self._rhs_legacy(name=name, state=state, fields=fields, flux=flux, sources=sources)
 
     def _rhs_legacy(self, name: Any = None, state: Any = None, fields: Any = None, flux: Any = True,
@@ -211,18 +331,24 @@ LocalTerm`, an :class:`pops.model.OperatorHandle` from ``m.source_term``, or a p
         list of NAMED ``m.flux_term`` assembles -div of their SUM (mixing ``"default"`` with named
         fluxes is rejected)."""
         state, fields = _resolve_handle(state), _resolve_handle(fields)
-        if isinstance(name, Value):
+        if isinstance(name, ProgramValue):
             raise ValueError("rhs: pass state=/fields= by keyword (first arg is the debug name)")
-        if not (isinstance(state, Value) and state.vtype == "state"):
+        if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("rhs: a State value is required (state=...)")
-        if fields is not None and not (isinstance(fields, Value) and fields.vtype == "fields"):
+        if fields is not None and not (isinstance(fields, ProgramValue) and fields.vtype == "fields"):
             raise ValueError("rhs: fields must be a FieldContext from solve_fields")
+        field_context = None
+        if fields is not None:
+            from pops.time.field_context import require_field_read
+            field_context = require_field_read(fields, state, "rhs")
         # Preserve None (legacy default = flux + default source) DISTINCT from [] (flux only): the
         # codegen routes on whether "default" is requested, and None is the legacy "default included".
         src = list(sources) if sources is not None else None
         attrs = {"flux": bool(flux), "sources": src, "fluxes": list(fluxes) if fluxes else None}
         inputs = (state, fields) if fields is not None else (state,)
-        return self._new("rhs", "rhs", inputs, attrs, name, state.block)
+        return self._new(
+            "rhs", "rhs", inputs, attrs, name, state.block, space=rate_space_for(state.space),
+            field_context=field_context)
 
     def linear_combine(self, name: Any = None, expr: Any = None) -> Any:
         """Materialize an affine combination of State/RHS values into a new State. Accepts
@@ -237,48 +363,56 @@ LocalTerm`, an :class:`pops.model.OperatorHandle` from ``m.source_term``, or a p
         are different grid shapes); the codegen lowers both through the same axpy/lincomb idiom."""
         if expr is None and not isinstance(name, str):
             name, expr = None, name
-        aff = _to_affine(expr)._merge()
+        raw = tuple((self._canonical_value(value), coeff)
+                    for value, coeff in _to_affine(expr).terms)
+        for value, _ in raw:
+            require_owned(self, value, "linear_combine")
+        aff = _Affine(raw)._merge()
         if not aff:
             raise ValueError("linear_combine: empty combination")
-        # ADC-427: an affine whose terms are ALL scalar_field yields a scalar_field (block=None, like
-        # P.scalar_field) -- the condensed-Schur phi^{n+1} extrapolation over 1-component potentials.
-        # A combine that contains ANY State/RHS term keeps the historical State result (the state branch
-        # below picks its block/space), so a mixed State+scalar_field combine -- the BDF Newton update
-        # 1.0*Uk + 1.0*dU, where dU is a solve_linear scalar_field iterate over an n-component state --
-        # is byte-identical to before. The scalar branch fires ONLY for a pure scalar_field affine.
+        if any(v.vtype == "scalar_field" for v, _ in aff) and not all(
+                v.vtype == "scalar_field" for v, _ in aff):
+            raise ValueError("linear_combine: scalar fields cannot mix with State/Rate values")
+        # ADC-427: an affine whose terms are ALL scalar_field yields a scalar_field.  A solve_linear
+        # result retains the block provenance of its rhs, while a raw P.scalar_field scratch is
+        # unqualified (block=None).  Preserve the single known block across the combination: otherwise
+        # a valid ``phi_next = phi + correction`` would lose its provenance and could not be committed
+        # through the block-qualified endpoint.  Two distinct known blocks are a type error; silently
+        # choosing the first would make a cross-block commit possible.  Unqualified scratch terms may
+        # participate alongside one qualified value, but cannot manufacture a block on their own.
         if all(v.vtype == "scalar_field" for v, _ in aff):
+            blocks = {v.block for v, _ in aff if v.block is not None}
+            if len(blocks) > 1:
+                raise ValueError(
+                    "cannot combine scalar fields owned by different blocks %s"
+                    % sorted(blocks))
+            block = next(iter(blocks), None)
             inputs = tuple(v for v, _ in aff)
-            coeffs = [c.as_dict() for _, c in aff]
-            return self._new("scalar_field", "linear_combine", inputs, {"coeffs": coeffs}, name, None)
-        block = None
-        state_space = None
-        for v, _ in aff:
-            if v.vtype == "state":
-                block = v.block
-                if state_space is None:
-                    state_space = v.space
-                break
-        if block is None:
-            block = aff[0][0].block
-        # Operator-first type check (Spec 2): every State/Rate term must live over ONE StateSpace.
-        # Combining a Rate(U) with a State(V) (V != U) is a type error; untyped (legacy) terms skip.
-        spaces = {nm for nm in (_state_base_name(v.space) for v, _ in aff) if nm is not None}
-        if len(spaces) > 1:
-            raise ValueError(
-                "cannot combine values over different state spaces %s; a State and the Rate(state) "
-                "added to it must share one StateSpace" % sorted(spaces))
+            coeffs = [c.to_polynomial() for _, c in aff]
+            return self._new(
+                "scalar_field", "linear_combine", inputs, {"coeffs": coeffs}, name, block)
         inputs = tuple(v for v, _ in aff)
-        coeffs = [c.as_dict() for _, c in aff]
-        out = self._new("state", "linear_combine", inputs, {"coeffs": coeffs}, name, block)
-        out.space = state_space  # the combine result is a State over the same space
-        return out
+        # Structural type errors outrank the secondary block-label mismatch.
+        state_space = merge_state_spaces(inputs, "linear_combine")
+        blocks = {value.block for value in inputs if value.block is not None}
+        if len(blocks) > 1:
+            raise ValueError(
+                "linear_combine: cannot combine values owned by different blocks %s"
+                % sorted(blocks))
+        block = next(iter(blocks), None)
+        from pops.time.field_context import merge_field_contexts
+        field_context = merge_field_contexts(inputs, "linear_combine")
+        coeffs = [c.to_polynomial() for _, c in aff]
+        return self._new(
+            "state", "linear_combine", inputs, {"coeffs": coeffs}, name, block,
+            space=state_space, field_context=field_context)
 
     # --- named sources / local linear operators (Phase 4 / ADC-403) ---
     @property
     def I(self) -> Any:  # noqa: E743  -- the mathematical identity operator (matches the spec's P.I)
         """The identity operator, for building a local linear operator ``self.I - a * L`` (L a
         linear source). Consumed by `solve_local_linear`."""
-        return _Operator(_Coeff({0: 1.0}), [])
+        return _Operator(_Coeff({0: 1}), [])
 
     def linear_source(self, operator: Any) -> Any:
         """Reference a model linear-source operator ``L`` (declared via ``m.linear_source`` /
@@ -287,40 +421,66 @@ LocalTerm`, an :class:`pops.model.OperatorHandle` from ``m.source_term``, or a p
         (ADC-532 / ADC-625): a free string is REFUSED here with a ``TypeError`` naming the handle form;
         the lowering / lib.time macros lower through the ``_linear_source`` seam with the bare name, so
         the IR is byte-identical to the historical string form."""
-        from pops.model import OperatorHandle
         if isinstance(operator, str):
             raise TypeError(
                 "linear_source: a free string %r is not accepted on the public route; pass the typed "
                 "OperatorHandle the declarer returned (P.linear_source(handle))" % (operator,))
-        if not isinstance(operator, OperatorHandle):
-            raise TypeError(
-                "linear_source: expected an pops.model.OperatorHandle, got %r" % (operator,))
-        return self._linear_source(operator.name)
+        resolved = resolve_operator_handle(
+            self, operator, where="linear_source",
+            expected_kinds="local_linear_operator")
+        return self._linear_source(resolved.name)
 
-    def source(self, name: Any, state: Any = None, fields: Any = None) -> Any:
-        """Evaluate a single named model source ``S_name(U, fields)`` (``m.source_term``) on its own.
-        Returns an RHS-like value (a dU/dt contribution) usable in linear combinations. Named sources
-        are never summed implicitly; this requests exactly one."""
+    def source(self, operator: Any, state: Any = None, fields: Any = None) -> Any:
+        """Evaluate one typed model source ``S(U, fields)`` on its own.
+
+        ``operator`` is the exact :class:`pops.model.OperatorHandle` returned by
+        ``m.source_term``. A free name is refused; the private :meth:`_source` seam carries the
+        registry-local name after owner/kind/signature validation. Returns an RHS-like value.
+        """
+        if isinstance(operator, str):
+            raise TypeError(
+                "source: a free string %r is not accepted on the public route; pass the "
+                "OperatorHandle returned by m.source_term(...)" % operator)
+        resolved = resolve_operator_handle(
+            self, operator, where="source", expected_kinds="local_source")
+        source_name = resolved.lowering.get("source", resolved.name)
+        if source_name == "default":
+            return self._rhs_legacy(
+                name=operator.name, state=state, fields=fields,
+                flux=False, sources=["default"])
+        return self._source(source_name, state=state, fields=fields)
+
+    def _source(self, name: Any, state: Any = None, fields: Any = None) -> Any:
+        """Private lowering seam for a registry-local source name."""
         state, fields = _resolve_handle(state), _resolve_handle(fields)
         if not isinstance(name, str) or not name:
-            raise ValueError("source: a non-empty source name is required")
-        if not (isinstance(state, Value) and state.vtype == "state"):
+            raise ValueError("_source: a non-empty source name is required")
+        if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("source: a State value is required (state=...)")
-        if fields is not None and not (isinstance(fields, Value) and fields.vtype == "fields"):
+        if fields is not None and not (isinstance(fields, ProgramValue) and fields.vtype == "fields"):
             raise ValueError("source: fields must be a FieldContext from solve_fields")
+        field_context = None
+        if fields is not None:
+            from pops.time.field_context import require_field_read
+            field_context = require_field_read(fields, state, "source")
         inputs = (state, fields) if fields is not None else (state,)
-        return self._new("rhs", "source", inputs, {"source": name}, name, state.block)
+        return self._new(
+            "rhs", "source", inputs, {"source": name}, name, state.block,
+            space=rate_space_for(state.space), field_context=field_context)
 
     def _check_operator_state(self, l_value: Any, state_value: Any, where: Any) -> Any:
         """Operator-first type check (Spec 2): a LocalLinearOperator L: U -> U may only act on a State
         over U. Fires only when both carry space tags (P.call / P.state(space=)); legacy skips."""
-        lop = getattr(l_value, "space", None) if isinstance(l_value, Value) else None
-        dom = getattr(lop, "domain_name", None)
-        st = _state_base_name(getattr(state_value, "space", None))
-        if dom is not None and st is not None and dom != st:
+        lop = getattr(l_value, "space", None) if isinstance(l_value, ProgramValue) else None
+        domain = getattr(lop, "domain", None)
+        range_ = getattr(lop, "range", None)
+        state_space = getattr(state_value, "space", None)
+        if (domain is not None and range_ is not None and state_space is not None
+                and (domain != state_space or range_ != state_space)):
             raise ValueError(
-                "%s: operator maps %s -> %s but was applied to a State over %r"
-                % (where, dom, getattr(lop, "range_name", dom), st))
+                "%s: operator maps %r -> %r but was applied to a State over %r; "
+                "space compatibility is structural, not name-based"
+                % (where, domain, range_, state_space))
 
     def apply(self, operator: Any = None, state: Any = None, fields: Any = None,
               name: Any = None) -> Any:
@@ -334,4 +494,3 @@ LocalTerm`, an :class:`pops.model.OperatorHandle` from ``m.source_term``, or a p
                 "apply: a free string %r is not accepted on the public route; pass a typed "
                 "P.linear_source(handle) value or the OperatorHandle" % (operator,))
         return self._apply(operator, state=state, fields=fields, name=name)
-

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops.ir.literals import scalar_cpp
+
 from pops.codegen.program_emit_kernels import (
     _aux_comp,  # noqa: F401
     _cell_locals,
@@ -291,13 +293,13 @@ def _emit_solve_local_nonlinear_kernel(model: Any, v: Any, guess_var: Any, out_v
     with a relative ``eps`` so it scales with the iterate magnitude."""
     impl = _model_impl(model)
     n = len(impl.cons_names)
-    tol = repr(float(v.attrs["tol"]))
+    tol = scalar_cpp(v.attrs["tol"])
     max_iter = int(v.attrs["max_iter"])
     # ADC-617: the FD Jacobian relative step. None on the node -> the historical "1e-7" literal
     # VERBATIM (so the emitted kernel and its program hash stay byte-identical to before). A configured
     # fd_eps replaces the literal, and since fd_eps is a hashed node attribute the cache busts.
     fd_eps = v.attrs.get("fd_eps")
-    fd_eps_lit = "1e-7" if fd_eps is None else repr(float(fd_eps))
+    fd_eps_lit = "1e-7" if fd_eps is None else scalar_cpp(fd_eps)
     # The aux fields the residual reads: bind them once per cell (constant across the Newton iterates),
     # so the residual lambda captures them by reference. Gather the dependency set over every term Expr.
     term_exprs = []

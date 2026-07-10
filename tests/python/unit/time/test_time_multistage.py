@@ -99,7 +99,7 @@ def ssprk2_program():
     U1 = P.linear_combine("U1", U0 + dt * k0)
     f1 = P.solve_fields(U1)
     k1 = P._rhs_legacy(state=U1, fields=f1, flux=True, sources=["default"])
-    P.commit("ions", P.linear_combine("U2", 0.5 * U0 + 0.5 * (U1 + dt * k1)))
+    P.commit(P.state("U", block="ions").next, P.linear_combine("U2", 0.5 * U0 + 0.5 * (U1 + dt * k1)))
     return P
 
 
@@ -114,7 +114,7 @@ def rk4_program():
     k3 = P._rhs_legacy(state=U2, fields=P.solve_fields(U2), flux=True, sources=["default"])
     U3 = P.linear_combine("U3", U0 + dt * k3)
     k4 = P._rhs_legacy(state=U3, fields=P.solve_fields(U3), flux=True, sources=["default"])
-    P.commit("ions", P.linear_combine(
+    P.commit(P.state("U", block="ions").next, P.linear_combine(
         "Unp1", U0 + dt / 6.0 * k1 + dt / 3.0 * k2 + dt / 3.0 * k3 + dt / 6.0 * k4))
     return P
 

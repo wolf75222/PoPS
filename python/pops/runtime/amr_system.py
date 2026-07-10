@@ -16,6 +16,7 @@ from pops.runtime import threading as _threading
 from pops.runtime._lifecycle import (
     FROZEN_STRUCTURAL as _FROZEN_STRUCTURAL, freeze_error as _freeze_error,
     guard_assembling as _guard_assembling, _LifecycleMixin)
+from pops.runtime._numeric import native_real
 from pops.runtime.bricks import Spatial, Explicit, Split
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
@@ -301,13 +302,18 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
                           getattr(time, "substeps", 1), getattr(time, "stride", 1),
                           getattr(time, "implicit_vars", []), getattr(time, "implicit_roles", []),
                           getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS),
-                          getattr(time, "newton_rel_tol", NEWTON_DEFAULT_REL_TOL),
-                          getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL),
-                          getattr(time, "newton_fd_eps", NEWTON_DEFAULT_FD_EPS),
-                          getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING),
+                          native_real(getattr(time, "newton_rel_tol", NEWTON_DEFAULT_REL_TOL),
+                                      where="AmrSystem.add_block.newton_rel_tol"),
+                          native_real(getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL),
+                                      where="AmrSystem.add_block.newton_abs_tol"),
+                          native_real(getattr(time, "newton_fd_eps", NEWTON_DEFAULT_FD_EPS),
+                                      where="AmrSystem.add_block.newton_fd_eps"),
+                          native_real(getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING),
+                                      where="AmrSystem.add_block.newton_damping"),
                           getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
                           getattr(time, "newton_diagnostics", False),
-                          getattr(spatial, "positivity_floor", 0.0))
+                          native_real(getattr(spatial, "positivity_floor", 0.0),
+                                      where="AmrSystem.add_block.positivity_floor"))
 
     def field(self, name: Any) -> Any:
         """Return the solved potential of a NAMED elliptic field (ADC-428) as an (n, n) array.

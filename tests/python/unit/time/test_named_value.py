@@ -3,8 +3,8 @@
 ``T.value("name", expr)`` names an intermediate SSA value and lowers to the EXACT
 ``program.define(name, expr)`` path, so it produces the byte-identical IR as the long
 ``T.define("name", expr)`` form. ``U.stage(k)`` stays the temporal-version handle only and
-``T.define(U.next, value)`` stays the commit door. The SSA invariants (single definition, no redefine,
-use-before-define) are unchanged; the named values appear in the structured inspection.
+``T.commit(U.next, value)`` is the only end-of-step write door. The SSA invariants (single
+definition, no redefine, use-before-define) are unchanged; named values appear in inspection.
 
 Pure Python (``_ir_hash`` is the IR fingerprint; no compilation); skips cleanly if pops is
 unavailable. Never fakes the engine.
@@ -27,8 +27,8 @@ def _heun(P, use_value):
     U_star = (P.value(name, U.n + P.dt * R) if use_value
               else P.define(name, U.n + P.dt * R))
     R_star = P._rhs_legacy(state=U_star, fields=P.solve_fields(U_star), sources=["default"])
-    P.define(U.next, U.n + 0.5 * P.dt * R + 0.5 * P.dt * R_star)
-    P.commit(U.next)
+    U_next = P.value("U_next", U.n + 0.5 * P.dt * R + 0.5 * P.dt * R_star)
+    P.commit(U.next, U_next)
 
 
 def test_value_ir_byte_identical_to_define():
@@ -74,7 +74,7 @@ def test_value_refuses_a_version_handle():
     """T.value is for free intermediates: a version handle is refused pointing at T.define."""
     P = Program("nover")
     U = P.state("U", block="plasma")
-    with pytest.raises(TypeError, match="T.define"):
+    with pytest.raises(TypeError, match="commit"):
         P.value(U.next, U.n)
     with pytest.raises(TypeError, match="T.define"):
         P.value(U.stage(1), U.n)
@@ -101,16 +101,16 @@ def test_ssa_invariants_unchanged():
     print("OK  SSA invariants (use-before-define / no-redefine / read-only n) unchanged")
 
 
-def test_define_next_stays_the_commit_door():
-    """T.define(U.next, value) + T.commit(U.next) still lowers and commits (unchanged door)."""
+def test_next_is_a_commit_only_endpoint():
+    """T.commit(U.next, value) is the only end-of-step write door."""
     P = Program("door")
     U = P.state("U", block="plasma")
     R = P._rhs_legacy(state=U.n, fields=P.solve_fields(U.n), sources=["default"])
-    U_next = P.define(U.next, U.n + P.dt * R)
-    P.commit(U.next)
+    U_next = P.value("U_next", U.n + P.dt * R)
+    P.commit(U.next, U_next)
     P.validate()
     assert P.commits()["plasma"] is U_next
-    print("OK  T.define(U.next, ...) + T.commit(U.next) remains the commit door")
+    print("OK  T.commit(U.next, value) is the commit-only endpoint door")
 
 
 def main():
@@ -119,7 +119,7 @@ def main():
     test_value_returns_composable_handle()
     test_value_refuses_a_version_handle()
     test_ssa_invariants_unchanged()
-    test_define_next_stays_the_commit_door()
+    test_next_is_a_commit_only_endpoint()
     print("OK  test_named_value")
 
 

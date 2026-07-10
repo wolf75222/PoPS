@@ -22,6 +22,7 @@ from typing import Any
 from pops.ir import (  # noqa: F401  -- node classes used by Param's operator overloads
     _wrap, Const, Add, Sub, Mul, Div, Pow, Neg, Var)
 from pops.ir.values import RuntimeParamRef
+from pops.model.handles import OwnerPath
 
 from ._authoring_vars import _VariablesMixin
 from ._authoring_flux import _FluxMixin
@@ -31,6 +32,7 @@ from ._authoring_view import _OperatorViewMixin
 from ._authoring_eval import _EvalMixin
 from ._authoring_params import _RuntimeParamsMixin
 from ._authoring_codegen import _CodegenMixin
+from ._freeze import PhysicsFreezable
 
 
 class _BackendLazyMeta(type):
@@ -49,7 +51,7 @@ class _BackendLazyMeta(type):
         raise AttributeError(name)
 
 
-class HyperbolicModel(_VariablesMixin, _FluxMixin, _SourceMixin, _RiemannMixin,
+class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixin, _RiemannMixin,
                       _OperatorViewMixin, _EvalMixin, _RuntimeParamsMixin, _CodegenMixin,
                       metaclass=_BackendLazyMeta):
     """Hyperbolic model written as FORMULAS: conservative variables, primitives (defined by
@@ -58,8 +60,22 @@ class HyperbolicModel(_VariablesMixin, _FluxMixin, _SourceMixin, _RiemannMixin,
     The behaviour lives in the topical authoring mixins; this concrete class only assembles
     them and owns ``__init__`` (the full instance-attribute layout the mixins operate on)."""
 
+    _physics_mutators = frozenset({
+        "cons", "conservative_vars", "primitive", "aux", "aux_field",
+        "set_primitive_state", "set_conservative_from", "set_flux", "set_eigenvalues",
+        "flux_term", "set_wave_speeds", "set_wave_speeds_from_jacobian", "set_gamma",
+        "set_source", "set_elliptic_rhs", "elliptic_field", "source_term", "linear_source",
+        "rate_operator", "stability_speed", "stability_dt", "source_frequency", "projection",
+        "source_jacobian", "enable_hllc", "set_riemann_hooks", "enable_roe",
+        "roe_dissipation", "roe_from_jacobian",
+    })
+
     def __init__(self, name: Any) -> None:
+        if not isinstance(name, str) or not name:
+            raise TypeError("HyperbolicModel: name must be a non-empty string")
+        self._init_physics_freeze()
         self.name = name
+        self._owner_path = OwnerPath.fresh("model", name)
         self.cons_names = []
         self.prim_defs = {}     # name -> Expr (in terms of the cons / previous prims / aux)
         self.aux_names = []      # CANONICAL aux fields read (phi/grad/B_z/T_e), cf. AUX_CANONICAL
@@ -118,9 +134,13 @@ class HyperbolicModel(_VariablesMixin, _FluxMixin, _SourceMixin, _RiemannMixin,
                                    # Program-side ALIAS for ctx.rhs(flux=..., sources=..., fluxes=...): a
                                    # typed P.call(name) lowers to the SAME rhs IR, so the alias never enters
                                    # the model hash nor the codegen (its flux/sources are already hashed).
+    @property
+    def owner_path(self) -> OwnerPath:
+        """Immutable qualified identity anchor for every symbol declared by this model."""
+        return self._owner_path
 
 
-class Param:
+class Param(PhysicsFreezable):
     """NAMED parameter of a DSL model, usable like an Expr in formulas.
 
     Mode (a), constant fixed at compilation: `kind="const"` (default). The codegen INLINES every
@@ -147,8 +167,9 @@ class Param:
     def __init__(self, name: Any, value: Any, kind: str = "const") -> None:
         if kind not in ("const", "runtime"):
             raise ValueError("Param: kind 'const' | 'runtime' (got %r)" % (kind,))
+        self._init_physics_freeze()
         self.name = name
-        self.value = float(value)
+        self.value = value
         self.kind = kind
         if kind == "runtime":
             # SHARED RUNTIME node: all occurrences of the param in formulas point to this same

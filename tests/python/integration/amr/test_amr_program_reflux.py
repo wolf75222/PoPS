@@ -88,7 +88,7 @@ def _ssprk2_program(name):
     f1 = P.solve_fields("f1", U1)
     k1 = P._rhs_legacy("k1", state=U1, fields=f1, flux=True, sources=["default"])
     U2 = P.linear_combine("U2", 0.5 * U0 + 0.5 * (U1 + dt * k1))
-    P.commit("blk", U2)
+    P.commit(P.state("U", block="blk").next, U2)
     return P
 
 
@@ -104,7 +104,7 @@ def _midpoint_program(name):
     f1 = P.solve_fields("f1", U1)
     k1 = P._rhs_legacy("k1", state=U1, fields=f1, flux=True, sources=["default"])
     U2 = P.linear_combine("U2", U0 + dt * k1)
-    P.commit("blk", U2)
+    P.commit(P.state("U", block="blk").next, U2)
     return P
 
 

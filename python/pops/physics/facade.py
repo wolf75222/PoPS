@@ -20,9 +20,10 @@ from ._modelpkg import model as _model
 from .aux import aux_total_n_aux, roles_for  # noqa: F401  -- used in Model.compile
 from .model import HyperbolicModel, Param, _NO_KIND, _coerce_param
 from ._facade_compile import _FacadeCompileMixin
+from ._freeze import PhysicsFreezable
 
 
-class Model(_FacadeCompileMixin):
+class Model(PhysicsFreezable, _FacadeCompileMixin):
     """STABLE facade of a DSL model (Phase A). COMPOSES a private HyperbolicModel (_m, composition and
     NOT inheritance) and delegates each call to an existing method: no new numerics.
 
@@ -38,7 +39,19 @@ class Model(_FacadeCompileMixin):
 
     cf. docs/DSL_MODEL_DESIGN.md sections 1-3."""
 
+    _physics_mutators = frozenset({
+        "conservative_vars", "primitive", "primitive_vars", "aux", "aux_field",
+        "conservative_from", "flux", "flux_term", "eigenvalues", "wave_speeds",
+        "wave_speeds_from_jacobian", "stability_speed", "stability_dt", "source",
+        "source_term", "linear_source", "rate_operator", "rate", "field_solve",
+        "local_linear_map", "source_frequency", "source_jacobian", "projection",
+        "implicit_source", "enable_hllc", "set_riemann_hooks", "enable_roe",
+        "roe_dissipation", "roe_from_jacobian", "elliptic_rhs", "elliptic_field",
+        "gamma", "param",
+    })
+
     def __init__(self, name: Any) -> None:
+        self._init_physics_freeze()
         self._m = HyperbolicModel(name)
         self.params = {}   # name -> Param (introspection / reproducibility)
 
@@ -239,7 +252,8 @@ class Model(_FacadeCompileMixin):
         """
         from pops.model import OperatorHandle
         op = self._m.operator_registry().get(name)
-        return OperatorHandle(op.name, kind=op.kind, signature=op.signature)
+        return OperatorHandle(
+            op.name, kind=op.kind, owner=self._m.owner_path, signature=op.signature)
 
     def rate(self, name: Any, *, flux: bool = True, sources: Any = ("default",),
              fluxes: Any = None) -> Any:
@@ -443,7 +457,7 @@ class Model(_FacadeCompileMixin):
         elliptic_field / flux / rate_operator populate. dsl.Model is the PDE convenience
         facade; the Module is the model-free view a generic Program binds to (P.bind_operators).
         The Module carries no numerics; codegen still reads this Model via compile_problem."""
-        mod = _model.Module(self.name)
+        mod = _model.Module(self.name, owner=self._m.owner_path)
         st = self._m.state_space()
         mod.state_space(st.name, st.components, roles=st.roles, layout=st.layout,
                         storage=st.storage)
@@ -476,4 +490,3 @@ class Model(_FacadeCompileMixin):
     def operator_capabilities(self, name: Any) -> Any:
         """The capabilities dict of operator ``name``."""
         return dict(self._m.operator_registry().get(name).capabilities)
-

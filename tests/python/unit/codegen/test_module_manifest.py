@@ -8,6 +8,7 @@ ModelSpec POD, which is now quarantined off the ``pops`` root (``pops.runtime.Mo
 Pure Python (the model layer is import-free); skips if ``pops`` is not importable.
 """
 import json
+from fractions import Fraction
 
 import pytest
 
@@ -45,12 +46,13 @@ def _two_fluid_module():
 
 def test_manifest_schema_and_spaces():
     manifest = _small_module().manifest()
-    assert manifest.schema_version == model.manifest.SCHEMA_VERSION == 1
+    assert manifest.schema_version == model.manifest.SCHEMA_VERSION == 3
     assert manifest.name == "m"
-    assert manifest.state_spaces["U"]["components"] == ["rho", "mx", "my"]
+    assert manifest.state_spaces["U"]["components"] == ("rho", "mx", "my")
     assert manifest.state_spaces["U"]["roles"] == {"rho": "Density"}
-    assert manifest.field_spaces["fields"]["components"] == ["phi", "grad_x", "grad_y"]
-    assert manifest.params["alpha"]["default"] == 1.0
+    assert manifest.field_spaces["fields"]["components"] == ("phi", "grad_x", "grad_y")
+    assert manifest.params["alpha"]["default"] == {
+        "kind": "binary64", "value": 1.0.hex(), "target": "real"}
     assert manifest.aux["B_z"] == "cell_scalar"
     assert manifest.has_eigenvalues == {"x": False, "y": False}
     print("OK  manifest carries schema_version, spaces, params, aux")
@@ -74,7 +76,11 @@ def test_operator_entries_in_registration_order_with_ids():
     assert [e.name for e in entries] == ["op_a", "op_b"]
     assert [e.id for e in entries] == [0, 1]
     assert entries[0].kind == "local_rate" and entries[1].kind == "field_operator"
-    assert entries[0].inputs == ["U", "fields"]
+    assert entries[0].inputs == ("U", "fields")
+    assert entries[0].to_dict()["signature"] == {
+        "inputs": [u.to_data(), f.to_data()],
+        "output": model.Rate(u).to_data(),
+    }
     print("OK  operator entries are in registration order with stable ids")
 
 
@@ -94,11 +100,23 @@ def test_to_json_round_trips_through_json_loads():
     manifest = _small_module().manifest()
     blob = manifest.to_json()
     restored = json.loads(blob)
-    assert restored["schema_version"] == 1
+    assert restored["schema_version"] == 3
     assert restored["name"] == "m"
     assert restored["operators"][0]["name"] == "fields_from_state"
     assert restored == manifest.to_dict()
     print("OK  to_json round-trips through json.loads")
+
+
+def test_manifest_preserves_an_exact_rational_parameter_default():
+    mod = model.Module("exact")
+    mod.param("third", Fraction(1, 3), dtype="real64")
+
+    assert mod.manifest().params["third"]["default"] == {
+        "kind": "rational",
+        "numerator": "1",
+        "denominator": "3",
+        "target": "real64",
+    }
 
 
 def test_native_routes_and_abi_slot_present():
@@ -119,7 +137,7 @@ def test_coupled_rate_multi_output_names_bundle_without_new_flat_field():
     entry = manifest.operators.describe("collision")
     assert entry.kind == "coupled_rate"
     # inputs are the participating state spaces; the output is the RateBundle, named by its blocks
-    assert entry.inputs == ["electron_state", "ion_state"]
+    assert entry.inputs == ("electron_state", "ion_state")
     assert entry.output.startswith("RateBundle{")
     assert "electrons" in entry.output and "ions" in entry.output
     # no new flat per-block field on the entry: the manifest row exposes only the frozen slots

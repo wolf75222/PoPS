@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pops._bootstrap import ModelSpec
+from pops.runtime._numeric import native_real, positive_int
 from pops.runtime.bricks import Spatial, Explicit, Split
 from pops.runtime.routes import check_riemann_capability as _check_riemann_capability
 from pops.runtime.defaults import (
@@ -137,8 +138,12 @@ class _AmrSystemEquation(_AmrSystem):
                     "amr-schur path (the AMR stage reads the dedicated coarse B_z buffer). Keep "
                     "magnetic_field='B_z', or declare layout=Uniform(...) on the pops.Problem "
                     "(the mono-level route carries a general magnetic aux field).")
-            self._s.set_source_stage(name, src.kind, src.theta, src.alpha,
-                                     getattr(src, "krylov_tol", 0.0),
+            self._s.set_source_stage(
+                name, src.kind,
+                native_real(src.theta, where="AmrSystem.add_equation.theta"),
+                native_real(src.alpha, where="AmrSystem.add_equation.alpha"),
+                native_real(getattr(src, "krylov_tol", 0.0),
+                            where="AmrSystem.add_equation.krylov_tol"),
                                      getattr(src, "krylov_max_iters", 0),
                                      getattr(src, "density_spec", ""),
                                      getattr(src, "momentum_x_spec", ""),
@@ -147,14 +152,18 @@ class _AmrSystemEquation(_AmrSystem):
                                      # ADC-614: composite-FAC knobs of the multi-level Schur solve.
                                      getattr(src, "fac_max_iters", 0),
                                      getattr(src, "fac_fine_sweeps", 0),
-                                     getattr(src, "fac_tol", 0.0),
-                                     getattr(src, "fac_coarse_rel_tol", 0.0),
+                                     native_real(getattr(src, "fac_tol", 0.0),
+                                                 where="AmrSystem.add_equation.fac_tol"),
+                                     native_real(getattr(src, "fac_coarse_rel_tol", 0.0),
+                                                 where="AmrSystem.add_equation.fac_coarse_rel_tol"),
                                      getattr(src, "fac_coarse_cycles", 0),
                                      getattr(src, "fac_verbose", False))
             self._s.set_time_scheme(time.scheme)  # "lie" (Split) or "strang" (Strang)
             return
 
-        nsub = substeps if substeps is not None else getattr(time, "substeps", 1)
+        nsub = positive_int(
+            substeps if substeps is not None else getattr(time, "substeps", 1),
+            where="AmrSystem.add_equation.substeps")
 
         # --- ModelSpec: native bricks composed -> add_block (existing path) ---
         # We FORWARD stride (multirate, capstone iv) AND the partial IMEX mask implicit_vars /
@@ -169,13 +178,18 @@ class _AmrSystemEquation(_AmrSystem):
                               nsub, getattr(time, "stride", 1),
                               getattr(time, "implicit_vars", []), getattr(time, "implicit_roles", []),
                               getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS),
-                              getattr(time, "newton_rel_tol", NEWTON_DEFAULT_REL_TOL),
-                              getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL),
-                              getattr(time, "newton_fd_eps", NEWTON_DEFAULT_FD_EPS),
-                              getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING),
+                              native_real(getattr(time, "newton_rel_tol", NEWTON_DEFAULT_REL_TOL),
+                                          where="AmrSystem.add_equation.newton_rel_tol"),
+                              native_real(getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL),
+                                          where="AmrSystem.add_equation.newton_abs_tol"),
+                              native_real(getattr(time, "newton_fd_eps", NEWTON_DEFAULT_FD_EPS),
+                                          where="AmrSystem.add_equation.newton_fd_eps"),
+                              native_real(getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING),
+                                          where="AmrSystem.add_equation.newton_damping"),
                               getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
                               getattr(time, "newton_diagnostics", False),
-                              getattr(spatial, "positivity_floor", 0.0))  # Zhang-Shu floor (ADC-259)
+                              native_real(getattr(spatial, "positivity_floor", 0.0),
+                                          where="AmrSystem.add_equation.positivity_floor"))
             return
 
         if not isinstance(model, CompiledModel):
@@ -251,10 +265,13 @@ class _AmrSystemEquation(_AmrSystem):
         # 'symbol not found' cryptic message.
         from pops.codegen.abi import check_compiled_matches_module
         check_compiled_matches_module(getattr(compiled, "abi_key", ""))
-        gamma = compiled.gamma if compiled.gamma is not None else PHYSICAL_DEFAULT_GAMMA
+        gamma = native_real(
+            compiled.gamma if compiled.gamma is not None else PHYSICAL_DEFAULT_GAMMA,
+            where="AmrSystem.add_equation.gamma")
         self._s.add_native_block(name, compiled.so_path, spatial.limiter, spatial.flux,
                                  spatial.recon, time.kind, gamma, nsub,
-                                 getattr(spatial, "positivity_floor", 0.0))
+                                 native_real(getattr(spatial, "positivity_floor", 0.0),
+                                             where="AmrSystem.add_equation.positivity_floor"))
         # ADC-291: record the named aux fields the block declares (component of the k-th name =
         # AUX_NAMED_BASE + k), so set_aux_field(block, name, array) can resolve name -> component.
         extra = list(getattr(compiled, "aux_extra_names", []) or [])

@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 from .expr import _BoardNode, _EllipticTerm
+from .literals import exact_numeric_scalar, exact_scale_prefix
 
 
 def _as_elliptic(x: Any) -> Any:
@@ -39,7 +40,7 @@ class Reaction(_EllipticTerm):
     def __init__(self, field: Any, coeff: Any, scale: Any = 1.0) -> None:
         self.field = field
         self.coeff = coeff
-        self.scale = float(scale)
+        self.scale = exact_numeric_scalar(scale, where="Reaction scale")
 
     def _kind(self) -> Any:
         return "reaction"
@@ -48,7 +49,7 @@ class Reaction(_EllipticTerm):
         return Reaction(self.field, self.coeff, -self.scale)
 
     def __repr__(self) -> str:
-        lead = "" if self.scale == 1.0 else "%g*" % self.scale
+        lead = exact_scale_prefix(self.scale)
         return "Reaction(%s%r*%r)" % (lead, self.coeff, self.field)
 
 
@@ -58,7 +59,7 @@ class CoeffGradient(_BoardNode):
     def __init__(self, field: Any, coeff: Any, scale: Any = 1.0) -> None:
         self.field = field
         self.coeff = coeff
-        self.scale = float(scale)
+        self.scale = exact_numeric_scalar(scale, where="CoeffGradient scale")
 
     def __neg__(self) -> Any:
         return CoeffGradient(self.field, self.coeff, -self.scale)
@@ -73,7 +74,7 @@ class DivCoeffGrad(_EllipticTerm):
     def __init__(self, field: Any, coeff: Any, scale: Any = 1.0) -> None:
         self.field = field
         self.coeff = coeff
-        self.scale = float(scale)
+        self.scale = exact_numeric_scalar(scale, where="DivCoeffGrad scale")
 
     def _kind(self) -> Any:
         return "div_coeff_grad"
@@ -82,7 +83,7 @@ class DivCoeffGrad(_EllipticTerm):
         return DivCoeffGrad(self.field, self.coeff, -self.scale)
 
     def __repr__(self) -> str:
-        lead = "" if self.scale == 1.0 else "%g*" % self.scale
+        lead = exact_scale_prefix(self.scale)
         return "DivCoeffGrad(%sdiv(%r*grad(%r)))" % (lead, self.coeff, self.field)
 
 
@@ -90,7 +91,7 @@ class EllipticSum(_EllipticTerm):
     """An accumulated sum of elliptic operator terms (laplacian / div-coeff-grad / reaction)."""
 
     def __init__(self, terms: Any) -> None:
-        self.terms = list(terms)
+        self.terms = tuple(terms)
 
     def _elliptic_terms(self) -> Any:
         return list(self.terms)

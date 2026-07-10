@@ -60,7 +60,7 @@ def test_history_builds_state_value(t):
     Rp = P.history("blk.R", lag=1)
     assert Rp.vtype == "state", "P.history returns a State-typed value (got %r)" % Rp.vtype
     assert Rp.is_field(), "a history value is a grid field (affine algebra applies)"
-    P.commit("blk", P.linear_combine(U + P.dt * (R - Rp)))
+    P.commit(P.state("U", block="blk").next, P.linear_combine(U + P.dt * (R - Rp)))
     assert P.validate() is True, "the history Program must validate"
 
 
@@ -95,7 +95,9 @@ def test_ab2_macro_lowers(t):
                  "ctx.rotate_histories();"):
         assert frag in src, "the AB2 codegen must contain %r\n%s" % (frag, src)
     # The AB2 coefficients: +3/2 dt on R_n, -1/2 dt on R_{n-1}.
-    assert "1.5 * dt" in src and "-0.5 * dt" in src, "AB2 weights 3/2, -1/2 on dt\n%s" % src
+    assert ("pops::Real(3) / pops::Real(2)" in src
+            and "pops::Real(-1) / pops::Real(2)" in src), \
+        "AB2 exact weights 3/2, -1/2 on dt\n%s" % src
 
 
 def test_store_before_read_in_body(t):
@@ -128,7 +130,7 @@ def _hist_program(t, name, lag):
     R = P._rhs_legacy(state=U, sources=["default"])
     P.store_history(name, R)
     Rp = P.history(name, lag=lag)
-    P.commit("blk", P.linear_combine(U + P.dt * (R - Rp)))
+    P.commit(P.state("U", block="blk").next, P.linear_combine(U + P.dt * (R - Rp)))
     return P
 
 
@@ -147,7 +149,7 @@ def test_absent_history_program_lowers(t):
     U = P.state("blk")
     Rp = P.history("missing.R", lag=1)
     R = P._rhs_legacy(state=U, sources=["default"])
-    P.commit("blk", P.linear_combine(U + P.dt * (R - Rp)))
+    P.commit(P.state("U", block="blk").next, P.linear_combine(U + P.dt * (R - Rp)))
     assert P.validate() is True
     src = P.emit_cpp_program()
     assert 'ctx.history("missing.R", 1)' in src, src
@@ -271,7 +273,7 @@ def _run_section_c(t):
     U = P.state("blk")
     Rp = P.history("missing.R", lag=1)
     R = P._rhs_legacy(state=U, sources=["default"])
-    P.commit("blk", P.linear_combine(U + P.dt * (R - Rp)))
+    P.commit(P.state("U", block="blk").next, P.linear_combine(U + P.dt * (R - Rp)))
 
     try:
         compiled = pops.codegen.compile_problem(model=_passive_source_model("miss_prog"), time=P)

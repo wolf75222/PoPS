@@ -24,27 +24,36 @@ from __future__ import annotations
 from typing import Any
 
 from .. import math as _bm
-from .board_handles import (CallableOperator, FieldHandle, FieldsHandle, FluxHandle,
+from ..ir import _wrap
+from .board_handles import (FieldHandle, FluxHandle,
                             Invariant, LocalLinearOperatorExpr, SourceHandle, StateHandle,
-                            VectorHandle, _canon_role, _roles_for, _safe_name)
+                            VectorHandle, _canon_role, _safe_name)
+from ._board_contract import (atomic_attrs, normalize_components, normalize_roles,
+                              normalize_sequence, normalize_string_mapping, require_name)
+from ._board_elliptic import _EllipticAuthoringMixin
 from ._board_multispecies import _MultiSpeciesMixin
-from .model import _NO_KIND
-
-# ADC-642: the Riemann-flux vocabulary decoded ONCE (a new capability-backed generic flux is one
-# row). The enabler maps a generic flux to its dsl hook; euler_hllc/euler_roe pin the explicit C++
-# flux and emit no generic hook. The frozensets are the authoring-validation sets (was inline tuples).
-_GENERIC_CAPABILITY_ENABLERS = {"hllc": "enable_hllc", "roe": "enable_roe"}
-_PRESSURE_ROLE_FLUXES = frozenset({"hllc", "roe", "euler_hllc", "euler_roe"})
-_EULER_LAYOUT_FLUXES = frozenset({"euler_hllc", "euler_roe"})
+from ._board_rate import _RateAuthoringMixin
+from ._board_riemann import _RiemannAuthoringMixin
+from ._freeze import PhysicsFreezable
+from .model import Param, _NO_KIND
 
 
-class Model(_MultiSpeciesMixin):
+class Model(PhysicsFreezable, _RateAuthoringMixin, _RiemannAuthoringMixin,
+            _EllipticAuthoringMixin, _MultiSpeciesMixin):
     """A blackboard-style physical model that lowers to the operator-first IR."""
 
+    _physics_mutators = frozenset({
+        "state", "species", "primitive", "scalar", "param", "aux", "field",
+        "vector_field", "flux", "source", "local_linear_operator", "solve_field",
+        "field_problem", "operator", "riemann", "invariant", "rate",
+        "finite_volume_rate", "coupled_rate", "solve_fields_from_species",
+    })
+
     def __init__(self, name: Any) -> None:
+        self._init_physics_freeze()
         from .facade import Model as _PdeModel  # lazy: the facade pulls numpy
         self._dsl = _PdeModel(name)
-        self.name = str(name)
+        self.name = self._dsl.name
         self._states = {}
         self._fields = {}
         self._fluxes = {}
@@ -64,6 +73,11 @@ class Model(_MultiSpeciesMixin):
         self._multi_module = None
         self._species = {}          # species name -> StateHandle (multi-species mode)
 
+    @property
+    def owner_path(self) -> Any:
+        """Read-only owner anchor delegated to the underlying typed model."""
+        return self._dsl._m.owner_path
+
     # --- escape hatches ---
     @property
     def dsl(self) -> Any:
@@ -77,9 +91,13 @@ class Model(_MultiSpeciesMixin):
         directly (N StateSpaces, a ``coupled_rate`` operator, a multi-block field operator) -- the SAME
         operator-first IR a hand-written :class:`pops.model.Module` would build.
         """
-        if self._multi_module is not None:
-            return self._multi_module
-        return self._dsl.module
+        module = self._multi_module if self._multi_module is not None else self._dsl.module
+        registry = module.operator_registry()
+        for handle in self._fields.values():
+            target = getattr(handle, "registered_operator_name", None)
+            if target is not None and target != handle.name:
+                registry.register_alias(handle.name, target)
+        return module
 
     # --- state / species ---
     def state(self, name: Any = "U", components: Any = (), roles: Any = None) -> Any:
@@ -88,12 +106,19 @@ class Model(_MultiSpeciesMixin):
         the dsl roles (``Density`` / ``MomentumX`` / ...) so the native Riemann capabilities (HLLC/Roe
         role lookup) recognize them.
         """
-        role_list = None
-        if roles:
-            role_list = [_canon_role(roles.get(c)) for c in components]
-        vars_ = self._dsl.conservative_vars(*components, roles=role_list)
-        handle = StateHandle(name, components, vars_, roles)
-        self._states[handle.name] = handle
+        name = require_name(name, "state name")
+        components = normalize_components(components, "state")
+        role_map = normalize_roles(roles, components, "state")
+        if self._states:
+            raise ValueError(
+                "state %r cannot be declared: this physics model already owns state %r; "
+                "use species(...) for multiple state blocks" % (name, next(iter(self._states))))
+        role_list = None if roles is None else [_canon_role(role_map.get(c)) for c in components]
+        hyp = self._dsl._m
+        with atomic_attrs((hyp, "cons_names"), (hyp, "cons_roles"), (self, "_states")):
+            vars_ = self._dsl.conservative_vars(*components, roles=role_list)
+            handle = StateHandle(name, components, vars_, role_map, owner=self.owner_path)
+            self._states[handle.name] = handle
         return handle
 
     def species(self, name: Any, state: Any = (), roles: Any = None) -> Any:
@@ -106,28 +131,31 @@ class Model(_MultiSpeciesMixin):
         (``pops.model.Module`` with N spaces + ``coupled_rate`` + ``solve_fields_from_blocks``), never a
         parallel runtime.
         """
+        name = require_name(name, "species name")
+        components = normalize_components(state, "species %s state" % name)
+        role_map = normalize_roles(roles, components, "species %s" % name)
         if name in self._species:
             raise ValueError(
                 "species %r is already declared; each species needs a distinct name "
                 "(a reused name would silently alias the StateSpace)" % name)
-        if not self._species and not self._multi_module:
+        if not self._species and self._multi_module is None:
             # First species: keep the single-state dsl-backed path byte-identical to state().
-            handle = self.state(name, components=state, roles=roles)
+            handle = self.state(
+                name, components=components, roles=None if roles is None else role_map)
             self._species[handle.name] = handle
             return handle
-        # Second (or later) species: promote to multi-species mode. The first species was
-        # authored on the dsl model; re-realize it as a typed StateSpace on the multi-block
-        # Module so all species live in the SAME operator-first IR.
-        self._promote_to_multispecies()
-        return self._add_species(name, components=state, roles=roles)
+        if self._multi_module is None:
+            return self._promote_to_multispecies(
+                extra=(name, components, role_map))
+        return self._add_species(name, components=components, roles=role_map)
 
     def primitive(self, name: Any, expr: Any) -> Any:
         """Define a primitive quantity by its formula; returns a usable expression."""
-        return self._dsl.primitive(name, expr)
+        return self._dsl.primitive(require_name(name, "primitive name"), expr)
 
     def scalar(self, name: Any, expr: Any) -> Any:
         """Define a named derived scalar (e.g. pressure, sound speed)."""
-        return self._dsl.primitive(name, expr)
+        return self._dsl.primitive(require_name(name, "scalar name"), expr)
 
     def param(self, name: Any, value: Any = None, *, kind: Any = _NO_KIND) -> Any:
         """Declare a named scalar parameter; returns a usable expression.
@@ -136,10 +164,15 @@ class Model(_MultiSpeciesMixin):
         ``param(pops.physics.RuntimeParam("cs2", 1.0))`` / ``param(ConstParam("g", 9.8))`` /
         ``param("g", 9.8)`` (const shorthand). A bare ``kind=`` keyword is REJECTED.
         """
+        if isinstance(name, Param):
+            require_name(name.name, "parameter name")
+        else:
+            name = require_name(name, "parameter name")
         return self._dsl.param(name, value, kind=kind)
 
     def aux(self, name: Any) -> Any:
         """Declare an auxiliary field read by the model (e.g. an imposed ``B_z``)."""
+        name = require_name(name, "aux field name")
         canonical = {"phi", "grad_x", "grad_y", "B_z", "T_e"}
         if name in canonical:
             return self._dsl.aux(name)
@@ -147,14 +180,23 @@ class Model(_MultiSpeciesMixin):
 
     def field(self, name: Any) -> Any:
         """Declare a solved scalar field (e.g. the potential ``phi``)."""
-        h = FieldHandle(name)
+        name = require_name(name, "field name")
+        if name in self._fields:
+            raise ValueError("field %r is already declared" % name)
+        h = FieldHandle(name, owner=self.owner_path)
         self._fields[h.name] = h
         return h
 
     def vector_field(self, name: Any, x: Any, y: Any) -> Any:
         """Define a named vector field with ``.x`` / ``.y`` expression components."""
-        h = VectorHandle(name, self._to_expr(x), self._to_expr(y))
-        self._fields[name] = h
+        name = require_name(name, "vector field name")
+        if name in self._fields:
+            raise ValueError("field %r is already declared" % name)
+        hyp = self._dsl._m
+        with atomic_attrs((hyp, "aux_names"), (hyp, "aux_extra_names"), (self, "_fields")):
+            h = VectorHandle(
+                name, _wrap(self._to_expr(x)), _wrap(self._to_expr(y)), owner=self.owner_path)
+            self._fields[name] = h
         return h
 
     # --- operators (board equations) ---
@@ -164,23 +206,65 @@ class Model(_MultiSpeciesMixin):
         ``x`` / ``y`` are the per-component flux expressions; ``waves`` gives the
         per-direction eigenvalues. Lowers to the model's default flux.
         """
+        name = require_name(name, "flux name")
+        self._require_state_handle(on, "flux", optional=True)
+        if self._fluxes:
+            raise ValueError("flux %r cannot replace already declared physical flux %r"
+                             % (name, next(iter(self._fluxes))))
         if x is None or y is None:
             raise ValueError("flux(%r) requires per-component x= and y= expressions" % (name,))
-        self._dsl.flux(list(x), list(y))
+        h = FluxHandle(name, is_default=True, owner=self.owner_path)
+        x_values = normalize_sequence(x, "flux x expressions", nonempty=True)
+        y_values = normalize_sequence(y, "flux y expressions", nonempty=True)
+        expected = self._dsl._m.n_vars
+        if len(x_values) != expected or len(y_values) != expected:
+            raise ValueError("flux(%r) needs %d expression(s) per direction; got %d/%d"
+                             % (name, expected, len(x_values), len(y_values)))
+        wave_values = None
         if waves is not None:
-            self._dsl.eigenvalues(list(waves["x"]), list(waves["y"]))
-        h = FluxHandle(name, is_default=True)
-        self._fluxes[name] = h
+            wave_map = normalize_string_mapping(waves, "flux waves")
+            if set(wave_map) != {"x", "y"}:
+                raise ValueError("flux waves must define exactly the 'x' and 'y' directions")
+            wave_values = (
+                normalize_sequence(wave_map["x"], "flux x waves", nonempty=True),
+                normalize_sequence(wave_map["y"], "flux y waves", nonempty=True))
+            if len(wave_values[0]) != expected or len(wave_values[1]) != expected:
+                raise ValueError("flux(%r) needs %d wave(s) per direction; got %d/%d"
+                                 % (name, expected, len(wave_values[0]), len(wave_values[1])))
+        hyp = self._dsl._m
+        with atomic_attrs((hyp, "aux_names"), (hyp, "aux_extra_names"), (hyp, "_flux"),
+                          (hyp, "_eig"), (self, "_fluxes")):
+            x_exprs = [_wrap(self._to_expr(value)) for value in x_values]
+            y_exprs = [_wrap(self._to_expr(value)) for value in y_values]
+            self._dsl.flux(x_exprs, y_exprs)
+            if wave_values is not None:
+                self._dsl.eigenvalues(
+                    [_wrap(self._to_expr(value)) for value in wave_values[0]],
+                    [_wrap(self._to_expr(value)) for value in wave_values[1]])
+            self._fluxes[name] = h
         return h
 
     def source(self, name: Any, on: Any = None, value: Any = None) -> Any:
         """Declare a named local source term; returns a :class:`SourceHandle`."""
+        name = require_name(name, "source name")
+        self._require_state_handle(on, "source", optional=True)
         if value is None:
             raise ValueError("source(%r) requires value= (one expression per component)" % (name,))
         reg = _safe_name(name)
-        self._dsl.source_term(reg, [self._to_expr(e) for e in value])
-        h = SourceHandle(name, reg)
-        self._sources[reg] = h
+        if reg in self._sources:
+            raise ValueError("source %r collides with already declared source %r"
+                             % (name, self._sources[reg].name))
+        values = normalize_sequence(value, "source expressions", nonempty=True)
+        if len(values) != self._dsl._m.n_vars:
+            raise ValueError("source(%r) needs %d expression(s); got %d"
+                             % (name, self._dsl._m.n_vars, len(values)))
+        h = SourceHandle(name, reg, owner=self.owner_path)
+        hyp = self._dsl._m
+        with atomic_attrs((hyp, "aux_names"), (hyp, "aux_extra_names"),
+                          (hyp, "_source_terms"), (hyp, "_source"), (self, "_sources")):
+            self._dsl.source_term(
+                reg, [_wrap(self._to_expr(expression)) for expression in values])
+            self._sources[reg] = h
         return h
 
     def local_linear_operator(self, name: Any, on: Any = None, matrix: Any = None) -> Any:
@@ -190,72 +274,13 @@ class Model(_MultiSpeciesMixin):
         directly raises a clear error -- see :class:`LocalLinearOperatorExpr`."""
         if matrix is None:
             raise ValueError("local_linear_operator(%r) requires matrix=" % (name,))
-        return LocalLinearOperatorExpr(name, matrix, on=on)
-
-    def solve_field(self, name: Any, equation: Any = None, outputs: Any = None,
-                    solver: Any = None) -> Any:
-        """Declare an elliptic field solve ``-laplacian(phi) == rhs`` (ADC-556: the single facade).
-        Wires the Poisson coupling AND records an inspectable :class:`pops.fields.PoissonProblem` (like
-        :meth:`field_problem`); returns a typed :class:`FieldsHandle` (an ``OperatorHandle`` of kind
-        ``"field_operator"``) with structured ``outputs`` (``fields.outputs.E``) and ``solver``.
-        """
-        if not isinstance(equation, _bm.Equation):
-            raise TypeError("solve_field expects an equation '-laplacian(phi) == rhs'")
-        lhs = equation.lhs
-        if not isinstance(lhs, _bm.Laplacian):
-            raise ValueError(
-                "solve_field left-hand side must be (-)laplacian(field); got %r" % (lhs,))
-        rhs = self._to_expr(equation.rhs)
-        if lhs.scale > 0:  # laplacian(phi) == rhs -> -Delta phi = -rhs (dsl Poisson convention)
-            rhs = -rhs
-        self._dsl.elliptic_rhs(rhs)
-        # Unify with field_problem: also record the inert typed descriptor so inspect() surfaces it.
-        self.field_problem(name, equation, outputs=outputs, solver=solver)
-        self._fields[name] = h = FieldsHandle(name, outputs, solver)
-        if solver is not None:
-            self._field_solvers[name] = solver  # runtime solver map, beside the descriptor
-        return h
-
-    def field_problem(self, name: Any, equation: Any, outputs: Any = None, solver: Any = None,
-                      bcs: Any = None, coefficients: Any = None) -> Any:
-        """Author an inspectable elliptic field problem (Spec 5 sec.5.1 / sec.9.6).
-
-        The typed-object ergonomic shortcut: it CONSTRUCTS and RETURNS an inert
-        :class:`pops.fields.PoissonProblem` (or a :class:`pops.fields.FieldProblem` when
-        ``coefficients`` are present, e.g. a screened / anisotropic operator) describing the
-        solve ``-laplacian(phi) == rhs`` directly from a :class:`pops.math.Equation`, and
-        records it on the model's authoring state so :meth:`inspect` surfaces it.
-
-        Unlike :meth:`solve_field`, this method is INERT: it lowers ONLY to an inspectable
-        field-problem descriptor; it does NOT touch the dsl model, the elliptic right-hand
-        side, the operator graph, codegen or the runtime. Wiring the problem into the operator
-        graph (a second elliptic operator + aux channel) is the deeper lowering and stays
-        DEFERRED (see :meth:`solve_field` / the multi-elliptic runtime); this entry point only
-        produces the typed descriptor a user can ``validate()`` / ``inspect()`` before any run.
-
-        Args:
-            name: the field-problem name (also the unknown's display name when not derivable).
-            equation: a :class:`pops.math.Equation` of the form ``-laplacian(phi) == rhs``.
-            outputs: the produced fields (passed through to the descriptor's ``outputs``).
-            solver: the elliptic solver descriptor (carried; ``None`` leaves it unset so the
-                descriptor's own ``available`` / ``validate`` flags the missing solver).
-            bcs: an iterable of field boundary-condition descriptors (``pops.fields.bcs``).
-            coefficients: an optional operator coefficient; when present the descriptor is a
-                general :class:`pops.fields.FieldProblem` rather than a ``PoissonProblem``.
-        """
-        from pops import fields as _fields  # lazy: keep the module import-graph numpy-free.
-
-        if not isinstance(equation, _bm.Equation):
-            raise TypeError(
-                "field_problem(%r) expects a pops.math.Equation '-laplacian(phi) == rhs'; got %r"
-                % (name, type(equation).__name__))
-        unknown = equation.lhs.field if isinstance(equation.lhs, _bm.Laplacian) else name
-        cls = _fields.FieldProblem if coefficients is not None else _fields.PoissonProblem
-        problem = cls(name=name, unknown=unknown, equation=equation, coefficients=coefficients,
-                      bcs=tuple(bcs or ()), outputs=outputs,
-                      solver=_fields.lower_field_solver(solver))
-        self._field_problems[name] = problem
-        return problem
+        self._require_state_handle(on, "local_linear_operator", optional=True)
+        obj = LocalLinearOperatorExpr(name, matrix, on=on)
+        expected = self._dsl._m.n_vars
+        if len(obj.matrix) != expected or any(len(row) != expected for row in obj.matrix):
+            raise ValueError("local_linear_operator(%r) needs a %dx%d matrix"
+                             % (obj.name, expected, expected))
+        return obj
 
     def inspect(self) -> Any:
         """A plain-dict, inert view of the model's authoring state (Spec 5 sec.12.1). Reports the
@@ -275,37 +300,6 @@ class Model(_MultiSpeciesMixin):
                                for nm, prob in self._field_problems.items()},
         }
 
-    def rate(self, name: Any, equation: Any) -> Any:
-        """Declare a rate operator from ``ddt(U) == -div(F) + sources``."""
-        if not isinstance(equation, _bm.Equation):
-            raise TypeError("rate expects an equation 'ddt(U) == -div(F) + sources'")
-        if not isinstance(equation.lhs, _bm.TimeDerivative):
-            raise ValueError("rate left-hand side must be ddt(U) / rate(U)")
-        flux, sources = self._destructure_rate(equation.rhs)
-        self._dsl.rate_operator(_safe_name(name), flux=flux, sources=sources)
-        return CallableOperator(_safe_name(name), self)
-
-    def finite_volume_rate(self, name: Any, flux: Any = None, riemann: Any = None,
-                           reconstruction: Any = None, sources: Any = ()) -> Any:
-        """Declare a rate assembled by the native finite-volume machinery.
-
-        Selects the native Riemann solver and reconstruction (by descriptor) and
-        the source terms; lowers to the same rate operator a board equation does.
-        The native-brick hook codegen for a custom Riemann is tracked by ADC-456.
-        """
-        self._reconstruction = reconstruction
-        # Selecting a Riemann solver validates the model's capabilities for it and enables
-        # the role-derived hooks (criterion 10); accept a string or an pops.lib descriptor.
-        if riemann is not None:
-            scheme = getattr(riemann, "scheme", riemann)
-            self.riemann(scheme)
-        src_names = [s.reg_name if isinstance(s, SourceHandle) else _safe_name(s)
-                     for s in sources]
-        # A finite-volume rate always assembles -div F; the flux selection is recorded
-        # for the native bricks (riemann/reconstruction), not toggled off here.
-        self._dsl.rate_operator(_safe_name(name), flux=True, sources=src_names)
-        return name
-
     def operator(self, name: Any, handle: Any = None, *, inputs: Any = None,
                  returns: Any = None) -> Any:
         """Register a typed, callable operator under ``name`` from a math object.
@@ -313,101 +307,67 @@ class Model(_MultiSpeciesMixin):
         ``returns`` (or the positional ``handle``) is the operator body; ``inputs`` names
         its field dependencies (metadata for requirements). A
         :class:`LocalLinearOperatorExpr` registers as a ``local_linear_operator``
-        ``Fields -> LocalLinearOperator(U, U)``. Returns a :class:`CallableOperator`.
+        ``Fields -> LocalLinearOperator(U, U)``. Returns an immutable
+        :class:`pops.model.OperatorHandle`.
         """
         obj = returns if returns is not None else handle
         if obj is None:
             raise TypeError("operator(%r) requires returns= (or a positional handle)" % (name,))
         reg = _safe_name(name)
         if isinstance(obj, LocalLinearOperatorExpr):
-            self._dsl.linear_source(
-                reg, [[self._to_expr(e) for e in row] for row in obj.matrix])
-            self._operators[reg] = obj
-            self._operator_inputs[reg] = tuple(inputs) if inputs else ()
-            return CallableOperator(reg, self)
-        if isinstance(obj, CallableOperator):
+            self._require_state_handle(obj.on, "operator", optional=True)
+            input_names = () if inputs is None else normalize_sequence(inputs, "operator inputs")
+            for input_name in input_names:
+                require_name(input_name, "operator input")
+            hyp = self._dsl._m
+            with atomic_attrs(
+                    (hyp, "aux_names"), (hyp, "aux_extra_names"), (hyp, "_linear_sources"),
+                    (self, "_operators"), (self, "_operator_inputs")):
+                self._dsl.linear_source(
+                    reg, [[_wrap(self._to_expr(e)) for e in row] for row in obj.matrix])
+                self._operators[reg] = obj
+                self._operator_inputs[reg] = input_names
+                result = self._registered_operator_handle(reg)
+            return result
+        from pops.model import OperatorHandle
+        if isinstance(obj, OperatorHandle):
             # aliasing an already-registered operator under a new role name
-            self._aliases[name] = obj.reg_name
+            if obj.owner_path != self.owner_path:
+                raise ValueError(
+                    "operator(%r): the operator handle %r belongs to another physics model"
+                    % (name, obj.name))
+            target = obj.registered_operator_name
+            try:
+                self.module.operator_registry().get(target)
+            except KeyError:
+                raise ValueError(
+                    "operator(%r): operator handle %r is not registered by this physics model"
+                    % (name, obj.name)) from None
+            if name in self._aliases:
+                raise ValueError("operator alias %r is already declared" % name)
+            self._aliases[name] = target
             return obj
         raise TypeError(
             "operator(%r): returns= must be a local_linear_operator object or a "
             "registered operator; got %r" % (name, obj))
 
-    def riemann(self, name: Any, flux: Any = None, pressure: Any = None, velocity: Any = None,
-                sound_speed: Any = None, wave_speeds: Any = None, contact_speed: Any = None,
-                star_state: Any = None) -> Any:
-        """Select a Riemann solver and validate the model's capabilities for it.
-
-        The native solvers are C++ (``pops::RusanovFlux`` / ``HLLFlux`` / ``HLLCFlux`` /
-        ``RoeFlux``). HLLC/Roe need model capabilities: a pressure primitive and the fluid roles
-        Density/MomentumX/MomentumY (the dsl ``enable_hllc`` / ``enable_roe`` then generate the
-        ``contact_speed`` / ``hllc_star_state`` / ``roe_dissipation`` hooks). ``euler_hllc`` /
-        ``euler_roe`` (ADC-590) are the EXPLICIT canonical Euler 2D routes (no generic hook). Missing
-        capabilities are rejected here (Spec 3 criterion 10).
-
-        ADC-456: an explicit board formula for a capability quantity (e.g. ``pressure=<expr>``)
-        overrides the role-derived hook via :meth:`pops.dsl.Model.set_riemann_hooks`; a hook
-        DESCRIPTOR or ``None`` keeps the default. A formula for a quantity the model cannot provide
-        still raises the clear capability error at codegen.
-        """
-        self._riemann = name
-        kind = str(getattr(name, "scheme", name)).lower()
-        self._validate_riemann_capabilities(kind, pressure, wave_speeds)
-        # Only generic hllc/roe emit the capability hook; euler_hllc/euler_roe pin the explicit
-        # EulerHLLCFlux2D / EulerRoeFlux2D and emit no generic hook (ADC-590/ADC-642, one table).
-        enabler = _GENERIC_CAPABILITY_ENABLERS.get(kind)
-        if enabler is not None:
-            getattr(self._dsl, enabler)()
-        # Wire any ARBITRARY board formula through to the dsl codegen (ADC-456). Resolve board nodes
-        # to dsl Exprs; the dsl method codegen's the Expr ones and ignores descriptors / None (the
-        # role-derived default stands). Off the hot path for the role-derived case (no Expr -> no-op).
-        self._dsl.set_riemann_hooks(
-            pressure=self._to_expr(pressure) if pressure is not None else None,
-            sound_speed=self._to_expr(sound_speed) if sound_speed is not None else None,
-            contact_speed=self._to_expr(contact_speed) if contact_speed is not None else None,
-            star_state=self._to_expr(star_state) if star_state is not None else None,
+    def _registered_operator_handle(self, name: Any) -> Any:
+        """Return the one immutable handle for an operator already in this model's registry."""
+        from pops.model import OperatorHandle
+        name = require_name(name, "registered operator name")
+        op = self.module.operator_registry().get(name)
+        return OperatorHandle(
+            op.name,
+            kind=op.kind,
+            owner=self.owner_path,
+            signature=op.signature,
         )
-        return name
-
-    def _validate_riemann_capabilities(self, kind: Any, pressure: Any, wave_speeds: Any) -> None:
-        """Reject a model that lacks the capabilities the chosen Riemann solver needs (Spec 3
-        criterion 10): rusanov = max wave speed only; hll = wave speeds; hllc/roe/euler_* = pressure
-        + fluid roles (euler_hllc/euler_roe also require the 4-variable Euler layout, ADC-590)."""
-        hyp = self._dsl._m
-        roles = set(_roles_for(hyp))
-        has_pressure = ("p" in hyp.prim_defs) or (pressure is not None)
-        fluid = {"Density", "MomentumX", "MomentumY"}
-        if kind in _PRESSURE_ROLE_FLUXES:
-            if not has_pressure:
-                raise ValueError(
-                    "riemann %s requires model capability 'pressure' for state %r: declare a "
-                    "primitive m.primitive('p', ...) or pass m.riemann(..., pressure=...)"
-                    % (kind.upper(), self._state_name()))
-            missing = fluid - roles
-            if missing:
-                raise ValueError(
-                    "riemann %s requires model capability 'hllc_star_state' for state %r: the "
-                    "fluid roles %s are needed (declare m.state(..., roles={...})); missing %s"
-                    % (kind.upper(), self._state_name(), sorted(fluid), sorted(missing)))
-            if kind in _EULER_LAYOUT_FLUXES and len(hyp.cons_names) != 4:
-                raise ValueError(
-                    "riemann %s requires a canonical 4-variable Euler layout (rho, rho_u, rho_v, E) "
-                    "for state %r; use riemann='hllc'/'roe' for a generic model"
-                    % (kind.upper(), self._state_name()))
-        elif kind == "hll":
-            if (wave_speeds is None and not hyp._eig and hyp._wave_speeds is None
-                    and hyp._ws_jacobian is None):
-                raise ValueError(
-                    "riemann HLL requires model capability 'wave_speeds': declare m.flux(..., "
-                    "waves=...) or pass m.riemann('hll', wave_speeds=...)")
-        # rusanov: only max_wave_speed, always derivable -> no extra requirement.
-
-    def _state_name(self) -> Any:
-        return next(iter(self._states), "U")
 
     def invariant(self, name: Any, expression: Any = None, over: Any = None) -> Any:
         """Declare a generic invariant ``StateSet -> Scalar`` from an ``integral(...)``."""
         inv = Invariant(name, expression, over=over)
+        if inv.name in self._invariants:
+            raise ValueError("invariant %r is already declared" % inv.name)
         self._invariants[inv.name] = inv
         return inv
 
@@ -449,34 +409,18 @@ class Model(_MultiSpeciesMixin):
     # --- introspection ---
 
     # --- internals ---
-    def _destructure_rate(self, rhs: Any) -> Any:
-        """Split a rate right-hand side into ``(flux, [source names])``."""
-        terms = _bm._as_rate(rhs)._rate_terms()
-        flux = False
-        sources = []
-        for kind, payload, sign in terms:
-            if kind == "flux":
-                if sign >= 0:
-                    raise ValueError(
-                        "a rate equation flux term must be -div(F) (negative); "
-                        "write 'ddt(U) == -div(F) + ...'")
-                flux = True
-            elif kind == "source":
-                if sign <= 0:
-                    raise ValueError(
-                        "a rate equation source term %r must be added (positive sign)"
-                        % (payload.name,))
-                sources.append(payload.reg_name)
-            else:  # pragma: no cover - defensive
-                raise ValueError("unknown rate term kind %r" % (kind,))
-        return flux, sources
-
     def _to_expr(self, node: Any) -> Any:
         """Resolve a board node to an :mod:`pops.dsl` expression in this model's context."""
         if isinstance(node, _bm.Partial):
             field = node.field
-            fname = field.name if isinstance(field, FieldHandle) else str(field)
-            aux_name = self._gradient_aux(fname, node.axis)
+            if not isinstance(field, FieldHandle):
+                raise TypeError("gradient requires a declared FieldHandle; got %r" % (field,))
+            if (field.owner_path != self.owner_path
+                    or self._fields.get(field.name) != field):
+                raise ValueError(
+                    "gradient field handle %r belongs to another physics model"
+                    % (field.name,))
+            aux_name = self._gradient_aux(field.name, node.axis)
             expr = self._dsl.aux(aux_name)
             if node.scale != 1.0:
                 expr = node.scale * expr
@@ -490,10 +434,25 @@ class Model(_MultiSpeciesMixin):
     @staticmethod
     def _gradient_aux(field_name: Any, axis: Any) -> Any:
         """Canonical gradient aux name of ``field_name`` along ``axis`` (0=x, 1=y)."""
+        field_name = require_name(field_name, "gradient field name")
+        if isinstance(axis, bool) or not isinstance(axis, int) or axis not in (0, 1):
+            raise ValueError("gradient axis must be integer 0 (x) or 1 (y); got %r" % (axis,))
         if field_name == "phi":
             return "grad_x" if axis == 0 else "grad_y"
         # generic fields keep a <field>_grad_x / _grad_y convention
         return "%s_grad_%s" % (field_name, "x" if axis == 0 else "y")
+
+    def _require_state_handle(self, handle: Any, where: str, *, optional: bool = False) -> Any:
+        """Validate an ``on=`` state without accepting a same-named foreign handle."""
+        if handle is None and optional:
+            return None
+        if (not isinstance(handle, StateHandle)
+                or handle.owner_path != self.owner_path
+                or self._states.get(handle.name) != handle):
+            raise ValueError(
+                "%s on= must be a StateHandle declared by this physics model; got %r"
+                % (where, handle))
+        return handle
 
     def __repr__(self) -> str:
         return "physics.Model(%r)" % (self.name,)

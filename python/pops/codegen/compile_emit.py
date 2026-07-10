@@ -71,10 +71,15 @@ def model_hash(model: Any, params: Any = None) -> str:
     ``repr(Expr)`` (stable, structural); insensitive to dict ordering (sorted).
     """
     import hashlib
+    import json
     # Import the helper lazily to avoid pulling pops.dsl at import time.
     # aux_total_n_aux and roles_for live in dsl; we read them from the model
     # package which is stdlib-only (no C extension).
+    from pops.ir.literals import scalar_data
     from pops.ir.values import _EIG_FIELDS  # noqa: F401 -- confirm ir is importable
+
+    def _scalar_token(value: Any) -> str:
+        return json.dumps(scalar_data(value), sort_keys=True, separators=(",", ":"))
 
     # --- lazy helpers: resolve at call time, not at import time ---
     def _aux_total_n_aux(aux_names: Any, aux_extra_names: Any) -> int:
@@ -181,20 +186,21 @@ def model_hash(model: Any, params: Any = None) -> str:
         # Appended ONLY when set, so the default (None -> the historical 1e-6 literal) leaves the hash
         # byte-identical (no spurious cache miss for existing models).
         if ws.get("fd_eps") is not None:
-            parts.append("ws_jac_fd_eps=%s" % repr(float(ws["fd_eps"])))
+            parts.append("ws_jac_fd_eps=%s" % _scalar_token(ws["fd_eps"]))
         # ADC-645: eig_max_iter / im_tol are EMITTED into the eig kernels (real_eig_minmax /
         # roe_abs_apply args), so they enter the hash -- but ONLY when set, keeping the default
         # model_hash byte-identical (the fd_eps rule).
         if ws.get("eig_max_iter") is not None:
             parts.append("ws_jac_eig_max_iter=%d" % int(ws["eig_max_iter"]))
         if ws.get("im_tol") is not None:
-            parts.append("ws_jac_im_tol=%s" % repr(float(ws["im_tol"])))
+            parts.append("ws_jac_im_tol=%s" % _scalar_token(ws["im_tol"]))
     parts.append("n_aux=%d" % _aux_total_n_aux(m.aux_names, m.aux_extra_names))
     if m.aux_extra_names:
         parts.append("aux_extra=%s" % ",".join(m.aux_extra_names))
-    parts.append("gamma=%r" % m.gamma)
+    parts.append("gamma=%s" % ("None" if m.gamma is None else _scalar_token(m.gamma)))
     params = params or {}
-    parts.append("params=%s" % ";".join("%s=%r:%s" % (k, params[k].value, params[k].kind)
+    parts.append("params=%s" % ";".join("%s=%s:%s" % (
+        k, _scalar_token(params[k].value), params[k].kind)
                                          for k in sorted(params)))
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()
 

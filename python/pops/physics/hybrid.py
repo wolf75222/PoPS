@@ -16,6 +16,7 @@ from typing import Any
 from .aux import roles_for
 from .bricks import CompiledBrick, NativeBrick
 from .model import HyperbolicModel
+from ._scalars import physics_scalar_cpp
 
 
 class HybridModel:
@@ -104,7 +105,9 @@ class HybridModel:
         parts.append('POPS_DEFINE_COMPILED_BLOCK(pops_generated::AotModel)\n')
         parts.append('POPS_EXPORT_BLOCK_METADATA(pops_generated::AotModel)\n')
         if self.gamma is not None:
-            parts.append('POPS_EXPORT_BLOCK_GAMMA(%r)\n' % self.gamma)
+            parts.append(
+                'POPS_EXPORT_BLOCK_GAMMA(%s)\n'
+                % physics_scalar_cpp(self.gamma, where="HybridModel.gamma"))
         return "".join(parts)
 
     def _model_hash(self) -> Any:
@@ -130,7 +133,9 @@ class HybridModel:
         macro arguments on commas)."""
         out = '\nPOPS_EXPORT_BLOCK_METADATA(%s)\n' % alias
         if self.gamma is not None:
-            out += 'POPS_EXPORT_BLOCK_GAMMA(%r)\n' % self.gamma
+            out += (
+                'POPS_EXPORT_BLOCK_GAMMA(%s)\n'
+                % physics_scalar_cpp(self.gamma, where="HybridModel.gamma"))
         return out
 
     def _emit_jit_source(self) -> str:

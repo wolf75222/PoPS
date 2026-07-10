@@ -12,36 +12,72 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops.ir.literals import exact_numeric_scalar
+from pops.model.handles import OwnerPath
 from pops.time.program_authoring import _ProgramAuthoring
 from pops.time.program_condensed import _ProgramCondensed
 from pops.time.program_core import _ProgramCore
+from pops.time.program_dt_bound import _ProgramDtBound
+from pops.time.program_history import _ProgramHistory
 from pops.time.program_inspect import _ProgramInspect
 from pops.time.program_local import _ProgramLocal
 from pops.time.program_passes import _ProgramPasses
 from pops.time.program_solve import _ProgramSolve
-from pops.time.values import _Coeff, Value  # noqa: F401  (Value used by mixins via prog ref)
+from pops.time.program_time_handles import _ProgramTimeHandles
+from pops.time.values import _Coeff, ProgramValue  # noqa: F401  (ProgramValue used by mixins via prog ref)
 
 
-class Program(_ProgramCore, _ProgramLocal, _ProgramCondensed, _ProgramSolve, _ProgramAuthoring,
-              _ProgramPasses, _ProgramInspect):
+class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondensed,
+              _ProgramHistory, _ProgramSolve,
+              _ProgramAuthoring, _ProgramDtBound, _ProgramPasses, _ProgramInspect):
     """A compiled time program (builder mode). Holds the SSA value list and the committed
     blocks. The Python object only BUILDS the IR; it is never executed numerically during
     ``sim.step``. Authoring methods come from the mixins; C++ emission is delegated to
     ``pops.codegen.program_codegen`` via :meth:`emit_cpp_program`.
     """
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "name" and hasattr(self, "name"):
+            raise AttributeError(
+                "pops.time.Program name is an immutable identity anchor; construct a new Program")
+        if getattr(self, "_frozen", False):
+            if name == "_frozen" and value is not True:
+                raise RuntimeError("pops.time.Program freeze is irreversible")
+            if name != "_frozen" or value is not True:
+                raise RuntimeError("pops.time.Program is frozen: cannot change %s" % name)
+        object.__setattr__(self, name, value)
+
+    def __delattr__(self, name: str) -> None:
+        if name == "name":
+            raise AttributeError(
+                "pops.time.Program name is an immutable identity anchor; construct a new Program")
+        if getattr(self, "_frozen", False):
+            raise RuntimeError("pops.time.Program is frozen: cannot delete %s" % name)
+        object.__delattr__(self, name)
+
     def __init__(self, name: Any) -> None:
+        if not isinstance(name, str) or not name:
+            raise ValueError("Program name must be a non-empty string")
         self.name = name
+        self._owner_path = OwnerPath.fresh("program", name)
+        self._init_time_handle_tables()
         # De-stringing is the ONE public path (Spec 5 sec.15, ADC-479 criteria 23 + 27): the public
         # P.call requires a typed operator handle and the public P.rhs requires the typed terms= list
         # (the legacy string operator name / flux=/sources= form is REFUSED). The byte-identical
         # builders survive ONLY as the internal _call / _rhs_legacy, which the typed front doors and
         # the pops.lib.time macros lower through -- no opt-in flag, no second public path.
         self._values = []
+        self._issued_values = {}  # id -> strong identity, including stale immutable replacement records
         self._next_id = 0
         self._commits = {}      # block -> State value
         self._recording = []    # stack of sub-block lists (a control-flow body); see _new / while_
+        self._next_region = 1
+        self._recording_regions = {}  # id(list) -> (strong list ref, exact authoring-region token)
+        self._region_imports = {}  # destination region -> explicitly sanctioned source regions
+        self._state_spaces = {}  # block -> StateSpace or None; typed/untyped mixing is forbidden
         self._histories = {}    # name -> max declared lag (multistep histories; ADC-406a)
+        self._history_spaces = {}  # full-state history name -> StateSpace or None
+        self._history_blocks = {}  # full-state history name -> qualified block or None
         # name -> slot ncomp for a NARROW (non-full-state) history ring (ADC-427). Only names read with
         # an explicit P.history(ncomp=1) appear here (the condensed-Schur phi^n carry); a full-state
         # multistep ring is absent (the codegen emits the historical 2-arg register_history for it).
@@ -53,50 +89,82 @@ class Program(_ProgramCore, _ProgramLocal, _ProgramCondensed, _ProgramSolve, _Pr
         # OPTIONAL dt bound (spec s18 / ADC-417): a recorded scalar sub-program (cfl -> Scalar) the
         # generated .so exports as pops_program_dt_bound; None = no bound (the native CFL is used).
         self._dt_bound = None        # (block, scalar_value) once set; the block is the scalar sub-block
-        self.dt = _Coeff({1: 1.0})   # symbolic time step; participates in coefficient arithmetic
+        self.dt = _Coeff({1: 1})     # symbolic time step; participates in coefficient arithmetic
         # OPTIONAL bound operator registry (Spec 2, operator-first): set by bind_operators so P.call
         # can resolve and type-check operators at build time. None = legacy PDE-shortcut-only Program.
         self._registry = None
+        self._registry_owner = None
+        self._default_state_space = None  # unique StateSpace inferred structurally from a registry
+        self._default_field_space = None  # unique FieldSpace inferred structurally from a registry
         # OPTIONAL debug capture of the authoring source location per IR node (ADC-530). DEFAULT OFF:
         # a stack walk per node is too costly for the normal build path, and the location is
         # INSPECTION-ONLY (never serialized into the IR / the hash). Toggle with
-        # capture_source_locations(True) before building to populate Value.source_location.
+        # capture_source_locations(True) before building to populate ProgramValue.source_location.
         self._capture_source = False
-        # Per-emit scratch names of coupled_rate blocks, keyed by (coupled node id, block): the
-        # coupled_rate kernel fills them and each coupled_rate_out projection aliases its block's
-        # scratch (ADC-457). Populated during _emit_op; harmless to keep across emits (keys are unique
-        # per node id).
-        self._coupled_scratch = {}
         # ADC-563 freeze: a Program is MUTABLE while authored and FROZEN by pops.compile. After
         # freeze, adding an IR node (via _new) RAISES -- a compiled artifact is frozen to exactly the
         # program it was compiled from. Emission / hashing are pure reads and stay allowed.
         self._frozen = False
 
+    @property
+    def owner_path(self) -> OwnerPath:
+        """Stable authoring identity used to qualify this Program's declaration handles."""
+        return self._owner_path
+
     def freeze(self) -> Any:
-        """Freeze the Program: a later IR node addition RAISES (ADC-563). Returns ``self``.
+        """Deep-freeze the Program IR and detach every pre-freeze container reference.
 
         ``pops.compile`` freezes the time Program it lowers; emission (``emit_cpp_program``) and the
-        IR hash are pure reads and remain allowed, but building a new node afterwards is refused so a
-        post-compile edit cannot diverge from the compiled artifact. Idempotent."""
-        self._frozen = True
+        IR hash are pure reads and remain allowed. Every owned list/dict/set is replaced by an
+        immutable copy, so a stale authoring reference cannot alter the compiled identity. Idempotent.
+        """
+        if self._frozen:
+            return self
+        from pops.time.program_freeze import freeze_program_tables
+        freeze_program_tables(self)
         return self
 
-    def _new(self, vtype: Any, op: Any, inputs: Any, attrs: Any, name: Any, block: Any) -> Any:
-        """Guard the single IR-append choke point against a post-freeze mutation (ADC-563)."""
+    def _guard_mutable(self, operation: Any) -> None:
+        """Reject every authoring mutation after ``freeze()``, including non-node metadata writes."""
         if self._frozen:
-            raise RuntimeError("pops.time.Program %r is frozen (ADC-563): cannot add IR node %r "
-                               "after pops.compile; author a fresh Program and recompile."
-                               % (self.name, op))
-        return super()._new(vtype, op, inputs, attrs, name, block)
+            raise RuntimeError(
+                "pops.time.Program %r is frozen: cannot %s" % (self.name, operation))
+
+    def _region_for_block(self, block: Any) -> int:
+        """Return the deterministic region token for one recorded sub-block list."""
+        key = id(block)
+        entry = self._recording_regions.get(key)
+        if entry is None:
+            region = self._next_region
+            self._next_region += 1
+            self._recording_regions[key] = (block, region)
+            return region
+        if entry[0] is not block:
+            raise RuntimeError("internal authoring-region identity collision")
+        return entry[1]
+
+    def _current_region(self) -> int:
+        return self._region_for_block(self._recording[-1]) if self._recording else 0
+
+    def _allow_region_capture(self, source: int, destination: int) -> None:
+        """Declare one explicit loop-carried edge between two sibling sub-block regions."""
+        self._region_imports.setdefault(destination, set()).add(source)
+
+    def _new(self, vtype: Any, op: Any, inputs: Any, attrs: Any, name: Any, block: Any,
+             **metadata: Any) -> Any:
+        """Guard the single IR-append choke point against a post-freeze mutation (ADC-563)."""
+        self._guard_mutable("add IR node %r" % op)
+        return super()._new(vtype, op, inputs, attrs, name, block, **metadata)
 
     def capture_source_locations(self, enabled: Any = True) -> Any:
         """Enable (or disable) recording each IR node's authoring source location (ADC-530).
 
-        When enabled, every subsequently built :class:`pops.time.values.Value` captures the file and
+        When enabled, every subsequently built :class:`pops.time.values.ProgramValue` captures the file and
         line of the authoring call site into its ``source_location`` (a debug aid: which macro line
         emitted a node). It is INSPECTION-ONLY -- excluded from ``_serialize`` / ``_ir_hash`` -- so it
         never changes a compiled-artifact cache key or a trajectory. Off by default (the stack walk is
         skipped on the normal build path). Returns ``self`` for chaining."""
+        self._guard_mutable("change source-location capture")
         self._capture_source = bool(enabled)
         return self
 
@@ -178,17 +246,21 @@ class CompiledTime:
     fails loud rather than being silently ignored."""
 
     def __init__(self, substeps: Any = 1, stride: Any = 1, cfl: Any = "default") -> None:
-        if not isinstance(substeps, int) or substeps < 1:
+        if isinstance(substeps, bool) or not isinstance(substeps, int) or substeps < 1:
             raise ValueError("CompiledTime: substeps must be a positive int (got %r)" % (substeps,))
-        if not isinstance(stride, int) or stride < 1:
+        if isinstance(stride, bool) or not isinstance(stride, int) or stride < 1:
             raise ValueError("CompiledTime: stride must be a positive int (got %r)" % (stride,))
         # A numeric cfl is wired (applied at runtime via sim.run(cfl=)); only a non-numeric,
         # non-"default" cfl (e.g. cfl="program", a self-computed dt sub-program) is still deferred.
-        if cfl != "default" and not isinstance(cfl, (int, float)):
-            raise NotImplementedError(
-                "CompiledTime: a self-computed cfl sub-program (cfl=%r) is deferred (ADC-401 Phase "
-                "2c); pass a numeric cfl=<value> (applied at runtime by sim.run(cfl=)) or an explicit "
-                "dt to sim.step(dt)" % (cfl,))
+        if cfl != "default":
+            if isinstance(cfl, str):
+                raise NotImplementedError(
+                    "CompiledTime: a self-computed cfl sub-program (cfl=%r) is deferred (ADC-401 "
+                    "Phase 2c); pass a positive numeric cfl=<value> or an explicit dt to sim.step(dt)"
+                    % (cfl,))
+            cfl = exact_numeric_scalar(cfl, where="CompiledTime cfl")
+            if cfl <= 0:
+                raise ValueError("CompiledTime: cfl must be > 0 (got %r)" % (cfl,))
         self.substeps = substeps
         self.stride = stride
         self.cfl = cfl

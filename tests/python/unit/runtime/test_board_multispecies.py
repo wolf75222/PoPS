@@ -81,8 +81,12 @@ def _two_fluid_program(mod, e_space, i_space):
     e_n = P.state("electron_state", space=e_space)
     i_n = P.state("ion_state", space=i_space)
     C = P._call("collision", e_n, i_n)
-    P.commit_many({"electron_state": P.linear_combine("e1", e_n + P.dt * C["electron_state"]),
-                   "ion_state": P.linear_combine("i1", i_n + P.dt * C["ion_state"])})
+    P.commit_many({
+        P.state("U", block="electron_state").next:
+            P.linear_combine("e1", e_n + P.dt * C["electron_state"]),
+        P.state("U", block="ion_state").next:
+            P.linear_combine("i1", i_n + P.dt * C["ion_state"]),
+    })
     return P
 
 
@@ -149,7 +153,9 @@ def test_board_two_fluid_emits_identical_cpp_to_handwritten():
     # the lowered program emits BYTE-identical C++ to the hand-written operator-first program.
     bm, be, bi = _two_fluid_board()
     hmod, he, hi = _two_fluid_handwritten()
-    bsrc = _two_fluid_program(bm.module, be.space, bi.space).emit_cpp_program(model=None)
+    board_spaces = bm.module.state_spaces()
+    bsrc = _two_fluid_program(
+        bm.module, board_spaces[be.name], board_spaces[bi.name]).emit_cpp_program(model=None)
     hsrc = _two_fluid_program(hmod, he, hi).emit_cpp_program(model=None)
     assert bsrc == hsrc
     # one shared multi-state kernel binds both species, reads cons from each state (sanity)
@@ -192,10 +198,11 @@ def test_wrong_species_rate_in_affine_combine_errors():
     m.coupled_rate("collision", inputs=[e, i],
                    outputs={e: [i["ni"] - e["ne"]], i: [e["ne"] - i["ni"]]})
     P = adctime.Program("s").bind_operators(m.module)
-    e_n = P.state("electrons", space=e.space)
-    i_n = P.state("ions", space=i.space)
+    spaces = m.module.state_spaces()
+    e_n = P.state("electrons", space=spaces[e.name])
+    i_n = P.state("ions", space=spaces[i.name])
     C = P._call("collision", e_n, i_n)
-    with pytest.raises(ValueError, match="different state spaces"):
+    with pytest.raises(ValueError, match="incompatible state spaces"):
         P.linear_combine("bad", e_n + P.dt * C["ions"])  # electron state + ion rate
 
 

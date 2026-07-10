@@ -108,7 +108,7 @@ class SolverIR:
 
     It is a thin view over the building :class:`pops.time.Program` -- it records the
     flat op list and the returned solution value. It holds NO numeric data: every
-    node is a typed SSA record (see :class:`pops.time.Value`). The C++ lowering of
+    node is a typed SSA record (see :class:`pops.time.ProgramValue`). The C++ lowering of
     this IR is deferred (ADC-462); :func:`pops.codegen.solvers.solver_cpp.generate_solver_cpp`
     raises rather than fake a Python solve.
     """
@@ -171,7 +171,7 @@ class SolverContext:
         is an IR node, never a live Python counter the loop mutates."""
         if isinstance(n, bool) or not isinstance(n, int):
             raise TypeError("scalar_int expects a Python int; got %r" % (n,))
-        return self._p._scalar_binop(float(n), 0.0, "add")
+        return self._p._scalar_binop(n, 0, "add")
 
     # --- reductions ---------------------------------------------------------
     def norm2(self, x: Any) -> Any:
@@ -266,6 +266,8 @@ class _SolverWhile:
         # Its ops live in a separate cond_block (re-run each pass), not the body block.
         cond_block = []
         self._p._recording.append(cond_block)
+        self._p._allow_region_capture(
+            self._p._region_for_block(self._body), self._p._region_for_block(cond_block))
         try:
             cond = self._cond_fn()
         finally:
@@ -273,8 +275,15 @@ class _SolverWhile:
         if not (hasattr(cond, "vtype") and cond.vtype == "bool"):
             raise TypeError("while_: the condition builder must return a Bool IR value "
                             "(e.g. ctx.norm2(r) > tol); got %r" % (cond,))
+        from pops.time.program_value_validation import require_region
+        require_region(
+            self._p, cond, self._p._region_for_block(cond_block), "solver while condition",
+            vtype="bool")
         self._p._new("state", "while", (),
-                     {"cond_block": cond_block, "cond": cond, "body_block": self._body},
+                     {"cond_block": cond_block,
+                      "cond_region": self._p._region_for_block(cond_block), "cond": cond,
+                      "body_block": self._body,
+                      "body_region": self._p._region_for_block(self._body)},
                      None, self._block)
         return False
 
@@ -332,7 +341,7 @@ def _walk_nodes(values: Any, out: Any) -> None:
         attrs = node.attrs if hasattr(node, "attrs") else {}
         for key in ("cond_block", "body_block"):
             block = attrs.get(key)
-            if isinstance(block, list):
+            if isinstance(block, (list, tuple)):
                 _walk_nodes(block, out)
 
 

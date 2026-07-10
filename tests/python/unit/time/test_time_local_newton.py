@@ -77,12 +77,12 @@ def reaction_program(t, name="implicit_reaction"):
     U = P.state("blk")
 
     def residual(P, Uit, U0):
-        S = P.source("react", state=Uit)  # S(U) = -k U^2 (named non-linear source)
+        S = P._source("react", state=Uit)  # private name seam; public handle route is tested separately
         return P.linear_combine("r", Uit - U0 - dt * S)  # r = U - U0 - dt*S(U)
 
     W = P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U,
                                 tol=1e-12, max_iter=50)
-    P.commit("blk", W)
+    P.commit(P.state("U", block="blk").next, W)
     return P
 
 
@@ -133,7 +133,8 @@ def section_a(t):
     chk(Pr.validate() is True, "the implicit-reaction Newton IR validates")
     chk(bool(Pr._ir_hash()), "the Newton IR serializes to a stable hash")
     nl = [v for v in Pr._values if v.op == "solve_local_nonlinear"][0]
-    chk(nl.attrs["max_iter"] == 50 and nl.attrs["tol"] == 1e-12, "tol / max_iter recorded on the op")
+    chk(nl.attrs["max_iter"] == 50 and nl.attrs["tol"].to_python() == 1e-12,
+        "tol / max_iter recorded on the op")
     chk(len(nl.attrs["residual_block"]) >= 3,
         "the residual sub-block holds the iterate + guess + ops")
 
@@ -144,8 +145,8 @@ def section_a(t):
         u = Q.state("blk")
 
         def r(Q, Uit, U0):
-            return Q.linear_combine(Uit - U0 - dt * Q.source("react", state=Uit))
-        Q.commit("blk", Q.solve_local_nonlinear(name="W", residual=r, initial_guess=u,
+            return Q.linear_combine(Uit - U0 - dt * Q._source("react", state=Uit))
+        Q.commit(Q.state("U", block="blk").next, Q.solve_local_nonlinear(name="W", residual=r, initial_guess=u,
                                                  tol=tol, max_iter=mi))
         return Q._ir_hash()
     chk(_h(1e-10, 20) != _h(1e-8, 20), "a different tol rehashes the IR")
@@ -179,8 +180,8 @@ def section_a(t):
     Ub = Pbig.state("blk")
 
     def big_resid(P, Uit, U0):
-        return P.linear_combine(Uit - U0 - P.dt * P.source("react", state=Uit))
-    Pbig.commit("blk", Pbig.solve_local_nonlinear(name="W", residual=big_resid, initial_guess=Ub))
+        return P.linear_combine(Uit - U0 - P.dt * P._source("react", state=Uit))
+    Pbig.commit(Pbig.state("U", block="blk").next, Pbig.solve_local_nonlinear(name="W", residual=big_resid, initial_guess=Ub))
     chk(raises(ValueError, lambda: Pbig.emit_cpp_program(model=big)),
         "n_cons > 8 dense-fallback guard fires")
 

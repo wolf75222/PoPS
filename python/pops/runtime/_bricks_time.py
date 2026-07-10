@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops.runtime._numeric import exact_real, optional_positive_int, strict_bool
 from pops.runtime.routes import SOURCE_STAGE_ELECTROSTATIC_LORENTZ
 from pops.runtime.defaults import PHYSICAL_DEFAULT_ALPHA
 
@@ -105,50 +106,48 @@ class CondensedSchur:
                  fac_coarse_rel_tol: Any = None, fac_coarse_cycles: Any = None,
                  fac_verbose: bool = False, n_precond_vcycles: Any = None,
                  polar_precond: Any = None) -> None:
-        self.krylov_tol = float(krylov_tol) if krylov_tol is not None else 0.0
-        self.krylov_max_iters = int(krylov_max_iters) if krylov_max_iters is not None else 0
-        if krylov_tol is not None and not (0.0 < self.krylov_tol < 1.0):
-            raise ValueError("CondensedSchur: krylov_tol must be in (0, 1) (got %r)" % (krylov_tol,))
-        if krylov_max_iters is not None and self.krylov_max_iters < 1:
-            raise ValueError("CondensedSchur: krylov_max_iters >= 1 (got %r)" % (krylov_max_iters,))
+        self.krylov_tol = (0.0 if krylov_tol is None else exact_real(
+            krylov_tol, where="CondensedSchur.krylov_tol", minimum=0, minimum_open=True,
+            maximum=1, maximum_open=True))
+        self.krylov_max_iters = optional_positive_int(
+            krylov_max_iters, where="CondensedSchur.krylov_max_iters")
         # ADC-645: Krylov-preconditioner knobs of the stage. n_precond_vcycles = MG V-cycles per
         # BiCGStab-preconditioner application on the CARTESIAN (and AMR) stage; the steppers accept
         # 1 or 2 (None = the historical ONE V-cycle, wire sentinel 0). polar_precond selects the
         # POLAR stage's preconditioner ('radial_line' | 'jacobi'; None = the historical RadialLine,
         # wire sentinel ""). Cross-geometry misuse refuses at the native seam, never silently.
-        self.n_precond_vcycles = int(n_precond_vcycles) if n_precond_vcycles is not None else 0
+        self.n_precond_vcycles = optional_positive_int(
+            n_precond_vcycles, where="CondensedSchur.n_precond_vcycles")
         if n_precond_vcycles is not None and self.n_precond_vcycles not in (1, 2):
             raise ValueError("CondensedSchur: n_precond_vcycles must be 1 or 2 (got %r)"
                              % (n_precond_vcycles,))
-        self.polar_precond = str(polar_precond) if polar_precond is not None else ""
+        if polar_precond is not None and not isinstance(polar_precond, str):
+            raise TypeError("CondensedSchur.polar_precond must be a string or None")
+        self.polar_precond = polar_precond if polar_precond is not None else ""
         if polar_precond is not None and self.polar_precond not in ("radial_line", "jacobi"):
             raise ValueError("CondensedSchur: polar_precond must be 'radial_line' or 'jacobi' "
                              "(got %r)" % (polar_precond,))
         # ADC-614: composite-FAC knobs of the MULTI-LEVEL condensed Schur solve on AMR (the coarse
         # uniform stage uses only the Krylov knobs above). None (defaults) = the kFAC* constants,
         # bit-identical; refused out-of-domain (never silently clamped). Inert on the uniform System.
-        self.fac_max_iters = int(fac_max_iters) if fac_max_iters is not None else 0
-        self.fac_fine_sweeps = int(fac_fine_sweeps) if fac_fine_sweeps is not None else 0
-        self.fac_tol = float(fac_tol) if fac_tol is not None else 0.0
-        self.fac_coarse_rel_tol = float(fac_coarse_rel_tol) if fac_coarse_rel_tol is not None else 0.0
-        self.fac_coarse_cycles = int(fac_coarse_cycles) if fac_coarse_cycles is not None else 0
-        self.fac_verbose = bool(fac_verbose)
-        if fac_max_iters is not None and self.fac_max_iters < 1:
-            raise ValueError("CondensedSchur: fac_max_iters >= 1 (got %r)" % (fac_max_iters,))
-        if fac_fine_sweeps is not None and self.fac_fine_sweeps < 1:
-            raise ValueError("CondensedSchur: fac_fine_sweeps >= 1 (got %r)" % (fac_fine_sweeps,))
-        if fac_tol is not None and not (0.0 < self.fac_tol < 1.0):
-            raise ValueError("CondensedSchur: fac_tol must be in (0, 1) (got %r)" % (fac_tol,))
-        if fac_coarse_rel_tol is not None and not (0.0 < self.fac_coarse_rel_tol < 1.0):
-            raise ValueError(
-                "CondensedSchur: fac_coarse_rel_tol must be in (0, 1) (got %r)" % (fac_coarse_rel_tol,))
-        if fac_coarse_cycles is not None and self.fac_coarse_cycles < 1:
-            raise ValueError("CondensedSchur: fac_coarse_cycles >= 1 (got %r)" % (fac_coarse_cycles,))
-        if kind != "electrostatic_lorentz":
+        self.fac_max_iters = optional_positive_int(
+            fac_max_iters, where="CondensedSchur.fac_max_iters")
+        self.fac_fine_sweeps = optional_positive_int(
+            fac_fine_sweeps, where="CondensedSchur.fac_fine_sweeps")
+        self.fac_tol = (0.0 if fac_tol is None else exact_real(
+            fac_tol, where="CondensedSchur.fac_tol", minimum=0, minimum_open=True,
+            maximum=1, maximum_open=True))
+        self.fac_coarse_rel_tol = (0.0 if fac_coarse_rel_tol is None else exact_real(
+            fac_coarse_rel_tol, where="CondensedSchur.fac_coarse_rel_tol", minimum=0,
+            minimum_open=True, maximum=1, maximum_open=True))
+        self.fac_coarse_cycles = optional_positive_int(
+            fac_coarse_cycles, where="CondensedSchur.fac_coarse_cycles")
+        self.fac_verbose = strict_bool(fac_verbose, where="CondensedSchur.fac_verbose")
+        if not isinstance(kind, str) or kind != "electrostatic_lorentz":
             raise ValueError(
                 "CondensedSchur: kind 'electrostatic_lorentz' (only one supported); got %r" % (kind,))
-        if not (0.0 < float(theta) <= 1.0):
-            raise ValueError("CondensedSchur: theta must be in (0, 1] (got %r)" % (theta,))
+        theta_exact = exact_real(
+            theta, where="CondensedSchur.theta", minimum=0, minimum_open=True, maximum=1)
         # momentum must be a pair (role_x, role_y); a bare string (iterable of characters)
         # is rejected explicitly (otherwise tuple("xy") would give two components by accident).
         if isinstance(momentum, str):
@@ -200,8 +199,8 @@ class CondensedSchur:
                 "behind it); leave potential='phi' (default)." % (potential,))
         # Typed source-stage route (ADC-584); str value stays the historical token.
         self.kind = SOURCE_STAGE_ELECTROSTATIC_LORENTZ
-        self.theta = float(theta)
-        self.alpha = float(alpha)
+        self.theta = theta_exact
+        self.alpha = exact_real(alpha, where="CondensedSchur.alpha")
         self.density = density
         self.momentum = mom
         self.energy = energy

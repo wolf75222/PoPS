@@ -61,7 +61,7 @@ def _program(name="intro_demo", *, krylov=False):
         from pops.solvers.krylov import CG
         P.set_apply(A, _apply)
         P.solve_linear(operator=A, rhs=buf, method=CG(max_iter=10), max_iter=10)
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
     return P
 
 

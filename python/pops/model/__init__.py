@@ -21,7 +21,7 @@ The package imports only the standard library so it can be exercised without the
 compiled ``_pops`` extension.
 """
 from .bundles import RateBundle
-from .handles import OperatorHandle
+from .handles import Handle, OperatorHandle, OwnerPath
 from .manifest import (
     ModuleManifest,
     OperatorManifestEntry,
@@ -33,10 +33,13 @@ from .operators import (
     OPERATOR_FAMILIES,
     OPERATOR_KINDS,
     OPERATOR_REQUIREMENT_KEYS,
+    OPERATOR_SIGNATURE_CONTRACTS,
     LocalLinearOperator,
     MatrixFreeOperator,
     Operator,
+    SignatureContract,
     operator_family,
+    validate_operator_signature,
 )
 from .registry import OperatorRegistry
 from .signatures import Signature
@@ -65,11 +68,14 @@ __all__ = [
     "AuxSpace",
     "Module",
     "RateBundle",
-    "OperatorHandle",
+    "Handle", "OperatorHandle", "OwnerPath",
     "OPERATOR_KINDS",
     "OPERATOR_FAMILIES",
     "OPERATOR_REQUIREMENT_KEYS",
+    "OPERATOR_SIGNATURE_CONTRACTS",
     "operator_family",
+    "SignatureContract",
+    "validate_operator_signature",
     "ModuleManifest",
     "OperatorManifestEntry",
     "OperatorRegistryManifest",

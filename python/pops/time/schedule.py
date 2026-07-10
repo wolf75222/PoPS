@@ -6,13 +6,31 @@ not; the module helpers (``always`` / ``every`` / ``when`` / ``on_start`` / ``on
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any
+
+from pops.time.value_metadata import _freeze_attr
+
+
+def _freeze_param(value: Any) -> Any:
+    # Runtime output policies deliberately accept a callable predicate; Program schedules reject
+    # such predicates at their explicit lowerability gate. Every data leaf is otherwise strict.
+    if callable(value):
+        return value
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze_param(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_param(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_freeze_param(item) for item in value)
+    return _freeze_attr(value)
 
 
 class Schedule:
     """When a Program node is due, and what to do when it is not (Spec 3 unified scheduler).
 
-    A Schedule is an inert IR annotation recorded on a node (``Value.attrs['schedule']``). The
+    A Schedule is an inert IR annotation recorded on a node (``ProgramValue.attrs['schedule']``). The
     ``kind`` decides WHEN the node is due (``always`` every step, ``every(N)``, ``when(cond)``,
     ``on_start`` / ``on_end``, ``subcycle``); the ``policy`` decides what happens when it is NOT
     due (``recompute`` the default, ``hold`` the cached value, ``skip``, ``zero``,
@@ -29,6 +47,7 @@ class Schedule:
     _POLICIES = ("recompute", "hold", "skip", "zero", "accumulate_dt", "error")
     # policies that reuse a stored value, so the operator must be cacheable
     _CACHING = ("hold", "accumulate_dt")
+    __pops_ir_immutable__ = True
     # ADC-642: each kind decoded ONCE. so_lowerable = a compiled sim.step(dt) loop can evaluate the
     # due-test (on_end cannot: no end-of-run signal reaches the .so). host_cadence = the host output
     # driver can fire it (subcycles are internal to the native macro step, invisible to the run-loop
@@ -43,6 +62,8 @@ class Schedule:
         "subcycle": {"so_lowerable": True,  "host_cadence": False},
     }
 
+    __slots__ = ("kind", "policy", "params")
+
     def __init__(self, kind: Any, policy: Any = "recompute", **params: Any) -> None:
         if kind not in Schedule._KINDS:
             raise ValueError("schedule kind %r must be one of %s"
@@ -50,9 +71,15 @@ class Schedule:
         if policy not in Schedule._POLICIES:
             raise ValueError("schedule policy %r must be one of %s"
                              % (policy, ", ".join(Schedule._POLICIES)))
-        self.kind = kind
-        self.policy = policy
-        self.params = dict(params)
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "policy", policy)
+        object.__setattr__(self, "params", _freeze_param(params))
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("Schedule is immutable")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("Schedule is immutable")
 
     def is_always(self) -> Any:
         """True for the default cadence (every step, recompute) -- the only schedule that lowers."""
@@ -120,7 +147,7 @@ def always() -> Any:
 
 def every(n: Any) -> Any:
     """Due every ``n`` macro-steps (``n`` a positive int)."""
-    if not (isinstance(n, int) and n > 0):
+    if isinstance(n, bool) or not (isinstance(n, int) and n > 0):
         raise ValueError("every(n): n must be a positive int, got %r" % (n,))
     return Schedule("every", n=n)
 
@@ -142,7 +169,6 @@ def on_end() -> Any:
 
 def subcycle(count: Any, dt: Any = None) -> Any:
     """Structured sub-cycling: ``count`` inner steps (of ``dt`` each, default ``macro_dt/count``)."""
-    if not (isinstance(count, int) and count > 0):
+    if isinstance(count, bool) or not (isinstance(count, int) and count > 0):
         raise ValueError("subcycle(count): count must be a positive int, got %r" % (count,))
     return Schedule("subcycle", count=count, dt=dt)
-

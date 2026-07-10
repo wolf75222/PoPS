@@ -51,27 +51,53 @@ def test_field_outputs_unknown_raises_naming_known():
 
 
 def test_fields_handle_is_a_typed_operator_handle():
-    h = FieldsHandle("phi_solve", outputs={"E": "grad"}, solver=None)
+    m, rho, phi, laplacian, grad = _board_with_field()
+    h = m.solve_field("phi_solve", equation=(-laplacian(phi) == rho),
+                      outputs={"E": grad(phi).x}, solver=None)
     assert isinstance(h, OperatorHandle)
     assert h.kind == "field_operator"
     assert h.name == "phi_solve"
     assert isinstance(h.outputs, FieldOutputs)
-    assert h.outputs.E == "grad"
+    assert h.outputs.E.field is phi
 
 
 def test_fields_handle_call_lowers_to_solve_fields():
     from pops.time.program import Program
-    P = Program("p")
+    m, rho, phi, laplacian, grad = _board_with_field()
+    h = m.solve_field("phi_solve", equation=(-laplacian(phi) == rho),
+                      outputs={"E": grad(phi).x}, solver=None)
+    P = Program("p").bind_operators(m.module)
     U = P.state("plasma")
-    h = FieldsHandle("phi_solve", outputs={"E": "grad"}, solver=None)
     v = h(U)
     assert v.vtype == "fields" and v.op == "solve_fields"
     # ADC-588 tag rides through: the value carries a FieldContext.
-    assert v.field_context.block == "plasma"
+    assert v.field_context.stage_sources == (("plasma", U.id),)
+
+
+def test_fields_handle_alias_keeps_exact_declaring_owner():
+    """The readable alias maps explicitly to fields_from_state without becoming name-only."""
+    from pops.time.program import Program
+
+    first, rho1, phi1, laplacian1, grad1 = _board_with_field()
+    first_handle = first.solve_field(
+        "phi_solve", equation=(-laplacian1(phi1) == rho1),
+        outputs={"E": grad1(phi1).x}, solver=None)
+    second, rho2, phi2, laplacian2, grad2 = _board_with_field()
+    foreign_handle = second.solve_field(
+        "phi_solve", equation=(-laplacian2(phi2) == rho2),
+        outputs={"E": grad2(phi2).x}, solver=None)
+    program = Program("p").bind_operators(first.module)
+    state = program.state("plasma")
+
+    assert first_handle(state).op == "solve_fields"
+    with pytest.raises(ValueError, match="belongs to owner"):
+        foreign_handle(state)
 
 
 def test_fields_handle_bare_call_refused():
-    h = FieldsHandle("phi_solve", outputs={}, solver=None)
+    m, rho, phi, laplacian, grad = _board_with_field()
+    h = m.solve_field("phi_solve", equation=(-laplacian(phi) == rho),
+                      outputs={}, solver=None)
     with pytest.raises(ValueError) as exc:
         h(42)
     assert "field operator" in str(exc.value)

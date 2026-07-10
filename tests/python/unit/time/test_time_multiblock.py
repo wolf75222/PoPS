@@ -84,7 +84,7 @@ def single_block_program(t, name, block):
     dt = P.dt
     U = P.state(block)
     R = P._rhs_legacy(name="R_" + block, state=U, flux=True, sources=["decay"])
-    P.commit(block, P.linear_combine(block + "_next", U + dt * R))
+    P.commit(P.state("U", block=block).next, P.linear_combine(block + "_next", U + dt * R))
     return P
 
 
@@ -97,7 +97,7 @@ def two_block_program(t, name="two_block_passive"):
     for blk in ("a", "b"):
         U = P.state(blk)
         R = P._rhs_legacy(name="R_" + blk, state=U, flux=True, sources=["decay"])
-        P.commit(blk, P.linear_combine(blk + "_next", U + dt * R))
+        P.commit(P.state("U", block=blk).next, P.linear_combine(blk + "_next", U + dt * R))
     return P
 
 
@@ -112,7 +112,7 @@ def section_a(t):
     for blk in ("a", "b"):
         U = P.state(blk)
         R = P._rhs_legacy(state=U, flux=True, sources=["default"])
-        P.commit(blk, P.linear_combine(blk + "_next", U + dt * R))
+        P.commit(P.state("U", block=blk).next, P.linear_combine(blk + "_next", U + dt * R))
     src = P.emit_cpp_program()
     chk("ctx.state(0)" in src and "ctx.state(1)" in src, "two blocks bind ctx.state(0) and state(1)")
     chk("ctx.rhs_into(0, " in src and "ctx.rhs_into(1, " in src, "RHS routed per block index")
@@ -123,7 +123,7 @@ def section_a(t):
     Ub = Pro.state("b")  # noqa: F841 -- declared, read by the coupled charge but never committed
     fa = Pro.solve_fields(Ua)
     Ra = Pro._rhs_legacy(state=Ua, fields=fa, sources=["default"])
-    Pro.commit("a", Pro.linear_combine("a1", Ua + Pro.dt * Ra))
+    Pro.commit(Pro.state("U", block="a").next, Pro.linear_combine("a1", Ua + Pro.dt * Ra))
     chk(Pro.validate() is True, "a read-only (uncommitted) block validates")
     src_ro = Pro.emit_cpp_program()
     chk("ctx.state(1)" in src_ro, "the read-only block still binds its index (ctx.state(1))")
@@ -131,16 +131,18 @@ def section_a(t):
     # A double commit is rejected at build time.
     Pd = t.Program("double")
     Uad = Pd.state("a")
-    Pd.commit("a", Pd.linear_combine("x", 1.0 * Uad))
-    chk(raises(ValueError, lambda: Pd.commit("a", Pd.linear_combine("y", 1.0 * Uad))),
+    Pd.commit(Pd.state("U", block="a").next, Pd.linear_combine("x", 1.0 * Uad))
+    chk(raises(ValueError, lambda: Pd.commit(Pd.state("U", block="a").next, Pd.linear_combine("y", 1.0 * Uad))),
         "a double commit of the same block is rejected")
 
     # A commit of a block no P.state declares cannot route to an index -> rejected.
     Pu = t.Program("unknown")
     Uau = Pu.state("a")
-    Pu.commit("ghost", Pu.linear_combine("g", 1.0 * Uau))
-    chk(raises(ValueError, lambda: Pu.emit_cpp_program()),
-        "a commit of an undeclared block is rejected")
+    chk(raises(
+        ValueError,
+        lambda: Pu.commit(
+            Pu.state("U", block="ghost").next, Pu.linear_combine("g", 1.0 * Uau))),
+        "a cross-block commit is rejected before lowering")
 
     # The SIMULTANEOUS multi-target coupled field solve LOWERS (Spec 3 criterion 24, ADC-457): every
     # listed block contributes its stage state at once into the shared phi/aux.
@@ -148,8 +150,8 @@ def section_a(t):
     Uac = Pc.state("a")
     Ubc = Pc.state("b")
     Pc.solve_fields_from_blocks([Uac, Ubc])
-    Pc.commit("a", Pc.linear_combine("a1", Uac + Pc.dt * Pc._rhs_legacy(state=Uac, sources=["default"])))
-    Pc.commit("b", Pc.linear_combine("b1", Ubc + Pc.dt * Pc._rhs_legacy(state=Ubc, sources=["default"])))
+    Pc.commit(Pc.state("U", block="a").next, Pc.linear_combine("a1", Uac + Pc.dt * Pc._rhs_legacy(state=Uac, sources=["default"])))
+    Pc.commit(Pc.state("U", block="b").next, Pc.linear_combine("b1", Ubc + Pc.dt * Pc._rhs_legacy(state=Ubc, sources=["default"])))
     src_c = Pc.emit_cpp_program()
     chk("ctx.solve_fields_from_blocks(" in src_c,
         "solve_fields_from_blocks lowers to the coupled multi-block solve")
@@ -171,13 +173,13 @@ def section_a(t):
     Pcf = t.Program("cf_block_routing")
     Uacf = Pcf.state("a")
     Ubcf = Pcf.state("b")
-    Pcf.commit("a", Pcf.linear_combine(
+    Pcf.commit(Pcf.state("U", block="a").next, Pcf.linear_combine(
         "a_n", Uacf + Pcf.dt * Pcf._rhs_legacy(state=Uacf, flux=True, sources=["default"])))
 
     def _cf_body(prog, x):
         return prog.linear_combine(None, x + prog.dt * prog._rhs_legacy(state=x, flux=True, sources=["default"]))
 
-    Pcf.commit("b", Pcf.range(Ubcf, 2, _cf_body))
+    Pcf.commit(Pcf.state("U", block="b").next, Pcf.range(Ubcf, 2, _cf_body))
     src_cf = Pcf.emit_cpp_program()
     chk("ctx.rhs_into(1, " in src_cf,
         "control flow inside block b routes its body RHS to index 1 (not silently 0)")

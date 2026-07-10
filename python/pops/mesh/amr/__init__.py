@@ -11,6 +11,7 @@ Everything here is an inert descriptor; nothing tags a cell in Python.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from .._descriptor import Availability, MeshDescriptor
@@ -78,13 +79,13 @@ def _declared_subjects(model_or_context: Any) -> Any:
         if view is not None:
             add_iter(getattr(view, "components", None))
             roles = getattr(view, "roles", None)
-            if isinstance(roles, dict):
+            if isinstance(roles, Mapping):
                 found_surface = True
                 names.update(k for k in roles if isinstance(k, str))
                 names.update(v for v in roles.values() if isinstance(v, str))
 
     # A bare mapping / collection of declared subject names (a lightweight context).
-    if isinstance(model_or_context, dict):
+    if isinstance(model_or_context, Mapping):
         for key in ("roles", "subjects", "variables", "components"):
             if key in model_or_context:
                 add_iter(model_or_context[key])

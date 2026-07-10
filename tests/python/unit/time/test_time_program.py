@@ -31,11 +31,11 @@ def test_forward_euler_ir():
     fields = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=fields, flux=True, sources=["default"])
     U1 = P.linear_combine("U1", U + dt * R)
-    P.commit("plasma", U1)
+    P.commit(P.state("U", block="plasma").next, U1)
     P.validate()
     assert U.vtype == "state" and R.vtype == "rhs" and fields.vtype == "fields"
     assert U1.vtype == "state" and U1.op == "linear_combine"
-    assert set(U1.inputs) == {U, R}
+    assert {value.id for value in U1.inputs} == {U.id, R.id}
     assert _coeff(U1, U) == {0: 1.0}
     assert _coeff(U1, R) == {1: 1.0}
     assert P.commits()["plasma"] is U1
@@ -52,7 +52,7 @@ def test_ssprk2_ir():
     f1 = P.solve_fields("f1", U1)
     k1 = P._rhs_legacy("k1", state=U1, fields=f1, flux=True, sources=["default"])
     U2 = P.linear_combine("U2", 0.5 * U0 + 0.5 * (U1 + dt * k1))
-    P.commit("plasma", U2)
+    P.commit(P.state("U", block="plasma").next, U2)
     P.validate()
     assert _coeff(U2, U0) == {0: 0.5}
     assert _coeff(U2, U1) == {0: 0.5}
@@ -72,7 +72,7 @@ def test_rk4_ir():
     U3 = P.linear_combine("U3", U0 + dt * k3)
     k4 = P._rhs_legacy("k4", state=U3, fields=P.solve_fields(U3), flux=True, sources=["default"])
     Unp1 = P.linear_combine("Unp1", U0 + dt / 6.0 * k1 + dt / 3.0 * k2 + dt / 3.0 * k3 + dt / 6.0 * k4)
-    P.commit("plasma", Unp1)
+    P.commit(P.state("U", block="plasma").next, Unp1)
     P.validate()
     assert _coeff(Unp1, U0) == {0: 1.0}
     assert abs(_coeff(Unp1, k1)[1] - 1.0 / 6.0) < 1e-15
@@ -85,9 +85,9 @@ def test_commit_once():
     P = adctime.Program("p")
     U = P.state("plasma")
     U1 = P.linear_combine("U1", U + P.dt * P._rhs_legacy(state=U, fields=P.solve_fields(U)))
-    P.commit("plasma", U1)
+    P.commit(P.state("U", block="plasma").next, U1)
     try:
-        P.commit("plasma", U1)
+        P.commit(P.state("U", block="plasma").next, U1)
     except ValueError as e:
         assert "committed more than once" in str(e), str(e)
         print("OK  4. double commit rejected")
@@ -125,7 +125,7 @@ def _build_euler(scale=1.0):
     dt = P.dt
     U = P.state("plasma")
     R = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=["default"])
-    P.commit("plasma", P.linear_combine("U1", U + (scale * dt) * R))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + (scale * dt) * R))
     return P
 
 
@@ -149,7 +149,7 @@ def test_rhs_records_sources_and_flux():
     U = P.state("plasma")
     R = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=["electric", "chemistry"])
     assert R.attrs["flux"] is True
-    assert R.attrs["sources"] == ["electric", "chemistry"]
+    assert R.attrs["sources"] == ("electric", "chemistry")
     print("OK  9. rhs records its flux flag and named sources")
 
 

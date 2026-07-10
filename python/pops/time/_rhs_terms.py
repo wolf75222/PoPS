@@ -10,18 +10,22 @@ from __future__ import annotations
 from typing import Any
 
 
-def terms_to_flux_sources(terms: Any) -> Any:
+def terms_to_flux_sources(program: Any, terms: Any) -> Any:
     """Lower a typed ``terms=[...]`` list onto the legacy ``(flux, sources)``.
 
     A :class:`pops.numerics.terms.Flux` sets ``flux=True`` (its absence -> ``flux=False``); every
-    source term contributes its NAME to ``sources`` in list order. Accepted source forms (each maps
-    cleanly onto an existing ``sources=`` name): a :class:`~pops.numerics.terms.SourceTerm` /
-    :class:`~pops.numerics.terms.LocalTerm` descriptor (its ``.name`` must be set), an
-    :class:`pops.model.OperatorHandle` from ``m.source_term`` (its ``.name``), or a plain source
-    name ``str``. A non-term object (e.g. a bare ``bool``) is a clear ``TypeError``.
+    source term contributes its registered NAME to ``sources`` in list order. Accepted source forms
+    are a named :class:`~pops.numerics.terms.SourceTerm` /
+    :class:`~pops.numerics.terms.LocalTerm` descriptor, or the exact
+    :class:`pops.model.OperatorHandle` returned by ``m.source_term``. Both are resolved against the
+    Program's bound registry and must name a ``local_source``. Free strings are private lowering
+    tokens, not public typed terms. A non-term object is a clear ``TypeError``.
     """
     from pops.numerics.terms import Flux, LocalTerm, SourceTerm
     from pops.model import OperatorHandle
+    from pops.time.operator_resolution import (
+        resolve_operator_handle, resolve_registered_operator,
+    )
     flux = False
     sources = []
     for t in terms:
@@ -34,14 +38,21 @@ def terms_to_flux_sources(terms: Any) -> Any:
                 raise ValueError(
                     "rhs: a %s in terms= must be named (the name of a declared m.source_term); "
                     "got an unnamed %s" % (type(t).__name__, type(t).__name__))
-            sources.append(t.name)
+            operator = resolve_registered_operator(
+                program, t.name, where="rhs: terms=", expected_kinds="local_source")
+            sources.append(operator.name)
         elif isinstance(t, OperatorHandle):
-            sources.append(t.name)
-        elif isinstance(t, str) and t:
-            sources.append(t)
+            operator = resolve_operator_handle(
+                program, t, where="rhs: terms=", expected_kinds="local_source")
+            sources.append(operator.lowering.get("source", operator.name))
+        elif isinstance(t, str):
+            raise TypeError(
+                "rhs: a free source name %r is not accepted in public terms=; pass the "
+                "OperatorHandle returned by m.source_term(...) or a typed SourceTerm/LocalTerm "
+                "descriptor" % t)
         else:
             raise TypeError(
-                "rhs: terms= entries must be a pops.numerics.terms.Flux/SourceTerm/LocalTerm, a "
-                "source OperatorHandle (from m.source_term), or a source name str; got %r "
+                "rhs: terms= entries must be a pops.numerics.terms.Flux/SourceTerm/LocalTerm or "
+                "the source OperatorHandle returned by m.source_term; got %r "
                 "(note: Flux() is a term, not a bool)" % (t,))
     return flux, sources

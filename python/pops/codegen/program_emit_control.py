@@ -119,9 +119,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system") -> tuple
     var = {}
     prelude = []
     lines = []
-    # Bool-predicate value id -> its C++ token, for a when(cond) schedule whose cond is a Program
-    # compare value emitted earlier in the body (ADC-458). Reset per emit (tokens are body-local).
-    program._when_tokens = {}
+    # ``var`` also carries emission-local schedule/coupled scratch tokens under tuple keys. Nothing
+    # is written back into Program authoring state, so codegen remains pure after deep freeze.
     committed_ids = {s.id for s in program._commits.values()}
     # Multistep histories (ADC-406a): register each declared history at its MAX lag FIRST (a
     # registration-only call, NOT a read -- a read before the first store fails loud), so the ring

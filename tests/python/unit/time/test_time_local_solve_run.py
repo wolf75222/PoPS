@@ -37,18 +37,11 @@ try:
     import pops
     from pops.ir.ops import sqrt
     from pops.physics.facade import Model
-    from pops.model import OperatorHandle
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001  -- numpy or _pops unavailable in this interpreter
     _skip("pops/numpy unavailable: %s" % exc)
 
 fails = 0
-
-
-def _op(name):
-    """A typed OperatorHandle for the public P.linear_source route (ADC-625): unwraps to name, so the
-    built IR is byte-identical to the historical bare-name selector."""
-    return OperatorHandle(name)
 
 
 def chk(cond, label):
@@ -98,8 +91,8 @@ def lorentz_program(name="lorentz_step"):
     dt = P.dt
     U = P.state("plasma")
     Q = P.linear_combine("Q", 1.0 * U)  # a State scratch == U (the solve rhs)
-    W = P.solve_local_linear(name="W", operator=P.I - dt * P.linear_source(_op("lorentz")), rhs=Q)
-    P.commit("plasma", W)
+    W = P.solve_local_linear(name="W", operator=P.I - dt * P._linear_source("lorentz"), rhs=Q)
+    P.commit(P.state("U", block="plasma").next, W)
     return P
 
 
@@ -126,7 +119,7 @@ big.linear_source("L", zero9)
 Pbig = adctime.Program("big")
 Ub = Pbig.state("blk")
 Qb = Pbig.linear_combine("Qb", 1.0 * Ub)
-Pbig.commit("blk", Pbig.solve_local_linear(name="Wb", operator=Pbig.I - Pbig.dt * Pbig.linear_source(_op("L")),
+Pbig.commit(Pbig.state("U", block="blk").next, Pbig.solve_local_linear(name="Wb", operator=Pbig.I - Pbig.dt * Pbig._linear_source("L"),
                                            rhs=Qb))
 chk(raises(ValueError, lambda: Pbig.emit_cpp_program(model=big)),
     "n_cons > 8 dense-fallback guard fires")

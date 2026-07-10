@@ -9,9 +9,12 @@ operator-first multi-block IR (:mod:`pops.model`); codegen-free, ``_pops``-free.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
-from .board_handles import (CallableOperator, FieldsHandle, StateHandle,
+from ._board_contract import (atomic_attrs, normalize_components, normalize_roles,
+                              normalize_sequence, normalize_string_mapping, require_name)
+from .board_handles import (FieldsHandle, StateHandle,
                             _canon_role, _safe_name)
 
 if TYPE_CHECKING:
@@ -23,40 +26,61 @@ else:
 class _MultiSpeciesMixin(_BoardModel):
     """Multi-species promotion, coupled_rate, field-solve, and inspection dumps."""
 
-    def _promote_to_multispecies(self) -> None:
+    def _promote_to_multispecies(self, extra: Any = None) -> Any:
         """Build the multi-block :class:`pops.model.Module` and migrate the first species into it.
 
         The single-state dsl model authored the first species; multi-species mode realizes every
         species as a typed StateSpace on a shared Module so N >= 2 species lower to the existing
         operator-first multi-block IR (N spaces + coupled_rate + multi-block field solve), not a
-        second runtime. The first species' :class:`StateHandle` is updated IN PLACE (its ``.space``
-        is set) so the reference the caller already holds stays valid after promotion."""
+        second runtime. Promotion replaces registry metadata with a new, equal immutable handle;
+        an earlier user reference retains the same qualified identity and expression components."""
         if self._multi_module is not None:
-            return
+            if extra is None:
+                return None
+            return self._add_species(extra[0], components=extra[1], roles=extra[2])
         from .. import model as _model
-        self._multi_module = _model.Module(self.name)
+        candidate = _model.Module(self.name, owner=self.owner_path)
+        promoted = {}
         for nm, h in self._species.items():
-            self._add_species(nm, components=h.components, roles=h.roles, handle=h)
+            promoted[nm] = self._declare_species_on(
+                candidate, nm, h.components, dict(h.roles))
+        result = None
+        if extra is not None:
+            name, components, roles = extra
+            result = self._declare_species_on(candidate, name, components, roles)
+            promoted[name] = result
+        self._multi_module = candidate
+        self._species.update(promoted)
+        self._states.update(promoted)
+        return result
 
-    def _add_species(self, name: Any, components: Any = (), roles: Any = None,
-                     handle: Any = None) -> Any:
-        """Add one typed StateSpace to the multi-block Module and return its StateHandle.
-
-        ``handle`` updates an existing :class:`StateHandle` in place (promotion of the first
-        species); otherwise a fresh handle is created and recorded."""
-        from ..ir.expr import Var
-        comps = tuple(components)
-        canon = {c: _canon_role(roles.get(c)) for c in comps} if roles else {}
-        space = self._multi_module.state_space(str(name), comps, roles=canon)
-        vars_ = tuple(Var(c, "cons") for c in comps)
-        if handle is None:
-            handle = StateHandle(name, comps, vars_, roles, space=space)
-        else:
-            handle.vars = vars_
-            handle.space = space
-        self._species[handle.name] = handle
-        self._states[handle.name] = handle
+    def _add_species(self, name: Any, components: Any = (), roles: Any = None) -> Any:
+        """Add one typed StateSpace to the multi-block Module atomically."""
+        name = require_name(name, "species name")
+        comps = normalize_components(components, "species %s state" % name)
+        role_map = normalize_roles(roles, comps, "species %s" % name)
+        if name in self._species:
+            raise ValueError("species %r is already declared" % name)
+        module = self._multi_module
+        with atomic_attrs((module, "_state_spaces"), (self, "_species"), (self, "_states")):
+            handle = self._declare_species_on(module, name, comps, role_map)
+            self._species[handle.name] = handle
+            self._states[handle.name] = handle
         return handle
+
+    def _declare_species_on(self, module: Any, name: Any, components: Any,
+                            roles: Any) -> StateHandle:
+        """Build one complete typed species on an unpublished/guarded Module."""
+        from ..ir.expr import Var
+
+        name = require_name(name, "species name")
+        comps = normalize_components(components, "species %s state" % name)
+        role_map = normalize_roles(roles, comps, "species %s" % name)
+        canon = {component: _canon_role(role) for component, role in role_map.items()}
+        space = module.state_space(name, comps, roles=canon)
+        vars_ = tuple(Var(component, "cons") for component in comps)
+        return StateHandle(
+            name, comps, vars_, role_map, owner=self.owner_path, space=space)
 
     # --- quantities ---
 
@@ -77,36 +101,51 @@ class _MultiSpeciesMixin(_BoardModel):
         mode (declare the species with :meth:`species`).
         """
         from .. import model as _model
+        reg = _safe_name(name)
         if self._multi_module is None:
             raise ValueError(
                 "coupled_rate(%r) needs at least two species; declare them with m.species(...)"
                 % (name,))
         in_handles = self._as_species_list("coupled_rate", name, inputs)
-        if not outputs:
+        if not isinstance(outputs, Mapping) or len(outputs) == 0:
             raise ValueError("coupled_rate(%r) requires outputs={species: [per-component exprs]}"
                              % (name,))
         in_spaces = tuple(h.space for h in in_handles)
-        bundle = _model.RateBundle()
-        expr = {}
+        output_specs = []
         for sp, comps in outputs.items():
             h = self._species_handle("coupled_rate", name, sp)
-            comp_list = [self._to_expr(c) for c in self._as_iter(comps)]
-            if len(comp_list) != len(h.components):
+            if h not in in_handles:
+                raise ValueError(
+                    "coupled_rate(%r) output species %r must also be declared in inputs"
+                    % (name, h.name))
+            comp_values = normalize_sequence(
+                comps, "coupled_rate %s output %s" % (reg, h.name), nonempty=True)
+            if len(comp_values) != len(h.components):
                 raise ValueError(
                     "coupled_rate(%r) output %r has %d component formula(s) but its state %r has %d"
-                    % (name, h.name, len(comp_list), h.name, len(h.components)))
-            bundle.add(h.name, h.space)
-            expr[h.name] = comp_list
+                    % (name, h.name, len(comp_values), h.name, len(h.components)))
+            output_specs.append((h, comp_values))
         caps = {}
         if preserves is not None:
             caps["preserves"] = preserves
         if dissipates is not None:
             caps["dissipates"] = dissipates
-        reg = _safe_name(name)
-        self._multi_module.operator(name=reg, kind="coupled_rate",
-                                    signature=_model.Signature(in_spaces, bundle),
-                                    capabilities=caps or None, expr=expr)
-        return CallableOperator(reg, self)
+        registry = self._multi_module.operator_registry()
+        hyp = self._dsl._m
+        with atomic_attrs((registry, "_by_name"), (registry, "_order"),
+                          (hyp, "aux_names"), (hyp, "aux_extra_names")):
+            rate_entries = {handle.name: handle.space for handle, _ in output_specs}
+            expr = {
+                handle.name: [self._to_expr(value) for value in values]
+                for handle, values in output_specs
+            }
+            bundle = _model.RateBundle(rate_entries)
+            signature = _model.Signature(in_spaces, bundle)
+            self._multi_module.operator(
+                name=reg, kind="coupled_rate", signature=signature,
+                capabilities=caps or None, expr=expr)
+            result = self._registered_operator_handle(reg)
+        return result
 
     def solve_fields_from_species(self, name: Any, inputs: Any = (), equation: Any = None,
                                   outputs: Any = None, solver: Any = None) -> Any:
@@ -119,38 +158,60 @@ class _MultiSpeciesMixin(_BoardModel):
         ``solver`` record the elliptic problem and the produced fields for introspection.
         """
         from .. import model as _model
+        reg = _safe_name(name)
         if self._multi_module is None:
             raise ValueError(
                 "solve_fields_from_species(%r) needs at least two species; declare them with "
                 "m.species(...)" % (name,))
         in_handles = self._as_species_list("solve_fields_from_species", name, inputs)
         in_spaces = tuple(h.space for h in in_handles)
-        out_comps = tuple(outputs.keys()) if outputs else ("phi",)
-        fields = self._multi_module.field_space(_safe_name(name), out_comps)
-        reg = _safe_name(name)
+        output_map = ({"phi": None} if outputs is None
+                      else normalize_string_mapping(outputs, "field solve outputs"))
+        if not output_map:
+            raise ValueError("solve_fields_from_species(%r) requires at least one output" % name)
+        out_comps = tuple(output_map)
         reqs = {"solver": solver} if solver is not None else None
-        self._multi_module.operator(name=reg, kind="field_operator",
-                                    signature=_model.Signature(in_spaces, fields),
-                                    requirements=reqs,
-                                    expr={"blocks": [h.name for h in in_handles]})
-        h = FieldsHandle(name, outputs, solver)
-        self._fields[name] = h
-        if solver is not None:
-            self._field_solvers[name] = solver
+        h = FieldsHandle(
+            name, output_map, solver, owner=self.owner_path,
+            registered_operator_name=reg)
+        if name in self._fields:
+            raise ValueError("field operator %r is already declared" % name)
+        registry = self._multi_module.operator_registry()
+        with atomic_attrs(
+                (self._multi_module, "_field_spaces"), (registry, "_by_name"),
+                (registry, "_order"), (self, "_fields"), (self, "_field_solvers")):
+            fields = self._multi_module.field_space(reg, out_comps)
+            self._multi_module.operator(
+                name=reg, kind="field_operator",
+                signature=_model.Signature(in_spaces, fields), requirements=reqs,
+                expr={"blocks": [handle.name for handle in in_handles]})
+            self._fields[name] = h
+            if solver is not None:
+                self._field_solvers[name] = solver
         return h
 
     def _as_species_list(self, op: Any, name: Any, items: Any) -> Any:
         """Resolve a list of species handles / names to StateHandles (multi-species mode)."""
-        if not items:
+        values = self._as_iter(items)
+        if not values:
             raise ValueError("%s(%r) requires inputs=[species, ...]" % (op, name))
-        return [self._species_handle(op, name, s) for s in self._as_iter(items)]
+        handles = [self._species_handle(op, name, species) for species in values]
+        if len(set(handles)) != len(handles):
+            raise ValueError("%s(%r) inputs must not repeat a species" % (op, name))
+        return handles
 
     def _species_handle(self, op: Any, name: Any, sp: Any) -> Any:
         """Resolve one species (a StateHandle or a species name) to its StateHandle."""
         if isinstance(sp, StateHandle):
+            if sp.owner_path != self.owner_path:
+                raise ValueError(
+                    "%s(%r): species handle %r belongs to another physics model"
+                    % (op, name, sp.name))
             handle = self._species.get(sp.name)
+            if handle != sp:
+                handle = None
         else:
-            handle = self._species.get(str(sp))
+            handle = self._species.get(require_name(sp, "%s species" % op))
         if handle is None:
             known = ", ".join(self._species) or "<none>"
             raise KeyError("%s(%r): unknown species %r (declared: %s)"
@@ -160,9 +221,11 @@ class _MultiSpeciesMixin(_BoardModel):
     @staticmethod
     def _as_iter(x: Any) -> Any:
         """A list view of a single item or an iterable (so inputs=e and inputs=[e, i] both work)."""
-        if isinstance(x, (list, tuple)):
-            return list(x)
-        return [x]
+        if x is None:
+            return []
+        if isinstance(x, (StateHandle, str)):
+            return [x]
+        return list(normalize_sequence(x, "species inputs"))
 
 
     def list_operators(self) -> Any:

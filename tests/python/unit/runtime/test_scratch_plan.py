@@ -50,7 +50,7 @@ def _ssprk3(name="ssprk3"):
     f2 = P.solve_fields(u2)
     r2 = P._rhs_legacy(state=u2, fields=f2, flux=True, sources=["default"])
     un = P.linear_combine("Un", (1.0 / 3.0) * U + (2.0 / 3.0) * u2 + (2.0 / 3.0) * dt * r2)
-    P.commit("plasma", un)
+    P.commit(P.state("U", block="plasma").next, un)
     return P
 
 
@@ -71,7 +71,7 @@ def _krylov(name="krylov_demo"):
     from pops.solvers.krylov import CG
     P.set_apply(A, _apply)
     P.solve_linear(operator=A, rhs=buf, method=CG(max_iter=10), max_iter=10)
-    P.commit("plasma", P.linear_combine("U1", U + P.dt * r))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + P.dt * r))
     return P
 
 
@@ -230,7 +230,7 @@ def test_no_persistent_without_solve():
     P = adctime.Program("transport_only")
     U = P.state("plasma")
     r = P._rhs_legacy(state=U, flux=True, sources=[])
-    P.commit("plasma", P.linear_combine("U1", U + P.dt * r))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + P.dt * r))
     plan = P.scratch_plan()
     chk(plan.persistent == [], "no solve -> no persistent solver buffers")
     chk(plan.conservative is False, "a solve-free plan is EXACT, not conservative")

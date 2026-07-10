@@ -71,7 +71,7 @@ def test_local_linear_map_signature():
                                        [0.0, -bz, 0.0]])
     assert isinstance(L, OperatorHandle)
     assert L.kind == "local_linear_operator" and L.category == "local_linear_map"
-    assert "LocalLinearOperator('U', 'U')" in repr(L.signature)
+    assert "LocalLinearOperator(StateSpace('U'" in repr(L.signature)
     print("OK  m.local_linear_map -> Fields -> LocalLinearOperator(U, U)")
 
 
@@ -100,14 +100,16 @@ def test_declarers_funnel_into_one_registry():
     assert reg.get("rate_math").kind == reg.get("rate_classic").kind == "local_rate"
     assert reg.get("rate_math").signature == reg.get("rate_classic").signature
 
-    fields_h = OperatorHandle("fields_from_state", kind="field_operator")
+    fields_h = OperatorHandle(
+        "fields_from_state", kind="field_operator", owner=reg.owner_path,
+        signature=reg.get("fields_from_state").signature)
 
     def prog(handle):
         P = adctime.Program("p").bind_operators(m)
         U = P.state("plasma")
         f = P.call(fields_h, U)
         R = P.call(handle, U, f)
-        P.commit("plasma", P.linear_combine("u1", U + P.dt * R))
+        P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", U + P.dt * R))
         return P
 
     assert prog(r_math)._ir_hash() == prog(r_classic)._ir_hash(), (
@@ -130,8 +132,11 @@ def test_bare_math_object_raises_when_called():
 
 def test_fields_handle_still_field_solve_category():
     """A FieldsHandle (ADC-556 subtype) keeps its own __call__ AND reports category field_solve."""
+    from pops.model import OwnerPath
     from pops.physics.board_handles import FieldsHandle
-    fh = FieldsHandle("E", outputs={"E": object()}, solver=None)
+    fh = FieldsHandle(
+        "E", outputs={"E": object()}, solver=None,
+        owner=OwnerPath("test", "fields-handle"))
     assert isinstance(fh, OperatorHandle)
     assert fh.kind == "field_operator" and fh.category == "field_solve"
     # inspect() works on the subtype (its signature is None: FieldsHandle carries no Signature).

@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pops.ir import Expr, _wrap  # noqa: F401  -- _validate_hook_form isinstance checks
-from pops.ir.values import RuntimeParamRef  # noqa: F401
+from pops.ir.values import RuntimeParamRef, set_runtime_param_indices  # noqa: F401
 from pops.ir.visitors import _children  # noqa: F401
 
 from .aux import _K_MAX_RUNTIME_PARAMS, max_runtime_params  # noqa: F401 -- literal + _pops-preferring
@@ -92,8 +92,7 @@ class _RuntimeParamsMixin(_HyperbolicModel):
                 "overflow. Reduce the number of runtime params or promote some to kind='const'. "
                 "Declared runtime params: %s"
                 % (self.name, len(nodes), limit, names))
-        for k, node in enumerate(nodes):
-            node.index = k
+        set_runtime_param_indices({node.name: k for k, node in enumerate(nodes)})
         return nodes
 
     def _runtime_params_member(self) -> str:
@@ -103,7 +102,7 @@ class _RuntimeParamsMixin(_HyperbolicModel):
         nodes = self.assign_runtime_indices()
         if not nodes:
             return ""
-        vals = ", ".join(repr(node.value) for node in nodes)
+        vals = ", ".join(node.literal.to_cpp() for node in nodes)
         return ("  pops::RuntimeParams params{%d, {%s}};  // params RUNTIME (P7-b) : ecrasables a "
                 "l'execution\n" % (len(nodes), vals))
 
@@ -125,4 +124,3 @@ class _RuntimeParamsMixin(_HyperbolicModel):
                 "riemann hook %r references undeclared quantity %s: the formula needs model "
                 "capabilities %s that are not provided (declare them, or use the role-derived "
                 "default)" % (hook, missing, missing))
-

@@ -4,13 +4,13 @@ Optimization passes (dead-node / CSE / redundant-solve elimination), IR serializ
 / ``_ir_hash``), ``validate``, ``_block_indices``; cost inspection is ``_ProgramInspect``. No _pops."""
 from __future__ import annotations
 
-import hashlib
 import json
 from typing import TYPE_CHECKING, Any
 
 from pops.time.program_base import _ProgramConstants
+from pops.time.program_serialization import _ProgramSerialization
 from pops.time.schedule import Schedule
-from pops.time.values import Value, _Affine, _affine_ids  # noqa: F401
+from pops.time.values import ProgramValue, _Affine
 
 if TYPE_CHECKING:
     from pops.time._program_contract import _ProgramBase
@@ -18,12 +18,12 @@ else:
     _ProgramBase = object
 
 
-class _ProgramPasses(_ProgramConstants, _ProgramBase):
+class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
     """IR optimization passes, serialization and validation for the Program authoring class."""
 
     @staticmethod
     def _subblock_value_refs(v: Any) -> Any:
-        """Yield every Value an op references THROUGH its attrs (sub-block result pointers + the ops
+        """Yield every ProgramValue an op references THROUGH its attrs (sub-block result pointers + the ops
         nested in its recorded sub-blocks). Used to keep alive anything a control-flow / matrix-free
         node closes over from the enclosing scope -- v1 never rewrites a sub-block, so it is all live.
         The flat ``v.inputs`` already covers the directly-passed values; this adds the attr-borne ones."""
@@ -31,7 +31,7 @@ class _ProgramPasses(_ProgramConstants, _ProgramBase):
         for key in ("cond", "body", "residual", "iterate", "guess",
                     "apply_result", "apply_in", "apply_out"):
             ref = attrs.get(key)
-            if isinstance(ref, Value):
+            if isinstance(ref, ProgramValue):
                 yield ref
             elif isinstance(ref, _Affine):
                 for term, _ in ref.terms:
@@ -39,7 +39,7 @@ class _ProgramPasses(_ProgramConstants, _ProgramBase):
         sched = attrs.get("schedule")
         if sched is not None:
             cond = getattr(sched, "params", {}).get("cond")
-            if isinstance(cond, Value):
+            if isinstance(cond, ProgramValue):
                 yield cond  # a when(cond) predicate is live (kept off the dead-node / CSE-drop path)
         for key in ("cond_block", "body_block", "apply_block", "residual_block"):
             block = attrs.get(key)
@@ -63,41 +63,9 @@ class _ProgramPasses(_ProgramConstants, _ProgramBase):
         # JSON-serialize the attrs dict to a stable string so the whole key is hashable / comparable
         # exactly as the IR hash compares it.
         return (node["op"], node["vtype"], node["block"], node["inputs"],
+                json.dumps(node.get("space"), sort_keys=True, separators=(",", ":")),
+                json.dumps(node.get("field_context"), sort_keys=True, separators=(",", ":")),
                 json.dumps(node["attrs"], sort_keys=True, separators=(",", ":")))
-
-    @staticmethod
-    def _serialize_node(v: Any) -> Any:
-        attrs = dict(v.attrs)
-        if "schedule" in attrs:  # an authoring annotation: serialize its repr so the IR hash is
-            attrs["schedule"] = repr(attrs["schedule"])  # schedule-sensitive yet JSON-safe
-        if "coeffs" in attrs:  # dict keys (powers) -> sorted [power, value] for stable JSON
-            attrs["coeffs"] = [sorted((int(p), c) for p, c in d.items()) for d in attrs["coeffs"]]
-        if "a_coeff" in attrs:  # solve_local_linear: the dt-polynomial a in (I - a*L)
-            attrs["a_coeff"] = sorted((int(p), c) for p, c in attrs["a_coeff"].items())
-        if "c_dt" in attrs:  # rhs_jacvec: the dt-polynomial BDF coefficient c*dt
-            attrs["c_dt"] = sorted((int(p), c) for p, c in attrs["c_dt"].items())
-        if v.op == "while":  # the cond/body sub-blocks are nested node lists; the results are ids
-            attrs["cond_block"] = [_ProgramPasses._serialize_node(w) for w in attrs["cond_block"]]
-            attrs["body_block"] = [_ProgramPasses._serialize_node(w) for w in attrs["body_block"]]
-            attrs["cond"] = attrs["cond"].id
-            attrs["body"] = attrs["body"].id
-        elif v.op in ("range", "if"):  # body sub-block (range carries its int count in attrs too)
-            attrs["body_block"] = [_ProgramPasses._serialize_node(w) for w in attrs["body_block"]]
-            attrs["body"] = attrs["body"].id
-        elif v.op == "matrix_free_operator":  # the apply sub-block is a nested node list; refs are ids
-            attrs["apply_block"] = ([_ProgramPasses._serialize_node(w) for w in attrs["apply_block"]]
-                                    if attrs.get("apply_block") else None)
-            for k in ("apply_result", "apply_in", "apply_out"):
-                ref = attrs.get(k)
-                attrs[k] = (_affine_ids(ref) if isinstance(ref, _Affine)
-                            else (ref.id if isinstance(ref, Value) else None))
-        elif v.op == "solve_local_nonlinear":  # the residual sub-block is a nested node list; refs ids
-            attrs["residual_block"] = [_ProgramPasses._serialize_node(w) for w in attrs["residual_block"]]
-            for k in ("residual", "iterate", "guess"):
-                attrs[k] = attrs[k].id
-        return {"id": v.id, "vtype": v.vtype, "op": v.op, "block": v.block,
-                "inputs": [i.id for i in v.inputs], "attrs": attrs}
-
 
     def _live_value_ids(self) -> Any:
         """The set of value ids reverse-reachable from the live roots: the commits plus every flat node
@@ -149,7 +117,7 @@ class _ProgramPasses(_ProgramConstants, _ProgramBase):
         live = self._live_value_ids()
         return self._rebuild(lambda v: v.id in live)
 
-    def _rebuild(self, keep: Any, alias: Any = None) -> Any:
+    def _rebuild(self, keep: Any, alias: Any = None, space_of: Any = None) -> Any:
         """Clone this Program into a fresh one keeping the flat nodes for which ``keep(v)`` is true,
         renumbering surviving ids to a contiguous 0.. range in original order. Sub-blocks are cloned
         wholesale (never filtered). The clone reproduces the IR identity of an equivalent hand-built
@@ -157,25 +125,48 @@ class _ProgramPasses(_ProgramConstants, _ProgramBase):
 
         @p alias (optional) maps a DROPPED node id -> the kept representative node id it should be
         replaced by (the CSE / redundant-solve passes use it to rewire every use of a duplicate onto its
-        survivor). Every reference -- a flat input, an attr-borne Value / affine ref, a commit target --
+        survivor). Every reference -- a flat input, an attr-borne ProgramValue / affine ref, a commit target --
         is resolved THROUGH this alias before id lookup, so a dropped node never leaves a dangling
         reference. A dropped node MUST have an alias entry (the passes guarantee a representative whose
         id < the duplicate's, hence already cloned); a kept node maps to itself. Without an alias map
         the behavior is the historical drop-only rebuild."""
         out = type(self)(self.name)
         out.dt = self.dt
+        out._state_spaces = dict(getattr(self, "_state_spaces", {}))
         out._histories = dict(self._histories)
         out._histories_ncomp = dict(getattr(self, "_histories_ncomp", {}))
+        out._history_spaces = dict(getattr(self, "_history_spaces", {}))
+        out._history_blocks = dict(getattr(self, "_history_blocks", {}))
+        from pops.time.history_persistence import HistoryPersistence
+        out._history_persistence = {}
+        for name, (depth, policy) in getattr(self, "_history_persistence", {}).items():
+            copied = HistoryPersistence.from_manifest(policy.to_manifest())
+            if hasattr(copied, "freeze"):
+                copied.freeze()
+            out._history_persistence[name] = (depth, copied)
         out._registry = self._registry
-        idmap = {}  # old Value -> new Value
+        out._registry_owner = getattr(self, "_registry_owner", None)
+        out._default_state_space = getattr(self, "_default_state_space", None)
+        out._default_field_space = getattr(self, "_default_field_space", None)
+        # ProgramValue deliberately has no hash: equality authors an Equation.  Every rewrite map is
+        # therefore indexed by the stable SSA id, never by a symbolic object (which would otherwise
+        # make dict membership invoke forbidden symbolic equality/truth semantics).
+        idmap = {}  # old SSA id -> new ProgramValue
         by_id = {v.id: v for v in self._values}
         for v in self._values:  # sub-block ops too, so an alias to a sub-block-internal id resolves
             for w in self._subblock_value_refs(v):
                 by_id.setdefault(w.id, w)
         alias = alias or {}
+        region_map = {0: 0}
+
+        def mapped_region(region: int) -> int:
+            if region not in region_map:
+                region_map[region] = out._next_region
+                out._next_region += 1
+            return region_map[region]
 
         def rep(v: Any) -> Any:
-            """Follow @p v through the alias chain to the surviving representative Value (identity for a
+            """Follow @p v through the alias chain to the surviving representative ProgramValue (identity for a
             kept node). The passes only alias onto an EARLIER, kept node, so the chain terminates."""
             seen = set()
             while v.id in alias and alias[v.id] != v.id:
@@ -185,27 +176,43 @@ class _ProgramPasses(_ProgramConstants, _ProgramBase):
                 v = by_id[alias[v.id]]
             return v
 
-        def clone_block(block: Any) -> Any:
-            return [clone(w) for w in block]
+        def clone_block(block: Any, region_hint: Any = None) -> Any:
+            copied = [clone(w) for w in block]
+            regions = {mapped_region(w.region) for w in block}
+            if not regions and region_hint is not None:
+                regions.add(mapped_region(region_hint))
+            if not regions:
+                entry = getattr(self, "_recording_regions", {}).get(id(block))
+                if entry is not None and entry[0] is block:
+                    regions.add(mapped_region(entry[1]))
+            if len(regions) == 1:
+                region = next(iter(regions))
+                if region != 0:
+                    out._recording_regions[id(copied)] = (copied, region)
+            return copied
 
         def remap(ref: Any) -> Any:
-            if isinstance(ref, Value):
-                return idmap[rep(ref)]
+            if isinstance(ref, ProgramValue):
+                return idmap[rep(ref).id]
             if isinstance(ref, _Affine):
-                return _Affine([(idmap[rep(v)], c) for v, c in ref.terms])
+                return _Affine([(idmap[rep(v).id], c) for v, c in ref.terms])
             return ref
 
         def clone_attrs(v: Any) -> Any:
             attrs = {}
             for key, val in v.attrs.items():
                 if key in ("cond_block", "body_block", "apply_block", "residual_block"):
-                    attrs[key] = clone_block(val) if val else val
+                    region_key = key.replace("_block", "_region")
+                    attrs[key] = (clone_block(val, v.attrs.get(region_key))
+                                  if val is not None else None)
+                elif key in ("cond_region", "body_region", "apply_region", "residual_region"):
+                    attrs[key] = mapped_region(val)
                 elif key in ("cond", "body", "residual", "iterate", "guess",
                              "apply_result", "apply_in", "apply_out"):
                     attrs[key] = remap(val)
                 elif key == "schedule" and val is not None and isinstance(
-                        getattr(val, "params", {}).get("cond"), Value):
-                    # a when(cond) schedule embeds a predicate Value in params["cond"]; remap it onto
+                        getattr(val, "params", {}).get("cond"), ProgramValue):
+                    # a when(cond) schedule embeds a predicate ProgramValue in params["cond"]; remap it onto
                     # the survivor so a CSE-collapsed/renumbered predicate is not left dangling.
                     attrs[key] = Schedule(val.kind, val.policy,
                                           **{**val.params, "cond": remap(val.params["cond"])})
@@ -235,8 +242,8 @@ class _ProgramPasses(_ProgramConstants, _ProgramBase):
             return sorted((w for w in seen if w.id < v.id), key=lambda w: w.id)
 
         def clone(v: Any) -> Any:
-            if v in idmap:
-                return idmap[v]
+            if v.id in idmap:
+                return idmap[v.id]
             # Assign new ids in ORIGINAL creation order: clone every predecessor (id < v.id) first,
             # id-ascending, then v, then any sub-block op created AFTER v (e.g. a matrix_free_operator's
             # apply ops, whose original ids exceed the operator node's). Inputs / attr refs are remapped
@@ -246,10 +253,31 @@ class _ProgramPasses(_ProgramConstants, _ProgramBase):
                 clone(w)
             vid = out._next_id
             out._next_id += 1
-            nv = Value(out, vid, v.vtype, v.op, [idmap[rep(i)] for i in v.inputs],
-                       clone_attrs(v), v.name, v.block)
-            nv.space = v.space
-            idmap[v] = nv
+            new_inputs = [idmap[rep(i).id] for i in v.inputs]
+            field_context = v.field_context
+            if field_context is not None:
+                from pops.time.field_context import remap_field_provenance
+                def remap_source(source: Any) -> Any:
+                    if isinstance(source, int) and source in by_id:
+                        return idmap[rep(by_id[source]).id].id
+                    return source
+                field_context = remap_field_provenance(field_context, remap_source)
+            nv = ProgramValue(
+                out,
+                vid,
+                v.vtype,
+                v.op,
+                new_inputs,
+                clone_attrs(v),
+                v.name,
+                v.block,
+                space=v.space if space_of is None else space_of(v),
+                source_location=v.source_location,
+                field_context=field_context,
+                region=mapped_region(v.region),
+            )
+            out._issued_values[id(nv)] = nv
+            idmap[v.id] = nv
             return nv
 
         # Clone all surviving flat nodes (and, transitively, their sub-block ops and any later-created
@@ -258,12 +286,17 @@ class _ProgramPasses(_ProgramConstants, _ProgramBase):
         kept = sorted((v for v in self._values if keep(v)), key=lambda v: v.id)
         for v in kept:
             clone(v)
-        out._values = [idmap[v] for v in kept]
-        out._commits = {b: idmap[rep(s)] for b, s in self._commits.items()}
+        out._values = [idmap[v.id] for v in kept]
+        out._commits = {b: idmap[rep(s).id] for b, s in self._commits.items()}
+        out._region_imports = {
+            mapped_region(destination): {mapped_region(source) for source in sources}
+            for destination, sources in getattr(self, "_region_imports", {}).items()
+        }
         if self._dt_bound is not None:
             sub, result = self._dt_bound
-            cloned_sub = [clone(w) for w in sub]
-            out._dt_bound = (cloned_sub, idmap[result])
+            cloned_sub = clone_block(sub)
+            out._dt_bound = (cloned_sub, idmap[rep(result).id])
+        self._rebuild_time_handle_tables(out, idmap, rep)
         return out
 
     # --- common-subexpression elimination (Spec 3 s28, ADC-465) ---
@@ -414,6 +447,8 @@ class _ProgramPasses(_ProgramConstants, _ProgramBase):
 
     def validate(self) -> Any:
         """Structural validation of the IR. Raises ValueError on a malformed program."""
+        from pops.time.program_region_validation import validate_program_regions
+        validate_program_regions(self)
         if not self._commits:
             raise ValueError("a time Program must commit each advanced block exactly once "
                              "(no block was committed)")
@@ -453,48 +488,7 @@ class _ProgramPasses(_ProgramConstants, _ProgramBase):
         seen = set(outer_seen)
         for v in block:
             for inp in v.inputs:
-                if inp.id not in seen:
+                imported = inp.region in self._region_imports.get(v.region, ())
+                if inp.id not in seen and not imported:
                     raise ValueError("IR value '%s' used before definition" % inp.name)
             seen.add(v.id)
-
-    # --- serialization / hash ---
-    def _serialize(self) -> Any:
-        nodes = [self._serialize_node(v) for v in self._values]
-        commits = sorted((b, s.id) for b, s in self._commits.items())
-        # NAME-based block binding (Spec 3 criterion 23, ADC-457): the block names in P.state
-        # declaration order are part of the IR identity -- the .so exports them (pops_program_block_name)
-        # and install_program binds System blocks to them BY NAME. Reordering P.state changes this list,
-        # so two Programs differing only by block order get distinct IR hashes (and distinct .so caches).
-        _order = self._block_indices()
-        block_order = sorted(_order, key=_order.get)
-        out = {"name": self.name, "version": 1, "nodes": nodes, "commits": commits,
-               "block_order": block_order}
-        # The optional dt bound (spec s18 / ADC-417) is part of the IR identity: its presence and its
-        # scalar sub-program feed the hash (the compiled-problem cache key) so two Programs differing
-        # only by a dt bound get distinct .so caches.
-        if self._dt_bound is not None:
-            sub, result = self._dt_bound
-            out["dt_bound"] = {"nodes": [self._serialize_node(w) for w in sub],
-                               "result": result.id}
-        return out
-
-    def _ir_hash(self) -> Any:
-        """Stable SHA-256 of the IR (feeds the compiled-problem cache key in a later phase)."""
-        blob = json.dumps(self._serialize(), sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(blob.encode()).hexdigest()
-
-
-    def _block_indices(self) -> Any:
-        """Map each block name to a stable runtime block index, in the order the Program FIRST declares
-        it via ``P.state(...)`` (ADC-426). Index 0 is the first declared block, 1 the second, ...; the
-        single-block program keeps index 0 (byte-identical lowering). The generated ``.so`` addresses
-        blocks by this index in its step body AND exports the block NAMES in this order
-        (``pops_program_block_name``); ``System::install_program`` binds them to the instantiated System
-        blocks BY NAME (Spec 3 criterion 23, ADC-457), so the System block add-order need NOT match the
-        Program's ``P.state`` order -- the historical positional convention is the identity special case
-        (names already in add-order)."""
-        order = {}
-        for v in self._values:
-            if v.op == "state" and v.block not in order:
-                order[v.block] = len(order)
-        return order

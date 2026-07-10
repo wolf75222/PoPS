@@ -50,7 +50,7 @@ def _euler_with_dead_rhs():
     fields = P.solve_fields(U)
     R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
     P._rhs_legacy("dead", state=U, fields=fields, flux=True, sources=["default"])  # never consumed
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
     return P
 
 
@@ -61,7 +61,7 @@ def _euler_no_dead():
     U = P.state("plasma")
     fields = P.solve_fields(U)
     R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
     return P
 
 
@@ -123,7 +123,7 @@ def test_side_effecting_nodes_never_removed():
     R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
     P.fill_boundary(U)                    # side-effecting, result unused
     P.record_scalar("mass", P.norm2(R))  # side-effecting diagnostic, result unused
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
 
     Q = adctime.eliminate_dead_nodes(P)
     kept = {v.op for v in Q._values}
@@ -152,7 +152,7 @@ def test_chained_dead_nodes_removed():
     R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
     dead0 = P._rhs_legacy("dead0", state=U, fields=fields, flux=True, sources=["default"])
     P.linear_combine("dead1", U + dt * dead0)  # consumes dead0 but is itself unused
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
 
     Q = adctime.eliminate_dead_nodes(P)
     names = {v.name for v in Q._values}
@@ -189,6 +189,15 @@ def _lorentz_energy_model(name):
     return m
 
 
+def _linear_handle(model):
+    from pops.model import OperatorHandle
+    registry = model.operator_registry()
+    operator = registry.operators_of_kind("local_linear_operator")[0]
+    return OperatorHandle(
+        operator.name, kind=operator.kind, owner=registry.owner_path,
+        signature=operator.signature)
+
+
 def test_condensed_buffer_writers_never_removed():
     """REGRESSION (the safe-by-default whitelist). ``pops.lib.time.condensed_schur`` assembles its RHS
     with ``P.condensed_rhs(rhs, phi_n, U, ...)`` (ADC-637) -- a top-level op whose RESULT is DISCARDED.
@@ -201,9 +210,11 @@ def test_condensed_buffer_writers_never_removed():
     linear_combine copy / extrapolation / condensed_energy buffer-writers)."""
     RHS_MARKER = "rhsA(i, j, 0) = nlA(i, j, 0)"  # the generic fused -Lap - g*div(F) write
     for theta, c_E in ((1.0, None), (0.5, None), (0.5, 3), (1.0, 3)):
-        P = adctime.Program("cs")
-        libtime.condensed_schur(P, "blk", alpha=_ALPHA, theta=theta, c_E=c_E)
         model = _lorentz_energy_model("cs_ir_%d_%s" % (int(round(theta * 100)), c_E))
+        P = adctime.Program("cs").bind_operators(model)
+        libtime.condensed_schur(
+            P, "blk", alpha=_ALPHA, theta=theta, c_E=c_E,
+            linear_operator=_linear_handle(model))
         before = P.emit_cpp_program(model=model)
         assert RHS_MARKER in before, "fixture lost its condensed RHS assembly"
 
@@ -236,7 +247,7 @@ def test_buffer_writing_op_with_discarded_result_kept():
     from pops.solvers.krylov import CG
     P.set_apply(A, apply)
     P.solve_linear(operator=A, rhs=buf, method=CG(max_iter=10), max_iter=10)  # reads buf by BUFFER IDENTITY
-    P.commit("plasma", P.linear_combine("U1", 1.0 * U))
+    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", 1.0 * U))
 
     before = P.emit_cpp_program()
     Q = adctime.eliminate_dead_nodes(P)
@@ -260,7 +271,7 @@ def test_control_flow_input_kept():
         return p.linear_combine("it", 0.5 * x)
 
     Ufinal = P.while_(U, cond, body)
-    P.commit("plasma", Ufinal)
+    P.commit(P.state("U", block="plasma").next, Ufinal)
 
     Q = adctime.eliminate_dead_nodes(P)
     ops = [v.op for v in Q._values]
@@ -268,3 +279,31 @@ def test_control_flow_input_kept():
     # No node was dead (state feeds the while, while is committed) -> exact no-op.
     assert Q._ir_hash() == P._ir_hash()
     assert Q.emit_cpp_program() == P.emit_cpp_program()
+
+
+def test_rebuild_preserves_history_policy_and_remaps_field_context_stage_source():
+    from pops.time import Interval
+
+    program = adctime.Program("metadata_rebuild")
+    tracked = program.state("U", block="tracked")
+    program.keep_history(tracked, depth=4, checkpoint_policy=Interval(3))
+    program.linear_combine("dead", 2 * tracked.n)
+    advanced = program.state("U", block="advanced")
+    fields = program.solve_fields(advanced.n)
+    final = program.linear_combine("advanced_next", advanced.n)
+    program.commit(advanced.next, final)
+
+    rebuilt = program.eliminate_dead_nodes()
+    rebuilt_state = next(v for v in rebuilt._values if v.op == "state" and v.block == "advanced")
+    rebuilt_fields = next(v for v in rebuilt._values if v.op == "solve_fields")
+    depth, policy = rebuilt._history_persistence["tracked.U"]
+
+    assert depth == 4
+    assert policy.to_manifest() == {"kind": "interval", "k": 3}
+    assert rebuilt_fields.field_context.stage_sources == (("advanced", rebuilt_state.id),)
+    rebuilt_fields.field_context.require_read(None, "advanced", rebuilt_state.id)
+    assert rebuilt._serialize()["history_persistence"] == [{
+        "name": "tracked.U",
+        "depth": 4,
+        "policy": {"kind": "interval", "k": 3},
+    }]

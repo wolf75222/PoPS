@@ -1,11 +1,10 @@
 """ADC-560: the callable OperatorHandle facade over P.call (tableau-style Programs).
 
 A canonical :class:`pops.model.OperatorHandle` is now callable inside a Program: ``R(U, f)`` finds
-the Program from its Value arguments and delegates to the INTERNAL ``P._call(name, ...)`` -- the same
+the Program from its ProgramValue arguments and delegates to the INTERNAL ``P._call(name, ...)`` -- the same
 lowering the public ``P.call(handle, ...)`` uses. So the callable facade builds the BYTE-IDENTICAL IR
 (same ``_ir_hash``) as ``P.call`` / ``T.call``, runs the SAME signature type-checks, raises the SAME
-errors, and does ZERO numerics (it only builds IR). ``CallableOperator`` (the board handle) is now an
-``OperatorHandle`` subtype (the one-handle fold), keeping its self-binding board behaviour.
+errors, and does ZERO numerics (it only builds IR).
 
 Pure Python (``_ir_hash`` is the IR fingerprint; no compilation); skips cleanly if pops is
 unavailable. Never fakes the engine.
@@ -41,7 +40,12 @@ def build_model():
     return m, {"electric": h_src, "lorentz": h_lin, "explicit_rhs": h_rate}
 
 
-_FIELDS = OperatorHandle("fields_from_state", kind="field_operator")
+def _operator_handle(model, name):
+    registry = model.operator_registry()
+    operator = registry.get(name)
+    return OperatorHandle(
+        operator.name, kind=operator.kind, owner=registry.owner_path,
+        signature=operator.signature)
 
 
 def test_callable_handle_ir_byte_identical_to_pcall():
@@ -51,17 +55,17 @@ def test_callable_handle_ir_byte_identical_to_pcall():
     def via_pcall():
         P = adctime.Program("prog").bind_operators(m)
         U = P.state("plasma")
-        f = P.call(_FIELDS, U)
+        f = P.call(_operator_handle(m, "fields_from_state"), U)
         R = P.call(h["explicit_rhs"], U, f)
-        P.commit("plasma", P.linear_combine("u1", U + P.dt * R))
+        P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", U + P.dt * R))
         return P
 
     def via_callable():
         P = adctime.Program("prog").bind_operators(m)
         U = P.state("plasma")
-        f = _FIELDS(U)                       # callable facade
+        f = _operator_handle(m, "fields_from_state")(U)  # callable facade
         R = h["explicit_rhs"](U, f)          # callable facade
-        P.commit("plasma", P.linear_combine("u1", U + P.dt * R))
+        P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", U + P.dt * R))
         return P
 
     a, b = via_pcall(), via_callable()
@@ -80,18 +84,20 @@ def test_callable_facade_across_all_kinds():
     def src(via_callable):
         P = adctime.Program("p").bind_operators(m)
         U = P.state("plasma")
-        f = _FIELDS(U) if via_callable else P.call(_FIELDS, U)
+        fields = _operator_handle(m, "fields_from_state")
+        f = fields(U) if via_callable else P.call(fields, U)
         s = h["electric"](U, f) if via_callable else P.call(h["electric"], U, f)
-        P.commit("plasma", P.linear_combine("u1", U + P.dt * s))
+        P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", U + P.dt * s))
         return P
 
     def lin(via_callable):
         P = adctime.Program("p").bind_operators(m)
         U = P.state("plasma")
-        f = _FIELDS(U) if via_callable else P.call(_FIELDS, U)
+        fields = _operator_handle(m, "fields_from_state")
+        f = fields(U) if via_callable else P.call(fields, U)
         L = h["lorentz"](f) if via_callable else P.call(h["lorentz"], f)
         U1 = P.solve_local_linear("u1", operator=P.I - P.dt * L, rhs=U, fields=f)
-        P.commit("plasma", U1)
+        P.commit(P.state("U", block="plasma").next, U1)
         return P
 
     assert src(True)._ir_hash() == src(False)._ir_hash()
@@ -104,7 +110,7 @@ def test_callable_facade_same_signature_errors():
     m, h = build_model()
     P = adctime.Program("p").bind_operators(m)
     U = P.state("plasma")
-    f = _FIELDS(U)
+    f = _operator_handle(m, "fields_from_state")(U)
 
     # arity: electric needs (state, fields)
     with pytest.raises(ValueError, match="expects 2 argument"):
@@ -121,31 +127,27 @@ def test_callable_facade_same_signature_errors():
 
 def test_call_outside_program_refused():
     """A callable handle with no Program value cannot find a Program to build into -> clear error."""
-    h_rate = OperatorHandle("explicit_rhs", kind="local_rate")
+    from pops.model import OwnerPath
+    h_rate = OperatorHandle(
+        "explicit_rhs", kind="local_rate", owner=OwnerPath("test", "outside-program"))
     with pytest.raises(ValueError, match="must be called with time-Program values"):
         h_rate("not a value", 3)
     print("OK  calling a handle outside a Program is refused with a clear message")
 
 
-def test_callable_operator_is_operator_handle():
-    """The board CallableOperator is now an OperatorHandle subtype (the one-handle fold)."""
-    from pops.physics.board_handles import CallableOperator
-    assert issubclass(CallableOperator, OperatorHandle)
-    print("OK  CallableOperator is an OperatorHandle subtype")
-
-
 def test_callable_does_no_numerics():
-    """__call__ only builds IR: the result is an IR Value, never a numpy array."""
+    """__call__ only builds IR: the result is an IR ProgramValue, never a numpy array."""
     m, h = build_model()
     P = adctime.Program("p").bind_operators(m)
     U = P.state("plasma")
-    f = _FIELDS(U)
+    f = _operator_handle(m, "fields_from_state")(U)
     R = h["explicit_rhs"](U, f)
-    from pops.time.values import Value
-    assert isinstance(R, Value) and R.vtype == "rhs"
-    assert type(R).__module__.startswith("pops."), "the result must be an IR Value, not numeric data"
+    from pops.time.values import ProgramValue
+    assert isinstance(R, ProgramValue) and R.vtype == "rhs"
+    assert type(R).__module__.startswith("pops."), (
+        "the result must be an IR ProgramValue, not numeric data")
     assert not (hasattr(R, "shape") and hasattr(R, "dtype")), "no ndarray may leak from __call__"
-    print("OK  the callable facade builds an IR Value and does no numerics")
+    print("OK  the callable facade builds an IR ProgramValue and does no numerics")
 
 
 def main():
@@ -153,7 +155,6 @@ def main():
     test_callable_facade_across_all_kinds()
     test_callable_facade_same_signature_errors()
     test_call_outside_program_refused()
-    test_callable_operator_is_operator_handle()
     test_callable_does_no_numerics()
     print("OK  test_operator_callable")
 

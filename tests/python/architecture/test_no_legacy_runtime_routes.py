@@ -414,7 +414,7 @@ def test_field_solve_facade_lowers_to_program_ir_and_context():
     assert any(value.op == "solve_fields" for value in program._values)
 
     rhs = program._rhs_legacy(state=state, fields=fields, flux=True, sources=["default"])
-    program.commit("gas", program.linear_combine("U_next", state + program.dt * rhs))
+    program.commit(program.state("U", block="gas").next, program.linear_combine("U_next", state + program.dt * rhs))
     source = program.emit_cpp_program(model=None)
 
     assert "ProgramContext" in source

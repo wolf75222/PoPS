@@ -4,9 +4,12 @@ Exports: strang, lie, condensed_schur.
 """
 from __future__ import annotations
 
+from fractions import Fraction
 from typing import Any
 
-from ._helpers import program_macro
+from ._helpers import (
+    _exact_coefficient, _exact_product, _exact_reciprocal, _operator_handle, program_macro,
+)
 
 
 @program_macro
@@ -16,11 +19,11 @@ def strang(P: Any, block: Any, half_flow: Any, source: Any, *, commit: Any = Tru
     state that advance the hyperbolic flow and the source by a fraction @p frac of dt. Returns the final
     state (committed when @p commit)."""
     U = P.state(block)
-    U1 = half_flow(P, U, 0.5)
-    U2 = source(P, U1, 1.0)
-    U3 = half_flow(P, U2, 0.5)
+    U1 = half_flow(P, U, Fraction(1, 2))
+    U2 = source(P, U1, 1)
+    U3 = half_flow(P, U2, Fraction(1, 2))
     if commit:
-        P.commit(block, U3)
+        P._commit_block(block, U3)
     return U3
 
 
@@ -33,18 +36,18 @@ def lie(P: Any, block: Any, half_flow: Any, source: Any, *, commit: Any = True) 
     Lowers to the SAME IR primitives as `strang` (no scheme-specific class). Returns the final state
     (committed when @p commit)."""
     U = P.state(block)
-    U1 = half_flow(P, U, 1.0)
-    U2 = source(P, U1, 1.0)
+    U1 = half_flow(P, U, 1)
+    U2 = source(P, U1, 1)
     if commit:
-        P.commit(block, U2)
+        P._commit_block(block, U2)
     return U2
 
 
 @program_macro
-def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1.0, c_rho: Any = 0,
+def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1, c_rho: Any = 0,
                     c_mx: Any = 1, c_my: Any = 2, c_E: Any = None,
                     method: Any = None, tol: Any = 1e-10, max_iter: Any = 400,
-                    linear_operator: Any = None, commit: Any = True) -> Any:
+                    linear_operator: Any, commit: Any = True) -> Any:
     """Condensed-implicit electrostatic-Lorentz SOURCE stage as a compiled Program (epic ADC-399,
     acceptance 32), authored ENTIRELY in the DSL and emitted to C++ with no Schur vocabulary (ADC-637).
     Mirrors the native ``pops.CondensedSchur`` (CondensedSchurSourceStepper) sequence:
@@ -64,9 +67,10 @@ def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1.0, c_rho: 
 
     The per-cell block linearization ``J`` is the electrostatic-Lorentz rotation generator
     ``J = [[0, B_z], [-B_z, 0]]`` on the coupled momentum subset ``(c_mx, c_my)``. The compiling model
-    MUST carry it -- author it with ``pops.lib.models.author_electrostatic_lorentz(m)`` (canonical name
-    ``pops.lib.models.LORENTZ_J_NAME``, referenced by default). ``B_z`` enters through J's aux (canonical
-    component 3), not a separate ``c_bz``. @p linear_operator overrides the operator name / handle.
+    MUST carry it -- author it with ``pops.lib.models.author_electrostatic_lorentz(m)`` and pass the
+    returned typed local-linear ``OperatorHandle`` as @p linear_operator. ``B_z`` enters through J's
+    aux (canonical component 3), not a separate ``c_bz``. No global name/default is guessed: the
+    Program must be bound to the exact declaring model before this macro is authored.
 
     phi^n handling depends on theta. At ``theta == 1`` (the sanctioned backward-Euler electrostatic
     push) phi^n is a fresh ZERO scalar field each step: the ``-Lap(phi^n)`` RHS term vanishes and the
@@ -104,13 +108,13 @@ def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1.0, c_rho: 
     ``tests/python/unit/time/test_time_condensed_schur.py`` checks against an offline reference of the
     identical assemble / solve / reconstruct / extrapolate steps and documents the gap vs native
     (theta == 1 and theta == 0.5)."""
-    if not (0.0 < float(theta) <= 1.0):
+    theta = _exact_coefficient(theta, "condensed_schur: theta")
+    alpha = _exact_coefficient(alpha, "condensed_schur: alpha")
+    if not (0 < theta <= 1):
         raise ValueError("condensed_schur: theta must be in (0, 1] (got %r)" % (theta,))
     if c_E is not None and (isinstance(c_E, bool) or not isinstance(c_E, int) or c_E < 0):
         raise ValueError("condensed_schur: c_E must be None or a Python int >= 0 (got %r)" % (c_E,))
-    if linear_operator is None:
-        from pops.lib.models import LORENTZ_J_NAME
-        linear_operator = LORENTZ_J_NAME
+    linear_operator = _operator_handle(linear_operator, "linear_operator")
     subset = (c_mx, c_my)  # the coupled momentum block the condensed solve eliminates (2D core invariant)
     U = P.state(block)
     P.solve_fields(U)  # fill the shared aux (B_z at component 3) from the current state, like the native stage
@@ -120,14 +124,16 @@ def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1.0, c_rho: 
     # System history ring (ADC-427): last step's phi^{n+1} is this step's phi^n, exactly as the native
     # CondensedSchurSourceStepper carries it (via ell_phi + the -Lap(phi^n) anchor). The ring's
     # cold-start fill seeds phi^n = 0 at step 0, so the FIRST theta<1 step still matches native.
-    carry = float(theta) != 1.0
+    carry = theta != 1
     if carry:
         phi_n = P.history(block + ".schur_phi", lag=1, ncomp=1)  # scalar read; cold-start = 0
     else:
         phi_n = P.scalar_field(block + ".schur_phi_n")           # UNCHANGED: fresh zero each step
-    c_coeff = (float(theta) * float(theta) * float(alpha)) * P.dt * P.dt  # c = theta^2 dt^2 alpha
-    th_dt = float(theta) * P.dt  # theta dt
-    g = (float(theta) * float(alpha)) * P.dt  # theta dt alpha (coefficient of the div(F) term)
+    theta_alpha = _exact_product(theta, alpha, where="condensed_schur: theta * alpha")
+    c_coeff = _exact_product(
+        theta, theta_alpha, where="condensed_schur: theta^2 * alpha") * P.dt * P.dt
+    th_dt = theta * P.dt
+    g = theta_alpha * P.dt
     # The three per-cell stages carry the authored J + the coupled momentum subset; B_z enters through J's
     # aux, emitted inline via the closed-form block_inverse intrinsic with no Schur vocabulary.
     coeffs = P.condensed_coeffs(state=U, linear_operator=linear_operator, subset=subset,
@@ -139,7 +145,7 @@ def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1.0, c_rho: 
     def apply(P: Any, out: Any, x: Any) -> Any:  # out <- A(x) = -div((I + c rho M^{-1}) grad x) = -apply_laplacian_coeff(x)
         lap = P.scalar_field("schur_lap")
         P.apply_laplacian_coeff(lap, x, coeffs)
-        return -1.0 * lap  # the condensed operator -div(A grad phi); the affine is the lowered result
+        return -1 * lap  # the condensed operator -div(A grad phi); the affine is the lowered result
 
     # Spec 5 sec.7: method is a TYPED pops.solvers.krylov descriptor (default BiCGStab(), the
     # native CondensedSchur solver). A bare string is rejected by P.solve_linear with a clear
@@ -156,15 +162,15 @@ def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1.0, c_rho: 
     # The reconstruction overwrites the MOMENTUM in place. theta == 1 with no energy keeps the historical
     # IR byte-identical (reconstruct directly on U). For theta < 1 OR an energy update we need U^n
     # (mom^n / E^n) AFTER the reconstruction, so reconstruct on a fresh COPY of U^n and keep U^n intact.
-    needs_un = float(theta) != 1.0 or c_E is not None
-    target = P.linear_combine(block + ".schur_un_copy", 1.0 * U) if needs_un else U
+    needs_un = theta != 1 or c_E is not None
+    target = P.linear_combine(block + ".schur_un_copy", 1 * U) if needs_un else U
     out = P.condensed_reconstruct(state=target, phi=phi, linear_operator=linear_operator,
                                   subset=subset, th_dt=th_dt, c_rho=c_rho)
     # 5) theta-stage -> n+1 extrapolation (ADC-427). theta < 1 lowers U^n + (1/theta)(U^{n+theta} - U^n)
     # with the affine algebra (out is the theta-stage on the copy, U^n is the untouched original). rho is
     # frozen by the reconstruction, so this affine leaves rho (and the not-yet-written energy) at U^n.
-    if float(theta) != 1.0:
-        inv_theta = 1.0 / float(theta)
+    if theta != 1:
+        inv_theta = _exact_reciprocal(theta, "condensed_schur: theta")
         out = P.linear_combine(block + ".schur_extrap", U + inv_theta * (out - U))
     # 6) energy role (ADC-427). E^{n+1} = E^n + (1/2)rho(|v^{n+1}|^2 - |v^n|^2): the kinetic-energy
     # increment from v^n (= mom^n/rho, read from U^n) to v^{n+1} (= mom^{n+1}/rho, in `out`). Skipped
@@ -177,9 +183,9 @@ def condensed_schur(P: Any, block: Any, *, alpha: Any, theta: Any = 1.0, c_rho: 
     # (all terms 1-component), lowered through the same axpy/lincomb idiom as a State combine. Every op
     # here is gated by `carry`, so theta == 1 emits none of it and stays byte-identical.
     if carry:
-        inv_theta = 1.0 / float(theta)
+        inv_theta = _exact_reciprocal(theta, "condensed_schur: theta")
         phi_np1 = P.linear_combine(block + ".schur_phi_np1", phi_n + inv_theta * (phi - phi_n))
         P.store_history(block + ".schur_phi", phi_np1)  # rotated to lag 1 for the next step
     if commit:
-        P.commit(block, out)
+        P._commit_block(block, out)
     return out

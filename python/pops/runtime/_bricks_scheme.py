@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops.runtime._numeric import exact_real, positive_int, strict_bool
 from pops.runtime.routes import (
     LIMITER_MINMOD, LIMITER_NONE, LIMITER_VANLEER, LIMITER_WENO5,
     RECON_CONSERVATIVE, RECON_PRIMITIVE,
@@ -28,7 +29,7 @@ class Ionization:
         self.electron = electron
         self.ion = ion
         self.neutral = neutral
-        self.rate = rate
+        self.rate = exact_real(rate, where="Ionization.rate")
 
 
 class Collision:
@@ -37,7 +38,7 @@ class Collision:
     def __init__(self, a: Any, b: Any, rate: Any) -> None:
         self.a = a
         self.b = b
-        self.rate = rate
+        self.rate = exact_real(rate, where="Collision.rate")
 
 
 class ThermalExchange:
@@ -46,7 +47,7 @@ class ThermalExchange:
     def __init__(self, a: Any, b: Any, rate: Any) -> None:
         self.a = a
         self.b = b
-        self.rate = rate
+        self.rate = exact_real(rate, where="ThermalExchange.rate")
 
 
 # --- Spatial scheme + time treatment (per block) ------------------------
@@ -159,6 +160,9 @@ class Spatial:
                  minmod: bool = False, vanleer: bool = False, weno5: bool = False, primitive: bool = False,
                  positivity_floor: Any = None, wave_speed_cache: bool = False, reconstruction: Any = None,
                  _tokens: Any = None) -> None:
+        for label, flag in (("none", none), ("minmod", minmod), ("vanleer", vanleer),
+                            ("weno5", weno5), ("primitive", primitive)):
+            strict_bool(flag, where="Spatial.%s" % label)
         # Spec 5 sec.14.1 names the reconstruction/limiter slot ``reconstruction=``; keep ``limiter=``
         # working and accept ``reconstruction=`` as an alias (only one of the two at a time).
         if reconstruction is not None:
@@ -218,12 +222,10 @@ class Spatial:
         self.limiter = lim_tok if lim_tok is not None else LIMITER_MINMOD
         self.flux = flux_tok if flux_tok is not None else RIEMANN_RUSANOV
         self.recon = recon_tok if recon_tok is not None else RECON_CONSERVATIVE
-        pf = 0.0 if positivity_floor is None else float(positivity_floor)
-        if not (pf >= 0.0):
-            raise ValueError("Spatial: positivity_floor >= 0 (0/None = inactive; received %r)"
-                             % (positivity_floor,))
-        self.positivity_floor = pf
-        self.wave_speed_cache = bool(wave_speed_cache)
+        self.positivity_floor = (0.0 if positivity_floor is None else exact_real(
+            positivity_floor, where="Spatial.positivity_floor", minimum=0))
+        self.wave_speed_cache = strict_bool(
+            wave_speed_cache, where="Spatial.wave_speed_cache")
 
     def __str__(self) -> Any:
         # Spec 5 sec.12.1: a SHORT, deterministic one-line summary of the chosen scheme (the
@@ -232,7 +234,7 @@ class Spatial:
         # tight on the common path. __repr__ is intentionally left as the default for debug.
         body = "limiter=%s, flux=%s, recon=%s" % (self.limiter, self.flux, self.recon)
         if self.positivity_floor:
-            body += ", positivity_floor=%g" % self.positivity_floor
+            body += ", positivity_floor=%s" % self.positivity_floor
         if self.wave_speed_cache:
             body += ", wave_speed_cache=True"
         return "Spatial(%s)" % body
@@ -333,16 +335,13 @@ class Explicit:
     """
 
     def __init__(self, substeps: int = 1, method: str = "ssprk2", stride: int = 1, *, ssprk3: bool = False) -> None:
+        strict_bool(ssprk3, where="Explicit.ssprk3")
         if ssprk3:
             method = "ssprk3"
-        if method not in ("ssprk2", "ssprk3", "euler"):
+        if not isinstance(method, str) or method not in ("ssprk2", "ssprk3", "euler"):
             raise ValueError("Explicit: method 'ssprk2' | 'ssprk3' | 'euler' (received %r)" % (method,))
-        if int(substeps) < 1:
-            raise ValueError("Explicit: substeps >= 1 (received %r)" % (substeps,))
-        if int(stride) < 1:
-            raise ValueError("Explicit: stride >= 1 (received %r)" % (stride,))
-        self.substeps = int(substeps)
-        self.stride = int(stride)
+        self.substeps = positive_int(substeps, where="Explicit.substeps")
+        self.stride = positive_int(stride, where="Explicit.stride")
         self.method = method
         # kind passed to the compiled facade: the TYPED time route (ADC-584) whose str value is
         # the historical token -- "explicit" (SSPRK2, bit-identical default), "ssprk3" or "euler"

@@ -61,7 +61,7 @@ def _noring_program(name="adc631_noring"):
     P = pops.time.Program(name)
     U0 = P.state("blk")
     k0 = P._rhs_legacy("k0", state=U0, fields=None, flux=False, sources=["default"])
-    P.commit("blk", P.linear_combine("U1", U0 + P.dt * k0))
+    P.commit(P.state("U", block="blk").next, P.linear_combine("U1", U0 + P.dt * k0))
     return P
 
 

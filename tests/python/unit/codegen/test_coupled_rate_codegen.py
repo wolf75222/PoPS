@@ -50,8 +50,12 @@ def _two_fluid_program():
     e_n = P.state("electrons", space=e)
     i_n = P.state("ions", space=i)
     C = P._call("collision", e_n, i_n)
-    P.commit_many({"electrons": P.linear_combine("e1", e_n + P.dt * C["electrons"]),
-                   "ions": P.linear_combine("i1", i_n + P.dt * C["ions"])})
+    P.commit_many({
+        P.state("U", block="electrons").next:
+            P.linear_combine("e1", e_n + P.dt * C["electrons"]),
+        P.state("U", block="ions").next:
+            P.linear_combine("i1", i_n + P.dt * C["ions"]),
+    })
     return mod, P
 
 
@@ -66,6 +70,19 @@ def test_emit_one_multi_state_for_each_cell():
     src = P.emit_cpp_program(model=None)
     # ONE shared kernel fills both blocks' rate scratches (not two independent single-block rates).
     assert src.count("pops::for_each_cell") == 1
+
+
+def test_frozen_coupled_rate_codegen_is_a_repeatable_pure_read():
+    _mod, P = _two_fluid_program()
+    P.freeze()
+    before = P._ir_hash()
+
+    first = P.emit_cpp_program(model=None)
+    second = P.emit_cpp_program(model=None)
+
+    assert first == second
+    assert P._ir_hash() == before
+    assert not hasattr(P, "_coupled_scratch")
 
 
 def test_emit_binds_both_input_state_array4s():
@@ -122,8 +139,12 @@ def test_coupled_rate_with_prim_var_is_deferred():
     e_n = P.state("electrons", space=e)
     i_n = P.state("ions", space=i)
     C = P._call("collision", e_n, i_n)
-    P.commit_many({"electrons": P.linear_combine("e1", e_n + P.dt * C["electrons"]),
-                   "ions": P.linear_combine("i1", i_n + P.dt * C["ions"])})
+    P.commit_many({
+        P.state("U", block="electrons").next:
+            P.linear_combine("e1", e_n + P.dt * C["electrons"]),
+        P.state("U", block="ions").next:
+            P.linear_combine("i1", i_n + P.dt * C["ions"]),
+    })
     with pytest.raises(NotImplementedError, match="ADC-457"):
         P._check_lowerable(None)
 
@@ -161,8 +182,10 @@ def test_read_only_catalyst_input_is_bound():
     P = adctime.Program("ioniz_step").bind_operators(mod)
     e_n, i_n, n_n = P.state("e", space=e), P.state("i", space=i), P.state("n", space=n)
     C = P._call("ioniz", e_n, i_n, n_n)
-    P.commit_many({"e": P.linear_combine("e1", e_n + P.dt * C["e"]),
-                   "i": P.linear_combine("i1", i_n + P.dt * C["i"])})
+    P.commit_many({
+        P.state("U", block="e").next: P.linear_combine("e1", e_n + P.dt * C["e"]),
+        P.state("U", block="i").next: P.linear_combine("i1", i_n + P.dt * C["i"]),
+    })
     src = P.emit_cpp_program(model=None)
     # the catalyst's read handle (3rd input -> u2) and its cons local must be emitted
     assert "u2.fab(li).const_array()" in src, "the catalyst input state's read handle is bound"
@@ -179,8 +202,12 @@ def test_undefined_cons_var_is_rejected():
     P = adctime.Program("two_fluid_typo").bind_operators(mod)
     e_n, i_n = P.state("electrons", space=e), P.state("ions", space=i)
     C = P._call("collision", e_n, i_n)
-    P.commit_many({"electrons": P.linear_combine("e1", e_n + P.dt * C["electrons"]),
-                   "ions": P.linear_combine("i1", i_n + P.dt * C["ions"])})
+    P.commit_many({
+        P.state("U", block="electrons").next:
+            P.linear_combine("e1", e_n + P.dt * C["electrons"]),
+        P.state("U", block="ions").next:
+            P.linear_combine("i1", i_n + P.dt * C["ions"]),
+    })
     with pytest.raises(NotImplementedError, match="ADC-457"):
         P._check_lowerable(None)
 

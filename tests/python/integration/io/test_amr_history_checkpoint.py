@@ -95,7 +95,7 @@ def _state3_program(name="adc631_ckpt_state3"):
     # Markov forward-Euler on the linear source (reads U.n only), + a zero-weight prev(2) read that
     # declares the depth-3 ring without breaking the single-step reconstructability of the replay.
     nxt = P.linear_combine("Un", U.n + P.dt * (_C * U.n) + 0.0 * U.prev(2))
-    P.commit("blk", nxt)
+    P.commit(P.state("U", block="blk").next, nxt)
     return P
 
 

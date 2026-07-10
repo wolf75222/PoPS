@@ -152,11 +152,11 @@ class GeometricMG(Descriptor):
     def _resolved_tolerance(self) -> Any:
         """(rel_tol, abs_tol) for the native mixed criterion from the typed tolerance descriptor."""
         if isinstance(self.tolerance, Relative):
-            floor = self.tolerance.floor.abs_floor if self.tolerance.floor is not None else 0.0
-            return float(self.tolerance.rel), float(floor)
+            floor = self.tolerance.floor.abs_floor if self.tolerance.floor is not None else 0
+            return self.tolerance.rel, floor
         # Absolute: keep the native relative tolerance so rel_tol stays > 0 (the native solver
         # requires it) and the absolute floor dominates the mixed stop max(rel_tol*r0, abs_tol).
-        return _MG_DEFAULT_REL_TOL, float(self.tolerance.abs_tol)
+        return _MG_DEFAULT_REL_TOL, self.tolerance.abs_tol
 
     def validate(self, context: Any = None) -> ValidationReport:
         """Refuse the sub-options with no native realisation STRUCTURALLY (ADC-613).
