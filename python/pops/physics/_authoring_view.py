@@ -80,13 +80,13 @@ class _OperatorViewMixin(_HyperbolicModel):
                 capabilities={"local": False, "linear": False, "produces_rate": True,
                               "requires_ghosts": 1, "supports_device": True,
                               "default": True},
-                source="dsl.flux"))
+                source=None))
         for nm in sorted(self._flux_terms):
             reg.register(_model.Operator(
                 nm, "grid_operator", _model.Signature([state], _model.Rate(state)),
                 capabilities={"local": False, "linear": False, "produces_rate": True,
                               "requires_ghosts": 1, "supports_device": True},
-                source="dsl.flux_term"))
+                source=None))
 
         # Local sources (local_source: State[, Fields] -> Rate(State)).
         if self._source is not None:
@@ -100,7 +100,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                               "default": True},
                 requirements=self._aux_requirements(self._source),
                 lowering={"source": "default"},
-                source="dsl.source"))
+                source=None))
             # ``source_term("default", ...)`` returns a readable ``default`` handle,
             # while the lowering registry keeps the unambiguous ``source_default`` key.
             # The alias is an explicit registry declaration, never inferred by resolution.
@@ -115,7 +115,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                 capabilities={"local": True, "linear": False, "requires_fields": rf,
                               "produces_rate": True, "supports_device": True},
                 requirements=self._aux_requirements(exprs),
-                source="dsl.source_term"))
+                source=None))
 
         # Local linear operators (local_linear_operator: Fields? -> L(State, State)).
         for nm in sorted(self._linear_sources):
@@ -128,7 +128,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                 capabilities={"local": True, "linear": True, "solve_i_minus_a": True,
                               "matrix_available": True, "supports_device": True},
                 requirements=self._aux_requirements(coeffs),
-                source="dsl.linear_source"))
+                source=None))
 
         # Field operators (field_operator: State -> FieldSpace).
         if self._elliptic is not None:
@@ -142,7 +142,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                 capabilities={"requires_solver": True, "supports_device": True,
                               "default": True},
                 requirements={"elliptic_operator": "poisson"},
-                source="dsl.elliptic_rhs"))
+                source=None))
         for nm in sorted(self._elliptic_fields):
             info = self._elliptic_fields[nm]
             reg.register(_model.Operator(
@@ -151,7 +151,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                                  _model.FieldSpace(nm, components=tuple(info["aux"]))),
                 capabilities={"requires_solver": True, "supports_device": True},
                 requirements={"elliptic_operator": info["operator"]},
-                source="dsl.elliptic_field"))
+                source=None))
 
         # Pointwise projection (projection: State -> State).
         if self._proj is not None:
@@ -159,7 +159,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                 "projection", "projection", _model.Signature([state], state),
                 capabilities={"local": True, "idempotent": True,
                               "supports_device": True},
-                source="dsl.projection"))
+                source=None))
 
         # Composite rate operators (local_rate: State[, Fields] -> Rate(State)); aliases
         # for ctx.rhs(flux=, sources=, fluxes=), carried as a lowering hint for P.call.
@@ -181,7 +181,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                               "produces_rate": True, "supports_device": True},
                 lowering={"flux": cfg["flux"], "sources": cfg["sources"],
                           "fluxes": cfg["fluxes"]},
-                source="dsl.rate_operator"))
+                source=None))
         # Deep-freeze seals derived caches as mapping proxies. A missing view remains computable
         # after freeze, but must not mutate the sealed model merely to memoize it.
         if isinstance(cache, dict):

@@ -14,7 +14,7 @@ from pops.problem._registry_freeze import (
     flatten_freeze_members,
 )
 from pops.problem._registry_support import descriptor_declaration_key, strict_name
-from pops.problem.report import ProblemValidationReport
+from pops._report import ReportTree
 
 
 class RuntimePolicyRegistry(_FreezableRegistry):
@@ -143,12 +143,14 @@ class RuntimePolicyRegistry(_FreezableRegistry):
         return iter(self._outputs)
 
     def validate(self, context: Any = None) -> Any:
-        report = ProblemValidationReport()
+        report = ReportTree(
+            phase="validation", severity="info", code="validation.runtime.root",
+            source=self.family)
         resolver = context.get("declaration_resolver") if isinstance(context, dict) else None
         for policy in self._outputs:
             category = getattr(policy, "category", None)
             if category not in self._POLICY_CATEGORIES:
-                report.error(
+                report = report.error(
                     self.family,
                     "bad_output_policy",
                     "output() expects a pops.output.OutputPolicy / CheckpointPolicy; got %r "
@@ -158,7 +160,7 @@ class RuntimePolicyRegistry(_FreezableRegistry):
                 continue
             if category == "output_policy":
                 for index, reference in enumerate(getattr(policy, "fields", ())):
-                    self._validate_consumer_reference(
+                    report = self._validate_consumer_reference(
                         report,
                         resolver,
                         reference,
@@ -166,7 +168,7 @@ class RuntimePolicyRegistry(_FreezableRegistry):
                         allowed_kinds=self._OUTPUT_FIELD_KINDS,
                     )
                 for index, measure in enumerate(getattr(policy, "diagnostics", ())):
-                    self._validate_measure_reference(
+                    report = self._validate_measure_reference(
                         report,
                         resolver,
                         measure,
@@ -175,7 +177,7 @@ class RuntimePolicyRegistry(_FreezableRegistry):
         for measure in self._diagnostics:
             category = getattr(measure, "category", None)
             if not self._is_diagnostic_category(category):
-                report.error(
+                report = report.error(
                     self.family,
                     "bad_diagnostic_measure",
                     "diagnostics=[...] expects a pops.diagnostics measure; got %r (category %r)"
@@ -183,24 +185,32 @@ class RuntimePolicyRegistry(_FreezableRegistry):
                     context={"measure": type(measure).__name__, "category": category},
                 )
                 continue
-            self._validate_measure_reference(
+            report = self._validate_measure_reference(
                 report, resolver, measure, consumer=type(measure).__name__
             )
-        self._validate_flat_members(report, context)
-        return report
+        return self._validate_flat_members(report, context)
 
-    def _validate_flat_members(self, report: ProblemValidationReport, context: Any) -> None:
+    def _validate_flat_members(self, report: ReportTree, context: Any) -> ReportTree:
         """Validate the sole flat declarations; the input bundle is never retained."""
         members = [*self._outputs, *self._diagnostics, *self._schedules]
         ctx = context or {}
         requirements = {}
+        if self._schedules:
+            report = report.error(
+                "runtime_policies", "unattached_schedule",
+                "the runtime registry contains %d unattached schedule(s); every schedule must be "
+                "owned by a Program node, output, checkpoint, or diagnostic consumer"
+                % len(self._schedules),
+                context={"count": len(self._schedules)},
+                alternatives=("attach each schedule to its consumer",),
+            )
         for member in members:
             validate = getattr(member, "validate", None)
             if callable(validate):
                 try:
                     validate(ctx)
                 except Exception as exc:  # noqa: BLE001 -- aggregate member diagnostics
-                    report.error(
+                    report = report.error(
                         self.family,
                         "runtime_member_invalid",
                         str(exc),
@@ -208,11 +218,22 @@ class RuntimePolicyRegistry(_FreezableRegistry):
                     )
             requirement_provider = getattr(member, "requirements", None)
             if callable(requirement_provider):
-                requirements.update(requirement_provider().to_dict())
+                for key, value in requirement_provider().to_dict().items():
+                    if key in requirements and requirements[key] != value:
+                        report = report.error(
+                            "runtime_policies", "requirement_conflict",
+                            "runtime policy requirement %r is declared as both %r and %r; "
+                            "requirement unions cannot overwrite earlier evidence"
+                            % (key, requirements[key], value),
+                            context={"requirement": key, "first": requirements[key],
+                                     "second": value},
+                        )
+                    else:
+                        requirements[key] = value
         if requirements.get("parallel_io") and isinstance(ctx, dict):
             declared = [key for key in ("parallel", "mpi", "supports_mpi") if key in ctx]
             if declared and not any(bool(ctx.get(key)) for key in declared):
-                report.error(
+                report = report.error(
                     "runtime_policies",
                     "incompatible_policy",
                     "a runtime policy requires 'parallel_io' but the resolved runtime context "
@@ -220,27 +241,27 @@ class RuntimePolicyRegistry(_FreezableRegistry):
                     % ", ".join("%s=%r" % (key, ctx.get(key)) for key in declared),
                     context={"requirement": "parallel_io"},
                 )
+        return report
 
     def _validate_consumer_reference(
         self,
-        report: ProblemValidationReport,
+        report: ReportTree,
         resolver: Any,
         reference: Any,
         *,
         consumer: str,
         allowed_kinds: Any = None,
-    ) -> None:
+    ) -> ReportTree:
         if not isinstance(reference, Handle):
-            report.error(
+            return report.error(
                 self.family,
                 "untyped_declaration_reference",
                 "%s must reference a declaration Handle, not %r"
                 % (consumer, type(reference).__name__),
                 context={"consumer": consumer, "reference_type": type(reference).__name__},
             )
-            return
         if allowed_kinds is not None and reference.kind not in allowed_kinds:
-            report.error(
+            return report.error(
                 self.family,
                 "invalid_output_field_kind",
                 "%s accepts only writable state/field/aux handles; got kind %r"
@@ -251,68 +272,64 @@ class RuntimePolicyRegistry(_FreezableRegistry):
                     "kind": reference.kind,
                 },
             )
-            return
         if not callable(resolver):
-            return
+            return report
         try:
             resolver(reference)
         except AmbiguousReferenceError as exc:
-            report.error(
+            report = report.error(
                 self.family,
                 "ambiguous_declaration_reference",
                 "%s: %s" % (consumer, exc),
                 context={"consumer": consumer, "qualified_id": reference.qualified_id},
             )
         except (MissingOwnershipError, DoubleOwnershipError, TypeError, ValueError) as exc:
-            report.error(
+            report = report.error(
                 self.family,
                 "invalid_declaration_reference",
                 "%s: %s" % (consumer, exc),
                 context={"consumer": consumer, "qualified_id": reference.qualified_id},
             )
+        return report
 
     def _validate_measure_reference(
         self,
-        report: ProblemValidationReport,
+        report: ReportTree,
         resolver: Any,
         measure: Any,
         *,
         consumer: str,
-    ) -> None:
+    ) -> ReportTree:
         category = getattr(measure, "category", None)
         if not self._is_diagnostic_category(category):
-            report.error(
+            return report.error(
                 self.family,
                 "bad_diagnostic_measure",
                 "%s must reference a typed pops.diagnostics measure, not %r (category %r)"
                 % (consumer, type(measure).__name__, category),
                 context={"consumer": consumer, "category": category},
             )
-            return
         if category == "conservation_check":
-            self._validate_measure_reference(
+            return self._validate_measure_reference(
                 report,
                 resolver,
                 getattr(measure, "quantity", None),
                 consumer="%s.quantity" % consumer,
             )
-            return
         block = getattr(measure, "block", None)
         if block is None:
-            return
+            return report
         from pops.problem.handles import BlockHandle
 
         if not isinstance(block, BlockHandle):
-            report.error(
+            return report.error(
                 self.family,
                 "untyped_block_reference",
                 "%s.block must be a BlockHandle, not %r" % (consumer, type(block).__name__),
                 context={"consumer": consumer, "reference_type": type(block).__name__},
             )
-            return
-        self._validate_consumer_reference(
-            report, resolver, block, consumer="%s.block" % consumer
-        )
+        return self._validate_consumer_reference(
+            report, resolver, block, consumer="%s.block" % consumer)
 
     def inspect(self) -> Any:
         info = {
@@ -380,7 +397,12 @@ class ConstraintRegistry(_FreezableRegistry):
         return len(self._criteria)
 
     def validate(self, context: Any = None) -> Any:
-        return ProblemValidationReport()
+        return ReportTree(
+            phase="validation",
+            severity="info",
+            code="validation.amr.root",
+            source=self.family,
+        )
 
     def inspect(self) -> Any:
         return {

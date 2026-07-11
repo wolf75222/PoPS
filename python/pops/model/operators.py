@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any
+from pops.provenance import ProvenanceRecord
 
 from .signatures import Signature
 from .spaces import FieldSpace, RateSpace, Space, StateSpace, _as_signature_inputs
@@ -357,6 +358,8 @@ class Operator:
         self.signature = signature
         self.capabilities = dict(capabilities) if capabilities else {}
         self.requirements = dict(requirements) if requirements else {}
+        if source is not None and not isinstance(source, ProvenanceRecord):
+            raise TypeError("Operator.source must be a ProvenanceRecord or None before registration")
         self.source = source
         # Codegen hint consumed by the lowering of a typed P.call (e.g. a composite
         # rate operator carries {"flux", "sources", "fluxes"}); empty for primitives.
@@ -373,6 +376,8 @@ class Operator:
         """Deep-freeze this registry record while detaching every stale container alias."""
         if self.frozen:
             return self
+        if not isinstance(self.source, ProvenanceRecord):
+            raise TypeError("Operator.source must be a ProvenanceRecord before freeze")
         for name in ("capabilities", "requirements", "lowering", "body"):
             value = getattr(self, name)
             if isinstance(value, (Mapping, list, tuple, set, frozenset)):

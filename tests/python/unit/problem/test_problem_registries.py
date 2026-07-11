@@ -1,9 +1,8 @@
 """ADC-553: the typed internal registries of a Problem are independently inspectable/validatable.
 
 Each registry (blocks / fields / time / params / runtime policies / constraints) exposes add / get /
-names / __iter__ / inspect / validate and reports structured per-family errors. Problem.validate()
-aggregates the child reports into one ProblemValidationReport whose by_family() lists the errors per
-subsystem.
+names / __iter__ / inspect / validate and reports structured per-source errors. Problem.validate()
+aggregates the child trees into one immutable ReportTree whose by_source() lists errors per subsystem.
 
 Pure Python; needs only `import pops`.
 """
@@ -16,7 +15,7 @@ pops = pytest.importorskip("pops")
 from pops.problem.registries import (  # noqa: E402
     BlockRegistry, ConstraintRegistry, FieldRegistry, ParamRegistry,
     RuntimePolicyRegistry, TimeRegistry)
-from pops.problem.report import ProblemValidationReport  # noqa: E402
+from pops import ReportTree  # noqa: E402
 from pops.model import OwnerKind, OwnerPath  # noqa: E402
 from pops.params import ConstParam  # noqa: E402
 
@@ -46,9 +45,9 @@ def test_block_registry_add_get_names_and_duplicate():
 
 def test_block_registry_validate_reports_no_block():
     report = BlockRegistry(owner=_OWNER).validate()
-    assert isinstance(report, ProblemValidationReport)
+    assert isinstance(report, ReportTree)
     assert not report.ok
-    assert any(i.code == "no_block" for i in report)
+    assert any(i.code == "block.no_block" for i in report.issues)
 
 
 def test_field_registry_type_checks_and_names():
@@ -125,7 +124,7 @@ def test_runtime_policy_registry_refuses_bad_output():
     reg.add_output(_NotAPolicy())
     report = reg.validate()
     assert not report.ok
-    assert any(i.code == "bad_output_policy" for i in report)
+    assert any(i.code == "runtime.bad_output_policy" for i in report.issues)
 
 
 def test_runtime_registry_declarations_are_register_once():
@@ -222,8 +221,8 @@ def test_cross_family_homonyms_remain_typed_and_do_not_collide():
             .field(fp)
             .output(_NotAPolicy()))
     report = prob.validate_report()
-    families = report.by_family()
-    assert "runtime" in families and "field" not in families
+    sources = report.by_source()
+    assert "runtime" in sources and "field" not in sources
     assert prob.blocks()["ne"] != prob.fields()["ne"]
     assert not report.ok
 

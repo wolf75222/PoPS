@@ -138,7 +138,7 @@ def test_problem_validate_runs_the_bundle_validate():
     problem = pops.Problem(name="p").block("ne", physics=Module("m"))
     problem.runtime(rp)
     report = problem.validate_report({"parallel": False})
-    assert any(i.family == "runtime_policies" for i in report.issues)
+    assert any(i.source == "runtime_policies" for i in report.issues)
 
 
 def test_runtime_bundle_is_flattened_once_in_problem_snapshot():
@@ -169,7 +169,9 @@ def test_problem_validates_output_field_ownership_before_lowering():
     block_b = ambiguous.add_block("b", module)
     ambiguous.output(OutputPolicy(fields=[state_ref]))
     report = ambiguous.validate_report()
-    issue = next(item for item in report if item.code == "ambiguous_declaration_reference")
+    issue = next(
+        item for item in report.issues
+        if item.code == "runtime.ambiguous_declaration_reference")
     assert str(block_a.instance_owner_path) in issue.message
     assert str(block_b.instance_owner_path) in issue.message
 
@@ -195,8 +197,8 @@ def test_runtime_registry_rejects_non_writable_output_handle_kind():
     problem.add_block("fluid", module)
     problem.output(policy)
     issue = next(
-        item for item in problem.validate_report()
-        if item.code == "invalid_output_field_kind")
+        item for item in problem.validate_report().issues
+        if item.code == "runtime.invalid_output_field_kind")
     assert "local_rate" in issue.message
 
 
@@ -211,7 +213,9 @@ def test_problem_validates_diagnostic_block_ownership_before_lowering():
     foreign.add_block("other", module)
     foreign.runtime(RuntimePolicies(diagnostics=[Integral(block=local_block)]))
     report = foreign.validate_report()
-    issue = next(item for item in report if item.code == "invalid_declaration_reference")
+    issue = next(
+        item for item in report.issues
+        if item.code == "runtime.invalid_declaration_reference")
     assert "not registered by this case" in issue.message
 
 

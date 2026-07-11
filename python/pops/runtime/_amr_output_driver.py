@@ -14,6 +14,14 @@ verbatim message naming the live count at the moment of the write.
 from pops.runtime._output_driver import policy_due
 
 
+def _reject_output(code, message, *, evidence=None, actions=()):
+    from pops._report import DiagnosticError, ReportTree
+
+    raise DiagnosticError(ReportTree(
+        phase="runtime", severity="error", code="runtime.output.%s" % code,
+        message=message, source="amr_output", evidence=evidence or {}, actions=actions))
+
+
 def resolve_levels(sim, levels):
     """The level index set a typed level policy selects on @p sim's live hierarchy.
 
@@ -29,11 +37,13 @@ def resolve_levels(sim, levels):
         ks = list(getattr(levels, "levels", ()))
         for k in ks:
             if k < 0 or k >= n_levels:
-                raise ValueError(
+                _reject_output(
+                    "selected_level_out_of_range",
                     "OutputPolicy(levels=SelectedLevels(%s)): level %d is out of range for the live "
                     "AMR hierarchy (n_levels=%d at this write). Under active regridding the level "
                     "count varies; select a level in [0, %d)."
-                    % (", ".join(str(x) for x in ks), k, n_levels, n_levels))
+                    % (", ".join(str(x) for x in ks), k, n_levels, n_levels),
+                    evidence={"selected_levels": ks, "level": k, "n_levels": n_levels})
         return ks
     return list(range(n_levels))  # AllLevels (and the default)
 
@@ -63,9 +73,10 @@ def fire_amr_output_policies(sim, policies, step, output_dir, last_step=None):
             prefix = os.path.join(output_dir, getattr(policy, "prefix", None) or "checkpoint")
             written.append(sim.checkpoint("%s_%06d" % (prefix, step)))
         else:
-            raise TypeError(
+            _reject_output(
+                "unsupported_policy",
                 "output policy must be a pops.output.OutputPolicy / CheckpointPolicy "
-                "(got category %r)" % (cat,))
+                "(got category %r)" % (cat,), evidence={"category": cat})
     return written
 
 
@@ -80,11 +91,40 @@ def _write_amr(sim, prefix, policy, step, levels):
     """
     fmt = getattr(policy, "format", None)
     fmt_name = type(fmt).__name__ if fmt is not None else "npz"
+    if fmt_name == "HDF5":
+        _reject_output(
+            "hdf5_not_lowered",
+            "AMR OutputPolicy(format=HDF5()) has no HDF5 writer; refusing the historical NPZ "
+            "substitution. Use Plotfile() or the default NPZ route.",
+            actions=("use Plotfile() or the exact NPZ route",))
+    if getattr(policy, "fields", None):
+        _reject_output(
+            "field_subset_not_lowered",
+            "AMR OutputPolicy(fields=...) cannot yet preserve the exact qualified field subset; "
+            "refusing to widen it silently to every block state and phi")
+    if getattr(policy, "diagnostics", None):
+        _reject_output(
+            "diagnostics_not_lowered",
+            "AMR OutputPolicy(diagnostics=...) has no output-diagnostic lowering; refusing to "
+            "drop the requested diagnostics")
+    if getattr(policy, "require_parallel", False):
+        _reject_output(
+            "parallel_writer_unavailable",
+            "AMR OutputPolicy(require_parallel=True) cannot be honored by the rank-0 NPZ/plotfile "
+            "writers; refusing to report a parallel route")
     if fmt_name == "Plotfile":
         from pops.runtime._plotfile_writer import write_plotfile
         return write_plotfile(sim, prefix, step=step, levels=levels)
     if fmt_name == "VTK" or (isinstance(fmt, str) and fmt == "vtk"):
+        if type(getattr(policy, "levels", None)).__name__ not in {"AllLevels", "NoneType"}:
+            _reject_output(
+                "vtk_level_subset_not_lowered",
+                "AMR VTK output cannot preserve a selected level subset; use Plotfile/NPZ")
         return sim.write(prefix, format="vtk", step=step)
+    if fmt is not None and not (isinstance(fmt, str) and fmt == "npz"):
+        _reject_output(
+            "format_not_lowered",
+            "AMR output format %r has no exact lowering" % fmt_name)
     return _write_amr_levels_npz(sim, prefix, step, levels)
 
 

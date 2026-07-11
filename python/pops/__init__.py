@@ -25,7 +25,6 @@ from pops import _bootstrap  # noqa: F401  (loads _pops with RTLD_GLOBAL so the 
 from pops._bootstrap import abi_key  # noqa: F401  (module ABI key: a diagnostic, not a config export)
 # ADC-585 quarantined ModelSpec; ADC-545 retired System/AmrSystem/SystemConfig/AmrSystemConfig (see __getattr__).
 from pops._version import __version__  # noqa: F401
-
 # Runtime layer (the ONLY importer of _pops): parallelism, doctor, mesh, bricks, host flux.
 from pops.runtime.threading import set_threads, has_kokkos, parallel_info  # noqa: F401
 from pops.runtime.doctor import doctor, capabilities  # noqa: F401
@@ -44,7 +43,6 @@ from pops.runtime.bricks import (  # noqa: F401
     SourceImplicit, SourceImplicitBE, IMEXRK, Role, CondensedSchur, ElectrostaticLorentzSchur,
     Split, Strang, Dirichlet, Neumann, Periodic,
 )
-
 __all__ = [
     "Model", "CompositeModel", "CartesianMesh", "PolarMesh", "AuxHalo",
     "Scalar", "FluidState", "ExB", "CompressibleFlux", "IsothermalFlux",
@@ -59,7 +57,8 @@ __all__ = [
     "Profile", "PerformanceSummary", "RuntimeInspectionReport", "numerical_defaults_report",
     "fallback_diagnostics_report", "reset_fallback_diagnostics",
     "time", "model", "math", "physics", "lib", "mesh", "params", "output", "external", "fields",
-    "linalg", "solvers", "experimental", "abi_key", "capabilities", "inspect", "inspect_capabilities",
+    "linalg", "solvers", "experimental", "abi_key", "capabilities", "inspect", "explain",
+    "ReportTree", "ReportPhase", "ReportSeverity", "DiagnosticError", "SourceSpan", "ProvenanceRecord",
     "inspect_amr", "native_capability_report", "runtime_environment_report",
     "validate_runtime_environment", "RuntimeCapabilityError",
     "set_threads", "has_kokkos", "parallel_info", "doctor", "CompiledArtifact",
@@ -78,9 +77,10 @@ from pops.physics import PhysicsModel  # noqa: E402,F401  (Spec 5 sec.11: alias 
 from . import codegen  # noqa: E402,F401
 from ._capabilities import (  # noqa: E402,F401  (Spec 5: descriptor-sourced matrix + native reports)
     inspect_capabilities, inspect_amr, native_capability_report)
-from ._inspect import inspect  # noqa: E402,F401  (ADC-527: stable per-object inspect dispatcher)
+from ._report import DiagnosticError, ReportPhase, ReportSeverity, ReportTree  # noqa: E402,F401
+from .provenance import ProvenanceRecord, SourceSpan  # noqa: E402,F401
+from ._inspect import explain, inspect  # noqa: E402,F401  (typed explanation + explicit dict bridge)
 from .runtime_environment import RuntimeCapabilityError, runtime_environment_report, validate_runtime_environment  # noqa: E402,F401,E501
-
 # ADC-545: retired name -> advanced home; __getattr__ raises a targeted AttributeError naming both
 # the front door (pops.compile / pops.bind) and this home (no silent alias).
 _ADC545_HOMES = {

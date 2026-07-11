@@ -21,8 +21,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops._report import ReportTree
 from pops.descriptors import Availability, Descriptor
-from pops.descriptors_report import CapabilitySet, ValidationReport
+from pops.descriptors_report import CapabilitySet
 from pops.solvers.options import Chebyshev, CompositeFAC, DirectSmallGrid, RedBlackGaussSeidel
 from pops.solvers.requirements import capability_map
 from pops.solvers.tolerances import Absolute, Relative
@@ -158,7 +159,7 @@ class GeometricMG(Descriptor):
         # requires it) and the absolute floor dominates the mixed stop max(rel_tol*r0, abs_tol).
         return _MG_DEFAULT_REL_TOL, self.tolerance.abs_tol
 
-    def validate(self, context: Any = None) -> ValidationReport:
+    def validate(self, context: Any = None) -> ReportTree:
         """Refuse the sub-options with no native realisation STRUCTURALLY (ADC-613).
 
         The native ``GeometricMG`` V-cycle uses a Gauss-Seidel smoother and a Gauss-Seidel bottom
@@ -166,9 +167,13 @@ class GeometricMG(Descriptor):
         actionable alternative) rather than silently ignored -- honouring the audit rule that an
         unsupported sub-option refuses, never drops. Out-of-domain tolerances are rejected too.
         """
-        report = ValidationReport(subject=self)
+        report = ReportTree(
+            phase="validation", severity="info", code="validation.elliptic_solver.report",
+            source="elliptic_solver", owner=self,
+            evidence={"descriptor": self.name, "scheme": self.scheme},
+        )
         if isinstance(self.smoother, Chebyshev):
-            report.error(
+            report = report.error(
                 "elliptic_solver", "smoother_not_wired",
                 "GeometricMG smoother %r has no native C++ kernel: the native V-cycle uses a "
                 "Gauss-Seidel smoother. Use RedBlackGaussSeidel()." % self.smoother.name,
@@ -176,12 +181,12 @@ class GeometricMG(Descriptor):
                 alternatives=["pops.solvers.options.RedBlackGaussSeidel()"])
         rel_tol, abs_tol = self._resolved_tolerance()
         if rel_tol <= 0.0:
-            report.error(
+            report = report.error(
                 "elliptic_solver", "rel_tol_out_of_domain",
                 "GeometricMG relative tolerance must be > 0; got %r." % rel_tol,
                 context={"rel_tol": rel_tol})
         if abs_tol < 0.0:
-            report.error(
+            report = report.error(
                 "elliptic_solver", "abs_tol_out_of_domain",
                 "GeometricMG absolute floor must be >= 0; got %r." % abs_tol,
                 context={"abs_tol": abs_tol})

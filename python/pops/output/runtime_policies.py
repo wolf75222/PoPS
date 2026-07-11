@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pops._report import Report
+from pops._report import Report, ReportTree
 
 
 class RuntimePolicies:
@@ -71,21 +71,39 @@ class RuntimePolicies:
             req = getattr(member, "requirements", None)
             if callable(req):
                 reqset: Any = req()
-                merged.update(reqset.to_dict())
+                for key, value in reqset.to_dict().items():
+                    if key in merged and merged[key] != value:
+                        raise ValueError(
+                            "RuntimePolicies requirement conflict for %r: %r versus %r; "
+                            "policy unions cannot overwrite semantic requirements"
+                            % (key, merged[key], value))
+                    merged[key] = value
         return RequirementSet(merged)
 
     def validate(self, context: Any = None) -> Any:
         """Refuse an AMR / MPI / backend-incompatible member GIVEN @p context, before the runtime.
 
-        Returns a :class:`~pops.problem.report.ProblemValidationReport`. A parallel-only output on a
+        Returns a :class:`~pops.ReportTree`. A parallel-only output on a
         serial backend, or a member whose declared requirement the resolved layout / backend context
         does not satisfy, is refused HERE -- the bundle validates without the physics facade. A
         member's own ``validate`` failure is folded in too. Never a bare raise: the report
         accumulates, and a strict caller uses ``raise_if_error()``.
         """
-        from pops.problem.report import ProblemValidationReport
-        report = ProblemValidationReport(subject=self)
+        report = ReportTree(
+            phase="validation",
+            severity="info",
+            code="validation.runtime_policies.root",
+            source=self.category,
+        )
         ctx = context or {}
+        if self.schedules:
+            report = report.error(
+                self.category, "unattached_schedule",
+                "RuntimePolicies.schedules contains %d free schedule(s), but schedules must be "
+                "attached to a Program node, output, checkpoint, or diagnostic consumer; an "
+                "unattached schedule has no lowering target" % len(self.schedules),
+                context={"count": len(self.schedules)},
+                alternatives=("attach the schedule to its consumer",))
         # Each member's own validation (a solver-less checkpoint, an incomplete measure, ...).
         for member in self.members():
             member_validate = getattr(member, "validate", None)
@@ -93,10 +111,11 @@ class RuntimePolicies:
                 try:
                     member_validate(ctx)
                 except Exception as exc:  # noqa: BLE001 -- surface the member's message as an issue
-                    report.error(self.category, "member_invalid", str(exc),
-                                 context={"member": type(member).__name__})
+                    report = report.error(
+                        self.category, "member_invalid", str(exc),
+                        context={"member": type(member).__name__})
         # The bundle's own compatibility check: a declared requirement the context does not satisfy.
-        self._check_context_requirements(report, ctx)
+        report = self._check_context_requirements(report, ctx)
         return report
 
     # The requirements that name a real backend INCOMPATIBILITY (a parallel-only policy on a serial
@@ -118,7 +137,7 @@ class RuntimePolicies:
                 continue
             declared = [k for k in context_keys if isinstance(ctx, dict) and k in ctx]
             if declared and not any(bool(ctx.get(k)) for k in declared):
-                report.error(
+                report = report.error(
                     self.category, "incompatible_policy",
                     "a runtime policy requires %r but the resolved runtime context declares a serial "
                     "/ non-MPI backend (%s); choose a serial-compatible policy or compile for a "

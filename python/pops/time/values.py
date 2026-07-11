@@ -1,5 +1,4 @@
 """pops.time value algebra -- typed SSA handles and the affine/operator algebra.
-
 A ``ProgramValue`` is a typed SSA node in a Program IR; field-like values support an affine algebra
 (``U + dt * R``) and scalars compose into ``scalar_op`` nodes. ``_Coeff`` / ``_Affine`` /
 ``_Operator`` are the coefficient + linear-combination carriers; ``StageStateSet`` and
@@ -14,6 +13,7 @@ from typing import Any
 from pops.ir import Equation
 from pops.ir.literals import scalar_data
 from pops.ir.symbolic import ImmutableSymbolic
+from pops.provenance import ProvenanceRecord
 from pops.time.value_metadata import (
     CoeffPolynomial, CoefficientLiteralError, _exact_add, _exact_divide, _exact_multiply,
     _exact_negate, _exact_number, _freeze_attr, validate_program_value_identity,
@@ -284,7 +284,8 @@ class ProgramValue(ImmutableSymbolic):
 
     def __init__(self, prog: Any, vid: Any, vtype: Any, op: Any, inputs: Any, attrs: Any,
                  name: Any, block: Any, *, space: Any = None, source_location: Any = None,
-                 field_context: Any = None, region: int = 0, state_ref: Any = None) -> None:
+                 field_context: Any = None, region: int = 0, state_ref: Any = None,
+                 provenance: Any) -> None:
         inputs = validate_program_value_identity(
             vid, vtype, op, inputs, name, block, region, state_ref)
         self.prog = prog
@@ -298,19 +299,19 @@ class ProgramValue(ImmutableSymbolic):
         self.state_ref = state_ref
         self.region = region
         # Operator-first type tag (Spec 2): the pops.model space/operator-type this value lives over
-        # (a StateSpace / RateSpace / FieldSpace / LocalLinearOperator), set by T.state(block, U) and
-        # P.call. It is serialized structurally because component order can change lowering. None =
-        # untyped, in which case all space checks are skipped.
+        # (a StateSpace / RateSpace / FieldSpace / LocalLinearOperator); None skips space checks.
         if space is not None and getattr(space, "__pops_ir_immutable__", False) is not True:
             raise TypeError("ProgramValue space must be an immutable typed Space or None")
         self.space = space
-        # OPTIONAL authoring source location (ADC-530): the (file, line) of the call that built this
-        # node, populated by _new only when the Program has capture_source_locations() enabled. A pure
+        # OPTIONAL authoring source location: populated by _new when capture_source_locations() is on.
         # debug aid, INSPECTION-ONLY -- NEVER serialized into the IR / the hash. None by default.
         if source_location is not None \
                 and (not isinstance(source_location, str) or not source_location):
             raise TypeError("ProgramValue source_location must be a non-empty string or None")
         self.source_location = source_location
+        if not isinstance(provenance, ProvenanceRecord):
+            raise TypeError("ProgramValue provenance must be a ProvenanceRecord")
+        self.provenance = provenance
         if field_context is not None:
             from pops.time.field_context import FieldContext, FieldReadProvenance
             if not isinstance(field_context, (FieldContext, FieldReadProvenance)):
@@ -494,6 +495,4 @@ class ProgramValue(ImmutableSymbolic):
 
     def __repr__(self) -> str:
         return "<%s %s #%d>" % (self.vtype, self.name, self.id)
-
-
 from pops.time.value_collections import StageStateSet, _CoupledResult  # noqa: E402,F401

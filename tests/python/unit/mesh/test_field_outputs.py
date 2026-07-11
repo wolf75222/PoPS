@@ -201,7 +201,7 @@ def test_problem_rejects_foreign_and_ambiguous_field_output_sources():
         GeometricMG(), outputs=[GradientOutput("E", model.field)]))
 
     report = ambiguous.validate_report()
-    issue = next(item for item in report if item.code == "field_invalid")
+    issue = next(item for item in report.issues if item.code == "field.field_invalid")
     assert "matches 2 block instances" in issue.message
     assert str(block_a.instance_owner_path) in issue.message
     assert str(block_b.instance_owner_path) in issue.message
@@ -212,7 +212,7 @@ def test_problem_rejects_foreign_and_ambiguous_field_output_sources():
     foreign.add_field(_problem(
         GeometricMG(), outputs=[GradientOutput("E", foreign_model.field)]))
     foreign_issue = next(
-        item for item in foreign.validate_report() if item.code == "field_invalid")
+        item for item in foreign.validate_report().issues if item.code == "field.field_invalid")
     assert "no block in this case instantiates" in foreign_issue.message
 
     resolved = Problem(name="resolved-field-source")

@@ -12,7 +12,7 @@ import sys
 import pytest
 
 pops = pytest.importorskip("pops")
-from pops.params import ConstParam
+from pops.params import ConstParam  # noqa: E402
 
 from pops.model import Module  # noqa: E402
 
@@ -99,9 +99,9 @@ def test_field_type_is_checked_early():
 def test_no_block_reports_a_structured_error():
     report = pops.Problem().validate_report()
     assert not report.ok
-    families = report.by_family()
-    assert "block" in families
-    assert any(issue.code == "no_block" for issue in families["block"])
+    sources = report.by_source()
+    assert "block" in sources
+    assert any(issue.code == "block.no_block" for issue in sources["block"])
 
 
 def test_bad_output_policy_reports_runtime_family():
@@ -110,7 +110,7 @@ def test_bad_output_policy_reports_runtime_family():
     prob = pops.Problem().block("ne", physics=_model()).output(_NotAPolicy())
     report = prob.validate_report()
     assert not report.ok
-    assert "runtime" in report.by_family()
+    assert "runtime" in report.by_source()
 
 
 def test_to_dict_is_json_ready_and_array_free():

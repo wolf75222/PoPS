@@ -18,7 +18,7 @@ from pops.problem._registry_freeze import (
 )
 from pops.problem._registry_support import strict_name
 from pops.problem.handles import BlockHandle
-from pops.problem.report import ProblemValidationReport
+from pops._report import ReportTree
 
 
 class BlockRegistry(_FreezableRegistry):
@@ -363,9 +363,11 @@ class BlockRegistry(_FreezableRegistry):
         return isinstance(name, str) and name in self._blocks
 
     def validate(self, context: Any = None) -> Any:
-        report = ProblemValidationReport()
+        report = ReportTree(
+            phase="validation", severity="info", code="validation.block.root",
+            source=self.family)
         if not self._blocks:
-            report.error(
+            report = report.error(
                 self.family,
                 "no_block",
                 "no block declared; add one with add_block(name, model, spatial)",
@@ -374,7 +376,7 @@ class BlockRegistry(_FreezableRegistry):
             return report
         for name, spec in self._blocks.items():
             if spec.get("model") is None:
-                report.error(
+                report = report.error(
                     self.family,
                     "no_model",
                     "block %r has no physics model" % name,

@@ -67,12 +67,14 @@ def test_inspect_a_brick_descriptor():
     assert "requirements" in record and "capabilities" in record
 
 
-def test_inspect_a_validation_report():
-    from pops.descriptors import ValidationReport
-    report = ValidationReport().error("block", "no_model", "block ne has no model")
+def test_inspect_a_report_tree():
+    report = pops.ReportTree(
+        phase="validation", severity="info", code="validation.problem.report")
+    report = report.error("block", "no_model", "block ne has no model")
     record = pops.inspect(report)
     assert record["ok"] is False
-    assert record["issues"][0]["family"] == "block"
+    assert record["children"][0]["source"] == "block"
+    assert record["children"][0]["code"] == "block.no_model"
 
 
 def test_inspect_never_runs_numerics_on_a_plain_object():

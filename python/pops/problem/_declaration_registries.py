@@ -11,7 +11,13 @@ from pops.problem._registry_freeze import (
 )
 from pops.problem._registry_support import strict_name
 from pops.problem.handles import FieldHandle
-from pops.problem.report import ProblemValidationReport
+from pops._report import ReportTree
+
+
+def _validation_root(source: str) -> ReportTree:
+    return ReportTree(
+        phase="validation", severity="info", code="validation.%s.root" % source,
+        source=source)
 
 
 class FieldRegistry(_FreezableRegistry):
@@ -123,12 +129,13 @@ class FieldRegistry(_FreezableRegistry):
         return isinstance(name, str) and name in self._fields
 
     def validate(self, context: Any = None) -> Any:
-        report = ProblemValidationReport()
+        report = _validation_root(self.family)
         for name, field in self._fields.items():
             try:
                 field.validate(context)
             except Exception as exc:  # noqa: BLE001 -- report the descriptor's own refusal
-                report.error(self.family, "field_invalid", str(exc), context={"field": name})
+                report = report.error(
+                    self.family, "field_invalid", str(exc), context={"field": name})
         return report
 
     def inspect(self, resolver: Any = None) -> Any:
@@ -171,7 +178,7 @@ class TimeRegistry(_FreezableRegistry):
         return iter([self._program] if self._program is not None else [])
 
     def validate(self, context: Any = None) -> Any:
-        return ProblemValidationReport()
+        return _validation_root(self.family)
 
     def inspect(self) -> Any:
         return {
@@ -236,12 +243,12 @@ class ParamRegistry(_CanonicalParamRegistry, _FreezableRegistry):
         return isinstance(name, str) and name in self._declarations
 
     def validate(self, context: Any = None) -> Any:
-        report = ProblemValidationReport()
+        report = _validation_root(self.family)
         for name, declaration in self._declarations.items():
             try:
                 declaration.validate(context)
             except Exception as exc:  # noqa: BLE001 - aggregate descriptor refusal
-                report.error(
+                report = report.error(
                     self.family,
                     "parameter_invalid",
                     str(exc),

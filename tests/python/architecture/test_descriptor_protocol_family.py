@@ -2,8 +2,8 @@
 
 Source-only guards (no ``import pops`` / no ``_pops``) on the result-object module:
 
-* ``python/pops/descriptors_report.py`` defines the four typed result objects (RequirementSet,
-  CapabilitySet, LoweredDescriptor, ValidationReport) plus Requirement / ValidationIssue ;
+* ``python/pops/descriptors_report.py`` defines the descriptor value objects (RequirementSet,
+  CapabilitySet, LoweredDescriptor) plus Requirement, and re-exports the one ``ReportTree`` ;
 * ADC-625: RequirementSet / CapabilitySet / LoweredDescriptor are TYPED objects, NOT ``dict``
   subclasses -- ``to_dict()`` is the only mapping bridge, so a caller reads them through the typed
   accessors (no dict emulation crutch can come back) ;
@@ -19,8 +19,8 @@ import pathlib
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 POPS = REPO_ROOT / "python" / "pops"
 
-RESULT_OBJECTS = ("Requirement", "RequirementSet", "CapabilitySet", "LoweredDescriptor",
-                  "ValidationIssue", "ValidationReport")
+DESCRIPTOR_RESULT_OBJECTS = ("Requirement", "RequirementSet", "CapabilitySet", "LoweredDescriptor")
+RESULT_OBJECTS = DESCRIPTOR_RESULT_OBJECTS + ("ReportTree",)
 TYPED_RESULT_OBJECTS = ("RequirementSet", "CapabilitySet", "LoweredDescriptor")
 
 
@@ -33,8 +33,10 @@ def test_descriptors_report_defines_the_typed_result_objects():
     path = POPS / "descriptors_report.py"
     assert path.exists(), "python/pops/descriptors_report.py must exist (ADC-527 result objects)"
     classes = _classes(path)
-    for name in RESULT_OBJECTS:
+    for name in DESCRIPTOR_RESULT_OBJECTS:
         assert name in classes, "descriptors_report.py must define %r (ADC-527)" % name
+    assert "from pops._report import ReportTree" in path.read_text()
+    assert "ValidationIssue" not in classes and "ValidationReport" not in classes
 
 
 def test_result_objects_are_typed_not_dict_subclasses():
@@ -62,7 +64,7 @@ def test_inspect_dispatcher_module_exists():
     assert "inspect" in fns, "pops._inspect must define inspect(obj)"
     # And the top-level pops package re-exports it.
     init = (POPS / "__init__.py").read_text()
-    assert "from ._inspect import inspect" in init, "pops.__init__ must re-export inspect"
+    assert "from ._inspect import explain, inspect" in init, "pops.__init__ must re-export inspect"
     assert '"inspect"' in init, "pops.__all__ must list inspect"
 
 

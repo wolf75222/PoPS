@@ -71,7 +71,7 @@ class _ProgramSerialization:
     """Mixin owning the canonical external form of a Program graph."""
 
     @staticmethod
-    def _serialize_node(value: Any) -> dict[str, Any]:
+    def _serialize_node(value: Any, *, include_provenance: bool = True) -> dict[str, Any]:
         attrs = dict(value.attrs)
         if "schedule" in attrs:
             attrs["schedule"] = _serialize_schedule(attrs["schedule"])
@@ -85,17 +85,21 @@ class _ProgramSerialization:
             attrs["value"] = scalar_data(attrs["value"])
         if value.op == "while":
             attrs["cond_block"] = [
-                _ProgramSerialization._serialize_node(node) for node in attrs["cond_block"]]
+                _ProgramSerialization._serialize_node(
+                    node, include_provenance=include_provenance) for node in attrs["cond_block"]]
             attrs["body_block"] = [
-                _ProgramSerialization._serialize_node(node) for node in attrs["body_block"]]
+                _ProgramSerialization._serialize_node(
+                    node, include_provenance=include_provenance) for node in attrs["body_block"]]
             attrs["cond"], attrs["body"] = attrs["cond"].id, attrs["body"].id
         elif value.op in ("range", "if"):
             attrs["body_block"] = [
-                _ProgramSerialization._serialize_node(node) for node in attrs["body_block"]]
+                _ProgramSerialization._serialize_node(
+                    node, include_provenance=include_provenance) for node in attrs["body_block"]]
             attrs["body"] = attrs["body"].id
         elif value.op == "matrix_free_operator":
             attrs["apply_block"] = ([
-                _ProgramSerialization._serialize_node(node) for node in attrs["apply_block"]]
+                _ProgramSerialization._serialize_node(
+                    node, include_provenance=include_provenance) for node in attrs["apply_block"]]
                 if attrs.get("apply_block") else None)
             for key in ("apply_result", "apply_in", "apply_out"):
                 ref = attrs.get(key)
@@ -103,7 +107,8 @@ class _ProgramSerialization:
                               else (ref.id if isinstance(ref, ProgramValue) else None))
         elif value.op == "solve_local_nonlinear":
             attrs["residual_block"] = [
-                _ProgramSerialization._serialize_node(node) for node in attrs["residual_block"]]
+                _ProgramSerialization._serialize_node(
+                    node, include_provenance=include_provenance) for node in attrs["residual_block"]]
             for key in ("residual", "iterate", "guess"):
                 attrs[key] = attrs[key].id
         node = {"id": value.id, "name": value.name, "vtype": value.vtype, "op": value.op,
@@ -118,14 +123,19 @@ class _ProgramSerialization:
         # P.linear_source(L) + solve_local_linear(..., fields=fields) route.
         if value.field_context is not None and value.vtype != "operator":
             node["field_context"] = _json_ready(_serialize_field_context(value.field_context))
+        if include_provenance:
+            node["provenance"] = value.provenance.to_data()
         return node
 
-    def _serialize(self) -> dict[str, Any]:
+    def _serialize(self, *, include_provenance: bool = True) -> dict[str, Any]:
+        if not isinstance(include_provenance, bool):
+            raise TypeError("Program._serialize include_provenance must be bool")
         order = self._block_indices()
         result = {
             "name": self.name,
             "version": 3,
-            "nodes": [self._serialize_node(value) for value in self._values],
+            "nodes": [self._serialize_node(
+                value, include_provenance=include_provenance) for value in self._values],
             "commits": [
                 {
                     "state": handle_data(state_ref),
@@ -161,11 +171,14 @@ class _ProgramSerialization:
         if self._dt_bound is not None:
             block, value = self._dt_bound
             result["dt_bound"] = {
-                "nodes": [self._serialize_node(node) for node in block], "result": value.id}
+                "nodes": [self._serialize_node(
+                    node, include_provenance=include_provenance) for node in block],
+                "result": value.id}
         return result
 
     def _ir_hash(self) -> str:
-        blob = json.dumps(self._serialize(), sort_keys=True, separators=(",", ":"))
+        blob = json.dumps(
+            self._serialize(include_provenance=False), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode()).hexdigest()
 
     def _semantic_serialize(self) -> dict[str, Any]:

@@ -1092,6 +1092,11 @@ path = "tests/python/unit/descriptors"
 labels = ["unit", "python", "descriptors", "fast"]
 
 [[python.suite]]
+name = "pops_python_unit_reporting"
+path = "tests/python/unit/reporting"
+labels = ["unit", "python", "reporting", "fast"]
+
+[[python.suite]]
 name = "pops_python_unit_mesh"
 path = "tests/python/unit/mesh"
 labels = ["unit", "python", "mesh", "fast"]

@@ -17,13 +17,13 @@ The module is stdlib-only and runs before any ``pip install`` in CI.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterable
 import json
 import os
 import re
 import sys
 import tomllib
 from pathlib import Path
-from typing import Iterable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ci_import_closure  # noqa: E402
@@ -86,6 +86,7 @@ CPP_PATH_AREAS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
 )
 
 PYTHON_PATH_AREAS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (("python/pops/_report.py", "python/pops/_inspect.py"), ("reporting",)),
     (("python/pops/identity/",), ("identity", "codegen", "runtime")),
     (("python/pops/mesh/",), ("mesh", "amr")),
     (("python/pops/runtime/amr/",), ("amr", "runtime")),
@@ -117,6 +118,7 @@ AREA_LABEL_ALIASES: dict[str, tuple[str, ...]] = {
     "numerics": ("numerics", "elliptic", "solvers", "time"),
     "physics": ("physics", "numerics", "compliance"),
     "problem": ("problem", "runtime"),
+    "reporting": ("reporting", "descriptors", "problem", "runtime"),
     "runtime": ("runtime", "bindings", "native_loader", "compliance"),
     "solvers": ("solvers", "elliptic"),
     "time": ("time", "numerics", "solvers"),
@@ -453,7 +455,7 @@ def shard(items: list[str], index: int | None, total: int | None) -> list[str]:
     try:
         return ci_shard_binpack.shard_files(items, index, total)
     except ci_shard_binpack.PartitionError as exc:
-        raise SystemExit(f"shard partition invariant violated: {exc}")
+        raise SystemExit(f"shard partition invariant violated: {exc}") from exc
 
 
 def write_explain_file(path: str | None, payload: dict) -> None:
@@ -920,7 +922,7 @@ def plan_verify(args: argparse.Namespace) -> int:
         ci_shard_binpack.verify_partition(selected, shards, ci_shard_binpack.EXCLUDED_FROM_SHARDS)
     except ci_shard_binpack.PartitionError as exc:
         print(f"::error::shard partition is not an exact cover: {exc}")
-        raise SystemExit(1)
+        raise SystemExit(1) from exc
 
     excluded_present = sorted(set(selected) & excluded)
     loads = [round(sum(1 for _ in shard), 0) for shard in shards]

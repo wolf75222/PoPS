@@ -10,7 +10,15 @@ from pathlib import Path
 import pytest
 
 from pops.ir import Equation, SymbolicTruthValueError
+from pops.provenance import ProvenanceRecord, SourceSpan
 from pops.time import Program, ProgramValue
+
+
+def _direct_provenance(program: Program) -> ProvenanceRecord:
+    span = SourceSpan(__file__, 0)
+    return ProvenanceRecord(
+        primary=span, owner=program.owner_path,
+        authoring_api="tests.ProgramValue", origins=(span,))
 
 
 def test_program_state_is_an_immutable_nonhashable_program_value():
@@ -48,7 +56,7 @@ def test_program_metadata_rejects_mutable_or_opaque_leaves():
     with pytest.raises(TypeError, match="not an immutable IR value"):
         ProgramValue(
             program, 0, "state", "state", (), {"box": Box()},
-            "U", block,
+            "U", block, provenance=_direct_provenance(program),
         )
 
 
@@ -59,11 +67,12 @@ def test_program_value_rejects_untyped_mutable_space_and_field_context():
         with pytest.raises(TypeError):
             ProgramValue(
                 program, 0, "state", "state", (), {}, "U", block,
+                provenance=_direct_provenance(program),
                 **{keyword: []},
             )
 
 
-def test_program_value_has_no_python_truth_value_and_reports_user_provenance():
+def test_program_value_has_no_python_truth_value_and_reports_typed_provenance():
     program = Program("truth")
     value = typed_state(program, "plasma")
 
@@ -71,7 +80,13 @@ def test_program_value_has_no_python_truth_value_and_reports_user_provenance():
         bool(value)
 
     assert raised.value.code == "symbolic_truth_value"
-    assert Path(raised.value.location.file).name == Path(__file__).name
+    provenance = value.provenance
+    assert isinstance(provenance, ProvenanceRecord)
+    assert isinstance(provenance.primary, SourceSpan)
+    assert provenance.authoring_api == "pops.time.Program.state"
+    assert provenance.transformation == "direct"
+    assert Path(raised.value.location.file) == Path(provenance.primary.file)
+    assert raised.value.location.line == provenance.primary.line
 
 
 def test_program_value_equality_builds_an_equation_instead_of_identity_truth():
@@ -124,7 +139,8 @@ def test_forged_same_program_value_cannot_be_laundered_by_ssa_id():
     real = typed_state(program, "plasma")
     forged = ProgramValue(
         program, real.id, real.vtype, real.op, real.inputs, real.attrs,
-        real.name, real.block, space=real.space, region=real.region)
+        real.name, real.block, space=real.space, region=real.region,
+        provenance=real.provenance)
 
     assert program._canonical_value(forged) is forged
     with pytest.raises(ValueError, match="not authored"):
@@ -142,7 +158,7 @@ def test_direct_program_value_construction_validates_identity_fields(field, valu
     kwargs = {
         "prog": program, "vid": 0, "vtype": "state",
         "op": "state", "inputs": (), "attrs": {}, "name": "U", "block": block,
-        "region": 0,
+        "region": 0, "provenance": _direct_provenance(program),
     }
     kwargs[field] = value
     with pytest.raises((TypeError, ValueError)):

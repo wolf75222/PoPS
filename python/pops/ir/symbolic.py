@@ -16,6 +16,7 @@ from decimal import Decimal
 from fractions import Fraction
 from types import MappingProxyType
 from typing import Any
+from pops.provenance import ProvenanceRecord
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +52,10 @@ class SymbolicTruthValueError(TypeError):
 
 def _truth_test_location(value: Any) -> SourceLocation:
     """Return author provenance when present, otherwise the current user frame."""
+
+    provenance = getattr(value, "provenance", None)
+    if isinstance(provenance, ProvenanceRecord):
+        return SourceLocation(provenance.primary.file, provenance.primary.line)
 
     raw = getattr(value, "source_location", None)
     if isinstance(raw, SourceLocation):

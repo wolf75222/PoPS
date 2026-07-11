@@ -81,7 +81,7 @@ def _problem_snapshot_payload(problem: Any, *, artifact: bool) -> dict[str, Any]
             "model_owner_path": spec["model"].owner_path.canonical(),
             "model": _model_snapshot_value(spec["model"], artifact=artifact),
             "spatial": spec["spatial"],
-            "time": _time_snapshot_value(spec["time"]),
+            "time": _time_snapshot_value(spec["time"], artifact=artifact),
             "diagnostics": spec["diagnostics"],
         }
         for name, spec in problem._block_registry.items()
@@ -104,7 +104,7 @@ def _problem_snapshot_payload(problem: Any, *, artifact: bool) -> dict[str, Any]
         "diagnostics": runtime.diagnostics,
         "schedules": runtime.schedules,
         "constraints": problem._constraint_registry.refinement,
-        "time": _time_snapshot_value(problem._time_registry.program),
+        "time": _time_snapshot_value(problem._time_registry.program, artifact=artifact),
         "handles": {
             "blocks": [problem._block_registry.canonical_block(handle)
                        for handle in problem.blocks().values()],
@@ -161,7 +161,7 @@ def _validated_parameter_artifact_data(declaration: Any, *, where: str) -> dict[
     return artifact_row
 
 
-def _time_snapshot_value(program: Any) -> Any:
+def _time_snapshot_value(program: Any, *, artifact: bool = False) -> Any:
     """Project a Program from its IR, excluding lifecycle-only inspection state.
 
     ``Problem.freeze`` first captures the snapshot and then seals the Program.  Inspection reports
@@ -176,7 +176,7 @@ def _time_snapshot_value(program: Any) -> Any:
         ir_hash = getattr(program, "_ir_hash", None)
         return {
             "type": "%s.%s" % (type(program).__module__, type(program).__qualname__),
-            "ir": serialize(),
+            "ir": serialize(include_provenance=not artifact),
             "hash": ir_hash() if callable(ir_hash) else None,
         }
     return program

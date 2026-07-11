@@ -6,8 +6,16 @@ from typed_program_support import commits_by_block, state_refs, typed_state
 import pytest
 
 from pops.model import Rate, StateSpace
+from pops.provenance import ProvenanceRecord, SourceSpan
 from pops.time import Program
 from pops.time.values import ProgramValue
+
+
+def _direct_provenance(program: Program) -> ProvenanceRecord:
+    span = SourceSpan(__file__, 0)
+    return ProvenanceRecord(
+        primary=span, owner=program.owner_path,
+        authoring_api="tests.ProgramValue", origins=(span,))
 
 
 def test_state_declaration_has_one_complete_space_contract_per_block():
@@ -130,7 +138,7 @@ def test_subblock_value_and_fabricated_value_cannot_escape_to_top_level():
 
     fake = ProgramValue(
         program, 999, "state", "state", (), {}, "fabricated", temporal.block,
-        space=state)
+        space=state, provenance=_direct_provenance(program))
     with pytest.raises(ValueError, match="not authored"):
         program.linear_combine(fake)
 

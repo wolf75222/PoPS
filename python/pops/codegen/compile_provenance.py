@@ -26,6 +26,23 @@ ARTIFACT_SIDECAR_SUFFIX = ".pops-artifact.json"
 _ARTIFACT_SIDECAR_PROTOCOL = "pops.artifact-sidecar.v1"
 
 
+def lowering_provenance_data(program: Any) -> list[dict[str, Any]]:
+    """Return detached lowering lineage without mutating the authored Program."""
+    if program is None:
+        return []
+    from pops.provenance import ProvenanceRecord
+    rows = []
+    for value in getattr(program, "_values", ()):
+        rows.append({
+            "node_id": value.id,
+            "provenance": ProvenanceRecord.derive(
+                (value.provenance,), transformation="lower",
+                owner=program.owner_path, authoring_api="pops.codegen.compile",
+            ).to_data(),
+        })
+    return rows
+
+
 def artifact_sidecar_path(so_path: Any) -> Any:
     """Return the final artifact-identity sidecar path for ``so_path``."""
     return so_path + ARTIFACT_SIDECAR_SUFFIX
@@ -153,7 +170,8 @@ def build_debug_banner(program: Any, model: Any, *, program_hash: Any, abi_key: 
     """Return the C++ block-comment provenance banner for the persisted debug ``.cpp`` (ADC-536).
 
     The banner documents WHAT the ``.so`` was built from and HOW: the serialized Program IR (the
-    exact ``_serialize()`` blob ``_ir_hash`` digests), the program / ABI / cache hashes, the compile
+    full documentary ``_serialize()`` blob (the identity hash uses its provenance-free projection),
+    the program / ABI / cache hashes, the compile
     + link flags, the compiler and C++ standard, the redacted compile command and the route registry
     components. It is a C++ block comment (``/* ... */``), inert to the compiler.
 
@@ -163,8 +181,10 @@ def build_debug_banner(program: Any, model: Any, *, program_hash: Any, abi_key: 
     closed early by the content.
     """
     ir = "(no Program IR: this handle carries no serializable time Program)"
+    lowering = "[]"
     if program is not None and hasattr(program, "_serialize"):
         ir = json.dumps(program._serialize(), indent=2, sort_keys=True)
+        lowering = json.dumps(lowering_provenance_data(program), indent=2, sort_keys=True)
     model_name = getattr(model, "name", None) or getattr(program, "name", None) or "problem"
     lines = [
         "pops.compile provenance banner (ADC-536) -- INERT, sidecar-only, not compiled",
@@ -181,8 +201,11 @@ def build_debug_banner(program: Any, model: Any, *, program_hash: Any, abi_key: 
         "compile_command  : %s" % command,
         "route_registry   : %s" % registry,
         "",
-        "serialized Program IR (the WHAT _ir_hash digests):",
+        "serialized Program IR (documentary provenance included; excluded from _ir_hash):",
         ir,
+        "",
+        "lowering provenance (documentary; excluded from identities):",
+        lowering,
     ]
     body = "\n".join(lines).replace("*/", "* /")
     return "/*\n%s\n*/\n" % body

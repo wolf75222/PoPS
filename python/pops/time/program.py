@@ -107,6 +107,9 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         # INSPECTION-ONLY (never serialized into the IR / the hash). Toggle with
         # capture_source_locations(True) before building to populate ProgramValue.source_location.
         self._capture_source = False
+        # Temporary data-only context installed while a pops.lib.time factory expands. It contains
+        # SourceSpan values and an API string, never a callable or live frame.
+        self._provenance_context = None
         # ADC-563 freeze: a Program is MUTABLE while authored and FROZEN by pops.compile. After
         # freeze, adding an IR node (via _new) RAISES -- a compiled artifact is frozen to exactly the
         # program it was compiled from. Emission / hashing are pure reads and stay allowed.

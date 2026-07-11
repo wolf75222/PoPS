@@ -47,7 +47,8 @@ class CompiledProblem(CompiledProblemDumpMixin):
                  codegen_env: Any = None, module_manifest: Any = None,
                  module_hash: Any = None, external_bricks: Any = None,
                  problem_snapshot: Any = None, bind_schema: Any = None,
-                 program_param_routes: Any = None, generated_cpp: Any = None) -> None:
+                 program_param_routes: Any = None, generated_cpp: Any = None,
+                 lowering_coverage: Any = None) -> None:
         self.so_path = so_path
         from pops.time.program_space_resolution import resolve_program_spaces
         resolved_program = resolve_program_spaces(program, model)
@@ -111,6 +112,7 @@ class CompiledProblem(CompiledProblemDumpMixin):
         # replaces the authoring model by an immutable native loader after compilation; retaining
         # source text lets dump_cpp() remain exact without re-entering that discarded builder.
         self._generated_cpp = generated_cpp
+        self.lowering_coverage = lowering_coverage
         # Active codegen POPS_* environment snapshot (Spec 5 sec.12.4, #47-48): the resolved
         # CodegenEnv that governed this compile (log level, codegen dir, keep-generated, dump flags,
         # cache dir, profile, autotune, and the UNSAFE jit-backdoor gate). Recorded so the env state

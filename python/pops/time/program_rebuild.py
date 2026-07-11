@@ -9,6 +9,7 @@ from typing import Any
 
 from pops.time.schedule import Schedule
 from pops.time.values import ProgramValue, _Affine
+from pops.provenance import ProvenanceRecord
 
 
 def rebuild_program(
@@ -20,6 +21,7 @@ def rebuild_program(
     reference_of: Any = None,
     retain_operator_registries: bool = True,
     canonical_owner: bool = False,
+    transformation: str = "normalize",
 ) -> Any:
     """Clone this Program into a fresh one keeping the flat nodes for which ``keep(v)`` is true,
     renumbering surviving ids to a contiguous 0.. range in original order. Sub-blocks are cloned
@@ -117,6 +119,15 @@ def rebuild_program(
             seen.add(v.id)
             v = by_id[alias[v.id]]
         return v
+
+    def provenance_inputs(v: Any) -> tuple[ProvenanceRecord, ...]:
+        """Ordered source lineage for a rebuilt representative, including aliased duplicates."""
+        representative = rep(v).id
+        source_values = [v]
+        for candidate in sorted(by_id.values(), key=lambda item: item.id):
+            if candidate.id != v.id and rep(candidate).id == representative:
+                source_values.append(candidate)
+        return tuple(item.provenance for item in source_values)
 
     def clone_block(block: Any, region_hint: Any = None) -> Any:
         copied = [clone(w) for w in block]
@@ -264,6 +275,8 @@ def rebuild_program(
             field_context=field_context,
             region=mapped_region(v.region),
             state_ref=reference_of(v.state_ref),
+            provenance=ProvenanceRecord.derive(
+                provenance_inputs(v), transformation=transformation, owner=out.owner_path),
         )
         out._issued_values[id(nv)] = nv
         idmap[v.id] = nv

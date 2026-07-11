@@ -136,10 +136,27 @@ def program_macro(build: Any) -> Any:
     @functools.wraps(build)
     def macro(*args: Any, **kwargs: Any) -> Any:
         from pops.time import Program  # lazy: keep pops.lib.time free of a module-scope time edge
+        from pops.provenance import callable_span, source_span
+        caller = source_span()
+        context = {
+            "caller": caller,
+            "factory": callable_span(build),
+            "authoring_api": "%s.%s" % (build.__module__, build.__qualname__),
+        }
         if args and isinstance(args[0], Program):
-            return build(*args, **kwargs)  # legacy in-place path, result unchanged
+            prog = args[0]
+            previous = prog._provenance_context
+            prog._provenance_context = context
+            try:
+                return build(*args, **kwargs)
+            finally:
+                prog._provenance_context = previous
         prog = Program(build.__name__)
-        build(prog, *args, **kwargs)
+        prog._provenance_context = context
+        try:
+            build(prog, *args, **kwargs)
+        finally:
+            prog._provenance_context = None
         return prog
 
     return macro

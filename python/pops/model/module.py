@@ -151,8 +151,15 @@ class Module(ModuleFreezable):
 
         def _register(body: Any) -> Any:
             self._guard_mutable("register an operator")
+            from pops.provenance import ProvenanceRecord, callable_span, source_span
+            primary = callable_span(body) if callable(body) else source_span()
+            provenance = ProvenanceRecord(
+                primary=primary,
+                owner=self.owner_path,
+                authoring_api="pops.model.Module.operator",
+            )
             op = Operator(name, kind, signature, capabilities=capabilities,
-                          requirements=requirements, lowering=lowering, source="module",
+                          requirements=requirements, lowering=lowering, source=provenance,
                           body=body)
             self._registry.register(op)
             return self.operator_handle(op.name)
@@ -212,12 +219,16 @@ class Module(ModuleFreezable):
                 "rate_operator(%r): composed sources require multiple incompatible FieldSpaces; "
                 "declare one compatible field context or separate the rates" % name)
         inputs.extend(field_inputs)
+        from pops.provenance import ProvenanceRecord, source_span
+        provenance = ProvenanceRecord(
+            primary=source_span(), owner=self.owner_path,
+            authoring_api="pops.model.Module.rate_operator")
         op = Operator(name, "local_rate", Signature(tuple(inputs), RateSpace(u)),
                       capabilities={"local": False, "requires_fields": bool(field_inputs),
                                     "produces_rate": True, "supports_device": True},
                       lowering={"flux": flux, "sources": source_names,
                                 "fluxes": flux_names or None},
-                      source="module")
+                      source=provenance)
         self._registry.register(op)
         return self.operator_handle(op.name)
 

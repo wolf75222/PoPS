@@ -250,6 +250,13 @@ class OperatorRegistry:
         self._guard_mutable("register an operator")
         if not isinstance(operator, Operator):
             raise TypeError("register expects an Operator, got %r" % (operator,))
+        if operator.source is None:
+            from pops.provenance import ProvenanceRecord, source_span
+            operator.source = ProvenanceRecord(
+                primary=source_span(),
+                owner=self.owner_path,
+                authoring_api="pops.model.OperatorRegistry.register",
+            )
         # Registry is a trust boundary too: Operator remains an internal mutable
         # record for codegen, so revalidate in case a record was modified between
         # construction and registration.

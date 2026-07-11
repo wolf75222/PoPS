@@ -56,7 +56,7 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
         value, so the later one can alias the earlier. Built on the same ``_serialize_node`` the IR hash
         uses (so attr equality is exactly the hash's notion of equality), with the node id stripped (it
         is position, not identity) and the input ids canonicalized."""
-        node = _ProgramPasses._serialize_node(v)
+        node = _ProgramPasses._serialize_node(v, include_provenance=False)
         node.pop("id", None)
         node["inputs"] = tuple(canon.get(i, i) for i in node["inputs"])
         # JSON-serialize the attrs dict to a stable string so the whole key is hashable / comparable
@@ -132,6 +132,7 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
         reference_of: Any = None,
         retain_operator_registries: bool = True,
         canonical_owner: bool = False,
+        transformation: str = "normalize",
     ) -> Any:
         """Clone and remap this Program through the shared lossless rebuild engine.
 
@@ -148,6 +149,7 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
             reference_of=reference_of,
             retain_operator_registries=retain_operator_registries,
             canonical_owner=canonical_owner,
+            transformation=transformation,
         )
 
     # --- common-subexpression elimination (Spec 3 s28, ADC-465) ---
@@ -192,8 +194,9 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
                 reps[key] = v.id
                 canon[v.id] = v.id
         if not drop:
-            return self._rebuild(lambda v: True)  # byte-identical no-op clone
-        return self._rebuild(lambda v: v.id not in drop, alias=canon)
+            return self._rebuild(lambda v: True, transformation="cse")
+        return self._rebuild(
+            lambda v: v.id not in drop, alias=canon, transformation="cse")
 
     # --- redundant field-solve elimination (Spec 3 s28, ADC-465) ---
     def eliminate_redundant_field_solves(self) -> Any:

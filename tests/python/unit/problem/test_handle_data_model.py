@@ -151,7 +151,9 @@ def test_consumer_validation_reports_ambiguous_unqualified_reference_candidates(
     problem.output(OutputPolicy(fields=[model.u]))
 
     report = problem.validate_report()
-    issue = next(item for item in report if item.code == "ambiguous_declaration_reference")
+    issue = next(
+        item for item in report.issues
+        if item.code == "runtime.ambiguous_declaration_reference")
     assert str(block_a.instance_owner_path) in issue.message
     assert str(block_b.instance_owner_path) in issue.message
 

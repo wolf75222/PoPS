@@ -85,6 +85,14 @@ def compile(problem: Any, layout: Any = None, backend: Any = None, time: Any = N
     # explicit @p time wins, else the Problem's recorded scheme. The Uniform route still REQUIRES one
     # (raise below); the AMR route treats it as optional (a whole-system Program to install on the
     # hierarchy when present, else the native per-block time policy).
+    if time is not None and problem._time is not None and time is not problem._time:
+        from pops._report import DiagnosticError, ReportTree
+        raise DiagnosticError(ReportTree(
+            phase="compile", severity="error", code="compile.time.competing_authorities",
+            message=(
+                "pops.compile: time is declared both by problem.time(...) and compile(time=...); "
+                "competing semantic authorities cannot overwrite one another"),
+            source="compile", actions=("use exactly one time-program authority",)))
     eff_time = time if time is not None else problem._time
 
     if eff_time is not None:

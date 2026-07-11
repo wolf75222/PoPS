@@ -1,13 +1,7 @@
 """pops.fields.problem -- the typed elliptic field-problem descriptor (Spec 5 sec.5.5).
 
-:class:`FieldProblem` is the inert, typed declaration of a field solve: the unknown, the
-governing :class:`pops.math.Equation`, the input/coefficient/boundary/nullspace objects,
-the outputs and the solver brick. It declares its requirements / capabilities / options
-and validates that it was built from a real :class:`~pops.math.Equation` (not a Python
-bool or some other object) and that a solver was provided -- before the runtime is ever
-touched.
-
-It computes nothing; codegen / runtime consume the descriptor.
+:class:`FieldProblem` is the typed declaration of an elliptic solve. It validates its
+equation, solver and lowerable behavior before codegen/runtime consume the descriptor.
 """
 from __future__ import annotations
 
@@ -29,14 +23,9 @@ def _summarize(side: Any, limit: Any = 60) -> str:
 
 
 class SolveCadence(Descriptor):
-    """The inert record of a field-solve cadence: a schedule + a not-due policy.
+    """A field-solve schedule and its typed not-due policy.
 
-    Recorded on a :class:`FieldProblem` by :meth:`FieldProblem.solve` and surfaced by the
-    problem's :meth:`~FieldProblem.inspect`. It pairs the typed :class:`pops.time.Schedule`
-    (WHEN to solve) with the typed :class:`~pops.fields.policies.FieldSolvePolicy` (what to
-    do when the solve is not due). It is authoring metadata only: it carries the schedule and
-    policy, it does NOT lower into the Program / codegen. The runtime wiring is a
-    codegen-adjacent follow-up (see :meth:`FieldProblem.solve`).
+    Nontrivial instances remain inspectable but are rejected at the ADC-659 lowering gate.
     """
 
     category = "solve_cadence"
@@ -68,11 +57,7 @@ class FieldProblem(Descriptor):
     """A typed elliptic field problem: an unknown solved from an :class:`~pops.math.Equation`.
 
     ``FieldProblem(unknown=phi, equation=(-laplacian(phi) == rhs), solver=GeometricMG())``.
-    The ``inputs`` / ``coefficients`` / ``bcs`` / ``nullspace`` / ``outputs`` / ``postprocess``
-    fields are typed descriptors (from :mod:`pops.fields`); they are stored and surfaced, not
-    interpreted, here. :meth:`validate` rejects a non-:class:`~pops.math.Equation` equation
-    (a Python bool produced by ``==`` on plain values is the common mistake) and a missing
-    solver.
+    Its remaining fields are typed descriptors stored for validation and lowering.
     """
 
     category = "field_problem"
@@ -151,6 +136,11 @@ class FieldProblem(Descriptor):
                 missing=["equation"])
         if self.solver is None:
             return Availability.no("%s needs a solver" % self.name, missing=["solver"])
+        if self._has_nontrivial_cadence():
+            return Availability.no(
+                "%s has a nontrivial field cadence that codegen does not lower (ADC-659)"
+                % self.name,
+                missing=["field_cadence_lowering"])
         return Availability.yes()
 
     def validate(self, context: Any = None) -> bool:
@@ -166,12 +156,49 @@ class FieldProblem(Descriptor):
                 % (self.name, type(self.equation).__name__))
         if self.solver is None:
             raise ValueError("%s: a solver must be provided" % self.name)
+        self._require_lowerable_cadence()
         self._require_periodic_compatible_solver()
         self._require_layout_compatible_solver(context)
         self._require_declared_nullspace(context)
         self._require_owned_references(context)
         self._require_declared_outputs(context)
         return True
+
+    def _has_nontrivial_cadence(self) -> bool:
+        """Whether the authored cadence changes behavior from solve-every-step."""
+        if self.cadence is None:
+            return False
+        schedule_is_always = getattr(self.cadence.schedule, "is_always", None)
+        schedule_is_trivial = bool(schedule_is_always()) if callable(schedule_is_always) else False
+        from .policies import Recompute
+        return not (schedule_is_trivial and isinstance(self.cadence.policy, Recompute))
+
+    def _require_lowerable_cadence(self) -> None:
+        """Reject cadence semantics until a runtime lowering exists (ADC-659)."""
+        if not self._has_nontrivial_cadence():
+            return
+        from pops.codegen.lowering_coverage import (
+            LoweringCoverageReport,
+            LoweringCoverageRow,
+            LoweringRejection,
+        )
+
+        source = "field_problem:%s:cadence" % self.name
+        gate = "field_cadence_not_lowered"
+        report = LoweringCoverageReport((LoweringCoverageRow(
+            "field_problem:%s:metadata" % self.name, "documentary"),
+            LoweringCoverageRow(source, "rejected", gate=gate),
+        ))
+        raise LoweringRejection(
+            "%s: ADC-659 rejects nontrivial field cadence %r with policy %r because field "
+            "cadence has no Program/codegen lowering; accepting it would create inert schedule "
+            "semantics" % (self.name, self.cadence.schedule, self.cadence.policy),
+            coverage_report=report, source=source, gate=gate)
+
+    def lower(self, context: Any = None) -> Any:
+        """Lower descriptor metadata only after rejecting unimplemented cadence behavior."""
+        self._require_lowerable_cadence()
+        return super().lower(context)
 
     def resolve_references(self, resolver: Any) -> FieldProblem:
         """Return a detached field problem with every declaration reference authenticated."""
@@ -428,39 +455,11 @@ class FieldProblem(Descriptor):
                 % (self.name, solver_name, operator, tag, alternative))
 
     def solve(self, schedule: Any, policy: Any) -> FieldProblem:
-        """Record an inert field-solve cadence (a schedule + a not-due policy).
+        """Record a typed schedule/policy pair and return ``self``.
 
-        Pairs a typed :class:`pops.time.Schedule` (WHEN to solve -- e.g. ``every(4)`` to
-        solve every fourth macro-step, or ``when(cond)``) with a typed
-        :class:`~pops.fields.policies.FieldSolvePolicy`
-        (:class:`~pops.fields.policies.HoldPrevious` /
-        :class:`~pops.fields.policies.Recompute`) deciding what happens on a step where the
-        solve is not due. The pair is stored as :attr:`cadence` and surfaced by
-        :meth:`inspect`; the method returns ``self`` so it chains after construction.
-
-        This is AUTHORING metadata only. It deliberately does NOT lower the cadence into the
-        Program / codegen: honouring a non-trivial field-solve cadence at runtime (the cached
-        field carry, the residual gate) is the codegen-adjacent follow-up. The cadence is
-        recorded and inspectable, never silently executed.
-
-        Args:
-            schedule: A typed :class:`pops.time.Schedule` (built with ``every`` / ``when`` /
-                ``always`` / ...). A bare ``int`` or ``str`` is rejected with a clear
-                ``TypeError`` -- the cadence is a typed object, not a free string or count.
-            policy: A typed :class:`~pops.fields.policies.FieldSolvePolicy`
-                (:class:`~pops.fields.policies.HoldPrevious` or
-                :class:`~pops.fields.policies.Recompute`). A string such as ``"hold"`` is
-                rejected with a clear ``TypeError``.
-
-        Returns:
-            FieldProblem: ``self``, so the call chains after construction.
-
-        Raises:
-            TypeError: When @p schedule is not a :class:`pops.time.Schedule` or @p policy is
-                not a :class:`~pops.fields.policies.FieldSolvePolicy`.
+        Bare values are rejected. Nontrivial typed cadence stays inspectable but validate/lower
+        rejects it until codegen implements its cached-field and residual-gate behavior.
         """
-        # Lazy import: keep pops.fields free of a module-scope pops.time edge (the acyclic
-        # layering of test_import_graph; fields.aux defers its mesh import the same way).
         from pops.time.schedule import Schedule
 
         if not isinstance(schedule, Schedule):

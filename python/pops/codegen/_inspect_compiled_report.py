@@ -47,7 +47,8 @@ class CompiledReport(Report):
     def __init__(self, *, name: Any, backend: Any, platform: Any, layout: Any, blocks: Any,
                  fields: Any, program: Any, inputs: Any, artifacts: Any, status: Any,
                  env: Any = None, runtime: Any = None, capabilities: Any = None,
-                 options: Any = None, module_manifest: Any = None) -> None:
+                 options: Any = None, module_manifest: Any = None,
+                 lowering_coverage: Any = None) -> None:
         self.name = name
         self.backend = backend
         self.platform = platform
@@ -71,6 +72,7 @@ class CompiledReport(Report):
         # Module (spaces / params / aux / typed operators / native routes), or None when the artifact
         # carries a bare dsl.Model with no backing Module -- absent, never fabricated.
         self.module_manifest = dict(module_manifest) if module_manifest else None
+        self.lowering_coverage = dict(lowering_coverage) if lowering_coverage else None
 
     def to_dict(self) -> dict:
         """A plain-dict view of the whole report (JSON-ready)."""
@@ -81,7 +83,9 @@ class CompiledReport(Report):
                 "artifacts": dict(self.artifacts), "status": self.status,
                 "env": dict(self.env), "runtime": dict(self.runtime),
                 "capabilities": dict(self.capabilities), "options": dict(self.options),
-                "module_manifest": dict(self.module_manifest) if self.module_manifest else None}
+                "module_manifest": dict(self.module_manifest) if self.module_manifest else None,
+                "lowering_coverage": (
+                    dict(self.lowering_coverage) if self.lowering_coverage else None)}
 
     def __str__(self) -> str:
         lines = ["compiled problem %r" % self.name]
@@ -258,6 +262,8 @@ def build_compiled_report(compiled: Any) -> CompiledReport:
     # The operator-first Module manifest (ADC-585), when the artifact carries a backing Module.
     manifest = getattr(compiled, "module_manifest", None)
     module_manifest = manifest.to_dict() if manifest is not None else None
+    coverage = getattr(compiled, "lowering_coverage", None)
+    lowering_coverage = coverage.to_data() if coverage is not None else None
 
     return CompiledReport(
         name=prog_summary["name"], backend="production", platform=platform, layout=layout,
@@ -265,7 +271,7 @@ def build_compiled_report(compiled: Any) -> CompiledReport:
         inputs={"states": states, "params": req_params, "aux": req_aux},
         artifacts=artifacts, status="compiled, waiting for pops.bind(...)", env=env,
         runtime=runtime, capabilities=capability_report, options=_compiled_options(compiled),
-        module_manifest=module_manifest)
+        module_manifest=module_manifest, lowering_coverage=lowering_coverage)
 
 
 def _compiled_options(compiled: Any) -> dict:

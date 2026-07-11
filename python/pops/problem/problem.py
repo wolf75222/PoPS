@@ -10,13 +10,14 @@ from __future__ import annotations
 from typing import Any
 
 from pops.descriptors import Availability
-from pops.mesh.layouts import AMR, Uniform
+from pops.mesh.layouts import AMR
 from pops.problem.amr_handle import ProblemAmrHandle
 from pops.problem.registries import (
     BlockRegistry, ConstraintRegistry, FieldRegistry, ParamRegistry,
     RuntimePolicyRegistry, TimeRegistry)
 from pops.problem._inspection import inspect_payload, serialization_payload
-from pops.problem.report import ProblemValidationReport
+from pops.problem._validation import account_block_plan_fields, refuse_uniform_with_amr_criteria
+from pops._report import ReportTree
 from pops.model import OwnerKind, OwnerPath
 
 
@@ -388,7 +389,7 @@ class Problem:
         """Structural validation; aggregate the registries' per-family reports and fail loud.
 
         Runs the layout check plus each registry's own ``validate``, folds them into ONE
-        :class:`~pops.problem.report.ProblemValidationReport`, and raises (via ``raise_if_error``)
+        :class:`~pops.ReportTree`, and raises (via ``raise_if_error``)
         when any error accumulated -- so the legacy callers that expect a loud exception keep
         working, while the report is available for per-family inspection (ADC-553).
         """
@@ -404,40 +405,27 @@ class Problem:
         ``pops.compile(problem, layout=...)``, where the layout is finally known; the structural
         registry checks always run.
         """
-        report = ProblemValidationReport(subject=self)
+        report = ReportTree(
+            phase="validation", severity="info", code="validation.problem.root",
+            source="problem", owner=self.owner_path)
         if self._layout is not None:
-            self._refuse_uniform_with_amr_criteria(report)
+            report = refuse_uniform_with_amr_criteria(report, self._layout)
             try:
                 self._layout.validate(context)
             except Exception as exc:  # noqa: BLE001 -- surface the layout's own message as an issue
-                report.error("layout", "layout_invalid", str(exc))
-        report.extend(self._block_registry.validate(context))
+                report = report.error("layout", "layout_invalid", str(exc))
+        report = report.extend(self._block_registry.validate(context))
+        report = account_block_plan_fields(report, self._block_registry)
         # Carry the mesh layout into each field problem's validation so its solver can refuse a
         # layout it cannot serve (Spec 6 sec.8/9), precisely, before any compile.
-        report.extend(self._field_registry.validate(self._field_validation_context(context)))
-        report.extend(self._param_registry.validate(context))
+        report = report.extend(
+            self._field_registry.validate(self._field_validation_context(context)))
+        report = report.extend(self._param_registry.validate(context))
         runtime_context: dict[str, Any] = dict(context) if isinstance(context, dict) else {}
         runtime_context["declaration_resolver"] = self.resolve
-        report.extend(self._runtime_registry.validate(runtime_context))
-        report.extend(self._constraint_registry.validate(context))
+        report = report.extend(self._runtime_registry.validate(runtime_context))
+        report = report.extend(self._constraint_registry.validate(context))
         return report
-
-    def _refuse_uniform_with_amr_criteria(self, report: Any) -> None:
-        """Refuse a ``Uniform`` layout with an AMR criterion and no explicit escape (sec.8.6/5.14)."""
-        layout = self._layout
-        criterion = getattr(layout, "refine", None) if isinstance(layout, Uniform) else None
-        if criterion is None or getattr(layout, "ignore_amr", None) is not None:
-            return
-        sub_criteria = getattr(criterion, "criteria", None)
-        names = [c.name for c in sub_criteria] if sub_criteria is not None else [criterion.name]
-        report.error(
-            "amr", "uniform_with_amr_criteria",
-            "layout=Uniform(...) carries active AMR criteria (%s) but a single-level layout has no "
-            "level to refine onto; a criterion is never silently ignored. Use layout=AMR(...) to "
-            "actually refine, or pass Uniform(mesh, refine=..., "
-            "ignore_amr=pops.mesh.amr.IgnoreAMRCriteria()) to keep the criterion attached but "
-            "explicitly unused." % ", ".join(names),
-            context={"criteria": names})
 
     def _field_validation_context(self, context: Any) -> Any:
         """The validation context handed to each field problem, carrying the mesh layout."""

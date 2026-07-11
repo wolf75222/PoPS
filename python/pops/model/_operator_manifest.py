@@ -14,6 +14,7 @@ from .manifest_data import (
 )
 from .manifest_support import space_name as _space_name
 from .ownership import OwnerKind, OwnerPath
+from pops.provenance import ProvenanceRecord
 
 
 def require_exact_keys(value: Any, expected: set[str], *, where: str) -> Mapping:
@@ -82,10 +83,13 @@ class OperatorManifestEntry:
         "capabilities",
         "requirements",
         "lowering_route",
+        "provenance",
     )
 
     def __init__(self, operator: Any, operator_id: Any, handle: Any) -> None:
         signature = operator.signature
+        if not isinstance(operator.source, ProvenanceRecord):
+            raise TypeError("operator manifest requires strict ProvenanceRecord source")
         require_manifest_id(operator_id)
         if not isinstance(handle, OperatorHandle):
             raise TypeError("operator manifest handle must be an OperatorHandle")
@@ -130,6 +134,10 @@ class OperatorManifestEntry:
             "lowering_route",
             _freeze_json(operator.lowering or {}, where="operator %s lowering" % operator.name),
         )
+        object.__setattr__(
+            self, "provenance",
+            _freeze_json(operator.source.to_data(), where="operator %s provenance" % operator.name),
+        )
 
     def __setattr__(self, name: Any, value: Any) -> None:
         raise AttributeError("OperatorManifestEntry is immutable")
@@ -150,6 +158,7 @@ class OperatorManifestEntry:
             "capabilities": _thaw_json(self.capabilities),
             "requirements": _thaw_json(self.requirements),
             "lowering_route": _thaw_json(self.lowering_route),
+            "provenance": _thaw_json(self.provenance),
         }
 
     @classmethod
@@ -166,6 +175,7 @@ class OperatorManifestEntry:
             "capabilities",
             "requirements",
             "lowering_route",
+            "provenance",
         }
         row = require_exact_keys(data, expected, where="operator manifest row")
         require_manifest_id(row["id"])
@@ -209,6 +219,11 @@ class OperatorManifestEntry:
                 name,
                 _freeze_json(row[name], where="operator %s %s" % (row["name"], name)),
             )
+        provenance = ProvenanceRecord.from_data(row["provenance"])
+        object.__setattr__(
+            result, "provenance",
+            _freeze_json(provenance.to_data(), where="operator %s provenance" % row["name"]),
+        )
         if result.to_dict() != dict(row):
             raise ValueError("operator manifest row is not canonical")
         return result

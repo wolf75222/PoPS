@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops._report import ReportTree
+
 
 def inspect(obj: Any) -> Any:
     """Return a stable, serialisable ``dict`` view of @p obj (descriptor / Problem / report).
@@ -44,4 +46,40 @@ def inspect(obj: Any) -> Any:
     return record
 
 
-__all__ = ["inspect"]
+def explain(obj: Any) -> ReportTree:
+    """Return the object's typed explanation without crossing the dict bridge.
+
+    Objects with a domain-specific ``explain()`` own their explanation.  A ``ReportTree`` returned
+    by ``inspect()`` is also accepted directly.  Legacy/domain inspection values are captured as
+    detached JSON evidence under one generic inspection node; no live object is retained.
+    """
+    own_explain: Any = getattr(obj, "explain", None)
+    if callable(own_explain):
+        report = own_explain()
+        if not isinstance(report, ReportTree):
+            raise TypeError("%s.explain() must return ReportTree, got %s" % (
+                type(obj).__qualname__, type(report).__qualname__))
+        return report
+
+    own_inspect: Any = getattr(obj, "inspect", None)
+    if callable(own_inspect):
+        inspected = own_inspect()
+        if isinstance(inspected, ReportTree):
+            return inspected
+        to_dict: Any = getattr(inspected, "to_dict", None)
+        payload = to_dict() if callable(to_dict) else inspected
+    else:
+        payload = inspect(obj)
+
+    owner = getattr(obj, "owner_path", None)
+    if owner is None:
+        owner = getattr(obj, "name", None)
+    source = "%s.%s" % (type(obj).__module__, type(obj).__qualname__)
+    return ReportTree(
+        phase="inspection", severity="info", code="inspection.object.summary",
+        message="structured inspection of %s" % type(obj).__qualname__, source=source,
+        owner=owner, evidence={"inspection": payload},
+    )
+
+
+__all__ = ["explain", "inspect"]

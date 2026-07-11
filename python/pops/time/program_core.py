@@ -21,6 +21,7 @@ from pops.time.values import (
     ProgramValue, _Affine, _Coeff, _Operator, _authoring_source_location, _resolve_handle,
     _to_affine,
 )
+from pops.provenance import ProvenanceRecord, source_span
 
 if TYPE_CHECKING:
     from pops.time._program_contract import _ProgramBase
@@ -49,6 +50,21 @@ class _ProgramCore(_ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase):
             raise ValueError("IR op %r name must be a non-empty string or None" % op)
         self._next_id += 1
         source_location = _authoring_source_location() if self._capture_source else None
+        context = self._provenance_context
+        if context is None:
+            primary = source_span()
+            provenance = ProvenanceRecord(
+                primary=primary, owner=self.owner_path,
+                authoring_api="pops.time.Program.%s" % op,
+                origins=(primary,), phase="authoring", transformation="direct",
+            )
+        else:
+            provenance = ProvenanceRecord(
+                primary=context["caller"], owner=self.owner_path,
+                authoring_api=context["authoring_api"],
+                origins=(context["caller"], context["factory"]),
+                phase="authoring", transformation="factory_expand",
+            )
         value_inputs = [i for i in inputs if isinstance(i, ProgramValue)]
         if state_ref is None:
             input_refs = {item.state_ref for item in value_inputs if item.state_ref is not None}
@@ -57,7 +73,8 @@ class _ProgramCore(_ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase):
         v = ProgramValue(self, vid, vtype, op, value_inputs,
                          attrs, name, block,
                          space=space, source_location=source_location,
-                         field_context=field_context, region=region, state_ref=state_ref)
+                         field_context=field_context, region=region, state_ref=state_ref,
+                         provenance=provenance)
         self._issued_values[id(v)] = v
         # Inside a control-flow recording scope (cond_fn / body_fn of a while_), ops go into the active
         # sub-block, NOT the flat self._values: a while body must RE-EXECUTE each iteration, so its ops
@@ -112,6 +129,7 @@ class _ProgramCore(_ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase):
             field_context=(current.field_context if field_context is _UNCHANGED else field_context),
             region=current.region,
             state_ref=current.state_ref,
+            provenance=current.provenance,
         )
         self._issued_values[id(replacement)] = replacement
         for collection in list(reversed(self._recording)) + [self._values]:

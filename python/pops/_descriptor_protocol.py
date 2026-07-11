@@ -15,9 +15,11 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
+from pops._report import ReportTree
+
 if TYPE_CHECKING:
     from pops.descriptors_report import (
-        CapabilitySet, LoweredDescriptor, RequirementSet, ValidationReport)
+        CapabilitySet, LoweredDescriptor, RequirementSet)
 
 
 def _freeze_descriptor_value(value: Any) -> Any:
@@ -198,26 +200,25 @@ class Descriptor:
         return Availability.yes()
 
     def validate(self, context: Any = None) -> bool:
-        """Return a :class:`~pops.descriptors_report.ValidationReport`, raising loud on error.
+        """Validate strictly, raising a structured diagnostic on error.
 
-        ADC-527: ``validate`` accumulates structured issues into a report; for the strict callers
-        that expect an exception, it also raises via ``report.raise_if_error()`` at the end, so both
-        "accumulate" and "fail loud" are honoured. The historical ``True`` return is preserved for
-        the callers that only check the boolean.
+        The historical ``True`` return remains for boolean-only callers.  The inspectable form is
+        :meth:`validate_report`; both paths share the same immutable :class:`ReportTree`.
         """
-        status = self.available(context)
-        if not status.ok:
-            raise ValueError("%s is not available for this route:\n%s" % (self.name, status))
+        self.validate_report(context).raise_if_error()
         return True
 
-    def validate_report(self, context: Any = None) -> ValidationReport:
-        """Return the accumulated :class:`~pops.descriptors_report.ValidationReport` (no raise)."""
-        from pops.descriptors_report import ValidationReport
-        report = ValidationReport(subject=self)
+    def validate_report(self, context: Any = None) -> ReportTree:
+        """Return the immutable descriptor validation tree without raising."""
+        report = ReportTree(
+            phase="validation", severity="info", code="validation.descriptor.report",
+            source=self.category, owner=self,
+            evidence={"descriptor": self.name, "category": self.category},
+        )
         status = self.available(context)
         if not status.ok:
-            report.error(self.category, "unavailable", str(status),
-                         alternatives=status.alternatives)
+            report = report.error(self.category, "unavailable", str(status),
+                                  alternatives=status.alternatives)
         return report
 
     def lower(self, context: Any = None) -> LoweredDescriptor:
@@ -292,13 +293,12 @@ class DescriptorProtocol(typing.Protocol):
         capabilities(): What the route PROVIDES / supports (a ``CapabilitySet``).
         options(): The configured knobs and their chosen values (a plain dict).
         available(context): An :class:`Availability` (yes / no / partial), never a bare bool.
-        validate(context): A ``ValidationReport`` of accumulated errors (also raises for strict
-            callers via ``raise_if_error``).
+        validate(context): Strict validation (raises a structured ``DiagnosticError`` on failure).
         lower(context): The inert ``LoweredDescriptor`` record (metadata only, no computation).
         inspect(): A plain-dict view of the descriptor for tooling and printing.
 
     ADC-527 / ADC-625: the result objects (``RequirementSet`` / ``CapabilitySet`` /
-    ``LoweredDescriptor`` / ``ValidationReport``) are TYPED, not ``dict`` subclasses. Each family
+    ``LoweredDescriptor`` / ``ReportTree``) are TYPED, not ``dict`` subclasses. Each family
     returns the typed object directly; a consumer reads it through the typed accessors
     (``supports`` / ``check`` / the ``LoweredDescriptor`` attributes) or ``to_dict``.
     """
@@ -315,7 +315,7 @@ class DescriptorProtocol(typing.Protocol):
 
     def available(self, context: Any = None) -> Availability: ...
 
-    def validate(self, context: Any = None) -> ValidationReport: ...
+    def validate(self, context: Any = None) -> bool: ...
 
     def lower(self, context: Any = None) -> LoweredDescriptor: ...
 

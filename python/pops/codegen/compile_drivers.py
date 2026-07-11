@@ -334,6 +334,7 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
     # _module_to_model; a dsl / physics Model is consumed as-is).
     from pops.codegen.module_lowering import lower_and_validate
     model, source_module = lower_and_validate(model, facade=model)
+    lowering_coverage = getattr(model, "_lowering_coverage_report", None)
 
     # VALIDATED-OR-ABSENT INVARIANT (ADC-558): every structural check runs HERE, before a handle
     # exists. lower_and_validate validated the model above; emit_cpp_program calls program.validate()
@@ -415,7 +416,8 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
                                        external_bricks=external_brick_records,
                                        problem_snapshot=problem_snapshot,
                                        program_param_routes=program_param_routes,
-                                       generated_cpp=src)
+                                       generated_cpp=src,
+                                       lowering_coverage=lowering_coverage)
             compiled.semantic_identity = semantic
             compiled.artifact_spec_identity = spec_identity
             compiled.binary_identity = binary
@@ -486,7 +488,8 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
                                module_hash=module_hash, external_bricks=external_brick_records,
                                problem_snapshot=problem_snapshot,
                                program_param_routes=program_param_routes,
-                               generated_cpp=src)
+                               generated_cpp=src,
+                               lowering_coverage=lowering_coverage)
     compiled.semantic_identity = semantic
     compiled.artifact_spec_identity = spec_identity
     compiled.binary_identity = binary

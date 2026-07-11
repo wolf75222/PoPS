@@ -71,7 +71,7 @@ def test_chebyshev_smoother_refuses_structurally():
     report = GeometricMG(smoother=Chebyshev()).validate()
     assert not report.ok
     codes = {i.code for i in report.issues}
-    assert "smoother_not_wired" in codes
+    assert "elliptic_solver.smoother_not_wired" in codes
     # lower() must also refuse (never a silent drop of the un-wired smoother).
     with pytest.raises(ValueError, match="Gauss-Seidel"):
         GeometricMG(smoother=Chebyshev()).lower()
@@ -89,7 +89,7 @@ def test_out_of_domain_cycles_and_tolerance_refuse():
 # --- runtime tier (needs _pops) ----------------------------------------------
 
 pops = pytest.importorskip("pops")
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime.system import System  # noqa: E402  (ADC-545 advanced runtime seam)
 
 
 def _sim(**poisson):

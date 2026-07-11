@@ -290,8 +290,8 @@ def test_validate_outputs_lower():
         bad.validate()
         raise AssertionError("a non-policy output object must raise")
     except ValueError as exc:
-        # ADC-553/ADC-527: Problem.validate() aggregates the per-family reports and raises a single
-        # ValueError via ProblemValidationReport.raise_if_error(); the message still names the type.
+        # ADC-659: Problem.validate() aggregates the source trees and raises one DiagnosticError;
+        # its rendered report still names the expected type.
         _check("OutputPolicy" in str(exc), "non-policy reject names the expected type")
     print("ok test_validate_outputs_lower")
 

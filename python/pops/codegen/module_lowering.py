@@ -22,6 +22,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from .lowering_coverage import (
+    LoweringCoverageReport,
+    LoweringCoverageRow,
+    LoweringRejection,
+)
+
 
 def _module_to_model(module: Any) -> Any:
     """Lower a :class:`pops.model.Module` to a :class:`pops.dsl.Model`
@@ -36,10 +42,24 @@ def _module_to_model(module: Any) -> Any:
     from pops.physics.facade import Model  # noqa: PLC0415
     from pops.physics.aux import AUX_CANONICAL  # noqa: PLC0415
     from pops.model.operators import OPERATOR_KINDS  # noqa: PLC0415
+    coverage_rows = [LoweringCoverageRow(
+        "module:%s:metadata" % module.name, "documentary")]
+
+    def _reject(source: str, gate: str, message: str) -> None:
+        report = LoweringCoverageReport([
+            *coverage_rows,
+            LoweringCoverageRow(source, "rejected", gate=gate),
+        ])
+        raise LoweringRejection(
+            message, coverage_report=report, source=source, gate=gate)
+
     states = module.state_spaces()
     if len(states) != 1:
-        raise ValueError("compile_problem: a Module must declare exactly one StateSpace to compile "
-                         "(got %s)" % sorted(states))
+        _reject(
+            "module:%s:state_spaces" % module.name,
+            "exactly_one_state_space",
+            "compile_problem: a Module must declare exactly one StateSpace to compile "
+            "(got %s)" % sorted(states))
     state = next(iter(states.values()))
     m = Model(module.name)
     # Preserve the canonical source-Module identity across the internal facade lowering. The
@@ -73,8 +93,20 @@ def _module_to_model(module: Any) -> Any:
         if all(r is None for r in roles):
             roles = None
     cvars = m.conservative_vars(*state.components, roles=roles)
+    coverage_rows.append(LoweringCoverageRow(
+        "state_space:%s" % state.name, "lowered",
+        ("dsl:state_space:%s" % state.name,
+         *("dsl:conservative:%s" % component for component in state.components))))
     m.primitive_vars(*cvars)
+    for component in state.components:
+        coverage_rows.append(LoweringCoverageRow(
+            "derived:primitive:%s" % component, "derived",
+            ("dsl:primitive:%s" % component,),
+            rule="default primitive variables are derived from conservative state"))
     m.conservative_from(list(cvars))
+    coverage_rows.append(LoweringCoverageRow(
+        "derived:conservative_from", "derived", ("dsl:conservative_from",),
+        rule="default conservative reconstruction is the declared conservative state"))
     for declaration in module.params().values():
         if registry.handle(declaration) != module.param_handle(declaration):
             raise ValueError("compile_problem: Module parameter authority is inconsistent")
@@ -86,6 +118,12 @@ def _module_to_model(module: Any) -> Any:
                     "compile_problem: EOS metadata parameter 'gamma' must be a ConstParam"
                 )
             m._m.set_gamma(declaration.value)
+        handle = module.param_handle(declaration)
+        targets = ["dsl:param_registry:%s" % handle.qualified_id]
+        if declaration.name == "gamma":
+            targets.append("dsl:eos:gamma")
+        coverage_rows.append(LoweringCoverageRow(
+            "parameter:%s" % handle.qualified_id, "lowered", tuple(targets)))
     declared = {}
 
     def _declare_aux(nm: Any, key: Any) -> None:
@@ -103,12 +141,31 @@ def _module_to_model(module: Any) -> Any:
             m.aux_field(nm)
 
     for fs in module.field_spaces().values():
+        targets = ["dsl:field_space:%s" % fs.name]
         for comp in fs.components:
             _declare_aux(comp, "field/%s/%s" % (fs.name, comp))
+            targets.append("dsl:aux:%s" % comp)
+        coverage_rows.append(LoweringCoverageRow(
+            "field_space:%s" % fs.name, "lowered", tuple(targets)))
     for a in module.aux().values():
         _declare_aux(a.name, "aux/%s/%s" % (a.name, a.name))
+        coverage_rows.append(LoweringCoverageRow(
+            "aux:%s" % a.name, "lowered", ("dsl:aux:%s" % a.name,)))
     if module._eigenvalues is not None:
         m.eigenvalues(x=module._eigenvalues["x"], y=module._eigenvalues["y"])
+        coverage_rows.append(LoweringCoverageRow(
+            "module:%s:eigenvalues" % module.name, "lowered", ("dsl:eigenvalues",)))
+    else:
+        coverage_rows.append(LoweringCoverageRow(
+            "module:%s:eigenvalues" % module.name, "documentary"))
+
+    for key in provider_pack:
+        key_data = key.to_data()
+        stable_key = "%s/%s/%s" % (
+            key_data["space_kind"], key_data["space_name"], key_data["component"])
+        coverage_rows.append(LoweringCoverageRow(
+            "provider:%s" % stable_key, "lowered",
+            ("component_provider_pack:%s" % stable_key,)))
     _CODEGEN_KINDS = ("grid_operator", "local_source", "local_linear_operator", "field_operator",
                       "projection")
     # ADC-642: one decode -- a {kind: builder} dispatch over the shared OPERATOR_KINDS vocabulary.
@@ -154,16 +211,42 @@ def _module_to_model(module: Any) -> Any:
                 "local_linear_operator": _b_local_linear_operator,
                 "field_operator": _b_field_operator, "local_rate": _b_local_rate,
                 "projection": _b_projection}
+    builder_targets = {
+        "grid_operator": "dsl:flux", "local_source": "dsl:source_term",
+        "local_linear_operator": "dsl:linear_source",
+        "field_operator": "dsl:elliptic_rhs", "local_rate": "dsl:rate_operator",
+        "projection": "dsl:projection",
+    }
     assert set(_CODEGEN_KINDS) <= set(OPERATOR_KINDS) and set(builders) <= set(OPERATOR_KINDS)
     for op in module.operator_registry():
+        source = "operator:%s" % op.name
+        coverage_rows.append(LoweringCoverageRow(
+            "operator_metadata:%s" % op.name, "documentary"))
         body = op.body
         if op.kind in _CODEGEN_KINDS and (body is None or callable(body)):
-            raise ValueError(
+            _reject(
+                source,
+                "expression_body_required",
                 "compile_problem: operator %r (%s) has no IR body; a compilable Module operator "
                 "needs an expression body (Module.operator(..., expr=...))" % (op.name, op.kind))
-        builder = builders.get(op.kind)
-        if builder is not None:
+        if op.kind not in builders:
+            _reject(
+                source,
+                "operator_kind_not_lowerable",
+                "compile_problem: operator %r (%s) has no codegen lowering; every operator must "
+                "map to executable behavior or be rejected" % (op.name, op.kind))
+        builder = builders[op.kind]
+        try:
             builder(op)
+        except LoweringRejection:
+            raise
+        except Exception as exc:  # noqa: BLE001 -- every builder failure is a structured gate
+            _reject(source, "operator_lowering_failed", str(exc))
+        coverage_rows.append(LoweringCoverageRow(
+            source, "lowered", (builder_targets[op.kind],)))
+    coverage_report = LoweringCoverageReport(coverage_rows)
+    object.__setattr__(m, "lowering_coverage_report", coverage_report)
+    object.__setattr__(m, "_lowering_coverage_report", coverage_report)
     return m
 
 
@@ -187,12 +270,17 @@ def remap_lowering_error(exc: Any, facade: Any) -> None:
             states = tuple(module.state_spaces())
         except Exception:  # noqa: BLE001 -- a best-effort context, never mask the real error
             ops = states = ()
-    raise ValueError(
+    message = (
         "pops.compile: lowering the physics model %r failed while validating it for compile.\n"
         "  %s\n"
         "Your model declares states %s and operators %s -- check that every quantity the flux / "
         "sources / field solve reference is declared on the model."
-        % (name, exc, sorted(states) or "(none)", sorted(ops) or "(none)")) from exc
+        % (name, exc, sorted(states) or "(none)", sorted(ops) or "(none)"))
+    if isinstance(exc, LoweringRejection):
+        raise LoweringRejection(
+            message, coverage_report=exc.coverage_report,
+            source=exc.source, gate=exc.gate) from exc
+    raise ValueError(message) from exc
 
 
 def lower_and_validate(model: Any, facade: Any = None) -> Any:

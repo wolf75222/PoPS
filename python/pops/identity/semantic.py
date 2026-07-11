@@ -72,7 +72,7 @@ def model_semantic_data(model: Any) -> dict[str, Any]:
     for row in manifest["operators"]:
         expected = {
             "id", "name", "kind", "qid", "handle", "signature", "inputs", "output",
-            "capabilities", "requirements", "lowering_route",
+            "capabilities", "requirements", "lowering_route", "provenance",
         }
         optional_digests = {key for key in ("content_hash", "body_hash") if key in row}
         if set(row) != expected | optional_digests:
@@ -113,7 +113,7 @@ def program_semantic_data(program: Any) -> dict[str, Any]:
 
     if not isinstance(program, Program):
         raise TypeError("semantic program identity requires a pops.time.Program")
-    serialized = program._serialize()
+    serialized = program._serialize(include_provenance=False)
     expected = {"name", "version", "nodes", "commits", "block_order"}
     optional = {"histories", "history_persistence", "dt_bound"}
     if not expected.issubset(serialized) or not set(serialized).issubset(expected | optional):

@@ -484,6 +484,5 @@ from pops.descriptors_report import (  # noqa: E402,F401
     LoweredDescriptor,
     Requirement,
     RequirementSet,
-    ValidationIssue,
-    ValidationReport,
+    ReportTree,
 )

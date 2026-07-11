@@ -261,7 +261,9 @@ def test_coupled_rate_multi_output_names_bundle_without_new_flat_field():
         "capabilities",
         "requirements",
         "lowering_route",
+        "provenance",
     }
+    assert row["provenance"]["transformation"] == "direct"
     print("OK  a coupled_rate names its RateBundle output with no new flat field")
 
 

@@ -14,9 +14,11 @@ numerical operators: arithmetic combines, flux divergence, gradient, field / lin
 Schur stages, history, control flow -- no RNG, no wall-clock, no stochastic source). An op OUTSIDE
 that vetted allow-list, or one referencing an external brick that DECLARES itself
 non-deterministic, is treated as non-deterministic-unless-proven and refused -- rather than risking
-a silent replay drift. The refusal accumulates into the caller's ``ValidationReport`` (verbatim
+    a silent replay drift. The refusal composes into the caller's ``ReportTree`` (verbatim
 message tested).
 """
+
+from pops._report import ReportTree
 
 #: The complete built-in time-DSL op vocabulary (every op ``Program._new`` emits). Each is a pure,
 #: deterministic function of ``(state, dt, params)`` -- there is no stochastic / RNG / wall-clock op
@@ -48,8 +50,7 @@ def _walk_ops(values):
         for key in ("cond_block", "body_block", "apply_block", "residual_block"):
             block = attrs.get(key)
             if block:
-                for w in _walk_ops(block):
-                    yield w
+                yield from _walk_ops(block)
 
 
 def _op_is_nondeterministic(op):
@@ -78,14 +79,14 @@ def _op_is_nondeterministic(op):
     return None
 
 
-def validate_history_persistence(program, report):
+def validate_history_persistence(program, report: ReportTree) -> ReportTree:
     """Accumulate the ADC-626 compile-time refusals into @p report for @p program.
 
     For each ``keep_history`` ring (recorded on ``program._history_persistence`` as ``(depth,
     policy)``): validate the policy coherence against depth (loud), then -- for a non-Dense policy --
     scan the Program op graph and refuse if any op is (or may be) non-deterministic (the replay would
-    silently drift). @p report is a :class:`pops.descriptors_report.ValidationReport`; every issue
-    carries the family ``"history_persistence"`` and the ring name for a precise, verbatim message.
+    silently drift). @p report is an immutable :class:`pops.ReportTree`; every issue carries the
+    source ``"history_persistence"`` and the ring name for a precise, verbatim message.
     Returns @p report (chains)."""
     persistence = getattr(program, "_history_persistence", None) or {}
     if not persistence:
@@ -101,13 +102,14 @@ def validate_history_persistence(program, report):
         try:
             policy.validate_for(depth)
         except (ValueError, TypeError) as exc:
-            report.error("history_persistence", "incoherent_policy",
-                         "history %r: %s" % (name, exc), context={"history": name})
+            report = report.error(
+                "history_persistence", "incoherent_policy",
+                "history %r: %s" % (name, exc), context={"history": name})
             continue
         if policy.degenerate_to_dense(depth):
             continue  # Dense (or a budget-covers-all ring): no replay, never refused
         if nondet_reason is not None:
-            report.error(
+            report = report.error(
                 "history_persistence", "nondeterministic_replay",
                 "history %r uses %s which recomputes ring slots by deterministic replay, but the "
                 "Program step reaches a non-deterministic op (%s) -- use Dense() (store every slot) "
@@ -122,8 +124,11 @@ def check_program(program):
     The single entry point ``Program.validate`` calls at ``pops.compile``: builds a report, runs
     :func:`validate_history_persistence`, and raises via ``raise_if_error``. A Program with no
     non-Dense ring adds no cost (the scan short-circuits on an empty persistence map)."""
-    from pops.descriptors_report import ValidationReport
-    report = validate_history_persistence(program, ValidationReport(subject=program))
+    report = ReportTree(
+        phase="validation", severity="info", code="validation.history_persistence.report",
+        source="history_persistence", owner=program,
+    )
+    report = validate_history_persistence(program, report)
     report.raise_if_error()
 
 

@@ -40,6 +40,12 @@ from . import backends  # noqa: F401
 # Spec 5 (sec.12.4, #47-48): the codegen POPS_* environment resolver (CodegenEnv) + the JIT-backdoor
 # guard predicate. Stdlib-only, so this adds no numpy / _pops weight to the codegen surface.
 from .env import CodegenEnv, jit_backdoor_enabled  # noqa: F401
+from .lowering_coverage import (  # noqa: F401
+    LOWERING_DISPOSITIONS,
+    LoweringCoverageReport,
+    LoweringCoverageRow,
+    LoweringRejection,
+)
 
 __all__ = [
     "pops_header_signature",
@@ -62,4 +68,6 @@ __all__ = [
     "optimization", "math_options",
     "Production", "AOT", "JIT", "lower_backend", "backends",
     "CodegenEnv", "jit_backdoor_enabled",
+    "LOWERING_DISPOSITIONS", "LoweringCoverageReport", "LoweringCoverageRow",
+    "LoweringRejection",
 ]

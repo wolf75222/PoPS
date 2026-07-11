@@ -83,7 +83,7 @@ def test_deterministic_program_with_non_dense_policy_passes_compile_gate():
 
 def test_dense_policy_never_refused_even_with_unknown_op():
     """Dense needs no replay, so the determinism scan never refuses it."""
-    from pops.descriptors_report import ValidationReport
+    from pops import ReportTree
     from pops.time.history_persistence_validate import validate_history_persistence
 
     class FakeOp:
@@ -94,13 +94,15 @@ def test_dense_policy_never_refused_even_with_unknown_op():
         _history_persistence = {"plasma.U": (4, Dense())}
         _values = [FakeOp()]
 
-    report = validate_history_persistence(FakeProg(), ValidationReport())
+    root = ReportTree(
+        phase="validation", severity="info", code="validation.history_persistence.report")
+    report = validate_history_persistence(FakeProg(), root)
     assert report.ok, str(report)
 
 
 def test_non_deterministic_op_refuses_non_dense_policy_verbatim():
     """A non-Dense policy whose replay reaches an op OUTSIDE the vetted allow-list is refused loud."""
-    from pops.descriptors_report import ValidationReport
+    from pops import ReportTree
     from pops.time.history_persistence_validate import validate_history_persistence
 
     class FakeOp:
@@ -111,7 +113,9 @@ def test_non_deterministic_op_refuses_non_dense_policy_verbatim():
         _history_persistence = {"plasma.U": (4, Interval(3))}
         _values = [FakeOp()]
 
-    report = validate_history_persistence(FakeProg(), ValidationReport())
+    root = ReportTree(
+        phase="validation", severity="info", code="validation.history_persistence.report")
+    report = validate_history_persistence(FakeProg(), root)
     assert not report.ok
     message = str(report)
     assert "non-deterministic" in message
