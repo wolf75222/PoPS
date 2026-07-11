@@ -21,7 +21,7 @@ The package imports only the standard library so it can be exercised without the
 compiled ``_pops`` extension.
 """
 from .bundles import RateBundle
-from .handles import Handle, OperatorHandle, OwnerPath
+from .handles import Handle, OperatorHandle, OwnerPath, ParamHandle
 from .ownership import (
     AmbiguousReferenceError,
     DoubleOwnershipError,
@@ -51,12 +51,13 @@ from .operators import (
     operator_family,
     validate_operator_signature,
 )
+from .param_registry import ParamRegistry
+from .bind_schema import BIND_SCHEMA_VERSION, BindSchema, BindSlot, ResolvedBindings
 from .registry import DeclarationIndex, OperatorRegistry
 from .signatures import Signature
 from .spaces import (
     AuxSpace,
     FieldSpace,
-    ParameterSpace,
     Rate,
     RateSpace,
     Space,
@@ -75,11 +76,11 @@ __all__ = [
     "Operator",
     "OperatorRegistry",
     "DeclarationIndex",
-    "ParameterSpace",
     "AuxSpace",
     "Module",
     "RateBundle",
-    "Handle", "OperatorHandle", "OwnerPath", "OwnerKind", "OwnerSegment",
+    "Handle", "ParamHandle", "OperatorHandle", "OwnerPath", "OwnerKind", "OwnerSegment",
+    "ParamRegistry", "BIND_SCHEMA_VERSION", "BindSchema", "BindSlot", "ResolvedBindings",
     "OwnershipError", "MissingOwnershipError", "DoubleOwnershipError",
     "AmbiguousReferenceError", "IdentityCollisionError",
     "UnresolvedOwnershipError",

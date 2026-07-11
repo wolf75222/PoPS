@@ -203,11 +203,32 @@ class RuntimeParamRef(Expr):
     Structural CSE key (cf. _key): the NAME (two refs to the same runtime param share the same
     CSE local); the declaration value does not enter the key (it is runtime, not structural)."""
 
-    def __init__(self, name: Any, value: Any) -> None:
+    def __init__(self, name: Any, value: Any, *, handle: Any = None, dtype: Any = None) -> None:
         if not isinstance(name, str) or not name:
             raise TypeError("RuntimeParamRef name must be a non-empty string")
+        if handle is not None:
+            if getattr(handle, "kind", None) != "parameter" \
+                    or getattr(handle, "local_id", None) != name \
+                    or getattr(handle, "param_kind", None) not in ("runtime", "derived"):
+                raise TypeError(
+                    "RuntimeParamRef handle must be the Runtime/Derived ParamHandle "
+                    "declaring %r" % name)
         self.name = name
         self.literal = scalar_literal(value)
+        # The read retains the declaration identity for ownership collection and snapshots.  CSE
+        # and generated code remain model-local (``name`` + assigned native slot), so an opaque
+        # authoring token never contaminates the reproducible code fingerprint.
+        self.handle = handle
+        # Expr nodes are recursively checked for immutable metadata.  Public dtype
+        # markers intentionally are identity singletons, not immutable scalar
+        # leaves, so retain their stable semantic name rather than the marker
+        # object itself.
+        dtype_name = getattr(dtype, "name", dtype)
+        if dtype_name is not None and dtype_name not in ("Real", "Integer", "Bool"):
+            raise TypeError(
+                "RuntimeParamRef dtype must be Real, Integer, Bool, or None"
+            )
+        self.dtype = dtype_name
 
     @property
     def value(self) -> Any:

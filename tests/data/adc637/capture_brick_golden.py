@@ -12,6 +12,7 @@ throughput -- the parity/throughput gates survive the deletion of the reference 
 Not run in CI. Regenerate only on a deliberate golden refresh: rebuild _pops on the pre-retirement
 base, then `python3 tests/data/adc637/capture_brick_golden.py`.
 """
+from pops.params import ConstParam
 import sys
 import time
 
@@ -55,7 +56,7 @@ def _schur_model(env, name, with_J):
     Model, sqrt = env["Model"], env["sqrt"]
     m = Model(name)
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    cs2 = m.param("cs2", 0.5)
+    cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
     p = m.primitive("p", cs2 * rho)

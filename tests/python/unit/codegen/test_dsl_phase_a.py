@@ -26,7 +26,7 @@ import pops
 from pops.codegen.loader import CompiledModel
 from pops.ir.ops import sqrt
 from pops.physics.facade import Model
-from pops.physics.model import Param, RuntimeParam
+from pops.params import ConstParam, RuntimeParam
 
 from tests.python.support.requirements import repo_include
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
@@ -40,7 +40,7 @@ def build_euler(name="euler_pa"):
     rho, rhou, rhov, E = m.conservative_vars(
         "rho", "rho_u", "rho_v", "E",
         roles=["Density", "MomentumX", "MomentumY", "Energy"])
-    g = m.param("gamma", GAMMA)                       # Param NOMME, inline au codegen + set_gamma
+    g = m.value(m.param(ConstParam("gamma", GAMMA)))                       # Param NOMME, inline au codegen + set_gamma
     u = rhou / rho
     v = rhov / rho
     p = (g - 1.0) * (E - 0.5 * rho * (u * u + v * v))
@@ -68,7 +68,7 @@ def build_euler_predef(name="euler_predef"):
     rho, rhou, rhov, E = m.conservative_vars(
         "rho", "rho_u", "rho_v", "E",
         roles=["Density", "MomentumX", "MomentumY", "Energy"])
-    g = m.param("gamma", GAMMA)
+    g = m.value(m.param(ConstParam("gamma", GAMMA)))
     u = m.primitive("u", rhou / rho)                  # Var PRIMITIVE deja definie
     v = m.primitive("v", rhov / rho)
     p = m.primitive("p", (g - 1.0) * (E - 0.5 * rho * (u * u + v * v)))
@@ -101,19 +101,17 @@ def expect_raises(exc, fn, label):
 
 
 def pure_python_checks():
-    # Param nomme + identite ; runtime SUPPORTE (P7-b)
+    # Declarations explicites + identites de handles ; runtime supporte (P7-b).
     m = build_euler()
     g = m.params["gamma"]
-    assert isinstance(g, Param) and g.name == "gamma" and abs(g.value - GAMMA) < 1e-12 \
-        and g.kind == "const", "Param identite"
-    assert abs(float(g) - GAMMA) < 1e-12, "Param float()"
+    assert isinstance(g, ConstParam) and g.name == "gamma" and abs(g.value - GAMMA) < 1e-12
     # P7-b : les parametres runtime sont desormais implementes (cf. test_dsl_runtime_params). L'ancienne
     # assertion "runtime rejete -> NotImplementedError" etait perimee depuis l'arrivee de la feature et
     # echouait en silence (CI auto-decouverte avalant l'echec, cf. ADC-104).
-    kp = m.param(RuntimeParam("kappa", 1.0))
-    assert isinstance(kp, Param) and kp.name == "kappa" and kp.kind == "runtime" \
-        and abs(kp.value - 1.0) < 1e-12, "param runtime supporte (Param kind='runtime')"
-    print("OK  Param nomme (name/value/kind) + runtime supporte (P7-b)")
+    kp = m.param(RuntimeParam("kappa", default=1.0))
+    assert kp.param_kind == "runtime" and kp.local_id == "kappa"
+    assert m.value(kp) is not kp
+    print("OK  declarations explicites + handles distincts des Expr")
 
     # flux declarateur vs eval_flux evaluateur : noms distincts, methodes distinctes
     assert m.flux is not m.eval_flux, "flux et eval_flux doivent etre distincts"

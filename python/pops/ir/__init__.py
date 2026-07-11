@@ -38,6 +38,7 @@ from .expr import (
     TimeDerivative, Unknown, OpApply, Integral,
 )
 from .handle_expr import ValueExpr
+from .param_values import parameter_value
 from .literals import ScalarLiteral, scalar_cpp, scalar_data, scalar_literal, scalar_to_native
 from .symbolic import SourceLocation, SymbolicTruthValueError
 
@@ -67,7 +68,7 @@ from .lowering import (
 
 __all__ = [
     # node classes
-    "Expr", "Const", "Var", "ValueExpr", "_Bin", "Add", "Sub", "Mul", "Div", "Pow", "Compare",
+    "Expr", "Const", "Var", "ValueExpr", "parameter_value", "_Bin", "Add", "Sub", "Mul", "Div", "Pow", "Compare",
     "Neg", "Sqrt", "Abs", "Sign",
     # board nodes
     "Equation", "_BoardNode",

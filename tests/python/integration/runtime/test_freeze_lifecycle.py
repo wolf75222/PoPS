@@ -3,7 +3,7 @@
 
 Le cycle de vie runtime est EXPLICITE : assembly mutable AVANT bind, composition GELEE une fois
 pops.bind termine (etat 'bound'), simulation mutable seulement par les APIs runtime controlees
-(donnees d'etat / params runtime / checkpoint / diagnostics / sorties). Ce test prouve LOCALEMENT
+(donnees d'etat / checkpoint / diagnostics / sorties ; params figes au bind). Ce test prouve LOCALEMENT
 (sous un _pops deja construit, sans codegen / Kokkos obligatoire) :
 
   1. AVANT bind : un System frais est 'assembling' ; add_block fonctionne.
@@ -11,14 +11,13 @@ pops.bind termine (etat 'bound'), simulation mutable seulement par les APIs runt
      structurelle Python leve RuntimeError avec le vocabulaire bind (pops.Problem + pops.compile +
      pops.bind, JAMAIS un setter herite comme REMEDE) ; les noms natifs structurels interceptes
      par __getattr__ (install_program / set_refinement / set_program_cadence) levent aussi ; les
-     mutations runtime (set_density / set_block_params) restent permises ; lifecycle passe a
+     mutations d'etat restent permises mais les carriers param bruts sont bloques ; lifecycle passe a
      'running' apres un pas.
   3. AMR : idem sur un AmrSystem (set_refinement / add_block / add_coupling gelees).
   4. PENDANT bind : _finalize_bind est le DERNIER acte -> le System reste 'assembling' jusque-la.
   5. Snapshot : le BoundSnapshot est un manifeste inerte, JSON-ready, hash stable 64-hex ;
      inspect() montre le lifecycle + le hash + les blocs/solveurs.
-  6. Params runtime : set_block_params reste permis apres bind SANS recompiler (le lifecycle reste
-     'bound'/'running', aucun appel codegen).
+  6. Params runtime : BindSchema fige les valeurs au bind ; les setters de carrier bruts sont refuses.
   7. Gate compilateur : le flux complet Problem -> compile -> bind (le native mark_bound absent du .so
      prebuilt -> les sous-asserts natifs skippent avec un message CI-diagnosable).
 
@@ -276,7 +275,13 @@ def test_bound_snapshot_manifest():
                  "recon": "conservative", "time": "explicit", "evolve": True}],
         solvers={"phi": "geometric_mg"}, program_hash="deadbeef", abi_key="k|c|s",
         cache_key="cache123", cadence={"substeps": 1, "stride": 1, "cfl": 0.4},
-        aux=["B_z"], params=["cs2"], outputs=["OutputPolicy"])
+        aux=["B_z"], params=[{
+            "qid": "pops.handle.v1::block:plasma::parameter::cs2",
+            "dtype": "Real", "source": "override",
+            "value": {"kind": "binary64", "value": "0x1.0000000000000p+0",
+                      "target": "Real"},
+        }], bind_schema_hash="a" * 64, bind_schema_artifact_hash="b" * 64,
+        outputs=["OutputPolicy"])
     d = snap.to_dict()
     _check(json.loads(json.dumps(d)) == d, "le snapshot est JSON round-trippable")
     h = snap.snapshot_hash
@@ -285,6 +290,11 @@ def test_bound_snapshot_manifest():
     _check(BoundSnapshot(**{k: v for k, v in _snap_kwargs(snap).items()}).snapshot_hash == h,
            "le hash est STABLE (deterministe pour le meme contenu)")
     _check(snap.block_names() == ["ions"], "block_names() liste les blocs bindes")
+    try:
+        snap.params = ()
+        raise AssertionError("BoundSnapshot mutation should be rejected")
+    except AttributeError as exc:
+        _check("immutable" in str(exc), "le snapshot refuse les mutations")
 
     # inspect() a travers un moteur reel gele expose lifecycle + snapshot.
     engine = System(n=8, L=1.0, periodic=True)
@@ -307,25 +317,41 @@ def _snap_kwargs(snap):
     """Reconstruit le kwargs d'un BoundSnapshot pour prouver la stabilite du hash."""
     return {"layout": snap.layout, "blocks": snap.blocks, "solvers": snap.solvers,
             "program_hash": snap.program_hash, "abi_key": snap.abi_key, "cache_key": snap.cache_key,
-            "cadence": snap.cadence, "aux": snap.aux, "params": snap.params, "outputs": snap.outputs}
+            "cadence": snap.cadence, "aux": snap.aux, "params": snap.params,
+            "bind_schema_hash": snap.bind_schema_hash,
+            "bind_schema_artifact_hash": snap.bind_schema_artifact_hash,
+            "outputs": snap.outputs}
 
 
-# --- 6. Params runtime permis apres bind SANS recompiler -------------------------------------
-def test_runtime_params_allowed_after_bind():
-    """set_block_params (mutation runtime) reste permis apres bind ; le lifecycle ne change pas."""
-    # On prouve que la couche Python ne GELE pas le chemin des params runtime : set_block_params est
-    # une mutation de donnees (dans _MUTATIONS de la vue), et lifecycle_state reste 'bound'.
+# --- 6. Les carriers param bruts ne contournent pas BindSchema apres bind ---------------------
+def test_runtime_param_carriers_are_frozen_after_bind():
+    """Les setters indexes internes disparaissent de la surface publique apres bind."""
     from pops.runtime._bound_sim import _MUTATIONS, _BLOCKED
-    _check("set_block_params" in _MUTATIONS, "set_block_params est une mutation runtime permise")
-    _check("set_program_params" in _MUTATIONS, "set_program_params est une mutation runtime permise")
+    _check("set_block_params" not in _MUTATIONS and "set_block_params" in _BLOCKED,
+           "set_block_params est bloque sur la vue")
+    _check("set_program_params" not in _MUTATIONS and "set_program_params" in _BLOCKED,
+           "set_program_params est bloque sur la vue")
     _check("install_program" in _BLOCKED, "install_program reste bloque sur la vue")
     _check("set_refinement" in _BLOCKED, "set_refinement reste bloque sur la vue")
-    # FROZEN_STRUCTURAL (le passthrough natif) ne contient AUCUN setter de donnees runtime.
-    for data_setter in ("set_density", "set_magnetic_field", "set_block_params",
-                        "set_program_params", "set_state", "set_clock"):
+    for carrier in ("set_block_params", "set_program_params"):
+        _check(carrier in FROZEN_STRUCTURAL, "%r est gele dans le passthrough natif" % carrier)
+    for data_setter in ("set_density", "set_magnetic_field", "set_state", "set_clock"):
         _check(data_setter not in FROZEN_STRUCTURAL,
                "%r (donnees runtime) n'est PAS gele" % data_setter)
-    print("ok test_runtime_params_allowed_after_bind")
+    engine = System(n=8, L=1.0, periodic=True)
+    engine._finalize_bind(_minimal_snapshot())
+    view = BoundSimulation(engine)
+    try:
+        view.set_block_params
+        raise AssertionError("la vue ne doit pas exposer set_block_params")
+    except AttributeError:
+        pass
+    try:
+        engine.set_program_params
+        raise AssertionError("le passthrough ne doit pas exposer set_program_params apres bind")
+    except RuntimeError as exc:
+        _assert_bind_vocabulary(exc, "set_program_params")
+    print("ok test_runtime_param_carriers_are_frozen_after_bind")
 
 
 # --- Gate compilateur : le flux complet Problem -> compile -> bind + snapshot reel ---------------
@@ -348,13 +374,14 @@ def _dsl_isothermal_model(name="adc592_iso"):
     return m
 
 
-def _lie_program(block="ne", name="adc592_prog"):
+def _lie_program(block, state, name="adc592_prog"):
     """Un time Program Lie VALIDE (miroir de test_bind_adapters._lie_program)."""
     P = pops.time.Program(name)
-    u = P.state(block)
+    endpoint = P.state(block, state)
+    u = endpoint.n
     fields = P.solve_fields(u)
     r = P._rhs_legacy(state=u, fields=fields)
-    P.commit(P.state("U", block=block).next, P.linear_combine("u1", u + P.dt * r))
+    P.commit(endpoint.next, P.linear_combine("u1", u + P.dt * r))
     return P
 
 
@@ -370,9 +397,11 @@ def test_full_bind_flow_freeze_gated():
 
     n = 64
     m = _dsl_isothermal_model()
-    prog = _lie_program(block="ne")
-    case = (pops.Problem(layout=Uniform(CartesianMesh(n=n, L=1.0, periodic=True)))
-            .block("ne", physics=m))
+    case = pops.Problem(layout=Uniform(CartesianMesh(n=n, L=1.0, periodic=True)))
+    block = case.add_block("ne", m)
+    module = m.module
+    state = module.state_handle(next(iter(module.state_spaces().values())))
+    prog = _lie_program(block, state)
     try:
         compiled = pops.compile(case, time=prog)
     except Exception as exc:  # noqa: BLE001 - barriere toolchain -> skip diagnosable
@@ -443,9 +472,13 @@ def test_checkpoint_restart_roundtrip_through_bind_gated():
 
     n = 64
 
-    def _case():
-        return (pops.Problem(layout=Uniform(CartesianMesh(n=n, L=1.0, periodic=True)))
-                .block("ne", physics=_dsl_isothermal_model()))
+    def _case_and_program():
+        model = _dsl_isothermal_model()
+        case = pops.Problem(layout=Uniform(CartesianMesh(n=n, L=1.0, periodic=True)))
+        block = case.add_block("ne", model)
+        module = model.module
+        state = module.state_handle(next(iter(module.state_spaces().values())))
+        return case, _lie_program(block, state)
 
     xs = (np.arange(n) + 0.5) / n
     xx, yy = np.meshgrid(xs, xs, indexing="ij")
@@ -453,7 +486,8 @@ def test_checkpoint_restart_roundtrip_through_bind_gated():
     u0 = np.stack([rho0, 0.4 * rho0, -0.2 * rho0])
 
     try:
-        compiled = pops.compile(_case(), time=_lie_program(block="ne"))
+        case, program = _case_and_program()
+        compiled = pops.compile(case, time=program)
     except Exception as exc:  # noqa: BLE001 - barriere toolchain -> skip diagnosable
         print("skip test_checkpoint_restart_roundtrip_through_bind_gated (toolchain %s: %s)"
               % (type(exc).__name__, str(exc)[:140]))
@@ -470,7 +504,8 @@ def test_checkpoint_restart_roundtrip_through_bind_gated():
 
     # Rebind une sim IDENTIQUE (le restart v1 exige la MEME composition rejouee avant l'appel) puis
     # restaure PAR LA VUE : l'etat du bloc revient a celui sauve.
-    compiled2 = pops.compile(_case(), time=_lie_program(block="ne"))
+    case2, program2 = _case_and_program()
+    compiled2 = pops.compile(case2, time=program2)
     sim2 = pops.bind(compiled2, state={"ne": u0}, solvers=solvers)
     sim2.restart(path)  # restart est allowlistee sur la vue
     restored = np.array(sim2.density("ne"))

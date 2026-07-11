@@ -57,7 +57,10 @@ def _key(e: Any) -> Any:
         if key is not NotImplemented:
             return key
     if isinstance(e, Const):
-        return ("const", json.dumps(e.literal.to_data(), sort_keys=True, separators=(",", ":")))
+        literal = json.dumps(e.literal.to_data(), sort_keys=True, separators=(",", ":"))
+        if getattr(e, "handle", None) is not None:
+            return ("param_const", e.handle.local_id, literal)
+        return ("const", literal)
     if isinstance(e, RuntimeParamRef):
         return ("rparam", e.name)  # key = name: two refs to the same runtime param share the CSE local
     if isinstance(e, Var):

@@ -11,6 +11,7 @@ from typing import Any
 
 from ._descriptor import MeshDescriptor
 from ..descriptors_report import CapabilitySet
+from pops.params.use_sites import ParamUse, resolve_param_use
 from pops.runtime_environment import NATIVE_DIMENSION, validate_dimension
 
 
@@ -27,9 +28,11 @@ class CartesianMesh(MeshDescriptor):
     def __init__(self, n: Any = 64, L: Any = 1.0, periodic: Any = True,
                  *, dim: Any = NATIVE_DIMENSION) -> None:
         self.dim = validate_dimension(dim, where="CartesianMesh")
-        self.n = int(n)
-        self.L = float(L)
-        self.periodic = bool(periodic)
+        self.n = int(resolve_param_use(n, ParamUse.SHAPE, where="CartesianMesh(n=)"))
+        self.L = float(resolve_param_use(
+            L, ParamUse.MESH_EXTENT, where="CartesianMesh(L=)"))
+        self.periodic = bool(resolve_param_use(
+            periodic, ParamUse.MESH_TOPOLOGY, where="CartesianMesh(periodic=)"))
 
     def options(self) -> dict:
         return {"n": self.n, "L": self.L, "periodic": self.periodic}

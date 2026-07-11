@@ -10,6 +10,7 @@ from decimal import Decimal
 from fractions import Fraction
 
 pops = pytest.importorskip("pops", exc_type=ImportError)
+from pops.params import ConstParam
 
 from pops.problem._snapshot import ProblemSnapshot, build_problem_snapshot  # noqa: E402
 from pops.numerics.riemann import HLL  # noqa: E402
@@ -75,14 +76,15 @@ def test_snapshot_hash_stable_across_identical_assemblies():
 
 
 def test_snapshot_hash_changes_on_a_different_assembly():
-    p2 = _problem().param(pops.physics.ConstParam("gamma", 1.4))
+    p2 = _problem()
+    p2.param(ConstParam("gamma", 1.4))
     assert build_problem_snapshot(_problem()).hash != build_problem_snapshot(p2).hash
 
 
 def test_snapshot_is_json_ready():
     import json
     d = build_problem_snapshot(_problem()).to_dict()
-    assert d["schema_version"] == 4
+    assert d["schema_version"] == 5
     assert json.loads(json.dumps(d, sort_keys=True)) == d  # no runtime object, no numpy array
 
 
@@ -99,14 +101,17 @@ def test_snapshot_to_dict_has_no_mutable_escape_from_cached_identity():
 
 
 def test_snapshot_preserves_exact_parameter_literals():
-    p = _problem().param(pops.physics.ConstParam("third", Fraction(1, 3)))
+    p = _problem()
+    p.param(ConstParam("third", Fraction(1, 3)))
     payload = build_problem_snapshot(p).to_dict()
 
     assert payload["params"]["third"]["default"] == {
-        "$scalar": {
+        "state": "value",
+        "value": {
             "kind": "rational",
             "numerator": "1",
             "denominator": "3",
+            "target": "Real",
         }
     }
 
@@ -260,7 +265,7 @@ def test_failed_freeze_is_atomic_and_problem_can_be_edited_then_retried():
     repairable = RepairableOptions()
     p = (pops.Problem(layout=layout, name="atomic")
          .block("ne", physics=_model(), spatial=spatial)
-         .param("bad", repairable))
+         .aux("repairable", repairable))
 
     with pytest.raises(RuntimeError, match="not serializable yet"):
         p.freeze()
@@ -401,7 +406,7 @@ def test_later_freeze_failure_restores_python_physics_cascade_exactly():
 @pytest.mark.parametrize("mutate", [
     lambda p: p.block("extra", physics=_model()),
     lambda p: p.add_block("extra2", _model()),
-    lambda p: p.param(pops.physics.ConstParam("gamma", 1.4)),
+    lambda p: p.param(ConstParam("gamma", 1.4)),
     lambda p: p.aux("B_z"),
     lambda p: p.output(pops.output.OutputPolicy()),
     lambda p: p.time(pops.time.Program("t")),
@@ -506,9 +511,14 @@ def test_snapshot_validator_authenticates_type_hash_and_payload():
     with pytest.raises(ValueError, match="canonical payload"):
         validate_problem_snapshot(snapshot)
 
+    artifact_snapshot = ProblemSnapshot({"problem": "artifact-identity"})
+    object.__setattr__(artifact_snapshot, "_artifact_hash", "b" * 64)
+    with pytest.raises(ValueError, match="canonical artifact projection"):
+        validate_problem_snapshot(artifact_snapshot)
+
 
 def test_compiled_handle_is_sealed_after_public_compile():
-    from pops.codegen.loader import CompiledProblem
+    from pops.codegen.loader import CompiledModel, CompiledProblem
 
     handle = CompiledProblem("x.so", None, None, "abi", "c++", "c++23")
     handle._advanced_attach = "ok"  # the advanced compile_problem route stays attachable
@@ -517,6 +527,15 @@ def test_compiled_handle_is_sealed_after_public_compile():
         handle.so_path = "y.so"
     with pytest.raises(AttributeError, match="ADC-563"):
         handle._layout = object()
+
+    block = CompiledModel(
+        "block.so", "production", "add_native_block", (), (), (), 0,
+        None, 0, {}, {}, "abi", "model-hash", "c++", "c++23",
+    )
+    block.bind_schema = object()  # advanced Model.compile remains attachable
+    block._seal()
+    with pytest.raises(AttributeError, match="immutable after pops.compile"):
+        block.bind_schema = None
 
 
 if __name__ == "__main__":

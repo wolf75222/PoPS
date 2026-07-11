@@ -1,19 +1,15 @@
-"""pops.mesh.amr -- typed AMR policy descriptors (Spec 5 sec.5.11 / sec.8).
+"""Typed, inert AMR policies consumed by layouts and the native runtime.
 
-AMR is mesh / runtime infrastructure, not physics. These descriptors declare the
-refinement criteria, patch clustering, regrid cadence, proper nesting, and the
-checkpoint / output policy that :class:`pops.mesh.layouts.AMR` consumes and the C++
-runtime executes after validation. Spec 5 (sec.8.6) replaces the string forms
-(``set_refinement(0.05, variable="rho")`` / ``set_phi_refinement(0.5)``) with typed
-criteria: ``Refine.on(block.role(Density)).above(0.05)`` and ``TagUnion(...)``.
-
-Everything here is an inert descriptor; nothing tags a cell in Python.
+Refinement uses typed criteria such as ``Refine.on(subject).above(0.05)``; Python never tags cells.
 """
 from __future__ import annotations
 
 from typing import Any
 
+from pops.params.use_sites import ParamUse, resolve_param_use
+
 from .._descriptor import Availability, MeshDescriptor
+from ._param_threshold import resolve_refine_threshold
 
 # Current native AMR capability envelope (Spec 5 sec.8.7): the production AMR route
 # supports 2 levels at refinement ratio 2. A request beyond this is refused BEFORE the
@@ -178,13 +174,10 @@ def _semantic_projection(value: Any, active: set[int]) -> Any:
 
 
 class Refine(MeshDescriptor):
-    """A typed refinement criterion (Spec 5 sec.8.6).
+    """Typed ``Refine.on(subject).above(threshold)`` criterion.
 
-    Build with the fluent form ``Refine.on(subject).above(threshold)``. ``subject`` is either a real
-    declaration :class:`pops.model.Handle` or a semantic expression (for example a gradient-norm
-    indicator) implementing ``resolve_references(resolver)``. Bare strings are deliberately
-    refused. Every Handle leaf is authenticated and block-qualified by the Problem before compile;
-    the expression itself stays symbolic until a backend explicitly lowers or refuses it.
+    Subjects are declaration handles or semantic expressions. Handles are authenticated and
+    block-qualified before compile; the indicator stays symbolic until backend lowering.
     """
 
     category = "refinement_criterion"
@@ -200,7 +193,12 @@ class Refine(MeshDescriptor):
         return cls(subject)
 
     def _with(self, predicate: Any, threshold: Any) -> Refine:
-        result = Refine(self.subject, predicate, float(threshold))
+        # Tagging thresholds are genuine runtime values.  Preserve RuntimeParam /
+        # DerivedParam descriptors for the resolved plan instead of silently
+        # erasing their storage class through float(...); ConstParam is unwrapped.
+        threshold = resolve_param_use(
+            threshold, ParamUse.RUNTIME_VALUE, where="Refine.%s(threshold=)" % predicate)
+        result = Refine(self.subject, predicate, threshold)
         result._references_authenticated = self._references_authenticated
         return result
 
@@ -225,7 +223,9 @@ class Refine(MeshDescriptor):
         result = Refine(
             _resolve_refine_subject(self.subject, resolver),
             self.predicate,
-            self.threshold,
+            resolve_refine_threshold(
+                self.threshold, resolver, _resolve_handle_reference
+            ),
         )
         result._references_authenticated = True
         return result
@@ -284,7 +284,8 @@ class RegridEvery(MeshDescriptor):
     category = "regrid_policy"
 
     def __init__(self, steps: Any) -> None:
-        self.steps = int(steps)
+        self.steps = int(resolve_param_use(
+            steps, ParamUse.REGRID_SCHEDULE, where="RegridEvery(steps=)"))
         if self.steps <= 0:
             raise ValueError("RegridEvery: steps must be > 0 (use FrozenRegrid for no regrid)")
 
@@ -307,8 +308,11 @@ class PatchLayout(MeshDescriptor):
     category = "patch_layout"
 
     def __init__(self, distribute_coarse: Any = False, coarse_max_grid: Any = 32) -> None:
-        self.distribute_coarse = bool(distribute_coarse)
-        self.coarse_max_grid = int(coarse_max_grid)
+        self.distribute_coarse = bool(resolve_param_use(
+            distribute_coarse, ParamUse.MESH_TOPOLOGY,
+            where="PatchLayout(distribute_coarse=)"))
+        self.coarse_max_grid = int(resolve_param_use(
+            coarse_max_grid, ParamUse.SHAPE, where="PatchLayout(coarse_max_grid=)"))
 
     def options(self) -> dict:
         return {"distribute_coarse": self.distribute_coarse,
@@ -316,23 +320,23 @@ class PatchLayout(MeshDescriptor):
 
 
 class PatchClustering(MeshDescriptor):
-    """Berger-Rigoutsos clustering policy of the regrid layout (ADC-615/616).
+    """Berger-Rigoutsos clustering controls (ADC-615/616).
 
-    Tunes how tagged coarse cells are grouped into fine patches:
-
-    * ``min_efficiency`` in (0, 1] -- the tagged fraction a candidate box must reach to be accepted
-      (higher = tighter, more patches; default 0.7);
-    * ``min_box_size`` -- the smallest admissible patch side (default 1);
-    * ``max_box_size`` -- the largest patch side; accepted boxes are chopped to it (default 32).
-
-    Defaults reproduce the historical native ``ClusterParams{0.7, 1, 32}`` bit-for-bit. Out-of-domain
-    values (efficiency outside (0, 1], sizes < 1, min > max) are refused STRUCTURALLY at construction.
+    Efficiency is in ``(0, 1]`` and box sizes are positive with ``min <= max``. Defaults preserve
+    the native ``ClusterParams{0.7, 1, 32}`` policy.
     """
 
     category = "clustering_policy"
 
     def __init__(self, min_efficiency: Any = 0.7, min_box_size: Any = 1,
                  max_box_size: Any = 32) -> None:
+        min_efficiency = resolve_param_use(
+            min_efficiency, ParamUse.AMR_HIERARCHY,
+            where="PatchClustering(min_efficiency=)")
+        min_box_size = resolve_param_use(
+            min_box_size, ParamUse.SHAPE, where="PatchClustering(min_box_size=)")
+        max_box_size = resolve_param_use(
+            max_box_size, ParamUse.SHAPE, where="PatchClustering(max_box_size=)")
         if isinstance(min_efficiency, bool) or not isinstance(min_efficiency, (int, float)):
             raise TypeError("PatchClustering: min_efficiency must be a number (got %r)"
                             % (min_efficiency,))
@@ -363,7 +367,8 @@ class ProperNesting(MeshDescriptor):
     category = "nesting_policy"
 
     def __init__(self, buffer: Any = 1) -> None:
-        self.buffer = int(buffer)
+        self.buffer = int(resolve_param_use(
+            buffer, ParamUse.AMR_HIERARCHY, where="ProperNesting(buffer=)"))
         if self.buffer < 0:
             raise ValueError("ProperNesting: buffer must be >= 0")
 
@@ -377,7 +382,8 @@ class BufferCells(MeshDescriptor):
     category = "tag_policy"
 
     def __init__(self, cells: Any = 1) -> None:
-        self.cells = int(cells)
+        self.cells = int(resolve_param_use(
+            cells, ParamUse.AMR_HIERARCHY, where="BufferCells(cells=)"))
 
     def options(self) -> dict:
         return {"cells": self.cells}
@@ -402,7 +408,9 @@ class SelectedLevels(MeshDescriptor):
     category = "level_policy"
 
     def __init__(self, *levels: Any) -> None:
-        self.levels = tuple(int(l) for l in levels)
+        self.levels = tuple(int(resolve_param_use(
+            level, ParamUse.AMR_HIERARCHY, where="SelectedLevels(levels=)"))
+                            for level in levels)
 
     def options(self) -> dict:
         return {"levels": self.levels}

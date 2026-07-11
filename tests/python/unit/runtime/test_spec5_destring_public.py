@@ -11,8 +11,9 @@ Surfaces covered:
      descriptors (CG / GMRES / BiCGStab / Richardson, Identity); a bare string is rejected.
   2. ``pops.codegen.compile_library(backend=)`` -- a typed pops.codegen backend (Production / AOT / JIT);
      a bare string is rejected (mirrors pops.compile).
-  3. ``Model.param`` / board ``param`` / ``Problem.param`` -- a typed pops.physics param object
-     (ConstParam / RuntimeParam); a bare ``kind=`` string is rejected.
+  3. ``Model.param`` / board ``param`` / ``Problem.param`` -- a canonical declaration from
+     ``pops.params``; every registry returns a stable ``ParamHandle`` and formulas read it only
+     through ``value(handle)``. The old shorthand and ``kind=`` routes are rejected.
 
 Pure Python, no _pops / compiler needed: every check exercises the authoring + lowering layer.
 Runs under pytest AND standalone (``python test_spec5_destring_public.py``).
@@ -24,9 +25,17 @@ import pytest
 
 # --- 1. solve_linear(method=, preconditioner=) ----------------------------------------------
 def _solve_program(method, *, restart=None, preconditioner=None):
+    from pops.model import Module
+    from pops.problem import Problem
     import pops.time as t
+
+    module = Module("linear-state")
+    state = module.state_space("U", ("u",))
+    state_handle = module.state_handle(state)
+    problem = Problem(name="linear-case")
+    block = problem.add_block("blk", module)
     P = t.Program("p")
-    U = P.state("blk")
+    U = P.state(block, state_handle)
     A = P.matrix_free_operator("A")
 
     def apply(P, out, x):
@@ -35,13 +44,13 @@ def _solve_program(method, *, restart=None, preconditioner=None):
         return x - 0.1 * lap
 
     P.set_apply(A, apply)
-    kw = dict(operator=A, rhs=U, method=method, tol=1e-10, max_iter=200)
+    kw = dict(operator=A, rhs=U.n, method=method, tol=1e-10, max_iter=200)
     if preconditioner is not None:
         kw["preconditioner"] = preconditioner
     if restart is not None:
         kw["restart"] = restart
     phi = P.solve_linear(**kw)
-    P.commit(P.state("U", block="blk").next, phi)
+    P.commit(U.next, phi)
     return P
 
 
@@ -55,7 +64,7 @@ def test_solve_linear_typed_method_byte_identical():
              (krylov.GMRES(max_iter=200), "gmres", 8)]
     for descriptor, token, restart in cases:
         P = _solve_program(descriptor, restart=restart)
-        node = P._commits["blk"]
+        node = next(iter(P._commits.values()))
         assert node.attrs["method"] == token, (descriptor, node.attrs["method"])
         # The IR hash is stable + the typed object never leaks a Python object into the node.
         assert P._ir_hash()
@@ -128,86 +137,97 @@ def test_compile_library_non_production_typed_backend_rejected():
             pops.codegen.compile_library("lib.so", objects=_lib_objects(), backend=backend)
 
 
-# --- 3. param(kind=) on the public surfaces --------------------------------------------------
-def test_facade_param_typed_byte_identical():
-    """Model.param(RuntimeParam(...)) builds the SAME Param the kind='runtime' string did."""
+# --- 3. canonical declarations + Handle/Expr separation -------------------------------------
+def test_facade_param_returns_handle_and_value_builds_a_distinct_expr():
+    from pops.model import ParamHandle
+    from pops.params import ConstParam, RuntimeParam
     from pops.physics.facade import Model
-    from pops.physics import ConstParam, RuntimeParam
-    from pops.physics.model import Param
 
     m = Model("iso")
     m.conservative_vars("rho", "rho_u", "rho_v")
-    cs2 = m.param(RuntimeParam("cs2", 1.0))
-    assert isinstance(cs2, Param) and cs2.kind == "runtime" and cs2.value == 1.0
-    g = m.param(ConstParam("gamma", 1.4))
-    assert g.kind == "const" and g.value == 1.4
-    # the (name, value) shorthand is a const param (the default mode), byte-identical to kind='const'
-    a = m.param("alpha", 2.0)
-    assert a.kind == "const" and a.value == 2.0
+    cs2 = m.param(RuntimeParam("cs2", default=1.0))
+    gamma = m.param(ConstParam("gamma", 1.4))
+
+    assert isinstance(cs2, ParamHandle) and cs2.param_kind == "runtime"
+    assert isinstance(gamma, ParamHandle) and gamma.param_kind == "const"
+    assert cs2 == cs2 and hash(cs2) == hash(cs2)
+    expression = m.value(cs2)
+    assert expression is not cs2
+    with pytest.raises(TypeError):
+        bool(expression)
 
 
-def test_facade_param_string_kind_rejected():
+def test_facade_param_shorthand_and_kind_keyword_are_rejected():
     from pops.physics.facade import Model
+
     m = Model("iso")
-    m.conservative_vars("rho", "rho_u", "rho_v")
-    for kind in ("const", "runtime"):
-        with pytest.raises(TypeError) as exc:
-            m.param("cs2", 1.0, kind=kind)
-        msg = str(exc.value)
-        assert "kind=" in msg and "RuntimeParam" in msg and "ConstParam" in msg, msg
+    for call in (
+        lambda: m.param("cs2"),
+        lambda: m.param("cs2", 1.0),
+        lambda: m.param("cs2", 1.0, kind="runtime"),
+    ):
+        with pytest.raises(TypeError, match="RuntimeParam|ConstParam|argument"):
+            call()
 
 
-def test_board_param_string_kind_rejected():
+def test_board_param_uses_the_same_canonical_contract():
     import pops.physics as physics
+    from pops.model import ParamHandle
+    from pops.params import RuntimeParam
+
     m = physics.Model("board")
-    with pytest.raises(TypeError) as exc:
-        m.param("cs2", 1.0, kind="runtime")
-    assert "RuntimeParam" in str(exc.value), str(exc.value)
+    handle = m.param(RuntimeParam("cs2", default=1.0))
+    assert isinstance(handle, ParamHandle) and handle.param_kind == "runtime"
+    assert m.value(handle) is not handle
+    with pytest.raises(TypeError):
+        m.param("cs2", 1.0)
 
 
-def test_board_param_typed_accepted():
-    import pops.physics as physics
-    from pops.physics import RuntimeParam
-    m = physics.Model("board")
-    cs2 = m.param(RuntimeParam("cs2", 1.0))
-    assert cs2.kind == "runtime" and cs2.value == 1.0
-
-
-def test_case_param_typed_byte_identical():
-    """Problem.param(typed) stores the SAME {default, kind} record the kind= string did."""
+def test_case_param_returns_a_case_owned_handle_and_inspection_is_lossless():
     import pops
-    from pops.physics import ConstParam, RuntimeParam
+    from pops.model import OwnerKind, ParamHandle
+    from pops.params import ConstParam, RuntimeParam
+
     case = pops.Problem(name="c")
-    case.param(RuntimeParam("alpha", 1.0))
-    case.param(ConstParam("gamma", 1.4))
-    case.param("beta", 2.0)  # shorthand -> const
-    rec = case.inspect().params  # ADC-564: Problem.inspect() is a typed report; read the attribute
-    assert rec["alpha"] == {"default": 1.0, "kind": "runtime"}, rec
-    assert rec["gamma"] == {"default": 1.4, "kind": "const"}, rec
-    assert rec["beta"] == {"default": 2.0, "kind": "const"}, rec
+    alpha = case.param(RuntimeParam("alpha", default=1.0))
+    gamma = case.param(ConstParam("gamma", 1.4))
+    assert isinstance(alpha, ParamHandle) and alpha.owner_path.kind is OwnerKind.CASE
+    assert isinstance(gamma, ParamHandle) and gamma.owner_path == case.owner_path
+    records = case.inspect().params
+    assert records["alpha"]["kind"] == "runtime"
+    assert records["alpha"]["default"]["state"] == "value"
+    assert records["gamma"]["kind"] == "const"
+    assert records["alpha"]["handle"]["qualified_id"] == case.resolve(alpha).qualified_id
 
 
-def test_case_param_string_kind_rejected():
+def test_case_param_shorthand_and_chaining_are_removed():
     import pops
+    from pops.params import RuntimeParam
+
     case = pops.Problem(name="c")
-    for kind in ("const", "runtime"):
-        with pytest.raises(TypeError) as exc:
-            case.param("alpha", 1.0, kind=kind)
-        msg = str(exc.value)
-        assert "kind=" in msg and "RuntimeParam" in msg and "ConstParam" in msg, msg
+    with pytest.raises(TypeError, match="RuntimeParam|ConstParam"):
+        case.param("alpha")
+    with pytest.raises(TypeError):
+        case.param("alpha", 1.0)
+    handle = case.param(RuntimeParam("alpha", default=1.0))
+    assert handle is not case
 
 
-def test_param_carrying_module_lowers_after_destring():
-    # Regression: de-stringing facade.Model.param must not break the INTERNAL codegen path
-    # (compile_drivers._module_to_model lowers a Module's params via the (name, value) shorthand,
-    # not the removed kind= string). A Module declaring a param must lower without a TypeError.
-    from pops.model import Module
-    m = Module("iso")
-    m.state_space("U", ["rho", "mom_x", "mom_y", "E"])
-    m.param("cs2", 0.5)
-    dsl = m.to_dsl()  # routes through _module_to_model (the de-string crash site)
-    assert "cs2" in dsl.params
-    assert getattr(dsl.params["cs2"], "kind", None) == "const"  # shorthand -> const, byte-identical
+def test_param_carrying_module_lowers_without_losing_kind_or_identity():
+    from pops.model import Module, ParamHandle
+    from pops.params import ConstParam
+
+    module = Module("iso")
+    module.state_space("U", ["rho", "mom_x", "mom_y", "E"])
+    declaration = ConstParam("cs2", 0.5)
+    handle = module.param(declaration)
+    assert isinstance(handle, ParamHandle)
+    assert module.value(handle) is not handle
+    dsl = module.to_dsl()
+    assert dsl._param_registry is module.param_registry()
+    assert dsl._param_registry.handle(declaration) == handle
+    assert dsl.params["cs2"].kind.value == "const"
+    assert dsl.params["cs2"].value == 0.5
 
 
 if __name__ == "__main__":

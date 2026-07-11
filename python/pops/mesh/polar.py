@@ -10,6 +10,7 @@ from typing import Any
 
 from ._descriptor import MeshDescriptor
 from ..descriptors_report import CapabilitySet
+from pops.params.use_sites import ParamUse, resolve_param_use
 from pops.runtime_environment import NATIVE_DIMENSION, validate_dimension
 
 
@@ -35,6 +36,15 @@ class PolarMesh(MeshDescriptor):
     def __init__(self, r_min: Any, r_max: Any, nr: Any, ntheta: Any, theta_boxes: Any = 1,
                  *, dim: Any = NATIVE_DIMENSION) -> None:
         self.dim = validate_dimension(dim, where="PolarMesh")
+        r_min = resolve_param_use(
+            r_min, ParamUse.MESH_EXTENT, where="PolarMesh(r_min=)")
+        r_max = resolve_param_use(
+            r_max, ParamUse.MESH_EXTENT, where="PolarMesh(r_max=)")
+        nr = resolve_param_use(nr, ParamUse.SHAPE, where="PolarMesh(nr=)")
+        ntheta = resolve_param_use(
+            ntheta, ParamUse.SHAPE, where="PolarMesh(ntheta=)")
+        theta_boxes = resolve_param_use(
+            theta_boxes, ParamUse.MESH_TOPOLOGY, where="PolarMesh(theta_boxes=)")
         if not (r_max > r_min >= 0.0):
             raise ValueError("PolarMesh: requires r_max > r_min >= 0 (ring)")
         # nr >= 3: the radial drift uses a 2nd-order ONE-SIDED stencil at both walls.

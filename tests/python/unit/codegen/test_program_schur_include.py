@@ -10,6 +10,7 @@ The condensed-Schur Program brick is retired (ADC-637): the sole route is the ge
 solve, emitted inline via pops::detail::block_inverse (block_inverse.hpp) with no coupling/schur/**
 in the generated .so.
 """
+from pops.params import ConstParam
 import pytest
 
 # import pops loads _pops; skip honestly on a source-only checkout (the bootstrap wraps the raw
@@ -26,7 +27,7 @@ def _lorentz_model(name):
     from pops.physics.facade import Model
     m = Model(name)
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    cs2 = m.param("cs2", 0.5)
+    cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
     p = m.primitive("p", cs2 * rho)

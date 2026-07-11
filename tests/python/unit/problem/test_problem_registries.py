@@ -18,6 +18,7 @@ from pops.problem.registries import (  # noqa: E402
     RuntimePolicyRegistry, TimeRegistry)
 from pops.problem.report import ProblemValidationReport  # noqa: E402
 from pops.model import OwnerKind, OwnerPath  # noqa: E402
+from pops.params import ConstParam  # noqa: E402
 
 
 _OWNER = OwnerPath.fresh(OwnerKind.CASE, "registry-tests")
@@ -80,32 +81,35 @@ def test_time_registry_single_slot():
 
 
 def test_param_registry_rejects_kind_string():
-    reg = ParamRegistry()
-    reg.add("alpha", 1.0)
-    assert reg.get("alpha") == {"default": 1.0, "kind": "const"}
-    with pytest.raises(TypeError, match="kind="):
-        reg.add("beta", 1.0, kind="const")
+    reg = ParamRegistry(owner=_OWNER)
+    alpha = ConstParam("alpha", 1.0)
+    handle = reg.add(alpha)
+    assert reg.get(handle) is alpha
+    assert reg.get("alpha") is alpha
+    with pytest.raises(TypeError, match="kind"):
+        ConstParam("beta", 1.0, kind="const")
 
 
 def test_param_registry_rejects_identical_and_incompatible_redeclarations():
-    reg = ParamRegistry()
-    reg.add("alpha", 1.0)
+    reg = ParamRegistry(owner=_OWNER)
+    alpha = ConstParam("alpha", 1.0)
+    reg.add(alpha)
     with pytest.raises(ValueError, match="already declared"):
-        reg.add("alpha", 1.0)
+        reg.add(alpha)
     with pytest.raises(ValueError, match="already declared"):
-        reg.add("alpha", 2.0)
-    assert reg.get("alpha") == {"default": 1.0, "kind": "const"}
+        reg.add(ConstParam("alpha", 2.0))
+    assert reg.get("alpha") is alpha
 
 
 def test_registries_never_stringify_author_identity_objects():
     block = BlockRegistry(owner=_OWNER)
-    params = ParamRegistry()
+    params = ParamRegistry(owner=_OWNER)
     runtime = RuntimePolicyRegistry()
 
     with pytest.raises(TypeError, match="block name"):
         block.add(object(), _StubModel())
-    with pytest.raises(TypeError, match="parameter name"):
-        params.add(object(), 1.0)
+    with pytest.raises(TypeError, match="RuntimeParam, ConstParam or DerivedParam"):
+        params.add(object())
     with pytest.raises(TypeError, match="aux name"):
         runtime.add_aux(object(), 1.0)
     assert block.names() == []

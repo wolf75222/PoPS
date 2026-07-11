@@ -5,6 +5,7 @@ to show the lowering: the operator-first Program IR and the C++ plan, and the ty
 Module the board model lowers to. These dumps are pure introspection over the
 existing IR -- they prove the board and operator-first writings share one kernel.
 """
+from pops.params import ConstParam
 import pytest
 
 physics = pytest.importorskip("pops.physics")
@@ -19,7 +20,7 @@ def _board_model():
                 roles={"rho": "density", "mx": "momentum_x", "my": "momentum_y"})
     rho, mx, my = U
     u, v = m.primitive("u", mx / rho), m.primitive("v", my / rho)
-    cs2 = m.param("cs2", 1.0)
+    cs2 = m.value(m.param(ConstParam("cs2", 1.0)))
     p, c = m.scalar("p", cs2 * rho), m.scalar("c", sqrt(cs2))
     flux = m.flux("F", on=U, x=[mx, mx * u + p, mx * v], y=[my, my * u, my * v + p],
                   waves={"x": [u - c, u, u + c], "y": [v - c, v, v + c]})
@@ -80,7 +81,7 @@ def test_explicit_program_binding_refreshes_out_of_order_registration():
     U = m.state("U", components=["rho", "mx", "my"])
     rho, mx, my = U
     u, v = m.primitive("u", mx / rho), m.primitive("v", my / rho)
-    cs2 = m.param("cs2", 1.0)
+    cs2 = m.value(m.param(ConstParam("cs2", 1.0)))
     p, c = m.scalar("p", cs2 * rho), m.scalar("c", sqrt(cs2))
     flux = m.flux("F", on=U, x=[mx, mx * u + p, mx * v], y=[my, my * u, my * v + p],
                   waves={"x": [u - c, u, u + c], "y": [v - c, v, v + c]})

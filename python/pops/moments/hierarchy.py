@@ -152,12 +152,18 @@ class MomentModel:
 
             if electric is not None:
                 ex_name, ey_name, qom_name = electric
+                from pops.params import ConstParam
+
                 ex = m.aux(ex_name)
                 ey = m.aux(ey_name)
-                qom = m.param(qom_name, 1.0)
+                qom_handle = m.param(ConstParam(qom_name, value=1.0))
+                qom = m.value(qom_handle)
                 add(lorentz_sources(M, ex, ey, qom, 0.0))
             if magnetic is not None:
-                omega_c = m.param(magnetic, 1.0)
+                from pops.params import ConstParam
+
+                omega_handle = m.param(ConstParam(magnetic, value=1.0))
+                omega_c = m.value(omega_handle)
                 add(lorentz_sources(M, 0.0, 0.0, 1.0, omega_c))
             if extra is not None:
                 add(extra(m, M))

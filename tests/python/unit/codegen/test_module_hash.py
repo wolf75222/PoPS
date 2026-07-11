@@ -16,6 +16,7 @@ try:
     from pops.ir.expr import Const, Var
     from pops.ir.ops import sqrt
     from pops.physics.facade import Model
+    from pops.params import RuntimeParam
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_module_hash (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -26,7 +27,7 @@ def test_deterministic():
         mod = model.Module("m")
         u = mod.state_space("U", ("rho", "mx", "my"), roles={"rho": "Density"})
         f = mod.field_space("fields", ("phi", "grad_x", "grad_y"))
-        mod.parameters(alpha=1.0)
+        mod.parameters(RuntimeParam("alpha", default=1.0))
         mod.aux_fields(B_z="cell_scalar")
         mod.operator(name="fields_from_state", signature=(u,) >> f,
                      kind="field_operator", expr="POISSON")

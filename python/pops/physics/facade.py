@@ -1,13 +1,6 @@
-"""Stable PDE-model facade: ``pops.physics.facade.Model``.
+"""Stable PDE facade composing a private :class:`HyperbolicModel`.
 
-``Model`` COMPOSES a private :class:`~pops.physics.model.HyperbolicModel`
-(composition, not inheritance) and delegates each call: no new numerics. It is
-the PDE convenience facade that ``pops.dsl.Model`` re-exports; the blackboard
-board facade (also named ``Model``, re-exported as ``pops.physics.Model``) lives
-in :mod:`pops.physics.board`. cf. ``docs/DSL_MODEL_DESIGN.md`` sections 1-3.
-
-Import-graph rule (Spec 4): module-scope imports are confined to :mod:`pops.ir`
-and :mod:`pops.model`; codegen is imported LAZILY inside ``Model.compile``.
+It delegates existing numerics and imports codegen lazily to preserve the Spec-4 import graph.
 """
 from __future__ import annotations
 
@@ -18,26 +11,17 @@ from pops.ir.ops import left, right  # noqa: F401  -- Model.left / Model.right s
 
 from ._modelpkg import model as _model
 from .aux import aux_total_n_aux, roles_for  # noqa: F401  -- used in Model.compile
-from .model import HyperbolicModel, _NO_KIND, _coerce_param
+from .model import HyperbolicModel
 from ._facade_compile import _FacadeCompileMixin
 from ._freeze import PhysicsFreezable
 
 
 class Model(PhysicsFreezable, _FacadeCompileMixin):
-    """STABLE facade of a DSL model (Phase A). COMPOSES a private HyperbolicModel (_m, composition and
-    NOT inheritance) and delegates each call to an existing method: no new numerics.
+    """Stable facade delegating authoring to a composed ``HyperbolicModel``.
 
-        m = pops.dsl.Model("euler")
-        rho, rhou, rhov, E = m.conservative_vars("rho", "rho_u", "rho_v", "E")
-        g = m.param("gamma", 1.4)                 # NAMED constant, inlined at codegen
-        u = m.primitive("u", rhou / rho)
-        p = m.primitive("p", (g - 1.0) * (E - 0.5 * rho * (u*u + ...)))
-        m.flux(x=[...], y=[...])                   # symbolic DECLARATOR of the physical flux
-        m.eval_flux(U, aux, dir)                   # numpy EVALUATOR (debug), DISTINCT name
-        m.primitive_vars(rho=rho, u=u, v=v, p=p)   # ordered Prim layout (kwargs order)
-        compiled = m.compile(so_path, include, backend="aot")  # -> CompiledModel
-
-    cf. docs/DSL_MODEL_DESIGN.md sections 1-3."""
+    It separates symbolic declarations (for example ``flux``) from host evaluators such as
+    ``eval_flux`` and exposes the compiled model through the lazy codegen mixin.
+    """
 
     _physics_mutators = frozenset({
         "conservative_vars", "primitive", "primitive_vars", "aux", "aux_field",
@@ -53,7 +37,8 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
     def __init__(self, name: Any) -> None:
         self._init_physics_freeze()
         self._m = HyperbolicModel(name)
-        self.params = {}   # name -> Param (introspection / reproducibility)
+        self._param_registry = _model.ParamRegistry(
+            owner=self._m.owner_path, mutation_guard=self._guard_mutable)
         self._module_cache = None
 
     def _invalidate_authoring_views(self) -> None: self._module_cache = None
@@ -65,10 +50,7 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
 
     @property
     def capabilities(self) -> Any:
-        """Typed capability handles of this model (ADC-552): ``m.capabilities.wave_speeds`` returns
-        the model's :class:`~pops.numerics.riemann.waves.WaveSpeedProvider`. There is NO silent
-        None -- a model that declares no wave speeds raises a precise, actionable error on access.
-        Pass the returned provider to ``HLL(waves=m.capabilities.wave_speeds)``."""
+        """Typed capability handles; missing capabilities fail explicitly on access."""
         from pops.numerics.riemann.waves import _CapabilityHandles  # lazy: keep facade lean
         return _CapabilityHandles(self)
 
@@ -82,15 +64,10 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         return self._m.primitive(name, expr)
 
     def primitive_vars(self, *vars: Any, roles: Any = None, **named: Any) -> Any:
-        """Declares the primitives AND the ORDERED layout of Prim. Two forms:
+        """Declare primitives and their order, from expressions in kwargs or positional names.
 
-        - KWARGS (target style): `primitive_vars(rho=expr, u=expr, v=expr, p=expr)`: each kwarg
-          DEFINES a primitive (m.primitive(name, expr)) AND fixes the layout of Prim in the
-          insertion order of the kwargs (Python 3.7+: order guaranteed). @p roles (list) optional.
-        - POSITIONAL: `primitive_vars(rho, u, v, p, roles=...)`: names/Var already defined, fixes
-          only the layout (delegates to set_primitive_state, like HyperbolicModel).
-
-        The two forms are exclusive (mixing named kwargs and positional raises)."""
+        Keyword and positional forms are exclusive; keyword insertion order defines the layout.
+        """
         if named and vars:
             raise ValueError("primitive_vars: mixing positional form and named kwargs "
                              "(choose one; kwargs define AND order the primitives)")
@@ -389,28 +366,44 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         """Adiabatic index (EOS), carried by POPS_EXPORT_BLOCK_GAMMA (delegates to set_gamma)."""
         self._m.set_gamma(value)
 
-    def param(self, name: Any, value: Any = None, *, kind: Any = _NO_KIND) -> Any:
-        """NAMED parameter usable in the formulas. The KIND is chosen by a TYPED param object
-        (Spec 5 sec.7), NOT a ``kind=`` string:
+    def param(self, declaration: Any) -> Any:
+        """Register a canonical parameter declaration and return its handle.
 
-          - ``m.param(pops.physics.ConstParam("gamma", 1.4))`` -- a const (mode (a)): frozen /
-            inlined at codegen, stored in ``m.params`` (introspection / reproducibility);
-          - ``m.param(pops.physics.RuntimeParam("cs2", 1.0))`` -- a runtime (mode (b), P7-b):
-            SUPPORTED on the "aot" backend, emits ``params.get(<index>)`` and is CHANGEABLE at
-            runtime via ``System.set_block_params`` without recompiling;
-          - ``m.param("gamma", 1.4)`` -- the (name, value) shorthand, a const param.
+        Only ``pops.params.RuntimeParam`` / ``ConstParam`` / ``DerivedParam``
+        are accepted.  The historical ``(name, value)`` shorthand is removed:
+        storage lifetime must never be inferred silently.  A handle is identity,
+        not an expression; call :meth:`value` when a physics formula reads it.
+        """
+        from pops.params import ConstParam
 
-        A bare ``kind="const"/"runtime"`` keyword is REJECTED (the string route is removed; use
-        ``ConstParam`` / ``RuntimeParam``). The lowering is byte-identical: a typed sugar IS a
-        ``Param`` with the same ``kind``.
+        if getattr(declaration, "name", None) == "gamma" and not isinstance(
+            declaration, ConstParam
+        ):
+            raise ValueError(
+                "the EOS metadata parameter 'gamma' must be a ConstParam; the native block "
+                "exports gamma as compile-time metadata"
+            )
+        handle = self._param_registry.register(declaration)
+        if declaration.name == "gamma":
+            self._m.set_gamma(declaration.value)
+        self._invalidate_authoring_views()
+        return handle
 
-        gamma CASE: if the name is "gamma", ALSO calls set_gamma(value) so that the ABI metadata
-        stays consistent (otherwise the System falls back to 1.4)."""
-        p = _coerce_param(name, value, kind=kind, who="Model.param")
-        self.params[p.name] = p
-        if p.name == "gamma":
-            self._m.set_gamma(p.value)
-        return p
+    def value(self, parameter: Any) -> Any:
+        """Return the distinct symbolic Expr read of a registered ParamHandle."""
+        from pops.ir import parameter_value
+
+        return parameter_value(self._param_registry, parameter)
+
+    @property
+    def params(self) -> Any:
+        """Canonical declarations keyed by local id; immutable after model freeze."""
+        declarations = self._param_registry.declarations()
+        if self.frozen:
+            from types import MappingProxyType
+
+            return MappingProxyType(declarations)
+        return declarations
 
     def check(self) -> Any:
         """Checks the dependencies (referenced variables are declared). Raises ValueError otherwise."""
@@ -470,6 +463,10 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
                         storage=st.storage)
         fs = self._m.field_space()
         mod.field_space(fs.name, fs.components, layout=fs.layout)
+        # ``module`` is a typed view of this exact model definition, not another
+        # declaration owner. Share the one registry so handles never acquire a
+        # parallel authority with merely equal-looking IDs.
+        mod._param_registry = self._param_registry
         mod.adopt_registry(self._m.operator_registry())
         self._module_cache = mod
         return mod

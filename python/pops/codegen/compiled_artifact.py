@@ -30,6 +30,11 @@ class CompiledArtifact(Protocol):
         """Path to the compiled ``.so`` artifact on disk."""
         ...
 
+    @property
+    def bind_schema(self) -> Any:
+        """Immutable owner-qualified parameter contract captured at compile."""
+        ...
+
     def inspect(self) -> Any:
         """A printable :class:`pops.codegen.inspect_report.CompiledReport` of this artifact."""
         ...

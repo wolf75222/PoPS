@@ -25,6 +25,7 @@ The contract this test pins:
 Pure Python: no compilation, no .so. ``model=None`` still lowers FE / SSPRK, so the parity checks run
 on real emitted C++ without a model. Run with python3 (PYTHONPATH = built pops package).
 """
+from pops.params import ConstParam
 import pytest
 
 adctime = pytest.importorskip("pops.time")
@@ -172,7 +173,7 @@ def _lorentz_energy_model(name):
     from pops.physics.facade import Model
     m = Model(name)
     rho, mx, my, E = m.conservative_vars("rho", "mx", "my", "E")
-    cs2 = m.param("cs2", 0.5)
+    cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
     p = m.primitive("p", cs2 * rho)

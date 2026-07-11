@@ -80,8 +80,8 @@ class _SystemUnifiedInstall(_System):
             The block model is the per-instance ``"model"`` if given, else ``compiled`` (single-
             instance case). ``spatial`` is an pops.FiniteVolume(...) / pops.Spatial(...) OR an
             pops.numerics.spatial.FiniteVolume(...) descriptor.
-        @param params dict {param_name: value} of RUNTIME parameters, routed to the instance whose
-            compiled model declares the name (set_block_params). Unknown names raise.
+        @param params complete mapping from canonical, block-qualified ParamHandle values to their
+            resolved runtime values. BindSchema has already applied defaults and derived values.
         @param aux dict {field_name: array}: "B_z" -> set_magnetic_field, "T_e" -> rejected (it is
             DERIVED, use set_electron_temperature_from), any other -> set_aux_field on the instance
             declaring it. Set BEFORE install_program so the section-24 aux requirement check sees it.
@@ -162,15 +162,15 @@ class _SystemUnifiedInstall(_System):
         for field_name, field in aux.items():
             self._install_aux(field_name, field)
 
-        # (4) PARAMS (AOT-block path, P7-b): route each runtime param to the instance whose RESOLVED
-        # CompiledModel declares it (set_block_params). Native mode rejects an unknown name; the
-        # compiled-program path defers (an unconsumed name may be a Program param routed in 5b).
-        program_params_left = dict(params)
-        if params:
-            consumed = self._install_params(resolved_models, params,
-                                            reject_unknown=(compiled is None))
-            for name in consumed:
-                program_params_left.pop(name, None)
+        # (4) PARAMS: BindSchema already resolved every supplied/default/derived value to a canonical
+        # ParamHandle. Project the complete block vectors; no name broadcast and no default fallback.
+        bind_schema = getattr(compiled, "bind_schema", None) if compiled is not None else None
+        if bind_schema is not None:
+            self._install_params(resolved_models, bind_schema, params)
+        elif params:
+            raise ValueError(
+                "install: parameter values require a compiled artifact carrying BindSchema"
+            )
 
         # (5) COMPILED mode only: install the compiled time Program (binds blocks by name + runs the
         # section-24 .so requirement validation: aux / solver / block instance, verbatim messages). In
@@ -187,13 +187,9 @@ class _SystemUnifiedInstall(_System):
             if persistence and set_persistence is not None:
                 set_persistence(
                     {name: policy for name, (_depth, policy) in persistence.items()})
-            # (5b) COMPILED-PROGRAM RUNTIME PARAMS (ADC-510, Spec 5 C5): route the REMAINING params (no
-            # AOT instance consumed them in 4) to the per-PROGRAM-block set_program_params AFTER
-            # install_program seeded the declaration defaults; the Program kernels read them via the
-            # System-owned RuntimeParams (no recompile). A name no AOT instance / Program kernel declares
-            # raises (no silent drop).
-            if program_params_left:
-                self._install_program_params(compiled, program_params_left)
+            # (5b) Program carriers were emitted with neutral values. Always install the complete
+            # BindSchema projection after loading, including declaration defaults.
+            self._install_program_params(compiled, bind_schema, params)
 
         # (6) PROGRAM CADENCE (substeps / stride): a compiled Program is ONE whole-system closure, so
         # its macro-step cadence is GLOBAL. Apply it AFTER install_program (the cadence wraps the
@@ -455,40 +451,18 @@ class _SystemUnifiedInstall(_System):
     # Uniform and AMR install seams both delegate to ONE routing implementation.
     _route_block_params = staticmethod(route_block_params)
 
-    def _install_params(self, resolved_models: Any, params: Any,
-                        reject_unknown: bool = True) -> Any:
-        """Route flat {param_name: value} to set_block_params per instance: build each instance's
-        sorted runtime-param vector (declaration defaults for unspecified names) and push it. @p
-        resolved_models maps each instance name to its RESOLVED CompiledModel. @p reject_unknown (native
-        mode): raise on a name declared by no instance (no silent drop); the COMPILED-PROGRAM path passes
-        False (an unconsumed name may be a Program-lowered param routed in 5b). Returns the CONSUMED names
-        so the caller can subtract them from the program-param remainder."""
-        per_block, unknown = self._route_block_params(resolved_models, params)
+    def _install_params(self, resolved_models: Any, schema: Any, params: Any) -> None:
+        """Install complete owner-qualified block vectors from BindSchema."""
+        per_block = self._route_block_params(resolved_models, schema, params)
         for name, values in per_block.items():
             self._s.set_block_params(name, values)
-        if unknown and reject_unknown:
-            raise ValueError("install: params %s declared by no instance's runtime parameters"
-                             % (unknown,))
-        return set(params) - set(unknown)  # the names an AOT instance consumed
 
     # Host-testable pure core (ADC-510 program-param routing, mirror of _route_block_params): callable
     # as System._route_program_params without building a System.
     _route_program_params = staticmethod(route_program_params)
 
-    def _install_program_params(self, compiled: Any, params: Any) -> Any:
-        """Route flat {param_name: value} to set_program_params per PROGRAM block (ADC-510): read the
-        compiled handle's declared routing (runtime_param_routes), build each block's COMPLETE value
-        vector (declaration defaults for unspecified names) and push it to the System-owned per-block
-        RuntimeParams the Program kernels read. A name declared by no Program kernel (incl. a const-only /
-        param-free Program carrying no routing) raises (no silent drop)."""
-        routes_fn = getattr(compiled, "runtime_param_routes", None)
-        routing: Any = routes_fn() if callable(routes_fn) else ({}, {})
-        routes, defaults = routing
-        per_block, unknown = self._route_program_params(routes, defaults, params)
+    def _install_program_params(self, compiled: Any, schema: Any, params: Any) -> None:
+        """Install complete owner-qualified Program vectors from BindSchema."""
+        per_block = self._route_program_params(compiled, schema, params)
         for blk, values in per_block.items():
             self._s.set_program_params(blk, values)
-        if unknown:
-            raise ValueError(
-                "install: params %s declared by no runtime parameter of the compiled Program "
-                "(a runtime param must be read by the Program's source / linear-source kernels and "
-                "declared dsl.Param(..., kind='runtime'))" % (unknown,))

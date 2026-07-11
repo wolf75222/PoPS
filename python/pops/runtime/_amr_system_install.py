@@ -26,7 +26,8 @@ class _AmrSystemInstall(_AmrSystem):
 
     def _install_compiled(self, compiled: Any = None, *, instances: Any = None, params: Any = None,
                           aux: Any = None, solvers: Any = None, cadence: Any = None,
-                          outputs: Any = None, diagnostics: Any = None) -> Any:
+                          outputs: Any = None, diagnostics: Any = None,
+                          bind_schema: Any = None) -> Any:
         """INTERNAL low-level install seam on the AMR hierarchy (Spec 5 sec.11) -- signature parity
         with ``System._install_compiled``. NOT the public entry point: author the run with
         ``pops.bind(...)``, which dispatches System / AmrSystem and calls this seam.
@@ -51,8 +52,8 @@ class _AmrSystemInstall(_AmrSystem):
         @param compiled a compiled time-Program handle, or ``None`` for a native AMR install.
         @param instances dict {name: {"initial": array, "spatial": <brick>, "model": <model>,
             "time": <policy>}}; the block is bound by the dict KEY.
-        @param params runtime parameters of a COMPILED time Program (dsl.Param kind='runtime'),
-            routed to ``set_program_params`` per PROGRAM block. A native AMR install (``compiled=None``)
+        @param params canonical block-qualified runtime values resolved by BindSchema and routed to
+            ``set_program_params`` per PROGRAM block. A native AMR install (``compiled=None``)
             has no ``set_block_params`` (the native AMR .so loader does not transport runtime params),
             so a non-empty ``params=`` there raises rather than dropping them silently.
         @param aux dict {field_name: array}: "B_z" -> set_magnetic_field, "T_e" rejected (derived),
@@ -145,78 +146,38 @@ class _AmrSystemInstall(_AmrSystem):
             if initial is not None:
                 self.set_density(name, initial)
 
-        # (4b) NATIVE per-block RUNTIME PARAMS (ADC-514, parity with System step 4): route each instance's
-        # declared runtime params (dsl.Param kind='runtime') to set_block_params, so a native AMR install
-        # (compiled=None) now HONORS params= WITHOUT recompiling. reject_unknown is True on the native
-        # install (a name declared by no instance is a loud error, no silent drop); on the COMPILED-Program
-        # install it is False -- an unconsumed name may be a Program-lowered param routed in step 5b, so the
-        # remainder is threaded to _finish_program_install. Returns the names consumed by an instance.
-        #
-        # PROGRAM PARAMS WIN ON A COMPILED-PROGRAM INSTALL (ADC-634): each AMR block is a target='amr_system'
-        # CompiledModel that ALSO declares the model's runtime params, so route_block_params would GREEDILY
-        # consume a name the installed whole-system Program reads through ctx.program_params (a name declared
-        # by BOTH). But with a Program installed the native per-block time policy is superseded -- the
-        # Program's lowered kernels read the PROGRAM RuntimeParams (set_program_params), NOT the native
-        # set_block_params store -- so a Program-declared name MUST reach step 5b. Withhold those names from
-        # the native route (they still reach set_program_params below); a name declared ONLY by an instance
-        # (no Program kernel reads it) still routes natively. The Uniform route never hit this: its instances
-        # carry the physical Model (no runtime_param_names), so nothing was consumed there.
-        program_names = self._program_param_names(compiled)
-        native_params = {k: v for k, v in params.items() if k not in program_names}
-        consumed = self._install_block_params(resolved_models, native_params,
-                                              reject_unknown=(compiled is None))
-        program_params = {k: v for k, v in params.items() if k not in consumed}
+        # (4b) BindSchema supplies complete block-qualified vectors. Install them on the native
+        # block carrier; a compiled Program receives the same values on its own carrier below.
+        if bind_schema is None and compiled is not None:
+            bind_schema = getattr(compiled, "bind_schema", None)
+        if bind_schema is not None:
+            self._install_block_params(resolved_models, bind_schema, params)
+        elif params:
+            raise ValueError(
+                "pops.bind: parameter values require a compiled artifact carrying BindSchema"
+            )
 
         # (5/5b/6) COMPILED time Program: install_program on the AMR hierarchy, route the REMAINING runtime
         # params and apply the global cadence (or reject a leftover params= / cadence= on a NATIVE install).
         # Extracted into the _AmrSystemProgram mixin (_finish_program_install) to keep this module small.
-        self._finish_program_install(compiled, so_path, program_params, cadence)
+        self._finish_program_install(compiled, so_path, bind_schema, params, cadence)
 
         # (7) FREEZE (ADC-592): the AMR composition is fully lowered -- build the BoundSnapshot manifest
         # of WHAT was bound (build_amr_snapshot, in _bound_snapshot), then _finalize_bind marks the
-        # runtime 'bound' as the LAST act. The AMR route installs no whole-system Program, so
-        # program_hash / abi_key / cache_key are None; each block's own CompiledModel hash lands in the
-        # per-block snapshot row.
+        # runtime 'bound' as the LAST act. If this route installed a whole-system Program, its
+        # program/cache/ABI identity and cadence are retained alongside each block-model hash.
         from pops.runtime._bound_snapshot import build_amr_snapshot
-        snapshot = build_amr_snapshot(instances, solvers, aux, params)
+        snapshot = build_amr_snapshot(
+            self, compiled, instances, solvers, cadence, aux, params
+        )
         self._finalize_bind(snapshot)  # freeze (ADC-592): _finalize_bind lives on _LifecycleMixin
 
-    @staticmethod
-    def _program_param_names(compiled: Any) -> Any:
-        """The runtime-parameter names the compiled whole-system Program reads (ADC-634).
-
-        Read from the handle's declared routing (``runtime_param_routes`` -> ``(routes, defaults)``, the
-        SAME metadata step 5b routes to ``set_program_params``); ``defaults`` keys ARE the Program-declared
-        names. On the AMR compiled-Program install these names win over the native per-block route (each
-        block is a CompiledModel that also declares them), so they are withheld from ``_install_block_params``
-        and reach ``set_program_params``. Empty set when the handle carries no Program or no runtime param
-        (a native install, or a param-free Program): the native route then behaves exactly as before."""
-        routes_fn = getattr(compiled, "runtime_param_routes", None)
-        if not callable(routes_fn):
-            return set()
-        routed: Any = routes_fn()  # (routes, defaults); typed Any: callable() narrows to -> object
-        return set(routed[1] or {})
-
-    def _install_block_params(self, resolved_models: Any, params: Any,
-                              reject_unknown: bool = True) -> Any:
-        """Route flat {param_name: value} to AmrSystem.set_block_params per instance (ADC-514, AMR mirror
-        of System._install_params). Uses the SHARED pure core route_block_params: build each declaring
-        instance's COMPLETE runtime-param vector (declaration defaults for unspecified names, in the
-        model's runtime_param_names order -- the SAME order add_compiled_model seeds the .so vector and
-        pops_compiled_param_names reports) and push it. @p reject_unknown (native install): raise on a
-        name declared by no instance (no silent drop); the COMPILED-Program install passes False (an
-        unconsumed name may be a Program-lowered param routed in step 5b). Returns the CONSUMED names so
-        the caller subtracts them from the program-param remainder."""
+    def _install_block_params(self, resolved_models: Any, schema: Any, params: Any) -> None:
+        """Install complete owner-qualified block vectors from BindSchema."""
         from pops.runtime._install_param_routing import route_block_params
-        per_block, unknown = route_block_params(resolved_models, params)
+        per_block = route_block_params(resolved_models, schema, params)
         for name, values in per_block.items():
             self.set_block_params(name, values)
-        if unknown and reject_unknown:
-            raise ValueError(
-                "pops.bind: params %s declared by no instance's runtime parameters (a runtime param "
-                "must be declared dsl.Param(..., kind='runtime') on the block's model and read by a "
-                "brick formula)" % (unknown,))
-        return set(params) - set(unknown)  # the names an instance consumed
 
     # Field names the default AMR Poisson route already serves (the shared coarse elliptic solve).
     _DEFAULT_POISSON_FIELDS = ("phi", "poisson", "charge_density", "default")

@@ -68,10 +68,10 @@ def _wrap(o: Any) -> Any:
         return node
     return Const(o)
 
-
 class Const(Expr):
-    def __init__(self, value: Any) -> None:
+    def __init__(self, value: Any, *, handle: Any = None) -> None:
         self.literal = scalar_literal(value)
+        self.handle = handle
 
     @property
     def value(self) -> Any:

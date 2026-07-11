@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from pops.descriptors import _native, _external_descriptor
+from pops.params.use_sites import ParamUse, resolve_param_use
 from .limiters import limiters
 
 # Spec 5 sec.7 / criterion 11: the GHOST (halo) depth a reconstruction stencil NEEDS, by its
@@ -80,6 +81,8 @@ def required_ghost_depth(reconstruction_or_token: Any) -> Any:
         return REQUIRED_GHOST_DEPTH.get(reconstruction_or_token)
     descriptor = reconstruction_or_token
     declared = (getattr(descriptor, "options", None) or {}).get("ghost_depth")
+    declared = resolve_param_use(
+        declared, ParamUse.STENCIL, where="reconstruction(ghost_depth=)")
     if isinstance(declared, int) and not isinstance(declared, bool):
         return declared
     scheme: Any = getattr(descriptor, "scheme", None)
@@ -119,6 +122,8 @@ def validate_ghost_depth(reconstruction_or_token: Any, available: Any = None,
     """
     if available is None:
         return True  # runtime grows the halo to the scheme; no explicit constraint to check.
+    available = resolve_param_use(
+        available, ParamUse.GHOST_DEPTH, where="validate_ghost_depth(available=)")
     needed = required_ghost_depth(reconstruction_or_token)
     if needed is None or needed <= available:
         return True

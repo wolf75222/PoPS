@@ -6,6 +6,7 @@ Pure-Python: validation + role canonicalization + descriptors. The hook C++ itse
 emitted by the dsl backend (enable_hllc/enable_roe/roe_dissipation); generating hooks from
 ARBITRARY board formulas and the end-to-end compile remain ADC-456 follow-ups.
 """
+from pops.params import ConstParam
 import pytest
 
 physics = pytest.importorskip("pops.physics")
@@ -44,7 +45,7 @@ def _euler(with_pressure=True, with_roles=True):
     rho, mx, my, E = U
     m.primitive("u", mx / rho)
     m.primitive("v", my / rho)
-    g = m.param("gamma", 1.4)
+    g = m.value(m.param(ConstParam("gamma", 1.4)))
     if with_pressure:
         m.primitive("p", (g - 1.0) * (E - 0.5 * (mx * mx + my * my) / rho))
     m.scalar("c", sqrt(g * (g - 1.0)))  # a sound-speed-ish scalar (value irrelevant here)

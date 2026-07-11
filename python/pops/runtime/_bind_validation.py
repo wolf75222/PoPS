@@ -1,11 +1,7 @@
-"""pops.runtime._bind_validation -- the pure bind-time refusal core (ADC-537).
+"""Pure, host-testable bind refusal gates (ADC-537).
 
-``pops.bind`` refuses a bad install BEFORE the native artifact is loaded: an initial state of the wrong shape / dtype / component count / ghost depth, a runtime param outside its typed domain, an aux field a lowered operator requires but the state omits, and an ABI / Kokkos / MPI / layout manifest mismatch. Every refusal is a HARD error with precise context; there is NO Python-runtime fallback when the native load fails (that decision lives in :mod:`pops.codegen.orchestration`).
-
-This module is the PURE core of those gates: each function takes plain metadata (manifest / arguments / layout / declared params / supplied state) and returns one actionable refusal line per violation (empty list = ok). No ``_pops`` and no numpy at module scope (arrays are duck-typed via ``.shape`` / ``.dtype``), so the whole refusal surface is host-testable with plain dicts; :func:`aggregate_bind_refusals` folds the per-gate lines into one error.
-
-Per the phase-6 cross-stream contract (decisions 4-5): per-block ghost depth and the ABI / Kokkos / MPI feature tokens come from the compiled MANIFEST; a fresh artifact always carries them, and a manifest lacking a field it must carry is refused as ABI-incomplete (fail loud, never skipped).
-The ABI comparison is LIKE-WITH-LIKE: the artifact key (``<headers-sha>|<cxx>|<std>``) and the runtime env key (``compiler=..;std=..;headers=..;kokkos=..;stdlib=..``) are parsed into components and only the comparable ones are compared -- the headers signature (the real header-ABI anchor) and the normalized C++ standard (``c++20`` == ``202002L``). Incomparable tokens (compiler path vs version) are never compared; a token spelled ``unknown`` is an honest-unknown, skipped like ``None``.
+The gates validate state, parameters, aux fields and artifact/runtime compatibility before native
+loading. ABI keys are compared component-wise; missing runtime facts remain honestly unknown.
 """
 from __future__ import annotations
 
@@ -94,17 +90,11 @@ def _precision_dtype_names(precision: Any) -> Any:
 
 def validate_initial_state(manifest: Any, arguments: Any, layout: Any,
                            initial_state: Any) -> Any:
-    """Refuse an initial state that does not match the artifact + mesh (ADC-537 gate d / G4).
+    """Refuse state whose name, shape, dtype, components or ghosts mismatch metadata.
 
-    Per supplied block array, check -- against the MANIFEST (ABI truth) and the mesh LAYOUT --
-    shape, dtype (declared real precision), component count and ghost depth; an undeclared block
-    name is also refused. One actionable line per mismatch (empty list = ok). Sourcing: blocks +
-    components from @p arguments (``instances``); mesh extent from @p layout (``Uniform.mesh`` /
-    ``AMR.base``); ghost depth + precision from @p manifest (no ``ghost_depth`` = ABI-incomplete,
-    refused, never guessed). The expected shape follows what the install CONSUMES per layout:
-    Uniform writes the FULL conservative state (``set_state`` -> ``(components, n, n)``, valid or
-    ghost-ringed); AMR seeds the per-block coarse DENSITY (``set_density`` -> ``(n, n)`` or flat
-    ``(n*n,)``; the native lift fills the other components, like direct ``set_density``)."""
+    Uniform consumes full conservative states; AMR consumes coarse density seeds. Missing manifest
+    halo metadata is ABI-incomplete and is refused rather than guessed.
+    """
     lines = []
     if not initial_state:
         return lines
@@ -213,17 +203,7 @@ def validate_runtime_param_domains(declared_params: Any, params: Any) -> Any:
 
 
 def validate_bind_manifest(manifest: Any, runtime_facts: Any) -> Any:
-    """Refuse an ABI / Kokkos / MPI / layout manifest mismatch at the bind front door (gate b / G2).
-
-    Compares the compiled MANIFEST against the loaded runtime facts (@p runtime_facts, a plain dict
-    of the feature tokens the _pops build reports: ``abi_key`` / ``supports_mpi`` / ``supports_gpu``
-    / ``precision`` / ``communicator``). Policy (phase-6 contract decision 5): a token the manifest
-    MUST carry but does not is refused as ABI-unverifiable (fail loud, never skipped); a token BOTH
-    sides report is compared and a definite mismatch is a hard line naming both sides. An
-    honest-unknown token on the RUNTIME side (the facts dict does not report it) is skipped -- the
-    runtime cannot adjudicate what it does not know -- which is NOT a fallback. Returns one line per
-    mismatch (empty list = ok).
-    """
+    """Return ABI/runtime incompatibilities; skip only honestly unknown runtime facts."""
     lines = []
     facts = runtime_facts or {}
     # ABI key: the manifest MUST carry one; a fresh artifact always does. An absent key is unverifiable.
@@ -421,7 +401,10 @@ def collect_missing_arguments(args: Any, provided_blocks: Any, provided_params: 
                            "state via pops.bind(state={%r: <array>})" % (name, name))
     for name, spec in sorted(getattr(args, "params", {}).items()):
         if spec.get("required") and name not in provided_params:
-            missing.append("runtime param %r; pass pops.bind(params={%r: <value>})" % (name, name))
+            missing.append(
+                "runtime param %r; pass pops.bind(params={block[param_handle]: <value>})"
+                % name
+            )
     for name, spec in sorted(getattr(args, "aux", {}).items()):
         if spec.get("required") and name not in provided_aux:
             missing.append("aux field %r; pass pops.bind(aux={%r: <array>})" % (name, name))
@@ -459,8 +442,12 @@ def validate_install_arguments(sim: Any, compiled: Any, instances: Any, params: 
     provided_named_aux = set()
     for table in getattr(sim, "_aux_field_index", {}).values():
         provided_named_aux |= set(table)
+    provided_param_ids = {
+        getattr(handle, "qualified_id", handle) for handle in params
+    }
     missing = collect_missing_arguments(
-        args, provided_blocks, set(params), set(aux) | provided_named_aux, set(solvers))
+        args, provided_blocks, provided_param_ids,
+        set(aux) | provided_named_aux, set(solvers))
     if missing:
         raise ValueError("pops.bind: the compiled artifact is missing required argument(s):\n  "
                          + "\n  ".join(missing))
@@ -482,11 +469,9 @@ def run_bind_gates(compiled: Any, problem: Any, layout: Any, initial: Any, param
     arguments = compiled.arguments() if hasattr(compiled, "arguments") else None
     if manifest is None or arguments is None:
         return  # degraded handle: the native install raises its own clear error
-    declared_params = getattr(problem, "_param_declarations", None) or {}
     groups = [
         ("aux-required-by-operator", validate_operator_aux(manifest, aux)),
         ("manifest-abi", validate_bind_manifest(manifest, loaded_runtime_facts())),
-        ("runtime-param-domain", validate_runtime_param_domains(declared_params, params)),
         ("initial-state", validate_initial_state(manifest, arguments, layout, initial)),
     ]
     message = aggregate_bind_refusals(groups)

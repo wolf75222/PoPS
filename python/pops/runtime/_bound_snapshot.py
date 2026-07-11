@@ -4,7 +4,7 @@ When ``pops.bind`` completes, the runtime is FROZEN: the composition it lowered 
 recorded here as a self-describing, JSON-ready, INERT snapshot manifest (ModuleManifest-style,
 :mod:`pops.model.manifest`). It answers "what got bound" -- the layout, the blocks (with their
 model hash + spatial tokens + time kind), the field solvers, the installed Program hash / ABI key /
-cache key, the macro-step cadence, the aux + runtime-param names, and the output policy kinds -- and
+cache key, cadence, aux inputs, effective typed parameter rows, BindSchema identities and outputs -- and
 carries a STABLE :attr:`snapshot_hash` (sha256 over the canonical JSON) that ties the bound identity
 to the compiled artifact's cache/ABI key. ``sim.inspect()`` surfaces it (lifecycle + snapshot hash +
 block/solver summary) so a bound simulation states its identity.
@@ -17,27 +17,47 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
+from types import MappingProxyType
 
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+
+def _freeze(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(item) for item in value)
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    raise TypeError("BoundSnapshot contains non-JSON value %r" % type(value).__name__)
+
+
+def _thaw(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw(item) for item in value]
+    return value
 
 
 class BoundSnapshot:
     """The inert, JSON-ready manifest of a bound composition (ADC-592).
 
-    Frozen after construction: every field is a plain value / list / dict, so it can be serialised,
-    hashed and compared without touching the live engine. The fields:
+    Deeply frozen after construction and serialised through detached plain containers.
 
       - ``layout``: ``"system"`` (Uniform) or ``"amr_system"`` (AMR).
       - ``blocks``: ordered list of ``{name, model_hash, limiter, flux, recon, time, evolve}`` --
         the per-block identity (model hash or ``None`` when the model records none; the spatial
         tokens as plain strings; the time policy kind).
       - ``solvers``: ``{field: solver_token}`` -- the field-solver routes bound.
-      - ``program_hash`` / ``abi_key`` / ``cache_key``: the compiled time Program identity (all
-        ``None`` on the AMR route, which installs no whole-system Program).
+      - ``program_hash`` / ``abi_key`` / ``cache_key``: compiled Program identity when installed.
       - ``cadence``: ``{substeps, stride, cfl}`` or ``None`` (no compiled cadence).
-      - ``aux`` / ``params``: sorted aux field names and runtime-param names supplied at bind.
+      - ``aux``: sorted auxiliary inputs.
+      - ``params``: typed effective rows with QID, value, provenance and materialization source.
+      - ``bind_schema_hash`` / ``bind_schema_artifact_hash``: full and reusable-plan identities.
       - ``outputs``: the output / checkpoint policy kind names (empty when none).
 
     :meth:`to_dict` is the canonical view; :attr:`snapshot_hash` is a stable sha256 over it (so a
@@ -45,36 +65,60 @@ class BoundSnapshot:
     is captured at compile time, so it is unaffected: cf. orchestration.compile snapshot authority).
     """
 
+    __slots__ = (
+        "schema_version", "layout", "blocks", "solvers", "program_hash", "abi_key",
+        "cache_key", "cadence", "aux", "params", "bind_schema_hash",
+        "bind_schema_artifact_hash", "outputs",
+    )
+
     def __init__(self, *, layout: Any, blocks: Any = None, solvers: Any = None,
                  program_hash: Any = None, abi_key: Any = None, cache_key: Any = None,
                  cadence: Any = None, aux: Any = None, params: Any = None,
+                 bind_schema_hash: Any = None, bind_schema_artifact_hash: Any = None,
                  outputs: Any = None) -> None:
-        self.schema_version = SCHEMA_VERSION
-        self.layout = layout
-        self.blocks = [dict(b) for b in (blocks or [])]
-        self.solvers = dict(solvers or {})
-        self.program_hash = program_hash
-        self.abi_key = abi_key
-        self.cache_key = cache_key
-        self.cadence = dict(cadence) if cadence is not None else None
-        self.aux = sorted(aux or [])
-        self.params = sorted(params or [])
-        self.outputs = list(outputs or [])
+        rows = list(params or ())
+        if any(not isinstance(row, Mapping) or not isinstance(row.get("qid"), str)
+               for row in rows):
+            raise TypeError("BoundSnapshot params must be resolved binding rows with qid")
+        if len({row["qid"] for row in rows}) != len(rows):
+            raise ValueError("BoundSnapshot params contain duplicate qualified IDs")
+        for name, value in (("bind_schema_hash", bind_schema_hash),
+                            ("bind_schema_artifact_hash", bind_schema_artifact_hash)):
+            if value is not None and (
+                not isinstance(value, str) or len(value) != 64
+                or any(char not in "0123456789abcdef" for char in value)
+            ):
+                raise ValueError("BoundSnapshot %s must be a sha256 hex string or None" % name)
+        object.__setattr__(self, "schema_version", SCHEMA_VERSION)
+        object.__setattr__(self, "layout", layout)
+        object.__setattr__(self, "blocks", _freeze(list(blocks or ())))
+        object.__setattr__(self, "solvers", _freeze(dict(solvers or {})))
+        object.__setattr__(self, "program_hash", program_hash)
+        object.__setattr__(self, "abi_key", abi_key)
+        object.__setattr__(self, "cache_key", cache_key)
+        object.__setattr__(self, "cadence", _freeze(cadence))
+        object.__setattr__(self, "aux", tuple(sorted(aux or ())))
+        object.__setattr__(self, "params", _freeze(rows))
+        object.__setattr__(self, "bind_schema_hash", bind_schema_hash)
+        object.__setattr__(self, "bind_schema_artifact_hash", bind_schema_artifact_hash)
+        object.__setattr__(self, "outputs", _freeze(list(outputs or ())))
 
     def to_dict(self) -> Any:
         """A plain-dict view of the whole snapshot (JSON-ready)."""
         return {
             "schema_version": self.schema_version,
             "layout": self.layout,
-            "blocks": [dict(b) for b in self.blocks],
-            "solvers": dict(self.solvers),
+            "blocks": _thaw(self.blocks),
+            "solvers": _thaw(self.solvers),
             "program_hash": self.program_hash,
             "abi_key": self.abi_key,
             "cache_key": self.cache_key,
-            "cadence": dict(self.cadence) if self.cadence is not None else None,
+            "cadence": _thaw(self.cadence),
             "aux": list(self.aux),
-            "params": list(self.params),
-            "outputs": list(self.outputs),
+            "params": _thaw(self.params),
+            "bind_schema_hash": self.bind_schema_hash,
+            "bind_schema_artifact_hash": self.bind_schema_artifact_hash,
+            "outputs": _thaw(self.outputs),
         }
 
     def to_json(self, path: Any = None, *, indent: int = 2) -> Any:
@@ -100,6 +144,12 @@ class BoundSnapshot:
     def block_names(self) -> Any:
         """The bound block names in order (a convenience for inspection summaries)."""
         return [b.get("name") for b in self.blocks]
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("BoundSnapshot is immutable")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("BoundSnapshot is immutable")
 
     def __repr__(self) -> Any:
         return ("BoundSnapshot(layout=%r, blocks=[%s], hash=%s)"
@@ -187,13 +237,24 @@ def _cadence_row(cadence: Any) -> Any:
             "cfl": cfl}
 
 
+def _binding_snapshot(params: Any) -> tuple[list[dict[str, Any]], str | None, str | None]:
+    """Effective typed rows plus the full/artifact BindSchema identities."""
+    rows = getattr(params, "rows", None)
+    schema = getattr(params, "schema", None)
+    if params is None or (not params and (not callable(rows) or schema is None)):
+        return [], None, None
+    if not callable(rows) or schema is None:
+        raise TypeError("BoundSnapshot parameters must be a ResolvedBindings value")
+    return list(rows()), schema.hash, schema.artifact_hash
+
+
 def build_uniform_snapshot(engine: Any, compiled: Any, resolved_models: Any, instances: Any,
                            solvers: Any, cadence: Any, aux: Any, params: Any) -> Any:
     """Assemble the Uniform :class:`BoundSnapshot` from the lowered install pieces (ADC-592).
 
     Reads only what ``System._install_compiled`` already resolved (block models / spatial / time /
     evolve, the solver tokens, the compiled handle's program hash / abi_key / cache_key, the cadence
-    and the aux / param names) -- inert. The Uniform route carries the whole-system compiled time
+    and the aux / effective parameter rows) -- inert. The Uniform route carries the whole-system compiled time
     Program, so program_hash / abi_key / cache_key come from the handle; a native install
     (compiled=None) leaves them None. @p engine supplies the spatial lowering + solver-token helpers
     (already on the install mixin) and the stored output policies.
@@ -206,19 +267,21 @@ def build_uniform_snapshot(engine: Any, compiled: Any, resolved_models: Any, ins
                                            spec.get("evolve", True)))
     solver_tokens = {field: engine._solver_token(brick)
                      for field, brick in (solvers or {}).items()}
+    param_rows, schema_hash, schema_artifact_hash = _binding_snapshot(params)
     return BoundSnapshot(
         layout="system", blocks=blocks, solvers=solver_tokens, program_hash=_program_hash(compiled),
         abi_key=getattr(compiled, "abi_key", None), cache_key=getattr(compiled, "cache_key", None),
-        cadence=_cadence_row(cadence), aux=list(aux or {}), params=list(params or {}),
+        cadence=_cadence_row(cadence), aux=list(aux or {}), params=param_rows,
+        bind_schema_hash=schema_hash, bind_schema_artifact_hash=schema_artifact_hash,
         outputs=[_output_policy_row(p) for p in getattr(engine, "_output_policies", []) or []])
 
 
-def build_amr_snapshot(instances: Any, solvers: Any, aux: Any, params: Any) -> Any:
+def build_amr_snapshot(engine: Any, compiled: Any, instances: Any, solvers: Any,
+                       cadence: Any, aux: Any, params: Any) -> Any:
     """Assemble the AMR :class:`BoundSnapshot` from the lowered install pieces (ADC-592).
 
-    The AMR route installs NO whole-system compiled time Program, so program_hash / abi_key /
-    cache_key stay None; each block carries its OWN target='amr_system' CompiledModel, whose hash
-    lands in the per-block row. @p instances / @p solvers come straight from the AMR install seam.
+    When AMR installs a whole-system Program its program/cache/ABI identity and cadence are retained;
+    otherwise those fields are absent while each block's CompiledModel hash remains in its row.
     """
     from pops.runtime.bricks import Spatial
     blocks = []
@@ -231,9 +294,16 @@ def build_amr_snapshot(instances: Any, solvers: Any, aux: Any, params: Any) -> A
     for field, brick in (solvers or {}).items():
         solver_tokens[field] = brick if isinstance(brick, str) else (
             getattr(brick, "scheme", None) or getattr(brick, "name", None))
+    param_rows, schema_hash, schema_artifact_hash = _binding_snapshot(params)
     return BoundSnapshot(layout="amr_system", blocks=blocks, solvers=solver_tokens,
-                         program_hash=None, abi_key=None, cache_key=None, cadence=None,
-                         aux=list(aux or {}), params=list(params or {}), outputs=[])
+                         program_hash=_program_hash(compiled),
+                         abi_key=getattr(compiled, "abi_key", None),
+                         cache_key=getattr(compiled, "cache_key", None),
+                         cadence=_cadence_row(cadence), aux=list(aux or {}), params=param_rows,
+                         bind_schema_hash=schema_hash,
+                         bind_schema_artifact_hash=schema_artifact_hash,
+                         outputs=[_output_policy_row(p) for p in
+                                  getattr(engine, "_output_policies", []) or []])
 
 
 def _output_policy_row(policy: Any) -> Any:

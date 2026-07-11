@@ -22,15 +22,30 @@ from .manifest_support import params_utilization as _params_utilization
 from .ownership import OwnerPath
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
+
+_PARAM_ROW_KEYS = {
+    "schema_version",
+    "name",
+    "kind",
+    "dtype",
+    "unit",
+    "domain",
+    "default",
+    "storage",
+    "provenance",
+    "expression",
+    "depends_on",
+    "phase",
+    "invalidation",
+    "qid",
+    "handle",
+}
 
 _DECLARATION_ROW_KEYS = {
     "state": ({"components", "roles", "layout", "storage", "qid", "handle"},),
     "field": ({"components", "layout", "qid", "handle"},),
-    "parameter": (
-        {"default", "dtype", "qid", "handle"},
-        {"default", "dtype", "kind", "qid", "handle"},
-    ),
+    "parameter": (_PARAM_ROW_KEYS,),
     "aux": ({"aux_kind", "qid", "handle"},),
 }
 
@@ -55,7 +70,7 @@ def _validate_declaration_rows(
                 else type(row).__name__
             )
             raise TypeError("%s %r has unsupported keys %s" % (where, name, got))
-        validate_handle_identity(
+        handle = validate_handle_identity(
             row["handle"],
             row["qid"],
             owner=owner,
@@ -63,6 +78,22 @@ def _validate_declaration_rows(
             kind=kind,
             where="%s %s" % (where, name),
         )
+        if kind == "parameter":
+            from .handles import ParamHandle
+            from pops.params import validate_parameter_data
+
+            if not isinstance(handle, ParamHandle):
+                raise TypeError("%s %s handle must be a ParamHandle" % (where, name))
+            if row["name"] != name:
+                raise ValueError("%s %s row name does not match its registry key" % (where, name))
+            if handle.param_kind != row["kind"]:
+                raise ValueError(
+                    "%s %s ParamHandle kind does not match declaration kind" % (where, name)
+                )
+            declaration_data = {
+                key: value for key, value in row.items() if key not in {"qid", "handle"}
+            }
+            validate_parameter_data(declaration_data)
 
 
 class ModuleManifest:

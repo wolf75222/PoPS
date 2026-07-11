@@ -48,6 +48,13 @@ def _module_to_model(module: Any) -> Any:
     # rejected (correctly) as belonging to a different model during codegen.
     object.__setattr__(m._m, "_owner_path", module.owner_path)
     m._m._invalidate_authoring_views()
+    # This is a lowering view, not a second declaration authority.  Reuse the
+    # Module's registry itself so every RuntimeParamRef and every report keeps
+    # the exact ParamHandle identity authored by the user.
+    registry = module.param_registry()
+    if registry.owner_path != module.owner_path:
+        raise ValueError("compile_problem: Module ParamRegistry owner drift")
+    object.__setattr__(m, "_param_registry", registry)
     _spec_role = {"density": "Density", "momentum_x": "MomentumX", "momentum_y": "MomentumY",
                   "momentum_z": "MomentumZ", "energy": "Energy", "pressure": "Pressure",
                   "velocity_x": "VelocityX", "velocity_y": "VelocityY", "velocity_z": "VelocityZ",
@@ -60,8 +67,17 @@ def _module_to_model(module: Any) -> Any:
     cvars = m.conservative_vars(*state.components, roles=roles)
     m.primitive_vars(*cvars)
     m.conservative_from(list(cvars))
-    for p in module.params().values():
-        m.param(p.name, p.default)  # (name, value) shorthand -> a const param (no kind= string)
+    for declaration in module.params().values():
+        if registry.handle(declaration) != module.param_handle(declaration):
+            raise ValueError("compile_problem: Module parameter authority is inconsistent")
+        if declaration.name == "gamma":
+            from pops.params import ConstParam
+
+            if not isinstance(declaration, ConstParam):
+                raise ValueError(
+                    "compile_problem: EOS metadata parameter 'gamma' must be a ConstParam"
+                )
+            m._m.set_gamma(declaration.value)
     declared = set()
 
     def _declare_aux(nm: Any) -> None:

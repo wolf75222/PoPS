@@ -39,11 +39,11 @@ from pops.numerics.riemann import HLL
 from pops.output import CheckpointPolicy
 from pops.runtime import routes as _routes
 from pops.runtime._bind_validation import loaded_runtime_facts, run_bind_gates
-from pops.runtime._install_param_routing import route_program_params
+from pops.model.bind_schema import BindSchema
+from pops.params import RuntimeParam
 from pops.solvers.elliptic import GeometricMG
 from pops.solvers.krylov import CG
 from pops import model as _model
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 # --------------------------------------------------------------------------------------------------
@@ -197,12 +197,20 @@ def _pos_matrix_free_krylov():
 
 
 def _pos_params_runtime_const_bind():
-    # Pure runtime-param routing keeps defaults and rejects unknown names; the bind PASS path runs.
-    # A const override routes; an unknown name is reported (never silently dropped).
-    per_block, unknown = route_program_params({0: ["k"]}, {"k": 2.0}, {"k": 6.0})
-    assert per_block == {0: [6.0]} and unknown == []
-    _, unknown = route_program_params({0: ["k"]}, {"k": 2.0}, {"zzz": 9.0})
-    assert unknown == ["zzz"]
+    # BindSchema materialises defaults and accepts only the block-qualified ParamHandle.
+    module = _model.Module("adc547-runtime-param")
+    k = module.param(RuntimeParam("k", default=2.0))
+    problem = pops.Problem(name="adc547-runtime-bind")
+    gas = problem.add_block("gas", module)
+    schema = BindSchema.from_problem(problem)
+    canonical = problem.resolve(k, block=gas)
+    assert schema.resolve()[canonical] == 2.0
+    assert schema.resolve({gas[k]: 6.0})[canonical] == 6.0
+    try:
+        schema.resolve({"zzz": 9.0})
+        raise AssertionError("an ownerless parameter name must be rejected")
+    except TypeError:
+        pass
     # The bind PASS path runs over the metadata stub (no .so): a well-formed install passes the gates.
     run_bind_gates(_compiled_problem(), None, _uniform(), {"plasma": np.ones((3, 8, 8))}, {}, {})
     # The associated native route (the program install path) is advertised available.
@@ -326,25 +334,21 @@ def _neg_amr_maxlevels_ratio():
 
 
 def _neg_param_missing_or_domain():
-    from pops.params.constraints import Positive
-    from pops.params.runtime import RuntimeParam
-    from pops.physics.model import Param
+    from pops.params import Positive, RuntimeParam
+    from pops.model.bind_schema import BindSchema
 
-    problem = pops.Problem(name="g").param(RuntimeParam("alpha", default=1.0, domain=Positive()))
-    compiled = CompiledProblem(
-        "/tmp/pops-cache/problem.so", _bindable_program(),
-        _bind_model_with_param(), _abi(), "c++", "c++23")
-    run_bind_gates(compiled, problem, _uniform(), {"plasma": np.ones((3, 8, 8))}, {"alpha": -5.0}, {})
+    problem = pops.Problem(name="g")
+    alpha = problem.param(RuntimeParam("alpha", default=1.0, domain=Positive()))
+    BindSchema.from_problem(problem).resolve({alpha: -5.0})
 
 
 def _bind_model_with_param():
-    from pops.physics.model import Param
-
+    from pops.params import RuntimeParam
     return CompiledModel(
         so_path="/nonexistent/problem.so", backend="production", adder="add_native_block",
         cons_names=["rho", "mx", "my"], cons_roles=["Density", "MomentumX", "MomentumY"],
         prim_names=["rho", "mx", "my"], n_vars=3, gamma=1.4, n_aux=0,
-        params={"alpha": Param("alpha", 1.0, kind="runtime")}, caps={"cpu": True},
+        params={"alpha": RuntimeParam("alpha", default=1.0)}, caps={"cpu": True},
         abi_key=_abi(), model_hash="h", cxx="c++", std="c++23")
 
 

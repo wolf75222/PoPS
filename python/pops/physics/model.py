@@ -1,4 +1,4 @@
-"""HyperbolicModel and Param: the symbolic mini-DSL core.
+"""HyperbolicModel: the symbolic mini-DSL core.
 
 Python WRITES the formulas (named variables, expressions); the operations build
 an expression TREE. :class:`HyperbolicModel` declares the conservative variables,
@@ -19,9 +19,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from pops.ir import (  # noqa: F401  -- node classes used by Param's operator overloads
-    _wrap, Const, Add, Sub, Mul, Div, Pow, Neg, Var)
-from pops.ir.values import RuntimeParamRef
 from pops.model.ownership import OwnerKind, OwnerPath
 
 from ._authoring_vars import _VariablesMixin
@@ -143,108 +140,3 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixi
     def _invalidate_authoring_views(self) -> None:
         """Discard derived registry views after one successful physics declaration."""
         self._operator_registry_cache = {}
-
-
-class Param(PhysicsFreezable):
-    """NAMED parameter of a DSL model, usable like an Expr in formulas.
-
-    Mode (a), constant fixed at compilation: `kind="const"` (default). The codegen INLINES every
-    constant (Const.to_cpp -> repr(value)), so the param inlines as Const(value) at codegen (value
-    written HARD-CODED in the .so) while keeping its IDENTITY (name/value/kind) for introspection
-    (m.params), diagnostics and reproducibility. UNCHANGED by P7-b: bit-identical to the history.
-
-    Mode (b), RUNTIME parameter (modifiable WITHOUT recompiling): `kind="runtime"` (P7-b). At codegen, the
-    param emits `params.get(<index>)` (read of an pops::RuntimeParams member of the brick) instead
-    of a constant; its value is carried at runtime by the AOT .so ABI and can be CHANGED
-    (block.set_param / System.set_block_params) without recompiling. The value passed at declaration serves
-    as the DEFAULT (without a set call, the block behaves as with a const param of that value).
-    SUPPORTED by the "aot" backend (add_compiled_block). The "prototype" (JIT) and "production"
-    (native) backends compile a runtime param as its declaration value (fixed): a set_param there has no
-    effect, the API reports it (cf. CompiledModel.runtime_param_names / System.set_block_params).
-
-    Param DOES NOT INHERIT from Expr (see NB below): it EXPOSES the same tree hooks
-    (`eval`/`to_cpp`/`deps`) and operators by DELEGATING to an internal NODE (Const for 'const',
-    RuntimeParamRef for 'runtime'), so `g * (E - ...)` builds the expected tree directly. The
-    value is not an environment variable -> no dependency to check in check()."""
-
-    # NB: Param DOES NOT INHERIT from Expr to avoid embedding its state (name/kind) in the CSE
-    # structural key; it EXPOSES the tree hooks instead by delegating to an internal node.
-    def __init__(self, name: Any, value: Any, kind: str = "const") -> None:
-        if kind not in ("const", "runtime"):
-            raise ValueError("Param: kind 'const' | 'runtime' (got %r)" % (kind,))
-        self._init_physics_freeze()
-        self.name = name
-        self.value = value
-        self.kind = kind
-        if kind == "runtime":
-            # SHARED RUNTIME node: all occurrences of the param in formulas point to this same
-            # object, so setting its .index at compilation (Model._assign_runtime_indices) is enough to
-            # route all its reads to params.get(<index>). index=-1 while not assigned.
-            self._node = RuntimeParamRef(self.name, self.value)
-        else:
-            self._node = Const(self.value)  # inlines at codegen: value written HARD-CODED in the .so
-
-    # --- tree hooks (delegated to the internal node): Param usable like an Expr ---
-    def eval(self, env: Any) -> Any: return self._node.eval(env)
-    def to_cpp(self) -> Any: return self._node.to_cpp()
-    def deps(self) -> Any: return set()  # neither const nor runtime has a dependency (nothing to check in check())
-
-    # --- operators: Param combines like an Expr (promotion via _wrap of the internal node) ---
-    def __add__(self, o: Any) -> Any: return Add(self._node, _wrap(o))
-    def __radd__(self, o: Any) -> Any: return Add(_wrap(o), self._node)
-    def __sub__(self, o: Any) -> Any: return Sub(self._node, _wrap(o))
-    def __rsub__(self, o: Any) -> Any: return Sub(_wrap(o), self._node)
-    def __mul__(self, o: Any) -> Any: return Mul(self._node, _wrap(o))
-    def __rmul__(self, o: Any) -> Any: return Mul(_wrap(o), self._node)
-    def __truediv__(self, o: Any) -> Any: return Div(self._node, _wrap(o))
-    def __rtruediv__(self, o: Any) -> Any: return Div(_wrap(o), self._node)
-    def __neg__(self) -> Any: return Neg(self._node)
-    def __pos__(self) -> Any: return self._node  # +param = identity (Expr), for +k*ne*ng
-    def __pow__(self, o: Any) -> Any: return Pow(self._node, _wrap(o))
-
-    def __float__(self) -> float: return self.value
-    def __repr__(self) -> str: return "Param(%r, %r, kind=%r)" % (self.name, self.value, self.kind)
-
-
-def RuntimeParam(name: Any, value: Any) -> Any:
-    """Sugar: a RUNTIME parameter (modifiable without recompiling). Equivalent to Param(name, value,
-    kind='runtime'). cf. Param mode (b) and include/pops/runtime/runtime_params.hpp (P7-b)."""
-    return Param(name, value, kind="runtime")
-
-
-def ConstParam(name: Any, value: Any) -> Any:
-    """Sugar: a CONST parameter (frozen / inlined at compile time). Equivalent to Param(name, value,
-    kind='const') -- the default param mode (a). The TYPED counterpart of the removed
-    ``kind="const"`` string on the public param surface (Spec 5 sec.7)."""
-    return Param(name, value, kind="const")
-
-
-# Sentinel distinguishing "the caller did not pass kind=" from "the caller passed kind=None":
-# the public param surfaces de-string by REJECTING any kind= keyword (Spec 5 sec.7), so they keep
-# a kind= sentinel only to emit a clear error naming the typed alternative.
-_NO_KIND = object()
-
-
-def _coerce_param(name: Any, value: Any = None, *, kind: Any = _NO_KIND, who: str = "param") -> Any:
-    """Coerce a public param argument into a typed :class:`Param`, rejecting the ``kind=`` string.
-
-    Accepts a typed :class:`Param` (e.g. :func:`ConstParam` / :func:`RuntimeParam`) as ``name``
-    (returned as-is; ``value`` must not also be given), or a ``(name, value)`` pair that builds a
-    CONST param (the default mode). A bare ``kind="const"/"runtime"`` keyword is REJECTED -- the
-    string route is removed; the error names :func:`ConstParam` / :func:`RuntimeParam`. The typed
-    sugars produce the SAME ``Param`` the old ``kind=`` string did, so the lowering is byte-identical.
-    """
-    if kind is not _NO_KIND:
-        raise TypeError(
-            "%s: the kind= string is removed (Spec 5 sec.7); pass a typed param object "
-            "(pops.physics.RuntimeParam(name, value) or pops.physics.ConstParam(name, value)) "
-            "instead of kind=%r" % (who, kind))
-    if isinstance(name, Param):
-        if value is not None:
-            raise TypeError(
-                "%s: a typed Param was given; do not also pass a value (%r)" % (who, value))
-        return name
-    if value is None:
-        raise TypeError(
-            "%s: provide a typed param (ConstParam/RuntimeParam) or a (name, value) pair" % (who,))
-    return ConstParam(name, value)

@@ -13,7 +13,7 @@ AmrSystem.add_equation + install_program), and composes correctly:
       (np.array_equal on the evolved coarse density), for SSPRK2 and a custom midpoint Program;
   (b) a flat AMR hierarchy (FrozenRegrid, single level, no C/F interface): the clean AMR route ==
       the Uniform clean route BIT-FOR-BIT on the density (mean-removed phi to the MG tolerance);
-  (d) a Program reading a dsl.Param(kind='runtime'): pops.bind(params={...}) reaches
+  (d) a Program reading a canonical RuntimeParam: qualified pops.bind(params={handle: value}) reaches
       set_program_params -- the run DIFFERS from the k=2.0 (declaration-default value) run and
       MATCHES a direct set_program_params run; a bind WITHOUT params= refuses with the actionable
       message (the Uniform-mirrored Spec 5 arguments() contract);
@@ -36,6 +36,7 @@ try:
 
     import pops
     import pops.lib.time as lib_time
+    from pops.params import MISSING, ConstParam
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
     from pops.mesh.amr import FrozenRegrid
@@ -274,29 +275,37 @@ def test_clean_flat_amr_equals_clean_uniform():
 # --------------------------------------------------------------------------------------------------
 # (d) a runtime param reaches set_program_params through the clean route's bind(params=).
 # --------------------------------------------------------------------------------------------------
-def _decay_model(k_value=2.0, name="adc634_decay"):
+def _decay_model(k_value=2.0, name="adc634_decay", *, with_handle=False):
     """Scalar rho, NO transport, a named source S = k*rho reading a runtime param k (no elliptic, so it
     runs on AMR with no Poisson solver). Mirror of test_program_runtime_params._decay_model."""
-    from pops.physics import RuntimeParam
+    from pops.params import RuntimeParam
     from pops.physics.facade import Model
     m = Model(name)
     (rho,) = m.conservative_vars("rho")
-    k = m.param(RuntimeParam("k", k_value))
+    k_handle = m.param(RuntimeParam("k", default=k_value))
+    k = m.value(k_handle)
     m.primitive_vars(rho=rho)
     m.conservative_from([rho])
     m.flux(x=[rho * 0.0], y=[rho * 0.0])
     m.eigenvalues(x=[rho * 0.0], y=[rho * 0.0])
     m.source_term("decay", [k * rho])
-    return m
+    return (m, k_handle) if with_handle else m
 
 
-def _decay_program(name="adc634_decay_prog", block="gas"):
+def _decay_program(model, name="adc634_decay_prog", *, problem=None, block=None):
     """U <- U + dt*S over 'gas'; S reads the runtime param k."""
     from pops import time as adctime
+    if problem is None:
+        problem = pops.Problem(name=name + "-case")
+    if block is None:
+        block = problem.add_block("gas", model)
+    module = model.module
+    state = module.state_handle(next(iter(module.state_spaces().values())))
     P = adctime.Program(name)
-    U = P.state(block)
+    endpoint = P.state(block, state)
+    U = endpoint.n
     S = P._source("decay", state=U)
-    P.commit(P.state("U", block=block).next, P.linear_combine("U1", U + P.dt * S))
+    P.commit(endpoint.next, P.linear_combine("U1", U + P.dt * S))
     return P
 
 
@@ -313,8 +322,9 @@ def _direct_decay_amr(u0, set_k=None, nsteps=1, dt=1e-2):
     if not hasattr(amr, "install_program") or not hasattr(amr, "set_program_params"):
         return None, "the built _pops lacks install_program/set_program_params (rebuild _pops)"
     try:
-        compiled = pops.codegen.compile_problem(model=_decay_model(2.0), time=_decay_program(),
-                                                target="amr_system")
+        model = _decay_model(2.0)
+        compiled = pops.codegen.compile_problem(
+            model=model, time=_decay_program(model), target="amr_system")
         block_cm = _decay_model(2.0).compile(backend="production", target="amr_system")
     except RuntimeError as exc:
         return None, "compile (direct decay AMR): %s" % str(exc)[:160]
@@ -333,16 +343,20 @@ def _direct_decay_amr(u0, set_k=None, nsteps=1, dt=1e-2):
     return np.array(amr.density("gas")), None
 
 
-def _clean_decay_amr(u0, params=None, nsteps=1, dt=1e-2):
+def _clean_decay_amr(u0, k_override=MISSING, nsteps=1, dt=1e-2):
     """The CLEAN decay route on AMR: pops.compile(layout=AMR) + pops.bind(params=). Returns the
     evolved density after nsteps."""
-    problem = _problem(_decay_model(2.0), _decay_program(), block="gas")
+    model, k_handle = _decay_model(2.0, with_handle=True)
+    problem = pops.Problem(name="adc634-decay")
+    block = problem.add_block("gas", model, spatial=_spatial())
+    problem.time(_decay_program(model, problem=problem, block=block))
     try:
         compiled = pops.compile(problem, layout=_amr_layout())
     except RuntimeError as exc:
         return None, "compile (clean decay AMR): %s" % str(exc)[:160]
     try:
-        sim = pops.bind(compiled, initial_state={"gas": u0}, params=params or {})
+        params = {} if k_override is MISSING else {block[k_handle]: k_override}
+        sim = pops.bind(compiled, initial_state={"gas": u0}, params=params)
     except RuntimeError as exc:
         return None, "bind (clean decay AMR): %s" % str(exc)[:240]
     for _ in range(nsteps):
@@ -351,34 +365,26 @@ def _clean_decay_amr(u0, params=None, nsteps=1, dt=1e-2):
 
 
 def test_clean_amr_bind_params_reach_set_program_params():
-    """(d) A Program reading dsl.Param(kind='runtime'): the clean route's pops.bind(params={'k': 6.0})
+    """(d) A Program reading RuntimeParam: the clean route's owner-qualified bind override
     routes k to set_program_params, so the run DIFFERS from the k=2.0 (the declaration-default value)
     run and MATCHES a direct set_program_params(0, [6.0]) run. S = k*rho, no flux -> the step scales
     linearly in k, so k=6 gives 3x the increment of k=2. The clean AMR bind also enforces the SAME
-    Spec 5 contract as the clean Uniform bind: arguments() marks kind='runtime' params required
-    (inspect_compiled), so a bind WITHOUT params= refuses with the actionable message -- the
-    declaration default reaches the kernel only on the DIRECT install_program route, via
-    route_program_params' fallback."""
+    same BindSchema contract as Uniform: omitted overrides materialize the declaration default,
+    while supplied values are keyed by the block-qualified ParamHandle."""
     print("== (d) clean-route bind(params=) reaches set_program_params ==")
     u0 = _decay_ic()
 
-    # Uniform-mirrored bind contract: a runtime-param Program refuses to bind without params=.
-    try:
-        res, rerr = _clean_decay_amr(u0, params=None)
-    except ValueError as exc:
-        chk("runtime param 'k'" in str(exc),
-            "bind without params= refuses with the actionable runtime-param message (Uniform parity)")
-    else:
-        if res is None:  # no compiler / Kokkos: the .so did not build -- an honest skip, not a fail
-            print("skip (%s)" % rerr)
-            return
-        chk(False, "bind without params= must refuse a runtime-param Program (Uniform-mirrored)")
-
-    default_rho, derr = _clean_decay_amr(u0, params={"k": 2.0})  # the declaration-default value
+    baseline_rho, berr = _clean_decay_amr(u0)
+    if baseline_rho is None:
+        print("skip (%s)" % berr)
+        return
+    default_rho, derr = _clean_decay_amr(u0, k_override=2.0)
     if default_rho is None:
         print("skip (%s)" % derr)
         return
-    override_rho, oerr = _clean_decay_amr(u0, params={"k": 6.0})  # k = 6.0 via bind(params=)
+    chk(np.array_equal(baseline_rho, default_rho),
+        "an omitted override materializes the declared default through BindSchema")
+    override_rho, oerr = _clean_decay_amr(u0, k_override=6.0)
     if override_rho is None:
         print("skip (%s)" % oerr)
         return
@@ -388,7 +394,7 @@ def test_clean_amr_bind_params_reach_set_program_params():
         return
 
     chk(not np.array_equal(default_rho, override_rho),
-        "bind(params={'k': 6.0}) changed the run vs the declaration-default k=2.0 (max|diff| = %.3e)"
+        "qualified k=6 override changed the run vs the declaration-default k=2 (max|diff| = %.3e)"
         % float(np.abs(default_rho - override_rho).max()))
     chk(np.array_equal(override_rho, direct_rho),
         "clean bind(params=) == direct set_program_params run, bit-for-bit (max|diff| = %.3e)"
@@ -434,7 +440,7 @@ def _schur_model(name="adc633_schur"):
     from pops.physics.facade import Model
     m = Model(name)
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    cs2 = m.param("cs2", 0.5)
+    cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
     p = m.primitive("p", cs2 * rho)

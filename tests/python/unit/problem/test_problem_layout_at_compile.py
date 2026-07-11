@@ -28,6 +28,10 @@ class _StubCompiledModel:
         self.so_path = "/tmp/%s_amr.so" % name
         self.target = "amr_system"
         self.adder = "add_native_block"
+        self.sealed = False
+
+    def _seal(self):
+        self.sealed = True
 
 
 class _StubDsl:
@@ -95,6 +99,7 @@ def test_same_problem_compiles_uniform_and_amr():
         assert compiled_a._target == "amr_system"
         assert hasattr(compiled_a, "_block_compiled_models")
         assert set(compiled_a._block_compiled_models) == {"ne"}
+        assert all(child.sealed for child in compiled_a._block_compiled_models.values())
     finally:
         compile_drivers.compile_problem = saved
 

@@ -6,6 +6,7 @@ import json
 import pytest
 
 from pops import model
+from pops.params import ConstParam, RuntimeParam
 
 
 @pytest.mark.parametrize("bad", [object(), True, ""])
@@ -18,10 +19,10 @@ def test_authoring_identities_refuse_implicit_stringification(bad):
         model.Operator(bad, "local_rate", signature)
     with pytest.raises(ValueError):
         model.Operator("rate", bad, signature)
-    with pytest.raises(ValueError):
-        model.ParameterSpace(bad)
-    with pytest.raises(ValueError):
-        model.ParameterSpace("alpha", dtype=bad)
+    with pytest.raises((TypeError, ValueError)):
+        RuntimeParam(bad)
+    with pytest.raises((TypeError, ValueError)):
+        RuntimeParam("alpha", dtype=bad)
     with pytest.raises(ValueError):
         model.AuxSpace(bad)
     with pytest.raises(ValueError):
@@ -61,7 +62,7 @@ def test_operator_signature_contract_refuses_malformed_output_and_dropped_input(
     module = model.Module("contracts")
     state = module.state_space("U", ("rho",))
     fields = module.field_space("fields", ("phi",))
-    parameter = module.param("alpha", 1.0)
+    parameter_like = module.aux_field("parameter_like")
 
     with pytest.raises(TypeError, match="output must be Rate"):
         module.operator(
@@ -69,7 +70,8 @@ def test_operator_signature_contract_refuses_malformed_output_and_dropped_input(
             kind="local_rate", expr="bad")
     with pytest.raises(TypeError, match="StateSpace.*FieldSpace"):
         module.operator(
-            "dropped_parameter", signature=model.Signature((state, parameter), model.Rate(state)),
+            "dropped_parameter",
+            signature=model.Signature((state, parameter_like), model.Rate(state)),
             kind="local_source", expr="bad")
 
     # Registry repeats validation because Operator is an internal mutable
@@ -118,11 +120,11 @@ def test_all_descriptor_redeclarations_are_rejected_even_when_identical():
     with pytest.raises(ValueError, match="already declared"):
         module.field_space("fields", ("grad_phi",))
 
-    module.param("alpha", 1.0)
+    module.param(ConstParam("alpha", 1.0))
     with pytest.raises(ValueError, match="already declared"):
-        module.param("alpha", 1.0)
+        module.param(ConstParam("alpha", 1.0))
     with pytest.raises(ValueError, match="already declared"):
-        module.param("alpha", 2.0)
+        module.param(ConstParam("alpha", 2.0))
 
     module.aux_field("mask", "cell_scalar")
     with pytest.raises(ValueError, match="already declared"):
@@ -159,7 +161,7 @@ def test_module_family_registries_issue_and_authenticate_all_declaration_handles
     module = model.Module("all-handles")
     state = module.state_space("U", ("rho",))
     field = module.field_space("fields", ("phi",))
-    parameter = module.param("alpha", 1.0)
+    parameter = module.param(ConstParam("alpha", 1.0))
     aux = module.aux_field("mask")
 
     handles = (
@@ -251,7 +253,7 @@ def test_manifest_is_structured_deeply_frozen_json_and_copy_out():
 
     manifest = module.manifest()
     entry = manifest.operators.describe("fields_from_state")
-    assert manifest.schema_version == 4
+    assert manifest.schema_version == 5
     assert entry.to_dict()["signature"] == model.Signature((state,), fields).to_data()
     assert json.loads(manifest.to_json()) == manifest.to_dict()
 

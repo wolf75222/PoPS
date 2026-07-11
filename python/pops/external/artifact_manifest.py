@@ -1,24 +1,7 @@
-"""pops.external.artifact_manifest -- the rich manifest of a compiled artifact (Spec 5 sec.13.12).
+"""Rich, inert self-description of a compiled artifact (Spec 5 sec.13.12).
 
-Spec 5 sec.13.12 (acceptance criterion #36, epic ADC-479) widens the compiled-artifact manifest
-from the thin brick-id / category list :class:`pops.external.manifests.CompiledManifest` carries
-into the FULL self-description a runtime needs to bind a ``.so`` safely: its ABI identity, the
-model name, the blocks / variables / roles, the required aux, the const / runtime params, the
-ghost depth, the field outputs, and the ``supports_*`` capability flags (uniform / AMR / MPI /
-GPU / stride / partial-IMEX mask / named fields) plus the native entrypoints.
-
-This module reads that metadata from a :class:`pops.codegen.loader.CompiledProblem` (its
-``arguments()`` bind table, its carried physical model, its ``abi_key``). It is INERT: it
-binds nothing, dlopens nothing, runs no kernel. Where a field is GENUINELY available from
-today's metadata it is populated; where the C++ codegen does NOT yet emit a capability flag the
-field is honestly ``None`` (UNKNOWN), never a fabricated ``True`` / ``False`` -- the
-:meth:`CompiledArtifactManifest.needs_cpp_followup` list reports exactly which flags need a C++
-codegen follow-up to become real.
-
-The :func:`build_compiled_manifest` builder reads the passed ``compiled`` object's public
-surface only (no module-scope ``pops.codegen`` import), so the ``external`` layer stays at the
-bottom of the import graph (cf. tests/python/architecture/test_import_graph.py). It pulls in no numpy /
-``_pops`` at module scope.
+Metadata comes from the compiled handle's public surface. Missing native facts remain ``None``
+(unknown), and imports stay lazy so this module remains at the bottom of the import graph.
 """
 
 # Capability flags Spec 5 sec.13.12 enumerates. The first four are GENUINELY derivable from the
@@ -37,43 +20,18 @@ ARTIFACT_MANIFEST_SCHEMA_VERSION = 1
 
 
 class CompiledArtifactManifest:
-    """The rich, self-describing manifest of a compiled artifact (Spec 5 sec.13.12, #36).
+    """Self-describing value needed to bind a compiled artifact safely.
 
-    A plain, inert value carrying what a runtime needs to bind the ``.so`` safely. The fields:
-
-      - ``abi_version`` / ``abi_key`` / ``required_headers_sig``: the ABI identity. ``abi_key`` is
-        the ``<headers>|<cxx>|<std>`` cache key; ``required_headers_sig`` is its header token;
-        ``abi_version`` is the discrete numeric ABI revision, ``None`` until the C++ emits one.
-      - ``model_name``: the compiled program / model name.
-      - ``blocks``: the physics blocks the artifact commits (bind ``instances=``).
-      - ``variables`` / ``roles``: the conservative state component names + their physical roles
-        (``roles`` is ``None`` when the carried model does not record them).
-      - ``aux_required``: the static aux inputs the model declares.
-      - ``params_const`` / ``params_runtime``: the const (frozen at compile) and runtime (settable
-        at bind) parameter names.
-      - ``ghost_depth``: the halo depth the artifact assumes (a single conservative scalar).
-      - ``ghost_depth_by_block``: the halo depth keyed by block name (ADC-536); the bind stream
-        validates each block's initial-state ghosts against it. ``{}`` for a degraded handle that
-        exposes no bind table.
-      - ``field_outputs``: the elliptic / diagnostic field outputs the Program records.
-      - ``supports_uniform`` / ``supports_amr`` / ``supports_mpi`` / ``supports_gpu``: the layout /
-        backend capability flags, read from the model's backend capability dict (``None`` when the
-        carried model records no caps).
-      - ``supports_stride`` / ``supports_partial_imex_mask`` / ``supports_named_fields``: capability
-        flags the C++ codegen does NOT yet emit -- honestly ``None`` (UNKNOWN), reported by
-        :meth:`needs_cpp_followup`.
-      - ``native_entrypoints``: the native symbols the artifact exports; ``[]`` until the C++ emits
-        them in the manifest.
-      - ``external_bricks``: the external compiled bricks bound into the artifact (ADC-544); each entry
-        is a per-brick manifest record. ``[]`` for an artifact with no external bricks.
-
-    A flag that is ``None`` is UNKNOWN, not ``False``: a validator must not hard-reject on it (cf.
-    :func:`check_layout_supported`). :meth:`to_dict` / :meth:`__str__` serialise / print it.
+    It records ABI identity, blocks, state roles, parameter classes, halo requirements, outputs,
+    external bricks and backend capabilities. A capability of ``None`` is unknown, not false;
+    validators must not reject it as unsupported. ``to_dict`` is the versioned wire form.
     """
 
     def __init__(self, *, model_name=None, abi_key=None, abi_version=None,
                  required_headers_sig=None, blocks=None, variables=None, roles=None,
-                 aux_required=None, params_const=None, params_runtime=None, ghost_depth=None,
+                 aux_required=None, params_const=None, params_runtime=None, params_derived=None,
+                 bind_schema=None, bind_schema_hash=None, bind_schema_artifact_hash=None,
+                 ghost_depth=None,
                  ghost_depth_by_block=None,
                  field_outputs=None, supports_uniform=None, supports_amr=None, supports_mpi=None,
                  supports_gpu=None, supports_stride=None, supports_partial_imex_mask=None,
@@ -91,6 +49,36 @@ class CompiledArtifactManifest:
         self.aux_required = list(aux_required or [])
         self.params_const = list(params_const or [])
         self.params_runtime = list(params_runtime or [])
+        self.params_derived = list(params_derived or [])
+        if bind_schema is None:
+            if bind_schema_hash is not None or bind_schema_artifact_hash is not None:
+                raise ValueError(
+                    "bind schema hashes cannot be present without a bind_schema payload"
+                )
+            self.bind_schema = None
+            self.bind_schema_hash = None
+            self.bind_schema_artifact_hash = None
+        else:
+            from pops.model.bind_schema import BindSchema
+
+            schema = BindSchema.from_dict(bind_schema)
+            if bind_schema_hash is not None and bind_schema_hash != schema.hash:
+                raise ValueError("bind_schema_hash does not match the BindSchema payload")
+            if (
+                bind_schema_artifact_hash is not None
+                and bind_schema_artifact_hash != schema.artifact_hash
+            ):
+                raise ValueError(
+                    "bind_schema_artifact_hash does not match the BindSchema artifact projection"
+                )
+            self.bind_schema = schema.to_dict()
+            self.bind_schema_hash = schema.hash
+            self.bind_schema_artifact_hash = schema.artifact_hash
+            # Qualified summaries are projections of the schema, never a competing declaration
+            # table supplied by the caller.
+            self.params_const = sorted(slot.qid for slot in schema.const_slots)
+            self.params_runtime = sorted(slot.qid for slot in schema.runtime_slots)
+            self.params_derived = sorted(slot.qid for slot in schema.derived_slots)
         self.ghost_depth = ghost_depth
         # Per-block halo depth (ADC-536 / CONTRACTS6 decision 4): the bind stream validates each
         # block's initial-state ghosts against this map. A plain {name: depth} dict, serializable
@@ -131,13 +119,7 @@ class CompiledArtifactManifest:
             flags=self.supports(), source="manifest")
 
     def needs_cpp_followup(self):
-        """The capability flags that are UNKNOWN today and need a C++ codegen follow-up to be real.
-
-        A flag is listed when its value is ``None`` -- either because the carried model recorded no
-        backend caps (the caps-sourced flags) or because the C++ codegen does not yet emit it
-        (``supports_stride`` / ``supports_partial_imex_mask`` / ``supports_named_fields``, and
-        ``native_entrypoints`` when empty). It is the HONEST record of what is not yet wired, so a
-        caller never mistakes a missing flag for a ``False``."""
+        """Return unknown capability flags plus absent native entrypoints."""
         pending = [name for name in _SUPPORTS_FLAGS if getattr(self, name) is None]
         if not self.native_entrypoints:
             pending.append("native_entrypoints")
@@ -154,7 +136,12 @@ class CompiledArtifactManifest:
                "roles": list(self.roles) if self.roles is not None else None,
                "aux_required": list(self.aux_required),
                "params_const": list(self.params_const),
-               "params_runtime": list(self.params_runtime), "ghost_depth": self.ghost_depth,
+               "params_runtime": list(self.params_runtime),
+               "params_derived": list(self.params_derived),
+               "bind_schema": self.bind_schema,
+               "bind_schema_hash": self.bind_schema_hash,
+               "bind_schema_artifact_hash": self.bind_schema_artifact_hash,
+               "ghost_depth": self.ghost_depth,
                "ghost_depth_by_block": dict(self.ghost_depth_by_block),
                "field_outputs": list(self.field_outputs),
                "dimension": self.dimension,
@@ -194,7 +181,8 @@ class CompiledArtifactManifest:
         # The constructor keyword arguments (every stored field, including the supports_* flags).
         ctor_keys = set(_SUPPORTS_FLAGS) | {
             "model_name", "abi_key", "abi_version", "required_headers_sig", "blocks", "variables",
-            "roles", "aux_required", "params_const", "params_runtime", "ghost_depth",
+            "roles", "aux_required", "params_const", "params_runtime", "params_derived",
+            "bind_schema", "bind_schema_hash", "bind_schema_artifact_hash", "ghost_depth",
             "ghost_depth_by_block", "field_outputs",
             "native_entrypoints", "external_bricks", "dimension", "amr_refinement_ratio", "precision",
             "real_bytes", "communicator"}
@@ -203,7 +191,13 @@ class CompiledArtifactManifest:
             raise ValueError("compiled-artifact manifest has unknown field(s) %s; the strict schema does "
                              "not accept them" % (unknown,))
         kwargs = {k: data[k] for k in data if k in ctor_keys}
-        return cls(**kwargs)
+        result = cls(**kwargs)
+        if result.to_dict() != data:
+            raise ValueError(
+                "compiled-artifact manifest is not canonical; parameter summaries and BindSchema "
+                "hashes must be derived from the embedded schema"
+            )
+        return result
 
     def __str__(self):
         def _flag(value):
@@ -220,8 +214,14 @@ class CompiledArtifactManifest:
                      % ("(unknown)" if self.roles is None else
                         (", ".join(self.roles) or "(none)")))
         lines.append("  aux_required : %s" % (", ".join(self.aux_required) or "(none)"))
-        lines.append("  params       : const=[%s] runtime=[%s]"
-                     % (", ".join(self.params_const), ", ".join(self.params_runtime)))
+        lines.append("  params       : const=[%s] runtime=[%s] derived=[%s]"
+                     % (", ".join(self.params_const), ", ".join(self.params_runtime),
+                        ", ".join(self.params_derived)))
+        if self.bind_schema is not None:
+            lines.append("  bind_schema  : hash=%s artifact_hash=%s slots=%d"
+                         % (_short(self.bind_schema_hash),
+                            _short(self.bind_schema_artifact_hash),
+                            len(self.bind_schema.get("slots", []))))
         by_block = ("; ".join("%s=%s" % (b, d) for b, d in sorted(self.ghost_depth_by_block.items()))
                     if self.ghost_depth_by_block else "(none)")
         lines.append("  ghost_depth  : %s (by block: %s)" % (self.ghost_depth, by_block))
@@ -296,21 +296,10 @@ def _caps_flags(model):
 
 
 def build_compiled_manifest(compiled):
-    """Build the rich :class:`CompiledArtifactManifest` of a compiled artifact (Spec 5 sec.13.12).
+    """Build a manifest from a compiled handle's inert public metadata.
 
-    Reads, all from the ``compiled`` object's public surface (no compile / bind / runtime read):
-
-      - the ABI identity from ``compiled.abi_key`` (and its header token);
-      - the model name from ``compiled.program_name`` (or the carried model's ``name``);
-      - the blocks / params / aux / ghost depth / field outputs from ``compiled.arguments()`` (the
-        bind table built by the codegen introspection -- the single source of those groups);
-      - the conservative variable names + roles from the carried physical model;
-      - the ``supports_*`` capability flags from the model's backend caps where genuinely known,
-        else honestly ``None`` (see :func:`_caps_flags` and :meth:`needs_cpp_followup`).
-
-    The ``arguments()`` call is the only behaviour and it is itself inert (it reads metadata). A
-    ``compiled`` handle that exposes no ``arguments`` (a degraded handle) yields a manifest with
-    the ABI / model fields populated and the bind groups empty rather than raising."""
+    A degraded handle without ``arguments()`` keeps its ABI/model facts and empty bind groups.
+    """
     model = getattr(compiled, "model", None)
     abi_key = getattr(compiled, "abi_key", None)
     model_name = (getattr(compiled, "program_name", None)
@@ -320,13 +309,14 @@ def build_compiled_manifest(compiled):
     if args is not None:
         blocks = sorted(args.instances)
         aux_required = sorted(args.aux)
-        params_const = sorted(n for n, s in args.params.items() if s.get("kind") != "runtime")
+        params_const = sorted(n for n, s in args.params.items() if s.get("kind") == "const")
         params_runtime = sorted(n for n, s in args.params.items() if s.get("kind") == "runtime")
+        params_derived = sorted(n for n, s in args.params.items() if s.get("kind") == "derived")
         field_outputs = sorted(set(args.solvers) | set(args.outputs))
         ghost_depth = args.layout_runtime.get("ghost_depth")
         ghost_depth_by_block = dict(args.layout_runtime.get("ghost_depth_by_block") or {})
     else:
-        blocks = aux_required = params_const = params_runtime = field_outputs = []
+        blocks = aux_required = params_const = params_runtime = params_derived = field_outputs = []
         ghost_depth = None
         ghost_depth_by_block = {}
 
@@ -338,6 +328,11 @@ def build_compiled_manifest(compiled):
     # compile_problem validated + captured on the handle). [] for an artifact with no external bricks.
     external_bricks = list(getattr(compiled, "external_bricks", []) or [])
 
+    bind_schema = getattr(compiled, "bind_schema", None)
+    bind_schema_data = bind_schema.to_dict() if bind_schema is not None else None
+    bind_schema_hash = bind_schema.hash if bind_schema is not None else None
+    bind_schema_artifact_hash = bind_schema.artifact_hash if bind_schema is not None else None
+
     caps_flags = _caps_flags(model)
     from pops.runtime_environment import compiled_runtime_facts
     runtime_facts = compiled_runtime_facts(supports_mpi=caps_flags.get("supports_mpi"))
@@ -346,7 +341,9 @@ def build_compiled_manifest(compiled):
         model_name=model_name, abi_key=abi_key, abi_version=None,
         required_headers_sig=_headers_sig(abi_key), blocks=blocks, variables=variables,
         roles=roles, aux_required=aux_required, params_const=params_const,
-        params_runtime=params_runtime, ghost_depth=ghost_depth,
+        params_runtime=params_runtime, params_derived=params_derived,
+        bind_schema=bind_schema_data, bind_schema_hash=bind_schema_hash,
+        bind_schema_artifact_hash=bind_schema_artifact_hash, ghost_depth=ghost_depth,
         ghost_depth_by_block=ghost_depth_by_block, field_outputs=field_outputs,
         supports_stride=None, supports_partial_imex_mask=None, supports_named_fields=None,
         native_entrypoints=[], external_bricks=external_bricks,
@@ -358,32 +355,16 @@ def build_compiled_manifest(compiled):
         **caps_flags)
 
 
-# The NativeManifest fields the .so's ``pops_compiled_manifest()`` emits AUTHORITATIVELY (Spec 5
-# sec.13.12, #36): each comes from the model traits at the .so's OWN compile time, so it supersedes
-# the honest-None / caps-derived value when a real artifact is on disk. ``n_aux`` / ``n_params`` /
-# ``n_vars`` are surfaced via the related manifest fields (variables length, params split, aux list)
-# but the booleans + ghost_depth + roles + entrypoints below are the ones the .so adjudicates.
+# Fields emitted authoritatively by the native artifact supersede Python-derived values.
 _NATIVE_BOOL_FIELDS = ("supports_stride", "supports_partial_imex_mask", "supports_named_fields",
                        "supports_custom_communicator")
 
-# Layout / platform flags the .so now emits from its OWN compile (Spec 5 sec.13.12, #36): the AOT
-# route is a single uniform grid on one rank (supports_uniform true, supports_amr / supports_mpi
-# false) and supports_gpu is the build's device-backend token. These are ARTIFACT-authoritative, so
-# a real .so's manifest SUPERSEDES the model-caps overlay (_caps_flags) -- what the artifact can bind
-# under, not what the model could in principle support.
+# Layout/platform facts also come from the artifact itself, not model potential.
 _NATIVE_LAYOUT_PLATFORM_FIELDS = ("supports_uniform", "supports_amr", "supports_mpi", "supports_gpu")
 
 
 def apply_native_manifest(manifest, native):
-    """Overlay a .so's authoritative ``pops_compiled_manifest()`` dict onto @p manifest (sec.13.12).
-
-    Replaces the honest-``None`` / Python-derived fields with the AUTHORITATIVE values the artifact
-    computed at its OWN compile time (the booleans ``supports_stride`` / ``supports_partial_imex_mask``
-    / ``supports_named_fields``, the ``abi_version``, ``ghost_depth``, ``roles`` and
-    ``native_entrypoints``). A field ABSENT from @p native is left untouched (an old / partial
-    manifest never erases a known value). @p native of ``None`` (an old .so without the symbol) is a
-    no-op: the manifest keeps its honest-None set -- graceful fallback, never fabricated. Mutates and
-    returns @p manifest."""
+    """Overlay authoritative native facts; absent fields leave carried metadata untouched."""
     if not native:
         return manifest
     if "abi_version" in native:

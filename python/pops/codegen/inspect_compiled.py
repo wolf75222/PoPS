@@ -210,12 +210,8 @@ def build_arguments(compiled: Any) -> Arguments:
         instances[block_name] = {"state": state_space, "components": n_cons, "required": True,
                                  "conservative": list(cons)}
 
-    param_args = {}
-    for name, param in params.items():
-        kind = getattr(param, "kind", "const")
-        ptype = getattr(param, "type", None) or type(getattr(param, "value", 0.0)).__name__
-        param_args[name] = {"type": str(ptype), "kind": str(kind),
-                            "required": kind == "runtime"}
+    from ._inspect_params import build_parameter_arguments
+    param_args = build_parameter_arguments(compiled, params)
 
     aux_args = {name: {"layout": "cell", "required": True} for name in aux_names}
 

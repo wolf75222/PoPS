@@ -272,10 +272,17 @@ def _compiled_options(compiled: Any) -> dict:
     defaults = numerical_defaults_report()
     model = getattr(compiled, "model", None)
     params = dict(getattr(model, "params", {}) or {})
-    const_params = sorted(
-        name for name, param in params.items() if getattr(param, "kind", "const") != "runtime")
-    runtime_params = sorted(
-        name for name, param in params.items() if getattr(param, "kind", "const") == "runtime")
+
+    def param_kind(param: Any) -> str:
+        kind = getattr(param, "kind", "const")
+        return getattr(kind, "value", kind)
+
+    const_params = sorted(name for name, param in params.items()
+                          if param_kind(param) == "const")
+    runtime_params = sorted(name for name, param in params.items()
+                            if param_kind(param) == "runtime")
+    derived_params = sorted(name for name, param in params.items()
+                            if param_kind(param) == "derived")
 
     default_gamma = defaults.get("physical", {}).get("gamma", PHYSICAL_DEFAULT_GAMMA)
     model_gamma = getattr(model, "gamma", None)
@@ -285,11 +292,14 @@ def _compiled_options(compiled: Any) -> dict:
     param_rows = []
     for name in sorted(params):
         param = params[name]
-        kind = getattr(param, "kind", "const")
+        kind = param_kind(param)
+        value = (getattr(param, "value", None) if kind == "const" else
+                 getattr(param, "default", None) if getattr(param, "has_default", False)
+                 else None)
         param_rows.append({
             "name": name,
             "kind": kind,
-            "value": getattr(param, "value", None),
+            "value": value,
             "affects_cache_key": kind != "runtime",
         })
 
@@ -326,6 +336,7 @@ def _compiled_options(compiled: Any) -> dict:
             ],
             "const_params": const_params,
             "runtime_params": runtime_params,
+            "derived_params": derived_params,
             "runtime_params_affect_cache_key": False,
             # Route registry / report vocabulary components (ADC-599): the native catalog the
             # artifact was keyed against. A registry change (route added/removed/re-tokenized)

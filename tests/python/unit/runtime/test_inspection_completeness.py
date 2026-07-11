@@ -32,7 +32,7 @@ try:
     import pops  # noqa: F401
     from pops.codegen import BindReport, CompiledReport, RequirementsReport
     from pops.codegen.loader import CompiledModel, CompiledProblem
-    from pops.physics.model import Param
+    from pops.params import ConstParam, RuntimeParam
     from pops import time as adctime
     from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 except Exception as exc:  # noqa: BLE001 -- pops unavailable in this interpreter
@@ -40,14 +40,23 @@ except Exception as exc:  # noqa: BLE001 -- pops unavailable in this interpreter
     sys.exit(0)
 
 
-def _program(name="intro_demo"):
+def _program(name="intro_demo", *, n_vars=4):
     """A real in-memory Program: a state, an elliptic field solve, a Forward-Euler commit."""
+    from pops.model import Module
+    from pops.problem import Problem
+
+    components = ("rho", "mx", "my", "E")[:n_vars]
+    module = Module(name + "-state")
+    state = module.state_space("U", components)
+    problem = Problem(name=name + "-case")
+    block = problem.add_block("plasma", module)
     P = adctime.Program(name)
     dt = P.dt
-    U = P.state("plasma")
+    endpoint = P.state(block, module.state_handle(state))
+    U = endpoint.n
     f = P.solve_fields("phi", U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
+    P.commit(endpoint.next, P.linear_combine("U1", U + dt * R))
     return P
 
 
@@ -70,7 +79,7 @@ def _model(*, n_vars=4, n_aux=1, aux_names=("B_z",), params=None, caps=None,
 
 def _compiled(*, program=None, params=None, **model_kw):
     """A SYNTHETIC CompiledProblem: a real lowered Program + a real CompiledModel, no compile."""
-    P = program if program is not None else _program()
+    P = program if program is not None else _program(n_vars=model_kw.get("n_vars", 4))
     m = _model(params=params, **model_kw)
     return CompiledProblem("/tmp/pops-cache/problem.so", P, m, "SIG|c++|c++23", "c++", "c++23",
                            problem_hash="deadbeefcafe", cache_key="0badc0de")
@@ -88,8 +97,8 @@ def chk(cond, label):
 def test_inspect_aggregates_metadata():
     """inspect() returns a CompiledReport aggregating name / backend / blocks / fields / inputs."""
     print("== inspect() aggregates the compiled metadata ==")
-    params = {"cs2": Param("cs2", 1.0, kind="runtime"),
-              "gamma_const": Param("gamma_const", 1.4, kind="const")}
+    params = {"cs2": RuntimeParam("cs2", default=1.0),
+              "gamma_const": ConstParam("gamma_const", 1.4)}
     cp = _compiled(n_vars=4, n_aux=1, aux_names=("B_z",), params=params, has_wave_speeds=True)
     rep = cp.inspect()
     chk(isinstance(rep, CompiledReport), "inspect() returns a CompiledReport")
@@ -298,7 +307,7 @@ def test_dumps_raise_clear_error_without_program():
 def test_explain_bind_on_real_system():
     """System.explain_bind reports provided-vs-required for a REAL System (reuses ADC-463)."""
     print("== System.explain_bind (real System, no fake engine) ==")
-    params = {"cs2": Param("cs2", 1.0, kind="runtime")}
+    params = {"cs2": RuntimeParam("cs2", default=1.0)}
     cp = _compiled(n_vars=4, n_aux=1, aux_names=("B_z",), params=params)
     sim = System(n=16, L=1.0, periodic=True)  # a REAL engine (no fake adc)
     rep = sim.explain_bind(cp)

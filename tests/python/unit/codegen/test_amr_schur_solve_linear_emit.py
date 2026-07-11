@@ -6,6 +6,7 @@ same Program lowered for ``target='system'`` keeps emitting the verbatim ``pops:
 This pins the target-conditional seam (the System body -- and hence the uniform trajectory + IR hash --
 is byte-untouched; only the AMR body gains the hierarchy-aware solve).
 """
+from pops.params import ConstParam
 import pytest
 
 pops_time = pytest.importorskip("pops.time", exc_type=ImportError)
@@ -20,7 +21,7 @@ def _lorentz_model(name):
     from pops.physics.facade import Model
     m = Model(name)
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    cs2 = m.param("cs2", 0.5)
+    cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
     p = m.primitive("p", cs2 * rho)

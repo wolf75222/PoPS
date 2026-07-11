@@ -22,7 +22,7 @@ import pytest
 
 import pops  # noqa: F401 -- ensures the package import path is set up like the sibling suites
 from pops.physics.facade import Model
-from pops.physics import RuntimeParam
+from pops.params import RuntimeParam
 
 
 def _model_with_runtime_params(n):
@@ -36,7 +36,8 @@ def _model_with_runtime_params(n):
     # A source term that reads every runtime param, forcing each to get a stable index.
     acc = rho * 0.0
     for k in range(n):
-        acc = acc + m.param(RuntimeParam("p_%d" % k, float(k) + 1.0)) * rho
+        handle = m.param(RuntimeParam("p_%d" % k, default=float(k) + 1.0))
+        acc = acc + m.value(handle) * rho
     m.primitive_vars(rho=rho, u=u, v=v)
     m.conservative_from([rho, rho * u, rho * v])
     m.flux(x=[mx, mx * u, my * u], y=[my, mx * v, my * v])
@@ -110,15 +111,23 @@ def test_module_manifest_surfaces_runtime_param_utilization():
 
 
 def test_params_utilization_helper_computes_count_limit_status():
-    from pops.model.manifest import _params_utilization
+    from pops.model import Module
+    from pops.params import ConstParam
+
     limit = _limit()
-    # A params map with 2 runtime + 1 const -> count counts only kind='runtime'.
-    params = {"a": {"kind": "runtime"}, "b": {"kind": "runtime"}, "c": {"kind": "const"}}
-    util = _params_utilization(params)
+    module = Module("utilization")
+    module.parameters(
+        RuntimeParam("a", default=1.0),
+        RuntimeParam("b", default=2.0),
+        ConstParam("c", 3.0),
+    )
+    util = module.manifest().params_utilization
     assert util == {"count": 2, "limit": limit, "status": "ok"}
-    # Exactly at the limit -> status 'at_limit'.
-    at = {"p%d" % k: {"kind": "runtime"} for k in range(limit)}
-    assert _params_utilization(at)["status"] == "at_limit"
+    at_limit = Module("at-limit")
+    at_limit.parameters(*(
+        RuntimeParam("p%d" % k, default=float(k)) for k in range(limit)
+    ))
+    assert at_limit.manifest().params_utilization["status"] == "at_limit"
 
 
 def test_coupled_source_overflow_errors_are_exact():

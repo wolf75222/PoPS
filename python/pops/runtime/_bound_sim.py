@@ -28,10 +28,10 @@ _STEPPING = frozenset({
     "run", "step", "step_cfl", "step_adaptive", "solve_fields",
 })
 
-# Mutate runtime DATA (state / fields / params / clock) -- never the block composition.
+# Mutate runtime DATA (state / fields / clock) -- never parameter carriers or composition.
 _MUTATIONS = frozenset({
     "set_state", "set_primitive_state", "set_density", "set_potential", "set_magnetic_field",
-    "set_aux_field", "set_block_params", "set_program_params", "set_clock", "restart",
+    "set_aux_field", "set_clock", "restart",
 })
 
 # Read diagnostics / runtime data (inert reads; no structural change). Includes the ADC-592 runtime
@@ -62,6 +62,7 @@ _BLOCKED = frozenset({
     # they are presets routed through add_coupling, which stays blocked here.
     "set_poisson", "set_source_stage", "set_time_scheme",
     "install_program", "set_program_cadence", "set_refinement", "set_phi_refinement",
+    "set_block_params", "set_program_params",
     "set_disc_domain", "set_geometry_mode", "set_epsilon_field", "_install_compiled",
 })
 

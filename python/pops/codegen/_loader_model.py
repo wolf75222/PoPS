@@ -30,7 +30,8 @@ class CompiledModel:
                  prim_names: Any, n_vars: Any, gamma: Any, n_aux: Any, params: Any, caps: Any,
                  abi_key: Any, model_hash: Any, cxx: Any, std: Any, target: Any = "system",
                  hllc: Any = False, roe: Any = False, aux_extra_names: Any = None,
-                 wave_speeds: Any = False, elliptic_field_names: Any = None) -> None:
+                 wave_speeds: Any = False, elliptic_field_names: Any = None,
+                 bind_schema: Any = None) -> None:
         self.has_hllc = bool(hllc)   # HLLC capability emitted (enable_hllc): hllc available beyond 4-var Euler
         self.has_roe = bool(roe)     # ROE hook emitted (enable_roe roles OR m.roe_dissipation provided): roe available beyond 4-var Euler
         self.has_wave_speeds = bool(wave_speeds)  # wave_speeds emitted (explicit pair OR 'p'): hll available
@@ -60,6 +61,21 @@ class CompiledModel:
         self.model_hash = model_hash  # stable hash formulas+roles+n_aux+params
         self.cxx = cxx
         self.std = std
+        # Set directly only by advanced constructors. The public pops.compile route replaces this
+        # with the one BindSchema captured from the complete frozen Problem (all block instances).
+        self.bind_schema = bind_schema
+
+    def _seal(self) -> None:
+        """Freeze a public per-block artifact after orchestration attaches metadata."""
+        object.__setattr__(self, "_sealed", True)
+
+    def __setattr__(self, name: Any, value: Any) -> None:
+        if getattr(self, "_sealed", False):
+            raise AttributeError(
+                "CompiledModel is immutable after pops.compile: cannot set %r; "
+                "assemble a new Problem and recompile" % name
+            )
+        object.__setattr__(self, name, value)
 
     @property
     def capabilities(self) -> Any:
@@ -73,15 +89,27 @@ class CompiledModel:
 
     @property
     def runtime_param_names(self) -> list:
-        """Names of the model's RUNTIME parameters (kind='runtime'), SORTED: this is the ORDER of
-        the indices on the C++ side (RuntimeParams) AND the order expected by
-        System.set_block_params(name, values) (P7-b). Empty if the model has only const params."""
-        return sorted(k for k, p in self.params.items() if getattr(p, "kind", "const") == "runtime")
+        """Runtime-carrier local IDs in the exact emitted within-model slot order."""
+        captured = getattr(self, "_runtime_param_names", None)
+        if captured is not None:
+            return list(captured)
+        result = []
+        for name, declaration in self.params.items():
+            kind = getattr(getattr(declaration, "kind", None), "value", None)
+            phase = getattr(getattr(declaration, "phase", None), "value", None)
+            if kind == "runtime" or (kind == "derived" and phase == "bind"):
+                result.append(name)
+        return sorted(result)
 
     def runtime_param_values(self) -> list:
         """DECLARATION values of the runtime params, parallel to runtime_param_names (default as
         long as no set_block_params has been called)."""
-        return [self.params[k].value for k in self.runtime_param_names]
+        return [
+            self.params[name].default
+            if getattr(self.params[name], "has_default", False)
+            else None
+            for name in self.runtime_param_names
+        ]
 
     def check_runtime(self, n: Any = 16, state: Any = None, raise_on_error: Any = True,
                       rtol: Any = 1e-8, atol: Any = 1e-10) -> Any:

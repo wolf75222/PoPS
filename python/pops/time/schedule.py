@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any
 
+from pops.params.use_sites import ParamUse, resolve_param_use
 from pops.time.value_metadata import _freeze_attr
 
 
@@ -147,6 +148,7 @@ def always() -> Any:
 
 def every(n: Any) -> Any:
     """Due every ``n`` macro-steps (``n`` a positive int)."""
+    n = resolve_param_use(n, ParamUse.SCHEDULE, where="every(n=)")
     if isinstance(n, bool) or not (isinstance(n, int) and n > 0):
         raise ValueError("every(n): n must be a positive int, got %r" % (n,))
     return Schedule("every", n=n)
@@ -169,6 +171,9 @@ def on_end() -> Any:
 
 def subcycle(count: Any, dt: Any = None) -> Any:
     """Structured sub-cycling: ``count`` inner steps (of ``dt`` each, default ``macro_dt/count``)."""
+    count = resolve_param_use(count, ParamUse.SCHEDULE, where="subcycle(count=)")
+    if dt is not None:
+        dt = resolve_param_use(dt, ParamUse.SCHEDULE, where="subcycle(dt=)")
     if isinstance(count, bool) or not (isinstance(count, int) and count > 0):
         raise ValueError("subcycle(count): count must be a positive int, got %r" % (count,))
     return Schedule("subcycle", count=count, dt=dt)

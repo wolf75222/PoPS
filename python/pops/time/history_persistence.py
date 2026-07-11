@@ -31,6 +31,7 @@ Griewank-Walsh adjoint Revolve (which optimises a different objective); the name
 because the policy is budget-bounded storage, but the schedule is documented as equispaced.
 """
 from pops.descriptors import Descriptor
+from pops.params.use_sites import ParamUse, resolve_param_use
 
 #: The category every history-persistence descriptor declares. Distinct from the
 #: ``"checkpoint_policy"`` category of :class:`pops.output.CheckpointPolicy` (a different axis),
@@ -61,10 +62,13 @@ class HistoryPersistence(Descriptor):
     def recomputed_slots(self, depth):
         """The slots NOT stored (reconstructed by replay), sorted ascending. Derived generically
         from :meth:`stored_slots` so a subclass never re-derives it."""
-        stored = set(self.stored_slots(int(depth)))
-        return tuple(s for s in range(int(depth)) if s not in stored)
+        depth = self._check_depth(depth)
+        stored = set(self.stored_slots(depth))
+        return tuple(s for s in range(depth) if s not in stored)
 
     def _check_depth(self, depth):
+        depth = resolve_param_use(
+            depth, ParamUse.SHAPE, where="%s(depth=)" % self.name)
         if isinstance(depth, bool) or not isinstance(depth, int) or depth < 1:
             raise ValueError(
                 "%s: ring depth must be a Python int >= 1 (got %r)" % (self.name, depth))
@@ -145,6 +149,7 @@ class Interval(HistoryPersistence):
     kind = "interval"
 
     def __init__(self, k):
+        k = resolve_param_use(k, ParamUse.SCHEDULE, where="Interval(k=)")
         if isinstance(k, bool) or not isinstance(k, int) or k < 1:
             raise ValueError("Interval(k): k must be a Python int >= 1 (got %r)" % (k,))
         self.k = int(k)
@@ -192,6 +197,8 @@ class Revolve(HistoryPersistence):
     kind = "revolve"
 
     def __init__(self, snapshots):
+        snapshots = resolve_param_use(
+            snapshots, ParamUse.SHAPE, where="Revolve(snapshots=)")
         if isinstance(snapshots, bool) or not isinstance(snapshots, int) or snapshots < 2:
             raise ValueError(
                 "Revolve(snapshots): snapshots must be a Python int >= 2 (got %r); a single stored "
@@ -276,7 +283,7 @@ def _optimal_placement(depth, snapshots):
     while len(anchors) < snapshots:
         widest_lo = anchors[0]
         widest_gap = -1
-        for lo, hi in zip(anchors, anchors[1:]):
+        for lo, hi in zip(anchors, anchors[1:], strict=False):
             gap = hi - lo
             if gap > widest_gap:
                 widest_gap = gap

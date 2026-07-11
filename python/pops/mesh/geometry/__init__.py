@@ -23,6 +23,21 @@ from typing import Any
 from .._descriptor import Availability, MeshDescriptor
 from ..masks import lower_disc_mode
 from ...descriptors_report import CapabilitySet, RequirementSet
+from pops.params.use_sites import ParamUse, resolve_param_use
+
+
+def _geometry_scalar(value: Any, *, where: str) -> float:
+    """Resolve a structural geometry coordinate before numeric coercion."""
+    return float(resolve_param_use(value, ParamUse.MESH_EXTENT, where=where))
+
+
+def _geometry_coordinates(values: Any, *, where: str) -> tuple[float, ...]:
+    """Resolve every coordinate independently so no parameter can hide in a tuple."""
+    values = resolve_param_use(values, ParamUse.MESH_EXTENT, where=where)
+    return tuple(
+        _geometry_scalar(value, where="%s[%d]" % (where, index))
+        for index, value in enumerate(values)
+    )
 
 
 class _Boundary(MeshDescriptor):
@@ -80,8 +95,8 @@ class Disc(_Geometry):
     """
 
     def __init__(self, center: Any = (0.0, 0.0), radius: Any = 0.5) -> None:
-        self.center = tuple(float(c) for c in center)
-        self.radius = float(radius)
+        self.center = _geometry_coordinates(center, where="Disc(center=)")
+        self.radius = _geometry_scalar(radius, where="Disc(radius=)")
         if self.radius <= 0.0:
             raise ValueError("Disc: radius must be > 0 (got %r)" % (self.radius,))
 
@@ -97,8 +112,8 @@ class HalfPlane(_Geometry):
     """A half-plane wall: a point on the plane + an outward normal."""
 
     def __init__(self, point: Any = (0.0, 0.0), normal: Any = (1.0, 0.0)) -> None:
-        self.point = tuple(float(c) for c in point)
-        self.normal = tuple(float(c) for c in normal)
+        self.point = _geometry_coordinates(point, where="HalfPlane(point=)")
+        self.normal = _geometry_coordinates(normal, where="HalfPlane(normal=)")
 
     def options(self) -> dict:
         return {"point": self.point, "normal": self.normal}
@@ -132,8 +147,8 @@ class DiscDomain(MeshDescriptor):
     category = "disc_domain"
 
     def __init__(self, center: Any = (0.0, 0.0), radius: Any = 0.5, mode: Any = None) -> None:
-        self.center = tuple(float(c) for c in center)
-        self.radius = float(radius)
+        self.center = _geometry_coordinates(center, where="DiscDomain(center=)")
+        self.radius = _geometry_scalar(radius, where="DiscDomain(radius=)")
         if self.radius <= 0.0:
             raise ValueError("DiscDomain: radius must be > 0 (got %r)" % (self.radius,))
         # Default mode = the inert NoMask (full Cartesian transport; only the mask is materialised).

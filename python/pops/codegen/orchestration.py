@@ -136,6 +136,11 @@ def compile(problem: Any, layout: Any = None, backend: Any = None, time: Any = N
             "pops.compile computes and freezes its own ProblemSnapshot; problem_snapshot= is only "
             "accepted by the advanced pops.codegen.compile_problem driver")
     problem_snapshot = _prepare_problem_snapshot(problem, eff_time)
+    # One immutable, owner-qualified bind contract is captured from the same frozen Problem the
+    # driver compiles.  It is attached to every returned handle before the public artifact is sealed;
+    # neither arguments() nor manifest() has to re-read live model dictionaries afterwards.
+    from pops.model.bind_schema import BindSchema
+    bind_schema = BindSchema.from_problem(problem)
 
     if is_amr:
         # AMR route (single AND multi block): each block lowers to a target='amr_system' production
@@ -148,7 +153,7 @@ def compile(problem: Any, layout: Any = None, backend: Any = None, time: Any = N
         from pops.codegen._orchestration_amr import _compile_amr
         return _compile_amr(
             problem, layout, backend, target, eff_time,
-            problem_snapshot=problem_snapshot, **kwargs)
+            problem_snapshot=problem_snapshot, bind_schema=bind_schema, **kwargs)
 
     time = eff_time
 
@@ -184,6 +189,7 @@ def compile(problem: Any, layout: Any = None, backend: Any = None, time: Any = N
     # settings) and flows the typed refinement. A handle NOT produced here carries no layout and
     # binds on the bare System() defaults.
     compiled._layout = layout
+    compiled.bind_schema = bind_schema
     _attach_problem_snapshot(compiled, problem_snapshot)
     return compiled
 
@@ -239,7 +245,8 @@ def bind(compiled: Any, *, initial_state: Any = None, state: Any = None, params:
         compiled: A ``CompiledProblem`` from :func:`compile` (carries ``_problem`` / ``_target``).
         initial_state: dict {block_name: array} of per-block initial state (alias: @p state).
         state: Alias for @p initial_state (only one may be given).
-        params: dict {param_name: value} of runtime parameter overrides.
+        params: dict {ParamHandle: value} of runtime parameter overrides. Model parameters must be
+            block-qualified (``block[param]``); case-owned handles are already unambiguous.
         aux: dict {aux_name: array} of static aux inputs.
         solvers: dict {field: solver} overriding the per-field solvers from the problem.
         cadence: optional ``pops.CompiledTime`` macro-step cadence.
@@ -301,13 +308,24 @@ def bind(compiled: Any, *, initial_state: Any = None, state: Any = None, params:
     instances = _assemble_instances(problem, initial or {}, block_specs=block_specs,
                                     models=amr_models)
 
+    bind_schema = getattr(compiled, "bind_schema", None)
+    if bind_schema is None:
+        raise ValueError(
+            "pops.bind: public compiled artifact has no BindSchema; recompile it from the "
+            "Problem before binding"
+        )
+    # One validation/materialisation point: this authenticates qualified handles, checks dtype/domain,
+    # installs every explicit default and evaluates Bind-phase DerivedParam dependencies. Downstream
+    # adapters receive the complete canonical mapping and never invent a fallback.
+    resolved_params = bind_schema.resolve(params or {})
+
     # HARD REFUSAL GATES (ADC-537): reject a bad install with precise context BEFORE the native
     # artifact is loaded -- an initial state of the wrong shape/dtype/components/ghost depth, a
     # runtime param outside its typed domain, an aux a lowered operator requires but the state omits,
     # and an ABI/Kokkos/MPI/layout manifest mismatch. run_bind_gates raises ONE aggregated error on
     # any violation; there is no Python-runtime fallback when the native load fails.
     from pops.runtime._bind_validation import run_bind_gates
-    run_bind_gates(compiled, problem, layout, initial or {}, params or {}, aux or {})
+    run_bind_gates(compiled, problem, layout, initial or {}, resolved_params, aux or {})
 
     # Delegate to the internal runtime adapter (lazy import: runtime edge, kept in-function so the
     # codegen module-scope import graph stays clean). adapter_for selects Uniform vs AMR from the
@@ -316,7 +334,7 @@ def bind(compiled: Any, *, initial_state: Any = None, state: Any = None, params:
     from pops.runtime._bind_adapters import adapter_for
 
     adapter = adapter_for(target, layout, n_blocks=n_blocks)
-    return adapter.build(compiled, layout=layout, instances=instances, params=params or {},
+    return adapter.build(compiled, layout=layout, instances=instances, params=resolved_params,
                          aux=aux or {}, solvers=field_solvers, cadence=cadence, outputs=outputs,
                          diagnostics=diagnostics)
 

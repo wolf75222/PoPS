@@ -6,8 +6,8 @@ type + stable message substrings, NOT the full sentence, so a wording change fai
 The cells here:
 
   * IMEXRK / ARS(2,2,2) on AMR -- scoped to the Cartesian System; refused at ``AmrSystem.add_block``.
-  * native runtime params on AMR -- the native AMR ``.so`` loader has no per-block param seam;
-    refused at the program-install seam.
+  * ownerless runtime values on AMR -- the native carrier is fed only by a resolved, block-qualified
+    ``BindSchema`` mapping; a flat name is never broadcast or accepted as a fallback.
 
 Cells covered elsewhere are CITED, not duplicated: the multi-block condensed-Schur source-stage
 refusal is in ``test_amr_strang_condensed_schur.test_amr_condensed_schur_multiblock_is_refused``;
@@ -27,6 +27,9 @@ import pytest
 pops = pytest.importorskip("pops", exc_type=ImportError)
 
 from pops.runtime.system import AmrSystem  # noqa: E402  (ADC-545 advanced runtime seam)
+from pops.model import Module  # noqa: E402
+from pops.model.bind_schema import BindSchema  # noqa: E402
+from pops.params import RuntimeParam  # noqa: E402
 
 
 def _scalar_charge(q, B0=1.0):
@@ -49,17 +52,19 @@ def test_imexrk_ars222_on_amr_is_refused_with_precise_message():
         assert needle in msg, "IMEXRK-on-AMR refusal missing %r; got %r" % (needle, msg)
 
 
-def test_unknown_runtime_params_on_amr_are_refused_with_precise_message():
-    """AMR native install x runtime params: the blanket refusal is GONE (ADC-514 wired
-    set_block_params), so the remaining precise refusal is the routing one -- a param name
-    declared by NO instance's runtime parameters is rejected, never silently dropped.
-    Positive coverage of the live route: test_amr_native_params.py."""
+def test_ownerless_runtime_value_on_amr_is_never_a_fallback():
+    """The AMR native carrier requires the resolved qualified handle, never a flat name."""
+    module = Module("transport")
+    module.param(RuntimeParam("alpha", default=1.0))
+    problem = pops.Problem(name="amr-qualified-bind").block("gas", physics=module)
+    schema = BindSchema.from_problem(problem)
+
+    class _Carrier:
+        runtime_param_names = ("alpha",)
+
     sim = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-    with pytest.raises(ValueError) as excinfo:
-        sim._install_block_params({}, {"alpha": 1.0})
-    msg = str(excinfo.value)
-    for needle in ("declared by no instance", "kind='runtime'"):
-        assert needle in msg, "unknown runtime-params refusal missing %r; got %r" % (needle, msg)
+    with pytest.raises(ValueError, match="resolved BindSchema is missing install value"):
+        sim._install_block_params({"gas": _Carrier()}, schema, {"alpha": 1.0})
 
 
 if __name__ == "__main__":

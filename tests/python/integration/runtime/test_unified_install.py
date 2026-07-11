@@ -27,7 +27,7 @@ try:
     from pops.codegen.loader import CompiledModel
     from pops.ir.ops import sqrt
     from pops.physics.facade import Model
-    from pops.physics.model import Param, RuntimeParam
+    from pops.params import ConstParam, RuntimeParam
     from pops import time as adctime
     from pops.runtime.system import System  # ADC-545 advanced runtime seam
 except Exception as exc:  # noqa: BLE001
@@ -158,54 +158,52 @@ def test_install_aux_derived_rejected():
 
 
 def test_install_params_routing():
-    """install routes a flat params dict to set_block_params per instance (keyed by the RESOLVED
-    CompiledModel's runtime_param_names, NOT the raw Model), and rejects a param name declared by
-    no instance (no silent drop). Host-testable via _install_params (which takes resolved models)."""
-    sim = System(n=N, L=1.0, periodic=True)
-    # An instance whose RESOLVED model declares no runtime params: a stray param name must raise.
+    """BindSchema rejects ownerless parameter names before install routing."""
+    from pops.model import Module
+    from pops.model.bind_schema import BindSchema
+    from pops.problem import Problem
+
+    module = Module("qualified-routing")
+    module.param(RuntimeParam("nu", default=1.0))
+    problem = Problem(name="qualified-routing")
+    problem.add_block("plasma", module)
+    schema = BindSchema.from_problem(problem)
     try:
-        sim._install_params({"plasma": _fake_compiled(params={})}, {"nu": 1.0})
-        raise AssertionError("MISMATCH: an unknown param should raise")
-    except ValueError as exc:
-        assert "declared by no instance" in str(exc)
-        print("OK  install rejects a param declared by no instance")
-    # The POSITIVE branch (a DECLARED runtime param IS routed) is covered host-side by
-    # test_install_params_routes_declared_runtime_param below.
+        schema.resolve({"nu": 1.0})
+        raise AssertionError("MISMATCH: an ownerless param name should raise")
+    except TypeError as exc:
+        assert "ParamHandle" in str(exc)
+        print("OK  BindSchema rejects an ownerless parameter name")
 
 
 def test_install_params_routes_declared_runtime_param():
-    """install ROUTES a DECLARED runtime param to set_block_params in sorted-name order -- the
-    positive branch test_install_params_routing leaves to here. The fix reads the RESOLVED
-    CompiledModel's runtime_param_names; a raw Model has none, so routing it UNRESOLVED would drop
-    the param into 'unknown' (surfaced as 'declared by no instance') -- exactly the bug install's
-    resolve step (install step 2) prevents. Host-testable via the pure router
-    System._route_block_params (no compile, no engine call)."""
+    """A complete qualified mapping projects to the compiled model's native slot order."""
+    from pops.model import Module
+    from pops.model.bind_schema import BindSchema
+    from pops.problem import Problem
+    from pops.runtime._install_param_routing import route_block_params
+
+    declarations = {
+        "nu": RuntimeParam("nu", default=0.0),
+        "cs2": RuntimeParam("cs2", default=1.0),
+        "g": ConstParam("g", 9.8),
+    }
+    module = Module("qualified-routing")
+    handles = {name: module.param(declaration) for name, declaration in declarations.items()}
+    problem = Problem(name="qualified-routing")
+    block = problem.add_block("plasma", module)
+    schema = BindSchema.from_problem(problem)
+
     # A RESOLVED model declaring two runtime params + one const (const excluded; names SORTED).
-    resolved = _fake_compiled(params={
-        "nu": Param("nu", 0.0, kind="runtime"),
-        "cs2": Param("cs2", 1.0, kind="runtime"),
-        "g": Param("g", 9.8, kind="const")})
+    resolved = _fake_compiled(params=declarations)
     assert resolved.runtime_param_names == ["cs2", "nu"], \
         "runtime params SORTED, const excluded (got %r)" % resolved.runtime_param_names
-    # Positive: a declared param is routed (NOT 'unknown'); the vector handed to set_block_params is in
-    # sorted-name order, keeping the declaration default for the unspecified name.
-    per_block, unknown = System._route_block_params({"plasma": resolved}, {"nu": 2.5})
-    assert unknown == [], "a declared runtime param must NOT be 'unknown' (got %r)" % unknown
+    values = schema.resolve({block[handles["nu"]]: 2.5})
+    per_block = route_block_params({"plasma": resolved}, schema, values)
     assert per_block == {"plasma": [1.0, 2.5]}, \
         "set_block_params vector sorted by name: cs2 keeps default 1.0, nu set to 2.5 (got %r)" \
         % per_block
-    print("OK  install routes a declared runtime param to set_block_params in sorted-name order")
-
-    # Contrast (the bug): the SAME param via a RAW Model (no runtime_param_names accessor) is
-    # dropped into 'unknown' -- which install would surface as 'declared by no instance'. This is why
-    # install RESOLVES each model before routing (install step 2 -> _route_block_params).
-    raw = Model("adc466_raw_rt")
-    raw.param(RuntimeParam("cs2", 1.0))
-    raw.param(RuntimeParam("nu", 0.0))
-    _, unknown_raw = System._route_block_params({"plasma": raw}, {"nu": 2.5})
-    assert unknown_raw == ["nu"], \
-        "a RAW Model exposes no runtime_param_names -> the param is dropped (the bug)"
-    print("OK  routing a RAW Model drops the param (the bug install's resolve step prevents)")
+    print("OK  qualified values project to native slot order with defaults materialized")
 
 
 def _lorentz_model(name="adc466_model"):
@@ -228,11 +226,19 @@ def _lorentz_model(name="adc466_model"):
 
 
 def _lie_program(name="adc466_prog"):
+    from pops.model import Module
+    from pops.problem import Problem
+
+    module = Module(name + "-state")
+    state = module.state_space("U", ("rho", "mx", "my"))
+    problem = Problem(name=name + "-case")
+    block = problem.add_block("plasma", module)
     P = adctime.Program(name)
-    u = P.state("plasma")
+    endpoint = P.state(block, module.state_handle(state))
+    u = endpoint.n
     fields = P.solve_fields(u)
     r = P._rhs_legacy(state=u, fields=fields)
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", u + P.dt * r))
+    P.commit(endpoint.next, P.linear_combine("u1", u + P.dt * r))
     return P
 
 
@@ -284,13 +290,14 @@ def test_install_end_to_end_kokkos():
     print("OK  unified install wires instance + aux + solver and installs the program")
 
 
-def _iso_runtime_model(name="adc466_rt_model"):
+def _iso_runtime_model(name="adc466_rt_model", *, with_handle=False):
     """An isothermal fluid with a DECLARED RUNTIME param cs2 (sound speed^2), no required aux. install
     resolves a runtime-param Model via AOT (production/native FREEZES runtime params; cf.
     System._resolve_instance_model), so set_block_params can change cs2 at runtime."""
     m = Model(name)
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    cs2 = m.param(RuntimeParam("cs2", 0.5))
+    cs2_param = m.param(RuntimeParam("cs2", default=0.5))
+    cs2 = m.value(cs2_param)
     cs = sqrt(cs2)
     m.flux(x=[mx, mx * mx / rho + cs2 * rho, mx * my / rho],
            y=[my, mx * my / rho, my * my / rho + cs2 * rho])
@@ -300,7 +307,7 @@ def _iso_runtime_model(name="adc466_rt_model"):
     m.conservative_from([rho, mx, my])
     m.elliptic_rhs(rho)
     m.rate_operator("explicit_rhs", flux=True)
-    return m
+    return (m, cs2_param) if with_handle else m
 
 
 def test_install_routes_runtime_param_kokkos():
@@ -314,13 +321,21 @@ def test_install_routes_runtime_param_kokkos():
     if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
         print("skip test_install_routes_runtime_param_kokkos (_pops lacks install_program; rebuild _pops)")
         return
-    m = _iso_runtime_model()
+    m, cs2_param = _iso_runtime_model(with_handle=True)
     try:
         compiled = pops.codegen.compile_problem(model=m, time=_lie_program())  # compiled.model is the raw Model
     except RuntimeError as exc:
         print("skip test_install_routes_runtime_param_kokkos (no Kokkos to build the .so: %s)"
               % str(exc)[:120])
         return
+
+    from pops.model.bind_schema import BindSchema
+    from pops.problem import Problem
+
+    problem = Problem(name="adc466-runtime")
+    block = problem.add_block("plasma", m)
+    compiled.bind_schema = BindSchema.from_problem(problem)
+    resolved_cs2 = compiled.bind_schema.resolve({block[cs2_param]: 1.0})
 
     x = (np.arange(N) + 0.5) / N
     xx, yy = np.meshgrid(x, x, indexing="ij")
@@ -335,7 +350,7 @@ def test_install_routes_runtime_param_kokkos():
         instances={"plasma": {"state": "U", "initial": u0,
                               "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                               "time": pops.Explicit()}},
-        params={"cs2": 1.0},
+        params=resolved_cs2,
         solvers={"phi": pops.fields.catalog.GeometricMG()})
     assert "plasma" in sim.block_names(), "instance bound by name (no 'declared by no instance' raise)"
     print("OK  headline install(params=) routes a runtime param (raw Model auto-resolved via AOT)")
@@ -361,7 +376,7 @@ def test_install_routes_runtime_param_kokkos():
             instances={"plasma": {"state": "U", "initial": u0,
                                   "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                                   "time": pops.Explicit(method="euler")}},
-            params={"cs2": 1.0},
+            params=resolved_cs2,
             solvers={"phi": pops.fields.catalog.GeometricMG()})
         raise AssertionError("MISMATCH: a runtime-param (AOT) block should reject euler")
     except RuntimeError as exc:

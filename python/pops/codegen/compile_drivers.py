@@ -1,10 +1,6 @@
-"""pops.codegen.compile_drivers : the compiler-invocation + facade layer of the pipeline.
+"""Compiler invocation and facade layer extracted from :mod:`pops.codegen.compile`.
 
-Extracted verbatim from ``pops.codegen.compile`` (Spec-4 budget): compile_so / compile_aot /
-compile_native (one per backend), the compile_or_jit dispatcher, the compile_model facade,
-_module_to_model (Module -> dsl Model) and compile_problem (Program -> problem.so);
-``pops.codegen.compile`` re-imports every name so its public surface is unchanged. Does NOT
-import pops.physics at module scope (cycle); facade/aux helpers are imported lazily."""
+Physics and facade helpers stay lazy to preserve the import graph."""
 
 from __future__ import annotations
 
@@ -57,10 +53,6 @@ from pops.codegen.compile_link_flags import deterministic_program_link_flags
 # ``from pops.codegen.compile_drivers import _module_to_model`` (and pops.codegen.compile) is unchanged.
 from pops.codegen.module_lowering import _module_to_model  # noqa: F401
 
-
-# ---------------------------------------------------------------------------
-# Compiler runners
-# ---------------------------------------------------------------------------
 
 def compile_so(model: Any, so_path: Any, include: Any = None, name: Any = None, cxx: Any = None,
                std: Any = "c++20", hoist_reciprocals: Any = False) -> Any:
@@ -276,35 +268,21 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
                     backend: Any = "production", target: Any = "system", force: Any = False,
                     cxx: Any = None, include: Any = None, std: Any = None, debug: Any = False,
                     libraries: Any = None, problem_snapshot: Any = None) -> Any:
-    """Compile a ``pops.time.Program`` into a ``problem.so`` the runtime loads
-    via ``sim.install_program``.
+    """Compile a time Program into an ABI-compatible native ``problem.so``.
 
-    Lowers the Program IR to C++ (``Program.emit_cpp_program``) and compiles
-    it against the pops headers with the SAME Kokkos toolchain as the loaded
-    _pops module (``pops_loader_build_flags``), so the ``.so`` is ABI-compatible
-    and runs in-process. Returns a ``CompiledProblem`` (``.so_path`` + metadata).
-
-    The physical ``model`` is validated here (fail-loud) and carried on the
-    handle, but in this MVP it is added as a normal block
-    (``sim.add_equation``) while the Program drives the step via
-    ``ProgramContext`` (``ctx.rhs_into`` uses the block RHS); a single combined
-    model+program ``.so`` is a later phase. Constraints (spec): ``backend``
-    must be "production"; ``target`` is "system" (the .so exports
-    ``pops_install_program``) or "amr_system" (it ALSO exports
-    ``pops_install_program_amr``, the AMR install entry, epic ADC-511 / ADC-508).
-    Without an explicit ``so_path`` the ``.so`` is cached out-of-source keyed by [program source +
-    optional ProblemSnapshot + header signature + compiler + std]; ``force=True`` recompiles.
-    ``debug=True`` also
-    writes the generated ``.cpp`` next to the ``.so`` for inspection.
+    Only the production backend is supported; ``target`` selects system or AMR entrypoints. An
+    omitted path uses the content-addressed cache, ``force`` recompiles, and ``debug`` retains C++.
+    The returned ``CompiledProblem`` carries the validated physical model and compile metadata.
     """
     import hashlib
     import tempfile
     from pops.codegen.loader import CompiledProblem
     from pops.codegen.env import CodegenEnv
-    snapshot_hash = None
+    snapshot_artifact_hash = None
     if problem_snapshot is not None:
         from pops.problem._snapshot import validate_problem_snapshot
-        snapshot_hash = validate_problem_snapshot(problem_snapshot)
+        validate_problem_snapshot(problem_snapshot)
+        snapshot_artifact_hash = problem_snapshot.artifact_hash
     # ADDITIVE (Spec 5 sec.12.4, #47-48): resolve the codegen POPS_* environment ONCE. An explicit
     # argument wins over the env -- debug=True forces keep-generated regardless of POPS_KEEP_GENERATED,
     # and the resolver leaves the JIT-backdoor gate OFF unless POPS_JIT_BACKDOOR is itself set (loud
@@ -376,12 +354,16 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
     # the WHAT, the cache key combines it with the abi_key (the HOW) -- the same identity the
     # out-of-source .so cache file name carries. Computed unconditionally so the metadata is present
     # on BOTH the cache-hit and the fresh-compile path (and even when an explicit so_path is given).
-    # Registry, feature and precision identities join the key; the frozen ProblemSnapshot joins both
-    # the artifact hash (and therefore .so path) and the final cache-key preimage.
+    # Registry, feature and precision identities join the key. The frozen ProblemSnapshot's
+    # ARTIFACT projection joins both the artifact hash (and therefore .so path) and final cache-key
+    # preimage; its full hash was authenticated above and remains attached for reproducibility.
     feature_key = _native_feature_key()
     precision_key = _precision_cache_key()
     source_hash = hashlib.sha256(src.encode()).hexdigest()
-    snapshot_component = "problem_snapshot=%s" % snapshot_hash if snapshot_hash else None
+    snapshot_component = (
+        "problem_artifact=%s" % snapshot_artifact_hash
+        if snapshot_artifact_hash else None
+    )
     program_hash = (hashlib.sha256((source_hash + "|" + snapshot_component).encode()).hexdigest()
                     if snapshot_component else source_hash)
     cache_components = [program_hash, abi_key, "program-production", target,

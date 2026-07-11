@@ -29,7 +29,7 @@ pops = pytest.importorskip("pops", exc_type=ImportError)
 from pops.codegen.loader import CompiledModel  # noqa: E402
 from pops.mesh import CartesianMesh  # noqa: E402
 from pops.mesh.layouts import AMR, Uniform  # noqa: E402
-from pops.physics.model import Param  # noqa: E402
+from pops.params import ConstParam, RuntimeParam  # noqa: E402
 
 
 def _amr_handle(*, n_aux=2, mpi=True, runtime_param=True):
@@ -39,8 +39,8 @@ def _amr_handle(*, n_aux=2, mpi=True, runtime_param=True):
     ``_orchestration_amr._compile_amr`` attaches it."""
     params = {}
     if runtime_param:
-        params["alpha"] = Param("alpha", 1.0, kind="runtime")
-    params["gamma"] = Param("gamma", 1.4, kind="const")
+        params["alpha"] = RuntimeParam("alpha", default=1.0)
+    params["gamma"] = ConstParam("gamma", 1.4)
     aux = ["B_z", "phi_bg"][:n_aux]
     handle = CompiledModel(
         so_path="<stub-amr>", backend="production", adder="add_native_block",

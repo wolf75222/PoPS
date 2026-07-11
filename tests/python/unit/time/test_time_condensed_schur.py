@@ -54,6 +54,7 @@ The carry is GATED to theta != 1, so theta == 1 keeps the fresh-zero phi path by
 Self-skips (exit 0) without numpy / _pops / install_program / a compiler / a visible Kokkos -- never
 fakes the engine (project policy: no fake pops in tests).
 """
+from pops.params import ConstParam
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
@@ -92,7 +93,7 @@ def _lorentz_model(name):
     from pops.physics.facade import Model
     m = Model(name)
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    cs2 = m.param("cs2", 0.5)
+    cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
     u = m.primitive("u", mx / rho); v = m.primitive("v", my / rho); p = m.primitive("p", cs2 * rho)
     m.primitive_vars(rho=rho, u=u, v=v, p=p)
     m.conservative_from([rho, rho * u, rho * v])
@@ -112,7 +113,7 @@ def _lorentz_energy_model(name):
     from pops.physics.facade import Model
     m = Model(name)
     rho, mx, my, E = m.conservative_vars("rho", "mx", "my", "E")
-    cs2 = m.param("cs2", 0.5)
+    cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
     u = m.primitive("u", mx / rho); v = m.primitive("v", my / rho); p = m.primitive("p", cs2 * rho)
     m.primitive_vars(rho=rho, u=u, v=v, p=p, E=E)
     m.conservative_from([rho, rho * u, rho * v, E])
@@ -534,7 +535,7 @@ def _energy_model(name, sqrt, Model):
     from pops.lib.models import author_electrostatic_lorentz
     m = Model(name)
     rho, mx, my, E = m.conservative_vars("rho", "mx", "my", "E")
-    cs2 = m.param("cs2", 0.5)
+    cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
     p = m.primitive("p", cs2 * rho)
@@ -631,7 +632,7 @@ def _run_section_b(t):
         condensed-Schur block (Density / MomentumX / MomentumY roles + B_z)."""
         m = Model(name)
         rho, mx, my = m.conservative_vars("rho", "mx", "my")
-        cs2 = m.param("cs2", 0.5)
+        cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
         u = m.primitive("u", mx / rho)
         v = m.primitive("v", my / rho)
         p = m.primitive("p", cs2 * rho)

@@ -1,49 +1,33 @@
-"""The :class:`Module` front-end of the operator-first type system (Spec 2, S2-3).
+"""Operator-first :class:`Module`: typed spaces, parameters, and operators.
 
-A Module owns the RULES -- state/field spaces, parameters, aux declarations and a
-registry of typed operators a Program composes by signature. The Simulation owns
-the DATA. ``Module.to_dsl()`` lowers a pure Module to a
-:class:`pops.physics.facade.Model`.
-
-Imports only the standard library (plus the sibling operator-first types) so it
-can be exercised without the compiled ``_pops`` extension; the codegen engine is
-imported lazily inside :meth:`Module.to_dsl` to avoid an import cycle.
+The Module owns rules while the Simulation owns data. Codegen is imported lazily
+inside :meth:`Module.to_dsl`, keeping this authoring layer extension-free.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+from types import MappingProxyType
 from typing import Any
 from weakref import ref
 
+from ._module_freeze import ModuleFreezable
 from .hash_data import body_identity as _body_identity, canonical_hash_data as _canonical_hash_data
 from .operators import Operator, validate_operator_signature
-from .handles import Handle, OperatorHandle
+from .handles import Handle, OperatorHandle, ParamHandle
 from .ownership import OwnerKind, OwnerPath
+from .param_registry import ParamRegistry
 from .registry import DeclarationIndex, OperatorRegistry
 from .signatures import Signature
-from .spaces import (
-    AuxSpace,
-    FieldSpace,
-    ParameterSpace,
-    RateSpace,
-    StateSpace,
-)
+from .spaces import AuxSpace, FieldSpace, RateSpace, StateSpace
 
 
-class Module:
-    """A model as typed spaces + a registry of typed operators (Spec 2, operator-first).
+class Module(ModuleFreezable):
+    """Typed spaces plus the operator registry consumed by a generic Program.
 
-    A Module owns the RULES -- state/field spaces, parameters, aux declarations and the
-    typed operators a Program composes by signature. The Simulation owns the DATA
-    (grid, arrays, solvers, clock). :class:`pops.physics.facade.Model` is the PDE convenience facade
-    that populates a Module's registry (``source_term`` / ``linear_source`` /
-    ``elliptic_field`` / ``flux`` register typed operators); a Module can also be built
-    directly with ``state_space`` / ``field_space`` / ``parameters`` / ``aux_fields`` /
-    ``operator``. A generic Program bound to ``module.operator_registry()`` runs against
-    any Module that provides operators with the expected signatures.
+    The physics facade populates this registry; direct authoring through spaces,
+    explicit parameter declarations, auxiliary fields, and operators is equivalent.
     """
-
     def __init__(self, name: Any, *, owner: Any = None) -> None:
         if not isinstance(name, str) or not name:
             raise ValueError("Module name must be a non-empty string")
@@ -54,12 +38,11 @@ class Module:
             OwnerKind.MODEL_DEFINITION, name=self.name, where="Module owner")
         self._state_spaces = {}
         self._field_spaces = {}
-        self._params = {}
         self._aux = {}
         self._state_handles = {}
         self._field_handles = {}
-        self._param_handles = {}
         self._aux_handles = {}
+        self._param_registry = ParamRegistry(owner=self.owner_path, mutation_guard=self._guard_mutable)
         self._registry = OperatorRegistry(owner=self.owner_path)
         # Wave speeds for the Riemann solver of a compilable Module: {"x": [Expr], "y": [Expr]}
         # eigenvalues, or None (set via eigenvalues()). Carried so a pure Module is self-contained;
@@ -82,7 +65,6 @@ class Module:
     def owner_path(self) -> OwnerPath:
         """Immutable declaration owner anchoring all handles and registries."""
         return self._owner_path
-
     # --- spaces ---
     def state_space(self, name: Any = "U", components: Any = (), roles: Any = None, layout: str = "cell",
                     storage: str = "multifab") -> Any:
@@ -98,15 +80,31 @@ class Module:
             self._field_spaces, self._field_handles, space, "FieldSpace", "field")
 
     # --- parameters / aux ---
-    def param(self, name: Any, default: Any = 0.0, dtype: str = "real") -> Any:
-        """Declare and return one :class:`ParameterSpace`."""
-        p = ParameterSpace(name, default, dtype)
-        return self._declare_descriptor(
-            self._params, self._param_handles, p, "parameter", "parameter")
+    def param(self, declaration: Any) -> ParamHandle:
+        """Register one canonical parameter declaration and return its typed handle.
 
-    def parameters(self, **defaults: Any) -> Any:
-        """Declare several parameters by keyword; return ``{name: ParameterSpace}``."""
-        return {k: self.param(k, v) for k, v in defaults.items()}
+        The kind is carried by ``RuntimeParam`` / ``ConstParam`` / ``DerivedParam``.  A
+        ``(name, value)`` shorthand is deliberately not accepted because it would silently choose
+        compile-time storage for a value whose intended lifetime is unknown.
+        """
+        self._guard_mutable("declare a parameter")
+        return self._param_registry.register(declaration)
+
+    def parameters(self, *declarations: Any) -> tuple[ParamHandle, ...]:
+        """Register several explicit typed declarations in order."""
+        return tuple(self.param(declaration) for declaration in declarations)
+
+    def value(self, parameter: Any) -> Any:
+        """Build the symbolic value read of one registered parameter.
+
+        This explicit conversion keeps :class:`ParamHandle` identity separate
+        from :class:`pops.ir.Expr` algebra: handles retain Boolean equality and
+        dictionary-key semantics, while the returned node carries the declared
+        compile/bind storage behavior.
+        """
+        from pops.ir import parameter_value
+
+        return parameter_value(self._param_registry, parameter)
 
     def aux_field(self, name: Any, kind: str = "cell_scalar") -> Any:
         """Declare and return one :class:`AuxSpace`."""
@@ -142,6 +140,7 @@ class Module:
         validate_operator_signature(kind, signature, operator_name=name)
 
         def _register(body: Any) -> Any:
+            self._guard_mutable("register an operator")
             op = Operator(name, kind, signature, capabilities=capabilities,
                           requirements=requirements, lowering=lowering, source="module",
                           body=body)
@@ -165,6 +164,7 @@ class Module:
         this Module. Names remain only in the private lowering payload; public semantic references
         are never looked up from strings.
         """
+        self._guard_mutable("register a rate operator")
         state_ref = self.state_handle(state_space)
         u = self._state_spaces[state_ref.local_id]
         if not isinstance(flux, bool):
@@ -255,10 +255,17 @@ class Module:
         return self._descriptor_handle(
             field, self._field_spaces, self._field_handles, "FieldSpace")
 
-    def param_handle(self, parameter: Any) -> Handle:
+    def param_handle(self, parameter: Any) -> ParamHandle:
         """Return the registry-issued handle of a declared parameter."""
-        return self._descriptor_handle(
-            parameter, self._params, self._param_handles, "parameter")
+        return self._param_registry.handle(parameter)
+
+    def param_declaration(self, parameter: Any) -> Any:
+        """Return the immutable declaration authenticated by ``parameter``."""
+        return self._param_registry.declaration(parameter)
+
+    def param_registry(self) -> ParamRegistry:
+        """The unique parameter authority owned by this Module."""
+        return self._param_registry
 
     def aux_handle(self, aux: Any) -> Handle:
         """Return the registry-issued handle of a declared auxiliary field."""
@@ -269,7 +276,7 @@ class Module:
         handles = [
             *self._state_handles.values(),
             *self._field_handles.values(),
-            *self._param_handles.values(),
+            *self._param_registry.handles(),
             *self._aux_handles.values(),
             *self._registry.declaration_index().records(),
         ]
@@ -302,7 +309,8 @@ class Module:
         return dict(self._field_spaces)
 
     def params(self) -> Any:
-        return dict(self._params)
+        declarations = self._param_registry.declarations()
+        return MappingProxyType(declarations) if getattr(self, "frozen", False) else declarations
 
     def aux(self) -> Any:
         return dict(self._aux)
@@ -370,6 +378,7 @@ class Module:
         """
         op = self._registry.get(name)
         if caps:
+            self._guard_mutable("change operator capabilities")
             op.capabilities.update(caps)
         return dict(op.capabilities)
 
@@ -390,7 +399,10 @@ class Module:
             "field_spaces": [
                 self._field_spaces[name].to_data() for name in sorted(self._field_spaces)
             ],
-            "parameters": [self._params[name].to_data() for name in sorted(self._params)],
+            "parameters": [
+                declaration.artifact_data()
+                for _, declaration in sorted(self._param_registry.items())
+            ],
             "aux": [self._aux[name].to_data() for name in sorted(self._aux)],
             "eigenvalues": None if self._eigenvalues is None else {
                 direction: [_canonical_hash_data(value) for value in self._eigenvalues[direction]]
@@ -423,6 +435,7 @@ class Module:
         kind: str,
     ) -> Any:
         """Install one descriptor exactly once under its semantic name."""
+        self._guard_mutable("declare %s" % label)
         existing = registry.get(descriptor.name)
         if existing is None:
             registry[descriptor.name] = descriptor

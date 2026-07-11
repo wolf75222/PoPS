@@ -199,9 +199,26 @@ def model_hash(model: Any, params: Any = None) -> str:
         parts.append("aux_extra=%s" % ",".join(m.aux_extra_names))
     parts.append("gamma=%s" % ("None" if m.gamma is None else _scalar_token(m.gamma)))
     params = params or {}
-    parts.append("params=%s" % ";".join("%s=%s:%s" % (
-        k, _scalar_token(params[k].value), params[k].kind)
-                                         for k in sorted(params)))
+    param_rows = []
+    for key in sorted(params):
+        declaration = params[key]
+        artifact_data = getattr(declaration, "artifact_data", None)
+        if not callable(artifact_data):
+            raise TypeError(
+                "model parameters must be canonical RuntimeParam/ConstParam/DerivedParam "
+                "declarations; %r has no artifact_data()" % type(declaration).__name__
+            )
+        row = artifact_data()
+        if row.get("name") != key:
+            raise ValueError(
+                "parameter registry key %r does not match declaration name %r"
+                % (key, row.get("name"))
+            )
+        param_rows.append(row)
+    parts.append(
+        "params=%s"
+        % json.dumps(param_rows, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    )
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()
 
 

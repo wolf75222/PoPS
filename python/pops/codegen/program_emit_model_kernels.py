@@ -27,7 +27,7 @@ def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, blo
     """Lower ``source`` (a named ``m.source_term``): outA(i,j,c) = S_c(U, prims, aux, params) per cell.
 
     @p block_idx (ADC-510): the PROGRAM block index whose RuntimeParams the kernel reads when a source
-    expression references a runtime parameter (dsl.Param(..., kind="runtime")). The model's runtime
+    expression references a canonical RuntimeParam read. The model's runtime
     indices are assigned here (idempotent, sorted-name order matching the .so metadata + the per-block
     ``ctx.program_params`` store), so a RuntimeParamRef lowers to ``params.get(<index>)`` and _kernel_open
     binds the ``params`` struct; a source reading no runtime param is byte-identical (params_block None)."""

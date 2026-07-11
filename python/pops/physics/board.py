@@ -35,7 +35,6 @@ from ._board_multispecies import _MultiSpeciesMixin
 from ._board_rate import _RateAuthoringMixin
 from ._board_riemann import _RiemannAuthoringMixin
 from ._freeze import PhysicsFreezable
-from .model import Param, _NO_KIND
 
 
 class Model(PhysicsFreezable, _RateAuthoringMixin, _RiemannAuthoringMixin,
@@ -164,18 +163,13 @@ class Model(PhysicsFreezable, _RateAuthoringMixin, _RiemannAuthoringMixin,
         """Define a named derived scalar (e.g. pressure, sound speed)."""
         return self._dsl.primitive(require_name(name, "scalar name"), expr)
 
-    def param(self, name: Any, value: Any = None, *, kind: Any = _NO_KIND) -> Any:
-        """Declare a named scalar parameter; returns a usable expression.
+    def param(self, declaration: Any) -> Any:
+        """Register a typed parameter declaration and return its ParamHandle."""
+        return self._dsl.param(declaration)
 
-        The kind is a TYPED param object (Spec 5 sec.7), not a ``kind=`` string:
-        ``param(pops.physics.RuntimeParam("cs2", 1.0))`` / ``param(ConstParam("g", 9.8))`` /
-        ``param("g", 9.8)`` (const shorthand). A bare ``kind=`` keyword is REJECTED.
-        """
-        if isinstance(name, Param):
-            require_name(name.name, "parameter name")
-        else:
-            name = require_name(name, "parameter name")
-        return self._dsl.param(name, value, kind=kind)
+    def value(self, parameter: Any) -> Any:
+        """Return the symbolic Expr read of a registered ParamHandle."""
+        return self._dsl.value(parameter)
 
     def aux(self, name: Any) -> Any:
         """Declare an auxiliary field read by the model (e.g. an imposed ``B_z``)."""
@@ -463,7 +457,7 @@ class Model(PhysicsFreezable, _RateAuthoringMixin, _RiemannAuthoringMixin,
             raise TypeError("a gradient is a vector; use grad(field).x / .y")
         if isinstance(node, _bm.Laplacian):
             raise TypeError("a laplacian only appears as a field-solve operator")
-        return node  # already a dsl Expr / Var / Param / number
+        return node  # already a dsl Expr / Var / number
 
     @staticmethod
     def _gradient_aux(field_name: Any, axis: Any) -> Any:

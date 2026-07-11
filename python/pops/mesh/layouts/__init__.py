@@ -15,6 +15,7 @@ from typing import Any
 from .._descriptor import Availability, MeshDescriptor
 from ..amr import IgnoreAMRCriteria, NATIVE_MAX_LEVELS, NATIVE_RATIOS
 from ...descriptors_report import RequirementSet, CapabilitySet
+from pops.params.use_sites import ParamUse, resolve_param_use
 from pops.runtime_environment import validate_amr_refinement_ratio
 
 
@@ -141,8 +142,10 @@ class AMR(MeshDescriptor):
                  patches: Any = None, refine: Any = None, nesting: Any = None,
                  checkpoint: Any = None, output: Any = None, clustering: Any = None) -> None:
         self.base = base
-        self.max_levels = int(max_levels)
-        self.ratio = int(ratio)
+        self.max_levels = int(resolve_param_use(
+            max_levels, ParamUse.AMR_HIERARCHY, where="AMR(max_levels=)"))
+        self.ratio = int(resolve_param_use(
+            ratio, ParamUse.AMR_HIERARCHY, where="AMR(ratio=)"))
         self.regrid = regrid
         self.patches = patches
         self.refine = refine

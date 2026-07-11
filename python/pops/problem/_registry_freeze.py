@@ -51,18 +51,19 @@ class FreezableRegistry:
         if self._frozen:
             return self
         members = tuple(self._freezable_members())
-        replacements = {
-            name: _immutable_copy(value)
-            for name, value in vars(self).items()
-            if name != "_frozen" and isinstance(
-                value, (Mapping, list, tuple, set, frozenset))
-        }
 
         def commit() -> None:
+            self._prepare_freeze()
             for member in members:
                 member_freeze = getattr(member, "freeze", None)
                 if callable(member_freeze):
                     member_freeze()
+            replacements = {
+                name: _immutable_copy(value)
+                for name, value in vars(self).items()
+                if name != "_frozen" and isinstance(
+                    value, (Mapping, list, tuple, set, frozenset))
+            }
             for name, value in replacements.items():
                 object.__setattr__(self, name, value)
             object.__setattr__(self, "_frozen", True)
@@ -72,6 +73,9 @@ class FreezableRegistry:
 
     def _freezable_members(self) -> Any:
         return ()
+
+    def _prepare_freeze(self) -> None:
+        """Materialize derived registry state inside the atomic freeze transaction."""
 
     def _guard_frozen(self, what: Any) -> None:
         if self._frozen:

@@ -24,6 +24,7 @@ from __future__ import annotations
 from typing import Any
 
 from pops.descriptors import Availability, Descriptor
+from pops.params.use_sites import ParamUse, resolve_param_use
 
 # The canonical backend string each typed descriptor lowers to (the token the compile drivers'
 # ``_BACKENDS`` table -- ``compile_emit`` -- already keys on). Kept here as the single mapping so
@@ -168,6 +169,7 @@ def lower_backend(backend: Any) -> Any:
         always has for an unknown/None backend (transparent coercion -- it never introduces a new
         rejection of its own).
     """
+    backend = resolve_param_use(backend, ParamUse.BACKEND, where="compile(backend=)")
     if isinstance(backend, _Backend):
         return backend.lower()
     # str / None / anything else: pass through untouched. The downstream _BACKENDS validation in

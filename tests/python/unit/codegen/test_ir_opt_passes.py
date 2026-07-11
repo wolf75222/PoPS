@@ -23,6 +23,7 @@ checks run on real emitted C++ without a model. Runs as a script (``python3 test
 the CI invocation) AND under pytest; the script form drives the same checks and exits non-zero on the
 first failure.
 """
+from pops.params import ConstParam
 import sys
 
 import pytest
@@ -150,7 +151,7 @@ def _lorentz_model(name):
     from pops.physics.facade import Model
     m = Model(name)
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    cs2 = m.param("cs2", 0.5)
+    cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
     p = m.primitive("p", cs2 * rho)

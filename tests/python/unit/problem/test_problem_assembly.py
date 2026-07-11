@@ -12,6 +12,7 @@ import sys
 import pytest
 
 pops = pytest.importorskip("pops")
+from pops.params import ConstParam
 
 from pops.model import Module  # noqa: E402
 
@@ -37,19 +38,21 @@ def test_problem_has_no_constructor_layout():
     assert prob.options()["layout"] is None
 
 
-def test_chaining_setters_return_the_problem():
+def test_chaining_setters_return_the_problem_while_param_returns_a_handle():
     model = _model("ne")
     program = type("Prog", (), {"name": "euler"})()
     prob = (pops.Problem(name="plasma")
             .block("ne", physics=model)
-            .param(pops.physics.ConstParam("alpha", 1.0))
             .aux("B_z")
             .program(program))
+    alpha = prob.param(ConstParam("alpha", 1.0))
     assert prob is prob.block.__self__
+    assert alpha.param_kind == "const" and alpha.owner_path == prob.owner_path
     info = prob.inspect().to_dict()  # ADC-564: Problem.inspect() is a typed report; to_dict() bridges
     assert info["name"] == "plasma"
     assert set(info["blocks"]) == {"ne"}
-    assert info["params"]["alpha"]["default"] == 1.0
+    assert info["params"]["alpha"]["kind"] == "const"
+    assert info["params"]["alpha"]["default"]["state"] == "value"
     assert "B_z" in info["aux"]
     assert info["time"] == "euler"
 
@@ -112,8 +115,8 @@ def test_bad_output_policy_reports_runtime_family():
 
 def test_to_dict_is_json_ready_and_array_free():
     import json
-    prob = (pops.Problem(name="plasma").block("ne", physics=_model())
-            .param(pops.physics.ConstParam("alpha", 1.0)))
+    prob = pops.Problem(name="plasma").block("ne", physics=_model())
+    prob.param(ConstParam("alpha", 1.0))
     data = prob.to_dict()
     # Round-trips through JSON (no runtime object, no numpy array).
     dumped = json.dumps(data)

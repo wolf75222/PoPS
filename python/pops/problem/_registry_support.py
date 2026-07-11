@@ -5,9 +5,6 @@ from typing import Any
 
 
 # Distinguishes no ``kind=`` from ``kind=None``. ParamRegistry rejects either explicit form.
-NO_KIND = object()
-
-
 def strict_name(value: Any, where: str) -> str:
     if not isinstance(value, str) or not value:
         raise TypeError("%s must be a non-empty string" % where)
@@ -70,4 +67,4 @@ def descriptor_declaration_key(value: Any) -> Any:
     )
 
 
-__all__ = ["NO_KIND", "descriptor_declaration_key", "identity_atom", "strict_name"]
+__all__ = ["descriptor_declaration_key", "identity_atom", "strict_name"]

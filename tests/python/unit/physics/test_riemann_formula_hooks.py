@@ -9,6 +9,7 @@ still raises the clear capability error.
 EMIT-LEVEL: these assert the EMITTED C++ string + the Python wiring. The brick ``.so`` compile and
 run need POPS_KOKKOS_ROOT (ROMEO) and are out of scope here.
 """
+from pops.params import ConstParam
 import re
 import types
 
@@ -28,7 +29,7 @@ def _euler(custom_pressure=None):
                 roles={"rho": "density", "mx": "momentum_x",
                        "my": "momentum_y", "E": "energy"})
     rho, mx, my, E = U
-    g = m.param("gamma", 1.4)
+    g = m.value(m.param(ConstParam("gamma", 1.4)))
     p = m.primitive("p", (g - 1.0) * (E - 0.5 * (mx * mx + my * my) / rho))
     d = m.dsl
     u, v = mx / rho, my / rho
@@ -108,7 +109,7 @@ def test_pressure_formula_referencing_a_missing_capability_raises():
                 roles={"rho": "density", "mx": "momentum_x",
                        "my": "momentum_y", "E": "energy"})
     rho, mx, my, E = U
-    g = m.param("gamma", 1.4)
+    g = m.value(m.param(ConstParam("gamma", 1.4)))
     p = m.primitive("p", (g - 1.0) * (E - 0.5 * (mx * mx + my * my) / rho))
     d = m.dsl
     u, v = mx / rho, my / rho

@@ -40,7 +40,7 @@ from pops.model import Handle, OwnerPath
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 from pops.physics.facade import Model as FacadeModel
-from pops.physics.model import Param
+from pops.params import ConstParam, RuntimeParam
 from pops.runtime.system import AmrSystem
 
 
@@ -102,7 +102,7 @@ def _amr_route_handle(*, n_aux=1, mpi=True):
         so_path="<stub-amr>", backend="production", adder="add_native_block",
         cons_names=["rho", "mx", "my"], cons_roles=["Density", "MomentumX", "MomentumY"],
         prim_names=["rho", "mx", "my"], n_vars=3, gamma=1.4, n_aux=n_aux,
-        params={"alpha": Param("alpha", 1.0, kind="runtime")},
+        params={"alpha": RuntimeParam("alpha", default=1.0)},
         caps={"cpu": True, "amr": True, "mpi": mpi}, abi_key="k", model_hash="h", cxx="c++",
         std="c++23", target="amr_system", aux_extra_names=["B_z"][:n_aux])
     rho = Handle("rho", kind="state", owner=OwnerPath.shared("spec6-matrix"))
@@ -253,7 +253,7 @@ def _schur_facade_model(name="spec6_clean_schur"):
     from pops.lib.models import author_electrostatic_lorentz
     m = FacadeModel(name)
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    cs2 = m.param("cs2", 0.5)
+    cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
     p = m.primitive("p", cs2 * rho)

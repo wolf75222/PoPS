@@ -44,11 +44,12 @@ from pops.mesh.amr import (  # noqa: E402
 )
 from pops.mesh.layouts import AMR  # noqa: E402
 from pops.model import Handle, Module, OwnerPath  # noqa: E402
+from pops.model.bind_schema import BindSchema  # noqa: E402
 from pops.numerics.reconstruction import WENO5, validate_ghost_depth  # noqa: E402
 from pops.numerics.reconstruction.limiters import Minmod  # noqa: E402
 from pops.numerics.riemann import HLL, HLLC, Roe, Rusanov  # noqa: E402
 from pops.numerics.variables import Primitive  # noqa: E402
-from pops.runtime._install_param_routing import route_program_params  # noqa: E402
+from pops.params import RuntimeParam  # noqa: E402
 from pops.solvers.elliptic import FFT, GeometricMG  # noqa: E402
 
 
@@ -359,11 +360,18 @@ def test_positive_matrix_keeps_supported_native_routes_available():
     assert native_routes["elliptic:geometric_mg"]["status"] == "available"
     assert native_routes["program_context:amr"]["status"] == "available"
 
-    # Runtime params without recompile: pure routing keeps defaults and rejects unknown names.
-    per_block, unknown = route_program_params({0: ["k"]}, {"k": 2.0}, {"k": 6.0})
-    assert per_block == {0: [6.0]} and unknown == []
-    per_block, unknown = route_program_params({0: ["k"]}, {"k": 2.0}, {})
-    assert per_block == {0: [2.0]} and unknown == []
+    # Runtime params without recompile: BindSchema keeps defaults, accepts a qualified override,
+    # and rejects an ownerless name instead of broadcasting it.
+    module = Module("adc597-runtime-param")
+    k = module.param(RuntimeParam("k", default=2.0))
+    problem = pops.Problem(name="adc597-runtime-bind")
+    gas = problem.add_block("gas", module)
+    schema = BindSchema.from_problem(problem)
+    canonical = problem.resolve(k, block=gas)
+    assert schema.resolve()[canonical] == 2.0
+    assert schema.resolve({gas[k]: 6.0})[canonical] == 6.0
+    with pytest.raises(TypeError, match="ParamHandle"):
+        schema.resolve({"k": 6.0})
 
     # Structured inspect reports.
     inspected = sim.inspect().to_dict()

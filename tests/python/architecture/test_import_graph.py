@@ -3,18 +3,18 @@
 The sub-packages form a directed acyclic dependency stack:
 
     ir        imports nothing else in pops
-    model     -> ir
-    physics   -> ir, model
-    time      -> ir, model
-    mesh      -> (nothing)                       (Spec 5: pure mesh/layout/AMR descriptors)
-    numerics  -> (nothing)                       (Spec 5: discretisation descriptors)
+    model     -> ir, params
+    physics   -> ir, model, params
+    time      -> ir, model, params
+    mesh      -> params                           (typed structural parameter use sites)
+    numerics  -> params                           (typed stencil/ghost parameter use sites)
     linalg    -> (nothing)                       (Spec 5: abstract algebra descriptors)
     solvers   -> (nothing)                       (Spec 5: linear/nonlinear/elliptic solvers)
     moments   -> ir                              (Spec 5: moment-model toolkit)
     diagnostics -> linalg                        (Spec 5: Norm takes a typed norm kind)
     params / output / external -> (nothing)      (Spec 5: inert descriptors)
     lib       -> ir, model, time, physics, moments, numerics
-    codegen   -> ir, model, physics, time, lib, solvers   (lowering + solver-gen DSL; no _pops)
+    codegen   -> ir, model, physics, time, lib, solvers, params
     runtime   -> everything, and is the ONLY layer allowed to import _pops
 
 This test builds the cross-layer edges from module-scope imports (``ast``,
@@ -34,14 +34,17 @@ POPS = REPO_ROOT / "python" / "pops"
 # Allowed downstream targets for each layer (what it MAY import within pops).
 ALLOWED = {
     "ir": set(),
-    "model": {"ir"},
-    "physics": {"ir", "model"},
-    "time": {"ir", "model"},
-    "mesh": set(),  # Spec 5: pure mesh/layout/AMR descriptors; import nothing else in pops.
+    # ADC-654: params is a dependency-free semantic sink.  Model owns ParamRegistry and the
+    # authoring consumers call the central ParamKind x ParamUse validator instead of growing local
+    # isinstance/int/float coercion branches.
+    "model": {"ir", "params"},
+    "physics": {"ir", "model", "params"},
+    "time": {"ir", "model", "params"},
+    "mesh": {"params"},
     # Spec 5 central packages: inert descriptor catalogs. numerics/diagnostics/params/output/
     # external/fields import only the flat pops.descriptors / pops.math modules (not tracked
     # layers); moments imports the symbolic pops.ir. None import the runtime.
-    "numerics": set(),
+    "numerics": {"params"},
     # Spec 5 sec.5.6: pops.linalg names the algebra (A x = b, operators, norms, reductions).
     # It imports only the flat pops.descriptors module (not a tracked layer) -> no edges.
     "linalg": set(),
@@ -72,8 +75,8 @@ ALLOWED = {
     "lib": {"ir", "model", "time", "physics", "moments", "numerics"},
     # codegen.solvers (the solver-gen DSL, criterion 19) imports pops.solvers at module scope to
     # attach the custom-solver registry hooks -> codegen -> solvers (solvers is a sink: acyclic).
-    "codegen": {"ir", "model", "physics", "time", "lib", "solvers"},
-    "runtime": {"ir", "model", "physics", "time", "lib", "mesh", "codegen"},
+    "codegen": {"ir", "model", "physics", "time", "lib", "solvers", "params"},
+    "runtime": {"ir", "model", "physics", "time", "lib", "mesh", "codegen", "params"},
 }
 LAYERS = set(ALLOWED)
 
@@ -169,3 +172,11 @@ def test_graph_is_acyclic():
         if color[layer] == WHITE and visit(layer):
             break
     assert not cycle_edge, "import cycle through edge(s): " + ", ".join(cycle_edge)
+
+
+def test_params_remains_a_dependency_sink():
+    """ADC-654 consumers may depend on params; params must never depend back on them."""
+    dependencies = sorted(dst for dst, _ in _build_edges().get("params", set()))
+    assert not dependencies, (
+        "pops.params is the central ParamKind x ParamUse sink and must have no layered "
+        "module-scope dependencies; got %s" % dependencies)

@@ -14,6 +14,7 @@ disponible hors Euler 4 variables.
 
 Invariants par assert ; imprime "OK test_dsl_roe" en cas de succes.
 """
+from pops.params import ConstParam
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import Roe
 import os
@@ -56,7 +57,7 @@ def euler4_dsl(name, roe=False):
     rho, rhou, rhov, E = m.conservative_vars(
         "rho", "rho_u", "rho_v", "E",
         roles=["Density", "MomentumX", "MomentumY", "Energy"])
-    g = m.param("gamma", GAMMA)
+    g = m.value(m.param(ConstParam("gamma", GAMMA)))
     u = rhou / rho
     v = rhov / rho
     p = (g - 1.0) * (E - 0.5 * rho * (u * u + v * v))

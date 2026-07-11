@@ -35,6 +35,7 @@ def _raises(exc_types, fn):
 
 # =================== Section A: pure Python (codegen + install seam) ===================
 try:
+    from pops.params import ConstParam
     from pops.ir.ops import sqrt
     from pops.physics.facade import Model
     from pops.runtime.amr_system import AmrSystem
@@ -48,7 +49,7 @@ _Q = -1.0  # charge sign (f = q * rho), like pops::ChargeDensity
 
 def _isothermal_block(m):
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    cs2 = m.param("cs2", 0.5)
+    cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
     p = m.primitive("p", cs2 * rho)

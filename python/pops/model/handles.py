@@ -157,22 +157,26 @@ class Handle:
         required = {"kind", "local_id", "owner_path", "qualified_id", "schema_version"}
         operator_keys = required | {"registered_operator_name"}
         block_keys = required | {"handle_type", "model_owner_path"}
+        parameter_keys = required | {"handle_type", "param_kind"}
         instance_keys = required | {"declaration_ref", "block_ref"}
         operator_instance_keys = operator_keys | {"declaration_ref", "block_ref"}
+        parameter_instance_keys = parameter_keys | {"declaration_ref", "block_ref"}
         allowed_shapes = (
             required,
             operator_keys,
             block_keys,
+            parameter_keys,
             instance_keys,
             operator_instance_keys,
+            parameter_instance_keys,
         )
         if set(data) not in allowed_shapes:
             raise TypeError(
                 "Handle canonical identity has an unsupported key set %s"
                 % sorted(data))
         owner = OwnerPath.from_data(data["owner_path"])
-        if "handle_type" in data:
-            if data["handle_type"] != "block" or data["kind"] != "block":
+        if data.get("handle_type") == "block":
+            if data["kind"] != "block":
                 raise ValueError(
                     "BlockHandle canonical identity requires handle_type='block' and kind='block'"
                 )
@@ -184,6 +188,17 @@ class Handle:
                 model_owner=OwnerPath.from_data(data["model_owner_path"]),
                 schema_version=data["schema_version"],
             )
+        elif data.get("handle_type") == "parameter":
+            if data["kind"] != "parameter":
+                raise ValueError(
+                    "ParamHandle canonical identity requires handle_type='parameter' and "
+                    "kind='parameter'"
+                )
+            result = ParamHandle(
+                data["local_id"], owner=owner, param_kind=data["param_kind"],
+                schema_version=data["schema_version"])
+        elif "handle_type" in data:
+            raise ValueError("unknown Handle handle_type %r" % data["handle_type"])
         elif "registered_operator_name" in data:
             result: Handle = OperatorHandle(
                 data["local_id"], kind=data["kind"], owner=owner,
@@ -264,6 +279,65 @@ class Handle:
     def __repr__(self) -> str:
         return "%s(local_id=%r, kind=%r, owner=%r)" % (
             type(self).__name__, self.local_id, self.kind, str(self.owner_path))
+
+
+class ParamHandle(Handle):
+    """Immutable identity of one canonical parameter declaration.
+
+    A ParamHandle deliberately exposes no arithmetic operators.  Symbolic parameter reads are
+    separate Expr nodes; the handle remains a stable dictionary key with Boolean equality.
+    """
+
+    __slots__ = ("param_kind",)
+    _PARAM_KINDS = frozenset({"runtime", "const", "derived"})
+
+    def __init__(
+        self,
+        name: Any,
+        *,
+        owner: Any,
+        param_kind: Any,
+        schema_version: int = 1,
+    ) -> None:
+        value = getattr(param_kind, "value", param_kind)
+        if value not in self._PARAM_KINDS:
+            raise ValueError(
+                "ParamHandle param_kind must be runtime, const or derived (got %r)" % value
+            )
+        super().__init__(
+            name, kind="parameter", owner=owner, schema_version=schema_version
+        )
+        object.__setattr__(self, "param_kind", value)
+
+    @property
+    def qualified_id(self) -> str:
+        return self._qualified_param_id(self.owner_path)
+
+    def _qualified_param_id(self, owner_path: OwnerPath) -> str:
+        return "%s::param-kind::%s" % (
+            self._qualified_id(owner_path), quote(self.param_kind, safe="")
+        )
+
+    def inspect(self) -> dict[str, Any]:
+        result = super().inspect()
+        result.update({
+            "handle_type": "parameter",
+            "param_kind": self.param_kind,
+            "qualified_id": self._qualified_param_id(self.owner_path.presentation()),
+        })
+        return result
+
+    def canonical_identity(self) -> dict[str, Any]:
+        result = super().canonical_identity()
+        result.update({
+            "handle_type": "parameter",
+            "param_kind": self.param_kind,
+            "qualified_id": self._qualified_param_id(self.owner_path),
+        })
+        return result
+
+    def _identity(self) -> tuple[Any, ...]:
+        return super()._identity() + (self.param_kind,)
 
 
 class OperatorHandle(Handle):
@@ -397,4 +471,4 @@ class OperatorHandle(Handle):
             self.name, self.kind, str(self.owner_path))
 
 
-__all__ = ["Handle", "OperatorHandle", "OwnerPath"]
+__all__ = ["Handle", "ParamHandle", "OperatorHandle", "OwnerPath"]

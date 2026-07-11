@@ -32,7 +32,6 @@ from ._coupled_abi import (
 )
 from ._coupled_compiled import CompiledCoupledSource
 from ._scalars import canonical_scalar_key, exact_physics_scalar
-from .model import Param  # CoupledSource.param wraps a const Param (acyclic: model never imports this)
 
 
 # --- Generic COUPLED inter-species source (P5 phase 1, EXPLICIT splitting) -----------------------
@@ -91,7 +90,7 @@ class CoupledSource:
         self.name = name
         self._fields = {}    # '<block>::<role>' -> _CsField (single input register per (block, role))
         self._reg_order = []  # order of appearance of the input fields (-> register order)
-        self._params = {}    # name -> Param
+        self._params = {}    # name -> exact Const expression
         self._terms = []     # [(block, role_canonical, Expr)]
         # Indices (in self._terms) of the terms EMITTED BY add_pair, by pair: [(idx_gain, idx_loss)].
         # add_pair guarantees that the two terms carry EXACTLY the same evaluated Expr, one +expr,
@@ -145,7 +144,7 @@ class CoupledSource:
     def param(self, name: Any, value: Any) -> Any:
         """NAMED constant parameter, usable like an Expr (inlines as a real in the bytecode)."""
         exact = exact_physics_scalar(value, where="CoupledSource.param(%r)" % name)
-        p = Param(name, exact, kind="const")
+        p = Const(exact)
         self._params[name] = p
         return p
 

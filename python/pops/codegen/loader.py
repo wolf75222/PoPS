@@ -44,7 +44,7 @@ class CompiledProblem:
                  compile_command: Any = None, generated_sources: Any = None,
                  codegen_env: Any = None, module_manifest: Any = None,
                  module_hash: Any = None, external_bricks: Any = None,
-                 problem_snapshot: Any = None) -> None:
+                 problem_snapshot: Any = None, bind_schema: Any = None) -> None:
         self.so_path = so_path
         from pops.time.program_space_resolution import resolve_program_spaces
         self.program = resolve_program_spaces(program, model)  # the exact Program that was lowered
@@ -101,6 +101,10 @@ class CompiledProblem:
         # is inspectable in inspect(); None for a handle built outside compile_problem (no env was
         # resolved -- a documented absence, not a fabricated default).
         self._codegen_env = codegen_env
+        # The immutable parameter contract. The low-level compile_problem driver may not have a
+        # whole Problem and therefore leaves it absent; pops.compile attaches the schema captured
+        # from its frozen Problem before sealing this handle.
+        self.bind_schema = bind_schema
 
     def _seal(self) -> None:
         """Make this handle immutable (ADC-563): ``pops.compile`` seals it after its last attach.
@@ -188,14 +192,6 @@ class CompiledProblem:
         compile; the model object is held by reference, so a later mutation would otherwise silently
         change what bind lowers). ``None`` for a model with no backing Module."""
         return self._module_hash
-
-    def runtime_param_routes(self) -> Any:
-        """``(per_block, defaults)`` routing the Program's RUNTIME parameters to the per-PROGRAM-block
-        ``set_program_params`` vectors (ADC-510): per_block maps a program block index to its param names
-        in within-block index order (matching the ``.so`` metadata + the lowered read), defaults a name to
-        its declaration value. Built via the SAME ``program_param_entries`` the codegen emits. No bind."""
-        from pops.codegen.program_emit_params import program_param_routes
-        return program_param_routes(self.program, self.model)
 
     # --- operator introspection (Spec 2, S2-5): metadata read from the carried model,
     # no need to load or run the .so.

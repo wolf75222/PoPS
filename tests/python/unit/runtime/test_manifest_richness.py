@@ -30,18 +30,26 @@ from pops.codegen.loader import CompiledModel, CompiledProblem  # noqa: E402
 from pops.external import (  # noqa: E402
     CompiledArtifactManifest, build_compiled_manifest, check_layout_supported)
 from pops.descriptors import Availability  # noqa: E402
-from pops.physics.model import Param  # noqa: E402
+from pops.params import ConstParam, RuntimeParam  # noqa: E402
 from pops import time as adctime  # noqa: E402
 
 
 def _program(name="manifest_demo"):
     """A real in-memory Program: a state, an elliptic field solve, a Forward-Euler commit."""
+    from pops.model import Module
+    from pops.problem import Problem
+
+    module = Module(name + "-state")
+    state = module.state_space("U", ("rho", "mx", "my"))
+    problem = Problem(name=name + "-case")
+    block = problem.add_block("plasma", module)
     P = adctime.Program(name)
     dt = P.dt
-    U = P.state("plasma")
+    endpoint = P.state(block, module.state_handle(state))
+    U = endpoint.n
     f = P.solve_fields("phi", U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
+    P.commit(endpoint.next, P.linear_combine("U1", U + dt * R))
     return P
 
 
@@ -66,8 +74,8 @@ def _compiled(*, params=None, caps=None, with_roles=True):
 
 
 def _default_params():
-    return {"cs2": Param("cs2", 1.0, kind="runtime"),
-            "gamma_const": Param("gamma_const", 1.4, kind="const")}
+    return {"cs2": RuntimeParam("cs2", default=1.0),
+            "gamma_const": ConstParam("gamma_const", 1.4)}
 
 
 # ---------------------------------------------------------------------------

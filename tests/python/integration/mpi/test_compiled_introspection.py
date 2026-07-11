@@ -31,21 +31,30 @@ try:
     from pops.codegen.loader import CompiledModel, CompiledProblem
     from pops.mesh.cartesian import CartesianMesh
     from pops.mesh.layouts import AMR, Uniform
-    from pops.physics.model import Param
+    from pops.params import ConstParam, RuntimeParam
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001 -- pops unavailable in this interpreter
     print("skip test_compiled_introspection (pops unavailable: %s)" % exc)
     sys.exit(0)
 
 
-def _program(name="intro_demo", *, krylov=False):
+def _program(name="intro_demo", *, krylov=False, n_vars=3):
     """A real in-memory Program: a state, an elliptic field solve, a Forward-Euler commit.
 
     With ``krylov=True`` it also records a matrix-free ``solve_linear`` (Krylov) node, so the IR
     carries the Krylov memory category."""
+    from pops.model import Module
+    from pops.problem import Problem
+
+    components = ("rho", "mx", "my", "E")[:n_vars]
+    module = Module(name + "-state")
+    state = module.state_space("U", components)
+    problem = Problem(name=name + "-case")
+    block = problem.add_block("plasma", module)
     P = adctime.Program(name)
     dt = P.dt
-    U = P.state("plasma")
+    endpoint = P.state(block, module.state_handle(state))
+    U = endpoint.n
     f = P.solve_fields("phi", U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     if krylov:
@@ -61,7 +70,7 @@ def _program(name="intro_demo", *, krylov=False):
         from pops.solvers.krylov import CG
         P.set_apply(A, _apply)
         P.solve_linear(operator=A, rhs=buf, method=CG(max_iter=10), max_iter=10)
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
+    P.commit(endpoint.next, P.linear_combine("U1", U + dt * R))
     return P
 
 
@@ -79,7 +88,7 @@ def _model(*, n_vars=3, n_aux=1, aux_names=("B_z",), params=None, caps=None):
 
 def _compiled(*, krylov=False, params=None, **model_kw):
     """A SYNTHETIC CompiledProblem: a real lowered Program + a real CompiledModel, no compile."""
-    P = _program(krylov=krylov)
+    P = _program(krylov=krylov, n_vars=model_kw.get("n_vars", 3))
     m = _model(params=params, **model_kw)
     return CompiledProblem("/tmp/pops-cache/problem.so", P, m, "SIG|c++|c++23", "c++", "c++23",
                            problem_hash="deadbeefcafe", cache_key="0badc0de")
@@ -97,8 +106,8 @@ def chk(cond, label):
 def test_arguments_lists_bind_inputs():
     """arguments() lists instances / params / aux / solvers from the carried Program + model."""
     print("== arguments() lists the bind inputs ==")
-    params = {"cs2": Param("cs2", 1.0, kind="runtime"),
-              "gamma_const": Param("gamma_const", 1.4, kind="const")}
+    params = {"cs2": RuntimeParam("cs2", default=1.0),
+              "gamma_const": ConstParam("gamma_const", 1.4)}
     cp = _compiled(n_vars=3, n_aux=1, aux_names=("B_z",), params=params)
     args = cp.arguments()
     chk(isinstance(args, Arguments), "arguments() returns an Arguments")

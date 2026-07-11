@@ -28,7 +28,7 @@ from pops.codegen.orchestration import (
 
 
 def _compile_amr(problem: Any, layout: Any, backend: Any, target: Any, time: Any = None, *,
-                 problem_snapshot: Any, **kwargs: Any) -> Any:
+                 problem_snapshot: Any, bind_schema: Any = None, **kwargs: Any) -> Any:
     """Compile each AMR block to a ``target='amr_system'`` ``CompiledModel``, plus an optional Program.
 
     Each block's resolved physics model is compiled to a production native loader
@@ -69,7 +69,8 @@ def _compile_amr(problem: Any, layout: Any, backend: Any, target: Any, time: Any
 
     if time is not None:
         return _compile_amr_program(
-            problem, layout, backend, target, time, block_compiled, problem_snapshot, kwargs)
+            problem, layout, backend, target, time, block_compiled, problem_snapshot,
+            kwargs, bind_schema=bind_schema)
 
     _, compiled = next(iter(block_compiled.items()))
     compiled._problem = problem
@@ -86,12 +87,16 @@ def _compile_amr(problem: Any, layout: Any, backend: Any, target: Any, time: Any
     # Carry the AMR layout so bind() can rebuild the AmrSystemConfig (n / L / periodic / regrid /
     # patch settings) and flow the typed refinement + field problem onto the AmrSystem.
     compiled._layout = layout
+    compiled.bind_schema = bind_schema
     _attach_problem_snapshot(compiled, problem_snapshot)
+    for child in block_compiled.values():
+        child._seal()
     return compiled
 
 
 def _compile_amr_program(problem: Any, layout: Any, backend: Any, target: Any, time: Any,
-                         block_compiled: Any, problem_snapshot: Any, kwargs: Any) -> Any:
+                         block_compiled: Any, problem_snapshot: Any, kwargs: Any,
+                         bind_schema: Any = None) -> Any:
     """Compile the whole-system time Program for the AMR target and attach the AMR snapshot (ADC-634).
 
     Compiles @p time with ``compile_problem(model=<first block engine model>, target='amr_system')`` --
@@ -128,7 +133,10 @@ def _compile_amr_program(problem: Any, layout: Any, backend: Any, target: Any, t
     # Carry the AMR layout so bind() rebuilds the AmrSystemConfig and flows the typed refinement, and
     # so the introspection (arguments / estimate_memory / inspect_amr) reports the AMR hierarchy.
     compiled._layout = layout
+    compiled.bind_schema = bind_schema
     _attach_problem_snapshot(compiled, problem_snapshot)
+    for child in block_compiled.values():
+        child._seal()
     return compiled
 
 

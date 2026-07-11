@@ -13,7 +13,7 @@ from pops.descriptors import Availability
 from pops.mesh.layouts import AMR, Uniform
 from pops.problem.amr_handle import ProblemAmrHandle
 from pops.problem.registries import (
-    _NO_KIND, BlockRegistry, ConstraintRegistry, FieldRegistry, ParamRegistry,
+    BlockRegistry, ConstraintRegistry, FieldRegistry, ParamRegistry,
     RuntimePolicyRegistry, TimeRegistry)
 from pops.problem._inspection import inspect_payload, serialization_payload
 from pops.problem.report import ProblemValidationReport
@@ -78,7 +78,7 @@ class Problem:
         self._block_registry = BlockRegistry(self.owner_path)
         self._field_registry = FieldRegistry(self.owner_path)
         self._time_registry = TimeRegistry()
-        self._param_registry = ParamRegistry()
+        self._param_registry = ParamRegistry(self.owner_path)
         self._runtime_registry = RuntimePolicyRegistry()
         self._constraint_registry = ConstraintRegistry()
 
@@ -184,17 +184,22 @@ class Problem:
         self._guard_mutable("add a field")
         return self._field_registry.add(field_problem)
 
-    def param(self, name: Any, default: Any = None, *, kind: Any = _NO_KIND) -> Any:
-        """Declare a runtime/const parameter and its default value. Chains.
+    def param(self, declaration: Any) -> Any:
+        """Register a case-owned typed parameter and return its ParamHandle.
 
-        The KIND is a TYPED param object (Spec 5 sec.7), not a ``kind=`` string:
-        ``problem.param(pops.physics.RuntimeParam("alpha", 1.0))`` /
-        ``problem.param(pops.physics.ConstParam("gamma", 1.4))`` / ``problem.param("alpha", 1.0)``.
-        A bare ``kind="const"/"runtime"`` keyword is REJECTED.
+        Case parameters serve runtime consumers outside one physics model, for
+        example AMR indicators or solver tolerances.  Only explicit canonical
+        declarations are accepted; the removed ``(name, value)`` shorthand
+        cannot silently turn a runtime value into a compile-time constant.
         """
         self._guard_mutable("declare a param")
-        self._param_registry.add(name, default, kind=kind)
-        return self
+        return self._param_registry.add(declaration)
+
+    def value(self, parameter: Any) -> Any:
+        """Return an owner-qualified symbolic read of a case parameter."""
+        from pops.ir import ValueExpr
+
+        return ValueExpr(self._param_registry.handle(parameter))
 
     def aux(self, name: Any, value: Any = None) -> Any:
         """Declare a static aux input ``name`` (e.g. a background field). Chains."""
@@ -242,11 +247,11 @@ class Problem:
 
     @property
     def _params(self) -> Any:
-        return dict(self._param_registry.items())
+        return self._param_registry.declarations()
 
     @property
     def _param_declarations(self) -> Any:
-        """The ``{name: typed declaration}`` map for the bind-time domain check (ADC-541)."""
+        """Canonical declarations retained for strict bind-schema construction."""
         return self._param_registry.declarations()
 
     @property
@@ -305,7 +310,7 @@ class Problem:
         Model-local references are first qualified to exactly one block.  A local reference used by
         multiple blocks is therefore rejected with all candidate owners instead of being guessed.
         """
-        from pops.model import Handle
+        from pops.model import Handle, ParamHandle
         from pops.problem.handles import BlockHandle, FieldHandle
 
         case_root_owned = (
@@ -325,6 +330,10 @@ class Problem:
             if block is not None:
                 raise TypeError("case-owned fields do not accept block=")
             return self._field_registry.canonicalize(declaration)
+        if isinstance(declaration, ParamHandle) and case_root_owned:
+            if block is not None:
+                raise TypeError("case-owned parameters do not accept block=")
+            return self._param_registry.canonicalize(declaration)
         return self._block_registry.canonicalize(declaration, block=block)
 
     # --- DescriptorProtocol surface (pure Python; no runtime, no codegen) ----

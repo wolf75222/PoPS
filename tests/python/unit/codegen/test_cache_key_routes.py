@@ -15,8 +15,8 @@ stepped. They pin, at the Python surface:
   2  the registry cache-key string is the readable ``"routes=vN:<hash16>;capvocab=M"`` form, the
      registry hash is a 64-hex sha256 digest, and the compact signature lists all 14 route
      families in registry order with the expected per-family counts.
-  3  a kind='runtime' param VALUE never enters ``model_hash`` (seeded at bind, not compile), while
-     a kind='const' param value does -- so a runtime ``set_block_params`` is never a recompile.
+  3  a ``RuntimeParam`` VALUE never enters ``model_hash`` (seeded at bind, not compile), while a
+     ``ConstParam`` value does -- so a runtime ``set_block_params`` is never a recompile.
   4  ``inspect()`` exposes the registry components via ``_route_registry_components()``, consistent
      with :mod:`pops.runtime.routes`.
   5  ``route_registry_signature()`` is a stable diagnostic equal to the family:count list derived
@@ -30,10 +30,10 @@ import sys
 import pytest
 
 pytest.importorskip("pops")
+from pops.params import ConstParam, RuntimeParam  # noqa: E402
 from pops.codegen.cache import _cache_so_path, _registry_cache_key  # noqa: E402
-from pops.codegen.compile_emit import model_hash  # noqa: E402
 from pops.codegen._inspect_compiled_report import _route_registry_components  # noqa: E402
-from pops.physics.model import HyperbolicModel, Param  # noqa: E402
+from pops.physics.facade import Model  # noqa: E402
 from pops.runtime import routes  # noqa: E402
 
 # The 14 route families in registry order with their acceptance-locked cardinalities (mirror of
@@ -103,30 +103,31 @@ def test_registry_signature_families_and_counts():
 
 # --- 3: a runtime param VALUE never recompiles; a const param value does -----------------------
 
-def _scalar_model(name, param):
+def _scalar_model(name, declaration):
     """A minimal scalar model whose x-flux reads @p param (rho advected at speed param)."""
-    m = HyperbolicModel(name)
+    m = Model(name)
     (rho,) = m.conservative_vars("rho")
-    m.set_flux(x=[param * rho], y=[rho])
-    m.set_eigenvalues(x=[rho], y=[rho])
+    param = m.value(m.param(declaration))
+    m.flux(x=[param * rho], y=[rho])
+    m.eigenvalues(x=[rho], y=[rho])
     return m
 
 
 def test_runtime_param_value_does_not_change_model_hash():
-    # A kind='runtime' param reads as rparam(<name>) in the formula (its VALUE is not in the repr),
+    # A RuntimeParam reads as rparam(<name>) in the formula (its VALUE is not in the repr),
     # and the compile_model cache path hashes model_hash(m) with NO params dict, so the runtime
     # value -- seeded at bind / set_block_params, not at compile -- never reaches the hash.
-    slow = _scalar_model("scal_rt", Param("nu", 0.25, kind="runtime"))
-    fast = _scalar_model("scal_rt", Param("nu", 4.0, kind="runtime"))
-    assert model_hash(slow) == model_hash(fast), "a runtime param value must not recompile"
+    slow = _scalar_model("scal_rt", RuntimeParam("nu", default=0.25))
+    fast = _scalar_model("scal_rt", RuntimeParam("nu", default=4.0))
+    assert slow._model_hash() == fast._model_hash(), "a runtime param value must not recompile"
 
 
 def test_const_param_value_changes_model_hash():
-    # A kind='const' param inlines as Const(value) in the formula repr, so its value IS part of the
+    # A ConstParam inlines as Const(value) in the formula repr, so its value IS part of the
     # artifact WHAT: changing it is a genuine recompile (a distinct cache key).
-    slow = _scalar_model("scal_ct", Param("c", 0.25, kind="const"))
-    fast = _scalar_model("scal_ct", Param("c", 4.0, kind="const"))
-    assert model_hash(slow) != model_hash(fast), "a const param value must recompile"
+    slow = _scalar_model("scal_ct", ConstParam("c", 0.25))
+    fast = _scalar_model("scal_ct", ConstParam("c", 4.0))
+    assert slow._model_hash() != fast._model_hash(), "a const param value must recompile"
 
 
 # --- 4: inspect() exposes the registry components, consistent with routes.py -------------------

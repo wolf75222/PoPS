@@ -2,7 +2,7 @@
 
 The runtime lifecycle is EXPLICIT: a composition is mutable while ``assembling`` (blocks, field
 problems, AMR layout, source stage, refinement, solver routes, aux layout), FROZEN once
-``pops.bind`` completes (``bound``), and only DATA / runtime-param / io / diagnostic operations
+``pops.bind`` completes (``bound``), and only state/field DATA, io and diagnostic operations
 stay allowed on the running simulation. This module is the ONE place Uniform and AMR share the
 freeze semantics, so both engines refuse the same structural setters with the same
 bind-vocabulary error (issue requirement: shared semantics).
@@ -35,10 +35,8 @@ else:
 # native passthrough (each exists on System and/or AmrSystem's C++ facade ``_s``). A bound engine
 # returns the freeze RuntimeError instead of the native callable for any of these, so
 # ``sim._engine.install_program(...)`` / ``sim._engine.set_refinement(...)`` cannot bypass the
-# freeze even when the native ``mark_bound`` is absent (old prebuilt ``.so``). The data-writing
-# setters (set_density / set_magnetic_field / set_aux_field_component / set_state / set_block_params
-# / set_program_params / set_clock / set_potential) are DELIBERATELY absent: they are allowed
-# runtime mutations.
+# freeze even when the native ``mark_bound`` is absent. Raw parameter-carrier setters are also
+# structural after bind: only BindSchema may populate them. State/field/clock data remain mutable.
 FROZEN_STRUCTURAL = frozenset({
     # blocks / field problems / aux LAYOUT
     "add_block", "add_equation", "add_dynamic_block", "add_compiled_block", "add_native_block",
@@ -54,6 +52,7 @@ FROZEN_STRUCTURAL = frozenset({
     "set_refinement", "set_phi_refinement", "set_conservative_state",
     # installed time Program
     "install_program", "install_program_step", "set_program_cadence", "add_dt_bound",
+    "set_block_params", "set_program_params",
 })
 
 
@@ -70,7 +69,7 @@ def freeze_error(what: Any) -> Any:
         "pops.bind: %r is frozen once pops.bind completes (runtime lifecycle 'bound'): the "
         "composition (blocks / field problems / AMR layout / source stage / refinement / solver "
         "routes / aux layout / installed Program) is declared on the pops.Problem and lowered with "
-        "pops.compile(...) + pops.bind(...); only runtime data / params / checkpoint / diagnostics "
+        "pops.compile(...) + pops.bind(...); only state/field data, checkpoint and diagnostics "
         "may change on a bound simulation." % (what,))
 
 

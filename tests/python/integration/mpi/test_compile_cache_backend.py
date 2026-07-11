@@ -25,6 +25,7 @@ On verifie :
 
 Lance avec python3, meme PYTHONPATH que les autres tests DSL.
 """
+from pops.params import ConstParam
 from pops.numerics.riemann import HLLC
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.variables import Primitive
@@ -64,7 +65,7 @@ def build_euler(name="euler_cacheb", gamma=1.6667):
     rho, rhou, rhov, E = m.conservative_vars(
         "rho", "rho_u", "rho_v", "E",
         roles=["Density", "MomentumX", "MomentumY", "Energy"])
-    g = m.param("gamma", gamma)
+    g = m.value(m.param(ConstParam("gamma", gamma)))
     u = rhou / rho
     v = rhov / rho
     p = (g - 1.0) * (E - 0.5 * rho * (u * u + v * v))

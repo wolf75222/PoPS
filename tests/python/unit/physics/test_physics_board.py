@@ -6,6 +6,7 @@ pure-Python: only pops.physics / pops.math / pops.model / pops.dsl are needed; n
 compiled time-program run, so they pass without a freshly built _pops beyond what
 ``import pops`` requires.
 """
+from pops.params import ConstParam
 import pytest
 
 from pops import model as _model
@@ -28,9 +29,9 @@ def _euler_poisson_lorentz():
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
 
-    cs2 = m.param("cs2", 1.0)
-    alpha = m.param("alpha", 1.0)
-    rho_ref = m.param("rho_ref", 1.0)
+    cs2 = m.value(m.param(ConstParam("cs2", 1.0)))
+    alpha = m.value(m.param(ConstParam("alpha", 1.0)))
+    rho_ref = m.value(m.param(ConstParam("rho_ref", 1.0)))
 
     p = m.scalar("p", cs2 * rho)
     c = m.scalar("c", sqrt(cs2))
@@ -143,7 +144,7 @@ def test_rate_and_operator_return_callables_usable_in_a_program():
     U = m.state("U", components=["rho", "mx", "my"])
     rho, mx, my = U
     u, v = m.primitive("u", mx / rho), m.primitive("v", my / rho)
-    cs2 = m.param("cs2", 1.0)
+    cs2 = m.value(m.param(ConstParam("cs2", 1.0)))
     p, c = m.scalar("p", cs2 * rho), m.scalar("c", sqrt(cs2))
     flux = m.flux("F", on=U, x=[mx, mx * u + p, mx * v], y=[my, my * u, my * v + p],
                   waves={"x": [u - c, u, u + c], "y": [v - c, v, v + c]})

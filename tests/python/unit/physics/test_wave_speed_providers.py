@@ -14,6 +14,7 @@ import pytest
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 pytest.importorskip("pops")
+from pops.params import ConstParam
 import pops  # noqa: E402
 from pops.codegen.loader import CompiledModel  # noqa: E402
 from pops.numerics.reconstruction import FirstOrder  # noqa: E402
@@ -29,7 +30,7 @@ from pops.runtime.routes import check_wave_speed_provider  # noqa: E402
 def _model_pair():
     m = Model("pair")
     q1, q2 = m.conservative_vars("q1", "q2")
-    a = m.param("a", 1.5)
+    a = m.value(m.param(ConstParam("a", 1.5)))
     m.flux(x=[a * q2, a * q1], y=[a * q2, a * q1])
     m.wave_speeds(x=(-1.0 * a, 1.0 * a), y=(-1.0 * a, 1.0 * a))
     return m

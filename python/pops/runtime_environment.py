@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops.params.use_sites import ParamUse, resolve_param_use
+
 # The declared native-core facts live in the dependency-free leaf pops._native_facts (so the
 # runtime-fenced layers can read them); this module re-exports them as the public spelling.
 from pops._native_facts import (  # noqa: F401  (re-export)
@@ -103,6 +105,7 @@ def compiled_runtime_facts(*, supports_mpi: Any = None) -> dict:
 
 def validate_dimension(value: Any, *, where: str = "runtime") -> int:
     """Reject any requested dimension other than the native 2D core."""
+    value = resolve_param_use(value, ParamUse.ABI, where="%s(dimension=)" % where)
     dim = int(value)
     if dim != NATIVE_DIMENSION:
         raise RuntimeCapabilityError(
@@ -114,6 +117,8 @@ def validate_dimension(value: Any, *, where: str = "runtime") -> int:
 
 def validate_amr_refinement_ratio(value: Any, *, where: str = "AMR") -> int:
     """Reject any requested AMR refinement ratio other than 2."""
+    value = resolve_param_use(
+        value, ParamUse.AMR_HIERARCHY, where="%s(refinement_ratio=)" % where)
     ratio = int(value)
     if ratio != NATIVE_AMR_REFINEMENT_RATIO:
         raise RuntimeCapabilityError(
@@ -126,6 +131,7 @@ def validate_amr_refinement_ratio(value: Any, *, where: str = "AMR") -> int:
 
 def validate_precision(value: Any, *, where: str = "runtime") -> str:
     """Reject precision policies that the hardcoded C++ ``Real=double`` core cannot honor."""
+    value = resolve_param_use(value, ParamUse.ABI, where="%s(precision=)" % where)
     precision = str(value).lower()
     aliases = {"double", "float64", "real64"}
     if precision not in aliases:
@@ -138,6 +144,7 @@ def validate_precision(value: Any, *, where: str = "runtime") -> str:
 
 def validate_communicator(value: Any, *, where: str = "runtime") -> str:
     """Reject custom communicator requests until the native MPI seam supports them."""
+    value = resolve_param_use(value, ParamUse.ABI, where="%s(communicator=)" % where)
     comm = str(value)
     if comm in ("serial", "none"):
         return "serial"

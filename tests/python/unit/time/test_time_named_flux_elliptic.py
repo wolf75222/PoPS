@@ -22,6 +22,7 @@ to ~1e-14 (the named fluxes sum to the same -div F).
 
 Skips cleanly (exit 0) without numpy / _pops / a compiler / a visible Kokkos -- never fakes the engine.
 """
+from pops.params import ConstParam
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
@@ -64,7 +65,7 @@ def raises(exc_types, fn):
 # --- shared isothermal 2D fluid block (rho, mx, my; Poisson aux) ---
 def _base_block(m):
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    cs2 = m.param("cs2", 0.5)
+    cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
     p = m.primitive("p", cs2 * rho)

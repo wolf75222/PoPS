@@ -24,6 +24,7 @@ On verifie :
 
 S'auto-saute (exit 0) sans compilateur pour (4)-(6).
 """
+from pops.params import ConstParam
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import HLL
 import os
@@ -61,8 +62,8 @@ def linear_toy(blocks=None, eig="numeric"):
     """Advections decouplees : flux x = [a q1, b q2], y = [b q1, a q2] -> Jx = diag(a, b)."""
     m = Model("jaclin")
     q1, q2 = m.conservative_vars("q1", "q2")
-    a = m.param("a", A)
-    b = m.param("b", B)
+    a = m.value(m.param(ConstParam("a", A)))
+    b = m.value(m.param(ConstParam("b", B)))
     m.flux(x=[a * q1, b * q2], y=[b * q1, a * q2])
     m.wave_speeds_from_jacobian(eig=eig, blocks=blocks)
     m.primitive_vars(q1, q2)

@@ -157,6 +157,10 @@ class _FacadeCompileMixin(_FacadeModel):
             # install seam routes a bind(solvers={field: ...}) selection for a DECLARED field and
             # rejects a typo against this set. Empty for the default-Poisson-only model.
             elliptic_field_names=list(m._elliptic_fields))
+        # Exact ABI order of only the RuntimeParamRef nodes actually read by emitted formulas.
+        # BindSchema routes qualified values into this local vector; declarations that are never
+        # read do not create native slots.
+        cm._runtime_param_names = [node.name for node in m.assign_runtime_indices()]
         # Trace of the 'auto' policy (ADC-63): None if the backend was explicit. Diagnostic,
         # never a silent choice -- cm.backend says what was built, this says WHY.
         cm.backend_auto_reason = auto_reason

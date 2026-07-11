@@ -54,6 +54,19 @@ class BlockRegistry(_FreezableRegistry):
             )
         )
 
+    def _prepare_freeze(self) -> None:
+        """Materialize every declaration instance before storage becomes immutable.
+
+        Qualification is deterministic derived state, but caching it after freeze would mutate a
+        mapping proxy.  Eagerly issuing the complete finite set here keeps ``qualify`` and schema
+        extraction read-only on a frozen Problem.  The enclosing freeze transaction rolls this
+        cache back if a later member fails to freeze.
+        """
+        for block in self._handles.values():
+            index = self._index_for(block)
+            for declaration in index.records():
+                self._qualify_new(declaration, block)
+
     def add(
         self,
         name: Any,

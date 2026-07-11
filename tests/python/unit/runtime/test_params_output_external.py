@@ -10,12 +10,14 @@ import pytest
 pops = pytest.importorskip("pops")
 
 from pops.math import Real, Integer, Bool  # noqa: E402
-from pops.params import (RuntimeParam, ConstParam, DerivedParam,  # noqa: E402
+from pops.params import (MISSING, RuntimeParam, ConstParam, DerivedParam,  # noqa: E402
+                         ParamInvalidation, ParamPhase, ParamStorage,
                          Positive, NonNegative, Range, In, Interval, OneOf, Constant)
 from pops.output import (OutputPolicy, CheckpointPolicy, HDF5, Plotfile,  # noqa: E402
                          AllLevels, CoarseOnly, SelectedLevels)
 from pops.external import CompiledBrickRef, ExternalBrick  # noqa: E402
-from pops.model import Handle, OperatorHandle, OwnerPath  # noqa: E402
+from pops.model import Handle, Module, OperatorHandle, OwnerPath  # noqa: E402
+from pops.ir.expr import Var  # noqa: E402
 import pops.descriptors as _desc  # noqa: E402
 
 
@@ -30,13 +32,19 @@ def test_runtime_and_const_params():
     a.validate()  # default 1.0 satisfies Positive
     g = ConstParam("gamma", value=5.0 / 3.0)
     assert g.capabilities().to_dict()["in_cache_key"] is True and g.value == 5.0 / 3.0
-    assert DerivedParam("Te", expression="p/rho").category == "derived_param"
+    module = Module("derived")
+    alpha = module.param(a)
+    derived = DerivedParam(
+        "alpha2", expression=Var("alpha", "param") * Var("alpha", "param"),
+        depends_on=(alpha,), phase=ParamPhase.PerBlock,
+        storage=ParamStorage.DerivedCache,
+        invalidation=ParamInvalidation.OnDependencies)
+    assert derived.category == "derived_param"
 
 
 def test_param_domain_rejects_bad_default():
-    bad = RuntimeParam("nu", dtype=Real, default=-1.0, domain=Positive())
-    with pytest.raises(ValueError):
-        bad.validate()
+    with pytest.raises(ValueError, match="compile"):
+        RuntimeParam("nu", dtype=Real, default=-1.0, domain=Positive())
 
 
 def test_constraints():
@@ -63,7 +71,10 @@ def test_interval_and_oneof_aliases():
     iv.check(0.5)
     with pytest.raises(ValueError):
         iv.check(2.0)
-    assert iv.options() == {"lo": 0.0, "hi": 1.0}
+    assert iv.options() == {
+        "lo": {"kind": "binary64", "value": (0.0).hex()},
+        "hi": {"kind": "binary64", "value": (1.0).hex()},
+    }
     oo = OneOf("roe", "hll")
     assert isinstance(oo, In)
     assert oo.name == "OneOf"
@@ -87,7 +98,7 @@ def test_runtime_param_check_bind_four_part_message():
     # diagnostic -- param name / expected domain / received value / phase.
     p = RuntimeParam("alpha", dtype=Real, default=1.0, domain=Interval(0.0, 2.0))
     assert p.check_bind(1.5) is True  # in domain
-    assert p.check_bind(None) is True  # falls back to the in-domain default
+    assert p.check_bind(MISSING) is True  # falls back to the in-domain default
     with pytest.raises(ValueError) as exc:
         p.check_bind(5.0)
     msg = str(exc.value)
@@ -101,14 +112,13 @@ def test_runtime_param_check_bind_requires_a_value_without_default():
     # A runtime param with no default MUST be supplied at bind; a missing value is refused.
     p = RuntimeParam("beta", dtype=Real, domain=Positive())  # no default
     with pytest.raises(ValueError, match="a value is required at the bind phase"):
-        p.check_bind(None)
+        p.check_bind(MISSING)
 
 
 def test_runtime_param_compile_phase_domain_error_is_four_part():
     # The declared DEFAULT is validated at the COMPILE phase with the same 4-part diagnostic.
-    bad = RuntimeParam("nu", dtype=Real, default=-1.0, domain=Positive())
     with pytest.raises(ValueError) as exc:
-        bad.validate()
+        RuntimeParam("nu", dtype=Real, default=-1.0, domain=Positive())
     msg = str(exc.value)
     assert "nu" in msg and "Positive" in msg and "-1.0" in msg and "compile" in msg
 
@@ -176,38 +186,20 @@ def test_external_brick_ref_missing_is_explainable(tmp_path):
     assert not av.ok and "could not be resolved" in av.reason
 
 
-# --- ADC-541: const params participate in the cache key; runtime params do not recompile --------
-def _scalar_model(name, param):
-    """A minimal scalar model whose x-flux reads @p param (rho advected at speed param)."""
-    from pops.physics.model import HyperbolicModel
-    m = HyperbolicModel(name)
-    (rho,) = m.conservative_vars("rho")
-    m.set_flux(x=[param * rho], y=[rho])
-    m.set_eigenvalues(x=[rho], y=[rho])
-    return m
-
-
 def test_const_param_change_invalidates_cache():
-    # ADC-541: a compile-time constant inlines into the formula, so changing its VALUE is a genuine
-    # recompile (a distinct model_hash / cache key). ConstParam.capabilities advertises this.
-    from pops.codegen.compile_emit import model_hash
-    from pops.physics.model import Param
-    assert ConstParam("gamma", value=1.4).capabilities().to_dict()["in_cache_key"] is True
-    slow = _scalar_model("scal_ct", Param("c", 0.25, kind="const"))
-    fast = _scalar_model("scal_ct", Param("c", 4.0, kind="const"))
-    assert model_hash(slow) != model_hash(fast), "a const param value must recompile"
+    slow = ConstParam("c", value=0.25)
+    fast = ConstParam("c", value=4.0)
+    assert slow.capabilities().to_dict()["in_cache_key"] is True
+    assert slow.artifact_data() != fast.artifact_data()
 
 
 def test_runtime_param_change_does_not_recompile():
-    # A runtime param reads as rparam(<name>) in the formula (its VALUE is not in the model hash),
-    # so changing it is NOT a recompile while the ABI holds. RuntimeParam.capabilities advertises it.
-    from pops.codegen.compile_emit import model_hash
-    from pops.physics.model import Param
-    assert RuntimeParam("nu", dtype=Real).capabilities().to_dict()["runtime"] is True
-    assert RuntimeParam("nu", dtype=Real).capabilities().to_dict()["compile_time"] is False
-    slow = _scalar_model("scal_rt", Param("nu", 0.25, kind="runtime"))
-    fast = _scalar_model("scal_rt", Param("nu", 4.0, kind="runtime"))
-    assert model_hash(slow) == model_hash(fast), "a runtime param value must not recompile"
+    missing = RuntimeParam("nu", dtype=Real)
+    slow = RuntimeParam("nu", dtype=Real, default=0.25)
+    fast = RuntimeParam("nu", dtype=Real, default=4.0)
+    assert missing.capabilities().to_dict()["runtime"] is True
+    assert missing.capabilities().to_dict()["compile_time"] is False
+    assert missing.artifact_data() == slow.artifact_data() == fast.artifact_data()
 
 
 def test_params_public_surface_has_no_kind_or_domain_string():

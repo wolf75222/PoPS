@@ -17,6 +17,7 @@ All three LOWER to the existing Program IR (no new C++ stepper):
     Kokkos): the compiled program is stepped and compared to an INDEPENDENT offline numpy reference of
     the identical recurrence, to machine precision. Self-skips, never fakes the engine.
 """
+from pops.params import ConstParam
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
@@ -90,7 +91,7 @@ def _lorentz_model(name):
     from pops.physics.facade import Model
     m = Model(name)
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    cs2 = m.param("cs2", 0.5)
+    cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
     p = m.primitive("p", cs2 * rho)

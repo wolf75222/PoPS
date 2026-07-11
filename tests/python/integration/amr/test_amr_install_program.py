@@ -36,7 +36,7 @@ try:
     from pops import time as adctime
     from pops.physics.facade import Model
     from pops.ir.ops import sqrt
-    from pops.physics.model import RuntimeParam
+    from pops.params import RuntimeParam
     from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
     print("skip test_amr_install_program (pops/numpy unavailable: %s)" % exc)

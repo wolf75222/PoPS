@@ -18,8 +18,8 @@ try:
 
     import pops
     from pops.codegen.loader import CompiledModel, CompiledProblem
-    from pops.physics.model import Param
-    from pops.params.runtime import RuntimeParam
+    from pops.model import Module
+    from pops.params import ConstParam, RuntimeParam
     from pops.params.constraints import Positive
     from pops.runtime._bind_validation import run_bind_gates, loaded_runtime_facts
     from pops import time as adctime
@@ -31,12 +31,17 @@ N = 8
 
 
 def _program(name="bindgate_demo"):
+    module = Module(name + "-state")
+    state = module.state_space("U", ("rho", "mx", "my"))
+    problem = pops.Problem(name=name + "-case")
+    block = problem.add_block("plasma", module)
     P = adctime.Program(name)
     dt = P.dt
-    U = P.state("plasma")
+    endpoint = P.state(block, module.state_handle(state))
+    U = endpoint.n
     f = P.solve_fields("phi", U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
+    P.commit(endpoint.next, P.linear_combine("U1", U + dt * R))
     return P
 
 
@@ -110,14 +115,17 @@ def test_wrong_initial_state_dtype_is_refused():
 
 def test_param_out_of_domain_is_refused_via_problem_declaration():
     print("== a runtime param outside its typed domain is refused ==")
-    cp = _compiled(aux_names=(), params={"alpha": Param("alpha", 1.0, kind="runtime")})
-    problem = pops.Problem(name="g").param(RuntimeParam("alpha", default=1.0, domain=Positive()))
+    from pops.model.bind_schema import BindSchema
+
+    problem = pops.Problem(name="g")
+    alpha = problem.param(RuntimeParam("alpha", default=1.0, domain=Positive()))
+    schema = BindSchema.from_problem(problem)
     try:
-        run_bind_gates(cp, problem, _uniform(), {"plasma": np.ones((3, N, N))}, {"alpha": -5.0}, {})
+        schema.resolve({alpha: -5.0})
         chk(False, "should have refused alpha=-5.0 (domain Positive)")
     except ValueError as exc:
         msg = str(exc)
-        chk("runtime-param-domain" in msg and "alpha" in msg and "-5.0" in msg and "bind" in msg,
+        chk("alpha" in msg and "-5.0" in msg and "bind" in msg,
             "the 4-part domain refusal names param / value / phase")
 
 

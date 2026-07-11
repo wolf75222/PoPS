@@ -20,6 +20,7 @@ cell by cell via a dense per-cell inverse) -- reusing ProgramContext + for_each_
     once _pops is rebuilt; skips if _pops lacks install_program, numpy/_pops is absent, no compiler/Kokkos
     is visible, or the .so compile fails -- never faking the engine.
 """
+from pops.params import ConstParam
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
@@ -69,7 +70,7 @@ def lorentz_model(name="lorentz_local"):
     independently of the flux. B_z is read off the System aux."""
     m = Model(name)
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    cs2 = m.param("cs2", 0.5)  # const sound speed^2
+    cs2 = m.value(m.param(ConstParam("cs2", 0.5)))  # const sound speed^2
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
     p = m.primitive("p", cs2 * rho)

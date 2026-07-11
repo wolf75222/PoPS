@@ -27,6 +27,7 @@ On verifie :
 
 S'auto-saute (exit 0) sans compilateur pour (2)-(4) ; (1)/(5)/(6 partiel) tournent toujours.
 """
+from pops.params import ConstParam
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import HLL, Rusanov
 import os
@@ -74,8 +75,8 @@ def toy_model(name="acoustic2"):
     (exerce aussi le fallback max_wave_speed = max(|smin|, |smax|))."""
     m = Model(name)
     q1, q2 = m.conservative_vars("q1", "q2")
-    a = m.param("a", A)
-    b = m.param("b", B)
+    a = m.value(m.param(ConstParam("a", A)))
+    b = m.value(m.param(ConstParam("b", B)))
     m.flux(x=[a * q2, a * q1], y=[b * q2, b * q1])
     m.wave_speeds(x=(WSX[0] * a, WSX[1] * a), y=(WSY[0] * b, WSY[1] * b))
     m.primitive_vars(q1, q2)
@@ -176,7 +177,7 @@ for label, riemann in (("(3) riemann='hll'", "hll"), ("(4) riemann='rusanov'", "
 print("== (5b) eigenvalues sans 'p' ni paire : hll toujours rejete (historique) ==")
 m_eig = Model("eigonly")
 e1, e2 = m_eig.conservative_vars("e1", "e2")
-ae = m_eig.param("a", A)
+ae = m_eig.value(m_eig.param(ConstParam("a", A)))
 m_eig.flux(x=[ae * e2, ae * e1], y=[ae * e2, ae * e1])
 m_eig.eigenvalues(x=[-1.0 * ae, 1.0 * ae], y=[-1.0 * ae, 1.0 * ae])
 m_eig.primitive_vars(e1, e2)
@@ -197,7 +198,7 @@ rho, mx, my = m_p.conservative_vars("rho", "m_x", "m_y",
 u = m_p.primitive("u", mx / rho)
 v = m_p.primitive("v", my / rho)
 p = m_p.primitive("p", 1.0 * rho)  # isotherme theta = 1
-cs = m_p.param("cs", 1.0)
+cs = m_p.value(m_p.param(ConstParam("cs", 1.0)))
 m_p.flux(x=[mx, mx * u + p, mx * v], y=[my, my * u, my * v + p])
 m_p.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
 m_p.primitive_vars(rho, u, v)

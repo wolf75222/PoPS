@@ -40,6 +40,8 @@ class _MultiSpeciesMixin(_BoardModel):
             return self._add_species(extra[0], components=extra[1], roles=extra[2])
         from .. import model as _model
         candidate = _model.Module(self.name, owner=self.owner_path)
+        # Promotion changes the state-space view, not parameter ownership.
+        candidate._param_registry = self._dsl._param_registry
         promoted = {}
         for nm, h in self._species.items():
             promoted[nm] = self._declare_species_on(

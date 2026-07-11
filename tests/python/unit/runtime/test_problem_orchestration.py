@@ -9,6 +9,7 @@ asserted to raise loudly (never fake success).
 Runs both under pytest and as a plain script (``python3 test_problem_orchestration.py``); the
 CI runner executes it as a script (the ``__main__`` guard below).
 """
+from pops.params import ConstParam
 import sys
 
 try:
@@ -19,6 +20,7 @@ try:
     from pops.math import laplacian
     from pops.codegen import orchestration
     from pops.model import DeclarationIndex, Handle, OwnerKind, OwnerPath
+    from pops.model.bind_schema import BindSchema
     from tests.python.support.assertions import _check
 except Exception as exc:  # noqa: BLE001
     print("skip test_problem_orchestration (pops unavailable: %s)" % exc)
@@ -39,6 +41,10 @@ class _StubCompiledModel:
         self.so_path = so_path
         self.target = "amr_system"
         self.adder = "add_native_block"
+        self.sealed = False
+
+    def _seal(self):
+        self.sealed = True
 
 
 class _StubDsl:
@@ -91,6 +97,8 @@ class _StubCompiled:
         self._target = target
         self._problem = problem
         self._layout = layout
+        if problem is not None:
+            self.bind_schema = BindSchema.from_problem(problem)
         if block_compiled is not None:
             self._block_compiled_models = block_compiled
 
@@ -114,14 +122,15 @@ def test_assembly_chaining_and_inspect():
     model = _StubModel("ne")
     prob = (pops.Problem(name="plasma")
             .block("ne", physics=model, spatial=None)
-            .param(pops.physics.ConstParam("alpha", 1.0))
             .aux("B_z", value=None))
+    alpha = prob.param(ConstParam("alpha", 1.0))
     _check(prob is prob.block.__self__, "setters operate on the same problem")
+    _check(alpha.param_kind == "const", "param returns a typed handle")
     _check(prob.layout is None, "ADC-526: a layout-free Problem carries no layout (supplied at compile)")
     info = prob.inspect().to_dict()  # ADC-564: Problem.inspect() is a typed report; to_dict() bridges
     _check(info["name"] == "plasma", "name carried")
     _check(set(info["blocks"]) == {"ne"}, "block recorded")
-    _check(info["params"]["alpha"]["default"] == 1.0, "param recorded")
+    _check(info["params"]["alpha"]["kind"] == "const", "param recorded")
     _check("B_z" in info["aux"], "aux recorded")
     _check(prob.options()["n_blocks"] == 1, "options report n_blocks")
     print("ok test_assembly_chaining_and_inspect")
@@ -523,10 +532,12 @@ class _RecordingSim:
     last = {}
 
     def _install_compiled(self, compiled=None, *, instances=None, params=None, aux=None,
-                          solvers=None, cadence=None, outputs=None, diagnostics=None):
+                          solvers=None, cadence=None, outputs=None, diagnostics=None,
+                          bind_schema=None):
         _RecordingSim.last = {"compiled": compiled, "instances": instances, "params": params,
                               "aux": aux, "solvers": solvers, "cadence": cadence,
-                              "outputs": outputs, "diagnostics": diagnostics}
+                              "outputs": outputs, "diagnostics": diagnostics,
+                              "bind_schema": bind_schema}
 
 
 def _bind_with_stub_runtime(target, layout=None, blocks=("ne",), initial=None):

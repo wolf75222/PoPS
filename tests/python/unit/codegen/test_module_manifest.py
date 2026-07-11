@@ -19,6 +19,8 @@ pytest.importorskip("pops")
 import pops
 from pops import model
 from pops.ir.expr import Var
+from pops.math import Real
+from pops.params import ConstParam, RuntimeParam
 
 
 def _small_module():
@@ -26,7 +28,7 @@ def _small_module():
     mod = model.Module("m")
     u = mod.state_space("U", ("rho", "mx", "my"), roles={"rho": "Density"})
     f = mod.field_space("fields", ("phi", "grad_x", "grad_y"))
-    mod.parameters(alpha=1.0)
+    mod.parameters(RuntimeParam("alpha", default=1.0))
     mod.aux_fields(B_z="cell_scalar")
     mod.operator(
         name="fields_from_state", signature=(u,) >> f, kind="field_operator", expr="POISSON"
@@ -55,16 +57,19 @@ def _two_fluid_module():
 def test_manifest_schema_and_spaces():
     module = _small_module()
     manifest = module.manifest()
-    assert manifest.schema_version == model.manifest.SCHEMA_VERSION == 4
+    assert manifest.schema_version == model.manifest.SCHEMA_VERSION == 5
     assert manifest.name == "m"
     assert manifest.to_dict()["owner_path"] == module.owner_path.canonical().to_data()
     assert manifest.state_spaces["U"]["components"] == ("rho", "mx", "my")
     assert manifest.state_spaces["U"]["roles"] == {"rho": "Density"}
     assert manifest.field_spaces["fields"]["components"] == ("phi", "grad_x", "grad_y")
     assert manifest.params["alpha"]["default"] == {
-        "kind": "binary64",
-        "value": (1.0).hex(),
-        "target": "real",
+        "state": "value",
+        "value": {
+            "kind": "binary64",
+            "value": (1.0).hex(),
+            "target": "Real",
+        },
     }
     assert manifest.aux["B_z"]["aux_kind"] == "cell_scalar"
     assert manifest.has_eigenvalues == {"x": False, "y": False}
@@ -137,7 +142,7 @@ def test_to_json_round_trips_through_json_loads():
     manifest = _small_module().manifest()
     blob = manifest.to_json()
     restored = json.loads(blob)
-    assert restored["schema_version"] == 4
+    assert restored["schema_version"] == 5
     assert restored["name"] == "m"
     assert restored["operators"][0]["name"] == "fields_from_state"
     assert restored == manifest.to_dict()
@@ -171,7 +176,7 @@ def test_strict_json_round_trip_rejects_schema_and_identity_tampering():
         model.ModuleManifest.from_dict(forged_qid)
 
     with pytest.raises(ValueError, match="duplicate object key"):
-        model.ModuleManifest.from_json('{"schema_version":4,"schema_version":4}')
+        model.ModuleManifest.from_json('{"schema_version":5,"schema_version":5}')
     with pytest.raises(ValueError, match="non-finite"):
         model.ModuleManifest.from_json('{"schema_version":NaN}')
 
@@ -205,13 +210,16 @@ def test_alias_manifest_carries_authenticated_alias_and_target_identities():
 
 def test_manifest_preserves_an_exact_rational_parameter_default():
     mod = model.Module("exact")
-    mod.param("third", Fraction(1, 3), dtype="real64")
+    mod.param(ConstParam("third", Fraction(1, 3), dtype=Real))
 
     assert mod.manifest().params["third"]["default"] == {
-        "kind": "rational",
-        "numerator": "1",
-        "denominator": "3",
-        "target": "real64",
+        "state": "value",
+        "value": {
+            "kind": "rational",
+            "numerator": "1",
+            "denominator": "3",
+            "target": "Real",
+        },
     }
 
 

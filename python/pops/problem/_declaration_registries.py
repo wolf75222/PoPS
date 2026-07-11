@@ -4,11 +4,12 @@ from __future__ import annotations
 from typing import Any
 
 from pops.model.ownership import MissingOwnershipError, OwnerKind, OwnerPath
+from pops.model.param_registry import ParamRegistry as _CanonicalParamRegistry
 from pops.problem._registry_freeze import (
     FreezableRegistry as _FreezableRegistry,
     flatten_freeze_members,
 )
-from pops.problem._registry_support import NO_KIND, strict_name
+from pops.problem._registry_support import strict_name
 from pops.problem.handles import FieldHandle
 from pops.problem.report import ProblemValidationReport
 
@@ -180,80 +181,82 @@ class TimeRegistry(_FreezableRegistry):
         }
 
 
-class ParamRegistry(_FreezableRegistry):
-    """The runtime and constant parameter declarations."""
+class ParamRegistry(_CanonicalParamRegistry, _FreezableRegistry):
+    """Canonical case-owned parameter authority.
+
+    This is the same owner-qualified registry used by ``pops.model.Module``.
+    The Problem wrapper adds only the freeze/report protocol; it does not keep a
+    second flat ``{name: value}`` store.
+    """
 
     family = "params"
 
-    def __init__(self) -> None:
-        self._params = {}
-        self._declarations = {}
+    def __init__(self, owner: Any) -> None:
+        _CanonicalParamRegistry.__init__(self, owner=owner)
+        self._frozen = False
 
-    def _freezable_members(self) -> Any:
-        return [declaration for declaration in self._declarations.values() if declaration is not None]
+    def add(self, declaration: Any) -> Any:
+        self._guard_frozen("declare a parameter")
+        return self.register(declaration)
 
-    def add(self, name: Any, default: Any = None, *, kind: Any = NO_KIND) -> None:
-        self._guard_frozen("declare a param")
-        if kind is not NO_KIND:
-            raise TypeError(
-                "param: the kind= string is removed (Spec 5 sec.7); pass a typed param object "
-                "(pops.physics.RuntimeParam(name, value) or pops.physics.ConstParam(name, value)) "
-                "instead of kind=%r" % (kind,)
-            )
-        if hasattr(name, "kind") and hasattr(name, "name") and hasattr(name, "value"):
-            if default is not None:
-                raise TypeError(
-                    "param: a typed param was given; do not also pass a default (%r)" % (default,)
-                )
-            key = strict_name(name.name, "parameter name")
-            spec = {"default": name.value, "kind": strict_name(name.kind, "parameter kind")}
-            declaration = name
-        elif getattr(name, "category", None) in ("runtime_param", "const_param") and hasattr(
-            name, "name"
-        ):
-            if default is not None:
-                raise TypeError(
-                    "param: a typed param was given; do not also pass a default (%r)" % (default,)
-                )
-            kind_name = {"runtime_param": "runtime", "const_param": "const"}[name.category]
-            declared = getattr(name, "default", getattr(name, "value", None))
-            key = strict_name(name.name, "parameter name")
-            spec = {"default": declared, "kind": kind_name}
-            declaration = name
-        else:
-            key = strict_name(name, "parameter name")
-            spec = {"default": default, "kind": "const"}
-            declaration = None
-        if key in self._params:
-            raise ValueError(
-                "parameter %r is already declared; parameter declarations are register-once" % key
-            )
-        self._params[key] = spec
-        self._declarations[key] = declaration
-
-    def get(self, name: Any) -> Any:
-        return self._params.get(strict_name(name, "parameter name"))
+    def get(self, parameter: Any) -> Any:
+        if isinstance(parameter, str):
+            return self._declarations.get(strict_name(parameter, "parameter name"))
+        return self.declaration(parameter)
 
     def names(self) -> Any:
-        return list(self._params)
+        return list(self._declarations)
 
-    def items(self) -> Any:
-        return self._params.items()
+    def canonicalize(self, parameter: Any) -> Any:
+        authenticated = self.handle(parameter)
+        return authenticated._resolved(self.owner_path.canonical())
 
-    def declarations(self) -> Any:
-        return dict(self._declarations)
+    def _freezable_members(self) -> Any:
+        return list(self._declarations.values())
+
+    def freeze(self) -> Any:
+        if self._frozen:
+            return self
+        from types import MappingProxyType
+
+        for declaration in self._declarations.values():
+            declaration.freeze()
+        object.__setattr__(self, "_declarations", MappingProxyType(dict(self._declarations)))
+        object.__setattr__(self, "_handles", MappingProxyType(dict(self._handles)))
+        object.__setattr__(self, "_frozen", True)
+        return self
 
     def __iter__(self) -> Any:
-        return iter(self._params)
+        return iter(self._declarations)
 
     def __len__(self) -> int:
-        return len(self._params)
+        return len(self._declarations)
+
+    def __contains__(self, name: Any) -> bool:
+        return isinstance(name, str) and name in self._declarations
 
     def validate(self, context: Any = None) -> Any:
-        return ProblemValidationReport()
+        report = ProblemValidationReport()
+        for name, declaration in self._declarations.items():
+            try:
+                declaration.validate(context)
+            except Exception as exc:  # noqa: BLE001 - aggregate descriptor refusal
+                report.error(
+                    self.family,
+                    "parameter_invalid",
+                    str(exc),
+                    context={"parameter": name},
+                )
+        return report
 
     def inspect(self) -> Any:
-        return {name: dict(spec) for name, spec in self._params.items()}
+        return {
+            name: {
+                **declaration.bind_data(),
+                "handle": self._handles[name].inspect(),
+            }
+            for name, declaration in self._declarations.items()
+        }
 
 
 __all__ = ["FieldRegistry", "ParamRegistry", "TimeRegistry"]

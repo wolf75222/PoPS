@@ -38,17 +38,12 @@ def field_space_row(space: Any) -> Any:
 
 
 def param_row(param: Any) -> Any:
-    """Manifest row containing a lossless parameter default literal."""
-    from pops.ir.literals import scalar_literal
+    """Lossless canonical declaration row used by manifests and bind-schema resolution."""
+    from pops.params import ParameterDeclaration
 
-    default = getattr(param, "default", getattr(param, "value", None))
-    dtype = getattr(param, "dtype", "real")
-    literal = scalar_literal(default, target=dtype)
-    row = {"default": literal.to_data(), "dtype": str(getattr(dtype, "name", dtype))}
-    kind = getattr(param, "kind", None)
-    if kind is not None:
-        row["kind"] = kind
-    return row
+    if not isinstance(param, ParameterDeclaration):
+        raise TypeError("parameter manifest rows require a canonical ParameterDeclaration")
+    return param.bind_data()
 
 
 def params_utilization(params: Any) -> Any:

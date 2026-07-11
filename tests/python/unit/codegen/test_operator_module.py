@@ -13,6 +13,7 @@ try:
     from pops.ir.expr import Const
     from pops.physics.facade import Model
     from pops import time as adctime
+    from pops.params import RuntimeParam
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_operator_module (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -34,7 +35,9 @@ def test_module_builder_and_decorator():
     mod = model.Module("euler_poisson_lorentz")
     u = mod.state_space("U", ("rho", "mx", "my"), roles={"rho": "Density"})
     f = mod.field_space("fields", ("phi", "grad_x", "grad_y"))
-    params = mod.parameters(alpha=1.0, cs2=0.0)
+    param_handles = mod.parameters(
+        RuntimeParam("alpha", default=1.0), RuntimeParam("cs2", default=0.0))
+    params = {handle.name: mod.param_declaration(handle) for handle in param_handles}
     aux = mod.aux_fields(B_z="cell_scalar")
     assert params["alpha"].default == 1.0 and aux["B_z"].kind == "cell_scalar"
     assert "U" in mod.state_spaces() and "fields" in mod.field_spaces()

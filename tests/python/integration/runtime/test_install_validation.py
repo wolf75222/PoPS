@@ -36,7 +36,10 @@ try:
 
     import pops
     from pops.codegen.loader import CompiledModel, CompiledProblem
-    from pops.physics.model import Param
+    from pops.model import Module
+    from pops.params import ConstParam, RuntimeParam
+    from pops.model.bind_schema import BindSchema
+    from pops.problem import Problem
     from pops.runtime._system_unified_install import (collect_missing_arguments,
                                                       validate_install_arguments)
     from pops import time as adctime
@@ -55,12 +58,17 @@ N = 8
 def _program(name="installval_demo"):
     """A real in-memory Program: a state, an elliptic field solve, a Forward-Euler commit on
     'plasma' (so arguments().instances commits the 'plasma' block)."""
+    module = Module(name + "-state")
+    state = module.state_space("U", ("rho", "mx", "my"))
+    problem = Problem(name=name + "-case")
+    block = problem.add_block("plasma", module)
     P = adctime.Program(name)
     dt = P.dt
-    U = P.state("plasma")
+    endpoint = P.state(block, module.state_handle(state))
+    U = endpoint.n
     f = P.solve_fields("phi", U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
+    P.commit(endpoint.next, P.linear_combine("U1", U + dt * R))
     return P
 
 
@@ -77,9 +85,17 @@ def _model(*, n_vars=3, aux_names=("B_z",), params=None):
 
 def _compiled(*, aux_names=("B_z",), params=None):
     """A SYNTHETIC CompiledProblem carrying a known arguments(): a real Program + a real model."""
-    return CompiledProblem("/tmp/pops-cache/problem.so", _program(),
-                           _model(aux_names=aux_names, params=params),
-                           "SIG|c++|c++23", "c++", "c++23")
+    module = Module("installval-model")
+    for declaration in (params or {}).values():
+        module.param(declaration)
+    problem = Problem(name="installval-case")
+    problem.add_block("plasma", module)
+    schema = BindSchema.from_problem(problem)
+    return CompiledProblem(
+        "/tmp/pops-cache/problem.so", _program(),
+        _model(aux_names=aux_names, params=params),
+        "SIG|c++|c++23", "c++", "c++23", bind_schema=schema,
+    )
 
 
 def chk(cond, label):
@@ -95,13 +111,13 @@ def test_pure_router_flags_only_required_and_missing():
     """collect_missing_arguments flags a missing required instance / param / aux, but NOT a const
     param and NOT the default-Poisson solver (arguments() never marks 'phi' required)."""
     print("== pure router: only required-and-missing inputs are flagged ==")
-    params = {"cs2": Param("cs2", 1.0, kind="runtime"),
-              "g": Param("g", 1.4, kind="const")}
+    params = {"cs2": RuntimeParam("cs2"),
+              "g": ConstParam("g", 1.4)}
     args = _compiled(aux_names=("B_z",), params=params).arguments()
 
     missing = collect_missing_arguments(args, set(), set(), set(), set())
     chk(any("'plasma'" in m for m in missing), "missing required instance 'plasma' is flagged")
-    chk(any("'cs2'" in m for m in missing), "missing required runtime param 'cs2' is flagged")
+    chk(any("cs2" in m for m in missing), "missing required runtime param cs2 is flagged by qid")
     chk(any("'B_z'" in m for m in missing), "missing required aux 'B_z' is flagged")
     chk(not any("'g'" in m for m in missing), "a CONST param ('g') is NOT required")
     chk(not any("solver" in m for m in missing),
@@ -115,19 +131,21 @@ def test_pure_router_passes_when_everything_supplied():
     """collect_missing_arguments returns [] once every required input is supplied (no false
     positive) -- a block already added on the sim counts as provided."""
     print("== pure router: nothing missing once everything required is supplied ==")
-    params = {"cs2": Param("cs2", 1.0, kind="runtime")}
-    args = _compiled(aux_names=("B_z",), params=params).arguments()
-    chk(collect_missing_arguments(args, {"plasma"}, {"cs2"}, {"B_z"}, {"phi"}) == [],
+    params = {"cs2": RuntimeParam("cs2")}
+    compiled = _compiled(aux_names=("B_z",), params=params)
+    args = compiled.arguments()
+    qid = compiled.bind_schema.runtime_slots[0].qid
+    chk(collect_missing_arguments(args, {"plasma"}, {qid}, {"B_z"}, {"phi"}) == [],
         "all supplied -> no missing argument")
-    chk(collect_missing_arguments(args, {"plasma"}, {"cs2"}, {"B_z"}, set()) == [],
+    chk(collect_missing_arguments(args, {"plasma"}, {qid}, {"B_z"}, set()) == [],
         "the solver is not required, so omitting it is still complete")
 
 
 def test_pure_router_aggregates_multiple_missing():
     """Several missing required inputs aggregate into one list (one line each)."""
     print("== pure router: multiple missing inputs aggregate ==")
-    params = {"cs2": Param("cs2", 1.0, kind="runtime"),
-              "nu": Param("nu", 0.1, kind="runtime")}
+    params = {"cs2": RuntimeParam("cs2"),
+              "nu": RuntimeParam("nu")}
     args = _compiled(aux_names=("B_z",), params=params).arguments()
     missing = collect_missing_arguments(args, {"plasma"}, set(), set(), set())
     chk(len(missing) == 3, "two missing params + one missing aux -> 3 lines (got %d)" % len(missing))
@@ -143,7 +161,7 @@ def test_install_raises_before_native_when_required_missing():
     install_program is mocked to flip a flag; the validation must raise before it is ever called, so
     a misuse cannot leave a half-configured System."""
     print("== System._install_compiled raises BEFORE the native install_program ==")
-    params = {"cs2": Param("cs2", 1.0, kind="runtime")}
+    params = {"cs2": RuntimeParam("cs2")}
     cp = _compiled(aux_names=("B_z",), params=params)
     sim = System(n=N, L=1.0, periodic=True)
     called = {"native": False}
@@ -250,14 +268,15 @@ def test_validate_helper_is_inert_on_bad_handle():
 # ---------------------------------------------------------------------------
 
 def test_amr_install_signature_parity():
-    """AmrSystem._install_compiled mirrors System._install_compiled's signature exactly. The seam
-    is internal (Spec 5 sec.11): authors call pops.bind, not the install method directly."""
+    """The seams share bind inputs; AMR additionally receives the native-block BindSchema."""
     print("== AmrSystem._install_compiled signature parity with System._install_compiled ==")
     chk(not hasattr(System, "install"), "System.install must be gone (now _install_compiled)")
     chk(not hasattr(AmrSystem, "install"), "AmrSystem.install must be gone (now _install_compiled)")
     sys_params = list(inspect.signature(System._install_compiled).parameters)
     amr_params = list(inspect.signature(AmrSystem._install_compiled).parameters)
-    chk(sys_params == amr_params, "same parameter list (got %r vs %r)" % (amr_params, sys_params))
+    chk(amr_params[:-1] == sys_params and amr_params[-1] == "bind_schema",
+        "AMR adds only bind_schema to the common parameter list (got %r vs %r)"
+        % (amr_params, sys_params))
 
 
 def test_amr_install_runs_the_same_validation():
@@ -312,54 +331,44 @@ def test_amr_compiled_path_reaches_install_program():
     chk(record["blocks"] == ["plasma"], "the instance was wired before install_program")
 
 
-def test_amr_compiled_params_and_cadence_route():
-    """A COMPILED AMR install routes params= to set_program_params and cadence= to set_program_cadence
-    (the AMR counterparts of the System routes), AFTER install_program. The compiled handle's
-    runtime_param_routes is stubbed to the {block: [name]} the codegen emits (the SAME pure core
-    route_program_params the System path uses), so this exercises the WIRING deterministically without a
-    Program that symbolically reads the param."""
+def test_amr_compiled_qualified_params_and_cadence_route():
+    """A compiled AMR install projects a complete qualified BindSchema mapping."""
     print("== AmrSystem._install_compiled routes compiled params + cadence ==")
-    cp = _compiled(aux_names=())
-    cp.runtime_param_routes = lambda: ({0: ["cs2"]}, {"cs2": 1.0})  # the codegen routing for one block
+    cp = _compiled(aux_names=(), params={"cs2": RuntimeParam("cs2", default=1.0)})
+    slot = cp.bind_schema.runtime_slots[0]
+    resolved = cp.bind_schema.resolve({slot.handle: 2.0})
     amr = AmrSystem(n=N, L=1.0)
     record = {}
     _stub_amr_lower_layer(amr, record)
     amr._install_compiled(cp,
-                          instances={"plasma": {"model": _model(aux_names=()),
+                          instances={"plasma": {"model": _model(
+                                                    aux_names=(), params=cp.model.params),
                                                 "initial": np.ones((3, N, N))}},
-                          params={"cs2": 2.0},
+                          params=resolved,
                           cadence=adctime.CompiledTime(substeps=2, stride=3))
     chk(record["installed"] is True, "install_program was reached")
-    chk(record["params"] == [(0, [2.0])], "params= routed to set_program_params (block 0, [2.0])")
+    chk(record["block_params"] == [("plasma", [2.0])],
+        "qualified params route to the native block carrier")
+    chk(record["params"] == [], "a Program that does not read cs2 gets no fabricated route")
     chk(record["cadence"] == (2, 3), "cadence= routed to set_program_cadence (substeps=2, stride=3)")
 
 
-def test_amr_native_params_route():
-    """A NATIVE AMR install (compiled=None) now ROUTES params= to set_block_params per instance (ADC-514:
-    the production AMR path carries per-block runtime params). The instance model declares the runtime
-    param 'nu', so the flat params={'nu': 2.0} lands as a per-block vector; cadence= is still honestly
-    rejected on a native install (no Program to wrap)."""
-    print("== AmrSystem._install_compiled routes native params to set_block_params ==")
+def test_amr_native_params_without_bind_schema_are_rejected():
+    """A native install cannot accept ownerless flat params without an artifact BindSchema."""
+    print("== native AMR params require a compiled BindSchema ==")
     amr = AmrSystem(n=N, L=1.0)
     record = {}
     _stub_amr_lower_layer(amr, record)
-    model = _model(aux_names=(), params={"nu": Param("nu", 1.0, kind="runtime")})
-    amr._install_compiled(None,
-                          instances={"plasma": {"model": model, "initial": np.ones((3, N, N))}},
-                          params={"nu": 2.0})
-    chk(record["block_params"] == [("plasma", [2.0])],
-        "params= routed to set_block_params (block 'plasma', [2.0])")
-    # A param declared by NO instance is a loud error (no silent drop).
+    model = _model(aux_names=(), params={"nu": RuntimeParam("nu", default=1.0)})
     try:
-        amr2 = AmrSystem(n=N, L=1.0)
-        _stub_amr_lower_layer(amr2, {})
-        model2 = _model(aux_names=(), params={"nu": Param("nu", 1.0, kind="runtime")})
-        amr2._install_compiled(None,
-                               instances={"plasma": {"model": model2, "initial": np.ones((3, N, N))}},
-                               params={"nu": 2.0, "bogus": 9.0})
-        chk(False, "a param declared by no instance should raise")
+        amr._install_compiled(
+            None,
+            instances={"plasma": {"model": model, "initial": np.ones((3, N, N))}},
+            params={"nu": 2.0},
+        )
+        chk(False, "ownerless params without a BindSchema should raise")
     except ValueError as exc:
-        chk("bogus" in str(exc), "the unknown-param rejection names 'bogus'")
+        chk("BindSchema" in str(exc), "the refusal names the missing BindSchema")
     # cadence= is still rejected on a native install (no Program).
     try:
         amr3 = AmrSystem(n=N, L=1.0)

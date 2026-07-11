@@ -97,14 +97,15 @@ class _RuntimeParamsMixin(_HyperbolicModel):
 
     def _runtime_params_member(self) -> str:
         """C++ line declaring the RuntimeParams member of a generated brick, initialized to the
-        DECLARATION values (default without a runtime set call). Empty string if the model has no runtime
-        param (brick strictly identical to history -> bit-identity of const params preserved)."""
+        neutral carrier values.  Runtime defaults belong to the resolved BindSchema and are installed
+        before execution; baking them into generated C++ would make a bind-time value change alter the
+        artifact identity. Empty string if the model has no runtime param."""
         nodes = self.assign_runtime_indices()
         if not nodes:
             return ""
-        vals = ", ".join(node.literal.to_cpp() for node in nodes)
-        return ("  pops::RuntimeParams params{%d, {%s}};  // params RUNTIME (P7-b) : ecrasables a "
-                "l'execution\n" % (len(nodes), vals))
+        vals = ", ".join("pops::Real(0)" for _ in nodes)
+        return ("  pops::RuntimeParams params{%d, {%s}};  // defaults installed from BindSchema\n"
+                % (len(nodes), vals))
 
     def has_runtime_params(self) -> bool:
         """True if at least one formula reads a runtime parameter (kind='runtime')."""

@@ -32,6 +32,7 @@ Self-skips (exit 0) without numpy / _pops / install_program / set_magnetic_field
 Kokkos / the frozen golden -- never fakes the engine (project policy: no fake pops in tests). Runs under
 pytest and as a script.
 """
+from pops.params import ConstParam
 import os
 import sys
 import time
@@ -93,7 +94,7 @@ def _schur_model(env, name, with_J):
     Model, sqrt = env["Model"], env["sqrt"]
     m = Model(name)
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    cs2 = m.param("cs2", 0.5)
+    cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
     p = m.primitive("p", cs2 * rho)

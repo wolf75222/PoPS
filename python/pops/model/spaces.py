@@ -3,7 +3,8 @@
 Defines the abstract spaces a model-free ``pops.time.Program`` composes:
 ``StateSpace`` (the components of ``U``), ``FieldSpace`` (auxiliary / solved
 fields), ``RateSpace`` / ``Rate(U)`` (the tangent of a ``StateSpace``), plus the
-``ParameterSpace`` and ``AuxSpace`` declarations a Module owns. These carry no
+``AuxSpace`` declarations a Module owns. Canonical scalar parameter declarations
+live in :mod:`pops.params` and are referenced by ``ParamHandle``. These carry no
 numerics and no array data; they are a TYPED VIEW only.
 
 Imports only the standard library so it can be exercised without the compiled
@@ -189,29 +190,6 @@ class RateSpace(Space):
 def Rate(base: Any) -> Any:  # noqa: N802 (type-constructor sugar, intentionally capitalized)
     """Return the :class:`RateSpace` tangent of an immutable ``StateSpace``."""
     return RateSpace(base)
-
-
-class ParameterSpace(_ImmutableTypeValue):
-    """A named scalar parameter of a Module: a default value and a dtype. The Module
-    holds only the declaration; the runtime value belongs to the Simulation (read in a
-    generated kernel via ProgramContext / ModuleContext, never frozen at codegen)."""
-
-    def __init__(self, name: Any, default: Any = 0.0, dtype: str = "real") -> None:
-        if not isinstance(name, str) or not name:
-            raise ValueError("ParameterSpace name must be a non-empty string")
-        if not isinstance(dtype, str) or not dtype:
-            raise ValueError("ParameterSpace dtype must be a non-empty string")
-        object.__setattr__(self, "name", name)
-        object.__setattr__(self, "default", _freeze_metadata(default))
-        object.__setattr__(self, "dtype", dtype)
-
-    def __repr__(self) -> str:
-        return "ParameterSpace(%r, default=%r, dtype=%r)" % (
-            self.name, self.default, self.dtype)
-
-    def to_data(self) -> dict[str, Any]:
-        return {"kind": "parameter", "name": self.name, "default": self.default,
-                "dtype": self.dtype}
 
 
 class AuxSpace(_ImmutableTypeValue):

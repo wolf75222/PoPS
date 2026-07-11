@@ -124,9 +124,8 @@ class _AmrRuntimeAdapter(_RuntimeAdapter):
             raise TypeError(
                 "pops.bind: an AMR target carries no layout descriptor; the compiled handle must "
                 "come from pops.compile(problem_with_AMR_layout, ...)")
-        engine = AmrSystem(_amr_config_from_layout(layout))
-        _flow_amr_layout(engine, layout, n_blocks=self._n_blocks)
-        return engine
+        self._layout = layout
+        return AmrSystem(_amr_config_from_layout(layout))
 
     def install(self, engine, compiled, *, instances, params, aux, solvers, cadence, outputs,
                 diagnostics):
@@ -138,9 +137,18 @@ class _AmrRuntimeAdapter(_RuntimeAdapter):
         # like System._install_compiled -- never by the handle class. A native CompiledModel has no
         # .program attribute, so getattr(..., None) selects compiled=None for it.
         program = compiled if getattr(compiled, "program", None) is not None else None
+        schema = getattr(compiled, "bind_schema", None)
+        _flow_amr_layout(
+            engine,
+            self._layout,
+            n_blocks=self._n_blocks,
+            bind_schema=schema,
+            params=params,
+        )
         engine._install_compiled(compiled=program, instances=instances, params=params, aux=aux,
                                  solvers=solvers, cadence=cadence, outputs=outputs,
-                                 diagnostics=diagnostics)
+                                 diagnostics=diagnostics,
+                                 bind_schema=schema)
 
 
 def adapter_for(target: Any, layout: Any, n_blocks: Any = 1) -> Any:
@@ -255,7 +263,8 @@ def _amr_config_from_layout(layout: Any) -> Any:
     return cfg
 
 
-def _flow_amr_layout(sim: Any, layout: Any, n_blocks: Any = 1) -> Any:
+def _flow_amr_layout(sim: Any, layout: Any, n_blocks: Any = 1, *,
+                     bind_schema: Any = None, params: Any = None) -> Any:
     """Flow the AMR layout's typed refinement criterion onto @p sim BEFORE the blocks are installed.
 
     Mirrors the old string path: a ``Refine.on(subject).above(threshold)`` (or a ``TagUnion`` of
@@ -272,10 +281,17 @@ def _flow_amr_layout(sim: Any, layout: Any, n_blocks: Any = 1) -> Any:
     """
     criterion = getattr(layout, "refine", None)
     if criterion is not None:
-        _apply_refine_criterion(sim, criterion, is_multiblock=n_blocks > 1)
+        _apply_refine_criterion(
+            sim,
+            criterion,
+            is_multiblock=n_blocks > 1,
+            bind_schema=bind_schema,
+            params=params,
+        )
 
 
-def _apply_refine_criterion(sim: Any, criterion: Any, is_multiblock: bool = False) -> Any:
+def _apply_refine_criterion(sim: Any, criterion: Any, is_multiblock: bool = False, *,
+                            bind_schema: Any = None, params: Any = None) -> Any:
     """Lower one typed refinement criterion to set_refinement / set_phi_refinement on @p sim.
 
     A ``Refine`` whose predicate is a gradient on the potential (``phi`` / ``grad phi``) lowers to
@@ -288,7 +304,13 @@ def _apply_refine_criterion(sim: Any, criterion: Any, is_multiblock: bool = Fals
 
     if isinstance(criterion, TagUnion):
         for c in criterion.criteria:
-            _apply_refine_criterion(sim, c, is_multiblock=is_multiblock)
+            _apply_refine_criterion(
+                sim,
+                c,
+                is_multiblock=is_multiblock,
+                bind_schema=bind_schema,
+                params=params,
+            )
         return
     if not isinstance(criterion, Refine):
         raise TypeError(
@@ -303,6 +325,7 @@ def _apply_refine_criterion(sim: Any, criterion: Any, is_multiblock: bool = Fals
     if threshold is None:
         raise ValueError("pops.bind: Refine criterion has no threshold "
                          "(use Refine.on(subject).above(value))")
+    threshold = _refine_threshold_value(threshold, bind_schema, params)
     from pops.model import Handle
     if not isinstance(criterion.subject, Handle):
         raise NotImplementedError(
@@ -334,6 +357,24 @@ def _apply_refine_criterion(sim: Any, criterion: Any, is_multiblock: bool = Fals
     # it against each block's conserved variables (a native block) or refuses it (a compiled .so
     # block: component 0 only) -- the honest native boundary, not a silent drop here.
     sim.set_refinement(float(threshold), variable=subject)
+
+
+def _refine_threshold_value(threshold: Any, schema: Any, params: Any) -> Any:
+    """Resolve one canonical parameter threshold from the effective bind mapping."""
+    from pops.ir import ValueExpr
+    from pops.model import ParamHandle
+
+    handle = threshold.handle if isinstance(threshold, ValueExpr) else threshold
+    if not isinstance(handle, ParamHandle):
+        return threshold
+    if schema is None:
+        raise ValueError("pops.bind: parameterized AMR threshold requires BindSchema")
+    slot = schema.slot(handle)
+    if slot.handle not in (params or {}):
+        raise ValueError(
+            "pops.bind: resolved params are missing AMR threshold %s" % slot.qid
+        )
+    return params[slot.handle]
 
 
 def _refine_subject_name(subject: Any) -> Any:
