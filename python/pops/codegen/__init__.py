@@ -13,15 +13,13 @@ from .toolchain import (  # noqa: F401
 )
 from .cache import pops_cache_dir  # noqa: F401
 from .abi import check_compiled_matches_module  # noqa: F401
-from .compile import compile_problem  # noqa: F401
-from .loader import CompiledProblem  # noqa: F401
 # ADC-545: the brick-library manifest API is an advanced/codegen concern (mirrors compile_problem);
 # it left the pops root, so pops.codegen is its one reachable home. library imports only stdlib +
 # pops.descriptors, so this adds no _pops / numpy weight and no cross-layer edge.
 from .library import LibraryManifest, compile_library, read_library_manifest  # noqa: F401
-# ADC-523: the public inspectable handle protocol (re-exported as pops.CompiledArtifact); the
-# concrete CompiledProblem loader class stays advanced/internal, reachable only here.
-from .compiled_artifact import CompiledArtifact  # noqa: F401
+# ADC-660: one exact compiled artifact record plus exact resolve/bind/install phase values.
+from .compiled_artifact import CompiledSimulationArtifact  # noqa: F401
+from ._plans import BindInputs, InstallPlan, ResolvedSimulationPlan  # noqa: F401
 from .library_codegen import emit_library_cpp  # noqa: F401
 # Spec 5 (sec.12.2 / 12.3): inert introspection of a compiled artifact (bind arguments + memory).
 from .inspect_compiled import Arguments, MemoryEstimate  # noqa: F401
@@ -55,10 +53,8 @@ __all__ = [
     "pops_loader_build_flags",
     "pops_cache_dir",
     "check_compiled_matches_module",
-    "compile_problem",
-    "CompiledProblem",
     "LibraryManifest", "compile_library", "read_library_manifest",
-    "CompiledArtifact",
+    "CompiledSimulationArtifact", "ResolvedSimulationPlan", "BindInputs", "InstallPlan",
     "Arguments", "MemoryEstimate",
     "ScratchPlan", "build_scratch_plan",
     "CompiledReport", "RequirementsReport", "BindReport",

@@ -22,7 +22,7 @@ class CompiledProblem(CompiledProblemDumpMixin):
     for the public path, wrapped by ``pops.compile(...)``; wire a runnable
     simulation from it with ``pops.bind(compiled, ...)`` (ADC-523). The concrete
     class stays off the top-level surface -- annotate against the inspectable
-    ``pops.CompiledArtifact`` protocol instead. The bound Program drives
+    ``pops.CompiledSimulationArtifact`` instead. The bound Program drives
     ``sim.step(dt)`` entirely in C++ via ``ProgramContext``.
 
     The ``.so`` is compiled against the pops headers with the SAME Kokkos

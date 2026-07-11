@@ -199,10 +199,69 @@ def validate_ref(record, *, manifest_abi_key=None, context=None, handle=None,
     Every gate RAISES (never warns): G1 :class:`RuntimeError`, G2 / G3 / G4 :class:`ValueError`. A
     successful return means the brick passed every checkable gate; a gate that is not checkable in the
     given scope (no key, no capability info, no layout, no ``.so``) is SKIPPED, never a false reject."""
+    canonical = isinstance(context, dict) and bool(context.get("canonical_resolution"))
+    if canonical:
+        _require_canonical_evidence(
+            record,
+            manifest_abi_key=manifest_abi_key,
+            context=context,
+            handle=handle,
+            module_abi_key=module_abi_key,
+        )
     check_abi(record, manifest_abi_key, module_abi_key=module_abi_key)
     check_capabilities(record, context)
     check_layout(record, context)
     check_symbols(record, handle)
+
+
+def _require_canonical_evidence(record, *, manifest_abi_key, context, handle,
+                                module_abi_key=None):
+    """Fail closed on evidence that the canonical resolve phase cannot prove.
+
+    The historical descriptor-level validation API remains useful for exploratory availability
+    reports, where an omitted context means "not adjudicable".  ADC-660's canonical resolution is a
+    different contract: it is the last support decision before artifact creation, so an unknown ABI,
+    provider set, layout, or declared symbol is an error rather than success-by-absence.
+    """
+    native_id = record.get("native_id", record.get("id", "<unknown>"))
+    if not manifest_abi_key:
+        raise ValueError(
+            "external brick %r has unknown ABI evidence during canonical resolution; "
+            "use a versioned manifest carrying abi_key" % native_id)
+    effective_module_abi = module_abi_key
+    if effective_module_abi is None:
+        effective_module_abi = context.get("module_abi_key")
+    if effective_module_abi in (None, "", "abi_key=unavailable"):
+        raise ValueError(
+            "external brick %r cannot authenticate ABI during canonical resolution because the "
+            "module ABI key is unknown" % native_id)
+    if "capabilities" not in context or context.get("capabilities") is None:
+        raise ValueError(
+            "external brick %r has unknown provider capabilities during canonical resolution"
+            % native_id)
+    if context.get("layout") in (None, "", "unknown"):
+        raise ValueError(
+            "external brick %r has unknown layout evidence during canonical resolution" % native_id)
+    if "requirements" not in record or record.get("requirements") is None:
+        raise ValueError(
+            "external brick %r has no requirements evidence during canonical resolution" % native_id)
+    if "capabilities" not in record or record.get("capabilities") is None:
+        raise ValueError(
+            "external brick %r has no capabilities evidence during canonical resolution" % native_id)
+    supported = record.get("supported_layouts")
+    if not supported:
+        raise ValueError(
+            "external brick %r has unknown supported_layouts during canonical resolution"
+            % native_id)
+    symbols = record.get("exported_symbols")
+    if symbols is None:
+        raise ValueError(
+            "external brick %r has no exported_symbols evidence during canonical resolution"
+            % native_id)
+    if symbols and handle is None:
+        raise ValueError(
+            "external brick %r declares symbols %s but canonical resolution has no artifact symbol "
+            "evidence" % (native_id, sorted(symbols)))
 
 
 __all__ = ["validate_ref", "check_abi", "check_capabilities", "check_layout", "check_symbols"]

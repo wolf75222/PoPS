@@ -61,13 +61,13 @@ def test_relative_import_edge_is_resolved():
 
 
 def test_lazy_function_scope_edge_is_captured():
-    """The function-scope ``pops.codegen.orchestration`` -> ``_bind_adapters`` edge.
+    """The function-scope canonical phase module -> runtime adapter edge.
 
     A module-scope-only walker would miss it (orchestration imports ``_bind_adapters``
     only inside functions to keep the import-graph architecture gate green).
     """
     graph = cic.build_module_graph(REPO_ROOT)
-    assert "pops.runtime._bind_adapters" in graph.get("pops.codegen.orchestration", set())
+    assert "pops.runtime._bind_adapters" in graph.get("pops.codegen._phases", set())
 
 
 # --------------------------------------------------------------------------- #

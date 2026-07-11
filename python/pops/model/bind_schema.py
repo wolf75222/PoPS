@@ -320,92 +320,20 @@ class BindSchema:
             )
         raise KeyError("parameter handle %s is not present in this BindSchema" % handle.qualified_id)
 
-    def resolve(self, values: Any = None) -> Mapping[ParamHandle, Any]:
-        """Validate overrides and materialize every Const, Runtime and Derived slot."""
-        if values is None:
-            values = {}
-        if not isinstance(values, Mapping):
-            raise TypeError("BindSchema.resolve values must be a ParamHandle mapping")
-        supplied: dict[ParamHandle, Any] = {}
-        for handle, value in values.items():
-            canonical = self._canonical_handle(handle)
-            if canonical in supplied:
-                raise ValueError(
-                    "multiple bind entries resolve to the same ParamHandle %s"
-                    % canonical.qualified_id
-                )
-            slot = self._by_handle[canonical]
-            if slot.kind != "runtime":
-                raise TypeError(
-                    "bind value supplied for %s parameter %s; only RuntimeParam slots are settable"
-                    % (slot.kind, slot.qid)
-                )
-            supplied[canonical] = slot.validate_value(value)
+    def resolve_compile(self) -> Mapping[ParamHandle, Any]:
+        """Materialize only Const and Compile-phase DerivedParam slots during resolution."""
+        from ._bind_schema_phases import resolve_compile
+        return resolve_compile(self)
 
-        resolved: dict[ParamHandle, Any] = {
-            slot.handle: slot.default_value() for slot in self.const_slots
-        }
-        sources: dict[ParamHandle, str] = {
-            slot.handle: "const" for slot in self.const_slots
-        }
-        missing = []
-        for slot in self.runtime_slots:
-            if slot.handle in supplied:
-                resolved[slot.handle] = supplied[slot.handle]
-                sources[slot.handle] = "override"
-            elif slot.has_default:
-                resolved[slot.handle] = slot.default_value()
-                sources[slot.handle] = "default"
-            else:
-                missing.append(slot.qid)
-        if missing:
-            raise ValueError(
-                "missing required RuntimeParam bind value(s): %s" % ", ".join(missing)
-            )
-        self._materialize_derived(resolved, sources)
-        return ResolvedBindings(self, resolved, sources)
-
-    def _materialize_derived(
+    def resolve_bind(
         self,
-        resolved: dict[ParamHandle, Any],
-        sources: dict[ParamHandle, str],
-    ) -> None:
-        evaluated: dict[ParamHandle, Any] = dict(resolved)
-
-        def dependency_slot(owner: BindSlot, dependency: Mapping[str, Any]) -> BindSlot:
-            matches = [
-                candidate for candidate in self._slots
-                if self._scope_key(candidate.handle) == self._scope_key(owner.handle)
-                and candidate.handle.local_id == dependency["name"]
-                and candidate.kind == dependency["param_kind"]
-            ]
-            if len(matches) != 1:
-                raise RuntimeError("BindSchema dependency index is inconsistent")
-            return matches[0]
-
-        def materialize(slot: BindSlot) -> Any:
-            if slot.handle in evaluated:
-                return evaluated[slot.handle]
-            if slot.kind == "const":
-                value = slot.default_value()
-            elif slot.kind == "runtime":
-                return evaluated[slot.handle]
-            else:
-                env: dict[str, Any] = {}
-                for dependency in slot.declaration["depends_on"]:
-                    target = dependency_slot(slot, dependency)
-                    value = materialize(target)
-                    env[target.handle.local_id] = value
-                    env[target.qid] = value
-                    if target.handle.declaration_ref is not None:
-                        env[target.handle.declaration_ref.qualified_id] = value
-                value = slot.evaluate(env)
-            evaluated[slot.handle] = value
-            return value
-
-        for slot in self.derived_slots:
-            resolved[slot.handle] = materialize(slot)
-            sources[slot.handle] = "derived"
+        values: Any,
+        *,
+        compile_values: Mapping[ParamHandle, Any],
+    ) -> Mapping[ParamHandle, Any]:
+        """Validate concrete overrides and materialize only Bind-phase derivations."""
+        from ._bind_schema_phases import resolve_bind
+        return resolve_bind(self, values, compile_values=compile_values)
 
     def to_dict(self) -> dict[str, Any]:
         return manifest_envelope(

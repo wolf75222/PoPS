@@ -1,23 +1,16 @@
-"""Compiler-side helpers for immutable resolved and install plans."""
+"""Pure helpers used by resolve and total compile; no artifact mutation or install path."""
 from __future__ import annotations
 
 from typing import Any
 
 
-def resolve_compile_libraries(
-    values: tuple[Any, ...],
-) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
-    """Normalize library inputs once and derive detached snapshot projections."""
-    if not values:
-        return (), ()
+def resolve_compile_libraries(values: tuple[Any, ...]) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
     from pops.codegen.library import read_library_manifest
     from pops.external.bricks import CompiledBrickRef
 
-    compiler_values = []
-    snapshot_values = []
+    compiler_values, snapshot_values = [], []
     for value in values:
         if isinstance(value, CompiledBrickRef):
-            value.validate()
             compiler_values.append(value)
             record = value.manifest_record()
             snapshot_values.append(record if record is not None else value.options())
@@ -28,239 +21,70 @@ def resolve_compile_libraries(
     return tuple(compiler_values), tuple(snapshot_values)
 
 
-def compile_install_models(plan: Any, backend: str, kwargs: Any) -> dict[str, Any]:
-    """Compile every block before bind and return one native loader per instance."""
-    compile_kwargs = {
-        key: value for key, value in kwargs.items()
-        if key in ("include", "cxx", "std", "require_metadata", "hoist_reciprocals")
-    }
-    return {
-        block.name: compile_install_model(
-            block.name, block.model, backend, plan.target, compile_kwargs)
-        for block in plan.blocks
-    }
+def compile_install_models(plan: Any, options: Any) -> dict[str, Any]:
+    compile_options = {key: value for key, value in options.items()
+                       if key in ("include", "cxx", "std")}
+    return {block.name: compile_install_model(
+        block.name, block.model, block.backend, plan.target, compile_options)
+            for block in plan.blocks}
 
 
-def compile_install_model(
-    name: str,
-    model: Any,
-    backend: str,
-    target: str,
-    compile_kwargs: Any,
-) -> Any:
-    """Lower one model through the final compiled-value or structural protocol."""
+def compile_install_model(name: str, model: Any, backend: str, target: str,
+                          compile_options: Any) -> Any:
     from pops.codegen.loader import CompiledModel
     from pops.codegen._compiled_model_boundary import validate_compiled_model_result
     from pops.codegen._compiled_model_identity import authenticate_compiled_model
 
     if isinstance(model, CompiledModel):
         validate_compiled_model_result(model)
+        if model.target != target or model.backend != backend:
+            raise ValueError("resolved compiled model route disagrees with its plan")
         return model
     source_module_hash = None
     compile_model = getattr(model, "compile", None)
     if not callable(compile_model) and callable(getattr(model, "operator_registry", None)):
         from pops.codegen.module_lowering import _module_to_model
-
-        module_hash = getattr(model, "module_hash", None)
-        source_module_hash = module_hash() if callable(module_hash) else None
+        source_module_hash = model.module_hash()
         model = _module_to_model(model)
-        compile_model = getattr(model, "compile", None)
+        compile_model = model.compile
     if not callable(compile_model):
-        raise NotImplementedError(
-            "pops.compile: block %r model %s does not implement the install-model protocol "
-            "(expected CompiledModel or compile(backend=, target=))"
-            % (name, type(model).__name__))
-    selected_backend = backend
-    if target == "system" and model_has_runtime_params(model):
-        selected_backend = "aot"
-    compiled = compile_model(backend=selected_backend, target=target, **compile_kwargs)
-    if not isinstance(compiled, CompiledModel):
-        raise TypeError(
-            "pops.compile: block %r compile() must return pops.codegen.CompiledModel, not %s; "
-            "mutable/opaque loader records cannot enter InstallPlan"
-            % (name, type(compiled).__name__)
-        )
+        raise TypeError("resolved block %r has no total compile lowering" % name)
+    compiled = compile_model(backend=backend, target=target, **compile_options)
+    if type(compiled) is not CompiledModel:
+        raise TypeError("resolved block compiler must return exact CompiledModel")
     validate_compiled_model_result(compiled)
     authenticate_compiled_model(model, compiled, module_hash=source_module_hash)
-    if compiled.target != target:
-        raise ValueError(
-            "pops.compile: block %r compile() returned target=%r, expected %r"
-            % (name, compiled.target, target)
-        )
+    if compiled.target != target or compiled.backend != backend:
+        raise ValueError("compiled block route differs from ResolvedSimulationPlan")
     return compiled
 
 
-def model_has_runtime_params(model: Any) -> bool:
-    params = getattr(model, "params", {})
-    params = params() if callable(params) else params
-    values = params.values() if hasattr(params, "values") else ()
-    for declaration in values:
-        kind = getattr(declaration, "kind", None)
-        kind = getattr(kind, "value", kind)
-        phase = getattr(declaration, "phase", None)
-        phase = getattr(phase, "value", phase)
-        if kind == "runtime" or (kind == "derived" and phase == "bind"):
-            return True
-    return False
-
-
-def attach_install_plan(
-    compiled: Any,
-    resolved: Any,
-    models: Any,
-    *,
-    has_program: bool,
-) -> None:
-    """Attach the only bind authority and remove authoring-model retention."""
-    from pops.codegen._plans import InstallBlock, InstallPlan
-    from pops.codegen.loader import CompiledModel
-
-    blocks = tuple(
-        InstallBlock(block.name, models[block.name], block.spatial)
-        for block in resolved.blocks)
-    install_plan = InstallPlan(
-        snapshot_hash=resolved.snapshot.hash,
-        target=resolved.target,
-        layout=resolved.layout,
-        blocks=blocks,
-        bind_schema=resolved.bind_schema,
-        field_solvers=resolved.field_solvers,
-        outputs=resolved.outputs,
-        diagnostics=resolved.diagnostics,
-        has_program=has_program,
-    )
-    if isinstance(compiled, CompiledModel):
-        object.__setattr__(compiled, "install_plan", install_plan)
-        object.__setattr__(compiled, "bind_schema", resolved.bind_schema)
-    else:
-        compiled.install_plan = install_plan
-        compiled.bind_schema = resolved.bind_schema
-    if hasattr(compiled, "model"):
-        compiled.model = blocks[0].model
-    _attach_bundle_identities(
-        compiled, resolved, models, has_program=has_program)
-    for model in models.values():
-        if model is not compiled and isinstance(model, CompiledModel):
-            # The artifact boundary is final: a subclass cannot replace _seal with a no-op.
-            CompiledModel._seal(model)
-
-
-def _attach_bundle_identities(
-    compiled: Any, resolved: Any, models: Any, *, has_program: bool,
-) -> None:
-    """Authenticate every native component represented by one public artifact."""
-    from pops.codegen.cache import _precision_cache_key, _registry_cache_key
-    from pops.identity import (
-        artifact_identity, artifact_spec_identity, binary_bundle_identity, binary_identity,
-    )
-
-    semantic = resolved.snapshot.semantic_identity
-    binaries = {}
-    evidence = {}
-    for block in resolved.blocks:
-        model = models[block.name]
-        binary = binary_identity(model.so_path)
-        key = "model:%s" % block.name
-        binaries[key] = binary
-        evidence[key] = {
-            "binary": binary.to_data(),
-            "backend": str(model.backend),
-            "target": str(model.target),
-            "abi": str(model.abi_key),
-            "toolchain": "%s|%s" % (model.cxx, model.std),
-            "model_hash": str(model.model_hash),
-        }
-    if has_program:
-        binary = binary_identity(compiled.so_path)
-        binaries["program"] = binary
-        evidence["program"] = {
-            "binary": binary.to_data(),
-            "backend": "production",
-            "target": str(resolved.target),
-            "abi": str(compiled.abi_key),
-            "toolchain": "%s|%s" % (compiled.cxx, compiled.std),
-        }
-    backends = sorted({row["backend"] for row in evidence.values()})
-    spec = artifact_spec_identity(
-        semantic,
-        target=str(resolved.target),
-        backend=backends[0] if len(backends) == 1 else "mixed",
-        precision=_precision_cache_key(),
-        abi="bundle",
-        toolchain="bundle",
-        routes={"registry": _registry_cache_key()},
-        components=evidence,
-        flags=(),
-        libraries=(),
-        codegen_version="pops.codegen.bundle.v1",
-    )
-    bundle = binary_bundle_identity(binaries)
-    final = artifact_identity(spec, bundle)
-    for name, value in (
-        ("semantic_identity", semantic),
-        ("artifact_spec_identity", spec),
-        ("binary_identity", bundle),
-        ("artifact_identity", final),
-    ):
-        object.__setattr__(compiled, name, value)
-
-
-def capture_runtime_declarations(
-    problem: Any,
-    detach: Any = None,
-) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
-    """Detach and canonicalize output/diagnostic declarations."""
-    if detach is None:
-        from pops.problem._detached import detached_frozen
-
-        detach = detached_frozen
-
+def capture_runtime_declarations(problem: Any, detach: Any) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
     def resolved(value: Any, family: str) -> Any:
-        resolve_references = getattr(value, "resolve_references", None)
-        if not callable(resolve_references):
-            raise TypeError(
-                "%s declaration %r must implement resolve_references(resolver)"
-                % (family, type(value).__name__))
-        return detach(resolve_references(problem.resolve))
+        protocol = getattr(value, "resolve_references", None)
+        if not callable(protocol):
+            raise TypeError("%s must implement resolve_references" % family)
+        return detach(protocol(problem.resolve))
 
-    outputs = tuple(resolved(value, "runtime output")
-                    for value in (problem._outputs or []))
-    diagnostics = tuple(resolved(value, "runtime diagnostic")
-                        for value in (problem._diagnostics or []))
-    return outputs, diagnostics
+    return (
+        tuple(resolved(value, "runtime output") for value in (problem._outputs or [])),
+        tuple(resolved(value, "runtime diagnostic")
+              for value in (problem._diagnostics or [])),
+    )
 
 
 def capture_field_solvers(problem: Any, detach: Any) -> dict[str, Any]:
-    """Resolve field references once and retain only detached solver values."""
-    result = {}
-    for name, field in problem._field_registry.resolved_items(problem.resolve):
-        if field.solver is not None:
-            result[name] = detach(field.solver)
-    return result
+    return {name: detach(field.solver)
+            for name, field in problem._field_registry.resolved_items(problem.resolve)
+            if field.solver is not None}
 
 
-def prepare_problem_snapshot(
-    problem: Any,
-    time: Any,
-    *,
-    layout: Any,
-    libraries: Any,
-) -> Any:
-    """Freeze authoring before the driver computes an artifact identity."""
+def prepare_problem_snapshot(problem: Any, time: Any, *, layout: Any, libraries: Any) -> Any:
     from pops.problem._snapshot import prepare_compile_snapshot
-
     return prepare_compile_snapshot(problem, time, layout=layout, libraries=libraries)
 
 
-def attach_problem_snapshot(compiled: Any, snapshot: Any) -> None:
-    """Attach the snapshot already used by the driver, then seal the artifact."""
-    from pops.problem._snapshot import attach_problem_snapshot
-
-    attach_problem_snapshot(compiled, snapshot)
-
-
 __all__ = [
-    "attach_install_plan", "attach_problem_snapshot", "capture_field_solvers",
-    "capture_runtime_declarations", "compile_install_model", "compile_install_models",
-    "model_has_runtime_params", "prepare_problem_snapshot", "resolve_compile_libraries",
+    "capture_field_solvers", "capture_runtime_declarations", "compile_install_model",
+    "compile_install_models", "prepare_problem_snapshot", "resolve_compile_libraries",
 ]

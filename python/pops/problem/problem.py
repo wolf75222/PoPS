@@ -103,15 +103,19 @@ class Problem:
                 "cannot change a bound artifact." % (self._name, what))
 
     def freeze(self) -> Any:
-        """Freeze the assembly and return its stable :class:`~pops.problem._snapshot.AuthoringSnapshot`.
+        """Validate, freeze, and return the stable authoring snapshot.
 
-        ``pops.compile`` calls this on the Problem it compiles: after freeze every mutating setter
-        RAISES (naming the Problem), the member registries and their descriptors are sealed, and the
-        returned snapshot's ``.hash`` is the frozen identity the compile cache key folds in. Idempotent
-        -- a second call returns the SAME snapshot, so ``compile`` can freeze a Problem the caller
-        already froze."""
+        This method cannot bypass validation: it is the snapshot-returning form of the same phase
+        transition as :meth:`validate`.  Resolution accepts only the successfully frozen result.
+        """
         if self._frozen:
             return self._snapshot
+        report = self.validate_report()
+        report.raise_if_error()
+        return self._commit_freeze()
+
+    def _commit_freeze(self) -> Any:
+        """Commit a graph already proven valid; internal half of the phase transition."""
         from pops.problem._snapshot import build_problem_snapshot
         # Two-phase commit: canonicalisation can call descriptor projections and therefore fail.
         # Build and validate the complete inert snapshot while every authoring object is still
@@ -386,15 +390,18 @@ class Problem:
         return Availability.yes()
 
     def validate(self, context: Any = None) -> Any:
-        """Structural validation; aggregate the registries' per-family reports and fail loud.
+        """Validate and atomically freeze the complete authoring graph.
 
         Runs the layout check plus each registry's own ``validate``, folds them into ONE
         :class:`~pops.ReportTree`, and raises (via ``raise_if_error``)
-        when any error accumulated -- so the legacy callers that expect a loud exception keep
-        working, while the report is available for per-family inspection (ADC-553).
+        when any error accumulated.  Success seals the Problem before returning, making this the
+        sole transition from mutable authoring into the validated phase; resolution refuses an
+        unfrozen Problem and never repairs or mutates it.
         """
         report = self.validate_report(context)
         report.raise_if_error()
+        if not self._frozen:
+            self._commit_freeze()
         return True
 
     def validate_report(self, context: Any = None) -> Any:

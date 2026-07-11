@@ -1,7 +1,8 @@
-"""Pure, host-testable bind refusal gates (ADC-537).
+"""Pure, host-testable bind refusal gates (ADC-537 / ADC-660).
 
 The gates validate state, parameters, aux fields and artifact/runtime compatibility before native
-loading. ABI keys are compared component-wise; missing runtime facts remain honestly unknown.
+loading. ABI keys are compared component-wise.  The typed bind phase fails closed when artifact
+metadata or runtime facts are unavailable: absence is not permission to try the native loader.
 """
 from __future__ import annotations
 
@@ -337,31 +338,44 @@ def validate_operator_aux(manifest: Any, aux: Any, provided_named_aux: Any = ())
 
 
 def loaded_runtime_facts() -> Any:
-    """The feature tokens the LOADED pops runtime reports, for the manifest bind gate (G2).
+    """Return exact live ABI/capability facts or fail before loading an artifact."""
+    from collections.abc import Mapping
 
-    Reads the live runtime's ABI key (``pops.abi_key()``) and its environment report
-    (``runtime_environment_report()``: ``precision`` / ``communicator`` / ``mpi_compiled`` /
-    ``has_kokkos`` / ``kokkos_backend``) into the plain dict :func:`validate_bind_manifest` compares
-    against the manifest. A token the runtime does not know (the conservative static fallback reports
-    ``mpi_compiled``/``has_kokkos`` as ``None``) stays ``None`` so the gate skips it -- the runtime
-    cannot adjudicate what it does not know. Imports lazily so this module's scope stays _pops-free.
-    """
-    facts = {}
-    try:
-        from pops._bootstrap import abi_key
-        facts["abi_key"] = abi_key()
-    except Exception:  # noqa: BLE001 -- an unreadable abi key leaves the manifest gate to catch it
-        facts["abi_key"] = None
-    try:
-        from pops.runtime_environment import runtime_environment_report
-        env = runtime_environment_report()
-    except Exception:  # noqa: BLE001 -- no env report: every runtime token is honest-unknown
-        env = {}
-    facts["precision"] = env.get("precision")
-    facts["communicator"] = env.get("communicator")
-    facts["supports_mpi"] = env.get("mpi_compiled")
-    facts["supports_gpu"] = env.get("has_kokkos")
+    from pops._bootstrap import abi_key
+    from pops.runtime_environment import runtime_environment_report
+
+    env = runtime_environment_report()
+    if not isinstance(env, Mapping):
+        raise TypeError("pops.bind: runtime_environment_report() must return a mapping, got %s"
+                        % type(env).__name__)
+    facts = {
+        "abi_key": abi_key(),
+        "precision": env.get("precision"),
+        "communicator": env.get("communicator"),
+        "supports_mpi": env.get("mpi_compiled"),
+        "supports_gpu": env.get("has_kokkos"),
+    }
+    _require_runtime_facts(facts)
     return facts
+
+
+def _require_runtime_facts(facts: Any) -> None:
+    from collections.abc import Mapping
+    if not isinstance(facts, Mapping):
+        raise TypeError("pops.bind: runtime capability facts must be a mapping")
+    required = ("abi_key", "precision", "communicator", "supports_mpi", "supports_gpu")
+    missing = [name for name in required if name not in facts or facts[name] is None]
+    if missing:
+        raise ValueError("pops.bind: loaded runtime cannot provide required identity/capability "
+                         "fact(s) %s; refusing to load the artifact" % missing)
+    for name in ("abi_key", "precision", "communicator"):
+        if _is_unknown_token(facts[name]):
+            raise ValueError("pops.bind: loaded runtime reports %s=%r; a typed bind requires an "
+                             "exact fact" % (name, facts[name]))
+    for name in ("supports_mpi", "supports_gpu"):
+        if not isinstance(facts[name], bool):
+            raise TypeError("pops.bind: loaded runtime fact %s must be bool, got %s"
+                            % (name, type(facts[name]).__name__))
 
 
 def aggregate_bind_refusals(groups: Any) -> Any:
@@ -417,27 +431,20 @@ def collect_missing_arguments(args: Any, provided_blocks: Any, provided_params: 
 
 def validate_install_arguments(sim: Any, compiled: Any, instances: Any, params: Any, aux: Any,
                                solvers: Any) -> Any:
-    """Early bind-input validation (Spec 5 sec.10) for a COMPILED install on @p sim (System OR
-    AmrSystem): reject -- BEFORE any native mutation -- an install missing a REQUIRED argument the
-    artifact declares, with one clear actionable error aggregating every missing input.
-
-    Reads ``compiled.arguments()`` (the inert metadata the .so DECLARES) and confirms every argument
-    marked ``required`` is supplied by this install call (@p instances / params / aux / solvers) OR
-    already wired on the sim (an added block, a declared named aux). A NATIVE install
-    (``compiled is None``) carries no declared arguments and is skipped; a handle whose
-    ``arguments()`` is unavailable or unreadable is skipped too (conservative -- a missing check
-    never breaks a working install)."""
-    if compiled is None or not hasattr(compiled, "arguments"):
+    """Reject missing declared inputs and unreadable metadata before native mutation."""
+    if compiled is None:
         return
-    try:
-        args = compiled.arguments()
-    except Exception:  # noqa: BLE001 -- introspection must never break a valid install
-        return
+    arguments = getattr(compiled, "arguments", None)
+    if not callable(arguments):
+        raise TypeError("pops.bind: compiled artifact must expose callable arguments() metadata")
+    args = arguments()
+    if args is None:
+        raise ValueError("pops.bind: compiled artifact arguments() returned no metadata")
     provided_blocks = set(instances)
-    try:
-        provided_blocks |= set(sim.block_names())
-    except Exception:  # noqa: BLE001 -- block_names is a convenience; absence is not a failure
-        pass
+    block_names = getattr(sim, "block_names", None)
+    if not callable(block_names):
+        raise TypeError("pops.bind: runtime engine must expose callable block_names()")
+    provided_blocks |= set(block_names())
     # Named aux already declared on the sim (B_z has no queryable trace, so it must come via aux=).
     provided_named_aux = set()
     for table in getattr(sim, "_aux_field_index", {}).values():
@@ -464,13 +471,19 @@ def run_bind_gates(compiled: Any, layout: Any, initial: Any, params: Any, aux: A
     validation has already been performed by the artifact's immutable BindSchema. Every refusal is a HARD error with
     precise context; there is NO fallback. A degraded handle that exposes no manifest / arguments is
     left to the adapter's own native install check (this gate never fabricates one)."""
-    manifest = compiled.manifest() if hasattr(compiled, "manifest") else None
-    arguments = compiled.arguments() if hasattr(compiled, "arguments") else None
+    manifest_fn = getattr(compiled, "manifest", None)
+    arguments_fn = getattr(compiled, "arguments", None)
+    if not callable(manifest_fn) or not callable(arguments_fn):
+        raise TypeError("pops.bind: compiled artifact must expose callable manifest() and "
+                        "arguments() metadata")
+    manifest = manifest_fn()
+    arguments = arguments_fn()
     if manifest is None or arguments is None:
-        return  # degraded handle: the native install raises its own clear error
+        raise ValueError("pops.bind: compiled artifact returned incomplete manifest/arguments metadata")
+    runtime_facts = loaded_runtime_facts()
     groups = [
         ("aux-required-by-operator", validate_operator_aux(manifest, aux)),
-        ("manifest-abi", validate_bind_manifest(manifest, loaded_runtime_facts())),
+        ("manifest-abi", validate_bind_manifest(manifest, runtime_facts)),
         ("initial-state", validate_initial_state(manifest, arguments, layout, initial)),
     ]
     message = aggregate_bind_refusals(groups)

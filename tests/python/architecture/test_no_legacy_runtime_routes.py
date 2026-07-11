@@ -511,6 +511,9 @@ class _FakeAmrRefineModel:
         from pops.model import DeclarationIndex
         return DeclarationIndex(owner=self.owner_path, handles=())
 
+    def _semantic_data(self):
+        return {"kind": "architecture-test-model", "name": self.name}
+
 
 def test_uniform_plus_amr_tags_refused_by_default():
     try:

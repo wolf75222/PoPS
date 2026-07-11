@@ -61,11 +61,12 @@ __all__ = [
     "ReportTree", "ReportPhase", "ReportSeverity", "DiagnosticError", "SourceSpan", "ProvenanceRecord",
     "inspect_amr", "native_capability_report", "runtime_environment_report",
     "validate_runtime_environment", "RuntimeCapabilityError",
-    "set_threads", "has_kokkos", "parallel_info", "doctor", "CompiledArtifact",
-    "Problem", "AuthoringSnapshot", "Program", "PhysicsModel", "compile", "bind",
+    "set_threads", "has_kokkos", "parallel_info", "doctor", "CompiledSimulationArtifact",
+    "ResolvedSimulationPlan", "BindInputs", "InstallPlan",
+    "Problem", "AuthoringSnapshot", "Program", "PhysicsModel",
+    "validate", "resolve", "compile", "bind", "install",
     "RuntimePolicies",
 ]
-
 # Lower / authoring layers + the moved integrate (re-exported, surface unchanged; numpy-free).
 from pops.runtime import integrate  # noqa: E402,F401  (pops.integrate name preserved; without numpy)
 from . import time, model, math, lib, physics, mesh  # noqa: E402  (Spec 2/3 operator-first + board authoring + IR)
@@ -75,6 +76,8 @@ from .time import Program  # noqa: E402,F401
 from pops.physics import PhysicsModel  # noqa: E402,F401  (Spec 5 sec.11: alias of pops.physics.Model)
 # ADC-545: library trio + CompiledTime left the root (homes in __getattr__); keep pops.codegen bound.
 from . import codegen  # noqa: E402,F401
+from .codegen import (  # noqa: E402,F401
+    BindInputs, CompiledSimulationArtifact, InstallPlan, ResolvedSimulationPlan)
 from ._capabilities import (  # noqa: E402,F401  (Spec 5: descriptor-sourced matrix + native reports)
     inspect_capabilities, inspect_amr, native_capability_report)
 from ._report import DiagnosticError, ReportPhase, ReportSeverity, ReportTree  # noqa: E402,F401
@@ -95,22 +98,17 @@ _ADC545_HOMES = {
 }
 
 
-# LAZY public front doors (PEP 562, ADC-523): pops.compile / pops.bind are the only compile/bind
-# entry points; compile_problem / CompiledProblem live at pops.codegen.*; CompiledArtifact types the
-# inspectable handle. ADC-545 removals refuse below with a targeted, advanced-home AttributeError.
+# Lazy canonical phase front doors; retired structural/low-level compiler spellings fail below.
 def __getattr__(name: str):
-    if name in ("compile", "bind"):
+    if name in ("validate", "resolve", "compile", "bind", "install"):
         from .codegen import orchestration
         return getattr(orchestration, name)
     if name == "RuntimePolicies":  # ADC-562: typed runtime-policy bundle
         return output.RuntimePolicies  # noqa: E501
-    if name == "CompiledArtifact":
-        from .codegen.compiled_artifact import CompiledArtifact
-        return CompiledArtifact
-    if name in ("compile_problem", "CompiledProblem"):
+    if name in ("CompiledArtifact", "compile_problem", "CompiledProblem"):
         raise AttributeError(
-            "pops.%s left the public surface (ADC-523): use pops.compile(...) / pops.bind(...) as "
-            "the front doors; the low-level driver stays reachable as pops.codegen.%s." % (name, name))
+            "pops.%s is not part of the final typed phase API; use "
+            "pops.validate -> pops.resolve -> pops.compile -> pops.bind." % name)
     if name == "Case":
         raise AttributeError(
             "pops.Case was renamed to pops.Problem (ADC-553/ADC-526), no alias: use pops.Problem(...).")

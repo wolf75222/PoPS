@@ -137,20 +137,14 @@ def test_adc545_retired_names_raise_and_advanced_seams_import():
         compile_library, read_library_manifest, LibraryManifest))
 
 
-def test_adc545_compile_backend_default_is_typed_production():
-    # ADC-545: pops.compile no longer defaults backend= to the "production" string; it resolves the
-    # typed Production() in-body (signature default None), and a bare string is refused with a
-    # TypeError naming Production() (byte-identical lowering to the same token).
+def test_adc660_backend_is_resolved_before_compile():
+    # ADC-660: backend selection belongs to resolve; compile accepts only the closed plan.
     import inspect  # noqa: PLC0415
 
     pops = importlib.import_module("pops")
-    default = inspect.signature(pops.compile).parameters["backend"].default
-    assert default is None, "backend= must default to None (lazy Production() resolve)"
+    assert tuple(inspect.signature(pops.compile).parameters) == ("plan",)
     from pops.codegen.backends import Production, lower_backend  # noqa: PLC0415
 
     assert Production().lower() == "production" == lower_backend(Production())
-    from pops.problem import Problem  # noqa: PLC0415
-
-    with pytest.raises(TypeError) as excinfo:
-        pops.compile(Problem(name="arch_backend"), backend="production")
-    assert "Production()" in str(excinfo.value), "the TypeError must name Production()"
+    with pytest.raises(TypeError, match="ResolvedSimulationPlan"):
+        pops.compile(object())

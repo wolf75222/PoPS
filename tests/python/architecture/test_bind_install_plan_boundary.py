@@ -102,8 +102,8 @@ def test_bind_reads_the_install_plan_and_no_retired_authoring_mirror():
         if isinstance(node, ast.Constant) and isinstance(node.value, str)
     }
 
-    assert "require_install_plan" in calls
-    assert "assemble_instances" in attributes
+    assert "InstallPlan" in calls
+    assert "install" in calls
     retired = {
         "_problem", "_block_specs", "_block_models", "_block_compiled_models",
         "_layout", "_target", "_field_solvers", "_outputs",
@@ -116,8 +116,10 @@ def test_complete_bind_install_path_has_no_live_authoring_fallback():
     """Every public bind/install hop is plan/data-only, including helpers below bind()."""
     path = {
         "bind": orchestration.bind,
+        "install": orchestration.install,
         "require_install_plan": plans.require_install_plan,
-        "InstallPlan.assemble_instances": plans.InstallPlan.assemble_instances,
+        "runtime install_plan": adapters.install_plan,
+        "_RuntimeAdapter.build_install_plan": adapters._RuntimeAdapter.build_install_plan,
         "adapter_for": adapters.adapter_for,
         "_RuntimeAdapter.build": adapters._RuntimeAdapter.build,
         "_UniformRuntimeAdapter.install": adapters._UniformRuntimeAdapter.install,

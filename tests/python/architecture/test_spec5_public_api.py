@@ -99,9 +99,9 @@ def test_install_is_not_the_public_path():
     amr = AmrSystem(n=8, L=1.0)
     assert not hasattr(amr, "install"), "AmrSystem.install must be gone (renamed to _install_compiled)"
     assert hasattr(amr, "_install_compiled"), "AmrSystem keeps the internal _install_compiled seam"
-    # The documented public entry points are pops.compile / pops.bind (not install / install_program).
-    assert "compile" in pops.__all__ and "bind" in pops.__all__
-    assert "install" not in pops.__all__ and "install_program" not in pops.__all__
+    # ADC-660 exposes the typed final install phase, never an engine mutation method.
+    assert {"validate", "resolve", "compile", "bind", "install"} <= set(pops.__all__)
+    assert "install_program" not in pops.__all__
 
 
 def test_physics_model_is_a_writing_facade_not_a_compiler():
@@ -192,9 +192,7 @@ def test_no_public_target_kwarg_on_compile_or_bind():
 
 
 def test_compile_problem_off_public_surface():
-    # ADC-523: pops.compile / pops.bind are the ONLY public front doors. The low-level
-    # compile_problem driver and the concrete CompiledProblem loader class leave the top-level
-    # surface (still reachable as pops.codegen.compile_problem / pops.codegen.CompiledProblem).
+    # ADC-660 removes parallel low-level compiler exports from both public surfaces.
     assert "compile" in pops.__all__ and "bind" in pops.__all__
     for removed in ("compile_problem", "CompiledProblem"):
         assert removed not in pops.__all__, "pops.%s must not linger in pops.__all__" % removed
@@ -203,28 +201,19 @@ def test_compile_problem_off_public_surface():
             getattr(pops, removed)
         msg = str(excinfo.value)
         assert "pops.compile" in msg, "the AttributeError must point at pops.compile (got %r)" % msg
-        assert "pops.codegen.%s" % removed in msg, (
-            "the AttributeError must name the advanced pops.codegen.%s path (got %r)" % (removed, msg))
-    # The advanced path is preserved: pops.codegen.compile_problem / CompiledProblem still resolve.
+        assert "typed phase API" in msg
     import importlib  # noqa: PLC0415
 
     codegen = importlib.import_module("pops.codegen")
-    assert codegen.compile_problem is not None
-    assert codegen.CompiledProblem is not None
-    # ADC-523: pops.CompiledArtifact types the inspectable handle without the concrete loader class.
-    assert hasattr(pops, "CompiledArtifact"), "pops.CompiledArtifact must type the compiled handle"
-    assert "CompiledArtifact" in pops.__all__
-    assert pops.CompiledArtifact is codegen.CompiledArtifact
+    assert not hasattr(codegen, "compile_problem") and not hasattr(codegen, "CompiledProblem")
+    assert pops.CompiledSimulationArtifact is codegen.CompiledSimulationArtifact
 
 
-def test_compile_accepts_optional_layout_passthrough():
-    # ADC-523: pops.compile gains an optional layout= passthrough (falls back to problem.layout when
-    # omitted). PR-1 accepts it; the full move to pops.compile(problem, layout=...) completes in PR-2.
+def test_layout_is_resolved_before_compile():
     import inspect  # noqa: PLC0415
 
-    params = inspect.signature(pops.compile).parameters
-    assert "layout" in params, "pops.compile must accept an optional layout= argument"
-    assert params["layout"].default is None, "layout= must default to None (fall back to the Problem)"
+    assert tuple(inspect.signature(pops.resolve).parameters)[:2] == ("problem", "layout")
+    assert tuple(inspect.signature(pops.compile).parameters) == ("plan",)
 
 
 def test_solver_generation_dsl_is_internal_experimental():

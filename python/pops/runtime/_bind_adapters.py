@@ -66,6 +66,27 @@ class _RuntimeAdapter:
                      solvers=solvers, cadence=cadence, outputs=outputs, diagnostics=diagnostics)
         return BoundSimulation(engine)
 
+    def build_install_plan(self, install_plan: Any) -> Any:
+        from pops.codegen._plans import require_install_plan
+        from pops.runtime._bound_sim import BoundSimulation
+        plan = require_install_plan(install_plan)
+        if plan.target != self.target:
+            raise ValueError(
+                "pops.bind: InstallPlan target %r cannot be consumed by the %r adapter"
+                % (plan.target, self.target)
+            )
+        if plan.resources:
+            raise NotImplementedError(
+                "pops.bind: InstallPlan carries runtime resources %s, but this adapter has no "
+                "typed native resource consumer" % sorted(plan.resources)
+            )
+        engine = self.build_engine(plan.layout)
+        self.install_plan(engine, plan)
+        return BoundSimulation(engine)
+
+    def install_plan(self, engine: Any, install_plan: Any) -> None:
+        raise NotImplementedError
+
 
 class _UniformRuntimeAdapter(_RuntimeAdapter):
     """Bind adapter for ``layout=Uniform(...)`` (the single-level ``System`` engine).
@@ -93,6 +114,21 @@ class _UniformRuntimeAdapter(_RuntimeAdapter):
         engine._install_compiled(compiled, instances=instances, params=params, aux=aux,
                                  solvers=solvers, cadence=cadence, outputs=outputs,
                                  diagnostics=diagnostics)
+
+    def install_plan(self, engine: Any, install_plan: Any) -> None:
+        artifact = install_plan.artifact
+        if artifact.program is None:
+            raise ValueError("pops.bind: system InstallPlan has no compiled program")
+        resolved = artifact.plan
+        engine._install_compiled(
+            artifact, instances=install_plan.instances,
+            params=install_plan.params,
+            aux=install_plan.aux,
+            solvers=resolved.field_solvers,
+            cadence=None,
+            outputs=resolved.outputs,
+            diagnostics=resolved.diagnostics,
+        )
 
 
 class _AmrRuntimeAdapter(_RuntimeAdapter):
@@ -151,6 +187,34 @@ class _AmrRuntimeAdapter(_RuntimeAdapter):
                                  diagnostics=diagnostics,
                                  bind_schema=schema)
 
+    def install_plan(self, engine: Any, install_plan: Any) -> None:
+        artifact = install_plan.artifact
+        if artifact.program is None:
+            raise NotImplementedError(
+                "pops.bind: [amr:typed-native-install unavailable] an AMR artifact without a "
+                "whole-system Program cannot yet preserve the full CompiledSimulationArtifact "
+                "identity through native installation; compile with a time Program"
+            )
+        resolved = artifact.plan
+        schema = artifact.bind_schema
+        _flow_amr_layout(
+            engine,
+            self._layout,
+            n_blocks=len(install_plan.instances),
+            bind_schema=schema,
+            params=install_plan.params,
+        )
+        engine._install_compiled(
+            compiled=artifact, instances=install_plan.instances,
+            params=install_plan.params,
+            aux=install_plan.aux,
+            solvers=resolved.field_solvers,
+            cadence=None,
+            outputs=resolved.outputs,
+            diagnostics=resolved.diagnostics,
+            bind_schema=schema,
+        )
+
 
 def adapter_for(target: Any, layout: Any, n_blocks: Any = 1) -> Any:
     """Select the runtime adapter for a compiled Problem.
@@ -177,7 +241,38 @@ def adapter_for(target: Any, layout: Any, n_blocks: Any = 1) -> Any:
                 "pops.bind: an AMR target carries no layout descriptor; the compiled handle must "
                 "come from pops.compile(problem_with_AMR_layout, ...)")
         return _AmrRuntimeAdapter(n_blocks=n_blocks)
-    return _UniformRuntimeAdapter()
+    if target == "system":
+        return _UniformRuntimeAdapter()
+    raise ValueError(
+        "pops.bind: InstallPlan target must be exactly 'system' or 'amr_system'; "
+        "got %r" % (target,)
+    )
+
+
+def install_plan(install_plan: Any) -> Any:
+    from pops.codegen._plans import require_install_plan
+    from pops.runtime._bind_validation import run_bind_gates
+    plan = require_install_plan(install_plan)
+    artifact = plan.artifact
+    inputs = plan.bind_inputs
+    if plan.target == "amr_system" and artifact.program is None:
+        raise NotImplementedError(
+            "pops.bind: [amr:typed-native-install unavailable] an AMR artifact without a "
+            "whole-system Program cannot yet preserve the full CompiledSimulationArtifact "
+            "identity through native installation; compile with a time Program"
+        )
+    run_bind_gates(
+        artifact,
+        plan.layout,
+        inputs.initial_state,
+        plan.params,
+        plan.aux,
+    )
+    adapter = adapter_for(plan.target, plan.layout, n_blocks=len(plan.instances))
+    return adapter.build_install_plan(plan)
+
+
+__all__ = ["adapter_for", "install_plan"]
 
 
 # --- Mesh layout lowering (engine config + AMR refinement seams) --------------------------------

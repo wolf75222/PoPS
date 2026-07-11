@@ -28,6 +28,10 @@ from pops.problem import Problem
 from pops.runtime._bound_snapshot import BoundSnapshot, build_amr_snapshot
 
 
+def _resolve(schema, values=None):
+    return schema.resolve_bind(values or {}, compile_values=schema.resolve_compile())
+
+
 def _two_instance_schema(*, default: float = 1.0):
     module = model.Module("transport")
     speed = module.param(RuntimeParam("speed", dtype=Real, default=default, domain=Positive()))
@@ -47,7 +51,7 @@ def test_same_module_in_two_blocks_has_distinct_qualified_slots_and_defaults():
     assert schema.slot(left[speed]).handle.block_ref.local_id == "left"
     assert schema.slot(right[speed]).handle.block_ref.local_id == "right"
 
-    resolved = schema.resolve({left[speed]: 2.0})
+    resolved = _resolve(schema, {left[speed]: 2.0})
     assert resolved[schema.slot(left[speed]).handle] == 2.0
     assert resolved[schema.slot(right[speed]).handle] == 1.25
     assert resolved.schema is schema
@@ -62,7 +66,7 @@ def test_two_instances_route_distinct_values_to_native_block_vectors():
     from pops.runtime._install_param_routing import route_block_params
 
     schema, left, right, speed, _ = _two_instance_schema(default=1.25)
-    resolved = schema.resolve({left[speed]: 2.0, right[speed]: 3.0})
+    resolved = _resolve(schema, {left[speed]: 2.0, right[speed]: 3.0})
     carriers = {
         "left": SimpleNamespace(runtime_param_names=("speed",)),
         "right": SimpleNamespace(runtime_param_names=("speed",)),
@@ -82,7 +86,7 @@ def test_native_real_carrier_refuses_lossy_integer_lowering():
     problem = Problem(name="integer-carrier-case")
     block = problem.add_block("fluid", module)
     schema = BindSchema.from_problem(problem)
-    resolved = schema.resolve({block[count]: 2**53 + 1})
+    resolved = _resolve(schema, {block[count]: 2**53 + 1})
     carrier = {"fluid": SimpleNamespace(runtime_param_names=("count",))}
 
     with pytest.raises(ValueError, match="not exactly representable"):
@@ -99,7 +103,7 @@ def test_schema_extraction_from_an_already_frozen_problem_is_read_only():
     schema = BindSchema.from_problem(problem)
 
     assert schema.slot(block[speed]).handle.block_ref.local_id == "fluid"
-    assert schema.resolve()[schema.slot(block[speed]).handle] == 1.0
+    assert _resolve(schema)[schema.slot(block[speed]).handle] == 1.0
 
 
 def test_schema_alias_authentication_does_not_retain_live_authoring_graph():
@@ -150,7 +154,7 @@ def test_case_and_block_parameters_with_same_local_name_never_merge():
     assert schema.slot(block[local]).handle.is_instance
     assert not schema.slot(case).handle.is_instance
 
-    resolved = schema.resolve({block[local]: 3.0, case: 4.0})
+    resolved = _resolve(schema, {block[local]: 3.0, case: 4.0})
     assert resolved[schema.slot(block[local]).handle] == 3.0
     assert resolved[schema.slot(case).handle] == 4.0
 
@@ -212,21 +216,21 @@ def test_bind_mapping_requires_handles_and_validates_kind_dtype_domain_and_requi
     schema = BindSchema.from_problem(problem)
 
     with pytest.raises(ValueError, match="missing required"):
-        schema.resolve()
+        _resolve(schema)
     with pytest.raises(TypeError, match="ParamHandle"):
-        schema.resolve({"required": 2})
+        _resolve(schema, {"required": 2})
     with pytest.raises(ValueError, match="block-qualified"):
-        schema.resolve({required: 2})
+        _resolve(schema, {required: 2})
     with pytest.raises(TypeError, match="requires an int"):
-        schema.resolve({block[required]: 2.5})
+        _resolve(schema, {block[required]: 2.5})
     with pytest.raises(TypeError, match="requires a bool"):
-        schema.resolve({block[required]: 2, block[enabled]: 1})
+        _resolve(schema, {block[required]: 2, block[enabled]: 1})
     with pytest.raises(ValueError, match="outside domain"):
-        schema.resolve({block[required]: 2, block[positive]: -1.0})
+        _resolve(schema, {block[required]: 2, block[positive]: -1.0})
     with pytest.raises(TypeError, match="only RuntimeParam"):
-        schema.resolve({block[required]: 2, block[order]: 4})
+        _resolve(schema, {block[required]: 2, block[order]: 4})
 
-    resolved = schema.resolve({block[required]: 3})
+    resolved = _resolve(schema, {block[required]: 3})
     assert resolved[schema.slot(block[required]).handle] == 3
     assert resolved[schema.slot(block[enabled]).handle] is True
     assert resolved[schema.slot(block[positive]).handle] == 1.0
@@ -262,12 +266,12 @@ def test_bind_derived_cache_is_topological_and_cannot_be_overridden():
     block = problem.add_block("fluid", module)
     schema = BindSchema.from_problem(problem)
 
-    resolved = schema.resolve({block[alpha]: 3.0})
+    resolved = _resolve(schema, {block[alpha]: 3.0})
     assert resolved[schema.slot(block[beta]).handle] == 6.0
     assert resolved[schema.slot(block[gamma]).handle] == 7.0
     assert resolved.source(schema.slot(block[beta]).handle) == "derived"
     with pytest.raises(TypeError, match="only RuntimeParam"):
-        schema.resolve({block[beta]: 9.0})
+        _resolve(schema, {block[beta]: 9.0})
 
 
 def test_compile_inline_derived_is_materialized_for_python_consumers():
@@ -287,7 +291,8 @@ def test_compile_inline_derived_is_materialized_for_python_consumers():
     block = problem.add_block("fluid", module)
     schema = BindSchema.from_problem(problem)
 
-    resolved = schema.resolve()
+    compile_values = schema.resolve_compile()
+    resolved = schema.resolve_bind({}, compile_values=compile_values)
     assert resolved[schema.slot(block[scale]).handle] == 2
     assert resolved[schema.slot(block[doubled]).handle] == 4
 
@@ -387,7 +392,7 @@ def test_bound_snapshot_records_effective_values_sources_and_schema_identity():
     schema, left, _, speed, _ = _two_instance_schema(default=1.5)
 
     def snapshot(value):
-        resolved = schema.resolve({left[speed]: value})
+        resolved = _resolve(schema, {left[speed]: value})
         return BoundSnapshot(
             semantic_identity=make_identity("semantic", {"problem": "bind-schema"}),
             artifact_identity=make_identity("artifact", {"binary": "bind-schema"}),
@@ -414,7 +419,7 @@ def test_bound_snapshot_records_effective_values_sources_and_schema_identity():
 
 def test_amr_bound_snapshot_retains_installed_program_identity_and_bindings():
     schema, left, _, speed, _ = _two_instance_schema(default=1.5)
-    resolved = schema.resolve({left[speed]: 2.0})
+    resolved = _resolve(schema, {left[speed]: 2.0})
     compiled = SimpleNamespace(
         semantic_identity=make_identity("semantic", {"problem": "amr-bind"}),
         artifact_identity=make_identity("artifact", {"binary": "amr-bind"}),
