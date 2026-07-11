@@ -12,6 +12,7 @@ try:
     from pops.ir.expr import Const, Var
     from pops.physics.facade import Model
     from pops import time as adctime
+    from typed_program_support import typed_state
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_operator_call (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -50,17 +51,19 @@ def test_call_matches_shortcut_predictor():
     m = build_model()
 
     def shortcut(P, _m):
-        U = P.state("plasma")
+        U = typed_state(P, "plasma", model=_m)
         f = P.solve_fields(U)
         R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["electric"])
-        P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", U + P.dt * R))
+        P.commit(typed_state(P, "plasma", state_name="U", model=_m).next,
+                 P.linear_combine("u1", U + P.dt * R))
 
     def opfirst(P, _m):
         P.bind_operators(_m)
-        U = P.state("plasma")
+        U = typed_state(P, "plasma", model=_m)
         f = P._call("fields_from_state", U)
         R = P._call("explicit_rhs", U, f)
-        P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", U + P.dt * R))
+        P.commit(typed_state(P, "plasma", state_name="U", model=_m).next,
+                 P.linear_combine("u1", U + P.dt * R))
 
     shortcut_program = _program(shortcut, m)
     operator_program = _program(opfirst, m)
@@ -77,19 +80,21 @@ def test_call_matches_source_and_flux():
     m = build_model()
 
     def shortcut(P, _m):
-        U = P.state("plasma")
+        U = typed_state(P, "plasma", model=_m)
         f = P.solve_fields(U)
         s = P._source("electric", state=U, fields=f)
         flux = P._rhs_legacy(state=U, flux=True, sources=[])
-        P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", U + P.dt * s + P.dt * flux))
+        P.commit(typed_state(P, "plasma", state_name="U", model=_m).next,
+                 P.linear_combine("u1", U + P.dt * s + P.dt * flux))
 
     def opfirst(P, _m):
         P.bind_operators(_m)
-        U = P.state("plasma")
+        U = typed_state(P, "plasma", model=_m)
         f = P._call("fields_from_state", U)
         s = P._call("electric", U, f)
         flux = P._call("flux_default", U)
-        P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", U + P.dt * s + P.dt * flux))
+        P.commit(typed_state(P, "plasma", state_name="U", model=_m).next,
+                 P.linear_combine("u1", U + P.dt * s + P.dt * flux))
 
     assert _emit(shortcut, m) == _emit(opfirst, m)
     print("OK  P.call(electric)/P.call(flux_default) == source / flux-only rhs")
@@ -108,17 +113,19 @@ def test_call_default_source():
     m.elliptic_rhs(rho - 1.0)
 
     def shortcut(P, _m):
-        U = P.state("plasma")
+        U = typed_state(P, "plasma", model=_m)
         f = P.solve_fields(U)
         s = P._rhs_legacy(state=U, fields=f, flux=False, sources=["default"])
-        P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", U + P.dt * s))
+        P.commit(typed_state(P, "plasma", state_name="U", model=_m).next,
+                 P.linear_combine("u1", U + P.dt * s))
 
     def opfirst(P, _m):
         P.bind_operators(_m)
-        U = P.state("plasma")
+        U = typed_state(P, "plasma", model=_m)
         f = P._call("fields_from_state", U)
         s = P._call("source_default", U, f)
-        P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", U + P.dt * s))
+        P.commit(typed_state(P, "plasma", state_name="U", model=_m).next,
+                 P.linear_combine("u1", U + P.dt * s))
 
     assert _emit(shortcut, m) == _emit(opfirst, m)
     print("OK  P.call(source_default) == default-source-only rhs (m._source path)")
@@ -128,19 +135,19 @@ def test_call_linear_operator_matches_solve_local_linear():
     m = build_model()
 
     def shortcut(P, _m):
-        U = P.state("plasma")
+        U = typed_state(P, "plasma", model=_m)
         f = P.solve_fields(U)
         L = P._linear_source("lorentz")
         U1 = P.solve_local_linear("u1", operator=P.I - P.dt * L, rhs=U, fields=f)
-        P.commit(P.state("U", block="plasma").next, U1)
+        P.commit(typed_state(P, "plasma", state_name="U", model=_m).next, U1)
 
     def opfirst(P, _m):
         P.bind_operators(_m)
-        U = P.state("plasma")
+        U = typed_state(P, "plasma", model=_m)
         f = P._call("fields_from_state", U)
         L = P._call("lorentz", f)
         U1 = P.solve_local_linear("u1", operator=P.I - P.dt * L, rhs=U, fields=f)
-        P.commit(P.state("U", block="plasma").next, U1)
+        P.commit(typed_state(P, "plasma", state_name="U", model=_m).next, U1)
 
     assert _emit(shortcut, m) == _emit(opfirst, m)
     print("OK  P.call(lorentz) operator drives solve_local_linear identically")
@@ -149,16 +156,16 @@ def test_call_linear_operator_matches_solve_local_linear():
 def test_call_typing_errors():
     m = build_model()
     P = adctime.Program("p").bind_operators(m)
-    U = P.state("plasma")
+    U = typed_state(P, "plasma", model=m)
     f = P._call("fields_from_state", U)
 
     # No bind -> clear error.
     P2 = adctime.Program("p2")
     try:
-        P2._call("electric", P2.state("plasma"))
+        P2._call("electric", typed_state(P2, "plasma"))
         raise AssertionError("expected an error calling without bound operators")
     except ValueError as exc:
-        assert "no operators bound" in str(exc)
+        assert "no operators are bound" in str(exc)
 
     # Unknown operator -> clear KeyError.
     try:

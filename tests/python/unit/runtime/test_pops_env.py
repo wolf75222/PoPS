@@ -25,6 +25,7 @@ import os
 import sys
 import tempfile
 import warnings
+from pathlib import Path
 
 import pytest
 
@@ -34,19 +35,23 @@ try:
         CodegenEnv, resolve_log_level, resolve_autotune, jit_backdoor_enabled)
     from pops.codegen.loader import CompiledProblem
     from pops.codegen.inspect_report import CompiledReport
-    from pops import time as adctime
 except Exception as exc:  # noqa: BLE001 -- pops unavailable in this interpreter
     print("skip test_pops_env (pops unavailable: %s)" % exc)
     sys.exit(0)
 
+from tests.python.unit.runtime._typed_program import typed_program_state
+
+
+INCLUDE = str(Path(__file__).resolve().parents[4] / "include")
+
 
 def _program(name="env_demo"):
     """A real in-memory Program (a state, a Forward-Euler commit) -- no compile."""
-    P = adctime.Program(name)
+    P, _, _, _, _, temporal = typed_program_state(name, block_name="plasma")
     dt = P.dt
-    U = P.state("plasma")
+    U = temporal.n
     R = P._rhs_legacy(state=U, flux=True, sources=["default"])
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
+    P.commit(temporal.next, P.linear_combine("U1", U + dt * R))
     return P
 
 
@@ -218,7 +223,8 @@ def test_compile_problem_records_env_and_honors_dirs(monkeypatch):
         monkeypatch.setenv("POPS_AUTOTUNE", "basic")
         monkeypatch.delenv("POPS_JIT_BACKDOOR", raising=False)
 
-        compiled = cd.compile_problem(time=_program("wired"), force=True)
+        compiled = cd.compile_problem(
+            time=_program("wired"), force=True, include=INCLUDE)
 
         # The env snapshot is recorded on the handle and surfaced in inspect().
         assert compiled.codegen_env is not None
@@ -234,7 +240,8 @@ def test_compile_problem_records_env_and_honors_dirs(monkeypatch):
         assert "wired.cpp" in produced, produced
 
         # A second call hits the cache (the placeholder .so exists) and STILL records the env.
-        again = cd.compile_problem(time=_program("wired"), force=False)
+        again = cd.compile_problem(
+            time=_program("wired"), force=False, include=INCLUDE)
         assert again.codegen_env is not None
         assert again.so_path == compiled.so_path
 
@@ -252,7 +259,8 @@ def test_explicit_debug_keeps_generated_over_env(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
         monkeypatch.setenv("POPS_CODEGEN_DIR", tmp)
         monkeypatch.delenv("POPS_KEEP_GENERATED", raising=False)
-        compiled = cd.compile_problem(time=_program("dbg"), force=True, debug=True)
+        compiled = cd.compile_problem(
+            time=_program("dbg"), force=True, debug=True, include=INCLUDE)
         assert compiled.codegen_env.keep_generated is True
         assert compiled.generated_sources and os.path.exists(compiled.generated_sources[0])
 

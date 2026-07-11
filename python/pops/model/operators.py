@@ -8,11 +8,13 @@ lives in the model / codegen.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any
 
 from .signatures import Signature
 from .spaces import FieldSpace, RateSpace, Space, StateSpace, _as_signature_inputs
+from ._module_freeze import deep_freeze_model_value
 
 # The operator kinds of Spec 2. A kind is metadata only; the Signature carries
 # the actual type contract that Program validation checks.
@@ -346,6 +348,7 @@ class Operator:
     def __init__(self, name: Any, kind: Any, signature: Any, capabilities: Any = None,
                  requirements: Any = None, source: Any = None, lowering: Any = None,
                  body: Any = None) -> None:
+        self._frozen = False
         if not isinstance(name, str) or not name:
             raise ValueError("Operator name must be a non-empty string")
         validate_operator_signature(kind, signature, operator_name=name)
@@ -361,6 +364,37 @@ class Operator:
         # OPTIONAL body: the callable / expression that builds the operator IR when the
         # operator is declared via Module.operator; None for a derived dsl operator.
         self.body = body
+
+    @property
+    def frozen(self) -> bool:
+        return bool(getattr(self, "_frozen", False))
+
+    def freeze(self) -> Operator:
+        """Deep-freeze this registry record while detaching every stale container alias."""
+        if self.frozen:
+            return self
+        for name in ("capabilities", "requirements", "lowering", "body"):
+            value = getattr(self, name)
+            if isinstance(value, (Mapping, list, tuple, set, frozenset)):
+                object.__setattr__(self, name, deep_freeze_model_value(value))
+        object.__setattr__(self, "_frozen", True)
+        return self
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if getattr(self, "_frozen", False):
+            raise RuntimeError(
+                "operator %r is frozen with its Module; cannot set %r after Problem.freeze(). "
+                "Author a fresh Module and recompile." % (getattr(self, "name", "?"), name)
+            )
+        object.__setattr__(self, name, value)
+
+    def __delattr__(self, name: str) -> None:
+        if self.frozen:
+            raise RuntimeError(
+                "operator %r is frozen with its Module; cannot delete %r after Problem.freeze()"
+                % (getattr(self, "name", "?"), name)
+            )
+        object.__delattr__(self, name)
 
     def __repr__(self) -> str:
         return "Operator(%r, kind=%r, %r)" % (

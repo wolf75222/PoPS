@@ -17,7 +17,6 @@ try:
     from pops.codegen.backends import JIT, AOT, Production
     from pops.codegen.compile_drivers import compile_problem
     from pops.model import OperatorHandle
-    from pops import time as adctime
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_prototype_quarantine (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -76,6 +75,7 @@ def _program_source():
     from pops.ir.expr import Const
     from pops.physics.facade import Model
     import pops.lib.time as libtime
+    from tests.python.unit.runtime._typed_program import typed_program_state
 
     m = Model("ep")
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
@@ -87,9 +87,9 @@ def _program_source():
     m.linear_source("lorentz", [[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
     m.elliptic_rhs(rho - 1.0)
     m.rate_operator("explicit_rhs", flux=True, sources=["electric"])
-    P = adctime.Program("pc").bind_operators(m)
+    P, _, _, block, state, _ = typed_program_state("pc", model=m, state="U")
     libtime.predictor_corrector_local_linear(
-        P, "plasma", fields_operator=_op(m, "fields_from_state"),
+        P, block, state, fields_operator=_op(m, "fields_from_state"),
         explicit_rate_operator=_op(m, "explicit_rhs"), implicit_operator=_op(m, "lorentz"))
     return P.emit_cpp_program(model=m)
 

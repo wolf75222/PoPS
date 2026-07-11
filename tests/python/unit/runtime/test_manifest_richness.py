@@ -32,6 +32,7 @@ from pops.external import (  # noqa: E402
 from pops.descriptors import Availability  # noqa: E402
 from pops.params import ConstParam, RuntimeParam  # noqa: E402
 from pops import time as adctime  # noqa: E402
+from tests.python.unit.runtime._typed_program import attach_typed_install_plan  # noqa: E402
 
 
 def _program(name="manifest_demo"):
@@ -69,8 +70,10 @@ def _compiled(*, params=None, caps=None, with_roles=True):
     """A SYNTHETIC CompiledProblem: a real lowered Program + a real CompiledModel, no compile."""
     P = _program()
     m = _model(params=params, caps=caps, with_roles=with_roles)
-    return CompiledProblem("/tmp/pops-cache/problem.so", P, m, "HEADERSIG|c++|c++23", "c++",
-                           "c++23", problem_hash="deadbeefcafe", cache_key="0badc0de")
+    compiled = CompiledProblem(
+        "/tmp/pops-cache/problem.so", P, m, "HEADERSIG|c++|c++23", "c++",
+        "c++23", problem_hash="deadbeefcafe", cache_key="0badc0de")
+    return attach_typed_install_plan(compiled, m)
 
 
 def _default_params():
@@ -100,13 +103,13 @@ def test_rich_fields_populated_from_real_metadata():
     assert m.abi_key == "HEADERSIG|c++|c++23"
     assert m.required_headers_sig == "HEADERSIG"  # the header token of the abi key
     # Blocks / variables / roles from the committed block + the model.
-    assert m.blocks == ["plasma"]
-    assert m.variables == ["rho", "mx", "my"]
-    assert m.roles == ["Density", "MomentumX", "MomentumY"]
+    assert m.blocks == ("plasma",)
+    assert m.variables == ("rho", "mx", "my")
+    assert m.roles == ("Density", "MomentumX", "MomentumY")
     # Aux + params split by kind.
-    assert m.aux_required == ["B_z"]
-    assert m.params_const == ["gamma_const"]
-    assert m.params_runtime == ["cs2"]
+    assert m.aux_required == ("B_z",)
+    assert m.params_const == tuple(slot.qid for slot in cp.bind_schema.const_slots)
+    assert m.params_runtime == tuple(slot.qid for slot in cp.bind_schema.runtime_slots)
     # Ghost depth + field outputs from the bind table / IR.
     assert m.ghost_depth == 2
     assert "phi" in m.field_outputs
@@ -125,7 +128,7 @@ def test_roles_unknown_when_model_records_none():
     m = cp.manifest()
     assert m.roles is None
     # Variables are still populated (the names are always recorded).
-    assert m.variables == ["rho", "mx", "my"]
+    assert m.variables == ("rho", "mx", "my")
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +152,7 @@ def test_unknown_flags_are_none_not_fabricated():
     for flag in ("supports_stride", "supports_partial_imex_mask", "supports_named_fields"):
         assert getattr(m, flag) is None, "%s must be honestly None (C++ does not emit it)" % flag
     # native_entrypoints is empty until the C++ emits it.
-    assert m.native_entrypoints == []
+    assert m.native_entrypoints == ()
     # abi_version has no discrete C++ source yet -> honestly None.
     assert m.abi_version is None
     # needs_cpp_followup names exactly the unknown flags + native_entrypoints.

@@ -6,6 +6,8 @@ typed history-persistence descriptor, records it in the Program-owned history ta
 author time, and the compile-time gate (Program.validate) refuses a non-Dense policy whose replay would
 reach a non-deterministic op. Pure Python IR construction (no numerics / no _pops).
 """
+from typed_program_support import typed_state
+
 import sys
 
 import pytest
@@ -27,7 +29,7 @@ def _expect(exc_type, fn, needle):
 # --- acceptance: the gate is gone ---------------------------------------------------------------
 def test_keep_history_no_longer_raises_not_implemented():
     P = adctime.Program("k")
-    U = P.state("U", block="plasma")
+    U = typed_state(P, "plasma", state_name="U")
     # This exact call raised NotImplementedError before ADC-626; now it is accepted.
     node = P.keep_history(U, depth=4, checkpoint_policy=Interval(3))
     assert node.op == "store_history"
@@ -35,7 +37,7 @@ def test_keep_history_no_longer_raises_not_implemented():
 
 def test_keep_history_records_depth_and_policy_on_program():
     P = adctime.Program("k")
-    U = P.state("U", block="plasma")
+    U = typed_state(P, "plasma", state_name="U")
     P.keep_history(U, depth=5, checkpoint_policy=Revolve(3))
     depth, policy = P._history_persistence["plasma.U"]
     assert depth == 5 and isinstance(policy, Revolve)
@@ -45,8 +47,8 @@ def test_keep_history_records_depth_and_policy_on_program():
 def test_multiple_histories_distinct_policies_one_program():
     """GENERIC: several rings with DIFFERENT policies coexist in one Program (owner constraint)."""
     P = adctime.Program("multi")
-    U = P.state("U", block="plasma")
-    W = P.state("W", block="neutral")
+    U = typed_state(P, "plasma", state_name="U")
+    W = typed_state(P, "neutral", state_name="W")
     P.keep_history(U, depth=4, checkpoint_policy=Interval(3))
     P.keep_history(W, depth=5, checkpoint_policy=Revolve(3))
     assert isinstance(P._history_persistence["plasma.U"][1], Interval)
@@ -56,14 +58,14 @@ def test_multiple_histories_distinct_policies_one_program():
 # --- author-time coherence refusals -------------------------------------------------------------
 def test_incoherent_interval_refused_at_author_time():
     P = adctime.Program("k")
-    U = P.state("U", block="plasma")
+    U = typed_state(P, "plasma", state_name="U")
     _expect(ValueError, lambda: P.keep_history(U, depth=4, checkpoint_policy=Interval(2)),
             "oldest slot")
 
 
 def test_oversized_revolve_refused_at_author_time():
     P = adctime.Program("k")
-    U = P.state("U", block="plasma")
+    U = typed_state(P, "plasma", state_name="U")
     _expect(ValueError, lambda: P.keep_history(U, depth=3, checkpoint_policy=Revolve(5)),
             "exceeds ring depth")
 
@@ -71,11 +73,11 @@ def test_oversized_revolve_refused_at_author_time():
 # --- compile-time determinism gate --------------------------------------------------------------
 def test_deterministic_program_with_non_dense_policy_passes_compile_gate():
     P = adctime.Program("det")
-    U = P.state("U", block="plasma")
+    U = typed_state(P, "plasma", state_name="U")
     P.keep_history(U, depth=4, checkpoint_policy=Interval(3))
     # A deterministic combine reading the ring, committed as the new state (a valid State value).
     nxt = P.linear_combine("U_next", 1.0 * U.n + 0.5 * U.prev(1))
-    P.commit(P.state("U", block="plasma").next, nxt)
+    P.commit(typed_state(P, "plasma", state_name="U").next, nxt)
     check_program(P)  # no refusal: every op is on the vetted deterministic allow-list
 
 

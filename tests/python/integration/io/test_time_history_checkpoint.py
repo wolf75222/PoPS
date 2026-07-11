@@ -116,7 +116,7 @@ def test_v2_history_persistence_key_scheme(_t):
         print("-- (A2) skipped: numpy unavailable: %s --" % exc)
         return
     from pops.runtime._system_io_history import restore_histories, serialize_histories
-    from pops.time.history_persistence import Interval, Revolve
+    from pops.time.history_persistence import Revolve
 
     hname = "blk.state"
     depth = 5
@@ -265,7 +265,6 @@ def _build_system(pops, np, n):
     sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program") or not hasattr(sim, "history_names"):
         return None, None
-    from pops.physics.facade import Model
     try:
         compiled_model = _passive_source_model("ckpt_block").compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible
@@ -286,8 +285,12 @@ def _rho0(np, n):
 def _compile_program(pops, t, builder, prog_name, model_name):
     """compile_problem for the program built by @p builder (e.g. lt.adams_bashforth2). Returns the
     handle or None if the toolchain is absent."""
+    from tests.python.support.typed_program import program_states, synthetic_module
+
     P = t.Program(prog_name)
-    builder(P, "blk")
+    module = synthetic_module("%s_state" % prog_name, components=("rho",))
+    _case, states = program_states(P, module, ("blk",))
+    builder(P, states["blk"])
     try:
         return pops.codegen.compile_problem(model=_passive_source_model(model_name), time=P)
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed

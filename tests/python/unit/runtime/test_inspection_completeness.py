@@ -39,6 +39,8 @@ except Exception as exc:  # noqa: BLE001 -- pops unavailable in this interpreter
     print("skip test_inspection_completeness (pops unavailable: %s)" % exc)
     sys.exit(0)
 
+from tests.python.unit.runtime._typed_program import attach_typed_install_plan
+
 
 def _program(name="intro_demo", *, n_vars=4):
     """A real in-memory Program: a state, an elliptic field solve, a Forward-Euler commit."""
@@ -81,8 +83,10 @@ def _compiled(*, program=None, params=None, **model_kw):
     """A SYNTHETIC CompiledProblem: a real lowered Program + a real CompiledModel, no compile."""
     P = program if program is not None else _program(n_vars=model_kw.get("n_vars", 4))
     m = _model(params=params, **model_kw)
-    return CompiledProblem("/tmp/pops-cache/problem.so", P, m, "SIG|c++|c++23", "c++", "c++23",
-                           problem_hash="deadbeefcafe", cache_key="0badc0de")
+    compiled = CompiledProblem(
+        "/tmp/pops-cache/problem.so", P, m, "SIG|c++|c++23", "c++", "c++23",
+        problem_hash="deadbeefcafe", cache_key="0badc0de")
+    return attach_typed_install_plan(compiled, m)
 
 
 def chk(cond, label):
@@ -97,9 +101,10 @@ def chk(cond, label):
 def test_inspect_aggregates_metadata():
     """inspect() returns a CompiledReport aggregating name / backend / blocks / fields / inputs."""
     print("== inspect() aggregates the compiled metadata ==")
-    params = {"cs2": RuntimeParam("cs2", default=1.0),
+    params = {"cs2": RuntimeParam("cs2"),
               "gamma_const": ConstParam("gamma_const", 1.4)}
     cp = _compiled(n_vars=4, n_aux=1, aux_names=("B_z",), params=params, has_wave_speeds=True)
+    cs2_qid = cp.bind_schema.runtime_slots[0].qid
     rep = cp.inspect()
     chk(isinstance(rep, CompiledReport), "inspect() returns a CompiledReport")
     chk(rep.name == "intro_demo", "report names the program")
@@ -110,7 +115,8 @@ def test_inspect_aggregates_metadata():
         "the committed block 'plasma' carries the model component count")
     chk(any(f["name"] == "phi" for f in rep.fields), "the elliptic 'phi' field is listed")
     chk(rep.inputs["states"] == ["plasma"], "required states list the committed block")
-    chk(rep.inputs["params"] == ["cs2"], "only the runtime param is a required input (const frozen)")
+    chk(rep.inputs["params"] == [cs2_qid],
+        "only the owner-qualified runtime param is required (const frozen)")
     chk(rep.inputs["aux"] == ["B_z"], "the named aux is a required input")
     chk(rep.program["commits"] == ["plasma"], "program summary lists the committed block")
     chk(rep.artifacts["so_path"] == cp.so_path, "artifacts carry the .so path")
@@ -307,19 +313,20 @@ def test_dumps_raise_clear_error_without_program():
 def test_explain_bind_on_real_system():
     """System.explain_bind reports provided-vs-required for a REAL System (reuses ADC-463)."""
     print("== System.explain_bind (real System, no fake engine) ==")
-    params = {"cs2": RuntimeParam("cs2", default=1.0)}
+    params = {"cs2": RuntimeParam("cs2")}
     cp = _compiled(n_vars=4, n_aux=1, aux_names=("B_z",), params=params)
+    cs2_qid = cp.bind_schema.runtime_slots[0].qid
     sim = System(n=16, L=1.0, periodic=True)  # a REAL engine (no fake adc)
     rep = sim.explain_bind(cp)
     chk(isinstance(rep, BindReport), "explain_bind returns a BindReport")
     chk(rep.required["instances"] == ["plasma"], "the committed block is a required instance")
-    chk(rep.required["params"] == ["cs2"], "the runtime param is required")
+    chk(rep.required["params"] == [cs2_qid], "the qualified runtime param is required")
     chk(rep.required["aux"] == ["B_z"], "the named aux is required")
     chk(rep.provided["instances"] == [], "a fresh System provides no block yet")
     chk(not rep.ready, "a fresh System is NOT ready to bind (inputs missing)")
     # Each missing line is actionable (names the install keyword).
     chk(any("instance 'plasma'" in m for m in rep.missing), "the missing instance is named")
-    chk(any("runtime param 'cs2'" in m for m in rep.missing), "the missing runtime param is named")
+    chk(any(cs2_qid in m for m in rep.missing), "the missing runtime param is qualified")
     chk("bind plan" in str(rep), "the report is printable")
     d = rep.to_dict()
     chk(json.loads(json.dumps(d)) == d, "to_dict is JSON round-trippable")

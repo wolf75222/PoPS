@@ -14,6 +14,7 @@ try:
     from pops.physics.facade import Model
     from pops import time as adctime
     from pops.params import RuntimeParam
+    from typed_program_support import typed_state
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_operator_module (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -102,13 +103,13 @@ def test_dsl_model_is_a_module_facade():
 def _build_predictor(P, mdl):
     """A GENERIC predictor step: no physics names, only typed operator calls."""
     P.bind_operators(mdl)
-    u = P.state("plasma")
+    u = typed_state(P, "plasma")
     fields = P._call("fields_from_state", u)
     rate = P._call("explicit_rhs", u, fields)
     lin = P._call("lorentz", fields)
     rhs = P.linear_combine("rhs", u + P.dt * rate)
     ustar = P.solve_local_linear("ustar", operator=P.I - P.dt * lin, rhs=rhs, fields=fields)
-    P.commit(P.state("U", block="plasma").next, ustar)
+    P.commit(typed_state(P, "plasma", state_name="U").next, ustar)
 
 
 def _physics_model(name, gain):

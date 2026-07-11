@@ -31,7 +31,7 @@ class CompiledModel:
                  abi_key: Any, model_hash: Any, cxx: Any, std: Any, target: Any = "system",
                  hllc: Any = False, roe: Any = False, aux_extra_names: Any = None,
                  wave_speeds: Any = False, elliptic_field_names: Any = None,
-                 bind_schema: Any = None) -> None:
+                 bind_schema: Any = None, definition_identity: Any = None) -> None:
         self.has_hllc = bool(hllc)   # HLLC capability emitted (enable_hllc): hllc available beyond 4-var Euler
         self.has_roe = bool(roe)     # ROE hook emitted (enable_roe roles OR m.roe_dissipation provided): roe available beyond 4-var Euler
         self.has_wave_speeds = bool(wave_speeds)  # wave_speeds emitted (explicit pair OR 'p'): hll available
@@ -55,19 +55,40 @@ class CompiledModel:
         # decide whether a bind(solvers={field: ...}) selection names a DECLARED field (route it) or a
         # typo (reject, naming the declared set). Empty for a model with only the default Poisson field.
         self.elliptic_field_names = list(elliptic_field_names) if elliptic_field_names else []
-        self.params = dict(params)   # {name: Param}
+        # Compiler-owned declarations remain live until orchestration has finished attaching the
+        # bind schema.  ``_seal`` replaces this mapping by registry-free CompiledParameter values;
+        # no public artifact retains ParamHandle/Expr/OwnerPath authority through ``params``.
+        self.params = dict(params)
         self.caps = dict(caps)       # {cpu/mpi/amr/gpu: bool}
         self.abi_key = abi_key       # ABI key mirroring pops_header_signature + compiler/std
         self.model_hash = model_hash  # stable hash formulas+roles+n_aux+params
+        # Authenticated structural preimage of model.compile(). Public orchestration requires this
+        # to match the frozen compiler input; low-level test/runtime handles may leave it absent.
+        self.definition_identity = definition_identity
         self.cxx = cxx
         self.std = std
         # Set directly only by advanced constructors. The public pops.compile route replaces this
         # with the one BindSchema captured from the complete frozen Problem (all block instances).
         self.bind_schema = bind_schema
+        self.install_plan = None
 
     def _seal(self) -> None:
         """Freeze a public per-block artifact after orchestration attaches metadata."""
-        object.__setattr__(self, "_sealed", True)
+        stored = object.__getattribute__(self, "__dict__")
+        if stored.get("_sealed", False):
+            return
+        from pops.codegen._compiled_parameter import compiled_parameters
+        from pops.codegen._artifact_freeze import seal_attributes
+        from pops.codegen._compiled_model_boundary import seal_compiled_model
+
+        object.__setattr__(self, "params", compiled_parameters(stored["params"]))
+        seal_compiled_model(self)
+        seal_attributes(self)
+
+    @property
+    def authoring_snapshot(self) -> Any:
+        """Complete immutable authoring identity, or ``None`` on a low-level handle."""
+        return getattr(self, "_problem_snapshot", None)
 
     def __setattr__(self, name: Any, value: Any) -> None:
         if getattr(self, "_sealed", False):
@@ -95,8 +116,10 @@ class CompiledModel:
             return list(captured)
         result = []
         for name, declaration in self.params.items():
-            kind = getattr(getattr(declaration, "kind", None), "value", None)
-            phase = getattr(getattr(declaration, "phase", None), "value", None)
+            kind = getattr(declaration, "kind", None)
+            kind = getattr(kind, "value", kind)
+            phase = getattr(declaration, "phase", None)
+            phase = getattr(phase, "value", phase)
             if kind == "runtime" or (kind == "derived" and phase == "bind"):
                 result.append(name)
         return sorted(result)
@@ -173,6 +196,24 @@ class CompiledModel:
         from pops.codegen.inspect_compiled import build_arguments
         return build_arguments(self)
 
+    def inspect(self) -> Any:
+        """Return the same inert compiled-artifact report as a whole-system handle."""
+        from pops.codegen.inspect_report import build_compiled_report
+
+        return build_compiled_report(self)
+
+    def requirements(self) -> Any:
+        """Return compile-time requirements for every model carried by the InstallPlan."""
+        from pops.codegen.inspect_report import build_requirements
+
+        return build_requirements(self)
+
+    def manifest(self) -> Any:
+        """Return the rich manifest consumed by the pre-bind refusal gates."""
+        from pops.external.artifact_manifest import build_compiled_manifest
+
+        return build_compiled_manifest(self)
+
     def estimate_memory(self, mesh: Any, *, platform: Any = None, layout: Any = None) -> Any:
         """A FORMULA-based memory estimate for this AMR-route artifact on ``mesh`` (sec.12.3, ADC-515).
 
@@ -180,29 +221,32 @@ class CompiledModel:
         and the model's component counts (state / aux / halo, plus the conservative AMR patch budget),
         via the SAME :func:`~pops.codegen.inspect_compiled.build_memory_estimate` with no Program (the
         no-Program branch skips Program-only scratch and solver categories). @p layout defaults to the
-        AMR layout this handle carries on ``_layout`` (``pops.compile``'s AMR route attaches it), so a
+        AMR layout carried by the immutable ``InstallPlan``, so a
         bare ``estimate_memory(mesh)`` auto-reports the AMR hierarchy budget (``layout='amr'``,
         conservative full-refinement worst case); an explicit @p layout / @p platform still wins. It
         NEVER allocates a ``MultiFab``; every assumption is in ``MemoryEstimate.assumptions``."""
         from pops.codegen.inspect_compiled import build_memory_estimate
         return build_memory_estimate(self, mesh, platform=platform,
-                                     layout=layout or getattr(self, "_layout", None))
+                                     layout=layout or (
+                                         self.install_plan.layout
+                                         if self.install_plan is not None else None))
 
     def inspect_amr(self, layout: Any = None) -> Any:
         """STATIC AMR report on this compiled MODEL (Spec 5 sec.8.12 / sec.8.4).
 
         A ``CompiledModel`` produced off the AMR route (``pops.compile(problem, layout=AMR(...))``)
-        carries the compile-time layout on ``self._layout`` (ADC-555: the refine/regrid/patches
+        carries the compile-time layout in ``self.install_plan`` (the refine/regrid/patches
         tags must appear in ``compiled.inspect_amr()``, not just ``layout.inspect()``), so a bare
         call with no argument reports THAT layout when one is attached, rather than the generic
         native envelope. An explicit @p layout argument always wins (it overrides the carried
-        one); a handle with no ``_layout`` (a ``target='system'`` model, or a stub built outside
+        one); a handle with no ``InstallPlan`` (a ``target='system'`` model, or a stub built outside
         ``pops.compile``) falls back to the native envelope, same as before. Delegates to the
         top-level :func:`pops.inspect_amr`; never fabricates a hierarchy.
         """
         from pops import inspect_amr
         if layout is None:
-            layout = getattr(self, "_layout", None)
+            layout = (self.install_plan.layout
+                      if self.install_plan is not None else None)
         return inspect_amr(layout)
 
     def capability_matrix(self) -> Any:

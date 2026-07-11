@@ -18,6 +18,8 @@ SEPARATE sub-block (a recording scope), not the flat SSA list, so the body re-ru
     reference x_k = target + (1-omega)^k (x0 - target). Self-skips without numpy / _pops / a compiler /
     Kokkos / install_program (never faking the engine).
 """
+from typed_program_support import typed_state
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
@@ -39,7 +41,7 @@ def _convergence_program(t, *, name="fixed_point", omega=0.5, tol=1e-10):
     The body and condition use only linear_combine + norm2, so the Program lowers with NO model
     (solve_fields is inert / absent); the loop drives the fixed point entirely in C++."""
     P = t.Program(name)
-    U0 = P.state("blk")
+    U0 = typed_state(P, "blk")
     target = P.linear_combine("target", 2.0 * U0)  # a fixed target state == 2*U0
 
     def cond(P, x):
@@ -51,35 +53,35 @@ def _convergence_program(t, *, name="fixed_point", omega=0.5, tol=1e-10):
         return P.linear_combine("x_next", (1.0 - omega) * x + omega * target)
 
     x_final = P.while_(U0, cond, body)
-    P.commit(P.state("U", block="blk").next, x_final)
+    P.commit(typed_state(P, "blk", state_name="U").next, x_final)
     return P
 
 
 # ---- (A) codegen: pure Python, always runs ----
 def test_norm2_is_scalar(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     s = P.norm2(U)
     assert s.vtype == "scalar", "P.norm2 returns a Scalar value (got %r)" % s.vtype
 
 
 def test_dot_is_scalar(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     s = P.dot(U, U)
     assert s.vtype == "scalar", "P.dot returns a Scalar value (got %r)" % s.vtype
 
 
 def test_compare_is_bool(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     b = P.norm2(U) > 1e-8
     assert b.vtype == "bool", "a scalar comparison returns a Bool value (got %r)" % b.vtype
 
 
 def test_scalar_not_python_bool(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     s = P.norm2(U)
     try:
         bool(s)
@@ -92,7 +94,7 @@ def test_scalar_not_python_bool(t):
 
 def test_bool_not_python_bool(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     b = P.norm2(U) > 1e-8
     try:
         bool(b)
@@ -105,7 +107,7 @@ def test_bool_not_python_bool(t):
 
 def test_scalar_not_python_index(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     s = P.norm2(U)
     try:
         range(s)  # __index__ must fire, never a silent integer
@@ -118,7 +120,7 @@ def test_scalar_not_python_index(t):
 def test_state_bool_still_loud(t):
     # The existing field-value guard must stay intact (only the scalar/bool branch is ADDED).
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     try:
         bool(U)
     except TypeError:

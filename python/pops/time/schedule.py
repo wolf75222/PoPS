@@ -54,14 +54,14 @@ class Schedule:
     # driver can fire it (subcycles are internal to the native macro step, invisible to the run-loop
     # hook). Codegen and the output driver READ these instead of re-listing kind strings; the per-kind
     # C++ / host bodies stay in their own layers.
-    _KIND_FACTS = {
-        "always":   {"so_lowerable": True,  "host_cadence": True},
-        "every":    {"so_lowerable": True,  "host_cadence": True},
-        "when":     {"so_lowerable": True,  "host_cadence": True},
-        "on_start": {"so_lowerable": True,  "host_cadence": True},
-        "on_end":   {"so_lowerable": False, "host_cadence": True},
-        "subcycle": {"so_lowerable": True,  "host_cadence": False},
-    }
+    _KIND_FACTS = MappingProxyType({
+        "always": MappingProxyType({"so_lowerable": True,  "host_cadence": True}),
+        "every": MappingProxyType({"so_lowerable": True,  "host_cadence": True}),
+        "when": MappingProxyType({"so_lowerable": True,  "host_cadence": True}),
+        "on_start": MappingProxyType({"so_lowerable": True,  "host_cadence": True}),
+        "on_end": MappingProxyType({"so_lowerable": False, "host_cadence": True}),
+        "subcycle": MappingProxyType({"so_lowerable": True,  "host_cadence": False}),
+    })
 
     __slots__ = ("kind", "policy", "params")
 

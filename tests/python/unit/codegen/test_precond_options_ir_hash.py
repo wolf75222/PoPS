@@ -11,7 +11,8 @@ compile). Runs under pytest AND standalone. Skips (never fakes) if pops is not i
 """
 import sys
 
-import pytest
+
+from typed_program_support import typed_state
 
 
 def _solve_program(preconditioner=None):
@@ -19,7 +20,7 @@ def _solve_program(preconditioner=None):
     import pops.time as t
     from pops.solvers.krylov import GMRES
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
 
     def apply(P, out, x):
@@ -32,7 +33,7 @@ def _solve_program(preconditioner=None):
     if preconditioner is not None:
         kw["preconditioner"] = preconditioner
     phi = P.solve_linear(**kw)
-    P.commit(P.state("U", block="blk").next, phi)
+    P.commit(typed_state(P, "blk", state_name="U").next, phi)
     return P
 
 
@@ -43,7 +44,7 @@ def test_default_geometric_mg_precond_leaves_ir_hash_byte_identical():
     default_a = _solve_program(preconditioners.GeometricMG())
     default_b = _solve_program(preconditioners.GeometricMG())
     assert default_a._ir_hash() == default_b._ir_hash()
-    node = default_a._commits["blk"]
+    node = next(iter(default_a._commits.values()))
     # Omit-when-default: no precond_options attr on the node for a default GeometricMG().
     assert "precond_options" not in node.attrs
     assert node.attrs["preconditioner"] == "geometric_mg"
@@ -54,12 +55,11 @@ def test_configured_precond_busts_ir_hash_and_adds_attr():
     default = _solve_program(preconditioners.GeometricMG())
     override = _solve_program(preconditioners.GeometricMG(n_vcycles=3, pre_sweeps=1))
     assert default._ir_hash() != override._ir_hash()
-    node = override._commits["blk"]
+    node = next(iter(override._commits.values()))
     assert node.attrs["precond_options"] == {"n_vcycles": 3, "pre_sweeps": 1}
 
 
 def test_default_precond_emits_historical_ctor():
-    default = _solve_program()  # None -> Identity() (unpreconditioned)
     mg_default = _solve_program(_mg())
     src_default = mg_default.emit_cpp_program()
     # The default GeometricMG preconditioner emits the no-arg ctor, byte-identical to pre-644.

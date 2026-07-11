@@ -24,6 +24,10 @@ component 0 alone and leave the rest unsolved.
     same offline CG bit-for-bit. Self-skips (exit 0) without numpy / _pops / install_program / a compiler
     / a visible Kokkos -- never fakes the engine.
 """
+from typed_program_support import typed_state
+
+from pops.model import StateSpace
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 from pops.solvers import krylov
@@ -49,7 +53,8 @@ def _mc_program(t, ncomp, *, name="mc_solve", method=None, tol=1e-10, max_iter=2
     The apply ``out = in - alpha*Lap(in)`` is built with P.laplacian (which now runs per component) +
     the affine algebra; solve_linear drives the runtime multi-component Krylov loop."""
     P = t.Program(name)
-    U = P.state("blk")
+    space = StateSpace("U", tuple("c%d" % component for component in range(ncomp)))
+    U = typed_state(P, "blk", space=space)
     kind = "scalar" if ncomp == 1 else "state"
     A = P.matrix_free_operator("A", domain=kind, range_=kind,
                                ncomp=(None if ncomp == 1 else ncomp))
@@ -64,7 +69,7 @@ def _mc_program(t, ncomp, *, name="mc_solve", method=None, tol=1e-10, max_iter=2
         method = CG(max_iter=max_iter)  # ADC-535: max_iter is mandatory on the descriptor
     P.set_apply(A, apply)
     phi = P.solve_linear(operator=A, rhs=U, method=method, tol=tol, max_iter=max_iter)
-    P.commit(P.state("U", block="blk").next, phi)
+    P.commit(typed_state(P, "blk", state_name="U", space=space).next, phi)
     return P
 
 
@@ -83,11 +88,12 @@ def test_state_operator_builds(t):
 
     from pops.solvers.krylov import CG
     P.set_apply(A, apply)
-    U = P.state("blk")
+    space = StateSpace("U", ("c0", "c1"))
+    U = typed_state(P, "blk", space=space)
     phi = P.solve_linear(operator=A, rhs=U, method=CG(max_iter=50), tol=1e-10, max_iter=50)
     assert phi.vtype == "state", "a state-domain solve over a State rhs returns a State"
     assert phi.attrs["ncomp"] == 2, "the solution carries the operator ncomp"
-    P.commit(P.state("U", block="blk").next, phi)
+    P.commit(typed_state(P, "blk", state_name="U", space=space).next, phi)
     assert P.validate() is True, "the multi-component Program must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
 
@@ -143,17 +149,18 @@ def test_solve_rhs_component_count(t):
         assert "component" in str(exc), str(exc)
     else:
         raise AssertionError("a rhs with too few components must raise")
-    # a scalar_field with >= ncomp components, and a State (n_cons checked at compile), are accepted
+    # A scalar_field with >= ncomp components and a structurally matching typed State are accepted.
     phi = P.solve_linear(operator=A, rhs=P.scalar_field("rhs3", ncomp=3), max_iter=10)
     assert phi.attrs["ncomp"] == 3
-    P.solve_linear(operator=A, rhs=P.state("blk"), max_iter=10)  # State deferred -> accepted
+    state_space = StateSpace("U", ("c0", "c1", "c2"))
+    P.solve_linear(operator=A, rhs=typed_state(P, "blk", space=state_space), max_iter=10)
 
 
 def test_typed_state_component_count_is_checked_at_author_time(t):
     from pops.model import StateSpace
 
     P = t.Program("typed_ncomp")
-    rhs = P.state("blk", space=StateSpace("U", ("rho", "momentum")))
+    rhs = typed_state(P, "blk", space=StateSpace("U", ("rho", "momentum")))
     A = P.matrix_free_operator("A", domain="state", range_="state", ncomp=3)
     P.set_apply(A, lambda _P, _out, x: x)
     try:
@@ -248,7 +255,6 @@ def _run_one(t, pops, np, ncomp, init):
         print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
 
-    from pops.physics.facade import Model
 
     cons = tuple("c%d" % i for i in range(ncomp))
     tol = 1e-10

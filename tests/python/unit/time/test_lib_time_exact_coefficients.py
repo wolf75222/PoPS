@@ -7,6 +7,7 @@ import pytest
 import pops.lib.time as libtime
 from pops import time as adctime
 from pops.physics.facade import Model
+from typed_program_support import state_refs
 
 
 def _bound_program(name):
@@ -29,14 +30,14 @@ def _node(program, op):
             {"kind": "rational", "numerator": "1", "denominator": "3"},
         ),
         (Decimal("0.125"), {"kind": "decimal", "value": "0.125"}),
-        (0.25, {"kind": "binary64", "value": float(0.25).hex()}),
+        (0.25, {"kind": "binary64", "value": 0.25.hex()}),
     ],
 )
 def test_imex_preserves_the_authored_theta_domain(theta, expected):
     program, linear = _bound_program("imex_exact")
     libtime.imex_local(
         program,
-        "block",
+        *state_refs(program, "block"),
         linear_source=linear,
         sources=(),
         flux=False,
@@ -52,7 +53,7 @@ def test_imex_rejects_values_that_cannot_be_exact_coefficients():
     with pytest.raises(TypeError, match="finite real coefficient"):
         libtime.imex_local(
             bad_bool,
-            "block",
+            *state_refs(bad_bool, "block"),
             linear_source=bool_linear,
             sources=(),
             flux=False,
@@ -62,7 +63,7 @@ def test_imex_rejects_values_that_cannot_be_exact_coefficients():
     with pytest.raises(ValueError, match="finite real coefficient"):
         libtime.imex_local(
             bad_nan,
-            "block",
+            *state_refs(bad_nan, "block"),
             linear_source=nan_linear,
             sources=(),
             flux=False,
@@ -74,7 +75,7 @@ def test_condensed_schur_composes_rational_coefficients_exactly():
     program, linear = _bound_program("schur_exact")
     libtime.condensed_schur(
         program,
-        "block",
+        *state_refs(program, "block"),
         theta=Fraction(1, 2),
         alpha=Fraction(3, 5),
         linear_operator=linear,
@@ -105,7 +106,7 @@ def test_condensed_schur_composes_decimal_coefficients_without_binary64():
     program, linear = _bound_program("schur_decimal")
     libtime.condensed_schur(
         program,
-        "block",
+        *state_refs(program, "block"),
         theta=Decimal("0.5"),
         alpha=Decimal("0.6"),
         linear_operator=linear,
@@ -128,7 +129,7 @@ def test_decimal_affine_and_lib_time_products_ignore_the_ambient_context():
         affine_product = (_Coeff({0: left}) * right).as_dict()[0]
         program, linear = _bound_program("schur_decimal_context")
         libtime.condensed_schur(
-            program, "block",
+            program, *state_refs(program, "block"),
             theta=Decimal("0.1250000000000000000000000000000000000000"),
             alpha=right, linear_operator=linear)
 
@@ -156,7 +157,7 @@ def test_repeating_decimal_division_is_never_silently_rounded():
         with pytest.raises(TypeError, match="non-terminating Decimal reciprocal"):
             libtime.condensed_schur(
                 program,
-                "block",
+                *state_refs(program, "block"),
                 theta=Decimal("0.3"),
                 alpha=Decimal(1),
                 linear_operator=linear,
@@ -168,7 +169,7 @@ def test_condensed_schur_refuses_implicit_numeric_domain_mixing():
     with pytest.raises(TypeError, match="cannot mix Decimal and Fraction"):
         libtime.condensed_schur(
             program,
-            "block",
+            *state_refs(program, "block"),
             theta=Decimal("0.5"),
             alpha=Fraction(3, 5),
             linear_operator=linear,
@@ -177,7 +178,8 @@ def test_condensed_schur_refuses_implicit_numeric_domain_mixing():
 
 def test_multistep_presets_serialize_integer_and_rational_weights():
     ab3 = adctime.Program("ab3_exact")
-    libtime.adams_bashforth(ab3, "block", 3)
+    libtime.adams_bashforth(
+        ab3, *state_refs(ab3, "block"), order=3)
     coeffs = _node(ab3, "linear_combine")["attrs"]["coeffs"]
     assert coeffs == [
         [[0, {"kind": "integer", "value": "1"}]],
@@ -187,7 +189,9 @@ def test_multistep_presets_serialize_integer_and_rational_weights():
     ]
 
     bdf2, linear = _bound_program("bdf2_exact")
-    libtime.bdf(bdf2, "block", 2, linear_source=linear)
+    libtime.bdf(
+        bdf2, *state_refs(bdf2, "block"), order=2,
+        linear_source=linear)
     solve = _node(bdf2, "solve_local_linear")
     assert solve["attrs"]["a_coeff"] == [[
         1, {"kind": "rational", "numerator": "2", "denominator": "3"}
@@ -205,7 +209,10 @@ def test_strang_and_lie_pass_exact_builtin_step_fractions():
         seen.append(("source", fraction))
         return state
 
-    libtime.strang(adctime.Program("strang"), "block", flow, source, commit=False)
+    strang = adctime.Program("strang")
+    libtime.strang(
+        strang, *state_refs(strang, "block"), half_flow=flow,
+        source=source, commit=False)
     assert seen == [
         ("flow", Fraction(1, 2)),
         ("source", 1),
@@ -214,6 +221,9 @@ def test_strang_and_lie_pass_exact_builtin_step_fractions():
     assert type(seen[1][1]) is int
 
     seen.clear()
-    libtime.lie(adctime.Program("lie"), "block", flow, source, commit=False)
+    lie = adctime.Program("lie")
+    libtime.lie(
+        lie, *state_refs(lie, "block"), half_flow=flow,
+        source=source, commit=False)
     assert seen == [("flow", 1), ("source", 1)]
     assert all(type(fraction) is int for _, fraction in seen)

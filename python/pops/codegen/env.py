@@ -134,7 +134,16 @@ class CodegenEnv:
     """
 
     __slots__ = ("log_level", "codegen_dir", "keep_generated", "dump_ir", "dump_cpp",
-                 "cache_dir", "profile", "autotune", "jit_backdoor")
+                 "cache_dir", "profile", "autotune", "jit_backdoor", "_frozen")
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if getattr(self, "_frozen", False):
+            raise AttributeError("CodegenEnv is immutable after artifact sealing")
+        object.__setattr__(self, name, value)
+
+    def freeze(self) -> Any:
+        object.__setattr__(self, "_frozen", True)
+        return self
 
     def __init__(self, *, log_level: Any = _LOG_QUIET, codegen_dir: Any = None,
                  keep_generated: Any = False, dump_ir: Any = False, dump_cpp: Any = False,

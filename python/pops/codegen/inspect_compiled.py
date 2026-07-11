@@ -20,6 +20,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops.codegen._artifact_models import (
+    aggregate_capability as _aggregate_capability,
+    aggregate_model_metadata as _model_metadata,
+    artifact_model_metadata as _artifact_model_metadata,
+)
 from pops._report import Report
 
 # Bytes per double-precision cell value. The core is 2D (n x n cells), one field component is a
@@ -111,45 +116,6 @@ class Arguments(Report):
                 % (len(self.instances), len(self.params), len(self.aux), len(self.solvers)))
 
 
-def _metadata_source(compiled: Any) -> Any:
-    """The object carrying the (cons_names / n_vars / params / aux) metadata.
-
-    A :class:`CompiledProblem` carries its model on ``.model``. A bare :class:`CompiledModel` -- the
-    handle ``pops.compile(layout=AMR(...))`` returns (its first block's model, ADC-515) -- has no
-    ``.model`` but IS the model (it exposes ``cons_names`` / ``aux_extra_names`` directly), so when
-    ``.model`` is absent we fall back to the handle if it duck-types a model, else ``None`` (a
-    Program-only handle). The model-as-handle path the AMR-route introspection reuses."""
-    model = getattr(compiled, "model", None)
-    if model is not None:
-        return model
-    return compiled if getattr(compiled, "cons_names", None) is not None else None
-
-
-def _model_metadata(compiled: Any) -> tuple:
-    """Read the carried model's (name -> ...) metadata WITHOUT loading the .so.
-
-    Returns ``(cons_names, n_cons, params, aux_names, n_aux, state_space)`` from the physical model
-    a :class:`CompiledProblem` carries OR from the bare :class:`CompiledModel` handle itself (the AMR
-    route, ADC-515) via :func:`_metadata_source`. Either exposes ``cons_names`` / ``n_vars`` /
-    ``params``; the named-aux table is ``aux_extra_names`` and the count is ``n_aux``. A handle that
-    is neither yields empty metadata (the Program structure is still introspectable)."""
-    model = _metadata_source(compiled)
-    if model is None:
-        return [], 0, {}, [], 0, "U"
-    cons = list(getattr(model, "cons_names", []) or [])
-    n_cons = int(getattr(model, "n_vars", len(cons)) or len(cons))
-    params = dict(getattr(model, "params", {}) or {})
-    aux_names = list(getattr(model, "aux_extra_names", []) or [])
-    n_aux = int(getattr(model, "n_aux", len(aux_names)) or len(aux_names))
-    spaces = getattr(model, "list_state_spaces", None)
-    state_space = "U"
-    if callable(spaces):
-        names: Any = spaces()
-        if names:
-            state_space = names[0]
-    return cons, n_cons, params, aux_names, n_aux, state_space
-
-
 def _solver_arguments(program: Any) -> dict:
     """Elliptic field solves the Program performs (field name -> {problem, solver}).
 
@@ -186,7 +152,9 @@ def build_arguments(compiled: Any) -> Arguments:
         Program supports today), MPI optionality and the model ghost depth.
     """
     program = getattr(compiled, "program", None)
-    cons, n_cons, params, aux_names, n_aux, state_space = _model_metadata(compiled)
+    model_rows = _artifact_model_metadata(compiled)
+    primary = model_rows[0] if model_rows else None
+    params = primary.params if primary is not None else {}
 
     # Instances: the blocks the Program commits. A read-only block (never committed) is still a
     # bind input, but the Program only references blocks it commits or reads; the commit set is the
@@ -196,23 +164,35 @@ def build_arguments(compiled: Any) -> Arguments:
         commits = program.commits()
     instances = {}
     from pops.time.references import block_name as _block_name, handle_data
+    by_block = {row.block_name: row for row in model_rows if row.block_name is not None}
     for state_ref in sorted(commits, key=lambda item: item.qualified_id):
-        instances[_block_name(state_ref.block_ref)] = {"state": state_space, "components": n_cons,
-                            "required": True, "conservative": list(cons),
-                            "block_identity": handle_data(state_ref.block_ref),
-                            "state_identity": handle_data(state_ref)}
-    if not instances and n_cons:
-        # No Program commits (a bare CompiledModel: the AMR route, or a pure field/diagnostic Program)
-        # still needs the physics block the model describes; surface it under the model name (the AMR
-        # blocks bind by name) so the table is never silently empty.
-        block_name = (getattr(compiled, "program_name", None)
-                      or getattr(compiled, "name", None) or "block")
-        instances[block_name] = {"state": state_space, "components": n_cons, "required": True,
-                                 "conservative": list(cons)}
+        name = _block_name(state_ref.block_ref)
+        row = by_block.get(name, primary)
+        instances[name] = {
+            "state": row.state_space if row is not None else "U",
+            "components": row.n_vars if row is not None else 0,
+            "required": True,
+            "conservative": list(row.cons_names) if row is not None else [],
+            "block_identity": handle_data(state_ref.block_ref),
+            "state_identity": handle_data(state_ref),
+        }
+    if not instances:
+        # AMR without a whole-system Program advances every native InstallPlan block. The plan, not
+        # the first returned CompiledModel, is therefore the complete instance authority.
+        for row in model_rows:
+            name = (row.block_name or getattr(compiled, "program_name", None)
+                    or getattr(row.model, "name", None) or "block")
+            instances[name] = {
+                "state": row.state_space,
+                "components": row.n_vars,
+                "required": True,
+                "conservative": list(row.cons_names),
+            }
 
     from ._inspect_params import build_parameter_arguments
     param_args = build_parameter_arguments(compiled, params)
 
+    aux_names = dict.fromkeys(name for row in model_rows for name in row.aux_names)
     aux_args = {name: {"layout": "cell", "required": True} for name in aux_names}
 
     solver_args = _solver_arguments(program) if program is not None else {}
@@ -225,7 +205,6 @@ def build_arguments(compiled: Any) -> Arguments:
             elif value.op == "record" or value.op == "record_scalar":
                 outputs[value.name or "diagnostic"] = {"kind": "diagnostic"}
 
-    caps = getattr(_metadata_source(compiled), "caps", {}) or {}
     ghost_depth = _ghost_depth(compiled)
     # Per-block ghost depth (ADC-536 / CONTRACTS6 decision 4): the bind stream validates each block's
     # initial-state ghosts against the MANIFEST value keyed by block. Every instance shares the model's
@@ -235,13 +214,12 @@ def build_arguments(compiled: Any) -> Arguments:
     # The runtime LAYOUT the artifact targets: "amr" for an AMR-route CompiledModel (target=
     # 'amr_system', ADC-515) so ``arguments()`` reports the native per-block AMR loader; a whole-system
     # Program handle stays "system" (its only target today).
-    _amr = (getattr(compiled, "_target", None) == "amr_system"
-            or getattr(compiled, "target", "system") == "amr_system")
+    _amr = getattr(compiled, "target", "system") == "amr_system"
     layout_kind = "amr" if _amr else "system"
     layout_runtime = {"layout": layout_kind, "requires_mpi": False,
                       "ghost_depth": ghost_depth,
                       "ghost_depth_by_block": ghost_depth_by_block,
-                      "supports_mpi": bool(caps.get("mpi", False))}
+                      "supports_mpi": bool(_aggregate_capability(compiled, "mpi"))}
 
     return Arguments(instances=instances, params=param_args, aux=aux_args,
                      solvers=solver_args, outputs=outputs, layout_runtime=layout_runtime,
@@ -390,12 +368,12 @@ def build_memory_estimate(compiled: Any, mesh: Any, *, platform: Any = None,
     _cons, n_cons, _params, _aux_names, n_aux, _space = _model_metadata(compiled)
     n_cons = max(n_cons, 1)  # a degenerate empty model still stages 1 component (never 0 bytes)
 
-    # ADC-515: on the AMR route ``compiled`` is a bare CompiledModel carrying the AMR layout on
-    # ``_layout`` and no Program, so a bare ``estimate_memory(mesh)`` defaults @p layout to it (the AMR
-    # patch budget without re-passing layout=; explicit @p layout wins). A Program handle has no
-    # ``_layout``, so this is a no-op there (the Uniform estimate stays byte-identical).
+    # On the AMR route ``compiled`` is a CompiledModel carrying the AMR layout in its immutable
+    # InstallPlan and no Program, so a bare ``estimate_memory(mesh)`` defaults to that plan. An
+    # explicit layout wins; a low-level handle without an InstallPlan retains the uniform default.
     if layout is None:
-        layout = getattr(compiled, "_layout", None)
+        plan = getattr(compiled, "install_plan", None)
+        layout = getattr(plan, "layout", None)
 
     est = program.estimate() if (program is not None and hasattr(program, "estimate")) \
         else {"buffer_count": 1, "heavy_kernels": 0}

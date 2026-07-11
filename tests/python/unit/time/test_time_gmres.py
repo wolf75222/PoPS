@@ -26,6 +26,8 @@ one, GMRES minimises the residual over the Krylov subspace and converges.
 The non-symmetric C++ guard (CG stagnates while gmres recovers phi_exact) is also pinned directly in
 tests/cpp/unit/elliptic/test_generic_krylov.cpp, which is fully validatable on every backend without the Python toolchain.
 """
+from typed_program_support import typed_state
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
@@ -61,7 +63,7 @@ def _spd_program(t, *, name="gmres_spd", method="gmres", tol=1e-9, max_iter=300,
 
     A pure (SPD) Helmholtz apply; solve_linear drives the runtime GMRES loop. No model needed."""
     P = t.Program(name)
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
 
     def apply(P, out, x):
@@ -72,7 +74,7 @@ def _spd_program(t, *, name="gmres_spd", method="gmres", tol=1e-9, max_iter=300,
     P.set_apply(A, apply)
     phi = P.solve_linear(operator=A, rhs=U, method=_krylov(method), tol=tol, max_iter=max_iter,
                          restart=restart)
-    P.commit(P.state("U", block="blk").next, phi)
+    P.commit(typed_state(P, "blk", state_name="U").next, phi)
     return P
 
 
@@ -84,7 +86,7 @@ def _nonsym_program(t, *, name="gmres_nonsym", tol=1e-9, max_iter=300, restart=3
     d fx/dx (the x-flux read from in, the y-flux zero) -- a skew-symmetric term that makes A
     non-self-adjoint, so CG stagnates while GMRES converges."""
     P = t.Program(name)
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
 
     def apply(P, out, x):
@@ -104,7 +106,7 @@ def _nonsym_program(t, *, name="gmres_nonsym", tol=1e-9, max_iter=300, restart=3
     if method == "gmres":
         kw["restart"] = restart  # restart is gmres-only (rejected for cg/bicgstab)
     phi = P.solve_linear(**kw)
-    P.commit(P.state("U", block="blk").next, phi)
+    P.commit(typed_state(P, "blk", state_name="U").next, phi)
     return P
 
 
@@ -142,7 +144,7 @@ def test_gmres_now_valid_method(t):
 
 def test_gmres_max_iter_required(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     for bad in (None, 0, -5):
@@ -156,7 +158,7 @@ def test_gmres_max_iter_required(t):
 
 def test_gmres_restart_validation(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     for bad in (0, -3, 1.5, True):  # a positive int is required (True is rejected: bool is not allowed)
@@ -173,7 +175,7 @@ def test_gmres_restart_validation(t):
 
 def test_restart_rejected_for_non_gmres(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     for method in ("cg", "bicgstab", "richardson"):
@@ -269,7 +271,6 @@ def _run_one(t, pops, np, program, name):
         print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
 
-    from pops.physics.facade import Model
 
     try:
         compiled = pops.codegen.compile_problem(model=_passive_model(name + "_prog"), time=program)

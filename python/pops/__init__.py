@@ -63,15 +63,16 @@ __all__ = [
     "inspect_amr", "native_capability_report", "runtime_environment_report",
     "validate_runtime_environment", "RuntimeCapabilityError",
     "set_threads", "has_kokkos", "parallel_info", "doctor", "CompiledArtifact",
-    "Problem", "PhysicsModel", "compile", "bind", "RuntimePolicies",
+    "Problem", "AuthoringSnapshot", "Program", "PhysicsModel", "compile", "bind",
+    "RuntimePolicies",
 ]
-
 
 # Lower / authoring layers + the moved integrate (re-exported, surface unchanged; numpy-free).
 from pops.runtime import integrate  # noqa: E402,F401  (pops.integrate name preserved; without numpy)
 from . import time, model, math, lib, physics, mesh  # noqa: E402  (Spec 2/3 operator-first + board authoring + IR)
 from . import params, output, external, fields, linalg, solvers  # noqa: E402  (Spec 5 typed params/output/fields/algebra/solvers)
-from .problem import Problem  # noqa: E402,F401  (Spec 5 sec.5.16: top-level compilable assembly; pure stdlib)
+from .problem import AuthoringSnapshot, Problem  # noqa: E402,F401
+from .time import Program  # noqa: E402,F401
 from pops.physics import PhysicsModel  # noqa: E402,F401  (Spec 5 sec.11: alias of pops.physics.Model)
 # ADC-545: library trio + CompiledTime left the root (homes in __getattr__); keep pops.codegen bound.
 from . import codegen  # noqa: E402,F401
@@ -79,7 +80,6 @@ from ._capabilities import (  # noqa: E402,F401  (Spec 5: descriptor-sourced mat
     inspect_capabilities, inspect_amr, native_capability_report)
 from ._inspect import inspect  # noqa: E402,F401  (ADC-527: stable per-object inspect dispatcher)
 from .runtime_environment import RuntimeCapabilityError, runtime_environment_report, validate_runtime_environment  # noqa: E402,F401,E501
-
 
 # ADC-545: retired name -> advanced home; __getattr__ raises a targeted AttributeError naming both
 # the front door (pops.compile / pops.bind) and this home (no silent alias).

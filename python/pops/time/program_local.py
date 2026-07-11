@@ -425,7 +425,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         return self._new("scalar_field", "rhs_jacvec", (out, in_, iterate, r0),
                          {"c_dt": c_d, "eps": eps_literal, "flux": True, "sources": src,
                           "field_coupled": field_coupled},
-                         out.name, None)
+                         out.name, iterate.block, state_ref=iterate.state_ref)
 
     # --- tensor-coefficient matrix-free apply of the generic condensed-implicit route (ADC-637) --------
     def apply_laplacian_coeff(self, out: Any, in_: Any, coeffs: Any) -> Any:
@@ -445,5 +445,11 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         if not (isinstance(coeffs, ProgramValue) and coeffs.vtype == "condensed_coeffs"):
             raise ValueError("apply_laplacian_coeff: coeffs must be a coefficient bundle "
                              "(P.condensed_coeffs(...))")
-        return self._new("scalar_field", "apply_laplacian_coeff", (out, in_, coeffs), {}, out.name,
-                         None)
+        # ``out`` / ``in_`` are matrix-free scratch buffers and therefore intentionally have no
+        # block of their own.  The coefficient bundle is different: it is assembled from one
+        # concrete state and determines the physical block on which this apply is valid.  Preserve
+        # that provenance on the result instead of letting ``_new`` infer only ``state_ref`` while
+        # leaving ``block=None`` (an impossible half-qualified ProgramValue).
+        return self._new(
+            "scalar_field", "apply_laplacian_coeff", (out, in_, coeffs), {}, out.name,
+            coeffs.block, state_ref=coeffs.state_ref)

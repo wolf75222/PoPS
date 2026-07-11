@@ -9,6 +9,8 @@ is byte-untouched; only the AMR body gains the hierarchy-aware solve).
 from pops.params import ConstParam
 import pytest
 
+from typed_program_support import state_refs
+
 pops_time = pytest.importorskip("pops.time", exc_type=ImportError)
 pops_lib_time = pytest.importorskip("pops.lib.time", exc_type=ImportError)
 
@@ -50,8 +52,9 @@ def _linear_handle(model):
 def _emit(target):
     model = _lorentz_model("adc633_emit_model")
     P = pops_time.Program("adc633_schur_emit").bind_operators(model)
+    block, state = state_refs(P, "blk", model=model)
     pops_lib_time.condensed_schur(
-        P, "blk", alpha=1.0, theta=1.0,
+        P, block, state, alpha=1.0, theta=1.0,
         linear_operator=_linear_handle(model))
     return P.emit_cpp_program(model=model, target=target)
 
@@ -82,8 +85,9 @@ def test_ir_hash_is_target_independent():
     AMR seam is an emission-time branch, not an IR change, so the uniform IR-hash is untouched."""
     model = _lorentz_model("adc633_hash_model")
     P = pops_time.Program("adc633_schur_hash").bind_operators(model)
+    block, state = state_refs(P, "gas", model=model)
     pops_lib_time.condensed_schur(
-        P, "gas", alpha=1.0, theta=1.0,
+        P, block, state, alpha=1.0, theta=1.0,
         linear_operator=_linear_handle(model))
     h_sys = P._ir_hash()
     h_amr = P._ir_hash()

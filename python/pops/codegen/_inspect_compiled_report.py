@@ -270,7 +270,9 @@ def _compiled_options(compiled: Any) -> dict:
     from pops.runtime.defaults import PHYSICAL_DEFAULT_GAMMA, numerical_defaults_report
 
     defaults = numerical_defaults_report()
-    model = getattr(compiled, "model", None)
+    from pops.codegen._artifact_models import primary_artifact_model
+
+    model = primary_artifact_model(compiled)
     params = dict(getattr(model, "params", {}) or {})
 
     def param_kind(param: Any) -> str:

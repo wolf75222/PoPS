@@ -193,6 +193,36 @@ def test_artifact_manifest_external_bricks_is_additive_and_round_trips():
     assert back.to_dict() == d
 
 
+def test_artifact_manifest_is_deeply_immutable_and_returns_detached_wire_data():
+    from pops.external.artifact_manifest import CompiledArtifactManifest
+
+    source = [{
+        "id": "nested", "category": "riemann",
+        "requirements": {"fields": ["pressure"]},
+        "options": {"reconstruction": {"order": 2}},
+    }]
+    manifest = CompiledArtifactManifest(
+        model_name="demo",
+        ghost_depth_by_block={"fluid": 2},
+        external_bricks=source,
+    )
+    source[0]["options"]["reconstruction"]["order"] = 7
+    assert manifest.external_bricks[0]["options"]["reconstruction"]["order"] == 2
+
+    with pytest.raises(AttributeError, match="immutable"):
+        manifest.model_name = "forged"
+    with pytest.raises(TypeError):
+        manifest.ghost_depth_by_block["fluid"] = 9
+    with pytest.raises(TypeError):
+        manifest.external_bricks[0]["options"]["reconstruction"]["order"] = 9
+
+    detached = manifest.to_dict()
+    detached["external_bricks"][0]["options"]["reconstruction"]["order"] = 11
+    detached["ghost_depth_by_block"]["fluid"] = 11
+    assert manifest.external_bricks[0]["options"]["reconstruction"]["order"] == 2
+    assert manifest.ghost_depth_by_block["fluid"] == 2
+
+
 # ---- ADC-544 v2 optional fields (native_id / layouts / platforms / params / options / symbols) ---
 
 def test_v2_optional_fields_parse():

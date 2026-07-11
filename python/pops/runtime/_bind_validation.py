@@ -453,16 +453,15 @@ def validate_install_arguments(sim: Any, compiled: Any, instances: Any, params: 
                          + "\n  ".join(missing))
 
 
-def run_bind_gates(compiled: Any, problem: Any, layout: Any, initial: Any, params: Any,
-                   aux: Any) -> Any:
+def run_bind_gates(compiled: Any, layout: Any, initial: Any, params: Any, aux: Any) -> Any:
     """Run the four ADC-537 bind refusal gates, raising ONE aggregated ``ValueError`` on any violation.
 
     The ``pops.bind`` front-door check (called from :mod:`pops.codegen.orchestration` BEFORE the
     native artifact is loaded). Reads the compiled artifact's MANIFEST
     (:meth:`~pops.codegen.loader.CompiledProblem.manifest` -- ghost depth / precision / abi_key /
     supports_* per the phase-6 contract) and its ``arguments()`` (the declared blocks / components),
-    the live runtime facts (:func:`loaded_runtime_facts`) and the Problem's typed param declarations
-    (``problem._param_declarations``), then folds the four gates. Every refusal is a HARD error with
+    the live runtime facts (:func:`loaded_runtime_facts`), then folds the four gates. Parameter
+    validation has already been performed by the artifact's immutable BindSchema. Every refusal is a HARD error with
     precise context; there is NO fallback. A degraded handle that exposes no manifest / arguments is
     left to the adapter's own native install check (this gate never fabricates one)."""
     manifest = compiled.manifest() if hasattr(compiled, "manifest") else None

@@ -17,19 +17,20 @@ import pytest
 
 t = pytest.importorskip("pops.time")
 lt = pytest.importorskip("pops.lib.time")  # ready schemes (Spec 4)
+from tests.python.unit.runtime._typed_program import typed_program_state  # noqa: E402
 
 
 def _forward_euler():
     """A small real Program: forward Euler over one block via pops.lib.time."""
-    P = t.Program("pernode_fe")
-    lt.forward_euler(P, "gas")
+    P, _, _, block, state, _ = typed_program_state("pernode_fe", block_name="gas")
+    lt.forward_euler(P, block, state)
     return P
 
 
 def _ssprk3():
     """A multi-stage Program (three rhs / two intermediate lincomb / one commit)."""
-    P = t.Program("pernode_ssprk3")
-    lt.ssprk3(P, "gas")
+    P, _, _, block, state, _ = typed_program_state("pernode_ssprk3", block_name="gas")
+    lt.ssprk3(P, block, state)
     return P
 
 

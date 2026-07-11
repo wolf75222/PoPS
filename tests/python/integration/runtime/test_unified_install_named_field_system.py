@@ -3,8 +3,8 @@
 PURE-PYTHON tests of the install-seam routing for a NAMED elliptic field (m.elliptic_field): a
 field a block's model DECLARES routes through the shared system elliptic solver (set_poisson), while
 an UNDECLARED field name is rejected LOUD against the declared set (never a silent drop). The
-declared set is collected from CompiledModel.elliptic_field_names / a raw model's _elliptic_fields,
-so the codegen->install carry is exercised without a real Kokkos compile.
+declared set is collected exclusively from the ``CompiledModel.elliptic_field_names`` records in an
+immutable ``InstallPlan``; bind never consults a raw authoring model.
 
 Runs both under pytest and as a plain script; the CI runner executes it via the __main__ guard.
 """
@@ -13,7 +13,10 @@ import sys
 try:
     import pops
     from pops.runtime._system_unified_install import _SystemUnifiedInstall
+    from pops.codegen._plans import InstallBlock, InstallPlan
     from pops.codegen.loader import CompiledModel
+    from pops.model import Module
+    from pops.problem._snapshot import AuthoringSnapshot
 except Exception as exc:  # noqa: BLE001
     print("skip test_unified_install_named_field_system (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -22,11 +25,30 @@ except Exception as exc:  # noqa: BLE001
 from tests.python.support.assertions import _check
 
 
-class _RawModel:
-    """A raw physics/dsl model stand-in exposing the _elliptic_fields mapping (m.elliptic_field)."""
+def _compiled_model(*fields):
+    """Return an inert, runtime-ready model carrying only immutable install metadata."""
+    return CompiledModel(
+        so_path="/fake.so", backend="production", adder="add_native_block",
+        cons_names=["rho"], cons_roles=["Density"], prim_names=["rho"], n_vars=1,
+        gamma=None, n_aux=0, params={}, caps={}, abi_key="k", model_hash="h",
+        cxx="c++", std="c++20", target="system", elliptic_field_names=list(fields))
 
-    def __init__(self, fields=()):
-        self._elliptic_fields = {n: {} for n in fields}
+
+def _install_instances(**models):
+    """Assemble the runtime instance mapping through the same immutable plan as ``pops.bind``."""
+    snapshot = AuthoringSnapshot({"kind": "named-field-system", "blocks": tuple(models)})
+    plan = InstallPlan(
+        snapshot_hash=snapshot.hash,
+        target="system",
+        layout=None,
+        blocks=tuple(InstallBlock(name, model, None) for name, model in models.items()),
+        bind_schema=None,
+        field_solvers={},
+        outputs=(),
+        diagnostics=(),
+        has_program=False,
+    )
+    return plan.assemble_instances({})
 
 
 class _SolverHarness(_SystemUnifiedInstall):
@@ -57,24 +79,20 @@ def test_compiled_model_carries_elliptic_field_names():
     print("ok test_compiled_model_carries_elliptic_field_names")
 
 
-def test_declared_elliptic_fields_collected_from_handle_and_instances():
-    """C1: the declared set is gathered from the compiled handle's model AND the per-instance models,
-    reading elliptic_field_names (CompiledModel) or _elliptic_fields (raw model) without compiling."""
-    handle = type("CP", (), {"model": _RawModel(fields=("psi",))})()
-    instances = {"ne": {"model": _RawModel(fields=("chi",))},
-                 "ni": {"model": _RawModel(fields=("psi",))}}
-    declared = _SystemUnifiedInstall._declared_elliptic_fields(handle, instances)
-    _check(declared == {"psi", "chi"}, "union of handle + instance declared fields (got %r)" % declared)
-    # a CompiledModel exposes elliptic_field_names instead of _elliptic_fields
-    cm = CompiledModel(
-        so_path="/fake.so", backend="production", adder="add_native_block",
-        cons_names=["rho"], cons_roles=["Density"], prim_names=["rho"], n_vars=1,
-        gamma=None, n_aux=0, params={}, caps={}, abi_key="k", model_hash="h",
-        cxx="c++", std="c++20", elliptic_field_names=["theta"])
+def test_declared_elliptic_fields_collected_from_install_plan_instances():
+    """C1: the declared set is the union of per-instance ``CompiledModel`` metadata."""
+    instances = _install_instances(
+        ne=_compiled_model("chi"),
+        ni=_compiled_model("psi"),
+    )
+    declared = _SystemUnifiedInstall._declared_elliptic_fields(None, instances)
+    _check(declared == {"psi", "chi"},
+           "union of InstallPlan CompiledModel fields (got %r)" % declared)
     declared2 = _SystemUnifiedInstall._declared_elliptic_fields(
-        type("CP", (), {"model": None})(), {"b": {"model": cm}})
-    _check(declared2 == {"theta"}, "CompiledModel.elliptic_field_names collected (got %r)" % declared2)
-    print("ok test_declared_elliptic_fields_collected_from_handle_and_instances")
+        None, _install_instances(b=_compiled_model("theta")))
+    _check(declared2 == {"theta"},
+           "CompiledModel.elliptic_field_names collected (got %r)" % declared2)
+    print("ok test_declared_elliptic_fields_collected_from_install_plan_instances")
 
 
 def test_install_solver_routes_default_poisson_field():
@@ -110,16 +128,6 @@ def test_install_solver_rejects_undeclared_field():
 
 def test_case_validate_accepts_named_field():
     """C1: a Problem with a named non-Poisson field VALIDATES (the whitelist reject is removed)."""
-    class _M:
-        def validate(self, context=None):
-            return True
-
-        def requirements(self):
-            return {}
-
-        def capabilities(self):
-            return {}
-
     class _F:
         def validate(self, context=None):
             return True
@@ -127,7 +135,9 @@ def test_case_validate_accepts_named_field():
         def requirements(self):
             return {}
 
-    problem = pops.Problem().block("ne", physics=_M())
+    model = Module("named-field-validation")
+    model.state_space("U", ("rho",))
+    problem = pops.Problem().block("ne", physics=model)
     # Poke a stub field into the field registry's backing store directly (the stub is intentionally
     # not a real FieldProblem, so the typed .field() guard is bypassed as it was on the old dict).
     problem._fields._fields["psi"] = _F()

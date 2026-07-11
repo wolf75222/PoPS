@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import math
+import types
 from collections.abc import Mapping
 from decimal import Decimal
 from fractions import Fraction
@@ -20,6 +21,13 @@ from pops.model.handles import (
     OwnerPath,
     ParamHandle,
 )
+from pops.problem._snapshot_callable import (
+    canonical_callable_reference as _canonical_callable_reference,
+    class_has_public_behavior as _class_has_public_behavior,
+    class_implementation_projection as _class_implementation_projection,
+)
+from pops.problem._snapshot_mapping import canonical_mapping as _canonical_mapping
+from pops.problem._snapshot_literals import canonical_literal_data as _canonical_literal_data
 
 
 def _canonical(
@@ -29,6 +37,7 @@ def _canonical(
     active: set[int] | None = None,
     handle_resolver: Any = None,
     artifact: bool = False,
+    projection_cache: dict[tuple[int, str], Any] | None = None,
 ) -> Any:
     """Return a strict, deterministic JSON view of ``value``.
 
@@ -38,6 +47,8 @@ def _canonical(
     """
     if active is None:
         active = set()
+    if projection_cache is None:
+        projection_cache = {}
     if value is None or isinstance(value, bool):
         return value
     if isinstance(value, int):
@@ -47,22 +58,56 @@ def _canonical(
                             "denominator": str(value.denominator)}}
     if isinstance(value, Decimal):
         if not value.is_finite():
-            raise ValueError("ProblemSnapshot cannot encode a non-finite Decimal")
+            raise ValueError("AuthoringSnapshot cannot encode a non-finite Decimal")
         return {"$scalar": {"kind": "decimal", "value": str(value)}}
     if isinstance(value, float):
         if not math.isfinite(value):
-            raise ValueError("ProblemSnapshot cannot encode a non-finite float at %s" % path)
+            raise ValueError("AuthoringSnapshot cannot encode a non-finite float at %s" % path)
         return {"$scalar": {"kind": "binary64", "value": value.hex()}}
     if isinstance(value, str):
         return value
+    if isinstance(value, bytes):
+        return {"$bytes": value.hex()}
+    if isinstance(value, complex):
+        if not math.isfinite(value.real) or not math.isfinite(value.imag):
+            raise ValueError("AuthoringSnapshot cannot encode a non-finite complex at %s" % path)
+        return {"$complex": [value.real.hex(), value.imag.hex()]}
+    if isinstance(value, types.ModuleType):
+        raise TypeError(
+            "AuthoringSnapshot cannot encode module %s as an opaque value at %s; "
+            "reference explicit module attributes from a callable instead"
+            % (getattr(value, "__name__", "<module>"), path))
+    if isinstance(value, type):
+        projection = _class_implementation_projection(
+            value,
+            path=path,
+            active=active,
+            handle_resolver=handle_resolver,
+            artifact=artifact,
+            canonical=lambda item, **kwargs: _canonical(
+                item, projection_cache=projection_cache, **kwargs),
+            dependency_cache=projection_cache,
+        )
+        return {"$class": projection}
+    if isinstance(value, (types.FunctionType, types.MethodType, types.BuiltinFunctionType)):
+        return _canonical_callable_reference(
+            value,
+            path=path,
+            active=active,
+            handle_resolver=handle_resolver,
+            artifact=artifact,
+            canonical=lambda item, **kwargs: _canonical(
+                item, projection_cache=projection_cache, **kwargs),
+            dependency_cache=projection_cache,
+        )
     marker = id(value)
     if marker in active:
-        raise ValueError("ProblemSnapshot cannot encode a reference cycle at %s" % path)
+        raise ValueError("AuthoringSnapshot cannot encode a reference cycle at %s" % path)
     active.add(marker)
     try:
         return _canonical_compound(
             value, path=path, active=active, handle_resolver=handle_resolver,
-            artifact=artifact)
+            artifact=artifact, projection_cache=projection_cache)
     finally:
         active.remove(marker)
 
@@ -74,57 +119,68 @@ def _canonical_compound(
     active: set[int],
     handle_resolver: Any,
     artifact: bool,
+    projection_cache: dict[tuple[int, str], Any],
 ) -> Any:
     """Canonicalise a container, handle, literal or structural Python object."""
     if type(value).__module__.split(".", 1)[0] == "numpy":
         raise TypeError(
-            "ProblemSnapshot cannot encode numpy runtime data at %s; declare metadata, not arrays"
+            "AuthoringSnapshot cannot encode numpy runtime data at %s; declare metadata, not arrays"
             % path)
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list):
         return [_canonical(
                     item, path="%s[%d]" % (path, index), active=active,
-                    handle_resolver=handle_resolver, artifact=artifact)
+                    handle_resolver=handle_resolver, artifact=artifact,
+                    projection_cache=projection_cache)
                 for index, item in enumerate(value)]
-    if isinstance(value, (set, frozenset)):
+    if isinstance(value, tuple):
+        return {"$tuple": [_canonical(
+                    item, path="%s[%d]" % (path, index), active=active,
+                    handle_resolver=handle_resolver, artifact=artifact,
+                    projection_cache=projection_cache)
+                for index, item in enumerate(value)]}
+    if isinstance(value, set):
         items = [_canonical(
                     item, path="%s{item}" % path, active=active,
-                    handle_resolver=handle_resolver, artifact=artifact)
+                    handle_resolver=handle_resolver, artifact=artifact,
+                    projection_cache=projection_cache)
                  for item in value]
         return {"$set": sorted(items, key=lambda item: json.dumps(
             item, sort_keys=True, separators=(",", ":"), allow_nan=False))}
+    if isinstance(value, frozenset):
+        items = [_canonical(
+                    item, path="%s{item}" % path, active=active,
+                    handle_resolver=handle_resolver, artifact=artifact,
+                    projection_cache=projection_cache)
+                 for item in value]
+        return {"$frozenset": sorted(items, key=lambda item: json.dumps(
+            item, sort_keys=True, separators=(",", ":"), allow_nan=False))}
     if isinstance(value, Mapping):
-        if all(isinstance(key, str) for key in value):
-            return {key: _canonical(
-                        item, path="%s.%s" % (path, key), active=active,
-                        handle_resolver=handle_resolver, artifact=artifact)
-                    for key, item in value.items()}
-        entries = [
-            (_canonical(
-                key, path="%s{key}" % path, active=active,
-                handle_resolver=handle_resolver, artifact=artifact),
-             _canonical(
-                 item, path="%s{%r}" % (path, key), active=active,
-                 handle_resolver=handle_resolver, artifact=artifact))
-            for key, item in value.items()
-        ]
-        entries.sort(key=lambda pair: json.dumps(
-            pair[0], sort_keys=True, separators=(",", ":"), allow_nan=False))
-        return {"$map": [[key, item] for key, item in entries]}
+        return _canonical_mapping(
+            value,
+            path=path,
+            active=active,
+            handle_resolver=handle_resolver,
+            artifact=artifact,
+            canonical=lambda item, **kwargs: _canonical(
+                item, projection_cache=projection_cache, **kwargs),
+        )
     if isinstance(value, OwnerPath):
         canonical_owner = value.canonical()
-        data = _call_projection(canonical_owner, "to_data", canonical_owner.to_data, path)
+        data = _call_projection(
+            canonical_owner, "to_data", canonical_owner.to_data, path, projection_cache)
         if OwnerPath.from_data(data) != canonical_owner:
             raise ValueError("OwnerPath.to_data() does not round-trip at %s" % path)
         return {"$owner_path": data}
     if isinstance(value, Handle):
         return {"$handle": _canonical_handle_identity(
-            value, path, handle_resolver=handle_resolver)}
+            value, path, handle_resolver=handle_resolver,
+            projection_cache=projection_cache)}
     if isinstance(value, ScalarLiteral):
-        data = _call_projection(value, "to_data", value.to_data, path)
+        data = _call_projection(value, "to_data", value.to_data, path, projection_cache)
         return {"$scalar": _canonical_literal_data(data, path="%s.to_data()" % path)}
     return _canonical_object(
         value, path=path, active=active, handle_resolver=handle_resolver,
-        artifact=artifact)
+        artifact=artifact, projection_cache=projection_cache)
 
 
 def _canonical_handle_identity(
@@ -132,6 +188,7 @@ def _canonical_handle_identity(
     path: str,
     *,
     handle_resolver: Any = None,
+    projection_cache: dict[tuple[int, str], Any],
 ) -> dict[str, Any]:
     """Validate an authenticated Handle projection without lossy coercion or duck typing."""
     if callable(handle_resolver):
@@ -139,32 +196,33 @@ def _canonical_handle_identity(
         resolved = handle_resolver(value)
         if not isinstance(resolved, Handle) or not resolved.is_resolved:
             raise TypeError(
-                "ProblemSnapshot handle resolver must return a canonical Handle at %s" % path)
+                "AuthoringSnapshot handle resolver must return a canonical Handle at %s" % path)
         if (resolved.schema_version, resolved.kind, resolved.local_id) != (
                 authored.schema_version, authored.kind, authored.local_id):
             raise ValueError(
-                "ProblemSnapshot handle resolver changed declaration identity at %s" % path)
+                "AuthoringSnapshot handle resolver changed declaration identity at %s" % path)
         if isinstance(authored, ModelOperatorHandle) and (
                 not isinstance(resolved, ModelOperatorHandle)
                 or resolved.registered_operator_name != authored.registered_operator_name):
             raise ValueError(
-                "ProblemSnapshot handle resolver changed operator target at %s" % path)
+                "AuthoringSnapshot handle resolver changed operator target at %s" % path)
         if isinstance(authored, ParamHandle) and (
                 not isinstance(resolved, ParamHandle)
                 or resolved.param_kind != authored.param_kind):
             raise ValueError(
-                "ProblemSnapshot handle resolver changed parameter kind at %s" % path)
+                "AuthoringSnapshot handle resolver changed parameter kind at %s" % path)
         if authored.is_resolved \
                 and resolved.canonical_identity() != authored.canonical_identity():
             raise ValueError(
-                "ProblemSnapshot handle resolver changed an already canonical identity at %s"
+                "AuthoringSnapshot handle resolver changed an already canonical identity at %s"
                 % path)
         value = resolved
     elif not value.is_resolved:
         raise TypeError(
-            "ProblemSnapshot cannot serialize unresolved handle %s at %s without an "
+            "AuthoringSnapshot cannot serialize unresolved handle %s at %s without an "
             "authoritative resolver" % (value.qualified_id, path))
-    identity = _call_projection(value, "canonical_identity", value.canonical_identity, path)
+    identity = _call_projection(
+        value, "canonical_identity", value.canonical_identity, path, projection_cache)
     if not isinstance(identity, Mapping):
         raise TypeError("Handle.canonical_identity() must return a mapping at %s" % path)
     required = {"qualified_id", "schema_version", "kind", "owner_path", "local_id"}
@@ -270,6 +328,7 @@ def _canonical_object(
     active: set[int],
     handle_resolver: Any,
     artifact: bool,
+    projection_cache: dict[tuple[int, str], Any],
 ) -> Any:
     """Encode a non-container from explicit projections and/or public structural fields."""
     if artifact:
@@ -277,14 +336,15 @@ def _canonical_object(
             projection = getattr(value, "artifact_data", None)
         except Exception as exc:
             raise TypeError(
-                "ProblemSnapshot could not read %s.artifact_data at %s" %
+                "AuthoringSnapshot could not read %s.artifact_data at %s" %
                 (_qualified_type(value), path)) from exc
         if projection is not None:
             if not callable(projection):
                 raise TypeError(
-                    "ProblemSnapshot expected %s.artifact_data to be callable at %s" %
+                    "AuthoringSnapshot expected %s.artifact_data to be callable at %s" %
                     (_qualified_type(value), path))
-            projected = _call_projection(value, "artifact_data", projection, path)
+            projected = _call_projection(
+                value, "artifact_data", projection, path, projection_cache)
             return {"$object": {
                 "type": _qualified_type(value),
                 "projections": {
@@ -294,6 +354,7 @@ def _canonical_object(
                         active=active,
                         handle_resolver=handle_resolver,
                         artifact=True,
+                        projection_cache=projection_cache,
                     ),
                 },
             }}
@@ -303,25 +364,38 @@ def _canonical_object(
             member = getattr(value, accessor, None)
         except Exception as exc:  # property access is part of the structural protocol
             raise TypeError(
-                "ProblemSnapshot could not read %s.%s at %s" %
+                "AuthoringSnapshot could not read %s.%s at %s" %
                 (_qualified_type(value), accessor, path)) from exc
         if callable(member):
-            projections[accessor] = _call_projection(value, accessor, member, path)
+            projections[accessor] = _call_projection(
+                value, accessor, member, path, projection_cache)
         elif member is not None:
             if accessor == "options" and isinstance(member, Mapping):
                 projections[accessor] = member
             else:
                 raise TypeError(
-                    "ProblemSnapshot expected %s.%s to be callable at %s" %
+                    "AuthoringSnapshot expected %s.%s to be callable at %s" %
                     (_qualified_type(value), accessor, path))
 
     fields = _public_structural_fields(value, path)
     if fields:
         projections["fields"] = fields
-    if not projections:
+    if not projections and not callable(value) and not _class_has_public_behavior(type(value)):
         raise TypeError(
-            "ProblemSnapshot cannot encode opaque %s at %s: expose to_data(), to_dict(), "
+            "AuthoringSnapshot cannot encode opaque %s at %s: expose to_data(), to_dict(), "
             "options(), or public structural fields" % (_qualified_type(value), path))
+    implementation = _class_implementation_projection(
+        type(value),
+        path="%s<%s>.implementation" % (path, _qualified_type(value)),
+        active=active,
+        handle_resolver=handle_resolver,
+        artifact=artifact,
+        canonical=lambda item, **kwargs: _canonical(
+            item, projection_cache=projection_cache, **kwargs),
+        dependency_cache=projection_cache,
+    )
+    if implementation:
+        projections["implementation"] = implementation
     return {"$object": {
         "type": _qualified_type(value),
         "projections": _canonical(
@@ -330,19 +404,37 @@ def _canonical_object(
             active=active,
             handle_resolver=handle_resolver,
             artifact=artifact,
+            projection_cache=projection_cache,
         ),
     }}
 
 
-def _call_projection(value: Any, name: str, fn: Any, path: str) -> Any:
+def _call_projection(
+    value: Any,
+    name: str,
+    fn: Any,
+    path: str,
+    projection_cache: dict[tuple[int, str], Any],
+) -> Any:
     """Call one structural projection without swallowing or replacing its exception."""
+    key = (id(value), name)
+    cached = projection_cache.get(key)
+    if cached is not None:
+        cached_value, cached_result = cached
+        if cached_value is value:
+            return cached_result
     try:
-        return fn()
+        result = fn()
     except Exception as exc:
         if hasattr(exc, "add_note"):
-            exc.add_note("while ProblemSnapshot called %s.%s() at %s" %
+            exc.add_note("while AuthoringSnapshot called %s.%s() at %s" %
                          (_qualified_type(value), name, path))
         raise
+    # Keep the projected object alive with its result.  Snapshot payload builders may create
+    # short-lived canonical Handle copies; caching by a bare id lets CPython reuse that id for the
+    # next copy and return another declaration's projection.
+    projection_cache[key] = (value, result)
+    return result
 
 
 def _public_structural_fields(value: Any, path: str) -> dict[str, Any]:
@@ -373,7 +465,7 @@ def _public_structural_fields(value: Any, path: str) -> dict[str, Any]:
             except AttributeError:
                 continue  # an unset optional slot carries no state
             except Exception as exc:
-                raise TypeError("ProblemSnapshot could not read %s.%s at %s" %
+                raise TypeError("AuthoringSnapshot could not read %s.%s at %s" %
                                 (_qualified_type(value), name, path)) from exc
         return fields
 
@@ -383,7 +475,7 @@ def _public_structural_fields(value: Any, path: str) -> dict[str, Any]:
         names = sorted(
             name for name in dir(value) if isinstance(name, str) and not name.startswith("_"))
     except Exception as exc:
-        raise TypeError("ProblemSnapshot could not inspect %s at %s" %
+        raise TypeError("AuthoringSnapshot could not inspect %s at %s" %
                         (_qualified_type(value), path)) from exc
     for name in names:
         if name in ("to_data", "to_dict", "options", "frozen"):
@@ -391,7 +483,7 @@ def _public_structural_fields(value: Any, path: str) -> dict[str, Any]:
         try:
             member = getattr(value, name)
         except Exception as exc:
-            raise TypeError("ProblemSnapshot could not read %s.%s at %s" %
+            raise TypeError("AuthoringSnapshot could not read %s.%s at %s" %
                             (_qualified_type(value), name, path)) from exc
         if not callable(member):
             fields[name] = member
@@ -402,24 +494,6 @@ def _qualified_type(value: Any) -> str:
     cls = type(value)
     cls = getattr(cls, "_pops_unfrozen_type", cls)
     return "%s.%s" % (cls.__module__, cls.__qualname__)
-
-
-def _canonical_literal_data(data: Any, *, path: str) -> Any:
-    """Canonicalize an already JSON-shaped ScalarLiteral view without re-tagging its integers."""
-    if isinstance(data, dict):
-        if not all(isinstance(key, str) for key in data):
-            raise TypeError("ScalarLiteral.to_data() requires string keys at %s" % path)
-        return {key: _canonical_literal_data(item, path="%s.%s" % (path, key))
-                for key, item in data.items()}
-    if isinstance(data, (list, tuple)):
-        return [_canonical_literal_data(item, path="%s[%d]" % (path, index))
-                for index, item in enumerate(data)]
-    if isinstance(data, float) and not math.isfinite(data):
-        raise ValueError("ScalarLiteral.to_data() contains a non-finite float at %s" % path)
-    if data is None or isinstance(data, (bool, int, float, str)):
-        return data
-    raise TypeError("ScalarLiteral.to_data() is not JSON-ready at %s (got %s)" %
-                    (path, _qualified_type(data)))
 
 
 __all__ = ["_canonical"]

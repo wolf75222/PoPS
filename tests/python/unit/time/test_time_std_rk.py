@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """pops.lib.time.rk -- generic explicit Runge-Kutta from a Butcher tableau (epic ADC-399 / ADC-423).
 
-``std.rk(P, block, tableau)`` lowers an arbitrary EXPLICIT Butcher tableau (A, b, c) to the same
+``pops.lib.time.rk(P, block, state, tableau=...)`` lowers an arbitrary EXPLICIT Butcher tableau
+(A, b, c) to the same
 stage topology the hard-coded `rk4` macro emits (solve_fields + rhs + linear_combine, no RK class):
 
     k_i     = R(U + dt*sum_{j<i} A[i][j]*k_j)
@@ -18,6 +19,8 @@ stage topology the hard-coded `rk4` macro emits (solve_fields + rhs + linear_com
 
 Pure-Python IR construction is always available; the compiled section gates on the full toolchain.
 """
+from typed_program_support import commits_by_block, state_refs
+
 from decimal import Decimal
 from fractions import Fraction
 import sys
@@ -51,9 +54,9 @@ def _coeff(node, value):
 def test_rk_rk4_tableau_matches_rk4_macro_exactly(t):
     """The data-driven and handwritten RK4 forms retain the same exact coefficients."""
     macro = t.Program("rk4")
-    lt.rk4(macro, "plasma")
+    lt.rk4(macro, *state_refs(macro, "plasma"))
     generic = t.Program("rk4")  # the RK4_TABLEAU is named "rk4", so the node tags match too
-    lt.rk(generic, "plasma", lt.RK4_TABLEAU)
+    lt.rk(generic, *state_refs(generic, "plasma"), tableau=lt.RK4_TABLEAU)
     macro_nodes = [
         (v.vtype, v.op, v.name, tuple(i.id for i in v.inputs),
          tuple(dict(coeff) for coeff in v.attrs.get("coeffs", ())))
@@ -72,9 +75,9 @@ def test_rk_rk4_tableau_matches_rk4_macro_exactly(t):
 def test_rk_ssprk2_tableau_is_heun(t):
     """rk(SSPRK2_TABLEAU) commits Heun's U + dt(1/2 k1 + 1/2 k2): two stages, two equal-weighted RHS."""
     P = t.Program("ssprk2")
-    lt.rk(P, "plasma", lt.SSPRK2_TABLEAU)
+    lt.rk(P, *state_refs(P, "plasma"), tableau=lt.SSPRK2_TABLEAU)
     P.validate()
-    node = P.commits()["plasma"]
+    node = commits_by_block(P)["plasma"]
     assert node.op == "linear_combine"
     states = [v for v in node.inputs if v.vtype == "state"]
     rhss = [v for v in node.inputs if v.vtype == "rhs"]
@@ -94,10 +97,11 @@ def test_rk_accepts_raw_triple(t):
     b = [Fraction(1, 2), Fraction(1, 2)]
     c = [0, 1]
     P = t.Program("raw")
-    lt.rk(P, "plasma", (A, b, c))
+    lt.rk(P, *state_refs(P, "plasma"), tableau=(A, b, c))
     assert P.validate() is True
     heun = t.Program("raw")
-    lt.rk(heun, "plasma", lt.ButcherTableau(A, b, c))
+    lt.rk(
+        heun, *state_refs(heun, "plasma"), tableau=lt.ButcherTableau(A, b, c))
     assert P._ir_hash() == heun._ir_hash(), "the raw triple == its wrapped tableau IR"
 
 
@@ -186,7 +190,6 @@ def _run_section_b(t):
         import numpy as np
 
         import pops
-        from pops.physics.facade import Model
     except Exception as exc:  # noqa: BLE001
         print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return
@@ -203,10 +206,15 @@ def _run_section_b(t):
             print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:160])
             return None
 
-    macro = compiled_so(lambda P: lt.rk4(P, "blk"), "rk4_macro")
+    macro = compiled_so(
+        lambda P: lt.rk4(P, *state_refs(P, "blk")), "rk4_macro")
     if macro is None:
         return
-    generic = compiled_so(lambda P: lt.rk(P, "blk", lt.RK4_TABLEAU), "rk4_macro")
+    generic = compiled_so(
+        lambda P: lt.rk(
+            P, *state_refs(P, "blk"), tableau=lt.RK4_TABLEAU),
+        "rk4_macro",
+    )
     if generic is None:
         return
 

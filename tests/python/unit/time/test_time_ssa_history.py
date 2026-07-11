@@ -13,6 +13,8 @@ covered there:
 
 Pure Python IR construction (no numerics / no _pops); collected as pytest functions.
 """
+from typed_program_support import commits_by_block, typed_state
+
 import sys
 
 import pytest
@@ -34,7 +36,7 @@ def _expect(exc_type, fn, needle):
 # --- keep_history checkpoint policy (ADC-626) ---------------------------------------------------
 def test_keep_history_default_resolves_to_dense():
     P = adctime.Program("h")
-    U = P.state("U", block="plasma")
+    U = typed_state(P, "plasma", state_name="U")
     node = P.keep_history(U, depth=2)
     assert node.op == "store_history"
     # The historical whole-ring behaviour: cold start defaults to CopyCurrent, persistence to Dense.
@@ -48,7 +50,7 @@ def test_keep_history_default_resolves_to_dense():
 
 def test_keep_history_accepts_typed_policy():
     P = adctime.Program("h")
-    U = P.state("U", block="plasma")
+    U = typed_state(P, "plasma", state_name="U")
     # depth 4 with Interval(3): (depth-1)=3 divisible by 3 -> stores {0, 3}, coherent.
     node = P.keep_history(U, depth=4, checkpoint_policy=Interval(3))
     assert node.op == "store_history"
@@ -60,14 +62,14 @@ def test_keep_history_accepts_typed_policy():
 
 def test_keep_history_bad_string_policy_refused():
     P = adctime.Program("h")
-    U = P.state("U", block="plasma")
+    U = typed_state(P, "plasma", state_name="U")
     # A bare string is NOT a typed policy: refused with a TypeError (only the descriptors are accepted).
     _expect(TypeError, lambda: P.keep_history(U, depth=2, checkpoint_policy="disk"), "typed policy")
 
 
 def test_keep_history_incoherent_policy_refused_at_author_time():
     P = adctime.Program("h")
-    U = P.state("U", block="plasma")
+    U = typed_state(P, "plasma", state_name="U")
     # Interval(2) on depth 4: (depth-1)=3 not divisible by 2 -> the oldest lag is unreconstructable.
     _expect(ValueError, lambda: P.keep_history(U, depth=4, checkpoint_policy=Interval(2)),
             "oldest slot")
@@ -76,7 +78,7 @@ def test_keep_history_incoherent_policy_refused_at_author_time():
 # --- bounded loops: the count is a MANDATORY bound ----------------------------------------------
 def test_static_range_requires_int_bound():
     P = adctime.Program("sr")
-    U = P.state("plasma")
+    U = typed_state(P, "plasma")
 
     def body(prog, x):
         return prog.linear_combine("x1", 1.0 * x)
@@ -92,7 +94,7 @@ def test_static_range_requires_int_bound():
 
 def test_range_requires_int_bound_and_refuses_runtime_scalar():
     P = adctime.Program("rg")
-    U = P.state("plasma")
+    U = typed_state(P, "plasma")
 
     def body(prog, x):
         return prog.linear_combine("x1", 1.0 * x)
@@ -108,21 +110,21 @@ def test_range_requires_int_bound_and_refuses_runtime_scalar():
 
 def test_range_negative_bound_rejected():
     P = adctime.Program("neg")
-    U = P.state("plasma")
+    U = typed_state(P, "plasma")
     _expect(ValueError, lambda: P.range(U, -1, lambda prog, x: x), "non-negative")
 
 
 # --- commit_many atomicity ----------------------------------------------------------------------
 def test_commit_many_atomic_double_commit_rejected():
     P = adctime.Program("cm")
-    Ua = P.state("a")
-    Ub = P.state("b")
+    Ua = typed_state(P, "a")
+    Ub = typed_state(P, "b")
     a1 = P.linear_combine("a1", 1.0 * Ua)
     b1 = P.linear_combine("b1", 1.0 * Ub)
-    P.commit(P.state("U", block="a").next, a1)  # 'a' already committed
+    P.commit(typed_state(P, "a", state_name="U").next, a1)  # 'a' already committed
     # commit_many of {a, b} must be rejected as a UNIT (a is double), and b must NOT be committed.
-    a_next = P.state("U", block="a").next
-    b_next = P.state("U", block="b").next
+    a_next = typed_state(P, "a", state_name="U").next
+    b_next = typed_state(P, "b", state_name="U").next
     _expect(
         ValueError,
         lambda: P.commit_many({a_next: a1, b_next: b1}),
@@ -134,11 +136,11 @@ def test_commit_many_atomic_double_commit_rejected():
 def test_commit_many_foreign_value_rejected_atomically():
     P = adctime.Program("cm2")
     other = adctime.Program("other")
-    Ua = P.state("a")
+    Ua = typed_state(P, "a")
     a1 = P.linear_combine("a1", 1.0 * Ua)
-    foreign = other.linear_combine("z", 1.0 * other.state("a"))
-    a_next = P.state("U", block="a").next
-    z_next = P.state("U", block="z").next
+    foreign = other.linear_combine("z", 1.0 * typed_state(other, "a"))
+    a_next = typed_state(P, "a", state_name="U").next
+    z_next = typed_state(P, "z", state_name="U").next
     _expect(
         ValueError,
         lambda: P.commit_many({a_next: a1, z_next: foreign}),
@@ -149,13 +151,13 @@ def test_commit_many_foreign_value_rejected_atomically():
 
 def test_commit_many_success_commits_all():
     P = adctime.Program("cm3")
-    Ua = P.state("a")
-    Ub = P.state("b")
+    Ua = typed_state(P, "a")
+    Ub = typed_state(P, "b")
     a1 = P.linear_combine("a1", 1.0 * Ua)
     b1 = P.linear_combine("b1", 1.0 * Ub)
-    P.commit_many({P.state("U", block="a").next: a1,
-                   P.state("U", block="b").next: b1})
-    assert P.commits() == {"a": a1, "b": b1}
+    P.commit_many({typed_state(P, "a", state_name="U").next: a1,
+                   typed_state(P, "b", state_name="U").next: b1})
+    assert commits_by_block(P) == {"a": a1, "b": b1}
 
 
 if __name__ == "__main__":

@@ -20,12 +20,27 @@ try:
     from pops.ir.expr import Const
     from pops.physics.facade import Model
     from pops import time as adctime
+    from typed_program_support import typed_state
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_operator_signature_errors (pops unavailable: %s)" % exc)
     sys.exit(0)
 
 
 _OTHER = model.StateSpace("V", ("a", "b", "c"))
+
+
+def _typed(P, block, space, physical=None):
+    if physical is not None:
+        module = physical.module
+        declared = module.state_spaces().get(space.name)
+        if declared is None:
+            declared = module.state_space(space.name, space.components)
+        return typed_state(
+            P, block, space=declared, model=module, state=module.state_handle(declared))
+    module = model.Module("%s_%s_model" % (P.name, block))
+    declared = module.state_space(space.name, space.components)
+    return typed_state(
+        P, block, space=declared, model=module, state=module.state_handle(declared))
 
 
 def _model():
@@ -46,8 +61,8 @@ def test_state_space_mismatch_message():
     m = _model()
     u = m.state_space("U")
     P = adctime.Program("p").bind_operators(m)
-    fields = P._call("fields_from_state", P.state("plasma", space=u))
-    wrong = P.state("other", space=_OTHER)
+    fields = P._call("fields_from_state", _typed(P, "plasma", u, m))
+    wrong = _typed(P, "other", _OTHER, m)
     try:
         P._call("explicit_rhs", wrong, fields)
         raise AssertionError("expected a State-space mismatch error")
@@ -61,9 +76,9 @@ def test_rate_combined_with_wrong_state_message():
     m = _model()
     u = m.state_space("U")
     P = adctime.Program("p").bind_operators(m)
-    u_n = P.state("plasma", space=u)
+    u_n = _typed(P, "plasma", u, m)
     rate = P._call("explicit_rhs", u_n, P._call("fields_from_state", u_n))  # Rate(U)
-    wrong = P.state("other", space=_OTHER)
+    wrong = _typed(P, "other", _OTHER, m)
     try:
         P.linear_combine("bad", u_n + P.dt * rate + wrong)
         raise AssertionError("expected a Rate/State space combination error")
@@ -77,7 +92,7 @@ def test_field_input_wrong_value_flavour_message():
     m = _model()
     u = m.state_space("U")
     P = adctime.Program("p").bind_operators(m)
-    u_n = P.state("plasma", space=u)
+    u_n = _typed(P, "plasma", u, m)
     try:
         P._call("explicit_rhs", u_n, u_n)  # second arg should be a fields value, not a state
         raise AssertionError("expected a Field-input value-flavour error")
@@ -91,7 +106,7 @@ def test_field_wrong_arity_message():
     m = _model()
     u = m.state_space("U")
     P = adctime.Program("p").bind_operators(m)
-    u_n = P.state("plasma", space=u)
+    u_n = _typed(P, "plasma", u, m)
     try:
         P._call("explicit_rhs", u_n)  # explicit_rhs expects (state, fields); only state given
         raise AssertionError("expected an arity error")
@@ -121,9 +136,9 @@ def test_local_linear_operator_domain_mismatch_message():
     m = _model()
     u = m.state_space("U")
     P = adctime.Program("p").bind_operators(m)
-    fields = P._call("fields_from_state", P.state("plasma", space=u))
+    fields = P._call("fields_from_state", _typed(P, "plasma", u, m))
     lin = P._call("lorentz", fields)  # LocalLinearOperator(U, U)
-    rhs_v = P.state("other", space=_OTHER)
+    rhs_v = _typed(P, "other", _OTHER, m)
     try:
         P.solve_local_linear("bad", operator=P.I - P.dt * lin, rhs=rhs_v)
         raise AssertionError("expected an operator/state domain error")

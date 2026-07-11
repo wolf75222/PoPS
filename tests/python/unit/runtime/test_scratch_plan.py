@@ -25,10 +25,14 @@ try:
     import pops  # noqa: F401
     from pops.codegen import ScratchPlan, build_scratch_plan
     from pops.codegen.loader import CompiledModel, CompiledProblem
-    from pops import time as adctime
 except Exception as exc:  # noqa: BLE001 -- pops unavailable in this interpreter
     print("skip test_scratch_plan (pops unavailable: %s)" % exc)
     sys.exit(0)
+
+from tests.python.unit.runtime._typed_program import (
+    attach_typed_install_plan,
+    typed_program_state,
+)
 
 
 def _ssprk3(name="ssprk3"):
@@ -38,9 +42,9 @@ def _ssprk3(name="ssprk3"):
     the next stage; the final stage commits. This is the canonical multi-stage step the plan
     analyzes: the per-stage rate scratch (rhs2 / rhs5 / rhs8) lifetimes do NOT overlap (each is
     consumed by the very next combine), so they collapse to ONE reused buffer -- a provable reuse."""
-    P = adctime.Program(name)
+    P, _, _, _, _, temporal = typed_program_state(name, block_name="plasma")
     dt = P.dt
-    U = P.state("plasma")
+    U = temporal.n
     f0 = P.solve_fields(U)
     r0 = P._rhs_legacy(state=U, fields=f0, flux=True, sources=["default"])
     u1 = P.linear_combine("U1", U + dt * r0)
@@ -50,14 +54,14 @@ def _ssprk3(name="ssprk3"):
     f2 = P.solve_fields(u2)
     r2 = P._rhs_legacy(state=u2, fields=f2, flux=True, sources=["default"])
     un = P.linear_combine("Un", (1.0 / 3.0) * U + (2.0 / 3.0) * u2 + (2.0 / 3.0) * dt * r2)
-    P.commit(P.state("U", block="plasma").next, un)
+    P.commit(temporal.next, un)
     return P
 
 
 def _krylov(name="krylov_demo"):
     """A Program with a matrix-free ``solve_linear`` (Krylov) node -- exercises the persistent path."""
-    P = adctime.Program(name)
-    U = P.state("plasma")
+    P, _, _, _, _, temporal = typed_program_state(name, block_name="plasma")
+    U = temporal.n
     f = P.solve_fields("phi", U)
     r = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     buf = P.scalar_field("buf")
@@ -71,7 +75,7 @@ def _krylov(name="krylov_demo"):
     from pops.solvers.krylov import CG
     P.set_apply(A, _apply)
     P.solve_linear(operator=A, rhs=buf, method=CG(max_iter=10), max_iter=10)
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + P.dt * r))
+    P.commit(temporal.next, P.linear_combine("U1", U + P.dt * r))
     return P
 
 
@@ -89,8 +93,11 @@ def _model(*, n_vars=3, n_aux=1, aux_names=("B_z",)):
 
 def _compiled(program):
     """A SYNTHETIC CompiledProblem: a real lowered Program + a real CompiledModel, no compile."""
-    return CompiledProblem("/tmp/pops-cache/problem.so", program, _model(), "SIG|c++|c++23",
-                           "c++", "c++23", problem_hash="deadbeefcafe", cache_key="0badc0de")
+    model = _model()
+    compiled = CompiledProblem(
+        "/tmp/pops-cache/problem.so", program, model, "SIG|c++|c++23",
+        "c++", "c++23", problem_hash="deadbeefcafe", cache_key="0badc0de")
+    return attach_typed_install_plan(compiled, model)
 
 
 def chk(cond, label):
@@ -227,10 +234,10 @@ def test_persistent_krylov_buffers():
 def test_no_persistent_without_solve():
     """A pure transport step (no field / Krylov solve) has no persistent buffers and is EXACT."""
     print("== a solve-free step has no persistent buffers (exact plan) ==")
-    P = adctime.Program("transport_only")
-    U = P.state("plasma")
+    P, _, _, _, _, temporal = typed_program_state("transport_only", block_name="plasma")
+    U = temporal.n
     r = P._rhs_legacy(state=U, flux=True, sources=[])
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + P.dt * r))
+    P.commit(temporal.next, P.linear_combine("U1", U + P.dt * r))
     plan = P.scratch_plan()
     chk(plan.persistent == [], "no solve -> no persistent solver buffers")
     chk(plan.conservative is False, "a solve-free plan is EXACT, not conservative")

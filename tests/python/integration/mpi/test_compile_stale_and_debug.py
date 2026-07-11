@@ -31,6 +31,7 @@ try:
     import pops
     from pops import time as adctime
     from pops.codegen.compile_provenance import cachekey_path, read_cachekey_sidecar, StaleArtifactError
+    from tests.python.support.typed_program import program_states, synthetic_module
 except Exception as exc:  # noqa: BLE001 -- pops/_pops unavailable in this interpreter
     _skip("pops unavailable: %s" % exc)
 
@@ -47,10 +48,13 @@ def chk(cond, label):
 def _fe_program(name="stale_debug_probe"):
     P = adctime.Program(name)
     dt = P.dt
-    U = P.state("ions")
+    module = synthetic_module("%s_state" % name, components=("rho", "mx", "my"))
+    _case, states = program_states(P, module, ("ions",))
+    temporal = states["ions"]
+    U = temporal.n
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(P.state("U", block="ions").next, P.linear_combine("U1", U + dt * R))
+    P.commit(temporal.next, P.linear_combine("U1", U + dt * R))
     return P
 
 

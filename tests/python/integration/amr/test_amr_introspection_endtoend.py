@@ -8,8 +8,8 @@ surface (``profile`` / ``step_cfl`` / ``amr.patch_table``):
   * INERT metadata on the AMR-route handle: ``arguments()`` reports ``layout='amr'`` with the block
     instance / named aux / typed params, ``estimate_memory(mesh)`` is a conservative patch-budget
     FORMULA, and ``inspect_amr()`` surfaces the carried refine / regrid tags. These run on a stub
-    ``CompiledModel`` carrying the AMR ``_layout`` exactly as ``pops.compile(layout=AMR(...))``'s
-    ``_orchestration_amr._compile_amr`` attaches it -- no ``.so`` dlopen, so the inert surface is
+    ``CompiledModel`` carrying an AMR ``InstallPlan`` exactly as ``pops.compile(layout=AMR(...))``
+    attaches it -- no ``.so`` dlopen, so the inert surface is
     validated locally without the Kokkos AOT compile the real per-block AMR loader needs.
   * LIVE runtime on a real ``AmrSystem``: a typed ``profile(Profile.Basic())`` context wraps two
     ``step_cfl`` runtime-CFL steps (the engine picks a CFL-bounded dt and advances the clock), the
@@ -27,20 +27,22 @@ import pytest
 pops = pytest.importorskip("pops", exc_type=ImportError)
 
 from pops.codegen.loader import CompiledModel  # noqa: E402
+from pops.codegen._plans import InstallBlock, InstallPlan  # noqa: E402
 from pops.mesh import CartesianMesh  # noqa: E402
 from pops.mesh.amr import Refine, RegridEvery  # noqa: E402
 from pops.mesh.layouts import AMR, Uniform  # noqa: E402
 from pops.model import Handle, OwnerPath  # noqa: E402
-from pops.params import ConstParam, RuntimeParam  # noqa: E402
+from pops.params import RuntimeParam  # noqa: E402
 from pops.runtime.system import AmrSystem  # noqa: E402  (ADC-545 advanced runtime seam)
+from pops.problem._snapshot import AuthoringSnapshot  # noqa: E402
 
 
 def _amr_route_handle():
     """A stub AMR-route ``CompiledModel`` (target='amr_system', no ``.so``) carrying the AMR layout.
 
     The shape ``pops.compile(problem, layout=AMR(...))`` returns: the first block's model with
-    target='amr_system' and the Problem's AMR layout attached on ``_layout`` (what ``_compile_amr``
-    attaches). No ``.so`` is dlopened -- the arguments / estimate_memory / inspect_amr surface is
+    target='amr_system' and the Problem's AMR layout attached through ``InstallPlan``. No ``.so`` is
+    dlopened -- the arguments / estimate_memory / inspect_amr surface is
     pure metadata + formula, so it is validated here without the Kokkos AOT per-block loader compile.
     """
     handle = CompiledModel(
@@ -51,8 +53,21 @@ def _amr_route_handle():
         caps={"cpu": True, "amr": True, "mpi": True}, abi_key="k", model_hash="h", cxx="c++",
         std="c++23", target="amr_system", aux_extra_names=["B_z"])
     rho = Handle("rho", kind="state", owner=OwnerPath.shared("amr-introspection"))
-    handle._layout = AMR(base=CartesianMesh(n=64, periodic=True), max_levels=2, ratio=2,
-                         regrid=RegridEvery(4), refine=Refine.on(rho).above(0.1))
+    layout = AMR(base=CartesianMesh(n=64, periodic=True), max_levels=2, ratio=2,
+                 regrid=RegridEvery(4), refine=Refine.on(rho).above(0.1))
+    snapshot = AuthoringSnapshot({"kind": "amr-introspection-stub"})
+    handle.install_plan = InstallPlan(
+        snapshot_hash=snapshot.hash,
+        target="amr_system",
+        layout=layout,
+        blocks=(InstallBlock("ne", handle, None),),
+        bind_schema=None,
+        field_solvers={},
+        outputs=(),
+        diagnostics=(),
+        has_program=False,
+    )
+    handle._problem_snapshot = snapshot
     return handle
 
 
@@ -70,7 +85,7 @@ def test_arguments_on_the_amr_route_handle():
 def test_estimate_memory_on_the_amr_route_handle_adds_a_patch_budget():
     handle = _amr_route_handle()
     mesh = CartesianMesh(n=64, L=1.0, periodic=True)
-    amr_est = handle.estimate_memory(mesh)                       # auto AMR from _layout
+    amr_est = handle.estimate_memory(mesh)                       # auto AMR from InstallPlan
     uni_est = handle.estimate_memory(mesh, layout=Uniform(mesh))
     assert amr_est.layout == "amr" and uni_est.layout == "uniform"
     assert amr_est.categories.get("amr_patch", 0) > 0

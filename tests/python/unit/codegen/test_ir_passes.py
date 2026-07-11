@@ -28,6 +28,8 @@ on real emitted C++ without a model. Run with python3 (PYTHONPATH = built pops p
 from pops.params import ConstParam
 import pytest
 
+from typed_program_support import commits_by_block, state_refs, typed_state
+
 adctime = pytest.importorskip("pops.time")
 libtime = pytest.importorskip("pops.lib.time")  # ready schemes (Spec 4)
 
@@ -37,7 +39,7 @@ def _commit_signature(prog):
     State's op + name + the affine coefficient polynomials it combines (the actual numerics), so two
     programs that commit the same scheme match even if their node ids differ."""
     out = {}
-    for block, state in prog.commits().items():
+    for block, state in commits_by_block(prog).items():
         coeffs = state.attrs.get("coeffs")
         out[block] = (state.op, state.name, repr(coeffs))
     return out
@@ -47,11 +49,12 @@ def _euler_with_dead_rhs():
     """Forward Euler whose committed combine never reads ``dead`` (a genuinely unused rhs)."""
     P = adctime.Program("forward_euler")
     dt = P.dt
-    U = P.state("plasma")
+    U = typed_state(P, "plasma")
     fields = P.solve_fields(U)
     R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
     P._rhs_legacy("dead", state=U, fields=fields, flux=True, sources=["default"])  # never consumed
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
+    P.commit(typed_state(P, "plasma", state_name="U").next,
+             P.linear_combine("U1", U + dt * R))
     return P
 
 
@@ -59,10 +62,11 @@ def _euler_no_dead():
     """The SAME forward Euler, written without the dead rhs (the byte-identity reference)."""
     P = adctime.Program("forward_euler")
     dt = P.dt
-    U = P.state("plasma")
+    U = typed_state(P, "plasma")
     fields = P.solve_fields(U)
     R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
+    P.commit(typed_state(P, "plasma", state_name="U").next,
+             P.linear_combine("U1", U + dt * R))
     return P
 
 
@@ -82,7 +86,7 @@ def test_removes_exactly_the_dead_node():
     # Exactly one node removed; every other (op, name) kept, in order.
     assert after_ops == [op for op in before_ops if op != ("rhs", "dead")]
     # The commit target and its inputs survive unchanged.
-    assert set(Q.commits()) == {"plasma"}
+    assert set(commits_by_block(Q)) == {"plasma"}
     assert _commit_signature(Q) == _commit_signature(P)
 
 
@@ -119,12 +123,13 @@ def test_side_effecting_nodes_never_removed():
     result. Here the committed combine reads only U + dt*R, so none of the three feeds the commit."""
     P = adctime.Program("side_effects")
     dt = P.dt
-    U = P.state("plasma")
+    U = typed_state(P, "plasma")
     fields = P.solve_fields(U)            # side-effecting (fills ghosts/aux), result unused downstream
     R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
     P.fill_boundary(U)                    # side-effecting, result unused
     P.record_scalar("mass", P.norm2(R))  # side-effecting diagnostic, result unused
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
+    P.commit(typed_state(P, "plasma", state_name="U").next,
+             P.linear_combine("U1", U + dt * R))
 
     Q = adctime.eliminate_dead_nodes(P)
     kept = {v.op for v in Q._values}
@@ -148,12 +153,13 @@ def test_chained_dead_nodes_removed():
     """A dead node feeding only another dead node: BOTH go (reverse-reachability, not one level)."""
     P = adctime.Program("chain")
     dt = P.dt
-    U = P.state("plasma")
+    U = typed_state(P, "plasma")
     fields = P.solve_fields(U)
     R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
     dead0 = P._rhs_legacy("dead0", state=U, fields=fields, flux=True, sources=["default"])
     P.linear_combine("dead1", U + dt * dead0)  # consumes dead0 but is itself unused
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
+    P.commit(typed_state(P, "plasma", state_name="U").next,
+             P.linear_combine("U1", U + dt * R))
 
     Q = adctime.eliminate_dead_nodes(P)
     names = {v.name for v in Q._values}
@@ -213,8 +219,9 @@ def test_condensed_buffer_writers_never_removed():
     for theta, c_E in ((1.0, None), (0.5, None), (0.5, 3), (1.0, 3)):
         model = _lorentz_energy_model("cs_ir_%d_%s" % (int(round(theta * 100)), c_E))
         P = adctime.Program("cs").bind_operators(model)
+        block, state = state_refs(P, "blk")
         libtime.condensed_schur(
-            P, "blk", alpha=_ALPHA, theta=theta, c_E=c_E,
+            P, block, state, alpha=_ALPHA, theta=theta, c_E=c_E,
             linear_operator=_linear_handle(model))
         before = P.emit_cpp_program(model=model)
         assert RHS_MARKER in before, "fixture lost its condensed RHS assembly"
@@ -235,7 +242,7 @@ def test_buffer_writing_op_with_discarded_result_kept():
     from the allow-list, so the safe-by-default pass keeps it -- a buffer-writer that aliases an input
     is never wrongly dropped, even with an unconsumed result."""
     P = adctime.Program("buf_writer")
-    U = P.state("plasma")
+    U = typed_state(P, "plasma")
     buf = P.scalar_field("buf")
     P.laplacian(buf, buf)  # buffer-writer: writes buf in place, RESULT DISCARDED
     A = P.matrix_free_operator("op")
@@ -248,7 +255,8 @@ def test_buffer_writing_op_with_discarded_result_kept():
     from pops.solvers.krylov import CG
     P.set_apply(A, apply)
     P.solve_linear(operator=A, rhs=buf, method=CG(max_iter=10), max_iter=10)  # reads buf by BUFFER IDENTITY
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", 1.0 * U))
+    P.commit(typed_state(P, "plasma", state_name="U").next,
+             P.linear_combine("U1", 1.0 * U))
 
     before = P.emit_cpp_program()
     Q = adctime.eliminate_dead_nodes(P)
@@ -263,7 +271,7 @@ def test_control_flow_input_kept():
     """A value consumed only inside a while sub-block is LIVE (the while op lists it as an input);
     v1 never descends into sub-blocks, so anything feeding one is conservatively kept."""
     P = adctime.Program("cf")
-    U = P.state("plasma")
+    U = typed_state(P, "plasma")
 
     def cond(p, x):
         return p.norm2(x) > 1e-10
@@ -272,7 +280,7 @@ def test_control_flow_input_kept():
         return p.linear_combine("it", 0.5 * x)
 
     Ufinal = P.while_(U, cond, body)
-    P.commit(P.state("U", block="plasma").next, Ufinal)
+    P.commit(typed_state(P, "plasma", state_name="U").next, Ufinal)
 
     Q = adctime.eliminate_dead_nodes(P)
     ops = [v.op for v in Q._values]
@@ -286,23 +294,25 @@ def test_rebuild_preserves_history_policy_and_remaps_field_context_stage_source(
     from pops.time import Interval
 
     program = adctime.Program("metadata_rebuild")
-    tracked = program.state("U", block="tracked")
+    tracked = typed_state(program, "tracked", state_name="U")
     program.keep_history(tracked, depth=4, checkpoint_policy=Interval(3))
     program.linear_combine("dead", 2 * tracked.n)
-    advanced = program.state("U", block="advanced")
-    fields = program.solve_fields(advanced.n)
+    advanced = typed_state(program, "advanced", state_name="U")
+    program.solve_fields(advanced.n)
     final = program.linear_combine("advanced_next", advanced.n)
     program.commit(advanced.next, final)
 
     rebuilt = program.eliminate_dead_nodes()
-    rebuilt_state = next(v for v in rebuilt._values if v.op == "state" and v.block == "advanced")
+    rebuilt_state = next(
+        v for v in rebuilt._values
+        if v.op == "state" and v.block.local_id == "advanced")
     rebuilt_fields = next(v for v in rebuilt._values if v.op == "solve_fields")
     depth, policy = rebuilt._history_persistence["tracked.U"]
 
     assert depth == 4
     assert policy.to_manifest() == {"kind": "interval", "k": 3}
-    assert rebuilt_fields.field_context.stage_sources == (("advanced", rebuilt_state.id),)
-    rebuilt_fields.field_context.require_read(None, "advanced", rebuilt_state.id)
+    assert rebuilt_fields.field_context.stage_sources == ((rebuilt_state.block, rebuilt_state.id),)
+    rebuilt_fields.field_context.require_read(None, rebuilt_state.block, rebuilt_state.id)
     assert rebuilt._serialize()["history_persistence"] == [{
         "name": "tracked.U",
         "depth": 4,

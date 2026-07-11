@@ -11,11 +11,33 @@ A descriptor is INERT: it declares metadata and computes nothing.
 from __future__ import annotations
 
 import typing
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pops.descriptors_report import (
         CapabilitySet, LoweredDescriptor, RequirementSet, ValidationReport)
+
+
+def _freeze_descriptor_value(value: Any) -> Any:
+    """Recursively freeze storage reachable from a descriptor attribute."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({
+            _freeze_descriptor_value(key): _freeze_descriptor_value(item)
+            for key, item in value.items()
+        })
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_descriptor_value(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_freeze_descriptor_value(item) for item in value)
+    freeze = getattr(value, "freeze", None)
+    if callable(freeze):
+        result = freeze()
+        if result is not None and result is not value:
+            raise TypeError(
+                "%s.freeze() must seal and return self" % type(value).__name__)
+    return value
 
 
 class Availability:
@@ -91,6 +113,31 @@ class Descriptor:
     #: native brick set this (as a class or instance attribute).
     native_id = None
 
+    def __copy__(self) -> Descriptor:
+        """Return a detached, mutable authoring copy even when ``self`` is frozen.
+
+        Reference-resolution protocols intentionally copy descriptors before replacing Handle
+        leaves.  Python's default shallow-copy implementation also copied ``_frozen=True`` and
+        therefore made the first replacement fail.  A copy is a new authoring transaction: retain
+        the already-immutable member values, but never inherit the source object's lifecycle flag.
+        """
+        clone = type(self).__new__(type(self))
+        names = list(getattr(self, "__dict__", {}))
+        for owner in type(self).__mro__:
+            slots = owner.__dict__.get("__slots__", ())
+            if isinstance(slots, str):
+                slots = (slots,)
+            for name in slots:
+                if name.startswith("__") and not name.endswith("__"):
+                    name = "_%s%s" % (owner.__name__.lstrip("_"), name)
+                if name not in names:
+                    names.append(name)
+        for name in names:
+            if name != "_frozen":
+                if name not in ("__dict__", "__weakref__") and hasattr(self, name):
+                    object.__setattr__(clone, name, getattr(self, name))
+        return clone
+
     def freeze(self) -> Descriptor:
         """Freeze this descriptor: a later attribute mutation RAISES (ADC-563). Returns ``self``.
 
@@ -98,6 +145,11 @@ class Descriptor:
         frozen (``pops.compile`` freezes the ``Problem``, which cascades ``freeze`` to its member
         descriptors), the descriptor is sealed so a post-freeze edit to a route the artifact already
         committed cannot silently diverge from what was compiled. Idempotent."""
+        # A guard on attribute assignment is not enough: stale references to a list/dict stored in
+        # the descriptor would bypass __setattr__. Replace every container recursively first.
+        for name, value in tuple(getattr(self, "__dict__", {}).items()):
+            if name != "_frozen":
+                object.__setattr__(self, name, _freeze_descriptor_value(value))
         object.__setattr__(self, "_frozen", True)
         return self
 

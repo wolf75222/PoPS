@@ -18,6 +18,8 @@ Builds on ADC-404a (Scalar/Bool IR, P.norm2/P.dot, P.while_). This slice adds:
     and match the offline x_N = target + 0.5^N (x0 - target); if_ applies the body iff the runtime
     condition holds. Self-skips without numpy / _pops / a compiler / Kokkos (never faking the engine).
 """
+from typed_program_support import typed_state
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
@@ -52,16 +54,16 @@ def _contraction_body(target):
 # ---- (A) codegen: pure Python, always runs ----
 def test_norm_inf_is_scalar(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     s = P.norm_inf(U)
     assert s.vtype == "scalar", "P.norm_inf returns a Scalar value (got %r)" % s.vtype
 
 
 def test_static_range_unrolls(t):
     P = t.Program("sr")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     Uf = P.static_range(U, 3, _fe_body())
-    P.commit(P.state("U", block="blk").next, Uf)
+    P.commit(typed_state(P, "blk", state_name="U").next, Uf)
     src = P.emit_cpp_program()
     assert src.count("ctx.rhs_into") == 3, "static_range(3) unrolls the body 3 times\n%s" % src
     assert "for (" not in src, "static_range must NOT emit a C++ loop (it is unrolled)\n%s" % src
@@ -69,9 +71,9 @@ def test_static_range_unrolls(t):
 
 def test_range_emits_for(t):
     P = t.Program("rg")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     Uf = P.range(U, 3, _fe_body())
-    P.commit(P.state("U", block="blk").next, Uf)
+    P.commit(typed_state(P, "blk", state_name="U").next, Uf)
     src = P.emit_cpp_program()
     assert "for (int i" in src, "range must emit a C++ for loop\n%s" % src
     assert src.count("ctx.rhs_into") == 1, "range emits the body ONCE (inside the loop)\n%s" % src
@@ -79,10 +81,10 @@ def test_range_emits_for(t):
 
 def test_if_emits_branch(t):
     P = t.Program("if")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     cond = P.norm_inf(U) > 0.0
     Uf = P.if_(U, cond, _fe_body())
-    P.commit(P.state("U", block="blk").next, Uf)
+    P.commit(typed_state(P, "blk", state_name="U").next, Uf)
     src = P.emit_cpp_program()
     assert "pops::norm_inf" in src, "norm_inf must lower to pops::norm_inf\n%s" % src
     assert "if (" in src, "if_ must emit a C++ if branch\n%s" % src
@@ -91,7 +93,7 @@ def test_if_emits_branch(t):
 
 def test_static_range_scalar_count_rejected(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     try:
         P.static_range(U, P.norm2(U), _fe_body())  # a runtime Scalar is not a compile-time count
     except TypeError as exc:
@@ -102,7 +104,7 @@ def test_static_range_scalar_count_rejected(t):
 
 def test_range_scalar_count_rejected(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     try:
         P.range(U, P.norm2(U), _fe_body())
     except NotImplementedError as exc:
@@ -114,8 +116,8 @@ def test_range_scalar_count_rejected(t):
 def test_range_count_changes_hash(t):
     def prog(count):
         P = t.Program("rg")
-        U = P.state("blk")
-        P.commit(P.state("U", block="blk").next, P.range(U, count, _fe_body()))
+        U = typed_state(P, "blk")
+        P.commit(typed_state(P, "blk", state_name="U").next, P.range(U, count, _fe_body()))
         return P._ir_hash()
     assert prog(3) != prog(4), "a different range count must change the IR hash (cache key)"
 
@@ -123,9 +125,9 @@ def test_range_count_changes_hash(t):
 def test_static_range_body_changes_hash(t):
     def prog(c):
         P = t.Program("sr")
-        U = P.state("blk")
+        U = typed_state(P, "blk")
         target = P.linear_combine("target", 2.0 * U)
-        P.commit(P.state("U", block="blk").next, P.static_range(U, 2, lambda _P, x: _P.linear_combine(c * x + 0.5 * target)))
+        P.commit(typed_state(P, "blk", state_name="U").next, P.static_range(U, 2, lambda _P, x: _P.linear_combine(c * x + 0.5 * target)))
         return P._ir_hash()
     assert prog(0.5) != prog(0.25), "a different unrolled body must change the IR hash"
 
@@ -134,23 +136,23 @@ def test_static_range_body_changes_hash(t):
 def _contraction_program(t, kind, count, *, name):
     """target = 2*U0; loop x -> 0.5*x + 0.5*target  `count` times via `kind` in {'range','static'}."""
     P = t.Program(name)
-    U0 = P.state("blk")
+    U0 = typed_state(P, "blk")
     target = P.linear_combine("target", 2.0 * U0)
     body = _contraction_body(target)
     xf = P.range(U0, count, body) if kind == "range" else P.static_range(U0, count, body)
-    P.commit(P.state("U", block="blk").next, xf)
+    P.commit(typed_state(P, "blk", state_name="U").next, xf)
     return P
 
 
 def _if_program(t, *, name, threshold):
     """if norm_inf(target - U0) > threshold: U <- 0.5*U0 + 0.5*target  (else U unchanged)."""
     P = t.Program(name)
-    U0 = P.state("blk")
+    U0 = typed_state(P, "blk")
     target = P.linear_combine("target", 2.0 * U0)
     diff = P.linear_combine("diff", target - U0)
     cond = P.norm_inf(diff) > threshold
     xf = P.if_(U0, cond, _contraction_body(target))
-    P.commit(P.state("U", block="blk").next, xf)
+    P.commit(typed_state(P, "blk", state_name="U").next, xf)
     return P
 
 
@@ -183,7 +185,6 @@ def _run_section_b(t):
         print("-- (B) skipped: _pops lacks install_program (rebuild _pops) --")
         return None
 
-    from pops.physics.facade import Model
 
     count = 3
     try:

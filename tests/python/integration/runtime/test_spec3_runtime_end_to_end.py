@@ -46,6 +46,7 @@ try:
 
     import pops
     from pops import time as adctime
+    from tests.python.support.typed_program import program_states, synthetic_module
 except Exception as exc:  # noqa: BLE001  -- numpy or _pops unavailable in this interpreter
     _skip("pops/numpy unavailable: %s" % exc)
 
@@ -97,12 +98,15 @@ def held_program(name="spec3_runtime_held"):
     """
     P = adctime.Program(name)
     dt = P.dt
-    U = P.state("ions")
+    module = synthetic_module("%s_state" % name, components=("rho", "mx", "my"))
+    _case, states = program_states(P, module, ("ions",))
+    temporal = states["ions"]
+    U = temporal.n
     f = P.fields("phi", from_state=U)
     f = P._replace_value(
         f, attrs={**f.attrs, "schedule": adctime.every(EVERY).hold()})
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=["default"])
-    P.commit(P.state("U", block="ions").next, P.define("U1", U + dt * R))
+    P.commit(temporal.next, P.define("U1", U + dt * R))
     return P
 
 

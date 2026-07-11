@@ -20,6 +20,7 @@ try:
     from pops.physics.facade import Model
     from pops import time as adctime
     from pops.runtime.system import System  # ADC-545 advanced runtime seam
+    from tests.python.support.typed_program import program_states, synthetic_module
 except Exception as exc:  # noqa: BLE001
     print("skip test_install_requirement_validation (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -47,10 +48,13 @@ def lorentz_model(name="adc446_model"):
 
 def lie_program(name="adc446_prog"):
     P = adctime.Program(name)
-    u = P.state("plasma")
+    module = synthetic_module("%s_state" % name, components=("rho", "mx", "my"))
+    _case, states = program_states(P, module, ("plasma",))
+    temporal = states["plasma"]
+    u = temporal.n
     fields = P.solve_fields(u)
     r = P._rhs_legacy(state=u, fields=fields)
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", u + P.dt * r))
+    P.commit(temporal.next, P.linear_combine("u1", u + P.dt * r))
     return P
 
 

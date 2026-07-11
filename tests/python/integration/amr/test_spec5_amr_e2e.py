@@ -52,20 +52,24 @@ except Exception as exc:  # noqa: BLE001
 from tests.python.support.assertions import _check
 from tests.python.support.initial_states import bubble_amr as _bubble
 from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
+from pops.codegen.loader import CompiledModel
+from pops.codegen._compiled_model_identity import model_compile_identity
 
 
 def _ref(name, kind="state"):
     return Handle(name, kind=kind, owner=OwnerPath.shared("spec5-amr-e2e"))
 
 
-class _StubCompiledModel:
+class _StubCompiledModel(CompiledModel):
     """A target='amr_system' CompiledModel stand-in (the AMR route compiles each block to one)."""
 
-    def __init__(self, name="ne"):
-        self.name = name
-        self.so_path = "/tmp/%s_amr.so" % name
-        self.target = "amr_system"
-        self.adder = "add_native_block"
+    def __init__(self, source):
+        super().__init__(
+            "/tmp/%s_amr.so" % source.name, "production", "add_native_block",
+            (), (), (), 0, None, 0, {}, {"cpu": True, "amr": True}, "abi",
+            source._model_hash(), "c++", "c++20", target="amr_system",
+            definition_identity=model_compile_identity(source))
+        self.name = source.name
 
 
 class _StubDsl:
@@ -77,7 +81,10 @@ class _StubDsl:
 
     def compile(self, *, backend, target, **kw):
         self.compiled.append((backend, target))
-        return _StubCompiledModel(self.name)
+        return _StubCompiledModel(self)
+
+    def _model_hash(self):
+        return "model-hash:%s" % self.name
 
 
 class _StubModel:
@@ -136,11 +143,15 @@ def test_amr_layout_drives_compile_target(monkeypatch=None):
         _check(tripwire["hit"] is False, "layout=AMR does NOT call compile_problem")
         _check(model.dsl.compiled == [("production", "amr_system")],
                "the block is compiled once with backend='production', target='amr_system'")
-        _check(compiled._target == "amr_system", "amr_system target carried on the handle")
-        _check(compiled._layout is not layout and compiled._layout.base is layout.base,
-               "the detached AMR layout is carried for bind()")
-        _check(set(compiled._block_compiled_models) == {"ne"},
-               "the {block: CompiledModel} table is carried on the handle")
+        plan = compiled.install_plan
+        _check(plan.target == "amr_system", "amr_system target carried by the InstallPlan")
+        _check(plan.layout is not layout and plan.layout.base is not layout.base
+               and plan.layout.base.n == layout.base.n,
+               "the deeply detached AMR layout is carried for bind()")
+        _check(set(plan.block_models) == {"ne"},
+               "the block CompiledModel is carried by the InstallPlan")
+        _check(not hasattr(compiled, "_block_compiled_models"),
+               "the retired private block-loader mirror is absent")
     finally:
         _unpatch(monkeypatch)
     print("ok test_amr_layout_drives_compile_target")

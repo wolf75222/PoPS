@@ -1,6 +1,8 @@
 """ADC-652 temporal handles are immutable declarations; Program owns every resolution table."""
 from __future__ import annotations
 
+from typed_program_support import commits_by_block, typed_state
+
 import pytest
 
 from pops.model import Handle, StateSpace
@@ -21,7 +23,7 @@ def test_private_mutable_temporal_aliases_are_removed():
 
 def test_temporal_handle_families_are_immutable_hashable_handle_values():
     program = Program("immutable_temporal")
-    state = program.state("U", block="fluid")
+    state = typed_state(program, "fluid", state_name="U")
     stage = state.stage(1)
     history = state.prev
     endpoint = state.next
@@ -40,7 +42,7 @@ def test_temporal_handle_families_are_immutable_hashable_handle_values():
         assert handle.schema_version == 1
         assert handle.owner_path == program.owner_path
         assert handle.qualified_id.startswith("pops.handle.v1::")
-        assert handle.inspect()["owner_path"] == program.owner_path.segments
+        assert handle.inspect()["owner_path"] == program.owner_path.presentation().to_data()
 
     mutations = (
         (state, "block", "other"),
@@ -59,14 +61,14 @@ def test_temporal_handle_families_are_immutable_hashable_handle_values():
 def test_program_caches_every_temporal_declaration_and_resolution():
     program = Program("temporal_tables")
     space = StateSpace("U", ("rho", "momentum"))
-    state = program.state("U", block="fluid", space=space)
+    state = typed_state(program, "fluid", state_name="U", space=space)
 
-    assert state is program.state("U", block="fluid", space=space)
+    assert state is typed_state(program, "fluid", state_name="U", space=space)
     assert state.n is state.n
     assert state.stage("predictor") is state.stage("predictor")
     assert state.prev is state.prev
     assert state.next is state.next
-    assert program._time_states[("fluid", "U")] is state
+    assert program._time_states[(state.block, state.state)] is state
     assert program._time_current_values[state] is state.n
     assert program._time_stage_handles[(state, "predictor")] is state.stage("predictor")
     assert program._time_history_handles[(state, 1)] is state.prev
@@ -75,7 +77,7 @@ def test_program_caches_every_temporal_declaration_and_resolution():
 
 def test_stage_resolution_is_program_owned_single_assignment():
     program = Program("stage_table")
-    state = program.state("U", block="fluid")
+    state = typed_state(program, "fluid", state_name="U")
     stage = state.stage(1)
 
     with pytest.raises(ValueError, match="stage 1 is undefined"):
@@ -93,7 +95,7 @@ def test_stage_resolution_is_program_owned_single_assignment():
 
 def test_stage_definition_refuses_non_state_values_without_partial_assignment():
     program = Program("stage_type")
-    state = program.state("U", block="fluid")
+    state = typed_state(program, "fluid", state_name="U")
     stage = state.stage(1)
     scalar = program.norm2(state.n)
     scalar_name = scalar.name
@@ -115,7 +117,7 @@ def test_stage_definition_refuses_non_state_values_without_partial_assignment():
 
 def test_history_resolution_and_configuration_live_on_program():
     program = Program("history_table")
-    state = program.state("U", block="fluid")
+    state = typed_state(program, "fluid", state_name="U")
     lag1 = state.prev
 
     with pytest.raises(ValueError, match="keep_history first"):
@@ -132,7 +134,7 @@ def test_history_resolution_and_configuration_live_on_program():
 
 def test_history_refuses_a_cold_start_policy_the_runtime_cannot_lower():
     program = Program("history_cold_start")
-    state = program.state("U", block="fluid")
+    state = typed_state(program, "fluid", state_name="U")
 
     with pytest.raises(TypeError, match=r"cold_start must be CopyCurrent"):
         program.keep_history(state, depth=2, cold_start=object())
@@ -142,7 +144,7 @@ def test_history_refuses_a_cold_start_policy_the_runtime_cannot_lower():
 
 def test_history_configuration_snapshots_and_freezes_the_supplied_policy():
     program = Program("history_policy_snapshot")
-    state = program.state("U", block="fluid")
+    state = typed_state(program, "fluid", state_name="U")
     supplied = Interval(3)
 
     program.keep_history(state, depth=4, checkpoint_policy=supplied)
@@ -160,8 +162,10 @@ def test_history_configuration_is_not_published_when_ring_provenance_is_invalid(
     program = Program("history_atomic")
     declared = StateSpace("U", ("rho",))
     conflicting = StateSpace("U", ("rho", "momentum"))
-    state = program.state("U", block="fluid", space=declared)
-    program.history("fluid.U", space=conflicting, block="fluid")
+    state = typed_state(program, "fluid", state_name="U", space=declared)
+    program.history(
+        "fluid.U", space=conflicting, block=state.block,
+        state_ref=state.state)
     values_before = tuple(program._values)
 
     with pytest.raises(ValueError, match=r"incompatible structures"):
@@ -170,20 +174,25 @@ def test_history_configuration_is_not_published_when_ring_provenance_is_invalid(
     assert state not in program._time_history_stores
     assert "fluid.U" not in program._history_persistence
     assert len(program._values) == len(values_before)
-    assert all(current is before for current, before in zip(program._values, values_before))
+    assert all(
+        current is before
+        for current, before in zip(program._values, values_before, strict=True)
+    )
 
 
 def test_history_configuration_refuses_incompatible_existing_ring_shapes():
     narrow_program = Program("history_narrow")
-    narrow_state = narrow_program.state("U", block="fluid")
+    narrow_state = typed_state(narrow_program, "fluid", state_name="U")
     narrow_program.history("fluid.U", ncomp=1)
     with pytest.raises(ValueError, match=r"narrow scalar history ring"):
         narrow_program.keep_history(narrow_state, depth=2)
     assert narrow_state not in narrow_program._time_history_configs
 
     deep_program = Program("history_depth")
-    deep_state = deep_program.state("U", block="fluid")
-    deep_program.history("fluid.U", lag=3, block="fluid")
+    deep_state = typed_state(deep_program, "fluid", state_name="U")
+    deep_program.history(
+        "fluid.U", lag=3, space=deep_state.space,
+        block=deep_state.block, state_ref=deep_state.state)
     with pytest.raises(ValueError, match=r"smaller than the already-declared lag 3"):
         deep_program.keep_history(deep_state, depth=2)
     assert deep_state not in deep_program._time_history_configs
@@ -192,8 +201,8 @@ def test_history_configuration_refuses_incompatible_existing_ring_shapes():
 def test_temporal_identity_is_owner_qualified_between_programs():
     first = Program("same_name")
     second = Program("same_name")
-    left = first.state("U", block="fluid")
-    right = second.state("U", block="fluid")
+    left = typed_state(first, "fluid", state_name="U")
+    right = typed_state(second, "fluid", state_name="U")
 
     pairs = (
         (left, right),
@@ -216,18 +225,22 @@ def test_temporal_identity_is_owner_qualified_between_programs():
 
 def test_forged_equal_handles_cannot_bypass_program_issuance_tables():
     program = Program("forgery")
-    state = program.state("U", block="fluid")
+    state = typed_state(program, "fluid", state_name="U")
     issued_stage = state.stage(1)
     issued_history = state.prev
     issued_endpoint = state.next
 
-    forged_state = TimeState(program, "fluid", "U")
+    forged_state = TimeState(
+        program, state.block, state.state, space=state.space)
     forged_stage = StageHandle(
-        program=program, block="fluid", state_name="U", key=1)
+        program=program, block=state.block, state=state.state, key=1,
+        space=state.space)
     forged_history = HistoryHandle(
-        program=program, block="fluid", state_name="U", lag=1)
+        program=program, block=state.block, state=state.state, lag=1,
+        space=state.space)
     forged_endpoint = StateEndpointHandle(
-        owner=program.owner_path, block="fluid", state_name="U")
+        owner=program.owner_path, block=state.block, state=state.state,
+        space=state.space)
 
     assert forged_state == state
     assert forged_stage == issued_stage
@@ -245,7 +258,7 @@ def test_forged_equal_handles_cannot_bypass_program_issuance_tables():
 
 def test_program_rebuild_reowns_and_remaps_temporal_tables():
     program = Program("temporal_rebuild")
-    state = program.state("U", block="fluid")
+    state = typed_state(program, "fluid", state_name="U")
     stage = state.stage(1)
     program.define(stage, state.n)
     program.keep_history(state, depth=1)
@@ -253,7 +266,7 @@ def test_program_rebuild_reowns_and_remaps_temporal_tables():
     program.commit(state.next, stage.value)
 
     rebuilt = program.eliminate_dead_nodes()
-    rebuilt_state = rebuilt.state("U", block="fluid")
+    rebuilt_state = typed_state(rebuilt, "fluid", state_name="U")
     rebuilt_stage = rebuilt_state.stage(1)
     rebuilt_history = rebuilt_state.prev
     rebuilt_endpoint = rebuilt_state.next
@@ -271,7 +284,7 @@ def test_program_rebuild_reowns_and_remaps_temporal_tables():
     assert rebuilt_history.value is rebuilt._time_history_values[rebuilt_history]
     assert rebuilt._time_history_configs[rebuilt_state][0] == 1
     assert rebuilt._time_history_stores[rebuilt_state].op == "store_history"
-    assert rebuilt.commits()["fluid"] is rebuilt_stage.value
+    assert commits_by_block(rebuilt)["fluid"] is rebuilt_stage.value
     with pytest.raises(ValueError, match="different Program"):
         rebuilt._require_stage(stage, "rebuild")
     with pytest.raises(ValueError, match="different Program"):

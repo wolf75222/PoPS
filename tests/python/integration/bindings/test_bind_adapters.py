@@ -33,6 +33,7 @@ import sys
 try:
     import numpy as np
     import pops
+    from tests.python.support.typed_program import program_states, synthetic_module
     from pops.runtime._bind_adapters import (
         adapter_for, _UniformRuntimeAdapter, _AmrRuntimeAdapter, _amr_config_from_layout)
     from pops.runtime._bound_sim import BoundSimulation
@@ -72,7 +73,7 @@ def _compressible_model():
                       elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0))
 
 
-from tests.python.support.initial_states import bubble_offset as _bubble
+from tests.python.support.initial_states import bubble_offset as _bubble  # noqa: E402
 
 
 # --- 1. Sélection d'adaptateur ---------------------------------------------------------------
@@ -116,7 +117,7 @@ def test_bound_simulation_blocks_assembly_vocabulary():
                        "le message de %r ne recommande pas %r" % (name, bad))
     # Un attribut arbitraire inconnu leve aussi (la vue ne passe rien en silence).
     try:
-        sim.totally_unknown_attribute
+        _ = sim.totally_unknown_attribute
         raise AssertionError("un attribut inconnu doit lever AttributeError")
     except AttributeError as exc:
         _check("bound simulation" in str(exc), "le message nomme la surface de la bound simulation")
@@ -196,7 +197,7 @@ def test_bound_simulation_delegates_amr():
     _check(view is not None and hasattr(view, "patch_table"), "sim.amr rend la vue AMR")
     # set_refinement (assemblage / raffinement) est cache : il se declare sur le layout AMR.
     try:
-        sim.set_refinement
+        _ = sim.set_refinement
         raise AssertionError("set_refinement doit etre cache sur la bound simulation AMR")
     except AttributeError as exc:
         _check("pops.Problem" in str(exc), "le rejet AMR parle pops.Problem")
@@ -249,10 +250,13 @@ def _lie_program(block="ne", name="adc583_bind_prog"):
     bloc, resout les champs, avance d'un pas d'Euler explicite et COMMIT le bloc (l'exigence du
     compile 'chaque bloc avance est committe exactement une fois' est donc satisfaite)."""
     P = pops.time.Program(name)
-    u = P.state(block)
+    module = synthetic_module("%s_state" % name, components=("rho", "mx", "my"))
+    _case, states = program_states(P, module, (block,))
+    temporal = states[block]
+    u = temporal.n
     fields = P.solve_fields(u)
     r = P._rhs_legacy(state=u, fields=fields)
-    P.commit(P.state("U", block=block).next, P.linear_combine("u1", u + P.dt * r))
+    P.commit(temporal.next, P.linear_combine("u1", u + P.dt * r))
     return P
 
 
@@ -295,7 +299,7 @@ def test_full_bind_flow_uniform_gated():
     _check(type(sim).__name__ == "BoundSimulation", "pops.bind rend une BoundSimulation")
     sim.run(t_end=0.01, cfl=0.4, max_steps=4)
     try:
-        sim.add_equation
+        _ = sim.add_equation
         raise AssertionError("add_equation doit etre cache sur la bound simulation")
     except AttributeError:
         pass

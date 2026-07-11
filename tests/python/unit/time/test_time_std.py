@@ -10,6 +10,8 @@ and is deferred.
 
 Run with python3 (PYTHONPATH = built pops package).
 """
+from typed_program_support import commits_by_block, state_refs
+
 from fractions import Fraction
 
 from pops import time as adctime
@@ -25,7 +27,7 @@ def _coeff(node, value):
 
 def _committed(P, block):
     P.validate()
-    node = P.commits()[block]
+    node = commits_by_block(P)[block]
     assert node.op == "linear_combine", node.op
     states = [v for v in node.inputs if v.vtype == "state"]
     rhss = [v for v in node.inputs if v.vtype == "rhs"]
@@ -38,7 +40,7 @@ def _approx(d, power, val):
 
 def test_forward_euler():
     P = adctime.Program("fe")
-    libtime.forward_euler(P, "plasma")
+    libtime.forward_euler(P, *state_refs(P, "plasma"))
     node, states, rhss = _committed(P, "plasma")
     assert len(states) == 1 and len(rhss) == 1
     assert _coeff(node, states[0]) == {0: 1}     # U
@@ -48,7 +50,7 @@ def test_forward_euler():
 
 def test_ssprk2():
     P = adctime.Program("ssprk2")
-    libtime.ssprk2(P, "plasma")
+    libtime.ssprk2(P, *state_refs(P, "plasma"))
     node, states, rhss = _committed(P, "plasma")
     # U2 = 0.5*U0 + 0.5*U1 + 0.5*dt*k1
     assert len(states) == 2 and len(rhss) == 1
@@ -60,7 +62,7 @@ def test_ssprk2():
 
 def test_ssprk3():
     P = adctime.Program("ssprk3")
-    libtime.ssprk3(P, "plasma")
+    libtime.ssprk3(P, *state_refs(P, "plasma"))
     node, states, rhss = _committed(P, "plasma")
     # Shu-Osher final stage: U^{n+1} = 1/3 U0 + 2/3 U2 + 2/3 dt k2
     assert len(states) == 2 and len(rhss) == 1
@@ -72,7 +74,7 @@ def test_ssprk3():
 
 def test_rk4_no_special_class():
     P = adctime.Program("rk4")
-    libtime.rk4(P, "plasma")
+    libtime.rk4(P, *state_refs(P, "plasma"))
     node, states, rhss = _committed(P, "plasma")
     # Unp1 = U0 + dt/6 k1 + dt/3 k2 + dt/3 k3 + dt/6 k4
     assert len(states) == 1 and len(rhss) == 4
@@ -97,9 +99,10 @@ def test_strang_combinator():
         S = prog._rhs_legacy(state=U, fields=None, flux=False, sources=["default"])
         return prog.linear_combine(None, U + (frac * prog.dt) * S)
 
-    out = libtime.strang(P, "plasma", half_flow, source)
+    out = libtime.strang(
+        P, *state_refs(P, "plasma"), half_flow=half_flow, source=source)
     P.validate()
-    assert P.commits()["plasma"] is out and out.vtype == "state"
+    assert commits_by_block(P)["plasma"] is out and out.vtype == "state"
     # three linear_combine stages were built (two half flows + one source)
     n_lc = sum(1 for v in P._values if v.op == "linear_combine")
     assert n_lc == 3, n_lc

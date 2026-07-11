@@ -52,9 +52,10 @@ try:
     import pops
     from pops.ir.ops import sqrt
     from pops.physics.facade import Model
-    from pops import time as adctime
 except Exception as exc:  # noqa: BLE001  -- numpy or _pops unavailable in this interpreter
     _skip("pops/numpy unavailable: %s" % exc)
+
+from tests.python.unit.runtime._typed_program import typed_program_state  # noqa: E402
 
 fails = 0
 
@@ -126,27 +127,27 @@ print("== (A) named-source rhs codegen ==")
 m_named = named_source_model()
 
 
-def _electric_fe_program(name="electric_fe"):
+def _electric_fe_program(model, name="electric_fe"):
     """One Forward-Euler step from a single rhs(sources=['electric'])."""
-    P = adctime.Program(name)
-    U = P.state("plasma")
+    P, _, _, _, _, temporal = typed_program_state(name, model=model, state="U")
+    U = temporal.n
     f = P.solve_fields(U)
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=["electric"])
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + P.dt * R))
+    P.commit(temporal.next, P.linear_combine("U1", U + P.dt * R))
     return P
 
 
-def _unknown_source_program(name="unknown_src"):
+def _unknown_source_program(model, name="unknown_src"):
     """One Forward-Euler step naming a source the model never declared."""
-    P = adctime.Program(name)
-    U = P.state("plasma")
+    P, _, _, _, _, temporal = typed_program_state(name, model=model, state="U")
+    U = temporal.n
     f = P.solve_fields(U)
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=["does_not_exist"])
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + P.dt * R))
+    P.commit(temporal.next, P.linear_combine("U1", U + P.dt * R))
     return P
 
 
-src = _electric_fe_program().emit_cpp_program(model=m_named)
+src = _electric_fe_program(m_named).emit_cpp_program(model=m_named)
 # sources=["electric"] excludes "default" (ADC-425) -> the flux base is the flux-only primitive, NOT
 # ctx.rhs_into (which would fold the default source); the named electric source is axpy'd on top.
 chk("ctx.neg_div_flux_default_into(0, " in src and "ctx.rhs_into(" not in src,
@@ -159,7 +160,9 @@ chk("auxA(i, j, 1)" in src and "auxA(i, j, 2)" in src,
 chk("ctx.axpy(" in src, "the named source is accumulated onto R via axpy (R += S_electric)")
 
 # Unknown source name -> clear ValueError (spec error 1).
-chk(raises(ValueError, lambda: _unknown_source_program().emit_cpp_program(model=named_source_model())),
+unknown_model = named_source_model("unknown_src")
+chk(raises(ValueError, lambda: _unknown_source_program(unknown_model).emit_cpp_program(
+    model=unknown_model)),
     "an unknown source_term name in rhs raises ValueError")
 
 # ADC-425: a named-source rhs on a model WITH a non-empty DEFAULT source now LOWERS (the old
@@ -175,32 +178,36 @@ def _both_source_model(name="pc_both"):
     return m
 
 
-def _extra_fe_program(srcs, name="extra_fe"):
-    P = adctime.Program(name)
-    U = P.state("plasma")
+def _extra_fe_program(model, srcs, name="extra_fe"):
+    P, _, _, _, _, temporal = typed_program_state(name, model=model, state="U")
+    U = temporal.n
     f = P.solve_fields(U)
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=srcs)
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + P.dt * R))
+    P.commit(temporal.next, P.linear_combine("U1", U + P.dt * R))
     return P
 
 
-src_extra_only = _extra_fe_program(["extra"]).emit_cpp_program(model=_both_source_model())
+both_extra_only = _both_source_model("extra_only")
+src_extra_only = _extra_fe_program(both_extra_only, ["extra"]).emit_cpp_program(
+    model=both_extra_only)
 chk("ctx.neg_div_flux_default_into(0, " in src_extra_only and "ctx.rhs_into(" not in src_extra_only,
     "rhs(sources=['extra']) on a default-source model uses the flux-only base (no double-count)")
-src_extra_default = _extra_fe_program(["default", "extra"]).emit_cpp_program(model=_both_source_model())
+both_extra_default = _both_source_model("extra_default")
+src_extra_default = _extra_fe_program(
+    both_extra_default, ["default", "extra"]).emit_cpp_program(model=both_extra_default)
 chk("ctx.rhs_into(0, " in src_extra_default,
     "rhs(sources=['default','extra']) folds the default via rhs_into + the extra source axpy'd")
 
 # A named-source rhs without a model cannot read the coefficients -> NotImplementedError.
-chk(raises(NotImplementedError, lambda: _electric_fe_program().emit_cpp_program()),
+chk(raises(NotImplementedError, lambda: _electric_fe_program(m_named).emit_cpp_program()),
     "rhs with named sources is refused without a model")
 
 
 # ---- the spec example-5 predictor-corrector Program ----
-def predictor_corrector_program(name="predictor_corrector_poisson_lorentz"):
-    P = adctime.Program(name)
+def predictor_corrector_program(model, name="predictor_corrector_poisson_lorentz"):
+    P, _, _, _, _, temporal = typed_program_state(name, model=model, state="U")
     dt = P.dt
-    U_n = P.state("plasma")
+    U_n = temporal.n
     f_n = P.solve_fields("fields_n", U_n)
     R_n = P._rhs_legacy(name="R_n", state=U_n, fields=f_n, flux=True, sources=["electric"])
     U_star_rhs = P.linear_combine("U_star_rhs", U_n + dt * R_n)
@@ -212,12 +219,13 @@ def predictor_corrector_program(name="predictor_corrector_poisson_lorentz"):
     Q = P.linear_combine("Q", U_n + 0.5 * dt * R_n + 0.5 * dt * R_star + 0.5 * dt * C_star)
     U_np1 = P.solve_local_linear(name="U_np1", operator=P.I - 0.5 * dt * P._linear_source("lorentz"),
                                  rhs=Q, fields=f_star)
-    P.commit(P.state("U", block="plasma").next, U_np1)
+    P.commit(temporal.next, U_np1)
     return P
 
 
 # The predictor-corrector emits (with a model) -- it uses named sources + local solves.
-chk(bool(predictor_corrector_program().emit_cpp_program(model=named_source_model())),
+pc_codegen_model = named_source_model("pc_codegen")
+chk(bool(predictor_corrector_program(pc_codegen_model).emit_cpp_program(model=pc_codegen_model)),
     "the full predictor-corrector Program emits C++ (named sources + Lorentz local solves)")
 
 # ---- (B)/(C) end-to-end: skip unless the install_program binding is present ----
@@ -281,8 +289,9 @@ def analytic_lorentz_apply(U):
 # ---- (B) focused: one FE step, named-source rhs == default-source eval_rhs ----
 print("== (B) focused: rhs(sources=['electric']) == -div F + electric (one FE step) ==")
 try:
-    compiled_fe = pops.codegen.compile_problem(model=named_source_model("electric_fe_prog"),
-                                      time=_electric_fe_program())
+    electric_fe_model = named_source_model("electric_fe_prog")
+    compiled_fe = pops.codegen.compile_problem(
+        model=electric_fe_model, time=_electric_fe_program(electric_fe_model))
 except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 
@@ -303,8 +312,9 @@ chk(float(np.abs(U_fe - U0).max()) > 1e-6, "the electric source actually moved t
 # ---- (C) full predictor-corrector parity ----
 print("== (C) full predictor-corrector parity ==")
 try:
-    compiled_pc = pops.codegen.compile_problem(model=named_source_model("pc_prog"),
-                                      time=predictor_corrector_program())
+    pc_model = named_source_model("pc_prog")
+    compiled_pc = pops.codegen.compile_problem(
+        model=pc_model, time=predictor_corrector_program(pc_model))
 except RuntimeError as exc:
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 

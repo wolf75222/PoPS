@@ -144,15 +144,27 @@ def validate_input_regions(program: Any, inputs: Any, region: int, where: str) -
             % (where, value.name, value.region, region))
 
 
-def require_declared_state_space(program: Any, block: Any, space: Any) -> None:
-    """Enforce one typed-or-untyped StateSpace contract for every declared block."""
+def require_declared_state_space(program: Any, state_ref: Any, space: Any) -> None:
+    """Enforce one StateSpace contract per block-qualified state declaration.
+
+    A model may declare several independent state families inside one Problem block. Their qualified
+    Handles are the only non-ambiguous keys: indexing by block or by a local name would either collapse
+    distinct spaces or reintroduce a registry/name lookup after the typed authoring boundary.
+    """
+    from pops.model.handles import Handle
+
+    if not isinstance(state_ref, Handle) or state_ref.kind != "state" \
+            or not state_ref.is_instance:
+        raise TypeError(
+            "state space declaration requires a block-qualified state Handle")
     require_state_space(space, "state")
     missing = object()
-    prior = program._state_spaces.get(block, missing)
+    prior = program._state_spaces.get(state_ref, missing)
     if prior is missing:
-        program._state_spaces[block] = space
+        program._state_spaces[state_ref] = space
         return
-    require_compatible_spaces(prior, space, "state block %r" % block, typed_pair=True)
+    require_compatible_spaces(
+        prior, space, "state %s" % state_ref.qualified_id, typed_pair=True)
 
 
 def require_history_space(program: Any, name: str, space: Any) -> None:

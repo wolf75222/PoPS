@@ -249,7 +249,7 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             result_type, "solve_linear", inputs, attrs, name, rhs.block, space=rhs.space)
 
     def commit(self, endpoint: StateEndpointHandle, state: ProgramValue) -> None:
-        """Commit ``state`` to ``endpoint``, at most once for its block.
+        """Commit ``state`` to ``endpoint``, at most once for that qualified state.
 
         The public form is exactly ``P.commit(U.next, U_next)``. ``U.next`` is a
         commit-only :class:`StateEndpointHandle`; a block-name string is not a public target and a
@@ -267,8 +267,8 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         endpoint = self._require_endpoint(endpoint, "commit")
         if isinstance(state, ProgramValue) and state.block != endpoint.block:
             raise ValueError(
-                "commit: cross-block write: endpoint for block %r cannot receive a value owned by block %r"
-                % (endpoint.block, state.block)
+                "commit: cross-block write: endpoint for block %r cannot receive a value owned "
+                "by block %r" % (block_name(endpoint.block), block_name(state.block))
             )
         require_top_level(self, state, "commit")
         require_compatible_spaces(endpoint.space, state.space, "commit", typed_pair=True)
@@ -295,17 +295,13 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             raise ValueError(
                 "_commit_state: state %s cannot receive a value derived from %s"
                 % (state_ref.qualified_id, state.state_ref.qualified_id))
-        if block not in self._state_spaces:
+        if state_ref not in self._state_spaces:
             raise ValueError(
-                "_commit_state: block %r has no declared StateSpace" % block_name(block))
+                "_commit_state: state %s has no declared StateSpace" % state_ref.qualified_id)
         require_compatible_spaces(
-            self._state_spaces[block], state.space, "_commit_state", typed_pair=True)
+            self._state_spaces[state_ref], state.space, "_commit_state", typed_pair=True)
         if state_ref in self._commits:
             raise ValueError("state %s committed more than once" % state_ref.qualified_id)
-        if any(committed.block_ref is block for committed in self._commits):
-            raise ValueError(
-                "block %r already has a committed state; multi-state block storage is not "
-                "supported by the current runtime" % block_name(block))
         self._commits[state_ref] = state
 
     def commits(self) -> Any:

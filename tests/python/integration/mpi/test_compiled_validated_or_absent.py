@@ -28,6 +28,7 @@ try:
     from pops import time as adctime
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
+    from tests.python.support.typed_program import program_states, synthetic_module
 except Exception as exc:  # noqa: BLE001
     _skip("pops/numpy unavailable: %s" % exc)
 
@@ -44,10 +45,13 @@ def chk(cond, label):
 def _fe_program(name="validated_probe"):
     P = adctime.Program(name)
     dt = P.dt
-    U = P.state("ions")
+    module = synthetic_module("%s_state" % name, components=("rho", "mx", "my"))
+    _case, states = program_states(P, module, ("ions",))
+    temporal = states["ions"]
+    U = temporal.n
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(P.state("U", block="ions").next, P.linear_combine("U1", U + dt * R))
+    P.commit(temporal.next, P.linear_combine("U1", U + dt * R))
     return P
 
 
@@ -94,10 +98,11 @@ print("== (2) failure -> no artifact escapes ==")
 
 
 def _broken_program():
-    # A Program that commits a block never declared: emit's program.validate() must reject it, so
-    # compile raises before any handle exists.
+    # An advanced low-level Program that declares an evolved block but never commits it is invalid;
+    # compile must fail before any handle exists. A foreign free-name commit is no longer expressible.
     P = adctime.Program("broken_probe")
-    P.commit(P.state("U", block="never_declared").next, P.linear_combine("U1", P.state("ions")))
+    module = synthetic_module("broken_probe_state", components=("rho", "mx", "my"))
+    program_states(P, module, ("ions",))
     return P
 
 

@@ -36,8 +36,8 @@ try:
     from pops import time as adctime
     from pops.physics.facade import Model
     from pops.ir.ops import sqrt
-    from pops.params import RuntimeParam
     from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
+    from tests.python.support.typed_program import program_states
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
     print("skip test_amr_install_program (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -73,25 +73,29 @@ def _euler_model(name="adc508_amr_model"):
     return m
 
 
-def _lie_program(name="adc508_amr_prog"):
+def _lie_program(model, name="adc508_amr_prog"):
     """A single-block Lie step on 'plasma' (solve_fields then a Forward-Euler commit)."""
     P = adctime.Program(name)
-    u = P.state("plasma")
+    _case, states = program_states(P, model, ("plasma",))
+    temporal = states["plasma"]
+    u = temporal.n
     fields = P.solve_fields(u)
     r = P._rhs_legacy(state=u, fields=fields)
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", u + P.dt * r))
+    P.commit(temporal.next, P.linear_combine("u1", u + P.dt * r))
     return P
 
 
-def _two_block_program(name="adc508_amr_2block"):
+def _two_block_program(model, name="adc508_amr_2block"):
     """A TWO-block Lie Program (states 'plasma' and 'plasma2'), each a Forward-Euler step. The Program
     binds 2 blocks -> the AMR install must FAIL LOUD (v1 single-block-AMR-Program limit, ADC-508 fix 2)."""
     P = adctime.Program(name)
+    _case, states = program_states(P, model, ("plasma", "plasma2"))
     for blk in ("plasma", "plasma2"):
-        u = P.state(blk)
+        temporal = states[blk]
+        u = temporal.n
         fields = P.solve_fields(u)
         r = P._rhs_legacy(state=u, fields=fields)
-        P.commit(P.state("U", block=blk).next, P.linear_combine("u1_%s" % blk, u + P.dt * r))
+        P.commit(temporal.next, P.linear_combine("u1_%s" % blk, u + P.dt * r))
     return P
 
 
@@ -100,9 +104,10 @@ def test_codegen_emits_amr_install_export():
     default does NOT. The AMR export builds an AmrProgramContext and runs the body per level (the
     per-level driver has landed, ADC-508)."""
     print("== codegen emits pops_install_program_amr only for target='amr_system' ==")
-    prog = _lie_program()
-    src_sys = prog.emit_cpp_program(model=_euler_model())
-    src_amr = prog.emit_cpp_program(model=_euler_model(), target="amr_system")
+    model = _euler_model()
+    prog = _lie_program(model)
+    src_sys = prog.emit_cpp_program(model=model)
+    src_amr = prog.emit_cpp_program(model=model, target="amr_system")
     chk("pops_install_program(" in src_sys, "the System .so exports pops_install_program")
     chk("pops_install_program_amr" not in src_sys, "the System .so does NOT export the AMR entry")
     chk("pops_install_program_amr" in src_amr, "the AMR .so exports pops_install_program_amr")
@@ -111,7 +116,7 @@ def test_codegen_emits_amr_install_export():
         "the AMR install entry builds an AmrProgramContext and runs the body per level (ADC-508)")
     # bad target rejected
     try:
-        prog.emit_cpp_program(model=_euler_model(), target="bogus")
+        prog.emit_cpp_program(model=model, target="bogus")
         chk(False, "an unknown target must raise")
     except ValueError as exc:
         chk("target" in str(exc), "unknown target is rejected with a clear message")
@@ -157,7 +162,8 @@ def test_amr_install_program_end_to_end_kokkos():
         return
     m = _euler_model()
     try:
-        compiled = pops.codegen.compile_problem(model=m, time=_lie_program(), target="amr_system")
+        compiled = pops.codegen.compile_problem(
+            model=m, time=_lie_program(m), target="amr_system")
         block_cm = m.compile(backend="production", target="amr_system")
     except RuntimeError as exc:
         print("skip (no Kokkos to build the AMR .so: %s)" % str(exc)[:120])
@@ -200,7 +206,8 @@ def test_multi_block_amr_program_install_fails_loud():
         return
     m = _euler_model("adc508_2block_model")
     try:
-        compiled = pops.codegen.compile_problem(model=m, time=_two_block_program(), target="amr_system")
+        compiled = pops.codegen.compile_problem(
+            model=m, time=_two_block_program(m), target="amr_system")
         block_cm = m.compile(backend="production", target="amr_system")
     except RuntimeError as exc:
         print("skip (no Kokkos to build the 2-block AMR .so: %s)" % str(exc)[:120])

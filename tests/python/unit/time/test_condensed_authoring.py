@@ -14,6 +14,8 @@ raises with a precise message; a non-operator handle raises; a cons/prim-depende
 at m.local_linear_map registration (the block-local-linearization contract). Real engine only; skips
 (exit 0) if pops is unavailable, never faking. Runs under pytest and as a script.
 """
+from typed_program_support import typed_state
+
 import sys
 
 try:
@@ -43,7 +45,7 @@ def test_builders_record_the_condensed_ops():
     the authored operator name + the coupled subset, and the program validates + hashes."""
     m, _, jh = _model()
     P = adctime.Program("cs").bind_operators(m)
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     P.solve_fields(U)
     coeffs = P.condensed_coeffs(state=U, linear_operator=jh, subset=(1, 2), c=1.0 * P.dt * P.dt,
                                 th_dt=1.0 * P.dt, c_rho=0)
@@ -57,7 +59,7 @@ def test_builders_record_the_condensed_ops():
     recon = P.condensed_reconstruct(state=U, phi=phi_n, linear_operator=jh, subset=(1, 2),
                                     th_dt=1.0 * P.dt, c_rho=0)
     assert recon.vtype == "state" and recon.attrs["subset"] == (1, 2)
-    P.commit(P.state("U", block="blk").next, recon)
+    P.commit(typed_state(P, "blk", state_name="U").next, recon)
     assert P.validate() is True and P._ir_hash()
     print("OK  condensed_coeffs/rhs/reconstruct record + validate + hash")
 
@@ -68,7 +70,7 @@ def test_subset_size_must_equal_the_spatial_dimension():
     ill-posed, not unimplemented (ValueError, never NotImplementedError)."""
     m, _, jh = _model()
     P = adctime.Program("cs").bind_operators(m)
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     with pytest.raises(ValueError, match="spatial velocity block"):
         P.condensed_coeffs(state=U, linear_operator=jh, subset=(0, 1, 2), c=1.0, th_dt=1.0)
     print("OK  condensed_coeffs refuses a size-3 subset via the spatial-dimension contract")
@@ -80,7 +82,7 @@ def test_no_dense_capacity_bound_only_the_dimension_contract():
     message must not invent a capacity."""
     m, _, jh = _model()
     P = adctime.Program("cs").bind_operators(m)
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     big = tuple(range(9))
     with pytest.raises(ValueError, match="dimension=2") as excinfo:
         P.condensed_reconstruct(state=U, phi=P.scalar_field("p"), linear_operator=jh, subset=big,
@@ -93,7 +95,7 @@ def test_subset_must_be_distinct_nonnegative_ints():
     """A subset with a repeated / negative / non-int component raises a precise ValueError."""
     m, _, jh = _model()
     P = adctime.Program("cs").bind_operators(m)
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     with pytest.raises(ValueError, match="distinct"):
         P.condensed_reconstruct(state=U, phi=P.scalar_field("p"), linear_operator=jh, subset=(1, 1),
                                 th_dt=1.0)
@@ -107,7 +109,7 @@ def test_non_operator_handle_is_refused():
     """linear_operator must be an authored operator (handle or name), not an arbitrary object."""
     m, _, _ = _model()
     P = adctime.Program("cs").bind_operators(m)
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     with pytest.raises(TypeError, match="OperatorHandle"):
         P.condensed_coeffs(state=U, linear_operator=object(), subset=(1, 2), c=1.0, th_dt=1.0)
     print("OK  a non-operator linear_operator is refused")
@@ -117,7 +119,7 @@ def test_scalar_coeffs_and_c_rho_are_validated():
     """The coefficients must be numbers or dt-polynomials, c_rho a non-negative int."""
     m, _, jh = _model()
     P = adctime.Program("cs").bind_operators(m)
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     with pytest.raises(ValueError, match=r"exact scalar or a dt-polynomial"):
         P.condensed_coeffs(state=U, linear_operator=jh, subset=(1, 2), c="not-a-number", th_dt=1.0)
     with pytest.raises(ValueError, match="c_rho"):

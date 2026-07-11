@@ -56,7 +56,7 @@ def test_private_transaction_hooks_reject_calls_without_coordinator_capability()
         spec.transport = "isothermal"
 
 
-def test_problem_freeze_rolls_modelspec_back_when_a_later_descriptor_fails():
+def test_problem_freeze_rolls_module_back_when_a_later_descriptor_fails():
     import pops
     from pops.descriptors import BrickDescriptor
 
@@ -65,16 +65,16 @@ def test_problem_freeze_rolls_modelspec_back_when_a_later_descriptor_fails():
             super().freeze()
             raise RuntimeError("spatial freeze failed")
 
-    spec = ModelSpec()
-    spec.transport = "exb"
-    spec.source = "none"
-    spec.elliptic = "charge"
+    from pops.model import Module
+
+    module = Module("native-rollback-model")
+    module.state_space("U", ("rho",))
     problem = pops.Problem(name="native-rollback")
-    problem.add_block("u", spec, spatial=FailingSpatial("fv", "native"))
+    problem.add_block("u", module, spatial=FailingSpatial("fv", "native"))
 
     with pytest.raises(RuntimeError, match="spatial freeze failed"):
         problem.freeze()
 
-    assert spec.frozen is False
-    spec.transport = "isothermal"
-    assert spec.transport == "isothermal"
+    assert module.frozen is False
+    module.state_space("late", ("q",))
+    assert "late" in module.state_spaces()

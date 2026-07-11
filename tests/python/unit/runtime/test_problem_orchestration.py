@@ -19,8 +19,12 @@ try:
     from pops.fields import FieldProblem
     from pops.math import laplacian
     from pops.codegen import orchestration
-    from pops.model import DeclarationIndex, Handle, OwnerKind, OwnerPath
+    from pops.codegen.loader import CompiledModel
+    from pops.codegen._compiled_model_identity import model_compile_identity
+    from pops.codegen._plans import InstallBlock, InstallPlan
+    from pops.model import Handle, Module, OwnerPath
     from pops.model.bind_schema import BindSchema
+    from pops.solvers.elliptic import GeometricMG
     from tests.python.support.assertions import _check
 except Exception as exc:  # noqa: BLE001
     print("skip test_problem_orchestration (pops unavailable: %s)" % exc)
@@ -32,89 +36,112 @@ def _ref(name, kind="state"):
 
 
 # --- tiny stand-ins (no compiler / no runtime) -----------------------------
-class _StubCompiledModel:
+class _StubCompiledModel(CompiledModel):
     """A target='amr_system' CompiledModel stand-in: ``.so_path`` + the adder/target metadata
     AmrSystem.add_equation dispatches on (no real .so)."""
 
-    def __init__(self, name="stub", so_path="/tmp/stub_amr.so"):
-        self.name = name
-        self.so_path = so_path
-        self.target = "amr_system"
-        self.adder = "add_native_block"
-        self.sealed = False
+    def __init__(self, source, so_path="/tmp/stub_amr.so", target="amr_system"):
+        super().__init__(
+            so_path, "production", "add_native_block", (), (), (), 0, None, 0,
+            {}, {"cpu": True, "amr": target == "amr_system"}, "abi", "model-hash",
+            "c++", "c++20", target=target,
+            definition_identity=model_compile_identity(source))
+        self.name = source.name
 
-    def _seal(self):
-        self.sealed = True
+    @property
+    def sealed(self):
+        return getattr(self, "_sealed", False)
 
 
-class _StubDsl:
-    """The ``.dsl`` engine model a physics block resolves to: its ``.compile(backend, target)``
-    returns a stub CompiledModel and records the call (no compiler).
+_COMPILE_CALLS = {}
 
-    ADC-545: pops.compile now flows the TYPED backend descriptor (``Production()``) to the driver;
-    the real ``Model.compile`` lowers it via ``lower_backend`` to the canonical token, so this stub
-    mirrors that and records the LOWERED string (byte-identical to the pre-ADC-545 default)."""
+
+class _StubModel(Module):
+    """A genuine operator-first Module with a compiler spy at the final protocol boundary.
+
+    The global call table is deliberate: ``Problem.freeze`` deeply freezes the Module before
+    compilation, so recording on the model itself would be an invalid post-freeze mutation.  The
+    compiler still receives a real Module and the returned loader is an exact ``CompiledModel``.
+    """
 
     def __init__(self, name="stub"):
-        self.name = name
-        self.compiled = []  # (backend_token, target) per compile call
+        super().__init__(name)
+        self.state_space("U", ("rho",))
+        _COMPILE_CALLS[id(self)] = []
+
+    @property
+    def compiled(self):
+        return list(_COMPILE_CALLS[id(self)])
 
     def compile(self, *, backend, target, **kw):
-        from pops.codegen.backends import lower_backend
-        self.compiled.append((lower_backend(backend), target))
-        return _StubCompiledModel(name=self.name, so_path="/tmp/%s_amr.so" % self.name)
-
-
-class _StubModel:
-    """A physics stand-in exposing the ``.dsl`` engine model pops.compile resolves. The Uniform
-    route reads ``.dsl`` as an opaque token for compile_problem; the AMR route calls
-    ``.dsl.compile(backend, target='amr_system')``."""
-
-    def __init__(self, name="stub"):
-        self.name = name
-        self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, name)
-        self.dsl = _StubDsl(name)  # what _resolve_problem_model returns
-
-    def declaration_index(self):
-        return DeclarationIndex(owner=self.owner_path, handles=())
-
-
-class _StubSolver:
-    name = "GeometricMG"
-    scheme = "geometric_mg"
-    options = {}
+        _COMPILE_CALLS[id(self)].append((backend, target))
+        return _StubCompiledModel(
+            self, so_path="/tmp/%s_%s.so" % (self.name, target), target=target)
 
 
 class _StubCompiled:
-    """A compiled-handle stand-in: only ``.so_path`` + the carried problem/target/layout.
-
-    The AMR route also carries ``_block_compiled_models`` (the {block: CompiledModel} table); a
-    System handle leaves it unset (the install reads it only for target='amr_system')."""
+    """A compiled-handle stand-in carrying only the immutable InstallPlan bind authority."""
 
     def __init__(self, target="system", problem=None, layout=None, block_compiled=None):
         self.so_path = "/tmp/stub.so"
         self.model = None
-        self._target = target
-        self._problem = problem
-        self._layout = layout
+        self.install_plan = None
+        self._problem_snapshot = None
         if problem is not None:
-            self.bind_schema = BindSchema.from_problem(problem)
-        if block_compiled is not None:
-            self._block_compiled_models = block_compiled
+            from pops.problem._snapshot import AuthoringSnapshot
+            from pops.problem._detached import detached_frozen
+
+            schema = BindSchema.from_problem(problem)
+            problem.freeze()
+            models = block_compiled or {
+                name: _StubCompiledModel(_StubModel(name), target=target)
+                for name, _spec in problem._blocks.items()
+            }
+            for model in models.values():
+                model._seal()
+            self._problem_snapshot = AuthoringSnapshot({
+                "kind": "direct-bind-test-artifact",
+                "target": target,
+                "blocks": tuple(models),
+            })
+            blocks = tuple(
+                InstallBlock(name, models[name], detached_frozen(spec["spatial"]))
+                for name, spec in problem._blocks.items()
+            )
+            field_solvers = {
+                name: detached_frozen(field.solver)
+                for name, field in problem._field_registry.resolved_items(problem.resolve)
+                if field.solver is not None
+            }
+            self.install_plan = InstallPlan(
+                snapshot_hash=self._problem_snapshot.hash,
+                target=target,
+                layout=detached_frozen(layout),
+                blocks=blocks,
+                bind_schema=schema,
+                field_solvers=field_solvers,
+                outputs=tuple(detached_frozen(value) for value in (problem._outputs or ())),
+                diagnostics=tuple(
+                    detached_frozen(value) for value in (problem._diagnostics or ())),
+                has_program=(target == "system"),
+            )
+            self.bind_schema = schema
+
+    @property
+    def authoring_snapshot(self):
+        return self._problem_snapshot
 
 
-class _StubTime:
-    """Strict inert time descriptor accepted by the structural Problem snapshot."""
-
-    def to_data(self):
-        return {"kind": "stub_time"}
+def _StubTime():
+    """Return the exact final Program type; opaque subclasses are not freeze-trusted."""
+    return pops.Program("stub-time")
 
 
 def _poisson_problem():
     """A minimal valid Poisson FieldProblem named 'phi' (the default-served field)."""
     return FieldProblem(name="phi", unknown="phi",
                         equation=(-laplacian("phi") == "charge_density"),
-                        solver=_StubSolver())
+                        solver=GeometricMG())
 
 
 # --- assembly + chaining + inspect -----------------------------------------
@@ -222,7 +249,7 @@ def test_validate_named_field_lowers():
     # C1-System: a named non-Poisson field now VALIDATES (the _POISSON_FIELD_NAMES whitelist reject
     # is removed); an undeclared field name is caught downstream at install (_install_solver).
     field = FieldProblem(name="temperature", unknown="T",
-                         equation=(-laplacian("T") == "src"), solver=_StubSolver())
+                         equation=(-laplacian("T") == "src"), solver=GeometricMG())
     prob = pops.Problem().block("ne", physics=_StubModel()).field(field)
     _check(prob.validate() is True, "a Problem with a named non-Poisson field validates (C1-System)")
     print("ok test_validate_named_field_lowers")
@@ -290,8 +317,8 @@ def test_compile_layout_drives_target(monkeypatch=None):
         compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=_StubTime())
         _check(captured["target"] == "system", "Uniform layout routes to target='system'")
         _check(captured["backend"] == "production", "default backend forwarded (typed Production() lowered)")
-        _check(compiled._target == "system", "target carried on the handle")
-        _check(compiled._problem is prob, "problem carried on the handle")
+        _check(compiled.install_plan.target == "system", "target carried by the InstallPlan")
+        _check(not hasattr(compiled, "_problem"), "compiled artifact retains no live Problem")
     finally:
         _unpatch(monkeypatch)
     print("ok test_compile_layout_drives_target")
@@ -327,13 +354,15 @@ def test_compile_amr_routes_to_amr_system():
         compiled = orchestration.compile(prob)  # no time= : the AMR route does not need one
         _check(tripwire["hit"] is False,
                "the AMR route does NOT call compile_problem (no whole-system time Program)")
-        _check(model.dsl.compiled == [("production", "amr_system")],
+        _check(model.compiled == [("production", "amr_system")],
                "the block was compiled once for target='amr_system'")
-        _check(compiled._target == "amr_system", "amr_system target carried on the handle")
-        _check(compiled._layout is not layout and compiled._layout.base is layout.base,
-               "a detached AMR layout is carried on the handle for bind()")
-        _check(set(compiled._block_compiled_models) == {"ne"},
-               "compile carries one CompiledModel per block (_block_compiled_models)")
+        plan = compiled.install_plan
+        _check(plan.target == "amr_system", "amr_system target carried by the InstallPlan")
+        _check(plan.layout is not layout and plan.layout.base is not layout.base
+               and plan.layout.base.n == layout.base.n,
+               "a deeply detached AMR layout is carried on the InstallPlan")
+        _check(set(plan.block_models) == {"ne"},
+               "compile carries one CompiledModel per InstallBlock")
         _check(getattr(compiled, "so_path", None) is not None,
                "the handle carries a .so_path so bind's so_path guard passes")
     finally:
@@ -361,13 +390,14 @@ def test_compile_multi_block_amr_routes_natively():
                 .block("ni", physics=m_ni))
         compiled = orchestration.compile(prob)
         _check(tripwire["hit"] is False, "multi-block AMR does NOT call compile_problem")
-        _check(m_ne.dsl.compiled == [("production", "amr_system")],
+        _check(m_ne.compiled == [("production", "amr_system")],
                "block 'ne' compiled once for target='amr_system'")
-        _check(m_ni.dsl.compiled == [("production", "amr_system")],
+        _check(m_ni.compiled == [("production", "amr_system")],
                "block 'ni' compiled once for target='amr_system'")
-        _check(set(compiled._block_compiled_models) == {"ne", "ni"},
+        _check(set(compiled.install_plan.block_models) == {"ne", "ni"},
                "compile carries a CompiledModel per block")
-        _check(all(cm.target == "amr_system" for cm in compiled._block_compiled_models.values()),
+        _check(all(cm.target == "amr_system"
+                   for cm in compiled.install_plan.block_models.values()),
                "every carried CompiledModel targets the AMR system")
     finally:
         while saved:
@@ -484,9 +514,8 @@ def test_compile_problem_time_setter_honored(monkeypatch=None):
 
 
 def test_compile_multi_block_uniform_lowers(monkeypatch=None):
-    # C3: a multi-block Uniform Problem lowers -- compile resolves EACH block's physics and carries the
-    # {block: model} table on the handle (_block_models); the per-block models flow to install via
-    # bind()'s _assemble_instances. compile_problem is monkeypatched so no real .so is built.
+    # C3: a multi-block Uniform Problem lowers -- compile resolves EACH block's physics into the
+    # immutable InstallPlan consumed by bind. compile_problem is monkeypatched so no real .so is built.
     def _fake_compile_problem(*, time, model, backend, target, **kw):
         return _StubCompiled(target=target)
 
@@ -495,34 +524,83 @@ def test_compile_multi_block_uniform_lowers(monkeypatch=None):
         prob = (pops.Problem().block("ne", physics=_StubModel("ne"))
                 .block("ni", physics=_StubModel("ni")))
         compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=_StubTime())
-        _check(compiled._target == "system", "multi-block Uniform routes to target='system'")
-        _check(set(compiled._block_models) == {"ne", "ni"},
-               "compile carries a model per block (_block_models)")
+        _check(compiled.install_plan.target == "system",
+               "multi-block Uniform routes to target='system'")
+        _check(set(compiled.install_plan.block_models) == {"ne", "ni"},
+               "compile carries a model per InstallBlock")
     finally:
         _unpatch(monkeypatch)
     print("ok test_compile_multi_block_uniform_lowers")
 
 
 def test_compile_amr_module_without_compile_raises():
-    # ADC-503 honest boundary: an AMR block whose resolved model has no .compile(...) producing a
-    # target='amr_system' CompiledModel (e.g. a raw pops.model.Module) raises a clear error, not a
-    # cryptic AttributeError. _resolve_problem_model returns the physics as-is when it has no .dsl.
-    class _NoCompilePhysics:
-        name = "raw"  # no .dsl, no .compile
+    # ADC-655 honest boundary: the install-model protocol itself refuses an opaque value. Testing
+    # it directly keeps the invalid object outside Problem's stricter freeze/snapshot boundary.
+    from pops.codegen._orchestration_compile import compile_install_model
 
-        def __init__(self):
-            self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, self.name)
-
-        def declaration_index(self):
-            return DeclarationIndex(owner=self.owner_path, handles=())
-
-    prob = pops.Problem(layout=AMR(CartesianMesh())).block("ne", physics=_NoCompilePhysics())
     try:
-        orchestration.compile(prob)
+        compile_install_model("ne", object(), "production", "amr_system", {})
         raise AssertionError("an AMR block without .compile must raise")
     except NotImplementedError as exc:
-        _check("CompiledModel" in str(exc), "the message names the missing AMR loader")
+        _check("install-model protocol" in str(exc),
+               "the message names the missing install-model protocol")
     print("ok test_compile_amr_module_without_compile_raises")
+
+
+def test_program_param_routing_requires_captured_artifact_metadata():
+    from pops.runtime._install_param_routing import route_program_params
+
+    class _ProgramArtifact:
+        program = _StubTime()
+        program_param_routes = None
+
+    try:
+        route_program_params(_ProgramArtifact(), BindSchema(), {})
+        raise AssertionError("missing program_param_routes metadata must be refused")
+    except ValueError as exc:
+        _check("no immutable program_param_routes metadata" in str(exc),
+               "missing metadata refusal names the immutable route table")
+
+    _ProgramArtifact.program_param_routes = ()
+    _check(route_program_params(_ProgramArtifact(), BindSchema(), {}) == {},
+           "a captured empty route table is distinct from missing metadata")
+    print("ok test_program_param_routing_requires_captured_artifact_metadata")
+
+
+def test_install_metadata_rejects_live_or_incomplete_models():
+    from pops.runtime._amr_system_install import _AmrSystemInstall
+    from pops.runtime._system_unified_install import _SystemUnifiedInstall
+
+    compiled = _StubCompiledModel(_StubModel("stub"), target="system")
+    compiled.elliptic_field_names = ["theta"]
+    instances = {"ne": {"model": compiled}}
+    _check(
+        _SystemUnifiedInstall._declared_elliptic_fields(object(), instances) == {"theta"},
+        "System reads named fields from detached CompiledModel metadata",
+    )
+    _check(
+        _AmrSystemInstall._declared_elliptic_fields(instances) == {"theta"},
+        "AMR reads named fields from detached CompiledModel metadata",
+    )
+    raw = _StubModel("live-authoring")
+    for reader, args in (
+        (_SystemUnifiedInstall._declared_elliptic_fields,
+         (object(), {"ne": {"model": raw}})),
+        (_AmrSystemInstall._declared_elliptic_fields, ({"ne": {"model": raw}},)),
+    ):
+        try:
+            reader(*args)
+            raise AssertionError("live authoring model must not reach install metadata")
+        except TypeError as exc:
+            _check("detached CompiledModel" in str(exc),
+                   "install metadata refusal names the detached CompiledModel contract")
+    try:
+        _SystemUnifiedInstall._resolve_instance_model(object(), raw)
+        raise AssertionError("a live Module must not resolve during install")
+    except TypeError as exc:
+        _check("detached CompiledModel" in str(exc),
+               "instance-model refusal names the detached CompiledModel contract")
+    print("ok test_install_metadata_rejects_live_or_incomplete_models")
 
 
 # --- bind(): System vs AmrSystem dispatch via a monkeypatched runtime -------
@@ -549,7 +627,7 @@ def _bind_with_stub_runtime(target, layout=None, blocks=("ne",), initial=None):
     bound-simulation view. The AmrSystem stub mirrors the real constructor (it accepts the derived
     ``AmrSystemConfig``) and records the refinement flow (set_refinement / set_phi_refinement) the
     adapter applies before install. For target='amr_system' the compiled handle carries a per-block
-    CompiledModel table (``_block_compiled_models``) so the install routes the native path
+    CompiledModel table in the ``InstallPlan`` so the install routes the native path
     (compiled=None)."""
     import pops.runtime.system as rtsys
 
@@ -581,7 +659,9 @@ def _bind_with_stub_runtime(target, layout=None, blocks=("ne",), initial=None):
         prob = prob.field(_poisson_problem())
         block_compiled = None
         if target == "amr_system":
-            block_compiled = {name: _StubCompiledModel(name) for name in blocks}
+            block_compiled = {
+                name: _StubCompiledModel(_StubModel(name)) for name in blocks
+            }
         effective_layout = (orchestration._resolve_layout(prob, layout)
                             if layout is not None else None)
         compiled = _StubCompiled(target=target, problem=prob, layout=effective_layout,
@@ -672,7 +752,12 @@ def test_bind_flows_output_policies():
         compiled = _StubCompiled(target="system", problem=prob)
         orchestration.bind(compiled, initial_state={"ne": [1.0]})
         flowed = _RecordingSim.last["outputs"]
-        _check(flowed == [out, ckpt], "both policies flowed to the install seam in order")
+        _check([type(value) for value in flowed] == [OutputPolicy, CheckpointPolicy],
+               "both typed policies flowed to the install seam in order")
+        _check([value.options() for value in flowed] == [out.options(), ckpt.options()],
+               "detached policies preserve their exact options")
+        _check(flowed[0] is not out and flowed[1] is not ckpt,
+               "InstallPlan owns detached output policies, not authoring objects")
     finally:
         rtsys.System = orig
     print("ok test_bind_flows_output_policies")
@@ -841,8 +926,8 @@ _SAVED = []
 
 # --- ADC-592: compile-time snapshot authority + Problem-mutation drift check ---
 def test_compile_freezes_snapshot_authority(monkeypatch=None):
-    # ADC-592: compile() freezes WHAT it saw on the handle -- _block_specs (model + spatial per block),
-    # _field_solvers, _outputs -- so bind() lowers from the compile-time truth, not a live Problem re-read.
+    # ADC-655: compile() retains one immutable InstallPlan, not private authoring mirrors, so bind()
+    # lowers from compile-time truth without a live Problem re-read.
     def _fake_compile_problem(*, time, model, backend, target, **kw):
         return _StubCompiled(target=target)
 
@@ -852,13 +937,17 @@ def test_compile_freezes_snapshot_authority(monkeypatch=None):
                 .block("ni", physics=_StubModel("ni")).field(_poisson_problem()))
         compiled = orchestration.compile(
             prob, layout=Uniform(CartesianMesh()), time=_StubTime())
-        _check(set(compiled._block_specs) == {"ne", "ni"},
-               "compile freezes a per-block spec (model + spatial) on the handle")
-        _check(all("model" in s and "spatial" in s for s in compiled._block_specs.values()),
-               "each frozen block spec carries model + spatial")
-        _check("phi" in compiled._field_solvers,
+        plan = compiled.install_plan
+        _check({block.name for block in plan.blocks} == {"ne", "ni"},
+               "compile freezes one typed InstallBlock per declared block")
+        _check(all(block.model is not None for block in plan.blocks),
+               "each InstallBlock carries its compiled model")
+        _check("phi" in plan.field_solvers,
                "compile freezes the field solvers (not a live re-read)")
-        _check(compiled._outputs == [], "compile freezes the (empty) output policies")
+        _check(plan.outputs == (), "compile freezes output policies as a tuple")
+        for forbidden in ("_problem", "_block_specs", "_field_solvers", "_outputs"):
+            _check(not hasattr(compiled, forbidden),
+                   "compiled artifact does not retain private authoring mirror %s" % forbidden)
     finally:
         _unpatch(monkeypatch)
     print("ok test_compile_freezes_snapshot_authority")
@@ -892,7 +981,7 @@ def test_bind_rejects_case_mutated_after_compile(monkeypatch=None):
 
 
 def test_bind_uses_snapshot_not_live_physics(monkeypatch=None):
-    # ADC-592: the Uniform install instances come from the COMPILE-TIME snapshot (_block_specs), so a
+    # ADC-655: Uniform install instances come from the COMPILE-TIME InstallPlan, so a
     # mutation of a block's physics AFTER compile (without changing the block set) does not leak into
     # the bound install -- the frozen model is what gets bound.
     def _fake_compile_problem(*, time, model, backend, target, **kw):
@@ -915,7 +1004,7 @@ def test_bind_uses_snapshot_not_live_physics(monkeypatch=None):
             prob = pops.Problem().block("ne", physics=m0).field(_poisson_problem())
             stale_spec = prob._blocks.spec("ne")
             compiled = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=_StubTime())
-            frozen_model = compiled._block_specs["ne"]["model"]
+            frozen_model = compiled.install_plan.block_models["ne"]
             # A reference obtained before compile is deliberately detached by freeze. Mutating that
             # stale authoring dictionary must not alter the frozen registry or compiled snapshot.
             swapped_model = _StubModel("ne_swapped")

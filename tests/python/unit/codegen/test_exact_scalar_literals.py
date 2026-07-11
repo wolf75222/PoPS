@@ -7,7 +7,17 @@ from fractions import Fraction
 import pytest
 
 from pops.ir import Const, ScalarLiteral, scalar_data
+from pops.model import StateSpace
 from pops.time import Program
+from typed_program_support import typed_state
+
+
+_SCALAR_SPACE = StateSpace("U", ("u",))
+
+
+def _state(program, *, temporal=False):
+    return typed_state(
+        program, "transport", state_name="U" if temporal else None, space=_SCALAR_SPACE)
 
 
 @pytest.mark.parametrize(
@@ -81,7 +91,7 @@ def test_ambiguous_or_non_finite_literals_are_rejected(value):
 
 def test_exact_affine_coefficient_has_one_typed_codec_for_hash_and_cpp():
     program = Program("exact_coeff")
-    state = program.state("U", block="transport")
+    state = _state(program, temporal=True)
     result = program.linear_combine("next", Fraction(1, 3) * state.n)
     program.commit(state.next, result)
 
@@ -97,7 +107,7 @@ def test_unit_target_and_algebraic_program_constants_reach_target_lowering_lossl
     algebraic = ScalarLiteral.algebraic(
         "sqrt(2)", cpp="std::sqrt(pops::Real(2))")
     program = Program("annotated_scalars")
-    state = program.state("U", block="transport")
+    state = _state(program, temporal=True)
     reduced = program.norm2(state.n)
     program.record_scalar("annotated", reduced + annotated)
     program.record_scalar("algebraic", reduced + algebraic)
@@ -114,7 +124,7 @@ def test_unit_target_and_algebraic_program_constants_reach_target_lowering_lossl
 
 def test_affine_coefficients_refuse_to_drop_annotations_or_evaluate_algebraic_literals():
     program = Program("coefficient_gate")
-    state = program.state("transport")
+    state = _state(program)
     annotated = ScalarLiteral.from_value(Fraction(1, 2), unit="s")
     algebraic = ScalarLiteral.algebraic("sqrt(2)", cpp="std::sqrt(pops::Real(2))")
 
@@ -204,7 +214,7 @@ def test_solver_controls_keep_exact_literals_until_codegen():
     from pops.solvers.krylov import Richardson
 
     program = Program("exact_solver_controls")
-    time_state = program.state("U", block="transport")
+    time_state = _state(program, temporal=True)
     state = time_state.n
     operator = program.matrix_free_operator("A")
     program.set_apply(operator, lambda P, out, in_: in_)
@@ -228,7 +238,7 @@ def test_solver_controls_keep_exact_literals_until_codegen():
 
 def test_solver_iteration_budget_rejects_bool():
     program = Program("bool_budget")
-    state = program.state("transport")
+    state = _state(program)
     operator = program.matrix_free_operator("A")
     program.set_apply(operator, lambda P, out, in_: in_)
 

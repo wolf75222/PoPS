@@ -17,6 +17,7 @@ import pytest
 # ModuleNotFoundError in a plain ImportError, hence exc_type).
 pops_time = pytest.importorskip("pops.time", exc_type=ImportError)
 pops_lib_time = pytest.importorskip("pops.lib.time", exc_type=ImportError)
+from typed_program_support import state_refs  # noqa: E402
 
 
 def _lorentz_model(name):
@@ -57,7 +58,8 @@ def test_forward_euler_program_excludes_schur_includes():
     """A condensed-free (Forward-Euler) Program's generated .so excludes coupling/schur/** AND
     block_inverse.hpp (both gated on the condensed ops, ADC-637)."""
     P = pops_time.Program("fe")
-    pops_lib_time.forward_euler(P, "gas")
+    block, state = state_refs(P, "gas")
+    pops_lib_time.forward_euler(P, block, state)
     src = P.emit_cpp_program()
     assert "program/program_context.hpp" in src, "the .so must always include the runtime facade"
     assert "coupling/schur" not in src, (
@@ -74,8 +76,9 @@ def test_condensed_program_includes_block_inverse_and_no_schur():
     namespace (ADC-637: the brick is retired, the generic route is the sole route)."""
     model = _lorentz_model("cs_model")
     P = pops_time.Program("cs").bind_operators(model)
+    block, state = state_refs(P, "blk", model=model)
     pops_lib_time.condensed_schur(
-        P, "blk", alpha=1.0, theta=1.0,
+        P, block, state, alpha=1.0, theta=1.0,
         linear_operator=_linear_handle(model))
     src = P.emit_cpp_program(model=model)
     assert "numerics/linalg/block_inverse.hpp" in src, (

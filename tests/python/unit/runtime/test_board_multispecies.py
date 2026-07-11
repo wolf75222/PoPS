@@ -28,8 +28,9 @@ import pytest
 
 adctime = pytest.importorskip("pops.time")
 physics = pytest.importorskip("pops.physics")
-from pops import model
-from pops.ir.expr import Var
+from pops import model  # noqa: E402
+from pops.ir.expr import Var  # noqa: E402
+from tests.python.unit.runtime._typed_program import typed_program_states  # noqa: E402
 
 
 def _three_fluid_board():
@@ -77,15 +78,18 @@ def _two_fluid_handwritten():
 
 def _two_fluid_program(mod, e_space, i_space):
     """A forward-Euler collision step over the two-fluid module (board or hand-written)."""
-    P = adctime.Program("two_fluid_collision").bind_operators(mod)
-    e_n = P.state("electron_state", space=e_space)
-    i_n = P.state("ion_state", space=i_space)
+    P, _, _, states = typed_program_states(
+        "two_fluid_collision", mod,
+        (("electron_state", e_space), ("ion_state", i_space)),
+    )
+    e_state, i_state = states["electron_state"], states["ion_state"]
+    e_n, i_n = e_state.n, i_state.n
     C = P._call("collision", e_n, i_n)
     P.commit_many({
-        P.state("U", block="electron_state").next:
-            P.linear_combine("e1", e_n + P.dt * C["electron_state"]),
-        P.state("U", block="ion_state").next:
-            P.linear_combine("i1", i_n + P.dt * C["ion_state"]),
+        e_state.next:
+            P.linear_combine("e1", e_n + P.dt * C[e_n.block]),
+        i_state.next:
+            P.linear_combine("i1", i_n + P.dt * C[i_n.block]),
     })
     return P
 
@@ -197,13 +201,13 @@ def test_wrong_species_rate_in_affine_combine_errors():
     i = m.species("ions", state=["ni"])
     m.coupled_rate("collision", inputs=[e, i],
                    outputs={e: [i["ni"] - e["ne"]], i: [e["ne"] - i["ni"]]})
-    P = adctime.Program("s").bind_operators(m.module)
     spaces = m.module.state_spaces()
-    e_n = P.state("electrons", space=spaces[e.name])
-    i_n = P.state("ions", space=spaces[i.name])
+    P, _, _, states = typed_program_states(
+        "s", m, (("electrons", spaces[e.name]), ("ions", spaces[i.name])))
+    e_n, i_n = states["electrons"].n, states["ions"].n
     C = P._call("collision", e_n, i_n)
     with pytest.raises(ValueError, match="incompatible state spaces"):
-        P.linear_combine("bad", e_n + P.dt * C["ions"])  # electron state + ion rate
+        P.linear_combine("bad", e_n + P.dt * C[i_n.block])  # electron state + ion rate
 
 
 def test_coupled_rate_output_component_count_must_match_state():
@@ -256,11 +260,15 @@ def test_field_solve_call_lowers_to_solve_fields_from_blocks_over_all_species():
     # drop every species but the first and read only the first charge into the elliptic RHS.
     m, _e, _i, _n = _three_fluid_board()
     mod = m.module
-    P = adctime.Program("ms_fields").bind_operators(mod)
     sp = mod.state_spaces()
-    e_n = P.state("electrons", space=sp["electrons"])
-    i_n = P.state("ions", space=sp["ions"])
-    n_n = P.state("neutrals", space=sp["neutrals"])
+    P, _, _, states = typed_program_states(
+        "ms_fields", mod,
+        (("electrons", sp["electrons"]),
+         ("ions", sp["ions"]),
+         ("neutrals", sp["neutrals"])),
+    )
+    e_n, i_n, n_n = (
+        states["electrons"].n, states["ions"].n, states["neutrals"].n)
     f = P._call("fields", e_n, i_n, n_n)
     assert f.op == "solve_fields_from_blocks", "multi-input field op lowers to the coupled solve"
     assert len(f.inputs) == 3, "all three species contribute to the field solve (none dropped)"

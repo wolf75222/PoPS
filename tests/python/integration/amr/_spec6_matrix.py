@@ -42,6 +42,7 @@ from pops.numerics.riemann import Rusanov
 from pops.physics.facade import Model as FacadeModel
 from pops.params import ConstParam, RuntimeParam
 from pops.runtime.system import AmrSystem
+from tests.python.support.typed_program import program_states, synthetic_module
 
 
 # --------------------------------------------------------------------------------------------------
@@ -96,8 +97,10 @@ def _iso_state(n, L, rho=1.5):
 
 
 def _amr_route_handle(*, n_aux=1, mpi=True):
-    """A stub AMR-route ``CompiledModel`` (target='amr_system' + AMR ``_layout``): what the AMR route
-    of ``pops.compile`` returns. Drives the INERT introspection cells (no ``.so`` dlopen)."""
+    """A stub AMR-route ``CompiledModel`` with the immutable InstallPlan returned by compile."""
+    from pops.codegen._plans import InstallBlock, InstallPlan
+    from pops.problem._snapshot import AuthoringSnapshot
+
     handle = CompiledModel(
         so_path="<stub-amr>", backend="production", adder="add_native_block",
         cons_names=["rho", "mx", "my"], cons_roles=["Density", "MomentumX", "MomentumY"],
@@ -106,8 +109,21 @@ def _amr_route_handle(*, n_aux=1, mpi=True):
         caps={"cpu": True, "amr": True, "mpi": mpi}, abi_key="k", model_hash="h", cxx="c++",
         std="c++23", target="amr_system", aux_extra_names=["B_z"][:n_aux])
     rho = Handle("rho", kind="state", owner=OwnerPath.shared("spec6-matrix"))
-    handle._layout = AMR(base=CartesianMesh(n=64, periodic=True), max_levels=2, ratio=2,
-                         regrid=RegridEvery(4), refine=Refine.on(rho).above(0.1))
+    layout = AMR(base=CartesianMesh(n=64, periodic=True), max_levels=2, ratio=2,
+                 regrid=RegridEvery(4), refine=Refine.on(rho).above(0.1))
+    snapshot = AuthoringSnapshot({"kind": "spec6-matrix-stub"})
+    handle.install_plan = InstallPlan(
+        snapshot_hash=snapshot.hash,
+        target="amr_system",
+        layout=layout,
+        blocks=(InstallBlock("ne", handle, None),),
+        bind_schema=None,
+        field_solvers={},
+        outputs=(),
+        diagnostics=(),
+        has_program=False,
+    )
+    handle._problem_snapshot = snapshot
     return handle
 
 
@@ -216,10 +232,13 @@ def _run_clean_route_program(n=16, nsteps=4, dt=1.0e-3):
     """Build a real AmrSystem via the clean pops.compile(layout=AMR(FrozenRegrid))+pops.bind route with
     an SSPRK3 whole-system Program (ADC-634), step it, and assert finite + coarse-mass-conserved. Skips
     cleanly (pytest.skip, never a fake engine) when the .so cannot build (no compiler / no Kokkos)."""
-    program = lib_time.ssprk3("plasma")
+    model = _euler_facade_model()
+    program = pops.time.Program("ssprk3")
+    _case, states = program_states(program, model, ("plasma",))
+    lib_time.ssprk3(program, states["plasma"])
     u0 = _clean_density(n)
     problem = (pops.Problem()
-               .block("plasma", physics=_euler_facade_model(),
+               .block("plasma", physics=model,
                       spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()))
                .time(program))
     layout = AMR(base=CartesianMesh(n=n, L=1.0, periodic=True), regrid=FrozenRegrid())
@@ -285,8 +304,9 @@ def _run_clean_schur_program(n=16, nsteps=4, dt=5.0e-4):
         operator.name, kind=operator.kind, owner=registry.owner_path,
         signature=operator.signature)
     program = pops.time.Program("condensed_schur").bind_operators(model)
+    _case, states = program_states(program, model, ("plasma",))
     lib_time.condensed_schur(
-        program, "plasma", alpha=1.0, theta=1.0, linear_operator=linear)
+        program, states["plasma"], alpha=1.0, theta=1.0, linear_operator=linear)
     u0 = _clean_density(n)
     bz0 = 4.0 * np.ones((n, n))
     problem = (pops.Problem()
@@ -397,14 +417,21 @@ def _exists_fft_on_amr_refused():
 def _exists_ssprk3_exclusivity():
     # Cited: tests/python/integration/amr/test_amr_ssprk3 (SSPRK3-vs-IMEX exclusivity). The SSPRK3
     # brick is the native explicit family (kind='ssprk3'); assert it authors here.
-    assert isinstance(lib_time.ssprk3("plasma"), pops.time.Program)
+    program = pops.time.Program("spec6-exists-ssprk3")
+    module = synthetic_module("spec6_ssprk3_state", components=("rho",))
+    _case, states = program_states(program, module, ("plasma",))
+    lib_time.ssprk3(program, states["plasma"])
+    assert isinstance(program, pops.time.Program)
     return "exists:test_amr_ssprk3"
 
 
 def _exists_ssprk2_program_parity():
     # Cited: test_amr_program_parity (ADC-508 compiled-Program SSPRK2 parity on AMR). The compiled
     # whole-system Program parity is proven there; assert the ssprk2 macro authors a stable Program.
-    prog = lib_time.ssprk2("plasma")
+    prog = pops.time.Program("spec6-exists-ssprk2")
+    module = synthetic_module("spec6_ssprk2_state", components=("rho",))
+    _case, states = program_states(prog, module, ("plasma",))
+    lib_time.ssprk2(prog, states["plasma"])
     assert prog._ir_hash() == prog._ir_hash()
     return "exists:test_amr_program_parity"
 
@@ -426,7 +453,11 @@ def _exists_multistep(builder):
     # v3 replay covered by test_amr_history_regrid / test_amr_history_checkpoint. The authoring
     # object stays structurally real here.
     def run():
-        assert isinstance(builder("plasma"), pops.time.Program)
+        program = pops.time.Program("spec6-exists-multistep")
+        module = synthetic_module("spec6_multistep_state", components=("rho",))
+        _case, states = program_states(program, module, ("plasma",))
+        builder(program, states["plasma"])
+        assert isinstance(program, pops.time.Program)
         return "exists:test_amr_history_parity"
     return run
 
@@ -476,7 +507,8 @@ MATRIX = {
     "ab2.amr.mono": Cell("ab2", "amr", "mono", "exists",
                          _exists_multistep(lib_time.adams_bashforth2)),
     "bdf2.amr.mono": Cell("bdf2", "amr", "mono", "exists",
-                          _exists_multistep(lambda block: lib_time.bdf(block, order=2))),
+                          _exists_multistep(
+                              lambda program, state: lib_time.bdf(program, state, order=2))),
     # clean-compile(layout=AMR) whole-system Program -- GREEN LIVE (ADC-634 route implemented): the
     # clean pops.compile(layout=AMR)+pops.bind SSPRK3 Program builds a real AmrSystem, runs, conserves.
     "clean_program.amr.mono": Cell("clean_program", "amr", "mono", "green_live",

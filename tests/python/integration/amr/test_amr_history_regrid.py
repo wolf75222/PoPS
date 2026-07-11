@@ -26,6 +26,7 @@ try:
     from pops.numerics.riemann import Rusanov
     from pops.physics.facade import Model
     from pops.runtime.system import AmrSystem
+    from tests.python.support.typed_program import program_states, synthetic_module
 except Exception as exc:  # noqa: BLE001
     print("skip test_amr_history_regrid (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -69,7 +70,10 @@ def _euler_model(name):
 
 def _ab2_program(name):
     P = pops.time.Program(name)
-    lt.adams_bashforth2(P, "blk")
+    module = synthetic_module(
+        "%s_state" % name, components=("rho", "rho_u", "rho_v", "E"))
+    _case, states = program_states(P, module, ("blk",))
+    lt.adams_bashforth2(P, states["blk"])
     return P
 
 

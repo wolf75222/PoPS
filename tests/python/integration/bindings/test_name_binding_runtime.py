@@ -23,6 +23,7 @@ from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from tests.python.support.typed_program import program_states, synthetic_module
 
 
 def _skip(msg):
@@ -69,10 +70,13 @@ def passive_model(name):
 def two_block_program(t, name="nb_two_block"):
     """Forward-Euler passive transport of blocks "a" then "b" (P.state order a=0, b=1)."""
     P = t.Program(name)
+    module = synthetic_module("%s_state" % name, components=("rho",))
+    _case, states = program_states(P, module, ("a", "b"))
     for blk in ("a", "b"):
-        U = P.state(blk)
+        temporal = states[blk]
+        U = temporal.n
         R = P._rhs_legacy(name="R_" + blk, state=U, flux=True, sources=["decay"])
-        P.commit(P.state("U", block=blk).next, P.linear_combine(blk + "_next", U + P.dt * R))
+        P.commit(temporal.next, P.linear_combine(blk + "_next", U + P.dt * R))
     return P
 
 
@@ -82,7 +86,6 @@ def _run():
 
         import pops
         import pops.time as t
-        from pops.physics.facade import Model
     except Exception as exc:  # noqa: BLE001 -- numpy / _pops / pops.time unavailable
         _skip("pops / pops.time / numpy unavailable: %s" % exc)
 

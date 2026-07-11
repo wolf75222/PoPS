@@ -8,7 +8,8 @@ This enables Adams-Bashforth 2: ``U^{n+1} = U + dt*(3/2 R_n - 1/2 R_{n-1})`` the
 
   - ``P.history(name, lag=1)`` -> a State-typed value (the value @p lag macro-steps back);
   - ``P.store_history(name, value)`` -> a side-effecting op (copy the value into the current slot);
-  - ``pops.lib.time.adams_bashforth2(P, block)`` -> the AB2 IR (store-then-read, cold start = FE step 0).
+  - ``pops.lib.time.adams_bashforth2(P, block, state)`` -> the AB2 IR
+    (store-then-read, cold start = FE step 0).
 
 The codegen lowers ``history`` -> ``ctx.history(...)``, ``store_history`` -> ``ctx.store_history(...)``,
 and appends ``ctx.rotate_histories()`` at the END of the step body when any history is used.
@@ -31,6 +32,8 @@ mirrors this exactly (FE step 0, AB2 thereafter), so the comparison is to machin
     stepped WITHOUT ever storing it -> sim.step surfaces a RuntimeError containing
     "history 'missing.R' with lag=1 was requested but not initialized".
 """
+from typed_program_support import state_refs, typed_state
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
@@ -54,13 +57,13 @@ _C = 0.75  # source coefficient: S(rho) = _C * rho (a linear ODE rho' = c rho; R
 # ---- (A) codegen / IR: pure Python, always runs ----
 def test_history_builds_state_value(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     R = P._rhs_legacy(state=U, sources=["default"])
     P.store_history("blk.R", R)
-    Rp = P.history("blk.R", lag=1)
+    Rp = P.history("blk.R", lag=1, space=U.space, block=U.block, state_ref=U.state_ref)
     assert Rp.vtype == "state", "P.history returns a State-typed value (got %r)" % Rp.vtype
     assert Rp.is_field(), "a history value is a grid field (affine algebra applies)"
-    P.commit(P.state("U", block="blk").next, P.linear_combine(U + P.dt * (R - Rp)))
+    P.commit(typed_state(P, "blk", state_name="U").next, P.linear_combine(U + P.dt * (R - Rp)))
     assert P.validate() is True, "the history Program must validate"
 
 
@@ -88,7 +91,7 @@ def test_history_lag_must_be_positive_int(t):
 
 def test_ab2_macro_lowers(t):
     P = t.Program("ab2")
-    lt.adams_bashforth2(P, "plasma")
+    lt.adams_bashforth2(P, *state_refs(P, "plasma"))
     assert P.validate() is True, "the AB2 macro must validate"
     src = P.emit_cpp_program()
     for frag in ('ctx.history("plasma.R", 1)', 'ctx.store_history("plasma.R"',
@@ -105,7 +108,7 @@ def test_store_before_read_in_body(t):
     the history line bound to a MultiFab& (``pops::MultiFab& ... = ctx.history(...)``); the bare
     ``ctx.history(...)`` at the top is only the depth-locking registration."""
     P = t.Program("ab2")
-    lt.adams_bashforth2(P, "plasma")
+    lt.adams_bashforth2(P, *state_refs(P, "plasma"))
     src = P.emit_cpp_program()
     body = src[src.index("ctx.install"):]
     read = body.index("= ctx.history(\"plasma.R\", 1);")  # the bound read, not the bare registration
@@ -118,7 +121,7 @@ def test_store_before_read_in_body(t):
 def test_non_history_schemes_emit_no_rotate(t):
     for sched in ("forward_euler", "ssprk2", "ssprk3", "rk4"):
         P = t.Program(sched)
-        getattr(lt, sched)(P, "blk")
+        getattr(lt, sched)(P, *state_refs(P, "blk"))
         src = P.emit_cpp_program()
         assert "ctx.rotate_histories" not in src, "%s must not rotate (no history)" % sched
         assert "ctx.history(" not in src, "%s must not read a history" % sched
@@ -126,11 +129,12 @@ def test_non_history_schemes_emit_no_rotate(t):
 
 def _hist_program(t, name, lag):
     P = t.Program("h")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     R = P._rhs_legacy(state=U, sources=["default"])
     P.store_history(name, R)
-    Rp = P.history(name, lag=lag)
-    P.commit(P.state("U", block="blk").next, P.linear_combine(U + P.dt * (R - Rp)))
+    Rp = P.history(
+        name, lag=lag, space=U.space, block=U.block, state_ref=U.state_ref)
+    P.commit(typed_state(P, "blk", state_name="U").next, P.linear_combine(U + P.dt * (R - Rp)))
     return P
 
 
@@ -146,10 +150,11 @@ def test_absent_history_program_lowers(t):
     """A Program that reads a never-stored history still BUILDS and LOWERS (the failure is at runtime,
     spec test 38). The store is absent; the read still emits ctx.history."""
     P = t.Program("miss")
-    U = P.state("blk")
-    Rp = P.history("missing.R", lag=1)
+    U = typed_state(P, "blk")
+    Rp = P.history(
+        "missing.R", lag=1, space=U.space, block=U.block, state_ref=U.state_ref)
     R = P._rhs_legacy(state=U, sources=["default"])
-    P.commit(P.state("U", block="blk").next, P.linear_combine(U + P.dt * (R - Rp)))
+    P.commit(typed_state(P, "blk", state_name="U").next, P.linear_combine(U + P.dt * (R - Rp)))
     assert P.validate() is True
     src = P.emit_cpp_program()
     assert 'ctx.history("missing.R", 1)' in src, src
@@ -201,12 +206,13 @@ def _run_section_b(t):
         print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
 
-    from pops.physics.facade import Model
 
+    model = _passive_source_model("ab2_prog")
     P = t.Program("ab2_step")
-    lt.adams_bashforth2(P, "blk")
+    lt.adams_bashforth2(
+        P, *state_refs(P, "blk", model=model.module))
     try:
-        compiled = pops.codegen.compile_problem(model=_passive_source_model("ab2_prog"), time=P)
+        compiled = pops.codegen.compile_problem(model=model, time=P)
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
         return None
@@ -266,17 +272,19 @@ def _run_section_c(t):
         print("-- (C) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
 
-    from pops.physics.facade import Model
 
     # A Program that READS missing.R but NEVER stores it -> the runtime read must fail loud.
+    program_model = _passive_source_model("miss_prog")
     P = t.Program("miss_step")
-    U = P.state("blk")
-    Rp = P.history("missing.R", lag=1)
+    U = typed_state(P, "blk", model=program_model)
+    Rp = P.history(
+        "missing.R", lag=1, space=U.space, block=U.block, state_ref=U.state_ref)
     R = P._rhs_legacy(state=U, sources=["default"])
-    P.commit(P.state("U", block="blk").next, P.linear_combine(U + P.dt * (R - Rp)))
+    P.commit(typed_state(P, "blk", state_name="U", model=program_model).next,
+             P.linear_combine(U + P.dt * (R - Rp)))
 
     try:
-        compiled = pops.codegen.compile_problem(model=_passive_source_model("miss_prog"), time=P)
+        compiled = pops.codegen.compile_problem(model=program_model, time=P)
     except RuntimeError as exc:
         print("-- (C) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
         return None

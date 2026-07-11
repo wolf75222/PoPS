@@ -26,16 +26,22 @@ from typing import Any
 import hashlib
 import json
 
+from pops._manifest_immutability import (
+    canonical_manifest_json,
+    thaw_manifest_json,
+)
 from pops.descriptors import BrickDescriptor
+from pops.codegen._library_manifest_data import freeze_bricks as _freeze_bricks
 
 __all__ = ["LibraryManifest", "compile_library", "read_library_manifest"]
 
 # Manifest schema version: bumped if the serialized shape changes, so a stale
 # round-trip is rejected loud rather than silently mis-read.
-_MANIFEST_VERSION = 1
+_MANIFEST_VERSION = 2
 
 _REQUIRED_KEYS = ("manifest_version", "name", "backend", "abi_key", "bricks",
                   "generated_symbols", "content_hash")
+_ALLOWED_KEYS = frozenset(_REQUIRED_KEYS + ("so_path",))
 
 
 def _lower_library_backend(backend: Any) -> Any:
@@ -109,17 +115,17 @@ def _content_hash(name: Any, backend: Any, abi_key: Any, bricks: Any) -> str:
     ``available`` flag and native id fold in so a planned brick gaining a real
     symbol re-keys the library.
     """
-    parts = ["adc-library-v%d" % _MANIFEST_VERSION, "name=%s" % name,
-             "backend=%s" % backend, "abi_key=%s" % abi_key]
-    for b in sorted(bricks, key=lambda e: e["id"]):
-        parts.append(
-            "brick:%s:%s:%s:%s:%s:avail=%d:reqs=%r:caps=%r:opts=%r" % (
-                b["id"], b["brick_type"], b["category"], b["scheme"],
-                b["native_id"], 1 if b["available"] else 0,
-                sorted(b["requirements"].items()),
-                sorted(b["capabilities"].items()),
-                sorted(b["options"].items())))
-    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+    payload = {
+        "protocol": "pops.library-manifest.v%d" % _MANIFEST_VERSION,
+        "name": str(name),
+        "backend": str(backend),
+        "abi_key": str(abi_key),
+        "bricks": [
+            thaw_manifest_json(brick)
+            for brick in sorted(bricks, key=lambda entry: entry["id"])
+        ],
+    }
+    return hashlib.sha256(canonical_manifest_json(payload).encode("utf-8")).hexdigest()
 
 
 class LibraryManifest:
@@ -135,18 +141,55 @@ class LibraryManifest:
     ``.so`` path.
     """
 
+    __slots__ = (
+        "name", "backend", "abi_key", "bricks", "generated_symbols", "content_hash", "so_path",
+    )
+
     def __init__(self, name: Any, backend: Any, abi_key: Any, bricks: Any, generated_symbols: Any,
                  content_hash: Any, so_path: Any = None) -> None:
-        self.name = str(name)
-        self.backend = str(backend)
-        self.abi_key = str(abi_key)
-        self.bricks = list(bricks)
-        self.generated_symbols = list(generated_symbols)
-        self.content_hash = str(content_hash)
+        frozen_bricks = _freeze_bricks(bricks)
+        expected_symbols = tuple(_generated_symbols(frozen_bricks))
+        try:
+            supplied_symbols = tuple(str(symbol) for symbol in generated_symbols)
+        except TypeError:
+            raise TypeError("LibraryManifest generated_symbols must be an iterable") from None
+        if supplied_symbols != expected_symbols:
+            raise ValueError(
+                "LibraryManifest generated_symbols do not match the generated brick records "
+                "(got %r, expected %r)" % (supplied_symbols, expected_symbols)
+            )
+        normalized_hash = str(content_hash)
+        expected_hash = _content_hash(name, backend, abi_key, frozen_bricks)
+        if normalized_hash != expected_hash:
+            raise ValueError(
+                "LibraryManifest content_hash does not match its canonical payload "
+                "(got %r, expected %r); the manifest is corrupt or stale"
+                % (normalized_hash, expected_hash)
+            )
+        object.__setattr__(self, "name", str(name))
+        object.__setattr__(self, "backend", str(backend))
+        object.__setattr__(self, "abi_key", str(abi_key))
+        object.__setattr__(self, "bricks", frozen_bricks)
+        object.__setattr__(self, "generated_symbols", expected_symbols)
+        object.__setattr__(self, "content_hash", normalized_hash)
         # Path of the compiled .so, or None for a manifest-only (emit=False) build. It is
         # provenance, NOT identity: it stays OUT of __eq__ / the content hash (the same
         # library compiled to two paths is the same library) but IS carried on to_dict.
-        self.so_path = None if so_path is None else str(so_path)
+        object.__setattr__(self, "so_path", None if so_path is None else str(so_path))
+
+    def _validate_integrity(self) -> None:
+        expected_symbols = tuple(_generated_symbols(self.bricks))
+        if self.generated_symbols != expected_symbols:
+            raise ValueError(
+                "LibraryManifest generated_symbols no longer match its brick records "
+                "(got %r, expected %r)" % (self.generated_symbols, expected_symbols)
+            )
+        expected = _content_hash(self.name, self.backend, self.abi_key, self.bricks)
+        if self.content_hash != expected:
+            raise ValueError(
+                "LibraryManifest content_hash no longer matches its canonical payload "
+                "(got %r, expected %r)" % (self.content_hash, expected)
+            )
 
     def to_dict(self) -> dict:
         """The serialized manifest (round-trips through :func:`read_library_manifest`)."""
@@ -155,7 +198,7 @@ class LibraryManifest:
             "name": self.name,
             "backend": self.backend,
             "abi_key": self.abi_key,
-            "bricks": [dict(b) for b in self.bricks],
+            "bricks": thaw_manifest_json(self.bricks),
             "generated_symbols": list(self.generated_symbols),
             "content_hash": self.content_hash,
             "so_path": self.so_path,
@@ -168,8 +211,21 @@ class LibraryManifest:
         d.pop("so_path", None)
         return d
 
+    def artifact_data(self) -> dict:
+        """Compile identity without location-only ``so_path`` provenance."""
+        return self._identity()
+
     def __eq__(self, other: Any) -> bool:
         return isinstance(other, LibraryManifest) and self._identity() == other._identity()
+
+    def __hash__(self) -> int:
+        return hash(self.content_hash)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("LibraryManifest is immutable")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("LibraryManifest is immutable")
 
     def __repr__(self) -> str:
         return "LibraryManifest(%r, bricks=%d, hash=%s)" % (
@@ -214,7 +270,12 @@ def compile_library(name: Any, objects: Any, *, backend: Any = None, emit: bool 
         generated_symbols=_generated_symbols(bricks),
         content_hash=_content_hash(name, backend, abi_key, bricks))
     if emit:
-        manifest.so_path = _emit_and_compile(manifest, so_path=so_path, cxx=cxx, force=force)
+        compiled_path = _emit_and_compile(manifest, so_path=so_path, cxx=cxx, force=force)
+        manifest = LibraryManifest(
+            name=manifest.name, backend=manifest.backend, abi_key=manifest.abi_key,
+            bricks=manifest.bricks, generated_symbols=manifest.generated_symbols,
+            content_hash=manifest.content_hash, so_path=compiled_path,
+        )
     return manifest
 
 
@@ -239,12 +300,27 @@ def _emit_and_compile(manifest: Any, *, so_path: Any = None, cxx: Any = None,
     sig = toolchain.pops_header_signature(include)
     cc, cflags, lflags = toolchain.pops_loader_build_flags(cxx)
     eff_std = toolchain._probe_cxx_std(cc, toolchain.loader_cxx_std())
+    source_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
+    cache_key = hashlib.sha256(
+        ("%s|%s|%s|%s|%s" % (
+            manifest.content_hash, source_hash, sig, cc, eff_std)).encode("utf-8")
+    ).hexdigest()
 
     if so_path is None:
         key = "%s|%s|%s" % (sig, cc, eff_std)
         so_path = cache._cache_so_path(manifest.content_hash, key, "library-production",
                                        "library", manifest.name)
         if not force and os.path.isfile(so_path):
+            from .compile_provenance import verify_cached_program_so
+
+            verify_cached_program_so(
+                so_path, cache_key=cache_key, abi_key=manifest.abi_key)
+            loaded = _read_so_manifest(so_path)
+            if loaded != manifest:
+                raise RuntimeError(
+                    "pops.compile_library: cached .so manifest does not match the requested "
+                    "library content hash %s" % manifest.content_hash
+                )
             return so_path
 
     optflags = cache._dsl_optflags()
@@ -256,6 +332,17 @@ def _emit_and_compile(manifest: Any, *, so_path: Any = None, cxx: Any = None,
                  "-DPOPS_HEADER_SIG=\"%s\"" % sig, *cflags]
         cmd = [cc, *flags, "-I", include, cpp, "-o", so_path, *lflags]
         toolchain._run_compile(cmd, "compile_library (backend production)")
+    from .compile_provenance import write_cachekey_sidecar
+
+    write_cachekey_sidecar(
+        so_path, cache_key=cache_key, abi_key=manifest.abi_key,
+        toolchain="%s|%s" % (cc, eff_std))
+    loaded = _read_so_manifest(so_path)
+    if loaded != manifest:
+        raise RuntimeError(
+            "pops.compile_library: freshly compiled .so manifest does not match requested "
+            "library content hash %s" % manifest.content_hash
+        )
     return so_path
 
 
@@ -263,7 +350,7 @@ def read_library_manifest(manifest: Any) -> Any:
     """Reconstruct a :class:`LibraryManifest` from a serialized dict, a compiled ``.so`` path,
     or a :class:`LibraryManifest` (idempotent).
 
-    * a :class:`LibraryManifest` is returned unchanged;
+    * a :class:`LibraryManifest` is revalidated and returned unchanged;
     * a dict produced by :meth:`to_dict` round-trips; a dict missing a required key, or
       carrying an unknown manifest version, is rejected loud (a corrupt / stale manifest is
       never silently half-read);
@@ -278,6 +365,7 @@ def read_library_manifest(manifest: Any) -> Any:
     import os
 
     if isinstance(manifest, LibraryManifest):
+        manifest._validate_integrity()
         return manifest
     if isinstance(manifest, (str, os.PathLike)):
         return _read_so_manifest(os.fspath(manifest))
@@ -289,9 +377,16 @@ def read_library_manifest(manifest: Any) -> Any:
         raise KeyError("library manifest is missing required keys: %s"
                        % ", ".join(missing))
     version = manifest["manifest_version"]
+    if isinstance(version, bool) or not isinstance(version, int):
+        raise TypeError("library manifest_version must be an integer")
     if version != _MANIFEST_VERSION:
         raise ValueError("unsupported library manifest version %r (expected %d)"
                          % (version, _MANIFEST_VERSION))
+    if any(not isinstance(key, str) for key in manifest):
+        raise TypeError("library manifest keys must be strings")
+    unknown = sorted(set(manifest) - _ALLOWED_KEYS)
+    if unknown:
+        raise ValueError("library manifest has unknown field(s): %s" % ", ".join(unknown))
     return LibraryManifest(
         name=manifest["name"], backend=manifest["backend"],
         abi_key=manifest["abi_key"], bricks=manifest["bricks"],
@@ -338,6 +433,19 @@ def _read_so_manifest(so_path: Any) -> Any:
         raw = fn(i)
         return "" if raw is None else raw.decode("utf-8")
 
+    try:
+        version = cint("pops_library_manifest_version")
+    except AttributeError as err:
+        raise ValueError(
+            "library %r does not export pops_library_manifest_version(); regenerate it with "
+            "the current pops.codegen.compile_library" % (so_path,)
+        ) from err
+    if version != _MANIFEST_VERSION:
+        raise ValueError(
+            "library %r has manifest version %r (expected %d); regenerate it with the current "
+            "pops.codegen.compile_library" % (so_path, version, _MANIFEST_VERSION)
+        )
+
     so_abi = cstr("pops_library_abi_key")
     module_abi = _abi_key()
     # HARD ABI / Kokkos guard: never silently load bricks compiled against a different toolchain.
@@ -363,7 +471,7 @@ def _read_so_manifest(so_path: Any) -> Any:
             "available": cstr_i("pops_library_brick_available", i) == "1",
             "requirements": json.loads(cstr_i("pops_library_brick_requirements", i) or "{}"),
             "capabilities": json.loads(cstr_i("pops_library_brick_capabilities", i) or "{}"),
-            "options": {},
+            "options": json.loads(cstr_i("pops_library_brick_options", i) or "{}"),
         })
     gen = [cstr_i("pops_library_generated_symbol", i)
            for i in range(cint("pops_library_generated_symbol_count"))]

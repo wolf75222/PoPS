@@ -26,6 +26,7 @@ try:
     from pops.numerics.riemann import Rusanov
     from pops.physics.facade import Model
     from pops.runtime.system import AmrSystem
+    from tests.python.support.typed_program import program_states, synthetic_module
 except Exception as exc:  # noqa: BLE001
     print("skip test_amr_history_mpi (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -60,7 +61,9 @@ def _passive_source_model(name):
 
 def _ab2_program(name):
     P = pops.time.Program(name)
-    lt.adams_bashforth2(P, "blk")
+    module = synthetic_module("%s_state" % name, components=("rho",))
+    _case, states = program_states(P, module, ("blk",))
+    lt.adams_bashforth2(P, states["blk"])
     return P
 
 
@@ -69,10 +72,12 @@ def _state_ring_program(name):
     Markov recurrence so the single-seed replay reconstructs the gap bit-for-bit."""
     from pops.time.history_persistence import Interval
     P = pops.time.Program(name)
-    U = P.state("U", block="blk")
+    module = synthetic_module("%s_state" % name, components=("rho",))
+    _case, states = program_states(P, module, ("blk",))
+    U = states["blk"]
     P.keep_history(U, depth=3, checkpoint_policy=Interval(2))
     nxt = P.linear_combine("Un", U.n + P.dt * (0.6 * U.n) + 0.0 * U.prev(2))
-    P.commit(P.state("U", block="blk").next, nxt)
+    P.commit(U.next, nxt)
     return P
 
 

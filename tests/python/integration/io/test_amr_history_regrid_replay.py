@@ -43,6 +43,7 @@ try:
     from pops.physics.facade import Model
     from pops.runtime.system import AmrSystem
     from pops.time.history_persistence import Interval
+    from tests.python.support.typed_program import program_states, synthetic_module
 except Exception as exc:  # noqa: BLE001
     print("skip test_amr_history_regrid_replay (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -84,10 +85,12 @@ def _state_ring_program(depth, k, name):
     the recurrence multi-term (a k-term recurrence would need k seed states the single-seed replay
     cannot supply -- the documented replay class)."""
     P = pops.time.Program(name)
-    U = P.state("U", block="blk")
+    module = synthetic_module("%s_state" % name, components=("rho",))
+    _case, states = program_states(P, module, ("blk",))
+    U = states["blk"]
     P.keep_history(U, depth=depth, checkpoint_policy=Interval(k))
     nxt = P.linear_combine("Un", U.n + P.dt * (_C * U.n) + 0.0 * U.prev(depth - 1))
-    P.commit(P.state("U", block="blk").next, nxt)
+    P.commit(U.next, nxt)
     return P
 
 
@@ -191,7 +194,7 @@ def _assert_bit_identical(out, label, want_fired):
             "the replay COMPLETED the in-window regrids %r (fingerprint %r)"
             % (fired, {h: v[2] for h, v in stored_info.items()}))
     ok_rings = all(np.array_equal(a, b) for h in cont_rings
-                   for a, b in zip(cont_rings[h], rest_rings.get(h, [])))
+                   for a, b in zip(cont_rings[h], rest_rings.get(h, []), strict=False))
     chk(ok_rings, "every post-restart ring slot (recomputed included) equals uninterrupted bit-for-bit")
     chk(np.array_equal(ref, got),
         "%s continuation is BIT-IDENTICAL to uninterrupted (max|d| = %.3e)"

@@ -9,6 +9,8 @@ definition, no redefine, use-before-define) are unchanged; named values appear i
 Pure Python (``_ir_hash`` is the IR fingerprint; no compilation); skips cleanly if pops is
 unavailable. Never fakes the engine.
 """
+from typed_program_support import commits_by_block, typed_state
+
 import sys
 
 try:
@@ -21,7 +23,7 @@ except Exception as exc:  # pops not importable here -> skip, never fake
 
 def _heun(P, use_value):
     """A Heun-like step written with the short T.value or the long T.define for the intermediate."""
-    U = P.state("U", block="plasma")
+    U = typed_state(P, "plasma", state_name="U")
     R = P._rhs_legacy(state=U.n, fields=P.solve_fields(U.n), sources=["default"])
     name = "rhs_star"
     U_star = (P.value(name, U.n + P.dt * R) if use_value
@@ -48,7 +50,7 @@ def test_value_ir_byte_identical_to_define():
 def test_named_value_appears_in_inspection():
     """A named value shows up in the structured IR inspection under its name."""
     P = Program("insp")
-    U = P.state("U", block="plasma")
+    U = typed_state(P, "plasma", state_name="U")
     R = P._rhs_legacy(state=U.n, fields=P.solve_fields(U.n), sources=["default"])
     v = P.value("Q", U.n + 0.5 * P.dt * R)
     assert v.name == "Q"
@@ -60,7 +62,7 @@ def test_named_value_appears_in_inspection():
 def test_value_returns_composable_handle():
     """The returned handle composes in the affine algebra like any State value."""
     P = Program("compose")
-    U = P.state("U", block="plasma")
+    U = typed_state(P, "plasma", state_name="U")
     R = P._rhs_legacy(state=U.n, fields=P.solve_fields(U.n), sources=["default"])
     U_star = P.value("U_star", U.n + P.dt * R)
     # It reads as a State value and composes further.
@@ -73,7 +75,7 @@ def test_value_returns_composable_handle():
 def test_value_refuses_a_version_handle():
     """T.value is for free intermediates: a version handle is refused pointing at T.define."""
     P = Program("nover")
-    U = P.state("U", block="plasma")
+    U = typed_state(P, "plasma", state_name="U")
     with pytest.raises(TypeError, match="commit"):
         P.value(U.next, U.n)
     with pytest.raises(TypeError, match="T.define"):
@@ -86,7 +88,7 @@ def test_value_refuses_a_version_handle():
 def test_ssa_invariants_unchanged():
     """The version-handle SSA guards (read-only n, no redefine, use-before-define) are unchanged."""
     P = Program("ssa")
-    U = P.state("U", block="plasma")
+    U = typed_state(P, "plasma", state_name="U")
     R = P._rhs_legacy(state=U.n, fields=P.solve_fields(U.n), sources=["default"])
     # use-before-define: a stage used before T.define raises
     with pytest.raises(ValueError, match="undefined"):
@@ -104,12 +106,12 @@ def test_ssa_invariants_unchanged():
 def test_next_is_a_commit_only_endpoint():
     """T.commit(U.next, value) is the only end-of-step write door."""
     P = Program("door")
-    U = P.state("U", block="plasma")
+    U = typed_state(P, "plasma", state_name="U")
     R = P._rhs_legacy(state=U.n, fields=P.solve_fields(U.n), sources=["default"])
     U_next = P.value("U_next", U.n + P.dt * R)
     P.commit(U.next, U_next)
     P.validate()
-    assert P.commits()["plasma"] is U_next
+    assert commits_by_block(P)["plasma"] is U_next
     print("OK  T.commit(U.next, value) is the commit-only endpoint door")
 
 

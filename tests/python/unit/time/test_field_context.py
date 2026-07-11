@@ -12,6 +12,13 @@
 
 Pure Python (no _pops numerics beyond importing the package); no compilation.
 """
+from typed_program_support import (
+    fresh_state_refs,
+    state_refs,
+    typed_field,
+    typed_state,
+)
+
 import sys
 
 import pytest
@@ -22,28 +29,33 @@ from pops.time.program import Program
 
 def test_field_context_matches_and_rejects_triple():
     layout_outputs = ("phi", "grad_x", "grad_y")
-    ctx = FieldContext("phi", (("plasma", 7),), layout_outputs)
-    assert ctx.matches("phi", "plasma", 7)
-    assert ctx.matches(None, "plasma", 7)  # None problem matches any (default case)
-    assert not ctx.matches("phi", "plasma", 8)  # stage mismatch
-    assert not ctx.matches("phi", "other", 7)  # block mismatch
-    assert not ctx.matches("psi", "plasma", 7)  # problem mismatch
+    plasma, _ = fresh_state_refs("plasma")
+    other, _ = fresh_state_refs("other")
+    ctx = FieldContext("phi", ((plasma, 7),), layout_outputs)
+    assert ctx.matches("phi", plasma, 7)
+    assert ctx.matches(None, plasma, 7)  # None problem matches any (default case)
+    assert not ctx.matches("phi", plasma, 8)  # stage mismatch
+    assert not ctx.matches("phi", other, 7)  # block mismatch
+    assert not ctx.matches("psi", plasma, 7)  # problem mismatch
     assert hash(ctx)
     with pytest.raises((AttributeError, TypeError)):
-        ctx.stage_sources = (("plasma", 8),)
+        ctx.stage_sources = ((plasma, 8),)
 
 
 def test_require_read_raises_structured_error():
-    ctx = FieldContext("phi", (("plasma", 7),))
+    plasma, _ = fresh_state_refs("plasma")
+    other, _ = fresh_state_refs("other_block")
+    ctx = FieldContext("phi", ((plasma, 7),))
     with pytest.raises(ValueError) as exc:
-        ctx.require_read("phi", "other_block", 7)
+        ctx.require_read("phi", other, 7)
     msg = str(exc.value)
     assert "incompatible field context" in msg
     assert "plasma" in msg and "other_block" in msg
 
 
 def test_output_lookup_names_known_outputs():
-    ctx = FieldContext("phi", (("plasma", 0),), ("phi", "grad_x", "grad_y"))
+    plasma, _ = fresh_state_refs("plasma")
+    ctx = FieldContext("phi", ((plasma, 0),), ("phi", "grad_x", "grad_y"))
     assert ctx.output("grad_y") == "grad_y"
     with pytest.raises(KeyError) as exc:
         ctx.output("E")
@@ -52,7 +64,8 @@ def test_output_lookup_names_known_outputs():
 
 
 def test_default_field_problem_sentinel():
-    ctx = FieldContext(None, (("plasma", 0),))
+    plasma, _ = fresh_state_refs("plasma")
+    ctx = FieldContext(None, ((plasma, 0),))
     assert ctx.field_problem == DEFAULT_FIELD_PROBLEM == "phi"
 
 
@@ -72,25 +85,28 @@ def test_field_context_rejects_mutable_or_unstable_identity_leaves(kwargs):
 
 
 def test_field_context_detaches_container_inputs_and_remains_hashable():
-    sources = [["plasma", 0]]
+    plasma, _ = fresh_state_refs("plasma")
+    other, _ = fresh_state_refs("other")
+    sources = [[plasma, 0]]
     outputs = ["phi"]
     context = FieldContext("phi", sources, outputs)
-    sources[0][0] = "other"
+    sources[0][0] = other
     outputs.append("grad_x")
 
-    assert context.stage_sources == (("plasma", 0),)
+    assert context.stage_sources == ((plasma, 0),)
     assert context.outputs == ("phi",)
     assert hash(context)
 
 
 def test_solve_fields_tags_default_context():
     P = Program("p")
-    U = P.state("plasma")
+    U = typed_state(P, "plasma")
+    block, _ = state_refs(P, "plasma")
     f = P.solve_fields(state=U)
     assert f.vtype == "fields"
     ctx = f.field_context
     assert ctx.field_problem == "phi"
-    assert ctx.stage_sources == (("plasma", U.id),)
+    assert ctx.stage_sources == ((block, U.id),)
     assert ctx.outputs == ("phi", "grad_x", "grad_y")
     # The default op keeps empty physics attrs; provenance has its own canonical IR field.
     assert f.attrs == {}
@@ -98,39 +114,44 @@ def test_solve_fields_tags_default_context():
 
 def test_solve_fields_named_field_context():
     P = Program("p")
-    U = P.state("plasma")
-    g = P.solve_fields(name="psi_solve", state=U, field="psi")
+    U = typed_state(P, "plasma")
+    psi = typed_field(P, "psi")
+    g = P.solve_fields(name="psi_solve", state=U, field=psi)
     ctx = g.field_context
-    assert ctx.field_problem == "psi"
+    assert ctx.field_problem is psi
     assert ctx.outputs == ("psi",)
     # The named field records its route in the IR (non-empty attrs) as before ADC-588.
-    assert g.attrs == {"field": "psi"}
+    assert g.attrs == {"field": psi}
 
 
 def test_solves_from_different_states_have_distinct_stage_sources():
     P = Program("p")
-    Ua = P.state("blockA")
-    Ub = P.state("blockB")
+    Ua = typed_state(P, "blockA")
+    Ub = typed_state(P, "blockB")
+    block_a, _ = state_refs(P, "blockA")
+    block_b, _ = state_refs(P, "blockB")
     fa = P.solve_fields(state=Ua)
     fb = P.solve_fields(state=Ub)
     # Each call carries its OWN context object; solves from different stage states are distinct
     # (different block AND different stage source), so one cannot be read as the other.
     assert fa.field_context is not fb.field_context
-    assert fa.field_context.stage_sources == (("blockA", Ua.id),)
-    assert fb.field_context.stage_sources == (("blockB", Ub.id),)
-    assert not fa.field_context.matches("phi", "blockB", Ub.id)
+    assert fa.field_context.stage_sources == ((block_a, Ua.id),)
+    assert fb.field_context.stage_sources == ((block_b, Ub.id),)
+    assert not fa.field_context.matches("phi", block_b, Ub.id)
 
 
 def test_coupled_context_tracks_every_block_source_and_rejects_stale_stage():
     P = Program("coupled")
-    Ua = P.state("a")
-    Ub = P.state("b")
+    Ua = typed_state(P, "a")
+    Ub = typed_state(P, "b")
+    block_a, _ = state_refs(P, "a")
+    block_b, _ = state_refs(P, "b")
     fields = P.solve_fields_from_blocks((Ua, Ub))
 
     assert fields.block is None
-    assert fields.field_context.stage_sources == (("a", Ua.id), ("b", Ub.id))
-    assert P._rhs_legacy(state=Ua, fields=fields, sources=[]).block == "a"
-    assert P._rhs_legacy(state=Ub, fields=fields, sources=[]).block == "b"
+    assert fields.field_context.stage_sources == ((block_a, Ua.id), (block_b, Ub.id))
+    assert P._rhs_legacy(state=Ua, fields=fields, sources=[]).block is block_a
+    assert P._rhs_legacy(state=Ub, fields=fields, sources=[]).block is block_b
 
     Ua_stage = P.linear_combine("a_stage", Ua)
     with pytest.raises(ValueError, match="incompatible field context"):
@@ -139,7 +160,7 @@ def test_coupled_context_tracks_every_block_source_and_rejects_stale_stage():
 
 def test_field_consumers_reject_stale_state_but_local_solve_accepts_derived_rhs():
     P = Program("derived")
-    U0 = P.state("plasma")
+    U0 = typed_state(P, "plasma")
     fields0 = P.solve_fields(U0)
     R0 = P._rhs_legacy(state=U0, fields=fields0, sources=[])
     q = P.linear_combine("q", U0 + P.dt * R0)
@@ -167,7 +188,7 @@ def test_field_consumers_reject_stale_state_but_local_solve_accepts_derived_rhs(
 
 def test_multistage_provenance_is_explicit_and_operator_context_cannot_be_substituted():
     P = Program("multistage")
-    U0 = P.state("plasma")
+    U0 = typed_state(P, "plasma")
     fields0 = P.solve_fields(U0)
     R0 = P._rhs_legacy(state=U0, fields=fields0, sources=[])
     U1 = P.linear_combine("U1", U0 + P.dt * R0)
@@ -193,8 +214,9 @@ def test_multistage_provenance_is_explicit_and_operator_context_cannot_be_substi
 def test_rk4_final_combine_retains_all_stage_contexts_without_rejection():
     from pops.lib import time as libtime
 
-    program = libtime.rk4("plasma")
-    final = program._commits["plasma"]
+    block, state = fresh_state_refs("plasma")
+    program = libtime.rk4(block, state)
+    final = next(iter(program._commits.values()))
     assert isinstance(final.field_context, FieldReadProvenance)
     assert len(final.field_context.contexts) == 4
     serialized = program._serialize()
@@ -206,7 +228,7 @@ def test_rk4_final_combine_retains_all_stage_contexts_without_rejection():
     assert inspected["field_context"] == final_data["field_context"]
 
     rebuilt = program.eliminate_dead_nodes()
-    rebuilt_final = rebuilt._commits["plasma"]
+    rebuilt_final = next(iter(rebuilt._commits.values()))
     source_ids = {source for context in rebuilt_final.field_context.contexts
                   for _, source in context.stage_sources}
     assert source_ids <= {value.id for value in rebuilt._values}

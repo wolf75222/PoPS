@@ -38,6 +38,7 @@ try:
     from pops.physics.facade import Model
     from pops.runtime.system import AmrSystem
     from pops.time.history_persistence import Interval
+    from tests.python.support.typed_program import program_states, synthetic_module
 except Exception as exc:  # noqa: BLE001
     print("skip test_amr_history_checkpoint (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -75,7 +76,9 @@ def _ab2_program(name="adc631_ckpt_ab2"):
     """AB2 over the R-ring (Dense by default: no keep_history policy). flux=False keeps the body free
     of solve_fields, staying in the warm-start-independent replay class."""
     P = pops.time.Program(name)
-    lt.adams_bashforth2(P, "blk", flux=False)
+    module = synthetic_module("%s_state" % name, components=("rho",))
+    _case, states = program_states(P, module, ("blk",))
+    lt.adams_bashforth2(P, states["blk"], flux=False)
     return P
 
 
@@ -90,12 +93,14 @@ def _state3_program(name="adc631_ckpt_state3"):
     which the single-seed replay cannot supply -- the documented replay class). No phi / no flux, so the
     trajectory is independent of the multigrid warm start too."""
     P = pops.time.Program(name)
-    U = P.state("U", block="blk")
+    module = synthetic_module("%s_state" % name, components=("rho",))
+    _case, states = program_states(P, module, ("blk",))
+    U = states["blk"]
     P.keep_history(U, depth=3, checkpoint_policy=Interval(2))
     # Markov forward-Euler on the linear source (reads U.n only), + a zero-weight prev(2) read that
     # declares the depth-3 ring without breaking the single-step reconstructability of the replay.
     nxt = P.linear_combine("Un", U.n + P.dt * (_C * U.n) + 0.0 * U.prev(2))
-    P.commit(P.state("U", block="blk").next, nxt)
+    P.commit(U.next, nxt)
     return P
 
 
@@ -184,7 +189,7 @@ def test_ab2_dense_checkpoint_bit_identical():
     chk(all(len(s) == depth for depth, s in stored_info.values()) and bool(stored_info),
         "Dense stores every ring slot (no replay): %r" % stored_info)
     ok_rings = all(np.array_equal(a, b) for h in cont_rings
-                   for a, b in zip(cont_rings[h], rest_rings.get(h, [])))
+                   for a, b in zip(cont_rings[h], rest_rings.get(h, []), strict=False))
     chk(ok_rings, "the restored ring equals the uninterrupted ring at the checkpoint step, bit-for-bit")
     chk(np.array_equal(ref, got),
         "AB2 continuous == (run, ckpt, restart, continue) BIT-IDENTICALLY (max|d| = %.3e)"
@@ -203,7 +208,7 @@ def test_state3_interval_replay_bit_identical():
     chk(report is not None and any(h["recomputed_slots"] >= 1 for h in report.histories),
         "the restart report records the replayed (recomputed) slots")
     ok_rings = all(np.array_equal(a, b) for h in cont_rings
-                   for a, b in zip(cont_rings[h], rest_rings.get(h, [])))
+                   for a, b in zip(cont_rings[h], rest_rings.get(h, []), strict=False))
     chk(ok_rings,
         "EVERY post-restart ring slot (recomputed included) equals the uninterrupted ring bit-for-bit")
     chk(np.array_equal(ref, got),
@@ -222,7 +227,7 @@ def test_state3_replay_window_straddling_regrid_bit_identical():
         "Interval(2) stores a SUBSET; the straddling gap is replayed THROUGH the in-window regrid: %r"
         % stored_info)
     ok_rings = all(np.array_equal(a, b) for h in cont_rings
-                   for a, b in zip(cont_rings[h], rest_rings.get(h, [])))
+                   for a, b in zip(cont_rings[h], rest_rings.get(h, []), strict=False))
     chk(ok_rings,
         "EVERY post-restart ring slot (recomputed through the in-window regrid) equals uninterrupted")
     chk(np.array_equal(ref, got),

@@ -11,6 +11,7 @@ from typing import Any
 from weakref import ref
 
 from .hash_data import body_identity, canonical_hash_data
+from ._module_freeze import deep_freeze_model_value
 from .handles import Handle, OperatorHandle
 from .ownership import MissingOwnershipError, OwnerKind, OwnerPath
 from .operators import Operator, validate_operator_signature
@@ -161,12 +162,16 @@ class OperatorRegistry:
     debug / validation only. Re-registering an existing name raises.
     """
 
-    def __init__(self, *, owner: Any) -> None:
+    def __init__(self, *, owner: Any, mutation_guard: Any = None) -> None:
+        self._frozen = False
         self._owner_path = OwnerPath.coerce(owner).require_authoring_root(
             OwnerKind.MODEL_DEFINITION, where="OperatorRegistry owner")
         self._by_name = {}
         self._order = []
         self._aliases = {}
+        if mutation_guard is not None and not callable(mutation_guard):
+            raise TypeError("OperatorRegistry mutation_guard must be callable or None")
+        self._mutation_guard = mutation_guard
         # A standalone registry must already have a reproducible canonical owner before a Module
         # view exists. Module later replaces this lower-priority provider with its complete hash.
         registry_ref = ref(self)
@@ -183,8 +188,66 @@ class OperatorRegistry:
         """Read-only declaration owner shared by every handle in the registry."""
         return self._owner_path
 
+    @property
+    def frozen(self) -> bool:
+        return bool(getattr(self, "_frozen", False))
+
+    def _guard_mutable(self, operation: str) -> None:
+        if self.frozen:
+            raise RuntimeError(
+                "OperatorRegistry owned by %s is frozen; cannot %s after Problem.freeze(). "
+                "Author a fresh Module and recompile." % (self.owner_path, operation)
+            )
+        if self._mutation_guard is not None:
+            self._mutation_guard(operation)
+
+    def _bind_mutation_guard(self, mutation_guard: Any) -> None:
+        """Bind this registry once to the Module that owns its mutation lifecycle."""
+        self._guard_mutable("bind a Module mutation authority")
+        if not callable(mutation_guard):
+            raise TypeError("OperatorRegistry mutation_guard must be callable")
+        existing = self._mutation_guard
+        if existing is not None and existing != mutation_guard:
+            raise ValueError(
+                "OperatorRegistry is already bound to a different Module mutation authority"
+            )
+        self._mutation_guard = mutation_guard
+
+    def freeze(self) -> OperatorRegistry:
+        """Freeze operators and registry tables in one rollback-safe transaction."""
+        if self.frozen:
+            return self
+        from pops.problem._freeze_transaction import freeze_atomically
+        operators = tuple(self)
+
+        def commit() -> None:
+            for operator in operators:
+                operator.freeze()
+            object.__setattr__(self, "_by_name", deep_freeze_model_value(self._by_name))
+            object.__setattr__(self, "_order", deep_freeze_model_value(self._order))
+            object.__setattr__(self, "_aliases", deep_freeze_model_value(self._aliases))
+            object.__setattr__(self, "_frozen", True)
+
+        freeze_atomically((*operators, self), commit)
+        return self
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if getattr(self, "_frozen", False):
+            raise RuntimeError(
+                "OperatorRegistry is frozen; cannot set %r after Problem.freeze()" % name
+            )
+        object.__setattr__(self, name, value)
+
+    def __delattr__(self, name: str) -> None:
+        if self.frozen:
+            raise RuntimeError(
+                "OperatorRegistry is frozen; cannot delete %r after Problem.freeze()" % name
+            )
+        object.__delattr__(self, name)
+
     def register(self, operator: Any) -> Any:
         """Register ``operator`` and return it; its id is its insertion index."""
+        self._guard_mutable("register an operator")
         if not isinstance(operator, Operator):
             raise TypeError("register expects an Operator, got %r" % (operator,))
         # Registry is a trust boundary too: Operator remains an internal mutable
@@ -211,6 +274,7 @@ class OperatorRegistry:
         loudly. Repeated alias *resolution* through :meth:`target_for_handle` remains
         side-effect free and permitted.
         """
+        self._guard_mutable("register an operator alias")
         if not isinstance(alias, str) or not alias:
             raise ValueError("operator alias must be a non-empty string")
         if not isinstance(target, str) or not target:
@@ -259,7 +323,7 @@ class OperatorRegistry:
         try:
             return self._aliases[public_name]
         except KeyError:
-            known = self._order + list(self._aliases)
+            known = list(self._order) + list(self._aliases)
             raise KeyError(
                 "unknown operator handle %r (registered operators/aliases: %s)"
                 % (public_name, ", ".join(known) or "<none>")) from None

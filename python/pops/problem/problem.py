@@ -67,7 +67,7 @@ class Problem:
         self._owner_path = OwnerPath.fresh(OwnerKind.CASE, self._name)
         # ADC-563 freeze: a Problem is MUTABLE during assembly and FROZEN by pops.compile. After
         # freeze every mutating setter RAISES (naming the Problem) and freeze() returns a stable
-        # ProblemSnapshot the compile cache keys on.
+        # AuthoringSnapshot the compile cache keys on.
         self._frozen = False
         self._snapshot = None
         # ADC-526: the Problem does NOT own a layout. Layout is supplied at compile
@@ -102,7 +102,7 @@ class Problem:
                 "cannot change a bound artifact." % (self._name, what))
 
     def freeze(self) -> Any:
-        """Freeze the assembly and return its stable :class:`~pops.problem._snapshot.ProblemSnapshot`.
+        """Freeze the assembly and return its stable :class:`~pops.problem._snapshot.AuthoringSnapshot`.
 
         ``pops.compile`` calls this on the Problem it compiles: after freeze every mutating setter
         RAISES (naming the Problem), the member registries and their descriptors are sealed, and the
@@ -134,7 +134,7 @@ class Problem:
 
     @property
     def snapshot(self) -> Any:
-        """The :class:`ProblemSnapshot` from the last :meth:`freeze` (``None`` before freeze)."""
+        """The :class:`AuthoringSnapshot` from the last :meth:`freeze` (``None`` before freeze)."""
         return self._snapshot
 
     # --- registry access (the typed internals, each independently inspectable) ----------

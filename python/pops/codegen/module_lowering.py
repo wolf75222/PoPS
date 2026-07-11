@@ -42,6 +42,9 @@ def _module_to_model(module: Any) -> Any:
                          "(got %s)" % sorted(states))
     state = next(iter(states.values()))
     m = Model(module.name)
+    # Preserve the canonical source-Module identity across the internal facade lowering. The
+    # resulting CompiledModel authenticates this scalar hash; it never retains ``module`` itself.
+    object.__setattr__(m, "_compile_source_module_hash", module.module_hash())
     # The facade is a lowering view of THIS Module, not a newly declared model. Re-anchor its empty
     # backing model before the first declaration so every derived operator registry retains the
     # Module's exact authoring authority. Without this, owner-qualified Program nodes would be

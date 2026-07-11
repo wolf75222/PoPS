@@ -21,6 +21,8 @@ import sys
 
 import pytest
 
+from typed_program_support import typed_state
+
 pytest.importorskip("pops")
 from pops import model as model_pkg  # noqa: E402
 from pops import time as adctime  # noqa: E402
@@ -41,12 +43,13 @@ def _facade_model(name="ep"):
     return m
 
 
-def _fe_program(name="p"):
+def _fe_program(model, name="p"):
     P = adctime.Program(name)
-    U = P.state("ep")
+    U = typed_state(P, "ep", model=model)
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["electric"])
-    P.commit(P.state("U", block="ep").next, P.linear_combine("U1", U + P.dt * R))
+    P.commit(typed_state(P, "ep", state_name="U", model=model).next,
+             P.linear_combine("U1", U + P.dt * R))
     return P
 
 
@@ -115,9 +118,12 @@ def test_remap_without_facade_reraises_unchanged():
 # --- 4: byte-identical emit through lower_and_validate vs direct --------------------------------
 
 def test_emit_is_byte_identical_through_lower_and_validate():
-    direct = _fe_program("cmp").emit_cpp_program(model=_facade_model(), target="system")
-    emit_model, _ = lower_and_validate(_facade_model(), facade=None)
-    via = _fe_program("cmp").emit_cpp_program(model=emit_model, target="system")
+    direct_model = _facade_model()
+    direct = _fe_program(direct_model, "cmp").emit_cpp_program(
+        model=direct_model, target="system")
+    candidate = _facade_model()
+    emit_model, _ = lower_and_validate(candidate, facade=None)
+    via = _fe_program(emit_model, "cmp").emit_cpp_program(model=emit_model, target="system")
     assert direct == via, "routing a facade Model through lower_and_validate is byte-identical"
 
 
@@ -163,7 +169,8 @@ def _stub_toolchain(monkeypatch, tmp_path):
 
 def test_compile_problem_chain_threads_trace_for_facade_model(monkeypatch, tmp_path):
     cd = _stub_toolchain(monkeypatch, tmp_path)
-    compiled = cd.compile_problem(time=_fe_program(), model=_facade_model("ep"),
+    model = _facade_model("ep")
+    compiled = cd.compile_problem(time=_fe_program(model), model=model,
                                   include=str(tmp_path))
     assert compiled.module_manifest is not None, \
         "the REAL compile chain attaches the operator-first Module manifest"
@@ -173,14 +180,15 @@ def test_compile_problem_chain_threads_trace_for_facade_model(monkeypatch, tmp_p
     assert "flux_default" in ops, "the trace lists the facade's operators: %s" % ops
 
 
-def _fe_program_default(name="spec"):
+def _fe_program_default(model, name="spec"):
     """An FE program on the DEFAULT source only (ctx.rhs_into: no model kernels emitted), the same
     minimal lowering the sibling integration tests compile with a native brick ModelSpec."""
     P = adctime.Program(name)
-    U = P.state("ep")
+    U = typed_state(P, "ep", model=model)
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(P.state("U", block="ep").next, P.linear_combine("U1", U + P.dt * R))
+    P.commit(typed_state(P, "ep", state_name="U", model=model).next,
+             P.linear_combine("U1", U + P.dt * R))
     return P
 
 
@@ -193,8 +201,22 @@ def test_compile_problem_chain_honest_absence_for_moduleless_model(monkeypatch, 
         name = "spec"
         cons_names = ["rho", "mx", "my"]
 
+        def __init__(self):
+            from pops.model import OwnerKind, OwnerPath, StateHandle, StateSpace
+
+            self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, self.name)
+            self._state = StateHandle(
+                "U", owner=self.owner_path,
+                space=StateSpace("U", tuple(self.cons_names)))
+
+        def declaration_index(self):
+            from pops.model import DeclarationIndex
+
+            return DeclarationIndex(owner=self.owner_path, handles=(self._state,))
+
     cd = _stub_toolchain(monkeypatch, tmp_path)
-    compiled = cd.compile_problem(time=_fe_program_default(), model=_ModulelessModel(),
+    model = _ModulelessModel()
+    compiled = cd.compile_problem(time=_fe_program_default(model), model=model,
                                   include=str(tmp_path))
     assert compiled.module_manifest is None, "no backing Module -> manifest honestly absent"
     assert compiled.module_hash() is None, "no backing Module -> module_hash honestly absent"

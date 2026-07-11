@@ -10,11 +10,12 @@ The emitted ``.so`` exports a stable, ABI-keyed descriptor of the library:
 * ``pops_library_abi_key()`` -- the ``POPS_ABI_KEY_LITERAL`` of the TU (compiler + std +
   header signature + kokkos + stdlib). The library reader compares it against the loaded
   ``_pops`` module's ``abi_key()``; a mismatch is a HARD error (never a silent fallback);
-* ``pops_library_name()`` / ``pops_library_backend()`` / ``pops_library_content_hash()`` --
+* ``pops_library_manifest_version()`` / ``pops_library_name()`` /
+  ``pops_library_backend()`` / ``pops_library_content_hash()`` --
   the manifest identity, so a compiled ``.so`` round-trips back into a ``LibraryManifest``;
 * ``pops_library_brick_count()`` and per-brick string tables (id / type / category / scheme
-  / native id / requirements JSON / capabilities JSON / available) -- the full brick list
-  with its signatures, requirements and capabilities;
+  / native id / requirements JSON / capabilities JSON / options JSON / available) -- the full
+  brick list with its signatures, requirements, capabilities and configured options;
 * ``pops_library_generated_symbol_*`` -- the generated brick ids the ``.so`` carries;
 * ``pops_brick_manifest()`` -- the SAME JSON contract :func:`pops.lib.load_cpp_library`
   already reads, so the library ``.so`` is also a self-describing external-brick ``.so``,
@@ -31,6 +32,8 @@ from __future__ import annotations
 from typing import Any
 
 import json
+
+from pops._manifest_immutability import thaw_manifest_json
 
 __all__ = ["emit_library_cpp"]
 
@@ -50,12 +53,17 @@ def _requirements_json(brick: Any) -> str:
 
     Mirrors :meth:`pops.codegen.library.LibraryManifest` entries: a dict of named requirement lists
     (e.g. ``{"capabilities": ["physical_flux", "wave_speeds"]}``). Empty dict -> ``{}``."""
-    return json.dumps(brick.get("requirements", {}), sort_keys=True)
+    return json.dumps(thaw_manifest_json(brick.get("requirements", {})), sort_keys=True)
 
 
 def _capabilities_json(brick: Any) -> str:
     """The brick's capabilities as compact JSON (the wire form the reader parses back)."""
-    return json.dumps(brick.get("capabilities", {}), sort_keys=True)
+    return json.dumps(thaw_manifest_json(brick.get("capabilities", {})), sort_keys=True)
+
+
+def _options_json(brick: Any) -> str:
+    """The brick's configured options as canonical JSON for lossless read-back."""
+    return json.dumps(thaw_manifest_json(brick.get("options", {})), sort_keys=True)
 
 
 def _manifest_csv(value_map: Any, key: Any) -> str:
@@ -120,13 +128,15 @@ def emit_library_cpp(manifest: Any) -> str:
     machinery) and ``abi_key.hpp`` (the ``POPS_ABI_KEY_LITERAL``); it has no numerics and no
     device code, so it compiles fast and is ABI-keyed exactly like a problem ``.so``. It
     exports the library identity, the full brick list (id / type / category / scheme / native
-    id / requirements / capabilities / available), the generated-symbol table, and the
+    id / requirements / capabilities / options / available), the generated-symbol table, and the
     ``pops_brick_manifest()`` JSON the external-brick loader reads.
     """
     bricks = list(manifest.bricks)
     gen = list(manifest.generated_symbols)
     manifest_json = _brick_manifest_json(manifest.name, bricks)
+    from .library import _MANIFEST_VERSION
     return _LIBRARY_CPP_TEMPLATE.format(
+        manifest_version=_MANIFEST_VERSION,
         name=json.dumps(manifest.name),
         backend=json.dumps(manifest.backend),
         content_hash=json.dumps(manifest.content_hash),
@@ -144,6 +154,7 @@ def emit_library_cpp(manifest: Any) -> str:
                               ["1" if b["available"] else "0" for b in bricks]),
         requirements=_str_table("brick_requirements", [_requirements_json(b) for b in bricks]),
         capabilities=_str_table("brick_capabilities", [_capabilities_json(b) for b in bricks]),
+        options=_str_table("brick_options", [_options_json(b) for b in bricks]),
         gen_symbols=_str_table("generated_symbol", gen))
 
 
@@ -161,14 +172,15 @@ _LIBRARY_CPP_TEMPLATE = '''\
 
 // --- library identity (round-trips back into a LibraryManifest) -----------------------------------
 extern "C" const char* pops_library_abi_key() {{ return POPS_ABI_KEY_LITERAL; }}
+extern "C" int pops_library_manifest_version() {{ return {manifest_version}; }}
 extern "C" const char* pops_library_name() {{ return {name}; }}
 extern "C" const char* pops_library_backend() {{ return {backend}; }}
 extern "C" const char* pops_library_content_hash() {{ return {content_hash}; }}
 extern "C" int pops_library_brick_count() {{ return {brick_count}; }}
 extern "C" int pops_library_generated_symbol_count() {{ return {gen_count}; }}
 
-// --- per-brick metadata tables (id / type / category / scheme / native id / reqs / caps / avail) --
-{ids}{types}{categories}{schemes}{native_ids}{availables}{requirements}{capabilities}{gen_symbols}
+// per-brick metadata (id / type / category / scheme / native id / reqs / caps / opts / avail) ----
+{ids}{types}{categories}{schemes}{native_ids}{availables}{requirements}{capabilities}{options}{gen_symbols}
 // --- external-brick manifest (the JSON pops.lib.load_cpp_library reads) ----------------------------
 extern "C" const char* pops_brick_manifest() {{ return {manifest_json}; }}
 

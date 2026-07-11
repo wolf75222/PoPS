@@ -36,6 +36,7 @@ try:
     from pops.numerics.riemann import Rusanov
     from pops.physics.facade import Model
     from pops.runtime.system import AmrSystem
+    from tests.python.support.typed_program import program_states, synthetic_module
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
     print("skip test_amr_program_reflux (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -81,14 +82,17 @@ def _ssprk2_program(name):
     """Canonical SSPRK2 (Heun): U1 = U + dt R(U); U <<= 0.5 U + 0.5 (U1 + dt R(U1))."""
     P = adctime.Program(name)
     dt = P.dt
-    U0 = P.state("blk")
+    module = synthetic_module("%s_state" % name, components=("rho", "rho_u", "rho_v", "E"))
+    _case, states = program_states(P, module, ("blk",))
+    temporal = states["blk"]
+    U0 = temporal.n
     f0 = P.solve_fields("f0", U0)
     k0 = P._rhs_legacy("k0", state=U0, fields=f0, flux=True, sources=["default"])
     U1 = P.linear_combine("U1", U0 + dt * k0)
     f1 = P.solve_fields("f1", U1)
     k1 = P._rhs_legacy("k1", state=U1, fields=f1, flux=True, sources=["default"])
     U2 = P.linear_combine("U2", 0.5 * U0 + 0.5 * (U1 + dt * k1))
-    P.commit(P.state("U", block="blk").next, U2)
+    P.commit(temporal.next, U2)
     return P
 
 
@@ -97,14 +101,17 @@ def _midpoint_program(name):
     only) -- proves the ledger tracks the Program's actual weights, not a hard-coded scheme."""
     P = adctime.Program(name)
     dt = P.dt
-    U0 = P.state("blk")
+    module = synthetic_module("%s_state" % name, components=("rho", "rho_u", "rho_v", "E"))
+    _case, states = program_states(P, module, ("blk",))
+    temporal = states["blk"]
+    U0 = temporal.n
     f0 = P.solve_fields("f0", U0)
     k0 = P._rhs_legacy("k0", state=U0, fields=f0, flux=True, sources=["default"])
     U1 = P.linear_combine("U1", U0 + 0.5 * dt * k0)
     f1 = P.solve_fields("f1", U1)
     k1 = P._rhs_legacy("k1", state=U1, fields=f1, flux=True, sources=["default"])
     U2 = P.linear_combine("U2", U0 + dt * k1)
-    P.commit(P.state("U", block="blk").next, U2)
+    P.commit(temporal.next, U2)
     return P
 
 

@@ -25,8 +25,11 @@ whether ``"default"`` is among the requested sources.
 
 Run with python3 (PYTHONPATH = built pops package).
 """
+from typed_program_support import state_refs, typed_state
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.numerics.terms import DefaultSource
 import sys
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
@@ -89,13 +92,14 @@ def decay_model_with_named(name="rhs_decay_named", c=0.7, d=0.5):
     return m
 
 
-def one_step_program(name, sources, flux=True):
+def one_step_program(name, sources, flux=True, model=None):
     """U^{n+1} = U + dt * rhs(flux=flux, sources=sources), committed on block 'plasma'."""
     P = adctime.Program(name)
-    U = P.state("plasma")
+    U = typed_state(P, "plasma", model=model)
     fields = P.solve_fields(U) if flux else None
     R = P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("%s_step" % name, U + P.dt * R))
+    P.commit(typed_state(P, "plasma", state_name="U", model=model).next,
+             P.linear_combine("%s_step" % name, U + P.dt * R))
     return P
 
 
@@ -103,8 +107,8 @@ def one_step_program(name, sources, flux=True):
 print("== (A) rhs source routing: IR + codegen ==")
 m = decay_model()
 
-src_default = one_step_program("p_default", ["default"]).emit_cpp_program(model=m)
-src_empty = one_step_program("p_empty", []).emit_cpp_program(model=m)
+src_default = one_step_program("p_default", ["default"], model=m).emit_cpp_program(model=m)
+src_empty = one_step_program("p_empty", [], model=m).emit_cpp_program(model=m)
 
 # sources=["default"] keeps the historical ctx.rhs_into (flux + default source), unchanged.
 chk("ctx.rhs_into(0," in src_default and "ctx.neg_div_flux_default_into(" not in src_default,
@@ -127,11 +131,15 @@ chk(one_step_program("p", ["default"])._ir_hash() == h_default,
 
 # A named-source rhs on a model WITH a non-empty default source now lowers (no double-count): the base
 # is rhs_into (default folded) iff 'default' is listed; the named source is axpy'd on top either way.
-src_named_on_default = one_step_program("p_nd", ["default", "decay"]).emit_cpp_program(
-    model=decay_model_with_named())
+named_default_model = decay_model_with_named()
+src_named_on_default = one_step_program(
+    "p_nd", ["default", "decay"], model=named_default_model).emit_cpp_program(
+        model=named_default_model)
 chk("ctx.rhs_into(0," in src_named_on_default,
     "sources=['default','decay'] uses rhs_into base (default folded) + named axpy (no double-count)")
-src_named_only = one_step_program("p_no", ["decay"]).emit_cpp_program(model=decay_model_with_named())
+named_only_model = decay_model_with_named("rhs_named_only")
+src_named_only = one_step_program(
+    "p_no", ["decay"], model=named_only_model).emit_cpp_program(model=named_only_model)
 chk("ctx.neg_div_flux_default_into(0," in src_named_only,
     "sources=['decay'] (no 'default') uses flux-only base + named axpy")
 
@@ -169,8 +177,10 @@ def run_one_step(sources, flux=True):
     """Compile + install a one-step program, step once, return (out, rho0)."""
     pname = "p_%s_%s" % ("flux" if flux else "noflux", "_".join(sources) or "empty")
     try:
-        compiled = pops.codegen.compile_problem(model=decay_model("decay_%s" % pname, C),
-                                       time=one_step_program(pname, sources, flux=flux))
+        program_model = decay_model("decay_%s" % pname, C)
+        compiled = pops.codegen.compile_problem(
+            model=program_model,
+            time=one_step_program(pname, sources, flux=flux, model=program_model))
     except RuntimeError as exc:  # no compiler / no Kokkos / .so compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
     sim, rho0 = make_sim(pname)
@@ -199,18 +209,21 @@ chk(float(np.abs(out_default - rho0d).max()) > 1e-6, "sources=['default'] actual
 # Lie split: H = flux(flux=True, sources=[]) then S = source(flux=False, sources=["default"]).
 # On this model H is the identity (zero flux, no source) and S adds dt*C*rho -> equals the offline
 # single-source split U + dt*C*U applied once.
-def lie_split_program(name):
+def lie_split_program(name, model=None):
     P = adctime.Program(name)
-    U = P.state("plasma")
+    U = typed_state(P, "plasma", model=model)
     H = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=[])  # flux only (== identity here)
     U1 = P.linear_combine("%s_H" % name, U + P.dt * H)
     S = P._rhs_legacy(state=U1, fields=None, flux=False, sources=["default"])    # default source on U1
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("%s_S" % name, U1 + P.dt * S))
+    P.commit(typed_state(P, "plasma", state_name="U", model=model).next,
+             P.linear_combine("%s_S" % name, U1 + P.dt * S))
     return P
 
 
 try:
-    compiled_lie = pops.codegen.compile_problem(model=decay_model("decay_lie", C), time=lie_split_program("lie"))
+    lie_model = decay_model("decay_lie", C)
+    compiled_lie = pops.codegen.compile_problem(
+        model=lie_model, time=lie_split_program("lie", model=lie_model))
 except RuntimeError as exc:
     _skip("compile_problem (lie) could not build the .so: %s" % str(exc)[:160])
 sim_lie, rho0l = make_sim("lie")
@@ -226,9 +239,12 @@ chk(d_lie < 1e-12, "Lie split H(flux,sources=[]);S(source) == offline single-sou
 # NO-REGRESSION: a default-source forward_euler (sources=['default']) is the historical path. On the
 # zero-flux model it is U + dt*C*rho -- identical to the sources=['default'] one-step above.
 try:
+    fe_model = decay_model("decay_fe", C)
     P_fe = adctime.Program("fe_default")
-    libtime.forward_euler(P_fe, "plasma", sources=("default",))
-    compiled_fe = pops.codegen.compile_problem(model=decay_model("decay_fe", C), time=P_fe)
+    libtime.forward_euler(
+        P_fe, *state_refs(P_fe, "plasma", model=fe_model.module),
+        sources=(DefaultSource(),))
+    compiled_fe = pops.codegen.compile_problem(model=fe_model, time=P_fe)
 except RuntimeError as exc:
     _skip("compile_problem (forward_euler) could not build the .so: %s" % str(exc)[:160])
 sim_fe, rho0f = make_sim("fe")

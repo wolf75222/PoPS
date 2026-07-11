@@ -12,7 +12,15 @@ pops = pytest.importorskip("pops")
 
 
 class _StubModel:
-    name = "m"
+    def __init__(self):
+        from pops.model import DeclarationIndex, OwnerKind, OwnerPath
+
+        self.name = "m"
+        self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, self.name)
+        self._index = DeclarationIndex(owner=self.owner_path, handles=())
+
+    def declaration_index(self):
+        return self._index
 
 
 def test_pops_inspect_is_public():

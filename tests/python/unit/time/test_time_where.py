@@ -17,6 +17,8 @@ scalar runtime branch ``if_``. The 0/1 mask is built per cell with ``P.cell_ge``
     SOME take b (non-vacuous). Self-skips without numpy / _pops / a compiler / Kokkos / install_program
     (never faking the engine).
 """
+from typed_program_support import typed_state
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
@@ -38,18 +40,18 @@ def _clamp_program(t, *, name="where_clamp", floor=0.5):
     Uses only linear_combine + cell_ge + where, so the Program lowers with NO model (solve_fields is
     inert / absent); the select is decided per cell entirely in C++."""
     P = t.Program(name)
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     half = P.linear_combine("half", 0.5 * U)        # the 'b' branch: 0.5 * U
     mask = P.cell_ge(U, floor, name="mask")          # 1 where U >= floor, else 0
     clamped = P.where(mask, U, half, name="clamped")  # per-cell: U if mask else 0.5*U
-    P.commit(P.state("U", block="blk").next, clamped)
+    P.commit(typed_state(P, "blk", state_name="U").next, clamped)
     return P
 
 
 # ---- (A) codegen: pure Python, always runs ----
 def test_cell_ge_is_scalar_field(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     m = P.cell_ge(U, 0.5)
     assert m.vtype == "scalar_field", "cell_ge returns a 1-component mask scalar_field (got %r)" % m.vtype
     assert m.attrs["cmp"] == ">=" and m.attrs["value"].to_python() == 0.5, m.attrs
@@ -58,7 +60,7 @@ def test_cell_ge_is_scalar_field(t):
 
 def test_cell_compare_variants(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     assert P.cell_gt(U, 1.0).attrs["cmp"] == ">"
     assert P.cell_ge(U, 1.0).attrs["cmp"] == ">="
     assert P.cell_lt(U, 1.0).attrs["cmp"] == "<"
@@ -67,13 +69,13 @@ def test_cell_compare_variants(t):
 
 def test_where_result_type(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     a = P.linear_combine("a", 1.0 * U)
     b = P.linear_combine("b", 0.5 * U)
     m = P.cell_ge(U, 0.5)
     w = P.where(m, a, b)
     assert w.vtype == "state", "where over states returns a State (got %r)" % w.vtype
-    assert w.block == "blk", "where inherits a's block"
+    assert w.block is a.block and w.block.local_id == "blk", "where inherits a's block"
     assert [i.op for i in w.inputs] == ["cell_compare", "linear_combine", "linear_combine"], \
         "where inputs = (mask, a, b)"
 
@@ -137,7 +139,7 @@ def test_where_accepts_per_component_mask(t):
 
 def test_where_rejects_mismatched_vtype(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     sf = P.scalar_field("sf", ncomp=1)
     m = P.cell_ge(U, 0.5)
     try:
@@ -150,7 +152,7 @@ def test_where_rejects_mismatched_vtype(t):
 
 def test_cell_compare_rejects_non_scalar_threshold(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     try:
         P.cell_ge(U, U)  # a per-cell field threshold is a later phase
     except TypeError as exc:
@@ -161,7 +163,7 @@ def test_cell_compare_rejects_non_scalar_threshold(t):
 
 def test_cell_compare_rejects_bad_cmp(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     try:
         P.cell_compare(U, 0.5, "==")
     except ValueError as exc:

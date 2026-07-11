@@ -35,9 +35,12 @@ def _raises(exc_types, fn):
 
 # =================== Section A: pure Python (codegen + install seam) ===================
 try:
+    from pops.codegen._plans import InstallBlock, InstallPlan
+    from pops.codegen.loader import CompiledModel
     from pops.params import ConstParam
     from pops.ir.ops import sqrt
     from pops.physics.facade import Model
+    from pops.problem._snapshot import AuthoringSnapshot
     from pops.runtime.amr_system import AmrSystem
 except Exception as exc:  # noqa: BLE001  -- pops not importable -> skip, never fake
     print("skip test_amr_named_field (pops unavailable: %s)" % exc)
@@ -100,11 +103,31 @@ def test_amr_loader_no_named_field_unchanged():
     print("ok test_amr_loader_no_named_field_unchanged")
 
 
-class _RawModel:
-    """A raw physics/dsl model stand-in exposing the _elliptic_fields mapping (m.elliptic_field)."""
+def _compiled_model(*fields):
+    """Return an inert AMR loader record with detached named-field metadata."""
+    return CompiledModel(
+        so_path="/fake.so", backend="production", adder="add_native_block",
+        cons_names=["rho"], cons_roles=["Density"], prim_names=["rho"], n_vars=1,
+        gamma=None, n_aux=0, params={}, caps={}, abi_key="k", model_hash="h",
+        cxx="c++", std="c++20", target="amr_system",
+        elliptic_field_names=list(fields))
 
-    def __init__(self, fields=()):
-        self._elliptic_fields = {n: {} for n in fields}
+
+def _install_instances(**models):
+    """Assemble runtime inputs from the immutable AMR install contract."""
+    snapshot = AuthoringSnapshot({"kind": "named-field-amr", "blocks": tuple(models)})
+    plan = InstallPlan(
+        snapshot_hash=snapshot.hash,
+        target="amr_system",
+        layout=None,
+        blocks=tuple(InstallBlock(name, model, None) for name, model in models.items()),
+        bind_schema=None,
+        field_solvers={},
+        outputs=(),
+        diagnostics=(),
+        has_program=False,
+    )
+    return plan.assemble_instances({})
 
 
 class _SolverHarness(AmrSystem):
@@ -118,16 +141,16 @@ class _SolverHarness(AmrSystem):
 
 
 def test_amr_declared_elliptic_fields_collected():
-    """A3: the declared named-field set is gathered from the per-instance models (raw _elliptic_fields
-    or a CompiledModel.elliptic_field_names)."""
-    instances = {"plasma": {"model": _RawModel(fields=("psi",))},
-                 "beam": {"model": _RawModel(fields=("chi",))}}
+    """A3: the declared set is gathered from per-instance ``CompiledModel`` metadata."""
+    instances = _install_instances(
+        plasma=_compiled_model("psi"),
+        beam=_compiled_model("chi"),
+    )
     declared = AmrSystem._declared_elliptic_fields(instances)
     _check(declared == {"psi", "chi"}, "union of the instance declared fields (got %r)" % declared)
-    # a model exposing elliptic_field_names (CompiledModel shape) is read too.
-    cm = type("CM", (), {"elliptic_field_names": ["theta"]})()
-    _check(AmrSystem._declared_elliptic_fields({"b": {"model": cm}}) == {"theta"},
-           "elliptic_field_names is collected from a compiled handle shape")
+    theta = _install_instances(b=_compiled_model("theta"))
+    _check(AmrSystem._declared_elliptic_fields(theta) == {"theta"},
+           "elliptic_field_names is collected from a real CompiledModel")
     print("ok test_amr_declared_elliptic_fields_collected")
 
 

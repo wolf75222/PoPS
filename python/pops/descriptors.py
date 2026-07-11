@@ -83,6 +83,11 @@ class BrickDescriptor:
         The :class:`BrickDescriptor` counterpart of :meth:`pops.descriptors.Descriptor.freeze`; the
         assembly that holds it (a frozen ``Problem`` / ``Program``) seals it so a route the compiled
         artifact committed cannot be silently re-pointed. Idempotent."""
+        from pops._descriptor_protocol import _freeze_descriptor_value
+
+        for name, value in tuple(self.__dict__.items()):
+            if name != "_frozen":
+                object.__setattr__(self, name, _freeze_descriptor_value(value))
         object.__setattr__(self, "_frozen", True)
         return self
 
@@ -121,7 +126,6 @@ class BrickDescriptor:
         with an empty ``native_id`` (a catalogued-but-not-native brick) is left to the loud
         :meth:`validate` refusal upstream -- never a silent fallback.
         """
-        from pops.descriptors_report import LoweredDescriptor
         return LoweredDescriptor(name=self.name, category=self.category,
                                  native_id=self.native_id or None, options=dict(self.options),
                                  scheme=self.scheme)

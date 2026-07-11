@@ -73,6 +73,7 @@ class _FacadeCompileMixin(_FacadeModel):
         from pops.codegen.abi import _abi_key_python
         from pops.codegen.compile import _BACKEND_CAPS
         from pops.codegen.loader import CompiledModel
+        from pops.codegen._compiled_model_identity import model_compile_identity
         from pops.codegen.backends import lower_backend
         # ADDITIVE (Spec 5 sec.8.15): accept a typed backend descriptor (Production()/AOT()/JIT()) as
         # well as the legacy string; lower it BEFORE the 'auto'/_BACKENDS checks so both selectors
@@ -147,6 +148,7 @@ class _FacadeCompileMixin(_FacadeModel):
             n_vars=m.n_vars, gamma=m.gamma, n_aux=aux_total_n_aux(m.aux_names, m.aux_extra_names),
             params=self.params, caps=_BACKEND_CAPS[backend],
             abi_key=abi_key, model_hash=model_hash,
+            definition_identity=model_compile_identity(self),
             cxx=eff_cxx, std=eff_std, hllc=m._hllc,
             roe=(m._roe or getattr(m, '_roe_rows', None) is not None
                  or getattr(m, '_roe_jacobian', None) is not None),

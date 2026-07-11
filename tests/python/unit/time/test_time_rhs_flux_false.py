@@ -28,6 +28,8 @@ flux=False stage WRONGLY re-added -div F. ADC-430 adds the source-only runtime p
 
 Run with python3 (PYTHONPATH = built pops package).
 """
+from typed_program_support import typed_state
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
@@ -90,13 +92,14 @@ def advect_model_with_named(name="adv_rhs_named", a=1.0, c=0.7, d=0.5):
     return m
 
 
-def one_step_program(name, sources, flux=True):
+def one_step_program(name, sources, flux=True, model=None):
     """U^{n+1} = U + dt * rhs(flux=flux, sources=sources), committed on block 'plasma'."""
     P = adctime.Program(name)
-    U = P.state("plasma")
+    U = typed_state(P, "plasma", model=model)
     fields = P.solve_fields(U) if flux else None
     R = P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("%s_step" % name, U + P.dt * R))
+    P.commit(typed_state(P, "plasma", state_name="U", model=model).next,
+             P.linear_combine("%s_step" % name, U + P.dt * R))
     return P
 
 
@@ -105,7 +108,8 @@ print("== (A) rhs flux=False routing: IR + codegen ==")
 m = advect_model()
 
 # THE BUG PROBE (codegen): flux=False, sources=["default"] must be SOURCE-ONLY -- no flux base.
-src_noflux_default = one_step_program("p_nf_default", ["default"], flux=False).emit_cpp_program(model=m)
+src_noflux_default = one_step_program(
+    "p_nf_default", ["default"], flux=False, model=m).emit_cpp_program(model=m)
 chk("ctx.source_default_into(0," in src_noflux_default,
     "flux=False, sources=['default'] lowers to ctx.source_default_into (source only)")
 chk("ctx.rhs_into(" not in src_noflux_default
@@ -117,31 +121,36 @@ chk("ctx.rhs_into(" not in src_noflux_default
 # block's runtime index, not a hardcoded 0. Block 'b' is declared second -> index 1, so its source-only
 # RHS must lower to ctx.source_default_into(1, ...). (A naive ADC-425-era flux=False branch hardcoded 0,
 # which would silently apply block b's source to block a under a multi-block Program.)
-def two_block_noflux(name):
+def two_block_noflux(name, model=None):
     P = adctime.Program(name)
-    Ua = P.state("a")
-    Ub = P.state("b")
+    Ua = typed_state(P, "a", model=model)
+    Ub = typed_state(P, "b", model=model)
     Ra = P._rhs_legacy(state=Ua, fields=None, flux=False, sources=["default"])
     Rb = P._rhs_legacy(state=Ub, fields=None, flux=False, sources=["default"])
-    P.commit(P.state("U", block="a").next, P.linear_combine("%s_a" % name, Ua + P.dt * Ra))
-    P.commit(P.state("U", block="b").next, P.linear_combine("%s_b" % name, Ub + P.dt * Rb))
+    P.commit(typed_state(P, "a", state_name="U", model=model).next,
+             P.linear_combine("%s_a" % name, Ua + P.dt * Ra))
+    P.commit(typed_state(P, "b", state_name="U", model=model).next,
+             P.linear_combine("%s_b" % name, Ub + P.dt * Rb))
     return P
 
 
-src_2blk = two_block_noflux("p_2blk_nf").emit_cpp_program(model=m)
+src_2blk = two_block_noflux("p_2blk_nf", model=m).emit_cpp_program(model=m)
 chk("ctx.source_default_into(0," in src_2blk and "ctx.source_default_into(1," in src_2blk,
     "flux=False source-only routes to its block's bidx (block b -> index 1, not a hardcoded 0)")
 
 # flux=False, sources=[] -> the zero RHS: NO flux base, NO source.
-src_noflux_empty = one_step_program("p_nf_empty", [], flux=False).emit_cpp_program(model=m)
+src_noflux_empty = one_step_program(
+    "p_nf_empty", [], flux=False, model=m).emit_cpp_program(model=m)
 chk("ctx.rhs_into(" not in src_noflux_empty
     and "ctx.neg_div_flux_default_into(" not in src_noflux_empty
     and "ctx.source_default_into(" not in src_noflux_empty,
     "flux=False, sources=[] is the zero RHS (no flux base, no source)")
 
 # flux=False, sources=["decay"] (named only) -> NO flux base, the named source axpy is the whole RHS.
-src_noflux_named = one_step_program("p_nf_named", ["decay"], flux=False).emit_cpp_program(
-    model=advect_model_with_named())
+named_model = advect_model_with_named()
+src_noflux_named = one_step_program(
+    "p_nf_named", ["decay"], flux=False, model=named_model).emit_cpp_program(
+        model=named_model)
 chk("ctx.rhs_into(" not in src_noflux_named
     and "ctx.neg_div_flux_default_into(" not in src_noflux_named
     and "ctx.source_default_into(" not in src_noflux_named,
@@ -150,8 +159,10 @@ chk("ctx.axpy(" in src_noflux_named,
     "flux=False, sources=['decay'] axpys the named source onto the zeroed RHS")
 
 # flux=True paths UNCHANGED (ADC-425 routing): rhs_into for default, flux-only for [].
-src_flux_default = one_step_program("p_f_default", ["default"], flux=True).emit_cpp_program(model=m)
-src_flux_empty = one_step_program("p_f_empty", [], flux=True).emit_cpp_program(model=m)
+src_flux_default = one_step_program(
+    "p_f_default", ["default"], flux=True, model=m).emit_cpp_program(model=m)
+src_flux_empty = one_step_program(
+    "p_f_empty", [], flux=True, model=m).emit_cpp_program(model=m)
 chk("ctx.rhs_into(0," in src_flux_default and "ctx.source_default_into(" not in src_flux_default,
     "flux=True, sources=['default'] still lowers to ctx.rhs_into (unchanged)")
 chk("ctx.neg_div_flux_default_into(0," in src_flux_empty,
@@ -163,17 +174,19 @@ h_f = one_step_program("p", ["default"], flux=True)._ir_hash()
 chk(h_nf != h_f, "flux=False vs flux=True produce distinct IR hashes")
 
 # flux=False + named fluxes is rejected (a source-only stage has no flux divergence).
-def _noflux_named_fluxes():
+def _noflux_named_fluxes(model=None):
     P = adctime.Program("p_bad")
-    U = P.state("plasma")
+    U = typed_state(P, "plasma", model=model)
     P._rhs_legacy(state=U, fields=None, flux=False, sources=["default"], fluxes=["fx"])
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("p_bad_step", U))
+    P.commit(typed_state(P, "plasma", state_name="U", model=model).next,
+             P.linear_combine("p_bad_step", U))
     return P
 
 
 rejected = False
 try:
-    _noflux_named_fluxes().emit_cpp_program(model=advect_model())
+    rejected_model = advect_model()
+    _noflux_named_fluxes(model=rejected_model).emit_cpp_program(model=rejected_model)
 except ValueError:
     rejected = True
 chk(rejected, "flux=False with named fluxes is rejected (no flux base to divide)")
@@ -213,8 +226,10 @@ def run_one_step(sources, flux):
     """Compile + install a one-step program, step once, return (out, rho0)."""
     tag = "%s_%s" % ("flux" if flux else "noflux", "_".join(sources) or "empty")
     try:
-        compiled = pops.codegen.compile_problem(model=advect_model("adv_%s" % tag, A, C),
-                                       time=one_step_program("p_%s" % tag, sources, flux=flux))
+        program_model = advect_model("adv_%s" % tag, A, C)
+        compiled = pops.codegen.compile_problem(
+            model=program_model,
+            time=one_step_program("p_%s" % tag, sources, flux=flux, model=program_model))
     except RuntimeError as exc:  # no compiler / no Kokkos / .so compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
     sim, rho0 = make_sim(tag)
@@ -245,18 +260,21 @@ chk(d_full_vs_src > 1e-6,
 # Lie split: H = rhs(flux=True, sources=[]) then S = rhs(flux=False, sources=["default"]) on the
 # NON-zero-flux model. It must equal the offline split: U1 = U + dt*(-div F)(U); out = U1 + dt*C*U1.
 # Offline reference for the H half = a flux-only one-step (ADC-425's flux-only primitive, validated).
-def lie_split_program(name):
+def lie_split_program(name, model=None):
     P = adctime.Program(name)
-    U = P.state("plasma")
+    U = typed_state(P, "plasma", model=model)
     H = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=[])   # flux only (-div F)
     U1 = P.linear_combine("%s_H" % name, U + P.dt * H)
     S = P._rhs_legacy(state=U1, fields=None, flux=False, sources=["default"])     # source only on U1
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("%s_S" % name, U1 + P.dt * S))
+    P.commit(typed_state(P, "plasma", state_name="U", model=model).next,
+             P.linear_combine("%s_S" % name, U1 + P.dt * S))
     return P
 
 
 try:
-    compiled_lie = pops.codegen.compile_problem(model=advect_model("adv_lie", A, C), time=lie_split_program("lie"))
+    lie_model = advect_model("adv_lie", A, C)
+    compiled_lie = pops.codegen.compile_problem(
+        model=lie_model, time=lie_split_program("lie", model=lie_model))
 except RuntimeError as exc:
     _skip("compile_problem (lie) could not build the .so: %s" % str(exc)[:160])
 sim_lie, rho0l = make_sim("lie")

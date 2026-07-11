@@ -354,7 +354,7 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
     # the WHAT, the cache key combines it with the abi_key (the HOW) -- the same identity the
     # out-of-source .so cache file name carries. Computed unconditionally so the metadata is present
     # on BOTH the cache-hit and the fresh-compile path (and even when an explicit so_path is given).
-    # Registry, feature and precision identities join the key. The frozen ProblemSnapshot's
+    # Registry, feature and precision identities join the key. The frozen AuthoringSnapshot's
     # ARTIFACT projection joins both the artifact hash (and therefore .so path) and final cache-key
     # preimage; its full hash was authenticated above and remains attached for reproducibility.
     feature_key = _native_feature_key()
@@ -383,6 +383,11 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
     # drift check). None for a model with no backing Module.
     module_hash = source_module.module_hash() if (source_module is not None
                                                    and hasattr(source_module, "module_hash")) else None
+    # Capture the program-parameter ABI table while the compiler still owns the full model IR.
+    # Public orchestration replaces the live model builder by a CompiledModel metadata/loader value;
+    # bind consumes this immutable table and never re-enters authoring analysis.
+    from pops.codegen.program_emit_params import program_param_entries
+    program_param_routes = tuple(program_param_entries(time, model))
 
     if so_path is None:
         # Fold the feature-key + precision token into the backend slot of the cache file name (the
@@ -409,7 +414,9 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
                                        cache_key=cache_key, codegen_env=cenv,
                                        module_manifest=module_manifest, module_hash=module_hash,
                                        external_bricks=external_brick_records,
-                                       problem_snapshot=problem_snapshot)
+                                       problem_snapshot=problem_snapshot,
+                                       program_param_routes=program_param_routes,
+                                       generated_cpp=src)
             cenv.run_dumps(compiled)
             return compiled
 
@@ -477,6 +484,8 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
                                generated_sources=[gen_src_path] if gen_src_path else [],
                                codegen_env=cenv, module_manifest=module_manifest,
                                module_hash=module_hash, external_bricks=external_brick_records,
-                               problem_snapshot=problem_snapshot)
+                               problem_snapshot=problem_snapshot,
+                               program_param_routes=program_param_routes,
+                               generated_cpp=src)
     cenv.run_dumps(compiled)
     return compiled

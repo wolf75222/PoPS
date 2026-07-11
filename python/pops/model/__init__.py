@@ -21,7 +21,7 @@ The package imports only the standard library so it can be exercised without the
 compiled ``_pops`` extension.
 """
 from .bundles import RateBundle
-from .handles import Handle, OperatorHandle, OwnerPath, ParamHandle
+from .handles import Handle, OperatorHandle, OwnerPath, ParamHandle, StateHandle
 from .ownership import (
     AmbiguousReferenceError,
     DoubleOwnershipError,
@@ -79,7 +79,8 @@ __all__ = [
     "AuxSpace",
     "Module",
     "RateBundle",
-    "Handle", "ParamHandle", "OperatorHandle", "OwnerPath", "OwnerKind", "OwnerSegment",
+    "Handle", "StateHandle", "ParamHandle", "OperatorHandle", "OwnerPath", "OwnerKind",
+    "OwnerSegment",
     "ParamRegistry", "BIND_SCHEMA_VERSION", "BindSchema", "BindSlot", "ResolvedBindings",
     "OwnershipError", "MissingOwnershipError", "DoubleOwnershipError",
     "AmbiguousReferenceError", "IdentityCollisionError",

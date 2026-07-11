@@ -288,12 +288,22 @@ class _ProgramTimeHandles:
         self._time_history_stores[state] = store
         return store
 
-    def _rebuild_time_handle_tables(self, out: Any, idmap: Any, representative: Any) -> None:
-        """Recreate owner-qualified handles and remap their ProgramValue resolutions after a pass."""
+    def _rebuild_time_handle_tables(
+        self,
+        out: Any,
+        idmap: Any,
+        representative: Any,
+        reference_of: Any = None,
+    ) -> None:
+        """Recreate temporal handles and remap their values after a pass/detachment."""
+        if reference_of is None:
+            def _identity(value: Any) -> Any:
+                return value
+            reference_of = _identity
         state_map = {}
         for old_state in self._time_states.values():
             new_state = out._time_state(
-                old_state.block, old_state.state, old_state.space)
+                reference_of(old_state.block), reference_of(old_state.state), old_state.space)
             state_map[old_state] = new_state
             old_current = self._time_current_values.get(old_state)
             if old_current is not None:
@@ -317,12 +327,13 @@ class _ProgramTimeHandles:
                 if mapped is not None:
                     out._time_history_values[new_handle] = mapped
 
-        for old_state, (depth, cold_start, _policy) in self._time_history_configs.items():
+        for old_state, (depth, _cold_start, _policy) in self._time_history_configs.items():
             new_state = state_map[old_state]
             name = "%s.%s" % (
                 block_name(new_state.block), state_name(new_state.state))
             copied_policy = out._history_persistence[name][1]
-            out._time_history_configs[new_state] = (depth, cold_start, copied_policy)
+            from pops.time.history import CopyCurrent
+            out._time_history_configs[new_state] = (depth, CopyCurrent(), copied_policy)
             old_store = self._time_history_stores.get(old_state)
             if old_store is not None:
                 mapped = idmap.get(representative(old_store).id)

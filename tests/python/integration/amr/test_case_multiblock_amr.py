@@ -2,7 +2,7 @@
 
 ADC-503 lifts the C3 boundary: a multi-block (and single-block) AMR Problem now lowers. Each block's
 resolved physics is compiled to a target='amr_system' production CompiledModel (the native AMR .so
-loader, add_native_block), the {block: CompiledModel} table is carried on the handle, and bind
+loader, add_native_block), the typed blocks are carried by the immutable InstallPlan, and bind
 installs through the native path (_install_compiled(compiled=None, instances=...)). There is NO
 whole-system time Program on AMR, so compile_problem is NOT called and time= is not required. The
 real .so compile is Kokkos-gated (ROMEO), so the block model's .compile is MONKEYPATCHED here to
@@ -18,6 +18,8 @@ try:
     from pops.mesh.cartesian import CartesianMesh
     from pops.mesh.layouts import AMR
     from pops.model import DeclarationIndex, OwnerKind, OwnerPath
+    from pops.codegen.loader import CompiledModel
+    from pops.codegen._compiled_model_identity import model_compile_identity
     import pops.codegen.compile_drivers as compile_drivers
 except Exception as exc:  # noqa: BLE001
     print("skip test_case_multiblock_amr (pops unavailable: %s)" % exc)
@@ -27,14 +29,16 @@ except Exception as exc:  # noqa: BLE001
 from tests.python.support.assertions import _check
 
 
-class _StubCompiledModel:
+class _StubCompiledModel(CompiledModel):
     """A target='amr_system' CompiledModel stand-in (the AMR route compiles each block to one)."""
 
-    def __init__(self, name="stub"):
-        self.name = name
-        self.so_path = "/tmp/%s_amr.so" % name
-        self.target = "amr_system"
-        self.adder = "add_native_block"
+    def __init__(self, source):
+        super().__init__(
+            "/tmp/%s_amr.so" % source.name, "production", "add_native_block",
+            (), (), (), 0, None, 0, {}, {"cpu": True, "amr": True}, "abi",
+            source._model_hash(), "c++", "c++20", target="amr_system",
+            definition_identity=model_compile_identity(source))
+        self.name = source.name
 
 
 class _StubDsl:
@@ -46,7 +50,10 @@ class _StubDsl:
 
     def compile(self, *, backend, target, **kw):
         self.compiled.append((backend, target))
-        return _StubCompiledModel(self.name)
+        return _StubCompiledModel(self)
+
+    def _model_hash(self):
+        return "model-hash:%s" % self.name
 
 
 class _StubModel:
@@ -63,7 +70,7 @@ class _StubCompiled:
     def __init__(self, target="amr_system", model=None):
         self.so_path = "/tmp/stub.so"
         self.model = model
-        self._target = target
+        self.install_plan = None
 
 
 _SAVED = []
@@ -99,11 +106,14 @@ def test_multi_block_amr_lowers_natively():
                "block 'ne' compiled once for backend='production', target='amr_system'")
         _check(m_ni.dsl.compiled == [("production", "amr_system")],
                "block 'ni' compiled once for backend='production', target='amr_system'")
-        _check(set(compiled._block_compiled_models) == {"ne", "ni"},
-               "the {block: CompiledModel} table carries both blocks")
-        _check(all(cm.target == "amr_system" for cm in compiled._block_compiled_models.values()),
+        plan = compiled.install_plan
+        _check(set(plan.block_models) == {"ne", "ni"},
+               "the InstallPlan carries both block loaders")
+        _check(all(cm.target == "amr_system" for cm in plan.block_models.values()),
                "every carried CompiledModel targets the AMR system")
-        _check(compiled._target == "amr_system", "amr_system target carried on the handle")
+        _check(plan.target == "amr_system", "amr_system target carried by the InstallPlan")
+        _check(not hasattr(compiled, "_block_compiled_models"),
+               "the retired private block-loader mirror is absent")
     finally:
         _unpatch()
     print("ok test_multi_block_amr_lowers_natively")
@@ -127,10 +137,12 @@ def test_single_block_amr_still_lowers():
         _check(called["hit"] is False, "single-block AMR does NOT call compile_problem")
         _check(model.dsl.compiled == [("production", "amr_system")],
                "the single block compiled for target='amr_system'")
-        _check(set(compiled._block_compiled_models) == {"ne"},
-               "the handle carries the single block's CompiledModel")
-        _check(compiled._layout is not layout and compiled._layout.base is layout.base,
-               "a detached AMR layout is carried on the handle for bind()")
+        plan = compiled.install_plan
+        _check(set(plan.block_models) == {"ne"},
+               "the InstallPlan carries the single block's CompiledModel")
+        _check(plan.layout is not layout and plan.layout.base is not layout.base
+               and plan.layout.base.n == layout.base.n,
+               "a deeply detached AMR layout is carried by the InstallPlan")
     finally:
         _unpatch()
     print("ok test_single_block_amr_still_lowers")

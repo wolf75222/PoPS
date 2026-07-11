@@ -25,6 +25,8 @@ compiled solve is verified against an OFFLINE numpy CG on that SAME wide-stencil
     periodic 5-point system. Asserts max|compiled - offline| <= 1e-6. Self-skips (exit 0) without numpy
     / _pops / install_program / a compiler / a visible Kokkos -- never fakes the engine.
 """
+from typed_program_support import state_refs, typed_state
+
 from pops.params import ConstParam
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
@@ -53,7 +55,7 @@ def _divgrad_program(t, *, name="divgrad", method=None, tol=1e-10, max_iter=200,
     The apply ``out = in - alpha*div(grad(in))`` chains P.gradient (into a 2-component buffer) then
     P.divergence (recovering Lap), so it exercises ctx.divergence inside the matrix-free Krylov loop."""
     P = t.Program(name)
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
 
     def apply(P, out, x):
@@ -68,7 +70,7 @@ def _divgrad_program(t, *, name="divgrad", method=None, tol=1e-10, max_iter=200,
         method = BiCGStab(max_iter=max_iter)  # ADC-535: max_iter is mandatory on the descriptor
     P.set_apply(A, apply)
     phi = P.solve_linear(operator=A, rhs=U, method=method, tol=tol, max_iter=max_iter)
-    P.commit(P.state("U", block="blk").next, phi)
+    P.commit(typed_state(P, "blk", state_name="U").next, phi)
     return P
 
 
@@ -87,9 +89,9 @@ def test_divergence_records_and_validates(t):
 
     from pops.solvers.krylov import BiCGStab
     P.set_apply(A, apply)
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     phi = P.solve_linear(operator=A, rhs=U, method=BiCGStab(max_iter=50), tol=1e-8, max_iter=50)
-    P.commit(P.state("U", block="blk").next, phi)
+    P.commit(typed_state(P, "blk", state_name="U").next, phi)
     assert P.validate() is True, "the div(grad) Program must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
 
@@ -114,7 +116,7 @@ def test_divergence_operand_types(t):
         P.divergence(dd, g, g)
         return x - dd
 
-    U_state = P.state("blk")  # a State is not a scalar_field -> each divergence operand must reject it
+    U_state = typed_state(P, "blk")  # a State is not a scalar_field -> each divergence operand must reject it
     P.set_apply(A, apply)
     assert all(bad), "divergence must reject a non-scalar_field operand (out / fx / fy)"
 
@@ -181,7 +183,7 @@ def test_condensed_schur_macro_lowers(t):
     model1 = _lorentz_model("div_m1")
     P = t.Program("p").bind_operators(model1)
     lt.condensed_schur(
-        P, "blk", alpha=1.0, theta=1.0,
+        P, *state_refs(P, "blk"), alpha=1.0, theta=1.0,
         linear_operator=_linear_handle(model1))
     assert P.validate() is True, "the condensed macro must validate"
     src = P.emit_cpp_program(model=model1)
@@ -193,16 +195,17 @@ def test_condensed_schur_macro_lowers(t):
     model2 = _lorentz_model("div_m2")
     P2 = t.Program("p2").bind_operators(model2)
     lt.condensed_schur(
-        P2, "blk", alpha=1.0, theta=0.5,
+        P2, *state_refs(P2, "blk"), alpha=1.0, theta=0.5,
         linear_operator=_linear_handle(model2))
     assert P2.validate() is True, "condensed_schur(theta != 1) must validate (ADC-427)"
     assert "pops::detail::block_apply_inverse<2>" in P2.emit_cpp_program(model=model2), (
         "theta=0.5 must lower the reconstruct chain (inline block_apply_inverse)")
     # theta out of (0, 1] is still rejected (loud).
     invalid_model = _lorentz_model("div_invalid")
+    invalid = t.Program("p3").bind_operators(invalid_model)
     try:
         lt.condensed_schur(
-            t.Program("p3").bind_operators(invalid_model), "blk", alpha=1.0, theta=1.5,
+            invalid, *state_refs(invalid, "blk"), alpha=1.0, theta=1.5,
             linear_operator=_linear_handle(invalid_model))
     except ValueError as exc:
         assert "theta must be in (0, 1]" in str(exc), str(exc)

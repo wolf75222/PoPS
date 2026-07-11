@@ -281,6 +281,32 @@ class Handle:
             type(self).__name__, self.local_id, self.kind, str(self.owner_path))
 
 
+class StateHandle(Handle):
+    """Registry-issued state identity carrying its authoritative :class:`StateSpace`.
+
+    The space is declaration metadata, not a second identity axis. Carrying it on the handle lets
+    ``Program.state(block, state)`` stay typed without consulting a live Module registry.
+    """
+
+    __slots__ = ("space",)
+
+    def __init__(self, name: Any, *, owner: Any, space: Any, schema_version: int = 1) -> None:
+        from .spaces import StateSpace
+
+        if not isinstance(space, StateSpace):
+            raise TypeError("StateHandle space must be a pops.model.StateSpace")
+        if name != space.name:
+            raise ValueError(
+                "StateHandle name %r must match StateSpace name %r" % (name, space.name))
+        super().__init__(name, kind="state", owner=owner, schema_version=schema_version)
+        object.__setattr__(self, "space", space)
+
+    def inspect(self) -> dict[str, Any]:
+        result = super().inspect()
+        result["space"] = self.space.to_data()
+        return result
+
+
 class ParamHandle(Handle):
     """Immutable identity of one canonical parameter declaration.
 

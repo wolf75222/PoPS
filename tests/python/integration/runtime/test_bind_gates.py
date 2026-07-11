@@ -19,7 +19,7 @@ try:
     import pops
     from pops.codegen.loader import CompiledModel, CompiledProblem
     from pops.model import Module
-    from pops.params import ConstParam, RuntimeParam
+    from pops.params import RuntimeParam
     from pops.params.constraints import Positive
     from pops.runtime._bind_validation import run_bind_gates, loaded_runtime_facts
     from pops import time as adctime
@@ -79,7 +79,7 @@ def test_valid_bind_passes_all_gates():
     """A well-formed install (right shape/dtype, aux supplied, param in domain) passes every gate."""
     print("== a valid install passes all four gates ==")
     cp = _compiled(aux_names=())
-    run_bind_gates(cp, None, _uniform(), {"plasma": np.ones((3, N, N))}, {}, {})
+    run_bind_gates(cp, _uniform(), {"plasma": np.ones((3, N, N))}, {}, {})
     chk(True, "no refusal for a valid install")
 
 
@@ -87,7 +87,7 @@ def test_missing_operator_aux_is_refused():
     print("== a missing operator-required aux is refused ==")
     cp = _compiled(aux_names=("B_z",))
     try:
-        run_bind_gates(cp, None, _uniform(), {"plasma": np.ones((3, N, N))}, {}, {})
+        run_bind_gates(cp, _uniform(), {"plasma": np.ones((3, N, N))}, {}, {})
         chk(False, "should have refused the missing B_z aux")
     except ValueError as exc:
         chk("B_z" in str(exc) and "aux-required-by-operator" in str(exc), "names the missing aux")
@@ -97,7 +97,7 @@ def test_wrong_initial_state_shape_is_refused():
     print("== a wrong-shape initial state is refused ==")
     cp = _compiled(aux_names=())
     try:
-        run_bind_gates(cp, None, _uniform(), {"plasma": np.ones((3, 4, 4))}, {}, {})
+        run_bind_gates(cp, _uniform(), {"plasma": np.ones((3, 4, 4))}, {}, {})
         chk(False, "should have refused the (3,4,4) state on a 8x8 mesh")
     except ValueError as exc:
         chk("initial-state" in str(exc) and "shape" in str(exc), "names the shape mismatch")
@@ -107,7 +107,7 @@ def test_wrong_initial_state_dtype_is_refused():
     print("== a wrong-dtype initial state is refused ==")
     cp = _compiled(aux_names=())
     try:
-        run_bind_gates(cp, None, _uniform(), {"plasma": np.ones((3, N, N), dtype=np.float32)}, {}, {})
+        run_bind_gates(cp, _uniform(), {"plasma": np.ones((3, N, N), dtype=np.float32)}, {}, {})
         chk(False, "should have refused a float32 state (declared precision is double)")
     except ValueError as exc:
         chk("dtype" in str(exc) and "float64" in str(exc), "names the dtype mismatch")
@@ -135,7 +135,7 @@ def test_abi_mismatch_is_refused():
     cp.model.abi_key = "TOTALLY_DIFFERENT_ABI"  # force a definite mismatch vs the loaded runtime
     cp.abi_key = "TOTALLY_DIFFERENT_ABI"
     try:
-        run_bind_gates(cp, None, _uniform(), {"plasma": np.ones((3, N, N))}, {}, {})
+        run_bind_gates(cp, _uniform(), {"plasma": np.ones((3, N, N))}, {}, {})
         chk(False, "should have refused the ABI mismatch")
     except ValueError as exc:
         chk("manifest-abi" in str(exc) and "ABI mismatch" in str(exc), "names the ABI mismatch")
@@ -147,7 +147,7 @@ def test_degraded_handle_is_left_to_native_install():
     class _NoIntrospect:
         so_path = "/tmp/x.so"
 
-    run_bind_gates(_NoIntrospect(), None, _uniform(), {}, {}, {})  # no raise
+    run_bind_gates(_NoIntrospect(), _uniform(), {}, {}, {})  # no raise
     chk(True, "a degraded handle does not raise in the gates")
 
 

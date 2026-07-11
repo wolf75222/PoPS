@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any
 
 from pops.time.program_base import _ProgramConstants
 from pops.time.program_serialization import _ProgramSerialization
-from pops.time.schedule import Schedule
 from pops.time.values import ProgramValue, _Affine
 
 if TYPE_CHECKING:
@@ -62,7 +61,14 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
         node["inputs"] = tuple(canon.get(i, i) for i in node["inputs"])
         # JSON-serialize the attrs dict to a stable string so the whole key is hashable / comparable
         # exactly as the IR hash compares it.
-        return (node["op"], node["vtype"], node["block"], node["inputs"],
+        # Typed block/state identities are canonical JSON mappings, not scalar labels.  Encode both
+        # with the same stable JSON projection as attrs/space before using them in the dict key.  The
+        # state identity is semantically required too: two pure reads from distinct state families in
+        # one block must never become a common subexpression merely because their local IR matches.
+        return (node["op"], node["vtype"],
+                json.dumps(node.get("block"), sort_keys=True, separators=(",", ":")),
+                json.dumps(node.get("state"), sort_keys=True, separators=(",", ":")),
+                node["inputs"],
                 json.dumps(node.get("space"), sort_keys=True, separators=(",", ":")),
                 json.dumps(node.get("field_context"), sort_keys=True, separators=(",", ":")),
                 json.dumps(node["attrs"], sort_keys=True, separators=(",", ":")))
@@ -117,189 +123,32 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
         live = self._live_value_ids()
         return self._rebuild(lambda v: v.id in live)
 
-    def _rebuild(self, keep: Any, alias: Any = None, space_of: Any = None) -> Any:
-        """Clone this Program into a fresh one keeping the flat nodes for which ``keep(v)`` is true,
-        renumbering surviving ids to a contiguous 0.. range in original order. Sub-blocks are cloned
-        wholesale (never filtered). The clone reproduces the IR identity of an equivalent hand-built
-        Program (same serialization), so it is byte-identical when nothing was dropped.
+    def _rebuild(
+        self,
+        keep: Any,
+        alias: Any = None,
+        space_of: Any = None,
+        *,
+        reference_of: Any = None,
+        retain_operator_registries: bool = True,
+        canonical_owner: bool = False,
+    ) -> Any:
+        """Clone and remap this Program through the shared lossless rebuild engine.
 
-        @p alias (optional) maps a DROPPED node id -> the kept representative node id it should be
-        replaced by (the CSE / redundant-solve passes use it to rewire every use of a duplicate onto its
-        survivor). Every reference -- a flat input, an attr-borne ProgramValue / affine ref, a commit target --
-        is resolved THROUGH this alias before id lookup, so a dropped node never leaves a dangling
-        reference. A dropped node MUST have an alias entry (the passes guarantee a representative whose
-        id < the duplicate's, hence already cloned); a kept node maps to itself. Without an alias map
-        the behavior is the historical drop-only rebuild."""
-        out = type(self)(self.name)
-        out.dt = self.dt
-        out._state_spaces = dict(getattr(self, "_state_spaces", {}))
-        out._histories = dict(self._histories)
-        out._histories_ncomp = dict(getattr(self, "_histories_ncomp", {}))
-        out._history_spaces = dict(getattr(self, "_history_spaces", {}))
-        out._history_blocks = dict(getattr(self, "_history_blocks", {}))
-        out._history_state_refs = dict(getattr(self, "_history_state_refs", {}))
-        from pops.time.history_persistence import HistoryPersistence
-        out._history_persistence = {}
-        for name, (depth, policy) in getattr(self, "_history_persistence", {}).items():
-            copied = HistoryPersistence.from_manifest(policy.to_manifest())
-            if hasattr(copied, "freeze"):
-                copied.freeze()
-            out._history_persistence[name] = (depth, copied)
-        out._operator_registries = dict(self._operator_registries)
-        out._default_state_spaces = dict(self._default_state_spaces)
-        out._default_field_spaces = dict(self._default_field_spaces)
-        # ProgramValue deliberately has no hash: equality authors an Equation.  Every rewrite map is
-        # therefore indexed by the stable SSA id, never by a symbolic object (which would otherwise
-        # make dict membership invoke forbidden symbolic equality/truth semantics).
-        idmap = {}  # old SSA id -> new ProgramValue
-        by_id = {v.id: v for v in self._values}
-        for v in self._values:  # sub-block ops too, so an alias to a sub-block-internal id resolves
-            for w in self._subblock_value_refs(v):
-                by_id.setdefault(w.id, w)
-        alias = alias or {}
-        region_map = {0: 0}
-
-        def mapped_region(region: int) -> int:
-            if region not in region_map:
-                region_map[region] = out._next_region
-                out._next_region += 1
-            return region_map[region]
-
-        def rep(v: Any) -> Any:
-            """Follow @p v through the alias chain to the surviving representative ProgramValue (identity for a
-            kept node). The passes only alias onto an EARLIER, kept node, so the chain terminates."""
-            seen = set()
-            while v.id in alias and alias[v.id] != v.id:
-                if v.id in seen:  # defensive: never loop on a malformed alias map
-                    break
-                seen.add(v.id)
-                v = by_id[alias[v.id]]
-            return v
-
-        def clone_block(block: Any, region_hint: Any = None) -> Any:
-            copied = [clone(w) for w in block]
-            regions = {mapped_region(w.region) for w in block}
-            if not regions and region_hint is not None:
-                regions.add(mapped_region(region_hint))
-            if not regions:
-                entry = getattr(self, "_recording_regions", {}).get(id(block))
-                if entry is not None and entry[0] is block:
-                    regions.add(mapped_region(entry[1]))
-            if len(regions) == 1:
-                region = next(iter(regions))
-                if region != 0:
-                    out._recording_regions[id(copied)] = (copied, region)
-            return copied
-
-        def remap(ref: Any) -> Any:
-            if isinstance(ref, ProgramValue):
-                return idmap[rep(ref).id]
-            if isinstance(ref, _Affine):
-                return _Affine([(idmap[rep(v).id], c) for v, c in ref.terms])
-            return ref
-
-        def clone_attrs(v: Any) -> Any:
-            attrs = {}
-            for key, val in v.attrs.items():
-                if key in ("cond_block", "body_block", "apply_block", "residual_block"):
-                    region_key = key.replace("_block", "_region")
-                    attrs[key] = (clone_block(val, v.attrs.get(region_key))
-                                  if val is not None else None)
-                elif key in ("cond_region", "body_region", "apply_region", "residual_region"):
-                    attrs[key] = mapped_region(val)
-                elif key in ("cond", "body", "residual", "iterate", "guess",
-                             "apply_result", "apply_in", "apply_out"):
-                    attrs[key] = remap(val)
-                elif key == "schedule" and val is not None and isinstance(
-                        getattr(val, "params", {}).get("cond"), ProgramValue):
-                    # a when(cond) schedule embeds a predicate ProgramValue in params["cond"]; remap it onto
-                    # the survivor so a CSE-collapsed/renumbered predicate is not left dangling.
-                    attrs[key] = Schedule(val.kind, val.policy,
-                                          **{**val.params, "cond": remap(val.params["cond"])})
-                else:
-                    attrs[key] = val
-            return attrs
-
-        def deps(v: Any) -> Any:
-            """The values v depends on that must be cloned (hence id-assigned) BEFORE v, in their
-            ORIGINAL creation order. A fresh build records the inputs and most sub-blocks before the
-            owning node, BUT a matrix_free_operator is created (its node id assigned) BEFORE
-            ``set_apply`` records its apply sub-block -- the node id precedes the sub-block ids. Ordering
-            every dependency by its original id (ascending) reproduces the build order verbatim for both
-            shapes, so a no-drop clone is byte-identical (same renumbering) rather than reordering the
-            matrix_free_operator node after its own sub-block. Each input is resolved THROUGH the alias
-            map, so a dropped duplicate is replaced by its (already-earlier) representative."""
-            seen = []
-            for inp in v.inputs:
-                seen.append(rep(inp))
-            for key in ("cond_block", "body_block", "apply_block", "residual_block"):
-                block = v.attrs.get(key)
-                if block:
-                    seen.extend(block)
-            # A matrix_free_operator's sub-block ops are created AFTER the node, so they must NOT be
-            # forced ahead of it; an input / control-flow body is created BEFORE. Keep only the deps
-            # whose original id precedes v's (the genuine predecessors) and visit them id-ascending.
-            return sorted((w for w in seen if w.id < v.id), key=lambda w: w.id)
-
-        def clone(v: Any) -> Any:
-            if v.id in idmap:
-                return idmap[v.id]
-            # Assign new ids in ORIGINAL creation order: clone every predecessor (id < v.id) first,
-            # id-ascending, then v, then any sub-block op created AFTER v (e.g. a matrix_free_operator's
-            # apply ops, whose original ids exceed the operator node's). Inputs / attr refs are remapped
-            # through idmap after alias resolution (every referenced surviving value is mappable on its
-            # own clone).
-            for w in deps(v):
-                clone(w)
-            vid = out._next_id
-            out._next_id += 1
-            new_inputs = [idmap[rep(i).id] for i in v.inputs]
-            field_context = v.field_context
-            if field_context is not None:
-                from pops.time.field_context import remap_field_provenance
-                def remap_source(source: Any) -> Any:
-                    if isinstance(source, int) and source in by_id:
-                        return idmap[rep(by_id[source]).id].id
-                    return source
-                field_context = remap_field_provenance(field_context, remap_source)
-            nv = ProgramValue(
-                out,
-                vid,
-                v.vtype,
-                v.op,
-                new_inputs,
-                clone_attrs(v),
-                v.name,
-                v.block,
-                space=v.space if space_of is None else space_of(v),
-                source_location=v.source_location,
-                field_context=field_context,
-                region=mapped_region(v.region),
-                state_ref=v.state_ref,
-            )
-            out._issued_values[id(nv)] = nv
-            idmap[v.id] = nv
-            return nv
-
-        # Clone all surviving flat nodes (and, transitively, their sub-block ops and any later-created
-        # sub-block ops) in ascending original id, so the contiguous renumbering matches the original
-        # build order exactly -- a no-op clone is byte-for-byte identical.
-        kept = sorted((v for v in self._values if keep(v)), key=lambda v: v.id)
-        for v in kept:
-            clone(v)
-        out._values = [idmap[v.id] for v in kept]
-        out._commits = {state_ref: idmap[rep(value).id]
-                        for state_ref, value in self._commits.items()}
-        out._region_imports = {
-            mapped_region(destination): {mapped_region(source) for source in sources}
-            for destination, sources in getattr(self, "_region_imports", {}).items()
-        }
-        if self._dt_bound is not None:
-            sub, result = self._dt_bound
-            cloned_sub = clone_block(sub)
-            out._dt_bound = (cloned_sub, idmap[rep(result).id])
-        self._rebuild_time_handle_tables(out, idmap, rep)
-        return out
+        The method remains the optimization and compiled-boundary hook. ``reference_of`` replaces
+        semantic handles, ``retain_operator_registries=False`` drops authoring registries, and
+        ``canonical_owner=True`` detaches the rebuilt Program from its authoring owner.
+        """
+        from pops.time.program_rebuild import rebuild_program
+        return rebuild_program(
+            self,
+            keep,
+            alias,
+            space_of,
+            reference_of=reference_of,
+            retain_operator_registries=retain_operator_registries,
+            canonical_owner=canonical_owner,
+        )
 
     # --- common-subexpression elimination (Spec 3 s28, ADC-465) ---
     def eliminate_common_subexpressions(self) -> Any:

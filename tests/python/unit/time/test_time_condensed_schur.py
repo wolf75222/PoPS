@@ -54,6 +54,8 @@ The carry is GATED to theta != 1, so theta == 1 keeps the fresh-zero phi path by
 Self-skips (exit 0) without numpy / _pops / install_program / a compiler / a visible Kokkos -- never
 fakes the engine (project policy: no fake pops in tests).
 """
+from typed_program_support import state_refs, typed_state
+
 from pops.params import ConstParam
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
@@ -62,7 +64,7 @@ import sys
 # ADC-427: section B compiles several .so variants (golden, theta sweep, dt-refinement order
 # study); a cold CI compile cache blows the default 300 s process budget (ADC-627 idiom).
 POPS_PROCESS_TIMEOUT = 1200
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime.system import System  # noqa: E402  -- ADC-545 advanced runtime seam
 
 
 def _pops_time():
@@ -94,12 +96,18 @@ def _lorentz_model(name):
     m = Model(name)
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
     cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
-    u = m.primitive("u", mx / rho); v = m.primitive("v", my / rho); p = m.primitive("p", cs2 * rho)
+    u = m.primitive("u", mx / rho)
+    v = m.primitive("v", my / rho)
+    p = m.primitive("p", cs2 * rho)
     m.primitive_vars(rho=rho, u=u, v=v, p=p)
     m.conservative_from([rho, rho * u, rho * v])
     m.flux(x=[mx, mx * u + p, my * u], y=[my, mx * v, my * v + p])
-    cs = sqrt(cs2); m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
-    m.elliptic_rhs(rho); m.aux("grad_x"); m.aux("grad_y"); m.aux("B_z")
+    cs = sqrt(cs2)
+    m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
+    m.elliptic_rhs(rho)
+    m.aux("grad_x")
+    m.aux("grad_y")
+    m.aux("B_z")
     author_electrostatic_lorentz(m)
     return m
 
@@ -114,12 +122,18 @@ def _lorentz_energy_model(name):
     m = Model(name)
     rho, mx, my, E = m.conservative_vars("rho", "mx", "my", "E")
     cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
-    u = m.primitive("u", mx / rho); v = m.primitive("v", my / rho); p = m.primitive("p", cs2 * rho)
+    u = m.primitive("u", mx / rho)
+    v = m.primitive("v", my / rho)
+    p = m.primitive("p", cs2 * rho)
     m.primitive_vars(rho=rho, u=u, v=v, p=p, E=E)
     m.conservative_from([rho, rho * u, rho * v, E])
     m.flux(x=[mx, mx * u + p, my * u, (E + p) * u], y=[my, mx * v, my * v + p, (E + p) * v])
-    cs = sqrt(cs2); m.eigenvalues(x=[u - cs, u, u + cs, u], y=[v - cs, v, v + cs, v])
-    m.elliptic_rhs(rho); m.aux("grad_x"); m.aux("grad_y"); m.aux("B_z")
+    cs = sqrt(cs2)
+    m.eigenvalues(x=[u - cs, u, u + cs, u], y=[v - cs, v, v + cs, v])
+    m.elliptic_rhs(rho)
+    m.aux("grad_x")
+    m.aux("grad_y")
+    m.aux("B_z")
     author_electrostatic_lorentz(m)
     return m
 
@@ -142,7 +156,7 @@ def _bound_program(t, name, *, energy=False):
 # ---- (A) builder ops + macro lowering: pure Python, always runs ----
 def test_apply_laplacian_coeff_operand_types(t):
     P, _, linear = _bound_program(t, "p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
     seen = []
 
@@ -166,7 +180,8 @@ def test_apply_laplacian_coeff_operand_types(t):
 def test_condensed_schur_macro_lowers(t):
     P, model, linear = _bound_program(t, "cs")
     lt.condensed_schur(
-        P, "blk", alpha=_ALPHA, theta=1.0, linear_operator=linear)
+        P, *state_refs(P, "blk"), alpha=_ALPHA, theta=1.0,
+        linear_operator=linear)
     assert P.validate() is True, "the condensed-Schur macro must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
     src = P.emit_cpp_program(model=model)
@@ -189,7 +204,8 @@ def test_condensed_schur_theta_half_lowers(t):
     read mom^n, then commits U^n + (1/theta)(U^{n+theta} - U^n)."""
     P, model, linear = _bound_program(t, "cs")
     lt.condensed_schur(
-        P, "blk", alpha=_ALPHA, theta=0.5, linear_operator=linear)
+        P, *state_refs(P, "blk"), alpha=_ALPHA, theta=0.5,
+        linear_operator=linear)
     assert P.validate() is True, "the theta=0.5 condensed-Schur macro must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
     src = P.emit_cpp_program(model=model)
@@ -211,7 +227,8 @@ def test_condensed_schur_theta_half_emits_phi_carry(t):
     emits NONE of this (a separate no-regression test)."""
     P, model, linear = _bound_program(t, "cs")
     lt.condensed_schur(
-        P, "blk", alpha=_ALPHA, theta=0.5, linear_operator=linear)
+        P, *state_refs(P, "blk"), alpha=_ALPHA, theta=0.5,
+        linear_operator=linear)
     src = P.emit_cpp_program(model=model)
     # A NARROW (1-component) ring declared up front, then read / stored / rotated. The read is the
     # ZERO COLD-START variant: the carry reads phi^n at the TOP of the step (before any store), so its
@@ -233,7 +250,8 @@ def test_condensed_schur_theta_one_emits_no_phi_carry(t):
     start, NO store/rotate -- so an existing theta==1 program's IR / .so cache key is byte-identical."""
     P, model, linear = _bound_program(t, "cs")
     lt.condensed_schur(
-        P, "blk", alpha=_ALPHA, theta=1.0, linear_operator=linear)
+        P, *state_refs(P, "blk"), alpha=_ALPHA, theta=1.0,
+        linear_operator=linear)
     src = P.emit_cpp_program(model=model)
     for frag in ("register_history", "ctx.history(", "store_history", "rotate_histories"):
         assert frag not in src, "theta=1 must NOT emit %r (byte-identical to the historical IR)\n%s" % (
@@ -250,11 +268,13 @@ def test_condensed_schur_theta_one_ir_byte_identical_with_carry_present(t):
         energy = "c_E" in kwargs
         P, model, linear = _bound_program(t, "cs", energy=energy)
         lt.condensed_schur(
-            P, "blk", alpha=_ALPHA, linear_operator=linear, **kwargs)
+            P, *state_refs(P, "blk"), alpha=_ALPHA,
+            linear_operator=linear, **kwargs)
         h1 = P._ir_hash()
         Q = t.Program("cs").bind_operators(model)
         lt.condensed_schur(
-            Q, "blk", alpha=_ALPHA, linear_operator=linear, **kwargs)
+            Q, *state_refs(Q, "blk"), alpha=_ALPHA,
+            linear_operator=linear, **kwargs)
         assert P._ir_hash() == h1 == Q._ir_hash(), "theta==1 IR hash must be deterministic"
         assert "register_history" not in P.emit_cpp_program(model=model), "no carry at theta==1"
 
@@ -264,7 +284,8 @@ def test_condensed_schur_theta_out_of_range_raises(t):
         P, _, linear = _bound_program(t, "p_%s" % str(bad).replace(".", "_"))
         try:
             lt.condensed_schur(
-                P, "blk", alpha=1.0, theta=bad, linear_operator=linear)
+                P, *state_refs(P, "blk"), alpha=1.0, theta=bad,
+                linear_operator=linear)
         except ValueError as exc:
             assert "theta must be in (0, 1]" in str(exc), str(exc)
         else:
@@ -295,7 +316,8 @@ def test_condensed_schur_energy_lowers(t):
     function), ending in the kinetic-increment write stateA(i, j, 3) += ke_new - ke_old."""
     P, model, linear = _bound_program(t, "cs", energy=True)
     lt.condensed_schur(
-        P, "blk", alpha=_ALPHA, theta=0.5, c_E=3, linear_operator=linear)
+        P, *state_refs(P, "blk"), alpha=_ALPHA, theta=0.5,
+        c_E=3, linear_operator=linear)
     assert P.validate() is True
     src = P.emit_cpp_program(model=model)
     assert "stateA(i, j, 3) += ke_new - ke_old;" in src, (
@@ -307,7 +329,8 @@ def test_condensed_schur_theta_one_ir_unchanged(t):
     extrapolation / energy op), so an existing theta==1 program's .so cache key is byte-identical."""
     P, model, linear = _bound_program(t, "cs")
     lt.condensed_schur(
-        P, "blk", alpha=_ALPHA, theta=1.0, linear_operator=linear)
+        P, *state_refs(P, "blk"), alpha=_ALPHA, theta=1.0,
+        linear_operator=linear)
     src = P.emit_cpp_program(model=model)
     assert "ke_new - ke_old" not in src, "theta=1 must NOT emit an energy op"
     # No copy-then-reconstruct: the reconstruction writes U^n in place, the commit is the reconstruction.
@@ -579,7 +602,8 @@ def _run_energy_check(t, pops, np, sqrt, Model, h):
     model = _energy_model("cs_energy_prog", sqrt, Model)
     P = t.Program("cs_energy_step").bind_operators(model)
     lt.condensed_schur(
-        P, "blk", alpha=_ALPHA, theta=theta, c_E=3, tol=_TOL, max_iter=400,
+        P, *state_refs(P, "blk"), alpha=_ALPHA, theta=theta,
+        c_E=3, tol=_TOL, max_iter=400,
         linear_operator=_linear_handle(model))
     try:
         compiled = pops.codegen.compile_problem(model=model, time=P)
@@ -676,7 +700,8 @@ def _run_section_b(t):
         model = schur_model("cs_prog_%s" % tag)
         P = t.Program("cs_step_%s" % tag).bind_operators(model)
         lt.condensed_schur(
-            P, "blk", alpha=_ALPHA, theta=theta, tol=_TOL, max_iter=400,
+            P, *state_refs(P, "blk"), alpha=_ALPHA, theta=theta,
+            tol=_TOL, max_iter=400,
             linear_operator=_linear_handle(model))
         try:
             return pops.codegen.compile_problem(model=model, time=P)

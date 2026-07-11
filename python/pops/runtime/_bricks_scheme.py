@@ -156,6 +156,26 @@ class Spatial:
       geometry, or a staircase/cutcell disc transport mode is active (set_disc_domain / set_geometry_mode).
     """
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        if getattr(self, "_frozen", False) and name != "_frozen":
+            raise RuntimeError(
+                "Spatial is frozen by AuthoringSnapshot: cannot change %r; author a new "
+                "FiniteVolume/Spatial value and recompile" % name
+            )
+        object.__setattr__(self, name, value)
+
+    def __delattr__(self, name: str) -> None:
+        if getattr(self, "_frozen", False):
+            raise RuntimeError(
+                "Spatial is frozen by AuthoringSnapshot: cannot delete %r" % name
+            )
+        object.__delattr__(self, name)
+
+    def freeze(self) -> Any:
+        """Seal the complete spatial selection after the authoring boundary."""
+        object.__setattr__(self, "_frozen", True)
+        return self
+
     def __init__(self, limiter: Any = None, flux: Any = None, recon: Any = None, *, none: bool = False,
                  minmod: bool = False, vanleer: bool = False, weno5: bool = False, primitive: bool = False,
                  positivity_floor: Any = None, wave_speed_cache: bool = False, reconstruction: Any = None,

@@ -1,4 +1,4 @@
-"""ProblemSnapshot participates in the real compiled-Program cache identity."""
+"""AuthoringSnapshot participates in the real compiled-Program cache identity."""
 from __future__ import annotations
 
 import hashlib
@@ -43,6 +43,10 @@ class _Compiled:
         self.problem_hash = metadata["problem_hash"]
         self.cache_key = metadata["cache_key"]
         self._problem_snapshot = metadata.get("problem_snapshot")
+
+    @property
+    def authoring_snapshot(self):
+        return self._problem_snapshot
 
 
 def _install_fake_toolchain(monkeypatch, tmp_path):
@@ -115,8 +119,8 @@ def test_distinct_problem_snapshots_get_distinct_paths_keys_and_matching_sidecar
     assert second.problem_hash == expected_second
     assert first.so_path != second.so_path
     assert first.cache_key != second.cache_key
-    assert first._problem_snapshot is first_snapshot
-    assert second._problem_snapshot is second_snapshot
+    assert first.authoring_snapshot is first_snapshot
+    assert second.authoring_snapshot is second_snapshot
     assert read_cachekey_sidecar(first.so_path)["cache_key"] == first.cache_key
     assert read_cachekey_sidecar(second.so_path)["cache_key"] == second.cache_key
     assert compiled_paths == [first.so_path, second.so_path]
@@ -132,12 +136,12 @@ def test_advanced_compile_problem_without_snapshot_keeps_source_identity(monkeyp
     compiled = drivers.compile_problem(time=program, model=_SnapshotModel())
 
     assert compiled.problem_hash == hashlib.sha256(program.source.encode()).hexdigest()
-    assert compiled._problem_snapshot is None
+    assert compiled.authoring_snapshot is None
 
 
 def test_different_full_snapshots_reuse_one_binary_when_artifact_projection_matches(
         monkeypatch, tmp_path):
-    from pops.problem._snapshot import ProblemSnapshot
+    from pops.problem._snapshot import AuthoringSnapshot
 
     class RuntimeSetting:
         def __init__(self, default):
@@ -159,8 +163,8 @@ def test_different_full_snapshots_reuse_one_binary_when_artifact_projection_matc
             }
 
     drivers, compiled_paths = _install_fake_toolchain(monkeypatch, tmp_path)
-    first_snapshot = ProblemSnapshot({"parameter": RuntimeSetting(1.0)})
-    second_snapshot = ProblemSnapshot({"parameter": RuntimeSetting(2.0)})
+    first_snapshot = AuthoringSnapshot({"parameter": RuntimeSetting(1.0)})
+    second_snapshot = AuthoringSnapshot({"parameter": RuntimeSetting(2.0)})
     assert first_snapshot.hash != second_snapshot.hash
     assert first_snapshot.artifact_hash == second_snapshot.artifact_hash
 
@@ -174,16 +178,16 @@ def test_different_full_snapshots_reuse_one_binary_when_artifact_projection_matc
     assert first.problem_hash == second.problem_hash
     assert first.cache_key == second.cache_key
     assert first.so_path == second.so_path
-    assert first._problem_snapshot is first_snapshot
-    assert second._problem_snapshot is second_snapshot
+    assert first.authoring_snapshot is first_snapshot
+    assert second.authoring_snapshot is second_snapshot
     assert compiled_paths == [first.so_path]
 
 
 def test_compile_authenticates_full_snapshot_before_using_artifact_hash(monkeypatch, tmp_path):
-    from pops.problem._snapshot import ProblemSnapshot
+    from pops.problem._snapshot import AuthoringSnapshot
 
     drivers, compiled_paths = _install_fake_toolchain(monkeypatch, tmp_path)
-    snapshot = ProblemSnapshot({"problem": "strict-full-snapshot"})
+    snapshot = AuthoringSnapshot({"problem": "strict-full-snapshot"})
     object.__setattr__(snapshot, "_hash", "a" * 64)
 
     with pytest.raises(ValueError, match="canonical payload"):

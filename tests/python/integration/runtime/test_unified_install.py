@@ -24,10 +24,12 @@ try:
     import numpy as np
 
     import pops
+    from pops.codegen._plans import InstallBlock, InstallPlan
     from pops.codegen.loader import CompiledModel
     from pops.ir.ops import sqrt
     from pops.physics.facade import Model
     from pops.params import ConstParam, RuntimeParam
+    from pops.problem._snapshot import AuthoringSnapshot
     from pops import time as adctime
     from pops.runtime.system import System  # ADC-545 advanced runtime seam
 except Exception as exc:  # noqa: BLE001
@@ -48,6 +50,41 @@ def _fake_compiled(*, hllc=False, roe=False, prim_names=("rho", "u", "v"), wave_
         prim_names=list(prim_names), n_vars=3, gamma=None, n_aux=3, params=params or {},
         caps={}, abi_key="", model_hash="", cxx="c++", std="23",
         hllc=hllc, roe=roe, wave_speeds=wave_speeds)
+
+
+def _attach_install_plan(compiled, block_model, *, spatial=None, bind_schema=None,
+                         has_program=True):
+    """Attach the same immutable block/runtime contract produced by public ``pops.compile``."""
+    snapshot = AuthoringSnapshot({
+        "kind": "unified-install-integration",
+        "block": "plasma",
+        "model_hash": block_model.model_hash,
+        "has_program": bool(has_program),
+    })
+    plan = InstallPlan(
+        snapshot_hash=snapshot.hash,
+        target="system",
+        layout=None,
+        blocks=(InstallBlock("plasma", block_model, spatial),),
+        bind_schema=bind_schema,
+        field_solvers={},
+        outputs=(),
+        diagnostics=(),
+        has_program=has_program,
+    )
+    if compiled is not None:
+        compiled.install_plan = plan
+        compiled._problem_snapshot = snapshot
+        compiled.bind_schema = bind_schema
+    return plan
+
+
+def _instances_from_plan(plan, initial, *, time=None):
+    """Materialize fresh runtime inputs without reconstructing anything from ``compiled.model``."""
+    instances = plan.assemble_instances({"plasma": initial})
+    if time is not None:
+        instances["plasma"]["time"] = time
+    return instances
 
 
 def test_lower_spatial_accepts_runtime_and_catalog():
@@ -252,6 +289,7 @@ def test_install_end_to_end_kokkos():
     m = _lorentz_model()
     try:
         compiled = pops.codegen.compile_problem(model=m, time=_lie_program())
+        block_model = m.compile(backend="production", target="system")
     except RuntimeError as exc:
         print("skip test_install_end_to_end_kokkos (no Kokkos to build the .so: %s)"
               % str(exc)[:120])
@@ -261,15 +299,16 @@ def test_install_end_to_end_kokkos():
     xx, yy = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * xx) * np.cos(2 * np.pi * yy)
     u0 = np.stack([rho, 0.4 * rho, -0.2 * rho])
+    spatial = pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov())
+    plan = _attach_install_plan(compiled, block_model, spatial=spatial)
 
     # Negative: install WITHOUT aux B_z -> section-24 aux requirement raised at install_program.
     sim_missing = System(n=N, L=1.0, periodic=True)
     try:
         sim_missing._install_compiled(
             compiled,
-            instances={"plasma": {"state": "U", "initial": u0,
-                                  "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                                  "time": pops.Explicit(method="euler")}},
+            instances=_instances_from_plan(
+                plan, u0, time=pops.Explicit(method="euler")),
             solvers={"phi": pops.fields.catalog.GeometricMG()})
         raise AssertionError("MISMATCH: unified install accepted a simulation missing B_z")
     except RuntimeError as exc:
@@ -281,9 +320,8 @@ def test_install_end_to_end_kokkos():
     sim_ok = System(n=N, L=1.0, periodic=True)
     sim_ok._install_compiled(
         compiled,
-        instances={"plasma": {"state": "U", "initial": u0,
-                              "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                              "time": pops.Explicit(method="euler")}},
+        instances=_instances_from_plan(
+            plan, u0, time=pops.Explicit(method="euler")),
         aux={"B_z": 3.0 * np.ones(N * N)},
         solvers={"phi": pops.fields.catalog.GeometricMG()})
     assert "plasma" in sim_ok.block_names(), "instance bound by name"
@@ -291,9 +329,11 @@ def test_install_end_to_end_kokkos():
 
 
 def _iso_runtime_model(name="adc466_rt_model", *, with_handle=False):
-    """An isothermal fluid with a DECLARED RUNTIME param cs2 (sound speed^2), no required aux. install
-    resolves a runtime-param Model via AOT (production/native FREEZES runtime params; cf.
-    System._resolve_instance_model), so set_block_params can change cs2 at runtime."""
+    """An isothermal fluid with a declared runtime ``cs2`` parameter and no required aux.
+
+    Compilation freezes its ABI slot into ``CompiledModel.runtime_param_names`` so install can route
+    values without retaining this authoring object.
+    """
     m = Model(name)
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
     cs2_param = m.param(RuntimeParam("cs2", default=0.5))
@@ -311,19 +351,17 @@ def _iso_runtime_model(name="adc466_rt_model", *, with_handle=False):
 
 
 def test_install_routes_runtime_param_kokkos():
-    """End-to-end (Kokkos-gated): the HEADLINE unified-install path -- compile_problem(model=<Model
-    declaring a runtime param>) + install(params={...}) with NO explicit instance model and the
-    default SSPRK2 time -- routes the param to set_block_params on the real block. install resolves a
-    runtime-param Model via AOT (production freezes runtime params; cf. _resolve_instance_model),
-    so the param is settable; the pre-fix router (reading the raw Model's absent
-    runtime_param_names) raised 'declared by no instance' here. Self-skips without a compiler / Kokkos
-    (mirrors test_install_end_to_end_kokkos)."""
+    """End-to-end (Kokkos-gated): the install path carries a separately compiled block loader in
+    ``InstallPlan`` and routes ``params={...}`` to ``set_block_params`` on that block. Bind consumes
+    detached ``CompiledModel`` metadata directly; it neither reads ``compiled.model`` nor compiles
+    the authoring model. Self-skips without a compiler / Kokkos."""
     if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
         print("skip test_install_routes_runtime_param_kokkos (_pops lacks install_program; rebuild _pops)")
         return
     m, cs2_param = _iso_runtime_model(with_handle=True)
     try:
-        compiled = pops.codegen.compile_problem(model=m, time=_lie_program())  # compiled.model is the raw Model
+        compiled = pops.codegen.compile_problem(model=m, time=_lie_program())
+        block_model = m.compile(backend="aot", target="system")
     except RuntimeError as exc:
         print("skip test_install_routes_runtime_param_kokkos (no Kokkos to build the .so: %s)"
               % str(exc)[:120])
@@ -334,26 +372,25 @@ def test_install_routes_runtime_param_kokkos():
 
     problem = Problem(name="adc466-runtime")
     block = problem.add_block("plasma", m)
-    compiled.bind_schema = BindSchema.from_problem(problem)
-    resolved_cs2 = compiled.bind_schema.resolve({block[cs2_param]: 1.0})
+    bind_schema = BindSchema.from_problem(problem)
+    resolved_cs2 = bind_schema.resolve({block[cs2_param]: 1.0})
 
     x = (np.arange(N) + 0.5) / N
     xx, yy = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * xx) * np.cos(2 * np.pi * yy)
     u0 = np.stack([rho, np.zeros_like(rho), np.zeros_like(rho)])  # u=0 -> momentum residual ~ cs2*rho
+    spatial = pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov())
+    plan = _attach_install_plan(
+        compiled, block_model, spatial=spatial, bind_schema=bind_schema)
 
     sim = System(n=N, L=1.0, periodic=True)
     sim._install_compiled(
         compiled,
-        # No "model" key -> install uses compiled.model (the raw Model) and AUTO-resolves it via
-        # AOT (it declares a runtime param); the default pops.Explicit() == SSPRK2 is AOT-compatible.
-        instances={"plasma": {"state": "U", "initial": u0,
-                              "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                              "time": pops.Explicit()}},
+        instances=_instances_from_plan(plan, u0, time=pops.Explicit()),
         params=resolved_cs2,
         solvers={"phi": pops.fields.catalog.GeometricMG()})
-    assert "plasma" in sim.block_names(), "instance bound by name (no 'declared by no instance' raise)"
-    print("OK  headline install(params=) routes a runtime param (raw Model auto-resolved via AOT)")
+    assert "plasma" in sim.block_names(), "InstallPlan instance bound by name"
+    print("OK  headline install(params=) routes a runtime param from detached metadata")
 
     # The routed param is LIVE on the block: with u=0 the momentum residual is -div(cs2*rho), so cs2
     # 1 -> 4 scales it x4 -- proof set_block_params reached the real block (P7-b).
@@ -373,9 +410,8 @@ def test_install_routes_runtime_param_kokkos():
     try:
         sim_euler._install_compiled(
             compiled,
-            instances={"plasma": {"state": "U", "initial": u0,
-                                  "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                                  "time": pops.Explicit(method="euler")}},
+            instances=_instances_from_plan(
+                plan, u0, time=pops.Explicit(method="euler")),
             params=resolved_cs2,
             solvers={"phi": pops.fields.catalog.GeometricMG()})
         raise AssertionError("MISMATCH: a runtime-param (AOT) block should reject euler")
@@ -423,10 +459,11 @@ def test_install_native_cadence_rejected():
 
 
 def test_install_native_end_to_end_kokkos():
-    """install(compiled=None, ...) builds a NATIVE sim (no compiled Program): each instance carries
-    its own native model + native time, install_program is skipped, the native advance loop steps it.
-    Bit-parity vs the manual add_equation/set_*/set_state sequence (the pre-amendment native path).
-    Needs a compiler + Kokkos -> ROMEO / CI-Kokkos."""
+    """A no-Program install still consumes a detached block ``CompiledModel`` from ``InstallPlan``.
+
+    ``install_program`` is skipped and the native advance loop steps the installed loader. The result
+    remains bit-identical to the corresponding low-level ``add_equation`` sequence.
+    """
     if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
         print("skip test_install_native_end_to_end_kokkos (_pops lacks install_program; rebuild _pops)")
         return
@@ -440,28 +477,35 @@ def test_install_native_end_to_end_kokkos():
     def _fv():
         return pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov())
 
-    # NATIVE via the unified entry: compiled=None, the instance carries the native model + time.
+    try:
+        block_model = m.compile(backend="production", target="system")
+    except RuntimeError as exc:
+        print("skip test_install_native_end_to_end_kokkos (no Kokkos to build the block loader: %s)"
+              % str(exc)[:120])
+        return
+    plan = _attach_install_plan(
+        None, block_model, spatial=_fv(), has_program=False)
+
+    # No whole-system Program: the instance still comes from an immutable compiled block plan.
     sim_install = System(n=N, L=1.0, periodic=True)
     try:
         sim_install._install_compiled(
             None,
-            instances={"plasma": {"model": m, "initial": u0, "spatial": _fv(),
-                                  "time": pops.Explicit(method="euler")}},
+            instances=_instances_from_plan(
+                plan, u0, time=pops.Explicit(method="euler")),
             aux={"B_z": bz},
             solvers={"phi": pops.fields.catalog.GeometricMG()})
     except RuntimeError as exc:
         print("skip test_install_native_end_to_end_kokkos (no Kokkos to build the native block: %s)"
               % str(exc)[:120])
         return
-    assert "plasma" in sim_install.block_names(), "native install bound the instance by name"
+    assert "plasma" in sim_install.block_names(), "InstallPlan bound the instance by name"
 
-    # MANUAL native path (the pre-amendment sequence): same lower-layer calls, no install_program.
-    # add_equation needs a resolved model (ModelSpec/CompiledModel), the same resolution install does
-    # internally via _resolve_instance_model -- so both paths add the SAME native block.
+    # Manual low-level path: the exact same detached loader, no authoring model reconstruction.
     sim_manual = System(n=N, L=1.0, periodic=True)
     sim_manual.set_poisson(solver="geometric_mg")
-    resolved = sim_manual._resolve_instance_model(m)
-    sim_manual.add_equation("plasma", resolved, spatial=_fv(), time=pops.Explicit(method="euler"))
+    sim_manual.add_equation(
+        "plasma", block_model, spatial=_fv(), time=pops.Explicit(method="euler"))
     sim_manual.set_magnetic_field(bz)
     sim_manual.set_state("plasma", u0)
 
@@ -472,7 +516,7 @@ def test_install_native_end_to_end_kokkos():
     b = np.array(sim_manual.get_state("plasma"))
     assert np.array_equal(a, b), "native install != manual add_equation (max|d|=%.3e)" % \
         float(np.max(np.abs(a - b)))
-    print("OK  native install == manual add_equation sequence (bit-identical after run)")
+    print("OK  InstallPlan block == manual CompiledModel sequence (bit-identical after run)")
 
 
 def main():

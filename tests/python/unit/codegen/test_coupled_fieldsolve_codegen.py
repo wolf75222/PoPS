@@ -51,13 +51,16 @@ def coupled_program(t, name, blocks):
     """An N-block Forward-Euler program with ONE simultaneous coupled field solve over @p blocks: the
     shared aux is re-filled from all blocks' stage states at once, then each block advances
     U_blk1 = U_blk + dt*rhs(U_blk, fields) with the default/composite source (no model needed)."""
+    from typed_program_support import typed_state
+
     P = t.Program(name)
     dt = P.dt
-    states = [P.state(b) for b in blocks]
+    states = [typed_state(P, b) for b in blocks]
     f = P.solve_fields_from_blocks(states)  # SIMULTANEOUS coupled solve over every block at once
     for b, U in zip(blocks, states, strict=True):
         R = P._rhs_legacy(state=U, fields=f, sources=["default"])
-        P.commit(P.state("U", block=b).next, P.linear_combine(b + "_next", U + dt * R))
+        P.commit(typed_state(P, b, state_name="U").next,
+                 P.linear_combine(b + "_next", U + dt * R))
     return P
 
 

@@ -10,9 +10,9 @@ other mixins' methods) and ``self._s``.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
-from pops._bootstrap import ModelSpec
 from pops.runtime._install_param_routing import route_block_params, route_program_params
 from pops.runtime.bricks import Spatial
 
@@ -66,19 +66,19 @@ class _SystemUnifiedInstall(_System):
         install-time validation (section 24) sees a fully-configured simulation.
 
         install() is the ONE entry for BOTH runtime modes (Spec 4 amendment): a COMPILED-program sim
-        (pass the compile_problem(...) handle as ``compiled``) and a NATIVE sim (``compiled=None``;
-        each instance carries its own native model + native time policy, no compiled .so).
+        (pass the compiled Program handle as ``compiled``) and a per-block native sim
+        (``compiled=None``; each InstallPlan instance still carries a detached CompiledModel).
 
         @param compiled the compiled problem handle (compile_problem(...) result) carrying ``so_path``,
             installed via install_program after every instance/solver/aux is wired. Pass ``None`` for a
-            NATIVE sim: no Program is installed; each instance must supply its own native ``"model"``
-            and (optionally) ``"time"`` policy, and the native per-block advance loop drives stepping.
-        @param instances dict {name: {"initial": array, "spatial": <brick>, "model": <pops.Model>,
+            native per-block sim: no Program is installed; each instance must still supply its own
+            InstallPlan ``CompiledModel`` and optional ``"time"`` policy.
+        @param instances dict {name: {"initial": array, "spatial": <brick>, "model": <CompiledModel>,
             "time": <pops.Explicit/IMEX>}}. The block is bound by the dict KEY @p name (Spec criterion
             23), not a "state" field. Each entry adds the named block (add_equation), sets its
             "initial" state (if given) and lowers the "spatial" brick to the add_equation spatial args.
-            The block model is the per-instance ``"model"`` if given, else ``compiled`` (single-
-            instance case). ``spatial`` is an pops.FiniteVolume(...) / pops.Spatial(...) OR an
+            The block model is always the per-instance ``"model"`` from InstallPlan. ``spatial`` is
+            an pops.FiniteVolume(...) / pops.Spatial(...) OR an
             pops.numerics.spatial.FiniteVolume(...) descriptor.
         @param params complete mapping from canonical, block-qualified ParamHandle values to their
             resolved runtime values. BindSchema has already applied defaults and derived values.
@@ -122,12 +122,9 @@ class _SystemUnifiedInstall(_System):
             self._install_solver(field, solver_brick, declared_fields)
 
         # (2) INSTANCES: add each named block (binds the Program block of that name, criterion 23),
-        # lower its spatial brick and set its initial state. The block model is the per-instance "model"
-        # if given, else the PHYSICAL model on the handle (not the handle, which is the step-5 .so).
-        # COMPILED: a compile_problem(...) handle with a .so_path time Program. NATIVE: compiled is None
-        # (each instance carries its own model + time policy, step 5 skipped). Validate the handle first.
+        # lower its spatial brick and set its initial state. Every instance comes from InstallPlan and
+        # carries its own detached CompiledModel; bind never consults compiled.model or a PDE builder.
         so_path = None
-        compiled_model = None
         if compiled is not None:
             so_path = getattr(compiled, "so_path", None)
             if so_path is None:
@@ -135,18 +132,16 @@ class _SystemUnifiedInstall(_System):
                     "install: compiled handle has no .so_path (got %r); pass a compile_problem(...) "
                     "result, or compiled=None for a native sim (each instance carries its own native "
                     "model)." % type(compiled).__name__)
-            compiled_model = getattr(compiled, "model", None)
         resolved_models = {}  # instance name -> RESOLVED (CompiledModel), reused by the params step
         for name, spec in instances.items():
             if not isinstance(spec, dict):
                 raise TypeError("install: instances[%r] must be a dict (initial/spatial/time/model); "
                                 "got %r" % (name, type(spec).__name__))
-            model = spec.get("model", compiled_model)
+            model = spec.get("model")
             if model is None:
                 raise ValueError(
-                    "install: instance %r has no block model -- supply instances[%r]['model'] "
-                    "(an pops.Model(...) / CompiledModel), or pass a compiled handle that carries one "
-                    "(compile_problem(model=...))." % (name, name))
+                    "install: instance %r has no CompiledModel from InstallPlan; rebuild the "
+                    "Problem with pops.compile(...) before binding" % name)
             model = self._resolve_instance_model(model)
             resolved_models[name] = model
             spatial = self._lower_spatial(spec.get("spatial"))
@@ -270,7 +265,7 @@ class _SystemUnifiedInstall(_System):
         # to the canonical Spatial tokens directly (Spatial._from_tokens bypasses the public typed-
         # descriptor guard, which the runtime FiniteVolume now enforces -- Spec 5 sec.7).
         opts = getattr(spatial, "options", None)
-        if isinstance(opts, dict):
+        if isinstance(opts, Mapping):
             limiter = opts.get("reconstruction", opts.get("limiter", "minmod"))
             riemann = opts.get("riemann", opts.get("flux", "rusanov"))
             variables = opts.get("variables", opts.get("recon", "conservative"))
@@ -283,27 +278,19 @@ class _SystemUnifiedInstall(_System):
                         % type(spatial).__name__)
 
     def _resolve_instance_model(self, model: Any) -> Any:
-        """Resolve an instance's block model to something add_equation accepts. A ModelSpec
-        (pops.Model(...)) or a dsl.CompiledModel passes through unchanged. A dsl.Model (the PDE
-        builder, e.g. carried by compile_problem(model=...)) is compiled to a CompiledModel so the
-        block is added on the real System context.
+        """Accept only a runtime-ready model emitted into ``InstallPlan``.
 
-        Backend choice (P7-b): a dsl.Model declaring RUNTIME params is compiled via AOT, because the
-        production/native backend FREEZES runtime params at their declaration value (so
-        install(params=...) -> set_block_params would raise 'block ... has no runtime parameter'); a
-        const-only model keeps the native production path (no .so dlopen). The AOT block gates its OWN
-        time integrator to SSPRK2 + backward-Euler, harmless here (the compiled time Program drives the
-        step). A runtime-param instance must use an AOT-compatible ``time`` (Explicit()==SSPRK2 fine)."""
-        # Late imports (the codegen/physics modules import this package: avoid the cycle).
+        Compiling a PDE builder during bind made the runtime a second compiler and reintroduced live
+        authoring authority. Public ``pops.compile`` now builds every block loader up front.
+        """
         from pops.codegen.loader import CompiledModel
-        from pops.physics.facade import Model
-        if isinstance(model, (ModelSpec, CompiledModel)):
+        if isinstance(model, CompiledModel):
             return model
-        if isinstance(model, Model):
-            has_runtime = any(getattr(p, "kind", "const") == "runtime"
-                              for p in model.params.values())
-            return model.compile(backend="aot" if has_runtime else "production")
-        return model  # unknown -> let add_equation raise its own clear error
+        raise TypeError(
+            "install: instance model must be a detached CompiledModel from InstallPlan, got %s; "
+            "compile the Problem before binding"
+            % type(model).__name__
+        )
 
     def _validate_riemann_capability(self, model: Any, spatial: Any) -> Any:
         """Section 24 capability check: reject the selected Riemann flux when a compiled model does
@@ -370,7 +357,7 @@ class _SystemUnifiedInstall(_System):
         so only a genuine dict is read here -- never the method object (the pre-613 code read the
         bound method by mistake, so no typed knob ever flowed)."""
         opts = getattr(solver_brick, "options", None)
-        return opts if isinstance(opts, dict) else {}
+        return dict(opts) if isinstance(opts, Mapping) else {}
 
     @staticmethod
     def _solver_mg_options(solver_brick: Any) -> Any:
@@ -383,31 +370,33 @@ class _SystemUnifiedInstall(_System):
         mg_fn = getattr(solver_brick, "mg_options", None)
         if callable(mg_fn):
             resolved = mg_fn()
-            if isinstance(resolved, dict):
-                return resolved
+            if isinstance(resolved, Mapping):
+                return dict(resolved)
         return {}
 
     @staticmethod
     def _declared_elliptic_fields(compiled: Any, instances: Any) -> Any:
-        """Collect the NAMED elliptic fields declared by the compiled handle's model and the
-        per-instance models (C1-System). Reads each model's declared names WITHOUT compiling: a
-        CompiledModel exposes ``elliptic_field_names``; a raw physics/dsl Model exposes the
-        ``_elliptic_fields`` mapping. Returns a set (empty when no model declares a named field)."""
+        """Collect named elliptic fields exclusively from InstallPlan CompiledModel metadata."""
+        del compiled  # a whole-program handle is never a field-declaration authority
+        from pops.codegen.loader import CompiledModel
+
         names = set()
-
-        def _names_of(model):
-            if model is None:
-                return ()
-            explicit = getattr(model, "elliptic_field_names", None)
-            if explicit is not None:
-                return list(explicit)
-            raw = getattr(model, "_elliptic_fields", None)
-            return list(raw) if raw else ()
-
-        names.update(_names_of(getattr(compiled, "model", None)))
-        for spec in (instances or {}).values():
-            if isinstance(spec, dict):
-                names.update(_names_of(spec.get("model")))
+        for block_name, spec in (instances or {}).items():
+            if not isinstance(spec, dict):
+                raise TypeError("install: instances[%r] must be a dict" % block_name)
+            model = spec.get("model")
+            if not isinstance(model, CompiledModel):
+                raise TypeError(
+                    "install: instances[%r] must carry a detached CompiledModel from InstallPlan"
+                    % block_name
+                )
+            declared = getattr(model, "elliptic_field_names", None)
+            if declared is None:
+                raise ValueError(
+                    "install: CompiledModel for block %r lacks elliptic_field_names metadata; "
+                    "rebuild it with pops.compile(...)" % block_name
+                )
+            names.update(declared)
         return names
 
     @staticmethod

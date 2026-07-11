@@ -12,7 +12,7 @@ path (the ``CompiledModel`` IS its own physical model):
   * ``arguments()`` reports the block instance / params / named aux and the runtime layout, with
     ``layout == "amr"`` driven by the handle's ``target='amr_system'``;
   * ``estimate_memory(mesh)`` is a pure FORMULA (state / aux / halo + AMR patch budget) that defaults
-    the AMR layout from the handle's carried ``_layout`` and NEVER touches Program-only scratch (the
+    the AMR layout from the handle's carried ``InstallPlan`` and NEVER touches Program-only scratch (the
     no-Program branch is guarded), so the seam matches the ``CompiledProblem`` counterpart on the
     Uniform route.
 
@@ -27,16 +27,17 @@ import pytest
 pops = pytest.importorskip("pops", exc_type=ImportError)
 
 from pops.codegen.loader import CompiledModel  # noqa: E402
+from pops.codegen._plans import InstallBlock, InstallPlan  # noqa: E402
 from pops.mesh import CartesianMesh  # noqa: E402
 from pops.mesh.layouts import AMR, Uniform  # noqa: E402
 from pops.params import ConstParam, RuntimeParam  # noqa: E402
+from pops.problem._snapshot import AuthoringSnapshot  # noqa: E402
 
 
 def _amr_handle(*, n_aux=2, mpi=True, runtime_param=True):
     """A stub AMR-route ``CompiledModel`` (target='amr_system', no ``.so``): the handle the AMR route
     returns. Carries three conservative components, named aux, a runtime + a const param, and the
-    ``caps`` the ``pops.compile`` AMR route produces. ``_layout`` is attached exactly as
-    ``_orchestration_amr._compile_amr`` attaches it."""
+    ``caps`` the ``pops.compile`` AMR route produces. The layout lives only in InstallPlan."""
     params = {}
     if runtime_param:
         params["alpha"] = RuntimeParam("alpha", default=1.0)
@@ -48,7 +49,20 @@ def _amr_handle(*, n_aux=2, mpi=True, runtime_param=True):
         prim_names=["rho", "mx", "my"], n_vars=3, gamma=1.4, n_aux=n_aux, params=params,
         caps={"cpu": True, "amr": True, "mpi": mpi}, abi_key="k", model_hash="h", cxx="c++",
         std="c++23", target="amr_system", aux_extra_names=aux)
-    handle._layout = AMR(base=CartesianMesh(n=64, periodic=True), max_levels=2, ratio=2)
+    layout = AMR(base=CartesianMesh(n=64, periodic=True), max_levels=2, ratio=2)
+    snapshot = AuthoringSnapshot({"kind": "amr-route-introspection-stub"})
+    handle.install_plan = InstallPlan(
+        snapshot_hash=snapshot.hash,
+        target="amr_system",
+        layout=layout,
+        blocks=(InstallBlock("block", handle, None),),
+        bind_schema=None,
+        field_solvers={},
+        outputs=(),
+        diagnostics=(),
+        has_program=False,
+    )
+    handle._problem_snapshot = snapshot
     return handle
 
 
@@ -97,7 +111,7 @@ def test_estimate_memory_defaults_the_amr_layout_from_the_carried_layout():
     handle = _amr_handle()
     mesh = CartesianMesh(n=64, L=1.0, periodic=True)
     # A BARE estimate_memory(mesh) auto-reports the AMR hierarchy (the handle carries the AMR
-    # _layout); the caller need not re-pass layout=AMR(...).
+    # InstallPlan); the caller need not re-pass layout=AMR(...).
     est = handle.estimate_memory(mesh)
     assert est.layout == "amr"
     cats = est.categories

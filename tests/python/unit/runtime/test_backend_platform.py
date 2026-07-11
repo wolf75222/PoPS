@@ -24,6 +24,8 @@ effect of ``import pops`` -- platform availability reads its build flags -- but 
 or run, and no compiler is invoked).
 """
 
+from pathlib import Path
+
 import pytest
 
 pops = pytest.importorskip("pops")
@@ -33,6 +35,9 @@ from pops.codegen.backends import BACKEND_DESCRIPTORS, _Backend  # noqa: E402
 from pops.descriptors import Availability, Descriptor  # noqa: E402
 from pops.runtime.platforms import (  # noqa: E402
     KokkosCuda, KokkosHIP, KokkosOpenMP, KokkosSerial, MPI)
+
+
+INCLUDE = str(Path(__file__).resolve().parents[4] / "include")
 
 
 # --- backend descriptors lower to the legacy string -------------------------------------------
@@ -137,7 +142,7 @@ def test_compile_model_lowers_typed_backend_past_unknown_guard():
             pass
 
     with pytest.raises(AttributeError):
-        compile_model(_FakeModel(), backend=JIT())
+        compile_model(_FakeModel(), backend=JIT(), include=INCLUDE)
     # A genuinely unknown string still raises the unknown-backend ValueError (additive, not lossy).
     with pytest.raises(ValueError, match="backend 'nope' unknown"):
         compile_model(_FakeModel(), backend="nope")
@@ -248,7 +253,8 @@ def test_unavailable_platform_explains_missing_build_flag():
     # On a build that lacks a flag, available() is "no"/"partial" and NAMES the missing flag +
     # an alternative. The exact verdict depends on the loaded _pops build, so assert the contract,
     # not a fixed verdict: a non-yes status must carry a reason and either missing or alternatives.
-    has_mpi = getattr(pops._pops, "__has_mpi__", None)
+    import importlib
+    has_mpi = getattr(importlib.import_module("pops._pops"), "__has_mpi__", None)
     mpi_status = MPI().available()
     if has_mpi is False:
         assert mpi_status.status == "no"
@@ -308,7 +314,8 @@ def test_unavailable_platform_refuses_before_compile_with_reason():
     # An unavailable device is refused through the EXPLAINABLE Availability BEFORE any compile: the
     # status is not "yes", it carries a reason, and it names the missing build flag or an alternative
     # (never a bare bool, never a silent fallback). MPI on a non-MPI build is the deterministic case.
-    has_mpi = getattr(pops._pops, "__has_mpi__", None)
+    import importlib
+    has_mpi = getattr(importlib.import_module("pops._pops"), "__has_mpi__", None)
     status = MPI().available()
     assert isinstance(status, Availability)
     if has_mpi is False:

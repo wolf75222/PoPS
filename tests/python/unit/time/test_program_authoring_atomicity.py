@@ -1,6 +1,8 @@
 """Failed Program authoring calls leave no SSA, identity or region residue."""
 from __future__ import annotations
 
+from typed_program_support import typed_state
+
 import pytest
 
 from pops.math import unknown
@@ -36,7 +38,7 @@ def _authoring_identity(program: Program) -> tuple[object, ...]:
 
 def test_board_solve_rolls_back_materialized_affine_rhs_on_operator_failure():
     program = Program("atomic_solve")
-    state = program.state("plasma")
+    state = typed_state(program, "plasma")
     equation = (program.I @ unknown("candidate")) == state + state
     before = _authoring_identity(program)
 
@@ -54,7 +56,7 @@ def test_dt_bound_builder_exception_restores_ids_values_regions_and_metadata():
     before = _authoring_identity(program)
 
     def fail_after_authoring(prog, cfl):
-        leaked.extend((cfl, prog.hmin(), prog.state("temporary_block")))
+        leaked.extend((cfl, prog.hmin(), typed_state(prog, "temporary_block")))
         raise _BuilderFailure("dt bound failed")
 
     with pytest.raises(_BuilderFailure, match="dt bound failed"):
@@ -72,14 +74,14 @@ def test_dt_bound_post_validation_failure_is_atomic_too():
     before = _authoring_identity(program)
 
     with pytest.raises(ValueError, match="Scalar"):
-        program.set_dt_bound(lambda prog, _cfl: prog.state("not_a_bound"))
+        program.set_dt_bound(lambda prog, _cfl: typed_state(prog, "not_a_bound"))
 
     assert _authoring_identity(program) == before
 
 
 def test_check_invariant_validates_tolerance_before_creating_drift_nodes():
     program = Program("atomic_diagnostic")
-    state = program.state("plasma")
+    state = typed_state(program, "plasma")
     before_value = program.sum(state)
     after_value = program.sum(state)
     before = _authoring_identity(program)
@@ -93,7 +95,7 @@ def test_check_invariant_validates_tolerance_before_creating_drift_nodes():
 
 def test_record_rolls_back_a_builder_exception_exactly():
     program = Program("atomic_record")
-    state = program.state("plasma")
+    state = typed_state(program, "plasma")
     leaked = []
     before = _authoring_identity(program)
 
@@ -110,7 +112,7 @@ def test_record_rolls_back_a_builder_exception_exactly():
 
 def test_while_body_failure_rolls_back_successful_condition_recording():
     program = Program("atomic_while")
-    state = program.state("plasma")
+    state = typed_state(program, "plasma")
     leaked = []
     before = _authoring_identity(program)
 
@@ -131,7 +133,7 @@ def test_while_body_failure_rolls_back_successful_condition_recording():
 
 def test_control_flow_return_validation_failure_rolls_back_recorded_body():
     program = Program("atomic_range")
-    state = program.state("plasma")
+    state = typed_state(program, "plasma")
     before = _authoring_identity(program)
 
     with pytest.raises(ValueError, match="next-iteration State"):
@@ -142,7 +144,7 @@ def test_control_flow_return_validation_failure_rolls_back_recorded_body():
 
 def test_step_builder_failure_is_atomic():
     program = Program("atomic_step")
-    state = program.state("plasma")
+    state = typed_state(program, "plasma")
     before = _authoring_identity(program)
 
     def fail(prog):
@@ -157,7 +159,7 @@ def test_step_builder_failure_is_atomic():
 
 def test_local_nonlinear_callback_failure_rolls_back_and_retry_reuses_ids():
     program = Program("atomic_local_nonlinear")
-    initial = program.state("plasma")
+    initial = typed_state(program, "plasma")
     leaked = []
     before = _authoring_identity(program)
 
@@ -233,7 +235,7 @@ def test_set_apply_post_builder_validation_failure_is_atomic():
     def return_wrong_type_after_nodes(prog, _out, in_):
         scratch = prog.scalar_field("scratch")
         prog.laplacian(scratch, in_)
-        return prog.state("wrong_result")
+        return typed_state(prog, "wrong_result")
 
     with pytest.raises(ValueError, match="must return the result scalar_field"):
         program.set_apply(operator, return_wrong_type_after_nodes)

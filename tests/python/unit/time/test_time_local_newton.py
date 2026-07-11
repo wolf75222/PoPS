@@ -19,9 +19,11 @@ uses -- iterating to ``max_c |r_c| < tol`` or the budget. No heap / std::functio
     ``r(rho) = rho - rho0 - dt*S(rho) = 0`` per cell; compile_problem -> problem.so, install_program,
     step(dt). The implicit step has the closed form rho = (-1 + sqrt(1 + 4*dt*k*rho0))/(2*dt*k); the
     stepped rho must match it AND an offline numpy Newton on the identical residual to ~1e-10, with the
-    offline Newton taking > 1 iteration and its residual dropping by many orders. Skips (exit 0) without
+offline Newton taking > 1 iteration and its residual dropping by many orders. Skips (exit 0) without
     numpy / _pops / a compiler / a visible Kokkos, or if the .so compile fails -- never faking the engine.
 """
+from typed_program_support import typed_state
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
@@ -69,12 +71,12 @@ def reaction_model(name, k):
     return m
 
 
-def reaction_program(t, name="implicit_reaction"):
+def reaction_program(t, name="implicit_reaction", model=None):
     """W = the per-cell solution of r(rho) = rho - rho0 - dt*S(rho) = 0 (an implicit Euler reaction
     step). The residual is built from the named source ``react`` + the iterate / frozen guess."""
     P = t.Program(name)
     dt = P.dt
-    U = P.state("blk")
+    U = typed_state(P, "blk", model=model)
 
     def residual(P, Uit, U0):
         S = P._source("react", state=Uit)  # private name seam; public handle route is tested separately
@@ -82,7 +84,7 @@ def reaction_program(t, name="implicit_reaction"):
 
     W = P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U,
                                 tol=1e-12, max_iter=50)
-    P.commit(P.state("U", block="blk").next, W)
+    P.commit(typed_state(P, "blk", state_name="U", model=model).next, W)
     return P
 
 
@@ -107,7 +109,7 @@ def section_a(t):
 
     # --- builder validation ---
     P = t.Program("v")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     chk(raises(ValueError, lambda: P.solve_local_nonlinear(residual=U, initial_guess=U)),
         "a non-callable residual is rejected")
 
@@ -142,11 +144,11 @@ def section_a(t):
     def _h(tol, mi):
         Q = t.Program("h")
         dt = Q.dt
-        u = Q.state("blk")
+        u = typed_state(Q, "blk")
 
         def r(Q, Uit, U0):
             return Q.linear_combine(Uit - U0 - dt * Q._source("react", state=Uit))
-        Q.commit(Q.state("U", block="blk").next, Q.solve_local_nonlinear(name="W", residual=r, initial_guess=u,
+        Q.commit(typed_state(Q, "blk", state_name="U").next, Q.solve_local_nonlinear(name="W", residual=r, initial_guess=u,
                                                  tol=tol, max_iter=mi))
         return Q._ir_hash()
     chk(_h(1e-10, 20) != _h(1e-8, 20), "a different tol rehashes the IR")
@@ -154,7 +156,7 @@ def section_a(t):
 
     # --- the codegen lowers a per-cell Newton kernel ---
     m = reaction_model("react_cg", 2.0)
-    src = reaction_program(t, "react_cg").emit_cpp_program(model=m)
+    src = reaction_program(t, "react_cg", model=m).emit_cpp_program(model=m)
     for frag in ("auto residual_eval = [&]", "pops::detail::mat_inverse<1>(",
                  "for (int it_ = 0;", "J_[1][1]", "std::fmax(rmax_, std::fabs(r_",
                  "if (rmax_ < static_cast<pops::Real>(1e-12)) break;",
@@ -177,11 +179,13 @@ def section_a(t):
     cons = big.conservative_vars(*["c%d" % i for i in range(9)])
     big.source_term("react", [-1.0 * c for c in cons])
     Pbig = t.Program("big_nl")
-    Ub = Pbig.state("blk")
+    Ub = typed_state(Pbig, "blk", model=big)
 
     def big_resid(P, Uit, U0):
         return P.linear_combine(Uit - U0 - P.dt * P._source("react", state=Uit))
-    Pbig.commit(Pbig.state("U", block="blk").next, Pbig.solve_local_nonlinear(name="W", residual=big_resid, initial_guess=Ub))
+    Pbig.commit(typed_state(Pbig, "blk", state_name="U", model=big).next,
+                Pbig.solve_local_nonlinear(
+                    name="W", residual=big_resid, initial_guess=Ub))
     chk(raises(ValueError, lambda: Pbig.emit_cpp_program(model=big)),
         "n_cons > 8 dense-fallback guard fires")
 
@@ -192,7 +196,6 @@ def section_b(t):
         import numpy as np
 
         import pops
-        from pops.physics.facade import Model
     except Exception as exc:  # noqa: BLE001
         print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return
@@ -227,8 +230,10 @@ def section_b(t):
 
     # ---- compile the Program + a native reaction block, run one implicit step ----
     try:
-        compiled = pops.codegen.compile_problem(model=reaction_model("react_prog", k),
-                                       time=reaction_program(t, "react_step"))
+        program_model = reaction_model("react_prog", k)
+        compiled = pops.codegen.compile_problem(
+            model=program_model,
+            time=reaction_program(t, "react_step", model=program_model))
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 

@@ -10,7 +10,7 @@ import pytest
 
 physics = pytest.importorskip("pops.physics")
 amath = pytest.importorskip("pops.math")
-from pops.time import Program  # noqa: E402
+from tests.python.unit.runtime._typed_program import typed_program_state  # noqa: E402
 
 
 def _board_model():
@@ -39,23 +39,23 @@ def _board_model():
 
 
 def test_program_dump_operator_ir_shows_the_lowering():
-    P = Program("fe")
+    P, _, _, _, _, temporal = typed_program_state("fe", block_name="plasma")
     dt = P.dt
-    u = P.state("plasma")
+    u = temporal.n
     f = P.solve_fields("f", u)
     r = P._rhs_legacy(name="R", state=u, fields=f, flux=True, sources=["electric"])
     u1 = P.linear_combine("U1", u + dt * r)
-    P.commit(P.state("U", block="plasma").next, u1)
+    P.commit(temporal.next, u1)
     txt = P.dump_operator_ir()
     assert "operator-first Program IR" in txt
     assert "solve_fields" in txt
     assert "linear_combine" in txt
-    assert "P.commit(P.state('U', block='plasma').next" in txt
+    assert "T.commit(T.state(plasma, U).next" in txt
 
 
 def test_program_dump_board_and_cpp_plan():
-    P = Program("fe")
-    u = P.state("plasma")
+    P, _, _, _, _, temporal = typed_program_state("fe", block_name="plasma")
+    u = temporal.n
     P.solve_fields("f", u)
     board = P.dump_board()
     plan = P.dump_cpp_plan()
@@ -73,9 +73,9 @@ def test_model_dump_module_ir_lists_spaces_and_operators():
     assert "implicit_operator" in txt and "local_linear_operator" in txt
 
 
-def test_explicit_program_binding_refreshes_out_of_order_registration():
-    # Handles carry declaration identity, not a hidden Program binding. A Program binds the model
-    # explicitly and refreshes that binding after a later operator declaration.
+def test_explicit_program_binding_rejects_out_of_order_registry_replacement():
+    # A Program is bound to one exact registry identity. Extending the facade may publish a new
+    # registry for the same owner, but an existing Program must not silently swap authorities.
     from pops.math import sqrt, grad, div, laplacian, ddt
     m = physics.Model("ep")
     U = m.state("U", components=["rho", "mx", "my"])
@@ -93,16 +93,22 @@ def test_explicit_program_binding_refreshes_out_of_order_registration():
     a_src = m.source("electric", on=U, value=[0.0 * rho, rho * e_field.x, rho * e_field.y])
     explicit_rate = m.rate("explicit_rate", ddt(U) == -div(flux) + a_src)
 
-    P = Program("late").bind_operators(m.module)
-    u_n = P.state("plasma")
+    P, _, _, _, _, temporal = typed_program_state(
+        "late", block_name="plasma", model=m, state="U")
+    u_n = temporal.n
     f_n = P.solve_fields("f", u_n)
     explicit_rate(u_n, f_n)
     bz = m.aux("B_z")
     c_b = m.local_linear_operator("C(B)", on=U,
                                   matrix=[[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
     implicit_operator = m.operator("implicit_operator", returns=c_b, inputs=["fields"])
-    P.bind_operators(m.module)                   # refresh after the later declaration
-    L = implicit_operator(f_n)
+    with pytest.raises(ValueError, match="already bound to a different registry"):
+        P.bind_operators(m.module)
+
+    fresh, _, _, _, _, fresh_temporal = typed_program_state(
+        "late-fresh", block_name="plasma", model=m, state="U")
+    fresh_fields = fresh.solve_fields("f", fresh_temporal.n)
+    L = implicit_operator(fresh_fields)
     assert L.vtype == "operator"
 
 

@@ -20,6 +20,8 @@ validation errors #18/#19.
     Self-skips (exit 0) without numpy / _pops / a compiler / a visible Kokkos -- never fakes the engine.
 (C) Validation #18 (pure Python, mocked System) + #19 (skips without the engine).
 """
+from typed_program_support import typed_state
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
@@ -39,7 +41,7 @@ def _pops_time():
 def test_solve_local_nonlinear_validates_inputs(t):
     # The residual must be an IR-building callable and the guess a State; the bad-input messages are loud.
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     try:  # a State (not a callable) is no longer accepted -- the residual builds r(U)
         P.solve_local_nonlinear(name="u", residual=U, initial_guess=U)
     except ValueError as exc:
@@ -68,7 +70,7 @@ def test_solve_local_nonlinear_builds_newton_ir(t):
     # sub-block; the IR validates and hashes.
     P = t.Program("react")
     dt = P.dt
-    U = P.state("blk")
+    U = typed_state(P, "blk")
 
     def residual(P, Uit, U0):
         S = P._source("react", state=Uit)
@@ -77,7 +79,7 @@ def test_solve_local_nonlinear_builds_newton_ir(t):
     assert W.op == "solve_local_nonlinear" and W.vtype == "state", (W.op, W.vtype)
     assert W.attrs["max_iter"] == 25 and W.attrs["tol"].to_python() == 1e-10
     assert len(W.attrs["residual_block"]) >= 3, "the residual sub-block holds the iterate/guess + ops"
-    P.commit(P.state("U", block="blk").next, W)
+    P.commit(typed_state(P, "blk", state_name="U").next, W)
     assert P.validate() is True, "the Newton IR must validate"
     assert P._ir_hash(), "the Newton IR must serialize to a stable hash"
 
@@ -86,7 +88,7 @@ def test_solve_local_nonlinear_rejects_non_local_residual(t):
     # A non-local op (P.rhs / P.solve_fields) inside the residual is rejected: the per-cell kernel cannot
     # re-evaluate a halo / global solve at a perturbed stack state.
     P = t.Program("bad")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
 
     def bad_residual(P, Uit, U0):
         R = P._rhs_legacy(state=Uit, sources=["default"])  # a non-local divergence-bearing rhs
@@ -103,12 +105,12 @@ def test_solve_local_nonlinear_refused_without_model(t):
     # The Newton codegen reads the residual's named source / linear source coefficients -> needs a model.
     P = t.Program("react")
     dt = P.dt
-    U = P.state("blk")
+    U = typed_state(P, "blk")
 
     def residual(P, Uit, U0):
         S = P._source("react", state=Uit)
         return P.linear_combine("r", Uit - U0 - dt * S)
-    P.commit(P.state("U", block="blk").next, P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U))
+    P.commit(typed_state(P, "blk", state_name="U").next, P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U))
     try:
         P.emit_cpp_program()  # no model
     except NotImplementedError as exc:
@@ -120,7 +122,7 @@ def test_solve_local_nonlinear_refused_without_model(t):
 # ---- (A.2) reductions (op 16): IR + codegen ----
 def test_reductions_build_scalar_values(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     R = P._rhs_legacy(state=U, sources=["default"])
     for node in (P.sum(U), P.max(U), P.min(U), P.sum_component(U, 0)):
         assert node.vtype == "scalar" and node.op == "reduce", \
@@ -134,7 +136,7 @@ def test_reductions_build_scalar_values(t):
 
 def test_reductions_reject_non_field_and_bad_component(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     for fn in (P.sum, P.max, P.min):
         try:
             fn("not a field")
@@ -154,7 +156,7 @@ def test_reductions_reject_non_field_and_bad_component(t):
 def test_reductions_lower_to_adc_reductions(t):
     # A while_ loop whose condition compares a reduction lets the reduce op lower inside the body.
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     R = P._rhs_legacy(state=U, sources=["default"])
     s_sum = P.sum(R)
     s_max = P.max(R)
@@ -165,7 +167,7 @@ def test_reductions_lower_to_adc_reductions(t):
     P.record_scalar("s_max", s_max)
     P.record_scalar("s_min", s_min)
     P.record_scalar("s_c", s_c)
-    P.commit(P.state("U", block="blk").next, P.linear_combine(U + P.dt * R))
+    P.commit(typed_state(P, "blk", state_name="U").next, P.linear_combine(U + P.dt * R))
     src = P.emit_cpp_program()
     for frag in ("pops::reduce_sum(", "pops::reduce_max(", "pops::reduce_min("):
         assert frag in src, "the reduction codegen must contain %r\n%s" % (frag, src)
@@ -175,11 +177,11 @@ def test_reductions_lower_to_adc_reductions(t):
 # ---- (A.3) fill_boundary (op 22) + project (op 21): IR + codegen ----
 def test_fill_boundary_ir_and_codegen(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     Uf = P.fill_boundary(U)
     assert Uf.op == "fill_boundary" and Uf.vtype == "state", (Uf.op, Uf.vtype)
     R = P._rhs_legacy(state=Uf, sources=["default"])
-    P.commit(P.state("U", block="blk").next, P.linear_combine(Uf + P.dt * R))
+    P.commit(typed_state(P, "blk", state_name="U").next, P.linear_combine(Uf + P.dt * R))
     src = P.emit_cpp_program()
     assert "ctx.fill_boundary(" in src, "fill_boundary lowers to ctx.fill_boundary\n%s" % src
 
@@ -196,19 +198,19 @@ def test_fill_boundary_rejects_non_field(t):
 
 def test_project_ir_and_codegen(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     R = P._rhs_legacy(state=U, sources=["default"])
     U1 = P.linear_combine(U + P.dt * R)
     Up = P.project(state=U1)
     assert Up.op == "project" and Up.vtype == "state", (Up.op, Up.vtype)
-    P.commit(P.state("U", block="blk").next, Up)
+    P.commit(typed_state(P, "blk", state_name="U").next, Up)
     src = P.emit_cpp_program()
     assert "ctx.apply_projection(0, " in src, "project lowers to ctx.apply_projection\n%s" % src
 
 
 def test_project_rejects_non_state_and_custom_projection(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     try:
         P.project(state="nope")
     except ValueError as exc:
@@ -226,18 +228,18 @@ def test_project_rejects_non_state_and_custom_projection(t):
 # ---- (A.4) record_scalar (op 23): IR + codegen ----
 def test_record_scalar_ir_and_codegen(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     R = P._rhs_legacy(state=U, sources=["default"])
     rec = P.record_scalar("rhs_norm", P.norm2(R))
     assert rec.op == "record_scalar" and rec.attrs["diagnostic"] == "rhs_norm"
-    P.commit(P.state("U", block="blk").next, P.linear_combine(U + P.dt * R))
+    P.commit(typed_state(P, "blk", state_name="U").next, P.linear_combine(U + P.dt * R))
     src = P.emit_cpp_program()
     assert 'ctx.record_scalar("rhs_norm", ' in src, "record_scalar lowers to ctx.record_scalar\n%s" % src
 
 
 def test_record_scalar_rejects_non_scalar_and_bad_name(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     try:
         P.record_scalar("x", U)  # a field is not a scalar
     except ValueError as exc:
@@ -256,10 +258,10 @@ def test_record_scalar_rejects_non_scalar_and_bad_name(t):
 def test_ir_hash_distinguishes_new_ops(t):
     def _h(build):
         P = t.Program("h")
-        U = P.state("blk")
+        U = typed_state(P, "blk")
         R = P._rhs_legacy(state=U, sources=["default"])
         build(P, U, R)
-        P.commit(P.state("U", block="blk").next, P.linear_combine(U + P.dt * R))
+        P.commit(typed_state(P, "blk", state_name="U").next, P.linear_combine(U + P.dt * R))
         return P._ir_hash()
 
     base = _h(lambda P, U, R: None)
@@ -291,13 +293,13 @@ def _reductions_program(t):
     """Forward Euler that also records sum / max / min / sum_component of the CURRENT state (component 0)
     each step, so the diagnostics can be checked against the analytic state."""
     P = t.Program("reductions_step")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     R = P._rhs_legacy(state=U, sources=["default"])
     P.record_scalar("state_sum", P.sum(U))
     P.record_scalar("state_max", P.max(U))
     P.record_scalar("state_min", P.min(U))
     P.record_scalar("state_sum_c0", P.sum_component(U, 0))
-    P.commit(P.state("U", block="blk").next, P.linear_combine(U + P.dt * R))
+    P.commit(typed_state(P, "blk", state_name="U").next, P.linear_combine(U + P.dt * R))
     return P
 
 
@@ -317,7 +319,6 @@ def _run_section_b(t):
               "(rebuild _pops) --")
         return None
 
-    from pops.physics.facade import Model
 
     c = 0.5
     P = _reductions_program(t)
@@ -380,11 +381,11 @@ def _fill_project_program(t):
     flux-only (zero source) so the state is unchanged by the RHS; the program just commits U after a
     ghost fill and a projection (both no-ops on a smooth positive state, but they must lower + run)."""
     P = t.Program("fill_project_step")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     Uf = P.fill_boundary(U)
     R = P._rhs_legacy(state=Uf, sources=["default"])
     U1 = P.linear_combine(Uf + P.dt * R)
-    P.commit(P.state("U", block="blk").next, P.project(state=U1))
+    P.commit(typed_state(P, "blk", state_name="U").next, P.project(state=U1))
     return P
 
 
@@ -402,7 +403,6 @@ def _run_section_b2(t):
     if not hasattr(sim, "install_program"):
         print("-- (B.2) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
-    from pops.physics.facade import Model
     P = _fill_project_program(t)
     try:
         compiled = pops.codegen.compile_problem(model=_const_source_model("fp_prog", 0.0), time=P)
@@ -477,7 +477,6 @@ def test_restart_missing_history_fails_loud(t):
     try:
         import numpy as np
 
-        import pops
     except Exception as exc:  # noqa: BLE001
         print("-- (C.1) skipped: pops/numpy unavailable: %s --" % exc)
         return
@@ -522,7 +521,7 @@ def test_restart_missing_history_fails_loud(t):
 # ---- (C.2) validation #19: ABI mismatch on install_program (skips without the engine) ----
 def _run_section_c2(t):
     try:
-        import pops
+        pass
     except Exception as exc:  # noqa: BLE001
         print("-- (C.2) skipped: pops unavailable: %s --" % exc)
         return None

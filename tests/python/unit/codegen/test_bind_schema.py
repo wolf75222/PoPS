@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import copy
+import gc
+import weakref
 from types import SimpleNamespace
 
 import pytest
@@ -97,6 +99,26 @@ def test_schema_extraction_from_an_already_frozen_problem_is_read_only():
 
     assert schema.slot(block[speed]).handle.block_ref.local_id == "fluid"
     assert schema.resolve()[schema.slot(block[speed]).handle] == 1.0
+
+
+def test_schema_alias_authentication_does_not_retain_live_authoring_graph():
+    def build():
+        module = model.Module("detached-schema")
+        speed = module.param(RuntimeParam("speed", default=1.0))
+        problem = Problem(name="detached-schema-case")
+        block = problem.add_block("fluid", module)
+        live_alias = block[speed]
+        schema = BindSchema.from_problem(problem)
+        assert schema.slot(live_alias).handle.is_resolved
+        assert all(isinstance(key, str) for key in schema._aliases)
+        return schema, weakref.ref(problem), weakref.ref(module)
+
+    schema, problem_ref, module_ref = build()
+    gc.collect()
+
+    assert schema.hash
+    assert problem_ref() is None
+    assert module_ref() is None
 
 
 def test_raw_module_cannot_add_parameters_after_problem_freeze():
@@ -324,12 +346,18 @@ def test_compiled_arguments_and_manifest_are_derived_from_attached_schema():
     assert [row["required"] for row in arguments.params.values()].count(False) == 4
 
     manifest = compiled.manifest()
-    assert manifest.bind_schema == schema.to_dict()
+    assert manifest.to_dict()["bind_schema"] == schema.to_dict()
     assert manifest.bind_schema_hash == schema.hash
     assert manifest.bind_schema_artifact_hash == schema.artifact_hash
-    assert manifest.params_runtime == sorted(slot.qid for slot in schema.runtime_slots)
-    assert manifest.params_const == sorted(slot.qid for slot in schema.const_slots)
+    assert manifest.params_runtime == tuple(sorted(slot.qid for slot in schema.runtime_slots))
+    assert manifest.params_const == tuple(sorted(slot.qid for slot in schema.const_slots))
+    with pytest.raises(TypeError):
+        manifest.bind_schema["slots"][0]["declaration"]["default"]["value"] = 7.0
     assert type(manifest).from_dict(manifest.to_dict()).to_dict() == manifest.to_dict()
+    forged_hash = copy.deepcopy(manifest.to_dict())
+    forged_hash["bind_schema_hash"] = "0" * 64
+    with pytest.raises(ValueError, match="bind_schema_hash"):
+        type(manifest).from_dict(forged_hash)
     forged_summary = copy.deepcopy(manifest.to_dict())
     forged_summary["params_runtime"] = []
     with pytest.raises(ValueError, match="not canonical"):

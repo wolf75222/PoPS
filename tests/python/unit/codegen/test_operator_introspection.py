@@ -5,13 +5,16 @@ list_state_spaces / list_field_spaces return the typed registry metadata. The Co
 methods read the carried model's metadata -- no need to load or run the .so -- so they are
 exercised here on a CompiledProblem built directly (not via the Kokkos-only compile). Pure Python.
 """
+import gc
 import sys
+import weakref
 
 try:
     from pops import model
     from pops.codegen.loader import CompiledProblem
     from pops.ir.expr import Const
     from pops.physics.facade import Model
+    from pops.problem import Problem
     from pops import time as adctime
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
 except Exception as exc:  # pops not importable here -> skip, never fake
@@ -42,6 +45,13 @@ def _model():
     return m
 
 
+def _time_refs(m):
+    module = m.module
+    block = Problem(name="introspection-case").add_block("plasma", module)
+    state = module.state_handle(module.state_spaces()["U"])
+    return block, state
+
+
 def _check(obj):
     ops = obj.list_operators()
     assert "explicit_rhs" in ops and "fields_from_state" in ops and "lorentz" in ops
@@ -67,13 +77,18 @@ def test_dsl_model_introspection():
 
 def test_compiled_problem_introspection():
     m = _model()
+    block, state = _time_refs(m)
     P = adctime.Program("pc").bind_operators(m)
     libtime.predictor_corrector_local_linear(
-        P, "plasma", fields_operator=_op(m, "fields_from_state"),
+        P, block, state, fields_operator=_op(m, "fields_from_state"),
         explicit_rate_operator=_op(m, "explicit_rhs"), implicit_operator=_op(m, "lorentz"))
     # A CompiledProblem built directly: introspection reads model metadata, never the .so.
     compiled = CompiledProblem(so_path="<not built>", program=P, model=m,
                                    abi_key="k", cxx="clang", std="c++23")
+    _check(compiled)
+    # Public orchestration discards the authoring model after code emission.  Introspection is
+    # served by the detached compiled-module view, not by re-entering that builder.
+    compiled.model = object()
     _check(compiled)
     # The matching-the-spec assertion.
     signature = compiled.operator_signature("explicit_rhs")
@@ -89,10 +104,36 @@ def test_compiled_problem_introspection():
     print("OK  CompiledProblem introspection (metadata only, no .so run)")
 
 
+def test_compiled_introspection_view_does_not_retain_model_registry():
+    def build():
+        m = _model()
+        block, state = _time_refs(m)
+        P = adctime.Program("detached-introspection").bind_operators(m)
+        libtime.predictor_corrector_local_linear(
+            P, block, state, fields_operator=_op(m, "fields_from_state"),
+            explicit_rate_operator=_op(m, "explicit_rhs"),
+            implicit_operator=_op(m, "lorentz"))
+        registry_ref = weakref.ref(m.operator_registry())
+        model_ref = weakref.ref(m)
+        compiled = CompiledProblem(
+            "<not built>", P, m, "k", "clang", "c++23",
+            generated_cpp="// detached\n")
+        compiled.model = object()
+        return compiled, model_ref, registry_ref
+
+    compiled, model_ref, registry_ref = build()
+    gc.collect()
+
+    assert compiled.list_operators()
+    assert model_ref() is None
+    assert registry_ref() is None
+
+
 def main():
     test_module_introspection()
     test_dsl_model_introspection()
     test_compiled_problem_introspection()
+    test_compiled_introspection_view_does_not_retain_model_registry()
     print("OK  test_operator_introspection")
 
 

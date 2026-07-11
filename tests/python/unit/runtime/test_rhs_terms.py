@@ -16,12 +16,14 @@ Pure Python; no compilation, no ``_pops``. Run with python3 (PYTHONPATH = built 
 """
 import pytest
 
-from pops import time as adctime
 from pops.numerics.terms import Flux, LocalTerm, SourceTerm
 from pops.physics.facade import Model
+from tests.python.unit.runtime._typed_program import typed_program_state
 
 
 _HANDLE = object()
+_SOURCE_TERM = object()
+_LOCAL_TERM = object()
 
 
 def _source_model():
@@ -31,40 +33,56 @@ def _source_model():
     return model, model.source_term("electric", [-u])
 
 
-def _terms_program(terms):
+def _terms_program(terms, authored=None):
     """A one-block forward-Euler Program whose single rhs is built from ``terms=``."""
-    model, source = _source_model()
-    terms = [source if term is _HANDLE else term for term in terms]
-    P = adctime.Program("rhs_terms").bind_operators(model)
+    model, source = authored or _source_model()
+    terms = [
+        source if term is _HANDLE else
+        SourceTerm(source) if term is _SOURCE_TERM else
+        LocalTerm(source) if term is _LOCAL_TERM else term
+        for term in terms
+    ]
+    P, _, _, _, _, temporal = typed_program_state(
+        "rhs_terms", model=model, state="U")
     dt = P.dt
-    U = P.state("plasma")
+    U = temporal.n
     f = P.solve_fields(U)
     R = P.rhs("R", state=U, fields=f, terms=terms)
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
+    P.commit(temporal.next, P.linear_combine("U1", U + dt * R))
     P.validate()
     return P
 
 
-def _legacy_program(flux, sources):
+def _legacy_program(flux, sources, model=None):
     """The same Program built through the INTERNAL ``_rhs_legacy`` flux=/sources= builder (the typed
     terms= path lowers onto this private builder; it is the byte-identity target, not a public path)."""
-    model, _ = _source_model()
-    P = adctime.Program("rhs_terms").bind_operators(model)
+    model = model or _source_model()[0]
+    P, _, _, _, _, temporal = typed_program_state(
+        "rhs_terms", model=model, state="U")
     dt = P.dt
-    U = P.state("plasma")
+    U = temporal.n
     f = P.solve_fields(U)
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=flux, sources=sources)
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
+    P.commit(temporal.next, P.linear_combine("U1", U + dt * R))
     P.validate()
     return P
+
+
+def _cpp_without_identity(program, model):
+    """Compare lowering bytes while intentionally excluding the typed IR identity export."""
+    return "\n".join(
+        line for line in program.emit_cpp_program(model=model).splitlines()
+        if "pops_program_hash()" not in line
+    )
 
 
 def test_terms_flux_plus_source_is_byte_identical():
-    """A typed source term lowers byte-identically to the private name-token seam."""
-    h_terms = _terms_program([Flux(), SourceTerm("electric")])._ir_hash()
-    h_legacy = _legacy_program(True, ["electric"])._ir_hash()
-    assert h_terms == h_legacy, (h_terms, h_legacy)
-    print("OK  1. terms=[Flux(), 'electric'] _ir_hash == _rhs_legacy(flux=True, sources=['electric'])")
+    """Typed identity changes the hash while the actual C++ lowering stays byte-identical."""
+    authored = _source_model()
+    typed = _terms_program([Flux(), _SOURCE_TERM], authored)
+    private = _legacy_program(True, ["electric"], authored[0])
+    assert typed._ir_hash() != private._ir_hash()
+    assert _cpp_without_identity(typed, authored[0]) == _cpp_without_identity(private, authored[0])
 
 
 def test_terms_flux_only_is_byte_identical():
@@ -75,15 +93,19 @@ def test_terms_flux_only_is_byte_identical():
 
 def test_terms_source_only_is_byte_identical():
     """A typed source without Flux lowers to the private source-only path."""
-    assert _terms_program([SourceTerm("electric")])._ir_hash() == _legacy_program(False, ["electric"])._ir_hash()
+    authored = _source_model()
+    typed = _terms_program([_SOURCE_TERM], authored)
+    private = _legacy_program(False, ["electric"], authored[0])
+    assert typed._ir_hash() != private._ir_hash()
+    assert _cpp_without_identity(typed, authored[0]) == _cpp_without_identity(private, authored[0])
     print("OK  3. typed source-only term == private _rhs_legacy source selector")
 
 
 def test_source_forms_map_to_same_name():
     """Every accepted typed source form folds in the same registered source."""
-    h_srcterm = _terms_program([Flux(), SourceTerm("electric")])._ir_hash()
+    h_srcterm = _terms_program([Flux(), _SOURCE_TERM])._ir_hash()
     h_handle = _terms_program([Flux(), _HANDLE])._ir_hash()
-    h_local = _terms_program([Flux(), LocalTerm("electric")])._ir_hash()
+    h_local = _terms_program([Flux(), _LOCAL_TERM])._ir_hash()
     assert h_srcterm == h_handle == h_local, (h_srcterm, h_handle, h_local)
     print("OK  5. typed source forms (SourceTerm/OperatorHandle/LocalTerm) -> same hash")
 
@@ -99,8 +121,8 @@ def test_flux_is_a_term_not_a_bool():
     distinguishes a Flux term from a flux boolean."""
     # Flux() lowers to flux=True (proven by the byte-identical hash above); a bare True does not.
     assert _terms_program([Flux()])._ir_hash() != _terms_program([])._ir_hash()
-    P = adctime.Program("rhs_terms")
-    U = P.state("plasma")
+    P, _, _, _, _, temporal = typed_program_state("rhs_terms")
+    U = temporal.n
     f = P.solve_fields(U)
     with pytest.raises(TypeError):
         P.rhs("R", state=U, fields=f, terms=[True])
@@ -110,8 +132,8 @@ def test_flux_is_a_term_not_a_bool():
 def test_legacy_flux_sources_rejected_in_public_surface():
     """The legacy flux=/sources=/fluxes= form (and a bare P.rhs) is NOT a public path: it is refused
     with a clear TypeError naming terms= (Spec 5: terms= is the one public RHS path)."""
-    P = adctime.Program("rhs_terms")
-    U = P.state("plasma")
+    P, _, _, _, _, temporal = typed_program_state("rhs_terms")
+    U = temporal.n
     f = P.solve_fields(U)
     for kw in ({"flux": True}, {"sources": ["electric"]}, {"fluxes": ["default"]}, {}):
         with pytest.raises(TypeError, match="requires the typed terms="):
@@ -121,14 +143,14 @@ def test_legacy_flux_sources_rejected_in_public_surface():
 
 def test_bad_term_raises_typeerror():
     """A non-term object in terms= is a clear TypeError (transparent typed surface)."""
-    P = adctime.Program("rhs_terms")
-    U = P.state("plasma")
+    P, _, _, _, _, temporal = typed_program_state("rhs_terms")
+    U = temporal.n
     f = P.solve_fields(U)
     for bad in (123, 4.5, object(), ["nested"]):
         with pytest.raises(TypeError):
             P.rhs("R", state=U, fields=f, terms=[Flux(), bad])
-    # An unnamed SourceTerm/LocalTerm has no declared source name to fold in.
-    for unnamed in (SourceTerm(), LocalTerm()):
-        with pytest.raises(ValueError, match="must be named"):
-            P.rhs("R", state=U, fields=f, terms=[Flux(), unnamed])
-    print("OK  8. a non-term in terms= -> TypeError; an unnamed source term -> ValueError")
+    # Source wrappers themselves require the exact declaring OperatorHandle.
+    for constructor in (SourceTerm, LocalTerm):
+        with pytest.raises(TypeError, match="typed OperatorHandle"):
+            constructor("electric")
+    print("OK  8. bad RHS terms and ownerless source selectors are rejected")

@@ -40,6 +40,8 @@ reference would witness it -- Euler keeps the native cross-check exact.
 
 Run with python3 (PYTHONPATH = built pops package).
 """
+from typed_program_support import commits_by_block, state_refs
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
@@ -52,7 +54,7 @@ def _skip(msg):
 
 
 from pops import time as adctime  # noqa: E402  -- IR construction is pure Python, always available
-import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
+import pops.lib.time as libtime  # noqa: E402  -- ready schemes live in pops.lib.time (Spec 4)
 
 
 # ============================ (A) IR construction + codegen: pure Python =======================
@@ -74,7 +76,8 @@ def strang_program(name="strang_parity", block="ions"):
     """The compiled Strang program H(dt/2); S(dt); H(dt/2) built via pops.lib.time.strang (no special
     Strang class -- the same combinator + affine algebra over dt)."""
     P = adctime.Program(name)
-    libtime.strang(P, block, half_flow, no_op_source)
+    libtime.strang(
+        P, *state_refs(P, block), half_flow=half_flow, source=no_op_source)
     return P
 
 
@@ -98,7 +101,7 @@ def chk_a(cond, label):
 print("== (A) std.strang lowers to two half-flow stages around a no-op source ==")
 P = strang_program()
 P.validate()
-out = P.commits()["ions"]
+out = commits_by_block(P)["ions"]
 chk_a(out.op == "linear_combine" and out.vtype == "state",
       "the committed value is the final half-flow state")
 

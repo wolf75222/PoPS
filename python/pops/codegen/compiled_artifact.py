@@ -35,6 +35,16 @@ class CompiledArtifact(Protocol):
         """Immutable owner-qualified parameter contract captured at compile."""
         ...
 
+    @property
+    def authoring_snapshot(self) -> Any:
+        """Complete immutable identity of the effective authoring transaction."""
+        ...
+
+    @property
+    def install_plan(self) -> Any:
+        """Immutable runtime plan consumed by :func:`pops.bind`."""
+        ...
+
     def inspect(self) -> Any:
         """A printable :class:`pops.codegen.inspect_report.CompiledReport` of this artifact."""
         ...

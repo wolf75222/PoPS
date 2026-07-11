@@ -136,8 +136,9 @@ class _AmrRuntimeAdapter(_RuntimeAdapter):
         # with add_equation -> add_native_block. Discriminate by the duck-typed getattr signal, exactly
         # like System._install_compiled -- never by the handle class. A native CompiledModel has no
         # .program attribute, so getattr(..., None) selects compiled=None for it.
-        program = compiled if getattr(compiled, "program", None) is not None else None
-        schema = getattr(compiled, "bind_schema", None)
+        plan = getattr(compiled, "install_plan", None)
+        program = compiled if getattr(plan, "has_program", False) else None
+        schema = getattr(plan, "bind_schema", None)
         _flow_amr_layout(
             engine,
             self._layout,

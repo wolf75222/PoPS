@@ -9,10 +9,11 @@ which :func:`pops.codegen.read_library_manifest` reads back (dlopen) with a HARD
 manifest shape, the hash stability/sensitivity, the reader round-trip, and -- when Kokkos
 is visible -- the real emit + compile + read-back + the ABI-mismatch hard error.
 """
+import types as _t
+
 import pytest
 
 pops = pytest.importorskip("pops")
-import types as _t
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
 # global 300 s process-isolation budget (ADC-627, same class as test_compile_cache_backend).
 POPS_PROCESS_TIMEOUT = 900
@@ -65,7 +66,7 @@ def test_compile_library_builds_a_manifest():
     man = pops.codegen.compile_library("my_numerics.so", objects=_objects())
     assert man.name == "my_numerics.so"
     assert man.backend == "production"
-    assert isinstance(man.bricks, list) and len(man.bricks) == 2
+    assert isinstance(man.bricks, tuple) and len(man.bricks) == 2
     # The abi_key is the loaded-module ABI key (header sig + compiler + std).
     assert man.abi_key == pops.abi_key()
     # The content hash is a hex sha256 digest.
@@ -127,6 +128,8 @@ def test_content_hash_is_order_insensitive():
     rev = pops.codegen.compile_library("lib.so",
                                objects=[lib.riemann.HLLC(), lib.solvers.GMRES(max_iter=200)])
     assert fwd.content_hash == rev.content_hash
+    assert fwd == rev
+    assert fwd.to_dict() == rev.to_dict()
 
 
 # --- round-trip through the reader -----------------------------------------
@@ -138,6 +141,59 @@ def test_manifest_round_trips_through_reader():
     assert restored.content_hash == man.content_hash
     assert restored.bricks == man.bricks
     assert restored.to_dict() == man.to_dict()
+
+
+def test_manifest_is_deeply_immutable_and_detached_from_descriptors():
+    nested = {"levels": [1, {"ratio": 2}]}
+    brick = lib.BrickDescriptor(
+        "nested", "native", category="solver", native_id="pops::nested",
+        scheme="nested", options={"config": nested},
+    )
+    manifest = pops.codegen.compile_library("nested.so", objects=[brick])
+
+    nested["levels"][1]["ratio"] = 8
+    brick.options["config"]["levels"].append(3)
+    assert manifest.to_dict()["bricks"][0]["options"] == {
+        "config": {"levels": [1, {"ratio": 2}]}
+    }
+    with pytest.raises(AttributeError, match="immutable"):
+        manifest.name = "other.so"
+    with pytest.raises(TypeError):
+        manifest.bricks[0]["options"]["config"]["levels"][1]["ratio"] = 4
+
+    detached = manifest.to_dict()
+    detached["bricks"][0]["options"]["config"]["levels"].append(99)
+    assert manifest.to_dict()["bricks"][0]["options"]["config"]["levels"] == [
+        1, {"ratio": 2}
+    ]
+
+
+def test_reader_revalidates_content_hash_after_nested_tampering():
+    manifest = pops.codegen.compile_library("lib.so", objects=_objects())
+    forged = manifest.to_dict()
+    forged["bricks"][0]["options"]["max_iter"] = 201
+    with pytest.raises(ValueError, match="content_hash"):
+        pops.codegen.read_library_manifest(forged)
+
+
+def test_emitted_descriptor_carries_version_and_lossless_options():
+    from pops.codegen.library_codegen import emit_library_cpp
+
+    manifest = pops.codegen.compile_library("lib.so", objects=_objects())
+    source = emit_library_cpp(manifest)
+    assert "pops_library_manifest_version" in source
+    assert "pops_library_brick_options" in source
+    assert '\\"max_iter\\": 200' in source
+
+    forged = manifest.to_dict()
+    forged["content_hash"] = "0" * 64
+    with pytest.raises(ValueError, match="content_hash"):
+        pops.codegen.read_library_manifest(forged)
+
+    forged = manifest.to_dict()
+    forged["generated_symbols"] = ["forged"]
+    with pytest.raises(ValueError, match="generated_symbols"):
+        pops.codegen.read_library_manifest(forged)
 
 
 def test_reader_rejects_a_corrupt_manifest():
@@ -207,6 +263,7 @@ def test_emit_compiles_a_real_so_and_reads_it_back(tmp_path):
     by_id = {b["id"]: b for b in back.bricks}
     assert set(by_id) == {"gmres", "hllc"}
     assert by_id["gmres"]["native_id"] == "pops::gmres_solve"
+    assert by_id["gmres"]["options"]["max_iter"] == 200
     assert by_id["hllc"]["native_id"] == "pops::HLLCFlux"
     # The required model capabilities round-trip through the .so tables.
     assert "physical_flux" in by_id["hllc"]["requirements"].get("capabilities", [])
@@ -281,17 +338,24 @@ def test_compile_problem_consumes_a_compiled_library_so(tmp_path):
     cc, cflags, lflags = _toolchain_or_skip()
     pytest.importorskip("pops.codegen")
     from pops.codegen.compile import compile_problem
+    from pops.model import Module
+    from pops.problem import Problem
     time = pytest.importorskip("pops.time")
     so = str(tmp_path / "consumed.so")
     pops.codegen.compile_library("consumed.so", objects=_objects(), emit=True, so_path=so)
     # A real Forward-Euler Program so the problem lowers; libraries=[.so] is read + ABI-checked.
+    module = Module("consume-model")
+    state = module.state_space("U", ("rho",))
+    problem = Problem(name="consume-case")
+    block = problem.add_block("ions", module)
     P = time.Program("consume")
     dt = P.dt
-    U = P.state("ions")
+    endpoint = P.state(block, module.state_handle(state))
+    U = endpoint.n
     R = P._rhs_legacy(state=U, flux=True, sources=[])
-    P.commit(P.state("U", block="ions").next, P.linear_combine("U1", U + dt * R))
+    P.commit(endpoint.next, P.linear_combine("U1", U + dt * R))
     try:
-        compiled = compile_problem(time=P, libraries=[so])
+        compiled = compile_problem(time=P, model=module, libraries=[so])
     except RuntimeError as exc:  # .so compile of the PROBLEM failed (toolchain), not the library
         pytest.skip("compile_problem could not build the problem .so: %s" % str(exc)[:160])
     # The validated library manifest is carried on the handle, ABI-matched.

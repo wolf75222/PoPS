@@ -5,16 +5,13 @@ inside :meth:`Module.to_dsl`, keeping this authoring layer extension-free.
 """
 from __future__ import annotations
 
-import hashlib
-import json
 from types import MappingProxyType
 from typing import Any
 from weakref import ref
 
 from ._module_freeze import ModuleFreezable
-from .hash_data import body_identity as _body_identity, canonical_hash_data as _canonical_hash_data
 from .operators import Operator, validate_operator_signature
-from .handles import Handle, OperatorHandle, ParamHandle
+from .handles import Handle, OperatorHandle, ParamHandle, StateHandle
 from .ownership import OwnerKind, OwnerPath
 from .param_registry import ParamRegistry
 from .registry import DeclarationIndex, OperatorRegistry
@@ -43,7 +40,8 @@ class Module(ModuleFreezable):
         self._field_handles = {}
         self._aux_handles = {}
         self._param_registry = ParamRegistry(owner=self.owner_path, mutation_guard=self._guard_mutable)
-        self._registry = OperatorRegistry(owner=self.owner_path)
+        self._registry = OperatorRegistry(
+            owner=self.owner_path, mutation_guard=self._guard_mutable)
         # Wave speeds for the Riemann solver of a compilable Module: {"x": [Expr], "y": [Expr]}
         # eigenvalues, or None (set via eigenvalues()). Carried so a pure Module is self-contained;
         # lowered to dsl.Model.eigenvalues by compile_problem.
@@ -215,16 +213,22 @@ class Module(ModuleFreezable):
         """Declare the per-direction wave speeds (eigenvalues) the Riemann solver needs, as lists of
         IR expressions over the state. Carried so a pure Module is a self-contained, compilable model
         (lowered to ``dsl.Model.eigenvalues``)."""
-        self._eigenvalues = {"x": list(x), "y": list(y)}
-        return self._eigenvalues
+        self._guard_mutable("declare eigenvalues")
+        x_values, y_values = tuple(x), tuple(y)
+        self._eigenvalues = {"x": x_values, "y": y_values}
+        # An inspection result is deliberately detached.  Mutating a value returned during
+        # authoring must never rewrite the Module behind its public setter.
+        return {"x": list(x_values), "y": list(y_values)}
 
     def adopt_registry(self, registry: Any) -> Any:
         """Use ``registry`` as this Module's operator registry (the dsl.Model facade adopts
         the derived registry of its HyperbolicModel). Returns ``self``."""
+        self._guard_mutable("adopt an operator registry")
         if not isinstance(registry, OperatorRegistry):
             raise TypeError("adopt_registry expects an OperatorRegistry")
         if registry.owner_path != self.owner_path:
             raise ValueError("adopt_registry cannot adopt a registry owned by another Module")
+        registry._bind_mutation_guard(self._guard_mutable)
         self._registry = registry
         return self
 
@@ -390,38 +394,8 @@ class Module(ModuleFreezable):
         body, else its repr). Sensitive to an operator body, signature, capability or space change;
         deterministic for an identical module. A spec2 tag namespaces it away from any spec1 key.
         """
-        payload = {
-            "schema": "spec2-module",
-            "name": self.name,
-            "state_spaces": [
-                self._state_spaces[name].to_data() for name in sorted(self._state_spaces)
-            ],
-            "field_spaces": [
-                self._field_spaces[name].to_data() for name in sorted(self._field_spaces)
-            ],
-            "parameters": [
-                declaration.artifact_data()
-                for _, declaration in sorted(self._param_registry.items())
-            ],
-            "aux": [self._aux[name].to_data() for name in sorted(self._aux)],
-            "eigenvalues": None if self._eigenvalues is None else {
-                direction: [_canonical_hash_data(value) for value in self._eigenvalues[direction]]
-                for direction in ("x", "y")
-            },
-            # Registry order is semantic: it determines stable OperatorId values.
-            "operators": [{
-                "name": op.name,
-                "kind": op.kind,
-                "signature": op.signature.to_data(),
-                "capabilities": op.capabilities,
-                "requirements": op.requirements,
-                "lowering": op.lowering,
-                "body": _body_identity(op.body),
-            } for op in self._registry],
-        }
-        canonical = json.dumps(
-            _canonical_hash_data(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        from ._module_hash import module_content_hash
+        return module_content_hash(self)
 
     def __repr__(self) -> str:
         return "Module(%r, operators=[%s])" % (self.name, ", ".join(self._registry.names()))
@@ -439,8 +413,11 @@ class Module(ModuleFreezable):
         existing = registry.get(descriptor.name)
         if existing is None:
             registry[descriptor.name] = descriptor
-            handles[descriptor.name] = Handle(
-                descriptor.name, kind=kind, owner=self.owner_path)
+            handles[descriptor.name] = (
+                StateHandle(descriptor.name, owner=self.owner_path, space=descriptor)
+                if kind == "state"
+                else Handle(descriptor.name, kind=kind, owner=self.owner_path)
+            )
             return descriptor
         old_data = existing.to_data()
         new_data = descriptor.to_data()

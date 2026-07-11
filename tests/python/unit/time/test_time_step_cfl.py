@@ -15,6 +15,8 @@ Section (A) (pure Python) is minimal -- this is runtime behavior; the substantiv
 (end-to-end), which needs _pops + a compiler + a visible Kokkos (POPS_KOKKOS_ROOT) and self-skips cleanly
 otherwise. It never fakes the engine.
 """
+from typed_program_support import typed_state
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
@@ -81,10 +83,10 @@ def make_sim(time):
 
 def fe_program(name="fe_stepcfl"):
     P = adctime.Program(name)
-    U = P.state("ions")
+    U = typed_state(P, "ions")
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(P.state("U", block="ions").next, P.linear_combine("U1", U + P.dt * R))
+    P.commit(typed_state(P, "ions", state_name="U").next, P.linear_combine("U1", U + P.dt * R))
     return P
 
 

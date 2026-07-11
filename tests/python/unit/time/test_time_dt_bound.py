@@ -16,6 +16,8 @@ emitted, and a Program WITHOUT a dt bound emits ``has_dt_bound() -> false``. Sec
 (needs _pops + a compiler + a visible Kokkos via POPS_KOKKOS_ROOT) and self-skips cleanly otherwise; it
 never fakes the engine.
 """
+from typed_program_support import typed_state
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
@@ -53,10 +55,10 @@ print("== (A) IR + codegen ==")
 
 def _fe(name="fe_dtbound"):
     P = adctime.Program(name)
-    U = P.state("ions")
+    U = typed_state(P, "ions")
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(P.state("U", block="ions").next, P.linear_combine("U1", U + P.dt * R))
+    P.commit(typed_state(P, "ions", state_name="U").next, P.linear_combine("U1", U + P.dt * R))
     return P
 
 
@@ -76,7 +78,7 @@ P_dec = _fe("fe_decorator")
 
 @P_dec.dt_bound
 def _dt_bound(P, cfl):
-    U = P.state("ions")
+    U = typed_state(P, "ions")
     w = P.max_wave_speed(U)
     return cfl * P.hmin() / w
 
@@ -92,14 +94,14 @@ chk("cfl" in src_dec.split("pops_program_dt_bound", 1)[1], "the cfl argument is 
 # different IR hash (the bound is part of the IR identity / cache key).
 P_set = _fe("fe_setter")
 P_set.set_dt_bound(
-    lambda P, _cfl: 0.5 * P.hmin() / P.max_wave_speed(P.state("ions")))
+    lambda P, _cfl: 0.5 * P.hmin() / P.max_wave_speed(typed_state(P, "ions")))
 chk(P_set.has_dt_bound(), "P.set_dt_bound(builder) records the bound")
 chk(P_no._ir_hash() != P_set._ir_hash(), "a dt bound changes the IR hash (distinct cache key)")
 
 # (A4) fail-loud: the body must return a Scalar, set at most once, and read only (no commit).
 P_bad = _fe("fe_bad")
 try:
-    P_bad.set_dt_bound(lambda P, cfl: P.state("ions"))  # returns a State, not a Scalar
+    P_bad.set_dt_bound(lambda P, cfl: typed_state(P, "ions"))  # returns a State, not a Scalar
 except ValueError as exc:
     chk("Scalar" in str(exc), "non-Scalar dt bound body rejected")
 else:
@@ -177,14 +179,14 @@ def fe_program(name, *, factor=None):
     """Forward Euler; with factor set, attach a dt bound factor * cfl * hmin / max_wave_speed (a
     multiple of the native single-block CFL dt = cfl * h / w): factor < 1 tightens, factor > 1 loosens."""
     P = adctime.Program(name)
-    U = P.state("ions")
+    U = typed_state(P, "ions")
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(P.state("U", block="ions").next, P.linear_combine("U1", U + P.dt * R))
+    P.commit(typed_state(P, "ions", state_name="U").next, P.linear_combine("U1", U + P.dt * R))
     if factor is not None:
         @P.dt_bound
         def _b(Pr, cfl, _f=factor):
-            Us = Pr.state("ions")
+            Us = typed_state(Pr, "ions")
             w = Pr.max_wave_speed(Us)
             return _f * cfl * Pr.hmin() / w
     return P

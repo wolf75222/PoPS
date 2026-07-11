@@ -30,6 +30,8 @@ Section B (gated, self-skip): the OFFLINE REFERENCE is the engine's own default 
 
 Skips cleanly (exit 0) without numpy / _pops / a compiler / a visible Kokkos -- never fakes the engine.
 """
+from typed_program_support import typed_field, typed_state
+
 from pops.params import ConstParam
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
@@ -119,26 +121,31 @@ def named_model(name="me_named", scale=1.0, src_scale=1.0):
 print("== (A) m.elliptic_field lowering + validation ==")
 
 
-def _prog(name, field=None):
+def _prog(name, field=None, model=None):
     P = adctime.Program(name)
-    U = P.state("plasma")
+    U = typed_state(P, "plasma", model=model)
     if field is None:
         f = P.solve_fields(U)
     else:
-        f = P.solve_fields("f_" + field, U, field=field)
+        f = P.solve_fields("f_" + field, U, field=typed_field(P, field))
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True)
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + P.dt * R))
+    P.commit(typed_state(P, "plasma", state_name="U", model=model).next,
+             P.linear_combine("U1", U + P.dt * R))
     return P
 
 
 # default solve_fields lowers to the 2-arg ctx call (historical), named to the 3-arg ctx call.
-src_default = _prog("me_def_prog").emit_cpp_program(model=default_model())
+default_codegen_model = default_model()
+src_default = _prog("me_def_prog", model=default_codegen_model).emit_cpp_program(
+    model=default_codegen_model)
 chk("ctx.solve_fields_from_state(0, " in src_default,
     "default solve_fields lowers to ctx.solve_fields_from_state(0, ...)")
 chk('ctx.solve_fields_from_state("' not in src_default,
     "default solve_fields does NOT use the named (3-arg) overload")
 
-src_named = _prog("me_nam_prog", field="phi2").emit_cpp_program(model=named_model())
+named_codegen_model = named_model()
+src_named = _prog("me_nam_prog", field="phi2", model=named_codegen_model).emit_cpp_program(
+    model=named_codegen_model)
 chk('ctx.solve_fields_from_state("phi2", 0, ' in src_named,
     "named solve_fields lowers to ctx.solve_fields_from_state(\"phi2\", 0, ...)")
 
@@ -150,7 +157,9 @@ chk("set_block_elliptic_field" in loader and "make_poisson_rhs" in loader,
     "the named field attaches its RHS closure (make_poisson_rhs of the brick)")
 
 # Validation: unknown field / missing model / aux-reading rhs / undeclared aux output / amr target.
-chk(raises(ValueError, lambda: _prog("me_unknown", field="nope").emit_cpp_program(model=named_model())),
+unknown_model = named_model("me_unknown_model")
+chk(raises(ValueError, lambda: _prog(
+    "me_unknown", field="nope", model=unknown_model).emit_cpp_program(model=unknown_model)),
     "an unknown elliptic_field name in solve_fields raises ValueError")
 chk(raises(NotImplementedError, lambda: _prog("me_nomodel", field="phi2").emit_cpp_program()),
     "a named solve_fields without a model raises NotImplementedError")
@@ -210,7 +219,9 @@ chk(raises(NotImplementedError, _jit_named),
 # NO REGRESSION: a default-only model lowers IDENTICALLY whether or not the named feature exists. We
 # assert the default program never emits the named (3-arg) ctx call (above) AND that adding a named
 # field to a SECOND model leaves the default model's lowering untouched.
-src_default2 = _prog("me_def_prog").emit_cpp_program(model=default_model())
+default_codegen_model2 = default_model()
+src_default2 = _prog("me_def_prog", model=default_codegen_model2).emit_cpp_program(
+    model=default_codegen_model2)
 chk(src_default == src_default2, "the default program lowers deterministically (no named-field leak)")
 
 
@@ -274,12 +285,15 @@ def step_program(model, prog):
 
 # REFERENCE: the default Poisson coupling, source reads the default grad.
 U0 = _ic()
-ref = step_program(default_model("me_ref"), _prog("me_ref_fe"))
+reference_model = default_model("me_ref")
+ref = step_program(reference_model, _prog("me_ref_fe", model=reference_model))
 chk(float(np.abs(ref - U0).max()) > 1e-9, "the default electrostatic source actually moved the state")
 
 # PARITY: a named field with rhs == the default RHS solves the same problem with the same native
 # solver, so g2x/g2y == grad_x/grad_y -> the named-field-driven step matches the default step.
-got = step_program(named_model("me_par", scale=1.0, src_scale=1.0), _prog("me_par_fe", field="phi2"))
+parity_model = named_model("me_par", scale=1.0, src_scale=1.0)
+got = step_program(
+    parity_model, _prog("me_par_fe", field="phi2", model=parity_model))
 e_par = float(np.abs(got - ref).max())
 print("  named(rhs=default) vs default Poisson: max|d| = %.2e" % e_par)
 chk(e_par < 1e-12,
@@ -288,8 +302,9 @@ chk(e_par < 1e-12,
 # DISTINCT RHS (linearity): named rhs = 2*default -> phi2 = 2*phi -> g2x = 2*grad_x; the source reads
 # 0.5*g2x, recovering the default-grad step. Confirms the named field carries a genuinely different,
 # correctly scaled field (not an alias of the shared aux).
-got2 = step_program(named_model("me_lin", scale=2.0, src_scale=0.5),
-                    _prog("me_lin_fe", field="phi2"))
+linear_model = named_model("me_lin", scale=2.0, src_scale=0.5)
+got2 = step_program(
+    linear_model, _prog("me_lin_fe", field="phi2", model=linear_model))
 e_lin = float(np.abs(got2 - ref).max())
 print("  named(rhs=2*default, src=0.5*g2) vs default: max|d| = %.2e" % e_lin)
 chk(e_lin < 1e-12,

@@ -43,6 +43,7 @@ try:
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
     from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
+    from tests.python.support.typed_program import program_states
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
     print("skip test_amr_program_parity (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -83,36 +84,40 @@ def _euler_model(name="adc508_parity_model"):
     return m
 
 
-def _ssprk2_program(name="adc508_ssprk2"):
+def _ssprk2_program(model, name="adc508_ssprk2"):
     """The canonical SSPRK2 (Heun) Program on one block 'plasma' -- the SAME scheme the native explicit
     AMR advance uses. solve_fields(); R=rhs(U); U1=U+dt R; solve_fields(U1); R1=rhs(U1);
     U <<= 0.5 U + 0.5 (U1 + dt R1)."""
     P = adctime.Program(name)
     dt = P.dt
-    U0 = P.state("plasma")
+    _case, states = program_states(P, model, ("plasma",))
+    temporal = states["plasma"]
+    U0 = temporal.n
     f0 = P.solve_fields("f0", U0)
     k0 = P._rhs_legacy("k0", state=U0, fields=f0, flux=True, sources=["default"])
     U1 = P.linear_combine("U1", U0 + dt * k0)
     f1 = P.solve_fields("f1", U1)
     k1 = P._rhs_legacy("k1", state=U1, fields=f1, flux=True, sources=["default"])
     U2 = P.linear_combine("U2", 0.5 * U0 + 0.5 * (U1 + dt * k1))
-    P.commit(P.state("U", block="plasma").next, U2)
+    P.commit(temporal.next, U2)
     return P
 
 
-def _midpoint_program(name="adc508_midpoint"):
+def _midpoint_program(model, name="adc508_midpoint"):
     """A CUSTOM 2-stage scheme (midpoint RK2): U1 = U + 0.5 dt R(U); U <<= U + dt R(U1). A DIFFERENT
     combine through the same seam -- proves the Program text drives the integrator."""
     P = adctime.Program(name)
     dt = P.dt
-    U0 = P.state("plasma")
+    _case, states = program_states(P, model, ("plasma",))
+    temporal = states["plasma"]
+    U0 = temporal.n
     f0 = P.solve_fields("f0", U0)
     k0 = P._rhs_legacy("k0", state=U0, fields=f0, flux=True, sources=["default"])
     U1 = P.linear_combine("U1", U0 + 0.5 * dt * k0)
     f1 = P.solve_fields("f1", U1)
     k1 = P._rhs_legacy("k1", state=U1, fields=f1, flux=True, sources=["default"])
     U2 = P.linear_combine("U2", U0 + dt * k1)
-    P.commit(P.state("U", block="plasma").next, U2)
+    P.commit(temporal.next, U2)
     return P
 
 
@@ -129,8 +134,9 @@ def test_codegen_emits_amr_install_wrapper():
     """(1) host-side: target='amr_system' emits a per-level install wrapper (NOT a fail-loud throw):
     pops_install_program_amr builds an AmrProgramContext and runs the body in a per-level loop."""
     print("== codegen emits the per-level AmrProgramContext install wrapper ==")
-    prog = _ssprk2_program()
-    src = prog.emit_cpp_program(model=_euler_model(), target="amr_system")
+    model = _euler_model()
+    prog = _ssprk2_program(model)
+    src = prog.emit_cpp_program(model=model, target="amr_system")
     chk("pops_install_program_amr" in src, "the AMR .so exports pops_install_program_amr")
     body = src.split("pops_install_program_amr", 1)[1]
     chk("AmrProgramContext ctx(sys)" in body,
@@ -141,7 +147,7 @@ def test_codegen_emits_amr_install_wrapper():
         and "is not yet available" not in body,
         "the fail-loud throw is gone (the real driver is emitted)")
     # The System target still emits NO AMR entry.
-    src_sys = prog.emit_cpp_program(model=_euler_model())
+    src_sys = prog.emit_cpp_program(model=model)
     chk("pops_install_program_amr" not in src_sys, "the System .so does NOT export the AMR entry")
 
 
@@ -207,11 +213,11 @@ def test_single_level_bit_identical_parity():
     model = _euler_model("adc508_parity_ssprk2")
     u0 = _init_density()
 
-    sys_out, sys_err = _system_run(_ssprk2_program(), model, u0)
+    sys_out, sys_err = _system_run(_ssprk2_program(model), model, u0)
     if sys_out is None:
         print("skip (%s)" % sys_err)
         return
-    amr_out, amr_err = _amr_run(_ssprk2_program(), model, u0)
+    amr_out, amr_err = _amr_run(_ssprk2_program(model), model, u0)
     if amr_out is None:
         print("skip (%s)" % amr_err)
         return
@@ -244,14 +250,15 @@ def test_custom_two_stage_runs_and_differs():
     u0 = _init_density()
     m0 = float(u0.mean())  # mean density == coarse mass / area (L=1)
 
-    mid_amr, err = _amr_run(_midpoint_program(), model, u0)
+    mid_amr, err = _amr_run(_midpoint_program(model), model, u0)
     if mid_amr is None:
         print("skip (%s)" % err)
         return
     mid_rho, mid_phi, mid_mass = mid_amr
 
     # SSPRK2 on the SAME AMR for the differ-check (same model name -> same .so cache key per Program).
-    ss_amr, err2 = _amr_run(_ssprk2_program(), _euler_model("adc508_parity_mid"), u0)
+    ss_model = _euler_model("adc508_parity_mid")
+    ss_amr, err2 = _amr_run(_ssprk2_program(ss_model), ss_model, u0)
     if ss_amr is None:
         print("skip ssprk2 leg (%s)" % err2)
         return
@@ -267,7 +274,8 @@ def test_custom_two_stage_runs_and_differs():
         "the midpoint scheme DIFFERS from SSPRK2 through the SAME seam (max|diff| = %.3e)" % diff)
 
     # Bit-identical vs the same midpoint Program on System (the duck-typing holds for a 2nd combine).
-    sys_out, sys_err = _system_run(_midpoint_program(), _euler_model("adc508_parity_mid"), u0)
+    sys_model = _euler_model("adc508_parity_mid")
+    sys_out, sys_err = _system_run(_midpoint_program(sys_model), sys_model, u0)
     if sys_out is not None:
         sys_rho = sys_out[0][0]
         chk(np.array_equal(sys_rho, mid_rho),
@@ -330,7 +338,8 @@ def test_step_cfl_routes_through_installed_program():
     model = _euler_model("adc508_stepcfl")
     u0 = _init_density()
 
-    prog_out, err = _amr_run_cfl(_ssprk2_program("adc508_stepcfl_prog"), model, u0)
+    prog_out, err = _amr_run_cfl(
+        _ssprk2_program(model, "adc508_stepcfl_prog"), model, u0)
     if prog_out is None:
         print("skip (%s)" % err)
         return

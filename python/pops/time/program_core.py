@@ -11,11 +11,11 @@ from pops.time.program_call import _ProgramCall
 from pops.time.program_rhs import _ProgramRhs
 from pops.time.operator_resolution import resolve_operator_handle
 from pops.time.references import (
-    bind_field_reference, bind_program_block, bind_state_reference, field_name,
+    bind_field_reference, bind_program_block, bind_state_reference, block_name, field_name,
 )
 from pops.time.program_value_validation import (
-    merge_state_spaces, rate_space_for, require_declared_state_space, require_owned,
-    validate_input_regions,
+    merge_state_spaces, rate_space_for, require_compatible_spaces,
+    require_declared_state_space, require_owned, validate_input_regions,
 )
 from pops.time.values import (
     ProgramValue, _Affine, _Coeff, _Operator, _authoring_source_location, _resolve_handle,
@@ -140,7 +140,7 @@ class _ProgramCore(_ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase):
         space = getattr(qualified_state, "space", None)
         if space is None:
             space = self._default_state_spaces.get(block.model_owner_path)
-        require_declared_state_space(self, block, space)
+        require_declared_state_space(self, qualified_state, space)
         return self._time_state(block, qualified_state, space)
 
     def solve_fields(self, name: Any = None, state: Any = None, field: Any = None) -> Any:
@@ -320,12 +320,20 @@ class _ProgramCore(_ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase):
             if len(blocks) > 1:
                 raise ValueError(
                     "cannot combine scalar fields owned by different blocks %s"
-                    % sorted(blocks))
+                    % sorted(block_name(item) for item in blocks))
             block = next(iter(blocks), None)
             inputs = tuple(v for v, _ in aff)
+            # A block-qualified scalar result can represent a one-component state (notably a
+            # scalar-domain Krylov solve).  Preserve its single structural StateSpace through
+            # combinations with unqualified scratch fields so the result remains commit-compatible.
+            spaces = [v.space for v in inputs if v.space is not None]
+            space = spaces[0] if spaces else None
+            for candidate in spaces[1:]:
+                require_compatible_spaces(space, candidate, "linear_combine scalar fields")
             coeffs = [c.to_polynomial() for _, c in aff]
             return self._new(
-                "scalar_field", "linear_combine", inputs, {"coeffs": coeffs}, name, block)
+                "scalar_field", "linear_combine", inputs, {"coeffs": coeffs}, name, block,
+                space=space)
         inputs = tuple(v for v, _ in aff)
         # Structural type errors outrank the secondary block-label mismatch.
         state_space = merge_state_spaces(inputs, "linear_combine")
@@ -333,7 +341,7 @@ class _ProgramCore(_ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase):
         if len(blocks) > 1:
             raise ValueError(
                 "linear_combine: cannot combine values owned by different blocks %s"
-                % sorted(blocks))
+                % sorted(block_name(item) for item in blocks))
         block = next(iter(blocks), None)
         from pops.time.field_context import merge_field_contexts
         field_context = merge_field_contexts(inputs, "linear_combine")

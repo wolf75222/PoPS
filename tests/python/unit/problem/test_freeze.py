@@ -2,7 +2,7 @@
 
 A Problem is MUTABLE while authored and FROZEN by pops.compile. After freeze, every mutating setter
 RAISES (naming the frozen object), the member descriptors are sealed, and Problem.freeze() returns a
-stable ProblemSnapshot whose .hash enters the real compile cache identity. There is NO warning, NO
+stable AuthoringSnapshot whose .hash enters the real compile cache identity. There is NO warning, NO
 shallow-copy escape. Pure Python; needs only ``import pops``.
 """
 import pytest
@@ -10,13 +10,23 @@ from decimal import Decimal
 from fractions import Fraction
 
 pops = pytest.importorskip("pops", exc_type=ImportError)
-from pops.params import ConstParam
+from pops.params import ConstParam  # noqa: E402
 
-from pops.problem._snapshot import ProblemSnapshot, build_problem_snapshot  # noqa: E402
+from pops.problem._snapshot import AuthoringSnapshot, build_problem_snapshot  # noqa: E402
 from pops.numerics.riemann import HLL  # noqa: E402
 from pops.descriptors import BrickDescriptor  # noqa: E402
+from pops.ir import Const  # noqa: E402
 from pops.math import ddt, div  # noqa: E402
-from pops.model import DeclarationIndex, Handle, OwnerKind, OwnerPath  # noqa: E402
+from pops.model import (  # noqa: E402
+    DeclarationIndex,
+    Handle,
+    Module,
+    Operator,
+    OperatorRegistry,
+    OwnerKind,
+    OwnerPath,
+    Rate,
+)
 from pops.physics import Model as PhysicsModel  # noqa: E402
 
 
@@ -60,13 +70,32 @@ def _problem(name="plasma"):
     return pops.Problem(name=name).block("ne", physics=_model(), spatial=pops.FiniteVolume())
 
 
+def _operator_module(name="deep-operator-module"):
+    module = Module(name)
+    state = module.state_space("U", ("rho",))
+    capabilities = {"routes": {"backends": ["cpu"]}}
+    requirements = {"aux": ["B_z"]}
+    lowering = {"sources": ["default"], "stages": {"order": [1, 2]}}
+    body = {"x": [Const(0.0)], "y": [Const(0.0)]}
+    module.operator(
+        "flux",
+        signature=(state,) >> Rate(state),
+        kind="grid_operator",
+        capabilities=capabilities,
+        requirements=requirements,
+        lowering=lowering,
+        expr=body,
+    )
+    return module, state, capabilities, requirements, lowering, body
+
+
 # ---------------------------------------------------------------------------
-# ProblemSnapshot: stable hash, mutation-sensitive, JSON-ready.
+# AuthoringSnapshot: stable hash, mutation-sensitive, JSON-ready.
 # ---------------------------------------------------------------------------
 
 def test_snapshot_hash_is_a_stable_sha256():
     snap = build_problem_snapshot(_problem())
-    assert isinstance(snap, ProblemSnapshot)
+    assert isinstance(snap, AuthoringSnapshot)
     assert isinstance(snap.hash, str) and len(snap.hash) == 64
     assert all(c in "0123456789abcdef" for c in snap.hash)
 
@@ -84,12 +113,12 @@ def test_snapshot_hash_changes_on_a_different_assembly():
 def test_snapshot_is_json_ready():
     import json
     d = build_problem_snapshot(_problem()).to_dict()
-    assert d["schema_version"] == 5
+    assert d["schema_version"] == 6
     assert json.loads(json.dumps(d, sort_keys=True)) == d  # no runtime object, no numpy array
 
 
 def test_snapshot_to_dict_has_no_mutable_escape_from_cached_identity():
-    snap = ProblemSnapshot({"blocks": [{"name": "a"}]})
+    snap = AuthoringSnapshot({"blocks": [{"name": "a"}]})
     before = snap.hash
     external = snap.to_dict()
     external["blocks"][0]["name"] = "mutated"
@@ -121,8 +150,8 @@ def test_structural_objects_with_different_state_never_collide():
         def __init__(self, value):
             self.value = value
 
-    one = ProblemSnapshot({"descriptor": C(1)})
-    two = ProblemSnapshot({"descriptor": C(2)})
+    one = AuthoringSnapshot({"descriptor": C(1)})
+    two = AuthoringSnapshot({"descriptor": C(2)})
 
     assert one.hash != two.hash
     assert one.to_dict()["descriptor"]["$object"]["projections"]["fields"]["value"] != \
@@ -136,7 +165,7 @@ def test_private_slotted_state_is_structural_not_a_type_only_token():
         def __init__(self, value):
             self.__value = value
 
-    assert ProblemSnapshot({"value": C(1)}).hash != ProblemSnapshot({"value": C(2)}).hash
+    assert AuthoringSnapshot({"value": C(1)}).hash != AuthoringSnapshot({"value": C(2)}).hash
 
 
 def test_problem_cache_identity_does_not_collapse_same_named_models():
@@ -179,7 +208,7 @@ def test_structural_projection_is_deeply_detached_from_descriptor_state():
             return self.settings
 
     descriptor = Descriptor()
-    snapshot = ProblemSnapshot({"descriptor": descriptor})
+    snapshot = AuthoringSnapshot({"descriptor": descriptor})
     descriptor.settings["levels"].append(3)
 
     captured = snapshot.to_dict()["descriptor"]["$object"]["projections"]
@@ -191,12 +220,12 @@ def test_mapping_valued_descriptor_options_participate_in_hash():
     first = BrickDescriptor("scheme", "native", options={"order": 1})
     second = BrickDescriptor("scheme", "native", options={"order": 2})
 
-    assert ProblemSnapshot({"brick": first}).hash != ProblemSnapshot({"brick": second}).hash
+    assert AuthoringSnapshot({"brick": first}).hash != AuthoringSnapshot({"brick": second}).hash
 
 
 def test_snapshot_envelope_schema_version_cannot_be_shadowed_by_payload():
     with pytest.raises(ValueError, match="reserved key 'schema_version'"):
-        ProblemSnapshot({"schema_version": 999})
+        AuthoringSnapshot({"schema_version": 999})
 
 
 @pytest.mark.parametrize("accessor", ["options", "to_dict"])
@@ -209,14 +238,14 @@ def test_failing_structural_projection_is_never_swallowed(accessor):
 
     setattr(Broken, accessor, fail)
     with pytest.raises(RuntimeError, match="projection exploded") as exc:
-        ProblemSnapshot({"broken": Broken()})
-    assert any("ProblemSnapshot" in note and "%s()" % accessor in note
+        AuthoringSnapshot({"broken": Broken()})
+    assert any("AuthoringSnapshot" in note and "%s()" % accessor in note
                for note in getattr(exc.value, "__notes__", ()))
 
 
 def test_non_finite_decimal_is_refused_instead_of_entering_json_hash():
     with pytest.raises(ValueError, match="non-finite Decimal"):
-        ProblemSnapshot({"bad": Decimal("NaN")})
+        AuthoringSnapshot({"bad": Decimal("NaN")})
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +412,126 @@ def test_python_physics_model_is_deeply_frozen_without_changing_snapshot_identit
     assert build_problem_snapshot(p).hash == snapshot.hash
 
 
+def test_raw_module_freeze_seals_registry_and_operator_records_deeply():
+    module, state, *_ = _operator_module("raw-module-freeze")
+    registry = module.operator_registry()
+    operator = registry.get("flux")
+    problem = pops.Problem(name="raw-module-freeze").block("fluid", physics=module)
+
+    snapshot = problem.freeze()
+
+    assert module.frozen and registry.frozen and operator.frozen
+    with pytest.raises(RuntimeError, match="frozen"):
+        registry.register(Operator(
+            "late", "grid_operator", (state,) >> Rate(state), body={"x": (), "y": ()}))
+    with pytest.raises(RuntimeError, match="frozen"):
+        registry.register_alias("late_alias", "flux")
+    with pytest.raises(RuntimeError, match="frozen"):
+        operator.capabilities = {}
+    with pytest.raises(RuntimeError, match="frozen"):
+        module._frozen = False
+    with pytest.raises(RuntimeError, match="frozen"):
+        registry._frozen = False
+    with pytest.raises(RuntimeError, match="frozen"):
+        operator._frozen = False
+    with pytest.raises(TypeError):
+        operator.capabilities["late"] = True
+    with pytest.raises(AttributeError):
+        operator.capabilities["routes"]["backends"].append("gpu")
+    assert build_problem_snapshot(problem).hash == snapshot.hash
+
+
+def test_raw_module_freeze_detaches_all_stale_operator_metadata_aliases():
+    module, _, capabilities, requirements, lowering, body = _operator_module(
+        "raw-module-aliases")
+    operator = module.operator_registry().get("flux")
+    stale_capabilities = operator.capabilities
+    stale_requirements = operator.requirements
+    stale_lowering = operator.lowering
+    problem = pops.Problem(name="raw-module-aliases").block("fluid", physics=module)
+
+    snapshot = problem.freeze()
+    frozen_hash = module.module_hash()
+    stale_capabilities["late"] = True
+    stale_requirements["aux"].append("late_aux")
+    stale_lowering["sources"].append("late_source")
+    capabilities["routes"]["backends"].append("gpu")
+    requirements["aux"].append("foreign_aux")
+    lowering["stages"]["order"].append(3)
+    body["x"].append(Const(1.0))
+
+    assert dict(operator.capabilities) == {"routes": {"backends": ("cpu",)}}
+    assert dict(operator.requirements) == {"aux": ("B_z",)}
+    assert operator.lowering["sources"] == ("default",)
+    assert operator.lowering["stages"]["order"] == (1, 2)
+    assert len(operator.body["x"]) == 1
+    assert module.module_hash() == frozen_hash
+    assert build_problem_snapshot(problem).hash == snapshot.hash
+
+
+def test_module_eigenvalues_never_expose_a_live_authoring_alias():
+    module = Module("eigenvalue-aliases")
+    module.state_space("U", ("rho",))
+    x_input, y_input = [Const(1.0)], [Const(-1.0)]
+    returned = module.eigenvalues(x_input, y_input)
+    initial_hash = module.module_hash()
+
+    returned["x"].append(Const(2.0))
+    x_input.append(Const(3.0))
+    assert len(module._eigenvalues["x"]) == 1
+    assert module.module_hash() == initial_hash
+
+    stale_internal = module._eigenvalues
+    problem = pops.Problem(name="eigenvalue-aliases").block("fluid", physics=module)
+    snapshot = problem.freeze()
+    frozen_hash = module.module_hash()
+    stale_internal["x"] = stale_internal["x"] + (Const(4.0),)
+
+    assert len(module._eigenvalues["x"]) == 1
+    assert module.module_hash() == frozen_hash
+    assert build_problem_snapshot(problem).hash == snapshot.hash
+    with pytest.raises(TypeError):
+        module._eigenvalues["x"] = ()
+
+
+def test_failed_problem_freeze_restores_raw_module_registry_and_operator_mutability():
+    class FailingSpatial(BrickDescriptor):
+        def freeze(self):
+            super().freeze()
+            raise RuntimeError("later spatial freeze failed")
+
+    module, state, *_ = _operator_module("raw-module-rollback")
+    registry = module.operator_registry()
+    operator = registry.get("flux")
+    problem = pops.Problem(name="raw-module-rollback").block(
+        "fluid", physics=module, spatial=FailingSpatial("bad", "native"))
+
+    with pytest.raises(RuntimeError, match="later spatial freeze failed"):
+        problem.freeze()
+
+    assert not module.frozen and not registry.frozen and not operator.frozen
+    operator.capabilities["after_rollback"] = True
+    registry.register(Operator(
+        "late", "grid_operator", (state,) >> Rate(state), body={"x": (), "y": ()}))
+    module.eigenvalues([Const(0.0)], [Const(0.0)])
+    assert module.list_operators() == ["flux", "late"]
+
+
+def test_adopted_registry_is_bound_to_one_module_mutation_lifecycle():
+    module = Module("adopted-registry")
+    state = module.state_space("U", ("rho",))
+    registry = OperatorRegistry(owner=module.owner_path)
+    registry.register(Operator(
+        "rate", "local_rate", (state,) >> Rate(state), body=(Const(0.0),)))
+
+    module.adopt_registry(registry)
+    module.freeze()
+
+    assert registry.frozen and registry.get("rate").frozen
+    with pytest.raises(RuntimeError, match="frozen"):
+        registry.register_alias("default", "rate")
+
+
 def test_later_freeze_failure_restores_python_physics_cascade_exactly():
     class FailingSpatial(BrickDescriptor):
         def freeze(self):
@@ -502,16 +651,16 @@ def test_program_freeze_raises_on_new_node():
 def test_snapshot_validator_authenticates_type_hash_and_payload():
     from pops.problem._snapshot import validate_problem_snapshot
 
-    snapshot = ProblemSnapshot({"problem": "cache-identity"})
+    snapshot = AuthoringSnapshot({"problem": "cache-identity"})
     assert validate_problem_snapshot(snapshot) == snapshot.hash
-    with pytest.raises(TypeError, match="ProblemSnapshot"):
+    with pytest.raises(TypeError, match="AuthoringSnapshot"):
         validate_problem_snapshot(snapshot.hash)
 
     object.__setattr__(snapshot, "_hash", "a" * 64)
     with pytest.raises(ValueError, match="canonical payload"):
         validate_problem_snapshot(snapshot)
 
-    artifact_snapshot = ProblemSnapshot({"problem": "artifact-identity"})
+    artifact_snapshot = AuthoringSnapshot({"problem": "artifact-identity"})
     object.__setattr__(artifact_snapshot, "_artifact_hash", "b" * 64)
     with pytest.raises(ValueError, match="canonical artifact projection"):
         validate_problem_snapshot(artifact_snapshot)
@@ -519,6 +668,7 @@ def test_snapshot_validator_authenticates_type_hash_and_payload():
 
 def test_compiled_handle_is_sealed_after_public_compile():
     from pops.codegen.loader import CompiledModel, CompiledProblem
+    from pops.model.bind_schema import BindSchema
 
     handle = CompiledProblem("x.so", None, None, "abi", "c++", "c++23")
     handle._advanced_attach = "ok"  # the advanced compile_problem route stays attachable
@@ -526,13 +676,13 @@ def test_compiled_handle_is_sealed_after_public_compile():
     with pytest.raises(AttributeError, match="immutable after pops.compile"):
         handle.so_path = "y.so"
     with pytest.raises(AttributeError, match="ADC-563"):
-        handle._layout = object()
+        handle.install_plan = object()
 
     block = CompiledModel(
         "block.so", "production", "add_native_block", (), (), (), 0,
         None, 0, {}, {}, "abi", "model-hash", "c++", "c++23",
     )
-    block.bind_schema = object()  # advanced Model.compile remains attachable
+    block.bind_schema = BindSchema()  # advanced Model.compile remains attachable with typed metadata
     block._seal()
     with pytest.raises(AttributeError, match="immutable after pops.compile"):
         block.bind_schema = None

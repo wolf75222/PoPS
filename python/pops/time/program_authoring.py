@@ -1,10 +1,11 @@
-"""Program dumps, control flow, reductions, decorators and optional dt bounds."""
+"""Program control flow, field ops, reductions and decorator authoring."""
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from pops.ir.literals import scalar_literal
+from pops.time.program_dump import _ProgramDump
 from pops.time.program_base import _ProgramConstants
 from pops.time.program_transaction import atomic_authoring
-from pops.time.references import block_name, state_name
+from pops.time.references import block_name
 from pops.time.program_value_validation import (
     require_compatible_spaces, require_region, require_top_level,
     validate_input_regions,
@@ -15,61 +16,8 @@ if TYPE_CHECKING:
     from pops.time._program_contract import _ProgramBase
 else:
     _ProgramBase = object
-class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
-    """IR dumps, decorator step(), control flow (while_/if_/range), reductions and the dt bound."""
-
-    def _render_node(self, v: Any) -> Any:
-        """Render one IR value as an operator-first line (introspection, not codegen)."""
-        ins = ", ".join(self._canonical_value(i).name for i in v.inputs)
-        extra = ""
-        keys = {k: val for k, val in v.attrs.items() if k != "coeffs"}
-        if "coeffs" in v.attrs:
-            extra = "  # coeffs=%s" % (v.attrs["coeffs"],)
-        elif keys:
-            extra = "  # %s" % (keys,)
-        return "%-16s = P.%s(%s)%s" % (v.name, v.op, ins, extra)
-
-    def dump_operator_ir(self) -> Any:
-        """The operator-first Program IR (one line per node): P.call/linear_combine/
-        solve_local_linear/commit. The board sugar lowers to exactly this -- the dump
-        proves the board and the operator-first writings share one IR."""
-        lines = ["# operator-first Program IR: %s" % self.name]
-        for v in self._values:
-            lines.append("  " + self._render_node(v))
-        for state_ref, st in self._commits.items():
-            lines.append(
-                "  T.commit(T.state(%s, %s).next, %s)"
-                % (block_name(state_ref.block_ref), state_name(state_ref), st.name))
-        return "\n".join(lines)
-
-    def dump_board(self) -> Any:
-        """The board-level view; board notation lowers to the operator-first IR below."""
-        return ("# board program %s lowers to the operator-first IR (board == operator-first):\n%s"
-                % (self.name, self.dump_operator_ir()))
-
-    def dump_cpp_plan(self) -> Any:
-        """A textual C++ plan of the generated step (ProgramContext calls), NOT the exact
-        codegen -- it shows which ctx / GeneratedModule call each node lowers to."""
-        lines = ["// C++ plan for GeneratedProgram step of %s" % self.name]
-        for v in self._values:
-            ins = ", ".join(self._canonical_value(i).name for i in v.inputs)
-            if v.op == "coupled_rate":
-                # the coupled-rate kernel lowers to ONE multi-state for_each_cell filling every block's
-                # rate scratch at once (ADC-457); there is no single ctx.coupled_rate(...) call.
-                blks = ", ".join(block_name(block) for block in v.attrs.get("blocks", []))
-                lines.append("  // %s: multi-state for_each_cell rate kernel over (%s) for blocks "
-                             "[%s];  // ADC-457" % (v.name, ins, blks))
-            elif v.op == "coupled_rate_out":
-                # a pure projection: it aliases its block's rate scratch (no code of its own).
-                lines.append("  // %s = %s.rate[%r];  // ADC-457 (block projection, no ctx call)"
-                             % (v.name, ins, v.attrs.get("out_block")))
-            else:
-                lines.append("  ctx.%s(%s);  // -> %s" % (v.op, ins, v.name))
-        for state_ref, st in self._commits.items():
-            lines.append(
-                "  ctx.commit(%r, %s);"
-                % (block_name(state_ref.block_ref), st.name))
-        return "\n".join(lines)
+class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
+    """Decorator, field-op, reduction and control-flow Program authoring."""
 
     # --- decorator mode (ADC-423): record the step body from a function ---
     @atomic_authoring
@@ -321,7 +269,15 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
                     raise TypeError(
                         "scalar arithmetic operands must be Scalar values or numbers; got %r" % (x,)
                     ) from exc
-        block = next((x.block for x in (a, b) if isinstance(x, ProgramValue)), None)
+        blocks = {
+            x.block for x in (a, b)
+            if isinstance(x, ProgramValue) and x.block is not None
+        }
+        if len(blocks) > 1:
+            raise ValueError(
+                "scalar arithmetic cannot combine values owned by different blocks %s"
+                % sorted(block_name(item) for item in blocks))
+        block = next(iter(blocks), None)
         return self._new("scalar", "scalar_op", tuple(inputs), {"fn": fn, "operands": operands}, None,
                          block)
 
@@ -333,6 +289,13 @@ class _ProgramAuthoring(_ProgramConstants, _ProgramBase):
         not recompute the speed."""
         if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("max_wave_speed: a State value is required")
+        # A dt-bound is emitted as an isolated sub-program.  Materialize an explicit state read in
+        # that region when its builder refers to an already-authored top-level TimeState; otherwise
+        # the bound would retain a cross-region SSA input that its emitter cannot name.
+        if self._recording and state.region != self._current_region():
+            state = self._new(
+                "state", "state", (), {"state": state.state_ref}, block_name(state.block),
+                state.block, space=state.space, state_ref=state.state_ref)
         return self._new("scalar", "max_wave_speed", (state,), {}, None, state.block)
 
     def hmin(self) -> Any:

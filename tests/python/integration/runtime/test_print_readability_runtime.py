@@ -30,9 +30,9 @@ import sys
 
 try:
     import pops._pops  # noqa: F401  -- System / AmrSystem need the native runtime
-    import pops
     from pops import time as adctime
     from pops.codegen.loader import CompiledModel, CompiledProblem
+    from tests.python.support.typed_program import program_states, synthetic_module
     from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 except Exception as exc:  # noqa: BLE001 -- _pops not built in this interpreter
     print("skip test_print_readability_runtime (_pops unavailable: %s)" % exc)
@@ -63,10 +63,13 @@ def _synthetic_compiled():
     ``.so`` or touches the runtime; only ``CompiledProblem``'s pure-Python metadata wrapper runs."""
     P = adctime.Program("demo")
     dt = P.dt
-    U = P.state("plasma")
+    module = synthetic_module("demo_state", components=("rho", "mx", "my"))
+    _case, states = program_states(P, module, ("plasma",))
+    temporal = states["plasma"]
+    U = temporal.n
     f = P.solve_fields("phi", U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + dt * R))
+    P.commit(temporal.next, P.linear_combine("U1", U + dt * R))
     m = CompiledModel(
         so_path="/nonexistent/problem.so", backend="production", adder="add_native_block",
         cons_names=["rho", "mx", "my"], cons_roles=["Density", "MomentumX", "MomentumY"],

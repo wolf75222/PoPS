@@ -22,6 +22,7 @@ try:
     from pops.numerics.riemann import Rusanov
     from pops.physics.facade import Model
     from pops.runtime.system import AmrSystem, System
+    from tests.python.support.typed_program import program_states, synthetic_module
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
     print("skip test_amr_history_parity (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -58,7 +59,9 @@ def _passive_source_model(name):
 
 def _ab2_program(name="adc631_ab2"):
     P = pops.time.Program(name)
-    lt.adams_bashforth2(P, "blk")
+    module = synthetic_module("%s_state" % name, components=("rho",))
+    _case, states = program_states(P, module, ("blk",))
+    lt.adams_bashforth2(P, states["blk"])
     return P
 
 
@@ -145,7 +148,8 @@ def test_flat_amr_history_equals_uniform():
         "the same history rings are registered on both (%r)" % sorted(amr_rings))
     all_slots_equal = True
     for hname in sys_rings:
-        for k, (a, b) in enumerate(zip(sys_rings[hname], amr_rings.get(hname, []))):
+        for k, (a, b) in enumerate(
+                zip(sys_rings[hname], amr_rings.get(hname, []), strict=False)):
             if not np.array_equal(a, b):
                 all_slots_equal = False
                 print("    ring %s slot %d differs: max|d|=%.3e" % (hname, k, np.abs(a - b).max()))

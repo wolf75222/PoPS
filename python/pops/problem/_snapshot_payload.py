@@ -3,7 +3,7 @@
 The public ``Problem.to_dict()`` is an inspection view and intentionally shortens several objects
 to display names.  A compile-cache identity cannot use that lossy view: two models may share a name
 while carrying different coefficients.  This module reads the typed registries and returns detached
-container shells whose leaves remain the real descriptors; ``ProblemSnapshot`` then applies its
+container shells whose leaves remain the real descriptors; ``AuthoringSnapshot`` then applies its
 strict structural protocol to every leaf.
 """
 from __future__ import annotations
@@ -116,11 +116,24 @@ def _validated_parameter_artifact_data(declaration: Any, *, where: str) -> dict[
 
 
 def _time_snapshot_value(program: Any) -> Any:
-    """Use the Program's structural report (including its IR hash), or the value itself."""
+    """Project a Program from its IR, excluding lifecycle-only inspection state.
+
+    ``Problem.freeze`` first captures the snapshot and then seals the Program.  Inspection reports
+    include that lifecycle state, so using ``inspect()`` made the same Problem hash differently
+    immediately after a successful freeze.  The serialized IR and its hash are the complete compile
+    input and remain identical across the mutable-to-frozen transition.
+    """
     if program is None:
         return None
-    inspect = getattr(program, "inspect", None)
-    return inspect() if callable(inspect) else program
+    serialize = getattr(program, "_serialize", None)
+    if callable(serialize):
+        ir_hash = getattr(program, "_ir_hash", None)
+        return {
+            "type": "%s.%s" % (type(program).__module__, type(program).__qualname__),
+            "ir": serialize(),
+            "hash": ir_hash() if callable(ir_hash) else None,
+        }
+    return program
 
 
 def _model_snapshot_value(model: Any, *, artifact: bool = False) -> Any:

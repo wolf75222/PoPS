@@ -16,6 +16,7 @@
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from tests.python.support.typed_program import program_states, synthetic_module
 import sys
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
@@ -59,10 +60,13 @@ def raises(exc_types, fn):
 def _fe_program(name="forward_euler_parity"):
     P = adctime.Program(name)
     dt = P.dt
-    U = P.state("ions")
+    module = synthetic_module("%s_state" % name, components=("rho", "mx", "my"))
+    _case, states = program_states(P, module, ("ions",))
+    temporal = states["ions"]
+    U = temporal.n
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(P.state("U", block="ions").next, P.linear_combine("U1", U + dt * R))
+    P.commit(temporal.next, P.linear_combine("U1", U + dt * R))
     return P
 
 
@@ -154,10 +158,13 @@ import tempfile  # noqa: E402
 def _fe_scaled(name, a):
     """A Forward-Euler Program U <- U + a*dt*R (the dt coefficient varies with a)."""
     P = adctime.Program(name)
-    U = P.state("ions")
+    module = synthetic_module("%s_state" % name, components=("rho", "mx", "my"))
+    _case, states = program_states(P, module, ("ions",))
+    temporal = states["ions"]
+    U = temporal.n
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(P.state("U", block="ions").next, P.linear_combine("U1", U + a * P.dt * R))
+    P.commit(temporal.next, P.linear_combine("U1", U + a * P.dt * R))
     return P
 
 

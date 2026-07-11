@@ -6,6 +6,8 @@ build typed IR (validated structurally); the codegen that LOWERS them is a later
 `emit_cpp_program` still refuses a Program that uses them with a clear NotImplementedError (never a
 mis-lowering). Pure Python (no compile / no _pops runtime); skips if pops is unavailable.
 """
+from typed_program_support import typed_state
+
 import sys
 
 
@@ -22,7 +24,7 @@ def _predictor_corrector(t):
     """Spec example 5: predictor-corrector Poisson/Lorentz (electric source + Lorentz local solve)."""
     P = t.Program("predictor_corrector_poisson_lorentz")
     dt = P.dt
-    U_n = P.state("plasma")
+    U_n = typed_state(P, "plasma")
     f_n = P.solve_fields("fields_n", U_n)
     R_n = P._rhs_legacy(name="R_n", state=U_n, fields=f_n, flux=True, sources=["electric"])
     U_star_rhs = P.linear_combine("U_star_rhs", U_n + dt * R_n)
@@ -35,7 +37,7 @@ def _predictor_corrector(t):
     U_np1 = P.solve_local_linear(name="U_np1", operator=P.I - 0.5 * dt * P._linear_source("lorentz"),
                                  rhs=Q, fields=f_star)
     P.solve_fields("fields_np1", U_np1)
-    P.commit(P.state("U", block="plasma").next, U_np1)
+    P.commit(typed_state(P, "plasma", state_name="U").next, U_np1)
     return P
 
 
@@ -49,17 +51,17 @@ def test_a_coeff_recorded_and_hashed(t):
     # operator I - a*dt*L records a as a dt-polynomial in attrs; a changes the IR hash.
     def prog(a):
         P = t.Program("scl")
-        U = P.state("plasma")
+        U = typed_state(P, "plasma")
         Q = P.linear_combine("Q", 1.0 * U)
         op = P.I - a * P.dt * P._linear_source("lorentz")
-        P.commit(P.state("U", block="plasma").next, P.solve_local_linear(name="W", operator=op, rhs=Q))
+        P.commit(typed_state(P, "plasma", state_name="U").next, P.solve_local_linear(name="W", operator=op, rhs=Q))
         return P
     assert prog(1.0)._ir_hash() != prog(0.5)._ir_hash(), "a different solve coefficient must rehash"
 
 
 def test_solve_local_linear_rejects_non_operator(t):
     P = t.Program("bad")
-    U = P.state("plasma")
+    U = typed_state(P, "plasma")
     Q = P.linear_combine("Q", 1.0 * U)
     try:  # a plain State is not a local linear operator
         P.solve_local_linear(name="W", operator=U, rhs=Q)
@@ -71,7 +73,7 @@ def test_solve_local_linear_rejects_non_operator(t):
 
 def test_solve_local_linear_requires_identity(t):
     P = t.Program("bad2")
-    U = P.state("plasma")
+    U = typed_state(P, "plasma")
     Q = P.linear_combine("Q", 1.0 * U)
     try:  # a*L without the identity I is not the I +/- a*L form
         P.solve_local_linear(name="W", operator=P.dt * P._linear_source("lorentz"), rhs=Q)
@@ -83,14 +85,14 @@ def test_solve_local_linear_requires_identity(t):
 
 def test_source_and_apply_are_rhs_like(t):
     P = t.Program("sa")
-    U = P.state("plasma")
+    U = typed_state(P, "plasma")
     f = P.solve_fields(U)
     # This unit pins the primitive IR. Public handle resolution is covered by
     # test_operator_handle_resolution; use the explicit private selector seam here.
     S = P._source("electric", state=U, fields=f)
     LU = P.apply(P._linear_source("lorentz"), state=U, fields=f)
     assert S.vtype == "rhs" and LU.vtype == "rhs", "source/apply are dU/dt-like (RHS) values"
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("Un", U + P.dt * S + P.dt * LU))
+    P.commit(typed_state(P, "plasma", state_name="U").next, P.linear_combine("Un", U + P.dt * S + P.dt * LU))
     assert P.validate() is True
 
 

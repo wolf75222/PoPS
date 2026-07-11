@@ -9,6 +9,8 @@ import pytest
 
 from pops import model
 from pops.ir.expr import Var
+from pops.problem import Problem
+from tests.python.unit.runtime._typed_program import add_typed_block
 
 adctime = pytest.importorskip("pops.time")
 
@@ -24,6 +26,17 @@ def _two_fluid_module():
                  kind="coupled_rate",
                  expr={"electrons": [ni - ne, ne, ne], "ions": [ne - ni, ni, ni]})
     return mod, e, i, bundle
+
+
+def _program_states(mod, name, declarations):
+    """Build real case-qualified temporal states for a coupled Program."""
+    case = Problem(name="%s_case" % name)
+    program = adctime.Program(name).bind_operators(mod)
+    result = {}
+    for block_name, space in declarations:
+        block, state = add_typed_block(case, mod, block_name, space)
+        result[block_name] = program.state(block, state)
+    return program, result
 
 
 def test_coupled_rate_is_a_valid_kind():
@@ -63,11 +76,10 @@ def test_coupled_rate_operator_registers_with_bundle_output():
 
 def test_p_call_coupled_rate_returns_indexable_bundle():
     mod, e, i, _ = _two_fluid_module()
-    P = adctime.Program("step").bind_operators(mod)
-    e_n = P.state("electrons", space=e)
-    i_n = P.state("ions", space=i)
+    P, states = _program_states(mod, "step", (("electrons", e), ("ions", i)))
+    e_n, i_n = states["electrons"].n, states["ions"].n
     C = P._call("collision", e_n, i_n)
-    re_, ri_ = C["electrons"], C["ions"]
+    re_, ri_ = C[e_n.block], C[i_n.block]
     assert re_.vtype == "rhs" and ri_.vtype == "rhs"
     # each per-block rate is usable in an affine combination of its block's state
     e1 = P.linear_combine("e1", e_n + P.dt * re_)
@@ -84,16 +96,16 @@ def test_coupled_rate_arbitrary_arity_three_blocks():
     z = Var("ne", "cons")
     mod.operator(name="coll3", signature=model.Signature((e, i, n), bundle),
                  kind="coupled_rate", expr={"e": [z], "i": [z], "n": [z]})
-    P = adctime.Program("s").bind_operators(mod)
-    en, inn, nn = P.state("e", space=e), P.state("i", space=i), P.state("n", space=n)
+    P, states = _program_states(mod, "s", (("e", e), ("i", i), ("n", n)))
+    en, inn, nn = states["e"].n, states["i"].n, states["n"].n
     C = P._call("coll3", en, inn, nn)
-    assert set(C.keys()) == {"e", "i", "n"}
+    assert set(C.keys()) == {en.block, inn.block, nn.block}
 
 
 def test_coupled_rate_bundle_unknown_block_errors():
     mod, e, i, _ = _two_fluid_module()
-    P = adctime.Program("step").bind_operators(mod)
-    C = P._call("collision", P.state("electrons", space=e), P.state("ions", space=i))
+    P, states = _program_states(mod, "step", (("electrons", e), ("ions", i)))
+    C = P._call("collision", states["electrons"].n, states["ions"].n)
     with pytest.raises(KeyError):
         _ = C["neutrals"]
 
@@ -102,9 +114,9 @@ def test_coupled_rate_rejects_schedule_clearly():
     # schedule= on a coupled_rate has no single output to schedule yet -> clear error, not a raw
     # AttributeError from the _CoupledResult having no .attrs.
     mod, e, i, _ = _two_fluid_module()
-    P = adctime.Program("step").bind_operators(mod)
+    P, states = _program_states(mod, "step", (("electrons", e), ("ions", i)))
     with pytest.raises(ValueError, match="coupled_rate"):
-        P._call("collision", P.state("electrons", space=e), P.state("ions", space=i),
+        P._call("collision", states["electrons"].n, states["ions"].n,
                schedule=adctime.every(2))
 
 
@@ -112,10 +124,10 @@ def test_dump_cpp_plan_shows_coupled_rate_kernel():
     # the C++ plan shows the coupled_rate as ONE multi-state kernel (ADC-457), never a
     # ctx.coupled_rate(...) call that does not exist.
     mod, e, i, _ = _two_fluid_module()
-    P = adctime.Program("step").bind_operators(mod)
-    e_n, i_n = P.state("electrons", space=e), P.state("ions", space=i)
+    P, states = _program_states(mod, "step", (("electrons", e), ("ions", i)))
+    e_n, i_n = states["electrons"].n, states["ions"].n
     C = P._call("collision", e_n, i_n)
-    P.linear_combine("e1", e_n + P.dt * C["electrons"])
+    P.linear_combine("e1", e_n + P.dt * C[e_n.block])
     plan = P.dump_cpp_plan()
     assert "ADC-457" in plan and "ctx.coupled_rate(" not in plan
     assert "multi-state for_each_cell rate kernel" in plan
@@ -127,14 +139,14 @@ def test_coupled_rate_now_lowers_to_cpp():
     # deferral is now scoped to prim/aux formulas (the cons-only MVP) -- see
     # test_coupled_rate_codegen.py for the emitted kernel shape and the prim-var raise.
     mod, e, i, _ = _two_fluid_module()
-    P = adctime.Program("step").bind_operators(mod)
-    e_n, i_n = P.state("electrons", space=e), P.state("ions", space=i)
+    P, states = _program_states(mod, "step", (("electrons", e), ("ions", i)))
+    e_n, i_n = states["electrons"].n, states["ions"].n
     C = P._call("collision", e_n, i_n)
     P.commit_many({
-        P.state("U", block="electrons").next:
-            P.linear_combine("e1", e_n + P.dt * C["electrons"]),
-        P.state("U", block="ions").next:
-            P.linear_combine("i1", i_n + P.dt * C["ions"]),
+        states["electrons"].next:
+            P.linear_combine("e1", e_n + P.dt * C[e_n.block]),
+        states["ions"].next:
+            P.linear_combine("i1", i_n + P.dt * C[i_n.block]),
     })
     P._check_lowerable(None)  # no longer raises for a cons-only coupled_rate
     src = P.emit_cpp_program(model=None)

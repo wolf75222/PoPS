@@ -24,6 +24,8 @@ captured into the step closure), reused across every step and every Krylov itera
     1e-6, the solve changed the state, and the offline solve took > 1 iteration. Self-skips (exit 0)
     without numpy / _pops / install_program / a compiler / a visible Kokkos -- never fakes the engine.
 """
+from typed_program_support import typed_state
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
@@ -67,7 +69,7 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
     drives the runtime Krylov loop. The Program needs no model (the apply is a pure Laplacian). An
     optional @p preconditioner (a typed descriptor) is threaded into solve_linear."""
     P = t.Program(name)
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
 
     def apply(P, out, x):
@@ -78,7 +80,7 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
     P.set_apply(A, apply)
     kw = {} if preconditioner is None else {"preconditioner": preconditioner}
     phi = P.solve_linear(operator=A, rhs=U, method=_krylov(method), tol=tol, max_iter=max_iter, **kw)
-    P.commit(P.state("U", block="blk").next, phi)
+    P.commit(typed_state(P, "blk", state_name="U").next, phi)
     return P
 
 
@@ -173,7 +175,7 @@ def test_planned_precond_rejected(t):
 def test_string_precond_rejected(t):
     # Spec 5 sec.7: a bare string preconditioner is rejected, naming the typed alternative.
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     try:
@@ -199,7 +201,7 @@ def test_solve_validates(t):
 
 def test_max_iter_required(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     for bad in (None, 0, -5):
@@ -213,7 +215,7 @@ def test_max_iter_required(t):
 
 def test_tol_positive(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     for bad in (0.0, -1e-8):
@@ -229,7 +231,7 @@ def test_string_method_rejected(t):
     # Spec 5 sec.7: solve_linear takes a TYPED pops.solvers.krylov descriptor; a bare string
     # (known or unknown) is rejected and the error names the typed alternative.
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     for bad in ("cg", "minres"):
@@ -243,7 +245,7 @@ def test_string_method_rejected(t):
 
 def test_operator_must_be_matrix_free(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     try:
         P.solve_linear(operator=U, rhs=U, max_iter=10)  # a State is not an operator
     except ValueError as exc:

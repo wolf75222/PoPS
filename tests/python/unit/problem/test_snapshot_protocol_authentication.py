@@ -1,4 +1,4 @@
-"""ProblemSnapshot special encodings accept authenticated PoPS value types only."""
+"""AuthoringSnapshot special encodings accept authenticated PoPS value types only."""
 import pytest
 
 pops = pytest.importorskip("pops", exc_type=ImportError)
@@ -6,7 +6,7 @@ pops = pytest.importorskip("pops", exc_type=ImportError)
 from pops.ir.literals import ScalarLiteral as PopsScalarLiteral  # noqa: E402
 from pops.model import DeclarationIndex, MissingOwnershipError, OwnerKind  # noqa: E402
 from pops.model.handles import Handle, OwnerPath  # noqa: E402
-from pops.problem._snapshot import ProblemSnapshot  # noqa: E402
+from pops.problem._snapshot import AuthoringSnapshot  # noqa: E402
 
 
 def test_same_named_scalar_literal_cannot_collide_with_real_literal():
@@ -14,8 +14,8 @@ def test_same_named_scalar_literal_cannot_collide_with_real_literal():
         def to_data(self):
             return {"kind": "integer", "value": "7"}
 
-    real = ProblemSnapshot({"value": PopsScalarLiteral.from_value(7)})
-    fake = ProblemSnapshot({"value": ScalarLiteral()})
+    real = AuthoringSnapshot({"value": PopsScalarLiteral.from_value(7)})
+    fake = AuthoringSnapshot({"value": ScalarLiteral()})
 
     assert real.hash != fake.hash
     assert "$scalar" in real.to_dict()["value"]
@@ -36,8 +36,8 @@ def test_duck_typed_handle_cannot_collide_with_authenticated_handle():
         def canonical_identity(self):
             return real_handle.canonical_identity()
 
-    real = ProblemSnapshot({"handle": real_handle})
-    fake = ProblemSnapshot({"handle": FakeHandle()})
+    real = AuthoringSnapshot({"handle": real_handle})
+    fake = AuthoringSnapshot({"handle": FakeHandle()})
 
     assert real.hash != fake.hash
     assert "$handle" in real.to_dict()["handle"]
@@ -55,7 +55,7 @@ def test_authenticated_handle_canonical_identity_is_strictly_validated():
     handle = CoercibleHandle("rho", kind="state", owner=OwnerPath.model("fluid"))
 
     with pytest.raises(TypeError, match="schema_version"):
-        ProblemSnapshot({"handle": handle})
+        AuthoringSnapshot({"handle": handle})
 
 
 def test_authoring_handle_requires_an_authoritative_snapshot_resolver():
@@ -63,10 +63,10 @@ def test_authoring_handle_requires_an_authoritative_snapshot_resolver():
     handle = Handle("rho", kind="state", owner=owner)
 
     with pytest.raises(TypeError, match="authoritative resolver"):
-        ProblemSnapshot({"handle": handle})
+        AuthoringSnapshot({"handle": handle})
 
     index = DeclarationIndex(owner=owner, handles=(handle,))
-    resolved = ProblemSnapshot(
+    resolved = AuthoringSnapshot(
         {"handle": handle},
         handle_resolver=lambda value: index.authenticate(value)._resolved(),
     )
@@ -79,7 +79,7 @@ def test_snapshot_resolver_must_reauthenticate_canonical_identity_without_rewrit
     rewritten = Handle("rho", kind="state", owner=OwnerPath.model("other"))
 
     with pytest.raises(ValueError, match="changed an already canonical identity"):
-        ProblemSnapshot({"handle": authored}, handle_resolver=lambda value: rewritten)
+        AuthoringSnapshot({"handle": authored}, handle_resolver=lambda value: rewritten)
 
 
 def test_problem_freeze_reauthenticates_already_canonical_handles():

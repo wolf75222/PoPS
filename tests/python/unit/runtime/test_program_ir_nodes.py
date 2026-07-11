@@ -17,16 +17,19 @@ import sys
 try:
     from pops import time as adctime
     from pops import model
+    from pops.problem import Problem
+    from tests.python.unit.runtime._typed_program import add_typed_block, typed_program_state
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_program_ir_nodes (pops unavailable: %s)" % exc)
     sys.exit(0)
 
 
 def _euler(scale=1.0):
-    P = adctime.Program("forward_euler")
-    U = P.state("plasma")
+    P, _, _, _, _, temporal = typed_program_state(
+        "forward_euler", block_name="plasma")
+    U = temporal.n
     R = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=["default"])
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + (scale * P.dt) * R))
+    P.commit(temporal.next, P.linear_combine("U1", U + (scale * P.dt) * R))
     return P
 
 
@@ -44,24 +47,29 @@ def test_ir_node_has_identity_and_inspection_fields():
 
 
 def test_logical_shape_reflects_the_space_tag():
-    P = adctime.Program("typed")
-    u = model.StateSpace("U", ("rho", "mx", "my"))
-    state = P.state("plasma", space=u)
+    P, _, _, _, _, temporal = typed_program_state(
+        "typed", components=("rho", "mx", "my"))
+    state = temporal.n
     shape = state.logical_shape
     assert shape["space"] == "U" and shape["n_comp"] == 3 and shape["layout"] == "cell", shape
-    # An untyped (legacy) value has no space -> n_comp / layout are None (backward compatible).
-    untyped = adctime.Program("legacy").state("plasma")
-    assert untyped.logical_shape["space"] is None and untyped.logical_shape["n_comp"] is None
-    print("OK  logical_shape is derived from the space tag (None for an untyped value)")
+    _, _, _, _, _, scalar_temporal = typed_program_state("scalar", components=("rho",))
+    assert scalar_temporal.n.logical_shape["n_comp"] == 1
+    print("OK  logical_shape is derived from the exact declared StateSpace")
 
 
 def test_source_location_capture_is_opt_in_and_out_of_hash():
     # Capture ON records the authoring line; the IR hash is IDENTICAL to the capture-OFF build.
     off = _euler()
+    module = model.Module("forward_euler_model")
+    space = module.state_space("U", ("u",))
+    case = Problem(name="forward_euler_case")
+    block, state = add_typed_block(case, module, "plasma", space)
     on = adctime.Program("forward_euler").capture_source_locations(True)
-    U = on.state("plasma")
+    on.bind_operators(module)
+    temporal = on.state(block, state)
+    U = temporal.n
     R = on._rhs_legacy(state=U, fields=on.solve_fields(U), flux=True, sources=["default"])
-    on.commit(on.state("U", block="plasma").next, on.linear_combine("U1", U + (1.0 * on.dt) * R))
+    on.commit(temporal.next, on.linear_combine("U1", U + (1.0 * on.dt) * R))
     located = [n for n in on.ir_nodes() if n["source_location"]]
     assert located, "capture ON must populate at least one source_location"
     loc = located[0]["source_location"]
@@ -75,19 +83,20 @@ def test_source_location_capture_is_opt_in_and_out_of_hash():
 def test_space_tag_changes_the_hash():
     # A StateSpace controls component order/layout and therefore belongs to compiled identity.
     def build(tag):
-        P = adctime.Program("forward_euler")
-        u = model.StateSpace("U", ("rho", "mx", "my")) if tag else None
-        U = P.state("plasma", space=u)
+        components = ("rho", "mx", "my") if tag else ("rho", "my", "mx")
+        P, _, _, _, _, temporal = typed_program_state(
+            "forward_euler", components=components)
+        U = temporal.n
         R = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=["default"])
-        P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + P.dt * R))
+        P.commit(temporal.next, P.linear_combine("U1", U + P.dt * R))
         return P
     assert build(True)._ir_hash() != build(False)._ir_hash()
     print("OK  the operator-first space tag participates in the IR hash")
 
 
 def test_missing_commit_rejected():
-    P = adctime.Program("p")
-    U = P.state("plasma")
+    P, _, _, _, _, temporal = typed_program_state("p")
+    U = temporal.n
     P._rhs_legacy(state=U, fields=P.solve_fields(U))
     try:
         P.validate()
@@ -98,12 +107,12 @@ def test_missing_commit_rejected():
 
 
 def test_double_commit_rejected():
-    P = adctime.Program("p")
-    U = P.state("plasma")
+    P, _, _, _, _, temporal = typed_program_state("p")
+    U = temporal.n
     U1 = P.linear_combine("U1", U + P.dt * P._rhs_legacy(state=U, fields=P.solve_fields(U)))
-    P.commit(P.state("U", block="plasma").next, U1)
+    P.commit(temporal.next, U1)
     try:
-        P.commit(P.state("U", block="plasma").next, U1)
+        P.commit(temporal.next, U1)
         raise AssertionError("a double commit must be rejected")
     except ValueError as exc:
         assert "committed more than once" in str(exc), str(exc)
@@ -111,8 +120,8 @@ def test_double_commit_rejected():
 
 
 def test_distinct_field_context_per_stage():
-    P = adctime.Program("p")
-    U = P.state("plasma")
+    P, _, _, _, _, temporal = typed_program_state("p")
+    U = temporal.n
     f0 = P.solve_fields(U)
     U1 = P.linear_combine("U1", U + P.dt * P._rhs_legacy(state=U, fields=f0))
     f1 = P.solve_fields(U1)
@@ -124,8 +133,8 @@ def test_distinct_field_context_per_stage():
 
 
 def test_value_refuses_len_and_range():
-    P = adctime.Program("p")
-    U = P.state("plasma")
+    P, _, _, _, _, temporal = typed_program_state("p")
+    U = temporal.n
     try:
         len(U)
         raise AssertionError("len(value) must raise")
@@ -139,6 +148,27 @@ def test_value_refuses_len_and_range():
     print("OK  a runtime IR value refuses len() and range()")
 
 
+def test_program_value_refuses_unknown_mutable_metadata_before_detach():
+    class _MutableExtensionMetadata:
+        def __init__(self):
+            self.value = 1
+
+        def to_data(self):
+            return {"value": self.value}
+
+    P, _, _, _, _, temporal = typed_program_state("mutable-extension")
+    U = temporal.n
+    rate = P._rhs_legacy(state=U, flux=True, sources=["default"])
+    attrs = dict(rate.attrs)
+    attrs["extension"] = _MutableExtensionMetadata()
+    try:
+        P._replace_value(rate, attrs=attrs)
+        raise AssertionError("mutable extension metadata must not enter Program IR")
+    except TypeError as exc:
+        assert "not an immutable IR value" in str(exc), str(exc)
+    print("OK  ProgramValue rejects unknown mutable metadata before compiled detachment")
+
+
 def main():
     test_ir_node_has_identity_and_inspection_fields()
     test_logical_shape_reflects_the_space_tag()
@@ -148,6 +178,7 @@ def main():
     test_double_commit_rejected()
     test_distinct_field_context_per_stage()
     test_value_refuses_len_and_range()
+    test_program_value_refuses_unknown_mutable_metadata_before_detach()
     print("OK  test_program_ir_nodes")
 
 

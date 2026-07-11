@@ -231,14 +231,16 @@ def test_compiled_inspect_amr_delegates_to_top_level():
 
 def test_compiled_inspect_amr_surfaces_the_carried_layout_by_default():
     # ADC-555 criterion: the refine/regrid/... tags appear in compiled.inspect_amr(), not just
-    # layout.inspect(). pops.compile's AMR route (_compile_amr) attaches the Problem's AMR layout
-    # to the returned CompiledModel as `_layout`; a bare inspect_amr() call must report THAT
+    # layout.inspect(). pops.compile's AMR route retains the Problem's AMR layout in InstallPlan;
+    # a bare inspect_amr() call must report THAT
     # layout (with its tags), not silently fall back to the generic native envelope.
     from pops.codegen.loader import CompiledModel
+    from pops.codegen._plans import InstallBlock, InstallPlan
     from pops.mesh import CartesianMesh
     from pops.mesh.amr import Refine, RegridEvery
     from pops.mesh.layouts import AMR
     from pops.model import Handle, OwnerPath
+    from pops.problem._snapshot import AuthoringSnapshot
 
     cm = CompiledModel(
         so_path="<stub>", backend="aot", adder="add_native_block", cons_names=["rho"],
@@ -247,7 +249,19 @@ def test_compiled_inspect_amr_surfaces_the_carried_layout_by_default():
     rho = Handle("rho", kind="state", owner=OwnerPath.shared("amr-runtime-inspect"))
     carried = AMR(base=CartesianMesh(n=64), regrid=RegridEvery(4),
                   refine=Refine.on(rho).above(0.1))
-    cm._layout = carried  # what pops.codegen.orchestration._compile_amr attaches
+    snapshot = AuthoringSnapshot({"kind": "amr-runtime-inspect-stub"})
+    cm.install_plan = InstallPlan(
+        snapshot_hash=snapshot.hash,
+        target="amr_system",
+        layout=carried,
+        blocks=(InstallBlock("ne", cm, None),),
+        bind_schema=None,
+        field_solvers={},
+        outputs=(),
+        diagnostics=(),
+        has_program=False,
+    )
+    cm._problem_snapshot = snapshot
 
     rep = cm.inspect_amr()
     payload = rep.to_dict()

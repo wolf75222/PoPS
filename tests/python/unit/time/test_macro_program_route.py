@@ -1,15 +1,17 @@
 """ADC-554: time macros and the manual Program are ONE IR route.
 
-A ``pops.lib.time.*`` macro is a function that builds a ``Program``: called with the block name it
-returns a fresh, inspectable ``Program`` (``isinstance(pops.lib.time.forward_euler("plasma"),
-Program)``); called with a live ``Program`` first it is the historical in-place builder (byte-identical
-IR). ``Program.ir_nodes()`` exposes the generated nodes. A macro and the equivalent manual Program
-produce the same logical IR. The ``CompiledTime`` public bypass (``time=CompiledTime(...)``) is refused
-with a structured error, while ``CompiledTime`` stays a legit cadence descriptor.
+A ``pops.lib.time.*`` macro is a function that builds a ``Program``: called with a typed
+``(BlockHandle, state Handle)`` pair it returns a fresh, inspectable ``Program``; called with a live
+``Program`` first it is an in-place builder with byte-identical IR. ``Program.ir_nodes()`` exposes the
+generated nodes. A macro and the equivalent manual Program produce the same logical IR. The
+``CompiledTime`` public bypass (``time=CompiledTime(...)``) is refused with a structured error, while
+``CompiledTime`` stays a legit cadence descriptor.
 
 Pure Python (``_ir_hash`` / ``ir_nodes`` are the IR fingerprints; no compilation); skips cleanly if
 pops is unavailable. Never fakes the engine.
 """
+from typed_program_support import fresh_state_refs, state_refs, typed_state
+
 import sys
 from fractions import Fraction
 
@@ -34,13 +36,14 @@ def _op(m, name):
 
 
 def test_macro_without_program_returns_a_program():
-    """Every explicit macro invoked with the block name returns a Program (ADC-554 acceptance)."""
+    """Every explicit macro invoked with typed references returns a Program."""
+    block, state = fresh_state_refs("plasma")
     cases = [
-        ("forward_euler", lambda: libtime.forward_euler("plasma")),
-        ("ssprk2", lambda: libtime.ssprk2("plasma")),
-        ("ssprk3", lambda: libtime.ssprk3("plasma")),
-        ("rk4", lambda: libtime.rk4("plasma")),
-        ("adams_bashforth2", lambda: libtime.adams_bashforth2("plasma")),
+        ("forward_euler", lambda: libtime.forward_euler(block, state)),
+        ("ssprk2", lambda: libtime.ssprk2(block, state)),
+        ("ssprk3", lambda: libtime.ssprk3(block, state)),
+        ("rk4", lambda: libtime.rk4(block, state)),
+        ("adams_bashforth2", lambda: libtime.adams_bashforth2(block, state)),
     ]
     for label, fn in cases:
         prog = fn()
@@ -51,7 +54,7 @@ def test_macro_without_program_returns_a_program():
 
 def test_predictor_corrector_returns_program():
     """The operator-first predictor-corrector macro also returns a Program (the issue's example)."""
-    from pops.ir.expr import Const, Var
+    from pops.ir.expr import Const
     from pops.physics.facade import Model
 
     m = Model("pc")
@@ -67,8 +70,9 @@ def test_predictor_corrector_returns_program():
 
     def build(P):
         P.bind_operators(m)
+        block, state = state_refs(P, "plasma")
         libtime.predictor_corrector_local_linear(
-            P, "plasma", fields_operator=_op(m, "fields_from_state"),
+            P, block, state, fields_operator=_op(m, "fields_from_state"),
             explicit_rate_operator=_op(m, "explicit_rhs"), implicit_operator=_op(m, "lorentz"))
 
     # Manual route: build into an explicit Program.
@@ -81,7 +85,7 @@ def test_predictor_corrector_returns_program():
 
 def test_ir_nodes_inspection_lists_generated_nodes():
     """Program.ir_nodes() exposes the macro-generated nodes as a structured list."""
-    prog = libtime.forward_euler("plasma")
+    prog = libtime.forward_euler(*fresh_state_refs("plasma"))
     nodes = prog.ir_nodes()
     ops = [n["op"] for n in nodes]
     assert ops == ["state", "solve_fields", "rhs", "linear_combine", "commit"], ops
@@ -96,15 +100,15 @@ def test_ir_nodes_inspection_lists_generated_nodes():
 def test_macro_and_manual_same_ir():
     """A macro and the equivalent hand-written manual Program produce the same logical IR."""
     # Fresh-Program macro (its Program is named after the scheme).
-    macro_prog = libtime.ssprk2("plasma")
+    macro_prog = libtime.ssprk2(*fresh_state_refs("plasma"))
 
     # Manual equivalent: the exact SSPRK2 stage chain, same Program name for byte-identical IR.
     manual = Program("ssprk2")
-    U0 = manual.state("plasma")
+    U0 = typed_state(manual, "plasma")
     k0 = manual._rhs_legacy(state=U0, fields=manual.solve_fields(U0), flux=True, sources=["default"])
     U1 = manual.linear_combine("ssprk2_U1", U0 + manual.dt * k0)
     k1 = manual._rhs_legacy(state=U1, fields=manual.solve_fields(U1), flux=True, sources=["default"])
-    manual.commit(manual.state("U", block="plasma").next, manual.linear_combine(
+    manual.commit(typed_state(manual, "plasma", state_name="U").next, manual.linear_combine(
         "ssprk2_step",
         Fraction(1, 2) * U0 + Fraction(1, 2) * (U1 + manual.dt * k1),
     ))
@@ -117,15 +121,16 @@ def test_macro_and_manual_same_ir():
     print("OK  ssprk2 macro and manual Program produce the same IR (%s)" % macro_prog._ir_hash())
 
 
-def test_legacy_in_place_call_is_byte_identical():
-    """Passing a live Program keeps the historical in-place behaviour (byte-identical IR)."""
+def test_in_place_call_is_byte_identical():
+    """Passing a live Program and typed references keeps byte-identical IR."""
     P = Program("mine")
-    ret = libtime.forward_euler(P, "plasma")     # legacy: mutates P
-    assert ret is None                            # forward_euler committed in place, returned nothing
-    fresh = libtime.forward_euler("plasma")       # fresh Program (named "forward_euler")
+    block, state = state_refs(P, "plasma")
+    ret = libtime.forward_euler(P, block, state)
+    assert ret is None
+    fresh = libtime.forward_euler(block, state)
     # Same nodes, only the Program name differs -> same node list, distinct name in the serialized hash.
     assert [n["op"] for n in P.ir_nodes()] == [n["op"] for n in fresh.ir_nodes()]
-    print("OK  legacy forward_euler(P, block) mutates in place and returns None")
+    print("OK  typed forward_euler(P, block, state) mutates in place and returns None")
 
 
 def test_compiled_time_route_is_refused_but_constructible():
@@ -149,7 +154,7 @@ def main():
     test_predictor_corrector_returns_program()
     test_ir_nodes_inspection_lists_generated_nodes()
     test_macro_and_manual_same_ir()
-    test_legacy_in_place_call_is_byte_identical()
+    test_in_place_call_is_byte_identical()
     test_compiled_time_route_is_refused_but_constructible()
     print("OK  test_macro_program_route")
 

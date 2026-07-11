@@ -20,6 +20,8 @@ cell by cell via a dense per-cell inverse) -- reusing ProgramContext + for_each_
     once _pops is rebuilt; skips if _pops lacks install_program, numpy/_pops is absent, no compiler/Kokkos
     is visible, or the .so compile fails -- never faking the engine.
 """
+from typed_program_support import typed_state
+
 from pops.params import ConstParam
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
@@ -86,21 +88,21 @@ def lorentz_model(name="lorentz_local"):
     return m
 
 
-def lorentz_program(name="lorentz_step"):
+def lorentz_program(name="lorentz_step", model=None):
     """W = (I - dt*L_lorentz)^{-1} U, committed: one implicit Lorentz rotation of the momentum."""
     P = adctime.Program(name)
     dt = P.dt
-    U = P.state("plasma")
+    U = typed_state(P, "plasma", model=model)
     Q = P.linear_combine("Q", 1.0 * U)  # a State scratch == U (the solve rhs)
     W = P.solve_local_linear(name="W", operator=P.I - dt * P._linear_source("lorentz"), rhs=Q)
-    P.commit(P.state("U", block="plasma").next, W)
+    P.commit(typed_state(P, "plasma", state_name="U", model=model).next, W)
     return P
 
 
 # ---- (A) codegen: pure Python, always runs ----
 print("== (A) solve_local_linear codegen ==")
 m = lorentz_model()
-src = lorentz_program().emit_cpp_program(model=m)
+src = lorentz_program(model=m).emit_cpp_program(model=m)
 for frag in ("pops::for_each_cell(", "pops::detail::mat_inverse<3>(", "pops::Real M_[3][3];",
              "pops::Real Minv_[3][3];", "auxA(i, j, 3)", "ctx.aux()"):
     chk(frag in src, "generated solve_local_linear kernel has %r" % frag)
@@ -118,9 +120,9 @@ big.aux("B_z")
 zero9 = [[0.0] * 9 for _ in range(9)]
 big.linear_source("L", zero9)
 Pbig = adctime.Program("big")
-Ub = Pbig.state("blk")
+Ub = typed_state(Pbig, "blk", model=big)
 Qb = Pbig.linear_combine("Qb", 1.0 * Ub)
-Pbig.commit(Pbig.state("U", block="blk").next, Pbig.solve_local_linear(name="Wb", operator=Pbig.I - Pbig.dt * Pbig._linear_source("L"),
+Pbig.commit(typed_state(Pbig, "blk", state_name="U", model=big).next, Pbig.solve_local_linear(name="Wb", operator=Pbig.I - Pbig.dt * Pbig._linear_source("L"),
                                            rhs=Qb))
 chk(raises(ValueError, lambda: Pbig.emit_cpp_program(model=big)),
     "n_cons > 8 dense-fallback guard fires")
@@ -159,7 +161,9 @@ def make_sim():
 dt = 0.05
 
 try:
-    compiled = pops.codegen.compile_problem(model=lorentz_model("lorentz_prog"), time=lorentz_program())
+    program_model = lorentz_model("lorentz_prog")
+    compiled = pops.codegen.compile_problem(
+        model=program_model, time=lorentz_program(model=program_model))
 except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 

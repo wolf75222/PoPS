@@ -85,16 +85,20 @@ def _model(*, n_vars=3, aux_names=("B_z",), params=None):
 
 def _compiled(*, aux_names=("B_z",), params=None):
     """A SYNTHETIC CompiledProblem carrying a known arguments(): a real Program + a real model."""
+    from pops.codegen.program_emit_params import program_param_entries
+
     module = Module("installval-model")
     for declaration in (params or {}).values():
         module.param(declaration)
     problem = Problem(name="installval-case")
     problem.add_block("plasma", module)
     schema = BindSchema.from_problem(problem)
+    program = _program()
+    model = _model(aux_names=aux_names, params=params)
     return CompiledProblem(
-        "/tmp/pops-cache/problem.so", _program(),
-        _model(aux_names=aux_names, params=params),
+        "/tmp/pops-cache/problem.so", program, model,
         "SIG|c++|c++23", "c++", "c++23", bind_schema=schema,
+        program_param_routes=tuple(program_param_entries(program, model)),
     )
 
 

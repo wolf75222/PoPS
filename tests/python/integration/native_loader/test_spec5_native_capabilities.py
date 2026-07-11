@@ -155,7 +155,8 @@ def test_capability_mismatch_error_is_exported():
 # --- STATIC tier: Problem.explain_routes (criterion #37) ---------------------------------
 def test_explain_routes_sourced_from_native_facts():
     _module_caps()
-    prob = pops.Problem(name="cap-demo").block("ne", physics=object())
+    from pops.model import Module
+    prob = pops.Problem(name="cap-demo").block("ne", physics=Module("cap-demo-model"))
     matrix = prob.explain_routes()
     rows = {row.feature: row for row in matrix}
     for flag in _EXPECTED_FLAGS:
@@ -168,7 +169,8 @@ def test_explain_routes_sourced_from_native_facts():
 
 def test_explain_routes_prints():
     _module_caps()
-    prob = pops.Problem(name="cap-demo").block("ne", physics=object())
+    from pops.model import Module
+    prob = pops.Problem(name="cap-demo").block("ne", physics=Module("cap-demo-model"))
     text = str(prob.explain_routes())
     assert "route matrix" in text
     assert "supports_uniform" in text
@@ -190,7 +192,9 @@ def test_apply_native_manifest_overlays_authoritative_fields():
               "supports_uniform": True, "supports_amr": False, "supports_mpi": False,
               "supports_gpu": False, "roles": ["density", "momentum_x"],
               "native_entrypoints": ["pops_model_nvars", "pops_compiled_manifest"]}
-    apply_native_manifest(manifest, native)
+    updated = apply_native_manifest(manifest, native)
+    assert manifest.abi_version is None  # the immutable input is never partially overlaid
+    manifest = updated
     assert manifest.abi_version == 1
     assert manifest.ghost_depth == 3
     assert manifest.supports_partial_imex_mask is False  # the .so adjudicates, not a fabricated None
@@ -201,7 +205,7 @@ def test_apply_native_manifest_overlays_authoritative_fields():
     assert manifest.supports_amr is False
     assert manifest.supports_mpi is False
     assert manifest.supports_gpu is False
-    assert manifest.roles == ["density", "momentum_x"]
+    assert manifest.roles == ("density", "momentum_x")
     assert "pops_compiled_manifest" in manifest.native_entrypoints
     # supports_partial_imex_mask is now KNOWN-False, so it leaves the needs-followup list.
     assert "supports_partial_imex_mask" not in manifest.needs_cpp_followup()
@@ -211,7 +215,7 @@ def test_apply_native_manifest_none_is_graceful_noop():
     # An old .so without the symbol -> load returns None -> the manifest keeps its honest-None set.
     from pops.external import CompiledArtifactManifest, apply_native_manifest
     manifest = CompiledArtifactManifest(model_name="m", supports_stride=None)
-    apply_native_manifest(manifest, None)
+    assert apply_native_manifest(manifest, None) is manifest
     assert manifest.supports_stride is None  # untouched: graceful fallback, never fabricated
 
 

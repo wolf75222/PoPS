@@ -18,6 +18,8 @@ Skips cleanly (never fakes the engine) if pops.time cannot import (it needs _pop
 """
 import sys
 
+from tests.python.support.typed_program import program_states, synthetic_module
+
 
 def _skip(msg):
     print("skip test_name_binding_codegen (%s)" % msg)
@@ -45,10 +47,13 @@ def chk(cond, label):
 def _flux_program(t, name, blocks):
     """A flux-only Forward-Euler Program over @p blocks (declared in the given order), no model needed."""
     P = t.Program(name)
+    module = synthetic_module("%s_state" % name, components=("rho",))
+    _case, states = program_states(P, module, blocks)
     for blk in blocks:
-        U = P.state(blk)
+        temporal = states[blk]
+        U = temporal.n
         R = P._rhs_legacy(state=U, flux=True, sources=["default"])
-        P.commit(P.state("U", block=blk).next, P.linear_combine(blk + "_next", U + P.dt * R))
+        P.commit(temporal.next, P.linear_combine(blk + "_next", U + P.dt * R))
     return P
 
 
@@ -79,10 +84,19 @@ def section_b(t):
     h_ba = _flux_program(t, "p", ["electrons", "plasma"])._ir_hash()
     chk(h_ab != h_ba, "reordering P.state declarations changes the IR hash (block names in identity)")
 
-    # The block_order serialization field carries the names in declaration order (the hash input).
+    # The block_order field carries qualified block-handle identities in declaration order. Runtime
+    # labels remain readable through local_id, while the owner paths prevent cross-Case aliasing.
     ser = _flux_program(t, "p", ["plasma", "electrons"])._serialize()
-    chk(ser.get("block_order") == ["plasma", "electrons"],
-        "_serialize records block_order in declaration order")
+    order = ser.get("block_order", [])
+    chk([item.get("local_id") for item in order] == ["plasma", "electrons"],
+        "_serialize records qualified block_order in declaration order")
+    chk(all(item.get("kind") == "block" and item.get("handle_type") == "block"
+            and item.get("qualified_id", "").startswith("pops.handle.v1::case:p-program-case::")
+            for item in order),
+        "each block_order entry is a qualified Case-owned BlockHandle")
+    chk(all(item.get("model_owner_path", {}).get("definition_fingerprint", "").startswith(
+        "pops.module:sha256:") for item in order),
+        "each block_order entry authenticates its model owner")
 
     # Same program written twice (same names, same order) is byte-identical -> identical hash.
     h_again = _flux_program(t, "p", ["plasma", "electrons"])._ir_hash()

@@ -44,6 +44,7 @@ try:
     from pops.mesh.layouts import AMR, Uniform
     from pops.runtime.amr_program_support import amr_program_op_support
     from pops.runtime.system import AmrSystem
+    from tests.python.support.typed_program import program_states
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
     print("skip test_amr_clean_route_program (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -101,8 +102,9 @@ def _condensed_program(model, *, block="plasma", theta=1.0):
         operator.name, kind=operator.kind, owner=registry.owner_path,
         signature=operator.signature)
     program = Program("condensed_schur").bind_operators(model)
+    _case, states = program_states(program, model, (block,))
     lib_time.condensed_schur(
-        program, block, alpha=1.0, theta=theta, linear_operator=handle)
+        program, states[block], alpha=1.0, theta=theta, linear_operator=handle)
     return program
 
 
@@ -165,12 +167,11 @@ def test_clean_amr_ssprk2_equals_direct_install_program():
     model = parity._euler_model("adc634_clean_ssprk2")
     u0 = parity._init_density()
 
-    direct, derr = parity._amr_run(parity._ssprk2_program(), model, u0)
+    direct, derr = parity._amr_run(parity._ssprk2_program(model), model, u0)
     if direct is None:
         print("skip (%s)" % derr)
         return
-    clean, cerr = _clean_amr_run(parity._ssprk2_program(),
-                                 parity._euler_model("adc634_clean_ssprk2"), u0)
+    clean, cerr = _clean_amr_run(parity._ssprk2_program(model), model, u0)
     if clean is None:
         print("skip (%s)" % cerr)
         return
@@ -195,13 +196,14 @@ def test_clean_amr_custom_midpoint_equals_direct():
     """(a') A CUSTOM 2-stage midpoint Program through the clean route is ALSO bit-identical to the direct
     route -- the Program TEXT drives the integrator through the clean seam (not a hard-coded scheme)."""
     print("== (a') clean AMR midpoint Program == direct install_program (bit-identical) ==")
+    model = parity._euler_model("adc634_mid")
     u0 = parity._init_density()
 
-    direct, derr = parity._amr_run(parity._midpoint_program(), parity._euler_model("adc634_mid"), u0)
+    direct, derr = parity._amr_run(parity._midpoint_program(model), model, u0)
     if direct is None:
         print("skip (%s)" % derr)
         return
-    clean, cerr = _clean_amr_run(parity._midpoint_program(), parity._euler_model("adc634_mid"), u0)
+    clean, cerr = _clean_amr_run(parity._midpoint_program(model), model, u0)
     if clean is None:
         print("skip (%s)" % cerr)
         return
@@ -243,20 +245,20 @@ def test_clean_flat_amr_equals_clean_uniform():
     Poisson phi is pinned up to an additive constant differently, so phi is compared mean-removed to
     the MG tolerance -- the physically meaningful part that feeds the density's RHS."""
     print("== (b) clean flat AMR route == clean Uniform route (bit-identical density) ==")
+    model = parity._euler_model("adc634_flat")
     u0 = parity._init_density()
 
     # The Uniform bind takes the FULL conservative state: read the native set_density lift back
     # from a scratch System so the Uniform initial state is BITWISE the AMR set_density seed.
-    u0_full, lerr = _lift_density(parity._euler_model("adc634_flat"), u0)
+    u0_full, lerr = _lift_density(model, u0)
     if u0_full is None:
         print("skip (%s)" % lerr)
         return
-    uni, uerr = _clean_uniform_run(parity._ssprk2_program(), parity._euler_model("adc634_flat"),
-                                   u0_full)
+    uni, uerr = _clean_uniform_run(parity._ssprk2_program(model), model, u0_full)
     if uni is None:
         print("skip (%s)" % uerr)
         return
-    amr, aerr = _clean_amr_run(parity._ssprk2_program(), parity._euler_model("adc634_flat"), u0)
+    amr, aerr = _clean_amr_run(parity._ssprk2_program(model), model, u0)
     if amr is None:
         print("skip (%s)" % aerr)
         return
@@ -414,7 +416,8 @@ def test_composition_query_ssprk2_all_green():
     """The capability query reports an explicit SSPRK2 Program all-green on the AMR Program path (it
     uses no deferred op). Pure Python -- no build needed."""
     print("== composition: amr_program_op_support(ssprk2) is all green ==")
-    support = amr_program_op_support(parity._ssprk2_program())
+    model = parity._euler_model("adc634_support")
+    support = amr_program_op_support(parity._ssprk2_program(model))
     pending = {g: s for g, s in support.items() if s != "green"}
     chk(not pending, "no pending group for an SSPRK2 Program (support = %r)" % support)
 

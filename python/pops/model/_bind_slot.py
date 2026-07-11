@@ -91,7 +91,8 @@ class BindSlot:
                 domain.check(value, who=self.qid)
             except (TypeError, ValueError):
                 raise ValueError(
-                    "bind value %r for %s is outside domain %s" % (value, self.qid, domain_data)
+                    "runtime-param-domain: bind value %r for %s is outside domain %s"
+                    % (value, self.qid, domain_data)
                 ) from None
         return value
 

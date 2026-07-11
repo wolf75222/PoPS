@@ -79,19 +79,25 @@ class BindSchema:
         object.__setattr__(self, "_aliases", self._validate_aliases(aliases or {}))
         self._validate_dependencies()
 
-    def _validate_aliases(self, aliases: Any) -> Mapping[ParamHandle, ParamHandle]:
+    def _validate_aliases(self, aliases: Any) -> Mapping[str, ParamHandle]:
         if not isinstance(aliases, Mapping):
             raise TypeError("BindSchema aliases must be a ParamHandle mapping")
-        checked: dict[ParamHandle, ParamHandle] = {}
+        # Never retain a live authoring Handle here.  A block-qualified ParamHandle points at the
+        # issuing BlockHandle, which in turn owns the case registry capability.  The process-local
+        # qualified id already contains that opaque authoring serial and the complete owner path;
+        # storing only this scalar authentication token preserves alias lookup without keeping the
+        # Problem/model/registries alive in a compiled artifact.
+        checked: dict[str, ParamHandle] = {}
         for alias, canonical in aliases.items():
             if not isinstance(alias, ParamHandle) or not isinstance(canonical, ParamHandle):
                 raise TypeError("BindSchema aliases must map ParamHandle to ParamHandle")
             if canonical not in self._by_handle:
                 raise ValueError("BindSchema alias targets an unknown canonical ParamHandle")
-            previous = checked.get(alias)
+            alias_key = alias.qualified_id
+            previous = checked.get(alias_key)
             if previous is not None and previous != canonical:
                 raise ValueError("BindSchema alias resolves to multiple parameter slots")
-            checked[alias] = canonical
+            checked[alias_key] = canonical
         return MappingProxyType(checked)
 
     @staticmethod
@@ -308,7 +314,7 @@ class BindSchema:
             )
         if handle in self._by_handle:
             return handle
-        canonical = self._aliases.get(handle)
+        canonical = self._aliases.get(handle.qualified_id)
         if canonical is not None:
             return canonical
         if (

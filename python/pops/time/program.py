@@ -78,7 +78,9 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         self._next_region = 1
         self._recording_regions = {}  # id(list) -> (strong list ref, exact authoring-region token)
         self._region_imports = {}  # destination region -> explicitly sanctioned source regions
-        self._state_spaces = {}  # block -> StateSpace or None; typed/untyped mixing is forbidden
+        # Qualified state Handle -> StateSpace or None. A block may instantiate several declared
+        # state families; their semantic state_ref, never the block/name alone, owns the type contract.
+        self._state_spaces = {}
         self._histories = {}    # name -> max declared lag (multistep histories; ADC-406a)
         self._history_spaces = {}  # full-state history name -> StateSpace or None
         self._history_blocks = {}  # full-state history name -> qualified block or None

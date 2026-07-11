@@ -22,6 +22,8 @@ to ~1e-14 (the named fluxes sum to the same -div F).
 
 Skips cleanly (exit 0) without numpy / _pops / a compiler / a visible Kokkos -- never fakes the engine.
 """
+from typed_program_support import typed_field, typed_state
+
 from pops.params import ConstParam
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
@@ -191,12 +193,13 @@ chk(eh1._m._model_hash() != eh2._m._model_hash(),
 
 
 # --- codegen: rhs(fluxes=['default']) lowers IDENTICALLY to the current default rhs ---
-def _fe_program(name, fluxes):
+def _fe_program(name, fluxes, model=None):
     P = adctime.Program(name)
-    U = P.state("plasma")
+    U = typed_state(P, "plasma", model=model)
     f = P.solve_fields(U)
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, fluxes=fluxes)
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + P.dt * R))
+    P.commit(typed_state(P, "plasma", state_name="U", model=model).next,
+             P.linear_combine("U1", U + P.dt * R))
     return P
 
 
@@ -210,42 +213,49 @@ def _norm_ids(src):
 
 
 mdl = whole_flux_model("nf_codegen")
-src_none = _norm_ids(_fe_program("nf_codegen", None).emit_cpp_program(model=mdl))
-src_default = _norm_ids(_fe_program("nf_codegen", ["default"]).emit_cpp_program(model=mdl))
+src_none = _norm_ids(_fe_program("nf_codegen", None, model=mdl).emit_cpp_program(model=mdl))
+src_default = _norm_ids(_fe_program(
+    "nf_codegen", ["default"], model=mdl).emit_cpp_program(model=mdl))
 chk("ctx.rhs_into(0, " in src_none, "default rhs lowers via ctx.rhs_into")
 chk("ctx.neg_div_flux_into(" not in src_none, "default rhs does NOT use the named-flux divergence path")
 chk(src_none == src_default,
     "rhs(fluxes=['default']) lowers byte-identically to rhs(fluxes=None) (the historical default)")
 
 # A NAMED flux lowers the new path (per-cell flux kernel + neg_div_flux_into), NOT rhs_into.
-src_named = _fe_program("nf_named", ["whole"]).emit_cpp_program(model=mdl)
+src_named = _fe_program("nf_named", ["whole"], model=mdl).emit_cpp_program(model=mdl)
 chk("ctx.neg_div_flux_into(" in src_named, "a named-flux rhs lowers via ctx.neg_div_flux_into")
 chk("pops::for_each_cell(" in src_named, "the named flux is evaluated by a per-cell kernel")
 chk("ctx.rhs_into(0, " not in src_named, "a named-flux rhs does NOT call rhs_into (distinct stencil)")
 
 # Validation: unknown flux name -> clear error; mixing default + named -> clear error; named flux
 # without a model -> NotImplementedError.
-chk(raises(ValueError, lambda: _fe_program("nf_unknown", ["does_not_exist"]).emit_cpp_program(model=mdl)),
+chk(raises(ValueError, lambda: _fe_program(
+    "nf_unknown", ["does_not_exist"], model=mdl).emit_cpp_program(model=mdl)),
     "an unknown flux_term name in rhs raises ValueError")
-chk(raises(ValueError, lambda: _fe_program("nf_mix", ["default", "whole"]).emit_cpp_program(model=mdl)),
+chk(raises(ValueError, lambda: _fe_program(
+    "nf_mix", ["default", "whole"], model=mdl).emit_cpp_program(model=mdl)),
     "mixing 'default' with a named flux raises ValueError")
 chk(raises(NotImplementedError, lambda: _fe_program("nf_nomodel", ["whole"]).emit_cpp_program()),
     "a named-flux rhs without a model raises NotImplementedError")
 
 # Two named fluxes summing to the whole flux lower to ONE kernel + one neg_div_flux_into (the SUM).
-src_split = _fe_program("nf_split_prog", ["conv", "press"]).emit_cpp_program(model=split_flux_model())
+split_codegen_model = split_flux_model()
+src_split = _fe_program(
+    "nf_split_prog", ["conv", "press"], model=split_codegen_model).emit_cpp_program(
+        model=split_codegen_model)
 chk(src_split.count("ctx.neg_div_flux_into(") == 1,
     "a multi-named-flux rhs assembles a single -div of the summed fluxes")
 
 # --- elliptic_field: solve_fields(field=) now lowers to the named ctx call (ADC-428 wired the runtime;
 #     the multi-elliptic SOLVE + aux channel are no longer deferred). The end-to-end parity lives in
 #     tests/python/unit/time/test_time_multielliptic.py; here we just assert the lowering + the error paths. ---
-def _named_field_program(name="nf_ell"):
+def _named_field_program(name="nf_ell", model=None):
     P = adctime.Program(name)
-    U = P.state("plasma")
-    f = P.solve_fields("fields_phi2", U, field="phi2")
+    U = typed_state(P, "plasma", model=model)
+    f = P.solve_fields("fields_phi2", U, field=typed_field(P, "phi2"))
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True)
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + P.dt * R))
+    P.commit(typed_state(P, "plasma", state_name="U", model=model).next,
+             P.linear_combine("U1", U + P.dt * R))
     return P
 
 
@@ -253,20 +263,24 @@ ell_model, Vell = _carrier()
 ell_model.elliptic_field("phi2", rhs=Vell["rho"], aux=["phi2", "g2x", "g2y"])
 for a in ("phi2", "g2x", "g2y"):
     ell_model._m.aux_field(a)  # the named field's aux outputs need channel slots (ADC-428)
-src_named_ell = _named_field_program().emit_cpp_program(model=ell_model)
+src_named_ell = _named_field_program(model=ell_model).emit_cpp_program(model=ell_model)
 chk('ctx.solve_fields_from_state("phi2", 0, ' in src_named_ell,
     "solve_fields(field=) lowers to the named ctx call (ADC-428 multi-elliptic runtime)")
 # Unknown field name -> clear ValueError; missing model -> NotImplementedError (cannot validate).
+unknown_ell_model = _carrier()[0]
 chk(raises(ValueError,
-           lambda: _named_field_program("nf_unknown_ell").emit_cpp_program(
-               model=_carrier()[0])),
+           lambda: _named_field_program(
+               "nf_unknown_ell", model=unknown_ell_model).emit_cpp_program(
+                   model=unknown_ell_model)),
     "an unknown elliptic_field name in solve_fields raises ValueError")
 chk(raises(NotImplementedError, lambda: _named_field_program("nf_nomodel_ell").emit_cpp_program()),
     "a named-elliptic solve_fields without a model raises NotImplementedError")
 # An empty field name is rejected at construction (clear error).
-chk(raises(ValueError, lambda: adctime.Program("x").solve_fields("f", adctime.Program("x").state("b"),
-                                                                 field="")),
-    "solve_fields with an empty field name raises ValueError")
+bad_field_program = adctime.Program("x")
+bad_field_state = typed_state(bad_field_program, "b")
+chk(raises(TypeError, lambda: bad_field_program.solve_fields(
+    "f", bad_field_state, field="")),
+    "solve_fields rejects an empty string in place of a typed FieldHandle")
 
 
 # =================== Section B: gated end-to-end parity ===================
@@ -312,11 +326,12 @@ def make_sim(model):
     return sim, U0
 
 
-def _flux_fe_program(name, fluxes):
+def _flux_fe_program(name, fluxes, model=None):
     P = adctime.Program(name)
-    U = P.state("plasma")
+    U = typed_state(P, "plasma", model=model)
     R = P._rhs_legacy(name="R", state=U, flux=True, fluxes=fluxes)
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("U1", U + P.dt * R))
+    P.commit(typed_state(P, "plasma", state_name="U", model=model).next,
+             P.linear_combine("U1", U + P.dt * R))
     return P
 
 
@@ -324,10 +339,15 @@ def _flux_fe_program(name, fluxes):
 # to it. Both go through the SAME centered-FV neg_div_flux_into, so -div(conv)+-div(press) ==
 # -div(whole) exactly (linearity) -> the stepped states must match to round-off.
 try:
-    compiled_whole = pops.codegen.compile_problem(model=whole_flux_model("nf_whole_prog"),
-                                         time=_flux_fe_program("nf_whole_fe", ["whole"]))
-    compiled_split = pops.codegen.compile_problem(model=split_flux_model("nf_split_prog2"),
-                                         time=_flux_fe_program("nf_split_fe", ["conv", "press"]))
+    whole_program_model = whole_flux_model("nf_whole_prog")
+    split_program_model = split_flux_model("nf_split_prog2")
+    compiled_whole = pops.codegen.compile_problem(
+        model=whole_program_model,
+        time=_flux_fe_program("nf_whole_fe", ["whole"], model=whole_program_model))
+    compiled_split = pops.codegen.compile_problem(
+        model=split_program_model,
+        time=_flux_fe_program(
+            "nf_split_fe", ["conv", "press"], model=split_program_model))
 except RuntimeError as exc:
     _skipB("compile_problem could not build the .so: %s" % str(exc)[:160])
 

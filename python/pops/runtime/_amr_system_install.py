@@ -36,8 +36,8 @@ class _AmrSystemInstall(_AmrSystem):
         any native mutation -- an install missing a REQUIRED argument the artifact declares, with one
         clear actionable error), then lowers to the AMR layer:
 
-          - NATIVE install (``compiled=None``): wires each instance with ``add_equation`` (native
-            bricks / a CompiledModel target='amr_system'), sets the field solvers (``set_poisson``),
+          - NATIVE install (``compiled=None``): wires each InstallPlan ``CompiledModel`` with
+            ``add_equation``, sets the field solvers (``set_poisson``),
             the aux inputs (``set_magnetic_field`` / ``set_aux_field``) and each instance's initial
             density (``set_density``). This is the real AMR add path; a full run is Kokkos-gated.
           - COMPILED install (a ``compiled`` handle carrying a time Program, epic ADC-511 / ADC-508 /
@@ -50,7 +50,7 @@ class _AmrSystemInstall(_AmrSystem):
             the honest AmrProgramContext backstop only when that op is reached at run.
 
         @param compiled a compiled time-Program handle, or ``None`` for a native AMR install.
-        @param instances dict {name: {"initial": array, "spatial": <brick>, "model": <model>,
+        @param instances dict {name: {"initial": array, "spatial": <brick>, "model": <CompiledModel>,
             "time": <policy>}}; the block is bound by the dict KEY.
         @param params canonical block-qualified runtime values resolved by BindSchema and routed to
             ``set_program_params`` per PROGRAM block. A native AMR install (``compiled=None``)
@@ -78,11 +78,9 @@ class _AmrSystemInstall(_AmrSystem):
         validate_install_arguments(self, compiled, instances, params, aux, solvers)
 
         # COMPILED vs NATIVE. COMPILED: `compiled` carries a .so_path time Program (installed in step 5,
-        # with the section-24 .so validation) + a PHYSICAL model (the per-block model an instance falls
-        # back on). NATIVE: `compiled is None` -- each instance carries its OWN native model. Validate the
-        # handle up front, BEFORE any native mutation (no half-configured AMR hierarchy).
+        # with the section-24 .so validation). Every block model comes exclusively from InstallPlan;
+        # neither route falls back to compiled.model or a live authoring builder.
         so_path = None
-        compiled_model = None
         if compiled is not None:
             so_path = getattr(compiled, "so_path", None)
             if so_path is None:
@@ -90,7 +88,6 @@ class _AmrSystemInstall(_AmrSystem):
                     "pops.bind: compiled handle has no .so_path (got %r); pass a compile_problem(...) "
                     "result (target='amr_system'), or compiled=None for a native AMR install (each "
                     "instance carries its own native model)." % type(compiled).__name__)
-            compiled_model = getattr(compiled, "model", None)
         # (7) OUTPUT / CHECKPOINT policies and DIAGNOSTIC measures flow onto the AMR engine exactly
         # like the Uniform System (ADC-542 / addendum C.1): AmrSystem.run() fires each at its cadence
         # through the AMR per-level output driver + the composite-reduction diagnostics path. Stored
@@ -111,25 +108,25 @@ class _AmrSystemInstall(_AmrSystem):
             self._install_solver(field, solver_brick, declared_fields)
 
         # (2) INSTANCES: add each named block (add_equation, binds the Program block of that name), then
-        # set its initial density. The block model is the per-instance "model" if given, else the
-        # PHYSICAL model carried by the compiled handle (compiled.model) -- NOT the handle itself (the
-        # time Program .so installed in step 5). resolved_models is reused by step-4b (ADC-514) to route
+        # set its initial density. The per-instance detached CompiledModel is mandatory.
+        # resolved_models is reused by step-4b (ADC-514) to route
         # the native per-block runtime params to set_block_params: it maps each instance name to the
-        # model add_equation received (a ModelSpec has no runtime param; a target='amr_system'
-        # CompiledModel exposes runtime_param_names).
+        # detached CompiledModel add_equation received (target='amr_system' metadata exposes
+        # runtime_param_names).
+        from pops.codegen.loader import CompiledModel
+
         resolved_models = {}
         for name, spec in instances.items():
             if not isinstance(spec, dict):
                 raise TypeError("pops.bind: instances[%r] must be a dict "
                                 "(initial/spatial/time/model); got %r"
                                 % (name, type(spec).__name__))
-            model = spec.get("model", compiled_model)
-            if model is None:
-                raise ValueError(
-                    "pops.bind: instance %r has no block model -- supply "
-                    "instances[%r]['model'] (an pops.Model(...) / a target='amr_system' "
-                    "CompiledModel), or pass a compiled handle that carries one "
-                    "(compile_problem(model=...))." % (name, name))
+            model = spec.get("model")
+            if not isinstance(model, CompiledModel):
+                raise TypeError(
+                    "pops.bind: instances[%r] must carry a detached target='amr_system' "
+                    "CompiledModel from InstallPlan; rebuild with pops.compile(...)" % name
+                )
             spatial = spec.get("spatial")
             time = spec.get("time")
             self.add_equation(name, model, spatial=spatial, time=time)
@@ -217,25 +214,26 @@ class _AmrSystemInstall(_AmrSystem):
 
     @staticmethod
     def _declared_elliptic_fields(instances: Any) -> Any:
-        """Collect the NAMED elliptic fields declared by the per-instance models (ADC-428). Reads each
-        model's declared names WITHOUT compiling: a target='amr_system' CompiledModel exposes
-        ``elliptic_field_names``; a raw physics/dsl Model exposes the ``_elliptic_fields`` mapping.
-        Returns a set (empty when no model declares a named field). Mirror of
-        System._declared_elliptic_fields (no compiled whole-system handle on the AMR path)."""
+        """Collect named fields exclusively from detached per-block CompiledModel metadata."""
+        from pops.codegen.loader import CompiledModel
+
         names = set()
-        for spec in (instances or {}).values():
+        for block_name, spec in (instances or {}).items():
             if not isinstance(spec, dict):
-                continue
+                raise TypeError("pops.bind: instances[%r] must be a dict" % block_name)
             model = spec.get("model")
-            if model is None:
-                continue
-            explicit = getattr(model, "elliptic_field_names", None)
-            if explicit is not None:
-                names.update(explicit)
-                continue
-            raw = getattr(model, "_elliptic_fields", None)
-            if raw:
-                names.update(raw)
+            if not isinstance(model, CompiledModel):
+                raise TypeError(
+                    "pops.bind: instances[%r] must carry a detached CompiledModel from InstallPlan"
+                    % block_name
+                )
+            declared = getattr(model, "elliptic_field_names", None)
+            if declared is None:
+                raise ValueError(
+                    "pops.bind: CompiledModel for block %r lacks elliptic_field_names metadata; "
+                    "rebuild it with pops.compile(...)" % block_name
+                )
+            names.update(declared)
         return names
 
     def _install_aux(self, field_name: Any, field: Any) -> Any:

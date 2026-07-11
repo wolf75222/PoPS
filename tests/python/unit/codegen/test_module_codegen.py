@@ -14,6 +14,7 @@ try:
     from pops.physics.facade import Model
     from pops import time as adctime
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
+    from typed_program_support import state_refs, typed_state
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_module_codegen (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -44,8 +45,9 @@ def _model():
 def test_metadata_block_emitted():
     m = _model()
     P = adctime.Program("pc").bind_operators(m)
+    block, state = state_refs(P, "plasma")
     libtime.predictor_corrector_local_linear(
-        P, "plasma", fields_operator=_op(m, "fields_from_state"),
+        P, block, state, fields_operator=_op(m, "fields_from_state"),
         explicit_rate_operator=_op(m, "explicit_rhs"), implicit_operator=_op(m, "lorentz"))
     src = P.emit_cpp_program(model=m)
     # GeneratedModule descriptor + GeneratedProgram coexist in the one .so.
@@ -72,8 +74,9 @@ def test_metadata_block_emitted():
 def test_metadata_not_in_step_body():
     m = _model()
     P = adctime.Program("pc").bind_operators(m)
+    block, state = state_refs(P, "plasma")
     libtime.predictor_corrector_local_linear(
-        P, "plasma", fields_operator=_op(m, "fields_from_state"),
+        P, block, state, fields_operator=_op(m, "fields_from_state"),
         explicit_rate_operator=_op(m, "explicit_rhs"), implicit_operator=_op(m, "lorentz"))
     src = P.emit_cpp_program(model=m)
     body = src.split("pops_install_program", 1)[1]
@@ -84,8 +87,13 @@ def test_metadata_not_in_step_body():
 
 def test_no_model_empty_module():
     P = adctime.Program("fe")
-    u = P.state("plasma")
-    P.commit(P.state("U", block="plasma").next, P.linear_combine("u1", u + P.dt * P._rhs_legacy(state=u, fields=P.solve_fields(u))))
+    u = typed_state(P, "plasma")
+    target = typed_state(P, "plasma", state_name="U")
+    P.commit(
+        target.next,
+        P.linear_combine(
+            "u1", u + P.dt * P._rhs_legacy(state=u, fields=P.solve_fields(u))),
+    )
     src = P.emit_cpp_program(model=None)
     assert "pops_module_operator_count() { return 0; }" in src
     print("OK  model=None emits an empty GeneratedModule (count 0)")

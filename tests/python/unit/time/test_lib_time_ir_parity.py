@@ -19,7 +19,7 @@ from fractions import Fraction
 import pytest
 
 from pops.ir.expr import Const
-from pops.model import DeclarationIndex, Handle, OperatorHandle
+from pops.model import OperatorHandle
 from pops.physics.facade import Model
 from pops.problem import Problem
 from pops import time as adctime
@@ -47,22 +47,15 @@ def _op(m, name):
         signature=op.signature)
 
 
-class _BlockModel:
-    """Expose one conservative-state declaration beside a facade model's operator registry."""
-
-    def __init__(self, model):
-        self.owner_path = model.operator_registry().owner_path
-        self.name = self.owner_path.name
-        self.state = Handle("U", kind="state", owner=self.owner_path)
-
-    def declaration_index(self):
-        return DeclarationIndex(owner=self.owner_path, handles=(self.state,))
-
-
 def _refs(model):
-    view = _BlockModel(model)
-    block = Problem(name="parity_case").add_block("plasma", view)
-    return block, view.state
+    # Use the facade's real Module declaration graph.  A synthetic DeclarationIndex sharing the
+    # model OwnerPath but omitting its operator declarations is not an equivalent model: it gives
+    # the same owner two competing structural fingerprints and makes the first canonical IR
+    # projection depend on serialization order.
+    module = model.module
+    block = Problem(name="parity_case").add_block("plasma", model)
+    state = module.state_handle(module.state_spaces()["U"])
+    return block, state
 
 
 def _assert_parity(macro_prog, manual_prog):

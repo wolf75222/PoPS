@@ -16,22 +16,27 @@ import pytest
 pops = pytest.importorskip("pops")
 
 from pops.codegen import orchestration  # noqa: E402
+from pops.codegen.loader import CompiledModel  # noqa: E402
+from pops.codegen._compiled_model_identity import model_compile_identity  # noqa: E402
 import pops.codegen.compile_drivers as compile_drivers  # noqa: E402
 from pops.mesh.cartesian import CartesianMesh  # noqa: E402
 from pops.mesh.layouts import AMR, Uniform  # noqa: E402
 from pops.model import DeclarationIndex, Handle, OwnerKind, OwnerPath  # noqa: E402
 
 
-class _StubCompiledModel:
-    def __init__(self, name="stub"):
-        self.name = name
-        self.so_path = "/tmp/%s_amr.so" % name
-        self.target = "amr_system"
-        self.adder = "add_native_block"
-        self.sealed = False
+class _StubCompiledModel(CompiledModel):
+    def __init__(self, source, target="amr_system"):
+        super().__init__(
+            "/tmp/%s_%s.so" % (source.name, target), "production",
+            "add_native_block" if target == "amr_system" else "add_dynamic_block",
+            (), (), (), 0, None, 0, {}, {"cpu": True, "amr": target == "amr_system"},
+            "abi", source._model_hash(), "c++", "c++20", target=target,
+            definition_identity=model_compile_identity(source))
+        self.name = source.name
 
-    def _seal(self):
-        self.sealed = True
+    @property
+    def sealed(self):
+        return getattr(self, "_sealed", False)
 
 
 class _StubDsl:
@@ -39,7 +44,10 @@ class _StubDsl:
         self.name = name
 
     def compile(self, *, backend, target, **kw):
-        return _StubCompiledModel(self.name)
+        return _StubCompiledModel(self, target=target)
+
+    def _model_hash(self):
+        return "model-hash:%s" % self.name
 
 
 class _StubModel:
@@ -57,20 +65,18 @@ class _StubCompiled:
     def __init__(self, target="system", model=None):
         self.so_path = "/tmp/stub.so"
         self.model = model
-        self._target = target
+        self.install_plan = None
 
 
-class _StubTime:
-    """A structural time test double; opaque ``object()`` is not a cache identity."""
-
-    def __init__(self, name="stub-time"):
-        self.name = name
+def _stub_time():
+    """An exact final Program value; opaque subclasses are intentionally not freeze-trusted."""
+    return pops.Program("stub-time")
 
 
 def _fresh_problem():
     """One Problem, no layout -- the subject of the two-layouts proof."""
     return pops.Problem(name="plasma").block(
-        "ne", physics=_StubModel("ne")).program(_StubTime())
+        "ne", physics=_StubModel("ne")).program(_stub_time())
 
 
 def _rho(problem):
@@ -91,15 +97,15 @@ def test_same_problem_compiles_uniform_and_amr():
     try:
         prob = _fresh_problem()
         # Under Uniform -> target='system' (the whole-system Program is compiled once).
-        compiled_u = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=_StubTime())
+        compiled_u = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=_stub_time())
         assert captured["target"] == "system"
-        assert compiled_u._target == "system"
+        assert compiled_u.install_plan.target == "system"
         # The SAME Problem under AMR -> target='amr_system' (per-block native loader; no Program).
         compiled_a = orchestration.compile(prob, layout=AMR(base=CartesianMesh()))
-        assert compiled_a._target == "amr_system"
-        assert hasattr(compiled_a, "_block_compiled_models")
-        assert set(compiled_a._block_compiled_models) == {"ne"}
-        assert all(child.sealed for child in compiled_a._block_compiled_models.values())
+        assert compiled_a.install_plan.target == "amr_system"
+        assert set(compiled_a.install_plan.block_models) == {"ne"}
+        assert all(child.sealed for child in compiled_a.install_plan.block_models.values())
+        assert not hasattr(compiled_a, "_block_compiled_models")
     finally:
         compile_drivers.compile_problem = saved
 
@@ -109,7 +115,7 @@ def test_compile_without_layout_raises_pointing_at_layout_kwarg():
     compile_drivers.compile_problem = _patched_uniform({})
     try:
         with pytest.raises(ValueError, match=r"pops\.compile\(problem, layout="):
-            orchestration.compile(_fresh_problem(), time=_StubTime())
+            orchestration.compile(_fresh_problem(), time=_stub_time())
     finally:
         compile_drivers.compile_problem = saved
 
@@ -120,19 +126,19 @@ def test_constructor_layout_still_works_for_back_compat():
     compile_drivers.compile_problem = _patched_uniform(captured)
     try:
         prob = pops.Problem(layout=Uniform(CartesianMesh())).block(
-            "ne", physics=_StubModel()).program(_StubTime())
+            "ne", physics=_StubModel()).program(_stub_time())
         compiled = orchestration.compile(
-            prob, time=_StubTime())  # no layout= : uses the constructor one
-        assert compiled._target == "system"
+            prob, time=_stub_time())  # no layout= : uses the constructor one
+        assert compiled.install_plan.target == "system"
     finally:
         compile_drivers.compile_problem = saved
 
 
 def test_explicit_layout_disagreeing_with_constructor_is_refused():
     prob = pops.Problem(layout=Uniform(CartesianMesh())).block(
-        "ne", physics=_StubModel()).program(_StubTime())
+        "ne", physics=_StubModel()).program(_stub_time())
     with pytest.raises(ValueError, match="disagrees"):
-        orchestration.compile(prob, layout=AMR(base=CartesianMesh()), time=_StubTime())
+        orchestration.compile(prob, layout=AMR(base=CartesianMesh()), time=_stub_time())
 
 
 def test_recorded_amr_criteria_apply_to_the_amr_layout():
@@ -144,10 +150,10 @@ def test_recorded_amr_criteria_apply_to_the_amr_layout():
     compile_drivers.compile_problem = _patched_uniform({})
     try:
         compiled = orchestration.compile(prob, layout=layout)
-        assert compiled._target == "amr_system"
+        assert compiled.install_plan.target == "amr_system"
         # Compile owns a detached merged layout; the caller's reusable descriptor is untouched.
-        assert compiled._layout is not layout
-        assert compiled._layout.regrid.steps == 7
+        assert compiled.install_plan.layout is not layout
+        assert compiled.install_plan.layout.regrid.steps == 7
         assert layout.regrid is None
     finally:
         compile_drivers.compile_problem = saved
@@ -158,7 +164,7 @@ def test_recorded_amr_criteria_refused_on_a_uniform_compile():
     prob = _fresh_problem()
     prob.amr.refine(Refine.on(_rho(prob)).above(0.1))
     with pytest.raises(ValueError, match="no level to refine onto"):
-        orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=_StubTime())
+        orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=_stub_time())
 
 
 def test_layout_and_problem_cannot_both_author_the_same_amr_slot():

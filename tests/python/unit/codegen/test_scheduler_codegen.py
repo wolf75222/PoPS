@@ -35,6 +35,7 @@ try:
     from pops import model
     from pops.ir.expr import Var
     from pops import time as adctime
+    from typed_program_support import typed_state
 except Exception as exc:  # noqa: BLE001  -- _pops unavailable in this interpreter
     _skip("pops unavailable: %s" % exc)
 
@@ -49,12 +50,12 @@ def _field_program(schedule):
     mod.operator(name="fields_from_state", signature=(u,) >> fields, kind="field_operator", expr=rho)
     mod.operator_capabilities("fields_from_state", cacheable=True)
     P = adctime.Program("sched").bind_operators(mod)
-    U = P.state("plasma", space=u)
+    U = typed_state(P, "plasma", space=u)
     if schedule is None:
         P._call("fields_from_state", U)
     else:
         P._call("fields_from_state", U, schedule=schedule)
-    P.commit(P.state("U", block="plasma").next, U)
+    P.commit(typed_state(P, "plasma", state_name="U", space=u).next, U)
     return P
 
 
@@ -72,11 +73,12 @@ def _scratch_program(schedule):
     test_schedule_authoring); here the focus is the emitted guard shape."""
     P = adctime.Program("sched_rhs")
     dt = P.dt
-    U = P.state("ions")
+    U = typed_state(P, "ions")
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     R = P._replace_value(R, attrs={**R.attrs, "schedule": schedule})
-    P.commit(P.state("U", block="ions").next, P.linear_combine("U1", U + dt * R))
+    P.commit(typed_state(P, "ions", state_name="U").next,
+             P.linear_combine("U1", U + dt * R))
     return P
 
 
@@ -120,14 +122,15 @@ def test_on_start_lowers_to_macro_step_zero():
 def test_when_reuses_program_predicate_token():
     P = adctime.Program("when_sched")
     dt = P.dt
-    U = P.state("ions")
+    U = typed_state(P, "ions")
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     cond = P.norm2(R) < 1e-6  # a Program Bool predicate emitted before the scheduled node
     R2 = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     R2 = P._replace_value(
         R2, attrs={**R2.attrs, "schedule": adctime.when(cond).hold()})
-    P.commit(P.state("U", block="ions").next, P.linear_combine("U1", U + dt * R2))
+    P.commit(typed_state(P, "ions", state_name="U").next,
+             P.linear_combine("U1", U + dt * R2))
     P._check_schedules_lowerable()  # a Program Bool when() lowers
     cpp = P.emit_cpp_program(model=_transport_model())
     assert "< 1e-06" in cpp                           # exact predicate threshold
@@ -136,7 +139,7 @@ def test_when_reuses_program_predicate_token():
 
 def test_frozen_when_codegen_is_repeatable_and_keeps_tokens_emission_local():
     P = adctime.Program("frozen_when_sched")
-    U = P.state("ions")
+    U = typed_state(P, "ions")
     fields = P.solve_fields(U)
     rate = P._rhs_legacy(state=U, fields=fields, flux=True, sources=["default"])
     condition = P.norm2(rate) < 1e-6
@@ -144,7 +147,7 @@ def test_frozen_when_codegen_is_repeatable_and_keeps_tokens_emission_local():
         state=U, fields=fields, flux=True, sources=["default"])
     scheduled = P._replace_value(
         scheduled, attrs={**scheduled.attrs, "schedule": adctime.when(condition).hold()})
-    P.commit(P.state("U", block="ions").next,
+    P.commit(typed_state(P, "ions", state_name="U").next,
              P.linear_combine("U1", U + P.dt * scheduled))
     P.freeze()
     before = P._ir_hash()

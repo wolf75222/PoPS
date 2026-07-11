@@ -32,6 +32,8 @@ Self-skips (exit 0) without numpy / _pops / install_program / set_magnetic_field
 Kokkos / the frozen golden -- never fakes the engine (project policy: no fake pops in tests). Runs under
 pytest and as a script.
 """
+from typed_program_support import state_refs
+
 from pops.params import ConstParam
 import os
 import sys
@@ -156,7 +158,8 @@ def _compile_generic(env, theta, tag, n):
         signature=operator.signature)
     P = adctime.Program("cs_%s" % tag).bind_operators(model)
     lt.condensed_schur(
-        P, "blk", alpha=_ALPHA, theta=theta, tol=_TOL, max_iter=400,
+        P, *state_refs(P, "blk"), alpha=_ALPHA, theta=theta,
+        tol=_TOL, max_iter=400,
         linear_operator=linear)
     try:
         compiled = pops.codegen.compile_problem(model=model, time=P)

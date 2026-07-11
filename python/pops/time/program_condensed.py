@@ -129,7 +129,7 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         g_d = self._coeff_dict(g, "g", "condensed_rhs")
         return self._new("scalar_field", "condensed_rhs", (out, phi_n, state),
                          {"linear_operator": opname, "subset": sub, "th_dt": th_d, "g": g_d},
-                         out.name, None)
+                         out.name, state.block)
 
     def condensed_reconstruct(self, name: Any = None, state: Any = None, phi: Any = None,
                               linear_operator: Any = None, subset: Any = None, th_dt: Any = None,

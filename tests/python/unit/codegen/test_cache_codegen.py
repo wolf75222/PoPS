@@ -10,6 +10,7 @@ import pytest
 
 from pops import model
 from pops.ir.expr import Var
+from typed_program_support import typed_state
 
 adctime = pytest.importorskip("pops.time")
 
@@ -27,9 +28,9 @@ def _module():
 def _held_program(schedule):
     mod, u = _module()
     P = adctime.Program("held").bind_operators(mod)
-    U = P.state("plasma", space=u)
+    U = typed_state(P, "plasma", space=u)
     P._call("fields_from_state", U, schedule=schedule)
-    P.commit(P.state("U", block="plasma").next, U)
+    P.commit(typed_state(P, "plasma", state_name="U", space=u).next, U)
     return P
 
 
@@ -47,9 +48,9 @@ def test_held_solve_fields_lowers_and_emits_cache_branch():
 def test_unscheduled_solve_fields_has_no_cache_branch():
     mod, u = _module()
     P = adctime.Program("plain").bind_operators(mod)
-    U = P.state("plasma", space=u)
+    U = typed_state(P, "plasma", space=u)
     P._call("fields_from_state", U)               # no schedule
-    P.commit(P.state("U", block="plasma").next, U)
+    P.commit(typed_state(P, "plasma", state_name="U", space=u).next, U)
     cpp = P.emit_cpp_program()
     assert "cache_should_update" not in cpp       # plain unconditional solve, no cache
     assert "ctx.solve_fields_from_state(" in cpp

@@ -123,13 +123,18 @@ def build_requirements(compiled: Any) -> Any:
       - unknown: pieces genuinely not in today's metadata (e.g. the exact reconstruction stencil
         width), recorded honestly rather than guessed.
     """
-    model = getattr(compiled, "model", None)
+    from pops.codegen._artifact_models import artifact_model_metadata
+
+    model_rows = artifact_model_metadata(compiled)
+    models = [row.model for row in model_rows]
+    model = models[0] if models else None
     args = compiled.arguments()
     layout_runtime = getattr(args, "layout_runtime", {})
 
     capabilities = []
     for flag, token, used_by in _CAPABILITY_FLAGS:
-        if getattr(model, flag, False):
+        selected = [candidate for candidate in models if getattr(candidate, flag, False)]
+        if selected:
             row = {"capability": token, "used_by": used_by, "provided": True}
             # ADC-552: name the derivable wave-speed provider kind next to the wave_speeds row
             # (additive key). None when the source is not derivable from today's metadata (a bare
@@ -137,14 +142,16 @@ def build_requirements(compiled: Any) -> Any:
             if flag == "has_wave_speeds":
                 from pops.numerics.riemann.waves import provider_of
                 try:
-                    provider = provider_of(model) if model is not None else None
+                    resolved = [provider_of(candidate) for candidate in selected]
+                    providers = {provider.kind for provider in resolved if provider is not None}
+                    provider = providers.pop() if len(providers) == 1 else None
                 except ValueError:
                     provider = None
-                row["wave_speed_provider"] = provider.kind if provider is not None else None
+                row["wave_speed_provider"] = provider
             capabilities.append(row)
 
     constraints = {
-        "backend": "production",
+        "backend": getattr(compiled, "backend", "production"),
         "layout": layout_runtime.get("layout", "system"),
         "supports_mpi": bool(layout_runtime.get("supports_mpi", False)),
         "abi_key": getattr(compiled, "abi_key", None),

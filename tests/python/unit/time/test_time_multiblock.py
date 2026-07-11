@@ -21,6 +21,8 @@ MUST be added in the SAME order the Program declares them via ``P.state``.
     _pops) and locally once _pops is rebuilt; skips if _pops lacks install_program, numpy/_pops is absent,
     no compiler/Kokkos is visible, or the .so compile fails -- never faking the engine.
 """
+from typed_program_support import typed_state
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
@@ -82,9 +84,9 @@ def single_block_program(t, name, block):
     """Forward-Euler passive transport of ONE block: U1 = U + dt*(-div F + S_decay)."""
     P = t.Program(name)
     dt = P.dt
-    U = P.state(block)
+    U = typed_state(P, block)
     R = P._rhs_legacy(name="R_" + block, state=U, flux=True, sources=["decay"])
-    P.commit(P.state("U", block=block).next, P.linear_combine(block + "_next", U + dt * R))
+    P.commit(typed_state(P, block, state_name="U").next, P.linear_combine(block + "_next", U + dt * R))
     return P
 
 
@@ -95,9 +97,9 @@ def two_block_program(t, name="two_block_passive"):
     P = t.Program(name)
     dt = P.dt
     for blk in ("a", "b"):
-        U = P.state(blk)
+        U = typed_state(P, blk)
         R = P._rhs_legacy(name="R_" + blk, state=U, flux=True, sources=["decay"])
-        P.commit(P.state("U", block=blk).next, P.linear_combine(blk + "_next", U + dt * R))
+        P.commit(typed_state(P, blk, state_name="U").next, P.linear_combine(blk + "_next", U + dt * R))
     return P
 
 
@@ -110,48 +112,48 @@ def section_a(t):
     P = t.Program("two_block_flux")
     dt = P.dt
     for blk in ("a", "b"):
-        U = P.state(blk)
+        U = typed_state(P, blk)
         R = P._rhs_legacy(state=U, flux=True, sources=["default"])
-        P.commit(P.state("U", block=blk).next, P.linear_combine(blk + "_next", U + dt * R))
+        P.commit(typed_state(P, blk, state_name="U").next, P.linear_combine(blk + "_next", U + dt * R))
     src = P.emit_cpp_program()
     chk("ctx.state(0)" in src and "ctx.state(1)" in src, "two blocks bind ctx.state(0) and state(1)")
     chk("ctx.rhs_into(0, " in src and "ctx.rhs_into(1, " in src, "RHS routed per block index")
 
     # A read-only block (declared via P.state, never committed) is allowed: only block 'a' commits.
     Pro = t.Program("readonly_b")
-    Ua = Pro.state("a")
-    Ub = Pro.state("b")  # noqa: F841 -- declared, read by the coupled charge but never committed
+    Ua = typed_state(Pro, "a")
+    Ub = typed_state(Pro, "b")  # noqa: F841 -- declared, read by the coupled charge but never committed
     fa = Pro.solve_fields(Ua)
     Ra = Pro._rhs_legacy(state=Ua, fields=fa, sources=["default"])
-    Pro.commit(Pro.state("U", block="a").next, Pro.linear_combine("a1", Ua + Pro.dt * Ra))
+    Pro.commit(typed_state(Pro, "a", state_name="U").next, Pro.linear_combine("a1", Ua + Pro.dt * Ra))
     chk(Pro.validate() is True, "a read-only (uncommitted) block validates")
     src_ro = Pro.emit_cpp_program()
     chk("ctx.state(1)" in src_ro, "the read-only block still binds its index (ctx.state(1))")
 
     # A double commit is rejected at build time.
     Pd = t.Program("double")
-    Uad = Pd.state("a")
-    Pd.commit(Pd.state("U", block="a").next, Pd.linear_combine("x", 1.0 * Uad))
-    chk(raises(ValueError, lambda: Pd.commit(Pd.state("U", block="a").next, Pd.linear_combine("y", 1.0 * Uad))),
+    Uad = typed_state(Pd, "a")
+    Pd.commit(typed_state(Pd, "a", state_name="U").next, Pd.linear_combine("x", 1.0 * Uad))
+    chk(raises(ValueError, lambda: Pd.commit(typed_state(Pd, "a", state_name="U").next, Pd.linear_combine("y", 1.0 * Uad))),
         "a double commit of the same block is rejected")
 
     # A commit of a block no P.state declares cannot route to an index -> rejected.
     Pu = t.Program("unknown")
-    Uau = Pu.state("a")
+    Uau = typed_state(Pu, "a")
     chk(raises(
         ValueError,
         lambda: Pu.commit(
-            Pu.state("U", block="ghost").next, Pu.linear_combine("g", 1.0 * Uau))),
+            typed_state(Pu, "ghost", state_name="U").next, Pu.linear_combine("g", 1.0 * Uau))),
         "a cross-block commit is rejected before lowering")
 
     # The SIMULTANEOUS multi-target coupled field solve LOWERS (Spec 3 criterion 24, ADC-457): every
     # listed block contributes its stage state at once into the shared phi/aux.
     Pc = t.Program("coupled")
-    Uac = Pc.state("a")
-    Ubc = Pc.state("b")
+    Uac = typed_state(Pc, "a")
+    Ubc = typed_state(Pc, "b")
     Pc.solve_fields_from_blocks([Uac, Ubc])
-    Pc.commit(Pc.state("U", block="a").next, Pc.linear_combine("a1", Uac + Pc.dt * Pc._rhs_legacy(state=Uac, sources=["default"])))
-    Pc.commit(Pc.state("U", block="b").next, Pc.linear_combine("b1", Ubc + Pc.dt * Pc._rhs_legacy(state=Ubc, sources=["default"])))
+    Pc.commit(typed_state(Pc, "a", state_name="U").next, Pc.linear_combine("a1", Uac + Pc.dt * Pc._rhs_legacy(state=Uac, sources=["default"])))
+    Pc.commit(typed_state(Pc, "b", state_name="U").next, Pc.linear_combine("b1", Ubc + Pc.dt * Pc._rhs_legacy(state=Ubc, sources=["default"])))
     src_c = Pc.emit_cpp_program()
     chk("ctx.solve_fields_from_blocks(" in src_c,
         "solve_fields_from_blocks lowers to the coupled multi-block solve")
@@ -161,7 +163,7 @@ def section_a(t):
 
     # The builder rejects malformed solve_fields_from_blocks arguments.
     Pb = t.Program("b")
-    Uab = Pb.state("a")
+    Uab = typed_state(Pb, "a")
     chk(raises(ValueError, lambda: Pb.solve_fields_from_blocks([])),
         "solve_fields_from_blocks([]) is rejected")
     chk(raises(ValueError, lambda: Pb.solve_fields_from_blocks([Uab, Uab])),
@@ -171,15 +173,15 @@ def section_a(t):
     # runtime index, not silently to 0 (_emit_while/_emit_range/_emit_if forward block_idx). Block b
     # (index 1) updates inside a range loop -> the in-loop RHS must lower to ctx.rhs_into(1, ...).
     Pcf = t.Program("cf_block_routing")
-    Uacf = Pcf.state("a")
-    Ubcf = Pcf.state("b")
-    Pcf.commit(Pcf.state("U", block="a").next, Pcf.linear_combine(
+    Uacf = typed_state(Pcf, "a")
+    Ubcf = typed_state(Pcf, "b")
+    Pcf.commit(typed_state(Pcf, "a", state_name="U").next, Pcf.linear_combine(
         "a_n", Uacf + Pcf.dt * Pcf._rhs_legacy(state=Uacf, flux=True, sources=["default"])))
 
     def _cf_body(prog, x):
         return prog.linear_combine(None, x + prog.dt * prog._rhs_legacy(state=x, flux=True, sources=["default"]))
 
-    Pcf.commit(Pcf.state("U", block="b").next, Pcf.range(Ubcf, 2, _cf_body))
+    Pcf.commit(typed_state(Pcf, "b", state_name="U").next, Pcf.range(Ubcf, 2, _cf_body))
     src_cf = Pcf.emit_cpp_program()
     chk("ctx.rhs_into(1, " in src_cf,
         "control flow inside block b routes its body RHS to index 1 (not silently 0)")
@@ -191,7 +193,6 @@ def section_b(t):
         import numpy as np
 
         import pops
-        from pops.physics.facade import Model
     except Exception as exc:  # noqa: BLE001 -- numpy or _pops unavailable
         print("-- (B) skipped: pops/numpy unavailable (%s) --" % exc)
         return

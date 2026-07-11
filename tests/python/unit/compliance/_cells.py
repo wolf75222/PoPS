@@ -107,22 +107,35 @@ def _poisson(solver, *bcs):
     return PoissonProblem(unknown=phi, equation=(-laplacian(phi) == rho), bcs=bcs, solver=solver)
 
 
+def _state_refs(model_name, block_name):
+    """Create the typed block/state declarations required by the final Program API."""
+    module = _model.Module(model_name)
+    state_space = module.state_space("U", ("rho", "mx", "my"))
+    state = module.state_handle(state_space)
+    block = pops.Problem(name="%s-case" % model_name).add_block(block_name, module)
+    return module, block, state
+
+
 def _program_with_context():
     program = adctime.Program("adc547_ctx")
     dt = program.dt
-    state = program.state("gas")
+    _module, block, declaration = _state_refs("adc547-ctx-model", "gas")
+    temporal = program.state(block, declaration)
+    state = temporal.n
     rhs = program._rhs_legacy(state=state, flux=True, sources=["default"])
-    program.commit(program.state("U", block="gas").next, program.linear_combine("U1", state + dt * rhs))
+    program.commit(temporal.next, program.linear_combine("U1", state + dt * rhs))
     return program
 
 
 def _bindable_program(name="adc547_bind"):
     program = adctime.Program(name)
     dt = program.dt
-    state = program.state("plasma")
+    _module, block, declaration = _state_refs("%s-model" % name, "plasma")
+    temporal = program.state(block, declaration)
+    state = temporal.n
     fields = program.solve_fields("phi", state)
     rhs = program._rhs_legacy(state=state, fields=fields, flux=True, sources=["default"])
-    program.commit(program.state("U", block="plasma").next, program.linear_combine("U1", state + dt * rhs))
+    program.commit(temporal.next, program.linear_combine("U1", state + dt * rhs))
     return program
 
 
@@ -184,7 +197,8 @@ def _pos_program_macro_lib_time():
     # A lib.time macro produces the canonical Program with a stable IR hash (no lib stepper).
     import pops.lib.time as lib_time
 
-    program = lib_time.ssprk3("plasma")
+    _module, block, state = _state_refs("adc547-ssprk3-model", "plasma")
+    program = lib_time.ssprk3(block, state)
     assert isinstance(program, adctime.Program)
     assert program._ir_hash() == program._ir_hash()
     return _assert_route_available("program_context:system")
@@ -212,7 +226,7 @@ def _pos_params_runtime_const_bind():
     except TypeError:
         pass
     # The bind PASS path runs over the metadata stub (no .so): a well-formed install passes the gates.
-    run_bind_gates(_compiled_problem(), None, _uniform(), {"plasma": np.ones((3, 8, 8))}, {}, {})
+    run_bind_gates(_compiled_problem(), _uniform(), {"plasma": np.ones((3, 8, 8))}, {}, {})
     # The associated native route (the program install path) is advertised available.
     return _assert_route_available("program_context:system")
 
@@ -234,15 +248,30 @@ def _pos_amr_route_when_capable():
 
 
 def _amr_route_handle():
-    """A stub AMR-route CompiledModel (target='amr_system' + AMR _layout): what pops.compile(layout=
-    AMR(...)) returns. Drives the ADC-515 inert introspection cells (no .so dlopen)."""
+    """A stub AMR-route CompiledModel with the immutable InstallPlan returned by pops.compile."""
+    from pops.codegen._plans import InstallBlock, InstallPlan
+    from pops.problem._snapshot import AuthoringSnapshot
+
     handle = CompiledModel(
         so_path="<stub-amr>", backend="production", adder="add_native_block",
         cons_names=["rho", "mx", "my"], cons_roles=["Density", "MomentumX", "MomentumY"],
         prim_names=["rho", "mx", "my"], n_vars=3, gamma=1.4, n_aux=1, params={},
         caps={"cpu": True, "amr": True, "mpi": True}, abi_key=_abi(), model_hash="h", cxx="c++",
         std="c++23", target="amr_system", aux_extra_names=["B_z"])
-    handle._layout = AMR(base=CartesianMesh(n=64), max_levels=2, ratio=2, regrid=RegridEvery(4))
+    layout = AMR(base=CartesianMesh(n=64), max_levels=2, ratio=2, regrid=RegridEvery(4))
+    snapshot = AuthoringSnapshot({"kind": "compliance-amr-route-stub"})
+    handle.install_plan = InstallPlan(
+        snapshot_hash=snapshot.hash,
+        target="amr_system",
+        layout=layout,
+        blocks=(InstallBlock("block", handle, None),),
+        bind_schema=None,
+        field_solvers={},
+        outputs=(),
+        diagnostics=(),
+        has_program=False,
+    )
+    handle._problem_snapshot = snapshot
     return handle
 
 
@@ -257,7 +286,7 @@ def _pos_amr_arguments_inert():
 
 def _pos_amr_estimate_memory_inert():
     # ADC-515: estimate_memory(mesh) on the AMR-route handle is a conservative patch-budget FORMULA
-    # (layout='amr', amr_patch > 0) that defaults the AMR layout from the carried _layout. Inert.
+    # (layout='amr', amr_patch > 0) that defaults the AMR layout from InstallPlan. Inert.
     est = _amr_route_handle().estimate_memory(_CartesianMesh(n=64, periodic=True))
     assert est.layout == "amr" and est.categories.get("amr_patch", 0) > 0
     return _assert_route_available("layout:AMR")
@@ -357,28 +386,31 @@ def _neg_operator_signature_mismatch():
     module = _arity_module()
     program = adctime.Program("adc547_arity")
     program.bind_operators(module)
-    state = program.state("plasma")
+    block = pops.Problem(name="adc547-arity-case").add_block("plasma", module)
+    declaration = module.state_handle(module.state_spaces()["U"])
+    state = program.state(block, declaration).n
     program._call("explicit_rhs", state)  # missing the fields input -> arity refusal
 
 
 def _neg_missing_aux_field():
     # The lowered operator requires aux B_z the state omits -> bind gate refusal (metadata stub).
     compiled = _compiled_problem(aux_names=("B_z",))
-    run_bind_gates(compiled, None, _uniform(), {"plasma": np.ones((3, 8, 8))}, {}, {})
+    run_bind_gates(compiled, _uniform(), {"plasma": np.ones((3, 8, 8))}, {}, {})
 
 
 def _neg_abi_cache_mismatch():
     compiled = _compiled_problem()
     compiled.model.abi_key = "TOTALLY_DIFFERENT_ABI"
     compiled.abi_key = "TOTALLY_DIFFERENT_ABI"
-    run_bind_gates(compiled, None, _uniform(), {"plasma": np.ones((3, 8, 8))}, {}, {})
+    run_bind_gates(compiled, _uniform(), {"plasma": np.ones((3, 8, 8))}, {}, {})
 
 
 def _neg_ir_index_refusal():
     # Gap 3 closed: a Program state value refuses __index__ (range()/index) with a stable message
     # steering to P.while_ / P.if_ -- a runtime IR value is not a compile-time index.
     program = adctime.Program("adc547_index")
-    state = program.state("plasma")
+    _module, block, declaration = _state_refs("adc547-index-model", "plasma")
+    state = program.state(block, declaration).n
     range(state)  # triggers __index__ -> TypeError
 
 

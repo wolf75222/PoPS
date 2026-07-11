@@ -22,6 +22,7 @@ try:
     from pops.numerics.riemann import Rusanov
     from pops.physics.facade import Model
     from pops.runtime.system import AmrSystem
+    from tests.python.support.typed_program import program_states, synthetic_module
 except Exception as exc:  # noqa: BLE001
     print("skip test_amr_history_backcompat (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -59,9 +60,12 @@ def _passive_source_model(name):
 def _noring_program(name="adc631_noring"):
     """A forward-Euler Program with NO keep_history -> registers no rings (the back-compat subject)."""
     P = pops.time.Program(name)
-    U0 = P.state("blk")
+    module = synthetic_module("%s_state" % name, components=("rho",))
+    _case, states = program_states(P, module, ("blk",))
+    temporal = states["blk"]
+    U0 = temporal.n
     k0 = P._rhs_legacy("k0", state=U0, fields=None, flux=False, sources=["default"])
-    P.commit(P.state("U", block="blk").next, P.linear_combine("U1", U0 + P.dt * k0))
+    P.commit(temporal.next, P.linear_combine("U1", U0 + P.dt * k0))
     return P
 
 

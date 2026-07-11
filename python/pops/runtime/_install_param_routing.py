@@ -102,18 +102,20 @@ def route_program_params(
     if not isinstance(resolved, Mapping):
         raise TypeError("resolved parameter values must be a ParamHandle mapping")
     program = getattr(compiled, "program", None)
-    model = getattr(compiled, "model", None)
-    if program is None or model is None:
+    if program is None:
         return {}
-
-    from pops.codegen.program_emit_params import program_param_entries
     from pops.time.references import block_name
 
     blocks = {index: reference for reference, index in program._block_indices().items()}
     vectors: dict[int, list[float | None]] = {}
-    for block_index, local_id, within_index, _neutral in program_param_entries(
-        program, model
-    ):
+    captured = getattr(compiled, "program_param_routes", None)
+    if captured is None:
+        raise ValueError(
+            "compiled Program carries no immutable program_param_routes metadata; rebuild it "
+            "through pops.compile(...) before binding (bind never re-enters model/codegen analysis)"
+        )
+    entries = tuple(captured)
+    for block_index, local_id, within_index, _neutral in entries:
         reference = blocks.get(block_index)
         if reference is None:
             raise ValueError(

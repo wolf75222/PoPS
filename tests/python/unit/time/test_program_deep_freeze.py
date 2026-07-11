@@ -1,4 +1,6 @@
 """Program.freeze deeply detaches authoring tables and preserves pure reads."""
+from typed_program_support import typed_state
+
 from types import MappingProxyType
 
 import pytest
@@ -8,7 +10,7 @@ from pops.time import Program
 
 def _program():
     program = Program("deep-program")
-    state = program.state("U", block="fluid")
+    state = typed_state(program, "fluid", state_name="U")
     program.commit(state.next, state.n)
     return program
 
@@ -68,7 +70,7 @@ def test_frozen_program_codegen_is_repeatable_and_does_not_install_caches():
 
 def test_frozen_temporal_handles_preserve_materialized_pure_reads():
     program = Program("frozen-temporal-reads")
-    state = program.state("U", block="fluid")
+    state = typed_state(program, "fluid", state_name="U")
     current = state.n
     stage = state.stage("predictor")
     defined = program.define(stage, current)
@@ -90,7 +92,7 @@ def test_frozen_temporal_handles_preserve_materialized_pure_reads():
 
 def test_frozen_temporal_handles_refuse_new_lazy_declarations_clearly():
     program = Program("frozen-temporal-missing")
-    state = program.state("U", block="fluid")
+    state = typed_state(program, "fluid", state_name="U")
     program.freeze()
 
     with pytest.raises(RuntimeError, match="frozen"):

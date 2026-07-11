@@ -28,14 +28,16 @@ from pops.fields import FieldProblem  # noqa: E402
 from pops.math import laplacian  # noqa: E402
 from pops.mesh.cartesian import CartesianMesh  # noqa: E402
 from pops.mesh.layouts import AMR, Uniform  # noqa: E402
+from pops.model import Module  # noqa: E402
 
 
 # --- tiny inert stand-ins (no compiler / no runtime) -----------------------
-class _StubModel:
-    """A physics stand-in (the assembly only reads its presence, never runs it)."""
+class _StubModel(Module):
+    """A minimal real declaration owner; route inspection never compiles it."""
 
-    name = "ne"
-    dsl = object()
+    def __init__(self):
+        super().__init__("ne")
+        self.state_space("U", ("rho",))
 
 
 class _StubSolver:

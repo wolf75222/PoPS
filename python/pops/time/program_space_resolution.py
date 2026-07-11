@@ -138,8 +138,8 @@ def resolve_program_spaces(program: Any, model: Any) -> Any:
     resolved.bind_operators(model)
     if state_space is not None:
         resolved._state_spaces = {
-            block: state_space if space is None else space
-            for block, space in resolved._state_spaces.items()}
+            state_ref: state_space if space is None else space
+            for state_ref, space in resolved._state_spaces.items()}
         resolved._history_spaces = {
             name: state_space if space is None else space
             for name, space in resolved._history_spaces.items()}

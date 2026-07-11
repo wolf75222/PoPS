@@ -131,7 +131,10 @@ gas = route_problem.add_block("gas", route_model)
 schema = BindSchema.from_problem(route_problem)
 default_values = schema.resolve()
 override_values = schema.resolve({gas[k_handle]: 7.0})
-carrier = SimpleNamespace(program=route_program, model=route_model)
+carrier = SimpleNamespace(
+    program=route_program,
+    program_param_routes=tuple(program_param_entries(route_program, route_model)),
+)
 chk(route_program_params(carrier, schema, default_values) == {0: [2.0]},
     "BindSchema materialises the declaration default")
 chk(route_program_params(carrier, schema, override_values) == {0: [7.0]},

@@ -21,8 +21,8 @@ from pops.physics.facade import Model
 
 # Golden hashes for the ADC-652 exact-literal model-hash schema. Named-source declarations must
 # not perturb the corresponding default-source/no-source identities inside this schema.
-GOLDEN_WITH_SOURCE = "923ae2f52bd906ac062072365590235c674187869c4e5fcea3dc351569c0af0e"
-GOLDEN_NO_SOURCE = "81405d8bc86a9e86f232ca4a73162d9a140aa17aeb3b225c40adcfb73ce5be0a"
+GOLDEN_WITH_SOURCE = "19e82bbcb3f48791e7b0583ee92edb449a1bb0e8abf2c41bbd5a938f35fa7f5e"
+GOLDEN_NO_SOURCE = "dce7cdcec524a2abee4f8b314dd109af9edc00937215f4011ee49dd9b67819a1"
 
 
 def build(with_source=True):

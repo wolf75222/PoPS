@@ -13,6 +13,7 @@ import pytest
 pops = pytest.importorskip("pops")
 Model = pytest.importorskip("pops.physics.facade").Model
 from pops.codegen.compile_emit import model_hash  # noqa: E402
+from typed_program_support import typed_state  # noqa: E402
 
 
 def _fd_model(fd_eps=None):
@@ -63,14 +64,14 @@ def _solve_program(adctime, fd_eps=None):
     """A minimal Program with a solve_local_nonlinear node carrying fd_eps (trivial residual so no
     compiled model is needed): r(U) = U - U0. The node stores tol / max_iter / fd_eps."""
     P = adctime.Program("p_default" if fd_eps is None else "p_eps")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
 
     def residual(P, Uit, U0):
         return P.linear_combine("r", Uit - U0)
 
     W = P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U, tol=1e-12,
                                 max_iter=20, fd_eps=fd_eps)
-    P.commit(P.state("U", block="blk").next, W)
+    P.commit(typed_state(P, "blk", state_name="U").next, W)
     return P
 
 
@@ -87,7 +88,7 @@ def test_solve_local_nonlinear_fd_eps_changes_program_ir_hash():
 def test_solve_local_nonlinear_fd_eps_rejected_out_of_domain():
     adctime = pytest.importorskip("pops.time")
     P = adctime.Program("bad")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
 
     def residual(P, Uit, U0):
         return P.linear_combine("r", Uit - U0)

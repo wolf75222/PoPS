@@ -183,14 +183,34 @@ def field_provenance_contains(provenance: Any, context: FieldContext) -> bool:
     return False
 
 
-def remap_field_provenance(provenance: Any, remap_source: Any) -> Any:
-    """Rebuild provenance after an SSA rewrite using ``remap_source(old_id)``."""
+def remap_field_provenance(
+    provenance: Any,
+    remap_source: Any,
+    remap_reference: Any = None,
+) -> Any:
+    """Rebuild provenance after an SSA/reference rewrite.
+
+    ``remap_source(old_id)`` reowns SSA ids.  ``remap_reference(handle)`` is optional and lets the
+    compiled-program detachment boundary replace live block/field handles by canonical inert values;
+    ordinary optimization passes retain their existing reference identity.
+    """
+    if remap_reference is None:
+        def _identity(value: Any) -> Any:
+            return value
+        remap_reference = _identity
     if isinstance(provenance, FieldReadProvenance):
         return merge_field_provenance(
-            *(remap_field_provenance(item, remap_source) for item in provenance.contexts))
+            *(
+                remap_field_provenance(item, remap_source, remap_reference)
+                for item in provenance.contexts
+            )
+        )
     return FieldContext(
-        provenance.field_problem,
-        tuple((block, remap_source(source)) for block, source in provenance.stage_sources),
+        remap_reference(provenance.field_problem),
+        tuple(
+            (remap_reference(block), remap_source(source))
+            for block, source in provenance.stage_sources
+        ),
         provenance.outputs,
     )
 

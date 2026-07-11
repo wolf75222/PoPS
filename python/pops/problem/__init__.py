@@ -11,6 +11,7 @@ from pops.problem.handles import (
     BlockHandle, FieldHandle, OperatorHandle, StateHandle)
 from pops.problem.problem import Problem
 from pops.problem.report import ProblemValidationIssue, ProblemValidationReport
+from pops.problem._snapshot import AuthoringSnapshot
 
-__all__ = ["Problem", "BlockHandle", "StateHandle", "FieldHandle",
+__all__ = ["Problem", "AuthoringSnapshot", "BlockHandle", "StateHandle", "FieldHandle",
            "OperatorHandle", "ProblemValidationReport", "ProblemValidationIssue"]
