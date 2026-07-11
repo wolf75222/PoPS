@@ -475,5 +475,6 @@ inline py::dict effective_options_report_to_dict(const EffectiveOptionsReport& r
 // init_amr.cpp). bindings.cpp calls them in this order: init_core registers SystemConfig / ModelSpec
 // (used by System / AmrSystem signatures) before init_system / init_amr run.
 void init_core(py::module_& m);
+void init_identity(py::module_& m);
 void init_system(py::module_& m);
 void init_amr(py::module_& m);

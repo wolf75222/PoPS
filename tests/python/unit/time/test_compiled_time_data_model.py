@@ -7,7 +7,9 @@ from fractions import Fraction
 import pytest
 
 from pops.ir import ScalarLiteral
-from pops.runtime._bound_snapshot import _cadence_row
+from pops.identity import make_identity
+from pops.model.bind_schema import BindSchema
+from pops.runtime._bound_snapshot import build_uniform_snapshot
 from pops.runtime._system_unified_install import _SystemUnifiedInstall
 from pops.time import CompiledTime
 
@@ -57,6 +59,15 @@ def test_uniform_runtime_converts_exact_cfl_only_at_install_boundary():
 
     assert system.native_cadence == (2, 3)
     assert system._program_cadence_cfl == float(Fraction(1, 3))
-    assert _cadence_row(cadence) == {
-        "substeps": 2, "stride": 3, "cfl": float(Fraction(1, 3)),
+    schema = BindSchema(())
+    compiled = type("Compiled", (), {
+        "semantic_identity": make_identity("semantic", {"model": "time-test"}),
+        "artifact_identity": make_identity("artifact", {"binary": "time-test"}),
+    })()
+    engine = type("Engine", (), {"_output_policies": (), "_diagnostic_measures": ()})()
+    manifest = build_uniform_snapshot(
+        engine, compiled, {}, {}, {}, cadence, {}, schema.resolve({})).to_dict()
+    assert manifest["cadence"] == {
+        "kind": "compiled-time", "substeps": 2, "stride": 3,
+        "cfl": {"rational": [1, 3]},
     }

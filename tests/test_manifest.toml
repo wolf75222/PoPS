@@ -387,6 +387,11 @@ sources = ["tests/cpp/integration/runtime/test_capability_report.cpp"]
 labels = ["integration", "runtime", "medium"]
 
 [[cpp.suite]]
+name = "test_canonical_identity"
+sources = ["tests/cpp/unit/core/test_canonical_identity.cpp"]
+labels = ["unit", "core", "fast"]
+
+[[cpp.suite]]
 name = "test_checkpoint_cache"
 sources = ["tests/cpp/integration/runtime/test_checkpoint_cache.cpp"]
 labels = ["integration", "runtime", "medium"]
@@ -1070,6 +1075,11 @@ labels = ["integration", "python", "runtime", "medium"]
 name = "pops_python_unit_codegen"
 path = "tests/python/unit/codegen"
 labels = ["unit", "python", "codegen", "fast"]
+
+[[python.suite]]
+name = "pops_python_unit_identity"
+path = "tests/python/unit/identity"
+labels = ["unit", "python", "identity", "codegen", "runtime", "fast"]
 
 [[python.suite]]
 name = "pops_python_unit_compliance"

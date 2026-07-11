@@ -9,8 +9,11 @@ asserted to raise loudly (never fake success).
 Runs both under pytest and as a plain script (``python3 test_problem_orchestration.py``); the
 CI runner executes it as a script (the ``__main__`` guard below).
 """
-from pops.params import ConstParam
+from pathlib import Path
 import sys
+import tempfile
+
+from pops.params import ConstParam
 
 try:
     import pops
@@ -35,12 +38,24 @@ def _ref(name, kind="state"):
     return Handle(name, kind=kind, owner=OwnerPath.shared("problem-orchestration"))
 
 
+_STUB_BINARY_DIR = Path(tempfile.mkdtemp(prefix="pops-problem-orchestration-"))
+
+
+def _stub_binary(name):
+    """Return a real immutable payload for identity hashing; no dynamic loading occurs here."""
+    path = _STUB_BINARY_DIR / name
+    if not path.exists():
+        path.write_bytes(("PoPS test artifact: %s\n" % name).encode("utf-8"))
+    return str(path)
+
+
 # --- tiny stand-ins (no compiler / no runtime) -----------------------------
 class _StubCompiledModel(CompiledModel):
     """A target='amr_system' CompiledModel stand-in: ``.so_path`` + the adder/target metadata
     AmrSystem.add_equation dispatches on (no real .so)."""
 
-    def __init__(self, source, so_path="/tmp/stub_amr.so", target="amr_system"):
+    def __init__(self, source, so_path=None, target="amr_system"):
+        so_path = so_path or _stub_binary("stub_amr.so")
         super().__init__(
             so_path, "production", "add_native_block", (), (), (), 0, None, 0,
             {}, {"cpu": True, "amr": target == "amr_system"}, "abi", "model-hash",
@@ -76,14 +91,17 @@ class _StubModel(Module):
     def compile(self, *, backend, target, **kw):
         _COMPILE_CALLS[id(self)].append((backend, target))
         return _StubCompiledModel(
-            self, so_path="/tmp/%s_%s.so" % (self.name, target), target=target)
+            self, so_path=_stub_binary("%s_%s.so" % (self.name, target)), target=target)
 
 
 class _StubCompiled:
     """A compiled-handle stand-in carrying only the immutable InstallPlan bind authority."""
 
     def __init__(self, target="system", problem=None, layout=None, block_compiled=None):
-        self.so_path = "/tmp/stub.so"
+        self.so_path = _stub_binary("stub.so")
+        self.abi_key = "stub-abi"
+        self.cxx = "stub-c++"
+        self.std = "c++20"
         self.model = None
         self.install_plan = None
         self._problem_snapshot = None
@@ -680,7 +698,8 @@ def _bind_with_stub_runtime(target, layout=None, blocks=("ne",), initial=None):
 def test_bind_system_dispatch():
     sim_class, last, stub_system, _, _ = _bind_with_stub_runtime("system")
     _check(sim_class is stub_system, "target='system' binds a System")
-    _check(last["compiled"].so_path == "/tmp/stub.so", "compiled handle passed to install")
+    _check(last["compiled"].so_path == _stub_binary("stub.so"),
+           "compiled handle passed to install")
     _check(set(last["instances"]) == {"ne"}, "the block becomes one install instance")
     _check(last["instances"]["ne"]["initial"] == [1.0], "initial state routed by block name")
     _check("phi" in last["solvers"], "the Poisson field solver derived from the problem")

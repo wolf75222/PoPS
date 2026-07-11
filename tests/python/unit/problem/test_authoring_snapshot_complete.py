@@ -13,32 +13,12 @@ import pytest
 pops = pytest.importorskip("pops")
 
 import pops.problem._snapshot as snapshot_module  # noqa: E402
+import pops.lib.time as libtime  # noqa: E402
 from pops.mesh.cartesian import CartesianMesh  # noqa: E402
 from pops.mesh.layouts import Uniform  # noqa: E402
-from pops.model import DeclarationIndex, Handle, OwnerKind, OwnerPath  # noqa: E402
+from pops.model import Handle, Module, OwnerKind, OwnerPath  # noqa: E402
 from pops.problem._snapshot import AuthoringSnapshot, build_authoring_snapshot  # noqa: E402
 from pops.problem._detached import detached_frozen  # noqa: E402
-
-
-class _Model:
-    def __init__(self, name="transport"):
-        self.name = name
-        self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, name)
-
-    def declaration_index(self):
-        return DeclarationIndex(owner=self.owner_path, handles=())
-
-    def to_data(self):
-        return {"name": self.name, "equation": "scalar_advection"}
-
-
-class _MutableDescriptor:
-    def __init__(self, kind, payload):
-        self.kind = kind
-        self.payload = payload
-
-    def to_data(self):
-        return {"kind": self.kind, "payload": self.payload}
 
 
 _GLOBAL_CALLABLE_DATA = {"scale": 2, "offsets": [1, 3]}
@@ -55,7 +35,21 @@ def _operator_using_opaque_global():
 
 
 def _problem():
-    return pops.Problem(name="complete-snapshot").block("fluid", physics=_Model())
+    module = Module("transport")
+    module.state_space("U", ("u",))
+    return pops.Problem(name="complete-snapshot").block("fluid", physics=module)
+
+
+def _program(problem, scheme):
+    spec = problem._blocks.spec("fluid")
+    module = spec["model"]
+    block = problem.blocks()["fluid"]
+    state = module.state_handle(module.state_spaces()["U"])
+    if scheme == "euler":
+        return libtime.forward_euler(block, state)
+    if scheme == "ssprk2":
+        return libtime.ssprk2(block, state)
+    raise ValueError("unknown test scheme %r" % scheme)
 
 
 def test_authoring_snapshot_is_the_only_snapshot_type_name():
@@ -68,17 +62,17 @@ def test_effective_layout_and_time_have_distinct_complete_identities():
     base = build_authoring_snapshot(
         problem,
         layout=Uniform(CartesianMesh(n=16, L=1.0)),
-        time=_MutableDescriptor("time", {"scheme": "euler", "stages": [1]}),
+        time=_program(problem, "euler"),
     )
     other_layout = build_authoring_snapshot(
         problem,
         layout=Uniform(CartesianMesh(n=32, L=1.0)),
-        time=_MutableDescriptor("time", {"scheme": "euler", "stages": [1]}),
+        time=_program(problem, "euler"),
     )
     other_time = build_authoring_snapshot(
         problem,
         layout=Uniform(CartesianMesh(n=16, L=1.0)),
-        time=_MutableDescriptor("time", {"scheme": "ssprk2", "stages": [1, 2]}),
+        time=_program(problem, "ssprk2"),
     )
 
     assert base.hash != other_layout.hash
@@ -95,27 +89,19 @@ _SUBPROCESS_PROBE = textwrap.dedent(
     """
     import json
     import pops
+    import pops.lib.time as libtime
     from pops.mesh.cartesian import CartesianMesh
     from pops.mesh.layouts import Uniform
-    from pops.model import DeclarationIndex, OwnerKind, OwnerPath
+    from pops.model import Module
     from pops.problem._snapshot import build_authoring_snapshot
 
-    class Model:
-        def __init__(self):
-            self.name = "transport"
-            self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, self.name)
-        def declaration_index(self):
-            return DeclarationIndex(owner=self.owner_path, handles=())
-        def to_data(self):
-            return {"name": self.name, "equation": "scalar_advection"}
-
-    class Time:
-        def to_data(self):
-            return {"scheme": "ssprk2", "stages": [1, 2]}
-
-    problem = pops.Problem(name="deterministic").block("fluid", physics=Model())
+    model = Module("transport")
+    state = model.state_space("U", ("u",))
+    problem = pops.Problem(name="deterministic")
+    block = problem.add_block("fluid", model)
+    time = libtime.ssprk2(block, model.state_handle(state))
     snapshot = build_authoring_snapshot(
-        problem, layout=Uniform(CartesianMesh(n=16, L=1.0)), time=Time())
+        problem, layout=Uniform(CartesianMesh(n=16, L=1.0)), time=time)
     print(json.dumps({
         "hash": snapshot.hash,
         "artifact_hash": snapshot.artifact_hash,
@@ -370,14 +356,14 @@ def test_library_location_is_provenance_but_not_artifact_identity():
 def test_stale_authoring_mutations_cannot_change_an_existing_snapshot():
     problem = _problem()
     stale_block_spec = problem._blocks.spec("fluid")
-    layout = _MutableDescriptor("layout", {"cells": [16, 16], "periodic": [True, True]})
-    time = _MutableDescriptor("time", {"scheme": "rk", "stages": [1, 2]})
+    layout = Uniform(CartesianMesh(n=16, L=1.0, periodic=True))
+    time = _program(problem, "ssprk2")
     snapshot = build_authoring_snapshot(problem, layout=layout, time=time)
     before = snapshot.to_dict()
     before_hash = snapshot.hash
 
-    layout.payload["cells"][0] = 4096
-    time.payload["stages"].append(99)
+    layout.mesh.n = 4096
+    time.linear_combine("late-presentation-node", time._values[0])
     stale_block_spec["spatial"] = {"scheme": "mutated-after-snapshot"}
     caller_copy = snapshot.to_dict()
     caller_copy["compile_context"]["libraries"] = ["mutated-copy"]

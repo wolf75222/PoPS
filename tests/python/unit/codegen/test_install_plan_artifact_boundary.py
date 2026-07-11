@@ -14,13 +14,13 @@ from pops.codegen.loader import CompiledModel  # noqa: E402
 from pops.codegen._compiled_model_identity import model_compile_identity  # noqa: E402
 from pops.mesh.cartesian import CartesianMesh  # noqa: E402
 from pops.mesh.layouts import Uniform  # noqa: E402
-from pops.model import DeclarationIndex, OwnerKind, OwnerPath  # noqa: E402
+from pops.model import Module  # noqa: E402
 
 
 class _Loader(CompiledModel):
     def __init__(self, source, target):
         super().__init__(
-            "/tmp/%s_%s.so" % (source.name, target), "production", "add_native_block",
+            source.so_path, "production", "add_native_block",
             (), (), (), 0, None, 0, {}, {"cpu": True, "amr": target == "amr_system"},
             "abi", source._model_hash(), "c++", "c++20", target=target,
             definition_identity=model_compile_identity(source))
@@ -28,8 +28,9 @@ class _Loader(CompiledModel):
 
 
 class _Dsl:
-    def __init__(self, name):
+    def __init__(self, name, so_path="/tmp/nonexistent-test-artifact.so"):
         self.name = name
+        self.so_path = str(so_path)
 
     def compile(self, *, backend, target, **kwargs):
         return _Loader(self, target)
@@ -39,16 +40,15 @@ class _Dsl:
 
 
 class _Model:
-    def __init__(self, name):
+    def __init__(self, name, so_path="/tmp/nonexistent-test-artifact.so"):
         self.name = name
-        self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, name)
-        self.dsl = _Dsl(name)
+        self.module = Module(name)
+        self.module.state_space("U", ("u",))
+        self.owner_path = self.module.owner_path
+        self.dsl = _Dsl(name, so_path)
 
     def declaration_index(self):
-        return DeclarationIndex(owner=self.owner_path, handles=())
-
-    def to_data(self):
-        return {"name": self.name, "equation": "transport"}
+        return self.module.declaration_index()
 
 
 class _Time(pops.Program):
@@ -57,8 +57,11 @@ class _Time(pops.Program):
 
 
 class _Artifact:
-    def __init__(self, problem_snapshot):
-        self.so_path = "/tmp/problem.so"
+    def __init__(self, problem_snapshot, so_path):
+        self.so_path = str(so_path)
+        self.abi_key = "test-abi"
+        self.cxx = "c++"
+        self.std = "c++20"
         self.model = None
         self.bind_schema = None
         self.install_plan = None
@@ -78,14 +81,18 @@ class _Artifact:
         object.__setattr__(self, name, value)
 
 
-def test_public_artifact_has_no_authoring_backdoor_and_plan_containers_are_immutable(monkeypatch):
+def test_public_artifact_has_no_authoring_backdoor_and_plan_containers_are_immutable(
+        monkeypatch, tmp_path):
+    binary = tmp_path / "compiled-test-artifact.so"
+    binary.write_bytes(b"immutable artifact boundary")
+
     def fake_compile_problem(*, problem_snapshot, **kwargs):
-        return _Artifact(problem_snapshot)
+        return _Artifact(problem_snapshot, binary)
 
     monkeypatch.setattr(compile_drivers, "compile_problem", fake_compile_problem)
     problem = (pops.Problem(name="artifact-boundary")
-               .block("ions", physics=_Model("ions"))
-               .block("electrons", physics=_Model("electrons")))
+               .block("ions", physics=_Model("ions", binary))
+               .block("electrons", physics=_Model("electrons", binary)))
     artifact = orchestration.compile(
         problem,
         layout=Uniform(CartesianMesh(n=16)),

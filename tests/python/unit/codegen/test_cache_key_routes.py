@@ -10,7 +10,7 @@ must be a cache MISS, never a silent reuse.
 These checks stay at the pure hash / key / report level: no ``.so`` is compiled and no System is
 stepped. They pin, at the Python surface:
 
-  1  ``_cache_so_path`` folds in the registry component: same inputs -> same path; a bumped
+  1  the artifact-spec identity folds in the registry component: same inputs -> same path; a bumped
      ``ROUTE_REGISTRY_VERSION`` (or a patched component) -> a different path (cache MISS).
   2  the registry cache-key string is the readable ``"routes=vN:<hash16>;capvocab=M"`` form, the
      registry hash is a 64-hex sha256 digest, and the compact signature lists all 14 route
@@ -31,7 +31,8 @@ import pytest
 
 pytest.importorskip("pops")
 from pops.params import ConstParam, RuntimeParam  # noqa: E402
-from pops.codegen.cache import _cache_so_path, _registry_cache_key  # noqa: E402
+from pops.codegen.cache import _identity_cache_so_path, _registry_cache_key  # noqa: E402
+from pops.identity import artifact_spec_identity, make_identity  # noqa: E402
 from pops.codegen._inspect_compiled_report import _route_registry_components  # noqa: E402
 from pops.physics.facade import Model  # noqa: E402
 from pops.runtime import routes  # noqa: E402
@@ -48,33 +49,35 @@ _FAMILY_COUNTS = (
 )
 
 
-def _cache_args():
-    """A representative (model_hash, abi_key, backend, target, name) cache-key tuple."""
-    return ("0123456789abcdef0", "SIG|c++|c++23", "production", "system", "scal")
+def _cache_path():
+    semantic = make_identity("semantic", {"model": "0123456789abcdef0"})
+    spec = artifact_spec_identity(
+        semantic, target="system", backend="production", precision="double",
+        abi="SIG|c++|c++23", toolchain="c++|c++23",
+        routes={"registry": _registry_cache_key()}, components={"name": "scal"},
+        flags=[], libraries=())
+    return _identity_cache_so_path(spec)
 
 
 # --- 1: the registry component participates in every out-of-source .so cache path --------------
 
-def test_cache_so_path_folds_in_registry(monkeypatch, tmp_path):
+def test_identity_cache_path_folds_in_registry(monkeypatch, tmp_path):
     # Isolate the cache dir so the test never touches the user's real ~/.cache/pops/dsl.
     monkeypatch.setenv("POPS_CACHE_DIR", str(tmp_path))
-    args = _cache_args()
-    assert _cache_so_path(*args) == _cache_so_path(*args), "the path is deterministic"
-    baseline = _cache_so_path(*args)
+    assert _cache_path() == _cache_path(), "the path is deterministic"
+    baseline = _cache_path()
     # Bumping the route catalog version re-keys the artifact (cache MISS, not a silent reuse).
     monkeypatch.setattr(routes, "ROUTE_REGISTRY_VERSION", routes.ROUTE_REGISTRY_VERSION + 1)
-    assert _cache_so_path(*args) != baseline, "a registry version bump changes the cache path"
+    assert _cache_path() != baseline, "a registry version bump changes the cache path"
 
 
-def test_cache_so_path_registry_component_is_wired(monkeypatch, tmp_path):
+def test_identity_cache_path_registry_component_is_wired(monkeypatch, tmp_path):
     # Patching the whole component (not just the version int) also moves the path, proving
     # _registry_cache_key -- routes + report vocabulary -- is folded into the file name.
     monkeypatch.setenv("POPS_CACHE_DIR", str(tmp_path))
-    args = _cache_args()
-    baseline = _cache_so_path(*args)
-    import pops.codegen.cache as cache_mod
-    monkeypatch.setattr(cache_mod, "_registry_cache_key", lambda: "routes=vX:deadbeefdeadbeef;capvocab=9")
-    assert _cache_so_path(*args) != baseline, "the registry component drives the cache path"
+    baseline = _cache_path()
+    monkeypatch.setattr(routes, "route_registry_hash", lambda: "deadbeefdeadbeef" * 4)
+    assert _cache_path() != baseline, "the registry component drives the cache path"
 
 
 # --- 2: the registry cache-key string, hash and signature shape --------------------------------

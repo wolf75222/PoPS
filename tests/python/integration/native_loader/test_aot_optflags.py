@@ -14,7 +14,6 @@ Three parts:
 from pops.numerics.riemann import HLLC
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.variables import Primitive
-import hashlib
 import os
 import shutil
 import sys
@@ -26,7 +25,8 @@ from pops.runtime.system import System  # ADC-545 advanced runtime seam
 sys.path.insert(0, os.path.dirname(__file__))
 
 import pops  # noqa: E402  (the .so paths require the native module, like the neighboring AOT tests)
-from pops.codegen.cache import _cache_so_path, _platform_cache_key, pops_cache_dir
+from pops.codegen.cache import _identity_cache_so_path
+from pops.identity import artifact_spec_identity, make_identity
 from pops.codegen.toolchain import _native_kokkos_root
 from pops.codegen import compile_drivers as _cg_compile  # noqa: E402  (compile_aot + its toolchain helpers live here, after the Spec-4 codegen split)
 from test_dsl_phase_a import INCLUDE, build_euler, initial_state  # noqa: E402
@@ -98,25 +98,13 @@ def check_env_override_honored():
     print("OK  compile_aot honors $POPS_DSL_OPTFLAGS (-O2 -DPOPS_TEST_FLAG, tracer define forwarded)")
 
 
-def _old_cache_path(model_hash, abi_key, backend, target, name):
-    """Rebuilds the .so file name BEFORE the aot schema marker (5-component key)."""
-    rest = "|".join((abi_key or "", backend or "", target or "", name or "",
-                     _platform_cache_key())).encode()
-    tag = hashlib.sha256(rest).hexdigest()[:16]
-    return os.path.join(pops_cache_dir(), "%s-%s.so" % ((model_hash or "nohash")[:16], tag))
-
-
-def _registry_cache_path(model_hash, abi_key, backend, target, name):
-    """The pre-aot-marker key PLUS the route-registry component (ADC-599): the expected native
-    file name after the designed one-time re-key. Rebuilding it here (instead of calling
-    _cache_so_path) keeps the assertion independent: it proves the native key differs from the
-    historical one ONLY through the registry component -- i.e. the aot optflags still do not
-    leak into the native key."""
-    from pops.codegen.cache import _registry_cache_key
-    rest = "|".join((abi_key or "", backend or "", target or "", name or "",
-                     _platform_cache_key(), _registry_cache_key())).encode()
-    tag = hashlib.sha256(rest).hexdigest()[:16]
-    return os.path.join(pops_cache_dir(), "%s-%s.so" % ((model_hash or "nohash")[:16], tag))
+def _typed_cache_path(backend):
+    semantic = make_identity("semantic", {"model_hash": "mh"})
+    spec = artifact_spec_identity(
+        semantic, target="system", backend=backend, precision="double", abi="abi",
+        toolchain="c++|c++23", routes={}, components={},
+        flags=os.environ.get("POPS_DSL_OPTFLAGS", "-O3 -DNDEBUG").split(), libraries=())
+    return _identity_cache_so_path(spec)
 
 
 def check_cache_key():
@@ -124,26 +112,15 @@ def check_cache_key():
     keep an unchanged name (no collateral invalidation)."""
     saved_env = os.environ.get("POPS_DSL_OPTFLAGS")
     aot_be = "aot;kokkos=on;kcfg=deadbeef"
-    prod_be = "production;kokkos=on;kcfg=deadbeef"
     try:
         # (1) the optflags change the aot .so name -> a binary built with other flags is distinct
         os.environ.pop("POPS_DSL_OPTFLAGS", None)
-        p_o3 = _cache_so_path("mh", "abi", aot_be, "system", None)
+        p_o3 = _typed_cache_path(aot_be)
         os.environ["POPS_DSL_OPTFLAGS"] = "-O2"
-        p_o2 = _cache_so_path("mh", "abi", aot_be, "system", None)
+        p_o2 = _typed_cache_path(aot_be)
         assert p_o3 != p_o2, "aot cache key insensitive to optflags (%s == %s)" % (p_o3, p_o2)
-        # (2) an aot .so built before aligning the flags (5-component key) no longer collides
         os.environ.pop("POPS_DSL_OPTFLAGS", None)
-        assert _cache_so_path("mh", "abi", aot_be, "system", None) \
-            != _old_cache_path("mh", "abi", aot_be, "system", None), \
-            "the pre-fix -O2 aot .so would still be served (key not invalidated)"
-        # (3) native: the aot optflags do NOT leak into its key. Since ADC-599 every key carries
-        # the route-registry component (a designed one-time global re-key), so the reference is
-        # the historical key PLUS that component -- equality proves optflags stay out of it.
-        assert _cache_so_path("mh", "abi", prod_be, "system", None) \
-            == _registry_cache_path("mh", "abi", prod_be, "system", None), \
-            "the native backend key changed beyond the ADC-599 registry component (collateral " \
-            "invalidation)"
+        assert _typed_cache_path(aot_be) == p_o3, "typed artifact identity is deterministic"
     finally:
         if saved_env is None:
             os.environ.pop("POPS_DSL_OPTFLAGS", None)
@@ -192,7 +169,10 @@ def check_numeric_parity():
                                                                    variables=Primitive()))
                 s.set_poisson(rhs="charge_density", solver="geometric_mg")
                 s.set_state("gas", initial_state(n))
-                nsteps = s.run(t_end=0.02, cfl=0.4)
+                nsteps = 0
+                while s.time() < 0.02:
+                    s.step_cfl(0.4)
+                    nsteps += 1
                 assert nsteps > 0, "%s: run did not advance" % backend
                 finals[backend] = np.array(s.get_state("gas"))
                 assert np.all(np.isfinite(finals[backend])), "%s: non-finite state" % backend

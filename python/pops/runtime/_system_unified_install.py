@@ -103,7 +103,7 @@ class _SystemUnifiedInstall(_System):
         from pops.runtime._lifecycle import guard_assembling
         guard_assembling(self, "_install_compiled")
         instances = instances or {}
-        params = params or {}
+        params = {} if params is None else params
         aux = aux or {}
         solvers = solvers or {}
 

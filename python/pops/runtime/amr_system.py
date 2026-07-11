@@ -123,13 +123,17 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         # what was bound (None until bind).
         self._lifecycle = "assembling"
         self._bound_snapshot = None
+        self._last_run_manifest = None
+        self._last_run_identity = None
+        self._last_restart_identity = None
+        self._program_cadence_cfl = None
         # OUTPUT / CHECKPOINT policies + DIAGNOSTIC measures (ADC-542, parity with System) flowed by
         # pops.bind. Empty until install; run() fires each at its cadence via the AMR per-level output
         # driver and the composite-reduction diagnostics path.
         self._output_policies = []
         self._diagnostic_measures = []
 
-    def run(self, t_end, cfl=0.4, max_steps=1_000_000, output_dir=None):
+    def run(self, t_end, cfl=None, max_steps=1_000_000, output_dir=None):
         """Advance up to t_end by CFL steps, firing declared output / diagnostic policies (ADC-542).
 
         AMR parity with ``System.run``: each step advances by ``step_cfl(cfl)`` then fires the DUE
@@ -137,6 +141,10 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         output_dir is the directory the outputs land in (defaults to the current directory when
         policies are present). ``on_end`` fires on the last step actually taken (CFL-driven dt).
         Returns the number of steps taken."""
+        if cfl is None:
+            cfl = self._program_cadence_cfl if self._program_cadence_cfl is not None else 0.4
+        from pops.runtime._run_manifest import begin_run
+        begin_run(self, t_end=t_end, cfl=cfl, max_steps=max_steps, output_dir=output_dir)
         policies = getattr(self, "_output_policies", [])
         measures = getattr(self, "_diagnostic_measures", [])
         out_dir = output_dir if output_dir is not None else "."

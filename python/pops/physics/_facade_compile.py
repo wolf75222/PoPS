@@ -69,7 +69,13 @@ class _FacadeCompileMixin(_FacadeModel):
         from pops.codegen.toolchain import (resolve_auto_backend, loader_cxx_std,
                                             _native_kokkos_compiler, _default_cxx,
                                             _native_feature_key, pops_include)
-        from pops.codegen.cache import _cache_so_path, _record_so_backend
+        from pops.codegen.cache import (
+            _dsl_optflags, _identity_cache_so_path, _platform_cache_key,
+            _precision_cache_key, _record_so_backend, _registry_cache_key,
+        )
+        from pops.codegen.compile_provenance import (
+            verify_cached_artifact, write_artifact_sidecar,
+        )
         from pops.codegen.abi import _abi_key_python
         from pops.codegen.compile import _BACKEND_CAPS
         from pops.codegen.loader import CompiledModel
@@ -113,29 +119,47 @@ class _FacadeCompileMixin(_FacadeModel):
         # serve as cache keys, so we compute them here to reuse them (key/metadata consistency).
         model_hash = self._model_hash()
         abi_key = _abi_key_python(include, eff_cxx, eff_std)
+        from pops.identity import artifact_spec_identity
+        from pops.identity.semantic import semantic_identity_of
+
+        semantic_identity = semantic_identity_of(model=self)
+        feature_key = _native_feature_key() if kokkos_like else "prototype"
+        spec_identity = artifact_spec_identity(
+            semantic_identity,
+            target=target,
+            backend=backend,
+            precision=_precision_cache_key(),
+            abi=abi_key,
+            toolchain="%s|%s" % (eff_cxx, eff_std),
+            routes={"registry": _registry_cache_key(), "features": feature_key},
+            components={"model_hash": str(model_hash), "emitted_name": str(name or "")},
+            flags=(
+                [_platform_cache_key(), *_dsl_optflags()]
+                if kokkos_like else ["prototype-default"]
+            ) + ["hoist_reciprocals=%d" % bool(hoist_reciprocals)],
+            libraries=(),
+        )
 
         # OUT-OF-SOURCE cache when so_path is omitted: we RESOLVE the keyed path here (with the
         # params-included hash) and pass it explicitly to the engine -- the cache of HyperbolicModel.compile
         # would otherwise use the hash WITHOUT params (the Model facade adds the Param). HIT -> we skip the
         # compilation. Explicit so_path -> forced path, always recompiles (strict backward-compat).
-        cache_hit = False
-        if so_path is None:
-            # kokkos feature-key in the key (cf. compile_native): a SERIAL .so is not reused
-            # on a Kokkos module. MUST match the engine's key, otherwise repeated recompilations.
-            cache_backend = (backend + ";" + _native_feature_key()) if kokkos_like else backend
-            if hoist_reciprocals:  # distinct codegen -> distinct key (cf. HyperbolicModel.compile)
-                cache_backend += ";hoist"
-            so_path = _cache_so_path(model_hash, abi_key, cache_backend, target, name)
-            cache_hit = os.path.exists(so_path)
+        cache_requested = so_path is None
+        if cache_requested:
+            so_path = _identity_cache_so_path(spec_identity)
 
-        if cache_hit:
-            out_path = so_path  # .so already compiled for this key: no recompilation
+        if cache_requested and os.path.isfile(so_path):
+            binary_identity, final_artifact_identity = verify_cached_artifact(
+                so_path, semantic_identity=semantic_identity, spec_identity=spec_identity)
+            out_path = so_path
         else:
             # Compilation (engines unchanged, require_metadata/backend/target guards of
             # HyperbolicModel.compile: the loader emits pops_install_native_amr for target="amr_system").
             out_path = m.compile(so_path, include, backend=backend, name=name, cxx=cxx, std=std,
                                  require_metadata=require_metadata, target=target,
                                  hoist_reciprocals=hoist_reciprocals)
+            binary_identity, final_artifact_identity = write_artifact_sidecar(
+                out_path, semantic_identity=semantic_identity, spec_identity=spec_identity)
         # The keyed path (cache HIT) or the path retained by the engine carries the written backend: we
         # record it so a cross-backend reuse of the SAME path in this process is detected.
         _record_so_backend(out_path, backend)
@@ -159,6 +183,10 @@ class _FacadeCompileMixin(_FacadeModel):
             # install seam routes a bind(solvers={field: ...}) selection for a DECLARED field and
             # rejects a typo against this set. Empty for the default-Poisson-only model.
             elliptic_field_names=list(m._elliptic_fields))
+        cm.semantic_identity = semantic_identity
+        cm.artifact_spec_identity = spec_identity
+        cm.binary_identity = binary_identity
+        cm.artifact_identity = final_artifact_identity
         # Exact ABI order of only the RuntimeParamRef nodes actually read by emitted formulas.
         # BindSchema routes qualified values into this local vector; declarations that are never
         # read do not create native slots.

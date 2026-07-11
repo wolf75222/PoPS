@@ -3,20 +3,19 @@
 Split out of :mod:`pops.runtime._system_io` (the 500-line cap): the checkpoint WRITER emits, per
 history ring, only the policy-selected slots plus the policy manifest and the per-slot dt; the
 RESTART reader restores the stored slots and REPLAYS the recomputed gaps via the native
-``rebuild_history_slots`` seam. A Dense policy (or a v1 checkpoint) stores every slot and never
-replays -- byte-compatible with the historical whole-ring checkpoint.
+``rebuild_history_slots`` seam. A Dense policy stores every slot and never replays.
 """
 import json
 
 
 def resolve_ring_policy(policy, depth):
-    """The history-persistence policy for one ring at @p depth: @p policy when a typed one is attached,
-    else :class:`pops.time.Dense` (every slot stored -- the v1-compatible whole ring). Validated against
-    @p depth (defence in depth; the author-time gate already ran)."""
-    from pops.time.history_persistence import Dense, HistoryPersistence
-    resolved = policy if isinstance(policy, HistoryPersistence) else Dense()
-    resolved.validate_for(depth)
-    return resolved
+    """Validate the explicitly installed history-persistence policy for one ring."""
+    from pops.time.history_persistence import HistoryPersistence
+    if not isinstance(policy, HistoryPersistence):
+        raise RuntimeError(
+            "checkpoint history ring has no explicit compiled persistence policy")
+    policy.validate_for(depth)
+    return policy
 
 
 def replay_regrid_steps(depth, m, regrid_every):
@@ -42,7 +41,7 @@ def replay_regrid_steps(depth, m, regrid_every):
 def serialize_histories(system, persistence, out):
     """Write every registered ring of @p system into the checkpoint dict @p out (ADC-626).
 
-    @p persistence is the ``name -> policy`` map (empty -> Dense everywhere). Per ring: depth / ncomp /
+    @p persistence is the complete compiled ``name -> policy`` map. Per ring: depth / ncomp /
     initialized / the policy manifest / the stored-slot index array / the per-slot dt, then ONLY the
     policy-selected slots' global buffers (a recomputed slot is replayed at restart, not stored). The
     gather is collective (all ranks call), like state_global."""
@@ -76,33 +75,32 @@ def serialize_histories(system, persistence, out):
                 system.history_global(hname, k), dtype=np.float64)
 
 
-def restore_histories(system, d, ckpt_version, fired_out=None):
+def restore_histories(system, d, fired_out=None):
     """Restore every checkpointed ring of @p system, replaying the recomputed slots (ADC-626).
 
-    v1 (or a Dense v2): every slot present -> restore all, no replay. v2 non-Dense: restore the stored
-    slots + the per-slot dt, then ``rebuild_history_slots`` reconstructs the gaps by deterministic
+    The current payload restores the stored slots + per-slot dt, then
+    ``rebuild_history_slots`` reconstructs any gaps by deterministic
     replay. A stored-slots / policy mismatch is refused verbatim. When @p fired_out is a dict it is
     populated ``name -> the in-window regrid steps the replay fired`` (ADC-635; the AMR reader asserts it
     against the checkpoint fingerprint). Returns the typed
     :class:`~pops.time.history_persistence_report.HistoryReplayReport`."""
     import numpy as np
-    from pops.time.history_persistence import Dense, HistoryPersistence
+    from pops.time.history_persistence import HistoryPersistence
     from pops.time.history_persistence_report import HistoryReplayReport
     report = HistoryReplayReport()
     for hname in (str(h) for h in d["history_names"]):
         depth = int(d["history_depth_" + hname])
         policy_key = "history_policy_" + hname
-        if ckpt_version == 1 or policy_key not in d:
-            policy = Dense()
-            stored = list(range(depth))
-        else:
-            policy = HistoryPersistence.from_manifest(json.loads(str(d[policy_key])))
-            stored = [int(s) for s in d["history_stored_slots_" + hname]]
-            expected = list(policy.stored_slots(depth))
-            if sorted(stored) != expected:
-                raise RuntimeError(
-                    "restart : history '%s' checkpoint stored slots %r != policy %s expects %r"
-                    % (hname, sorted(stored), policy.name, expected))
+        if policy_key not in d:
+            raise RuntimeError(
+                "restart : history '%s' lacks its required persistence manifest" % hname)
+        policy = HistoryPersistence.from_manifest(json.loads(str(d[policy_key])))
+        stored = [int(s) for s in d["history_stored_slots_" + hname]]
+        expected = list(policy.stored_slots(depth))
+        if sorted(stored) != expected:
+            raise RuntimeError(
+                "restart : history '%s' checkpoint stored slots %r != policy %s expects %r"
+                % (hname, sorted(stored), policy.name, expected))
         for k in stored:
             system.restore_history(
                 hname, k, np.asarray(d["history_%s_%d" % (hname, k)], dtype=np.float64))

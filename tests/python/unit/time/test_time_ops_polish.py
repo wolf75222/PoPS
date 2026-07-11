@@ -434,7 +434,7 @@ def _run_section_b2(t):
     return err
 
 
-# ---- (C.1) validation #18: missing required Program history on restart (pure Python mock) ----
+# ---- (C.1) canonical restart envelope rejects historical checkpoints -------------------------
 class _MockSystem:
     """A minimal stand-in for the C++ System exposing only what System.restart touches for the #18
     check. It has ONE registered history ('blk.R') and stubs the rest. Never fakes the engine numerics
@@ -483,8 +483,8 @@ def test_restart_missing_history_fails_loud(t):
     import os
     import tempfile
 
-    # Build a checkpoint dict that does NOT contain the required 'blk.R' history (a legacy / wrong
-    # checkpoint), then drive System.restart against a System that has registered it.
+    # A legacy checkpoint cannot be authenticated, so it is rejected at the canonical manifest
+    # boundary before any payload or Program-history mutation is attempted.
     sysobj = System.__new__(System)  # bypass __init__ (no engine needed for the guard path)
     sysobj._s = _MockSystem()
     ckpt = {
@@ -494,28 +494,20 @@ def test_restart_missing_history_fails_loud(t):
         "ncomp_blk": 1,
         "state_blk": np.zeros((1, 4, 4)),
         "t": 0.0, "macro_step": 0,
-        # NO history_names key -> the required 'blk.R' is missing.
+        # NO canonical manifest/restart identity and NO history_names.
     }
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "no_history.npz")
         np.savez_compressed(path, **ckpt)
         try:
             sysobj.restart(path)
-        except RuntimeError as exc:
+        except (RuntimeError, ValueError) as exc:
             msg = str(exc)
-            assert "checkpoint does not contain required Program history 'blk.R'" in msg, \
-                "the missing-history restart must fail loud with the spec-18 message; got: %s" % msg
-            print("  missing-history restart raised as expected: %s" % msg.splitlines()[0][:120])
+            assert "canonical manifest/restart identity" in msg, \
+                "historical checkpoint must fail at the identity boundary; got: %s" % msg
+            print("  historical checkpoint rejected as expected: %s" % msg.splitlines()[0][:120])
             return
-        except Exception as exc:  # noqa: BLE001 -- a different early guard fired (composition/grid)
-            print("-- (C.1) inconclusive: an earlier restart guard fired (%s); the #18 string is "
-                  "still pinned by the message text below --" % str(exc)[:120])
-            # Fall through to a direct string check so the spec wording is always exercised.
-        # If restart did not reach the guard (an earlier check tripped), at least assert the message is
-        # the spec wording when constructed directly.
-        produced = "checkpoint does not contain required Program history '%s'" % "blk.R"
-        assert "checkpoint does not contain required Program history 'blk.R'" == produced
-    raise AssertionError("restart with a missing required history must raise (spec error 18)")
+    raise AssertionError("historical restart without canonical identity must raise")
 
 
 # ---- (C.2) validation #19: ABI mismatch on install_program (skips without the engine) ----

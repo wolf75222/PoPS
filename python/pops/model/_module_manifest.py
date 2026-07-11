@@ -43,10 +43,18 @@ _PARAM_ROW_KEYS = {
 }
 
 _DECLARATION_ROW_KEYS = {
-    "state": ({"components", "roles", "layout", "storage", "qid", "handle"},),
-    "field": ({"components", "layout", "qid", "handle"},),
+    "state": ({
+        "components", "roles", "layout", "storage", "representation", "centering",
+        "units", "frame", "clock", "qid", "handle",
+    },),
+    "field": ({
+        "components", "layout", "representation", "centering", "units", "frame", "clock",
+        "qid", "handle",
+    },),
     "parameter": (_PARAM_ROW_KEYS,),
-    "aux": ({"aux_kind", "qid", "handle"},),
+    "aux": ({
+        "aux_kind", "representation", "centering", "unit", "frame", "clock", "qid", "handle",
+    },),
 }
 
 

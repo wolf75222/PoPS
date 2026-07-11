@@ -1,6 +1,6 @@
 """System IO mixin (Spec-4 PR-F): outputs, checkpoint, restart.
 
-VISUALIZATION OUTPUT (vtk/npz/hdf5, serial + parallel-hyperslab), restartable v1 checkpoint and
+VISUALIZATION OUTPUT (vtk/npz/hdf5, serial + parallel-hyperslab), strict restartable checkpoint and
 restart of :class:`pops.runtime.system.System`. Pure Python (zero change to the C++ hot path),
 single-rank / rank-0 gather. ATOMIC write (.tmp + os.replace). Mixed into ``System`` via
 inheritance; operates on ``self._s``. ``abi_key`` is the module ABI key, baked into the .so
@@ -26,7 +26,7 @@ class _SystemIO(_System):
         """Attach the per-history persistence policies (ADC-626): @p mapping is ``name -> policy`` (a
         :class:`pops.time.history_persistence.HistoryPersistence`). The checkpoint reads it to store only
         the policy-selected slots; a ring absent from the map (or an empty map) persists Dense (the whole
-        ring, byte-compatible with a v1 checkpoint). Idempotent; ``None`` clears it."""
+        ring. Idempotent; ``None`` clears it."""
         self._history_persistence = dict(mapping or {})
         return self
 
@@ -37,7 +37,7 @@ class _SystemIO(_System):
         return getattr(self, "_last_restart_report", None)
 
     # ------------------------------------------------------------------
-    # OUTPUTS / CHECKPOINT / RESTART v1 (audit 2026-06, IO; cf. docs/IO_CHECKPOINT_PLAN.md).
+    # OUTPUTS / STRICT CHECKPOINT / RESTART.
     # Pure Python (zero change to the C++ hot path), single-rank; HDF5 aggregated/parallel and AMR =
     # PR-IO-3. ATOMIC write (.tmp file then os.replace: a crash mid-write never
     # corrupts a previous checkpoint).
@@ -261,7 +261,7 @@ class _SystemIO(_System):
         return target
 
     def checkpoint(self, path: Any, parallel: bool = False) -> Any:
-        """RESTARTABLE CHECKPOINT v1 (npz) : COMPLETE block state + clock (t, macro_step --
+        """RESTARTABLE CHECKPOINT (npz): complete block state + clock (t, macro_step --
         MANDATORY for the stride cadence) + grid + provenance (abi_key). CONTRACT (cf.
         docs/IO_CHECKPOINT_PLAN.md) : restart does NOT rebuild the composition -- the user
         script replays its add_block/set_poisson/couplings then calls sim.restart(path), which
@@ -272,7 +272,7 @@ class _SystemIO(_System):
         rank 0 writes the SINGLE file (identical to mono-rank). The checkpoint/restart pair stays
         bit-identical under np>1 (mono-box System : all the state lives on rank 0, exact gather).
 
-        @p parallel : the v1 checkpoint is ALWAYS rank-0 gather (npz format, not HDF5). The hyperslab
+        @p parallel: the checkpoint is rank-0 gather (npz format, not HDF5). The hyperslab
         write (parallel=True) only applies to the visualization OUTPUT
         write(format='hdf5') : an npz checkpoint has neither HDF5 datasets nor box partitioning. Passing
         parallel=True therefore raises an EXPLICIT error (never a silently degraded write) : for a
@@ -283,7 +283,7 @@ class _SystemIO(_System):
         from pops import _pops
         if parallel:
             raise NotImplementedError(
-                "checkpoint(parallel=True) : the v1 checkpoint is a rank-0 gather npz (non "
+                "checkpoint(parallel=True): the checkpoint is a rank-0 gather npz (non "
                 "HDF5 format, no box partitioning). The hyperslab write only concerns "
                 "write(format='hdf5', parallel=True) (visualization output). A restartable parallel "
                 "HDF5 checkpoint remains to be done (PR-IO-3, docs/IO_CHECKPOINT_PLAN.md) ; for "
@@ -308,20 +308,16 @@ class _SystemIO(_System):
         # previous RHS R_{n-1}, ...) MUST survive the checkpoint -- else AB2 cold-starts again and
         # diverges. The program HASH is recorded too: a restart against a DIFFERENT compiled Program is
         # rejected (the buffers / cadence would be meaningless). Both groups of keys are OPTIONAL: a
-        # checkpoint with no installed program / no history restarts exactly as before (back-compatible).
+        # The program identity is mandatory; histories are represented by an explicit index.
         prog_hash = ""
         if hasattr(self._s, "installed_program_hash"):
             prog_hash = self._s.installed_program_hash()
-        if prog_hash:
-            out["program_hash"] = prog_hash
-        hist_names = list(self._s.history_names()) if hasattr(self._s, "history_names") else []
-        if hist_names:
-            # HISTORY-PERSISTENCE (ADC-626): serialize each ring storing ONLY the policy-selected slots +
-            # the policy manifest + the per-slot dt (a recomputed slot is replayed at restart). The
-            # name -> policy map is attached at install (set_history_persistence); empty -> Dense (whole
-            # ring, byte-compatible with v1). The heavy loop lives in _system_io_history (500-line cap).
-            from pops.runtime._system_io_history import serialize_histories
-            serialize_histories(self._s, getattr(self, "_history_persistence", None) or {}, out)
+        if not prog_hash:
+            raise RuntimeError("checkpoint requires the installed compiled Program hash")
+        out["program_hash"] = prog_hash
+        # An explicit empty history_names array distinguishes "no rings" from a truncated payload.
+        from pops.runtime._system_io_history import serialize_histories
+        serialize_histories(self._s, getattr(self, "_history_persistence", None) or {}, out)
         # SCHEDULER VALUE CACHE (ADC-458, Spec 3 section 30): a compiled Program with a held schedule
         # (every(N).hold / accumulate_dt) caches the System aux / a scratch per node so the field solve
         # runs only when DUE. The cache lives in the System (program_cache, NOT the .so step closure),
@@ -332,10 +328,10 @@ class _SystemIO(_System):
         # (program_cache_global mirrors history_global), only rank 0 writes (below).
         cache_nodes = (list(self._s.program_cache_nodes())
                        if hasattr(self._s, "program_cache_nodes") else [])
+        out["cache_nodes"] = np.array(cache_nodes, dtype=np.int64)
+        out["cache_names"] = np.array([str(self._s.program_cache_name(nid))
+                                       for nid in cache_nodes])
         if cache_nodes:
-            out["cache_nodes"] = np.array(cache_nodes, dtype=np.int64)
-            out["cache_names"] = np.array([str(self._s.program_cache_name(nid))
-                                           for nid in cache_nodes])
             for nid in cache_nodes:
                 out["cache_ncomp_%d" % nid] = int(self._s.program_cache_ncomp(nid))
                 out["cache_ngrow_%d" % nid] = int(self._s.program_cache_ngrow(nid))
@@ -346,6 +342,8 @@ class _SystemIO(_System):
                 # COLLECTIVE gather of the cached value (all ranks call), like history_global above.
                 out["cache_value_%d" % nid] = np.asarray(
                     self._s.program_cache_global(nid), dtype=np.float64)
+        from pops.runtime._checkpoint_manifest import seal_checkpoint_payload
+        seal_checkpoint_payload(self, out, runtime_kind="uniform")
         target = path if path.endswith(".npz") else path + ".npz"
         if _pops.my_rank() != 0:
             return target  # only rank 0 writes the checkpoint (gather already done)
@@ -356,11 +354,11 @@ class _SystemIO(_System):
         return target
 
     def restart(self, path: Any) -> Any:
-        """RESUMES a v1 checkpoint : VERIFIES the composition (same blocks, same sizes -- explicit
+        """Resume the current strict checkpoint after authenticating its complete manifest.
         error otherwise, never a silently wrong resume), restores the state of each block
         then the clock (t, macro_step : the stride cadence resumes exactly). The COMPOSITION
         (add_block / set_poisson / set_magnetic_field / couplings) must have been replayed by the
-        script BEFORE the call (v1 contract, cf. checkpoint).
+        The composition must already have been bound before the call.
 
         MULTI-RANK (MPI np>1) : all ranks read the file (shared file system) and
         call set_state / set_potential / set_clock. set_state / set_potential are MPI-safe (the
@@ -369,12 +367,12 @@ class _SystemIO(_System):
         import numpy as np
         target = path if path.endswith(".npz") else path + ".npz"
         d = np.load(target, allow_pickle=False)
+        from pops.runtime._checkpoint_manifest import authenticate_checkpoint_payload
+        self._last_restart_identity = authenticate_checkpoint_payload(
+            self, d, runtime_kind="uniform")
         ckpt_version = int(d["pops_checkpoint_version"])
-        if ckpt_version not in (1, 2):
-            # v1 = the pre-ADC-626 dense checkpoint (every ring slot stored); v2 adds the selective
-            # history-persistence keys (stored slots + policy + per-slot dt). A v1 checkpoint restores
-            # as Dense (back-compatible), following the AMR checkpoint versioning precedent.
-            raise ValueError("restart : checkpoint version %r not supported (expected 1 or 2)"
+        if ckpt_version != 2:
+            raise ValueError("restart : checkpoint version %r not supported (expected exactly 2)"
                              % (d["pops_checkpoint_version"],))
         if int(d["nx"]) != self._s.nx() or int(d["ny"]) != self._s.ny():
             raise ValueError("restart : checkpoint grid (%d x %d) != system (%d x %d)"
@@ -391,10 +389,9 @@ class _SystemIO(_System):
             self._s.set_state(b, np.asarray(d["state_" + b], dtype=np.float64))
         # phi BEFORE the clock : warm start of the restored solver (bit-identical restart ; physical
         # state in gauss_policy="evolve").
-        if "phi" in d:
-            self._s.set_potential(np.asarray(d["phi"], dtype=np.float64).ravel())
+        self._s.set_potential(np.asarray(d["phi"], dtype=np.float64).ravel())
         # COMPILED-PROGRAM HASH GUARD (ADC-406b): if the checkpoint recorded an installed program hash,
-        # the user must have RE-INSTALLED the SAME compiled Program before restart (the v1 replay
+        # the user must have installed the SAME compiled Program before restart (the replay
         # contract). A different Program (different IR hash) makes the restored histories / cadence
         # meaningless -> fail loud rather than silently continue with the wrong scheme.
         if "program_hash" in d:
@@ -408,7 +405,7 @@ class _SystemIO(_System):
         # continue) bit-for-bit. The program re-registers the rings on its first post-restart step;
         # restoring them here (before that step) seeds the slots and the initialized flag so the first
         # post-restart read sees the true R_{n-1} (no phantom cold-start re-fill).
-        available = set(str(h) for h in d["history_names"]) if "history_names" in d else set()
+        available = set(str(h) for h in d["history_names"])
         # MISSING-HISTORY GUARD (ADC-414, spec error 18): a history the CURRENT program already
         # registered (it stepped at least once before this restart, or was re-installed and run) but the
         # checkpoint never recorded cannot be restored -> the multistep scheme would silently cold-start.
@@ -422,7 +419,7 @@ class _SystemIO(_System):
                         "checkpoint does not contain required Program history '%s'" % hname)
         if available:
             from pops.runtime._system_io_history import restore_histories
-            self._last_restart_report = restore_histories(self._s, d, ckpt_version)
+            self._last_restart_report = restore_histories(self._s, d)
         # SCHEDULER VALUE CACHE (ADC-458, Spec 3 section 30): restore each held node's cached value +
         # bookkeeping so a held schedule resumes EXACTLY on its cadence -- continuous == (run, ckpt,
         # restart, continue) bit-for-bit. The cache is keyed by IR node id (re-keyed by the re-installed
@@ -431,19 +428,23 @@ class _SystemIO(_System):
         # with the verbatim spec message naming the node, distinct from the hash-mismatch above (the
         # held node would otherwise silently cold-start off its cadence). Back-compatible: a checkpoint
         # with no cache_nodes restores as before.
-        if "cache_nodes" in d and hasattr(self._s, "restore_program_cache"):
-            cache_names = ([str(nm) for nm in d["cache_names"]]
-                           if "cache_names" in d else None)
+        if not hasattr(self._s, "restore_program_cache") and len(d["cache_nodes"]):
+            raise RuntimeError("runtime cannot restore the checkpoint's scheduled value cache")
+        if hasattr(self._s, "restore_program_cache"):
+            cache_names = [str(nm) for nm in d["cache_names"]]
             for idx, nid in enumerate(int(n) for n in d["cache_nodes"]):
-                name = (cache_names[idx] if cache_names is not None and idx < len(cache_names)
-                        else "node_%d" % nid)
+                if idx >= len(cache_names):
+                    raise RuntimeError("checkpoint cache-name index is truncated")
+                name = cache_names[idx]
                 value_key = "cache_value_%d" % nid
                 if value_key not in d:
                     raise RuntimeError(
                         "checkpoint missing cached value for scheduled node '%s'" % name)
-                # ngrow defaults to 1 for a pre-ngrow-key checkpoint (the aux MVP width) so older
-                # checkpoints still restore; a held scratch (ngrow 2) carries its own key.
-                ngrow = int(d["cache_ngrow_%d" % nid]) if ("cache_ngrow_%d" % nid) in d else 1
+                ngrow_key = "cache_ngrow_%d" % nid
+                if ngrow_key not in d:
+                    raise RuntimeError(
+                        "checkpoint missing cache ghost depth for scheduled node '%s'" % name)
+                ngrow = int(d[ngrow_key])
                 self._s.restore_program_cache(
                     nid, int(d["cache_ncomp_%d" % nid]), ngrow,
                     int(d["cache_last_update_%d" % nid]),

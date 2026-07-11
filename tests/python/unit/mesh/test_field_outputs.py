@@ -24,10 +24,9 @@ from pops.ir.expr import Var  # noqa: E402
 from pops.math import laplacian, unknown  # noqa: E402
 from pops.model import (  # noqa: E402
     AmbiguousReferenceError,
-    DeclarationIndex,
     Handle,
     MissingOwnershipError,
-    OwnerKind,
+    Module,
     OwnerPath,
 )
 from pops.output import OutputPolicy  # noqa: E402
@@ -49,12 +48,15 @@ def _shared_field(name):
 class _DeclaredModel:
     def __init__(self, name="field-model"):
         self.name = name
-        self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, name)
-        self.field = Handle("phi", kind="field", owner=self.owner_path)
-        self.aux = Handle("rho_background", kind="aux", owner=self.owner_path)
+        self.module = Module(name)
+        field = self.module.field_space("phi", ("phi",))
+        aux = self.module.aux_field("rho_background")
+        self.owner_path = self.module.owner_path
+        self.field = self.module.field_handle(field)
+        self.aux = self.module.aux_handle(aux)
 
     def declaration_index(self):
-        return DeclarationIndex(owner=self.owner_path, handles=(self.field, self.aux))
+        return self.module.declaration_index()
 
 
 def _registered_blocks(*names):

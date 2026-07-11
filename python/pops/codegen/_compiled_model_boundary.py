@@ -19,6 +19,7 @@ _SCALAR_FIELDS = (
 )
 _CORE_FIELDS = set(_SEQUENCE_FIELDS) | set(_SCALAR_FIELDS) | {
     "params", "caps", "bind_schema", "install_plan", "definition_identity",
+    "semantic_identity", "artifact_spec_identity", "binary_identity", "artifact_identity",
 }
 
 
@@ -66,6 +67,17 @@ def _validate_core(compiled: Any, *, allow_install_plan: bool) -> None:
         from pops.codegen._compiled_model_identity import validate_compiled_model_identity
 
         validate_compiled_model_identity(identity)
+    from pops.identity import Identity
+    expected_identity_domains = {
+        "semantic_identity": "semantic",
+        "artifact_spec_identity": "artifact-spec",
+        "binary_identity": "binary",
+        "artifact_identity": "artifact",
+    }
+    for name, domain in expected_identity_domains.items():
+        value = _core_value(compiled, name)
+        if value is not None and (not isinstance(value, Identity) or value.domain != domain):
+            raise TypeError("CompiledModel.%s must be a pops.%s Identity" % (name, domain))
     bind_schema = _core_value(compiled, "bind_schema")
     if bind_schema is not None:
         from pops.model.bind_schema import BindSchema

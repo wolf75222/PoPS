@@ -294,27 +294,36 @@ def _emit_and_compile(manifest: Any, *, so_path: Any = None, cxx: Any = None,
 
     from . import toolchain, cache
     from .library_codegen import emit_library_cpp
-
     src = emit_library_cpp(manifest)
     include = toolchain.pops_include()
     sig = toolchain.pops_header_signature(include)
     cc, cflags, lflags = toolchain.pops_loader_build_flags(cxx)
     eff_std = toolchain._probe_cxx_std(cc, toolchain.loader_cxx_std())
-    source_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
-    cache_key = hashlib.sha256(
-        ("%s|%s|%s|%s|%s" % (
-            manifest.content_hash, source_hash, sig, cc, eff_std)).encode("utf-8")
-    ).hexdigest()
+    source_digest = hashlib.sha256(src.encode("utf-8")).digest()
+    optflags = cache._dsl_optflags()
+    from pops.identity import artifact_spec_identity, make_identity
+    semantic = make_identity("semantic", {
+        "kind": "library", "content_digest": bytes.fromhex(manifest.content_hash),
+    })
+    spec_identity = artifact_spec_identity(
+        semantic,
+        target="library",
+        backend="production",
+        precision=cache._precision_cache_key(),
+        abi=manifest.abi_key,
+        toolchain="%s|%s" % (cc, eff_std),
+        routes={"registry": cache._registry_cache_key()},
+        components={"generated_source": source_digest},
+        flags=[*optflags, *cflags, *lflags], libraries=(),
+    )
 
     if so_path is None:
-        key = "%s|%s|%s" % (sig, cc, eff_std)
-        so_path = cache._cache_so_path(manifest.content_hash, key, "library-production",
-                                       "library", manifest.name)
+        so_path = cache._identity_cache_so_path(spec_identity)
         if not force and os.path.isfile(so_path):
-            from .compile_provenance import verify_cached_program_so
+            from .compile_provenance import verify_cached_artifact
 
-            verify_cached_program_so(
-                so_path, cache_key=cache_key, abi_key=manifest.abi_key)
+            verify_cached_artifact(
+                so_path, semantic_identity=semantic, spec_identity=spec_identity)
             loaded = _read_so_manifest(so_path)
             if loaded != manifest:
                 raise RuntimeError(
@@ -323,7 +332,6 @@ def _emit_and_compile(manifest: Any, *, so_path: Any = None, cxx: Any = None,
                 )
             return so_path
 
-    optflags = cache._dsl_optflags()
     with tempfile.TemporaryDirectory() as tmp:
         cpp = os.path.join(tmp, "library.cpp")
         with open(cpp, "w") as f:
@@ -332,11 +340,10 @@ def _emit_and_compile(manifest: Any, *, so_path: Any = None, cxx: Any = None,
                  "-DPOPS_HEADER_SIG=\"%s\"" % sig, *cflags]
         cmd = [cc, *flags, "-I", include, cpp, "-o", so_path, *lflags]
         toolchain._run_compile(cmd, "compile_library (backend production)")
-    from .compile_provenance import write_cachekey_sidecar
+    from .compile_provenance import write_artifact_sidecar
 
-    write_cachekey_sidecar(
-        so_path, cache_key=cache_key, abi_key=manifest.abi_key,
-        toolchain="%s|%s" % (cc, eff_std))
+    write_artifact_sidecar(
+        so_path, semantic_identity=semantic, spec_identity=spec_identity)
     loaded = _read_so_manifest(so_path)
     if loaded != manifest:
         raise RuntimeError(

@@ -172,6 +172,27 @@ class _LifecycleMixin(_System):
         (``None`` before bind)."""
         return getattr(self, "_bound_snapshot", None)
 
+    @property
+    def bind_identity(self) -> Any:
+        """Domain-``bind`` identity of the frozen bind manifest."""
+        snapshot = getattr(self, "_bound_snapshot", None)
+        return getattr(snapshot, "bind_identity", None) if snapshot is not None else None
+
+    @property
+    def last_run_manifest(self) -> Any:
+        """The last canonical execution request, or ``None`` before :meth:`run`."""
+        return getattr(self, "_last_run_manifest", None)
+
+    @property
+    def last_run_identity(self) -> Any:
+        """Domain-``run`` identity of :attr:`last_run_manifest`."""
+        return getattr(self, "_last_run_identity", None)
+
+    @property
+    def last_restart_identity(self) -> Any:
+        """Authenticated domain-``restart`` identity of the last restored checkpoint."""
+        return getattr(self, "_last_restart_identity", None)
+
 
 __all__ = ["FROZEN_STRUCTURAL", "freeze_error", "guard_assembling", "derive_lifecycle_state",
            "_LifecycleMixin"]

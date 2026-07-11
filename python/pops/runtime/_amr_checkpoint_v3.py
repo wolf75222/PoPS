@@ -1,20 +1,17 @@
-"""AMR checkpoint format v3 -- restartable under ACTIVE regridding (ADC-542 addendum B).
+"""Strict AMR checkpoint payload -- restartable under frozen or active regridding.
 
-The v1/v2 AMR checkpoint restarts a FROZEN hierarchy only (regrid_every == 0): a post-restart regrid
-would re-diverge because the restart cannot impose the mid-run hierarchy. v3 designs that away. By the
+The current format imposes the recorded hierarchy rather than reconstructing it from defaults. By the
 determinism theorem (addendum B.2) the regrid is a PURE function of (state, composition, macro_step):
 restore the hierarchy (BoxArrays + owner-rank DistributionMappings), the full per-level per-block
 state (covered cells included), the shared phi warm-start, and the clock EXACTLY, and every
 post-restart regrid reproduces the uninterrupted layout sequence.
 
-v3 is ADDITIVE (reader accepts {1, 2, 3}); v1/v2 checkpoints restore on the existing frozen path with
-zero behaviour change. New keys (all additive):
+The core reader accepts only this schema. Its payload keys include:
   - ``pops_amr_checkpoint_version = 3``
   - ``dmap_<k>``: owner rank per box of level k, aligned with the level-k rows of ``patch_boxes``
     (bit-identity requires the box->rank map: it fixes the local-fab aggregation order).
   - ``aux_<k>``: the FULL shared aux of level k, ALL components (phi comp 0, gradients, named aux),
-    flat c*nf*nf+j*nf+i. Absent on the single-block coupler path (its aux is derived +
-    static-reapplied; the reader falls back to phi-only, the documented fallback semantics).
+    flat c*nf*nf+j*nf+i; an engine with no shared aux records an explicit empty array.
   - ``regrid_count``, ``regrid_every``: regrid metadata (report parity + the cadence guard).
   - ``program_hash``: the installed compiled-Program hash (a compiled AMR Program must restart under
     the SAME program; absent for a native composition -- the guard is skipped, like the uniform writer).
@@ -30,7 +27,7 @@ uninterrupted clock.
 _V3 = 3
 
 
-def write_v3(sim, path, L, regrid_every, persistence=None):
+def write_v3(owner, sim, path, L, regrid_every, persistence=None):
     """Write a v3 AMR checkpoint (restartable under active regridding). Returns the path.
 
     @p sim is the C++ AmrSystem engine (``self._s``); @p L the domain length; @p regrid_every the live
@@ -74,8 +71,7 @@ def write_v3(sim, path, L, regrid_every, persistence=None):
     # program-hash guard (m5): a compiled AMR Program must restart under the SAME program. Absent for a
     # native composition (the guard is skipped, like the uniform writer).
     phash = sim.installed_program_hash() if hasattr(sim, "installed_program_hash") else ""
-    if phash:
-        out["program_hash"] = str(phash)
+    out["program_hash"] = str(phash)
     # per-level owner-rank DistributionMapping (m1): the box->rank map fixing the local-fab order.
     for k in range(nlev):
         ranks = list(sim.level_owner_ranks(k)) if hasattr(sim, "level_owner_ranks") else []
@@ -98,21 +94,20 @@ def write_v3(sim, path, L, regrid_every, persistence=None):
         out["phi_%d" % k] = np.asarray(
             sim.level_potential_global(k) if gather else sim.level_potential(k), dtype=np.float64)
     # FULL shared aux per level (m2): ALL aux components (phi comp 0 + gradients + named aux), flat
-    # c*nf*nf+j*nf+i. EMPTY on the single-block coupler path (its aux is derived + static-reapplied;
-    # phi_<k> suffices there) -- the key is then skipped and the reader falls back to phi-only.
+    # c*nf*nf+j*nf+i. An engine with no shared aux records an explicit empty array.
     for k in range(nlev):
         aux = np.asarray(sim.level_aux_flat_global(k) if gather else sim.level_aux_flat(k),
                          dtype=np.float64)
-        if aux.size:
-            out["aux_%d" % k] = aux
+        out["aux_%d" % k] = aux
     # ADC-631: multistep history rings (keep_history / T.prev). serialize_histories stores only the
     # policy-selected slots + the per-slot dt (a recomputed slot is replayed at restart); the per-level
     # slices are hidden inside AmrSystem.history_global's flat concat, so the SHARED writer is reused
     # verbatim. No rings (no keep_history / an engine-less coupler) -> history_names() is empty (no-op).
-    if sim.history_names():
-        from pops.runtime._system_io_history import serialize_histories
-        serialize_histories(sim, persistence or {}, out)
+    from pops.runtime._system_io_history import serialize_histories
+    serialize_histories(sim, persistence or {}, out)
 
+    from pops.runtime._checkpoint_manifest import seal_checkpoint_payload
+    seal_checkpoint_payload(owner, out, runtime_kind="amr")
     target = path if path.endswith(".npz") else path + ".npz"
     if _pops.my_rank() != 0:
         return target  # only rank 0 writes (the gather is already done on every rank)
@@ -151,9 +146,9 @@ def restart_v3(sim, d, L):
         raise ValueError("restart : %d levels in the checkpoint, %d here (composition / refinement "
                          "differ?)" % (nlev, int(sim.n_levels())))
     # program-hash guard (m5): a v3 checkpoint of a compiled AMR Program refuses a DIFFERENT program.
-    chk_hash = str(d["program_hash"]) if "program_hash" in d else ""
+    chk_hash = str(d["program_hash"])
     cur_hash = sim.installed_program_hash() if hasattr(sim, "installed_program_hash") else ""
-    if chk_hash and cur_hash and chk_hash != cur_hash:
+    if chk_hash != cur_hash:
         raise ValueError(
             "restart : checkpoint program hash %r != installed program hash %r (a different compiled "
             "AMR Program cannot restart this checkpoint)" % (chk_hash, cur_hash))
@@ -169,7 +164,7 @@ def restart_v3(sim, d, L):
         owner_ranks = _owner_ranks_for_boxes(d, boxes, nlev)
         sim.rebuild_hierarchy(boxes, owner_ranks)
     elif nlev >= 2:
-        # single-block coupler path: impose the fine hierarchy (level 1) as v1/v2 does.
+        # single-block coupler path: impose the recorded fine hierarchy.
         fine = [b for b in boxes if b[0] == 1]
         if not fine:
             raise ValueError("restart : %d-level hierarchy but no fine patch (level 1) in the "
@@ -190,13 +185,11 @@ def restart_v3(sim, d, L):
             else:
                 sim.set_level_state(k, st)
 
-    # (5) FULL SHARED AUX per level when the checkpoint carries it (m2; the reader PREFERS aux_<k> and
-    # falls back to phi-only when absent -- the single-block coupler path), then the phi warm-start
-    # (separate storage: the level-0 phi is the multigrid warm start mg_.phi(), not aux comp 0).
+    # (5) FULL SHARED AUX per level, then the separate multigrid phi warm-start. The current schema
+    # requires every aux key, including an explicit empty array for an engine with no shared aux.
     for k in range(nlev):
         key = "aux_%d" % k
-        if key in d:
-            sim.set_level_aux_flat(k, np.asarray(d[key], dtype=np.float64).ravel())
+        sim.set_level_aux_flat(k, np.asarray(d[key], dtype=np.float64).ravel())
     for k in range(nlev):
         sim.set_level_potential(k, np.asarray(d["phi_%d" % k], dtype=np.float64).ravel())
 
@@ -229,9 +222,7 @@ def _restore_histories_v3(sim, d):
     COHERENCE GUARD (replaces the refusal): the engine refuses a regrid completed OFF the due schedule
     derived from (depth, m, regrid_every); here we additionally assert the checkpoint's recorded
     fingerprint history_regrid_steps_<name> matches the schedule re-derived from the manifest's own
-    scalars, and that every completed replay regrid sits on it (an old ADC-631 v3 file without the key
-    DERIVES the schedule from m + regrid_every -- back-compat; a non-straddling old file has an empty
-    schedule, identical to the clean-window path). A mismatch fails LOUD; a due step whose regrid
+    scalars, and that every completed replay regrid sits on it. A mismatch fails LOUD; a due step whose regrid
     no-ops deterministically (single-level hierarchy, empty tags) is legitimate on both runs.
     Returns the typed HistoryReplayReport, or ``None`` when the checkpoint has no rings.
     """
@@ -239,14 +230,16 @@ def _restore_histories_v3(sim, d):
         return None
     from pops import _pops
     from pops.runtime._system_io_history import replay_regrid_steps, restore_histories
-    chk_ranks = int(d["n_ranks"]) if "n_ranks" in d else 1
+    chk_ranks = int(d["n_ranks"])
     cur_ranks = int(_pops.n_ranks())
     m = int(d["macro_step"])
-    regrid_every = int(d["regrid_every"]) if "regrid_every" in d else 0
+    regrid_every = int(d["regrid_every"])
     for hname in (str(h) for h in d["history_names"]):
         depth = int(d["history_depth_" + hname])
         key = "history_stored_slots_" + hname
-        stored = sorted(int(s) for s in d[key]) if key in d else list(range(depth))
+        if key not in d:
+            raise ValueError("restart: history '%s' lacks its stored-slot index" % hname)
+        stored = sorted(int(s) for s in d[key])
         if len(stored) >= depth:
             continue  # Dense (every slot stored): no replay -> the refusal does not apply.
         if chk_ranks != cur_ranks:
@@ -261,11 +254,10 @@ def _restore_histories_v3(sim, d):
     # Prime the facade cursor to the checkpoint macro-step so the replay's per-re-step cursor (m-1-j)
     # reproduces the ORIGINAL in-window regrid schedule. The engine bracket saves/restores it; the
     # final set_clock in restart_v3 re-imposes m (idempotent, the uninterrupted-clock invariant holds).
-    if hasattr(sim, "set_clock"):
-        sim.set_clock(float(d["t"]), m)
+    sim.set_clock(float(d["t"]), m)
 
     fired = {}
-    report = restore_histories(sim, d, ckpt_version=3, fired_out=fired)
+    report = restore_histories(sim, d, fired_out=fired)
 
     # Fingerprint assertion (ADC-635). Two sound checks per replayed ring:
     # (1) the recorded fingerprint history_regrid_steps_<name> must equal the schedule re-derived from
@@ -275,20 +267,18 @@ def _restore_histories_v3(sim, d):
     #     means broken cursor driving / a divergent restart composition). A due step that completed
     #     NOTHING is legitimate: regrid() no-ops deterministically (single-level hierarchy, no wired
     #     predicate, empty tags) and by determinism the original run no-oped there identically.
-    # An OLDER v3 file lacks the fingerprint key -> derive it (back-compat; empty for a clean window).
     for hname, got in fired.items():
         derived = replay_regrid_steps(int(d["history_depth_" + hname]), m, regrid_every)
         key = "history_regrid_steps_" + hname
-        if key in d:
-            recorded = sorted(int(s) for s in d[key])
-            if recorded != derived:
-                raise ValueError(
-                    "restart : history '%s' checkpoint records the in-window regrid schedule %r but "
-                    "its own macro_step=%d / regrid_every=%d derive %r; the manifest is corrupted or "
-                    "inconsistent with the recorded in-window regrid schedule."
-                    % (hname, recorded, m, regrid_every, derived))
-        else:
-            recorded = derived
+        if key not in d:
+            raise ValueError("restart: history '%s' lacks its regrid replay fingerprint" % hname)
+        recorded = sorted(int(s) for s in d[key])
+        if recorded != derived:
+            raise ValueError(
+                "restart : history '%s' checkpoint records the in-window regrid schedule %r but "
+                "its own macro_step=%d / regrid_every=%d derive %r; the manifest is corrupted or "
+                "inconsistent with the recorded in-window regrid schedule."
+                % (hname, recorded, m, regrid_every, derived))
         off = sorted(set(int(s) for s in got) - set(recorded))
         if off:
             raise ValueError(
@@ -312,9 +302,13 @@ def _owner_ranks_for_boxes(d, boxes, nlev):
     cursor = {k: 0 for k in range(nlev)}
     owners = []
     for (lvl, _ilo, _jlo, _ihi, _jhi) in boxes:
-        ranks = per_level_ranks.get(lvl, [])
+        if lvl not in per_level_ranks:
+            raise ValueError("restart: checkpoint lacks owner-rank map for AMR level %d" % lvl)
+        ranks = per_level_ranks[lvl]
         idx = cursor.get(lvl, 0)
-        owners.append(int(ranks[idx]) if idx < len(ranks) else 0)
+        if idx >= len(ranks):
+            raise ValueError("restart: owner-rank map for AMR level %d is truncated" % lvl)
+        owners.append(int(ranks[idx]))
         cursor[lvl] = idx + 1
     return owners
 

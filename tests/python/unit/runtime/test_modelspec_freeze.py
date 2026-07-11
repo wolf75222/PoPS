@@ -58,9 +58,12 @@ def test_private_transaction_hooks_reject_calls_without_coordinator_capability()
 
 def test_problem_freeze_rolls_module_back_when_a_later_descriptor_fails():
     import pops
-    from pops.descriptors import BrickDescriptor
+    from pops.descriptors import Descriptor
 
-    class FailingSpatial(BrickDescriptor):
+    class FailingSpatial(Descriptor):
+        def options(self):
+            return {"kind": "failing"}
+
         def freeze(self):
             super().freeze()
             raise RuntimeError("spatial freeze failed")
@@ -70,7 +73,7 @@ def test_problem_freeze_rolls_module_back_when_a_later_descriptor_fails():
     module = Module("native-rollback-model")
     module.state_space("U", ("rho",))
     problem = pops.Problem(name="native-rollback")
-    problem.add_block("u", module, spatial=FailingSpatial("fv", "native"))
+    problem.add_block("u", module, spatial=FailingSpatial())
 
     with pytest.raises(RuntimeError, match="spatial freeze failed"):
         problem.freeze()

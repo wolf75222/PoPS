@@ -131,6 +131,10 @@ class CompiledProblem(CompiledProblemDumpMixin):
             None if program_param_routes is None else tuple(program_param_routes)
         )
         self.install_plan = None
+        self.semantic_identity = None
+        self.artifact_spec_identity = None
+        self.binary_identity = None
+        self.artifact_identity = None
 
     @property
     def target(self) -> str:

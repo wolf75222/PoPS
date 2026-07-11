@@ -18,30 +18,27 @@ from pops.codegen.toolchain import (
     _native_kokkos_root,
     _native_kokkos_compiler,
     _native_kokkos_flags,
-    _native_feature_key,
     _run_compile,
     _pops_import_lib,
     pops_header_signature,
     pops_loader_build_flags,
 )
 from pops.codegen.cache import (
-    _cache_so_path,
+    _identity_cache_so_path,
     _backend_distinct_so_path,
     _record_so_backend,
     _registry_cache_key,
-    _precision_cache_key,
     _native_mpi_flags,
     _dsl_optflags,
 )
 from pops.codegen.compile_provenance import (
     build_debug_banner,
-    verify_cached_program_so,
-    write_cachekey_sidecar,
+    verify_cached_artifact,
+    write_artifact_sidecar,
 )
 from pops.codegen.abi import _abi_key_python
 from pops.codegen.compile_emit import (
     _BACKENDS,
-    model_hash,
     emit_cpp_so_source,
     emit_cpp_aot_source,
     emit_cpp_native_loader,
@@ -242,16 +239,22 @@ def compile_model(model: Any, so_path: Any = None, include: Any = None, backend:
     # _check_require_metadata lives on the HyperbolicModel: call it via the model.
     m._check_require_metadata(require_metadata, backend)
 
+    kokkos_like = backend in ("production", "aot")
+    eff_cxx = _native_kokkos_compiler(cxx) if kokkos_like else _default_cxx(cxx)
+    abi_key = _abi_key_python(include, eff_cxx, std)
+    from pops.codegen._artifact_identity import model_artifact_spec
+
+    semantic_identity, spec_identity = model_artifact_spec(
+        m, backend=str(backend), target=str(target), name=name, compiler=eff_cxx,
+        standard=std, abi_key=str(abi_key), kokkos_like=kokkos_like,
+        hoist_reciprocals=hoist_reciprocals)
+
     # Out-of-source CACHE when so_path is omitted.
     if so_path is None:
-        kokkos_like = backend in ("production", "aot")
-        eff_cxx = _native_kokkos_compiler(cxx) if kokkos_like else _default_cxx(cxx)
-        abi_key = _abi_key_python(include, eff_cxx, std)
-        cache_backend = (backend + ";" + _native_feature_key()) if kokkos_like else backend
-        if hoist_reciprocals:
-            cache_backend += ";hoist"
-        so_path = _cache_so_path(model_hash(m), abi_key, cache_backend, target, name)
+        so_path = _identity_cache_so_path(spec_identity)
         if os.path.exists(so_path):
+            verify_cached_artifact(
+                so_path, semantic_identity=semantic_identity, spec_identity=spec_identity)
             _record_so_backend(so_path, backend)
             return so_path
     else:
@@ -259,6 +262,8 @@ def compile_model(model: Any, so_path: Any = None, include: Any = None, backend:
 
     out_path = compile_or_jit(m, so_path, include, mode=mode, name=name, cxx=cxx, std=std,
                               target=target, hoist_reciprocals=hoist_reciprocals)
+    write_artifact_sidecar(
+        out_path, semantic_identity=semantic_identity, spec_identity=spec_identity)
     _record_so_backend(out_path, backend)
     return out_path
 
@@ -274,15 +279,12 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
     omitted path uses the content-addressed cache, ``force`` recompiles, and ``debug`` retains C++.
     The returned ``CompiledProblem`` carries the validated physical model and compile metadata.
     """
-    import hashlib
     import tempfile
     from pops.codegen.loader import CompiledProblem
     from pops.codegen.env import CodegenEnv
-    snapshot_artifact_hash = None
     if problem_snapshot is not None:
         from pops.problem._snapshot import validate_problem_snapshot
         validate_problem_snapshot(problem_snapshot)
-        snapshot_artifact_hash = problem_snapshot.artifact_hash
     # ADDITIVE (Spec 5 sec.12.4, #47-48): resolve the codegen POPS_* environment ONCE. An explicit
     # argument wins over the env -- debug=True forces keep-generated regardless of POPS_KEEP_GENERATED,
     # and the resolver leaves the JIT-backdoor gate OFF unless POPS_JIT_BACKDOOR is itself set (loud
@@ -336,7 +338,7 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
     # VALIDATED-OR-ABSENT INVARIANT (ADC-558): every structural check runs HERE, before a handle
     # exists. lower_and_validate validated the model above; emit_cpp_program calls program.validate()
     # + _check_lowerable, so a malformed Program raises now; a compiler error raises at _run_compile
-    # below; a stale cache HIT raises at verify_cached_program_so. A CompiledProblem is therefore
+    # below; a stale cache HIT raises at verify_cached_artifact. A CompiledProblem is therefore
     # returned ONLY after validation AND a successful (or already-cached-and-verified) compile -- both
     # return points below hand back a fully-valid, directly bindable handle, never a "to-check" one.
     # There is no public check() to run after compile: the handle's validity is guaranteed by its
@@ -350,27 +352,28 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
     lflags = deterministic_program_link_flags(lflags)
     eff_std = _probe_cxx_std(cc, std or loader_cxx_std())
     abi_key = "%s|%s|%s" % (sig, cc, eff_std)
-    # Stable program (problem) hash + cache key (Spec 5 sec.12.4, #48): the program-source hash is
-    # the WHAT, the cache key combines it with the abi_key (the HOW) -- the same identity the
-    # out-of-source .so cache file name carries. Computed unconditionally so the metadata is present
-    # on BOTH the cache-hit and the fresh-compile path (and even when an explicit so_path is given).
-    # Registry, feature and precision identities join the key. The frozen AuthoringSnapshot's
-    # ARTIFACT projection joins both the artifact hash (and therefore .so path) and final cache-key
-    # preimage; its full hash was authenticated above and remains attached for reproducibility.
-    feature_key = _native_feature_key()
-    precision_key = _precision_cache_key()
-    source_hash = hashlib.sha256(src.encode()).hexdigest()
-    snapshot_component = (
-        "problem_artifact=%s" % snapshot_artifact_hash
-        if snapshot_artifact_hash else None
+    # The semantic and artifact layers are independently versioned.  Semantic identity excludes
+    # target/toolchain/binary facts; artifact-spec includes every lowering decision and addresses
+    # the cache; final artifact identity additionally authenticates the emitted binary bytes.
+    optflags = _dsl_optflags()
+    from pops.codegen._artifact_identity import program_artifact_spec
+
+    semantic, spec_identity = program_artifact_spec(
+        snapshot=problem_snapshot,
+        model_authority=source_module if source_module is not None else model,
+        program=time,
+        target=target,
+        abi_key=abi_key,
+        compiler=cc,
+        standard=eff_std,
+        source=src,
+        cflags=cflags,
+        lflags=lflags,
+        optflags=optflags,
+        libraries=library_manifests,
     )
-    program_hash = (hashlib.sha256((source_hash + "|" + snapshot_component).encode()).hexdigest()
-                    if snapshot_component else source_hash)
-    cache_components = [program_hash, abi_key, "program-production", target,
-                        _registry_cache_key(), feature_key, precision_key]
-    if snapshot_component:
-        cache_components.append(snapshot_component)
-    cache_key = hashlib.sha256("|".join(cache_components).encode()).hexdigest()
+    program_hash = semantic.hexdigest
+    cache_key = spec_identity.hexdigest
 
     # The Module manifest (ADC-585): attached on BOTH the cache-hit and fresh-compile path; its
     # abi_key slot is bound in CompiledProblem. None for a bare dsl.Model with no backing Module.
@@ -390,12 +393,7 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
     program_param_routes = tuple(program_param_entries(time, model))
 
     if so_path is None:
-        # Fold the feature-key + precision token into the backend slot of the cache file name (the
-        # model .so path folds the feature-key the same way), so the keyed .so is distinct once the
-        # tokens are non-default -- a one-time re-key, the .so bytes unchanged (ADC-536).
-        cache_backend = "program-production;%s;%s" % (feature_key, precision_key)
-        so_path = _cache_so_path(program_hash, abi_key, cache_backend, target,
-                                 getattr(time, "name", "problem"))
+        so_path = _identity_cache_so_path(spec_identity)
         # POPS_CODEGEN_DIR (sec.12.4, #47): redirect the out-of-source .so (and any kept source /
         # dump) into the requested directory, keeping the collision-free cache file name. An explicit
         # so_path bypasses this -- the caller pinned the path. Created on demand, never inside the repo.
@@ -405,9 +403,10 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
         if not force and os.path.isfile(so_path):
             # STALE / ABI GUARD (ADC-536, CONTRACTS6 decision 1): a cache HIT reuses the .so WITHOUT
             # recompiling, so nothing else re-checks it against the current keys. verify the sidecar
-            # <so>.cachekey matches the freshly computed cache_key / abi_key; a missing sidecar (a
-            # legacy .so) or any mismatch RAISES (never a silent warn-and-reuse).
-            verify_cached_program_so(so_path, cache_key=cache_key, abi_key=abi_key)
+            # final sidecar matches the freshly computed semantic/spec/binary identities; a missing
+            # or mismatching sidecar RAISES (never a silent warn-and-reuse).
+            binary, artifact = verify_cached_artifact(
+                so_path, semantic_identity=semantic, spec_identity=spec_identity)
             cenv.log("compile_problem: cache HIT -> %s" % so_path)
             compiled = CompiledProblem(so_path, time, model, abi_key, cc, eff_std,
                                        libraries=library_manifests, problem_hash=program_hash,
@@ -417,10 +416,13 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
                                        problem_snapshot=problem_snapshot,
                                        program_param_routes=program_param_routes,
                                        generated_cpp=src)
+            compiled.semantic_identity = semantic
+            compiled.artifact_spec_identity = spec_identity
+            compiled.binary_identity = binary
+            compiled.artifact_identity = artifact
             cenv.run_dumps(compiled)
             return compiled
 
-    optflags = _dsl_optflags()
     # POPS_KEEP_GENERATED (sec.12.4, #47): keep the emitted .cpp next to the .so -- the same effect
     # debug=True has (debug=True already set keep_generated in cenv, explicit-arg-wins). When neither
     # is set the source lives only in the TemporaryDirectory below and is discarded.
@@ -473,10 +475,8 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
                 "written to %s. Re-run pops.compile(..., debug=True) to keep the .cpp with a full "
                 "provenance banner (IR + hashes + flags + command)."
                 % (exc, getattr(time, "name", "problem"), failed_src)) from exc
-    # Sidecar cache-key file (ADC-536): record the keys + toolchain next to the fresh .so so a later
-    # cache HIT can prove the on-disk artifact matches (verify_cached_program_so). Atomic write.
-    write_cachekey_sidecar(so_path, cache_key=cache_key, abi_key=abi_key,
-                           toolchain="%s|%s" % (cc, eff_std))
+    binary, artifact = write_artifact_sidecar(
+        so_path, semantic_identity=semantic, spec_identity=spec_identity)
     cenv.log("compile_problem: compiled -> %s" % so_path)
     compiled = CompiledProblem(so_path, time, model, abi_key, cc, eff_std,
                                libraries=library_manifests, problem_hash=program_hash,
@@ -487,5 +487,9 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
                                problem_snapshot=problem_snapshot,
                                program_param_routes=program_param_routes,
                                generated_cpp=src)
+    compiled.semantic_identity = semantic
+    compiled.artifact_spec_identity = spec_identity
+    compiled.binary_identity = binary
+    compiled.artifact_identity = artifact
     cenv.run_dumps(compiled)
     return compiled

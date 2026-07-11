@@ -21,13 +21,13 @@ from pops.codegen._compiled_model_identity import model_compile_identity  # noqa
 import pops.codegen.compile_drivers as compile_drivers  # noqa: E402
 from pops.mesh.cartesian import CartesianMesh  # noqa: E402
 from pops.mesh.layouts import AMR, Uniform  # noqa: E402
-from pops.model import DeclarationIndex, Handle, OwnerKind, OwnerPath  # noqa: E402
+from pops.model import Handle, Module  # noqa: E402
 
 
 class _StubCompiledModel(CompiledModel):
     def __init__(self, source, target="amr_system"):
         super().__init__(
-            "/tmp/%s_%s.so" % (source.name, target), "production",
+            source.so_path, "production",
             "add_native_block" if target == "amr_system" else "add_dynamic_block",
             (), (), (), 0, None, 0, {}, {"cpu": True, "amr": target == "amr_system"},
             "abi", source._model_hash(), "c++", "c++20", target=target,
@@ -40,8 +40,9 @@ class _StubCompiledModel(CompiledModel):
 
 
 class _StubDsl:
-    def __init__(self, name="stub"):
+    def __init__(self, name="stub", so_path="/tmp/nonexistent-test-artifact.so"):
         self.name = name
+        self.so_path = str(so_path)
 
     def compile(self, *, backend, target, **kw):
         return _StubCompiledModel(self, target=target)
@@ -51,19 +52,24 @@ class _StubDsl:
 
 
 class _StubModel:
-    def __init__(self, name="stub"):
+    def __init__(self, name="stub", so_path="/tmp/nonexistent-test-artifact.so"):
         self.name = name
-        self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, name)
-        self.rho = Handle("rho", kind="state", owner=self.owner_path)
-        self.dsl = _StubDsl(name)
+        self.module = Module(name)
+        rho = self.module.state_space("rho", ("rho",))
+        self.owner_path = self.module.owner_path
+        self.rho = self.module.state_handle(rho)
+        self.dsl = _StubDsl(name, so_path)
 
     def declaration_index(self):
-        return DeclarationIndex(owner=self.owner_path, handles=(self.rho,))
+        return self.module.declaration_index()
 
 
 class _StubCompiled:
-    def __init__(self, target="system", model=None):
-        self.so_path = "/tmp/stub.so"
+    def __init__(self, target="system", model=None, so_path="/tmp/nonexistent-program.so"):
+        self.so_path = str(so_path)
+        self.abi_key = "test-abi"
+        self.cxx = "c++"
+        self.std = "c++20"
         self.model = model
         self.install_plan = None
 
@@ -73,29 +79,31 @@ def _stub_time():
     return pops.Program("stub-time")
 
 
-def _fresh_problem():
+def _fresh_problem(so_path="/tmp/nonexistent-test-artifact.so"):
     """One Problem, no layout -- the subject of the two-layouts proof."""
     return pops.Problem(name="plasma").block(
-        "ne", physics=_StubModel("ne")).program(_stub_time())
+        "ne", physics=_StubModel("ne", so_path)).program(_stub_time())
 
 
 def _rho(problem):
     return problem._blocks.spec("ne")["model"].rho
 
 
-def _patched_uniform(captured):
+def _patched_uniform(captured, program_path="/tmp/nonexistent-program.so"):
     def _fake(*, time, model, backend, target, **kw):
         captured.update(target=target, model=model)
-        return _StubCompiled(target=target, model=model)
+        return _StubCompiled(target=target, model=model, so_path=program_path)
     return _fake
 
 
-def test_same_problem_compiles_uniform_and_amr():
+def test_same_problem_compiles_uniform_and_amr(tmp_path):
+    binary = tmp_path / "layout-route.so"
+    binary.write_bytes(b"layout routing artifact")
     saved = compile_drivers.compile_problem
     captured = {}
-    compile_drivers.compile_problem = _patched_uniform(captured)
+    compile_drivers.compile_problem = _patched_uniform(captured, binary)
     try:
-        prob = _fresh_problem()
+        prob = _fresh_problem(binary)
         # Under Uniform -> target='system' (the whole-system Program is compiled once).
         compiled_u = orchestration.compile(prob, layout=Uniform(CartesianMesh()), time=_stub_time())
         assert captured["target"] == "system"
@@ -120,13 +128,15 @@ def test_compile_without_layout_raises_pointing_at_layout_kwarg():
         compile_drivers.compile_problem = saved
 
 
-def test_constructor_layout_still_works_for_back_compat():
+def test_constructor_layout_still_works_for_back_compat(tmp_path):
+    binary = tmp_path / "constructor-layout.so"
+    binary.write_bytes(b"constructor layout artifact")
     saved = compile_drivers.compile_problem
     captured = {}
-    compile_drivers.compile_problem = _patched_uniform(captured)
+    compile_drivers.compile_problem = _patched_uniform(captured, binary)
     try:
         prob = pops.Problem(layout=Uniform(CartesianMesh())).block(
-            "ne", physics=_StubModel()).program(_stub_time())
+            "ne", physics=_StubModel(so_path=binary)).program(_stub_time())
         compiled = orchestration.compile(
             prob, time=_stub_time())  # no layout= : uses the constructor one
         assert compiled.install_plan.target == "system"
@@ -141,13 +151,15 @@ def test_explicit_layout_disagreeing_with_constructor_is_refused():
         orchestration.compile(prob, layout=AMR(base=CartesianMesh()), time=_stub_time())
 
 
-def test_recorded_amr_criteria_apply_to_the_amr_layout():
+def test_recorded_amr_criteria_apply_to_the_amr_layout(tmp_path):
     from pops.mesh.amr import RegridEvery
-    prob = _fresh_problem()
+    binary = tmp_path / "amr-layout.so"
+    binary.write_bytes(b"amr layout artifact")
+    prob = _fresh_problem(binary)
     prob.amr.refine(regrid=RegridEvery(7))
     layout = AMR(base=CartesianMesh())
     saved = compile_drivers.compile_problem
-    compile_drivers.compile_problem = _patched_uniform({})
+    compile_drivers.compile_problem = _patched_uniform({}, binary)
     try:
         compiled = orchestration.compile(prob, layout=layout)
         assert compiled.install_plan.target == "amr_system"

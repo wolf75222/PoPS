@@ -131,6 +131,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         # in depth. _bound_snapshot is the BoundSnapshot manifest of what was bound (None until bind).
         self._lifecycle = "assembling"
         self._bound_snapshot = None
+        self._last_run_manifest = self._last_run_identity = self._last_restart_identity = None
 
     def run(self, t_end: Any, cfl: Any = None, max_steps: int = 1_000_000,
             output_dir: Any = None) -> Any:
@@ -147,6 +148,8 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         cf. DSL_MODEL_DESIGN.md section 6."""
         if cfl is None:
             cfl = self._program_cadence_cfl if self._program_cadence_cfl is not None else 0.4
+        from pops.runtime._run_manifest import begin_run
+        begin_run(self, t_end=t_end, cfl=cfl, max_steps=max_steps, output_dir=output_dir)
         policies = getattr(self, "_output_policies", [])
         measures = getattr(self, "_diagnostic_measures", [])
         out_dir = output_dir if output_dir is not None else "."

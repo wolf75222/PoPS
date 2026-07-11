@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: B018, B904, E402
 """ADC-592 : cycle de vie de gel du runtime apres pops.bind.
 
 Le cycle de vie runtime est EXPLICITE : assembly mutable AVANT bind, composition GELEE une fois
@@ -29,9 +30,10 @@ import sys
 try:
     import numpy as np
     import pops
+    from pops.identity import make_identity
     from pops.runtime._bound_sim import BoundSimulation
     from pops.runtime._bound_snapshot import BoundSnapshot
-    from pops.runtime._lifecycle import FROZEN_STRUCTURAL, freeze_error
+    from pops.runtime._lifecycle import FROZEN_STRUCTURAL
     from pops.numerics.reconstruction.limiters import Minmod
 except Exception as exc:  # noqa: BLE001
     print("skip test_freeze_lifecycle (pops unavailable: %s)" % exc)
@@ -67,7 +69,15 @@ from tests.python.support.initial_states import bubble_offset as _bubble
 
 def _minimal_snapshot(layout="system"):
     """Un BoundSnapshot minimal LEGITIME pour geler un moteur bas-niveau dans un test unitaire."""
-    return BoundSnapshot(layout=layout, blocks=[{"name": "ions"}], solvers={"phi": "geometric_mg"})
+    return BoundSnapshot(
+        semantic_identity=make_identity("semantic", {"test": "freeze"}),
+        artifact_identity=make_identity("artifact", {"binary": "freeze"}),
+        layout={"kind": layout}, blocks=[{"name": "ions"}],
+        solvers={"phi": "geometric_mg"},
+        cadence={"kind": "engine-default", "substeps": 1, "stride": 1, "cfl": "default"},
+        params=[], aux_evidence={}, initial_evidence={}, outputs=[], diagnostics=[],
+        bind_schema_identity=make_identity("bind-schema", {"slots": []}),
+    )
 
 
 def _assert_bind_vocabulary(exc, what):
@@ -229,11 +239,7 @@ def test_double_bind_rejected():
 
 # --- 4c. Restart d'une sim bindee (mutation runtime permise) ---------------------------------
 def test_restart_on_bound_sim_restores_state():
-    """checkpoint -> _finalize_bind -> restart a travers la vue restaure l'etat bit-a-bit.
-
-    restart est une mutation runtime allowlistee (pas un setter structurel) : elle reste permise sur
-    une sim gelee et repose l'etat/le potentiel/l'horloge du checkpoint. On prouve le round-trip a
-    travers la vue BoundSimulation, aucun compilateur requis (bloc natif)."""
+    """Un moteur assemble bas niveau ne peut plus fabriquer un checkpoint sans identité de bind/run."""
     import os
     import tempfile
 
@@ -243,25 +249,15 @@ def test_restart_on_bound_sim_restores_state():
     engine.add_block("ions", _isothermal_model(),
                      spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
     engine.set_density("ions", _bubble(n))
-    d0 = np.array(engine.density("ions"), copy=True)
-
     tmp = tempfile.mkdtemp(prefix="pops_freeze_ckpt_")
     path = os.path.join(tmp, "state")
-    engine.checkpoint(path)
-
-    # Gel bas-niveau LEGITIME (ce que _install_compiled fait en dernier), puis vue.
-    engine._finalize_bind(_minimal_snapshot())
-    sim = BoundSimulation(engine)
-    _check(sim.lifecycle_state() == "bound", "la sim est 'bound' apres _finalize_bind")
-
-    # On perturbe l'etat PAR LA VUE (mutation runtime permise), puis on restaure PAR LA VUE.
-    sim.set_density("ions", np.ones(n * n))
-    _check(not np.array_equal(np.array(sim.density("ions")), d0),
-           "la perturbation a bien change l'etat avant restart")
-    sim.restart(path)  # restart est allowlistee : elle ne doit PAS lever sur une sim gelee
-    _check(np.array_equal(np.array(sim.density("ions")), d0),
-           "restart a travers la vue restaure l'etat bit-a-bit sur une sim bindee")
-    print("ok test_restart_on_bound_sim_restores_state")
+    try:
+        engine.checkpoint(path)
+        raise AssertionError("checkpoint bas niveau sans bind/run doit etre refuse")
+    except RuntimeError as exc:
+        _check("compiled Program" in str(exc) or "pops.bind" in str(exc),
+               "le checkpoint exige un artefact compile et une identite de bind")
+    print("ok test_low_level_checkpoint_without_identity_rejected")
 
 
 # --- 5. Snapshot : manifeste inerte + hash stable + inspect() --------------------------------
@@ -270,24 +266,27 @@ def test_bound_snapshot_manifest():
     import json
 
     snap = BoundSnapshot(
-        layout="system",
+        semantic_identity=make_identity("semantic", {"problem": "snapshot-test"}),
+        artifact_identity=make_identity("artifact", {"binary": "snapshot-test"}),
+        layout={"kind": "uniform"},
         blocks=[{"name": "ions", "model_hash": None, "limiter": "minmod", "flux": "rusanov",
                  "recon": "conservative", "time": "explicit", "evolve": True}],
-        solvers={"phi": "geometric_mg"}, program_hash="deadbeef", abi_key="k|c|s",
-        cache_key="cache123", cadence={"substeps": 1, "stride": 1, "cfl": 0.4},
-        aux=["B_z"], params=[{
+        solvers={"phi": "geometric_mg"},
+        cadence={"kind": "compiled-time", "substeps": 1, "stride": 1, "cfl": 0.4},
+        aux_evidence={"B_z": {"dtype": "<f8", "shape": [1], "content_sha256": "a" * 64}},
+        initial_evidence={}, params=[{
             "qid": "pops.handle.v1::block:plasma::parameter::cs2",
             "dtype": "Real", "source": "override",
             "value": {"kind": "binary64", "value": "0x1.0000000000000p+0",
                       "target": "Real"},
-        }], bind_schema_hash="a" * 64, bind_schema_artifact_hash="b" * 64,
-        outputs=["OutputPolicy"])
+        }], bind_schema_identity=make_identity("bind-schema", {"slots": []}),
+        outputs=["OutputPolicy"], diagnostics=[])
     d = snap.to_dict()
     _check(json.loads(json.dumps(d)) == d, "le snapshot est JSON round-trippable")
-    h = snap.snapshot_hash
+    h = snap.bind_identity.hexdigest
     _check(isinstance(h, str) and len(h) == 64 and all(c in "0123456789abcdef" for c in h),
-           "snapshot_hash est un sha256 64-hex")
-    _check(BoundSnapshot(**{k: v for k, v in _snap_kwargs(snap).items()}).snapshot_hash == h,
+           "bind_identity est un sha256 64-hex")
+    _check(BoundSnapshot(**_snap_kwargs(snap)).bind_identity.hexdigest == h,
            "le hash est STABLE (deterministe pour le meme contenu)")
     _check(snap.block_names() == ["ions"], "block_names() liste les blocs bindes")
     try:
@@ -304,7 +303,7 @@ def test_bound_snapshot_manifest():
     rep = engine.inspect()
     rep_dict = rep.to_dict()
     _check(rep_dict["lifecycle"] == "bound", "inspect().to_dict() porte le lifecycle 'bound'")
-    _check(rep_dict["bound_snapshot"]["snapshot_hash"] == h,
+    _check(rep_dict["bound_snapshot"]["bind_identity"]["hexdigest"] == h,
            "inspect().to_dict() porte le hash du snapshot")
     text = str(rep)
     _check("lifecycle" in text and "bound" in text, "str(inspect()) montre le lifecycle")
@@ -315,12 +314,15 @@ def test_bound_snapshot_manifest():
 
 def _snap_kwargs(snap):
     """Reconstruit le kwargs d'un BoundSnapshot pour prouver la stabilite du hash."""
-    return {"layout": snap.layout, "blocks": snap.blocks, "solvers": snap.solvers,
-            "program_hash": snap.program_hash, "abi_key": snap.abi_key, "cache_key": snap.cache_key,
-            "cadence": snap.cadence, "aux": snap.aux, "params": snap.params,
-            "bind_schema_hash": snap.bind_schema_hash,
-            "bind_schema_artifact_hash": snap.bind_schema_artifact_hash,
-            "outputs": snap.outputs}
+    return {
+        "semantic_identity": snap.semantic_identity,
+        "artifact_identity": snap.artifact_identity,
+        "layout": snap.layout, "blocks": snap.blocks, "solvers": snap.solvers,
+        "cadence": snap.cadence, "params": snap.params,
+        "aux_evidence": snap.aux_evidence, "initial_evidence": snap.initial_evidence,
+        "bind_schema_identity": snap.bind_schema_identity,
+        "outputs": snap.outputs, "diagnostics": snap.diagnostics,
+    }
 
 
 # --- 6. Les carriers param bruts ne contournent pas BindSchema apres bind ---------------------
@@ -421,8 +423,8 @@ def test_full_bind_flow_freeze_gated():
     _check(sim.lifecycle_state() == "bound", "la sim bindee est 'bound'")
     snap = sim.bound_snapshot
     _check(snap is not None, "la sim bindee porte un BoundSnapshot")
-    h = snap.snapshot_hash
-    _check(isinstance(h, str) and len(h) == 64, "snapshot_hash est un sha256 64-hex")
+    h = snap.bind_identity.hexdigest
+    _check(isinstance(h, str) and len(h) == 64, "bind_identity est un sha256 64-hex")
     _check("ne" in snap.block_names(), "le snapshot liste le bloc 'ne'")
 
     # inspect() a travers la vue montre lifecycle + hash + blocs/solveurs.

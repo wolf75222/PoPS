@@ -118,7 +118,7 @@ def test_rich_fields_populated_from_real_metadata():
     assert m.amr_refinement_ratio == 2
     assert m.precision == "double"
     assert m.real_bytes == 8
-    assert m.communicator == "MPI_COMM_WORLD"
+    assert m.communicator == "serial"
     assert m.supports_custom_communicator is False
 
 
@@ -140,7 +140,9 @@ def test_caps_sourced_flags_read_from_backend_caps():
     cp = _compiled(caps={"cpu": True, "mpi": True, "amr": True, "gpu": False})
     m = cp.manifest()
     assert m.supports_uniform is True   # cpu -> uniform
-    assert m.supports_mpi is True
+    # Compatibility facts describe what these bytes REQUIRE. This serial build does not require
+    # MPI even though the abstract production route can support it in an MPI-enabled build.
+    assert m.supports_mpi is False
     assert m.supports_amr is True
     assert m.supports_gpu is False      # a genuine False, honestly reported
 
@@ -169,9 +171,10 @@ def test_caps_flags_unknown_when_no_caps():
     """With no backend caps, the caps-sourced flags are None (unknown), not fabricated False."""
     cp = _compiled(caps={})
     m = cp.manifest()
-    for flag in ("supports_uniform", "supports_amr", "supports_mpi", "supports_gpu"):
+    for flag in ("supports_uniform", "supports_amr", "supports_gpu"):
         assert getattr(m, flag) is None, "%s must be None when the model records no caps" % flag
         assert flag in m.needs_cpp_followup()
+    assert m.supports_mpi is False  # exact serial build requirement, independent of route caps
 
 
 # ---------------------------------------------------------------------------

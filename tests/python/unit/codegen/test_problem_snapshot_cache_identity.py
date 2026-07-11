@@ -1,28 +1,15 @@
 """AuthoringSnapshot participates in the real compiled-Program cache identity."""
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
 import pytest
 
 pops = pytest.importorskip("pops", exc_type=ImportError)
 
-from pops.codegen.compile_provenance import read_cachekey_sidecar  # noqa: E402
-from pops.model import DeclarationIndex, OwnerKind, OwnerPath  # noqa: E402
-
-
-class _SnapshotModel:
-    """Small structural model shared by the two Problem snapshots."""
-
-    def __init__(self) -> None:
-        self.name = "same-model"
-        self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, self.name)
-
-    def declaration_index(self):
-        return DeclarationIndex(owner=self.owner_path, handles=())
-
-
+from pops.codegen.compile_provenance import read_artifact_sidecar  # noqa: E402
+from pops.identity import Identity  # noqa: E402
+from pops.model import Module  # noqa: E402
 class _Program:
     name = "same-program"
     source = 'extern "C" void pops_install_program(void*) {}\n'
@@ -52,8 +39,10 @@ class _Compiled:
 def _install_fake_toolchain(monkeypatch, tmp_path):
     """Exercise the production driver and real sidecar writer without invoking a compiler."""
     import pops.codegen.compile_drivers as drivers
+    import pops.codegen.cache as cache
     import pops.codegen.loader as loader
     import pops.codegen.module_lowering as lowering
+    import pops.codegen.toolchain as toolchain
     import pops.model.manifest as manifest
 
     monkeypatch.setattr(lowering, "lower_and_validate", lambda model, facade: (model, None))
@@ -64,17 +53,17 @@ def _install_fake_toolchain(monkeypatch, tmp_path):
     monkeypatch.setattr(
         drivers, "pops_loader_build_flags", lambda cxx: ("fake-c++", [], []))
     monkeypatch.setattr(drivers, "_probe_cxx_std", lambda cxx, std: "c++23")
-    monkeypatch.setattr(drivers, "_native_feature_key", lambda: "kokkos=fake;mpi=off")
+    monkeypatch.setattr(toolchain, "_native_feature_key", lambda: "kokkos=fake;mpi=off")
     monkeypatch.setattr(
-        drivers, "_precision_cache_key", lambda: "precision=double;real_bytes=8")
+        cache, "_precision_cache_key", lambda: "precision=double;real_bytes=8")
+    monkeypatch.setattr(cache, "_registry_cache_key", lambda: "routes=fake;capvocab=1")
     monkeypatch.setattr(drivers, "_registry_cache_key", lambda: "routes=fake;capvocab=1")
     monkeypatch.setattr(drivers, "_dsl_optflags", lambda: [])
     monkeypatch.setattr(drivers, "deterministic_program_link_flags", lambda flags: list(flags))
     monkeypatch.setattr(
         drivers,
-        "_cache_so_path",
-        lambda artifact_hash, abi, backend, target, name: str(
-            tmp_path / (artifact_hash + ".so")),
+        "_identity_cache_so_path",
+        lambda spec_identity: str(tmp_path / (spec_identity.hexdigest + ".so")),
     )
 
     compiled_paths = []
@@ -97,7 +86,7 @@ def _install_fake_toolchain(monkeypatch, tmp_path):
 def test_distinct_problem_snapshots_get_distinct_paths_keys_and_matching_sidecars(
         monkeypatch, tmp_path):
     drivers, compiled_paths = _install_fake_toolchain(monkeypatch, tmp_path)
-    model = _SnapshotModel()
+    model = Module("same-model")
     program = _Program()
     first_problem = pops.Problem(name="first-problem").block("u", physics=model)
     second_problem = pops.Problem(name="second-problem").block("u", physics=model)
@@ -110,19 +99,18 @@ def test_distinct_problem_snapshots_get_distinct_paths_keys_and_matching_sidecar
     second = drivers.compile_problem(
         time=program, model=model, problem_snapshot=second_snapshot)
 
-    source_hash = hashlib.sha256(program.source.encode()).hexdigest()
-    expected_first = hashlib.sha256(
-        (source_hash + "|problem_artifact=" + first_snapshot.artifact_hash).encode()).hexdigest()
-    expected_second = hashlib.sha256(
-        (source_hash + "|problem_artifact=" + second_snapshot.artifact_hash).encode()).hexdigest()
-    assert first.problem_hash == expected_first
-    assert second.problem_hash == expected_second
+    assert isinstance(first.semantic_identity, Identity)
+    assert isinstance(second.semantic_identity, Identity)
+    assert first.problem_hash == first.semantic_identity.hexdigest
+    assert second.problem_hash == second.semantic_identity.hexdigest
     assert first.so_path != second.so_path
     assert first.cache_key != second.cache_key
     assert first.authoring_snapshot is first_snapshot
     assert second.authoring_snapshot is second_snapshot
-    assert read_cachekey_sidecar(first.so_path)["cache_key"] == first.cache_key
-    assert read_cachekey_sidecar(second.so_path)["cache_key"] == second.cache_key
+    assert read_artifact_sidecar(first.so_path)[
+        "artifact_spec_identity"] == first.artifact_spec_identity.token
+    assert read_artifact_sidecar(second.so_path)[
+        "artifact_spec_identity"] == second.artifact_spec_identity.token
     assert compiled_paths == [first.so_path, second.so_path]
 
     hit = drivers.compile_problem(time=program, model=model, problem_snapshot=first_snapshot)
@@ -130,16 +118,14 @@ def test_distinct_problem_snapshots_get_distinct_paths_keys_and_matching_sidecar
     assert compiled_paths == [first.so_path, second.so_path]
 
 
-def test_advanced_compile_problem_without_snapshot_keeps_source_identity(monkeypatch, tmp_path):
+def test_advanced_compile_problem_without_semantic_authority_is_rejected(monkeypatch, tmp_path):
     drivers, _ = _install_fake_toolchain(monkeypatch, tmp_path)
     program = _Program()
-    compiled = drivers.compile_problem(time=program, model=_SnapshotModel())
-
-    assert compiled.problem_hash == hashlib.sha256(program.source.encode()).hexdigest()
-    assert compiled.authoring_snapshot is None
+    with pytest.raises(TypeError, match="semantic program identity requires"):
+        drivers.compile_problem(time=program, model=Module("same-model"))
 
 
-def test_different_full_snapshots_reuse_one_binary_when_artifact_projection_matches(
+def test_different_semantic_snapshots_never_alias_one_artifact_identity(
         monkeypatch, tmp_path):
     from pops.problem._snapshot import AuthoringSnapshot
 
@@ -168,19 +154,19 @@ def test_different_full_snapshots_reuse_one_binary_when_artifact_projection_matc
     assert first_snapshot.hash != second_snapshot.hash
     assert first_snapshot.artifact_hash == second_snapshot.artifact_hash
 
-    model = _SnapshotModel()
+    model = Module("same-model")
     program = _Program()
     first = drivers.compile_problem(
         time=program, model=model, problem_snapshot=first_snapshot)
     second = drivers.compile_problem(
         time=program, model=model, problem_snapshot=second_snapshot)
 
-    assert first.problem_hash == second.problem_hash
-    assert first.cache_key == second.cache_key
-    assert first.so_path == second.so_path
+    assert first.problem_hash != second.problem_hash
+    assert first.cache_key != second.cache_key
+    assert first.so_path != second.so_path
     assert first.authoring_snapshot is first_snapshot
     assert second.authoring_snapshot is second_snapshot
-    assert compiled_paths == [first.so_path]
+    assert compiled_paths == [first.so_path, second.so_path]
 
 
 def test_compile_authenticates_full_snapshot_before_using_artifact_hash(monkeypatch, tmp_path):
@@ -192,5 +178,5 @@ def test_compile_authenticates_full_snapshot_before_using_artifact_hash(monkeypa
 
     with pytest.raises(ValueError, match="canonical payload"):
         drivers.compile_problem(
-            time=_Program(), model=_SnapshotModel(), problem_snapshot=snapshot)
+            time=_Program(), model=Module("same-model"), problem_snapshot=snapshot)
     assert compiled_paths == []

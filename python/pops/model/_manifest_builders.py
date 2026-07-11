@@ -132,7 +132,14 @@ def build_module_manifest(module: Any) -> ModuleManifest:
     aux = {
         name: _declaration_row(
             descriptor,
-            {"aux_kind": getattr(descriptor, "kind", "cell_scalar")},
+            {
+                "aux_kind": getattr(descriptor, "kind", "cell_scalar"),
+                "representation": descriptor.representation,
+                "centering": descriptor.centering,
+                "unit": descriptor.unit,
+                "frame": descriptor.frame,
+                "clock": descriptor.clock,
+            },
             handle=module.aux_handle(descriptor),
             index=index,
             name=name,

@@ -32,7 +32,8 @@ endforeach()
 # control flow, classified in docs/design/pybind-binding-audit.md). The per-(transport, flux) seam leaves
 # come from POPS_GENERATED_SEAM_SOURCES.
 set(POPS_MODULE_SOURCES
-    bindings/core/bindings.cpp bindings/core/init/init_core.cpp bindings/core/init/init_system.cpp
+    bindings/core/bindings.cpp bindings/core/init/init_core.cpp bindings/core/init/init_identity.cpp
+    bindings/core/init/init_system.cpp
     bindings/core/init/init_amr.cpp bindings/system/base/system.cpp bindings/system/base/system_polar.cpp
     # ADC-632: system.cpp split by responsibility into sibling TUs sharing system_impl.hpp (install /
     # fields / io / profiling / program). Smaller TUs also cut the per-TU compile peak (the JOB_POOL

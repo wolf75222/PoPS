@@ -27,6 +27,52 @@ def problem_snapshot_artifact_payload(problem: Any) -> dict[str, Any]:
     return _problem_snapshot_payload(problem, artifact=True)
 
 
+def problem_semantic_payload(problem: Any, *, layout: Any, time: Any) -> dict[str, Any]:
+    """Return the closed scientific projection used by ``semantic_identity``.
+
+    Presentation/report policies, runtime values, lowering routes and platform facts never enter
+    this payload. Every accepted leaf comes from a typed owner or an explicit descriptor protocol;
+    there is no object walk or lossy fallback.
+    """
+    from pops.identity.semantic import model_semantic_data, program_semantic_data, semantic_value
+
+    blocks = {}
+    for name, spec in sorted(problem._block_registry.items()):
+        block = problem._block_registry.canonical_block(problem._block_registry.handle(name))
+        row = {
+            "handle": block.canonical_identity(),
+            "model": model_semantic_data(spec["model"]),
+            "spatial": _spatial_semantic_data(spec["spatial"]),
+        }
+        if spec["time"] is not None:
+            row["time"] = program_semantic_data(spec["time"])
+        blocks[name] = row
+
+    resolved_fields = dict(problem._field_registry.resolved_items(problem.resolve))
+    fields = {
+        name: {
+            "handle": problem._field_registry.canonicalize(handle).canonical_identity(),
+            "definition": _descriptor_semantic_data(
+                resolved_fields[name], where="field %s" % name),
+        }
+        for name, handle in sorted(problem.fields().items())
+    }
+    effective_time = time if time is not None else problem._time_registry.program
+    payload = {
+        "owner": problem.owner_path.canonical().to_data(),
+        "blocks": blocks,
+        "fields": fields,
+        "parameters": _semantic_parameter_rows(problem),
+        "layout": _layout_semantic_data(layout),
+        "time": None if effective_time is None else program_semantic_data(effective_time),
+        "constraints": {
+            name: _descriptor_semantic_data(item, where="problem constraint %s" % name)
+            for name, item in sorted(problem._constraint_registry.refinement.items())
+        },
+    }
+    return semantic_value(payload, where="Problem semantic payload")
+
+
 def _problem_snapshot_payload(problem: Any, *, artifact: bool) -> dict[str, Any]:
     blocks = {
         name: {
@@ -238,4 +284,137 @@ def _scientific_model_hash(model: Any, manifest_owner: Any, *, artifact: bool = 
     return None
 
 
-__all__ = ["problem_snapshot_artifact_payload", "problem_snapshot_payload"]
+def _semantic_parameter_rows(problem: Any) -> dict[str, Any]:
+    """Case parameters without defaults, runtime values, provenance or lowering policy."""
+    rows = {}
+    for name, declaration in sorted(problem._param_registry.items()):
+        data = declaration.bind_data()
+        if not isinstance(data, Mapping):
+            raise TypeError("Problem parameter %r bind_data() must return a mapping" % name)
+        required = {"kind", "domain", "unit", "storage"}
+        if not required.issubset(data):
+            raise TypeError("Problem parameter %r lacks semantic declaration metadata" % name)
+        rows[name] = {key: data[key] for key in sorted(required)}
+    return rows
+
+
+def _descriptor_semantic_data(value: Any, *, where: str) -> Any:
+    """Project the public Descriptor protocol; arbitrary structural objects are refused."""
+    if value is None:
+        return None
+    from pops.descriptors import Descriptor
+
+    if not isinstance(value, Descriptor):
+        raise TypeError("%s must be a typed pops Descriptor, got %s" % (
+            where, type(value).__name__))
+    options = value.options()
+    if not isinstance(options, Mapping):
+        raise TypeError("%s options() must return a mapping" % where)
+    return _semantic_option_data({
+        "category": value.category,
+        "name": value.name,
+        "options": dict(options),
+    }, where=where)
+
+
+def _semantic_option_data(value: Any, *, where: str) -> Any:
+    """Closed extension values admitted inside typed Descriptor options."""
+    from decimal import Decimal
+    from fractions import Fraction
+    from pops.descriptors import Descriptor
+    from pops.identity.semantic import semantic_value
+    from pops.model import Handle
+    from pops.params import ParameterDeclaration
+
+    if isinstance(value, ParameterDeclaration):
+        data = value.bind_data()
+        keys = {"kind", "domain", "unit", "storage"}
+        return {key: _semantic_option_data(data[key], where="%s.%s" % (where, key))
+                for key in sorted(keys)}
+    if isinstance(value, Handle):
+        return value.canonical_identity()
+    if isinstance(value, Descriptor):
+        return _descriptor_semantic_data(value, where=where)
+    if isinstance(value, Mapping):
+        return {key: _semantic_option_data(item, where="%s.%s" % (where, key))
+                for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_semantic_option_data(item, where=where) for item in value]
+    if isinstance(value, (Decimal, Fraction)):
+        from pops.ir.literals import scalar_literal
+        return scalar_literal(value).to_data()
+    return semantic_value(value, where=where)
+
+
+def _spatial_semantic_data(value: Any) -> Any:
+    """Project the public finite-volume spatial selection without native route metadata."""
+    if value is None:
+        return None
+    from pops.runtime._bricks_scheme import Spatial
+
+    if not isinstance(value, Spatial):
+        return _descriptor_semantic_data(value, where="block spatial")
+    return _semantic_option_data({
+        "family": "finite_volume",
+        "reconstruction": str(value.limiter),
+        "riemann": str(value.flux),
+        "variables": str(value.recon),
+        "positivity_floor": value.positivity_floor,
+        "wave_speed_cache": value.wave_speed_cache,
+        "waves_provider": value.waves_provider,
+        "weno_epsilon": value.weno_epsilon,
+    }, where="block spatial")
+
+
+def _mesh_semantic_data(mesh: Any) -> dict[str, Any]:
+    """Closed projection of the scientific domain and topology of supported meshes."""
+    from pops.mesh.cartesian import CartesianMesh
+    from pops.mesh.polar import PolarMesh
+
+    if isinstance(mesh, CartesianMesh):
+        return {"geometry": "cartesian", "dimension": mesh.dim, "cells": [mesh.n, mesh.n],
+                "extent": [[0.0, mesh.L], [0.0, mesh.L]],
+                "periodic": [mesh.periodic, mesh.periodic]}
+    if isinstance(mesh, PolarMesh):
+        return {"geometry": "polar", "dimension": mesh.dim,
+                "cells": [mesh.nr, mesh.ntheta],
+                "extent": [[mesh.r_min, mesh.r_max], [0.0, "2*pi"]],
+                "periodic": [False, True], "theta_boxes": mesh.theta_boxes}
+    raise TypeError("semantic layout requires a supported typed mesh, got %s" % type(mesh).__name__)
+
+
+def _layout_semantic_data(layout: Any) -> Any:
+    """Project scientific mesh structure without backend, ABI, route or target facts."""
+    if layout is None:
+        return None
+    from pops.mesh.layouts import AMR, Uniform
+
+    if isinstance(layout, Uniform):
+        return {
+            "kind": "uniform",
+            "domain": _mesh_semantic_data(layout.mesh),
+            "embedded_boundary": _descriptor_semantic_data(
+                layout.embedded_boundary, where="uniform embedded boundary"),
+            "refinement": _descriptor_semantic_data(
+                layout.refine, where="uniform refinement criterion"),
+        }
+    if isinstance(layout, AMR):
+        policies = {}
+        for name in ("regrid", "patches", "refine", "nesting", "clustering"):
+            item = getattr(layout, name)
+            if item is not None:
+                policies[name] = _descriptor_semantic_data(item, where="AMR %s" % name)
+        return {
+            "kind": "amr",
+            "domain": _mesh_semantic_data(layout.base),
+            "max_levels": layout.max_levels,
+            "ratio": layout.ratio,
+            "policies": policies,
+        }
+    raise TypeError("semantic identity requires Uniform or AMR layout, got %s"
+                    % type(layout).__name__)
+
+
+__all__ = [
+    "problem_semantic_payload", "problem_snapshot_artifact_payload", "problem_snapshot_payload",
+]

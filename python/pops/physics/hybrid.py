@@ -244,8 +244,14 @@ class HybridModel:
                                             _warn_kokkos_parity, _probe_cxx_std,
                                             _native_feature_key, _native_kokkos_flags,
                                             _native_kokkos_root, _run_compile, pops_header_signature)
-        from pops.codegen.cache import (_cache_so_path, _record_so_backend,
-                                        _backend_distinct_so_path, _dsl_optflags)
+        from pops.codegen.cache import (
+            _backend_distinct_so_path, _dsl_optflags, _identity_cache_so_path,
+            _platform_cache_key, _precision_cache_key, _record_so_backend,
+            _registry_cache_key,
+        )
+        from pops.codegen.compile_provenance import (
+            verify_cached_artifact, write_artifact_sidecar,
+        )
         from pops.codegen.abi import _abi_key_python
         from pops.codegen.backends import lower_backend
         # ADDITIVE (Spec 5 sec.8.15): accept a typed backend descriptor (Production()/AOT()/JIT()) as
@@ -289,13 +295,37 @@ class HybridModel:
         std = _probe_cxx_std(eff_cxx, std)  # ACTIONABLE error if the std is not supported
         model_hash = self._model_hash()
         abi_key = _abi_key_python(include, eff_cxx, std)
-        if so_path is None:
-            cache_backend = (("hybrid-" + backend + ";" + _native_feature_key()) if kokkos_like
-                             else "hybrid-" + backend)
-            so_path = _cache_so_path(model_hash, abi_key, cache_backend, target, name)
+        from pops.identity import artifact_spec_identity, make_identity
+
+        semantic_identity = make_identity(
+            "semantic", {"kind": "hybrid-model", "model_hash": str(model_hash)})
+        feature_key = _native_feature_key() if kokkos_like else "prototype"
+        spec_identity = artifact_spec_identity(
+            semantic_identity,
+            target=target,
+            backend="hybrid-" + backend,
+            precision=_precision_cache_key(),
+            abi=abi_key,
+            toolchain="%s|%s" % (eff_cxx, std),
+            routes={"registry": _registry_cache_key(), "features": feature_key},
+            components={"model_hash": str(model_hash), "emitted_name": str(name or "")},
+            flags=(
+                [_platform_cache_key(), *_dsl_optflags()]
+                if kokkos_like else ["-O2"]
+            ),
+            libraries=(),
+        )
+        cache_requested = so_path is None
+        if cache_requested:
+            so_path = _identity_cache_so_path(spec_identity)
             if os.path.exists(so_path):
+                binary_identity, final_artifact_identity = verify_cached_artifact(
+                    so_path, semantic_identity=semantic_identity, spec_identity=spec_identity)
                 _record_so_backend(so_path, "hybrid-" + backend)
-                return self._compiled_model(so_path, backend, target, abi_key, model_hash, eff_cxx, std)
+                return self._compiled_model(
+                    so_path, backend, target, abi_key, model_hash, eff_cxx, std,
+                    identities=(semantic_identity, spec_identity, binary_identity,
+                                final_artifact_identity))
         else:
             # Explicit so_path: avoid the dlopen handle cache re-serving ANOTHER backend already loaded at
             # this path in the process (cf. _backend_distinct_so_path). The hybrid backend is distinct from
@@ -332,14 +362,19 @@ class HybridModel:
             _run_compile([eff_cxx, *flags, "-I", include, cpp, "-o", so_path, *kokkos_link_flags],
                          "HybridModel, backend " + backend)
         _record_so_backend(so_path, "hybrid-" + backend)
-        return self._compiled_model(so_path, backend, target, abi_key, model_hash, eff_cxx, std)
+        binary_identity, final_artifact_identity = write_artifact_sidecar(
+            so_path, semantic_identity=semantic_identity, spec_identity=spec_identity)
+        return self._compiled_model(
+            so_path, backend, target, abi_key, model_hash, eff_cxx, std,
+            identities=(semantic_identity, spec_identity, binary_identity,
+                        final_artifact_identity))
 
     def _compiled_model(self, so_path: Any, backend: Any, target: Any, abi_key: Any, model_hash: Any,
-                        cxx: Any, std: Any) -> Any:
+                        cxx: Any, std: Any, identities: Any = None) -> Any:
         from pops.codegen.loader import CompiledModel  # lazy: physics stays codegen-free
         from pops.codegen._compiled_model_identity import model_compile_identity
         from pops.codegen.compile import _BACKEND_CAPS
-        return CompiledModel(
+        compiled = CompiledModel(
             so_path=so_path, backend=backend, adder=HyperbolicModel.adder_for(backend),
             target=target, cons_names=self.cons_names, cons_roles=self.cons_roles,
             prim_names=self.prim_names, n_vars=self.n_vars, gamma=self.gamma, n_aux=self.n_aux,
@@ -348,3 +383,7 @@ class HybridModel:
             cxx=cxx, std=std, hllc=getattr(self, "_hllc", False),
             roe=getattr(self, "_roe", False),
             wave_speeds=getattr(self, "_has_wave_speeds", True))
+        if identities is not None:
+            (compiled.semantic_identity, compiled.artifact_spec_identity,
+             compiled.binary_identity, compiled.artifact_identity) = identities
+        return compiled

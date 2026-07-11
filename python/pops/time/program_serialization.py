@@ -168,6 +168,11 @@ class _ProgramSerialization:
         blob = json.dumps(self._serialize(), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode()).hexdigest()
 
+    def _semantic_serialize(self) -> dict[str, Any]:
+        """Scientific IR projection shared by manual programs and library constructors."""
+        from pops.identity.semantic import program_semantic_data
+        return program_semantic_data(self)
+
     def _block_indices(self) -> dict[Any, int]:
         order = {}
         for value in self._values:

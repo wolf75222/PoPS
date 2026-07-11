@@ -10,7 +10,9 @@ Deux niveaux :
 (2) BOUT EN BOUT (saute si pas de compilateur / en-tetes) : compile(backend="aot") ET
     compile(backend="production") -> CompiledModel (adder correct : add_compiled_block vs
     add_native_block), add_equation + run ; aot et production donnent le MEME etat (memes briques de
-    production). Prouve que production passe bien par le chemin NATIF add_native_block (#85), pas aot.
+    production). Le seam bas niveau refuse volontairement ``run`` hors ``pops.bind`` ; le test
+    avance donc explicitement par ``step_cfl``. Prouve que production passe bien par le chemin
+    NATIF add_native_block (#85), pas aot.
 """
 from pops.numerics.riemann import HLLC
 from pops.numerics.reconstruction.limiters import Minmod
@@ -28,6 +30,7 @@ from pops.ir.ops import sqrt
 from pops.physics.facade import Model
 from pops.params import ConstParam, RuntimeParam
 
+from tests.python.support.initial_states import euler_bubble_state
 from tests.python.support.requirements import repo_include
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 INCLUDE = repo_include()
@@ -84,9 +87,6 @@ def build_euler_predef(name="euler_predef"):
     return m
 
 
-from tests.python.support.initial_states import euler_bubble_state
-
-
 def initial_state(n):
     return euler_bubble_state(n, GAMMA)
 
@@ -98,6 +98,20 @@ def expect_raises(exc, fn, label):
         print("OK  %s : %s levee" % (label, exc.__name__))
         return
     raise AssertionError("%s : %s attendue, non levee" % (label, exc.__name__))
+
+
+def advance_low_level(system, *, t_end, cfl):
+    """Advance an explicitly assembled low-level engine after pinning the public run guard."""
+    expect_raises(
+        RuntimeError,
+        lambda: system.run(t_end=t_end, cfl=cfl),
+        "run bas niveau hors transaction pops.bind refuse",
+    )
+    nsteps = 0
+    while system.time() < t_end:
+        system.step_cfl(cfl)
+        nsteps += 1
+    return nsteps
 
 
 def pure_python_checks():
@@ -198,7 +212,7 @@ def end_to_end_checks(cxx):
                                                                variables=Primitive()))
             s.set_poisson(rhs="charge_density", solver="geometric_mg")
             s.set_state("gas", initial_state(n))
-            nsteps = s.run(t_end=0.02, cfl=0.4)
+            nsteps = advance_low_level(s, t_end=0.02, cfl=0.4)
             assert nsteps > 0, "run a avance"
             finals[backend] = np.array(s.get_state("gas"))
             assert np.all(np.isfinite(finals[backend])), "%s : etat fini" % backend
@@ -221,7 +235,7 @@ def end_to_end_checks(cxx):
                                                               variables=Primitive()))
         sp.set_poisson(rhs="charge_density", solver="geometric_mg")
         sp.set_state("gas", initial_state(n))
-        sp.run(t_end=0.02, cfl=0.4)
+        advance_low_level(sp, t_end=0.02, cfl=0.4)
         pf = np.array(sp.get_state("gas"))
         assert np.all(np.isfinite(pf)), "primitive_vars kwargs (Var pre-definies) : etat fini, pas de NaN"
         dp = float(np.max(np.abs(pf - finals["aot"])))

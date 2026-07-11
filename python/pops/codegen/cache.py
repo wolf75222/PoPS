@@ -56,6 +56,20 @@ def pops_cache_dir() -> str:
     return base
 
 
+def _identity_cache_so_path(spec_identity: Any) -> str:
+    """Return the collision-safe path addressed by one artifact specification.
+
+    The complete digest is retained in the filename.  Human-readable names and paths are not
+    identity inputs; any emitted symbol name that changes bytes belongs in the artifact-spec
+    component payload before this function is called.
+    """
+    from pops.identity import Identity
+
+    if not isinstance(spec_identity, Identity) or spec_identity.domain != "artifact-spec":
+        raise TypeError("cache path requires a pops.artifact-spec Identity")
+    return os.path.join(pops_cache_dir(), spec_identity.hexdigest + ".so")
+
+
 def _precision_cache_key() -> str:
     """The floating-point precision component of a compiled artifact's cache key (ADC-536).
 
@@ -82,63 +96,6 @@ def _registry_cache_key() -> str:
                                      route_registry_hash)
     return "routes=v%d:%s;capvocab=%d" % (ROUTE_REGISTRY_VERSION, route_registry_hash()[:16],
                                           CAPABILITY_VOCAB_VERSION)
-
-
-def _optimization_cache_key(optimization: Any) -> str:
-    """The codegen-optimization component of the cache key (ADC-540), or "" when unset.
-
-    A typed pops.codegen.Optimization changes WHICH IR / expression transforms the emitter applies
-    (CSE, dead-node / redundant-solve elimination, local fusion, reciprocal hoisting) and the
-    numeric math mode -- so two artifacts built from the SAME model under DIFFERENT policies are
-    NOT interchangeable and must be a cache MISS. Its signature therefore participates in the .so
-    identity. The component is readable ("opt=cse=1;fuse=conservative;math=strict_math;...") so the
-    changed knob is nameable in diagnostics and in the manifest cache_key. ``None`` yields "" so the
-    key is byte-identical to before this fold (the historical default: no explicit policy).
-
-    Accepts an Optimization descriptor (its ``options()`` drive the signature) or ``None``; a plain
-    dict of the same shape is also accepted (a pre-lowered options view)."""
-    if optimization is None:
-        return ""
-    opts = optimization.options() if hasattr(optimization, "options") else dict(optimization)
-    # Stable, sorted key=value rendering so the same policy always yields the same signature.
-    body = ";".join("%s=%s" % (k, opts[k]) for k in sorted(opts))
-    return "opt=%s" % body
-
-
-def _cache_so_path(model_hash: Any, abi_key: Any, backend: Any, target: Any, name: Any,
-                   optimization: Any = None) -> str:
-    """Cached .so path for this (model_hash, abi_key, backend, target, name[, optimization]).
-
-    The cache key combines model_hash (the WHAT: formulas/roles/params) and abi_key (the HOW:
-    headers + compiler + std), plus backend/target/name which change the emitted code (native loader
-    vs AOT vs JIT, System vs AmrSystem), the route registry / report vocabulary component
-    (_registry_cache_key, ADC-599), and -- when a typed codegen Optimization policy is supplied --
-    its signature (_optimization_cache_key, ADC-540) so a policy change is a cache MISS, never a
-    silent reuse of a differently-optimised binary. The file name is
-    <model_hash[:16]>-<sha(rest)[:16]>.so: readable (prefix = model identity) and collision-free
-    (suffix = rest of the key). ``optimization=None`` keeps the file name byte-identical to before
-    the fold (no explicit policy is the historical default)."""
-    import hashlib
-    import os
-    # _platform_cache_key: the CPU arch + the optflags enter the key (a .so x86_64 or
-    # -march=native reused on another machine via a shared cache = silent SIGILL).
-    parts = [abi_key or "", backend or "", target or "", name or "", _platform_cache_key(),
-             _registry_cache_key()]
-    # AOT schema marker: the aot .so built before aligning the flags on native were compiled at
-    # a hardcoded -O2 while the key already advertised the native optflags -> set them apart so a
-    # shared cache does not serve a stale -O2 binary. Native/jit, whose key already reflects their
-    # binary, keep an UNCHANGED file name (marker added for aot only).
-    if (backend or "").split(";", 1)[0] in ("aot", "hybrid-aot"):
-        parts.append("aot-optflags")
-    # ADC-540: fold the optimization policy signature into the rest bytes. Empty (no policy) leaves
-    # the file name unchanged; a policy change moves the .so name (and the manifest cache_key).
-    opt_key = _optimization_cache_key(optimization)
-    if opt_key:
-        parts.append(opt_key)
-    rest = "|".join(parts).encode()
-    tag = hashlib.sha256(rest).hexdigest()[:16]
-    fname = "%s-%s.so" % ((model_hash or "nohash")[:16], tag)
-    return os.path.join(pops_cache_dir(), fname)
 
 
 # In-process registry of the backend already written to each resolved .so path (key = absolute path,

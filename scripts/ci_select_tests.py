@@ -86,6 +86,7 @@ CPP_PATH_AREAS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
 )
 
 PYTHON_PATH_AREAS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (("python/pops/identity/",), ("identity", "codegen", "runtime")),
     (("python/pops/mesh/",), ("mesh", "amr")),
     (("python/pops/runtime/amr/",), ("amr", "runtime")),
     (("python/pops/runtime/",), ("runtime",)),
@@ -110,6 +111,7 @@ AREA_LABEL_ALIASES: dict[str, tuple[str, ...]] = {
     "coupling": ("coupling", "runtime", "elliptic", "amr", "physics"),
     "elliptic": ("elliptic", "solvers", "compliance"),
     "io": ("io", "runtime"),
+    "identity": ("identity", "codegen", "runtime"),
     "mesh": ("mesh", "amr"),
     "native_loader": ("native_loader", "codegen", "compiler"),
     "numerics": ("numerics", "elliptic", "solvers", "time"),

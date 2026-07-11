@@ -5,10 +5,8 @@ A compiled `Program` with multistep histories (e.g. Adams-Bashforth 2) carries S
 buffers across macro-steps (the previous RHS R_{n-1}, ...). For a checkpoint/restart to be correct the
 rings MUST survive the checkpoint, so a CONTINUOUS run is bit-for-bit identical to a (run, checkpoint,
 restart, continue) run -- without the rings the post-restart AB2 would cold-start again and diverge.
-The program HASH is recorded in the checkpoint too: restarting a DIFFERENT compiled Program is rejected
-fail-loud (the restored buffers / cadence would be meaningless). The existing v1 checkpoint format
-(state, t, macro_step, phi) stays back-compatible: a checkpoint with no program/history keys restarts
-as before.
+The typed semantic/artifact/bind/run identities and every payload digest are recorded too: restarting
+under a different composition is rejected before any state mutation.
 
 (A) NPZ facade keys (pure Python / numpy, always runs when numpy is present): the checkpoint key naming
     scheme (program_hash, history_names, history_depth_<n>, history_<n>_<k>, history_init_<n>) and the
@@ -51,60 +49,84 @@ _DT = 0.01
 _NSTEPS = 6  # even, so N/2 is a whole number of macro-steps
 
 
-# ---- (A) NPZ facade keys: pure numpy, always runs when numpy is present ----
-def test_npz_key_scheme_roundtrips(_t):
+def _authorize_identity_runtime(sim, compiled, *, executed=False):
+    """Attach the exact identity boundary to this deliberately low-level integration engine."""
+    from pops.identity import make_identity
+    from pops.runtime._bound_snapshot import BoundSnapshot
+    from pops.runtime._run_manifest import RunManifest
+
+    snapshot = BoundSnapshot(
+        semantic_identity=compiled.semantic_identity,
+        artifact_identity=compiled.artifact_identity,
+        layout={"kind": "uniform"}, blocks=[{"name": "blk"}], solvers={},
+        cadence={"kind": "compiled-program", "substeps": 1, "stride": 1, "cfl": "default"},
+        params=[], aux_evidence={}, initial_evidence={}, outputs=[], diagnostics=[],
+        bind_schema_identity=make_identity("bind-schema", {"slots": []}),
+    )
+    if executed:
+        from pops.time.history_persistence import Dense
+        sim.set_history_persistence({name: Dense() for name in sim._s.history_names()})
+    sim._finalize_bind(snapshot)
+    if executed:
+        run = RunManifest(
+            bind_identity=snapshot.bind_identity, start_time=0.0, start_macro_step=0,
+            controls={"t_end": sim.time(), "cfl": 0.4,
+                      "max_steps": sim.macro_step(), "output_mode": "current-directory"})
+        sim._last_run_manifest = run
+        sim._last_run_identity = run.run_identity
+    return snapshot
+
+
+# ---- (A) Current strict NPZ envelope: pure numpy, always runs when numpy is present ----
+def test_current_checkpoint_envelope_roundtrips(_t):
     try:
         import numpy as np
     except Exception as exc:  # noqa: BLE001 -- numpy unavailable in this interpreter
         print("-- (A) skipped: numpy unavailable: %s --" % exc)
         return
-    # Mirror EXACTLY the keys + dtypes System.checkpoint writes for a program with one AB2 history.
-    hname = "blk.R"
-    depth = 2
-    ncomp, ny, nx = 1, 4, 4
-    slots = [np.full((ncomp, ny, nx), float(k + 1)) for k in range(depth)]
+    from types import SimpleNamespace
+    from pops.identity import make_identity
+    from pops.runtime._bound_snapshot import BoundSnapshot
+    from pops.runtime._checkpoint_manifest import (
+        authenticate_checkpoint_payload, seal_checkpoint_payload)
+    from pops.runtime._run_manifest import RunManifest
+    from pops.runtime.bricks import abi_key
+
+    snapshot = BoundSnapshot(
+        semantic_identity=make_identity("semantic", {"test": "npz-envelope"}),
+        artifact_identity=make_identity("artifact", {"binary": "npz-envelope"}),
+        layout={"kind": "uniform"}, blocks=[{"name": "blk"}], solvers={},
+        cadence={"kind": "compiled-program", "substeps": 1, "stride": 1, "cfl": "default"},
+        params=[], aux_evidence={}, initial_evidence={}, outputs=[], diagnostics=[],
+        bind_schema_identity=make_identity("bind-schema", {"slots": []}),
+    )
+    run = RunManifest(
+        bind_identity=snapshot.bind_identity, start_time=0.0, start_macro_step=0,
+        controls={"t_end": 0.1, "cfl": 0.4, "max_steps": 10,
+                  "output_mode": "current-directory"})
+    owner = SimpleNamespace(bound_snapshot=snapshot, last_run_identity=run.run_identity)
     out = {
-        "pops_checkpoint_version": 1,
-        "program_hash": "deadbeef" * 8,  # a 64-hex IR hash shape
-        "history_names": np.array([hname]),
-        "history_depth_" + hname: depth,
-        "history_ncomp_" + hname: ncomp,
-        "history_init_" + hname: True,
+        "pops_checkpoint_version": 2, "t": 0.1, "macro_step": 2,
+        "abi_key": abi_key(), "program_hash": "deadbeef" * 8,
+        "history_names": np.array([], dtype="U1"),
+        "cache_nodes": np.array([], dtype=np.int64),
+        "cache_names": np.array([], dtype="U1"),
+        "state_blk": np.arange(16, dtype=np.float64),
     }
-    for k in range(depth):
-        out["history_%s_%d" % (hname, k)] = slots[k]
+    expected = seal_checkpoint_payload(owner, out, runtime_kind="uniform")
 
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "ckpt.npz")
         with open(path, "wb") as f:
             np.savez_compressed(f, **out)
         d = np.load(path, allow_pickle=False)
-        assert "program_hash" in d and str(d["program_hash"]) == out["program_hash"]
-        assert [str(h) for h in d["history_names"]] == [hname]
-        assert int(d["history_depth_" + hname]) == depth
-        assert int(d["history_ncomp_" + hname]) == ncomp
-        assert bool(d["history_init_" + hname]) is True
-        for k in range(depth):
-            np.testing.assert_array_equal(d["history_%s_%d" % (hname, k)], slots[k])
-
-    # The hash guard is a plain string compare: equal -> ok, different -> the spec-46 message.
-    assert out["program_hash"] == ("deadbeef" * 8), "same hash compares equal"
-    assert out["program_hash"] != ("cafe" * 16), "a different hash must compare unequal"
-
-    # Back-compat: a checkpoint WITHOUT the new keys carries neither program_hash nor history_names.
-    legacy = {"pops_checkpoint_version": 1, "t": 0.0, "macro_step": 0}
-    with tempfile.TemporaryDirectory() as tmp:
-        path = os.path.join(tmp, "legacy.npz")
-        with open(path, "wb") as f:
-            np.savez_compressed(f, **legacy)
-        d = np.load(path, allow_pickle=False)
-        assert "program_hash" not in d and "history_names" not in d, \
-            "a legacy checkpoint must not carry the ADC-406b keys (back-compatible restart)"
+        assert authenticate_checkpoint_payload(
+            owner, d, runtime_kind="uniform") == expected
 
 
-# ---- (A2) ADC-626 v2 selective-persistence key scheme + reader dispatch (pure numpy) ----
-def test_v2_history_persistence_key_scheme(_t):
-    """The v2 checkpoint stores only the policy-selected slots + the policy manifest + the per-slot dt;
+# ---- (A2) Selective-persistence key scheme + strict reader dispatch (pure numpy) ----
+def test_history_persistence_key_scheme(_t):
+    """The current checkpoint stores only policy-selected slots + policy manifest + per-slot dt;
     the restore_histories reader dispatches on the manifest, restores the stored slots, and the
     policy-compat guard refuses a stored-slots / policy mismatch verbatim. Pure numpy (no engine): a
     fake System captures restore_history / restore_history_slot_dt / rebuild_history_slots calls."""
@@ -189,7 +211,7 @@ def test_v2_history_persistence_key_scheme(_t):
             np.savez_compressed(f, **payload)
         d = np.load(path, allow_pickle=False)
         reader = FakeSystem(present_slots=stored)
-        report = restore_histories(reader, d, ckpt_version=2)
+        report = restore_histories(reader, d)
     assert sorted(reader.restored) == [0, 2, 4], "only the stored slots are restored"
     assert reader.rebuilt == [0, 2, 4], "replay is driven from the stored slots"
     assert len(reader.restored_dt) == depth, "every slot's dt is restored"
@@ -206,12 +228,13 @@ def test_v2_history_persistence_key_scheme(_t):
         d = np.load(path, allow_pickle=False)
         raised = False
         try:
-            restore_histories(FakeSystem(stored), d, ckpt_version=2)
+            restore_histories(FakeSystem(stored), d)
         except RuntimeError as exc:
             raised = "stored slots" in str(exc) and "policy" in str(exc)
         assert raised, "a stored-slots / policy mismatch must be refused verbatim"
 
-    # BACK-COMPAT: a v1 checkpoint (no policy keys, every slot present) restores as Dense, no replay.
+    # STRICT FORMAT: a checkpoint without the persistence manifest is refused; conversion belongs
+    # outside the runtime core.
     v1 = {"history_names": np.array([hname]),
           "history_depth_" + hname: depth,
           "history_init_" + hname: True}
@@ -223,10 +246,12 @@ def test_v2_history_persistence_key_scheme(_t):
             np.savez_compressed(f, **v1)
         d = np.load(path, allow_pickle=False)
         reader = FakeSystem(present_slots=list(range(depth)))
-        report = restore_histories(reader, d, ckpt_version=1)
-    assert sorted(reader.restored) == list(range(depth)), "v1 restores every slot (Dense)"
-    assert reader.rebuilt is None, "v1 never replays (every slot is present)"
-    assert report.histories[0]["policy_kind"] == "dense" and report.histories[0]["recomputed_slots"] == 0
+        raised = False
+        try:
+            restore_histories(reader, d)
+        except RuntimeError as exc:
+            raised = "persistence manifest" in str(exc)
+    assert raised, "a checkpoint without the current persistence manifest must be refused"
 
     # UNKNOWN kind at restart fails loud (a checkpoint written by a newer pops).
     unknown = dict(payload)
@@ -238,7 +263,7 @@ def test_v2_history_persistence_key_scheme(_t):
         d = np.load(path, allow_pickle=False)
         raised = False
         try:
-            restore_histories(FakeSystem(stored), d, ckpt_version=2)
+            restore_histories(FakeSystem(stored), d)
         except ValueError as exc:
             raised = "unknown" in str(exc)
         assert raised, "an unknown policy kind must fail loud at restart"
@@ -334,12 +359,14 @@ def _run_section_b(t):
     sim1.install_program(compiled.so_path)
     for _ in range(half):
         sim1.step(_DT)
+    _authorize_identity_runtime(sim1, compiled, executed=True)
     with tempfile.TemporaryDirectory() as tmp:
         ckpt = sim1.checkpoint(os.path.join(tmp, "ab2"))
 
         # (3) FRESH system, re-add block, re-install the SAME program, RESTART, run N/2 more -> B.
         sim2, _ = _build_system(pops, np, n)
         sim2.install_program(compiled.so_path)  # the hash guard needs the program installed first
+        _authorize_identity_runtime(sim2, compiled)
         sim2.restart(ckpt)
         assert sim2.macro_step() == half, \
             "restart restores macro_step (%d != %d)" % (sim2.macro_step(), half)
@@ -411,18 +438,20 @@ def _run_section_c(t):
     sim.install_program(ab2.so_path)
     sim.step(_DT)
     sim.step(_DT)
+    _authorize_identity_runtime(sim, ab2, executed=True)
     with tempfile.TemporaryDirectory() as tmp:
         ckpt = sim.checkpoint(os.path.join(tmp, "ab2_for_mismatch"))
 
         # A fresh system that installs the WRONG (Forward Euler) program, then restarts the AB2 ckpt.
         sim2, _ = _build_system(pops, np, n)
         sim2.install_program(fe.so_path)
+        _authorize_identity_runtime(sim2, fe)
         try:
             sim2.restart(ckpt)
-        except RuntimeError as exc:
+        except ValueError as exc:
             msg = str(exc)
-            assert "checkpoint was created with a different compiled Program hash" in msg, \
-                "the hash mismatch must fail loud with the spec-46 message; got: %s" % msg
+            assert "identity" in msg and "bound runtime" in msg, \
+                "the canonical identity mismatch must fail before mutation; got: %s" % msg
             print("  hash mismatch raised as expected: %s" % msg.splitlines()[0][:120])
             return True
     raise AssertionError("restarting a different compiled Program must raise (spec test 46)")

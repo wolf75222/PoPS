@@ -29,7 +29,8 @@ import time
 import numpy as np
 
 import pops
-from pops.codegen.cache import _cache_so_path, pops_cache_dir
+from pops.codegen.cache import _identity_cache_so_path, pops_cache_dir
+from pops.identity import artifact_spec_identity, make_identity
 from pops.codegen.loader import CompiledModel
 from pops.codegen.toolchain import pops_include
 from pops.ir.expr import Var
@@ -68,11 +69,19 @@ def build_euler(name="euler_cache", gamma=GAMMA):
     return m
 
 
-from tests.python.support.initial_states import euler_bubble_state
+from tests.python.support.initial_states import euler_bubble_state  # noqa: E402
 
 
 def initial_state(n):
     return euler_bubble_state(n, GAMMA)
+
+
+def _typed_cache_path(model_hash, abi, backend, target):
+    semantic = make_identity("semantic", {"model_hash": model_hash})
+    spec = artifact_spec_identity(
+        semantic, target=target, backend=backend, precision="double", abi=abi,
+        toolchain="c++|c++23", routes={}, components={}, flags=[], libraries=())
+    return _identity_cache_so_path(spec)
 
 
 def pure_python_checks():
@@ -98,24 +107,24 @@ def pure_python_checks():
         abi = "fakeabikey"
         m = build_euler()
         h = m._model_hash()
-        p_aot = _cache_so_path(h, abi, "aot", "system", None)
-        p_aot_again = _cache_so_path(h, abi, "aot", "system", None)
+        p_aot = _typed_cache_path(h, abi, "aot", "system")
+        p_aot_again = _typed_cache_path(h, abi, "aot", "system")
         assert p_aot == p_aot_again, "cle de cache non deterministe pour un modele identique"
         assert p_aot.startswith(os.path.normpath(cache)), "le .so en cache doit vivre dans le cache dir"
 
         # backend / target / abi differents -> chemins distincts (memes model_hash)
-        assert _cache_so_path(h, abi, "production", "system", None) != p_aot, \
+        assert _typed_cache_path(h, abi, "production", "system") != p_aot, \
             "backend different doit donner un chemin different"
-        assert _cache_so_path(h, abi, "production", "amr_system", None) != \
-            _cache_so_path(h, abi, "production", "system", None), \
+        assert _typed_cache_path(h, abi, "production", "amr_system") != \
+            _typed_cache_path(h, abi, "production", "system"), \
             "target different doit donner un chemin different"
-        assert _cache_so_path(h, "autreabi", "aot", "system", None) != p_aot, \
+        assert _typed_cache_path(h, "autreabi", "aot", "system") != p_aot, \
             "abi_key differente doit donner un chemin different"
 
         # un PARAMETRE different change model_hash, donc le chemin de cache (cache MISS)
         m2 = build_euler(gamma=1.4)
         assert m2._model_hash() != h, "un param different doit changer model_hash"
-        assert _cache_so_path(m2._model_hash(), abi, "aot", "system", None) != p_aot, \
+        assert _typed_cache_path(m2._model_hash(), abi, "aot", "system") != p_aot, \
             "un param different doit buster le cache"
 
         # une FORMULE differente change aussi model_hash : on ajoute une source non triviale
@@ -123,7 +132,7 @@ def pure_python_checks():
         rho3 = Var("rho", "cons")
         m3.source([0.0 * rho3, 0.0 * rho3, 0.0 * rho3, rho3])  # source != defaut -> formules differentes
         assert m3._model_hash() != h, "une formule differente (source) doit changer model_hash"
-        assert _cache_so_path(m3._model_hash(), abi, "aot", "system", None) != p_aot, \
+        assert _typed_cache_path(m3._model_hash(), abi, "aot", "system") != p_aot, \
             "une formule differente doit buster le cache"
         print("OK  cle de cache : stable pour modele identique, distincte sur param/formule/backend/"
               "target/abi")
@@ -171,7 +180,10 @@ def end_to_end_checks():
                                                                variables=Primitive()))
             s.set_poisson(rhs="charge_density", solver="geometric_mg")
             s.set_state("gas", initial_state(n))
-            nsteps = s.run(t_end=0.02, cfl=0.4)
+            nsteps = 0
+            while s.time() < 0.02:
+                s.step_cfl(0.4)
+                nsteps += 1
             assert nsteps > 0 and np.all(np.isfinite(np.array(s.get_state("gas")))), \
                 "%s : run instable" % backend
             print("OK  %s : add_equation + run(%d pas) -> etat fini" % (backend, nsteps))
@@ -203,7 +215,11 @@ def end_to_end_checks():
                                                               variables=Primitive()))
         s.set_poisson(rhs="charge_density", solver="geometric_mg")
         s.set_state("gas", initial_state(n))
-        assert s.run(t_end=0.02, cfl=0.4) > 0, "run via so_path explicite instable"
+        nsteps = 0
+        while s.time() < 0.02:
+            s.step_cfl(0.4)
+            nsteps += 1
+        assert nsteps > 0, "run via so_path explicite instable"
         print("OK  retro-compat : compile(so_path, include, ...) explicite marche toujours")
     finally:
         for k, v in (("POPS_CACHE_DIR", old_cache), ("POPS_INCLUDE", old_inc)):

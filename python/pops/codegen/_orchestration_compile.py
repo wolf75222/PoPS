@@ -137,10 +137,72 @@ def attach_install_plan(
         compiled.bind_schema = resolved.bind_schema
     if hasattr(compiled, "model"):
         compiled.model = blocks[0].model
+    _attach_bundle_identities(
+        compiled, resolved, models, has_program=has_program)
     for model in models.values():
         if model is not compiled and isinstance(model, CompiledModel):
             # The artifact boundary is final: a subclass cannot replace _seal with a no-op.
             CompiledModel._seal(model)
+
+
+def _attach_bundle_identities(
+    compiled: Any, resolved: Any, models: Any, *, has_program: bool,
+) -> None:
+    """Authenticate every native component represented by one public artifact."""
+    from pops.codegen.cache import _precision_cache_key, _registry_cache_key
+    from pops.identity import (
+        artifact_identity, artifact_spec_identity, binary_bundle_identity, binary_identity,
+    )
+
+    semantic = resolved.snapshot.semantic_identity
+    binaries = {}
+    evidence = {}
+    for block in resolved.blocks:
+        model = models[block.name]
+        binary = binary_identity(model.so_path)
+        key = "model:%s" % block.name
+        binaries[key] = binary
+        evidence[key] = {
+            "binary": binary.to_data(),
+            "backend": str(model.backend),
+            "target": str(model.target),
+            "abi": str(model.abi_key),
+            "toolchain": "%s|%s" % (model.cxx, model.std),
+            "model_hash": str(model.model_hash),
+        }
+    if has_program:
+        binary = binary_identity(compiled.so_path)
+        binaries["program"] = binary
+        evidence["program"] = {
+            "binary": binary.to_data(),
+            "backend": "production",
+            "target": str(resolved.target),
+            "abi": str(compiled.abi_key),
+            "toolchain": "%s|%s" % (compiled.cxx, compiled.std),
+        }
+    backends = sorted({row["backend"] for row in evidence.values()})
+    spec = artifact_spec_identity(
+        semantic,
+        target=str(resolved.target),
+        backend=backends[0] if len(backends) == 1 else "mixed",
+        precision=_precision_cache_key(),
+        abi="bundle",
+        toolchain="bundle",
+        routes={"registry": _registry_cache_key()},
+        components=evidence,
+        flags=(),
+        libraries=(),
+        codegen_version="pops.codegen.bundle.v1",
+    )
+    bundle = binary_bundle_identity(binaries)
+    final = artifact_identity(spec, bundle)
+    for name, value in (
+        ("semantic_identity", semantic),
+        ("artifact_spec_identity", spec),
+        ("binary_identity", bundle),
+        ("artifact_identity", final),
+    ):
+        object.__setattr__(compiled, name, value)
 
 
 def capture_runtime_declarations(

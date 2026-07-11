@@ -71,6 +71,10 @@ class CompiledModel:
         # with the one BindSchema captured from the complete frozen Problem (all block instances).
         self.bind_schema = bind_schema
         self.install_plan = None
+        self.semantic_identity = None
+        self.artifact_spec_identity = None
+        self.binary_identity = None
+        self.artifact_identity = None
 
     def _seal(self) -> None:
         """Freeze a public per-block artifact after orchestration attaches metadata."""

@@ -65,15 +65,23 @@ class Module(ModuleFreezable):
         return self._owner_path
     # --- spaces ---
     def state_space(self, name: Any = "U", components: Any = (), roles: Any = None, layout: str = "cell",
-                    storage: str = "multifab") -> Any:
+                    storage: str = "multifab", *, representation: Any = "conservative",
+                    centering: Any = None, units: Any = None, frame: Any = "model",
+                    clock: Any = "simulation") -> Any:
         """Declare and return a :class:`StateSpace`."""
-        space = StateSpace(name, components, roles, layout, storage)
+        space = StateSpace(
+            name, components, roles, layout, storage, representation=representation,
+            centering=centering, units=units, frame=frame, clock=clock)
         return self._declare_descriptor(
             self._state_spaces, self._state_handles, space, "StateSpace", "state")
 
-    def field_space(self, name: Any, components: Any = (), layout: str = "cell") -> Any:
+    def field_space(self, name: Any, components: Any = (), layout: str = "cell", *,
+                    representation: Any = "field", centering: Any = None, units: Any = None,
+                    frame: Any = "model", clock: Any = "simulation") -> Any:
         """Declare and return a :class:`FieldSpace`."""
-        space = FieldSpace(name, components, layout)
+        space = FieldSpace(
+            name, components, layout, representation=representation, centering=centering,
+            units=units, frame=frame, clock=clock)
         return self._declare_descriptor(
             self._field_spaces, self._field_handles, space, "FieldSpace", "field")
 
@@ -104,9 +112,13 @@ class Module(ModuleFreezable):
 
         return parameter_value(self._param_registry, parameter)
 
-    def aux_field(self, name: Any, kind: str = "cell_scalar") -> Any:
+    def aux_field(self, name: Any, kind: str = "cell_scalar", *,
+                  representation: Any = "auxiliary", centering: Any = "cell",
+                  unit: Any = None, frame: Any = "model", clock: Any = "simulation") -> Any:
         """Declare and return one :class:`AuxSpace`."""
-        a = AuxSpace(name, kind)
+        a = AuxSpace(
+            name, kind, representation=representation, centering=centering, unit=unit,
+            frame=frame, clock=clock)
         return self._declare_descriptor(
             self._aux, self._aux_handles, a, "aux field", "aux")
 

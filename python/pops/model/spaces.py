@@ -39,6 +39,35 @@ def _metadata_key(value: Any) -> Any:
     return value
 
 
+def _semantic_tag(value: Any, where: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError("%s must be a non-empty string" % where)
+    return value
+
+
+def _component_units(components: tuple[str, ...], units: Any) -> tuple[str | None, ...]:
+    """Normalize units into component order; mapping insertion order is never semantic."""
+    if units is None:
+        return (None,) * len(components)
+    if isinstance(units, Mapping):
+        unknown = sorted(set(units) - set(components))
+        missing = sorted(set(components) - set(units))
+        if unknown or missing:
+            raise ValueError(
+                "Space units must name exactly the components (unknown=%r, missing=%r)"
+                % (unknown, missing)
+            )
+        values = tuple(units[name] for name in components)
+    else:
+        values = tuple(units)
+        if len(values) != len(components):
+            raise ValueError("Space units must have one entry per component")
+    for value in values:
+        if value is not None and (not isinstance(value, str) or not value):
+            raise ValueError("Space units entries must be non-empty strings or None")
+    return values
+
+
 class _ImmutableTypeValue:
     """Small value-object base: authoring type descriptors are immutable once built."""
 
@@ -62,7 +91,18 @@ class Space(_ImmutableTypeValue):
 
     kind = "space"
 
-    def __init__(self, name: Any, components: Any = (), layout: str = "cell") -> None:
+    def __init__(
+        self,
+        name: Any,
+        components: Any = (),
+        layout: str = "cell",
+        *,
+        representation: Any = None,
+        centering: Any = None,
+        units: Any = None,
+        frame: Any = "model",
+        clock: Any = "simulation",
+    ) -> None:
         if not isinstance(name, str) or not name:
             raise ValueError("Space name must be a non-empty string")
         normalized = tuple(components)
@@ -75,9 +115,26 @@ class Space(_ImmutableTypeValue):
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "components", normalized)
         object.__setattr__(self, "layout", layout)
+        object.__setattr__(self, "representation", _semantic_tag(
+            representation or self.kind, "Space representation"))
+        object.__setattr__(self, "centering", _semantic_tag(
+            centering or layout, "Space centering"))
+        object.__setattr__(self, "units", _component_units(normalized, units))
+        object.__setattr__(self, "frame", _semantic_tag(frame, "Space frame"))
+        object.__setattr__(self, "clock", _semantic_tag(clock, "Space clock"))
 
     def _key(self) -> Any:
-        return (self.kind, self.name, self.components, self.layout)
+        return (
+            self.kind,
+            self.name,
+            self.components,
+            self.layout,
+            self.representation,
+            self.centering,
+            self.units,
+            self.frame,
+            self.clock,
+        )
 
     def __eq__(self, other: Any) -> bool:
         return isinstance(other, Space) and self._key() == other._key()
@@ -86,8 +143,9 @@ class Space(_ImmutableTypeValue):
         return hash(self._key())
 
     def __repr__(self) -> str:
-        return "%s(%r, components=%r, layout=%r)" % (
-            type(self).__name__, self.name, list(self.components), self.layout)
+        return "%s(%r, components=%r, layout=%r, representation=%r, centering=%r)" % (
+            type(self).__name__, self.name, list(self.components), self.layout,
+            self.representation, self.centering)
 
     def to_data(self) -> dict[str, Any]:
         """Stable structural type identity used by Program IR serialization."""
@@ -96,6 +154,11 @@ class Space(_ImmutableTypeValue):
             "name": self.name,
             "components": list(self.components),
             "layout": self.layout,
+            "representation": self.representation,
+            "centering": self.centering,
+            "units": list(self.units),
+            "frame": self.frame,
+            "clock": self.clock,
         }
 
     # Operator-first signature sugar: ``U >> Fields`` and ``(U, Fields) >> Rate(U)``.
@@ -125,8 +188,19 @@ class StateSpace(Space):
     kind = "state"
 
     def __init__(self, name: Any = "U", components: Any = (), roles: Any = None, layout: str = "cell",
-                 storage: str = "multifab") -> None:
-        super().__init__(name, components, layout)
+                 storage: str = "multifab", *, representation: Any = "conservative",
+                 centering: Any = None, units: Any = None, frame: Any = "model",
+                 clock: Any = "simulation") -> None:
+        super().__init__(
+            name,
+            components,
+            layout,
+            representation=representation,
+            centering=centering,
+            units=units,
+            frame=frame,
+            clock=clock,
+        )
         object.__setattr__(self, "roles", _freeze_metadata(roles or {}))
         if not isinstance(storage, str) or not storage:
             raise ValueError("StateSpace storage must be a non-empty string")
@@ -170,7 +244,15 @@ class RateSpace(Space):
         # base remains the type authority; these mirrored fields make generic
         # Space consumers (not only Rate-aware ones) report the right shape.
         super().__init__(
-            "Rate(%s)" % base_name, components=base.components, layout=base.layout)
+            "Rate(%s)" % base_name,
+            components=base.components,
+            layout=base.layout,
+            representation="rate",
+            centering=base.centering,
+            units=base.units,
+            frame=base.frame,
+            clock=base.clock,
+        )
         object.__setattr__(self, "base_name", base_name)
         object.__setattr__(self, "base_space", base)
 
@@ -197,16 +279,35 @@ class AuxSpace(_ImmutableTypeValue):
     imposed magnetic field, a mask). Distinct from a FieldSpace, which an operator
     produces; an AuxSpace is imposed runtime data the operators may read."""
 
-    def __init__(self, name: Any, kind: str = "cell_scalar") -> None:
+    def __init__(self, name: Any, kind: str = "cell_scalar", *, representation: Any = "auxiliary",
+                 centering: Any = "cell", unit: Any = None, frame: Any = "model",
+                 clock: Any = "simulation") -> None:
         if not isinstance(name, str) or not name:
             raise ValueError("AuxSpace name must be a non-empty string")
         if not isinstance(kind, str) or not kind:
             raise ValueError("AuxSpace kind must be a non-empty string")
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "representation", _semantic_tag(
+            representation, "AuxSpace representation"))
+        object.__setattr__(self, "centering", _semantic_tag(centering, "AuxSpace centering"))
+        if unit is not None and (not isinstance(unit, str) or not unit):
+            raise ValueError("AuxSpace unit must be a non-empty string or None")
+        object.__setattr__(self, "unit", unit)
+        object.__setattr__(self, "frame", _semantic_tag(frame, "AuxSpace frame"))
+        object.__setattr__(self, "clock", _semantic_tag(clock, "AuxSpace clock"))
 
     def __repr__(self) -> str:
         return "AuxSpace(%r, kind=%r)" % (self.name, self.kind)
 
     def to_data(self) -> dict[str, Any]:
-        return {"kind": "aux", "name": self.name, "aux_kind": self.kind}
+        return {
+            "kind": "aux",
+            "name": self.name,
+            "aux_kind": self.kind,
+            "representation": self.representation,
+            "centering": self.centering,
+            "unit": self.unit,
+            "frame": self.frame,
+            "clock": self.clock,
+        }

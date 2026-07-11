@@ -323,6 +323,28 @@ void init_core(py::module_& m) {
            "Seal ModelSpec authoring; subsequent Python property writes fail.")
       .def_property_readonly("frozen", &ModelSpec::frozen, "Whether ModelSpec authoring is sealed.")
       .def(
+          "_semantic_data",
+          [](const ModelSpec& spec) {
+            py::dict data;
+            data["kind"] = "native-model-spec";
+            data["transport"] = spec.transport.get();
+            data["source"] = spec.source.get();
+            data["elliptic"] = spec.elliptic.get();
+            data["B0"] = spec.B0.get();
+            data["gamma"] = spec.gamma.get();
+            data["cs2"] = spec.cs2.get();
+            data["vacuum_floor"] = spec.vacuum_floor.get();
+            data["qom"] = spec.qom.get();
+            data["q"] = spec.q.get();
+            data["alpha"] = spec.alpha.get();
+            data["n0"] = spec.n0.get();
+            data["sign"] = spec.sign.get();
+            data["four_pi_G"] = spec.four_pi_G.get();
+            data["rho0"] = spec.rho0.get();
+            return data;
+          },
+          "Return the closed scientific projection consumed by PoPS semantic identity.")
+      .def(
           "_pops_freeze_snapshot",
           [](const ModelSpec& spec, const py::handle& capability) {
             require_freeze_transaction_capability(capability);

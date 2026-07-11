@@ -43,7 +43,9 @@ _DIAGNOSTICS = frozenset({
     "block_names", "inspect", "explain_bind", "check_model", "profile", "field",
     "patch_rectangles", "patch_boxes", "n_patches", "coarse_local_boxes", "coarse_total_boxes",
     "by_amr_mpi", "newton_report", "program_diagnostic", "program_diagnostics", "abi_key", "amr",
-    "lifecycle_state", "bound_snapshot", "program_report", "reduce_component",
+    "lifecycle_state", "bound_snapshot", "bind_identity", "last_run_manifest", "last_run_identity",
+    "last_restart_identity",
+    "program_report", "reduce_component",
 })
 
 # Write outputs / checkpoints; record a diagnostic scalar (the ADC-542 driver sink + composite AMR

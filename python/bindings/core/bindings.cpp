@@ -15,6 +15,7 @@
 
 PYBIND11_MODULE(_pops, m) {
   init_core(m);
+  init_identity(m);
   init_system(m);
   init_amr(m);
 }

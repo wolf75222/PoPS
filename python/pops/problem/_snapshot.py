@@ -12,19 +12,20 @@ the immutable value, hashing, construction, validation, and attachment lifecycle
 """
 from __future__ import annotations
 
-import hashlib
 import json
 from typing import Any
 
+from pops.identity import Identity, canonical_sha256
+from pops.identity.semantic import semantic_identity, semantic_value
 from pops.problem._snapshot_canonical import _canonical
 
 #: Bumped when the full snapshot's canonical shape changes. The compile-only projection has its own
 #: version below, so artifact-identity evolution does not rewrite the reproducibility schema.
-SNAPSHOT_SCHEMA_VERSION = 6
+SNAPSHOT_SCHEMA_VERSION = 7
 
 #: Independent namespace for the compile-identity projection. Changing which declaration facts
 #: affect generated artifacts bumps this version without rewriting the full snapshot schema.
-ARTIFACT_SCHEMA_VERSION = 1
+ARTIFACT_SCHEMA_VERSION = 2
 
 
 class AuthoringSnapshot:
@@ -39,7 +40,10 @@ class AuthoringSnapshot:
     """
 
     schema_version = SNAPSHOT_SCHEMA_VERSION
-    __slots__ = ("_canonical_json", "_hash", "_artifact_canonical_json", "_artifact_hash")
+    __slots__ = (
+        "_canonical_json", "_hash", "_semantic_canonical_json", "_semantic_identity",
+        "_artifact_canonical_json", "_artifact_hash",
+    )
 
     def __init__(
         self,
@@ -47,6 +51,7 @@ class AuthoringSnapshot:
         *,
         handle_resolver: Any = None,
         artifact_payload: Any = None,
+        semantic_payload: Any = None,
     ) -> None:
         # A deep, canonical, JSON-ready copy: no shared reference to a live registry, no runtime
         # object -- so there is no shallow-copy escape from the frozen identity.
@@ -62,8 +67,17 @@ class AuthoringSnapshot:
         canonical_json = json.dumps(
             out, sort_keys=False, separators=(",", ":"), allow_nan=False)
         object.__setattr__(self, "_canonical_json", canonical_json)
-        object.__setattr__(
-            self, "_hash", hashlib.sha256(canonical_json.encode("utf-8")).hexdigest())
+        object.__setattr__(self, "_hash", canonical_sha256(out))
+
+        # Problem builders always supply their closed scientific projection. Direct construction is
+        # a low-level provenance seam: there the caller's explicit payload is also the semantic
+        # declaration, after the strict snapshot projector has made it an inert value.
+        semantic_source = canonical_payload if semantic_payload is None else semantic_payload
+        semantic_data = semantic_value(semantic_source, where="AuthoringSnapshot semantic payload")
+        semantic_json = json.dumps(
+            semantic_data, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        object.__setattr__(self, "_semantic_canonical_json", semantic_json)
+        object.__setattr__(self, "_semantic_identity", semantic_identity(semantic_data))
 
         # This is a separately versioned preimage, not a scrub of the full canonical dict. The
         # Problem builder supplies an explicit parameter/model projection; standalone snapshots use
@@ -85,9 +99,7 @@ class AuthoringSnapshot:
         artifact_json = json.dumps(
             artifact_envelope, sort_keys=False, separators=(",", ":"), allow_nan=False)
         object.__setattr__(self, "_artifact_canonical_json", artifact_json)
-        object.__setattr__(
-            self, "_artifact_hash",
-            hashlib.sha256(artifact_json.encode("utf-8")).hexdigest())
+        object.__setattr__(self, "_artifact_hash", canonical_sha256(artifact_envelope))
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError("AuthoringSnapshot is immutable")
@@ -103,8 +115,17 @@ class AuthoringSnapshot:
 
     @property
     def hash(self) -> Any:
-        """The stable sha256 (64-hex) over the canonical ``to_dict`` (computed once, then cached)."""
+        """Provenance sha256 over canonical PoPS bytes of the exact authoring capture."""
         return self._hash
+
+    @property
+    def semantic_identity(self) -> Identity:
+        """Scientific identity, independent from presentation, runtime and lowering choices."""
+        return self._semantic_identity
+
+    def semantic_to_dict(self) -> dict[str, Any]:
+        """Return a detached copy of the exact semantic-identity payload."""
+        return json.loads(self._semantic_canonical_json)
 
     @property
     def artifact_hash(self) -> str:
@@ -126,8 +147,8 @@ class AuthoringSnapshot:
         return hash(self.hash)
 
     def __repr__(self) -> str:
-        return "AuthoringSnapshot(hash=%s..., artifact_hash=%s...)" % (
-            self.hash[:12], self.artifact_hash[:12])
+        return "AuthoringSnapshot(hash=%s..., semantic_identity=%s..., artifact_hash=%s...)" % (
+            self.hash[:12], self.semantic_identity.hexdigest[:12], self.artifact_hash[:12])
 
 
 def build_problem_snapshot(problem: Any) -> Any:
@@ -150,16 +171,20 @@ def build_problem_snapshot(problem: Any) -> Any:
         return snapshot
 
     from pops.problem._snapshot_payload import (
+        problem_semantic_payload,
         problem_snapshot_artifact_payload,
         problem_snapshot_payload,
     )
 
     payload = problem_snapshot_payload(problem)
     artifact_payload = problem_snapshot_artifact_payload(problem)
+    semantic_payload = problem_semantic_payload(
+        problem, layout=problem._layout, time=problem._time_registry.program)
     return AuthoringSnapshot(
         payload,
         handle_resolver=problem.resolve,
         artifact_payload=artifact_payload,
+        semantic_payload=semantic_payload,
     )
 
 
@@ -179,12 +204,14 @@ def build_authoring_snapshot(
     retaining the live objects.
     """
     from pops.problem._snapshot_payload import (
+        problem_semantic_payload,
         problem_snapshot_artifact_payload,
         problem_snapshot_payload,
     )
 
     full = problem_snapshot_payload(problem)
     artifact = problem_snapshot_artifact_payload(problem)
+    semantic = problem_semantic_payload(problem, layout=layout, time=time)
     context = {
         "layout": layout,
         "time": _compile_time_snapshot_value(time),
@@ -196,6 +223,7 @@ def build_authoring_snapshot(
         full,
         handle_resolver=problem.resolve,
         artifact_payload=artifact,
+        semantic_payload=semantic,
     )
 
 
@@ -229,9 +257,15 @@ def validate_problem_snapshot(snapshot: Any) -> str:
         raise ValueError("AuthoringSnapshot.hash must be exactly 64 lowercase hexadecimal characters")
     canonical_json = json.dumps(
         snapshot.to_dict(), sort_keys=False, separators=(",", ":"), allow_nan=False)
-    expected = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+    expected = canonical_sha256(json.loads(canonical_json))
     if snapshot_hash != expected:
         raise ValueError("AuthoringSnapshot.hash does not match its canonical payload")
+    semantic = snapshot.semantic_identity
+    if not isinstance(semantic, Identity) or semantic.domain != "semantic":
+        raise TypeError("AuthoringSnapshot.semantic_identity must be a semantic Identity")
+    expected_semantic = semantic_identity(snapshot.semantic_to_dict())
+    if semantic != expected_semantic:
+        raise ValueError("AuthoringSnapshot.semantic_identity does not match its semantic payload")
     artifact_hash = snapshot.artifact_hash
     if not isinstance(artifact_hash, str) or len(artifact_hash) != 64 \
             or any(char not in "0123456789abcdef" for char in artifact_hash):
@@ -249,7 +283,7 @@ def validate_problem_snapshot(snapshot: Any) -> str:
         raise TypeError("AuthoringSnapshot artifact projection payload must be a mapping")
     artifact_json = json.dumps(
         artifact_data, sort_keys=False, separators=(",", ":"), allow_nan=False)
-    expected_artifact = hashlib.sha256(artifact_json.encode("utf-8")).hexdigest()
+    expected_artifact = canonical_sha256(json.loads(artifact_json))
     if artifact_hash != expected_artifact:
         raise ValueError(
             "AuthoringSnapshot.artifact_hash does not match its canonical artifact projection")

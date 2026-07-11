@@ -12,6 +12,7 @@ pytest.importorskip("pops")
 
 from pops import model
 from pops.codegen.loader import CompiledProblem
+from pops.identity import make_identity
 from pops.math import Bool, Integer, Real
 from pops.params import (
     ConstParam,
@@ -370,18 +371,22 @@ def test_bound_snapshot_records_effective_values_sources_and_schema_identity():
     def snapshot(value):
         resolved = schema.resolve({left[speed]: value})
         return BoundSnapshot(
-            layout="system",
+            semantic_identity=make_identity("semantic", {"problem": "bind-schema"}),
+            artifact_identity=make_identity("artifact", {"binary": "bind-schema"}),
+            layout={"kind": "uniform"}, blocks=[], solvers={},
+            cadence={"kind": "engine-default", "substeps": 1, "stride": 1,
+                     "cfl": "default"},
             params=resolved.rows(),
-            bind_schema_hash=schema.hash,
-            bind_schema_artifact_hash=schema.artifact_hash,
+            aux_evidence={}, initial_evidence={}, outputs=[], diagnostics=[],
+            bind_schema_identity=make_identity("bind-schema", schema.to_dict()),
         )
 
     first = snapshot(2.0)
     second = snapshot(3.0)
-    assert first.snapshot_hash != second.snapshot_hash
+    assert first.bind_identity != second.bind_identity
     payload = first.to_dict()
-    assert payload["bind_schema_hash"] == schema.hash
-    assert payload["bind_schema_artifact_hash"] == schema.artifact_hash
+    assert payload["bind_schema_identity"]["hexdigest"] == make_identity(
+        "bind-schema", schema.to_dict()).hexdigest
     rows = {row["qid"]: row for row in payload["params"]}
     assert rows[schema.slot(left[speed]).qid]["source"] == "override"
     assert rows[schema.slot(left[speed]).qid]["value"]["kind"] == "binary64"
@@ -393,17 +398,18 @@ def test_amr_bound_snapshot_retains_installed_program_identity_and_bindings():
     schema, left, _, speed, _ = _two_instance_schema(default=1.5)
     resolved = schema.resolve({left[speed]: 2.0})
     compiled = SimpleNamespace(
-        program_hash="program-hash", abi_key="abi-key", cache_key="cache-key"
+        semantic_identity=make_identity("semantic", {"problem": "amr-bind"}),
+        artifact_identity=make_identity("artifact", {"binary": "amr-bind"}),
     )
     cadence = SimpleNamespace(substeps=2, stride=3, cfl="default")
-    engine = SimpleNamespace(_output_policies=[])
+    engine = SimpleNamespace(_output_policies=[], _diagnostic_measures=[])
 
     snapshot = build_amr_snapshot(
         engine, compiled, {}, {}, cadence, {}, resolved
     ).to_dict()
-    assert snapshot["program_hash"] == "program-hash"
-    assert snapshot["abi_key"] == "abi-key"
-    assert snapshot["cache_key"] == "cache-key"
-    assert snapshot["cadence"] == {"substeps": 2, "stride": 3, "cfl": None}
-    assert snapshot["bind_schema_hash"] == schema.hash
+    assert snapshot["semantic_identity"]["domain"] == "semantic"
+    assert snapshot["artifact_identity"]["domain"] == "artifact"
+    assert snapshot["cadence"] == {
+        "kind": "compiled-time", "substeps": 2, "stride": 3, "cfl": "default"}
+    assert snapshot["bind_schema_identity"]["domain"] == "bind-schema"
     assert len(snapshot["params"]) == len(schema.slots)

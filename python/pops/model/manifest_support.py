@@ -27,6 +27,11 @@ def state_space_row(space: Any) -> Any:
         "roles": dict(getattr(space, "roles", {}) or {}),
         "layout": getattr(space, "layout", "cell"),
         "storage": getattr(space, "storage", "multifab"),
+        "representation": space.representation,
+        "centering": space.centering,
+        "units": list(space.units),
+        "frame": space.frame,
+        "clock": space.clock,
     }
 
 
@@ -34,6 +39,11 @@ def field_space_row(space: Any) -> Any:
     return {
         "components": list(space.components),
         "layout": getattr(space, "layout", "cell"),
+        "representation": space.representation,
+        "centering": space.centering,
+        "units": list(space.units),
+        "frame": space.frame,
+        "clock": space.clock,
     }
 
 

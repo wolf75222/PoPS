@@ -65,7 +65,6 @@ from pops.codegen.toolchain import (  # noqa: F401
 )
 from pops.codegen.cache import (  # noqa: F401
     pops_cache_dir,
-    _cache_so_path,
     _backend_distinct_so_path,
     _record_so_backend,
     _native_mpi_flags,

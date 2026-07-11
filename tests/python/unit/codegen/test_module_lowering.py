@@ -192,11 +192,10 @@ def _fe_program_default(model, name="spec"):
     return P
 
 
-def test_compile_problem_chain_honest_absence_for_moduleless_model(monkeypatch, tmp_path):
-    # A model with NO backing operator-first Module (e.g. the native brick _pops.ModelSpec on the
-    # real route) yields an honestly-absent trace: manifest None, module_hash None -- never
-    # fabricated. Modeled here with a minimal module-less duck (no .module, no .check), the same
-    # shape lower_and_validate sees for a ModelSpec.
+def test_compile_problem_chain_refuses_a_moduleless_model_duck(monkeypatch, tmp_path):
+    # Semantic identity requires an authenticated Module authority or one of the explicitly
+    # supported physical models. A shape-compatible duck must fail instead of producing an
+    # unauthenticated artifact with an "honestly absent" identity.
     class _ModulelessModel:
         name = "spec"
         cons_names = ["rho", "mx", "my"]
@@ -216,10 +215,9 @@ def test_compile_problem_chain_honest_absence_for_moduleless_model(monkeypatch, 
 
     cd = _stub_toolchain(monkeypatch, tmp_path)
     model = _ModulelessModel()
-    compiled = cd.compile_problem(time=_fe_program_default(model), model=model,
-                                  include=str(tmp_path))
-    assert compiled.module_manifest is None, "no backing Module -> manifest honestly absent"
-    assert compiled.module_hash() is None, "no backing Module -> module_hash honestly absent"
+    with pytest.raises(TypeError, match="Module authority|supported model|semantic model identity"):
+        cd.compile_problem(time=_fe_program_default(model), model=model,
+                           include=str(tmp_path))
 
 
 if __name__ == "__main__":

@@ -84,15 +84,16 @@ class RuntimeInspectionReport(Report):
                         rt.get("precision"), rt.get("communicator")))
         lines.append("  program     : installed=%s hash=%s"
                      % (self.program.get("installed"), self.program.get("hash") or "(none)"))
-        # RUNTIME FREEZE LIFECYCLE (ADC-592): the state, and once bound the snapshot hash + a one-line
+        # RUNTIME FREEZE LIFECYCLE: the state, canonical bind identity and frozen composition.
         # block / solver summary of what was frozen.
         lines.append("  lifecycle   : %s" % self.lifecycle)
         snap = self.bound_snapshot
         if snap is not None:
             snap_blocks = ", ".join(str(b.get("name")) for b in snap.get("blocks", [])) or "(none)"
             snap_solvers = ", ".join(sorted(snap.get("solvers", {}))) or "(none)"
-            lines.append("  bound       : snapshot=%s blocks=[%s] solvers=[%s]"
-                         % (snap.get("snapshot_hash", "(none)"), snap_blocks, snap_solvers))
+            identity = snap.get("bind_identity", {})
+            lines.append("  bound       : identity=%s blocks=[%s] solvers=[%s]"
+                         % (identity.get("hexdigest", "(none)"), snap_blocks, snap_solvers))
         lines.append("  profile     : source=%s scopes=%d counters=%d"
                      % (prof.get("source"), len(prof.get("scopes", {})),
                         len(prof.get("counters", {}))))
@@ -209,21 +210,13 @@ def _lifecycle(sim: Any) -> Any:
 
 
 def _bound_snapshot(sim: Any) -> Any:
-    """The BoundSnapshot manifest of what pops.bind froze, as a plain dict + its hash (ADC-592).
-
-    Reads the engine's ``bound_snapshot`` (None before bind); serialises it via ``to_dict()`` and
-    folds in the stable ``snapshot_hash`` so inspection carries the frozen identity. Returns None when
-    the engine was never bound (an engine driven by the low-level seam without pops.bind)."""
+    """Canonical BindManifest of what ``pops.bind`` froze, as a detached plain dict."""
     snap = getattr(sim, "bound_snapshot", None)
     if snap is None:
         return None
     to_dict: Any = getattr(snap, "to_dict", None)
     raw: Any = to_dict() if callable(to_dict) else {}
-    payload: Any = dict(raw)
-    snapshot_hash = getattr(snap, "snapshot_hash", None)
-    if snapshot_hash is not None:
-        payload["snapshot_hash"] = snapshot_hash
-    return payload
+    return dict(raw)
 
 
 def _history(sim: Any) -> Any:

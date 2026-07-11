@@ -67,6 +67,14 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixi
         "roe_dissipation", "roe_from_jacobian",
     })
 
+    def _semantic_data(self) -> dict[str, Any]:
+        """Closed low-level semantic protocol for the formula codegen model."""
+        return {
+            "kind": "hyperbolic-model",
+            "owner": self.name,
+            "component_digest": self._model_hash(),
+        }
+
     def __init__(self, name: Any) -> None:
         if not isinstance(name, str) or not name:
             raise TypeError("HyperbolicModel: name must be a non-empty string")

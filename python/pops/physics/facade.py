@@ -459,10 +459,14 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
             return self._module_cache
         mod = _model.Module(self.name, owner=self._m.owner_path)
         st = self._m.state_space()
-        mod.state_space(st.name, st.components, roles=st.roles, layout=st.layout,
-                        storage=st.storage)
+        mod.state_space(
+            st.name, st.components, roles=st.roles, layout=st.layout, storage=st.storage,
+            representation=st.representation, centering=st.centering, units=st.units,
+            frame=st.frame, clock=st.clock)
         fs = self._m.field_space()
-        mod.field_space(fs.name, fs.components, layout=fs.layout)
+        mod.field_space(
+            fs.name, fs.components, layout=fs.layout, representation=fs.representation,
+            centering=fs.centering, units=fs.units, frame=fs.frame, clock=fs.clock)
         # ``module`` is a typed view of this exact model definition, not another
         # declaration owner. Share the one registry so handles never acquire a
         # parallel authority with merely equal-looking IDs.
@@ -470,7 +474,6 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         mod.adopt_registry(self._m.operator_registry())
         self._module_cache = mod
         return mod
-
     # --- operator introspection (Spec 2, S2-5) ---
     def list_operators(self) -> Any:
         """Names of the typed operators this model exposes (registration order)."""

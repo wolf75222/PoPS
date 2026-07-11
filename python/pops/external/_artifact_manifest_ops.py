@@ -64,9 +64,14 @@ def build_compiled_manifest(compiled):
     bind_schema_artifact_hash = bind_schema.artifact_hash if bind_schema is not None else None
 
     caps_flags = _caps_flags(compiled)
-    from pops.runtime_environment import compiled_runtime_facts
+    from pops.runtime_environment import runtime_environment_report
 
-    runtime_facts = compiled_runtime_facts(supports_mpi=caps_flags.get("supports_mpi"))
+    runtime_facts = runtime_environment_report()
+    # Manifest compatibility fields describe what these bytes REQUIRE, not every capability the
+    # abstract production route could provide under another build.  A serial native artifact must
+    # therefore remain bindable to the serial runtime that produced it.
+    if runtime_facts.get("mpi_compiled") is not None:
+        caps_flags["supports_mpi"] = bool(runtime_facts["mpi_compiled"])
     return CompiledArtifactManifest(
         model_name=model_name, abi_key=abi_key, abi_version=None,
         required_headers_sig=_headers_sig(abi_key), blocks=blocks, variables=variables,

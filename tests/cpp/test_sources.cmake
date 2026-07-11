@@ -54,6 +54,7 @@ set(POPS_CPP_TEST_SOURCE_test_box_array "tests/cpp/unit/mesh/test_box_array.cpp"
 set(POPS_CPP_TEST_SOURCE_test_brick_catalog "tests/cpp/integration/runtime/test_brick_catalog.cpp")
 set(POPS_CPP_TEST_SOURCE_test_cache_manager "tests/cpp/integration/runtime/test_cache_manager.cpp")
 set(POPS_CPP_TEST_SOURCE_test_capability_report "tests/cpp/integration/runtime/test_capability_report.cpp")
+set(POPS_CPP_TEST_SOURCE_test_canonical_identity "tests/cpp/unit/core/test_canonical_identity.cpp")
 set(POPS_CPP_TEST_SOURCE_test_cf_interface "tests/cpp/integration/amr/test_cf_interface.cpp")
 set(POPS_CPP_TEST_SOURCE_test_program_reflux_ledger "tests/cpp/integration/amr/test_program_reflux_ledger.cpp")
 set(POPS_CPP_TEST_SOURCE_test_cfl_dt "tests/cpp/unit/numerics/test_cfl_dt.cpp")
