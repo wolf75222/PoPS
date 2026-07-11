@@ -167,6 +167,26 @@ TEST(RouteIds, HistoricalAliasesResolveToCanonicalRoute) {
       << "route_token(kExplicitSsprk2) == 'explicit' (canonique)";
 }
 
+TEST(RouteIds, UnknownAndReservedNumericIdsAreRefused) {
+  const std::string unknown =
+      throw_message([] { (void)route_info(static_cast<TimeRouteId>(99)); });
+  EXPECT_TRUE(contains(unknown, "time") && contains(unknown, "99"));
+  const std::string reserved =
+      throw_message([] { (void)route_info(static_cast<TimeRouteId>(kReservedRouteWireId255)); });
+  EXPECT_TRUE(contains(reserved, "time") && contains(reserved, "255"));
+}
+
+TEST(RouteIds, RegistrySignatureAuthenticatesFullContent) {
+  const std::string signature = route_registry_signature();
+  EXPECT_TRUE(signature.rfind("v1:", 0) == 0) << signature;
+  EXPECT_TRUE(signature.size() == 19) << "v1: plus sixteen lowercase hex digits";
+  EXPECT_TRUE(throw_message([&] { verify_route_manifest("", "test"); }).find("missing") !=
+              std::string::npos);
+  EXPECT_TRUE(throw_message([&] { verify_route_manifest("v1:0000000000000000", "test"); })
+                  .find("mismatch") != std::string::npos);
+  EXPECT_NO_THROW(verify_route_manifest(signature, "test"));
+}
+
 TEST(RouteIds, RouteInfoCarriesNativeEntryRequirementsAndLimitations) {
   EXPECT_TRUE(std::string(route_info(RiemannRouteId::kHllc).native_entry) == "pops::HLLCFlux" &&
               contains(route_info(RiemannRouteId::kHllc).requirements, "pressure"))

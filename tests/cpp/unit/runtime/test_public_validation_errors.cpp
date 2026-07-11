@@ -12,6 +12,7 @@
 #include <pops/numerics/elliptic/linear/krylov_solver.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/runtime/program/program_context.hpp>
 
 #include <exception>
 #include <string>
@@ -42,6 +43,22 @@ template <class F>
 }  // namespace
 
 using namespace pops;
+
+TEST(PublicValidationErrors, ProgramWireIdsNeverFallback) {
+  using namespace pops::runtime::program;
+  EXPECT_TRUE(ThrowsWithMessage(
+      [] { validate_linear_solve_method(99, "test"); }, {"LinearSolveMethod", "99"}));
+  EXPECT_TRUE(ThrowsWithMessage(
+      [] { validate_linear_solve_method(kLinearSolveReserved4, "test"); },
+      {"LinearSolveMethod", "4"}));
+  EXPECT_TRUE(ThrowsWithMessage(
+      [] { validate_assembly_write_role(kPhi, "test"); }, {"AssemblyFieldRole", "6"}));
+  EXPECT_TRUE(ThrowsWithMessage(
+      [] { validate_assembly_read_role(kFlux, "test"); }, {"AssemblyFieldRole", "5"}));
+  EXPECT_NO_THROW(validate_linear_solve_method(kLinearSolveBicgstab, "test"));
+  EXPECT_NO_THROW(validate_assembly_write_role(kFlux, "test"));
+  EXPECT_NO_THROW(validate_assembly_read_role(kPhi, "test"));
+}
 
 TEST(PublicValidationErrors, Fab2DRejectsZeroComponents) {
   const Box2D valid = Box2D::from_extents(2, 2);

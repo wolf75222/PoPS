@@ -99,9 +99,11 @@ def test_registry_hash_is_a_sha256_digest():
 
 
 def test_registry_signature_families_and_counts():
-    # All 14 families, registry order, with the acceptance-locked cardinalities.
-    expected = ",".join("%s:%d" % (fam, n) for fam, n in _FAMILY_COUNTS)
-    assert routes.route_registry_signature() == expected, routes.route_registry_signature()
+    # Content-authenticated signature; family counts remain locked independently below.
+    signature = routes.route_registry_signature()
+    assert signature.startswith("v%d:" % routes.ROUTE_REGISTRY_VERSION)
+    assert len(signature.rsplit(":", 1)[1]) == 16
+    assert tuple((fam, len(routes.routes_of(fam))) for fam, _ in _FAMILY_COUNTS) == _FAMILY_COUNTS
 
 
 # --- 3: a runtime param VALUE never recompiles; a const param value does -----------------------
@@ -149,10 +151,8 @@ def test_route_registry_components_keys_and_consistency():
 def test_signature_is_stable_and_derived_from_routes_of():
     first = routes.route_registry_signature()
     assert first == routes.route_registry_signature(), "the signature is stable across calls"
-    # The compact signature IS the joined family:count list of the routes_of() cardinalities, so a
-    # stale artifact can name the mismatching family before any run.
-    derived = ",".join("%s:%d" % (fam, len(routes.routes_of(fam))) for fam, _ in _FAMILY_COUNTS)
-    assert first == derived, "signature mirrors the routes_of() family cardinalities"
+    assert first.startswith("v%d:" % routes.ROUTE_REGISTRY_VERSION)
+    assert all(len(routes.routes_of(fam)) == count for fam, count in _FAMILY_COUNTS)
 
 
 if __name__ == "__main__":

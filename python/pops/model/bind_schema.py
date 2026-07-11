@@ -15,14 +15,20 @@ from typing import Any
 
 from pops.model.handles import ParamHandle
 from pops.model.ownership import OwnerKind
+from pops._manifest_protocol import (
+    manifest_envelope,
+    parse_manifest_envelope,
+    strict_json_loads,
+)
 
-from ._bind_schema_data import exact_mapping
+from ._bind_schema_aliases import validate_authoring_aliases, validate_serialized_aliases
 from ._bind_slot import BindSlot
 from .resolved_bindings import ResolvedBindings
 
 
-BIND_SCHEMA_VERSION = 1
-_SCHEMA_KEYS = {"schema_version", "slots"}
+BIND_SCHEMA_VERSION = 2
+_MANIFEST_KIND = "bind-schema"
+_PAYLOAD_KEYS = {"slots", "aliases"}
 
 
 def _resolved_bind_data(declaration: Any, resolver: Any) -> dict[str, Any]:
@@ -53,7 +59,9 @@ class BindSchema:
 
     __slots__ = ("schema_version", "_slots", "_by_handle", "_aliases")
 
-    def __init__(self, slots: Any = (), *, aliases: Any = None) -> None:
+    def __init__(
+        self, slots: Any = (), *, aliases: Any = None, _serialized_aliases: Any = None,
+    ) -> None:
         try:
             values = tuple(slots)
         except TypeError:
@@ -76,29 +84,14 @@ class BindSchema:
         object.__setattr__(self, "schema_version", BIND_SCHEMA_VERSION)
         object.__setattr__(self, "_slots", values)
         object.__setattr__(self, "_by_handle", MappingProxyType(by_handle))
-        object.__setattr__(self, "_aliases", self._validate_aliases(aliases or {}))
+        if aliases is not None and _serialized_aliases is not None:
+            raise TypeError("BindSchema aliases have two competing authorities")
+        if _serialized_aliases is not None:
+            checked_aliases = validate_serialized_aliases(_serialized_aliases, self._slots)
+        else:
+            checked_aliases = validate_authoring_aliases(aliases or {}, self._by_handle)
+        object.__setattr__(self, "_aliases", checked_aliases)
         self._validate_dependencies()
-
-    def _validate_aliases(self, aliases: Any) -> Mapping[str, ParamHandle]:
-        if not isinstance(aliases, Mapping):
-            raise TypeError("BindSchema aliases must be a ParamHandle mapping")
-        # Never retain a live authoring Handle here.  A block-qualified ParamHandle points at the
-        # issuing BlockHandle, which in turn owns the case registry capability.  The process-local
-        # qualified id already contains that opaque authoring serial and the complete owner path;
-        # storing only this scalar authentication token preserves alias lookup without keeping the
-        # Problem/model/registries alive in a compiled artifact.
-        checked: dict[str, ParamHandle] = {}
-        for alias, canonical in aliases.items():
-            if not isinstance(alias, ParamHandle) or not isinstance(canonical, ParamHandle):
-                raise TypeError("BindSchema aliases must map ParamHandle to ParamHandle")
-            if canonical not in self._by_handle:
-                raise ValueError("BindSchema alias targets an unknown canonical ParamHandle")
-            alias_key = alias.qualified_id
-            previous = checked.get(alias_key)
-            if previous is not None and previous != canonical:
-                raise ValueError("BindSchema alias resolves to multiple parameter slots")
-            checked[alias_key] = canonical
-        return MappingProxyType(checked)
 
     @staticmethod
     def _scope_key(handle: ParamHandle) -> Any:
@@ -415,34 +408,40 @@ class BindSchema:
             sources[slot.handle] = "derived"
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "schema_version": self.schema_version,
-            "slots": [slot.to_dict() for slot in self._slots],
-        }
+        return manifest_envelope(
+            kind=_MANIFEST_KIND,
+            schema_version=self.schema_version,
+            payload={
+                "slots": [slot.to_dict() for slot in self._slots],
+                "aliases": {
+                    alias_qid: target.qualified_id
+                    for alias_qid, target in sorted(self._aliases.items())
+                },
+            },
+        )
 
     @classmethod
     def from_dict(cls, data: Any) -> BindSchema:
-        row = exact_mapping(data, _SCHEMA_KEYS, where="BindSchema")
-        version = row["schema_version"]
-        if isinstance(version, bool) or not isinstance(version, int):
-            raise TypeError("BindSchema schema_version must be an integer")
-        if version != BIND_SCHEMA_VERSION:
-            raise ValueError(
-                "unsupported BindSchema schema_version %r (expected %d)"
-                % (version, BIND_SCHEMA_VERSION)
-            )
+        row = parse_manifest_envelope(
+            data,
+            kind=_MANIFEST_KIND,
+            schema_version=BIND_SCHEMA_VERSION,
+            payload_keys=_PAYLOAD_KEYS,
+            where="BindSchema",
+        )
         if not isinstance(row["slots"], (list, tuple)):
             raise TypeError("BindSchema slots must be a list")
-        result = cls(BindSlot.from_dict(slot) for slot in row["slots"])
-        if result.to_dict() != dict(row):
+        result = cls(
+            (BindSlot.from_dict(slot) for slot in row["slots"]),
+            _serialized_aliases=row["aliases"],
+        )
+        if result.to_dict() != dict(data):
             raise ValueError("BindSchema payload is not canonical")
         return result
 
     @classmethod
     def from_json(cls, text: Any) -> BindSchema:
-        if not isinstance(text, str):
-            raise TypeError("BindSchema.from_json requires a string")
-        return cls.from_dict(json.loads(text))
+        return cls.from_dict(strict_json_loads(text, where="BindSchema JSON"))
 
     def to_json(self, *, indent: int | None = None) -> str:
         return json.dumps(
@@ -455,10 +454,17 @@ class BindSchema:
         return hashlib.sha256(self.to_json().encode("utf-8")).hexdigest()
 
     def artifact_data(self) -> dict[str, Any]:
-        return {
-            "schema_version": self.schema_version,
-            "slots": [slot.artifact_data() for slot in self._slots],
-        }
+        # Authoring aliases contain process-local capability qids. They are authenticated by
+        # ``hash`` and restored by the full wire form, but are not compile semantics and must not
+        # make an otherwise reusable native artifact depend on one authoring session.
+        return manifest_envelope(
+            kind=_MANIFEST_KIND,
+            schema_version=self.schema_version,
+            payload={
+                "slots": [slot.artifact_data() for slot in self._slots],
+                "aliases": {},
+            },
+        )
 
     @property
     def artifact_hash(self) -> str:

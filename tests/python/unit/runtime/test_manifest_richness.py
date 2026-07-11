@@ -113,13 +113,13 @@ def test_rich_fields_populated_from_real_metadata():
     # Ghost depth + field outputs from the bind table / IR.
     assert m.ghost_depth == 2
     assert "phi" in m.field_outputs
-    # Native runtime facts from ADC-602/ADC-609.
-    assert m.dimension == 2
-    assert m.amr_refinement_ratio == 2
-    assert m.precision == "double"
-    assert m.real_bytes == 8
-    assert m.communicator == "serial"
-    assert m.supports_custom_communicator is False
+    # Runtime-side construction cannot attest facts about future artifact bytes.
+    assert m.dimension is None
+    assert m.amr_refinement_ratio is None
+    assert m.precision is None
+    assert m.real_bytes is None
+    assert m.communicator is None
+    assert m.supports_custom_communicator is None
 
 
 def test_roles_unknown_when_model_records_none():
@@ -140,9 +140,7 @@ def test_caps_sourced_flags_read_from_backend_caps():
     cp = _compiled(caps={"cpu": True, "mpi": True, "amr": True, "gpu": False})
     m = cp.manifest()
     assert m.supports_uniform is True   # cpu -> uniform
-    # Compatibility facts describe what these bytes REQUIRE. This serial build does not require
-    # MPI even though the abstract production route can support it in an MPI-enabled build.
-    assert m.supports_mpi is False
+    assert m.supports_mpi is True
     assert m.supports_amr is True
     assert m.supports_gpu is False      # a genuine False, honestly reported
 
@@ -174,7 +172,7 @@ def test_caps_flags_unknown_when_no_caps():
     for flag in ("supports_uniform", "supports_amr", "supports_gpu"):
         assert getattr(m, flag) is None, "%s must be None when the model records no caps" % flag
         assert flag in m.needs_cpp_followup()
-    assert m.supports_mpi is False  # exact serial build requirement, independent of route caps
+    assert m.supports_mpi is None
 
 
 # ---------------------------------------------------------------------------
@@ -186,23 +184,25 @@ def test_to_dict_round_trips_and_print_works():
     cp = _compiled(params=_default_params())
     m = cp.manifest()
     d = m.to_dict()
-    assert d["model_name"] == "manifest_demo"
-    assert d["blocks"] == ["plasma"]
-    assert d["supports_amr"] is True
-    assert d["supports_stride"] is None  # unknown stays None through serialisation
-    assert d["dimension"] == 2
-    assert d["amr_refinement_ratio"] == 2
-    assert d["precision"] == "double"
-    assert d["supports_custom_communicator"] is False
-    assert "capability_matrix" in d
+    assert d["protocol"] == "pops.manifest" and d["kind"] == "compiled-artifact"
+    payload = d["payload"]
+    assert payload["model_name"] == "manifest_demo"
+    assert payload["blocks"] == ["plasma"]
+    assert payload["supports_amr"] is True
+    assert payload["supports_stride"] is None
+    assert payload["dimension"] is None
+    assert payload["amr_refinement_ratio"] is None
+    assert payload["precision"] is None
+    assert payload["supports_custom_communicator"] is None
+    assert "capability_matrix" in payload
     assert any(row["feature"] == "checkpoint:parallel_hdf5"
                and row["status"] == "unavailable"
-               for row in d["capability_matrix"])
+               for row in payload["capability_matrix"])
     assert json.loads(json.dumps(d)) == d, "to_dict is JSON round-trippable"
     text = str(m)
     assert "compiled-artifact manifest" in text
     assert "supports_amr" in text and "yes" in text
-    assert "dimension=2" in text
+    assert "dimension=None" in text
     assert "precision=double" in text
     assert "unknown" in text  # the unknown flags render as 'unknown', not 'no'
     assert "needs C++ follow-up" in text

@@ -213,14 +213,16 @@ def test_read_manifest_reads_without_registering():
     from pops.external import read_manifest, CompiledManifest
     from pops import descriptors as desc
     # ADC-611 : le schema strict versionne exige schema_version (et chaque champ d'entree).
-    # ADC-544 : le schema passe a la v2 (les champs v2 sont optionnels; native_id defaut = id).
+    row = {
+        "id": "my_flux", "category": "riemann", "native_id": "my_flux",
+        "requirements": "physical_flux,wave_speeds", "capabilities": "provides_x",
+        "supported_layouts": "", "supported_platforms": "", "params": "", "options": "",
+        "exported_symbols": "",
+    }
     manifest = {
-        "schema_version": 2,
+        "schema_version": desc.BRICK_MANIFEST_SCHEMA_VERSION,
         "abi_key": "pops-test-abi",
-        "bricks": [
-            {"id": "my_flux", "category": "riemann",
-             "requirements": "physical_flux,wave_speeds", "capabilities": "provides_x"},
-        ],
+        "annotations": {}, "bricks": [row],
     }
     desc._clear_external_catalog()
     fd, path = tempfile.mkstemp(suffix=".json")

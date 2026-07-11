@@ -94,7 +94,7 @@ def restore_histories(system, d, fired_out=None):
         if policy_key not in d:
             raise RuntimeError(
                 "restart : history '%s' lacks its required persistence manifest" % hname)
-        policy = HistoryPersistence.from_manifest(json.loads(str(d[policy_key])))
+        policy = HistoryPersistence.from_json(str(d[policy_key]))
         stored = [int(s) for s in d["history_stored_slots_" + hname]]
         expected = list(policy.stored_slots(depth))
         if sorted(stored) != expected:

@@ -1,9 +1,8 @@
 """pops.external.manifests -- read + register a compiled-brick manifest (Spec 5 sec.5.17).
 
-A manifest is the JSON ``pops_brick_manifest()`` exports under the STRICT versioned schema (ADC-611 /
-ADC-544): ``{"schema_version": 2, "abi_key": <opt>, "bricks": [{"id", "category", "requirements",
-"capabilities", <optional native_id / supported_layouts / supported_platforms / params / options /
-exported_symbols>}, ...]}``. It can be read from a ``.json`` file or from a ``.so`` (dlopened).
+A manifest is the JSON ``pops_brick_manifest()`` exports under the strict v3 schema: every ABI and
+brick compatibility field is explicit, and documentary ``annotations`` are carried losslessly.
+It can be read from a ``.json`` file or from a ``.so`` (dlopened).
 :func:`register` / :func:`register_manifest_file` register the ids in the in-process catalog owned by
 :mod:`pops.descriptors`; :func:`read_manifest` is the read-only counterpart that returns the metadata
 WITHOUT registering or executing anything. The strict parse (schema_version / required fields /
@@ -12,15 +11,21 @@ unknown-field refusal) lives ONCE in :func:`pops.descriptors.parse_brick_manifes
 from __future__ import annotations
 
 import ctypes
+import os
 from typing import Any
 
-from pops.descriptors import (BRICK_MANIFEST_SCHEMA_VERSION, load_cpp_library, _register_manifest,
-                              parse_brick_manifest)
+from pops.descriptors import (
+    BRICK_MANIFEST_SCHEMA_VERSION,
+    _parse_brick_manifest_document,
+    _register_manifest,
+    load_cpp_library,
+    parse_brick_manifest,
+)
 
 
 def register_manifest_file(path: Any) -> Any:
     """Register the bricks in a manifest ``.json`` file. Returns the count registered."""
-    with open(str(path), "r", encoding="utf-8") as handle:
+    with open(str(path), encoding="utf-8") as handle:
         return _register_manifest(handle.read())
 
 
@@ -49,11 +54,12 @@ def register_and_capture(path):
     The bricks are also registered in the in-process catalog (parity with :func:`register`)."""
     p = str(path)
     if p.endswith(".json"):
-        with open(p, "r", encoding="utf-8") as fh:
+        with open(p, encoding="utf-8") as fh:
             manifest_json = fh.read()
         records, abi_key = parse_brick_manifest(manifest_json)
         _register_manifest(manifest_json)
         return records, abi_key, None
+    os.stat(p)  # exact FileNotFoundError before ctypes normalizes the dynamic-loader failure
     handle = ctypes.CDLL(p)  # raises OSError if the path is not a loadable library
     try:
         manifest_fn = handle.pops_brick_manifest
@@ -74,15 +80,18 @@ class CompiledManifest:
     """The read-only metadata of a compiled-brick manifest (Spec 5 sec.5.17).
 
     A plain value holding the parsed manifest: the ABI key (when the manifest carries one) and
-    the per-brick records (id / category / requirements / capabilities). It is inert -- it
+        annotations and the per-brick records. It is inert -- it
     NEITHER registers the bricks in the in-process catalog NOR dlopens / executes anything, so a
     caller can inspect a third-party brick before deciding to load it. Use
     :func:`pops.external.register` to actually register the bricks.
     """
 
-    def __init__(self, bricks: Any, *, abi_key: Any = None) -> None:
-        self.bricks = list(bricks)
+    def __init__(self, bricks: Any, *, abi_key: Any, annotations: Any) -> None:
+        from copy import deepcopy
+
+        self.bricks = deepcopy(list(bricks))
         self.abi_key = abi_key
+        self.annotations = deepcopy(dict(annotations))
 
     @property
     def ids(self) -> list:
@@ -95,11 +104,42 @@ class CompiledManifest:
         return sorted({b["category"] for b in self.bricks})
 
     def to_dict(self) -> dict:
-        """A plain-dict view of the manifest (abi_key + brick records)."""
-        return {"abi_key": self.abi_key, "bricks": [dict(b) for b in self.bricks]}
+        """The exact canonical v3 wire form, reversible through :meth:`from_dict`."""
+        from copy import deepcopy
+
+        csv_fields = (
+            "requirements", "capabilities", "supported_layouts", "supported_platforms", "params",
+            "options", "exported_symbols",
+        )
+        bricks = []
+        for record in self.bricks:
+            row = {key: record[key] for key in ("id", "category", "native_id")}
+            row.update({key: ",".join(record[key]) for key in csv_fields})
+            bricks.append(row)
+        return {
+            "schema_version": BRICK_MANIFEST_SCHEMA_VERSION,
+            "abi_key": self.abi_key,
+            "annotations": deepcopy(self.annotations),
+            "bricks": bricks,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> CompiledManifest:
+        """Strictly reconstruct the inert value from its canonical JSON-ready wire form."""
+        import json
+
+        if not isinstance(data, dict):
+            raise TypeError("CompiledManifest.from_dict expects a dict")
+        records, abi_key, annotations = _parse_brick_manifest_document(
+            json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        )
+        return cls(records, abi_key=abi_key, annotations=annotations)
 
     def __repr__(self) -> str:
         return "CompiledManifest(ids=%r, abi_key=%r)" % (self.ids, self.abi_key)
+
+    def __eq__(self, other: Any) -> bool:
+        return isinstance(other, CompiledManifest) and self.to_dict() == other.to_dict()
 
 
 def _parse_manifest_metadata(manifest_json: Any) -> Any:
@@ -110,8 +150,8 @@ def _parse_manifest_metadata(manifest_json: Any) -> Any:
     check, required fields, unknown-field refusal, each error naming the offending field), building an
     inert value instead of mutating the in-process catalog. Any schema violation raises ``ValueError``.
     """
-    records, abi_key = parse_brick_manifest(manifest_json)
-    return CompiledManifest(records, abi_key=abi_key)
+    records, abi_key, annotations = _parse_brick_manifest_document(manifest_json)
+    return CompiledManifest(records, abi_key=abi_key, annotations=annotations)
 
 
 def read_manifest(path: Any) -> Any:
@@ -126,8 +166,9 @@ def read_manifest(path: Any) -> Any:
     """
     p = str(path)
     if p.endswith(".json"):
-        with open(p, "r", encoding="utf-8") as handle:
+        with open(p, encoding="utf-8") as handle:
             return _parse_manifest_metadata(handle.read())
+    os.stat(p)  # exact FileNotFoundError for missing shared-object manifests
     handle = ctypes.CDLL(p)  # raises OSError if the path is not a loadable library
     try:
         manifest_fn = handle.pops_brick_manifest

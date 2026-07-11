@@ -156,12 +156,16 @@ def test_case_and_block_parameters_with_same_local_name_never_merge():
 
 
 def test_schema_roundtrip_is_strict_and_hashes_have_separate_lifetimes():
-    first, _, _, _, _ = _two_instance_schema(default=1.0)
+    first, left, right, speed, _ = _two_instance_schema(default=1.0)
     second, _, _, _, _ = _two_instance_schema(default=2.0)
 
     rebuilt = BindSchema.from_json(first.to_json())
     assert rebuilt.to_dict() == first.to_dict()
     assert rebuilt.hash == first.hash
+    assert rebuilt.slot(left[speed]).qid == first.slot(left[speed]).qid
+    assert rebuilt.slot(right[speed]).qid == first.slot(right[speed]).qid
+    without_aliases = BindSchema(first.slots)
+    assert without_aliases.hash != first.hash
     assert first.hash != second.hash
     assert first.artifact_hash == second.artifact_hash
 
@@ -170,17 +174,31 @@ def test_schema_roundtrip_is_strict_and_hashes_have_separate_lifetimes():
     with pytest.raises(TypeError, match="unknown"):
         BindSchema.from_dict(unknown)
     bad_qid = copy.deepcopy(first.to_dict())
-    bad_qid["slots"][0]["qid"] += "-forged"
+    bad_qid["payload"]["slots"][0]["qid"] += "-forged"
     with pytest.raises(ValueError, match="qid"):
         BindSchema.from_dict(bad_qid)
     bad_ordinal = copy.deepcopy(first.to_dict())
-    bad_ordinal["slots"][0]["ordinal"] = 2
+    bad_ordinal["payload"]["slots"][0]["ordinal"] = 2
     with pytest.raises(ValueError, match="ordinal"):
         BindSchema.from_dict(bad_ordinal)
     noncanonical_default = copy.deepcopy(first.to_dict())
-    noncanonical_default["slots"][0]["declaration"]["default"]["value"]["target"] = "Integer"
+    noncanonical_default["payload"]["slots"][0]["declaration"]["default"]["value"]["target"] = "Integer"
     with pytest.raises(ValueError, match="not in canonical form"):
         BindSchema.from_dict(noncanonical_default)
+
+    forged_alias = copy.deepcopy(first.to_dict())
+    alias_qid = next(iter(forged_alias["payload"]["aliases"]))
+    forged_alias["payload"]["aliases"][alias_qid] = "parameter:missing"
+    with pytest.raises(ValueError, match="unknown parameter slot"):
+        BindSchema.from_dict(forged_alias)
+
+    duplicate = first.to_json().replace(
+        '"protocol":"pops.manifest",',
+        '"protocol":"pops.manifest","protocol":"forged",',
+        1,
+    )
+    with pytest.raises(ValueError, match="duplicate object key"):
+        BindSchema.from_json(duplicate)
 
 
 def test_bind_mapping_requires_handles_and_validates_kind_dtype_domain_and_requiredness():
@@ -281,29 +299,29 @@ def test_derived_foreign_cycle_phase_and_invalidation_fail_loudly():
     schema = BindSchema.from_problem(problem)
 
     foreign = copy.deepcopy(schema.to_dict())
-    foreign["slots"][1]["declaration"]["depends_on"] = [
+    foreign["payload"]["slots"][1]["declaration"]["depends_on"] = [
         {"name": "foreign", "param_kind": "runtime"}
     ]
     with pytest.raises(ValueError, match="cannot resolve dependency"):
         BindSchema.from_dict(foreign)
 
     cycle = copy.deepcopy(schema.to_dict())
-    cycle["slots"][1]["declaration"]["depends_on"] = [
+    cycle["payload"]["slots"][1]["declaration"]["depends_on"] = [
         {"name": "gamma", "param_kind": "derived"}
     ]
-    cycle["slots"][1]["declaration"]["expression"]["value"] = ["rparam", "gamma"]
+    cycle["payload"]["slots"][1]["declaration"]["expression"]["value"] = ["rparam", "gamma"]
     with pytest.raises(ValueError, match="cycle"):
         BindSchema.from_dict(cycle)
 
     undeclared_read = copy.deepcopy(schema.to_dict())
-    undeclared_read["slots"][1]["declaration"]["expression"]["value"] = [
+    undeclared_read["payload"]["slots"][1]["declaration"]["expression"]["value"] = [
         "rparam", "foreign"
     ]
     with pytest.raises(ValueError, match="undeclared dependency"):
         BindSchema.from_dict(undeclared_read)
 
     late_dependency = copy.deepcopy(schema.to_dict())
-    beta = late_dependency["slots"][1]["declaration"]
+    beta = late_dependency["payload"]["slots"][1]["declaration"]
     beta["phase"] = "compile"
     beta["storage"] = "inline"
     beta["invalidation"] = "never"
@@ -347,20 +365,20 @@ def test_compiled_arguments_and_manifest_are_derived_from_attached_schema():
     assert [row["required"] for row in arguments.params.values()].count(False) == 4
 
     manifest = compiled.manifest()
-    assert manifest.to_dict()["bind_schema"] == schema.to_dict()
+    assert manifest.to_dict()["payload"]["bind_schema"] == schema.to_dict()
     assert manifest.bind_schema_hash == schema.hash
     assert manifest.bind_schema_artifact_hash == schema.artifact_hash
     assert manifest.params_runtime == tuple(sorted(slot.qid for slot in schema.runtime_slots))
     assert manifest.params_const == tuple(sorted(slot.qid for slot in schema.const_slots))
     with pytest.raises(TypeError):
-        manifest.bind_schema["slots"][0]["declaration"]["default"]["value"] = 7.0
+        manifest.bind_schema["payload"]["slots"][0]["declaration"]["default"]["value"] = 7.0
     assert type(manifest).from_dict(manifest.to_dict()).to_dict() == manifest.to_dict()
     forged_hash = copy.deepcopy(manifest.to_dict())
-    forged_hash["bind_schema_hash"] = "0" * 64
+    forged_hash["payload"]["bind_schema_hash"] = "0" * 64
     with pytest.raises(ValueError, match="bind_schema_hash"):
         type(manifest).from_dict(forged_hash)
     forged_summary = copy.deepcopy(manifest.to_dict())
-    forged_summary["params_runtime"] = []
+    forged_summary["payload"]["params_runtime"] = []
     with pytest.raises(ValueError, match="not canonical"):
         type(manifest).from_dict(forged_summary)
 

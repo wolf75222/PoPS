@@ -432,8 +432,13 @@ inline std::string compiled_native_entrypoints_csv() {
          "pops_compiled_advance_p,pops_compiled_max_speed,pops_compiled_max_speed_p,"
          "pops_compiled_poisson_rhs,pops_compiled_poisson_rhs_p,pops_compiled_to_conservative,"
          "pops_compiled_to_conservative_p,pops_compiled_to_primitive,pops_compiled_to_primitive_p,"
-         "pops_compiled_has_projection,pops_compiled_project_p,pops_compiled_manifest";
+         "pops_compiled_has_projection,pops_compiled_project_p,pops_compiled_manifest,"
+         "pops_compiled_manifest_schema_version,pops_compiled_manifest_kind,"
+         "pops_compiled_abi_version";
 }
+
+inline constexpr int kCompiledManifestSchemaVersion = 2;
+inline constexpr const char* kCompiledManifestKind = "pops.compiled-block";
 
 /// The per-artifact NativeManifest of @p Model as a JSON string (Spec 5 sec.13.12, criterion #36).
 ///
@@ -456,7 +461,9 @@ std::string compiled_manifest_json() {
   const std::string roles = csv_to_json_array(model_cons_roles_csv<Model>());
   const std::string entrypoints = csv_to_json_array(compiled_native_entrypoints_csv());
   std::string out = "{";
-  out += "\"abi_version\":" + std::to_string(kAbiVersion);
+  out += "\"schema_version\":" + std::to_string(kCompiledManifestSchemaVersion);
+  out += ",\"kind\":\"" + std::string(kCompiledManifestKind) + "\"";
+  out += ",\"abi_version\":" + std::to_string(kAbiVersion);
   out += ",\"n_vars\":" + std::to_string(Model::n_vars);
   out += ",\"n_aux\":" + std::to_string(aux_comps<Model>());
   out += ",\"n_params\":" + std::to_string(model_nparams<Model>());
@@ -582,4 +589,11 @@ std::string compiled_manifest_json() {
   extern "C" const char* pops_compiled_manifest() {                                                 \
     static const std::string manifest = pops::compiled_block::compiled_manifest_json<MODEL>();      \
     return manifest.c_str();                                                                        \
-  }
+  }                                                                                                 \
+  extern "C" int pops_compiled_manifest_schema_version() {                                         \
+    return pops::compiled_block::kCompiledManifestSchemaVersion;                                    \
+  }                                                                                                 \
+  extern "C" const char* pops_compiled_manifest_kind() {                                           \
+    return pops::compiled_block::kCompiledManifestKind;                                             \
+  }                                                                                                 \
+  extern "C" int pops_compiled_abi_version() { return pops::kAbiVersion; }

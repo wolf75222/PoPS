@@ -31,12 +31,22 @@ Griewank-Walsh adjoint Revolve (which optimises a different objective); the name
 because the policy is budget-bounded storage, but the schedule is documented as equispaced.
 """
 from pops.descriptors import Descriptor
+from pops._manifest_protocol import (
+    exact_mapping,
+    manifest_envelope,
+    parse_manifest_envelope,
+    strict_int,
+    strict_json_loads,
+    strict_string,
+)
 from pops.params.use_sites import ParamUse, resolve_param_use
 
 #: The category every history-persistence descriptor declares. Distinct from the
 #: ``"checkpoint_policy"`` category of :class:`pops.output.CheckpointPolicy` (a different axis),
 #: so a runtime-policy registry never confuses the two (ADC-626).
 HISTORY_PERSISTENCE_CATEGORY = "history_persistence"
+HISTORY_PERSISTENCE_SCHEMA_VERSION = 1
+_MANIFEST_KIND = "history-persistence"
 
 
 class HistoryPersistence(Descriptor):
@@ -48,7 +58,7 @@ class HistoryPersistence(Descriptor):
     """
 
     category = HISTORY_PERSISTENCE_CATEGORY
-    #: The manifest tag that identifies this policy in a checkpoint. Subclasses set it; it is the
+    #: The payload tag that identifies this policy in a checkpoint. Subclasses set it; it is the
     #: reader's dispatch key (:meth:`from_manifest`), NOT a free string sniffed from other fields.
     kind = "history_persistence"
 
@@ -91,7 +101,11 @@ class HistoryPersistence(Descriptor):
     def to_manifest(self):
         """The small tagged dict the checkpoint carries VERBATIM for this policy (schema-driven).
         The ``"kind"`` tag is the policy identity; subclasses add their scalar knobs."""
-        return {"kind": self.kind}
+        return manifest_envelope(
+            kind=_MANIFEST_KIND,
+            schema_version=HISTORY_PERSISTENCE_SCHEMA_VERSION,
+            payload={"policy": self.kind},
+        )
 
     @staticmethod
     def from_manifest(manifest):
@@ -100,21 +114,34 @@ class HistoryPersistence(Descriptor):
         The reader NEVER sniffs other fields: an unknown kind fails loud (a checkpoint written by
         a newer pops), never a silent Dense fallback. @p manifest is the dict :meth:`to_manifest`
         produced (already parsed from the npz JSON string)."""
-        if not isinstance(manifest, dict) or "kind" not in manifest:
-            raise ValueError(
-                "history persistence manifest must be a dict with a 'kind' tag (got %r)"
-                % (manifest,))
-        kind = manifest["kind"]
+        if not isinstance(manifest, dict):
+            raise TypeError("history persistence manifest must be a mapping")
+        envelope = parse_manifest_envelope(
+            manifest,
+            kind=_MANIFEST_KIND,
+            schema_version=HISTORY_PERSISTENCE_SCHEMA_VERSION,
+            payload_keys=None,
+            where="history persistence manifest",
+        )
+        if "policy" not in envelope:
+            raise TypeError("history persistence manifest payload is missing required field 'policy'")
+        kind = strict_string(envelope["policy"], where="history persistence policy")
         factory = _KIND_REGISTRY.get(kind)
         if factory is None:
             raise ValueError(
                 "history persistence kind %r unknown -- this checkpoint was written by a newer "
                 "pops (known kinds: %s)" % (kind, ", ".join(sorted(_KIND_REGISTRY))))
-        return factory._from_manifest(manifest)
+        return factory._from_manifest_payload(envelope)
+
+    @staticmethod
+    def from_json(text):
+        return HistoryPersistence.from_manifest(
+            strict_json_loads(text, where="history persistence manifest JSON"))
 
     @classmethod
-    def _from_manifest(cls, manifest):
+    def _from_manifest_payload(cls, payload):
         """Default reader: a no-knob policy (Dense). Subclasses with knobs override."""
+        exact_mapping(payload, {"policy"}, where="Dense persistence payload")
         return cls()
 
     def options(self):
@@ -177,11 +204,16 @@ class Interval(HistoryPersistence):
         return depth
 
     def to_manifest(self):
-        return {"kind": self.kind, "k": self.k}
+        return manifest_envelope(
+            kind=_MANIFEST_KIND,
+            schema_version=HISTORY_PERSISTENCE_SCHEMA_VERSION,
+            payload={"policy": self.kind, "k": self.k},
+        )
 
     @classmethod
-    def _from_manifest(cls, manifest):
-        return cls(int(manifest["k"]))
+    def _from_manifest_payload(cls, payload):
+        row = exact_mapping(payload, {"policy", "k"}, where="Interval persistence payload")
+        return cls(strict_int(row["k"], where="Interval persistence k", minimum=1))
 
 
 class Revolve(HistoryPersistence):
@@ -223,11 +255,18 @@ class Revolve(HistoryPersistence):
         return depth
 
     def to_manifest(self):
-        return {"kind": self.kind, "snapshots": self.snapshots}
+        return manifest_envelope(
+            kind=_MANIFEST_KIND,
+            schema_version=HISTORY_PERSISTENCE_SCHEMA_VERSION,
+            payload={"policy": self.kind, "snapshots": self.snapshots},
+        )
 
     @classmethod
-    def _from_manifest(cls, manifest):
-        return cls(int(manifest["snapshots"]))
+    def _from_manifest_payload(cls, payload):
+        row = exact_mapping(
+            payload, {"policy", "snapshots"}, where="Revolve persistence payload")
+        return cls(strict_int(
+            row["snapshots"], where="Revolve persistence snapshots", minimum=2))
 
 
 #: Reader dispatch table: the ``"kind"`` tag -> the policy class (ADC-626). An unknown kind at
@@ -296,5 +335,6 @@ def _optimal_placement(depth, snapshots):
 
 
 __all__ = ["HistoryPersistence", "Dense", "Interval", "Revolve",
-           "HISTORY_PERSISTENCE_CATEGORY", "DEFAULT_HISTORY_PERSISTENCE",
+           "HISTORY_PERSISTENCE_CATEGORY", "HISTORY_PERSISTENCE_SCHEMA_VERSION",
+           "DEFAULT_HISTORY_PERSISTENCE",
            "resolve_history_persistence"]

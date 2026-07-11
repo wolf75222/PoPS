@@ -4,6 +4,9 @@
 #include <pops/runtime/dynamic/model_registry.hpp>  // kTransports / kSources / kElliptics
 
 #include <cstddef>
+#include <cstdint>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -100,7 +103,9 @@ struct RouteInfo {
 };
 
 // --- Riemann flux routes (mirror of kRiemanns, dispatch_tags.hpp) ---------------------------
-enum class RiemannRouteId { kRusanov, kHll, kHllc, kRoe, kEulerHllc, kEulerRoe };
+enum class RiemannRouteId : int {
+  kRusanov = 0, kHll = 1, kHllc = 2, kRoe = 3, kEulerHllc = 4, kEulerRoe = 5
+};
 inline constexpr RouteInfo kRiemannRoutes[] = {
     {0, "rusanov", "pops::RusanovFlux", "max_wave_speed", ""},
     {1, "hll", "pops::HLLFlux", "physical_flux,wave_speeds", ""},
@@ -118,7 +123,9 @@ inline constexpr RouteInfo kRiemannRoutes[] = {
 };
 
 // --- Reconstruction limiter routes (mirror of kLimiters, dispatch_tags.hpp) ------------------
-enum class LimiterRouteId { kNone, kMinmod, kVanLeer, kWeno5 };
+enum class LimiterRouteId : int {
+  kNone = 0, kMinmod = 1, kVanLeer = 2, kWeno5 = 3
+};
 inline constexpr RouteInfo kLimiterRoutes[] = {
     {0, "none", "pops::NoSlope", "", ""},
     {1, "minmod", "pops::Minmod", "", ""},
@@ -128,7 +135,7 @@ inline constexpr RouteInfo kLimiterRoutes[] = {
 };
 
 // --- Reconstructed-variable routes (recon_prim flag today) ------------------------------------
-enum class ReconRouteId { kConservative, kPrimitive };
+enum class ReconRouteId : int { kConservative = 0, kPrimitive = 1 };
 inline constexpr RouteInfo kReconRoutes[] = {
     {0, "conservative", "pops::make_block(recon_prim=false)", "", ""},
     {1, "primitive", "pops::make_block(recon_prim=true)", "primitive_vars",
@@ -138,7 +145,9 @@ inline constexpr RouteInfo kReconRoutes[] = {
 // --- Time-treatment routes (NEW single source: no historical registry existed; the accepted
 // value sets of the entry points diverged -- pybind add_block took the full set while the AOT
 // .so ABI rejects ssprk3/euler. The limitations column carries that split as DATA.) -----------
-enum class TimeRouteId { kExplicitSsprk2, kSsprk3, kForwardEuler, kImex, kImexRkArs222 };
+enum class TimeRouteId : int {
+  kExplicitSsprk2 = 0, kSsprk3 = 1, kForwardEuler = 2, kImex = 3, kImexRkArs222 = 4
+};
 inline constexpr RouteInfo kTimeRoutes[] = {
     {0, "explicit", "pops::SSPRK2", "", ""},
     {1, "ssprk3", "pops::SSPRK3", "",
@@ -152,7 +161,7 @@ inline constexpr RouteInfo kTimeRoutes[] = {
 };
 
 // --- Splitting routes (system time scheme: Lie / Strang) --------------------------------------
-enum class SplittingRouteId { kLie, kStrang };
+enum class SplittingRouteId : int { kLie = 0, kStrang = 1 };
 inline constexpr RouteInfo kSplittingRoutes[] = {
     {0, "lie", "pops::SystemStepper(lie)", "", ""},
     {1, "strang", "pops::SystemStepper(strang)", "",
@@ -160,7 +169,9 @@ inline constexpr RouteInfo kSplittingRoutes[] = {
 };
 
 // --- Field-solver (elliptic solve) routes ------------------------------------------------------
-enum class FieldSolverRouteId { kGeometricMg, kFft, kFftSpectral, kPolar };
+enum class FieldSolverRouteId : int {
+  kGeometricMg = 0, kFft = 1, kFftSpectral = 2, kPolar = 3
+};
 inline constexpr RouteInfo kFieldSolverRoutes[] = {
     {0, "geometric_mg", "pops::GeometricMG", "", ""},
     {1, "fft", "pops::PoissonFFTSolver", "periodic bc,constant coefficient",
@@ -171,7 +182,9 @@ inline constexpr RouteInfo kFieldSolverRoutes[] = {
 };
 
 // --- Poisson boundary-condition routes ---------------------------------------------------------
-enum class PoissonBcRouteId { kAuto, kPeriodic, kDirichlet, kNeumann };
+enum class PoissonBcRouteId : int {
+  kAuto = 0, kPeriodic = 1, kDirichlet = 2, kNeumann = 3
+};
 inline constexpr RouteInfo kPoissonBcRoutes[] = {
     {0, "auto", "resolved from the wall/periodic system config", "", ""},
     {1, "periodic", "pops::fill_boundary(periodic)", "", ""},
@@ -180,7 +193,7 @@ inline constexpr RouteInfo kPoissonBcRoutes[] = {
 };
 
 // --- Layout routes (single-level System vs AMR hierarchy) --------------------------------------
-enum class LayoutRouteId { kUniform, kAmr };
+enum class LayoutRouteId : int { kUniform = 0, kAmr = 1 };
 inline constexpr RouteInfo kLayoutRoutes[] = {
     {0, "uniform", "pops::System", "", ""},
     {1, "amr", "pops::AmrSystem", "",
@@ -191,7 +204,9 @@ inline constexpr RouteInfo kLayoutRoutes[] = {
 // The alias spellings of kSources (magnetic==lorentz, potential_magnetic==potential_lorentz) are
 // PARSE-ONLY compatibility: they resolve to the canonical route; route_token emits the canonical
 // spelling. ---------------------------------------------------------------------------------
-enum class TransportRouteId { kExb, kCompressible, kIsothermal };
+enum class TransportRouteId : int {
+  kExb = 0, kCompressible = 1, kIsothermal = 2
+};
 inline constexpr RouteInfo kTransportRoutes[] = {
     {0, "exb", "pops::ExBVelocity", "", "scalar (1 var); no fluid source"},
     {1, "compressible", "pops::CompressibleFlux", "", "polar geometry not wired"},
@@ -199,11 +214,11 @@ inline constexpr RouteInfo kTransportRoutes[] = {
 };
 
 enum class SourceRouteId {
-  kNone,
-  kPotential,
-  kGravity,
-  kMagneticLorentz,
-  kPotentialMagneticLorentz,
+  kNone = 0,
+  kPotential = 1,
+  kGravity = 2,
+  kMagneticLorentz = 3,
+  kPotentialMagneticLorentz = 4,
 };
 inline constexpr RouteInfo kSourceRoutes[] = {
     {0, "none", "pops::NoSource", "", ""},
@@ -215,7 +230,9 @@ inline constexpr RouteInfo kSourceRoutes[] = {
      "fluid transport (>= 3 vars),aux B_z channel", ""},
 };
 
-enum class EllipticRouteId { kCharge, kBackground, kGravity };
+enum class EllipticRouteId : int {
+  kCharge = 0, kBackground = 1, kGravity = 2
+};
 inline constexpr RouteInfo kEllipticRoutes[] = {
     {0, "charge", "pops::ChargeDensity", "", ""},
     {1, "background", "pops::BackgroundDensity", "", ""},
@@ -223,14 +240,14 @@ inline constexpr RouteInfo kEllipticRoutes[] = {
 };
 
 // --- Condensed source-stage routes (set_source_stage kind) -------------------------------------
-enum class SourceStageRouteId { kElectrostaticLorentz };
+enum class SourceStageRouteId : int { kElectrostaticLorentz = 0 };
 inline constexpr RouteInfo kSourceStageRoutes[] = {
     {0, "electrostatic_lorentz", "pops::ElectrostaticLorentzCondensedSchur",
      "magnetic field B_z,system potential phi", "theta in (0, 1]"},
 };
 
 // --- Poisson right-hand-side routes (set_poisson rhs) ------------------------------------------
-enum class PoissonRhsRouteId { kChargeDensity, kComposite };
+enum class PoissonRhsRouteId : int { kChargeDensity = 0, kComposite = 1 };
 inline constexpr RouteInfo kPoissonRhsRoutes[] = {
     {0, "charge_density", "per-block ChargeDensity bricks summed", "",
      "alias of composite when every block carries a charge density (bit-identical)"},
@@ -238,7 +255,7 @@ inline constexpr RouteInfo kPoissonRhsRoutes[] = {
 };
 
 // --- Wall predicate routes (set_poisson wall) ---------------------------------------------------
-enum class WallRouteId { kNone, kCircle };
+enum class WallRouteId : int { kNone = 0, kCircle = 1 };
 inline constexpr RouteInfo kWallRoutes[] = {
     {0, "none", "no wall (fully periodic/physical domain)", "", ""},
     {1, "circle", "pops::make_wall_predicate(circle)", "wall_radius > 0", ""},
@@ -265,6 +282,15 @@ inline int parse_route_index(const RouteInfo (&tbl)[N], RouteFamily family,
                            "); typed routes never fall back to a default");
 }
 
+template <std::size_t N, class Id>
+inline const RouteInfo& checked_route_info(const RouteInfo (&tbl)[N], Id id, RouteFamily family) {
+  const int index = static_cast<int>(id);
+  if (index < 0 || index >= static_cast<int>(N) || tbl[index].index != index)
+    throw std::runtime_error(std::string("routes: unknown ") + route_family_name(family) +
+                             " wire id " + std::to_string(index));
+  return tbl[index];
+}
+
 }  // namespace detail
 
 /// parse_*_route: wire token -> typed route ID (throws on unknown, never defaults).
@@ -275,7 +301,7 @@ inline RiemannRouteId parse_riemann_route(const std::string& token, const char* 
       detail::parse_route_index(kRiemannRoutes, RouteFamily::kRiemann, token, ctx));
 }
 inline const RouteInfo& route_info(RiemannRouteId id) {
-  return kRiemannRoutes[static_cast<int>(id)];
+  return detail::checked_route_info(kRiemannRoutes, id, RouteFamily::kRiemann);
 }
 inline const char* route_token(RiemannRouteId id) {
   return route_info(id).token;
@@ -286,7 +312,7 @@ inline LimiterRouteId parse_limiter_route(const std::string& token, const char* 
       detail::parse_route_index(kLimiterRoutes, RouteFamily::kLimiter, token, ctx));
 }
 inline const RouteInfo& route_info(LimiterRouteId id) {
-  return kLimiterRoutes[static_cast<int>(id)];
+  return detail::checked_route_info(kLimiterRoutes, id, RouteFamily::kLimiter);
 }
 inline const char* route_token(LimiterRouteId id) {
   return route_info(id).token;
@@ -297,7 +323,7 @@ inline ReconRouteId parse_recon_route(const std::string& token, const char* ctx 
       detail::parse_route_index(kReconRoutes, RouteFamily::kRecon, token, ctx));
 }
 inline const RouteInfo& route_info(ReconRouteId id) {
-  return kReconRoutes[static_cast<int>(id)];
+  return detail::checked_route_info(kReconRoutes, id, RouteFamily::kRecon);
 }
 inline const char* route_token(ReconRouteId id) {
   return route_info(id).token;
@@ -313,7 +339,7 @@ inline TimeRouteId parse_time_route(const std::string& token, const char* ctx = 
       detail::parse_route_index(kTimeRoutes, RouteFamily::kTime, token, ctx));
 }
 inline const RouteInfo& route_info(TimeRouteId id) {
-  return kTimeRoutes[static_cast<int>(id)];
+  return detail::checked_route_info(kTimeRoutes, id, RouteFamily::kTime);
 }
 inline const char* route_token(TimeRouteId id) {
   return route_info(id).token;
@@ -325,7 +351,7 @@ inline SplittingRouteId parse_splitting_route(const std::string& token,
       detail::parse_route_index(kSplittingRoutes, RouteFamily::kSplitting, token, ctx));
 }
 inline const RouteInfo& route_info(SplittingRouteId id) {
-  return kSplittingRoutes[static_cast<int>(id)];
+  return detail::checked_route_info(kSplittingRoutes, id, RouteFamily::kSplitting);
 }
 inline const char* route_token(SplittingRouteId id) {
   return route_info(id).token;
@@ -337,7 +363,7 @@ inline FieldSolverRouteId parse_field_solver_route(const std::string& token,
       detail::parse_route_index(kFieldSolverRoutes, RouteFamily::kFieldSolver, token, ctx));
 }
 inline const RouteInfo& route_info(FieldSolverRouteId id) {
-  return kFieldSolverRoutes[static_cast<int>(id)];
+  return detail::checked_route_info(kFieldSolverRoutes, id, RouteFamily::kFieldSolver);
 }
 inline const char* route_token(FieldSolverRouteId id) {
   return route_info(id).token;
@@ -349,7 +375,7 @@ inline PoissonBcRouteId parse_poisson_bc_route(const std::string& token,
       detail::parse_route_index(kPoissonBcRoutes, RouteFamily::kPoissonBc, token, ctx));
 }
 inline const RouteInfo& route_info(PoissonBcRouteId id) {
-  return kPoissonBcRoutes[static_cast<int>(id)];
+  return detail::checked_route_info(kPoissonBcRoutes, id, RouteFamily::kPoissonBc);
 }
 inline const char* route_token(PoissonBcRouteId id) {
   return route_info(id).token;
@@ -360,7 +386,7 @@ inline LayoutRouteId parse_layout_route(const std::string& token, const char* ct
       detail::parse_route_index(kLayoutRoutes, RouteFamily::kLayout, token, ctx));
 }
 inline const RouteInfo& route_info(LayoutRouteId id) {
-  return kLayoutRoutes[static_cast<int>(id)];
+  return detail::checked_route_info(kLayoutRoutes, id, RouteFamily::kLayout);
 }
 inline const char* route_token(LayoutRouteId id) {
   return route_info(id).token;
@@ -372,7 +398,7 @@ inline TransportRouteId parse_transport_route(const std::string& token,
       detail::parse_route_index(kTransportRoutes, RouteFamily::kTransport, token, ctx));
 }
 inline const RouteInfo& route_info(TransportRouteId id) {
-  return kTransportRoutes[static_cast<int>(id)];
+  return detail::checked_route_info(kTransportRoutes, id, RouteFamily::kTransport);
 }
 inline const char* route_token(TransportRouteId id) {
   return route_info(id).token;
@@ -390,7 +416,7 @@ inline SourceRouteId parse_source_route(const std::string& token, const char* ct
       detail::parse_route_index(kSourceRoutes, RouteFamily::kSource, token, ctx));
 }
 inline const RouteInfo& route_info(SourceRouteId id) {
-  return kSourceRoutes[static_cast<int>(id)];
+  return detail::checked_route_info(kSourceRoutes, id, RouteFamily::kSource);
 }
 inline const char* route_token(SourceRouteId id) {
   return route_info(id).token;
@@ -401,7 +427,7 @@ inline EllipticRouteId parse_elliptic_route(const std::string& token, const char
       detail::parse_route_index(kEllipticRoutes, RouteFamily::kElliptic, token, ctx));
 }
 inline const RouteInfo& route_info(EllipticRouteId id) {
-  return kEllipticRoutes[static_cast<int>(id)];
+  return detail::checked_route_info(kEllipticRoutes, id, RouteFamily::kElliptic);
 }
 inline const char* route_token(EllipticRouteId id) {
   return route_info(id).token;
@@ -413,7 +439,7 @@ inline SourceStageRouteId parse_source_stage_route(const std::string& token,
       detail::parse_route_index(kSourceStageRoutes, RouteFamily::kSourceStage, token, ctx));
 }
 inline const RouteInfo& route_info(SourceStageRouteId id) {
-  return kSourceStageRoutes[static_cast<int>(id)];
+  return detail::checked_route_info(kSourceStageRoutes, id, RouteFamily::kSourceStage);
 }
 inline const char* route_token(SourceStageRouteId id) {
   return route_info(id).token;
@@ -425,7 +451,7 @@ inline PoissonRhsRouteId parse_poisson_rhs_route(const std::string& token,
       detail::parse_route_index(kPoissonRhsRoutes, RouteFamily::kPoissonRhs, token, ctx));
 }
 inline const RouteInfo& route_info(PoissonRhsRouteId id) {
-  return kPoissonRhsRoutes[static_cast<int>(id)];
+  return detail::checked_route_info(kPoissonRhsRoutes, id, RouteFamily::kPoissonRhs);
 }
 inline const char* route_token(PoissonRhsRouteId id) {
   return route_info(id).token;
@@ -436,7 +462,7 @@ inline WallRouteId parse_wall_route(const std::string& token, const char* ctx = 
       detail::parse_route_index(kWallRoutes, RouteFamily::kWall, token, ctx));
 }
 inline const RouteInfo& route_info(WallRouteId id) {
-  return kWallRoutes[static_cast<int>(id)];
+  return detail::checked_route_info(kWallRoutes, id, RouteFamily::kWall);
 }
 inline const char* route_token(WallRouteId id) {
   return route_info(id).token;
@@ -445,69 +471,70 @@ inline const char* route_token(WallRouteId id) {
 /// Native route catalog version (ADC-599): bumped on any INCOMPATIBLE registry change (a removed
 /// or re-tokenized route). MIRROR of ROUTE_REGISTRY_VERSION in python/pops/runtime/routes.py.
 inline constexpr int kRouteRegistryVersion = 1;
+/// Reserved tombstone shared by every route-id family. It is intentionally outside every enum so
+/// exhaustive numerical switches stay warning-clean; deserializers must reject it and never reuse it.
+inline constexpr int kReservedRouteWireId255 = 255;
 
-/// Compact per-family signature "family:count,..." (registry order) -- the form EMBEDDED in
-/// generated artifacts (pops_compiled_route_manifest / pops_program_route_manifest) and compared
-/// at load time. MIRROR of routes.py::route_registry_signature(); the parity is locked by
-/// tests/python/architecture/test_route_registry_parity.py. A stale .so built against a different route
-/// set is refused with the mismatching family named (see verify_route_manifest below), instead
-/// of failing later on a cryptic dispatch or symbol error.
+/// Content-authenticated signature embedded in generated artifacts. FNV-1a-64 is applied to the
+/// canonical row stream ``family US id US token US native_entry US requirements US limitations LF``
+/// (US = byte 0x1f), in family/table order. Unlike the former family-count signature, this detects a
+/// retokenized, reordered or semantically edited row even when every family keeps the same size.
+/// MIRROR of routes.py::route_registry_signature().
 inline std::string route_registry_signature() {
-  auto count = [](const auto& tbl) { return static_cast<int>(sizeof(tbl) / sizeof(tbl[0])); };
-  std::string out;
-  auto add = [&out](const char* family, int n) {
-    if (!out.empty())
-      out += ',';
-    out += family;
-    out += ':';
-    out += std::to_string(n);
+  std::uint64_t hash = UINT64_C(14695981039346656037);
+  auto feed = [&hash](const std::string& value) {
+    for (const unsigned char c : value) {
+      hash ^= static_cast<std::uint64_t>(c);
+      hash *= UINT64_C(1099511628211);
+    }
   };
-  add("riemann", count(kRiemannRoutes));
-  add("limiter", count(kLimiterRoutes));
-  add("recon", count(kReconRoutes));
-  add("time", count(kTimeRoutes));
-  add("splitting", count(kSplittingRoutes));
-  add("field_solver", count(kFieldSolverRoutes));
-  add("poisson_bc", count(kPoissonBcRoutes));
-  add("layout", count(kLayoutRoutes));
-  add("transport", count(kTransportRoutes));
-  add("source", count(kSourceRoutes));
-  add("elliptic", count(kEllipticRoutes));
-  add("source_stage", count(kSourceStageRoutes));
-  add("poisson_rhs", count(kPoissonRhsRoutes));
-  add("wall", count(kWallRoutes));
-  return out;
+  auto add_family = [&feed](const char* family, const auto& table) {
+    for (const RouteInfo& row : table) {
+      feed(family);
+      feed("\x1f");
+      feed(std::to_string(row.index));
+      feed("\x1f");
+      feed(row.token);
+      feed("\x1f");
+      feed(row.native_entry);
+      feed("\x1f");
+      feed(row.requirements);
+      feed("\x1f");
+      feed(row.limitations);
+      feed("\n");
+    }
+  };
+  add_family("riemann", kRiemannRoutes);
+  add_family("limiter", kLimiterRoutes);
+  add_family("recon", kReconRoutes);
+  add_family("time", kTimeRoutes);
+  add_family("splitting", kSplittingRoutes);
+  add_family("field_solver", kFieldSolverRoutes);
+  add_family("poisson_bc", kPoissonBcRoutes);
+  add_family("layout", kLayoutRoutes);
+  add_family("transport", kTransportRoutes);
+  add_family("source", kSourceRoutes);
+  add_family("elliptic", kEllipticRoutes);
+  add_family("source_stage", kSourceStageRoutes);
+  add_family("poisson_rhs", kPoissonRhsRoutes);
+  add_family("wall", kWallRoutes);
+  std::ostringstream out;
+  out << "v" << kRouteRegistryVersion << ':' << std::hex << std::setfill('0') << std::setw(16)
+      << hash;
+  return out.str();
 }
 
 /// Refuses a compiled artifact whose EMBEDDED route manifest differs from the current registry
 /// (ADC-599: no silent reuse of a stale artifact). @p embedded is the artifact's
-/// route_registry_signature() at build time; an empty string means an OLD artifact without the
-/// manifest symbol -- accepted unchanged (append-only compatibility). The refusal names the
-/// FIRST mismatching family (its built-against vs current count), never a generic message.
+/// route_registry_signature() at build time. Strict artifacts must carry it: absence and every
+/// content mismatch are rejected before any install mutation.
 inline void verify_route_manifest(const std::string& embedded, const char* ctx) {
   if (embedded.empty())
-    return;  // pre-manifest artifact: append-only compat, the ABI key still guards headers
+    throw std::runtime_error(std::string(ctx) +
+                             ": compiled artifact is missing the required route registry signature");
   const std::string current = route_registry_signature();
   if (embedded == current)
     return;
-  // Name the first differing family for a precise diagnostic.
-  std::string built = embedded, cur = current;
-  while (!built.empty() || !cur.empty()) {
-    auto pop = [](std::string& s) {
-      const std::size_t p = s.find(',');
-      std::string tok = s.substr(0, p);
-      s = (p == std::string::npos) ? std::string() : s.substr(p + 1);
-      return tok;
-    };
-    const std::string b = pop(built);
-    const std::string c = pop(cur);
-    if (b != c)
-      throw std::runtime_error(
-          std::string(ctx) + ": stale compiled artifact -- route registry mismatch on '" +
-          (b.empty() ? c : b) + "' (built against '" + (b.empty() ? "<absent>" : b) +
-          "', current '" + (c.empty() ? "<absent>" : c) +
-          "'); recompile the artifact against the current pops headers");
-  }
   throw std::runtime_error(std::string(ctx) +
                            ": stale compiled artifact -- route registry mismatch (built against '" +
                            embedded + "', current '" + current + "')");

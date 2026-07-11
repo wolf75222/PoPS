@@ -238,13 +238,23 @@ CAPABILITY_VOCAB_VERSION = 0
 
 
 def route_registry_signature() -> str:
-    """Compact per-family signature "family:count,..." (registry order) -- the embedded form.
+    """Content-authenticated FNV-1a signature of every native route row.
 
     MIRROR of pops::route_registry_signature() (route_ids.hpp); the two strings must stay equal
     (locked by tests/python/architecture/test_route_registry_parity.py). Embedded verbatim in generated
-    artifacts so a stale .so is refused with the mismatching family named, before any run.
+    artifacts so a stale .so is refused before any run.  IDs are included explicitly so a removed
+    numeric value cannot be reused without changing artifact identity.
     """
-    return ",".join("%s:%d" % (family, len(_TABLES[family])) for family in _TABLES)
+    value = 14695981039346656037
+    for family in _TABLES:
+        for route_id, (token, entry, requirements, limitations) in enumerate(_TABLES[family]):
+            row = "\x1f".join((
+                family, str(route_id), token, entry, requirements, limitations,
+            )) + "\n"
+            for byte in row.encode("utf-8"):
+                value ^= byte
+                value = (value * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+    return "v%d:%016x" % (ROUTE_REGISTRY_VERSION, value)
 
 
 def route_registry_hash() -> str:

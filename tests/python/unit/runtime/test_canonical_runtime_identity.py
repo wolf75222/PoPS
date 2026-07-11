@@ -66,6 +66,25 @@ def test_run_identity_changes_only_with_effective_controls():
     assert first.run_identity != changed.run_identity
 
 
+def test_run_manifest_strict_round_trip_and_no_numeric_coercion():
+    bind = _bound_snapshot().bind_identity
+    manifest = RunManifest(
+        bind_identity=bind, start_time=0.0, start_macro_step=0,
+        controls={"t_end": 1.0, "cfl": 0.4, "max_steps": 10,
+                  "output_mode": "current-directory"})
+    assert RunManifest.from_dict(manifest.to_dict()).to_dict() == manifest.to_dict()
+    with pytest.raises(TypeError, match="max_steps"):
+        RunManifest(
+            bind_identity=bind, start_time=0.0, start_macro_step=0,
+            controls={"t_end": 1.0, "cfl": 0.4, "max_steps": True,
+                      "output_mode": "current-directory"})
+    with pytest.raises(ValueError, match="finite"):
+        RunManifest(
+            bind_identity=bind, start_time=0.0, start_macro_step=0,
+            controls={"t_end": float("nan"), "cfl": 0.4, "max_steps": 10,
+                      "output_mode": "current-directory"})
+
+
 def test_uniform_and_amr_run_share_the_cfl_resolution_contract():
     assert inspect.signature(System.run).parameters["cfl"].default is None
     assert inspect.signature(AmrSystem.run).parameters["cfl"].default is None

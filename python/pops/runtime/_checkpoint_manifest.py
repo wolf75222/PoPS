@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from pops.identity import Identity, canonical_bytes, make_identity
+from pops._manifest_protocol import strict_json_loads
 
 
 CHECKPOINT_SCHEMA_VERSION = 1
@@ -105,18 +106,7 @@ def seal_checkpoint_payload(owner: Any, payload: dict[str, Any], *, runtime_kind
 
 
 def _strict_json(text: Any) -> dict[str, Any]:
-    def object_pairs(pairs: Any) -> dict[str, Any]:
-        out = {}
-        for key, value in pairs:
-            if key in out:
-                raise ValueError("checkpoint manifest contains duplicate key %r" % key)
-            out[key] = value
-        return out
-
-    def constant(value: str) -> Any:
-        raise ValueError("checkpoint manifest contains non-finite constant %s" % value)
-
-    result = json.loads(str(text), object_pairs_hook=object_pairs, parse_constant=constant)
+    result = strict_json_loads(str(text), where="checkpoint manifest JSON")
     if not isinstance(result, dict):
         raise TypeError("checkpoint manifest must decode to a mapping")
     return result
@@ -134,7 +124,9 @@ def authenticate_checkpoint_payload(owner: Any, payload: Any, *, runtime_kind: s
     }
     if set(manifest) != expected_keys:
         raise ValueError("checkpoint manifest keys must be exactly %s" % sorted(expected_keys))
-    if manifest["schema_version"] != CHECKPOINT_SCHEMA_VERSION:
+    version = manifest["schema_version"]
+    if (isinstance(version, bool) or not isinstance(version, int)
+            or version != CHECKPOINT_SCHEMA_VERSION):
         raise ValueError("unsupported checkpoint manifest schema_version %r" % manifest["schema_version"])
     if manifest["runtime_kind"] != runtime_kind:
         raise ValueError("checkpoint runtime kind %r cannot restart %r" % (

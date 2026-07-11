@@ -153,17 +153,26 @@ def test_compiled_brick_without_a_manifest_is_a_clear_error():
     # manifest is absent raises an explainable error before any runtime install.
     from pops.external import CompiledBrickRef, read_manifest
 
-    with pytest.raises(OSError):  # FileNotFoundError is an OSError
+    with pytest.raises(FileNotFoundError):
         read_manifest("/nonexistent_pops_brick_manifest.json")
 
     ref = CompiledBrickRef(manifest="/nonexistent_pops_brick_manifest.json",
                            native_id="missing_brick")
-    with pytest.raises((OSError, ValueError)):
+    with pytest.raises(FileNotFoundError):
         ref.resolve()
-    # validate() turns the unresolvable manifest into an explainable ValueError, not a crash.
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(FileNotFoundError) as excinfo:
         ref.validate()
-    assert "missing_brick" in str(excinfo.value)
+    assert "nonexistent_pops_brick_manifest.json" in str(excinfo.value)
+    with pytest.raises(FileNotFoundError):
+        ref.manifest_record()
+    with pytest.raises(FileNotFoundError):
+        ref.requirements()
+    with pytest.raises(FileNotFoundError):
+        ref.capabilities()
+    missing_so = CompiledBrickRef(
+        manifest="/nonexistent_pops_brick_manifest.so", native_id="missing_brick")
+    with pytest.raises(FileNotFoundError):
+        missing_so.resolve()
 
 
 if __name__ == "__main__":

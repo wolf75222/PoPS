@@ -69,11 +69,11 @@ TEST(ExternalBrickJson, EscapedFormIsValidJsonStringBody) {
       << "escaped quote not truncated";
 }
 
-// ADC-544: to_json emits schema_version 2 and the six v2 per-entry fields (native_id /
+// ADC-657: to_json emits schema_version 3 and all ten per-entry fields (native_id /
 // supported_layouts / supported_platforms / params / options / exported_symbols) the host parser
 // (pops.descriptors.parse_brick_manifest) accepts. Emitter + parser stay in lockstep on this field set.
-TEST(ExternalBrickJson, ToJsonEmitsV2SchemaAndFields) {
-  EXPECT_TRUE(kBrickManifestSchemaVersion == 2) << "schema version is v2 (ADC-544)";
+TEST(ExternalBrickJson, ToJsonEmitsV3SchemaAndFields) {
+  EXPECT_TRUE(kBrickManifestSchemaVersion == 3) << "schema version is v3 (ADC-657)";
 
   // A clean registry so the emitted JSON contains exactly the one entry we register here (this TU's
   // executable has no static POPS_REGISTER_BRICK, so the singleton starts empty; clear() is belt-and-
@@ -85,8 +85,7 @@ TEST(ExternalBrickJson, ToJsonEmitsV2SchemaAndFields) {
                       "pops_brick_residual"});
   const std::string out = reg.to_json();
 
-  // The top-level schema_version stamp is v2.
-  EXPECT_TRUE(out.find("\"schema_version\":2") != std::string::npos) << "stamps v2";
+  EXPECT_TRUE(out.find("\"schema_version\":3") != std::string::npos) << "stamps v3";
 
   // Each v2 field is emitted with its registered value.
   EXPECT_TRUE(out.find("\"native_id\":\"json_native\"") != std::string::npos) << "native_id";
@@ -105,15 +104,31 @@ TEST(ExternalBrickJson, ToJsonEmitsV2SchemaAndFields) {
   EXPECT_TRUE(out.find("\"capabilities\":\"physical_flux\"") != std::string::npos) << "capabilities";
 }
 
-// A brick registered via the 3-argument POPS_REGISTER_BRICK path leaves the six v2 fields empty in
-// to_json (aggregate value-initialization). The host parser then defaults native_id from id and the
-// CSV lists to []. This locks the minimal-brick wire form.
-TEST(ExternalBrickJson, ToJsonEmitsEmptyV2FieldsForMinimalBrick) {
+// A minimal schema-v3 row still supplies its native identity explicitly; documentary CSV fields may
+// be empty but the loader never invents an id.
+TEST(ExternalBrickJson, ToJsonEmitsExplicitIdentityForMinimalBrick) {
   BrickRegistry& reg = BrickRegistry::instance();
   reg.clear();
-  reg.register_brick({"minimal", "riemann", "", ""});  // 4-arg aggregate: v2 fields default to ""
+  reg.register_brick({"minimal", "riemann", "", "", "minimal"});
   const std::string out = reg.to_json();
-  EXPECT_TRUE(out.find("\"native_id\":\"\"") != std::string::npos) << "empty native_id emitted";
+  EXPECT_TRUE(out.find("\"native_id\":\"minimal\"") != std::string::npos)
+      << "explicit native_id emitted";
   EXPECT_TRUE(out.find("\"supported_layouts\":\"\"") != std::string::npos) << "empty layouts emitted";
   EXPECT_TRUE(out.find("\"exported_symbols\":\"\"") != std::string::npos) << "empty symbols emitted";
+}
+
+TEST(ExternalBrickJson, DuplicateIdIsIdempotentOnlyForIdenticalRows) {
+  BrickRegistry& reg = BrickRegistry::instance();
+  reg.clear();
+  const BrickManifestEntry row{"same", "riemann", "pressure", "physical_flux", "same_native",
+                               "uniform", "cpu", "", "", "pops_same"};
+  EXPECT_NO_THROW(reg.register_brick(row));
+  EXPECT_NO_THROW(reg.register_brick(row));
+  EXPECT_TRUE(reg.size() == 1);
+  BrickManifestEntry conflict = row;
+  conflict.native_id = "different_native";
+  EXPECT_THROW(reg.register_brick(conflict), std::runtime_error);
+  EXPECT_TRUE(reg.size() == 1);
+  EXPECT_THROW(reg.register_brick({"", "riemann", "", "", "native"}), std::runtime_error);
+  EXPECT_THROW(reg.register_brick({"missing_native", "riemann", "", ""}), std::runtime_error);
 }

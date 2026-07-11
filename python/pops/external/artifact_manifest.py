@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops._manifest_protocol import manifest_envelope, parse_manifest_envelope
 from pops._manifest_immutability import freeze_manifest_json, thaw_manifest_json
 
 # Capability flags Spec 5 sec.13.12 enumerates. The first four are GENUINELY derivable from the
@@ -21,7 +22,28 @@ _SUPPORTS_FLAGS = _SUPPORTS_FROM_CAPS + _SUPPORTS_UNKNOWN + _SUPPORTS_RUNTIME
 # STRICT versioned schema of the rich compiled-artifact manifest (ADC-611). to_dict() stamps it;
 # from_dict() refuses a dict without it (or a wrong one) so any future read-back path is strict by
 # construction. Bump when a field is renamed/removed (an additive field keeps version 1).
-ARTIFACT_MANIFEST_SCHEMA_VERSION = 1
+ARTIFACT_MANIFEST_SCHEMA_VERSION = 2
+_MANIFEST_KIND = "compiled-artifact"
+
+
+def _strict_optional_bool(value, *, where):
+    if value is not None and not isinstance(value, bool):
+        raise TypeError("%s must be bool or None" % where)
+    return value
+
+
+def _strict_optional_int(value, *, where, minimum=0):
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise TypeError("%s must be an integer >= %d or None" % (where, minimum))
+    return value
+
+
+def _strict_optional_text(value, *, where):
+    if value is not None and (not isinstance(value, str) or not value):
+        raise TypeError("%s must be a non-empty string or None" % where)
+    return value
 
 
 class CompiledArtifactManifest:
@@ -51,9 +73,9 @@ class CompiledArtifactManifest:
                  ghost_depth_by_block=None,
                  field_outputs=None, supports_uniform=None, supports_amr=None, supports_mpi=None,
                  supports_gpu=None, supports_stride=None, supports_partial_imex_mask=None,
-                 supports_named_fields=None, native_entrypoints=None, dimension=2,
-                 amr_refinement_ratio=2, precision="double", real_bytes=8,
-                 communicator="unknown", supports_custom_communicator=False,
+                 supports_named_fields=None, native_entrypoints=None, dimension=None,
+                 amr_refinement_ratio=None, precision=None, real_bytes=None,
+                 communicator=None, supports_custom_communicator=None,
                  external_bricks=None):
         put = object.__setattr__
         put(self, "model_name", freeze_manifest_json(model_name, where="artifact.model_name"))
@@ -176,20 +198,24 @@ class CompiledArtifactManifest:
                 list(external_bricks or []), where="artifact.external_bricks"
             ),
         )
-        put(self, "dimension", freeze_manifest_json(dimension, where="artifact.dimension"))
+        put(self, "dimension", _strict_optional_int(
+            dimension, where="artifact.dimension", minimum=1))
         put(
             self,
             "amr_refinement_ratio",
-            freeze_manifest_json(amr_refinement_ratio, where="artifact.amr_refinement_ratio"),
+            _strict_optional_int(
+                amr_refinement_ratio, where="artifact.amr_refinement_ratio", minimum=2),
         )
-        put(self, "precision", freeze_manifest_json(precision, where="artifact.precision"))
-        put(self, "real_bytes", freeze_manifest_json(real_bytes, where="artifact.real_bytes"))
+        put(self, "precision", _strict_optional_text(precision, where="artifact.precision"))
+        put(self, "real_bytes", _strict_optional_int(
+            real_bytes, where="artifact.real_bytes", minimum=1))
         put(
             self,
             "communicator",
-            freeze_manifest_json(communicator, where="artifact.communicator"),
+            _strict_optional_text(communicator, where="artifact.communicator"),
         )
-        put(self, "supports_custom_communicator", bool(supports_custom_communicator))
+        put(self, "supports_custom_communicator", _strict_optional_bool(
+            supports_custom_communicator, where="artifact.supports_custom_communicator"))
 
     def supports(self):
         """The ``{flag: True/False/None}`` capability map (``None`` = honestly unknown)."""
@@ -213,8 +239,7 @@ class CompiledArtifactManifest:
         """A plain-dict view of every manifest field (JSON-ready; ``None`` flags stay ``None``). Stamped
         with ``schema_version`` (ADC-611) so a strict :meth:`from_dict` read-back can reject a legacy or
         incompatible dict by construction."""
-        out = {"schema_version": ARTIFACT_MANIFEST_SCHEMA_VERSION,
-               "model_name": self.model_name, "abi_key": self.abi_key,
+        payload = {"model_name": self.model_name, "abi_key": self.abi_key,
                "abi_version": self.abi_version, "required_headers_sig": self.required_headers_sig,
                "blocks": thaw_manifest_json(self.blocks),
                "variables": thaw_manifest_json(self.variables),
@@ -238,8 +263,12 @@ class CompiledArtifactManifest:
                "native_entrypoints": thaw_manifest_json(self.native_entrypoints),
                "external_bricks": thaw_manifest_json(self.external_bricks),
                "capability_matrix": [row.to_dict() for row in self.capability_matrix().rows]}
-        out.update(self.supports())
-        return out
+        payload.update(self.supports())
+        return manifest_envelope(
+            kind=_MANIFEST_KIND,
+            schema_version=ARTIFACT_MANIFEST_SCHEMA_VERSION,
+            payload=payload,
+        )
 
     @classmethod
     def from_dict(cls, data):
@@ -251,18 +280,8 @@ class CompiledArtifactManifest:
           - an UNKNOWN key -> ValueError (naming it; no permissive silent-ignore).
         ``capability_matrix`` is a DERIVED view (rebuilt from the flags), so it is accepted and ignored on
         read-back; the constructor recomputes it. Round-trip: ``from_dict(m.to_dict())`` equals ``m``."""
-        if not isinstance(data, dict):
-            raise ValueError("compiled-artifact manifest must be a dict; got %r" % (data,))
-        if "schema_version" not in data:
-            raise ValueError("compiled-artifact manifest is missing the required 'schema_version' "
-                             "field (expected %d); it predates the versioned schema -- re-serialize it "
-                             "with the current build" % (ARTIFACT_MANIFEST_SCHEMA_VERSION,))
-        version = data["schema_version"]
-        if version != ARTIFACT_MANIFEST_SCHEMA_VERSION:
-            raise ValueError("compiled-artifact manifest 'schema_version' is %r, incompatible with the "
-                             "supported version %d" % (version, ARTIFACT_MANIFEST_SCHEMA_VERSION))
-        # DERIVED keys are recomputed by the constructor, not passed to it: accept-and-ignore on read-back.
-        derived = {"schema_version", "capability_matrix"}
+        # DERIVED keys are recomputed by the constructor and compared exactly on read-back.
+        derived = {"capability_matrix"}
         # The constructor keyword arguments (every stored field, including the supports_* flags).
         ctor_keys = set(_SUPPORTS_FLAGS) | {
             "model_name", "abi_key", "abi_version", "required_headers_sig", "blocks", "variables",
@@ -271,11 +290,22 @@ class CompiledArtifactManifest:
             "ghost_depth_by_block", "field_outputs",
             "native_entrypoints", "external_bricks", "dimension", "amr_refinement_ratio", "precision",
             "real_bytes", "communicator"}
-        unknown = sorted(set(data) - ctor_keys - derived)
+        payload = parse_manifest_envelope(
+            data,
+            kind=_MANIFEST_KIND,
+            schema_version=ARTIFACT_MANIFEST_SCHEMA_VERSION,
+            where="compiled-artifact manifest",
+        )
+        unknown = sorted(set(payload) - ctor_keys - derived)
         if unknown:
             raise ValueError("compiled-artifact manifest has unknown field(s) %s; the strict schema does "
                              "not accept them" % (unknown,))
-        kwargs = {k: data[k] for k in data if k in ctor_keys}
+        missing = sorted((ctor_keys | derived) - set(payload))
+        if missing:
+            raise ValueError(
+                "compiled-artifact manifest is missing required field(s) %s" % missing
+            )
+        kwargs = {k: payload[k] for k in ctor_keys}
         result = cls(**kwargs)
         if result.to_dict() != data:
             raise ValueError(
@@ -306,7 +336,7 @@ class CompiledArtifactManifest:
             lines.append("  bind_schema  : hash=%s artifact_hash=%s slots=%d"
                          % (_short(self.bind_schema_hash),
                             _short(self.bind_schema_artifact_hash),
-                            len(self.bind_schema.get("slots", []))))
+                            len(self.bind_schema["payload"]["slots"])))
         by_block = ("; ".join("%s=%s" % (b, d) for b, d in sorted(self.ghost_depth_by_block.items()))
                     if self.ghost_depth_by_block else "(none)")
         lines.append("  ghost_depth  : %s (by block: %s)" % (self.ghost_depth, by_block))
@@ -315,7 +345,7 @@ class CompiledArtifactManifest:
                      "real_bytes=%s communicator=%s custom_communicator=%s"
                      % (self.dimension, self.amr_refinement_ratio, self.precision,
                         self.real_bytes, self.communicator,
-                        "yes" if self.supports_custom_communicator else "no"))
+                        _flag(self.supports_custom_communicator)))
         lines.append("  supports     :")
         for name in _SUPPORTS_FLAGS:
             lines.append("    %-26s %s" % (name, _flag(getattr(self, name))))

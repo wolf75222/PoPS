@@ -184,7 +184,8 @@ def test_apply_native_manifest_overlays_authoritative_fields():
     from pops.external import CompiledArtifactManifest, apply_native_manifest
     manifest = CompiledArtifactManifest(model_name="m", supports_stride=None,
                                         supports_partial_imex_mask=None, supports_named_fields=None)
-    native = {"abi_version": 1, "n_vars": 4, "n_aux": 3, "n_params": 0, "ghost_depth": 3,
+    native = {"schema_version": 2, "kind": "pops.compiled-block",
+              "abi_version": 1, "n_vars": 2, "n_aux": 3, "n_params": 0, "ghost_depth": 3,
               "supports_stride": False, "supports_partial_imex_mask": False,
               "supports_named_fields": True,
               # Layouts / platforms now emitted authoritatively by the .so (Spec 5 #36): the AOT
@@ -211,12 +212,12 @@ def test_apply_native_manifest_overlays_authoritative_fields():
     assert "supports_partial_imex_mask" not in manifest.needs_cpp_followup()
 
 
-def test_apply_native_manifest_none_is_graceful_noop():
-    # An old .so without the symbol -> load returns None -> the manifest keeps its honest-None set.
+def test_apply_native_manifest_missing_contract_is_refused():
+    # Old artifacts are runtime-refused; conversion/rebuild is an offline concern.
     from pops.external import CompiledArtifactManifest, apply_native_manifest
     manifest = CompiledArtifactManifest(model_name="m", supports_stride=None)
-    assert apply_native_manifest(manifest, None) is manifest
-    assert manifest.supports_stride is None  # untouched: graceful fallback, never fabricated
+    with pytest.raises(ValueError, match="JSON object"):
+        apply_native_manifest(manifest, None)
 
 
 if __name__ == "__main__":

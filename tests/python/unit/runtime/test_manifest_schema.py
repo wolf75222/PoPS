@@ -27,13 +27,20 @@ def _clean_catalog():
 
 
 def _entry(**over):
-    row = {"id": "my_brick", "category": "riemann", "requirements": "pressure", "capabilities": ""}
+    row = {
+        "id": "my_brick", "category": "riemann", "requirements": "pressure", "capabilities": "",
+        "native_id": "my_brick", "supported_layouts": "", "supported_platforms": "",
+        "params": "", "options": "", "exported_symbols": "",
+    }
     row.update(over)
     return row
 
 
 def _manifest(entries=None, **top):
-    doc = {"schema_version": VERSION, "bricks": entries if entries is not None else [_entry()]}
+    doc = {
+        "schema_version": VERSION, "abi_key": "test-abi", "annotations": {},
+        "bricks": entries if entries is not None else [_entry()],
+    }
     doc.update(top)
     return json.dumps(doc)
 
@@ -70,7 +77,7 @@ def test_missing_schema_version_is_refused_and_names_the_field():
         _desc.parse_brick_manifest(doc)
     msg = str(exc.value)
     assert "schema_version" in msg
-    assert "regenerate" in msg  # actionable: rebuild the brick library
+    assert "migrate" in msg
 
 
 def test_wrong_schema_version_names_got_and_expected():
@@ -118,6 +125,27 @@ def test_entry_missing_id_names_it():
     assert "id" in str(exc.value)
 
 
+@pytest.mark.parametrize("field", ["id", "category", "native_id"])
+@pytest.mark.parametrize("value", [None, "", 7, True])
+def test_identity_fields_are_nonempty_strings(field, value):
+    with pytest.raises(ValueError, match=field):
+        _desc.parse_brick_manifest(_manifest([_entry(**{field: value})]))
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["requirements", "capabilities", "supported_layouts", "supported_platforms", "params",
+     "options", "exported_symbols"],
+)
+def test_list_fields_are_explicit_canonical_csv(field):
+    with pytest.raises(ValueError, match="CSV string"):
+        _desc.parse_brick_manifest(_manifest([_entry(**{field: []})]))
+    with pytest.raises(ValueError, match="canonical"):
+        _desc.parse_brick_manifest(_manifest([_entry(**{field: "a, a"})]))
+    with pytest.raises(ValueError, match="duplicate token"):
+        _desc.parse_brick_manifest(_manifest([_entry(**{field: "a,a"})]))
+
+
 # ---- read_manifest (the .json inspection path uses the same strict parser) ---------------------
 
 def test_read_manifest_json_path_is_strict(tmp_path):
@@ -129,10 +157,15 @@ def test_read_manifest_json_path_is_strict(tmp_path):
 
 
 def test_read_manifest_json_path_accepts_versioned(tmp_path):
+    from pops.external.manifests import CompiledManifest
+
     p = tmp_path / "good.json"
-    p.write_text(_manifest())
+    wire = json.loads(_manifest(annotations={"x-owner": {"team": "runtime"}}))
+    p.write_text(json.dumps(wire))
     m = _ext.read_manifest(str(p))
     assert m.ids == ["my_brick"]
+    assert m.to_dict() == wire
+    assert CompiledManifest.from_dict(m.to_dict()) == m
 
 
 # ---- rich compiled-artifact manifest: schema_version + strict round-trip -----------------------
@@ -149,6 +182,8 @@ def test_artifact_manifest_to_dict_carries_schema_version():
     from pops.external.artifact_manifest import ARTIFACT_MANIFEST_SCHEMA_VERSION
     d = _artifact().to_dict()
     assert d["schema_version"] == ARTIFACT_MANIFEST_SCHEMA_VERSION
+    assert d["protocol"] == "pops.manifest"
+    assert d["kind"] == "compiled-artifact"
 
 
 def test_artifact_manifest_round_trip_from_dict():
@@ -163,7 +198,7 @@ def test_artifact_manifest_from_dict_missing_version_refused():
     from pops.external.artifact_manifest import CompiledArtifactManifest
     d = _artifact().to_dict()
     d.pop("schema_version")
-    with pytest.raises(ValueError) as exc:
+    with pytest.raises(TypeError) as exc:
         CompiledArtifactManifest.from_dict(d)
     assert "schema_version" in str(exc.value)
 
@@ -172,7 +207,7 @@ def test_artifact_manifest_from_dict_unknown_field_refused():
     from pops.external.artifact_manifest import CompiledArtifactManifest
     d = _artifact().to_dict()
     d["totally_new"] = 1
-    with pytest.raises(ValueError) as exc:
+    with pytest.raises(TypeError) as exc:
         CompiledArtifactManifest.from_dict(d)
     assert "totally_new" in str(exc.value)
 
@@ -181,14 +216,14 @@ def test_artifact_manifest_external_bricks_is_additive_and_round_trips():
     # ADC-544: external_bricks is an additive field -> present as [] by default and round-trips.
     from pops.external.artifact_manifest import CompiledArtifactManifest
     m = _artifact()
-    assert m.to_dict()["external_bricks"] == []  # additive, empty when none
+    assert m.to_dict()["payload"]["external_bricks"] == []
     brick = {"id": "my_ext", "native_id": "ext_native", "category": "riemann",
              "requirements": ["pressure"], "capabilities": [], "supported_layouts": ["uniform"],
              "supported_platforms": ["cpu"], "params": [], "options": [],
              "exported_symbols": ["pops_brick_residual"]}
     m2 = CompiledArtifactManifest(model_name="demo", abi_key="h|c|20", external_bricks=[brick])
     d = m2.to_dict()
-    assert d["external_bricks"][0]["native_id"] == "ext_native"
+    assert d["payload"]["external_bricks"][0]["native_id"] == "ext_native"
     back = CompiledArtifactManifest.from_dict(d)
     assert back.to_dict() == d
 
@@ -217,13 +252,13 @@ def test_artifact_manifest_is_deeply_immutable_and_returns_detached_wire_data():
         manifest.external_bricks[0]["options"]["reconstruction"]["order"] = 9
 
     detached = manifest.to_dict()
-    detached["external_bricks"][0]["options"]["reconstruction"]["order"] = 11
-    detached["ghost_depth_by_block"]["fluid"] = 11
+    detached["payload"]["external_bricks"][0]["options"]["reconstruction"]["order"] = 11
+    detached["payload"]["ghost_depth_by_block"]["fluid"] = 11
     assert manifest.external_bricks[0]["options"]["reconstruction"]["order"] == 2
     assert manifest.ghost_depth_by_block["fluid"] == 2
 
 
-# ---- ADC-544 v2 optional fields (native_id / layouts / platforms / params / options / symbols) ---
+# ---- v3 explicit fields (native_id / layouts / platforms / params / options / symbols) -----------
 
 def test_v2_optional_fields_parse():
     entry = _entry(id="ext_full", native_id="ext_native", supported_layouts="uniform,amr",
@@ -239,15 +274,19 @@ def test_v2_optional_fields_parse():
     assert rec["exported_symbols"] == ["pops_brick_residual"]
 
 
-def test_v2_native_id_defaults_to_id_when_absent():
-    records, _ = _desc.parse_brick_manifest(_manifest([_entry(id="ext_default")]))
-    rec = records[0]
-    assert rec["native_id"] == "ext_default"  # native_id defaults to the selector id
-    # The CSV lists default to [] when the field is absent.
-    assert rec["supported_layouts"] == [] and rec["exported_symbols"] == []
+@pytest.mark.parametrize(
+    "field",
+    ["native_id", "supported_layouts", "supported_platforms", "params", "options",
+     "exported_symbols"],
+)
+def test_v3_current_fields_are_explicit(field):
+    entry = _entry()
+    entry.pop(field)
+    with pytest.raises(ValueError, match=field):
+        _desc.parse_brick_manifest(_manifest([entry]))
 
 
-def test_v2_still_refuses_an_unknown_entry_field():
+def test_v3_still_refuses_an_unknown_entry_field():
     with pytest.raises(ValueError) as exc:
         _desc.parse_brick_manifest(_manifest([_entry(surprise_v2="x")]))
     assert "surprise_v2" in str(exc.value) and "unknown field" in str(exc.value)
@@ -255,11 +294,45 @@ def test_v2_still_refuses_an_unknown_entry_field():
 
 def test_v1_manifest_is_refused_after_the_bump():
     # The ADC-544 bump makes a version-1 manifest incompatible (refuse-never-warn on the wire format).
-    doc = json.dumps({"schema_version": 1, "bricks": [_entry()]})
+    doc = json.dumps({"schema_version": 1, "abi_key": "legacy", "annotations": {},
+                      "bricks": [_entry()]})
     with pytest.raises(ValueError) as exc:
         _desc.parse_brick_manifest(doc)
     msg = str(exc.value)
     assert "schema_version" in msg and "1" in msg and str(VERSION) in msg
+
+
+def test_annotations_are_required_validated_and_preserved_exactly():
+    from pops.external.manifests import CompiledManifest, _parse_manifest_metadata
+
+    annotations = {"x-owner": {"team": "physics"}, "urn:pops:test": [1, "two"]}
+    compiled = _parse_manifest_metadata(_manifest(annotations=annotations))
+    assert compiled.annotations == annotations
+    assert CompiledManifest.from_dict(compiled.to_dict()).to_dict() == compiled.to_dict()
+    with pytest.raises(ValueError, match="annotations"):
+        _desc.parse_brick_manifest(_manifest(annotations=None))
+    with pytest.raises(ValueError, match="namespace URI"):
+        _desc.parse_brick_manifest(_manifest(annotations={"owner": "physics"}))
+
+
+def test_duplicate_json_key_and_duplicate_ids_are_refused():
+    duplicate_key = (
+        '{"schema_version":3,"abi_key":"a","abi_key":"b","annotations":{},"bricks":[]}'
+    )
+    with pytest.raises(ValueError, match="duplicate.*key"):
+        _desc.parse_brick_manifest(duplicate_key)
+    with pytest.raises(ValueError, match="duplicate brick id"):
+        _desc.parse_brick_manifest(_manifest([_entry(), _entry()]))
+
+
+def test_registration_is_idempotent_but_refuses_different_metadata_collision():
+    payload = _manifest()
+    assert _desc._register_manifest(payload) == 1
+    assert _desc._register_manifest(payload) == 1
+    with pytest.raises(ValueError, match="collision.*different metadata"):
+        _desc._register_manifest(_manifest([_entry(category="preconditioner")]))
+    with pytest.raises(ValueError, match="collision.*different metadata"):
+        _desc._register_manifest(_manifest(annotations={"x-owner": "other"}))
 
 
 # ---- external bricks appear in the capability report (ADC-611) --------------------------------

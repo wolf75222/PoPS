@@ -10,6 +10,7 @@
 #include <pops/mesh/boundary/physical_bc.hpp>  // AuxHaloPolicy (ADC-369: per-field aux halo tail marshaling)
 #include <pops/runtime/config/route_ids.hpp>  // verify_route_manifest (ADC-599: embedded route registry guard)
 #include <pops/runtime/dynamic/abi_key.hpp>   // pops::abi_key (ABI guard for the native loader)
+#include <pops/runtime/module_capabilities.hpp>  // kAbiVersion (strict compiled manifest)
 #include <pops/runtime/dynamic/dynamic_model.hpp>  // IModel: model loaded at runtime (dynamic block)
 #include <pops/runtime/context/grid_context.hpp>   // GridContext
 #include <pops/runtime/system.hpp>  // pops::System (install_block / grid_context / ensure_aux_width)
@@ -20,6 +21,8 @@
 #include <pops/runtime/dynamic/dynlib.hpp>  // portable dlopen<->LoadLibraryW layer (ADC-99); includes <dlfcn.h> on POSIX
 #include <functional>
 #include <memory>
+#include <limits>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -199,6 +202,8 @@ inline std::vector<std::string> split(const std::string& s, char sep) {
 /// add_dynamic_block paths fall back to their fallback (names u0.., empty roles, gamma 1.4). No C++
 /// object dependency: only strings and a double pass through dlsym (flat ABI, like the rest of the block).
 struct BlockMeta {
+  bool has_names = false;
+  bool has_roles = false;
   bool has_gamma = false;
   double gamma = static_cast<double>(kPhysicalDefaultGamma);
   VariableSet cons{VariableKind::Conservative, {}, 0, {}};
@@ -244,6 +249,8 @@ inline BlockMeta read_block_meta(pops::dynlib::handle h) {
       reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_compiled_var_names"));
   auto roles_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_compiled_roles"));
   auto gamma_fn = reinterpret_cast<double (*)()>(pops::dynlib::sym(h, "pops_compiled_gamma"));
+  m.has_names = names_fn != nullptr;
+  m.has_roles = roles_fn != nullptr;
   std::string names = names_fn ? std::string(names_fn()) : std::string();
   std::string roles = roles_fn ? std::string(roles_fn()) : std::string();
   // "cons|prim": index 0 = conservative set, index 1 = primitive set (each possibly empty).
@@ -259,6 +266,61 @@ inline BlockMeta read_block_meta(pops::dynlib::handle h) {
     m.gamma = gamma_fn();
   }
   return m;
+}
+
+inline void validate_compiled_manifest(pops::dynlib::handle h, int n_vars, int n_aux,
+                                       int n_params) {
+  using int_fn = int (*)();
+  auto manifest_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_compiled_manifest"));
+  auto schema_fn = reinterpret_cast<int_fn>(
+      pops::dynlib::sym(h, "pops_compiled_manifest_schema_version"));
+  auto kind_fn = reinterpret_cast<const char* (*)()>(
+      pops::dynlib::sym(h, "pops_compiled_manifest_kind"));
+  auto abi_fn = reinterpret_cast<int_fn>(pops::dynlib::sym(h, "pops_compiled_abi_version"));
+  if (!manifest_fn || !schema_fn || !kind_fn || !abi_fn)
+    throw std::runtime_error(
+        "add_compiled_block: strict compiled manifest symbols are missing; regenerate the artifact");
+  const char* raw_ptr = manifest_fn();
+  const char* kind_ptr = kind_fn();
+  if (!raw_ptr || !kind_ptr)
+    throw std::runtime_error("add_compiled_block: strict compiled manifest returned NULL");
+  const std::string raw(raw_ptr);
+  if (schema_fn() != 2 || raw.find("\"schema_version\":2") == std::string::npos)
+    throw std::runtime_error("add_compiled_block: unsupported compiled manifest schema_version");
+  if (std::string(kind_ptr) != "pops.compiled-block" ||
+      raw.find("\"kind\":\"pops.compiled-block\"") == std::string::npos)
+    throw std::runtime_error("add_compiled_block: compiled manifest kind is not 'pops.compiled-block'");
+  if (abi_fn() != kAbiVersion ||
+      raw.find("\"abi_version\":" + std::to_string(kAbiVersion)) == std::string::npos)
+    throw std::runtime_error("add_compiled_block: compiled manifest ABI version mismatch");
+  const struct { const char* key; int value; } counts[] = {
+      {"n_vars", n_vars}, {"n_aux", n_aux}, {"n_params", n_params}};
+  for (const auto& count : counts)
+    if (raw.find(std::string("\"") + count.key + "\":" + std::to_string(count.value) + ",") ==
+        std::string::npos)
+      throw std::runtime_error(std::string("add_compiled_block: compiled manifest disagrees on '") +
+                               count.key + "'");
+}
+
+inline void validate_strict_block_meta(const BlockMeta& meta, int n_vars) {
+  if (!meta.has_names || !meta.has_roles)
+    throw std::runtime_error(
+        "add_compiled_block: strict variable names/roles metadata symbols are required");
+  auto validate_set = [n_vars](const VariableSet& vars, const char* kind) {
+    if (static_cast<int>(vars.names.size()) != n_vars ||
+        static_cast<int>(vars.roles.size()) != n_vars)
+      throw std::runtime_error(std::string("add_compiled_block: ") + kind +
+                               " names and roles must each have n_vars entries");
+    std::set<std::string> names;
+    for (const std::string& name : vars.names)
+      if (name.empty() || !names.insert(name).second)
+        throw std::runtime_error(std::string("add_compiled_block: ") + kind +
+                                 " variable names must be non-empty and unique");
+  };
+  validate_set(meta.cons, "conservative");
+  validate_set(meta.prim, "primitive");
+  if (meta.has_gamma && (!std::isfinite(meta.gamma) || meta.gamma <= 1.0))
+    throw std::runtime_error("add_compiled_block: gamma metadata must be finite and > 1");
 }
 
 /// Builds a DYNAMIC block (IModel<NV> model loaded from the .so @p h) and adds it. The
@@ -550,10 +612,16 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
         "dsl.compile_aot / compile_or_jit(mode='compile'))");
   }
   const int nv = nv_fn();
+  if (nv <= 0)
+    throw std::runtime_error("add_compiled_block: n_vars must be positive");
   // Width of the aux channel that the compiled model READS (B_z, T_e...). Symmetric to the JIT path
   // (IModel::n_aux). Optional: an old .so without this symbol falls back on the base contract (3).
   auto naux_fn = reinterpret_cast<nv_fn_t>(pops::dynlib::sym(h, "pops_compiled_naux"));
   const int naux = naux_fn ? naux_fn() : kAuxBaseComps;
+  if (!naux_fn || naux < kAuxBaseComps || naux > kAuxMaxComps)
+    throw std::runtime_error("add_compiled_block: n_aux is missing or outside the supported [" +
+                             std::to_string(kAuxBaseComps) + "," +
+                             std::to_string(kAuxMaxComps) + "] envelope");
   // RUNTIME PARAMS (P7-b): SUFFIXED `_p` variants that take a flat block (const double*, int) of
   // runtime parameter values, injected into the model before execution. OPTIONAL: a .so
   // generated before this work (or a model without runtime params) does not expose them / declares nparams=0 ->
@@ -568,11 +636,12 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
   // limit -- otherwise the flat block would be copied into the fixed-size device array
   // RuntimeParams::values[kMaxRuntimeParams] (silently truncated in make_model_with_params, then read
   // out of bounds on device for values a wrongly-large loader passed). Never a silent overflow.
-  if (nparams > kMaxRuntimeParams)
+  if (!nparams_fn || nparams < 0 || nparams > kMaxRuntimeParams)
     throw std::runtime_error(
-        "add_compiled_block: the .so declares " + std::to_string(nparams) +
-        " runtime parameters > kMaxRuntimeParams=" + std::to_string(kMaxRuntimeParams) +
-        " (include/pops/runtime/config/runtime_params.hpp); the fixed-size device carrier "
+        "add_compiled_block: the .so declares an absent or invalid n_params=" +
+        std::to_string(nparams) + " (expected 0.." + std::to_string(kMaxRuntimeParams) +
+        ", kMaxRuntimeParams=" + std::to_string(kMaxRuntimeParams) +
+        ") (include/pops/runtime/config/runtime_params.hpp); the fixed-size device carrier "
         "RuntimeParams cannot hold them. Regenerate the compiled module with the current headers "
         "(the codegen enforces the same bound).");
   using res_p_fn_t = void (*)(const double*, double*, const double*, int, double, double, int,
@@ -586,6 +655,12 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
   auto adv_p_fn = reinterpret_cast<adv_p_fn_t>(pops::dynlib::sym(h, "pops_compiled_advance_p"));
   auto max_p_fn = reinterpret_cast<max_p_fn_t>(pops::dynlib::sym(h, "pops_compiled_max_speed_p"));
   auto poi_p_fn = reinterpret_cast<poi_p_fn_t>(pops::dynlib::sym(h, "pops_compiled_poisson_rhs_p"));
+  validate_compiled_manifest(h, nv, naux, nparams);
+  const bool any_param_entrypoint = res_p_fn || adv_p_fn || max_p_fn || poi_p_fn;
+  const bool all_param_entrypoints = res_p_fn && adv_p_fn && max_p_fn && poi_p_fn;
+  if (any_param_entrypoint != all_param_entrypoints || (nparams > 0 && !all_param_entrypoints))
+    throw std::runtime_error(
+        "add_compiled_block: runtime-parameter entrypoints must be present as one complete set");
   // SHARED block of current values: captured by the closures AND registered in P->block_params_
   // (set_block_params writes there -> the closures see the new value at the next step). Empty if the
   // block has no runtime param or if the `_p` ABI is absent (old .so): the closures then call
@@ -603,15 +678,16 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
     pv = std::make_shared<std::vector<double>>(static_cast<std::size_t>(nparams), 0.0);
     auto defs_fn =
         reinterpret_cast<void (*)(double*)>(pops::dynlib::sym(h, "pops_compiled_param_defaults"));
-    if (defs_fn)
-      defs_fn(pv->data());  // seed to the declaration defaults
+    if (!defs_fn)
+      throw std::runtime_error(
+          "add_compiled_block: n_params > 0 requires pops_compiled_param_defaults");
+    defs_fn(pv->data());  // seed to the declaration defaults
   }  // registration in P->block_params_ DEFERRED to just before push_back (after the validations that
   // may throw: avoids an orphan entry without an associated block if the addition fails).
-  // OPTIONAL metadata (names / roles / gamma) transported by the extended ABI of the .so. Absent
-  // from an old .so -> empty meta, we fall back on the fallback (names u0.. / no roles / gamma 1.4).
+  // Strict names / roles metadata transported by the extended ABI. Missing or malformed descriptors
+  // are rejected before the block store or parameter registry is mutated.
   const BlockMeta meta = read_block_meta(h);
-  if ((names.empty() && meta.cons.names.empty()) || meta.cons.roles.empty() || !meta.has_gamma)
-    record_fallback(FallbackCounter::kNativeLoaderLegacyMetadata);
+  validate_strict_block_meta(meta, nv);
   // Widen the SHARED aux channel so set_magnetic_field/T_e populate it and the marshaling
   // transports the extra components to the .so. Base model (3) -> no-op (bit-identical).
   P->ensure_aux_width(naux);
@@ -689,9 +765,8 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
         r(i, j, 0) += pr[static_cast<std::size_t>(j - v.lo[1]) * n + (i - v.lo[0])];
   };
 
-  // Variable descriptors: PRIORITY to the explicit name passed by the caller (names=), otherwise to the
-  // NAMES carried by the extended ABI of the .so (meta), otherwise fallback u0.. . The ROLES and the PRIMITIVE do not
-  // transit EXCEPT through the ABI (the API has no way to provide them): we take them from meta as-is.
+  // Variable descriptors come from the strict artifact metadata. ``names=`` may only provide a
+  // same-width display override; it cannot repair an incomplete artifact contract.
   VariableSet cons_vs = meta.cons, prim_vs = meta.prim;
   if (!names.empty()) {  // explicit override of the conservative names
     if (static_cast<int>(names.size()) != nv)
@@ -701,16 +776,9 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
     cons_vs.names = names;
     cons_vs.size = static_cast<int>(names.size());
   }
-  if (cons_vs.names.empty()) {  // neither names= nor meta: historical fallback u0..
-    for (int c = 0; c < nv; ++c)
-      cons_vs.names.push_back("u" + std::to_string(c));
-    cons_vs.size = nv;
-  }
-  if (prim_vs.names.empty())
-    prim_vs = {VariableKind::Primitive, cons_vs.names, cons_vs.size, {}};
-  // gamma: carried by the ABI if the model declares it (pops_compiled_gamma), otherwise historical default 1.4.
+  // Gamma is optional metadata for non-gas models. Preserve absence as NaN; never fabricate 1.4.
   const double gamma =
-      meta.has_gamma ? meta.gamma : static_cast<double>(kPhysicalDefaultGamma);
+      meta.has_gamma ? meta.gamma : std::numeric_limits<double>::quiet_NaN();
   typename ImplT::Species block{name,
                                 MultiFab(P->ba, P->dm, nv, 2),
                                 nv,

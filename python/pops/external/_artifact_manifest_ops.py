@@ -64,14 +64,6 @@ def build_compiled_manifest(compiled):
     bind_schema_artifact_hash = bind_schema.artifact_hash if bind_schema is not None else None
 
     caps_flags = _caps_flags(compiled)
-    from pops.runtime_environment import runtime_environment_report
-
-    runtime_facts = runtime_environment_report()
-    # Manifest compatibility fields describe what these bytes REQUIRE, not every capability the
-    # abstract production route could provide under another build.  A serial native artifact must
-    # therefore remain bindable to the serial runtime that produced it.
-    if runtime_facts.get("mpi_compiled") is not None:
-        caps_flags["supports_mpi"] = bool(runtime_facts["mpi_compiled"])
     return CompiledArtifactManifest(
         model_name=model_name, abi_key=abi_key, abi_version=None,
         required_headers_sig=_headers_sig(abi_key), blocks=blocks, variables=variables,
@@ -82,11 +74,8 @@ def build_compiled_manifest(compiled):
         ghost_depth_by_block=ghost_depth_by_block, field_outputs=field_outputs,
         supports_stride=None, supports_partial_imex_mask=None, supports_named_fields=None,
         native_entrypoints=[], external_bricks=external_bricks,
-        dimension=runtime_facts["dimension"],
-        amr_refinement_ratio=runtime_facts["amr_refinement_ratio"],
-        precision=runtime_facts["precision"], real_bytes=runtime_facts["real_bytes"],
-        communicator=runtime_facts["communicator"],
-        supports_custom_communicator=runtime_facts["supports_custom_communicator"],
+        dimension=None, amr_refinement_ratio=None, precision=None, real_bytes=None,
+        communicator=None, supports_custom_communicator=None,
         **caps_flags)
 
 
@@ -99,41 +88,80 @@ _NATIVE_LAYOUT_PLATFORM_FIELDS = (
 )
 
 
+def validate_native_manifest(native):
+    """Validate and return the exact current compiled-block native contract."""
+    if not isinstance(native, dict):
+        raise ValueError("compiled native manifest must be a JSON object")
+    expected = {
+        "schema_version", "kind", "abi_version", "n_vars", "n_aux", "n_params",
+        "ghost_depth", "supports_uniform", "supports_amr", "supports_mpi",
+        "supports_gpu", "supports_stride", "supports_partial_imex_mask",
+        "supports_named_fields", "roles", "native_entrypoints",
+    }
+    missing = sorted(expected - set(native))
+    unknown = sorted(set(native) - expected)
+    if missing or unknown:
+        raise ValueError(
+            "compiled native manifest fields must be exact; missing=%s unknown=%s"
+            % (missing, unknown)
+        )
+    version = native["schema_version"]
+    if isinstance(version, bool) or not isinstance(version, int) or version != 2:
+        raise ValueError("compiled native manifest schema_version must be integer 2")
+    if native["kind"] != "pops.compiled-block":
+        raise ValueError("compiled native manifest kind must be 'pops.compiled-block'")
+    for field in ("abi_version", "n_vars", "n_aux", "n_params", "ghost_depth"):
+        value = native[field]
+        minimum = 1 if field in ("abi_version", "n_vars") else 0
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise ValueError("compiled native manifest %s must be integer >= %d"
+                             % (field, minimum))
+    for field in _NATIVE_BOOL_FIELDS[:-1] + _NATIVE_LAYOUT_PLATFORM_FIELDS:
+        if not isinstance(native[field], bool):
+            raise ValueError("compiled native manifest %s must be bool" % field)
+    for field in ("roles", "native_entrypoints"):
+        value = native[field]
+        if (not isinstance(value, list)
+                or any(not isinstance(item, str) or not item for item in value)
+                or len(value) != len(set(value))):
+            raise ValueError(
+                "compiled native manifest %s must contain unique non-empty strings" % field
+            )
+    if native["roles"] and len(native["roles"]) != native["n_vars"]:
+        raise ValueError("compiled native manifest roles cardinality must equal n_vars")
+    return native
+
+
 def apply_native_manifest(manifest, native):
-    """Return a new immutable manifest with authoritative native facts overlaid."""
+    """Return a manifest completed by one exact authoritative native contract.
+
+    Loading is deliberately not a migration seam: every current field must be
+    emitted by the shared object, unknown fields are refused, and values are
+    copied without Python coercion.
+    """
     from pops.external.artifact_manifest import CompiledArtifactManifest
 
     if not isinstance(manifest, CompiledArtifactManifest):
         raise TypeError("apply_native_manifest requires a CompiledArtifactManifest")
-    if not native:
-        return manifest
-    values = manifest.to_dict()
-    values.pop("schema_version", None)
+    native = validate_native_manifest(native)
+    if manifest.variables and len(manifest.variables) != native["n_vars"]:
+        raise ValueError("compiled native manifest n_vars disagrees with carried variables")
+    if manifest.params_runtime and len(manifest.params_runtime) != native["n_params"]:
+        raise ValueError("compiled native manifest n_params disagrees with BindSchema")
+    values = dict(manifest.to_dict()["payload"])
     values.pop("capability_matrix", None)
-    if "abi_version" in native:
-        values["abi_version"] = native["abi_version"]
-    if "ghost_depth" in native and manifest.ghost_depth is None:
-        values["ghost_depth"] = native["ghost_depth"]
-    if native.get("ghost_depth_by_block") and not manifest.ghost_depth_by_block:
-        values["ghost_depth_by_block"] = dict(native["ghost_depth_by_block"])
-    for field in _NATIVE_BOOL_FIELDS:
-        if field in native:
-            values[field] = bool(native[field])
+    values["abi_version"] = native["abi_version"]
+    if manifest.ghost_depth is not None and manifest.ghost_depth != native["ghost_depth"]:
+        raise ValueError("compiled native manifest ghost_depth disagrees with carried metadata")
+    values["ghost_depth"] = native["ghost_depth"]
+    for field in _NATIVE_BOOL_FIELDS[:-1]:
+        values[field] = native[field]
     for field in _NATIVE_LAYOUT_PLATFORM_FIELDS:
-        if field in native:
-            values[field] = bool(native[field])
-    for field in ("dimension", "amr_refinement_ratio", "real_bytes"):
-        if field in native:
-            values[field] = int(native[field])
-    for field in ("precision", "communicator"):
-        if field in native:
-            values[field] = str(native[field])
-    roles = native.get("roles")
-    if roles and manifest.roles is None:
-        values["roles"] = list(roles)
-    entrypoints = native.get("native_entrypoints")
-    if entrypoints:
-        values["native_entrypoints"] = list(entrypoints)
+        values[field] = native[field]
+    if manifest.roles is not None and list(manifest.roles) != native["roles"]:
+        raise ValueError("compiled native manifest roles disagree with carried metadata")
+    values["roles"] = list(native["roles"])
+    values["native_entrypoints"] = list(native["native_entrypoints"])
     return CompiledArtifactManifest(**values)
 
 
@@ -181,5 +209,5 @@ def check_layout_supported(manifest, layout_kind):
 
 __all__ = [
     "apply_native_manifest", "build_compiled_manifest", "build_compiled_manifest_from_so",
-    "check_layout_supported", "load_native_manifest",
+    "check_layout_supported", "load_native_manifest", "validate_native_manifest",
 ]

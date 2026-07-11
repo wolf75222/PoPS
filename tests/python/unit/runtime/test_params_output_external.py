@@ -5,6 +5,8 @@ checkpoint / format / level policies, and typed compiled-brick references with m
 native id. All inert; the runtime consumes them. Needs only `import pops`.
 """
 
+import json
+
 import pytest
 
 pops = pytest.importorskip("pops")
@@ -163,12 +165,18 @@ def test_output_policy_rejects_non_writable_semantic_handles():
 
 def test_external_brick_ref_resolves_from_json_manifest(tmp_path):
     _desc._clear_external_catalog()
+    from pops.runtime.bricks import abi_key
     manifest = tmp_path / "bricks.json"
-    # ADC-611 : le schema strict versionne exige schema_version + chaque champ d'entree.
-    # ADC-544 : le schema passe a la v2 (les champs v2 sont optionnels; native_id defaut = id).
-    manifest.write_text(
-        '{"schema_version": 2, "bricks": [{"id": "my_ext_hll", "category": "riemann", '
-        '"requirements": "physical_flux,wave_speeds", "capabilities": ""}]}', encoding="utf-8")
+    manifest.write_text(json.dumps({
+        "schema_version": _desc.BRICK_MANIFEST_SCHEMA_VERSION,
+        "abi_key": abi_key(), "annotations": {},
+        "bricks": [{
+            "id": "my_ext_hll", "category": "riemann", "native_id": "my_ext_hll",
+            "requirements": "physical_flux,wave_speeds", "capabilities": "",
+            "supported_layouts": "", "supported_platforms": "", "params": "", "options": "",
+            "exported_symbols": "",
+        }],
+    }), encoding="utf-8")
     ref = CompiledBrickRef(manifest=str(manifest), native_id="my_ext_hll",
                            expect_category="riemann")
     assert ref.available()  # registers + resolves

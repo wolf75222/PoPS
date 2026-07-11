@@ -82,13 +82,7 @@ class CompiledBrickRef(Descriptor):
         symbol (:class:`ValueError`). A ``.json``-only manifest skips G4 (no ``.so`` to probe). A ref
         whose ``native_id`` is not in the manifest is left to :meth:`resolve`'s clear ``LookupError``.
         Returns ``True`` when every checkable gate passes."""
-        try:
-            self._ensure_registered()
-        except OSError as error:
-            raise ValueError(
-                "compiled brick %r manifest could not be loaded from %r: %s"
-                % (self.native_id, self.manifest, error)
-            ) from error
+        self._ensure_registered()
         if self._record is not None:
             validate_ref(self._record, manifest_abi_key=self._manifest_abi_key,
                          context=self._gate_context(context), handle=self._handle)
@@ -103,7 +97,12 @@ class CompiledBrickRef(Descriptor):
         capabilities (``"capabilities"`` or a ``"model"``) and the requested ``"layout"``."""
         self._ensure_registered()
         self.validate(context)
-        return _external_descriptor(self.native_id, expect_category=self.expect_category)
+        if self._record is None:
+            raise LookupError(
+                "compiled brick native_id %r is not declared by manifest %r"
+                % (self.native_id, self.manifest)
+            )
+        return _external_descriptor(self._record["id"], expect_category=self.expect_category)
 
     def manifest_record(self):
         """The parsed per-brick manifest dict (native_id / category / requirements / capabilities /
@@ -114,19 +113,10 @@ class CompiledBrickRef(Descriptor):
         return dict(self._record) if self._record is not None else None
 
     def requirements(self):
-        # Inert metadata accessor: an unresolved brick (not loaded / bad manifest) has no
-        # requirements to report; the loud signal is surfaced by available()/resolve(), so this
-        # degrades to an empty typed set rather than crashing an introspection walk.
-        try:
-            return RequirementSet(dict(self.resolve().requirements))
-        except (LookupError, ValueError, OSError, RuntimeError):
-            return RequirementSet()
+        return RequirementSet(dict(self.resolve().requirements))
 
     def capabilities(self):
-        try:
-            return CapabilitySet(dict(self.resolve().capabilities))
-        except (LookupError, ValueError, OSError, RuntimeError):
-            return CapabilitySet()
+        return CapabilitySet(dict(self.resolve().capabilities))
 
     def available(self, context=None):
         try:

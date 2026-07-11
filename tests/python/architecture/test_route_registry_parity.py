@@ -338,7 +338,7 @@ def test_alias_maps_evolve_together():
 def test_embedded_route_manifest_signature_and_version_parity():
     """ADC-599: the EMBEDDED route manifest (signature + registry version) is one across the mirror.
 
-    ``route_registry_signature()`` ("family:count,..." in registry order) is baked verbatim into
+    ``route_registry_signature()`` (versioned FNV-1a over complete rows) is baked verbatim into
     every generated artifact (pops_compiled_route_manifest / pops_program_route_manifest) and
     compared at load time by pops::verify_route_manifest.  The Python producer
     (routes.py::route_registry_signature) and the C++ consumer (route_ids.hpp::route_registry_signature)
@@ -350,12 +350,23 @@ def test_embedded_route_manifest_signature_and_version_parity():
     cpp_families, cpp_raw = _parse_cpp_registry()
 
     def _signature(families):
-        return ",".join("%s:%d" % (family, len(rows)) for family, rows in families.items())
+        value = 14695981039346656037
+        for family, rows in families.items():
+            for route_id, row in enumerate(rows):
+                requirements = ",".join(row["requirements"])
+                limitations = ",".join(row["limitations"])
+                wire = "\x1f".join((
+                    family, str(route_id), row["token"], row["native_entry"],
+                    requirements, limitations,
+                )) + "\n"
+                for byte in wire.encode():
+                    value ^= byte
+                    value = (value * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+        return "v%d:%016x" % (module.ROUTE_REGISTRY_VERSION, value)
 
     py_sig = _signature(py_families)
     cpp_sig = _signature(cpp_families)
-    # The Python-side function itself must agree with the recomputed table signature (guards a
-    # divergence between _TABLES iteration order and route_registry_signature()).
+    # Both mirrors must agree on the complete authenticated row stream.
     assert module.route_registry_signature() == py_sig, (
         "routes.py::route_registry_signature() %r disagrees with its own _TABLES row counts %r"
         % (module.route_registry_signature(), py_sig))

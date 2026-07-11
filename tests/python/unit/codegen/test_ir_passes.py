@@ -310,11 +310,17 @@ def test_rebuild_preserves_history_policy_and_remaps_field_context_stage_source(
     depth, policy = rebuilt._history_persistence["tracked.U"]
 
     assert depth == 4
-    assert policy.to_manifest() == {"kind": "interval", "k": 3}
+    assert policy.to_manifest() == {
+        "protocol": "pops.manifest", "kind": "history-persistence", "schema_version": 1,
+        "payload": {"policy": "interval", "k": 3},
+    }
     assert rebuilt_fields.field_context.stage_sources == ((rebuilt_state.block, rebuilt_state.id),)
     rebuilt_fields.field_context.require_read(None, rebuilt_state.block, rebuilt_state.id)
     assert rebuilt._serialize()["history_persistence"] == [{
         "name": "tracked.U",
         "depth": 4,
-        "policy": {"kind": "interval", "k": 3},
+        "policy": {
+            "protocol": "pops.manifest", "kind": "history-persistence", "schema_version": 1,
+            "payload": {"policy": "interval", "k": 3},
+        },
     }]

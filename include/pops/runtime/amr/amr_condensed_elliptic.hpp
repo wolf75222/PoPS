@@ -75,7 +75,10 @@ class AmrCondensedElliptic {
       case 2: return lb.a_xy;    // kAxy
       case 3: return lb.a_yx;    // kAyx
       case 4: return lb.rhs;     // kRhs
-      default: return lb.flux;   // kFlux (transient explicit-flux scratch)
+      case 5: return lb.flux;    // kFlux (transient explicit-flux scratch)
+      default:
+        throw std::runtime_error("AmrCondensedElliptic::target: unknown AssemblyFieldRole wire id " +
+                                 std::to_string(role));
     }
   }
 

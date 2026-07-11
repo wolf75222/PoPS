@@ -40,7 +40,7 @@ def test_ghost_depth_by_block_round_trips_through_dict():
     m = CompiledArtifactManifest(model_name="gas", ghost_depth=2,
                                  ghost_depth_by_block={"ions": 2})
     data = m.to_dict()
-    assert data["ghost_depth_by_block"] == {"ions": 2}, "serialized in to_dict"
+    assert data["payload"]["ghost_depth_by_block"] == {"ions": 2}, "serialized in to_dict"
     # Additive field: from_dict accepts it (schema stays v1, no unknown-field error).
     back = CompiledArtifactManifest.from_dict(data)
     assert back.ghost_depth_by_block == {"ions": 2}, "reconstructed by from_dict"

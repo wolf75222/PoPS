@@ -9,6 +9,7 @@
 
 #include <pops/core/foundation/types.hpp>      // Real, POPS_HD
 #include <pops/runtime/program/profiler.hpp>   // Profiler / ProfileScope (per-node timing, ADC-459)
+#include <pops/runtime/program/wire_ids.hpp>   // stable compiled-Program numeric protocol
 #include <pops/mesh/boundary/physical_bc.hpp>  // fill_ghosts (periodic / physical halo exchange)
 #include <pops/mesh/execution/for_each.hpp>  // for_each_cell (per-cell coeff / reconstruct kernels + negated divergence copy)
 #include <pops/mesh/geometry/geometry.hpp>  // Geometry (mesh metric of the Laplacian / gradient)
@@ -48,30 +49,6 @@
 namespace pops {
 namespace runtime {
 namespace program {
-
-/// Krylov method id for the ``ctx.solve_linear_matfree(...)`` seam (ADC-633). The codegen emits the id
-/// as a plain int; both ProgramContext (uniform) and AmrProgramContext (hierarchy) dispatch on it.
-enum LinearSolveMethod {
-  kLinearSolveCg = 0,          ///< pops::cg_solve (SPD, no preconditioner parameter)
-  kLinearSolveBicgstab = 1,    ///< pops::bicgstab_solve (the matrix-free default)
-  kLinearSolveGmres = 2,       ///< pops::gmres_solve (restarted; @p restart = basis size)
-  kLinearSolveRichardson = 3,  ///< pops::richardson_solve (omega = 1)
-};
-
-/// Assembly field-role id for the ``ctx.assembly_target(field, role)`` / ``assembly_source(field, role)``
-/// write/read-redirection seam (ADC-633 / ADC-637). The codegen emits the id by NAME; the uniform
-/// ProgramContext ignores it (identity, byte-preserving), the AMR ProgramContext routes the field to the
-/// matching per-level composite buffer of AmrCondensedElliptic on a refined hierarchy. Declared on the
-/// always-included facade so every generated .so sees it (the emitted condensed redirect names kEpsX..kPhi).
-enum AssemblyFieldRole {
-  kEpsX = 0,  ///< diagonal coefficient eps_x (A_op(0,0))
-  kEpsY = 1,  ///< diagonal coefficient eps_y (A_op(1,1))
-  kAxy = 2,   ///< cross coefficient a_xy (A_op(0,1))
-  kAyx = 3,   ///< cross coefficient a_yx (A_op(1,0))
-  kRhs = 4,   ///< condensed right-hand side
-  kFlux = 5,  ///< explicit flux F
-  kPhi = 6,   ///< solved potential phi^{n+theta} (READ role for the reconstruction)
-};
 
 class ProgramContext {
  public:
@@ -238,13 +215,19 @@ class ProgramContext {
   /// allocated, byte-for-byte as before. The @p role tag (a field id defined by the assembly module) is
   /// ignored here; it exists so the AMR ProgramContext can, on a refined hierarchy, redirect the write
   /// to a per-level composite buffer instead. Kept trivial + inline so the uniform .so is unchanged.
-  MultiFab& assembly_target(MultiFab& field, int /*role*/) const { return field; }
+  MultiFab& assembly_target(MultiFab& field, int role) const {
+    validate_assembly_write_role(role, "ProgramContext::assembly_target");
+    return field;
+  }
 
   /// The MultiFab a per-level reconstruction should READ its solved field from (ADC-633). Identity on
   /// the uniform System (the field passed is the level-0 solution the emitted solve wrote); the AMR
   /// ProgramContext redirects the READ to the current level's published composite field on a refined
   /// hierarchy. Trivial + inline so the uniform .so is byte-for-byte unchanged.
-  MultiFab& assembly_source(MultiFab& field, int /*role*/) const { return field; }
+  MultiFab& assembly_source(MultiFab& field, int role) const {
+    validate_assembly_read_role(role, "ProgramContext::assembly_source");
+    return field;
+  }
 
   /// Solve the matrix-free linear system A(phi) = rhs of a compiled Program (ADC-633). On the uniform
   /// System this dispatches by @p method to the SAME matrix-free Krylov call the codegen used to emit
@@ -259,6 +242,7 @@ class ProgramContext {
                             const ApplyFn& precond, int method, Real tol, int max_iter,
                             int restart) const {
     (void)restart;
+    validate_linear_solve_method(method, "ProgramContext::solve_linear_matfree");
     switch (method) {
       case kLinearSolveCg:
         (void)pops::cg_solve(apply, sol, rhs, tol, max_iter);
@@ -269,9 +253,11 @@ class ProgramContext {
       case kLinearSolveRichardson:
         (void)pops::richardson_solve(apply, sol, rhs, static_cast<Real>(1), tol, max_iter);
         break;
-      default:  // kLinearSolveBicgstab
+      case kLinearSolveBicgstab:
         (void)pops::bicgstab_solve(apply, precond, sol, rhs, tol, max_iter);
         break;
+      default:
+        break;  // validated above; keeps exhaustive behavior explicit for defensive builds
     }
   }
 

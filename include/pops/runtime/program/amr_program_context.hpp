@@ -24,6 +24,7 @@
 #include <pops/runtime/context/grid_context.hpp>  // GridContext (per-level Schur assembly seam, ADC-633)
 #include <pops/runtime/amr_system.hpp>          // AmrSystem (the facade: params / block map / engine)
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams
+#include <pops/runtime/program/wire_ids.hpp>       // stable compiled-Program numeric protocol
 
 /// @file
 /// @brief AmrProgramContext -- the AMR counterpart of ProgramContext (epic ADC-508, Spec 6).
@@ -438,6 +439,7 @@ class AmrProgramContext {
   /// emitted level-0 field IS the whole system, so this is the identity (byte-for-byte the uniform path --
   /// the flat bit-parity gate). @p role is an AssemblyFieldRole (eps_x / eps_y / a_xy / a_yx / rhs / flux).
   MultiFab& assembly_target(MultiFab& field, int role) const {
+    validate_assembly_write_role(role, "AmrProgramContext::assembly_target");
     AmrCondensedElliptic& s = condensed_elliptic();
     if (!s.has_fine_patches())
       return field;  // flat / no fine patch: the emitted level-0 field is correct as-is.
@@ -446,7 +448,8 @@ class AmrProgramContext {
   /// Reconstruction READ redirection (ADC-633): the fine-level reconstruction reads the level's published
   /// composite potential (the emitted level-0 solution cannot hold a fine level's phi). Flat / no fine
   /// patch: identity (returns the emitted solution). @p role is kPhi.
-  MultiFab& assembly_source(MultiFab& field, int /*role*/) const {
+  MultiFab& assembly_source(MultiFab& field, int role) const {
+    validate_assembly_read_role(role, "AmrProgramContext::assembly_source");
     AmrCondensedElliptic& s = condensed_elliptic();
     if (!s.has_fine_patches())
       return field;
@@ -471,6 +474,7 @@ class AmrProgramContext {
                           const ApplyFn& precond, int method, Real tol, int max_iter,
                           int restart) const {
     (void)restart;
+    validate_linear_solve_method(method, "AmrProgramContext::solve_linear_matfree");
     AmrCondensedElliptic& s = condensed_elliptic();
     if (!s.has_fine_patches()) {
       switch (method) {
@@ -483,9 +487,11 @@ class AmrProgramContext {
         case kLinearSolveRichardson:
           (void)pops::richardson_solve(apply, sol, rhs, static_cast<Real>(1), tol, max_iter);
           break;
-        default:  // kLinearSolveBicgstab
+        case kLinearSolveBicgstab:
           (void)pops::bicgstab_solve(apply, precond, sol, rhs, tol, max_iter);
           break;
+        default:
+          break;  // validated above
       }
       return;
     }

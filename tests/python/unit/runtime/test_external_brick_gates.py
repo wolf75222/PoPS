@@ -46,9 +46,18 @@ def _record(**over):
     return rec
 
 
-def _write_manifest(tmp_path, entry, *, schema_version=2, name="bricks.json", **top):
-    """Write a v2 brick manifest .json carrying @p entry, return its path."""
-    doc = {"schema_version": schema_version, "bricks": [entry]}
+def _write_manifest(tmp_path, entry, *, schema_version=None, name="bricks.json", **top):
+    """Write a strict current brick manifest .json carrying @p entry, return its path."""
+    row = {
+        "native_id": entry.get("id", "my_ext"), "supported_layouts": "",
+        "supported_platforms": "", "params": "", "options": "", "exported_symbols": "",
+    }
+    row.update(entry)
+    doc = {
+        "schema_version": (_desc.BRICK_MANIFEST_SCHEMA_VERSION
+                           if schema_version is None else schema_version),
+        "abi_key": _gates._module_abi_key(), "annotations": {}, "bricks": [row],
+    }
     doc.update(top)
     p = tmp_path / name
     p.write_text(json.dumps(doc), encoding="utf-8")

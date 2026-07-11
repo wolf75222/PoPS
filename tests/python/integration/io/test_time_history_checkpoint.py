@@ -197,7 +197,8 @@ def test_history_persistence_key_scheme(_t):
         assert ("history_%s_%d" % (hname, k)) in out
     for k in (1, 3):
         assert ("history_%s_%d" % (hname, k)) not in out, "a recomputed slot is not written"
-    assert json.loads(str(out["history_policy_" + hname]))["kind"] == "revolve"
+    policy_wire = json.loads(str(out["history_policy_" + hname]))
+    assert policy_wire["payload"]["policy"] == "revolve"
     assert len(out["history_slot_dt_" + hname]) == depth
 
     # READER: round-trip through numpy so the dtypes match, then restore + replay.
@@ -255,7 +256,9 @@ def test_history_persistence_key_scheme(_t):
 
     # UNKNOWN kind at restart fails loud (a checkpoint written by a newer pops).
     unknown = dict(payload)
-    unknown["history_policy_" + hname] = np.array(json.dumps({"kind": "brand_new"}))
+    unknown_policy = Revolve(3).to_manifest()
+    unknown_policy["payload"]["policy"] = "brand_new"
+    unknown["history_policy_" + hname] = np.array(json.dumps(unknown_policy))
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "unknown.npz")
         with open(path, "wb") as f:
