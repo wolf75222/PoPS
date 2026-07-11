@@ -258,9 +258,10 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
   const std::shared_ptr<std::vector<double>> rt_values =
       bp.runtime.count > 0 ? bp.runtime.values : nullptr;
   auto make_runtime_params = [](const std::vector<double>& v) {
+    if (v.size() > static_cast<std::size_t>(pops::kMaxRuntimeParams))
+      throw std::runtime_error("AMR runtime parameter pack exceeds kMaxRuntimeParams");
     pops::RuntimeParams rp;
-    rp.count = static_cast<int>(v.size()) > pops::kMaxRuntimeParams ? pops::kMaxRuntimeParams
-                                                                    : static_cast<int>(v.size());
+    rp.count = static_cast<int>(v.size());
     for (int k = 0; k < rp.count; ++k)
       rp.values[k] = static_cast<Real>(v[static_cast<std::size_t>(k)]);
     return rp;
@@ -648,9 +649,10 @@ AmrRuntimeBlock build_amr_block(
   const std::shared_ptr<std::vector<double>> rt_values =
       (runtime_params && !runtime_params->empty()) ? runtime_params : nullptr;
   auto inject_runtime_params = [](Model& m, const std::vector<double>& v) {
+    if (v.size() > static_cast<std::size_t>(pops::kMaxRuntimeParams))
+      throw std::runtime_error("AMR runtime parameter pack exceeds kMaxRuntimeParams");
     pops::RuntimeParams rp;
-    rp.count = static_cast<int>(v.size()) > pops::kMaxRuntimeParams ? pops::kMaxRuntimeParams
-                                                                    : static_cast<int>(v.size());
+    rp.count = static_cast<int>(v.size());
     for (int k = 0; k < rp.count; ++k)
       rp.values[k] = static_cast<Real>(v[static_cast<std::size_t>(k)]);
     pops::compiled_block::apply_runtime_params(m.hyp, rp);

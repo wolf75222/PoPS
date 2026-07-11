@@ -20,9 +20,10 @@ from .manifest_data import (
 )
 from .manifest_support import params_utilization as _params_utilization
 from .ownership import OwnerPath
+from .provider_pack import ProviderPack
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _PARAM_ROW_KEYS = {
     "schema_version",
@@ -115,6 +116,7 @@ class ModuleManifest:
         "field_spaces",
         "params",
         "aux",
+        "provider_pack",
         "has_eigenvalues",
         "operators",
         "capabilities",
@@ -133,6 +135,7 @@ class ModuleManifest:
         field_spaces: Any,
         params: Any,
         aux: Any,
+        provider_pack: Any,
         has_eigenvalues: Any,
         operators: Any,
         capabilities: Any,
@@ -159,6 +162,7 @@ class ModuleManifest:
         )
         _validate_declaration_rows(params, owner=owner, kind="parameter", where="module params")
         _validate_declaration_rows(aux, owner=owner, kind="aux", where="module aux")
+        provider_pack = ProviderPack.from_data(provider_pack).to_data()
         object.__setattr__(self, "schema_version", SCHEMA_VERSION)
         object.__setattr__(self, "name", name)
         object.__setattr__(
@@ -169,6 +173,7 @@ class ModuleManifest:
             ("field_spaces", field_spaces),
             ("params", params),
             ("aux", aux),
+            ("provider_pack", provider_pack),
             ("has_eigenvalues", has_eigenvalues),
             ("capabilities", capabilities),
             ("native_routes", native_routes),
@@ -202,6 +207,7 @@ class ModuleManifest:
             field_spaces=_thaw_json(self.field_spaces),
             params=_thaw_json(self.params),
             aux=_thaw_json(self.aux),
+            provider_pack=_thaw_json(self.provider_pack),
             has_eigenvalues=_thaw_json(self.has_eigenvalues),
             operators=self.operators,
             capabilities=_thaw_json(self.capabilities),
@@ -221,6 +227,7 @@ class ModuleManifest:
             "params": _thaw_json(self.params),
             "params_utilization": _thaw_json(self.params_utilization),
             "aux": _thaw_json(self.aux),
+            "provider_pack": _thaw_json(self.provider_pack),
             "has_eigenvalues": _thaw_json(self.has_eigenvalues),
             "operators": self.operators.to_dict(),
             "operator_aliases": self.operators.aliases(),
@@ -241,6 +248,7 @@ class ModuleManifest:
             "params",
             "params_utilization",
             "aux",
+            "provider_pack",
             "has_eigenvalues",
             "operators",
             "operator_aliases",
@@ -269,6 +277,7 @@ class ModuleManifest:
             field_spaces=row["field_spaces"],
             params=row["params"],
             aux=row["aux"],
+            provider_pack=row["provider_pack"],
             has_eigenvalues=row["has_eigenvalues"],
             operators=operators,
             capabilities=row["capabilities"],

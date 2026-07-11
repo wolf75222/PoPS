@@ -53,15 +53,16 @@ static int pops_run_test_native_aux_named() {
     ++fails;
   }
 
-  // (B) narrow channel (base 3 only): the named field is absent -> read as 0 -> residual 0
-  // (documented: a field the channel does not carry stays 0, no out-of-bounds read).
+  // (B) narrow non-empty channel: the named provider is absent -> reject before evaluation.
   std::vector<double> AUXnarrow(3 * nn, 0.0);
-  std::vector<double> R0 = native_loader::host_residual<1>(m, U, AUXnarrow, n, dx, 0);
-  double maxz = 0.0;
-  for (double v : R0)
-    maxz = std::fmax(maxz, std::fabs(v));
-  if (maxz != 0.0) {
-    std::printf("FAIL narrow_channel_named_zero (max=%.2e)\n", maxz);
+  bool rejected = false;
+  try {
+    (void)native_loader::host_residual<1>(m, U, AUXnarrow, n, dx, 0);
+  } catch (const std::runtime_error&) {
+    rejected = true;
+  }
+  if (!rejected) {
+    std::printf("FAIL narrow_channel_missing_provider_was_not_rejected\n");
     ++fails;
   }
 

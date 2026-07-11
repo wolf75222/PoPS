@@ -42,7 +42,7 @@ def build_model():
     # Default elliptic field U -> phi -> field_operator (fields_from_state).
     m.elliptic_rhs(rho - 1.0)
     # A second, NAMED elliptic field -> field_operator.
-    m.elliptic_field("psi", rhs=mx, aux=["psi_x", "psi_y"])
+    m.elliptic_field("psi", rhs=mx, aux=["psi", "psi_x", "psi_y"])
     # Pointwise positivity projection -> projection.
     m.projection([abs_(rho), mx, my])
     return m
@@ -117,7 +117,7 @@ def test_registry_signatures():
 
     psi = reg.get("psi")
     assert psi.kind == "field_operator"
-    assert psi.signature.output.components == ("psi_x", "psi_y")
+    assert psi.signature.output.components == ("psi", "psi_x", "psi_y")
 
     projection = reg.get("projection")
     assert projection.kind == "projection"

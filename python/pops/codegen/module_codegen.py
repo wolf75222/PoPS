@@ -260,6 +260,10 @@ def _elliptic_field_registrations(model: Any, nm: Any) -> list:
     regs = []
     for fld in sorted(model._elliptic_fields):
         aux = model._elliptic_fields[fld]["aux"]
+        if len(aux) == 2 or len(aux) > 3:
+            raise ValueError(
+                "elliptic_field('%s'): aux outputs must have length 1 or 3; the runtime "
+                "cannot register %d outputs yet" % (fld, len(aux)))
         phi_c = comp(aux[0])
         gx_c = comp(aux[1]) if len(aux) > 1 else -1
         gy_c = comp(aux[2]) if len(aux) > 2 else -1

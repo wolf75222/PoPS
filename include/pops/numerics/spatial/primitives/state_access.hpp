@@ -139,6 +139,8 @@ POPS_HD inline typename Model::State load_state(const ConstArray4& a, int i, int
 // same table). NComp = kAuxBaseComps: all guards are false -> bit-identical.
 template <int NComp = kAuxBaseComps>
 POPS_HD inline Aux load_aux(const ConstArray4& a, int i, int j) {
+  static_assert(NComp >= kAuxBaseComps, "provider pack is missing required base aux fields");
+  static_assert(NComp <= kAuxMaxComps, "provider pack exceeds capacity; never clamp it");
   Aux x{a(i, j, 0), a(i, j, 1), a(i, j, 2)};
 #define POPS_AUX_LOAD(name, idx) \
   if constexpr (NComp > (idx))  \
@@ -148,11 +150,10 @@ POPS_HD inline Aux load_aux(const ConstArray4& a, int i, int j) {
   // NAMED aux fields (ADC-70 phase 1): components from kAuxNamedBase (= 5). Loaded
   // ONLY if the model declares n_aux > kAuxNamedBase (otherwise if constexpr false -> no codegen,
   // NComp = kAuxBaseComps stays strictly bit-identical). The bound n_extra is known at
-  // compile time (NComp template): the loop is unrolled and clamped to kAuxMaxExtra (size of
-  // x.extra) -- never an out-of-bounds access on the C array, device-clean.
+  // compile time (NComp template): the loop is unrolled after the capacity assertion above --
+  // never clamped and never an out-of-bounds access on the C array, device-clean.
   if constexpr (NComp > kAuxNamedBase) {
-    constexpr int n_extra =
-        (NComp - kAuxNamedBase) < kAuxMaxExtra ? (NComp - kAuxNamedBase) : kAuxMaxExtra;
+    constexpr int n_extra = NComp - kAuxNamedBase;
     for (int k = 0; k < n_extra; ++k)
       x.extra[k] = a(i, j, kAuxNamedBase + k);
   }

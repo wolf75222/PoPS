@@ -62,6 +62,10 @@ class _SourceMixin(_HyperbolicModel):
         aux = list(aux) if aux is not None else ["phi", "grad_x", "grad_y"]
         if not aux:
             raise ValueError("elliptic_field('%s'): aux must list at least one field" % name)
+        if len(aux) == 2 or len(aux) > 3:
+            raise ValueError(
+                "elliptic_field('%s'): aux outputs must have length 1 or 3; the runtime "
+                "cannot register %d outputs yet" % (name, len(aux)))
         for a in aux:
             if not (isinstance(a, str) and a.isidentifier()):
                 raise ValueError("elliptic_field('%s'): aux field %r is not a valid identifier"

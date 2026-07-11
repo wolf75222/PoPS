@@ -57,7 +57,7 @@ def _two_fluid_module():
 def test_manifest_schema_and_spaces():
     module = _small_module()
     manifest = module.manifest()
-    assert manifest.schema_version == model.manifest.SCHEMA_VERSION == 5
+    assert manifest.schema_version == model.manifest.SCHEMA_VERSION == 6
     assert manifest.name == "m"
     assert manifest.to_dict()["owner_path"] == module.owner_path.canonical().to_data()
     assert manifest.state_spaces["U"]["components"] == ("rho", "mx", "my")
@@ -72,6 +72,8 @@ def test_manifest_schema_and_spaces():
         },
     }
     assert manifest.aux["B_z"]["aux_kind"] == "cell_scalar"
+    assert manifest.provider_pack["schema_version"] == 1
+    assert len(manifest.provider_pack["entries"]) == 7
     assert manifest.has_eigenvalues == {"x": False, "y": False}
 
     data = manifest.to_dict()
@@ -142,7 +144,7 @@ def test_to_json_round_trips_through_json_loads():
     manifest = _small_module().manifest()
     blob = manifest.to_json()
     restored = json.loads(blob)
-    assert restored["schema_version"] == 5
+    assert restored["schema_version"] == 6
     assert restored["name"] == "m"
     assert restored["operators"][0]["name"] == "fields_from_state"
     assert restored == manifest.to_dict()
@@ -176,7 +178,7 @@ def test_strict_json_round_trip_rejects_schema_and_identity_tampering():
         model.ModuleManifest.from_dict(forged_qid)
 
     with pytest.raises(ValueError, match="duplicate object key"):
-        model.ModuleManifest.from_json('{"schema_version":5,"schema_version":5}')
+        model.ModuleManifest.from_json('{"schema_version":6,"schema_version":6}')
     with pytest.raises(ValueError, match="non-finite"):
         model.ModuleManifest.from_json('{"schema_version":NaN}')
 

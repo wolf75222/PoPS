@@ -45,6 +45,11 @@ def _module_to_model(module: Any) -> Any:
     # Preserve the canonical source-Module identity across the internal facade lowering. The
     # resulting CompiledModel authenticates this scalar hash; it never retains ``module`` itself.
     object.__setattr__(m, "_compile_source_module_hash", module.module_hash())
+    from pops.model.provider_pack import build_provider_pack  # noqa: PLC0415
+
+    provider_pack = build_provider_pack(module)
+    object.__setattr__(m, "_component_provider_pack", provider_pack)
+    object.__setattr__(m, "_component_provider_metadata", provider_pack.to_data())
     # The facade is a lowering view of THIS Module, not a newly declared model. Re-anchor its empty
     # backing model before the first declaration so every derived operator registry retains the
     # Module's exact authoring authority. Without this, owner-qualified Program nodes would be
@@ -81,12 +86,17 @@ def _module_to_model(module: Any) -> Any:
                     "compile_problem: EOS metadata parameter 'gamma' must be a ConstParam"
                 )
             m._m.set_gamma(declaration.value)
-    declared = set()
+    declared = {}
 
-    def _declare_aux(nm: Any) -> None:
-        if nm in declared:
+    def _declare_aux(nm: Any, key: Any) -> None:
+        previous = declared.get(nm)
+        if previous is not None and previous != key:
+            raise ValueError(
+                "compile_problem: typed components %s and %s both lower to legacy aux name %r; "
+                "the spaces are distinct and cannot be merged silently" % (previous, key, nm))
+        if previous is not None:
             return
-        declared.add(nm)
+        declared[nm] = key
         if nm in AUX_CANONICAL:
             m.aux(nm)
         else:
@@ -94,9 +104,9 @@ def _module_to_model(module: Any) -> Any:
 
     for fs in module.field_spaces().values():
         for comp in fs.components:
-            _declare_aux(comp)
+            _declare_aux(comp, "field/%s/%s" % (fs.name, comp))
     for a in module.aux().values():
-        _declare_aux(a.name)
+        _declare_aux(a.name, "aux/%s/%s" % (a.name, a.name))
     if module._eigenvalues is not None:
         m.eigenvalues(x=module._eigenvalues["x"], y=module._eigenvalues["y"])
     _CODEGEN_KINDS = ("grid_operator", "local_source", "local_linear_operator", "field_operator",
@@ -125,6 +135,11 @@ def _module_to_model(module: Any) -> Any:
             raise ValueError(
                 "compile_problem: a Module currently supports one field_operator (the default "
                 "elliptic solve); multiple solved fields are deferred (operator %r)" % op.name)
+        outputs = tuple(getattr(op.signature.output, "components", ()))
+        if len(outputs) == 2 or len(outputs) > 3:
+            raise ValueError(
+                "compile_problem: field_operator %r outputs must have length 1 or 3; the runtime "
+                "cannot register %d outputs yet" % (op.name, len(outputs)))
         m.elliptic_rhs(op.body)
 
     def _b_local_rate(op: Any) -> None:

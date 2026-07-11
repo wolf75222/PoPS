@@ -16,6 +16,7 @@
 #include <pops/runtime/module_capabilities.hpp>  // kAbiVersion: per-artifact ABI revision (manifest)
 
 #include <string>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
@@ -145,9 +146,11 @@ inline void apply_runtime_params(B& b, const RuntimeParams& rp) {
 template <class Model>
 Model make_model_with_params(const double* pvals, int npar) {
   Model model{};
+  if (npar < 0 || npar > kMaxRuntimeParams)
+    throw std::runtime_error("compiled block runtime parameter pack exceeds exact capacity");
   if (pvals && npar > 0) {
     RuntimeParams rp;
-    rp.count = npar > kMaxRuntimeParams ? kMaxRuntimeParams : npar;
+    rp.count = npar;
     for (int k = 0; k < rp.count; ++k)
       rp.values[k] = static_cast<Real>(pvals[k]);
     apply_runtime_params(model.hyp, rp);
@@ -323,6 +326,8 @@ void pointwise_project(double* U, const double* aux_in, int n, const double* pva
   if constexpr (HasPointwiseProjection<Model>) {
     constexpr int NV = Model::n_vars;
     constexpr int naux = aux_comps<Model>();
+    static_assert(naux <= kAuxMaxComps,
+                  "compiled provider pack exceeds the native auxiliary capacity");
     const std::size_t nn = static_cast<std::size_t>(n) * n;
     Model model =
         make_model_with_params<Model>(pvals, npar);  // P7-b : params runtime (no-op si const)
@@ -344,10 +349,9 @@ void pointwise_project(double* U, const double* aux_in, int n, const double* pva
         POPS_AUX_FIELDS(POPS_AUX_MARSHAL)
 #undef POPS_AUX_MARSHAL
         // Champs aux NOMMES (aux_field, ADC-70) : composantes a partir de kAuxNamedBase, miroir de
-        // load_aux (borne deroulee et clampee a kAuxMaxExtra, jamais d'acces hors tableau).
+        // load_aux (borne deroulee validee a la compilation, jamais tronquee).
         if constexpr (naux > kAuxNamedBase) {
-          constexpr int n_extra =
-              (naux - kAuxNamedBase) < kAuxMaxExtra ? (naux - kAuxNamedBase) : kAuxMaxExtra;
+          constexpr int n_extra = naux - kAuxNamedBase;
           for (int x = 0; x < n_extra; ++x)
             a.extra[x] =
                 static_cast<Real>(aux_in[static_cast<std::size_t>(kAuxNamedBase + x) * nn + k]);

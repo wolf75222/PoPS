@@ -15,6 +15,7 @@ from .manifest_support import (
     state_space_row as _state_space_row,
 )
 from .ownership import OwnerPath
+from .provider_pack import build_provider_pack
 
 
 def _declaration_row(
@@ -158,6 +159,7 @@ def build_module_manifest(module: Any) -> ModuleManifest:
     capabilities = dict(capabilities_provider() if callable(capabilities_provider) else {})
     routes = _native_routes()
     catalog = _native_catalog()
+    provider_pack = build_provider_pack(module).to_data()
     return ModuleManifest(
         name=module.name,
         owner_path=canonical_owner,
@@ -165,6 +167,7 @@ def build_module_manifest(module: Any) -> ModuleManifest:
         field_spaces=field_spaces,
         params=params,
         aux=aux,
+        provider_pack=provider_pack,
         has_eigenvalues=has_eigenvalues,
         operators=operators,
         capabilities=capabilities,

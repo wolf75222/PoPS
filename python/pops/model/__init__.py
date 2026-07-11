@@ -54,6 +54,32 @@ from .operators import (
 from .param_registry import ParamRegistry
 from .bind_schema import BIND_SCHEMA_VERSION, BindSchema, BindSlot, ResolvedBindings
 from .registry import DeclarationIndex, OperatorRegistry
+from .component_protocols import (
+    Effects,
+    FallibleEvaluation,
+    Lowering,
+    Provider,
+    Report,
+    Requirement,
+    Restart,
+    Stability,
+    Stencil,
+)
+from .component_registry import (
+    COMPONENT_MANIFEST_SCHEMA_VERSION,
+    ComponentManifest,
+    ComponentRecord,
+    ComponentRegistry,
+    ComponentRegistrySnapshot,
+)
+from .provider_pack import (
+    ComponentContract,
+    ComponentKey,
+    MissingInputProvider,
+    ProviderEntry,
+    ProviderPack,
+    build_provider_pack,
+)
 from .signatures import Signature
 from .spaces import (
     AuxSpace,
@@ -96,4 +122,10 @@ __all__ = [
     "OperatorManifestEntry",
     "OperatorRegistryManifest",
     "build_module_manifest",
+    "Requirement", "Lowering", "Stencil", "Stability", "Provider", "Effects",
+    "Restart", "Report", "FallibleEvaluation",
+    "COMPONENT_MANIFEST_SCHEMA_VERSION", "ComponentManifest", "ComponentRecord",
+    "ComponentRegistry", "ComponentRegistrySnapshot",
+    "ComponentKey", "ComponentContract", "ProviderEntry", "ProviderPack",
+    "MissingInputProvider", "build_provider_pack",
 ]

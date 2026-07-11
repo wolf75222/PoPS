@@ -170,6 +170,9 @@ class CompiledReport(Report):
             lines.append("    name           : %s" % manifest.get("name"))
             lines.append("    state_spaces   : %s"
                          % (", ".join(sorted(manifest.get("state_spaces", {}))) or "(none)"))
+            provider_pack = manifest.get("provider_pack", {})
+            lines.append("    providers      : %d"
+                         % len(provider_pack.get("entries", ())))
             lines.append("    operators      : %s"
                          % (", ".join(op.get("name") for op in ops) or "(none)"))
         lines.append("  status   : %s" % self.status)

@@ -95,6 +95,12 @@ template <int NV>
 std::vector<double> host_residual(const IModel<NV>& m, const std::vector<double>& U,
                                   const std::vector<double>& AUX, int n, double dx, int recon) {
   const std::size_t nn = static_cast<std::size_t>(n) * n;
+  const std::size_t required_aux = static_cast<std::size_t>(m.n_aux()) * nn;
+  if ((!AUX.empty() || m.n_aux() > kAuxNamedBase) && AUX.size() < required_aux) {
+    throw std::runtime_error("host_residual: missing input provider components: model requires " +
+                             std::to_string(m.n_aux()) + " aux components, buffer carries " +
+                             std::to_string(AUX.size() / nn));
+  }
   auto idx = [&](int i, int j) {
     return static_cast<std::size_t>((j + n) % n) * n + ((i + n) % n);
   };
@@ -104,7 +110,7 @@ std::vector<double> host_residual(const IModel<NV>& m, const std::vector<double>
       u[c] = U[static_cast<std::size_t>(c) * nn + idx(i, j)];
     return u;
   };
-  auto aux_at = [&](int i, int j) {  // per-cell aux, periodic; empty => zero
+  auto aux_at = [&](int i, int j) {  // per-cell aux, periodic; empty only for base providers
     Aux a{};
     if (AUX.size() >= 3 * nn) {
       const std::size_t k = idx(i, j);
@@ -120,10 +126,8 @@ std::vector<double> host_residual(const IModel<NV>& m, const std::vector<double>
     a.name = AUX[(idx) * nn + k];
       POPS_AUX_FIELDS(POPS_AUX_MARSHAL)
 #undef POPS_AUX_MARSHAL
-      // Model-NAMED aux fields (ADC-291): extra[e] = aux component kAuxNamedBase + e. Same contract
-      // as load_aux (spatial_operator.hpp) and the AOT path (compiled_block_abi.hpp): a component is
-      // read ONLY when the channel carries it, so a narrow channel leaves extra[] at 0 (no out-of-
-      // bounds). Without this loop a model reading aux.extra_field(k) on the JIT host read 0 silently.
+      // Model-NAMED aux fields (ADC-291): the width guard above proves every component declared by
+      // the model is present. A narrower non-empty pack is rejected, never synthesized as zero.
       for (int e = 0; e < kAuxMaxExtra; ++e) {
         const std::size_t comp = static_cast<std::size_t>(kAuxNamedBase + e);
         if (AUX.size() >= (comp + 1) * nn)

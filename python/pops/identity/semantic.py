@@ -61,7 +61,8 @@ def model_semantic_data(model: Any) -> dict[str, Any]:
     manifest = module.manifest().to_dict()
     required = {
         "schema_version", "name", "owner_path", "state_spaces", "field_spaces", "params",
-        "params_utilization", "aux", "has_eigenvalues", "operators", "operator_aliases",
+        "params_utilization", "aux", "provider_pack", "has_eigenvalues", "operators",
+        "operator_aliases",
         "capabilities", "native_routes", "native_catalog", "abi_requirements",
     }
     if set(manifest) != required:
@@ -98,6 +99,7 @@ def model_semantic_data(model: Any) -> dict[str, Any]:
             "aux": _aux_rows(manifest["aux"]),
         },
         "parameters": _parameter_rows(manifest["params"]),
+        "providers": manifest["provider_pack"],
         "operators": operators,
         "operator_aliases": manifest["operator_aliases"],
         "has_eigenvalues": manifest["has_eigenvalues"],

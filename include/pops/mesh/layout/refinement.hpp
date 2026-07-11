@@ -134,9 +134,14 @@ inline BoxArray coarsen(const BoxArray& ba, int r) {
 
 /// Copies the valid regions that OVERLAP from src to dst (same indices, no shift).
 /// General redistribution between two MultiFab over the same domain with different decompositions.
-/// Copies min(ncomp) components. A dst cell not covered by src is left intact.
+/// Provider widths must be identical; a dst cell not covered by src is left intact.
 inline void parallel_copy(MultiFab& dst, const MultiFab& src) {
-  const int nc = std::min(dst.ncomp(), src.ncomp());
+  if (dst.ncomp() != src.ncomp())
+    throw_validation_error("pops/mesh/layout/refinement.hpp: parallel_copy",
+                           "source and destination provider widths are identical",
+                           "dst.ncomp=" + std::to_string(dst.ncomp()) +
+                               ", src.ncomp=" + std::to_string(src.ncomp()));
+  const int nc = dst.ncomp();
   // memoized schedule (BoxHash + enumeration) for this (dst layout, src layout) pair. Replayed in the
   // SAME order as the legacy inline loops -> bit-identical to the per-call rebuild (ADC-607).
   const std::shared_ptr<const CopySchedule> sched = detail::get_copy_schedule(dst, src);
@@ -208,7 +213,7 @@ inline std::string transfer_scratch_summary(const MultiFab& fine, const MultiFab
   return "r=" + std::to_string(r) + ", fine.boxes=" +
          std::to_string(fine.box_array().size()) + ", scratch.boxes=" +
          std::to_string(scratch.box_array().size()) + ", scratch.ncomp=" +
-         std::to_string(scratch.ncomp()) + ", required.ncomp>=" + std::to_string(nc) +
+         std::to_string(scratch.ncomp()) + ", required.ncomp=" + std::to_string(nc) +
          ", scratch.ngrow=" + std::to_string(scratch.n_grow());
 }
 
@@ -219,12 +224,12 @@ inline void validate_transfer_scratch(const char* where, const MultiFab& fine,
                            "r=" + std::to_string(r));
   const BoxArray expected = coarsen(fine.box_array(), r);
   if (scratch.box_array().boxes() != expected.boxes() ||
-      scratch.dmap().ranks() != fine.dmap().ranks() || scratch.ncomp() < nc ||
+      scratch.dmap().ranks() != fine.dmap().ranks() || scratch.ncomp() != nc ||
       scratch.n_grow() != 0) {
     throw_validation_error(
         where,
         "scratch MultiFab layout == coarsen(fine.box_array(), r), scratch.dmap == fine.dmap, "
-        "scratch.ncomp >= min(fine.ncomp, coarse.ncomp), scratch.ngrow == 0",
+        "scratch.ncomp equals the provider width, scratch.ngrow == 0",
         transfer_scratch_summary(fine, scratch, nc, r));
   }
 }
@@ -253,13 +258,18 @@ struct AverageDownKernel {
 
 /// CONSERVATIVE average fine -> coarse (ratio r): coarse(I, J) = average of the r^2 fine cells of
 /// the block. Writes the coarse cells covered by fine (via parallel_copy from a local fine-coarsen
-/// grid); copies min(ncomp). Preserves the integral (sum * dV) of the fine over the covered area.
+/// grid); provider widths must match. Preserves the fine integral over the covered area.
 // PROVIDED-BUFFER variant: @p cfine is the "fine coarsen" grid (layout coarsen(fine.box_array(), r),
-// dmap = fine.dmap(), >= min(ncomp) components, 0 ghost) ALLOCATED by the caller and reused on each
+// dmap = fine.dmap(), exactly ncomp components, 0 ghost) ALLOCATED by the caller and reused on each
 // call (hot path of the MG V-cycle: avoids one MultiFab allocation per restriction). Computation
 // STRICTLY identical to the allocating variant below.
 inline void average_down(const MultiFab& fine, MultiFab& coarse, int r, MultiFab& cfine) {
-  const int nc = std::min(fine.ncomp(), coarse.ncomp());
+  if (fine.ncomp() != coarse.ncomp())
+    throw_validation_error("pops/mesh/layout/refinement.hpp: average_down",
+                           "fine and coarse provider widths are identical",
+                           "fine.ncomp=" + std::to_string(fine.ncomp()) +
+                               ", coarse.ncomp=" + std::to_string(coarse.ncomp()));
+  const int nc = fine.ncomp();
   detail::validate_transfer_scratch("pops/mesh/layout/refinement.hpp: average_down(scratch)",
                                     fine, cfine, nc, r);
   const Real inv = Real(1) / (r * r);
@@ -293,12 +303,17 @@ struct InterpolateKernel {
 
 /// Interpolation coarse -> fine (ratio r) by piecewise-CONSTANT injection: each fine cell
 /// (including the box ghosts) receives the value of its coarse cell (coarsen_index). Copies
-/// min(ncomp). First brings the coarse values onto a local fine-coarsen grid (parallel_copy).
+/// identical provider widths. First brings coarse values onto a local fine-coarsen grid.
 // PROVIDED-BUFFER variant: @p cfine is the "fine coarsen" grid (same layout contract as
 // average_down above) allocated by the caller and reused (hot path of the MG V-cycle: avoids one
 // allocation per prolongation). Computation STRICTLY identical to the allocating variant.
 inline void interpolate(const MultiFab& coarse, MultiFab& fine, int r, MultiFab& cfine) {
-  const int nc = std::min(fine.ncomp(), coarse.ncomp());
+  if (fine.ncomp() != coarse.ncomp())
+    throw_validation_error("pops/mesh/layout/refinement.hpp: interpolate",
+                           "fine and coarse provider widths are identical",
+                           "fine.ncomp=" + std::to_string(fine.ncomp()) +
+                               ", coarse.ncomp=" + std::to_string(coarse.ncomp()));
+  const int nc = fine.ncomp();
   detail::validate_transfer_scratch("pops/mesh/layout/refinement.hpp: interpolate(scratch)",
                                     fine, cfine, nc, r);
   parallel_copy(cfine, coarse);  // bring the coarse values onto the fine-coarsen grid

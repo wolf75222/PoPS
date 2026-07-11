@@ -8,6 +8,9 @@
 
 #include <pops/core/foundation/types.hpp>
 
+#include <cassert>
+#include <limits>
+
 // State and Aux: the two pointwise types handled by the physics layer.
 //
 // Architecture rule: these are trivially copyable aggregates (POD).
@@ -136,10 +139,14 @@ struct Aux {
   // zero cost by default). Read in a DSL formula via aux.extra_field(k).
   Real extra[kAuxMaxExtra]{};
 
-  /// BOUNDED read of a named aux field (component kAuxNamedBase + k). Returns 0 out of bounds: the
-  /// generated brick never calls extra_field with a k that the model did not declare, but the
-  /// guard makes the access safe (still device-clean, no dynamic branch on a k known at codegen).
-  POPS_HD Real extra_field(int k) const { return (k >= 0 && k < kAuxMaxExtra) ? extra[k] : Real(0); }
+  /// Read one declared named provider slot. Invalid slots are never a physical zero: debug/device
+  /// builds trap through assert and release builds propagate NaN defensively.
+  POPS_HD Real extra_field(int k) const {
+    assert(k >= 0 && k < kAuxMaxExtra);
+    return (k >= 0 && k < kAuxMaxExtra)
+               ? extra[k]
+               : std::numeric_limits<Real>::quiet_NaN();
+  }
 };
 
 // Width of the aux channel of the base contract (phi, grad phi). A model reading additional

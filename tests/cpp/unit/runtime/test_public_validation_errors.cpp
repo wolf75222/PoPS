@@ -168,6 +168,21 @@ TEST(PublicValidationErrors, AverageDownRejectsWrongScratchLayout) {
       << "average_down rejects wrong scratch layout in release";
 }
 
+TEST(PublicValidationErrors, RefinementTransfersRejectComponentWidthMismatch) {
+  const Box2D cdom = Box2D::from_extents(2, 2);
+  const Box2D fdom = Box2D::from_extents(4, 4);
+  const BoxArray cba = BoxArray::from_domain(cdom, 2);
+  const BoxArray fba = BoxArray::from_domain(fdom, 4);
+  MultiFab coarse(cba, DistributionMapping(cba.size(), n_ranks()), 1, 0);
+  MultiFab fine(fba, DistributionMapping(fba.size(), n_ranks()), 2, 0);
+  EXPECT_TRUE(ThrowsWithMessage([&] { average_down(fine, coarse, 2); },
+                                {"average_down", "provider widths", "fine.ncomp=2"}));
+  EXPECT_TRUE(ThrowsWithMessage([&] { interpolate(coarse, fine, 2); },
+                                {"interpolate", "provider widths", "fine.ncomp=2"}));
+  EXPECT_TRUE(ThrowsWithMessage([&] { parallel_copy(fine, coarse); },
+                                {"parallel_copy", "provider widths", "dst.ncomp=2"}));
+}
+
 TEST(PublicValidationErrors, CsProgramStackValidationRejectsUnderflow) {
   EXPECT_TRUE(ThrowsWithMessage(
       [&] {
