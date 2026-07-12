@@ -149,8 +149,8 @@ def test_optimization_math_rejects_a_bare_string():
 
 def test_compiled_brick_without_a_manifest_is_a_clear_error():
     # The compiled-brick load path refuses a brick whose manifest does not exist. read_manifest
-    # on a missing .json raises FileNotFoundError (an OSError); resolving a CompiledBrickRef whose
-    # manifest is absent raises an explainable error before any runtime install.
+    # remains a low-level inspection operation; resolving a CompiledBrickRef turns the filesystem
+    # failure into the public validation error promised by the typed authoring API.
     from pops.external import CompiledBrickRef, read_manifest
 
     with pytest.raises(FileNotFoundError):
@@ -158,21 +158,26 @@ def test_compiled_brick_without_a_manifest_is_a_clear_error():
 
     ref = CompiledBrickRef(manifest="/nonexistent_pops_brick_manifest.json",
                            native_id="missing_brick")
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(ValueError):
         ref.resolve()
-    with pytest.raises(FileNotFoundError) as excinfo:
+    with pytest.raises(ValueError) as excinfo:
         ref.validate()
-    assert "nonexistent_pops_brick_manifest.json" in str(excinfo.value)
-    with pytest.raises(FileNotFoundError):
+    message = str(excinfo.value)
+    assert "nonexistent_pops_brick_manifest.json" in message
+    assert "missing_brick" in message
+    assert "pops.external.register(path)" in message
+    assert isinstance(excinfo.value.__cause__, FileNotFoundError)
+    with pytest.raises(ValueError):
         ref.manifest_record()
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(ValueError):
         ref.requirements()
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(ValueError):
         ref.capabilities()
     missing_so = CompiledBrickRef(
         manifest="/nonexistent_pops_brick_manifest.so", native_id="missing_brick")
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(ValueError) as excinfo:
         missing_so.resolve()
+    assert "nonexistent_pops_brick_manifest.so" in str(excinfo.value)
 
 
 if __name__ == "__main__":

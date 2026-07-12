@@ -54,7 +54,15 @@ class CompiledBrickRef(Descriptor):
 
     def _ensure_registered(self):
         if not self._registered:
-            records, abi_key, handle = register_and_capture(self.manifest)
+            try:
+                records, abi_key, handle = register_and_capture(self.manifest)
+            except FileNotFoundError as err:
+                raise ValueError(
+                    "compiled brick %r manifest was not found at %r; generate or restore the "
+                    "current strict manifest at that path and register it with "
+                    "pops.external.register(path) before resolving the brick"
+                    % (self.native_id, self.manifest)
+                ) from err
             self._manifest_abi_key = abi_key
             self._handle = handle
             self._record = next((r for r in records if r["native_id"] == self.native_id
