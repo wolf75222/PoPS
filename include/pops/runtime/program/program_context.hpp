@@ -236,28 +236,25 @@ class ProgramContext {
   /// OVERRIDES this method to route a refined hierarchy through its composite elliptic. @p method:
   /// 0 = cg, 1 = bicgstab, 2 = gmres, 3 = richardson (LinearSolveMethod). @p precond is the
   /// preconditioner ApplyFn (empty = unpreconditioned); @p restart is the GMRES basis size (ignored by
-  /// the others). The KrylovResult is discarded (the trip count is a C++-side detail, invisible to the
-  /// IR), matching the old inline emission.
-  void solve_linear_matfree(MultiFab& sol, const MultiFab& rhs, const ApplyFn& apply,
-                            const ApplyFn& precond, int method, Real tol, int max_iter,
-                            int restart) const {
-    (void)restart;
+  /// the others). The SolveReport is returned to generated code, which must consume it before
+  /// publishing @p sol as a solved value.
+  SolveReport solve_linear_matfree(MultiFab& sol, const MultiFab& rhs, const ApplyFn& apply,
+                                   const ApplyFn& precond, int method, Real tol, int max_iter,
+                                   int restart) const {
     validate_linear_solve_method(method, "ProgramContext::solve_linear_matfree");
     switch (method) {
       case kLinearSolveCg:
-        (void)pops::cg_solve(apply, sol, rhs, tol, max_iter);
-        break;
+        return pops::cg_solve(apply, sol, rhs, tol, max_iter);
       case kLinearSolveGmres:
-        (void)pops::gmres_solve(apply, precond, sol, rhs, tol, max_iter, restart);
-        break;
+        return pops::gmres_solve(apply, precond, sol, rhs, tol, max_iter, restart);
       case kLinearSolveRichardson:
-        (void)pops::richardson_solve(apply, sol, rhs, static_cast<Real>(1), tol, max_iter);
-        break;
+        return pops::richardson_solve(apply, sol, rhs, static_cast<Real>(1), tol, max_iter);
       case kLinearSolveBicgstab:
-        (void)pops::bicgstab_solve(apply, precond, sol, rhs, tol, max_iter);
-        break;
+        return pops::bicgstab_solve(apply, precond, sol, rhs, tol, max_iter);
       default:
-        break;  // validated above; keeps exhaustive behavior explicit for defensive builds
+        SolveReport report;
+        report.mark_failed(SolveStatus::kInvalidInput, SolveAction::kRejectAttempt);
+        return report;  // validated above; keeps exhaustive behavior explicit for defensive builds
     }
   }
 

@@ -31,6 +31,7 @@ from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.time import FailRun
 import sys
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
@@ -74,7 +75,7 @@ def _spd_program(t, *, name="gmres_spd", method="gmres", tol=1e-9, max_iter=300,
 
     P.set_apply(A, apply)
     phi = P.solve_linear(operator=A, rhs=U, method=_krylov(method), tol=tol, max_iter=max_iter,
-                         restart=restart)
+                         restart=restart).consume(action=FailRun())
     endpoint = typed_state(P, "blk", state_name="U").next
     final = P.linear_combine("phi_next", phi, at=endpoint.point)
     P.commit(endpoint, final)
@@ -108,7 +109,7 @@ def _nonsym_program(t, *, name="gmres_nonsym", tol=1e-9, max_iter=300, restart=3
     kw = dict(operator=A, rhs=U, method=_krylov(method), tol=tol, max_iter=max_iter)
     if method == "gmres":
         kw["restart"] = restart  # restart is gmres-only (rejected for cg/bicgstab)
-    phi = P.solve_linear(**kw)
+    phi = P.solve_linear(**kw).consume(action=FailRun())
     endpoint = typed_state(P, "blk", state_name="U").next
     final = P.linear_combine("phi_next", phi, at=endpoint.point)
     P.commit(endpoint, final)
@@ -166,7 +167,8 @@ def test_gmres_restart_validation(t):
     U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
-    for bad in (0, -3, 1.5, True):  # a positive int is required (True is rejected: bool is not allowed)
+    for bad in (0, -3, 1.5, True, 51):
+        # a positive int in the native GMRES basis range is required (True is rejected: bool is not allowed)
         try:
             P.solve_linear(operator=A, rhs=U, method=_krylov("gmres"), max_iter=10, restart=bad)
         except ValueError as exc:
@@ -174,8 +176,9 @@ def test_gmres_restart_validation(t):
         else:
             raise AssertionError("restart=%r must raise for gmres" % (bad,))
     # a positive int restart is accepted
-    phi = P.solve_linear(operator=A, rhs=U, method=_krylov("gmres"), max_iter=10, restart=8)
-    assert phi.attrs["restart"] == 8, "the restart is stored on the IR node"
+    P.solve_linear(operator=A, rhs=U, method=_krylov("gmres"), max_iter=10, restart=8)
+    token = next(value for value in P._values if value.op == "solve_linear")
+    assert token.attrs["restart"] == 8, "the restart is stored on the IR node"
 
 
 def test_restart_rejected_for_non_gmres(t):

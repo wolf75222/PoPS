@@ -32,6 +32,7 @@ from pops.params import ConstParam
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 from pops.solvers import krylov
+from pops.time import FailRun
 import sys
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
@@ -70,7 +71,8 @@ def _divgrad_program(t, *, name="divgrad", method=None, tol=1e-10, max_iter=200,
         from pops.solvers.krylov import BiCGStab  # typed default (Spec 5 sec.7); lowers to "bicgstab"
         method = BiCGStab(max_iter=max_iter)  # ADC-535: max_iter is mandatory on the descriptor
     P.set_apply(A, apply)
-    phi = P.solve_linear(operator=A, rhs=U, method=method, tol=tol, max_iter=max_iter)
+    phi = P.solve_linear(
+        operator=A, rhs=U, method=method, tol=tol, max_iter=max_iter).consume(action=FailRun())
     endpoint = typed_state(P, "blk", state_name="U").next
     final = P.linear_combine("phi_next", phi, at=endpoint.point)
     P.commit(endpoint, final)
@@ -93,7 +95,9 @@ def test_divergence_records_and_validates(t):
     from pops.solvers.krylov import BiCGStab
     P.set_apply(A, apply)
     U = typed_state(P, "blk")
-    phi = P.solve_linear(operator=A, rhs=U, method=BiCGStab(max_iter=50), tol=1e-8, max_iter=50)
+    phi = P.solve_linear(
+        operator=A, rhs=U, method=BiCGStab(max_iter=50), tol=1e-8,
+        max_iter=50).consume(action=FailRun())
     endpoint = typed_state(P, "blk", state_name="U").next
     final = P.linear_combine("phi_next", phi, at=endpoint.point)
     P.commit(endpoint, final)

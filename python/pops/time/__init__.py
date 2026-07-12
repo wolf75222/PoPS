@@ -41,7 +41,9 @@ from pops.time.passes_facade import (  # noqa: F401
     optimize,
 )
 from pops.time.program import CompiledTime, Program
-from pops.time.program_residual import ResidualSolution  # noqa: F401
+from pops.time.solve_outcome import (  # noqa: F401
+    FailRun, RejectAttempt, ResidualSolution, SOLVE_STATUSES, SolveAction, SolveOutcome,
+)
 from pops.time.points import Clock, StagePoint, TimePoint  # noqa: F401
 from pops.time.residual import (  # noqa: F401
     AlgebraicTerm, ApproximateLinearization, AutomaticJVP, Boundary,
@@ -63,7 +65,8 @@ from pops.time.synchronization import (  # noqa: F401
 )
 from pops.time.values import StageStateSet, ProgramValue  # noqa: F401
 
-__all__ = ["Program", "CompiledTime", "ProgramValue", "StageStateSet", "ResidualSolution", "Schedule",
+__all__ = ["Program", "CompiledTime", "ProgramValue", "StageStateSet", "ResidualSolution",
+           "SolveOutcome", "SolveAction", "FailRun", "RejectAttempt", "SOLVE_STATUSES", "Schedule",
            "ProgramGraph", "GraphProgramValue", "StateRead", "Unknown", "OperatorCall",
            "ResidualEvaluation", "ResidualSolve", "Solve", "Branch", "Loop", "Region", "RegionCapture",
            "Synchronize", "Commit", "ValueRef",

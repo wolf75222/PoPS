@@ -17,6 +17,7 @@ from pops.time.references import block_name
 from pops.time.program_value_validation import (
     require_compatible_spaces, require_top_level, structural_state_space,
 )
+from pops.time.solve_outcome import SolveOutcome
 from pops.time.value_metadata import positive_scalar_literal
 from pops.time.values import ProgramValue, _Affine, _is_field_value, _resolve_handle
 
@@ -30,16 +31,11 @@ def _lower_krylov_method(method: Any) -> Any:
     """Lower a typed Krylov descriptor to ``(scheme, options)`` (Spec 5 sec.7).
 
     ``method`` is a :mod:`pops.solvers.krylov` descriptor (``CG()`` / ``GMRES()`` /
-    ``BiCGStab()`` / ``Richardson()``); its ``scheme`` is the C++ token (``"cg"`` ...) the
-    runtime keys on, so the typed object lowers byte-identically to the historical string. A
-    bare algorithm-selector string is REJECTED (Spec 5 forbids keeping the string form on the
-    public surface); ``None`` defaults to the ``cg`` scheme.
+    ``BiCGStab()`` / ``Richardson()``); its ``scheme`` is the C++ token. A bare
+    algorithm-selector string is REJECTED; ``None`` defaults to the ``cg`` scheme.
 
-    The descriptor's own ``max_iter`` (mandatory at descriptor construction, ADC-535) is metadata
-    for the LinearProblem-lowering path; the program's ``P.solve_linear(max_iter=...)`` argument is
-    the authoritative budget for THIS op. ADC-645: ``options`` carries the descriptor's optional
-    ``rel_tol`` (supplies ``tol`` when the call site leaves it default) and ``omega`` (Richardson
-    relaxation, baked at emit) -- absent when unset, so a default descriptor lowers as before.
+    The descriptor's own ``max_iter`` is metadata for LinearProblem lowering; the
+    call-site ``max_iter`` is authoritative for THIS op.
     """
     if method is None:
         return "cg", {}
@@ -220,6 +216,9 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             elif isinstance(restart, bool) or not isinstance(restart, int) or restart <= 0:
                 raise ValueError("solve_linear: restart must be a positive integer for gmres (got %r)"
                                  % (restart,))
+            if int(restart) > 50:
+                raise ValueError(
+                    "solve_linear: restart must be <= 50 for gmres; got %r" % (restart,))
         elif restart is not None:
             raise ValueError("solve_linear: restart only applies to method='gmres' (got method=%r)"
                              % (method,))
@@ -246,9 +245,18 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         result_type = (
             "state" if operator.attrs["domain"] == "state" and rhs.vtype == "state"
             else "scalar_field")
-        return self._new(
+        token = self._new(
             result_type, "solve_linear", inputs, attrs, name, rhs.block, space=rhs.space,
             point=rhs.point if at is None else at)
+        outcome_name = name or token.name
+
+        def project(outcome: Any) -> Any:
+            return self._new(
+                result_type, "solve_outcome_component", (outcome,),
+                {"index": 0, "ncomp": op_ncomp},
+                outcome_name, rhs.block, space=rhs.space, point=token.point)
+
+        return SolveOutcome(self, token, project, outcome_name)
 
     def commit(self, endpoint: StateEndpointHandle, state: ProgramValue) -> None:
         """Commit ``state`` to ``endpoint``, at most once for that qualified state.

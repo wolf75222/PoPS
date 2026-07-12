@@ -6,7 +6,7 @@ from typed_program_support import commits_by_block, typed_state
 import pytest
 
 from pops.ir import ValueExpr
-from pops.time import Program, ProgramValue
+from pops.time import FailRun, Program, ProgramValue
 from pops.time.handles import StateEndpointHandle
 from pops.model import Module, StateSpace
 from pops.problem import Problem
@@ -187,7 +187,8 @@ def _block_scalar_field(program, block, name):
     state = typed_state(program, block, state_name="U")
     operator = program.matrix_free_operator("A_" + name)
     program.set_apply(operator, lambda _program, _out, value: value)
-    return program.solve_linear(name, operator=operator, rhs=state.n, max_iter=1)
+    return program.solve_linear(
+        name, operator=operator, rhs=state.n, max_iter=1).consume(action=FailRun())
 
 
 def test_scalar_field_linear_combine_preserves_the_single_known_block_for_commit():

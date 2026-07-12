@@ -34,7 +34,7 @@ def _solve_program(preconditioner=None):
         kw["preconditioner"] = preconditioner
     endpoint = typed_state(P, "blk", state_name="U").next
     kw["rhs"] = P.linear_combine("rhs", U, at=endpoint.point)
-    phi = P.solve_linear(**kw)
+    phi = P.solve_linear(**kw).consume(action=t.FailRun())
     P.commit(endpoint, phi)
     return P
 
@@ -46,7 +46,7 @@ def test_default_geometric_mg_precond_leaves_ir_hash_byte_identical():
     default_a = _solve_program(preconditioners.GeometricMG())
     default_b = _solve_program(preconditioners.GeometricMG())
     assert default_a._ir_hash() == default_b._ir_hash()
-    node = next(iter(default_a._commits.values()))
+    node = next(value for value in default_a._values if value.op == "solve_linear")
     # Omit-when-default: no precond_options attr on the node for a default GeometricMG().
     assert "precond_options" not in node.attrs
     assert node.attrs["preconditioner"] == "geometric_mg"
@@ -57,7 +57,7 @@ def test_configured_precond_busts_ir_hash_and_adds_attr():
     default = _solve_program(preconditioners.GeometricMG())
     override = _solve_program(preconditioners.GeometricMG(n_vcycles=3, pre_sweeps=1))
     assert default._ir_hash() != override._ir_hash()
-    node = next(iter(override._commits.values()))
+    node = next(value for value in override._values if value.op == "solve_linear")
     assert node.attrs["precond_options"] == {"n_vcycles": 3, "pre_sweeps": 1}
 
 

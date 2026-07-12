@@ -213,10 +213,12 @@ def _bdf_implicit_flux(P: Any, temporal: Any, order: Any, sources: Any, flux: An
                                 sources=sources, field_coupled=field_coupled)
 
         from pops.solvers import krylov
+        from pops.time import FailRun
         P.set_apply(A, apply)
         dU = P.solve_linear(name="%s_dU" % tag, operator=A, rhs=negF,
                             method=krylov.GMRES(max_iter=krylov_max),
-                            tol=krylov_tol, max_iter=krylov_max, restart=krylov_restart)
+                            tol=krylov_tol, max_iter=krylov_max,
+                            restart=krylov_restart).consume(action=FailRun())
         return P.linear_combine("%s_next" % tag, Uk + dU, at=endpoint)
 
     # Outer Newton loop: a fixed unroll of newton_max iterations (each independent top-level IR).

@@ -7,7 +7,7 @@ from types import MappingProxyType
 
 import pytest
 
-from pops.time import Clock, StagePoint, TimePoint
+from pops.time import Clock, FailRun, StagePoint, TimePoint
 from pops.time.graph import (
     Branch,
     Commit,
@@ -73,11 +73,18 @@ def test_program_graph_has_exact_nodes_canonical_hash_and_no_builder_references(
         3, "rhs", "state", "linear_combine", (ValueRef(0), ValueRef(2)),
         clock, _point(clock), attrs=metadata)
     solve = Solve(4, ValueRef(1), ValueRef(2), ValueRef(3), clock, _point(clock))
+    outcome = ProgramValue(
+        5, "solve_report", "solve_outcome", "solve_outcome", (ValueRef(4),),
+        clock, _point(clock), attrs={"action": FailRun()})
+    solved = ProgramValue(
+        6, "solved", "state", "solve_outcome_component", (ValueRef(5),),
+        clock, _point(clock), attrs={"index": 0})
     commit = Commit(
-        5, {"qualified_id": "case/fluid/U.next", "readable": False},
-        ValueRef(4), clock, _point(clock))
+        7, {"qualified_id": "case/fluid/U.next", "readable": False},
+        ValueRef(6), clock, _point(clock))
 
-    graph = ProgramGraph("step", (state, unknown, call, value, solve, commit), clocks=(clock,))
+    nodes = (state, unknown, call, value, solve, outcome, solved, commit)
+    graph = ProgramGraph("step", nodes, clocks=(clock,))
     before = graph.to_data()
     metadata["coefficients"].append(99)
 
@@ -86,8 +93,7 @@ def test_program_graph_has_exact_nodes_canonical_hash_and_no_builder_references(
     assert graph.to_data()["nodes"][0]["kind"] == "state_read"
     assert graph.to_data()["nodes"][-1]["kind"] == "commit"
     assert len(graph.graph_hash) == 64
-    assert graph.graph_hash == ProgramGraph(
-        "step", (state, unknown, call, value, solve, commit), clocks=(clock,)).graph_hash
+    assert graph.graph_hash == ProgramGraph("step", nodes, clocks=(clock,)).graph_hash
     assert not hasattr(graph, "_values")
     assert not hasattr(state, "prog")
     with pytest.raises(TypeError, match="write-only.*no readable"):

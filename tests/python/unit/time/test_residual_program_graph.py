@@ -5,8 +5,10 @@ import pytest
 
 from pops.model import Module
 from pops.problem import Problem
-from pops.time import Program
-from pops.time.graph import ProgramGraph, ResidualEvaluation, ResidualSolve, StateRead, ValueRef
+from pops.time import FailRun, Program, RejectAttempt
+from pops.time.graph import (
+    Commit, ProgramGraph, ProgramValue, ResidualEvaluation, ResidualSolve, StateRead, ValueRef,
+)
 from pops.time.points import Clock, TimePoint
 from pops.time.residual import (
     Dt, EquationSpace, FiniteDifferenceJVP, IdentityTerm, PreconditionerContract,
@@ -37,7 +39,10 @@ def test_residual_product_and_solve_are_exact_immutable_graph_references():
 
     residual = program.residual(
         operator, {"fluid::p": p, "fluid::u": u}, name="F")
-    solution = program.solve_residual(residual, initial=(u, p), name="newton")
+    outcome = program.solve_residual(residual, initial=(u, p), name="newton")
+    with pytest.raises(TypeError, match="not iterable"):
+        tuple(outcome)
+    solution = outcome.consume(action=RejectAttempt(statuses=("iteration_limit",)))
     before = program._ir_hash()
 
     graph = program.to_graph()
@@ -50,11 +55,14 @@ def test_residual_product_and_solve_are_exact_immutable_graph_references():
     assert solve.initial == (ValueRef(u.id), ValueRef(p.id))
     assert len(solution) == 2
     assert tuple(value.op for value in solution) == (
-        "residual_solution_component", "residual_solution_component")
+        "solve_outcome_component", "solve_outcome_component")
     assert tuple(value.block for value in solution) == (u.block, p.block)
     assert tuple(value.space for value in solution) == (u.space, p.space)
     token = next(value for value in program._values if value.op == "solve_residual")
-    assert all(value.inputs == (token,) for value in solution)
+    consumed = next(value for value in program._values if value.op == "solve_outcome")
+    assert consumed.inputs == (token,)
+    assert consumed.attrs["action"].to_data()["kind"] == "reject_attempt"
+    assert all(value.inputs == (consumed,) for value in solution)
     assert program._ir_hash() == before
     assert graph.graph_hash == program.to_graph().graph_hash
     assert graph.to_data() == program.to_graph().to_data()
@@ -78,7 +86,8 @@ def test_residual_rejects_product_and_initial_space_mismatches_before_compile():
     residual = program.residual(operator, (u, p))
     with pytest.raises(ValueError, match="initial product arity"):
         program.solve_residual(residual, initial=(u,))
-    solution = program.solve_residual(residual, initial={"fluid::p": p, "fluid::u": u})
+    solution = program.solve_residual(
+        residual, initial={"fluid::p": p, "fluid::u": u}).consume(action=FailRun())
     assert tuple(value.space for value in solution) == (u.space, p.space)
     with pytest.raises(ValueError, match="mapping keys must exactly match"):
         program.solve_residual(residual, initial={"fluid::u": u, "fluid::q": q})
@@ -133,10 +142,44 @@ def test_residual_solution_preserves_each_unknown_block_and_space():
     residual = program.residual(operator, (u_left, u_right))
     solution = program.solve_residual(
         residual, initial=(u_left, u_right),
-        at=(left_state.next.point, right_state.next.point))
+        at=(left_state.next.point, right_state.next.point)).consume(action=FailRun())
 
     assert tuple(value.block for value in solution) == (left, right)
     assert tuple(value.space for value in solution) == (space, space)
     assert tuple(value.point for value in solution) == (
         left_state.next.point, right_state.next.point)
     program.commit_many({left_state.next: solution[0], right_state.next: solution[1]})
+
+
+def test_graph_rejects_direct_residual_solve_reads_before_consumed_outcome():
+    clock = Clock("macro")
+    point = TimePoint(clock)
+    operator = _operator("fluid::u")
+    source = StateRead(0, {"state": "fluid::u"}, clock, point)
+    residual = ResidualEvaluation(1, operator, (ValueRef(0),), clock, point)
+    solve = ResidualSolve(
+        2, ValueRef(1), (ValueRef(0),), clock, point,
+        attrs={"unknown_count": 1})
+
+    direct = ProgramValue(3, "bad", "state", "copy", (ValueRef(2),), clock, point)
+    with pytest.raises(ValueError, match="unconsumed solve token"):
+        ProgramGraph("bad-direct", (source, residual, solve, direct), clocks=(clock,))
+
+    commit = Commit(4, {"state": "fluid::u"}, ValueRef(2), clock, TimePoint(clock, step=1))
+    with pytest.raises(ValueError, match="unconsumed solve token"):
+        ProgramGraph("bad-commit", (source, residual, solve, commit), clocks=(clock,))
+
+    outcome = ProgramValue(
+        5, "accepted", "solve_outcome", "solve_outcome", (ValueRef(2),), clock, point,
+        attrs={"action": FailRun()})
+    component = ProgramValue(
+        6, "u", "state", "solve_outcome_component", (ValueRef(5),), clock, point,
+        attrs={"index": 0})
+    graph = ProgramGraph(
+        "good-consume", (source, residual, solve, outcome, component), clocks=(clock,))
+    assert graph.nodes[-1].to_data()["op"] == "solve_outcome_component"
+
+    missing_action = ProgramValue(
+        7, "missing", "solve_outcome", "solve_outcome", (ValueRef(2),), clock, point)
+    with pytest.raises(ValueError, match="requires explicit action"):
+        ProgramGraph("bad-action", (source, residual, solve, missing_action), clocks=(clock,))

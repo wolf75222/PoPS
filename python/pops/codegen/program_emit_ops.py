@@ -368,6 +368,12 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             "apply sub-block" % (v.op, v.name))
     elif v.op == "solve_linear":
         _emit_solve_linear(program, v, base, var, prelude, lines, target=target)
+    elif v.op in ("solve_outcome", "solve_outcome_component"):
+        # Python graph/authoring requires an explicit consumed outcome before a solve result can feed
+        # effects. Runtime lowering keeps the existing Krylov call as the value-producing operation;
+        # these nodes are zero-cost aliases that preserve that explicit contract in the IR.
+        (source,) = v.inputs
+        var[v.id] = var[source.id]
     elif v.op == "reduce":
         # A collective all_reduce -> a C++ scalar. norm2 = sqrt(dot(u, u)); dot(a, b) directly;
         # sum/max/min (over a component) via the matching pops reduction. All MUST run on every rank

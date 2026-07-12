@@ -28,6 +28,7 @@ from pops.codegen import compile_drivers
 from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
+from pops.time import FailRun
 from pops.numerics.riemann import Rusanov
 import sys
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
@@ -84,7 +85,7 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
     rhs = P.linear_combine("rhs", U, at=endpoint.point)
     phi = P.solve_linear(
         operator=A, rhs=rhs, method=_krylov(method), tol=tol, max_iter=max_iter,
-        at=endpoint.point, **kw)
+        at=endpoint.point, **kw).consume(action=FailRun())
     P.commit(endpoint, phi)
     return P
 

@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pops.time.program_transaction import atomic_authoring
 from pops.time.program_value_validation import require_compatible_spaces, require_owned
+from pops.time.solve_outcome import ResidualSolution, SolveOutcome
 from pops.time.values import ProgramValue, _resolve_handle
 
 if TYPE_CHECKING:
@@ -116,31 +116,20 @@ class _ProgramResidual(_ProgramBase):
         token = self._new(
             "residual_solution", "solve_residual", (residual, *initial_product), attrs,
             name, None, point=points[0])
-        values = tuple(
-            self._new(
-                initial_value.vtype, "residual_solution_component", (token,),
-                {"index": index},
-                "%s_%d" % (name or "residual_solution", index),
-                initial_value.block, space=initial_value.space, point=points[index])
-            for index, initial_value in enumerate(initial_product)
-        )
-        return ResidualSolution(values)
+        outcome_name = name or "residual_solution"
+
+        def project(outcome: Any) -> Any:
+            values = tuple(
+                self._new(
+                    initial_value.vtype, "solve_outcome_component", (outcome,),
+                    {"index": index},
+                    "%s_%d" % (outcome_name, index),
+                    initial_value.block, space=initial_value.space, point=points[index])
+                for index, initial_value in enumerate(initial_product)
+            )
+            return ResidualSolution(values)
+
+        return SolveOutcome(self, token, project, outcome_name)
 
 
-@dataclass(frozen=True, slots=True)
-class ResidualSolution:
-    """Ordered, typed projections of one residual solve token."""
-
-    values: tuple[ProgramValue, ...]
-
-    def __iter__(self):
-        return iter(self.values)
-
-    def __len__(self) -> int:
-        return len(self.values)
-
-    def __getitem__(self, index: int) -> ProgramValue:
-        return self.values[index]
-
-
-__all__ = ["ResidualSolution", "_ProgramResidual"]
+__all__ = ["ResidualSolution", "SolveOutcome", "_ProgramResidual"]

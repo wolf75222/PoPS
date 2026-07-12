@@ -29,6 +29,7 @@ _ALLOWED_OPS = frozenset({"state", "solve_fields", "solve_fields_from_blocks", "
                           "reduce", "scalar_op", "compare", "hmin", "max_wave_speed", "cfl",
                           "while", "range", "branch", "matrix_free_operator",
                           "scalar_field", "laplacian", "gradient", "divergence", "solve_linear",
+                          "solve_outcome", "solve_outcome_component",
                           "apply_in", "apply_out", "history", "store_history",
                           "fill_boundary", "project", "record_scalar",
                           "cell_compare", "where", "rhs_jacvec",

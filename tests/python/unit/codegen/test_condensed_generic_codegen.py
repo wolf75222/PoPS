@@ -22,6 +22,7 @@ try:
     from pops.physics.facade import Model
     from pops.solvers.krylov import BiCGStab
     from pops import time as adctime
+    from pops.time import FailRun
     from pops.time.value_metadata import CoeffPolynomial
     from typed_program_support import typed_state
 except Exception as exc:  # pops not importable here (no built extension) -> skip, never fake
@@ -69,7 +70,9 @@ def _lorentz_condensed_program():
         return -1.0 * lap
 
     P.set_apply(A, apply)
-    phi = P.solve_linear(operator=A, rhs=rhs2, method=BiCGStab(max_iter=50), tol=1e-10, max_iter=50)
+    phi = P.solve_linear(
+        operator=A, rhs=rhs2, method=BiCGStab(max_iter=50), tol=1e-10,
+        max_iter=50).consume(action=FailRun())
     out = P._new("state", "condensed_reconstruct", (U, phi),
                  {"linear_operator": "lorentz_J", "subset": (1, 2),
                   "th_dt": CoeffPolynomial({1: 1.0}), "c_rho": 0},

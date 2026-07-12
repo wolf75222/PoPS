@@ -93,7 +93,7 @@ static void fill_mms_rhs(GeometricMG& mg, const Geometry& geom, const Box2D& dom
 // termes croises), resout par BiCGStab, renvoie iterations + convergence ; rapporte le V-cycle MG
 // SEUL en contraste (meme operateur op, vcycle direct). n = resolution, c = amplitude croisee,
 // non_sym = true -> Ayx = -c (A non symetrique), sinon Ayx = c (A symetrique).
-struct SolveReport {
+struct TensorSolveCaseReport {
   int kry_iters;
   bool kry_conv;
   double kry_rel;
@@ -102,7 +102,7 @@ struct SolveReport {
   const char* mg_state;
 };
 
-static SolveReport solve_case(int n, double c, bool non_sym) {
+static TensorSolveCaseReport solve_case(int n, double c, bool non_sym) {
   Box2D dom = Box2D::from_extents(n, n);
   Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
   BoxArray ba = BoxArray::from_domain(dom, n);
@@ -144,7 +144,7 @@ static SolveReport solve_case(int n, double c, bool non_sym) {
   const char* st =
       (rn < 1e-6 * r0) ? "CONVERGE" : (rn < r0 ? "stagne (incomplet)" : "DIVERGE/STAGNE");
 
-  return SolveReport{kr.iters, kr.converged, static_cast<double>(kr.rel_residual), r0, rn, cyc, st};
+  return TensorSolveCaseReport{kr.iters, kr.converged, static_cast<double>(kr.rel_residual), r0, rn, cyc, st};
 }
 
 // (A) A = I : ecart MAX phi_krylov vs phi_mg (Poisson canonique), reduit sur tous les rangs.
@@ -207,7 +207,7 @@ static double consistency_identity(int n) {
 //
 // On rapporte : convergence + residu relatif Krylov, et l'ecart MAX a phi_exact (cellules valides) compare
 // a une reference GeometricMG du MEME probleme Dirichlet (consistance, comme (A)) ET a l'analytique
-// (avec la tolerance O(h^2) du schema 2 points). Renvoie le tout par SolveReport-like via parametres.
+// (avec la tolerance O(h^2) du schema 2 points). Renvoie le tout par TensorSolveCaseReport-like via parametres.
 struct DirichletReport {
   bool kry_conv;
   double kry_rel;
@@ -289,7 +289,7 @@ TEST(test_krylov_solver, tensor_krylov_solver_converges_where_mg_alone_stalls) {
   for (int t = 0; t < 3; ++t) {
     const double c = cs[t];
     // A SYMETRIQUE (Axy = Ayx = c).
-    const SolveReport rs = solve_case(n, c, /*non_sym=*/false);
+    const TensorSolveCaseReport rs = solve_case(n, c, /*non_sym=*/false);
     if (me == 0)
       std::printf(
           "(B) SYM c=%.1f : BiCGStab %s en %d iters (rel=%.2e) | MG seul: r0=%.2e rN=%.2e (%d cyc) "
@@ -300,7 +300,7 @@ TEST(test_krylov_solver, tensor_krylov_solver_converges_where_mg_alone_stalls) {
     chk(rs.kry_rel < 1e-10, "B_sym_residu_sous_1e-10");
 
     // A NON SYMETRIQUE (Axy = c, Ayx = -c) : le cas verrou de #120.
-    const SolveReport ru = solve_case(n, c, /*non_sym=*/true);
+    const TensorSolveCaseReport ru = solve_case(n, c, /*non_sym=*/true);
     if (me == 0)
       std::printf(
           "(B) NONSYM c=%.1f : BiCGStab %s en %d iters (rel=%.2e) | MG seul: r0=%.2e rN=%.2e (%d "
@@ -344,7 +344,7 @@ TEST(test_krylov_solver, tensor_krylov_solver_converges_where_mg_alone_stalls) {
   // MPI : convergence et iterations invariantes au nombre de rangs (dot collectif). On reverifie le
   // cas verrou non symetrique fort et on all_reduce le nombre d'iterations : spread nul attendu.
   {
-    const SolveReport r = solve_case(n, 0.7, /*non_sym=*/true);
+    const TensorSolveCaseReport r = solve_case(n, 0.7, /*non_sym=*/true);
     const long it = r.kry_iters;
     const long it_min = -static_cast<long>(all_reduce_max(static_cast<double>(-it)));
     const long it_max = static_cast<long>(all_reduce_max(static_cast<double>(it)));

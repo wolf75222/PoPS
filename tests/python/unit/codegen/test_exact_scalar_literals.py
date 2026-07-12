@@ -8,7 +8,7 @@ import pytest
 
 from pops.ir import Const, ScalarLiteral, scalar_data
 from pops.model import StateSpace
-from pops.time import Program
+from pops.time import FailRun, Program
 from typed_program_support import typed_state
 
 
@@ -229,7 +229,7 @@ def test_solver_controls_keep_exact_literals_until_codegen():
         method=Richardson(max_iter=4, omega=Fraction(2, 3)),
         tol=Decimal("1e-12"),
         max_iter=4,
-    )
+    ).consume(action=FailRun())
     program.commit(time_state.next, result)
 
     solve = next(node for node in program._values if node.op == "solve_linear")

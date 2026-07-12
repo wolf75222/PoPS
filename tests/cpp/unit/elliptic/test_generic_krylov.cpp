@@ -342,3 +342,34 @@ TEST_F(GenericKrylov, zero_max_iters_throws_invalid_argument) {
   EXPECT_THROW(gmres_solve(*A_, ApplyFn{}, x, *rhs_, kRelTol, 0), std::invalid_argument)
       << "gmres_max_iters_0_throws";
 }
+
+TEST_F(GenericKrylov, gmres_restart_is_exact_or_rejected) {
+  MultiFab x(*ba_, *dm_, 1, 1);
+  x.set_val(0.0);
+  EXPECT_THROW(gmres_solve(*A_, ApplyFn{}, x, *rhs_, kRelTol, 500, 0), std::invalid_argument)
+      << "gmres_restart_0_rejected";
+  EXPECT_THROW(gmres_solve(*A_, ApplyFn{}, x, *rhs_, kRelTol, 500, -3), std::invalid_argument)
+      << "gmres_restart_negative_rejected";
+  EXPECT_THROW(gmres_solve(*A_, ApplyFn{}, x, *rhs_, kRelTol, 500, 51), std::invalid_argument)
+      << "gmres_restart_above_stack_cap_rejected";
+
+  EXPECT_NO_THROW((void)gmres_solve(*A_, ApplyFn{}, x, *rhs_, kRelTol, 500, 1))
+      << "gmres_restart_1_is_valid_and_not_clamped_or_rejected";
+}
+
+TEST_F(GenericKrylov, failed_solves_report_no_solved_value) {
+  MultiFab x_limit(*ba_, *dm_, 1, 1);
+  x_limit.set_val(0.0);
+  const KrylovResult limited = richardson_solve(*A_, x_limit, *rhs_, Real(1e-12), kRelTol, 1);
+  EXPECT_FALSE(limited.solved_value_available());
+  EXPECT_EQ(limited.status, SolveStatus::kIterationLimit);
+  EXPECT_EQ(limited.action, SolveAction::kFailRun);
+
+  ApplyFn zero_op = [](MultiFab& out, const MultiFab&) { out.set_val(0.0); };
+  MultiFab x_break(*ba_, *dm_, 1, 1);
+  x_break.set_val(0.0);
+  const KrylovResult breakdown = cg_solve(zero_op, x_break, *rhs_, kRelTol, 10);
+  EXPECT_FALSE(breakdown.solved_value_available());
+  EXPECT_EQ(breakdown.status, SolveStatus::kBreakdown);
+  EXPECT_EQ(breakdown.action, SolveAction::kFailRun);
+}

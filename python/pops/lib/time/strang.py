@@ -183,8 +183,9 @@ def condensed_schur(P: Any, block: Any, state: Any = None, *,
     P.set_apply(A, apply)
     # theta < 1 warm-starts the Krylov solve from phi^n (the carried potential), like the native stepper;
     # theta == 1 keeps the zero warm start (initial_guess=None) so the IR is byte-identical.
+    from pops.time import FailRun
     phi = P.solve_linear(operator=A, rhs=rhs, method=method, tol=tol, max_iter=max_iter,
-                         initial_guess=phi_n if carry else None)
+                         initial_guess=phi_n if carry else None).consume(action=FailRun())
     # The reconstruction overwrites the MOMENTUM in place. theta == 1 with no energy keeps the historical
     # IR byte-identical (reconstruct directly on U). For theta < 1 OR an energy update we need U^n
     # (mom^n / E^n) AFTER the reconstruction, so reconstruct on a fresh COPY of U^n and keep U^n intact.

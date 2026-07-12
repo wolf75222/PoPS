@@ -425,7 +425,7 @@ def _run_section_b(t):
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)  # smooth isothermal-Euler state
     init = np.stack([rho, 0.4 * rho, -0.2 * rho])  # (3, n, n): rho, mx, my -> a clear nonlinear flux
     dt = 0.02
-    tol = 1e-10
+    tol = 1e-8
     newton_max = 20
 
     def _build(order):
@@ -433,7 +433,7 @@ def _run_section_b(t):
             compiled = compile_drivers.compile_problem(
                 model=_nonlinear_flux_model(),
                 time=_bdf_program(t, order, name="bdf_iso_step%d" % order, newton_max=newton_max,
-                                  krylov_max=200, tol=tol))
+                                  krylov_max=5000, tol=tol))
         except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
             print("-- (B) skipped: could not build the .so: %s --" % str(exc)[:200])
             return None

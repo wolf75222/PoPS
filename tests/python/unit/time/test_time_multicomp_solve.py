@@ -32,6 +32,7 @@ from pops.model import StateSpace
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 from pops.solvers import krylov
+from pops.time import FailRun
 import sys
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
@@ -69,7 +70,8 @@ def _mc_program(t, ncomp, *, name="mc_solve", method=None, tol=1e-10, max_iter=2
         from pops.solvers.krylov import CG  # typed default (Spec 5 sec.7); CG lowers to "cg"
         method = CG(max_iter=max_iter)  # ADC-535: max_iter is mandatory on the descriptor
     P.set_apply(A, apply)
-    phi = P.solve_linear(operator=A, rhs=U, method=method, tol=tol, max_iter=max_iter)
+    phi = P.solve_linear(
+        operator=A, rhs=U, method=method, tol=tol, max_iter=max_iter).consume(action=FailRun())
     endpoint = typed_state(P, "blk", state_name="U", space=space).next
     P.commit(endpoint, P.linear_combine("solution_next", 1 * phi, at=endpoint.point))
     return P
@@ -92,7 +94,9 @@ def test_state_operator_builds(t):
     P.set_apply(A, apply)
     space = StateSpace("U", ("c0", "c1"))
     U = typed_state(P, "blk", space=space)
-    phi = P.solve_linear(operator=A, rhs=U, method=CG(max_iter=50), tol=1e-10, max_iter=50)
+    phi = P.solve_linear(
+        operator=A, rhs=U, method=CG(max_iter=50), tol=1e-10,
+        max_iter=50).consume(action=FailRun())
     assert phi.vtype == "state", "a state-domain solve over a State rhs returns a State"
     assert phi.attrs["ncomp"] == 2, "the solution carries the operator ncomp"
     endpoint = typed_state(P, "blk", state_name="U", space=space).next
@@ -153,8 +157,10 @@ def test_solve_rhs_component_count(t):
     else:
         raise AssertionError("a rhs with too few components must raise")
     # A scalar_field with >= ncomp components and a structurally matching typed State are accepted.
-    phi = P.solve_linear(operator=A, rhs=P.scalar_field("rhs3", ncomp=3), max_iter=10)
-    assert phi.attrs["ncomp"] == 3
+    outcome = P.solve_linear(operator=A, rhs=P.scalar_field("rhs3", ncomp=3), max_iter=10)
+    token = next(value for value in P._values if value.op == "solve_linear")
+    assert token.attrs["ncomp"] == 3
+    outcome.consume(action=FailRun())
     state_space = StateSpace("U", ("c0", "c1", "c2"))
     P.solve_linear(operator=A, rhs=typed_state(P, "blk", space=state_space), max_iter=10)
 

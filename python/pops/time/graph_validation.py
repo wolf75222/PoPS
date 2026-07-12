@@ -48,9 +48,58 @@ def _residual_operator_unknowns(node: Any) -> tuple[str, ...]:
     return tuple(components)
 
 
+def _solve_outcome_action(attrs: Mapping[str, Any]) -> None:
+    from pops.time.solve_outcome import SOLVE_STATUSES
+
+    attrs = _payload_attrs(attrs)
+    action = attrs.get("action")
+    if not isinstance(action, Mapping):
+        raise ValueError("solve_outcome requires explicit action=FailRun(...) or RejectAttempt(...)")
+    if action.get("kind") not in ("fail_run", "reject_attempt"):
+        raise ValueError("solve_outcome action must be fail_run or reject_attempt")
+    statuses = action.get("statuses")
+    if not isinstance(statuses, Sequence) or isinstance(statuses, (str, bytes)) or not statuses:
+        raise ValueError("solve_outcome action statuses must be a non-empty sequence")
+    unknown = tuple(status for status in statuses if status not in SOLVE_STATUSES)
+    if unknown:
+        raise ValueError("solve_outcome action has unknown status(es): %s" % ", ".join(unknown))
+
+
+def _payload_attrs(attrs: Mapping[str, Any]) -> Mapping[str, Any]:
+    if "attrs" in attrs and isinstance(attrs["attrs"], Mapping):
+        return attrs["attrs"]
+    return attrs
+
+
+def _int_attr(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, Mapping):
+        scalar = value.get("scalar")
+        if isinstance(scalar, Mapping) and scalar.get("kind") == "integer":
+            raw = scalar.get("value")
+            if isinstance(raw, str):
+                return int(raw)
+    return None
+
+
+def _solve_arity(node: Any) -> int:
+    from pops.time.graph import ResidualSolve, Solve
+
+    if type(node) is Solve:
+        return 1
+    if type(node) is ResidualSolve:
+        attrs = _payload_attrs(node.attrs.to_data())
+        return _int_attr(attrs.get("unknown_count")) or len(node.initial)
+    raise TypeError("expected a solve graph node")
+
+
 def validate_nodes(nodes: Any, clocks: Any, available: dict[int, Any], *, where: str) -> None:
     from pops.time.graph import (
-        Branch, Loop, ResidualEvaluation, ResidualSolve, Synchronize, _point_clocks,
+        Branch, Loop, ProgramValue, ResidualEvaluation, ResidualSolve, Solve, Synchronize,
+        _point_clocks,
     )
 
     declared = set(clocks)
@@ -74,6 +123,11 @@ def validate_nodes(nodes: Any, clocks: Any, available: dict[int, Any], *, where:
                     % (where, ref.node_id))
             if getattr(source, "readable", True) is False:
                 raise ValueError("%s cannot read a Commit node" % where)
+            if type(source) in (Solve, ResidualSolve) \
+                    and not (type(node) is ProgramValue and node.op == "solve_outcome"):
+                raise ValueError(
+                    "%s cannot read an unconsumed solve token; call outcome.consume(action=...)"
+                    % where)
             if type(node) is Synchronize:
                 if source.clock != node.source_clock:
                     raise ValueError("Synchronize source_clock does not match its input value")
@@ -104,8 +158,9 @@ def validate_nodes(nodes: Any, clocks: Any, available: dict[int, Any], *, where:
             if len(node.initial) != len(residual_source.unknowns):
                 raise ValueError(
                     "ResidualSolve initial product arity must match residual unknown product")
-            attrs = node.attrs.to_data()
-            if "unknown_count" in attrs and attrs["unknown_count"] != len(node.initial):
+            attrs = _payload_attrs(node.attrs.to_data())
+            unknown_count = _int_attr(attrs.get("unknown_count"))
+            if "unknown_count" in attrs and unknown_count != len(node.initial):
                 raise ValueError(
                     "ResidualSolve unknown_count must match initial product arity")
         if type(node) is ResidualEvaluation:
@@ -113,6 +168,24 @@ def validate_nodes(nodes: Any, clocks: Any, available: dict[int, Any], *, where:
             if len(components) != len(node.unknowns):
                 raise ValueError(
                     "ResidualEvaluation unknown product arity must match operator unknown_space")
+        if type(node) is ProgramValue and node.op == "solve_outcome":
+            if len(node.inputs) != 1:
+                raise ValueError("solve_outcome must consume exactly one solve token")
+            source = available[node.inputs[0].node_id]
+            if type(source) not in (Solve, ResidualSolve):
+                raise ValueError("solve_outcome must consume a Solve or ResidualSolve node")
+            _solve_outcome_action(node.attrs.to_data())
+        if type(node) is ProgramValue and node.op == "solve_outcome_component":
+            if len(node.inputs) != 1:
+                raise ValueError("solve_outcome_component must read exactly one solve_outcome")
+            source = available[node.inputs[0].node_id]
+            if not (type(source) is ProgramValue and source.op == "solve_outcome"):
+                raise ValueError("solve_outcome_component must read a consumed solve_outcome")
+            attrs = _payload_attrs(node.attrs.to_data())
+            index = _int_attr(attrs.get("index"))
+            solve_source = available[source.inputs[0].node_id]
+            if index is None or index < 0 or index >= _solve_arity(solve_source):
+                raise ValueError("solve_outcome_component index is outside solve outcome arity")
         for index, region in enumerate(_nested_regions(node)):
             _validate_region_boundary(
                 region, available, declared,

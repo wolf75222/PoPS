@@ -39,6 +39,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <stdexcept>
 
 namespace pops {
 
@@ -112,6 +113,10 @@ class TensorKrylovSolver {
   // Preconditioned BiCGStab. phi() is the unknown (warm start: incoming value = starting point);
   // rhs() the right-hand side. Returns iterations + relative residual + convergence.
   KrylovResult solve(Real rel_tol, int max_iters) {
+    if (max_iters <= 0)
+      throw std::invalid_argument("dynamic solver loops require max_iter");
+    if (!(rel_tol > Real(0)) || !std::isfinite(static_cast<double>(rel_tol)))
+      throw std::invalid_argument("dynamic solver loops require positive finite rel_tol");
     prepare_solve();  // compute (once) the inhomogeneous Dirichlet BC offsets (matvec + precond)
     // r0 = rhs - L_int(phi)  (true INHOMOGENEOUS residual, warm start respected). Here we KEEP the AFFINE
     // operator: it folds the Dirichlet data into the residual, exactly what we want for r0. The
@@ -125,8 +130,12 @@ class TensorKrylovSolver {
     Real rnorm = l2_norm(r_);
     KrylovResult res;
     res.rel_residual = rnorm / norm0;
+    if (!std::isfinite(static_cast<double>(rnorm))) {
+      res.mark_failed(SolveStatus::kInvalidEvaluation);
+      return res;
+    }
     if (rnorm <= rel_tol * norm0) {
-      res.converged = true;
+      res.mark_solved();
       return res;
     }  // already converged
 
@@ -138,10 +147,18 @@ class TensorKrylovSolver {
 
     for (int k = 1; k <= max_iters; ++k) {
       const Real rho = dot(rhat_, r_);  // COLLECTIVE (all ranks)
-      // guard: BiCGStab breakdown (rho or omega ~ 0). We return the current best effort.
+      // guard: BiCGStab breakdown (rho or omega ~ 0). We return an explicit failed report.
+      if (!std::isfinite(static_cast<double>(rho)) ||
+          !std::isfinite(static_cast<double>(omega))) {
+        res.iters = k - 1;
+        res.rel_residual = rnorm / norm0;
+        res.mark_failed(SolveStatus::kInvalidEvaluation);
+        return res;
+      }
       if (std::fabs(rho) < kTiny || std::fabs(omega) < kTiny) {
         res.iters = k - 1;
         res.rel_residual = rnorm / norm0;
+        res.mark_failed(SolveStatus::kBreakdown);
         return res;
       }
       const Real beta = (rho / rho_prev) * (alpha / omega);
@@ -152,9 +169,16 @@ class TensorKrylovSolver {
       apply_precond(p_, phat_);
       apply_operator_lin(phat_, v_);  // v = L_lin(phat) (LINEAR matvec: phat is a direction)
       const Real rhat_dot_v = dot(rhat_, v_);  // COLLECTIVE
+      if (!std::isfinite(static_cast<double>(rhat_dot_v))) {
+        res.iters = k - 1;
+        res.rel_residual = rnorm / norm0;
+        res.mark_failed(SolveStatus::kInvalidEvaluation);
+        return res;
+      }
       if (std::fabs(rhat_dot_v) < kTiny) {
         res.iters = k - 1;
         res.rel_residual = rnorm / norm0;
+        res.mark_failed(SolveStatus::kBreakdown);
         return res;
       }
       alpha = rho / rhat_dot_v;
@@ -163,17 +187,29 @@ class TensorKrylovSolver {
       // phi <- phi + alpha phat   (partial correction; buffer before the test on ||s||)
       saxpy(phi(), alpha, phat_);
       const Real snorm = l2_norm(s_);
+      if (!std::isfinite(static_cast<double>(snorm))) {
+        res.iters = k;
+        res.rel_residual = snorm / norm0;
+        res.mark_failed(SolveStatus::kInvalidEvaluation);
+        return res;
+      }
       if (snorm <= rel_tol * norm0) {  // convergence at mid-iteration
         rnorm = snorm;
         res.iters = k;
         res.rel_residual = rnorm / norm0;
-        res.converged = true;
+        res.mark_solved();
         return res;
       }
       // shat = M^{-1} s; t = L_lin(shat) (LINEAR matvec: shat is a correction direction)
       apply_precond(s_, shat_);
       apply_operator_lin(shat_, t_);
       const Real tt = dot(t_, t_);  // COLLECTIVE
+      if (!std::isfinite(static_cast<double>(tt))) {
+        res.iters = k - 1;
+        res.rel_residual = rnorm / norm0;
+        res.mark_failed(SolveStatus::kInvalidEvaluation);
+        return res;
+      }
       omega = tt > kTiny ? dot(t_, s_) / tt : Real(0);
       // phi <- phi + omega shat; r <- s - omega t
       saxpy(phi(), omega, shat_);
@@ -181,13 +217,19 @@ class TensorKrylovSolver {
       rnorm = l2_norm(r_);
       res.iters = k;
       res.rel_residual = rnorm / norm0;
+      if (!std::isfinite(static_cast<double>(omega)) ||
+          !std::isfinite(static_cast<double>(rnorm))) {
+        res.mark_failed(SolveStatus::kInvalidEvaluation);
+        return res;
+      }
       if (rnorm <= rel_tol * norm0) {
-        res.converged = true;
+        res.mark_solved();
         return res;
       }
       rho_prev = rho;
     }
-    return res;  // max_iters reached without convergence: best effort (converged=false)
+    res.mark_failed(SolveStatus::kIterationLimit);
+    return res;  // max_iters reached without convergence: no solved value published
   }
 
  private:

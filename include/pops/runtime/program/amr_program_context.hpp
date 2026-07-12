@@ -470,34 +470,32 @@ class AmrProgramContext {
   /// (a real fine patch under a Program) needs the ADC-648 gather-then-solve (on these same generic ops)
   /// -- or the native AMR source-stage route -- for a conservative, order-exact result. This branch is
   /// the composite-solve scaffold, not a bit-exact multilevel driver.
-  void solve_linear_matfree(MultiFab& sol, const MultiFab& rhs, const ApplyFn& apply,
-                          const ApplyFn& precond, int method, Real tol, int max_iter,
-                          int restart) const {
-    (void)restart;
+  SolveReport solve_linear_matfree(MultiFab& sol, const MultiFab& rhs, const ApplyFn& apply,
+                                   const ApplyFn& precond, int method, Real tol, int max_iter,
+                                   int restart) const {
     validate_linear_solve_method(method, "AmrProgramContext::solve_linear_matfree");
     AmrCondensedElliptic& s = condensed_elliptic();
     if (!s.has_fine_patches()) {
       switch (method) {
         case kLinearSolveCg:
-          (void)pops::cg_solve(apply, sol, rhs, tol, max_iter);
-          break;
+          return pops::cg_solve(apply, sol, rhs, tol, max_iter);
         case kLinearSolveGmres:
-          (void)pops::gmres_solve(apply, precond, sol, rhs, tol, max_iter, restart);
-          break;
+          return pops::gmres_solve(apply, precond, sol, rhs, tol, max_iter, restart);
         case kLinearSolveRichardson:
-          (void)pops::richardson_solve(apply, sol, rhs, static_cast<Real>(1), tol, max_iter);
-          break;
+          return pops::richardson_solve(apply, sol, rhs, static_cast<Real>(1), tol, max_iter);
         case kLinearSolveBicgstab:
-          (void)pops::bicgstab_solve(apply, precond, sol, rhs, tol, max_iter);
-          break;
+          return pops::bicgstab_solve(apply, precond, sol, rhs, tol, max_iter);
         default:
-          break;  // validated above
+          SolveReport report;
+          report.mark_failed(SolveStatus::kInvalidInput, SolveAction::kRejectAttempt);
+          return report;  // validated above
       }
-      return;
     }
     // Refined: the per-level coefficients / RHS are already assembled into AmrCondensedElliptic (through
     // assembly_target on the prior per-level assembly calls); drive the composite FAC over the whole tower.
-    s.solve_composite();
+    // The composite FAC currently exposes no per-solve report. Refuse to publish a solved value from
+    // this seam until the composite branch can report its own status.
+    return SolveReport::capability_failure();
   }
 
   // --- named-flux primitive: DEFERRED on AMR (v1), fail loud -----------------------------------------
