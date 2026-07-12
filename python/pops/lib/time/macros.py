@@ -3,7 +3,7 @@
 A catalog SimpleNamespace of MACRO ``BrickDescriptor``-style entries that forward to the
 ``pops.lib.time`` scheme builders (build Program IR only). This is the OLD Spec-3
 ``pops.lib.time`` surface; under Spec 4 the public ``pops.lib.time`` is the scheme-builder
-package (:mod:`pops.lib.time`'s ``forward_euler`` / ``ssprk2`` / ...), so this catalog ns is
+package (:mod:`pops.lib.time`'s ``forward_euler`` / ``SSPRK2`` / ...), so this catalog ns is
 kept here as an internal artifact and is NOT re-exported as ``lib.time``.
 """
 from __future__ import annotations
@@ -24,7 +24,7 @@ def _time_macro(scheme_name: Any) -> Any:
 
 time = SimpleNamespace(
     forward_euler=_time_macro("forward_euler"),
-    ssprk2=_time_macro("ssprk2"),
+    SSPRK2=_time_macro("SSPRK2"),
     ssprk3=_time_macro("ssprk3"),
     rk4=_time_macro("rk4"),
     rk=_time_macro("rk"),

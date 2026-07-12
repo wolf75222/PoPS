@@ -451,7 +451,7 @@ def _exists_ssprk2_program_parity():
     prog = pops.time.Program("spec6-exists-ssprk2")
     module = synthetic_module("spec6_ssprk2_state", components=("rho",))
     _case, states = program_states(prog, module, ("plasma",))
-    lib_time.ssprk2(prog, states["plasma"])
+    lib_time.SSPRK2(prog, states["plasma"])
     assert prog._ir_hash() == prog._ir_hash()
     return "exists:test_amr_program_parity"
 

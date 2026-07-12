@@ -81,3 +81,10 @@ def test_program_has_one_public_runtime_branch_spelling():
         node.name for node in authoring.body if isinstance(node, ast.FunctionDef)}
     assert "branch" in methods, "Program.branch must be the public runtime value branch"
     assert "if_" not in methods, "Program.if_ is a removed second public branch spelling"
+
+
+def test_ssprk2_preset_has_one_final_public_spelling():
+    import pops.lib.time as lib_time
+
+    assert callable(lib_time.SSPRK2)
+    assert not hasattr(lib_time, "ssprk2")

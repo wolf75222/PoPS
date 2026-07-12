@@ -101,8 +101,8 @@ def test_forward_euler_parity():
 
 def test_ssprk2_parity():
     block, state_handle = _refs(_model("ssprk2"))
-    macro = libtime.ssprk2(block, state_handle)
-    manual = adctime.Program("ssprk2")
+    macro = libtime.SSPRK2(block, state_handle)
+    manual = adctime.Program("SSPRK2")
     libtime.rk(manual, block, state_handle, tableau=libtime.SSPRK2_TABLEAU)
     _assert_parity(macro, manual)
     assert macro.to_graph().graph_hash == manual.to_graph().graph_hash
@@ -158,7 +158,7 @@ def test_rk_ssprk2_tableau_matches_the_rk_macro():
 def test_explicit_presets_put_every_rhs_at_its_exact_stage_abscissa():
     cases = (
         ("fe-points", libtime.forward_euler, (0,)),
-        ("ssprk2-points", libtime.ssprk2, (0, 1)),
+        ("ssprk2-points", libtime.SSPRK2, (0, 1)),
         ("ssprk3-points", libtime.ssprk3, (0, 1, Fraction(1, 2))),
         ("rk4-points", libtime.rk4, (0, Fraction(1, 2), Fraction(1, 2), 1)),
     )

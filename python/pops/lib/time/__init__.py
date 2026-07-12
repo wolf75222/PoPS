@@ -10,7 +10,7 @@ Euler:
     forward_euler
 
 SSPRK:
-    ssprk2, ssprk3
+    SSPRK2, ssprk3
 
 Classic Runge-Kutta:
     rk4, rk, explicit_rk, ButcherTableau, RK4_TABLEAU, SSPRK2_TABLEAU
@@ -32,7 +32,7 @@ catch-all bundle). Call e.g. ``pops.lib.time.ssprk3`` / ``pops.lib.time.strang``
 """
 
 from .euler import forward_euler
-from .ssprk import SSPRK3_TABLEAU, ssprk2, ssprk3
+from .ssprk import SSPRK2, SSPRK3_TABLEAU, ssprk3
 from .rk import rk4, rk, explicit_rk, ButcherTableau, RK4_TABLEAU, SSPRK2_TABLEAU
 from .strang import strang, lie, condensed_schur
 from .imex import IMEX_EULER_TABLEAU, ark_local_linear, imex_local, imex_local_linear
@@ -43,7 +43,7 @@ __all__ = [
     # Euler
     "forward_euler",
     # SSPRK
-    "ssprk2",
+    "SSPRK2",
     "ssprk3",
     # Classic RK
     "rk4",

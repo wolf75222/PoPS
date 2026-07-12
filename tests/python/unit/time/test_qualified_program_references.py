@@ -19,7 +19,7 @@ from pops.model import (
 from pops.problem import Problem
 from pops.problem.handles import BlockHandle
 from pops.time import Program, StagePoint, TimePoint
-from pops.lib.time import forward_euler, ssprk2
+from pops.lib.time import SSPRK2, forward_euler
 from pops.numerics.terms import DefaultSource, SourceTerm
 from pops.fields import FieldProblem
 
@@ -320,7 +320,7 @@ def test_ready_presets_take_typed_references_and_match_the_explicit_program():
     assert preset._serialize(include_provenance=False) == manual._serialize(
         include_provenance=False)
 
-    factory = ssprk2(block, model.u, sources=(), flux=False)
+    factory = SSPRK2(block, model.u, sources=(), flux=False)
     assert isinstance(factory, Program)
     assert factory.validate() is True
     assert all(value.block is block for value in factory._values if value.block is not None)

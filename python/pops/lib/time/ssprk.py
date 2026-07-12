@@ -17,7 +17,7 @@ SSPRK3_TABLEAU = ButcherTableau(
 
 
 @program_macro
-def ssprk2(P: Any, block: Any, state: Any = None, *,
+def SSPRK2(P: Any, block: Any, state: Any = None, *,
            sources: Any = _DEFAULT_SOURCES, flux: Any = True) -> Any:
     """SSPRK2 (Heun / Shu-Osher): U1 = U0 + dt k0; U^{n+1} = 1/2 U0 + 1/2 (U1 + dt k1)."""
     return _rk_from_tableau(P, block, state, SSPRK2_TABLEAU, sources, flux)
@@ -31,4 +31,4 @@ def ssprk3(P: Any, block: Any, state: Any = None, *,
     return _rk_from_tableau(P, block, state, SSPRK3_TABLEAU, sources, flux)
 
 
-__all__ = ["SSPRK3_TABLEAU", "ssprk2", "ssprk3"]
+__all__ = ["SSPRK2", "SSPRK3_TABLEAU", "ssprk3"]

@@ -2,7 +2,7 @@
 from fractions import Fraction
 
 from pops.lib.time.rk import RK4_TABLEAU, SSPRK2_TABLEAU, rk, rk4
-from pops.lib.time.ssprk import SSPRK3_TABLEAU, ssprk2, ssprk3
+from pops.lib.time.ssprk import SSPRK2, SSPRK3_TABLEAU, ssprk3
 from pops.time import Program
 from pops.time.method_properties import UnknownOrder
 from pops.time.method_properties import certify_program_graph
@@ -76,7 +76,7 @@ def test_presets_and_tableau_authority_have_identical_program_graphs():
     assert preset.graph_hash == manual.to_graph().graph_hash
 
     for preset_builder, tableau, name in (
-        (ssprk2, SSPRK2_TABLEAU, "ssprk2"),
+        (SSPRK2, SSPRK2_TABLEAU, "ssprk2"),
         (ssprk3, SSPRK3_TABLEAU, "ssprk3"),
     ):
         preset = _graph(preset_builder, name)

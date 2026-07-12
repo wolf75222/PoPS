@@ -122,7 +122,7 @@ def test_store_before_read_in_body(t):
 
 
 def test_non_history_schemes_emit_no_rotate(t):
-    for sched in ("forward_euler", "ssprk2", "ssprk3", "rk4"):
+    for sched in ("forward_euler", "SSPRK2", "ssprk3", "rk4"):
         P = t.Program(sched)
         getattr(lt, sched)(P, *state_refs(P, "blk"))
         src = P.emit_cpp_program()

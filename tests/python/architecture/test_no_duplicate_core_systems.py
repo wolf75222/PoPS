@@ -225,7 +225,7 @@ def test_lib_time_macro_returns_the_same_program_handle():
     block = Problem(name="architecture-time-case").add_block("plasma", module)
     # Strang / imex / bdf / predictor_corrector need extra scheme arguments and are covered by the
     # ADC-566 boundary proof through their in-place form.
-    for name in ("forward_euler", "ssprk2", "ssprk3", "rk4"):
+    for name in ("forward_euler", "SSPRK2", "ssprk3", "rk4"):
         result = getattr(lib_time, name)(block, state, sources=(), flux=False)
         assert isinstance(result, Program), (
             "pops.lib.time.%s must return a pops.time.Program, got %r" % (name, type(result)))

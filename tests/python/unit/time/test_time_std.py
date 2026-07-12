@@ -50,7 +50,7 @@ def test_forward_euler():
 
 def test_ssprk2():
     P = adctime.Program("ssprk2")
-    libtime.ssprk2(P, *state_refs(P, "plasma"))
+    libtime.SSPRK2(P, *state_refs(P, "plasma"))
     node, states, rhss = _committed(P, "plasma")
     # Canonical Butcher form: U2 = U0 + dt*(k0+k1)/2.
     assert len(states) == 1 and len(rhss) == 2

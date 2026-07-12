@@ -250,7 +250,7 @@ def test_lib_time_macros_return_a_core_program():
     state_space = module.state_space("U", ("u",))
     state = module.state_handle(state_space)
     block = Problem(name="architecture-time-case").add_block("plasma", module)
-    for name in ("forward_euler", "ssprk2", "ssprk3", "rk4"):
+    for name in ("forward_euler", "SSPRK2", "ssprk3", "rk4"):
         program = getattr(lib_time, name)(block, state, sources=(), flux=False)
         assert isinstance(program, Program), (
             "pops.lib.time.%s must return a pops.time.Program, got %r" % (name, type(program)))

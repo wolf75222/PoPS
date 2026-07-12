@@ -4,7 +4,7 @@ Spec 5 moves the generic *building blocks* out of ``pops.lib`` into top-level ce
 packages and keeps ``pops.lib`` for things that are ready to use (criterion 7: presets only):
 
 * :mod:`pops.lib.time` -- provided time-stepping scheme macros (forward_euler /
-  ssprk2 / ssprk3 / rk4 / strang / imex / bdf / predictor_corrector ...);
+  SSPRK2 / ssprk3 / rk4 / strang / imex / bdf / predictor_corrector ...);
 * :mod:`pops.lib.models` -- provided physical models (HyQMOM15 / Gaussian);
 * :mod:`pops.lib.presets` -- ready-to-run compose-and-go bundles (a provided model paired
   with a provided time scheme; the user still picks the mesh layout at

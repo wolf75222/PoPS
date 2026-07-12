@@ -23,7 +23,7 @@ def _stage(program, state):
 
 def test_manual_and_library_ssprk2_have_one_semantic_identity():
     block, state_handle = _references()
-    library = libtime.ssprk2(block, state_handle)
+    library = libtime.SSPRK2(block, state_handle)
 
     manual = Program("my-presentation-name")
     state = manual.state(block, state_handle)

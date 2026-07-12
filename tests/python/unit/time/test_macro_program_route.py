@@ -40,7 +40,7 @@ def test_macro_without_program_returns_a_program():
     block, state = fresh_state_refs("plasma")
     cases = [
         ("forward_euler", lambda: libtime.forward_euler(block, state)),
-        ("ssprk2", lambda: libtime.ssprk2(block, state)),
+        ("ssprk2", lambda: libtime.SSPRK2(block, state)),
         ("ssprk3", lambda: libtime.ssprk3(block, state)),
         ("rk4", lambda: libtime.rk4(block, state)),
         ("adams_bashforth2", lambda: libtime.adams_bashforth2(block, state)),
@@ -100,10 +100,10 @@ def test_ir_nodes_inspection_lists_generated_nodes():
 def test_macro_and_manual_same_ir():
     """A macro and the equivalent hand-written manual Program produce the same logical IR."""
     # Fresh-Program macro (its Program is named after the scheme).
-    macro_prog = libtime.ssprk2(*fresh_state_refs("plasma"))
+    macro_prog = libtime.SSPRK2(*fresh_state_refs("plasma"))
 
     # Manual equivalent: the exact SSPRK2 stage chain, same Program name for byte-identical IR.
-    manual = Program("ssprk2")
+    manual = Program("SSPRK2")
     U0 = typed_state(manual, "plasma")
     point0 = StagePoint("ssprk2_stage_0", {"main": TimePoint(manual.clock, 0)})
     fields0 = manual._replace_value(manual.solve_fields(U0), point=point0)

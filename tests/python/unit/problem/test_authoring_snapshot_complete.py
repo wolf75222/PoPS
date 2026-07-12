@@ -48,7 +48,7 @@ def _program(problem, scheme):
     if scheme == "euler":
         return libtime.forward_euler(block, state)
     if scheme == "ssprk2":
-        return libtime.ssprk2(block, state)
+        return libtime.SSPRK2(block, state)
     raise ValueError("unknown test scheme %r" % scheme)
 
 
@@ -99,7 +99,7 @@ _SUBPROCESS_PROBE = textwrap.dedent(
     state = model.state_space("U", ("u",))
     problem = pops.Problem(name="deterministic")
     block = problem.add_block("fluid", model)
-    time = libtime.ssprk2(block, model.state_handle(state))
+    time = libtime.SSPRK2(block, model.state_handle(state))
     snapshot = build_authoring_snapshot(
         problem, layout=Uniform(CartesianMesh(n=16, L=1.0)), time=time)
     print(json.dumps({

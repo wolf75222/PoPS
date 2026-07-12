@@ -210,9 +210,9 @@ def test_typed_call_lowers_through_private_rhs():
 def test_lib_time_macro_uses_the_private_path():
     """A pops.lib.time scheme macro (ssprk2) builds and validates: it authors the RHS through the
     private P._rhs_legacy, so the public terms=-only reject does not break the ready schemes."""
-    from pops.lib.time import ssprk2
+    from pops.lib.time import SSPRK2
     P, _, _, block, state, _ = typed_program_state("m", block_name="plasma")
-    ssprk2(P, block, state)
+    SSPRK2(P, block, state)
     P.validate()
     print("OK  lib.time.ssprk2 builds + validates via the private path")
 
