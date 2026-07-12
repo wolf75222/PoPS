@@ -133,7 +133,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         self._output_policies = []
         self._diagnostic_measures = []
 
-    def run(self, t_end, cfl=None, max_steps=1_000_000, output_dir=None):
+    def run(self, t_end, cfl=None, max_steps=1_000_000, output_dir=None, strategy=None):
         """Advance up to t_end by CFL steps, firing declared output / diagnostic policies (ADC-542).
 
         AMR parity with ``System.run``: each step advances by ``step_cfl(cfl)`` then fires the DUE
@@ -141,17 +141,19 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         output_dir is the directory the outputs land in (defaults to the current directory when
         policies are present). ``on_end`` fires on the last step actually taken (CFL-driven dt).
         Returns the number of steps taken."""
-        if cfl is None:
-            cfl = self._program_cadence_cfl if self._program_cadence_cfl is not None else 0.4
+        from pops.runtime._step_strategy import (
+            AdaptiveCFL, resolve_run_strategy, run_step_attempt)
+        strategy = resolve_run_strategy(self, strategy, cfl)
+        manifest_cfl = strategy.cfl if isinstance(strategy, AdaptiveCFL) else 0.0
         from pops.runtime._run_manifest import begin_run
-        begin_run(self, t_end=t_end, cfl=cfl, max_steps=max_steps, output_dir=output_dir)
+        begin_run(self, t_end=t_end, cfl=manifest_cfl, max_steps=max_steps, output_dir=output_dir)
         policies = getattr(self, "_output_policies", [])
         measures = getattr(self, "_diagnostic_measures", [])
         out_dir = output_dir if output_dir is not None else "."
         baselines = {}
         steps = 0
         while self._s.time() < t_end and steps < max_steps:
-            self._s.step_cfl(cfl)
+            run_step_attempt(self, self._s, strategy, t_end=float(t_end))
             steps += 1
             last_step = steps if (not (self._s.time() < t_end) or steps >= max_steps) else None
             if policies:

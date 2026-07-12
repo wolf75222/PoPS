@@ -134,7 +134,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         self._last_run_manifest = self._last_run_identity = self._last_restart_identity = None
 
     def run(self, t_end: Any, cfl: Any = None, max_steps: int = 1_000_000,
-            output_dir: Any = None) -> Any:
+            output_dir: Any = None, strategy: Any = None) -> Any:
         """Advance up to t_end by CFL steps (sugar: `while time() < t_end: step_cfl(cfl)`).
 
         @p cfl: Courant number passed to step_cfl. When omitted (None) it defaults to the CFL pinned
@@ -146,10 +146,12 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         write()/checkpoint writers (C4 / ADC-509). Defaults to the current directory when policies
         are present and output_dir is omitted. Returns the number of steps taken.
         cf. DSL_MODEL_DESIGN.md section 6."""
-        if cfl is None:
-            cfl = self._program_cadence_cfl if self._program_cadence_cfl is not None else 0.4
+        from pops.runtime._step_strategy import (
+            AdaptiveCFL, resolve_run_strategy, run_step_attempt)
+        strategy = resolve_run_strategy(self, strategy, cfl)
+        manifest_cfl = strategy.cfl if isinstance(strategy, AdaptiveCFL) else 0.0
         from pops.runtime._run_manifest import begin_run
-        begin_run(self, t_end=t_end, cfl=cfl, max_steps=max_steps, output_dir=output_dir)
+        begin_run(self, t_end=t_end, cfl=manifest_cfl, max_steps=max_steps, output_dir=output_dir)
         policies = getattr(self, "_output_policies", [])
         measures = getattr(self, "_diagnostic_measures", [])
         out_dir = output_dir if output_dir is not None else "."
@@ -158,7 +160,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         baselines = {}
         steps = 0
         while self.time() < t_end and steps < max_steps:
-            self.step_cfl(cfl)
+            run_step_attempt(self, self, strategy, t_end=float(t_end))
             steps += 1
             # on_end honesty: dt is CFL-driven, so the final step count is unknown a priori. This step
             # is the LAST one iff the loop is about to exit (t_end reached or the max_steps guard hit).

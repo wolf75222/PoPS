@@ -26,6 +26,7 @@ from pops.time.program_residual import _ProgramResidual
 from pops.time.program_solve import _ProgramSolve
 from pops.time.program_time_handles import _ProgramTimeHandles
 from pops.time.references import bind_program_block, block_name
+from pops.time.step_transaction import StepTransactionPlan, ensure_step_strategy
 from pops.time.values import _Coeff, ProgramValue  # noqa: F401  (ProgramValue used by mixins via prog ref)
 
 
@@ -111,6 +112,12 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         # Temporary data-only context installed while a pops.lib.time factory expands. It contains
         # SourceSpan values and an API string, never a callable or live frame.
         self._provenance_context = None
+        # ADC-666: explicit attempt controller. Runtime kwargs are validated against this descriptor;
+        # a run-time CFL/dt/error-control option never silently selects a strategy.
+        self._step_strategy = None
+        self._transaction_staged_effects = ()
+        self._transaction_guards = ()
+        self._transaction_projections = ()
         # ADC-563 freeze: a Program is MUTABLE while authored and FROZEN by pops.compile. After
         # freeze, adding an IR node (via _new) RAISES -- a compiled artifact is frozen to exactly the
         # program it was compiled from. Emission / hashing are pure reads and stay allowed.
@@ -185,6 +192,55 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         self._guard_mutable("change source-location capture")
         self._capture_source = bool(enabled)
         return self
+
+    def step_strategy(
+        self,
+        strategy: Any,
+        *,
+        staged_effects: Any = (),
+        guards: Any = (),
+        projections: Any = (),
+    ) -> Any:
+        """Attach the explicit StepStrategy/transaction contract to this Program.
+
+        This is authoring metadata, not a runtime kwargs bag.  The native controller must validate run
+        controls against the selected strategy before the first attempt and must report staged,
+        committed, or rolled-back effects through StepTransactionReport.
+        """
+        self._guard_mutable("set step strategy")
+        strategy = ensure_step_strategy(strategy)
+        self._step_strategy = strategy
+        self._transaction_staged_effects = tuple(str(item) for item in staged_effects)
+        self._transaction_guards = tuple(str(item) for item in guards)
+        self._transaction_projections = tuple(str(item) for item in projections)
+        return self
+
+    def transaction_plan(self) -> Any:
+        """Return the frozen transaction plan, or None when the Program has no controller contract."""
+        if self._step_strategy is None:
+            return None
+        return StepTransactionPlan(
+            self._step_strategy,
+            self._transaction_staged_effects,
+            self._transaction_guards,
+            self._transaction_projections,
+        )
+
+    def validate_runtime_controls(self, controls: Any = None) -> bool:
+        """Validate run controls against the explicit StepStrategy selected by this Program."""
+        if self._step_strategy is None:
+            controls = {} if controls is None else dict(controls)
+            if controls:
+                raise ValueError(
+                    "runtime controls require Program.step_strategy(...); got %s"
+                    % ", ".join(sorted(controls)))
+            return True
+        controls = {} if controls is None else dict(controls)
+        if controls:
+            raise ValueError(
+                "runtime controls must be encoded by the selected StepStrategy descriptor; got %s"
+                % ", ".join(sorted(controls)))
+        return True
 
     def __str__(self) -> str:
         """Short, deterministic, array-free summary -- never the full SSA IR.

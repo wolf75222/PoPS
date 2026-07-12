@@ -44,6 +44,12 @@ from pops.time.program import CompiledTime, Program
 from pops.time.solve_outcome import (  # noqa: F401
     FailRun, RejectAttempt, ResidualSolution, SOLVE_STATUSES, SolveAction, SolveOutcome,
 )
+from pops.time.step_strategy import (  # noqa: F401
+    AdaptiveCFL, ErrorControlledDt, ExternalTimeGrid, FixedDt, StepStrategy,
+)
+from pops.time.step_transaction import (  # noqa: F401
+    StepTransactionPlan, StepTransactionReport,
+)
 from pops.time.points import Clock, StagePoint, TimePoint  # noqa: F401
 from pops.time.residual import (  # noqa: F401
     AlgebraicTerm, ApproximateLinearization, AutomaticJVP, Boundary,
@@ -67,6 +73,8 @@ from pops.time.values import StageStateSet, ProgramValue  # noqa: F401
 
 __all__ = ["Program", "CompiledTime", "ProgramValue", "StageStateSet", "ResidualSolution",
            "SolveOutcome", "SolveAction", "FailRun", "RejectAttempt", "SOLVE_STATUSES", "Schedule",
+           "StepStrategy", "FixedDt", "AdaptiveCFL", "ErrorControlledDt", "ExternalTimeGrid",
+           "StepTransactionPlan", "StepTransactionReport",
            "ProgramGraph", "GraphProgramValue", "StateRead", "Unknown", "OperatorCall",
            "ResidualEvaluation", "ResidualSolve", "Solve", "Branch", "Loop", "Region", "RegionCapture",
            "Synchronize", "Commit", "ValueRef",
