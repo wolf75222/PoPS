@@ -123,9 +123,12 @@ def build_requirements(compiled: Any) -> Any:
       - unknown: pieces genuinely not in today's metadata (e.g. the exact reconstruction stencil
         width), recorded honestly rather than guessed.
     """
-    from pops.codegen._artifact_models import artifact_model_metadata
+    from pops.codegen._artifact_models import artifact_model_metadata, component_model_metadata
+    from pops.codegen.compiled_artifact import CompiledSimulationArtifact
 
-    model_rows = artifact_model_metadata(compiled)
+    model_rows = (artifact_model_metadata(compiled)
+                  if type(compiled) is CompiledSimulationArtifact
+                  else component_model_metadata(compiled))
     models = [row.model for row in model_rows]
     model = models[0] if models else None
     args = compiled.arguments()

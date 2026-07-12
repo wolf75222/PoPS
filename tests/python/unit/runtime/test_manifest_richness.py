@@ -32,7 +32,7 @@ from pops.external import (  # noqa: E402
 from pops.descriptors import Availability  # noqa: E402
 from pops.params import ConstParam, RuntimeParam  # noqa: E402
 from pops import time as adctime  # noqa: E402
-from tests.python.unit.runtime._typed_program import attach_typed_install_plan  # noqa: E402
+from tests.python.unit.runtime._typed_program import typed_compiled_artifact  # noqa: E402
 
 
 def _program(name="manifest_demo"):
@@ -73,7 +73,7 @@ def _compiled(*, params=None, caps=None, with_roles=True):
     compiled = CompiledProblem(
         "/tmp/pops-cache/problem.so", P, m, "HEADERSIG|c++|c++23", "c++",
         "c++23", problem_hash="deadbeefcafe", cache_key="0badc0de")
-    return attach_typed_install_plan(compiled, m)
+    return typed_compiled_artifact(compiled, m)
 
 
 def _default_params():
@@ -219,7 +219,6 @@ def test_compiled_capability_matrix_lists_unsupported_routes():
         assert feature in rows
     for feature in ("elliptic:fft_direct_dft_fallback", "amr:refinement_ratio",
                     "parallel:mpi_world_communicator",
-                    "runtime:native_loader_legacy_metadata",
                     "runtime:kokkos_lifecycle",
                     "runtime:allocator_lifetime"):
         assert rows[feature].status == "partial"

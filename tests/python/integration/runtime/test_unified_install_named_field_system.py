@@ -4,7 +4,7 @@ PURE-PYTHON tests of the install-seam routing for a NAMED elliptic field (m.elli
 field a block's model DECLARES routes through the shared system elliptic solver (set_poisson), while
 an UNDECLARED field name is rejected LOUD against the declared set (never a silent drop). The
 declared set is collected exclusively from the ``CompiledModel.elliptic_field_names`` records in an
-immutable ``InstallPlan``; bind never consults a raw authoring model.
+exact immutable phase records; bind never consults a raw authoring model.
 
 Runs both under pytest and as a plain script; the CI runner executes it via the __main__ guard.
 """
@@ -13,8 +13,10 @@ import sys
 try:
     import pops
     from pops.runtime._system_unified_install import _SystemUnifiedInstall
-    from pops.codegen._plans import InstallBlock, InstallPlan
+    from pops.codegen._plans import BindInputs, InstallPlan, ResolvedBlock, ResolvedSimulationPlan
+    from pops.codegen.compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
     from pops.codegen.loader import CompiledModel
+    from pops.model.bind_schema import BindSchema
     from pops.model import Module
     from pops.problem._snapshot import AuthoringSnapshot
 except Exception as exc:  # noqa: BLE001
@@ -27,28 +29,53 @@ from tests.python.support.assertions import _check
 
 def _compiled_model(*fields):
     """Return an inert, runtime-ready model carrying only immutable install metadata."""
-    return CompiledModel(
+    from pops.codegen._compiled_model_identity import compiled_model_identity
+    model = CompiledModel(
         so_path="/fake.so", backend="production", adder="add_native_block",
         cons_names=["rho"], cons_roles=["Density"], prim_names=["rho"], n_vars=1,
         gamma=None, n_aux=0, params={}, caps={}, abi_key="k", model_hash="h",
         cxx="c++", std="c++20", target="system", elliptic_field_names=list(fields))
+    model.definition_identity = compiled_model_identity(model_hash="h")
+    return model
 
 
 def _install_instances(**models):
-    """Assemble the runtime instance mapping through the same immutable plan as ``pops.bind``."""
+    """Assemble runtime instances through the exact resolve/compile/bind records."""
     snapshot = AuthoringSnapshot({"kind": "named-field-system", "blocks": tuple(models)})
-    plan = InstallPlan(
-        snapshot_hash=snapshot.hash,
+    schema = BindSchema()
+    source = {"kind": "named-field-system", "blocks": tuple(models)}
+    resolved = ResolvedSimulationPlan(
+        snapshot=snapshot,
         target="system",
+        backend="production",
         layout=None,
-        blocks=tuple(InstallBlock(name, model, None) for name, model in models.items()),
-        bind_schema=None,
+        time={"method": "inert"},
+        blocks=tuple(ResolvedBlock(name, source, None, "production") for name in models),
+        bind_schema=schema,
+        compile_values=schema.resolve_compile(),
         field_solvers={},
         outputs=(),
         diagnostics=(),
-        has_program=False,
+        libraries=(),
+        requirements={},
+        capabilities={},
     )
-    return plan.assemble_instances({})
+    artifact = CompiledSimulationArtifact(
+        plan=resolved,
+        program=_compiled_model(),
+        blocks=tuple(
+            CompiledBlockArtifact(name, model, None) for name, model in models.items()
+        ),
+    )
+    inputs = BindInputs()
+    plan = InstallPlan(
+        artifact=artifact,
+        bind_inputs=inputs,
+        instances={name: {"model": model, "spatial": None} for name, model in models.items()},
+        params=schema.resolve_bind({}, compile_values=resolved.compile_values),
+        aux={},
+    )
+    return plan.instances
 
 
 class _SolverHarness(_SystemUnifiedInstall):
@@ -128,19 +155,19 @@ def test_install_solver_rejects_undeclared_field():
 
 def test_case_validate_accepts_named_field():
     """C1: a Problem with a named non-Poisson field VALIDATES (the whitelist reject is removed)."""
-    class _F:
-        def validate(self, context=None):
-            return True
+    from pops.fields import FieldProblem
+    from pops.math import laplacian
 
-        def requirements(self):
-            return {}
+    class _Solver:
+        name = "GeometricMG"
+        scheme = "geometric_mg"
+        options = {}
 
     model = Module("named-field-validation")
     model.state_space("U", ("rho",))
     problem = pops.Problem().block("ne", physics=model)
-    # Poke a stub field into the field registry's backing store directly (the stub is intentionally
-    # not a real FieldProblem, so the typed .field() guard is bypassed as it was on the old dict).
-    problem._fields._fields["psi"] = _F()
+    problem.field(FieldProblem(
+        name="psi", unknown="psi", equation=(-laplacian("psi") == "rho"), solver=_Solver()))
     _check(problem.validate() is True, "a named non-Poisson field validates (C1-System)")
     print("ok test_case_validate_accepts_named_field")
 

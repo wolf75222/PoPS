@@ -154,7 +154,6 @@ def test_explain_routes_exposes_adc601_native_audit_limitations():
         "amr:refinement_ratio": "ratio=2",
         "parallel:mpi_world_communicator": "MPI_COMM_WORLD",
         "schur:condensed_source": "2D plus Bz",
-        "runtime:native_loader_legacy_metadata": "u0.. names",
         "runtime:kokkos_lifecycle": "lazily initialized",
         "runtime:allocator_lifetime": "process-lifetime ManagedArena",
     }

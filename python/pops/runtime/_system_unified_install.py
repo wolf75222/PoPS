@@ -134,8 +134,8 @@ class _SystemUnifiedInstall(_System):
                     "model)." % type(compiled).__name__)
         resolved_models = {}  # instance name -> RESOLVED (CompiledModel), reused by the params step
         for name, spec in instances.items():
-            if not isinstance(spec, dict):
-                raise TypeError("install: instances[%r] must be a dict (initial/spatial/time/model); "
+            if not isinstance(spec, Mapping):
+                raise TypeError("install: instances[%r] must be a mapping (initial/spatial/time/model); "
                                 "got %r" % (name, type(spec).__name__))
             model = spec.get("model")
             if model is None:
@@ -272,7 +272,10 @@ class _SystemUnifiedInstall(_System):
             return Spatial._from_tokens(
                 limiter, riemann, variables,
                 positivity_floor=opts.get("positivity_floor"),
-                wave_speed_cache=bool(opts.get("wave_speed_cache", False)))
+                wave_speed_cache=opts.get("wave_speed_cache", False),
+                waves_provider=opts.get("waves_provider"),
+                weno_epsilon=opts.get("weno_epsilon"),
+                external_flux_id=opts.get("external_flux_id"))
         raise TypeError("install: spatial must be an pops.FiniteVolume / pops.Spatial or an "
                         "pops.numerics.spatial.FiniteVolume(...) descriptor; got %r"
                         % type(spatial).__name__)
@@ -382,8 +385,8 @@ class _SystemUnifiedInstall(_System):
 
         names = set()
         for block_name, spec in (instances or {}).items():
-            if not isinstance(spec, dict):
-                raise TypeError("install: instances[%r] must be a dict" % block_name)
+            if not isinstance(spec, Mapping):
+                raise TypeError("install: instances[%r] must be a mapping" % block_name)
             model = spec.get("model")
             if not isinstance(model, CompiledModel):
                 raise TypeError(

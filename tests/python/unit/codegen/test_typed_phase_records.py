@@ -55,7 +55,7 @@ def _resolved_plan():
         blocks=(plans.ResolvedBlock(
             "fluid", _Canonical("model"), {"flux": ["hll"]}, "production"),),
         bind_schema=BindSchema(),
-        compile_values={"cfl_limit": 0.5},
+        compile_values={},
         field_solvers={"phi": {"algorithm": "mg", "levels": [2, 4]}},
         outputs=({"format": "hdf5"},),
         diagnostics=({"name": "mass"},),
@@ -87,7 +87,7 @@ def test_resolved_plan_is_exact_deeply_frozen_and_self_authenticating():
     plan, source_layout = _resolved_plan()
     assert not hasattr(plans, "ResolvedPlan")
     assert plan.plan_identity.domain == "resolved-plan"
-    assert plan.compile_values["cfl_limit"] == 0.5
+    assert dict(plan.compile_values) == {}
 
     source_layout["mesh"]["shape"].append(32)
     assert plan.layout["mesh"]["shape"] == (16, 16)
@@ -113,8 +113,8 @@ def test_wrong_phase_and_structural_lookalikes_are_rejected():
 def test_compiled_artifact_is_one_exact_wrapper_and_rehashes_binaries(tmp_path):
     artifact, program_path = _artifact(tmp_path)
     assert artifact.so_path == str(program_path)
-    assert artifact.inspect() == "inspect"
-    assert artifact.manifest() == "manifest"
+    assert artifact.inspect.__func__ is CompiledSimulationArtifact.inspect
+    assert artifact.manifest.__func__ is CompiledSimulationArtifact.manifest
     artifact.verify()
 
     program_path.write_bytes(b"program-tampered")
@@ -162,7 +162,8 @@ def test_install_plan_is_bind_created_and_authenticates_all_inputs(tmp_path):
                 "initial": state,
             }
         },
-        params={},
+        params=artifact.bind_schema.resolve_bind(
+            {}, compile_values=artifact.plan.compile_values),
         aux={},
     )
     assert install.target == "system"

@@ -220,6 +220,12 @@ class ResolvedSimulationPlan:
         if not isinstance(self.compile_values, Mapping):
             raise TypeError("ResolvedSimulationPlan.compile_values must be a mapping")
         object.__setattr__(self, "compile_values", _deep_freeze(self.compile_values))
+        expected_compile_values = self.bind_schema.resolve_compile()
+        if _evidence(self.compile_values, where="resolved compile values") != _evidence(
+                expected_compile_values, where="BindSchema compile values"):
+            raise ValueError(
+                "ResolvedSimulationPlan.compile_values must exactly match BindSchema.resolve_compile()"
+            )
         object.__setattr__(self, "field_solvers", _string_mapping(
             self.field_solvers, where="ResolvedSimulationPlan.field_solvers"))
         for name in ("outputs", "diagnostics", "libraries"):
@@ -329,6 +335,7 @@ class InstallPlan:
 
     def __post_init__(self) -> None:
         from pops.codegen.compiled_artifact import CompiledSimulationArtifact
+        from pops.model.resolved_bindings import ResolvedBindings
 
         if type(self.artifact) is not CompiledSimulationArtifact:
             raise TypeError("InstallPlan.artifact must be an exact CompiledSimulationArtifact")
@@ -336,7 +343,10 @@ class InstallPlan:
             raise TypeError("InstallPlan.bind_inputs must be an exact BindInputs")
         object.__setattr__(self, "instances", _string_mapping(
             self.instances, where="InstallPlan.instances"))
-        object.__setattr__(self, "params", _deep_freeze(self.params))
+        if type(self.params) is not ResolvedBindings:
+            raise TypeError("InstallPlan.params must be exact resolved BindSchema values")
+        if self.params.schema.hash != self.artifact.bind_schema.hash:
+            raise ValueError("InstallPlan.params were resolved from a different BindSchema")
         object.__setattr__(self, "aux", _string_mapping(self.aux, where="InstallPlan.aux"))
         object.__setattr__(self, "resources", _string_mapping(
             self.resources, where="InstallPlan.resources"))

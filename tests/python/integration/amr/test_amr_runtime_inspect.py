@@ -231,46 +231,60 @@ def test_compiled_inspect_amr_delegates_to_top_level():
 
 def test_compiled_inspect_amr_surfaces_the_carried_layout_by_default():
     # ADC-555 criterion: the refine/regrid/... tags appear in compiled.inspect_amr(), not just
-    # layout.inspect(). pops.compile's AMR route retains the Problem's AMR layout in InstallPlan;
+    # layout.inspect(). pops.compile's AMR route retains the resolved layout in its exact artifact;
     # a bare inspect_amr() call must report THAT
     # layout (with its tags), not silently fall back to the generic native envelope.
     from pops.codegen.loader import CompiledModel
-    from pops.codegen._plans import InstallBlock, InstallPlan
+    from pops.codegen._plans import ResolvedBlock, ResolvedSimulationPlan
+    from pops.codegen.compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
     from pops.mesh import CartesianMesh
     from pops.mesh.amr import Refine, RegridEvery
     from pops.mesh.layouts import AMR
     from pops.model import Handle, OwnerPath
+    from pops.model.bind_schema import BindSchema
     from pops.problem._snapshot import AuthoringSnapshot
 
     cm = CompiledModel(
         so_path="<stub>", backend="aot", adder="add_native_block", cons_names=["rho"],
         cons_roles=["Density"], prim_names=["rho"], n_vars=1, gamma=None, n_aux=0, params={},
         caps={}, abi_key="k", model_hash="h", cxx="c++", std="23", target="amr_system")
+    from pops.codegen._compiled_model_identity import compiled_model_identity
+    cm.definition_identity = compiled_model_identity(model_hash="h")
     rho = Handle("rho", kind="state", owner=OwnerPath.shared("amr-runtime-inspect"))
     carried = AMR(base=CartesianMesh(n=64), regrid=RegridEvery(4),
                   refine=Refine.on(rho).above(0.1))
     snapshot = AuthoringSnapshot({"kind": "amr-runtime-inspect-stub"})
-    cm.install_plan = InstallPlan(
-        snapshot_hash=snapshot.hash,
+    schema = BindSchema()
+    resolved = ResolvedSimulationPlan(
+        snapshot=snapshot,
         target="amr_system",
+        backend="aot",
         layout=carried,
-        blocks=(InstallBlock("ne", cm, None),),
-        bind_schema=None,
+        time=None,
+        blocks=(ResolvedBlock("ne", {"kind": "amr-runtime-inspect-stub"}, None, "aot"),),
+        bind_schema=schema,
+        compile_values=schema.resolve_compile(),
         field_solvers={},
         outputs=(),
         diagnostics=(),
-        has_program=False,
+        libraries=(),
+        requirements={"amr": True},
+        capabilities={"amr": True},
     )
-    cm._problem_snapshot = snapshot
+    artifact = CompiledSimulationArtifact(
+        plan=resolved,
+        program=None,
+        blocks=(CompiledBlockArtifact("ne", cm, None),),
+    )
 
-    rep = cm.inspect_amr()
+    rep = artifact.inspect_amr()
     payload = rep.to_dict()
     assert payload["layout"] == "amr"
     slots = {row["slot"] for row in payload["policies"]}
     assert "refine" in slots and "regrid" in slots
 
     # An explicit argument still overrides the carried layout.
-    override = cm.inspect_amr(AMR(base=CartesianMesh(n=32)))
+    override = artifact.inspect_amr(AMR(base=CartesianMesh(n=32)))
     assert override.to_dict()["max_levels"] == 2 and "policies" in override.to_dict()
     assert {row["slot"] for row in override.to_dict()["policies"]} == set()
 

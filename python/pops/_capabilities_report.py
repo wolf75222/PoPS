@@ -444,11 +444,6 @@ def _inventory_rows(flags: Any, source: Any) -> list:
         _row("program_context:amr", layout="amr", backend="production", platform="host",
              flags=flags, flag="supports_amr", mpi=mpi, gpu=gpu,
              limitation="AMR program install requires target='amr_system'", source=source),
-        _row("runtime:native_loader_legacy_metadata", layout="uniform|amr",
-             backend="aot|dynamic|prototype", platform="host", mpi=mpi, gpu=gpu, status="partial",
-             limitation=("old native modules without metadata fall back to u0.. names, empty roles, "
-                         "legacy default gamma and host prototype copies"),
-             source=source),
         _row("output:npz_vtk_hdf5", layout="uniform|amr", backend="runtime", platform="host",
              mpi=mpi, limitation="runtime output writers; AMR VTK is coarse + patch metadata",
              source=source),

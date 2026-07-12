@@ -176,6 +176,43 @@ class Spatial:
         object.__setattr__(self, "_frozen", True)
         return self
 
+    def to_data(self) -> dict[str, Any]:
+        """Return the closed, exact identity payload of this finite-volume choice.
+
+        Native routes are identified by their canonical wire tokens, never by their richer
+        process-local objects.  Real controls remain scalar literals until the explicit native
+        lowering boundary, so Decimal, Fraction and binary64 authoring values cannot collapse to
+        the same accidental float identity.
+        """
+        from pops.ir.literals import scalar_literal
+
+        return {
+            "schema_version": 1,
+            "family": "finite_volume",
+            "reconstruction": str(self.limiter),
+            "riemann": {
+                "route": str(self.flux),
+                "external_id": self.external_flux_id,
+            },
+            "variables": str(self.recon),
+            "positivity_floor": scalar_literal(self.positivity_floor).to_data(),
+            "wave_speed_cache": self.wave_speed_cache,
+            "waves_provider": self.waves_provider,
+            "weno_epsilon": (
+                None if self.weno_epsilon is None
+                else scalar_literal(self.weno_epsilon).to_data()
+            ),
+        }
+
+    def identity(self) -> Any:
+        """Authenticated stable identity of :meth:`to_data`."""
+        from pops.identity import make_identity
+
+        return make_identity("spatial", self.to_data(), schema_version=1)
+
+    def __eq__(self, other: Any) -> bool:
+        return type(other) is type(self) and self.to_data() == other.to_data()
+
     def __init__(self, limiter: Any = None, flux: Any = None, recon: Any = None, *, none: bool = False,
                  minmod: bool = False, vanleer: bool = False, weno5: bool = False, primitive: bool = False,
                  positivity_floor: Any = None, wave_speed_cache: bool = False, reconstruction: Any = None,
@@ -217,8 +254,11 @@ class Spatial:
         # compiled model's actual wave-speed source (least-invasive: read the descriptor object
         # here, the lowered route token stays byte-identical). None when no provider was pinned.
         self.waves_provider = None
+        self.external_flux_id = None
         if _tokens is None and flux is not None and not isinstance(flux, str):
             self.waves_provider = getattr(flux, "options", {}).get("waves")
+            if getattr(flux, "scheme", None) == "user":
+                self.external_flux_id = getattr(flux, "name", None)
         # ADC-645 ride-along (mirror of waves_provider): a reconstruction descriptor built with
         # WENO5(epsilon=...) carries the WENO-Z regulariser in options["epsilon"]. None (the default)
         # keeps the native kWenoEpsilon -> nothing forwarded, byte-identical.
@@ -276,7 +316,9 @@ class Spatial:
                 "recon": _manifest(self.recon)}
 
     @classmethod
-    def _from_tokens(cls, limiter: Any, flux: Any, recon: Any, *, positivity_floor: Any = None, wave_speed_cache: bool = False) -> Any:
+    def _from_tokens(cls, limiter: Any, flux: Any, recon: Any, *, positivity_floor: Any = None,
+                     wave_speed_cache: bool = False, waves_provider: Any = None,
+                     weno_epsilon: Any = None, external_flux_id: Any = None) -> Any:
         """Build a Spatial from ALREADY-canonical string tokens (internal lowering only).
 
         The spatial brick-catalog descriptor (``pops.numerics.spatial.FiniteVolume``) carries its scheme
@@ -284,8 +326,22 @@ class Spatial:
         this to bypass the typed-descriptor guard. Not part of the public API -- public callers pass
         typed descriptors to ``Spatial`` / ``FiniteVolume``.
         """
-        return cls(_tokens=(limiter, flux, recon),
-                   positivity_floor=positivity_floor, wave_speed_cache=wave_speed_cache)
+        result = cls(_tokens=(limiter, flux, recon),
+                     positivity_floor=positivity_floor, wave_speed_cache=wave_speed_cache)
+        if waves_provider is not None:
+            if not isinstance(waves_provider, str) or not waves_provider:
+                raise TypeError("Spatial._from_tokens waves_provider must be a non-empty string")
+            result.waves_provider = waves_provider
+        if external_flux_id is not None:
+            if str(result.flux) != "user":
+                raise ValueError("Spatial._from_tokens external_flux_id requires flux='user'")
+            if not isinstance(external_flux_id, str) or not external_flux_id:
+                raise TypeError("Spatial._from_tokens external_flux_id must be a non-empty string")
+            result.external_flux_id = external_flux_id
+        if weno_epsilon is not None:
+            result.weno_epsilon = exact_real(
+                weno_epsilon, where="Spatial.weno_epsilon", minimum=0, minimum_open=True)
+        return result
 
     def validate(self, ghost_depth: Any = None, block: Any = None) -> Any:
         """Reject a reconstruction whose ghost depth exceeds an EXPLICIT block halo (Spec 5 sec.7).

@@ -39,7 +39,7 @@ except Exception as exc:  # noqa: BLE001 -- pops unavailable in this interpreter
     print("skip test_inspection_completeness (pops unavailable: %s)" % exc)
     sys.exit(0)
 
-from tests.python.unit.runtime._typed_program import attach_typed_install_plan
+from tests.python.unit.runtime._typed_program import typed_compiled_artifact
 
 
 def _program(name="intro_demo", *, n_vars=4):
@@ -86,7 +86,7 @@ def _compiled(*, program=None, params=None, **model_kw):
     compiled = CompiledProblem(
         "/tmp/pops-cache/problem.so", P, m, "SIG|c++|c++23", "c++", "c++23",
         problem_hash="deadbeefcafe", cache_key="0badc0de")
-    return attach_typed_install_plan(compiled, m)
+    return typed_compiled_artifact(compiled, m)
 
 
 def chk(cond, label):
@@ -220,10 +220,11 @@ def test_requirements_defers_honestly():
 # ---------------------------------------------------------------------------
 
 def test_inspect_capabilities_scoped():
-    """inspect_capabilities() returns the descriptor capability rows for this compiled."""
+    """The low-level compiled Program retains its scoped route catalogue."""
     print("== inspect_capabilities() reuses the top-level matrix ==")
     cp = _compiled()
-    matrix = cp.inspect_capabilities()
+    component = cp.program
+    matrix = component.inspect_capabilities()
     names = {e.name for e in matrix}
     chk(len(matrix) > 0, "the capability matrix is non-empty")
     chk("rusanov" in names and "hll" in names, "the Riemann fluxes are catalogued")
@@ -231,7 +232,8 @@ def test_inspect_capabilities_scoped():
     chk("riemann" in cats and "reconstruction" in cats, "the route-choosing categories are present")
     chk("capability matrix" in str(matrix), "the matrix is printable")
     # It matches the top-level machinery scoped to the compiled's categories.
-    chk(cats <= set(cp._CAPABILITY_CATEGORIES), "the scope is the compiled's bind categories")
+    chk(cats <= set(component._CAPABILITY_CATEGORIES),
+        "the scope is the compiled component's bind categories")
 
 
 # ---------------------------------------------------------------------------
@@ -242,15 +244,16 @@ def test_dump_ir_serialises_the_program():
     """dump_ir writes the SAME serialization _ir_hash digests (nodes / commits / block order)."""
     print("== dump_ir exposes the serialized Program IR ==")
     cp = _compiled()
-    blob = cp.dump_ir()
+    component = cp.program
+    blob = component.dump_ir()
     parsed = json.loads(blob)
     # dump_ir IS the Program _serialize blob, JSON-normalised (tuples -> lists through json).
-    normalised = json.loads(json.dumps(cp.program._serialize()))
+    normalised = json.loads(json.dumps(cp.program.program._serialize()))
     chk(parsed == normalised, "dump_ir() is exactly the Program _serialize blob")
     chk(parsed["name"] == "intro_demo" and parsed["commits"], "the IR carries name + commits")
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "ir.json")
-        out = cp.dump_ir(path)
+        out = component.dump_ir(path)
         chk(out == path, "dump_ir(path) returns the written path")
         chk(json.load(open(path, encoding="utf-8")) == parsed, "dump_ir(path) wrote the same JSON")
 
@@ -259,20 +262,21 @@ def test_dump_cpp_reuses_emit():
     """dump_cpp writes the generated C++ by REUSING emit_cpp_program (host-side, no Kokkos)."""
     print("== dump_cpp reuses the existing emit_cpp_program codegen ==")
     cp = _compiled()
-    expected = cp.program.emit_cpp_program(model=cp.model)
+    component = cp.program
+    expected = component.program.emit_cpp_program(model=component.model)
     with tempfile.TemporaryDirectory() as tmp:
         # A directory target writes <program_name>.cpp inside it.
-        out = cp.dump_cpp(tmp)
+        out = component.dump_cpp(tmp)
         chk(out == os.path.join(tmp, "intro_demo.cpp"), "dump_cpp(dir) writes <name>.cpp in the dir")
         chk(open(out, encoding="utf-8").read() == expected, "the written C++ IS the emitted source")
         chk("pops_install_program" in open(out, encoding="utf-8").read(),
             "the generated source carries the .so install entry point")
         # An explicit .cpp path is written verbatim.
         explicit = os.path.join(tmp, "custom.cpp")
-        chk(cp.dump_cpp(explicit) == explicit, "dump_cpp(path.cpp) writes that path")
+        chk(component.dump_cpp(explicit) == explicit, "dump_cpp(path.cpp) writes that path")
     # A non-existent target directory is a CLEAR error (never silently creates / fakes).
     try:
-        cp.dump_cpp("/nonexistent-dir-xyz/sub")
+        component.dump_cpp("/nonexistent-dir-xyz/sub")
         chk(False, "dump_cpp should reject a missing target directory")
     except NotADirectoryError:
         chk(True, "dump_cpp rejects a missing target directory")
@@ -282,12 +286,13 @@ def test_dump_schedule_lists_commit_order():
     """dump_schedule writes the block commit order (the runtime block-index schedule)."""
     print("== dump_schedule exposes the commit/schedule order ==")
     cp = _compiled()
-    text = cp.dump_schedule()
+    component = cp.program
+    text = component.dump_schedule()
     chk("commit" in text and "plasma" in text, "the schedule names the committed block")
     chk("0  commit plasma" in text, "the block is at runtime index 0")
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "schedule.txt")
-        chk(cp.dump_schedule(path) == path, "dump_schedule(path) returns the path")
+        chk(component.dump_schedule(path) == path, "dump_schedule(path) returns the path")
         chk("plasma" in open(path, encoding="utf-8").read(), "dump_schedule(path) wrote the listing")
 
 
@@ -353,7 +358,8 @@ def test_real_compile_inspection_or_skips():
     print("== real compile_problem inspection (Kokkos-gated; skips if absent) ==")
     program = _program()
     try:
-        compiled = pops.codegen.compile_problem(time=program, force=True)
+        from pops.codegen.compile_drivers import compile_problem
+        compiled = compile_problem(time=program, force=True)
     except Exception as exc:  # noqa: BLE001 -- no compiler / no Kokkos: skip cleanly
         print("  [..] real compile skipped (no toolchain / Kokkos): %s" % str(exc)[:90])
         return

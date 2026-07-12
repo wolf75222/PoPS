@@ -354,16 +354,7 @@ def _spatial_semantic_data(value: Any) -> Any:
 
     if not isinstance(value, Spatial):
         return _descriptor_semantic_data(value, where="block spatial")
-    return _semantic_option_data({
-        "family": "finite_volume",
-        "reconstruction": str(value.limiter),
-        "riemann": str(value.flux),
-        "variables": str(value.recon),
-        "positivity_floor": value.positivity_floor,
-        "wave_speed_cache": value.wave_speed_cache,
-        "waves_provider": value.waves_provider,
-        "weno_epsilon": value.weno_epsilon,
-    }, where="block spatial")
+    return _semantic_option_data(value.to_data(), where="block spatial")
 
 
 def _mesh_semantic_data(mesh: Any) -> dict[str, Any]:

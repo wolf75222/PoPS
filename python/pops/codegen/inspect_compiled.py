@@ -21,7 +21,6 @@ from __future__ import annotations
 from typing import Any
 
 from pops.codegen._artifact_models import (
-    aggregate_capability as _aggregate_capability,
     aggregate_model_metadata as _model_metadata,
     artifact_model_metadata as _artifact_model_metadata,
 )
@@ -151,8 +150,28 @@ def build_arguments(compiled: Any) -> Arguments:
       - layout_runtime: the target layout (System, single level -- the only ``target`` a compiled
         Program supports today), MPI optionality and the model ghost depth.
     """
-    program = getattr(compiled, "program", None)
+    from pops.codegen.compiled_artifact import CompiledSimulationArtifact
+
+    if type(compiled) is not CompiledSimulationArtifact:
+        raise TypeError("build_arguments requires a CompiledSimulationArtifact")
+    program_component = compiled.program
+    program = getattr(program_component, "program", None)
     model_rows = _artifact_model_metadata(compiled)
+    return _build_arguments(compiled, program, model_rows)
+
+
+def build_component_arguments(compiled: Any) -> Arguments:
+    """Advanced low-level counterpart for exact compiled component handles."""
+    from pops.codegen._artifact_models import component_model_metadata
+    from pops.codegen.loader import CompiledModel, CompiledProblem
+
+    if type(compiled) not in (CompiledModel, CompiledProblem):
+        raise TypeError("build_component_arguments requires an exact compiled component")
+    program = compiled.program if type(compiled) is CompiledProblem else None
+    return _build_arguments(compiled, program, component_model_metadata(compiled))
+
+
+def _build_arguments(compiled: Any, program: Any, model_rows: Any) -> Arguments:
     primary = model_rows[0] if model_rows else None
     params = primary.params if primary is not None else {}
 
@@ -216,10 +235,15 @@ def build_arguments(compiled: Any) -> Arguments:
     # Program handle stays "system" (its only target today).
     _amr = getattr(compiled, "target", "system") == "amr_system"
     layout_kind = "amr" if _amr else "system"
-    layout_runtime = {"layout": layout_kind, "requires_mpi": False,
-                      "ghost_depth": ghost_depth,
-                      "ghost_depth_by_block": ghost_depth_by_block,
-                      "supports_mpi": bool(_aggregate_capability(compiled, "mpi"))}
+    mpi_values = [
+        bool(row.model.caps["mpi"])
+        for row in model_rows
+        if getattr(row.model, "caps", None) and "mpi" in row.model.caps
+    ]
+    supports_mpi = bool(mpi_values) and len(mpi_values) == len(model_rows) and all(mpi_values)
+    layout_runtime = {"layout": layout_kind, "requires_mpi": False, "requires_gpu": False,
+                      "ghost_depth": ghost_depth, "ghost_depth_by_block": ghost_depth_by_block,
+                      "supports_mpi": supports_mpi}
 
     return Arguments(instances=instances, params=param_args, aux=aux_args,
                      solvers=solver_args, outputs=outputs, layout_runtime=layout_runtime,
@@ -470,5 +494,6 @@ def _amr_patch_budget(layout: Any, state_field: Any, cell_field: Any, n_elliptic
     ]
     return "amr", amr_bytes, notes
 
-
-__all__ = ["Arguments", "MemoryEstimate", "build_arguments", "build_memory_estimate"]
+__all__ = [
+    "Arguments", "MemoryEstimate", "build_arguments", "build_component_arguments",
+    "build_memory_estimate"]

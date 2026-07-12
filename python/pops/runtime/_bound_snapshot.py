@@ -79,13 +79,7 @@ def _data(value: Any, *, where: str) -> Any:
             and type(value).__name__ == "Spatial":
         return {
             "type": "pops.runtime.Spatial",
-            "limiter": str(value.limiter), "flux": str(value.flux), "recon": str(value.recon),
-            "positivity_floor": float(value.positivity_floor),
-            "wave_speed_cache": bool(value.wave_speed_cache),
-            "waves_provider": _data(value.waves_provider, where=where)
-            if value.waves_provider is not None else {"kind": "unselected"},
-            "weno_epsilon": value.weno_epsilon
-            if value.weno_epsilon is not None else {"kind": "native-default"},
+            "selection": _data(value.to_data(), where=where),
         }
     if type(value).__module__ == "pops.time.schedule" \
             and type(value).__name__ == "Schedule":

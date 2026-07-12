@@ -204,7 +204,7 @@ def validate_runtime_param_domains(declared_params: Any, params: Any) -> Any:
 
 
 def validate_bind_manifest(manifest: Any, runtime_facts: Any) -> Any:
-    """Return ABI/runtime incompatibilities; skip only honestly unknown runtime facts."""
+    """Return manifest identity mismatches; ``supports_*`` are capabilities, not requirements."""
     lines = []
     facts = runtime_facts or {}
     # ABI key: the manifest MUST carry one; a fresh artifact always does. An absent key is unverifiable.
@@ -214,14 +214,18 @@ def validate_bind_manifest(manifest: Any, runtime_facts: Any) -> Any:
                      "cannot be bound (rebuild it so its manifest stamps the ABI key)")
     else:
         _compare_abi(lines, manifest_abi, facts.get("abi_key"))
-    _compare_feature(lines, "supports_mpi", getattr(manifest, "supports_mpi", None),
-                     facts.get("supports_mpi"), "MPI")
-    _compare_feature(lines, "supports_gpu", getattr(manifest, "supports_gpu", None),
+    _compare_str(lines, "precision", getattr(manifest, "precision", None), facts.get("precision"))
+    _compare_communicator(lines, getattr(manifest, "communicator", None), facts.get("communicator"))
+    return lines
+
+def validate_layout_runtime_requirements(arguments: Any, runtime_facts: Any) -> Any:
+    """Refuse target requirements from Arguments, independently of manifest capabilities."""
+    layout_runtime = getattr(arguments, "layout_runtime", None) or {}
+    facts = runtime_facts or {}
+    lines = []
+    _compare_feature(lines, "requires_mpi", layout_runtime.get("requires_mpi"), facts.get("supports_mpi"), "MPI")
+    _compare_feature(lines, "requires_gpu", layout_runtime.get("requires_gpu"),
                      facts.get("supports_gpu"), "GPU / Kokkos device")
-    _compare_str(lines, "precision", getattr(manifest, "precision", None),
-                 facts.get("precision"))
-    _compare_communicator(lines, getattr(manifest, "communicator", None),
-                          facts.get("communicator"))
     return lines
 
 
@@ -275,12 +279,7 @@ def _compare_communicator(lines: Any, manifest_value: Any, runtime_value: Any) -
 
 def _compare_feature(lines: Any, field: Any, manifest_value: Any, runtime_value: Any,
                      human: Any) -> Any:
-    """Refuse a boolean feature the artifact REQUIRES but the runtime LACKS (directional).
-
-    A refusal is only ``manifest=True`` and ``runtime=False``: the artifact needs a feature the
-    loaded runtime does not provide. The reverse (a more-capable runtime than the CPU-only artifact
-    uses) is NOT a mismatch -- a CPU artifact binds fine on a Kokkos/MPI-capable runtime. An
-    honest-unknown (``None``) on either side is not adjudicable and skipped."""
+    """Refuse only a required feature the runtime lacks; unknowns are not adjudicable."""
     if manifest_value is None or runtime_value is None:
         return  # honest-unknown on either side: not adjudicable, not a fallback
     if bool(manifest_value) and not bool(runtime_value):
@@ -484,6 +483,7 @@ def run_bind_gates(compiled: Any, layout: Any, initial: Any, params: Any, aux: A
     groups = [
         ("aux-required-by-operator", validate_operator_aux(manifest, aux)),
         ("manifest-abi", validate_bind_manifest(manifest, runtime_facts)),
+        ("layout-runtime", validate_layout_runtime_requirements(arguments, runtime_facts)),
         ("initial-state", validate_initial_state(manifest, arguments, layout, initial)),
     ]
     message = aggregate_bind_refusals(groups)

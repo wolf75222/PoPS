@@ -59,6 +59,17 @@ class CompiledProblem(CompiledProblemDumpMixin):
             from pops.time.program_detach import detach_compiled_program
             resolved_program = detach_compiled_program(resolved_program)
         self.program = resolved_program
+        if self.program is None:
+            self.program_block_routes = ()
+        else:
+            from pops.time.references import block_name
+
+            self.program_block_routes = tuple(
+                sorted(
+                    (index, block_name(reference))
+                    for reference, index in self.program._block_indices().items()
+                )
+            )
         self.model = model              # the physical model (optional; added as a block in the MVP)
         # The self-describing Module manifest (ADC-585): the operator-first central representation of
         # the resolved model (spaces / params / aux / typed operators / native routes), superseding
@@ -167,6 +178,12 @@ class CompiledProblem(CompiledProblemDumpMixin):
         from pops.codegen._artifact_freeze import seal_attributes
 
         seal_attributes(self)
+
+    def _discard_authoring(self) -> None:
+        """Drop the last formula-model builder after all compile metadata was captured."""
+        if getattr(self, "_sealed", False):
+            raise RuntimeError("cannot discard authoring from a sealed compiled program")
+        self.model = None
 
     def __setattr__(self, name: Any, value: Any) -> None:
         if getattr(self, "_sealed", False):
@@ -305,8 +322,8 @@ class CompiledProblem(CompiledProblemDumpMixin):
         field solves it performs) and the physical model (its state / params / aux). It is DISTINCT
         from :meth:`requirements`-style compile constraints: ``arguments`` lists what you must SUPPLY
         to bind. It allocates and reads nothing."""
-        from pops.codegen.inspect_compiled import build_arguments
-        return build_arguments(self)
+        from pops.codegen.inspect_compiled import build_component_arguments
+        return build_component_arguments(self)
 
     def manifest(self) -> Any:
         """The RICH self-describing manifest of this artifact (Spec 5 sec.13.12, #36).

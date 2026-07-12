@@ -311,6 +311,12 @@ def lower_and_validate(model: Any, facade: Any = None) -> Any:
             source_module = model
             emit_model = _module_to_model(model)
             return emit_model, source_module
+        from pops.codegen.compiler_lowering import CompilerLowerable, require_compiler_lowering
+
+        if isinstance(model, CompilerLowerable):
+            lowering = require_compiler_lowering(model)
+            lowering.emit_model.check()
+            return lowering.emit_model, lowering.source_module
         # A dsl / physics Model: the ONE dependency validation is its own check() (fail-loud); the
         # operator-first Module view is the canonical trace authority.
         if model is not None and hasattr(model, "check"):

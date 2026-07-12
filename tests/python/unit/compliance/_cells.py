@@ -12,7 +12,8 @@ Design notes (from the plan):
   * The CLEAN route only. The ADC-597 matrix drives the legacy ``System(...).add_block()``
     route; this matrix inspects the Problem/layout/descriptor clean route and the metadata-stub bind
     gates instead (``pops.runtime.routes`` install-time predicates over a ``CompiledModel`` stub;
-    ``run_bind_gates`` over a ``CompiledProblem`` stub -- no ``.so`` on disk). That is also the
+    ``run_bind_gates`` over an exact ``CompiledSimulationArtifact`` -- no ``.so`` on disk). That is
+    also the
     phase-6 lesson: every compiler-gated decision runs its full PRE-compile path locally.
   * No broad allowlists; each cell names exactly one route/refusal.
 
@@ -25,11 +26,14 @@ import numpy as np
 
 import pops
 from pops import time as adctime
-from pops.codegen.loader import CompiledModel, CompiledProblem
+from pops.codegen._plans import ResolvedBlock, ResolvedSimulationPlan
+from pops.codegen.compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
+from pops.codegen.loader import CompiledModel
 from pops.diagnostics import MinMax
 from pops.fields import PoissonProblem
 from pops.fields.bcs import Dirichlet
 from pops.ir.expr import Var
+from pops.identity import make_identity
 from pops.math import laplacian, unknown
 from pops.mesh import CartesianMesh
 from pops.mesh.amr import RegridEvery
@@ -41,6 +45,7 @@ from pops.runtime import routes as _routes
 from pops.runtime._bind_validation import loaded_runtime_facts, run_bind_gates
 from pops.model.bind_schema import BindSchema
 from pops.params import RuntimeParam
+from pops.problem._snapshot import AuthoringSnapshot
 from pops.solvers.elliptic import GeometricMG
 from pops.solvers.krylov import CG
 from pops import model as _model
@@ -140,17 +145,80 @@ def _bindable_program(name="adc547_bind"):
 
 
 def _bind_model(aux_names=()):
-    return CompiledModel(
+    model = CompiledModel(
         so_path="/nonexistent/problem.so", backend="production", adder="add_native_block",
         cons_names=["rho", "mx", "my"], cons_roles=["Density", "MomentumX", "MomentumY"],
         prim_names=["rho", "mx", "my"], n_vars=3, gamma=1.4, n_aux=len(aux_names), params={},
         caps={"cpu": True}, abi_key=_abi(), model_hash="h", cxx="c++", std="c++23",
         aux_extra_names=list(aux_names))
+    model.artifact_identity = make_identity(
+        "artifact", {"fixture": "adc547-bind-model", "aux": list(aux_names)})
+    return model
 
 
-def _compiled_problem(aux_names=()):
-    return CompiledProblem("/tmp/pops-cache/problem.so", _bindable_program(),
-                           _bind_model(aux_names), _abi(), "c++", "c++23")
+def _compiled_problem(aux_names=(), *, abi_key=None):
+    """Exact system artifact used by the metadata-only bind gates."""
+    program = _bindable_program()
+    model = _bind_model(aux_names)
+    key = _abi() if abi_key is None else abi_key
+    model.abi_key = key
+    snapshot = AuthoringSnapshot({"kind": "adc547-bind-fixture"})
+    schema = BindSchema()
+    plan = ResolvedSimulationPlan(
+        snapshot=snapshot,
+        target="system",
+        backend="production",
+        layout={"kind": "uniform"},
+        time={"program": "adc547_bind"},
+        blocks=(ResolvedBlock(
+            "plasma", {"model": "adc547-bind-model"}, None, "production"),),
+        bind_schema=schema,
+        compile_values=schema.resolve_compile(),
+        field_solvers={},
+        outputs=(),
+        diagnostics=(),
+        libraries=(),
+        requirements={},
+        capabilities={"cpu": True},
+    )
+
+    class _CompiledProgram:
+        so_path = "/tmp/pops-cache/problem.so"
+        target = "system"
+        backend = "production"
+        abi_key = key
+        cxx = "c++"
+        std = "c++23"
+        program_name = "adc547_bind"
+
+        def commits(self):
+            return program.commits()
+
+        @property
+        def _values(self):
+            return program._values
+
+        def to_data(self):
+            return {"kind": "compiled-program", "name": self.program_name}
+
+        def arguments(self):
+            from pops.codegen.inspect_compiled import build_arguments
+
+            return build_arguments(self.artifact)
+
+        def manifest(self):
+            from pops.external.artifact_manifest import build_compiled_manifest
+
+            return build_compiled_manifest(self.artifact)
+
+    compiled_program = _CompiledProgram()
+    artifact = CompiledSimulationArtifact(
+        plan=plan,
+        program=compiled_program,
+        blocks=(CompiledBlockArtifact("plasma", model, None),),
+    )
+    compiled_program.artifact = artifact
+    return artifact
 
 
 def _uniform(n=8):
@@ -248,9 +316,7 @@ def _pos_amr_route_when_capable():
 
 
 def _amr_route_handle():
-    """A stub AMR-route CompiledModel with the immutable InstallPlan returned by pops.compile."""
-    from pops.codegen._plans import InstallBlock, InstallPlan
-    from pops.problem._snapshot import AuthoringSnapshot
+    """An exact metadata-only AMR compiled artifact."""
 
     handle = CompiledModel(
         so_path="<stub-amr>", backend="production", adder="add_native_block",
@@ -258,27 +324,41 @@ def _amr_route_handle():
         prim_names=["rho", "mx", "my"], n_vars=3, gamma=1.4, n_aux=1, params={},
         caps={"cpu": True, "amr": True, "mpi": True}, abi_key=_abi(), model_hash="h", cxx="c++",
         std="c++23", target="amr_system", aux_extra_names=["B_z"])
+    handle.artifact_identity = make_identity(
+        "artifact", {"fixture": "compliance-amr-route-model"})
     layout = AMR(base=CartesianMesh(n=64), max_levels=2, ratio=2, regrid=RegridEvery(4))
     snapshot = AuthoringSnapshot({"kind": "compliance-amr-route-stub"})
-    handle.install_plan = InstallPlan(
-        snapshot_hash=snapshot.hash,
+    schema = BindSchema()
+    plan = ResolvedSimulationPlan(
+        snapshot=snapshot,
         target="amr_system",
+        backend="production",
         layout=layout,
-        blocks=(InstallBlock("block", handle, None),),
-        bind_schema=None,
+        time=None,
+        blocks=(ResolvedBlock(
+            "block", {"model": "compliance-amr-route-model"}, None, "production"),),
+        bind_schema=schema,
+        compile_values=schema.resolve_compile(),
         field_solvers={},
         outputs=(),
         diagnostics=(),
-        has_program=False,
+        libraries=(),
+        requirements={"amr": True},
+        capabilities={"cpu": True, "amr": True, "mpi": True},
     )
-    handle._problem_snapshot = snapshot
-    return handle
+    return CompiledSimulationArtifact(
+        plan=plan,
+        program=None,
+        blocks=(CompiledBlockArtifact("block", handle, None),),
+    )
 
 
 def _pos_amr_arguments_inert():
     # ADC-515: arguments() on the AMR-route handle reports layout='amr' + the block instance (inert,
     # no .so). Agrees with the integration sec.20 matrix's arguments.amr.mono green_inert cell.
-    args = _amr_route_handle().arguments()
+    from pops.codegen.inspect_compiled import build_arguments
+
+    args = build_arguments(_amr_route_handle())
     assert args.layout_runtime["layout"] == "amr"
     assert next(iter(args.instances.values()))["components"] == 3
     return _assert_route_available("layout:AMR")
@@ -286,8 +366,12 @@ def _pos_amr_arguments_inert():
 
 def _pos_amr_estimate_memory_inert():
     # ADC-515: estimate_memory(mesh) on the AMR-route handle is a conservative patch-budget FORMULA
-    # (layout='amr', amr_patch > 0) that defaults the AMR layout from InstallPlan. Inert.
-    est = _amr_route_handle().estimate_memory(_CartesianMesh(n=64, periodic=True))
+    # (layout='amr', amr_patch > 0) using the artifact's resolved layout. Inert.
+    from pops.codegen.inspect_compiled import build_memory_estimate
+
+    artifact = _amr_route_handle()
+    est = build_memory_estimate(
+        artifact, _CartesianMesh(n=64, periodic=True), layout=artifact.layout)
     assert est.layout == "amr" and est.categories.get("amr_patch", 0) > 0
     return _assert_route_available("layout:AMR")
 
@@ -399,9 +483,7 @@ def _neg_missing_aux_field():
 
 
 def _neg_abi_cache_mismatch():
-    compiled = _compiled_problem()
-    compiled.model.abi_key = "TOTALLY_DIFFERENT_ABI"
-    compiled.abi_key = "TOTALLY_DIFFERENT_ABI"
+    compiled = _compiled_problem(abi_key="TOTALLY_DIFFERENT_ABI")
     run_bind_gates(compiled, _uniform(), {"plasma": np.ones((3, 8, 8))}, {}, {})
 
 

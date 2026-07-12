@@ -195,7 +195,6 @@
   "tests/python/unit/runtime/test_pernode_profiling.py": 0.5,
   "tests/python/unit/runtime/test_pops_env.py": 0.5,
   "tests/python/unit/runtime/test_predictor_corrector.py": 0.5,
-  "tests/python/unit/runtime/test_problem_orchestration.py": 0.5,
   "tests/python/unit/runtime/test_profile_api.py": 0.5,
   "tests/python/unit/runtime/test_profiling.py": 0.5,
   "tests/python/unit/runtime/test_profiling_counters.py": 0.5,

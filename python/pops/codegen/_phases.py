@@ -133,6 +133,7 @@ def compile(plan: Any) -> Any:
         program = compile_problem(
             time=plan.time, model=plan.first_model, backend=plan.backend, target=plan.target,
             problem_snapshot=plan.snapshot, **options)
+        program._discard_authoring()
     from pops.codegen.compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
 
     blocks = tuple(

@@ -35,8 +35,10 @@ def _raises(exc_types, fn):
 
 # =================== Section A: pure Python (codegen + install seam) ===================
 try:
-    from pops.codegen._plans import InstallBlock, InstallPlan
+    from pops.codegen._plans import BindInputs, InstallPlan, ResolvedBlock, ResolvedSimulationPlan
+    from pops.codegen.compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
     from pops.codegen.loader import CompiledModel
+    from pops.model.bind_schema import BindSchema
     from pops.params import ConstParam
     from pops.ir.ops import sqrt
     from pops.physics.facade import Model
@@ -105,29 +107,54 @@ def test_amr_loader_no_named_field_unchanged():
 
 def _compiled_model(*fields):
     """Return an inert AMR loader record with detached named-field metadata."""
-    return CompiledModel(
+    from pops.codegen._compiled_model_identity import compiled_model_identity
+    model = CompiledModel(
         so_path="/fake.so", backend="production", adder="add_native_block",
         cons_names=["rho"], cons_roles=["Density"], prim_names=["rho"], n_vars=1,
         gamma=None, n_aux=0, params={}, caps={}, abi_key="k", model_hash="h",
         cxx="c++", std="c++20", target="amr_system",
         elliptic_field_names=list(fields))
+    model.definition_identity = compiled_model_identity(model_hash="h")
+    return model
 
 
 def _install_instances(**models):
-    """Assemble runtime inputs from the immutable AMR install contract."""
+    """Assemble runtime inputs from the exact AMR resolve/compile/bind contract."""
     snapshot = AuthoringSnapshot({"kind": "named-field-amr", "blocks": tuple(models)})
-    plan = InstallPlan(
-        snapshot_hash=snapshot.hash,
+    schema = BindSchema()
+    source = {"kind": "named-field-amr", "blocks": tuple(models)}
+    resolved = ResolvedSimulationPlan(
+        snapshot=snapshot,
         target="amr_system",
+        backend="production",
         layout=None,
-        blocks=tuple(InstallBlock(name, model, None) for name, model in models.items()),
-        bind_schema=None,
+        time=None,
+        blocks=tuple(ResolvedBlock(name, source, None, "production") for name in models),
+        bind_schema=schema,
+        compile_values=schema.resolve_compile(),
         field_solvers={},
         outputs=(),
         diagnostics=(),
-        has_program=False,
+        libraries=(),
+        requirements={},
+        capabilities={"amr": True},
     )
-    return plan.assemble_instances({})
+    artifact = CompiledSimulationArtifact(
+        plan=resolved,
+        program=None,
+        blocks=tuple(
+            CompiledBlockArtifact(name, model, None) for name, model in models.items()
+        ),
+    )
+    inputs = BindInputs()
+    plan = InstallPlan(
+        artifact=artifact,
+        bind_inputs=inputs,
+        instances={name: {"model": model, "spatial": None} for name, model in models.items()},
+        params=schema.resolve_bind({}, compile_values=resolved.compile_values),
+        aux={},
+    )
+    return plan.instances
 
 
 class _SolverHarness(AmrSystem):

@@ -18,9 +18,14 @@ import sys
 import pytest
 
 pops = pytest.importorskip("pops")
-from pops.codegen._plans import InstallBlock, InstallPlan  # noqa: E402
-from pops.codegen.loader import CompiledModel, CompiledProblem  # noqa: E402
+from pops.codegen._plans import ResolvedBlock, ResolvedSimulationPlan  # noqa: E402
+from pops.codegen.compiled_artifact import (  # noqa: E402
+    CompiledBlockArtifact,
+    CompiledSimulationArtifact,
+)
+from pops.codegen.loader import CompiledModel  # noqa: E402
 from pops.external.artifact_manifest import CompiledArtifactManifest  # noqa: E402
+from pops.identity import make_identity  # noqa: E402
 from pops.model import Module  # noqa: E402
 from pops.model.bind_schema import BindSchema  # noqa: E402
 from tests.python.unit.runtime._typed_program import typed_program_states  # noqa: E402
@@ -56,7 +61,7 @@ def test_ghost_depth_by_block_is_serializable_plain_values():
 # --- 3: build_arguments populates the per-block map keyed by committed block --------------------
 
 def _compiled(blocks):
-    """Build a real typed Program + InstallPlan artifact without compiling a shared object."""
+    """Build the exact compiled artifact around a real typed Program, without a shared object."""
     module = Module("ghost-depth-model")
     state = module.state_space("U", ("rho", "mx", "my"))
     declarations = tuple((name, state) for name in blocks)
@@ -71,28 +76,67 @@ def _compiled(blocks):
         params={}, caps={}, abi_key="SIG|c++|c++23", model_hash="ghost-depth-model",
         cxx="c++", std="c++23",
     )
-    compiled = CompiledProblem(
-        "/nonexistent/ghost-depth-problem.so", program, model,
-        "SIG|c++|c++23", "c++", "c++23",
-    )
+    model.artifact_identity = make_identity(
+        "artifact", {"fixture": "ghost-depth-model", "blocks": list(blocks)})
     schema = BindSchema.from_problem(problem)
     snapshot = problem.freeze()
-    compiled.install_plan = InstallPlan(
-        snapshot_hash=snapshot.hash,
+    plan = ResolvedSimulationPlan(
+        snapshot=snapshot,
         target="system",
+        backend="production",
         layout=None,
-        blocks=tuple(InstallBlock(name, model, None) for name in blocks),
+        time={"program": "gas_program"},
+        blocks=tuple(
+            ResolvedBlock(name, {"model": "ghost-depth-model"}, None, "production")
+            for name in blocks
+        ),
         bind_schema=schema,
+        compile_values=schema.resolve_compile(),
         field_solvers={},
         outputs=(),
         diagnostics=(),
-        has_program=True,
+        libraries=(),
+        requirements={},
+        capabilities={"cpu": True},
     )
-    compiled.bind_schema = schema
-    compiled._problem_snapshot = snapshot
-    model._seal()
-    compiled._seal()
-    return compiled
+
+    class _CompiledProgram:
+        so_path = "/nonexistent/ghost-depth-problem.so"
+        target = "system"
+        backend = "production"
+        abi_key = "SIG|c++|c++23"
+        cxx = "c++"
+        std = "c++23"
+        program_name = "gas_program"
+
+        def commits(self):
+            return program.commits()
+
+        @property
+        def _values(self):
+            return program._values
+
+        def to_data(self):
+            return {"kind": "compiled-program", "name": self.program_name}
+
+        def arguments(self):
+            from pops.codegen.inspect_compiled import build_arguments
+
+            return build_arguments(self.artifact)
+
+        def manifest(self):
+            from pops.external.artifact_manifest import build_compiled_manifest
+
+            return build_compiled_manifest(self.artifact)
+
+    compiled_program = _CompiledProgram()
+    artifact = CompiledSimulationArtifact(
+        plan=plan,
+        program=compiled_program,
+        blocks=tuple(CompiledBlockArtifact(name, model, None) for name in blocks),
+    )
+    compiled_program.artifact = artifact
+    return artifact
 
 
 def test_build_arguments_keys_ghost_depth_by_block():

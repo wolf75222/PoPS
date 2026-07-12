@@ -197,8 +197,8 @@ class CompiledModel:
         required), the model's declared params (type / kind / required), its named aux (layout /
         required) and the runtime layout the artifact targets (``layout='amr'`` for this handle). It
         allocates and reads nothing."""
-        from pops.codegen.inspect_compiled import build_arguments
-        return build_arguments(self)
+        from pops.codegen.inspect_compiled import build_component_arguments
+        return build_component_arguments(self)
 
     def inspect(self) -> Any:
         """Return the same inert compiled-artifact report as a whole-system handle."""

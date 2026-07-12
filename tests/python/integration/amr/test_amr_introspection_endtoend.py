@@ -8,8 +8,8 @@ surface (``profile`` / ``step_cfl`` / ``amr.patch_table``):
   * INERT metadata on the AMR-route handle: ``arguments()`` reports ``layout='amr'`` with the block
     instance / named aux / typed params, ``estimate_memory(mesh)`` is a conservative patch-budget
     FORMULA, and ``inspect_amr()`` surfaces the carried refine / regrid tags. These run on a stub
-    ``CompiledModel`` carrying an AMR ``InstallPlan`` exactly as ``pops.compile(layout=AMR(...))``
-    attaches it -- no ``.so`` dlopen, so the inert surface is
+    exact ``CompiledSimulationArtifact`` carrying the resolved AMR layout -- no ``.so`` dlopen, so
+    the inert surface is
     validated locally without the Kokkos AOT compile the real per-block AMR loader needs.
   * LIVE runtime on a real ``AmrSystem``: a typed ``profile(Profile.Basic())`` context wraps two
     ``step_cfl`` runtime-CFL steps (the engine picks a CFL-bounded dt and advances the clock), the
@@ -27,48 +27,80 @@ import pytest
 pops = pytest.importorskip("pops", exc_type=ImportError)
 
 from pops.codegen.loader import CompiledModel  # noqa: E402
-from pops.codegen._plans import InstallBlock, InstallPlan  # noqa: E402
+from pops.codegen._plans import (  # noqa: E402
+    BindInputs, InstallPlan, ResolvedBlock, ResolvedSimulationPlan,
+)
+from pops.codegen.compiled_artifact import (  # noqa: E402
+    CompiledBlockArtifact, CompiledSimulationArtifact,
+)
+from pops.model.bind_schema import BindSchema  # noqa: E402
+from pops.codegen._compiled_model_identity import compiled_model_identity  # noqa: E402
 from pops.mesh import CartesianMesh  # noqa: E402
 from pops.mesh.amr import Refine, RegridEvery  # noqa: E402
 from pops.mesh.layouts import AMR, Uniform  # noqa: E402
-from pops.model import Handle, OwnerPath  # noqa: E402
+from pops.model import Handle, Module, OwnerPath  # noqa: E402
 from pops.params import RuntimeParam  # noqa: E402
+from pops.problem import Problem  # noqa: E402
 from pops.runtime.system import AmrSystem  # noqa: E402  (ADC-545 advanced runtime seam)
 from pops.problem._snapshot import AuthoringSnapshot  # noqa: E402
 
 
 def _amr_route_handle():
-    """A stub AMR-route ``CompiledModel`` (target='amr_system', no ``.so``) carrying the AMR layout.
+    """A stub exact AMR artifact (target='amr_system', no ``.so``) carrying the AMR layout.
 
-    The shape ``pops.compile(problem, layout=AMR(...))`` returns: the first block's model with
-    target='amr_system' and the Problem's AMR layout attached through ``InstallPlan``. No ``.so`` is
-    dlopened -- the arguments / estimate_memory / inspect_amr surface is
+    This mirrors ``pops.compile(problem, layout=AMR(...))``: an exact artifact owns the resolved
+    AMR layout and a target-specific compiled block. No ``.so`` is dlopened -- the arguments /
+    estimate_memory / inspect_amr surface is
     pure metadata + formula, so it is validated here without the Kokkos AOT per-block loader compile.
     """
+    alpha = RuntimeParam("alpha", default=1.0)
     handle = CompiledModel(
         so_path="<stub-amr>", backend="production", adder="add_native_block",
         cons_names=["rho", "mx", "my"], cons_roles=["Density", "MomentumX", "MomentumY"],
         prim_names=["rho", "mx", "my"], n_vars=3, gamma=1.4, n_aux=1,
-        params={"alpha": RuntimeParam("alpha", default=1.0)},
+        params={"alpha": alpha},
         caps={"cpu": True, "amr": True, "mpi": True}, abi_key="k", model_hash="h", cxx="c++",
         std="c++23", target="amr_system", aux_extra_names=["B_z"])
+    handle.definition_identity = compiled_model_identity(model_hash="h")
     rho = Handle("rho", kind="state", owner=OwnerPath.shared("amr-introspection"))
     layout = AMR(base=CartesianMesh(n=64, periodic=True), max_levels=2, ratio=2,
                  regrid=RegridEvery(4), refine=Refine.on(rho).above(0.1))
     snapshot = AuthoringSnapshot({"kind": "amr-introspection-stub"})
-    handle.install_plan = InstallPlan(
-        snapshot_hash=snapshot.hash,
+    module = Module("amr-introspection-model")
+    module.param(alpha)
+    case = Problem("amr-introspection-case")
+    case.add_block("ne", module)
+    schema = BindSchema.from_problem(case)
+    resolved = ResolvedSimulationPlan(
+        snapshot=snapshot,
         target="amr_system",
+        backend="production",
         layout=layout,
-        blocks=(InstallBlock("ne", handle, None),),
-        bind_schema=None,
+        time=None,
+        blocks=(ResolvedBlock("ne", module, None, "production"),),
+        bind_schema=schema,
+        compile_values=schema.resolve_compile(),
         field_solvers={},
         outputs=(),
         diagnostics=(),
-        has_program=False,
+        libraries=(),
+        requirements={"amr": True},
+        capabilities={"cpu": True, "amr": True, "mpi": True},
     )
-    handle._problem_snapshot = snapshot
-    return handle
+    artifact = CompiledSimulationArtifact(
+        plan=resolved,
+        program=None,
+        blocks=(CompiledBlockArtifact("ne", handle, None),),
+    )
+    inputs = BindInputs()
+    InstallPlan(
+        artifact=artifact,
+        bind_inputs=inputs,
+        instances={"ne": {"model": handle, "spatial": None}},
+        params=schema.resolve_bind({}, compile_values=resolved.compile_values),
+        aux={},
+    )
+    return artifact
 
 
 # --- inert introspection on the AMR-route handle ---------------------------------
@@ -79,7 +111,10 @@ def test_arguments_on_the_amr_route_handle():
     inst = next(iter(args.instances.values()))
     assert inst["components"] == 3 and inst["conservative"] == ["rho", "mx", "my"]
     assert set(args.aux) == {"B_z"}
-    assert args.params["alpha"]["kind"] == "runtime" and args.params["alpha"]["required"] is True
+    alpha_qid = next(iter(args.params))
+    assert args.params[alpha_qid]["name"] == "alpha"
+    assert args.params[alpha_qid]["kind"] == "runtime"
+    assert args.params[alpha_qid]["required"] is False  # declaration carries a bind default
 
 
 def test_estimate_memory_on_the_amr_route_handle_adds_a_patch_budget():

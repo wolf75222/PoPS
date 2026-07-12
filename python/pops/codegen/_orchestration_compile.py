@@ -40,13 +40,14 @@ def compile_install_model(name: str, model: Any, backend: str, target: str,
         if model.target != target or model.backend != backend:
             raise ValueError("resolved compiled model route disagrees with its plan")
         return model
-    source_module_hash = None
+    from pops.codegen.module_lowering import lower_and_validate
+
+    facade = model
+    model, source_module = lower_and_validate(model, facade=facade)
+    source_module_hash = (
+        source_module.module_hash() if source_module is not None else None
+    )
     compile_model = getattr(model, "compile", None)
-    if not callable(compile_model) and callable(getattr(model, "operator_registry", None)):
-        from pops.codegen.module_lowering import _module_to_model
-        source_module_hash = model.module_hash()
-        model = _module_to_model(model)
-        compile_model = model.compile
     if not callable(compile_model):
         raise TypeError("resolved block %r has no total compile lowering" % name)
     compiled = compile_model(backend=backend, target=target, **compile_options)

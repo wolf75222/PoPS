@@ -318,10 +318,6 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
       capability_route("program_context:amr", status_from_bool(caps.supports_amr),
                        "AMR program install requires target='amr_system'", "amr", "production",
                        "host", mpi, gpu),
-      capability_route("runtime:native_loader_legacy_metadata", "partial",
-                       "old native modules without metadata fall back to u0.. names, empty roles, "
-                       "legacy default gamma and host prototype copies",
-                       "uniform|amr", "aot|dynamic|prototype", "host", mpi, gpu),
       capability_route("output:npz_vtk_hdf5", "available",
                        "runtime output writers; AMR VTK is coarse + patch metadata", "uniform|amr",
                        "runtime", "host", mpi, gpu),

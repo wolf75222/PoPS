@@ -21,12 +21,10 @@ compile_model(model, ...)            -- full facade (HyperbolicModel.compile log
 model_hash(model, params=None)       -- stable hash of the model formulas
 adder_for(backend)                   -- name of the System adder for a backend
 
-Module-level symbols also exported
------------------------------------
+Internal tables also exported
+-----------------------------
 _BACKEND_CAPS    -- per-backend capability table
 _BACKENDS        -- per-backend (mode, adder) table
-compile_problem  -- compile a pops.time.Program into a problem.so
-_module_to_model -- lower a pops.model.Module -> Model (used by compile_problem)
 
 This is the THIN public module of the model compile pipeline.  The lowering
 machinery is split across two sibling modules so each file fits the Spec-4 size
@@ -36,8 +34,7 @@ budget, and every name re-imported below so the public surface of
   - ``compile_emit``    -- the backend tables, ``model_hash`` / ``adder_for`` and
                            the three ``emit_cpp_*`` source emitters;
   - ``compile_drivers`` -- the per-backend compiler runners, ``compile_or_jit`` /
-                           ``compile_model`` facade, ``_module_to_model`` and
-                           ``compile_problem``.
+                           ``compile_model`` facade.
 
 ``pops_cache_dir`` is re-exported for callers that read it off this module.
 """
@@ -86,6 +83,4 @@ from pops.codegen.compile_drivers import (  # noqa: F401
     compile_native,
     compile_or_jit,
     compile_model,
-    _module_to_model,
-    compile_problem,
 )

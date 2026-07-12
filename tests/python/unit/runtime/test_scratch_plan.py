@@ -30,7 +30,7 @@ except Exception as exc:  # noqa: BLE001 -- pops unavailable in this interpreter
     sys.exit(0)
 
 from tests.python.unit.runtime._typed_program import (
-    attach_typed_install_plan,
+    typed_compiled_artifact,
     typed_program_state,
 )
 
@@ -97,7 +97,7 @@ def _compiled(program):
     compiled = CompiledProblem(
         "/tmp/pops-cache/problem.so", program, model, "SIG|c++|c++23",
         "c++", "c++23", problem_hash="deadbeefcafe", cache_key="0badc0de")
-    return attach_typed_install_plan(compiled, model)
+    return typed_compiled_artifact(compiled, model)
 
 
 def chk(cond, label):

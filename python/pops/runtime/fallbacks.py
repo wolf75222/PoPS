@@ -65,18 +65,6 @@ def _configured_routes(options: Any) -> Any:
                 "configured_by": "positivity_floor",
                 "value": float(block.get("positivity_floor")),
             })
-        cons = list(block.get("conservative_vars") or [])
-        route = block.get("route", "")
-        if route in ("dynamic_loader", "aot_loader", "native_loader") and cons:
-            legacy_names = all(str(v) == "u%d" % i for i, v in enumerate(cons))
-            if legacy_names:
-                configured.append({
-                    "key": "runtime.native_loader.legacy_metadata",
-                    "block": name,
-                    "policy": "report_and_compat",
-                    "configured_by": "legacy_or_missing_metadata",
-                    "value": {"conservative_vars": cons},
-                })
     return configured
 
 

@@ -201,15 +201,13 @@ inline std::vector<std::string> split(const std::string& s, char sep) {
   return out;
 }
 
-/// OPTIONAL metadata read by dlsym on a generated .so (names / roles / gamma). All
-/// optional: an old .so without these symbols gives empty meta -> the add_compiled_block /
-/// add_dynamic_block paths fall back to their fallback (names u0.., empty roles, gamma 1.4). No C++
-/// object dependency: only strings and a double pass through dlsym (flat ABI, like the rest of the block).
+/// Metadata read by dlsym on a generated .so (names / roles / optional gamma). Names and roles are
+/// mandatory at the loader boundary; gamma may be absent for models that do not define a gas EOS.
 struct BlockMeta {
   bool has_names = false;
   bool has_roles = false;
   bool has_gamma = false;
-  double gamma = static_cast<double>(kPhysicalDefaultGamma);
+  double gamma = std::numeric_limits<double>::quiet_NaN();
   VariableSet cons{VariableKind::Conservative, {}, 0, {}};
   VariableSet prim{VariableKind::Primitive, {}, 0, {}};
 };
@@ -228,25 +226,34 @@ inline VariableSet parse_var_set(VariableKind kind, const std::string& names_csv
 }
 
 /// Refuses an already-open .so (@p h) whose EMBEDDED route registry signature
-/// (pops_compiled_route_manifest, ADC-599) differs from the current registry. OPTIONAL symbol:
-/// an old .so without it -> verify_route_manifest("") is a no-op (append-only compat, the ABI key
-/// still guards the header layout). A mismatch throws, naming the first differing family, BEFORE
+/// (pops_compiled_route_manifest, ADC-599) differs from the current registry. The symbol is
+/// mandatory: artifacts predating the strict route manifest must be rebuilt. A mismatch throws
+/// naming the first differing family, BEFORE
 /// the block is installed. @p ctx names the entry point in the diagnostic (e.g. "add_native_block").
 inline void verify_block_route_manifest(pops::dynlib::handle h, const char* ctx) {
   auto manifest_fn =
       reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_compiled_route_manifest"));
-  const std::string embedded = manifest_fn ? std::string(manifest_fn()) : std::string();
+  if (!manifest_fn) {
+    pops::dynlib::close(h);
+    throw std::runtime_error(std::string(ctx) +
+                             ": strict pops_compiled_route_manifest is missing; rebuild artifact");
+  }
+  const char* raw = manifest_fn();
+  if (!raw) {
+    pops::dynlib::close(h);
+    throw std::runtime_error(std::string(ctx) +
+                             ": pops_compiled_route_manifest returned NULL");
+  }
+  const std::string embedded(raw);
   try {
-    pops::verify_route_manifest(embedded, ctx);  // no-op if absent (old .so)
+    pops::verify_route_manifest(embedded, ctx);
   } catch (...) {
     pops::dynlib::close(h);  // release the handle before propagating, like the abi-key path
     throw;
   }
 }
 
-/// Reads (by dlsym, all OPTIONAL) the metadata symbols of an already-open .so (@p h). Returns
-/// deserialized names+roles and gamma if present. Absent symbols leave the fields empty /
-/// has_gamma=false: the caller then decides the fallback. String format: "cons_csv|prim_csv".
+/// Reads the metadata symbols of an already-open .so. Validation decides which fields are required.
 inline BlockMeta read_block_meta(pops::dynlib::handle h) {
   BlockMeta m;
   auto names_fn =
@@ -439,13 +446,10 @@ void push_dynamic(ImplT* P, const std::string& name, pops::dynlib::handle h, int
         r(i, j, 0) += im->elliptic_rhs(s);
       }
   };
-  // OPTIONAL metadata (names / roles / gamma) carried by the extended ABI of the .so. Symmetric
-  // to the AOT path. Absent from an old .so -> empty meta -> fallback (names u0.. / no roles /
-  // gamma 1.4). PRIORITY to the explicit name (names=), then meta, then fallback; roles + primitive
-  // come ONLY from the ABI (the API does not expose them).
+  // Strict names/roles metadata carried by the current ABI. An explicit names= value may only
+  // override same-width display names; it cannot repair a legacy/incomplete artifact.
   const BlockMeta meta = read_block_meta(h);
-  if ((names.empty() && meta.cons.names.empty()) || meta.cons.roles.empty() || !meta.has_gamma)
-    record_fallback(FallbackCounter::kNativeLoaderLegacyMetadata);
+  validate_strict_block_meta(meta, NV);
   VariableSet cons_vs = meta.cons, prim_vs = meta.prim;
   if (!names.empty()) {
     if (static_cast<int>(names.size()) != NV)
@@ -455,15 +459,8 @@ void push_dynamic(ImplT* P, const std::string& name, pops::dynlib::handle h, int
     cons_vs.names = names;
     cons_vs.size = static_cast<int>(names.size());
   }
-  if (cons_vs.names.empty()) {
-    for (int c = 0; c < NV; ++c)
-      cons_vs.names.push_back("u" + std::to_string(c));
-    cons_vs.size = NV;
-  }
-  if (prim_vs.names.empty())
-    prim_vs = {VariableKind::Primitive, cons_vs.names, cons_vs.size, {}};
   const double gamma =
-      meta.has_gamma ? meta.gamma : static_cast<double>(kPhysicalDefaultGamma);
+      meta.has_gamma ? meta.gamma : std::numeric_limits<double>::quiet_NaN();
 
   typename ImplT::Species block{name,
                                 MultiFab(P->ba, P->dm, NV, 2),
@@ -531,7 +528,7 @@ void add_dynamic_block(System* self, ImplT* P, const std::string& name, const st
                              "'): " + (e.empty() ? std::string("?") : e));
   }
   // Route registry guard (ADC-599): refuse a .so whose embedded route manifest disagrees with the
-  // current registry, before installing. Optional symbol (old .so) -> no-op.
+  // current registry, before installing. The strict symbol is mandatory.
   verify_block_route_manifest(h, "add_dynamic_block");
   auto nv_fn = reinterpret_cast<int (*)()>(pops::dynlib::sym(h, "pops_model_nvars"));
   if (!nv_fn) {
@@ -592,7 +589,7 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
                              "'): " + (e.empty() ? std::string("?") : e));
   }
   // Route registry guard (ADC-599): refuse a .so whose embedded route manifest disagrees with the
-  // current registry, before installing. Optional symbol (old .so) -> no-op.
+  // current registry, before installing. The strict symbol is mandatory.
   verify_block_route_manifest(h, "add_compiled_block");
   // extern "C" ABI of the compiled block (compiled_block_abi.hpp). The .so runs the production path
   // (assemble_rhs<Limiter, Flux>, SSPRK2/IMEX) on the generated model; only flat arrays
@@ -796,11 +793,9 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
                                 std::move(add_poisson)};
   block.cons_vars = std::move(cons_vs);
   block.prim_vars = std::move(prim_vs);
-  // cons <-> prim conversions OF THE MODEL via the extended ABI of the .so (set/get_primitive_state). The
+  // cons <-> prim conversions OF THE MODEL via the current ABI of the .so. The
   // symbols operate on flat component-major arrays c*nn+k: called with n=1 (thus nn=1),
   // they convert ONE cell (in/out = nv doubles), which is exactly the CellConvert contract.
-  // OPTIONAL: a .so generated before this work does not expose them -> empty conversion -> identity (the
-  // set/get_primitive_state path then falls back on prim == cons, exact for a scalar).
   using cv_fn_t = void (*)(const double*, double*, int);
   auto p2c_fn = reinterpret_cast<cv_fn_t>(pops::dynlib::sym(h, "pops_compiled_to_conservative"));
   auto c2p_fn = reinterpret_cast<cv_fn_t>(pops::dynlib::sym(h, "pops_compiled_to_primitive"));
@@ -810,6 +805,10 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
   auto p2c_p_fn =
       reinterpret_cast<cv_p_fn_t>(pops::dynlib::sym(h, "pops_compiled_to_conservative_p"));
   auto c2p_p_fn = reinterpret_cast<cv_p_fn_t>(pops::dynlib::sym(h, "pops_compiled_to_primitive_p"));
+  if (!p2c_fn || !c2p_fn || (pv && (!p2c_p_fn || !c2p_p_fn)))
+    throw std::runtime_error(
+        "add_compiled_block: strict conservative/primitive conversion entrypoints are missing; "
+        "rebuild artifact with the current PoPS ABI");
   if (pv && p2c_p_fn)
     block.prim_to_cons = [lib, p2c_p_fn, pv](const double* in, double* out) {
       p2c_p_fn(in, out, 1, pv->data(), static_cast<int>(pv->size()));

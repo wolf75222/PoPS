@@ -30,6 +30,7 @@ from .board_handles import (FieldHandle, FluxHandle,
                             VectorHandle, _canon_role, _safe_name)
 from ._board_contract import (atomic_attrs, normalize_components, normalize_roles,
                               normalize_sequence, normalize_string_mapping, require_name)
+from ._board_compile import _BoardCompileMixin
 from ._board_elliptic import _EllipticAuthoringMixin
 from ._board_multispecies import _MultiSpeciesMixin
 from ._board_rate import _RateAuthoringMixin
@@ -37,7 +38,7 @@ from ._board_riemann import _RiemannAuthoringMixin
 from ._freeze import PhysicsFreezable
 
 
-class Model(PhysicsFreezable, _RateAuthoringMixin, _RiemannAuthoringMixin,
+class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannAuthoringMixin,
             _EllipticAuthoringMixin, _MultiSpeciesMixin):
     """A blackboard-style physical model that lowers to the operator-first IR."""
 
@@ -121,8 +122,19 @@ class Model(PhysicsFreezable, _RateAuthoringMixin, _RiemannAuthoringMixin,
                 "use species(...) for multiple state blocks" % (name, next(iter(self._states))))
         role_list = None if roles is None else [_canon_role(role_map.get(c)) for c in components]
         hyp = self._dsl._m
-        with atomic_attrs((hyp, "cons_names"), (hyp, "cons_roles"), (self, "_states")):
+        with atomic_attrs(
+            (hyp, "cons_names"),
+            (hyp, "cons_roles"),
+            (hyp, "prim_state"),
+            (hyp, "prim_roles"),
+            (hyp, "cons_from"),
+            (self, "_states"),
+        ):
             vars_ = self._dsl.conservative_vars(*components, roles=role_list)
+            # A blackboard state is a complete coordinate system: use its conservative components
+            # as the exact identity primitive layout/inverse, avoiding scalar-law boilerplate.
+            self._dsl.primitive_vars(*vars_, roles=role_list)
+            self._dsl.conservative_from(list(vars_))
             handle = StateHandle(name, components, vars_, role_map, owner=self.owner_path)
             self._states[handle.name] = handle
         return handle
@@ -423,7 +435,9 @@ class Model(PhysicsFreezable, _RateAuthoringMixin, _RiemannAuthoringMixin,
 
             physics_model = pops.physics.Model(...)
             problem.add_block("blk", model=physics_model)
-            compiled = pops.compile(problem, layout=..., backend=pops.codegen.Production())
+            validated = pops.validate(problem)
+            resolved = pops.resolve(validated, layout=..., backend=pops.codegen.Production())
+            compiled = pops.compile(resolved)
 
         ``pops.compile`` captures the operator-first Module and validates ONCE internally; ``lower``
         (and its ``to_module`` alias) stay ADVANCED / inspection-only. Identical to :pyattr:`module`."""

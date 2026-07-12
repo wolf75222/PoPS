@@ -16,9 +16,12 @@ The front door is the typed assembly + compile/bind/run flow: author an inert ``
                .block("ne", physics=model)
                .field(PoissonProblem(unknown="phi", equation=eq, solver=mg))
                .time(time_program))
-    compiled = pops.compile(problem, layout=Uniform(CartesianMesh(n=96, periodic=False)),
+    validated = pops.validate(problem)
+    resolved = pops.resolve(validated,
+                            layout=Uniform(CartesianMesh(n=96, periodic=False)),
                             backend=Production())
-    sim = pops.bind(compiled, initial_state={"ne": ne0})
+    compiled = pops.compile(resolved)
+    sim = pops.bind(compiled, pops.BindInputs(initial_state={"ne": ne0}))
     sim.run(t_end=0.1, cfl=0.4)
 """
 from pops import _bootstrap  # noqa: F401  (loads _pops with RTLD_GLOBAL so the production .so resolves)
@@ -96,8 +99,6 @@ _ADC545_HOMES = {
     "read_library_manifest": "pops.codegen.read_library_manifest",
     "LibraryManifest": "pops.codegen.LibraryManifest",
 }
-
-
 # Lazy canonical phase front doors; retired structural/low-level compiler spellings fail below.
 def __getattr__(name: str):
     if name in ("validate", "resolve", "compile", "bind", "install"):

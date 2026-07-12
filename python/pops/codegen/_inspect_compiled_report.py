@@ -222,7 +222,15 @@ def build_compiled_report(compiled: Any) -> CompiledReport:
     req_aux = [name for name, spec in sorted(getattr(args, "aux", {}).items())
                if spec.get("required")]
 
-    program = getattr(compiled, "program", None)
+    from pops.codegen.compiled_artifact import CompiledSimulationArtifact
+    from pops.codegen.loader import CompiledProblem
+
+    if type(compiled) is CompiledSimulationArtifact:
+        program = getattr(compiled.program, "program", None)
+    elif type(compiled) is CompiledProblem:
+        program = compiled.program
+    else:
+        raise TypeError("build_compiled_report requires an exact compiled artifact or problem")
     from pops.time.references import block_name, handle_data
     commit_handles = (sorted(program.commits(), key=lambda item: item.qualified_id)
                       if (program is not None and hasattr(program, "commits")) else [])
@@ -279,9 +287,14 @@ def _compiled_options(compiled: Any) -> dict:
     from pops.runtime.defaults import PHYSICAL_DEFAULT_GAMMA, numerical_defaults_report
 
     defaults = numerical_defaults_report()
-    from pops.codegen._artifact_models import primary_artifact_model
+    from pops.codegen._artifact_models import component_model_metadata, primary_artifact_model
+    from pops.codegen.compiled_artifact import CompiledSimulationArtifact
 
-    model = primary_artifact_model(compiled)
+    if type(compiled) is CompiledSimulationArtifact:
+        model = primary_artifact_model(compiled)
+    else:
+        rows = component_model_metadata(compiled)
+        model = rows[0].model if rows else None
     params = dict(getattr(model, "params", {}) or {})
 
     def param_kind(param: Any) -> str:

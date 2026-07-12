@@ -9,6 +9,9 @@ select it. MUSCL is reconstruction-by-limiter; its native limiter type is pops::
 """
 from __future__ import annotations
 
+import math
+from decimal import Decimal
+from fractions import Fraction
 from types import SimpleNamespace
 from typing import Any
 
@@ -50,11 +53,17 @@ def _weno5(name: str, epsilon: Any = None) -> Any:
     (cartesian System path; refused loud on the polar / disc / AMR paths, never silently dropped)."""
     if epsilon is None:
         return _native(name, "pops::Weno5", "weno5", category="reconstruction", ghost_depth=3)
-    if isinstance(epsilon, bool) or not isinstance(epsilon, (int, float)) or not (epsilon > 0.0):
-        raise ValueError("reconstruction.%s(epsilon=) must be a positive number or None; got %r"
-                         % ("WENO5" if name == "weno5" else "WENO5Z", epsilon))
+    where = "reconstruction.%s(epsilon=)" % ("WENO5" if name == "weno5" else "WENO5Z")
+    if isinstance(epsilon, bool) or not isinstance(epsilon, (int, float, Decimal, Fraction)):
+        raise TypeError("%s must be an exact Python numeric scalar" % where)
+    if isinstance(epsilon, float) and not math.isfinite(epsilon):
+        raise ValueError("%s must be finite" % where)
+    if isinstance(epsilon, Decimal) and not epsilon.is_finite():
+        raise ValueError("%s must be finite" % where)
+    if epsilon <= 0:
+        raise ValueError("%s must be a positive number or None; got %r" % (where, epsilon))
     return _native(name, "pops::Weno5", "weno5", category="reconstruction", ghost_depth=3,
-                   epsilon=float(epsilon))
+                   epsilon=epsilon)
 
 
 reconstruction = SimpleNamespace(

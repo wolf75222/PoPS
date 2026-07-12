@@ -6,6 +6,8 @@ the declared runtime params, the supplied initial state), so they are exercised 
 Python objects -- no compiled ``.so``, no ``_pops``. The compiler-gated end-to-end refusal lives in
 the integration tier; this tier proves the refusal LOGIC.
 """
+from types import SimpleNamespace
+
 import pytest
 
 pops = pytest.importorskip("pops", exc_type=ImportError)
@@ -181,15 +183,14 @@ def test_missing_abi_key_is_refused_as_unverifiable():
 
 
 def test_mpi_required_but_runtime_lacks_it_is_refused():
-    # The artifact REQUIRES MPI but the runtime does not provide it -> hard refusal.
-    manifest = _Manifest(abi_key="A", supports_mpi=True)
-    lines = bv.validate_bind_manifest(manifest, {"abi_key": "A", "supports_mpi": False})
+    arguments = SimpleNamespace(layout_runtime={"requires_mpi": True})
+    lines = bv.validate_layout_runtime_requirements(arguments, {"supports_mpi": False})
     assert any("MPI support mismatch" in l for l in lines)
 
 
 def test_gpu_required_but_runtime_lacks_it_is_refused():
-    manifest = _Manifest(abi_key="A", supports_gpu=True)
-    lines = bv.validate_bind_manifest(manifest, {"abi_key": "A", "supports_gpu": False})
+    arguments = SimpleNamespace(layout_runtime={"requires_gpu": True})
+    lines = bv.validate_layout_runtime_requirements(arguments, {"supports_gpu": False})
     assert any("GPU / Kokkos" in l for l in lines)
 
 
@@ -198,6 +199,12 @@ def test_more_capable_runtime_is_not_a_mismatch():
     # the runtime being MORE capable than the artifact needs is NOT a mismatch (directional gate).
     manifest = _Manifest(abi_key="A", supports_mpi=False, supports_gpu=False)
     facts = {"abi_key": "A", "supports_mpi": True, "supports_gpu": True}
+    assert bv.validate_bind_manifest(manifest, facts) == []
+
+
+def test_supported_feature_is_not_an_execution_requirement():
+    manifest = _Manifest(abi_key="A", supports_mpi=True, supports_gpu=True)
+    facts = {"abi_key": "A", "supports_mpi": False, "supports_gpu": False}
     assert bv.validate_bind_manifest(manifest, facts) == []
 
 

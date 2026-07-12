@@ -101,12 +101,15 @@ def route_program_params(
     schema = _require_schema(schema)
     if not isinstance(resolved, Mapping):
         raise TypeError("resolved parameter values must be a ParamHandle mapping")
-    program = getattr(compiled, "program", None)
-    if program is None:
+    if getattr(compiled, "program", None) is None:
         return {}
-    from pops.time.references import block_name
-
-    blocks = {index: reference for reference, index in program._block_indices().items()}
+    block_routes = getattr(compiled, "program_block_routes", None)
+    if block_routes is None:
+        raise ValueError(
+            "compiled Program carries no immutable program_block_routes metadata; rebuild it "
+            "through pops.compile(...) before binding"
+        )
+    blocks = dict(block_routes)
     vectors: dict[int, list[float | None]] = {}
     captured = getattr(compiled, "program_param_routes", None)
     if captured is None:
@@ -122,7 +125,7 @@ def route_program_params(
                 "compiled Program parameter route references unknown block index %d"
                 % block_index
             )
-        owner_name = block_name(reference)
+        owner_name = reference
         slot = _slot_for_block(schema, owner_name, local_id)
         vector = vectors.setdefault(block_index, [])
         if len(vector) <= within_index:

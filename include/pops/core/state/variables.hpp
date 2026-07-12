@@ -230,7 +230,7 @@ inline int coupling_role_index(const VariableSet& vs, VariableRole role, int fal
 }
 
 /// A model's "names" metadata: "cons_csv|prim_csv" (separator '|' between the two sets). Read
-/// as-is by the consumer (System) via the optional symbol pops_compiled_var_names.
+/// as-is by the consumer (System) via the mandatory current-ABI symbol pops_compiled_var_names.
 template <class Model>
 std::string var_names_meta() {
   return names_csv(Model::conservative_vars()) + "|" + names_csv(Model::primitive_vars());
@@ -247,11 +247,8 @@ using Variables = VariableSet;
 
 }  // namespace pops
 
-/// Exports the OPTIONAL "names + roles" metadata of a .so block via extern "C" symbols read by
-/// dlsym on the System side. SHARED by the two generated backends (AOT compiled_block and JIT
-/// dynamic_model): the lost metadata (names/roles) is carried without breaking the flat ABI.
-/// BACKWARD-COMPATIBLE: a .so that does not define these symbols (generated before this work) stays
-/// valid -- the System does not find the symbol and falls back (names u0.., no roles).
+/// Exports the mandatory current-ABI "names + roles" metadata of a .so block via extern "C"
+/// symbols read by the System loader. Shared by both generated backends.
 /// @p MODEL = type of the model (carries conservative_vars / primitive_vars).
 #define POPS_EXPORT_BLOCK_METADATA(MODEL)                       \
   extern "C" const char* pops_compiled_var_names() {            \

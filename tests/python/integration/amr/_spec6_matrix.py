@@ -31,16 +31,21 @@ import pytest
 
 import pops
 import pops.lib.time as lib_time
+from pops.codegen._plans import ResolvedBlock, ResolvedSimulationPlan
+from pops.codegen.compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
 from pops.codegen.loader import CompiledModel
 from pops.ir.ops import sqrt
+from pops.identity import make_identity
 from pops.mesh import CartesianMesh
 from pops.mesh.amr import FrozenRegrid, Refine, RegridEvery
 from pops.mesh.layouts import AMR, Uniform
 from pops.model import Handle, OwnerPath
+from pops.model.bind_schema import BindSchema
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 from pops.physics.facade import Model as FacadeModel
 from pops.params import ConstParam, RuntimeParam
+from pops.problem._snapshot import AuthoringSnapshot
 from pops.runtime.system import AmrSystem
 from tests.python.support.typed_program import program_states, synthetic_module
 
@@ -97,9 +102,7 @@ def _iso_state(n, L, rho=1.5):
 
 
 def _amr_route_handle(*, n_aux=1, mpi=True):
-    """A stub AMR-route ``CompiledModel`` with the immutable InstallPlan returned by compile."""
-    from pops.codegen._plans import InstallBlock, InstallPlan
-    from pops.problem._snapshot import AuthoringSnapshot
+    """An exact metadata-only AMR compiled artifact."""
 
     handle = CompiledModel(
         so_path="<stub-amr>", backend="production", adder="add_native_block",
@@ -108,23 +111,35 @@ def _amr_route_handle(*, n_aux=1, mpi=True):
         params={"alpha": RuntimeParam("alpha", default=1.0)},
         caps={"cpu": True, "amr": True, "mpi": mpi}, abi_key="k", model_hash="h", cxx="c++",
         std="c++23", target="amr_system", aux_extra_names=["B_z"][:n_aux])
+    handle.artifact_identity = make_identity(
+        "artifact", {"fixture": "spec6-matrix-model", "n_aux": n_aux, "mpi": mpi})
     rho = Handle("rho", kind="state", owner=OwnerPath.shared("spec6-matrix"))
     layout = AMR(base=CartesianMesh(n=64, periodic=True), max_levels=2, ratio=2,
                  regrid=RegridEvery(4), refine=Refine.on(rho).above(0.1))
     snapshot = AuthoringSnapshot({"kind": "spec6-matrix-stub"})
-    handle.install_plan = InstallPlan(
-        snapshot_hash=snapshot.hash,
+    schema = BindSchema()
+    plan = ResolvedSimulationPlan(
+        snapshot=snapshot,
         target="amr_system",
+        backend="production",
         layout=layout,
-        blocks=(InstallBlock("ne", handle, None),),
-        bind_schema=None,
+        time=None,
+        blocks=(ResolvedBlock(
+            "ne", {"model": "spec6-matrix-model"}, None, "production"),),
+        bind_schema=schema,
+        compile_values=schema.resolve_compile(),
         field_solvers={},
         outputs=(),
         diagnostics=(),
-        has_program=False,
+        libraries=(),
+        requirements={"amr": True},
+        capabilities={"cpu": True, "amr": True, "mpi": mpi},
     )
-    handle._problem_snapshot = snapshot
-    return handle
+    return CompiledSimulationArtifact(
+        plan=plan,
+        program=None,
+        blocks=(CompiledBlockArtifact("ne", handle, None),),
+    )
 
 
 def _routes_by_id():
@@ -340,7 +355,9 @@ def _run_clean_schur_program(n=16, nsteps=4, dt=5.0e-4):
 # green_inert: introspection on the AMR-route handle (no run, no dlopen).
 # --------------------------------------------------------------------------------------------------
 def _inert_arguments():
-    args = _amr_route_handle().arguments()
+    from pops.codegen.inspect_compiled import build_arguments
+
+    args = build_arguments(_amr_route_handle())
     assert args.layout_runtime["layout"] == "amr"
     assert next(iter(args.instances.values()))["components"] == 3
     assert set(args.aux) == {"B_z"} and args.params["alpha"]["kind"] == "runtime"
@@ -348,16 +365,19 @@ def _inert_arguments():
 
 
 def _inert_estimate_memory():
+    from pops.codegen.inspect_compiled import build_memory_estimate
+
     handle = _amr_route_handle()
     mesh = CartesianMesh(n=64, L=1.0, periodic=True)
-    est = handle.estimate_memory(mesh)
+    est = build_memory_estimate(handle, mesh, layout=handle.layout)
     assert est.layout == "amr" and est.categories.get("amr_patch", 0) > 0
-    assert est.total_bytes >= handle.estimate_memory(mesh, layout=Uniform(mesh)).total_bytes
+    assert est.total_bytes >= build_memory_estimate(
+        handle, mesh, layout=Uniform(mesh)).total_bytes
     return "green_inert:estimate_memory_amr"
 
 
 def _inert_inspect_amr():
-    rep = _amr_route_handle().inspect_amr().to_dict()
+    rep = pops.inspect_amr(_amr_route_handle().layout).to_dict()
     assert rep["layout"] == "amr" and rep["max_levels"] == 2
     assert {row["slot"] for row in rep["policies"]} >= {"refine", "regrid"}
     return "green_inert:inspect_amr"

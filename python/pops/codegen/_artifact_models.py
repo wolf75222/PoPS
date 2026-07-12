@@ -20,24 +20,26 @@ class ArtifactModelMetadata:
 
 
 def artifact_model_metadata(compiled: Any) -> tuple[ArtifactModelMetadata, ...]:
-    """Return every model carried by ``InstallPlan.blocks`` in declaration order.
+    """Return every exact compiled block in declaration order; no historical fallback."""
+    from pops.codegen.compiled_artifact import CompiledSimulationArtifact
 
-    Public artifacts use the install plan as their sole block authority. Low-level handles that
-    have not crossed public orchestration retain the historical single-model fallback.
-    """
-    plan = getattr(compiled, "install_plan", None)
-    blocks = tuple(getattr(plan, "blocks", ()) or ())
-    if blocks:
-        return tuple(_metadata(block.name, block.model) for block in blocks)
+    if type(compiled) is not CompiledSimulationArtifact:
+        raise TypeError("artifact_model_metadata requires a CompiledSimulationArtifact")
+    return tuple(_metadata(block.name, block.model) for block in compiled.blocks)
 
-    model = getattr(compiled, "model", None)
-    if model is None and getattr(compiled, "cons_names", None) is not None:
-        model = compiled
+
+def component_model_metadata(compiled: Any) -> tuple[ArtifactModelMetadata, ...]:
+    """Metadata for an explicitly low-level compiled component, never a public artifact."""
+    from pops.codegen.loader import CompiledModel, CompiledProblem
+
+    if type(compiled) is CompiledModel:
+        return (_metadata(getattr(compiled, "name", None), compiled),)
+    if type(compiled) is not CompiledProblem:
+        raise TypeError("component metadata requires exact CompiledModel/CompiledProblem")
+    model = compiled.model
     if model is None:
         return ()
-    name = (getattr(compiled, "program_name", None)
-            or getattr(model, "name", None)
-            or getattr(compiled, "name", None))
+    name = compiled.program_name or getattr(model, "name", None)
     return (_metadata(name, model),)
 
 
@@ -113,5 +115,5 @@ def _metadata(block_name: str | None, model: Any) -> ArtifactModelMetadata:
 
 __all__ = [
     "ArtifactModelMetadata", "aggregate_capability", "aggregate_model_metadata",
-    "artifact_model_metadata", "primary_artifact_model",
+    "artifact_model_metadata", "component_model_metadata", "primary_artifact_model",
 ]

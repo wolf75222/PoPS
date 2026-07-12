@@ -108,6 +108,7 @@ class HybridModel:
             parts.append(
                 'POPS_EXPORT_BLOCK_GAMMA(%s)\n'
                 % physics_scalar_cpp(self.gamma, where="HybridModel.gamma"))
+        parts.append(self._emit_route_manifest())
         return "".join(parts)
 
     def _model_hash(self) -> Any:
@@ -138,6 +139,19 @@ class HybridModel:
                 % physics_scalar_cpp(self.gamma, where="HybridModel.gamma"))
         return out
 
+    @staticmethod
+    def _emit_route_manifest() -> str:
+        """Emit the mandatory route-registry signature without widening the
+        module-level ``pops.physics`` import graph into ``pops.codegen``.
+
+        Hybrid artifacts are loaded by the same strict native boundaries as
+        regular DSL artifacts, so every backend must carry exactly the same
+        route identity evidence.
+        """
+        from pops.codegen.compile_emit import _emit_route_manifest
+
+        return _emit_route_manifest("pops_compiled_route_manifest")
+
     def _emit_jit_source(self) -> str:
         """Source of the JIT library (backend 'prototype'): the hybrid composite behind an
         extern \"C\" factory (pops_make_model via pops::ModelAdapter). Host VIRTUAL dispatch (order-1
@@ -153,7 +167,8 @@ class HybridModel:
                 + 'extern "C" void* pops_make_model() { return new pops::ModelAdapter<pops_generated::JitModel>(); }\n'
                 + 'extern "C" void pops_destroy_model(void* p) { delete static_cast<pops::IModel<%d>*>(p); }\n'
                 % self.n_vars
-                + self._emit_metadata("pops_generated::JitModel"))
+                + self._emit_metadata("pops_generated::JitModel")
+                + self._emit_route_manifest())
 
     def _emit_native_source(self, target: str = "system") -> str:
         """C++ source of the NATIVE LOADER (backend 'production'): the hybrid composite as CompositeModel<...>
@@ -206,15 +221,20 @@ class HybridModel:
             install = ('POPS_LOADER_API void pops_install_native_amr(void* sys, const char* name,\n'
                        '                                        const char* limiter, const char* riemann,\n'
                        '                                        const char* recon, const char* time,\n'
-                       '                                        double gamma, int substeps) {\n'
+                       '                                        double gamma, int substeps, double pos_floor) {\n'
                        '  pops::AmrSystem* s = reinterpret_cast<pops::AmrSystem*>(sys);\n'
                        '  pops::add_compiled_model<pops_generated::ProdModel>(*s, name, pops_generated::ProdModel{},\n'
                        '                                                    limiter, riemann, recon, time, gamma,\n'
-                       '                                                    substeps);\n'
-                       '}\n')
+                       '                                                    substeps, /*stride=*/1,\n'
+                       '                                                    /*implicit_vars=*/{},\n'
+                       '                                                    /*implicit_roles=*/{}, pos_floor);\n'
+                       '}\n'
+                       'extern "C" int pops_compiled_nparams() { return 0; }\n'
+                       'extern "C" const char* pops_compiled_param_names() { return ""; }\n')
         return (head + bricks
                 + '\nnamespace pops_generated { using ProdModel = %s; }\n' % composite
-                + key + install + self._emit_metadata("pops_generated::ProdModel"))
+                + key + install + self._emit_metadata("pops_generated::ProdModel")
+                + self._emit_route_manifest())
 
     def compile(self, backend: str = "aot", so_path: Any = None, include: Any = None, name: Any = None,
                 cxx: Any = None, std: Any = None, target: str = "system") -> Any:
@@ -308,7 +328,11 @@ class HybridModel:
             abi=abi_key,
             toolchain="%s|%s" % (eff_cxx, std),
             routes={"registry": _registry_cache_key(), "features": feature_key},
-            components={"model_hash": str(model_hash), "emitted_name": str(name or "")},
+            components={
+                "model_hash": str(model_hash),
+                "emitted_name": str(name or ""),
+                "emitter_contract": "hybrid-strict-route-manifest-v1",
+            },
             flags=(
                 [_platform_cache_key(), *_dsl_optflags()]
                 if kokkos_like else ["-O2"]

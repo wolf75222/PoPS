@@ -123,7 +123,7 @@ def test_subclass_slot_cannot_hide_an_authoring_builder():
     hidden.hidden = source
     source.compile = lambda **kwargs: hidden
 
-    with pytest.raises(TypeError, match="hidden.*unsupported live object"):
+    with pytest.raises(TypeError, match="exact CompiledModel"):
         _compile(source)
 
 

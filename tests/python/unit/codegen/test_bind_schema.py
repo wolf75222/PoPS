@@ -11,7 +11,7 @@ import pytest
 pytest.importorskip("pops")
 
 from pops import model
-from pops.codegen.loader import CompiledProblem
+from _typed_artifact_fixture import artifact_fixture
 from pops.identity import make_identity
 from pops.math import Bool, Integer, Real
 from pops.params import (
@@ -354,14 +354,8 @@ def test_derived_foreign_cycle_phase_and_invalidation_fail_loudly():
 
 def test_compiled_arguments_and_manifest_are_derived_from_attached_schema():
     schema, _, _, _, _ = _two_instance_schema(default=1.5)
-    compiled = CompiledProblem(
-        "/tmp/pops-bind-schema/problem.so",
-        None,
-        None,
-        "HEADERS|c++|c++23",
-        "c++",
-        "c++23",
-        bind_schema=schema,
+    compiled = artifact_fixture(
+        target="amr_system", block_names=("left", "right"), bind_schema=schema,
     )
 
     arguments = compiled.arguments()

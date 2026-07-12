@@ -243,15 +243,15 @@ def adder_for(backend: Any) -> str:
 # ---------------------------------------------------------------------------
 
 def _emit_route_manifest(symbol_name: Any) -> str:
-    """OPTIONAL symbol embedding the native route registry SIGNATURE into the artifact (ADC-599).
+    """Emit the mandatory native route-registry signature (ADC-599).
 
     Returns the C++ source of ``extern "C" const char* <symbol_name>()`` returning
     ``route_registry_signature()`` evaluated at EMIT time (the compact "family:count,..." form,
-    MIRROR of pops::route_registry_signature()). The C++ loader dlsyms this OPTIONAL symbol and
-    calls pops::verify_route_manifest(value, ctx): a stale .so built against a different route set
-    is refused at load time with the mismatching family named, before any run. Missing symbol =
-    old artifact -> accepted (append-only compat). Imported here (routes.py is import-free) so the
-    signature is baked into the string, exactly like pops_native_abi_key bakes POPS_ABI_KEY_LITERAL.
+    MIRROR of pops::route_registry_signature()). The C++ loader requires this symbol and calls
+    pops::verify_route_manifest(value, ctx): a stale .so built against a different route set, or an
+    artifact predating this contract, is refused before any run. Imported here (routes.py is
+    import-free) so the signature is baked into the string, exactly like pops_native_abi_key bakes
+    POPS_ABI_KEY_LITERAL.
     """
     from pops.runtime.routes import route_registry_signature
     return ('extern "C" const char* %s() { return "%s"; }\n'

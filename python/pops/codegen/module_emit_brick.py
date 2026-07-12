@@ -172,13 +172,12 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
 
     cnames = ", ".join('"%s"' % c for c in model.cons_names)
     pnames = ", ".join('"%s"' % p for p in model.prim_state)
-    # Physical roles parallel to the names : C++ initializer of pops::VariableSet::roles. Emitted IF at
-    # least one component has a recognized role (otherwise empty roles -> brick identical to history,
-    # couplings fall back on the fallback indices). The roles let System
-    # resolve inter-species couplings by index_of(role) instead of a literal index.
+    # Physical roles parallel to the names: the current compiled-artifact ABI requires one explicit
+    # role descriptor per component. ``Custom`` is a real, intentional descriptor for a component
+    # without a canonical physical role; an empty roles vector would be ambiguous legacy metadata.
+    # Keeping the vectors total also makes metadata validation independent of particular model
+    # families (moments, passive scalars, user-defined systems, ...).
     def roles_init(roles: Any) -> Any:
-        if all(r == "Custom" for r in roles):
-            return None  # no useful role : we do not emit the 4th field (strict back-compat)
         return ", ".join("pops::VariableRole::%s" % r for r in roles)
 
     croles = roles_init(_roles_for(model.cons_names, model.cons_roles))

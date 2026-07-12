@@ -7,8 +7,9 @@ resolvent ainsi une composante par index_of(role) au lieu d'un indice litteral.
 Ce test verifie :
 (1) FORME (sans compilateur) : Euler (noms standards) emet les roles CANONIQUES (Density, MomentumX,
     MomentumY, Energy / Pressure) ; un layout NON STANDARD (qte de mvt avant densite) avec roles=
-    explicites emet ces roles dans l'ordre demande ; un modele aux noms inconnus n'emet PAS de roles
-    (retro-compat stricte : le 4e champ VariableSet::roles reste absent, fallback indices historiques).
+    explicites emet ces roles dans l'ordre demande. Les noms sans role canonique exportent
+    explicitement ``Custom`` : le contrat ABI courant exige
+    un descripteur total et n'autorise plus l'absence ambigue de roles.
 (2) RESOLUTION (si compilateur + en-tetes pops) : la brique au layout non standard compile, satisfait
     pops::HyperbolicModel, et index_of(MomentumX/MomentumY/Density/Energy) retrouve la BONNE composante
     QUELLE QUE SOIT sa position -- c'est exactement ce dont depend la resolution par role des couplages.
@@ -21,13 +22,11 @@ import tempfile
 
 from pops.ir.ops import sqrt
 from pops.physics.model import HyperbolicModel
+from tests.python.support.models import build_euler_brick
+from tests.python.support.requirements import repo_include
 
 GAMMA = 1.4
-from tests.python.support.requirements import repo_include
 INCLUDE = repo_include()
-
-
-from tests.python.support.models import build_euler_brick
 
 
 def build_shuffled_brick():
@@ -58,7 +57,7 @@ def build_shuffled_brick():
 
 
 def build_scalar_brick():
-    """Modele a NOM inconnu (q) : aucun role canonique -> brique sans roles (retro-compat stricte)."""
+    """Modele a NOM inconnu (q) : aucun role canonique -> role Custom explicite."""
     e = HyperbolicModel("scal")
     (q,) = e.conservative_vars("q")
     e.set_flux(x=[q], y=[q])
@@ -112,12 +111,15 @@ def main():
         "roles du layout non standard incorrects"
     print("OK  layout non standard : roles explicites emis dans l'ordre du layout")
 
-    # retro-compat stricte : noms inconnus -> AUCUN champ roles (init 3 champs comme avant)
+    # Contrat strict : un nom inconnu conserve son identite avec un role Custom explicite.
     scal = build_scalar_brick().emit_cpp_brick(name="ScalGen")
-    assert ('conservative_vars() { return {pops::VariableKind::Conservative, {"q"}, 1}; }') in scal, \
-        "modele a roles Custom devrait emettre l'init historique 3 champs (retro-compat)"
-    assert "VariableRole" not in scal, "modele a roles Custom ne doit emettre aucun role"
-    print("OK  noms inconnus : aucun role emis (retro-compat bit-exacte, fallback indices)")
+    assert ('conservative_vars() { return {pops::VariableKind::Conservative, {"q"}, 1, '
+            '{pops::VariableRole::Custom}}; }') in scal, \
+        "modele a nom inconnu doit emettre un role Custom explicite"
+    assert ('primitive_vars() { return {pops::VariableKind::Primitive, {"q"}, 1, '
+            '{pops::VariableRole::Custom}}; }') in scal, \
+        "etat primitif identite doit emettre un role Custom explicite"
+    print("OK  noms inconnus : role Custom explicite (metadata ABI totale)")
 
     # (2) RESOLUTION par role a travers le C++ (si compilateur dispo) --------------------------
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")

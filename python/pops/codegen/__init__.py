@@ -13,7 +13,7 @@ from .toolchain import (  # noqa: F401
 )
 from .cache import pops_cache_dir  # noqa: F401
 from .abi import check_compiled_matches_module  # noqa: F401
-# ADC-545: the brick-library manifest API is an advanced/codegen concern (mirrors compile_problem);
+# ADC-545: the brick-library manifest API is an advanced/codegen concern;
 # it left the pops root, so pops.codegen is its one reachable home. library imports only stdlib +
 # pops.descriptors, so this adds no _pops / numpy weight and no cross-layer edge.
 from .library import LibraryManifest, compile_library, read_library_manifest  # noqa: F401

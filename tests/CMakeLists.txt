@@ -128,7 +128,7 @@ function(pops_add_gtest_suite)
 
   if(NOT ARG_NO_DISCOVER)
     gtest_discover_tests(${ARG_NAME}
-      DISCOVERY_MODE PRE_TEST
+      DISCOVERY_MODE POST_BUILD
       DISCOVERY_TIMEOUT 60
       XML_OUTPUT_DIR "${_pops_gtest_xml_dir}/${ARG_NAME}"
       PROPERTIES ${_pops_test_properties})

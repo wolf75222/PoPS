@@ -17,7 +17,6 @@ import shutil
 import subprocess
 import tempfile
 
-import pops
 from pops.ir.ops import sqrt
 from pops.physics.model import HyperbolicModel
 
@@ -176,29 +175,27 @@ def main():
             else:
                 raise AssertionError("%s : names= de mauvaise longueur aurait du lever" % mode)
 
-        # (2a) RETRO-COMPAT : .so AOT ANCIEN (sans metadonnees) -> fallback -----------------------
+        # (2a) FINAL ABI: an old AOT .so without strict metadata is rejected ----------------------
         old_aot = legacy_aot_so(os.path.join(tmp, "legacy_aot.so"))
         so = System(n=n, L=L, periodic=True)
-        so.add_compiled_block("scal", old_aot, limiter="none", riemann="rusanov")
-        assert so.variable_names("scal") == ["u0"], \
-            "AOT legacy : fallback noms attendu, recu %r" % so.variable_names("scal")
-        assert so.variable_roles("scal") == ["custom"], \
-            "AOT legacy : fallback roles attendu, recu %r" % so.variable_roles("scal")
-        assert abs(so.block_gamma("scal") - 1.4) < 1e-12, \
-            "AOT legacy : fallback gamma 1.4 attendu, recu %r" % so.block_gamma("scal")
-        print("OK  AOT legacy (sans symboles de metadonnees) : charge + fallback u0../custom/1.4")
+        try:
+            so.add_compiled_block("scal", old_aot, limiter="none", riemann="rusanov")
+        except RuntimeError as exc:
+            assert "strict pops_compiled_route_manifest is missing" in str(exc)
+        else:
+            raise AssertionError("AOT legacy aurait du etre refuse")
+        print("OK  AOT legacy refuse : rebuild artifact exige")
 
-        # (2b) RETRO-COMPAT : .so JIT ANCIEN (sans metadonnees) -> fallback -----------------------
+        # (2b) FINAL ABI: an old JIT .so without strict metadata is rejected ----------------------
         old_jit = legacy_jit_so(os.path.join(tmp, "legacy_jit.so"))
         sjo = System(n=n, L=L, periodic=True)
-        sjo.add_dynamic_block("scal", old_jit, recon="none")
-        assert sjo.variable_names("scal") == ["u0"], \
-            "JIT legacy : fallback noms attendu, recu %r" % sjo.variable_names("scal")
-        assert sjo.variable_roles("scal") == ["custom"], \
-            "JIT legacy : fallback roles attendu, recu %r" % sjo.variable_roles("scal")
-        assert abs(sjo.block_gamma("scal") - 1.4) < 1e-12, \
-            "JIT legacy : fallback gamma 1.4 attendu, recu %r" % sjo.block_gamma("scal")
-        print("OK  JIT legacy (sans symboles de metadonnees) : charge + fallback u0../custom/1.4")
+        try:
+            sjo.add_dynamic_block("scal", old_jit, recon="none")
+        except RuntimeError as exc:
+            assert "strict pops_compiled_route_manifest is missing" in str(exc)
+        else:
+            raise AssertionError("JIT legacy aurait du etre refuse")
+        print("OK  JIT legacy refuse : rebuild artifact exige")
 
         print("test_dsl_abi_metadata : tout est vert")
     finally:

@@ -87,7 +87,7 @@ def typed_program_states(
     return program, module, case, endpoints
 
 
-def attach_typed_install_plan(
+def typed_compiled_artifact(
     compiled: Any,
     models: Any,
     *,
@@ -95,14 +95,20 @@ def attach_typed_install_plan(
     layout: Any = None,
     has_program: bool = True,
 ):
-    """Attach a minimal immutable InstallPlan to an inert compiled-artifact fixture.
+    """Wrap inert compiled components in the exact compile-phase artifact.
 
     This is for metadata tests that intentionally do not invoke a native compiler.  Block names are
     derived from the Program's authenticated committed state handles, never supplied as a parallel
     free-name table.  ``models`` is either one real ``CompiledModel`` shared by all blocks or an
-    exact block-name mapping of ``CompiledModel`` values.
+    exact block-name mapping of ``CompiledModel`` values.  The helper returns a
+    ``CompiledSimulationArtifact``; it never mutates a component with bind/install phase state.
     """
-    from pops.codegen._plans import InstallBlock, InstallPlan
+    from pops.codegen._plans import ResolvedBlock, ResolvedSimulationPlan
+    from pops.codegen._compiled_model_identity import model_compile_identity
+    from pops.codegen.compiled_artifact import (
+        CompiledBlockArtifact,
+        CompiledSimulationArtifact,
+    )
     from pops.codegen.loader import CompiledModel
     from pops.model.bind_schema import BindSchema
     from pops.problem._snapshot import AuthoringSnapshot
@@ -112,12 +118,12 @@ def attach_typed_install_plan(
     commits = program.commits() if program is not None else {}
     names = tuple(dict.fromkeys(block_name(ref.block_ref) for ref in commits))
     if not names:
-        raise ValueError("typed InstallPlan fixture requires at least one committed Program state")
+        raise ValueError("typed artifact fixture requires at least one committed Program state")
     by_name = dict(models) if isinstance(models, Mapping) else {name: models for name in names}
     if set(by_name) != set(names):
-        raise ValueError("typed InstallPlan models must match the Program's committed blocks")
+        raise ValueError("typed artifact models must match the Program's committed blocks")
     if any(not isinstance(model, CompiledModel) for model in by_name.values()):
-        raise TypeError("typed InstallPlan fixtures require exact CompiledModel values")
+        raise TypeError("typed artifact fixtures require exact CompiledModel values")
 
     # Recreate the compiler-side parameter schema before sealing the inert artifact.  The Program's
     # canonical block handles provide the exact case/model owner names, while CompiledModel.params
@@ -127,6 +133,7 @@ def attach_typed_install_plan(
     block_refs = {block_name(ref.block_ref): ref.block_ref for ref in state_refs}
     case_owner = next(iter(block_refs.values())).owner_path.nodes[0].name
     schema_problem = Problem(name=case_owner)
+    schema_modules = {}
     for name in names:
         model = by_name[name]
         model_owner = block_refs[name].model_owner_path.nodes[-1].name
@@ -134,6 +141,7 @@ def attach_typed_install_plan(
         for declaration in model.params.values():
             schema_module.param(declaration)
         schema_problem.add_block(name, schema_module)
+        schema_modules[name] = schema_module
     schema = BindSchema.from_problem(schema_problem)
 
     snapshot = AuthoringSnapshot({
@@ -142,27 +150,43 @@ def attach_typed_install_plan(
         "target": target,
         "blocks": names,
     })
-    compiled.install_plan = InstallPlan(
-        snapshot_hash=snapshot.hash,
+    backend = next(iter(by_name.values())).backend
+    layout_value = layout if layout is not None else {"kind": target}
+    plan = ResolvedSimulationPlan(
+        snapshot=snapshot,
         target=target,
-        layout=layout,
-        blocks=tuple(InstallBlock(name, by_name[name], None) for name in names),
+        backend=backend,
+        layout=layout_value,
+        time=program if has_program else None,
+        blocks=tuple(
+            ResolvedBlock(name, schema_modules[name], None, backend)
+            for name in names
+        ),
         bind_schema=schema,
+        compile_values=schema.resolve_compile(),
         field_solvers={},
         outputs=(),
         diagnostics=(),
-        has_program=has_program,
+        libraries=(),
+        requirements={},
+        capabilities={"cpu": True, "amr": target == "amr_system"},
     )
     compiled.bind_schema = schema
-    compiled._problem_snapshot = snapshot
-    for model in dict.fromkeys(by_name.values()):
+    for name, model in by_name.items():
         model.bind_schema = schema
-        model._seal()
-    compiled._seal()
-    return compiled
+        if getattr(model, "definition_identity", None) is None:
+            model.definition_identity = model_compile_identity(schema_modules[name])
+    return CompiledSimulationArtifact(
+        plan=plan,
+        program=compiled if has_program else None,
+        blocks=tuple(
+            CompiledBlockArtifact(name, by_name[name], None)
+            for name in names
+        ),
+    )
 
 
 __all__ = [
     "add_typed_block", "module_of", "state_handle", "typed_program_state",
-    "typed_program_states", "attach_typed_install_plan",
+    "typed_program_states", "typed_compiled_artifact",
 ]

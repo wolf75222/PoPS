@@ -4,11 +4,134 @@ from __future__ import annotations
 import hashlib
 import os
 from dataclasses import dataclass, field
+from collections.abc import Mapping
 from typing import Any
 
 from pops.identity import Identity, make_identity
 
 from ._plans import ResolvedSimulationPlan, _deep_freeze, _evidence
+
+
+@dataclass(frozen=True, slots=True)
+class CompiledPlanBlock:
+    """Compiler facts retained for one block after authoring objects are discarded."""
+
+    name: str
+    backend: str
+    spatial: Any
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not self.name:
+            raise TypeError("CompiledPlanBlock name must be a non-empty string")
+        if not isinstance(self.backend, str) or not self.backend:
+            raise TypeError("CompiledPlanBlock backend must be a non-empty string")
+        object.__setattr__(self, "spatial", _deep_freeze(self.spatial))
+        _evidence(self.spatial, where="CompiledPlanBlock.spatial")
+
+
+@dataclass(frozen=True, slots=True)
+class CompiledPlanRecord:
+    """Detached data required by bind/install; never retains Model or Program builders."""
+
+    plan_identity: Identity
+    snapshot: Any
+    target: str
+    backend: str
+    layout: Any
+    bind_schema: Any
+    compile_values: Mapping[Any, Any]
+    field_solvers: Mapping[str, Any]
+    outputs: tuple[Any, ...]
+    diagnostics: tuple[Any, ...]
+    requirements: Mapping[str, Any]
+    capabilities: Mapping[str, Any]
+    blocks: tuple[CompiledPlanBlock, ...]
+    time_identity: Any
+    contract_identity: Identity = field(init=False)
+
+    @classmethod
+    def from_resolved(cls, plan: ResolvedSimulationPlan) -> CompiledPlanRecord:
+        if type(plan) is not ResolvedSimulationPlan:
+            raise TypeError("CompiledPlanRecord requires an exact ResolvedSimulationPlan")
+        plan.verify()
+        return cls(
+            plan_identity=Identity.from_data(plan.plan_identity.to_data()),
+            snapshot=plan.snapshot,
+            target=plan.target,
+            backend=plan.backend,
+            layout=plan.layout,
+            bind_schema=plan.bind_schema,
+            compile_values=plan.compile_values,
+            field_solvers=plan.field_solvers,
+            outputs=plan.outputs,
+            diagnostics=plan.diagnostics,
+            requirements=plan.requirements,
+            capabilities=plan.capabilities,
+            blocks=tuple(
+                CompiledPlanBlock(block.name, block.backend, block.spatial)
+                for block in plan.blocks
+            ),
+            time_identity=(
+                _evidence(plan.time, where="resolved time")
+                if plan.time is not None else None
+            ),
+        )
+
+    def __post_init__(self) -> None:
+        if type(self.plan_identity) is not Identity \
+                or self.plan_identity.domain != "resolved-plan":
+            raise TypeError("CompiledPlanRecord requires a resolved-plan Identity")
+        if self.target not in ("system", "amr_system"):
+            raise ValueError("CompiledPlanRecord has an unsupported target")
+        object.__setattr__(self, "layout", _deep_freeze(self.layout))
+        object.__setattr__(self, "compile_values", _deep_freeze(self.compile_values))
+        object.__setattr__(self, "field_solvers", _deep_freeze(self.field_solvers))
+        object.__setattr__(self, "outputs", tuple(_deep_freeze(v) for v in self.outputs))
+        object.__setattr__(self, "diagnostics", tuple(
+            _deep_freeze(v) for v in self.diagnostics))
+        object.__setattr__(self, "requirements", _deep_freeze(self.requirements))
+        object.__setattr__(self, "capabilities", _deep_freeze(self.capabilities))
+        blocks = tuple(self.blocks)
+        if not blocks or any(type(block) is not CompiledPlanBlock for block in blocks):
+            raise TypeError("CompiledPlanRecord blocks must be exact CompiledPlanBlock values")
+        object.__setattr__(self, "blocks", blocks)
+        object.__setattr__(
+            self, "contract_identity", make_identity("compiled-plan", self._payload()))
+
+    def _payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "resolved_plan_identity": self.plan_identity.to_data(),
+            "target": self.target,
+            "backend": self.backend,
+            "layout": _evidence(self.layout, where="compiled plan layout"),
+            "bind_schema": _evidence(self.bind_schema, where="compiled plan bind schema"),
+            "compile_values": _evidence(
+                self.compile_values, where="compiled plan compile values"),
+            "field_solvers": _evidence(
+                self.field_solvers, where="compiled plan field solvers"),
+            "outputs": _evidence(self.outputs, where="compiled plan outputs"),
+            "diagnostics": _evidence(
+                self.diagnostics, where="compiled plan diagnostics"),
+            "requirements": _evidence(
+                self.requirements, where="compiled plan requirements"),
+            "capabilities": _evidence(
+                self.capabilities, where="compiled plan capabilities"),
+            "blocks": [
+                {
+                    "name": block.name,
+                    "backend": block.backend,
+                    "spatial": _evidence(
+                        block.spatial, where="compiled plan block spatial"),
+                }
+                for block in self.blocks
+            ],
+            "time_identity": self.time_identity,
+        }
+
+    def verify(self) -> None:
+        if self.contract_identity != make_identity("compiled-plan", self._payload()):
+            raise ValueError("CompiledPlanRecord identity verification failed")
 
 
 def _binary_evidence(value: Any, *, where: str) -> dict[str, Any]:
@@ -64,16 +187,19 @@ class CompiledSimulationArtifact:
     every binary component.
     """
 
-    plan: ResolvedSimulationPlan
+    plan: Any
     program: Any | None
     blocks: tuple[CompiledBlockArtifact, ...]
     artifact_identity: Identity = field(init=False)
     _component_evidence: Any = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        if type(self.plan) is not ResolvedSimulationPlan:
+        if type(self.plan) is ResolvedSimulationPlan:
+            object.__setattr__(self, "plan", CompiledPlanRecord.from_resolved(self.plan))
+        if type(self.plan) is not CompiledPlanRecord:
             raise TypeError(
-                "CompiledSimulationArtifact.plan must be an exact ResolvedSimulationPlan")
+                "CompiledSimulationArtifact.plan must originate from an exact "
+                "ResolvedSimulationPlan")
         self.plan.verify()
         blocks = tuple(self.blocks)
         if not blocks or any(type(block) is not CompiledBlockArtifact for block in blocks):
@@ -150,10 +276,47 @@ class CompiledSimulationArtifact:
         return self._delegate.std
 
     @property
+    def backend(self) -> str:
+        return self.plan.backend
+
+    @property
+    def program_name(self) -> Any:
+        return getattr(self.program, "program_name", None)
+
+    @property
+    def program_hash(self) -> Any:
+        return getattr(self.program, "program_hash", None)
+
+    @property
+    def cache_key(self) -> Any:
+        return getattr(self._delegate, "cache_key", None)
+
+    @property
+    def codegen_env(self) -> Any:
+        return getattr(self._delegate, "codegen_env", None)
+
+    @property
+    def module_manifest(self) -> Any:
+        return getattr(self._delegate, "module_manifest", None)
+
+    @property
+    def lowering_coverage(self) -> Any:
+        return getattr(self._delegate, "lowering_coverage", None)
+
+    @property
     def program_param_routes(self) -> Any:
         if self.program is None:
             return None
         return getattr(self.program, "program_param_routes", None)
+
+    @property
+    def program_block_routes(self) -> tuple[tuple[int, str], ...]:
+        if self.program is None:
+            return ()
+        routes = getattr(self.program, "program_block_routes", None)
+        if routes is None:
+            raise ValueError("compiled program lacks immutable block-route metadata")
+        return tuple(routes)
 
     @property
     def _delegate(self) -> Any:
@@ -193,19 +356,48 @@ class CompiledSimulationArtifact:
             raise ValueError("CompiledSimulationArtifact identity verification failed")
 
     def inspect(self) -> Any:
-        return self._delegate.inspect()
+        from pops.codegen.inspect_report import build_compiled_report
+
+        return build_compiled_report(self)
 
     def requirements(self) -> Any:
-        return self._delegate.requirements()
+        from pops.codegen.inspect_report import build_requirements
+
+        return build_requirements(self)
 
     def manifest(self) -> Any:
-        return self._delegate.manifest()
+        from pops.external.artifact_manifest import build_compiled_manifest
+
+        return build_compiled_manifest(self)
 
     def arguments(self) -> Any:
-        return self._delegate.arguments()
+        from pops.codegen.inspect_compiled import build_arguments
+
+        return build_arguments(self)
 
     def capability_matrix(self) -> Any:
-        return self._delegate.capability_matrix()
+        return self.manifest().capability_matrix()
+
+    def estimate_memory(self, mesh: Any, *, platform: Any = None, layout: Any = None) -> Any:
+        from pops.codegen.inspect_compiled import build_memory_estimate
+
+        return build_memory_estimate(
+            self, mesh, platform=platform, layout=layout or self.layout)
+
+    def inspect_amr(self, layout: Any = None) -> Any:
+        from pops import inspect_amr
+
+        return inspect_amr(layout or self.layout)
+
+    def scratch_plan(self) -> Any:
+        if self.program is None:
+            raise ValueError("compiled artifact has no whole-system Program to analyze")
+        from pops.codegen.scratch_plan import build_scratch_plan
+
+        return build_scratch_plan(self.program.program)
 
 
-__all__ = ["CompiledBlockArtifact", "CompiledSimulationArtifact"]
+__all__ = [
+    "CompiledBlockArtifact", "CompiledPlanBlock", "CompiledPlanRecord",
+    "CompiledSimulationArtifact",
+]

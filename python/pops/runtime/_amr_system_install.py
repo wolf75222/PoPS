@@ -11,6 +11,7 @@ the other AmrSystem methods (``add_equation`` / ``set_density`` / ``set_poisson`
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from pops.runtime._system_unified_install import validate_install_arguments
@@ -117,8 +118,8 @@ class _AmrSystemInstall(_AmrSystem):
 
         resolved_models = {}
         for name, spec in instances.items():
-            if not isinstance(spec, dict):
-                raise TypeError("pops.bind: instances[%r] must be a dict "
+            if not isinstance(spec, Mapping):
+                raise TypeError("pops.bind: instances[%r] must be a mapping "
                                 "(initial/spatial/time/model); got %r"
                                 % (name, type(spec).__name__))
             model = spec.get("model")
@@ -219,8 +220,8 @@ class _AmrSystemInstall(_AmrSystem):
 
         names = set()
         for block_name, spec in (instances or {}).items():
-            if not isinstance(spec, dict):
-                raise TypeError("pops.bind: instances[%r] must be a dict" % block_name)
+            if not isinstance(spec, Mapping):
+                raise TypeError("pops.bind: instances[%r] must be a mapping" % block_name)
             model = spec.get("model")
             if not isinstance(model, CompiledModel):
                 raise TypeError(

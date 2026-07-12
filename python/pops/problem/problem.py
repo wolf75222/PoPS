@@ -2,8 +2,8 @@
 
 Problem owns exactly one registry per declaration family and aggregates their inspectable
 validation reports.  It computes nothing and imports neither the native extension nor runtime or
-codegen.  ``pops.compile(problem, layout=..., time=...)`` is the lowering boundary; one assembly can
-therefore be compiled against different compatible layout descriptors.
+codegen. ``pops.resolve(pops.validate(problem), layout=...)`` is the semantic lowering boundary;
+one assembly can therefore be resolved against different compatible layout descriptors.
 """
 from __future__ import annotations
 
@@ -30,7 +30,9 @@ class Problem:
                    .block("ne", physics=model, spatial=pops.FiniteVolume())
                    .field(pops.fields.PoissonProblem(unknown="phi", equation=eq, solver=mg))
                    .time(pops.time.Program(...)))
-        compiled = pops.compile(problem, layout=Uniform(CartesianMesh()))
+        validated = pops.validate(problem)
+        resolved = pops.resolve(validated, layout=Uniform(CartesianMesh()))
+        compiled = pops.compile(resolved)
 
     Each assembly setter RETURNS the Problem so calls chain. A Problem CONTAINS descriptors (the
     blocks' physics, the field problems) but is NOT itself a :class:`pops.descriptors.Descriptor`
