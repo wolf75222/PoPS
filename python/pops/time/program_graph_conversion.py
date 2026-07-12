@@ -69,6 +69,8 @@ def program_to_graph(program: Any) -> Any:
         OperatorCall,
         ProgramGraph,
         ProgramValue as GraphValue,
+        ResidualEvaluation,
+        ResidualSolve,
         Region,
         RegionCapture,
         Solve,
@@ -219,6 +221,28 @@ def program_to_graph(program: Any) -> Any:
                 value.attrs["relation"],
                 value.point,
                 name=_name(value),
+            )
+        elif value.op == "residual_eval":
+            node = ResidualEvaluation(
+                value.id,
+                value.attrs["operator"],
+                inputs,
+                value.clock,
+                value.point,
+                name=_name(value),
+                attrs=attrs,
+            )
+        elif value.op == "solve_residual":
+            if len(inputs) < 2:
+                raise ValueError("solve_residual graph conversion expects residual and initial")
+            node = ResidualSolve(
+                value.id,
+                inputs[0],
+                inputs[1:],
+                value.clock,
+                value.point,
+                name=_name(value),
+                attrs=attrs,
             )
         elif "operator_handle" in value.attrs:
             node = OperatorCall(

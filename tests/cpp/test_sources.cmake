@@ -168,6 +168,7 @@ set(POPS_CPP_TEST_SOURCE_test_primitive_recon "tests/cpp/unit/numerics/test_prim
 set(POPS_CPP_TEST_SOURCE_test_profiler "tests/cpp/integration/runtime/test_profiler.cpp")
 set(POPS_CPP_TEST_SOURCE_test_program_abi_symbols "tests/cpp/integration/native_loader/test_program_abi_symbols.cpp")
 set(POPS_CPP_TEST_SOURCE_test_program_context_contract "tests/cpp/unit/runtime/test_program_context_contract.cpp")
+set(POPS_CPP_TEST_SOURCE_test_residual_operator "tests/cpp/unit/runtime/test_residual_operator.cpp")
 set(POPS_CPP_TEST_SOURCE_test_program_context_schur_free "tests/cpp/unit/runtime/test_program_context_schur_free.cpp")
 set(POPS_CPP_TEST_SOURCE_test_program_loader "tests/cpp/integration/native_loader/test_program_loader.cpp")
 set(POPS_CPP_TEST_SOURCE_test_program_runtime "tests/cpp/integration/runtime/test_program_runtime.cpp")

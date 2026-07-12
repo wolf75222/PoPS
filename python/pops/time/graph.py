@@ -1,9 +1,4 @@
-"""Immutable SSA-style ProgramGraph records.
-
-These values are the compiler boundary, not authoring builders.  Semantic references are captured
-as canonical data, graph edges are integer ``ValueRef`` values, and no node retains a Program,
-registry, temporal handle, callback, or commit endpoint object.
-"""
+"""Immutable, canonical SSA ProgramGraph records detached from authoring objects."""
 from __future__ import annotations
 
 import hashlib
@@ -247,6 +242,83 @@ class OperatorCall(_Node):
 
 
 @dataclass(frozen=True, slots=True, init=False)
+class ResidualEvaluation(_Node):
+    """One pure evaluation of a residual operator on an ordered unknown product."""
+    kind: ClassVar[str] = "residual_evaluation"
+    node_id: int
+    operator: CanonicalData
+    unknowns: tuple[ValueRef, ...]
+    clock: Clock
+    point: TimePoint | StagePoint
+    name: str
+    attrs: CanonicalData
+
+    def __init__(self, node_id: int, operator: Any, unknowns: Any, clock: Clock,
+                 point: TimePoint | StagePoint, *, name: str = "residual",
+                 attrs: Any = None) -> None:
+        refs = _refs(unknowns, where="ResidualEvaluation unknowns")
+        if not refs:
+            raise ValueError("ResidualEvaluation requires a non-empty unknown product")
+        object.__setattr__(self, "node_id", _node_id(node_id))
+        object.__setattr__(
+            self, "operator", CanonicalData(operator, where="ResidualEvaluation.operator"))
+        object.__setattr__(self, "unknowns", refs)
+        object.__setattr__(self, "clock", clock)
+        object.__setattr__(self, "point", _point(point))
+        object.__setattr__(self, "name", _nonempty(name, where="ResidualEvaluation name"))
+        object.__setattr__(self, "attrs", CanonicalData(
+            {} if attrs is None else attrs, where="ResidualEvaluation.attrs"))
+
+    def references(self) -> tuple[ValueRef, ...]:
+        return self.unknowns
+
+    def to_data(self) -> dict[str, Any]:
+        return _node_data(
+            self, operator=self.operator.to_data(),
+            unknowns=[value.to_data() for value in self.unknowns],
+            name=self.name, attrs=self.attrs.to_data())
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class ResidualSolve(_Node):
+    """A solve whose residual and initial unknown product are explicit graph references."""
+    kind: ClassVar[str] = "residual_solve"
+    node_id: int
+    residual: ValueRef
+    initial: tuple[ValueRef, ...]
+    clock: Clock
+    point: TimePoint | StagePoint
+    name: str
+    attrs: CanonicalData
+
+    def __init__(self, node_id: int, residual: ValueRef, initial: Any, clock: Clock,
+                 point: TimePoint | StagePoint, *, name: str = "solve_residual",
+                 attrs: Any = None) -> None:
+        if type(residual) is not ValueRef:
+            raise TypeError("ResidualSolve residual must be an exact ValueRef")
+        initial_refs = _refs(initial, where="ResidualSolve initial")
+        if not initial_refs:
+            raise ValueError("ResidualSolve requires a non-empty initial unknown product")
+        object.__setattr__(self, "node_id", _node_id(node_id))
+        object.__setattr__(self, "residual", residual)
+        object.__setattr__(self, "initial", initial_refs)
+        object.__setattr__(self, "clock", clock)
+        object.__setattr__(self, "point", _point(point))
+        object.__setattr__(self, "name", _nonempty(name, where="ResidualSolve name"))
+        object.__setattr__(self, "attrs", CanonicalData(
+            {} if attrs is None else attrs, where="ResidualSolve.attrs"))
+
+    def references(self) -> tuple[ValueRef, ...]:
+        return (self.residual, *self.initial)
+
+    def to_data(self) -> dict[str, Any]:
+        return _node_data(
+            self, residual=self.residual.to_data(),
+            initial=[value.to_data() for value in self.initial],
+            name=self.name, attrs=self.attrs.to_data())
+
+
+@dataclass(frozen=True, slots=True, init=False)
 class Solve(_Node):
     kind: ClassVar[str] = "solve"
     node_id: int
@@ -355,7 +427,8 @@ class Commit(_Node):
 
 
 _NODE_TYPES = (
-    StateRead, ProgramValue, Unknown, OperatorCall, Solve, Branch, Loop, Synchronize, Commit,
+    StateRead, ProgramValue, Unknown, OperatorCall, ResidualEvaluation, ResidualSolve,
+    Solve, Branch, Loop, Synchronize, Commit,
 )
 
 
@@ -421,5 +494,6 @@ class ProgramGraph:
 
 __all__ = [
     "Branch", "CanonicalData", "Commit", "Loop", "OperatorCall", "ProgramGraph", "Region",
-    "RegionCapture", "ProgramValue", "Solve", "StateRead", "Synchronize", "Unknown", "ValueRef",
+    "RegionCapture", "ProgramValue", "ResidualEvaluation", "ResidualSolve", "Solve",
+    "StateRead", "Synchronize", "Unknown", "ValueRef",
 ]

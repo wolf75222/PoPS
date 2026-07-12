@@ -1,7 +1,7 @@
 """Recursive validation for immutable ProgramGraph nodes and structured regions."""
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from pops.time.points import Clock
@@ -34,8 +34,24 @@ def _validate_region_boundary(
                 % (where, capture.value.node_id))
 
 
+def _residual_operator_unknowns(node: Any) -> tuple[str, ...]:
+    data = node.operator.to_data()
+    if data.get("kind") != "residual_operator":
+        raise ValueError("ResidualEvaluation operator must be a residual_operator descriptor")
+    unknown_space = data.get("unknown_space")
+    if not isinstance(unknown_space, Mapping):
+        raise ValueError("ResidualEvaluation operator must declare an unknown_space")
+    components = unknown_space.get("components")
+    if not isinstance(components, Sequence) or isinstance(components, (str, bytes)) \
+            or not components:
+        raise ValueError("ResidualEvaluation operator unknown_space must be a non-empty tuple")
+    return tuple(components)
+
+
 def validate_nodes(nodes: Any, clocks: Any, available: dict[int, Any], *, where: str) -> None:
-    from pops.time.graph import Branch, Loop, Synchronize, _point_clocks
+    from pops.time.graph import (
+        Branch, Loop, ResidualEvaluation, ResidualSolve, Synchronize, _point_clocks,
+    )
 
     declared = set(clocks)
     for node in nodes:
@@ -80,6 +96,23 @@ def validate_nodes(nodes: Any, clocks: Any, available: dict[int, Any], *, where:
                     "to_data", lambda: {})().get("value_type") == "bool")
             if not is_bool:
                 raise ValueError("Branch condition must reference a scalar Bool graph value")
+        if type(node) is ResidualSolve:
+            residual_source = available[node.residual.node_id]
+            if type(residual_source) is not ResidualEvaluation:
+                raise ValueError(
+                    "ResidualSolve residual must reference a ResidualEvaluation node")
+            if len(node.initial) != len(residual_source.unknowns):
+                raise ValueError(
+                    "ResidualSolve initial product arity must match residual unknown product")
+            attrs = node.attrs.to_data()
+            if "unknown_count" in attrs and attrs["unknown_count"] != len(node.initial):
+                raise ValueError(
+                    "ResidualSolve unknown_count must match initial product arity")
+        if type(node) is ResidualEvaluation:
+            components = _residual_operator_unknowns(node)
+            if len(components) != len(node.unknowns):
+                raise ValueError(
+                    "ResidualEvaluation unknown product arity must match operator unknown_space")
         for index, region in enumerate(_nested_regions(node)):
             _validate_region_boundary(
                 region, available, declared,

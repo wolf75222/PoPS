@@ -282,6 +282,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_external_brick
   test_external_brick_json
   test_runtime_environment
+  test_residual_operator
   test_capability_report
   test_canonical_identity
   test_box2d

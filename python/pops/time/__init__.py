@@ -23,7 +23,8 @@ from pops.time.history_persistence import (  # noqa: F401
 )
 from pops.time.graph import (  # noqa: F401
     Branch, Commit, Loop, OperatorCall, ProgramGraph, ProgramValue as GraphProgramValue,
-    Region, RegionCapture, Solve, StateRead, Synchronize, Unknown, ValueRef,
+    Region, RegionCapture, ResidualEvaluation, ResidualSolve, Solve, StateRead, Synchronize,
+    Unknown, ValueRef,
 )
 from pops.time.method_properties import (  # noqa: F401
     AdditiveMethodCertificate, AdditiveMethodProperties, MethodCertificate,
@@ -40,7 +41,17 @@ from pops.time.passes_facade import (  # noqa: F401
     optimize,
 )
 from pops.time.program import CompiledTime, Program
+from pops.time.program_residual import ResidualSolution  # noqa: F401
 from pops.time.points import Clock, StagePoint, TimePoint  # noqa: F401
+from pops.time.residual import (  # noqa: F401
+    AlgebraicTerm, ApproximateLinearization, AutomaticJVP, Boundary,
+    ConsistentInitialization, Constraint, Coupling, Dt, EquationSpace, ExactJacobian,
+    FieldDependency, FiniteDifferenceJVP, IdentityTerm, Index1DAE,
+    LinearizationFidelity, MassTerm, NoPostStepValidation, PostStepValidation,
+    PreconditionerContract, PreconditionerDomain, ProductSpace,
+    RequireConsistentInitialState, ResidualOperator, ResidualReport, SupportReport, SupportStatus,
+    UnknownSpace, linearization_fidelity,
+)
 from pops.time.schedule import (  # noqa: F401
     AMRLevel, AcceptedStep, AccumulateDt, Always, AtEnd, AtStart, Attempt,
     ClockTick, Domain, Error, Event, EventHandle, Every, Hold, OffPolicy,
@@ -52,9 +63,9 @@ from pops.time.synchronization import (  # noqa: F401
 )
 from pops.time.values import StageStateSet, ProgramValue  # noqa: F401
 
-__all__ = ["Program", "CompiledTime", "ProgramValue", "StageStateSet", "Schedule",
+__all__ = ["Program", "CompiledTime", "ProgramValue", "StageStateSet", "ResidualSolution", "Schedule",
            "ProgramGraph", "GraphProgramValue", "StateRead", "Unknown", "OperatorCall",
-           "Solve", "Branch", "Loop", "Region", "RegionCapture",
+           "ResidualEvaluation", "ResidualSolve", "Solve", "Branch", "Loop", "Region", "RegionCapture",
            "Synchronize", "Commit", "ValueRef",
            "Clock", "TimePoint", "StagePoint",
            "RungeKuttaTableau", "AdditiveRungeKuttaTableau",
@@ -71,3 +82,14 @@ __all__ = ["Program", "CompiledTime", "ProgramValue", "StageStateSet", "Schedule
            "always", "every", "when", "on_start", "on_end",
            "eliminate_dead_nodes", "eliminate_common_subexpressions",
            "eliminate_redundant_field_solves", "optimize"]
+
+__all__ += [
+    "AlgebraicTerm", "ApproximateLinearization", "AutomaticJVP", "Boundary",
+    "ConsistentInitialization", "Constraint", "Coupling", "Dt",
+    "EquationSpace", "ExactJacobian", "FieldDependency", "FiniteDifferenceJVP", "IdentityTerm",
+    "Index1DAE", "LinearizationFidelity", "MassTerm",
+    "NoPostStepValidation", "PostStepValidation", "PreconditionerContract",
+    "PreconditionerDomain", "ProductSpace", "RequireConsistentInitialState",
+    "ResidualOperator", "ResidualReport", "SupportReport", "SupportStatus", "UnknownSpace",
+    "linearization_fidelity",
+]
