@@ -127,6 +127,48 @@ class SystemFieldSolver {
     diagnostics_.record("runtime.solve_fields.trace", "SystemFieldSolver", "trace", marker);
   }
 
+  /// Mutable elliptic state that belongs to one step attempt. The solver objects themselves are
+  /// structural and stay installed; only their warm-start potential, the polar source buffer and
+  /// the evolve-policy latch may be provisionally changed by a failed attempt.
+  struct StepSnapshot {
+    std::optional<MultiFab> potential;
+    std::optional<MultiFab> polar_potential;
+    std::optional<MultiFab> polar_source;
+    bool had_elliptic = false;
+    bool had_polar_solver = false;
+    bool gauss_solved_once = false;
+    RuntimeDiagnosticsReport diagnostics;
+  };
+
+  StepSnapshot step_snapshot() {
+    StepSnapshot out;
+    out.had_elliptic = ell_.has_value();
+    out.had_polar_solver = pell_.has_value();
+    if (ell_)
+      out.potential = std::visit([](auto& e) { return MultiFab(e.phi()); }, *ell_);
+    if (pell_)
+      out.polar_potential = pell_->phi();
+    if (phi_src_polar_)
+      out.polar_source = *phi_src_polar_;
+    out.gauss_solved_once = gauss_solved_once_;
+    out.diagnostics = diagnostics_;
+    return out;
+  }
+
+  void restore_step_snapshot(const StepSnapshot& snapshot) {
+    if (!snapshot.had_elliptic)
+      ell_.reset();
+    else if (snapshot.potential && ell_)
+      std::visit([&](auto& e) { e.phi() = *snapshot.potential; }, *ell_);
+    if (!snapshot.had_polar_solver)
+      pell_.reset();
+    else if (snapshot.polar_potential && pell_)
+      pell_->phi() = *snapshot.polar_potential;
+    phi_src_polar_ = snapshot.polar_source;
+    gauss_solved_once_ = snapshot.gauss_solved_once;
+    diagnostics_ = snapshot.diagnostics;
+  }
+
   // --- OWNED state (elliptic solve + coefficient fields + application buffers) --------
   // Poisson configuration (elliptic solver built lazily).
   std::string p_rhs = "charge_density";

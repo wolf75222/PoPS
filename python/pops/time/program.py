@@ -235,11 +235,7 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
                     "runtime controls require Program.step_strategy(...); got %s"
                     % ", ".join(sorted(controls)))
             return True
-        controls = {} if controls is None else dict(controls)
-        if controls:
-            raise ValueError(
-                "runtime controls must be encoded by the selected StepStrategy descriptor; got %s"
-                % ", ".join(sorted(controls)))
+        self._step_strategy.validate_runtime_controls(controls)
         return True
 
     def __str__(self) -> str:

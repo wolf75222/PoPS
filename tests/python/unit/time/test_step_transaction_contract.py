@@ -32,7 +32,8 @@ def test_runtime_controls_cannot_select_a_strategy_implicitly():
 
     program.step_strategy(AdaptiveCFL(cfl=0.8))
     assert program.validate_runtime_controls({}) is True
-    with pytest.raises(ValueError, match="StepStrategy descriptor"):
+    assert program.validate_runtime_controls({"dt_min": 1e-6, "dt_max": 1e-2}) is True
+    with pytest.raises(ValueError, match="dt_min/dt_max"):
         program.validate_runtime_controls({"cfl": 0.4})
 
 

@@ -19,6 +19,31 @@ from pops.codegen.program_emit_kernels import (
 )
 
 
+def _program_nodes(program: Any) -> Any:
+    """Iterate top-level and nested ProgramValue nodes without importing lowerability helpers."""
+    def walk(value: Any) -> Any:
+        yield value
+        for key in ("cond_block", "body_block", "apply_block", "residual_block",
+                    "true_block", "false_block"):
+            block = value.attrs.get(key)
+            if isinstance(block, (list, tuple)):
+                for nested in block:
+                    yield from walk(nested)
+
+    for value in program._values:
+        yield from walk(value)
+
+
+def _consumed_solve_action(program: Any, solve: Any) -> str:
+    """Return the explicit action kind attached to the unique solve_outcome consumer."""
+    for node in _program_nodes(program):
+        if node.op != "solve_outcome" or len(node.inputs) != 1 or node.inputs[0] is not solve:
+            continue
+        action = node.attrs.get("action")
+        return str(getattr(action, "kind", "fail_run"))
+    return "fail_run"
+
+
 def _validate_matrix_free_contract(v: Any, model: Any) -> None:
     """Validate matrix-free facts that need either the final node or physical model metadata."""
     if v.op == "rhs_jacvec":
@@ -334,11 +359,17 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     rhs_tok = var[rhs_in.id]
     method = v.attrs["method"]
     kr = "kr%d" % v.id
+    action_kind = _consumed_solve_action(program, v)
 
     def _append_report_guard() -> None:
         lines.append("if (!%s.solved_value_available()) {" % kr)
-        lines.append("  throw std::runtime_error(std::string(\"solve_linear failed: \") + "
-                     "%s.status_name() + \" action=\" + %s.action_name());" % (kr, kr))
+        if action_kind == "reject_attempt":
+            lines.append("  throw pops::runtime::program::StepAttemptRejected("
+                         "%s.status, \"solve\", std::string(\"solve_linear failed: \") + "
+                         "%s.status_name());" % (kr, kr))
+        else:
+            lines.append("  throw std::runtime_error(std::string(\"solve_linear failed: \") + "
+                         "%s.status_name() + \" action=fail_run\");" % kr)
         lines.append("}")
 
     # The preconditioner ApplyFn passed to bicgstab / gmres: an EMPTY pops::ApplyFn{} for the identity

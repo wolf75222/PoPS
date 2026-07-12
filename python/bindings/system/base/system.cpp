@@ -37,16 +37,17 @@ System& System::operator=(System&&) noexcept = default;
 void System::step(double dt) {
   pops::runtime::program::ProfileScope s(p_->program_.profiler_, "step");
   p_->program_.profiler_.count("steps");
-  p_->stepper_.step(dt);
+  p_->execute_step_transaction([&] { p_->stepper_.step(dt); });
 }
 void System::advance(double dt, int nsteps) {
-  p_->stepper_.advance(dt, nsteps);
+  for (int i = 0; i < nsteps; ++i)
+    step(dt);
 }
 double System::step_cfl(double cfl, double speed_floor) {
-  return p_->stepper_.step_cfl(cfl, speed_floor);
+  return p_->execute_step_transaction([&] { return p_->stepper_.step_cfl(cfl, speed_floor); });
 }
 double System::step_adaptive(double cfl) {
-  return p_->stepper_.step_adaptive(cfl);
+  return p_->execute_step_transaction([&] { return p_->stepper_.step_adaptive(cfl); });
 }
 
 // System clock (IO v1, audit wave 2): macro_step is REQUIRED by the restart (the

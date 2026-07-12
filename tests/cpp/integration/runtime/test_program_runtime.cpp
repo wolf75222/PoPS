@@ -16,6 +16,7 @@
 #include <pops/physics/fluids/euler.hpp>                 // Euler
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
 #include <pops/runtime/program/program_context.hpp>      // ProgramContext (the seam under test)
+#include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <cmath>
@@ -28,6 +29,13 @@
 #endif
 
 using namespace pops;
+
+#if defined(POPS_HAS_KOKKOS)
+static void ensure_kokkos() {
+  static Kokkos::ScopeGuard guard;
+  (void)guard;
+}
+#endif
 
 // Elliptic brick that contributes nothing (no charge): the Poisson RHS stays zero, phi = 0, and the
 // Euler flux ignores aux -> the residual is pure gas dynamics.
@@ -64,7 +72,7 @@ static void add_gas(System& s, double gamma) {
 
 TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsKernels) {
 #if defined(POPS_HAS_KOKKOS)
-  static Kokkos::ScopeGuard guard;
+  ensure_kokkos();
 #endif
   const int n = 16;
   const double gamma = 1.4, dt = 1e-3;
@@ -149,4 +157,46 @@ TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsK
     EXPECT_TRUE(report.find("kernels=") != std::string::npos)
         << "profile_report omits the kernels counter line";
   }
+}
+
+TEST(ProgramRuntime, RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr int n = 8;
+  constexpr double gamma = 1.4;
+  SystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodic = true;
+
+  System sim(cfg);
+  add_gas(sim, gamma);
+  std::vector<double> initial(4 * static_cast<std::size_t>(n) * n);
+  fill_ic(initial, n, gamma);
+  sim.set_state("gas", initial);
+  sim.register_history("gas.U", 2, 4);
+  sim.set_program_block_map({0});
+
+  runtime::program::ProgramContext ctx(&sim);
+  ctx.install([ctx](double dt) {
+    MultiFab& state = ctx.state(0);
+    MultiFab bump = state;
+    bump.set_val(Real(dt));
+    ctx.axpy(state, Real(1), bump);
+    ctx.store_history("gas.U", state);
+    ctx.rotate_histories();
+    ctx.cache_store_scratch(17, state);
+    ctx.record_scalar("provisional", Real(42));
+    throw runtime::program::StepAttemptRejected(
+        SolveStatus::kIterationLimit, "solve", "fault injection after provisional publications");
+  });
+
+  EXPECT_THROW(sim.step(1e-3), runtime::program::StepAttemptRejected);
+  EXPECT_EQ(sim.macro_step(), 0);
+  EXPECT_DOUBLE_EQ(sim.time(), 0.0);
+  EXPECT_EQ(sim.get_state("gas"), initial);
+  EXPECT_FALSE(sim.history_initialized("gas.U"));
+  EXPECT_FALSE(sim.program_cache().has(17));
+  EXPECT_TRUE(sim.program_diagnostics().empty());
 }

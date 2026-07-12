@@ -28,7 +28,7 @@ from pops.codegen import compile_drivers
 from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
-from pops.time import FailRun
+from pops.time import FailRun, RejectAttempt
 from pops.numerics.riemann import Rusanov
 import sys
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
@@ -64,7 +64,7 @@ def _precond(scheme):
 
 
 def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200, alpha=_ALPHA,
-                   preconditioner=None):
+                   preconditioner=None, action=None):
     """(I - alpha*Lap) phi = U, committed back into the 1-component block (its state == a scalar field).
 
     The apply ``out = in - alpha*Lap(in)`` is built with P.laplacian + the affine algebra; solve_linear
@@ -85,7 +85,7 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
     rhs = P.linear_combine("rhs", U, at=endpoint.point)
     phi = P.solve_linear(
         operator=A, rhs=rhs, method=_krylov(method), tol=tol, max_iter=max_iter,
-        at=endpoint.point, **kw).consume(action=FailRun())
+        at=endpoint.point, **kw).consume(action=action or FailRun())
     P.commit(endpoint, phi)
     return P
 
@@ -96,6 +96,13 @@ def test_apply_lambda_and_cg_codegen(t):
     for frag in ("pops::ApplyFn apply_A", "ctx.laplacian", "pops::cg_solve",
                  "std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field"):
         assert frag in src, "the generated cg solve must contain %r\n%s" % (frag, src)
+
+
+def test_reject_attempt_solve_codegen_throws_step_attempt_signal(t):
+    src = _solve_program(t, method="cg", action=RejectAttempt()).emit_cpp_program()
+    assert "#include <pops/runtime/program/step_transaction.hpp>" in src, src
+    assert "pops::runtime::program::StepAttemptRejected" in src, src
+    assert "solve_linear failed" in src, src
 
 
 def test_bicgstab_codegen(t):

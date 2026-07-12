@@ -337,6 +337,7 @@ _PROGRAM_CPP_TEMPLATE = '''\
 // A compiled time Program installed across the stable .so ABI: it drives sim.step(dt) entirely in
 // C++ via ProgramContext, reusing the PoPS runtime (no MultiFab / flux / solver reimplementation).
 #include <pops/runtime/program/program_context.hpp>
+#include <pops/runtime/program/step_transaction.hpp>
 {coeff_elliptic_include}{block_inverse_include}#include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/storage/fab2d.hpp>          // Array4 / ConstArray4 (per-cell handles)

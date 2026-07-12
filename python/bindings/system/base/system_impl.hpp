@@ -59,6 +59,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -498,6 +499,59 @@ struct System::Impl {
   // push_dynamic<NV> (DYNAMIC IModel<NV> block loaded from a .so) was EXTRACTED VERBATIM into
   // pops::native_loader::push_dynamic (include/pops/runtime/native_loader.hpp, template over Impl);
   // add_dynamic_block below instantiates it with System::Impl. See SYSTEM_CPP_EXTRACTION_PLAN.md.
+
+  /// Execute one public macro-step against an accepted snapshot. Any exception restores every
+  /// runtime-owned value a Program/native step may have published before failing; the typed
+  /// StepAttemptRejected signal therefore leaves no partial state and no consumed clock tick.
+  template <class Body>
+  decltype(auto) execute_step_transaction(Body&& body) {
+    struct Snapshot {
+      std::vector<MultiFab> states;
+      MultiFab aux;
+      typename pops::field_solver::SystemFieldSolver<Impl>::StepSnapshot fields;
+      double time;
+      int macro_step;
+      Real last_program_dt;
+      std::map<std::string, Real> program_diagnostics;
+      pops::runtime::program::CacheManager cache;
+      pops::runtime::program::HistoryManager history;
+
+      explicit Snapshot(Impl& impl)
+          : aux(impl.aux),
+            fields(impl.fields_.step_snapshot()),
+            time(impl.t),
+            macro_step(impl.macro_step_),
+            last_program_dt(impl.program_.last_dt_),
+            program_diagnostics(impl.program_.diagnostics_),
+            cache(impl.program_.cache_),
+            history(impl.program_.hist_) {
+        states.reserve(impl.sp.size());
+        for (const auto& block : impl.sp)
+          states.emplace_back(block.U);
+      }
+
+      void restore(Impl& impl) const {
+        for (std::size_t i = 0; i < states.size(); ++i)
+          impl.sp[i].U = states[i];
+        impl.aux = aux;
+        impl.fields_.restore_step_snapshot(fields);
+        impl.t = time;
+        impl.macro_step_ = macro_step;
+        impl.program_.last_dt_ = last_program_dt;
+        impl.program_.diagnostics_ = program_diagnostics;
+        impl.program_.cache_ = cache;
+        impl.program_.hist_ = history;
+      }
+    };
+
+    Snapshot accepted(*this);
+    try {
+      return std::forward<Body>(body)();
+    } catch (...) {
+      accepted.restore(*this);
+      throw;
+    }
+  }
 };
 
 // Config / geometry / lifecycle guards (formerly anonymous-namespace, now header-inline).
