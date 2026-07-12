@@ -331,7 +331,7 @@ class ProgramValue(ImmutableSymbolic):
         # range(scalar) / using a Scalar as a Python index is just as loud: the value is unknown until
         # the step runs.
         raise TypeError(
-            "a Program %s (%r) cannot be used as a Python index; use P.while_ / P.if_ for runtime "
+            "a Program %s (%r) cannot be used as a Python index; use P.while_ / P.branch for runtime "
             "control flow" % (self.vtype, self.name))
 
     def __len__(self) -> Any:
@@ -340,7 +340,7 @@ class ProgramValue(ImmutableSymbolic):
         # loudly (ADC-530) and point at the inspection-only logical_shape for the component layout.
         raise TypeError(
             "a Program %s value (%r) has no Python len(): its shape is a runtime grid property. Read "
-            "its inspection-only logical_shape for the component layout; use P.while_ / P.if_ / "
+            "its inspection-only logical_shape for the component layout; use P.while_ / P.branch / "
             "P.static_range for control flow." % (self.vtype, self.name))
 
     @property

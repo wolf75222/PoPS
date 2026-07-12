@@ -10,7 +10,10 @@ from pops.time.program_value_validation import (
 )
 
 
-_BLOCK_KEYS = ("cond_block", "body_block", "apply_block", "residual_block")
+_BLOCK_KEYS = (
+    "cond_block", "body_block", "apply_block", "residual_block",
+    "true_block", "false_block",
+)
 
 
 def _block_region(program: Any, block: Any, where: str, hint: Any = None) -> int:
@@ -62,10 +65,19 @@ def validate_program_regions(program: Any) -> None:
                 require_region(
                     program, attrs["body"], regions["body_block"], "while body",
                     allow=value.inputs)
-        elif value.op in ("range", "if"):
+        elif value.op == "range":
             require_region(
                 program, attrs["body"], regions["body_block"], "%s body" % value.op,
                 allow=value.inputs)
+        elif value.op == "branch":
+            require_region(
+                program, attrs["true_result"], regions["true_block"], "branch when_true",
+                allow=(attrs["true_result"],)
+                if attrs["true_result"].region in (0, value.region) else ())
+            require_region(
+                program, attrs["false_result"], regions["false_block"], "branch when_false",
+                allow=(attrs["false_result"],)
+                if attrs["false_result"].region in (0, value.region) else ())
         elif value.op == "matrix_free_operator":
             result = attrs.get("apply_result")
             if result is not None:

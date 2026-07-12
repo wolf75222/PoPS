@@ -7,15 +7,15 @@ Builds on ADC-404a (Scalar/Bool IR, P.norm2/P.dot, P.while_). This slice adds:
     inline, NO C++ loop);
   - ``P.range(state, count, body)`` -- a C++ ``for`` over a fixed count (body emitted ONCE, re-run each
     pass);
-  - ``P.if_(state, cond, body)`` -- a C++ ``if`` branch on a runtime Bool.
+  - ``P.branch(cond, true_fn, false_fn)`` -- a lazy C++ ``if``/``else`` value branch.
 
 (A) Codegen (pure Python, always runs): static_range unrolls (body N times, no ``for``), range emits a
-    C++ ``for (int``, if_ emits ``if (``, norm_inf is a Scalar emitting ``pops::norm_inf``; the IR hash
+    C++ ``for (int``, branch emits ``if (``, norm_inf is a Scalar emitting ``pops::norm_inf``; the IR hash
     distinguishes loop counts and unrolled bodies; runtime-count guards fire.
 
 (B) End-to-end parity (skips unless the full toolchain is present): a dt-free contraction
     x <- 0.5*x + 0.5*target (target = 2*U0); range(3) and static_range(3) both compile, install, step,
-    and match the offline x_N = target + 0.5^N (x0 - target); if_ applies the body iff the runtime
+    and match the offline x_N = target + 0.5^N (x0 - target); branch applies the body iff the runtime
     condition holds. Self-skips without numpy / _pops / a compiler / Kokkos (never faking the engine).
 """
 from pops.codegen import compile_drivers
@@ -86,17 +86,22 @@ def test_range_emits_for(t):
     assert src.count("ctx.rhs_into") == 1, "range emits the body ONCE (inside the loop)\n%s" % src
 
 
-def test_if_emits_branch(t):
-    P = t.Program("if")
+def test_branch_emits_if_else(t):
+    P = t.Program("branch")
     U = typed_state(P, "blk")
     cond = P.norm_inf(U) > 0.0
-    Uf = P.if_(U, cond, _fe_body())
+    body = _fe_body()
+    Uf = P.branch(
+        cond,
+        lambda T: body(T, U),
+        lambda T: T.linear_combine(U, at=TimePoint(T.clock, step=1)),
+    )
     endpoint = typed_state(P, "blk", state_name="U").next
-    P.commit(endpoint, P.linear_combine("if_next", Uf, at=endpoint.point))
+    P.commit(endpoint, P.linear_combine("branch_next", Uf, at=endpoint.point))
     src = P.emit_cpp_program()
     assert "pops::norm_inf" in src, "norm_inf must lower to pops::norm_inf\n%s" % src
-    assert "if (" in src, "if_ must emit a C++ if branch\n%s" % src
-    assert "for (" not in src, "if_ alone emits no loop\n%s" % src
+    assert "if (" in src and "} else {" in src, "branch must emit C++ if/else\n%s" % src
+    assert "for (" not in src, "branch alone emits no loop\n%s" % src
 
 
 def test_static_range_scalar_count_rejected(t):
@@ -158,16 +163,17 @@ def _contraction_program(t, kind, count, *, name):
     return P
 
 
-def _if_program(t, *, name, threshold):
+def _branch_program(t, *, name, threshold):
     """if norm_inf(target - U0) > threshold: U <- 0.5*U0 + 0.5*target  (else U unchanged)."""
     P = t.Program(name)
     U0 = typed_state(P, "blk")
     target = P.linear_combine("target", 2.0 * U0)
     diff = P.linear_combine("diff", target - U0)
     cond = P.norm_inf(diff) > threshold
-    xf = P.if_(U0, cond, _contraction_body(target))
+    body = _contraction_body(target)
+    xf = P.branch(cond, lambda T: body(T, U0), lambda _T: U0)
     endpoint = typed_state(P, "blk", state_name="U").next
-    P.commit(endpoint, P.linear_combine("if_next", xf, at=endpoint.point))
+    P.commit(endpoint, P.linear_combine("branch_next", xf, at=endpoint.point))
     return P
 
 
@@ -207,10 +213,10 @@ def _run_section_b(t):
                                        time=_contraction_program(t, "range", count, name="cf_range"))
         compiled_sr = compile_drivers.compile_problem(model=_passive_model("cf_sr"),
                                           time=_contraction_program(t, "static", count, name="cf_sr"))
-        compiled_if = compile_drivers.compile_problem(model=_passive_model("cf_if"),
-                                          time=_if_program(t, name="cf_if", threshold=1e3))  # cond FALSE
-        compiled_if_t = compile_drivers.compile_problem(model=_passive_model("cf_ift"),
-                                            time=_if_program(t, name="cf_ift", threshold=0.0))  # TRUE
+        compiled_branch = compile_drivers.compile_problem(model=_passive_model("cf_branch"),
+                                          time=_branch_program(t, name="cf_branch", threshold=1e3))  # cond FALSE
+        compiled_branch_t = compile_drivers.compile_problem(model=_passive_model("cf_brancht"),
+                                            time=_branch_program(t, name="cf_brancht", threshold=0.0))  # TRUE
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- (B) skipped: compile_problem could not build a .so: %s --" % str(exc)[:160])
         return None
@@ -244,19 +250,21 @@ def _run_section_b(t):
     err_rg = float(np.abs(out_rg - xk).max())
     _, out_sr = run(compiled_sr)
     err_sr = float(np.abs(out_sr - xk).max())
-    _, out_if_false = run(compiled_if)        # cond false -> unchanged
-    _, out_if_true = run(compiled_if_t)       # cond true  -> one body application
+    _, out_branch_false = run(compiled_branch)      # cond false -> unchanged
+    _, out_branch_true = run(compiled_branch_t)     # cond true  -> one body application
     x_one = 0.5 * rho0 + 0.5 * target
-    err_if_false = float(np.abs(out_if_false - rho0).max())
-    err_if_true = float(np.abs(out_if_true - x_one).max())
-    print("  range(%d) parity = %.2e | static_range = %.2e | if(false) = %.2e | if(true) = %.2e"
-          % (count, err_rg, err_sr, err_if_false, err_if_true))
+    err_branch_false = float(np.abs(out_branch_false - rho0).max())
+    err_branch_true = float(np.abs(out_branch_true - x_one).max())
+    print("  range(%d) parity = %.2e | static_range = %.2e | branch(false) = %.2e | "
+          "branch(true) = %.2e"
+          % (count, err_rg, err_sr, err_branch_false, err_branch_true))
     assert err_rg <= 1e-12, "range(%d) == offline contraction (max|d| = %.2e)" % (count, err_rg)
     assert err_sr <= 1e-12, "static_range(%d) == offline contraction (max|d| = %.2e)" % (count, err_sr)
     assert float(np.abs(out_rg - out_sr).max()) <= 1e-14, "range == static_range bit-for-bit"
-    assert err_if_false <= 1e-14, "if_ with a false condition leaves the state unchanged (%.2e)" \
-        % err_if_false
-    assert err_if_true <= 1e-12, "if_ with a true condition applies the body once (%.2e)" % err_if_true
+    assert err_branch_false <= 1e-14, "branch false arm leaves the state unchanged (%.2e)" \
+        % err_branch_false
+    assert err_branch_true <= 1e-12, "branch true arm applies the body once (%.2e)" \
+        % err_branch_true
     assert float(np.abs(out_rg - rho0).max()) > 1e-6, "the loop must change the state"
     return (err_rg, err_sr)
 

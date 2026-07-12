@@ -9,7 +9,7 @@ named MultiFab):
   - `every(N)`   -> `if (ctx.cache_should_update(id, N)) { ... }`
   - `on_start()` -> `if ((ctx.macro_step() == 0)) { ... }`
   - `when(cond)` -> reuses the Program Bool predicate token as the due test
-  - `subcycle(c)`-> a `for (...) { ... }` sub-loop over the sub-dt
+  - `ClockTick` / `AMRLevel` -> typed and preserved, honestly refused before ADC-677
   - `recompute`  -> the body runs only when due, no else
   - `hold`       -> store/restore the cached value (aux or named scratch) off-cadence
   - `skip`       -> the op runs only when due; the value keeps its stale content (no else)
@@ -38,6 +38,22 @@ try:
     from typed_program_support import typed_state
 except Exception as exc:  # noqa: BLE001  -- _pops unavailable in this interpreter
     _skip("pops unavailable: %s" % exc)
+
+
+def _every(clock, n, off=None):
+    return adctime.Schedule(adctime.Every(adctime.AcceptedStep(clock), n), off=off)
+
+
+def _at_start(clock, off=None):
+    return adctime.Schedule(adctime.AtStart(adctime.AcceptedStep(clock)), off=off)
+
+
+def _at_end(clock, off=None):
+    return adctime.Schedule(adctime.AtEnd(adctime.AcceptedStep(clock)), off=off)
+
+
+def _when(clock, condition, off=None):
+    return adctime.Schedule(adctime.When(adctime.AcceptedStep(clock), condition), off=off)
 
 
 # --- builders ---------------------------------------------------------------
@@ -98,10 +114,11 @@ def test_always_body_identical_to_unscheduled():
     # the LOWERED body of always() equals the unscheduled body (no guard). The whole-file emit differs
     # only by the IR hash, which legitimately tracks the schedule attr (cache invalidation by design).
     _, plain = _field_program(None)._emit_body()
-    _, always = _field_program(lambda clock: adctime.always(clock=clock))._emit_body()
+    _, always = _field_program(lambda clock: adctime.Schedule(
+        adctime.Always(adctime.AcceptedStep(clock))))._emit_body()
     assert plain == always
     assert "cache_should_update" not in _emit_field(
-        lambda clock: adctime.always(clock=clock))
+        lambda clock: adctime.Schedule(adctime.Always(adctime.AcceptedStep(clock))))
 
 
 def test_unscheduled_has_no_guard():
@@ -112,13 +129,13 @@ def test_unscheduled_has_no_guard():
 
 # --- every(N) cadence (kind) ------------------------------------------------
 def test_every_due_test_carries_period():
-    cpp = _emit_field(lambda clock: adctime.every(7, clock=clock).hold())
+    cpp = _emit_field(lambda clock: _every(clock, 7, adctime.Hold()))
     assert "ctx.cache_should_update(" in cpp and ", 7)" in cpp
 
 
 # --- on_start (kind) --------------------------------------------------------
 def test_on_start_lowers_to_macro_step_zero():
-    cpp = _emit_field(lambda clock: adctime.on_start(clock=clock).hold())
+    cpp = _emit_field(lambda clock: _at_start(clock, adctime.Hold()))
     assert "(ctx.macro_step() == 0)" in cpp
 
 
@@ -132,7 +149,7 @@ def test_when_reuses_program_predicate_token():
     cond = P.norm2(R) < 1e-6  # a Program Bool predicate emitted before the scheduled node
     R2 = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     R2 = P._replace_value(
-        R2, attrs={**R2.attrs, "schedule": adctime.when(cond, clock=P.clock).hold()})
+        R2, attrs={**R2.attrs, "schedule": _when(P.clock, cond, adctime.Hold())})
     endpoint = typed_state(P, "ions", state_name="U").next
     P.commit(endpoint, P.linear_combine("U1", U + dt * R2, at=endpoint.point))
     P._check_schedules_lowerable()  # a Program Bool when() lowers
@@ -152,7 +169,7 @@ def test_frozen_when_codegen_is_repeatable_and_keeps_tokens_emission_local():
     scheduled = P._replace_value(
         scheduled, attrs={
             **scheduled.attrs,
-            "schedule": adctime.when(condition, clock=P.clock).hold(),
+            "schedule": _when(P.clock, condition, adctime.Hold()),
         })
     endpoint = typed_state(P, "ions", state_name="U").next
     P.commit(
@@ -172,7 +189,7 @@ def test_frozen_when_codegen_is_repeatable_and_keeps_tokens_emission_local():
 
 def test_when_over_python_callable_refuses():
     P = _scratch_program(
-        lambda clock: adctime.when(lambda: True, clock=clock).hold())
+        lambda clock: _when(clock, lambda: True, adctime.Hold()))
     try:
         P._check_schedules_lowerable()
     except NotImplementedError as exc:
@@ -182,66 +199,74 @@ def test_when_over_python_callable_refuses():
 
 
 # --- subcycle (kind) --------------------------------------------------------
-def test_subcycle_emits_a_subloop():
-    cpp = _emit_field(lambda clock: adctime.subcycle(4, clock=clock))
-    assert "for (int _sub" in cpp
-    assert "dt / static_cast<pops::Real>(4)" in cpp  # default sub-dt = macro_dt / count
-    assert "< 4;" in cpp
+def test_clock_tick_domain_refuses_until_multirate_runtime_exists():
+    program = _field_program(lambda clock: adctime.Schedule(
+        adctime.Always(adctime.ClockTick(clock))))
+    try:
+        program._check_schedules_lowerable()
+    except NotImplementedError as exc:
+        assert "ClockTick" in str(exc) and "ADC-677" in str(exc)
+    else:
+        raise AssertionError("ClockTick must refuse before ADC-677")
 
 
-def test_subcycle_explicit_dt():
-    cpp = _emit_field(lambda clock: adctime.subcycle(3, dt=0.01, clock=clock))
-    assert "for (int _sub" in cpp
-    assert "0.01" in cpp
+def test_amr_level_domain_refuses_until_amr_clock_runtime_exists():
+    program = _field_program(lambda clock: adctime.Schedule(
+        adctime.Always(adctime.AMRLevel(clock, level=1))))
+    try:
+        program._check_schedules_lowerable()
+    except NotImplementedError as exc:
+        assert "AMRLevel" in str(exc) and "ADC-677" in str(exc)
+    else:
+        raise AssertionError("AMRLevel must refuse before ADC-677")
 
 
-def test_subcycle_on_scratch_node_refuses():
-    # subcycle is lowerable only for a field solve (aux output): a scratch-output op sub-cycled would
-    # declare its scratch inside the loop, out of scope downstream -> refuse loud (ADC-458).
-    P = _scratch_program(lambda clock: adctime.subcycle(4, clock=clock))
+def test_clock_tick_on_scratch_node_refuses_honestly():
+    P = _scratch_program(lambda clock: adctime.Schedule(
+        adctime.Always(adctime.ClockTick(clock))))
     try:
         P._check_schedules_lowerable()
     except NotImplementedError as exc:
-        assert "ADC-458" in str(exc) and "subcycle" in str(exc)
+        assert "ClockTick" in str(exc) and "ADC-677" in str(exc)
     else:
-        raise AssertionError("subcycle on a scratch-output node must refuse to lower")
+        raise AssertionError("ClockTick must refuse before ADC-677")
 
 
 # --- policies on a FIELD-SOLVE node (output = aux) --------------------------
 def test_field_hold_stores_and_restores_aux():
-    cpp = _emit_field(lambda clock: adctime.every(10, clock=clock).hold())
+    cpp = _emit_field(lambda clock: _every(clock, 10, adctime.Hold()))
     assert "ctx.cache_store_aux(" in cpp
     assert "ctx.cache_restore_aux(" in cpp
 
 
 def test_field_zero_emits_aux_set_val_else():
-    cpp = _emit_field(lambda clock: adctime.every(4, clock=clock).zero())
+    cpp = _emit_field(lambda clock: _every(clock, 4, adctime.Zero()))
     assert "} else {" in cpp
     assert "ctx.aux().set_val(static_cast<pops::Real>(0));" in cpp
 
 
 def test_field_accumulate_dt_reads_effective_dt():
-    cpp = _emit_field(lambda clock: adctime.every(7, clock=clock).accumulate_dt())
+    cpp = _emit_field(lambda clock: _every(clock, 7, adctime.AccumulateDt()))
     assert "ctx.cache_effective_dt(" in cpp     # the due step reads the summed skipped dt
     assert "ctx.cache_accumulate_dt(" in cpp    # the skip step accumulates the real dt
     assert "ctx.cache_store_aux(" in cpp
 
 
 def test_field_skip_runs_only_when_due():
-    cpp = _emit_field(lambda clock: adctime.every(5, clock=clock).skip())
+    cpp = _emit_field(lambda clock: _every(clock, 5, adctime.Skip()))
     assert "skip: stale aux off-cadence" in cpp
     assert "ctx.cache_restore_aux" not in cpp   # skip does not cache (stale, no restore)
     assert "} else {" not in cpp.split("skip: stale aux off-cadence")[1].split("\n", 1)[0]
 
 
 def test_field_error_emits_scheduler_error_else():
-    cpp = _emit_field(lambda clock: adctime.every(3, clock=clock).error())
+    cpp = _emit_field(lambda clock: _every(clock, 3, adctime.Error()))
     assert "ctx.scheduler_error(" in cpp
     assert "policy=error" in cpp
 
 
 def test_field_recompute_runs_only_when_due():
-    cpp = _emit_field(lambda clock: adctime.every(2, clock=clock).recompute())
+    cpp = _emit_field(lambda clock: _every(clock, 2))
     assert "if (ctx.cache_should_update(" in cpp
     assert "cache_store_aux" not in cpp  # recompute does not cache
     assert "cache_restore_aux" not in cpp
@@ -251,7 +276,7 @@ def test_field_recompute_runs_only_when_due():
 def test_scratch_hold_caches_named_scratch():
     # a held NON-solve_fields scratch now caches: the output decl is hoisted out of the guard, the
     # fill + cache_store_scratch run when due, cache_restore_scratch off-cadence.
-    cpp = _emit_scratch(lambda clock: adctime.every(10, clock=clock).hold())
+    cpp = _emit_scratch(lambda clock: _every(clock, 10, adctime.Hold()))
     assert "ctx.cache_store_scratch(" in cpp
     assert "ctx.cache_restore_scratch(" in cpp
     # the output scratch is DECLARED before the guard (so both branches see it)
@@ -261,13 +286,13 @@ def test_scratch_hold_caches_named_scratch():
 
 
 def test_scratch_zero_sets_the_scratch_to_zero():
-    cpp = _emit_scratch(lambda clock: adctime.every(4, clock=clock).zero())
+    cpp = _emit_scratch(lambda clock: _every(clock, 4, adctime.Zero()))
     assert ".set_val(static_cast<pops::Real>(0));" in cpp
     assert "ctx.aux().set_val" not in cpp  # a scratch node zeroes its OWN buffer, not the aux
 
 
 def test_scratch_accumulate_dt_uses_scratch_cache():
-    cpp = _emit_scratch(lambda clock: adctime.every(7, clock=clock).accumulate_dt())
+    cpp = _emit_scratch(lambda clock: _every(clock, 7, adctime.AccumulateDt()))
     assert "ctx.cache_effective_dt(" in cpp
     assert "ctx.cache_accumulate_dt(" in cpp
     assert "ctx.cache_store_scratch(" in cpp
@@ -276,7 +301,7 @@ def test_scratch_accumulate_dt_uses_scratch_cache():
 
 def test_scratch_decl_hoisted_for_skip():
     # the scratch decl must be OUTSIDE the guard so the (stale) buffer stays in scope for downstream
-    cpp = _emit_scratch(lambda clock: adctime.every(5, clock=clock).skip())
+    cpp = _emit_scratch(lambda clock: _every(clock, 5, adctime.Skip()))
     decl_idx = cpp.index("pops::MultiFab r")
     guard_idx = cpp.index("if (ctx.cache_should_update(")
     assert decl_idx < guard_idx
@@ -284,11 +309,11 @@ def test_scratch_decl_hoisted_for_skip():
 
 # --- genuinely unlowerable: on_end (no end-of-run signal) -------------------
 def test_on_end_refuses_to_lower():
-    P = _field_program(lambda clock: adctime.on_end(clock=clock).hold())
+    P = _field_program(lambda clock: _at_end(clock, adctime.Hold()))
     try:
         P._check_schedules_lowerable()
     except NotImplementedError as exc:
-        assert "ADC-458" in str(exc) and "on_end" in str(exc)
+        assert "AtEnd" in str(exc) and "ConsumerGraph" in str(exc)
     else:
         raise AssertionError("on_end() must refuse to lower (no end-of-run signal)")
 

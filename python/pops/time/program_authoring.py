@@ -113,7 +113,7 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
 
     def where(self, mask: Any, a: Any, b: Any, name: Any = None) -> Any:
         """A PER-CELL conditional select (spec op 17): ``out(i,j,c) = mask(i,j,*) != 0 ? a(i,j,c) :
-        b(i,j,c)`` COMPONENT-WISE over the field. This is NOT the scalar runtime branch `if_` -- the
+        b(i,j,c)`` COMPONENT-WISE over the field. This is NOT the scalar runtime `branch` -- the
         condition is decided per cell INSIDE a Kokkos kernel.
 
           - @p mask: a 0/1 (or any nonzero/zero) mask field. Either 1-component (one mask shared by all
@@ -420,33 +420,69 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
                          None, state.block, space=state.space)
 
     @atomic_authoring
-    def if_(self, state: Any, cond: Any, body_fn: Any) -> Any:
-        """A C++ ``if`` branch: from @p state, if the runtime Bool @p cond holds, replace the state by
-        ``body_fn(self, x)``; otherwise leave it unchanged. Returns the (possibly updated) State. @p
-        cond is a Bool value built BEFORE if_ (e.g. ``P.norm2(d) > tol``), evaluated ONCE. The body ops
-        are captured into a recording sub-block and emitted inside the branch."""
-        if not (isinstance(state, ProgramValue) and state.vtype == "state"):
-            raise ValueError("if_: the state must be a State value")
-        if not (isinstance(cond, ProgramValue) and cond.vtype == "bool"):
-            raise ValueError("if_: cond must be a Bool value (e.g. P.norm2(d) > tol)")
-        require_top_level(self, state, "if_")
-        require_top_level(self, cond, "if_ cond")
-        if self._recording:
-            raise NotImplementedError("if_: nested control flow is a later phase; a control-flow body "
-                                      "cannot itself open an if_ yet")
-        body_block, next_state = self._record(body_fn, state)
-        body_region = self._region_for_block(body_block)
-        if not (isinstance(next_state, ProgramValue) and next_state.vtype == "state"
-                and next_state.block == state.block):
-            raise ValueError("if_: body_fn must return a State of the same block as the input state")
-        require_region(
-            self, next_state, body_region, "if_ body", vtype="state",
-            allow=(state,))
-        require_compatible_spaces(state.space, next_state.space, "if_ body", typed_pair=True)
-        return self._new("state", "if", (state, cond),
-                         {"body_block": body_block, "body_region": body_region,
-                          "body": next_state}, None, state.block,
-                         space=state.space)
+    def branch(self, condition: Any, when_true: Any, when_false: Any,
+               name: Any = None) -> Any:
+        """Select one lazily-authored typed value at runtime.
+
+        ``when_true`` and ``when_false`` are build callbacks taking this Program.  Their nodes are
+        captured in disjoint regions and are emitted inside the corresponding runtime ``if`` arm;
+        neither arm is evaluated eagerly by the generated program.  This graph control-flow
+        operation is deliberately distinct from :meth:`where`, which selects per cell.
+        """
+        if not (isinstance(condition, ProgramValue) and condition.vtype == "bool"):
+            raise ValueError("branch: condition must be a scalar Bool ProgramValue")
+        if not callable(when_true) or not callable(when_false):
+            raise TypeError("branch: when_true and when_false must be callables accepting Program")
+        validate_input_regions(self, (condition,), self._current_region(), "branch condition")
+        parent_region = self._current_region()
+        true_block, true_result = self._record_branch_arm(when_true)
+        false_block, false_result = self._record_branch_arm(when_false)
+        true_region = self._region_for_block(true_block)
+        false_region = self._region_for_block(false_block)
+        if parent_region:
+            self._allow_region_capture(parent_region, true_region)
+            self._allow_region_capture(parent_region, false_region)
+        for label, result, region in (
+                ("when_true", true_result, true_region),
+                ("when_false", false_result, false_region)):
+            if not isinstance(result, ProgramValue):
+                raise TypeError("branch: %s must return a ProgramValue" % label)
+            if result.region not in (0, region, parent_region):
+                raise ValueError(
+                    "branch: %s result escapes an unrelated authoring region" % label)
+            validate_input_regions(self, (result,), region, "branch %s" % label)
+        self._require_branch_compatible(true_result, false_result)
+        if condition.clock != true_result.clock:
+            raise ValueError("branch: condition and result arms must share one clock")
+        return self._new(
+            true_result.vtype, "branch", (condition,),
+            {"true_block": true_block, "true_region": true_region,
+             "true_result": true_result, "false_block": false_block,
+             "false_region": false_region, "false_result": false_result},
+            name, true_result.block, space=true_result.space, point=true_result.point,
+            field_context=true_result.field_context)
+
+    @staticmethod
+    def _require_branch_compatible(left: Any, right: Any) -> None:
+        if left.vtype != right.vtype:
+            raise ValueError("branch: both arms must return the same value type")
+        if left.block != right.block:
+            raise ValueError("branch: both arms must return values from the same owned block")
+        if left.clock != right.clock or left.point != right.point:
+            raise ValueError("branch: both arms must share one clock and exact point")
+        if left.space != right.space:
+            raise ValueError("branch: both arms must return the same typed space")
+        if left.field_context != right.field_context:
+            raise ValueError("branch: both arms must return the same field context")
+
+    def _record_branch_arm(self, fn: Any) -> Any:
+        sub = []
+        self._recording.append(sub)
+        try:
+            result = fn(self)
+        finally:
+            self._recording.pop()
+        return sub, result
 
     @atomic_authoring
     def _record(self, fn: Any, x: Any) -> Any:

@@ -69,3 +69,15 @@ def test_public_linear_source_and_apply_refuse_a_free_string():
     for seam in ("_linear_source", "_apply"):
         assert _program_method("_ProgramLocal", seam) is not None, (
             "pops.time _ProgramLocal must define the internal seam %s (ADC-625)" % seam)
+
+
+def test_program_has_one_public_runtime_branch_spelling():
+    source = (POPS / "time" / "program_authoring.py").read_text()
+    tree = ast.parse(source)
+    authoring = next(
+        node for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "_ProgramAuthoring")
+    methods = {
+        node.name for node in authoring.body if isinstance(node, ast.FunctionDef)}
+    assert "branch" in methods, "Program.branch must be the public runtime value branch"
+    assert "if_" not in methods, "Program.if_ is a removed second public branch spelling"

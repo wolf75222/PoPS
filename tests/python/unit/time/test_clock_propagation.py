@@ -7,7 +7,7 @@ from typed_program_support import typed_state
 
 from pops.time import Program, SampleAndHold
 from pops.time.points import Clock, StagePoint, TimePoint
-from pops.time.schedule import every
+from pops.time.schedule import AcceptedStep, Every, Hold, Schedule
 from pops.time.program_value_validation import validate_input_clocks
 
 
@@ -60,12 +60,12 @@ def test_partitioned_stage_keeps_distinct_abscissae_on_one_clock():
 
 def test_schedule_is_explicitly_clock_bound():
     clock = Clock("macro")
-    schedule = every(4, clock=clock).hold()
+    schedule = Schedule(Every(AcceptedStep(clock), 4), off=Hold())
 
     assert schedule.clock is clock
-    assert schedule.params["n"] == 4
+    assert schedule.trigger.n == 4
     with pytest.raises(TypeError, match="exact Clock"):
-        every(4, clock="macro")
+        AcceptedStep("macro")
 
 
 def test_cross_clock_edge_requires_a_synchronize_node():

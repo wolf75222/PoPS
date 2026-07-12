@@ -8,7 +8,7 @@ build a REAL board-flavoured Program, compile it to a problem.so against the loa
 (`pops.codegen.compile_problem`), install it, and STEP it -- so the spec's runtime acceptance criteria are
 RUNTIME-proven, not emit-asserted. It never fakes the engine.
 
-The Program holds a board-style field solve on an `every(N).hold()` schedule (Spec 3 sections 17-18,
+The Program holds a board-style field solve on `Schedule(Every(...), off=Hold())` (Spec 3,
 ADC-458): the Poisson solve `phi <- solve(-Laplace phi = alpha*rho)` recomputes only when DUE and the
 cached aux is restored in between. The held phi feeds a PotentialForce source, so a held step and a
 recompute step produce a genuinely different RHS -- the cache is observable, not cosmetic.
@@ -91,7 +91,7 @@ def held_program(name="spec3_runtime_held"):
     """A board-flavoured forward-Euler Program whose field solve is held every EVERY steps.
 
     P.fields(..., from_state=U) is the board sugar for P.solve_fields (test_time_board pins the IR
-    identity) and P.define for P.linear_combine. The every(EVERY).hold() schedule attaches a hold
+    identity) and P.define for P.linear_combine. The typed Every/Hold schedule attaches a hold
     policy to that solve_fields node (a solve_fields output is the System aux, which is cacheable), so
     the codegen lowers it to `if (cache_should_update(id, N)) { solve_fields_from_state; store_aux }
     else { restore_aux }`. The held aux feeds the rhs source, so a held step != a recompute step.
@@ -106,7 +106,8 @@ def held_program(name="spec3_runtime_held"):
     f = P._replace_value(
         f, attrs={
             **f.attrs,
-            "schedule": adctime.every(EVERY, clock=P.clock).hold(),
+            "schedule": adctime.Schedule(
+                adctime.Every(adctime.AcceptedStep(P.clock), EVERY), off=adctime.Hold()),
         })
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=["default"])
     P.commit(temporal.next, P.define("U1", U + dt * R, at=temporal.next.point))

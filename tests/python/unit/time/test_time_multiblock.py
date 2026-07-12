@@ -188,7 +188,7 @@ def section_a(t):
         "solve_fields_from_blocks with a block listed twice is rejected")
 
     # Control flow (range/while/if) inside a NON-index-0 block must route its body ops to THAT block's
-    # runtime index, not silently to 0 (_emit_while/_emit_range/_emit_if forward block_idx). Block b
+    # runtime index, not silently to 0 (control-flow emitters forward block_idx). Block b
     # (index 1) updates inside a range loop -> the in-loop RHS must lower to ctx.rhs_into(1, ...).
     Pcf = t.Program("cf_block_routing")
     Uacf = typed_state(Pcf, "a")

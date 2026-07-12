@@ -12,23 +12,25 @@ import json
 from typing import Any
 
 from pops.codegen.program_emit_kernels import _AUX_OUTPUT_OPS, ProgramValue
-from pops.ir.literals import scalar_cpp
+from pops.time.schedule import (
+    AccumulateDt, AtStart, Error, Every, Hold, Skip, When, Zero,
+)
 
 
 def _schedule_due_test(program: Any, v: Any, sched: Any, var: Any = None) -> str:
     """The C++ boolean 'is this node due this step' for a non-subcycle schedule kind. Reused as the
     guard of the policy branch. Raises (naming ADC-458) for a kind that needs a runtime primitive the
     compiled .so does not have (on_end: no end-of-run signal reaches a sim.step(dt) loop)."""
-    kind = sched.kind
-    if kind == "every":
+    trigger = sched.trigger
+    if type(trigger) is Every:
         # Cadence: due cold-start, then every N macro-steps (CacheManager::is_due via macro_step()).
-        return "ctx.cache_should_update(%d, %d)" % (v.id, int(sched.params.get("n", 1)))
-    if kind == "on_start":
+        return "ctx.cache_should_update(%d, %d)" % (v.id, trigger.n)
+    if type(trigger) is AtStart:
         return "(ctx.macro_step() == 0)"
-    if kind == "when":
+    if type(trigger) is When:
         # A runtime predicate: a Program Bool value already lowered to a parenthesized C++ expr token
         # (a compare over reductions). A bare Python callable cannot lower (it is not a Program value).
-        cond = sched.params.get("cond")
+        cond = trigger.condition
         if not (isinstance(cond, ProgramValue) and cond.vtype == "bool"):
             raise NotImplementedError(
                 "when(cond) lowers only a Program Bool predicate (e.g. P.norm2(r) < tol), not a "
@@ -42,9 +44,9 @@ def _schedule_due_test(program: Any, v: Any, sched: Any, var: Any = None) -> str
                 "predicate earlier in the Program (ADC-458)" % v.name)
         return tokens[key]
     raise NotImplementedError(
-        "schedule kind %r on node %r is not lowerable: on_end() needs an end-of-run signal that a "
+        "schedule trigger %s on node %r is not lowerable: AtEnd needs an end-of-run signal that a "
         "compiled sim.step(dt) loop never sees (the .so cannot know the last step); use on_start()/"
-        "every()/when()/subcycle() or an on_end host hook (ADC-458)." % (kind, v.name))
+        "Every/When or a later ConsumerGraph host hook." % (type(trigger).__name__, v.name))
 
 def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) -> None:
     """Wrap the C++ statements node @p v emitted (``lines[start:]``) in its schedule's due-test guard
@@ -56,31 +58,13 @@ def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) 
         return
     body = lines[start:]
     del lines[start:]
-    if sched.kind == "subcycle":
-        # Structured sub-cycling of a field solve (the gate restricts subcycle to an aux-output op):
-        # run the op body COUNT times over the sub-dt (macro_dt / count by default, or an explicit
-        # dt), refreshing the persistent System aux each pass. A pure recompute cadence -- no cache.
-        # The sub-dt is a const local exposed for a dt-scaled body; the MVP field-solve body is
-        # dt-free, so it documents the cadence (the aux solve re-runs COUNT times).
-        count = int(sched.params["count"])
-        sub_dt = sched.params.get("dt")
-        sd = "_subdt%d" % v.id
-        if sub_dt is None:
-            lines.append("const pops::Real %s = dt / static_cast<pops::Real>(%d);" % (sd, count))
-        else:
-            lines.append("const pops::Real %s = %s;" % (sd, scalar_cpp(sub_dt)))
-        lines.append("(void)%s;" % sd)  # the MVP body is self-contained; sd documents the cadence
-        lines.append("for (int _sub%d = 0; _sub%d < %d; ++_sub%d) {" % (v.id, v.id, count, v.id))
-        lines += ["  " + ln for ln in body]
-        lines.append("}")
-        return
     due = _schedule_due_test(program, v, sched, var)
-    policy = sched.policy
+    policy = sched.off
     is_aux = v.op in _AUX_OUTPUT_OPS
     # The scratch node's output token (the MultiFab the policy holds / zeroes). A field solve writes
     # the System aux and sets no var[v.id], so out is read only on the scratch path.
     out = None if is_aux else var.get(v.id)
-    if policy == "recompute":
+    if policy is None:
         # Run only when due; on a NOT-due step do nothing (the aux / scratch keeps its last content).
         # recompute off-cadence is simply 'run when due' -- no cache, no else branch. A scratch node
         # hoists its output declaration so the buffer stays in scope when the body does not run.
@@ -95,7 +79,7 @@ def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) 
             lines += ["  " + ln for ln in rest]
             lines.append("}")
         return
-    if policy == "skip":
+    if type(policy) is Skip:
         # Do not run the op off-cadence: the value keeps its previous content (the cacheable contract
         # -- downstream must tolerate a stale value). A scratch node hoists its output declaration so
         # the stale buffer stays in scope across the guard (no else branch: nothing happens off-
@@ -111,7 +95,7 @@ def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) 
             lines += ["  " + ln for ln in rest]
             lines.append("}")
         return
-    if policy == "zero":
+    if type(policy) is Zero:
         # Off-cadence, zero the node's output. The output must EXIST in both branches: for a scratch
         # node hoist its allocation out of the guard (the first emitted line declares var[v.id]); the
         # aux always exists (System-owned).
@@ -130,7 +114,7 @@ def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) 
             lines.append("  %s.set_val(static_cast<pops::Real>(0));" % out)
             lines.append("}")
         return
-    if policy == "hold":
+    if type(policy) is Hold:
         # Recompute + cache when due; restore the cached value off-cadence (no recompute). The aux
         # path uses cache_store_aux/restore_aux; a scratch node hoists its allocation and uses the
         # named-scratch cache. _validate_schedule already rejected hold on a non-cacheable operator.
@@ -151,7 +135,7 @@ def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) 
             lines.append("  ctx.cache_restore_scratch(%d, %s);" % (v.id, out))
             lines.append("}")
         return
-    if policy == "accumulate_dt":
+    if type(policy) is AccumulateDt:
         # Off-cadence: accumulate THIS step's dt (the real skipped dt, never N*dt_current) and hold the
         # cached value. When due: read eff_dt = dt + sum(skipped) (resets the accumulator), recompute,
         # cache. eff_dt is bound so a dt-dependent recompute can read it (the MVP field solve / scratch
@@ -180,7 +164,7 @@ def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) 
             lines.append("  ctx.cache_restore_scratch(%d, %s);" % (v.id, out))
             lines.append("}")
         return
-    if policy == "error":
+    if type(policy) is Error:
         # Guard that a stale value is never read off-cadence: run when due, else fail loud (the node
         # asserts it is only consumed on its cadence). Emitted as a runtime throw on the not-due path.
         # A scratch node hoists its output declaration so the buffer stays in scope (the throw never
@@ -204,7 +188,8 @@ def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) 
             lines.append("}")
         return
     raise NotImplementedError(
-        "schedule policy %r on node %r is not lowerable (ADC-458)" % (policy, v.name))
+        "schedule off-policy %s on node %r is not lowerable"
+        % (type(policy).__name__, v.name))
 
 def _split_output_decl(program: Any, body: Any, out: Any, v: Any) -> tuple:
     """Split a scratch node's emitted @p body into (declaration_line, rest): the OUTPUT scratch

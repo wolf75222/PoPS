@@ -9,8 +9,8 @@ from pops.model import Module, Rate
 from pops.problem import Problem
 from pops.time import Program
 from pops.time.graph import (
-    Branch, Commit, Loop, OperatorCall, ProgramGraph, ProgramValue, Region, RegionCapture,
-    StateRead, Synchronize, ValueRef,
+    Branch, Commit, Loop, OperatorCall, ProgramValue, Region, RegionCapture, StateRead,
+    Synchronize, ValueRef,
 )
 from pops.time.points import Clock, TimePoint
 
@@ -106,7 +106,7 @@ def test_to_graph_is_a_deep_snapshot_of_serialized_attrs():
     assert graph.to_data() == before
 
 
-def test_to_graph_converts_if_range_and_while_blocks_to_structured_regions():
+def test_to_graph_converts_branch_range_and_while_blocks_to_structured_regions():
     model = Module("control")
     space = model.state_space("U", ("u",))
     block = Problem(name="case").add_block("fluid", model)
@@ -118,7 +118,11 @@ def test_to_graph_converts_if_range_and_while_blocks_to_structured_regions():
     def copy(P, value):
         return P.linear_combine("body_copy", 1 * value)
 
-    selected = program.if_(state.n, condition, copy)
+    selected = program.branch(
+        condition,
+        lambda P: copy(P, state.n),
+        lambda _P: state.n,
+    )
     ranged = program.range(selected, 2, copy)
     program.while_(ranged, lambda P, value: P.norm2(value) > 0, copy)
 
@@ -129,7 +133,7 @@ def test_to_graph_converts_if_range_and_while_blocks_to_structured_regions():
     assert type(branch.when_true) is Region and type(branch.when_false) is Region
     assert branch.when_true.nodes[0].op == "linear_combine"
     assert branch.when_true.result == ValueRef(branch.when_true.nodes[0].node_id)
-    assert branch.when_false.nodes == () and branch.when_false.result == branch.state
+    assert branch.when_false.nodes == () and branch.when_false.result == ValueRef(state.n.id)
     assert [loop.loop_kind for loop in loops] == ["range", "while"]
     assert loops[0].count == 2 and loops[0].condition is None
     assert loops[1].condition.result.node_id == loops[1].condition.nodes[-1].node_id
@@ -140,17 +144,19 @@ def test_to_graph_converts_if_range_and_while_blocks_to_structured_regions():
 def test_structured_region_validates_capture_identity_clock_point_and_inner_refs():
     clock = Clock("macro")
     point = TimePoint(clock)
-    source = StateRead(0, {"qualified_id": "case/fluid/U"}, clock, point)
-    bad_capture = RegionCapture(ValueRef(0), clock, TimePoint(clock, 1))
-    arm = Region("arm", (bad_capture,), (), ValueRef(0), clocks=(clock,))
+    signature = {"value_type": "state", "space": None, "block": None}
+    bad_capture = RegionCapture(
+        ValueRef(1), clock, TimePoint(clock, 1), signature=signature)
+    arm = Region(
+        "arm", (bad_capture,), (), ValueRef(1), clocks=(clock,),
+        result_signature=signature)
     identity = Region(
-        "identity", (RegionCapture(ValueRef(0), clock, point),), (), ValueRef(0),
-        clocks=(clock,))
-    branch = Branch(
-        1, ValueRef(0), arm, identity, clock, point, state=ValueRef(0))
-
-    with pytest.raises(ValueError, match="capture 0 clock/point metadata"):
-        ProgramGraph("bad-capture", (source, branch), clocks=(clock,))
+        "identity", (RegionCapture(ValueRef(1), clock, point, signature=signature),), (),
+        ValueRef(1), clocks=(clock,), result_signature=signature)
+    with pytest.raises(ValueError, match="clock and exact point"):
+        Branch(
+            2, ValueRef(0), arm, identity, clock, point,
+            result_signature=signature)
 
     with pytest.raises(ValueError, match="earlier readable node or explicit capture"):
         Region(

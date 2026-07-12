@@ -2,7 +2,7 @@
 
 Extracted verbatim from ``pops.codegen.program_codegen`` so the Program -> C++ lowering
 fits the Spec-4 file-size budget.  ``_emit_body`` is the two-phase body walk;
-``_emit_while`` / ``_emit_range`` / ``_emit_if`` lower the control-flow ops (they re-run
+``_emit_while`` / ``_emit_range`` / ``_emit_branch`` lower the control-flow ops (they re-run
 the per-op lowering on their sub-blocks); ``_coupled_rate_components`` / ``_walk_expr``
 resolve and scan a coupled_rate node.  The op dispatcher ``_emit_op`` lives in
 ``program_emit_ops`` and is imported LAZILY inside the functions below to break the
@@ -220,24 +220,49 @@ def _emit_range(program: Any, v: Any, base: Any, var: Any, model: Any, lines: An
     lines += ["  " + ln for ln in body_lines]
     lines.append("}")
 
-def _emit_if(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any, block_idx: Any = None) -> None:
-    """Lower an if op to a C++ branch. @p cond was emitted at the top level (its boolean expression
-    is var[cond.id]); the loop variable is a copy of the input state, overwritten in place only when
-    the branch is taken (so the result is the input state when the condition is false at runtime)."""
-    from pops.codegen.program_emit_ops import _emit_op
-    state_in, cond = v.inputs[0], v.inputs[1]
-    x = "x%d" % v.id
+def _emit_branch(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any,
+                 block_idx: Any = None) -> None:
+    """Lower two captured regions to a genuinely lazy C++ ``if``/``else`` value branch."""
+    (cond,) = v.inputs
+    x = ("b%d" if v.vtype == "bool" else "s%d") % v.id
+    is_field = v.vtype in ("state", "rhs", "scalar_field")
+    if is_field:
+        x = "x%d" % v.id
+        if base is None:
+            raise NotImplementedError(
+                "branch codegen for a block-free scalar_field result requires an explicit "
+                "layout template")
+        lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);" % (x, var[base.id]))
+    else:
+        cpp_type = "bool" if v.vtype == "bool" else "pops::Real"
+        lines.append("%s %s;" % (cpp_type, x))
     var[v.id] = x
-    lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);" % (x, var[base.id]))
-    lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, static_cast<pops::Real>(1), %s);"
-                 % (x, x, var[state_in.id]))
     lines.append("if (%s) {" % var[cond.id])
-    sub = dict(var)
-    sub[state_in.id] = x
-    body_lines = []
-    for w in v.attrs["body_block"]:
-        _emit_op(program, w, base, frozenset(), sub, model, body_lines, block_idx=block_idx)
-    body_lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, static_cast<pops::Real>(1), %s);"
-                      % (x, x, sub[v.attrs["body"].id]))
-    lines += ["  " + ln for ln in body_lines]
+    lines += ["  " + line for line in _emit_branch_arm(
+        program, v.attrs["true_block"], v.attrs["true_result"], x, is_field,
+        base, var, model, block_idx)]
+    lines.append("} else {")
+    lines += ["  " + line for line in _emit_branch_arm(
+        program, v.attrs["false_block"], v.attrs["false_result"], x, is_field,
+        base, var, model, block_idx)]
     lines.append("}")
+
+
+def _emit_branch_arm(program: Any, block: Any, result: Any, output: str, is_field: bool,
+                     base: Any, outer_var: Any, model: Any, block_idx: Any) -> list[str]:
+    from pops.codegen.program_emit_ops import _emit_op
+
+    sub = dict(outer_var)
+    arm_lines = []
+    for value in block:
+        _emit_op(
+            program, value, base, frozenset(), sub, model, arm_lines,
+            block_idx=block_idx)
+    token = sub[result.id]
+    if is_field:
+        arm_lines.append(
+            "ctx.lincomb(%s, static_cast<pops::Real>(0), %s, "
+            "static_cast<pops::Real>(1), %s);" % (output, output, token))
+    else:
+        arm_lines.append("%s = %s;" % (output, token))
+    return arm_lines

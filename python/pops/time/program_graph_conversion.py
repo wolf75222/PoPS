@@ -97,19 +97,32 @@ def program_to_graph(program: Any) -> Any:
         for value in block:
             for candidate in value.inputs:
                 add(candidate)
-            for key in ("cond_block", "body_block"):
+            for key in ("cond_block", "body_block", "true_block", "false_block"):
                 nested = value.attrs.get(key)
                 if nested is None:
                     continue
-                result_key = "cond" if key == "cond_block" else "body"
+                result_key = {
+                    "cond_block": "cond", "body_block": "body",
+                    "true_block": "true_result", "false_block": "false_result",
+                }[key]
                 for candidate in region_values(nested, value.attrs[result_key]):
                     add(candidate)
         add(result)
         return tuple(captures[key] for key in sorted(captures))
 
-    def convert_region(block: Any, result: Any, name: str) -> Any:
+    def result_signature(result: Any) -> dict[str, Any]:
+        return {
+            "value_type": result.vtype,
+            "space": result.space.to_data() if result.space is not None else None,
+            "block": result.block.inspect() if result.block is not None else None,
+        }
+
+    def convert_region(block: Any, result: Any, name: str,
+                       *, signature: Any = None) -> Any:
         captures = tuple(
-            RegionCapture(ValueRef(value.id), value.clock, value.point)
+            RegionCapture(
+                ValueRef(value.id), value.clock, value.point,
+                signature=result_signature(value))
             for value in region_values(block, result)
         )
         region_nodes = convert_values(block)
@@ -120,25 +133,31 @@ def program_to_graph(program: Any) -> Any:
         for capture in captures:
             if capture.clock not in clocks:
                 clocks.append(capture.clock)
-        return Region(name, captures, region_nodes, ValueRef(result.id), clocks=clocks)
+        return Region(
+            name, captures, region_nodes, ValueRef(result.id), clocks=clocks,
+            result_signature=signature)
 
     def convert_value(value: Any) -> tuple[Any, ...]:
         nonlocal next_id
         prefix = ()
         inputs = tuple(ValueRef(item.id) for item in value.inputs)
-        if value.op == "if":
-            body = convert_region(
-                value.attrs["body_block"], value.attrs["body"], "%s/true" % _name(value))
-            identity = convert_region((), value.inputs[0], "%s/false" % _name(value))
+        if value.op == "branch":
+            signature = result_signature(value)
+            when_true = convert_region(
+                value.attrs["true_block"], value.attrs["true_result"],
+                "%s/true" % _name(value), signature=signature)
+            when_false = convert_region(
+                value.attrs["false_block"], value.attrs["false_result"],
+                "%s/false" % _name(value), signature=signature)
             return (Branch(
                 value.id,
-                inputs[1],
-                body,
-                identity,
+                inputs[0],
+                when_true,
+                when_false,
                 value.clock,
                 value.point,
-                state=inputs[0],
                 name=_name(value),
+                result_signature=signature,
             ),)
         if value.op == "range":
             body = convert_region(

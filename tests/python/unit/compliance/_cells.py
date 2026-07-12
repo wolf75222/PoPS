@@ -489,7 +489,7 @@ def _neg_abi_cache_mismatch():
 
 def _neg_ir_index_refusal():
     # Gap 3 closed: a Program state value refuses __index__ (range()/index) with a stable message
-    # steering to P.while_ / P.if_ -- a runtime IR value is not a compile-time index.
+    # steering to P.while_ / P.branch -- a runtime IR value is not a compile-time index.
     program = adctime.Program("adc547_index")
     _module, block, declaration = _state_refs("adc547-index-model", "plasma")
     state = program.state(block, declaration).n

@@ -103,44 +103,19 @@ def test_ssprk2_parity():
     block, state_handle = _refs(_model("ssprk2"))
     macro = libtime.ssprk2(block, state_handle)
     manual = adctime.Program("ssprk2")
-    state = manual.state(block, state_handle)
-    U0 = state.n
-    k0 = _stage(manual, U0, "ssprk2_0", 0)
-    U1 = manual.linear_combine(
-        "ssprk2_U1", U0 + manual.dt * k0, at=_point(manual, "ssprk2_1", 1))
-    k1 = _stage(manual, U1, "ssprk2_1", 1)
-    manual.commit(
-        state.next,
-        manual.linear_combine(
-            "ssprk2_step",
-            Fraction(1, 2) * U0 + Fraction(1, 2) * (U1 + manual.dt * k1),
-            at=state.next.point,
-        ),
-    )
+    libtime.rk(manual, block, state_handle, tableau=libtime.SSPRK2_TABLEAU)
     _assert_parity(macro, manual)
+    assert macro.to_graph().graph_hash == manual.to_graph().graph_hash
 
 
 def test_ssprk3_parity():
     block, state_handle = _refs(_model("ssprk3"))
     macro = libtime.ssprk3(block, state_handle)
     manual = adctime.Program("ssprk3")
-    state = manual.state(block, state_handle)
-    U0 = state.n
-    k0 = _stage(manual, U0, "ssprk3_0", 0)
-    U1 = manual.linear_combine(
-        "ssprk3_U1", U0 + manual.dt * k0, at=_point(manual, "ssprk3_1", 1))
-    k1 = _stage(manual, U1, "ssprk3_1", 1)
-    U2 = manual.linear_combine(
-        "ssprk3_U2",
-        Fraction(3, 4) * U0 + Fraction(1, 4) * (U1 + manual.dt * k1),
-        at=_point(manual, "ssprk3_2", Fraction(1, 2)),
-    )
-    k2 = _stage(manual, U2, "ssprk3_2", Fraction(1, 2))
-    manual.commit(state.next, manual.linear_combine(
-        "ssprk3_step",
-        Fraction(1, 3) * U0 + Fraction(2, 3) * (U2 + manual.dt * k2),
-        at=state.next.point))
+    from pops.lib.time.ssprk import SSPRK3_TABLEAU
+    libtime.rk(manual, block, state_handle, tableau=SSPRK3_TABLEAU)
     _assert_parity(macro, manual)
+    assert macro.to_graph().graph_hash == manual.to_graph().graph_hash
 
 
 def test_rk4_parity():

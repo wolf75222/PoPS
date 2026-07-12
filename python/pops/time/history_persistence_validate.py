@@ -33,7 +33,7 @@ _KNOWN_DETERMINISTIC_OPS = frozenset({
     "solve_linear", "solve_local_linear", "matrix_free_operator",
     "schur_coeffs", "schur_energy", "schur_reconstruct", "schur_explicit_flux", "schur_rhs",
     "cfl", "hmin", "max_wave_speed", "record_scalar", "reduce", "scalar_op", "compare",
-    "while", "range", "if", "solve_local_nonlinear",
+    "while", "range", "branch", "solve_local_nonlinear",
 })
 
 #: The capability tag an external brick clears to declare it is NOT a deterministic function of its
@@ -47,7 +47,8 @@ def _walk_ops(values):
     for v in values:
         yield v
         attrs = getattr(v, "attrs", {}) or {}
-        for key in ("cond_block", "body_block", "apply_block", "residual_block"):
+        for key in ("cond_block", "body_block", "true_block", "false_block",
+                    "apply_block", "residual_block"):
             block = attrs.get(key)
             if block:
                 yield from _walk_ops(block)

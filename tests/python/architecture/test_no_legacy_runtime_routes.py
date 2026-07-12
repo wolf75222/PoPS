@@ -108,8 +108,6 @@ TEXT_SELECTOR_ALLOWLIST = {
         "internal codegen target seam; public compile/bind do not expose target=",
     ("python/pops/time/program_local.py", "_ProgramLocal.solve_local_nonlinear", "method"):
         "typed local nonlinear op currently has a single explicit Newton backend",
-    ("python/pops/time/schedule.py", "Schedule.__init__", "policy"):
-        "typed schedule descriptor limits the existing recompute/hold/accumulate policy set",
     ("python/pops/mesh/boundaries/__init__.py", "Physical.__init__", "kind"):
         "typed boundary descriptor limits the legacy wall/outlet topology selector",
 }

@@ -34,7 +34,7 @@ from pops.codegen.program_emit_model_kernels import (
 from pops.codegen.program_emit_condensed import emit_condensed_op
 from pops.codegen.program_emit_control import (
     _coupled_rate_components,
-    _emit_if,
+    _emit_branch,
     _emit_range,
     _emit_while,
 )
@@ -210,7 +210,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     elif v.op == "where":
         # A PER-CELL conditional select (spec op 17, ADC-418): out(i,j,c) = mask ? a(i,j,c) :
         # b(i,j,c), COMPONENT-WISE. A fresh scratch the same shape as `a` (its vtype / ncomp); the
-        # ternary is decided per cell inside the kernel (NOT a scalar runtime branch -- that is if_).
+        # ternary is decided per cell inside the kernel (NOT the scalar lazy ``branch`` op).
         mask_in, a_in, b_in = v.inputs
         var[v.id] = "w%d" % v.id
         lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);" % (var[v.id], var[a_in.id]))
@@ -436,8 +436,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         _emit_while(program, v, base, var, model, lines, block_idx)
     elif v.op == "range":
         _emit_range(program, v, base, var, model, lines, block_idx)
-    elif v.op == "if":
-        _emit_if(program, v, base, var, model, lines, block_idx)
+    elif v.op == "branch":
+        _emit_branch(program, v, base, var, model, lines, block_idx)
     elif v.op == "linear_combine":
         terms = list(zip(v.inputs, v.attrs["coeffs"], strict=True))
         if v.id in committed_ids:

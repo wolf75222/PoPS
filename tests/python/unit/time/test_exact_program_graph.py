@@ -14,6 +14,7 @@ from pops.time.graph import (
     OperatorCall,
     ProgramGraph,
     ProgramValue,
+    Region,
     Solve,
     StateRead,
     Synchronize,
@@ -114,12 +115,20 @@ def test_cross_clock_reads_require_one_explicit_synchronize_node():
 
 def test_branch_owns_immutable_graph_arms_and_is_lazily_represented():
     clock = Clock("macro")
+    point = TimePoint(clock)
     condition = ProgramValue(
-        0, "condition", "bool", "compare", (), clock, TimePoint(clock))
-    true_graph = ProgramGraph("true", (), clocks=(clock,))
-    false_graph = ProgramGraph("false", (), clocks=(clock,))
+        0, "condition", "bool", "compare", (), clock, point)
+    selected = ProgramValue(1, "selected", "scalar", "value", (), clock, point)
+    signature = {"value_type": "scalar", "space": None, "block": None}
+    true_graph = Region(
+        "true", (), (selected,), ValueRef(1), clocks=(clock,),
+        result_signature=signature)
+    false_graph = Region(
+        "false", (), (selected,), ValueRef(1), clocks=(clock,),
+        result_signature=signature)
     branch = Branch(
-        1, ValueRef(0), true_graph, false_graph, clock, TimePoint(clock), name="choose")
+        2, ValueRef(0), true_graph, false_graph, clock, point, name="choose",
+        result_signature=signature)
     graph = ProgramGraph("branch", (condition, branch), clocks=(clock,))
 
     data = graph.to_data()["nodes"][1]

@@ -1,183 +1,309 @@
-"""pops.time scheduler annotations (Spec 3 unified scheduler).
+"""Closed, typed schedule algebra for temporal Program nodes.
 
-``Schedule`` is an inert IR annotation deciding WHEN a node is due and what to do when it is
-not; the module helpers (``always`` / ``every`` / ``when`` / ``on_start`` / ``on_end`` /
-``subcycle``) build the kinds. Authoring only.
+Schedules are values, not mini configuration dictionaries: a :class:`Domain` says which
+runtime timeline owns a cadence, a :class:`Trigger` says when it is due, and an
+:class:`OffPolicy` says what a consumer observes between due instants.  No public constructor
+accepts a kind or policy string.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
-from types import MappingProxyType
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from typing import Any
 
+from pops.model.ownership import OwnerPath
 from pops.params.use_sites import ParamUse, resolve_param_use
-from pops.time.points import Clock
-from pops.time.value_metadata import _freeze_attr
+from pops.time.points import Clock, StagePoint, TimePoint, point_clock
 
 
-def _freeze_param(value: Any) -> Any:
-    # Runtime output policies deliberately accept a callable predicate; Program schedules reject
-    # such predicates at their explicit lowerability gate. Every data leaf is otherwise strict.
-    if callable(value):
-        return value
-    if isinstance(value, Mapping):
-        return MappingProxyType({key: _freeze_param(item) for key, item in value.items()})
-    if isinstance(value, (list, tuple)):
-        return tuple(_freeze_param(item) for item in value)
-    if isinstance(value, (set, frozenset)):
-        return frozenset(_freeze_param(item) for item in value)
-    return _freeze_attr(value)
+def _clock(value: Any, where: str) -> Clock:
+    if type(value) is not Clock:
+        raise TypeError("%s must be an exact Clock" % where)
+    return value
 
 
-class Schedule:
-    """When a Program node is due, and what to do when it is not (Spec 3 unified scheduler).
+def _point(value: Any, clock: Clock, where: str) -> TimePoint | StagePoint | None:
+    if value is None:
+        return None
+    if type(value) not in (TimePoint, StagePoint):
+        raise TypeError("%s must be an exact TimePoint or StagePoint" % where)
+    if point_clock(value, where) != clock:
+        raise ValueError("%s belongs to a different clock" % where)
+    return value
 
-    A Schedule is an inert IR annotation recorded on a node (``ProgramValue.attrs['schedule']``). The
-    ``kind`` decides WHEN the node is due (``always`` every step, ``every(N)``, ``when(cond)``,
-    ``on_start`` / ``on_end``, ``subcycle``); the ``policy`` decides what happens when it is NOT
-    due (``recompute`` the default, ``hold`` the cached value, ``skip``, ``zero``,
-    ``accumulate_dt``, or ``error``). Build a kind with the module helpers and set the policy by
-    chaining: ``every(10, clock=T.clock).hold()``.
 
-    Only ``always()`` runs at ``sim.step`` today: the runtime that honors a non-trivial schedule
-    (the typed cache, ``accumulate_dt``, the checkpoint) is the C++ part of ADC-458, so a node
-    carrying a non-always schedule is recorded and inspectable but refuses to lower (it is never
-    silently ignored). See ``docs/sphinx/reference/program-scheduler.md``.
-    """
+@dataclass(frozen=True, slots=True)
+class Domain:
+    """Closed base class for schedule domains; instantiate one of its concrete subclasses."""
 
-    _KINDS = ("always", "every", "when", "on_start", "on_end", "subcycle")
-    _POLICIES = ("recompute", "hold", "skip", "zero", "accumulate_dt", "error")
-    # policies that reuse a stored value, so the operator must be cacheable
-    _CACHING = ("hold", "accumulate_dt")
+    clock: Clock
+    at: TimePoint | StagePoint | None = None
     __pops_ir_immutable__ = True
-    # ADC-642: each kind decoded ONCE. so_lowerable = a compiled sim.step(dt) loop can evaluate the
-    # due-test (on_end cannot: no end-of-run signal reaches the .so). host_cadence = the host output
-    # driver can fire it (subcycles are internal to the native macro step, invisible to the run-loop
-    # hook). Codegen and the output driver READ these instead of re-listing kind strings; the per-kind
-    # C++ / host bodies stay in their own layers.
-    _KIND_FACTS = MappingProxyType({
-        "always": MappingProxyType({"so_lowerable": True,  "host_cadence": True}),
-        "every": MappingProxyType({"so_lowerable": True,  "host_cadence": True}),
-        "when": MappingProxyType({"so_lowerable": True,  "host_cadence": True}),
-        "on_start": MappingProxyType({"so_lowerable": True,  "host_cadence": True}),
-        "on_end": MappingProxyType({"so_lowerable": False, "host_cadence": True}),
-        "subcycle": MappingProxyType({"so_lowerable": True,  "host_cadence": False}),
-    })
 
-    __slots__ = ("clock", "kind", "policy", "params")
+    def __post_init__(self) -> None:
+        if type(self) is Domain:
+            raise TypeError("Domain is closed; use AcceptedStep/Attempt/Stage/... instead")
+        clock = _clock(self.clock, "%s clock" % type(self).__name__)
+        object.__setattr__(self, "at", _point(self.at, clock, "%s at" % type(self).__name__))
 
-    def __init__(self, clock: Any, kind: Any, policy: Any = "recompute", **params: Any) -> None:
-        if type(clock) is not Clock:
-            raise TypeError("Schedule clock must be an exact Clock")
-        if kind not in Schedule._KINDS:
-            raise ValueError("schedule kind %r must be one of %s"
-                             % (kind, ", ".join(Schedule._KINDS)))
-        if policy not in Schedule._POLICIES:
-            raise ValueError("schedule policy %r must be one of %s"
-                             % (policy, ", ".join(Schedule._POLICIES)))
-        object.__setattr__(self, "clock", clock)
-        object.__setattr__(self, "kind", kind)
-        object.__setattr__(self, "policy", policy)
-        object.__setattr__(self, "params", _freeze_param(params))
 
-    def __setattr__(self, name: str, value: Any) -> None:
-        raise AttributeError("Schedule is immutable")
+@dataclass(frozen=True, slots=True)
+class AcceptedStep(Domain):
+    """Cadence indexed only by committed, accepted macro steps."""
 
-    def __delattr__(self, name: str) -> None:
-        raise AttributeError("Schedule is immutable")
 
-    def is_always(self) -> Any:
-        """True for the default cadence (every step, recompute) -- the only schedule that lowers."""
-        return self.kind == "always" and self.policy == "recompute"
+@dataclass(frozen=True, slots=True)
+class Attempt(Domain):
+    """Cadence indexed by step attempts, including rejected attempts."""
 
-    def needs_cache(self) -> Any:
-        """True if the policy reuses a stored value (so the operator must be cacheable)."""
-        return self.policy in Schedule._CACHING
 
-    def so_lowerable(self) -> bool:
-        """True when a compiled sim.step(dt) loop can evaluate this kind's due-test (ADC-642)."""
-        return Schedule._KIND_FACTS[self.kind]["so_lowerable"]
+@dataclass(frozen=True, slots=True)
+class Stage(Domain):
+    """Cadence at one exact named stage point."""
 
-    def host_cadence(self) -> bool:
-        """True when the host output run-loop can honor this kind's cadence (ADC-642)."""
-        return Schedule._KIND_FACTS[self.kind]["host_cadence"]
+    at: StagePoint
 
-    def _with_policy(self, policy: Any) -> Any:
-        return Schedule(self.clock, self.kind, policy=policy, **self.params)
+    def __post_init__(self) -> None:
+        super(Stage, self).__post_init__()
+        if type(self.at) is not StagePoint:
+            raise TypeError("Stage at must be an exact StagePoint")
 
-    def recompute(self) -> Any:
-        """A copy whose off-cadence policy re-evaluates the node (the default)."""
-        return self._with_policy("recompute")
 
-    def hold(self) -> Any:
-        """A copy whose off-cadence policy reuses the cached value (needs a cacheable op)."""
-        return self._with_policy("hold")
+@dataclass(frozen=True, slots=True)
+class ClockTick(Domain):
+    """Cadence on a distinct logical clock tick (multirate runtime domain)."""
 
-    def skip(self) -> Any:
-        """A copy whose off-cadence policy skips the node entirely."""
-        return self._with_policy("skip")
 
-    def zero(self) -> Any:
-        """A copy whose off-cadence policy substitutes a zero value."""
-        return self._with_policy("zero")
+@dataclass(frozen=True, slots=True)
+class AMRLevel(Domain):
+    """Cadence for one AMR hierarchy level."""
 
-    def accumulate_dt(self) -> Any:
-        """A copy whose off-cadence policy accumulates dt until the node is next due."""
-        return self._with_policy("accumulate_dt")
+    level: int = 0
 
-    def error(self) -> Any:
-        """A copy whose off-cadence policy raises: the node must never run off cadence."""
-        return self._with_policy("error")
+    def __post_init__(self) -> None:
+        super(AMRLevel, self).__post_init__()
+        if isinstance(self.level, bool) or not isinstance(self.level, int) or self.level < 0:
+            raise ValueError("AMRLevel level must be a non-negative int")
+
+
+@dataclass(frozen=True, slots=True)
+class EventHandle:
+    """Immutable owner-qualified identity of one runtime event channel."""
+
+    owner: OwnerPath
+    local_id: str
+    __pops_ir_immutable__ = True
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "owner", OwnerPath.coerce(self.owner).canonical())
+        if not isinstance(self.local_id, str) or not self.local_id:
+            raise ValueError("EventHandle local_id must be a non-empty string")
+
+    def to_data(self) -> dict[str, Any]:
+        return {"schema_version": 1, "owner": self.owner.to_data(), "local_id": self.local_id}
+
+
+@dataclass(frozen=True, slots=True)
+class Event(Domain):
+    """Cadence driven by an owner-qualified typed runtime event channel."""
+
+    event: EventHandle | None = None
+
+    def __post_init__(self) -> None:
+        super(Event, self).__post_init__()
+        if type(self.event) is not EventHandle:
+            raise TypeError("Event event must be an exact EventHandle")
+
+
+@dataclass(frozen=True, slots=True)
+class WallOutput(Domain):
+    """Host wall/output cadence, owned by the later ConsumerGraph runtime."""
+
+
+@dataclass(frozen=True, slots=True)
+class Trigger:
+    domain: Domain
+    __pops_ir_immutable__ = True
+
+    def __post_init__(self) -> None:
+        if type(self) is Trigger:
+            raise TypeError("Trigger is closed; use Always/Every/AtStart/AtEnd/When")
+        if type(self.domain) not in (
+                AcceptedStep, Attempt, Stage, ClockTick, AMRLevel, Event, WallOutput):
+            raise TypeError("%s domain must be an exact closed Domain" % type(self).__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class Always(Trigger):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class Every(Trigger):
+    n: int
+
+    def __post_init__(self) -> None:
+        super(Every, self).__post_init__()
+        n = resolve_param_use(self.n, ParamUse.SCHEDULE, where="Every(n=)")
+        if isinstance(n, bool) or not isinstance(n, int) or n <= 0:
+            raise ValueError("Every n must be a positive int")
+        object.__setattr__(self, "n", n)
+
+
+@dataclass(frozen=True, slots=True)
+class AtStart(Trigger):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class AtEnd(Trigger):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class When(Trigger):
+    condition: Any
+
+
+@dataclass(frozen=True, slots=True)
+class OffPolicy:
+    """Closed base class for the meaning of an off-cadence read."""
+
+    __pops_ir_immutable__ = True
+
+    def __post_init__(self) -> None:
+        if type(self) is OffPolicy:
+            raise TypeError("OffPolicy is closed; use Hold/Skip/Zero/AccumulateDt/Error")
+
+
+@dataclass(frozen=True, slots=True)
+class Hold(OffPolicy):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class Skip(OffPolicy):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class Zero(OffPolicy):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class AccumulateDt(OffPolicy):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class Error(OffPolicy):
+    pass
+
+
+_DOMAIN_TAGS = {AcceptedStep: "accepted_step", Attempt: "attempt", Stage: "stage",
+                ClockTick: "clock_tick", AMRLevel: "amr_level", Event: "event",
+                WallOutput: "wall_output"}
+_TRIGGER_TAGS = {Always: "always", Every: "every", AtStart: "at_start",
+                 AtEnd: "at_end", When: "when"}
+_OFF_TAGS = {Hold: "hold", Skip: "skip", Zero: "zero",
+             AccumulateDt: "accumulate_dt", Error: "error"}
+
+
+@dataclass(frozen=True, slots=True)
+class Schedule:
+    """One exact typed cadence. ``off`` may be omitted only while its result is never read."""
+
+    trigger: Trigger
+    off: OffPolicy | None = None
+    __pops_ir_immutable__ = True
+
+    def __post_init__(self) -> None:
+        if type(self.trigger) not in _TRIGGER_TAGS:
+            raise TypeError("Schedule trigger must be an exact closed Trigger")
+        if self.off is not None and type(self.off) not in _OFF_TAGS:
+            raise TypeError("Schedule off must be an exact closed OffPolicy or None")
+        if type(self.trigger) is Always and self.off is not None:
+            raise ValueError("Always has no off-cadence instant; off must be omitted")
+
+    @property
+    def domain(self) -> Domain:
+        return self.trigger.domain
+
+    @property
+    def clock(self) -> Clock:
+        return self.domain.clock
+
+    @property
+    def params(self) -> dict[str, Any]:
+        """Internal generic-IR projection used by graph walkers; not an authoring surface."""
+        if type(self.trigger) is Every:
+            return {"n": self.trigger.n}
+        if type(self.trigger) is When:
+            return {"cond": self.trigger.condition}
+        return {}
+
+    def is_always(self) -> bool:
+        return type(self.trigger) is Always
+
+    def needs_cache(self) -> bool:
+        return type(self.off) in (Hold, AccumulateDt)
+
+    def validate_site(self, *, clock: Clock, point: Any = None, where: str = "schedule") -> None:
+        if self.clock != clock:
+            raise ValueError("%s clock %r does not match evaluation clock %r"
+                             % (where, self.clock.name, clock.name))
+        if self.domain.at is not None and point is not None and self.domain.at != point:
+            raise ValueError("%s point does not match its typed domain point" % where)
+
+    def map_values(self, mapper: Callable[[Any], Any]) -> Schedule:
+        trigger = self.trigger
+        if type(trigger) is When:
+            trigger = replace(trigger, condition=mapper(trigger.condition))
+        return Schedule(trigger, off=self.off)
+
+    def to_data(self) -> dict[str, Any]:
+        domain = {"type": _DOMAIN_TAGS[type(self.domain)], "clock": self.clock.to_data(),
+                  "at": self.domain.at.to_data() if self.domain.at is not None else None}
+        if type(self.domain) is AMRLevel:
+            domain["level"] = self.domain.level
+        elif type(self.domain) is Event:
+            domain["event"] = self.domain.event.to_data()
+        trigger = {"type": _TRIGGER_TAGS[type(self.trigger)]}
+        if type(self.trigger) is Every:
+            trigger["n"] = self.trigger.n
+        elif type(self.trigger) is When:
+            trigger["condition"] = self.trigger.condition
+        return {"schema_version": 1, "domain": domain, "trigger": trigger,
+                "off": _OFF_TAGS[type(self.off)] if self.off is not None else None}
 
     def __repr__(self) -> str:
-        if self.kind == "every":
-            base = "every(%r)" % (self.params.get("n"),)
-        elif self.kind == "subcycle":
-            base = "subcycle(%r)" % (self.params.get("count"),)
-        elif self.kind == "when":
-            base = "when(...)"
-        else:
-            base = "%s()" % self.kind
-        return base if self.policy == "recompute" else "%s.%s()" % (base, self.policy)
+        return "Schedule(%r%s)" % (self.trigger, ", off=%r" % self.off if self.off else "")
 
 
-# A new kind that forgets its facts row fails loudly at import, not silently at a consumer (ADC-642).
-assert set(Schedule._KIND_FACTS) == set(Schedule._KINDS)
+# Ergonomic helpers build only the exact typed algebra; none accepts a selector string.
+def always(*, clock: Clock) -> Schedule:
+    return Schedule(Always(AcceptedStep(clock)))
 
 
-def always(*, clock: Any) -> Any:
-    """Due every step, recomputed -- the default cadence (the only schedule that runs today)."""
-    return Schedule(clock, "always")
+def every(n: Any, *, clock: Clock) -> Schedule:
+    return Schedule(Every(AcceptedStep(clock), n))
 
 
-def every(n: Any, *, clock: Any) -> Any:
-    """Due every ``n`` macro-steps (``n`` a positive int)."""
-    n = resolve_param_use(n, ParamUse.SCHEDULE, where="every(n=)")
-    if isinstance(n, bool) or not (isinstance(n, int) and n > 0):
-        raise ValueError("every(n): n must be a positive int, got %r" % (n,))
-    return Schedule(clock, "every", n=n)
+def when(cond: Any, *, clock: Clock) -> Schedule:
+    return Schedule(When(AcceptedStep(clock), cond))
 
 
-def when(cond: Any, *, clock: Any) -> Any:
-    """Due when the runtime condition ``cond`` holds (a Program Bool value or a callable)."""
-    return Schedule(clock, "when", cond=cond)
+def on_start(*, clock: Clock) -> Schedule:
+    return Schedule(AtStart(AcceptedStep(clock)))
 
 
-def on_start(*, clock: Any) -> Any:
-    """Due only at the first step."""
-    return Schedule(clock, "on_start")
+def on_end(*, clock: Clock) -> Schedule:
+    return Schedule(AtEnd(AcceptedStep(clock)))
 
 
-def on_end(*, clock: Any) -> Any:
-    """Due only at the last step."""
-    return Schedule(clock, "on_end")
-
-
-def subcycle(count: Any, dt: Any = None, *, clock: Any) -> Any:
-    """Structured sub-cycling: ``count`` inner steps (of ``dt`` each, default ``macro_dt/count``)."""
-    count = resolve_param_use(count, ParamUse.SCHEDULE, where="subcycle(count=)")
-    if dt is not None:
-        dt = resolve_param_use(dt, ParamUse.SCHEDULE, where="subcycle(dt=)")
-    if isinstance(count, bool) or not (isinstance(count, int) and count > 0):
-        raise ValueError("subcycle(count): count must be a positive int, got %r" % (count,))
-    return Schedule(clock, "subcycle", count=count, dt=dt)
+__all__ = ["Domain", "AcceptedStep", "Attempt", "Stage", "ClockTick", "AMRLevel",
+           "EventHandle", "Event",
+           "WallOutput", "Trigger", "Always", "Every", "AtStart", "AtEnd", "When",
+           "OffPolicy", "Hold", "Skip", "Zero", "AccumulateDt", "Error", "Schedule",
+           "always", "every", "when", "on_start", "on_end"]

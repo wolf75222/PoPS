@@ -6,9 +6,17 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops.time.method_tableau import AdditiveRungeKuttaTableau, RungeKuttaTableau
+
 from ._helpers import (
     _DEFAULT_SOURCES, _at_point, _block_label, _commit, _exact_coefficient, _opcall,
     _operator_handle, _stage_point, _time_state, _typed_rhs, program_macro,
+)
+
+
+IMEX_EULER_TABLEAU = AdditiveRungeKuttaTableau(
+    RungeKuttaTableau(A=[[]], b=[1], c=[0], name="imex-euler-explicit"),
+    implicit_A=[[1]], implicit_b=[1], implicit_c=[1], name="imex-euler",
 )
 
 
@@ -92,3 +100,71 @@ def imex_local_linear(P: Any, block: Any, state: Any = None, *,
         "imex_step", operator=P.I - theta * P.dt * lin, rhs=q, fields=fields)
     _commit(P, temporal, u1)
     return u1
+
+
+@program_macro
+def ark_local_linear(P: Any, block: Any, state: Any = None, *,
+                     explicit_operator: Any, implicit_operator: Any,
+                     tableau: AdditiveRungeKuttaTableau,
+                     fields_operator: Any = None) -> Any:
+    """Lower an exact diagonally-implicit ARK tableau to ordinary Program operations.
+
+    The implicit operator denotes a local linear map.  Every stage records both partition
+    abscissae in one :class:`StagePoint`; no ARK-specific runtime stepper or hidden schedule exists.
+    """
+    if type(tableau) is not AdditiveRungeKuttaTableau:
+        raise TypeError("ark_local_linear: tableau must be an AdditiveRungeKuttaTableau")
+    explicit_operator = _operator_handle(explicit_operator, "explicit_operator")
+    implicit_operator = _operator_handle(implicit_operator, "implicit_operator")
+    if fields_operator is not None:
+        fields_operator = _operator_handle(fields_operator, "fields_operator")
+    temporal = _time_state(P, block, state)
+    u0 = temporal.n
+    explicit_rates: list[Any] = []
+    implicit_rates: list[Any] = []
+    tag = (tableau.name + "_") if tableau.name else "ark_"
+    for i in range(tableau.stages):
+        point = _stage_point(P, "%sstage_%d" % (tag, i), partitions={
+            "explicit": tableau.explicit.c[i], "implicit": tableau.implicit_c[i]})
+        predictor = u0
+        for j in range(i):
+            ae = tableau.explicit.A[i][j]
+            ai = tableau.implicit_A[i][j]
+            if ae != 0:
+                predictor = predictor + (P.dt * ae) * explicit_rates[j]
+            if ai != 0:
+                predictor = predictor + (P.dt * ai) * implicit_rates[j]
+        predictor = P.linear_combine("%spredictor_%d" % (tag, i), predictor, at=point)
+        fields = (_opcall(P, fields_operator, predictor,
+                          value_name="%sfields_%d" % (tag, i), point=point)
+                  if fields_operator else None)
+        linear = _opcall(P, implicit_operator, fields,
+                         value_name="%sL_%d" % (tag, i), point=point)
+        diagonal = tableau.implicit_A[i][i]
+        stage = predictor
+        if diagonal != 0:
+            stage = P.solve_local_linear(
+                "%sstage_solve_%d" % (tag, i),
+                operator=P.I - (P.dt * diagonal) * linear,
+                rhs=predictor, fields=fields)
+            stage = _at_point(P, stage, point)
+        explicit_rates.append(_opcall(
+            P, explicit_operator, stage, fields,
+            value_name="%sk_exp_%d" % (tag, i), point=point))
+        implicit_rates.append(_at_point(P, P.apply(
+            linear, stage, fields=fields, name="%sk_imp_%d" % (tag, i)), point))
+    final = u0
+    for weight, rate in zip(tableau.explicit.b, explicit_rates, strict=True):
+        if weight != 0:
+            final = final + (P.dt * weight) * rate
+    for weight, rate in zip(tableau.implicit_b, implicit_rates, strict=True):
+        if weight != 0:
+            final = final + (P.dt * weight) * rate
+    out = P.linear_combine("%sstep" % tag, final, at=temporal.next.point)
+    _commit(P, temporal, out)
+    return out
+
+
+__all__ = [
+    "IMEX_EULER_TABLEAU", "ark_local_linear", "imex_local", "imex_local_linear",
+]

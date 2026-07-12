@@ -13,30 +13,29 @@ from pops.time.values import ProgramValue, _Affine, _affine_ids
 
 
 def _serialize_schedule(schedule: Any) -> dict[str, Any]:
-    params = {}
-    for name, item in schedule.params.items():
-        if isinstance(item, ProgramValue):
-            params[name] = {"program_value_id": item.id}
-        elif callable(item):
-            # A Python callable is deliberately not lowerable (ADC-458), but authoring/inspection
-            # and hashing must still fail deterministically at the explicit lowerability gate rather
-            # than inside json.dumps with an opaque TypeError.
-            params[name] = {
-                "unsupported_python_callable": {
-                    "module": getattr(item, "__module__", type(item).__module__),
-                    "qualname": getattr(item, "__qualname__", type(item).__qualname__),
-                }
-            }
-        elif name == "dt" and item is not None:
-            params[name] = {"scalar": scalar_data(item)}
+    from pops.time.schedule import AMRLevel, Event, Every, When
+    domain = {"type": type(schedule.domain).__name__, "clock": schedule.clock.to_data(),
+              "at": _json_ready(schedule.domain.at)}
+    if type(schedule.domain) is AMRLevel:
+        domain["level"] = schedule.domain.level
+    elif type(schedule.domain) is Event:
+        domain["event"] = schedule.domain.event.to_data()
+    trigger = {"type": type(schedule.trigger).__name__}
+    if type(schedule.trigger) is Every:
+        trigger["n"] = schedule.trigger.n
+    elif type(schedule.trigger) is When:
+        condition = schedule.trigger.condition
+        if isinstance(condition, ProgramValue):
+            trigger["condition"] = {"program_value_id": condition.id}
+        elif callable(condition):
+            trigger["condition"] = {"unsupported_python_callable": {
+                "module": getattr(condition, "__module__", type(condition).__module__),
+                "qualname": getattr(condition, "__qualname__", type(condition).__qualname__),
+            }}
         else:
-            params[name] = _json_ready(item)
-    return {
-        "clock": schedule.clock.to_data(),
-        "kind": schedule.kind,
-        "policy": schedule.policy,
-        "params": params,
-    }
+            trigger["condition"] = _json_ready(condition)
+    return {"schema_version": 1, "domain": domain, "trigger": trigger,
+            "off": type(schedule.off).__name__ if schedule.off is not None else None}
 
 
 def _json_ready(value: Any) -> Any:
@@ -96,11 +95,18 @@ class _ProgramSerialization:
                 _ProgramSerialization._serialize_node(
                     node, include_provenance=include_provenance) for node in attrs["body_block"]]
             attrs["cond"], attrs["body"] = attrs["cond"].id, attrs["body"].id
-        elif value.op in ("range", "if"):
+        elif value.op == "range":
             attrs["body_block"] = [
                 _ProgramSerialization._serialize_node(
                     node, include_provenance=include_provenance) for node in attrs["body_block"]]
             attrs["body"] = attrs["body"].id
+        elif value.op == "branch":
+            for arm in ("true", "false"):
+                attrs[arm + "_block"] = [
+                    _ProgramSerialization._serialize_node(
+                        node, include_provenance=include_provenance)
+                    for node in attrs[arm + "_block"]]
+                attrs[arm + "_result"] = attrs[arm + "_result"].id
         elif value.op == "matrix_free_operator":
             attrs["apply_block"] = ([
                 _ProgramSerialization._serialize_node(

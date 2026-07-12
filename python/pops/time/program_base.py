@@ -51,12 +51,12 @@ class _ProgramConstants:
         "cell_compare", "where", "reduce", "scalar_op", "compare",
     })
 
-    # Ops that own a recorded sub-block (a while / if / range body, a matrix-free apply, a Newton
+    # Ops that own a recorded sub-block (a loop / branch region, a matrix-free apply, a Newton
     # residual). v1 does NOT descend into sub-blocks, so these are treated as always-live roots and
     # every value they (or their sub-blocks) read is conservatively kept. They are simply absent from
     # the allow-list above (hence live); listed here only to drive the sub-block reference walk.
     _SUBBLOCK_OPS = frozenset({
-        "while", "if", "range", "matrix_free_operator", "solve_local_nonlinear",
+        "while", "branch", "range", "matrix_free_operator", "solve_local_nonlinear",
     })
 
     # Ops PROVEN PURE for common-subexpression elimination (Spec 3 s28, ADC-465): each allocates a

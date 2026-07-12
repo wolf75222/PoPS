@@ -20,8 +20,23 @@ from pops.ir.expr import Var  # noqa: E402
 from pops.fields import (  # noqa: E402
     FieldProblem, PoissonProblem, HoldPrevious, Recompute, FieldSolvePolicy)
 from pops.fields.problem import SolveCadence  # noqa: E402
-from pops.time import every, when, always  # noqa: E402
-from pops.time.schedule import Schedule  # noqa: E402
+from pops.time import (  # noqa: E402
+    AcceptedStep, Always, Clock, Every, Schedule, When,
+)
+
+_CLOCK = Clock("field_solve")
+
+
+def _every(n):
+    return Schedule(Every(AcceptedStep(_CLOCK), n))
+
+
+def _when(condition):
+    return Schedule(When(AcceptedStep(_CLOCK), condition))
+
+
+def _always():
+    return Schedule(Always(AcceptedStep(_CLOCK)))
 
 
 def _poisson():
@@ -76,7 +91,7 @@ def test_policies_exported_from_fields():
 def test_solve_records_cadence_and_inspects():
     prob = _poisson()
     assert prob.cadence is None
-    returned = prob.solve(schedule=every(4), policy=HoldPrevious())
+    returned = prob.solve(schedule=_every(4), policy=HoldPrevious())
     # solve() chains (returns self) and records a typed cadence.
     assert returned is prob
     assert isinstance(prob.cadence, SolveCadence)
@@ -85,7 +100,7 @@ def test_solve_records_cadence_and_inspects():
 
     info = prob.inspect()
     assert info["cadence"] is not None
-    assert info["cadence"]["schedule"] == repr(every(4))
+    assert info["cadence"]["schedule"] == repr(_every(4))
     assert info["cadence"]["policy"]["category"] == "field_solve_policy"
     assert info["cadence"]["policy"]["capabilities"]["reuses_cache"] is True
     # options() flags that a cadence is recorded.
@@ -94,9 +109,9 @@ def test_solve_records_cadence_and_inspects():
 
 def test_solve_with_recompute_and_when_schedule():
     prob = _poisson()
-    prob.solve(schedule=when("cond"), policy=Recompute())
+    prob.solve(schedule=_when(True), policy=Recompute())
     assert prob.cadence.policy.capabilities().to_dict()["recomputes"] is True
-    assert prob.cadence.schedule.kind == "when"
+    assert isinstance(prob.cadence.schedule.trigger, When)
 
 
 def test_inspect_cadence_none_before_solve():
@@ -110,7 +125,7 @@ def test_field_problem_solve_also_works():
     phi = unknown("phi")
     prob = FieldProblem(unknown=phi, equation=(-laplacian(phi) == Var("rho", "cons")),
                         solver=object())
-    prob.solve(schedule=always(), policy=Recompute())
+    prob.solve(schedule=_always(), policy=Recompute())
     assert isinstance(prob.cadence, SolveCadence)
 
 
@@ -132,12 +147,12 @@ def test_solve_rejects_string_schedule():
 def test_solve_rejects_string_policy():
     prob = _poisson()
     with pytest.raises(TypeError, match="policy must be a typed field-solve policy"):
-        prob.solve(schedule=every(4), policy="hold")
+        prob.solve(schedule=_every(4), policy="hold")
     assert prob.cadence is None
 
 
 def test_solve_cadence_inspect_and_repr():
-    cadence = SolveCadence(every(2), HoldPrevious())
+    cadence = SolveCadence(_every(2), HoldPrevious())
     assert "schedule" in cadence.inspect()
     assert cadence.inspect()["policy"]["category"] == "field_solve_policy"
     assert "SolveCadence" in repr(cadence)

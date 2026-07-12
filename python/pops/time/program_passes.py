@@ -27,7 +27,8 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
         node closes over from the enclosing scope -- v1 never rewrites a sub-block, so it is all live.
         The flat ``v.inputs`` already covers the directly-passed values; this adds the attr-borne ones."""
         attrs = v.attrs
-        for key in ("cond", "body", "residual", "iterate", "guess",
+        for key in ("cond", "body", "true_result", "false_result",
+                    "residual", "iterate", "guess",
                     "apply_result", "apply_in", "apply_out"):
             ref = attrs.get(key)
             if isinstance(ref, ProgramValue):
@@ -40,7 +41,8 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
             cond = getattr(sched, "params", {}).get("cond")
             if isinstance(cond, ProgramValue):
                 yield cond  # a when(cond) predicate is live (kept off the dead-node / CSE-drop path)
-        for key in ("cond_block", "body_block", "apply_block", "residual_block"):
+        for key in ("cond_block", "body_block", "true_block", "false_block",
+                    "apply_block", "residual_block"):
             block = attrs.get(key)
             if block:
                 for w in block:
@@ -315,8 +317,11 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
             if v.op == "while":
                 self._validate_block(v.attrs["cond_block"], seen)
                 self._validate_block(v.attrs["body_block"], seen)
-            elif v.op in ("range", "if"):
+            elif v.op == "range":
                 self._validate_block(v.attrs["body_block"], seen)
+            elif v.op == "branch":
+                self._validate_block(v.attrs["true_block"], seen)
+                self._validate_block(v.attrs["false_block"], seen)
             elif v.op == "matrix_free_operator" and v.attrs.get("apply_block"):
                 # The apply sub-block is self-contained (its in/out placeholders + scratch are defined
                 # inside it); it reads nothing from the enclosing scope.

@@ -49,7 +49,7 @@ def test_bool_reports_a_stable_code_user_provenance_and_actionable_alternatives(
     assert Path(error.location.file).name == Path(__file__).name
     assert error.location.line > 0
     assert "where(...)" in error.suggestions
-    assert "T.if_(...)" in error.suggestions
+    assert "T.branch(...)" in error.suggestions
     assert "T.while_(...)" in error.suggestions
     assert "[symbolic_truth_value]" in str(error)
 

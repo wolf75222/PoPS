@@ -78,9 +78,10 @@ def test_state_preserving_ops_and_timestate_history_keep_space():
 
     ranged = program.range(
         combined, 2, lambda builder, value: builder.linear_combine(value))
-    conditional = program.if_(
-        ranged, program.norm2(ranged) > 0,
-        lambda builder, value: builder.linear_combine(value))
+    conditional = program.branch(
+        program.norm2(ranged) > 0,
+        lambda builder: builder.linear_combine(ranged),
+        lambda _builder: ranged)
     looped = program.while_(
         conditional, lambda builder, value: builder.norm2(value) > 0,
         lambda builder, value: builder.linear_combine(value))
@@ -107,7 +108,10 @@ def test_callback_results_cannot_cross_program_or_region_boundaries():
     with pytest.raises(ValueError, match="different Program|same block"):
         first.range(left, 1, lambda _builder, _value: right)
     with pytest.raises(ValueError, match="different Program"):
-        first.if_(left, second.norm2(right) > 0, lambda builder, value: value)
+        first.branch(
+            second.norm2(right) > 0,
+            lambda _builder: left,
+            lambda _builder: left)
 
     operator = first.matrix_free_operator("A")
     foreign_field = second.scalar_field("foreign")

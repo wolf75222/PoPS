@@ -83,7 +83,7 @@ from pops.codegen.program_emit_schedule import (  # noqa: F401
 from pops.codegen.program_emit_control import (  # noqa: F401
     _coupled_rate_components,
     _emit_body,
-    _emit_if,
+    _emit_branch,
     _emit_range,
     _emit_while,
     _walk_expr,
@@ -351,8 +351,12 @@ def _check_op_lowerable(program: Any, v: Any, model: Any) -> None:
         # aliases that block's rate scratch). Lowerable iff its producing coupled_rate is (checked
         # when that node is walked); nothing to validate here.
         return
-    if v.op in ("while", "range", "if"):  # recurse: the cond / body sub-blocks must lower too
-        for key in ("cond_block", "body_block"):
+    if v.op in ("while", "range", "branch"):  # recursively validate structured regions
+        keys = (
+            ("true_block", "false_block")
+            if v.op == "branch" else ("cond_block", "body_block")
+        )
+        for key in keys:
             for w in v.attrs.get(key, []):
                 _check_op_lowerable(program, w, model)
         return

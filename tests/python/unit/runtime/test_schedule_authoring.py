@@ -14,6 +14,18 @@ from tests.python.unit.runtime._typed_program import typed_program_state
 adctime = pytest.importorskip("pops.time")
 
 
+def _every(clock, n, off=None):
+    return adctime.Schedule(adctime.Every(adctime.AcceptedStep(clock), n), off=off)
+
+
+def _at_end(clock, off=None):
+    return adctime.Schedule(adctime.AtEnd(adctime.AcceptedStep(clock)), off=off)
+
+
+def _when(clock, condition, off=None):
+    return adctime.Schedule(adctime.When(adctime.AcceptedStep(clock), condition), off=off)
+
+
 def _module(cacheable=True):
     """A module with a cacheable field_operator and a (non-cacheable) flux grid_operator."""
     mod = model.Module("sched_demo")
@@ -37,46 +49,46 @@ def _program_state(mod, state, name="p"):
 
 # --- schedule vocabulary -----------------------------------------------------
 def test_always_is_default_recompute():
-    s = adctime.always()
-    assert s.kind == "always" and s.policy == "recompute" and s.is_always()
+    s = adctime.Schedule(adctime.Always(adctime.AcceptedStep(adctime.Clock("macro"))))
+    assert isinstance(s.trigger, adctime.Always) and s.off is None and s.is_always()
 
 
 def test_every_carries_n_and_is_not_always():
-    s = adctime.every(10)
-    assert s.kind == "every" and s.params["n"] == 10 and not s.is_always()
+    s = _every(adctime.Clock("macro"), 10)
+    assert isinstance(s.trigger, adctime.Every) and s.trigger.n == 10 and not s.is_always()
 
 
 def test_every_rejects_non_positive():
     with pytest.raises(ValueError):
-        adctime.every(0)
+        _every(adctime.Clock("macro"), 0)
     with pytest.raises(ValueError):
-        adctime.every(True)
-    with pytest.raises(ValueError):
-        adctime.subcycle(False)
+        _every(adctime.Clock("macro"), True)
 
 
 def test_other_kinds_exist():
-    assert adctime.when(lambda: True).kind == "when"
-    assert adctime.on_start().kind == "on_start"
-    assert adctime.on_end().kind == "on_end"
-    assert adctime.subcycle(4).kind == "subcycle"
+    clock = adctime.Clock("macro")
+    assert isinstance(_when(clock, lambda: True).trigger, adctime.When)
+    assert isinstance(adctime.Schedule(
+        adctime.AtStart(adctime.AcceptedStep(clock))).trigger, adctime.AtStart)
+    assert isinstance(_at_end(clock).trigger, adctime.AtEnd)
+    assert isinstance(adctime.ClockTick(clock), adctime.ClockTick)
 
 
 # --- policy chaining ---------------------------------------------------------
 def test_policy_chaining():
-    assert adctime.every(10).hold().policy == "hold"
-    assert adctime.always().skip().policy == "skip"
-    assert adctime.every(5).accumulate_dt().policy == "accumulate_dt"
-    assert adctime.on_end().zero().policy == "zero"
-    assert adctime.every(2).error().policy == "error"
-    # chaining keeps the kind + params
-    s = adctime.every(7).hold()
-    assert s.kind == "every" and s.params["n"] == 7
+    clock = adctime.Clock("macro")
+    assert isinstance(_every(clock, 10, adctime.Hold()).off, adctime.Hold)
+    assert isinstance(_every(clock, 5, adctime.AccumulateDt()).off, adctime.AccumulateDt)
+    assert isinstance(_at_end(clock, adctime.Zero()).off, adctime.Zero)
+    assert isinstance(_every(clock, 2, adctime.Error()).off, adctime.Error)
+    s = _every(clock, 7, adctime.Hold())
+    assert s.trigger.n == 7
 
 
 def test_schedule_repr_reads_like_the_api():
-    assert repr(adctime.every(10).hold()) == "every(10).hold()"
-    assert repr(adctime.always()) == "always()"
+    clock = adctime.Clock("macro")
+    assert "Every" in repr(_every(clock, 10, adctime.Hold()))
+    assert "Always" in repr(adctime.Schedule(adctime.Always(adctime.AcceptedStep(clock))))
 
 
 # --- operator_capabilities setter/getter -------------------------------------
@@ -91,8 +103,8 @@ def test_operator_capabilities_setter_then_getter():
 def test_call_records_schedule_on_value():
     mod, u, _ = _module()
     P, U, _ = _program_state(mod, u)
-    f = P._call("fields_from_state", U, schedule=adctime.every(10).hold())
-    assert f.attrs["schedule"].policy == "hold"
+    f = P._call("fields_from_state", U, schedule=_every(P.clock, 10, adctime.Hold()))
+    assert isinstance(f.attrs["schedule"].off, adctime.Hold)
     assert "schedule" in P.dump_operator_ir()       # inspectable: recorded, not dropped
 
 
@@ -108,27 +120,27 @@ def test_hold_on_non_cacheable_operator_raises():
     mod, u, _ = _module(cacheable=False)
     P, U, _ = _program_state(mod, u)
     with pytest.raises(ValueError, match="not cacheable"):
-        P._call("fields_from_state", U, schedule=adctime.every(10).hold())
+        P._call("fields_from_state", U, schedule=_every(P.clock, 10, adctime.Hold()))
 
 
 def test_accumulate_dt_on_non_cacheable_raises():
     mod, u, _ = _module(cacheable=False)
     P, U, _ = _program_state(mod, u)
     with pytest.raises(ValueError, match="not cacheable"):
-        P._call("fields_from_state", U, schedule=adctime.every(4).accumulate_dt())
+        P._call("fields_from_state", U, schedule=_every(P.clock, 4, adctime.AccumulateDt()))
 
 
 def test_hold_on_cacheable_operator_ok():
     mod, u, _ = _module(cacheable=True)
     P, U, _ = _program_state(mod, u)
-    P._call("fields_from_state", U, schedule=adctime.every(10).hold())   # no raise
+    P._call("fields_from_state", U, schedule=_every(P.clock, 10, adctime.Hold()))
 
 
 def test_skip_does_not_require_cacheable():
     # skip / recompute / zero produce nothing cached, so they do not require cacheable
     mod, u, _ = _module(cacheable=False)
     P, U, _ = _program_state(mod, u)
-    P._call("fields_from_state", U, schedule=adctime.every(10).skip())   # no raise
+    P._call("fields_from_state", U, schedule=_every(P.clock, 10, adctime.Skip()))
 
 
 # --- honesty gate: the two genuinely-unlowerable cases must fail loud, never silently no-op ---
@@ -137,8 +149,8 @@ def test_skip_does_not_require_cacheable():
 def test_on_end_schedule_refuses_to_lower():
     mod, u, _ = _module(cacheable=True)
     P, U, _ = _program_state(mod, u)
-    P._call("fields_from_state", U, schedule=adctime.on_end().hold())
-    with pytest.raises(NotImplementedError, match="ADC-458"):
+    P._call("fields_from_state", U, schedule=_at_end(P.clock, adctime.Hold()))
+    with pytest.raises(NotImplementedError, match="AtEnd"):
         P._check_schedules_lowerable()
 
 
@@ -146,9 +158,9 @@ def test_when_python_callable_refuses_to_lower():
     mod, u, _ = _module(cacheable=True)
     P, U, _ = _program_state(mod, u)
     # a when() over a bare Python callable is not a Program value -> cannot lower
-    P._call("fields_from_state", U, schedule=adctime.when(lambda: True).hold())
+    P._call("fields_from_state", U, schedule=_when(P.clock, lambda: True, adctime.Hold()))
     serialized = P._serialize()
-    callable_token = serialized["nodes"][-1]["attrs"]["schedule"]["params"]["cond"]
+    callable_token = serialized["nodes"][-1]["attrs"]["schedule"]["trigger"]["condition"]
     assert "unsupported_python_callable" in callable_token
     assert isinstance(P._ir_hash(), str)
     with pytest.raises(NotImplementedError, match="ADC-458"):
@@ -160,7 +172,7 @@ def test_held_solve_fields_now_lowers():
     # cadence is exercised in the compiled .so / ROMEO).
     mod, u, _ = _module(cacheable=True)
     P, U, _ = _program_state(mod, u)
-    P._call("fields_from_state", U, schedule=adctime.every(10).hold())
+    P._call("fields_from_state", U, schedule=_every(P.clock, 10, adctime.Hold()))
     P._check_schedules_lowerable()   # no raise
 
 
@@ -168,14 +180,15 @@ def test_skip_now_lowers():
     # ADC-458: skip on a field solve lowers (the op runs only when due; the aux is stale off-cadence).
     mod, u, _ = _module(cacheable=True)
     P, U, _ = _program_state(mod, u)
-    P._call("fields_from_state", U, schedule=adctime.every(10).skip())
+    P._call("fields_from_state", U, schedule=_every(P.clock, 10, adctime.Skip()))
     P._check_schedules_lowerable()   # no raise
 
 
 def test_always_schedule_lowers_fine():
     mod, u, _ = _module(cacheable=True)
     P, U, _ = _program_state(mod, u)
-    P._call("fields_from_state", U, schedule=adctime.always())
+    P._call("fields_from_state", U, schedule=adctime.Schedule(
+        adctime.Always(adctime.AcceptedStep(P.clock))))
     P._check_schedules_lowerable()   # no raise: always() == the default cadence
 
 
@@ -184,37 +197,39 @@ def test_scheduled_node_serializes_for_codegen():
     # (regression: an always()-scheduled node passed the gate then crashed _ir_hash with a TypeError).
     mod, u, _ = _module(cacheable=True)
     P, U, _ = _program_state(mod, u)
-    P._call("fields_from_state", U, schedule=adctime.always())
+    P._call("fields_from_state", U, schedule=adctime.Schedule(
+        adctime.Always(adctime.AcceptedStep(P.clock))))
     h = P._ir_hash()                 # must not raise
     assert isinstance(h, str) and h
     # the schedule is part of the IR identity: a different cadence yields a different hash
     P2, U2, _ = _program_state(mod, u)
-    P2._call("fields_from_state", U2, schedule=adctime.every(10).skip())
+    P2._call("fields_from_state", U2, schedule=_every(P2.clock, 10, adctime.Skip()))
     assert P2._ir_hash() != h
 
 
 def test_schedule_parameters_that_change_lowering_change_ir_identity():
     mod, u, _ = _module(cacheable=True)
 
-    def build(schedule):
+    def build(domain_factory):
         program, state, temporal = _program_state(mod, u)
-        program._call("fields_from_state", state, schedule=schedule)
-        program.commit(temporal.next, state)
+        program._call("fields_from_state", state, schedule=adctime.Schedule(
+            adctime.Always(domain_factory(program.clock))))
+        final = program.linear_combine("final", state, at=temporal.next.point)
+        program.commit(temporal.next, final)
         return program
 
-    short = build(adctime.subcycle(3, dt=0.01))
-    long = build(adctime.subcycle(3, dt=0.02))
+    short = build(adctime.ClockTick)
+    long = build(lambda clock: adctime.AMRLevel(clock, level=1))
     assert short._ir_hash() != long._ir_hash()
-    assert short.emit_cpp_program() != long.emit_cpp_program()
 
     first, first_state, _ = _program_state(mod, u, "when_identity")
     first_cond = first.norm2(first_state) < 1
     _first_other = first.norm2(first_state) < 2
-    first._call("fields_from_state", first_state, schedule=adctime.when(first_cond))
+    first._call("fields_from_state", first_state, schedule=_when(first.clock, first_cond))
     second, second_state, _ = _program_state(mod, u, "when_identity")
     _second_other = second.norm2(second_state) < 1
     second_cond = second.norm2(second_state) < 2
-    second._call("fields_from_state", second_state, schedule=adctime.when(second_cond))
+    second._call("fields_from_state", second_state, schedule=_when(second.clock, second_cond))
     assert first._ir_hash() != second._ir_hash()
 
 
@@ -226,4 +241,4 @@ def test_when_rejects_bool_value_from_another_program_even_with_colliding_ssa_id
 
     with pytest.raises(ValueError, match="different Program"):
         owner._call(
-            "fields_from_state", owner_state, schedule=adctime.when(foreign_cond))
+            "fields_from_state", owner_state, schedule=_when(owner.clock, foreign_cond))

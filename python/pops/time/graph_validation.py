@@ -41,7 +41,7 @@ def validate_nodes(nodes: Any, clocks: Any, available: dict[int, Any], *, where:
     for node in nodes:
         direct_ids = set()
         if type(node) is Branch:
-            direct_ids = {node.state.node_id, node.condition.node_id}
+            direct_ids = {node.condition.node_id}
         elif type(node) is Loop:
             direct_ids = {node.initial.node_id}
         if node.node_id in available:
@@ -67,6 +67,19 @@ def validate_nodes(nodes: Any, clocks: Any, available: dict[int, Any], *, where:
                 raise ValueError(
                     "cross-clock read %s -> %s requires an explicit Synchronize node"
                     % (source.clock.name, node.clock.name))
+        if type(node) is Branch:
+            condition_source = available[node.condition.node_id]
+            condition_signature = getattr(condition_source, "signature", None)
+            if condition_signature is not None:
+                condition_signature = condition_signature.to_data()
+            is_bool = (
+                getattr(condition_source, "value_type", None) == "bool"
+                or (condition_signature or {}).get("value_type") == "bool"
+                or getattr(
+                    getattr(condition_source, "result_signature", None),
+                    "to_data", lambda: {})().get("value_type") == "bool")
+            if not is_bool:
+                raise ValueError("Branch condition must reference a scalar Bool graph value")
         for index, region in enumerate(_nested_regions(node)):
             _validate_region_boundary(
                 region, available, declared,

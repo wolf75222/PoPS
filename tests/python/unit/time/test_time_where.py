@@ -3,7 +3,7 @@
 
 ``P.where(mask, a, b)`` is a PER-CELL select -- ``out(i,j,c) = mask ? a(i,j,c) : b(i,j,c)``
 COMPONENT-WISE -- lowered to a condition INSIDE a Kokkos for_each_cell kernel (a ternary), NOT the
-scalar runtime branch ``if_``. The 0/1 mask is built per cell with ``P.cell_ge`` / ``cell_gt`` /
+scalar runtime branch ``P.branch``. The 0/1 mask is built per cell with ``P.cell_ge`` / ``cell_gt`` /
 ``cell_lt`` / ``cell_le`` (a threshold on component 0 of a field).
 
 (A) Codegen (pure Python, always runs): ``cell_ge`` + ``where`` build + lower to the select kernel

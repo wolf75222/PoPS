@@ -32,7 +32,7 @@ from pops.params import (  # noqa: E402
     resolve_param_use,
 )
 from pops.runtime_environment import validate_dimension, validate_precision  # noqa: E402
-from pops.time import every, subcycle  # noqa: E402
+from pops.time import AcceptedStep, Clock, Every  # noqa: E402
 from pops.time.history_persistence import (  # noqa: E402
     Dense,
     Interval as HistoryInterval,
@@ -72,8 +72,7 @@ def test_matrix_is_closed_and_runtime_is_rejected_by_every_structural_use():
         (lambda p: AMR(base=CartesianMesh(), max_levels=p), ParamUse.AMR_HIERARCHY),
         (lambda p: AMR(base=CartesianMesh(), ratio=p), ParamUse.AMR_HIERARCHY),
         (lambda p: RegridEvery(p), ParamUse.REGRID_SCHEDULE),
-        (lambda p: every(p), ParamUse.SCHEDULE),
-        (lambda p: subcycle(p), ParamUse.SCHEDULE),
+        (lambda p: Every(AcceptedStep(Clock("macro")), p), ParamUse.SCHEDULE),
         (lambda p: validate_ghost_depth("weno5", available=p), ParamUse.GHOST_DEPTH),
         (lambda p: validate_dimension(p), ParamUse.ABI),
         (lambda p: lower_backend(p), ParamUse.BACKEND),
@@ -125,8 +124,9 @@ def test_const_params_are_explicitly_unwrapped_at_structural_sites():
         regrid=RegridEvery(ConstParam("regrid", 5, dtype=Integer)),
     )
     assert (layout.max_levels, layout.ratio, layout.regrid.steps) == (2, 2, 5)
-    assert every(ConstParam("cadence", 7, dtype=Integer)).params["n"] == 7
-    assert subcycle(ConstParam("subcycles", 3, dtype=Integer)).params["count"] == 3
+    trigger = Every(
+        AcceptedStep(Clock("macro")), ConstParam("cadence", 7, dtype=Integer))
+    assert trigger.n == 7
     assert validate_ghost_depth(
         "weno5", available=ConstParam("ghosts", 3, dtype=Integer)) is True
 

@@ -4,126 +4,18 @@ Exports: rk4, rk, explicit_rk, ButcherTableau, RK4_TABLEAU, SSPRK2_TABLEAU.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 from fractions import Fraction
 from typing import Any
 
+from pops.time.method_tableau import RungeKuttaTableau
+
 from ._helpers import (
-    _DEFAULT_SOURCES, _commit, _exact_coefficient, _exact_fraction, _opcall, _operator_handle,
-    _stage_point, _stage_rhs, _time_state, program_macro,
+    _DEFAULT_SOURCES, _commit, _opcall, _operator_handle, _stage_point, _stage_rhs, _time_state,
+    program_macro,
 )
 
 
-@program_macro
-def rk4(P: Any, block: Any, state: Any = None, *,
-        sources: Any = _DEFAULT_SOURCES, flux: Any = True) -> Any:
-    """Classic RK4, expressed with NO special RK4 class (spec acceptance 29):
-    U^{n+1} = U0 + dt/6 (k1 + 2 k2 + 2 k3 + k4)."""
-    temporal = _time_state(P, block, state)
-    U0 = temporal.n
-    k1 = _stage_rhs(P, U0, sources, flux, name="rk4_stage_0", offset=0)
-    point1 = _stage_point(P, "rk4_stage_1", Fraction(1, 2))
-    U1 = P.linear_combine(
-        "rk4_U1", U0 + Fraction(1, 2) * P.dt * k1, at=point1)
-    k2 = _stage_rhs(P, U1, sources, flux, name="rk4_stage_1", offset=Fraction(1, 2))
-    point2 = _stage_point(P, "rk4_stage_2", Fraction(1, 2))
-    U2 = P.linear_combine(
-        "rk4_U2", U0 + Fraction(1, 2) * P.dt * k2, at=point2)
-    k3 = _stage_rhs(P, U2, sources, flux, name="rk4_stage_2", offset=Fraction(1, 2))
-    point3 = _stage_point(P, "rk4_stage_3", 1)
-    U3 = P.linear_combine("rk4_U3", U0 + P.dt * k3, at=point3)
-    k4 = _stage_rhs(P, U3, sources, flux, name="rk4_stage_3", offset=1)
-    _commit(P, temporal, P.linear_combine(
-        "rk4_step",
-        U0 + Fraction(1, 6) * P.dt * k1 + Fraction(1, 3) * P.dt * k2
-        + Fraction(1, 3) * P.dt * k3 + Fraction(1, 6) * P.dt * k4,
-        at=temporal.next.point))
-
-
-# Classic explicit Butcher tableaux (A lower-triangular, b weights, c nodes) for `rk` (ADC-423).
-@dataclass(frozen=True, slots=True, init=False)
-class ButcherTableau:
-    """An explicit Butcher tableau ``(A, b, c)`` for `rk`: ``A`` is strictly lower-triangular (stage i
-    depends only on stages j < i), ``b`` the final weights, and ``c`` the exact evaluation nodes.
-    Coefficients retain their authoring domain (integer, rational, decimal or
-    binary64); validation compares their exact rational values, never a tolerance.
-    The stored representation is immutable and canonical: rows keep only their
-    strictly-lower entries, while an equivalent full square matrix with zero
-    diagonal/upper entries is accepted and normalized to the same value.
-    """
-
-    A: tuple[tuple[Any, ...], ...]
-    b: tuple[Any, ...]
-    c: tuple[Any, ...]
-    name: str | None
-
-    def __init__(self, A: Any, b: Any, c: Any = None, name: Any = None) -> None:
-        try:
-            weights = tuple(
-                _exact_coefficient(value, "ButcherTableau.b[%d]" % i)
-                for i, value in enumerate(b))
-            rows = tuple(tuple(row) for row in A)
-        except TypeError as exc:
-            raise TypeError("ButcherTableau: A and b must be finite coefficient sequences") from exc
-        s = len(weights)
-        if s == 0:
-            raise ValueError("ButcherTableau: at least one stage is required")
-        if len(rows) != s:
-            raise ValueError("ButcherTableau: A, b, c must share the stage count")
-
-        lower_rows = []
-        row_sums = []
-        for i, raw_row in enumerate(rows):
-            if len(raw_row) < i or len(raw_row) > s:
-                raise ValueError(
-                    "ButcherTableau: row %d must provide its %d lower coefficient(s), optionally "
-                    "followed by zero diagonal/upper entries" % (i, i))
-            row = tuple(
-                _exact_coefficient(value, "ButcherTableau.A[%d][%d]" % (i, j))
-                for j, value in enumerate(raw_row))
-            if any(value != 0 for value in row[i:]):
-                raise ValueError(
-                    "ButcherTableau: A must be strictly lower-triangular (stage %d reads stage >= %d); "
-                    "rk lowers EXPLICIT tableaux only" % (i, i))
-            lower = row[:i]
-            lower_rows.append(lower)
-            row_sums.append(sum(
-                (_exact_fraction(value, "ButcherTableau.A[%d]" % i) for value in lower),
-                Fraction(0, 1)))
-
-        weight_sum = sum(
-            (_exact_fraction(value, "ButcherTableau.b") for value in weights), Fraction(0, 1))
-        if weight_sum != 1:
-            raise ValueError(
-                "ButcherTableau: weights b must sum exactly to 1 (got %r)" % weight_sum)
-
-        if c is None:
-            nodes = tuple(row_sums)
-        else:
-            try:
-                nodes = tuple(
-                    _exact_coefficient(value, "ButcherTableau.c[%d]" % i)
-                    for i, value in enumerate(c))
-            except TypeError as exc:
-                raise TypeError("ButcherTableau: c must be a finite coefficient sequence") from exc
-            if len(nodes) != s:
-                raise ValueError("ButcherTableau: A, b, c must share the stage count")
-            for i, (node, expected) in enumerate(zip(nodes, row_sums, strict=True)):
-                if _exact_fraction(node, "ButcherTableau.c[%d]" % i) != expected:
-                    raise ValueError(
-                        "ButcherTableau: c[%d] must equal the exact row sum of A[%d] (%r); got %r"
-                        % (i, i, expected, node))
-        if name is not None and (not isinstance(name, str) or not name):
-            raise ValueError("ButcherTableau: name must be a non-empty string or None")
-
-        object.__setattr__(self, "A", tuple(lower_rows))
-        object.__setattr__(self, "b", weights)
-        object.__setattr__(self, "c", nodes)
-        object.__setattr__(self, "name", name)
-
-    @property
-    def stages(self) -> int:
-        return len(self.b)
+ButcherTableau = RungeKuttaTableau
 
 
 # RK4 (classic): the same tableau the rk4 macro hard-codes, written data-driven.
@@ -145,6 +37,37 @@ SSPRK2_TABLEAU = ButcherTableau(
     name="ssprk2")
 
 
+def _rk_from_tableau(P: Any, block: Any, state: Any, tableau: RungeKuttaTableau,
+                     sources: Any, flux: Any) -> None:
+    tag = (tableau.name + "_") if tableau.name else "rk_"
+    temporal = _time_state(P, block, state)
+    U0 = temporal.n
+    ks: list[Any] = []
+    for i in range(tableau.stages):
+        point = _stage_point(P, "%sstage_%d" % (tag, i), tableau.c[i])
+        Ui = U0
+        if i:
+            expr = U0
+            for j, aij in enumerate(tableau.A[i]):
+                if aij != 0:
+                    expr = expr + (P.dt * aij) * ks[j]
+            Ui = P.linear_combine("%sU%d" % (tag, i), expr, at=point)
+        ks.append(_stage_rhs(
+            P, Ui, sources, flux, name="%sstage_%d" % (tag, i), offset=tableau.c[i]))
+    final = U0
+    for bi, ki in zip(tableau.b, ks, strict=True):
+        if bi != 0:
+            final = final + (P.dt * bi) * ki
+    _commit(P, temporal, P.linear_combine("%sstep" % tag, final, at=temporal.next.point))
+
+
+@program_macro
+def rk4(P: Any, block: Any, state: Any = None, *,
+        sources: Any = _DEFAULT_SOURCES, flux: Any = True) -> Any:
+    """Classic fourth-order RK, lowered solely through :data:`RK4_TABLEAU`."""
+    return _rk_from_tableau(P, block, state, RK4_TABLEAU, sources, flux)
+
+
 @program_macro
 def rk(P: Any, block: Any, state: Any = None, tableau: Any = None, *,
        sources: Any = _DEFAULT_SOURCES, flux: Any = True) -> Any:
@@ -164,30 +87,7 @@ def rk(P: Any, block: Any, state: Any = None, tableau: Any = None, *,
     if not isinstance(tableau, ButcherTableau):
         A, b, c = tableau if len(tableau) == 3 else (tableau[0], tableau[1], None)
         tableau = ButcherTableau(A, b, c)
-    tag = (tableau.name + "_") if tableau.name else "rk_"
-    temporal = _time_state(P, block, state)
-    U0 = temporal.n
-    ks: list[Any] = []
-    for i in range(tableau.stages):
-        point = _stage_point(P, "%sstage_%d" % (tag, i), tableau.c[i])
-        if i == 0:
-            Ui = U0  # the first stage reads U^n directly (no scratch combine, like rk4)
-        else:
-            expr = U0
-            for j in range(i):
-                aij = tableau.A[i][j]
-                if aij != 0:
-                    expr = expr + (P.dt * aij) * ks[j]
-            Ui = P.linear_combine("%sU%d" % (tag, i), expr, at=point)
-        ks.append(_stage_rhs(
-            P, Ui, sources, flux, name="%sstage_%d" % (tag, i), offset=tableau.c[i]))
-    final = U0
-    for i in range(tableau.stages):
-        bi = tableau.b[i]
-        if bi != 0:
-            final = final + (P.dt * bi) * ks[i]
-    _commit(P, temporal, P.linear_combine(
-        "%sstep" % tag, final, at=temporal.next.point))
+    return _rk_from_tableau(P, block, state, tableau, sources, flux)
 
 
 @program_macro

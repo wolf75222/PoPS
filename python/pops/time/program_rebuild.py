@@ -125,8 +125,12 @@ def rebuild_program(
 
     def mapped_region(region: int) -> int:
         if region not in region_map:
-            region_map[region] = out._next_region
-            out._next_region += 1
+            # Region ids are semantic authoring tokens, not traversal-order ordinals. Preserving
+            # them makes a no-drop detach byte-identical even when deps(v) visits a nested branch
+            # before its owning node; optimization remains deterministic because removed regions
+            # may leave harmless gaps.
+            region_map[region] = region
+            out._next_region = max(out._next_region, region + 1)
         return region_map[region]
 
     def rep(v: Any) -> Any:
@@ -198,12 +202,17 @@ def rebuild_program(
         if isinstance(value, (FieldContext, FieldReadProvenance)):
             return remap_provenance(value)
         if isinstance(value, Schedule):
-            return Schedule(
-                remap_clock(value.clock),
-                value.kind,
-                value.policy,
-                **{key: remap_metadata(item) for key, item in value.params.items()},
+            from dataclasses import replace
+            domain = replace(
+                value.domain,
+                clock=remap_clock(value.clock),
+                at=remap_point(value.domain.at) if value.domain.at is not None else None,
             )
+            trigger = replace(value.trigger, domain=domain)
+            from pops.time.schedule import When
+            if type(trigger) is When:
+                trigger = replace(trigger, condition=remap_metadata(trigger.condition))
+            return Schedule(trigger, off=value.off)
         if getattr(value, "__pops_ir_immutable__", False) is True:
             return value
         if isinstance(value, Mapping):
@@ -232,14 +241,17 @@ def rebuild_program(
     def clone_attrs(v: Any) -> Any:
         attrs = {}
         for key, val in v.attrs.items():
-            if key in ("cond_block", "body_block", "apply_block", "residual_block"):
+            if key in ("cond_block", "body_block", "apply_block", "residual_block",
+                       "true_block", "false_block"):
                 region_key = key.replace("_block", "_region")
                 attrs[key] = (clone_block(val, v.attrs.get(region_key))
                               if val is not None else None)
-            elif key in ("cond_region", "body_region", "apply_region", "residual_region"):
+            elif key in ("cond_region", "body_region", "apply_region", "residual_region",
+                         "true_region", "false_region"):
                 attrs[key] = mapped_region(val)
             elif key in ("cond", "body", "residual", "iterate", "guess",
-                         "apply_result", "apply_in", "apply_out"):
+                         "apply_result", "apply_in", "apply_out",
+                         "true_result", "false_result"):
                 attrs[key] = remap(val)
             else:
                 attrs[key] = remap_metadata(val)
@@ -257,7 +269,8 @@ def rebuild_program(
         seen = []
         for inp in v.inputs:
             seen.append(rep(inp))
-        for key in ("cond_block", "body_block", "apply_block", "residual_block"):
+        for key in ("cond_block", "body_block", "apply_block", "residual_block",
+                    "true_block", "false_block"):
             block = v.attrs.get(key)
             if block:
                 seen.extend(block)
@@ -278,6 +291,9 @@ def rebuild_program(
             clone(w)
         vid = out._next_id
         out._next_id += 1
+        # Reserve the owning node's region before clone_attrs recursively maps branch/sub-block
+        # regions. Parent-first allocation is part of exact rebuild identity for nested branches.
+        node_region = mapped_region(v.region)
         new_inputs = [idmap[rep(i).id] for i in v.inputs]
         field_context = v.field_context
         if field_context is not None:
@@ -294,7 +310,7 @@ def rebuild_program(
             space=v.space if space_of is None else space_of(v),
             source_location=v.source_location,
             field_context=field_context,
-            region=mapped_region(v.region),
+            region=node_region,
             state_ref=reference_of(v.state_ref),
             point=remap_point(v.point),
             provenance=ProvenanceRecord.derive(

@@ -41,7 +41,7 @@ class SymbolicTruthValueError(TypeError):
         self.location = _truth_test_location(value)
         self.suggestions = (
             suggestion
-            or "use where(...) for symbolic data selection or T.if_(...) / T.while_(...) "
+            or "use where(...) for symbolic data selection or T.branch(...) / T.while_(...) "
             "for Program control flow; Python if/and/or cannot evaluate a symbolic predicate"
         )
         super().__init__(

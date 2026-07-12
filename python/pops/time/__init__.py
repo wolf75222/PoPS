@@ -22,8 +22,16 @@ from pops.time.history_persistence import (  # noqa: F401
     Dense, HistoryPersistence, Interval, Revolve,
 )
 from pops.time.graph import (  # noqa: F401
-    Branch, Commit, OperatorCall, ProgramGraph, ProgramValue as GraphProgramValue,
-    Solve, StateRead, Synchronize, Unknown, ValueRef,
+    Branch, Commit, Loop, OperatorCall, ProgramGraph, ProgramValue as GraphProgramValue,
+    Region, RegionCapture, Solve, StateRead, Synchronize, Unknown, ValueRef,
+)
+from pops.time.method_properties import (  # noqa: F401
+    AdditiveMethodCertificate, AdditiveMethodProperties, MethodCertificate,
+    MethodProperties, ProgramMethodCertificate, SSPCertificate, UnknownOrder,
+    certify_program_graph,
+)
+from pops.time.method_tableau import (  # noqa: F401
+    AdditiveRungeKuttaTableau, RungeKuttaTableau,
 )
 from pops.time.passes_facade import (  # noqa: F401
     eliminate_common_subexpressions,
@@ -34,7 +42,10 @@ from pops.time.passes_facade import (  # noqa: F401
 from pops.time.program import CompiledTime, Program
 from pops.time.points import Clock, StagePoint, TimePoint  # noqa: F401
 from pops.time.schedule import (  # noqa: F401
-    Schedule, always, every, on_end, on_start, subcycle, when,
+    AMRLevel, AcceptedStep, AccumulateDt, Always, AtEnd, AtStart, Attempt,
+    ClockTick, Domain, Error, Event, EventHandle, Every, Hold, OffPolicy,
+    Schedule, Skip, Stage, Trigger, WallOutput, When, Zero,
+    always, every, on_end, on_start, when,
 )
 from pops.time.synchronization import (  # noqa: F401
     SampleAndHold, SynchronizationRelation,
@@ -43,11 +54,20 @@ from pops.time.values import StageStateSet, ProgramValue  # noqa: F401
 
 __all__ = ["Program", "CompiledTime", "ProgramValue", "StageStateSet", "Schedule",
            "ProgramGraph", "GraphProgramValue", "StateRead", "Unknown", "OperatorCall",
-           "Solve", "Branch", "Synchronize", "Commit", "ValueRef",
+           "Solve", "Branch", "Loop", "Region", "RegionCapture",
+           "Synchronize", "Commit", "ValueRef",
            "Clock", "TimePoint", "StagePoint",
+           "RungeKuttaTableau", "AdditiveRungeKuttaTableau",
+           "MethodCertificate", "MethodProperties", "AdditiveMethodCertificate",
+           "AdditiveMethodProperties", "ProgramMethodCertificate", "SSPCertificate",
+           "UnknownOrder", "certify_program_graph",
            "SampleAndHold", "SynchronizationRelation",
            "TimeState", "StageHandle", "HistoryHandle", "StateEndpointHandle", "CopyCurrent",
            "HistoryPersistence", "Dense", "Interval", "Revolve",
-           "always", "every", "when", "on_start", "on_end", "subcycle",
+           "Domain", "AcceptedStep", "Attempt", "Stage", "ClockTick", "AMRLevel",
+           "EventHandle", "Event", "WallOutput", "Trigger", "Always", "Every",
+           "AtStart", "AtEnd", "When", "OffPolicy", "Hold", "Skip", "Zero",
+           "AccumulateDt", "Error",
+           "always", "every", "when", "on_start", "on_end",
            "eliminate_dead_nodes", "eliminate_common_subexpressions",
            "eliminate_redundant_field_solves", "optimize"]

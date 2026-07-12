@@ -52,24 +52,23 @@ def test_ssprk2():
     P = adctime.Program("ssprk2")
     libtime.ssprk2(P, *state_refs(P, "plasma"))
     node, states, rhss = _committed(P, "plasma")
-    # U2 = 0.5*U0 + 0.5*U1 + 0.5*dt*k1
-    assert len(states) == 2 and len(rhss) == 1
-    for s in states:
-        assert _coeff(node, s) == {0: Fraction(1, 2)}
-    assert _coeff(node, rhss[0]) == {1: Fraction(1, 2)}
-    print("OK  ssprk2 -> 0.5 U0 + 0.5 U1 + 0.5 dt k1")
+    # Canonical Butcher form: U2 = U0 + dt*(k0+k1)/2.
+    assert len(states) == 1 and len(rhss) == 2
+    assert _coeff(node, states[0]) == {0: 1}
+    assert all(_coeff(node, rhs) == {1: Fraction(1, 2)} for rhs in rhss)
+    print("OK  ssprk2 -> U0 + 0.5 dt k0 + 0.5 dt k1")
 
 
 def test_ssprk3():
     P = adctime.Program("ssprk3")
     libtime.ssprk3(P, *state_refs(P, "plasma"))
     node, states, rhss = _committed(P, "plasma")
-    # Shu-Osher final stage: U^{n+1} = 1/3 U0 + 2/3 U2 + 2/3 dt k2
-    assert len(states) == 2 and len(rhss) == 1
-    cs = sorted(_coeff(node, s)[0] for s in states)
-    assert cs == [Fraction(1, 3), Fraction(2, 3)]
-    assert _coeff(node, rhss[0]) == {1: Fraction(2, 3)}
-    print("OK  ssprk3 -> 1/3 U0 + 2/3 U2 + 2/3 dt k2")
+    # Canonical Butcher form of the same SSP method.
+    assert len(states) == 1 and len(rhss) == 3
+    assert _coeff(node, states[0]) == {0: 1}
+    cs = sorted(_coeff(node, rhs)[1] for rhs in rhss)
+    assert cs == [Fraction(1, 6), Fraction(1, 6), Fraction(2, 3)]
+    print("OK  ssprk3 -> U0 + dt*(k0/6 + k1/6 + 2 k2/3)")
 
 
 def test_rk4_no_special_class():

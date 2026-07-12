@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pops.codegen.program_emit_kernels import _AUX_OUTPUT_OPS, ProgramValue
+from pops.codegen.program_emit_kernels import ProgramValue
 
 
 _MODEL_OWNER_SENSITIVE_OPS = frozenset(
@@ -24,13 +24,18 @@ _MODEL_OWNER_SENSITIVE_OPS = frozenset(
 
 
 def all_ops(program: Any) -> Any:
-    """Iterate top-level nodes and the flat sub-blocks carried in their attributes."""
-    for value in program._values:
+    """Iterate every node recursively, including lazy branch and solver sub-regions."""
+    def walk(value: Any) -> Any:
         yield value
-        for key in ("cond_block", "body_block", "apply_block", "residual_block"):
+        for key in ("cond_block", "body_block", "apply_block", "residual_block",
+                    "true_block", "false_block"):
             block = value.attrs.get(key)
             if isinstance(block, (list, tuple)):
-                yield from block
+                for nested in block:
+                    yield from walk(nested)
+
+    for value in program._values:
+        yield from walk(value)
 
 
 def check_model_owner_dispatch(program: Any, model: Any) -> None:
@@ -82,6 +87,38 @@ def check_model_owner_dispatch(program: Any, model: Any) -> None:
 
 def check_schedules_lowerable(program: Any) -> None:
     """Reject schedule policies without a semantically valid native lowering."""
+    from pops.time.schedule import (
+        AcceptedStep, Always, AtEnd, AtStart, Every, When,
+    )
+    scheduled = {
+        value.id: value for value in all_ops(program)
+        if value.attrs.get("schedule") is not None
+    }
+    for consumer in all_ops(program):
+        sources = list(consumer.inputs)
+        for key in ("true_result", "false_result", "body", "residual", "apply_result"):
+            source = consumer.attrs.get(key)
+            if isinstance(source, ProgramValue):
+                sources.append(source)
+        for source in sources:
+            scheduled_source = scheduled.get(source.id)
+            if scheduled_source is None:
+                continue
+            source_schedule = scheduled_source.attrs["schedule"]
+            if not source_schedule.is_always() and source_schedule.off is None:
+                raise ValueError(
+                    "scheduled value %r is read by %r but has no explicit OffPolicy; use "
+                    "Schedule(trigger, off=Hold()/Skip()/Zero()/AccumulateDt()/Error())"
+                    % (scheduled_source.name, consumer.name))
+    for endpoint, source in program._commits.items():
+        scheduled_source = scheduled.get(source.id)
+        if scheduled_source is None:
+            continue
+        source_schedule = scheduled_source.attrs["schedule"]
+        if not source_schedule.is_always() and source_schedule.off is None:
+            raise ValueError(
+                "scheduled value %r is committed to %r but has no explicit OffPolicy"
+                % (scheduled_source.name, endpoint))
     for value in all_ops(program):
         if value.clock != program.clock:
             raise NotImplementedError(
@@ -96,29 +133,33 @@ def check_schedules_lowerable(program: Any) -> None:
             raise NotImplementedError(
                 "schedule on node %r belongs to clock %r, but this native runtime advances %r"
                 % (value.name, schedule.clock.name, program.clock.name))
-        if schedule.is_always():
-            continue
-        if not schedule.so_lowerable():
+        if type(schedule.domain) is not AcceptedStep:
             raise NotImplementedError(
-                "schedule on_end() on node %r (op '%s') is not lowerable: a compiled sim.step(dt) "
+                "schedule domain %s on node %r is typed and preserved, but this runtime only "
+                "supports AcceptedStep; Attempt needs StepTransaction, Stage/ClockTick/AMRLevel "
+                "need ADC-677, and Event/WallOutput need ConsumerGraph"
+                % (type(schedule.domain).__name__, value.name))
+        schedule.validate_site(clock=value.clock, point=value.point,
+                               where="schedule on node %r" % value.name)
+        if type(schedule.trigger) is Always:
+            continue
+        if type(schedule.trigger) is AtEnd:
+            raise NotImplementedError(
+                "schedule AtEnd on node %r (op '%s') is not lowerable: a compiled sim.step(dt) "
                 "loop never sees an end-of-run signal, so the .so cannot know the last step. Use "
-                "on_start()/every()/when()/subcycle(), or an on_end host hook (ADC-458)."
+                "AtStart/Every/When on AcceptedStep, or an AtEnd ConsumerGraph hook."
                 % (value.name, value.op)
             )
-        if schedule.kind == "when":
-            condition = schedule.params.get("cond")
+        if type(schedule.trigger) is When:
+            condition = schedule.trigger.condition
             if not isinstance(condition, ProgramValue) or condition.vtype != "bool":
                 raise NotImplementedError(
                     "schedule when(cond) on node %r lowers only a Program Bool predicate (e.g. "
                     "P.norm2(r) < tol), not a Python callable (ADC-458)." % value.name
                 )
-        if schedule.kind == "subcycle" and value.op not in _AUX_OUTPUT_OPS:
-            raise NotImplementedError(
-                "schedule subcycle on node %r (op '%s') is lowerable only for a field solve (its "
-                "output is the persistent System aux); a scratch-output op sub-cycled has no single "
-                "result a downstream node can read (ADC-458). Sub-cycle the field solve, or express "
-                "the inner steps explicitly." % (value.name, value.op)
-            )
+        if type(schedule.trigger) not in (Every, AtStart, When):
+            raise NotImplementedError("schedule trigger %s is not supported by the native protocol"
+                                      % type(schedule.trigger).__name__)
 
 
 __all__ = ["all_ops", "check_model_owner_dispatch", "check_schedules_lowerable"]

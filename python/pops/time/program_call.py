@@ -81,6 +81,7 @@ class _ProgramCall(_ProgramBase):
             op = resolve_registered_operator(
                 self, operator_name, where="P._call", values=args)
         self._check_call_args(op, args)
+        self._validate_scheduled_reads(args, consumer="P.call(%r)" % op.name)
         if schedule is not None:
             self._validate_schedule(op, schedule, args)
         result = self._lower_call(op, operator_name, args, name)
@@ -124,6 +125,8 @@ class _ProgramCall(_ProgramBase):
                 operator_handle, field_context.stage_sources, field_context.outputs)
         if schedule is not None:
             attrs["schedule"] = schedule
+            schedule.validate_site(clock=result.clock, point=result.point,
+                                   where="schedule on operator %r" % op.name)
         return self._replace_value(
             result, attrs=attrs, space=op.signature.output, field_context=field_context)
 
@@ -157,8 +160,9 @@ class _ProgramCall(_ProgramBase):
             raise ValueError(
                 "schedule clock %r does not match operator evaluation clock %r"
                 % (schedule.clock.name, expected_clock.name))
-        if schedule.kind == "when":
-            cond = schedule.params.get("cond")
+        from pops.time.schedule import When
+        if type(schedule.trigger) is When:
+            cond = schedule.trigger.condition
             if isinstance(cond, ProgramValue):
                 require_top_level(self, cond, "schedule when(cond)")
                 if cond.vtype != "bool" or not any(v.id == cond.id for v in self._values):
@@ -171,7 +175,21 @@ class _ProgramCall(_ProgramBase):
             raise ValueError(
                 "operator %r is not cacheable; cannot use schedule %s -- declare it with "
                 "m.operator_capabilities(%r, cacheable=True)"
-                % (op.name, schedule.policy, op.name))
+                % (op.name, type(schedule.off).__name__, op.name))
+
+    @staticmethod
+    def _validate_scheduled_reads(values: Any, *, consumer: str) -> None:
+        """A non-trivial scheduled value is readable only with an explicit typed OffPolicy."""
+        for value in values:
+            if not isinstance(value, ProgramValue):
+                continue
+            source_schedule = value.attrs.get("schedule")
+            if (source_schedule is not None and not source_schedule.is_always()
+                    and source_schedule.off is None):
+                raise ValueError(
+                    "%s reads scheduled value %r without an explicit OffPolicy; construct it as "
+                    "Schedule(trigger, off=Hold()/Skip()/Zero()/AccumulateDt()/Error())"
+                    % (consumer, value.name))
 
     def _lower_call(self, op: Any, operator_name: Any, args: Any, name: Any) -> Any:
         # A typed call lowers THROUGH the PRIVATE RHS builder (self._rhs_legacy(flux=...) /

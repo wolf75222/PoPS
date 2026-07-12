@@ -27,7 +27,7 @@ _MODEL_OPS = ("source", "apply", "solve_local_linear", "solve_local_nonlinear")
 _ALLOWED_OPS = frozenset({"state", "solve_fields", "solve_fields_from_blocks", "rhs",
                           "linear_combine", "linear_source",
                           "reduce", "scalar_op", "compare", "hmin", "max_wave_speed", "cfl",
-                          "while", "range", "if", "matrix_free_operator",
+                          "while", "range", "branch", "matrix_free_operator",
                           "scalar_field", "laplacian", "gradient", "divergence", "solve_linear",
                           "apply_in", "apply_out", "history", "store_history",
                           "fill_boundary", "project", "record_scalar",
