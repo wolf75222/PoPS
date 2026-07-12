@@ -17,6 +17,12 @@ import json
 from typing import Any
 
 from pops.codegen.program_emit_kernels import _has_runtime_param, _model_impl
+from pops.codegen.program_models import ProgramModelGraph, model_for_node
+
+
+_MODEL_PARAM_OPS = frozenset({
+    "source", "apply", "solve_local_linear", "rhs", "solve_local_nonlinear",
+})
 
 
 def _required_param_block_index(block_idx: Any, block: Any, value: Any) -> int:
@@ -69,19 +75,39 @@ def _op_model_exprs(impl: Any, v: Any) -> list:
     return out
 
 
-def _runtime_param_names_in(exprs: Any) -> set:
-    """The set of runtime-parameter NAMES read anywhere in @p exprs (a RuntimeParamRef walk)."""
+def _runtime_param_refs_in(exprs: Any) -> tuple[Any, ...]:
+    """Runtime parameter references in deterministic qualified-identity order."""
     from pops.ir.values import RuntimeParamRef
     from pops.ir.visitors import _children
-    names = set()
+    refs = {}
     stack = list(exprs)
     while stack:
         e = stack.pop()
         if isinstance(e, RuntimeParamRef):
-            names.add(e.name)
+            handle = getattr(e, "handle", None)
+            key = getattr(handle, "qualified_id", None) or e.name
+            refs.setdefault(key, e)
         else:
             stack.extend(_children(e))
-    return names
+    return tuple(refs[key] for key in sorted(refs))
+
+
+def _qualified_param_identity(ref: Any, block: Any, *, graph_aware: bool) -> tuple[Any, str]:
+    """Authenticate one read against its block/model owner and return ``(owner, qualified_id)``."""
+    owner = block.model_owner_path.canonical()
+    handle = getattr(ref, "handle", None)
+    if handle is None:
+        if graph_aware:
+            raise ValueError(
+                "runtime parameter %r in block %r has no owner-qualified ParamHandle"
+                % (ref.name, block.local_id))
+        return owner, ref.name
+    actual = handle.owner_path.canonical()
+    if actual != owner:
+        raise ValueError(
+            "runtime parameter %r in block %r belongs to model owner %s, not %s"
+            % (ref.name, block.local_id, actual, owner))
+    return owner, handle.qualified_id
 
 
 def program_param_entries(program: Any, model: Any) -> list:
@@ -97,25 +123,67 @@ def program_param_entries(program: Any, model: Any) -> list:
     (None -> no entries)."""
     if model is None:
         return []
-    impl = _model_impl(model)
-    if not getattr(impl, "has_runtime_params", lambda: False)():
-        return []
-    nodes = impl.assign_runtime_indices()  # stable sorted order used by kernel emission
-    by_name = {node.name: (index, node) for index, node in enumerate(nodes)}
+    graph_aware = type(model) is ProgramModelGraph
     block_idx = program._block_indices()
     seen = set()
+    emitted_names = {}
+    model_params = {}
     entries = []
     for v in _all_program_ops(program):
+        if v.op not in _MODEL_PARAM_OPS:
+            continue
+        emit_model = model_for_node(model, v)
+        impl = _model_impl(emit_model)
+        cache_key = id(impl)
+        cached = model_params.get(cache_key)
+        if cached is None:
+            if not getattr(impl, "has_runtime_params", lambda: False)():
+                model_params[cache_key] = ({}, {})
+                continue
+            nodes = impl.assign_runtime_indices()
+            by_name = {node.name: (index, node) for index, node in enumerate(nodes)}
+            by_identity = {
+                getattr(getattr(node, "handle", None), "qualified_id", None): node
+                for node in nodes
+                if getattr(node, "handle", None) is not None
+            }
+            cached = by_name, by_identity
+            model_params[cache_key] = cached
+        by_name, by_identity = cached
+        if not by_name:
+            continue
         exprs = _op_model_exprs(impl, v)
         if not exprs or not _has_runtime_param(exprs):
             continue
         blk = _required_param_block_index(block_idx, v.block, v)
-        for name in _runtime_param_names_in(exprs):
+        for ref in _runtime_param_refs_in(exprs):
+            name = ref.name
+            owner, qualified_id = _qualified_param_identity(
+                ref, v.block, graph_aware=graph_aware)
             indexed_node = by_name.get(name)
-            if indexed_node is None or (blk, name) in seen:
+            if indexed_node is None:
+                raise ValueError(
+                    "runtime parameter %s for block %r/model owner %s is absent from that "
+                    "model's assigned RuntimeParam table"
+                    % (qualified_id, v.block.local_id, owner))
+            declaration = by_identity.get(qualified_id)
+            if graph_aware and (
+                    declaration is None or declaration.name != indexed_node[1].name):
+                raise ValueError(
+                    "runtime parameter %s does not match block %r/model owner %s declaration"
+                    % (qualified_id, v.block.local_id, owner))
+            route = (blk, owner, qualified_id)
+            collision_key = (blk, name)
+            prior = emitted_names.get(collision_key)
+            if prior is not None and prior != route:
+                raise ValueError(
+                    "runtime parameter name collision for block %r: %r maps to both %s and %s"
+                    % (v.block.local_id, name, prior[2], qualified_id))
+            emitted_names[collision_key] = route
+            if route in seen:
                 continue
             index, node = indexed_node
-            seen.add((blk, name))
+            seen.add(route)
             # The metadata ABI is explicitly double-valued; this is the target-precision
             # lowering boundary, not a mutation/coercion of the authoring literal.
             entries.append((blk, name, index, float(node.value)))

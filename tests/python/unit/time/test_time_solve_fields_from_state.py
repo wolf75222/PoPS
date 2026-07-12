@@ -27,6 +27,7 @@ per-stage FieldContext buffer is needed.
 Skips cleanly (exit 0) without the install_program binding / numpy / a compiler / a visible Kokkos --
 never fakes the engine.
 """
+from pops.codegen import compile_drivers
 from typed_program_support import typed_state
 
 from pops.params import ConstParam
@@ -107,11 +108,14 @@ def heun_program(name="sffs_heun", model=None):
     U0 = typed_state(P, "plasma", model=model)
     f0 = P.solve_fields("fields_0", U0)
     R0 = P._rhs_legacy(name="R0", state=U0, fields=f0, flux=True, sources=["electric"])
-    U1 = P.linear_combine("U1", U0 + dt * R0)
+    stage1 = adctime.StagePoint(
+        "heun_predictor", {"main": adctime.TimePoint(P.clock, 1)})
+    U1 = P.linear_combine("U1", U0 + dt * R0, at=stage1)
     f1 = P.solve_fields("fields_1", U1)            # <-- solved from U1, not U0 (ADC-409)
     R1 = P._rhs_legacy(name="R1", state=U1, fields=f1, flux=True, sources=["electric"])
-    P.commit(typed_state(P, "plasma", state_name="U", model=model).next,
-             P.linear_combine("U_np1", U0 + 0.5 * dt * R0 + 0.5 * dt * R1))
+    endpoint = typed_state(P, "plasma", state_name="U", model=model).next
+    P.commit(endpoint, P.linear_combine(
+        "U_np1", U0 + 0.5 * dt * R0 + 0.5 * dt * R1, at=endpoint.point))
     return P
 
 
@@ -146,8 +150,9 @@ fe_model = named_source_model("sffs_fe_named")
 U = typed_state(P_fe, "plasma", model=fe_model)
 f = P_fe.solve_fields(U)
 R = P_fe._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=["electric"])
-P_fe.commit(typed_state(P_fe, "plasma", state_name="U", model=fe_model).next,
-            P_fe.linear_combine("U1", U + P_fe.dt * R))
+endpoint_fe = typed_state(P_fe, "plasma", state_name="U", model=fe_model).next
+P_fe.commit(endpoint_fe, P_fe.linear_combine(
+    "U1", U + P_fe.dt * R, at=endpoint_fe.point))
 src_fe = P_fe.emit_cpp_program(model=fe_model)
 chk(src_fe.count("ctx.solve_fields_from_state(0, ") == 1,
     "the single-stage solve_fields(U) on the current state still lowers (per-stage form)")
@@ -205,7 +210,7 @@ def offline_rhs_frozen(ref, U, U_fields):
 print("== (B) field-coupled 2-stage parity (per-stage field solve) ==")
 try:
     program_model = named_source_model("sffs_prog")
-    compiled = pops.codegen.compile_problem(
+    compiled = compile_drivers.compile_problem(
         model=program_model, time=heun_program(model=program_model))
 except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])

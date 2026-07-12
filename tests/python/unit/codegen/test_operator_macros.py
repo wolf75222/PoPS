@@ -129,10 +129,11 @@ def test_handle_macro_ir_parity_with_name_call():
     fields = P_manual._call("fields_from_state", u, name="fields")
     r = P_manual._call("explicit_rhs", u, fields, name="R")
     lin = P_manual._call("lorentz", fields, name="L")
-    q = P_manual.linear_combine("imex_rhs", u + P_manual.dt * r)
+    endpoint = typed_state(P_manual, "plasma", state_name="U", model=m).next
+    q = P_manual.linear_combine("imex_rhs", u + P_manual.dt * r, at=endpoint.point)
     u1 = P_manual.solve_local_linear("imex_step", operator=P_manual.I - 1.0 * P_manual.dt * lin,
                                      rhs=q, fields=fields)
-    P_manual.commit(typed_state(P_manual, "plasma", state_name="U", model=m).next, u1)
+    P_manual.commit(endpoint, u1)
     def executable_body(source):
         return "\n".join(
             line for line in source.splitlines()

@@ -8,23 +8,40 @@ from fractions import Fraction
 from typing import Any
 
 from ._helpers import (
-    _block_label, _commit, _exact_coefficient, _exact_product, _exact_reciprocal,
-    _operator_handle, _time_state, program_macro,
+    _at_point, _block_label, _commit, _exact_coefficient, _exact_product, _exact_reciprocal,
+    _operator_handle, _stage_point, _time_state, program_macro,
 )
+
+
+def _subflow(flow: Any, P: Any, state: Any, fraction: Any, point: Any, where: Any) -> Any:
+    """Build one split sub-flow and require it to honor the combinator's exact endpoint."""
+    from pops.time.values import ProgramValue
+
+    value = flow(P, state, fraction, at=point)
+    if not isinstance(value, ProgramValue) or value.vtype != "state":
+        raise TypeError("%s must return a Program State value" % where)
+    if value.point != point:
+        raise ValueError(
+            "%s returned point %r instead of its declared split endpoint %r; "
+            "materialize the sub-flow with linear_combine(..., at=at)" %
+            (where, value.point, point))
+    return value
 
 
 @program_macro
 def strang(P: Any, block: Any, state: Any = None, *, half_flow: Any, source: Any,
            commit: Any = True) -> Any:
     """Strang splitting macro H(dt/2); S(dt); H(dt/2), the macro form of pops.Strang (lowers to the SAME
-    IR, no special class). @p half_flow and @p source are IR-building callables (prog, state, frac) ->
-    state that advance the hyperbolic flow and the source by a fraction @p frac of dt. Returns the final
-    state (committed when @p commit)."""
+    IR, no special class). @p half_flow and @p source are IR-building callables
+    ``(prog, state, frac, *, at) -> state`` that advance their sub-flow by ``frac*dt`` and materialize
+    the result at the exact supplied endpoint. Returns the final state (committed when @p commit)."""
     temporal = _time_state(P, block, state)
     U = temporal.n
-    U1 = half_flow(P, U, Fraction(1, 2))
-    U2 = source(P, U1, 1)
-    U3 = half_flow(P, U2, Fraction(1, 2))
+    midpoint = _stage_point(P, "strang_midpoint", Fraction(1, 2))
+    U1 = _subflow(half_flow, P, U, Fraction(1, 2), midpoint, "strang half_flow[0]")
+    U2 = _subflow(source, P, U1, 1, midpoint, "strang source")
+    U3 = _subflow(
+        half_flow, P, U2, Fraction(1, 2), temporal.next.point, "strang half_flow[1]")
     if commit:
         _commit(P, temporal, U3)
     return U3
@@ -37,12 +54,13 @@ def lie(P: Any, block: Any, state: Any = None, *, half_flow: Any, source: Any,
     (ADC-423). @p half_flow and @p source are the SAME IR-building callables `strang` takes
     ``(prog, state, frac) -> state`` (each advances its sub-flow by a fraction @p frac of dt); Lie
     just composes them sequentially over the FULL step (H over dt, then S over dt) with no half-steps.
+    Each callable receives the exact keyword-only endpoint ``at`` and must materialize its result there.
     Lowers to the SAME IR primitives as `strang` (no scheme-specific class). Returns the final state
     (committed when @p commit)."""
     temporal = _time_state(P, block, state)
     U = temporal.n
-    U1 = half_flow(P, U, 1)
-    U2 = source(P, U1, 1)
+    U1 = _subflow(half_flow, P, U, 1, temporal.next.point, "lie half_flow")
+    U2 = _subflow(source, P, U1, 1, temporal.next.point, "lie source")
     if commit:
         _commit(P, temporal, U2)
     return U2
@@ -179,7 +197,8 @@ def condensed_schur(P: Any, block: Any, state: Any = None, *,
     # frozen by the reconstruction, so this affine leaves rho (and the not-yet-written energy) at U^n.
     if theta != 1:
         inv_theta = _exact_reciprocal(theta, "condensed_schur: theta")
-        out = P.linear_combine(label + ".schur_extrap", U + inv_theta * (out - U))
+        out = P.linear_combine(
+            label + ".schur_extrap", U + inv_theta * (out - U), at=temporal.next.point)
     # 6) energy role (ADC-427). E^{n+1} = E^n + (1/2)rho(|v^{n+1}|^2 - |v^n|^2): the kinetic-energy
     # increment from v^n (= mom^n/rho, read from U^n) to v^{n+1} (= mom^{n+1}/rho, in `out`). Skipped
     # for an isothermal rho/mx/my block (c_E is None). Emitted generically (no Schur kernel).
@@ -192,8 +211,11 @@ def condensed_schur(P: Any, block: Any, state: Any = None, *,
     # here is gated by `carry`, so theta == 1 emits none of it and stays byte-identical.
     if carry:
         inv_theta = _exact_reciprocal(theta, "condensed_schur: theta")
-        phi_np1 = P.linear_combine(label + ".schur_phi_np1", phi_n + inv_theta * (phi - phi_n))
+        phi_np1 = P.linear_combine(
+            label + ".schur_phi_np1", phi_n + inv_theta * (phi - phi_n),
+            at=temporal.next.point)
         P.store_history(label + ".schur_phi", phi_np1)  # rotated to lag 1 for the next step
     if commit:
+        out = _at_point(P, out, temporal.next.point)
         _commit(P, temporal, out)
     return out

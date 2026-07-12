@@ -93,12 +93,25 @@ def resolve_program_spaces(program: Any, model: Any) -> Any:
     """
     if not hasattr(program, "_values") or not hasattr(program, "_rebuild"):
         return program
-    registry = _registry(model)
-    if registry is None:
-        return program
-    state_space, field_space = _defaults(registry)
+    from pops.codegen.program_models import ProgramModelGraph, model_for_node
+
+    default_cache = {}
+
+    def context(value: Any) -> tuple[Any, Any, Any]:
+        source = model_for_node(model, value) if type(model) is ProgramModelGraph else model
+        registry = _registry(source)
+        if registry is None:
+            return None, None, None
+        key = id(registry)
+        if key not in default_cache:
+            default_cache[key] = _defaults(registry)
+        state_space, field_space = default_cache[key]
+        return registry, state_space, field_space
 
     def field_for(value: Any) -> Any:
+        registry, _state_space, field_space = context(value)
+        if registry is None:
+            return None
         field = value.attrs.get("field")
         if field is not None:
             from pops.time.references import field_name
@@ -113,6 +126,9 @@ def resolve_program_spaces(program: Any, model: Any) -> Any:
         return field_space
 
     def operator_for(value: Any) -> Any:
+        registry, _state_space, _field_space = context(value)
+        if registry is None:
+            return None
         name = value.attrs.get("linear_source")
         operator = _operator(registry, name) if isinstance(name, str) else None
         return operator.signature.output if operator is not None else None
@@ -121,8 +137,12 @@ def resolve_program_spaces(program: Any, model: Any) -> Any:
         if value.space is not None:
             return value.space
         if value.vtype == "state":
+            _registry_value, state_space, _field_space = context(value)
             return state_space
-        if value.vtype == "rhs" and state_space is not None:
+        if value.vtype == "rhs":
+            _registry_value, state_space, _field_space = context(value)
+            if state_space is None:
+                return None
             from pops.model.spaces import Rate
             return Rate(state_space)
         if value.vtype == "fields":
@@ -135,7 +155,12 @@ def resolve_program_spaces(program: Any, model: Any) -> Any:
     if not any(value.space is None and inferred(value) is not None for value in values):
         return program
     resolved = program._rebuild(lambda _value: True, space_of=inferred)
-    resolved.bind_operators(model)
+    if type(model) is not ProgramModelGraph:
+        resolved.bind_operators(model)
+    # Per-state clocks/spaces are already carried by typed Programs. The legacy single-model route
+    # alone may fill missing table entries from its unique state space.
+    _single_registry = _registry(model) if type(model) is not ProgramModelGraph else None
+    state_space = _defaults(_single_registry)[0] if _single_registry is not None else None
     if state_space is not None:
         resolved._state_spaces = {
             state_ref: state_space if space is None else space

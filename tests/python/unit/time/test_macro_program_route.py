@@ -20,7 +20,7 @@ try:
     import pops
     import pops.lib.time as libtime
     from pops.model import OperatorHandle
-    from pops.time import Program
+    from pops.time import Program, StagePoint, TimePoint
     from pops.time.program import CompiledTime
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_macro_program_route (pops unavailable: %s)" % exc)
@@ -105,12 +105,20 @@ def test_macro_and_manual_same_ir():
     # Manual equivalent: the exact SSPRK2 stage chain, same Program name for byte-identical IR.
     manual = Program("ssprk2")
     U0 = typed_state(manual, "plasma")
-    k0 = manual._rhs_legacy(state=U0, fields=manual.solve_fields(U0), flux=True, sources=["default"])
-    U1 = manual.linear_combine("ssprk2_U1", U0 + manual.dt * k0)
-    k1 = manual._rhs_legacy(state=U1, fields=manual.solve_fields(U1), flux=True, sources=["default"])
-    manual.commit(typed_state(manual, "plasma", state_name="U").next, manual.linear_combine(
+    point0 = StagePoint("ssprk2_0", {"main": TimePoint(manual.clock, 0)})
+    fields0 = manual._replace_value(manual.solve_fields(U0), point=point0)
+    k0 = manual._replace_value(manual._rhs_legacy(
+        state=U0, fields=fields0, flux=True, sources=["default"]), point=point0)
+    point1 = StagePoint("ssprk2_1", {"main": TimePoint(manual.clock, 1)})
+    U1 = manual.linear_combine("ssprk2_U1", U0 + manual.dt * k0, at=point1)
+    fields1 = manual._replace_value(manual.solve_fields(U1), point=point1)
+    k1 = manual._replace_value(manual._rhs_legacy(
+        state=U1, fields=fields1, flux=True, sources=["default"]), point=point1)
+    endpoint = typed_state(manual, "plasma", state_name="U").next
+    manual.commit(endpoint, manual.linear_combine(
         "ssprk2_step",
         Fraction(1, 2) * U0 + Fraction(1, 2) * (U1 + manual.dt * k1),
+        at=endpoint.point,
     ))
 
     assert macro_prog._ir_hash() == manual._ir_hash(), (

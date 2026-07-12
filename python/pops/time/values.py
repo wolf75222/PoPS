@@ -14,6 +14,11 @@ from pops.ir import Equation
 from pops.ir.literals import scalar_data
 from pops.ir.symbolic import ImmutableSymbolic
 from pops.provenance import ProvenanceRecord
+from pops.time.points import point_clock
+from pops.time.value_support import (
+    authoring_source_location as _authoring_source_location,  # noqa: F401
+    resolve_temporal_handle as _resolve_handle,
+)
 from pops.time.value_metadata import (
     CoeffPolynomial, CoefficientLiteralError, _exact_add, _exact_divide, _exact_multiply,
     _exact_negate, _exact_number, _freeze_attr, validate_program_value_identity,
@@ -109,36 +114,6 @@ class _Coeff(ImmutableSymbolic):
                      for p, c in sorted(self.powers.items()))
 
 
-def _resolve_handle(x: Any) -> Any:
-    """Resolve a typed temporal handle to its owning :class:`ProgramValue`.
-
-    ``StageHandle`` and ``HistoryHandle`` expose ``_as_value()`` and ask their Program-owned
-    resolution table for the value, raising clearly on use-before-define. Already-resolved values
-    and non-temporal arguments pass through unchanged. State-accepting boundaries use this helper
-    so temporal handles compose wherever a ``ProgramValue`` is expected without weakening the
-    typed block/state-reference contract or introducing a second IR representation.
-    """
-    from pops.time.handles import HistoryHandle, StageHandle
-    return x._as_value() if isinstance(x, (StageHandle, HistoryHandle)) else x
-
-
-def _authoring_source_location() -> Any:
-    """The (file, line) of the first authoring frame outside pops.time (ADC-530, debug-only).
-
-    Walks the current stack past the pops.time internals (this package builds the IR) to the first
-    caller frame -- a user script or a pops.lib.time macro -- so a captured ``ProgramValue.source_location``
-    points at the line that authored the node, not at ``_new``. Returns ``"<file>:<line>"`` or ``None``
-    if no such frame is found. Called only when a Program enabled ``capture_source_locations()``; it is
-    never on the normal build path."""
-    import os
-    import traceback
-    time_dir = os.path.dirname(__file__)
-    for frame in reversed(traceback.extract_stack()[:-1]):
-        if os.path.dirname(frame.filename) != time_dir:
-            return "%s:%d" % (frame.filename, frame.lineno)
-    return None
-
-
 def _to_affine(x: Any) -> Any:
     x = _resolve_handle(x)
     if isinstance(x, _Affine):
@@ -183,6 +158,13 @@ class _Affine(ImmutableSymbolic):
 
     def __init__(self, terms: Any) -> None:
         self.terms = tuple(terms)
+        clocks = {
+            term.clock for term, _ in self.terms
+            if isinstance(term, ProgramValue)
+        }
+        if len(clocks) > 1:
+            raise ValueError(
+                "an affine expression cannot mix clocks; synchronize the foreign value first")
 
     def _merge(self) -> Any:
         # coalesce repeated values (sum their coefficient polynomials), preserve first-seen order
@@ -285,7 +267,7 @@ class ProgramValue(ImmutableSymbolic):
     def __init__(self, prog: Any, vid: Any, vtype: Any, op: Any, inputs: Any, attrs: Any,
                  name: Any, block: Any, *, space: Any = None, source_location: Any = None,
                  field_context: Any = None, region: int = 0, state_ref: Any = None,
-                 provenance: Any) -> None:
+                 point: Any, provenance: Any) -> None:
         inputs = validate_program_value_identity(
             vid, vtype, op, inputs, name, block, region, state_ref)
         self.prog = prog
@@ -298,6 +280,8 @@ class ProgramValue(ImmutableSymbolic):
         self.block = block
         self.state_ref = state_ref
         self.region = region
+        point_clock(point, "ProgramValue")
+        self.point = point
         # Operator-first type tag (Spec 2): the pops.model space/operator-type this value lives over
         # (a StateSpace / RateSpace / FieldSpace / LocalLinearOperator); None skips space checks.
         if space is not None and getattr(space, "__pops_ir_immutable__", False) is not True:
@@ -317,6 +301,11 @@ class ProgramValue(ImmutableSymbolic):
             if not isinstance(field_context, (FieldContext, FieldReadProvenance)):
                 raise TypeError("ProgramValue field_context must be typed immutable provenance")
         self.field_context = field_context
+
+    @property
+    def clock(self) -> Any:
+        """The one logical clock owning this value's evaluation coordinate."""
+        return point_clock(self.point, "ProgramValue.clock")
 
     def is_field(self) -> Any:
         return self.vtype in ProgramValue._FIELD

@@ -77,6 +77,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     routing is always an error; even a one-block Program reaches index 0 through an explicit map."""
     bidx = (_required_block_index(block_idx, v.block, "emit op %r" % v.name)
             if v.block is not None else None)
+    from pops.codegen.program_models import model_for_node
+    node_model = model_for_node(model, v) if model is not None and (
+        v.block is not None or v.attrs.get("operator_handle") is not None) else model
     # PER-NODE PROFILING (ADC-459): bracket this op's emitted C++ with a steady_clock pair
     # recorded under "node:<v.name>" (shown by sim.profile_report next to the coarse phases). A
     # now() + ctx.profile_record pair (NOT a RAII ProfileScope { }) keeps the emitted declarations
@@ -269,7 +272,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             fy = "%s_fy" % var[v.id]
             lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);" % (fx, var[state_in.id]))
             lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);" % (fy, var[state_in.id]))
-            lines += _emit_flux_kernel(model, named_fluxes, var[state_in.id], fx, fy, bidx)
+            lines += _emit_flux_kernel(node_model, named_fluxes, var[state_in.id], fx, fy, bidx)
             lines.append("ctx.neg_div_flux_into(%s, %s, %s);" % (var[v.id], fx, fy))
         named = [s for s in (v.attrs.get("sources") or []) if s != "default"]
         for s in named:
@@ -278,20 +281,21 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             ssrc = "%s_%s" % (var[v.id], s)
             lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);"
                          % (ssrc, var[state_in.id]))
-            lines += _emit_source_kernel(model, s, var[state_in.id], ssrc, bidx)
+            lines += _emit_source_kernel(node_model, s, var[state_in.id], ssrc, bidx)
             lines.append("ctx.axpy(%s, static_cast<pops::Real>(1), %s);" % (var[v.id], ssrc))
     elif v.op == "source":
         state_in = v.inputs[0]  # source inputs = (state[, fields]); the state is first
         var[v.id] = "r%d" % v.id
         lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);"
                      % (var[v.id], var[state_in.id]))
-        lines += _emit_source_kernel(model, v.attrs["source"], var[state_in.id], var[v.id], bidx)
+        lines += _emit_source_kernel(
+            node_model, v.attrs["source"], var[state_in.id], var[v.id], bidx)
     elif v.op == "apply":
         state_in = v.inputs[0]  # apply inputs = (state[, fields]); the state is first
         var[v.id] = "r%d" % v.id
         lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);"
                      % (var[v.id], var[state_in.id]))
-        lines += _emit_apply_kernel(model, v.attrs["linear_source"], var[state_in.id], var[v.id],
+        lines += _emit_apply_kernel(node_model, v.attrs["linear_source"], var[state_in.id], var[v.id],
                                     bidx)
     elif v.op == "solve_local_linear":
         rhs_in = v.inputs[0]  # solve inputs = (rhs_state, op_value[, fields]); rhs first
@@ -299,7 +303,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);"
                      % (var[v.id], var[base.id]))
         lines += _emit_solve_local_linear_kernel(
-            model, v.attrs["linear_source"], v.attrs["a_coeff"], var[rhs_in.id], var[v.id], bidx)
+            node_model, v.attrs["linear_source"], v.attrs["a_coeff"], var[rhs_in.id], var[v.id], bidx)
     elif v.op == "solve_local_nonlinear":
         # Per-cell Newton (spec op 10): solve residual(U) = 0 from the initial guess U0, cell by
         # cell, with an in-kernel FD Jacobian + the SAME stack dense inverse solve_local_linear
@@ -308,7 +312,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         var[v.id] = "u%d" % v.id
         lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);"
                      % (var[v.id], var[base.id]))
-        lines += _emit_solve_local_nonlinear_kernel(model, v, var[guess_in.id], var[v.id], bidx)
+        lines += _emit_solve_local_nonlinear_kernel(
+            node_model, v, var[guess_in.id], var[v.id], bidx)
     elif v.op == "scalar_field":
         # A step-body scratch scalar field (e.g. the explicit-flux buffer the RHS assembly fills):
         # a persistent shared_ptr (prelude, alloc-once) reused every step. Inside an apply sub-block
@@ -345,7 +350,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # th_dt*J) on a momentum subset -- no coupling/schur call. The thin dispatch lives in
         # program_emit_condensed to keep this router (and its budget) small; condensed_coeffs allocates
         # its four persistent coeff fields there.
-        emit_condensed_op(v, var, model, lines, prelude)
+        emit_condensed_op(v, var, node_model, lines, prelude)
     elif v.op == "matrix_free_operator":
         # Install-time: emit the apply lambda `apply_A{id}` into the prelude. Its persistent scratch
         # (the scalar_field ops of the apply sub-block) are shared_ptr fields, captured by value so

@@ -80,7 +80,10 @@ def test_rate_combined_with_wrong_state_message():
     rate = P._call("explicit_rhs", u_n, P._call("fields_from_state", u_n))  # Rate(U)
     wrong = _typed(P, "other", _OTHER, m)
     try:
-        P.linear_combine("bad", u_n + P.dt * rate + wrong)
+        P.linear_combine(
+            "bad", u_n + P.dt * rate + wrong,
+            at=adctime.TimePoint(P.clock, step=1),
+        )
         raise AssertionError("expected a Rate/State space combination error")
     except ValueError as exc:
         assert "incompatible state spaces" in str(exc), str(exc)

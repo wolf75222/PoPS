@@ -24,6 +24,7 @@ captured into the step closure), reused across every step and every Krylov itera
     1e-6, the solve changed the state, and the offline solve took > 1 iteration. Self-skips (exit 0)
     without numpy / _pops / install_program / a compiler / a visible Kokkos -- never fakes the engine.
 """
+from pops.codegen import compile_drivers
 from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
@@ -79,8 +80,12 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
 
     P.set_apply(A, apply)
     kw = {} if preconditioner is None else {"preconditioner": preconditioner}
-    phi = P.solve_linear(operator=A, rhs=U, method=_krylov(method), tol=tol, max_iter=max_iter, **kw)
-    P.commit(typed_state(P, "blk", state_name="U").next, phi)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    rhs = P.linear_combine("rhs", U, at=endpoint.point)
+    phi = P.solve_linear(
+        operator=A, rhs=rhs, method=_krylov(method), tol=tol, max_iter=max_iter,
+        at=endpoint.point, **kw)
+    P.commit(endpoint, phi)
     return P
 
 
@@ -336,7 +341,7 @@ def _run_section_b(t):
 
     tol = 1e-10
     try:
-        compiled = pops.codegen.compile_problem(
+        compiled = compile_drivers.compile_problem(
             model=passive_model("solve_prog"),
             time=_solve_program(t, name="solve_step", method="cg", tol=tol, max_iter=200))
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
@@ -417,7 +422,7 @@ def _run_section_b_gmg_precond(t):
     prog = _solve_program(t, name="solve_gmg", method="gmres", tol=tol, max_iter=200,
                           preconditioner=preconditioners.GeometricMG())
     try:
-        compiled = pops.codegen.compile_problem(model=passive_model("solve_gmg_prog"), time=prog)
+        compiled = compile_drivers.compile_problem(model=passive_model("solve_gmg_prog"), time=prog)
         compiled_model = passive_model("solve_gmg_block").compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- (B') skipped: compile could not build the .so: %s --" % str(exc)[:200])

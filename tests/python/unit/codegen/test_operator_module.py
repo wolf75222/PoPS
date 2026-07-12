@@ -107,9 +107,10 @@ def _build_predictor(P, mdl):
     fields = P._call("fields_from_state", u)
     rate = P._call("explicit_rhs", u, fields)
     lin = P._call("lorentz", fields)
-    rhs = P.linear_combine("rhs", u + P.dt * rate)
+    endpoint = typed_state(P, "plasma", state_name="U").next
+    rhs = P.linear_combine("rhs", u + P.dt * rate, at=endpoint.point)
     ustar = P.solve_local_linear("ustar", operator=P.I - P.dt * lin, rhs=rhs, fields=fields)
-    P.commit(typed_state(P, "plasma", state_name="U").next, ustar)
+    P.commit(endpoint, ustar)
 
 
 def _physics_model(name, gain):

@@ -25,19 +25,25 @@ def _predictor_corrector(t):
     P = t.Program("predictor_corrector_poisson_lorentz")
     dt = P.dt
     U_n = typed_state(P, "plasma")
+    endpoint = typed_state(P, "plasma", state_name="U").next
+    predictor = t.StagePoint(
+        "predictor", {"main": t.TimePoint(P.clock, 1)})
     f_n = P.solve_fields("fields_n", U_n)
     R_n = P._rhs_legacy(name="R_n", state=U_n, fields=f_n, flux=True, sources=["electric"])
-    U_star_rhs = P.linear_combine("U_star_rhs", U_n + dt * R_n)
+    U_star_rhs = P.linear_combine(
+        "U_star_rhs", U_n + dt * R_n, at=predictor)
     U_star = P.solve_local_linear(name="U_star", operator=P.I - dt * P._linear_source("lorentz"),
                                   rhs=U_star_rhs, fields=f_n)
     f_star = P.solve_fields("fields_star", U_star)
     R_star = P._rhs_legacy(name="R_star", state=U_star, fields=f_star, flux=True, sources=["electric"])
     C_star = P.apply(operator=P._linear_source("lorentz"), state=U_star, fields=f_star, name="C_star")
-    Q = P.linear_combine("Q", U_n + 0.5 * dt * R_n + 0.5 * dt * R_star + 0.5 * dt * C_star)
+    Q = P.linear_combine(
+        "Q", U_n + 0.5 * dt * R_n + 0.5 * dt * R_star + 0.5 * dt * C_star,
+        at=endpoint.point)
     U_np1 = P.solve_local_linear(name="U_np1", operator=P.I - 0.5 * dt * P._linear_source("lorentz"),
                                  rhs=Q, fields=f_star)
     P.solve_fields("fields_np1", U_np1)
-    P.commit(typed_state(P, "plasma", state_name="U").next, U_np1)
+    P.commit(endpoint, U_np1)
     return P
 
 
@@ -52,9 +58,10 @@ def test_a_coeff_recorded_and_hashed(t):
     def prog(a):
         P = t.Program("scl")
         U = typed_state(P, "plasma")
-        Q = P.linear_combine("Q", 1.0 * U)
+        endpoint = typed_state(P, "plasma", state_name="U").next
+        Q = P.linear_combine("Q", 1.0 * U, at=endpoint.point)
         op = P.I - a * P.dt * P._linear_source("lorentz")
-        P.commit(typed_state(P, "plasma", state_name="U").next, P.solve_local_linear(name="W", operator=op, rhs=Q))
+        P.commit(endpoint, P.solve_local_linear(name="W", operator=op, rhs=Q))
         return P
     assert prog(1.0)._ir_hash() != prog(0.5)._ir_hash(), "a different solve coefficient must rehash"
 
@@ -92,7 +99,9 @@ def test_source_and_apply_are_rhs_like(t):
     S = P._source("electric", state=U, fields=f)
     LU = P.apply(P._linear_source("lorentz"), state=U, fields=f)
     assert S.vtype == "rhs" and LU.vtype == "rhs", "source/apply are dU/dt-like (RHS) values"
-    P.commit(typed_state(P, "plasma", state_name="U").next, P.linear_combine("Un", U + P.dt * S + P.dt * LU))
+    endpoint = typed_state(P, "plasma", state_name="U").next
+    P.commit(endpoint, P.linear_combine(
+        "Un", U + P.dt * S + P.dt * LU, at=endpoint.point))
     assert P.validate() is True
 
 

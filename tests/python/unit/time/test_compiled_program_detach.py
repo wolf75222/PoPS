@@ -21,7 +21,7 @@ from pops.model import (
 )
 from pops.problem import Problem
 from pops.problem.handles import BlockHandle, FieldHandle
-from pops.time import Program
+from pops.time import Program, StagePoint, TimePoint
 from pops.time.program_detach import detach_compiled_program
 from pops.time.values import ProgramValue
 
@@ -63,15 +63,19 @@ def _authored_program():
     previous = state.prev.value
     solved = program.solve_fields("solve-psi", state.n, field=field)
     rate = program.call(model.rate, state.n)
-    candidate = program.linear_combine("candidate", state.n + program.dt * rate)
+    predictor_point = StagePoint(
+        "predictor", {"main": TimePoint(state.clock, 1)})
+    stage = state.stage("predictor", point=predictor_point)
+    candidate = program.linear_combine(
+        "candidate", state.n + program.dt * rate, at=stage.point)
     looped = program.range(
         candidate,
         2,
         lambda builder, value: builder.linear_combine("range-body", value),
     )
-    stage = state.stage("predictor")
     program.define(stage, looped)
-    program.commit(state.next, stage.value)
+    final = program.linear_combine("final", stage.value, at=state.next.point)
+    program.commit(state.next, final)
     return {
         "model": model,
         "problem": problem,
@@ -104,7 +108,7 @@ def _walk_values(program):
 def test_detach_reowns_values_canonicalizes_handles_and_preserves_ir_identity():
     authored = _authored_program()
     source = authored["program"]
-    serialized = source._serialize()
+    serialized = source._serialize(include_provenance=False)
     ir_hash = source._ir_hash()
 
     detached = detach_compiled_program(source)
@@ -114,7 +118,7 @@ def test_detach_reowns_values_canonicalizes_handles_and_preserves_ir_identity():
     assert detached._frozen is True
     assert detached.owner_path.is_canonical
     assert detached._case_owner_path.is_canonical
-    assert detached._serialize() == serialized
+    assert detached._serialize(include_provenance=False) == serialized
     assert detached._ir_hash() == ir_hash
     assert detached._operator_registries == {}
     assert detached._default_state_spaces == {}
@@ -236,7 +240,8 @@ def test_ordinary_rebuild_keeps_authoring_registries_and_ir_identity():
 
     rebuilt = source._rebuild(lambda _value: True)
 
-    assert rebuilt._serialize() == source._serialize()
+    assert rebuilt._serialize(include_provenance=False) == source._serialize(
+        include_provenance=False)
     assert rebuilt._ir_hash() == source._ir_hash()
     assert rebuilt._operator_registries == source._operator_registries
     assert any(

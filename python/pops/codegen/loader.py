@@ -48,7 +48,7 @@ class CompiledProblem(CompiledProblemDumpMixin):
                  module_hash: Any = None, external_bricks: Any = None,
                  problem_snapshot: Any = None, bind_schema: Any = None,
                  program_param_routes: Any = None, generated_cpp: Any = None,
-                 lowering_coverage: Any = None) -> None:
+                 lowering_coverage: Any = None, program_graph: Any = None) -> None:
         self.so_path = so_path
         from pops.time.program_space_resolution import resolve_program_spaces
         resolved_program = resolve_program_spaces(program, model)
@@ -59,6 +59,21 @@ class CompiledProblem(CompiledProblemDumpMixin):
             from pops.time.program_detach import detach_compiled_program
             resolved_program = detach_compiled_program(resolved_program)
         self.program = resolved_program
+        if program_graph is None and self.program is not None:
+            program_graph = self.program.to_graph()
+        if program_graph is not None:
+            from pops.time.graph import ProgramGraph
+
+            if type(program_graph) is not ProgramGraph:
+                raise TypeError("CompiledProblem program_graph must be an exact ProgramGraph")
+            if self.program is None:
+                raise ValueError("CompiledProblem cannot carry a ProgramGraph without a Program")
+            resolved_graph = self.program.to_graph()
+            if resolved_graph.graph_hash != program_graph.graph_hash:
+                raise ValueError(
+                    "CompiledProblem ProgramGraph does not match the resolved lowering Program"
+                )
+        self.program_graph = program_graph
         if self.program is None:
             self.program_block_routes = ()
         else:
@@ -93,6 +108,9 @@ class CompiledProblem(CompiledProblemDumpMixin):
         self._module_hash = module_hash
         self.program_name = getattr(self.program, "name", None)
         self.program_hash = self.program._ir_hash() if hasattr(self.program, "_ir_hash") else None
+        self.program_graph_hash = (
+            self.program_graph.graph_hash if self.program_graph is not None else None
+        )
         self.abi_key = abi_key          # cache key: header signature | compiler | C++ standard
         self.cxx = cxx
         self.std = std

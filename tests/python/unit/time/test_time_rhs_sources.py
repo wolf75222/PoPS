@@ -25,6 +25,7 @@ whether ``"default"`` is among the requested sources.
 
 Run with python3 (PYTHONPATH = built pops package).
 """
+from pops.codegen import compile_drivers
 from typed_program_support import state_refs, typed_state
 
 from pops.numerics.reconstruction import FirstOrder
@@ -98,8 +99,9 @@ def one_step_program(name, sources, flux=True, model=None):
     U = typed_state(P, "plasma", model=model)
     fields = P.solve_fields(U) if flux else None
     R = P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
-    P.commit(typed_state(P, "plasma", state_name="U", model=model).next,
-             P.linear_combine("%s_step" % name, U + P.dt * R))
+    endpoint = typed_state(P, "plasma", state_name="U", model=model).next
+    P.commit(endpoint, P.linear_combine(
+        "%s_step" % name, U + P.dt * R, at=endpoint.point))
     return P
 
 
@@ -178,7 +180,7 @@ def run_one_step(sources, flux=True):
     pname = "p_%s_%s" % ("flux" if flux else "noflux", "_".join(sources) or "empty")
     try:
         program_model = decay_model("decay_%s" % pname, C)
-        compiled = pops.codegen.compile_problem(
+        compiled = compile_drivers.compile_problem(
             model=program_model,
             time=one_step_program(pname, sources, flux=flux, model=program_model))
     except RuntimeError as exc:  # no compiler / no Kokkos / .so compile failed
@@ -213,16 +215,18 @@ def lie_split_program(name, model=None):
     P = adctime.Program(name)
     U = typed_state(P, "plasma", model=model)
     H = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=[])  # flux only (== identity here)
-    U1 = P.linear_combine("%s_H" % name, U + P.dt * H)
+    endpoint = typed_state(P, "plasma", state_name="U", model=model).next
+    U1 = P.linear_combine(
+        "%s_H" % name, U + P.dt * H, at=adctime.TimePoint(P.clock, 1))
     S = P._rhs_legacy(state=U1, fields=None, flux=False, sources=["default"])    # default source on U1
-    P.commit(typed_state(P, "plasma", state_name="U", model=model).next,
-             P.linear_combine("%s_S" % name, U1 + P.dt * S))
+    P.commit(endpoint, P.linear_combine(
+        "%s_S" % name, U1 + P.dt * S, at=endpoint.point))
     return P
 
 
 try:
     lie_model = decay_model("decay_lie", C)
-    compiled_lie = pops.codegen.compile_problem(
+    compiled_lie = compile_drivers.compile_problem(
         model=lie_model, time=lie_split_program("lie", model=lie_model))
 except RuntimeError as exc:
     _skip("compile_problem (lie) could not build the .so: %s" % str(exc)[:160])
@@ -244,7 +248,7 @@ try:
     libtime.forward_euler(
         P_fe, *state_refs(P_fe, "plasma", model=fe_model.module),
         sources=(DefaultSource(),))
-    compiled_fe = pops.codegen.compile_problem(model=fe_model, time=P_fe)
+    compiled_fe = compile_drivers.compile_problem(model=fe_model, time=P_fe)
 except RuntimeError as exc:
     _skip("compile_problem (forward_euler) could not build the .so: %s" % str(exc)[:160])
 sim_fe, rho0f = make_sim("fe")

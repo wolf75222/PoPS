@@ -114,12 +114,13 @@ def program_semantic_data(program: Any) -> dict[str, Any]:
     if not isinstance(program, Program):
         raise TypeError("semantic program identity requires a pops.time.Program")
     serialized = program._serialize(include_provenance=False)
-    expected = {"name", "version", "nodes", "commits", "block_order"}
+    expected = {"name", "version", "clock", "nodes", "commits", "block_order"}
     optional = {"histories", "history_persistence", "dt_bound"}
     if not expected.issubset(serialized) or not set(serialized).issubset(expected | optional):
         raise TypeError("Program semantic projection received an unsupported IR schema")
     result = {
         "version": serialized["version"],
+        "clock": serialized["clock"],
         "nodes": [_semantic_node(row) for row in serialized["nodes"]],
         "commits": serialized["commits"],
         "block_order": serialized["block_order"],
@@ -159,13 +160,15 @@ def semantic_value(value: Any, *, where: str) -> Any:
 
 
 def _semantic_node(row: Any) -> dict[str, Any]:
-    expected = {"id", "name", "vtype", "op", "block", "state", "inputs", "attrs"}
+    expected = {
+        "id", "name", "vtype", "op", "block", "state", "point", "inputs", "attrs",
+    }
     optional = {"space", "field_context"}
     if not isinstance(row, Mapping) or not expected.issubset(row) \
             or not set(row).issubset(expected | optional):
         raise TypeError("Program node semantic data has an unsupported schema")
     result = {key: row[key] for key in (
-        "id", "vtype", "op", "block", "state", "inputs", "attrs")}
+        "id", "vtype", "op", "block", "state", "point", "inputs", "attrs")}
     for key in ("space", "field_context"):
         if key in row:
             result[key] = row[key]

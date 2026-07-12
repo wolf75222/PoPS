@@ -9,76 +9,42 @@ import pytest
 pops = pytest.importorskip("pops")
 
 from pops.codegen import compile_drivers, orchestration  # noqa: E402
-from pops.codegen._artifact_freeze import seal_attributes  # noqa: E402
-from pops.codegen.loader import CompiledModel  # noqa: E402
+from pops.codegen.loader import CompiledModel, CompiledProblem  # noqa: E402
 from pops.codegen._compiled_model_identity import model_compile_identity  # noqa: E402
 from pops.mesh.cartesian import CartesianMesh  # noqa: E402
 from pops.mesh.layouts import Uniform  # noqa: E402
-from pops.model import Module  # noqa: E402
+from pops.physics import Model  # noqa: E402
+from pops.physics.facade import Model as PdeModel  # noqa: E402
 
 
-class _Loader(CompiledModel):
-    def __init__(self, source, target):
-        super().__init__(
-            source.so_path, "production", "add_native_block",
-            (), (), (), 0, None, 0, {}, {"cpu": True, "amr": target == "amr_system"},
-            "abi", source._model_hash(), "c++", "c++20", target=target,
-            definition_identity=model_compile_identity(source))
-        self.name = source.name
+def _loader(source, target, so_path):
+    compiled = CompiledModel(
+        so_path, "production", "add_native_block",
+        (), (), (), 0, None, 0, {}, {"cpu": True, "amr": target == "amr_system"},
+        "abi", source._model_hash(), "c++", "c++20", target=target,
+        definition_identity=model_compile_identity(source))
+    compiled.name = source.name
+    return compiled
 
 
-class _Dsl:
-    def __init__(self, name, so_path="/tmp/nonexistent-test-artifact.so"):
-        self.name = name
-        self.so_path = str(so_path)
-
-    def compile(self, *, backend, target, **kwargs):
-        return _Loader(self, target)
-
-    def _model_hash(self):
-        return "model-hash:%s" % self.name
-
-
-class _Model:
-    def __init__(self, name, so_path="/tmp/nonexistent-test-artifact.so"):
-        self.name = name
-        self.module = Module(name)
-        self.module.state_space("U", ("u",))
-        self.owner_path = self.module.owner_path
-        self.dsl = _Dsl(name, so_path)
-
-    def declaration_index(self):
-        return self.module.declaration_index()
+class _Model(Model):
+    def __init__(self, name):
+        super().__init__(name)
+        state = self.state("U", ("u",))
+        (u,) = state
+        self.flux(
+            "transport", on=state, x=[0.0 * u], y=[0.0 * u],
+            waves={"x": [0.0 * u], "y": [0.0 * u]},
+        )
 
 
-class _Time(pops.Program):
-    def __init__(self):
-        super().__init__("stub-time")
-
-
-class _Artifact:
-    def __init__(self, problem_snapshot, so_path):
-        self.so_path = str(so_path)
-        self.abi_key = "test-abi"
-        self.cxx = "c++"
-        self.std = "c++20"
-        self.model = None
-        self.bind_schema = None
-        self.install_plan = None
-        self._problem_snapshot = problem_snapshot
-        self._sealed = False
-
-    @property
-    def authoring_snapshot(self):
-        return self._problem_snapshot
-
-    def _seal(self):
-        seal_attributes(self)
-
-    def __setattr__(self, name, value):
-        if getattr(self, "_sealed", False):
-            raise AttributeError("compiled artifact is immutable")
-        object.__setattr__(self, name, value)
+def _resolved_problem(name, blocks):
+    layout = Uniform(CartesianMesh(n=16))
+    problem = pops.Problem(name=name, layout=layout)
+    for block_name, physics in blocks:
+        problem.block(block_name, physics=physics, spatial=pops.FiniteVolume())
+    problem.program(pops.Program("stub-time"))
+    return orchestration.resolve(orchestration.validate(problem), layout=layout)
 
 
 def test_public_artifact_has_no_authoring_backdoor_and_plan_containers_are_immutable(
@@ -86,23 +52,26 @@ def test_public_artifact_has_no_authoring_backdoor_and_plan_containers_are_immut
     binary = tmp_path / "compiled-test-artifact.so"
     binary.write_bytes(b"immutable artifact boundary")
 
-    def fake_compile_problem(*, problem_snapshot, **kwargs):
-        return _Artifact(problem_snapshot, binary)
+    def fake_compile_problem(*, time, problem_snapshot, **kwargs):
+        return CompiledProblem(
+            str(binary), program=time, model=None, abi_key="test-abi",
+            cxx="c++", std="c++20", problem_snapshot=problem_snapshot)
 
     monkeypatch.setattr(compile_drivers, "compile_problem", fake_compile_problem)
-    problem = (pops.Problem(name="artifact-boundary")
-               .block("ions", physics=_Model("ions", binary))
-               .block("electrons", physics=_Model("electrons", binary)))
-    artifact = orchestration.compile(
-        problem,
-        layout=Uniform(CartesianMesh(n=16)),
-        time=_Time(),
+    monkeypatch.setattr(
+        PdeModel, "compile",
+        lambda source, *, target, **kwargs: _loader(source, target, str(binary)),
     )
-    plan = artifact.install_plan
+    plan = _resolved_problem("artifact-boundary", (
+        ("ions", _Model("ions")),
+        ("electrons", _Model("electrons")),
+    ))
+    artifact = orchestration.compile(plan)
+    plan = artifact.plan
 
-    assert artifact.authoring_snapshot.hash == plan.snapshot_hash
+    assert artifact.authoring_snapshot.hash == plan.snapshot.hash
     assert tuple(block.name for block in plan.blocks) == ("ions", "electrons")
-    assert set(plan.block_models) == {"ions", "electrons"}
+    assert {block.name for block in artifact.blocks} == {"ions", "electrons"}
     for forbidden in (
         "_problem", "_block_specs", "_block_models", "_block_compiled_models",
         "_layout", "_target", "_field_solvers", "_outputs",
@@ -111,12 +80,10 @@ def test_public_artifact_has_no_authoring_backdoor_and_plan_containers_are_immut
 
     with pytest.raises(TypeError):
         plan.field_solvers["phi"] = object()
-    with pytest.raises(TypeError):
-        plan.block_models["late"] = object()
     with pytest.raises((FrozenInstanceError, AttributeError)):
         plan.blocks = ()
-    with pytest.raises(AttributeError):
-        artifact.install_plan = None
+    with pytest.raises((FrozenInstanceError, AttributeError)):
+        artifact.plan = None
 
     assert isinstance(plan.blocks, tuple)
     assert isinstance(plan.outputs, tuple)
@@ -124,15 +91,13 @@ def test_public_artifact_has_no_authoring_backdoor_and_plan_containers_are_immut
 
 
 def test_model_compile_must_return_the_standard_immutable_loader(monkeypatch):
-    class MutableDsl(_Dsl):
-        def compile(self, *, backend, target, **kwargs):
-            return SimpleNamespace(
-                so_path="/tmp/mutable.so", target=target, mutable=[])
-
+    monkeypatch.setattr(
+        PdeModel, "compile",
+        lambda _source, *, target, **_kwargs: SimpleNamespace(
+            so_path="/tmp/mutable.so", target=target, mutable=[]),
+    )
     model = _Model("mutable-result")
-    model.dsl = MutableDsl("mutable-result")
-    problem = pops.Problem(name="mutable-result").block("fluid", physics=model)
+    plan = _resolved_problem("mutable-result", (("fluid", model),))
 
-    with pytest.raises(TypeError, match="must return pops.codegen.CompiledModel"):
-        orchestration.compile(
-            problem, layout=Uniform(CartesianMesh(n=16)), time=_Time())
+    with pytest.raises(TypeError, match="must return exact CompiledModel"):
+        orchestration.compile(plan)

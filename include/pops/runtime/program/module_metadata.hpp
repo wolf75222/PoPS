@@ -32,6 +32,7 @@ using SpaceId = std::uint32_t;
 /// One operator's metadata, as exported by the .so.
 struct OperatorMetadata {
   OperatorId id = 0;
+  std::string owner;         ///< canonical model owner; empty only for old artifacts
   std::string name;
   std::string kind;          ///< one of the Spec-2 operator kinds (local_rate, field_operator, ...)
   std::string signature;     ///< human-readable typed signature
@@ -44,16 +45,30 @@ struct ModuleMetadata {
   bool present = false;
   std::vector<OperatorMetadata> operators;
   std::vector<std::string> state_spaces;
+  std::vector<std::string> state_space_owners;
   std::vector<std::string> field_spaces;
+  std::vector<std::string> field_space_owners;
 
-  /// The operator with this name, or nullptr if none.
-  const OperatorMetadata* find(const std::string& name) const {
+  /// The exact owner-qualified operator, or nullptr if none.
+  const OperatorMetadata* find(const std::string& owner, const std::string& name) const {
     for (const auto& op : operators) {
-      if (op.name == name) {
+      if (op.owner == owner && op.name == name) {
         return &op;
       }
     }
     return nullptr;
+  }
+
+  /// Unqualified lookup succeeds only when the name is globally unique.
+  const OperatorMetadata* find(const std::string& name) const {
+    const OperatorMetadata* result = nullptr;
+    for (const auto& op : operators) {
+      if (op.name == name) {
+        if (result != nullptr) return nullptr;
+        result = &op;
+      }
+    }
+    return result;
   }
 };
 
@@ -111,6 +126,7 @@ inline ModuleMetadata read_module_metadata(void* dl_handle) {
   for (int i = 0; i < n; ++i) {
     OperatorMetadata op;
     op.id = static_cast<OperatorId>(i);
+    op.owner = detail::module_str(dl_handle, "pops_module_operator_owner", i);
     op.name = detail::module_str(dl_handle, "pops_module_operator_name", i);
     op.kind = detail::module_str(dl_handle, "pops_module_operator_kind", i);
     op.signature = detail::module_str(dl_handle, "pops_module_operator_signature", i);
@@ -119,8 +135,12 @@ inline ModuleMetadata read_module_metadata(void* dl_handle) {
   }
   meta.state_spaces =
       detail::module_names(dl_handle, "pops_module_state_space_count", "pops_module_state_space_name");
+  meta.state_space_owners = detail::module_names(
+      dl_handle, "pops_module_state_space_count", "pops_module_state_space_owner");
   meta.field_spaces =
       detail::module_names(dl_handle, "pops_module_field_space_count", "pops_module_field_space_name");
+  meta.field_space_owners = detail::module_names(
+      dl_handle, "pops_module_field_space_count", "pops_module_field_space_owner");
   return meta;
 }
 

@@ -21,6 +21,10 @@ from pops.time.history import CopyCurrent  # noqa: F401
 from pops.time.history_persistence import (  # noqa: F401
     Dense, HistoryPersistence, Interval, Revolve,
 )
+from pops.time.graph import (  # noqa: F401
+    Branch, Commit, OperatorCall, ProgramGraph, ProgramValue as GraphProgramValue,
+    Solve, StateRead, Synchronize, Unknown, ValueRef,
+)
 from pops.time.passes_facade import (  # noqa: F401
     eliminate_common_subexpressions,
     eliminate_dead_nodes,
@@ -28,12 +32,20 @@ from pops.time.passes_facade import (  # noqa: F401
     optimize,
 )
 from pops.time.program import CompiledTime, Program
+from pops.time.points import Clock, StagePoint, TimePoint  # noqa: F401
 from pops.time.schedule import (  # noqa: F401
     Schedule, always, every, on_end, on_start, subcycle, when,
+)
+from pops.time.synchronization import (  # noqa: F401
+    SampleAndHold, SynchronizationRelation,
 )
 from pops.time.values import StageStateSet, ProgramValue  # noqa: F401
 
 __all__ = ["Program", "CompiledTime", "ProgramValue", "StageStateSet", "Schedule",
+           "ProgramGraph", "GraphProgramValue", "StateRead", "Unknown", "OperatorCall",
+           "Solve", "Branch", "Synchronize", "Commit", "ValueRef",
+           "Clock", "TimePoint", "StagePoint",
+           "SampleAndHold", "SynchronizationRelation",
            "TimeState", "StageHandle", "HistoryHandle", "StateEndpointHandle", "CopyCurrent",
            "HistoryPersistence", "Dense", "Interval", "Revolve",
            "always", "every", "when", "on_start", "on_end", "subcycle",

@@ -239,10 +239,6 @@ class ResolvedSimulationPlan:
             self.compile_options, where="ResolvedSimulationPlan.compile_options"))
         object.__setattr__(self, "plan_identity", make_identity("resolved-plan", self._payload()))
 
-    @property
-    def first_model(self) -> Any:
-        return self.blocks[0].model
-
     def _payload(self) -> dict[str, Any]:
         return {
             "schema_version": 1,

@@ -20,6 +20,7 @@ validation errors #18/#19.
     Self-skips (exit 0) without numpy / _pops / a compiler / a visible Kokkos -- never fakes the engine.
 (C) Validation #18 (pure Python, mocked System) + #19 (skips without the engine).
 """
+from pops.codegen import compile_drivers
 from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
@@ -74,12 +75,13 @@ def test_solve_local_nonlinear_builds_newton_ir(t):
 
     def residual(P, Uit, U0):
         S = P._source("react", state=Uit)
-        return P.linear_combine("r", Uit - U0 - dt * S)
+        return P.linear_combine("r", Uit - U0 - dt * S, at=Uit.point)
     W = P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U, tol=1e-10, max_iter=25)
     assert W.op == "solve_local_nonlinear" and W.vtype == "state", (W.op, W.vtype)
     assert W.attrs["max_iter"] == 25 and W.attrs["tol"].to_python() == 1e-10
     assert len(W.attrs["residual_block"]) >= 3, "the residual sub-block holds the iterate/guess + ops"
-    P.commit(typed_state(P, "blk", state_name="U").next, W)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    P.commit(endpoint, P.linear_combine("W_next", 1 * W, at=endpoint.point))
     assert P.validate() is True, "the Newton IR must validate"
     assert P._ir_hash(), "the Newton IR must serialize to a stable hash"
 
@@ -92,7 +94,7 @@ def test_solve_local_nonlinear_rejects_non_local_residual(t):
 
     def bad_residual(P, Uit, U0):
         R = P._rhs_legacy(state=Uit, sources=["default"])  # a non-local divergence-bearing rhs
-        return P.linear_combine(Uit - U0 - P.dt * R)
+        return P.linear_combine(Uit - U0 - P.dt * R, at=Uit.point)
     try:
         P.solve_local_nonlinear(name="W", residual=bad_residual, initial_guess=U)
     except ValueError as exc:
@@ -109,8 +111,10 @@ def test_solve_local_nonlinear_refused_without_model(t):
 
     def residual(P, Uit, U0):
         S = P._source("react", state=Uit)
-        return P.linear_combine("r", Uit - U0 - dt * S)
-    P.commit(typed_state(P, "blk", state_name="U").next, P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U))
+        return P.linear_combine("r", Uit - U0 - dt * S, at=Uit.point)
+    W = P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    P.commit(endpoint, P.linear_combine("W_next", 1 * W, at=endpoint.point))
     try:
         P.emit_cpp_program()  # no model
     except NotImplementedError as exc:
@@ -167,7 +171,8 @@ def test_reductions_lower_to_adc_reductions(t):
     P.record_scalar("s_max", s_max)
     P.record_scalar("s_min", s_min)
     P.record_scalar("s_c", s_c)
-    P.commit(typed_state(P, "blk", state_name="U").next, P.linear_combine(U + P.dt * R))
+    endpoint = typed_state(P, "blk", state_name="U").next
+    P.commit(endpoint, P.linear_combine(U + P.dt * R, at=endpoint.point))
     src = P.emit_cpp_program()
     for frag in ("pops::reduce_sum(", "pops::reduce_max(", "pops::reduce_min("):
         assert frag in src, "the reduction codegen must contain %r\n%s" % (frag, src)
@@ -181,7 +186,8 @@ def test_fill_boundary_ir_and_codegen(t):
     Uf = P.fill_boundary(U)
     assert Uf.op == "fill_boundary" and Uf.vtype == "state", (Uf.op, Uf.vtype)
     R = P._rhs_legacy(state=Uf, sources=["default"])
-    P.commit(typed_state(P, "blk", state_name="U").next, P.linear_combine(Uf + P.dt * R))
+    endpoint = typed_state(P, "blk", state_name="U").next
+    P.commit(endpoint, P.linear_combine(Uf + P.dt * R, at=endpoint.point))
     src = P.emit_cpp_program()
     assert "ctx.fill_boundary(" in src, "fill_boundary lowers to ctx.fill_boundary\n%s" % src
 
@@ -200,10 +206,11 @@ def test_project_ir_and_codegen(t):
     P = t.Program("p")
     U = typed_state(P, "blk")
     R = P._rhs_legacy(state=U, sources=["default"])
-    U1 = P.linear_combine(U + P.dt * R)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    U1 = P.linear_combine(U + P.dt * R, at=endpoint.point)
     Up = P.project(state=U1)
     assert Up.op == "project" and Up.vtype == "state", (Up.op, Up.vtype)
-    P.commit(typed_state(P, "blk", state_name="U").next, Up)
+    P.commit(endpoint, Up)
     src = P.emit_cpp_program()
     assert "ctx.apply_projection(0, " in src, "project lowers to ctx.apply_projection\n%s" % src
 
@@ -232,7 +239,8 @@ def test_record_scalar_ir_and_codegen(t):
     R = P._rhs_legacy(state=U, sources=["default"])
     rec = P.record_scalar("rhs_norm", P.norm2(R))
     assert rec.op == "record_scalar" and rec.attrs["diagnostic"] == "rhs_norm"
-    P.commit(typed_state(P, "blk", state_name="U").next, P.linear_combine(U + P.dt * R))
+    endpoint = typed_state(P, "blk", state_name="U").next
+    P.commit(endpoint, P.linear_combine(U + P.dt * R, at=endpoint.point))
     src = P.emit_cpp_program()
     assert 'ctx.record_scalar("rhs_norm", ' in src, "record_scalar lowers to ctx.record_scalar\n%s" % src
 
@@ -261,7 +269,8 @@ def test_ir_hash_distinguishes_new_ops(t):
         U = typed_state(P, "blk")
         R = P._rhs_legacy(state=U, sources=["default"])
         build(P, U, R)
-        P.commit(typed_state(P, "blk", state_name="U").next, P.linear_combine(U + P.dt * R))
+        endpoint = typed_state(P, "blk", state_name="U").next
+        P.commit(endpoint, P.linear_combine(U + P.dt * R, at=endpoint.point))
         return P._ir_hash()
 
     base = _h(lambda P, U, R: None)
@@ -299,7 +308,8 @@ def _reductions_program(t):
     P.record_scalar("state_max", P.max(U))
     P.record_scalar("state_min", P.min(U))
     P.record_scalar("state_sum_c0", P.sum_component(U, 0))
-    P.commit(typed_state(P, "blk", state_name="U").next, P.linear_combine(U + P.dt * R))
+    endpoint = typed_state(P, "blk", state_name="U").next
+    P.commit(endpoint, P.linear_combine(U + P.dt * R, at=endpoint.point))
     return P
 
 
@@ -323,7 +333,7 @@ def _run_section_b(t):
     c = 0.5
     P = _reductions_program(t)
     try:
-        compiled = pops.codegen.compile_problem(model=_const_source_model("red_prog", c), time=P)
+        compiled = compile_drivers.compile_problem(model=_const_source_model("red_prog", c), time=P)
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
         return None
@@ -384,8 +394,9 @@ def _fill_project_program(t):
     U = typed_state(P, "blk")
     Uf = P.fill_boundary(U)
     R = P._rhs_legacy(state=Uf, sources=["default"])
-    U1 = P.linear_combine(Uf + P.dt * R)
-    P.commit(typed_state(P, "blk", state_name="U").next, P.project(state=U1))
+    endpoint = typed_state(P, "blk", state_name="U").next
+    U1 = P.linear_combine(Uf + P.dt * R, at=endpoint.point)
+    P.commit(endpoint, P.project(state=U1))
     return P
 
 
@@ -405,7 +416,7 @@ def _run_section_b2(t):
         return None
     P = _fill_project_program(t)
     try:
-        compiled = pops.codegen.compile_problem(model=_const_source_model("fp_prog", 0.0), time=P)
+        compiled = compile_drivers.compile_problem(model=_const_source_model("fp_prog", 0.0), time=P)
     except RuntimeError as exc:
         print("-- (B.2) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
         return None

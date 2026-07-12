@@ -29,6 +29,17 @@ def compile_install_models(plan: Any, options: Any) -> dict[str, Any]:
             for block in plan.blocks}
 
 
+def build_program_model_graph(plan: Any) -> Any:
+    """Build the exact owner-qualified model graph for whole-Program lowering."""
+    from pops.codegen._plans import ResolvedSimulationPlan
+
+    if type(plan) is not ResolvedSimulationPlan:
+        raise TypeError("program model graph requires an exact ResolvedSimulationPlan")
+    from pops.codegen.program_models import ProgramModelGraph
+
+    return ProgramModelGraph.from_resolved_blocks(plan.blocks)
+
+
 def compile_install_model(name: str, model: Any, backend: str, target: str,
                           compile_options: Any) -> Any:
     from pops.codegen.loader import CompiledModel
@@ -86,6 +97,7 @@ def prepare_problem_snapshot(problem: Any, time: Any, *, layout: Any, libraries:
 
 
 __all__ = [
-    "capture_field_solvers", "capture_runtime_declarations", "compile_install_model",
-    "compile_install_models", "prepare_problem_snapshot", "resolve_compile_libraries",
+    "build_program_model_graph", "capture_field_solvers", "capture_runtime_declarations",
+    "compile_install_model", "compile_install_models", "prepare_problem_snapshot",
+    "resolve_compile_libraries",
 ]

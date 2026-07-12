@@ -117,7 +117,8 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
 
     def solve_linear(self, name: Any = None, operator: Any = None, rhs: Any = None,
                      initial_guess: Any = None, method: Any = None, preconditioner: Any = None,
-                     tol: Any = None, max_iter: Any = None, restart: Any = None) -> Any:
+                     tol: Any = None, max_iter: Any = None, restart: Any = None, *,
+                     at: Any = None) -> Any:
         """Solve the matrix-free linear system ``operator x = rhs`` with the runtime's Krylov loop and
         return the solution as a field. A state-domain operator with a State rhs returns a State;
         scratch/vector solves return a scalar_field. The iteration is DYNAMIC (C++-side, inside the loop):
@@ -246,7 +247,8 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             "state" if operator.attrs["domain"] == "state" and rhs.vtype == "state"
             else "scalar_field")
         return self._new(
-            result_type, "solve_linear", inputs, attrs, name, rhs.block, space=rhs.space)
+            result_type, "solve_linear", inputs, attrs, name, rhs.block, space=rhs.space,
+            point=rhs.point if at is None else at)
 
     def commit(self, endpoint: StateEndpointHandle, state: ProgramValue) -> None:
         """Commit ``state`` to ``endpoint``, at most once for that qualified state.
@@ -271,6 +273,16 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
                 "by block %r" % (block_name(endpoint.block), block_name(state.block))
             )
         require_top_level(self, state, "commit")
+        if state.clock != endpoint.clock:
+            raise ValueError(
+                "commit: endpoint clock %r cannot receive value %r on clock %r; "
+                "insert Program.synchronize(..., at=TimePoint(endpoint.clock)) first"
+                % (endpoint.clock.name, state.name, state.clock.name))
+        if state.point != endpoint.point:
+            raise ValueError(
+                "commit: value %r is at %r, but the endpoint is at %r; construct the final "
+                "value with at=U.next.point"
+                % (state.name, state.point, endpoint.point))
         require_compatible_spaces(endpoint.space, state.space, "commit", typed_pair=True)
         return self._commit_state(endpoint.state, state)
 
@@ -352,7 +364,7 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             return self.solve_fields(name, states[0])
         return self.solve_fields_from_blocks(states, name=name)
 
-    def value(self, name: Any, expr: Any) -> Any:
+    def value(self, name: Any, expr: Any, *, at: Any = None) -> Any:
         """Name an intermediate SSA value ``name`` from ``expr`` (ADC-561: the short named-value form).
 
         The lightweight spelling of the free-value case of :meth:`define`::
@@ -368,7 +380,7 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         redefine, use-before-define) are unchanged.
 
         ``name`` MUST be a non-empty string (an intermediate SSA value, never a mutation): the
-        stage handles stay the ``T.define(U.stage(k), ...)`` door, while ``U.next`` is exclusively a
+        stage handles stay the ``T.define(U.stage(name, point=...), ...)`` door, while ``U.next`` is exclusively a
         commit destination. Passing either kind here is refused with the corresponding final API.
         """
         if isinstance(name, StateEndpointHandle):
@@ -385,12 +397,12 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         if isinstance(name, (StageHandle, HistoryHandle, TimeState)):
             raise TypeError(
                 "T.value(name, expr) names a free intermediate value: pass a string name. For a "
-                "temporal stage use T.define(U.stage(k), expr).")
+                "temporal stage use T.define(U.stage(name, point=...), expr).")
         if not isinstance(name, str) or not name:
             raise ValueError("T.value: name must be a non-empty string")
-        return self.define(name, expr)
+        return self.define(name, expr, at=at)
 
-    def define(self, name: Any, value: Any = None) -> Any:
+    def define(self, name: Any, value: Any = None, *, at: Any = None) -> Any:
         """Name a value or assign a stage; a state endpoint is never definable.
 
         Two forms (additive; the ``(name, value)`` board form is unchanged):
@@ -398,7 +410,7 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
           - ``P.define("U1", U0 + dt * k0)`` (board sugar) names a value: an affine combination of
             states materializes via ``linear_combine``, a ``rate(U) == <expr>`` equation keeps its
             right-hand side, and any other ProgramValue is named in place;
-          - ``P.define(U.stage(1), U.n + dt * k0)`` assigns a generated SSA name to the
+          - ``P.define(U.stage("predictor", point=...), U.n + dt * k0)`` assigns a generated SSA name to the
             stage and enforces single assignment. ``T.define(U.n, ...)`` raises because the
             current state is read-only; ``T.define(U.prev, ...)`` raises because history is
             policy-owned; and ``T.define(U.next, ...)`` raises because ``U.next`` is the
@@ -413,6 +425,8 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
                 "T.define: U.next is a commit-only StateEndpointHandle; "
                 "use T.commit(U.next, value)")
         if isinstance(name, StageHandle):
+            if at is not None:
+                raise TypeError("T.define(stage, value) gets its point from the StageHandle")
             return self._define_stage(name, value)
         if isinstance(name, HistoryHandle):
             self._require_history(name, "T.define")
@@ -420,7 +434,7 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         if isinstance(name, TimeState):
             self._require_time_state(name, "T.define")
             raise ValueError(
-                "T.define: pass a version handle (U.stage(k) / U.next), not the TimeState itself")
+                "T.define: pass a version handle (U.stage(name, point=...) / U.next), not the TimeState itself")
         if isinstance(name, ProgramValue):
             # The handle ``U.n`` is a State ProgramValue (the current state). No legacy define names a ProgramValue
             # (the board form always passes a string name), so a ProgramValue target can only be a misuse of
@@ -434,15 +448,16 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
                                  % (name,))
             value = value.rhs
         if isinstance(value, _Affine):
-            return self.linear_combine(name, value)
+            return self.linear_combine(name, value, at=at)
         if isinstance(value, ProgramValue):
-            return self._replace_value(value, name=name)
+            return self._replace_value(
+                value, name=name, point=value.point if at is None else at)
         raise TypeError(
             "define(%r): expected a ProgramValue, an affine combination, or a rate equation; got %r"
             % (name, value))
 
     @atomic_authoring
-    def solve(self, name: Any, equation: Any) -> Any:
+    def solve(self, name: Any, equation: Any, *, at: Any = None) -> Any:
         """Board sugar for an implicit local solve ``(I -/+ a*L) @ unknown("x") == rhs``.
 
         Lowers to ``linear_combine`` (if the rhs is an affine combination) then
@@ -455,11 +470,14 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         if not isinstance(lhs, _bm.OpApply):
             raise ValueError("solve(%r): left-hand side must be 'operator @ unknown(name)'" % (name,))
         if isinstance(rhs, _Affine):
-            rhs = self.linear_combine(name + "_rhs", rhs)
+            rhs = self.linear_combine(name + "_rhs", rhs, at=at)
         elif not (isinstance(rhs, ProgramValue) and rhs.vtype == "state"):
             raise ValueError("solve(%r): right-hand side must be a State or an affine of States"
                              % (name,))
-        return self.solve_local_linear(name=name, operator=lhs.operator, rhs=rhs)
+        result = self.solve_local_linear(name=name, operator=lhs.operator, rhs=rhs)
+        if at is not None and result.point != at:
+            result = self._replace_value(result, point=at)
+        return result
 
     def commit_many(self, mapping: Any) -> None:
         """Commit ``{Ua.next: Ua_next, Ub.next: Ub_next}`` as one atomic group.

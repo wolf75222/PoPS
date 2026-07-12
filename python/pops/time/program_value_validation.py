@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from pops.time.values import ProgramValue, _Affine
+from pops.time.points import point_clock
 
 
 TOP_LEVEL_REGION = 0
@@ -94,6 +95,25 @@ def require_owned(program: Any, value: Any, where: str, *, vtype: Any = None) ->
     return value
 
 
+def validate_input_clocks(
+        inputs: Any, point: Any, where: str, *, constructing_synchronize: bool = False) -> None:
+    """Reject an ordinary graph edge crossing logical clocks.
+
+    A synchronize node is the sole explicit clock-domain crossing. Its output already carries the
+    target clock, so downstream nodes consume it like any other same-clock value.
+    """
+    expected = point_clock(point, where)
+    for value in inputs:
+        if not isinstance(value, ProgramValue):
+            continue
+        if value.clock == expected or constructing_synchronize:
+            continue
+        raise ValueError(
+            "%s: value %r belongs to clock %r but the result belongs to clock %r; "
+            "insert an explicit Program synchronization node"
+            % (where, value.name, value.clock.name, expected.name))
+
+
 def require_top_level(program: Any, value: Any, where: str) -> ProgramValue:
     value = require_owned(program, value, where)
     if value.region != TOP_LEVEL_REGION:
@@ -180,6 +200,7 @@ def require_history_space(program: Any, name: str, space: Any) -> None:
 __all__ = [
     "TOP_LEVEL_REGION", "merge_state_spaces", "rate_space_for", "require_affine_region",
     "require_compatible_spaces", "require_declared_state_space", "require_history_space",
-    "require_owned", "require_region", "require_state_space", "require_top_level",
+    "point_clock", "require_owned", "require_region", "require_state_space", "require_top_level",
     "state_space_key", "state_space_name", "structural_state_space", "validate_input_regions",
+    "validate_input_clocks",
 ]

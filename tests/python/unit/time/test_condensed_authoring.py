@@ -59,7 +59,9 @@ def test_builders_record_the_condensed_ops():
     recon = P.condensed_reconstruct(state=U, phi=phi_n, linear_operator=jh, subset=(1, 2),
                                     th_dt=1.0 * P.dt, c_rho=0)
     assert recon.vtype == "state" and recon.attrs["subset"] == (1, 2)
-    P.commit(typed_state(P, "blk", state_name="U").next, recon)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    final = P.linear_combine("final", recon, at=endpoint.point)
+    P.commit(endpoint, final)
     assert P.validate() is True and P._ir_hash()
     print("OK  condensed_coeffs/rhs/reconstruct record + validate + hash")
 

@@ -9,8 +9,8 @@ from fractions import Fraction
 from typing import Any
 
 from ._helpers import (
-    _DEFAULT_SOURCES, _block_label, _commit, _operator_handle, _source_names, _stage_rhs,
-    _time_state, _typed_rhs, program_macro,
+    _DEFAULT_SOURCES, _at_point, _block_label, _commit, _operator_handle, _source_names,
+    _stage_rhs, _time_state, _typed_rhs, program_macro,
 )
 from .euler import forward_euler as _forward_euler_macro
 
@@ -70,13 +70,14 @@ def adams_bashforth(P: Any, block: Any, state: Any = None, order: Any = None, *,
     name = label + ".R"
     step_name = "ab2_step" if order == 2 else ("ab%d_step" % order)
     U = temporal.n
-    R_n = _stage_rhs(P, U, sources, flux)
+    R_n = _stage_rhs(P, U, sources, flux, name="ab_current", offset=0)
     # Store R_n FIRST (so the first store cold-start-fills the ring), then read R_{n-j} = lag j.
     P.store_history(name, R_n)
     expr = U + (P.dt * b[0]) * R_n
     for j in range(1, order):
         expr = expr + (P.dt * b[j]) * _history(P, name, j, temporal, R_n.space)
-    _commit(P, temporal, P.linear_combine(step_name, expr))
+    _commit(P, temporal, P.linear_combine(
+        step_name, expr, at=temporal.next.point))
 
 
 @program_macro
@@ -108,7 +109,8 @@ def _bdf_local_linear(P: Any, temporal: Any, order: Any, linear_source: Any, sou
         return (expr + P.dt * R) if R is not None else expr
 
     if order == 1:  # (I - dt*L) U^{n+1} = U^n [+ dt R]
-        rhs = P.linear_combine(label + "_bdf1_rhs", _with_explicit(1 * U))
+        rhs = P.linear_combine(
+            label + "_bdf1_rhs", _with_explicit(1 * U), at=temporal.next.point)
         operator = P.I - P.dt * P.linear_source(linear_source)
         out = P.solve_local_linear(
             name=label + "_bdf1_step", operator=operator, rhs=rhs, fields=fields)
@@ -119,7 +121,8 @@ def _bdf_local_linear(P: Any, temporal: Any, order: Any, linear_source: Any, sou
     P.store_history(name, U)                       # store U^n first (cold-start fills the ring)
     U_nm1 = _history(P, name, 1, temporal, U.space)
     rhs = P.linear_combine(
-        label + "_bdf2_rhs", _with_explicit(2 * U - Fraction(1, 2) * U_nm1))
+        label + "_bdf2_rhs", _with_explicit(2 * U - Fraction(1, 2) * U_nm1),
+        at=temporal.next.point)
     operator = P.I - (P.dt * Fraction(2, 3)) * P.linear_source(linear_source)
     # Divide both sides by 3/2: (I - (2/3) dt L) U^{n+1} = (2/3)(2 U^n - 1/2 U^{n-1} [+ dt R]).
     rhs = P.linear_combine(label + "_bdf2_rhs_scaled", Fraction(2, 3) * rhs)
@@ -163,6 +166,7 @@ def _bdf_implicit_flux(P: Any, temporal: Any, order: Any, sources: Any, flux: An
     c = 1 if order == 1 else Fraction(2, 3)
     label = _block_label(temporal)
     U0 = temporal.n
+    endpoint = temporal.next.point
     # Snapshot U^n into a scratch: the commit writes this block's runtime state IN PLACE at the very
     # end, so the lagged term must read this frozen copy (not the live state) -- otherwise the post-commit residual
     # diagnostic would read U^{n+1} as U^n. The Newton-loop residuals (before the commit) would be correct
@@ -189,10 +193,11 @@ def _bdf_implicit_flux(P: Any, temporal: Any, order: Any, sources: Any, flux: An
 
     def _residual(P: Any, Uk: Any, tag: Any) -> Any:
         # F^k = U^k - U^n_terms - c*dt*rhs(U^k); returns (F^k, R^k) so the matvec can reuse R^k.
-        fields_k = P.solve_fields(Uk) if field_coupled else None
-        Rk = P._rhs_legacy(
-            name="%s_R" % tag, state=Uk, fields=fields_k, flux=flux, sources=src)
-        Fk = P.linear_combine("%s_F" % tag, _un_terms() * -1 + Uk - (c * P.dt) * Rk)
+        fields_k = _at_point(P, P.solve_fields(Uk), endpoint) if field_coupled else None
+        Rk = _at_point(P, P._rhs_legacy(
+            name="%s_R" % tag, state=Uk, fields=fields_k, flux=flux, sources=src), endpoint)
+        Fk = P.linear_combine(
+            "%s_F" % tag, _un_terms() * -1 + Uk - (c * P.dt) * Rk, at=endpoint)
         return Fk, Rk
 
     def _newton_step(P: Any, Uk: Any, k: Any) -> Any:
@@ -212,7 +217,7 @@ def _bdf_implicit_flux(P: Any, temporal: Any, order: Any, sources: Any, flux: An
         dU = P.solve_linear(name="%s_dU" % tag, operator=A, rhs=negF,
                             method=krylov.GMRES(max_iter=krylov_max),
                             tol=krylov_tol, max_iter=krylov_max, restart=krylov_restart)
-        return P.linear_combine("%s_next" % tag, Uk + dU)
+        return P.linear_combine("%s_next" % tag, Uk + dU, at=endpoint)
 
     # Outer Newton loop: a fixed unroll of newton_max iterations (each independent top-level IR).
     Uk = U0

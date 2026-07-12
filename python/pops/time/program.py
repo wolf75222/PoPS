@@ -133,6 +133,12 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         freeze_program_tables(self)
         return self
 
+    def to_graph(self) -> Any:
+        """Return the detached immutable ProgramGraph snapshot of this authoring Program."""
+        from pops.time.program_graph_conversion import program_to_graph
+
+        return program_to_graph(self)
+
     def _guard_mutable(self, operation: Any) -> None:
         """Reject every authoring mutation after ``freeze()``, including non-node metadata writes."""
         if self._frozen:
@@ -191,7 +197,13 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
 
     # --- C++ codegen (lowering to a problem.so source) lives in pops.codegen; the authoring
     # Program delegates via a LAZY import so pops.time stays free of any codegen/_pops edge. ---
-    def emit_cpp_program(self, model: Any = None, target: Any = "system") -> Any:
+    def emit_cpp_program(
+        self,
+        model: Any = None,
+        target: Any = "system",
+        *,
+        model_graph: Any = None,
+    ) -> Any:
         """Generate the C++ source of a problem.so implementing this Program (codegen).
 
         Thin authoring entry point: delegates to the free function
@@ -204,7 +216,9 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
             install entry ``AmrSystem::install_program`` resolves), epic ADC-511 / ADC-508.
         """
         from pops.codegen import program_codegen as _pcg
-        return _pcg.emit_cpp_program(self, model=model, target=target)
+        return _pcg.emit_cpp_program(
+            self, model=model, model_graph=model_graph, target=target
+        )
 
     def _check_lowerable(self, model: Any = None) -> Any:
         """Raise if the IR uses a construct the codegen cannot lower (delegates to

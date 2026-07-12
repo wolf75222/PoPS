@@ -119,12 +119,12 @@ def test_commit_many_atomic_double_commit_rejected():
     P = adctime.Program("cm")
     Ua = typed_state(P, "a")
     Ub = typed_state(P, "b")
-    a1 = P.linear_combine("a1", 1.0 * Ua)
-    b1 = P.linear_combine("b1", 1.0 * Ub)
-    P.commit(typed_state(P, "a", state_name="U").next, a1)  # 'a' already committed
-    # commit_many of {a, b} must be rejected as a UNIT (a is double), and b must NOT be committed.
     a_next = typed_state(P, "a", state_name="U").next
     b_next = typed_state(P, "b", state_name="U").next
+    a1 = P.linear_combine("a1", 1.0 * Ua, at=a_next.point)
+    b1 = P.linear_combine("b1", 1.0 * Ub, at=b_next.point)
+    P.commit(a_next, a1)  # 'a' already committed
+    # commit_many of {a, b} must be rejected as a UNIT (a is double), and b must NOT be committed.
     _expect(
         ValueError,
         lambda: P.commit_many({a_next: a1, b_next: b1}),
@@ -137,9 +137,9 @@ def test_commit_many_foreign_value_rejected_atomically():
     P = adctime.Program("cm2")
     other = adctime.Program("other")
     Ua = typed_state(P, "a")
-    a1 = P.linear_combine("a1", 1.0 * Ua)
-    foreign = other.linear_combine("z", 1.0 * typed_state(other, "a"))
     a_next = typed_state(P, "a", state_name="U").next
+    a1 = P.linear_combine("a1", 1.0 * Ua, at=a_next.point)
+    foreign = other.linear_combine("z", 1.0 * typed_state(other, "a"))
     z_next = typed_state(P, "z", state_name="U").next
     _expect(
         ValueError,
@@ -153,10 +153,11 @@ def test_commit_many_success_commits_all():
     P = adctime.Program("cm3")
     Ua = typed_state(P, "a")
     Ub = typed_state(P, "b")
-    a1 = P.linear_combine("a1", 1.0 * Ua)
-    b1 = P.linear_combine("b1", 1.0 * Ub)
-    P.commit_many({typed_state(P, "a", state_name="U").next: a1,
-                   typed_state(P, "b", state_name="U").next: b1})
+    a_next = typed_state(P, "a", state_name="U").next
+    b_next = typed_state(P, "b", state_name="U").next
+    a1 = P.linear_combine("a1", 1.0 * Ua, at=a_next.point)
+    b1 = P.linear_combine("b1", 1.0 * Ub, at=b_next.point)
+    P.commit_many({a_next: a1, b_next: b1})
     assert commits_by_block(P) == {"a": a1, "b": b1}
 
 

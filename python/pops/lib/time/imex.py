@@ -7,8 +7,8 @@ from __future__ import annotations
 from typing import Any
 
 from ._helpers import (
-    _DEFAULT_SOURCES, _block_label, _commit, _exact_coefficient, _opcall, _operator_handle,
-    _time_state, _typed_rhs, program_macro,
+    _DEFAULT_SOURCES, _at_point, _block_label, _commit, _exact_coefficient, _opcall,
+    _operator_handle, _stage_point, _time_state, _typed_rhs, program_macro,
 )
 
 
@@ -40,10 +40,14 @@ def imex_local(P: Any, block: Any, state: Any = None, *,
     temporal = _time_state(P, block, state)
     label = _block_label(temporal)
     U = temporal.n
-    fields = P.solve_fields(U) if flux else None
-    R = _typed_rhs(P, U, fields=fields, sources=sources, flux=flux)
-    rhs = P.linear_combine(label + "_imex_rhs", U + P.dt * R)
-    operator = P.I - (theta * P.dt) * P.linear_source(linear_source)
+    point = _stage_point(
+        P, label + "_imex", partitions={"explicit": 0, "implicit": theta})
+    fields = _at_point(P, P.solve_fields(U), point) if flux else None
+    R = _at_point(P, _typed_rhs(P, U, fields=fields, sources=sources, flux=flux), point)
+    rhs = P.linear_combine(
+        label + "_imex_rhs", U + P.dt * R, at=temporal.next.point)
+    linear = _at_point(P, P.linear_source(linear_source), point)
+    operator = P.I - (theta * P.dt) * linear
     out = P.solve_local_linear(
         name=label + "_imex_step", operator=operator, rhs=rhs, fields=fields)
     _commit(P, temporal, out)
@@ -74,10 +78,17 @@ def imex_local_linear(P: Any, block: Any, state: Any = None, *,
         fields_operator = _operator_handle(fields_operator, "fields_operator")
     temporal = _time_state(P, block, state)
     u = temporal.n
-    fields = _opcall(P, fields_operator, u, value_name="fields") if fields_operator else None
-    r = _opcall(P, explicit_operator, u, fields, value_name="R")
-    lin = _opcall(P, implicit_operator, fields, value_name="L")
-    q = P.linear_combine("imex_rhs", u + P.dt * r)
-    u1 = P.solve_local_linear("imex_step", operator=P.I - theta * P.dt * lin, rhs=q, fields=fields)
+    point = _stage_point(
+        P, "imex", partitions={"explicit": 0, "implicit": theta})
+    fields = (
+        _opcall(P, fields_operator, u, value_name="fields", point=point)
+        if fields_operator else None
+    )
+    r = _opcall(P, explicit_operator, u, fields, value_name="R", point=point)
+    lin = _opcall(P, implicit_operator, fields, value_name="L", point=point)
+    q = P.linear_combine(
+        "imex_rhs", u + P.dt * r, at=temporal.next.point)
+    u1 = P.solve_local_linear(
+        "imex_step", operator=P.I - theta * P.dt * lin, rhs=q, fields=fields)
     _commit(P, temporal, u1)
     return u1

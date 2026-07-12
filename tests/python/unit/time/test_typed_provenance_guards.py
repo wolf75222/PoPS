@@ -69,7 +69,9 @@ def test_state_preserving_ops_and_timestate_history_keep_space():
     rate = program._rhs_legacy(state=current, sources=[])
     assert rate.space == Rate(state)
     assert rate.logical_shape["n_comp"] == len(state.components)
-    combined = program.linear_combine(current + program.dt * rate)
+    endpoint = temporal.next
+    combined = program.linear_combine(
+        current + program.dt * rate, at=endpoint.point)
     assert combined.space == state
     assert program.fill_boundary(combined).space == state
     assert program.project(combined).space == state
@@ -87,7 +89,7 @@ def test_state_preserving_ops_and_timestate_history_keep_space():
     program.keep_history(temporal, depth=2)
     previous = temporal.prev(1)
     assert previous.space == state and previous.block.local_id == "fluid"
-    program.commit(temporal.next, looped)
+    program.commit(endpoint, looped)
     assert program.validate() is True
 
 
@@ -138,11 +140,13 @@ def test_subblock_value_and_fabricated_value_cannot_escape_to_top_level():
 
     fake = ProgramValue(
         program, 999, "state", "state", (), {}, "fabricated", temporal.block,
-        space=state, provenance=_direct_provenance(program))
+        space=state, point=temporal.n.point, provenance=_direct_provenance(program))
     with pytest.raises(ValueError, match="not authored"):
         program.linear_combine(fake)
 
-    program.commit(temporal.next, output)
+    output_next = program.linear_combine(
+        "output_next", 1 * output, at=temporal.next.point)
+    program.commit(temporal.next, output_next)
     assert program.validate() is True
 
 
@@ -150,7 +154,9 @@ def test_identity_control_body_is_valid_but_keeps_region_metadata_through_rebuil
     program = Program("identity_body")
     temporal = typed_state(program, "fluid", state_name="U")
     output = program.range(temporal.n, 2, lambda _builder, value: value)
-    program.commit(temporal.next, output)
+    output_next = program.linear_combine(
+        "output_next", 1 * output, at=temporal.next.point)
+    program.commit(temporal.next, output_next)
     assert program.validate() is True
     rebuilt = program.eliminate_dead_nodes()
     assert rebuilt.validate() is True
@@ -176,7 +182,9 @@ def test_where_dot_and_solve_linear_reject_cross_block_fields():
 def test_freeze_guards_metadata_mutations_transactionally():
     program = Program("frozen")
     temporal = typed_state(program, "fluid", state_name="U")
-    program.commit(temporal.next, temporal.n)
+    current_next = program.linear_combine(
+        "current_next", 1 * temporal.n, at=temporal.next.point)
+    program.commit(temporal.next, current_next)
     before = program._ir_hash()
     program.freeze()
 
@@ -208,7 +216,8 @@ def test_program_name_cannot_diverge_from_issued_handle_owners_before_freeze():
 def test_replacing_a_committed_record_keeps_commit_inspection_canonical():
     program = Program("canonical_commit")
     temporal = typed_state(program, "fluid", state_name="U")
-    current = temporal.n
+    current = program.linear_combine(
+        "current_next", 1 * temporal.n, at=temporal.next.point)
     program.commit(temporal.next, current)
     renamed = program.define("renamed", current)
     assert commits_by_block(program)["fluid"] is renamed

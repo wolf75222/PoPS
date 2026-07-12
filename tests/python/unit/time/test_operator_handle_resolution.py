@@ -70,9 +70,15 @@ def test_homonymous_foreign_handles_are_rejected_on_every_route():
             build()
 
     # The handles from the bound model remain valid on the same public routes.
-    assert program.linear_source(first_linear).attrs["linear_source"] == "shared_linear"
-    assert program.apply(first_linear, state=state).attrs["linear_source"] == "shared_linear"
-    assert program.source(first_source, state=state).attrs["source"] == "shared_source"
+    linear_value = program.linear_source(first_linear)
+    assert linear_value.attrs["linear_source"] == "shared_linear"
+    assert linear_value.attrs["operator_handle"] is first_linear
+    applied = program.apply(first_linear, state=state)
+    assert applied.attrs["linear_source"] == "shared_linear"
+    assert applied.attrs["operator_handle"] is first_linear
+    sourced = program.source(first_source, state=state)
+    assert sourced.attrs["source"] == "shared_source"
+    assert sourced.attrs["operator_handle"] is first_source
     assert program.rhs(state=state, terms=[first_source]).attrs["sources"] == ("shared_source",)
     assert program.condensed_coeffs(
         state=state, linear_operator=first_linear, subset=(0, 1), c=1,

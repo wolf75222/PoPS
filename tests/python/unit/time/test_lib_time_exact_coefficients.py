@@ -201,13 +201,13 @@ def test_multistep_presets_serialize_integer_and_rational_weights():
 def test_strang_and_lie_pass_exact_builtin_step_fractions():
     seen = []
 
-    def flow(program, state, fraction):
+    def flow(program, state, fraction, *, at):
         seen.append(("flow", fraction))
-        return state
+        return program.linear_combine(None, 1 * state, at=at)
 
-    def source(program, state, fraction):
+    def source(program, state, fraction, *, at):
         seen.append(("source", fraction))
-        return state
+        return program.linear_combine(None, 1 * state, at=at)
 
     strang = adctime.Program("strang")
     libtime.strang(

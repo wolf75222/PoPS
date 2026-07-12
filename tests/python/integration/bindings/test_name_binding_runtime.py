@@ -21,6 +21,7 @@ Runs as a plain script (``python3 test_name_binding_runtime.py``, the CI invocat
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.codegen import compile_drivers
 import sys
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 from tests.python.support.typed_program import program_states, synthetic_module
@@ -76,7 +77,8 @@ def two_block_program(t, name="nb_two_block"):
         temporal = states[blk]
         U = temporal.n
         R = P._rhs_legacy(name="R_" + blk, state=U, flux=True, sources=["decay"])
-        P.commit(temporal.next, P.linear_combine(blk + "_next", U + P.dt * R))
+        P.commit(temporal.next, P.linear_combine(
+            blk + "_next", U + P.dt * R, at=temporal.next.point))
     return P
 
 
@@ -105,7 +107,8 @@ def _run():
 
     # Compile the 2-block .so ONCE (production model + compiled Program). Needs compiler + Kokkos.
     try:
-        comp = pops.codegen.compile_problem(model=passive_model("nb_model"), time=two_block_program(t))
+        comp = compile_drivers.compile_problem(
+            model=passive_model("nb_model"), time=two_block_program(t))
     except (RuntimeError, ValueError) as exc:  # no compiler / no Kokkos / .so compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 

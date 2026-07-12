@@ -76,8 +76,9 @@ def test_deterministic_program_with_non_dense_policy_passes_compile_gate():
     U = typed_state(P, "plasma", state_name="U")
     P.keep_history(U, depth=4, checkpoint_policy=Interval(3))
     # A deterministic combine reading the ring, committed as the new state (a valid State value).
-    nxt = P.linear_combine("U_next", 1.0 * U.n + 0.5 * U.prev(1))
-    P.commit(typed_state(P, "plasma", state_name="U").next, nxt)
+    nxt = P.linear_combine(
+        "U_next", 1.0 * U.n + 0.5 * U.prev(1), at=U.next.point)
+    P.commit(U.next, nxt)
     check_program(P)  # no refusal: every op is on the vetted deterministic allow-list
 
 

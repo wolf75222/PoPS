@@ -31,7 +31,8 @@ def _forward_euler(t):
     U = typed_state(P, "plasma")
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(typed_state(P, "plasma", state_name="U").next, P.linear_combine("U1", U + dt * R))
+    endpoint = typed_state(P, "plasma", state_name="U").next
+    P.commit(endpoint, P.linear_combine("U1", U + dt * R, at=endpoint.point))
     return P
 
 
@@ -41,10 +42,14 @@ def _ssprk2(t):
     U0 = typed_state(P, "plasma")
     f0 = P.solve_fields(U0)
     k0 = P._rhs_legacy(state=U0, fields=f0, flux=True, sources=["default"])
-    U1 = P.linear_combine("U1", U0 + dt * k0)
+    predictor = t.StagePoint(
+        "predictor", {"main": t.TimePoint(P.clock, 1)})
+    U1 = P.linear_combine("U1", U0 + dt * k0, at=predictor)
     f1 = P.solve_fields(U1)
     k1 = P._rhs_legacy(state=U1, fields=f1, flux=True, sources=["default"])
-    P.commit(typed_state(P, "plasma", state_name="U").next, P.linear_combine("U2", 0.5 * U0 + 0.5 * (U1 + dt * k1)))
+    endpoint = typed_state(P, "plasma", state_name="U").next
+    P.commit(endpoint, P.linear_combine(
+        "U2", 0.5 * U0 + 0.5 * (U1 + dt * k1), at=endpoint.point))
     return P
 
 
@@ -102,7 +107,8 @@ def test_named_source_refused(t):
     U = typed_state(P, "plasma")
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["electric"])
-    P.commit(typed_state(P, "plasma", state_name="U").next, P.linear_combine("U1", U + dt * R))
+    endpoint = typed_state(P, "plasma", state_name="U").next
+    P.commit(endpoint, P.linear_combine("U1", U + dt * R, at=endpoint.point))
     try:
         P.emit_cpp_program()
     except NotImplementedError as exc:
@@ -122,7 +128,9 @@ def test_multiblock_lowers(t):
         U = typed_state(P, blk)
         f = P.solve_fields(U)
         R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-        P.commit(typed_state(P, blk, state_name="U").next, P.linear_combine(blk + "_next", U + dt * R))
+        endpoint = typed_state(P, blk, state_name="U").next
+        P.commit(endpoint, P.linear_combine(
+            blk + "_next", U + dt * R, at=endpoint.point))
     src = P.emit_cpp_program()
     assert "ctx.state(0)" in src, "block a should bind ctx.state(0)"
     assert "ctx.state(1)" in src, "block b should bind ctx.state(1)"
@@ -135,8 +143,9 @@ def test_unknown_block_commit_refused(t):
     # A commit of a block no P.state declares cannot route to an index (ADC-426): reject fail-loud.
     P = t.Program("bad_commit")
     U = typed_state(P, "a")
+    endpoint = typed_state(P, "a", state_name="U").next
     Ua = P.linear_combine("a_next", U + P.dt * P._rhs_legacy(state=U, fields=P.solve_fields(U),
-                                                     sources=["default"]))
+                                                     sources=["default"]), at=endpoint.point)
     # Invalid ownership is rejected while authoring; it never enters the IR.
     try:
         P.commit(typed_state(P, "ghost", state_name="U").next, Ua)  # 'ghost' was never declared by P.state
@@ -154,8 +163,14 @@ def test_solve_fields_from_blocks_lowers(t):
     Ua = typed_state(P, "a")
     Ub = typed_state(P, "b")
     P.solve_fields_from_blocks([Ua, Ub])
-    P.commit(typed_state(P, "a", state_name="U").next, P.linear_combine("a1", Ua + P.dt * P._rhs_legacy(state=Ua, sources=["default"])))
-    P.commit(typed_state(P, "b", state_name="U").next, P.linear_combine("b1", Ub + P.dt * P._rhs_legacy(state=Ub, sources=["default"])))
+    endpoint_a = typed_state(P, "a", state_name="U").next
+    endpoint_b = typed_state(P, "b", state_name="U").next
+    P.commit(endpoint_a, P.linear_combine(
+        "a1", Ua + P.dt * P._rhs_legacy(state=Ua, sources=["default"]),
+        at=endpoint_a.point))
+    P.commit(endpoint_b, P.linear_combine(
+        "b1", Ub + P.dt * P._rhs_legacy(state=Ub, sources=["default"]),
+        at=endpoint_b.point))
     src = P.emit_cpp_program()
     assert "ctx.solve_fields_from_blocks(" in src
     assert "std::vector<const pops::MultiFab*>" in src

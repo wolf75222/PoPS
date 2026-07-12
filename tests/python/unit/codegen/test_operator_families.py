@@ -123,7 +123,7 @@ def test_declarers_funnel_into_one_registry():
         U = state.n
         f = P.call(fields_h, U)
         R = P.call(handle, U, f)
-        P.commit(state.next, P.linear_combine("u1", U + P.dt * R))
+        P.commit(state.next, P.linear_combine("u1", U + P.dt * R, at=state.next.point))
         return P
 
     assert prog(r_math)._ir_hash() == prog(registered_math)._ir_hash()

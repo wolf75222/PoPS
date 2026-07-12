@@ -25,12 +25,14 @@ TEST(ModuleMetadata, DefaultDescriptorIsAbsent) {
 TEST(ModuleMetadata, HandBuiltDescriptorResolvesOperatorsByName) {
   ModuleMetadata m;
   m.present = true;
-  m.operators.push_back({0U, "fields_from_state", "field_operator", "(U) -> Fields", "{}"});
-  m.operators.push_back({1U, "explicit_rhs", "local_rate", "(U, Fields) -> Rate(U)",
+  m.operators.push_back({0U, "model/a", "fields_from_state", "field_operator", "(U) -> Fields", "{}"});
+  m.operators.push_back({1U, "model/a", "explicit_rhs", "local_rate", "(U, Fields) -> Rate(U)",
                          "{\"kind\":\"local_rate\"}"});
   m.state_spaces.push_back("U");
   m.field_spaces.push_back("fields");
   EXPECT_TRUE(m.find("explicit_rhs") != nullptr) << "find resolves a known operator";
+  EXPECT_TRUE(m.find("model/a", "explicit_rhs") != nullptr)
+      << "owner-qualified find resolves the exact operator";
   EXPECT_TRUE(m.find("explicit_rhs")->id == 1U) << "OperatorId is the registration index";
   EXPECT_TRUE(m.find("explicit_rhs")->kind == "local_rate") << "operator kind is carried";
   EXPECT_TRUE(m.find("nope") == nullptr) << "find on an unknown operator returns nullptr";

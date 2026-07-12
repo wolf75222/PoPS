@@ -9,6 +9,7 @@ from typing import Any
 
 from pops.time.schedule import Schedule
 from pops.time.values import ProgramValue, _Affine
+from pops.time.points import Clock, StagePoint, TimePoint
 from pops.provenance import ProvenanceRecord
 
 
@@ -60,7 +61,26 @@ def rebuild_program(
             "_case_owner_path",
             None if case_owner is None else case_owner.canonical(),
         )
+        object.__setattr__(out, "clock", Clock("macro", owner=out.owner_path))
     out.dt = self.dt
+    clock_map = {self.clock: out.clock}
+
+    def remap_clock(clock: Clock) -> Clock:
+        mapped = clock_map.get(clock)
+        if mapped is None:
+            mapped = Clock(clock.name, owner=out.owner_path)
+            clock_map[clock] = mapped
+        return mapped
+
+    def remap_point(point: Any) -> Any:
+        if type(point) is TimePoint:
+            return TimePoint(remap_clock(point.clock), point.offset, step=point.step)
+        if type(point) is StagePoint:
+            return StagePoint(point.name, {
+                partition: remap_point(coordinate)
+                for partition, coordinate in point.partitions.items()
+            })
+        raise TypeError("Program rebuild encountered a value without an exact evaluation point")
     out._state_spaces = {
         reference_of(state_ref): space
         for state_ref, space in getattr(self, "_state_spaces", {}).items()
@@ -179,6 +199,7 @@ def rebuild_program(
             return remap_provenance(value)
         if isinstance(value, Schedule):
             return Schedule(
+                remap_clock(value.clock),
                 value.kind,
                 value.policy,
                 **{key: remap_metadata(item) for key, item in value.params.items()},
@@ -275,6 +296,7 @@ def rebuild_program(
             field_context=field_context,
             region=mapped_region(v.region),
             state_ref=reference_of(v.state_ref),
+            point=remap_point(v.point),
             provenance=ProvenanceRecord.derive(
                 provenance_inputs(v), transformation=transformation, owner=out.owner_path),
         )

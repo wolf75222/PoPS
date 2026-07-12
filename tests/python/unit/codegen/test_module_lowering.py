@@ -48,8 +48,8 @@ def _fe_program(model, name="p"):
     U = typed_state(P, "ep", model=model)
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["electric"])
-    P.commit(typed_state(P, "ep", state_name="U", model=model).next,
-             P.linear_combine("U1", U + P.dt * R))
+    endpoint = typed_state(P, "ep", state_name="U", model=model).next
+    P.commit(endpoint, P.linear_combine("U1", U + P.dt * R, at=endpoint.point))
     return P
 
 
@@ -187,8 +187,8 @@ def _fe_program_default(model, name="spec"):
     U = typed_state(P, "ep", model=model)
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(typed_state(P, "ep", state_name="U", model=model).next,
-             P.linear_combine("U1", U + P.dt * R))
+    endpoint = typed_state(P, "ep", state_name="U", model=model).next
+    P.commit(endpoint, P.linear_combine("U1", U + P.dt * R, at=endpoint.point))
     return P
 
 

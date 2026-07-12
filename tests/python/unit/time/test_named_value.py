@@ -2,7 +2,7 @@
 
 ``T.value("name", expr)`` names an intermediate SSA value and lowers to the EXACT
 ``program.define(name, expr)`` path, so it produces the byte-identical IR as the long
-``T.define("name", expr)`` form. ``U.stage(k)`` stays the temporal-version handle only and
+``T.define("name", expr)`` form. ``U.stage(name, point=...)`` stays the temporal-version handle and
 ``T.commit(U.next, value)`` is the only end-of-step write door. The SSA invariants (single
 definition, no redefine, use-before-define) are unchanged; named values appear in inspection.
 
@@ -11,11 +11,12 @@ unavailable. Never fakes the engine.
 """
 from typed_program_support import commits_by_block, typed_state
 
+from fractions import Fraction
 import sys
 
 try:
     import pytest
-    from pops.time import Program
+    from pops.time import Program, StagePoint, TimePoint
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_named_value (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -26,10 +27,13 @@ def _heun(P, use_value):
     U = typed_state(P, "plasma", state_name="U")
     R = P._rhs_legacy(state=U.n, fields=P.solve_fields(U.n), sources=["default"])
     name = "rhs_star"
-    U_star = (P.value(name, U.n + P.dt * R) if use_value
-              else P.define(name, U.n + P.dt * R))
+    star_point = TimePoint(P.clock, 1)
+    U_star = (P.value(name, U.n + P.dt * R, at=star_point) if use_value
+              else P.define(name, U.n + P.dt * R, at=star_point))
     R_star = P._rhs_legacy(state=U_star, fields=P.solve_fields(U_star), sources=["default"])
-    U_next = P.value("U_next", U.n + 0.5 * P.dt * R + 0.5 * P.dt * R_star)
+    U_next = P.value(
+        "U_next", U.n + 0.5 * P.dt * R + 0.5 * P.dt * R_star,
+        at=U.next.point)
     P.commit(U.next, U_next)
 
 
@@ -52,7 +56,8 @@ def test_named_value_appears_in_inspection():
     P = Program("insp")
     U = typed_state(P, "plasma", state_name="U")
     R = P._rhs_legacy(state=U.n, fields=P.solve_fields(U.n), sources=["default"])
-    v = P.value("Q", U.n + 0.5 * P.dt * R)
+    v = P.value(
+        "Q", U.n + 0.5 * P.dt * R, at=TimePoint(P.clock, Fraction(1, 2)))
     assert v.name == "Q"
     names = [n["name"] for n in P.ir_nodes()]
     assert "Q" in names, names
@@ -64,10 +69,12 @@ def test_value_returns_composable_handle():
     P = Program("compose")
     U = typed_state(P, "plasma", state_name="U")
     R = P._rhs_legacy(state=U.n, fields=P.solve_fields(U.n), sources=["default"])
-    U_star = P.value("U_star", U.n + P.dt * R)
+    U_star = P.value("U_star", U.n + P.dt * R, at=TimePoint(P.clock, 1))
     # It reads as a State value and composes further.
     assert U_star.vtype == "state"
-    combined = P.value("combined", 0.5 * U.n + 0.5 * U_star)
+    combined = P.value(
+        "combined", 0.5 * U.n + 0.5 * U_star,
+        at=TimePoint(P.clock, Fraction(1, 2)))
     assert combined.vtype == "state"
     print("OK  T.value returns a composable named State handle")
 
@@ -79,7 +86,13 @@ def test_value_refuses_a_version_handle():
     with pytest.raises(TypeError, match="commit"):
         P.value(U.next, U.n)
     with pytest.raises(TypeError, match="T.define"):
-        P.value(U.stage(1), U.n)
+        P.value(
+            U.stage(
+                "predictor",
+                point=StagePoint("predictor", {"main": TimePoint(U.clock, 1)}),
+            ),
+            U.n,
+        )
     with pytest.raises(ValueError, match="non-empty string"):
         P.value("", U.n)
     print("OK  T.value refuses a version handle / empty name")
@@ -92,11 +105,18 @@ def test_ssa_invariants_unchanged():
     R = P._rhs_legacy(state=U.n, fields=P.solve_fields(U.n), sources=["default"])
     # use-before-define: a stage used before T.define raises
     with pytest.raises(ValueError, match="undefined"):
-        _ = U.stage(1) + P.dt * R
+        _ = U.stage(
+            "predictor",
+            point=StagePoint("predictor", {"main": TimePoint(U.clock, 1)}),
+        ) + P.dt * R
     # define once, then no redefine
-    P.define(U.stage(1), U.n + P.dt * R)
+    stage = U.stage(
+        "predictor",
+        point=StagePoint("predictor", {"main": TimePoint(U.clock, 1)}),
+    )
+    P.define(stage, U.n + P.dt * R)
     with pytest.raises(ValueError, match="already defined"):
-        P.define(U.stage(1), U.n)
+        P.define(stage, U.n)
     # current state is read-only
     with pytest.raises(ValueError, match="read-only"):
         P.define(U.n, U.n + P.dt * R)
@@ -108,7 +128,7 @@ def test_next_is_a_commit_only_endpoint():
     P = Program("door")
     U = typed_state(P, "plasma", state_name="U")
     R = P._rhs_legacy(state=U.n, fields=P.solve_fields(U.n), sources=["default"])
-    U_next = P.value("U_next", U.n + P.dt * R)
+    U_next = P.value("U_next", U.n + P.dt * R, at=U.next.point)
     P.commit(U.next, U_next)
     P.validate()
     assert commits_by_block(P)["plasma"] is U_next

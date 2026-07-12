@@ -22,6 +22,7 @@ to ~1e-14 (the named fluxes sum to the same -div F).
 
 Skips cleanly (exit 0) without numpy / _pops / a compiler / a visible Kokkos -- never fakes the engine.
 """
+from pops.codegen import compile_drivers
 from typed_program_support import typed_field, typed_state
 
 from pops.params import ConstParam
@@ -198,8 +199,8 @@ def _fe_program(name, fluxes, model=None):
     U = typed_state(P, "plasma", model=model)
     f = P.solve_fields(U)
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, fluxes=fluxes)
-    P.commit(typed_state(P, "plasma", state_name="U", model=model).next,
-             P.linear_combine("U1", U + P.dt * R))
+    endpoint = typed_state(P, "plasma", state_name="U", model=model).next
+    P.commit(endpoint, P.linear_combine("U1", U + P.dt * R, at=endpoint.point))
     return P
 
 
@@ -254,8 +255,8 @@ def _named_field_program(name="nf_ell", model=None):
     U = typed_state(P, "plasma", model=model)
     f = P.solve_fields("fields_phi2", U, field=typed_field(P, "phi2"))
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True)
-    P.commit(typed_state(P, "plasma", state_name="U", model=model).next,
-             P.linear_combine("U1", U + P.dt * R))
+    endpoint = typed_state(P, "plasma", state_name="U", model=model).next
+    P.commit(endpoint, P.linear_combine("U1", U + P.dt * R, at=endpoint.point))
     return P
 
 
@@ -330,8 +331,8 @@ def _flux_fe_program(name, fluxes, model=None):
     P = adctime.Program(name)
     U = typed_state(P, "plasma", model=model)
     R = P._rhs_legacy(name="R", state=U, flux=True, fluxes=fluxes)
-    P.commit(typed_state(P, "plasma", state_name="U", model=model).next,
-             P.linear_combine("U1", U + P.dt * R))
+    endpoint = typed_state(P, "plasma", state_name="U", model=model).next
+    P.commit(endpoint, P.linear_combine("U1", U + P.dt * R, at=endpoint.point))
     return P
 
 
@@ -341,10 +342,10 @@ def _flux_fe_program(name, fluxes, model=None):
 try:
     whole_program_model = whole_flux_model("nf_whole_prog")
     split_program_model = split_flux_model("nf_split_prog2")
-    compiled_whole = pops.codegen.compile_problem(
+    compiled_whole = compile_drivers.compile_problem(
         model=whole_program_model,
         time=_flux_fe_program("nf_whole_fe", ["whole"], model=whole_program_model))
-    compiled_split = pops.codegen.compile_problem(
+    compiled_split = compile_drivers.compile_problem(
         model=split_program_model,
         time=_flux_fe_program(
             "nf_split_fe", ["conv", "press"], model=split_program_model))

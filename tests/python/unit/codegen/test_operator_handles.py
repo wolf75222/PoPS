@@ -82,7 +82,7 @@ def _rate_program(m, selector):
     U = state.n
     f = P.call(_operator_handle(m, "fields_from_state"), U)
     R = P.call(selector, U, f)
-    P.commit(state.next, P.linear_combine("u1", U + P.dt * R))
+    P.commit(state.next, P.linear_combine("u1", U + P.dt * R, at=state.next.point))
     return P
 
 
@@ -113,7 +113,7 @@ def test_typed_path_is_deterministic_and_complete_across_models():
         U = state.n
         f = P.call(_operator_handle(m, "fields_from_state"), U)
         s = P.call(selector, U, f)
-        P.commit(state.next, P.linear_combine("u1", U + P.dt * s))
+        P.commit(state.next, P.linear_combine("u1", U + P.dt * s, at=state.next.point))
         return P
 
     assert src_prog(_operator_handle(m, "electric"))._ir_hash() == src_prog(
@@ -122,9 +122,10 @@ def test_typed_path_is_deterministic_and_complete_across_models():
     def lin_prog(selector):
         P, state = _program_state(m, "p")
         U = state.n
-        f = P.call(_operator_handle(m, "fields_from_state"), U)
+        rhs = P.linear_combine("rhs", U, at=state.next.point)
+        f = P.call(_operator_handle(m, "fields_from_state"), rhs)
         L = P.call(selector, f)
-        U1 = P.solve_local_linear("u1", operator=P.I - P.dt * L, rhs=U, fields=f)
+        U1 = P.solve_local_linear("u1", operator=P.I - P.dt * L, rhs=rhs, fields=f)
         P.commit(state.next, U1)
         return P
 

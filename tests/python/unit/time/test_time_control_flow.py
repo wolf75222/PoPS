@@ -18,6 +18,7 @@ SEPARATE sub-block (a recording scope), not the flat SSA list, so the body re-ru
     reference x_k = target + (1-omega)^k (x0 - target). Self-skips without numpy / _pops / a compiler /
     Kokkos / install_program (never faking the engine).
 """
+from pops.codegen import compile_drivers
 from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
@@ -53,7 +54,9 @@ def _convergence_program(t, *, name="fixed_point", omega=0.5, tol=1e-10):
         return P.linear_combine("x_next", (1.0 - omega) * x + omega * target)
 
     x_final = P.while_(U0, cond, body)
-    P.commit(typed_state(P, "blk", state_name="U").next, x_final)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    final = P.linear_combine("fixed_point_next", x_final, at=endpoint.point)
+    P.commit(endpoint, final)
     return P
 
 
@@ -174,7 +177,7 @@ def _run_section_b(t):
 
     omega, tol = 0.5, 1e-10
     try:
-        compiled = pops.codegen.compile_problem(
+        compiled = compile_drivers.compile_problem(
             model=passive_model("cflow_prog"),
             time=_convergence_program(t, name="cflow_step", omega=omega, tol=tol))
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed

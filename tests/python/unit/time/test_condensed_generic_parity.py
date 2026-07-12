@@ -145,7 +145,7 @@ def _make_sim(env, name, n):
 def _compile_generic(env, theta, tag, n):
     """Compile+install the (sole) generic condensed_schur(theta) route on a fresh System at grid @p n;
     return the sim or None on a toolchain miss."""
-    pops, adctime, lt = env["pops"], env["adctime"], env["lt"]
+    adctime, lt = env["adctime"], env["lt"]
     sim = _make_sim(env, "blk_%s" % tag, n)
     if sim is None:
         return None
@@ -162,7 +162,8 @@ def _compile_generic(env, theta, tag, n):
         tol=_TOL, max_iter=400,
         linear_operator=linear)
     try:
-        compiled = pops.codegen.compile_problem(model=model, time=P)
+        from pops.codegen.compile_drivers import compile_problem
+        compiled = compile_problem(model=model, time=P)
     except RuntimeError as exc:
         print("skip: compile_problem failed: %s" % str(exc)[:160])
         return None

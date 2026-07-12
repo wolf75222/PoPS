@@ -269,7 +269,8 @@ def compile_model(model: Any, so_path: Any = None, include: Any = None, backend:
 
 
 # compile_problem -- compile a pops.time.Program into a problem.so
-def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
+def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any = None,
+                    time: Any = None,
                     backend: Any = "production", target: Any = "system", force: Any = False,
                     cxx: Any = None, include: Any = None, std: Any = None, debug: Any = False,
                     libraries: Any = None, problem_snapshot: Any = None) -> Any:
@@ -324,28 +325,19 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
 
     if time is None or not hasattr(time, "emit_cpp_program"):
         raise ValueError("compile_problem: time must be an pops.time.Program (got %r)" % (time,))
-
-    # ONE VALIDATION (ADC-557): lower_and_validate is the SINGLE validate + lower step. It validates
-    # the model ONCE (a raw Module's embedded checks, or a dsl / physics Model's check() dependency
-    # validation) and returns the emit model + the operator-first Module (the canonical compile-IR
-    # authority carried as the lowered-module trace). The divergent standalone model.check() compile
-    # step is gone -- there is no second validation path. A lowering error is remapped onto the user's
-    # facade handles. The emit model is byte-identical to before (a Module still lowers via
-    # _module_to_model; a dsl / physics Model is consumed as-is).
-    from pops.codegen.module_lowering import lower_and_validate
-    model, source_module = lower_and_validate(model, facade=model)
-    lowering_coverage = getattr(model, "_lowering_coverage_report", None)
-
-    # VALIDATED-OR-ABSENT INVARIANT (ADC-558): every structural check runs HERE, before a handle
-    # exists. lower_and_validate validated the model above; emit_cpp_program calls program.validate()
-    # + _check_lowerable, so a malformed Program raises now; a compiler error raises at _run_compile
-    # below; a stale cache HIT raises at verify_cached_artifact. A CompiledProblem is therefore
-    # returned ONLY after validation AND a successful (or already-cached-and-verified) compile -- both
-    # return points below hand back a fully-valid, directly bindable handle, never a "to-check" one.
-    # There is no public check() to run after compile: the handle's validity is guaranteed by its
-    # existence, and the single status signal is the "compiled, waiting for pops.bind(...)" line in
-    # inspect(). A failure NEVER lets a partially-validated handle escape.
-    src = time.emit_cpp_program(model=model, target=target)
+    from pops.codegen.program_models import prepare_program_authority
+    model, source_module, lowering_coverage, compile_authority = (
+        prepare_program_authority(model, model_graph)
+    )
+    from pops.time.program_space_resolution import resolve_program_spaces
+    time = resolve_program_spaces(time, compile_authority)
+    from pops.time.program_detach import detach_compiled_program
+    time = detach_compiled_program(time)
+    program_graph = time.to_graph()
+    from pops.codegen.program_graph_lowering import emit_program_graph
+    src = emit_program_graph(
+        program_graph, lowering_program=time, model=model,
+        model_graph=model_graph, target=target)
 
     include = include or pops_include()
     sig = pops_header_signature(include)
@@ -353,16 +345,19 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
     lflags = deterministic_program_link_flags(lflags)
     eff_std = _probe_cxx_std(cc, std or loader_cxx_std())
     abi_key = "%s|%s|%s" % (sig, cc, eff_std)
-    # The semantic and artifact layers are independently versioned.  Semantic identity excludes
-    # target/toolchain/binary facts; artifact-spec includes every lowering decision and addresses
-    # the cache; final artifact identity additionally authenticates the emitted binary bytes.
+    # Semantic, artifact-spec and final binary identities remain independently versioned.
     optflags = _dsl_optflags()
     from pops.codegen._artifact_identity import program_artifact_spec
 
     semantic, spec_identity = program_artifact_spec(
         snapshot=problem_snapshot,
-        model_authority=source_module if source_module is not None else model,
+        model_authority=(
+            model_graph
+            if model_graph is not None
+            else source_module if source_module is not None else model
+        ),
         program=time,
+        program_graph=program_graph,
         target=target,
         abi_key=abi_key,
         compiler=cc,
@@ -381,7 +376,11 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
     # source_module is now the operator-first Module for a facade / dsl Model too (ADC-557), so the
     # manifest is ALWAYS the operator-first trace on the standard flow.
     from pops.model.manifest import module_manifest_of
-    module_manifest = module_manifest_of(source_module if source_module is not None else model)
+    module_manifest = (
+        None
+        if model_graph is not None
+        else module_manifest_of(source_module if source_module is not None else model)
+    )
     # module_hash (ADC-557 I5): the stable hash of the operator-first Module, carried on the handle so
     # a post-compile in-place model mutation can be DETECTED loudly by bind (parity with the block
     # drift check). None for a model with no backing Module.
@@ -391,7 +390,7 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
     # Public orchestration replaces the live model builder by a CompiledModel metadata/loader value;
     # bind consumes this immutable table and never re-enters authoring analysis.
     from pops.codegen.program_emit_params import program_param_entries
-    program_param_routes = tuple(program_param_entries(time, model))
+    program_param_routes = tuple(program_param_entries(time, compile_authority))
 
     if so_path is None:
         so_path = _identity_cache_so_path(spec_identity)
@@ -409,7 +408,7 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
             binary, artifact = verify_cached_artifact(
                 so_path, semantic_identity=semantic, spec_identity=spec_identity)
             cenv.log("compile_problem: cache HIT -> %s" % so_path)
-            compiled = CompiledProblem(so_path, time, model, abi_key, cc, eff_std,
+            compiled = CompiledProblem(so_path, time, compile_authority, abi_key, cc, eff_std,
                                        libraries=library_manifests, problem_hash=program_hash,
                                        cache_key=cache_key, codegen_env=cenv,
                                        module_manifest=module_manifest, module_hash=module_hash,
@@ -417,7 +416,8 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
                                        problem_snapshot=problem_snapshot,
                                        program_param_routes=program_param_routes,
                                        generated_cpp=src,
-                                       lowering_coverage=lowering_coverage)
+                                       lowering_coverage=lowering_coverage,
+                                       program_graph=program_graph)
             compiled.semantic_identity = semantic
             compiled.artifact_spec_identity = spec_identity
             compiled.binary_identity = binary
@@ -449,7 +449,8 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
         # the compiled bytes stay banner-free. Now that compile_command is known the banner is complete.
         if gen_src_path:
             banner = build_debug_banner(
-                time, model, program_hash=program_hash, abi_key=abi_key, cache_key=cache_key,
+                time, compile_authority, program_hash=program_hash, abi_key=abi_key,
+                cache_key=cache_key,
                 cflags=cflags, lflags=lflags, cxx=cc, std=eff_std, command=compile_command,
                 registry=_registry_cache_key())
             try:
@@ -480,7 +481,7 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
     binary, artifact = write_artifact_sidecar(
         so_path, semantic_identity=semantic, spec_identity=spec_identity)
     cenv.log("compile_problem: compiled -> %s" % so_path)
-    compiled = CompiledProblem(so_path, time, model, abi_key, cc, eff_std,
+    compiled = CompiledProblem(so_path, time, compile_authority, abi_key, cc, eff_std,
                                libraries=library_manifests, problem_hash=program_hash,
                                cache_key=cache_key, compile_command=compile_command,
                                generated_sources=[gen_src_path] if gen_src_path else [],
@@ -489,7 +490,8 @@ def compile_problem(so_path: Any = None, *, model: Any = None, time: Any = None,
                                problem_snapshot=problem_snapshot,
                                program_param_routes=program_param_routes,
                                generated_cpp=src,
-                               lowering_coverage=lowering_coverage)
+                               lowering_coverage=lowering_coverage,
+                               program_graph=program_graph)
     compiled.semantic_identity = semantic
     compiled.artifact_spec_identity = spec_identity
     compiled.binary_identity = binary

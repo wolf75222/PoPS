@@ -82,7 +82,7 @@ class _ProgramCall(_ProgramBase):
                 self, operator_name, where="P._call", values=args)
         self._check_call_args(op, args)
         if schedule is not None:
-            self._validate_schedule(op, schedule)
+            self._validate_schedule(op, schedule, args)
         result = self._lower_call(op, operator_name, args, name)
         # A coupled_rate has no single output ProgramValue (it returns a _CoupledResult): its per-block
         # spaces are tagged inside _lower_coupled_rate, and a schedule on the whole bundle is not
@@ -139,13 +139,24 @@ class _ProgramCall(_ProgramBase):
             "_call: internal operator selector must be a non-empty string, got %r"
             % (operator,))
 
-    def _validate_schedule(self, op: Any, schedule: Any) -> Any:
+    def _validate_schedule(self, op: Any, schedule: Any, values: Any = ()) -> Any:
         """A schedule= on P.call must be a Schedule; a caching policy (hold / accumulate_dt)
         requires the operator to be cacheable (Spec 3 criterion 27)."""
         if not isinstance(schedule, Schedule):
             raise TypeError(
                 "schedule= expects an pops.time Schedule (always()/every(n)/...), got %r"
                 % (schedule,))
+        value_clocks = {
+            value.clock for value in values if isinstance(value, ProgramValue)
+        }
+        expected_clock = next(iter(value_clocks)) if value_clocks else self.clock
+        if len(value_clocks) > 1:
+            raise ValueError(
+                "schedule cannot govern inputs from different clocks; synchronize them first")
+        if schedule.clock != expected_clock:
+            raise ValueError(
+                "schedule clock %r does not match operator evaluation clock %r"
+                % (schedule.clock.name, expected_clock.name))
         if schedule.kind == "when":
             cond = schedule.params.get("cond")
             if isinstance(cond, ProgramValue):
@@ -153,6 +164,9 @@ class _ProgramCall(_ProgramBase):
                 if cond.vtype != "bool" or not any(v.id == cond.id for v in self._values):
                     raise ValueError(
                         "schedule when(cond): cond must be a previously authored Bool value")
+                if cond.clock != schedule.clock:
+                    raise ValueError(
+                        "schedule when(cond): predicate and schedule must use the same clock")
         if schedule.needs_cache() and not op.capabilities.get("cacheable"):
             raise ValueError(
                 "operator %r is not cacheable; cannot use schedule %s -- declare it with "
@@ -239,6 +253,12 @@ class _ProgramCall(_ProgramBase):
         ``coupled_rate`` node to one multi-state ``for_each_cell`` and each ``coupled_rate_out``
         projects its block's rate scratch.
         """
+        points = {argument.point for argument in args}
+        if len(points) != 1:
+            raise ValueError(
+                "coupled operator %r inputs belong to different evaluation points; "
+                "construct one explicit partitioned StagePoint or synchronize them first"
+                % operator_name)
         bundle = op.signature.output                 # a model.RateBundle: block -> RateSpace
         input_blocks = {
             block_name(argument.block): argument.block

@@ -59,8 +59,9 @@ def coupled_program(t, name, blocks):
     f = P.solve_fields_from_blocks(states)  # SIMULTANEOUS coupled solve over every block at once
     for b, U in zip(blocks, states, strict=True):
         R = P._rhs_legacy(state=U, fields=f, sources=["default"])
-        P.commit(typed_state(P, b, state_name="U").next,
-                 P.linear_combine(b + "_next", U + dt * R))
+        endpoint = typed_state(P, b, state_name="U").next
+        P.commit(endpoint, P.linear_combine(
+            b + "_next", U + dt * R, at=endpoint.point))
     return P
 
 

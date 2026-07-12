@@ -17,6 +17,7 @@ scalar runtime branch ``if_``. The 0/1 mask is built per cell with ``P.cell_ge``
     SOME take b (non-vacuous). Self-skips without numpy / _pops / a compiler / Kokkos / install_program
     (never faking the engine).
 """
+from pops.codegen import compile_drivers
 from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
@@ -44,7 +45,9 @@ def _clamp_program(t, *, name="where_clamp", floor=0.5):
     half = P.linear_combine("half", 0.5 * U)        # the 'b' branch: 0.5 * U
     mask = P.cell_ge(U, floor, name="mask")          # 1 where U >= floor, else 0
     clamped = P.where(mask, U, half, name="clamped")  # per-cell: U if mask else 0.5*U
-    P.commit(typed_state(P, "blk", state_name="U").next, clamped)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    result = P.linear_combine("clamped_next", 1 * clamped, at=endpoint.point)
+    P.commit(endpoint, result)
     return P
 
 
@@ -204,7 +207,7 @@ def _run_section_b(t):
 
     floor = 0.5
     try:
-        compiled = pops.codegen.compile_problem(
+        compiled = compile_drivers.compile_problem(
             model=passive_model("where_prog"),
             time=_clamp_program(t, name="where_step", floor=floor))
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed

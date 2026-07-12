@@ -73,7 +73,8 @@ def _lorentz_condensed_program():
     out = P._new("state", "condensed_reconstruct", (U, phi),
                  {"linear_operator": "lorentz_J", "subset": (1, 2),
                   "th_dt": CoeffPolynomial({1: 1.0}), "c_rho": 0},
-                 "cs_recon", temporal.block, space=U.space, state_ref=U.state_ref)
+                 "cs_recon", temporal.block, space=U.space, state_ref=U.state_ref,
+                 point=temporal.next.point)
     P.commit(temporal.next, out)
     return P, m
 
@@ -169,7 +170,7 @@ def test_schur_free_program_omits_block_inverse_header():
     temporal = typed_state(P, "blk", state_name="U")
     U = temporal.n
     P.commit(temporal.next,
-             P.linear_combine("id", 1.0 * U))
+             P.linear_combine("id", 1.0 * U, at=temporal.next.point))
     src = P.emit_cpp_program()
     assert "block_inverse.hpp" not in src, "a condensed-free Program must not include block_inverse.hpp"
     print("OK  block_inverse.hpp is gated: absent from a condensed-free Program")

@@ -36,12 +36,16 @@ def all_ops(program: Any) -> Any:
 def check_model_owner_dispatch(program: Any, model: Any) -> None:
     """Refuse lowering through one physical model when Program blocks have another owner."""
     block_owners = {block.model_owner_path for block in program._block_indices()}
-    if len(block_owners) > 1:
+    from pops.codegen.program_models import ProgramModelGraph
+
+    if type(model) is ProgramModelGraph:
+        for block in program._block_indices():
+            model.owner_for_block(block)
+    elif len(block_owners) > 1:
         raise NotImplementedError(
-            "multi-model Program lowering needs owner->model dispatch for module metadata, state "
-            "shape and kernels; Program blocks cover owners %s. Refusing a first-model fallback."
-            % sorted(str(owner) for owner in block_owners)
-        )
+            "multi-model Program lowering requires ProgramModelGraph; Program blocks cover owners "
+            "%s. Refusing a representative-model fallback."
+            % sorted(str(owner) for owner in block_owners))
     sensitive = [
         value
         for value in all_ops(program)
@@ -54,16 +58,21 @@ def check_model_owner_dispatch(program: Any, model: Any) -> None:
         model_owner = getattr(getattr(model, "_m", None), "owner_path", None)
     if model_owner is None:
         return
+    from pops.model import OwnerPath
+    model_owner = OwnerPath.coerce(model_owner).canonical()
     for value in sensitive:
         value_owner = value.block.model_owner_path
         operator = value.attrs.get("operator_handle")
         operator_owner = getattr(operator, "owner_path", value_owner)
-        if value_owner != operator_owner:
+        if value_owner.canonical() != OwnerPath.coerce(operator_owner).canonical():
             raise ValueError(
                 "Program node %r has block model owner %s but operator owner %s"
                 % (value.name, value_owner, operator_owner)
             )
-        if value_owner != model_owner:
+        if type(model) is ProgramModelGraph:
+            model.model_for_owner(value_owner)
+            continue
+        if value_owner.canonical() != model_owner:
             raise NotImplementedError(
                 "multi-model Program lowering needs owner->model dispatch: node %r belongs to %s, "
                 "but compile supplied only model %s. Refusing to lower it with the wrong physics."
@@ -74,8 +83,20 @@ def check_model_owner_dispatch(program: Any, model: Any) -> None:
 def check_schedules_lowerable(program: Any) -> None:
     """Reject schedule policies without a semantically valid native lowering."""
     for value in all_ops(program):
+        if value.clock != program.clock:
+            raise NotImplementedError(
+                "compiled Program runtime currently advances only clock %r; node %r belongs to "
+                "clock %r. Keep the immutable ProgramGraph for a multi-clock backend or provide "
+                "an explicit backend synchronization lowering."
+                % (program.clock.name, value.name, value.clock.name))
         schedule = value.attrs.get("schedule")
-        if schedule is None or schedule.is_always():
+        if schedule is None:
+            continue
+        if schedule.clock != program.clock:
+            raise NotImplementedError(
+                "schedule on node %r belongs to clock %r, but this native runtime advances %r"
+                % (value.name, schedule.clock.name, program.clock.name))
+        if schedule.is_always():
             continue
         if not schedule.so_lowerable():
             raise NotImplementedError(

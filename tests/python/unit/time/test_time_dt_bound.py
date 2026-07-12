@@ -16,6 +16,7 @@ emitted, and a Program WITHOUT a dt bound emits ``has_dt_bound() -> false``. Sec
 (needs _pops + a compiler + a visible Kokkos via POPS_KOKKOS_ROOT) and self-skips cleanly otherwise; it
 never fakes the engine.
 """
+from pops.codegen import compile_drivers
 from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
@@ -58,7 +59,9 @@ def _fe(name="fe_dtbound"):
     U = typed_state(P, "ions")
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(typed_state(P, "ions", state_name="U").next, P.linear_combine("U1", U + P.dt * R))
+    endpoint = typed_state(P, "ions", state_name="U").next
+    P.commit(endpoint, P.linear_combine(
+        "U1", U + P.dt * R, at=endpoint.point))
     return P
 
 
@@ -182,7 +185,9 @@ def fe_program(name, *, factor=None):
     U = typed_state(P, "ions")
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(typed_state(P, "ions", state_name="U").next, P.linear_combine("U1", U + P.dt * R))
+    endpoint = typed_state(P, "ions", state_name="U").next
+    P.commit(endpoint, P.linear_combine(
+        "U1", U + P.dt * R, at=endpoint.point))
     if factor is not None:
         @P.dt_bound
         def _b(Pr, cfl, _f=factor):
@@ -193,10 +198,10 @@ def fe_program(name, *, factor=None):
 
 
 try:
-    prog_none = pops.codegen.compile_problem(model=transport_model(), time=fe_program("fe_none"))
-    prog_tight = pops.codegen.compile_problem(model=transport_model(),
+    prog_none = compile_drivers.compile_problem(model=transport_model(), time=fe_program("fe_none"))
+    prog_tight = compile_drivers.compile_problem(model=transport_model(),
                                      time=fe_program("fe_tight", factor=0.5))
-    prog_loose = pops.codegen.compile_problem(model=transport_model(),
+    prog_loose = compile_drivers.compile_problem(model=transport_model(),
                                      time=fe_program("fe_loose", factor=2.0))
 except RuntimeError as exc:  # no compiler / no Kokkos visible / compile failed
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])

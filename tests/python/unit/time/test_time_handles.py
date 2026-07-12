@@ -14,11 +14,20 @@ Run with python3 (PYTHONPATH = built pops package); falls back to pytest from th
 """
 from typed_program_support import typed_state
 
+from fractions import Fraction
 import sys
 
 import pytest
 
 from pops import time as adctime
+
+
+def _stage(state, name, offset):
+    return state.stage(
+        name,
+        point=adctime.StagePoint(
+            name, {"main": adctime.TimePoint(state.clock, offset)}),
+    )
 
 
 def _expect_value_error(fn, needle):
@@ -48,9 +57,9 @@ def test_define_prev_rejected():
 def test_use_before_define_raises():
     P = adctime.Program("ubd")
     U = typed_state(P, "plasma", state_name="U")
-    s1 = U.stage(1)
+    s1 = _stage(U, "predictor", 1)
     _expect_value_error(lambda: s1 + P.dt * s1,
-                        "stage 1 is undefined (define it with T.define first)")
+                        "stage 'predictor' is undefined (define it with T.define first)")
     with pytest.raises(TypeError, match="StateEndpointHandle"):
         P.commit(s1, U.n)
 
@@ -59,8 +68,9 @@ def test_double_define_rejected():
     P = adctime.Program("dd")
     U = typed_state(P, "plasma", state_name="U")
     k0 = P._rhs_legacy(state=U.n, fields=P.solve_fields(U.n), sources=["default"])
-    P.define(U.stage(1), U.n + P.dt * k0)
-    _expect_value_error(lambda: P.define(U.stage(1), U.n + P.dt * k0),
+    stage = _stage(U, "predictor", 1)
+    P.define(stage, U.n + P.dt * k0)
+    _expect_value_error(lambda: P.define(stage, U.n + P.dt * k0),
                         "SSA stage already defined")
 
 
@@ -94,15 +104,20 @@ def _ssprk3_values(P, block):
     U0 = typed_state(P, block)
     f0 = P.solve_fields(U0)
     k0 = P._rhs_legacy(state=U0, fields=f0, flux=True, sources=["default"])
-    U1 = P.linear_combine("ssprk3_U1", U0 + P.dt * k0)
+    state = typed_state(P, block, state_name="U")
+    stage1 = _stage(state, "stage1", 1)
+    stage2 = _stage(state, "stage2", Fraction(1, 2))
+    U1 = P.linear_combine("ssprk3_U1", U0 + P.dt * k0, at=stage1.point)
     f1 = P.solve_fields(U1)
     k1 = P._rhs_legacy(state=U1, fields=f1, flux=True, sources=["default"])
-    U2 = P.linear_combine("ssprk3_U2", 0.75 * U0 + 0.25 * (U1 + P.dt * k1))
+    U2 = P.linear_combine(
+        "ssprk3_U2", 0.75 * U0 + 0.25 * (U1 + P.dt * k1), at=stage2.point)
     f2 = P.solve_fields(U2)
     k2 = P._rhs_legacy(state=U2, fields=f2, flux=True, sources=["default"])
     U_next = P.linear_combine(
-        "ssprk3_step", (1.0 / 3.0) * U0 + (2.0 / 3.0) * (U2 + P.dt * k2))
-    P.commit(typed_state(P, block, state_name="U").next, U_next)
+        "ssprk3_step", (1.0 / 3.0) * U0 + (2.0 / 3.0) * (U2 + P.dt * k2),
+        at=state.next.point)
+    P.commit(state.next, U_next)
 
 
 def _ssprk3_handles(P, block):
@@ -110,15 +125,18 @@ def _ssprk3_handles(P, block):
     U = typed_state(P, block, state_name="U")
     f0 = P.solve_fields(U.n)
     k0 = P._rhs_legacy(state=U.n, fields=f0, flux=True, sources=["default"])
-    P.define(U.stage(1), U.n + P.dt * k0)
-    f1 = P.solve_fields(U.stage(1))
-    k1 = P._rhs_legacy(state=U.stage(1), fields=f1, flux=True, sources=["default"])
-    P.define(U.stage(2), 0.75 * U.n + 0.25 * (U.stage(1) + P.dt * k1))
-    f2 = P.solve_fields(U.stage(2))
-    k2 = P._rhs_legacy(state=U.stage(2), fields=f2, flux=True, sources=["default"])
+    stage1 = _stage(U, "stage1", 1)
+    stage2 = _stage(U, "stage2", Fraction(1, 2))
+    P.define(stage1, U.n + P.dt * k0)
+    f1 = P.solve_fields(stage1)
+    k1 = P._rhs_legacy(state=stage1, fields=f1, flux=True, sources=["default"])
+    P.define(stage2, 0.75 * U.n + 0.25 * (stage1 + P.dt * k1))
+    f2 = P.solve_fields(stage2)
+    k2 = P._rhs_legacy(state=stage2, fields=f2, flux=True, sources=["default"])
     U_next = P.linear_combine(
         "ssprk3_step",
-        (1.0 / 3.0) * U.n + (2.0 / 3.0) * (U.stage(2) + P.dt * k2),
+        (1.0 / 3.0) * U.n + (2.0 / 3.0) * (stage2 + P.dt * k2),
+        at=U.next.point,
     )
     P.commit(U.next, U_next)
 
@@ -131,7 +149,10 @@ def test_ssprk3_handles_keep_numerical_ir_parity_with_value_authoring():
     _ssprk3_handles(handles, "plasma")
     handles.validate()
     def numerical_ir(program):
-        data = program._serialize()
+        # Provenance records the authoring door (free value vs named stage) and is intentionally
+        # different. Numerical parity retains exact point/clock metadata while excluding only that
+        # non-numerical lineage and the debug labels.
+        data = program._serialize(include_provenance=False)
         for node in data["nodes"]:
             node.pop("name")
         return data
@@ -145,7 +166,7 @@ def test_ssprk3_handles_keep_numerical_ir_parity_with_value_authoring():
 def test_handles_carry_no_ndarray():
     P = adctime.Program("nodata")
     U = typed_state(P, "plasma", state_name="U")
-    s1 = U.stage(1)
+    s1 = _stage(U, "predictor", 1)
     nxt = U.next
     prev = U.prev
     # No handle (including the slots-only StateEndpointHandle) owns a numpy array.

@@ -58,15 +58,16 @@ import pops.lib.time as libtime  # noqa: E402  -- ready schemes live in pops.lib
 
 
 # ============================ (A) IR construction + codegen: pure Python =======================
-def half_flow(prog, U, frac):
+def half_flow(prog, U, frac, *, at):
     """One Forward-Euler hyperbolic half-flow: U + frac*dt*R, R = -div F (+ default source). On the
     uncoupled NoSource model the default source is empty, so R is flux-only; the per-stage solve_fields
     is inert (no field feedback) -- kept so the program mirrors a real, field-coupled-ready Strang."""
     R = prog._rhs_legacy(state=U, fields=prog.solve_fields(U), flux=True, sources=["default"])
-    return prog.linear_combine(None, U + (frac * prog.dt) * R)
+    return prog.linear_combine(None, U + (frac * prog.dt) * R, at=at)
 
 
-def no_op_source(prog, U, frac):  # noqa: ARG001  -- frac unused: S is the identity on a NoSource model
+def no_op_source(
+        prog, U, frac, *, at):  # noqa: ARG001  -- frac/at unused: source is the identity
     """The Strang source stage S(dt). On a model with no source brick the native run_source_stage is a
     no-op, so the compiled source returns U unchanged (no extra IR stage)."""
     return U
@@ -188,7 +189,8 @@ print("== (B) compiled std.strang == native pops.Strang (bit-exact) ==")
 
 # Compile the std.strang program (skips cleanly without a compiler / visible Kokkos).
 try:
-    compiled = pops.codegen.compile_problem(model=transport_model(), time=strang_program("strang_prog"))
+    from pops.codegen.compile_drivers import compile_problem
+    compiled = compile_problem(model=transport_model(), time=strang_program("strang_prog"))
 except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
     _skip("compile_problem could not build the .so: %s (A passed)" % str(exc)[:160])
 

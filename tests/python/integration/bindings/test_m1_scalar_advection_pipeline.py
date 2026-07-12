@@ -10,6 +10,7 @@ from pops.math import ddt, div
 from pops.mesh.layouts import Uniform
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.time import StagePoint, TimePoint
 
 
 def test_scalar_advection_completes_typed_phase_pipeline():
@@ -38,12 +39,19 @@ def test_scalar_advection_completes_typed_phase_pipeline():
     program = pops.Program("ssprk2").bind_operators(model.module)
     temporal = program.state(tracer, state)
     k0 = rate(temporal.n, name="k0")
-    stage = program.linear_combine("q_stage", temporal.n + program.dt * k0)
+    stage_handle = temporal.stage(
+        "predictor",
+        point=StagePoint(
+            "predictor", {"explicit": TimePoint(program.clock, Fraction(1, 1))}
+        ),
+    )
+    stage = program.define(stage_handle, temporal.n + program.dt * k0)
     k1 = rate(stage, name="k1")
     next_state = program.linear_combine(
         "q_next",
         Fraction(1, 2) * temporal.n
         + Fraction(1, 2) * (stage + program.dt * k1),
+        at=temporal.next.point,
     )
     program.commit(temporal.next, next_state)
     case.time(program)
@@ -60,6 +68,7 @@ def test_scalar_advection_completes_typed_phase_pipeline():
     assert type(artifact.plan).__name__ == "CompiledPlanRecord"
     assert artifact.program.model is None
     assert artifact.program.program._compiled_detached is True
+    assert type(artifact.program.program_graph) is pops.time.ProgramGraph
 
     initial = np.ones((1, 16, 16), dtype=np.float64)
     simulation = pops.bind(

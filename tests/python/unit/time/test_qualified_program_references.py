@@ -18,7 +18,7 @@ from pops.model import (
 )
 from pops.problem import Problem
 from pops.problem.handles import BlockHandle
-from pops.time import Program
+from pops.time import Program, StagePoint, TimePoint
 from pops.lib.time import forward_euler, ssprk2
 from pops.numerics.terms import DefaultSource, SourceTerm
 from pops.fields import FieldProblem
@@ -62,7 +62,7 @@ def _forward_copy():
     model, block = _declarations()
     program = Program("step")
     state = program.state(block, model.u)
-    next_value = program.linear_combine("u_next", state.n)
+    next_value = program.linear_combine("u_next", state.n, at=state.next.point)
     program.commit(state.next, next_value)
     return model, block, program, state, next_value
 
@@ -115,8 +115,10 @@ def test_two_instances_of_one_model_remain_distinct_in_time_ir():
         "left", "right",
     ]
 
-    program.commit(left_state.next, program.linear_combine("left_next", left_state.n))
-    program.commit(right_state.next, program.linear_combine("right_next", right_state.n))
+    program.commit(left_state.next, program.linear_combine(
+        "left_next", left_state.n, at=left_state.next.point))
+    program.commit(right_state.next, program.linear_combine(
+        "right_next", right_state.n, at=right_state.next.point))
     from pops.codegen.program_codegen import _check_lowerable
     _check_lowerable(program, model=model)
 
@@ -149,7 +151,7 @@ def test_program_serialization_is_canonical_and_contains_no_authoring_capability
     assert first_data == second_data
     assert first._ir_hash() == second._ir_hash()
     assert all("#authoring=" not in state.local_id for state in first._time_states.values())
-    assert first_data["version"] == 3
+    assert first_data["version"] == 4
     assert first_data["nodes"][0]["block"]["kind"] == "block"
     assert first_data["nodes"][0]["state"]["kind"] == "state"
     assert first_data["commits"][0]["state"] == first_data["nodes"][0]["state"]
@@ -162,7 +164,8 @@ def test_history_tables_and_serialization_retain_the_qualified_state():
     state = program.state(block, model.u)
     program.keep_history(state, depth=2)
     previous = state.prev(2).value
-    program.commit(state.next, program.linear_combine("next", state.n + previous))
+    program.commit(state.next, program.linear_combine(
+        "next", state.n + previous, at=state.next.point))
 
     assert program._history_state_refs["fluid.u"] is state.state
     assert previous.state_ref is state.state
@@ -296,7 +299,7 @@ def test_homonymous_operators_from_two_models_resolve_by_owner_and_block_provena
     with pytest.raises(ValueError, match="ambiguous across 2 bound model registries"):
         program._call("decay")
     from pops.codegen.program_codegen import _check_lowerable
-    with pytest.raises(NotImplementedError, match="owner->model dispatch"):
+    with pytest.raises(NotImplementedError, match="ProgramModelGraph"):
         _check_lowerable(program, model=first)
 
 
@@ -304,12 +307,18 @@ def test_ready_presets_take_typed_references_and_match_the_explicit_program():
     model, block = _declarations()
     manual = Program("parity")
     state = manual.state(block, model.u)
-    rate = manual._rhs_legacy(state=state.n, fields=None, flux=False, sources=[])
-    manual.commit(state.next, manual.linear_combine("fe_step", state.n + manual.dt * rate))
+    point = StagePoint("forward_euler", {"main": TimePoint(manual.clock, 0)})
+    rate = manual._replace_value(
+        manual._rhs_legacy(state=state.n, fields=None, flux=False, sources=[]),
+        point=point,
+    )
+    manual.commit(state.next, manual.linear_combine(
+        "fe_step", state.n + manual.dt * rate, at=state.next.point))
 
     preset = Program("parity")
     forward_euler(preset, block, model.u, sources=(), flux=False)
-    assert preset._serialize() == manual._serialize()
+    assert preset._serialize(include_provenance=False) == manual._serialize(
+        include_provenance=False)
 
     factory = ssprk2(block, model.u, sources=(), flux=False)
     assert isinstance(factory, Program)

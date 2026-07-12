@@ -7,6 +7,15 @@ import pytest
 
 from pops import model
 from pops.params import ConstParam, RuntimeParam
+from pops.provenance import ProvenanceRecord, SourceSpan
+
+
+def _operator_source(owner):
+    return ProvenanceRecord(
+        primary=SourceSpan(__file__, 1),
+        owner=owner,
+        authoring_api="tests.model.Operator",
+    )
 
 
 @pytest.mark.parametrize("bad", [object(), True, ""])
@@ -32,8 +41,10 @@ def test_authoring_identities_refuse_implicit_stringification(bad):
 @pytest.mark.parametrize("bad_id", [object(), True, "", -1])
 def test_manifest_constructors_do_not_coerce_identity_fields(bad_id):
     state = model.StateSpace("U", ("rho",))
-    operator = model.Operator("rate", "local_rate", (state,) >> model.Rate(state))
     owner = model.OwnerPath.model("manifest-constructor")
+    operator = model.Operator(
+        "rate", "local_rate", (state,) >> model.Rate(state),
+        source=_operator_source(owner))
     handle = model.OperatorHandle(
         "rate", kind="local_rate", owner=owner, signature=operator.signature)
     with pytest.raises(ValueError):
@@ -51,8 +62,10 @@ def test_manifest_constructors_do_not_coerce_identity_fields(bad_id):
 
 def test_operator_manifest_id_refuses_numeric_string():
     state = model.StateSpace("U", ("rho",))
-    operator = model.Operator("rate", "local_rate", (state,) >> model.Rate(state))
     owner = model.OwnerPath.model("manifest-constructor")
+    operator = model.Operator(
+        "rate", "local_rate", (state,) >> model.Rate(state),
+        source=_operator_source(owner))
     handle = model.OperatorHandle(
         "rate", kind="local_rate", owner=owner, signature=operator.signature)
     with pytest.raises(ValueError):
@@ -346,9 +359,11 @@ def test_manifest_abi_binding_is_functional_and_rate_inherits_base_layout():
 
     from pops.codegen.loader import CompiledProblem
 
+    graph = program.to_graph()
     compiled = CompiledProblem(
-        "problem.so", program=object(), model=module, abi_key="abi-v2",
-        cxx="c++", std="c++17", module_manifest=manifest)
+        "problem.so", program=program, model=module, abi_key="abi-v2",
+        cxx="c++", std="c++17", module_manifest=manifest, program_graph=graph)
     assert manifest.abi_requirements["abi_key"] is None
     assert compiled.module_manifest is not manifest
     assert compiled.module_manifest.abi_requirements["abi_key"] == "abi-v2"
+    assert compiled.program_graph.graph_hash == graph.graph_hash

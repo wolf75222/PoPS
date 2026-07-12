@@ -155,13 +155,13 @@ def test_imex_local_rejects_string_linear_source(t):
 def test_lie_chains_two_stages(t):
     P = t.Program("lie")
 
-    def half_flow(prog, U, frac):
+    def half_flow(prog, U, frac, *, at):
         R = prog._rhs_legacy(state=U, fields=prog.solve_fields(U), flux=True, sources=["default"])
-        return prog.linear_combine(None, U + (frac * prog.dt) * R)
+        return prog.linear_combine(None, U + (frac * prog.dt) * R, at=at)
 
-    def source(prog, U, frac):
+    def source(prog, U, frac, *, at):
         S = prog._rhs_legacy(state=U, fields=None, flux=False, sources=["default"])
-        return prog.linear_combine(None, U + (frac * prog.dt) * S)
+        return prog.linear_combine(None, U + (frac * prog.dt) * S, at=at)
 
     out = lt.lie(
         P, *state_refs(P, "plasma"), half_flow=half_flow, source=source)
@@ -258,7 +258,8 @@ def _run_ab3(t):
     lt.adams_bashforth(
         P, *state_refs(P, "blk", model=model.module), order=3)
     try:
-        compiled = pops.codegen.compile_problem(model=model, time=P)
+        from pops.codegen.compile_drivers import compile_problem
+        compiled = compile_problem(model=model, time=P)
         cm = _passive_source_model("ab3_block").compile(backend="production")
     except RuntimeError as exc:
         print("-- (B AB3) skipped: compile could not build the .so: %s --" % str(exc)[:160])
@@ -302,7 +303,8 @@ def _run_imex(t):
         P, *state_refs(P, "plasma"), linear_source=_linear_handle(model),
         flux=True, sources=(DefaultSource(),), theta=1.0)
     try:
-        compiled = pops.codegen.compile_problem(model=model, time=P)
+        from pops.codegen.compile_drivers import compile_problem
+        compiled = compile_problem(model=model, time=P)
         cm = _lorentz_model("imex_block").compile(backend="production")
     except RuntimeError as exc:
         print("-- (B imex) skipped: compile could not build the .so: %s --" % str(exc)[:160])
@@ -353,13 +355,13 @@ def _run_lie(t):
     # Lie H(dt); S(dt) where H is flux-only transport (here zero flux -> no-op) and S the default
     # source S = _C*rho over the full dt. Both sub-flows are forward-Euler affine updates, so the
     # composition is exactly rho * (1 + dt*_C) per step (H is inert), which an offline ref mirrors.
-    def half_flow(prog, U, frac):
+    def half_flow(prog, U, frac, *, at):
         R = prog._rhs_legacy(state=U, fields=prog.solve_fields(U), flux=True, sources=[])
-        return prog.linear_combine(None, U + (frac * prog.dt) * R)
+        return prog.linear_combine(None, U + (frac * prog.dt) * R, at=at)
 
-    def source(prog, U, frac):
+    def source(prog, U, frac, *, at):
         S = prog._rhs_legacy(state=U, fields=None, flux=False, sources=["reaction"])
-        return prog.linear_combine(None, U + (frac * prog.dt) * S)
+        return prog.linear_combine(None, U + (frac * prog.dt) * S, at=at)
 
     model = _reaction_term_model("lie_prog")
     P = t.Program("lie_step")
@@ -367,7 +369,8 @@ def _run_lie(t):
         P, *state_refs(P, "blk", model=model.module),
         half_flow=half_flow, source=source)
     try:
-        compiled = pops.codegen.compile_problem(model=model, time=P)
+        from pops.codegen.compile_drivers import compile_problem
+        compiled = compile_problem(model=model, time=P)
         cm = _reaction_term_model("lie_block").compile(backend="production")
     except RuntimeError as exc:
         print("-- (B lie) skipped: compile could not build the .so: %s --" % str(exc)[:160])

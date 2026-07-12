@@ -29,6 +29,7 @@ matrix-free apply sub-block, perturbing the frozen Newton iterate).
     runs (> 1 iteration). BDF2 is checked the same way (a cold-start history). Self-skips (exit 0)
     without numpy / _pops / install_program / a compiler / a visible Kokkos -- never fakes the engine.
 """
+from pops.codegen import compile_drivers
 from typed_program_support import state_refs, typed_state
 
 import pytest
@@ -281,7 +282,6 @@ def _nonlinear_flux_model():
     feedback into the flux), so the frozen-Poisson implicit step is exact -- the same trick the other
     compiled-program tests use. A real composed-brick model, never a fake engine."""
     import pops
-
     return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                      transport=pops.IsothermalFlux(),
                      source=pops.NoSource(),
@@ -430,7 +430,7 @@ def _run_section_b(t):
 
     def _build(order):
         try:
-            compiled = pops.codegen.compile_problem(
+            compiled = compile_drivers.compile_problem(
                 model=_nonlinear_flux_model(),
                 time=_bdf_program(t, order, name="bdf_iso_step%d" % order, newton_max=newton_max,
                                   krylov_max=200, tol=tol))

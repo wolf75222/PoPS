@@ -10,7 +10,7 @@ from typing import Any
 
 from ._helpers import (
     _DEFAULT_SOURCES, _commit, _exact_coefficient, _exact_fraction, _opcall, _operator_handle,
-    _stage_rhs, _time_state, program_macro,
+    _stage_point, _stage_rhs, _time_state, program_macro,
 )
 
 
@@ -21,24 +21,30 @@ def rk4(P: Any, block: Any, state: Any = None, *,
     U^{n+1} = U0 + dt/6 (k1 + 2 k2 + 2 k3 + k4)."""
     temporal = _time_state(P, block, state)
     U0 = temporal.n
-    k1 = _stage_rhs(P, U0, sources, flux)
-    U1 = P.linear_combine("rk4_U1", U0 + Fraction(1, 2) * P.dt * k1)
-    k2 = _stage_rhs(P, U1, sources, flux)
-    U2 = P.linear_combine("rk4_U2", U0 + Fraction(1, 2) * P.dt * k2)
-    k3 = _stage_rhs(P, U2, sources, flux)
-    U3 = P.linear_combine("rk4_U3", U0 + P.dt * k3)
-    k4 = _stage_rhs(P, U3, sources, flux)
+    k1 = _stage_rhs(P, U0, sources, flux, name="rk4_stage_0", offset=0)
+    point1 = _stage_point(P, "rk4_stage_1", Fraction(1, 2))
+    U1 = P.linear_combine(
+        "rk4_U1", U0 + Fraction(1, 2) * P.dt * k1, at=point1)
+    k2 = _stage_rhs(P, U1, sources, flux, name="rk4_stage_1", offset=Fraction(1, 2))
+    point2 = _stage_point(P, "rk4_stage_2", Fraction(1, 2))
+    U2 = P.linear_combine(
+        "rk4_U2", U0 + Fraction(1, 2) * P.dt * k2, at=point2)
+    k3 = _stage_rhs(P, U2, sources, flux, name="rk4_stage_2", offset=Fraction(1, 2))
+    point3 = _stage_point(P, "rk4_stage_3", 1)
+    U3 = P.linear_combine("rk4_U3", U0 + P.dt * k3, at=point3)
+    k4 = _stage_rhs(P, U3, sources, flux, name="rk4_stage_3", offset=1)
     _commit(P, temporal, P.linear_combine(
         "rk4_step",
         U0 + Fraction(1, 6) * P.dt * k1 + Fraction(1, 3) * P.dt * k2
-        + Fraction(1, 3) * P.dt * k3 + Fraction(1, 6) * P.dt * k4))
+        + Fraction(1, 3) * P.dt * k3 + Fraction(1, 6) * P.dt * k4,
+        at=temporal.next.point))
 
 
 # Classic explicit Butcher tableaux (A lower-triangular, b weights, c nodes) for `rk` (ADC-423).
 @dataclass(frozen=True, slots=True, init=False)
 class ButcherTableau:
     """An explicit Butcher tableau ``(A, b, c)`` for `rk`: ``A`` is strictly lower-triangular (stage i
-    depends only on stages j < i), ``b`` the final weights, ``c`` the (unused-by-the-lowering) nodes.
+    depends only on stages j < i), ``b`` the final weights, and ``c`` the exact evaluation nodes.
     Coefficients retain their authoring domain (integer, rational, decimal or
     binary64); validation compares their exact rational values, never a tolerance.
     The stored representation is immutable and canonical: rows keep only their
@@ -163,6 +169,7 @@ def rk(P: Any, block: Any, state: Any = None, tableau: Any = None, *,
     U0 = temporal.n
     ks: list[Any] = []
     for i in range(tableau.stages):
+        point = _stage_point(P, "%sstage_%d" % (tag, i), tableau.c[i])
         if i == 0:
             Ui = U0  # the first stage reads U^n directly (no scratch combine, like rk4)
         else:
@@ -171,14 +178,16 @@ def rk(P: Any, block: Any, state: Any = None, tableau: Any = None, *,
                 aij = tableau.A[i][j]
                 if aij != 0:
                     expr = expr + (P.dt * aij) * ks[j]
-            Ui = P.linear_combine("%sU%d" % (tag, i), expr)
-        ks.append(_stage_rhs(P, Ui, sources, flux))
+            Ui = P.linear_combine("%sU%d" % (tag, i), expr, at=point)
+        ks.append(_stage_rhs(
+            P, Ui, sources, flux, name="%sstage_%d" % (tag, i), offset=tableau.c[i]))
     final = U0
     for i in range(tableau.stages):
         bi = tableau.b[i]
         if bi != 0:
             final = final + (P.dt * bi) * ks[i]
-    _commit(P, temporal, P.linear_combine("%sstep" % tag, final))
+    _commit(P, temporal, P.linear_combine(
+        "%sstep" % tag, final, at=temporal.next.point))
 
 
 @program_macro
@@ -209,6 +218,7 @@ def explicit_rk(P: Any, block: Any, state: Any = None, *,
     u0 = temporal.n
     ks: list[Any] = []
     for i in range(tableau.stages):
+        point = _stage_point(P, "%sstage_%d" % (tag, i), tableau.c[i])
         if i == 0:
             u_i = u0
         else:
@@ -217,15 +227,19 @@ def explicit_rk(P: Any, block: Any, state: Any = None, *,
                 aij = tableau.A[i][j]
                 if aij != 0:
                     expr = expr + (P.dt * aij) * ks[j]
-            u_i = P.linear_combine("%sU%d" % (tag, i), expr)
+            u_i = P.linear_combine("%sU%d" % (tag, i), expr, at=point)
         if fields_operator is not None:
-            f_i = _opcall(P, fields_operator, u_i)
-            ks.append(_opcall(P, rhs_operator, u_i, f_i, value_name="%sk%d" % (tag, i)))
+            f_i = _opcall(P, fields_operator, u_i, point=point)
+            ks.append(_opcall(
+                P, rhs_operator, u_i, f_i,
+                value_name="%sk%d" % (tag, i), point=point))
         else:
-            ks.append(_opcall(P, rhs_operator, u_i, value_name="%sk%d" % (tag, i)))
+            ks.append(_opcall(
+                P, rhs_operator, u_i, value_name="%sk%d" % (tag, i), point=point))
     final = u0
     for i in range(tableau.stages):
         bi = tableau.b[i]
         if bi != 0:
             final = final + (P.dt * bi) * ks[i]
-    _commit(P, temporal, P.linear_combine("%sstep" % tag, final))
+    _commit(P, temporal, P.linear_combine(
+        "%sstep" % tag, final, at=temporal.next.point))

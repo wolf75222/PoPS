@@ -31,6 +31,15 @@ def validate_commit_many(program: Any, mapping: Any) -> list[tuple[Any, Any]]:
         if state.prog is not program:
             raise ValueError("commit_many: the State for %r belongs to a different Program" % block)
         require_top_level(program, state, "commit_many")
+        if state.clock != endpoint.clock:
+            raise ValueError(
+                "commit_many: endpoint for block %r uses clock %r but value %r uses clock %r; "
+                "synchronize it explicitly before commit"
+                % (block_name(block), endpoint.clock.name, state.name, state.clock.name))
+        if state.point != endpoint.point:
+            raise ValueError(
+                "commit_many: value %r point does not match block %r endpoint point"
+                % (state.name, block_name(block)))
         require_compatible_spaces(
             endpoint.space, state.space, "commit_many block %r" % block, typed_pair=True)
         if state.block != block:

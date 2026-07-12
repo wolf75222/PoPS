@@ -7,11 +7,19 @@ import pytest
 
 from pops.model import Handle, StateSpace
 from pops.time import (
-    HistoryHandle, Program, StageHandle, StateEndpointHandle, TimeState,
+    HistoryHandle, Program, StageHandle, StagePoint, StateEndpointHandle,
+    TimePoint, TimeState,
 )
 from pops.time.history_persistence import Interval
 import pops.time as time_api
 import pops.time.handles as temporal_handles
+
+
+def _stage(state, name="predictor", offset=1):
+    return state.stage(
+        name,
+        point=StagePoint(name, {"main": TimePoint(state.clock, offset)}),
+    )
 
 
 def test_private_mutable_temporal_aliases_are_removed():
@@ -24,7 +32,7 @@ def test_private_mutable_temporal_aliases_are_removed():
 def test_temporal_handle_families_are_immutable_hashable_handle_values():
     program = Program("immutable_temporal")
     state = typed_state(program, "fluid", state_name="U")
-    stage = state.stage(1)
+    stage = _stage(state)
     history = state.prev
     endpoint = state.next
 
@@ -65,12 +73,13 @@ def test_program_caches_every_temporal_declaration_and_resolution():
 
     assert state is typed_state(program, "fluid", state_name="U", space=space)
     assert state.n is state.n
-    assert state.stage("predictor") is state.stage("predictor")
+    predictor = _stage(state)
+    assert _stage(state) is predictor
     assert state.prev is state.prev
     assert state.next is state.next
-    assert program._time_states[(state.block, state.state)] is state
+    assert program._time_states[(state.block, state.state, state.clock)] is state
     assert program._time_current_values[state] is state.n
-    assert program._time_stage_handles[(state, "predictor")] is state.stage("predictor")
+    assert program._time_stage_handles[(state, "predictor")] is predictor
     assert program._time_history_handles[(state, 1)] is state.prev
     assert program._time_endpoint_handles[state] is state.next
 
@@ -78,9 +87,9 @@ def test_program_caches_every_temporal_declaration_and_resolution():
 def test_stage_resolution_is_program_owned_single_assignment():
     program = Program("stage_table")
     state = typed_state(program, "fluid", state_name="U")
-    stage = state.stage(1)
+    stage = _stage(state)
 
-    with pytest.raises(ValueError, match="stage 1 is undefined"):
+    with pytest.raises(ValueError, match="stage 'predictor' is undefined"):
         _ = stage.value
     result = program.define(stage, state.n)
     assert stage.value is result
@@ -96,7 +105,7 @@ def test_stage_resolution_is_program_owned_single_assignment():
 def test_stage_definition_refuses_non_state_values_without_partial_assignment():
     program = Program("stage_type")
     state = typed_state(program, "fluid", state_name="U")
-    stage = state.stage(1)
+    stage = _stage(state)
     scalar = program.norm2(state.n)
     scalar_name = scalar.name
 
@@ -104,14 +113,14 @@ def test_stage_definition_refuses_non_state_values_without_partial_assignment():
         program.define(stage, scalar)
     assert scalar.name == scalar_name
     assert stage not in program._time_stage_values
-    with pytest.raises(ValueError, match="stage 1 is undefined"):
+    with pytest.raises(ValueError, match="stage 'predictor' is undefined"):
         _ = stage.value
 
     scratch = program.scalar_field("scratch")
     with pytest.raises(TypeError, match=r"affine term must be a State/Rate"):
         program.define(stage, 2 * scratch)
     assert stage not in program._time_stage_values
-    with pytest.raises(ValueError, match="stage 1 is undefined"):
+    with pytest.raises(ValueError, match="stage 'predictor' is undefined"):
         _ = stage.value
 
 
@@ -206,7 +215,7 @@ def test_temporal_identity_is_owner_qualified_between_programs():
 
     pairs = (
         (left, right),
-        (left.stage(1), right.stage(1)),
+        (_stage(left), _stage(right)),
         (left.prev, right.prev),
         (left.next, right.next),
     )
@@ -214,7 +223,7 @@ def test_temporal_identity_is_owner_qualified_between_programs():
         assert a != b and a.owner_path != b.owner_path
 
     with pytest.raises(ValueError, match="different Program"):
-        first.define(right.stage(1), left.n)
+        first.define(_stage(right), left.n)
     with pytest.raises(ValueError, match="different Program"):
         first.define(right.prev, left.n)
     with pytest.raises(ValueError, match="different Program"):
@@ -226,21 +235,21 @@ def test_temporal_identity_is_owner_qualified_between_programs():
 def test_forged_equal_handles_cannot_bypass_program_issuance_tables():
     program = Program("forgery")
     state = typed_state(program, "fluid", state_name="U")
-    issued_stage = state.stage(1)
+    issued_stage = _stage(state)
     issued_history = state.prev
     issued_endpoint = state.next
 
     forged_state = TimeState(
-        program, state.block, state.state, space=state.space)
+        program, state.block, state.state, clock=state.clock, space=state.space)
     forged_stage = StageHandle(
-        program=program, block=state.block, state=state.state, key=1,
-        space=state.space)
+        program=program, block=state.block, state=state.state, key="predictor",
+        clock=state.clock, point=issued_stage.point, space=state.space)
     forged_history = HistoryHandle(
         program=program, block=state.block, state=state.state, lag=1,
-        space=state.space)
+        clock=state.clock, space=state.space)
     forged_endpoint = StateEndpointHandle(
         owner=program.owner_path, block=state.block, state=state.state,
-        space=state.space)
+        clock=state.clock, space=state.space)
 
     assert forged_state == state
     assert forged_stage == issued_stage
@@ -259,15 +268,16 @@ def test_forged_equal_handles_cannot_bypass_program_issuance_tables():
 def test_program_rebuild_reowns_and_remaps_temporal_tables():
     program = Program("temporal_rebuild")
     state = typed_state(program, "fluid", state_name="U")
-    stage = state.stage(1)
+    stage = _stage(state)
     program.define(stage, state.n)
     program.keep_history(state, depth=1)
     _ = state.prev.value
-    program.commit(state.next, stage.value)
+    final = program.linear_combine("final", stage.value, at=state.next.point)
+    program.commit(state.next, final)
 
     rebuilt = program.eliminate_dead_nodes()
     rebuilt_state = typed_state(rebuilt, "fluid", state_name="U")
-    rebuilt_stage = rebuilt_state.stage(1)
+    rebuilt_stage = _stage(rebuilt_state)
     rebuilt_history = rebuilt_state.prev
     rebuilt_endpoint = rebuilt_state.next
 
@@ -284,7 +294,7 @@ def test_program_rebuild_reowns_and_remaps_temporal_tables():
     assert rebuilt_history.value is rebuilt._time_history_values[rebuilt_history]
     assert rebuilt._time_history_configs[rebuilt_state][0] == 1
     assert rebuilt._time_history_stores[rebuilt_state].op == "store_history"
-    assert commits_by_block(rebuilt)["fluid"] is rebuilt_stage.value
+    assert commits_by_block(rebuilt)["fluid"].point == rebuilt_endpoint.point
     with pytest.raises(ValueError, match="different Program"):
         rebuilt._require_stage(stage, "rebuild")
     with pytest.raises(ValueError, match="different Program"):

@@ -21,6 +21,7 @@ MUST be added in the SAME order the Program declares them via ``P.state``.
     _pops) and locally once _pops is rebuilt; skips if _pops lacks install_program, numpy/_pops is absent,
     no compiler/Kokkos is visible, or the .so compile fails -- never faking the engine.
 """
+from pops.codegen import compile_drivers
 from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
@@ -86,7 +87,9 @@ def single_block_program(t, name, block):
     dt = P.dt
     U = typed_state(P, block)
     R = P._rhs_legacy(name="R_" + block, state=U, flux=True, sources=["decay"])
-    P.commit(typed_state(P, block, state_name="U").next, P.linear_combine(block + "_next", U + dt * R))
+    endpoint = typed_state(P, block, state_name="U").next
+    P.commit(endpoint, P.linear_combine(
+        block + "_next", U + dt * R, at=endpoint.point))
     return P
 
 
@@ -99,7 +102,9 @@ def two_block_program(t, name="two_block_passive"):
     for blk in ("a", "b"):
         U = typed_state(P, blk)
         R = P._rhs_legacy(name="R_" + blk, state=U, flux=True, sources=["decay"])
-        P.commit(typed_state(P, blk, state_name="U").next, P.linear_combine(blk + "_next", U + dt * R))
+        endpoint = typed_state(P, blk, state_name="U").next
+        P.commit(endpoint, P.linear_combine(
+            blk + "_next", U + dt * R, at=endpoint.point))
     return P
 
 
@@ -114,7 +119,9 @@ def section_a(t):
     for blk in ("a", "b"):
         U = typed_state(P, blk)
         R = P._rhs_legacy(state=U, flux=True, sources=["default"])
-        P.commit(typed_state(P, blk, state_name="U").next, P.linear_combine(blk + "_next", U + dt * R))
+        endpoint = typed_state(P, blk, state_name="U").next
+        P.commit(endpoint, P.linear_combine(
+            blk + "_next", U + dt * R, at=endpoint.point))
     src = P.emit_cpp_program()
     chk("ctx.state(0)" in src and "ctx.state(1)" in src, "two blocks bind ctx.state(0) and state(1)")
     chk("ctx.rhs_into(0, " in src and "ctx.rhs_into(1, " in src, "RHS routed per block index")
@@ -125,7 +132,9 @@ def section_a(t):
     Ub = typed_state(Pro, "b")  # noqa: F841 -- declared, read by the coupled charge but never committed
     fa = Pro.solve_fields(Ua)
     Ra = Pro._rhs_legacy(state=Ua, fields=fa, sources=["default"])
-    Pro.commit(typed_state(Pro, "a", state_name="U").next, Pro.linear_combine("a1", Ua + Pro.dt * Ra))
+    endpoint_a = typed_state(Pro, "a", state_name="U").next
+    Pro.commit(endpoint_a, Pro.linear_combine(
+        "a1", Ua + Pro.dt * Ra, at=endpoint_a.point))
     chk(Pro.validate() is True, "a read-only (uncommitted) block validates")
     src_ro = Pro.emit_cpp_program()
     chk("ctx.state(1)" in src_ro, "the read-only block still binds its index (ctx.state(1))")
@@ -133,17 +142,20 @@ def section_a(t):
     # A double commit is rejected at build time.
     Pd = t.Program("double")
     Uad = typed_state(Pd, "a")
-    Pd.commit(typed_state(Pd, "a", state_name="U").next, Pd.linear_combine("x", 1.0 * Uad))
-    chk(raises(ValueError, lambda: Pd.commit(typed_state(Pd, "a", state_name="U").next, Pd.linear_combine("y", 1.0 * Uad))),
+    endpoint_d = typed_state(Pd, "a", state_name="U").next
+    Pd.commit(endpoint_d, Pd.linear_combine("x", 1.0 * Uad, at=endpoint_d.point))
+    chk(raises(ValueError, lambda: Pd.commit(
+        endpoint_d, Pd.linear_combine("y", 1.0 * Uad, at=endpoint_d.point))),
         "a double commit of the same block is rejected")
 
     # A commit of a block no P.state declares cannot route to an index -> rejected.
     Pu = t.Program("unknown")
     Uau = typed_state(Pu, "a")
+    ghost = typed_state(Pu, "ghost", state_name="U").next
     chk(raises(
         ValueError,
         lambda: Pu.commit(
-            typed_state(Pu, "ghost", state_name="U").next, Pu.linear_combine("g", 1.0 * Uau))),
+            ghost, Pu.linear_combine("g", 1.0 * Uau, at=ghost.point))),
         "a cross-block commit is rejected before lowering")
 
     # The SIMULTANEOUS multi-target coupled field solve LOWERS (Spec 3 criterion 24, ADC-457): every
@@ -152,8 +164,14 @@ def section_a(t):
     Uac = typed_state(Pc, "a")
     Ubc = typed_state(Pc, "b")
     Pc.solve_fields_from_blocks([Uac, Ubc])
-    Pc.commit(typed_state(Pc, "a", state_name="U").next, Pc.linear_combine("a1", Uac + Pc.dt * Pc._rhs_legacy(state=Uac, sources=["default"])))
-    Pc.commit(typed_state(Pc, "b", state_name="U").next, Pc.linear_combine("b1", Ubc + Pc.dt * Pc._rhs_legacy(state=Ubc, sources=["default"])))
+    endpoint_a = typed_state(Pc, "a", state_name="U").next
+    endpoint_b = typed_state(Pc, "b", state_name="U").next
+    Pc.commit(endpoint_a, Pc.linear_combine(
+        "a1", Uac + Pc.dt * Pc._rhs_legacy(state=Uac, sources=["default"]),
+        at=endpoint_a.point))
+    Pc.commit(endpoint_b, Pc.linear_combine(
+        "b1", Ubc + Pc.dt * Pc._rhs_legacy(state=Ubc, sources=["default"]),
+        at=endpoint_b.point))
     src_c = Pc.emit_cpp_program()
     chk("ctx.solve_fields_from_blocks(" in src_c,
         "solve_fields_from_blocks lowers to the coupled multi-block solve")
@@ -175,13 +193,23 @@ def section_a(t):
     Pcf = t.Program("cf_block_routing")
     Uacf = typed_state(Pcf, "a")
     Ubcf = typed_state(Pcf, "b")
-    Pcf.commit(typed_state(Pcf, "a", state_name="U").next, Pcf.linear_combine(
-        "a_n", Uacf + Pcf.dt * Pcf._rhs_legacy(state=Uacf, flux=True, sources=["default"])))
+    endpoint_a = typed_state(Pcf, "a", state_name="U").next
+    endpoint_b = typed_state(Pcf, "b", state_name="U").next
+    Pcf.commit(endpoint_a, Pcf.linear_combine(
+        "a_n", Uacf + Pcf.dt * Pcf._rhs_legacy(
+            state=Uacf, flux=True, sources=["default"]),
+        at=endpoint_a.point))
 
     def _cf_body(prog, x):
-        return prog.linear_combine(None, x + prog.dt * prog._rhs_legacy(state=x, flux=True, sources=["default"]))
+        return prog.linear_combine(
+            None,
+            x + prog.dt * prog._rhs_legacy(
+                state=x, flux=True, sources=["default"]),
+            at=endpoint_b.point,
+        )
 
-    Pcf.commit(typed_state(Pcf, "b", state_name="U").next, Pcf.range(Ubcf, 2, _cf_body))
+    ranged = Pcf.range(Ubcf, 2, _cf_body)
+    Pcf.commit(endpoint_b, Pcf.define("b_next", ranged, at=endpoint_b.point))
     src_cf = Pcf.emit_cpp_program()
     chk("ctx.rhs_into(1, " in src_cf,
         "control flow inside block b routes its body RHS to index 1 (not silently 0)")
@@ -216,11 +244,11 @@ def section_b(t):
 
     # Compile the single-block reference programs (one per block name) and the 2-block program.
     try:
-        comp_a = pops.codegen.compile_problem(model=passive_model("pa_ref"),
+        comp_a = compile_drivers.compile_problem(model=passive_model("pa_ref"),
                                      time=single_block_program(t, "fe_a", "a"))
-        comp_b = pops.codegen.compile_problem(model=passive_model("pb_ref"),
+        comp_b = compile_drivers.compile_problem(model=passive_model("pb_ref"),
                                      time=single_block_program(t, "fe_b", "b"))
-        comp_ab = pops.codegen.compile_problem(model=passive_model("pab"), time=two_block_program(t))
+        comp_ab = compile_drivers.compile_problem(model=passive_model("pab"), time=two_block_program(t))
     except (RuntimeError, ValueError) as exc:  # no compiler / no Kokkos / .so compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 

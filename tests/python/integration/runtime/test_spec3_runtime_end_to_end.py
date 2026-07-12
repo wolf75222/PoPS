@@ -104,9 +104,12 @@ def held_program(name="spec3_runtime_held"):
     U = temporal.n
     f = P.fields("phi", from_state=U)
     f = P._replace_value(
-        f, attrs={**f.attrs, "schedule": adctime.every(EVERY).hold()})
+        f, attrs={
+            **f.attrs,
+            "schedule": adctime.every(EVERY, clock=P.clock).hold(),
+        })
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=["default"])
-    P.commit(temporal.next, P.define("U1", U + dt * R))
+    P.commit(temporal.next, P.define("U1", U + dt * R, at=temporal.next.point))
     return P
 
 

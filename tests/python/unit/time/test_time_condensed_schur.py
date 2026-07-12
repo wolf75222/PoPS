@@ -54,6 +54,7 @@ The carry is GATED to theta != 1, so theta == 1 keeps the fresh-zero phi path by
 Self-skips (exit 0) without numpy / _pops / install_program / a compiler / a visible Kokkos -- never
 fakes the engine (project policy: no fake pops in tests).
 """
+from pops.codegen import compile_drivers
 from typed_program_support import state_refs, typed_state
 
 from pops.params import ConstParam
@@ -606,7 +607,7 @@ def _run_energy_check(t, pops, np, sqrt, Model, h):
         c_E=3, tol=_TOL, max_iter=400,
         linear_operator=_linear_handle(model))
     try:
-        compiled = pops.codegen.compile_problem(model=model, time=P)
+        compiled = compile_drivers.compile_problem(model=model, time=P)
     except RuntimeError as exc:
         print("-- (B) energy check skipped: compile_problem failed: %s --" % str(exc)[:160])
         return
@@ -704,7 +705,7 @@ def _run_section_b(t):
             tol=_TOL, max_iter=400,
             linear_operator=_linear_handle(model))
         try:
-            return pops.codegen.compile_problem(model=model, time=P)
+            return compile_drivers.compile_problem(model=model, time=P)
         except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
             print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
             return None

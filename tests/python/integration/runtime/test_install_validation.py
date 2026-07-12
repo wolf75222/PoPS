@@ -68,7 +68,7 @@ def _program(name="installval_demo"):
     U = endpoint.n
     f = P.solve_fields("phi", U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(endpoint.next, P.linear_combine("U1", U + dt * R))
+    P.commit(endpoint.next, P.linear_combine("U1", U + dt * R, at=endpoint.next.point))
     return P
 
 

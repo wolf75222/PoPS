@@ -53,7 +53,8 @@ def _flux_program(t, name, blocks):
         temporal = states[blk]
         U = temporal.n
         R = P._rhs_legacy(state=U, flux=True, sources=["default"])
-        P.commit(temporal.next, P.linear_combine(blk + "_next", U + P.dt * R))
+        P.commit(temporal.next, P.linear_combine(
+            blk + "_next", U + P.dt * R, at=temporal.next.point))
     return P
 
 

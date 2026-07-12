@@ -69,9 +69,11 @@ def _solve_program(adctime, fd_eps=None):
     def residual(P, Uit, U0):
         return P.linear_combine("r", Uit - U0)
 
-    W = P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U, tol=1e-12,
+    endpoint = typed_state(P, "blk", state_name="U").next
+    guess = P.linear_combine("guess", U, at=endpoint.point)
+    W = P.solve_local_nonlinear(name="W", residual=residual, initial_guess=guess, tol=1e-12,
                                 max_iter=20, fd_eps=fd_eps)
-    P.commit(typed_state(P, "blk", state_name="U").next, W)
+    P.commit(endpoint, W)
     return P
 
 

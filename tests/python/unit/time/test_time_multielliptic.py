@@ -30,6 +30,7 @@ Section B (gated, self-skip): the OFFLINE REFERENCE is the engine's own default 
 
 Skips cleanly (exit 0) without numpy / _pops / a compiler / a visible Kokkos -- never fakes the engine.
 """
+from pops.codegen import compile_drivers
 from typed_program_support import typed_field, typed_state
 
 from pops.params import ConstParam
@@ -129,8 +130,8 @@ def _prog(name, field=None, model=None):
     else:
         f = P.solve_fields("f_" + field, U, field=typed_field(P, field))
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True)
-    P.commit(typed_state(P, "plasma", state_name="U", model=model).next,
-             P.linear_combine("U1", U + P.dt * R))
+    endpoint = typed_state(P, "plasma", state_name="U", model=model).next
+    P.commit(endpoint, P.linear_combine("U1", U + P.dt * R, at=endpoint.point))
     return P
 
 
@@ -274,7 +275,7 @@ def make_sim(model):
 
 def step_program(model, prog):
     try:
-        compiled = pops.codegen.compile_problem(model=model, time=prog)
+        compiled = compile_drivers.compile_problem(model=model, time=prog)
     except RuntimeError as exc:
         _skipB("compile_problem could not build the .so: %s" % str(exc)[:160])
     sim = make_sim(model)

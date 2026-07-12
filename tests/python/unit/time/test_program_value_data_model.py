@@ -11,7 +11,7 @@ import pytest
 
 from pops.ir import Equation, SymbolicTruthValueError
 from pops.provenance import ProvenanceRecord, SourceSpan
-from pops.time import Program, ProgramValue
+from pops.time import Program, ProgramValue, TimePoint
 
 
 def _direct_provenance(program: Program) -> ProvenanceRecord:
@@ -56,7 +56,8 @@ def test_program_metadata_rejects_mutable_or_opaque_leaves():
     with pytest.raises(TypeError, match="not an immutable IR value"):
         ProgramValue(
             program, 0, "state", "state", (), {"box": Box()},
-            "U", block, provenance=_direct_provenance(program),
+            "U", block, point=TimePoint(program.clock),
+            provenance=_direct_provenance(program),
         )
 
 
@@ -67,6 +68,7 @@ def test_program_value_rejects_untyped_mutable_space_and_field_context():
         with pytest.raises(TypeError):
             ProgramValue(
                 program, 0, "state", "state", (), {}, "U", block,
+                point=TimePoint(program.clock),
                 provenance=_direct_provenance(program),
                 **{keyword: []},
             )
@@ -140,6 +142,7 @@ def test_forged_same_program_value_cannot_be_laundered_by_ssa_id():
     forged = ProgramValue(
         program, real.id, real.vtype, real.op, real.inputs, real.attrs,
         real.name, real.block, space=real.space, region=real.region,
+        point=real.point,
         provenance=real.provenance)
 
     assert program._canonical_value(forged) is forged
@@ -158,7 +161,8 @@ def test_direct_program_value_construction_validates_identity_fields(field, valu
     kwargs = {
         "prog": program, "vid": 0, "vtype": "state",
         "op": "state", "inputs": (), "attrs": {}, "name": "U", "block": block,
-        "region": 0, "provenance": _direct_provenance(program),
+        "region": 0, "point": TimePoint(program.clock),
+        "provenance": _direct_provenance(program),
     }
     kwargs[field] = value
     with pytest.raises((TypeError, ValueError)):
@@ -200,7 +204,7 @@ def test_debug_name_is_immutable_and_part_of_ir_identity_when_it_changes_cpp_lab
     def build(label):
         program = Program("named_identity")
         state = typed_state(program, "transport", state_name="U")
-        value = program.linear_combine(label, state.n)
+        value = program.linear_combine(label, state.n, at=state.next.point)
         program.commit(state.next, value)
         return program
 

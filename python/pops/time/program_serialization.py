@@ -31,7 +31,12 @@ def _serialize_schedule(schedule: Any) -> dict[str, Any]:
             params[name] = {"scalar": scalar_data(item)}
         else:
             params[name] = _json_ready(item)
-    return {"kind": schedule.kind, "policy": schedule.policy, "params": params}
+    return {
+        "clock": schedule.clock.to_data(),
+        "kind": schedule.kind,
+        "policy": schedule.policy,
+        "params": params,
+    }
 
 
 def _json_ready(value: Any) -> Any:
@@ -114,6 +119,7 @@ class _ProgramSerialization:
         node = {"id": value.id, "name": value.name, "vtype": value.vtype, "op": value.op,
                 "block": handle_data(value.block) if value.block is not None else None,
                 "state": handle_data(value.state_ref) if value.state_ref is not None else None,
+                "point": _json_ready(value.point),
                 "inputs": [item.id for item in value.inputs], "attrs": _json_ready(attrs)}
         if value.space is not None:
             node["space"] = _json_ready(value.space)
@@ -133,7 +139,8 @@ class _ProgramSerialization:
         order = self._block_indices()
         result = {
             "name": self.name,
-            "version": 3,
+            "version": 4,
+            "clock": self.clock.to_data(),
             "nodes": [self._serialize_node(
                 value, include_provenance=include_provenance) for value in self._values],
             "commits": [

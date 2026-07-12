@@ -18,10 +18,12 @@ Builds on ADC-404a (Scalar/Bool IR, P.norm2/P.dot, P.while_). This slice adds:
     and match the offline x_N = target + 0.5^N (x0 - target); if_ applies the body iff the runtime
     condition holds. Self-skips without numpy / _pops / a compiler / Kokkos (never faking the engine).
 """
+from pops.codegen import compile_drivers
 from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.time import TimePoint
 import sys
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
@@ -39,7 +41,10 @@ def _fe_body():
     """A Forward-Euler body x -> x + dt*(-div F): rhs(sources=['default']) lowers with NO model, so it
     serves the codegen asserts (one ``ctx.rhs_into`` per emitted copy of the body)."""
     def body(_P, x):
-        return _P.linear_combine(x + _P.dt * _P._rhs_legacy(state=x, sources=["default"]))
+        return _P.linear_combine(
+            x + _P.dt * _P._rhs_legacy(state=x, sources=["default"]),
+            at=TimePoint(_P.clock, step=1),
+        )
     return body
 
 
@@ -63,7 +68,8 @@ def test_static_range_unrolls(t):
     P = t.Program("sr")
     U = typed_state(P, "blk")
     Uf = P.static_range(U, 3, _fe_body())
-    P.commit(typed_state(P, "blk", state_name="U").next, Uf)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    P.commit(endpoint, P.linear_combine("range_next", Uf, at=endpoint.point))
     src = P.emit_cpp_program()
     assert src.count("ctx.rhs_into") == 3, "static_range(3) unrolls the body 3 times\n%s" % src
     assert "for (" not in src, "static_range must NOT emit a C++ loop (it is unrolled)\n%s" % src
@@ -73,7 +79,8 @@ def test_range_emits_for(t):
     P = t.Program("rg")
     U = typed_state(P, "blk")
     Uf = P.range(U, 3, _fe_body())
-    P.commit(typed_state(P, "blk", state_name="U").next, Uf)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    P.commit(endpoint, P.linear_combine("range_next", Uf, at=endpoint.point))
     src = P.emit_cpp_program()
     assert "for (int i" in src, "range must emit a C++ for loop\n%s" % src
     assert src.count("ctx.rhs_into") == 1, "range emits the body ONCE (inside the loop)\n%s" % src
@@ -84,7 +91,8 @@ def test_if_emits_branch(t):
     U = typed_state(P, "blk")
     cond = P.norm_inf(U) > 0.0
     Uf = P.if_(U, cond, _fe_body())
-    P.commit(typed_state(P, "blk", state_name="U").next, Uf)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    P.commit(endpoint, P.linear_combine("if_next", Uf, at=endpoint.point))
     src = P.emit_cpp_program()
     assert "pops::norm_inf" in src, "norm_inf must lower to pops::norm_inf\n%s" % src
     assert "if (" in src, "if_ must emit a C++ if branch\n%s" % src
@@ -117,7 +125,9 @@ def test_range_count_changes_hash(t):
     def prog(count):
         P = t.Program("rg")
         U = typed_state(P, "blk")
-        P.commit(typed_state(P, "blk", state_name="U").next, P.range(U, count, _fe_body()))
+        endpoint = typed_state(P, "blk", state_name="U").next
+        result = P.range(U, count, _fe_body())
+        P.commit(endpoint, P.linear_combine("range_next", result, at=endpoint.point))
         return P._ir_hash()
     assert prog(3) != prog(4), "a different range count must change the IR hash (cache key)"
 
@@ -127,7 +137,10 @@ def test_static_range_body_changes_hash(t):
         P = t.Program("sr")
         U = typed_state(P, "blk")
         target = P.linear_combine("target", 2.0 * U)
-        P.commit(typed_state(P, "blk", state_name="U").next, P.static_range(U, 2, lambda _P, x: _P.linear_combine(c * x + 0.5 * target)))
+        endpoint = typed_state(P, "blk", state_name="U").next
+        result = P.static_range(
+            U, 2, lambda _P, x: _P.linear_combine(c * x + 0.5 * target))
+        P.commit(endpoint, P.linear_combine("range_next", result, at=endpoint.point))
         return P._ir_hash()
     assert prog(0.5) != prog(0.25), "a different unrolled body must change the IR hash"
 
@@ -140,7 +153,8 @@ def _contraction_program(t, kind, count, *, name):
     target = P.linear_combine("target", 2.0 * U0)
     body = _contraction_body(target)
     xf = P.range(U0, count, body) if kind == "range" else P.static_range(U0, count, body)
-    P.commit(typed_state(P, "blk", state_name="U").next, xf)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    P.commit(endpoint, P.linear_combine("contraction_next", xf, at=endpoint.point))
     return P
 
 
@@ -152,7 +166,8 @@ def _if_program(t, *, name, threshold):
     diff = P.linear_combine("diff", target - U0)
     cond = P.norm_inf(diff) > threshold
     xf = P.if_(U0, cond, _contraction_body(target))
-    P.commit(typed_state(P, "blk", state_name="U").next, xf)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    P.commit(endpoint, P.linear_combine("if_next", xf, at=endpoint.point))
     return P
 
 
@@ -188,13 +203,13 @@ def _run_section_b(t):
 
     count = 3
     try:
-        compiled = pops.codegen.compile_problem(model=_passive_model("cf_rg"),
+        compiled = compile_drivers.compile_problem(model=_passive_model("cf_rg"),
                                        time=_contraction_program(t, "range", count, name="cf_range"))
-        compiled_sr = pops.codegen.compile_problem(model=_passive_model("cf_sr"),
+        compiled_sr = compile_drivers.compile_problem(model=_passive_model("cf_sr"),
                                           time=_contraction_program(t, "static", count, name="cf_sr"))
-        compiled_if = pops.codegen.compile_problem(model=_passive_model("cf_if"),
+        compiled_if = compile_drivers.compile_problem(model=_passive_model("cf_if"),
                                           time=_if_program(t, name="cf_if", threshold=1e3))  # cond FALSE
-        compiled_if_t = pops.codegen.compile_problem(model=_passive_model("cf_ift"),
+        compiled_if_t = compile_drivers.compile_problem(model=_passive_model("cf_ift"),
                                             time=_if_program(t, name="cf_ift", threshold=0.0))  # TRUE
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- (B) skipped: compile_problem could not build a .so: %s --" % str(exc)[:160])

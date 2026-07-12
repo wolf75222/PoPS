@@ -26,6 +26,7 @@ one, GMRES minimises the residual over the Krylov subspace and converges.
 The non-symmetric C++ guard (CG stagnates while gmres recovers phi_exact) is also pinned directly in
 tests/cpp/unit/elliptic/test_generic_krylov.cpp, which is fully validatable on every backend without the Python toolchain.
 """
+from pops.codegen import compile_drivers
 from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
@@ -74,7 +75,9 @@ def _spd_program(t, *, name="gmres_spd", method="gmres", tol=1e-9, max_iter=300,
     P.set_apply(A, apply)
     phi = P.solve_linear(operator=A, rhs=U, method=_krylov(method), tol=tol, max_iter=max_iter,
                          restart=restart)
-    P.commit(typed_state(P, "blk", state_name="U").next, phi)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    final = P.linear_combine("phi_next", phi, at=endpoint.point)
+    P.commit(endpoint, final)
     return P
 
 
@@ -106,7 +109,9 @@ def _nonsym_program(t, *, name="gmres_nonsym", tol=1e-9, max_iter=300, restart=3
     if method == "gmres":
         kw["restart"] = restart  # restart is gmres-only (rejected for cg/bicgstab)
     phi = P.solve_linear(**kw)
-    P.commit(typed_state(P, "blk", state_name="U").next, phi)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    final = P.linear_combine("phi_next", phi, at=endpoint.point)
+    P.commit(endpoint, final)
     return P
 
 
@@ -273,7 +278,7 @@ def _run_one(t, pops, np, program, name):
 
 
     try:
-        compiled = pops.codegen.compile_problem(model=_passive_model(name + "_prog"), time=program)
+        compiled = compile_drivers.compile_problem(model=_passive_model(name + "_prog"), time=program)
         compiled_model = _passive_model(name + "_block").compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- (B) skipped: could not build the .so: %s --" % str(exc)[:200])

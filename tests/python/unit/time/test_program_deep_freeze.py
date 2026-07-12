@@ -5,13 +5,14 @@ from types import MappingProxyType
 
 import pytest
 
-from pops.time import Program
+from pops.time import Program, StagePoint, TimePoint
 
 
 def _program():
     program = Program("deep-program")
     state = typed_state(program, "fluid", state_name="U")
-    program.commit(state.next, state.n)
+    final = program.linear_combine("final", state.n, at=state.next.point)
+    program.commit(state.next, final)
     return program
 
 
@@ -72,19 +73,21 @@ def test_frozen_temporal_handles_preserve_materialized_pure_reads():
     program = Program("frozen-temporal-reads")
     state = typed_state(program, "fluid", state_name="U")
     current = state.n
-    stage = state.stage("predictor")
+    point = StagePoint("predictor", {"main": TimePoint(state.clock, 1)})
+    stage = state.stage("predictor", point=point)
     defined = program.define(stage, current)
     program.keep_history(state, depth=1)
     previous = state.prev.value
     endpoint = state.next
-    program.commit(endpoint, defined)
+    final = program.linear_combine("final", defined, at=endpoint.point)
+    program.commit(endpoint, final)
 
     program.freeze()
 
     # Defining the stage gives the current state record a canonical named replacement with the same
     # SSA id. The frozen getter must return that canonical record without trying to republish it.
     assert state.n is defined
-    assert state.stage("predictor") is stage
+    assert state.stage("predictor", point=point) is stage
     assert stage.value is defined
     assert state.prev.value is previous
     assert state.next is endpoint
@@ -98,7 +101,8 @@ def test_frozen_temporal_handles_refuse_new_lazy_declarations_clearly():
     with pytest.raises(RuntimeError, match="frozen"):
         _ = state.n
     with pytest.raises(RuntimeError, match="frozen"):
-        state.stage("late")
+        state.stage(
+            "late", point=StagePoint("late", {"main": TimePoint(state.clock, 1)}))
     with pytest.raises(RuntimeError, match="frozen"):
         _ = state.prev
     with pytest.raises(RuntimeError, match="frozen"):

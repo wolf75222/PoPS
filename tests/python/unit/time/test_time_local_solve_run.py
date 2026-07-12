@@ -20,6 +20,7 @@ cell by cell via a dense per-cell inverse) -- reusing ProgramContext + for_each_
     once _pops is rebuilt; skips if _pops lacks install_program, numpy/_pops is absent, no compiler/Kokkos
     is visible, or the .so compile fails -- never faking the engine.
 """
+from pops.codegen import compile_drivers
 from typed_program_support import typed_state
 
 from pops.params import ConstParam
@@ -93,9 +94,11 @@ def lorentz_program(name="lorentz_step", model=None):
     P = adctime.Program(name)
     dt = P.dt
     U = typed_state(P, "plasma", model=model)
-    Q = P.linear_combine("Q", 1.0 * U)  # a State scratch == U (the solve rhs)
+    endpoint = typed_state(P, "plasma", state_name="U", model=model).next
+    Q = P.linear_combine(
+        "Q", 1.0 * U, at=endpoint.point)  # a State scratch == U (the solve rhs)
     W = P.solve_local_linear(name="W", operator=P.I - dt * P._linear_source("lorentz"), rhs=Q)
-    P.commit(typed_state(P, "plasma", state_name="U", model=model).next, W)
+    P.commit(endpoint, W)
     return P
 
 
@@ -121,9 +124,10 @@ zero9 = [[0.0] * 9 for _ in range(9)]
 big.linear_source("L", zero9)
 Pbig = adctime.Program("big")
 Ub = typed_state(Pbig, "blk", model=big)
-Qb = Pbig.linear_combine("Qb", 1.0 * Ub)
-Pbig.commit(typed_state(Pbig, "blk", state_name="U", model=big).next, Pbig.solve_local_linear(name="Wb", operator=Pbig.I - Pbig.dt * Pbig._linear_source("L"),
-                                           rhs=Qb))
+endpoint_big = typed_state(Pbig, "blk", state_name="U", model=big).next
+Qb = Pbig.linear_combine("Qb", 1.0 * Ub, at=endpoint_big.point)
+Pbig.commit(endpoint_big, Pbig.solve_local_linear(
+    name="Wb", operator=Pbig.I - Pbig.dt * Pbig._linear_source("L"), rhs=Qb))
 chk(raises(ValueError, lambda: Pbig.emit_cpp_program(model=big)),
     "n_cons > 8 dense-fallback guard fires")
 
@@ -162,7 +166,7 @@ dt = 0.05
 
 try:
     program_model = lorentz_model("lorentz_prog")
-    compiled = pops.codegen.compile_problem(
+    compiled = compile_drivers.compile_problem(
         model=program_model, time=lorentz_program(model=program_model))
 except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])

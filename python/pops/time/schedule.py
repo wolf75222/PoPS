@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import Any
 
 from pops.params.use_sites import ParamUse, resolve_param_use
+from pops.time.points import Clock
 from pops.time.value_metadata import _freeze_attr
 
 
@@ -36,7 +37,7 @@ class Schedule:
     ``on_start`` / ``on_end``, ``subcycle``); the ``policy`` decides what happens when it is NOT
     due (``recompute`` the default, ``hold`` the cached value, ``skip``, ``zero``,
     ``accumulate_dt``, or ``error``). Build a kind with the module helpers and set the policy by
-    chaining: ``every(10).hold()``.
+    chaining: ``every(10, clock=T.clock).hold()``.
 
     Only ``always()`` runs at ``sim.step`` today: the runtime that honors a non-trivial schedule
     (the typed cache, ``accumulate_dt``, the checkpoint) is the C++ part of ADC-458, so a node
@@ -63,15 +64,18 @@ class Schedule:
         "subcycle": MappingProxyType({"so_lowerable": True,  "host_cadence": False}),
     })
 
-    __slots__ = ("kind", "policy", "params")
+    __slots__ = ("clock", "kind", "policy", "params")
 
-    def __init__(self, kind: Any, policy: Any = "recompute", **params: Any) -> None:
+    def __init__(self, clock: Any, kind: Any, policy: Any = "recompute", **params: Any) -> None:
+        if type(clock) is not Clock:
+            raise TypeError("Schedule clock must be an exact Clock")
         if kind not in Schedule._KINDS:
             raise ValueError("schedule kind %r must be one of %s"
                              % (kind, ", ".join(Schedule._KINDS)))
         if policy not in Schedule._POLICIES:
             raise ValueError("schedule policy %r must be one of %s"
                              % (policy, ", ".join(Schedule._POLICIES)))
+        object.__setattr__(self, "clock", clock)
         object.__setattr__(self, "kind", kind)
         object.__setattr__(self, "policy", policy)
         object.__setattr__(self, "params", _freeze_param(params))
@@ -99,7 +103,7 @@ class Schedule:
         return Schedule._KIND_FACTS[self.kind]["host_cadence"]
 
     def _with_policy(self, policy: Any) -> Any:
-        return Schedule(self.kind, policy=policy, **self.params)
+        return Schedule(self.clock, self.kind, policy=policy, **self.params)
 
     def recompute(self) -> Any:
         """A copy whose off-cadence policy re-evaluates the node (the default)."""
@@ -141,39 +145,39 @@ class Schedule:
 assert set(Schedule._KIND_FACTS) == set(Schedule._KINDS)
 
 
-def always() -> Any:
+def always(*, clock: Any) -> Any:
     """Due every step, recomputed -- the default cadence (the only schedule that runs today)."""
-    return Schedule("always")
+    return Schedule(clock, "always")
 
 
-def every(n: Any) -> Any:
+def every(n: Any, *, clock: Any) -> Any:
     """Due every ``n`` macro-steps (``n`` a positive int)."""
     n = resolve_param_use(n, ParamUse.SCHEDULE, where="every(n=)")
     if isinstance(n, bool) or not (isinstance(n, int) and n > 0):
         raise ValueError("every(n): n must be a positive int, got %r" % (n,))
-    return Schedule("every", n=n)
+    return Schedule(clock, "every", n=n)
 
 
-def when(cond: Any) -> Any:
+def when(cond: Any, *, clock: Any) -> Any:
     """Due when the runtime condition ``cond`` holds (a Program Bool value or a callable)."""
-    return Schedule("when", cond=cond)
+    return Schedule(clock, "when", cond=cond)
 
 
-def on_start() -> Any:
+def on_start(*, clock: Any) -> Any:
     """Due only at the first step."""
-    return Schedule("on_start")
+    return Schedule(clock, "on_start")
 
 
-def on_end() -> Any:
+def on_end(*, clock: Any) -> Any:
     """Due only at the last step."""
-    return Schedule("on_end")
+    return Schedule(clock, "on_end")
 
 
-def subcycle(count: Any, dt: Any = None) -> Any:
+def subcycle(count: Any, dt: Any = None, *, clock: Any) -> Any:
     """Structured sub-cycling: ``count`` inner steps (of ``dt`` each, default ``macro_dt/count``)."""
     count = resolve_param_use(count, ParamUse.SCHEDULE, where="subcycle(count=)")
     if dt is not None:
         dt = resolve_param_use(dt, ParamUse.SCHEDULE, where="subcycle(dt=)")
     if isinstance(count, bool) or not (isinstance(count, int) and count > 0):
         raise ValueError("subcycle(count): count must be a positive int, got %r" % (count,))
-    return Schedule("subcycle", count=count, dt=dt)
+    return Schedule(clock, "subcycle", count=count, dt=dt)

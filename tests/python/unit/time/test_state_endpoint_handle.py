@@ -12,6 +12,10 @@ from pops.model import Module, StateSpace
 from pops.problem import Problem
 
 
+def _at_endpoint(program, state, *, name="final"):
+    return program.linear_combine(name, state.n, at=state.next.point)
+
+
 def test_next_is_a_cached_owner_qualified_endpoint():
     program = Program("endpoint")
     state = typed_state(program, "transport", state_name="tracer")
@@ -78,9 +82,10 @@ def test_commit_accepts_endpoint_and_value_as_two_distinct_roles():
     program = Program("commit")
     state = typed_state(program, "transport", state_name="tracer")
 
-    program.commit(state.next, state.n)
+    final = _at_endpoint(program, state)
+    program.commit(state.next, final)
 
-    assert program.commits() == {state.state: state.n}
+    assert program.commits() == {state.state: final}
 
 
 def test_commit_rejects_an_endpoint_owned_by_another_program():
@@ -115,9 +120,11 @@ def test_commit_many_accepts_only_endpoint_to_value_mappings():
     left = typed_state(program, "left", state_name="U")
     right = typed_state(program, "right", state_name="U")
 
-    program.commit_many({left.next: left.n, right.next: right.n})
+    left_final = _at_endpoint(program, left, name="left_final")
+    right_final = _at_endpoint(program, right, name="right_final")
+    program.commit_many({left.next: left_final, right.next: right_final})
 
-    assert program.commits() == {left.state: left.n, right.state: right.n}
+    assert program.commits() == {left.state: left_final, right.state: right_final}
 
 
 def test_commit_many_rejects_the_old_block_string_mapping():
@@ -135,7 +142,10 @@ def test_commit_many_rejects_cross_block_as_one_atomic_group():
     right = typed_state(program, "right", state_name="U")
 
     with pytest.raises(ValueError, match=r"block 'right'.*block 'left'"):
-        program.commit_many({left.next: left.n, right.next: left.n})
+        left_final = _at_endpoint(program, left, name="left_final")
+        wrong_right = program.linear_combine(
+            "wrong_right", left.n, at=right.next.point)
+        program.commit_many({left.next: left_final, right.next: wrong_right})
     assert program.commits() == {}, "the valid first entry must not be committed partially"
 
 
@@ -144,9 +154,10 @@ def test_commit_many_rejects_foreign_endpoint_as_one_atomic_group():
     foreign_program = Program("foreign_owner")
     left = typed_state(program, "left", state_name="U")
     foreign = typed_state(foreign_program, "foreign", state_name="U")
+    left_final = _at_endpoint(program, left, name="left_final")
 
     with pytest.raises(ValueError, match="different Program"):
-        program.commit_many({left.next: left.n, foreign.next: foreign.n})
+        program.commit_many({left.next: left_final, foreign.next: foreign.n})
     assert program.commits() == {}, "endpoint-owner validation must precede every write"
 
 
@@ -159,11 +170,15 @@ def test_commit_many_accepts_distinct_qualified_states_in_the_same_block():
     primary = program.state(block, module.state_handle(primary_space))
     alternate = program.state(block, module.state_handle(alternate_space))
 
-    program.commit_many({primary.next: primary.n, alternate.next: alternate.n})
+    primary_final = program.linear_combine(
+        "primary_final", primary.n, at=primary.next.point)
+    alternate_final = program.linear_combine(
+        "alternate_final", alternate.n, at=alternate.next.point)
+    program.commit_many({primary.next: primary_final, alternate.next: alternate_final})
 
     assert program.commits() == {
-        primary.state: primary.n,
-        alternate.state: alternate.n,
+        primary.state: primary_final,
+        alternate.state: alternate_final,
     }
 
 
@@ -181,7 +196,8 @@ def test_scalar_field_linear_combine_preserves_the_single_known_block_for_commit
     solved = _block_scalar_field(program, "transport", "solved")
     scratch = program.scalar_field("scratch")
 
-    combined = program.linear_combine("combined", solved + scratch)
+    combined = program.linear_combine(
+        "combined", solved + scratch, at=endpoint.point)
 
     assert solved.block is endpoint.block
     assert scratch.block is None

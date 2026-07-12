@@ -32,8 +32,10 @@ def _solve_program(preconditioner=None):
     kw = dict(operator=A, rhs=U, method=GMRES(max_iter=200), tol=1e-10, max_iter=200, restart=8)
     if preconditioner is not None:
         kw["preconditioner"] = preconditioner
+    endpoint = typed_state(P, "blk", state_name="U").next
+    kw["rhs"] = P.linear_combine("rhs", U, at=endpoint.point)
     phi = P.solve_linear(**kw)
-    P.commit(typed_state(P, "blk", state_name="U").next, phi)
+    P.commit(endpoint, phi)
     return P
 
 

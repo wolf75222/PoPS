@@ -93,7 +93,7 @@ def _decay_program(model, name="decay_runtime"):
     endpoint = P.state(block, state)
     U = endpoint.n
     S = P._source("decay", state=U)
-    P.commit(endpoint.next, P.linear_combine("U1", U + P.dt * S))
+    P.commit(endpoint.next, P.linear_combine("U1", U + P.dt * S, at=endpoint.next.point))
     return P
 
 

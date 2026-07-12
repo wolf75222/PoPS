@@ -10,13 +10,22 @@ pops = pytest.importorskip("pops", exc_type=ImportError)
 from pops.codegen.compile_provenance import read_artifact_sidecar  # noqa: E402
 from pops.identity import Identity  # noqa: E402
 from pops.model import Module  # noqa: E402
-class _Program:
-    name = "same-program"
-    source = 'extern "C" void pops_install_program(void*) {}\n'
+from pops.time import Program  # noqa: E402
 
-    def emit_cpp_program(self, *, model, target):
-        del model, target
-        return self.source
+
+def _program(model):
+    """Exact frozen compiler input; compile_problem owns detachment and ProgramGraph lowering."""
+    if not model.state_spaces():
+        model.state_space("U", ("u",))
+    block = pops.Problem(name="program-case").add_block("u", model)
+    state = model.state_handle(model.state_spaces()["U"])
+    program = Program("same-program")
+    temporal = program.state(block, state)
+    program.commit(
+        temporal.next,
+        program.linear_combine("u_next", temporal.n, at=temporal.next.point),
+    )
+    return program.freeze()
 
 
 class _Compiled:
@@ -30,6 +39,7 @@ class _Compiled:
         self.problem_hash = metadata["problem_hash"]
         self.cache_key = metadata["cache_key"]
         self._problem_snapshot = metadata.get("problem_snapshot")
+        self.program_graph = metadata["program_graph"]
 
     @property
     def authoring_snapshot(self):
@@ -87,7 +97,7 @@ def test_distinct_problem_snapshots_get_distinct_paths_keys_and_matching_sidecar
         monkeypatch, tmp_path):
     drivers, compiled_paths = _install_fake_toolchain(monkeypatch, tmp_path)
     model = Module("same-model")
-    program = _Program()
+    program = _program(model)
     first_problem = pops.Problem(name="first-problem").block("u", physics=model)
     second_problem = pops.Problem(name="second-problem").block("u", physics=model)
     first_snapshot = first_problem.freeze()
@@ -118,11 +128,16 @@ def test_distinct_problem_snapshots_get_distinct_paths_keys_and_matching_sidecar
     assert compiled_paths == [first.so_path, second.so_path]
 
 
-def test_advanced_compile_problem_without_semantic_authority_is_rejected(monkeypatch, tmp_path):
+def test_compile_problem_derives_semantic_authority_from_exact_program(monkeypatch, tmp_path):
+    from pops.time.graph import ProgramGraph
+
     drivers, _ = _install_fake_toolchain(monkeypatch, tmp_path)
-    program = _Program()
-    with pytest.raises(TypeError, match="semantic program identity requires"):
-        drivers.compile_problem(time=program, model=Module("same-model"))
+    model = Module("same-model")
+    compiled = drivers.compile_problem(time=_program(model), model=model)
+    assert isinstance(compiled.semantic_identity, Identity)
+    assert type(compiled.program_graph) is ProgramGraph
+    assert compiled.program._compiled_detached is True
+    assert compiled.program.to_graph().graph_hash == compiled.program_graph.graph_hash
 
 
 def test_different_semantic_snapshots_never_alias_one_artifact_identity(
@@ -155,7 +170,7 @@ def test_different_semantic_snapshots_never_alias_one_artifact_identity(
     assert first_snapshot.artifact_hash == second_snapshot.artifact_hash
 
     model = Module("same-model")
-    program = _Program()
+    program = _program(model)
     first = drivers.compile_problem(
         time=program, model=model, problem_snapshot=first_snapshot)
     second = drivers.compile_problem(
@@ -177,6 +192,7 @@ def test_compile_authenticates_full_snapshot_before_using_artifact_hash(monkeypa
     object.__setattr__(snapshot, "_hash", "a" * 64)
 
     with pytest.raises(ValueError, match="canonical payload"):
+        model = Module("same-model")
         drivers.compile_problem(
-            time=_Program(), model=Module("same-model"), problem_snapshot=snapshot)
+            time=_program(model), model=model, problem_snapshot=snapshot)
     assert compiled_paths == []

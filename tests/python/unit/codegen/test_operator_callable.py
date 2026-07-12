@@ -65,7 +65,7 @@ def test_callable_handle_ir_byte_identical_to_pcall():
         U = state.n
         f = P.call(_operator_handle(m, "fields_from_state"), U)
         R = P.call(h["explicit_rhs"], U, f)
-        P.commit(state.next, P.linear_combine("u1", U + P.dt * R))
+        P.commit(state.next, P.linear_combine("u1", U + P.dt * R, at=state.next.point))
         return P
 
     def via_callable():
@@ -73,7 +73,7 @@ def test_callable_handle_ir_byte_identical_to_pcall():
         U = state.n
         f = _operator_handle(m, "fields_from_state")(U)  # callable facade
         R = h["explicit_rhs"](U, f)          # callable facade
-        P.commit(state.next, P.linear_combine("u1", U + P.dt * R))
+        P.commit(state.next, P.linear_combine("u1", U + P.dt * R, at=state.next.point))
         return P
 
     a, b = via_pcall(), via_callable()
@@ -95,16 +95,17 @@ def test_callable_facade_across_all_kinds():
         fields = _operator_handle(m, "fields_from_state")
         f = fields(U) if via_callable else P.call(fields, U)
         s = h["electric"](U, f) if via_callable else P.call(h["electric"], U, f)
-        P.commit(state.next, P.linear_combine("u1", U + P.dt * s))
+        P.commit(state.next, P.linear_combine("u1", U + P.dt * s, at=state.next.point))
         return P
 
     def lin(via_callable):
         P, state = _program_state(m, "p")
         U = state.n
         fields = _operator_handle(m, "fields_from_state")
-        f = fields(U) if via_callable else P.call(fields, U)
+        rhs = P.linear_combine("rhs", U, at=state.next.point)
+        f = fields(rhs) if via_callable else P.call(fields, rhs)
         L = h["lorentz"](f) if via_callable else P.call(h["lorentz"], f)
-        U1 = P.solve_local_linear("u1", operator=P.I - P.dt * L, rhs=U, fields=f)
+        U1 = P.solve_local_linear("u1", operator=P.I - P.dt * L, rhs=rhs, fields=f)
         P.commit(state.next, U1)
         return P
 

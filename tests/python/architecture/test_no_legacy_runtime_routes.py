@@ -428,7 +428,9 @@ def test_field_solve_facade_lowers_to_program_ir_and_context():
     )
     program.commit(
         temporal.next,
-        program.linear_combine("U_next", state + program.dt * rhs),
+        program.linear_combine(
+            "U_next", state + program.dt * rhs, at=temporal.next.point
+        ),
     )
     source = program.emit_cpp_program(model=None)
 

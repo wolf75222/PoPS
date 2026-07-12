@@ -19,9 +19,10 @@ below so the public surface of ``pops.codegen.program_codegen`` is unchanged:
   - ``program_emit_control``       -- the body walk + control-flow (while/range/if) emitters;
   - ``program_emit_ops``           -- the per-op ``_emit_op`` dispatcher;
   - ``program_emit_amr``           -- the AMR install-entry emitter (target='amr_system', ADC-508).
+  - ``program_metadata``           -- complete owner-qualified GeneratedModule metadata.
 
-The orchestration (``emit_cpp_program`` + the block-name / module-metadata / dt-bound
-emitters + the lowerability checks) stays here.
+The orchestration (``emit_cpp_program`` + the block-name / dt-bound emitters + the lowerability
+checks) stays here.
 
 The emission-only tables (_MODEL_OPS / _ALLOWED_OPS / _PROFILE_SKIP_OPS / _AUX_OUTPUT_OPS)
 are module-level constants in ``program_emit_kernels``, re-exported here.
@@ -93,6 +94,7 @@ from pops.codegen.program_emit_params import (  # noqa: F401
     program_param_entries as _program_param_entries,
 )
 from pops.codegen.program_emit_amr import _emit_amr_install  # noqa: F401
+from pops.codegen.program_metadata import emit_module_metadata as _emit_module_metadata
 from pops.codegen.compile_emit import _emit_route_manifest  # noqa: F401 (ADC-599 embedded manifest)
 from pops.codegen.program_lowerability import (
     all_ops as _all_ops,
@@ -100,11 +102,18 @@ from pops.codegen.program_lowerability import (
     check_schedules_lowerable as _check_schedules_lowerable,
 )
 from pops.time.program_space_resolution import resolve_program_spaces
+from pops.codegen.program_models import ProgramModelGraph, model_for_node
 
 
 # --- Program -> C++ lowering (free functions taking `program`) ------------------------------
 # --- C++ codegen (Phase 2c-ii / Phase 4b): lower the IR to a problem.so source ---
-def emit_cpp_program(program: Any, model: Any = None, target: str = "system") -> str:
+def emit_cpp_program(
+    program: Any,
+    model: Any = None,
+    target: str = "system",
+    *,
+    model_graph: Any = None,
+) -> str:
     """Generate the C++ source of a problem.so implementing this Program (codegen).
 
     Exports the stable .so ABI -- ``pops_program_abi_key`` (the ``POPS_ABI_KEY_LITERAL``
@@ -179,22 +188,27 @@ def emit_cpp_program(program: Any, model: Any = None, target: str = "system") ->
     ``Sum_s elliptic_rhs_s(U_s)`` reading EVERY listed block's stage state at once
     (``assemble_poisson_rhs_from_blocks``), each slotted at its block index (nullptr = the block's
     live state) -- the coupled multi-species field solve."""
-    program = resolve_program_spaces(program, model)
+    if model is not None and model_graph is not None:
+        raise TypeError("emit_cpp_program received competing model and model_graph authorities")
+    if model_graph is not None and type(model_graph) is not ProgramModelGraph:
+        raise TypeError("model_graph must be an exact ProgramModelGraph")
+    authority = model_graph if model_graph is not None else model
+    program = resolve_program_spaces(program, authority)
     if target not in ("system", "amr_system"):
         raise ValueError("emit_cpp_program: target 'system' | 'amr_system' (got %r)" % (target,))
     program.validate()
-    _check_lowerable(program, model)
-    prelude, body = _emit_body(program, model, target=target)
+    _check_lowerable(program, authority)
+    prelude, body = _emit_body(program, authority, target=target)
     # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_program_has_dt_bound()
     # (true iff a bound was set) and pops_program_dt_bound(ProgramContext*, cfl) (the lowered scalar
     # expression). Without a bound, has_dt_bound() returns false and the dt_bound function returns a
     # +inf sentinel (never reached: the loader stores the closure only when has_dt_bound() is true).
-    has_dt_bound, dt_bound_body = _emit_dt_bound(program, model)
+    has_dt_bound, dt_bound_body = _emit_dt_bound(program, authority)
     return _PROGRAM_CPP_TEMPLATE.format(
         name=json.dumps(program.name), hash=program._ir_hash(), prelude=prelude, body=body,
         has_dt_bound=has_dt_bound, dt_bound_body=dt_bound_body,
-        module_metadata=_emit_module_metadata(program, model),
-        program_params=_emit_program_params(program, model),
+        module_metadata=_emit_module_metadata(program, authority),
+        program_params=_emit_program_params(program, authority),
         block_names=_emit_block_names(program),
         route_manifest=_emit_route_manifest("pops_program_route_manifest"),
         coeff_elliptic_include=_coeff_elliptic_include(program),
@@ -222,53 +236,6 @@ def _emit_block_names(program: Any) -> str:
         'extern "C" int pops_program_block_count() { return %d; }\n' % len(names) +
         'extern "C" const char* pops_program_block_name(int i) {\n'
         '  switch (i) {\n%s    default: return "";\n  }\n}\n' % cases)
-
-def _emit_module_metadata(program: Any, model: Any = None) -> str:
-    """C++ source of the GeneratedModule metadata the .so exports (Spec 2 / ADC-442).
-
-    A combined model+program .so carries, alongside ``GeneratedProgram`` (the step), a
-    ``GeneratedModule`` descriptor: ``extern "C"`` accessors exposing the typed operator registry
-    -- a count and, per integer ``OperatorId`` (the array index), the operator name / kind /
-    signature / requirements -- plus the state and field space names. These are read ONCE at
-    install (introspection + requirement validation, ``module_metadata.hpp``); the step body never
-    calls them, so operators stay inlined and there is no string lookup in any hot kernel.
-    ``model=None`` emits an empty module (count 0). The metadata is derived from the model's typed
-    registry, so it does not perturb the program IR hash.
-    """
-    ops, states, fields = [], [], []
-    if model is not None and hasattr(model, "operator_registry"):
-        reg = model.operator_registry()
-        ops = [reg.get(nm) for nm in reg.names()]
-        if hasattr(model, "state_space"):
-            states = [model.state_space().name]
-        if hasattr(model, "field_space"):
-            fields = [model.field_space().name]
-
-    def table(accessor: Any, values: Any) -> str:
-        cases = "".join('    case %d: return %s;\n' % (i, json.dumps(v))
-                        for i, v in enumerate(values))
-        return ('extern "C" const char* pops_module_%s(int i) {\n'
-                '  switch (i) {\n%s    default: return "";\n  }\n}\n' % (accessor, cases))
-
-    def req_json(op: Any) -> str:
-        # The operator's own kind always wins (a requirements dict must not shadow it).
-        return json.dumps({**op.requirements, "kind": op.kind})
-
-    parts = [
-        "// GeneratedModule metadata (Spec 2 / ADC-442): the typed operator registry exposed by\n"
-        "// the .so for introspection + install-time validation. OperatorId = the array index.\n"
-        "// NOT called from any hot kernel -- operators are inlined at codegen.\n",
-        'extern "C" int pops_module_operator_count() { return %d; }\n' % len(ops),
-        'extern "C" int pops_module_state_space_count() { return %d; }\n' % len(states),
-        'extern "C" int pops_module_field_space_count() { return %d; }\n' % len(fields),
-        table("operator_name", [op.name for op in ops]),
-        table("operator_kind", [op.kind for op in ops]),
-        table("operator_signature", [repr(op.signature) for op in ops]),
-        table("operator_requirements", [req_json(op) for op in ops]),
-        table("state_space_name", states),
-        table("field_space_name", fields),
-    ]
-    return "".join(parts)
 
 def _emit_dt_bound(program: Any, model: Any = None) -> tuple:
     """Lower the optional dt bound (spec s18 / ADC-417) to ``(has_dt_bound, body)``: the bool literal
@@ -321,12 +288,15 @@ def _check_lowerable(program: Any, model: Any = None) -> None:
     # Per-cell dense fallback bound for the local dense solves (mat_inverse<N> uses fixed stack
     # buffers): solve_local_linear (M = I - a*L) and solve_local_nonlinear (the Newton FD Jacobian).
     dense_ops = ("solve_local_linear", "solve_local_nonlinear")
-    if model is not None and any(v.op in dense_ops for v in _all_ops(program)):
-        impl = _model_impl(model)
+    for value in (v for v in _all_ops(program) if v.op in dense_ops):
+        if model is None:
+            continue
+        impl = _model_impl(model_for_node(model, value))
         n_cons = len(getattr(impl, "cons_names", []) or [])
         if n_cons > 8:
             raise ValueError(
-                "local dense fallback currently supports n_cons <= 8 (got %d)" % n_cons)
+                "local dense fallback for %r supports n_cons <= 8 (got %d)"
+                % (value.name, n_cons))
 
 
 # 'linear_source' is a pure NAME-reference SSA node (vtype 'operator'): it carries no runtime work
@@ -345,7 +315,13 @@ def _check_lowerable(program: Any, model: Any = None) -> None:
 def _check_op_lowerable(program: Any, v: Any, model: Any) -> None:
     """Lowerability check for a single op (used for both the top-level walk and a while sub-block).
     Raises NotImplementedError / ValueError naming the offending construct (never a mis-lowering)."""
-    _validate_matrix_free_contract(v, model)
+    node_model = (
+        model_for_node(model, v)
+        if model is not None
+        and (v.block is not None or v.attrs.get("operator_handle") is not None)
+        else model
+    )
+    _validate_matrix_free_contract(v, node_model)
     if v.op in _MODEL_OPS:
         if model is None:
             raise NotImplementedError(
@@ -402,10 +378,10 @@ def _check_op_lowerable(program: Any, v: Any, model: Any) -> None:
                     "emit_cpp_program cannot lower solve_fields with a named elliptic field "
                     "('%s') without the physical model that declares it (m.elliptic_field); pass "
                     "model= (compile_problem threads it through)" % field)
-            if field not in _model_impl(model)._elliptic_fields:
+            if field not in _model_impl(node_model)._elliptic_fields:
                 raise ValueError(
                     "unknown elliptic_field '%s' in solve_fields '%s'; declared: %s"
-                    % (field, v.name, sorted(_model_impl(model)._elliptic_fields)))
+                    % (field, v.name, sorted(_model_impl(node_model)._elliptic_fields)))
         return
     if v.op == "rhs":
         named_fluxes = _named_fluxes(v)
@@ -423,7 +399,7 @@ def _check_op_lowerable(program: Any, v: Any, model: Any) -> None:
                     "emit_cpp_program cannot lower rhs '%s' with named fluxes %r without the "
                     "physical model that declares them (m.flux_term); pass model= "
                     "(compile_problem threads it through)" % (v.name, named_fluxes))
-            impl_f = _model_impl(model)
+            impl_f = _model_impl(node_model)
             ft = impl_f._flux_terms
             for f in named_fluxes:
                 if f not in ft:
@@ -448,7 +424,7 @@ def _check_op_lowerable(program: Any, v: Any, model: Any) -> None:
                 "emit_cpp_program cannot lower rhs '%s' with named sources %r without the "
                 "physical model that declares them (m.source_term); pass model= "
                 "(compile_problem threads it through)" % (v.name, extra))
-        impl = _model_impl(model)
+        impl = _model_impl(node_model)
         # ADC-425: the named sources are axpy'd on top of an EXPLICIT base. With "default" requested
         # the base is ctx.rhs_into (flux + the model's default/composite source); without it the base
         # is ctx.neg_div_flux_default_into (flux only). Either way the default source is folded in iff

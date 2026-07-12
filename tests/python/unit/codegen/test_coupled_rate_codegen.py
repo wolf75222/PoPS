@@ -54,13 +54,15 @@ def _two_fluid_program():
     e_n = typed_state(P, "electrons", space=e, model=mod, state=e_state)
     i_n = typed_state(P, "ions", space=i, model=mod, state=i_state)
     C = P._call("collision", e_n, i_n)
+    e_next = typed_state(P, "electrons", state_name=e.name, space=e,
+                         model=mod, state=e_state).next
+    i_next = typed_state(P, "ions", state_name=i.name, space=i,
+                         model=mod, state=i_state).next
     P.commit_many({
-        typed_state(P, "electrons", state_name=e.name, space=e,
-                    model=mod, state=e_state).next:
-            P.linear_combine("e1", e_n + P.dt * C[e_n.block]),
-        typed_state(P, "ions", state_name=i.name, space=i,
-                    model=mod, state=i_state).next:
-            P.linear_combine("i1", i_n + P.dt * C[i_n.block]),
+        e_next: P.linear_combine(
+            "e1", e_n + P.dt * C[e_n.block], at=e_next.point),
+        i_next: P.linear_combine(
+            "i1", i_n + P.dt * C[i_n.block], at=i_next.point),
     })
     return mod, P
 
@@ -147,13 +149,15 @@ def test_coupled_rate_with_prim_var_is_deferred():
     e_n = typed_state(P, "electrons", space=e, model=mod, state=e_state)
     i_n = typed_state(P, "ions", space=i, model=mod, state=i_state)
     C = P._call("collision", e_n, i_n)
+    e_next = typed_state(P, "electrons", state_name=e.name, space=e,
+                         model=mod, state=e_state).next
+    i_next = typed_state(P, "ions", state_name=i.name, space=i,
+                         model=mod, state=i_state).next
     P.commit_many({
-        typed_state(P, "electrons", state_name=e.name, space=e,
-                    model=mod, state=e_state).next:
-            P.linear_combine("e1", e_n + P.dt * C[e_n.block]),
-        typed_state(P, "ions", state_name=i.name, space=i,
-                    model=mod, state=i_state).next:
-            P.linear_combine("i1", i_n + P.dt * C[i_n.block]),
+        e_next: P.linear_combine(
+            "e1", e_n + P.dt * C[e_n.block], at=e_next.point),
+        i_next: P.linear_combine(
+            "i1", i_n + P.dt * C[i_n.block], at=i_next.point),
     })
     with pytest.raises(NotImplementedError, match="ADC-457"):
         P._check_lowerable(None)
@@ -194,13 +198,15 @@ def test_read_only_catalyst_input_is_bound():
     i_n = typed_state(P, "i", space=i, model=mod, state=i_state)
     n_n = typed_state(P, "n", space=n, model=mod, state=n_state)
     C = P._call("ioniz", e_n, i_n, n_n)
+    e_next = typed_state(P, "e", state_name=e.name, space=e,
+                         model=mod, state=e_state).next
+    i_next = typed_state(P, "i", state_name=i.name, space=i,
+                         model=mod, state=i_state).next
     P.commit_many({
-        typed_state(P, "e", state_name=e.name, space=e,
-                    model=mod, state=e_state).next:
-            P.linear_combine("e1", e_n + P.dt * C[e_n.block]),
-        typed_state(P, "i", state_name=i.name, space=i,
-                    model=mod, state=i_state).next:
-            P.linear_combine("i1", i_n + P.dt * C[i_n.block]),
+        e_next: P.linear_combine(
+            "e1", e_n + P.dt * C[e_n.block], at=e_next.point),
+        i_next: P.linear_combine(
+            "i1", i_n + P.dt * C[i_n.block], at=i_next.point),
     })
     src = P.emit_cpp_program(model=None)
     # the catalyst's read handle (3rd input -> u2) and its cons local must be emitted
@@ -221,13 +227,15 @@ def test_undefined_cons_var_is_rejected():
     e_n = typed_state(P, "electrons", space=e, model=mod, state=e_state)
     i_n = typed_state(P, "ions", space=i, model=mod, state=i_state)
     C = P._call("collision", e_n, i_n)
+    e_next = typed_state(P, "electrons", state_name=e.name, space=e,
+                         model=mod, state=e_state).next
+    i_next = typed_state(P, "ions", state_name=i.name, space=i,
+                         model=mod, state=i_state).next
     P.commit_many({
-        typed_state(P, "electrons", state_name=e.name, space=e,
-                    model=mod, state=e_state).next:
-            P.linear_combine("e1", e_n + P.dt * C[e_n.block]),
-        typed_state(P, "ions", state_name=i.name, space=i,
-                    model=mod, state=i_state).next:
-            P.linear_combine("i1", i_n + P.dt * C[i_n.block]),
+        e_next: P.linear_combine(
+            "e1", e_n + P.dt * C[e_n.block], at=e_next.point),
+        i_next: P.linear_combine(
+            "i1", i_n + P.dt * C[i_n.block], at=i_next.point),
     })
     with pytest.raises(NotImplementedError, match="ADC-457"):
         P._check_lowerable(None)

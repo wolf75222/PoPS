@@ -92,17 +92,55 @@ def test_no_model_empty_module():
     P.commit(
         target.next,
         P.linear_combine(
-            "u1", u + P.dt * P._rhs_legacy(state=u, fields=P.solve_fields(u))),
+            "u1", u + P.dt * P._rhs_legacy(state=u, fields=P.solve_fields(u)),
+            at=target.next.point,
+        ),
     )
     src = P.emit_cpp_program(model=None)
     assert "pops_module_operator_count() { return 0; }" in src
     print("OK  model=None emits an empty GeneratedModule (count 0)")
 
 
+def test_metadata_includes_every_declared_space_for_one_owner():
+    from pops.codegen.program_codegen import _emit_module_metadata
+    from pops.codegen.program_models import ProgramModelGraph
+    from pops.model import Module
+
+    module = Module("multi_space_metadata")
+    module.state_space("fluid", ("rho", "momentum"))
+    module.state_space("tracer", ("c",))
+    module.field_space("electrostatic", ("phi",))
+    module.field_space("magnetic", ("bx", "by"))
+
+    class RepresentativeEmitModel:
+        """Kernel model exposes one representative space; source Module owns the full inventory."""
+
+        def state_space(self):
+            return module.state_spaces()["fluid"]
+
+        def field_space(self):
+            return module.field_spaces()["electrostatic"]
+
+    owner = module.owner_path.canonical()
+    graph = ProgramModelGraph(
+        models_by_owner={owner: RepresentativeEmitModel()},
+        source_modules_by_owner={owner: module},
+        owners_by_block={"fluid": owner},
+        authorities_by_owner={owner: module.owner_path},
+    )
+    src = _emit_module_metadata(adctime.Program("metadata_only"), graph)
+
+    assert "pops_module_state_space_count() { return 2; }" in src
+    assert "pops_module_field_space_count() { return 2; }" in src
+    for name in ("fluid", "tracer", "electrostatic", "magnetic"):
+        assert 'return "%s";' % name in src
+
+
 def main():
     test_metadata_block_emitted()
     test_metadata_not_in_step_body()
     test_no_model_empty_module()
+    test_metadata_includes_every_declared_space_for_one_owner()
     print("OK  test_module_codegen")
 
 

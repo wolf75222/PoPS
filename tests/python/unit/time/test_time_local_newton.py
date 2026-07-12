@@ -22,6 +22,7 @@ uses -- iterating to ``max_c |r_c| < tol`` or the budget. No heap / std::functio
 offline Newton taking > 1 iteration and its residual dropping by many orders. Skips (exit 0) without
     numpy / _pops / a compiler / a visible Kokkos, or if the .so compile fails -- never faking the engine.
 """
+from pops.codegen import compile_drivers
 from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
@@ -77,14 +78,17 @@ def reaction_program(t, name="implicit_reaction", model=None):
     P = t.Program(name)
     dt = P.dt
     U = typed_state(P, "blk", model=model)
+    endpoint = typed_state(P, "blk", state_name="U", model=model).next
+    guess = P.linear_combine("implicit_guess", U, at=endpoint.point)
 
     def residual(P, Uit, U0):
         S = P._source("react", state=Uit)  # private name seam; public handle route is tested separately
-        return P.linear_combine("r", Uit - U0 - dt * S)  # r = U - U0 - dt*S(U)
+        return P.linear_combine(
+            "r", Uit - U0 - dt * S, at=Uit.point)  # r = U - U0 - dt*S(U)
 
-    W = P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U,
+    W = P.solve_local_nonlinear(name="W", residual=residual, initial_guess=guess,
                                 tol=1e-12, max_iter=50)
-    P.commit(typed_state(P, "blk", state_name="U", model=model).next, W)
+    P.commit(endpoint, W)
     return P
 
 
@@ -126,7 +130,7 @@ def section_a(t):
     # A non-local residual op (P.rhs carries a divergence / halo) cannot live in a per-cell kernel.
     def bad_resid(P, Uit, U0):
         R = P._rhs_legacy(state=Uit, sources=["default"])
-        return P.linear_combine(Uit - U0 - P.dt * R)
+        return P.linear_combine(Uit - U0 - P.dt * R, at=Uit.point)
     chk(raises(ValueError, lambda: P.solve_local_nonlinear(residual=bad_resid, initial_guess=U)),
         "a non-local residual op (P.rhs) is rejected")
 
@@ -145,11 +149,14 @@ def section_a(t):
         Q = t.Program("h")
         dt = Q.dt
         u = typed_state(Q, "blk")
+        endpoint = typed_state(Q, "blk", state_name="U").next
+        guess = Q.linear_combine("implicit_guess", u, at=endpoint.point)
 
         def r(Q, Uit, U0):
-            return Q.linear_combine(Uit - U0 - dt * Q._source("react", state=Uit))
-        Q.commit(typed_state(Q, "blk", state_name="U").next, Q.solve_local_nonlinear(name="W", residual=r, initial_guess=u,
-                                                 tol=tol, max_iter=mi))
+            return Q.linear_combine(
+                Uit - U0 - dt * Q._source("react", state=Uit), at=Uit.point)
+        Q.commit(endpoint, Q.solve_local_nonlinear(
+            name="W", residual=r, initial_guess=guess, tol=tol, max_iter=mi))
         return Q._ir_hash()
     chk(_h(1e-10, 20) != _h(1e-8, 20), "a different tol rehashes the IR")
     chk(_h(1e-10, 20) != _h(1e-10, 30), "a different max_iter rehashes the IR")
@@ -180,12 +187,15 @@ def section_a(t):
     big.source_term("react", [-1.0 * c for c in cons])
     Pbig = t.Program("big_nl")
     Ub = typed_state(Pbig, "blk", model=big)
+    endpoint = typed_state(Pbig, "blk", state_name="U", model=big).next
+    guess = Pbig.linear_combine("implicit_guess", Ub, at=endpoint.point)
 
     def big_resid(P, Uit, U0):
-        return P.linear_combine(Uit - U0 - P.dt * P._source("react", state=Uit))
-    Pbig.commit(typed_state(Pbig, "blk", state_name="U", model=big).next,
+        return P.linear_combine(
+            Uit - U0 - P.dt * P._source("react", state=Uit), at=Uit.point)
+    Pbig.commit(endpoint,
                 Pbig.solve_local_nonlinear(
-                    name="W", residual=big_resid, initial_guess=Ub))
+                    name="W", residual=big_resid, initial_guess=guess))
     chk(raises(ValueError, lambda: Pbig.emit_cpp_program(model=big)),
         "n_cons > 8 dense-fallback guard fires")
 
@@ -231,7 +241,7 @@ def section_b(t):
     # ---- compile the Program + a native reaction block, run one implicit step ----
     try:
         program_model = reaction_model("react_prog", k)
-        compiled = pops.codegen.compile_problem(
+        compiled = compile_drivers.compile_problem(
             model=program_model,
             time=reaction_program(t, "react_step", model=program_model))
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed

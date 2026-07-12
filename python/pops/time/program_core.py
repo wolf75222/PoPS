@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from pops.time.program_base import _ProgramConstants
 from pops.time.program_call import _ProgramCall
+from pops.time.program_clocks import _ProgramClocks
 from pops.time.program_rhs import _ProgramRhs
 from pops.time.operator_resolution import resolve_operator_handle
 from pops.time.references import (
@@ -15,8 +16,9 @@ from pops.time.references import (
 )
 from pops.time.program_value_validation import (
     merge_state_spaces, rate_space_for, require_compatible_spaces,
-    require_declared_state_space, require_owned, validate_input_regions,
+    require_declared_state_space, require_owned, validate_input_clocks, validate_input_regions,
 )
+from pops.time.points import TimePoint
 from pops.time.values import (
     ProgramValue, _Affine, _Coeff, _Operator, _authoring_source_location, _resolve_handle,
     _to_affine,
@@ -31,7 +33,9 @@ else:
 _UNCHANGED = object()
 
 
-class _ProgramCore(_ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase):
+class _ProgramCore(
+    _ProgramClocks, _ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase
+):
     """State / field / RHS / source / apply construction (the operator-first builder core).
 
     The typed operator-call lowering (``P.call`` / ``_call`` and helpers) is mixed in from
@@ -40,9 +44,16 @@ class _ProgramCore(_ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase):
 
     # --- node construction ---
     def _new(self, vtype: Any, op: Any, inputs: Any, attrs: Any, name: Any, block: Any, *,
-             space: Any = None, field_context: Any = None, state_ref: Any = None) -> Any:
+             space: Any = None, field_context: Any = None, state_ref: Any = None,
+             point: Any = None) -> Any:
         region = self._current_region()
         validate_input_regions(self, inputs, region, "IR op %r" % op)
+        value_inputs = [i for i in inputs if isinstance(i, ProgramValue)]
+        if point is None:
+            point = value_inputs[0].point if value_inputs else TimePoint(self.clock)
+        validate_input_clocks(
+            value_inputs, point, "IR op %r" % op,
+            constructing_synchronize=op == "synchronize")
         vid = self._next_id
         if name is None:
             name = "%s%d" % (op, vid)
@@ -65,7 +76,6 @@ class _ProgramCore(_ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase):
                 origins=(context["caller"], context["factory"]),
                 phase="authoring", transformation="factory_expand",
             )
-        value_inputs = [i for i in inputs if isinstance(i, ProgramValue)]
         if state_ref is None:
             input_refs = {item.state_ref for item in value_inputs if item.state_ref is not None}
             if len(input_refs) == 1:
@@ -74,7 +84,7 @@ class _ProgramCore(_ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase):
                          attrs, name, block,
                          space=space, source_location=source_location,
                          field_context=field_context, region=region, state_ref=state_ref,
-                         provenance=provenance)
+                         point=point, provenance=provenance)
         self._issued_values[id(v)] = v
         # Inside a control-flow recording scope (cond_fn / body_fn of a while_), ops go into the active
         # sub-block, NOT the flat self._values: a while body must RE-EXECUTE each iteration, so its ops
@@ -105,7 +115,8 @@ class _ProgramCore(_ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase):
         return value
 
     def _replace_value(self, value: Any, *, attrs: Any = _UNCHANGED, name: Any = _UNCHANGED,
-                       space: Any = _UNCHANGED, field_context: Any = _UNCHANGED) -> Any:
+                       space: Any = _UNCHANGED, field_context: Any = _UNCHANGED,
+                       point: Any = _UNCHANGED) -> Any:
         """Replace one builder-owned SSA record with a newly constructed immutable record."""
         if getattr(self, "_frozen", False):
             raise RuntimeError(
@@ -129,6 +140,7 @@ class _ProgramCore(_ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase):
             field_context=(current.field_context if field_context is _UNCHANGED else field_context),
             region=current.region,
             state_ref=current.state_ref,
+            point=current.point if point is _UNCHANGED else point,
             provenance=current.provenance,
         )
         self._issued_values[id(replacement)] = replacement
@@ -144,7 +156,7 @@ class _ProgramCore(_ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase):
                     return replacement
         raise ValueError("ProgramValue #%d is not present in its Program" % current.id)
 
-    def state(self, block: Any, state: Any) -> Any:
+    def state(self, block: Any, state: Any, *, clock: Any = None) -> Any:
         """Declare one block-qualified temporal state family.
 
         The sole public form is ``T.state(block_handle, model_state_handle)``. The model-local state
@@ -159,7 +171,7 @@ class _ProgramCore(_ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase):
         if space is None:
             space = self._default_state_spaces.get(block.model_owner_path)
         require_declared_state_space(self, qualified_state, space)
-        return self._time_state(block, qualified_state, space)
+        return self._time_state(block, qualified_state, space, clock)
 
     def solve_fields(self, name: Any = None, state: Any = None, field: Any = None) -> Any:
         """Solve the elliptic fields from ``state`` and return a FieldContext. Accepts
@@ -167,7 +179,7 @@ class _ProgramCore(_ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase):
         FieldContext (a stage's RHS must read the fields solved from its own state, never a stale
         global). ``field`` is the case-owned ``FieldHandle`` returned by ``Problem.add_field`` for a
         named elliptic solve; a string is never promoted into a field identity."""
-        # A readable temporal handle (U.stage(k) / U.prev(lag)) resolves through Program-owned tables
+        # A readable temporal handle (U.stage(name, point=...) / U.prev(lag)) resolves through Program-owned tables
         # here so it composes wherever a State does; a plain ProgramValue / None / str is unchanged.
         name, state = _resolve_handle(name), _resolve_handle(state)
         if isinstance(name, ProgramValue) and state is None:
@@ -303,7 +315,9 @@ class _ProgramCore(_ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase):
                     self._replace_value(value, space=field_space)
         return self
 
-    def linear_combine(self, name: Any = None, expr: Any = None) -> Any:
+    def linear_combine(
+        self, name: Any = None, expr: Any = None, *, at: Any = None
+    ) -> Any:
         """Materialize an affine combination of State/RHS values into a new State. Accepts
         ``linear_combine(name, expr)`` or ``linear_combine(expr)``. The per-input coefficient
         polynomials in ``dt`` are recorded in ``attrs['coeffs']`` (aligned with ``inputs``).
@@ -326,6 +340,18 @@ class _ProgramCore(_ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase):
         if any(v.vtype == "scalar_field" for v, _ in aff) and not all(
                 v.vtype == "scalar_field" for v, _ in aff):
             raise ValueError("linear_combine: scalar fields cannot mix with State/Rate values")
+        points = {value.point for value, _ in aff}
+        advances_time = any(
+            power != 0 for _value, coeff in aff for power in coeff.powers
+        )
+        if at is None:
+            if advances_time or len(points) != 1:
+                raise ValueError(
+                    "linear_combine cannot infer an evaluation point from dt-dependent or "
+                    "multi-point inputs; pass at=TimePoint(...) / StagePoint(...), or define "
+                    "a named TimeState.stage"
+                )
+            at = next(iter(points))
         # ADC-427: an affine whose terms are ALL scalar_field yields a scalar_field.  A solve_linear
         # result retains the block provenance of its rhs, while a raw P.scalar_field scratch is
         # unqualified (block=None).  Preserve the single known block across the combination: otherwise
@@ -351,7 +377,7 @@ class _ProgramCore(_ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase):
             coeffs = [c.to_polynomial() for _, c in aff]
             return self._new(
                 "scalar_field", "linear_combine", inputs, {"coeffs": coeffs}, name, block,
-                space=space)
+                space=space, point=at)
         inputs = tuple(v for v, _ in aff)
         # Structural type errors outrank the secondary block-label mismatch.
         state_space = merge_state_spaces(inputs, "linear_combine")
@@ -366,7 +392,7 @@ class _ProgramCore(_ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase):
         coeffs = [c.to_polynomial() for _, c in aff]
         return self._new(
             "state", "linear_combine", inputs, {"coeffs": coeffs}, name, block,
-            space=state_space, field_context=field_context)
+            space=state_space, field_context=field_context, point=at)
 
     # --- named sources / local linear operators (Phase 4 / ADC-403) ---
     @property
@@ -389,7 +415,7 @@ class _ProgramCore(_ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase):
         resolved = resolve_operator_handle(
             self, operator, where="linear_source",
             expected_kinds="local_linear_operator")
-        return self._linear_source(resolved.name)
+        return self._linear_source(resolved.name, operator_handle=operator)
 
     def source(self, operator: Any, state: Any = None, fields: Any = None) -> Any:
         """Evaluate one typed model source ``S(U, fields)`` on its own.
@@ -408,12 +434,17 @@ class _ProgramCore(_ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase):
             values=tuple(value for value in (state, fields) if value is not None))
         source_name = resolved.lowering.get("source", resolved.name)
         if source_name == "default":
-            return self._rhs_legacy(
+            result = self._rhs_legacy(
                 name=operator.name, state=state, fields=fields,
                 flux=False, sources=["default"])
-        return self._source(source_name, state=state, fields=fields)
+            attrs = dict(result.attrs)
+            attrs["operator_handle"] = operator
+            return self._replace_value(result, attrs=attrs)
+        return self._source(
+            source_name, state=state, fields=fields, operator_handle=operator)
 
-    def _source(self, name: Any, state: Any = None, fields: Any = None) -> Any:
+    def _source(self, name: Any, state: Any = None, fields: Any = None,
+                operator_handle: Any = None) -> Any:
         """Private lowering seam for a registry-local source name."""
         state, fields = _resolve_handle(state), _resolve_handle(fields)
         if not isinstance(name, str) or not name:
@@ -427,8 +458,11 @@ class _ProgramCore(_ProgramCall, _ProgramRhs, _ProgramConstants, _ProgramBase):
             from pops.time.field_context import require_field_read
             field_context = require_field_read(fields, state, "source")
         inputs = (state, fields) if fields is not None else (state,)
+        attrs = {"source": name}
+        if operator_handle is not None:
+            attrs["operator_handle"] = operator_handle
         return self._new(
-            "rhs", "source", inputs, {"source": name}, name, state.block,
+            "rhs", "source", inputs, attrs, name, state.block,
             space=rate_space_for(state.space), field_context=field_context)
 
     def _check_operator_state(self, l_value: Any, state_value: Any, where: Any) -> Any:

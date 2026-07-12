@@ -28,6 +28,7 @@ flux=False stage WRONGLY re-added -div F. ADC-430 adds the source-only runtime p
 
 Run with python3 (PYTHONPATH = built pops package).
 """
+from pops.codegen import compile_drivers
 from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
@@ -98,8 +99,9 @@ def one_step_program(name, sources, flux=True, model=None):
     U = typed_state(P, "plasma", model=model)
     fields = P.solve_fields(U) if flux else None
     R = P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
-    P.commit(typed_state(P, "plasma", state_name="U", model=model).next,
-             P.linear_combine("%s_step" % name, U + P.dt * R))
+    endpoint = typed_state(P, "plasma", state_name="U", model=model).next
+    P.commit(endpoint, P.linear_combine(
+        "%s_step" % name, U + P.dt * R, at=endpoint.point))
     return P
 
 
@@ -127,10 +129,12 @@ def two_block_noflux(name, model=None):
     Ub = typed_state(P, "b", model=model)
     Ra = P._rhs_legacy(state=Ua, fields=None, flux=False, sources=["default"])
     Rb = P._rhs_legacy(state=Ub, fields=None, flux=False, sources=["default"])
-    P.commit(typed_state(P, "a", state_name="U", model=model).next,
-             P.linear_combine("%s_a" % name, Ua + P.dt * Ra))
-    P.commit(typed_state(P, "b", state_name="U", model=model).next,
-             P.linear_combine("%s_b" % name, Ub + P.dt * Rb))
+    endpoint_a = typed_state(P, "a", state_name="U", model=model).next
+    endpoint_b = typed_state(P, "b", state_name="U", model=model).next
+    P.commit(endpoint_a, P.linear_combine(
+        "%s_a" % name, Ua + P.dt * Ra, at=endpoint_a.point))
+    P.commit(endpoint_b, P.linear_combine(
+        "%s_b" % name, Ub + P.dt * Rb, at=endpoint_b.point))
     return P
 
 
@@ -178,8 +182,8 @@ def _noflux_named_fluxes(model=None):
     P = adctime.Program("p_bad")
     U = typed_state(P, "plasma", model=model)
     P._rhs_legacy(state=U, fields=None, flux=False, sources=["default"], fluxes=["fx"])
-    P.commit(typed_state(P, "plasma", state_name="U", model=model).next,
-             P.linear_combine("p_bad_step", U))
+    endpoint = typed_state(P, "plasma", state_name="U", model=model).next
+    P.commit(endpoint, P.linear_combine("p_bad_step", U, at=endpoint.point))
     return P
 
 
@@ -227,7 +231,7 @@ def run_one_step(sources, flux):
     tag = "%s_%s" % ("flux" if flux else "noflux", "_".join(sources) or "empty")
     try:
         program_model = advect_model("adv_%s" % tag, A, C)
-        compiled = pops.codegen.compile_problem(
+        compiled = compile_drivers.compile_problem(
             model=program_model,
             time=one_step_program("p_%s" % tag, sources, flux=flux, model=program_model))
     except RuntimeError as exc:  # no compiler / no Kokkos / .so compile failed
@@ -264,16 +268,18 @@ def lie_split_program(name, model=None):
     P = adctime.Program(name)
     U = typed_state(P, "plasma", model=model)
     H = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=[])   # flux only (-div F)
-    U1 = P.linear_combine("%s_H" % name, U + P.dt * H)
+    endpoint = typed_state(P, "plasma", state_name="U", model=model).next
+    U1 = P.linear_combine(
+        "%s_H" % name, U + P.dt * H, at=adctime.TimePoint(P.clock, 1))
     S = P._rhs_legacy(state=U1, fields=None, flux=False, sources=["default"])     # source only on U1
-    P.commit(typed_state(P, "plasma", state_name="U", model=model).next,
-             P.linear_combine("%s_S" % name, U1 + P.dt * S))
+    P.commit(endpoint, P.linear_combine(
+        "%s_S" % name, U1 + P.dt * S, at=endpoint.point))
     return P
 
 
 try:
     lie_model = advect_model("adv_lie", A, C)
-    compiled_lie = pops.codegen.compile_problem(
+    compiled_lie = compile_drivers.compile_problem(
         model=lie_model, time=lie_split_program("lie", model=lie_model))
 except RuntimeError as exc:
     _skip("compile_problem (lie) could not build the .so: %s" % str(exc)[:160])

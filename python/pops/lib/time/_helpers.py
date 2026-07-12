@@ -191,14 +191,35 @@ def _commit(P: Any, state: Any, value: Any) -> Any:
     return P.commit(state.next, value)
 
 
-def _stage_rhs(P: Any, U: Any, sources: Any, flux: Any) -> Any:
+def _stage_point(P: Any, name: Any, offset: Any = 0, *, partitions: Any = None) -> Any:
+    """Build one exact named stage coordinate on the Program's logical clock."""
+    from pops.time.points import StagePoint, TimePoint
+
+    if partitions is None:
+        partitions = {"main": offset}
+    return StagePoint(name, {
+        partition: TimePoint(P.clock, coordinate)
+        for partition, coordinate in partitions.items()
+    })
+
+
+def _at_point(P: Any, value: Any, point: Any) -> Any:
+    """Replace one authored SSA record with the same value at an exact evaluation point."""
+    return P._replace_value(value, point=point)
+
+
+def _stage_rhs(
+        P: Any, U: Any, sources: Any, flux: Any, *, name: Any, offset: Any = 0,
+        partitions: Any = None) -> Any:
     """Solve the elliptic fields from U and assemble its RHS for one stage. The FieldContext is
     distinct per stage (no stale global aux). flux=False builds a source-only sub-flow (e.g. Strang S).
 
     Ready schemes lower through the same public typed ``P.rhs(terms=[...])`` route as an explicit
     Program. Named sources remain owner-qualified ``OperatorHandle`` values until that boundary."""
-    fields = P.solve_fields(U) if flux else None
-    return _typed_rhs(P, U, fields=fields, sources=sources, flux=flux)
+    point = _stage_point(P, name, offset, partitions=partitions)
+    fields = _at_point(P, P.solve_fields(U), point) if flux else None
+    return _at_point(
+        P, _typed_rhs(P, U, fields=fields, sources=sources, flux=flux), point)
 
 
 def _typed_rhs(P: Any, U: Any, *, fields: Any, sources: Any, flux: Any) -> Any:
@@ -266,7 +287,9 @@ def _op_space_arity(P: Any, handle: Any) -> Any:
     return sum(1 for t in op.signature.inputs if getattr(t, "kind", None) in ("state", "field"))
 
 
-def _opcall(P: Any, handle: Any, *candidate_args: Any, value_name: Any = None) -> Any:
+def _opcall(
+        P: Any, handle: Any, *candidate_args: Any, value_name: Any = None,
+        point: Any = None) -> Any:
     """Call @p handle's operator passing exactly as many leading args as its signature's space inputs
     (so an operator that ignores the fields is called with the state alone, and a fields-free linear
     operator with no args). @p handle is a typed :class:`pops.model.OperatorHandle`.
@@ -275,4 +298,5 @@ def _opcall(P: Any, handle: Any, *candidate_args: Any, value_name: Any = None) -
     ``P.call(handle, ...)`` (the same registry lookup, the same primitive-op lowering): the private
     ``_call`` is the allowed internal seam, only the FREE-STRING macro entry is de-stringed."""
     arity = _op_space_arity(P, handle)
-    return P._call(handle, *candidate_args[:arity], name=value_name)
+    value = P._call(handle, *candidate_args[:arity], name=value_name)
+    return _at_point(P, value, point) if point is not None else value

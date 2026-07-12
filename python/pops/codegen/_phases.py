@@ -121,7 +121,10 @@ def compile(plan: Any) -> Any:
     if type(plan) is not ResolvedSimulationPlan:
         raise TypeError("pops.compile requires the ResolvedSimulationPlan returned by pops.resolve")
     plan.verify()
-    from pops.codegen._orchestration_compile import compile_install_models
+    from pops.codegen._orchestration_compile import (
+        build_program_model_graph,
+        compile_install_models,
+    )
 
     models = compile_install_models(plan, plan.compile_options)
     program = None
@@ -130,8 +133,9 @@ def compile(plan: Any) -> Any:
 
         options = dict(plan.compile_options)
         options["libraries"] = plan.libraries
+        model_graph = build_program_model_graph(plan)
         program = compile_problem(
-            time=plan.time, model=plan.first_model, backend=plan.backend, target=plan.target,
+            time=plan.time, model_graph=model_graph, backend=plan.backend, target=plan.target,
             problem_snapshot=plan.snapshot, **options)
         program._discard_authoring()
     from pops.codegen.compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact

@@ -66,7 +66,8 @@ def test_uniform_runtime_converts_exact_cfl_only_at_install_boundary():
     })()
     engine = type("Engine", (), {"_output_policies": (), "_diagnostic_measures": ()})()
     manifest = build_uniform_snapshot(
-        engine, compiled, {}, {}, {}, cadence, {}, schema.resolve({})).to_dict()
+        engine, compiled, {}, {}, {}, cadence, {},
+        schema.resolve_bind({}, compile_values={})).to_dict()
     assert manifest["cadence"] == {
         "kind": "compiled-time", "substeps": 2, "stride": 3,
         "cfl": {"rational": [1, 3]},

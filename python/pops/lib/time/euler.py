@@ -21,5 +21,6 @@ def forward_euler(P: Any, block: Any, state: Any = None, *,
     ``OperatorHandle`` values or RHS term descriptors; it never contains names."""
     temporal = _time_state(P, block, state)
     U = temporal.n
-    R = _stage_rhs(P, U, sources, flux)
-    _commit(P, temporal, P.linear_combine("fe_step", U + P.dt * R))
+    R = _stage_rhs(P, U, sources, flux, name="forward_euler", offset=0)
+    _commit(P, temporal, P.linear_combine(
+        "fe_step", U + P.dt * R, at=temporal.next.point))

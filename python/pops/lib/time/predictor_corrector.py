@@ -7,7 +7,9 @@ from __future__ import annotations
 from fractions import Fraction
 from typing import Any
 
-from ._helpers import _commit, _opcall, _operator_handle, _time_state, program_macro
+from ._helpers import (
+    _at_point, _commit, _opcall, _operator_handle, _stage_point, _time_state, program_macro,
+)
 
 
 @program_macro
@@ -34,21 +36,32 @@ def predictor_corrector_local_linear(P: Any, block: Any, state: Any = None, *,
     implicit_operator = _operator_handle(implicit_operator, "implicit_operator")
     temporal = _time_state(P, block, state)
     u_n = temporal.n
-    fields_n = _opcall(P, fields_operator, u_n, value_name="fields_n")
-    r_n = _opcall(P, explicit_rate_operator, u_n, fields_n, value_name="R_n")
-    l_n = _opcall(P, implicit_operator, fields_n, value_name="L_n")
-    u_star = P.solve_local_linear("U_star", operator=P.I - P.dt * l_n,
-                                  rhs=P.linear_combine("U_star_rhs", u_n + P.dt * r_n),
-                                  fields=fields_n)
-    fields_star = _opcall(P, fields_operator, u_star, value_name="fields_star")
-    r_star = _opcall(P, explicit_rate_operator, u_star, fields_star, value_name="R_star")
-    l_star = _opcall(P, implicit_operator, fields_star, value_name="L_star")
-    c_star = P.apply(l_star, u_star, fields=fields_star, name="C_star")
+    predictor = _stage_point(
+        P, "predictor", partitions={"explicit": 0, "implicit": 1})
+    fields_n = _opcall(P, fields_operator, u_n, value_name="fields_n", point=predictor)
+    r_n = _opcall(
+        P, explicit_rate_operator, u_n, fields_n, value_name="R_n", point=predictor)
+    l_n = _opcall(P, implicit_operator, fields_n, value_name="L_n", point=predictor)
+    u_star = _at_point(P, P.solve_local_linear(
+        "U_star", operator=P.I - P.dt * l_n,
+        rhs=P.linear_combine("U_star_rhs", u_n + P.dt * r_n, at=predictor),
+        fields=fields_n), predictor)
+    corrector = _stage_point(
+        P, "corrector", partitions={"explicit": 1, "implicit": 1})
+    fields_star = _opcall(
+        P, fields_operator, u_star, value_name="fields_star", point=corrector)
+    r_star = _opcall(
+        P, explicit_rate_operator, u_star, fields_star, value_name="R_star", point=corrector)
+    l_star = _opcall(
+        P, implicit_operator, fields_star, value_name="L_star", point=corrector)
+    c_star = _at_point(
+        P, P.apply(l_star, u_star, fields=fields_star, name="C_star"), corrector)
     half = Fraction(1, 2)
     q = P.linear_combine(
-        "Q", u_n + half * P.dt * r_n + half * P.dt * r_star + half * P.dt * c_star)
-    u_np1 = P.solve_local_linear("U_np1", operator=P.I - half * P.dt * l_star, rhs=q,
-                                 fields=fields_star)
+        "Q", u_n + half * P.dt * r_n + half * P.dt * r_star + half * P.dt * c_star,
+        at=temporal.next.point)
+    u_np1 = P.solve_local_linear(
+        "U_np1", operator=P.I - half * P.dt * l_star, rhs=q, fields=fields_star)
     if commit:
         _commit(P, temporal, u_np1)
     return u_np1

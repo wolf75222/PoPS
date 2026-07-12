@@ -24,6 +24,7 @@ component 0 alone and leave the rest unsolved.
     same offline CG bit-for-bit. Self-skips (exit 0) without numpy / _pops / install_program / a compiler
     / a visible Kokkos -- never fakes the engine.
 """
+from pops.codegen import compile_drivers
 from typed_program_support import typed_state
 
 from pops.model import StateSpace
@@ -69,7 +70,8 @@ def _mc_program(t, ncomp, *, name="mc_solve", method=None, tol=1e-10, max_iter=2
         method = CG(max_iter=max_iter)  # ADC-535: max_iter is mandatory on the descriptor
     P.set_apply(A, apply)
     phi = P.solve_linear(operator=A, rhs=U, method=method, tol=tol, max_iter=max_iter)
-    P.commit(typed_state(P, "blk", state_name="U", space=space).next, phi)
+    endpoint = typed_state(P, "blk", state_name="U", space=space).next
+    P.commit(endpoint, P.linear_combine("solution_next", 1 * phi, at=endpoint.point))
     return P
 
 
@@ -93,7 +95,8 @@ def test_state_operator_builds(t):
     phi = P.solve_linear(operator=A, rhs=U, method=CG(max_iter=50), tol=1e-10, max_iter=50)
     assert phi.vtype == "state", "a state-domain solve over a State rhs returns a State"
     assert phi.attrs["ncomp"] == 2, "the solution carries the operator ncomp"
-    P.commit(typed_state(P, "blk", state_name="U", space=space).next, phi)
+    endpoint = typed_state(P, "blk", state_name="U", space=space).next
+    P.commit(endpoint, P.linear_combine("solution_next", 1 * phi, at=endpoint.point))
     assert P.validate() is True, "the multi-component Program must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
 
@@ -259,7 +262,7 @@ def _run_one(t, pops, np, ncomp, init):
     cons = tuple("c%d" % i for i in range(ncomp))
     tol = 1e-10
     try:
-        compiled = pops.codegen.compile_problem(
+        compiled = compile_drivers.compile_problem(
             model=_passive_model("mc_prog%d" % ncomp, cons),
             time=_mc_program(t, ncomp, name="mc_step%d" % ncomp, method=krylov.CG(max_iter=200),
                              tol=tol, max_iter=200))

@@ -92,7 +92,8 @@ def test_ambiguous_or_non_finite_literals_are_rejected(value):
 def test_exact_affine_coefficient_has_one_typed_codec_for_hash_and_cpp():
     program = Program("exact_coeff")
     state = _state(program, temporal=True)
-    result = program.linear_combine("next", Fraction(1, 3) * state.n)
+    result = program.linear_combine(
+        "next", Fraction(1, 3) * state.n, at=state.next.point)
     program.commit(state.next, result)
 
     coeff = program._serialize()["nodes"][-1]["attrs"]["coeffs"][0]
@@ -111,7 +112,10 @@ def test_unit_target_and_algebraic_program_constants_reach_target_lowering_lossl
     reduced = program.norm2(state.n)
     program.record_scalar("annotated", reduced + annotated)
     program.record_scalar("algebraic", reduced + algebraic)
-    program.commit(state.next, state.n)
+    program.commit(
+        state.next,
+        program.linear_combine("next", state.n, at=state.next.point),
+    )
 
     serialized = program._serialize()
     scalar_nodes = [node for node in serialized["nodes"] if node["op"] == "scalar_op"]
@@ -218,9 +222,10 @@ def test_solver_controls_keep_exact_literals_until_codegen():
     state = time_state.n
     operator = program.matrix_free_operator("A")
     program.set_apply(operator, lambda P, out, in_: in_)
+    rhs = program.linear_combine("rhs", state, at=time_state.next.point)
     result = program.solve_linear(
         operator=operator,
-        rhs=state,
+        rhs=rhs,
         method=Richardson(max_iter=4, omega=Fraction(2, 3)),
         tol=Decimal("1e-12"),
         max_iter=4,

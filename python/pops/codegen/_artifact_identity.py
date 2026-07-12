@@ -42,7 +42,8 @@ def model_artifact_spec(
 
 
 def program_artifact_spec(
-    *, snapshot: Any, model_authority: Any, program: Any, target: str, abi_key: str,
+    *, snapshot: Any, model_authority: Any, program: Any, program_graph: Any,
+    target: str, abi_key: str,
     compiler: str, standard: str, source: str, cflags: Any, lflags: Any, optflags: Any,
     libraries: Any,
 ) -> tuple[Any, Any]:
@@ -57,10 +58,31 @@ def program_artifact_spec(
     if snapshot is not None:
         semantic = semantic_identity_of(snapshot=snapshot)
     else:
-        semantic_model = (
-            {"kind": "program-only"}
-            if model_authority is None else model_semantic_data(model_authority)
-        )
+        from pops.codegen.program_models import ProgramModelGraph
+
+        if type(model_authority) is ProgramModelGraph:
+            semantic_model = {
+                "kind": "program-model-graph",
+                "models": [
+                    {
+                        "owner": str(owner),
+                        "model": model_semantic_data(source),
+                    }
+                    for owner, source in sorted(
+                        model_authority.source_modules_by_owner.items(),
+                        key=lambda item: str(item[0]),
+                    )
+                ],
+                "blocks": [
+                    {"block": block, "owner": str(owner)}
+                    for block, owner in sorted(model_authority.owners_by_block.items())
+                ],
+            }
+        else:
+            semantic_model = (
+                {"kind": "program-only"}
+                if model_authority is None else model_semantic_data(model_authority)
+            )
         semantic = semantic_identity({
             "model": semantic_model,
             "program": program_semantic_data(program),
@@ -76,6 +98,7 @@ def program_artifact_spec(
         components={
             "generated_source": hashlib.sha256(source.encode("utf-8")).digest(),
             "program_entry": str(getattr(program, "name", "problem")),
+            "program_graph_hash": program_graph.graph_hash,
         },
         flags=[*optflags, *cflags, *lflags],
         libraries=[manifest.content_hash for manifest in libraries],

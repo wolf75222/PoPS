@@ -61,9 +61,11 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         lname = op_value.attrs["linear_source"]
         a = (-l_coeff).to_polynomial()  # operator = I - a*L, so L carries coefficient -a
         inputs = (rhs, op_value, fields) if fields is not None else (rhs, op_value)
+        attrs = {"linear_source": lname, "a_coeff": a}
+        if "operator_handle" in op_value.attrs:
+            attrs["operator_handle"] = op_value.attrs["operator_handle"]
         return self._new(
-            "state", "solve_local_linear", inputs,
-            {"linear_source": lname, "a_coeff": a}, name, rhs.block, space=rhs.space,
+            "state", "solve_local_linear", inputs, attrs, name, rhs.block, space=rhs.space,
             field_context=field_context)
 
     # The LOCAL per-cell ops a solve_local_nonlinear residual sub-block may use: the iterate / guess
@@ -195,7 +197,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             "%s: operator must be a linear source (P.linear_source(handle) or its OperatorHandle)"
             % where)
 
-    def _linear_source(self, name: Any) -> Any:
+    def _linear_source(self, name: Any, operator_handle: Any = None) -> Any:
         """Internal seam: reference a linear source by its bare NAME (an internal selector).
 
         NOT a public surface -- it is the byte-identical lowering the public typed
@@ -203,7 +205,10 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         lowering (``_lower_call``) and the ``pops.lib.time`` macros use directly with a bare name."""
         if not isinstance(name, str) or not name:
             raise ValueError("_linear_source: a non-empty operator name is required")
-        return self._new("operator", "linear_source", (), {"linear_source": name}, name, None)
+        attrs = {"linear_source": name}
+        if operator_handle is not None:
+            attrs["operator_handle"] = operator_handle
+        return self._new("operator", "linear_source", (), attrs, name, None)
 
     def _apply(self, operator: Any = None, state: Any = None, fields: Any = None,
                name: Any = None) -> Any:
@@ -224,8 +229,14 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             field_context = require_field_read(fields, state, "apply")
         self._check_operator_state(operator, state, "apply")
         inputs = (state, fields) if fields is not None else (state,)
+        attrs = {"linear_source": lname}
+        from pops.model import OperatorHandle
+        if isinstance(operator, OperatorHandle):
+            attrs["operator_handle"] = operator
+        elif isinstance(operator, ProgramValue) and "operator_handle" in operator.attrs:
+            attrs["operator_handle"] = operator.attrs["operator_handle"]
         return self._new(
-            "rhs", "apply", inputs, {"linear_source": lname},
+            "rhs", "apply", inputs, attrs,
             name or ("apply_" + lname), state.block, space=rate_space_for(state.space),
             field_context=field_context)
 

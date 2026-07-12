@@ -15,6 +15,7 @@ nothing, so re-solving from a stage state vs the current state is bit-identical 
 field-coupled case is exercised by test_time_solve_fields_from_state). Skips cleanly (exit 0)
 without the install_program binding / numpy / a compiler / a visible Kokkos -- never fakes the engine.
 """
+from pops.codegen import compile_drivers
 from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
@@ -83,7 +84,7 @@ def offline_rhs(ref, U):
 def run_compiled(P, dt):
     """compile_problem(P) -> install -> one step; returns the advanced state (or None to skip)."""
     try:
-        compiled = pops.codegen.compile_problem(model=transport_model(), time=P)
+        compiled = compile_drivers.compile_problem(model=transport_model(), time=P)
     except RuntimeError as exc:  # no compiler / no Kokkos visible / compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
     sim = make_sim()
@@ -98,10 +99,14 @@ def ssprk2_program():
     U0 = typed_state(P, "ions")
     f0 = P.solve_fields(U0)
     k0 = P._rhs_legacy(state=U0, fields=f0, flux=True, sources=["default"])
-    U1 = P.linear_combine("U1", U0 + dt * k0)
+    stage1 = adctime.StagePoint(
+        "ssprk2_stage_1", {"main": adctime.TimePoint(P.clock, 1)})
+    U1 = P.linear_combine("U1", U0 + dt * k0, at=stage1)
     f1 = P.solve_fields(U1)
     k1 = P._rhs_legacy(state=U1, fields=f1, flux=True, sources=["default"])
-    P.commit(typed_state(P, "ions", state_name="U").next, P.linear_combine("U2", 0.5 * U0 + 0.5 * (U1 + dt * k1)))
+    endpoint = typed_state(P, "ions", state_name="U").next
+    P.commit(endpoint, P.linear_combine(
+        "U2", 0.5 * U0 + 0.5 * (U1 + dt * k1), at=endpoint.point))
     return P
 
 
@@ -110,14 +115,22 @@ def rk4_program():
     dt = P.dt
     U0 = typed_state(P, "ions")
     k1 = P._rhs_legacy(state=U0, fields=P.solve_fields(U0), flux=True, sources=["default"])
-    U1 = P.linear_combine("U1", U0 + 0.5 * dt * k1)
+    stage1 = adctime.StagePoint(
+        "rk4_stage_1", {"main": adctime.TimePoint(P.clock, 0.5)})
+    U1 = P.linear_combine("U1", U0 + 0.5 * dt * k1, at=stage1)
     k2 = P._rhs_legacy(state=U1, fields=P.solve_fields(U1), flux=True, sources=["default"])
-    U2 = P.linear_combine("U2", U0 + 0.5 * dt * k2)
+    stage2 = adctime.StagePoint(
+        "rk4_stage_2", {"main": adctime.TimePoint(P.clock, 0.5)})
+    U2 = P.linear_combine("U2", U0 + 0.5 * dt * k2, at=stage2)
     k3 = P._rhs_legacy(state=U2, fields=P.solve_fields(U2), flux=True, sources=["default"])
-    U3 = P.linear_combine("U3", U0 + dt * k3)
+    stage3 = adctime.StagePoint(
+        "rk4_stage_3", {"main": adctime.TimePoint(P.clock, 1)})
+    U3 = P.linear_combine("U3", U0 + dt * k3, at=stage3)
     k4 = P._rhs_legacy(state=U3, fields=P.solve_fields(U3), flux=True, sources=["default"])
-    P.commit(typed_state(P, "ions", state_name="U").next, P.linear_combine(
-        "Unp1", U0 + dt / 6.0 * k1 + dt / 3.0 * k2 + dt / 3.0 * k3 + dt / 6.0 * k4))
+    endpoint = typed_state(P, "ions", state_name="U").next
+    P.commit(endpoint, P.linear_combine(
+        "Unp1", U0 + dt / 6.0 * k1 + dt / 3.0 * k2 + dt / 3.0 * k3 + dt / 6.0 * k4,
+        at=endpoint.point))
     return P
 
 

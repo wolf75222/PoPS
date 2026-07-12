@@ -36,11 +36,12 @@ def test_fields_define_commit_match_primitive_ir():
         u = typed_state(P, "plasma")
         f = P.fields("f", from_state=u) if board else P.solve_fields("f", u)
         r = P._rhs_legacy(name="R", state=u, fields=f, flux=True, sources=["electric"])
+        endpoint = typed_state(P, "plasma", state_name="U").next
         if board:
-            u1 = P.define("U1", u + dt * r)
+            u1 = P.define("U1", u + dt * r, at=endpoint.point)
         else:
-            u1 = P.linear_combine("U1", u + dt * r)
-        P.commit(typed_state(P, "plasma", state_name="U").next, u1)
+            u1 = P.linear_combine("U1", u + dt * r, at=endpoint.point)
+        P.commit(endpoint, u1)
         return P
 
     assert _ir(build(True)) == _ir(build(False))
@@ -52,16 +53,18 @@ def test_solve_matches_linear_combine_plus_solve_local_linear():
         dt = P.dt
         u = typed_state(P, "plasma")
         r = P._rhs_legacy(name="R", state=u, flux=True, sources=["electric"])
+        endpoint = typed_state(P, "plasma", state_name="U").next
         if board:
             u1 = P.solve(
                 "U1",
                 (P.I - dt * P._linear_source("lorentz")) @ unknown("U1") == u + dt * r,
+                at=endpoint.point,
             )
         else:
             op = P.I - dt * P._linear_source("lorentz")  # primitive private selector seam
-            rhs = P.linear_combine("U1_rhs", u + dt * r)
+            rhs = P.linear_combine("U1_rhs", u + dt * r, at=endpoint.point)
             u1 = P.solve_local_linear(name="U1", operator=op, rhs=rhs)
-        P.commit(typed_state(P, "plasma", state_name="U").next, u1)
+        P.commit(endpoint, u1)
         return P
 
     assert _ir(build(True)) == _ir(build(False))
@@ -91,10 +94,11 @@ def test_commit_many_is_atomic():
     P = Program("ms")
     e = typed_state(P, "electrons")
     i = typed_state(P, "ions")
-    e1 = P.linear_combine("e1", 2.0 * e)
-    i1 = P.linear_combine("i1", 2.0 * i)
-    P.commit_many({typed_state(P, "electrons", state_name="U").next: e1,
-                   typed_state(P, "ions", state_name="U").next: i1})
+    e_endpoint = typed_state(P, "electrons", state_name="U").next
+    i_endpoint = typed_state(P, "ions", state_name="U").next
+    e1 = P.linear_combine("e1", 2.0 * e, at=e_endpoint.point)
+    i1 = P.linear_combine("i1", 2.0 * i, at=i_endpoint.point)
+    P.commit_many({e_endpoint: e1, i_endpoint: i1})
     assert set(commits_by_block(P)) == {"electrons", "ions"}
 
 
@@ -102,12 +106,13 @@ def test_commit_many_rejects_double_commit_without_partial():
     P = Program("ms")
     e = typed_state(P, "electrons")
     i = typed_state(P, "ions")
-    e1 = P.linear_combine("e1", 2.0 * e)
-    i1 = P.linear_combine("i1", 2.0 * i)
-    P.commit(typed_state(P, "electrons", state_name="U").next, e1)
+    e_endpoint = typed_state(P, "electrons", state_name="U").next
+    i_endpoint = typed_state(P, "ions", state_name="U").next
+    e1 = P.linear_combine("e1", 2.0 * e, at=e_endpoint.point)
+    i1 = P.linear_combine("i1", 2.0 * i, at=i_endpoint.point)
+    P.commit(e_endpoint, e1)
     with pytest.raises(ValueError, match="committed more than once"):
-        P.commit_many({typed_state(P, "electrons", state_name="U").next: e1,
-                       typed_state(P, "ions", state_name="U").next: i1})
+        P.commit_many({e_endpoint: e1, i_endpoint: i1})
     # atomic: 'ions' must NOT have been committed because validation failed first
     assert "ions" not in commits_by_block(P)
 

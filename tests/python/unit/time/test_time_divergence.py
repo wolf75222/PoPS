@@ -25,6 +25,7 @@ compiled solve is verified against an OFFLINE numpy CG on that SAME wide-stencil
     periodic 5-point system. Asserts max|compiled - offline| <= 1e-6. Self-skips (exit 0) without numpy
     / _pops / install_program / a compiler / a visible Kokkos -- never fakes the engine.
 """
+from pops.codegen import compile_drivers
 from typed_program_support import state_refs, typed_state
 
 from pops.params import ConstParam
@@ -70,7 +71,9 @@ def _divgrad_program(t, *, name="divgrad", method=None, tol=1e-10, max_iter=200,
         method = BiCGStab(max_iter=max_iter)  # ADC-535: max_iter is mandatory on the descriptor
     P.set_apply(A, apply)
     phi = P.solve_linear(operator=A, rhs=U, method=method, tol=tol, max_iter=max_iter)
-    P.commit(typed_state(P, "blk", state_name="U").next, phi)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    final = P.linear_combine("phi_next", phi, at=endpoint.point)
+    P.commit(endpoint, final)
     return P
 
 
@@ -91,7 +94,9 @@ def test_divergence_records_and_validates(t):
     P.set_apply(A, apply)
     U = typed_state(P, "blk")
     phi = P.solve_linear(operator=A, rhs=U, method=BiCGStab(max_iter=50), tol=1e-8, max_iter=50)
-    P.commit(typed_state(P, "blk", state_name="U").next, phi)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    final = P.linear_combine("phi_next", phi, at=endpoint.point)
+    P.commit(endpoint, final)
     assert P.validate() is True, "the div(grad) Program must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
 
@@ -312,7 +317,7 @@ def _run_section_b(t):
 
     tol = 1e-10
     try:
-        compiled = pops.codegen.compile_problem(
+        compiled = compile_drivers.compile_problem(
             model=passive_model("divgrad_prog"),
             time=_divgrad_program(t, name="divgrad_step", method=krylov.BiCGStab(max_iter=200),
                                   tol=tol, max_iter=200))

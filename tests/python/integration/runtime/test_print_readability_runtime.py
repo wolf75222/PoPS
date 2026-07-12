@@ -69,7 +69,7 @@ def _synthetic_compiled():
     U = temporal.n
     f = P.solve_fields("phi", U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(temporal.next, P.linear_combine("U1", U + dt * R))
+    P.commit(temporal.next, P.linear_combine("U1", U + dt * R, at=temporal.next.point))
     m = CompiledModel(
         so_path="/nonexistent/problem.so", backend="production", adder="add_native_block",
         cons_names=["rho", "mx", "my"], cons_roles=["Density", "MomentumX", "MomentumY"],

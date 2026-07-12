@@ -25,6 +25,7 @@ import pytest
 
 from pops.time.field_context import DEFAULT_FIELD_PROBLEM, FieldContext, FieldReadProvenance
 from pops.time.program import Program
+from pops.time.points import TimePoint
 
 
 def test_field_context_matches_and_rejects_triple():
@@ -163,7 +164,7 @@ def test_field_consumers_reject_stale_state_but_local_solve_accepts_derived_rhs(
     U0 = typed_state(P, "plasma")
     fields0 = P.solve_fields(U0)
     R0 = P._rhs_legacy(state=U0, fields=fields0, sources=[])
-    q = P.linear_combine("q", U0 + P.dt * R0)
+    q = P.linear_combine("q", U0 + P.dt * R0, at=TimePoint(P.clock, 1))
     linear = P._linear_source("relax")
 
     # q carries the exact context through the RHS graph, so the implicit local solve is valid.
@@ -191,10 +192,11 @@ def test_multistage_provenance_is_explicit_and_operator_context_cannot_be_substi
     U0 = typed_state(P, "plasma")
     fields0 = P.solve_fields(U0)
     R0 = P._rhs_legacy(state=U0, fields=fields0, sources=[])
-    U1 = P.linear_combine("U1", U0 + P.dt * R0)
+    U1 = P.linear_combine("U1", U0 + P.dt * R0, at=TimePoint(P.clock, 1))
     fields1 = P.solve_fields(U1)
     R1 = P._rhs_legacy(state=U1, fields=fields1, sources=[])
-    q = P.linear_combine("q", U0 + P.dt * R0 + P.dt * R1)
+    q = P.linear_combine(
+        "q", U0 + P.dt * R0 + P.dt * R1, at=TimePoint(P.clock, step=1))
 
     assert isinstance(q.field_context, FieldReadProvenance)
     assert q.field_context.contexts == (fields0.field_context, fields1.field_context)
