@@ -6,7 +6,6 @@
 ///   - reconstruct_pp<>: reconstruct + Zhang-Shu positivity limiter (positivity.hpp).
 ///   - require_reconstruction_ghosts<>: structural entry guard (state ghosts >= stencil).
 ///   - xface_box / yface_box: face boxes normal to x / y for a cell box.
-///   - rusanov_flux: free compat, delegates to RusanovFlux{}.
 ///   - compute_face_fluxes<>: face fluxes (the brick required by the AMR reflux).
 ///
 /// reconstruct_pp is THE single reconstruction entry point that every assembly kernel calls
@@ -28,17 +27,6 @@
 #include <stdexcept>  // require_reconstruction_ghosts: state without the stencil width -> clear error
 
 namespace pops {
-
-/// rusanov_flux: free compat, delegates to RusanovFlux{} (policy of numerical_flux.hpp).
-///
-/// Kept for the serial references (GPU demos, unit tests) that call rusanov_flux directly.
-/// Prefer RusanovFlux{} passed as a template for new calls. POPS_HD.
-template <class Model>
-POPS_HD inline typename Model::State rusanov_flux(const Model& m, const typename Model::State& UL,
-                                                 const Aux& AL, const typename Model::State& UR,
-                                                 const Aux& AR, int dir) {
-  return RusanovFlux{}(m, UL, AL, UR, AR, dir);
-}
 
 /// reconstruct<Model,Limiter>: face value at (i,j) extrapolated in direction dir.
 ///
@@ -173,8 +161,11 @@ struct FaceFluxXKernel {
         reconstruct_pp<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
     const auto Rr =
         reconstruct_pp<Model>(model, u, i, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
-    const auto F = nflux(model, L, load_aux<aux_comps<Model>()>(ax, i - 1, j), Rr,
-                         load_aux<aux_comps<Model>()>(ax, i, j), 0);
+    const FaceContext face = FaceContext::axis_aligned(0);
+    const auto evaluation = evaluate_numerical_flux(
+        nflux, model, L, load_aux<aux_comps<Model>()>(ax, i - 1, j), Rr,
+        load_aux<aux_comps<Model>()>(ax, i, j), face);
+    const auto F = apply_face_measure(evaluation.density, face).value;
     for (int c = 0; c < Model::n_vars; ++c)
       fx(i, j, c) = F[c];
     if constexpr (DiffusiveModel<Model>) {
@@ -203,8 +194,11 @@ struct FaceFluxYKernel {
         reconstruct_pp<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim, pos_floor, pos_comp);
     const auto Rr =
         reconstruct_pp<Model>(model, u, i, j, 1, -1, lim, recon_prim, pos_floor, pos_comp);
-    const auto F = nflux(model, L, load_aux<aux_comps<Model>()>(ax, i, j - 1), Rr,
-                         load_aux<aux_comps<Model>()>(ax, i, j), 1);
+    const FaceContext face = FaceContext::axis_aligned(1);
+    const auto evaluation = evaluate_numerical_flux(
+        nflux, model, L, load_aux<aux_comps<Model>()>(ax, i, j - 1), Rr,
+        load_aux<aux_comps<Model>()>(ax, i, j), face);
+    const auto F = apply_face_measure(evaluation.density, face).value;
     for (int c = 0; c < Model::n_vars; ++c)
       fy(i, j, c) = F[c];
     if constexpr (DiffusiveModel<Model>) {

@@ -33,7 +33,8 @@ def _hll(waves: Any = None) -> Any:
     REFUSED with a precise message -- HLL needs a signed pair, ``MaxWaveSpeed`` is the Rusanov
     majorant. The accepted provider enters the descriptor options (``options["waves"]``) and
     requirements so the identity / inspection / install guard reflect it."""
-    desc = _riemann("hll", "pops::HLLFlux", ["physical_flux", "wave_speeds"])
+    desc = _riemann("hll", "pops::HLLFlux",
+                    ["physical_flux", "provider_pack", "stability_bound", "wave_speeds"])
     if waves is None:
         return desc
     if isinstance(waves, str):
@@ -53,25 +54,31 @@ def _hll(waves: Any = None) -> Any:
             "FromPressure() / Einfeldt() / Davis())." % (waves.describe(),))
     desc.options["waves"] = waves.kind
     # The provider participates in the descriptor requirements (identity / inspection reflect it).
-    desc.requirements.setdefault("capabilities", ["physical_flux", "wave_speeds"])
+    desc.requirements.setdefault(
+        "capabilities", ["physical_flux", "provider_pack", "stability_bound", "wave_speeds"])
     desc.requirements["wave_speed_provider"] = waves.kind
     return desc
 
 
 riemann = SimpleNamespace(
-    Rusanov=lambda: _riemann("rusanov", "pops::RusanovFlux", ["max_wave_speed"]),
+    Rusanov=lambda: _riemann(
+        "rusanov", "pops::RusanovFlux", ["physical_flux", "provider_pack", "stability_bound"]),
     HLL=_hll,
     HLLC=lambda: _riemann("hllc", "pops::HLLCFlux",
-                          ["physical_flux", "pressure", "wave_speeds",
+                          ["physical_flux", "provider_pack", "stability_bound", "pressure", "wave_speeds",
                            "contact_speed", "hllc_star_state"]),
-    Roe=lambda: _riemann("roe", "pops::RoeFlux", ["physical_flux", "roe_average"]),
+    Roe=lambda: _riemann(
+        "roe", "pops::RoeFlux",
+        ["physical_flux", "provider_pack", "stability_bound", "roe_dissipation"]),
     # Explicit canonical Euler 2D routes (ADC-590): force EulerHLLCFlux2D / EulerRoeFlux2D
     # (4-var rho/mx/my/E + pressure), never a fallback. Use HLLC()/Roe() for a generic model
     # that emits the capability (m.enable_hllc()/m.enable_roe()).
     EulerHLLC2D=lambda: _riemann("euler_hllc", "pops::EulerHLLCFlux2D",
-                                 ["physical_flux", "pressure", "euler_2d_layout"]),
+                                 ["physical_flux", "provider_pack", "stability_bound", "pressure",
+                                  "euler_2d_layout"]),
     EulerRoe2D=lambda: _riemann("euler_roe", "pops::EulerRoeFlux2D",
-                                ["physical_flux", "pressure", "euler_2d_layout"]),
+                                ["physical_flux", "provider_pack", "stability_bound", "pressure",
+                                 "euler_2d_layout"]),
     User=lambda brick_id: _external_descriptor(brick_id, expect_category="riemann"),
 )
 

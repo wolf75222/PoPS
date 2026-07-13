@@ -17,7 +17,8 @@ What a version bump is allowed to break is exactly this surface:
 
 - C++ runtime facade: `pops::System`, `pops::AmrSystem` and their public methods (block
   composition, `set_poisson`, `set_refinement`, stepping).
-- The concepts a model composes against: `PhysicalModel`, `NumericalFlux`, `EllipticSolver`,
+- The concepts a model composes against: `PhysicalModel`, `PhysicalFlux`, `NumericalFlux`,
+  `SpatialOperator`, `EllipticSolver`,
   and the named generic bricks in `include/pops/physics/`.
 - Python bindings: the documented `pops.*` surface (`pops.Model`, `pops.Problem`, `pops.compile`,
   `pops.bind`, `pops.physics.facade.Model`, the brick classes, `pops.doctor`, `pops.set_threads`,

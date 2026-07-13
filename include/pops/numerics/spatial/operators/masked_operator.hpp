@@ -89,8 +89,13 @@ struct AssembleRhsMaskedKernel {
         reconstruct_pp<Model>(model, u, i, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
     const auto Rxp =
         reconstruct_pp<Model>(model, u, i + 1, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
-    auto Fxm = nflux(model, Lxm, Axm, Rxm, Ac, 0);
-    auto Fxp = nflux(model, Lxp, Ac, Rxp, Axp, 0);
+    const FaceContext xface = FaceContext::axis_aligned(0);
+    auto Fxm = apply_face_measure(
+                   evaluate_numerical_flux(nflux, model, Lxm, Axm, Rxm, Ac, xface).density, xface)
+                   .value;
+    auto Fxp = apply_face_measure(
+                   evaluate_numerical_flux(nflux, model, Lxp, Ac, Rxp, Axp, xface).density, xface)
+                   .value;
     if (!mask_active(mask, i - 1, j))
       Fxm = typename Model::State{};
     if (!mask_active(mask, i + 1, j))
@@ -105,8 +110,13 @@ struct AssembleRhsMaskedKernel {
         reconstruct_pp<Model>(model, u, i, j, 1, +1, lim, recon_prim, pos_floor, pos_comp);
     const auto Ryp =
         reconstruct_pp<Model>(model, u, i, j + 1, 1, -1, lim, recon_prim, pos_floor, pos_comp);
-    auto Fym = nflux(model, Lym, Aym, Rym, Ac, 1);
-    auto Fyp = nflux(model, Lyp, Ac, Ryp, Ayp, 1);
+    const FaceContext yface = FaceContext::axis_aligned(1);
+    auto Fym = apply_face_measure(
+                   evaluate_numerical_flux(nflux, model, Lym, Aym, Rym, Ac, yface).density, yface)
+                   .value;
+    auto Fyp = apply_face_measure(
+                   evaluate_numerical_flux(nflux, model, Lyp, Ac, Ryp, Ayp, yface).density, yface)
+                   .value;
     if (!mask_active(mask, i, j - 1))
       Fym = typename Model::State{};
     if (!mask_active(mask, i, j + 1))

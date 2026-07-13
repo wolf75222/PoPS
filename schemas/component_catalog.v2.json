@@ -58,6 +58,7 @@
   "route_family_interfaces": {
     "riemann": [
       {"name": "requirement", "mode": "value", "binding": "requirements"},
+      {"name": "provider", "mode": "entry_point", "binding": "native"},
       {"name": "stability", "mode": "entry_point", "binding": "native"},
       {"name": "fallible_evaluation", "mode": "entry_point", "binding": "native"},
       {"name": "report", "mode": "method", "binding": "manifest"}
@@ -256,7 +257,9 @@
           "cpp_id": "kRusanov",
           "native_entry": "pops::RusanovFlux",
           "requirements": [
-            "max_wave_speed"
+            "physical_flux",
+            "provider_pack",
+            "stability_bound"
           ],
           "limitations": [],
           "aliases": [],
@@ -274,6 +277,8 @@
           "native_entry": "pops::HLLFlux",
           "requirements": [
             "physical_flux",
+            "provider_pack",
+            "stability_bound",
             "wave_speeds"
           ],
           "limitations": [],
@@ -292,6 +297,8 @@
           "native_entry": "pops::HLLCFlux",
           "requirements": [
             "physical_flux",
+            "provider_pack",
+            "stability_bound",
             "pressure",
             "wave_speeds",
             "contact_speed",
@@ -315,7 +322,9 @@
           "native_entry": "pops::RoeFlux",
           "requirements": [
             "physical_flux",
-            "roe_average"
+            "provider_pack",
+            "stability_bound",
+            "roe_dissipation"
           ],
           "limitations": [
             "polar geometry not wired; generic-only (ADC-590), requires HasRoeDissipation"
@@ -335,6 +344,8 @@
           "native_entry": "pops::EulerHLLCFlux2D",
           "requirements": [
             "physical_flux",
+            "provider_pack",
+            "stability_bound",
             "pressure",
             "euler_2d_layout"
           ],
@@ -356,6 +367,8 @@
           "native_entry": "pops::EulerRoeFlux2D",
           "requirements": [
             "physical_flux",
+            "provider_pack",
+            "stability_bound",
             "pressure",
             "euler_2d_layout"
           ],

@@ -111,7 +111,7 @@ def test_registration_rejects_malformed_interface_and_target_before_mutation():
         registry.register(external, origin="external", platform={
             "dimension": 3, "scalar": "float64", "device": "cpu", "features": [],
         })
-    assert getattr(target_error.value, "code", None) == "unsupported_target"
+    assert getattr(target_error.value, "code", None) == "unsupported_target_combination"
     assert registry.revision == 0
 
 
@@ -127,6 +127,13 @@ def test_fallible_interface_refuses_an_implicit_success_value():
         registry.adapter(component.component_manifest.component_id).invoke(
             "fallible_evaluation", {"layout": "uniform"})
     assert error.value.code == "implicit_evaluation_outcome"
+
+
+def test_fallible_outcomes_map_to_exact_program_transaction_actions():
+    assert EvaluationOutcome.ok().transaction_action == "continue"
+    assert EvaluationOutcome.retry("smaller dt").transaction_action == "retry_step"
+    assert EvaluationOutcome.reject("inadmissible stage").transaction_action == "reject_step"
+    assert EvaluationOutcome.failed("kernel failure").transaction_action == "abort_run"
 
 
 def test_builtin_and_external_registration_reports_have_identical_shape():

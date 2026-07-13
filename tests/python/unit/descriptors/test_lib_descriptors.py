@@ -119,4 +119,5 @@ def test_user_riemann_is_external():
 def test_descriptor_requirements_present():
     # HLLC requires the model HLLC capabilities; Rusanov only needs a max wave speed.
     assert "hllc_star_state" in lib.riemann.HLLC().requirements.get("capabilities", [])
-    assert lib.riemann.Rusanov().requirements.get("capabilities") == ["max_wave_speed"]
+    assert lib.riemann.Rusanov().requirements.get("capabilities") == [
+        "physical_flux", "provider_pack", "stability_bound"]

@@ -48,15 +48,15 @@ std::string brick_source() {
 #include <pops/runtime/program/external_riemann_brick.hpp>
 #include <pops/physics/bricks/bricks.hpp>
 
-// The user's flux: same single-interface contract as pops::RusanovFlux (numerical_flux.hpp). Here it
-// forwards to RusanovFlux so the test can assert bit-identical dispatch; a real brick would compute
-// its own interface flux. POPS_HD: device-callable, no virtuals.
+// The user's flux: the same narrow PhysicalFlux + two typed traces + FaceContext contract as
+// pops::RusanovFlux. Here it forwards to RusanovFlux so the test can assert bit-identical dispatch;
+// a real brick would compute its own interface flux. POPS_HD: device-callable, no virtuals.
 struct UserRusanov {
-  template <class Model>
-  POPS_HD typename Model::State operator()(const Model& m, const typename Model::State& UL,
-                                          const pops::Aux& AL, const typename Model::State& UR,
-                                          const pops::Aux& AR, int dir) const {
-    return pops::RusanovFlux{}(m, UL, AL, UR, AR, dir);
+  template <pops::PhysicalFlux Physical>
+  POPS_HD pops::FluxEvaluation<typename Physical::State> operator()(
+      const Physical& physical, const typename Physical::Trace& left,
+      const typename Physical::Trace& right, const pops::FaceContext& face) const {
+    return pops::RusanovFlux{}(physical, left, right, face);
   }
 };
 
@@ -64,7 +64,9 @@ namespace user_brick {
 using Model = pops::CompositeModel<pops::Euler, pops::NoSource, pops::BackgroundDensity>;
 }
 
-POPS_DEFINE_EXTERNAL_RIEMANN_BRICK("my_riemann", UserRusanov, user_brick::Model, "max_wave_speed");
+POPS_DEFINE_EXTERNAL_RIEMANN_BRICK(
+    "my_riemann", UserRusanov, user_brick::Model,
+    "physical_flux,provider_pack,stability_bound");
 POPS_DEFINE_BRICK_MANIFEST();
 )CPP";
   // clang-format on
@@ -182,7 +184,8 @@ static int pops_run_test_external_riemann_dispatch() {
   // (1) dlopen + manifest visibility + requirements surface.
   ExternalBrickHandle handle(so, "my_riemann");
   chk(handle.id() == "my_riemann", "handle_id");
-  chk(handle.requirements() == "max_wave_speed", "requirements_surface");
+  chk(handle.requirements() == "physical_flux,provider_pack,stability_bound",
+      "requirements_surface");
   chk(handle.residual() != nullptr, "residual_resolved");
   // The dlopen registered the manifest in this image's process catalog too.
   const auto* entry = pops::runtime::program::BrickRegistry::instance().lookup("my_riemann");

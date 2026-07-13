@@ -205,6 +205,57 @@ class ProviderPack:
 
     __getitem__ = lookup
 
+    def select(self, requirements: Iterable[Any]) -> ProviderPack:
+        """Resolve and retain exactly the qualified components a consumer declares.
+
+        A requirement is either a :class:`ComponentKey` or ``(key, contract)``.  Every row is
+        validated through :meth:`lookup` before the result is published: missing, unavailable,
+        unset, or contract-incompatible inputs fail at resolve time and can never become a neutral
+        runtime value.  Producer slots are storage descriptors, not positional argument indices,
+        so they retain their original values in the minimal pack.
+        """
+        rows = []
+        seen = set()
+        for requirement in requirements:
+            if isinstance(requirement, ComponentKey):
+                key, expected = requirement, None
+            else:
+                try:
+                    key, expected = tuple(requirement)
+                except (TypeError, ValueError):
+                    raise TypeError(
+                        "ProviderPack requirements must be ComponentKey or (key, contract)"
+                    ) from None
+                if not isinstance(key, ComponentKey) or not isinstance(expected, ComponentContract):
+                    raise TypeError(
+                        "ProviderPack requirements must be ComponentKey or (key, contract)"
+                    )
+            if key in seen:
+                continue
+            entry = self.lookup(key, expected)
+            rows.append((key, self._contracts[key], entry))
+            seen.add(key)
+        return ProviderPack(rows, capacity=self._capacity)
+
+    def select_spaces(self, *, owner_qid: str,
+                      spaces: Iterable[tuple[str, str]]) -> ProviderPack:
+        """Select complete typed spaces without falling back to a bare component name."""
+        _non_empty(owner_qid, "ProviderPack selection owner_qid")
+        requested = set(spaces)
+        for row in requested:
+            if (not isinstance(row, tuple) or len(row) != 2 or
+                    not all(isinstance(value, str) and value for value in row)):
+                raise TypeError("ProviderPack spaces must be (space_kind, space_name) pairs")
+        keys = [key for key in self if key.owner_qid == owner_qid and
+                (key.space_kind, key.space_name) in requested]
+        found = {(key.space_kind, key.space_name) for key in keys}
+        missing = requested - found
+        if missing:
+            raise MissingInputProvider(
+                "missing typed provider space(s) for owner %r: %r" %
+                (owner_qid, sorted(missing)))
+        return self.select(keys)
+
     def to_data(self) -> dict[str, Any]:
         rows = []
         for key in sorted(self._entries):
@@ -289,5 +340,23 @@ def build_provider_pack(module: Any) -> ProviderPack:
     return ProviderPack(rows)
 
 
+def build_operator_provider_pack(module: Any, operator: Any) -> ProviderPack:
+    """Build the minimal exact provider pack consumed by one typed operator.
+
+    State traces are explicit NumericalFlux operands and therefore are not duplicated in the
+    provider pack.  Every FieldSpace input is retained with its complete qualified contract.  The
+    selection goes through :meth:`ProviderPack.select_spaces`, so a stale signature or missing
+    producer is a resolve-time error rather than a runtime zero.
+    """
+    full = build_provider_pack(module)
+    spaces = []
+    for input_space in operator.signature.inputs:
+        if getattr(input_space, "kind", None) == "field":
+            spaces.append(("field", input_space.name))
+    if not spaces:
+        return ProviderPack(capacity=full.capacity)
+    return full.select_spaces(owner_qid=str(module.owner_path.canonical()), spaces=spaces)
+
+
 __all__ = ["ComponentKey", "ComponentContract", "ProviderEntry", "ProviderPack",
-           "MissingInputProvider", "build_provider_pack"]
+           "MissingInputProvider", "build_provider_pack", "build_operator_provider_pack"]

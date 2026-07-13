@@ -350,6 +350,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_polar_schur_multibox
   test_krylov_solver
   test_numerical_defaults
+  test_flux_interfaces
   test_fallback_diagnostics
   test_structured_solver_diagnostics
   test_public_validation_errors

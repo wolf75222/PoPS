@@ -93,6 +93,7 @@ from .provider_pack import (
     MissingInputProvider,
     ProviderEntry,
     ProviderPack,
+    build_operator_provider_pack,
     build_provider_pack,
 )
 from .signatures import Signature
@@ -145,5 +146,5 @@ __all__ = [
     "ComponentManifestError", "ComponentVersion", "ComponentRecord",
     "ComponentRegistry", "ComponentRegistrySnapshot",
     "ComponentKey", "ComponentContract", "ProviderEntry", "ProviderPack",
-    "MissingInputProvider", "build_provider_pack",
+    "MissingInputProvider", "build_provider_pack", "build_operator_provider_pack",
 ]

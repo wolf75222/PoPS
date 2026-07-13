@@ -109,8 +109,11 @@ function assemble_rhs(model, U, aux, geom, R, recon_prim):   # R = -div Fhat + S
             Rxm = reconstruct(model, U, i,   j, dir=0, sgn=-1, recon_prim)   # etat R de la face i-1/2
             Lxp = reconstruct(model, U, i,   j, dir=0, sgn=+1, recon_prim)
             Rxp = reconstruct(model, U, i+1, j, dir=0, sgn=-1, recon_prim)
-            Fxm = nflux(model, Lxm, A(i-1,j), Rxm, Ac,     dir=0)
-            Fxp = nflux(model, Lxp, Ac,       Rxp, A(i+1,j), dir=0)
+            left  = Trace(Lxm, bind_exact_providers(A(i-1,j)))
+            right = Trace(Rxm, bind_exact_providers(Ac))
+            face  = FaceContext(axis=0, normal=+x, face_measure=1)
+            Fxm = apply_face_measure(nflux(physical_flux, left, right, face).density, face)
+            Fxp = analogue at i+1/2
             # faces y : idem dans la direction j
             Fym, Fyp = (analogue avec dir=1)
             S = model.source(load_state(U, i, j), Ac)
@@ -133,6 +136,14 @@ gives back exactly the residual. The loop goes through the `for_each_cell` seam.
 subdomain: zero normal flux on the faces touching a masked cell (conservative FV wall), zero residual
 on the inactive cells. The global CFL step is read by `max_wave_speed_mf` (reduction over the local
 boxes then MPI `all_reduce_max`, otherwise each rank would pick a different `dt` and diverge).
+
+`PhysicalFlux`, `NumericalFlux` and the spatial operator are distinct contracts. The numerical
+policy receives only two typed traces and a `FaceContext`; it cannot inspect a runtime model, mesh,
+global auxiliary slot, or provider outside its resolved pack. It returns `FluxDensity` and a
+`StabilityBound` with explicit units/convention. `apply_face_measure` is the unique density-to-
+`IntegratedFaceFlux` operation, so Cartesian area, polar radius and embedded-boundary aperture are
+applied exactly once by the spatial layer. A fallible evaluation maps explicitly to retry, reject or
+abort transaction actions.
 
 **Constraints / remarks.** CFL condition: $\Delta t \le C\,\dfrac{\min(\Delta x,\Delta y)}{\max|\lambda|}$,
 where $\lambda$ is the local wave speed and $C \le 1$ at order 1; `max_wave_speed_mf` provides

@@ -64,8 +64,15 @@ struct AssembleRhsKernel {
         reconstruct_pp<Model>(model, u, i, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
     const auto Rxp =
         reconstruct_pp<Model>(model, u, i + 1, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Fxm = nflux(model, Lxm, Axm, Rxm, Ac, 0);
-    const auto Fxp = nflux(model, Lxp, Ac, Rxp, Axp, 0);
+    const FaceContext xface = FaceContext::axis_aligned(0);
+    const auto Fxm =
+        apply_face_measure(evaluate_numerical_flux(nflux, model, Lxm, Axm, Rxm, Ac, xface).density,
+                           xface)
+            .value;
+    const auto Fxp =
+        apply_face_measure(evaluate_numerical_flux(nflux, model, Lxp, Ac, Rxp, Axp, xface).density,
+                           xface)
+            .value;
 
     // y faces
     const auto Lym =
@@ -76,8 +83,15 @@ struct AssembleRhsKernel {
         reconstruct_pp<Model>(model, u, i, j, 1, +1, lim, recon_prim, pos_floor, pos_comp);
     const auto Ryp =
         reconstruct_pp<Model>(model, u, i, j + 1, 1, -1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Fym = nflux(model, Lym, Aym, Rym, Ac, 1);
-    const auto Fyp = nflux(model, Lyp, Ac, Ryp, Ayp, 1);
+    const FaceContext yface = FaceContext::axis_aligned(1);
+    const auto Fym =
+        apply_face_measure(evaluate_numerical_flux(nflux, model, Lym, Aym, Rym, Ac, yface).density,
+                           yface)
+            .value;
+    const auto Fyp =
+        apply_face_measure(evaluate_numerical_flux(nflux, model, Lyp, Ac, Ryp, Ayp, yface).density,
+                           yface)
+            .value;
 
     const auto S = model.source(load_state<Model>(u, i, j), Ac);
     for (int c = 0; c < Model::n_vars; ++c)
@@ -165,8 +179,20 @@ struct AssembleRhsHllCachedKernel {
     const Real sRxm = ws(i - 1, j, 1) > ws(i, j, 1) ? ws(i - 1, j, 1) : ws(i, j, 1);
     const Real sLxp = ws(i, j, 0) < ws(i + 1, j, 0) ? ws(i, j, 0) : ws(i + 1, j, 0);
     const Real sRxp = ws(i, j, 1) > ws(i + 1, j, 1) ? ws(i, j, 1) : ws(i + 1, j, 1);
-    const auto Fxm = hll_flux_with_speeds(model, Lxm, Axm, Rxm, Ac, 0, sLxm, sRxm);
-    const auto Fxp = hll_flux_with_speeds(model, Lxp, Ac, Rxp, Axp, 0, sLxp, sRxp);
+    const FaceContext xface = FaceContext::axis_aligned(0);
+    const PhysicalFluxView<Model> physical{model};
+    const auto Fxm = apply_face_measure(
+                         hll_flux_with_speeds(physical, make_face_trace<Model>(Lxm, Axm),
+                                              make_face_trace<Model>(Rxm, Ac), xface, sLxm, sRxm)
+                             .density,
+                         xface)
+                         .value;
+    const auto Fxp = apply_face_measure(
+                         hll_flux_with_speeds(physical, make_face_trace<Model>(Lxp, Ac),
+                                              make_face_trace<Model>(Rxp, Axp), xface, sLxp, sRxp)
+                             .density,
+                         xface)
+                         .value;
 
     // y faces (components 2 = lo_y, 3 = hi_y of the scratch)
     const auto Lym =
@@ -181,8 +207,19 @@ struct AssembleRhsHllCachedKernel {
     const Real sRym = ws(i, j - 1, 3) > ws(i, j, 3) ? ws(i, j - 1, 3) : ws(i, j, 3);
     const Real sLyp = ws(i, j, 2) < ws(i, j + 1, 2) ? ws(i, j, 2) : ws(i, j + 1, 2);
     const Real sRyp = ws(i, j, 3) > ws(i, j + 1, 3) ? ws(i, j, 3) : ws(i, j + 1, 3);
-    const auto Fym = hll_flux_with_speeds(model, Lym, Aym, Rym, Ac, 1, sLym, sRym);
-    const auto Fyp = hll_flux_with_speeds(model, Lyp, Ac, Ryp, Ayp, 1, sLyp, sRyp);
+    const FaceContext yface = FaceContext::axis_aligned(1);
+    const auto Fym = apply_face_measure(
+                         hll_flux_with_speeds(physical, make_face_trace<Model>(Lym, Aym),
+                                              make_face_trace<Model>(Rym, Ac), yface, sLym, sRym)
+                             .density,
+                         yface)
+                         .value;
+    const auto Fyp = apply_face_measure(
+                         hll_flux_with_speeds(physical, make_face_trace<Model>(Lyp, Ac),
+                                              make_face_trace<Model>(Ryp, Ayp), yface, sLyp, sRyp)
+                             .density,
+                         yface)
+                         .value;
 
     const auto S = model.source(load_state<Model>(u, i, j), Ac);
     for (int c = 0; c < Model::n_vars; ++c)

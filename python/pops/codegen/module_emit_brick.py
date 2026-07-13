@@ -9,6 +9,7 @@ historical single-module form.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from pops.codegen.cpp_writer import (
@@ -185,7 +186,9 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     # P7-b : assign the runtime indices BEFORE any to_cpp() (a RuntimeParamRef raises otherwise).
     rt_member = model._runtime_params_member()
     S = [
+        "#include <array>",
         "#include <cmath>",  # std::sqrt / std::pow : self-sufficient brick (g++ does not pull cmath)
+        "#include <pops/numerics/fv/flux_interfaces.hpp>",
         "// brique HYPERBOLIQUE generee depuis le modele symbolique '%s' (pops.dsl.emit_cpp_brick)."
         % model.name,
         "// Satisfait pops::HyperbolicModel : flux + max_wave_speed + conversions + descripteurs.",
@@ -205,6 +208,22 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         "  using Aux   = pops::Aux;",
         "  static constexpr int n_vars = %d;" % nc,
     ]
+    provider_rows = getattr(model, "_component_flux_provider_metadata", {}).get("entries", [])
+    S.append("  static constexpr int n_flux_providers = %d;" % len(provider_rows))
+    S.append(
+        "  inline static constexpr std::array<pops::QualifiedProviderRequirement, %d> "
+        "flux_provider_requirements{{" % len(provider_rows)
+    )
+    for row in provider_rows:
+        key, contract, provider = row["key"], row["contract"], row["provider"]
+        values = [
+            key["owner_qid"], key["space_kind"], key["space_name"], key["component"],
+            contract["representation"], contract["centering"], contract["unit"] or "",
+            contract["layout"], contract["value_kind"] or "", provider["producer"] or "",
+        ]
+        S.append("    {%s, %d}," %
+                 (", ".join(json.dumps(value) for value in values), provider["slot"]))
+    S.append("  }};")
     if rt_member:  # member pops::RuntimeParams params{count, {defaults}} (P7-b)
         S.append(rt_member.rstrip("\n"))
     # Foncteurs nommes des temoins de VP (EigWitness) : methodes statiques POPS_HD remplissant

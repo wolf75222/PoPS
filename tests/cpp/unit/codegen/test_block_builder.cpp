@@ -136,8 +136,11 @@ TEST(test_block_builder, generic_flux_bit_identical_to_explicit_on_composite_eul
   const Aux A{};
   double dh = 0, dr = 0;
   for (int d = 0; d < 2; ++d) {
-    const auto fh_g = ghllc(model, UL, A, UR, A, d), fh_e = ehllc(model, UL, A, UR, A, d);
-    const auto fr_g = groe(model, UL, A, UR, A, d), fr_e = eroe(model, UL, A, UR, A, d);
+    const FaceContext face = FaceContext::axis_aligned(d);
+    const auto fh_g = evaluate_numerical_flux(ghllc, model, UL, A, UR, A, face).density.value;
+    const auto fh_e = evaluate_numerical_flux(ehllc, model, UL, A, UR, A, face).density.value;
+    const auto fr_g = evaluate_numerical_flux(groe, model, UL, A, UR, A, face).density.value;
+    const auto fr_e = evaluate_numerical_flux(eroe, model, UL, A, UR, A, face).density.value;
     for (int c = 0; c < 4; ++c) {
       dh = std::fmax(dh, std::fabs(fh_g[c] - fh_e[c]));
       dr = std::fmax(dr, std::fabs(fr_g[c] - fr_e[c]));

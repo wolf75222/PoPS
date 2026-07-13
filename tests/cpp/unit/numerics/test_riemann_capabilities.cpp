@@ -171,6 +171,16 @@ double maxdiff(const pops::StateVec<N>& a, const pops::StateVec<N>& b) {
   return m;
 }
 
+template <class Policy, class Model>
+typename Model::State face_density(const Policy& policy, const Model& model,
+                                   const typename Model::State& left, const Aux& left_providers,
+                                   const typename Model::State& right, const Aux& right_providers,
+                                   int axis) {
+  return pops::evaluate_numerical_flux(policy, model, left, left_providers, right,
+                                       right_providers, pops::FaceContext::axis_aligned(axis))
+      .density.value;
+}
+
 }  // namespace
 
 TEST(test_riemann_capabilities, compile_time_detection) {
@@ -204,10 +214,11 @@ TEST(test_riemann_capabilities, generic_path_bit_identical_to_explicit_euler_pat
   };
   for (const auto& pr : pairs)
     for (int dir = 0; dir < 2; ++dir) {
-      const double dh =
-          maxdiff(hllc(e, pr[0], a, pr[1], a, dir), ehllc(e, pr[0], a, pr[1], a, dir));
+      const double dh = maxdiff(face_density(hllc, e, pr[0], a, pr[1], a, dir),
+                                face_density(ehllc, e, pr[0], a, pr[1], a, dir));
       EXPECT_EQ(dh, 0.0) << "HLLC generique != EulerHLLCFlux2D explicite (dir " << dir << ")";
-      const double dr = maxdiff(roe(e, pr[0], a, pr[1], a, dir), eroe(e, pr[0], a, pr[1], a, dir));
+      const double dr = maxdiff(face_density(roe, e, pr[0], a, pr[1], a, dir),
+                                face_density(eroe, e, pr[0], a, pr[1], a, dir));
       EXPECT_EQ(dr, 0.0) << "Roe generique != EulerRoeFlux2D explicite (dir " << dir << ")";
     }
 }
@@ -222,7 +233,7 @@ TEST(test_riemann_capabilities, non_euler_isothermal_hllc_consistency) {
   U[1] = 0.4;
   U[2] = -0.7;
   for (int dir = 0; dir < 2; ++dir) {
-    const double d = maxdiff(hllc(iso, U, a, U, a, dir), iso.flux(U, a, dir));
+    const double d = maxdiff(face_density(hllc, iso, U, a, U, a, dir), iso.flux(U, a, dir));
     EXPECT_LE(d, 1e-13) << "consistance HLLC isotherme (dir " << dir << ")";
   }
 }
@@ -241,8 +252,8 @@ TEST(test_riemann_capabilities, non_euler_isothermal_preserves_stationary_shear)
   UR[0] = 1.0;
   UR[1] = 0.0;
   UR[2] = -3.0;  // u_t = -3
-  const State3 Fc = hllc(iso, UL, a, UR, a, 0);
-  const State3 Fh = hll(iso, UL, a, UR, a, 0);
+  const State3 Fc = face_density(hllc, iso, UL, a, UR, a, 0);
+  const State3 Fh = face_density(hll, iso, UL, a, UR, a, 0);
   EXPECT_LE(std::fabs(Fc[2]), 1e-14) << "HLLC isotherme : cisaillement stationnaire diffuse";
   EXPECT_GE(std::fabs(Fh[2]), 1e-2) << "temoin HLL : le cisaillement devrait etre diffuse";
 }

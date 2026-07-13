@@ -13,9 +13,10 @@ Two things live here:
   HERE and re-exported from ``pops.runtime._bricks_scheme`` (its historical site) so every existing
   ``pops.FiniteVolume`` import path keeps working.
 
-The finite-volume residual is assembled by the ``pops::SpatialDiscretisation<Limiter,
-NumericalFlux>`` tag-type bundle (spatial_discretisation.hpp); there are no separate
-residual/divergence/source-assembly types, so these name that bundle.
+The finite-volume route is selected by the ``pops::SpatialDiscretisation<Limiter,
+NumericalFlux>`` tag bundle. At evaluation time, physical constitutive flux, two-trace numerical
+flux, and mesh-level spatial assembly are separate native protocols; the tag merely binds the
+chosen reconstruction and numerical-flux component into that spatial operator.
 """
 from __future__ import annotations
 

@@ -13,7 +13,7 @@
 ///   - spatial/state_access.hpp     DiffusiveModel, SourceFreeModel, load_state, load_aux.
 ///   - spatial/positivity.hpp       zhang_shu_scale, detail::positivity_comp.
 ///   - spatial/face_flux.hpp        reconstruct, reconstruct_pp, require_reconstruction_ghosts,
-///                                  xface_box / yface_box, rusanov_flux, compute_face_fluxes.
+///                                  xface_box / yface_box, compute_face_fluxes.
 ///   - spatial/wave_speed.hpp       max_wave_speed_mf and step-bound reductions, the hotspot
 ///                                  diagnostic, fill_wave_speed_cache.
 ///   - spatial/cartesian_operator.hpp  assemble_rhs, assemble_rhs_hll_cached.

@@ -645,6 +645,13 @@ A fallible evaluation returns an explicit `EvaluationOutcome` (`ok`, `retry`, `r
 `failed`). It has no implicit Python truth value. Native and Python callers therefore propagate the
 declared transaction action instead of converting a missing/error outcome into a neutral value.
 
+Finite-volume components use the same small-interface rule. `PhysicalFluxView` exposes only
+constitutive density, wave/stability and declared Riemann structure. A `NumericalFlux` consumes two
+model-qualified `FaceTrace` values plus `FaceContext` and returns a typed density/outcome; the mesh
+`SpatialOperator` alone applies face and cell measures. Provider packs are selected from exact
+`(owner, space kind, space name, component)` identities. Missing, unavailable or contract-mismatched
+providers fail during selection; homonymous components from different owners never alias.
+
 ## Limitations
 
 The following limits are guarded in the code (they raise a clear error rather than drift

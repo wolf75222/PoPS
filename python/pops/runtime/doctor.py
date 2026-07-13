@@ -276,7 +276,7 @@ def capabilities() -> Any:
             "system_polar": riemann_polar,
             "amr": list(riemann_all),
             "notes": {
-                "rusanov": "minimal generic (max_wave_speed only)",
+                "rusanov": "minimal generic (physical flux + exact provider pack + declared stability bound)",
                 "hll": "generic with signed waves (model.wave_speeds ; DSL : m.wave_speeds(x=, y=) "
                        "explicit WITHOUT primitive 'p', or historical path eigenvalues + 'p') ; "
                        "polar : eligible for the isothermal fluid (IsothermalFluxPolar), not for "

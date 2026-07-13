@@ -20,6 +20,7 @@ facade handles the user actually wrote via ``remap_lowering_error``.
 
 from __future__ import annotations
 
+from types import MappingProxyType
 from typing import Any
 
 from .lowering_coverage import (
@@ -65,11 +66,30 @@ def _module_to_model(module: Any) -> Any:
     # Preserve the canonical source-Module identity across the internal facade lowering. The
     # resulting CompiledModel authenticates this scalar hash; it never retains ``module`` itself.
     object.__setattr__(m, "_compile_source_module_hash", module.module_hash())
-    from pops.model.provider_pack import build_provider_pack  # noqa: PLC0415
+    from pops.model.provider_pack import (  # noqa: PLC0415
+        build_operator_provider_pack,
+        build_provider_pack,
+    )
 
     provider_pack = build_provider_pack(module)
     object.__setattr__(m, "_component_provider_pack", provider_pack)
     object.__setattr__(m, "_component_provider_metadata", provider_pack.to_data())
+    operator_provider_packs = {
+        operator.name: build_operator_provider_pack(module, operator)
+        for operator in module.operator_registry()
+    }
+    object.__setattr__(m, "_component_operator_provider_packs",
+                       MappingProxyType(operator_provider_packs))
+    object.__setattr__(m, "_component_operator_provider_metadata", MappingProxyType({
+        name: pack.to_data() for name, pack in operator_provider_packs.items()
+    }))
+    flux_keys = []
+    for operator in module.operator_registry():
+        if operator.kind == "grid_operator":
+            flux_keys.extend(operator_provider_packs[operator.name])
+    flux_provider_pack = provider_pack.select(flux_keys)
+    object.__setattr__(m, "_component_flux_provider_pack", flux_provider_pack)
+    object.__setattr__(m, "_component_flux_provider_metadata", flux_provider_pack.to_data())
     # The facade is a lowering view of THIS Module, not a newly declared model. Re-anchor its empty
     # backing model before the first declaration so every derived operator registry retains the
     # Module's exact authoring authority. Without this, owner-qualified Program nodes would be

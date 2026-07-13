@@ -84,6 +84,16 @@ class EvaluationOutcome:
     def __bool__(self) -> bool:
         raise TypeError("EvaluationOutcome has no Python truth value; inspect .status explicitly")
 
+    @property
+    def transaction_action(self) -> str:
+        """Exact Program/step action; no caller may reinterpret a failure as a value."""
+        return {
+            "ok": "continue",
+            "retry": "retry_step",
+            "reject": "reject_step",
+            "failed": "abort_run",
+        }[self.status]
+
     @classmethod
     def ok(cls, value: Any = None) -> EvaluationOutcome:
         return cls("ok", value=value)

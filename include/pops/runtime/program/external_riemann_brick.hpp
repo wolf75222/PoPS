@@ -177,6 +177,12 @@ class ExternalBrickHandle {
       e.category = field(rec, "category");
       e.requirements = field(rec, "requirements");
       e.capabilities = field(rec, "capabilities");
+      e.native_id = field(rec, "native_id");
+      e.supported_layouts = field(rec, "supported_layouts");
+      e.supported_platforms = field(rec, "supported_platforms");
+      e.params = field(rec, "params");
+      e.options = field(rec, "options");
+      e.exported_symbols = field(rec, "exported_symbols");
       if (!e.id.empty())
         BrickRegistry::instance().register_brick(e);
       pos = end + 1;
@@ -212,13 +218,18 @@ class ExternalBrickHandle {
 
 // Defines the static-dispatch ABI of an external Riemann brick `.so`: registers its identity in the
 // host catalog AND emits the entry point the host calls. Use ONCE at namespace scope:
-//   struct MyRiemann { template <class M> POPS_HD typename M::State operator()(...) const {...} };
+//   struct MyRiemann {
+//     template <pops::PhysicalFlux F>
+//     POPS_HD pops::FluxEvaluation<typename F::State>
+//     operator()(const F&, const typename F::Trace&, const typename F::Trace&,
+//                const pops::FaceContext&) const;
+//   };
 //   POPS_DEFINE_EXTERNAL_RIEMANN_BRICK("my_riemann", MyRiemann,
 //                                     pops::CompositeModel<pops::Euler, ...>, "pressure,wave_speeds");
 //   POPS_DEFINE_BRICK_MANIFEST();  // exports the manifest reader (once per .so)
 //
 // @p id          the brick id a user selects via pops.lib.riemann.User(id);
-// @p Flux        the NumericalFlux policy (numerics/fv/numerical_flux.hpp contract);
+// @p Flux        the narrow two-trace NumericalFlux policy (numerics/fv/numerical_flux.hpp);
 // @p Model       a TOP-LEVEL ALIAS of the CompositeModel the .so instantiates the flux against (write
 //                `using Model = pops::CompositeModel<...>;` first and pass the alias -- a bare
 //                CompositeModel<A, B, C> has a comma the preprocessor would split, exactly like

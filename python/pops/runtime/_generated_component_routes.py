@@ -9,30 +9,42 @@ ROUTE_REGISTRY_VERSION = 2
 
 CAPABILITY_VOCAB_VERSION = 1
 
-COMPONENT_CATALOG_SHA256 = 'aaecc31fd6ab48d995c7d92f9cb6c02368007a7ae8fa8f6d70730bb93b55f77a'
+COMPONENT_CATALOG_SHA256 = '9fe7f27d7d8320c1fcf531ffa60316043c26f9345c47e262cc1980ccc488aff0'
 
-COMPONENT_CATALOG_SEMANTIC_SHA256 = 'a4cf0ca6b1c5c47ce1e8dbf76fd35533264e5e2ec19bfc8234aa957a0f976f45'
+COMPONENT_CATALOG_SEMANTIC_SHA256 = '37044374a600e265670b2d4a697dbb678dd1f1729dc411884d847e457c2ea80d'
 
-ROUTE_REGISTRY_SIGNATURE = 'v2:a4cf0ca6b1c5c47ce1e8dbf76fd35533264e5e2ec19bfc8234aa957a0f976f45'
+ROUTE_REGISTRY_SIGNATURE = 'v2:37044374a600e265670b2d4a697dbb678dd1f1729dc411884d847e457c2ea80d'
 
-ROUTE_TABLES = {'riemann': (('rusanov', 'pops::RusanovFlux', ('max_wave_speed',), ()),
-             ('hll', 'pops::HLLFlux', ('physical_flux', 'wave_speeds'), ()),
+ROUTE_TABLES = {'riemann': (('rusanov',
+              'pops::RusanovFlux',
+              ('physical_flux', 'provider_pack', 'stability_bound'),
+              ()),
+             ('hll',
+              'pops::HLLFlux',
+              ('physical_flux', 'provider_pack', 'stability_bound', 'wave_speeds'),
+              ()),
              ('hllc',
               'pops::HLLCFlux',
-              ('physical_flux', 'pressure', 'wave_speeds', 'contact_speed', 'hllc_star_state'),
+              ('physical_flux',
+               'provider_pack',
+               'stability_bound',
+               'pressure',
+               'wave_speeds',
+               'contact_speed',
+               'hllc_star_state'),
               ('polar geometry not wired; generic-only (ADC-590), requires HasHLLCStructure',)),
              ('roe',
               'pops::RoeFlux',
-              ('physical_flux', 'roe_average'),
+              ('physical_flux', 'provider_pack', 'stability_bound', 'roe_dissipation'),
               ('polar geometry not wired; generic-only (ADC-590), requires HasRoeDissipation',)),
              ('euler_hllc',
               'pops::EulerHLLCFlux2D',
-              ('physical_flux', 'pressure', 'euler_2d_layout'),
+              ('physical_flux', 'provider_pack', 'stability_bound', 'pressure', 'euler_2d_layout'),
               ('4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; '
                'polar not wired',)),
              ('euler_roe',
               'pops::EulerRoeFlux2D',
-              ('physical_flux', 'pressure', 'euler_2d_layout'),
+              ('physical_flux', 'provider_pack', 'stability_bound', 'pressure', 'euler_2d_layout'),
               ('4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; '
                'polar not wired',))),
  'limiter': (('none', 'pops::NoSlope', (), ()),
@@ -243,6 +255,7 @@ ROUTE_COMPONENT_DEFAULTS = {'version': {'major': 1, 'minor': 0, 'patch': 0},
  'extensions': {}}
 
 ROUTE_FAMILY_INTERFACES = {'riemann': [{'name': 'requirement', 'mode': 'value', 'binding': 'requirements'},
+             {'name': 'provider', 'mode': 'entry_point', 'binding': 'native'},
              {'name': 'stability', 'mode': 'entry_point', 'binding': 'native'},
              {'name': 'fallible_evaluation', 'mode': 'entry_point', 'binding': 'native'},
              {'name': 'report', 'mode': 'method', 'binding': 'manifest'}],

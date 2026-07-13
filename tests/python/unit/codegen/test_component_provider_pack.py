@@ -1,4 +1,6 @@
 """ADC-658: exact immutable typed component/provider lowering metadata."""
+from types import SimpleNamespace
+
 import pytest
 
 pytest.importorskip("pops")
@@ -11,6 +13,7 @@ from pops.model.provider_pack import (
     MissingInputProvider,
     ProviderEntry,
     ProviderPack,
+    build_operator_provider_pack,
 )
 
 
@@ -42,6 +45,37 @@ def test_provider_pack_unset_or_unavailable_is_missing(entry):
     pack = ProviderPack([(key, contract, entry)])
     with pytest.raises(MissingInputProvider):
         pack[key]
+
+
+def test_minimal_selection_preserves_qualified_identity_and_refuses_missing_provider():
+    contract = ComponentContract("field", "cell", "V/m", "cell")
+    left = ComponentKey("case/left", "field", "electric", "grad_x")
+    right = ComponentKey("case/right", "field", "electric", "grad_x")
+    pack = ProviderPack([
+        (left, contract, ProviderEntry("left_solver", True, 0)),
+        (right, contract, ProviderEntry("right_solver", True, 0)),
+    ])
+    selected = pack.select([(left, contract)])
+    assert list(selected) == [left]
+    assert selected[left].producer == "left_solver"
+    with pytest.raises(MissingInputProvider):
+        selected[right]
+    with pytest.raises(MissingInputProvider):
+        pack.select([ComponentKey("case/missing", "field", "electric", "grad_x")])
+
+
+def test_operator_provider_pack_contains_fields_but_not_explicit_state_trace():
+    module = Module("operator_pack")
+    state = module.state_space("U", ("rho",))
+    fields = module.field_space("electric", ("phi", "grad_x", "grad_y"))
+    module.operator("solve", state >> fields, "field_operator", expr=1.0)
+    operator = SimpleNamespace(signature=SimpleNamespace(inputs=(state, fields)))
+    pack = build_operator_provider_pack(module, operator)
+    assert {(key.space_kind, key.space_name, key.component) for key in pack} == {
+        ("field", "electric", "phi"),
+        ("field", "electric", "grad_x"),
+        ("field", "electric", "grad_y"),
+    }
 
 
 def test_provider_pack_accepts_exact_capacity_and_refuses_capacity_plus_one_atomically():
