@@ -184,32 +184,35 @@ class _ProgramCore(
         name, state = _resolve_handle(name), _resolve_handle(state)
         if isinstance(name, ProgramValue) and state is None:
             name, state = None, name
-        if field is not None:
-            if not (isinstance(state, ProgramValue) and state.vtype == "state"):
-                raise ValueError("solve_fields: a State value is required")
-            field = bind_field_reference(self, state.block, field)
+        if field is None:
+            raise ValueError(
+                "solve_fields: field= must be the FieldHandle returned by Problem.add_field")
+        if not (isinstance(state, ProgramValue) and state.vtype == "state"):
+            raise ValueError("solve_fields: a State value is required")
+        field = bind_field_reference(self, state.block, field)
         return self._solve_fields(name=name, state=state, field=field)
 
     def _solve_fields(self, name: Any, state: Any, field: Any = None) -> Any:
         """Internal typed field-solve builder used after handle authentication."""
         if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("solve_fields: a State value is required")
-        attrs = {"field": field} if field is not None else {}
+        if field is None:
+            raise ValueError("solve_fields: an exact field handle is required")
+        attrs = {"field": field}
         # ADC-588: tag the value with a typed FieldContext (the "solve_fields returns a FieldContext"
         # contract, now a real object). The default problem exposes the historical phi/grad outputs;
         # a named field exposes its own single output. The context is build-time metadata only, NEVER
         # serialized as canonical provenance so validation, rewrites and cache identity agree.
-        from pops.time.field_context import DEFAULT_FIELD_PROBLEM, FieldContext
-        output_name = field_name(field) if field is not None else None
-        outputs = ("phi", "grad_x", "grad_y") if field is None else (output_name,)
-        context = FieldContext(
-            field or DEFAULT_FIELD_PROBLEM, ((state.block, state.id),), outputs)
+        from pops.time.field_context import FieldContext
+        output_name = field_name(field)
+        outputs = (output_name,)
+        context = FieldContext(field, ((state.block, state.id),), outputs)
         default_field_space = self._default_field_spaces.get(state.block.model_owner_path)
         return self._new(
             "fields", "solve_fields", (state,), attrs, name, state.block,
-            field_context=context, space=(default_field_space if field is None else None))
+            field_context=context, space=default_field_space)
 
-    def solve_fields_from_blocks(self, states: Any, name: Any = None) -> Any:
+    def solve_fields_from_blocks(self, states: Any, field: Any, name: Any = None) -> Any:
         """Solve the elliptic fields from the SIMULTANEOUS stage states of MULTIPLE blocks (spec
         \"Multi-blocs\"): a coupled Poisson where each listed block reads its own @p states[k] override
         at once, returning a FieldContext.
@@ -235,12 +238,17 @@ class _ProgramCore(
             if s.block in seen:
                 raise ValueError("solve_fields_from_blocks: block '%s' listed twice" % s.block)
             seen.add(s.block)
+        field = bind_field_reference(self, states[0].block, field)
+        return self._solve_fields_from_blocks(states, field=field, name=name)
+
+    def _solve_fields_from_blocks(self, states: Any, *, field: Any, name: Any = None) -> Any:
+        """Build a coupled field solve after its field identity was authenticated."""
         # A coupled solve carries EVERY exact block/state source. It has no singular block owner:
         # projecting onto states[0] would allow only that block to be checked and silently discard
         # the provenance of every other simultaneous override.
-        from pops.time.field_context import DEFAULT_FIELD_PROBLEM, FieldContext
+        from pops.time.field_context import FieldContext
         context = FieldContext(
-            DEFAULT_FIELD_PROBLEM,
+            field,
             tuple((state.block, state.id) for state in states),
             ("phi", "grad_x", "grad_y"),
         )
@@ -250,7 +258,7 @@ class _ProgramCore(
         field_spaces.discard(None)
         field_space = next(iter(field_spaces)) if len(field_spaces) == 1 else None
         return self._new(
-            "fields", "solve_fields_from_blocks", tuple(states), {}, name, None,
+            "fields", "solve_fields_from_blocks", tuple(states), {"field": field}, name, None,
             field_context=context, space=field_space)
 
     # --- operator-first calls (Spec 2) -------------------------------------------

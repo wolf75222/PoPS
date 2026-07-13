@@ -341,9 +341,13 @@ struct AmrSystem::Impl {
   // when the AmrRuntime engine does not yet exist. We stash both here and replay them on the runtime at
   // build_multi. ell_field_comps_: field -> {phi_comp, gx_comp, gy_comp}. ell_field_rhs_: field -> {block
   // name -> RHS closure}. Empty default -> bit-identical (no named field registered).
-  std::map<std::string, std::array<int, 3>> ell_field_comps_;
+  std::map<std::pair<std::string, std::string>, std::array<int, 3>> ell_field_comps_;
   std::map<std::string, std::map<std::string, std::function<void(const MultiFab&, MultiFab&)>>>
       ell_field_rhs_;
+  // Complete plans are keyed by the digest of the canonical block-qualified provider identity.
+  // The identity string is retained in AmrFieldSolveConfig and checked on duplicate installation,
+  // so hash collisions cannot alias fields.  Installed before loaders register (block,key).
+  std::map<std::string, AmrFieldSolveConfig> field_plans_;
   // A named elliptic field is solved only by the AmrRuntime engine (not the single-block AmrCouplerMP
   // coupler), so registering one FORCES the runtime engine even for a single block (AmrRuntime accepts >=
   // 1 block). A compiled time Program (ADC-508) likewise forces it: the AmrProgramContext driver needs
@@ -472,14 +476,11 @@ struct AmrSystem::Impl {
       set_macro_step_fn(macro_step_);
   }
 
-  /// Execute one public AMR macro-step against an accepted snapshot.  The AmrRuntime snapshot owns
-  /// topology + multi-block/per-level data; this facade layer adds its authoritative clock and the
-  /// Program-owned publications that live outside the engine.  Any exception rolls both layers back
-  /// before propagating (RejectAttempt remains observable to the Python retry policy).
-  template <class Body>
-  decltype(auto) execute_step_transaction(Body&& body) {
-    struct Snapshot {
+  struct AcceptedSnapshot {
       std::unique_ptr<AmrRuntime::StepSnapshot> runtime;
+      std::vector<PatchBox> coupler_boxes;
+      std::vector<std::vector<double>> coupler_states;
+      std::vector<std::vector<double>> coupler_potentials;
       double time;
       int macro_step;
       bool clock_restore_pending;
@@ -491,7 +492,7 @@ struct AmrSystem::Impl {
       std::string last_dt_reason;
       std::vector<int> replay_regrid_steps;
 
-      explicit Snapshot(Impl& impl)
+      explicit AcceptedSnapshot(Impl& impl)
           : time(impl.t),
             macro_step(impl.macro_step_),
             clock_restore_pending(impl.clock_restore_pending_),
@@ -504,11 +505,32 @@ struct AmrSystem::Impl {
             replay_regrid_steps(impl.last_replay_regrid_steps_) {
         if (impl.runtime)
           runtime = std::make_unique<AmrRuntime::StepSnapshot>(impl.runtime->step_snapshot());
+        else if (impl.n_levels_fn && impl.level_state_fn && impl.level_potential_fn) {
+          const int levels = impl.n_levels_fn();
+          if (impl.patch_boxes_fn)
+            coupler_boxes = impl.patch_boxes_fn();
+          coupler_states.reserve(static_cast<std::size_t>(levels));
+          coupler_potentials.reserve(static_cast<std::size_t>(levels));
+          for (int level = 0; level < levels; ++level) {
+            coupler_states.push_back(impl.level_state_fn(level));
+            coupler_potentials.push_back(impl.level_potential_fn(level));
+          }
+        }
       }
 
       void restore(Impl& impl) const {
         if (runtime && impl.runtime)
           impl.runtime->restore_step_snapshot(*runtime);
+        else if (!coupler_states.empty()) {
+          if (!impl.set_hierarchy_fn || !impl.set_level_state_fn || !impl.set_level_potential_fn)
+            throw std::runtime_error(
+                "AmrSystem restart rollback lost the single-block checkpoint hooks");
+          impl.set_hierarchy_fn(coupler_boxes);
+          for (std::size_t level = 0; level < coupler_states.size(); ++level) {
+            impl.set_level_state_fn(static_cast<int>(level), coupler_states[level]);
+            impl.set_level_potential_fn(static_cast<int>(level), coupler_potentials[level]);
+          }
+        }
         impl.t = time;
         impl.macro_step_ = macro_step;
         impl.clock_restore_pending_ = clock_restore_pending;
@@ -520,9 +542,17 @@ struct AmrSystem::Impl {
         impl.last_dt_reason = last_dt_reason;
         impl.last_replay_regrid_steps_ = replay_regrid_steps;
       }
-    };
+  };
 
-    Snapshot accepted(*this);
+  std::unique_ptr<AcceptedSnapshot> restart_transaction_;
+
+  /// Execute one public AMR macro-step against an accepted snapshot.  The AmrRuntime snapshot owns
+  /// topology + multi-block/per-level data; this facade layer adds its authoritative clock and the
+  /// Program-owned publications that live outside the engine.  Any exception rolls both layers back
+  /// before propagating (RejectAttempt remains observable to the Python retry policy).
+  template <class Body>
+  decltype(auto) execute_step_transaction(Body&& body) {
+    AcceptedSnapshot accepted(*this);
     try {
       return std::forward<Body>(body)();
     } catch (...) {
@@ -892,8 +922,11 @@ struct AmrSystem::Impl {
     // RHS closure is attached to its block's AmrRuntimeBlock (resolved by name) so solve_named_fields can
     // sum them. A closure naming an unknown block is a loader/codegen bug -> reject loud. Empty maps ->
     // no-op (no named field), bit-identical.
+    for (const auto& [slot, plan] : field_plans_)
+      runtime->install_field_plan(slot, plan);
     for (const auto& kv : ell_field_comps_)
-      runtime->register_named_field(kv.first, kv.second[0], kv.second[1], kv.second[2]);
+      runtime->register_named_field(kv.first.first, kv.first.second, kv.second[0], kv.second[1],
+                                    kv.second[2]);
     for (const auto& [field, by_block] : ell_field_rhs_)
       for (const auto& [block_name, rhs] : by_block) {
         const int bi = block_index(block_name);
@@ -1302,13 +1335,14 @@ POPS_EXPORT void AmrSystem::set_compiled_block(
 // m.elliptic_field after the block is installed. We stash the field's aux output components and FORCE
 // the runtime engine (the named-field solve lives only in AmrRuntime); build_multi replays it. POPS_EXPORT:
 // resolved by the generated AMR .so loader across the dlopen boundary (same as set_compiled_block).
-POPS_EXPORT void AmrSystem::register_elliptic_field(const std::string& field, int phi_comp,
-                                                    int gx_comp, int gy_comp) {
+POPS_EXPORT void AmrSystem::register_elliptic_field(const std::string& block_name,
+                                                    const std::string& provider_key,
+                                                    int phi_comp, int gx_comp, int gy_comp) {
   require_assembling_amr(p_->bound_,
                          "register_elliptic_field");  // frozen once pops.bind completes (ADC-592)
   if (p_->built)
     throw std::runtime_error("AmrSystem::register_elliptic_field : the system is already built");
-  p_->ell_field_comps_[field] = {phi_comp, gx_comp, gy_comp};
+  p_->ell_field_comps_[{block_name, provider_key}] = {phi_comp, gx_comp, gy_comp};
   p_->force_runtime_ =
       true;  // the named-field solve needs the AmrRuntime engine (even single-block)
 }
@@ -1339,6 +1373,75 @@ std::vector<double> AmrSystem::named_field_values(const std::string& field) {
         "' is only solved by the multi-block runtime engine (AmrRuntime). Declare it via "
         "m.elliptic_field on the block model so the loader registers it.");
   return p_->runtime->named_field_values(field);
+}
+
+std::vector<std::string> AmrSystem::field_provider_slots() const {
+  const_cast<Impl*>(p_.get())->ensure_built();
+  if (!p_->runtime)
+    return {};
+  return p_->runtime->provider_slots();
+}
+
+void AmrSystem::set_field_potential(const std::string& provider_slot,
+                                    const std::vector<double>& phi) {
+  set_field_potential_level(provider_slot, 0, phi);
+}
+
+int AmrSystem::field_provider_levels(const std::string& provider_slot) {
+  p_->ensure_built();
+  if (!p_->runtime)
+    throw std::runtime_error("AmrSystem::field_provider_levels requires the qualified field runtime");
+  return p_->runtime->provider_potential_levels(provider_slot);
+}
+
+void AmrSystem::set_field_potential_level(const std::string& provider_slot, int level,
+                                          const std::vector<double>& phi) {
+  p_->ensure_built();
+  if (!p_->runtime)
+    throw std::runtime_error("AmrSystem::set_field_potential_level requires the qualified field runtime");
+  if (level < 0 || level >= p_->runtime->provider_potential_levels(provider_slot))
+    throw std::out_of_range("AmrSystem::set_field_potential_level level out of range");
+  const int width = p_->cfg.n << level;
+  const std::size_t expected = static_cast<std::size_t>(width) * width;
+  if (phi.size() != expected)
+    throw std::runtime_error("AmrSystem::set_field_potential_level layout size mismatch");
+  MultiFab& target = p_->runtime->provider_potential_level(provider_slot, level);
+  for (int li = 0; li < target.local_size(); ++li) {
+    Array4 out = target.fab(li).array();
+    const Box2D valid = target.box(li);
+    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+        out(i, j, 0) = static_cast<Real>(
+            phi[static_cast<std::size_t>(j) * width + static_cast<std::size_t>(i)]);
+  }
+}
+
+std::vector<double> AmrSystem::field_potential_global(const std::string& provider_slot) {
+  return field_potential_level_global(provider_slot, 0);
+}
+
+std::vector<double> AmrSystem::field_potential_level_global(const std::string& provider_slot,
+                                                            int level) {
+  p_->ensure_built();
+  if (!p_->runtime)
+    throw std::runtime_error(
+        "AmrSystem::field_potential_global requires the qualified field runtime");
+  if (level < 0 || level >= p_->runtime->provider_potential_levels(provider_slot))
+    throw std::out_of_range("AmrSystem::field_potential_level_global level out of range");
+  const int width = p_->cfg.n << level;
+  MultiFab& source = p_->runtime->provider_potential_level(provider_slot, level);
+  std::vector<double> result(static_cast<std::size_t>(width) * width, 0.0);
+  for (int li = 0; li < source.local_size(); ++li) {
+    const ConstArray4 values = source.fab(li).const_array();
+    const Box2D valid = source.box(li);
+    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+        result[static_cast<std::size_t>(j) * width + static_cast<std::size_t>(i)] =
+            static_cast<double>(values(i, j, 0));
+  }
+  if (p_->cfg.distribute_coarse)
+    all_reduce_sum_inplace(result.data(), static_cast<int>(result.size()));
+  return result;
 }
 
 namespace {
@@ -1602,6 +1705,228 @@ void AmrSystem::set_poisson(const std::string& rhs, const std::string& solver,
   p_->p_fac_coarse_rel_tol = fac_coarse_rel_tol;
   p_->p_fac_coarse_cycles = fac_coarse_cycles;
   p_->p_fac_verbose = fac_verbose;
+}
+
+void AmrSystem::set_field_solver_plan(
+    const std::string& provider_slot, const std::string& provider_identity,
+    const std::string& output_owner_identity,
+    const std::string& output_block, const std::string& output_key,
+    const std::vector<std::string>& provider_identities,
+    const std::vector<std::string>& provider_blocks,
+    const std::vector<std::string>& provider_keys,
+    const std::vector<double>& provider_coefficients, const std::string& solver,
+    const std::string& hierarchy, double abs_tol, double rel_tol, int max_cycles,
+    int min_coarse, int pre_smooth, int post_smooth, int bottom_sweeps,
+    int coarse_threshold) {
+  require_assembling_amr(p_->bound_, "set_field_solver_plan");
+  if (p_->built)
+    throw std::runtime_error("AmrSystem::set_field_solver_plan: system already built");
+  if (provider_slot.empty() || provider_identity.empty() || output_owner_identity.empty() ||
+      output_block.empty() ||
+      output_key.empty())
+    throw std::runtime_error(
+        "AmrSystem::set_field_solver_plan requires a qualified provider identity");
+  const std::size_t provider_count = provider_identities.size();
+  if (provider_count == 0 || provider_blocks.size() != provider_count ||
+      provider_keys.size() != provider_count || provider_coefficients.size() != provider_count)
+    throw std::runtime_error("AmrSystem::set_field_solver_plan invalid provider-pack shape");
+  for (std::size_t i = 0; i < provider_count; ++i)
+    if (provider_identities[i].empty() || provider_blocks[i].empty() || provider_keys[i].empty() ||
+        !std::isfinite(provider_coefficients[i]))
+      throw std::runtime_error("AmrSystem::set_field_solver_plan invalid provider-pack entry");
+  if (solver != "geometric_mg")
+    throw std::runtime_error(
+        "AmrSystem::set_field_solver_plan requires geometric_mg on AMR");
+  if (hierarchy != "composite" && hierarchy != "level_local")
+    throw std::runtime_error("AmrSystem::set_field_solver_plan invalid hierarchy policy");
+  if (abs_tol < 0.0 || rel_tol <= 0.0 || max_cycles < 1 || min_coarse < 1 ||
+      pre_smooth < 0 || post_smooth < 0 || bottom_sweeps < 0 || coarse_threshold < 0)
+    throw std::runtime_error("AmrSystem::set_field_solver_plan invalid multigrid options");
+  const auto existing = p_->field_plans_.find(provider_slot);
+  if (existing != p_->field_plans_.end() &&
+      existing->second.provider_identity != provider_identity)
+    throw std::runtime_error("AmrSystem::set_field_solver_plan provider digest collision");
+  auto& plan = p_->field_plans_[provider_slot];
+  plan.provider_identity = provider_identity;
+  plan.output_owner_identity = output_owner_identity;
+  plan.output_block = output_block;
+  plan.output_key = output_key;
+  plan.providers.clear();
+  plan.providers.reserve(provider_count);
+  for (std::size_t i = 0; i < provider_count; ++i)
+    plan.providers.push_back({provider_identities[i], provider_blocks[i], provider_keys[i],
+                              static_cast<Real>(provider_coefficients[i])});
+  plan.solver = solver;
+  plan.hierarchy = hierarchy;
+  plan.mg_opts.abs_tol = static_cast<Real>(abs_tol);
+  plan.mg_opts.rel_tol = static_cast<Real>(rel_tol);
+  plan.mg_opts.max_cycles = max_cycles;
+  plan.mg_opts.min_coarse = min_coarse;
+  plan.mg_opts.nu1 = pre_smooth;
+  plan.mg_opts.nu2 = post_smooth;
+  plan.mg_opts.nbottom = bottom_sweeps;
+  plan.mg_opts.coarse_threshold = coarse_threshold;
+  p_->force_runtime_ = true;
+}
+
+void AmrSystem::set_field_boundary_plan(const std::string& provider_slot,
+                                        const std::vector<std::string>& kind,
+                                        const std::vector<double>& alpha,
+                                        const std::vector<double>& beta,
+                                        const std::vector<double>& value) {
+  require_assembling_amr(p_->bound_, "set_field_boundary_plan");
+  auto found = p_->field_plans_.find(provider_slot);
+  if (found == p_->field_plans_.end())
+    throw std::runtime_error("AmrSystem::set_field_boundary_plan unknown provider slot");
+  if (kind.size() != 4 || alpha.size() != 4 || beta.size() != 4 || value.size() != 4)
+    throw std::runtime_error(
+        "AmrSystem::set_field_boundary_plan requires four xlo/xhi/ylo/yhi entries");
+  BCRec bc;
+  bc.dx = static_cast<Real>(p_->cfg.L / p_->cfg.n);
+  bc.dy = bc.dx;
+  BCType* types[] = {&bc.xlo, &bc.xhi, &bc.ylo, &bc.yhi};
+  Real* vals[] = {&bc.xlo_val, &bc.xhi_val, &bc.ylo_val, &bc.yhi_val};
+  Real* alphas[] = {&bc.xlo_alpha, &bc.xhi_alpha, &bc.ylo_alpha, &bc.yhi_alpha};
+  Real* betas[] = {&bc.xlo_beta, &bc.xhi_beta, &bc.ylo_beta, &bc.yhi_beta};
+  for (int face = 0; face < 4; ++face) {
+    const Real a = static_cast<Real>(alpha[face]);
+    const Real b = static_cast<Real>(beta[face]);
+    const Real v = static_cast<Real>(value[face]);
+    if (!std::isfinite(alpha[face]) || !std::isfinite(beta[face]) ||
+        !std::isfinite(value[face]) ||
+        (a == Real(0) && b == Real(0) && kind[face] != "periodic"))
+      throw std::runtime_error("AmrSystem::set_field_boundary_plan invalid Robin coefficients");
+    if (kind[face] == "periodic") {
+      *types[face] = BCType::Periodic;
+    } else if (kind[face] == "dirichlet" || (kind[face] == "mixed" && b == Real(0))) {
+      if (a == Real(0))
+        throw std::runtime_error("AmrSystem::set_field_boundary_plan Dirichlet alpha is zero");
+      *types[face] = BCType::Dirichlet;
+      *vals[face] = v / a;
+    } else if (kind[face] == "neumann" && v == Real(0)) {
+      *types[face] = BCType::Foextrap;
+    } else if (kind[face] == "neumann" || kind[face] == "mixed") {
+      *types[face] = BCType::Robin;
+      *vals[face] = v;
+      *alphas[face] = a;
+      *betas[face] = b;
+      const Real h = face < 2 ? bc.dx : bc.dy;
+      if (a / Real(2) + b / h == Real(0))
+        throw std::runtime_error(
+            "AmrSystem::set_field_boundary_plan singular cell-centred Robin denominator");
+    } else {
+      throw std::runtime_error("AmrSystem::set_field_boundary_plan unknown kind '" + kind[face] +
+                               "'");
+    }
+  }
+  found->second.explicit_bc = bc;
+  found->second.has_explicit_bc = true;
+}
+
+void AmrSystem::set_field_boundary_kernel(const std::string& provider_slot,
+                                          const CompiledFieldBoundaryKernel& kernel) {
+  kernel.validate();
+  auto found = p_->field_plans_.find(provider_slot);
+  if (found == p_->field_plans_.end())
+    throw std::runtime_error("AmrSystem::set_field_boundary_kernel unknown provider slot");
+  found->second.boundary_kernel = kernel;
+  found->second.has_boundary_kernel = true;
+  if (!kernel.observes_iteration)
+    found->second.boundary_context.point.iteration = 0;
+  if (p_->runtime)
+    p_->runtime->set_field_boundary_kernel(provider_slot, kernel);
+}
+
+void AmrSystem::set_field_boundary_dependencies(
+    const std::string& provider_slot, const std::vector<std::string>& state_blocks,
+    const std::vector<int>& state_components,
+    const std::vector<std::string>& field_blocks,
+    const std::vector<std::string>& field_keys,
+    const std::vector<int>& field_components) {
+  require_assembling_amr(p_->bound_, "set_field_boundary_dependencies");
+  if (state_blocks.size() != state_components.size() || !field_blocks.empty() ||
+      !field_keys.empty() || !field_components.empty())
+    throw std::runtime_error(
+        "AmrSystem::set_field_boundary_dependencies accepts exact state buffers only");
+  if (std::any_of(state_blocks.begin(), state_blocks.end(), [](const auto& value) {
+        return value.empty();
+      }) ||
+      std::any_of(state_components.begin(), state_components.end(), [](int value) {
+        return value < 0;
+      }))
+    throw std::runtime_error(
+        "AmrSystem::set_field_boundary_dependencies contains invalid entries");
+  auto found = p_->field_plans_.find(provider_slot);
+  if (found == p_->field_plans_.end())
+    throw std::runtime_error(
+        "AmrSystem::set_field_boundary_dependencies unknown provider slot");
+  found->second.boundary_state_blocks = state_blocks;
+  found->second.boundary_state_components = state_components;
+  if (p_->runtime)
+    p_->runtime->set_field_boundary_dependencies(
+        provider_slot, state_blocks, state_components);
+}
+
+void AmrSystem::set_field_logical_timepoint(const std::string& provider_slot,
+                                            const FieldLogicalTimePoint& point) {
+  auto found = p_->field_plans_.find(provider_slot);
+  if (found == p_->field_plans_.end())
+    throw std::runtime_error("AmrSystem::set_field_logical_timepoint unknown provider slot");
+  found->second.boundary_context.point = point;
+  if (!found->second.has_boundary_kernel ||
+      !found->second.boundary_kernel.observes_iteration)
+    found->second.boundary_context.point.iteration = 0;
+  if (p_->runtime)
+    p_->runtime->set_field_logical_timepoint(provider_slot,
+                                             found->second.boundary_context.point);
+}
+
+void AmrSystem::set_field_boundary_parameters(const std::string& provider_slot,
+                                              const std::vector<double>& parameters) {
+  auto found = p_->field_plans_.find(provider_slot);
+  if (found == p_->field_plans_.end())
+    throw std::runtime_error("AmrSystem::set_field_boundary_parameters unknown provider slot");
+  auto& plan = found->second;
+  if (!plan.boundary_parameters)
+    plan.boundary_parameters = std::make_shared<std::vector<Real>>();
+  plan.boundary_parameters->assign(parameters.begin(), parameters.end());
+  plan.boundary_context.parameters = plan.boundary_parameters.get();
+  plan.boundary_context.parameter_count = static_cast<int>(parameters.size());
+  if (p_->runtime)
+    p_->runtime->set_field_boundary_parameters(
+        provider_slot, std::vector<Real>(parameters.begin(), parameters.end()));
+}
+
+void AmrSystem::set_field_newton_plan(const std::string& provider_slot, double tolerance,
+                                      int max_iterations, double linear_tolerance,
+                                      int linear_max_iterations, int restart, double armijo,
+                                      double minimum_step) {
+  require_assembling_amr(p_->bound_, "set_field_newton_plan");
+  auto found = p_->field_plans_.find(provider_slot);
+  if (found == p_->field_plans_.end())
+    throw std::runtime_error("AmrSystem::set_field_newton_plan unknown field provider slot");
+  FieldNewtonOptions options{static_cast<Real>(tolerance), max_iterations,
+                             static_cast<Real>(linear_tolerance), linear_max_iterations,
+                             restart, static_cast<Real>(armijo),
+                             static_cast<Real>(minimum_step)};
+  validate_field_newton_options(options);
+  found->second.newton = options;
+  found->second.has_newton = true;
+  if (p_->runtime)
+    p_->runtime->set_field_newton_plan(provider_slot, options);
+}
+
+void AmrSystem::set_field_nullspace(const std::string& provider_slot, bool constant_kernel,
+                                    bool mean_zero_gauge) {
+  require_assembling_amr(p_->bound_, "set_field_nullspace");
+  auto found = p_->field_plans_.find(provider_slot);
+  if (found == p_->field_plans_.end())
+    throw std::runtime_error("AmrSystem::set_field_nullspace unknown provider slot");
+  if (constant_kernel != mean_zero_gauge)
+    throw std::runtime_error(
+        "AmrSystem::set_field_nullspace constant kernel requires explicit mean-zero gauge");
+  found->second.nullspace_assertion = constant_kernel ? "constant" : "none";
+  found->second.gauge = mean_zero_gauge ? "mean_zero" : "none";
 }
 
 void AmrSystem::set_density(const std::string& name, const std::vector<double>& rho) {
@@ -2778,6 +3103,12 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
         seed_program_params(kv.first, kv.second);
     }
   }
+  // Target-specific counterpart of the uniform generated boundary-kernel install.  It mutates the
+  // facade plans before ensure_built(), so the freshly materialized AmrRuntime receives the exact
+  // function pointers and execution context on its first construction.
+  if (auto install_boundaries = reinterpret_cast<void (*)(void*)>(
+          pops::dynlib::sym(h, "pops_install_field_boundaries_amr")))
+    install_boundaries(static_cast<void*>(this));
   // Install the macro-step body: the .so wraps THIS AmrSystem in an AmrProgramContext and calls
   // install_program_step. The AMR blocks must be materialized first (ensure_built): the per-level
   // macro-step reads the hierarchy. The AmrProgramContext driver needs the AmrRuntime engine (per-level
@@ -3086,6 +3417,31 @@ void AmrSystem::rebuild_hierarchy(const std::vector<PatchBox>& boxes,
     level_owners[static_cast<std::size_t>(k)].push_back(owner_ranks[idx]);
   }
   p_->runtime->rebuild_hierarchy(level_boxes, level_owners);
+}
+
+void AmrSystem::begin_restart_transaction() {
+  p_->ensure_built();
+  if (p_->restart_transaction_)
+    throw std::runtime_error(
+        "AmrSystem::begin_restart_transaction : a restart transaction is already active");
+  p_->restart_transaction_ = std::make_unique<Impl::AcceptedSnapshot>(*p_);
+}
+
+void AmrSystem::commit_restart_transaction() {
+  if (!p_->restart_transaction_)
+    throw std::runtime_error(
+        "AmrSystem::commit_restart_transaction : no restart transaction is active");
+  p_->restart_transaction_.reset();
+}
+
+void AmrSystem::rollback_restart_transaction() {
+  if (!p_->restart_transaction_)
+    throw std::runtime_error(
+        "AmrSystem::rollback_restart_transaction : no restart transaction is active");
+  // Drop the active marker before restoration.  A restoration failure is terminal for this bracket,
+  // rather than leaving an unusable nested transaction that masks the original exception.
+  std::unique_ptr<Impl::AcceptedSnapshot> accepted = std::move(p_->restart_transaction_);
+  accepted->restore(*p_);
 }
 
 // --- MULTI-BLOCK per-BLOCK per-level checkpoint accessors (ADC-509) --------------------------------

@@ -32,8 +32,124 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
+#include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
+
+#include <stdexcept>
 
 namespace pops {
+
+namespace detail {
+struct CopyBoundaryViewKernel {
+  Array4 dst;
+  ConstArray4 src;
+  int component;
+  POPS_HD void operator()(int i, int j) const { dst(i, j, component) = src(i, j, component); }
+};
+}  // namespace detail
+
+inline BCRec homogeneous_field_bc(const BCRec& bc) {
+  BCRec out = bc;
+  out.xlo_val = out.xhi_val = out.ylo_val = out.yhi_val = Real(0);
+  return out;
+}
+
+inline void copy_field_valid(const MultiFab& source, MultiFab& destination) {
+  if (source.ncomp() != destination.ncomp() ||
+      source.box_array().boxes() != destination.box_array().boxes() ||
+      source.dmap().ranks() != destination.dmap().ranks())
+    throw std::runtime_error("field boundary operator view is not co-distributed with its source");
+  for (int li = 0; li < destination.local_size(); ++li) {
+    Array4 dst = destination.fab(li).array();
+    const ConstArray4 src = source.fab(li).const_array();
+    for (int c = 0; c < destination.ncomp(); ++c)
+      for_each_cell(destination.box(li), detail::CopyBoundaryViewKernel{dst, src, c});
+  }
+}
+
+/// Synchronize only the valid cells that can feed a one-cell ghost exchange or a physical closure.
+/// The dynamic smoother reads interior neighbours directly from the live iterate, so copying the
+/// complete valid field before every red/black colour would be pure bandwidth.  One-cell boundary
+/// bands are sufficient for physical faces, periodic wraps and neighbouring-box halo exchange.
+inline void copy_field_boundary_band(const MultiFab& source, MultiFab& destination) {
+  if (source.ncomp() != destination.ncomp() ||
+      source.box_array().boxes() != destination.box_array().boxes() ||
+      source.dmap().ranks() != destination.dmap().ranks())
+    throw std::runtime_error("field boundary work view is not co-distributed with its source");
+  for (int li = 0; li < destination.local_size(); ++li) {
+    Array4 dst = destination.fab(li).array();
+    const ConstArray4 src = source.fab(li).const_array();
+    const Box2D v = destination.box(li);
+    for (int c = 0; c < destination.ncomp(); ++c) {
+      for_each_cell(Box2D{{v.lo[0], v.lo[1]}, {v.lo[0], v.hi[1]}},
+                    detail::CopyBoundaryViewKernel{dst, src, c});
+      if (v.hi[0] != v.lo[0])
+        for_each_cell(Box2D{{v.hi[0], v.lo[1]}, {v.hi[0], v.hi[1]}},
+                      detail::CopyBoundaryViewKernel{dst, src, c});
+      if (v.hi[0] - v.lo[0] > 1) {
+        for_each_cell(Box2D{{v.lo[0] + 1, v.lo[1]}, {v.hi[0] - 1, v.lo[1]}},
+                      detail::CopyBoundaryViewKernel{dst, src, c});
+        if (v.hi[1] != v.lo[1])
+          for_each_cell(Box2D{{v.lo[0] + 1, v.hi[1]}, {v.hi[0] - 1, v.hi[1]}},
+                        detail::CopyBoundaryViewKernel{dst, src, c});
+      }
+    }
+  }
+}
+
+inline MultiFab& prepare_field_residual_view(
+    MultiFab& iterate, MultiFab* operator_view, const Geometry& geom, const BCRec& bc,
+    const CompiledFieldBoundaryKernel* kernel = nullptr,
+    const FieldBoundaryExecutionContext* context = nullptr) {
+  if (kernel == nullptr) {
+    fill_ghosts(iterate, geom.domain, bc);
+    return iterate;  // constant BCRec fast path: historical in-place ghost fill, no copy/indirection
+  }
+  if (context == nullptr || operator_view == nullptr)
+    throw std::runtime_error(
+        "compiled field boundary residual is missing its context or persistent operator view");
+  copy_field_valid(iterate, *operator_view);
+  fill_ghosts(*operator_view, geom.domain, bc);
+  for (int face = 0; face < 4; ++face)
+    kernel->prepare_residual_view(face, iterate, *operator_view, geom, *context);
+  return *operator_view;
+}
+
+inline MultiFab& prepare_field_jvp_view(
+    const MultiFab& iterate, const MultiFab& direction, MultiFab* direction_view,
+    const Geometry& geom, const BCRec& bc,
+    const CompiledFieldBoundaryKernel* kernel = nullptr,
+    const FieldBoundaryExecutionContext* context = nullptr) {
+  if (direction_view == nullptr)
+    throw std::runtime_error(
+        "field boundary JVP is missing its persistent direction view");
+  copy_field_valid(direction, *direction_view);
+  fill_ghosts(*direction_view, geom.domain, homogeneous_field_bc(bc));
+  if (kernel != nullptr) {
+    if (context == nullptr)
+      throw std::runtime_error("compiled field boundary JVP is missing its execution context");
+    for (int face = 0; face < 4; ++face)
+      kernel->prepare_jvp_view(face, iterate, direction, *direction_view, geom, *context);
+  }
+  return *direction_view;
+}
+
+inline MultiFab& prepare_field_smoother_view(
+    MultiFab& iterate, MultiFab* boundary_view, const Geometry& geom, const BCRec& bc,
+    const CompiledFieldBoundaryKernel* kernel,
+    const FieldBoundaryExecutionContext* context) {
+  if (kernel == nullptr) {
+    fill_ghosts(iterate, geom.domain, bc);
+    return iterate;
+  }
+  if (context == nullptr || boundary_view == nullptr)
+    throw std::runtime_error(
+        "compiled field boundary smoother is missing its context or persistent work view");
+  copy_field_boundary_band(iterate, *boundary_view);
+  fill_ghosts(*boundary_view, geom.domain, bc);
+  for (int face = 0; face < 4; ++face)
+    kernel->prepare_residual_view(face, iterate, *boundary_view, geom, *context);
+  return *boundary_view;
+}
 
 // Harmonic mean of two center permittivities -> face permittivity.
 // Guard against division by 0 if both centers are zero (inactive cell).
@@ -223,6 +339,28 @@ inline void apply_laplacian(const MultiFab& phi, const Geometry& geom, MultiFab&
   }
 }
 
+/// Exact Newton correction operator `K d = -R'(phi)d` for
+/// `R(phi)=f-L(phi)+C(phi)`: the volume/ghost part contributes `L'(phi)d`, and the generated
+/// additive launcher contributes `-C'(phi)d`.  Newton consequently solves `K delta = R` and tries
+/// `phi + delta`.  Interior coefficients are linear and reuse apply_laplacian; the generated
+/// boundary JVP first materializes direction ghosts from the nonlinear closure evaluated at
+/// @p iterate and its exact logical TimePoint.
+inline void apply_laplacian_jvp(
+    const MultiFab& iterate, const MultiFab& direction, const Geometry& geom, const BCRec& bc,
+    MultiFab& output, const CompiledFieldBoundaryKernel* kernel,
+    const FieldBoundaryExecutionContext* context, MultiFab* direction_view = nullptr,
+    const MultiFab* coef = nullptr,
+    const MultiFab* eps = nullptr, const MultiFab* kappa = nullptr,
+    const MultiFab* eps_y = nullptr, const MultiFab* a_xy = nullptr,
+    const MultiFab* a_yx = nullptr) {
+  MultiFab& view = prepare_field_jvp_view(
+      iterate, direction, direction_view, geom, bc, kernel, context);
+  apply_laplacian(view, geom, output, coef, eps, kappa, eps_y, a_xy, a_yx);
+  if (kernel != nullptr)
+    for (int face = 0; face < 4; ++face)
+      kernel->apply_jvp(face, iterate, direction, output, geom, *context);
+}
+
 namespace detail {
 // Centered finite-volume divergence of a cell-centered vector flux: the x-flux is read from
 // component @c cx of fx and the y-flux from component @c cy of fy:
@@ -272,16 +410,18 @@ inline void poisson_residual(MultiFab& phi, const MultiFab& f, const Geometry& g
                              const BCRec& bc, MultiFab& res, const MultiFab* mask = nullptr,
                              const MultiFab* coef = nullptr, const MultiFab* eps = nullptr,
                              const MultiFab* kappa = nullptr, const MultiFab* eps_y = nullptr,
-                             const MultiFab* a_xy = nullptr, const MultiFab* a_yx = nullptr) {
-  device_fence();  // GPU: phi may have been written by a kernel (smoother); we
-                   // wait before the host read in fill_ghosts.
-  fill_ghosts(phi, geom.domain, bc);
+                             const MultiFab* a_xy = nullptr, const MultiFab* a_yx = nullptr,
+                             const CompiledFieldBoundaryKernel* boundary_kernel = nullptr,
+                             const FieldBoundaryExecutionContext* boundary_context = nullptr,
+                             MultiFab* boundary_view = nullptr) {
+  MultiFab& operator_view = prepare_field_residual_view(
+      phi, boundary_view, geom, bc, boundary_kernel, boundary_context);
   const Real idx2 = Real(1) / (geom.dx() * geom.dx());
   const Real idy2 = Real(1) / (geom.dy() * geom.dy());
   const Real idx = Real(1) / geom.dx();
   const Real idy = Real(1) / geom.dy();
-  for (int li = 0; li < phi.local_size(); ++li) {
-    const ConstArray4 p = phi.fab(li).const_array();
+  for (int li = 0; li < operator_view.local_size(); ++li) {
+    const ConstArray4 p = operator_view.fab(li).const_array();
     const ConstArray4 ff = f.fab(li).const_array();
     Array4 r = res.fab(li).array();
     const Box2D v = res.box(li);
@@ -303,6 +443,9 @@ inline void poisson_residual(MultiFab& phi, const MultiFab& f, const Geometry& g
                   detail::PoissonResidualKernel{p,  ff, r,  idx2, idy2, idx, idy, hm,  mk,  hc,
                                                 cf, he, ep, ey,   hk,   ka,  hxy, hyx, axy, ayx});
   }
+  if (boundary_kernel != nullptr)
+    for (int face = 0; face < 4; ++face)
+      boundary_kernel->add_residual(face, phi, res, geom, *boundary_context);
 }
 
 namespace detail {
@@ -311,6 +454,7 @@ namespace detail {
 // of the named functor.
 struct GsColorKernel {
   Array4 p;
+  ConstArray4 view;
   ConstArray4 ff;
   Real idx2, idy2, diag0;
   int color;
@@ -322,6 +466,10 @@ struct GsColorKernel {
   ConstArray4 ep, ey;
   bool hk;
   ConstArray4 ka;
+  int ilo, ihi, jlo, jhi;
+  POPS_HD Real read(int i, int j) const {
+    return i >= ilo && i <= ihi && j >= jlo && j <= jhi ? p(i, j) : view(i, j);
+  }
   POPS_HD void operator()(int i, int j) const {
     if (((i + j) & 1) != color)
       return;
@@ -331,15 +479,17 @@ struct GsColorKernel {
     if (he) {  // face permittivity (harmonic), with or without cut-cell
       Real wxm, wxp, wym, wyp;
       face_weights(ep, ey, i, j, idx2, idy2, hc, cf, wxm, wxp, wym, wyp);
-      off = wxp * p(i + 1, j) + wxm * p(i - 1, j) + wyp * p(i, j + 1) + wym * p(i, j - 1);
+      off = wxp * read(i + 1, j) + wxm * read(i - 1, j) +
+            wyp * read(i, j + 1) + wym * read(i, j - 1);
       diag = wxm + wxp + wym + wyp;
     } else if (
         hc) {  // cut-cell stencil (Shortley-Weller); conductor neighbor = phi=0 on the circle
-      off = cf(i, j, 1) * p(i + 1, j) + cf(i, j, 0) * p(i - 1, j) + cf(i, j, 3) * p(i, j + 1) +
-            cf(i, j, 2) * p(i, j - 1);
+      off = cf(i, j, 1) * read(i + 1, j) + cf(i, j, 0) * read(i - 1, j) +
+            cf(i, j, 3) * read(i, j + 1) + cf(i, j, 2) * read(i, j - 1);
       diag = cf(i, j, 4);
     } else {
-      off = (p(i + 1, j) + p(i - 1, j)) * idx2 + (p(i, j + 1) + p(i, j - 1)) * idy2;
+      off = (read(i + 1, j) + read(i - 1, j)) * idx2 +
+            (read(i, j + 1) + read(i, j - 1)) * idy2;
       diag = diag0;
     }
     // Reaction term: the operator becomes div(eps grad phi) - kappa phi, so the
@@ -350,12 +500,15 @@ struct GsColorKernel {
 
 inline void gs_color(MultiFab& phi, const MultiFab& f, const Geometry& geom, int color,
                      const MultiFab* mask, const MultiFab* coef, const MultiFab* eps,
-                     const MultiFab* kappa = nullptr, const MultiFab* eps_y = nullptr) {
+                     const MultiFab* kappa = nullptr, const MultiFab* eps_y = nullptr,
+                     const MultiFab* operator_view = nullptr) {
   const Real idx2 = Real(1) / (geom.dx() * geom.dx());
   const Real idy2 = Real(1) / (geom.dy() * geom.dy());
   const Real diag0 = 2 * idx2 + 2 * idy2;
   for (int li = 0; li < phi.local_size(); ++li) {
     Array4 p = phi.fab(li).array();
+    const ConstArray4 view = (operator_view == nullptr ? phi : *operator_view)
+                                 .fab(li).const_array();
     const ConstArray4 ff = f.fab(li).const_array();
     const Box2D v = phi.box(li);
     const bool hm = mask != nullptr;
@@ -369,7 +522,8 @@ inline void gs_color(MultiFab& phi, const MultiFab& f, const Geometry& geom, int
     const bool hk = kappa != nullptr;  // reaction term -kappa phi (Helmholtz / screened)
     const ConstArray4 ka = hk ? kappa->fab(li).const_array() : ConstArray4{};
     for_each_cell(
-        v, GsColorKernel{p, ff, idx2, idy2, diag0, color, hm, mk, hc, cf, he, ep, ey, hk, ka});
+        v, GsColorKernel{p, view, ff, idx2, idy2, diag0, color, hm, mk, hc, cf, he, ep, ey, hk, ka,
+                         v.lo[0], v.hi[0], v.lo[1], v.hi[1]});
   }
 }
 }  // namespace detail
@@ -377,21 +531,29 @@ inline void gs_color(MultiFab& phi, const MultiFab& f, const Geometry& geom, int
 inline void gs_rb_sweep(MultiFab& phi, const MultiFab& f, const Geometry& geom, const BCRec& bc,
                         const MultiFab* mask = nullptr, const MultiFab* coef = nullptr,
                         const MultiFab* eps = nullptr, const MultiFab* kappa = nullptr,
-                        const MultiFab* eps_y = nullptr) {
-  device_fence();  // wait for the previous kernel before the host read of the halos
-  fill_ghosts(phi, geom.domain, bc);
-  detail::gs_color(phi, f, geom, 0, mask, coef, eps, kappa, eps_y);  // red (GPU kernel)
-  device_fence();  // the black sweep reads the red values via host fill_ghosts
-  fill_ghosts(phi, geom.domain, bc);
-  detail::gs_color(phi, f, geom, 1, mask, coef, eps, kappa, eps_y);  // black
+                        const MultiFab* eps_y = nullptr,
+                        const CompiledFieldBoundaryKernel* boundary_kernel = nullptr,
+                        const FieldBoundaryExecutionContext* boundary_context = nullptr,
+                        MultiFab* boundary_view = nullptr) {
+  MultiFab& red_view = prepare_field_smoother_view(
+      phi, boundary_view, geom, bc, boundary_kernel, boundary_context);
+  detail::gs_color(phi, f, geom, 0, mask, coef, eps, kappa, eps_y,
+                   &red_view);  // red (GPU kernel)
+  MultiFab& black_view = prepare_field_smoother_view(
+      phi, boundary_view, geom, bc, boundary_kernel, boundary_context);
+  detail::gs_color(phi, f, geom, 1, mask, coef, eps, kappa, eps_y, &black_view);  // black
 }
 
 inline void gs_smooth(MultiFab& phi, const MultiFab& f, const Geometry& geom, const BCRec& bc,
                       int nsweeps, const MultiFab* mask = nullptr, const MultiFab* coef = nullptr,
                       const MultiFab* eps = nullptr, const MultiFab* kappa = nullptr,
-                      const MultiFab* eps_y = nullptr) {
+                      const MultiFab* eps_y = nullptr,
+                      const CompiledFieldBoundaryKernel* boundary_kernel = nullptr,
+                      const FieldBoundaryExecutionContext* boundary_context = nullptr,
+                      MultiFab* boundary_view = nullptr) {
   for (int s = 0; s < nsweeps; ++s)
-    gs_rb_sweep(phi, f, geom, bc, mask, coef, eps, kappa, eps_y);
+    gs_rb_sweep(phi, f, geom, bc, mask, coef, eps, kappa, eps_y,
+                boundary_kernel, boundary_context, boundary_view);
 }
 
 namespace detail {

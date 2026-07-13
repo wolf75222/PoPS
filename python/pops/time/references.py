@@ -108,6 +108,7 @@ def bind_field_reference(program: Any, block: Any, field: Any) -> Any:
         raise ValueError(
             "Program.solve_fields: field registry and state block belong to different Cases")
     registry.canonicalize(field)
+    registry.get(field.local_id)
     return field
 
 

@@ -169,11 +169,8 @@ def _module_to_model(module: Any) -> Any:
     _CODEGEN_KINDS = ("grid_operator", "local_source", "local_linear_operator", "field_operator",
                       "projection")
     # ADC-642: one decode -- a {kind: builder} dispatch over the shared OPERATOR_KINDS vocabulary.
-    # Each builder holds its arm body verbatim; n_field_ops is a one-cell counter the field_operator
-    # builder mutates (the single-field guard). _CODEGEN_KINDS is the body-requirement set (local_rate
+    # Each builder holds its arm body verbatim. _CODEGEN_KINDS is the body-requirement set (local_rate
     # lowers from op.lowering, not a body, so it stays out); the assert makes an unwired kind loud.
-    n_field_ops = [0]
-
     def _b_grid_operator(op: Any) -> None:
         if op.name in ("flux", "flux_default"):
             m.flux(x=op.body["x"], y=op.body["y"])
@@ -187,17 +184,18 @@ def _module_to_model(module: Any) -> Any:
         m.linear_source(op.name, op.body)
 
     def _b_field_operator(op: Any) -> None:
-        n_field_ops[0] += 1
-        if n_field_ops[0] > 1:
-            raise ValueError(
-                "compile_problem: a Module currently supports one field_operator (the default "
-                "elliptic solve); multiple solved fields are deferred (operator %r)" % op.name)
         outputs = tuple(getattr(op.signature.output, "components", ()))
         if len(outputs) == 2 or len(outputs) > 3:
             raise ValueError(
                 "compile_problem: field_operator %r outputs must have length 1 or 3; the runtime "
                 "cannot register %d outputs yet" % (op.name, len(outputs)))
-        m.elliptic_rhs(op.body)
+        if not outputs:
+            raise ValueError(
+                "compile_problem: field_operator %r must declare at least one output" % op.name)
+        for output in outputs:
+            if output not in m.aux_extra_names:
+                m.aux_field(output)
+        m.elliptic_field(op.name, op.body, operator="poisson", aux=outputs)
 
     def _b_local_rate(op: Any) -> None:
         low = op.lowering
@@ -214,7 +212,7 @@ def _module_to_model(module: Any) -> Any:
     builder_targets = {
         "grid_operator": "dsl:flux", "local_source": "dsl:source_term",
         "local_linear_operator": "dsl:linear_source",
-        "field_operator": "dsl:elliptic_rhs", "local_rate": "dsl:rate_operator",
+        "field_operator": "dsl:elliptic_field", "local_rate": "dsl:rate_operator",
         "projection": "dsl:projection",
     }
     assert set(_CODEGEN_KINDS) <= set(OPERATOR_KINDS) and set(builders) <= set(OPERATOR_KINDS)

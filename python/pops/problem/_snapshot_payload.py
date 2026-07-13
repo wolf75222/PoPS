@@ -52,8 +52,11 @@ def problem_semantic_payload(problem: Any, *, layout: Any, time: Any) -> dict[st
     fields = {
         name: {
             "handle": problem._field_registry.canonicalize(handle).canonical_identity(),
-            "definition": _descriptor_semantic_data(
-                resolved_fields[name], where="field %s" % name),
+            "operator": _descriptor_semantic_data(
+                resolved_fields[name].operator, where="field %s operator" % name),
+            "discretization": _descriptor_semantic_data(
+                resolved_fields[name].discretization,
+                where="field %s discretization" % name),
         }
         for name, handle in sorted(problem.fields().items())
     }
@@ -307,6 +310,9 @@ def _descriptor_semantic_data(value: Any, *, where: str) -> Any:
     if not isinstance(value, Descriptor):
         raise TypeError("%s must be a typed pops Descriptor, got %s" % (
             where, type(value).__name__))
+    semantic_data = getattr(value, "semantic_data", None)
+    if callable(semantic_data):
+        return _semantic_option_data(semantic_data(), where=where)
     options = value.options()
     if not isinstance(options, Mapping):
         raise TypeError("%s options() must return a mapping" % where)

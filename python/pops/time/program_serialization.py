@@ -65,7 +65,7 @@ def _serialize_field_context(context: Any) -> dict[str, Any]:
     if isinstance(context, FieldReadProvenance):
         return {"reads": [_serialize_field_context(item) for item in context.contexts]}
     return {
-        "field_problem": _json_ready(context.field_problem),
+        "field": _json_ready(context.field),
         "stage_sources": [[_json_ready(item[0]), item[1]] for item in context.stage_sources],
         "outputs": list(context.outputs),
     }

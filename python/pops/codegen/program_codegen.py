@@ -113,6 +113,7 @@ def emit_cpp_program(
     target: str = "system",
     *,
     model_graph: Any = None,
+    field_plans: Any = None,
 ) -> str:
     """Generate the C++ source of a problem.so implementing this Program (codegen).
 
@@ -198,17 +199,22 @@ def emit_cpp_program(
         raise ValueError("emit_cpp_program: target 'system' | 'amr_system' (got %r)" % (target,))
     program.validate()
     _check_lowerable(program, authority)
-    prelude, body = _emit_body(program, authority, target=target)
+    prelude, body = _emit_body(
+        program, authority, target=target, field_plans=field_plans or {})
     # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_program_has_dt_bound()
     # (true iff a bound was set) and pops_program_dt_bound(ProgramContext*, cfl) (the lowered scalar
     # expression). Without a bound, has_dt_bound() returns false and the dt_bound function returns a
     # +inf sentinel (never reached: the loader stores the closure only when has_dt_bound() is true).
     has_dt_bound, dt_bound_body = _emit_dt_bound(program, authority)
+    from pops.codegen.program_emit_field_boundaries import emit_field_boundaries
+    field_boundaries = emit_field_boundaries(
+        program, authority, field_plans or {}, target)
     return _PROGRAM_CPP_TEMPLATE.format(
         name=json.dumps(program.name), hash=program._ir_hash(), prelude=prelude, body=body,
         has_dt_bound=has_dt_bound, dt_bound_body=dt_bound_body,
         module_metadata=_emit_module_metadata(program, authority),
         program_params=_emit_program_params(program, authority),
+        field_boundaries=field_boundaries,
         block_names=_emit_block_names(program),
         route_manifest=_emit_route_manifest("pops_program_route_manifest"),
         coeff_elliptic_include=_coeff_elliptic_include(program),

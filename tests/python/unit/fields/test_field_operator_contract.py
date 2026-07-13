@@ -4,7 +4,14 @@ import importlib.util
 
 import pytest
 
-from pops.fields import DerivedField, FieldOperator, FieldOutput, GradientOutput
+from pops.fields import (
+    DerivedField,
+    FieldOperator,
+    FieldOutput,
+    FieldProviderContribution,
+    FieldProviderPack,
+    GradientOutput,
+)
 from pops.ir import ValueExpr
 from pops.math import laplacian
 from pops.model import Handle, OwnerPath
@@ -22,6 +29,7 @@ def _operator(*, rhs: Handle | None = None) -> FieldOperator:
         "electrostatic",
         unknown=phi,
         equation=equation,
+        providers=_handle("electrostatic_residual", kind="field_operator"),
         outputs=(FieldOutput("phi", phi), GradientOutput("electric_field", phi)),
     )
 
@@ -35,6 +43,7 @@ def test_field_operator_contains_physics_only_and_has_canonical_identity() -> No
     assert {reference.local_id for reference in operator.declaration_references()} == {
         "phi",
         "rho",
+        "electrostatic_residual",
     }
     for numerical_name in (
         "method",
@@ -76,6 +85,7 @@ def test_field_operator_resolves_handles_in_equation_and_outputs() -> None:
         "field",
         unknown=phi,
         equation=(-laplacian(ValueExpr(phi)) == ValueExpr(rho)),
+        providers=_handle("field_residual", kind="field_operator", owner=authoring_owner),
         outputs=(GradientOutput("gradient", phi), DerivedField("rho_copy", ValueExpr(rho))),
     )
 
@@ -89,6 +99,27 @@ def test_field_operator_resolves_handles_in_equation_and_outputs() -> None:
     assert all(reference.is_resolved for reference in resolved.declaration_references())
     assert resolved.outputs[1].expression.handle.is_resolved
     assert resolved.identity.domain == "field-operator"
+
+
+def test_field_provider_pack_is_ordered_owner_qualified_and_identity_relevant() -> None:
+    phi = _handle("phi")
+    rho = _handle("rho")
+    first = _handle("ions", kind="field_operator")
+    second = _handle("electrons", kind="field_operator")
+    operator = FieldOperator(
+        "coupled",
+        unknown=phi,
+        equation=(-laplacian(ValueExpr(phi)) == ValueExpr(rho)),
+        providers=FieldProviderPack((
+            FieldProviderContribution(first, 1.0),
+            FieldProviderContribution(second, -1.0),
+        )),
+        outputs=(FieldOutput("phi", phi),),
+    )
+
+    data = operator.to_data()["providers"]["contributions"]
+    assert [row["coefficient"] for row in data] == [1.0, -1.0]
+    assert [row["provider"]["local_id"] for row in data] == ["ions", "electrons"]
 
 
 def test_legacy_field_problem_public_surface_is_removed() -> None:

@@ -101,8 +101,6 @@ set(POPS_CPP_TEST_SOURCE_test_external_riemann_dispatch "tests/cpp/integration/n
 set(POPS_CPP_TEST_SOURCE_test_fab2d "tests/cpp/unit/mesh/test_fab2d.cpp")
 set(POPS_CPP_TEST_SOURCE_test_facade_routing "tests/cpp/integration/runtime/test_facade_routing.cpp")
 set(POPS_CPP_TEST_SOURCE_test_field_context "tests/cpp/unit/runtime/test_field_context.cpp")
-set(POPS_CPP_TEST_SOURCE_test_field_problem_registry "tests/cpp/unit/runtime/test_field_problem_registry.cpp")
-set(POPS_CPP_TEST_SOURCE_test_field_registry_uniform_amr "tests/cpp/integration/runtime/test_field_registry_uniform_amr.cpp")
 set(POPS_CPP_TEST_SOURCE_test_fallback_diagnostics "tests/cpp/unit/numerics/test_fallback_diagnostics.cpp")
 set(POPS_CPP_TEST_SOURCE_test_copy_schedule_cache "tests/cpp/unit/mesh/test_copy_schedule_cache.cpp")
 set(POPS_CPP_TEST_SOURCE_test_fill_boundary "tests/cpp/unit/mesh/test_fill_boundary.cpp")

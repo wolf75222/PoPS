@@ -188,7 +188,7 @@ class ResolvedSimulationPlan:
     blocks: tuple[ResolvedBlock, ...]
     bind_schema: Any
     compile_values: Mapping[Any, Any]
-    field_solvers: Mapping[str, Any]
+    field_plans: Mapping[str, Any]
     outputs: tuple[Any, ...]
     diagnostics: tuple[Any, ...]
     libraries: tuple[Any, ...]
@@ -239,8 +239,14 @@ class ResolvedSimulationPlan:
             raise ValueError(
                 "ResolvedSimulationPlan.compile_values must exactly match BindSchema.resolve_compile()"
             )
-        object.__setattr__(self, "field_solvers", _string_mapping(
-            self.field_solvers, where="ResolvedSimulationPlan.field_solvers"))
+        object.__setattr__(self, "field_plans", _string_mapping(
+            self.field_plans, where="ResolvedSimulationPlan.field_plans"))
+        for name, registration in self.field_plans.items():
+            from pops.codegen.field_install import ResolvedFieldInstallPlan
+            if not isinstance(registration, ResolvedFieldInstallPlan):
+                raise TypeError(
+                    "ResolvedSimulationPlan.field_plans[%r] must be a total resolved install plan"
+                    % name)
         for name in ("outputs", "diagnostics", "libraries"):
             object.__setattr__(
                 self, name, tuple(_deep_freeze(item) for item in getattr(self, name)))
@@ -275,7 +281,7 @@ class ResolvedSimulationPlan:
                 "model": _evidence(block.model, where="plan.block.model"),
                 "spatial": _evidence(block.spatial, where="plan.block.spatial"),
             } for block in self.blocks],
-            "field_solvers": _evidence(self.field_solvers, where="plan.field_solvers"),
+            "field_plans": _evidence(self.field_plans, where="plan.field_plans"),
             "outputs": _evidence(self.outputs, where="plan.outputs"),
             "diagnostics": _evidence(self.diagnostics, where="plan.diagnostics"),
             "libraries": _evidence(self.libraries, where="plan.libraries"),

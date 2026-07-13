@@ -52,7 +52,8 @@ class _SystemUnifiedInstall(_System):
     """The internal ``_install_compiled`` lowering seam of System (driven by ``pops.bind``)."""
 
     def _install_compiled(self, compiled=None, *, instances=None, params=None, aux=None,
-                          solvers=None, cadence=None, outputs=None, diagnostics=None):
+                          solvers=None, field_plans=None, cadence=None, outputs=None,
+                          diagnostics=None):
         """INTERNAL low-level install seam (Spec 5 sec.11): wire a compiled handle + per-instance
         state/spatial + params + aux + field solvers in ONE call, then install the compiled time
         Program. NOT the public entry point: author the run with ``pops.bind(compiled, state=,
@@ -106,20 +107,28 @@ class _SystemUnifiedInstall(_System):
         params = {} if params is None else params
         aux = aux or {}
         solvers = solvers or {}
+        field_plans = field_plans or {}
+        if solvers and field_plans:
+            raise ValueError("install received both legacy solvers and resolved field_plans")
+        validation_solvers = solvers or field_plans
 
         # (0) EARLY VALIDATION (Spec 5 sec.10): in the COMPILED path, read the artifact's DECLARED bind
         # inputs (compiled.arguments()) and reject BEFORE any native call an install missing a REQUIRED
         # argument (instance / param / aux / solver). Inert (reads metadata); enforces only 'required',
         # so a valid install is unchanged.
-        self._validate_install_arguments(compiled, instances, params, aux, solvers)
+        self._validate_install_arguments(compiled, instances, params, aux, validation_solvers)
 
         # (1) FIELD SOLVERS first: set_poisson must run before install_program (the C++ section-24
         # solver requirement reads poisson_solver()). The DECLARED named elliptic fields (from the
         # handle + per-instance models) widen the accepted solver-field set beyond the default Poisson
         # names (C1-System), while a typo is rejected against the declared set.
         declared_fields = self._declared_elliptic_fields(compiled, instances)
-        for field, solver_brick in solvers.items():
-            self._install_solver(field, solver_brick, declared_fields)
+        if field_plans:
+            for field, field_plan in field_plans.items():
+                self._install_field_plan(field, field_plan, declared_fields)
+        else:
+            for field, solver_brick in solvers.items():
+                self._install_solver(field, solver_brick, declared_fields)
 
         # (2) INSTANCES: add each named block (binds the Program block of that name, criterion 23),
         # lower its spatial brick and set its initial state. Every instance comes from InstallPlan and
@@ -166,6 +175,8 @@ class _SystemUnifiedInstall(_System):
             raise ValueError(
                 "install: parameter values require a compiled artifact carrying BindSchema"
             )
+        for field_plan in field_plans.values():
+            self._install_field_boundary_parameters(field_plan, params, compiled=compiled)
 
         # (5) COMPILED mode only: install the compiled time Program (binds blocks by name + runs the
         # section-24 .so requirement validation: aux / solver / block instance, verbatim messages). In
@@ -206,7 +217,8 @@ class _SystemUnifiedInstall(_System):
         # _finalize_bind marks the runtime 'bound' as the LAST act (nothing above ran frozen, so the
         # install sequence never trips its own guards).
         from pops.runtime._bound_snapshot import build_uniform_snapshot
-        snapshot = build_uniform_snapshot(self, compiled, resolved_models, instances, solvers,
+        snapshot = build_uniform_snapshot(
+            self, compiled, resolved_models, instances, validation_solvers,
                                           cadence, aux, params)
         self._finalize_bind(snapshot)  # _finalize_bind lives on _LifecycleMixin
 
@@ -320,6 +332,89 @@ class _SystemUnifiedInstall(_System):
 
     # Field names the default native Poisson route already serves (the shared system elliptic solve).
     _DEFAULT_POISSON_FIELDS = ("phi", "poisson", "charge_density", "default")
+
+    def _install_field_plan(self, field: Any, field_plan: Any,
+                            declared_fields: Any = frozenset()) -> None:
+        """Consume every resolve-time field-plan property at the native boundary."""
+        from pops.codegen.field_install import ResolvedFieldInstallPlan
+        if not isinstance(field_plan, ResolvedFieldInstallPlan):
+            raise TypeError("install field_plans must contain ResolvedFieldInstallPlan values")
+        if field_plan.name != field or field_plan.target != "system":
+            raise ValueError("resolved field install plan identity/target mismatch")
+        # Re-run canonical construction verification before touching the native engine.
+        field_plan.__post_init__()
+        options = field_plan.native_options
+        solver_brick = field_plan.discretization.solver
+        token = self._solver_token(solver_brick)
+        if token != options["solver"]:
+            raise ValueError("field plan solver token drifted after resolve")
+        mg = self._solver_mg_options(solver_brick)
+        from pops.solvers._numeric import native_float
+        slot = options["provider_slot"]
+        routes = options["provider_pack"]
+        output_route = options["output_route"]
+        from pops.identity import canonical_bytes
+        mg_args = _mg_set_poisson_kwargs(mg)
+        mg_args = {
+            "rel_tol": 1.0e-8, "max_cycles": 50, "min_coarse": 2,
+            "pre_smooth": 2, "post_smooth": 2, "bottom_sweeps": 50,
+            "coarse_threshold": 0, **mg_args,
+        }
+        self._s.set_field_solver_plan(
+            slot, options["provider_identity_text"],
+            canonical_bytes(output_route["owner_identity"]).decode("utf-8"),
+            output_route["owner_block"],
+            output_route["key"],
+            [canonical_bytes(route["provider_identity"]).decode("utf-8")
+             for route in routes],
+            [route["owner_block"] for route in routes],
+            [route["key"] for route in routes],
+            [route["coefficient"] for route in routes], token,
+            native_float(mg.get("abs_tol", 0.0),
+                         where="field plan absolute tolerance"),
+            mg_args["rel_tol"], mg_args["max_cycles"], mg_args["min_coarse"],
+            mg_args["pre_smooth"], mg_args["post_smooth"],
+            mg_args["bottom_sweeps"], mg_args["coarse_threshold"])
+        faces = options["boundary_faces"]
+        if faces is not None:
+            self._s.set_field_boundary_plan(
+                slot,
+                [face["type"] for face in faces],
+                [face["alpha"] for face in faces],
+                [face["beta"] for face in faces],
+                [face["value"] for face in faces])
+        dependencies = options["boundary_dependencies"]
+        self._s.set_field_boundary_dependencies(
+            slot,
+            [row["owner_block"] for row in dependencies["states"]],
+            [row["component"] for row in dependencies["states"]],
+            [row["owner_block"] for row in dependencies["fields"]],
+            [row["output_key"] for row in dependencies["fields"]],
+            [row["component"] for row in dependencies["fields"]])
+        self._s.set_field_nullspace(
+            slot, options["nullspace"] == "constant", options["gauge"] == "mean_zero")
+        nonlinear = options.get("nonlinear")
+        if nonlinear is not None:
+            field_plan.nonlinear_provider.install(self._s, slot)
+
+    def _install_field_boundary_parameters(self, field_plan: Any, params: Any, *,
+                                           compiled: Any) -> None:
+        if not field_plan.native_options.get("boundary_kernel_required"):
+            return
+        if compiled is None:
+            raise ValueError(
+                "dynamic field boundaries require a compiled artifact that owns their generated "
+                "device launchers")
+        handles = field_plan.boundary_parameter_handles()
+        missing = [handle.qualified_id for handle in handles if handle not in params]
+        if missing:
+            raise ValueError(
+                "dynamic field boundary parameter pack is incomplete: %s" % ", ".join(missing))
+        from pops.solvers._numeric import native_float
+        values = [native_float(params[handle], where="dynamic field boundary parameter %s" %
+                               handle.qualified_id) for handle in handles]
+        self._s.set_field_boundary_parameters(
+            field_plan.native_options["provider_slot"], values)
 
     def _install_solver(self, field: Any, solver_brick: Any,
                         declared_fields: Any = frozenset()) -> Any:

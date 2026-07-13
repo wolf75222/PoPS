@@ -94,3 +94,42 @@ TEST(AuxHalo, OverrideKeepsPeriodicFacesPeriodic) {
   EXPECT_TRUE(ov.ylo == BCType::Periodic && ov.yhi == BCType::Periodic)
       << "override: theta stays periodic";
 }
+
+TEST(AuxHalo, RobinAndNonzeroNeumannUseOutwardNormalOnBothFaces) {
+  const Box2D dom = Box2D::from_extents(4, 3);
+  const BoxArray ba(std::vector<Box2D>{dom});
+  const DistributionMapping dm(1, n_ranks());
+  MultiFab mf(ba, dm, 1, 1);
+  mf.set_val(Real(2));
+
+  // beta du/dn = q with q=3 and h=1/4 gives ghost = interior + h*q on BOTH
+  // low and high faces because dn is the outward normal in each case.
+  BCRec neumann;
+  neumann.xlo = neumann.xhi = BCType::Robin;
+  neumann.ylo = neumann.yhi = BCType::Foextrap;
+  neumann.xlo_alpha = neumann.xhi_alpha = Real(0);
+  neumann.xlo_beta = neumann.xhi_beta = Real(1);
+  neumann.xlo_val = neumann.xhi_val = Real(3);
+  neumann.dx = Real(0.25);
+  fill_physical_bc(mf, dom, neumann);
+  device_fence();
+  if (mf.local_size()) {
+    const ConstArray4 a = mf.fab(0).const_array();
+    EXPECT_NEAR(a(-1, 1, 0), Real(2.75), 1e-12);
+    EXPECT_NEAR(a(4, 1, 0), Real(2.75), 1e-12);
+  }
+
+  mf.set_val(Real(2));
+  BCRec mixed = neumann;
+  mixed.xlo_alpha = mixed.xhi_alpha = Real(2);
+  mixed.xlo_beta = mixed.xhi_beta = Real(0.5);
+  mixed.xlo_val = mixed.xhi_val = Real(5);
+  fill_physical_bc(mf, dom, mixed);
+  device_fence();
+  if (mf.local_size()) {
+    const ConstArray4 a = mf.fab(0).const_array();
+    // g = (v - u_i*(alpha/2-beta/h))/(alpha/2+beta/h) = 7/3.
+    EXPECT_NEAR(a(-1, 1, 0), Real(7.0 / 3.0), 1e-12);
+    EXPECT_NEAR(a(4, 1, 0), Real(7.0 / 3.0), 1e-12);
+  }
+}

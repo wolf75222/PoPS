@@ -30,7 +30,21 @@ from .nullspace import (
     NullspaceCompatibility,
     RHSCompatibilityEvidence,
 )
-from .operator import FieldOperator
+from .operator import (
+    FieldOperator,
+    FieldProviderContribution,
+    FieldProviderMeasure,
+    FieldProviderPack,
+    SourceDensity,
+)
+from .methods import CellCenteredSecondOrder
+from .boundary_values import (
+    BoundaryValue,
+    LogicalTimeCoordinate,
+    LogicalTimeValue,
+    boundary_value,
+    logical_time,
+)
 from .outputs import DerivedField, FieldOutput, GradientOutput
 from .poisson import (
     AnisotropicPoissonOperator,
@@ -80,6 +94,8 @@ __all__ = [
     "Accepted",
     "AnisotropicPoissonOperator",
     "CompositeHierarchySolve",
+    "CellCenteredSecondOrder",
+    "BoundaryValue",
     "ConnectedComponentsManifest",
     "ConstantNullspace",
     "DerivedField",
@@ -98,6 +114,9 @@ __all__ = [
     "FieldInput",
     "FieldMaterialization",
     "FieldOperator",
+    "FieldProviderContribution",
+    "FieldProviderMeasure",
+    "FieldProviderPack",
     "FieldOperatorDomain",
     "FieldOutput",
     "FieldReadError",
@@ -113,6 +132,8 @@ __all__ = [
     "HoldLastValue",
     "InferHierarchyFromLayout",
     "LayoutBinding",
+    "LogicalTimeCoordinate",
+    "LogicalTimeValue",
     "LevelByLevelSolve",
     "MeanValueGauge",
     "MixedContribution",
@@ -135,6 +156,9 @@ __all__ = [
     "ScreenedPoissonOperator",
     "SolveOutcome",
     "SolveStatus",
+    "SourceDensity",
+    "boundary_value",
+    "logical_time",
     "UseHeldField",
     "UseMaterializedField",
     "aux",

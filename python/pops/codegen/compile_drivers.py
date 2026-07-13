@@ -1,5 +1,4 @@
 """Compiler invocation and facade layer extracted from :mod:`pops.codegen.compile`.
-
 Physics and facade helpers stay lazy to preserve the import graph."""
 
 from __future__ import annotations
@@ -273,7 +272,8 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
                     time: Any = None,
                     backend: Any = "production", target: Any = "system", force: Any = False,
                     cxx: Any = None, include: Any = None, std: Any = None, debug: Any = False,
-                    libraries: Any = None, problem_snapshot: Any = None) -> Any:
+                    libraries: Any = None, problem_snapshot: Any = None,
+                    field_plans: Any = None) -> Any:
     """Compile a time Program into an ABI-compatible native ``problem.so``.
 
     Only the production backend is supported; ``target`` selects system or AMR entrypoints. An
@@ -337,7 +337,7 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
     from pops.codegen.program_graph_lowering import emit_program_graph
     src = emit_program_graph(
         program_graph, lowering_program=time, model=model,
-        model_graph=model_graph, target=target)
+        model_graph=model_graph, target=target, field_plans=field_plans)
 
     include = include or pops_include()
     sig = pops_header_signature(include)

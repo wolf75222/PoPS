@@ -6,7 +6,7 @@ from typing import Any
 
 def emit_program_graph(
     graph: Any, *, lowering_program: Any, model: Any = None,
-    model_graph: Any = None, target: str = "system",
+    model_graph: Any = None, target: str = "system", field_plans: Any = None,
 ) -> str:
     """Lower exactly ``graph`` through its frozen, graph-equivalent Program adapter."""
     from pops.time.graph import ProgramGraph
@@ -20,7 +20,8 @@ def emit_program_graph(
     from pops.codegen.program_codegen import emit_cpp_program
 
     source = emit_cpp_program(
-        lowering_program, model=model, model_graph=model_graph, target=target
+        lowering_program, model=model, model_graph=model_graph, target=target,
+        field_plans=field_plans,
     )
     if lowering_program.to_graph().graph_hash != graph.graph_hash:
         raise RuntimeError("ProgramGraph lowering mutated or diverged from its compiler input")

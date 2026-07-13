@@ -26,7 +26,8 @@ class _AmrSystemInstall(_AmrSystem):
     """``pops.bind`` install seam for :class:`AmrSystem` (mixed in; operates on ``self``)."""
 
     def _install_compiled(self, compiled: Any = None, *, instances: Any = None, params: Any = None,
-                          aux: Any = None, solvers: Any = None, cadence: Any = None,
+                          aux: Any = None, solvers: Any = None, field_plans: Any = None,
+                          cadence: Any = None,
                           outputs: Any = None, diagnostics: Any = None,
                           bind_schema: Any = None, initial_values: Any = (),
                           bootstrap_plan: Any = None, amr_transfer: Any = None) -> Any:
@@ -74,10 +75,12 @@ class _AmrSystemInstall(_AmrSystem):
         params = {} if params is None else params
         aux = aux or {}
         solvers = solvers or {}
+        field_plans = field_plans or {}
 
         # (0) EARLY VALIDATION (shared with System._install_compiled): reject a compiled install missing a
         # required declared argument BEFORE any native mutation. Inert (reads arguments() metadata).
-        validate_install_arguments(self, compiled, instances, params, aux, solvers)
+        validate_install_arguments(
+            self, compiled, instances, params, aux, solvers or field_plans)
         if amr_transfer is not None:
             self._install_bootstrap_routes(amr_transfer)
 
@@ -108,6 +111,10 @@ class _AmrSystemInstall(_AmrSystem):
         # field routes (the native loader wired register_elliptic_field), a typo is rejected against the
         # declared set. Mirror of System._install with _declared_elliptic_fields.
         declared_fields = self._declared_elliptic_fields(instances)
+        if field_plans and solvers:
+            raise ValueError("pops.bind: field_plans and legacy solvers cannot both be installed")
+        for field, field_plan in field_plans.items():
+            self._install_field_plan(field, field_plan)
         for field, solver_brick in solvers.items():
             self._install_solver(field, solver_brick, declared_fields)
 
@@ -192,6 +199,8 @@ class _AmrSystemInstall(_AmrSystem):
             raise ValueError(
                 "pops.bind: parameter values require a compiled artifact carrying BindSchema"
             )
+        for field_plan in field_plans.values():
+            self._install_field_boundary_parameters(field_plan, params, compiled=compiled)
 
         if bootstrap_plan is not None:
             from pops.runtime._amr_bootstrap_execution import execute_native_bootstrap
@@ -211,7 +220,7 @@ class _AmrSystemInstall(_AmrSystem):
         # program/cache/ABI identity and cadence are retained alongside each block-model hash.
         from pops.runtime._bound_snapshot import build_amr_snapshot
         snapshot = build_amr_snapshot(
-            self, compiled, instances, solvers, cadence, aux, params
+            self, compiled, instances, solvers or field_plans, cadence, aux, params
         )
         self._finalize_bind(snapshot)  # freeze (ADC-592): _finalize_bind lives on _LifecycleMixin
 
@@ -276,6 +285,87 @@ class _AmrSystemInstall(_AmrSystem):
 
     # Field names the default AMR Poisson route already serves (the shared coarse elliptic solve).
     _DEFAULT_POISSON_FIELDS = ("phi", "poisson", "charge_density", "default")
+
+    def _install_field_plan(self, field: Any, field_plan: Any) -> None:
+        """Install the complete resolved AMR field route before native block loaders run."""
+        from pops.codegen.field_install import ResolvedFieldInstallPlan
+        if not isinstance(field_plan, ResolvedFieldInstallPlan):
+            raise TypeError("install field_plans must contain ResolvedFieldInstallPlan values")
+        if field_plan.name != field or field_plan.target != "amr_system":
+            raise ValueError("resolved AMR field install plan identity/target mismatch")
+        field_plan.__post_init__()
+        options = field_plan.native_options
+        routes = options["provider_pack"]
+        output_route = options["output_route"]
+        from pops.identity import canonical_bytes
+        solver = field_plan.discretization.solver
+        if options["solver"] != "geometric_mg":
+            raise ValueError("AMR field plan requires GeometricMG")
+        mg_fn = getattr(solver, "mg_options", None)
+        mg = mg_fn() if callable(mg_fn) else {}
+        from pops.solvers._numeric import native_float
+        mg_args = {
+            "rel_tol": 1.0e-8, "max_cycles": 50, "min_coarse": 2,
+            "pre_smooth": 2, "post_smooth": 2, "bottom_sweeps": 50,
+            "coarse_threshold": 0, **dict(mg),
+        }
+        slot = options["provider_slot"]
+        self._s.set_field_solver_plan(
+            slot, options["provider_identity_text"],
+            canonical_bytes(output_route["owner_identity"]).decode("utf-8"),
+            output_route["owner_block"],
+            output_route["key"],
+            [canonical_bytes(route["provider_identity"]).decode("utf-8")
+             for route in routes],
+            [route["owner_block"] for route in routes],
+            [route["key"] for route in routes],
+            [route["coefficient"] for route in routes],
+            options["solver"], options["hierarchy"],
+            native_float(mg.get("abs_tol", 0.0),
+                         where="AMR field plan absolute tolerance"),
+            native_float(mg_args["rel_tol"],
+                         where="AMR field plan relative tolerance"),
+            mg_args["max_cycles"], mg_args["min_coarse"], mg_args["pre_smooth"],
+            mg_args["post_smooth"], mg_args["bottom_sweeps"],
+            mg_args["coarse_threshold"])
+        faces = options["boundary_faces"]
+        if faces is not None:
+            self._s.set_field_boundary_plan(
+                slot, [face["type"] for face in faces],
+                [face["alpha"] for face in faces],
+                [face["beta"] for face in faces],
+                [face["value"] for face in faces])
+        dependencies = options["boundary_dependencies"]
+        self._s.set_field_boundary_dependencies(
+            slot,
+            [row["owner_block"] for row in dependencies["states"]],
+            [row["component"] for row in dependencies["states"]],
+            [], [], [])
+        self._s.set_field_nullspace(
+            slot, options["nullspace"] == "constant", options["gauge"] == "mean_zero")
+        nonlinear = options.get("nonlinear")
+        if nonlinear is not None:
+            field_plan.nonlinear_provider.install(self._s, slot)
+
+    def _install_field_boundary_parameters(self, field_plan: Any, params: Any, *,
+                                           compiled: Any) -> None:
+        if not field_plan.native_options.get("boundary_kernel_required"):
+            return
+        if compiled is None:
+            raise ValueError(
+                "dynamic AMR field boundaries require a compiled artifact that owns their "
+                "generated device launchers")
+        handles = field_plan.boundary_parameter_handles()
+        missing = [handle.qualified_id for handle in handles if handle not in params]
+        if missing:
+            raise ValueError(
+                "dynamic AMR field boundary parameter pack is incomplete: %s" %
+                ", ".join(missing))
+        from pops.solvers._numeric import native_float
+        values = [native_float(params[handle], where="dynamic AMR field boundary parameter %s" %
+                               handle.qualified_id) for handle in handles]
+        self._s.set_field_boundary_parameters(
+            field_plan.native_options["provider_slot"], values)
 
     def _install_solver(self, field: Any, solver_brick: Any,
                         declared_fields: Any = frozenset()) -> Any:

@@ -4,21 +4,27 @@
 #include <pops/core/foundation/types.hpp>        // Real
 #include <pops/diagnostics/runtime_diagnostics.hpp>
 #include <pops/mesh/storage/multifab.hpp>     // MultiFab, Array4, ConstArray4
+#include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/index/box2d.hpp>        // Box2D
 #include <pops/mesh/execution/for_each.hpp>     // device_fence
 #include <pops/mesh/boundary/physical_bc.hpp>  // BCRec, fill_ghosts, fill_boundary
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace.hpp>
+#include <pops/numerics/elliptic/interface/field_provider.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_fft_solver.hpp>
 #include <pops/numerics/elliptic/polar/polar_poisson_solver.hpp>  // PolarPoissonSolver (direct polar Poisson)
 #include <pops/parallel/comm.hpp>                           // n_ranks() (FFT MPI guard)
 #include <pops/runtime/builders/block/block_builder_polar.hpp>  // derive_aux_polar (polar aux in local basis)
 #include <pops/runtime/context/wall_predicate.hpp>       // detail::wall_predicate
-#include <pops/runtime/system/field_problem_registry.hpp>  // FieldProblemRegistry (ADC-596 descriptor)
 #include <pops/runtime/system/system_poisson_options.hpp>  // GeometricMgOptions (ADC-613 V-cycle knobs)
 
+#include <algorithm>
 #include <cstdlib>  // getenv
+#include <cmath>
 #include <functional>
+#include <limits>
 #include <map>  // named_aux_: NAMED aux fields (comp -> field), re-applied after channel realloc
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -59,6 +65,14 @@
 /// defining Impl. owner_ is an Impl* (the lifetime of the helper is subordinate to that of Impl).
 
 namespace pops {
+
+namespace detail {
+struct SubtractFieldMeanKernel {
+  Array4 field;
+  Real mean;
+  POPS_HD void operator()(int i, int j) const { field(i, j, 0) -= mean; }
+};
+}  // namespace detail
 namespace field_solver {
 
 /// SystemFieldSolver<Impl>: see contract above. All methods are MEMBERS (not free
@@ -138,6 +152,8 @@ class SystemFieldSolver {
     bool had_polar_solver = false;
     bool gauss_solved_once = false;
     RuntimeDiagnosticsReport diagnostics;
+    std::map<std::string, MultiFab> named_potentials;
+    std::vector<std::string> named_unbuilt;
   };
 
   StepSnapshot step_snapshot() {
@@ -150,6 +166,14 @@ class SystemFieldSolver {
       out.polar_potential = pell_->phi();
     if (phi_src_polar_)
       out.polar_source = *phi_src_polar_;
+    for (auto& item : named_fields_) {
+      if (!item.second.ell) {
+        out.named_unbuilt.push_back(item.first);
+        continue;
+      }
+      out.named_potentials.emplace(
+          item.first, std::visit([](auto& e) { return MultiFab(e.phi()); }, *item.second.ell));
+    }
     out.gauss_solved_once = gauss_solved_once_;
     out.diagnostics = diagnostics_;
     return out;
@@ -165,6 +189,16 @@ class SystemFieldSolver {
     else if (snapshot.polar_potential && pell_)
       pell_->phi() = *snapshot.polar_potential;
     phi_src_polar_ = snapshot.polar_source;
+    for (auto& item : named_fields_) {
+      if (std::find(snapshot.named_unbuilt.begin(), snapshot.named_unbuilt.end(), item.first) !=
+          snapshot.named_unbuilt.end()) {
+        item.second.ell.reset();
+        continue;
+      }
+      const auto saved = snapshot.named_potentials.find(item.first);
+      if (saved != snapshot.named_potentials.end() && item.second.ell)
+        std::visit([&](auto& e) { e.phi() = saved->second; }, *item.second.ell);
+    }
     gauss_solved_once_ = snapshot.gauss_solved_once;
     diagnostics_ = snapshot.diagnostics;
   }
@@ -174,6 +208,10 @@ class SystemFieldSolver {
   std::string p_rhs = "charge_density";
   std::string p_solver = "geometric_mg";
   std::string p_bc = "auto";
+  bool p_has_explicit_bc = false;
+  BCRec p_explicit_bc{};
+  bool p_nullspace_const = false;
+  bool p_mean_zero_gauge = false;
   std::string p_wall = "none";
   double p_wall_radius = 0.0;
   Real p_eps_ = 1;  // CONSTANT permittivity: div(eps grad phi) = f <=> lap phi = f/eps
@@ -250,28 +288,125 @@ class SystemFieldSolver {
   //     native solver is REUSED, not reimplemented. The default Poisson path (ell_) is untouched.
   // The RHS = sum over blocks of s.named_poisson_rhs[name] (the per-field brick, ADC-428), assembled
   // exactly like assemble_poisson_rhs but reading the named closures.
+  struct FieldSolveConfig {
+    std::string provider_identity;
+    std::string output_owner_identity;
+    std::string output_block;
+    std::string output_key;
+    std::vector<FieldProviderBinding> providers;
+    std::string solver = "geometric_mg";
+    std::string bc = "auto";
+    bool has_explicit_bc = false;
+    BCRec explicit_bc{};
+    bool has_boundary_kernel = false;
+    CompiledFieldBoundaryKernel boundary_kernel{};
+    std::shared_ptr<std::vector<Real>> boundary_parameters =
+        std::make_shared<std::vector<Real>>();
+    std::vector<std::string> boundary_state_blocks;
+    std::vector<int> boundary_state_components;
+    std::vector<std::string> boundary_field_blocks;
+    std::vector<std::string> boundary_field_keys;
+    std::vector<int> boundary_field_components;
+    std::vector<const MultiFab*> boundary_state_buffers;
+    std::vector<const MultiFab*> boundary_field_buffers;
+    FieldBoundaryExecutionContext boundary_context{};
+    bool has_newton = false;
+    FieldNewtonOptions newton{};
+    FieldNullspacePlan nullspace{};
+    GeometricMgOptions mg_opts{};
+  };
+
   struct NamedField {
+    struct PreparedProvider {
+      int block = -1;
+      Real coefficient = Real(1);
+      std::function<void(const MultiFab&, MultiFab&)> rhs;
+    };
     int phi_comp = -1;
     int gx_comp = -1;
     int gy_comp = -1;
+    bool has_plan = false;
+    FieldSolveConfig plan{};
+    std::vector<PreparedProvider> prepared_providers;
     std::optional<std::variant<GeometricMG, PoissonFFTSolver, RemappedFFTSolver>> ell;
   };
   std::map<std::string, NamedField> named_fields_;
+  // Field plans are installed before compiled block loaders register their output components.
+  // Keep the exact per-provider plan independently, then attach it when register_named_field runs.
+  std::map<std::string, FieldSolveConfig> named_field_plans_;
 
-  /// Unified DESCRIPTOR registry of the field problems this solver realizes (ADC-596): the default
-  /// shared Poisson ("phi") plus every named field, each recorded ONCE with its output AuxLayout,
-  /// solver kind and route support. It owns no solver and does not change any numerics -- it is the
-  /// single place Uniform and AMR describe field problems so a solver x layout x output combination
-  /// is validated early. Populated as a side effect of register_named_field (below); the default
-  /// "phi" entry is seeded lazily by field_problem_registry().
-  FieldProblemRegistry field_problems_;
+  std::vector<std::string> provider_slots() const {
+    std::vector<std::string> result;
+    result.reserve(named_fields_.size());
+    for (const auto& item : named_fields_)
+      result.push_back(item.first);
+    return result;
+  }
 
-  /// The unified field-problem registry, seeding the default "phi" entry on first access so the
-  /// single-field case is described the same way as a named one (the numerics stay in ell_).
-  const FieldProblemRegistry& field_problem_registry() {
-    if (field_problems_.find("phi") < 0)
-      field_problems_.register_problem(default_poisson_entry());
-    return field_problems_;
+  MultiFab& provider_potential(const std::string& slot) {
+    auto found = named_fields_.find(slot);
+    if (found == named_fields_.end())
+      throw std::runtime_error("System: unknown qualified field provider slot '" + slot + "'");
+    ensure_named_elliptic(found->second);
+    return std::visit([](auto& solver) -> MultiFab& { return solver.phi(); }, *found->second.ell);
+  }
+
+  void prepare_boundary_dependencies(NamedField& field, int stage_block,
+                                     const MultiFab* stage_state) {
+    auto& plan = field.plan;
+    plan.boundary_state_buffers.clear();
+    plan.boundary_state_buffers.reserve(plan.boundary_state_blocks.size());
+    for (std::size_t index = 0; index < plan.boundary_state_blocks.size(); ++index) {
+      const int block = owner_->index(plan.boundary_state_blocks[index]);
+      const MultiFab* value = (stage_state != nullptr && block == stage_block)
+                                  ? stage_state
+                                  : &owner_->sp[static_cast<std::size_t>(block)].U;
+      if (plan.boundary_state_components[index] < 0 ||
+          plan.boundary_state_components[index] >= value->ncomp())
+        throw std::runtime_error("System: boundary state dependency component is out of range");
+      plan.boundary_state_buffers.push_back(value);
+    }
+    plan.boundary_field_buffers.clear();
+    plan.boundary_field_buffers.reserve(plan.boundary_field_keys.size());
+    for (std::size_t index = 0; index < plan.boundary_field_keys.size(); ++index) {
+      auto dependency = std::find_if(
+          named_fields_.begin(), named_fields_.end(), [&](const auto& item) {
+            return item.second.plan.output_block == plan.boundary_field_blocks[index] &&
+                   item.second.plan.output_key == plan.boundary_field_keys[index];
+          });
+      if (dependency == named_fields_.end() || &dependency->second == &field)
+        throw std::runtime_error(
+            "System: boundary field dependency is missing or recursively reads its own solve");
+      MultiFab& value = provider_potential(dependency->first);
+      if (plan.boundary_field_components[index] < 0 ||
+          plan.boundary_field_components[index] >= value.ncomp())
+        throw std::runtime_error("System: boundary field dependency component is out of range");
+      plan.boundary_field_buffers.push_back(&value);
+    }
+    plan.boundary_context.states = plan.boundary_state_buffers.empty()
+                                       ? nullptr
+                                       : plan.boundary_state_buffers.data();
+    plan.boundary_context.state_count = static_cast<int>(plan.boundary_state_buffers.size());
+    plan.boundary_context.fields = plan.boundary_field_buffers.empty()
+                                       ? nullptr
+                                       : plan.boundary_field_buffers.data();
+    plan.boundary_context.field_count = static_cast<int>(plan.boundary_field_buffers.size());
+  }
+
+  void prepare_field_providers(NamedField& field) {
+    if (!field.prepared_providers.empty())
+      return;
+    std::vector<typename NamedField::PreparedProvider> prepared;
+    prepared.reserve(field.plan.providers.size());
+    for (const auto& binding : field.plan.providers) {
+      const int block = owner_->index(binding.owner_block);
+      auto& state = owner_->sp[static_cast<std::size_t>(block)];
+      auto found = state.named_poisson_rhs.find(binding.native_key);
+      if (found == state.named_poisson_rhs.end() || !found->second)
+        throw std::runtime_error("System: authenticated field provider has no RHS closure");
+      prepared.push_back({block, binding.coefficient, found->second});
+    }
+    field.prepared_providers = std::move(prepared);
   }
 
   /// Register a named elliptic field (ADC-428): records the aux output components (where the field's
@@ -279,19 +414,19 @@ class SystemFieldSolver {
   /// model declared fewer than 3 aux slots for the field). Idempotent (re-register overwrites the
   /// component map, drops the lazily-built solver so the next solve rebuilds it). The DEDICATED solver
   /// is built on first solve, never here.
-  void register_named_field(const std::string& field, int phi_comp, int gx_comp, int gy_comp) {
-    NamedField nf;
-    nf.phi_comp = phi_comp;
-    nf.gx_comp = gx_comp;
-    nf.gy_comp = gy_comp;
-    named_fields_[field] = std::move(nf);  // solver built lazily by ensure_named_elliptic
-    // ADC-596: mirror the field into the unified descriptor registry (a named GeometricMG field on
-    // the Uniform route). The component map is the low-level truth; the AuxLayout is its named view.
-    // Purely descriptive -- the lazy solver build and RHS assembly are untouched.
-    if (field_problems_.find("phi") < 0)
-      field_problems_.register_problem(default_poisson_entry());
-    field_problems_.register_problem(
-        named_field_entry(field, phi_comp, gx_comp, gy_comp, EllipticSolverKind::GeometricMG));
+  void register_named_field(const std::string& block, const std::string& provider_key,
+                            int phi_comp, int gx_comp, int gy_comp) {
+    for (const auto& configured : named_field_plans_) {
+      if (configured.second.output_block != block || configured.second.output_key != provider_key)
+        continue;
+      NamedField nf;
+      nf.phi_comp = phi_comp;
+      nf.gx_comp = gx_comp;
+      nf.gy_comp = gy_comp;
+      nf.has_plan = true;
+      nf.plan = configured.second;
+      named_fields_[configured.first] = std::move(nf);
+    }
   }
 
   /// Re-applies the per-field aux HALO policies (ADC-369) onto the shared channel, AFTER the shared
@@ -387,6 +522,8 @@ class SystemFieldSolver {
   /// Resolves the BC mode into a BCRec: "auto" -> dirichlet if wall/non-periodic, otherwise periodic;
   /// "periodic"|"dirichlet"|"neumann" (Foextrap). @throws std::runtime_error on an unknown mode.
   BCRec poisson_bc() {
+    if (p_has_explicit_bc)
+      return p_explicit_bc;
     std::string mode = p_bc;
     if (mode == "auto")
       mode = (p_wall == "circle" || !owner_->cfg.periodic) ? "dirichlet" : "periodic";
@@ -402,6 +539,26 @@ class SystemFieldSolver {
       return b;
     }
     throw std::runtime_error("System::set_poisson: unknown bc '" + mode + "'");
+  }
+
+  BCRec named_field_bc(const FieldSolveConfig& plan) const {
+    if (plan.has_explicit_bc)
+      return plan.explicit_bc;
+    std::string mode = plan.bc;
+    if (mode == "auto")
+      mode = !owner_->cfg.periodic ? "dirichlet" : "periodic";
+    BCRec result;
+    if (mode == "periodic")
+      return result;
+    if (mode == "dirichlet") {
+      result.xlo = result.xhi = result.ylo = result.yhi = BCType::Dirichlet;
+      return result;
+    }
+    if (mode == "neumann") {
+      result.xlo = result.xhi = result.ylo = result.yhi = BCType::Foextrap;
+      return result;
+    }
+    throw std::runtime_error("System: named field plan has unknown bc '" + mode + "'");
   }
   /// "Conductor interior" predicate from p_wall / p_wall_radius / cfg.L (cf. wall_predicate);
   /// empty if no wall.
@@ -611,6 +768,40 @@ class SystemFieldSolver {
     trace_mark("ell_solve: after std::visit");
   }
 
+  void require_nullspace_compatible(const MultiFab& rhs, bool constant_kernel) const {
+    if (!constant_kernel)
+      return;
+    const Real signed_sum = reduce_sum(rhs, 0);
+    const Real scale = reduce_abs_sum(rhs, 0);
+    const Real tolerance = Real(128) * std::numeric_limits<Real>::epsilon() *
+                           (scale > Real(1) ? scale : Real(1));
+    if (std::abs(signed_sum) > tolerance)
+      throw std::runtime_error(
+          "field RHS is incompatible with the declared constant nullspace; silent projection "
+          "is forbidden");
+  }
+
+  void apply_mean_zero_gauge(MultiFab& phi, bool mean_zero_gauge) const {
+    if (!mean_zero_gauge)
+      return;
+    const Real cells = Real(owner_->dom.nx()) * Real(owner_->dom.ny());
+    const Real mean = reduce_sum(phi, 0) / cells;
+    for (int li = 0; li < phi.local_size(); ++li) {
+      Array4 p = phi.fab(li).array();
+      const Box2D valid = phi.box(li);
+      for_each_cell(valid, detail::SubtractFieldMeanKernel{p, mean});
+    }
+  }
+
+
+  void require_nullspace_compatible(const MultiFab& rhs) const {
+    require_nullspace_compatible(rhs, p_nullspace_const);
+  }
+
+  void apply_mean_zero_gauge(MultiFab& phi) const {
+    apply_mean_zero_gauge(phi, p_mean_zero_gauge);
+  }
+
   // --- ELLIPTIC-SOLVER PROFILING COUNTERS (Spec 5 sec.13.11.1, ADC-479 criteria 42/43) ----------
   // Read-back accessors for the per-solve stats of the ACTIVE cartesian elliptic solver, queried at
   // the System solve_fields seam AFTER ell_solve()+device_fence() to populate the native profiler
@@ -815,6 +1006,7 @@ class SystemFieldSolver {
       // f = Sum_s elliptic_rhs_s(U_s). By default the CURRENT state of each block; with a
       // target_block / U_stage override the target block reads U_stage (per-stage field solve, ADC-409).
       assemble_poisson_rhs(rhs, target_block, U_stage);
+      require_nullspace_compatible(rhs);
       trace_mark("solve_fields: after add_poisson_rhs");
       // CONSTANT permittivity: div(eps grad phi) = f <=> lap phi = f/eps, so we scale the rhs by
       // 1/eps. With a VARIABLE or ANISOTROPIC eps(x) field we DO NOT do it: the GeometricMG
@@ -845,6 +1037,8 @@ class SystemFieldSolver {
     // (loop executed once, bit-identical to np=1). ell_phi() and aux share the same
     // DistributionMapping -> same local indexing.
     MultiFab& phi_mf = ell_phi();
+    apply_mean_zero_gauge(phi_mf);
+    device_fence();
     for (int li = 0; li < owner_->aux.local_size(); ++li) {
       const ConstArray4 p = phi_mf.fab(li).const_array();
       Array4 a = owner_->aux.fab(li).array();
@@ -977,31 +1171,43 @@ class SystemFieldSolver {
   void ensure_named_elliptic(NamedField& nf) {
     if (nf.ell)
       return;
-    const BCRec pbc = poisson_bc();
-    std::function<bool(Real, Real)> active = wall_active();
-    if (p_solver == "fft" || p_solver == "fft_spectral") {
+    const std::string& solver = nf.has_plan ? nf.plan.solver : p_solver;
+    const GeometricMgOptions& mg = nf.has_plan ? nf.plan.mg_opts : p_mg_opts_;
+    const BCRec pbc = nf.has_plan ? named_field_bc(nf.plan) : poisson_bc();
+    std::function<bool(Real, Real)> active = nf.has_plan
+        ? std::function<bool(Real, Real)>{}
+        : wall_active();
+    if (solver == "fft" || solver == "fft_spectral") {
+      if (nf.plan.has_boundary_kernel)
+        throw std::runtime_error(
+            "System: generated field boundary kernels require a residual/JVP solver route; "
+            "FFT accepts only its constant periodic closure");
       if (active)
-        throw std::runtime_error("System: named elliptic field solver '" + p_solver +
+        throw std::runtime_error("System: named elliptic field solver '" + solver +
                                  "' incompatible with a wall -> 'geometric_mg'");
-      const bool spectral = (p_solver == "fft_spectral");
+      const bool spectral = (solver == "fft_spectral");
       if (n_ranks() > 1)
         nf.ell.emplace(std::in_place_type<RemappedFFTSolver>, owner_->geom, owner_->ba, pbc, active,
                        spectral);
       else
         nf.ell.emplace(std::in_place_type<PoissonFFTSolver>, owner_->geom, owner_->ba, pbc, active,
                        spectral);
-    } else if (p_solver == "geometric_mg") {
-      // ADC-613: a named elliptic field reuses the SAME resolved V-cycle knobs as the default
-      // Poisson (its own per-field solver tuning is a future extension); bit-identical by default.
+    } else if (solver == "geometric_mg") {
       nf.ell.emplace(std::in_place_type<GeometricMG>, owner_->geom, owner_->ba, pbc,
-                     std::move(active), /*replicated=*/false, p_mg_opts_.min_coarse, p_mg_opts_.nu1,
-                     p_mg_opts_.nu2, p_mg_opts_.nbottom, /*cut_cell=*/false,
+                     std::move(active), /*replicated=*/false, mg.min_coarse, mg.nu1,
+                     mg.nu2, mg.nbottom, /*cut_cell=*/false,
                      /*levelset=*/std::function<Real(Real, Real)>{}, kEbCutFractionFloor,
-                     p_mg_opts_.coarse_threshold);  // ADC-644: coarse_threshold (0 = disabled).
-      std::get<GeometricMG>(*nf.ell).set_abs_tol(p_mg_opts_.abs_tol);
+                     mg.coarse_threshold);  // ADC-644: coarse_threshold (0 = disabled).
+      std::get<GeometricMG>(*nf.ell).set_abs_tol(mg.abs_tol);
     } else {
-      throw std::runtime_error("System: named elliptic field solver '" + p_solver +
+      throw std::runtime_error("System: named elliptic field solver '" + solver +
                                "' unsupported (geometric_mg|fft|fft_spectral)");
+    }
+    if (nf.plan.has_boundary_kernel) {
+      auto& geometric = std::get<GeometricMG>(*nf.ell);
+      geometric.set_boundary_kernel(nf.plan.boundary_kernel, nf.plan.boundary_context);
+      if (nf.plan.has_newton)
+        geometric.set_field_newton_options(nf.plan.newton);
     }
   }
 
@@ -1013,20 +1219,23 @@ class SystemFieldSolver {
   void assemble_named_poisson_rhs(const std::string& field, MultiFab& rhs, int target_block,
                                   const MultiFab* U_stage) {
     rhs.set_val(Real(0));
-    bool any = false;
-    for (std::size_t b = 0; b < owner_->sp.size(); ++b) {
-      auto& s = owner_->sp[b];
-      auto it = s.named_poisson_rhs.find(field);
-      if (it == s.named_poisson_rhs.end() || !it->second)
-        continue;
-      const bool override_here = (U_stage != nullptr && static_cast<int>(b) == target_block);
-      it->second(override_here ? *U_stage : s.U, rhs);
-      any = true;
+    const auto route = named_fields_.find(field);
+    if (route == named_fields_.end() || !route->second.has_plan)
+      throw std::runtime_error("System: field provider slot '" + field + "' is not installed");
+    prepare_field_providers(route->second);
+    MultiFab contribution(rhs.box_array(), rhs.dmap(), 1, 0);
+    for (const auto& binding : route->second.prepared_providers) {
+      const int b = binding.block;
+      auto& state = owner_->sp[static_cast<std::size_t>(b)];
+      const bool override_here = (U_stage != nullptr && b == target_block);
+      if (binding.coefficient == Real(1)) {
+        binding.rhs(override_here ? *U_stage : state.U, rhs);
+      } else {
+        contribution.set_val(Real(0));
+        binding.rhs(override_here ? *U_stage : state.U, contribution);
+        saxpy(rhs, binding.coefficient, contribution);
+      }
     }
-    if (!any)
-      throw std::runtime_error("System: named elliptic field '" + field +
-                               "' has no contributing block (declare m.elliptic_field on the block "
-                               "model)");
   }
 
   /// Solves named field @p field's SECOND elliptic problem from block @p block_idx's stage state
@@ -1055,9 +1264,23 @@ class SystemFieldSolver {
           "System: named elliptic field '" + field +
           "' aux component out of the channel width (add the block that declares "
           "its aux fields before solving)");
+    prepare_boundary_dependencies(nf, block_idx, &U_stage);
     ensure_named_elliptic(nf);
+    if (nf.plan.has_boundary_kernel) {
+      auto* geometric = std::get_if<GeometricMG>(&*nf.ell);
+      if (geometric == nullptr)
+        throw std::runtime_error("System: prepared boundary providers require GeometricMG");
+      geometric->set_boundary_context(nf.plan.boundary_context);
+    }
     MultiFab& rhs = std::visit([](auto& e) -> MultiFab& { return e.rhs(); }, *nf.ell);
+    MultiFab& phi_mf = std::visit([](auto& e) -> MultiFab& { return e.phi(); }, *nf.ell);
+    MultiFab published_phi(phi_mf.box_array(), phi_mf.dmap(), phi_mf.ncomp(), phi_mf.n_grow());
+    lincomb(published_phi, Real(1), phi_mf, Real(0), phi_mf);
+    auto restore_published = [&]() {
+      lincomb(phi_mf, Real(1), published_phi, Real(0), published_phi);
+    };
     assemble_named_poisson_rhs(field, rhs, block_idx, &U_stage);
+    require_field_nullspace_compatible(rhs, nf.plan.nullspace);
     // CONSTANT permittivity eps != 1: lap phi = f/eps (1/eps scaling), like the default Poisson. The
     // variable / anisotropic eps(x) and reaction kappa of the DEFAULT Poisson are NOT applied to a
     // named field (plain Laplacian operator; see ensure_named_elliptic).
@@ -1073,17 +1296,31 @@ class SystemFieldSolver {
     }
     // ADC-613: same resolved rel_tol / max_cycles / abs_tol as the default Poisson for GeometricMG;
     // FFT keeps the concept-level no-argument solve(). Bit-identical under the default knobs.
-    std::visit(
-        [this](auto& e) {
-          using T = std::decay_t<decltype(e)>;
-          if constexpr (std::is_same_v<T, GeometricMG>)
-            e.solve(p_mg_opts_.rel_tol, p_mg_opts_.max_cycles, p_mg_opts_.abs_tol);
-          else
-            e.solve();
-        },
-        *nf.ell);
+    const GeometricMgOptions& mg = nf.has_plan ? nf.plan.mg_opts : p_mg_opts_;
+    try {
+      std::visit(
+          [&mg, &nf](auto& e) {
+            using T = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<T, GeometricMG>) {
+              if (nf.plan.has_boundary_kernel && nf.plan.boundary_kernel.observes_iteration)
+                e.solve();
+              else
+                e.solve(mg.rel_tol, mg.max_cycles, mg.abs_tol);
+              if (!e.last_solve_report().solved())
+                throw std::runtime_error(std::string("field linear solve failed: ") +
+                                         e.last_solve_report().status_name());
+            } else {
+              e.solve();
+            }
+          },
+          *nf.ell);
+    } catch (...) {
+      restore_published();
+      throw;
+    }
     device_fence();  // CRITICAL: the V-cycle must finish before phi is read (same invariant as ell_)
-    MultiFab& phi_mf = std::visit([](auto& e) -> MultiFab& { return e.phi(); }, *nf.ell);
+    apply_field_gauge(phi_mf, nf.plan.nullspace);
+    device_fence();
     const Real dx = owner_->geom.dx(), dy = owner_->geom.dy();
     const int cphi = nf.phi_comp, cgx = nf.gx_comp, cgy = nf.gy_comp;
     const bool grad =

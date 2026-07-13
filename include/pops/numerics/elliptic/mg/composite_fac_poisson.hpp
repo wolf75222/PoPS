@@ -121,6 +121,7 @@ class CompositeFacPoisson {
         f_c_(ba_c, dm_c_, 1, 0),
         f_f_(ba_f_, dm_f_, 1, 0),
         res_c_(ba_c, dm_c_, 1, 0),
+        boundary_view_c_(ba_c, dm_c_, 1, 1),
         eps_c_(ba_c, dm_c_, 1, 1),
         eps_f_(ba_f_, dm_f_, 1, 1),
         axy_c_(ba_c, dm_c_, 1, 1),
@@ -236,9 +237,60 @@ class CompositeFacPoisson {
   }
   const CompositeFacOptions& options() const { return options_; }
 
+  void set_boundary_kernel(const CompiledFieldBoundaryKernel& kernel,
+                           const FieldBoundaryExecutionContext& context = {}) {
+    kernel.validate();
+    boundary_kernel_ = kernel;
+    boundary_context_ = context;
+    boundary_context_.failure = &boundary_failure_;
+    has_boundary_kernel_ = true;
+    mg_.set_boundary_kernel(boundary_kernel_, boundary_context_);
+  }
+
+  void set_boundary_context(const FieldBoundaryExecutionContext& context) {
+    if (!has_boundary_kernel_)
+      throw std::runtime_error("CompositeFacPoisson boundary context has no installed kernel");
+    boundary_context_ = context;
+    boundary_context_.failure = &boundary_failure_;
+    if (!boundary_kernel_.observes_iteration)
+      boundary_context_.point.iteration = 0;
+    mg_.set_boundary_context(boundary_context_);
+  }
+
+  void set_field_nonlinear_options(const FieldNewtonOptions& options) {
+    validate_field_newton_options(options);
+    field_nonlinear_options_ = options;
+    has_field_nonlinear_options_ = true;
+  }
+
+  const SolveReport& last_solve_report() const { return last_solve_report_; }
+
   /// Solves the composite system with the INSTALLED options (ADC-614). The couplers call this
   /// no-argument form; with default-constructed options it is bit-identical to the historical solve.
-  Real solve() { return solve(options_.max_iters, options_.fine_sweeps, options_.tol); }
+  Real solve() {
+    if (has_boundary_kernel_ && boundary_kernel_.observes_iteration) {
+      if (!has_field_nonlinear_options_)
+        throw std::runtime_error(
+            "iterate-dependent composite field boundary requires a nonlinear FAS outer plan");
+      last_solve_report_ = solve_boundary_fas(field_nonlinear_options_);
+      if (!last_solve_report_.solved())
+        throw std::runtime_error(std::string("field FAS solve failed: ") +
+                                 last_solve_report_.status_name());
+      return last_residual_;
+    }
+    const Real result = solve(options_.max_iters, options_.fine_sweeps, options_.tol);
+    last_solve_report_.iters = options_.max_iters;
+    last_solve_report_.rel_residual = result;
+    if (result <= options_.tol) {
+      last_solve_report_.mark_solved();
+    } else {
+      last_solve_report_.mark_failed(SolveStatus::kIterationLimit,
+                                     SolveAction::kRejectAttempt);
+      throw std::runtime_error(std::string("field composite solve failed: ") +
+                               last_solve_report_.status_name());
+    }
+    return result;
+  }
 
   /// Solves the composite system. @return the final max composite residual.
   /// @p max_iters FAC iterations (two-way); @p fine_sweeps SOR sweeps per fine solve; @p tol tolerance.
@@ -249,9 +301,21 @@ class CompositeFacPoisson {
   /// FAC (solve_composite_nlevel_, composite_fac_nlevel.hpp). At L == 2 / non-adjacent / mono-rank the
   /// general path reduces algebraically to the legacy loop (cross-checked, not gated on).
   Real solve(int max_iters, int fine_sweeps, Real tol) {
-    if (!force_general_ && n_levels_ == 2 && !adjacent_ && n_ranks() == 1)
-      return solve_two_level_legacy_(max_iters, fine_sweeps, tol);
-    return solve_composite_nlevel_(max_iters, fine_sweeps, tol);
+    const bool fallible_linear_boundary =
+        has_boundary_kernel_ && !boundary_kernel_.observes_iteration;
+    if (fallible_linear_boundary)
+      boundary_failure_.reset();
+    const Real result =
+        (!force_general_ && n_levels_ == 2 && !adjacent_ && n_ranks() == 1)
+            ? solve_two_level_legacy_(max_iters, fine_sweeps, tol)
+            : solve_composite_nlevel_(max_iters, fine_sweeps, tol);
+    if (fallible_linear_boundary && boundary_failure_.synchronize_across_ranks())
+      throw std::runtime_error(
+          "composite field boundary evaluation failed at face " +
+          std::to_string(boundary_failure_.face) + " cell (" +
+          std::to_string(boundary_failure_.i) + "," +
+          std::to_string(boundary_failure_.j) + ")");
+    return result;
   }
 
   /// TEST HOOK (ADC-636): route a 2-level non-adjacent mono-rank input through the GENERAL path so the
@@ -320,6 +384,61 @@ class CompositeFacPoisson {
 
  public:
   Real last_residual() const { return last_residual_; }
+
+  /// Nonlinear full-approximation outer loop for iterate-dependent physical closures.  The FAC
+  /// hierarchy is the nonlinear preconditioner/correction engine; only a converged hierarchy is
+  /// published.  Every failed evaluation, iteration limit or exception restores the immutable
+  /// pre-solve snapshots on all levels.
+  SolveReport solve_boundary_fas(const FieldNewtonOptions& nonlinear) {
+    if (!has_boundary_kernel_ || !boundary_kernel_.observes_iteration)
+      return SolveReport::capability_failure();
+    validate_field_newton_options(nonlinear);
+    std::vector<MultiFab> published;
+    published.reserve(static_cast<std::size_t>(n_levels_));
+    for (int level = 0; level < n_levels_; ++level) {
+      MultiFab& phi = phi_level(level);
+      published.emplace_back(phi.box_array(), phi.dmap(), phi.ncomp(), phi.n_grow());
+      lincomb(published.back(), Real(1), phi, Real(0), phi);
+    }
+    auto restore = [&]() {
+      for (int level = 0; level < n_levels_; ++level)
+        lincomb(phi_level(level), Real(1), published[static_cast<std::size_t>(level)], Real(0),
+                published[static_cast<std::size_t>(level)]);
+    };
+
+    SolveReport report;
+    Real base = Real(1);
+    try {
+      for (int iteration = 0; iteration < nonlinear.max_iterations; ++iteration) {
+        boundary_context_.point.iteration = iteration;
+        mg_.set_boundary_context(boundary_context_);
+        boundary_failure_.reset();
+        const Real residual = solve(options_.max_iters, options_.fine_sweeps, options_.tol);
+        const bool failed = boundary_failure_.synchronize_across_ranks();
+        if (failed || !std::isfinite(static_cast<double>(residual))) {
+          report.iters = iteration + 1;
+          report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kRejectAttempt);
+          restore();
+          return report;
+        }
+        if (iteration == 0)
+          base = residual > Real(0) ? residual : Real(1);
+        report.iters = iteration + 1;
+        report.rel_residual = residual / base;
+        last_residual_ = residual;
+        if (residual <= nonlinear.tolerance * base) {
+          report.mark_solved();
+          return report;
+        }
+      }
+    } catch (...) {
+      restore();
+      throw;
+    }
+    report.mark_failed(SolveStatus::kIterationLimit, SolveAction::kRejectAttempt);
+    restore();
+    return report;
+  }
 
  private:
   /// dst <- src (component 0, valid cells).
@@ -518,14 +637,16 @@ class CompositeFacPoisson {
   /// Composite coarse residual: r_c = f_c - div(eps grad phi_c) (non covered), 0 (covered), + C-F
   /// FLUX correction on the cells bordering the patch. @return ||r_c||_inf (NON covered cells).
   Real composite_coarse_residual() {
-    device_fence();
-    fill_ghosts(phi_c_, geom_c_.domain, bc_);
+    MultiFab& operator_view = prepare_field_residual_view(
+        phi_c_, has_boundary_kernel_ ? &boundary_view_c_ : nullptr, geom_c_, bc_,
+        has_boundary_kernel_ ? &boundary_kernel_ : nullptr,
+        has_boundary_kernel_ ? &boundary_context_ : nullptr);
     // r_c = f_c - div(A grad phi_c) (apply_laplacian reads the already-filled ghosts; eps + cross if active).
     // The cross terms are read also on the COVERED cells (= fine average after average_down) -> the
     // 9-point stencil stays consistent at the interface; only the NORMAL flux is explicitly joined C-F
     // (the cross flux, tangential and small for the Schur step, is carried by the volume stencil).
     MultiFab lap(ba_c_, dm_c_, 1, 0);
-    apply_laplacian(phi_c_, geom_c_, lap, /*coef=*/nullptr, has_eps_ ? &eps_c_ : nullptr,
+    apply_laplacian(operator_view, geom_c_, lap, /*coef=*/nullptr, has_eps_ ? &eps_c_ : nullptr,
                     /*kappa=*/nullptr, /*eps_y=*/nullptr, has_cross_ ? &axy_c_ : nullptr,
                     has_cross_ ? &ayx_c_ : nullptr);
     device_fence();
@@ -642,7 +763,7 @@ class CompositeFacPoisson {
   BoxArray ba_f_;
   DistributionMapping dm_f_;
   GeometricMG mg_;  ///< coarse solver (initial + corrections), homogeneous Dirichlet
-  MultiFab phi_c_, phi_f_, f_c_, f_f_, res_c_;
+  MultiFab phi_c_, phi_f_, f_c_, f_f_, res_c_, boundary_view_c_;
   MultiFab eps_c_, eps_f_;  ///< variable permittivity per level (condensed Schur operator B_z=0)
   MultiFab axy_c_, ayx_c_, axy_f_, ayx_f_;  ///< cross terms per level (full tensor, Schur B_z!=0)
   std::vector<Box2D> patch_coarse_;  ///< covered coarse footprint PER fine patch (multi-patch)
@@ -652,6 +773,13 @@ class CompositeFacPoisson {
       make_runtime_diagnostics_report("pops.numerics.elliptic.composite_fac_poisson");
   bool has_eps_ = false;    ///< true: div(eps grad phi) operator; false: scalar Laplacian (Phase 1)
   bool has_cross_ = false;  ///< true: adds the cross terms a_xy/a_yx (full tensor, Schur B_z!=0)
+  bool has_boundary_kernel_ = false;
+  CompiledFieldBoundaryKernel boundary_kernel_{};
+  FieldBoundaryExecutionContext boundary_context_{};
+  FieldBoundaryFailure boundary_failure_{};
+  bool has_field_nonlinear_options_ = false;
+  FieldNewtonOptions field_nonlinear_options_{};
+  SolveReport last_solve_report_{};
   bool verbose_ = false;
   bool two_way_ = true;
   CompositeFacOptions options_;  ///< ADC-614: installed FAC knobs; defaults = kFAC* (bit-identical).

@@ -143,7 +143,33 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           py::arg("composite") = false, py::arg("fac_max_iters") = 0,
           py::arg("fac_fine_sweeps") = 0, py::arg("fac_tol") = 0.0,
           py::arg("fac_coarse_rel_tol") = 0.0, py::arg("fac_coarse_cycles") = 0,
-          py::arg("fac_verbose") = false);
+          py::arg("fac_verbose") = false)
+      .def("set_field_solver_plan", &AmrSystem::set_field_solver_plan,
+           py::arg("provider_slot"), py::arg("provider_identity"),
+           py::arg("output_owner_identity"),
+           py::arg("output_block"), py::arg("output_key"),
+           py::arg("provider_identities"), py::arg("provider_blocks"),
+           py::arg("provider_keys"), py::arg("provider_coefficients"),
+           py::arg("solver"), py::arg("hierarchy"), py::arg("abs_tol"),
+           py::arg("rel_tol"), py::arg("max_cycles"), py::arg("min_coarse"),
+           py::arg("pre_smooth"), py::arg("post_smooth"), py::arg("bottom_sweeps"),
+           py::arg("coarse_threshold"))
+      .def("set_field_boundary_plan", &AmrSystem::set_field_boundary_plan,
+           py::arg("provider_slot"), py::arg("kind"), py::arg("alpha"), py::arg("beta"),
+           py::arg("value"))
+      .def("set_field_boundary_dependencies", &AmrSystem::set_field_boundary_dependencies,
+           py::arg("provider_slot"), py::arg("state_blocks"),
+           py::arg("state_components"), py::arg("field_blocks"),
+           py::arg("field_keys"), py::arg("field_components"))
+      .def("set_field_boundary_parameters", &AmrSystem::set_field_boundary_parameters,
+           py::arg("provider_slot"), py::arg("parameters"))
+      .def("set_field_newton_plan", &AmrSystem::set_field_newton_plan,
+           py::arg("provider_slot"), py::arg("tolerance"), py::arg("max_iterations"),
+           py::arg("linear_tolerance"), py::arg("linear_max_iterations"),
+           py::arg("restart"), py::arg("armijo"), py::arg("minimum_step"))
+      .def("set_field_nullspace", &AmrSystem::set_field_nullspace,
+           py::arg("provider_slot"), py::arg("constant_kernel"),
+           py::arg("mean_zero_gauge"));
 }
 
 // Physics wiring: dt bounds, GLOBAL Schur/coupled source stages, and time-splitting policy.
@@ -413,6 +439,13 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       // the regrid/stride cadence resumes exactly after a set_clock. Prerequisite PR-IO-3.
       .def("macro_step", &AmrSystem::macro_step)
       .def("set_clock", &AmrSystem::set_clock, py::arg("t"), py::arg("macro_step"))
+      .def("field_provider_slots", &AmrSystem::field_provider_slots)
+      .def("field_provider_levels", &AmrSystem::field_provider_levels,
+           py::arg("provider_slot"))
+      .def("set_field_potential", &AmrSystem::set_field_potential,
+           py::arg("provider_slot"), py::arg("phi"))
+      .def("set_field_potential_level", &AmrSystem::set_field_potential_level,
+           py::arg("provider_slot"), py::arg("level"), py::arg("phi"))
       // Compiled time Program on the AMR hierarchy (epic ADC-511 / ADC-508, Spec 6): dlopen a generated
       // problem.so (target='amr_system'), verify its ABI key, run the section-24 requirement validation
       // (block instance / solver), bind the Program blocks by name, seed the runtime params, and install
@@ -567,6 +600,10 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def(
           "level_potential_global", [](AmrSystem& s, int k) { return s.level_potential_global(k); },
           py::arg("k"))
+      .def("field_potential_global", &AmrSystem::field_potential_global,
+           py::arg("provider_slot"))
+      .def("field_potential_level_global", &AmrSystem::field_potential_level_global,
+           py::arg("provider_slot"), py::arg("level"))
       // MULTI-BLOCK per-BLOCK per-level state (ADC-509): the AmrRuntime engine shares the layout +
       // aux, so the per-level STATE is read/restored PER BLOCK (by name) while phi stays shared
       // (level_potential). block_level_state returns a FLAT field (c*nf*nf + j*nf + i); the _global
@@ -626,6 +663,9 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
             s.rebuild_hierarchy(bx, owner_ranks);
           },
           py::arg("boxes"), py::arg("owner_ranks"))
+      .def("begin_restart_transaction", &AmrSystem::begin_restart_transaction)
+      .def("commit_restart_transaction", &AmrSystem::commit_restart_transaction)
+      .def("rollback_restart_transaction", &AmrSystem::rollback_restart_transaction)
       // ADC-631 multistep history rings on the compiled-Program AMR route: the SAME seam names as
       // System (init_system.cpp) so _system_io_history.py serialize/restore is reused verbatim.
       // history_global returns the per-level slices concatenated into ONE flat buffer (level axis

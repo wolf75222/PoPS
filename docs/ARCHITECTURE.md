@@ -335,17 +335,44 @@ a validity token recording which field problem, block and stage produced the aux
 one stage cannot be silently read as another. These are descriptors around already-computed values;
 they add no numerics.
 
-The default shared Poisson and each named elliptic field are described by ONE native
-`FieldProblemRegistry`
-([`include/pops/runtime/system/field_problem_registry.hpp`](../include/pops/runtime/system/field_problem_registry.hpp)):
-both the Uniform `SystemFieldSolver` and the AMR `AmrRuntime` register their field problems into it
-(id, equation kind, output `AuxLayout`, solver kind, route support), so the two routes share one field
-abstraction. Its `validate(id, route)` refuses an illegal combination BEFORE bind (an FFT solver on
-the AMR route, an FFT solve with a Dirichlet potential, an entry declared on a route it does not
-support, or a problem producing no output), and `field_problem_routes` surfaces each entry as a
-`field_problem:<id>` capability report row. The registry owns no solver: the lazy solver build
-(`ensure_named_elliptic`) and RHS assembly (`assemble_poisson_rhs`) remain the numerical truth; the
-`NamedField` component fields become the derived low-level view of an entry's layout.
+Field solve legality is resolved from the owner-qualified Python `FieldSolvePlan` and its capability
+proof before native artifact creation.  The native runtime receives only authenticated prepared
+providers and executable operator callbacks; it does not maintain a second closed enum registry or
+privilege a field named `phi`.
+
+Each resolved field install carries the ordered, block-qualified RHS provider pack, output route,
+method/solver options, four complete physical-face laws, hierarchy policy, and nullspace/gauge proof.
+Non-constant Robin/Dirichlet/Neumann laws are compiled into named device launchers: runtime parameters
+are copied into POD functors before launch. Pointwise dependencies use the explicit
+`pops.fields.boundary_value(handle, component)` expression, while `logical_time(...)` reads the exact
+Program-supplied time point; the resolver turns both into ordered direct-buffer/POD slots. Handles
+remain Boolean/hashable identities and a vector state cannot be sampled without naming its component.
+An iterate-dependent law installs its exact symbolic JVP and requires an explicit nonlinear solver,
+and a device-invalid denominator is reduced to one rank-consistent witness before the solve can
+publish. Uniform state/field dependencies and single-level AMR state dependencies are prepared
+outside the iteration; multilevel AMR state providers and AMR field-to-field providers are rejected
+until a per-level materialization contract exists. No route falls through to a Python callback or a
+per-cell registry lookup.
+Linear and nonlinear field routes both retain the accepted warm start until their `SolveReport` is
+consumed; an invalid boundary evaluation or iteration limit restores that value and cannot update the
+published aux channel.
+
+Nullspace dimension is derived from operator, boundary closure, and the material topology, while the
+gauge remains an explicit representative choice. The Cartesian topology recipe is an explicit
+axis-neighbor cell graph with its periodic and coarse/fine identifications; its connected-component
+derivation proves one full-domain component (and, for composite AMR, masks coarse cells covered by
+finer levels).
+An embedded-boundary field solve or a level-local solve over partial AMR BoxArrays is therefore
+refused until its material connectivity and coarse/fine boundary closure can be materialised; PoPS
+does not pretend that a single constant mode covers an unknown disconnected topology.  Every AMR
+topology replacement increments a runtime epoch embedded in the nullspace recipe, so no coverage mask
+survives a regrid or restart hierarchy rebuild.
+
+Field warm starts are checkpoint payloads keyed by the complete qualified provider slot.  The AMR v3
+reader validates topology, ownership maps, state, aux, potentials, provider slots and history rings
+before its first write, then restores the hierarchy through the final clock update inside one native
+accepted-state transaction.  Any exception restores the previous hierarchy, data, field warm starts,
+histories, diagnostics and cadence counters; a partially restored simulation is never observable.
 
 The transport of a block, in turn, reads this aux:
 `advance_transport` routes toward the closure `s.advance` (full path) or its disk variants, and

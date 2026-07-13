@@ -44,8 +44,8 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
 
     _physics_mutators = frozenset({
         "state", "species", "primitive", "scalar", "param", "aux", "field",
-        "vector_field", "flux", "source", "local_linear_operator", "solve_field",
-        "field_problem", "operator", "riemann", "invariant", "rate",
+        "vector_field", "flux", "source", "local_linear_operator", "field_operator",
+        "operator", "riemann", "invariant", "rate",
         "finite_volume_rate", "coupled_rate", "solve_fields_from_species",
     })
 
@@ -62,10 +62,8 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         self._operator_inputs = {}  # registered op name -> declared field-input names
         self._aliases = {}          # board operator name -> registered op name
         self._invariants = {}
-        self._field_problems = {}   # name -> inert pops.fields field problem (Spec 5 sec.5.1/9.6)
         self._riemann = None        # selected Riemann descriptor (board surface)
         self._reconstruction = None
-        self._field_solvers = {}    # field-operator name -> solver descriptor
         # Multi-species mode (Spec 3 sections 12, 16): once a SECOND species is declared the model owns
         # a multi-block pops.model.Module directly (N StateSpaces + a coupled_rate + a multi-block field
         # operator). The single-species path stays byte-identical (keeps the dsl.Model and exposes
@@ -297,10 +295,9 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
 
     def inspect(self) -> Any:
         """A plain-dict, inert view of the model's authoring state (Spec 5 sec.12.1). Reports the
-        declared state / field / flux / source / operator names and the inspectable field problems
-        authored via :meth:`field_problem` (each as its descriptor's
-        :meth:`~pops.fields.FieldProblem.inspect` dict). Read-only: it touches no numerics, codegen or
-        runtime.
+        declared state / field / flux / source / operator names. Physical field operators are
+        descriptors returned to the caller and become authoritative only when paired with a
+        ``FieldDiscretization`` on a Problem.
         """
         return {
             "name": self.name,
@@ -309,8 +306,6 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             "fluxes": sorted(self._fluxes),
             "sources": sorted(self._sources),
             "operators": sorted(self._operators),
-            "field_problems": {nm: prob.inspect()
-                               for nm, prob in self._field_problems.items()},
         }
 
     def operator(self, name: Any, handle: Any = None, *, inputs: Any = None,

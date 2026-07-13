@@ -1,0 +1,395 @@
+"""Total resolve-time lowering from field declarations to runtime install plans."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any
+
+from pops.codegen.lowering_coverage import (
+    LoweringCoverageReport,
+    LoweringCoverageRow,
+    LoweringRejection,
+)
+from pops.codegen.field_boundary_lowering import (
+    boundary_dependency_pack,
+    boundary_plan,
+    topology_recipe,
+)
+from pops.identity import Identity
+from pops.math import principal_kinds
+
+from pops.fields._identity import field_identity, strict_field_data
+from pops.fields.discretization import FieldDiscretization
+from pops.fields.gauges import MeanValueGauge
+from pops.fields.nullspace import ConstantNullspace
+from pops.fields.operator import FieldOperator
+
+
+def _reject(rows: list[LoweringCoverageRow], source: str, gate: str, message: str) -> None:
+    report = LoweringCoverageReport((*rows, LoweringCoverageRow(
+        source, "rejected", gate=gate)))
+    raise LoweringRejection(
+        message, coverage_report=report, source=source, gate=gate)
+
+
+def _zero(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value == 0
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedFieldInstallPlan:
+    """Complete field semantics plus their exact native lowering."""
+
+    name: str
+    operator: FieldOperator
+    discretization: FieldDiscretization
+    target: str
+    rhs_providers: tuple[Any, ...]
+    native_options: Any
+    coverage: LoweringCoverageReport
+    nonlinear_provider: Any
+    identity: Identity
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not self.name:
+            raise TypeError("ResolvedFieldInstallPlan name must be non-empty")
+        if self.operator.name != self.name:
+            raise ValueError("field install name disagrees with FieldOperator")
+        if not isinstance(self.discretization, FieldDiscretization):
+            raise TypeError("field install requires FieldDiscretization")
+        if self.target not in ("system", "amr_system"):
+            raise ValueError("field install target is unsupported")
+        from pops.model import Handle
+        if not self.rhs_providers or any(
+                not isinstance(provider, Handle) or not provider.is_resolved
+                or provider.kind != "field_operator" for provider in self.rhs_providers):
+            raise TypeError("field install requires canonical field-operator RHS providers")
+        if not isinstance(self.coverage, LoweringCoverageReport):
+            raise TypeError("field install requires exact lowering coverage")
+        nonlinear_manifest = self.native_options.get("nonlinear")
+        if nonlinear_manifest is None:
+            if self.nonlinear_provider is not None:
+                raise ValueError("field install retains an undeclared nonlinear provider")
+        else:
+            validate = getattr(self.nonlinear_provider, "__post_init__", None)
+            install = getattr(self.nonlinear_provider, "install", None)
+            to_data = getattr(self.nonlinear_provider, "to_data", None)
+            if not callable(validate) or not callable(install) or not callable(to_data):
+                raise TypeError("field nonlinear provider does not implement the prepared protocol")
+            validate()
+            if to_data() != nonlinear_manifest:
+                raise ValueError("field nonlinear provider disagrees with its canonical manifest")
+        object.__setattr__(self, "native_options", MappingProxyType(dict(self.native_options)))
+        expected = field_identity("resolved-field-install", self.to_data(include_identity=False))
+        if self.identity != expected:
+            raise ValueError("resolved field install identity is not canonical")
+
+    def to_data(self, *, include_identity: bool = True) -> dict[str, Any]:
+        data = {
+            "schema_version": 1,
+            "name": self.name,
+            "operator": self.operator.to_data(),
+            "discretization": self.discretization.to_data(),
+            "target": self.target,
+            "rhs_providers": [provider.canonical_identity()
+                              for provider in self.rhs_providers],
+            "native_options": dict(self.native_options),
+            "coverage": self.coverage.to_data(),
+        }
+        if include_identity:
+            data["identity"] = self.identity.token
+        return data
+
+    def boundary_parameter_handles(self) -> tuple[Any, ...]:
+        """Exact compact parameter pack consumed by the generated boundary launchers."""
+        handles = {}
+        for binding in self.discretization.boundaries:
+            for handle in binding.condition.declaration_references():
+                if getattr(handle, "kind", None) == "parameter":
+                    handle.canonical_identity()
+                    handles.setdefault(handle.qualified_id, handle)
+        return tuple(handles[key] for key in sorted(handles))
+
+
+def resolve_field_install_plan(
+    name: str,
+    registration: Any,
+    *,
+    target: str,
+    rhs_providers: tuple[Any, ...],
+    provider_route: tuple[dict[str, Any], ...],
+    layout: Any,
+) -> ResolvedFieldInstallPlan:
+    operator = getattr(registration, "operator", None)
+    plan = getattr(registration, "discretization", None)
+    if not isinstance(operator, FieldOperator) or not isinstance(plan, FieldDiscretization):
+        raise TypeError("field registration lost FieldOperator + FieldDiscretization")
+    rows: list[LoweringCoverageRow] = []
+    source = "field:%s:operator" % name
+    kinds = principal_kinds(operator.equation.lhs)
+    if "laplacian" not in kinds or kinds - {"laplacian"}:
+        _reject(rows, source, "field.operator.not_native",
+                "field %r is generic but its principal operator %s has no native lowering"
+                % (name, sorted(kinds)))
+    rows.append(LoweringCoverageRow(source, "lowered", (
+        "field-install:%s:residual" % name,)))
+    if not rhs_providers or len(rhs_providers) != len(provider_route):
+        _reject(rows, "field:%s:provider" % name, "field.provider.pack_invalid",
+                "field %r requires a non-empty, fully routed provider pack" % name)
+    provider_identity = {
+        "schema_version": 1,
+        "contributions": [
+            {
+                "provider": provider.canonical_identity(),
+                "owner_block": route["owner_block"],
+                "native_key": route["key"],
+                "coefficient": route["coefficient"],
+                "measure": route["measure"],
+            }
+            for provider, route in zip(rhs_providers, provider_route)
+        ],
+    }
+    from pops.identity import canonical_bytes
+    provider_slot = field_identity(
+        "qualified-field-provider", provider_identity).token
+    rows.append(LoweringCoverageRow(
+        "field:%s:provider" % name, "lowered", (
+            "field-install:%s:provider:%s" % (name, provider_slot),)))
+    for reference in operator.declaration_references():
+        rows.append(LoweringCoverageRow(
+            "field:%s:dependency:%s" % (name, reference.qualified_id),
+            "lowered", ("field-install:%s:qualified-dependency" % name,)))
+
+    method_source = "field:%s:method" % name
+    method_adapter = getattr(plan.method, "lower_field_method", None)
+    if not callable(method_adapter):
+        _reject(rows, method_source, "field.method.not_native",
+                 "field %r method %s has no native lowering" %
+                 (name, type(plan.method).__name__))
+    method_options = method_adapter(target=target, layout=layout)
+    if not isinstance(method_options, dict) or not isinstance(
+            method_options.get("native_method"), str):
+        _reject(rows, method_source, "field.method.invalid_adapter",
+                "field %r method returned an invalid native lowering" % name)
+    rows.append(LoweringCoverageRow(method_source, "lowered", (
+        "field-install:%s:cell-centered-second-order" % name,)))
+
+    # The current native field operator is the full rectangular Cartesian cell graph.  It does not
+    # yet consume Uniform.embedded_boundary, so pretending to materialise connected components here
+    # would silently solve a different domain and derive the wrong nullspace dimension.  Refuse that
+    # topology explicitly; the accepted recipe below truthfully has exactly one material component.
+    from pops.mesh.layouts import AMR
+    embedded = None if isinstance(layout, AMR) else layout.embedded_boundary
+    if embedded is not None:
+        _reject(rows, "field:%s:topology" % name,
+                "field.topology.embedded_boundary_not_native",
+                "field %r uses an embedded boundary, but the native field residual has no "
+                "material-cell connectivity/mask lowering for that topology" % name)
+    rows.append(LoweringCoverageRow(
+        "field:%s:topology" % name, "derived",
+        rule="resolved full rectangular cell graph has one connected material component"))
+
+    bc, boundary_faces = boundary_plan(name, plan, rows, layout, operator.unknown)
+    boundary_dependencies = boundary_dependency_pack(plan, operator.unknown)
+    if target == "amr_system" and boundary_dependencies["fields"]:
+        _reject(rows, "field:%s:boundaries" % name,
+                "field.boundary.amr_field_dependency_not_native",
+                "field %r has a boundary law depending on another solved field; the AMR "
+                "backend has no exact same-level/composite materialization route for that "
+                "dependency yet" % name)
+    if target == "amr_system" and layout.max_levels > 1 and boundary_dependencies["states"]:
+        _reject(rows, "field:%s:boundaries" % name,
+                "field.boundary.amr_multilevel_state_dependency_not_native",
+                "field %r has a state-dependent boundary law on a multilevel hierarchy; the "
+                "generated physical-face provider does not yet receive one exact state buffer "
+                "per level" % name)
+    for kind in ("states", "fields"):
+        for dependency in boundary_dependencies[kind]:
+            rows.append(LoweringCoverageRow(
+                "field:%s:boundary-dependency:%s:%d" % (
+                    name, dependency["qualified_id"], dependency["component"]),
+                "lowered", ("field-install:%s:boundary-buffer:%s" % (name, kind),)))
+    for coordinate in boundary_dependencies["logical_time"]:
+        rows.append(LoweringCoverageRow(
+            "field:%s:boundary-time:%s" % (name, coordinate), "lowered",
+            ("field-install:%s:logical-timepoint" % name,)))
+    boundary_kernel_required = boundary_faces is not None and any(
+        face["dynamic"] for face in boundary_faces)
+    boundary_iterate_dependent = boundary_faces is not None and any(
+        face["iterate_dependent"] for face in boundary_faces)
+    solver_source = "field:%s:solver" % name
+    solver_adapter = getattr(plan.solver, "lower_field_solver", None)
+    if not callable(solver_adapter):
+        _reject(rows, solver_source, "field.solver.not_native",
+                 "field %r solver %s has no native lowering" %
+                 (name, type(plan.solver).__name__))
+    try:
+        solver_options = solver_adapter(target=target, layout=layout)
+    except (TypeError, ValueError) as exc:
+        _reject(rows, solver_source, "field.solver.layout_incompatible", str(exc))
+    if not isinstance(solver_options, dict) or not isinstance(
+            solver_options.get("native_solver"), str):
+        _reject(rows, solver_source, "field.solver.invalid_adapter",
+                "field %r solver returned an invalid native lowering" % name)
+    solver_token = solver_options["native_solver"]
+    rows.append(LoweringCoverageRow(solver_source, "lowered", (
+        "field-install:%s:solver:%s" % (name, solver_token),)))
+    nonlinear_options = None
+    nonlinear_provider = None
+    if plan.nonlinear is not None:
+        nonlinear_adapter = getattr(plan.nonlinear, "lower_field_nonlinear", None)
+        if not callable(nonlinear_adapter):
+            _reject(rows, "field:%s:nonlinear" % name, "field.nonlinear.not_native",
+                    "field %r nonlinear solver has no lowering adapter" % name)
+        try:
+            nonlinear_provider = nonlinear_adapter(target=target, layout=layout)
+        except (TypeError, ValueError) as exc:
+            _reject(rows, "field:%s:nonlinear" % name,
+                    "field.nonlinear.layout_incompatible", str(exc))
+        manifest = getattr(nonlinear_provider, "to_data", None)
+        install_adapter = getattr(nonlinear_provider, "install", None)
+        capabilities = getattr(nonlinear_provider, "capabilities", frozenset())
+        identity = getattr(nonlinear_provider, "identity", None)
+        if not callable(manifest) or not callable(install_adapter) or \
+                not isinstance(identity, Identity) or not {
+                    "residual", "publication_atomic", "reject_attempt"
+                }.issubset(set(capabilities)):
+            _reject(rows, "field:%s:nonlinear" % name,
+                    "field.nonlinear.invalid_adapter",
+                    "field %r nonlinear solver returned an invalid prepared provider" % name)
+        nonlinear_options = manifest()
+        rows.append(LoweringCoverageRow(
+            "field:%s:nonlinear" % name, "lowered",
+            ("field-install:%s:nonlinear:%s" % (name, identity.token),)))
+    if boundary_iterate_dependent and nonlinear_provider is None:
+        _reject(rows, "field:%s:boundaries" % name,
+                "field.boundary.nonlinear_outer_solver_required",
+                "field %r has iterate-dependent alpha/beta/value expressions and requires a "
+                "prepared nonlinear outer solver" % name)
+
+    # Nullspace dimension is a topology fact and cannot silently change with a runtime Robin alpha.
+    # A dynamic alpha is nevertheless fully supported when another face is statically Dirichlet-like,
+    # because that face anchors the operator for every runtime value of the dynamic coefficient.
+    dynamic_alpha = boundary_faces is not None and any(
+        "alpha" in face["dynamic"] for face in boundary_faces)
+    statically_anchored = boundary_faces is not None and any(
+        face["type"] != "periodic" and "alpha" not in face["dynamic"]
+        and face["alpha"] != 0.0 for face in boundary_faces)
+    if dynamic_alpha and not statically_anchored:
+        _reject(rows, "field:%s:boundaries" % name,
+                "field.boundary.dynamic_nullspace_topology",
+                "field %r has a dynamic Robin alpha that can change the nullspace dimension; "
+                "add a statically Dirichlet-like anchor or use a boundary law with invariant alpha"
+                % name)
+
+    if plan.preconditioner is not None:
+        _reject(rows, "field:%s:preconditioner" % name,
+                "field.preconditioner.not_native",
+                "field %r declares an external preconditioner that the native seam cannot consume"
+                % name)
+    rows.append(LoweringCoverageRow(
+        "field:%s:preconditioner" % name, "documentary"))
+
+    # The mathematical kernel is derived from operator + resolved topology + BC.  A user-supplied
+    # ConstantNullspace is an assertion only; it never creates a kernel that the operator does not
+    # have.  The representative-selection gauge remains an independent, explicit choice.
+    singular_faces = boundary_faces is not None and all(
+        face["type"] == "periodic" or face["alpha"] == 0.0
+        for face in boundary_faces)
+    derived_nullspace = "constant" if singular_faces else "none"
+    nullspace_assertion = "none"
+    if plan.nullspace is not None:
+        if not isinstance(plan.nullspace, ConstantNullspace):
+            _reject(rows, "field:%s:nullspace" % name, "field.nullspace.not_native",
+                    "field %r nullspace assertion has no native topology derivation" % name)
+        nullspace_assertion = "constant"
+        if boundary_faces is not None and derived_nullspace != "constant":
+            _reject(rows, "field:%s:nullspace" % name, "field.nullspace.assertion_mismatch",
+                    "field %r asserts ConstantNullspace but operator+topology+BC are invertible"
+                    % name)
+    if derived_nullspace == "constant":
+        if not isinstance(plan.gauge, MeanValueGauge) or not _zero(plan.gauge.value):
+            _reject(rows, "field:%s:gauge" % name, "field.gauge.required",
+                    "field %r has a topology-derived constant kernel and requires an explicit "
+                    "MeanValueGauge(0)" % name)
+        gauge = "mean_zero"
+    else:
+        if plan.gauge is not None:
+            _reject(rows, "field:%s:gauge" % name, "field.gauge.without_nullspace",
+                    "field %r declares a gauge for an invertible operator" % name)
+        gauge = "none"
+    nullspace = derived_nullspace
+    rows.append(LoweringCoverageRow(
+        "field:%s:nullspace" % name, "lowered" if nullspace != "none" else "documentary",
+        (() if nullspace == "none" else ("field-install:%s:nullspace:constant" % name,))))
+    rows.append(LoweringCoverageRow(
+        "field:%s:gauge" % name, "lowered" if gauge != "none" else "documentary",
+        (() if gauge == "none" else ("field-install:%s:gauge:mean-zero" % name,))))
+
+    policy = plan.hierarchy_policy.options()["policy"]
+    if target == "system":
+        if policy == "composite":
+            _reject(rows, "field:%s:hierarchy" % name, "field.hierarchy.unsupported",
+                    "uniform System cannot lower CompositeHierarchySolve")
+        hierarchy = "level_local"
+    else:
+        hierarchy = "composite" if policy in ("infer_from_layout", "composite") else "level_local"
+    if target == "amr_system" and hierarchy == "level_local" and layout.max_levels > 1:
+        _reject(rows, "field:%s:hierarchy" % name,
+                "field.hierarchy.level_local_partial_topology_not_native",
+                "field %r requests level-local solves on a refined partial BoxArray; the native "
+                "field residual has no coarse/fine boundary closure or per-patch connected-component "
+                "basis for that route (use CompositeHierarchySolve)" % name)
+    rows.append(LoweringCoverageRow(
+        "field:%s:hierarchy" % name, "derived", rule=(
+            "%s + target=%s resolves to %s" % (policy, target, hierarchy))))
+
+    options = {
+        "rhs": "composite",
+        "provider_slot": provider_slot,
+        "provider_identity": provider_identity,
+        "provider_identity_text": canonical_bytes(
+            strict_field_data(provider_identity)).hex(),
+        "provider_pack": [dict(route) for route in provider_route],
+        "output_route": {
+            "owner_identity": operator.unknown.block_ref.canonical_identity(),
+            "owner_block": operator.unknown.block_ref.local_id,
+            "key": operator.name,
+        },
+        "rhs_identity": field_identity(
+            "field-rhs", {
+                "rhs": operator.to_data()["equation"]["equation"]["rhs"],
+            }).token,
+        "solver": solver_token,
+        "method": method_options,
+        "solver_capabilities": solver_options,
+        "nonlinear": nonlinear_options,
+        "bc": bc,
+        "boundary_faces": boundary_faces,
+        "boundary_kernel_required": boundary_kernel_required,
+        "boundary_iterate_dependent": boundary_iterate_dependent,
+        "boundary_dependencies": boundary_dependencies,
+        "nullspace": nullspace,
+        "nullspace_assertion": nullspace_assertion,
+        "gauge": gauge,
+        "hierarchy": hierarchy,
+        "topology_recipe": topology_recipe(layout),
+    }
+    report = LoweringCoverageReport(rows)
+    data = {
+        "schema_version": 1,
+        "name": name,
+        "operator": operator.to_data(),
+        "discretization": plan.to_data(),
+        "target": target,
+        "rhs_providers": [provider.canonical_identity() for provider in rhs_providers],
+        "native_options": options,
+        "coverage": report.to_data(),
+    }
+    identity = field_identity("resolved-field-install", data)
+    return ResolvedFieldInstallPlan(
+        name, operator, plan, target, rhs_providers, options, report,
+        nonlinear_provider, identity)
+
+
+__all__ = ["ResolvedFieldInstallPlan", "resolve_field_install_plan"]

@@ -425,14 +425,19 @@ inline Real CompositeFacPoisson::composite_residual_(int m) {
   // ghosts for the operator: level 0 uses the physical BC (it is the whole domain); a patch level uses
   // the C/F bilerp + fine-fine order (its edges are INTERIOR to the refined domain, not physical).
   if (m == 0) {
-    fill_ghosts(phim, gm.domain, bc_);
+    prepare_field_residual_view(
+        phim, has_boundary_kernel_ ? &boundary_view_c_ : nullptr, gm, bc_,
+        has_boundary_kernel_ ? &boundary_kernel_ : nullptr,
+        has_boundary_kernel_ ? &boundary_context_ : nullptr);
   } else {
     if (m - 1 == 0)
       fill_ghosts(phi_c_, geom_c_.domain, bc_);
     fill_cf_phi_(m);
   }
   MultiFab lap(phim.box_array(), phim.dmap(), 1, 0);
-  apply_laplacian(phim, gm, lap, /*coef=*/nullptr, has_eps_ ? &eps_level(m) : nullptr,
+  MultiFab& operator_view = (m == 0 && has_boundary_kernel_) ? boundary_view_c_ : phim;
+  apply_laplacian(operator_view, gm, lap, /*coef=*/nullptr,
+                  has_eps_ ? &eps_level(m) : nullptr,
                   /*kappa=*/nullptr, /*eps_y=*/nullptr, has_cross_ ? &a_xy_level(m) : nullptr,
                   has_cross_ ? &a_yx_level(m) : nullptr);
   device_fence();

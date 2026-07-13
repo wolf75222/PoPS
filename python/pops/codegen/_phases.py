@@ -84,7 +84,7 @@ def resolve(
         raise TypeError("libraries/backend have dedicated resolve-time authorities")
 
     from pops.codegen._orchestration_compile import (
-        capture_field_solvers,
+        capture_field_plans,
         capture_runtime_declarations,
         prepare_problem_snapshot,
         resolve_compile_libraries,
@@ -115,7 +115,8 @@ def resolve(
         )
         for name, spec in problem._blocks.items()
     )
-    field_solvers = capture_field_solvers(problem, detached_frozen)
+    field_plans = capture_field_plans(
+        problem, detached_frozen, target=target, layout=detached_layout)
     outputs, diagnostics = capture_runtime_declarations(problem, detached_frozen)
     resolved_libraries, snapshot_libraries = resolve_compile_libraries(tuple(libraries or ()))
     snapshot = prepare_problem_snapshot(
@@ -140,7 +141,7 @@ def resolve(
         snapshot=snapshot, target=target, backend=backend_token, layout=detached_layout,
         layout_plan=layout_plan,
         time=resolved_time, blocks=blocks, bind_schema=bind_schema,
-        compile_values=compile_values, field_solvers=field_solvers, outputs=outputs,
+        compile_values=compile_values, field_plans=field_plans, outputs=outputs,
         diagnostics=diagnostics, libraries=resolved_libraries,
         requirements={"tokens": tuple(evidence["requirements"]),
                       "layout_resources": layout_plan.resource_requirements(),
@@ -175,7 +176,7 @@ def compile(plan: Any) -> Any:
         model_graph = build_program_model_graph(plan)
         program = compile_problem(
             time=plan.time, model_graph=model_graph, backend=plan.backend, target=plan.target,
-            problem_snapshot=plan.snapshot, **options)
+            problem_snapshot=plan.snapshot, field_plans=plan.field_plans, **options)
         program._discard_authoring()
     from pops.codegen.compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
 

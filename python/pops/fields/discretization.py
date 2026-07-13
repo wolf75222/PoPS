@@ -114,10 +114,14 @@ def _geometric_mg_data(value: Any) -> dict[str, Any]:
 
 def _register_builtin_solver_projections() -> None:
     from pops.solvers.elliptic import FFT, GeometricMG
+    from pops.solvers.nonlinear import Newton
 
     _register_builtin_descriptor_projection(GeometricMG, _geometric_mg_data)
     _register_builtin_descriptor_projection(
         FFT, lambda value: {"scheme": value.scheme, "spectral": value.spectral}
+    )
+    _register_builtin_descriptor_projection(
+        Newton, lambda value: {"scheme": value.scheme, **value.options()}
     )
 
 
@@ -140,6 +144,7 @@ class FieldDiscretization(Descriptor):
         method: Any,
         boundaries: Any,
         solver: Any,
+        nonlinear: Any = None,
         preconditioner: Any = None,
         nullspace: Any = None,
         gauge: Any = None,
@@ -153,6 +158,8 @@ class FieldDiscretization(Descriptor):
             )
         self.boundaries = boundary_tuple
         self.solver = _typed_descriptor(solver, field="solver")
+        self.nonlinear = _typed_descriptor(
+            nonlinear, field="nonlinear", required=False)
         self.preconditioner = _typed_descriptor(
             preconditioner, field="preconditioner", required=False
         )
@@ -178,11 +185,19 @@ class FieldDiscretization(Descriptor):
             "method": strict_field_data(self.method),
             "boundaries": strict_field_data(self.boundaries),
             "solver": strict_field_data(self.solver),
+            "nonlinear": strict_field_data(self.nonlinear),
             "preconditioner": strict_field_data(self.preconditioner),
             "nullspace": strict_field_data(self.nullspace),
             "gauge": strict_field_data(self.gauge),
             "hierarchy_policy": strict_field_data(self.hierarchy_policy),
         }
+
+    def semantic_data(self) -> dict[str, Any]:
+        """Exact numerical semantics, including nested descriptor configuration."""
+        return self.to_data()
+
+    def artifact_data(self) -> dict[str, Any]:
+        return self.to_data()
 
     def options(self) -> dict[str, Any]:
         def label(value: Any) -> str | None:
@@ -192,6 +207,7 @@ class FieldDiscretization(Descriptor):
             "method": label(self.method),
             "boundaries": [boundary.options() for boundary in self.boundaries],
             "solver": label(self.solver),
+            "nonlinear": label(self.nonlinear),
             "preconditioner": label(self.preconditioner),
             "nullspace": label(self.nullspace),
             "gauge": label(self.gauge),
@@ -220,6 +236,8 @@ class FieldDiscretization(Descriptor):
     def validate(self, context: Any = None) -> bool:
         _validate_route(self.method, context)
         _validate_route(self.solver, context)
+        if self.nonlinear is not None:
+            _validate_route(self.nonlinear, context)
         if self.preconditioner is not None:
             _validate_route(self.preconditioner, context)
         if self.nullspace is not None and self.gauge is None:
@@ -243,6 +261,7 @@ class FieldDiscretization(Descriptor):
                 self.method,
                 self.boundaries,
                 self.solver,
+                self.nonlinear,
                 self.preconditioner,
                 self.nullspace,
                 self.gauge,
@@ -257,6 +276,8 @@ class FieldDiscretization(Descriptor):
             resolve_value(self.boundaries, resolver, where="FieldDiscretization boundaries")
         )
         resolved.solver = resolve_value(self.solver, resolver, where="FieldDiscretization solver")
+        resolved.nonlinear = resolve_value(
+            self.nonlinear, resolver, where="FieldDiscretization nonlinear")
         resolved.preconditioner = resolve_value(
             self.preconditioner,
             resolver,

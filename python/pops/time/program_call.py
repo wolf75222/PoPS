@@ -212,14 +212,14 @@ class _ProgramCall(_ProgramBase):
         # solve_fields (named-field routing via the operator name as before).
         state_args = [a for a in args if getattr(a, "vtype", None) == "state"]
         if len(state_args) > 1:
-            result = self.solve_fields_from_blocks(state_args, name=name)
+            result = self._solve_fields_from_blocks(
+                state_args, field=op.handle, name=name)
             return self._replace_value(result, space=op.signature.output)
-        field = None
-        if operator_name != "fields_from_state":
-            registry = self._operator_registries[args[0].block.model_owner_path]
-            field = next(
-                handle for handle in registry.declaration_index().records()
-                if handle.local_id == operator_name)
+        registry = self._operator_registries[args[0].block.model_owner_path]
+        declaration = next(
+            handle for handle in registry.declaration_index().records()
+            if handle.local_id == operator_name)
+        field = args[0].block[declaration]
         result = self._solve_fields(name=name, state=args[0], field=field)
         return self._replace_value(result, space=op.signature.output)
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops.descriptors import Availability, Descriptor
 from pops.model.ownership import MissingOwnershipError, OwnerKind, OwnerPath
 from pops.model.param_registry import ParamRegistry as _CanonicalParamRegistry
 from pops.problem._registry_freeze import (
@@ -21,7 +22,7 @@ def _validation_root(source: str) -> ReportTree:
 
 
 class FieldRegistry(_FreezableRegistry):
-    """The elliptic field problems declared on a Problem (keyed on the field's name)."""
+    """Case-owned bindings from physical field operators to numerical plans."""
 
     family = "field"
 
@@ -39,20 +40,25 @@ class FieldRegistry(_FreezableRegistry):
     def _freezable_members(self) -> Any:
         return list(self._fields.values())
 
-    def add(self, field_problem: Any) -> Any:
-        """Register a FieldProblem exactly once and return its case-owned handle."""
+    def add(self, operator: Any, discretization: Any) -> Any:
+        """Register exactly one ``FieldOperator + FieldDiscretization`` pair."""
         self._guard_frozen("add a field")
-        from pops.fields import FieldProblem  # lazy: keep pops.problem free of a fields edge
+        from pops.fields import FieldDiscretization, FieldOperator
 
-        if not isinstance(field_problem, FieldProblem):
+        if not isinstance(operator, FieldOperator):
             raise TypeError(
-                "field: expected a pops.fields.FieldProblem; got %r"
-                % type(field_problem).__name__
+                "field: operator must be a pops.fields.FieldOperator; got %r"
+                % type(operator).__name__
             )
-        key = strict_name(field_problem.name, "field name")
+        if not isinstance(discretization, FieldDiscretization):
+            raise TypeError(
+                "field: discretization must be a pops.fields.FieldDiscretization; got %r"
+                % type(discretization).__name__
+            )
+        key = strict_name(operator.name, "field operator name")
         if key in self._fields:
-            raise ValueError("field: a field named %r already exists" % key)
-        self._fields[key] = field_problem
+            raise ValueError("field: a field operator named %r already exists" % key)
+        self._fields[key] = _RegisteredField(operator, discretization)
         handle = FieldHandle(key, owner=self.owner_path, field_registry=self)
         self._handles[key] = handle
         return handle
@@ -116,9 +122,6 @@ class FieldRegistry(_FreezableRegistry):
             resolved.append((name, protocol(resolver)))
         return tuple(resolved)
 
-    def solvers(self) -> Any:
-        return {name: fp.solver for name, fp in self._fields.items() if fp.solver is not None}
-
     def __iter__(self) -> Any:
         return iter(self._fields)
 
@@ -143,6 +146,56 @@ class FieldRegistry(_FreezableRegistry):
             self.resolved_items(resolver) if callable(resolver) else self._fields.items()
         )
         return {name: field.inspect() for name, field in items}
+
+
+class _RegisteredField(Descriptor):
+    """Internal case binding; users author only its two public descriptor inputs."""
+
+    category = "registered_field"
+
+    def __init__(self, operator: Any, discretization: Any) -> None:
+        self.operator = operator
+        self.discretization = discretization
+
+    @property
+    def name(self) -> str:
+        return self.operator.name
+
+    def options(self) -> dict[str, Any]:
+        return {"operator": self.operator, "discretization": self.discretization}
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "operator": self.operator.to_data(),
+            "discretization": self.discretization.to_data(),
+        }
+
+    def available(self, context: Any = None) -> Availability:
+        for value in (self.operator, self.discretization):
+            status = value.available(context)
+            if not status.ok:
+                return status
+        return Availability.yes("field operator and discretization are available")
+
+    def validate(self, context: Any = None) -> bool:
+        self.operator.validate(context)
+        self.discretization.validate(context)
+        return True
+
+    def resolve_references(self, resolver: Any) -> Any:
+        return type(self)(
+            self.operator.resolve_references(resolver),
+            self.discretization.resolve_references(resolver),
+        )
+
+    def inspect(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "category": self.category,
+            "operator": self.operator.inspect(),
+            "discretization": self.discretization.inspect(),
+        }
 
 
 class TimeRegistry(_FreezableRegistry):

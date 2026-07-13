@@ -151,7 +151,60 @@ class ProgramContext {
     }
     sys_->solve_fields_from_blocks(remapped);
   }
+
+  void solve_fields_from_blocks(const std::string& field,
+                                const std::vector<const MultiFab*>& u_stages) const {
+    count_kernel();
+    const std::vector<int>& map = sys_->program_block_map();
+    if (u_stages.size() != map.size())
+      throw std::runtime_error(
+          "ProgramContext::solve_fields_from_blocks(field): stage vector size mismatch");
+    std::vector<MultiFab*> live;
+    std::vector<MultiFab> published;
+    live.reserve(u_stages.size());
+    published.reserve(u_stages.size());
+    int representative = -1;
+    for (std::size_t p = 0; p < u_stages.size(); ++p) {
+      if (u_stages[p] == nullptr)
+        continue;
+      const int system_block = sys_block(static_cast<int>(p));
+      MultiFab& state_value = sys_->block_state(system_block);
+      if (representative < 0)
+        representative = system_block;
+      live.push_back(&state_value);
+      published.push_back(state_value);
+      state_value = *u_stages[p];
+    }
+    if (representative < 0)
+      throw std::runtime_error(
+          "ProgramContext::solve_fields_from_blocks(field): no stage override was supplied");
+    auto restore = [&]() {
+      for (std::size_t i = 0; i < live.size(); ++i)
+        *live[i] = std::move(published[i]);
+    };
+    try {
+      sys_->solve_fields_from_state(field, representative,
+                                    sys_->block_state(representative));
+      restore();
+    } catch (...) {
+      restore();
+      throw;
+    }
+  }
   int n_blocks() const { return sys_->n_blocks(); }
+  Real physical_time() const { return static_cast<Real>(sys_->time()); }
+  void set_field_logical_timepoint(const std::string& field,
+                                   const FieldLogicalTimePoint& point) const {
+    sys_->set_field_logical_timepoint(field, point);
+  }
+  void set_field_boundary_parameters(const std::string& field,
+                                     const std::vector<double>& parameters) const {
+    sys_->set_field_boundary_parameters(field, parameters);
+  }
+  void set_field_boundary_kernel(const std::string& field,
+                                 const CompiledFieldBoundaryKernel& kernel) const {
+    sys_->set_field_boundary_kernel(field, kernel);
+  }
   MultiFab& state(int b) const { return sys_->block_state(sys_block(b)); }
   void rhs_into(int b, MultiFab& u, MultiFab& r) const {
     count_kernel();

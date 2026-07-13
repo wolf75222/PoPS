@@ -53,18 +53,34 @@ def test_block_registry_validate_reports_no_block():
 def test_field_registry_type_checks_and_names():
     reg = FieldRegistry(owner=_OWNER)
     with pytest.raises(TypeError):
-        reg.add("not a field")
-    from pops.fields import PoissonProblem
+        reg.add("not a field", object())
+    from pops.descriptors import Descriptor
+    from pops.fields import FieldDiscretization, FieldOperator
+    from pops.ir import ValueExpr
     from pops.math import laplacian
-    from pops.solvers import GeometricMG
-    fp = PoissonProblem(name="phi", unknown="phi",
-                        equation=(-laplacian("phi") == "charge_density"),
-                        solver=GeometricMG())
-    handle = reg.add(fp)
+
+    class Method(Descriptor):
+        category = "field_method"
+
+    class Solver(Descriptor):
+        category = "elliptic_solver"
+
+    owner = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, "field-model")
+    phi = pops.model.Handle("phi", kind="field", owner=owner)
+    rho = pops.model.Handle("rho", kind="state", owner=owner)
+    operator = FieldOperator(
+        "electrostatic", unknown=phi,
+        equation=(-laplacian(ValueExpr(phi)) == ValueExpr(rho)),
+        provider=pops.model.Handle("field_residual", kind="field_operator", owner=owner))
+    discretization = FieldDiscretization(
+        method=Method(), boundaries=(), solver=Solver())
+    handle = reg.add(operator, discretization)
     assert handle.owner_path == _OWNER
     assert handle.kind == "field"
-    assert reg.names() == ["phi"]
-    assert reg.solvers()  # phi has a solver
+    assert reg.names() == ["electrostatic"]
+    registration = reg.get("electrostatic")
+    assert registration.operator is operator
+    assert registration.discretization is discretization
 
 
 def test_time_registry_single_slot():

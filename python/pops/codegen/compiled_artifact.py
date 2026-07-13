@@ -41,7 +41,7 @@ class CompiledPlanRecord:
     layout_plan: Any
     bind_schema: Any
     compile_values: Mapping[Any, Any]
-    field_solvers: Mapping[str, Any]
+    field_plans: Mapping[str, Any]
     outputs: tuple[Any, ...]
     diagnostics: tuple[Any, ...]
     requirements: Mapping[str, Any]
@@ -69,7 +69,7 @@ class CompiledPlanRecord:
             layout_plan=plan.layout_plan,
             bind_schema=plan.bind_schema,
             compile_values=plan.compile_values,
-            field_solvers=plan.field_solvers,
+            field_plans=plan.field_plans,
             outputs=plan.outputs,
             diagnostics=plan.diagnostics,
             requirements=plan.requirements,
@@ -104,7 +104,7 @@ class CompiledPlanRecord:
             raise TypeError(
                 "CompiledPlanRecord.lowering_coverage must be a LoweringCoverageReport")
         object.__setattr__(self, "compile_values", _deep_freeze(self.compile_values))
-        object.__setattr__(self, "field_solvers", _deep_freeze(self.field_solvers))
+        object.__setattr__(self, "field_plans", _deep_freeze(self.field_plans))
         object.__setattr__(self, "outputs", tuple(_deep_freeze(v) for v in self.outputs))
         object.__setattr__(self, "diagnostics", tuple(
             _deep_freeze(v) for v in self.diagnostics))
@@ -155,8 +155,8 @@ class CompiledPlanRecord:
             "bind_schema": _evidence(self.bind_schema, where="compiled plan bind schema"),
             "compile_values": _evidence(
                 self.compile_values, where="compiled plan compile values"),
-            "field_solvers": _evidence(
-                self.field_solvers, where="compiled plan field solvers"),
+            "field_plans": _evidence(
+                self.field_plans, where="compiled plan field plans"),
             "outputs": _evidence(self.outputs, where="compiled plan outputs"),
             "diagnostics": _evidence(
                 self.diagnostics, where="compiled plan diagnostics"),

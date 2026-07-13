@@ -4,6 +4,7 @@
 #include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperator / CouplingOperatorView (typed contract, ADC-595)
 #include <pops/diagnostics/runtime_diagnostics.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions (options of the IMEX source Newton)
+#include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/runtime/export.hpp>  // POPS_EXPORT (methods resolved by the native loader through dlopen)
 #include <pops/runtime/facade_options.hpp>  // SourceStageOptions / CoupledSourceProgram (facade PODs, ADC-214)
 #include <pops/runtime/context/grid_context.hpp>  // GridContext + BlockClosures (AOT-compiled block seam)
@@ -315,6 +316,56 @@ class System {
                    int bottom_sweeps = kMGDefaultBottomSweeps,
                    int coarse_threshold = kMGDefaultCoarseThreshold);
 
+  /// Install one fully resolved field solver route keyed by the digest of its complete
+  /// block-qualified provider identity. The canonical identity is carried alongside the digest
+  /// so collisions are rejected and manifests/restarts remain auditable.
+  void set_field_solver_plan(const std::string& provider_slot,
+                             const std::string& provider_identity,
+                             const std::string& output_owner_identity,
+                             const std::string& output_block,
+                             const std::string& output_key,
+                             const std::vector<std::string>& provider_identities,
+                             const std::vector<std::string>& provider_blocks,
+                             const std::vector<std::string>& provider_keys,
+                             const std::vector<double>& provider_coefficients,
+                             const std::string& solver, double abs_tol,
+                             double rel_tol, int max_cycles, int min_coarse,
+                             int pre_smooth, int post_smooth, int bottom_sweeps,
+                             int coarse_threshold);
+
+  /// Install the exact xlo/xhi/ylo/yhi field boundary residuals. ``kind`` is
+  /// periodic/dirichlet/neumann/mixed; mixed represents alpha*u + beta*du/dn = value.
+  void set_field_boundary_plan(const std::string& provider_slot,
+                               const std::vector<std::string>& kind,
+                               const std::vector<double>& alpha,
+                               const std::vector<double>& beta,
+                               const std::vector<double>& value);
+  void set_field_boundary_dependencies(
+      const std::string& provider_slot,
+      const std::vector<std::string>& state_blocks,
+      const std::vector<int>& state_components,
+      const std::vector<std::string>& field_blocks,
+      const std::vector<std::string>& field_keys,
+      const std::vector<int>& field_components);
+
+  /// Install generated boundary residual/JVP launchers owned by the compiled Program artifact.
+  /// The shared library remains loaded for the System lifetime, so the direct function pointers are
+  /// stable and no registry lookup occurs in a face-cell loop.
+  POPS_EXPORT void set_field_boundary_kernel(
+      const std::string& provider_slot, const CompiledFieldBoundaryKernel& kernel);
+  POPS_EXPORT void set_field_logical_timepoint(
+      const std::string& provider_slot, const FieldLogicalTimePoint& point);
+  POPS_EXPORT void set_field_boundary_parameters(
+      const std::string& provider_slot, const std::vector<double>& parameters);
+  void set_field_newton_plan(const std::string& provider_slot, double tolerance,
+                             int max_iterations, double linear_tolerance,
+                             int linear_max_iterations, int restart, double armijo,
+                             double minimum_step);
+
+  /// Declare the constant kernel and its explicit mean-zero gauge.
+  void set_field_nullspace(const std::string& provider_slot, bool constant_kernel,
+                           bool mean_zero_gauge);
+
   /// Configured field (Poisson) solver token, e.g. "geometric_mg" | "fft" | "fft_spectral"
   /// (the @p solver of the last set_poisson; default "geometric_mg"). Read by install_program for the
   /// Spec criterion-24 solver requirement check (a field operator that requires a named solver is
@@ -615,8 +666,9 @@ class System {
   /// Register named @p field's aux output components (where its solved phi / centered grad land). Called
   /// by the native loader for each m.elliptic_field once the block is installed. @p gx_comp / @p gy_comp
   /// < 0 => only phi is written (the field declared fewer than 3 aux slots).
-  POPS_EXPORT void register_elliptic_field(const std::string& field, int phi_comp, int gx_comp,
-                                          int gy_comp);
+  POPS_EXPORT void register_elliptic_field(const std::string& block,
+                                          const std::string& field, int phi_comp,
+                                          int gx_comp, int gy_comp);
   /// Attach named @p field's RHS closure (+= elliptic_field_rhs(U)) to block @p block_name. Called by
   /// the native loader (make_poisson_rhs of the per-field brick). @throws if the block is unknown.
   POPS_EXPORT void set_block_elliptic_field(const std::string& block_name, const std::string& field,
@@ -1043,6 +1095,9 @@ class System {
   /// gauss_policy="evolve", phi IS the physical state and its restoration is indispensable. Field
   /// ny*nx row-major (same layout as potential()).
   void set_potential(const std::vector<double>& phi);
+  std::vector<std::string> field_provider_slots() const;
+  void set_field_potential(const std::string& provider_slot,
+                           const std::vector<double>& phi);
 
   /// @name GLOBAL accessors (MPI-safe collectives) -- outputs / multi-rank checkpoint (IO v1)
   /// The System builds ONE box covering the whole domain (cf. ctor: mono-box ba, round-robin dm ->
@@ -1058,6 +1113,7 @@ class System {
   std::vector<double> density_global(const std::string& name) const;  ///< comp0, ny*nx global
   std::vector<double> state_global(const std::string& name) const;    ///< U, ncomp*ny*nx global
   std::vector<double> potential_global();                             ///< phi, ny*nx global
+  std::vector<double> field_potential_global(const std::string& provider_slot);
   /// @}
 
   /// @name LOCAL per-fab accessors -- PARALLEL HDF5 write by hyperslabs (IO PR-IO-3, opt-in)

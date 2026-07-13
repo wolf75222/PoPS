@@ -22,7 +22,7 @@ namespace pops {
 
 /// Boundary condition type for a face: Periodic (handled by fill_boundary), Foextrap (zero gradient,
 /// outflow/order-0 wall), Dirichlet (value imposed at the face by reflection).
-enum class BCType { Periodic, Foextrap, Dirichlet };
+enum class BCType { Periodic, Foextrap, Dirichlet, Robin };
 
 /// Boundary conditions for the FOUR faces of the domain (type + associated Dirichlet value). Default
 /// is all periodic (xlo_val... ignored for non-Dirichlet faces).
@@ -30,6 +30,9 @@ struct BCRec {
   BCType xlo = BCType::Periodic, xhi = BCType::Periodic;
   BCType ylo = BCType::Periodic, yhi = BCType::Periodic;
   Real xlo_val = 0, xhi_val = 0, ylo_val = 0, yhi_val = 0;
+  Real xlo_alpha = 0, xlo_beta = 1, xhi_alpha = 0, xhi_beta = 1;
+  Real ylo_alpha = 0, ylo_beta = 1, yhi_alpha = 0, yhi_beta = 1;
+  Real dx = 1, dy = 1;
 };
 
 namespace detail {
@@ -45,41 +48,65 @@ namespace detail {
 struct BCFaceXLoKernel {
   Array4 a;
   int c0, c1, lo;
-  bool foe;
-  Real val;
+  bool foe, robin;
+  Real val, alpha, beta, h;
   POPS_HD void operator()(int i, int j) const {
-    for (int c = c0; c < c1; ++c)
-      a(i, j, c) = foe ? a(lo, j, c) : 2 * val - a(2 * lo - i - 1, j, c);
+    const Real distance = Real(2 * (lo - i) - 1) * h;
+    for (int c = c0; c < c1; ++c) {
+      const Real inner = a(2 * lo - i - 1, j, c);
+      a(i, j, c) = foe ? a(lo, j, c)
+                       : (robin ? (val - inner * (alpha / 2 - beta / distance)) /
+                                      (alpha / 2 + beta / distance)
+                                : 2 * val - inner);
+    }
   }
 };
 struct BCFaceXHiKernel {
   Array4 a;
   int c0, c1, hi;
-  bool foe;
-  Real val;
+  bool foe, robin;
+  Real val, alpha, beta, h;
   POPS_HD void operator()(int i, int j) const {
-    for (int c = c0; c < c1; ++c)
-      a(i, j, c) = foe ? a(hi, j, c) : 2 * val - a(2 * hi - i + 1, j, c);
+    const Real distance = Real(2 * (i - hi) - 1) * h;
+    for (int c = c0; c < c1; ++c) {
+      const Real inner = a(2 * hi - i + 1, j, c);
+      a(i, j, c) = foe ? a(hi, j, c)
+                       : (robin ? (val - inner * (alpha / 2 - beta / distance)) /
+                                      (alpha / 2 + beta / distance)
+                                : 2 * val - inner);
+    }
   }
 };
 struct BCFaceYLoKernel {
   Array4 a;
   int c0, c1, lo;
-  bool foe;
-  Real val;
+  bool foe, robin;
+  Real val, alpha, beta, h;
   POPS_HD void operator()(int i, int j) const {
-    for (int c = c0; c < c1; ++c)
-      a(i, j, c) = foe ? a(i, lo, c) : 2 * val - a(i, 2 * lo - j - 1, c);
+    const Real distance = Real(2 * (lo - j) - 1) * h;
+    for (int c = c0; c < c1; ++c) {
+      const Real inner = a(i, 2 * lo - j - 1, c);
+      a(i, j, c) = foe ? a(i, lo, c)
+                       : (robin ? (val - inner * (alpha / 2 - beta / distance)) /
+                                      (alpha / 2 + beta / distance)
+                                : 2 * val - inner);
+    }
   }
 };
 struct BCFaceYHiKernel {
   Array4 a;
   int c0, c1, hi;
-  bool foe;
-  Real val;
+  bool foe, robin;
+  Real val, alpha, beta, h;
   POPS_HD void operator()(int i, int j) const {
-    for (int c = c0; c < c1; ++c)
-      a(i, j, c) = foe ? a(i, hi, c) : 2 * val - a(i, 2 * hi - j + 1, c);
+    const Real distance = Real(2 * (j - hi) - 1) * h;
+    for (int c = c0; c < c1; ++c) {
+      const Real inner = a(i, 2 * hi - j + 1, c);
+      a(i, j, c) = foe ? a(i, hi, c)
+                       : (robin ? (val - inner * (alpha / 2 - beta / distance)) /
+                                      (alpha / 2 + beta / distance)
+                                : 2 * val - inner);
+    }
   }
 };
 }  // namespace detail
@@ -141,16 +168,20 @@ inline void fill_physical_bc_range(MultiFab& mf, const Box2D& domain, const BCRe
     if (bc.xlo != BCType::Periodic && v.lo[0] == domain.lo[0]) {
       const int lo = domain.lo[0];
       const bool foe = bc.xlo == BCType::Foextrap;
+      const bool robin = bc.xlo == BCType::Robin;
       const Real val = bc.xlo_val;
       for_each_cell(Box2D{{lo - ng, jglo}, {lo - 1, jghi}},
-                    detail::BCFaceXLoKernel{a, c0, c1, lo, foe, val});
+                    detail::BCFaceXLoKernel{a, c0, c1, lo, foe, robin, val,
+                                            bc.xlo_alpha, bc.xlo_beta, bc.dx});
     }
     if (bc.xhi != BCType::Periodic && v.hi[0] == domain.hi[0]) {
       const int hi = domain.hi[0];
       const bool foe = bc.xhi == BCType::Foextrap;
+      const bool robin = bc.xhi == BCType::Robin;
       const Real val = bc.xhi_val;
       for_each_cell(Box2D{{hi + 1, jglo}, {hi + ng, jghi}},
-                    detail::BCFaceXHiKernel{a, c0, c1, hi, foe, val});
+                    detail::BCFaceXHiKernel{a, c0, c1, hi, foe, robin, val,
+                                            bc.xhi_alpha, bc.xhi_beta, bc.dx});
     }
 
     // --- y-faces, over the EXTENDED i range (corners via the already-filled x-ghosts) ---
@@ -158,16 +189,20 @@ inline void fill_physical_bc_range(MultiFab& mf, const Box2D& domain, const BCRe
     if (bc.ylo != BCType::Periodic && v.lo[1] == domain.lo[1]) {
       const int lo = domain.lo[1];
       const bool foe = bc.ylo == BCType::Foextrap;
+      const bool robin = bc.ylo == BCType::Robin;
       const Real val = bc.ylo_val;
       for_each_cell(Box2D{{iglo, lo - ng}, {ighi, lo - 1}},
-                    detail::BCFaceYLoKernel{a, c0, c1, lo, foe, val});
+                    detail::BCFaceYLoKernel{a, c0, c1, lo, foe, robin, val,
+                                            bc.ylo_alpha, bc.ylo_beta, bc.dy});
     }
     if (bc.yhi != BCType::Periodic && v.hi[1] == domain.hi[1]) {
       const int hi = domain.hi[1];
       const bool foe = bc.yhi == BCType::Foextrap;
+      const bool robin = bc.yhi == BCType::Robin;
       const Real val = bc.yhi_val;
       for_each_cell(Box2D{{iglo, hi + 1}, {ighi, hi + ng}},
-                    detail::BCFaceYHiKernel{a, c0, c1, hi, foe, val});
+                    detail::BCFaceYHiKernel{a, c0, c1, hi, foe, robin, val,
+                                            bc.yhi_alpha, bc.yhi_beta, bc.dy});
     }
   }
 }

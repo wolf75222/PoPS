@@ -298,6 +298,9 @@ void bind_system_physics(py::class_<System>& cls) {
       .def("macro_step", &System::macro_step)
       .def("set_clock", &System::set_clock, py::arg("t"), py::arg("macro_step"))
       .def("set_potential", &System::set_potential, py::arg("phi"))
+      .def("field_provider_slots", &System::field_provider_slots)
+      .def("set_field_potential", &System::set_field_potential,
+           py::arg("provider_slot"), py::arg("phi"))
       // Gauss law policy (R0, Hoffart repro): "restart" (default, re-solves Poisson every
       // step, bit-identical) or "evolve" (after phi^0, no more re-solve; the Schur stage evolves phi
       // without restart, like the paper). Cf. System::set_gauss_policy.
@@ -420,6 +423,33 @@ void bind_system_physics(py::class_<System>& cls) {
            py::arg("post_smooth") = kMGDefaultPostSmooth,
            py::arg("bottom_sweeps") = kMGDefaultBottomSweeps,
            py::arg("coarse_threshold") = kMGDefaultCoarseThreshold)
+      .def("set_field_solver_plan", &System::set_field_solver_plan,
+           py::arg("provider_slot"), py::arg("provider_identity"),
+           py::arg("output_owner_identity"),
+           py::arg("output_block"), py::arg("output_key"),
+           py::arg("provider_identities"), py::arg("provider_blocks"),
+           py::arg("provider_keys"), py::arg("provider_coefficients"),
+           py::arg("solver"), py::arg("abs_tol"), py::arg("rel_tol"),
+           py::arg("max_cycles"), py::arg("min_coarse"), py::arg("pre_smooth"),
+           py::arg("post_smooth"), py::arg("bottom_sweeps"),
+           py::arg("coarse_threshold"))
+      .def("set_field_boundary_plan", &System::set_field_boundary_plan,
+           py::arg("provider_slot"), py::arg("kind"), py::arg("alpha"), py::arg("beta"),
+           py::arg("value"))
+      .def("set_field_boundary_dependencies", &System::set_field_boundary_dependencies,
+           py::arg("provider_slot"), py::arg("state_blocks"),
+           py::arg("state_components"), py::arg("field_blocks"),
+           py::arg("field_keys"), py::arg("field_components"))
+      .def("set_field_boundary_parameters", &System::set_field_boundary_parameters,
+           py::arg("provider_slot"), py::arg("parameters"))
+      .def("set_field_nullspace", &System::set_field_nullspace,
+           py::arg("provider_slot"), py::arg("constant_kernel"),
+           py::arg("mean_zero_gauge"))
+      .def("set_field_newton_plan", &System::set_field_newton_plan,
+           py::arg("provider_slot"), py::arg("tolerance"),
+           py::arg("max_iterations"), py::arg("linear_tolerance"),
+           py::arg("linear_max_iterations"), py::arg("restart"),
+           py::arg("armijo"), py::arg("minimum_step"))
       // DISC transport domain (T2 / T5-PR3 work): materializes a cell-centered 0/1 mask (cell
       // active if its center is in hypot(x-cx, y-cy) - R < 0) and WIRES the transport according to
       // mode=: 'none' (default, full Cartesian transport, bit-identical even with the disc set),
@@ -620,6 +650,11 @@ void bind_system_data(py::class_<System>& cls) {
           py::arg("name"))
       .def("potential_global",
            [](System& s) { return to_2d(s.potential_global(), s.ny(), s.nx()); })
+      .def("field_potential_global",
+           [](System& s, const std::string& slot) {
+             return to_2d(s.field_potential_global(slot), s.ny(), s.nx());
+           },
+           py::arg("provider_slot"))
       // LOCAL per-fab accessors (NOT collective): PARALLEL HDF5 writing by hyperslabs (PR-IO-3,
       // sim.write(format='hdf5', parallel=True)). local_boxes returns the list of local boxes
       // (ilo, jlo, ihi, jhi) in GLOBAL indices; local_state returns the state of fab li reshaped

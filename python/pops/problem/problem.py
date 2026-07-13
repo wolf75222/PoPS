@@ -170,19 +170,19 @@ class Problem:
         return self._block_registry.add(name, model, spatial=spatial, time=time,
                                         diagnostics=diagnostics)
 
-    def field(self, field_problem: Any) -> Any:
-        """Register an elliptic :class:`~pops.fields.FieldProblem` (keyed on its name). Chains."""
+    def field(self, operator: Any, discretization: Any) -> Any:
+        """Register a physical field operator with its numerical plan. Chains."""
         self._guard_mutable("add a field")
-        self._field_registry.add(field_problem)
+        self._field_registry.add(operator, discretization)
         return self
 
-    def add_field(self, field_problem: Any) -> Any:
-        """Register a field problem and return its stable :class:`~pops.problem.handles.FieldHandle`.
+    def add_field(self, operator: Any, discretization: Any) -> Any:
+        """Register a field operator/plan and return its stable case-owned handle.
 
         The handle-returning counterpart of the chaining :meth:`field` (ADC-526 stable handles).
         """
         self._guard_mutable("add a field")
-        return self._field_registry.add(field_problem)
+        return self._field_registry.add(operator, discretization)
 
     def param(self, declaration: Any) -> Any:
         """Register a case-owned typed parameter and return its ParamHandle.

@@ -13,20 +13,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-# The default single field problem's name (the shared Poisson coupling). A named elliptic field
-# uses its own name; ``None`` here means "the default phi solve". Kept as the reserved sentinel the
-# operator-first lowering already uses (program_core._lower_call: fields_from_state -> default).
-DEFAULT_FIELD_PROBLEM = "phi"
-
 
 @dataclass(frozen=True, slots=True, init=False)
 class FieldContext:
     """Provenance + validity token for one field solve.
 
     Attributes:
-        field_problem: ``"phi"`` for the default shared Poisson, otherwise the exact typed field
-            selector retained by the Program. Never ``None`` -- the default resolves to
-            :data:`DEFAULT_FIELD_PROBLEM` so a report always names a problem.
+        field: exact owner-qualified field identity retained by the Program. Strings, ``None`` and
+            default sentinels are rejected: every solve route is explicit and symmetric.
         stage_sources: the ordered, immutable ``((block, state_id), ...)`` provenance of every
             stage state this solve consumed. A single-block solve has one entry; a simultaneous
             coupled solve has one exact entry per participating block. There is deliberately no
@@ -36,23 +30,17 @@ class FieldContext:
             "grad_y")`` for the default), for reports / structured-output lookup.
     """
 
-    field_problem: Any
+    field: Any
     stage_sources: tuple[tuple[Any, Any], ...]
     outputs: tuple[Any, ...]
     __pops_ir_immutable__ = True
 
-    def __init__(self, field_problem: Any, stage_sources: Any, outputs: Any = ()) -> None:
-        if field_problem is None:
-            field_problem = DEFAULT_FIELD_PROBLEM
-        elif isinstance(field_problem, str):
-            if not field_problem:
-                raise TypeError("FieldContext field_problem cannot be an empty string")
-        else:
-            from pops.model import Handle
-            if not isinstance(field_problem, Handle) or field_problem.kind not in (
-                    "field", "field_operator"):
-                raise TypeError(
-                    "FieldContext field_problem must be a typed field handle, 'phi', or None")
+    def __init__(self, field: Any, stage_sources: Any, outputs: Any = ()) -> None:
+        from pops.model import Handle
+        if isinstance(field, str) or not isinstance(field, Handle) or field.kind not in (
+                "field", "field_operator"):
+            raise TypeError(
+                "FieldContext field must be an exact owner-qualified field Handle")
         if isinstance(stage_sources, Mapping):
             entries = tuple(stage_sources.items())
         else:
@@ -83,30 +71,26 @@ class FieldContext:
             raise TypeError("FieldContext outputs must be non-empty strings")
         if len(set(output_names)) != len(output_names):
             raise ValueError("FieldContext outputs must be unique")
-        object.__setattr__(self, "field_problem", field_problem)
+        object.__setattr__(self, "field", field)
         object.__setattr__(self, "stage_sources", entries)
         object.__setattr__(self, "outputs", output_names)
 
-    def matches(self, field_problem: Any, block: Any, stage_source: Any) -> Any:
-        """True when this context was produced by exactly the requested triple.
-
-        A ``None`` ``field_problem`` matches any problem (the default single-field case), mirroring
-        the negative-``req_field`` rule of the C++ ``FieldContext::matches``.
-        """
-        return ((field_problem is None or self.field_problem == field_problem)
+    def matches(self, field: Any, block: Any, stage_source: Any) -> Any:
+        """True when this context was produced by exactly the requested triple."""
+        return ((self.field == field)
                 and any(candidate_block == block and candidate_source == stage_source
                         for candidate_block, candidate_source in self.stage_sources))
 
-    def require_read(self, field_problem: Any, block: Any, stage_source: Any) -> Any:
+    def require_read(self, field: Any, block: Any, stage_source: Any) -> Any:
         """Assert a downstream read targets THIS solve, else raise a structured error naming the
         field problem, the block and the stage that mismatched (the ADC-588 incompatible-context
         contract). Returns ``self`` so it composes in an expression.
         """
-        if not self.matches(field_problem, block, stage_source):
+        if not self.matches(field, block, stage_source):
             raise ValueError(
                 "incompatible field context: output of field problem %r solved from stage sources "
                 "%r cannot be read as problem %r / block %r / stage source %r"
-                % (self.field_problem, self.stage_sources, field_problem, block, stage_source))
+                % (self.field, self.stage_sources, field, block, stage_source))
         return self
 
     def output(self, handle: Any) -> Any:
@@ -118,11 +102,11 @@ class FieldContext:
             return handle
         raise KeyError(
             "unknown field output %r of problem %r; known outputs: %s"
-            % (handle, self.field_problem, list(self.outputs)))
+            % (handle, self.field, list(self.outputs)))
 
     def __repr__(self) -> str:
-        return ("FieldContext(field_problem=%r, stage_sources=%r, outputs=%r)"
-                % (self.field_problem, self.stage_sources, self.outputs))
+        return ("FieldContext(field=%r, stage_sources=%r, outputs=%r)"
+                % (self.field, self.stage_sources, self.outputs))
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -206,7 +190,7 @@ def remap_field_provenance(
             )
         )
     return FieldContext(
-        remap_reference(provenance.field_problem),
+        remap_reference(provenance.field),
         tuple(
             (remap_reference(block), remap_source(source))
             for block, source in provenance.stage_sources
@@ -230,7 +214,7 @@ def require_field_read(fields: Any, state: Any, where: str, *, allow_derived: bo
     if allow_derived and field_provenance_contains(
             getattr(state, "field_context", None), context):
         return context
-    return context.require_read(None, state.block, state.id)
+    return context.require_read(context.field, state.block, state.id)
 
 
 def merge_field_contexts(values: Any, where: str) -> Any:
@@ -252,7 +236,7 @@ def merge_field_contexts(values: Any, where: str) -> Any:
 
 
 __all__ = [
-    "DEFAULT_FIELD_PROBLEM", "FieldContext", "FieldReadProvenance",
+    "FieldContext", "FieldReadProvenance",
     "field_provenance_contains", "merge_field_contexts", "merge_field_provenance",
     "remap_field_provenance", "require_field_read",
 ]

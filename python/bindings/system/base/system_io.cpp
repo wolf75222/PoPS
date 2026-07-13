@@ -457,6 +457,12 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
         seed_program_params(kv.first, kv.second);
     }
   }
+  // Dynamic field-boundary launchers are installed from the same problem.so that owns their direct
+  // function pointers.  Static-boundary artifacts export no entry and keep the historical fast path.
+  // Install only after ABI/requirements/block/parameter preflight has completed.
+  if (auto install_boundaries = reinterpret_cast<void (*)(void*)>(
+          pops::dynlib::sym(h, "pops_install_field_boundaries")))
+    install_boundaries(static_cast<void*>(this));
   install(static_cast<void*>(this));
   // Record the program's IR hash (ADC-406b): the optional pops_program_hash export (a stable IR key,
   // cf. _PROGRAM_CPP_TEMPLATE) is serialized in the checkpoint so a restart against a DIFFERENT

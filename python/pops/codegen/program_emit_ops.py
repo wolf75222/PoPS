@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from pops.ir.literals import scalar_cpp
-from pops.time.references import block_name, field_name
+from pops.time.references import block_name
 from pops.codegen.program_emit_kernels import (
     _PROFILE_SKIP_OPS,
     _coeff_cpp,
@@ -43,6 +43,7 @@ from pops.codegen.program_emit_solve import (
     _emit_solve_linear,
 )
 from pops.codegen.program_emit_schedule import _emit_schedule_wrap
+from pops.codegen.program_emit_field_routes import field_point_cpp, resolved_field_route
 
 
 def _required_block_index(block_idx: Any, block: Any, where: str) -> int:
@@ -65,7 +66,8 @@ def _required_block_index(block_idx: Any, block: Any, where: str) -> int:
 
 
 def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, model: Any, lines: Any,
-             prelude: Any = None, block_idx: Any = None, target: Any = "system") -> None:
+             prelude: Any = None, block_idx: Any = None, target: Any = "system",
+             field_plans: Any = None) -> None:
     """Lower a SINGLE op to C++, appending to @p lines and recording its C++ token in @p var. Shared
     by the top-level walk and the while sub-blocks (a while body re-runs this per op each pass), so
     reductions / compares / linear_combine all lower identically inside the loop. @p base is the
@@ -99,16 +101,12 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # its live state into the shared phi/aux.
         (state_in,) = v.inputs  # solve_fields inputs = (state,)
         field_ref = v.attrs.get("field")
-        if field_ref is not None:
-            field = field_name(field_ref)
-            # NAMED multi-elliptic field (ADC-428): a SECOND elliptic solve into the field's OWN aux
-            # channel (distinct from the shared phi/grad). Lowers to the named overload
-            # ctx.solve_fields_from_state(field, block, U) -- block from block_idx (ADC-426); the
-            # default (unnamed) path keeps the 2-arg overload below, byte-identical.
-            solve_stmt = ('ctx.solve_fields_from_state(%s, %d, %s);'
-                          % (json.dumps(field), bidx, var[state_in.id]))
-        else:
-            solve_stmt = "ctx.solve_fields_from_state(%d, %s);" % (bidx, var[state_in.id])
+        if field_ref is None:
+            raise ValueError("solve_fields node has no exact field identity")
+        field, _ = resolved_field_route(field_ref, field_plans)
+        lines += field_point_cpp(program, v, field)
+        solve_stmt = ('ctx.solve_fields_from_state(%s, %d, %s);'
+                      % (json.dumps(field), bidx, var[state_in.id]))
         lines.append(solve_stmt)
     elif v.op == "solve_fields_from_blocks":
         # Coupled multi-block field solve (ADC-457): a SIMULTANEOUS solve, EVERY listed block at
@@ -128,7 +126,12 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             index = _required_block_index(
                 bmap, st.block, "solve_fields_from_blocks input node %r" % st.id)
             lines.append("%s[%d] = &%s;" % (vec, index, var[st.id]))
-        lines.append("ctx.solve_fields_from_blocks(%s);" % vec)
+        field_ref = v.attrs.get("field")
+        if field_ref is None:
+            raise ValueError("solve_fields_from_blocks node has no exact field identity")
+        field, _ = resolved_field_route(field_ref, field_plans)
+        lines += field_point_cpp(program, v, field)
+        lines.append("ctx.solve_fields_from_blocks(%s, %s);" % (json.dumps(field), vec))
         # solve_fields_from_blocks returns a FieldContext (the shared aux); its var aliases the first
         # listed state so a downstream rhs(state, fields) reads the refreshed shared aux like any
         # solve_fields result (the FieldContext carries no readable buffer of its own).
@@ -439,11 +442,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         var[v.id] = "(%s %s %s)" % (var[lhs.id], v.attrs["cmp"], rhs_tok)
         var[("when_predicate", v.id)] = var[v.id]  # emission-local schedule predicate token
     elif v.op == "while":
-        _emit_while(program, v, base, var, model, lines, block_idx)
+        _emit_while(program, v, base, var, model, lines, block_idx, field_plans)
     elif v.op == "range":
-        _emit_range(program, v, base, var, model, lines, block_idx)
+        _emit_range(program, v, base, var, model, lines, block_idx, field_plans)
     elif v.op == "branch":
-        _emit_branch(program, v, base, var, model, lines, block_idx)
+        _emit_branch(program, v, base, var, model, lines, block_idx, field_plans)
     elif v.op == "linear_combine":
         terms = list(zip(v.inputs, v.attrs["coeffs"], strict=True))
         if v.id in committed_ids:

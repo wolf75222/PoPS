@@ -552,6 +552,9 @@ void System::set_poisson(const std::string& rhs, const std::string& solver, cons
   p_->fields_.p_rhs = rhs;
   p_->fields_.p_solver = solver;
   p_->fields_.p_bc = bc;
+  p_->fields_.p_has_explicit_bc = false;
+  p_->fields_.p_nullspace_const = false;
+  p_->fields_.p_mean_zero_gauge = false;
   p_->fields_.p_wall = wall;
   p_->fields_.p_wall_radius = wall_radius;
   p_->fields_.p_eps_ = static_cast<Real>(epsilon);
@@ -568,6 +571,276 @@ void System::set_poisson(const std::string& rhs, const std::string& solver, cons
   p_->fields_.p_mg_opts_.nbottom = bottom_sweeps;
   p_->fields_.p_mg_opts_.coarse_threshold = coarse_threshold;  // ADC-644: total-cell coarsening ceiling.
   p_->fields_.ell_.reset();
+}
+
+void System::set_field_solver_plan(const std::string& provider_slot,
+                                   const std::string& provider_identity,
+                                   const std::string& output_owner_identity,
+                                   const std::string& output_block,
+                                   const std::string& output_key,
+                                   const std::vector<std::string>& provider_identities,
+                                   const std::vector<std::string>& provider_blocks,
+                                   const std::vector<std::string>& provider_keys,
+                                   const std::vector<double>& provider_coefficients,
+                                   const std::string& solver,
+                                   double abs_tol, double rel_tol,
+                                   int max_cycles, int min_coarse, int pre_smooth,
+                                   int post_smooth, int bottom_sweeps, int coarse_threshold) {
+  require_assembling(p_->lifecycle_, "set_field_solver_plan");
+  if (provider_slot.empty() || provider_identity.empty() || output_owner_identity.empty() ||
+      output_block.empty() ||
+      output_key.empty())
+    throw std::runtime_error("System::set_field_solver_plan requires a qualified provider identity");
+  const std::size_t provider_count = provider_identities.size();
+  if (provider_count == 0 || provider_blocks.size() != provider_count ||
+      provider_keys.size() != provider_count || provider_coefficients.size() != provider_count)
+    throw std::runtime_error("System::set_field_solver_plan invalid provider-pack shape");
+  for (std::size_t i = 0; i < provider_count; ++i)
+    if (provider_identities[i].empty() || provider_blocks[i].empty() || provider_keys[i].empty() ||
+        !std::isfinite(provider_coefficients[i]))
+      throw std::runtime_error("System::set_field_solver_plan invalid provider-pack entry");
+  if (solver != "geometric_mg" && solver != "fft" && solver != "fft_spectral")
+    throw std::runtime_error("System::set_field_solver_plan unknown solver '" + solver + "'");
+  if (abs_tol < 0.0 || rel_tol <= 0.0 || max_cycles < 1 || min_coarse < 1 ||
+      pre_smooth < 0 || post_smooth < 0 || bottom_sweeps < 0 || coarse_threshold < 0)
+    throw std::runtime_error("System::set_field_solver_plan invalid multigrid options");
+  const auto existing = p_->fields_.named_field_plans_.find(provider_slot);
+  if (existing != p_->fields_.named_field_plans_.end() &&
+      existing->second.provider_identity != provider_identity)
+    throw std::runtime_error("System::set_field_solver_plan provider digest collision");
+  auto& plan = p_->fields_.named_field_plans_[provider_slot];
+  plan.provider_identity = provider_identity;
+  plan.output_owner_identity = output_owner_identity;
+  plan.output_block = output_block;
+  plan.output_key = output_key;
+  plan.providers.clear();
+  plan.providers.reserve(provider_count);
+  for (std::size_t i = 0; i < provider_count; ++i)
+    plan.providers.push_back({provider_identities[i], provider_blocks[i], provider_keys[i],
+                              static_cast<Real>(provider_coefficients[i])});
+  plan.solver = solver;
+  plan.mg_opts.rel_tol = static_cast<Real>(rel_tol);
+  plan.mg_opts.abs_tol = static_cast<Real>(abs_tol);
+  plan.mg_opts.max_cycles = max_cycles;
+  plan.mg_opts.min_coarse = min_coarse;
+  plan.mg_opts.nu1 = pre_smooth;
+  plan.mg_opts.nu2 = post_smooth;
+  plan.mg_opts.nbottom = bottom_sweeps;
+  plan.mg_opts.coarse_threshold = coarse_threshold;
+  auto registered = p_->fields_.named_fields_.find(provider_slot);
+  if (registered != p_->fields_.named_fields_.end()) {
+    registered->second.has_plan = true;
+    registered->second.plan = plan;
+    registered->second.prepared_providers.clear();
+    registered->second.ell.reset();
+  }
+}
+
+void System::set_field_boundary_plan(const std::string& provider_slot,
+                                     const std::vector<std::string>& kind,
+                                     const std::vector<double>& alpha,
+                                     const std::vector<double>& beta,
+                                     const std::vector<double>& value) {
+  require_assembling(p_->lifecycle_, "set_field_boundary_plan");
+  if (kind.size() != 4 || alpha.size() != 4 || beta.size() != 4 || value.size() != 4)
+    throw std::runtime_error(
+        "System::set_field_boundary_plan requires four xlo/xhi/ylo/yhi entries");
+  BCRec bc;
+  bc.dx = p_->geom.dx();
+  bc.dy = p_->geom.dy();
+  BCType* types[] = {&bc.xlo, &bc.xhi, &bc.ylo, &bc.yhi};
+  Real* vals[] = {&bc.xlo_val, &bc.xhi_val, &bc.ylo_val, &bc.yhi_val};
+  Real* alphas[] = {&bc.xlo_alpha, &bc.xhi_alpha, &bc.ylo_alpha, &bc.yhi_alpha};
+  Real* betas[] = {&bc.xlo_beta, &bc.xhi_beta, &bc.ylo_beta, &bc.yhi_beta};
+  for (int face = 0; face < 4; ++face) {
+    const Real a = static_cast<Real>(alpha[face]);
+    const Real b = static_cast<Real>(beta[face]);
+    const Real v = static_cast<Real>(value[face]);
+    if (!std::isfinite(alpha[face]) || !std::isfinite(beta[face]) ||
+        !std::isfinite(value[face]) || (a == Real(0) && b == Real(0) && kind[face] != "periodic"))
+      throw std::runtime_error("System::set_field_boundary_plan invalid Robin coefficients");
+    if (kind[face] == "periodic") {
+      *types[face] = BCType::Periodic;
+    } else if (kind[face] == "dirichlet" || (kind[face] == "mixed" && b == Real(0))) {
+      if (a == Real(0))
+        throw std::runtime_error("System::set_field_boundary_plan Dirichlet alpha is zero");
+      *types[face] = BCType::Dirichlet;
+      *vals[face] = v / a;
+    } else if (kind[face] == "neumann" && v == Real(0)) {
+      *types[face] = BCType::Foextrap;
+    } else if (kind[face] == "neumann" || kind[face] == "mixed") {
+      *types[face] = BCType::Robin;
+      *vals[face] = v;
+      *alphas[face] = a;
+      *betas[face] = b;
+      const Real h = face < 2 ? bc.dx : bc.dy;
+      if (a / Real(2) + b / h == Real(0))
+        throw std::runtime_error(
+            "System::set_field_boundary_plan singular cell-centred Robin denominator");
+    } else {
+      throw std::runtime_error("System::set_field_boundary_plan unknown kind '" + kind[face] + "'");
+    }
+  }
+  auto plan_it = p_->fields_.named_field_plans_.find(provider_slot);
+  if (plan_it == p_->fields_.named_field_plans_.end())
+    throw std::runtime_error("System::set_field_boundary_plan unknown provider slot");
+  auto& plan = plan_it->second;
+  plan.explicit_bc = bc;
+  plan.has_explicit_bc = true;
+  auto registered = p_->fields_.named_fields_.find(provider_slot);
+  if (registered != p_->fields_.named_fields_.end()) {
+    registered->second.has_plan = true;
+    registered->second.plan = plan;
+    registered->second.ell.reset();
+  }
+}
+
+void System::set_field_boundary_dependencies(
+    const std::string& provider_slot, const std::vector<std::string>& state_blocks,
+    const std::vector<int>& state_components,
+    const std::vector<std::string>& field_blocks,
+    const std::vector<std::string>& field_keys,
+    const std::vector<int>& field_components) {
+  require_assembling(p_->lifecycle_, "set_field_boundary_dependencies");
+  if (state_blocks.size() != state_components.size() ||
+      field_blocks.size() != field_keys.size() || field_blocks.size() != field_components.size())
+    throw std::runtime_error("System::set_field_boundary_dependencies pack shape mismatch");
+  const auto invalid_text = [](const auto& value) { return value.empty(); };
+  const auto invalid_component = [](int value) { return value < 0; };
+  if (std::any_of(state_blocks.begin(), state_blocks.end(), invalid_text) ||
+      std::any_of(field_blocks.begin(), field_blocks.end(), invalid_text) ||
+      std::any_of(field_keys.begin(), field_keys.end(), invalid_text) ||
+      std::any_of(state_components.begin(), state_components.end(), invalid_component) ||
+      std::any_of(field_components.begin(), field_components.end(), invalid_component))
+    throw std::runtime_error("System::set_field_boundary_dependencies contains invalid entries");
+  auto plan_it = p_->fields_.named_field_plans_.find(provider_slot);
+  if (plan_it == p_->fields_.named_field_plans_.end())
+    throw std::runtime_error("System::set_field_boundary_dependencies unknown provider slot");
+  auto& plan = plan_it->second;
+  plan.boundary_state_blocks = state_blocks;
+  plan.boundary_state_components = state_components;
+  plan.boundary_field_blocks = field_blocks;
+  plan.boundary_field_keys = field_keys;
+  plan.boundary_field_components = field_components;
+  auto registered = p_->fields_.named_fields_.find(provider_slot);
+  if (registered != p_->fields_.named_fields_.end()) {
+    registered->second.plan = plan;
+    registered->second.has_plan = true;
+    registered->second.ell.reset();
+  }
+}
+
+void System::set_field_boundary_kernel(const std::string& provider_slot,
+                                       const CompiledFieldBoundaryKernel& kernel) {
+  require_assembling(p_->lifecycle_, "set_field_boundary_kernel");
+  kernel.validate();
+  auto plan_it = p_->fields_.named_field_plans_.find(provider_slot);
+  if (plan_it == p_->fields_.named_field_plans_.end())
+    throw std::runtime_error("System::set_field_boundary_kernel unknown provider slot");
+  auto& plan = plan_it->second;
+  plan.boundary_kernel = kernel;
+  plan.has_boundary_kernel = true;
+  if (!kernel.observes_iteration)
+    plan.boundary_context.point.iteration = 0;
+  auto registered = p_->fields_.named_fields_.find(provider_slot);
+  if (registered != p_->fields_.named_fields_.end()) {
+    registered->second.plan = plan;
+    registered->second.has_plan = true;
+    registered->second.ell.reset();
+  }
+}
+
+void System::set_field_logical_timepoint(const std::string& provider_slot,
+                                         const FieldLogicalTimePoint& point) {
+  auto plan_it = p_->fields_.named_field_plans_.find(provider_slot);
+  if (plan_it == p_->fields_.named_field_plans_.end())
+    throw std::runtime_error("System::set_field_logical_timepoint unknown provider slot");
+  auto& plan = plan_it->second;
+  plan.boundary_context.point = point;
+  if (!plan.has_boundary_kernel || !plan.boundary_kernel.observes_iteration)
+    plan.boundary_context.point.iteration = 0;
+  auto registered = p_->fields_.named_fields_.find(provider_slot);
+  if (registered != p_->fields_.named_fields_.end()) {
+    registered->second.plan.boundary_context = plan.boundary_context;
+    if (registered->second.ell && registered->second.plan.has_boundary_kernel) {
+      auto* geometric = std::get_if<GeometricMG>(&*registered->second.ell);
+      if (geometric != nullptr)
+        geometric->set_boundary_context(plan.boundary_context);
+    }
+  }
+}
+
+void System::set_field_boundary_parameters(const std::string& provider_slot,
+                                           const std::vector<double>& parameters) {
+  auto plan_it = p_->fields_.named_field_plans_.find(provider_slot);
+  if (plan_it == p_->fields_.named_field_plans_.end())
+    throw std::runtime_error("System::set_field_boundary_parameters unknown provider slot");
+  auto& plan = plan_it->second;
+  if (!plan.boundary_parameters)
+    plan.boundary_parameters = std::make_shared<std::vector<Real>>();
+  plan.boundary_parameters->assign(parameters.begin(), parameters.end());
+  plan.boundary_context.parameters = plan.boundary_parameters.get();
+  plan.boundary_context.parameter_count = static_cast<int>(parameters.size());
+  auto registered = p_->fields_.named_fields_.find(provider_slot);
+  if (registered != p_->fields_.named_fields_.end()) {
+    auto& installed = registered->second.plan;
+    installed.boundary_parameters = plan.boundary_parameters;
+    installed.boundary_context.parameters = plan.boundary_parameters.get();
+    installed.boundary_context.parameter_count = plan.boundary_context.parameter_count;
+    if (registered->second.ell && installed.has_boundary_kernel) {
+      auto* geometric = std::get_if<GeometricMG>(&*registered->second.ell);
+      if (geometric != nullptr)
+        geometric->set_boundary_context(installed.boundary_context);
+    }
+  }
+}
+
+void System::set_field_newton_plan(const std::string& provider_slot, double tolerance,
+                                   int max_iterations, double linear_tolerance,
+                                   int linear_max_iterations, int restart, double armijo,
+                                   double minimum_step) {
+  require_assembling(p_->lifecycle_, "set_field_newton_plan");
+  auto found = p_->fields_.named_field_plans_.find(provider_slot);
+  if (found == p_->fields_.named_field_plans_.end())
+    throw std::runtime_error("System::set_field_newton_plan unknown field provider slot");
+  FieldNewtonOptions options{static_cast<Real>(tolerance), max_iterations,
+                             static_cast<Real>(linear_tolerance), linear_max_iterations,
+                             restart, static_cast<Real>(armijo),
+                             static_cast<Real>(minimum_step)};
+  validate_field_newton_options(options);
+  found->second.has_newton = true;
+  found->second.newton = options;
+  auto installed = p_->fields_.named_fields_.find(provider_slot);
+  if (installed != p_->fields_.named_fields_.end()) {
+    installed->second.plan.has_newton = true;
+    installed->second.plan.newton = options;
+    installed->second.ell.reset();
+  }
+}
+
+void System::set_field_nullspace(const std::string& provider_slot, bool constant_kernel,
+                                 bool mean_zero_gauge) {
+  require_assembling(p_->lifecycle_, "set_field_nullspace");
+  if (mean_zero_gauge && !constant_kernel)
+    throw std::runtime_error("System::set_field_nullspace mean-zero gauge requires constant kernel");
+  auto plan_it = p_->fields_.named_field_plans_.find(provider_slot);
+  if (plan_it == p_->fields_.named_field_plans_.end())
+    throw std::runtime_error("System::set_field_nullspace unknown provider slot");
+  auto& plan = plan_it->second;
+  plan.nullspace = {};
+  if (constant_kernel) {
+    plan.nullspace = constant_mean_zero_nullspace(
+        provider_slot + ":topology-nullspace", "derived:uniform-connected-component:0",
+        p_->geom.dx() * p_->geom.dy());
+    if (!mean_zero_gauge)
+      plan.nullspace.gauges.clear();
+  }
+  auto registered = p_->fields_.named_fields_.find(provider_slot);
+  if (registered != p_->fields_.named_fields_.end()) {
+    registered->second.has_plan = true;
+    registered->second.plan = plan;
+    registered->second.ell.reset();
+  }
 }
 
 namespace {

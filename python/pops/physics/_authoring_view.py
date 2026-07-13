@@ -142,7 +142,9 @@ class _OperatorViewMixin(_HyperbolicModel):
                 capabilities={"requires_solver": True, "supports_device": True,
                               "default": True},
                 requirements={"elliptic_operator": "poisson"},
-                source=None))
+                lowering={"field_provider": {"key": "fields_from_state"}},
+                source=None,
+                body=self._elliptic))
         for nm in sorted(self._elliptic_fields):
             info = self._elliptic_fields[nm]
             reg.register(_model.Operator(
@@ -151,7 +153,9 @@ class _OperatorViewMixin(_HyperbolicModel):
                                  _model.FieldSpace(nm, components=tuple(info["aux"]))),
                 capabilities={"requires_solver": True, "supports_device": True},
                 requirements={"elliptic_operator": info["operator"]},
-                source=None))
+                lowering={"field_provider": {"key": nm}},
+                source=None,
+                body=info["rhs"]))
 
         # Pointwise projection (projection: State -> State).
         if self._proj is not None:

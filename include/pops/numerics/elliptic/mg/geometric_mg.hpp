@@ -32,6 +32,8 @@
 #include <pops/diagnostics/runtime_diagnostics.hpp>
 #include <pops/numerics/elliptic/eb/cut_fraction.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
+#include <pops/numerics/elliptic/interface/field_nonlinear.hpp>
+#include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
@@ -45,6 +47,7 @@
 #include <chrono>   // last_bottom_seconds(): self-time the coarsest (bottom) GS solve (Spec 5, ADC-479)
 #include <cstdlib>  // getenv
 #include <functional>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -115,6 +118,8 @@ class GeometricMG {
         replicated_(replicated),
         cut_cell_(cut_cell),
         levelset_(std::move(levelset)) {
+    bc_.dx = geom.dx();
+    bc_.dy = geom.dy();
     if (cut_cell_ && levelset_ && !active_)
       active_ = [ls = levelset_](Real x, Real y) { return ls(x, y) < Real(0); };
     add_level(geom, ba);
@@ -412,6 +417,20 @@ class GeometricMG {
   // relative criterion unchanged. The floor avoids over-solving an ALREADY converged state (tiny r0,
   // typical of an OFF-STEP solve on an unchanged state): early-exit without cycling if r0 is below abs_tol.
   int solve(Real rel_tol, int max_cycles, Real abs_tol = Real(0)) {
+    last_solve_report_ = {};
+    const bool fallible_linear_boundary =
+        has_boundary_kernel_ && !boundary_kernel_.observes_iteration;
+    if (fallible_linear_boundary)
+      boundary_failure_.reset();
+    auto finish = [&](int cycles) {
+      if (fallible_linear_boundary && boundary_failure_.synchronize_across_ranks())
+        throw std::runtime_error(
+            "field boundary evaluation failed at face " +
+            std::to_string(boundary_failure_.face) + " cell (" +
+            std::to_string(boundary_failure_.i) + "," +
+            std::to_string(boundary_failure_.j) + ")");
+      return cycles;
+    };
     trace_mark("solve: before initial current_residual");
     last_bottom_seconds_ = 0.0;  // reset the per-solve bottom self-time (accumulated by vcycle_rec)
     const Real r0 = current_residual();
@@ -419,7 +438,10 @@ class GeometricMG {
     if (r0 <= abs_tol) {
       last_cycles_ = 0;  // already under the floor (or zero); abs_tol=0 -> old test r0<=0
       last_residual_ = r0;
-      return 0;
+      last_solve_report_.iters = 0;
+      last_solve_report_.rel_residual = Real(0);
+      last_solve_report_.mark_solved();
+      return finish(0);
     }
     const Real stop =
         (rel_tol * r0 > abs_tol) ? rel_tol * r0 : abs_tol;  // max(rel_tol*r0, abs_tol)
@@ -431,19 +453,39 @@ class GeometricMG {
       if (r <= stop) {
         last_cycles_ = c;
         last_residual_ = r;
-        return c;
+        last_solve_report_.iters = c;
+        last_solve_report_.rel_residual = r / (r0 > Real(0) ? r0 : Real(1));
+        last_solve_report_.mark_solved();
+        return finish(c);
       }
     }
     last_cycles_ = max_cycles;
     last_residual_ = current_residual();
-    return max_cycles;
+    last_solve_report_.iters = max_cycles;
+    last_solve_report_.rel_residual =
+        last_residual_ / (r0 > Real(0) ? r0 : Real(1));
+    last_solve_report_.mark_failed(SolveStatus::kIterationLimit,
+                                   SolveAction::kRejectAttempt);
+    return finish(max_cycles);
   }
 
   // EllipticSolver concept interface: solve() with no argument (default
   // tolerance) and residual() (alias of current_residual). Lets couplers
   // depend on the concept, not on GeometricMG directly. Propagates abs_tol_ (absolute
   // floor, default 0 -> historical relative criterion unchanged) to the mixed criterion.
-  void solve() { solve(kMGDefaultRelTol, kMGDefaultMaxCycles, abs_tol_); }
+  void solve() {
+    if (has_boundary_kernel_ && boundary_kernel_.observes_iteration) {
+      if (!has_field_newton_options_)
+        throw std::runtime_error(
+            "iterate-dependent field boundary requires an installed nonlinear outer solver");
+      last_solve_report_ = solve_boundary_newton(field_newton_options_);
+      if (!last_solve_report_.solved())
+        throw std::runtime_error(std::string("field Newton solve failed: ") +
+                                 last_solve_report_.status_name());
+      return;
+    }
+    solve(kMGDefaultRelTol, kMGDefaultMaxCycles, abs_tol_);
+  }
   Real residual() { return current_residual(); }
 
   // ABSOLUTE floor on the residual used by the no-argument solve() (the EllipticSolver
@@ -524,7 +566,9 @@ class GeometricMG {
   Real current_residual() {
     trace_mark("current_residual: before poisson_residual");
     poisson_residual(lev_[0].phi, lev_[0].rhs, lev_[0].geom, bc_, lev_[0].res, mask_ptr(0),
-                     coef_ptr(0), eps_ptr(0), kappa_ptr(0), eps_y_ptr(0), a_xy_ptr(0), a_yx_ptr(0));
+                     coef_ptr(0), eps_ptr(0), kappa_ptr(0), eps_y_ptr(0), a_xy_ptr(0), a_yx_ptr(0),
+                     boundary_kernel_ptr(0), boundary_context_ptr(0),
+                     has_boundary_kernel_ ? &lev_[0].boundary_view : nullptr);
     trace_mark("current_residual: after poisson_residual, before norm_inf");
     const Real r = all_reduce_max(norm_inf(lev_[0].res));
     trace_mark("current_residual: after norm_inf");
@@ -548,6 +592,179 @@ class GeometricMG {
   const BoxArray& box_array() const { return lev_[0].ba; }
   const DistributionMapping& dmap() const { return lev_[0].dm; }
 
+  /// Attach one already-resolved generated boundary kernel.  The direct function pointers and
+  /// dependency-buffer table are copied into the solver once; V-cycle cell kernels never perform a
+  /// registry lookup.  Omitting this call preserves the zero-overhead BCRec path.
+  void set_boundary_kernel(const CompiledFieldBoundaryKernel& kernel,
+                           const FieldBoundaryExecutionContext& context) {
+    kernel.validate();
+    boundary_kernel_ = kernel;
+    boundary_context_ = context;
+    boundary_context_.failure = &boundary_failure_;
+    has_boundary_kernel_ = true;
+    lev_[0].boundary_view = MultiFab(lev_[0].ba, lev_[0].dm, 1, 1);
+    lev_[0].direction_view = MultiFab(lev_[0].ba, lev_[0].dm, 1, 1);
+  }
+
+  void clear_boundary_kernel() {
+    has_boundary_kernel_ = false;
+    boundary_kernel_ = {};
+    boundary_context_ = {};
+  }
+
+  void set_boundary_context(const FieldBoundaryExecutionContext& context) {
+    if (!has_boundary_kernel_)
+      throw std::runtime_error("GeometricMG boundary context installed without a compiled kernel");
+    boundary_context_ = context;
+    boundary_context_.failure = &boundary_failure_;
+  }
+
+  void set_field_newton_options(const FieldNewtonOptions& options) {
+    validate_field_newton_options(options);
+    field_newton_options_ = options;
+    has_field_newton_options_ = true;
+  }
+
+  const SolveReport& last_solve_report() const { return last_solve_report_; }
+
+  SolveReport solve_boundary_newton(const FieldNewtonOptions& options) {
+    if (!has_boundary_kernel_ || !boundary_kernel_.observes_iteration ||
+        boundary_kernel_.jvp == nullptr)
+      return SolveReport::capability_failure();
+    set_field_newton_options(options);
+    auto& L = lev_[0];
+    MultiFab published_snapshot(L.ba, L.dm, 1, L.phi.n_grow());
+    MultiFab accepted(L.ba, L.dm, 1, L.phi.n_grow());
+    MultiFab trial(L.ba, L.dm, 1, L.phi.n_grow());
+    MultiFab residual(L.ba, L.dm, 1, 0);
+    MultiFab trial_residual(L.ba, L.dm, 1, 0);
+    MultiFab delta(L.ba, L.dm, 1, L.phi.n_grow());
+    MultiFab rhs_snapshot(L.ba, L.dm, 1, L.rhs.n_grow());
+    lincomb(published_snapshot, Real(1), L.phi, Real(0), L.phi);
+    lincomb(accepted, Real(1), published_snapshot, Real(0), published_snapshot);
+    lincomb(rhs_snapshot, Real(1), L.rhs, Real(0), L.rhs);
+
+    auto restore_published = [&]() {
+      lincomb(L.phi, Real(1), published_snapshot, Real(0), published_snapshot);
+      lincomb(L.rhs, Real(1), rhs_snapshot, Real(0), rhs_snapshot);
+    };
+
+    auto evaluate = [&](MultiFab& iterate, MultiFab& output) -> Real {
+      boundary_failure_.reset();
+      poisson_residual(iterate, rhs_snapshot, L.geom, bc_, output, mask_ptr(0), coef_ptr(0),
+                       eps_ptr(0), kappa_ptr(0), eps_y_ptr(0), a_xy_ptr(0), a_yx_ptr(0),
+                       &boundary_kernel_, &boundary_context_, &L.boundary_view);
+      if (boundary_failure_.synchronize_across_ranks())
+        return std::numeric_limits<Real>::quiet_NaN();
+      return all_reduce_max(norm_inf(output));
+    };
+
+    SolveReport report;
+    Real r0 = evaluate(accepted, residual);
+    if (!std::isfinite(static_cast<double>(r0))) {
+      report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kRejectAttempt);
+      restore_published();
+      return report;
+    }
+    const Real base = r0 > Real(0) ? r0 : Real(1);
+    if (r0 == Real(0)) {
+      report.rel_residual = r0 / base;
+      report.mark_solved();
+      lincomb(L.phi, Real(1), accepted, Real(0), accepted);
+      return report;
+    }
+
+    for (int iteration = 0; iteration < options.max_iterations; ++iteration) {
+      boundary_context_.point.iteration = iteration;
+      delta.set_val(Real(0));
+      ApplyFn jacobian = [&](MultiFab& out, const MultiFab& in) {
+        boundary_failure_.reset();
+        apply_jvp(accepted, in, out);
+        if (boundary_failure_.synchronize_across_ranks())
+          out.set_val(std::numeric_limits<Real>::quiet_NaN());
+      };
+      ApplyFn preconditioner = [&](MultiFab& out, const MultiFab& in) {
+        struct RestorePreconditionerState {
+          bool& boundary_enabled;
+          bool saved_boundary_enabled;
+          MultiFab& phi;
+          MultiFab& rhs;
+          const MultiFab& saved_phi;
+          const MultiFab& saved_rhs;
+          ~RestorePreconditionerState() {
+            boundary_enabled = saved_boundary_enabled;
+            lincomb(phi, Real(1), saved_phi, Real(0), saved_phi);
+            lincomb(rhs, Real(1), saved_rhs, Real(0), saved_rhs);
+          }
+        } restore{has_boundary_kernel_, has_boundary_kernel_, L.phi, L.rhs, accepted,
+                  rhs_snapshot};
+        has_boundary_kernel_ = false;
+        L.phi.set_val(Real(0));
+        lincomb(L.rhs, Real(1), in, Real(0), in);
+        vcycle();
+        lincomb(out, Real(1), L.phi, Real(0), L.phi);
+      };
+      SolveReport linear;
+      try {
+        linear = gmres_solve(jacobian, preconditioner, delta, residual,
+                             options.linear_tolerance, options.linear_max_iterations,
+                             options.restart);
+      } catch (...) {
+        restore_published();
+        throw;
+      }
+      if (!linear.solved()) {
+        report = linear;
+        report.action = SolveAction::kRejectAttempt;
+        restore_published();
+        return report;
+      }
+
+      Real step = Real(1);
+      Real trial_norm = std::numeric_limits<Real>::infinity();
+      bool accepted_step = false;
+      while (step >= options.minimum_step) {
+        lincomb(trial, Real(1), accepted, step, delta);
+        trial_norm = evaluate(trial, trial_residual);
+        if (std::isfinite(static_cast<double>(trial_norm)) &&
+            trial_norm <= (Real(1) - options.armijo * step) * r0) {
+          accepted_step = true;
+          break;
+        }
+        step *= Real(0.5);
+      }
+      if (!accepted_step) {
+        report.iters = iteration + 1;
+        report.rel_residual = r0 / base;
+        report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kRejectAttempt);
+        restore_published();
+        return report;
+      }
+      lincomb(accepted, Real(1), trial, Real(0), trial);
+      lincomb(residual, Real(1), trial_residual, Real(0), trial_residual);
+      r0 = trial_norm;
+      report.iters = iteration + 1;
+      report.rel_residual = r0 / base;
+      if (r0 <= options.tolerance * base) {
+        report.mark_solved();
+        lincomb(L.phi, Real(1), accepted, Real(0), accepted);
+        lincomb(L.rhs, Real(1), rhs_snapshot, Real(0), rhs_snapshot);
+        return report;
+      }
+    }
+    report.mark_failed(SolveStatus::kIterationLimit, SolveAction::kRejectAttempt);
+    restore_published();
+    return report;
+  }
+
+  void apply_jvp(const MultiFab& iterate, const MultiFab& direction, MultiFab& output) {
+    apply_laplacian_jvp(iterate, direction, lev_[0].geom, bc_, output,
+                        boundary_kernel_ptr(0), boundary_context_ptr(0),
+                        has_boundary_kernel_ ? &lev_[0].direction_view : nullptr,
+                        coef_ptr(0), eps_ptr(0), kappa_ptr(0), eps_y_ptr(0), a_xy_ptr(0),
+                        a_yx_ptr(0));
+  }
+
  private:
   struct MGLevel {
     Geometry geom;
@@ -559,6 +776,7 @@ class GeometricMG {
     // restriction (average_down) and the prolongation (interpolate) of the level. The bottom leaves them empty
     // (vcycle_rec returns before touching them, and its coarsen would be degenerate).
     MultiFab corr, cfine;
+    MultiFab boundary_view, direction_view;
   };
 
   const MultiFab* mask_ptr(int l) { return active_ ? &lev_[l].mask : nullptr; }
@@ -570,6 +788,14 @@ class GeometricMG {
   // cross terms absent => nullptr => DIAGONAL block (current path unchanged).
   const MultiFab* a_xy_ptr(int l) { return has_cross_ ? &lev_[l].a_xy : nullptr; }
   const MultiFab* a_yx_ptr(int l) { return has_cross_ ? &lev_[l].a_yx : nullptr; }
+  const CompiledFieldBoundaryKernel* boundary_kernel_ptr(int l) {
+    // Coarse MG levels solve a homogeneous correction.  The exact nonlinear closure/JVP is applied
+    // on the materialized operator level; coarse levels remain an internal preconditioner.
+    return has_boundary_kernel_ && l == 0 ? &boundary_kernel_ : nullptr;
+  }
+  const FieldBoundaryExecutionContext* boundary_context_ptr(int l) {
+    return has_boundary_kernel_ && l == 0 ? &boundary_context_ : nullptr;
+  }
 
   void trace_mark(const char* marker) {
     if (std::getenv("POPS_TRACE_SOLVE_FIELDS") == nullptr)
@@ -597,7 +823,8 @@ class GeometricMG {
                                  : DistributionMapping(ba.size(), n_ranks());
     lev_.push_back(MGLevel{g, ba, dm, MultiFab(ba, dm, 1, 1), MultiFab(ba, dm, 1, 0),
                            MultiFab(ba, dm, 1, 0), MultiFab{}, MultiFab{}, MultiFab{}, MultiFab{},
-                           MultiFab{}, MultiFab{}, MultiFab{}, MultiFab{}, MultiFab{}});
+                           MultiFab{}, MultiFab{}, MultiFab{}, MultiFab{}, MultiFab{}, MultiFab{},
+                           MultiFab{}});
   }
 
   // FACTORIZATION (operator coefficient wiring, COMMON part): a scalar field
@@ -656,6 +883,9 @@ class GeometricMG {
 
   void vcycle_rec(int l, const BCRec& bc) {
     MGLevel& L = lev_[l];
+    BCRec level_bc = bc;
+    level_bc.dx = L.geom.dx();
+    level_bc.dy = L.geom.dy();
     const MultiFab* mk = mask_ptr(l);
     const MultiFab* ck = coef_ptr(l);
     const MultiFab* ep = eps_ptr(l);
@@ -670,7 +900,9 @@ class GeometricMG {
     // A, it may diverge (cf. set_cross_terms, reported observation).
     if (l == 0)
       trace_mark("vcycle_rec(0): before gs_smooth(nu1) [first GS kernel]");
-    gs_smooth(L.phi, L.rhs, L.geom, bc, nu1_, mk, ck, ep, kp, ey);
+    gs_smooth(L.phi, L.rhs, L.geom, level_bc, nu1_, mk, ck, ep, kp, ey,
+              boundary_kernel_ptr(l), boundary_context_ptr(l),
+              boundary_kernel_ptr(l) ? &L.boundary_view : nullptr);
     if (l == 0)
       trace_mark("vcycle_rec(0): after gs_smooth(nu1)");
 
@@ -681,7 +913,9 @@ class GeometricMG {
       // sec.13.11.1, ADC-479). Host serial / per-rank; the device-fence for an exact GPU bottom time is
       // deferred (counter stays an honest host-side measurement).
       const auto bottom_t0 = std::chrono::steady_clock::now();
-      gs_smooth(L.phi, L.rhs, L.geom, bc, nbottom_, mk, ck, ep, kp, ey);  // bottom solve
+      gs_smooth(L.phi, L.rhs, L.geom, level_bc, nbottom_, mk, ck, ep, kp, ey,
+                boundary_kernel_ptr(l), boundary_context_ptr(l),
+                boundary_kernel_ptr(l) ? &L.boundary_view : nullptr);  // bottom solve
       const auto bottom_t1 = std::chrono::steady_clock::now();
       last_bottom_seconds_ += std::chrono::duration<double>(bottom_t1 - bottom_t0).count();
       if (mk)
@@ -689,7 +923,9 @@ class GeometricMG {
       return;
     }
 
-    poisson_residual(L.phi, L.rhs, L.geom, bc, L.res, mk, ck, ep, kp, ey, axy, ayx);
+    poisson_residual(L.phi, L.rhs, L.geom, level_bc, L.res, mk, ck, ep, kp, ey, axy, ayx,
+                     boundary_kernel_ptr(l), boundary_context_ptr(l),
+                     boundary_kernel_ptr(l) ? &L.boundary_view : nullptr);
     if (l == 0)
       trace_mark("vcycle_rec(0): after poisson_residual");
     MGLevel& C = lev_[l + 1];
@@ -697,7 +933,7 @@ class GeometricMG {
     if (l == 0)
       trace_mark("vcycle_rec(0): after average_down");
     C.phi.set_val(0.0);
-    vcycle_rec(l + 1, homogeneous(bc));
+    vcycle_rec(l + 1, homogeneous(level_bc));
     if (l == 0)
       trace_mark("vcycle_rec(0): after coarse recursion");
 
@@ -709,7 +945,9 @@ class GeometricMG {
       trace_mark("vcycle_rec(0): after saxpy");
     if (mk)
       zero_conductor(L.phi, L.mask);  // re-pin the conductor
-    gs_smooth(L.phi, L.rhs, L.geom, bc, nu2_, mk, ck, ep, kp, ey);
+    gs_smooth(L.phi, L.rhs, L.geom, level_bc, nu2_, mk, ck, ep, kp, ey,
+              boundary_kernel_ptr(l), boundary_context_ptr(l),
+              boundary_kernel_ptr(l) ? &L.boundary_view : nullptr);
     if (l == 0)
       trace_mark("vcycle_rec(0): after gs_smooth(nu2)");
   }
@@ -725,6 +963,13 @@ class GeometricMG {
   bool has_eps_y_ = false;
   bool has_kappa_ = false;
   bool has_cross_ = false;  // off-diagonal Axy/Ayx coefficients (FULL tensor) active
+  bool has_boundary_kernel_ = false;
+  CompiledFieldBoundaryKernel boundary_kernel_{};
+  FieldBoundaryFailure boundary_failure_{};
+  FieldNewtonOptions field_newton_options_{};
+  bool has_field_newton_options_ = false;
+  SolveReport last_solve_report_{};
+  FieldBoundaryExecutionContext boundary_context_{};
   Real abs_tol_ =
       kMGDefaultAbsTol;  // absolute floor of the no-argument solve() (0 = relative criterion only)
   // PER-SOLVE PROFILING STATS (read back at the System field_solve seam, ADC-479 criteria 42/43).

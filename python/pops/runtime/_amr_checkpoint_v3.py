@@ -93,6 +93,17 @@ def write_v3(owner, sim, path, L, regrid_every, persistence=None):
     for k in range(nlev):
         out["phi_%d" % k] = np.asarray(
             sim.level_potential_global(k) if gather else sim.level_potential(k), dtype=np.float64)
+    # Qualified field-provider warm starts.  Slots are ordered native registry keys; each carries its
+    # complete canonical identity in the sealed BoundSnapshot, so restart validates composition before
+    # mutating a solver.  Composite fields retain every native level, level-local fields retain coarse.
+    field_slots = list(sim.field_provider_slots()) if hasattr(sim, "field_provider_slots") else []
+    out["field_provider_slots"] = np.asarray(field_slots)
+    for index, slot in enumerate(field_slots):
+        levels = int(sim.field_provider_levels(slot))
+        out["field_provider_levels_%d" % index] = levels
+        for k in range(levels):
+            out["field_provider_phi_%d_%d" % (index, k)] = np.asarray(
+                sim.field_potential_level_global(slot, k), dtype=np.float64)
     # FULL shared aux per level (m2): ALL aux components (phi comp 0 + gradients + named aux), flat
     # c*nf*nf+j*nf+i. An engine with no shared aux records an explicit empty array.
     for k in range(nlev):
@@ -128,6 +139,7 @@ def restart_v3(sim, d, L):
     step's regrid_if_due sees the uninterrupted clock). Returns the HistoryReplayReport (or None).
     """
     import numpy as np
+    from pops import _pops
 
     # (2) GUARDS.
     if int(d["n"]) != sim.nx():
@@ -157,52 +169,241 @@ def restart_v3(sim, d, L):
     multi = (sim.uses_runtime_engine() if hasattr(sim, "uses_runtime_engine")
              else sim.n_blocks() != 1)
 
-    # (3) HIERARCHY REBUILD: impose the mid-run hierarchy from the manifest (multi-block runtime path).
-    # The boxes carry their level; the dmaps give the owner rank per box (aligned by level order).
-    boxes = [tuple(int(x) for x in row) for row in np.asarray(d["patch_boxes"], dtype=np.int64)]
+    # Validate the complete qualified provider registry and every persisted level before hierarchy or
+    # state mutation.  The checkpoint manifest has already authenticated the payload; this check binds
+    # it to the exact live native registry and prevents partial field restoration.
+    checkpoint_slots = ([str(slot) for slot in d["field_provider_slots"]]
+                        if "field_provider_slots" in d else [])
+    current_slots = (list(sim.field_provider_slots())
+                     if hasattr(sim, "field_provider_slots") else [])
+    if checkpoint_slots != current_slots:
+        raise ValueError(
+            "restart : checkpoint qualified field providers %r != installed providers %r"
+            % (checkpoint_slots, current_slots))
+    field_payload = []
+    for index, slot in enumerate(checkpoint_slots):
+        levels_key = "field_provider_levels_%d" % index
+        if levels_key not in d:
+            raise ValueError("restart: checkpoint lacks field provider level count for %s" % slot)
+        checkpoint_levels = int(d[levels_key])
+        current_levels = int(sim.field_provider_levels(slot))
+        if checkpoint_levels != current_levels:
+            raise ValueError(
+                "restart: field provider %s has %d checkpoint levels, %d installed levels"
+                % (slot, checkpoint_levels, current_levels))
+        values = []
+        for k in range(checkpoint_levels):
+            key = "field_provider_phi_%d_%d" % (index, k)
+            if key not in d:
+                raise ValueError(
+                    "restart: checkpoint lacks level %d potential for field provider %s"
+                    % (k, slot))
+            width = int(sim.nx()) << k
+            value = np.asarray(d[key], dtype=np.float64).ravel()
+            if value.size != width * width:
+                raise ValueError(
+                    "restart: field provider %s level %d potential has size %d, expected %d"
+                    % (slot, k, value.size, width * width))
+            values.append(value)
+        field_payload.append((slot, values))
+
+    # Preflight the complete topology and every dense native payload before the transaction starts.
+    # The manifest seal authenticates bytes; these guards prove that all writes are shape-compatible
+    # with the live composition, so malformed state/aux/history cannot fail only after a hierarchy
+    # mutation.  The native transaction remains the final exception-safety boundary.
+    raw_boxes = np.asarray(d["patch_boxes"], dtype=np.int64)
+    if raw_boxes.ndim != 2 or raw_boxes.shape[1] != 5:
+        raise ValueError("restart: patch_boxes must have shape (npatches, 5)")
+    boxes = [tuple(int(x) for x in row) for row in raw_boxes]
+    per_level_boxes = {k: [] for k in range(nlev)}
+    for box in boxes:
+        level, ilo, jlo, ihi, jhi = box
+        if level <= 0 or level >= nlev:
+            raise ValueError(
+                "restart: fine patch level %d is outside [1, %d]" % (level, nlev - 1))
+        width = int(sim.nx()) << level
+        if ilo < 0 or jlo < 0 or ihi < ilo or jhi < jlo or ihi >= width or jhi >= width:
+            raise ValueError("restart: invalid level-%d patch box %r for width %d"
+                             % (level, box[1:], width))
+        for other in per_level_boxes[level]:
+            if not (ihi < other[0] or other[2] < ilo or
+                    jhi < other[1] or other[3] < jlo):
+                raise ValueError(
+                    "restart: overlapping level-%d patch boxes %r and %r"
+                    % (level, other, box[1:]))
+        per_level_boxes[level].append((ilo, jlo, ihi, jhi))
+    if nlev > 1:
+        for level in range(1, nlev):
+            if not per_level_boxes[level]:
+                raise ValueError(
+                    "restart: %d-level hierarchy has no patch at fine level %d" % (nlev, level))
+
+    owner_ranks = []
     if multi:
         owner_ranks = _owner_ranks_for_boxes(d, boxes, nlev)
-        sim.rebuild_hierarchy(boxes, owner_ranks)
-    elif nlev >= 2:
-        # single-block coupler path: impose the recorded fine hierarchy.
-        fine = [b for b in boxes if b[0] == 1]
-        if not fine:
-            raise ValueError("restart : %d-level hierarchy but no fine patch (level 1) in the "
-                             "checkpoint (inconsistent)." % nlev)
-        sim.set_hierarchy(boxes)
+        nranks = int(_pops.n_ranks())
+        for level in range(1, nlev):
+            key = "dmap_%d" % level
+            if key not in d:
+                raise ValueError("restart: checkpoint lacks owner-rank map for AMR level %d" % level)
+            ranks = np.asarray(d[key], dtype=np.int64).ravel()
+            if ranks.size != len(per_level_boxes[level]):
+                raise ValueError(
+                    "restart: owner-rank map for level %d has %d entries, expected %d"
+                    % (level, ranks.size, len(per_level_boxes[level])))
+            if any(int(rank) < 0 or int(rank) >= nranks for rank in ranks):
+                raise ValueError(
+                    "restart: owner-rank map for level %d contains a rank outside [0, %d)"
+                    % (level, nranks))
 
-    # (4) PER-LEVEL PER-BLOCK STATE (as-saved, no re-prolongation).
-    for b in cur_blocks:
-        cur_nv = int(sim.block_n_vars(b)) if multi else int(sim.n_vars())
-        chk_nv = int(d["n_vars_%s" % b])
-        if chk_nv != cur_nv:
+    state_payload = []
+    for block in cur_blocks:
+        nvars_key = "n_vars_%s" % block
+        if nvars_key not in d:
+            raise ValueError("restart: checkpoint lacks component count for block '%s'" % block)
+        current_nvars = int(sim.block_n_vars(block)) if multi else int(sim.n_vars())
+        checkpoint_nvars = int(d[nvars_key])
+        if checkpoint_nvars != current_nvars:
             raise ValueError("restart : block '%s' has %d components in the checkpoint, %d here"
-                             % (b, chk_nv, cur_nv))
-        for k in range(nlev):
-            st = np.asarray(d["state_%s_%d" % (b, k)], dtype=np.float64)
-            if multi:
-                sim.set_block_level_state(b, k, st)
-            else:
-                sim.set_level_state(k, st)
+                             % (block, checkpoint_nvars, current_nvars))
+        levels = []
+        for level in range(nlev):
+            key = "state_%s_%d" % (block, level)
+            if key not in d:
+                raise ValueError("restart: checkpoint lacks state for block '%s' level %d"
+                                 % (block, level))
+            width = int(sim.nx()) << level
+            state = np.asarray(d[key], dtype=np.float64)
+            expected = current_nvars * width * width
+            if state.size != expected:
+                raise ValueError(
+                    "restart: block '%s' level %d state has size %d, expected %d"
+                    % (block, level, state.size, expected))
+            levels.append(state)
+        state_payload.append((block, levels))
 
-    # (5) FULL SHARED AUX per level, then the separate multigrid phi warm-start. The current schema
-    # requires every aux key, including an explicit empty array for an engine with no shared aux.
-    for k in range(nlev):
-        key = "aux_%d" % k
-        sim.set_level_aux_flat(k, np.asarray(d[key], dtype=np.float64).ravel())
-    for k in range(nlev):
-        sim.set_level_potential(k, np.asarray(d["phi_%d" % k], dtype=np.float64).ravel())
+    aux_payload = []
+    phi_payload = []
+    for level in range(nlev):
+        aux_key = "aux_%d" % level
+        phi_key = "phi_%d" % level
+        if aux_key not in d or phi_key not in d:
+            raise ValueError("restart: checkpoint lacks aux or potential payload for level %d" % level)
+        aux = np.asarray(d[aux_key], dtype=np.float64).ravel()
+        expected_aux = len(sim.level_aux_flat(level))
+        if aux.size != expected_aux:
+            raise ValueError("restart: level %d aux has size %d, expected %d"
+                             % (level, aux.size, expected_aux))
+        width = int(sim.nx()) << level
+        phi = np.asarray(d[phi_key], dtype=np.float64).ravel()
+        if phi.size != width * width:
+            raise ValueError("restart: level %d potential has size %d, expected %d"
+                             % (level, phi.size, width * width))
+        aux_payload.append(aux)
+        phi_payload.append(phi)
 
-    # (6) MULTISTEP HISTORY RINGS (ADC-631/ADC-635): restore the policy-stored slots + per-slot dt, then
-    # replay the recomputed gaps (restore_histories drives rebuild_history_slots, which re-steps the
-    # installed Program with regrid ACTIVE, reproducing the original in-window regrid schedule and its
-    # incremental remap chain). Runs AFTER state/aux/phi (the replay seeds from a ring slot and is
-    # SAVE/RESTORE bracketed) and BEFORE the clock. _restore_histories_v3 primes the facade cursor to m.
-    report = _restore_histories_v3(sim, d)
+    _preflight_histories_v3(sim, d)
 
-    # (8) CLOCK LAST (macro_step advances the regrid cadence phase; idempotent with the replay's prime).
-    sim.set_clock(float(d["t"]), int(d["macro_step"]))
+    sim.begin_restart_transaction()
+    try:
+        # (3) Impose the exact recorded hierarchy.
+        if multi:
+            sim.rebuild_hierarchy(boxes, owner_ranks)
+        elif nlev >= 2:
+            sim.set_hierarchy(boxes)
+
+        # (4) Restore every block/level state as saved, without re-prolongation.
+        for block, levels in state_payload:
+            for level, state in enumerate(levels):
+                if multi:
+                    sim.set_block_level_state(block, level, state)
+                else:
+                    sim.set_level_state(level, state)
+
+        # (5) Restore shared aux only on the runtime route (the coupler deliberately persists an
+        # explicit empty aux payload), then all elliptic warm starts.
+        for level, aux in enumerate(aux_payload):
+            if aux.size:
+                sim.set_level_aux_flat(level, aux)
+        for level, phi in enumerate(phi_payload):
+            sim.set_level_potential(level, phi)
+        for slot, levels in field_payload:
+            for level, value in enumerate(levels):
+                sim.set_field_potential_level(slot, level, value)
+
+        # (6) Histories may replay the Program and regrid; they are inside the same native transaction.
+        report = _restore_histories_v3(sim, d)
+
+        # (8) Clock last: the next cadence decision is identical to the uninterrupted run.
+        sim.set_clock(float(d["t"]), int(d["macro_step"]))
+    except BaseException as original:
+        try:
+            sim.rollback_restart_transaction()
+        except BaseException as rollback_error:
+            raise RuntimeError(
+                "restart failed and native accepted-state rollback also failed: %s" % original
+            ) from rollback_error
+        raise
+    else:
+        sim.commit_restart_transaction()
     return report
+
+
+def _preflight_histories_v3(sim, d):
+    """Validate the entire ring registry and persisted buffers without mutating native state."""
+    import numpy as np
+    from pops import _pops
+    from pops.time.history_persistence import HistoryPersistence
+
+    checkpoint_names = ([str(name) for name in d["history_names"]]
+                        if "history_names" in d else [])
+    current_names = list(sim.history_names())
+    if checkpoint_names != current_names:
+        raise ValueError("restart: checkpoint history rings %r != installed rings %r"
+                         % (checkpoint_names, current_names))
+    checkpoint_ranks = int(d["n_ranks"]) if "n_ranks" in d else 1
+    current_ranks = int(_pops.n_ranks())
+    for name in checkpoint_names:
+        required = ["history_depth_" + name, "history_ncomp_" + name,
+                    "history_init_" + name, "history_policy_" + name,
+                    "history_stored_slots_" + name]
+        missing = [key for key in required if key not in d]
+        if missing:
+            raise ValueError("restart: history '%s' lacks keys %r" % (name, missing))
+        depth = int(d["history_depth_" + name])
+        ncomp = int(d["history_ncomp_" + name])
+        if depth != int(sim.history_depth(name)) or ncomp != int(sim.history_ncomp(name)):
+            raise ValueError(
+                "restart: history '%s' shape (%d, %d) != installed shape (%d, %d)"
+                % (name, depth, ncomp, int(sim.history_depth(name)),
+                   int(sim.history_ncomp(name))))
+        policy = HistoryPersistence.from_json(str(d["history_policy_" + name]))
+        stored = sorted(int(slot) for slot in d["history_stored_slots_" + name])
+        expected = list(policy.stored_slots(depth))
+        if stored != expected:
+            raise ValueError("restart: history '%s' stored slots %r != policy %s expects %r"
+                             % (name, stored, policy.name, expected))
+        if len(stored) < depth:
+            if checkpoint_ranks != current_ranks:
+                raise ValueError(
+                    "restart: non-Dense history '%s' was written under %d rank(s), current run has %d"
+                    % (name, checkpoint_ranks, current_ranks))
+            if "history_regrid_steps_" + name not in d:
+                raise ValueError("restart: history '%s' lacks its regrid replay fingerprint" % name)
+        expected_values = None
+        for slot in stored:
+            key = "history_%s_%d" % (name, slot)
+            if key not in d:
+                raise ValueError("restart: history '%s' lacks stored slot %d" % (name, slot))
+            values = np.asarray(d[key], dtype=np.float64).ravel()
+            if expected_values is None:
+                expected_values = len(sim.history_global(name, slot))
+            if values.size != expected_values:
+                raise ValueError("restart: history '%s' slot %d has size %d, expected %d"
+                                 % (name, slot, values.size, expected_values))
+        dt_key = "history_slot_dt_" + name
+        if dt_key in d and np.asarray(d[dt_key]).size != depth:
+            raise ValueError("restart: history '%s' dt vector has wrong length" % name)
 
 
 def _restore_histories_v3(sim, d):

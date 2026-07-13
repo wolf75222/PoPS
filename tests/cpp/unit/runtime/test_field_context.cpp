@@ -64,24 +64,25 @@ TEST(AuxLayout, RejectsDuplicateAndOutOfRangeChannels) {
   EXPECT_THROW(layout.add_channel("neg", -1, pops::FieldChannelRole::kNamed), std::out_of_range);
 }
 
-TEST(FieldContext, MatchesRejectsWrongProblemBlockOrStage) {
+TEST(FieldContext, MatchesRejectsWrongProviderOwnerOrStage) {
   const pops::AuxLayout layout = pops::default_poisson_layout();
   pops::FieldContext ctx;
-  ctx.field_problem_id = 2;
-  ctx.block_index = 1;
+  ctx.provider_identity = "case/field/provider-pack/2";
+  ctx.owner_identity = "case/block/material";
   ctx.stage_id = 3;
   ctx.layout = &layout;
-  EXPECT_TRUE(ctx.matches(2, 1, 3));
-  EXPECT_FALSE(ctx.matches(2, 1, 4)) << "stage mismatch";
-  EXPECT_FALSE(ctx.matches(2, 0, 3)) << "block mismatch";
-  EXPECT_FALSE(ctx.matches(5, 1, 3)) << "problem mismatch";
-  EXPECT_TRUE(ctx.matches(-1, 1, 3)) << "negative req_field matches any problem (default case)";
+  EXPECT_TRUE(ctx.matches("case/field/provider-pack/2", "case/block/material", 3));
+  EXPECT_FALSE(ctx.matches("case/field/provider-pack/2", "case/block/material", 4));
+  EXPECT_FALSE(ctx.matches("case/field/provider-pack/2", "case/block/other", 3));
+  EXPECT_FALSE(ctx.matches("case/field/provider-pack/5", "case/block/material", 3));
+  EXPECT_FALSE(ctx.matches("", "case/block/material", 3)) << "there is no default wildcard";
 }
 
 TEST(FieldContext, ResolvesOutputThroughLayoutAndFailsWithoutOne) {
   const pops::AuxLayout layout = pops::default_poisson_layout();
   pops::FieldContext ctx;
-  ctx.field_problem_id = 0;
+  ctx.provider_identity = "case/field/provider-pack/0";
+  ctx.owner_identity = "case/block/material";
   ctx.layout = &layout;
   EXPECT_EQ(ctx.component_of("grad_y"), 2);
   EXPECT_THROW(ctx.component_of("E"), std::out_of_range) << "unknown output still fails loud";

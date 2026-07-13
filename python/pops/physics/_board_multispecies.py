@@ -150,14 +150,15 @@ class _MultiSpeciesMixin(_BoardModel):
         return result
 
     def solve_fields_from_species(self, name: Any, inputs: Any = (), equation: Any = None,
-                                  outputs: Any = None, solver: Any = None) -> Any:
+                                  outputs: Any = None) -> Any:
         """Declare a coupled field solve over several species (multi-block Poisson).
 
         ``inputs`` is the ordered list of contributing species; the field RHS reads every listed
         species' stage state at once. Lowers to a typed ``field_operator`` over the N input
         :class:`StateSpace` set, the operator-first surface of ``P.solve_fields_from_blocks``
         (the existing multi-block field solve, Spec 3 criterion 24). ``equation`` /  ``outputs`` /
-        ``solver`` record the elliptic problem and the produced fields for introspection.
+        record the physical operator and produced fields. Numerical choices are registered only
+        through a case-owned ``FieldDiscretization``.
         """
         from .. import model as _model
         reg = _safe_name(name)
@@ -172,24 +173,21 @@ class _MultiSpeciesMixin(_BoardModel):
         if not output_map:
             raise ValueError("solve_fields_from_species(%r) requires at least one output" % name)
         out_comps = tuple(output_map)
-        reqs = {"solver": solver} if solver is not None else None
         h = FieldsHandle(
-            name, output_map, solver, owner=self.owner_path,
+            name, output_map, None, owner=self.owner_path,
             registered_operator_name=reg)
         if name in self._fields:
             raise ValueError("field operator %r is already declared" % name)
         registry = self._multi_module.operator_registry()
         with atomic_attrs(
                 (self._multi_module, "_field_spaces"), (registry, "_by_name"),
-                (registry, "_order"), (self, "_fields"), (self, "_field_solvers")):
+                (registry, "_order"), (self, "_fields")):
             fields = self._multi_module.field_space(reg, out_comps)
             self._multi_module.operator(
                 name=reg, kind="field_operator",
-                signature=_model.Signature(in_spaces, fields), requirements=reqs,
+                signature=_model.Signature(in_spaces, fields),
                 expr={"blocks": [handle.name for handle in in_handles]})
             self._fields[name] = h
-            if solver is not None:
-                self._field_solvers[name] = solver
         return h
 
     def _as_species_list(self, op: Any, name: Any, items: Any) -> Any:

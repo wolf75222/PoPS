@@ -368,9 +368,9 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             resolve_operator_handle(
                 self, operator, where="P.fields", expected_kinds="field_operator", values=states)
             return self.call(operator, *states, name=name)
-        if len(states) == 1:
-            return self.solve_fields(name, states[0])
-        return self.solve_fields_from_blocks(states, name=name)
+        raise ValueError(
+            "fields: operator= or an explicit Problem FieldHandle route is required; "
+            "there is no implicit default field")
 
     def value(self, name: Any, expr: Any, *, at: Any = None) -> Any:
         """Name an intermediate SSA value ``name`` from ``expr`` (ADC-561: the short named-value form).

@@ -175,9 +175,10 @@ POPS_EXPORT void System::solve_fields_from_state(const std::string& field, int b
 // in the aux channel (@p phi_comp / @p gx_comp / @p gy_comp, the model's named aux slots). The native
 // loader calls this for each m.elliptic_field after the block is installed. POPS_EXPORT: resolved by the
 // generated problem.so / native loader across the dlopen boundary.
-POPS_EXPORT void System::register_elliptic_field(const std::string& field, int phi_comp, int gx_comp,
-                                                int gy_comp) {
-  p_->register_elliptic_field(field, phi_comp, gx_comp, gy_comp);
+POPS_EXPORT void System::register_elliptic_field(const std::string& block,
+                                                const std::string& field, int phi_comp,
+                                                int gx_comp, int gy_comp) {
+  p_->register_elliptic_field(block, field, phi_comp, gx_comp, gy_comp);
 }
 
 // Attach a named elliptic-field RHS closure to block @p block_name (ADC-428): the per-field Poisson
@@ -225,6 +226,25 @@ void System::set_potential(const std::vector<double>& phi) {
   for (int j = v.lo[1]; j <= v.hi[1]; ++j)
     for (int i = v.lo[0]; i <= v.hi[0]; ++i)
       a(i, j, 0) = phi[k++];
+}
+
+std::vector<std::string> System::field_provider_slots() const {
+  return p_->fields_.provider_slots();
+}
+
+void System::set_field_potential(const std::string& provider_slot,
+                                 const std::vector<double>& phi) {
+  MultiFab& field = p_->fields_.provider_potential(provider_slot);
+  if (field.local_size() == 0)
+    return;
+  const Box2D valid = field.box(0);
+  if (static_cast<int>(phi.size()) != valid.nx() * valid.ny())
+    throw std::runtime_error("System::set_field_potential size != nx*ny");
+  Array4 values = field.fab(0).array();
+  std::size_t index = 0;
+  for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+    for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+      values(i, j, 0) = static_cast<Real>(phi[index++]);
 }
 std::vector<double> System::eval_rhs(const std::string& name) {
   Impl::Species& s = p_->find(name);
@@ -486,6 +506,12 @@ std::vector<double> System::potential_global() {
     phi = &p_->fields_.ell_phi();
   }
   return gather_global(*phi, 1, nx(), ny());
+}
+
+std::vector<double> System::field_potential_global(const std::string& provider_slot) {
+  device_fence();
+  MultiFab& field = p_->fields_.provider_potential(provider_slot);
+  return gather_global(field, 1, nx(), ny());
 }
 
 // --- LOCAL per-fab accessors (NON collective): parallel HDF5 write by hyperslabs (PR-IO-3) --

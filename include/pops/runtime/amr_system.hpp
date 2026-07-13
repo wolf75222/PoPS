@@ -4,6 +4,7 @@
 #include <pops/mesh/layout/patch_box.hpp>  // PatchBox: index-space signature of a fine patch (patch_boxes())
 #include <pops/mesh/boundary/physical_bc.hpp>                // BCRec
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions (Newton options of the IMEX source)
+#include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperator / CouplingOperatorView (typed contract, ADC-595)
 #include <pops/runtime/export.hpp>  // POPS_EXPORT: set_compiled_block resolved by the native AMR loader
 #include <pops/runtime/facade_options.hpp>  // SourceStageOptions / CoupledSourceProgram (facade PODs, ADC-214)
@@ -536,6 +537,47 @@ class AmrSystem {
                    double fac_tol = 0.0, double fac_coarse_rel_tol = 0.0,
                    int fac_coarse_cycles = 0, bool fac_verbose = false);
 
+  /// Install one fully resolved AMR field route.  The native registry key is the digest of the
+  /// complete block-qualified provider identity; the canonical identity is retained for collision
+  /// detection, manifests and restart validation.
+  void set_field_solver_plan(const std::string& provider_slot,
+                             const std::string& provider_identity,
+                             const std::string& output_owner_identity,
+                             const std::string& output_block,
+                             const std::string& output_key,
+                             const std::vector<std::string>& provider_identities,
+                             const std::vector<std::string>& provider_blocks,
+                             const std::vector<std::string>& provider_keys,
+                             const std::vector<double>& provider_coefficients,
+                             const std::string& solver,
+                             const std::string& hierarchy, double abs_tol, double rel_tol,
+                             int max_cycles, int min_coarse, int pre_smooth,
+                             int post_smooth, int bottom_sweeps, int coarse_threshold);
+  void set_field_boundary_plan(const std::string& provider_slot,
+                               const std::vector<std::string>& kind,
+                               const std::vector<double>& alpha,
+                               const std::vector<double>& beta,
+                               const std::vector<double>& value);
+  void set_field_boundary_dependencies(
+      const std::string& provider_slot,
+      const std::vector<std::string>& state_blocks,
+      const std::vector<int>& state_components,
+      const std::vector<std::string>& field_blocks,
+      const std::vector<std::string>& field_keys,
+      const std::vector<int>& field_components);
+  POPS_EXPORT void set_field_boundary_kernel(
+      const std::string& provider_slot, const CompiledFieldBoundaryKernel& kernel);
+  POPS_EXPORT void set_field_logical_timepoint(
+      const std::string& provider_slot, const FieldLogicalTimePoint& point);
+  POPS_EXPORT void set_field_boundary_parameters(
+      const std::string& provider_slot, const std::vector<double>& parameters);
+  void set_field_newton_plan(const std::string& provider_slot, double tolerance,
+                             int max_iterations, double linear_tolerance,
+                             int linear_max_iterations, int restart, double armijo,
+                             double minimum_step);
+  void set_field_nullspace(const std::string& provider_slot, bool constant_kernel,
+                           bool mean_zero_gauge);
+
   /// Sets the initial density on the coarse level (component 0), n*n row-major.
   /// @param name cosmetic label (mono-block AMR: the density targets the single block).
   void set_density(const std::string& name, const std::vector<double>& rho);
@@ -620,8 +662,9 @@ class AmrSystem {
   /// Registers named @p field's aux output components (where its solved phi / centered grad land). Called
   /// by the native AMR loader for each m.elliptic_field. @p gx_comp / @p gy_comp < 0 => only phi is
   /// written (the field declared fewer than 3 aux slots). @throws if the system is already built.
-  POPS_EXPORT void register_elliptic_field(const std::string& field, int phi_comp, int gx_comp,
-                                           int gy_comp);
+  POPS_EXPORT void register_elliptic_field(const std::string& block_name,
+                                           const std::string& provider_key, int phi_comp,
+                                           int gx_comp, int gy_comp);
   /// Attaches named @p field's RHS closure (rhs += elliptic_field_rhs(U)) to block @p block_name. Called
   /// by the native AMR loader (make_poisson_rhs of the per-field brick). @throws if the system is already
   /// built or the block is unknown.
@@ -632,6 +675,18 @@ class AmrSystem {
   /// component. AMR counterpart of System::aux_field_component for a named elliptic field. @throws if the
   /// field is unregistered (or in the single-block AmrCouplerMP path, which carries no named field).
   std::vector<double> named_field_values(const std::string& field);
+  std::vector<std::string> field_provider_slots() const;
+  int field_provider_levels(const std::string& provider_slot);
+  void set_field_potential(const std::string& provider_slot, const std::vector<double>& phi);
+  void set_field_potential_level(const std::string& provider_slot, int level,
+                                 const std::vector<double>& phi);
+  std::vector<double> field_potential_global(const std::string& provider_slot);
+  std::vector<double> field_potential_level_global(const std::string& provider_slot, int level);
+  /// Transaction bracket used by the v3 reader after complete payload preflight.  Every hierarchy,
+  /// state, aux, field warm-start, history and clock mutation is rolled back if any restore step fails.
+  void begin_restart_transaction();
+  void commit_restart_transaction();
+  void rollback_restart_transaction();
   /// @}
 
   /// Enables the Schur-CONDENSED SOURCE STAGE (amr-schur path) on block @p name. AMR counterpart of

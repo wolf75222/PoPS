@@ -113,6 +113,19 @@ class AmrProgramContext {
     return mapped;
   }
   int n_blocks() const { return static_cast<int>(eng_->n_blocks()); }
+  Real physical_time() const { return static_cast<Real>(facade_->time()); }
+  void set_field_logical_timepoint(const std::string& field,
+                                   const FieldLogicalTimePoint& point) const {
+    facade_->set_field_logical_timepoint(field, point);
+  }
+  void set_field_boundary_parameters(const std::string& field,
+                                     const std::vector<double>& parameters) const {
+    facade_->set_field_boundary_parameters(field, parameters);
+  }
+  void set_field_boundary_kernel(const std::string& field,
+                                 const CompiledFieldBoundaryKernel& kernel) const {
+    facade_->set_field_boundary_kernel(field, kernel);
+  }
 
   // --- inter-level coupling (the synchronous driver's (B) phase) --------------------------------------
   /// fine -> coarse average_down over ALL blocks (covered coarse cell <- 2x2 fine average), then a fresh
@@ -222,11 +235,21 @@ class AmrProgramContext {
     // fine level: reuse the injected aux (documented v1 fallback).
   }
   /// Named multi-elliptic field re-solve: deferred on AMR (ADC-513 companion). Fail loud.
-  void solve_fields_from_state(const std::string& field, int /*b*/, MultiFab& /*u_stage*/) const {
-    throw std::runtime_error(
-        "AmrProgramContext::solve_fields_from_state(field='" + field +
-        "'): named multi-elliptic fields under a compiled Program on AMR are deferred (ADC-513). Use "
-        "System, or a single (default) field.");
+  void solve_fields_from_state(const std::string& field, int b, MultiFab& u_stage) const {
+    if (level_ != 0)
+      return;  // the coarse solve publishes/injects every level once per stage
+    (void)eng_->provider_potential(field);  // authenticate the exact resolved field route
+    MultiFab& live = state(b);
+    MultiFab published = live;
+    try {
+      live = u_stage;
+      eng_->solve_named_fields();
+      live = std::move(published);
+    } catch (...) {
+      live = std::move(published);
+      throw;
+    }
+    solved_this_step_ = true;
   }
   /// Coupled multi-block field solve: deferred on AMR (the per-block summed-RHS at fine levels needs the
   /// coupled re-solve path). Fail loud rather than a silent half-implementation.
@@ -235,6 +258,40 @@ class AmrProgramContext {
         "AmrProgramContext::solve_fields_from_blocks: a coupled multi-block field solve under a "
         "compiled Program on AMR is deferred (v1, Spec 3 criterion 24). Use System, or a single-block "
         "AMR Program.");
+  }
+
+  void solve_fields_from_blocks(const std::string& field,
+                                const std::vector<const MultiFab*>& u_stages) const {
+    if (level_ != 0)
+      return;
+    if (u_stages.size() != static_cast<std::size_t>(n_blocks()))
+      throw std::runtime_error(
+          "AmrProgramContext::solve_fields_from_blocks(field): stage vector size mismatch");
+    (void)eng_->provider_potential(field);
+    std::vector<MultiFab*> live;
+    std::vector<MultiFab> published;
+    live.reserve(u_stages.size());
+    published.reserve(u_stages.size());
+    for (std::size_t p = 0; p < u_stages.size(); ++p) {
+      if (u_stages[p] == nullptr)
+        continue;
+      MultiFab& state_value = state(static_cast<int>(p));
+      live.push_back(&state_value);
+      published.push_back(state_value);
+      state_value = *u_stages[p];
+    }
+    auto restore = [&]() {
+      for (std::size_t i = 0; i < live.size(); ++i)
+        *live[i] = std::move(published[i]);
+    };
+    try {
+      eng_->solve_named_fields();
+      restore();
+    } catch (...) {
+      restore();
+      throw;
+    }
+    solved_this_step_ = true;
   }
 
   /// The SHARED aux of the current level (phi / grad / B_z), the channel solve_fields fills.

@@ -78,7 +78,6 @@ class _BoardModel:
     _fields: Any
     _fluxes: Any
     _sources: Any
-    _field_solvers: Any
     _multi_module: Any
     _aliases: Any
     _invariants: Any

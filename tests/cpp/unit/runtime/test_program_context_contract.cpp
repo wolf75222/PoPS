@@ -336,23 +336,23 @@ TEST(ProgramContextContract, BlockResolutionRequiresACompleteExplicitMap) {
       << "mapped System index outside n_blocks must fail";
 }
 
-// The per-stage FieldContext.matches() guard rejects a context read at the wrong (problem, block,
-// stage): a stage-k solve cannot be silently consumed as stage-k' or another block (ADC-588). This is
+// The per-stage FieldContext.matches() guard rejects a context read at the wrong qualified provider,
+// owner or stage: a stage-k solve cannot be silently consumed as stage-k' or another block (ADC-588). This is
 // the "per-stage field contexts" the ADC-538 contract names; it fences the compile/bind seam.
 TEST(ProgramContextContract, PerStageFieldContextGuardsRejectWrongTriple) {
   const pops::AuxLayout layout = pops::default_poisson_layout();
-  pops::FieldContext stage1;  // a context solved for problem 0, block 0, stage 1
-  stage1.field_problem_id = 0;
-  stage1.block_index = 0;
+  pops::FieldContext stage1;
+  stage1.provider_identity = "case/field/electric/provider-pack";
+  stage1.owner_identity = "case/block/plasma";
   stage1.stage_id = 1;
   stage1.layout = &layout;
 
-  EXPECT_TRUE(stage1.matches(0, 0, 1)) << "matches its own (problem, block, stage)";
-  EXPECT_FALSE(stage1.matches(0, 0, 2)) << "rejects a wrong stage";
-  EXPECT_FALSE(stage1.matches(0, 1, 1)) << "rejects a wrong block";
-  EXPECT_FALSE(stage1.matches(3, 0, 1)) << "rejects a wrong field problem";
-  EXPECT_TRUE(stage1.matches(-1, 0, 1))
-      << "a negative req_field matches any problem (default case)";
+  EXPECT_TRUE(stage1.matches("case/field/electric/provider-pack", "case/block/plasma", 1));
+  EXPECT_FALSE(stage1.matches("case/field/electric/provider-pack", "case/block/plasma", 2));
+  EXPECT_FALSE(stage1.matches("case/field/electric/provider-pack", "case/block/other", 1));
+  EXPECT_FALSE(stage1.matches("case/field/other/provider-pack", "case/block/plasma", 1));
+  EXPECT_FALSE(stage1.matches("", "case/block/plasma", 1))
+      << "an empty provider is never a wildcard";
   // the layout resolves a real output and fails loud on an unknown one.
   EXPECT_TRUE(stage1.component_of("phi") == 0) << "phi resolves to component 0";
   EXPECT_THROW(stage1.component_of("not_a_field"), std::out_of_range)

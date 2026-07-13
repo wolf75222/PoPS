@@ -6,11 +6,14 @@ from types import MappingProxyType
 from typing import Any
 
 
-def resolve_expr_references(expr: Any, resolver: Any, memo: dict[int, Any]) -> Any:
+def resolve_expr_references(
+        expr: Any, resolver: Any, memo: dict[int, Any], *, allow_formula_vars: bool = False) -> Any:
     """Clone one immutable Expr graph while resolving typed declaration leaves."""
     from .expr import Var
 
     if isinstance(expr, Var):
+        if allow_formula_vars:
+            return expr
         raise TypeError(
             "Expr.resolve_references cannot resolve free-name Var(%r, %r); use "
             "ValueExpr(declaration_handle) so ownership is explicit" % (expr.name, expr.kind)
@@ -33,12 +36,15 @@ def resolve_expr_references(expr: Any, resolver: Any, memo: dict[int, Any]) -> A
             object.__setattr__(
                 clone,
                 slot,
-                resolve_reference_value(getattr(expr, slot), resolver, memo),
+                resolve_reference_value(
+                    getattr(expr, slot), resolver, memo,
+                    allow_formula_vars=allow_formula_vars),
             )
     state = getattr(expr, "__dict__", None)
     if isinstance(state, dict):
         for name, value in state.items():
-            object.__setattr__(clone, name, resolve_reference_value(value, resolver, memo))
+            object.__setattr__(clone, name, resolve_reference_value(
+                value, resolver, memo, allow_formula_vars=allow_formula_vars))
     object.__setattr__(clone, "_pops_symbolic_initializing", False)
     return clone
 
@@ -98,7 +104,9 @@ def collect_reference_value(value: Any, references: list[Any], seen: set[int]) -
             collect_reference_value(item, references, seen)
 
 
-def resolve_reference_value(value: Any, resolver: Any, memo: dict[int, Any]) -> Any:
+def resolve_reference_value(
+        value: Any, resolver: Any, memo: dict[int, Any], *,
+        allow_formula_vars: bool = False) -> Any:
     """Resolve Handle leaves and immutable containers in an expression attribute."""
     from .expr import Expr
     from pops.model import Handle
@@ -121,26 +129,33 @@ def resolve_reference_value(value: Any, resolver: Any, memo: dict[int, Any]) -> 
             if not isinstance(resolved, Expr):
                 raise TypeError("%s.resolve_references() must return an Expr" % type(value).__name__)
             return resolved
-        return resolve_expr_references(value, resolver, memo)
+        return resolve_expr_references(
+            value, resolver, memo, allow_formula_vars=allow_formula_vars)
     protocol = getattr(value, "resolve_references", None)
     if callable(protocol):
         return protocol(resolver)
     if isinstance(value, tuple):
-        return tuple(resolve_reference_value(item, resolver, memo) for item in value)
+        return tuple(resolve_reference_value(
+            item, resolver, memo, allow_formula_vars=allow_formula_vars) for item in value)
     if isinstance(value, list):
-        return [resolve_reference_value(item, resolver, memo) for item in value]
+        return [resolve_reference_value(
+            item, resolver, memo, allow_formula_vars=allow_formula_vars) for item in value]
     if isinstance(value, Mapping):
         resolved = {
-            resolve_reference_value(key, resolver, memo): resolve_reference_value(
-                item, resolver, memo
+            resolve_reference_value(
+                key, resolver, memo, allow_formula_vars=allow_formula_vars):
+            resolve_reference_value(
+                item, resolver, memo, allow_formula_vars=allow_formula_vars
             )
             for key, item in value.items()
         }
         return MappingProxyType(resolved) if isinstance(value, MappingProxyType) else resolved
     if isinstance(value, frozenset):
-        return frozenset(resolve_reference_value(item, resolver, memo) for item in value)
+        return frozenset(resolve_reference_value(
+            item, resolver, memo, allow_formula_vars=allow_formula_vars) for item in value)
     if isinstance(value, set):
-        return {resolve_reference_value(item, resolver, memo) for item in value}
+        return {resolve_reference_value(
+            item, resolver, memo, allow_formula_vars=allow_formula_vars) for item in value}
     return value
 
 

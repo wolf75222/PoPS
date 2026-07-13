@@ -275,6 +275,15 @@ inline void AmrRuntime::rebuild_hierarchy(const std::vector<std::vector<PatchBox
       ref.push_back(*b.levels);
     detail::same_layout_or_throw(ref);
   }
+  for (auto& item : named_fields_) {
+    item.second.mg.reset();
+    item.second.level_mg.clear();
+    item.second.fac.reset();
+    item.second.nullspace = {};
+    item.second.level_nullspace.clear();
+    item.second.nullspace_ready = false;
+  }
+  ++topology_epoch_;
 }
 
 // --- regrid / clustering config setters (declared in amr_runtime.hpp) -----------------------------

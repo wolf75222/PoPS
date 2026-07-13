@@ -85,10 +85,108 @@ def capture_runtime_declarations(problem: Any, detach: Any) -> tuple[tuple[Any, 
     )
 
 
-def capture_field_solvers(problem: Any, detach: Any) -> dict[str, Any]:
-    return {name: detach(field.solver)
-            for name, field in problem._field_registry.resolved_items(problem.resolve)
-            if field.solver is not None}
+def capture_field_plans(
+    problem: Any, detach: Any, *, target: str, layout: Any,
+) -> dict[str, Any]:
+    """Resolve every complete field registration or refuse before artifact creation."""
+    from pops.codegen.field_install import resolve_field_install_plan
+
+    result = {}
+    runtime_routes = {}
+    # Authenticate the complete provider graph before canonicalizing any install identity. This is
+    # one snapshot boundary: identity/hash work for field A must not influence live authoring lookup
+    # for field B in the same Problem.
+    prepared = []
+    for name, field in problem._field_registry.resolved_items(problem.resolve):
+        providers, provider_route = _field_rhs_providers(problem, field)
+        prepared.append((name, field, providers, provider_route))
+    for name, field, providers, provider_route in prepared:
+        resolved = resolve_field_install_plan(
+            name, detach(field), target=target, rhs_providers=providers,
+            provider_route=provider_route, layout=layout)
+        route = resolved.native_options["provider_slot"]
+        provider_identity = resolved.native_options["provider_identity"]
+        if route in runtime_routes:
+            prior_name, prior_identity = runtime_routes[route]
+            if prior_identity != provider_identity:
+                raise ValueError(
+                    "qualified field-provider identity digest collision between %r and %r"
+                    % (prior_name, name))
+            raise ValueError(
+                "fields %r and %r resolve to the same native field provider %r; "
+                "each FieldOperator must name a distinct qualified provider"
+                % (prior_name, name, route))
+        runtime_routes[route] = (name, provider_identity)
+        result[name] = resolved
+    return result
+
+
+def _field_rhs_providers(problem: Any, registration: Any) -> tuple[tuple[Any, ...], tuple[dict[str, Any], ...]]:
+    """Authenticate the ordered owner-qualified provider pack materializing one RHS graph."""
+    operator = registration.operator
+    authenticated: list[Any] = []
+    routes: list[dict[str, Any]] = []
+    composed_body = None
+    for contribution in operator.providers:
+        provider = contribution.provider
+        if not provider.is_instance or provider.block_ref is None:
+            raise ValueError(
+                "field %r provider was not resolved to a Problem block instance"
+                % operator.name)
+        provider_declaration = provider.declaration_ref
+        if provider_declaration is None:
+            raise ValueError(
+                "field %r provider lost its model declaration provenance" % operator.name)
+        matched = False
+        for block_name, spec in problem._block_registry.items():
+            block_handle = problem._block_registry.handle(block_name)
+            block = problem.resolve(block_handle)
+            if block.canonical_identity() != provider.block_ref.canonical_identity():
+                continue
+            model = spec["model"]
+            module = getattr(model, "module", model)
+            registry = module.operator_registry()
+            declared = module.operator_handle(provider_declaration.local_id)
+            qualified = problem.resolve(declared, block=block_handle)
+            if qualified.canonical_identity() != provider.canonical_identity():
+                raise ValueError("field %r provider is not issued by its model" % operator.name)
+            field_op = registry.get(registry.target_for_handle(provider_declaration.local_id))
+            if field_op.kind != "field_operator":
+                raise TypeError("field %r provider is not a field_operator" % operator.name)
+            route = field_op.lowering.get("field_provider")
+            key = route.get("key") if isinstance(route, dict) else None
+            if not isinstance(key, str) or not key:
+                raise ValueError(
+                    "field %r provider has no explicit native provider key" % operator.name)
+            if field_op.body is None:
+                raise ValueError(
+                    "field %r RHS provider has no executable expression graph" % operator.name)
+            term = (field_op.body if contribution.coefficient == 1.0
+                    else field_op.body * contribution.coefficient)
+            composed_body = term if composed_body is None else composed_body + term
+            authenticated.append(qualified)
+            routes.append({
+                "provider_identity": qualified.canonical_identity(),
+                "owner_block": block_name,
+                "key": key,
+                "coefficient": contribution.coefficient,
+                "measure": contribution.measure.to_data(),
+                "native_measure": contribution.measure.lower_native_provider(),
+            })
+            matched = True
+            break
+        if not matched:
+            raise ValueError(
+                "field %r provider block is not registered by this Problem" % operator.name)
+    from pops.fields._identity import strict_field_data
+    expected = operator.equation.rhs
+    if getattr(operator.equation.lhs, "scale", -1) > 0:
+        expected = -expected
+    if strict_field_data(composed_body) != strict_field_data(expected):
+        raise ValueError(
+            "field %r descriptor RHS differs from its ordered provider composition"
+            % operator.name)
+    return tuple(authenticated), tuple(routes)
 
 
 def prepare_problem_snapshot(problem: Any, time: Any, *, layout: Any, libraries: Any) -> Any:
@@ -97,7 +195,7 @@ def prepare_problem_snapshot(problem: Any, time: Any, *, layout: Any, libraries:
 
 
 __all__ = [
-    "build_program_model_graph", "capture_field_solvers", "capture_runtime_declarations",
+    "build_program_model_graph", "capture_field_plans", "capture_runtime_declarations",
     "compile_install_model", "compile_install_models", "prepare_problem_snapshot",
     "resolve_compile_libraries",
 ]

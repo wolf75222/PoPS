@@ -12,6 +12,9 @@
 #include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperator / CouplingOperatorView (typed contract, ADC-595)
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess, FieldPostProcess
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
+#include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace.hpp>
+#include <pops/numerics/elliptic/interface/field_provider.hpp>
 #include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // AmrLevelMP, mf_average_down_mb
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonReport (OPT-IN IMEX diagnostics, aggregated per block)
 #include <pops/mesh/index/box2d.hpp>
@@ -29,7 +32,7 @@
 #include <pops/runtime/amr/bootstrap_transfer_builtins.hpp>
 #include <pops/runtime/amr/bootstrap_transfer_registry.hpp>
 #include <pops/runtime/program/profiler.hpp>  // Profiler / ProfileScope: AMR phase timings (Spec 5 criterion 43, ADC-479)
-#include <pops/runtime/system/field_problem_registry.hpp>  // FieldProblemRegistry (ADC-596 descriptor)
+#include <pops/runtime/system/system_poisson_options.hpp>  // GeometricMgOptions
 
 #include <algorithm>  // std::max (substeps/stride-aware CFL step)
 #include <chrono>  // AmrPhaseScope wall-clock timing (Spec 5 criterion 43)
@@ -83,6 +86,36 @@
 /// the explicit branch (test_amr_multiblock_imex guards that substeps=4 DIFFERS from substeps=1).
 
 namespace pops {
+
+/// Fully resolved AMR field solve keyed by the digest of the complete block-qualified provider
+/// identity.  The readable canonical identity travels beside the digest so a collision can never
+/// silently alias two providers.  This POD is installed before block loaders run and contains no
+/// authoring object or Python callback.
+struct AmrFieldSolveConfig {
+  std::string provider_identity;
+  std::string output_owner_identity;
+  std::string output_block;
+  std::string output_key;
+  std::vector<FieldProviderBinding> providers;
+  std::string solver = "geometric_mg";
+  std::string hierarchy = "composite";
+  std::string bc = "auto";
+  bool has_explicit_bc = false;
+  BCRec explicit_bc{};
+  bool has_boundary_kernel = false;
+  CompiledFieldBoundaryKernel boundary_kernel{};
+  std::shared_ptr<std::vector<Real>> boundary_parameters =
+      std::make_shared<std::vector<Real>>();
+  std::vector<std::string> boundary_state_blocks;
+  std::vector<int> boundary_state_components;
+  std::vector<const MultiFab*> boundary_state_buffers;
+  FieldBoundaryExecutionContext boundary_context{};
+  bool has_newton = false;
+  FieldNewtonOptions newton{};
+  std::string nullspace_assertion = "none";
+  std::string gauge = "none";
+  GeometricMgOptions mg_opts{};
+};
 
 namespace detail {
 struct AmrHistoryOps;  // ADC-631 multistep history-ring operations (friend of AmrRuntime; amr_history.hpp)
@@ -210,6 +243,12 @@ inline void bootstrap_prolong_face_vector(
   bootstrap_prolong_staggered(
       coarse_y, fine_y, runtime::amr::TransferCentering::FaceY, context);
 }
+
+struct SetFieldCoverageKernel {
+  Array4 mask;
+  Real value;
+  POPS_HD void operator()(int i, int j) const { mask(i, j, 0) = value; }
+};
 }  // namespace detail
 
 /// Type-erased closures of ONE AMR block, placed on the shared hierarchy. AMR counterpart of the
@@ -394,8 +433,9 @@ class AmrRuntime {
   struct StepSnapshot {
     struct NamedFieldSnapshot {
       bool allocated = false;
-      MultiFab phi;
-      MultiFab rhs;
+      bool composite = false;
+      std::vector<MultiFab> phi;
+      std::vector<MultiFab> rhs;
     };
 
     std::vector<std::vector<AmrLevelMP>> block_levels;
@@ -418,6 +458,7 @@ class AmrRuntime {
     int macro_step = 0;
     int solve_count = 0;
     int regrid_count = 0;
+    std::uint64_t topology_epoch = 0;
     bool has_profiler = false;
     runtime::program::Profiler profiler;
   };
@@ -883,6 +924,7 @@ class AmrRuntime {
   std::vector<double> density(std::size_t b) const { return blocks_[b].density(); }
   int solve_count() const { return solve_count_; }
   int regrid_count() const { return regrid_count_; }
+  std::uint64_t topology_epoch() const { return topology_epoch_; }
 
   /// Capture/restore the accepted AMR state around one public step attempt.  The snapshot includes
   /// fine layouts, every block/level, shared aux and elliptic warm starts, history rings, diagnostics
@@ -902,10 +944,19 @@ class AmrRuntime {
     out.poisson_rhs = mg_.rhs();
     for (auto& [name, field] : named_fields_) {
       StepSnapshot::NamedFieldSnapshot saved;
-      saved.allocated = static_cast<bool>(field.mg);
-      if (field.mg) {
-        saved.phi = field.mg->phi();
-        saved.rhs = field.mg->rhs();
+      saved.allocated = field.fac || !field.level_mg.empty();
+      if (field.fac) {
+        saved.allocated = true;
+        saved.composite = true;
+        for (int k = 0; k < field.fac->n_levels(); ++k) {
+          saved.phi.push_back(field.fac->phi_level(k));
+          saved.rhs.push_back(field.fac->rhs_level(k));
+        }
+      } else {
+        for (const auto& solver : field.level_mg) {
+          saved.phi.push_back(solver->phi());
+          saved.rhs.push_back(solver->rhs());
+        }
       }
       out.named_fields.emplace(name, std::move(saved));
     }
@@ -921,6 +972,7 @@ class AmrRuntime {
     out.macro_step = macro_step_;
     out.solve_count = solve_count_;
     out.regrid_count = regrid_count_;
+    out.topology_epoch = topology_epoch_;
     out.has_profiler = profiler_ != nullptr;
     if (profiler_ != nullptr)
       out.profiler = *profiler_;
@@ -959,10 +1011,31 @@ class AmrRuntime {
       auto& field = it->second;
       if (!accepted->second.allocated) {
         field.mg.reset();
+        field.level_mg.clear();
+        field.fac.reset();
+        field.nullspace = {};
+        field.level_nullspace.clear();
+        field.nullspace_ready = false;
       } else {
         ensure_named_elliptic(field);
-        field.mg->phi() = accepted->second.phi;
-        field.mg->rhs() = accepted->second.rhs;
+        if (accepted->second.composite) {
+          if (!field.fac || accepted->second.phi.size() !=
+                                static_cast<std::size_t>(field.fac->n_levels()))
+            throw std::runtime_error(
+                "AmrRuntime::restore_step_snapshot: field hierarchy mismatch");
+          for (int k = 0; k < field.fac->n_levels(); ++k) {
+            field.fac->phi_level(k) = accepted->second.phi[static_cast<std::size_t>(k)];
+            field.fac->rhs_level(k) = accepted->second.rhs[static_cast<std::size_t>(k)];
+          }
+        } else {
+          if (accepted->second.phi.size() != field.level_mg.size())
+            throw std::runtime_error(
+                "AmrRuntime::restore_step_snapshot: level-local field hierarchy mismatch");
+          for (std::size_t k = 0; k < field.level_mg.size(); ++k) {
+            field.level_mg[k]->phi() = accepted->second.phi[k];
+            field.level_mg[k]->rhs() = accepted->second.rhs[k];
+          }
+        }
       }
       ++it;
     }
@@ -977,6 +1050,7 @@ class AmrRuntime {
     macro_step_ = saved.macro_step;
     solve_count_ = saved.solve_count;
     regrid_count_ = saved.regrid_count;
+    topology_epoch_ = saved.topology_epoch;
     if (saved.has_profiler && profiler_ != nullptr)
       *profiler_ = saved.profiler;
 
@@ -1213,37 +1287,126 @@ class AmrRuntime {
   /// written (the field declared fewer than 3 aux slots). Idempotent (re-register overwrites the
   /// components and drops the lazily-built solver so the next solve rebuilds it). The dedicated solver
   /// is built on the first solve, never here.
-  void register_named_field(const std::string& field, int phi_comp, int gx_comp, int gy_comp) {
-    NamedField nf;
-    nf.phi_comp = phi_comp;
-    nf.gx_comp = gx_comp;
-    nf.gy_comp = gy_comp;
-    named_fields_[field] = std::move(nf);  // solver built lazily by ensure_named_elliptic
-    // ADC-596: mirror the field into the unified descriptor registry (a named GeometricMG field on
-    // the AMR route -- AMR always uses GeometricMG, never FFT). Purely descriptive: the lazy solver
-    // build (ensure_named_elliptic) and RHS assembly are untouched.
-    if (field_problems_.find("phi") < 0)
-      field_problems_.register_problem(default_poisson_entry());
-    field_problems_.register_problem(
-        named_field_entry(field, phi_comp, gx_comp, gy_comp, EllipticSolverKind::GeometricMG));
+  void install_field_plan(const std::string& provider_slot, const AmrFieldSolveConfig& plan) {
+    if (provider_slot.empty() || plan.provider_identity.empty() || plan.output_block.empty() ||
+        plan.output_key.empty() || plan.providers.empty())
+      throw std::runtime_error("AmrRuntime: incomplete qualified field provider plan");
+    auto existing = named_fields_.find(provider_slot);
+    if (existing != named_fields_.end() && existing->second.plan.provider_identity !=
+                                                   plan.provider_identity)
+      throw std::runtime_error("AmrRuntime: qualified field provider digest collision");
+    NamedField field;
+    field.plan = plan;
+    field.has_plan = true;
+    named_fields_[provider_slot] = std::move(field);
   }
 
-  /// The unified field-problem registry (ADC-596), seeding the default "phi" entry on first access so
-  /// the single-field case is described like a named one. Both Uniform and AMR expose this SAME type,
-  /// and both validate their entries for their route before bind. Descriptive only (no numerics).
-  const FieldProblemRegistry& field_problem_registry() {
-    if (field_problems_.find("phi") < 0)
-      field_problems_.register_problem(default_poisson_entry());
-    return field_problems_;
+  void set_field_boundary_kernel(const std::string& provider_slot,
+                                 const CompiledFieldBoundaryKernel& kernel) {
+    kernel.validate();
+    auto found = named_fields_.find(provider_slot);
+    if (found == named_fields_.end())
+      throw std::runtime_error("AmrRuntime: unknown field provider boundary-kernel slot");
+    found->second.plan.boundary_kernel = kernel;
+    found->second.plan.has_boundary_kernel = true;
+    if (!kernel.observes_iteration)
+      found->second.plan.boundary_context.point.iteration = 0;
+    found->second.mg.reset();
+    found->second.level_mg.clear();
+    found->second.fac.reset();
+  }
+
+  void set_field_logical_timepoint(const std::string& provider_slot,
+                                   const FieldLogicalTimePoint& point) {
+    auto found = named_fields_.find(provider_slot);
+    if (found == named_fields_.end())
+      throw std::runtime_error("AmrRuntime: unknown field provider logical-time slot");
+    auto& field = found->second;
+    field.plan.boundary_context.point = point;
+    if (!field.plan.has_boundary_kernel || !field.plan.boundary_kernel.observes_iteration)
+      field.plan.boundary_context.point.iteration = 0;
+    for (auto& solver : field.level_mg)
+      solver->set_boundary_context(field.plan.boundary_context);
+    if (field.mg && field.level_mg.empty())
+      field.mg->set_boundary_context(field.plan.boundary_context);
+    if (field.fac)
+      field.fac->set_boundary_context(field.plan.boundary_context);
+  }
+
+  void set_field_boundary_parameters(const std::string& provider_slot,
+                                     const std::vector<Real>& parameters) {
+    auto found = named_fields_.find(provider_slot);
+    if (found == named_fields_.end())
+      throw std::runtime_error("AmrRuntime: unknown field provider boundary-parameter slot");
+    auto& plan = found->second.plan;
+    if (!plan.boundary_parameters)
+      plan.boundary_parameters = std::make_shared<std::vector<Real>>();
+    *plan.boundary_parameters = parameters;
+    plan.boundary_context.parameters = plan.boundary_parameters.get();
+    plan.boundary_context.parameter_count = static_cast<int>(parameters.size());
+    for (auto& solver : found->second.level_mg)
+      solver->set_boundary_context(plan.boundary_context);
+    if (found->second.mg && found->second.level_mg.empty())
+      found->second.mg->set_boundary_context(plan.boundary_context);
+    if (found->second.fac)
+      found->second.fac->set_boundary_context(plan.boundary_context);
+  }
+
+  void set_field_boundary_dependencies(const std::string& provider_slot,
+                                       const std::vector<std::string>& state_blocks,
+                                       const std::vector<int>& state_components) {
+    auto found = named_fields_.find(provider_slot);
+    if (found == named_fields_.end())
+      throw std::runtime_error("AmrRuntime: unknown field boundary-dependency slot");
+    found->second.plan.boundary_state_blocks = state_blocks;
+    found->second.plan.boundary_state_components = state_components;
+    found->second.mg.reset();
+    found->second.level_mg.clear();
+    found->second.fac.reset();
+  }
+
+  void set_field_newton_plan(const std::string& provider_slot,
+                             const FieldNewtonOptions& options) {
+    validate_field_newton_options(options);
+    auto found = named_fields_.find(provider_slot);
+    if (found == named_fields_.end())
+      throw std::runtime_error("AmrRuntime: unknown field provider nonlinear-plan slot");
+    found->second.plan.newton = options;
+    found->second.plan.has_newton = true;
+    found->second.mg.reset();
+    found->second.level_mg.clear();
+    found->second.fac.reset();
+  }
+
+  void register_named_field(const std::string& block, const std::string& provider_key,
+                            int phi_comp, int gx_comp, int gy_comp) {
+    bool matched = false;
+    for (auto& [slot, field] : named_fields_) {
+      if (!field.has_plan || field.plan.output_block != block ||
+          field.plan.output_key != provider_key)
+        continue;
+      field.phi_comp = phi_comp;
+      field.gx_comp = gx_comp;
+      field.gy_comp = gy_comp;
+      field.mg.reset();
+      field.level_mg.clear();
+      field.fac.reset();
+      field.nullspace = {};
+      field.level_nullspace.clear();
+      field.nullspace_ready = false;
+      matched = true;
+    }
+    if (!matched)
+      return;  // loader may declare an unused provider; only resolved Problem plans are installed
   }
   /// Attaches named @p field's RHS contribution closure (rhs += elliptic_field_rhs(U_b)) to block @p b.
   /// Called per declared field once the runtime owns the blocks. @throws if @p b is out of bounds.
-  void set_block_named_elliptic_rhs(std::size_t b, const std::string& field,
+  void set_block_named_elliptic_rhs(std::size_t b, const std::string& provider_key,
                                     std::function<void(const MultiFab&, MultiFab&)> rhs) {
     if (b >= blocks_.size())
       throw std::runtime_error(
           "AmrRuntime::set_block_named_elliptic_rhs : block index out of bounds");
-    blocks_[b].named_elliptic_rhs[field] = std::move(rhs);
+    blocks_[b].named_elliptic_rhs[provider_key] = std::move(rhs);
   }
   /// Number of registered named elliptic fields (diagnostic / test).
   std::size_t n_named_fields() const { return named_fields_.size(); }
@@ -1255,11 +1418,50 @@ class AmrRuntime {
   /// the fields if needed (counterpart of potential() for the default phi), then reads the field's
   /// phi_comp on the coarse aux. @throws if @p field is unregistered. AMR counterpart of
   /// System::aux_field_component for a named elliptic field.
-  std::vector<double> named_field_values(const std::string& field) {
-    auto it = named_fields_.find(field);
+  std::vector<std::string> provider_slots() const {
+    std::vector<std::string> result;
+    result.reserve(named_fields_.size());
+    for (const auto& item : named_fields_)
+      result.push_back(item.first);
+    return result;
+  }
+
+  MultiFab& provider_potential(const std::string& provider_slot) {
+    auto it = named_fields_.find(provider_slot);
     if (it == named_fields_.end())
-      throw std::runtime_error("AmrRuntime::named_field_values : unknown named elliptic field '" +
-                               field + "' (register it via m.elliptic_field + the compiled block)");
+      throw std::runtime_error("AmrRuntime: unknown qualified field provider slot '" +
+                               provider_slot + "'");
+    ensure_named_elliptic(it->second);
+    return it->second.fac ? it->second.fac->phi_level(0) : it->second.level_mg.at(0)->phi();
+  }
+
+  int provider_potential_levels(const std::string& provider_slot) {
+    auto it = named_fields_.find(provider_slot);
+    if (it == named_fields_.end())
+      throw std::runtime_error("AmrRuntime: unknown qualified field provider slot");
+    ensure_named_elliptic(it->second);
+    return it->second.fac ? it->second.fac->n_levels() :
+                            static_cast<int>(it->second.level_mg.size());
+  }
+
+  MultiFab& provider_potential_level(const std::string& provider_slot, int level) {
+    auto it = named_fields_.find(provider_slot);
+    if (it == named_fields_.end())
+      throw std::runtime_error("AmrRuntime: unknown qualified field provider slot");
+    ensure_named_elliptic(it->second);
+    const int levels = it->second.fac ? it->second.fac->n_levels() :
+                                       static_cast<int>(it->second.level_mg.size());
+    if (level < 0 || level >= levels)
+      throw std::out_of_range("AmrRuntime: qualified field provider level out of range");
+    return it->second.fac ? it->second.fac->phi_level(level) :
+                            it->second.level_mg[static_cast<std::size_t>(level)]->phi();
+  }
+
+  std::vector<double> named_field_values(const std::string& provider_slot) {
+    auto it = named_fields_.find(provider_slot);
+    if (it == named_fields_.end())
+      throw std::runtime_error("AmrRuntime::named_field_values : unknown qualified field provider '" +
+                               provider_slot + "'");
     solve_fields();  // up-to-date phi (counterpart of potential()); named solve runs inside
     return coarse_aux_component(it->second.phi_comp);
   }
@@ -1548,34 +1750,113 @@ class AmrRuntime {
     for (auto& [field, nf] : named_fields_) {
       if (selected != nullptr && field != *selected)
         continue;
+      if (!nf.has_plan)
+        throw std::runtime_error("AmrRuntime: field provider slot '" + field +
+                                 "' has no resolved install plan");
       if (nf.phi_comp < 0 || nf.phi_comp >= aux_ncomp_)
         throw std::runtime_error("AmrRuntime : named elliptic field '" + field +
                                  "' aux component out of the channel width (add the block that "
                                  "declares its aux fields)");
-      ensure_named_elliptic(nf);
-      // SUMMED + CO-LOCATED RHS on the coarse: f = Sum_b named_elliptic_rhs_b[field](U_b), exactly like
-      // the default Poisson (mg_.rhs()), but reading the per-field block closures. A field with no
-      // contributing block solves a zero RHS -> reject loud (mirror of the System named path).
-      MultiFab& rhs = nf.mg->rhs();
-      rhs.set_val(Real(0));
-      bool any = false;
-      for (auto& b : blocks_) {
-        auto it = b.named_elliptic_rhs.find(field);
-        if (it == b.named_elliptic_rhs.end() || !it->second)
-          continue;
-        it->second((*b.levels)[0].U, rhs);
-        any = true;
+      nf.plan.boundary_state_buffers.clear();
+      for (std::size_t index = 0; index < nf.plan.boundary_state_blocks.size(); ++index) {
+        const int block = block_index(nf.plan.boundary_state_blocks[index]);
+        if (block < 0)
+          throw std::runtime_error("AmrRuntime: boundary state dependency names unknown block");
+        const MultiFab& state = (*blocks_[static_cast<std::size_t>(block)].levels)[0].U;
+        if (nf.plan.boundary_state_components[index] < 0 ||
+            nf.plan.boundary_state_components[index] >= state.ncomp())
+          throw std::runtime_error("AmrRuntime: boundary state component is out of range");
+        nf.plan.boundary_state_buffers.push_back(&state);
       }
-      if (!any)
-        throw std::runtime_error(
-            "AmrRuntime : named elliptic field '" + field +
-            "' has no contributing block (declare m.elliptic_field on the block model)");
-      nf.mg->solve();
+      nf.plan.boundary_context.states = nf.plan.boundary_state_buffers.empty()
+                                            ? nullptr
+                                            : nf.plan.boundary_state_buffers.data();
+      nf.plan.boundary_context.state_count =
+          static_cast<int>(nf.plan.boundary_state_buffers.size());
+      ensure_named_elliptic(nf);
+      if (nf.plan.has_boundary_kernel) {
+        if (nf.fac)
+          nf.fac->set_boundary_context(nf.plan.boundary_context);
+        else
+          nf.level_mg.at(0)->set_boundary_context(nf.plan.boundary_context);
+      }
+      prepare_named_field_providers(nf);
+      // The provider registry has already resolved the complete block-qualified route.  Assembly
+      // reads exactly one block and one closure; local provider names can therefore repeat freely in
+      // different blocks and adding a second field never changes an existing RHS.
+      auto assemble = [&](int level, MultiFab& rhs) {
+        rhs.set_val(Real(0));
+        MultiFab contribution(rhs.box_array(), rhs.dmap(), 1, 0);
+        for (const auto& binding : nf.prepared_providers) {
+          auto& block = blocks_[binding.block];
+          if (binding.coefficient == Real(1)) {
+            binding.rhs((*block.levels)[static_cast<std::size_t>(level)].U, rhs);
+          } else {
+            contribution.set_val(Real(0));
+            binding.rhs((*block.levels)[static_cast<std::size_t>(level)].U, contribution);
+            saxpy(rhs, binding.coefficient, contribution);
+          }
+        }
+      };
+      derive_named_nullspace(nf);
+      std::vector<MultiFab> published_phi;
+      published_phi.reserve(static_cast<std::size_t>(nlev_));
+      for (int k = 0; k < nlev_; ++k) {
+        MultiFab& phi = nf.fac ? nf.fac->phi_level(k) :
+                                 nf.level_mg[static_cast<std::size_t>(k)]->phi();
+        published_phi.emplace_back(phi.box_array(), phi.dmap(), phi.ncomp(), phi.n_grow());
+        lincomb(published_phi.back(), Real(1), phi, Real(0), phi);
+      }
+      auto restore_published = [&]() {
+        for (int k = 0; k < nlev_; ++k) {
+          MultiFab& phi = nf.fac ? nf.fac->phi_level(k) :
+                                   nf.level_mg[static_cast<std::size_t>(k)]->phi();
+          lincomb(phi, Real(1), published_phi[static_cast<std::size_t>(k)], Real(0),
+                  published_phi[static_cast<std::size_t>(k)]);
+        }
+      };
+      try {
+        if (nf.fac) {
+          std::vector<const MultiFab*> rhs_levels;
+          for (int k = 0; k < nlev_; ++k)
+            assemble(k, nf.fac->rhs_level(k));
+          for (int k = 0; k < nlev_; ++k)
+            rhs_levels.push_back(&nf.fac->rhs_level(k));
+          require_field_nullspace_compatible(rhs_levels, nf.nullspace);
+          nf.fac->solve();
+        } else {
+          for (int k = 0; k < static_cast<int>(nf.level_mg.size()); ++k) {
+            auto& solver = *nf.level_mg[static_cast<std::size_t>(k)];
+            assemble(k, solver.rhs());
+            if (!nf.level_nullspace.empty())
+              require_field_nullspace_compatible(
+                  std::vector<const MultiFab*>{&solver.rhs()},
+                  nf.level_nullspace[static_cast<std::size_t>(k)], k);
+            if (k == 0 && nf.plan.has_boundary_kernel &&
+                nf.plan.boundary_kernel.observes_iteration)
+              solver.solve();
+            else
+              solver.solve(nf.plan.mg_opts.rel_tol, nf.plan.mg_opts.max_cycles,
+                           nf.plan.mg_opts.abs_tol);
+            if (!solver.last_solve_report().solved())
+              throw std::runtime_error(std::string("AMR field linear solve failed: ") +
+                                       solver.last_solve_report().status_name());
+          }
+        }
+      } catch (...) {
+        restore_published();
+        throw;
+      }
       device_fence();  // CRITICAL: the V-cycle must finish before phi is read (same invariant as mg_)
+      if (nf.fac)
+        continue;  // published level-by-level after coarse-only fields have been injected
       // Write phi (+ centered grad) into the field's OWN aux components on the coarse valid cells. The
       // default field_postprocess hardcodes comps 0..2, so we write the named comps with a dedicated
       // loop (mirror of SystemFieldSolver::solve_named_field_from_state). Per-local-fab (MPI-safe).
-      MultiFab& phi_mf = nf.mg->phi();
+      MultiFab& phi_mf = nf.level_mg[0]->phi();
+      if (!nf.level_nullspace.empty())
+        apply_field_gauge(phi_mf, nf.level_nullspace[0]);
+      device_fence();
       const int cphi = nf.phi_comp, cgx = nf.gx_comp, cgy = nf.gy_comp;
       const bool grad = (cgx >= 0 && cgx < aux_ncomp_ && cgy >= 0 && cgy < aux_ncomp_);
       for (int li = 0; li < aux_[0].local_size(); ++li) {
@@ -1602,6 +1883,42 @@ class AmrRuntime {
     for (int k = 1; k < nlev_; ++k)
       detail::coupler_inject_aux_mb(aux_[k - 1], aux_[k],
                                     /*replicated_parent=*/(k == 1) && replicated_coarse_);
+    // Composite fields own a solved potential on every level. Publish them last so the generic
+    // coarse injection above cannot overwrite the refined values.
+    for (auto& [field, nf] : named_fields_) {
+      if (!nf.fac && nf.level_mg.size() <= 1)
+        continue;
+      const int cphi = nf.phi_comp, cgx = nf.gx_comp, cgy = nf.gy_comp;
+      const bool grad = (cgx >= 0 && cgx < aux_ncomp_ && cgy >= 0 && cgy < aux_ncomp_);
+      if (nf.fac) {
+        std::vector<MultiFab*> phi_levels;
+        for (int k = 0; k < nlev_; ++k)
+          phi_levels.push_back(&nf.fac->phi_level(k));
+        apply_field_gauge(phi_levels, nf.nullspace);
+      }
+      for (int k = 0; k < nlev_; ++k) {
+        MultiFab& phi = nf.fac ? nf.fac->phi_level(k) :
+                                 nf.level_mg[static_cast<std::size_t>(k)]->phi();
+        if (!nf.fac && !nf.level_nullspace.empty())
+          apply_field_gauge(std::vector<MultiFab*>{&phi},
+                            nf.level_nullspace[static_cast<std::size_t>(k)], k);
+        const Real level_dx = geom_.dx() / Real(1 << k);
+        const Real level_dy = geom_.dy() / Real(1 << k);
+        for (int li = 0; li < aux_[static_cast<std::size_t>(k)].local_size(); ++li) {
+          const ConstArray4 p = phi.fab(li).const_array();
+          Array4 a = aux_[static_cast<std::size_t>(k)].fab(li).array();
+          const Box2D valid = aux_[static_cast<std::size_t>(k)].box(li);
+          for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+            for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
+              a(i, j, cphi) = p(i, j);
+              if (grad) {
+                a(i, j, cgx) = (p(i + 1, j) - p(i - 1, j)) / (Real(2) * level_dx);
+                a(i, j, cgy) = (p(i, j + 1) - p(i, j - 1)) / (Real(2) * level_dy);
+              }
+            }
+        }
+      }
+    }
   }
 
   TagBox execute_bootstrap_tag_program(const MultiFab& values, const Box2D& domain,
@@ -1859,6 +2176,18 @@ class AmrRuntime {
         ref.push_back(*b.levels);
       detail::same_layout_or_throw(ref);
     }
+
+    // A composite field solver owns the fine BoxArrays.  Rebuild it lazily against the new exact
+    // hierarchy; the coarse-only solver and its warm start remain valid.
+    for (auto& item : named_fields_) {
+      item.second.mg.reset();
+      item.second.level_mg.clear();
+      item.second.fac.reset();
+      item.second.nullspace = {};
+      item.second.level_nullspace.clear();
+      item.second.nullspace_ready = false;
+    }
+    ++topology_epoch_;
 
     // (R8) RESTORATION OF THE COVERAGE INVARIANT: re-solve so that phi / grad phi are consistent with
     // the new grid AND to trigger the fine -> coarse cascade (mf_average_down_mb, in solve_fields) that
@@ -2484,12 +2813,45 @@ class AmrRuntime {
   // std::map (stable nodes), so a heap GeometricMG gives a stable address without making NamedField
   // movable. Defined here (before ensure_named_elliptic, whose parameter type must be visible).
   struct NamedField {
+    struct PreparedProvider {
+      std::size_t block = 0;
+      Real coefficient = Real(1);
+      std::function<void(const MultiFab&, MultiFab&)> rhs;
+    };
     int phi_comp = -1;
     int gx_comp = -1;
     int gy_comp = -1;
+    bool has_plan = false;
+    AmrFieldSolveConfig plan{};
+    std::vector<PreparedProvider> prepared_providers;
     std::shared_ptr<GeometricMG>
         mg;  // dedicated coarse solver, built lazily by ensure_named_elliptic
+    std::vector<std::shared_ptr<GeometricMG>> level_mg;
+    std::shared_ptr<CompositeFacPoisson> fac;
+    FieldNullspacePlan nullspace;
+    std::vector<FieldNullspacePlan> level_nullspace;
+    bool nullspace_ready = false;
   };
+
+  void prepare_named_field_providers(NamedField& field) {
+    if (!field.prepared_providers.empty())
+      return;
+    std::vector<NamedField::PreparedProvider> prepared;
+    prepared.reserve(field.plan.providers.size());
+    for (const auto& binding : field.plan.providers) {
+      const int block = block_index(binding.owner_block);
+      if (block < 0)
+        throw std::runtime_error("AmrRuntime: field provider names unknown owner block '" +
+                                 binding.owner_block + "'");
+      auto& owner = blocks_[static_cast<std::size_t>(block)];
+      auto found = owner.named_elliptic_rhs.find(binding.native_key);
+      if (found == owner.named_elliptic_rhs.end() || !found->second)
+        throw std::runtime_error("AmrRuntime: authenticated field provider has no RHS closure");
+      prepared.push_back(
+          {static_cast<std::size_t>(block), binding.coefficient, found->second});
+    }
+    field.prepared_providers = std::move(prepared);
+  }
 
   // Builds a NAMED elliptic field's dedicated coarse GeometricMG (ADC-428), lazily, IDENTICAL to the
   // default mg_ (same coarse geometry / BoxArray / Poisson BC / wall predicate / replication). REUSES the
@@ -2497,11 +2859,147 @@ class AmrRuntime {
   // Poisson is NOT carried onto a named field (a named field is a plain Laplacian, like the System named
   // path). No-op if already built.
   void ensure_named_elliptic(NamedField& nf) {
-    if (nf.mg)
+    if (nf.mg || nf.fac || !nf.level_mg.empty())
       return;
-    nf.mg =
-        std::make_shared<GeometricMG>(geom_, hierarchy_.ba[0], bcPhi_, wall_active_,
-                                      replicated_coarse_);
+    const BCRec boundary = nf.plan.has_explicit_bc ? nf.plan.explicit_bc : bcPhi_;
+    if (nf.plan.hierarchy == "composite" && nlev_ > 1) {
+      std::vector<BoxArray> fine_boxes;
+      fine_boxes.reserve(static_cast<std::size_t>(nlev_ - 1));
+      for (int k = 1; k < nlev_; ++k)
+        fine_boxes.push_back((*blocks_[0].levels)[static_cast<std::size_t>(k)].U.box_array());
+      nf.fac = std::make_shared<CompositeFacPoisson>(geom_, ba_coarse_, boundary, fine_boxes);
+      if (nf.plan.has_boundary_kernel)
+        nf.fac->set_boundary_kernel(nf.plan.boundary_kernel, nf.plan.boundary_context);
+      if (nf.plan.has_newton)
+        nf.fac->set_field_nonlinear_options(nf.plan.newton);
+      return;
+    }
+    const auto& mg = nf.plan.mg_opts;
+    const int levels = nf.plan.hierarchy == "level_local" ? nlev_ : 1;
+    nf.level_mg.reserve(static_cast<std::size_t>(levels));
+    for (int k = 0; k < levels; ++k) {
+      const Geometry g = level_geom(k);
+      const MultiFab& layout = (*blocks_[0].levels)[static_cast<std::size_t>(k)].U;
+      auto solver = std::make_shared<GeometricMG>(
+          g, layout.box_array(), boundary, wall_active_, replicated_coarse_ && k == 0,
+          mg.min_coarse, mg.nu1, mg.nu2, mg.nbottom, /*cut_cell=*/false,
+          std::function<Real(Real, Real)>{}, kEbCutFractionFloor, mg.coarse_threshold);
+      solver->set_abs_tol(mg.abs_tol);
+      if (nf.plan.has_boundary_kernel && k == 0)
+        solver->set_boundary_kernel(nf.plan.boundary_kernel, nf.plan.boundary_context);
+      if (nf.plan.has_newton && k == 0)
+        solver->set_field_newton_options(nf.plan.newton);
+      nf.level_mg.push_back(std::move(solver));
+    }
+    nf.mg = nf.level_mg.front();
+  }
+
+  static bool field_bc_has_constant_kernel(const BCRec& bc) {
+    auto singular_face = [](BCType type, Real alpha) {
+      return type == BCType::Periodic || type == BCType::Foextrap ||
+             (type == BCType::Robin && alpha == Real(0));
+    };
+    return singular_face(bc.xlo, bc.xlo_alpha) && singular_face(bc.xhi, bc.xhi_alpha) &&
+           singular_face(bc.ylo, bc.ylo_alpha) && singular_face(bc.yhi, bc.yhi_alpha);
+  }
+
+  std::shared_ptr<const MultiFab> composite_valid_mask(int level) const {
+    const MultiFab& layout = (*blocks_[0].levels)[static_cast<std::size_t>(level)].U;
+    auto mask = std::make_shared<MultiFab>(
+        layout.box_array(), layout.dmap(), /*ncomp=*/1, /*ngrow=*/0);
+    mask->set_val(Real(1));
+    if (level + 1 >= nlev_)
+      return mask;
+    const BoxArray& fine_boxes =
+        (*blocks_[0].levels)[static_cast<std::size_t>(level + 1)].U.box_array();
+    std::vector<Box2D> coarse_coverage;
+    coarse_coverage.reserve(static_cast<std::size_t>(fine_boxes.size()));
+    for (const Box2D& fine : fine_boxes.boxes())
+      coarse_coverage.push_back(fine.coarsen(kAmrRefRatio));
+    // Coverage is a box-topology operation, not a cell-search problem.  Launch exactly on each
+    // coarse/fine-footprint intersection: O(local coarse boxes * fine boxes) host intersections and
+    // O(covered cells) device writes, never O(all cells * fine boxes) host work.
+    for (int li = 0; li < mask->local_size(); ++li) {
+      Array4 active = mask->fab(li).array();
+      const Box2D valid = mask->box(li);
+      for (const Box2D& covered : coarse_coverage) {
+        const Box2D intersection = valid.intersect(covered);
+        if (!intersection.empty())
+          for_each_cell(intersection, detail::SetFieldCoverageKernel{active, Real(0)});
+      }
+    }
+    return mask;
+  }
+
+  void derive_named_nullspace(NamedField& nf) {
+    if (nf.nullspace_ready)
+      return;
+    const BCRec boundary = nf.plan.has_explicit_bc ? nf.plan.explicit_bc : bcPhi_;
+    const bool derived_constant = field_bc_has_constant_kernel(boundary);
+    if (nf.plan.nullspace_assertion == "constant" && !derived_constant)
+      throw std::runtime_error(
+          "AMR field nullspace assertion disagrees with operator + topology + boundary closure");
+    if (nf.plan.nullspace_assertion != "none" && nf.plan.nullspace_assertion != "constant")
+      throw std::runtime_error("AMR field nullspace assertion is unsupported");
+    if (!derived_constant) {
+      if (nf.plan.gauge != "none")
+        throw std::runtime_error("AMR field gauge was declared for an invertible operator");
+      nf.nullspace_ready = true;
+      return;
+    }
+    if (nf.plan.gauge != "mean_zero")
+      throw std::runtime_error(
+          "AMR topology-derived nullspace requires an explicit per-mode mean-zero gauge");
+
+    const std::string root = nf.plan.provider_identity + ":topology-nullspace";
+    if (nf.plan.hierarchy == "composite" && nlev_ > 1) {
+      nf.nullspace.identity = root;
+      nf.nullspace.layout_identity = root + ":composite-layout:" + std::to_string(nlev_) +
+                                     ":epoch:" + std::to_string(topology_epoch_);
+      nf.nullspace.scope = FieldNullspaceScope::Composite;
+      FieldNullspaceBasis basis;
+      basis.identity = root + ":connected-component:0";
+      basis.provenance = "derived:operator+topology+boundary:connected-component:0";
+      basis.recipe_identity = nf.nullspace.layout_identity + ":coverage-recipe-v1";
+      basis.field_component = 0;  // the current native Poisson operator is genuinely scalar
+      for (int k = 0; k < nlev_; ++k) {
+        basis.coverage.push_back(composite_valid_mask(k));
+        const Geometry g = level_geom(k);
+        basis.cell_measure.push_back(g.dx() * g.dy());
+      }
+      nf.nullspace.bases.push_back(std::move(basis));
+      nf.nullspace.gauges.push_back(
+          FieldGaugeConstraint{nf.nullspace.bases[0].identity, Real(0)});
+      std::vector<const MultiFab*> layouts;
+      for (int k = 0; k < nlev_; ++k)
+        layouts.push_back(&(*blocks_[0].levels)[static_cast<std::size_t>(k)].U);
+      validate_field_nullspace_basis(layouts, nf.nullspace);
+    } else {
+      nf.level_nullspace.reserve(static_cast<std::size_t>(nlev_));
+      for (int k = 0; k < nlev_; ++k) {
+        FieldNullspacePlan plan;
+        plan.identity = root + ":level:" + std::to_string(k);
+        plan.layout_identity = plan.identity + ":layout:epoch:" +
+                               std::to_string(topology_epoch_);
+        plan.scope = FieldNullspaceScope::LevelLocal;
+        FieldNullspaceBasis basis;
+        basis.identity = plan.identity + ":connected-component:0";
+        basis.provenance = "derived:level-local-topology:connected-component:0";
+        basis.recipe_identity = plan.layout_identity + ":recipe-v1";
+        basis.field_component = 0;
+        basis.cell_measure.resize(static_cast<std::size_t>(nlev_), Real(0));
+        const Geometry g = level_geom(k);
+        basis.cell_measure[static_cast<std::size_t>(k)] = g.dx() * g.dy();
+        plan.bases.push_back(std::move(basis));
+        plan.gauges.push_back(FieldGaugeConstraint{plan.bases[0].identity, Real(0)});
+        validate_field_nullspace_basis(
+            std::vector<const MultiFab*>{
+                &(*blocks_[0].levels)[static_cast<std::size_t>(k)].U},
+            plan, k);
+        nf.level_nullspace.push_back(std::move(plan));
+      }
+    }
+    nf.nullspace_ready = true;
   }
 
   // Reads aux component @p comp of the COARSE level as a GLOBAL n*n row-major field (diagnostic /
@@ -2618,10 +3116,6 @@ class AmrRuntime {
   // takes it by reference: a parameter type must be visible at the function declaration, unlike a member
   // body). Empty default -> bit-identical (the solve_named_fields loop early-returns).
   std::map<std::string, NamedField> named_fields_;
-  /// Unified DESCRIPTOR registry of the field problems this AMR runtime realizes (ADC-596): the
-  /// default shared Poisson ("phi") plus every named field, the SAME abstraction the Uniform
-  /// SystemFieldSolver uses. Owns no solver, changes no numerics; populated by register_named_field.
-  FieldProblemRegistry field_problems_;
   std::vector<CoupledSourceSpec>
       coupled_sources_;  // registered coupled sources (applied after transport)
   // TYPED coupling operator inspect metadata (ADC-595, parity with System::Impl::coupled_operators_):
@@ -2652,6 +3146,10 @@ class AmrRuntime {
   int macro_step_ = 0;
   mutable int solve_count_ = 0;
   int regrid_count_ = 0;
+  // Monotone identity of the materialized hierarchy.  Every successful topology replacement bumps
+  // it; accepted-state rollback restores it.  Nullspace recipes include the epoch so no basis or
+  // coverage mask can silently survive a regrid/restart hierarchy rebuild.
+  std::uint64_t topology_epoch_ = 0;
   // AMR / MPI PROFILING (Spec 5 criterion 43, ADC-479): non-owning pointer to the AmrSystem-owned
   // Profiler (lifetime guaranteed by the facade). Null by default -> the engine never profiles
   // (zero overhead). Set via set_profiler after build (parity with System::profiler_).

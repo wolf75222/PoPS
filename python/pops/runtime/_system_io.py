@@ -308,6 +308,11 @@ class _SystemIO(_System):
         # phi : multigrid warm start (BIT-IDENTICAL restart) ; physical STATE if
         # gauss_policy="evolve" (phi is no longer re-derived from rho there).
         out["phi"] = np.asarray(self._s.potential_global(), dtype=np.float64)
+        field_slots = list(self._s.field_provider_slots())
+        out["field_provider_slots"] = np.array(field_slots)
+        for index, slot in enumerate(field_slots):
+            out["field_potential_%d" % index] = np.asarray(
+                self._s.field_potential_global(slot), dtype=np.float64)
         # COMPILED-PROGRAM HISTORIES (ADC-406b): a compiled time Program with multistep histories (e.g.
         # Adams-Bashforth 2) carries the System-owned ring buffers across macro-steps. To make a
         # (run, checkpoint, restart, continue) run bit-identical to a continuous run, the rings (the
@@ -404,6 +409,19 @@ class _SystemIO(_System):
         # phi BEFORE the clock : warm start of the restored solver (bit-identical restart ; physical
         # state in gauss_policy="evolve").
         self._s.set_potential(np.asarray(d["phi"], dtype=np.float64).ravel())
+        checkpoint_slots = [str(slot) for slot in d["field_provider_slots"]]
+        current_slots = list(self._s.field_provider_slots())
+        if checkpoint_slots != current_slots:
+            raise RuntimeError(
+                "checkpoint qualified field providers %r != installed providers %r"
+                % (checkpoint_slots, current_slots))
+        for index, slot in enumerate(checkpoint_slots):
+            key = "field_potential_%d" % index
+            if key not in d:
+                raise RuntimeError(
+                    "checkpoint missing potential for qualified field provider %s" % slot)
+            self._s.set_field_potential(
+                slot, np.asarray(d[key], dtype=np.float64).ravel())
         # COMPILED-PROGRAM HASH GUARD (ADC-406b): if the checkpoint recorded an installed program hash,
         # the user must have installed the SAME compiled Program before restart (the replay
         # contract). A different Program (different IR hash) makes the restored histories / cadence

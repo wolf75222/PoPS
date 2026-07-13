@@ -359,6 +359,7 @@ extern "C" const char* pops_program_hash() {{ return "{hash}"; }}
 {block_names}
 {module_metadata}
 {program_params}
+{field_boundaries}
 extern "C" void pops_install_program(void* sys) {{
   pops::runtime::program::ProgramContext ctx(sys);
 {prelude}

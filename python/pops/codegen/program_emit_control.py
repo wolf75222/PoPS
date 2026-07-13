@@ -97,7 +97,8 @@ def _walk_expr(e: Any) -> Any:
         yield node
         stack.extend(_children(node))
 
-def _emit_body(program: Any, model: Any = None, target: Any = "system") -> tuple:
+def _emit_body(program: Any, model: Any = None, target: Any = "system",
+               field_plans: Any = None) -> tuple:
     """Generate the C++ of the install function in TWO phases (each list indented uniformly by the
     template). Assumes `_check_lowerable` has passed. @p model supplies the symbolic coefficients of
     the Phase-4b source / apply / solve_local_linear ops. Returns ``(prelude, body)``:
@@ -146,7 +147,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system") -> tuple
                          % (json.dumps(name), int(lag), int(ncomp)))
     for v in program._values:
         base = bases.get(v.block)  # the block-state value of THIS op's block (None: a scalar op)
-        _emit_op(program, v, base, committed_ids, var, model, lines, prelude, block_idx, target=target)
+        _emit_op(program, v, base, committed_ids, var, model, lines, prelude, block_idx,
+                 target=target, field_plans=field_plans)
     # Each committed block: a scratch commit (solve_local_linear / solve_linear / a non-base
     # linear_combine wrote a scratch) is copied into the block state; a linear_combine commit already
     # wrote ctx.state(idx) in place (var == base), so its copy is a no-op (skipped).
@@ -165,7 +167,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system") -> tuple
     body_src = "\n".join("    " + ln for ln in lines)
     return prelude_src, body_src
 
-def _emit_while(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any, block_idx: Any = None) -> None:
+def _emit_while(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any,
+                block_idx: Any = None, field_plans: Any = None) -> None:
     """Lower a while op to an infinite C++ loop with a break (the condition re-evaluates each pass).
     The loop variable is a single MultiFab mutated IN PLACE across iterations; the cond / body sub-
     blocks re-run the per-op lowering each pass, with the loop-variable value id seeded to the loop
@@ -186,18 +189,21 @@ def _emit_while(program: Any, v: Any, base: Any, var: Any, model: Any, lines: An
     sub[loop_in.id] = x
     body_lines = []
     for w in v.attrs["cond_block"]:
-        _emit_op(program, w, base, frozenset(), sub, model, body_lines, block_idx=block_idx)
+        _emit_op(program, w, base, frozenset(), sub, model, body_lines, block_idx=block_idx,
+                 field_plans=field_plans)
     cond_expr = sub[v.attrs["cond"].id]
     body_lines.append("if (!(%s)) break;" % cond_expr)
     for w in v.attrs["body_block"]:
-        _emit_op(program, w, base, frozenset(), sub, model, body_lines, block_idx=block_idx)
+        _emit_op(program, w, base, frozenset(), sub, model, body_lines, block_idx=block_idx,
+                 field_plans=field_plans)
     # Write the next state into the loop variable in place (x <- body result).
     body_lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, static_cast<pops::Real>(1), %s);"
                       % (x, x, sub[v.attrs["body"].id]))
     lines += ["  " + ln for ln in body_lines]
     lines.append("}")
 
-def _emit_range(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any, block_idx: Any = None) -> None:
+def _emit_range(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any,
+                block_idx: Any = None, field_plans: Any = None) -> None:
     """Lower a range op to a C++ ``for`` over a fixed count. Like a while, the loop variable is one
     MultiFab mutated in place and the body sub-block is emitted ONCE inside the loop (re-run each
     pass at runtime); the loop-variable value id is seeded to the loop var for the sub-block."""
@@ -214,14 +220,15 @@ def _emit_range(program: Any, v: Any, base: Any, var: Any, model: Any, lines: An
     sub[loop_in.id] = x
     body_lines = []
     for w in v.attrs["body_block"]:
-        _emit_op(program, w, base, frozenset(), sub, model, body_lines, block_idx=block_idx)
+        _emit_op(program, w, base, frozenset(), sub, model, body_lines, block_idx=block_idx,
+                 field_plans=field_plans)
     body_lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, static_cast<pops::Real>(1), %s);"
                       % (x, x, sub[v.attrs["body"].id]))
     lines += ["  " + ln for ln in body_lines]
     lines.append("}")
 
 def _emit_branch(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any,
-                 block_idx: Any = None) -> None:
+                 block_idx: Any = None, field_plans: Any = None) -> None:
     """Lower two captured regions to a genuinely lazy C++ ``if``/``else`` value branch."""
     (cond,) = v.inputs
     x = ("b%d" if v.vtype == "bool" else "s%d") % v.id
@@ -240,16 +247,17 @@ def _emit_branch(program: Any, v: Any, base: Any, var: Any, model: Any, lines: A
     lines.append("if (%s) {" % var[cond.id])
     lines += ["  " + line for line in _emit_branch_arm(
         program, v.attrs["true_block"], v.attrs["true_result"], x, is_field,
-        base, var, model, block_idx)]
+        base, var, model, block_idx, field_plans)]
     lines.append("} else {")
     lines += ["  " + line for line in _emit_branch_arm(
         program, v.attrs["false_block"], v.attrs["false_result"], x, is_field,
-        base, var, model, block_idx)]
+        base, var, model, block_idx, field_plans)]
     lines.append("}")
 
 
 def _emit_branch_arm(program: Any, block: Any, result: Any, output: str, is_field: bool,
-                     base: Any, outer_var: Any, model: Any, block_idx: Any) -> list[str]:
+                     base: Any, outer_var: Any, model: Any, block_idx: Any,
+                     field_plans: Any = None) -> list[str]:
     from pops.codegen.program_emit_ops import _emit_op
 
     sub = dict(outer_var)
@@ -257,7 +265,7 @@ def _emit_branch_arm(program: Any, block: Any, result: Any, output: str, is_fiel
     for value in block:
         _emit_op(
             program, value, base, frozenset(), sub, model, arm_lines,
-            block_idx=block_idx)
+            block_idx=block_idx, field_plans=field_plans)
     token = sub[result.id]
     if is_field:
         arm_lines.append(

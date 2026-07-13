@@ -148,6 +148,12 @@ class Module(ModuleFreezable):
                 "module.operator(%r): signature must be a Signature (use the >> sugar or "
                 "Signature(inputs, output)); got %r" % (name, signature))
         validate_operator_signature(kind, signature, operator_name=name)
+        if kind == "field_operator":
+            if lowering is None:
+                lowering = {"field_provider": {"key": name}}
+            elif not isinstance(lowering, dict) or "field_provider" not in lowering:
+                raise ValueError(
+                    "field_operator lowering must declare its field_provider route")
 
         def _register(body: Any) -> Any:
             self._guard_mutable("register an operator")
