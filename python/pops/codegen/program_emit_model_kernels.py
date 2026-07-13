@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from pops.ir.literals import scalar_cpp
+from pops.model.state_symbols import state_component_symbol
 
 from pops.codegen.program_emit_kernels import (
     _aux_comp,  # noqa: F401
@@ -47,6 +48,43 @@ def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, blo
     return body
 
 
+def _component_sources(
+    referenced: set[str], by_block: Any, source_for_state: Any,
+) -> dict[str, Any]:
+    """Map exact symbolic coordinates to their generated per-cell source.
+
+    Qualified coordinates are total for arbitrary overlapping StateSpaces. Bare
+    coordinates are a convenience only when unique across every input space.
+    """
+    from collections import Counter
+
+    states = [state for state in by_block.values() if state.space is not None]
+    counts = Counter(
+        component for state in states for component in state.space.components)
+    ambiguous = sorted(
+        component for component, count in counts.items()
+        if count > 1 and component in referenced)
+    if ambiguous:
+        raise ValueError(
+            "multi-state operator references ambiguous bare component(s) %s; obtain exact "
+            "coordinates with module.state_symbols(state_space)" % ambiguous)
+    sources = {}
+    for state in states:
+        for index, component in enumerate(state.space.components):
+            source = source_for_state(state, index)
+            qualified = state_component_symbol(state.space, component)
+            if qualified in referenced:
+                sources[qualified] = source
+            if counts[component] == 1 and component in referenced:
+                sources[component] = source
+    missing = sorted(referenced - set(sources))
+    if missing:
+        raise ValueError(
+            "multi-state operator references conservative symbol(s) %s that belong to no input "
+            "StateSpace" % missing)
+    return sources
+
+
 def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch: Any) -> list:
     """Lower a ``coupled_rate`` (Spec 3 criterion 27, ADC-457) to ONE multi-state for_each_cell kernel
     filling every participating block's rate scratch at once.
@@ -71,19 +109,8 @@ def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch:
     for comps in components.values():
         for e in comps:
             referenced |= e.deps()
-    cons_source = {}                             # cons name -> (state token, component index)
-    for st in by_block.values():                 # ALL input states, incl. read-only catalysts
-        if getattr(st, "space", None) is None:
-            continue
-        for idx, c in enumerate(st.space.components):
-            if c not in referenced:
-                continue
-            if c in cons_source and cons_source[c] != (var[st.id], idx):
-                raise NotImplementedError(
-                    "coupled_rate kernel codegen (ADC-457): cons var %r is a component of more than "
-                    "one input state; the cons-only MVP needs disjoint component names across the "
-                    "coupled states (rename one of them)" % (c,))
-            cons_source[c] = (var[st.id], idx)
+    cons_source = _component_sources(
+        referenced, by_block, lambda state, index: (var[state.id], index))
 
     def state_handle(token: Any) -> str:
         return "%sA" % token                     # read handle for an input state token (u0A / u1A)
@@ -128,25 +155,14 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
     for block in blocks:
         offsets[block] = total
         total += len(components[block])
-    if total > 16:
-        raise NotImplementedError(
-            "solve_implicit dense Newton lowering supports at most 16 coupled components; got %d"
-            % total)
     referenced = {name for rows in components.values() for expr in rows for name in expr.deps()}
-    sources = {}
-    for state in by_block.values():
-        if state.space is None:
-            continue
-        for index, component in enumerate(state.space.components):
-            if component not in referenced:
-                continue
-            source = (("unknown", offsets[state.block] + index)
-                      if state.block in offsets else ("frozen", var[state.id], index))
-            if component in sources and sources[component] != source:
-                raise NotImplementedError(
-                    "solve_implicit requires disjoint conservative component names across inputs; "
-                    "%r is ambiguous" % component)
-            sources[component] = source
+    sources = _component_sources(
+        referenced,
+        by_block,
+        lambda state, index: (
+            ("unknown", offsets[state.block] + index)
+            if state.block in offsets else ("frozen", var[state.id], index)),
+    )
     driver = scratch[blocks[0]]
     tol_cpp = scalar_cpp(tol)
     eps_cpp = scalar_cpp(fd_eps)

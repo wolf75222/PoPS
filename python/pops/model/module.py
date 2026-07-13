@@ -283,6 +283,25 @@ class Module(ModuleFreezable):
         return self._descriptor_handle(
             state, self._state_spaces, self._state_handles, "StateSpace")
 
+    def state_symbols(self, state: Any) -> tuple[Any, ...]:
+        """Return the owner-qualified conservative coordinates of ``state``.
+
+        These expressions are the canonical authoring path for operators that read
+        several state spaces.  Unlike bare component names, they remain unambiguous
+        when, for example, both an electron and ion state contain ``"density"``.
+        They are ordinary immutable :class:`pops.ir.Var` nodes and introduce no
+        separate multi-species runtime or lowering path.
+        """
+        from pops.ir.expr import Var
+        from pops.model.state_symbols import state_component_symbol
+
+        handle = self.state_handle(state)
+        space = self._state_spaces[handle.local_id]
+        return tuple(
+            Var(state_component_symbol(space, component), "cons")
+            for component in space.components
+        )
+
     def field_handle(self, field: Any) -> Handle:
         """Return the registry-issued handle of a declared :class:`FieldSpace`."""
         return self._descriptor_handle(

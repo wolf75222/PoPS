@@ -65,6 +65,11 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
             "state_space_route_required",
             "compile_problem: a multi-StateSpace Module must be lowered for an exact block/state "
             "route; requested %r, declared %s" % (state_space, sorted(states)))
+    from pops.model.state_symbols import rebind_state_symbols  # noqa: PLC0415
+
+    def _body_for_state(body: Any) -> Any:
+        return rebind_state_symbols(body, state, states.values())
+
     m = Model(module.name)
     # Preserve the canonical source-Module identity across the internal facade lowering. The
     # resulting CompiledModel authenticates this scalar hash; it never retains ``module`` itself.
@@ -175,7 +180,10 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
         coverage_rows.append(LoweringCoverageRow(
             "aux:%s" % a.name, "lowered", ("dsl:aux:%s" % a.name,)))
     if module._eigenvalues is not None:
-        m.eigenvalues(x=module._eigenvalues["x"], y=module._eigenvalues["y"])
+        m.eigenvalues(
+            x=_body_for_state(module._eigenvalues["x"]),
+            y=_body_for_state(module._eigenvalues["y"]),
+        )
         coverage_rows.append(LoweringCoverageRow(
             "module:%s:eigenvalues" % module.name, "lowered", ("dsl:eigenvalues",)))
     else:
@@ -195,16 +203,17 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
     # Each builder holds its arm body verbatim. _CODEGEN_KINDS is the body-requirement set (local_rate
     # lowers from op.lowering, not a body, so it stays out); the assert makes an unwired kind loud.
     def _b_grid_operator(op: Any) -> None:
+        body = _body_for_state(op.body)
         if op.name in ("flux", "flux_default"):
-            m.flux(x=op.body["x"], y=op.body["y"])
+            m.flux(x=body["x"], y=body["y"])
         else:
-            m.flux_term(op.name, x=op.body["x"], y=op.body["y"])
+            m.flux_term(op.name, x=body["x"], y=body["y"])
 
     def _b_local_source(op: Any) -> None:
-        m.source_term(op.name, op.body)
+        m.source_term(op.name, _body_for_state(op.body))
 
     def _b_local_linear_operator(op: Any) -> None:
-        m.linear_source(op.name, op.body)
+        m.linear_source(op.name, _body_for_state(op.body))
 
     def _b_field_operator(op: Any) -> None:
         outputs = tuple(getattr(op.signature.output, "components", ()))
@@ -216,9 +225,10 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
             raise ValueError(
                 "compile_problem: field_operator %r must declare at least one output" % op.name)
         for output in outputs:
-            if output not in m.aux_extra_names:
+            if output not in m._m.aux_extra_names:
                 m.aux_field(output)
-        m.elliptic_field(op.name, op.body, operator="poisson", aux=outputs)
+        m.elliptic_field(
+            op.name, _body_for_state(op.body), operator="poisson", aux=outputs)
 
     def _b_local_rate(op: Any) -> None:
         low = op.lowering
@@ -226,7 +236,7 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
                         sources=low.get("sources"), fluxes=low.get("fluxes"))
 
     def _b_projection(op: Any) -> None:
-        m.projection(op.body)
+        m.projection(_body_for_state(op.body))
 
     builders = {"grid_operator": _b_grid_operator, "local_source": _b_local_source,
                 "local_linear_operator": _b_local_linear_operator,
@@ -249,13 +259,12 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
             if getattr(item, "kind", None) == "state")
         if state_inputs and state not in state_inputs:
             coverage_rows.append(LoweringCoverageRow(
-                source, "documentary", rule="operator belongs to another block StateSpace"))
+                source, "documentary"))
             continue
         if op.kind == "coupled_rate" or (
                 op.kind == "field_operator" and len(state_inputs) > 1):
             coverage_rows.append(LoweringCoverageRow(
-                source, "lowered", ("program:multi_block_operator",),
-                rule="multi-block operator lowers in the compiled Program, not one block kernel"))
+                source, "lowered", ("program:multi_block_operator",)))
             continue
         if op.kind in _CODEGEN_KINDS and (body is None or callable(body)):
             _reject(

@@ -7,7 +7,7 @@ from typed_program_support import typed_state
 
 time = pytest.importorskip("pops.time")
 from pops import model  # noqa: E402
-from pops.ir.expr import Var  # noqa: E402
+from pops.ir.expr import Const  # noqa: E402
 
 
 def _program(*, consume=True):
@@ -18,8 +18,8 @@ def _program(*, consume=True):
         "electrons": model.Rate(electrons),
         "ions": model.Rate(ions),
     })
-    ne, pex, pey = (Var(name, "cons") for name in electrons.components)
-    ni, pix, piy = (Var(name, "cons") for name in ions.components)
+    ne, pex, pey = module.state_symbols(electrons)
+    ni, pix, piy = module.state_symbols(ions)
     collision = module.operator(
         name="collision",
         signature=model.Signature((electrons, ions), bundle),
@@ -91,3 +91,80 @@ def test_failed_coupled_implicit_never_aliases_live_state_before_guard():
     assert "ctx.scratch_state_like(u0)" in source
     assert "ctx.scratch_state_like(u1)" in source
     assert guard < first_commit
+
+
+def test_same_component_names_are_qualified_by_state_space():
+    module = model.Module("overlapping_components")
+    electrons = module.state_space("electrons", ("density",))
+    ions = module.state_space("ions", ("density",))
+    (electron_density,) = module.state_symbols(electrons)
+    (ion_density,) = module.state_symbols(ions)
+    exchange = module.operator(
+        name="exchange",
+        signature=model.Signature(
+            (electrons, ions),
+            model.RateBundle({"electrons": model.Rate(electrons),
+                              "ions": model.Rate(ions)}),
+        ),
+        kind="coupled_rate",
+        expr={
+            "electrons": [ion_density - electron_density],
+            "ions": [electron_density - ion_density],
+        },
+    )
+    program = time.Program("overlapping_components")
+    electron_n = typed_state(
+        program, "electrons", space=electrons, model=module,
+        state=module.state_handle(electrons))
+    ion_n = typed_state(
+        program, "ions", space=ions, model=module, state=module.state_handle(ions))
+    solved = program.solve_implicit(exchange, (electron_n, ion_n)).consume(
+        action=time.RejectAttempt())
+    electron_next = typed_state(
+        program, "electrons", state_name=electrons.name, space=electrons,
+        model=module, state=module.state_handle(electrons)).next
+    ion_next = typed_state(
+        program, "ions", state_name=ions.name, space=ions,
+        model=module, state=module.state_handle(ions)).next
+    program.commit_many({
+        electron_next: solved[electron_n.block],
+        ion_next: solved[ion_n.block],
+    })
+
+    source = program.emit_cpp_program(model=None)
+    assert electron_density.name in source
+    assert ion_density.name in source
+    assert electron_density.name != ion_density.name
+
+
+def test_dense_newton_dimension_follows_the_typed_rate_bundle():
+    module = model.Module("seventeen_components")
+    left = module.state_space("left", tuple("l%d" % index for index in range(9)))
+    right = module.state_space("right", tuple("r%d" % index for index in range(8)))
+    zero = Const(0)
+    operator = module.operator(
+        name="large_exchange",
+        signature=model.Signature(
+            (left, right),
+            model.RateBundle({"left": model.Rate(left), "right": model.Rate(right)}),
+        ),
+        kind="coupled_rate",
+        expr={"left": [zero] * 9, "right": [zero] * 8},
+    )
+    program = time.Program("seventeen_components")
+    left_n = typed_state(
+        program, "left", space=left, model=module, state=module.state_handle(left))
+    right_n = typed_state(
+        program, "right", space=right, model=module, state=module.state_handle(right))
+    solved = program.solve_implicit(operator, (left_n, right_n)).consume(
+        action=time.RejectAttempt())
+    left_next = typed_state(
+        program, "left", state_name=left.name, space=left,
+        model=module, state=module.state_handle(left)).next
+    right_next = typed_state(
+        program, "right", state_name=right.name, space=right,
+        model=module, state=module.state_handle(right)).next
+    program.commit_many({left_next: solved[left_n.block], right_next: solved[right_n.block]})
+
+    source = program.emit_cpp_program(model=None)
+    assert "pops::detail::mat_inverse<17>" in source

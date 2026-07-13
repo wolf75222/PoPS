@@ -69,7 +69,8 @@ def _two_fluid_handwritten():
     e = mod.state_space("electron_state", ("ne", "mex", "mey"))
     i = mod.state_space("ion_state", ("ni", "mix", "miy"))
     bundle = model.RateBundle({"electron_state": model.Rate(e), "ion_state": model.Rate(i)})
-    ne, ni = Var("ne", "cons"), Var("ni", "cons")
+    ne = mod.state_symbols(e)[0]
+    ni = mod.state_symbols(i)[0]
     mod.operator(name="collision", signature=model.Signature((e, i), bundle),
                  kind="coupled_rate",
                  expr={"electron_state": [ni - ne, ne, ne], "ion_state": [ne - ni, ni, ni]})
@@ -87,9 +88,9 @@ def _two_fluid_program(mod, e_space, i_space):
     C = P._call("collision", e_n, i_n)
     P.commit_many({
         e_state.next:
-            P.value("e1", e_n + P.dt * C[e_n.block]),
+            P.value("e1", e_n + P.dt * C[e_n.block], at=e_state.next.point),
         i_state.next:
-            P.value("i1", i_n + P.dt * C[i_n.block]),
+            P.value("i1", i_n + P.dt * C[i_n.block], at=i_state.next.point),
     })
     return P
 
@@ -130,10 +131,11 @@ def test_field_solve_lowers_to_a_multi_input_field_operator():
 def test_state_handle_indexes_by_component_name():
     m, e, _i, _n = _three_fluid_board()
     # e["ne"] is the conservative Var of that component (the board access of section 12.3/16),
-    # identical to the operator-first Var("ne", "cons"). Var has no __eq__ (== builds an
-    # expression), so compare by name + kind.
+    # qualified by StateSpace ownership. Var has no Boolean __eq__ (== builds an expression),
+    # so compare it to the canonical Module coordinate by name + kind.
     ne = e["ne"]
-    assert isinstance(ne, Var) and ne.name == "ne" and ne.kind == "cons"
+    canonical = m.module.state_symbols(m.module.state_spaces()[e.name])[0]
+    assert isinstance(ne, Var) and ne.name == canonical.name and ne.kind == "cons"
     with pytest.raises(KeyError):
         _ = e["not_a_component"]
 
@@ -164,8 +166,28 @@ def test_board_two_fluid_emits_identical_cpp_to_handwritten():
     assert bsrc == hsrc
     # one shared multi-state kernel binds both species, reads cons from each state (sanity)
     assert bsrc.count("pops::for_each_cell") == 1
-    assert "const pops::Real ne = u0A(i, j, 0);" in bsrc
-    assert "const pops::Real ni = u1A(i, j, 0);" in bsrc
+    assert be["ne"].name in bsrc
+    assert bi["ni"].name in bsrc
+
+
+def test_same_physical_component_name_needs_no_species_rename():
+    model_ = physics.Model("shared_density")
+    electrons = model_.species("electron_state", state=["density"])
+    ions = model_.species("ion_state", state=["density"])
+    model_.coupled_rate(
+        "collision",
+        inputs=[electrons, ions],
+        outputs={
+            electrons: [ions["density"] - electrons["density"]],
+            ions: [electrons["density"] - ions["density"]],
+        },
+    )
+    assert electrons["density"].name != ions["density"].name
+    spaces = model_.module.state_spaces()
+    source = _two_fluid_program(
+        model_.module, spaces["electron_state"], spaces["ion_state"]).emit_cpp_program(model=None)
+    assert electrons["density"].name in source
+    assert ions["density"].name in source
 
 
 def test_arbitrary_arity_four_inputs():

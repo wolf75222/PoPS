@@ -71,8 +71,8 @@ def build_multiphysics_core() -> MultiphysicsCore:
         "electrostatic_fields", ("potential", "electric_x", "electric_y")
     )
 
-    ne, pex, pey = (Var(name, "cons") for name in electrons.components)
-    ni, pix, piy = (Var(name, "cons") for name in ions.components)
+    ne, pex, pey = module.state_symbols(electrons)
+    ni, pix, piy = module.state_symbols(ions)
     electric_x, electric_y = Var("electric_x", "aux"), Var("electric_y", "aux")
     sound_speed_squared = Const(0.2)
 

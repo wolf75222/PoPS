@@ -20,7 +20,7 @@ IR (an :class:`pops.model.Module` with N :class:`pops.model.StateSpace`, a
 ``coupled_rate`` operator over a :class:`pops.model.RateBundle`, and a multi-input
 field operator), not a second runtime: the board surface produces the SAME typed
 operators a hand-written ``pops.model.Module`` registers (ADC-457). The single-species
-path is byte-identical to the single-state board model. The compiled multi-block
+path uses the same single-state backend and numerical operators. The compiled multi-block
 ``.so`` run is validated on ROMEO (Kokkos-only AOT).
 """
 from __future__ import annotations
@@ -83,8 +83,11 @@ class StateHandle(Handle):
     section 12.3/16), and remembers its name and roles for the typed
     :class:`pops.model.StateSpace`. The string index returns the conservative
     :class:`pops.dsl.Var` of that component, so a board coupled-rate formula
-    written as ``e["ni"] - e["ne"]`` is the same IR as the hand-written
-    operator-first ``dsl.Var("ni", "cons") - dsl.Var("ne", "cons")``.
+    written as ``e["density"] - i["density"]`` remains unambiguous even when
+    several species use the same physical component name.  Multi-state handles
+    therefore expose the same owner-qualified coordinates as
+    :meth:`pops.model.Module.state_symbols`; a single-state handle retains the
+    ordinary conservative variables of the underlying model.
     """
 
     __slots__ = ("components", "vars", "roles", "space")

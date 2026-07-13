@@ -73,14 +73,12 @@ class _MultiSpeciesMixin(_BoardModel):
     def _declare_species_on(self, module: Any, name: Any, components: Any,
                             roles: Any) -> StateHandle:
         """Build one complete typed species on an unpublished/guarded Module."""
-        from ..ir.expr import Var
-
         name = require_name(name, "species name")
         comps = normalize_components(components, "species %s state" % name)
         role_map = normalize_roles(roles, comps, "species %s" % name)
         canon = {component: _canon_role(role) for component, role in role_map.items()}
         space = module.state_space(name, comps, roles=canon)
-        vars_ = tuple(Var(component, "cons") for component in comps)
+        vars_ = module.state_symbols(space)
         return StateHandle(
             name, comps, vars_, role_map, owner=self.owner_path, space=space)
 

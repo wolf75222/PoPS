@@ -80,8 +80,8 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         self._reconstruction = None
         # Multi-species mode (Spec 3 sections 12, 16): once a SECOND species is declared the model owns
         # a multi-block pops.model.Module directly (N StateSpaces + a coupled_rate + a multi-block field
-        # operator). The single-species path stays byte-identical (keeps the dsl.Model and exposes
-        # dsl.Model.module); _multi_module is None until N > 1.
+        # operator). The single-species path keeps the same dsl.Model backend and numerics;
+        # _multi_module is None until N > 1.
         self._multi_module = None
         self._species = {}          # species name -> StateHandle (multi-species mode)
         self._module_cache = None
@@ -255,10 +255,11 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         to one :class:`pops.model.StateSpace` and a named block (Spec 3 sections 12, 16). The returned
         :class:`StateHandle` unpacks into its component vars and indexes them by name (``e["ne"]``) for
         a coupled-rate formula. Arbitrary arity: declare 2, 3, 4, ... species. The single-species case
-        is byte-identical to :meth:`state` (no multi-block Module is created); the multi-block path
+        uses the same backend as :meth:`state` (no multi-block Module is created); the multi-block path
         engages only from the SECOND species, lowering to the existing operator-first multi-block IR
         (``pops.model.Module`` with N spaces + ``coupled_rate`` + ``solve_fields_from_blocks``), never a
-        parallel runtime.
+        parallel runtime. Species components are owner-qualified from the first declaration, so an
+        existing handle remains exact if a second species later uses the same component names.
         """
         name = require_name(name, "species name")
         components = normalize_components(state, "species %s state" % name)
@@ -268,9 +269,24 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                 "species %r is already declared; each species needs a distinct name "
                 "(a reused name would silently alias the StateSpace)" % name)
         if not self._species and self._multi_module is None:
-            # First species: keep the single-state dsl-backed path byte-identical to state().
+            # First species: retain the single-state dsl-backed execution path.
             handle = self.state(
                 name, components=components, roles=None if roles is None else role_map)
+            # A species coordinate must retain its state owner if this model is later promoted to
+            # multiple blocks. The single-state backend rebinds these exact coordinates at its
+            # target boundary, so the executable result remains identical without mutating this
+            # immutable handle when a second species is declared.
+            from pops.ir.expr import Var
+            from pops.model.state_symbols import state_component_symbol
+
+            qualified = tuple(
+                Var(state_component_symbol(handle.space, component), "cons")
+                for component in handle.components
+            )
+            handle = StateHandle(
+                handle.name, handle.components, qualified, dict(handle.roles),
+                owner=self.owner_path, space=handle.space)
+            self._states[handle.name] = handle
             self._species[handle.name] = handle
             return handle
         if self._multi_module is None:

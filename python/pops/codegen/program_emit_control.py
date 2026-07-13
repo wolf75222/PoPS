@@ -70,16 +70,32 @@ def _coupled_rate_components(program: Any, v: Any) -> dict:
                         "operator %r block %r references %s var %r; the MVP per-cell binding is "
                         "cons-only (node %r)" % (op_name, blk, node.kind, node.name, v.name))
         components[state_in.block] = list(comps)
-    # Every cons var a formula references must be a component of SOME input state (an output block
-    # OR a read-only catalyst input). A name in no input state -- a typo, or a name the author
-    # forgot to add as a typed temporal state -- would emit an undefined C++ identifier that only
-    # fails at the AOT compile, far from the authoring site; reject it loud here, like prim/aux.
-    all_cons = {c for s in v.inputs if getattr(s, "space", None) is not None
-                for c in s.space.components}
+    # Every cons var a formula references must be a coordinate of SOME input state (an output block
+    # OR a read-only catalyst input). Qualified coordinates are always available. A bare component
+    # name remains accepted only when it identifies exactly one input state; otherwise it would
+    # silently select one of several physical quantities with the same display name.
+    from collections import Counter
+    from pops.model.state_symbols import state_component_symbol
+
+    spaces = [s.space for s in v.inputs if getattr(s, "space", None) is not None]
+    counts = Counter(component for space in spaces for component in space.components)
+    all_cons = {
+        state_component_symbol(space, component)
+        for space in spaces for component in space.components
+    }
+    all_cons.update(component for component, count in counts.items() if count == 1)
     referenced = set()
     for comps in components.values():
         for e in comps:
             referenced |= e.deps()
+    ambiguous = sorted(
+        component for component, count in counts.items()
+        if count > 1 and component in referenced)
+    if ambiguous:
+        raise ValueError(
+            "coupled_rate operator %r references ambiguous bare component(s) %s; obtain exact "
+            "coordinates with module.state_symbols(state_space) (node %r)"
+            % (op_name, ambiguous, v.name))
     missing = referenced - all_cons
     if missing:
         raise NotImplementedError(
