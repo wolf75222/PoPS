@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from pops.identity import make_identity
 from pops.identity.semantic import semantic_value
@@ -21,6 +21,15 @@ from .authoring import (
     AMRTagging,
     ResolvedAMRAuthorities,
 )
+
+
+@runtime_checkable
+class AMRLayoutResolver(Protocol):
+    """Small extension interface implemented by an adaptive layout authority."""
+
+    def resolve_amr_authorities(
+        self, context: "AMRResolutionContext",
+    ) -> ResolvedAMRAuthorities: ...
 
 
 def _canonical_owner(value: Any, *, where: str) -> OwnerPath:

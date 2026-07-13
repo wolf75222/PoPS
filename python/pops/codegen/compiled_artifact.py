@@ -42,8 +42,6 @@ class CompiledPlanRecord:
     bind_schema: Any
     compile_values: Mapping[Any, Any]
     field_plans: Mapping[str, Any]
-    outputs: tuple[Any, ...]
-    diagnostics: tuple[Any, ...]
     requirements: Mapping[str, Any]
     capabilities: Mapping[str, Any]
     lowering_coverage: Any
@@ -72,8 +70,6 @@ class CompiledPlanRecord:
             bind_schema=plan.bind_schema,
             compile_values=plan.compile_values,
             field_plans=plan.field_plans,
-            outputs=plan.outputs,
-            diagnostics=plan.diagnostics,
             consumer_graph=plan.consumer_graph,
             requirements=plan.requirements,
             capabilities=plan.capabilities,
@@ -109,9 +105,6 @@ class CompiledPlanRecord:
                 "CompiledPlanRecord.lowering_coverage must be a LoweringCoverageReport")
         object.__setattr__(self, "compile_values", _deep_freeze(self.compile_values))
         object.__setattr__(self, "field_plans", _deep_freeze(self.field_plans))
-        object.__setattr__(self, "outputs", tuple(_deep_freeze(v) for v in self.outputs))
-        object.__setattr__(self, "diagnostics", tuple(
-            _deep_freeze(v) for v in self.diagnostics))
         if self.consumer_graph is not None:
             from pops.runtime.consumer import ConsumerGraph
 
@@ -170,9 +163,6 @@ class CompiledPlanRecord:
                 self.compile_values, where="compiled plan compile values"),
             "field_plans": _evidence(
                 self.field_plans, where="compiled plan field plans"),
-            "outputs": _evidence(self.outputs, where="compiled plan outputs"),
-            "diagnostics": _evidence(
-                self.diagnostics, where="compiled plan diagnostics"),
             "consumer_graph": (
                 None if self.consumer_graph is None else self.consumer_graph.to_data()
             ),

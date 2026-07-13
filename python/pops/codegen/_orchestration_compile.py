@@ -55,17 +55,6 @@ def compile_install_model(name: str, model: Any, backend: str, target: str,
     return compiled
 
 
-def capture_runtime_declarations(problem: Any, detach: Any) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
-    """Return the retired legacy declaration families as empty tuples.
-
-    Accepted diagnostics, outputs and checkpoints are represented only by ``ConsumerGraph``.  The
-    two tuple slots remain in the compiled-plan record until ADC-687 removes that storage shape; no
-    Case registry or hidden compatibility path can populate them.
-    """
-    del problem, detach
-    return (), ()
-
-
 def capture_field_plans(
     problem: Any, detach: Any, *, target: str, layout: Any,
 ) -> dict[str, Any]:
@@ -197,6 +186,6 @@ def prepare_problem_snapshot(problem: Any, time: Any, *, layout: Any, libraries:
 
 
 __all__ = [
-    "build_program_model_graph", "capture_field_plans", "capture_runtime_declarations",
+    "build_program_model_graph", "capture_field_plans",
     "compile_install_model", "compile_install_models", "prepare_problem_snapshot",
 ]

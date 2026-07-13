@@ -39,7 +39,7 @@ def resolve(
         raise TypeError("pops.resolve backend must be a typed pops.codegen backend descriptor")
     backend_token = lower_backend(selected_backend)
     from pops.codegen._layout_resolution import (
-        layout_lowering_coverage, resolve_layout, validate_layout_consumers)
+        layout_lowering_coverage, resolve_layout, validate_program_layout_reads)
 
     layout_authority = resolve_layout(problem, layout, providers=layout_providers)
     layout_plan = layout_authority.plan
@@ -54,9 +54,7 @@ def resolve(
         raise ValueError("pops.resolve requires a whole-system Program for Uniform layout")
     if resolved_time is not None and backend_token != "production":
         raise ValueError("a resolved whole-system Program requires backend=Production()")
-    validate_layout_consumers(
-        problem, layout_plan, time=resolved_time,
-        outputs=(), diagnostics=())
+    validate_program_layout_reads(problem, layout_plan, time=resolved_time)
     resolved_layout = layout_authority.require_runtime()
 
     options = dict(compile_options or {})
@@ -69,7 +67,6 @@ def resolve(
 
     from pops.codegen._orchestration_compile import (
         capture_field_plans,
-        capture_runtime_declarations,
         prepare_problem_snapshot,
     )
     from pops.problem._detached import detached_frozen
@@ -111,13 +108,24 @@ def resolve(
     bootstrap_plan = None
     amr_execution = None
     if target == "amr_system":
-        protocol = getattr(detached_layout, "resolve_amr_authorities", None)
-        if not callable(protocol):
+        from pops.amr import (
+            AMRLayoutResolver,
+            AMRResolutionContext,
+            ResolvedAMRAuthorities,
+        )
+
+        if not isinstance(detached_layout, AMRLayoutResolver):
             raise TypeError(
                 "adaptive layout providers must implement "
                 "resolve_amr_authorities(AMRResolutionContext)"
             )
-        from pops.amr import AMRResolutionContext, ResolvedAMRAuthorities
+
+        from pops.model import Handle
+
+        def resolve_amr_handle(value: Any) -> Any:
+            if isinstance(value, Handle) and value.is_resolved:
+                return value
+            return problem.resolve(value)
 
         context = AMRResolutionContext(
             owner=problem.owner_path.canonical(),
@@ -126,10 +134,9 @@ def resolve(
                 block.numerics for block in blocks if block.numerics is not None),
             initials=problem.initials,
             program=resolved_time,
-            resolve=lambda value: (
-                value if getattr(value, "is_resolved", False) else problem.resolve(value)),
+            resolve=resolve_amr_handle,
         )
-        resolved_amr = protocol(context)
+        resolved_amr = detached_layout.resolve_amr_authorities(context)
         if type(resolved_amr) is not ResolvedAMRAuthorities:
             raise TypeError(
                 "layout resolve_amr_authorities() must return exact ResolvedAMRAuthorities"
@@ -141,7 +148,6 @@ def resolve(
         amr_execution = resolved_amr.execution
     field_plans = capture_field_plans(
         problem, detached_frozen, target=target, layout=detached_layout)
-    outputs, diagnostics = capture_runtime_declarations(problem, detached_frozen)
     snapshot = prepare_problem_snapshot(
         problem, resolved_time, layout=layout_plan, libraries=())
     from pops.codegen._resolution import resolve_capability_evidence
@@ -178,8 +184,7 @@ def resolve(
         snapshot=snapshot, target=target, backend=backend_token, layout=detached_layout,
         layout_plan=layout_plan,
         time=resolved_time, blocks=blocks, bind_schema=bind_schema,
-        compile_values=compile_values, field_plans=field_plans, outputs=outputs,
-        diagnostics=diagnostics, consumer_graph=consumer_graph,
+        compile_values=compile_values, field_plans=field_plans, consumer_graph=consumer_graph,
         libraries=(),
         requirements={"tokens": tuple(evidence["requirements"]),
                       "layout_resources": layout_plan.resource_requirements(),

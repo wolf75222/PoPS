@@ -90,10 +90,8 @@ def validate_layout(problem: Any, layout: Any) -> None:
     problem._field_registry.validate(context).raise_if_error()
 
 
-def validate_layout_consumers(
-    problem: Any, plan: Any, *, time: Any = None, outputs: Any = (), diagnostics: Any = (),
-) -> None:
-    """Authenticate consumer references and prove every materialized read has one layout."""
+def validate_program_layout_reads(problem: Any, plan: Any, *, time: Any = None) -> None:
+    """Prove every materialized Program read belongs to one resolved layout."""
     from pops.model import Handle
 
     def assigned(reference: Any) -> Any:
@@ -101,17 +99,6 @@ def validate_layout_consumers(
             return None
         canonical = problem.resolve(reference)
         return plan.layout_for(canonical)
-
-    for family, values in (("output", outputs or ()), ("diagnostic", diagnostics or ())):
-        for value in values:
-            protocol = getattr(value, "resolve_references", None)
-            if not callable(protocol):
-                raise TypeError("runtime %s must implement resolve_references" % family)
-            resolved = protocol(problem.resolve)
-            references = getattr(resolved, "declaration_references", None)
-            if callable(references):
-                for reference in references():
-                    assigned(reference)
 
     if time is None:
         return
@@ -300,5 +287,5 @@ def _refuse_runtime(plan: Any, *, gate: str, message: str) -> None:
 __all__ = [
     "LayoutCapabilityError", "ResolvedLayoutAuthority", "layout_lowering_coverage",
     "materialized_layout_subjects", "resolve_layout", "validate_layout",
-    "validate_layout_consumers",
+    "validate_program_layout_reads",
 ]

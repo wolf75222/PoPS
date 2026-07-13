@@ -64,11 +64,9 @@ def _resolved_plan():
             "fluid", _Canonical("model"), {"flux": ["hll"]}, "production"),),
         bind_schema=BindSchema(),
         compile_values={},
-        field_solvers={"phi": {"algorithm": "mg", "levels": [2, 4]}},
-        outputs=({"format": "hdf5"},),
-        diagnostics=({"name": "mass"},),
+        field_plans={},
         libraries=(),
-        requirements={"mpi": False},
+        requirements={"mpi": False, "field": {"levels": [2, 4]}},
         capabilities={"cpu": True, "gpu": False},
         lowering_coverage=layout_lowering_coverage(layout_plan),
         compile_options={"std": "c++20"},
@@ -101,7 +99,7 @@ def test_resolved_plan_is_exact_deeply_frozen_and_self_authenticating():
     source_layout["mesh"]["shape"].append(32)
     assert plan.layout["mesh"]["shape"] == (16, 16)
     with pytest.raises(TypeError):
-        plan.field_solvers["phi"]["levels"] = ()
+        plan.requirements["field"]["levels"] = ()
     with pytest.raises((FrozenInstanceError, AttributeError)):
         plan.target = "amr_system"
     plan.verify()

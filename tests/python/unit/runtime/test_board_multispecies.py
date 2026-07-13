@@ -31,13 +31,15 @@ physics = pytest.importorskip("pops.physics")
 from pops import model  # noqa: E402
 from pops.ir.expr import Var  # noqa: E402
 from tests.python.unit.runtime._typed_program import typed_program_states  # noqa: E402
+from tests.python.support.physics_roles import planar_fluid_roles  # noqa: E402
 
 
 def _three_fluid_board():
     """A 3-fluid (electrons / ions / neutrals) board model with a coupled rate + field solve."""
     m = physics.Model("three_fluid")
-    e = m.species("electrons", state=["ne", "mex", "mey"],
-                  roles={"ne": "density", "mex": "momentum_x", "mey": "momentum_y"})
+    e = m.species(
+        "electrons", state=["ne", "mex", "mey"],
+        roles=planar_fluid_roles("ne", "mex", "mey"))
     i = m.species("ions", state=["ni", "mix", "miy"])
     n = m.species("neutrals", state=["nn", "mnx", "mny"])
     m.coupled_rate(
@@ -261,14 +263,16 @@ def test_single_species_is_byte_identical_to_state():
     # the N == 1 path is unchanged: m.species == m.state (no multi-block Module created).
     def via_state():
         m = physics.Model("euler")
-        m.state("U", components=["rho", "mx", "my"],
-                roles={"rho": "density", "mx": "momentum_x", "my": "momentum_y"})
+        m.state(
+            "U", components=["rho", "mx", "my"],
+            roles=planar_fluid_roles("rho", "mx", "my"))
         return m
 
     def via_species():
         m = physics.Model("euler")
-        m.species("U", state=["rho", "mx", "my"],
-                  roles={"rho": "density", "mx": "momentum_x", "my": "momentum_y"})
+        m.species(
+            "U", state=["rho", "mx", "my"],
+            roles=planar_fluid_roles("rho", "mx", "my"))
         return m
 
     s = via_species()

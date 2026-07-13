@@ -8,14 +8,21 @@ import pytest
 from pops.ir import Divergence, Equation, RateExpr, TimeDerivative
 from pops.math import ddt, div
 from pops.model import OperatorHandle, OwnerKind
-from pops.physics import Model
+from pops.physics import Density, Model
+from tests.python.support.physics_roles import FRAME, X_AXIS, Y_AXIS
 
 
 def _scalar_advection_model():
-    model = Model("scalar_advection")
-    state = model.state("U", components=["u"], roles={"u": "density"})
+    model = Model("scalar_advection", frame=FRAME)
+    state = model.state("U", components=["u"], roles={"u": Density()})
     (u,) = state
-    flux = model.flux("F", on=state, x=[u], y=[u], waves={"x": [1], "y": [1]})
+    flux = model.flux(
+        "F",
+        frame=FRAME,
+        state=state,
+        components={X_AXIS: [u], Y_AXIS: [u]},
+        waves={X_AXIS: [1], Y_AXIS: [1]},
+    )
     return model, state, flux
 
 
@@ -39,7 +46,7 @@ def test_rate_registration_consumes_the_same_flux_handle_and_returns_an_owned_ha
     model, state, flux = _scalar_advection_model()
     equation = ddt(state) == -div(flux)
 
-    rate = model.rate("A", equation)
+    rate = model.rate("A", equation=equation)
 
     assert isinstance(rate, OperatorHandle)
     assert rate.owner_path == model.owner_path
@@ -51,7 +58,7 @@ def test_rate_rejects_a_positive_flux_divergence():
     model, state, flux = _scalar_advection_model()
 
     with pytest.raises(ValueError, match=r"must be -div\(F\)"):
-        model.rate("wrong_sign", ddt(state) == div(flux))
+        model.rate("wrong_sign", equation=ddt(state) == div(flux))
 
 
 @pytest.mark.parametrize("scale", [-2, Fraction(-1, 3), -0.5])
@@ -59,7 +66,7 @@ def test_rate_rejects_flux_coefficients_the_current_lowering_cannot_represent(sc
     model, state, flux = _scalar_advection_model()
 
     with pytest.raises(ValueError, match=r"exact unit coefficient.*discard a scale"):
-        model.rate("scaled_flux", ddt(state) == Divergence(flux, scale=scale))
+        model.rate("scaled_flux", equation=ddt(state) == Divergence(flux, scale=scale))
 
 
 def test_rate_rejects_source_coefficients_instead_of_silently_dropping_them():
@@ -69,14 +76,14 @@ def test_rate_rejects_source_coefficients_instead_of_silently_dropping_them():
     scaled_source = RateExpr([("source", source, Fraction(2, 1))])
 
     with pytest.raises(ValueError, match=r"exact unit coefficient.*discard scale"):
-        model.rate("scaled_source", ddt(state) == scaled_source)
+        model.rate("scaled_source", equation=ddt(state) == scaled_source)
 
 
 def test_rate_rejects_multiple_divergences_instead_of_collapsing_them_to_one_bool():
     model, state, flux = _scalar_advection_model()
 
     with pytest.raises(ValueError, match="one -div"):
-        model.rate("duplicate_flux", ddt(state) == -div(flux) - div(flux))
+        model.rate("duplicate_flux", equation=ddt(state) == -div(flux) - div(flux))
 
 
 def test_physics_model_owner_anchor_is_read_only():

@@ -194,8 +194,6 @@ class ResolvedSimulationPlan:
     bind_schema: Any
     compile_values: Mapping[Any, Any]
     field_plans: Mapping[str, Any]
-    outputs: tuple[Any, ...]
-    diagnostics: tuple[Any, ...]
     libraries: tuple[Any, ...]
     requirements: Mapping[str, Any]
     capabilities: Mapping[str, Any]
@@ -254,7 +252,7 @@ class ResolvedSimulationPlan:
                 raise TypeError(
                     "ResolvedSimulationPlan.field_plans[%r] must be a total resolved install plan"
                     % name)
-        for name in ("outputs", "diagnostics", "libraries"):
+        for name in ("libraries",):
             object.__setattr__(
                 self, name, tuple(_deep_freeze(item) for item in getattr(self, name)))
         if self.libraries:
@@ -302,8 +300,6 @@ class ResolvedSimulationPlan:
                 "spatial": _evidence(block.spatial, where="plan.block.spatial"),
             } for block in self.blocks],
             "field_plans": _evidence(self.field_plans, where="plan.field_plans"),
-            "outputs": _evidence(self.outputs, where="plan.outputs"),
-            "diagnostics": _evidence(self.diagnostics, where="plan.diagnostics"),
             "consumer_graph": (
                 None if self.consumer_graph is None else self.consumer_graph.to_data()
             ),

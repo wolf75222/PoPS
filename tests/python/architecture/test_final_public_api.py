@@ -147,7 +147,10 @@ def test_runtime_package_does_not_reexport_retired_authoring_engines() -> None:
 def test_physics_has_no_competing_model_facade() -> None:
     from pops import physics
 
-    assert physics.__all__ == ["Model", "ComponentRole", "Density", "Momentum"]
+    assert physics.__all__ == [
+        "Model", "ComponentRole", "Density", "Energy", "Momentum", "Pressure", "Scalar",
+        "Temperature", "Velocity",
+    ]
     assert physics.Model is pops.Model
     for removed in ("PdeModel", "HyperbolicModel", "PhysicsModel", "HybridModel"):
         assert not hasattr(physics, removed)

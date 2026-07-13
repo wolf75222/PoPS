@@ -6,6 +6,18 @@ operators and small protocols returned by ``Model``.
 """
 
 from .board import Model
-from .roles import ComponentRole, Density, Momentum
+from .roles import (
+    ComponentRole,
+    Density,
+    Energy,
+    Momentum,
+    Pressure,
+    Scalar,
+    Temperature,
+    Velocity,
+)
 
-__all__ = ["Model", "ComponentRole", "Density", "Momentum"]
+__all__ = [
+    "Model", "ComponentRole", "Density", "Energy", "Momentum", "Pressure", "Scalar",
+    "Temperature", "Velocity",
+]

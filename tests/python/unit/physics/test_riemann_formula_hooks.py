@@ -18,6 +18,7 @@ import pytest
 physics = pytest.importorskip("pops.physics")
 # Spec 5 (sec.4): the riemann capability-hook catalog lives in pops.numerics.riemann.
 lib = types.SimpleNamespace(riemann=pytest.importorskip("pops.numerics.riemann").riemann)
+from tests.python.support.physics_roles import planar_fluid_roles  # noqa: E402
 
 
 def _euler(custom_pressure=None):
@@ -25,9 +26,9 @@ def _euler(custom_pressure=None):
     ``m.riemann(pressure=...)`` (ADC-456), or None for the role-derived default."""
     from pops.math import sqrt
     m = physics.Model("euler")
-    U = m.state("U", components=["rho", "mx", "my", "E"],
-                roles={"rho": "density", "mx": "momentum_x",
-                       "my": "momentum_y", "E": "energy"})
+    U = m.state(
+        "U", components=["rho", "mx", "my", "E"],
+        roles=planar_fluid_roles("rho", "mx", "my", energy="E"))
     rho, mx, my, E = U
     g = m.value(m.param(ConstParam("gamma", 1.4)))
     p = m.primitive("p", (g - 1.0) * (E - 0.5 * (mx * mx + my * my) / rho))
@@ -105,9 +106,9 @@ def test_pressure_formula_referencing_a_missing_capability_raises():
     # at codegen (the pressure(U) hook has no Aux parameter).
     from pops.ir.expr import Var
     m = physics.Model("euler")
-    U = m.state("U", components=["rho", "mx", "my", "E"],
-                roles={"rho": "density", "mx": "momentum_x",
-                       "my": "momentum_y", "E": "energy"})
+    U = m.state(
+        "U", components=["rho", "mx", "my", "E"],
+        roles=planar_fluid_roles("rho", "mx", "my", energy="E"))
     rho, mx, my, E = U
     g = m.value(m.param(ConstParam("gamma", 1.4)))
     p = m.primitive("p", (g - 1.0) * (E - 0.5 * (mx * mx + my * my) / rho))
@@ -126,9 +127,9 @@ def test_arbitrary_formula_for_a_two_state_hook_is_rejected():
     # contact_speed / star_state span two states (UL/UR/pL/pR/sL/sR); an arbitrary single-Expr
     # override is ill-defined, so they accept only a capability-hook descriptor.
     m = physics.Model("euler")
-    U = m.state("U", components=["rho", "mx", "my", "E"],
-                roles={"rho": "density", "mx": "momentum_x",
-                       "my": "momentum_y", "E": "energy"})
+    U = m.state(
+        "U", components=["rho", "mx", "my", "E"],
+        roles=planar_fluid_roles("rho", "mx", "my", energy="E"))
     rho, _, _, _ = U
     m.primitive("p", rho)
     with pytest.raises(NotImplementedError, match="contact_speed"):
@@ -138,8 +139,8 @@ def test_arbitrary_formula_for_a_two_state_hook_is_rejected():
 def test_missing_pressure_capability_still_rejected():
     # the pre-existing capability gate is unchanged: HLLC on a model without pressure raises.
     m = physics.Model("euler")
-    m.state("U", components=["rho", "mx", "my", "E"],
-            roles={"rho": "density", "mx": "momentum_x",
-                   "my": "momentum_y", "E": "energy"})
+    m.state(
+        "U", components=["rho", "mx", "my", "E"],
+        roles=planar_fluid_roles("rho", "mx", "my", energy="E"))
     with pytest.raises(ValueError, match="requires model capability 'pressure'"):
         m.riemann("hllc")

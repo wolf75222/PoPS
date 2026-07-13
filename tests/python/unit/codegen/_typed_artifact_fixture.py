@@ -71,8 +71,6 @@ def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=Non
         bind_schema=schema,
         compile_values=schema.resolve_compile(),
         field_plans={},
-        outputs=(),
-        diagnostics=(),
         libraries=(),
         requirements={"amr": target == "amr_system"},
         capabilities={"cpu": True, "amr": target == "amr_system"},

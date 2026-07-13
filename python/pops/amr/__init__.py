@@ -15,6 +15,7 @@ from .authoring import (
     Tag,
 )
 from .resolution import (
+    AMRLayoutResolver,
     AMRResolutionContext,
     AMRTaggingResolutionContext,
     ResolvedTaggingAuthority,
@@ -28,6 +29,7 @@ from pops.mesh.amr.tagging_graph import ConflictPolicy, EqualityPolicy, Hysteres
 __all__ = [
     "AMRExecution",
     "AMRHierarchy",
+    "AMRLayoutResolver",
     "AMRRegrid",
     "AMRResolutionContext",
     "AMRTagging",

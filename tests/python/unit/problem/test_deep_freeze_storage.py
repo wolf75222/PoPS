@@ -8,6 +8,7 @@ pops = pytest.importorskip("pops", exc_type=ImportError)
 
 from pops.model import Module  # noqa: E402
 from pops.params import ParamProvenance, RuntimeParam  # noqa: E402
+from pops.problem._detached import detached_frozen  # noqa: E402
 from pops.problem._snapshot import build_problem_snapshot  # noqa: E402
 
 
@@ -52,3 +53,14 @@ def test_case_freeze_detaches_stale_registry_views_and_keeps_hash_stable():
         del case._block_registry._blocks
     with pytest.raises(AttributeError, match="identity"):
         del case._name
+
+
+def test_plain_mutable_extension_record_cannot_cross_compiled_boundary():
+    """A copied-but-still-mutable foreign record is not an immutable protocol."""
+
+    class MutableExtension:
+        def __init__(self):
+            self.options = {"order": 2}
+
+    with pytest.raises(TypeError, match="retained extension values must implement freeze"):
+        detached_frozen(MutableExtension())

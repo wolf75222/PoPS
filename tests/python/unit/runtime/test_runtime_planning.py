@@ -72,8 +72,6 @@ def _artifact(names=("fluid",), *, heterogeneous=False, memory_spaces=("host",))
         bind_schema=schema,
         compile_values=schema.resolve_compile(),
         field_plans={},
-        outputs=(),
-        diagnostics=(),
         libraries=(),
         requirements={},
         capabilities={},

@@ -53,14 +53,14 @@ issue = "ADC-655"
 polarity = "positive"
 kind = "pytest"
 target = "snapshot"
-nodeid = "tests/python/unit/problem/test_authoring_snapshot_complete.py::test_stale_authoring_mutations_cannot_change_an_existing_snapshot"
+nodeid = "tests/python/unit/problem/test_deep_freeze_storage.py::test_case_freeze_detaches_stale_registry_views_and_keeps_hash_stable"
 
 [[check]]
 issue = "ADC-655"
 polarity = "negative"
 kind = "pytest"
 target = "snapshot"
-nodeid = "tests/python/unit/problem/test_authoring_snapshot_complete.py::test_plain_mutable_extension_record_cannot_cross_compiled_boundary"
+nodeid = "tests/python/unit/problem/test_deep_freeze_storage.py::test_plain_mutable_extension_record_cannot_cross_compiled_boundary"
 
 [[check]]
 issue = "ADC-656"
@@ -123,7 +123,7 @@ issue = "ADC-659"
 polarity = "negative"
 kind = "pytest"
 target = "python"
-nodeid = "tests/python/unit/runtime/test_total_output_lowering.py::test_amr_output_never_substitutes_a_requested_contract"
+nodeid = "tests/python/unit/output/test_exact_writers.py::test_missing_exact_level_state_selection_fails_before_a_writer"
 
 [[check]]
 issue = "ADC-660"
