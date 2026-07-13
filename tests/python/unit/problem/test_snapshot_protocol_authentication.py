@@ -1,4 +1,6 @@
 """AuthoringSnapshot special encodings accept authenticated PoPS value types only."""
+from enum import Enum
+
 import pytest
 
 pops = pytest.importorskip("pops", exc_type=ImportError)
@@ -7,6 +9,23 @@ from pops.ir.literals import ScalarLiteral as PopsScalarLiteral  # noqa: E402
 from pops.model import DeclarationIndex, OwnerKind  # noqa: E402
 from pops.model.handles import Handle, OwnerPath  # noqa: E402
 from pops.problem._snapshot import AuthoringSnapshot  # noqa: E402
+
+
+def test_enum_members_have_a_qualified_cycle_free_snapshot_encoding():
+    class Equality(Enum):
+        HOLD = "hold"
+
+    class Conflict(Enum):
+        HOLD = "hold"
+
+    equality = AuthoringSnapshot({"policy": Equality.HOLD})
+    conflict = AuthoringSnapshot({"policy": Conflict.HOLD})
+
+    data = equality.to_dict()["policy"]["$enum"]
+    assert data["type"].endswith(".Equality")
+    assert data["member"] == "HOLD"
+    assert data["value"] == "hold"
+    assert equality.hash != conflict.hash
 
 
 def test_same_named_scalar_literal_cannot_collide_with_real_literal():

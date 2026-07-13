@@ -13,7 +13,7 @@ from pops.mesh.layout_plan import (
     normalize_layout_plan,
 )
 from pops.mesh.layouts import AMR, Uniform
-from pops.mesh.amr import CheckpointPolicy
+from pops.mesh.amr import PatchClustering
 from pops.model import Handle, OwnerKind, OwnerPath
 
 
@@ -198,9 +198,9 @@ def test_public_single_layout_normalization_returns_a_degenerate_plan():
 def test_descriptor_snapshot_accounts_for_semantics_omitted_from_options():
     owner = OwnerPath.case("main")
     first = normalize_layout_plan(
-        AMR(CartesianMesh(n=8), checkpoint=CheckpointPolicy(restartable=True)), owner=owner)
+        AMR(CartesianMesh(n=8), clustering=PatchClustering(min_efficiency=0.6)), owner=owner)
     second = normalize_layout_plan(
-        AMR(CartesianMesh(n=8), checkpoint=CheckpointPolicy(restartable=False)), owner=owner)
+        AMR(CartesianMesh(n=8), clustering=PatchClustering(min_efficiency=0.8)), owner=owner)
     assert first.layouts[0].options == second.layouts[0].options  # proves options() is incomplete
     assert first.layouts[0].descriptor_snapshot != second.layouts[0].descriptor_snapshot
     assert first.canonical_id != second.canonical_id

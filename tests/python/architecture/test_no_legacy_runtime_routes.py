@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import inspect
 from pathlib import Path
 
 import pops
@@ -21,6 +22,17 @@ def _removed_names() -> tuple[str, ...]:
         "Sys" + "tem",
         "Amr" + "System",
         "Model" + "Spec",
+    )
+
+
+def _removed_amr_authorities() -> tuple[str, ...]:
+    return (
+        "Checkpoint" + "Policy",
+        "AMR" + "Output",
+        "All" + "Levels",
+        "Coarse" + "Only",
+        "Selected" + "Levels",
+        "Priority" + "Order",
     )
 
 
@@ -52,6 +64,41 @@ def test_case_has_one_registration_spelling_per_authority() -> None:
     assert hasattr(case, "field") and not hasattr(case, "add_field")
     assert hasattr(case, "program") and not hasattr(case, "time")
     assert hasattr(case, "consumers") and not hasattr(case, "output")
+
+
+def test_amr_has_one_checkpoint_output_and_tagging_authority_path() -> None:
+    from pops import amr as authoring_amr
+    from pops.mesh import amr as mesh_amr
+    from pops.mesh.layouts import AMR as LegacyMeshAMR
+
+    removed = _removed_amr_authorities()
+    for name in removed[:5]:
+        assert name not in mesh_amr.__all__
+        assert not hasattr(mesh_amr, name)
+    assert removed[5] not in authoring_amr.__all__
+    assert not hasattr(authoring_amr, removed[5])
+
+    layout_parameters = inspect.signature(LegacyMeshAMR).parameters
+    assert "checkpoint" not in layout_parameters
+    assert "output" not in layout_parameters
+
+    tagging_parameters = inspect.signature(authoring_amr.AMRTagging).parameters
+    for name in ("hysteresis", "conflict_policy"):
+        assert tagging_parameters[name].default is inspect.Parameter.empty
+    for name in ("Hysteresis", "EqualityPolicy", "ConflictPolicy"):
+        assert name in authoring_amr.__all__
+        assert hasattr(authoring_amr, name)
+
+    source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (
+            PACKAGE / "amr" / "authoring.py",
+            PACKAGE / "mesh" / "amr" / "__init__.py",
+            PACKAGE / "mesh" / "layouts" / "__init__.py",
+        )
+    )
+    for name in removed:
+        assert name not in source
 
 
 def test_program_has_one_runtime_branch_spelling() -> None:

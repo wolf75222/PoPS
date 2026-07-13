@@ -11,7 +11,6 @@ from .authoring import (
     AMRTagging,
     Buffer,
     Coarsen,
-    PriorityOrder,
     ResolvedAMRAuthorities,
     Tag,
 )
@@ -23,6 +22,7 @@ from .resolution import (
     resolve_tagging,
 )
 from pops.mesh.amr.transfer import AMRTransfer
+from pops.mesh.amr.tagging_graph import ConflictPolicy, EqualityPolicy, Hysteresis
 
 
 __all__ = [
@@ -35,7 +35,9 @@ __all__ = [
     "AMRTransfer",
     "Buffer",
     "Coarsen",
-    "PriorityOrder",
+    "ConflictPolicy",
+    "EqualityPolicy",
+    "Hysteresis",
     "ResolvedAMRAuthorities",
     "ResolvedTaggingAuthority",
     "Tag",

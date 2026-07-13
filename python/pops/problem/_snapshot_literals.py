@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from enum import Enum
 from typing import Any
 
 
@@ -28,4 +29,16 @@ def canonical_literal_data(data: Any, *, path: str) -> Any:
         path, cls.__module__, cls.__qualname__))
 
 
-__all__ = ["canonical_literal_data"]
+def canonical_enum_data(value: Enum, *, path: str) -> dict[str, Any]:
+    """Encode one exact enum member without introspecting its cyclic class dictionary."""
+    cls = type(value)
+    qualified = "%s.%s" % (cls.__module__, cls.__qualname__)
+    return {"$enum": {
+        "type": qualified,
+        "member": value.name,
+        "value": canonical_literal_data(
+            value.value, path="%s<%s.%s>" % (path, qualified, value.name)),
+    }}
+
+
+__all__ = ["canonical_enum_data", "canonical_literal_data"]

@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 
 import pops
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -20,13 +21,31 @@ def _example():
     return module
 
 
-def _resolved_target():
+def _resolved_target(*, hysteresis=None, conflict_policy=None):
     from pops.amr import AMRResolutionContext
     from pops.mesh import normalize_layout_plan
 
     target = _example().build_final_case()
+    authored_layout = target.layout
+    if hysteresis is not None or conflict_policy is not None:
+        if hysteresis is None or conflict_policy is None:
+            raise ValueError("custom tagging requires both hysteresis and conflict_policy")
+        from pops.amr import AMRTagging
+
+        authored_layout = type(authored_layout)(
+            grid=authored_layout.grid,
+            hierarchy=authored_layout.hierarchy,
+            tagging=AMRTagging(
+                rules=authored_layout.tagging.rules,
+                hysteresis=hysteresis,
+                conflict_policy=conflict_policy,
+            ),
+            regrid=authored_layout.regrid,
+            transfer=authored_layout.transfer,
+            execution=authored_layout.execution,
+        )
     case = pops.validate(target.authoring.case)
-    layout = target.layout.resolve_for_case(case.resolve)
+    layout = authored_layout.resolve_for_case(case.resolve)
     subjects = case._materialized_layout_subjects()
     layout_plan = normalize_layout_plan(
         layout,
@@ -75,6 +94,39 @@ def test_final_amr_authorities_derive_discrete_context_and_nesting():
     assert graph.refine.context.stencil.kind == "stencil"
     assert authorities.initial_conditions.layout_plan_id == layout_plan.qualified_id
     assert authorities.bootstrap.tagging == authorities.tagging.graph
+
+
+def test_tagging_resolution_preserves_explicit_hysteresis_equality_and_conflict():
+    from pops.amr import ConflictPolicy, EqualityPolicy, Hysteresis
+
+    authored = Hysteresis(min_cycles=3, equality=EqualityPolicy.COARSEN)
+    _, layout, _, authorities = _resolved_target(
+        hysteresis=authored,
+        conflict_policy=ConflictPolicy.ERROR,
+    )
+    graph = authorities.tagging.graph.graph
+    assert layout.tagging.hysteresis == authored
+    assert graph.hysteresis == authored
+    assert graph.hysteresis.equality is EqualityPolicy.COARSEN
+    assert graph.conflict_policy is ConflictPolicy.ERROR
+
+
+def test_tagging_authority_requires_exact_explicit_policy_types():
+    from pops.amr import AMRTagging, ConflictPolicy, EqualityPolicy, Hysteresis
+
+    rules = _example().build_final_case().layout.tagging.rules
+    with pytest.raises(TypeError, match="exact Hysteresis"):
+        AMRTagging(
+            rules=rules,
+            hysteresis=object(),
+            conflict_policy=ConflictPolicy.ERROR,
+        )
+    with pytest.raises(TypeError, match="exact ConflictPolicy"):
+        AMRTagging(
+            rules=rules,
+            hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
+            conflict_policy="error",
+        )
 
 
 def test_public_resolve_derives_every_amr_authority_without_manual_injection():

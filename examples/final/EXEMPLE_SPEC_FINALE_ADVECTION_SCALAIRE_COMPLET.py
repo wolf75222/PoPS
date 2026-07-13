@@ -248,7 +248,9 @@ def build_amr_layout(core: ScalarAdvectionAuthoring) -> Any:
         AMRTransfer,
         Buffer,
         Coarsen,
-        PriorityOrder,
+        ConflictPolicy,
+        EqualityPolicy,
+        Hysteresis,
         Tag,
     )
     from pops.layouts import AMR
@@ -266,7 +268,8 @@ def build_amr_layout(core: ScalarAdvectionAuthoring) -> Any:
             Coarsen(gradient_magnitude < core.case.value(core.coarsen_threshold)),
             Buffer(cells=2),
         ),
-        combine=PriorityOrder(),
+        hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),
+        conflict_policy=ConflictPolicy.REFINE_WINS,
     )
 
     # Transfer accuracy/halos come from StateTransfer's installed policies; order is never repeated.

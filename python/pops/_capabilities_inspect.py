@@ -240,10 +240,11 @@ class AmrReport:
     """The structured, printable result of :func:`inspect_amr` (Spec 5 sec.5.11 / sec.8).
 
     A plain record of an AMR hierarchy's declared metadata -- the level / ratio envelope, the
-    regrid / patch / nesting / refinement / checkpoint / output policies, the runtime
-    requirements (reflux, tag reduction), and the explainable route limitations. :meth:`to_dict`
-    returns a plain nested dict and :meth:`__str__` a short, deterministic report. It is inert:
-    it holds metadata read from the descriptors, it computes nothing.
+    regrid / patch / nesting / refinement policies, the runtime requirements (reflux, tag
+    reduction), and the explainable route limitations. Checkpoint and output declarations live in
+    the Case's ConsumerGraph and are deliberately absent. :meth:`to_dict` returns a plain nested
+    dict and :meth:`__str__` a short, deterministic report. It is inert: it holds metadata read from
+    the descriptors, it computes nothing.
     """
 
     def __init__(self, *, layout, max_levels, ratio, native_max_levels, native_ratios,
@@ -301,13 +302,13 @@ class AmrReport:
 def _amr_policy_rows(layout):
     """Ordered (slot, name, options) rows for the policies attached to an AMR layout.
 
-    A deterministic, stable walk of the descriptor chain (refine / regrid / patches / nesting /
-    checkpoint / output); a slot left as ``None`` on the layout is skipped. The refinement
-    criterion is expanded into its sub-criteria when it is a ``TagUnion`` so the report names
-    each tagged subject / predicate / threshold, not just the union count.
+    A deterministic, stable walk of the descriptor chain (refine / regrid / patches / nesting); a
+    slot left as ``None`` on the layout is skipped. The refinement criterion is expanded into its
+    sub-criteria when it is a ``TagUnion`` so the report names each tagged subject / predicate /
+    threshold, not just the union count.
     """
     rows = []
-    for slot in ("refine", "regrid", "patches", "nesting", "checkpoint", "output"):
+    for slot in ("refine", "regrid", "patches", "nesting"):
         policy = getattr(layout, slot, None)
         if policy is None:
             continue
@@ -324,10 +325,9 @@ def inspect_amr(layout_or_context=None):
 
     The introspectable counterpart of :func:`inspect_capabilities` for the adaptive-mesh
     route. PURE: it imports only the inert :mod:`pops.mesh` authoring descriptors and reads
-    their declared metadata (levels / ratio, the regrid / patch / nesting / refine / checkpoint
-    / output policies, the runtime requirements such as reflux / tag reduction, and the
-    explainable route limitations); it NEVER imports ``_pops`` / the runtime / codegen and runs
-    no numeric loop.
+    their declared metadata (levels / ratio, the regrid / patch / nesting / refine policies, the
+    runtime requirements such as reflux / tag reduction, and the explainable route limitations);
+    it NEVER imports ``_pops`` / the runtime / codegen and runs no numeric loop.
 
     Args:
         layout_or_context: an :class:`pops.mesh.layouts.AMR` (or :class:`Uniform`) descriptor to

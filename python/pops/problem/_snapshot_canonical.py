@@ -10,24 +10,20 @@ import math
 import types
 from collections.abc import Mapping
 from decimal import Decimal
+from enum import Enum
 from fractions import Fraction
 from typing import Any
 from urllib.parse import quote
 
 from pops.ir.literals import ScalarLiteral
-from pops.model.handles import (
-    Handle,
-    OperatorHandle as ModelOperatorHandle,
-    OwnerPath,
-    ParamHandle,
-)
+from pops.model.handles import Handle, OperatorHandle as ModelOperatorHandle, OwnerPath, ParamHandle
 from pops.problem._snapshot_callable import (
     canonical_callable_reference as _canonical_callable_reference,
     class_has_public_behavior as _class_has_public_behavior,
     class_implementation_projection as _class_implementation_projection,
 )
 from pops.problem._snapshot_mapping import canonical_mapping as _canonical_mapping
-from pops.problem._snapshot_literals import canonical_literal_data as _canonical_literal_data
+from pops.problem._snapshot_literals import canonical_enum_data as _canonical_enum_data, canonical_literal_data as _canonical_literal_data
 
 
 def _canonical(
@@ -72,6 +68,8 @@ def _canonical(
         if not math.isfinite(value.real) or not math.isfinite(value.imag):
             raise ValueError("AuthoringSnapshot cannot encode a non-finite complex at %s" % path)
         return {"$complex": [value.real.hex(), value.imag.hex()]}
+    if isinstance(value, Enum):
+        return _canonical_enum_data(value, path=path)
     if isinstance(value, types.ModuleType):
         raise TypeError(
             "AuthoringSnapshot cannot encode module %s as an opaque value at %s; "

@@ -6,6 +6,7 @@ from typing import Any, ClassVar
 
 from pops.ir import Compare, Expr
 from pops.ir.visitors import _key
+from pops.mesh.amr.tagging_graph import ConflictPolicy, Hysteresis
 from pops.time import Schedule
 
 
@@ -173,21 +174,12 @@ class Buffer:
 
 
 @dataclass(frozen=True, slots=True)
-class PriorityOrder:
-    """Resolve conflicting actions in declaration order; no hidden Boolean precedence."""
-
-    __pops_ir_immutable__ = True
-
-    def inspect(self) -> dict[str, Any]:
-        return {"combine": "priority_order"}
-
-
-@dataclass(frozen=True, slots=True)
 class AMRTagging:
-    """Callback-free refine/coarsen graph with explicit conflict and buffer semantics."""
+    """Callback-free tag graph with explicit stability, equality and conflict semantics."""
 
     rules: tuple[Any, ...]
-    combine: PriorityOrder
+    hysteresis: Hysteresis
+    conflict_policy: ConflictPolicy
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
@@ -198,8 +190,10 @@ class AMRTagging:
             raise ValueError("AMRTagging requires at least one Tag rule")
         if sum(type(rule) is Buffer for rule in rules) != 1:
             raise ValueError("AMRTagging requires exactly one Buffer rule")
-        if type(self.combine) is not PriorityOrder:
-            raise TypeError("AMRTagging.combine must be PriorityOrder")
+        if type(self.hysteresis) is not Hysteresis:
+            raise TypeError("AMRTagging.hysteresis must be an exact Hysteresis")
+        if type(self.conflict_policy) is not ConflictPolicy:
+            raise TypeError("AMRTagging.conflict_policy must be an exact ConflictPolicy")
         object.__setattr__(self, "rules", rules)
 
     @property
@@ -215,7 +209,8 @@ class AMRTagging:
                 if callable(getattr(rule, "resolve_references", None)) else rule
                 for rule in self.rules
             ),
-            combine=self.combine,
+            hysteresis=self.hysteresis,
+            conflict_policy=self.conflict_policy,
         )
 
     def inspect(self) -> dict[str, Any]:
@@ -223,7 +218,8 @@ class AMRTagging:
             "schema_version": 1,
             "authority_type": "amr_tagging_authoring",
             "rules": [rule.inspect() for rule in self.rules],
-            "combine": self.combine.inspect(),
+            "hysteresis": self.hysteresis.canonical_identity(),
+            "conflict_policy": self.conflict_policy.value,
         }
 
     def resolve(self, context: Any) -> Any:
@@ -261,7 +257,6 @@ __all__ = [
     "AMRTagging",
     "Buffer",
     "Coarsen",
-    "PriorityOrder",
     "ResolvedAMRAuthorities",
     "Tag",
 ]

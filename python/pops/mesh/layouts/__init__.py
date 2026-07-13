@@ -142,7 +142,7 @@ class Uniform(MeshDescriptor):
         return super().validate(context)
 
     def inspect(self) -> dict:
-        from pops import inspect_amr
+        from pops._capabilities_inspect import inspect_amr
 
         return _layout_inspect_dict(
             self,
@@ -154,8 +154,10 @@ class AMR(MeshDescriptor):
     """An adaptively refined mesh layout (Spec 5 sec.5.10 / sec.8.5).
 
     ``AMR(base=mesh, max_levels=2, ratio=2, regrid=RegridEvery(20),
-    patches=PatchLayout(...), refine=TagUnion(...), nesting=ProperNesting(...),
-    checkpoint=CheckpointPolicy(...))``.
+    patches=PatchLayout(...), refine=TagUnion(...), nesting=ProperNesting(...))``.
+
+    Checkpoint and scientific-output declarations belong exclusively to the Case's
+    :class:`pops.consumers.ConsumerGraph`; a layout has no side-effect authority.
 
     The resolved hierarchy carries any positive level count.  Ratio support is a transfer-kernel
     capability (currently ratio 2); resource policy, not a hardcoded DSL constant, limits depth.
@@ -165,7 +167,7 @@ class AMR(MeshDescriptor):
 
     def __init__(self, base: Any, max_levels: Any = 2, ratio: Any = 2, regrid: Any = None,
                  patches: Any = None, refine: Any = None, nesting: Any = None,
-                 checkpoint: Any = None, output: Any = None, clustering: Any = None) -> None:
+                 clustering: Any = None) -> None:
         self.base = base
         self.max_levels = int(resolve_param_use(
             max_levels, ParamUse.AMR_HIERARCHY, where="AMR(max_levels=)"))
@@ -175,8 +177,6 @@ class AMR(MeshDescriptor):
         self.patches = patches
         self.refine = refine
         self.nesting = nesting
-        self.checkpoint = checkpoint
-        self.output = output
         # ADC-616: optional pops.mesh.amr.PatchClustering(...) tuning the Berger-Rigoutsos layout.
         # None -> the native ClusterParams default (bit-identical).
         self.clustering = clustering
@@ -219,8 +219,6 @@ class AMR(MeshDescriptor):
             patches=self.patches,
             refine=refine,
             nesting=self.nesting,
-            checkpoint=self.checkpoint,
-            output=resolved(self.output),
             clustering=self.clustering,
         )
 
@@ -237,14 +235,13 @@ class AMR(MeshDescriptor):
             raise ValueError("AMR: max_levels must be >= 1")
         validate_amr_refinement_ratio(self.ratio, where="AMR")
         # Validate the attached policies, then the route availability.
-        for policy in (self.regrid, self.patches, self.refine, self.nesting,
-                       self.checkpoint, self.output, self.clustering):
+        for policy in (self.regrid, self.patches, self.refine, self.nesting, self.clustering):
             if policy is not None and hasattr(policy, "validate"):
                 policy.validate(context)
         return super().validate(context)
 
     def inspect(self) -> dict:
-        from pops import inspect_amr
+        from pops._capabilities_inspect import inspect_amr
 
         return _layout_inspect_dict(
             self,

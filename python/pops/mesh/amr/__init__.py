@@ -400,81 +400,6 @@ class BufferCells(MeshDescriptor):
         return {"cells": self.cells}
 
 
-# --- level selection policies (shared semantics with pops.output, Spec 5 sec.5.14) -----
-class AllLevels(MeshDescriptor):
-    category = "level_policy"
-
-    def options(self) -> dict:
-        return {"levels": "all"}
-
-
-class CoarseOnly(MeshDescriptor):
-    category = "level_policy"
-
-    def options(self) -> dict:
-        return {"levels": "coarse"}
-
-
-class SelectedLevels(MeshDescriptor):
-    category = "level_policy"
-
-    def __init__(self, *levels: Any) -> None:
-        self.levels = tuple(int(resolve_param_use(
-            level, ParamUse.AMR_HIERARCHY, where="SelectedLevels(levels=)"))
-                            for level in levels)
-
-    def options(self) -> dict:
-        return {"levels": self.levels}
-
-
-class CheckpointPolicy(MeshDescriptor):
-    """AMR checkpoint / restart policy (Spec 5 sec.8.11).
-
-    Spec 5 keeps a single checkpoint semantics: :class:`pops.output.CheckpointPolicy` is
-    the general policy and this one is the AMR-compatible specialisation. ``restartable``
-    requests a bit-identical restart; the route validates whether the current native AMR
-    supports it (single block / single rank / frozen regrid) before runtime.
-    """
-
-    category = "checkpoint_policy"
-
-    def __init__(self, restartable: Any = False, require_bit_identical: Any = False) -> None:
-        self.restartable = bool(restartable)
-        self.require_bit_identical = bool(require_bit_identical)
-
-    def options(self) -> dict:
-        return {"restartable": self.restartable,
-                "require_bit_identical": self.require_bit_identical}
-
-
-class AMROutput(MeshDescriptor):
-    """AMR output policy: which fields on which levels, with patch metadata (sec.8.11)."""
-
-    category = "amr_output"
-
-    def __init__(self, fields: Any = (), levels: Any = None,
-                 include_patch_boxes: Any = False) -> None:
-        self.fields = tuple(
-            _require_value_handle(field, "AMROutput(fields=...)") for field in fields)
-        self.levels = levels if levels is not None else AllLevels()
-        self.include_patch_boxes = bool(include_patch_boxes)
-
-    def options(self) -> dict:
-        return {"n_fields": len(self.fields),
-                "fields": [_stable_handle_projection(field) for field in self.fields],
-                "levels": self.levels.options().get("levels"),
-                "include_patch_boxes": self.include_patch_boxes}
-
-    def resolve_references(self, resolver: Any) -> AMROutput:
-        """Return a detached output policy with canonical, authenticated field Handles."""
-        return AMROutput(
-            fields=tuple(_resolve_handle_reference(field, resolver, "AMROutput(fields=...)")
-                         for field in self.fields),
-            levels=self.levels,
-            include_patch_boxes=self.include_patch_boxes,
-        )
-
-
 class IgnoreAMRCriteria(MeshDescriptor):
     """The explicit escape hatch for a ``Uniform(...)`` layout carrying AMR criteria.
 
@@ -494,8 +419,7 @@ class IgnoreAMRCriteria(MeshDescriptor):
 
 __all__ = [
     "Refine", "TagUnion", "RegridEvery", "FrozenRegrid", "PatchLayout", "PatchClustering",
-    "ProperNesting", "BufferCells", "AllLevels", "CoarseOnly", "SelectedLevels",
-    "CheckpointPolicy", "AMROutput", "IgnoreAMRCriteria",
+    "ProperNesting", "BufferCells", "IgnoreAMRCriteria",
     "NATIVE_RATIOS", "Availability",
 ] + _tagging_graph.__all__ + _tagging_resolution.__all__ \
     + _hierarchy.__all__ + _hierarchy_regrid.__all__ + _hierarchy_resolution.__all__ \

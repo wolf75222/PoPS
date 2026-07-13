@@ -1,13 +1,9 @@
-"""Spec 5 (sec.5.11 / sec.8): the inert pops.inspect_amr authoring report.
+"""Inert adaptive-layout inspection through the sole public ``pops.inspect`` dispatcher.
 
-These exercise :func:`pops.inspect_amr`, the descriptor-sourced report of an AMR hierarchy
-(the introspectable counterpart of :func:`pops.inspect_capabilities` for the adaptive-mesh
-route). They assert the report names the levels / ratio envelope, the attached regrid /
-refine / nesting / checkpoint / output policies, the runtime requirements (reflux, tag
-reduction) and the explainable route limitations, for the native envelope (``None``), a full
-AMR layout, a deeper resource-policy-controlled layout, and a Uniform layout. Pure Python: only
-``import pops`` is needed (nothing computes on a grid); inspect_amr reads descriptor metadata
-and imports no ``_pops`` / runtime / codegen.
+The report names the level / ratio envelope, attached regrid / refine / nesting policies, runtime
+requirements (reflux, tag reduction), and explainable route limitations for adaptive and uniform
+layouts. Checkpoint and output consumers are intentionally absent from the layout report. Pure
+Python: descriptor inspection imports no ``_pops`` / runtime / codegen.
 """
 import sys
 
@@ -18,8 +14,7 @@ pops = pytest.importorskip("pops")
 from pops.mesh import CartesianMesh  # noqa: E402
 from pops.mesh.layouts import AMR, Uniform  # noqa: E402
 from pops.mesh.amr import (  # noqa: E402
-    Refine, TagUnion, RegridEvery, ProperNesting, PatchLayout, CheckpointPolicy,
-    AMROutput, AllLevels, NATIVE_RATIOS)
+    Refine, TagUnion, RegridEvery, ProperNesting, PatchLayout, NATIVE_RATIOS)
 from pops.model import Handle, OwnerPath  # noqa: E402
 
 
@@ -35,31 +30,17 @@ def _full_amr():
         patches=PatchLayout(distribute_coarse=True, coarse_max_grid=32),
         refine=TagUnion(Refine.on(_ref("rho")).above(0.05),
                         Refine.on(_ref("phi", kind="field")).gradient_above(0.5)),
-        nesting=ProperNesting(buffer=1),
-        checkpoint=CheckpointPolicy(restartable=True),
-        output=AMROutput(fields=[_ref("phi", kind="field")], levels=AllLevels(),
-                         include_patch_boxes=True))
+        nesting=ProperNesting(buffer=1))
 
 
-def test_inspect_amr_is_exported_at_top_level():
-    assert hasattr(pops, "inspect_amr")
-    assert "inspect_amr" in pops.__all__
-
-
-def test_native_envelope_report_when_none():
-    rep = pops.inspect_amr()
-    d = rep.to_dict()
-    assert d["layout"] == "native-envelope"
-    assert d["max_levels"] == "resource_policy"
-    assert d["native_max_levels"] == "resource_policy"
-    assert d["ratio"] == NATIVE_RATIOS[0]
-    assert d["available"] == "yes"
-    assert any("resource-policy" in note for note in d["limitations"])
+def test_layout_inspection_uses_the_generic_public_dispatcher():
+    assert "inspect" in pops.__all__
+    assert not hasattr(pops, "inspect_amr")
+    assert pops.inspect(_full_amr()) == _full_amr().inspect()
 
 
 def test_amr_layout_report_levels_ratio_and_policies():
-    rep = pops.inspect_amr(_full_amr())
-    d = rep.to_dict()
+    d = pops.inspect(_full_amr())["amr_report"]
     assert d["layout"] == "amr"
     assert d["max_levels"] == 3 and d["ratio"] == 2
     assert d["available"] == "yes"
@@ -69,7 +50,7 @@ def test_amr_layout_report_levels_ratio_and_policies():
     assert d["requirements"]["amr_runtime"] is True
     # Every attached policy slot is reported, and the TagUnion expands into its criteria.
     slots = [p["slot"] for p in d["policies"]]
-    for slot in ("refine", "regrid", "patches", "nesting", "checkpoint", "output"):
+    for slot in ("refine", "regrid", "patches", "nesting"):
         assert slot in slots, "policy slot %r missing from the AMR report" % slot
     assert slots.count("refine.criterion") == 2
     names = {p["slot"]: p["name"] for p in d["policies"]}
@@ -81,41 +62,28 @@ def test_amr_layout_report_levels_ratio_and_policies():
     assert "rho" in crit_subjects and "phi" in crit_subjects
 
 
-def test_amr_report_print_is_short_and_deterministic():
-    rep = pops.inspect_amr(_full_amr())
-    text = str(rep)
-    assert text.startswith("AMR hierarchy report")
-    assert "max_levels=3" in text and "ratio=2" in text
-    assert "native depth: resource_policy" in text
-    assert "reflux" in text
-    assert "RegridEvery(steps=20)" in text
-    # The report is deterministic (same input -> same string).
-    assert str(pops.inspect_amr(_full_amr())) == text
-    assert len(text) < 1200
+def test_amr_report_is_deterministic():
+    first = pops.inspect(_full_amr())
+    second = pops.inspect(_full_amr())
+    assert first == second
+    assert first["amr_report"]["max_levels"] == 3
+    assert first["amr_report"]["native_max_levels"] == "resource_policy"
 
 
 def test_arbitrary_depth_is_reported_as_resource_policy():
-    rep = pops.inspect_amr(AMR(base=CartesianMesh(n=128), max_levels=4))
-    assert rep.available == "yes"
-    assert rep.max_levels == 4
-    assert rep.native_max_levels == "resource_policy"
-    assert any("resource-policy" in note for note in rep.limitations)
+    report = pops.inspect(AMR(base=CartesianMesh(n=128), max_levels=4))["amr_report"]
+    assert report["available"] == "yes"
+    assert report["max_levels"] == 4
+    assert report["native_max_levels"] == "resource_policy"
+    assert any("resource-policy" in note for note in report["limitations"])
 
 
 def test_uniform_layout_reports_single_level():
-    rep = pops.inspect_amr(Uniform(CartesianMesh()))
-    d = rep.to_dict()
+    d = pops.inspect(Uniform(CartesianMesh()))["amr_report"]
     assert d["layout"] == "uniform"
     assert d["max_levels"] == 1
     assert d["policies"] == []
     assert any("single-level" in note for note in d["limitations"])
-
-
-def test_inspect_amr_rejects_a_non_layout():
-    with pytest.raises(TypeError):
-        pops.inspect_amr("amr")
-
-
 # The CI python runner invokes each test file as `python3 <file>`; run pytest on this
 # module so the assertions execute (a bare import would only define the test functions).
 if __name__ == "__main__":

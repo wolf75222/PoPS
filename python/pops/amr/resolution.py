@@ -235,12 +235,7 @@ def resolve_tagging(
     context: AMRTaggingResolutionContext,
 ) -> ResolvedTaggingAuthority:
     """Resolve an object-level priority list into one authenticated inert tag graph."""
-    from pops.mesh.amr import (
-        ConflictPolicy,
-        EqualityPolicy,
-        Hysteresis,
-        TaggingGraph,
-    )
+    from pops.mesh.amr import TaggingGraph
 
     if type(authoring) is not AMRTagging:
         raise TypeError("resolve_tagging requires an exact AMRTagging value")
@@ -248,7 +243,6 @@ def resolve_tagging(
         raise TypeError("resolve_tagging requires an AMRTaggingResolutionContext")
     resolved = authoring.resolve_references(context.resolve)
     roots: dict[str, list[Any]] = {"refine": [], "coarsen": []}
-    priority = []
     buffer_cells = None
     for rule in resolved.rules:
         action = getattr(rule, "action", None)
@@ -256,7 +250,6 @@ def resolve_tagging(
             roots[action].append(
                 _resolve_predicate(rule.predicate, action=action, context=context)
             )
-            priority.append(action)
         elif action == "buffer":
             buffer_cells = rule.cells
         else:
@@ -265,16 +258,11 @@ def resolve_tagging(
             )
     if buffer_cells is None:
         raise ValueError("AMR tagging resolution lost its explicit Buffer authority")
-    conflict = (
-        ConflictPolicy.REFINE_WINS
-        if priority[0] == "refine"
-        else ConflictPolicy.COARSEN_WINS
-    )
     graph = TaggingGraph(
         refine=_union(roots["refine"]),
         coarsen=_union(roots["coarsen"]),
-        hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),
-        conflict_policy=conflict,
+        hysteresis=resolved.hysteresis,
+        conflict_policy=resolved.conflict_policy,
     ).resolve()
     return ResolvedTaggingAuthority(graph, buffer_cells)
 

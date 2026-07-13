@@ -2,9 +2,8 @@
 
 These exercise the inert mesh / layout / AMR descriptors: their options/capabilities,
 the explainable AMR route limits (max_levels / ratio), the typed refinement criteria,
-the back-compat that pops.CartesianMesh is pops.mesh.CartesianMesh, and the short
-printable summaries. Pure Python; needs only `import pops` (the compiled _pops loads but
-nothing here computes on a grid).
+the canonical ``pops.mesh`` package, and short printable summaries. Pure Python; nothing here
+computes on a grid.
 """
 import sys
 
@@ -15,8 +14,7 @@ pops = pytest.importorskip("pops")
 from pops.mesh import CartesianMesh, PolarMesh, AuxHalo, PatchBox, BoxLayout  # noqa: E402
 from pops.mesh.layouts import Uniform, AMR  # noqa: E402
 from pops.mesh.amr import (  # noqa: E402
-    Refine, TagUnion, RegridEvery, FrozenRegrid, PatchLayout, ProperNesting,
-    CheckpointPolicy, AMROutput, AllLevels)
+    Refine, TagUnion, RegridEvery, FrozenRegrid, PatchLayout, ProperNesting)
 from pops.mesh.geometry import Disc, EmbeddedBoundary  # noqa: E402
 from pops.mesh.masks import CutCell, NoMask, Staircase  # noqa: E402
 from pops.mesh.boundaries import Periodic, Physical, FaceBC, XMin  # noqa: E402
@@ -29,10 +27,13 @@ def _handle(name, kind="state"):
     return Handle(name, kind=kind, owner=OwnerPath.model("mesh-descriptor-tests"))
 
 
-def test_back_compat_and_package_export():
-    assert pops.CartesianMesh is CartesianMesh
-    assert pops.PolarMesh is PolarMesh
-    assert "mesh" in pops.__all__
+def test_mesh_package_is_the_only_public_descriptor_path():
+    assert pops.mesh.CartesianMesh is CartesianMesh
+    assert pops.mesh.PolarMesh is PolarMesh
+    assert "CartesianMesh" not in pops.__all__
+    assert "PolarMesh" not in pops.__all__
+    assert not hasattr(pops, "CartesianMesh")
+    assert not hasattr(pops, "PolarMesh")
 
 
 def test_cartesian_options_and_caps():
@@ -78,7 +79,7 @@ def test_amr_route_limits_are_explainable():
     m = CartesianMesh(n=128)
     ok = AMR(base=m, max_levels=3, ratio=2, regrid=RegridEvery(20),
              patches=PatchLayout(distribute_coarse=True, coarse_max_grid=32),
-             nesting=ProperNesting(buffer=1), checkpoint=CheckpointPolicy(restartable=True))
+             nesting=ProperNesting(buffer=1))
     assert ok.available().ok
     ok.validate()
     deep = AMR(base=m, max_levels=4)
@@ -145,13 +146,6 @@ def test_amr_policies():
     assert RegridEvery(20).options()["steps"] == 20
     with pytest.raises(ValueError):
         RegridEvery(0)
-    phi = _handle("phi", kind="field")
-    out = AMROutput(fields=[phi], levels=AllLevels(), include_patch_boxes=True)
-    assert out.options()["levels"] == "all"
-    assert out.options()["include_patch_boxes"] is True
-    assert out.options()["fields"][0]["local_id"] == "phi"
-    with pytest.raises(TypeError, match="Handle"):
-        AMROutput(fields=["phi"])
 
 
 def test_printable_summaries_are_short_and_stable():
