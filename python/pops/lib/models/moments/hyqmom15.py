@@ -13,7 +13,7 @@ from pops.moments.model_builder import (
 )
 from pops.moments.projection import RealizabilityProjection
 from pops.moments.sources import lorentz_sources
-from pops.params import ParameterDeclaration, RuntimeParam
+from pops.params import ParameterDeclaration, RuntimeParam as _RuntimeParam
 from pops.physics import Model
 
 
@@ -22,7 +22,7 @@ _HYQMOM15_ORDER = 4
 
 def _parameter(value: Any, *, name: str, default: float) -> ParameterDeclaration:
     if value is None:
-        return RuntimeParam(name, default=default)
+        return _RuntimeParam(name, default=default)
     if not isinstance(value, ParameterDeclaration):
         raise TypeError(
             "%s must be a typed ParameterDeclaration; use RuntimeParam or ConstParam" % name)

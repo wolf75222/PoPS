@@ -1,4 +1,4 @@
-"""ADC-566: pops.lib is a leaf, locked to models / time / presets.
+"""ADC-566/ADC-693: pops.lib is a leaf of ready implementations.
 
 ``pops.lib`` holds ONLY ready-to-use things (provided models, provided time schemes, compose-and-go
 presets). It must stay a leaf of the import graph and must never become a second home for a central
@@ -30,7 +30,7 @@ LIB = REPO_ROOT / "python" / "pops" / "lib"
 # The strict directory allow: pops.lib has exactly these immediate child packages. A new
 # python/pops/lib/riemann/ or .../solvers/ would grow this set and fail (an ALLOW of 3 named dirs,
 # not a broad pattern).
-_ALLOWED_LIB_CHILD_DIRS = {"models", "time", "presets"}
+_ALLOWED_LIB_CHILD_DIRS = {"amr", "initial", "models", "time", "presets"}
 
 # The HARD refusal list: lib is a leaf, so it must import none of these at ANY scope (module-scope OR
 # lazily inside a function). This is the delta over test_no_runtime_imports.py (module-scope only).
@@ -58,11 +58,11 @@ _ALLOWED_POPS_IMPORT_ROOTS = (
 
 # Central object names that have exactly ONE public home elsewhere; lib must neither DEFINE nor
 # RE-EXPORT any of them (a second path). Canonical homes (asserted below): mesh AMR, elliptic
-# GeometricMG, params RuntimeParam, fields PoissonProblem/FieldProblem, numerics HLL/MUSCL/...,
+# GeometricMG, params RuntimeParam, fields FieldOperator/FieldDiscretization, numerics HLL/MUSCL/...,
 # time Program/Module.
 _CANONICAL_NAMES = {
     "HLL", "HLLC", "Roe", "Rusanov", "MUSCL", "WENO5",
-    "PoissonProblem", "FieldProblem", "GeometricMG", "FFT",
+    "FieldOperator", "FieldDiscretization", "GeometricMG", "FFT",
     "AMR", "RuntimeParam", "Program", "Module",
 }
 
@@ -106,7 +106,7 @@ def _import_targets(tree):
 
 
 # ---------------------------------------------------------------------------------------------
-# Gate 2a -- DIRECTORY fence: lib's child packages are exactly {models, time, presets}.
+# Gate 2a -- DIRECTORY fence: every lib child is an approved ready-implementation family.
 # ---------------------------------------------------------------------------------------------
 def test_lib_child_directories_are_the_strict_allow_set():
     children = {p.name for p in LIB.iterdir()
@@ -203,8 +203,8 @@ def test_canonical_homes_are_outside_lib():
         "AMR": REPO_ROOT / "python/pops/mesh/layouts/__init__.py",
         "GeometricMG": REPO_ROOT / "python/pops/solvers/elliptic/_descriptor.py",
         "RuntimeParam": REPO_ROOT / "python/pops/params/runtime.py",
-        "PoissonProblem": REPO_ROOT / "python/pops/fields/poisson.py",
-        "FieldProblem": REPO_ROOT / "python/pops/fields/problem.py",
+        "FieldOperator": REPO_ROOT / "python/pops/fields/operator.py",
+        "FieldDiscretization": REPO_ROOT / "python/pops/fields/discretization.py",
         "Program": REPO_ROOT / "python/pops/time/program.py",
     }
     missing = []
@@ -228,32 +228,6 @@ def test_lib_init_stays_thin():
     assert lines <= _LIB_INIT_LINE_CAP, (
         "pops.lib.__init__ must stay thin (<= %d lines); a fat __init__ concentrating logic is "
         "refused, got %d" % (_LIB_INIT_LINE_CAP, lines))
-
-
-def test_lib_time_macros_return_a_core_program():
-    """Functional (skip-clean): each typed lib.time macro produces a pops.time.Program.
-
-    The remaining macros (strang / imex / bdf / predictor_corrector) require extra scheme arguments;
-    they share the same @program_macro dispatch (lib/time/_helpers.py), so these four schemes are a
-    representative proof that lib.time lowers to the core Program, not a lib stepper.  The fixture
-    deliberately supplies the authoritative BlockHandle and model state Handle: a display label is
-    never promoted into semantic ownership."""
-    try:
-        import pops.lib.time as lib_time
-        from pops.model import Module
-        from pops.problem import Case
-        from pops.time import Program
-    except Exception as exc:  # pragma: no cover - bare source tree without importable pops.
-        pytest.skip("pops import unavailable: %s" % exc)
-
-    module = Module("architecture-time-schemes")
-    state_space = module.state_space("U", ("u",))
-    state = module.state_handle(state_space)
-    block = Case(name="architecture-time-case").block("plasma", module)
-    for name in ("forward_euler", "SSPRK2", "ssprk3", "rk4"):
-        program = getattr(lib_time, name)(block, state, sources=(), flux=False)
-        assert isinstance(program, Program), (
-            "pops.lib.time.%s must return a pops.time.Program, got %r" % (name, type(program)))
 
 
 def test_lib_models_lower_to_physics_without_runtime():

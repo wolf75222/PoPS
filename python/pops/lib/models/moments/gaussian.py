@@ -11,7 +11,7 @@ from pops.moments.closures import gaussian_closure
 from pops.moments.model_builder import moment_flux_expressions, moment_names
 from pops.moments.projection import RealizabilityProjection
 from pops.moments.sources import lorentz_sources
-from pops.params import ParameterDeclaration, RuntimeParam
+from pops.params import ParameterDeclaration, RuntimeParam as _RuntimeParam
 from pops.physics import Model
 
 
@@ -29,7 +29,7 @@ def _flag(value: Any, *, name: str) -> bool:
 
 def _parameter(value: Any, *, name: str, default: float) -> ParameterDeclaration:
     if value is None:
-        return RuntimeParam(name, default=default)
+        return _RuntimeParam(name, default=default)
     if not isinstance(value, ParameterDeclaration):
         raise TypeError(
             "%s must be RuntimeParam, ConstParam, or DerivedParam; strings are not parameters"
