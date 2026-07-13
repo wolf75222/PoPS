@@ -4,7 +4,8 @@ PoPS is the header-only C++20 core for coupled hyperbolic-elliptic systems on
 adaptive mesh (AMR), written for MPI + Kokkos (Kokkos is the ONLY on-node backend: Serial /
 OpenMP / Cuda depending on the install; the standalone OpenMP backend was removed). The generic physics bricks
 ([`include/pops/physics/`](../include/pops/physics)) and the library's Python bindings (module
-`pops`, compiled extension `_pops`, composition facades `System` / `AmrSystem`) live here; the
+`pops` and compiled extension `_pops`) live here. `System` / `AmrSystem` are private native
+execution engines behind `RuntimeInstance`, never Python authoring facades; the
 neighboring repository `adc_cases` only contains Python use cases that import this module. The
 core is model-agnostic: it names no scenario, it provides bricks composed in
 `CompositeModel`. The layers are orthogonal (physics, numerics, data/mesh, execution,
@@ -190,7 +191,7 @@ device kernel without returning garbage value under nvcc.
 Three modules carry a grid, each with its own convention. The table below fixes
 the notations used in the rest of this section.
 
-### Cartesian: `System` cell-centered, $N_x \times N_y$
+### Cartesian single-level runtime, $N_x \times N_y$
 
 `System` ([`include/pops/runtime/system.hpp`](../include/pops/runtime/system.hpp)) carries a single
 grid shared by all the blocks (species). The configuration lives in `SystemConfig`.
@@ -208,7 +209,7 @@ returns $x_{lo} + (i + 1/2)\,dx$ with $dx = (x_{hi} - x_{lo}) / N_x$ and likewis
 therefore uniform and the cell center exists even outside the valid domain, which allows filling
 the ghost layers by simple evaluation.
 
-### Polar: `System` geometry `"polar"`, ring $n_r \times n_\theta$
+### Polar single-level runtime, ring $n_r \times n_\theta$
 
 When `geometry == "polar"`, the same `System` runs on a global ring $(r, \theta)$ described by
 `PolarGeometry`. The axis convention is fixed: the index-0 direction is radial (i traverses
@@ -235,7 +236,7 @@ when `polar_` is true.
 The polar is `nr != ntheta` in general (the grid is not square), contrary to the cartesian
 $n \times n$.
 
-### AMR: `AmrSystem`, hierarchy of levels at constant physical extent
+### Adaptive runtime: hierarchy of levels at constant physical extent
 
 `AmrSystem` ([`include/pops/runtime/amr_system.hpp`](../include/pops/runtime/amr_system.hpp)) is the
 refined counterpart of `System`: one or more blocks carried over a hierarchy of levels
@@ -350,7 +351,7 @@ providers: `System` on a single-level grid and
 `set_density`) is identical from afar: it declares the system Poisson, composes the bricks of
 each block and sets the initial state. It is the macro-step that differs.
 
-### Single-level: `System.step_cfl`
+### Single-level runtime execution
 
 The core is `SystemStepper::step_cfl` (and `step`), in
 [`include/pops/runtime/system/system_stepper.hpp`](../include/pops/runtime/system/system_stepper.hpp). The order is an
@@ -434,41 +435,43 @@ cartesian and $h = \min(dr,\, r_{\min}\, d\theta)$ in polar.
 sequenceDiagram
     autonumber
     actor Utilisateur
-    participant System
-    participant EllipticSolver as EllipticSolver (SystemFieldSolver)
+    participant Case
+    participant Program
+    participant Runtime as RuntimeInstance
+    participant EllipticSolver as EllipticSolver
     participant SpatialOperator as SpatialOperator (assemble_rhs)
-    participant TimeIntegrator as TimeIntegrator (SSPRK)
+    participant Executor as ProgramExecutor
 
-    Note over Utilisateur,System: Construction (une fois)
-    Utilisateur->>System: set_poisson(rhs, solver, bc)
-    Utilisateur->>System: add_block(model, limiter, riemann, recon, time, substeps)
-    Utilisateur->>System: set_density(name, rho)
+    Note over Utilisateur,Program: Authoring pur (une fois)
+    Utilisateur->>Case: block(model), field(...), numerics(...), layout(...)
+    Utilisateur->>Program: state(...), value(...), solve(...), commit(...)
+    Utilisateur->>Case: program(Program), outputs(...), restart(...)
+    Utilisateur->>Runtime: bind(compile(resolve(validate(Case))), valeurs)
 
-    Note over Utilisateur,TimeIntegrator: Un macro-pas (System.step_cfl)
-    Utilisateur->>System: step_cfl(cfl)
-    System->>EllipticSolver: solve_fields()
+    Note over Utilisateur,Executor: Un macro-pas transactionnel
+    Utilisateur->>Runtime: run(t_end, contrôles d'exécution)
+    Runtime->>EllipticSolver: exécute les noeuds solve du Program
     EllipticSolver->>EllipticSolver: assemble le second membre (somme des q_b n_b) puis resout Poisson pour phi
-    EllipticSolver-->>System: renvoie aux (phi, grad phi, et B_z ou T_e si declares)
-    System->>System: calcule le pas dt par la condition CFL multi-blocs
+    EllipticSolver-->>Runtime: renvoie aux (phi, grad phi, et B_z ou T_e si declares)
+    Runtime->>Runtime: propose dt via la StepStrategy liée
 
-    loop pour chaque bloc DU (stride honore), eff_dt = stride*dt
-        System->>TimeIntegrator: advance_transport(s, eff_dt)
-        loop etages SSPRK (substeps sous-pas)
-            TimeIntegrator->>SpatialOperator: fill_ghosts(U) puis assemble_rhs(U, aux)
+    loop noeuds du graphe temporel explicite / implicite
+        Runtime->>Executor: évalue le noeud avec ses handles qualifiés
+        loop étages et sous-pas déclarés dans Program
+            Executor->>SpatialOperator: fill_ghosts(U) puis assemble_rhs(U, aux)
             SpatialOperator->>SpatialOperator: reconstruction limitee puis flux numerique
-            SpatialOperator-->>TimeIntegrator: assemble le residu R (moins divergence du flux, plus source)
-            TimeIntegrator->>TimeIntegrator: combinaison RK (mise a jour de U)
+            SpatialOperator-->>Executor: assemble le residu R (moins divergence du flux, plus source)
+            Executor->>Executor: combinaison du graphe (mise à jour provisoire)
         end
     end
-    System->>System: apply_couplings(dt) (sources inter-especes, splitting)
-    System->>System: avance le temps et le compteur de macro-pas
-    System-->>Utilisateur: dt utilise
+    Runtime->>Runtime: vérifie les gardes puis commit ou rollback atomique
+    Runtime-->>Utilisateur: RunReport, diagnostics et sorties des états acceptés
 ```
 
 Strang and Lie composition are Program macros (`pops.lib.time.strang` / `lie`). They lower explicit
 sub-flows into the same IR rather than selecting a native `System` stepper branch.
 
-### AMR: `AmrSystem.step`
+### Adaptive runtime execution
 
 On the adaptive hierarchy, `AmrSystem::step`
 ([`include/pops/runtime/amr_system.hpp`](../include/pops/runtime/amr_system.hpp)) forces the lazy build
@@ -494,21 +497,21 @@ inter-species sources by splitting, before `advance the macro-step counter`.
 sequenceDiagram
     autonumber
     actor Utilisateur
-    participant AmrSystem
-    participant AmrRuntime
+    participant Case
+    participant Runtime as RuntimeInstance
+    participant AmrRuntime as AdaptiveExecutor
     participant EllipticSolver as EllipticSolver (GeometricMG)
     participant SpatialOperator as SpatialOperator (advance_amr)
     participant TimeIntegrator as TimeIntegrator (SSPRK / IMEX)
 
-    Note over Utilisateur,AmrSystem: Construction (une fois)
-    Utilisateur->>AmrSystem: set_poisson(rhs, geometric_mg, bc)
-    Utilisateur->>AmrSystem: add_block(name, model, limiter, ...)
-    Utilisateur->>AmrSystem: set_refinement(threshold) et set_phi_refinement
-    Utilisateur->>AmrSystem: set_density(name, rho)
+    Note over Utilisateur,Case: Authoring pur (une fois)
+    Utilisateur->>Case: layout(AMRHierarchy, tagging, transfer, reflux)
+    Utilisateur->>Case: block(...), field(...), program(...), outputs(...), restart(...)
+    Utilisateur->>Runtime: bind(compile(resolve(validate(Case))), valeurs)
 
-    Note over Utilisateur,TimeIntegrator: Un macro-pas (AmrSystem.step)
-    Utilisateur->>AmrSystem: step(dt)
-    AmrSystem->>AmrRuntime: step(dt)
+    Note over Utilisateur,TimeIntegrator: Une tentative de macro-pas transactionnelle
+    Utilisateur->>Runtime: run(t_end, contrôles d'exécution)
+    Runtime->>AmrRuntime: propose(dt, snapshot complet)
 
     opt regrid_every > 0 et macro_step % regrid_every == 0
         AmrRuntime->>AmrRuntime: regrid() (union des tags densite et gradient de phi, nouveau layout fin)
@@ -528,10 +531,14 @@ sequenceDiagram
             SpatialOperator-->>TimeIntegrator: U mis a jour (conservatif par bloc)
         end
     end
-    AmrRuntime->>AmrRuntime: coupled_source_step(dt) : sources inter-especes (splitting, cascade)
-    AmrRuntime->>AmrRuntime: avance le compteur de macro-pas
-    AmrRuntime-->>AmrSystem: retour
-    AmrSystem->>AmrSystem: avance le temps
+    AmrRuntime->>AmrRuntime: évalue les gardes sur état, hiérarchie et rapports collectifs
+    alt tentative acceptée
+        AmrRuntime->>AmrRuntime: commit état + topologie + historiques + compteurs
+        AmrRuntime-->>Runtime: rapport accepté et état publiable
+    else tentative rejetée
+        AmrRuntime->>AmrRuntime: rollback intégral puis nouvelle proposition de dt
+        AmrRuntime-->>Runtime: rapport de rejet structuré
+    end
 ```
 
 The parallel between the two pipelines is deliberate: `AmrRuntime::solve_fields` reproduces

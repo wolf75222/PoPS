@@ -1948,15 +1948,16 @@ function System.step_cfl(cfl):
     step(dt) ; return dt
 ```
 
-**Code.** [`runtime/system.hpp`](../include/pops/runtime/system.hpp): `System` (multi-block
-single-level, shared Poisson, `add_block(name, ModelSpec, limiter, riemann, recon, time, substeps,
-evolve, stride, implicit_vars, implicit_roles)`, `step` / `step_cfl`, `evolve=false` for a frozen
-species seen by Poisson); [`runtime/amr_system.hpp`](../include/pops/runtime/amr_system.hpp):
-`AmrSystem` (1 block -> historical mono-model `AmrCouplerMP<Model>`; `>= 2 add_block` -> engine
-`AmrRuntime` multi-block on a shared hierarchy, same BoxArray + DistributionMapping + dx/dy per
-level via `same_layout_or_throw`, coarse Poisson co-located sum, conservation per block,
-`add_coupling_operator` for the inter-species sources (the raw bytecode ABI is the internal
-`_add_coupled_source`), `n_blocks()`). On the coupling side:
+**Code.** [`runtime/system.hpp`](../include/pops/runtime/system.hpp) and
+[`runtime/amr_system.hpp`](../include/pops/runtime/amr_system.hpp) are private native executors
+materialized from one resolved `Case`; neither is an authoring API. `RuntimeInstance` installs
+qualified blocks, field plans, the temporal graph, layout authorities and consumer graph from the
+compiled artifact in one authenticated transaction. The single-level executor shares Poisson across
+the selected blocks; the adaptive executor runs the same graph over a shared hierarchy (same BoxArray,
+DistributionMapping and geometry per level via `same_layout_or_throw`), performs coarse co-located
+Poisson assembly, and conservatively transfers/refluxes every declared state. Inter-species sources
+are typed component-interface implementations in the graph; the bytecode and native registration
+calls remain internal lowering details. On the coupling side:
 `coupling/system_coupler.hpp` (`SystemAssembler` assembles, `SystemDriver` advances),
 `coupling/amr_system_coupler.hpp` (the system carried over AMR).
 [`runtime/model_factory.hpp`](../include/pops/runtime/builders/factory/model_factory.hpp):
