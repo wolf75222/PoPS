@@ -9,17 +9,18 @@ ADC-591 adds a versioned native report above the route rows:
 
 - C++: `pops::native_capability_report(target)` returns a `NativeCapabilityReport`.
 - Python native binding: `_pops.capability_report(target)` returns the same report as a stable dict.
-- Public Python: `pops.native_capability_report(target)` wraps it as `NativeCapabilityReport`.
-- Runtime: `sim.inspect()` includes the native report plus profile, diagnostics, history/cache
-  metadata and runtime environment facts. `sim.amr.inspect()` (ADC-589/ADC-555) returns a
+- Public Python: `pops.inspect(obj)` is the sole inspection dispatcher. Layout, compiled-artifact,
+  and bound-runtime reports embed the relevant native rows without exposing a second root facade.
+- Runtime: `pops.inspect(sim)` includes the native report plus the authenticated bind/install
+  identity, layout plan, execution context, consumer graph/cursors, profile, diagnostics,
+  history/cache metadata, and runtime environment facts. The internal adaptive runtime view returns a
   `pops.runtime.amr.RuntimeInspection` composing `hierarchy` (config envelope + live patches),
   `patches` (the live patch census), `regrid` (cadence + union-tag criteria), and `limitations`
   (the non-available rows of the same native report, filtered to `status != "available"`).
 - Compiled artifacts: `compiled.inspect().to_dict()["capabilities"]` carries the same route IDs and
   statuses, projected from the artifact manifest without loading or recompiling the `.so`. On the
-  AMR route, `pops.inspect(compiled.layout)` reports the layout `pops.compile` actually
-  attached (`compiled._layout`, with its refine/regrid/... tags) by default; an explicit `layout=`
-  argument still overrides, and a handle with no carried layout falls back to the native envelope.
+  AMR route, `pops.inspect(compiled.layout)` reports the exact layout `pops.compile` attached,
+  including its refine/regrid policies. There is no artifact-specific layout inspector or override.
 
 Pretty strings are views of these objects only. Tests should assert on `to_dict()` fields such as
 `schema_version`, `abi_version`, `runtime`, `capabilities`, `routes[*].route_id`, `status`, and
@@ -45,11 +46,10 @@ The same shape is exposed by:
 
 - `pops.Case(...).explain_routes()`
 - descriptor `capability_matrix()` methods
-- `CompiledProblem.capability_matrix()`
-- `CompiledModel.capability_matrix()`
-- `CompiledArtifactManifest.to_dict()["capability_matrix"]`
+- `pops.inspect(compiled)["capabilities"]`
+- `pops.inspect(sim)["capabilities"]`
+- the internal compiled-artifact manifest used by bind validation
 - `_pops.capability_report()["routes"]`
-- `pops.native_capability_report().to_dict()["routes"]`
 
 ## Native Inventory
 
@@ -60,7 +60,8 @@ Supported native routes include:
 - Uniform single-level layout. A `Uniform(...)` layout with an active AMR refinement criterion
   attached is refused by `Case.validate` by default (ADC-589/ADC-555); the explicit escape is
   `Uniform(mesh, refine=..., ignore_amr=pops.mesh.amr.IgnoreAMRCriteria())`.
-- AMR through the native production route, limited to `max_levels <= 2` and `ratio == 2`.
+- AMR through the native production route with hierarchy depth controlled by resolved resource
+  policy; transfer/reflux kernels currently require `ratio == 2`.
 - Finite-volume spatial discretisation on the 2D core.
 - Native Riemann routes: Rusanov, HLL, HLLC, Roe, subject to model capability requirements.
 - Native reconstruction routes: first-order, MUSCL, WENO5/WENO5-Z.
@@ -104,8 +105,6 @@ future validators:
 - `program:condensed_implicit_preset`: `pops.lib.time.CondensedSchur` currently authors a 2D,
   two-component electrostatic-Lorentz reduction. The Program solve/provider protocol is independent
   of that preset and can host other operators, dimensions and hierarchy providers.
-- `runtime:native_loader_legacy_metadata`: old native modules without metadata still fall back to
-  `u0..` names, empty roles, `gamma=1.4` and host prototype copies.
 
 ## Error Policy
 
@@ -121,6 +120,7 @@ Example:
 unsupported route: requested solver=FFT() with layout=AMR; available route: GeometricMG() on AMR; alternative: use pops.solvers.elliptic.GeometricMG()
 ```
 
-Unknown values are not treated as false. Older artifacts that lack a manifest flag keep `None` in the
-manifest and produce `unknown` rows. A validator may warn or report that limitation, but must not reject
-a route solely because an old artifact did not emit a flag.
+Unknown values are not treated as false and are never repaired by a compatibility default. A public
+artifact must carry the current authenticated manifest and required route facts; missing, unknown, or
+incompatible evidence is refused before bind. Historical artifacts may only be converted by an
+explicit offline migration tool that emits a complete current artifact.

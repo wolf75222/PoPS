@@ -19,9 +19,9 @@
 ---
 
 PoPS is a compiled solver engine, not a Python numerical library and not a scenario repository.
-Python authors an inert, typed `pops.Problem`: physics model, finite-volume descriptors,
+Python authors an inert, typed `pops.Case`: physics model, finite-volume descriptors,
 field problems, time program, outputs, and runtime parameters. The explicit typed pipeline is
-`validate(problem) → resolve(validated, layout=...) → compile(resolved) → bind(artifact, inputs)`.
+`validate(case) → resolve(validated, layout=...) → compile(resolved) → bind(artifact, ...)`.
 Compilation lowers the resolved assembly to generated or native C++; binding creates the runtime;
 `sim.run(...)` advances with C++/Kokkos/MPI kernels.
 Python never runs a per-cell loop.

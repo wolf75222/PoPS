@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 from typing import Any
 
 from pops.codegen._plans import require_install_plan
@@ -33,6 +34,20 @@ _STRUCTURAL = frozenset({
     "set_poisson", "install_program", "set_program_cadence", "set_refinement",
     "set_phi_refinement", "set_block_params", "set_program_params", "_install_compiled",
 })
+
+
+def _identity_data(value: Any) -> Any:
+    """Detach an optional identity without retaining a live report/runtime object."""
+    if value is None:
+        return None
+    to_data = getattr(value, "to_data", None)
+    if callable(to_data):
+        return to_data()
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    raise TypeError("runtime identity evidence must implement to_data() or be canonical scalar data")
 
 
 class RuntimeInstance:
@@ -98,6 +113,32 @@ class RuntimeInstance:
 
     def output_snapshot(self, manifest: Any, diagnostics: Any = ()) -> Any:
         return self._snapshot_builder.build(manifest, tuple(diagnostics))
+
+    def inspect(self) -> Any:
+        """Return one array-free report spanning the accepted runtime and its install contract."""
+        from pops.runtime.inspection import build_runtime_inspection
+
+        layouts = tuple(self.layout_plan.layouts)
+        adaptive = any(row.adaptive for row in layouts)
+        return build_runtime_inspection(
+            self.native_executor,
+            runtime="adaptive" if adaptive else "uniform",
+            adaptive=adaptive,
+            instance={
+                "bind_identity": self.bind_identity.to_data(),
+                "artifact_identity": self.install_plan.artifact.artifact_identity.to_data(),
+                "plan_identity": self.install_plan.artifact.plan.plan_identity.to_data(),
+                "layout_plan": self.layout_plan.inspect(),
+                "execution_context": self.execution_context.to_data(),
+                "consumer_graph": self.consumer_graph.to_data(),
+                "consumer_cursors": self.consumer_cursors.to_data(),
+                "consumer_reports": [report.to_data() for report in self.consumer_reports],
+                "attempt": self._attempt,
+                "output_root": None if self.output_root is None else str(self.output_root),
+                "last_run_identity": _identity_data(self.last_run_identity),
+                "last_restart_identity": _identity_data(self.last_restart_identity),
+            },
+        )
 
     def _layout_bindings(self) -> tuple[LayoutBinding, ...]:
         generation = 0

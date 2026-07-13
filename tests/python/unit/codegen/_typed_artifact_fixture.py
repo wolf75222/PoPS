@@ -70,7 +70,7 @@ def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=Non
         ),
         bind_schema=schema,
         compile_values=schema.resolve_compile(),
-        field_solvers={},
+        field_plans={},
         outputs=(),
         diagnostics=(),
         libraries=(),

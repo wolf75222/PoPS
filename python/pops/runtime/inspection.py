@@ -25,7 +25,8 @@ class RuntimeInspectionReport(Report):
     def __init__(self, *, runtime: Any, blocks: Any, clock: Any, runtime_environment: Any,
                  capabilities: Any, program: Any, profile: Any, history: Any, cache: Any,
                  diagnostics: Any, options: Any = None, amr: Any = None, limitations: Any = None,
-                 routes: Any = None, lifecycle: Any = None, bound_snapshot: Any = None) -> None:
+                 routes: Any = None, lifecycle: Any = None, bound_snapshot: Any = None,
+                 instance: Any = None) -> None:
         self.runtime = runtime
         self.blocks = list(blocks)
         self.clock = dict(clock)
@@ -45,9 +46,10 @@ class RuntimeInspectionReport(Report):
         # An engine never bound reports "assembling" and no snapshot (bound_snapshot is None).
         self.lifecycle = lifecycle if lifecycle is not None else "assembling"
         self.bound_snapshot = dict(bound_snapshot) if bound_snapshot is not None else None
+        self.instance = dict(instance) if instance is not None else None
 
     def to_dict(self) -> Any:
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "report_type": self.report_type,
             "runtime": self.runtime,
@@ -67,6 +69,9 @@ class RuntimeInspectionReport(Report):
             "lifecycle": self.lifecycle,
             "bound_snapshot": dict(self.bound_snapshot) if self.bound_snapshot is not None else None,
         }
+        if self.instance is not None:
+            payload["instance"] = dict(self.instance)
+        return payload
 
     def __repr__(self) -> Any:
         return ("RuntimeInspectionReport(runtime=%r, blocks=%d, history=%d, cache=%d)"
@@ -117,10 +122,21 @@ class RuntimeInspectionReport(Report):
             unavailable = sum(1 for row in self.limitations if row.get("status") == "unavailable")
             lines.append("  limitations : %d partial, %d unavailable route(s)"
                          % (partial, unavailable))
+        if self.instance is not None:
+            lines.append("  instance    : bind=%s consumers=%d attempts=%s"
+                         % (self.instance.get("bind_identity", {}).get("digest", "(none)"),
+                            len(self.instance.get("consumer_graph", {}).get("nodes", [])),
+                            self.instance.get("attempt")))
         return "\n".join(lines)
 
 
-def build_runtime_inspection(sim: Any, *, runtime: Any) -> Any:
+def build_runtime_inspection(
+    sim: Any,
+    *,
+    runtime: Any,
+    adaptive: bool | None = None,
+    instance: Any = None,
+) -> Any:
     """Build the :class:`RuntimeInspectionReport` of a bound simulation (inert, no numerics).
 
     Reads the carried metadata of @p sim (blocks, clock, capabilities, program, profile,
@@ -146,11 +162,11 @@ def build_runtime_inspection(sim: Any, *, runtime: Any) -> Any:
         cache=_cache(sim),
         diagnostics=_diagnostics(sim, options),
         options=options,
-        amr=_amr(sim) if runtime == "amr_system" else None,
+        amr=_amr(sim) if (runtime == "amr_system" if adaptive is None else adaptive) else None,
         limitations=limitations,
         routes=_routes(options),
         lifecycle=_lifecycle(sim),
-        bound_snapshot=_bound_snapshot(sim))
+        bound_snapshot=_bound_snapshot(sim), instance=instance)
 
 
 def _call(obj: Any, name: Any, default: Any = None, *args: Any) -> Any:

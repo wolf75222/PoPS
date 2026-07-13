@@ -417,44 +417,6 @@ class CompiledProblem(CompiledProblemDumpMixin):
         from pops.codegen.inspect_report import build_requirements
         return build_requirements(self)
 
-    def inspect_capabilities(self) -> Any:
-        """The descriptor capability rows relevant to THIS compiled artifact (sec.12.1).
-
-        Delegates to the top-level :func:`pops.inspect_capabilities` machinery (the descriptor-sourced
-        capability matrix) and SCOPES it to the descriptor categories a compiled time Program can
-        select at bind -- the Riemann / reconstruction / limiter / projection bricks and the mesh
-        layouts (the solver / field catalogs are bind inputs, kept too). Returns the same printable
-        :class:`pops.CapabilityMatrix`. PURE: it imports only the inert authoring catalogs, never
-        ``_pops`` (cf. :func:`pops.inspect_capabilities`)."""
-        from pops._capabilities import inspect_capabilities, CapabilityMatrix
-        matrix = inspect_capabilities()
-        scoped = [e for e in matrix if e.category in self._CAPABILITY_CATEGORIES]
-        return CapabilityMatrix(scoped)
-
-    def capability_matrix(self) -> Any:
-        """The ADC-549 native route matrix for this compiled artifact.
-
-        Unlike :meth:`inspect_capabilities`, which scopes the descriptor catalog, this reports the
-        route support columns ADC-549 requires: feature, layout, backend, platform, MPI, GPU,
-        status, limitation and error_message. It is metadata-only: it builds the rich manifest from
-        the carried Program/model and never dlopens or binds the ``.so``.
-        """
-        from pops._capabilities import native_capability_matrix
-        manifest = self.manifest()
-        layout = "system"
-        try:
-            layout = self.arguments().layout_runtime.get("layout", "system")
-        except Exception:
-            pass
-        return native_capability_matrix(
-            owner=self.program_name or "compiled-problem", layout=layout,
-            flags=manifest.supports(), source="manifest")
-
-    # Descriptor categories a compiled time Program selects from at bind (a spatial brick + a layout
-    # + a field solver); the capability scope of inspect_capabilities().
-    _CAPABILITY_CATEGORIES = ("riemann", "reconstruction", "limiter", "projection", "layout",
-                              "solver", "field")
-
     def __str__(self) -> str:
         """A short, deterministic, array-free summary (Spec 5 sec.12.1, #40-41).
 

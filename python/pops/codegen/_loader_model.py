@@ -235,25 +235,6 @@ class CompiledModel:
                                          self.install_plan.layout
                                          if self.install_plan is not None else None))
 
-    def capability_matrix(self) -> Any:
-        """The ADC-549 native route matrix for this compiled model handle."""
-        from pops._capabilities import native_capability_matrix
-        flags = {
-            "supports_uniform": bool(self.caps.get("cpu", False)),
-            "supports_amr": bool(self.caps.get("amr", False)
-                                 and getattr(self, "target", "system") == "amr_system"),
-            "supports_mpi": bool(self.caps.get("mpi", False)),
-            "supports_gpu": bool(self.caps.get("gpu", False)),
-            "supports_stride": bool(getattr(self, "backend", None) == "production"),
-            "supports_named_fields": True,
-            "supports_partial_imex_mask": False,
-            "supports_custom_communicator": False,
-        }
-        return native_capability_matrix(
-            owner=getattr(self, "so_path", None) or "compiled-model",
-            layout="amr" if getattr(self, "target", "system") == "amr_system" else "system",
-            flags=flags, source="manifest")
-
     def __repr__(self) -> str:
         return ("CompiledModel(backend=%r, target=%r, so_path=%r, n_vars=%d, gamma=%r, n_aux=%d, "
                 "adder=%r, runtime_params=%r, abi_key=%.12s..., model_hash=%.12s...)"

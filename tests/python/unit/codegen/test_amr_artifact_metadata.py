@@ -32,7 +32,10 @@ def test_amr_artifact_reports_aggregate_every_declared_block():
     assert set(artifact.arguments().instances) == {"ions", "electrons"}
     manifest = artifact.manifest()
     assert manifest.supports_uniform is True and manifest.supports_amr is True
-    assert artifact.capability_matrix().to_dict() == manifest.capability_matrix().to_dict()
+    assert not hasattr(artifact, "capability_matrix")
+    report_rows = artifact.inspect().capabilities["routes"]
+    manifest_rows = [row.to_dict() for row in manifest.capability_matrix().rows]
+    assert report_rows == manifest_rows
 
 
 def test_system_artifact_cannot_omit_the_compiled_program():

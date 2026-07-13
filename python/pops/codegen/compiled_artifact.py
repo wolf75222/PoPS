@@ -500,9 +500,6 @@ class CompiledSimulationArtifact:
 
         return build_arguments(self)
 
-    def capability_matrix(self) -> Any:
-        return self.manifest().capability_matrix()
-
     def estimate_memory(self, mesh: Any, *, platform: Any = None, layout: Any = None) -> Any:
         from pops.codegen.inspect_compiled import build_memory_estimate
 

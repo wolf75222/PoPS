@@ -5,6 +5,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
+import pops
 import pytest
 
 from pops.codegen._plans import BindInputs, InstallPlan
@@ -178,6 +179,20 @@ def test_runtime_instance_retains_complete_multilayout_plan_without_target_dispa
     assert len(runtime.runtime_plan.communication.transfers) == 1
     assert runtime.runtime_plan.communication.transfers[0].provider_id == \
         runtime.layout_plan.mappings[0].provider_id
+
+
+def test_runtime_instance_inspection_exposes_install_and_consumer_evidence():
+    plan = _install()
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+
+    report = runtime.inspect()
+    payload = report.to_dict()
+    assert payload["runtime"] == "uniform"
+    assert payload["instance"]["bind_identity"] == plan.bind_identity.to_data()
+    assert payload["instance"]["plan_identity"] == plan.artifact.plan.plan_identity.to_data()
+    assert payload["instance"]["consumer_graph"] == runtime.consumer_graph.to_data()
+    assert payload["instance"]["consumer_cursors"]["rows"] == []
+    assert pops.inspect(runtime) == payload
 
 
 def test_run_publishes_exact_npz_only_after_accepted_step_and_commits_cursor(tmp_path):
