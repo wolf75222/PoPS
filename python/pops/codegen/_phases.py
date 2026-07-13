@@ -26,6 +26,10 @@ def resolve(
     time: Any = None,
     libraries: Any = (),
     compile_options: Mapping[str, Any] | None = None,
+    resolved_hierarchy: Any = None,
+    amr_transfer: Any = None,
+    initial_condition_plan: Any = None,
+    bootstrap_plan: Any = None,
 ) -> Any:
     """Resolve a frozen Problem into the only value accepted by :func:`compile`."""
     from pops.problem import Problem
@@ -44,6 +48,18 @@ def resolve(
     layout_authority = resolve_layout(problem, layout, providers=layout_providers)
     layout_plan = layout_authority.plan
     target = "amr_system" if layout_plan.layouts[0].adaptive else "system"
+    authorities = (
+        resolved_hierarchy,
+        amr_transfer,
+        initial_condition_plan,
+        bootstrap_plan,
+    )
+    if any(value is not None for value in authorities):
+        if target != "amr_system" or any(value is None for value in authorities):
+            raise ValueError(
+                "AMR hierarchy, transfer, initial-condition, and bootstrap authorities "
+                "must be passed together for an AMR layout"
+            )
     if time is not None and problem._time is not None and time is not problem._time:
         raise ValueError("pops.resolve received two competing time-program authorities")
     resolved_time = time if time is not None else problem._time
@@ -110,6 +126,16 @@ def resolve(
     evidence = resolve_capability_evidence(
         problem, layout=layout_plan, libraries=resolved_libraries, time=resolved_time,
         module_abi_key=abi_key())
+    amr_requirements = None
+    amr_capabilities = None
+    if bootstrap_plan is not None:
+        amr_requirements = {
+            "hierarchy": resolved_hierarchy.identity.to_data(),
+            "transfer": amr_transfer.identity.to_data(),
+            "initial_conditions": initial_condition_plan.identity.to_data(),
+            "bootstrap": bootstrap_plan.identity.to_data(),
+        }
+        amr_capabilities = bootstrap_plan.inspect()
     return ResolvedSimulationPlan(
         snapshot=snapshot, target=target, backend=backend_token, layout=detached_layout,
         layout_plan=layout_plan,
@@ -117,10 +143,14 @@ def resolve(
         compile_values=compile_values, field_solvers=field_solvers, outputs=outputs,
         diagnostics=diagnostics, libraries=resolved_libraries,
         requirements={"tokens": tuple(evidence["requirements"]),
-                      "layout_resources": layout_plan.resource_requirements()},
+                      "layout_resources": layout_plan.resource_requirements(),
+                      "amr_resources": amr_requirements},
         capabilities={"resolution": evidence,
-                      "layout_plan": layout_plan.capability_evidence()},
-        lowering_coverage=layout_lowering_coverage(layout_plan), compile_options=options)
+                      "layout_plan": layout_plan.capability_evidence(),
+                      "amr_bootstrap": amr_capabilities},
+        lowering_coverage=layout_lowering_coverage(layout_plan), compile_options=options,
+        resolved_hierarchy=resolved_hierarchy, amr_transfer=amr_transfer,
+        initial_condition_plan=initial_condition_plan, bootstrap_plan=bootstrap_plan)
 
 
 def compile(plan: Any) -> Any:
@@ -169,6 +199,35 @@ def bind(artifact: Any, inputs: Any) -> Any:
     artifact.verify()
     inputs.verify()
     plan = artifact.plan
+    if plan.initial_condition_plan is None:
+        if inputs.initial_values:
+            raise ValueError("BindInputs.initial_values requires a resolved InitialConditionPlan")
+    else:
+        if inputs.initial_state:
+            raise ValueError(
+                "AMR InitialConditionPlan is the single authority; initial_state cannot duplicate it"
+            )
+        expected_initial = {
+            row.subject.qualified_id: row.subject
+            for row in plan.initial_condition_plan.bindings
+        }
+        from pops.mesh.amr import AnalyticReprojection
+        analytic = {
+            row.subject.qualified_id
+            for row in plan.bootstrap_plan.selections
+            if type(row.method) is AnalyticReprojection
+        }
+        expected_initial = {
+            key: value for key, value in expected_initial.items() if key not in analytic
+        }
+        supplied_initial = {row.qualified_id: row for row in inputs.initial_values}
+        missing = sorted(set(expected_initial) - set(supplied_initial))
+        extra = sorted(set(supplied_initial) - set(expected_initial))
+        if missing or extra:
+            raise ValueError(
+                "BindInputs.initial_values must exactly cover InitialConditionPlan; "
+                "missing=%s extra=%s" % (missing, extra)
+            )
     params = plan.bind_schema.resolve_bind(
         inputs.params, compile_values=plan.compile_values)
     declared = {block.name for block in artifact.blocks}

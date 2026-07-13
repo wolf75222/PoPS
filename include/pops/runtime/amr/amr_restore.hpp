@@ -81,12 +81,16 @@ inline double AmrRuntime::composite_level_sum_(std::size_t b, int k, const std::
   const std::vector<AmrLevelMP>& L = *blocks_[b].levels;
   const MultiFab& U = L[k].U;
   const int nc = U.ncomp();
-  // Covered region: the level-(k+1) patch boxes coarsened by ratio 2 into level-k index space. The
-  // finer boxes come from the SHARED layout (block 0), identical for every block on this hierarchy.
+  // Covered region: level-(k+1) patch boxes coarsened by the resolved transition ratio.
+  // finer boxes come from the runtime-owned hierarchy authority.
   std::vector<Box2D> covered;
   if (k + 1 < static_cast<int>(L.size())) {
-    for (const Box2D& fb : (*blocks_[0].levels)[k + 1].U.box_array().boxes())
-      covered.push_back(Box2D{{fb.lo[0] >> 1, fb.lo[1] >> 1}, {fb.hi[0] >> 1, fb.hi[1] >> 1}});
+    const int ratio = hierarchy_.refinement_ratios[static_cast<std::size_t>(k)];
+    for (const Box2D& fb : hierarchy_.ba[static_cast<std::size_t>(k + 1)].boxes())
+      covered.push_back(Box2D{{coarsen_index(fb.lo[0], ratio),
+                               coarsen_index(fb.lo[1], ratio)},
+                              {coarsen_index(fb.hi[0], ratio),
+                               coarsen_index(fb.hi[1], ratio)}});
   }
   device_fence();
   double s = 0.0;
@@ -156,7 +160,7 @@ inline double AmrRuntime::composite_reduce(const std::string& block, const std::
 inline std::vector<int> AmrRuntime::level_owner_ranks(int k) const {
   if (k < 0 || k >= nlev_)
     throw std::runtime_error("AmrRuntime::level_owner_ranks : level out of bounds");
-  return (*blocks_[0].levels)[k].U.dmap().ranks();
+  return hierarchy_.dm[static_cast<std::size_t>(k)].ranks();
 }
 
 // FULL shared aux of level k: ALL aux_ncomp_ components of aux_[k], LOCAL valid cells at GLOBAL
@@ -169,7 +173,7 @@ inline std::vector<double> AmrRuntime::level_aux_flat(int k) const {
     throw std::runtime_error("AmrRuntime::level_aux_flat : level out of bounds");
   const MultiFab& A = aux_[k];
   const int nc = A.ncomp();
-  const std::size_t nf = static_cast<std::size_t>(dom_.nx()) << k;
+  const std::size_t nf = static_cast<std::size_t>(dom_.nx()) * level_refinement(k);
   std::vector<double> out(static_cast<std::size_t>(nc) * nf * nf, 0.0);
   device_fence();
   for (int li = 0; li < A.local_size(); ++li) {
@@ -200,7 +204,7 @@ inline void AmrRuntime::set_level_aux_flat(int k, const std::vector<double>& v) 
     throw std::runtime_error("AmrRuntime::set_level_aux_flat : level out of bounds");
   MultiFab& A = aux_[k];
   const int nc = A.ncomp();
-  const std::size_t nf = static_cast<std::size_t>(dom_.nx()) << k;
+  const std::size_t nf = static_cast<std::size_t>(dom_.nx()) * level_refinement(k);
   if (v.size() != static_cast<std::size_t>(nc) * nf * nf)
     throw std::runtime_error("AmrRuntime::set_level_aux_flat : aux size != ncomp*nf*nf");
   device_fence();

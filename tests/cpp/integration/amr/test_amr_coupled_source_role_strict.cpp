@@ -88,7 +88,7 @@ static AmrRuntime make_two_block(int N, double L, double B0, const std::vector<d
   // Pure host METADATA: the numerics still act on component 0, only (block, role) resolution changes.
   if (ions_user_role != nullptr)
     blocks[0].cons_vars.user_roles = {ions_user_role};
-  return AmrRuntime(S.geom, S.ba_coarse, S.poisson_bc, std::move(blocks), S.base_per,
+  return AmrRuntime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                     S.replicated_coarse, S.wall);
 }
 

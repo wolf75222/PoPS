@@ -26,6 +26,8 @@
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/parallel/comm.hpp>  // n_ranks() / comm_active(): MPI message+reduction counts (Spec 5 criterion 43)
 #include <pops/runtime/numerical_defaults.hpp>
+#include <pops/runtime/amr/bootstrap_transfer_builtins.hpp>
+#include <pops/runtime/amr/bootstrap_transfer_registry.hpp>
 #include <pops/runtime/program/profiler.hpp>  // Profiler / ProfileScope: AMR phase timings (Spec 5 criterion 43, ADC-479)
 #include <pops/runtime/system/field_problem_registry.hpp>  // FieldProblemRegistry (ADC-596 descriptor)
 
@@ -33,6 +35,7 @@
 #include <chrono>  // AmrPhaseScope wall-clock timing (Spec 5 criterion 43)
 #include <cmath>      // std::isfinite (reject a degenerate dt)
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <limits>  // std::numeric_limits (initial dt = +inf, min over the blocks)
 #include <map>  // named_aux_: model-named aux fields (comp -> coarse field), re-applied each solve
@@ -83,6 +86,130 @@ namespace pops {
 
 namespace detail {
 struct AmrHistoryOps;  // ADC-631 multistep history-ring operations (friend of AmrRuntime; amr_history.hpp)
+
+struct BootstrapNodeBilinearKernel {
+  Array4 fine;
+  ConstArray4 coarse;
+  int component;
+  int coarse_lo_x, coarse_lo_y, fine_lo_x, fine_lo_y;
+  POPS_HD void operator()(int i, int j) const {
+    const int ci = coarse_lo_x + floor_div(i - fine_lo_x, 2);
+    const int cj = coarse_lo_y + floor_div(j - fine_lo_y, 2);
+    const bool odd_x = ((i - fine_lo_x) & 1) != 0;
+    const bool odd_y = ((j - fine_lo_y) & 1) != 0;
+    if (!odd_x && !odd_y) {
+      fine(i, j, component) = coarse(ci, cj, component);
+    } else if (odd_x && !odd_y) {
+      fine(i, j, component) =
+          Real(0.5) * (coarse(ci, cj, component) + coarse(ci + 1, cj, component));
+    } else if (!odd_x && odd_y) {
+      fine(i, j, component) =
+          Real(0.5) * (coarse(ci, cj, component) + coarse(ci, cj + 1, component));
+    } else {
+      fine(i, j, component) = Real(0.25) *
+          (coarse(ci, cj, component) + coarse(ci + 1, cj, component) +
+           coarse(ci, cj + 1, component) + coarse(ci + 1, cj + 1, component));
+    }
+  }
+};
+
+struct BootstrapFaceProlongKernel {
+  Array4 fine;
+  ConstArray4 coarse;
+  runtime::amr::TransferCentering centering;
+  int component;
+  int coarse_lo_x, coarse_lo_y, fine_lo_x, fine_lo_y;
+  POPS_HD void operator()(int i, int j) const {
+    const int ci = coarse_lo_x + floor_div(i - fine_lo_x, 2);
+    const int cj = coarse_lo_y + floor_div(j - fine_lo_y, 2);
+    if (centering == runtime::amr::TransferCentering::FaceX) {
+      fine(i, j, component) =
+          ((i - fine_lo_x) & 1) ? Real(0.5) * (coarse(ci, cj, component) +
+                                 coarse(ci + 1, cj, component))
+                  : coarse(ci, cj, component);
+    } else {
+      fine(i, j, component) =
+          ((j - fine_lo_y) & 1) ? Real(0.5) * (coarse(ci, cj, component) +
+                                 coarse(ci, cj + 1, component))
+                  : coarse(ci, cj, component);
+    }
+  }
+};
+
+struct BootstrapConstantKernel {
+  Array4 values;
+  int component;
+  Real value;
+  POPS_HD void operator()(int i, int j) const { values(i, j, component) = value; }
+};
+
+struct BootstrapFloorKernel {
+  Array4 values;
+  int component;
+  Real floor;
+  POPS_HD int operator()(int i, int j) const {
+    if (values(i, j, component) >= floor)
+      return 0;
+    values(i, j, component) = floor;
+    return 1;
+  }
+};
+
+struct BootstrapThresholdTagKernel {
+  ConstArray4 values;
+  Array4 mask;
+  int component;
+  Real threshold;
+  POPS_HD void operator()(int i, int j) const {
+    mask(i, j, 0) = values(i, j, component) > threshold ? Real(1) : Real(0);
+  }
+};
+
+inline void bootstrap_prolong_staggered(
+    const MultiFab& parent, MultiFab& fine, runtime::amr::TransferCentering centering,
+    const runtime::amr::SpatialTransferContext& context) {
+  if (context.index.coarse_origin.size() != 2 || context.index.fine_origin.size() != 2 ||
+      context.index.refinement_ratio != std::vector<int>{2, 2})
+    throw std::runtime_error("staggered prolongation received an invalid index transform");
+  MultiFab local_parent(coarsen_grown(fine.box_array(), 2, 2), fine.dmap(),
+                        parent.ncomp(), 0);
+  parallel_copy(local_parent, parent);
+  const Box2D coarse_domain = parent.box_array().bounding_box();
+  const Box2D fine_domain = coarse_domain.refine(context.index.refinement_ratio[0]);
+  if (coarse_domain.lo[0] != context.index.coarse_origin[0] ||
+      coarse_domain.lo[1] != context.index.coarse_origin[1] ||
+      fine_domain.lo[0] != context.index.fine_origin[0] ||
+      fine_domain.lo[1] != context.index.fine_origin[1])
+    throw std::runtime_error("staggered prolongation index origin mismatch");
+  for (int li = 0; li < fine.local_size(); ++li) {
+    Array4 destination = fine.fab(li).array();
+    const ConstArray4 source = local_parent.fab(li).const_array();
+    for (int component = 0; component < fine.ncomp(); ++component) {
+      if (centering == runtime::amr::TransferCentering::Node)
+        for_each_cell(fine.box(li), BootstrapNodeBilinearKernel{
+                                           destination, source, component,
+                                           coarse_domain.lo[0], coarse_domain.lo[1],
+                                           fine_domain.lo[0], fine_domain.lo[1]});
+      else
+        for_each_cell(fine.box(li), BootstrapFaceProlongKernel{
+                                           destination, source, centering, component,
+                                           coarse_domain.lo[0], coarse_domain.lo[1],
+                                           fine_domain.lo[0], fine_domain.lo[1]});
+    }
+  }
+}
+
+inline void bootstrap_prolong_face_vector(
+    const MultiFab& coarse_x, const MultiFab& coarse_y, MultiFab& fine_x,
+    MultiFab& fine_y, const runtime::amr::SpatialTransferContext& context) {
+  if (coarse_x.ncomp() != coarse_y.ncomp() || fine_x.ncomp() != fine_y.ncomp() ||
+      coarse_x.ncomp() != fine_x.ncomp())
+    throw std::runtime_error("face-vector prolongation component mismatch");
+  bootstrap_prolong_staggered(
+      coarse_x, fine_x, runtime::amr::TransferCentering::FaceX, context);
+  bootstrap_prolong_staggered(
+      coarse_y, fine_y, runtime::amr::TransferCentering::FaceY, context);
+}
 }  // namespace detail
 
 /// Type-erased closures of ONE AMR block, placed on the shared hierarchy. AMR counterpart of the
@@ -241,6 +368,25 @@ struct AmrRuntimeBlock {
 /// AmrSystemCoupler algorithm (solve_fields + step) over closures rather than a CoupledSystem.
 class AmrRuntime {
  public:
+  struct BootstrapStaggeredField {
+    runtime::amr::TransferCentering centering{};
+    std::vector<MultiFab> levels;
+  };
+
+  struct BootstrapCacheState {
+    std::uint64_t epoch = 0;
+    bool valid = false;
+    int materialized_level = -1;
+    std::vector<PatchBox> topology;
+  };
+
+  struct BootstrapTagProgram {
+    std::string provider_identity;
+    int component = 0;
+    Real threshold = Real(0);
+    bool prepared = false;
+  };
+
   /// Deep, move-independent image of every runtime-owned value a macro-step may mutate.  MultiFab
   /// copies retain their BoxArray/DistributionMapping, so the snapshot carries the hierarchy itself,
   /// not merely field values on the current topology.  The facade uses this as the accepted-state
@@ -253,14 +399,18 @@ class AmrRuntime {
     };
 
     std::vector<std::vector<AmrLevelMP>> block_levels;
+    AmrHierarchyLayout hierarchy;
     std::vector<MultiFab> aux;
     MultiFab phi;
     MultiFab poisson_rhs;
     std::map<std::string, NamedFieldSnapshot> named_fields;
     std::map<std::string, std::vector<std::vector<MultiFab>>> history_rings;
     std::map<std::string, int> history_depth;
+    std::map<std::string, std::size_t> history_block_owner;
     std::map<std::string, std::vector<char>> history_initialized;
     std::map<std::string, std::vector<Real>> history_slot_dt;
+    std::map<std::string, BootstrapStaggeredField> staggered_fields;
+    std::map<std::string, BootstrapCacheState> bootstrap_caches;
     std::vector<NewtonReport> newton_reports;
     std::vector<char> has_newton_report;
     std::string last_dt_reason;
@@ -273,13 +423,13 @@ class AmrRuntime {
   };
 
   /// @param geom        geometry of the coarse level (domain + physical extents).
-  /// @param ba_coarse   BoxArray of the coarse (the coarse Poisson lives on it).
+  /// @param hierarchy   Runtime-owned level topology, distribution and metric authority.
   /// @param bcPhi       BC of the coarse Poisson.
   /// @param blocks      block registry (>= 1), all on the SAME layout (guarded at the ctor).
   /// @param base_per    periodicity of the base domain (transport).
   /// @param replicated_coarse  ownership of level 0 (replicated single-box, or distributed multi-box).
   /// @param active      conductive-wall predicate (passed to MG; empty = none).
-  AmrRuntime(const Geometry& geom, const BoxArray& ba_coarse, const BCRec& bcPhi,
+  AmrRuntime(const Geometry& geom, AmrHierarchyLayout hierarchy, const BCRec& bcPhi,
              std::vector<AmrRuntimeBlock> blocks, Periodicity base_per = Periodicity{true, true},
              bool replicated_coarse = true, std::function<bool(Real, Real)> active = {})
       : geom_(geom),
@@ -288,8 +438,8 @@ class AmrRuntime {
         bcPhi_(bcPhi),
         aux_bc_(detail::derive_aux_bc(bcPhi)),
         replicated_coarse_(replicated_coarse),
-        mg_(geom, ba_coarse, bcPhi, active, replicated_coarse),
-        ba_coarse_(ba_coarse),
+        hierarchy_(std::move(hierarchy)),
+        mg_(geom, hierarchy_.ba.at(0), bcPhi, active, replicated_coarse),
         wall_active_(std::move(active)),  // copy already consumed by mg_ (earlier in decl order)
         blocks_(std::move(blocks)) {
     if (blocks_.empty())
@@ -299,19 +449,39 @@ class AmrRuntime {
         throw std::runtime_error(
             "AmrRuntime : each block must carry at least one level "
             "(coarse) on the shared layout");
-    nlev_ = static_cast<int>(blocks_[0].levels->size());
+    nlev_ = hierarchy_.nlev();
+    if (nlev_ < 1 || hierarchy_.dm.size() != hierarchy_.ba.size() ||
+        hierarchy_.dx.size() != hierarchy_.ba.size() ||
+        hierarchy_.dy.size() != hierarchy_.ba.size() ||
+        hierarchy_.refinement_ratios.size() + 1 != hierarchy_.ba.size())
+      throw std::runtime_error("AmrRuntime : invalid runtime-owned hierarchy manifest");
+    for (std::size_t level = 0; level < hierarchy_.refinement_ratios.size(); ++level) {
+      const int ratio = hierarchy_.refinement_ratios[level];
+      if (ratio < 2 || hierarchy_.dx[level] != hierarchy_.dx[level + 1] * Real(ratio) ||
+          hierarchy_.dy[level] != hierarchy_.dy[level + 1] * Real(ratio))
+        throw std::runtime_error("AmrRuntime : inconsistent hierarchy refinement metric");
+    }
 
     // EXACT layout consistency between blocks (the aux is shared per level): same number of levels,
     // and per level same BoxArray (boxes AND order), same DistributionMapping, same dx/dy. SAME guard
     // as AmrSystemCoupler (detail::same_layout_or_throw): all blocks live on ALL patches of the
     // UNIQUE shared hierarchy. A single block matches itself trivially (the loop over the other blocks
     // is empty).
-    {
-      std::vector<std::vector<AmrLevelMP>> ref;
-      ref.reserve(blocks_.size());
-      for (const auto& b : blocks_)
-        ref.push_back(*b.levels);
-      detail::same_layout_or_throw(ref);
+    for (const auto& block : blocks_) {
+      if (static_cast<int>(block.levels->size()) != nlev_)
+        throw std::runtime_error(
+            "AmrRuntime : block level count differs from runtime-owned hierarchy");
+      for (int level = 0; level < nlev_; ++level) {
+        const auto& value = (*block.levels)[static_cast<std::size_t>(level)];
+        if (!detail::same_level_layout(
+                value.U.box_array(), value.U.dmap(), value.dx, value.dy,
+                hierarchy_.ba[static_cast<std::size_t>(level)],
+                hierarchy_.dm[static_cast<std::size_t>(level)],
+                hierarchy_.dx[static_cast<std::size_t>(level)],
+                hierarchy_.dy[static_cast<std::size_t>(level)]))
+          throw std::runtime_error(
+              "AmrRuntime : block storage differs from runtime-owned hierarchy");
+      }
     }
 
     // Width of the SHARED aux channel: max of the blocks' aux_comps (>= kAuxBaseComps). Counterpart of
@@ -325,12 +495,11 @@ class AmrRuntime {
         aux_ncomp_ = b.aux_ncomp;
 
     // SHARED aux: one MultiFab (phi, grad phi) per level, on the common grid. Sized once -> stable
-    // addresses for the blocks' aux pointers. The shared layout is that of block 0
-    // (same_layout_or_throw guard: identical for all).
+    // addresses for the blocks' aux pointers. The layout comes only from the runtime authority.
     aux_.resize(nlev_);
-    const auto& L0 = *blocks_[0].levels;
     for (int k = 0; k < nlev_; ++k)
-      aux_[k] = MultiFab(L0[k].U.box_array(), L0[k].U.dmap(), aux_ncomp_, 1);
+      aux_[k] = MultiFab(hierarchy_.ba[static_cast<std::size_t>(k)],
+                         hierarchy_.dm[static_cast<std::size_t>(k)], aux_ncomp_, 1);
     for (auto& b : blocks_)
       for (int k = 0; k < nlev_; ++k)
         (*b.levels)[k].aux = &aux_[k];
@@ -339,9 +508,355 @@ class AmrRuntime {
     // them). Empty by default -> no tag -> frozen hierarchy (regrid is not called anyway until
     // set_regrid activates regrid_every_ > 0).
     block_tag_.resize(blocks_.size());
+    bootstrap_tag_programs_.resize(blocks_.size());
+    block_transfer_authorities_.reserve(blocks_.size());
+    for (std::size_t block = 0; block < blocks_.size(); ++block)
+      block_transfer_authorities_.push_back(BlockTransferAuthority{
+          runtime::amr::prepare_conservative_coarse_fine(),
+          runtime::amr::prepare_linear_time_interpolation(), 2, true});
   }
 
   int nlev() const { return nlev_; }
+  int level_refinement(int level) const {
+    if (level < 0 || level >= nlev_)
+      throw std::runtime_error("AmrRuntime::level_refinement level out of bounds");
+    int refinement = 1;
+    for (int transition = 0; transition < level; ++transition)
+      refinement *= hierarchy_.refinement_ratios[static_cast<std::size_t>(transition)];
+    return refinement;
+  }
+  static runtime::amr::SpatialTransferContext bootstrap_transfer_context(
+      const MultiFab& coarse, const MultiFab& fine, int coarse_level, int fine_level,
+      int refinement_ratio, bool replicated_parent = false) {
+    const Box2D coarse_box = coarse.box_array().bounding_box();
+    (void)fine;
+    const Box2D fine_domain = coarse_box.refine(refinement_ratio);
+    return runtime::amr::SpatialTransferContext{
+        coarse_level,
+        fine_level,
+        coarse.ncomp(),
+        runtime::amr::IndexTransform{{coarse_box.lo[0], coarse_box.lo[1]},
+                                     {fine_domain.lo[0], fine_domain.lo[1]},
+                                     {refinement_ratio, refinement_ratio}},
+        replicated_parent};
+  }
+  void set_block_transfer_authority(
+      std::size_t block, runtime::amr::PreparedTransferKernel coarse_fine,
+      runtime::amr::PreparedTransferKernel temporal, int refinement_ratio) {
+    if (block >= blocks_.size() || !coarse_fine.coarse_fine || !temporal.temporal ||
+        refinement_ratio < 2 || bootstrap_pending_)
+      throw std::runtime_error("AmrRuntime::set_block_transfer_authority invalid manifest");
+    block_transfer_authorities_[block] = BlockTransferAuthority{
+        std::move(coarse_fine), std::move(temporal), refinement_ratio, true};
+  }
+  void set_bootstrap_threshold_tag(std::size_t block, int component, Real threshold,
+                                   std::string provider_identity = "legacy:component_threshold") {
+    if (block >= blocks_.size() || component < 0 || component >= blocks_[block].ncomp ||
+        provider_identity.empty() || bootstrap_pending_)
+      throw std::runtime_error("AmrRuntime::set_bootstrap_threshold_tag invalid descriptor");
+    bootstrap_tag_programs_[block] = BootstrapTagProgram{
+        std::move(provider_identity), component, threshold, true};
+  }
+
+  void register_bootstrap_staggered_field(
+      const std::string& subject, runtime::amr::TransferCentering centering, int ncomp,
+      const std::vector<double>& values) {
+    if (bootstrap_pending_ || subject.empty() || ncomp < 1 ||
+        bootstrap_staggered_fields_.count(subject) != 0 ||
+        (centering != runtime::amr::TransferCentering::FaceX &&
+         centering != runtime::amr::TransferCentering::FaceY &&
+         centering != runtime::amr::TransferCentering::Node))
+      throw std::runtime_error(
+          "AmrRuntime::register_bootstrap_staggered_field received an invalid descriptor");
+    const MultiFab& cell = aux_[0];
+    std::vector<Box2D> boxes;
+    boxes.reserve(static_cast<std::size_t>(cell.box_array().size()));
+    for (const Box2D& box : cell.box_array().boxes()) {
+      Box2D staggered = box;
+      if (centering == runtime::amr::TransferCentering::FaceX ||
+          centering == runtime::amr::TransferCentering::Node)
+        ++staggered.hi[0];
+      if (centering == runtime::amr::TransferCentering::FaceY ||
+          centering == runtime::amr::TransferCentering::Node)
+        ++staggered.hi[1];
+      boxes.push_back(staggered);
+    }
+    const int nx = dom_.nx() +
+                   (centering == runtime::amr::TransferCentering::FaceX ||
+                    centering == runtime::amr::TransferCentering::Node);
+    const int ny = dom_.ny() +
+                   (centering == runtime::amr::TransferCentering::FaceY ||
+                    centering == runtime::amr::TransferCentering::Node);
+    if (!values.empty() &&
+        values.size() != static_cast<std::size_t>(ncomp) * nx * ny)
+      throw std::runtime_error(
+          "AmrRuntime::register_bootstrap_staggered_field payload shape mismatch");
+    MultiFab coarse(BoxArray(std::move(boxes)), cell.dmap(), ncomp, 1);
+    coarse.set_val(Real(0));
+    if (!values.empty()) {
+      coarse.sync_host();
+      for (int li = 0; li < coarse.local_size(); ++li) {
+        Array4 data = coarse.fab(li).array();
+        const Box2D valid = coarse.box(li);
+        for (int c = 0; c < ncomp; ++c)
+          for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+            for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+              data(i, j, c) = static_cast<Real>(
+                  values[(static_cast<std::size_t>(c) * ny + j) * nx + i]);
+      }
+    }
+    BootstrapStaggeredField field;
+    field.centering = centering;
+    field.levels.push_back(std::move(coarse));
+    bootstrap_staggered_fields_.emplace(subject, std::move(field));
+  }
+
+  std::int64_t prolong_bootstrap_block(
+      std::size_t block, int level,
+      const runtime::amr::PreparedTransferKernel& kernel, int refinement_ratio) {
+    if (!bootstrap_pending_ || block >= blocks_.size() || level <= 0 || level >= nlev_ ||
+        !kernel.spatial)
+      throw std::runtime_error("AmrRuntime::prolong_bootstrap_block invalid route or phase");
+    auto& levels = *blocks_[block].levels;
+    const MultiFab& coarse = levels[static_cast<std::size_t>(level - 1)].U;
+    MultiFab& fine = levels[static_cast<std::size_t>(level)].U;
+    kernel.spatial(coarse, fine,
+                   bootstrap_transfer_context(coarse, fine, level - 1, level,
+                                              refinement_ratio));
+    return fine.box_array().num_cells() * fine.ncomp();
+  }
+
+  std::int64_t fill_bootstrap_block_constant(
+      std::size_t block, int level, const std::vector<double>& components) {
+    if (!bootstrap_pending_ || block >= blocks_.size() || level < 0 || level >= nlev_ ||
+        components.size() != static_cast<std::size_t>(blocks_[block].ncomp))
+      throw std::runtime_error("AmrRuntime::fill_bootstrap_block_constant invalid target/width");
+    MultiFab& values = (*blocks_[block].levels)[static_cast<std::size_t>(level)].U;
+    for (int li = 0; li < values.local_size(); ++li)
+      for (int component = 0; component < values.ncomp(); ++component)
+        for_each_cell(values.box(li), detail::BootstrapConstantKernel{
+                                           values.fab(li).array(), component,
+                                           static_cast<Real>(components[component])});
+    return values.box_array().num_cells() * values.ncomp();
+  }
+
+  void synchronize_bootstrap_block(
+      std::size_t block, int fine_level,
+      const runtime::amr::PreparedTransferKernel& kernel, int refinement_ratio) {
+    if (!bootstrap_pending_ || block >= blocks_.size() || fine_level <= 0 ||
+        fine_level >= nlev_ || !kernel.spatial)
+      throw std::runtime_error("AmrRuntime::synchronize_bootstrap_block invalid phase/level");
+    auto& levels = *blocks_[block].levels;
+    MultiFab& coarse = levels[static_cast<std::size_t>(fine_level - 1)].U;
+    const MultiFab& fine = levels[static_cast<std::size_t>(fine_level)].U;
+    kernel.spatial(fine, coarse,
+                   bootstrap_transfer_context(coarse, fine, fine_level - 1, fine_level,
+                                              refinement_ratio));
+  }
+
+  std::int64_t prolong_bootstrap_staggered_field(
+      const std::string& subject, int level,
+      const runtime::amr::PreparedTransferKernel& kernel, int refinement_ratio) {
+    auto found = bootstrap_staggered_fields_.find(subject);
+    if (!bootstrap_pending_ || found == bootstrap_staggered_fields_.end() || level <= 0 ||
+        level >= nlev_ || found->second.levels.size() != static_cast<std::size_t>(level) ||
+        !kernel.spatial)
+      throw std::runtime_error(
+          "AmrRuntime::prolong_bootstrap_staggered_field invalid subject/phase");
+    BootstrapStaggeredField& field = found->second;
+    const MultiFab& cell = aux_[static_cast<std::size_t>(level)];
+    std::vector<Box2D> boxes;
+    boxes.reserve(static_cast<std::size_t>(cell.box_array().size()));
+    for (const Box2D& box : cell.box_array().boxes()) {
+      Box2D staggered = box;
+      if (field.centering == runtime::amr::TransferCentering::FaceX ||
+          field.centering == runtime::amr::TransferCentering::Node)
+        ++staggered.hi[0];
+      if (field.centering == runtime::amr::TransferCentering::FaceY ||
+          field.centering == runtime::amr::TransferCentering::Node)
+        ++staggered.hi[1];
+      boxes.push_back(staggered);
+    }
+    MultiFab fine(BoxArray(std::move(boxes)), cell.dmap(), field.levels.back().ncomp(), 1);
+    fine.set_val(Real(0));
+    const MultiFab& parent = field.levels.back();
+    kernel.spatial(parent, fine,
+                   bootstrap_transfer_context(parent, fine, level - 1, level,
+                                              refinement_ratio));
+    const std::int64_t materialized = fine.box_array().num_cells() * fine.ncomp();
+    field.levels.push_back(std::move(fine));
+    return materialized;
+  }
+
+  std::int64_t prolong_bootstrap_face_vector(
+      const std::string& subject_x, const std::string& subject_y, int level,
+      const runtime::amr::PreparedTransferKernel& kernel, int refinement_ratio) {
+    auto x = bootstrap_staggered_fields_.find(subject_x);
+    auto y = bootstrap_staggered_fields_.find(subject_y);
+    if (!bootstrap_pending_ || x == bootstrap_staggered_fields_.end() ||
+        y == bootstrap_staggered_fields_.end() || level <= 0 || level >= nlev_ ||
+        !kernel.face_vector ||
+        x->second.centering != runtime::amr::TransferCentering::FaceX ||
+        y->second.centering != runtime::amr::TransferCentering::FaceY ||
+        x->second.levels[0].ncomp() != y->second.levels[0].ncomp())
+      throw std::runtime_error(
+          "AmrRuntime::prolong_bootstrap_face_vector invalid paired subject/route");
+    if (x->second.levels.size() == static_cast<std::size_t>(level + 1) &&
+        y->second.levels.size() == static_cast<std::size_t>(level + 1))
+      return x->second.levels.back().box_array().num_cells() *
+                 x->second.levels.back().ncomp() +
+             y->second.levels.back().box_array().num_cells() *
+                 y->second.levels.back().ncomp();
+    if (x->second.levels.size() != static_cast<std::size_t>(level) ||
+        y->second.levels.size() != static_cast<std::size_t>(level))
+      throw std::runtime_error(
+          "AmrRuntime::prolong_bootstrap_face_vector has a partially materialized pair");
+
+    const MultiFab& cell = aux_[static_cast<std::size_t>(level)];
+    const auto allocate = [&](runtime::amr::TransferCentering centering, int ncomp) {
+      std::vector<Box2D> boxes;
+      boxes.reserve(static_cast<std::size_t>(cell.box_array().size()));
+      for (const Box2D& box : cell.box_array().boxes()) {
+        Box2D staggered = box;
+        if (centering == runtime::amr::TransferCentering::FaceX)
+          ++staggered.hi[0];
+        else
+          ++staggered.hi[1];
+        boxes.push_back(staggered);
+      }
+      MultiFab result(BoxArray(std::move(boxes)), cell.dmap(), ncomp, 1);
+      result.set_val(Real(0));
+      return result;
+    };
+    MultiFab fine_x = allocate(x->second.centering, x->second.levels.back().ncomp());
+    MultiFab fine_y = allocate(y->second.centering, y->second.levels.back().ncomp());
+    const MultiFab& coarse_x = x->second.levels.back();
+    const MultiFab& coarse_y = y->second.levels.back();
+    kernel.face_vector(
+        coarse_x, coarse_y, fine_x, fine_y,
+        bootstrap_transfer_context(coarse_x, fine_x, level - 1, level,
+                                   refinement_ratio));
+    const std::int64_t materialized =
+        fine_x.box_array().num_cells() * fine_x.ncomp() +
+        fine_y.box_array().num_cells() * fine_y.ncomp();
+    x->second.levels.push_back(std::move(fine_x));
+    y->second.levels.push_back(std::move(fine_y));
+    return materialized;
+  }
+
+  std::int64_t fill_bootstrap_staggered_constant(
+      const std::string& subject, int level, const std::vector<double>& components) {
+    auto found = bootstrap_staggered_fields_.find(subject);
+    if (found == bootstrap_staggered_fields_.end() || level < 0 || level >= nlev_ ||
+        components.empty())
+      throw std::runtime_error("AmrRuntime::fill_bootstrap_staggered_constant invalid subject");
+    if (level > 0 && found->second.levels.size() == static_cast<std::size_t>(level)) {
+      const MultiFab& topology = aux_[static_cast<std::size_t>(level)];
+      std::vector<Box2D> boxes;
+      boxes.reserve(static_cast<std::size_t>(topology.box_array().size()));
+      for (const Box2D& box : topology.box_array().boxes()) {
+        Box2D staggered = box;
+        if (found->second.centering == runtime::amr::TransferCentering::FaceX ||
+            found->second.centering == runtime::amr::TransferCentering::Node)
+          ++staggered.hi[0];
+        if (found->second.centering == runtime::amr::TransferCentering::FaceY ||
+            found->second.centering == runtime::amr::TransferCentering::Node)
+          ++staggered.hi[1];
+        boxes.push_back(staggered);
+      }
+      MultiFab fine(BoxArray(std::move(boxes)), topology.dmap(),
+                    found->second.levels[0].ncomp(), 1);
+      fine.set_val(Real(0));
+      found->second.levels.push_back(std::move(fine));
+    }
+    if (found->second.levels.size() <= static_cast<std::size_t>(level) ||
+        found->second.levels[static_cast<std::size_t>(level)].ncomp() !=
+            static_cast<int>(components.size()))
+      throw std::runtime_error("AmrRuntime::fill_bootstrap_staggered_constant width mismatch");
+    MultiFab& values = found->second.levels[static_cast<std::size_t>(level)];
+    for (int li = 0; li < values.local_size(); ++li)
+      for (int component = 0; component < values.ncomp(); ++component)
+        for_each_cell(values.box(li), detail::BootstrapConstantKernel{
+                                           values.fab(li).array(), component,
+                                           static_cast<Real>(components[component])});
+    return values.box_array().num_cells() * values.ncomp();
+  }
+
+  std::vector<double> bootstrap_staggered_level(const std::string& subject, int level) const {
+    const auto found = bootstrap_staggered_fields_.find(subject);
+    if (found == bootstrap_staggered_fields_.end() || level < 0 ||
+        level >= static_cast<int>(found->second.levels.size()))
+      throw std::runtime_error("AmrRuntime::bootstrap_staggered_level has no such level");
+    const MultiFab& values = found->second.levels[static_cast<std::size_t>(level)];
+    const Box2D refined_domain = dom_.refine(level_refinement(level));
+    const int nx = refined_domain.nx() +
+                   (found->second.centering == runtime::amr::TransferCentering::FaceX ||
+                    found->second.centering == runtime::amr::TransferCentering::Node);
+    const int ny = refined_domain.ny() +
+                   (found->second.centering == runtime::amr::TransferCentering::FaceY ||
+                    found->second.centering == runtime::amr::TransferCentering::Node);
+    std::vector<double> out(static_cast<std::size_t>(values.ncomp()) * nx * ny, 0.0);
+    device_fence();
+    for (int li = 0; li < values.local_size(); ++li) {
+      const int global = values.global_index(li);
+      const ConstArray4 data = values.fab(li).const_array();
+      const Box2D valid = values.box(li);
+      for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+        for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
+          bool canonical = true;
+          for (int previous = 0; previous < global; ++previous)
+            if (values.box_array()[previous].contains(i, j)) {
+              canonical = false;
+              break;
+            }
+          if (!canonical)
+            continue;
+          for (int component = 0; component < values.ncomp(); ++component)
+            out[(static_cast<std::size_t>(component) * ny +
+                 (j - refined_domain.lo[1])) * nx +
+                (i - refined_domain.lo[0])] =
+                static_cast<double>(data(i, j, component));
+        }
+    }
+    if (n_ranks() > 1)
+      all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+    return out;
+  }
+
+  std::uint64_t invalidate_bootstrap_cache(const std::string& subject) {
+    if (!bootstrap_pending_ || subject.empty())
+      throw std::runtime_error("AmrRuntime::invalidate_bootstrap_cache invalid phase/key");
+    BootstrapCacheState& cache = bootstrap_caches_[subject];
+    ++cache.epoch;
+    cache.valid = false;
+    cache.materialized_level = -1;
+    cache.topology.clear();
+    return cache.epoch;
+  }
+
+  const BootstrapCacheState& rebuild_bootstrap_topology_cache(
+      const std::string& subject, int level) {
+    auto found = bootstrap_caches_.find(subject);
+    if (!bootstrap_pending_ || found == bootstrap_caches_.end() || found->second.valid ||
+        level < 0 || level >= nlev_)
+      throw std::runtime_error(
+          "AmrRuntime::rebuild_bootstrap_topology_cache requires invalidation in transaction");
+    BootstrapCacheState& cache = found->second;
+    cache.topology.push_back(PatchBox{0, 0, 0, dom_.nx() - 1, dom_.ny() - 1});
+    for (const PatchBox& box : patch_boxes())
+      if (box.level <= level)
+        cache.topology.push_back(box);
+    cache.materialized_level = level;
+    cache.valid = true;
+    return cache;
+  }
+
+  const BootstrapCacheState& bootstrap_cache(const std::string& subject) const {
+    const auto found = bootstrap_caches_.find(subject);
+    if (found == bootstrap_caches_.end())
+      throw std::runtime_error("AmrRuntime::bootstrap_cache has no registered cache");
+    return found->second;
+  }
   std::size_t n_blocks() const { return blocks_.size(); }
   /// Conservative VariableSet (names + physical roles, Model::conservative_vars()) of block @p b. The
   /// SAME cons_vars that add_coupled_source resolves (block, role) against; exposed read-only so the
@@ -381,6 +896,7 @@ class AmrRuntime {
       out.has_newton_report.push_back(block.newton_report ? char(1) : char(0));
       out.newton_reports.push_back(block.newton_report ? *block.newton_report : NewtonReport{});
     }
+    out.hierarchy = hierarchy_;
     out.aux = aux_;
     out.phi = mg_.phi();
     out.poisson_rhs = mg_.rhs();
@@ -395,8 +911,11 @@ class AmrRuntime {
     }
     out.history_rings = hist_rings_;
     out.history_depth = hist_depth_;
+    out.history_block_owner = hist_block_owner_;
     out.history_initialized = hist_init_;
     out.history_slot_dt = hist_slot_dt_;
+    out.staggered_fields = bootstrap_staggered_fields_;
+    out.bootstrap_caches = bootstrap_caches_;
     out.last_dt_reason = last_dt_reason_;
     out.nlev = nlev_;
     out.macro_step = macro_step_;
@@ -424,6 +943,7 @@ class AmrRuntime {
       }
     }
     nlev_ = saved.nlev;
+    hierarchy_ = saved.hierarchy;
     aux_ = saved.aux;
     for (auto& block : blocks_)
       for (int k = 0; k < nlev_; ++k)
@@ -448,8 +968,11 @@ class AmrRuntime {
     }
     hist_rings_ = saved.history_rings;
     hist_depth_ = saved.history_depth;
+    hist_block_owner_ = saved.history_block_owner;
     hist_init_ = saved.history_initialized;
     hist_slot_dt_ = saved.history_slot_dt;
+    bootstrap_staggered_fields_ = saved.staggered_fields;
+    bootstrap_caches_ = saved.bootstrap_caches;
     last_dt_reason_ = saved.last_dt_reason;
     macro_step_ = saved.macro_step;
     solve_count_ = saved.solve_count;
@@ -475,7 +998,7 @@ class AmrRuntime {
   const MultiFab& level_state(std::size_t b, int k) const { return (*blocks_[b].levels)[k].U; }
   /// Geometry of level @p k: the coarse metric refined k times (dx/dy >> k, domain << k). The metric
   /// the per-level Laplacian / gradient / RHS read (parity with System's grid_context().geom).
-  Geometry level_geom(int k) const { return geom_.refine(1 << k); }
+  Geometry level_geom(int k) const { return geom_.refine(level_refinement(k)); }
   /// Transport BCRec derived from the base periodicity (periodic where periodic, else Foextrap) -- the
   /// SAME convention System::make_bc uses, so a Program's per-level ghost fill matches the System path.
   BCRec transport_bc() const {
@@ -490,10 +1013,10 @@ class AmrRuntime {
   const BCRec& poisson_bc() const { return bcPhi_; }
   /// A fresh scalar field co-distributed with level @p k's grid (its ba/dm), @p n_comp components,
   /// @p n_ghost ghosts, zero-initialized -- the Krylov scratch (r/p/Ap) of a per-level field solve.
-  /// Counterpart of System::alloc_scalar_field, but at the level's layout (read from block 0).
+  /// Counterpart of System::alloc_scalar_field, allocated from the runtime-owned layout.
   MultiFab level_scalar_field(int k, int n_comp, int n_ghost) const {
-    const MultiFab& U = (*blocks_[0].levels)[k].U;
-    MultiFab f(U.box_array(), U.dmap(), n_comp, n_ghost);
+    MultiFab f(hierarchy_.ba.at(static_cast<std::size_t>(k)),
+               hierarchy_.dm.at(static_cast<std::size_t>(k)), n_comp, n_ghost);
     f.set_val(Real(0));
     return f;
   }
@@ -512,8 +1035,13 @@ class AmrRuntime {
     if (k < 1 || U.n_grow() == 0)
       return;
     const MultiFab& Uc = (*blocks_[b].levels)[k - 1].U;  // the parent (coarse) level state
-    mf_fill_fine_ghosts_mb(U, Uc, Uc, Real(0),
-                           /*replicated_parent=*/(k == 1) && replicated_coarse_);
+    const auto& authority = block_transfer_authorities_.at(b);
+    if (!authority.prepared || !authority.coarse_fine.coarse_fine)
+      throw std::runtime_error("AmrRuntime: no prepared coarse/fine transfer authority");
+    authority.coarse_fine.coarse_fine(
+        Uc, U, bootstrap_transfer_context(
+                   Uc, U, k - 1, k, authority.refinement_ratio,
+                   (k == 1) && replicated_coarse_));
   }
   /// R <- -div F(U) + S(U, aux_[k]) for block @p b on level @p k (the per-level analogue of
   /// System::block_rhs_into). Forwards to the block's level_rhs closure with the level metric + shared
@@ -563,7 +1091,7 @@ class AmrRuntime {
   }
   /// MIN physical cell size of level @p k (min(dx, dy) >> k): the per-level hmin a Program dt bound reads.
   Real level_hmin(int k) const {
-    const Real r = static_cast<Real>(1 << k);
+    const Real r = static_cast<Real>(level_refinement(k));
     return std::min(geom_.dx(), geom_.dy()) / r;
   }
   /// fine -> coarse restriction of block @p b between levels @p k and @p k-1 (covered coarse cell <-
@@ -940,6 +1468,28 @@ class AmrRuntime {
   /// injection. Reproduces AmrSystemCoupler::solve_fields identically, but the system RHS is assembled
   /// by the blocks' add_elliptic_rhs closures (Sum_b elliptic_rhs_b(U_b)) not a compile-time RhsAssembler.
   void solve_fields() {
+    solve_default_field();
+    solve_named_fields();
+  }
+
+  std::int64_t recompute_bootstrap_field(const std::string& field) {
+    if (!bootstrap_pending_)
+      throw std::runtime_error("AmrRuntime::recompute_bootstrap_field requires a transaction");
+    if (field == "phi") {
+      solve_default_field();
+    } else {
+      if (!has_named_field(field))
+        throw std::runtime_error(
+            "AmrRuntime::recompute_bootstrap_field has no runtime field '" + field + "'");
+      solve_named_fields(&field);
+    }
+    std::int64_t materialized = 0;
+    for (const MultiFab& level : aux_)
+      materialized += level.box_array().num_cells();
+    return materialized;
+  }
+
+  void solve_default_field() {
     ++solve_count_;
     // 1. average_down per block (fine -> coarse) over the whole hierarchy. AMR PROFILING (Spec 5
     // criterion 43): time the restriction cascade into the "average_down" scope + bump its per-solve
@@ -984,10 +1534,6 @@ class AmrRuntime {
       detail::coupler_inject_aux_mb(aux_[k - 1], aux_[k],
                                     /*replicated_parent=*/(k == 1) && replicated_coarse_);
 
-    // 5. NAMED multi-elliptic fields (ADC-428): a SECOND elliptic solve per user-named field, written to
-    // the field's OWN aux components and injected to the fine levels. No-op when none is registered ->
-    // the default-Poisson trajectory above is strictly bit-identical.
-    solve_named_fields();
   }
 
   /// Solves every registered NAMED elliptic field (ADC-428) on the coarse, writes phi (+ centered grad)
@@ -995,11 +1541,13 @@ class AmrRuntime {
   /// default Poisson block above (steps 2-4) but per named field, reusing a DEDICATED GeometricMG. The
   /// default phi/grad (comps 0..2) are never touched. No-op without a named field (default-only path
   /// stays bit-identical).
-  void solve_named_fields() {
+  void solve_named_fields(const std::string* selected = nullptr) {
     if (named_fields_.empty())
       return;
     const Real dx = geom_.dx(), dy = geom_.dy();
     for (auto& [field, nf] : named_fields_) {
+      if (selected != nullptr && field != *selected)
+        continue;
       if (nf.phi_comp < 0 || nf.phi_comp >= aux_ncomp_)
         throw std::runtime_error("AmrRuntime : named elliptic field '" + field +
                                  "' aux component out of the channel width (add the block that "
@@ -1056,6 +1604,149 @@ class AmrRuntime {
                                     /*replicated_parent=*/(k == 1) && replicated_coarse_);
   }
 
+  TagBox execute_bootstrap_tag_program(const MultiFab& values, const Box2D& domain,
+                                       const BootstrapTagProgram& program) {
+    if (!program.prepared)
+      throw std::runtime_error("bootstrap tag program was not prepared at resolve time");
+    if (program.provider_identity.empty())
+      throw std::runtime_error("bootstrap tag program has no authenticated provider identity");
+    MultiFab mask(values.box_array(), values.dmap(), 1, 0);
+    mask.set_val(Real(0));
+    for (int li = 0; li < values.local_size(); ++li)
+      for_each_cell(values.box(li), detail::BootstrapThresholdTagKernel{
+                                         values.fab(li).const_array(),
+                                         mask.fab(li).array(), program.component,
+                                         program.threshold});
+    device_fence();
+    // Clustering is a host algorithm.  Make the device -> host boundary explicit once, then inspect
+    // the host mirror; never dereference a device Array4 from a CPU loop.
+    mask.sync_host();
+    TagBox tags(domain);
+    for (int li = 0; li < mask.local_size(); ++li) {
+      const ConstArray4 local = mask.fab(li).const_array();
+      const Box2D valid = mask.box(li);
+      for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+        for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+          if (local(i, j, 0) != Real(0))
+            tags(i, j) = 1;
+    }
+    if (n_ranks() > 1)
+      all_reduce_or_inplace(tags.t.data(), static_cast<int>(tags.t.size()));
+    return tags;
+  }
+
+  /// Append one fine level from tags on the current finest parent. Unlike regrid(), this grows the
+  /// hierarchy and is used only by the explicit bootstrap before stepping.
+  void begin_bootstrap_plan() {
+    if (bootstrap_pending_)
+      throw std::runtime_error("AmrRuntime::begin_bootstrap_plan already has a transaction");
+    bootstrap_snapshot_ = std::make_unique<StepSnapshot>(step_snapshot());
+    bootstrap_pending_ = true;
+  }
+
+  void bootstrap_next_level(int refinement_ratio) {
+    if (!bootstrap_pending_)
+      throw std::runtime_error(
+          "AmrRuntime::bootstrap_next_level requires begin_bootstrap_plan");
+    if (refinement_ratio < 2)
+      throw std::runtime_error("AmrRuntime::bootstrap_next_level invalid refinement ratio");
+    const int pk = nlev_ - 1;
+    const Box2D pdom = dom_.refine(level_refinement(pk));
+    std::vector<TagBox> parts;
+    parts.reserve(blocks_.size() + 1);
+    for (std::size_t b = 0; b < blocks_.size(); ++b)
+      if (bootstrap_tag_programs_[b].prepared)
+        parts.push_back(execute_bootstrap_tag_program(
+            (*blocks_[b].levels)[pk].U, pdom, bootstrap_tag_programs_[b]));
+    if (parts.empty())
+      throw std::runtime_error(
+          "AmrRuntime::bootstrap_next_level : no resolved tagging predicate");
+    TagBox grown = grow_tags(tag_union(parts), regrid_grow_, pdom);
+    auto [fb, dmap] = regrid_compute_fine_layout(
+        std::move(grown), pdom, pk, regrid_margin_, replicated_coarse_, cluster_,
+        refinement_ratio);
+    if (fb.size() == 0)
+      throw std::runtime_error(
+          "AmrRuntime::bootstrap_next_level : resolved tagging produced no fine cells");
+    for (std::size_t block_index = 0; block_index < blocks_.size(); ++block_index) {
+      auto& block = blocks_[block_index];
+      auto& levels = *block.levels;
+      const MultiFab& parent = levels[pk].U;
+      const Real fine_dx = levels[pk].dx / Real(refinement_ratio);
+      const Real fine_dy = levels[pk].dy / Real(refinement_ratio);
+      MultiFab fine(fb, dmap, parent.ncomp(), parent.n_grow());
+      fine.set_val(Real(0));
+      levels.push_back(AmrLevelMP{std::move(fine), nullptr, fine_dx, fine_dy});
+    }
+    MultiFab fine_aux(fb, dmap, aux_ncomp_, 1);
+    fine_aux.set_val(Real(0));
+    hierarchy_.ba.push_back(fb);
+    hierarchy_.dm.push_back(dmap);
+    hierarchy_.dx.push_back(hierarchy_.dx.back() / Real(refinement_ratio));
+    hierarchy_.dy.push_back(hierarchy_.dy.back() / Real(refinement_ratio));
+    hierarchy_.refinement_ratios.push_back(refinement_ratio);
+    aux_.push_back(std::move(fine_aux));
+    ++nlev_;
+    for (auto& block : blocks_)
+      for (int level = 0; level < nlev_; ++level)
+        (*block.levels)[level].aux = &aux_[level];
+  }
+
+  void commit_bootstrap_level() {
+    if (!bootstrap_pending_)
+      throw std::runtime_error("AmrRuntime::commit_bootstrap_level : no pending transaction");
+    if (!bootstrap_snapshot_ || bootstrap_snapshot_->macro_step != 0 || macro_step_ != 0)
+      throw std::runtime_error(
+          "AmrRuntime::commit_bootstrap_level requires clocks to remain at t=0/step=0");
+    for (const auto& [subject, cache] : bootstrap_caches_)
+      if (!cache.valid || cache.materialized_level != nlev_ - 1)
+        throw std::runtime_error(
+            "AmrRuntime::commit_bootstrap_level has a stale cache '" + subject + "'");
+    for (const auto& [name, ring] : hist_rings_) {
+      const auto owner = hist_block_owner_.find(name);
+      if (owner == hist_block_owner_.end() || owner->second >= blocks_.size() ||
+          ring.size() != 2 || ring[0].size() != static_cast<std::size_t>(nlev_) ||
+          ring[1].size() != static_cast<std::size_t>(nlev_) ||
+          ring[0][0].ncomp() != blocks_[owner->second].ncomp ||
+          hist_init_[name].size() != static_cast<std::size_t>(nlev_) ||
+          hist_slot_dt_[name].size() != ring.size())
+        throw std::runtime_error(
+            "AmrRuntime::commit_bootstrap_level history '" + name +
+            "' requires an explicit materialization provider");
+      if (std::any_of(hist_init_[name].begin(), hist_init_[name].end(),
+                      [](char value) { return value == 0; }))
+        throw std::runtime_error(
+            "AmrRuntime::commit_bootstrap_level history '" + name +
+            "' contains an uninitialized level");
+    }
+    bootstrap_snapshot_.reset();
+    bootstrap_pending_ = false;
+  }
+
+  void rollback_bootstrap_level() {
+    if (!bootstrap_pending_)
+      throw std::runtime_error("AmrRuntime::rollback_bootstrap_level : no pending transaction");
+    restore_step_snapshot(*bootstrap_snapshot_);
+    bootstrap_snapshot_.reset();
+    bootstrap_pending_ = false;
+  }
+
+  int apply_bootstrap_component_floor(std::size_t block, int level, int component, Real floor) {
+    if (block >= blocks_.size() || level < 0 || level >= nlev_ || component < 0 ||
+        component >= blocks_[block].ncomp)
+      throw std::runtime_error(
+          "AmrRuntime::apply_bootstrap_component_floor received an incompatible target");
+    MultiFab& state = (*blocks_[block].levels)[level].U;
+    Real changed = Real(0);
+    for (int li = 0; li < state.local_size(); ++li) {
+      Array4 values = state.fab(li).array();
+      const Box2D valid = state.box(li);
+      changed += for_each_cell_reduce_sum(
+          valid, detail::BootstrapFloorKernel{values, component, floor});
+    }
+    return static_cast<int>(all_reduce_sum(static_cast<double>(changed)));
+  }
+
   /// UNION-TAGS REGRID (capstone Phase 2, C.6; docs/AMR_REGRID_UNION_TAGS_DESIGN.md, steps R0-R8).
   /// Re-grids the SHARED hierarchy from the UNION (cell-by-cell OR) of the tags of ALL blocks (per-block
   /// predicate, D1) + the phi tags (on |grad phi|, D4), followed by ONE SINGLE Berger-Rigoutsos
@@ -1087,8 +1778,7 @@ class AmrRuntime {
     solve_fields();
 
     // (R1)+(R2) PER-BLOCK TAGS (on the block U at the parent level) + PHI TAGS (on the shared aux).
-    const int PNX = dom_.nx() << pk, PNY = dom_.ny() << pk;
-    const Box2D pdom = Box2D::from_extents(PNX, PNY);
+    const Box2D pdom = dom_.refine(level_refinement(pk));
     std::vector<TagBox> parts;
     parts.reserve(blocks_.size() + 1);
     for (std::size_t b = 0; b < blocks_.size(); ++b) {
@@ -1118,8 +1808,11 @@ class AmrRuntime {
     // (R4)+(R5) cross-rank collective reduction (if coarse distributed) + UNIQUE clustering -> SHARED
     // fine layout. all_reduce_or_inplace is called INSIDE regrid_compute_fine_layout for every
     // distributed parent: all ranks start from the SAME tag grid -> IDENTICAL fb/dmap per rank.
-    auto [fb, dmap] = regrid_compute_fine_layout(std::move(grown), pdom, pk, regrid_margin_,
-                                                 replicated_coarse_, cluster_);  // ADC-616 params
+    const int refinement_ratio =
+        hierarchy_.refinement_ratios[static_cast<std::size_t>(pk)];
+    auto [fb, dmap] = regrid_compute_fine_layout(
+        std::move(grown), pdom, pk, regrid_margin_, replicated_coarse_, cluster_,
+        refinement_ratio);  // ADC-616 params
 #ifdef POPS_HAS_MPI
     // MPI COLLECTIVE COUNT (Spec 5 criterion 43): regrid_compute_fine_layout issues ONE
     // all_reduce_or_inplace over the tag grid when the coarse is distributed (multi-rank) -- every rank
@@ -1139,13 +1832,16 @@ class AmrRuntime {
     for (auto& b : blocks_) {
       auto& L = *b.levels;
       const int ngf = L[fk].U.n_grow();
-      L[fk].U = regrid_field_on_layout(fb, dmap, L[pk].U, L[fk].U, pk, ngf, replicated_coarse_);
+      L[fk].U = regrid_field_on_layout(
+          fb, dmap, L[pk].U, L[fk].U, pk, ngf, replicated_coarse_, refinement_ratio);
     }
 
     // (R7) REBUILD OF THE SHARED AUX (one only, width aux_ncomp_) on the new layout + RE-WIRING of the
     // aux pointer of EACH block. The address &aux_[fk] stays stable (in-place reallocation of the
     // MultiFab in the existing std::vector) -> the pointers of the other levels do not move.
     aux_[fk] = MultiFab(fb, dmap, aux_ncomp_, 1);
+    hierarchy_.ba[static_cast<std::size_t>(fk)] = fb;
+    hierarchy_.dm[static_cast<std::size_t>(fk)] = dmap;
     for (auto& b : blocks_)
       (*b.levels)[fk].aux = &aux_[fk];
 
@@ -1552,7 +2248,7 @@ class AmrRuntime {
   /// needed (counterpart of AmrSystem::potential), then reads aux(0). Identical for all blocks.
   std::vector<double> potential() {
     solve_fields();
-    return blocks_[0].potential(aux_[0]);
+    return coarse_aux_component(0);
   }
 
   /// Max SYSTEM wave speed (max over the blocks) on the current coarse. Requires the aux up to date.
@@ -1568,35 +2264,32 @@ class AmrRuntime {
   }
 
   int n_patches() const {
-    const auto& L = *blocks_[0].levels;
     int count = 0;
-    for (std::size_t k = 1; k < L.size(); ++k)
-      count += L[k].U.box_array().size();
+    for (std::size_t k = 1; k < hierarchy_.ba.size(); ++k)
+      count += hierarchy_.ba[k].size();
     return count;
   }
 
   // Index-space signatures of the fine patches (level + inclusive lo/hi corners), for ALL fine levels.
   // Read-only of the GLOBAL BoxArray (all boxes/all ranks) already stored -> rank-independent, zero
-  // communication, NO hot-path cost (query between steps). Mirror of n_patches(): the same box_array()
-  // that gives the COUNT gives the BOXES. Block 0 representative (SHARED layout, same_layout_or_throw
-  // guard). Loop k = 1..nlev-1; the level field disambiguates the ratio-2 spacing.
+  // communication, NO hot-path cost (query between steps). Mirror of n_patches(): the runtime-owned
+  // hierarchy BoxArray that gives the COUNT also gives the BOXES. Loop k = 1..nlev-1.
   std::vector<PatchBox> patch_boxes() const {
-    const auto& L = *blocks_[0].levels;
     std::vector<PatchBox> out;
-    for (int k = 1; k < static_cast<int>(L.size()); ++k) {
-      const auto& bxs = L[k].U.box_array().boxes();
+    for (int k = 1; k < hierarchy_.nlev(); ++k) {
+      const auto& bxs = hierarchy_.ba[static_cast<std::size_t>(k)].boxes();
       for (const Box2D& b : bxs)
         out.push_back(PatchBox{k, b.lo[0], b.lo[1], b.hi[0], b.hi[1]});
     }
     return out;
   }
 
-  // COARSE-level (base) box counts (ADC-319, MPI ownership diagnostic). Block 0 is the SHARED layout
-  // (same_layout_or_throw), so its level-0 MultiFab carries the base BoxArray + DistributionMapping
-  // common to all blocks. local_size() = base boxes OWNED by this rank; box_array().size() = total base
+  // COARSE-level (base) box counts (ADC-319, MPI ownership diagnostic). The runtime hierarchy owns
+  // the base BoxArray + DistributionMapping common to all blocks. local_size() = base boxes OWNED by
+  // this rank; box_array().size() = total base
   // boxes (all ranks). Mirror of n_patches(): a query between steps, no communication, no hot-path cost.
-  int coarse_local_boxes() const { return (*blocks_[0].levels)[0].U.local_size(); }
-  int coarse_total_boxes() const { return (*blocks_[0].levels)[0].U.box_array().size(); }
+  int coarse_local_boxes() const { return aux_[0].local_size(); }
+  int coarse_total_boxes() const { return hierarchy_.ba[0].size(); }
 
   // ----------------------------------------------------------------------------------------------
   // MULTI-BLOCK AMR CHECKPOINT / RESTART (ADC-509). PER-BLOCK PER-LEVEL state accessors + the
@@ -1627,7 +2320,7 @@ class AmrRuntime {
       throw std::runtime_error("AmrRuntime::block_level_state : level out of bounds");
     const MultiFab& U = L[k].U;
     const int nc = U.ncomp();
-    const std::size_t nf = static_cast<std::size_t>(dom_.nx()) << k;
+    const std::size_t nf = static_cast<std::size_t>(dom_.nx()) * level_refinement(k);
     std::vector<double> out(static_cast<std::size_t>(nc) * nf * nf, 0.0);
     device_fence();
     fill_level_state(U, nc, nf, out);
@@ -1653,7 +2346,7 @@ class AmrRuntime {
       throw std::runtime_error("AmrRuntime::set_block_level_state : level out of bounds");
     MultiFab& U = L[k].U;
     const int nc = U.ncomp();
-    const std::size_t nf = static_cast<std::size_t>(dom_.nx()) << k;
+    const std::size_t nf = static_cast<std::size_t>(dom_.nx()) * level_refinement(k);
     if (s.size() != static_cast<std::size_t>(nc) * nf * nf)
       throw std::runtime_error("AmrRuntime::set_block_level_state : state size != ncomp*nf*nf");
     device_fence();
@@ -1676,7 +2369,7 @@ class AmrRuntime {
   std::vector<double> level_potential(int k) {
     if (k < 0 || k >= nlev_)
       throw std::runtime_error("AmrRuntime::level_potential : level out of bounds");
-    const std::size_t nf = static_cast<std::size_t>(dom_.nx()) << k;
+    const std::size_t nf = static_cast<std::size_t>(dom_.nx()) * level_refinement(k);
     std::vector<double> out(nf * nf, 0.0);
     device_fence();
     const MultiFab& P = (k == 0) ? mg_.phi() : aux_[k];
@@ -1697,7 +2390,7 @@ class AmrRuntime {
   void set_level_potential(int k, const std::vector<double>& p) {
     if (k < 0 || k >= nlev_)
       throw std::runtime_error("AmrRuntime::set_level_potential : level out of bounds");
-    const std::size_t nf = static_cast<std::size_t>(dom_.nx()) << k;
+    const std::size_t nf = static_cast<std::size_t>(dom_.nx()) * level_refinement(k);
     if (p.size() != nf * nf)
       throw std::runtime_error("AmrRuntime::set_level_potential : phi size != nf*nf");
     device_fence();
@@ -1712,12 +2405,13 @@ class AmrRuntime {
   }
 
  private:
-  // ADC-631 multistep history rings (compiled-Program AMR route): name -> [slot][level] = block 0's
-  // level state at lag slot, + depth / per-level stored-once flag / per-slot dt. Data-only (MockImpl-
+  // ADC-631 multistep history rings: each owner-qualified name authenticates its block carrier,
+  // [slot][level] values, depth, per-level stored-once flag and per-slot dt. Data-only (MockImpl-
   // safe); all logic in detail::AmrHistoryOps (amr_history.hpp), a friend taking the engine by ref.
   friend struct detail::AmrHistoryOps;
   std::map<std::string, std::vector<std::vector<MultiFab>>> hist_rings_;
   std::map<std::string, int> hist_depth_;
+  std::map<std::string, std::size_t> hist_block_owner_;
   std::map<std::string, std::vector<char>> hist_init_;
   std::map<std::string, std::vector<Real>> hist_slot_dt_;
   // Regrid / rebuild_hierarchy ring remap hook (member so the INLINE regrid() can call it before
@@ -1806,7 +2500,8 @@ class AmrRuntime {
     if (nf.mg)
       return;
     nf.mg =
-        std::make_shared<GeometricMG>(geom_, ba_coarse_, bcPhi_, wall_active_, replicated_coarse_);
+        std::make_shared<GeometricMG>(geom_, hierarchy_.ba[0], bcPhi_, wall_active_,
+                                      replicated_coarse_);
   }
 
   // Reads aux component @p comp of the COARSE level as a GLOBAL n*n row-major field (diagnostic /
@@ -1877,11 +2572,8 @@ class AmrRuntime {
   Periodicity base_per_;
   BCRec bcPhi_, aux_bc_;
   bool replicated_coarse_;
+  AmrHierarchyLayout hierarchy_;
   GeometricMG mg_;
-  // Coarse BoxArray + conductive-wall predicate stashed at the ctor so a NAMED elliptic field (ADC-428)
-  // can build its own coarse GeometricMG identical to mg_ (ensure_named_elliptic). mg_ consumes them at
-  // its construction but does not expose them, so we keep a copy here (cheap; the coarse layout is small).
-  BoxArray ba_coarse_;
   std::function<bool(Real, Real)> wall_active_;
   std::vector<AmrRuntimeBlock> blocks_;
   // GLOBAL step bounds (add_dt_bound, parity with System) + ACTIVE bound of the last step_cfl.
@@ -1910,6 +2602,10 @@ class AmrRuntime {
   std::vector<CoupledFreqExprDecl> coupled_freq_exprs_;
   std::string last_dt_reason_;
   std::vector<MultiFab> aux_;  // [level], shared by all blocks
+  std::map<std::string, BootstrapStaggeredField> bootstrap_staggered_fields_;
+  std::map<std::string, BootstrapCacheState> bootstrap_caches_;
+  std::unique_ptr<StepSnapshot> bootstrap_snapshot_;
+  bool bootstrap_pending_ = false;
   // Model-NAMED aux fields (ADC-291): component (>= kAuxNamedBase) -> coarse base-level field
   // (n*n row-major). STATIC user fields re-applied by solve_fields each macro-step (so they persist
   // across regrid). Empty by default -> bit-identical. cf. set_named_aux / apply_named_aux.
@@ -1938,6 +2634,14 @@ class AmrRuntime {
   // tags nothing on its side). phi_tag_: phi tag predicate on |grad phi| (D4; empty = phi does not
   // contribute to the union).
   std::vector<TagPredicate> block_tag_;
+  std::vector<BootstrapTagProgram> bootstrap_tag_programs_;
+  struct BlockTransferAuthority {
+    runtime::amr::PreparedTransferKernel coarse_fine;
+    runtime::amr::PreparedTransferKernel temporal;
+    int refinement_ratio = 0;
+    bool prepared = false;
+  };
+  std::vector<BlockTransferAuthority> block_transfer_authorities_;
   TagPredicate phi_tag_;
   int regrid_every_ = 0;
   int regrid_grow_ = 2;

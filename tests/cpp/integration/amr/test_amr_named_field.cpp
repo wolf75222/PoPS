@@ -119,7 +119,7 @@ TEST(test_amr_named_field, Runs) {
   const int kPhiChi = kAuxNamedBase + 3;  // 8 (second named field, phi only)
   blocks[0].aux_ncomp = kPhiChi + 1;      // reserve up to comp 8
 
-  AmrRuntime rt(S.geom, S.ba_coarse, S.poisson_bc, std::move(blocks), S.base_per,
+  AmrRuntime rt(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                 S.replicated_coarse, S.wall);
   EXPECT_EQ(rt.n_blocks(), 1) << "named_engine_one_block";
 

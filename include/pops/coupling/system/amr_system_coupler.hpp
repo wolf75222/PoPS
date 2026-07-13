@@ -44,8 +44,6 @@
 
 namespace pops {
 
-static_assert(kAmrRefRatio == 2, "refine(1 << k) assumes a power-of-two (ratio-2) cascade");
-
 /// Re-solve frequency of the Poisson on AMR: OncePerStep (phi solved once per macro-step, frozen
 /// during the advance; cheapest); PerSubstep (phi re-solved before each species substep, more
 /// faithful for a field-driven transport, more expensive).
@@ -65,6 +63,7 @@ struct AmrHierarchyLayout {
   std::vector<BoxArray> ba;             // [level]: boxes of the level (set AND order)
   std::vector<DistributionMapping> dm;  // [level], parallel to ba: MPI rank per box
   std::vector<Real> dx, dy;             // [level]: grid spacing (= dx_coarse / 2^k)
+  std::vector<int> refinement_ratios;   // transition k -> k+1, resolved by hierarchy manifest
 
   /// Number of levels (= ba.size()).
   int nlev() const { return static_cast<int>(ba.size()); }
@@ -85,6 +84,13 @@ struct AmrHierarchyLayout {
       L.dm.push_back(lv.U.dmap());
       L.dx.push_back(lv.dx);
       L.dy.push_back(lv.dy);
+    }
+    for (std::size_t level = 1; level < levels.size(); ++level) {
+      const int ratio = static_cast<int>(levels[level - 1].dx / levels[level].dx);
+      if (ratio < 2 || levels[level - 1].dx != levels[level].dx * Real(ratio) ||
+          levels[level - 1].dy != levels[level].dy * Real(ratio))
+        throw std::runtime_error("AmrHierarchyLayout requires exact isotropic refinement ratios");
+      L.refinement_ratios.push_back(ratio);
     }
     return L;
   }

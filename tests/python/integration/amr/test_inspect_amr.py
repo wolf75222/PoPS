@@ -5,7 +5,7 @@ These exercise :func:`pops.inspect_amr`, the descriptor-sourced report of an AMR
 route). They assert the report names the levels / ratio envelope, the attached regrid /
 refine / nesting / checkpoint / output policies, the runtime requirements (reflux, tag
 reduction) and the explainable route limitations, for the native envelope (``None``), a full
-AMR layout, an over-the-envelope (refused) layout, and a Uniform layout. Pure Python: only
+AMR layout, a deeper resource-policy-controlled layout, and a Uniform layout. Pure Python: only
 ``import pops`` is needed (nothing computes on a grid); inspect_amr reads descriptor metadata
 and imports no ``_pops`` / runtime / codegen.
 """
@@ -19,7 +19,7 @@ from pops.mesh import CartesianMesh  # noqa: E402
 from pops.mesh.layouts import AMR, Uniform  # noqa: E402
 from pops.mesh.amr import (  # noqa: E402
     Refine, TagUnion, RegridEvery, ProperNesting, PatchLayout, CheckpointPolicy,
-    AMROutput, AllLevels, NATIVE_MAX_LEVELS, NATIVE_RATIOS)
+    AMROutput, AllLevels, NATIVE_RATIOS)
 from pops.model import Handle, OwnerPath  # noqa: E402
 
 
@@ -28,9 +28,9 @@ def _ref(name, kind="state"):
 
 
 def _full_amr():
-    """A fully-policied AMR layout at the native envelope (max_levels=2, ratio=2)."""
+    """A fully-policied three-level AMR layout."""
     return AMR(
-        base=CartesianMesh(n=128), max_levels=NATIVE_MAX_LEVELS, ratio=NATIVE_RATIOS[0],
+        base=CartesianMesh(n=128), max_levels=3, ratio=NATIVE_RATIOS[0],
         regrid=RegridEvery(20),
         patches=PatchLayout(distribute_coarse=True, coarse_max_grid=32),
         refine=TagUnion(Refine.on(_ref("rho")).above(0.05),
@@ -50,18 +50,18 @@ def test_native_envelope_report_when_none():
     rep = pops.inspect_amr()
     d = rep.to_dict()
     assert d["layout"] == "native-envelope"
-    assert d["max_levels"] == NATIVE_MAX_LEVELS
+    assert d["max_levels"] == "resource_policy"
+    assert d["native_max_levels"] == "resource_policy"
     assert d["ratio"] == NATIVE_RATIOS[0]
     assert d["available"] == "yes"
-    # The native limit is reported as an explainable limitation, not silent.
-    assert any("max_levels" in note for note in d["limitations"])
+    assert any("resource-policy" in note for note in d["limitations"])
 
 
 def test_amr_layout_report_levels_ratio_and_policies():
     rep = pops.inspect_amr(_full_amr())
     d = rep.to_dict()
     assert d["layout"] == "amr"
-    assert d["max_levels"] == 2 and d["ratio"] == 2
+    assert d["max_levels"] == 3 and d["ratio"] == 2
     assert d["available"] == "yes"
     # The reflux / tag-reduction runtime requirements come straight from the descriptor.
     assert d["requirements"]["reflux"] is True
@@ -85,7 +85,8 @@ def test_amr_report_print_is_short_and_deterministic():
     rep = pops.inspect_amr(_full_amr())
     text = str(rep)
     assert text.startswith("AMR hierarchy report")
-    assert "max_levels=2" in text and "ratio=2" in text
+    assert "max_levels=3" in text and "ratio=2" in text
+    assert "native depth: resource_policy" in text
     assert "reflux" in text
     assert "RegridEvery(steps=20)" in text
     # The report is deterministic (same input -> same string).
@@ -93,11 +94,12 @@ def test_amr_report_print_is_short_and_deterministic():
     assert len(text) < 1200
 
 
-def test_over_envelope_layout_is_refused_with_reason():
+def test_arbitrary_depth_is_reported_as_resource_policy():
     rep = pops.inspect_amr(AMR(base=CartesianMesh(n=128), max_levels=4))
-    assert rep.available == "no"
-    # The refusal reason is surfaced among the limitations (not silently clamped).
-    assert any("max_levels=4" in note for note in rep.limitations)
+    assert rep.available == "yes"
+    assert rep.max_levels == 4
+    assert rep.native_max_levels == "resource_policy"
+    assert any("resource-policy" in note for note in rep.limitations)
 
 
 def test_uniform_layout_reports_single_level():

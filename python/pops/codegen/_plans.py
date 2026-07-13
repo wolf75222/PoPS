@@ -196,6 +196,10 @@ class ResolvedSimulationPlan:
     capabilities: Mapping[str, Any]
     lowering_coverage: Any
     compile_options: Mapping[str, Any] = field(default_factory=dict)
+    resolved_hierarchy: Any = None
+    amr_transfer: Any = None
+    initial_condition_plan: Any = None
+    bootstrap_plan: Any = None
     plan_identity: Identity = field(init=False)
 
     def __post_init__(self) -> None:
@@ -246,7 +250,13 @@ class ResolvedSimulationPlan:
             self.capabilities, where="ResolvedSimulationPlan.capabilities"))
         object.__setattr__(self, "compile_options", _string_mapping(
             self.compile_options, where="ResolvedSimulationPlan.compile_options"))
+        self._validate_amr_authorities()
         object.__setattr__(self, "plan_identity", make_identity("resolved-plan", self._payload()))
+
+    def _validate_amr_authorities(self) -> None:
+        from pops.codegen._amr_plan_validation import validate_amr_authorities
+
+        validate_amr_authorities(self)
 
     def _payload(self) -> dict[str, Any]:
         return {
@@ -274,6 +284,18 @@ class ResolvedSimulationPlan:
             "lowering_coverage": _evidence(
                 self.lowering_coverage, where="plan.lowering_coverage"),
             "compile_options": _evidence(self.compile_options, where="plan.compile_options"),
+            "resolved_hierarchy": _evidence(
+                self.resolved_hierarchy, where="plan.resolved_hierarchy"
+            ) if self.resolved_hierarchy is not None else None,
+            "amr_transfer": _evidence(
+                self.amr_transfer, where="plan.amr_transfer"
+            ) if self.amr_transfer is not None else None,
+            "initial_condition_plan": _evidence(
+                self.initial_condition_plan, where="plan.initial_condition_plan"
+            ) if self.initial_condition_plan is not None else None,
+            "bootstrap_plan": _evidence(
+                self.bootstrap_plan, where="plan.bootstrap_plan"
+            ) if self.bootstrap_plan is not None else None,
         }
 
     def verify(self) -> None:
@@ -290,6 +312,7 @@ class BindInputs:
     params: Mapping[Any, Any] = field(default_factory=dict)
     aux: Mapping[str, Any] = field(default_factory=dict)
     resources: Mapping[str, Any] = field(default_factory=dict)
+    initial_values: Mapping[Any, Any] = field(default_factory=dict)
     inputs_identity: Identity = field(init=False)
 
     def __post_init__(self) -> None:
@@ -301,6 +324,12 @@ class BindInputs:
         object.__setattr__(self, "aux", _string_mapping(self.aux, where="BindInputs.aux"))
         object.__setattr__(self, "resources", _string_mapping(
             self.resources, where="BindInputs.resources"))
+        if not isinstance(self.initial_values, Mapping):
+            raise TypeError("BindInputs.initial_values must be a Handle-keyed mapping")
+        from pops.model import Handle
+        if any(not isinstance(key, Handle) or not key.is_resolved for key in self.initial_values):
+            raise TypeError("BindInputs.initial_values keys must be canonical owner-qualified Handles")
+        object.__setattr__(self, "initial_values", _deep_freeze(self.initial_values))
         forbidden = set(self.resources) & _SEMANTIC_OVERRIDE_KEYS
         unknown = set(self.resources) - _BIND_RESOURCE_KEYS
         if forbidden:
@@ -320,6 +349,9 @@ class BindInputs:
             "params": _evidence(self.params, where="bind.params"),
             "aux": _evidence(self.aux, where="bind.aux"),
             "resources": _evidence(self.resources, where="bind.resources"),
+            "initial_values": _evidence(
+                self.initial_values, where="bind.initial_values"
+            ),
         }
 
     def verify(self) -> None:
@@ -401,6 +433,26 @@ class InstallPlan:
         return self.artifact.plan.capabilities
 
     @property
+    def resolved_hierarchy(self) -> Any:
+        return self.artifact.plan.resolved_hierarchy
+
+    @property
+    def amr_transfer(self) -> Any:
+        return self.artifact.plan.amr_transfer
+
+    @property
+    def initial_condition_plan(self) -> Any:
+        return self.artifact.plan.initial_condition_plan
+
+    @property
+    def bootstrap_plan(self) -> Any:
+        return self.artifact.plan.bootstrap_plan
+
+    @property
+    def initial_values(self) -> Mapping[Any, Any]:
+        return self.bind_inputs.initial_values
+
+    @property
     def n_blocks(self) -> int:
         return len(self.artifact.blocks)
 
@@ -419,6 +471,9 @@ class InstallPlan:
             "params": _evidence(self.params, where="install.params"),
             "aux": _evidence(self.aux, where="install.aux"),
             "resources": _evidence(self.resources, where="install.resources"),
+            "initial_values": _evidence(
+                self.initial_values, where="install.initial_values"
+            ),
         }
 
     def verify(self) -> None:

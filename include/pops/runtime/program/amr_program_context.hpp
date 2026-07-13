@@ -347,11 +347,12 @@ class AmrProgramContext {
   // the level_==nlev-1 guard is the AMR analogue of the Uniform once-per-step rotate (design plan sec.2).
   // @p ncomp mirrors ProgramContext::register_history so the SAME lowered body (a single problem.so)
   // compiles against BOTH contexts. The narrow-ring AMR phi^n carry (ADC-427) threads @p ncomp into
-  // AmrHistoryOps: ncomp < 0 (the default) keeps block 0's width (the multistep ring, unchanged); an
+  // AmrHistoryOps: ncomp < 0 uses the owner-qualified program block's width; an
   // explicit ncomp >= 1 (the 1-component condensed-Schur phi^n carry) narrows the per-level ring, which
   // rides the same alloc / remap / replay machinery (each slot is sized by ncomp internally).
   void register_history(const std::string& name, int lag, int ncomp = -1) const {
-    pops::detail::AmrHistoryOps::register_history(*eng_, name, lag, ncomp);  // allocates every level
+    pops::detail::AmrHistoryOps::register_history(
+        *eng_, static_cast<std::size_t>(sys_block(0)), name, lag, ncomp);
   }
   MultiFab& history(const std::string& name, int lag = 1) const {
     MultiFab& mf = pops::detail::AmrHistoryOps::read_history(*eng_, name, lag, level_);
@@ -363,9 +364,10 @@ class AmrProgramContext {
   // body compiles on both contexts: a read-first cross-step carry reads the zero-filled slots on its
   // very first read instead of failing loud. @p ncomp binds the ring width at the first register (the
   // codegen prelude locks it before any read), exactly like register_history above: ncomp < 0 keeps
-  // block 0's width, an explicit ncomp >= 1 narrows the ring (the phi^n carry is 1-component).
+  // the owner-qualified block width; explicit ncomp >= 1 narrows the ring.
   MultiFab& history_zero_start(const std::string& name, int lag, int ncomp = -1) const {
-    pops::detail::AmrHistoryOps::register_history(*eng_, name, lag, ncomp);
+    pops::detail::AmrHistoryOps::register_history(
+        *eng_, static_cast<std::size_t>(sys_block(0)), name, lag, ncomp);
     if (!pops::detail::AmrHistoryOps::initialized(*eng_, name))
       pops::detail::AmrHistoryOps::set_initialized(*eng_, name, true);
     MultiFab& mf = pops::detail::AmrHistoryOps::read_history(*eng_, name, lag, level_);

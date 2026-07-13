@@ -49,6 +49,10 @@ class CompiledPlanRecord:
     lowering_coverage: Any
     blocks: tuple[CompiledPlanBlock, ...]
     time_identity: Any
+    resolved_hierarchy: Any = None
+    amr_transfer: Any = None
+    initial_condition_plan: Any = None
+    bootstrap_plan: Any = None
     contract_identity: Identity = field(init=False)
 
     @classmethod
@@ -79,6 +83,10 @@ class CompiledPlanRecord:
                 _evidence(plan.time, where="resolved time")
                 if plan.time is not None else None
             ),
+            resolved_hierarchy=plan.resolved_hierarchy,
+            amr_transfer=plan.amr_transfer,
+            initial_condition_plan=plan.initial_condition_plan,
+            bootstrap_plan=plan.bootstrap_plan,
         )
 
     def __post_init__(self) -> None:
@@ -106,6 +114,32 @@ class CompiledPlanRecord:
         if not blocks or any(type(block) is not CompiledPlanBlock for block in blocks):
             raise TypeError("CompiledPlanRecord blocks must be exact CompiledPlanBlock values")
         object.__setattr__(self, "blocks", blocks)
+        authorities = (
+            self.resolved_hierarchy,
+            self.amr_transfer,
+            self.initial_condition_plan,
+            self.bootstrap_plan,
+        )
+        if any(value is not None for value in authorities):
+            if self.target != "amr_system" or any(value is None for value in authorities):
+                raise ValueError("CompiledPlanRecord has a partial AMR authority set")
+            from pops.mesh.amr import (
+                BootstrapPlan,
+                InitialConditionPlan,
+                ResolvedHierarchy,
+            )
+            from pops.mesh.amr.transfer import ResolvedAMRTransfer
+            expected = (
+                ResolvedHierarchy,
+                ResolvedAMRTransfer,
+                InitialConditionPlan,
+                BootstrapPlan,
+            )
+            if any(
+                type(value) is not kind
+                for value, kind in zip(authorities, expected, strict=True)
+            ):
+                raise TypeError("CompiledPlanRecord contains a non-exact AMR authority")
         object.__setattr__(
             self, "contract_identity", make_identity("compiled-plan", self._payload()))
 
@@ -142,6 +176,18 @@ class CompiledPlanRecord:
                 for block in self.blocks
             ],
             "time_identity": self.time_identity,
+            "resolved_hierarchy": _evidence(
+                self.resolved_hierarchy, where="compiled plan resolved hierarchy"
+            ) if self.resolved_hierarchy is not None else None,
+            "amr_transfer": _evidence(
+                self.amr_transfer, where="compiled plan AMR transfer"
+            ) if self.amr_transfer is not None else None,
+            "initial_condition_plan": _evidence(
+                self.initial_condition_plan, where="compiled plan initial conditions"
+            ) if self.initial_condition_plan is not None else None,
+            "bootstrap_plan": _evidence(
+                self.bootstrap_plan, where="compiled plan bootstrap"
+            ) if self.bootstrap_plan is not None else None,
         }
 
     def verify(self) -> None:

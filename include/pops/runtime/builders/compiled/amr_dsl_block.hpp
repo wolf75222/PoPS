@@ -519,6 +519,7 @@ struct SharedAmrLayout {
   std::vector<BoxArray> ba;              // [level] shared BoxArray (coarse + fines)
   std::vector<DistributionMapping> dm;   // [level] shared DistributionMapping
   std::vector<Real> dx, dy;              // [level] mesh spacing
+  std::vector<int> refinement_ratios;    // transition k -> k+1
   bool replicated_coarse = true;         // ownership of level 0
   BCRec poisson_bc;                      // BC of the coarse Poisson
   std::function<bool(Real, Real)> wall;  // conducting-wall predicate (empty = none)
@@ -526,6 +527,10 @@ struct SharedAmrLayout {
   Periodicity base_per{true, true};      // periodicity of the base domain
 
   int nlev() const { return static_cast<int>(ba.size()); }
+
+  AmrHierarchyLayout runtime_hierarchy() const {
+    return AmrHierarchyLayout{ba, dm, dx, dy, refinement_ratios};
+  }
 };
 
 /// Builds a ratio-2 shared hierarchy with an explicit level count.  Every fine seed is the central
@@ -571,6 +576,7 @@ inline SharedAmrLayout make_shared_amr_layout_levels(const AmrBuildParams& bp, i
     S.dm.push_back(fine_dm);
     S.dx.push_back(spacing);
     S.dy.push_back(spacing);
+    S.refinement_ratios.push_back(kAmrRefRatio);
     parent_seed = fine_seed;
   }
   return S;

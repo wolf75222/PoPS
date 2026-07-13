@@ -190,7 +190,7 @@ static AmrRuntime make_two_block(int N, double L, double B0, double q0, double q
                                                 /*has_density=*/true, 1.4, 1, false, false,
                                                 stride1));
   });
-  return AmrRuntime(S.geom, S.ba_coarse, S.poisson_bc, std::move(blocks), S.base_per,
+  return AmrRuntime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                     S.replicated_coarse, S.wall);
 }
 
@@ -209,7 +209,7 @@ static AmrRuntime make_three_level_two_block(int N, const std::vector<double>& r
     blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "negative", rho,
                                                 /*has_density=*/true, 1.4, 1, false, false, 1));
   });
-  return AmrRuntime(S.geom, S.ba_coarse, S.poisson_bc, std::move(blocks), S.base_per,
+  return AmrRuntime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                     S.replicated_coarse, S.wall);
 }
 

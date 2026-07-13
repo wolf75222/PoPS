@@ -28,7 +28,8 @@ class _AmrSystemInstall(_AmrSystem):
     def _install_compiled(self, compiled: Any = None, *, instances: Any = None, params: Any = None,
                           aux: Any = None, solvers: Any = None, cadence: Any = None,
                           outputs: Any = None, diagnostics: Any = None,
-                          bind_schema: Any = None) -> Any:
+                          bind_schema: Any = None, initial_values: Any = (),
+                          bootstrap_plan: Any = None, amr_transfer: Any = None) -> Any:
         """INTERNAL low-level install seam on the AMR hierarchy (Spec 5 sec.11) -- signature parity
         with ``System._install_compiled``. NOT the public entry point: author the run with
         ``pops.bind(...)``, which dispatches System / AmrSystem and calls this seam.
@@ -77,6 +78,8 @@ class _AmrSystemInstall(_AmrSystem):
         # (0) EARLY VALIDATION (shared with System._install_compiled): reject a compiled install missing a
         # required declared argument BEFORE any native mutation. Inert (reads arguments() metadata).
         validate_install_arguments(self, compiled, instances, params, aux, solvers)
+        if amr_transfer is not None:
+            self._install_bootstrap_routes(amr_transfer)
 
         # COMPILED vs NATIVE. COMPILED: `compiled` carries a .so_path time Program (installed in step 5,
         # with the section-24 .so validation). Every block model comes exclusively from InstallPlan;
@@ -138,11 +141,46 @@ class _AmrSystemInstall(_AmrSystem):
         for field_name, field in aux.items():
             self._install_aux(field_name, field)
 
-        # (4) INITIAL state per instance (set_density on the AMR coarse base level).
+        # (4) INITIAL state: legacy density or the canonical full conservative-state manifest.
+        initial_rows = tuple(initial_values)
+        if initial_rows and any(spec.get("initial") is not None for spec in instances.values()):
+            raise ValueError("pops.bind: duplicate legacy and InitialConditionPlan state authorities")
         for name, spec in instances.items():
             initial = spec.get("initial")
             if initial is not None:
                 self.set_density(name, initial)
+        seen_initial = set()
+        for subject_id, name, initial, space, centering, method, source in initial_rows:
+            if method == "analytic":
+                if source.get("native_route") != "constant_field":
+                    raise NotImplementedError(
+                        "pops.bind: native analytic bootstrap requires constant_field"
+                    )
+                components = [
+                    float.fromhex(value["binary64"])
+                    if isinstance(value, Mapping) and "binary64" in value else float(value)
+                    for value in source.get("components", ())
+                ]
+                self._s._register_analytic_constant(
+                    subject_id, name or "", space, centering, components
+                )
+                continue
+            if space == "cell":
+                if name not in instances:
+                    raise ValueError("pops.bind: initial state targets unknown block %r" % name)
+                if name in seen_initial:
+                    raise ValueError(
+                        "pops.bind: multiple initial physical states target block %r" % name
+                    )
+                seen_initial.add(name)
+                self._s._bind_bootstrap_block_subject(subject_id, name)
+                self.set_conservative_state(name, initial)
+            elif space in {"face", "node"}:
+                self._s._register_bootstrap_array(subject_id, centering, initial)
+            else:
+                raise NotImplementedError(
+                    "pops.bind: native bootstrap has no payload carrier for space %r" % space
+                )
 
         # (4b) BindSchema supplies complete block-qualified vectors. Install them on the native
         # block carrier; a compiled Program receives the same values on its own carrier below.
@@ -153,6 +191,13 @@ class _AmrSystemInstall(_AmrSystem):
         elif params:
             raise ValueError(
                 "pops.bind: parameter values require a compiled artifact carrying BindSchema"
+            )
+
+        if bootstrap_plan is not None:
+            from pops.runtime._amr_bootstrap_execution import execute_native_bootstrap
+
+            self._bootstrap_execution = execute_native_bootstrap(
+                self, bootstrap_plan, initial_rows
             )
 
         # (5/5b/6) COMPILED time Program: install_program on the AMR hierarchy, route the REMAINING runtime
@@ -176,6 +221,58 @@ class _AmrSystemInstall(_AmrSystem):
         per_block = route_block_params(resolved_models, schema, params)
         for name, values in per_block.items():
             self.set_block_params(name, values)
+
+    def _install_bootstrap_routes(self, registry: Any) -> None:
+        from pops.mesh.amr.transfer import ApplyTransferProvider, ResolvedAMRTransfer
+
+        if type(registry) is not ResolvedAMRTransfer:
+            raise TypeError("pops.bind: amr_transfer must be an exact AMRTransfer")
+        face_vectors = set()
+        for entry in registry.entries:
+            action = entry.action
+            provider = action.provider
+            provider_options = provider.options.to_data()
+            paired = provider_options.get("paired_subjects")
+            if paired is not None:
+                pair = tuple(paired)
+                if len(pair) != 2 or any(not isinstance(value, str) for value in pair):
+                    raise ValueError("pops.bind: paired face provider has an invalid subject manifest")
+                face_vectors.add(pair)
+            key = entry.key.to_data()
+            if type(action) is ApplyTransferProvider:
+                options = action.route.options.to_data()
+                capabilities = action.capabilities
+                order, ghost = capabilities.order, capabilities.ghost_depth
+            else:
+                options = provider_options
+                order, ghost = 1, (0,)
+            dimensions = {row.accuracy.dimension for row in entry.requirements}
+            if len(dimensions) != 1:
+                raise ValueError("pops.bind: one native transfer route cannot mix dimensions")
+            ratios = {
+                tuple(row.accuracy.refinement_ratio) for row in entry.requirements
+            }
+            if len(ratios) != 1 or len(set(next(iter(ratios)))) != 1:
+                raise ValueError(
+                    "pops.bind: one native transfer route requires one isotropic ratio"
+                )
+            self._s._register_bootstrap_transfer_route(
+                entry.key.identity.token,
+                [row.subject.qualified_id for row in entry.requirements],
+                provider.qualified_id,
+                key["space"]["name"],
+                key["centering"]["name"],
+                key["representation"]["name"],
+                key["storage"]["name"],
+                key["operation"]["name"],
+                options["native_route"],
+                order,
+                ghost,
+                next(iter(dimensions)),
+                next(iter(ratios))[0],
+            )
+        for pair in sorted(face_vectors):
+            self._s._register_bootstrap_face_vector(pair)
 
     # Field names the default AMR Poisson route already serves (the shared coarse elliptic solve).
     _DEFAULT_POISSON_FIELDS = ("phi", "poisson", "charge_density", "default")

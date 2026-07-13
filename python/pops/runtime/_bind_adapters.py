@@ -82,9 +82,12 @@ class _RuntimeAdapter:
                 "pops.bind: InstallPlan carries runtime resources %s, but this adapter has no "
                 "typed native resource consumer" % sorted(plan.resources)
             )
-        engine = self.build_engine(plan.layout)
+        engine = self.build_engine_for_plan(plan)
         self.install_plan(engine, plan)
         return BoundSimulation(engine)
+
+    def build_engine_for_plan(self, install_plan: Any) -> Any:
+        return self.build_engine(install_plan.layout)
 
     def install_plan(self, engine: Any, install_plan: Any) -> None:
         raise NotImplementedError
@@ -165,6 +168,17 @@ class _AmrRuntimeAdapter(_RuntimeAdapter):
         self._layout = layout
         return AmrSystem(_amr_config_from_layout(layout))
 
+    def build_engine_for_plan(self, install_plan: Any) -> Any:
+        from pops.runtime.system import AmrSystem
+
+        self._layout = install_plan.layout
+        return AmrSystem(
+            _amr_config_from_layout(
+                install_plan.layout,
+                hierarchy=install_plan.resolved_hierarchy,
+            )
+        )
+
     def install(self, engine, compiled, *, instances, params, aux, solvers, cadence, outputs,
                 diagnostics):
         # A whole-system compiled time Program (compiled.program is not None, ADC-634) installs on the
@@ -199,13 +213,62 @@ class _AmrRuntimeAdapter(_RuntimeAdapter):
             )
         resolved = artifact.plan
         schema = artifact.bind_schema
-        _flow_amr_layout(
-            engine,
-            self._layout,
-            n_blocks=len(install_plan.instances),
-            bind_schema=schema,
-            params=install_plan.params,
-        )
+        by_id = {
+            handle.qualified_id: value
+            for handle, value in install_plan.initial_values.items()
+        }
+        initial_rows = []
+        if install_plan.initial_condition_plan is not None:
+            from pops.mesh.amr import AnalyticReprojection
+            selections = {
+                row.subject.qualified_id: row.method
+                for row in install_plan.bootstrap_plan.selections
+            }
+            physical = {
+                requirement.subject.qualified_id: requirement
+                for entry in install_plan.amr_transfer.entries
+                for requirement in entry.requirements
+                if requirement.materialization == "physical"
+            }
+            for binding in install_plan.initial_condition_plan.bindings:
+                subject = binding.subject
+                if subject.kind == "particle":
+                    raise NotImplementedError(
+                        "pops.bind: particle/hybrid particle-grid is outside this AMR target"
+                    )
+                if subject.kind != "state":
+                    raise ValueError(
+                        "pops.bind: AMR initial values must target state/particle Handles"
+                    )
+                requirement = physical[subject.qualified_id]
+                key = requirement.key.to_data()
+                space = key["space"]["name"]
+                centering = key["centering"]["name"]
+                block = subject.block_ref.local_id if subject.block_ref is not None else None
+                analytic = type(selections[subject.qualified_id]) is AnalyticReprojection
+                initial_rows.append(
+                    (
+                        subject.qualified_id,
+                        block,
+                        by_id.get(subject.qualified_id),
+                        space,
+                        centering,
+                        "analytic" if analytic else "prolong",
+                        binding.source.options.to_data(),
+                    )
+                )
+        if install_plan.bootstrap_plan is None:
+            _flow_amr_layout(
+                engine,
+                self._layout,
+                n_blocks=len(install_plan.instances),
+                bind_schema=schema,
+                params=install_plan.params,
+            )
+        else:
+            _flow_bootstrap_tagging(
+                engine, install_plan.bootstrap_plan, install_plan.params
+            )
         engine._install_compiled(
             compiled=artifact, instances=install_plan.instances,
             params=install_plan.params,
@@ -215,6 +278,9 @@ class _AmrRuntimeAdapter(_RuntimeAdapter):
             outputs=resolved.outputs,
             diagnostics=resolved.diagnostics,
             bind_schema=schema,
+            initial_values=tuple(initial_rows),
+            bootstrap_plan=install_plan.bootstrap_plan,
+            amr_transfer=install_plan.amr_transfer,
         )
 
 
@@ -328,6 +394,31 @@ def _flow_amr_layout(sim: Any, layout: Any, n_blocks: Any = 1, *,
             bind_schema=bind_schema,
             params=params,
         )
+
+
+def _flow_bootstrap_tagging(sim: Any, bootstrap: Any, params: Any) -> None:
+    """Lower the resolved owner-qualified threshold indicator without name heuristics."""
+    from pops.mesh.amr import Above
+
+    graph = bootstrap.tagging.graph
+    if type(graph.refine) is not Above or graph.coarsen is not None:
+        raise NotImplementedError(
+            "pops.bind: native bootstrap currently lowers Above(density, threshold) "
+            "without a coarsen root"
+        )
+    predicate = graph.refine
+    if predicate.threshold not in params:
+        raise ValueError("pops.bind: bootstrap tagging threshold is missing from resolved params")
+    # The native runtime resolves the exact variable against the selected block descriptor.  Never
+    # infer component zero from spelling (rho/n/ne) and never maintain a variable-name whitelist.
+    if predicate.indicator.block_ref is None:
+        raise ValueError("pops.bind: bootstrap tag indicator must be block-qualified")
+    sim._set_bootstrap_refinement(
+        predicate.indicator.block_ref.local_id,
+        predicate.indicator.local_id,
+        float(params[predicate.threshold]),
+        bootstrap.tagging.qualified_id,
+    )
 
 
 def _apply_refine_criterion(sim: Any, criterion: Any, is_multiblock: bool = False, *,

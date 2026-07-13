@@ -4,6 +4,8 @@
 #include <pops/runtime/config/route_ids.hpp>  // pops::verify_route_manifest (ADC-599: embedded route registry guard)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::dispatch_amr_compiled + build_amr_compiled (shared path)
 #include <pops/runtime/amr/amr_runtime.hpp>  // AmrRuntime + AmrRuntimeBlock (multi-block runtime engine)
+#include <pops/runtime/amr/bootstrap_transfer_registry.hpp>
+#include <pops/runtime/amr/bootstrap_transfer_builtins.hpp>
 #include <pops/runtime/program/profiler.hpp>  // Profiler: AMR / MPI phase timings (Spec 5 criterion 43, ADC-479)
 #include <pops/runtime/program/program_runtime_state.hpp>  // ProgramRuntimeState: the shared compiled-Program subsystem (ADC-594)
 #include <pops/runtime/program/step_transaction.hpp>  // StepAttemptRejected: atomic public AMR attempts
@@ -25,6 +27,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "amr_native_param_guard.hpp"  // detail::reject_excessive_amr_runtime_params (ADC-514 loader guard)
@@ -32,6 +35,137 @@
 namespace pops {
 
 namespace {
+runtime::amr::TransferCentering bootstrap_centering(const std::string& value) {
+  using C = runtime::amr::TransferCentering;
+  if (value == "cell") return C::Cell;
+  if (value == "face_x") return C::FaceX;
+  if (value == "face_y") return C::FaceY;
+  if (value == "node") return C::Node;
+  throw std::runtime_error("unknown native AMR transfer centering '" + value + "'");
+}
+
+runtime::amr::TransferKernelRegistry bootstrap_transfer_kernels() {
+  using namespace runtime::amr;
+  TransferKernelRegistry registry;
+  const auto exact = [](std::string space, std::string centering,
+                        std::string representation, std::string operation,
+                        int order, std::vector<int> ghost) {
+    return [=](const TransferRouteDescriptor& row) {
+      return row.space == space && row.centering == centering &&
+             row.representation == representation && row.storage == "dense" &&
+             row.operation == operation && row.order == order && row.ghost_depth == ghost &&
+             row.dimension == 2 && row.refinement_ratio == 2;
+    };
+  };
+  registry.add({
+      "pops.lib.amr.transfer::conservative_linear",
+      exact("cell", "cell", "conservative", "prolongation", 2, {1}),
+      [](const TransferRouteDescriptor&) {
+        PreparedTransferKernel kernel;
+        kernel.spatial = [](const MultiFab& coarse, MultiFab& fine,
+                            const SpatialTransferContext& context) {
+          detail::coupler_conservative_linear_to_fine_mb(
+              coarse, fine, context.index.coarse_origin, context.index.fine_origin,
+              context.index.refinement_ratio);
+        };
+        return kernel;
+      }});
+  registry.add({
+      "pops.lib.amr.transfer::volume_average",
+      exact("cell", "cell", "conservative", "restriction", 1, {0}),
+      [](const TransferRouteDescriptor&) {
+        PreparedTransferKernel kernel;
+        kernel.spatial = [](const MultiFab& fine, MultiFab& coarse,
+                            const SpatialTransferContext& context) {
+          if (context.index.refinement_ratio != std::vector<int>{2, 2})
+            throw std::runtime_error("volume-average restriction ratio mismatch");
+          average_down(fine, coarse, context.index.refinement_ratio[0]);
+        };
+        return kernel;
+      }});
+  registry.add({
+      "pops.lib.amr.transfer::conservative_coarse_fine",
+      exact("cell", "cell", "conservative", "coarse_fine_fill", 1, {1}),
+      [](const TransferRouteDescriptor&) { return prepare_conservative_coarse_fine(); }});
+  const auto face_accepts = [](const TransferRouteDescriptor& row) {
+    return row.space == "face" && (row.centering == "face_x" || row.centering == "face_y") &&
+           row.representation == "conservative" && row.storage == "dense" &&
+           row.operation == "prolongation" && row.order == 2 &&
+           row.ghost_depth == std::vector<int>{1} && row.dimension == 2 &&
+           row.refinement_ratio == 2;
+  };
+  registry.add({
+      "pops.lib.amr.transfer::face_divergence_preserving", face_accepts,
+      [](const TransferRouteDescriptor& row) {
+        PreparedTransferKernel kernel;
+        (void)row;
+        kernel.face_vector = [](const MultiFab& coarse_x, const MultiFab& coarse_y,
+                                MultiFab& fine_x, MultiFab& fine_y,
+                                const SpatialTransferContext& context) {
+          // One prepared vector operation owns both oriented carriers.  The two normal-face
+          // reconstructions are applied in the same transaction and preserve the discrete flux
+          // balance as a pair; no scalar face route exists.
+          detail::bootstrap_prolong_face_vector(
+              coarse_x, coarse_y, fine_x, fine_y, context);
+        };
+        return kernel;
+      }});
+  registry.add({
+      "pops.lib.amr.transfer::node_bilinear",
+      exact("node", "node", "primitive", "prolongation", 2, {1}),
+      [](const TransferRouteDescriptor&) {
+        PreparedTransferKernel kernel;
+        kernel.spatial = [](const MultiFab& coarse, MultiFab& fine,
+                            const SpatialTransferContext& context) {
+          detail::bootstrap_prolong_staggered(
+              coarse, fine, TransferCentering::Node, context);
+        };
+        return kernel;
+      }});
+  const auto temporal_accepts = [](const TransferRouteDescriptor& row) {
+    return row.space != "field" && row.space != "cache" && row.storage == "dense" &&
+           row.operation == "temporal_interpolation" && row.order == 2 &&
+           row.ghost_depth == std::vector<int>{0} && row.dimension == 2 &&
+           row.refinement_ratio == 2;
+  };
+  registry.add({
+      "pops.lib.amr.transfer::linear_time_interpolation", temporal_accepts,
+      [](const TransferRouteDescriptor&) { return prepare_linear_time_interpolation(); }});
+  registry.add({
+      "pops.lib.amr.materializer::elliptic_solve",
+      exact("field", "cell", "primitive", "coarse_fine_fill", 1, {0}),
+      [](const TransferRouteDescriptor&) {
+        PreparedTransferKernel kernel;
+        kernel.materialize = [](AmrRuntime& runtime, const MaterializationContext& context) {
+          if (context.operation != "recompute")
+            throw std::runtime_error("elliptic materializer received an incompatible operation");
+          return runtime.recompute_bootstrap_field(context.target);
+        };
+        return kernel;
+      }});
+  registry.add({
+      "pops.lib.amr.materializer::patch_topology",
+      exact("cache", "cell", "primitive", "coarse_fine_fill", 1, {0}),
+      [](const TransferRouteDescriptor&) {
+        PreparedTransferKernel kernel;
+        kernel.materialize = [](AmrRuntime& runtime, const MaterializationContext& context) {
+          if (context.operation == "invalidate_cache")
+            return static_cast<std::int64_t>(runtime.invalidate_bootstrap_cache(context.subject));
+          if (context.operation == "rebuild_cache" ||
+              context.operation == "invalidate_then_rebuild") {
+            if (context.operation == "invalidate_then_rebuild")
+              runtime.invalidate_bootstrap_cache(context.subject);
+            return static_cast<std::int64_t>(
+                runtime.rebuild_bootstrap_topology_cache(context.subject, context.level)
+                    .topology.size());
+          }
+          throw std::runtime_error("patch-topology materializer received an incompatible operation");
+        };
+        return kernel;
+      }});
+  return registry;
+}
+
 bool amr_newton_options_non_default(const NewtonOptions& newton, bool diagnostics = false) {
   return newton.max_iters != kNewtonDefaultMaxIters || newton.rel_tol != kNewtonDefaultRelTol ||
          newton.abs_tol != kNewtonDefaultAbsTol || newton.fd_eps != kNewtonDefaultFdEps ||
@@ -136,7 +270,18 @@ struct AmrSystem::Impl {
   };
 
   std::vector<BlockSpec> blocks;
-  double gamma = static_cast<double>(kPhysicalDefaultGamma);  // gamma of the FIRST block (compat)
+  struct BootstrapArray {
+    std::string centering;
+    int ncomp = 0;
+    std::vector<double> initial_values;
+  };
+  std::unordered_map<std::string, BootstrapArray> bootstrap_arrays;
+  std::unordered_map<std::string, std::vector<double>> bootstrap_analytic_constants;
+  runtime::amr::TransferRouteRegistry bootstrap_transfer_routes{
+      bootstrap_transfer_kernels()};
+  std::map<std::pair<std::string, std::string>, std::string> bootstrap_subject_routes;
+  std::unordered_map<std::string, std::string> bootstrap_block_subjects;
+  std::unordered_map<std::string, std::array<std::string, 2>> bootstrap_face_vectors;
 
   // Coupled inter-species sources (compiled pops.dsl.CoupledSource, flat P5 bytecode ABI) FROZEN at
   // add_coupled_source and injected into the AmrRuntime runtime engine at lazy build (build_multi).
@@ -167,6 +312,13 @@ struct AmrSystem::Impl {
   // Resolved PER BLOCK at build_multi against the block's cons_vars (STRICT, no silent comp-0 fallback).
   std::string refine_var_name;
   std::string refine_var_role;
+  struct BootstrapTagSpec {
+    std::string block;
+    std::string variable;
+    double threshold = 0.0;
+    std::string provider_identity;
+  };
+  std::unique_ptr<BootstrapTagSpec> bootstrap_tag_spec;
   // PHI tag threshold on |grad phi| (D4): <= 0 => phi does NOT contribute to the tag union (default,
   // bit-identical). > 0 => in multi-block + regrid_every > 0, build_multi sets the engine's phi predicate
   // (set_phi_tag_predicate): refines where |grad phi| (components 1,2 of the shared aux) exceeds this threshold.
@@ -288,7 +440,7 @@ struct AmrSystem::Impl {
   // coherence assertion against the checkpoint fingerprint). Reset each rebuild; empty on a clean window.
   std::vector<int> last_replay_regrid_steps_;
 
-  explicit Impl(const AmrSystemConfig& c) : cfg(c) {}
+  explicit Impl(const AmrSystemConfig& c) : cfg(c), force_runtime_(c.explicit_bootstrap) {}
 
   // SUBSTEPS/STRIDE cadence around the installed program closure (parity SystemStepper::run_program_
   // cadence): runs the whole program ONCE over eff_dt = stride*dt when the stride window closes (the
@@ -379,12 +531,10 @@ struct AmrSystem::Impl {
     }
   }
 
-  // Index of the block named @p name in the registry (-1 if absent). Empty name -> first block (compat
-  // single-block: the name was cosmetic). Multiple unnamed blocks is not ambiguous at add (an empty
-  // name always targets block 0), but set_density(name) resolves it precisely.
+  // Index of an exactly named block. Empty names never alias another runtime object.
   int block_index(const std::string& name) const {
     if (name.empty())
-      return blocks.empty() ? -1 : 0;
+      return -1;
     for (std::size_t i = 0; i < blocks.size(); ++i)
       if (blocks[i].name == name)
         return static_cast<int>(i);
@@ -421,12 +571,9 @@ struct AmrSystem::Impl {
     return detail::wall_predicate(p_wall, p_wall_radius, cfg.L, "AmrSystem::set_poisson");
   }
 
-  // Materializes the frozen parameters of the SINGLE-BLOCK path lazy build (AmrCouplerMP) from
-  // the config + the refine/poisson/density choices + the SINGLE block (blocks[0]). Common to both
-  // single-block paths (native ModelSpec and add_compiled_model): both instantiate the SAME shared
-  // builder (detail::build_amr_compiled). UNTOUCHED by multi-block -> single-block bit-identical.
-  AmrBuildParams make_build_params() {
-    const BlockSpec& b = blocks[0];
+  // Materializes only hierarchy/system-owned parameters.  Multi-block construction must never select
+  // a representative block merely to obtain the common mesh, Poisson, and ownership configuration.
+  AmrBuildParams make_layout_params() {
     AmrBuildParams bp;
     // MESH group: coarse geometry + ownership policy.
     bp.mesh.n = cfg.n;
@@ -434,19 +581,6 @@ struct AmrSystem::Impl {
     bp.mesh.regrid_every = cfg.regrid_every;
     bp.mesh.distribute_coarse = cfg.distribute_coarse;
     bp.mesh.coarse_max_grid = cfg.coarse_max_grid;
-    // PHYSICS group: physical + temporal treatment + IMEX Newton + positivity floor.
-    bp.physics.gamma = b.gamma;
-    bp.physics.substeps = b.substeps;
-    bp.physics.recon_prim = b.recon_prim;
-    bp.physics.imex = b.imex;
-    bp.physics.time_method =
-        b.time_method;  // SSPRK3 (1) / forward Euler (0) -> build_amr_compiled -> cpl->step
-    // NEWTON OPTIONS of the single-block IMEX source (wave 3: WIRED on the AmrCouplerMP coupler).
-    // Default (add_block without option) = historical NewtonOptions{} -> path (2a) bit-identical.
-    bp.physics.newton_options = b.newton;
-    // Zhang-Shu positivity floor (ADC-259): consumed by build_amr_compiled (mono-block ->
-    // cpl->step / advance_transport). 0 (default) -> inactive, bit-identical historical path.
-    bp.physics.pos_floor = b.pos_floor;
     // REGRID group: refinement threshold.
     bp.regrid.threshold = refine_threshold;
     // POISSON group: coarse Poisson BC + conductive wall.
@@ -460,6 +594,26 @@ struct AmrSystem::Impl {
     bp.poisson.fac_coarse_rel_tol = p_fac_coarse_rel_tol;
     bp.poisson.fac_coarse_cycles = p_fac_coarse_cycles;
     bp.poisson.fac_verbose = p_fac_verbose;
+    return bp;
+  }
+
+  // Materializes the frozen parameters of the SINGLE-BLOCK path lazy build (AmrCouplerMP) from
+  // the system-owned layout parameters plus the exactly-one installed block. Common to both
+  // single-block paths (native ModelSpec and add_compiled_model): both instantiate the SAME shared
+  // builder (detail::build_amr_compiled). UNTOUCHED by multi-block -> single-block bit-identical.
+  AmrBuildParams make_build_params() {
+    if (blocks.size() != 1)
+      throw std::runtime_error("AmrSystem::make_build_params requires exactly one block");
+    const BlockSpec& b = blocks.front();
+    AmrBuildParams bp = make_layout_params();
+    // PHYSICS group: block-owned physical and temporal treatment.
+    bp.physics.gamma = b.gamma;
+    bp.physics.substeps = b.substeps;
+    bp.physics.recon_prim = b.recon_prim;
+    bp.physics.imex = b.imex;
+    bp.physics.time_method = b.time_method;
+    bp.physics.newton_options = b.newton;
+    bp.physics.pos_floor = b.pos_floor;
     // INITIAL DATA group: density (historical) OR full conservative state (priority at seed).
     bp.initial.has_density = b.has_density;
     bp.initial.density = b.density;
@@ -550,7 +704,7 @@ struct AmrSystem::Impl {
           "AmrSystem::set_poisson : composite=true is single-block only (the composite FAC field "
           "solve lives on the AmrCouplerMP coupler) ; the multi-block AmrRuntime engine solves the "
           "shared coarse Poisson (Option A). Use one block, or composite=false.");
-    AmrBuildParams bp = make_build_params();  // geometry + poisson_bc + wall + common ownership
+    AmrBuildParams bp = make_layout_params();  // hierarchy/system authority; no representative block
     // SINGLE-LEVEL Program layout (epic ADC-508): a compiled time Program forced onto the runtime engine
     // for a SINGLE block builds a coarse-only hierarchy WHEN NO REFINEMENT IS CONFIGURED, so a
     // no-refinement single-block AMR Program is BIT-IDENTICAL to the same Program on System (the
@@ -568,9 +722,10 @@ struct AmrSystem::Impl {
     // refine_threshold stays the sentinel -> coarse-only -> the System parity gate is untouched.
     const bool refinement_active =
         refine_threshold < static_cast<double>(kAmrRefinementDisabledThreshold) ||
-        phi_grad_threshold > 0.0;
+        phi_grad_threshold > 0.0 || bootstrap_tag_spec != nullptr;
     const bool program_single_level = force_runtime_ && blocks.size() == 1 && !refinement_active;
-    const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp, program_single_level);
+    const int initial_levels = cfg.explicit_bootstrap ? 1 : (program_single_level ? 1 : 2);
+    const detail::SharedAmrLayout S = detail::make_shared_amr_layout_levels(bp, initial_levels);
     std::vector<pops::AmrRuntimeBlock> rblocks;
     rblocks.reserve(blocks.size());
     for (auto& b : blocks) {
@@ -663,13 +818,68 @@ struct AmrSystem::Impl {
       }
     }
     runtime =
-        std::make_shared<pops::AmrRuntime>(S.geom, S.ba_coarse, S.poisson_bc, std::move(rblocks),
+        std::make_shared<pops::AmrRuntime>(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(rblocks),
                                            S.base_per, S.replicated_coarse, S.wall);
+    // The authored AMRTransfer registry is the authority for every public-DSL block's runtime
+    // coarse/fine and temporal routes. Resolve the exact owner-qualified subject once, then retain
+    // only prepared native callables in AmrRuntime; no string/kernel switch survives into stepping.
+    for (const auto& [subject, block_name] : bootstrap_block_subjects) {
+      const int block = block_index(block_name);
+      const auto coarse_fine_id = bootstrap_subject_routes.find({subject, "coarse_fine_fill"});
+      const auto temporal_id = bootstrap_subject_routes.find({subject, "temporal_interpolation"});
+      if (block < 0 || coarse_fine_id == bootstrap_subject_routes.end() ||
+          temporal_id == bootstrap_subject_routes.end())
+        throw std::runtime_error(
+            "AmrSystem : state transfer authority lacks exact coarse/fine or temporal route");
+      const auto& coarse_fine = bootstrap_transfer_routes.at(coarse_fine_id->second);
+      const auto& temporal = bootstrap_transfer_routes.at(temporal_id->second);
+      if (!coarse_fine.executable.coarse_fine || !temporal.executable.temporal ||
+          coarse_fine.descriptor.refinement_ratio != temporal.descriptor.refinement_ratio)
+        throw std::runtime_error(
+            "AmrSystem : state transfer authority did not prepare compatible native callables");
+      runtime->set_block_transfer_authority(
+          static_cast<std::size_t>(block), coarse_fine.executable, temporal.executable,
+          coarse_fine.descriptor.refinement_ratio);
+    }
     // AMR / MPI PROFILING (Spec 5 criterion 43, ADC-479): wire the facade-owned Profiler into the
     // engine so it times its AMR phases (regrid / fill_boundary / average_down) into the SAME table
     // profile_report() renders. Non-owning: program_.profiler_ outlives runtime (both live on the
     // Impl, stable address). When profiling is disabled the engine never touches it (enabled()-guarded).
     runtime->set_profiler(&program_.profiler_);
+    for (const auto& [subject, array] : bootstrap_arrays)
+      runtime->register_bootstrap_staggered_field(
+          subject, bootstrap_centering(array.centering), array.ncomp, array.initial_values);
+    if (cfg.explicit_bootstrap) {
+      if (bootstrap_tag_spec) {
+        const int b = block_index(bootstrap_tag_spec->block);
+        if (b < 0 || blocks[static_cast<std::size_t>(b)].is_compiled)
+          throw std::runtime_error(
+              "explicit AMR bootstrap tag provider names an unknown or compiled block");
+        const int component = detail::resolve_selected_component(
+            "AmrSystem::bootstrap tagging", bootstrap_tag_spec->block,
+            runtime->block_cons_vars(static_cast<std::size_t>(b)),
+            bootstrap_tag_spec->variable, "");
+        runtime->set_bootstrap_threshold_tag(
+            static_cast<std::size_t>(b), component,
+            static_cast<Real>(bootstrap_tag_spec->threshold),
+            bootstrap_tag_spec->provider_identity);
+      } else {
+        const bool selected = !refine_var_name.empty() || !refine_var_role.empty();
+        for (std::size_t b = 0; b < blocks.size(); ++b) {
+          int component = 0;
+          if (selected) {
+            if (blocks[b].is_compiled)
+              throw std::runtime_error(
+                  "explicit AMR bootstrap tag selector requires a native block");
+            component = detail::resolve_selected_component(
+                "AmrSystem::bootstrap tagging", blocks[b].name,
+                runtime->block_cons_vars(b), refine_var_name, refine_var_role);
+          }
+          runtime->set_bootstrap_threshold_tag(
+              b, component, static_cast<Real>(refine_threshold));
+        }
+      }
+    }
     // Model-NAMED aux fields (ADC-291): push the pending coarse fields into the runtime engine, which
     // re-applies them onto the shared aux each solve_fields (so they persist across the union regrid)
     // and injects them to the fine levels. Empty -> no-op (bit-identical).
@@ -716,7 +926,7 @@ struct AmrSystem::Impl {
     // tag -> grid unchanged even if regrid_every > 0 (consistent no-op). regrid_every == 0 ->
     // set_regrid(0) -> FROZEN hierarchy, bit-identical to before this PR.
     const Real thr = static_cast<Real>(refine_threshold);
-    runtime->set_regrid(cfg.regrid_every);
+    runtime->set_regrid(cfg.regrid_every, cfg.regrid_grow, cfg.regrid_margin);
     // ADC-616: Berger-Rigoutsos clustering params. Each <= 0 keeps the ClusterParams default (0.7 /
     // 1 / 32), so an unconfigured AMR run clusters bit-identically. Applied only when set.
     if (cfg.cluster_min_efficiency > 0.0 || cfg.cluster_min_box_size > 0 ||
@@ -727,24 +937,42 @@ struct AmrSystem::Impl {
       runtime->set_clustering(eff, minb, maxb);
     }
     if (cfg.regrid_every > 0) {
-      const bool selected = !refine_var_name.empty() || !refine_var_role.empty();
-      for (std::size_t b = 0; b < blocks.size(); ++b) {
-        int comp = 0;  // default: component 0 (bit-identical density criterion)
-        if (selected) {
-          // The compiled .so flat-ABI block carries no role table on its runtime side: a non-default
-          // selector there is REFUSED (comp-0 only), not silently ignored (mirror of the other .so rejects).
-          if (blocks[b].is_compiled)
-            throw std::runtime_error(
-                "AmrSystem::set_refinement : variable/role selector not supported on the compiled "
-                ".so "
-                "block '" +
-                blocks[b].name + "' (component 0 only) ; use a native block pops.Model(...)");
-          comp = detail::resolve_selected_component("AmrSystem::set_refinement", blocks[b].name,
-                                                    runtime->block_cons_vars(b), refine_var_name,
-                                                    refine_var_role);
-        }
+      if (bootstrap_tag_spec) {
+        const int b = block_index(bootstrap_tag_spec->block);
+        if (b < 0 || blocks[static_cast<std::size_t>(b)].is_compiled)
+          throw std::runtime_error(
+              "runtime AMR tag provider names an unknown or compiled block");
+        const int component = detail::resolve_selected_component(
+            "AmrSystem::runtime tagging", bootstrap_tag_spec->block,
+            runtime->block_cons_vars(static_cast<std::size_t>(b)),
+            bootstrap_tag_spec->variable, "");
         runtime->set_block_tag_predicate(
-            b, [thr, comp](const ConstArray4& a, int i, int j) { return a(i, j, comp) > thr; });
+            static_cast<std::size_t>(b),
+            [threshold = static_cast<Real>(bootstrap_tag_spec->threshold), component](
+                const ConstArray4& a, int i, int j) {
+              return a(i, j, component) > threshold;
+            });
+      } else {
+        const bool selected = !refine_var_name.empty() || !refine_var_role.empty();
+        for (std::size_t b = 0; b < blocks.size(); ++b) {
+          int comp = 0;  // default: component 0 (bit-identical density criterion)
+          if (selected) {
+            // The compiled .so flat-ABI block carries no role table on its runtime side: a non-default
+            // selector there is REFUSED (comp-0 only), not silently ignored (mirror of the other .so rejects).
+            if (blocks[b].is_compiled)
+              throw std::runtime_error(
+                  "AmrSystem::set_refinement : variable/role selector not supported on the compiled "
+                  ".so block '" + blocks[b].name +
+                  "' (component 0 only) ; use a native block pops.Model(...)");
+            comp = detail::resolve_selected_component(
+                "AmrSystem::set_refinement", blocks[b].name,
+                runtime->block_cons_vars(b), refine_var_name, refine_var_role);
+          }
+          runtime->set_block_tag_predicate(
+              b, [thr, comp](const ConstArray4& a, int i, int j) {
+                return a(i, j, comp) > thr;
+              });
+        }
       }
       // PHI PREDICATE (D4): if the user set a |grad phi| threshold (set_phi_refinement > 0),
       // we wire the engine's phi predicate (read on the shared aux, components 1,2 = grad phi in x,y).
@@ -779,13 +1007,13 @@ struct AmrSystem::Impl {
     // set_block_tag_predicate). The old REFUSAL (the multi-block hierarchy was FROZEN) is lifted: the
     // grid actually re-grids from the union of the tags of all blocks. regrid_every == 0
     // stays a frozen hierarchy (regrid never called), bit-identical to Phase 1.
-    if (multi_block()) {
+    if (multi_block() || cfg.explicit_bootstrap) {
       build_multi();
       return;
     }
 
     // --- SINGLE-BLOCK path (AmrCouplerMP, untouched: bit-identical to history) ---
-    const BlockSpec& b = blocks[0];
+    const BlockSpec& b = blocks.front();
     // ADC-296: the name/role refinement selector is resolved per block by the MULTI-BLOCK runtime engine
     // (build_multi -> resolve_selected_component). The single-block AmrCouplerMP path tags on component 0
     // only; a selector requested but staying single-block would be SILENTLY ignored (the comp-0 fallback
@@ -877,6 +1105,15 @@ void validate_amr_system_config(const AmrSystemConfig& c) {
         "AmrSystem : regrid_every >= 0 required (0 = never regrid after init) ; "
         "got regrid_every = " +
         std::to_string(c.regrid_every));
+  if (c.level_count < 1)
+    throw std::runtime_error(
+        "AmrSystem : level_count >= 1 required");
+  if (!c.explicit_bootstrap && c.level_count != 2)
+    throw std::runtime_error(
+        "AmrSystem : non-default level_count requires explicit_bootstrap=true; deterministic "
+        "fine-level preallocation is not a valid substitute");
+  if (c.regrid_grow < 0 || c.regrid_margin < 0)
+    throw std::runtime_error("AmrSystem : regrid_grow/regrid_margin must be >= 0");
   if (c.coarse_max_grid < 0)
     throw std::runtime_error(
         "AmrSystem : coarse_max_grid >= 0 required (0 = default n/2 tile, "
@@ -980,17 +1217,10 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   // AmrRuntimeBlock on the SAME shared layout, exactly like a native block (cf. build_multi). A
   // single hard guard: the compiled block must have been registered WITH a runtime builder (an .so
   // loader recompiled against this header provides it; build_multi throws clearly otherwise).
-  // MULTI-BLOCK: the name INDEXES the block (set_density/mass/density) -> it must be UNIQUE and non
-  // empty as soon as there is (or we create) more than one block. Single-block: the name stays cosmetic.
-  if (!p_->blocks.empty()) {
-    if (name.empty())
-      throw std::runtime_error(
-          "AmrSystem::add_block : in multi-block each block must have a NON "
-          "empty name (the name indexes the block : set_density/mass/density)");
-    if (p_->block_index(name) >= 0)
-      throw std::runtime_error("AmrSystem::add_block : block name already used '" + name +
-                               "' (block names must be unique in multi-block)");
-  }
+  if (name.empty())
+    throw std::runtime_error("AmrSystem::add_block requires an owner-qualified non-empty name");
+  if (p_->block_index(name) >= 0)
+    throw std::runtime_error("AmrSystem::add_block : block name already used '" + name + "'");
   Impl::BlockSpec b;
   b.name = name;
   b.is_compiled = false;
@@ -1012,8 +1242,6 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   b.substeps = substeps;
   b.stride = stride;
   b.gamma = model.gamma;  // adiabatic index of the block (Euler), read by coupler_write_coarse
-  if (p_->blocks.empty())
-    p_->gamma = model.gamma;  // compat: gamma of the 1st block (single-block path)
   p_->blocks.push_back(std::move(b));
 }
 
@@ -1042,19 +1270,11 @@ POPS_EXPORT void AmrSystem::set_compiled_block(
         "time='imex' (the implicit mask only applies to the IMEX source step)");
   // MULTI-BLOCK (capstone v): a 2nd block (or more) switches to AmrRuntime; the compiled block is
   // materialized there by multi_builder (its AmrRuntimeBlock on the shared layout). So we STACK the
-  // block instead of throwing. Like add_block: as soon as there is (or we create) more than one block,
-  // the name INDEXES the block -> it must be UNIQUE and non empty. In single-block the name stays cosmetic.
-  if (!p_->blocks.empty()) {
-    if (name.empty())
-      throw std::runtime_error(
-          "AmrSystem::set_compiled_block : in multi-block each block must have "
-          "a NON empty name (the name indexes the block : set_density/mass/density)");
-    if (p_->block_index(name) >= 0)
-      throw std::runtime_error("AmrSystem::set_compiled_block : block name already used '" + name +
-                               "' (block names must be unique in multi-block)");
-  }
-  if (p_->blocks.empty())
-    p_->gamma = gamma;  // compat: gamma of the 1st block (single-block path)
+  if (name.empty())
+    throw std::runtime_error(
+        "AmrSystem::set_compiled_block requires an owner-qualified non-empty name");
+  if (p_->block_index(name) >= 0)
+    throw std::runtime_error("AmrSystem::set_compiled_block : block name already used '" + name + "'");
   Impl::BlockSpec b;
   b.name = name;
   b.is_compiled = true;
@@ -1310,6 +1530,19 @@ void AmrSystem::set_refinement(double threshold, const std::string& variable,
   p_->refine_var_role = role;
 }
 
+void AmrSystem::set_bootstrap_refinement(
+    const std::string& block, const std::string& variable, double threshold,
+    const std::string& provider_identity) {
+  require_assembling_amr(p_->bound_, "set_bootstrap_refinement");
+  if (p_->built || block.empty() || variable.empty() || provider_identity.empty() ||
+      !std::isfinite(threshold) || p_->bootstrap_tag_spec)
+    throw std::runtime_error(
+        "AmrSystem::set_bootstrap_refinement requires one exact pre-build provider manifest");
+  p_->bootstrap_tag_spec = std::make_unique<Impl::BootstrapTagSpec>(
+      Impl::BootstrapTagSpec{block, variable, threshold, provider_identity});
+  p_->refine_threshold = threshold;
+}
+
 void AmrSystem::set_phi_refinement(double grad_threshold) {
   require_assembling_amr(p_->bound_,
                          "set_phi_refinement");  // frozen once pops.bind completes (ADC-592)
@@ -1378,18 +1611,10 @@ void AmrSystem::set_density(const std::string& name, const std::vector<double>& 
         "density before any step/mass/density)");
   if (p_->blocks.empty())
     throw std::runtime_error("AmrSystem::set_density : call add_block first");
-  // SINGLE-BLOCK: the name is COSMETIC (historical compat, add_compiled_model /
-  // add_native_block paths that do not name the BlockSpec) -> the density targets the single block,
-  // whatever name is passed. MULTI-BLOCK: the name INDEXES the block (each block has ITS initial
-  // density, for the summed Poisson RHS Sum_b q_b n_b); an unknown name is an explicit error.
-  std::size_t idx = 0;
-  if (p_->blocks.size() >= 2) {
-    const int i = p_->block_index(name);
-    if (i < 0)
-      throw std::runtime_error("AmrSystem::set_density : no block named '" + name +
-                               "' (multi-block : the name indexes the block)");
-    idx = static_cast<std::size_t>(i);
-  }
+  const int resolved = p_->block_index(name);
+  if (resolved < 0)
+    throw std::runtime_error("AmrSystem::set_density : no block named '" + name + "'");
+  const std::size_t idx = static_cast<std::size_t>(resolved);
   p_->blocks[idx].density = rho;
   p_->blocks[idx].has_density = true;
 }
@@ -1415,18 +1640,366 @@ void AmrSystem::set_conservative_state(const std::string& name, const std::vecto
     throw std::runtime_error("AmrSystem::set_conservative_state : state size (" +
                              std::to_string(U.size()) + ") not a multiple of n*n (" +
                              std::to_string(nn) + ") ; expected ncomp*n*n component-major");
-  // SINGLE-BLOCK: cosmetic name. MULTI-BLOCK: the name indexes the block (but build_multi will then throw,
-  // the full state only being wired on the single-block path).
-  std::size_t idx = 0;
-  if (p_->blocks.size() >= 2) {
-    const int i = p_->block_index(name);
-    if (i < 0)
-      throw std::runtime_error("AmrSystem::set_conservative_state : no block named '" + name +
-                               "' (multi-block : the name indexes the block)");
-    idx = static_cast<std::size_t>(i);
-  }
+  const int resolved = p_->block_index(name);
+  if (resolved < 0)
+    throw std::runtime_error("AmrSystem::set_conservative_state : no block named '" + name + "'");
+  const std::size_t idx = static_cast<std::size_t>(resolved);
   p_->blocks[idx].state = U;
   p_->blocks[idx].has_state = true;
+}
+
+void AmrSystem::bootstrap_next_level(int refinement_ratio) {
+  require_assembling_amr(p_->bound_, "bootstrap_next_level");
+  if (!p_->cfg.explicit_bootstrap)
+    throw std::runtime_error(
+        "AmrSystem::bootstrap_next_level requires explicit_bootstrap=true");
+  if (p_->bootstrap_block_subjects.size() != p_->blocks.size())
+    throw std::runtime_error(
+        "AmrSystem::bootstrap_next_level requires one routed cell state per native block");
+  for (const auto& [_, block] : p_->bootstrap_block_subjects)
+    if (p_->block_index(block) < 0)
+      throw std::runtime_error(
+          "AmrSystem::bootstrap_next_level cell route names an unknown native block");
+  p_->ensure_built();
+  if (!p_->runtime)
+    throw std::runtime_error(
+        "AmrSystem::bootstrap_next_level requires the shared N-level runtime engine");
+  if (p_->runtime->nlev() >= p_->cfg.level_count)
+    throw std::runtime_error(
+        "AmrSystem::bootstrap_next_level would exceed resolved level_count");
+  for (const auto& [_, route] : p_->bootstrap_subject_routes) {
+    const auto& descriptor = p_->bootstrap_transfer_routes.at(route).descriptor;
+    if ((descriptor.operation == "prolongation" || descriptor.operation == "restriction" ||
+         descriptor.operation == "coarse_fine_fill" ||
+         descriptor.operation == "temporal_interpolation") &&
+        descriptor.refinement_ratio != refinement_ratio)
+      throw std::runtime_error(
+          "AmrSystem::bootstrap_next_level transition/transfer ratio mismatch");
+  }
+  p_->runtime->bootstrap_next_level(refinement_ratio);
+}
+
+void AmrSystem::begin_bootstrap_plan() {
+  require_assembling_amr(p_->bound_, "begin_bootstrap_plan");
+  if (!p_->cfg.explicit_bootstrap)
+    throw std::runtime_error(
+        "AmrSystem::begin_bootstrap_plan requires explicit_bootstrap=true");
+  p_->ensure_built();
+  if (!p_->runtime)
+    throw std::runtime_error(
+        "AmrSystem::begin_bootstrap_plan requires the shared N-level runtime engine");
+  p_->runtime->begin_bootstrap_plan();
+}
+
+void AmrSystem::register_bootstrap_transfer_route(
+    const std::string& identity, const std::vector<std::string>& subjects,
+    const std::string& provider_identity, const std::string& space,
+    const std::string& centering, const std::string& representation,
+    const std::string& storage, const std::string& operation,
+    const std::string& kernel, int order, const std::vector<int>& ghost_depth,
+    int dimension, int refinement_ratio) {
+  require_assembling_amr(p_->bound_, "register_bootstrap_transfer_route");
+  if (p_->built || subjects.empty())
+    throw std::runtime_error(
+        "AmrSystem::register_bootstrap_transfer_route requires pre-build subjects");
+  const std::string kernel_namespace =
+      (space == "field" || space == "cache") ? "pops.lib.amr.materializer::"
+                                               : "pops.lib.amr.transfer::";
+  runtime::amr::TransferRoute route{
+      provider_identity,
+      kernel_namespace + kernel,
+      runtime::amr::TransferRouteDescriptor{
+          space, centering, representation, storage, operation,
+          order, ghost_depth, dimension, refinement_ratio}};
+  p_->bootstrap_transfer_routes.add(identity, std::move(route));
+  for (const std::string& subject : subjects) {
+    const auto key = std::make_pair(subject, operation);
+    if (subject.empty() || p_->bootstrap_subject_routes.count(key) != 0)
+      throw std::runtime_error(
+          "AmrSystem::register_bootstrap_transfer_route requires unique subjects");
+    p_->bootstrap_subject_routes.emplace(key, identity);
+  }
+}
+
+void AmrSystem::commit_bootstrap_level() {
+  if (!p_->runtime)
+    throw std::runtime_error("AmrSystem::commit_bootstrap_level has no runtime engine");
+  p_->runtime->commit_bootstrap_level();
+}
+
+void AmrSystem::rollback_bootstrap_level() {
+  if (!p_->runtime)
+    throw std::runtime_error("AmrSystem::rollback_bootstrap_level has no runtime engine");
+  p_->runtime->rollback_bootstrap_level();
+}
+
+void AmrSystem::register_bootstrap_array(const std::string& subject,
+                                         const std::string& centering, int ncomp,
+                                         int ny, int nx,
+                                         const std::vector<double>& values) {
+  require_assembling_amr(p_->bound_, "register_bootstrap_array");
+  if (p_->built)
+    throw std::runtime_error(
+        "AmrSystem::register_bootstrap_array requires registration before hierarchy build");
+  if (subject.empty() || p_->bootstrap_arrays.count(subject) != 0)
+    throw std::runtime_error(
+        "AmrSystem::register_bootstrap_array requires a unique non-empty subject");
+  const auto route_key = std::make_pair(
+      subject, std::string("prolongation"));
+  const auto route_found = p_->bootstrap_subject_routes.find(route_key);
+  if (route_found == p_->bootstrap_subject_routes.end())
+    throw std::runtime_error(
+        "AmrSystem::register_bootstrap_array requires an exact registered prolongation route");
+  const auto& route = p_->bootstrap_transfer_routes.at(route_found->second);
+  if (route.descriptor.centering != centering ||
+      (route.descriptor.space != "face" && route.descriptor.space != "node"))
+    throw std::runtime_error(
+        "AmrSystem::register_bootstrap_array centering differs from its transfer route");
+  const int n = p_->cfg.n;
+  const bool shape_ok =
+      (centering == "node" && nx == n + 1 && ny == n + 1) ||
+      (centering == "face_x" && nx == n + 1 && ny == n) ||
+      (centering == "face_y" && nx == n && ny == n + 1);
+  if (!shape_ok || ncomp < 1 ||
+      values.size() != static_cast<std::size_t>(ncomp) * nx * ny)
+    throw std::runtime_error(
+        "AmrSystem::register_bootstrap_array received an incompatible centered array shape");
+  p_->bootstrap_arrays.emplace(
+      subject, Impl::BootstrapArray{centering, ncomp, values});
+}
+
+void AmrSystem::bind_bootstrap_block_subject(const std::string& subject,
+                                             const std::string& block) {
+  require_assembling_amr(p_->bound_, "bind_bootstrap_block_subject");
+  const auto route_key = std::make_pair(
+      subject, std::string("prolongation"));
+  const auto route_found = p_->bootstrap_subject_routes.find(route_key);
+  if (route_found == p_->bootstrap_subject_routes.end() || subject.empty() || block.empty() ||
+      p_->bootstrap_block_subjects.count(subject) != 0)
+    throw std::runtime_error(
+        "AmrSystem::bind_bootstrap_block_subject requires an exact unique cell route");
+  const auto& route = p_->bootstrap_transfer_routes.at(route_found->second);
+  if (route.descriptor.space != "cell" || route.descriptor.centering != "cell")
+    throw std::runtime_error(
+        "AmrSystem::bind_bootstrap_block_subject route is not cell-centered");
+  p_->bootstrap_block_subjects.emplace(subject, block);
+}
+
+void AmrSystem::register_bootstrap_face_vector(
+    const std::vector<std::string>& subjects) {
+  require_assembling_amr(p_->bound_, "register_bootstrap_face_vector");
+  if (p_->built || subjects.size() != 2 || subjects[0] == subjects[1])
+    throw std::runtime_error(
+        "AmrSystem::register_bootstrap_face_vector requires one exact x/y subject pair");
+  std::array<std::string, 2> ordered{};
+  for (const std::string& subject : subjects) {
+    const auto route_id = p_->bootstrap_subject_routes.find({subject, "prolongation"});
+    if (route_id == p_->bootstrap_subject_routes.end())
+      throw std::runtime_error("bootstrap face-vector subject has no prolongation route");
+    const auto& route = p_->bootstrap_transfer_routes.at(route_id->second);
+    if (route.descriptor.space != "face" || !route.executable.face_vector)
+      throw std::runtime_error("bootstrap face-vector route is not a prepared vector kernel");
+    const int axis = route.descriptor.centering == "face_x" ? 0 :
+                     route.descriptor.centering == "face_y" ? 1 : -1;
+    if (axis < 0 || !ordered[static_cast<std::size_t>(axis)].empty())
+      throw std::runtime_error("bootstrap face-vector centering is not an exact x/y pair");
+    ordered[static_cast<std::size_t>(axis)] = subject;
+  }
+  for (const std::string& subject : ordered) {
+    if (subject.empty() || p_->bootstrap_face_vectors.count(subject) != 0)
+      throw std::runtime_error("bootstrap face subject belongs to multiple vector providers");
+    p_->bootstrap_face_vectors.emplace(subject, ordered);
+  }
+}
+
+void AmrSystem::register_analytic_constant(const std::string& subject,
+                                           const std::string& block,
+                                           const std::string& space,
+                                           const std::string& centering,
+                                           const std::vector<double>& components) {
+  require_assembling_amr(p_->bound_, "register_analytic_constant");
+  if (p_->built || subject.empty() || components.empty() ||
+      p_->bootstrap_analytic_constants.count(subject) != 0)
+    throw std::runtime_error(
+        "AmrSystem::register_analytic_constant requires non-empty unique components");
+  const auto route_found = p_->bootstrap_subject_routes.find({subject, "prolongation"});
+  if (route_found == p_->bootstrap_subject_routes.end())
+    throw std::runtime_error(
+        "AmrSystem::register_analytic_constant requires an exact registered route");
+  const auto& route = p_->bootstrap_transfer_routes.at(route_found->second);
+  if (route.descriptor.space != space || route.descriptor.centering != centering)
+    throw std::runtime_error(
+        "AmrSystem::register_analytic_constant descriptor differs from its transfer route");
+  if (space == "cell") {
+    bind_bootstrap_block_subject(subject, block);
+  } else if (space == "face" || space == "node") {
+    if (p_->bootstrap_arrays.count(subject) != 0)
+      throw std::runtime_error(
+          "AmrSystem::register_analytic_constant requires a unique centered subject");
+    // Only the carrier descriptor crosses the authoring/runtime seam.  The native bootstrap
+    // transaction allocates the per-patch MultiFab and materializes the constant on device.
+    p_->bootstrap_arrays.emplace(
+        subject, Impl::BootstrapArray{centering, static_cast<int>(components.size()), {}});
+  } else {
+    throw std::runtime_error(
+        "AmrSystem::register_analytic_constant supports cell/face/node payloads");
+  }
+  p_->bootstrap_analytic_constants.emplace(subject, components);
+}
+
+std::int64_t AmrSystem::bootstrap_analytic_reproject(const std::string& subject, int level) {
+  if (!p_->runtime || level < 0 || level >= p_->runtime->nlev())
+    throw std::runtime_error(
+        "AmrSystem::bootstrap_analytic_reproject requires a pending hierarchy level");
+  const auto constants = p_->bootstrap_analytic_constants.find(subject);
+  const auto route_found = p_->bootstrap_subject_routes.find(
+      {subject, "prolongation"});
+  if (constants == p_->bootstrap_analytic_constants.end() ||
+      route_found == p_->bootstrap_subject_routes.end())
+    throw std::runtime_error("analytic bootstrap source/route is not registered");
+  const auto& route = p_->bootstrap_transfer_routes.at(route_found->second);
+  if (route.descriptor.space == "cell") {
+    const auto block = p_->bootstrap_block_subjects.find(subject);
+    if (block == p_->bootstrap_block_subjects.end())
+      throw std::runtime_error("analytic cell source has no bound block");
+    return p_->runtime->fill_bootstrap_block_constant(
+        static_cast<std::size_t>(p_->block_index(block->second)), level,
+        constants->second);
+  }
+  if (p_->bootstrap_arrays.count(subject) == 0)
+    throw std::runtime_error("analytic centered source has no exact parent payload");
+  return p_->runtime->fill_bootstrap_staggered_constant(
+      subject, level, constants->second);
+}
+
+int AmrSystem::apply_bootstrap_component_floor(const std::string& subject, int level,
+                                               int component, double floor) {
+  if (!p_->runtime)
+    throw std::runtime_error(
+        "AmrSystem::apply_bootstrap_component_floor requires the native runtime");
+  const auto block = p_->bootstrap_block_subjects.find(subject);
+  if (block == p_->bootstrap_block_subjects.end())
+    throw std::runtime_error("bootstrap component floor subject is not a cell state");
+  const int index = p_->block_index(block->second);
+  if (index < 0)
+    throw std::runtime_error("bootstrap component floor block is unknown");
+  return p_->runtime->apply_bootstrap_component_floor(
+      static_cast<std::size_t>(index), level, component, static_cast<Real>(floor));
+}
+
+std::int64_t AmrSystem::recompute_bootstrap_field(
+    const std::string& subject, const std::string& field_name) {
+  if (!p_->runtime)
+    throw std::runtime_error("bootstrap field recompute has no runtime engine");
+  const auto route_id =
+      p_->bootstrap_subject_routes.find({subject, "coarse_fine_fill"});
+  if (route_id == p_->bootstrap_subject_routes.end())
+    throw std::runtime_error("bootstrap field has no prepared elliptic materializer");
+  const auto& route = p_->bootstrap_transfer_routes.at(route_id->second);
+  if (route.descriptor.space != "field" || !route.executable.materialize)
+    throw std::runtime_error("bootstrap field route is not an executable materializer");
+  return route.executable.materialize(
+      *p_->runtime,
+      runtime::amr::MaterializationContext{subject, field_name, "recompute",
+                                           p_->runtime->nlev() - 1});
+}
+
+std::int64_t AmrSystem::bootstrap_prolong_array(const std::string& subject, int level) {
+  require_assembling_amr(p_->bound_, "bootstrap_prolong_array");
+  p_->ensure_built();
+  if (!p_->runtime || level <= 0 || level >= p_->runtime->nlev())
+    throw std::runtime_error(
+        "AmrSystem::bootstrap_prolong_array requires an already-created native fine level");
+  const auto route = p_->bootstrap_subject_routes.find({subject, "prolongation"});
+  if (route == p_->bootstrap_subject_routes.end())
+    throw std::runtime_error("bootstrap transfer subject has no prepared prolongation route");
+  const auto& registered = p_->bootstrap_transfer_routes.at(route->second);
+  const auto& prepared = registered.executable;
+  const auto face = p_->bootstrap_face_vectors.find(subject);
+  if (face != p_->bootstrap_face_vectors.end()) {
+    const auto& pair = face->second;
+    return p_->runtime->prolong_bootstrap_face_vector(
+        pair[0], pair[1], level, prepared, registered.descriptor.refinement_ratio);
+  }
+  const auto block = p_->bootstrap_block_subjects.find(subject);
+  if (block != p_->bootstrap_block_subjects.end()) {
+    const int index = p_->block_index(block->second);
+    if (index < 0)
+      throw std::runtime_error("bootstrap cell transfer names an unknown block");
+    return p_->runtime->prolong_bootstrap_block(
+        static_cast<std::size_t>(index), level, prepared,
+        registered.descriptor.refinement_ratio);
+  }
+  if (p_->bootstrap_arrays.count(subject) == 0)
+    throw std::runtime_error("bootstrap staggered transfer has no registered carrier");
+  return p_->runtime->prolong_bootstrap_staggered_field(
+      subject, level, prepared, registered.descriptor.refinement_ratio);
+}
+
+void AmrSystem::synchronize_bootstrap_state(const std::string& subject, int fine_level) {
+  if (!p_->runtime)
+    throw std::runtime_error("bootstrap synchronization has no runtime engine");
+  const auto block = p_->bootstrap_block_subjects.find(subject);
+  const auto route = p_->bootstrap_subject_routes.find(
+      {subject, "restriction"});
+  if (block == p_->bootstrap_block_subjects.end() ||
+      route == p_->bootstrap_subject_routes.end() ||
+      p_->bootstrap_transfer_routes.at(route->second).descriptor.operation != "restriction")
+    throw std::runtime_error(
+        "bootstrap synchronization requires an exact volume-average state route");
+  const int index = p_->block_index(block->second);
+  if (index < 0)
+    throw std::runtime_error("bootstrap synchronization names an unknown block");
+  p_->runtime->synchronize_bootstrap_block(
+      static_cast<std::size_t>(index), fine_level,
+      p_->bootstrap_transfer_routes.at(route->second).executable,
+      p_->bootstrap_transfer_routes.at(route->second).descriptor.refinement_ratio);
+}
+
+std::vector<double> AmrSystem::bootstrap_array_level(const std::string& subject,
+                                                     int level) const {
+  if (!p_->runtime)
+    throw std::runtime_error("AmrSystem::bootstrap_array_level has no runtime engine");
+  return p_->runtime->bootstrap_staggered_level(subject, level);
+}
+
+void AmrSystem::invalidate_bootstrap_cache(const std::string& subject, int level) {
+  if (!p_->runtime || subject.empty() || level < 0 || level >= p_->runtime->nlev())
+    throw std::runtime_error("AmrSystem::invalidate_bootstrap_cache received an invalid key");
+  const auto route_id =
+      p_->bootstrap_subject_routes.find({subject, "coarse_fine_fill"});
+  if (route_id == p_->bootstrap_subject_routes.end())
+    throw std::runtime_error("bootstrap cache has no prepared materializer");
+  const auto& route = p_->bootstrap_transfer_routes.at(route_id->second);
+  if (route.descriptor.space != "cache" || !route.executable.materialize)
+    throw std::runtime_error("bootstrap cache route is not an executable materializer");
+  route.executable.materialize(
+      *p_->runtime,
+      runtime::amr::MaterializationContext{subject, subject, "invalidate_cache", level});
+}
+
+std::vector<PatchBox> AmrSystem::rebuild_bootstrap_topology_cache(
+    const std::string& subject, int level) {
+  if (!p_->runtime || level < 0 || level >= p_->runtime->nlev())
+    throw std::runtime_error(
+        "AmrSystem::rebuild_bootstrap_topology_cache requires a materialized level");
+  const auto route_id =
+      p_->bootstrap_subject_routes.find({subject, "coarse_fine_fill"});
+  if (route_id == p_->bootstrap_subject_routes.end())
+    throw std::runtime_error("bootstrap cache has no prepared materializer");
+  const auto& route = p_->bootstrap_transfer_routes.at(route_id->second);
+  if (route.descriptor.space != "cache" || !route.executable.materialize)
+    throw std::runtime_error("bootstrap cache route is not an executable materializer");
+  route.executable.materialize(
+      *p_->runtime,
+      runtime::amr::MaterializationContext{subject, subject, "rebuild_cache", level});
+  return p_->runtime->bootstrap_cache(subject).topology;
+}
+
+std::uint64_t AmrSystem::bootstrap_cache_epoch(const std::string& subject) const {
+  if (!p_->runtime)
+    throw std::runtime_error("AmrSystem::bootstrap_cache_epoch has no runtime engine");
+  return p_->runtime->bootstrap_cache(subject).epoch;
 }
 
 void AmrSystem::set_magnetic_field(const std::vector<double>& bz) {
@@ -1691,15 +2264,16 @@ double AmrSystem::step_cfl(double cfl, double speed_floor) {
           "single-block AmrCouplerMP CFL divides by the raw max speed) ; leave it default, or use "
           "the multi-block runtime path");
     double h = cfl * hx / p_->max_speed_fn();
-    p_->last_dt_reason = "transport:" + p_->blocks[0].name;
-    const double sub = static_cast<double>(p_->blocks[0].substeps);
+    const auto& block = p_->blocks.front();
+    p_->last_dt_reason = "transport:" + block.name;
+    const double sub = static_cast<double>(block.substeps);
     if (p_->source_frequency_fn) {
       const double mu = p_->source_frequency_fn();
       if (mu > 0.0) {
         const double dt_src = cfl * sub / mu;
         if (dt_src < h) {
           h = dt_src;
-          p_->last_dt_reason = "source_frequency:" + p_->blocks[0].name;
+          p_->last_dt_reason = "source_frequency:" + block.name;
         }
       }
     }
@@ -1709,7 +2283,7 @@ double AmrSystem::step_cfl(double cfl, double speed_floor) {
         const double dt_adm = db * sub;
         if (dt_adm < h) {
           h = dt_adm;
-          p_->last_dt_reason = "stability_dt:" + p_->blocks[0].name;
+          p_->last_dt_reason = "stability_dt:" + block.name;
         }
       }
     }
@@ -2268,7 +2842,9 @@ EffectiveOptionsReport AmrSystem::effective_options_report() const {
       !(p_->refine_threshold < static_cast<double>(kAmrRefinementDisabledThreshold));
   report.amr_refinement.disabled_policy =
       report.amr_refinement.disabled ? "legacy_abi_sentinel_threshold" : "explicit_threshold";
-  report.amr_refinement.variable = p_->refine_var_name;
+  report.amr_refinement.variable = p_->bootstrap_tag_spec
+      ? p_->bootstrap_tag_spec->block + "." + p_->bootstrap_tag_spec->variable
+      : p_->refine_var_name;
   report.amr_refinement.role = p_->refine_var_role;
   report.amr_refinement.phi_grad_threshold = p_->phi_grad_threshold;
   report.amr_refinement.phi_refinement_enabled =
@@ -2375,7 +2951,7 @@ std::vector<PatchBox> AmrSystem::patch_boxes() {
 int AmrSystem::coarse_local_boxes() {
   p_->ensure_built();
   if (p_->runtime)
-    return p_->runtime->coarse_local_boxes();  // MULTI-BLOCK: shared layout, block 0
+    return p_->runtime->coarse_local_boxes();  // runtime-owned shared layout
   return p_->coarse_local_boxes_fn();          // SINGLE-BLOCK: AmrCouplerMP hook
 }
 int AmrSystem::coarse_total_boxes() {

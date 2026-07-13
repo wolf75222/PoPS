@@ -279,9 +279,9 @@ class AmrReport:
 
     def __str__(self):
         lines = ["AMR hierarchy report (%s):" % self.layout]
-        lines.append("  levels: max_levels=%s ratio=%s (native envelope: max_levels<=%s, "
-                     "ratios=%s)" % (self.max_levels, self.ratio, self.native_max_levels,
-                                     ", ".join(map(str, self.native_ratios))))
+        lines.append("  levels: max_levels=%s ratio=%s (native depth: %s; ratios=%s)" % (
+            self.max_levels, self.ratio, self.native_max_levels,
+            ", ".join(map(str, self.native_ratios))))
         lines.append("  available: %s" % self.available)
         if self.requirements:
             req = ", ".join("%s=%s" % (k, v) for k, v in sorted(self.requirements.items()))
@@ -331,27 +331,29 @@ def inspect_amr(layout_or_context=None):
 
     Args:
         layout_or_context: an :class:`pops.mesh.layouts.AMR` (or :class:`Uniform`) descriptor to
-            report on, or ``None`` to report the current native AMR envelope (the
-            :data:`pops.mesh.amr.NATIVE_MAX_LEVELS` / ``NATIVE_RATIOS`` capability limits).
+            report on, or ``None`` to report current native AMR ratio capabilities. Hierarchy
+            depth is governed by the resolved resource policy, not a hardcoded maximum.
     """
-    from pops.mesh.amr import NATIVE_MAX_LEVELS, NATIVE_RATIOS
+    from pops.mesh.amr import NATIVE_RATIOS
     from pops.mesh.layouts import AMR, Uniform
 
-    native_note = ("the current native AMR route supports max_levels<=%d at ratio %s; a request "
-                   "beyond that is refused before the runtime, not silently clamped"
-                   % (NATIVE_MAX_LEVELS, ", ".join(map(str, NATIVE_RATIOS))))
+    native_depth = "resource_policy"
+    native_note = (
+        "resolved hierarchy depth is resource-policy controlled; native transfer ratios: %s"
+        % ", ".join(map(str, NATIVE_RATIOS))
+    )
 
     if layout_or_context is None:
         return AmrReport(
-            layout="native-envelope", max_levels=NATIVE_MAX_LEVELS, ratio=NATIVE_RATIOS[0],
-            native_max_levels=NATIVE_MAX_LEVELS, native_ratios=NATIVE_RATIOS,
+            layout="native-envelope", max_levels=native_depth, ratio=NATIVE_RATIOS[0],
+            native_max_levels=native_depth, native_ratios=NATIVE_RATIOS,
             available="yes", limitations=[native_note], requirements={}, policies=[])
 
     if isinstance(layout_or_context, Uniform):
         caps = layout_or_context.capabilities()
         return AmrReport(
             layout="uniform", max_levels=caps.get("levels", 1), ratio=1,
-            native_max_levels=NATIVE_MAX_LEVELS, native_ratios=NATIVE_RATIOS,
+            native_max_levels=native_depth, native_ratios=NATIVE_RATIOS,
             available="yes",
             limitations=["a Uniform layout is single-level: no refinement, regrid or reflux"],
             requirements={}, policies=[])
@@ -368,6 +370,6 @@ def inspect_amr(layout_or_context=None):
         limitations.append(status.reason)
     return AmrReport(
         layout="amr", max_levels=layout.max_levels, ratio=layout.ratio,
-        native_max_levels=NATIVE_MAX_LEVELS, native_ratios=NATIVE_RATIOS,
+        native_max_levels=native_depth, native_ratios=NATIVE_RATIOS,
         available=status.status, limitations=limitations,
         requirements=layout.requirements().to_dict(), policies=_amr_policy_rows(layout))

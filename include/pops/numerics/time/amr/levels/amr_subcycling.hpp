@@ -344,6 +344,56 @@ inline void mf_fill_fine_ghosts_mb(MultiFab& Uf, const MultiFab& Po, const Multi
   }
 }
 
+// Prepared coarse/fine spatial transfer. Unlike mf_fill_fine_ghosts_mb this operation has exactly
+// one physical parent snapshot: time interpolation is a separate prepared route with explicit
+// TimePoints. Keeping the two protocols separate prevents callers from manufacturing a fake
+// `(parent, parent)` temporal window merely to request conservative spatial ghost materialization.
+namespace detail {
+struct CoarseFineSpatialGhostKernel {
+  Array4 fine;
+  ConstArray4 coarse;
+  Box2D valid;
+  int components;
+
+  POPS_HD void operator()(int i, int j) const {
+    if (i >= valid.lo[0] && i <= valid.hi[0] &&
+        j >= valid.lo[1] && j <= valid.hi[1])
+      return;
+    const int ci = coarsen_index(i, kAmrRefRatio);
+    const int cj = coarsen_index(j, kAmrRefRatio);
+    for (int component = 0; component < components; ++component)
+      fine(i, j, component) = coarse(ci, cj, component);
+  }
+};
+}  // namespace detail
+
+inline void mf_fill_fine_ghosts_spatial_mb(MultiFab& Uf, const MultiFab& parent,
+                                           bool replicated_parent = true) {
+  const int nc = Uf.ncomp(), ng = Uf.n_grow();
+  if (parent.ncomp() != nc)
+    throw std::runtime_error("coarse/fine spatial transfer component mismatch");
+  if (replicated_parent) {
+    for (int li = 0; li < Uf.local_size(); ++li) {
+      const Box2D valid = Uf.box(li), grown = Uf.fab(li).grown_box();
+      const int box = mf_find_box(parent, coarsen_index(grown.lo[0], kAmrRefRatio),
+                                  coarsen_index(grown.lo[1], kAmrRefRatio));
+      if (box < 0)
+        continue;
+      for_each_cell(grown, detail::CoarseFineSpatialGhostKernel{
+                                Uf.fab(li).array(), parent.fab(box).const_array(), valid, nc});
+    }
+    return;
+  }
+  const BoxArray local_parent_boxes = coarsen_grown(Uf.box_array(), ng, kAmrRefRatio);
+  MultiFab local_parent(local_parent_boxes, Uf.dmap(), nc, 0);
+  parallel_copy(local_parent, parent);
+  for (int li = 0; li < Uf.local_size(); ++li) {
+    const Box2D valid = Uf.box(li), grown = Uf.fab(li).grown_box();
+    for_each_cell(grown, detail::CoarseFineSpatialGhostKernel{
+                              Uf.fab(li).array(), local_parent.fab(li).const_array(), valid, nc});
+  }
+}
+
 // multi-box fine average -> multi-box parent (each cell routed to its parent box), DISTRIBUTED.
 // The parent box of a coarse cell may be on another rank, and the parent may be either REPLICATED
 // (level 0, each rank has a copy) or DISTRIBUTED (intermediate, a single owner). Both are covered

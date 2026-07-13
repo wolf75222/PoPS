@@ -119,6 +119,9 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            "name and role at once, or a name/role absent from a block, raises. Non-default "
            "selector is "
            "multi-block only.")
+      .def("_set_bootstrap_refinement", &AmrSystem::set_bootstrap_refinement,
+           py::arg("block"), py::arg("variable"), py::arg("threshold"),
+           py::arg("provider_identity"))
       // PHI tag on |grad phi| (D4) added to the union of regrid tags: also refines where the
       // norm of the potential gradient exceeds grad_threshold (diocotron ring edge). MULTI-BLOCK
       // + regrid_every > 0. <= 0 (default) -> phi DISABLED (bit-identical). cf. AmrSystem::set_phi_refinement.
@@ -240,6 +243,62 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
             s.set_conservative_state(name, flat(arr));
           },
           py::arg("name"), py::arg("U"))
+      .def("_begin_bootstrap_plan", &AmrSystem::begin_bootstrap_plan)
+      .def("_bootstrap_next_level", &AmrSystem::bootstrap_next_level)
+      .def("_commit_bootstrap_level", &AmrSystem::commit_bootstrap_level)
+      .def("_rollback_bootstrap_level", &AmrSystem::rollback_bootstrap_level)
+      .def("_register_bootstrap_transfer_route",
+           &AmrSystem::register_bootstrap_transfer_route,
+           py::arg("identity"), py::arg("subjects"), py::arg("provider_identity"),
+           py::arg("space"), py::arg("centering"), py::arg("representation"),
+           py::arg("storage"), py::arg("operation"), py::arg("kernel"),
+           py::arg("order"), py::arg("ghost_depth"), py::arg("dimension"),
+           py::arg("refinement_ratio"))
+      .def("_register_bootstrap_face_vector", &AmrSystem::register_bootstrap_face_vector,
+           py::arg("subjects"))
+      .def(
+          "_register_bootstrap_array",
+          [](AmrSystem& s, const std::string& subject, const std::string& centering,
+             py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
+            if (arr.ndim() != 3)
+              throw std::runtime_error(
+                  "AmrSystem._register_bootstrap_array expects (ncomp, ny, nx)");
+            s.register_bootstrap_array(subject, centering, static_cast<int>(arr.shape(0)),
+                                       static_cast<int>(arr.shape(1)),
+                                       static_cast<int>(arr.shape(2)), flat(arr));
+          },
+          py::arg("subject"), py::arg("centering"), py::arg("values"))
+      .def("_bind_bootstrap_block_subject", &AmrSystem::bind_bootstrap_block_subject,
+           py::arg("subject"), py::arg("block"))
+      .def("_register_analytic_constant", &AmrSystem::register_analytic_constant,
+           py::arg("subject"), py::arg("block"), py::arg("space"),
+           py::arg("centering"), py::arg("components"))
+      .def("_bootstrap_analytic_reproject", &AmrSystem::bootstrap_analytic_reproject,
+           py::arg("subject"), py::arg("level"))
+      .def("_apply_bootstrap_component_floor", &AmrSystem::apply_bootstrap_component_floor,
+           py::arg("subject"), py::arg("level"), py::arg("component"), py::arg("floor"))
+      .def("_recompute_bootstrap_field", &AmrSystem::recompute_bootstrap_field,
+           py::arg("subject"), py::arg("field_name"))
+      .def("_bootstrap_prolong_array", &AmrSystem::bootstrap_prolong_array,
+           py::arg("subject"), py::arg("level"))
+      .def("_synchronize_bootstrap_state", &AmrSystem::synchronize_bootstrap_state,
+           py::arg("subject"), py::arg("fine_level"))
+      .def("_bootstrap_array_level", &AmrSystem::bootstrap_array_level,
+           py::arg("subject"), py::arg("level"))
+      .def("_invalidate_bootstrap_cache", &AmrSystem::invalidate_bootstrap_cache,
+           py::arg("subject"), py::arg("level"))
+      .def(
+          "_rebuild_bootstrap_topology_cache",
+          [](AmrSystem& s, const std::string& subject, int level) {
+            py::list out;
+            for (const pops::PatchBox& b :
+                 s.rebuild_bootstrap_topology_cache(subject, level))
+              out.append(py::make_tuple(b.level, b.ilo, b.jlo, b.ihi, b.jhi));
+            return out;
+          },
+          py::arg("subject"), py::arg("level"))
+      .def("_bootstrap_cache_epoch", &AmrSystem::bootstrap_cache_epoch,
+           py::arg("subject"))
       // Inter-species COUPLED source (compiled pops.dsl.CoupledSource, P5 bytecode), MULTI-BLOCK on the
       // SHARED AMR hierarchy: applied after the transport at each macro-step, by explicit
       // splitting, level by level + fine -> coarse cascade (consistent covered cells). SAME
@@ -617,6 +676,10 @@ void init_amr(py::module_& m) {
       .def_readwrite("n", &AmrSystemConfig::n)
       .def_readwrite("L", &AmrSystemConfig::L)
       .def_readwrite("regrid_every", &AmrSystemConfig::regrid_every)
+      .def_readwrite("level_count", &AmrSystemConfig::level_count)
+      .def_readwrite("regrid_grow", &AmrSystemConfig::regrid_grow)
+      .def_readwrite("regrid_margin", &AmrSystemConfig::regrid_margin)
+      .def_readwrite("explicit_bootstrap", &AmrSystemConfig::explicit_bootstrap)
       .def_readwrite("periodic", &AmrSystemConfig::periodic)
       .def_readwrite("distribute_coarse", &AmrSystemConfig::distribute_coarse)
       .def_readwrite("coarse_max_grid", &AmrSystemConfig::coarse_max_grid)

@@ -27,5 +27,6 @@ is NOT a second path -- the old ``pops.lib.solvers`` shim was removed (no back-c
 from . import time
 from . import models
 from . import presets
+from . import amr
 
-__all__ = ["time", "models", "presets"]
+__all__ = ["amr", "time", "models", "presets"]

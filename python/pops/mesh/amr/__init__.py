@@ -10,20 +10,22 @@ from pops.params.use_sites import ParamUse, resolve_param_use
 
 from .._descriptor import Availability, MeshDescriptor
 from ._param_threshold import resolve_refine_threshold
-from . import hierarchy as _hierarchy
-from . import hierarchy_regrid as _hierarchy_regrid
+from . import bootstrap as _bootstrap, hierarchy as _hierarchy
+from . import hierarchy_regrid as _hierarchy_regrid, transfer as _transfer
 from . import hierarchy_resolution as _hierarchy_resolution
+from .bootstrap import *  # noqa: F403
 from .hierarchy import *  # noqa: F403
 from .hierarchy_regrid import *  # noqa: F403
 from .hierarchy_resolution import *  # noqa: F403
+from .transfer import *  # noqa: F403
 from . import tagging_graph as _tagging_graph, tagging_resolution as _tagging_resolution
 from .tagging_graph import *  # noqa: F403
 from .tagging_resolution import *  # noqa: F403
 
-# Current native AMR capability envelope (Spec 5 sec.8.7): the production AMR route
-# supports 2 levels at refinement ratio 2. A request beyond this is refused BEFORE the
-# runtime, with a clear message, rather than silently clamped.
-NATIVE_MAX_LEVELS = 2
+# ResolvedHierarchy transports an arbitrary positive level count.  Only the refinement ratio is a
+# native kernel capability; the old layout-only adapter remains a separate two-level compatibility
+# seam and must not masquerade as a backend maximum.
+LEGACY_CONFIG_LEVELS = 2
 NATIVE_RATIOS = (2,)
 
 
@@ -493,7 +495,8 @@ class IgnoreAMRCriteria(MeshDescriptor):
 __all__ = [
     "Refine", "TagUnion", "RegridEvery", "FrozenRegrid", "PatchLayout", "PatchClustering",
     "ProperNesting", "BufferCells", "AllLevels", "CoarseOnly", "SelectedLevels",
-    "CheckpointPolicy", "AMROutput", "IgnoreAMRCriteria", "NATIVE_MAX_LEVELS",
+    "CheckpointPolicy", "AMROutput", "IgnoreAMRCriteria",
     "NATIVE_RATIOS", "Availability",
 ] + _tagging_graph.__all__ + _tagging_resolution.__all__ \
-    + _hierarchy.__all__ + _hierarchy_regrid.__all__ + _hierarchy_resolution.__all__
+    + _hierarchy.__all__ + _hierarchy_regrid.__all__ + _hierarchy_resolution.__all__ \
+    + _transfer.__all__ + _bootstrap.__all__

@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from .._descriptor import Availability, MeshDescriptor
-from ..amr import IgnoreAMRCriteria, NATIVE_MAX_LEVELS, NATIVE_RATIOS
+from ..amr import IgnoreAMRCriteria, NATIVE_RATIOS
 from ...descriptors_report import RequirementSet, CapabilitySet
 from pops.params.use_sites import ParamUse, resolve_param_use
 from pops.runtime_environment import validate_amr_refinement_ratio
@@ -130,10 +130,8 @@ class AMR(MeshDescriptor):
     patches=PatchLayout(...), refine=TagUnion(...), nesting=ProperNesting(...),
     checkpoint=CheckpointPolicy(...))``.
 
-    Declares its limitations explicitly: the current native AMR route supports
-    ``max_levels <= 2`` at ``ratio == 2`` (see :data:`pops.mesh.amr.NATIVE_MAX_LEVELS` /
-    ``NATIVE_RATIOS``); a request beyond that is refused by :meth:`available` /
-    :meth:`validate` with a clear message instead of being silently clamped.
+    The resolved hierarchy carries any positive level count.  Ratio support is a transfer-kernel
+    capability (currently ratio 2); resource policy, not a hardcoded DSL constant, limits depth.
     """
 
     category = "layout"
@@ -162,8 +160,10 @@ class AMR(MeshDescriptor):
                 "refine": self.refine.name if self.refine else None}
 
     def capabilities(self) -> Any:
+        base_capabilities = self.base.capabilities().to_dict()
         return CapabilitySet({"layout": "amr", "max_levels": self.max_levels,
-                              "ratio": self.ratio, "supports_amr": True})
+                              "ratio": self.ratio, "dim": base_capabilities.get("dim"),
+                              "supports_amr": True})
 
     def requirements(self) -> Any:
         return RequirementSet({"amr_runtime": True,
@@ -171,11 +171,6 @@ class AMR(MeshDescriptor):
                                "tag_reduction": True})
 
     def available(self, context: Any = None) -> Any:
-        if self.max_levels > NATIVE_MAX_LEVELS:
-            return Availability.no(
-                "AMR(max_levels=%d) is not supported by the current native AMR route "
-                "(supports max_levels=%d)" % (self.max_levels, NATIVE_MAX_LEVELS),
-                alternatives=["AMR(max_levels=%d)" % NATIVE_MAX_LEVELS])
         if self.ratio not in NATIVE_RATIOS:
             return Availability.no(
                 "AMR(ratio=%d) is not supported by the current native AMR route "

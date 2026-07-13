@@ -12,6 +12,7 @@
 #include <pops/runtime/numerical_defaults.hpp>
 
 #include <functional>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <string>
@@ -38,7 +39,8 @@
 /// coupled sources: already wired. Multiple COMPILED blocks (add_compiled_model) and a MIX of
 /// compiled + native: wired (capstone v, multi-block production DSL). Union regrid: later PR.
 ///
-/// @note Two levels (ratio 2); explicit OR imex temporal treatment (per block).
+/// @note Resolved explicit bootstrap supports N ratio-2 levels; the legacy implicit config remains
+/// two-level. Temporal treatment is explicit or IMEX per block.
 
 namespace pops {
 
@@ -72,6 +74,10 @@ struct AmrSystemConfig {
   int n = 128;            ///< coarse-level cells per direction
   double L = 1.0;         ///< size of the square domain [0,L]^2
   int regrid_every = 20;  ///< re-refinement every N steps (0 = never after init)
+  int level_count = 2;    ///< exact materialized hierarchy depth (>= 1)
+  int regrid_grow = 2;    ///< tag lookahead/dilation from the resolved hierarchy
+  int regrid_margin = 2;  ///< proper-nesting buffer from the resolved hierarchy
+  bool explicit_bootstrap = false;  ///< coarse-only start; BootstrapPlan creates fine levels
   bool periodic = true;   ///< periodic domain
   /// OWNERSHIP POLICY of the coarse level (cf. AmrCouplerMP::replicated_coarse).
   /// false (DEFAULT, historical): coarse mono-box REPLICATED on all ranks. The coarse Poisson
@@ -492,6 +498,8 @@ class AmrSystem {
   /// @param role conserved-variable physical ROLE to threshold; empty (default) => component 0.
   void set_refinement(double threshold, const std::string& variable = std::string(),
                       const std::string& role = std::string());
+  void set_bootstrap_refinement(const std::string& block, const std::string& variable,
+                                double threshold, const std::string& provider_identity);
 
   /// Adds to the regrid criterion the PHI tag on |grad phi| (D4 of the design
   /// docs/AMR_REGRID_UNION_TAGS_DESIGN.md): also refines the cells where the norm of the gradient of the
@@ -545,6 +553,36 @@ class AmrSystem {
   /// @throws std::runtime_error if the system is already built, if U is empty, or if its size
   ///         is not a multiple of n*n.
   void set_conservative_state(const std::string& name, const std::vector<double>& U);
+  void begin_bootstrap_plan();
+  void bootstrap_next_level(int refinement_ratio);  ///< execute one resolved transition
+  void commit_bootstrap_level();
+  void rollback_bootstrap_level();
+  void register_bootstrap_transfer_route(
+      const std::string& identity, const std::vector<std::string>& subjects,
+      const std::string& provider_identity, const std::string& space,
+      const std::string& centering, const std::string& representation,
+      const std::string& storage, const std::string& operation,
+      const std::string& kernel, int order, const std::vector<int>& ghost_depth,
+      int dimension, int refinement_ratio);
+  void register_bootstrap_array(const std::string& subject, const std::string& centering,
+                                int ncomp, int ny, int nx,
+                                const std::vector<double>& values);
+  void register_bootstrap_face_vector(const std::vector<std::string>& subjects);
+  void bind_bootstrap_block_subject(const std::string& subject, const std::string& block);
+  void register_analytic_constant(const std::string& subject, const std::string& block,
+                                  const std::string& space, const std::string& centering,
+                                  const std::vector<double>& components);
+  std::int64_t bootstrap_analytic_reproject(const std::string& subject, int level);
+  int apply_bootstrap_component_floor(const std::string& subject, int level,
+                                      int component, double floor);
+  std::int64_t recompute_bootstrap_field(const std::string& subject,
+                                         const std::string& field_name);
+  std::int64_t bootstrap_prolong_array(const std::string& subject, int level);
+  void synchronize_bootstrap_state(const std::string& subject, int fine_level);
+  std::vector<double> bootstrap_array_level(const std::string& subject, int level) const;
+  void invalidate_bootstrap_cache(const std::string& subject, int level);
+  std::vector<PatchBox> rebuild_bootstrap_topology_cache(const std::string& subject, int level);
+  std::uint64_t bootstrap_cache_epoch(const std::string& subject) const;
 
   /// Sets the magnetic field B_z(x, y) of the coarse level (n*n row-major), required by the Schur-condensed
   /// source stage (Lorentz term Omega = B_z). AMR counterpart of System::set_magnetic_field.

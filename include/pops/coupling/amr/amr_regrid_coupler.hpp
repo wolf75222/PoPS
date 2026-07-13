@@ -15,6 +15,7 @@
 #include <pops/parallel/comm.hpp>    // n_ranks (explicit include, no longer an indirect path)
 
 #include <algorithm>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -52,7 +53,9 @@ namespace pops {
 /// clustering so every rank constructs the identical layout.
 inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout(
     TagBox grown, const Box2D& pdom, int pk, int margin, bool coarse_replicated = true,
-    const ClusterParams& cluster = ClusterParams{}) {
+    const ClusterParams& cluster = ClusterParams{}, int refinement_ratio = kAmrRefRatio) {
+  if (refinement_ratio < 2)
+    throw std::runtime_error("regrid_compute_fine_layout: refinement_ratio must be >= 2");
   const int PNX = pdom.nx(), PNY = pdom.ny();
   // Only a replicated level zero is complete locally. Every intermediate parent is distributed.
   const bool parent_replicated = (pk == 0) && coarse_replicated;
@@ -69,7 +72,9 @@ inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout(
     b.hi[1] = std::min(b.hi[1], PNY - 1 - margin);
     if (b.hi[0] < b.lo[0] || b.hi[1] < b.lo[1])
       continue;
-    fb.push_back(Box2D{{2 * b.lo[0], 2 * b.lo[1]}, {2 * b.hi[0] + 1, 2 * b.hi[1] + 1}});
+    fb.push_back(Box2D{{refinement_ratio * b.lo[0], refinement_ratio * b.lo[1]},
+                       {refinement_ratio * (b.hi[0] + 1) - 1,
+                        refinement_ratio * (b.hi[1] + 1) - 1}});
   }
   if (fb.empty())
     return {BoxArray{}, DistributionMapping{}};  // nothing to refine
@@ -86,7 +91,8 @@ inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout(
 /// to decide whether the parent is replicated (only pk == 0 may be replicated). Returns the new MultiFab.
 inline MultiFab regrid_field_on_layout(const BoxArray& fb, const DistributionMapping& dmap,
                                        const MultiFab& par, const MultiFab& old, int pk, int ngf,
-                                       bool coarse_replicated = true) {
+                                       bool coarse_replicated = true,
+                                       int refinement_ratio = kAmrRefRatio) {
   MultiFab nU(fb, dmap, old.ncomp(), ngf);
   const int ncf = nU.ncomp();
   // DISTRIBUTED parent (de-replicated coarse): par.fab only holds the LOCAL boxes, so
@@ -97,7 +103,7 @@ inline MultiFab regrid_field_on_layout(const BoxArray& fb, const DistributionMap
   const bool par_replicated = (pk == 0) && coarse_replicated;
   MultiFab parloc;
   if (!par_replicated) {
-    parloc = MultiFab(coarsen(nU.box_array(), kAmrRefRatio), nU.dmap(), par.ncomp(), 0);
+    parloc = MultiFab(coarsen(nU.box_array(), refinement_ratio), nU.dmap(), par.ncomp(), 0);
     parallel_copy(parloc, par);
     // parallel_copy launches async kernels under Cuda and, at np=1, returns WITHOUT a fence: without this
     // fence the read of parloc below would read device memory not yet written -> NaN.
@@ -110,19 +116,22 @@ inline MultiFab regrid_field_on_layout(const BoxArray& fb, const DistributionMap
       for (int j = nb.lo[1]; j <= nb.hi[1]; ++j)  // 1) interp from the parent (local)
         for (int i = nb.lo[0]; i <= nb.hi[0]; ++i) {
           const int pb =
-              mf_find_box(par, coarsen_index(i, kAmrRefRatio), coarsen_index(j, kAmrRefRatio));
+              mf_find_box(par, coarsen_index(i, refinement_ratio),
+                          coarsen_index(j, refinement_ratio));
           if (pb < 0)
             continue;
           const ConstArray4 pp = par.fab(pb).const_array();
           for (int k = 0; k < ncf; ++k)
-            a(i, j, k) = pp(coarsen_index(i, kAmrRefRatio), coarsen_index(j, kAmrRefRatio), k);
+            a(i, j, k) = pp(coarsen_index(i, refinement_ratio),
+                            coarsen_index(j, refinement_ratio), k);
         }
     } else {
       const ConstArray4 pp = parloc.fab(li).const_array();  // local child-coarsen grid
       for (int j = nb.lo[1]; j <= nb.hi[1]; ++j)
         for (int i = nb.lo[0]; i <= nb.hi[0]; ++i)
           for (int k = 0; k < ncf; ++k)
-            a(i, j, k) = pp(coarsen_index(i, kAmrRefRatio), coarsen_index(j, kAmrRefRatio), k);
+            a(i, j, k) = pp(coarsen_index(i, refinement_ratio),
+                            coarsen_index(j, refinement_ratio), k);
     }
     for (int ol = 0; ol < old.local_size(); ++ol) {  // 2) carry-over of the fine data
       const ConstArray4 o = old.fab(ol).const_array();

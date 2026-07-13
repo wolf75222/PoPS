@@ -40,10 +40,12 @@ try:
     # ROUTE (orchestration.compile) still lives in codegen, the lowering helpers do not.
     from pops.runtime import _bind_adapters
     from pops.mesh.amr import (FrozenRegrid, PatchLayout, Refine, RegridEvery, TagUnion,
-                               NATIVE_MAX_LEVELS, NATIVE_RATIOS)
+                               NATIVE_RATIOS)
     from pops.mesh.cartesian import CartesianMesh
     from pops.mesh.layouts import AMR
-    from pops.model import DeclarationIndex, Handle, OwnerKind, OwnerPath
+    from pops.model import Handle, OwnerPath
+    from pops.physics import Model as PhysicsModel
+    from pops.physics.facade import Model as PdeModel
 except Exception as exc:  # noqa: BLE001
     print("skip test_spec5_amr_e2e (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -60,43 +62,33 @@ def _ref(name, kind="state"):
     return Handle(name, kind=kind, owner=OwnerPath.shared("spec5-amr-e2e"))
 
 
-class _StubCompiledModel(CompiledModel):
-    """A target='amr_system' CompiledModel stand-in (the AMR route compiles each block to one)."""
+def _stub_compiled_model(source):
+    """Return an exact immutable loader value for the AMR compile-route test."""
+    compiled = CompiledModel(
+        "/tmp/%s_amr.so" % source.name, "production", "add_native_block",
+        (), (), (), 0, None, 0, {}, {"cpu": True, "amr": True}, "abi",
+        source._model_hash(), "c++", "c++20", target="amr_system",
+        definition_identity=model_compile_identity(source))
+    compiled.name = source.name
+    return compiled
 
-    def __init__(self, source):
-        super().__init__(
-            "/tmp/%s_amr.so" % source.name, "production", "add_native_block",
-            (), (), (), 0, None, 0, {}, {"cpu": True, "amr": True}, "abi",
-            source._model_hash(), "c++", "c++20", target="amr_system",
-            definition_identity=model_compile_identity(source))
-        self.name = source.name
 
-
-class _StubDsl:
-    """The ``.dsl`` engine model the compile route resolves to; its ``.compile`` records the call."""
+class _StubModel(PhysicsModel):
+    """A real semantic model whose native compile is replaced by a deterministic loader stub."""
 
     def __init__(self, name="ne"):
-        self.name = name
+        super().__init__(name)
+        state = self.state("U", ("u",))
+        (u,) = state
+        self.flux(
+            "transport", on=state, x=[0.0 * u], y=[0.0 * u],
+            waves={"x": [0.0 * u], "y": [0.0 * u]},
+        )
         self.compiled = []
 
     def compile(self, *, backend, target, **kw):
         self.compiled.append((backend, target))
         return _StubCompiledModel(self)
-
-    def _model_hash(self):
-        return "model-hash:%s" % self.name
-
-
-class _StubModel:
-    """A physics stand-in exposing the ``.dsl`` engine model the compile route resolves."""
-
-    def __init__(self, name="ne"):
-        self.name = name
-        self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, name)
-        self.dsl = _StubDsl(name)
-
-    def declaration_index(self):
-        return DeclarationIndex(owner=self.owner_path, handles=())
 
 
 # --- monkeypatch helpers (work under pytest fixture OR the bare __main__ runner) ---
@@ -112,6 +104,14 @@ def _patch(monkeypatch, dotted, value):
     else:
         _SAVED.append((module, attr, getattr(module, attr)))
         setattr(module, attr, value)
+
+
+def _patch_attr(monkeypatch, owner, attr, value):
+    if monkeypatch is not None:
+        monkeypatch.setattr(owner, attr, value)
+    else:
+        _SAVED.append((owner, attr, getattr(owner, attr)))
+        setattr(owner, attr, value)
 
 
 def _unpatch(monkeypatch):
@@ -130,26 +130,35 @@ def test_amr_layout_drives_compile_target(monkeypatch=None):
     compile_problem proves the route never touches it, and no time= is required.
     """
     tripwire = {"hit": False}
+    compile_calls = []
 
     def _tripwire(*a, **kw):
         tripwire["hit"] = True
 
+    def _compile_stub(source, *, backend, target, **kw):
+        compile_calls.append((backend, target))
+        return _stub_compiled_model(source)
+
     _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _tripwire)
+    _patch_attr(monkeypatch, PdeModel, "compile", _compile_stub)
     try:
         layout = AMR(CartesianMesh(n=48, L=2.0, periodic=False), max_levels=2, ratio=2)
         model = _StubModel("ne")
         prob = pops.Problem(layout=layout).block("ne", physics=model)
-        compiled = orchestration.compile(prob)  # no time= : the AMR route does not need one
+        frozen = orchestration.validate(prob)
+        resolved = orchestration.resolve(
+            frozen, layout=layout)  # no time= : the AMR route does not need one
+        compiled = orchestration.compile(resolved)
         _check(tripwire["hit"] is False, "layout=AMR does NOT call compile_problem")
-        _check(model.dsl.compiled == [("production", "amr_system")],
+        _check(compile_calls == [("production", "amr_system")],
                "the block is compiled once with backend='production', target='amr_system'")
-        plan = compiled.install_plan
-        _check(plan.target == "amr_system", "amr_system target carried by the InstallPlan")
+        plan = compiled.plan
+        _check(plan.target == "amr_system", "amr_system target carried by the resolved plan")
         _check(plan.layout is not layout and plan.layout.base is not layout.base
                and plan.layout.base.n == layout.base.n,
                "the deeply detached AMR layout is carried for bind()")
-        _check(set(plan.block_models) == {"ne"},
-               "the block CompiledModel is carried by the InstallPlan")
+        _check({block.name for block in compiled.blocks} == {"ne"},
+               "the block CompiledModel is carried by the immutable artifact")
         _check(not hasattr(compiled, "_block_compiled_models"),
                "the retired private block-loader mirror is absent")
     finally:
@@ -161,7 +170,7 @@ def test_amr_config_from_layout_mapping():
     """The AmrSystemConfig pops.bind builds from the layout matches the descriptor.
 
     Builds the config directly (no .so, no AmrSystem) and asserts each field; also confirms the
-    layout's max_levels / ratio sit inside the native envelope (the config carries no such knob).
+    layout's depth is governed by its resource policy while the transfer ratio remains native.
     """
     layout = AMR(CartesianMesh(n=64, L=1.5, periodic=False), max_levels=2, ratio=2,
                  regrid=RegridEvery(8),
@@ -173,8 +182,10 @@ def test_amr_config_from_layout_mapping():
     _check(cfg.regrid_every == 8, "regrid_every from RegridEvery(8)")
     _check(cfg.distribute_coarse is True, "distribute_coarse from PatchLayout")
     _check(cfg.coarse_max_grid == 16, "coarse_max_grid from PatchLayout")
-    # max_levels / ratio are validated against the native envelope, not stored on the config.
-    _check(layout.max_levels <= NATIVE_MAX_LEVELS, "max_levels within the native envelope")
+    # Depth is not clamped by a public native constant and is not stored on the config.
+    _check(layout.max_levels == 2, "max_levels remains a layout/resource-policy concern")
+    _check(pops.inspect_amr().native_max_levels == "resource_policy",
+           "native hierarchy depth is resource-policy controlled")
     _check(layout.ratio in NATIVE_RATIOS, "ratio within the native envelope")
     print("ok test_amr_config_from_layout_mapping")
 
@@ -281,30 +292,24 @@ def test_production_so_compile_is_romeo_gated():
     """
     reached = {}
 
-    class _RomeoDsl:
-        name = "ne"
-
-        def compile(self, *, backend, target, **kw):
-            reached["backend"], reached["target"] = backend, target
-            # A real call here would emit the loader C++ and invoke the Kokkos compiler (ROMEO).
-            raise RuntimeError("ROMEO boundary: .so compile needs the Kokkos toolchain")
-
-    class _RomeoModel:
-        def __init__(self):
-            self.name = "ne"
-            self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, self.name)
-            self.dsl = _RomeoDsl()
-
-        def declaration_index(self):
-            return DeclarationIndex(owner=self.owner_path, handles=())
+    def _romeo_boundary(source, *, backend, target, **kw):
+        reached["backend"], reached["target"] = backend, target
+        # A real call here would emit the loader C++ and invoke the Kokkos compiler (ROMEO).
+        raise RuntimeError("ROMEO boundary: .so compile needs the Kokkos toolchain")
 
     layout = AMR(CartesianMesh(n=32), max_levels=2, ratio=2)
-    prob = pops.Problem(layout=layout).block("ne", physics=_RomeoModel())
+    prob = pops.Problem(layout=layout).block("ne", physics=_StubModel("ne"))
+    _patch_attr(None, PdeModel, "compile", _romeo_boundary)
     try:
-        orchestration.compile(prob)
-        raise AssertionError("the ROMEO-boundary stub should have raised")
-    except RuntimeError as exc:
-        _check("ROMEO boundary" in str(exc), "reached the .so compile (Kokkos) boundary")
+        try:
+            frozen = orchestration.validate(prob)
+            resolved = orchestration.resolve(frozen, layout=layout)
+            orchestration.compile(resolved)
+            raise AssertionError("the ROMEO-boundary stub should have raised")
+        except RuntimeError as exc:
+            _check("ROMEO boundary" in str(exc), "reached the .so compile (Kokkos) boundary")
+    finally:
+        _unpatch(None)
     _check(reached.get("target") == "amr_system" and reached.get("backend") == "production",
            "the production .so path is reached with backend='production', target='amr_system'")
     print("ok test_production_so_compile_is_romeo_gated")

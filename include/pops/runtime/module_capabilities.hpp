@@ -183,7 +183,8 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
     const ModuleCapabilities& caps, const RuntimeEnvironmentReport& env) {
   const bool mpi = caps.supports_mpi;
   const bool gpu = caps.supports_gpu;
-  const std::string amr_note = "native AMR envelope: max_levels<=2 and ratio=2";
+  const std::string amr_note =
+      "hierarchy depth is resource-policy controlled; native ratio=2";
   return {
       capability_route("supports_uniform", status_from_bool(caps.supports_uniform),
                        "single-level Uniform layout", "uniform", "module", "host", mpi, gpu,
@@ -191,7 +192,7 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
       capability_route("supports_amr", status_from_bool(caps.supports_amr), amr_note, "amr",
                        "production", "host", mpi, gpu, "layout=AMR",
                        "backend='production' target='amr_system'",
-                       "use Uniform or AMR(max_levels<=2, ratio=2)"),
+                       "use Uniform or AMR(ratio=2)"),
       capability_route("supports_mpi", status_from_bool(caps.supports_mpi),
                        "MPI transport is compiled only when POPS_USE_MPI=ON", "uniform|amr",
                        "production", "mpi", mpi, gpu, "platform=MPI", "serial/OpenMP build",
@@ -222,9 +223,9 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
       capability_route("layout:Uniform", "available", "2D single-level Cartesian/Polar layout",
                        "uniform", "module", "host", mpi, gpu),
       capability_route("layout:AMR", status_from_bool(caps.supports_amr),
-                       "max_levels<=2 and ratio=2; unsupported ratios/levels validate before bind",
-                       "amr", "production", "host", mpi, gpu, "AMR(max_levels>2 or ratio!=2)",
-                       "AMR(max_levels<=2, ratio=2)", "use Uniform or the native AMR envelope"),
+                       "resource-policy-controlled depth and native ratio=2", "amr",
+                       "production", "host", mpi, gpu, "AMR(ratio!=2)", "AMR(ratio=2)",
+                       "use Uniform or the native AMR envelope"),
       capability_route("spatial:finite_volume", "available",
                        "2D finite-volume route; prototype backend is host-only", "uniform|amr",
                        "production|aot|prototype", "host", mpi, gpu),

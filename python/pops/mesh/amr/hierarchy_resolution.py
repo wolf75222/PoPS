@@ -16,6 +16,7 @@ from .hierarchy import (
     _positive_int,
     HierarchyPlan,
     RegridSchedule,
+    CanonicalOptions,
 )
 
 
@@ -35,6 +36,7 @@ class HierarchyProviderCapabilities:
     max_materialized_level_count: int
     supports_transactional_regrid: bool
     supports_lifecycle_events: bool
+    options: CanonicalOptions = CanonicalOptions()
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
@@ -60,6 +62,8 @@ class HierarchyProviderCapabilities:
             self.max_materialized_level_count,
             where="max_materialized_level_count",
         )
+        if type(self.options) is not CanonicalOptions:
+            raise TypeError("HierarchyProviderCapabilities.options must be CanonicalOptions")
 
     @property
     def identity(self) -> Identity:
@@ -73,6 +77,7 @@ class HierarchyProviderCapabilities:
             "max_materialized_level_count": self.max_materialized_level_count,
             "supports_transactional_regrid": self.supports_transactional_regrid,
             "supports_lifecycle_events": self.supports_lifecycle_events,
+            "options": self.options.to_data(),
         }
 
 

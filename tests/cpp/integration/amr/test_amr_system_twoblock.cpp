@@ -107,7 +107,7 @@ TEST(test_amr_system_twoblock, Runs) {
                                                   /*has_density=*/true, 1.4, 1, false, false));
     });
 
-    AmrRuntime rt(S.geom, S.ba_coarse, S.poisson_bc, std::move(blocks), S.base_per,
+    AmrRuntime rt(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                   S.replicated_coarse, S.wall);
     EXPECT_EQ(rt.n_blocks(), 2) << "twoblock_engine_two_blocks";
     EXPECT_EQ(rt.nlev(), 2) << "twoblock_engine_two_levels";

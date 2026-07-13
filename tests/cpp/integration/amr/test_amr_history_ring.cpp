@@ -101,7 +101,7 @@ static AmrRuntime make_two_block(int N, double L, double B0) {
                                                 blob(N, 0.65, 0.5, 0.8, 1.0, 0.10),
                                                 /*has_density=*/true, 1.4, 1, false, false, 1));
   });
-  return AmrRuntime(S.geom, S.ba_coarse, S.poisson_bc, std::move(blocks), S.base_per,
+  return AmrRuntime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                     S.replicated_coarse, S.wall);
 }
 
@@ -138,7 +138,7 @@ TEST(test_amr_history_ring, RegisterStoreReadRotate) {
   ASSERT_EQ(rt.nlev(), 2);
 
   // register lag=1 -> depth 2, all levels allocated.
-  detail::AmrHistoryOps::register_history(rt, "R", 1);
+  detail::AmrHistoryOps::register_history(rt, 0, "R", 1);
   EXPECT_EQ(detail::AmrHistoryOps::depth(rt, "R"), 2);
   EXPECT_FALSE(detail::AmrHistoryOps::initialized(rt, "R"));
 
@@ -170,7 +170,7 @@ TEST(test_amr_history_ring, RegisterStoreReadRotate) {
 
 TEST(test_amr_history_ring, CheckpointRoundTrip) {
   AmrRuntime rt = make_two_block(32, 1.0, 1.0);
-  detail::AmrHistoryOps::register_history(rt, "R", 2);  // depth 3
+  detail::AmrHistoryOps::register_history(rt, 0, "R", 2);  // depth 3
   for (int k = 0; k < rt.nlev(); ++k)
     detail::AmrHistoryOps::store_history(rt, "R", k, rt.level_state(0, k), Real(0.02));
   detail::AmrHistoryOps::restore_slot_dt(rt, "R", 1, 0.03);
@@ -178,7 +178,10 @@ TEST(test_amr_history_ring, CheckpointRoundTrip) {
   // Gather slot 1, wipe it into a fresh ring on another engine, and read it back identical.
   const std::vector<double> flat = detail::AmrHistoryOps::global(rt, "R", 1, false);
   AmrRuntime rt2 = make_two_block(32, 1.0, 1.0);
-  detail::AmrHistoryOps::restore(rt2, "R", 1, flat);  // registers the ring lazily
+  // Restore cannot invent an owner for an unknown local name: the installed Program/layout owns
+  // that qualified association, so recreate it explicitly before scattering checkpoint bytes.
+  detail::AmrHistoryOps::register_history(rt2, 0, "R", 2);
+  detail::AmrHistoryOps::restore(rt2, "R", 1, flat);
   detail::AmrHistoryOps::restore_slot_dt(rt2, "R", 1, 0.03);
   detail::AmrHistoryOps::set_initialized(rt2, "R", true);
   EXPECT_EQ(dmax(detail::AmrHistoryOps::global(rt2, "R", 1, false), flat), 0.0) << "flat_round_trip";
@@ -190,7 +193,7 @@ TEST(test_amr_history_ring, NullRemapIsBitIdentical) {
   // does in R6/R7b) is IDENTITY on the slots' valid cells -- the prolong writes first, then the
   // old-fine carry-over overwrites every covered cell with the original data.
   AmrRuntime rt = make_two_block(32, 1.0, 1.0);
-  detail::AmrHistoryOps::register_history(rt, "R", 1);
+  detail::AmrHistoryOps::register_history(rt, 0, "R", 1);
   for (int k = 0; k < rt.nlev(); ++k)
     detail::AmrHistoryOps::store_history(rt, "R", k, rt.level_state(0, k), Real(0.01));
   const std::vector<double> before0 = detail::AmrHistoryOps::global(rt, "R", 0, false);
@@ -206,7 +209,7 @@ TEST(test_amr_history_ring, NullRemapIsBitIdentical) {
 
 TEST(test_amr_history_ring, RegridRemapKeepsSlotsConsistent) {
   AmrRuntime rt = make_two_block(32, 1.0, 1.0);
-  detail::AmrHistoryOps::register_history(rt, "R", 1);
+  detail::AmrHistoryOps::register_history(rt, 0, "R", 1);
   for (int k = 0; k < rt.nlev(); ++k)
     detail::AmrHistoryOps::store_history(rt, "R", k, rt.level_state(0, k), Real(0.01));
   // The coarse slot (level 0) is stable across a regrid -- snapshot it to prove it is untouched.
@@ -258,7 +261,7 @@ TEST(test_amr_history_ring, RejectedFacadeAttemptRestoresTopologyStateHistoryAnd
   ASSERT_NE(rt, nullptr);
   rt->set_block_tag_predicate(0, TagDensityAbove{Real(1.2)});
   rt->set_block_tag_predicate(1, TagDensityAbove{Real(1.2)});
-  detail::AmrHistoryOps::register_history(*rt, "R", 1);
+  detail::AmrHistoryOps::register_history(*rt, 0, "R", 1);
   sim.set_clock(0.25, 1);  // next native engine step is regrid-due
 
   const std::vector<PatchBox> patches_before = rt->patch_boxes();

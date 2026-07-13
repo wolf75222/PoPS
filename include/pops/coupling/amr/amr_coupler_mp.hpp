@@ -248,6 +248,72 @@ inline void coupler_inject_coarse_to_fine_mb(const MultiFab& Uc, MultiFab& Uf, b
   }
 }
 
+struct ConservativeLinearProlongKernel {
+  Array4 fine;
+  ConstArray4 coarse;
+  Box2D coarse_domain;
+  Box2D fine_domain;
+  int component;
+
+  POPS_HD void operator()(int i, int j) const {
+    const int ci = coarse_domain.lo[0] +
+                   floor_div(i - fine_domain.lo[0], kAmrRefRatio);
+    const int cj = coarse_domain.lo[1] +
+                   floor_div(j - fine_domain.lo[1], kAmrRefRatio);
+    const Real center = coarse(ci, cj, component);
+    Real sx = Real(0), sy = Real(0);
+    if (ci > coarse_domain.lo[0] && ci < coarse_domain.hi[0]) {
+      const Real left = center - coarse(ci - 1, cj, component);
+      const Real right = coarse(ci + 1, cj, component) - center;
+      if (left * right > Real(0))
+        sx = ((left < Real(0) ? -left : left) <
+              (right < Real(0) ? -right : right)) ? left : right;
+    }
+    if (cj > coarse_domain.lo[1] && cj < coarse_domain.hi[1]) {
+      const Real down = center - coarse(ci, cj - 1, component);
+      const Real up = coarse(ci, cj + 1, component) - center;
+      if (down * up > Real(0))
+        sy = ((down < Real(0) ? -down : down) <
+              (up < Real(0) ? -up : up)) ? down : up;
+    }
+    const Real ox = ((i - fine_domain.lo[0]) & 1) ? Real(0.25) : Real(-0.25);
+    const Real oy = ((j - fine_domain.lo[1]) & 1) ? Real(0.25) : Real(-0.25);
+    fine(i, j, component) = center + ox * sx + oy * sy;
+  }
+};
+
+/// Ratio-2 conservative piecewise-linear prolongation. The four fine children average exactly to
+/// the parent value; minmod-limited slopes make the operator monotone. Parent regions are first
+/// migrated onto the child DistributionMapping, so the per-patch kernel is MPI/GPU-safe.
+inline void coupler_conservative_linear_to_fine_mb(
+    const MultiFab& coarse, MultiFab& fine, const std::vector<int>& coarse_origin,
+    const std::vector<int>& fine_origin, const std::vector<int>& refinement_ratio) {
+  if (fine.ncomp() != coarse.ncomp())
+    throw std::runtime_error("conservative-linear prolongation component mismatch");
+  if (coarse_origin.size() != 2 || fine_origin.size() != 2 ||
+      refinement_ratio != std::vector<int>{2, 2})
+    throw std::runtime_error("conservative-linear prolongation received an invalid index transform");
+  const BoxArray local_parent_boxes =
+      coarsen_grown(fine.box_array(), 2, refinement_ratio[0]);
+  MultiFab local_parent(local_parent_boxes, fine.dmap(), coarse.ncomp(), 0);
+  parallel_copy(local_parent, coarse);
+  const Box2D coarse_domain = coarse.box_array().bounding_box();
+  const Box2D fine_domain = coarse_domain.refine(refinement_ratio[0]);
+  if (coarse_domain.lo[0] != coarse_origin[0] || coarse_domain.lo[1] != coarse_origin[1] ||
+      fine_domain.lo[0] != fine_origin[0] || fine_domain.lo[1] != fine_origin[1])
+    throw std::runtime_error("conservative-linear prolongation index origin mismatch");
+  for (int li = 0; li < fine.local_size(); ++li) {
+    Array4 destination = fine.fab(li).array();
+    const ConstArray4 source = local_parent.fab(li).const_array();
+    const Box2D valid = fine.box(li);
+    for (int component = 0; component < fine.ncomp(); ++component)
+      for_each_cell(
+          valid,
+          ConservativeLinearProlongKernel{
+              destination, source, coarse_domain, fine_domain, component});
+  }
+}
+
 // Builds the coarse level (BoxArray + DistributionMapping) of the AmrSystem path according to the
 // ownership policy, in a SINGLE point for both build paths (native + compiled):
 //  - replicated (distribute=false, DEFAULT): mono-box covering the domain, dmap = my_rank() everywhere

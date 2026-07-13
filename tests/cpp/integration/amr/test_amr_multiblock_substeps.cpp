@@ -105,7 +105,7 @@ static AmrRuntime make_two_block(int N, double L, double q0, double q1, double B
                                                 /*has_density=*/true, 1.4, sub1, false, false,
                                                 stride1));
   });
-  return AmrRuntime(S.geom, S.ba_coarse, S.poisson_bc, std::move(blocks), S.base_per,
+  return AmrRuntime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                     S.replicated_coarse, S.wall);
 }
 

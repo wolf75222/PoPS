@@ -34,6 +34,7 @@ set(POPS_CPP_TEST_SOURCE_test_amr_system_bz_pop "tests/cpp/integration/amr/test_
 set(POPS_CPP_TEST_SOURCE_test_amr_system_contract "tests/cpp/integration/amr/test_amr_system_contract.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_system_coupler "tests/cpp/integration/amr/test_amr_system_coupler.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_system_twoblock "tests/cpp/integration/amr/test_amr_system_twoblock.cpp")
+set(POPS_CPP_TEST_SOURCE_test_amr_transfer_properties "tests/cpp/integration/amr/test_amr_transfer_properties.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_weno5_native "tests/cpp/integration/native_loader/test_amr_weno5_native.cpp")
 set(POPS_CPP_TEST_SOURCE_test_anisotropic_epsilon "tests/cpp/unit/elliptic/test_anisotropic_epsilon.cpp")
 set(POPS_CPP_TEST_SOURCE_test_ap_limit "tests/cpp/unit/physics/test_ap_limit.cpp")

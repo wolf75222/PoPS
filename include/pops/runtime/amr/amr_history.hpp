@@ -8,7 +8,7 @@
 ///
 /// SEMANTIC (design plan section 2): a ring slot on AMR is a snapshot of the FULL hierarchy state --
 /// one MultiFab per level, co-distributed with each level's U. `hist_rings_[name][slot][level]` is
-/// block 0's level-`level` state at macro-step lag `slot` (slot 0 = newest). Rotation swaps the whole
+/// its explicitly bound block's level-`level` state at macro-step lag `slot` (slot 0 = newest). Rotation swaps the whole
 /// per-level buffer set atomically (a vector-of-handles swap, O(1), no deep copy). `slot_dt` is ONE
 /// scalar per slot (the synchronous AMR driver advances every level with the SAME dt), byte-identical
 /// to the Uniform ring's per-slot dt, so the ADC-626 variable-dt replay math is reused unchanged.
@@ -34,8 +34,8 @@
 /// no-ops deterministically is legitimate: the original run no-oped there identically). The live block
 /// states, the shared aux, the warm start, the ring store and the regrid count are SAVE/RESTORE
 /// bracketed so replay is identity on them (parity System::rebuild_history_slots, ADC-626). A
-/// single-block AMR Program is reconstructed bit-for-bit; a multi-block Program inherits the Uniform
-/// limitation (only ring block 0 is re-seeded).
+/// Every ring re-seeds only its authenticated block owner; independent rings may target independent
+/// blocks without a representative-block convention.
 
 #pragma once
 
@@ -56,14 +56,14 @@ namespace detail {
 /// its own: every method takes the engine by reference, so the engine stays movable and the ring data
 /// stays co-located with the per-level U/aux it mirrors.
 struct AmrHistoryOps {
-  // One per-level buffer set (a MultiFab per level, co-distributed with block 0's per-level U),
+  // One per-level buffer set, co-distributed with the runtime-owned hierarchy.
   // @p ncomp components, one ghost, zero-initialized -- one ring slot on the shared hierarchy.
   static std::vector<MultiFab> alloc_slot(const AmrRuntime& eng, int ncomp) {
     std::vector<MultiFab> per_level;
     per_level.reserve(static_cast<std::size_t>(eng.nlev_));
     for (int k = 0; k < eng.nlev_; ++k) {
-      const MultiFab& U = (*eng.blocks_[0].levels)[static_cast<std::size_t>(k)].U;
-      MultiFab slot(U.box_array(), U.dmap(), ncomp, 1);
+      MultiFab slot(eng.hierarchy_.ba[static_cast<std::size_t>(k)],
+                    eng.hierarchy_.dm[static_cast<std::size_t>(k)], ncomp, 1);
       slot.set_val(Real(0));
       per_level.push_back(std::move(slot));
     }
@@ -72,13 +72,19 @@ struct AmrHistoryOps {
 
   // --- AmrProgramContext-facing seams (register / read / store / rotate) --------------------------
 
-  static void register_history(AmrRuntime& eng, const std::string& name, int lag, int ncomp = -1) {
+  static void register_history(AmrRuntime& eng, std::size_t block, const std::string& name,
+                               int lag, int ncomp = -1) {
+    if (block >= eng.blocks_.size())
+      throw std::runtime_error("AmrRuntime::register_history: block owner out of bounds");
     if (lag < 1)
       throw std::runtime_error("AmrRuntime::register_history: lag must be >= 1 (got " +
                                std::to_string(lag) + ") for history '" + name + "'");
     const int want_depth = lag + 1;
     auto it = eng.hist_rings_.find(name);
     if (it != eng.hist_rings_.end()) {
+      if (eng.hist_block_owner_.at(name) != block)
+        throw std::runtime_error(
+            "AmrRuntime::register_history: owner mismatch for history '" + name + "'");
       // Idempotent re-registration: the ring depth is the MAX lag any caller requests. A larger lag
       // grows the ring (append zero-filled deeper slots on the CURRENT layout, all levels); a smaller
       // one is a no-op. The already-stored slots and the current slot [0] are preserved. The @p ncomp
@@ -95,11 +101,10 @@ struct AmrHistoryOps {
       }
       return;
     }
-    // @p ncomp < 0 (the default) resolves to block 0's ncomp -- byte-identical to the historical
-    // full-state multistep ring (ADC-631); a caller that needs a narrower ring (ADC-427: the
+    // @p ncomp < 0 resolves to the explicitly bound block's width; a caller that needs a narrower ring
     // 1-component condensed-Schur phi^n carry) passes an explicit ncomp >= 1. The narrow ring rides the
     // same alloc_slot / remap / replay machinery (each slot is sized by ncomp internally).
-    const int resolved_ncomp = ncomp < 0 ? eng.blocks_[0].ncomp : ncomp;
+    const int resolved_ncomp = ncomp < 0 ? eng.blocks_[block].ncomp : ncomp;
     if (resolved_ncomp < 1)
       throw std::runtime_error("AmrRuntime::register_history: ncomp must be >= 1 (got " +
                                std::to_string(ncomp) + ") for history '" + name + "'");
@@ -109,6 +114,7 @@ struct AmrHistoryOps {
       ring.push_back(alloc_slot(eng, resolved_ncomp));
     eng.hist_rings_.emplace(name, std::move(ring));
     eng.hist_depth_[name] = want_depth;
+    eng.hist_block_owner_[name] = block;
     eng.hist_init_[name] = std::vector<char>(static_cast<std::size_t>(eng.nlev_), 0);
     eng.hist_slot_dt_[name] = std::vector<Real>(static_cast<std::size_t>(want_depth), Real(0));
   }
@@ -222,7 +228,8 @@ struct AmrHistoryOps {
   }
 
   // FULL history slot @p slot of ring @p name as ONE flat buffer, the per-level slices concatenated
-  // (level 0 then 1 ...), each at the v3 convention c*nf*nf+j*nf+i (nf = nx << level; zeros outside
+  // (level 0 then 1 ...), each at the v3 convention c*nf*nf+j*nf+i (nf derives from the runtime
+  // hierarchy transition product; zeros outside
   // the patches at a fine level) -- the SAME layout level_aux_flat uses, hiding the level axis inside
   // the accessor so _system_io_history.py is reused verbatim. @p gather -> np>1 all_reduce_sum.
   static std::vector<double> global(const AmrRuntime& eng, const std::string& name, int slot,
@@ -239,7 +246,8 @@ struct AmrHistoryOps {
     device_fence();
     for (int k = 0; k < eng.nlev_; ++k) {
       const MultiFab& S = ring[static_cast<std::size_t>(slot)][static_cast<std::size_t>(k)];
-      const std::size_t nf = static_cast<std::size_t>(eng.dom_.nx()) << k;
+      const Box2D domain = eng.dom_.refine(eng.level_refinement(k));
+      const std::size_t nf = static_cast<std::size_t>(domain.nx());
       std::vector<double> lvl(static_cast<std::size_t>(nc) * nf * nf, 0.0);
       for (int li = 0; li < S.local_size(); ++li) {
         const ConstArray4 a = S.fab(li).const_array();
@@ -247,8 +255,9 @@ struct AmrHistoryOps {
         for (int j = v.lo[1]; j <= v.hi[1]; ++j)
           for (int i = v.lo[0]; i <= v.hi[0]; ++i)
             for (int c = 0; c < nc; ++c)
-              lvl[static_cast<std::size_t>(c) * nf * nf + static_cast<std::size_t>(j) * nf +
-                  static_cast<std::size_t>(i)] = a(i, j, c);
+              lvl[static_cast<std::size_t>(c) * nf * nf +
+                  static_cast<std::size_t>(j - domain.lo[1]) * nf +
+                  static_cast<std::size_t>(i - domain.lo[0])] = a(i, j, c);
       }
       out.insert(out.end(), lvl.begin(), lvl.end());
     }
@@ -267,8 +276,9 @@ struct AmrHistoryOps {
                                name + "'");
     auto it = eng.hist_rings_.find(name);
     if (it == eng.hist_rings_.end()) {
-      register_history(eng, name, slot >= 1 ? slot : 1);
-      it = eng.hist_rings_.find(name);
+      throw std::runtime_error(
+          "AmrRuntime::restore_history: history '" + name +
+          "' has no owner-qualified registration in the installed Program");
     }
     std::vector<std::vector<MultiFab>>& ring = it->second;
     if (slot >= static_cast<int>(ring.size())) {
@@ -285,7 +295,8 @@ struct AmrHistoryOps {
     std::size_t off = 0;
     for (int k = 0; k < eng.nlev_; ++k) {
       MultiFab& S = ring[static_cast<std::size_t>(slot)][static_cast<std::size_t>(k)];
-      const std::size_t nf = static_cast<std::size_t>(eng.dom_.nx()) << k;
+      const Box2D domain = eng.dom_.refine(eng.level_refinement(k));
+      const std::size_t nf = static_cast<std::size_t>(domain.nx());
       for (int li = 0; li < S.local_size(); ++li) {
         Array4 a = S.fab(li).array();
         const Box2D v = S.box(li);
@@ -293,7 +304,8 @@ struct AmrHistoryOps {
           for (int i = v.lo[0]; i <= v.hi[0]; ++i)
             for (int c = 0; c < nc; ++c)
               a(i, j, c) = flat[off + static_cast<std::size_t>(c) * nf * nf +
-                                static_cast<std::size_t>(j) * nf + static_cast<std::size_t>(i)];
+                                static_cast<std::size_t>(j - domain.lo[1]) * nf +
+                                static_cast<std::size_t>(i - domain.lo[0])];
       }
       off += static_cast<std::size_t>(nc) * nf * nf;
     }
@@ -463,11 +475,12 @@ struct AmrHistoryOps {
     std::vector<char> is_stored(static_cast<std::size_t>(d), 0);
     for (int s : anchors)
       is_stored[static_cast<std::size_t>(s)] = 1;
+    const auto owner = eng.hist_block_owner_.at(name);
     for (int k = 0; k < eng.nlev_; ++k)
       pops::lincomb(
-          (*eng.blocks_[0].levels)[static_cast<std::size_t>(k)].U, Real(1),
+          (*eng.blocks_[owner].levels)[static_cast<std::size_t>(k)].U, Real(1),
           saved_rings.at(name)[static_cast<std::size_t>(d - 1)][static_cast<std::size_t>(k)], Real(0),
-          (*eng.blocks_[0].levels)[static_cast<std::size_t>(k)].U);
+          (*eng.blocks_[owner].levels)[static_cast<std::size_t>(k)].U);
     for (int j = d - 2; j >= 0; --j) {
       const int cursor = m - 1 - j;
       const int rc_before = eng.regrid_count_;

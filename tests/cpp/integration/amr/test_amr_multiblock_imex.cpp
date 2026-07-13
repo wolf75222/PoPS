@@ -152,7 +152,7 @@ AmrRuntime make_stiff_pair(int N, double L, double eps, bool imex_stiff,
   blocks.push_back(detail::build_amr_block<NeutralModel, Minmod, RusanovFlux>(
       make_neutral(), S, "neutral", rho, /*has_density=*/true, kGamma, /*substeps=*/1,
       /*recon_prim=*/false, /*imex=*/false, /*stride=*/1));
-  return AmrRuntime(S.geom, S.ba_coarse, S.poisson_bc, std::move(blocks), S.base_per,
+  return AmrRuntime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                     S.replicated_coarse, S.wall);
 }
 
