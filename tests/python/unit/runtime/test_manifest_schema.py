@@ -338,9 +338,9 @@ def test_registration_is_idempotent_but_refuses_different_metadata_collision():
 # ---- external bricks appear in the capability report (ADC-611) --------------------------------
 
 def test_registered_external_brick_appears_in_capabilities():
-    from pops import inspect_capabilities
+    from pops._capabilities_inspect import _descriptor_catalog_report
     _desc._register_manifest(_manifest([_entry(id="ext_hllc", category="riemann")]))
-    matrix = inspect_capabilities()
+    matrix = _descriptor_catalog_report()
     externals = [row for row in matrix.entries if row.source == "external"]
     assert any(row.name == "ext_hllc" for row in externals)
 
@@ -348,11 +348,11 @@ def test_registered_external_brick_appears_in_capabilities():
 def test_external_brick_row_carries_v2_route_fields(tmp_path):
     # ADC-544: a resolved brick's supported layouts/platforms appear on its capability row so a reader
     # sees the declared route surface, not just that the brick exists.
-    from pops import inspect_capabilities
+    from pops._capabilities_inspect import _descriptor_catalog_report
     _desc._register_manifest(_manifest([_entry(
         id="ext_route", category="riemann", native_id="route_native",
         supported_layouts="uniform,amr", supported_platforms="cpu,mpi")]))
-    matrix = inspect_capabilities()
+    matrix = _descriptor_catalog_report()
     row = next(r for r in matrix.entries if r.source == "external" and r.name == "ext_route")
     assert row.native_id == "route_native"
     assert row.layout == "amr|uniform"  # sorted join of the declared layouts

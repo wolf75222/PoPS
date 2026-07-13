@@ -7,19 +7,15 @@ These checks pin the Spec 5 sec.6 / sec.7 descriptor contract:
   - available() on the Descriptor family returns an explainable Availability, never a bare bool;
   - lower() returns an INERT metadata dict and never raises for a valid descriptor (it must not
     run a numeric loop or touch the runtime);
-  - inspect_capabilities() returns a descriptor-sourced matrix whose rows carry the required keys;
+  - pops.inspect(descriptor) returns the descriptor-owned structured record;
   - reject_string_selector() raises a clear TypeError with the spec message;
-  - read_manifest() reads a brick manifest's metadata WITHOUT registering it;
   - Availability is now the SAME class in pops.descriptors and pops.mesh._descriptor (the
     duplicate the reviewers flagged is gone).
 
 Pure Python: it only imports the inert authoring packages (the compiled _pops loads as a side
 effect of ``import pops`` but no model is built or run).
 """
-import json
-import os
 import sys
-import tempfile
 
 import pytest
 
@@ -47,7 +43,7 @@ MOMENTS_ROUTE_CHOOSERS = (
     (moments.ExactSpeeds(moments.ExactSpeeds.ROE_DISSIPATION), "wave_speed"),
     (moments.RealizabilityProjection(eps_m00=1e-10, robust=False), "realizability"),
     (moments.MagneticMomentSource(q_over_m="my_q", b_field="my_b"), "moment_source"),
-    (moments.HyQMOM15Closure(variant="levermore"), "closure"),
+    (moments.HyQMOM15Closure(), "closure"),
 )
 
 # The builders / handles of pops.moments do NOT choose a route, so they stay lightweight and
@@ -166,8 +162,9 @@ def test_brick_descriptor_native_id_carried_in_lowering():
         assert "alternative" in msg
 
 
-def test_inspect_capabilities_rows_have_required_keys():
-    matrix = pops.inspect_capabilities()
+def test_internal_descriptor_catalog_rows_have_required_keys():
+    from pops._capabilities_inspect import _descriptor_catalog_report
+    matrix = _descriptor_catalog_report()
     assert len(matrix) > 0
     seen_categories = set()
     for entry in matrix:
@@ -184,9 +181,10 @@ def test_inspect_capabilities_rows_have_required_keys():
     assert isinstance(matrix.to_dict(), dict)
 
 
-def test_inspect_capabilities_is_descriptor_sourced():
+def test_internal_descriptor_catalog_is_descriptor_sourced():
     # The matrix reports the native bricks as available with their real symbols.
-    matrix = pops.inspect_capabilities()
+    from pops._capabilities_inspect import _descriptor_catalog_report
+    matrix = _descriptor_catalog_report()
     riemann = {e.name: e for e in matrix.by_category("riemann")}
     assert riemann["hll"].native_id == "pops::HLLFlux"
     assert riemann["hll"].available == "yes"
@@ -207,42 +205,6 @@ def test_availability_is_unified_single_class():
     # MeshDescriptor is a subclass of the shared Descriptor base.
     assert issubclass(mesh_descriptor.MeshDescriptor, Descriptor)
     assert isinstance(CartesianMesh(n=8), Descriptor)
-
-
-def test_read_manifest_reads_without_registering():
-    from pops.external import read_manifest, CompiledManifest
-    from pops import descriptors as desc
-    # ADC-611 : le schema strict versionne exige schema_version (et chaque champ d'entree).
-    row = {
-        "id": "my_flux", "category": "riemann", "native_id": "my_flux",
-        "requirements": "physical_flux,wave_speeds", "capabilities": "provides_x",
-        "supported_layouts": "", "supported_platforms": "", "params": "", "options": "",
-        "exported_symbols": "",
-    }
-    manifest = {
-        "schema_version": desc.BRICK_MANIFEST_SCHEMA_VERSION,
-        "abi_key": "pops-test-abi",
-        "annotations": {}, "bricks": [row],
-    }
-    desc._clear_external_catalog()
-    fd, path = tempfile.mkstemp(suffix=".json")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(manifest, handle)
-        result = read_manifest(path)
-        assert isinstance(result, CompiledManifest)
-        assert result.ids == ["my_flux"]
-        assert result.abi_key == "pops-test-abi"
-        assert result.categories == ["riemann"]
-        assert result.bricks[0]["requirements"] == ["physical_flux", "wave_speeds"]
-        assert result.bricks[0]["capabilities"] == ["provides_x"]
-        # read_manifest is INSPECTION ONLY: it did NOT register the brick in the catalog.
-        with pytest.raises(LookupError):
-            desc.external("my_flux")
-        assert isinstance(result.to_dict(), dict)
-    finally:
-        os.remove(path)
-        desc._clear_external_catalog()
 
 
 if __name__ == "__main__":

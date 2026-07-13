@@ -1,6 +1,6 @@
 """pops._capabilities -- structured native and descriptor capability reports (facade).
 
-:func:`inspect_capabilities` walks the inert descriptor catalogs (the Riemann / reconstruction
+The private descriptor-catalog report walks the inert catalogs (Riemann / reconstruction
 / limiter / projection bricks, the mesh layouts, the solver / field catalogs) and reports, per
 entry, its name / category / native id / availability / requirements. It is PURE: it imports
 only the pure-stdlib authoring packages, never ``_pops``, and runs nothing -- it instantiates
@@ -15,8 +15,8 @@ The implementation was split across three sibling modules for the 500-line cap (
 ``_capabilities_common`` (the inert value objects + shared route helpers),
 ``_capabilities_report`` (the native ``capability_report`` value object + route-row builders),
 and ``_capabilities_inspect`` (the descriptor-catalog walk, the C++ cross-check, and the AMR
-report). This module re-exports every public and private name they used to expose, so every
-``from pops._capabilities import ...`` path keeps working unchanged.
+report). Public inspection is exclusively ``pops.inspect(object)``; this module only shares
+implementation records between the doctor, validation and inspection layers.
 """
 from __future__ import annotations
 
@@ -60,10 +60,10 @@ from pops._capabilities_inspect import (  # noqa: F401  (re-exported at the hist
     _native_rows,
     _walk_brick_catalog,
     _walk_class_catalog,
-    inspect_capabilities,
+    _descriptor_catalog_report,
 )
 
-__all__ = ["inspect_capabilities", "CapabilityMatrix", "CapabilityEntry",
+__all__ = ["CapabilityMatrix", "CapabilityEntry",
            "CapabilityMismatchError", "AmrReport",
            "CapabilityRouteRow", "CapabilityRouteMatrix", "NativeCapabilityReport",
            "native_capability_report", "native_capability_matrix"]

@@ -36,7 +36,7 @@ def _descriptor_tokens() -> Any:
     """Available brick tokens per category, sourced from the descriptor catalogs (Spec 5 sec.12).
 
     Single source of truth: this reads the SAME inert catalogs that
-    :func:`pops._capabilities.inspect_capabilities` walks (riemann / limiter / reconstruction /
+    the internal descriptor catalog report walks (riemann / limiter / reconstruction /
     elliptic solvers), so adding or retiring a descriptor cannot silently desync the doctor matrix
     from the introspectable capability matrix. Only descriptors that declare themselves available
     are reported (a planned-but-not-native brick like ``mc`` / ``superbee`` is left out). Pure: no
@@ -234,14 +234,14 @@ def capabilities() -> Any:
 
     Sec 12: the riemann / limiter / reconstruction / Poisson token lists are DERIVED from the
     descriptor catalogs via :func:`_descriptor_tokens` (the same single source
-    :func:`pops._capabilities.inspect_capabilities` reads), not hardcoded, so adding or retiring a
+    the internal descriptor report reads), not hardcoded, so adding or retiring a
     brick cannot silently desync this matrix from the introspectable one.
     """
     from pops import _pops as _pops_mod  # ADC-291: read the aux limit from the SINGLE C++ source
     from pops.physics.aux import AUX_NAMED_MAX  # fallback mirror (no second hardcoded literal)
     aux_max_extra = int(getattr(_pops_mod, "__aux_max_extra__", AUX_NAMED_MAX))
     # Sec 12: derive the riemann / limiter / reconstruction / Poisson token lists from the descriptor
-    # catalogs (the SAME single source inspect_capabilities() reads) instead of hardcoding them, so a
+    # catalogs (the same source as the internal descriptor report) instead of hardcoding them, so a
     # new descriptor cannot silently desync the doctor matrix from the introspectable one.
     tok = _descriptor_tokens()
     riemann_all = list(tok["riemann"])

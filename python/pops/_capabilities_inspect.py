@@ -4,7 +4,7 @@ The introspection side of the capability layer: the descriptor-catalog walk
 (``_walk_brick_catalog`` / ``_walk_class_catalog`` / ``_entry_from_brick``), the
 native cross-check (``_cross_check`` / :class:`CapabilityMismatchError` /
 ``_native_rows``) that adjudicates descriptor availability against the C++ facts,
-the public :func:`inspect_capabilities`, and the AMR hierarchy report
+the internal descriptor-catalog report, and the AMR hierarchy report
 (:class:`AmrReport` / the private layout-adaptivity protocol / ``_amr_policy_rows``). Split out of
 ``_capabilities`` for the 500-line cap; ``pops._capabilities`` re-exports every
 public name. The descriptor walk is PURE; ``_pops`` is only reached lazily through
@@ -36,7 +36,7 @@ def _entry_from_brick(descriptor):
     error = "" if ok else _unsupported_error(
         requested=feature,
         available="native %s descriptors with a non-empty native_id" % descriptor.category,
-        alternative="choose an available descriptor from pops.inspect_capabilities()")
+        alternative="choose a typed descriptor from its pops.lib catalog and inspect it with pops.inspect()")
     return CapabilityEntry(descriptor.name, descriptor.category,
                            descriptor.native_id or None, status, descriptor.requirements,
                            feature=feature, backend="native" if descriptor.native_id else "none",
@@ -76,7 +76,7 @@ def _external_brick_rows():
     """CapabilityEntry rows for the registered EXTERNAL C++ bricks (ADC-611 / ADC-544): one
     ``source="external"`` row per brick registered via ``pops.load_cpp_library`` /
     ``pops.external.register`` (the in-process catalog ``pops.descriptors._EXTERNAL_BRICKS``). Empty
-    when none are registered. This surfaces the external bricks in ``inspect_capabilities()`` so a
+    when none are registered. This surfaces external bricks in the internal catalog report so a
     third-party brick loaded at runtime appears in the capability report instead of being invisible.
 
     ADC-544 enriches the row with the brick's declared route surface: ``supported_layouts`` becomes the
@@ -136,7 +136,7 @@ _LAYOUT_NATIVE_FLAG = {"Uniform": "supports_uniform", "AMR": "supports_amr"}
 class CapabilityMismatchError(RuntimeError):
     """A descriptor's declared availability disagrees with the C++ authoritative source (#36/#37).
 
-    Raised by :func:`inspect_capabilities` when the native ``_pops.module_capabilities()`` reports a
+    Raised by :func:`_descriptor_catalog_report` when native ``_pops.module_capabilities()`` reports a
     transport as UNAVAILABLE while the Python descriptor catalog still advertises it available. It
     closes the Spec 5 sec.13.12 "Python-derived, not authoritative" gap: a descriptor can no longer
     silently claim a capability the built module does not provide.
@@ -186,8 +186,8 @@ def _cross_check(entries, native_caps):
                 % (entry.name, entry.category, entry.available, flag))
 
 
-def inspect_capabilities():
-    """Return the capability :class:`CapabilityMatrix`, cross-checked against the C++ source (sec.6).
+def _descriptor_catalog_report():
+    """Build the internal descriptor catalog, cross-checked against native facts.
 
     Walks the available descriptor catalogs and reports one row per catalogued entry (``source =
     "descriptor"``), THEN cross-checks the route-deciding entries against the authoritative C++
@@ -197,7 +197,7 @@ def inspect_capabilities():
     :class:`CapabilityMismatchError` (closing the silent-default-fallback gap).
 
     The descriptor walk is PURE (only the inert authoring packages, no numeric loop). ``_pops`` is
-    imported LAZILY (inside the function) and ONLY for the cross-check, so the module import graph
+    imported LAZILY (inside this function) and ONLY for the cross-check, so the module import graph
     stays acyclic; when ``_pops`` is absent or predates ``module_capabilities`` the walk proceeds
     WITHOUT the native rows / cross-check rather than failing (graceful degradation).
     """

@@ -4,7 +4,7 @@
 /// @brief Authoritative STATIC capability facts of the built _pops module (Spec 5 sec.13.12 /
 ///        sec.13.12.1, criteria #36/#37).
 ///
-/// MOTIVATION. ``pops._capabilities.inspect_capabilities`` walks the inert Python descriptor catalog;
+/// MOTIVATION. Python's internal descriptor report walks the inert catalog;
 /// that walk is "Python-derived, not authoritative" (Spec 5 sec.13.12). The transport capabilities a
 /// module actually provides -- which backend it was compiled with, whether MPI / GPU is real, whether
 /// the route carries a stride, named aux fields, a partial IMEX mask -- are decided by the C++ build,

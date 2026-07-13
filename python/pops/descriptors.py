@@ -121,7 +121,9 @@ class BrickDescriptor:
         return Availability.no(
             "%s [%s] has no native C++ symbol yet" % (self.name, self.category),
             missing=["native_id"],
-            alternatives=["choose an available descriptor from pops.inspect_capabilities()"])
+            alternatives=[
+                "choose a typed descriptor from its pops.lib catalog and inspect it with pops.inspect()"
+            ])
 
     def inspect(self) -> dict:
         """A plain-dict view of the brick descriptor (Spec 5 sec.12.1).
@@ -159,7 +161,7 @@ class BrickDescriptor:
                 "%s [%s] is not available: it has no native C++ symbol yet; unsupported route: "
                 "requested %s:%s; available route: native %s descriptors with a non-empty "
                 "native_id; alternative: choose an available descriptor from "
-                "pops.inspect_capabilities()."
+                "its pops.lib catalog and inspect it with pops.inspect()."
                 % (self.name, self.category, self.category, self.name, self.category))
         return True
 
@@ -173,7 +175,7 @@ class BrickDescriptor:
         if not ok:
             error = ("unsupported route: requested %s:%s; available route: native %s "
                      "descriptors with a non-empty native_id; alternative: choose an available "
-                     "descriptor from pops.inspect_capabilities()."
+                     "typed descriptor from its pops.lib catalog and inspect it with pops.inspect()."
                      % (self.category, self.name, self.category))
         row = CapabilityRouteRow(
             "%s:%s" % (self.category, self.name),

@@ -12,7 +12,7 @@ import pytest
 
 pops = pytest.importorskip("pops")
 
-from pops import DiagnosticError, ReportTree  # noqa: E402
+from pops._report import DiagnosticError, ReportTree  # noqa: E402
 from pops.descriptors import (  # noqa: E402
     CapabilitySet, LoweredDescriptor, Requirement, RequirementSet)
 
@@ -89,9 +89,9 @@ def test_report_error_carries_alternatives_as_actions():
         phase="validation", severity="info", code="validation.descriptor.report")
     report = root.error(
         "descriptor", "unavailable", "no native symbol",
-        alternatives=["pops.inspect_capabilities()"])
+        alternatives=["pops.inspect(descriptor)"])
     issue = report.issues[0]
-    assert issue.actions == ("pops.inspect_capabilities()",)
+    assert issue.actions == ("pops.inspect(descriptor)",)
     assert "no native symbol" in str(issue)
 
 
