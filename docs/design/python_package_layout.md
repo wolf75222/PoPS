@@ -24,11 +24,11 @@ Each top-level package is a single responsibility. Concrete models and ready-mad
 | `pops.fields` | Elliptic field-problem authoring (`FieldProblem` / `PoissonProblem`) and its catalog. |
 | `pops.diagnostics` | Diagnostic descriptors (norms, reductions). |
 | `pops.params` | Typed runtime-parameter descriptors. |
-| `pops.output` | Output / checkpoint policy descriptors. |
-| `pops.external` | Inert descriptors for external integrations. |
+| `pops.output` | Direct scientific-output, checkpoint, format and writer descriptors. |
+| `pops.external` | Authenticated source and fixed-binary component package contracts. |
 | `pops.lib` | Ready-to-use presets only: `lib.time` schemes, `lib.models` models, `lib.presets` bundles. |
 | `pops.codegen` | Lowering / build toolchain and the internal `compile_problem` driver + `@solver` DSL. |
-| `pops.runtime` | The runtime: `System` / `AmrSystem`, bind adapters, doctor, bricks. The ONLY layer that imports `_pops`. |
+| `pops.runtime` | Unified `RuntimeInstance`, execution, restart, consumers and diagnostics. The ONLY layer that imports `_pops`. |
 | `pops.experimental` | Tests-only, non-stable host backends (`PythonFlux`); never on the public surface. |
 
 Nested sub-packages keep the same rules: `pops.mesh.{layouts,amr,boundaries,geometry,masks}`,
@@ -69,7 +69,8 @@ is a leaf that composes descriptors: a preset in `lib.presets` pairs a `lib.mode
 
 ## Public front door
 
-`pops.compile` / `pops.bind` are the only public compile/bind entry points. Resolved plans, compiled
+The root lifecycle is exactly `validate`, `resolve`, `compile`, `bind`, and `run`; `inspect` and
+`explain` are its pure reporting operations. Resolved plans, compiled
 artifact records, bind-input evidence and install plans are phase-internal values: users receive
 them from the lifecycle but never import or construct their concrete codegen classes. External AOT
 components use the independent `pops.external.load(...).require(...)` and
@@ -88,20 +89,20 @@ components use the independent `pops.external.load(...).require(...)` and
   non-allowed layer, or any cycle, fails `test_import_graph.py`. Push a cross-layer dependency into
   a function-scope (lazy) import when the module-scope edge would violate the layering.
 
-## Root kernel modules (kept flat on purpose)
+## Root kernel modules and assembly package
 
-A few modules stay at the package root and are deliberately NOT buried in a package. They are the
-shared descriptor kernel, the bootstrap, and the top-level assembly that the whole tree depends on;
-the import-graph test treats them as untracked (not a layer), so moving them into a package would
-create edges and risk cycles across roughly forty importers. Do not relocate them:
+A few modules stay at the package root, while the larger assembly lives in `pops.problem`. They are
+the shared descriptor kernel, bootstrap and top-level ownership types that the whole tree depends on;
+the import-graph test treats them as untracked (not a layer). Do not relocate them without first
+updating the dependency model:
 
-- `pops/__init__.py` -- the runtime facade (re-exports the public surface).
+- `pops/__init__.py` -- the lazy public lifecycle facade.
 - `descriptors.py` -- the base `Descriptor`, imported by mesh / numerics / fields / moments / ...
 - `math.py` -- small math helpers imported by time / params / fields.
-- `case.py` -- the top-level `Case` assembly (a root module, not a package).
+- `problem/` -- the top-level `Case` assembly, qualified handles and immutable snapshots.
 - `runtime_environment.py` -- the runtime-environment report, imported by mesh and runtime.
 - `_bootstrap.py`, `_version.py`, `_descriptor_protocol.py`, `_capabilities*.py` -- bootstrap,
-  version, the descriptor protocol, and the capability inspection kernel.
+  version, the descriptor protocol, and internal capability/report support.
 
 A future change that wants to package one of these must first redesign `test_import_graph.py` to
 track it as a layer, so the new edges are checked rather than hidden.

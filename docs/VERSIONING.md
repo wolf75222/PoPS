@@ -22,9 +22,10 @@ What a version bump is allowed to break is exactly this surface:
 - The concepts a model composes against: `PhysicalModel`, `PhysicalFlux`, `NumericalFlux`,
   `SpatialOperator`, `EllipticSolver`,
   and the named generic bricks in `include/pops/physics/`.
-- Python bindings: the documented `pops.*` surface (`pops.Model`, `pops.Case`, `pops.compile`,
-  `pops.bind`, `pops.physics.facade.Model`, the brick classes, `pops.doctor`, `pops.set_threads`,
-  `pops.parallel_info`, `pops.has_kokkos`, `pops.__version__`). The runtime engines `System` /
+- Python root: exactly `Model`, `Program`, `Case`, `validate`, `inspect`, `explain`, `resolve`,
+  `compile`, `bind`, `run`, and `__version__`, plus the documented typed descriptors in public
+  subpackages. Runtime diagnostics and execution controls live under `pops.runtime`; they are not
+  aliases at package root. The runtime engines `System` /
   `AmrSystem` are internal seams behind `pops.compile` / `pops.bind` (reachable as
   `pops.runtime.system.*`); they carry no SemVer guarantee and may change.
 - DSL surface: the fixed aux names (`phi`, `grad_x`, `grad_y`, `B_z`, `T_e`) and the
