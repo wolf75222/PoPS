@@ -22,10 +22,14 @@ from .cartesian import CartesianMesh
 from .polar import PolarMesh
 from .aux import AuxHalo
 from .boxes import PatchBox, BoxLayout
+from .layout_plan import (
+    LayoutHandle, LayoutMappingProvider, LayoutPlan, LayoutPlanBuilder, normalize_layout_plan)
 from . import layouts, amr, geometry, masks, boundaries
 
 __all__ = [
     "CartesianMesh", "PolarMesh", "AuxHalo", "PatchBox", "BoxLayout",
     "Availability", "MeshDescriptor",
+    "LayoutHandle", "LayoutMappingProvider", "LayoutPlan", "LayoutPlanBuilder",
+    "normalize_layout_plan",
     "layouts", "amr", "geometry", "masks", "boundaries",
 ]

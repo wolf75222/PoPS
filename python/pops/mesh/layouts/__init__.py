@@ -204,4 +204,23 @@ class AMR(MeshDescriptor):
             amr_report=inspect_amr(self))
 
 
-__all__ = ["Uniform", "AMR"]
+from ..layout_plan import (  # noqa: E402
+    LayoutAssignment,
+    LayoutHandle,
+    LayoutLevel,
+    LayoutMappingProvider,
+    LayoutMappingRequirement,
+    LayoutPlan,
+    LayoutPlanBuilder,
+    NormalizedLayout,
+    ResolvedLayoutMapping,
+    normalize_layout,
+    normalize_layout_plan,
+)
+
+
+__all__ = [
+    "Uniform", "AMR", "LayoutAssignment", "LayoutHandle", "LayoutLevel",
+    "LayoutMappingProvider", "LayoutMappingRequirement", "LayoutPlan", "LayoutPlanBuilder",
+    "NormalizedLayout", "ResolvedLayoutMapping", "normalize_layout", "normalize_layout_plan",
+]
