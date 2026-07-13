@@ -70,14 +70,14 @@ _ALLOWED_NON_STEPPER_DATA = {
 # The canonical field-problem base + its home package. A second public class exposing a field
 # registration surface (``.field`` / ``register_field``) or subclassing ``*FieldProblem`` OUTSIDE
 # pops/fields would be a parallel field system.
-_FIELD_PROBLEM_HOME = POPS / "fields"
-_FIELD_PROBLEM_BASE_SUFFIX = "FieldProblem"
+_FIELD_OPERATOR_HOME = POPS / "fields"
+_FIELD_OPERATOR_BASE_SUFFIX = "FieldOperator"
 _FIELD_REGISTER_METHODS = {"register_field"}
 
 # The bind path consumes, never authors, a field problem: a PoissonProblem(/FieldProblem(
 # construction under pops/runtime would be bind re-declaring a field system.
 _BIND_PATH = POPS / "runtime"
-_FIELD_PROBLEM_CTOR_NAMES = {"FieldProblem", "PoissonProblem"}
+_FIELD_AUTHORING_CTOR_NAMES = {"FieldOperator", "FieldDiscretization"}
 
 
 def _rel(path):
@@ -219,11 +219,13 @@ def test_lib_time_macro_returns_the_same_program_handle():
     module = Module("architecture-time-schemes")
     state_space = module.state_space("U", ("u",))
     state = module.state_handle(state_space)
+    rate = module.rate_operator("advance", state_space, flux=False)
     block = Case(name="architecture-time-case").block("plasma", module)
-    # Strang / imex / bdf / predictor_corrector need extra scheme arguments and are covered by the
-    # ADC-566 boundary proof through their in-place form.
-    for name in ("forward_euler", "SSPRK2", "ssprk3", "rk4"):
-        result = getattr(lib_time, name)(block, state, sources=(), flux=False)
+    instance = block[state]
+    # Split, IMEX and multistep factories need their own typed operators/history and have dedicated
+    # contract tests.  These four share the same one-state/one-rate signature.
+    for name in ("ForwardEuler", "SSPRK2", "SSPRK3", "RK4"):
+        result = getattr(lib_time, name)(instance, rate=rate)
         assert isinstance(result, Program), (
             "pops.lib.time.%s must return a pops.time.Program, got %r" % (name, type(result)))
 
@@ -231,21 +233,21 @@ def test_lib_time_macro_returns_the_same_program_handle():
 # ---------------------------------------------------------------------------------------------
 # Gate 1b -- FIELDS: one canonical FieldProblem/PoissonProblem; facade == direct lowering.
 # ---------------------------------------------------------------------------------------------
-def test_only_pops_fields_defines_a_field_problem_class():
+def test_only_pops_fields_defines_a_field_operator_class():
     violations = []
     for path in _target_surface_files():
         # The canonical home is allowed to define/subclass FieldProblem.
-        if _FIELD_PROBLEM_HOME in path.parents or path == _FIELD_PROBLEM_HOME:
+        if _FIELD_OPERATOR_HOME in path.parents or path == _FIELD_OPERATOR_HOME:
             continue
         rel = _rel(path)
         for node in _public_classes(_parse(path)):
             base_names = {_dotted_name(base) or "" for base in node.bases}
             subclasses_field = any(
-                name and name.endswith(_FIELD_PROBLEM_BASE_SUFFIX) for name in base_names)
+                name and name.endswith(_FIELD_OPERATOR_BASE_SUFFIX) for name in base_names)
             has_register = bool(_class_methods(node) & _FIELD_REGISTER_METHODS)
             if subclasses_field:
                 violations.append(
-                    "%s:%d public class %r subclasses a *FieldProblem outside pops/fields"
+                    "%s:%d public class %r subclasses FieldOperator outside pops/fields"
                     % (rel, node.lineno, node.name))
             elif has_register:
                 violations.append(
@@ -253,11 +255,11 @@ def test_only_pops_fields_defines_a_field_problem_class():
                     % (rel, node.lineno, node.name))
 
     assert not violations, (
-        "the field problem has one home (pops.fields.FieldProblem / PoissonProblem); a parallel "
+        "the physical field operator has one home (pops.fields.FieldOperator); a parallel "
         "field system elsewhere is refused:\n  " + "\n  ".join(violations))
 
 
-def test_bind_path_consumes_a_field_problem_never_constructs_one():
+def test_bind_path_consumes_field_plans_never_constructs_them():
     violations = []
     if _BIND_PATH.is_dir():
         for path in _py_files(_BIND_PATH):
@@ -266,60 +268,69 @@ def test_bind_path_consumes_a_field_problem_never_constructs_one():
                 if isinstance(node, ast.Call):
                     name = _dotted_name(node.func)
                     tail = name.split(".")[-1] if name else None
-                    if tail in _FIELD_PROBLEM_CTOR_NAMES:
+                    if tail in _FIELD_AUTHORING_CTOR_NAMES:
                         violations.append(
-                            "%s:%d constructs %s() (bind must consume, not author, a field problem)"
+                            "%s:%d constructs %s() (bind must consume, not author, a field plan)"
                             % (rel, node.lineno, tail))
 
     assert not violations, (
-        "the runtime bind path must consume a field problem, never construct FieldProblem/"
-        "PoissonProblem itself:\n  " + "\n  ".join(violations))
+        "the runtime bind path must consume field authoring, never construct FieldOperator/"
+        "FieldDiscretization itself:\n  " + "\n  ".join(violations))
 
 
-def test_field_facade_and_direct_lowering_share_one_ir_hash():
-    """Installed-package gate: facade and direct paths lower to identical IR.
+def test_field_handle_is_the_sole_public_field_solve_route():
+    """The callable Case field handle is the only public field-solve entry.
 
-    ADC-565 demands "facade == direct". Two same-named Programs register a field solve two ways -- via
-    the ``@P.step`` facade decorator and via a direct inline ``solve_fields`` call -- and must produce
-    a byte-identical ``_ir_hash`` (the ADC-529 IR fingerprint; no compile, no _pops), proving there is
-    no second field-lowering path.
+    It delegates to the private generic Program node builder, so there is one canonical IR without
+    exposing a second authoring route that could bypass Case authentication.
     """
+    from pops.descriptors import Descriptor
+    from pops.fields import FieldDiscretization, FieldOperator
+    from pops.ir import ValueExpr
+    from pops.math import laplacian
+    from pops.model import Handle
     from pops.model import Module
     from pops.problem import Case
     from pops.time import Program
 
+    class _Method(Descriptor):
+        category = "field_method"
+
+        def to_data(self):
+            return {"type": "architecture-second-order"}
+
+    class _Solver(Descriptor):
+        category = "elliptic_solver"
+
+        def to_data(self):
+            return {"type": "architecture-solver"}
+
     module = Module("field-parity-model")
     state_space = module.state_space("U", ("u",))
     state_handle = module.state_handle(state_space)
-    block = Case(name="field-parity-case").block("gas", module)
+    case = Case(name="field-parity-case")
+    block = case.block("gas", module)
+    unknown = Handle("potential", kind="field", owner=module.owner_path)
+    provider = Handle("charge", kind="field_operator", owner=module.owner_path)
+    operator = FieldOperator(
+        "potential",
+        unknown=unknown,
+        equation=-laplacian(ValueExpr(unknown)) == ValueExpr(state_handle),
+        providers=provider,
+    )
+    field = case.field(
+        operator,
+        FieldDiscretization(method=_Method(), boundaries=(), solver=_Solver()),
+    )
+    instance = block[state_handle]
 
-    def _direct():
-        program = Program("field_parity")
-        state = program.state(block, state_handle)
-        program.solve_fields(state.n)
-        return program
+    program = Program("field_route")
+    state = program.state(instance)
+    outcome = field(state.n)
 
-    def _facade():
-        program = Program("field_parity")
-
-        @program.step
-        def _(prog):
-            state = prog.state(block, state_handle)
-            prog.solve_fields(state.n)
-
-        return program
-
-    direct = _direct()
-    facade = _facade()
-
-    # The facade produced the SAME solve_fields value op ...
-    direct_ops = [value.op for value in direct._values]
-    facade_ops = [value.op for value in facade._values]
-    assert "solve_fields" in direct_ops and "solve_fields" in facade_ops
-    # ... and byte-identical IR (one lowering path, no parallel field registry).
-    assert direct._ir_hash() == facade._ir_hash(), (
-        "facade and direct field lowering diverged: direct=%s facade=%s"
-        % (direct._ir_hash(), facade._ir_hash()))
+    assert not hasattr(program, "solve_fields")
+    assert type(outcome).__name__ == "FieldSolveOutcome"
+    assert [value.op for value in program._values].count("solve_fields") == 1
 
 
 # ---------------------------------------------------------------------------------------------
