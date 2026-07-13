@@ -217,7 +217,6 @@ def validate_bind_manifest(manifest: Any, runtime_facts: Any) -> Any:
     _compare_str(lines, "precision", getattr(manifest, "precision", None), facts.get("precision"))
     _compare_communicator(lines, getattr(manifest, "communicator", None), facts.get("communicator"))
     return lines
-
 def validate_layout_runtime_requirements(arguments: Any, runtime_facts: Any) -> Any:
     """Refuse target requirements from Arguments, independently of manifest capabilities."""
     layout_runtime = getattr(arguments, "layout_runtime", None) or {}
@@ -227,7 +226,6 @@ def validate_layout_runtime_requirements(arguments: Any, runtime_facts: Any) -> 
     _compare_feature(lines, "requires_gpu", layout_runtime.get("requires_gpu"),
                      facts.get("supports_gpu"), "GPU / Kokkos device")
     return lines
-
 
 def _compare_abi(lines: Any, manifest_abi: Any, runtime_abi: Any) -> Any:
     """Compare the two abi keys COMPONENT-WISE (like-with-like), never as raw strings.
@@ -253,7 +251,6 @@ def _compare_abi(lines: Any, manifest_abi: Any, runtime_abi: Any) -> Any:
                      "runtime reports %s (artifact abi_key %r vs runtime %r); rebuild the artifact "
                      "against this runtime" % (m_std, r_std, manifest_abi, runtime_abi))
 
-
 def _compare_communicator(lines: Any, manifest_value: Any, runtime_value: Any) -> Any:
     """Directional communicator check: refuse only what the artifact NEEDS and the runtime LACKS.
 
@@ -275,7 +272,6 @@ def _compare_communicator(lines: Any, manifest_value: Any, runtime_value: Any) -
         lines.append("communicator mismatch: the artifact requires communicator=%r but the loaded "
                      "pops runtime provides %r; bind under a matching runtime or rebuild the "
                      "artifact" % (manifest_value, runtime_value))
-
 
 def _compare_feature(lines: Any, field: Any, manifest_value: Any, runtime_value: Any,
                      human: Any) -> Any:
@@ -459,7 +455,8 @@ def validate_install_arguments(sim: Any, compiled: Any, instances: Any, params: 
                          + "\n  ".join(missing))
 
 
-def run_bind_gates(compiled: Any, layout: Any, initial: Any, params: Any, aux: Any) -> Any:
+def run_bind_gates(compiled: Any, layout: Any, initial: Any, params: Any, aux: Any, *,
+                   platform_manifest: Any = None, execution_context: Any = None) -> Any:
     """Run the four ADC-537 bind refusal gates, raising ONE aggregated ``ValueError`` on any violation.
 
     The ``pops.bind`` front-door check (called from :mod:`pops.codegen.orchestration` BEFORE the
@@ -480,7 +477,12 @@ def run_bind_gates(compiled: Any, layout: Any, initial: Any, params: Any, aux: A
     if manifest is None or arguments is None:
         raise ValueError("pops.bind: compiled artifact returned incomplete manifest/arguments metadata")
     runtime_facts = loaded_runtime_facts()
-    groups = [
+    from pops.runtime._platform_validation import validate_platform_bind
+    groups = []
+    if platform_manifest is not None or execution_context is not None:
+        groups.append(("platform-execution-field-view", validate_platform_bind(
+            platform_manifest, execution_context, initial, layout)))
+    groups += [
         ("aux-required-by-operator", validate_operator_aux(manifest, aux)),
         ("manifest-abi", validate_bind_manifest(manifest, runtime_facts)),
         ("layout-runtime", validate_layout_runtime_requirements(arguments, runtime_facts)),

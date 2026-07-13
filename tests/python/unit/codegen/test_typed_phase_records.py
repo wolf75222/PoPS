@@ -30,6 +30,7 @@ class _Compiled:
         self.so_path = str(path)
         self.target = target
         self.backend = "production"
+        self.abi_key = "test-headers|clang|c++20"
         self.artifact_identity = make_identity("artifact", {"component": name})
 
     def inspect(self):

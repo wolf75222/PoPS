@@ -467,6 +467,11 @@ sources = ["tests/cpp/integration/runtime/test_runtime_environment.cpp"]
 labels = ["integration", "runtime", "medium"]
 
 [[cpp.suite]]
+name = "test_platform_manifest"
+sources = ["tests/cpp/unit/runtime/test_platform_manifest.cpp"]
+labels = ["unit", "runtime", "small"]
+
+[[cpp.suite]]
 name = "test_system_abstraction"
 sources = ["tests/cpp/integration/runtime/test_system_abstraction.cpp"]
 labels = ["integration", "runtime", "medium"]

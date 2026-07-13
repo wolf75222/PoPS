@@ -2,6 +2,8 @@
 
 #include <pops/core/state/aux_names.hpp>  // ADC-291: canonical aux name<->component table + bounds
 #include <pops/runtime/config/runtime_params.hpp>  // ADC-610: kMaxRuntimeParams (mirrored to Python)
+#include <pops/runtime/config/platform_manifest.hpp>  // ADC-683: explicit launch contracts
+#include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/module_capabilities.hpp>  // ADC-479 (#36/#37): authoritative static capability facts
 #include <pops/runtime/runtime_environment.hpp>  // ADC-609: runtime environment/precision/communicator report
 
@@ -78,6 +80,49 @@ py::dict runtime_environment_to_dict(const pops::RuntimeEnvironmentReport& r) {
   d["comm_allocator_mode"] = r.comm_allocator_mode;
   d["allocator_lifetime"] = r.allocator_lifetime;
   return d;
+}
+
+py::dict serial_runtime_backend_manifest_to_dict(const std::string& backend,
+                                                 const std::string& target) {
+  const auto manifest = pops::platform::proven_serial_backend(
+      backend, target, pops::abi_key());
+  py::dict precision;
+  precision["storage"] = pops::platform::require_text(
+      manifest.precision.storage, "precision.storage");
+  precision["compute"] = pops::platform::require_text(
+      manifest.precision.compute, "precision.compute");
+  precision["accumulation"] = pops::platform::require_text(
+      manifest.precision.accumulation, "precision.accumulation");
+  precision["reduction"] = pops::platform::require_text(
+      manifest.precision.reduction, "precision.reduction");
+  py::dict capabilities;
+  capabilities["dimensions"] = pops::platform::require_int_set(
+      pops::platform::capability(manifest, "dimensions"), "capabilities.dimensions");
+  capabilities["centerings"] = pops::platform::require_text_set(
+      pops::platform::capability(manifest, "centerings"), "capabilities.centerings");
+  capabilities["scalars"] = pops::platform::require_text_set(
+      pops::platform::capability(manifest, "scalars"), "capabilities.scalars");
+  capabilities["layouts"] = pops::platform::require_text_set(
+      pops::platform::capability(manifest, "layouts"), "capabilities.layouts");
+  capabilities["ownership"] = pops::platform::require_text_set(
+      pops::platform::capability(manifest, "ownership"), "capabilities.ownership");
+  capabilities["generic_field_view"] = true;
+  py::dict result;
+  result["schema_version"] = pops::platform::kPlatformContractSchemaVersion;
+  result["backend"] = pops::platform::require_text(manifest.backend, "backend");
+  result["target"] = pops::platform::require_text(manifest.target, "target");
+  result["abi"] = pops::platform::require_text(manifest.abi, "abi");
+  result["precision"] = std::move(precision);
+  result["device"] = pops::platform::require_text(manifest.device, "device");
+  result["memory_spaces"] = pops::platform::require_text_set(
+      manifest.memory_spaces, "memory_spaces");
+  result["communicator"] = pops::platform::require_text(
+      manifest.communicator, "communicator");
+  result["capabilities"] = std::move(capabilities);
+  result["evidence"] = "pops.native.2d-float64-host.v1";
+  result["identity"] = pops::platform::identity_token(
+      "runtime-backend-manifest", manifest);
+  return result;
 }
 
 py::dict module_capabilities_to_dict(const pops::ModuleCapabilities& c,
@@ -253,6 +298,12 @@ void init_core(py::module_& m) {
       []() { return runtime_environment_to_dict(pops::runtime_environment_report()); },
       "Runtime environment facts: Kokkos lifecycle/ownership, MPI communicator, precision and "
       "allocator lifetime. Reading it does not initialize Kokkos or MPI.");
+
+  m.def(
+      "runtime_backend_manifest", &serial_runtime_backend_manifest_to_dict,
+      py::arg("backend"), py::arg("target"),
+      "Explicit 2D/float64/host RuntimeBackendManifest. It captures no global MPI/device state; "
+      "non-serial/non-host routes must supply their own ExecutionContext.");
 
   m.def(
       "numerical_defaults_report", []() { return numerical_defaults_report_to_dict(); },

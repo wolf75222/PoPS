@@ -252,6 +252,7 @@ class CompiledSimulationArtifact:
     program: Any | None
     blocks: tuple[CompiledBlockArtifact, ...]
     artifact_identity: Identity = field(init=False)
+    platform_manifest: Any = field(init=False)
     _component_evidence: Any = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -295,10 +296,15 @@ class CompiledSimulationArtifact:
                     "compiled block %r backend=%r does not match resolved backend=%r"
                     % (compiled.name, backend, resolved.backend))
         object.__setattr__(self, "blocks", blocks)
+        from pops._platform_contracts import artifact_platform_manifest
+        platform = artifact_platform_manifest(
+            backend=self.plan.backend, target=self.plan.target, component=blocks[0].model)
+        object.__setattr__(self, "platform_manifest", platform)
         evidence = self._current_component_evidence()
         object.__setattr__(self, "_component_evidence", _deep_freeze(evidence))
         object.__setattr__(
-            self, "artifact_identity", make_identity("artifact", self._payload(evidence)))
+            self, "artifact_identity", make_identity(
+                "artifact", self._payload(evidence, platform)))
 
     @property
     def authoring_snapshot(self) -> Any:
@@ -428,19 +434,26 @@ class CompiledSimulationArtifact:
         }
         return evidence
 
-    def _payload(self, evidence: Any) -> dict[str, Any]:
+    def _payload(self, evidence: Any, platform: Any | None = None) -> dict[str, Any]:
+        selected = self.platform_manifest if platform is None else platform
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "plan_identity": self.plan.plan_identity.to_data(),
             "target": self.plan.target,
+            "platform_manifest": selected.to_data(),
             "components": evidence,
         }
 
     def verify(self) -> None:
         self.plan.verify()
         current = self._current_component_evidence()
-        expected = make_identity("artifact", self._payload(current))
-        if self.artifact_identity != expected or self._component_evidence != _deep_freeze(current):
+        from pops._platform_contracts import artifact_platform_manifest
+        current_platform = artifact_platform_manifest(
+            backend=self.plan.backend, target=self.plan.target, component=self.blocks[0].model)
+        expected = make_identity("artifact", self._payload(current, current_platform))
+        if (self.artifact_identity != expected
+                or self._component_evidence != _deep_freeze(current)
+                or self.platform_manifest != current_platform):
             raise ValueError("CompiledSimulationArtifact identity verification failed")
 
     def inspect(self) -> Any:

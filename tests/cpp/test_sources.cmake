@@ -143,6 +143,7 @@ set(POPS_CPP_TEST_SOURCE_test_native_loader_param_overflow "tests/cpp/integratio
 set(POPS_CPP_TEST_SOURCE_test_newton_robustness "tests/cpp/unit/elliptic/test_newton_robustness.cpp")
 set(POPS_CPP_TEST_SOURCE_test_numerical_defaults "tests/cpp/unit/numerics/test_numerical_defaults.cpp")
 set(POPS_CPP_TEST_SOURCE_test_patch_range "tests/cpp/unit/mesh/test_patch_range.cpp")
+set(POPS_CPP_TEST_SOURCE_test_platform_manifest "tests/cpp/unit/runtime/test_platform_manifest.cpp")
 set(POPS_CPP_TEST_SOURCE_test_physical_bc "tests/cpp/unit/mesh/test_physical_bc.cpp")
 set(POPS_CPP_TEST_SOURCE_test_poisson_convergence "tests/cpp/unit/elliptic/test_poisson_convergence.cpp")
 set(POPS_CPP_TEST_SOURCE_test_poisson_disc "tests/cpp/unit/elliptic/test_poisson_disc.cpp")

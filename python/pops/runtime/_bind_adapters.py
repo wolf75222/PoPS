@@ -67,7 +67,6 @@ class _RuntimeAdapter:
         self.install(engine, compiled, instances=instances, params=params, aux=aux,
                      solvers=solvers, cadence=cadence, outputs=outputs, diagnostics=diagnostics)
         return BoundSimulation(engine)
-
     def build_install_plan(self, install_plan: Any) -> Any:
         from pops.codegen._plans import require_install_plan
         from pops.runtime._bound_sim import BoundSimulation
@@ -77,18 +76,19 @@ class _RuntimeAdapter:
                 "pops.bind: InstallPlan target %r cannot be consumed by the %r adapter"
                 % (plan.target, self.target)
             )
-        if plan.resources:
+        unsupported = sorted(set(plan.resources) - {"execution_context"})
+        if unsupported:
             raise NotImplementedError(
                 "pops.bind: InstallPlan carries runtime resources %s, but this adapter has no "
-                "typed native resource consumer" % sorted(plan.resources)
+                "typed native resource consumer" % unsupported
             )
         engine = self.build_engine_for_plan(plan)
+        engine._execution_context = plan.execution_context
         self.install_plan(engine, plan)
         return BoundSimulation(engine)
 
     def build_engine_for_plan(self, install_plan: Any) -> Any:
         return self.build_engine(install_plan.layout)
-
     def install_plan(self, engine: Any, install_plan: Any) -> None:
         raise NotImplementedError
 
@@ -335,6 +335,7 @@ def install_plan(install_plan: Any) -> Any:
         inputs.initial_state,
         plan.params,
         plan.aux,
+        platform_manifest=artifact.platform_manifest, execution_context=plan.execution_context,
     )
     adapter = adapter_for(plan.target, plan.layout, n_blocks=len(plan.instances))
     return adapter.build_install_plan(plan)

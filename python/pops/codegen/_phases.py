@@ -243,8 +243,14 @@ def bind(artifact: Any, inputs: Any) -> Any:
         instances[block.name] = entry
     install_plan = InstallPlan(
         artifact=artifact, bind_inputs=inputs, instances=instances, params=params,
-        aux=inputs.aux, resources=inputs.resources)
+        aux=inputs.aux, resources=inputs.resources,
+        execution_context=_execution_context(artifact, inputs.resources))
     return install(install_plan)
+
+
+def _execution_context(artifact: Any, resources: Any) -> Any:
+    from pops.runtime.platform_manifest import execution_context_for_bind
+    return execution_context_for_bind(artifact.platform_manifest, resources)
 
 
 def install(plan: Any) -> Any:

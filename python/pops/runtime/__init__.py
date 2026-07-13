@@ -32,6 +32,11 @@ from pops.runtime.defaults import numerical_defaults_report  # noqa: F401
 from pops.runtime.fallbacks import fallback_diagnostics_report, reset_fallback_diagnostics  # noqa: F401
 from pops.runtime.routes import Route, route_manifest  # noqa: F401  (typed native routes, ADC-584)
 from pops.runtime.brick_catalog import brick_catalog  # noqa: F401  (builtin native brick catalog, ADC-586)
+from pops.runtime.platform_manifest import (  # noqa: F401
+    CapabilityProof, ExecutionContext, ExecutionResource, FieldViewDescriptor,
+    PlatformContractError, PlatformManifest, PrecisionPolicy, RuntimeBackendManifest,
+    launch_checked, validate_launch,
+)
 
 __all__ = [
     "ModelSpec",
@@ -39,4 +44,7 @@ __all__ = [
     "fallback_diagnostics_report", "reset_fallback_diagnostics",
     "Route", "route_manifest",
     "brick_catalog",
+    "CapabilityProof", "PrecisionPolicy", "PlatformManifest", "RuntimeBackendManifest",
+    "ExecutionResource", "ExecutionContext", "FieldViewDescriptor", "PlatformContractError",
+    "validate_launch", "launch_checked",
 ]

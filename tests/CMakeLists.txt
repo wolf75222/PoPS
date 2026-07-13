@@ -354,6 +354,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_structured_solver_diagnostics
   test_public_validation_errors
   test_program_context_schur_free
+  test_platform_manifest
   test_generic_krylov
   test_solver_codegen_generated
   test_dispatch_tags

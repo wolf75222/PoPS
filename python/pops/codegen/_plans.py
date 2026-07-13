@@ -20,7 +20,9 @@ from pops.identity import Identity, canonical_bytes, make_identity
 
 
 _TARGETS = frozenset({"system", "amr_system"})
-_BIND_RESOURCE_KEYS = frozenset({"communicator", "device", "allocator", "stream"})
+_BIND_RESOURCE_KEYS = frozenset({
+    "execution_context", "communicator", "device", "allocator", "stream",
+})
 _SEMANTIC_OVERRIDE_KEYS = frozenset({
     "solver", "solvers", "cadence", "layout", "target", "backend", "spatial",
     "outputs", "diagnostics", "program", "algorithm",
@@ -377,6 +379,7 @@ class InstallPlan:
     params: Any
     aux: Mapping[str, Any]
     resources: Mapping[str, Any] = field(default_factory=dict)
+    execution_context: Any = None
     bind_identity: Identity = field(init=False)
 
     def __post_init__(self) -> None:
@@ -396,6 +399,18 @@ class InstallPlan:
         object.__setattr__(self, "aux", _string_mapping(self.aux, where="InstallPlan.aux"))
         object.__setattr__(self, "resources", _string_mapping(
             self.resources, where="InstallPlan.resources"))
+        from pops._platform_contracts import ExecutionContext, serial_execution_context, validate_launch
+        context = self.execution_context
+        if context is None:
+            context = serial_execution_context(self.artifact.platform_manifest)
+        if type(context) is not ExecutionContext:
+            raise TypeError("InstallPlan.execution_context must be an exact ExecutionContext")
+        supplied_context = self.resources.get("execution_context")
+        if supplied_context is not None and supplied_context is not context:
+            raise ValueError(
+                "InstallPlan execution_context must be the exact BindInputs resource")
+        validate_launch(self.artifact.platform_manifest, context, ())
+        object.__setattr__(self, "execution_context", context)
         expected_names = tuple(block.name for block in self.artifact.blocks)
         if tuple(self.instances) != expected_names:
             raise ValueError("InstallPlan instances must match compiled block order exactly")
@@ -480,6 +495,8 @@ class InstallPlan:
             "initial_values": _evidence(
                 self.initial_values, where="install.initial_values"
             ),
+            "execution_context": _evidence(
+                self.execution_context, where="install.execution_context"),
         }
 
     def verify(self) -> None:
