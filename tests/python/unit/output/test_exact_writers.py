@@ -92,7 +92,8 @@ def _accepted_output_effect(request, target):
         0,
         request.consumer_id,
         _identity("consumer-manifest", "density-output"),
-        PublicationTarget(str(target), "npz", ParallelMode.SERIAL),
+        PublicationTarget(
+            str(target), NPZ().consumer_data(), None, ParallelMode.SERIAL),
         payload,
         FailRun(),
         before,

@@ -28,7 +28,6 @@ class _System:
 
     _s: Any
     _aux_field_index: dict
-    _output_policies: list
     _program_cadence_cfl: Any
     _lifecycle: str
     _bound_snapshot: Any

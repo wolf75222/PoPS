@@ -95,14 +95,11 @@ class _AmrSystemInstall(_AmrSystem):
                     "pops.bind: compiled handle has no .so_path (got %r); pass a compile_problem(...) "
                     "result (target='amr_system'), or compiled=None for a native AMR install (each "
                     "instance carries its own native model)." % type(compiled).__name__)
-        # (7) OUTPUT / CHECKPOINT policies and DIAGNOSTIC measures flow onto the AMR engine exactly
-        # like the Uniform System (ADC-542 / addendum C.1): AmrSystem.run() fires each at its cadence
-        # through the AMR per-level output driver + the composite-reduction diagnostics path. Stored
-        # here; the run-loop hook lives on AmrSystem.
-        if outputs:
-            self._output_policies = list(outputs)
-        if diagnostics:
-            self._diagnostic_measures = list(diagnostics)
+        if outputs or diagnostics:
+            raise ValueError(
+                "native AMR install does not accept free output/diagnostic lists; "
+                "declare exact ConsumerGraph nodes on the compiled plan"
+            )
 
         # (1) FIELD SOLVERS first (parity with System: set_poisson before adding blocks AND before
         # install_program -- the section-24 solver requirement reads the configured solver). The DECLARED

@@ -118,13 +118,6 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         # sim.run(t_end) after bind(..., cadence=CompiledTime(cfl=X)) advances at X (not silently
         # ignored). Set by _install_cadence; None until a numeric-cfl cadence is installed.
         self._program_cadence_cfl = None
-        # OUTPUT / CHECKPOINT policies (C4 / ADC-509) flowed by pops.bind through _install_compiled.
-        # Empty until install; run(output_dir=...) fires each at its cadence via write()/checkpoint.
-        self._output_policies = []
-        # DECLARED diagnostic measures (ADC-542) flowed by pops.bind. Empty until install; run() fires
-        # each DUE measure at its cadence, lowering it to a native collective reduction and recording
-        # the scalar (readable via program_diagnostics). Previously the measures were dropped.
-        self._diagnostic_measures = []
         # RUNTIME FREEZE LIFECYCLE (ADC-592): "assembling" while the composition is mutable, "bound"
         # once _finalize_bind runs (the LAST act of _install_compiled). The Python flag enforces the
         # freeze even under a prebuilt .so with no native mark_bound; the native lifecycle is defence
@@ -142,11 +135,9 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         @p cfl: Courant number passed to step_cfl. When omitted (None) it defaults to the CFL pinned
         by an installed ``CompiledTime(cfl=X)`` cadence, else 0.4 -- so a numeric cadence cfl actually
         takes effect on a bare ``sim.run(t_end)`` rather than being silently ignored. @p max_steps:
-        guard (avoids an infinite loop if dt -> 0). @p output_dir: when output / checkpoint policies
-        were flowed onto this System (``pops.bind`` from a Problem with ``.output(policy)``), the
-        directory the run writes them to; each policy fires at its own cadence through the existing
-        write()/checkpoint writers (C4 / ADC-509). Defaults to the current directory when policies
-        are present and output_dir is omitted. Returns the number of steps taken.
+        guard (avoids an infinite loop if dt -> 0). ``output_dir`` is recorded in run provenance;
+        publication is owned exclusively by ``RuntimeInstance`` and its exact ``ConsumerGraph``.
+        Returns the number of steps taken.
         cf. DSL_MODEL_DESIGN.md section 6."""
         from pops.runtime._step_strategy import (
             AdaptiveCFL, resolve_run_strategy, run_control_payload, run_step_attempt)
@@ -157,43 +148,11 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
             control_payload, time=self.time(), macro_step=self.macro_step())
         from pops.runtime._run_manifest import begin_run
         begin_run(self, t_end=t_end, cfl=manifest_cfl, max_steps=max_steps, output_dir=output_dir)
-        policies = getattr(self, "_output_policies", [])
-        measures = getattr(self, "_diagnostic_measures", [])
-        out_dir = output_dir if output_dir is not None else "."
-        # ConservationCheck anchors its drift to the FIRST-tick value; the run owns the baseline map so
-        # it persists across the loop (the driver seeds an entry the first time a check fires).
-        baselines = {}
         steps = 0
         while self.time() < t_end and steps < max_steps:
             run_step_attempt(self, self, strategy, t_end=float(t_end))
             steps += 1
-            # on_end honesty: dt is CFL-driven, so the final step count is unknown a priori. This step
-            # is the LAST one iff the loop is about to exit (t_end reached or the max_steps guard hit).
-            last_step = steps if (not (self.time() < t_end) or steps >= max_steps) else None
-            if policies:
-                self._fire_outputs(policies, steps, out_dir, last_step)
-            if measures:
-                self._fire_diagnostics(measures, steps, last_step, baselines)
         return steps
-
-    def _fire_outputs(self, policies: Any, step: Any, output_dir: Any, last_step: Any = None) -> Any:
-        """Fire the DUE output / checkpoint policies at macro-step @p step (C4 run-loop hook).
-
-        Delegates to :func:`pops.runtime._output_driver.fire_output_policies`, which maps each
-        policy's typed cadence/format/fields onto the existing ``write`` / ``checkpoint`` writers.
-        Kept tiny so the cadence logic lives in one host-testable place, not inline in run()."""
-        from pops.runtime._output_driver import fire_output_policies
-        return fire_output_policies(self, policies, step, output_dir, last_step=last_step)
-
-    def _fire_diagnostics(self, measures, step, last_step, baselines):
-        """Fire the DUE declared diagnostic measures at macro-step @p step (ADC-542 run-loop hook).
-
-        Delegates to :func:`pops.runtime._diagnostics_driver.fire_diagnostics`, which lowers each due
-        measure to a native collective reduction on this System and records the scalar via
-        ``record_program_diagnostic``. Kept tiny (mirrors :meth:`_fire_outputs`) so the reduction
-        mapping lives in one host-testable place."""
-        from pops.runtime._diagnostics_driver import fire_diagnostics
-        return fire_diagnostics(self, measures, step, last_step, baselines)
 
     def profile(self, profile: Any = None) -> Any:
         """Typed profiling context manager (Spec 5 sec.12.5, criteria 41-44).

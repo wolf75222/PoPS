@@ -224,7 +224,9 @@ class NPZWriter:
     extension = ".npz"
 
     def prepare(self, snapshot: OutputSnapshot, request: OutputRequest,
-                target: Any) -> PreparedOutputFile:
+                target: Any, *, communicator: Any = None) -> PreparedOutputFile:
+        if communicator is not None:
+            raise ValueError("serial NPZ output cannot carry a communicator")
         if request.parallel:
             raise ValueError("NPZ has no collective writer; select HDF5(parallel=True)")
         import numpy as np
@@ -464,7 +466,9 @@ class ParaViewWriter:
     extension = ".vtu"
 
     def prepare(self, snapshot: OutputSnapshot, request: OutputRequest,
-                target: Any) -> PreparedOutputFile:
+                target: Any, *, communicator: Any = None) -> PreparedOutputFile:
+        if communicator is not None:
+            raise ValueError("serial ParaView output cannot carry a communicator")
         if request.parallel:
             raise ValueError("ParaView VTU publication is serial; use collective HDF5 for parallel IO")
         import numpy as np

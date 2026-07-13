@@ -17,6 +17,7 @@ from pops.fields import (
 )
 from pops.identity import make_identity
 from pops.model import Handle, OwnerPath
+from pops.output import HDF5, NPZ
 from pops.runtime._runtime_plan_contracts import RuntimePlanningError
 from pops.runtime._runtime_planning import build_runtime_plans
 from pops.runtime.consumer import (
@@ -70,7 +71,7 @@ def _manifest_for(
     n: int = 2,
     resource: str = "state:u",
     dependency: Handle | None = None,
-    action=FailRun(),
+    action=None,
     parallel_mode=ParallelMode.SERIAL,
 ) -> ConsumerManifest:
     owner = OwnerPath.consumer("adc-685")
@@ -81,13 +82,15 @@ def _manifest_for(
         runtime.calls[0].layout_id,
     )
     dependencies = (dependency,) if dependency is not None else ()
+    if action is None:
+        action = FailRun()
     return ConsumerManifest(
         handle,
         ConsumerKind.SCIENTIFIC_OUTPUT,
         (quantity,),
         Schedule(Every(AcceptedStep(clock), n)),
         "file:///adc-685/%s" % name,
-        "npz",
+        HDF5(parallel=True) if parallel_mode is ParallelMode.COLLECTIVE else NPZ(),
         parallel_mode,
         dependencies,
         action,
@@ -231,7 +234,7 @@ def test_stale_field_requires_explicit_policy_and_records_recompute_without_solv
         (quantity,),
         Schedule(Every(AcceptedStep(clock), 1)),
         "file:///adc-685/field",
-        "npz",
+        NPZ(),
         ParallelMode.SERIAL,
     )
     moment = _moment(clock, step=2, layouts=(layout,))

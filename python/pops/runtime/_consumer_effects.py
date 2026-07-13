@@ -113,17 +113,26 @@ class ConsumerFieldResolution:
 @dataclass(frozen=True, slots=True)
 class PublicationTarget:
     uri: str
-    output_format: str
+    output_format: Mapping[str, Any] | None
+    operation: Mapping[str, Any] | None
     parallel_mode: ParallelMode
 
     def __post_init__(self) -> None:
         _text(self.uri, "PublicationTarget.uri")
-        _text(self.output_format, "PublicationTarget.output_format")
+        for name in ("output_format", "operation"):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(
+                    self, name, freeze_data(value, "PublicationTarget.%s" % name))
+        if self.output_format is not None and self.operation is not None:
+            raise ValueError("PublicationTarget cannot mix scientific and restart providers")
         if type(self.parallel_mode) is not ParallelMode:
             raise TypeError("PublicationTarget.parallel_mode must be an exact ParallelMode")
 
     def to_data(self) -> dict[str, Any]:
-        return {"uri": self.uri, "format": self.output_format,
+        return {"uri": self.uri,
+                "format": None if self.output_format is None else thaw_data(self.output_format),
+                "operation": None if self.operation is None else thaw_data(self.operation),
                 "parallel_mode": self.parallel_mode.value}
 
 

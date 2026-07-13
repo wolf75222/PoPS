@@ -1,13 +1,8 @@
-"""The bound-simulation view returned by ``pops.bind`` (ADC-583).
+"""Strict public view over the one ``RuntimeInstance`` returned by ``pops.bind``.
 
-:class:`BoundSimulation` is a strict DELEGATING VIEW over an internal C++-backed runtime engine
-(:class:`pops.runtime.system.System` / :class:`pops.runtime.amr_system.AmrSystem`). It is NOT a
-third runtime: it holds no state and runs no stepping logic of its own; every runnable operation is
-forwarded, unchanged, to the engine, which stays the C++-backed runtime. Its sole job is to expose
-the RUN / DATA / DIAGNOSTIC / IO surface of a bound simulation while HIDING the assembly vocabulary
-(``add_block`` / ``add_equation`` / ``set_poisson`` / ``set_refinement`` / ``install_program`` /
-...): a composition is declared on the ``pops.Problem`` and lowered by ``pops.compile`` + ``pops.bind``,
-never mutated on the bound simulation.
+The instance owns the authenticated install/layout/runtime plans, its native executor and the
+transactional ConsumerGraph. This view exposes only run/data/diagnostic/checkpoint operations and
+hides every assembly setter.
 
 Users obtain a :class:`BoundSimulation` only from ``pops.bind(...)``; it is not exported on the
 ``pops`` root. The wrapped engine is reachable as ``sim._engine`` -- the documented INTERNAL escape
@@ -48,9 +43,9 @@ _DIAGNOSTICS = frozenset({
     "program_report", "reduce_component",
 })
 
-# Write outputs / checkpoints; record a diagnostic scalar (the ADC-542 driver sink + composite AMR
-# reduction, parity with reduce_component in _DIAGNOSTICS above).
-_IO = frozenset({"write", "checkpoint", "record_program_diagnostic", "composite_reduce"})
+# Exact scientific outputs are ConsumerGraph nodes, never an imperative side channel.  Checkpoint
+# remains a runtime operation because RuntimeInstance authenticates the graph and cursor state.
+_IO = frozenset({"checkpoint", "record_program_diagnostic", "composite_reduce"})
 
 _ALLOWED = _STEPPING | _MUTATIONS | _DIAGNOSTICS | _IO
 
@@ -70,14 +65,10 @@ _BLOCKED = frozenset({
 
 
 class BoundSimulation:
-    """A bound simulation: a delegating view over the internal runtime engine (``pops.bind`` result).
+    """A strict delegating view over one internal ``RuntimeInstance``.
 
-    Holds one internal engine (``self._engine``, a :class:`pops.runtime.system.System` or
-    :class:`pops.runtime.amr_system.AmrSystem`) and forwards the allowlisted run / data /
-    diagnostic / io surface to it. It adds NO stepping logic of its own -- it is a pure view, the
-    engine stays the C++-backed runtime. Assembly vocabulary (blocks / fields / couplings / the time
-    program) is declared on the ``pops.Problem`` and lowered by ``pops.compile`` + ``pops.bind``; the
-    bound simulation refuses those setters.
+    RuntimeInstance coordinates the C++ executor and accepted-side-effect transactions. Assembly
+    vocabulary is declared on ``pops.Problem`` and lowered before this view exists.
 
     ``self._engine`` is the documented INTERNAL escape hatch for low-level tests; it is not part of
     the public surface.
@@ -115,7 +106,7 @@ class BoundSimulation:
         # whole surface.
         raise AttributeError(
             "pops.bind: a bound simulation has no %r; its surface is the run / data / diagnostic / "
-            "io methods (run / step / step_cfl / set_state / density / mass / inspect / write / "
+            "io methods (run / step / step_cfl / set_state / density / mass / inspect / checkpoint / "
             "...). Author the composition on the pops.Problem and lower it with pops.compile(...) + "
             "pops.bind(...)." % attr)
 

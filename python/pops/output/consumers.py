@@ -29,16 +29,9 @@ def _schedule(value: Any, *, where: str) -> Schedule:
 
 
 def _format_data(value: Any) -> dict[str, Any]:
-    protocol = getattr(value, "consumer_data", None)
-    if not callable(protocol):
-        raise TypeError("scientific output format must implement consumer_data()")
-    data = protocol()
-    if not isinstance(data, dict):
-        raise TypeError("output format consumer_data() must return a dict")
-    name = data.get("format_name")
-    if not isinstance(name, str) or not name:
-        raise ValueError("output format consumer_data() must declare format_name")
-    return data
+    from .provider import consumer_format_data
+
+    return consumer_format_data(value, where="ScientificOutput.format")
 
 
 def _diagnostic(value: Any, *, index: int) -> None:
@@ -110,29 +103,25 @@ class ScientificOutput(Descriptor):
         return tuple(result)
 
     def consumer_authoring(self) -> tuple[Any, ...]:
-        from pops.runtime._consumer_authoring import (
-            ConsumerAuthoringNode,
-            ConsumerOperationAuthoring,
-        )
+        from pops.runtime._consumer_authoring import ConsumerAuthoringNode
         from pops.runtime.consumer import ConsumerKind, ParallelMode
 
-        requirements = self._format_data.get("requirements", {})
-        collective = isinstance(requirements, dict) and requirements.get("parallel_io") is True
-        operation = ConsumerOperationAuthoring(
-            "scientific_output",
-            {"format": self._format_data},
-            self.diagnostics,
-        )
+        mode = {
+            "serial": ParallelMode.SERIAL,
+            "collective": ParallelMode.COLLECTIVE,
+            "per_rank": ParallelMode.PER_RANK,
+        }[self._format_data["parallel_mode"]]
         return (ConsumerAuthoringNode(
             label="scientific-output-%s" % self.target.replace("/", "-"),
             kind=ConsumerKind.SCIENTIFIC_OUTPUT,
             references=self.fields,
             schedule=self.schedule,
             target_uri=self.target,
-            output_format=self._format_data["format_name"],
-            parallel_mode=(ParallelMode.COLLECTIVE if collective else ParallelMode.SERIAL),
+            output_format=self.format,
+            parallel_mode=mode,
             levels=self.levels,
-            operation=operation,
+            operation=None,
+            diagnostics=self.diagnostics,
         ),)
 
     def options(self) -> dict[str, Any]:
@@ -162,11 +151,9 @@ class Checkpoint(Descriptor):
         return ()
 
     def consumer_authoring(self) -> tuple[Any, ...]:
-        from pops.runtime._consumer_authoring import (
-            ConsumerAuthoringNode,
-            ConsumerOperationAuthoring,
-        )
+        from pops.runtime._consumer_authoring import ConsumerAuthoringNode
         from pops.runtime.consumer import ConsumerKind, ParallelMode
+        from pops.runtime.restart_provider import RestartV3
 
         return (ConsumerAuthoringNode(
             label="checkpoint-%s" % self.target.replace("/", "-"),
@@ -174,13 +161,10 @@ class Checkpoint(Descriptor):
             references=(),
             schedule=self.schedule,
             target_uri=self.target,
-            output_format="pops-checkpoint-v3",
+            output_format=None,
             parallel_mode=ParallelMode.COLLECTIVE,
             levels=AllLevels(),
-            operation=ConsumerOperationAuthoring(
-                "checkpoint",
-                {"restartable": True, "bit_identical": self.bit_identical},
-            ),
+            operation=RestartV3(bit_identical=self.bit_identical),
         ),)
 
     def options(self) -> dict[str, Any]:

@@ -14,7 +14,6 @@ from ._consumer_contracts import (
     ConsumerFailureAction,
     ConsumerKind,
     ConsumerManifest,
-    ConsumerOperation,
     ConsumerQuantity,
     FailRun,
     ParallelMode,
@@ -54,70 +53,6 @@ def _frozen_descriptor(value: Any, *, where: str) -> Any:
     return clone
 
 
-@dataclass(frozen=True, slots=True, init=False)
-class ConsumerOperationAuthoring:
-    """One open operation name, inert configuration and typed diagnostic descriptors."""
-
-    name: str
-    configuration: dict[str, Any]
-    diagnostics: tuple[Any, ...]
-
-    def __init__(self, name: Any, configuration: Any, diagnostics: Any = ()) -> None:
-        if not isinstance(name, str) or not name or name.strip() != name:
-            raise TypeError("consumer operation name must be canonical text")
-        if not isinstance(configuration, dict):
-            raise TypeError("consumer operation configuration must be a dict")
-        rows = tuple(
-            _frozen_descriptor(value, where="consumer diagnostic") for value in diagnostics)
-        for index, value in enumerate(rows):
-            where = "consumer diagnostic %d" % index
-            _references(value, where=where)
-            _protocol(value, "resolve_references", where=where)
-            _protocol(value, "consumer_data", where=where)
-        # ConsumerOperation owns the strict canonical value validation and deep freeze.
-        frozen = ConsumerOperation(name, configuration)
-        object.__setattr__(self, "name", name)
-        object.__setattr__(self, "configuration", frozen.to_data()["data"])
-        object.__setattr__(self, "diagnostics", rows)
-
-    def declaration_references(self) -> tuple[Handle, ...]:
-        result = []
-        for index, diagnostic in enumerate(self.diagnostics):
-            for reference in _references(
-                    diagnostic, where="consumer diagnostic %d" % index):
-                if reference not in result:
-                    result.append(reference)
-        return tuple(result)
-
-    def resolve(self, resolver: Any) -> ConsumerOperation:
-        if not callable(resolver):
-            raise TypeError("consumer operation resolver must be callable")
-        diagnostics = []
-        for index, diagnostic in enumerate(self.diagnostics):
-            where = "consumer diagnostic %d" % index
-            resolved = _protocol(
-                diagnostic, "resolve_references", where=where)(resolver)
-            references = tuple(resolver(reference) for reference in _references(
-                resolved, where=where))
-            if any(not isinstance(reference, Handle) or not reference.is_resolved
-                   for reference in references):
-                raise TypeError("resolved diagnostic references must be canonical Handles")
-            diagnostics.append({
-                "descriptor": _protocol(resolved, "consumer_data", where=where)(),
-                "references": [reference.canonical_identity() for reference in references],
-            })
-        data = dict(self.configuration)
-        data["diagnostics"] = diagnostics
-        return ConsumerOperation(self.name, data)
-
-    def inspect(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "configuration": dict(self.configuration),
-            "diagnostics": [diagnostic.inspect() for diagnostic in self.diagnostics],
-        }
-
-
 @dataclass(frozen=True, slots=True)
 class ConsumerAuthoringNode:
     """One immutable direct consumer declaration before Case/layout resolution."""
@@ -127,14 +62,15 @@ class ConsumerAuthoringNode:
     references: tuple[Handle, ...]
     schedule: Schedule
     target_uri: str
-    output_format: str
+    output_format: Any
     parallel_mode: ParallelMode
     levels: Any
-    operation: ConsumerOperationAuthoring
+    operation: Any
+    diagnostics: tuple[Any, ...] = ()
     failure_action: ConsumerFailureAction = FailRun()
 
     def __post_init__(self) -> None:
-        for name in ("label", "target_uri", "output_format"):
+        for name in ("label", "target_uri"):
             value = getattr(self, name)
             if not isinstance(value, str) or not value or value.strip() != value:
                 raise TypeError("ConsumerAuthoringNode.%s must be canonical text" % name)
@@ -153,17 +89,35 @@ class ConsumerAuthoringNode:
             raise TypeError("ConsumerAuthoringNode.parallel_mode must be an exact ParallelMode")
         _protocol(self.levels, "select_levels", where="consumer level selection")
         _protocol(self.levels, "to_data", where="consumer level selection")
-        if type(self.operation) is not ConsumerOperationAuthoring:
-            raise TypeError(
-                "ConsumerAuthoringNode.operation must be an exact ConsumerOperationAuthoring")
+        rows = tuple(
+            _frozen_descriptor(value, where="consumer diagnostic")
+            for value in self.diagnostics)
+        for index, value in enumerate(rows):
+            where = "consumer diagnostic %d" % index
+            _references(value, where=where)
+            _protocol(value, "resolve_references", where=where)
+            _protocol(value, "consumer_data", where=where)
+        object.__setattr__(self, "diagnostics", rows)
+        if self.kind is ConsumerKind.SCIENTIFIC_OUTPUT:
+            from pops.output.provider import consumer_format_data
+            consumer_format_data(self.output_format, where="ConsumerAuthoringNode.output_format")
+            if self.operation is not None:
+                raise ValueError("ScientificOutput carries no competing operation provider")
+        elif self.kind is ConsumerKind.CHECKPOINT:
+            if self.output_format is not None or self.operation is None:
+                raise ValueError("Checkpoint requires only its restart operation provider")
+        elif self.output_format is not None or self.operation is not None:
+            raise ValueError("Diagnostic/Monitor authoring carries no publication provider")
         if type(self.failure_action) not in _FAILURE_ACTIONS:
             raise TypeError("ConsumerAuthoringNode.failure_action has an unsupported type")
 
     def declaration_references(self) -> tuple[Handle, ...]:
         result = list(self.references)
-        for reference in self.operation.declaration_references():
-            if reference not in result:
-                result.append(reference)
+        for index, diagnostic in enumerate(self.diagnostics):
+            for reference in _references(
+                    diagnostic, where="consumer diagnostic %d" % index):
+                if reference not in result:
+                    result.append(reference)
         return tuple(result)
 
     def canonical_data(self, resolver: Any) -> dict[str, Any]:
@@ -173,17 +127,28 @@ class ConsumerAuthoringNode:
         if any(not isinstance(reference, Handle) or not reference.is_resolved
                for reference in references):
             raise TypeError("consumer resolver must return canonical Handles")
-        operation = self.operation.resolve(resolver)
+        diagnostics = []
+        for index, diagnostic in enumerate(self.diagnostics):
+            where = "consumer diagnostic %d" % index
+            resolved = _protocol(diagnostic, "resolve_references", where=where)(resolver)
+            diagnostics.append({
+                "descriptor": _protocol(resolved, "consumer_data", where=where)(),
+                "references": [resolver(reference).canonical_identity()
+                               for reference in _references(resolved, where=where)],
+            })
+        output_data = None if self.output_format is None else self.output_format.consumer_data()
+        operation_data = None if self.operation is None else self.operation.consumer_data()
         return {
             "label": self.label,
             "kind": self.kind.value,
             "references": [reference.canonical_identity() for reference in references],
             "schedule": self.schedule.to_data(),
             "target_uri": self.target_uri,
-            "output_format": self.output_format,
+            "output_format": output_data,
             "parallel_mode": self.parallel_mode.value,
             "levels": self.levels.to_data(),
-            "operation": operation.to_data(),
+            "operation": operation_data,
+            "diagnostics": diagnostics,
             "failure_action": self.failure_action.to_data(),
         }
 
@@ -234,7 +199,11 @@ class ConsumerAuthoringNode:
             output_format=self.output_format,
             parallel_mode=self.parallel_mode,
             failure_action=self.failure_action,
-            operation=self.operation.resolve(resolver),
+            operation=self.operation,
+            diagnostics=tuple(
+                _protocol(value, "resolve_references", where="consumer diagnostic")(
+                    resolver)
+                for value in self.diagnostics),
         )
 
     def inspect(self) -> dict[str, Any]:
@@ -244,12 +213,14 @@ class ConsumerAuthoringNode:
             "references": [reference.inspect() for reference in self.references],
             "schedule": self.schedule.to_data(),
             "target_uri": self.target_uri,
-            "output_format": self.output_format,
+            "output_format": None if self.output_format is None
+            else self.output_format.consumer_data(),
             "parallel_mode": self.parallel_mode.value,
             "levels": self.levels.to_data(),
-            "operation": self.operation.inspect(),
+            "operation": None if self.operation is None else self.operation.consumer_data(),
+            "diagnostics": [diagnostic.inspect() for diagnostic in self.diagnostics],
             "failure_action": self.failure_action.to_data(),
         }
 
 
-__all__ = ["ConsumerAuthoringNode", "ConsumerOperationAuthoring"]
+__all__ = ["ConsumerAuthoringNode"]

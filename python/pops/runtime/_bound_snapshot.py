@@ -87,27 +87,6 @@ def _data(value: Any, *, where: str) -> Any:
             "type": "pops.time.Schedule", "kind": value.kind, "policy": value.policy,
             "params": _data(dict(value.params), where=where),
         }
-    if type(value).__module__ == "pops.output.policies" \
-            and type(value).__name__ == "OutputPolicy":
-        return {
-            "type": "pops.output.OutputPolicy",
-            "format": _data(value.format, where=where),
-            "cadence": _data(value.cadence, where=where),
-            "fields": _data(value.fields, where=where),
-            "diagnostics": _data(value.diagnostics, where=where),
-            "levels": _data(value.levels, where=where),
-            "require_parallel": bool(value.require_parallel),
-            "prefix": value.prefix,
-        }
-    if type(value).__module__ == "pops.output.policies" \
-            and type(value).__name__ == "CheckpointPolicy":
-        return {
-            "type": "pops.output.CheckpointPolicy",
-            "cadence": _data(value.cadence, where=where),
-            "restartable": bool(value.restartable),
-            "require_bit_identical": bool(value.require_bit_identical),
-            "prefix": value.prefix,
-        }
     if type(value).__module__ == "pops.diagnostics.measures":
         fields = {
             "type": "%s.%s" % (type(value).__module__, type(value).__qualname__),
@@ -318,9 +297,10 @@ def _build_snapshot(engine: Any, compiled: Any, instances: Any, solvers: Any, ca
         initial_evidence=_input_evidence(
             {name: spec["initial"] for name, spec in (instances or {}).items()
              if "initial" in spec}, where="initial_state"),
-        outputs=[_data(value, where="output") for value in getattr(engine, "_output_policies", ())],
-        diagnostics=[_data(value, where="diagnostic")
-                     for value in getattr(engine, "_diagnostic_measures", ())],
+        # Exact consumers are authenticated by the compiled artifact and owned by RuntimeInstance.
+        # The native BoundSnapshot deliberately carries no second policy registry.
+        outputs=(),
+        diagnostics=(),
         bind_schema_identity=_schema_identity(params),
         execution_context=getattr(engine, "_execution_context", None),
     )

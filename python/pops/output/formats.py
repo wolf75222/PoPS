@@ -11,6 +11,7 @@ class FormatInterface(Descriptor):
     """Typed scientific-format protocol; concrete descriptors select one exact writer."""
 
     category = "output_format"
+    __pops_ir_immutable__ = True
     format_name = ""
     extension = ""
 
@@ -18,16 +19,10 @@ class FormatInterface(Descriptor):
         raise NotImplementedError("output format does not provide a writer")
 
     def consumer_data(self) -> dict[str, Any]:
-        """Exact inert writer selection consumed by policy-to-graph authoring."""
-        if not isinstance(self.format_name, str) or not self.format_name:
-            raise ValueError("output format must declare a non-empty format_name")
-        return {
-            "descriptor": "%s.%s" % (type(self).__module__, type(self).__qualname__),
-            "format_name": self.format_name,
-            "extension": self.extension,
-            "options": self.options(),
-            "requirements": self.requirements().to_dict(),
-        }
+        raise NotImplementedError("output format does not provide canonical consumer data")
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("scientific output providers are immutable")
 
 
 class HDF5(FormatInterface):
@@ -40,7 +35,7 @@ class HDF5(FormatInterface):
     def __init__(self, parallel: bool = False) -> None:
         if type(parallel) is not bool:
             raise TypeError("HDF5.parallel must be an exact bool")
-        self.parallel = parallel
+        object.__setattr__(self, "parallel", parallel)
 
     def options(self) -> dict:
         return {"parallel": self.parallel}
@@ -51,6 +46,15 @@ class HDF5(FormatInterface):
     def writer(self) -> Any:
         from .writers import HDF5Writer
         return HDF5Writer()
+
+    def consumer_data(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "provider_id": "pops.output.hdf5.v1",
+            "extension": self.extension,
+            "parallel_mode": "collective" if self.parallel else "serial",
+            "options": {"parallel": self.parallel},
+        }
 
 
 class NPZ(FormatInterface):
@@ -63,6 +67,15 @@ class NPZ(FormatInterface):
         from .writers import NPZWriter
         return NPZWriter()
 
+    def consumer_data(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "provider_id": "pops.output.npz.v1",
+            "extension": self.extension,
+            "parallel_mode": "serial",
+            "options": {},
+        }
+
 
 class ParaView(FormatInterface):
     """Single-file VTK UnstructuredGrid output read directly by ParaView."""
@@ -73,6 +86,15 @@ class ParaView(FormatInterface):
     def writer(self) -> Any:
         from .writers import ParaViewWriter
         return ParaViewWriter()
+
+    def consumer_data(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "provider_id": "pops.output.paraview-vtu.v1",
+            "extension": self.extension,
+            "parallel_mode": "serial",
+            "options": {},
+        }
 
 
 __all__ = ["FormatInterface", "HDF5", "NPZ", "ParaView"]

@@ -6,22 +6,14 @@ from types import SimpleNamespace
 import pytest
 
 from pops.runtime import _bind_validation as validation
-from pops.runtime._bind_adapters import (
-    _AmrRuntimeAdapter,
-    _UniformRuntimeAdapter,
-    adapter_for,
-    install_plan,
-)
+from pops.runtime import _bind_adapters
+from pops.runtime._bind_adapters import install_plan
 
 
-def test_adapter_selection_is_exhaustive():
-    layout = object()
-    assert isinstance(adapter_for("system", None), _UniformRuntimeAdapter)
-    assert isinstance(adapter_for("amr_system", layout), _AmrRuntimeAdapter)
-    with pytest.raises(ValueError, match="exactly 'system' or 'amr_system'"):
-        adapter_for("future-or-tampered-route", layout)
-    with pytest.raises(ValueError, match="exactly 'system' or 'amr_system'"):
-        adapter_for(None, None)
+def test_historical_target_adapters_are_not_an_install_authority():
+    assert not hasattr(_bind_adapters, "adapter_for")
+    assert not hasattr(_bind_adapters, "_UniformRuntimeAdapter")
+    assert not hasattr(_bind_adapters, "_AmrRuntimeAdapter")
 
 
 def test_typed_install_rejects_every_wrong_phase_value():

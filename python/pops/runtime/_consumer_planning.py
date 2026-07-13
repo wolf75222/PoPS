@@ -45,12 +45,7 @@ from ._runtime_plan_contracts import RuntimePlanBundle, refuse
 def _schedule_coordinate(manifest: ConsumerManifest, moment: ConsumerMoment) -> int | None:
     domain = manifest.schedule.domain
     if domain.clock != moment.point.clock:
-        refuse(
-            "consumer_clock_mismatch",
-            "consumer[%s].schedule" % manifest.qualified_id,
-            "consumer schedule and runtime moment use different clocks",
-            evidence={"schedule": domain.clock.to_data(), "moment": moment.point.clock.to_data()},
-        )
+        return None
     if type(domain) is AcceptedStep:
         return moment.accepted_step
     if type(domain) is Attempt:
@@ -70,6 +65,8 @@ def _schedule_coordinate(manifest: ConsumerManifest, moment: ConsumerMoment) -> 
 
 def _is_due(manifest: ConsumerManifest, moment: ConsumerMoment) -> bool:
     trigger = manifest.schedule.trigger
+    if moment.at_start and type(trigger) is not AtStart:
+        return False
     coordinate = _schedule_coordinate(manifest, moment)
     if coordinate is None:
         return False
@@ -234,12 +231,12 @@ def _field_resolution(
     raise TypeError("unsupported field resolution %s" % type(resolution).__name__)
 
 
-def _coverage(
-    graph: ConsumerGraph,
+def _coverage_active(
+    manifests: tuple[ConsumerManifest, ...],
     bindings: dict[str, tuple[ConsumerResourceBinding, ...]],
 ) -> LoweringCoverageReport:
     rows = []
-    for manifest in graph.nodes:
+    for manifest in manifests:
         for binding in bindings[manifest.qualified_id]:
             targets = [
                 "runtime-resource:%s@%s" % (binding.runtime_resource, binding.layout_id),
@@ -275,11 +272,15 @@ def plan_accepted_side_effects(
     if type(cursors) is not ConsumerCursorSet:
         raise TypeError("consumer planning requires an exact ConsumerCursorSet")
 
+    active = tuple(
+        manifest for manifest in graph.nodes
+        if manifest.schedule.domain.clock == moment.point.clock
+    )
     bindings = {
         manifest.qualified_id: _resource_bindings(runtime_plan, manifest)
-        for manifest in graph.nodes
+        for manifest in active
     }
-    coverage = _coverage(graph, bindings)
+    coverage = _coverage_active(active, bindings)
     effects = []
     for manifest in graph.topology:
         if not _is_due(manifest, moment):
@@ -310,7 +311,8 @@ def plan_accepted_side_effects(
             manifest.identity,
             PublicationTarget(
                 manifest.target_uri,
-                manifest.output_format,
+                manifest.output_format_data,
+                manifest.operation_data,
                 manifest.parallel_mode,
             ),
             payload,

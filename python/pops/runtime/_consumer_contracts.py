@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import heapq
-import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
@@ -13,6 +12,8 @@ from typing import TYPE_CHECKING, Any
 from pops.identity import Identity, make_identity
 from pops.model import Handle
 from pops.time import EventHandle, Schedule, StagePoint, TimePoint
+
+from ._runtime_plan_io import freeze_data, thaw_data
 
 if TYPE_CHECKING:
     from pops.fields import FieldContext, FieldReadPolicy, LayoutBinding
@@ -38,33 +39,25 @@ def _exact_handle(value: Any, kind: str | None, where: str) -> Handle:
     return value
 
 
-def _freeze_consumer_data(value: Any, *, where: str) -> Any:
-    """Project extension data to the strict cross-language identity vocabulary."""
-    if value is None or isinstance(value, (bool, int, str, bytes)):
-        return value
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise ValueError("%s cannot contain a non-finite float" % where)
-        return MappingProxyType({"binary64": value.hex()})
-    if isinstance(value, Mapping):
-        result = {}
-        for key, item in value.items():
-            if not isinstance(key, str) or not key:
-                raise TypeError("%s mapping keys must be non-empty strings" % where)
-            result[key] = _freeze_consumer_data(item, where="%s.%s" % (where, key))
-        return MappingProxyType(result)
-    if isinstance(value, (list, tuple)):
-        return tuple(
-            _freeze_consumer_data(item, where="%s[]" % where) for item in value)
-    raise TypeError("%s contains unsupported value %s" % (where, type(value).__name__))
-
-
-def _thaw_consumer_data(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {key: _thaw_consumer_data(item) for key, item in value.items()}
-    if isinstance(value, tuple):
-        return [_thaw_consumer_data(item) for item in value]
-    return value
+def _provider_data(value: Any, *, where: str, methods: tuple[str, ...]) -> Mapping[str, Any]:
+    if getattr(value, "__pops_ir_immutable__", False) is not True:
+        raise TypeError("%s must declare immutable semantic state" % where)
+    consumer_data = getattr(value, "consumer_data", None)
+    if not callable(consumer_data) or any(not callable(getattr(value, name, None)) for name in methods):
+        raise TypeError(
+            "%s must implement consumer_data() and %s"
+            % (where, "/".join("%s()" % name for name in methods))
+        )
+    first, second = consumer_data(), consumer_data()
+    if type(first) is not dict or type(second) is not dict or first != second:
+        raise TypeError("%s consumer_data() must return one deterministic dict" % where)
+    if first.get("schema_version") != 1:
+        raise ValueError("%s consumer_data schema_version must be 1" % where)
+    provider_id, extension = first.get("provider_id"), first.get("extension")
+    _text(provider_id, "%s.consumer_data.provider_id" % where)
+    if not isinstance(extension, str) or not extension.startswith(".") or "/" in extension:
+        raise TypeError("%s consumer_data.extension must be a canonical file suffix" % where)
+    return freeze_data(first, "%s.consumer_data" % where)
 
 
 class ConsumerKind(Enum):
@@ -78,28 +71,6 @@ class ParallelMode(Enum):
     SERIAL = "serial"
     COLLECTIVE = "collective"
     PER_RANK = "per_rank"
-
-
-@dataclass(frozen=True, slots=True)
-class ConsumerOperation:
-    """Resolved semantic operation performed by one consumer node.
-
-    The open extension point is a small data protocol: policy families choose a canonical operation
-    name and strict callback-free data. Runtime planning never branches on the Python policy class.
-    """
-
-    name: str
-    data: Mapping[str, Any]
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "name", _text(self.name, "ConsumerOperation.name"))
-        frozen = _freeze_consumer_data(self.data, where="ConsumerOperation.data")
-        if not isinstance(frozen, Mapping):
-            raise TypeError("ConsumerOperation.data must be a mapping")
-        object.__setattr__(self, "data", frozen)
-
-    def to_data(self) -> dict[str, Any]:
-        return {"name": self.name, "data": _thaw_consumer_data(self.data)}
 
 
 class ConsumerFailureAction:
@@ -201,11 +172,15 @@ class ConsumerManifest:
     quantities: tuple[ConsumerQuantity, ...]
     schedule: Schedule
     target_uri: str
-    output_format: str
+    output_format: Any
     parallel_mode: ParallelMode
+    diagnostics: tuple[Any, ...] = ()
     dependencies: tuple[Handle, ...] = ()
     failure_action: ConsumerFailureAction = field(default_factory=FailRun)
-    operation: ConsumerOperation | None = None
+    operation: Any = None
+    output_format_data: Mapping[str, Any] | None = field(init=False, repr=False)
+    operation_data: Mapping[str, Any] | None = field(init=False, repr=False)
+    diagnostics_data: tuple[Mapping[str, Any], ...] = field(init=False, repr=False)
     identity: Identity = field(init=False)
 
     def __post_init__(self) -> None:
@@ -222,9 +197,51 @@ class ConsumerManifest:
         if type(self.schedule) is not Schedule:
             raise TypeError("ConsumerManifest.schedule must be an exact Schedule")
         _text(self.target_uri, "ConsumerManifest.target_uri")
-        _text(self.output_format, "ConsumerManifest.output_format")
         if type(self.parallel_mode) is not ParallelMode:
             raise TypeError("ConsumerManifest.parallel_mode must be an exact ParallelMode")
+        if self.kind is ConsumerKind.SCIENTIFIC_OUTPUT:
+            from pops.output.provider import consumer_format_data
+            format_data = freeze_data(
+                consumer_format_data(
+                    self.output_format, where="ConsumerManifest.output_format"),
+                "ConsumerManifest.output_format.consumer_data",
+            )
+            if format_data["parallel_mode"] != self.parallel_mode.value:
+                raise ValueError(
+                    "ConsumerManifest parallel mode differs from its scientific format provider"
+                )
+            if self.operation is not None:
+                raise ValueError("ScientificOutput carries its writer in output_format, not operation")
+            operation_data = None
+        elif self.kind is ConsumerKind.CHECKPOINT:
+            if self.output_format is not None:
+                raise ValueError("Checkpoint has no scientific output_format")
+            format_data = None
+            operation_data = _provider_data(
+                self.operation,
+                where="ConsumerManifest.operation",
+                methods=("snapshot", "write", "reopen", "restore"),
+            )
+        else:
+            if self.output_format is not None or self.operation is not None:
+                raise ValueError("Diagnostic/Monitor consumers carry no publication provider")
+            format_data = operation_data = None
+        object.__setattr__(self, "output_format_data", format_data)
+        object.__setattr__(self, "operation_data", operation_data)
+        if not isinstance(self.diagnostics, tuple):
+            raise TypeError("ConsumerManifest.diagnostics must be a tuple")
+        diagnostic_rows = []
+        for index, diagnostic in enumerate(self.diagnostics):
+            where = "ConsumerManifest.diagnostics[%d]" % index
+            if not callable(getattr(diagnostic, "consumer_data", None)):
+                raise TypeError("%s must implement consumer_data()" % where)
+            first, second = diagnostic.consumer_data(), diagnostic.consumer_data()
+            if type(first) is not dict or first != second:
+                raise TypeError("%s consumer_data() must return one deterministic dict" % where)
+            diagnostic_rows.append(freeze_data(first, "%s.consumer_data" % where))
+        if diagnostic_rows and self.kind is not ConsumerKind.SCIENTIFIC_OUTPUT:
+            raise ValueError("only ScientificOutput can embed diagnostic providers")
+        object.__setattr__(self, "diagnostics_data", tuple(diagnostic_rows))
         if not isinstance(self.dependencies, tuple):
             raise TypeError("ConsumerManifest.dependencies must be a tuple")
         dependencies = tuple(sorted(
@@ -237,9 +254,6 @@ class ConsumerManifest:
         object.__setattr__(self, "dependencies", dependencies)
         if type(self.failure_action) not in _FAILURE_ACTIONS:
             raise TypeError("ConsumerManifest.failure_action must be FailRun, Retry, or SkipSampleReported")
-        if self.operation is not None and type(self.operation) is not ConsumerOperation:
-            raise TypeError(
-                "ConsumerManifest.operation must be an exact ConsumerOperation or None")
         object.__setattr__(self, "identity", make_identity("consumer-manifest", self._payload()))
 
     @property
@@ -254,11 +268,14 @@ class ConsumerManifest:
             "quantities": [value.to_data() for value in self.quantities],
             "schedule": self.schedule.to_data(),
             "target_uri": self.target_uri,
-            "output_format": self.output_format,
+            "output_format": None if self.output_format_data is None
+            else thaw_data(self.output_format_data),
+            "operation": None if self.operation_data is None
+            else thaw_data(self.operation_data),
+            "diagnostics": [thaw_data(value) for value in self.diagnostics_data],
             "parallel_mode": self.parallel_mode.value,
             "dependencies": [value.canonical_identity() for value in self.dependencies],
             "failure_action": self.failure_action.to_data(),
-            "operation": None if self.operation is None else self.operation.to_data(),
         }
 
     def to_data(self) -> dict[str, Any]:
@@ -545,6 +562,6 @@ class ConsumerCursorSet:
 
 __all__ = [
     "ConsumerCursorSet", "ConsumerFailureAction", "ConsumerGraph", "ConsumerKind",
-    "ConsumerManifest", "ConsumerMoment", "ConsumerOperation", "ConsumerQuantity", "FailRun", "ParallelMode",
+    "ConsumerManifest", "ConsumerMoment", "ConsumerQuantity", "FailRun", "ParallelMode",
     "Retry", "ScheduleCursor", "SkipSampleReported",
 ]

@@ -196,11 +196,11 @@ class ResolvedSimulationPlan:
     field_plans: Mapping[str, Any]
     outputs: tuple[Any, ...]
     diagnostics: tuple[Any, ...]
-    consumer_graph: Any
     libraries: tuple[Any, ...]
     requirements: Mapping[str, Any]
     capabilities: Mapping[str, Any]
     lowering_coverage: Any
+    consumer_graph: Any = None
     compile_options: Mapping[str, Any] = field(default_factory=dict)
     resolved_hierarchy: Any = None
     amr_transfer: Any = None

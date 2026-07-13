@@ -10,6 +10,9 @@ import pytest
 orchestration = pytest.importorskip("pops.codegen.orchestration")
 plans = pytest.importorskip("pops.codegen._plans")
 adapters = pytest.importorskip("pops.runtime._bind_adapters")
+runtime_executor = pytest.importorskip("pops.runtime._runtime_executor")
+runtime_instance = pytest.importorskip("pops.runtime.runtime_instance")
+mesh_lowering = pytest.importorskip("pops.runtime._runtime_mesh_lowering")
 bind_validation = pytest.importorskip("pops.runtime._bind_validation")
 install_params = pytest.importorskip("pops.runtime._install_param_routing")
 system_install = pytest.importorskip("pops.runtime._system_unified_install")
@@ -119,15 +122,15 @@ def test_complete_bind_install_path_has_no_live_authoring_fallback():
         "install": orchestration.install,
         "require_install_plan": plans.require_install_plan,
         "runtime install_plan": adapters.install_plan,
-        "_RuntimeAdapter.build_install_plan": adapters._RuntimeAdapter.build_install_plan,
-        "adapter_for": adapters.adapter_for,
-        "_RuntimeAdapter.build": adapters._RuntimeAdapter.build,
-        "_UniformRuntimeAdapter.install": adapters._UniformRuntimeAdapter.install,
-        "_AmrRuntimeAdapter.install": adapters._AmrRuntimeAdapter.install,
-        "_flow_amr_layout": adapters._flow_amr_layout,
-        "_apply_refine_criterion": adapters._apply_refine_criterion,
-        "_refine_threshold_value": adapters._refine_threshold_value,
-        "_refine_subject_name": adapters._refine_subject_name,
+        "RuntimeInstance.__init__": runtime_instance.RuntimeInstance.__init__,
+        "RuntimeInstance.run": runtime_instance.RuntimeInstance.run,
+        "install_runtime_executor": runtime_executor.install_runtime_executor,
+        "Uniform provider install": runtime_executor._UniformNativeProvider.install,
+        "Adaptive provider install": runtime_executor._AdaptiveNativeProvider.install,
+        "flow_amr_layout": mesh_lowering.flow_amr_layout,
+        "_apply_refine_criterion": mesh_lowering._apply_refine_criterion,
+        "_refine_threshold_value": mesh_lowering._refine_threshold_value,
+        "_refine_subject_name": mesh_lowering._refine_subject_name,
         "run_bind_gates": bind_validation.run_bind_gates,
         "validate_install_arguments": bind_validation.validate_install_arguments,
         "System._install_compiled": system_install._SystemUnifiedInstall._install_compiled,

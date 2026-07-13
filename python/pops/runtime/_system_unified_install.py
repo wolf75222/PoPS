@@ -95,8 +95,8 @@ class _SystemUnifiedInstall(_System):
             whole-system closure, so its cadence is GLOBAL (one program-level value). A numeric
             cadence.cfl is applied at runtime by sim.run(cfl=) (the cadence pins it on the System so a
             bare sim.run(t_end) uses it), not by the install.
-        @param outputs optional list of pops.output.OutputPolicy / CheckpointPolicy (C4 / ADC-509)
-            stored so sim.run(output_dir=) fires each at its cadence via the existing write/checkpoint.
+        @param outputs must be empty; exact publications are compiled ConsumerGraph nodes owned by
+            RuntimeInstance after an accepted step.
         @throws the verbatim Spec section-24 errors at install (missing aux / solver / block instance /
             Riemann capability). A disallowed schedule is rejected earlier, at Program compile.
         """
@@ -208,10 +208,11 @@ class _SystemUnifiedInstall(_System):
                     "(pops.Explicit(substeps=, stride=)) instead.")
             self._install_cadence(cadence)
 
-        if outputs:  # (7) OUTPUT / CHECKPOINT policies (C4): run() fires each at its cadence
-            self._output_policies = list(outputs)
-        if diagnostics:  # (7b) DIAGNOSTIC measures (ADC-542): run() fires each at its cadence
-            self._diagnostic_measures = list(diagnostics)
+        if outputs or diagnostics:
+            raise ValueError(
+                "native install does not accept free output/diagnostic lists; "
+                "declare exact ConsumerGraph nodes on the compiled plan"
+            )
 
         # (8) FREEZE (ADC-592): the composition is fully lowered -- snapshot WHAT was bound, then
         # _finalize_bind marks the runtime 'bound' as the LAST act (nothing above ran frozen, so the

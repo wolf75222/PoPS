@@ -49,6 +49,7 @@ class CompiledPlanRecord:
     lowering_coverage: Any
     blocks: tuple[CompiledPlanBlock, ...]
     time_identity: Any
+    consumer_graph: Any = None
     resolved_hierarchy: Any = None
     amr_transfer: Any = None
     initial_condition_plan: Any = None
@@ -72,6 +73,7 @@ class CompiledPlanRecord:
             field_plans=plan.field_plans,
             outputs=plan.outputs,
             diagnostics=plan.diagnostics,
+            consumer_graph=plan.consumer_graph,
             requirements=plan.requirements,
             capabilities=plan.capabilities,
             lowering_coverage=plan.lowering_coverage,
@@ -108,6 +110,12 @@ class CompiledPlanRecord:
         object.__setattr__(self, "outputs", tuple(_deep_freeze(v) for v in self.outputs))
         object.__setattr__(self, "diagnostics", tuple(
             _deep_freeze(v) for v in self.diagnostics))
+        if self.consumer_graph is not None:
+            from pops.runtime.consumer import ConsumerGraph
+
+            if type(self.consumer_graph) is not ConsumerGraph:
+                raise TypeError(
+                    "CompiledPlanRecord.consumer_graph must be an exact ConsumerGraph or None")
         object.__setattr__(self, "requirements", _deep_freeze(self.requirements))
         object.__setattr__(self, "capabilities", _deep_freeze(self.capabilities))
         blocks = tuple(self.blocks)
@@ -160,6 +168,9 @@ class CompiledPlanRecord:
             "outputs": _evidence(self.outputs, where="compiled plan outputs"),
             "diagnostics": _evidence(
                 self.diagnostics, where="compiled plan diagnostics"),
+            "consumer_graph": (
+                None if self.consumer_graph is None else self.consumer_graph.to_data()
+            ),
             "requirements": _evidence(
                 self.requirements, where="compiled plan requirements"),
             "capabilities": _evidence(

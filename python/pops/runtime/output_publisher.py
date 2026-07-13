@@ -7,7 +7,7 @@ from typing import Any
 
 from pops.identity import make_identity
 from pops.output.data import OutputRequest, OutputSnapshot
-from pops.output.formats import FormatInterface
+from pops.output.provider import consumer_format_data
 from pops.output.writers import PreparedOutputFile
 
 from .consumer import (
@@ -22,18 +22,18 @@ from .consumer import (
 class OutputPreparation:
     """Exact writer input resolved from one already accepted side effect."""
 
-    format: FormatInterface
+    format: Any
     snapshot: OutputSnapshot
     request: OutputRequest
     target: Any
     communicator: Any = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.format, FormatInterface):
-            raise TypeError("output preparation format must implement FormatInterface")
+        format_data = consumer_format_data(
+            self.format, where="OutputPreparation.format")
         if type(self.snapshot) is not OutputSnapshot or type(self.request) is not OutputRequest:
             raise TypeError("output preparation requires exact snapshot/request values")
-        if self.request.parallel != bool(getattr(self.format, "parallel", False)):
+        if self.request.parallel != (format_data["parallel_mode"] == "collective"):
             raise ValueError("resolved output request parallel mode differs from its format")
 
 
@@ -104,21 +104,20 @@ class ConsumerOutputPublisher(ConsumerPublisher):
             raise TypeError("output effect resolver must return an exact OutputPreparation")
         if preparation.request.consumer_id != effect.consumer_id:
             raise ValueError("output request consumer identity differs from its accepted effect")
-        if preparation.format.format_name != effect.target.output_format:
+        if consumer_format_data(
+                preparation.format, where="resolved output format") != \
+                dict(effect.target.output_format):
             raise ValueError("resolved output format differs from its accepted target")
         collective = effect.target.parallel_mode is ParallelMode.COLLECTIVE
         if preparation.request.parallel != collective:
             raise ValueError("resolved output parallel mode differs from its accepted target")
         writer = preparation.format.writer()
-        if collective:
-            prepared = writer.prepare(
-                preparation.snapshot, preparation.request, preparation.target,
-                communicator=preparation.communicator)
-        else:
-            if preparation.communicator is not None:
-                raise ValueError("non-collective output preparation cannot carry a communicator")
-            prepared = writer.prepare(
-                preparation.snapshot, preparation.request, preparation.target)
+        prepared = writer.prepare(
+            preparation.snapshot,
+            preparation.request,
+            preparation.target,
+            communicator=preparation.communicator,
+        )
         if not isinstance(prepared, PreparedOutputFile):
             raise TypeError("exact output writer must return PreparedOutputFile")
         return PreparedConsumerOutput(effect, prepared, self.publisher_id)
