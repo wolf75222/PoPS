@@ -173,11 +173,12 @@ class _ProgramCore(
         return self._time_state(block, qualified_state, space, clock)
 
     def solve_fields(self, name: Any = None, state: Any = None, field: Any = None) -> Any:
-        """Solve the elliptic fields from ``state`` and return a FieldContext. Accepts
+        """Author an elliptic solve from ``state`` and return a non-readable outcome. Accepts
         ``solve_fields(state)`` or ``solve_fields(name, state)``. Each call is a DISTINCT
-        FieldContext (a stage's RHS must read the fields solved from its own state, never a stale
-        global). ``field`` is the case-owned ``FieldHandle`` returned by ``Problem.add_field`` for a
-        named elliptic solve; a string is never promoted into a field identity."""
+        FieldContext after ``outcome.consume(action=...)`` (a stage's RHS must read the fields
+        solved from its own state, never a stale global). ``field`` is the case-owned ``FieldHandle``
+        returned by ``Case.field``; a string is never promoted into a field identity.  An
+        unconsumed solve cannot feed a rate, commit, output, or diagnostic."""
         # A readable temporal handle (U.stage(name, point=...) / U.prev(lag)) resolves through Program-owned tables
         # here so it composes wherever a State does; a plain ProgramValue / None / str is unchanged.
         name, state = _resolve_handle(name), _resolve_handle(state)
@@ -189,7 +190,8 @@ class _ProgramCore(
         if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("solve_fields: a State value is required")
         field = bind_field_reference(self, state.block, field)
-        return self._solve_fields(name=name, state=state, field=field)
+        return self._field_solve_outcome(
+            self._solve_fields(name=name, state=state, field=field))
 
     def _solve_fields(self, name: Any, state: Any, field: Any = None) -> Any:
         """Internal typed field-solve builder used after handle authentication."""
@@ -210,6 +212,24 @@ class _ProgramCore(
         return self._new(
             "fields", "solve_fields", (state,), attrs, name, state.block,
             field_context=context, space=default_field_space)
+
+    def _field_solve_outcome(self, token: Any) -> Any:
+        """Wrap one internal field-solve token in the mandatory public consumption contract."""
+        if not (isinstance(token, ProgramValue)
+                and token.op in ("solve_fields", "solve_fields_from_blocks")
+                and token.vtype == "fields"):
+            raise TypeError("field solve outcome requires an internal fields solve token")
+        from pops.time.solve_outcome import FieldSolveOutcome
+
+        outcome_name = token.name
+
+        def project(outcome: Any) -> Any:
+            return self._new(
+                "fields", "solve_outcome_component", (outcome,),
+                {"index": 0}, outcome_name, token.block,
+                space=token.space, field_context=token.field_context, point=token.point)
+
+        return FieldSolveOutcome(self, token, project, outcome_name)
 
     def solve_fields_from_blocks(self, states: Any, field: Any, name: Any = None) -> Any:
         """Solve the elliptic fields from the SIMULTANEOUS stage states of MULTIPLE blocks (spec
@@ -238,7 +258,8 @@ class _ProgramCore(
                 raise ValueError("solve_fields_from_blocks: block '%s' listed twice" % s.block)
             seen.add(s.block)
         field = bind_field_reference(self, states[0].block, field)
-        return self._solve_fields_from_blocks(states, field=field, name=name)
+        return self._field_solve_outcome(
+            self._solve_fields_from_blocks(states, field=field, name=name))
 
     def _solve_fields_from_blocks(self, states: Any, *, field: Any, name: Any = None) -> Any:
         """Build a coupled field solve after its field identity was authenticated."""

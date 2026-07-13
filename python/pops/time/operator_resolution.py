@@ -133,12 +133,16 @@ def resolve_operator_handle(
         raise ValueError(
             "%s: operator handle %r belongs to owner %s, but this Program is bound to %s"
             % (where, handle.name, handle.owner_path, owner))
-    argument_owner = _owner_from_values(values, where)
-    if argument_owner is not None and argument_owner != owner:
+    argument_owners = {
+        value.block.model_owner_path
+        for value in values
+        if getattr(value, "block", None) is not None
+    }
+    if argument_owners and owner not in argument_owners:
         raise ValueError(
-            "%s: operator handle %r belongs to owner %s, but its block-qualified arguments "
-            "instantiate model owner %s"
-            % (where, handle.name, owner, argument_owner))
+            "%s: operator handle %r belongs to owner %s, but none of its block-qualified "
+            "arguments instantiate that owner (argument owners: %s)"
+            % (where, handle.name, owner, sorted(str(item) for item in argument_owners)))
     registry_name = registry.target_for_handle(handle.name)
     if handle.registered_operator_name != registry_name:
         raise ValueError(
@@ -162,6 +166,14 @@ def resolve_operator_handle(
         raise ValueError(
             "%s: operator %r has signature %r, expected %r"
             % (where, handle.name, operator.signature, expected_signature))
+    # A typed operator is the explicit join protocol for cross-model values.  Multiple argument
+    # owners are therefore valid only when the registry declaration carries a structural signature;
+    # the caller's normal signature checker then authenticates every StateSpace/FieldSpace input in
+    # order.  Owner-local operators keep the historical single-owner contract.
+    if len(argument_owners) > 1 and operator.signature is None:
+        raise ValueError(
+            "%s: cross-model operator %r must declare a structural Signature"
+            % (where, handle.name))
     return operator
 
 

@@ -127,8 +127,11 @@ class _ProgramCall(_ProgramBase):
             attrs["schedule"] = schedule
             schedule.validate_site(clock=result.clock, point=result.point,
                                    where="schedule on operator %r" % op.name)
-        return self._replace_value(
+        result = self._replace_value(
             result, attrs=attrs, space=op.signature.output, field_context=field_context)
+        if op.kind == "field_operator":
+            return self._field_solve_outcome(result)
+        return result
 
     def _operator_call_name(self, operator: Any) -> Any:
         """Normalize an internal :meth:`_call` operator selector to its registry name.

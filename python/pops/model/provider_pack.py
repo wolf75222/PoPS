@@ -316,12 +316,20 @@ def build_provider_pack(module: Any) -> ProviderPack:
                                ("field", module.field_spaces())):
         for space in spaces.values():
             producers = field_producers.get(space, ()) if space_kind == "field" else ()
-            if len(producers) > 1:
-                raise ValueError(
-                    "typed space %s/%s has multiple component providers %s"
-                    % (space_kind, space.name, [p.qualified_id for p in producers]))
-            producer = (producers[0]._resolved(canonical_owner).qualified_id if producers else
-                        ("initial_state" if space_kind == "state" else None))
+            resolved_producers = tuple(sorted(
+                producer._resolved(canonical_owner).qualified_id for producer in producers
+            ))
+            if len(resolved_producers) == 1:
+                producer = resolved_producers[0]
+            elif resolved_producers:
+                # A field RHS is intentionally compositional: several owner-qualified model
+                # providers may contribute to one materialized FieldSpace (species charge is the
+                # canonical case).  The Module manifest records that complete ordered set as one
+                # deterministic logical provider.  Coefficients/measures remain the Case
+                # FieldProviderPack's authority and are never guessed here.
+                producer = "field_provider_set:[%s]" % ",".join(resolved_producers)
+            else:
+                producer = "initial_state" if space_kind == "state" else None
             for slot, component in enumerate(space.components):
                 rows.append((
                     ComponentKey(owner_qid, space_kind, space.name, component),

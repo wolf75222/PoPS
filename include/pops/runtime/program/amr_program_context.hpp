@@ -268,15 +268,18 @@ class AmrProgramContext {
   /// v1 runs it EXACTLY ONCE per macro-step (a level-0 / not-yet-solved guard): calling it again at fine
   /// levels within the same macro-step is a no-op cache-hit (parity: the body stays atomic, the solve
   /// fires once -- the OncePerStep cadence the native AMR step uses).
-  void solve_fields() const {
+  SolveReport solve_fields() const {
     if (level_ == 0 || !solved_this_step_) {
       eng_->solve_fields();
       solved_this_step_ = true;
     }
+    SolveReport report;
+    report.mark_solved();
+    return report;
   }
   /// Per-stage re-solve from a stage state is currently a coarse-only capability.  A fine-level request
   /// is rejected explicitly; it never consumes a stale injected auxiliary field.
-  void solve_fields_from_state(int b, MultiFab& u_stage) const {
+  SolveReport solve_fields_from_state(int b, MultiFab& u_stage) const {
     if (level_ == 0) {
       MultiFab& live = state(b);
       MultiFab saved = live;          // stash the live state
@@ -284,16 +287,22 @@ class AmrProgramContext {
       eng_->solve_fields();
       live = std::move(saved);        // restore the live state (the commit owns it)
       solved_this_step_ = true;
-      return;
+      SolveReport report;
+      report.mark_solved();
+      return report;
     }
     throw std::runtime_error(
         "AmrProgramContext::solve_fields_from_state: per-stage fine-level field re-solve is not "
         "implemented; use OncePerStep field cadence or provide a composite stage solver");
   }
   /// Named multi-elliptic field re-solve: deferred on AMR (ADC-513 companion). Fail loud.
-  void solve_fields_from_state(const std::string& field, int b, MultiFab& u_stage) const {
-    if (level_ != 0)
-      return;  // the coarse solve publishes/injects every level once per stage
+  SolveReport solve_fields_from_state(const std::string& field, int b,
+                                      MultiFab& u_stage) const {
+    if (level_ != 0) {
+      SolveReport report;
+      report.mark_solved();
+      return report;  // the coarse solve publishes/injects every level once per stage
+    }
     (void)eng_->provider_potential(field);  // authenticate the exact resolved field route
     MultiFab& live = state(b);
     MultiFab published = live;
@@ -306,20 +315,27 @@ class AmrProgramContext {
       throw;
     }
     solved_this_step_ = true;
+    SolveReport report;
+    report.mark_solved();
+    return report;
   }
   /// Coupled multi-block field solve: deferred on AMR (the per-block summed-RHS at fine levels needs the
   /// coupled re-solve path). Fail loud rather than a silent half-implementation.
-  void solve_fields_from_blocks(const std::vector<const MultiFab*>& /*u_stages*/) const {
+  SolveReport solve_fields_from_blocks(
+      const std::vector<const MultiFab*>& /*u_stages*/) const {
     throw std::runtime_error(
         "AmrProgramContext::solve_fields_from_blocks: a coupled multi-block field solve under a "
         "compiled Program on AMR is deferred (v1, Spec 3 criterion 24). Use System, or a single-block "
         "AMR Program.");
   }
 
-  void solve_fields_from_blocks(const std::string& field,
-                                const std::vector<const MultiFab*>& u_stages) const {
-    if (level_ != 0)
-      return;
+  SolveReport solve_fields_from_blocks(const std::string& field,
+                                       const std::vector<const MultiFab*>& u_stages) const {
+    if (level_ != 0) {
+      SolveReport report;
+      report.mark_solved();
+      return report;
+    }
     if (u_stages.size() != static_cast<std::size_t>(n_blocks()))
       throw std::runtime_error(
           "AmrProgramContext::solve_fields_from_blocks(field): stage vector size mismatch");
@@ -348,6 +364,9 @@ class AmrProgramContext {
       throw;
     }
     solved_this_step_ = true;
+    SolveReport report;
+    report.mark_solved();
+    return report;
   }
 
   /// The SHARED aux of the current level (phi / grad / B_z), the channel solve_fields fills.

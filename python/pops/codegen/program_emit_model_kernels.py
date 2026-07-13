@@ -113,6 +113,134 @@ def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch:
     return lines
 
 
+def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any,
+                                        scratch: Any, status: str, *, tol: Any,
+                                        max_iter: int, fd_eps: Any) -> list:
+    """Emit one fail-closed backward-Euler Newton kernel over a coupled ``RateBundle``.
+
+    Every output block is an unknown; additional signed inputs are frozen catalysts.  Results land
+    only in fresh scratches.  A per-cell status field is reduced after the kernel so generated host
+    code can construct one collective ``SolveReport`` before any result is publishable.
+    """
+    blocks = list(components)
+    offsets = {}
+    total = 0
+    for block in blocks:
+        offsets[block] = total
+        total += len(components[block])
+    if total > 16:
+        raise NotImplementedError(
+            "solve_implicit dense Newton lowering supports at most 16 coupled components; got %d"
+            % total)
+    referenced = {name for rows in components.values() for expr in rows for name in expr.deps()}
+    sources = {}
+    for state in by_block.values():
+        if state.space is None:
+            continue
+        for index, component in enumerate(state.space.components):
+            if component not in referenced:
+                continue
+            source = (("unknown", offsets[state.block] + index)
+                      if state.block in offsets else ("frozen", var[state.id], index))
+            if component in sources and sources[component] != source:
+                raise NotImplementedError(
+                    "solve_implicit requires disjoint conservative component names across inputs; "
+                    "%r is ambiguous" % component)
+            sources[component] = source
+    driver = scratch[blocks[0]]
+    tol_cpp = scalar_cpp(tol)
+    eps_cpp = scalar_cpp(fd_eps)
+    lines = ["for (int li = 0; li < %s.local_size(); ++li) {" % driver]
+    for block in blocks:
+        lines.append("  const pops::Array4 %sA = %s.fab(li).array();"
+                     % (scratch[block], scratch[block]))
+    lines.append("  const pops::Array4 %sA = %s.fab(li).array();" % (status, status))
+    seen = set()
+    for state in by_block.values():
+        token = var[state.id]
+        if token not in seen:
+            seen.add(token)
+            lines.append("  const pops::ConstArray4 %sA = %s.fab(li).const_array();"
+                         % (token, token))
+    lines.append("  pops::for_each_cell(%s.box(li), [=] POPS_HD(int i, int j) {" % driver)
+    lines.append("    pops::Real G_[%d];" % total)
+    for block in blocks:
+        state = by_block[block]
+        for index in range(len(components[block])):
+            lines.append("    G_[%d] = %sA(i, j, %d);"
+                         % (offsets[block] + index, var[state.id], index))
+    lines.append(
+        "    auto residual_eval = [&](const pops::Real (&Ueval)[%d], pops::Real (&rout)[%d]) {"
+        % (total, total))
+    for component in sorted(referenced):
+        source = sources[component]
+        if source[0] == "unknown":
+            lines.append("      const pops::Real %s = Ueval[%d];" % (component, source[1]))
+        else:
+            lines.append("      const pops::Real %s = %sA(i, j, %d);"
+                         % (component, source[1], source[2]))
+    for block in blocks:
+        for index, expr in enumerate(components[block]):
+            slot = offsets[block] + index
+            lines.append("      rout[%d] = Ueval[%d] - G_[%d] - dt * (%s);"
+                         % (slot, slot, slot, expr.to_cpp()))
+    lines.append("    };")
+    lines.append("    pops::Real U_[%d];" % total)
+    lines.append("    for (int c_ = 0; c_ < %d; ++c_) U_[c_] = G_[c_];" % total)
+    lines.append("    int failure_ = 1;")  # iteration_limit until convergence proves otherwise
+    lines.append("    for (int it_ = 0; it_ < %d; ++it_) {" % int(max_iter))
+    lines.append("      pops::Real r_[%d];" % total)
+    lines.append("      residual_eval(U_, r_);")
+    lines.append("      pops::Real rmax_ = pops::Real(0);")
+    lines.append("      for (int c_ = 0; c_ < %d; ++c_) {" % total)
+    lines.append("        if (!std::isfinite(r_[c_])) { failure_ = 3; break; }")
+    lines.append("        rmax_ = std::fmax(rmax_, std::fabs(r_[c_]));")
+    lines.append("      }")
+    lines.append("      if (failure_ == 3) break;")
+    lines.append("      if (rmax_ <= static_cast<pops::Real>(%s)) { failure_ = 0; break; }"
+                 % tol_cpp)
+    lines.append("      pops::Real J_[%d][%d];" % (total, total))
+    lines.append("      pops::Real Up_[%d], rp_[%d];" % (total, total))
+    lines.append("      for (int col_ = 0; col_ < %d; ++col_) {" % total)
+    lines.append("        for (int c_ = 0; c_ < %d; ++c_) Up_[c_] = U_[c_];" % total)
+    lines.append("        const pops::Real eps_ = static_cast<pops::Real>(%s) * "
+                 "std::fmax(std::fabs(U_[col_]), pops::Real(1));" % eps_cpp)
+    lines.append("        Up_[col_] += eps_;")
+    lines.append("        residual_eval(Up_, rp_);")
+    lines.append("        for (int row_ = 0; row_ < %d; ++row_) "
+                 "J_[row_][col_] = (rp_[row_] - r_[row_]) / eps_;" % total)
+    lines.append("      }")
+    lines.append("      pops::Real Jinv_[%d][%d];" % (total, total))
+    lines.append("      if (!pops::detail::mat_inverse<%d>(J_, Jinv_)) { failure_ = 2; break; }"
+                 % total)
+    lines.append("      for (int row_ = 0; row_ < %d; ++row_) {" % total)
+    lines.append("        pops::Real delta_ = pops::Real(0);")
+    lines.append("        for (int col_ = 0; col_ < %d; ++col_) "
+                 "delta_ += Jinv_[row_][col_] * r_[col_];" % total)
+    lines.append("        U_[row_] -= delta_;")
+    lines.append("        if (!std::isfinite(U_[row_])) failure_ = 3;")
+    lines.append("      }")
+    lines.append("      if (failure_ == 3) break;")
+    lines.append("    }")
+    lines.append("    if (failure_ == 1) {")
+    lines.append("      pops::Real final_r_[%d];" % total)
+    lines.append("      residual_eval(U_, final_r_);")
+    lines.append("      pops::Real final_max_ = pops::Real(0);")
+    lines.append("      for (int c_ = 0; c_ < %d; ++c_) "
+                 "final_max_ = std::fmax(final_max_, std::fabs(final_r_[c_]));" % total)
+    lines.append("      if (std::isfinite(final_max_) && "
+                 "final_max_ <= static_cast<pops::Real>(%s)) failure_ = 0;" % tol_cpp)
+    lines.append("      else if (!std::isfinite(final_max_)) failure_ = 3;")
+    lines.append("    }")
+    for block in blocks:
+        for index in range(len(components[block])):
+            lines.append("    %sA(i, j, %d) = U_[%d];"
+                         % (scratch[block], index, offsets[block] + index))
+    lines.append("    %sA(i, j, 0) = static_cast<pops::Real>(failure_);" % status)
+    lines += ["  });", "}"]
+    return lines
+
+
 def _emit_flux_kernel(model: Any, names: Any, state_var: Any, fx_var: Any, fy_var: Any,
                       block_idx: Any = 0) -> list:
     """Lower NAMED fluxes (ADC-419): fxA(i,j,c) = sum_k F^k_x[c](U, prims, aux, params),

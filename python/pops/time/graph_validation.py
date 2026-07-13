@@ -93,7 +93,22 @@ def _solve_arity(node: Any) -> int:
     if type(node) is ResidualSolve:
         attrs = _payload_attrs(node.attrs.to_data())
         return _int_attr(attrs.get("unknown_count")) or len(node.initial)
+    from pops.time.graph import ProgramValue
+    if type(node) is ProgramValue and node.op in ("solve_fields", "solve_fields_from_blocks"):
+        return 1
+    if type(node) is ProgramValue and node.op == "solve_coupled_implicit":
+        attrs = _payload_attrs(node.attrs.to_data())
+        return _int_attr(attrs.get("output_count")) or 0
     raise TypeError("expected a solve graph node")
+
+
+def _is_solve_token(node: Any) -> bool:
+    from pops.time.graph import ProgramValue, ResidualSolve, Solve
+
+    return (type(node) in (Solve, ResidualSolve)
+            or (type(node) is ProgramValue
+                and node.op in (
+                    "solve_fields", "solve_fields_from_blocks", "solve_coupled_implicit")))
 
 
 def validate_nodes(nodes: Any, clocks: Any, available: dict[int, Any], *, where: str) -> None:
@@ -103,6 +118,8 @@ def validate_nodes(nodes: Any, clocks: Any, available: dict[int, Any], *, where:
     )
 
     declared = set(clocks)
+    local_solves: dict[int, Any] = {}
+    consumed_solves: dict[int, int] = {}
     for node in nodes:
         direct_ids = set()
         if type(node) is Branch:
@@ -111,6 +128,8 @@ def validate_nodes(nodes: Any, clocks: Any, available: dict[int, Any], *, where:
             direct_ids = {node.initial.node_id}
         if node.node_id in available:
             raise ValueError("%s node ids must be unique across captures and local nodes" % where)
+        if _is_solve_token(node):
+            local_solves[node.node_id] = node
         if node.clock not in declared:
             raise ValueError("%s node clock is not declared" % where)
         if _point_clocks(node.point) != frozenset((node.clock,)):
@@ -123,7 +142,7 @@ def validate_nodes(nodes: Any, clocks: Any, available: dict[int, Any], *, where:
                     % (where, ref.node_id))
             if getattr(source, "readable", True) is False:
                 raise ValueError("%s cannot read a Commit node" % where)
-            if type(source) in (Solve, ResidualSolve) \
+            if _is_solve_token(source) \
                     and not (type(node) is ProgramValue and node.op == "solve_outcome"):
                 raise ValueError(
                     "%s cannot read an unconsumed solve token; call outcome.consume(action=...)"
@@ -172,8 +191,11 @@ def validate_nodes(nodes: Any, clocks: Any, available: dict[int, Any], *, where:
             if len(node.inputs) != 1:
                 raise ValueError("solve_outcome must consume exactly one solve token")
             source = available[node.inputs[0].node_id]
-            if type(source) not in (Solve, ResidualSolve):
-                raise ValueError("solve_outcome must consume a Solve or ResidualSolve node")
+            if not _is_solve_token(source):
+                raise ValueError(
+                    "solve_outcome must consume a linear, residual, or field solve token")
+            solve_id = node.inputs[0].node_id
+            consumed_solves[solve_id] = consumed_solves.get(solve_id, 0) + 1
             _solve_outcome_action(node.attrs.to_data())
         if type(node) is ProgramValue and node.op == "solve_outcome_component":
             if len(node.inputs) != 1:
@@ -191,6 +213,12 @@ def validate_nodes(nodes: Any, clocks: Any, available: dict[int, Any], *, where:
                 region, available, declared,
                 "%s/%s[%d]" % (where, node.kind, index))
         available[node.node_id] = node
+    for solve_id, solve in local_solves.items():
+        count = consumed_solves.get(solve_id, 0)
+        if count != 1:
+            raise ValueError(
+                "%s solve token %r must be consumed exactly once with an explicit action; got %d"
+                % (where, getattr(solve, "name", solve_id), count))
 
 
 __all__ = ["validate_nodes"]

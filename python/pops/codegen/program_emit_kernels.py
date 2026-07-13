@@ -36,7 +36,7 @@ _ALLOWED_OPS = frozenset({"state", "solve_fields", "solve_fields_from_blocks", "
                           "apply_laplacian_coeff",
                           "condensed_coeffs", "condensed_rhs", "condensed_reconstruct",
                           "condensed_energy",
-                          "coupled_rate", "coupled_rate_out"})
+                          "coupled_rate", "coupled_rate_out", "solve_coupled_implicit"})
 
 _PROFILE_SKIP_OPS = frozenset({"state", "history", "hmin", "cfl"})
 

@@ -26,11 +26,12 @@ from pops._report import ReportTree
 #: the pass refuses a non-Dense policy whose replay reaches it, rather than risk a silent drift.
 _KNOWN_DETERMINISTIC_OPS = frozenset({
     "state", "history", "store_history", "linear_combine", "project",
-    "solve_fields", "solve_fields_from_blocks",
+    "solve_fields", "solve_fields_from_blocks", "solve_coupled_implicit",
     "rhs", "apply", "source", "linear_source", "coupled_rate", "coupled_rate_out",
     "divergence", "gradient", "laplacian", "apply_laplacian_coeff",
     "apply_in", "apply_out", "cell_compare", "scalar_field", "rhs_jacvec",
     "solve_linear", "solve_local_linear", "matrix_free_operator",
+    "solve_outcome", "solve_outcome_component",
     "schur_coeffs", "schur_energy", "schur_reconstruct", "schur_explicit_flux", "schur_rhs",
     "cfl", "hmin", "max_wave_speed", "record_scalar", "reduce", "scalar_op", "compare",
     "while", "range", "branch", "solve_local_nonlinear",

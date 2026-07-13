@@ -5,6 +5,7 @@
 #include <pops/diagnostics/runtime_diagnostics.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions (options of the IMEX source Newton)
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
+#include <pops/numerics/elliptic/linear/krylov_result.hpp>
 #include <pops/runtime/export.hpp>  // POPS_EXPORT (methods resolved by the native loader through dlopen)
 #include <pops/runtime/facade_options.hpp>  // CoupledSourceProgram (facade POD, ADC-214)
 #include <pops/runtime/context/grid_context.hpp>  // GridContext + BlockClosures (AOT-compiled block seam)
@@ -581,7 +582,7 @@ class System {
   /// "unchecked" entry (empty contract). Empty until the first coupling is added.
   const std::vector<CouplingOperatorView>& coupled_operators() const;
 
-  POPS_EXPORT void solve_fields();  ///< solves Poisson then derives aux = (phi, grad phi); exported
+  POPS_EXPORT SolveReport solve_fields();  ///< solves Poisson then derives aux = (phi, grad phi); exported
                                    ///< so a compiled program .so resolves it via ProgramContext
                                    ///< (the other seam accessors below are likewise POPS_EXPORT)
   /// Per-stage field solve (ADC-409): SAME elliptic solve + aux derivation as solve_fields(), but
@@ -592,7 +593,7 @@ class System {
   /// before the next stage overwrites the aux. With block_idx 0 and U_stage = U^n (the first stage)
   /// it is identical to solve_fields(). POPS_EXPORT: resolved by a compiled program .so (ProgramContext)
   /// across the dlopen boundary. @throws std::out_of_range if @p block_idx is not a valid block.
-  POPS_EXPORT void solve_fields_from_state(int block_idx, const MultiFab& U_stage);
+  POPS_EXPORT SolveReport solve_fields_from_state(int block_idx, const MultiFab& U_stage);
   /// Coupled multi-block field solve (Spec 3 criterion 24, ADC-457): SAME elliptic solve + aux
   /// derivation as solve_fields(), but the system Poisson RHS is assembled from the SIMULTANEOUS stage
   /// states of MULTIPLE blocks at once -- every coupled block reads its OWN stage state, not a single-
@@ -603,7 +604,7 @@ class System {
   /// species field-coupled step uses (the IR commit_many guarantee: no operator observes a partially
   /// committed group). POPS_EXPORT: resolved by a compiled program .so (ProgramContext) across the
   /// dlopen boundary. @throws std::invalid_argument if @p U_stages is not sized to n_blocks().
-  POPS_EXPORT void solve_fields_from_blocks(const std::vector<const MultiFab*>& U_stages);
+  POPS_EXPORT SolveReport solve_fields_from_blocks(const std::vector<const MultiFab*>& U_stages);
   /// @name Named multi-elliptic fields (ADC-428)
   /// A SECOND elliptic solve (beyond the default Poisson) for a user-named field
   /// (m.elliptic_field("phi2", rhs=..., aux=[...])). The named field owns its RHS (a per-block brick,
@@ -616,8 +617,8 @@ class System {
   /// its solved phi (+ centered gradient) into the field's own aux components. The codegen lowers
   /// P.solve_fields(field=name, state=U) to this. @throws if @p field is unregistered, the block index
   /// is invalid, or the geometry is polar (cartesian only for now).
-  POPS_EXPORT void solve_fields_from_state(const std::string& field, int block_idx,
-                                          const MultiFab& U_stage);
+  POPS_EXPORT SolveReport solve_fields_from_state(const std::string& field, int block_idx,
+                                                 const MultiFab& U_stage);
   /// Register named @p field's aux output components (where its solved phi / centered grad land). Called
   /// by the native loader for each m.elliptic_field once the block is installed. @p gx_comp / @p gy_comp
   /// < 0 => only phi is written (the field declared fewer than 3 aux slots).

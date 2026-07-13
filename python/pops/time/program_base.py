@@ -89,7 +89,7 @@ class _ProgramConstants:
     # history store, or a second field solve into the shared aux counts as a state/aux barrier.
     _STATE_BARRIER_OPS = frozenset({
         "project", "fill_boundary", "store_history",
-        "solve_fields", "solve_fields_from_blocks",
+        "solve_fields", "solve_fields_from_blocks", "solve_coupled_implicit",
     })
 
     _OPTIMIZE_PASSES = (
@@ -100,15 +100,15 @@ class _ProgramConstants:
 
     _SCRATCH_OPS = frozenset({
         "rhs", "source", "apply", "linear_combine", "linear_source", "solve_local_linear",
-        "solve_local_nonlinear", "cell_compare", "where", "coupled_rate",
+        "solve_local_nonlinear", "solve_coupled_implicit", "cell_compare", "where", "coupled_rate",
     })
 
     _PERCELL_KERNEL_OPS = frozenset({
         "rhs", "source", "apply", "linear_combine", "linear_source", "solve_local_linear",
-        "solve_local_nonlinear", "cell_compare", "where", "coupled_rate", "project", "fill_boundary",
+        "solve_local_nonlinear", "solve_coupled_implicit", "cell_compare", "where", "coupled_rate", "project", "fill_boundary",
     })
     _HEAVY_KERNEL_OPS = frozenset({
-        "solve_fields", "solve_fields_from_blocks", "solve_linear",
+        "solve_fields", "solve_fields_from_blocks", "solve_linear", "solve_coupled_implicit",
     })
 
     # GPU heuristic thresholds (Spec 3 s28 detectors, ADC-465). A warning report, never a hard error:

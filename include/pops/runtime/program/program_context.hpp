@@ -100,20 +100,20 @@ class ProgramContext {
     return mapped;
   }
 
-  void solve_fields() const {
+  SolveReport solve_fields() const {
     // No count_kernel() here: this forwards to the PUBLIC System::solve_fields() -> Impl::solve_fields(),
     // which already counts the kernel. (The from_state/from_blocks/named seams below DO count, because
     // their Impl paths do not.) Counting here too would double-count this one op.
-    sys_->solve_fields();
+    return sys_->solve_fields();
   }
   /// Per-stage field solve (ADC-409): re-solve the elliptic fields and re-fill the shared aux from
   /// block @p b's STAGE state @p u_stage (not its live state), so a field-coupled multi-stage
   /// Program's stage k reads phi solved from stage k's own state. Forwards to
   /// System::solve_fields_from_state. With b = 0 and u_stage = U^n (the first stage) it matches
   /// solve_fields(); the codegen lowers every solve_fields op to this, passing the stage's state var.
-  void solve_fields_from_state(int b, MultiFab& u_stage) const {
+  SolveReport solve_fields_from_state(int b, MultiFab& u_stage) const {
     count_kernel();
-    sys_->solve_fields_from_state(sys_block(b), u_stage);
+    return sys_->solve_fields_from_state(sys_block(b), u_stage);
   }
   /// Named multi-elliptic field solve (ADC-428): re-solve the SECOND elliptic field @p field from block
   /// @p b's stage state @p u_stage and write its phi (+ centered grad) into the field's OWN aux
@@ -121,9 +121,9 @@ class ProgramContext {
   /// System::solve_fields_from_state(field, b, u_stage). The codegen lowers
   /// P.solve_fields(field=name, state=U) to this; a default (unnamed) solve_fields keeps the overload
   /// above, byte-identical.
-  void solve_fields_from_state(const std::string& field, int b, MultiFab& u_stage) const {
+  SolveReport solve_fields_from_state(const std::string& field, int b, MultiFab& u_stage) const {
     count_kernel();
-    sys_->solve_fields_from_state(field, sys_block(b), u_stage);
+    return sys_->solve_fields_from_state(field, sys_block(b), u_stage);
   }
   /// Coupled multi-block field solve (Spec 3 criterion 24, ADC-457): re-solve the elliptic fields and
   /// re-fill the shared aux from the SIMULTANEOUS stage states of MULTIPLE blocks at once -- the system
@@ -133,7 +133,7 @@ class ProgramContext {
   /// lowers P.solve_fields_from_blocks([U0, U1, ...]) to this, building the per-block pointer vector
   /// from the listed stage-state vars (their declaration order == the block index order, asserted at
   /// emit time). This is the multi-target counterpart of solve_fields_from_state.
-  void solve_fields_from_blocks(const std::vector<const MultiFab*>& u_stages) const {
+  SolveReport solve_fields_from_blocks(const std::vector<const MultiFab*>& u_stages) const {
     count_kernel();
     // The codegen builds @p u_stages indexed BY PROGRAM block index (a stage state slotted at its own
     // Program index, the rest nullptr). The System solver expects it indexed by SYSTEM block index, so
@@ -161,11 +161,11 @@ class ProgramContext {
       const int mapped = sys_block(static_cast<int>(p));
       remapped[static_cast<std::size_t>(mapped)] = u_stages[p];
     }
-    sys_->solve_fields_from_blocks(remapped);
+    return sys_->solve_fields_from_blocks(remapped);
   }
 
-  void solve_fields_from_blocks(const std::string& field,
-                                const std::vector<const MultiFab*>& u_stages) const {
+  SolveReport solve_fields_from_blocks(const std::string& field,
+                                       const std::vector<const MultiFab*>& u_stages) const {
     count_kernel();
     const std::vector<int>& map = sys_->program_block_map();
     if (u_stages.size() != map.size())
@@ -195,9 +195,10 @@ class ProgramContext {
         *live[i] = std::move(published[i]);
     };
     try {
-      sys_->solve_fields_from_state(field, representative,
-                                    sys_->block_state(representative));
+      const SolveReport report = sys_->solve_fields_from_state(
+          field, representative, sys_->block_state(representative));
       restore();
+      return report;
     } catch (...) {
       restore();
       throw;

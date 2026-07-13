@@ -109,7 +109,20 @@ class SolveOutcome:
         return "<SolveOutcome %s: unconsumed>" % self._name
 
 
+class FieldSolveOutcome(SolveOutcome):
+    """Non-readable field-solve token.
+
+    A field value is publishable only after :meth:`consume` records an explicit
+    :class:`FailRun` or :class:`RejectAttempt` action.  The distinct public type keeps field
+    materialization visible in signatures and error messages while reusing the exact one-shot
+    consumption transaction of every other solve.
+    """
+
+    def __repr__(self) -> str:
+        return "<FieldSolveOutcome %s: unconsumed>" % self._name
+
+
 __all__ = [
-    "FailRun", "RejectAttempt", "ResidualSolution", "SOLVE_STATUSES",
+    "FailRun", "FieldSolveOutcome", "RejectAttempt", "ResidualSolution", "SOLVE_STATUSES",
     "SolveAction", "SolveOutcome",
 ]

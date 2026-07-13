@@ -1,6 +1,7 @@
 """Pure helpers used by resolve and total compile; no artifact mutation or install path."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 
@@ -54,7 +55,7 @@ def compile_install_model(name: str, model: Any, backend: str, target: str,
     from pops.codegen.module_lowering import lower_and_validate
 
     facade = model
-    model, source_module = lower_and_validate(model, facade=facade)
+    model, source_module = lower_and_validate(model, facade=facade, state_space=name)
     source_module_hash = (
         source_module.module_hash() if source_module is not None else None
     )
@@ -151,7 +152,7 @@ def _field_rhs_providers(problem: Any, registration: Any) -> tuple[tuple[Any, ..
             if field_op.kind != "field_operator":
                 raise TypeError("field %r provider is not a field_operator" % operator.name)
             route = field_op.lowering.get("field_provider")
-            key = route.get("key") if isinstance(route, dict) else None
+            key = route.get("key") if isinstance(route, Mapping) else None
             if not isinstance(key, str) or not key:
                 raise ValueError(
                     "field %r provider has no explicit native provider key" % operator.name)

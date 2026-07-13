@@ -66,6 +66,7 @@ from pops.codegen.program_emit_model_kernels import (  # noqa: F401
     _emit_residual_eval,
     _emit_solve_local_linear_kernel,
     _emit_solve_local_nonlinear_kernel,
+    _emit_solve_coupled_implicit_kernel,
     _emit_source_kernel,
     _linear_source_rows,
     _residual_term_exprs,
@@ -294,9 +295,9 @@ def _check_lowerable(program: Any, model: Any = None) -> None:
     _check_schedules_lowerable(program)
     for v in program._values:
         _check_op_lowerable(program, v, model)
-    # Local dense solves are specialized to the model-manifest component count. The emitted
-    # ``mat_inverse<N>`` owns exactly N x N stack storage and bounded loops; there is no separate
-    # hard-coded state-size dispatch or truncating fixed-capacity buffer.
+    # Dense local and coupled solves are specialized to the complete manifest-sized system.  The
+    # emitted ``mat_inverse<N>`` owns exactly N x N stack storage and bounded loops; no central
+    # component-count allowlist, truncating buffer, or scientific-model branch selects N.
 
 
 # 'linear_source' is a pure NAME-reference SSA node (vtype 'operator'): it carries no runtime work
@@ -337,7 +338,7 @@ def _check_op_lowerable(program: Any, v: Any, model: Any) -> None:
             "emit_cpp_program cannot lower op '%s' (value '%s') yet; supported ops are %s "
             "(+ %s with a model; nested control flow / Krylov are later phases)"
             % (v.op, v.name, sorted(_ALLOWED_OPS), sorted(_MODEL_OPS)))
-    if v.op == "coupled_rate":
+    if v.op in ("coupled_rate", "solve_coupled_implicit"):
         # A coupled_rate (collisions / ionization, Spec 3 criterion 27) lowers to ONE multi-state
         # for_each_cell kernel (see _emit_coupled_rate_kernel). The lowering reaches the operator
         # body (its per-block component formulas) through the BOUND registry, and binds each input

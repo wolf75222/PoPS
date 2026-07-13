@@ -36,12 +36,17 @@ def _program_nodes(program: Any) -> Any:
 
 def _consumed_solve_action(program: Any, solve: Any) -> str:
     """Return the explicit action kind attached to the unique solve_outcome consumer."""
+    matches = []
     for node in _program_nodes(program):
         if node.op != "solve_outcome" or len(node.inputs) != 1 or node.inputs[0] is not solve:
             continue
         action = node.attrs.get("action")
-        return str(getattr(action, "kind", "fail_run"))
-    return "fail_run"
+        matches.append(str(getattr(action, "kind", "")))
+    if len(matches) != 1 or matches[0] not in ("fail_run", "reject_attempt"):
+        raise ValueError(
+            "solve %r must have exactly one explicit outcome.consume(action=FailRun(...) or "
+            "RejectAttempt(...)); found %d" % (solve.name, len(matches)))
+    return matches[0]
 
 
 def _validate_matrix_free_contract(v: Any, model: Any) -> None:

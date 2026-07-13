@@ -39,6 +39,7 @@ class ProgramModelGraph:
         "_source_modules_by_owner",
         "_owners_by_block",
         "_authorities_by_owner",
+        "_models_by_block",
     )
 
     def __init__(
@@ -48,6 +49,7 @@ class ProgramModelGraph:
         source_modules_by_owner: Mapping[Any, Any],
         owners_by_block: Mapping[str, Any],
         authorities_by_owner: Mapping[Any, Any],
+        models_by_block: Mapping[str, Any] | None = None,
     ) -> None:
         if not models_by_owner:
             raise ValueError("ProgramModelGraph requires at least one model owner")
@@ -76,6 +78,12 @@ class ProgramModelGraph:
         self._source_modules_by_owner = MappingProxyType(dict(source_modules_by_owner))
         self._owners_by_block = MappingProxyType(dict(owners_by_block))
         self._authorities_by_owner = MappingProxyType(dict(authorities_by_owner))
+        routed_models = (
+            {name: models_by_owner[owner] for name, owner in owners_by_block.items()}
+            if models_by_block is None else dict(models_by_block))
+        if set(routed_models) != set(owners_by_block):
+            raise ValueError("ProgramModelGraph block model routes must match owner block routes")
+        self._models_by_block = MappingProxyType(routed_models)
 
     @classmethod
     def from_resolved_blocks(cls, blocks: Any) -> ProgramModelGraph:
@@ -92,7 +100,8 @@ class ProgramModelGraph:
         modules: dict[Any, Any] = {}
         authorities: dict[Any, Any] = {}
         routes: dict[str, Any] = {}
-        lowered_by_authority: dict[int, tuple[Any, Any]] = {}
+        lowered_by_authority: dict[tuple[int, str], tuple[Any, Any]] = {}
+        block_models: dict[str, Any] = {}
         for block in blocks:
             if block.name in routes:
                 raise ValueError(
@@ -106,11 +115,11 @@ class ProgramModelGraph:
                     "ProgramModelGraph distinct authoring model authorities collide at canonical "
                     "owner %s" % canonical
                 )
-            previous_model = models.get(canonical)
-            authority_key = id(block.model)
+            authority_key = (id(block.model), block.name)
             lowered = lowered_by_authority.get(authority_key)
             if lowered is None:
-                lowered = lower_and_validate(block.model, facade=block.model)
+                lowered = lower_and_validate(
+                    block.model, facade=block.model, state_space=block.name)
                 lowered_by_authority[authority_key] = lowered
             emit_model, source_module = lowered
             emit_owner = _model_owner(emit_model).canonical()
@@ -119,20 +128,17 @@ class ProgramModelGraph:
                     "ProgramModelGraph lowering changed model owner %s to %s"
                     % (canonical, emit_owner)
                 )
-            if previous_model is not None and previous_model is not emit_model:
-                raise ValueError(
-                    "ProgramModelGraph canonical owner %s maps to multiple model definitions"
-                    % canonical
-                )
-            models[canonical] = emit_model
+            models.setdefault(canonical, emit_model)
             modules[canonical] = source_module
             authorities[canonical] = owner
             routes[block.name] = canonical
+            block_models[block.name] = emit_model
         return cls(
             models_by_owner=models,
             source_modules_by_owner=modules,
             owners_by_block=routes,
             authorities_by_owner=authorities,
+            models_by_block=block_models,
         )
 
     @property
@@ -146,6 +152,10 @@ class ProgramModelGraph:
     @property
     def owners_by_block(self) -> Mapping[str, Any]:
         return self._owners_by_block
+
+    @property
+    def models_by_block(self) -> Mapping[str, Any]:
+        return self._models_by_block
 
     def model_for_owner(self, owner: Any) -> Any:
         from pops.model import OwnerPath
@@ -196,7 +206,9 @@ class ProgramModelGraph:
         return expected
 
     def model_for_block(self, block: Any) -> Any:
-        return self.model_for_owner(self.owner_for_block(block))
+        self.owner_for_block(block)
+        name = block.local_id if hasattr(block, "local_id") else block
+        return self._models_by_block[name]
 
 
 def model_for_node(authority: Any, node: Any) -> Any:

@@ -244,6 +244,14 @@ def program_to_graph(program: Any) -> Any:
                 name=_name(value),
                 attrs=attrs,
             )
+        elif value.op in (
+                "solve_fields", "solve_fields_from_blocks", "solve_coupled_implicit"):
+            # Solve tokens remain generic unreadable ProgramValue graph nodes until an explicit
+            # solve_outcome consumes them.  Their operator handle is metadata, not an ordinary
+            # readable OperatorCall result.
+            node = GraphValue(
+                value.id, _name(value), value.vtype, value.op, inputs,
+                value.clock, value.point, attrs=attrs)
         elif "operator_handle" in value.attrs:
             node = OperatorCall(
                 value.id,

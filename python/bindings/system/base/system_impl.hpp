@@ -418,27 +418,27 @@ struct System::Impl {
   // once per Lie step / three times per Strang step), so counting here moves "kernels" on the native
   // host path -- no SystemStepper edit (Profiler stays an Impl member the stepper never reads). The
   // count() is a single predictable branch when profiling is off (zero hot-path cost).
-  void solve_fields() {
+  SolveReport solve_fields() {
     program_.profiler_.count("kernels");
-    fields_.solve_fields();
+    return fields_.solve_fields();
   }
   // Per-stage field solve (ADC-409): re-solve + re-fill the shared aux from a stage state of the
   // target block (the rest of the blocks keep their live s.U). Same delegation idiom as solve_fields.
-  void solve_fields_from_state(int block_idx, const MultiFab& U_stage) {
-    fields_.solve_fields_from_state(block_idx, U_stage);
+  SolveReport solve_fields_from_state(int block_idx, const MultiFab& U_stage) {
+    return fields_.solve_fields_from_state(block_idx, U_stage);
   }
   // Coupled multi-block field solve (Spec 3 criterion 24, ADC-457): re-solve + re-fill the shared aux
   // from the SIMULTANEOUS stage states of all blocks (assemble_poisson_rhs_from_blocks). Same
   // delegation idiom as solve_fields / solve_fields_from_state.
-  void solve_fields_from_blocks(const std::vector<const MultiFab*>& U_stages) {
-    fields_.solve_fields_from_blocks(U_stages);
+  SolveReport solve_fields_from_blocks(const std::vector<const MultiFab*>& U_stages) {
+    return fields_.solve_fields_from_blocks(U_stages);
   }
   // NAMED multi-elliptic field (ADC-428): a SECOND elliptic solve for the user-named @p field, from a
   // stage state of @p block_idx, written to the field's OWN aux components. The default Poisson path
   // (solve_fields / solve_fields_from_state) is untouched. Same delegation idiom.
-  void solve_named_field_from_state(const std::string& field, int block_idx,
-                                    const MultiFab& U_stage) {
-    fields_.solve_named_field_from_state(field, block_idx, U_stage);
+  SolveReport solve_named_field_from_state(const std::string& field, int block_idx,
+                                           const MultiFab& U_stage) {
+    return fields_.solve_named_field_from_state(field, block_idx, U_stage);
   }
   void register_elliptic_field(const std::string& block, const std::string& field,
                                int phi_comp, int gx_comp, int gy_comp) {

@@ -119,9 +119,9 @@ std::vector<double> System::get_primitive_state(const std::string& name) {
   return prim;
 }
 
-void System::solve_fields() {
+SolveReport System::solve_fields() {
   pops::runtime::program::ProfileScope s(p_->program_.profiler_, "field_solve");
-  p_->solve_fields();
+  const SolveReport report = p_->solve_fields();
   // ELLIPTIC-SOLVER NATIVE COUNTERS (Spec 5 sec.13.11.1, ADC-479 criteria 42/43). The opaque
   // "field_solve" scope hides where the elliptic solve (96-99.9% of step cost) spends its time: read
   // the active solver's per-solve stats back HERE -- after p_->solve_fields() returns, so AFTER its
@@ -139,19 +139,21 @@ void System::solve_fields() {
     p_->program_.profiler_.count_max("mg_levels", p_->fields_.last_num_levels());
     p_->program_.profiler_.record("elliptic_bottom", p_->fields_.last_bottom_seconds());
   }
+  return report;
 }
 
-void System::solve_fields_from_state(int block_idx, const MultiFab& U_stage) {
-  p_->solve_fields_from_state(block_idx, U_stage);
+SolveReport System::solve_fields_from_state(int block_idx, const MultiFab& U_stage) {
+  return p_->solve_fields_from_state(block_idx, U_stage);
 }
 
 // Coupled multi-block field solve (Spec 3 criterion 24, ADC-457): forwards to the field solver, which
 // assembles the system Poisson RHS as Sum_s elliptic_rhs_s(U_s) reading EVERY block's stage state at
 // once (U_stages indexed by block index; nullptr -> the block's live state), then re-fills the shared
 // aux. POPS_EXPORT: resolved by a generated problem.so (ProgramContext) across the dlopen boundary.
-POPS_EXPORT void System::solve_fields_from_blocks(const std::vector<const MultiFab*>& U_stages) {
+POPS_EXPORT SolveReport System::solve_fields_from_blocks(
+    const std::vector<const MultiFab*>& U_stages) {
   pops::runtime::program::ProfileScope s(p_->program_.profiler_, "field_solve");
-  p_->solve_fields_from_blocks(U_stages);
+  const SolveReport report = p_->solve_fields_from_blocks(U_stages);
   // Same elliptic-solver counters as System::solve_fields (ADC-479 criteria 42/43), read back AFTER
   // the coupled solve returns -- i.e. after its internal device_fence() (system_field_solver.hpp). The
   // coupled multi-block solve uses the SAME ell_ solver, so the stats are populated identically.
@@ -161,14 +163,15 @@ POPS_EXPORT void System::solve_fields_from_blocks(const std::vector<const MultiF
     p_->program_.profiler_.count_max("mg_levels", p_->fields_.last_num_levels());
     p_->program_.profiler_.record("elliptic_bottom", p_->fields_.last_bottom_seconds());
   }
+  return report;
 }
 
 // NAMED multi-elliptic field (ADC-428): a SECOND elliptic solve for @p field from block @p block_idx's
 // stage state. Forwards to the field solver, which assembles the per-field RHS (sum of the blocks'
 // named bricks), solves with a dedicated native solver, and writes the field's OWN aux components.
-POPS_EXPORT void System::solve_fields_from_state(const std::string& field, int block_idx,
-                                                const MultiFab& U_stage) {
-  p_->solve_named_field_from_state(field, block_idx, U_stage);
+POPS_EXPORT SolveReport System::solve_fields_from_state(const std::string& field, int block_idx,
+                                                       const MultiFab& U_stage) {
+  return p_->solve_named_field_from_state(field, block_idx, U_stage);
 }
 
 // Register a named elliptic field (ADC-428): records WHERE the field's solved phi / centered grad land

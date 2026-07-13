@@ -4,6 +4,7 @@ Local solves, matrix-free operators, laplacian/gradient/divergence and the coeff
 """
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from pops.time.program_base import _ProgramConstants
@@ -13,6 +14,7 @@ from pops.time.program_value_validation import (
     require_owned, require_top_level,
 )
 from pops.time.operator_resolution import resolve_operator_handle
+from pops.time.references import block_name
 from pops.time.value_metadata import positive_scalar_literal
 from pops.time.values import (
     ProgramValue, _Coeff, _Operator, _exact_number, _residual_wants_guess, _resolve_handle)
@@ -67,6 +69,92 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         return self._new(
             "state", "solve_local_linear", inputs, attrs, name, rhs.block, space=rhs.space,
             field_context=field_context)
+
+    @atomic_authoring
+    def solve_implicit(self, operator: Any, states: Any, *, method: Any = "newton",
+                       tol: Any = 1e-12, max_iter: Any = 20, fd_eps: Any = 1e-7,
+                       name: Any = None, at: Any = None) -> Any:
+        """Solve ``U - U0 - dt * operator(U) = 0`` over owner-qualified blocks.
+
+        The typed ``coupled_rate`` signature is the join contract for every input and output.  The
+        returned solve token stays unreadable until an explicit ``FailRun`` or ``RejectAttempt`` is
+        consumed; no partially converged state is ever published.
+        """
+        from pops.model import OperatorHandle
+        from pops.time.solve_outcome import SolveOutcome
+        from pops.time.value_collections import _CoupledResult
+
+        if not isinstance(operator, OperatorHandle):
+            raise TypeError("solve_implicit requires a typed coupled_rate OperatorHandle")
+        if isinstance(states, Mapping):
+            raw = tuple(states.values())
+            for block, value in states.items():
+                if getattr(_resolve_handle(value), "block", None) != block:
+                    raise ValueError(
+                        "solve_implicit state mapping keys must match each State value's BlockHandle")
+        elif isinstance(states, Sequence) and not isinstance(states, (str, bytes)):
+            raw = tuple(states)
+        else:
+            raise TypeError("solve_implicit states must be a non-empty sequence or block mapping")
+        values = tuple(_resolve_handle(value) for value in raw)
+        if not values or any(not isinstance(value, ProgramValue) or value.vtype != "state"
+                             for value in values):
+            raise ValueError("solve_implicit states must contain one or more State values")
+        for value in values:
+            require_top_level(self, value, "solve_implicit")
+        if len({value.point for value in values}) != 1:
+            raise ValueError("solve_implicit inputs must share one exact evaluation point")
+        op = resolve_operator_handle(
+            self, operator, where="solve_implicit", expected_kinds="coupled_rate", values=values)
+        self._check_call_args(op, values)
+        if method != "newton":
+            raise NotImplementedError("solve_implicit currently supports method='newton' only")
+        tol_literal = positive_scalar_literal(tol, where="solve_implicit: tol")
+        fd_eps_literal = positive_scalar_literal(fd_eps, where="solve_implicit: fd_eps")
+        if isinstance(max_iter, bool) or not isinstance(max_iter, int) or max_iter <= 0:
+            raise ValueError("solve_implicit: max_iter must be a positive int")
+        bundle = op.signature.output
+        by_name = {block_name(value.block): value for value in values}
+        missing = tuple(output for output in bundle.keys() if output not in by_name)
+        if missing:
+            raise ValueError(
+                "solve_implicit operator outputs %s without matching input block names"
+                % (missing,))
+        blocks = tuple(by_name[output].block for output in bundle.keys())
+        token_name = name or operator.name
+        if at is None:
+            from pops.time.points import TimePoint
+            result_points = (TimePoint(self.clock, step=1),) * len(blocks)
+        elif isinstance(at, Mapping):
+            if set(at) != set(blocks):
+                raise ValueError("solve_implicit at mapping must name every output BlockHandle")
+            result_points = tuple(at[block] for block in blocks)
+        elif isinstance(at, Sequence) and not isinstance(at, (str, bytes)):
+            result_points = tuple(at)
+            if len(result_points) != len(blocks):
+                raise ValueError("solve_implicit at sequence must match output arity")
+        else:
+            result_points = (at,) * len(blocks)
+        token = self._new(
+            "coupled_solution", "solve_coupled_implicit", values,
+            {"operator": op.name, "operator_handle": operator, "blocks": blocks,
+             "method": method, "tol": tol_literal, "max_iter": int(max_iter),
+             "fd_eps": fd_eps_literal, "output_count": len(blocks)},
+            token_name, blocks[0], point=result_points[0])
+
+        def project(outcome: Any) -> Any:
+            projected = {}
+            for index, (output_name, block) in enumerate(
+                    zip(bundle.keys(), blocks, strict=True)):
+                initial = by_name[output_name]
+                projected[block] = self._new(
+                    "state", "solve_outcome_component", (outcome,),
+                    {"index": index, "out_block": block},
+                    "%s_%s" % (token_name, output_name), block,
+                    space=initial.space, point=result_points[index])
+            return _CoupledResult(projected)
+
+        return SolveOutcome(self, token, project, token_name)
 
     # The LOCAL per-cell ops a solve_local_nonlinear residual sub-block may use: the iterate / guess
     # State placeholders, named per-cell sources / linear-source applies, and the affine combine of

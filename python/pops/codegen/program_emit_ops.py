@@ -30,6 +30,7 @@ from pops.codegen.program_emit_model_kernels import (
     _emit_flux_kernel,
     _emit_solve_local_linear_kernel,
     _emit_solve_local_nonlinear_kernel,
+    _emit_solve_coupled_implicit_kernel,
     _emit_source_kernel,
 )
 from pops.codegen.program_emit_condensed import emit_condensed_op
@@ -40,6 +41,7 @@ from pops.codegen.program_emit_control import (
     _emit_while,
 )
 from pops.codegen.program_emit_solve import (
+    _consumed_solve_action,
     _emit_matrix_free_operator,
     _emit_solve_linear,
 )
@@ -64,6 +66,24 @@ def _required_block_index(block_idx: Any, block: Any, where: str) -> int:
     if isinstance(index, bool) or not isinstance(index, int) or index < 0:
         raise ValueError("%s: invalid runtime block index %r" % (where, index))
     return index
+
+
+def _append_solve_report_guard(
+        program: Any, solve: Any, report: str, lines: list[str], *, label: str) -> None:
+    """Consume a native SolveReport with the exact action authored for ``solve``."""
+    action = _consumed_solve_action(program, solve)
+    lines.append("if (!%s.solved_value_available()) {" % report)
+    if action == "reject_attempt":
+        lines.append(
+            "  throw pops::runtime::program::StepAttemptRejected("
+            "%s.status, %s, std::string(%s) + %s.status_name());"
+            % (report, json.dumps(label), json.dumps(label + " failed: "), report))
+    else:
+        lines.append(
+            "  throw std::runtime_error(std::string(%s) + %s.status_name() + "
+            "\" action=fail_run\");"
+            % (json.dumps(label + " failed: "), report))
+    lines.append("}")
 
 
 def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, model: Any, lines: Any,
@@ -106,9 +126,13 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             raise ValueError("solve_fields node has no exact field identity")
         field, _ = resolved_field_route(field_ref, field_plans)
         lines += field_point_cpp(program, v, field)
-        solve_stmt = ('ctx.solve_fields_from_state(%s, %d, %s);'
-                      % (json.dumps(field), bidx, var[state_in.id]))
+        report = "field_report_%d" % v.id
+        solve_stmt = ('const pops::SolveReport %s = '
+                      'ctx.solve_fields_from_state(%s, %d, %s);'
+                      % (report, json.dumps(field), bidx, var[state_in.id]))
         lines.append(solve_stmt)
+        _append_solve_report_guard(program, v, report, lines, label="field_solve")
+        var[v.id] = var[state_in.id]
     elif v.op == "solve_fields_from_blocks":
         # Coupled multi-block field solve (ADC-457): a SIMULTANEOUS solve, EVERY listed block at
         # its OWN stage state -- the Poisson RHS is Sum_s elliptic_rhs_s(U_s) over all coupled
@@ -132,7 +156,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             raise ValueError("solve_fields_from_blocks node has no exact field identity")
         field, _ = resolved_field_route(field_ref, field_plans)
         lines += field_point_cpp(program, v, field)
-        lines.append("ctx.solve_fields_from_blocks(%s, %s);" % (json.dumps(field), vec))
+        report = "field_report_%d" % v.id
+        lines.append("const pops::SolveReport %s = ctx.solve_fields_from_blocks(%s, %s);"
+                     % (report, json.dumps(field), vec))
+        _append_solve_report_guard(program, v, report, lines, label="field_solve")
         # solve_fields_from_blocks returns a FieldContext (the shared aux); its var aliases the first
         # listed state so a downstream rhs(state, fields) reads the refreshed shared aux like any
         # solve_fields result (the FieldContext carries no readable buffer of its own).
@@ -165,6 +192,34 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # alias of solve_fields_from_blocks. The producing coupled_rate is the node's sole input.
         (coupled_in,) = v.inputs
         var[v.id] = var[("coupled_scratch", coupled_in.id, v.attrs["out_block"])]
+    elif v.op == "solve_coupled_implicit":
+        components = _coupled_rate_components(program, v)
+        by_block = {state.block: state for state in v.inputs}
+        scratch = {}
+        for block in components:
+            scratch[block] = "ci%d_%s" % (v.id, block_name(block))
+            lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);"
+                         % (scratch[block], var[by_block[block].id]))
+        status = "ci_status_%d" % v.id
+        lines.append("pops::MultiFab %s = ctx.alloc_scalar_field(1, 0);" % status)
+        lines += _emit_solve_coupled_implicit_kernel(
+            components, by_block, var, scratch, status,
+            tol=v.attrs["tol"], max_iter=int(v.attrs["max_iter"]),
+            fd_eps=v.attrs["fd_eps"])
+        code = "ci_code_%d" % v.id
+        report = "ci_report_%d" % v.id
+        lines.append("const int %s = static_cast<int>(pops::reduce_max(%s, 0));" % (code, status))
+        lines.append("pops::SolveReport %s;" % report)
+        lines.append("if (%s == 0) %s.mark_solved();" % (code, report))
+        lines.append("else if (%s == 1) %s.mark_failed(pops::SolveStatus::kIterationLimit);"
+                     % (code, report))
+        lines.append("else if (%s == 2) %s.mark_failed(pops::SolveStatus::kSingular);"
+                     % (code, report))
+        lines.append("else %s.mark_failed(pops::SolveStatus::kInvalidEvaluation);" % report)
+        _append_solve_report_guard(program, v, report, lines, label="coupled_implicit")
+        var.update({("coupled_solution", v.id, block): token
+                    for block, token in scratch.items()})
+        var[v.id] = scratch[next(iter(scratch))]
     elif v.op == "history":
         # Read the SYSTEM-OWNED history slot (a MultiFab&, ADC-406a): lag steps back. The reference
         # is bound to a C++ name the affine combine then reads like any other state/RHS term. An
@@ -404,7 +459,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # effects. Runtime lowering keeps the existing Krylov call as the value-producing operation;
         # these nodes are zero-cost aliases that preserve that explicit contract in the IR.
         (source,) = v.inputs
-        var[v.id] = var[source.id]
+        if v.op == "solve_outcome_component" and "out_block" in v.attrs:
+            solve = source.inputs[0]
+            var[v.id] = var[("coupled_solution", solve.id, v.attrs["out_block"])]
+        else:
+            var[v.id] = var[source.id]
     elif v.op == "reduce":
         # A collective all_reduce -> a C++ scalar. norm2 = sqrt(dot(u, u)); dot(a, b) directly;
         # sum/max/min (over a component) via the matching pops reduction. All MUST run on every rank

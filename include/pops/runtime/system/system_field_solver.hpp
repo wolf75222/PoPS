@@ -728,9 +728,9 @@ class SystemFieldSolver {
   }
   /// Solves the active cartesian Poisson (GeometricMG V-cycle or direct FFT). Sets the trace
   /// markers; the device_fence after ell_solve is carried by the CALLER (solve_fields), not here.
-  void ell_solve() {
+  SolveReport ell_solve() {
     trace_mark("ell_solve: before std::visit");
-    std::visit(
+    SolveReport report = std::visit(
         [this](auto& e) {
           using T = std::decay_t<decltype(e)>;
           if constexpr (std::is_same_v<T, GeometricMG>) {
@@ -739,15 +739,19 @@ class SystemFieldSolver {
             // of p_mg_opts_ ARE those constants, so an unconfigured System is bit-identical.
             trace_mark("ell_solve: GeometricMG::solve() start");
             e.solve(p_mg_opts_.rel_tol, p_mg_opts_.max_cycles, p_mg_opts_.abs_tol);
+            return e.last_solve_report();
           } else {
             // Direct FFT solver: no iterative tolerance, keep the concept-level no-argument solve().
             trace_mark("ell_solve: FFT solver::solve() start");
             e.solve();
+            SolveReport direct;
+            direct.mark_solved();
+            return direct;
           }
-          trace_mark("ell_solve: solve() return");
         },
         *ell_);
     trace_mark("ell_solve: after std::visit");
+    return report;
   }
 
   void require_nullspace_compatible(const MultiFab& rhs, bool constant_kernel) const {
@@ -929,7 +933,7 @@ class SystemFieldSolver {
   /// This is the layout expected by ExBVelocityPolar (v_r = -grad_theta/B, v_theta = grad_r/B).
   /// @p target_block / @p U_stage: per-stage state override for the target block (default -1: every
   /// block from s.U, bit-identical to the historical path).
-  void solve_fields_polar(int target_block = -1, const MultiFab* U_stage = nullptr) {
+  SolveReport solve_fields_polar(int target_block = -1, const MultiFab* U_stage = nullptr) {
     ensure_elliptic_polar();
     MultiFab& rhs = pell_->rhs();
     assemble_poisson_rhs(rhs, target_block, U_stage);
@@ -958,6 +962,9 @@ class SystemFieldSolver {
     // already routes through bc_ (xlo/xhi Foextrap, ylo/yhi Periodic) -> correct periodic azimuthal halo.
     fill_ghosts(owner_->aux, owner_->dom, owner_->bc_);
     apply_named_aux_bc();  // ADC-369: per-field halo override on the RADIAL faces (theta stays periodic)
+    SolveReport report;
+    report.mark_solved();
+    return report;
   }
 
   /// Solves the system Poisson then DERIVES the aux = (phi, grad phi[, B_z, T_e]). Routes to
@@ -971,12 +978,16 @@ class SystemFieldSolver {
   /// state (the compiled Program runs stages sequentially: stage k's solve overwrites the shared aux
   /// before stage k's RHS reads it). The default (-1 / nullptr) keeps every block at s.U: the
   /// historical solve_fields(), BIT-IDENTICAL.
-  void solve_fields(int target_block = -1, const MultiFab* U_stage = nullptr) {
+  SolveReport solve_fields(int target_block = -1, const MultiFab* U_stage = nullptr) {
     if (owner_->polar_)
       // ring: polar Poisson + aux in local basis (e_r, e_theta)
       return solve_fields_polar(target_block, U_stage);
     trace_mark("solve_fields: start");
     ensure_elliptic();
+    MultiFab& phi_before = ell_phi();
+    MultiFab published_phi(phi_before.box_array(), phi_before.dmap(), phi_before.ncomp(),
+                           phi_before.n_grow());
+    lincomb(published_phi, Real(1), phi_before, Real(0), phi_before);
     trace_mark("solve_fields: after ensure_elliptic");
     MultiFab& rhs = ell_rhs();
       // f = Sum_s elliptic_rhs_s(U_s). By default the CURRENT state of each block; with a
@@ -999,7 +1010,11 @@ class SystemFieldSolver {
         }
       }
       trace_mark("solve_fields: before ell_solve");
-      ell_solve();
+      SolveReport report = ell_solve();
+      if (!report.solved_value_available()) {
+        lincomb(phi_before, Real(1), published_phi, Real(0), published_phi);
+        return report;
+      }
     trace_mark("solve_fields: after ell_solve, before device_fence");
     device_fence();
     trace_mark("solve_fields: after device_fence (aux derivation)");
@@ -1034,6 +1049,7 @@ class SystemFieldSolver {
                   owner_->bc_);  // extrapolation at the boundary (wall / free outflow)
     apply_named_aux_bc();  // ADC-369: per-field halo override (after the shared fill; no-op if none)
     trace_mark("solve_fields: end (fill ghosts aux)");
+    return report;
   }
 
   /// Per-stage field solve (ADC-409): SAME solve + derive-aux as solve_fields(), but the target
@@ -1044,11 +1060,11 @@ class SystemFieldSolver {
   /// next stage's solve overwrites the aux, so no distinct per-stage buffer is needed. With
   /// block_idx == 0 and U_stage == U^n (the first stage) this is identical to solve_fields().
   /// @throws std::out_of_range if @p block_idx is not a valid block index.
-  void solve_fields_from_state(int block_idx, const MultiFab& U_stage) {
+  SolveReport solve_fields_from_state(int block_idx, const MultiFab& U_stage) {
     if (block_idx < 0 || block_idx >= static_cast<int>(owner_->sp.size()))
       throw std::out_of_range("solve_fields_from_state: block index " + std::to_string(block_idx) +
                               " out of range (" + std::to_string(owner_->sp.size()) + " blocks)");
-    solve_fields(block_idx, &U_stage);
+    return solve_fields(block_idx, &U_stage);
   }
 
   /// POLAR coupled multi-block solve (Spec 3 criterion 24, ADC-457): same solve + aux derivation as
@@ -1057,7 +1073,7 @@ class SystemFieldSolver {
   /// indexed by block index (nullptr = the block's live state). Mirrors solve_fields_polar() step for
   /// step (eps scaling, pell_->solve, device_fence, derive_aux_polar, apply_te, fill_ghosts, named-aux
   /// halo) -- only the RHS assembly differs, so a coupled solve from the live states is bit-identical.
-  void solve_fields_polar_from_blocks(const std::vector<const MultiFab*>& U_stages) {
+  SolveReport solve_fields_polar_from_blocks(const std::vector<const MultiFab*>& U_stages) {
     ensure_elliptic_polar();
     MultiFab& rhs = pell_->rhs();
     assemble_poisson_rhs_from_blocks(rhs, U_stages);
@@ -1077,6 +1093,9 @@ class SystemFieldSolver {
     apply_te();
     fill_ghosts(owner_->aux, owner_->dom, owner_->bc_);
     apply_named_aux_bc();
+    SolveReport report;
+    report.mark_solved();
+    return report;
   }
 
   /// Coupled multi-block field solve (Spec 3 criterion 24, ADC-457): SAME elliptic solve + aux
@@ -1090,11 +1109,16 @@ class SystemFieldSolver {
   /// P.solve_fields_from_blocks([...]) to this; the seam a multi-species field-coupled step uses to
   /// re-solve phi from all coupled blocks' stage states simultaneously. @throws (via
   /// assemble_poisson_rhs_from_blocks) if @p U_stages is not sized to the block count.
-  void solve_fields_from_blocks(const std::vector<const MultiFab*>& U_stages) {
+  SolveReport solve_fields_from_blocks(const std::vector<const MultiFab*>& U_stages) {
     if (owner_->polar_)
       return solve_fields_polar_from_blocks(U_stages);
     ensure_elliptic();
+    MultiFab& phi_before = ell_phi();
+    MultiFab published_phi(phi_before.box_array(), phi_before.dmap(), phi_before.ncomp(),
+                           phi_before.n_grow());
+    lincomb(published_phi, Real(1), phi_before, Real(0), phi_before);
     // Coupled multi-block solve always re-solves the Poisson from the requested stage states.
+    SolveReport report;
     {
       MultiFab& rhs = ell_rhs();
       assemble_poisson_rhs_from_blocks(rhs, U_stages);
@@ -1108,7 +1132,11 @@ class SystemFieldSolver {
               r(i, j, 0) *= inv;
         }
       }
-      ell_solve();
+      report = ell_solve();
+      if (!report.solved_value_available()) {
+        lincomb(phi_before, Real(1), published_phi, Real(0), published_phi);
+        return report;
+      }
     }
     device_fence();
     const Real dx = owner_->geom.dx(), dy = owner_->geom.dy();
@@ -1130,6 +1158,7 @@ class SystemFieldSolver {
     else
       fill_ghosts(owner_->aux, owner_->dom, owner_->bc_);
     apply_named_aux_bc();
+    return report;
   }
 
   // --- NAMED multi-elliptic field (ADC-428) ----------------------------------
@@ -1216,8 +1245,8 @@ class SystemFieldSolver {
   /// 0..2) and the default Poisson (ell_) are NOT touched. The named aux components are then ghost-
   /// filled (the shared aux fill + the per-field halo override). CARTESIAN only (the polar named path is
   /// a future extension); @throws on the polar geometry or an unknown field.
-  void solve_named_field_from_state(const std::string& field, int block_idx,
-                                    const MultiFab& U_stage) {
+  SolveReport solve_named_field_from_state(const std::string& field, int block_idx,
+                                           const MultiFab& U_stage) {
     if (block_idx < 0 || block_idx >= static_cast<int>(owner_->sp.size()))
       throw std::out_of_range("solve_fields_from_state (named): block index " +
                               std::to_string(block_idx) + " out of range (" +
@@ -1268,8 +1297,9 @@ class SystemFieldSolver {
     // ADC-613: same resolved rel_tol / max_cycles / abs_tol as the default Poisson for GeometricMG;
     // FFT keeps the concept-level no-argument solve(). Bit-identical under the default knobs.
     const GeometricMgOptions& mg = nf.has_plan ? nf.plan.mg_opts : p_mg_opts_;
+    SolveReport report;
     try {
-      std::visit(
+      report = std::visit(
           [&mg, &nf](auto& e) {
             using T = std::decay_t<decltype(e)>;
             if constexpr (std::is_same_v<T, GeometricMG>) {
@@ -1277,14 +1307,19 @@ class SystemFieldSolver {
                 e.solve();
               else
                 e.solve(mg.rel_tol, mg.max_cycles, mg.abs_tol);
-              if (!e.last_solve_report().solved())
-                throw std::runtime_error(std::string("field linear solve failed: ") +
-                                         e.last_solve_report().status_name());
+              return e.last_solve_report();
             } else {
               e.solve();
+              SolveReport direct;
+              direct.mark_solved();
+              return direct;
             }
           },
           *nf.ell);
+      if (!report.solved_value_available()) {
+        restore_published();
+        return report;
+      }
     } catch (...) {
       restore_published();
       throw;
@@ -1318,6 +1353,7 @@ class SystemFieldSolver {
     else
       fill_ghosts(owner_->aux, owner_->dom, owner_->bc_);
     apply_named_aux_bc();
+    return report;
   }
 
  private:

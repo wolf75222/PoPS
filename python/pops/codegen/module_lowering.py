@@ -30,7 +30,7 @@ from .lowering_coverage import (
 )
 
 
-def _module_to_model(module: Any) -> Any:
+def _module_to_model(module: Any, state_space: Any = None) -> Any:
     """Lower a :class:`pops.model.Module` to a :class:`pops.dsl.Model`
     (Spec 2, S2-11), reusing the dsl codegen engine -- a translation, NOT a
     second backend.  The Module's typed operators carry dsl ``Expr`` bodies;
@@ -55,13 +55,16 @@ def _module_to_model(module: Any) -> Any:
             message, coverage_report=report, source=source, gate=gate)
 
     states = module.state_spaces()
-    if len(states) != 1:
+    if len(states) == 1:
+        state = next(iter(states.values()))
+    elif isinstance(state_space, str) and state_space in states:
+        state = states[state_space]
+    else:
         _reject(
             "module:%s:state_spaces" % module.name,
-            "exactly_one_state_space",
-            "compile_problem: a Module must declare exactly one StateSpace to compile "
-            "(got %s)" % sorted(states))
-    state = next(iter(states.values()))
+            "state_space_route_required",
+            "compile_problem: a multi-StateSpace Module must be lowered for an exact block/state "
+            "route; requested %r, declared %s" % (state_space, sorted(states)))
     m = Model(module.name)
     # Preserve the canonical source-Module identity across the internal facade lowering. The
     # resulting CompiledModel authenticates this scalar hash; it never retains ``module`` itself.
@@ -241,6 +244,19 @@ def _module_to_model(module: Any) -> Any:
         coverage_rows.append(LoweringCoverageRow(
             "operator_metadata:%s" % op.name, "documentary"))
         body = op.body
+        state_inputs = tuple(
+            item for item in op.signature.inputs
+            if getattr(item, "kind", None) == "state")
+        if state_inputs and state not in state_inputs:
+            coverage_rows.append(LoweringCoverageRow(
+                source, "documentary", rule="operator belongs to another block StateSpace"))
+            continue
+        if op.kind == "coupled_rate" or (
+                op.kind == "field_operator" and len(state_inputs) > 1):
+            coverage_rows.append(LoweringCoverageRow(
+                source, "lowered", ("program:multi_block_operator",),
+                rule="multi-block operator lowers in the compiled Program, not one block kernel"))
+            continue
         if op.kind in _CODEGEN_KINDS and (body is None or callable(body)):
             _reject(
                 source,
@@ -301,7 +317,7 @@ def remap_lowering_error(exc: Any, facade: Any) -> None:
     raise ValueError(message) from exc
 
 
-def lower_and_validate(model: Any, facade: Any = None) -> Any:
+def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None) -> Any:
     """The SINGLE validate + lower entry of the compile pipeline (ADC-557).
 
     Validates @p model ONCE and returns ``(emit_model, source_module)``:
@@ -327,12 +343,18 @@ def lower_and_validate(model: Any, facade: Any = None) -> Any:
     try:
         if _model_pkg is not None and isinstance(model, _model_pkg.Module):
             source_module = model
-            emit_model = _module_to_model(model)
+            emit_model = _module_to_model(model, state_space=state_space)
             return emit_model, source_module
         from pops.codegen.compiler_lowering import CompilerLowerable, require_compiler_lowering
 
         if isinstance(model, CompilerLowerable):
             lowering = require_compiler_lowering(model)
+            states = lowering.source_module.state_spaces()
+            if len(states) > 1:
+                emit_model = _module_to_model(
+                    lowering.source_module, state_space=state_space)
+                emit_model.check()
+                return emit_model, lowering.source_module
             lowering.emit_model.check()
             return lowering.emit_model, lowering.source_module
         # A dsl / physics Model: the ONE dependency validation is its own check() (fail-loud); the

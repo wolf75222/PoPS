@@ -42,7 +42,8 @@ from pops.time.passes_facade import (  # noqa: F401
 )
 from pops.time.program import CompiledTime, Program
 from pops.time.solve_outcome import (  # noqa: F401
-    FailRun, RejectAttempt, ResidualSolution, SOLVE_STATUSES, SolveAction, SolveOutcome,
+    FailRun, FieldSolveOutcome, RejectAttempt, ResidualSolution, SOLVE_STATUSES, SolveAction,
+    SolveOutcome,
 )
 from pops.time.step_strategy import (  # noqa: F401
     AdaptiveCFL, ErrorControlledDt, ExternalTimeGrid, FixedDt, StepStrategy,
@@ -72,7 +73,8 @@ from pops.time.synchronization import (  # noqa: F401
 from pops.time.values import StageStateSet, ProgramValue  # noqa: F401
 
 __all__ = ["Program", "CompiledTime", "ProgramValue", "StageStateSet", "ResidualSolution",
-           "SolveOutcome", "SolveAction", "FailRun", "RejectAttempt", "SOLVE_STATUSES", "Schedule",
+           "SolveOutcome", "FieldSolveOutcome", "SolveAction", "FailRun", "RejectAttempt",
+           "SOLVE_STATUSES", "Schedule",
            "StepStrategy", "FixedDt", "AdaptiveCFL", "ErrorControlledDt", "ExternalTimeGrid",
            "StepTransactionPlan", "StepTransactionReport",
            "ProgramGraph", "GraphProgramValue", "StateRead", "Unknown", "OperatorCall",
