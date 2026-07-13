@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import tempfile
 
-from pops.physics.model import HyperbolicModel
+from pops.physics._model import HyperbolicModel
 
 QOM = -1.0
 from tests.python.support.requirements import repo_include

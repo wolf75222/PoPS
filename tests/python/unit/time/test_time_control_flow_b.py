@@ -18,7 +18,7 @@ Builds on ADC-404a (Scalar/Bool IR, P.norm2/P.dot, P.while_). This slice adds:
     and match the offline x_N = target + 0.5^N (x0 - target); branch applies the body iff the runtime
     condition holds. Self-skips without numpy / _pops / a compiler / Kokkos (never faking the engine).
 """
-from pops.codegen import compile_drivers
+from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
@@ -180,7 +180,7 @@ def _branch_program(t, *, name, threshold):
 def _passive_model(name):
     """A 1-variable model with zero flux + no Poisson coupling: the dt-free Program body needs no rhs /
     solve_fields, so this just provides a compilable block to install the program onto."""
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     (rho,) = m.conservative_vars("rho")
     u = m.primitive("u", 0.0 * rho)

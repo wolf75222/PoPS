@@ -31,7 +31,7 @@ def _euler(custom_pressure=None):
     rho, mx, my, E = U
     g = m.value(m.param(ConstParam("gamma", 1.4)))
     p = m.primitive("p", (g - 1.0) * (E - 0.5 * (mx * mx + my * my) / rho))
-    d = m.dsl
+    d = m._dsl
     u, v = mx / rho, my / rho
     d.conservative_from([rho, rho * u, rho * v, p / (g - 1.0) + 0.5 * rho * (u * u + v * v)])
     d._m.set_primitive_state(rho, u, v, p)
@@ -66,13 +66,13 @@ def _custom_cs2_pressure(m, U):
 
 def test_pressure_formula_overrides_role_derived_hook():
     # role-derived default emits the primitive 'p' formula verbatim.
-    default = _euler().dsl._m.emit_cpp_brick(name="EulerGen")
+    default = _euler()._dsl._m.emit_cpp_brick(name="EulerGen")
     body0 = _pressure_body(default)
     assert "return p;" in body0
     assert "cs2" not in body0
 
     # the arbitrary cs2-based formula is codegen'd into the hook body instead.
-    override = _euler(custom_pressure=_custom_cs2_pressure).dsl._m.emit_cpp_brick(name="EulerGen")
+    override = _euler(custom_pressure=_custom_cs2_pressure)._dsl._m.emit_cpp_brick(name="EulerGen")
     body1 = _pressure_body(override)
     assert "ARBITRARY board formula" in override        # the override marker comment
     assert "const pops::Real cs2 = " in body1            # the custom scalar appears as a local
@@ -85,17 +85,17 @@ def test_pressure_override_changes_the_module_hash():
     # a distinct hook body must key a distinct compiled-brick cache entry...
     m0 = _euler()
     m1 = _euler(custom_pressure=_custom_cs2_pressure)
-    assert m0.dsl._m._model_hash() != m1.dsl._m._model_hash()
+    assert m0._dsl._m._model_hash() != m1._dsl._m._model_hash()
     # ...while a role-derived-only model records NO override (historical hash bit-identity).
-    assert m0.dsl._m._riemann_hook_forms == {}
+    assert m0._dsl._m._riemann_hook_forms == {}
 
 
 def test_descriptor_hooks_keep_the_role_derived_default():
     # contact_speed / star_state given as canonical descriptors (.euler()) are NOT formula
     # overrides: the role-derived HLLC capability is emitted unchanged.
     m = _euler()
-    assert m.dsl._m._riemann_hook_forms == {}            # no Expr recorded from the descriptors
-    cpp = m.dsl._m.emit_cpp_brick(name="EulerGen")
+    assert m._dsl._m._riemann_hook_forms == {}            # no Expr recorded from the descriptors
+    cpp = m._dsl._m.emit_cpp_brick(name="EulerGen")
     assert "pops::Real contact_speed(const State& UL, const State& UR" in cpp
     assert "State hllc_star_state(const State& U" in cpp
 
@@ -111,7 +111,7 @@ def test_pressure_formula_referencing_a_missing_capability_raises():
     rho, mx, my, E = U
     g = m.value(m.param(ConstParam("gamma", 1.4)))
     p = m.primitive("p", (g - 1.0) * (E - 0.5 * (mx * mx + my * my) / rho))
-    d = m.dsl
+    d = m._dsl
     u, v = mx / rho, my / rho
     d.conservative_from([rho, rho * u, rho * v, E])
     d._m.set_primitive_state(rho, u, v, p)

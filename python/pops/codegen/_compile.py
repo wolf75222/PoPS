@@ -1,4 +1,4 @@
-"""pops.codegen.compile : compile / .so-loader layer for HyperbolicModel.
+"""pops.codegen._compile : compile / .so-loader layer for HyperbolicModel.
 
 Free functions that receive a ``HyperbolicModel`` instance (or other objects)
 as their first argument and drive the C++ compilation pipeline (source
@@ -29,7 +29,7 @@ _BACKENDS        -- per-backend (mode, adder) table
 This is the THIN public module of the model compile pipeline.  The lowering
 machinery is split across two sibling modules so each file fits the Spec-4 size
 budget, and every name re-imported below so the public surface of
-``pops.codegen.compile`` is unchanged:
+``pops.codegen._compile`` is unchanged:
 
   - ``compile_emit``    -- the backend tables, ``model_hash`` / ``adder_for`` and
                            the three ``emit_cpp_*`` source emitters;
@@ -43,7 +43,7 @@ from __future__ import annotations
 
 # Re-export every moved name so the public surface of this module is unchanged.
 # The original compile.py imported these toolchain/cache/abi helpers at module
-# scope, so they were attributes of ``pops.codegen.compile``; preserve that surface.
+# scope, so they were attributes of ``pops.codegen._compile``; preserve that surface.
 from pops.codegen.toolchain import (  # noqa: F401
     pops_include,
     loader_cxx_std,
@@ -68,7 +68,7 @@ from pops.codegen.cache import (  # noqa: F401
     _dsl_optflags,
 )
 from pops.codegen.abi import _abi_key_python  # noqa: F401
-from pops.codegen.compile_emit import (  # noqa: F401
+from pops.codegen._compile_emit import (  # noqa: F401
     _BACKEND_CAPS,
     _BACKENDS,
     model_hash,
@@ -77,7 +77,7 @@ from pops.codegen.compile_emit import (  # noqa: F401
     emit_cpp_aot_source,
     emit_cpp_native_loader,
 )
-from pops.codegen.compile_drivers import (  # noqa: F401
+from pops.codegen._compile_drivers import (  # noqa: F401
     compile_so,
     compile_aot,
     compile_native,

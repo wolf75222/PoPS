@@ -25,8 +25,8 @@ import numpy as np
 
 import pops
 from pops.physics.aux import AUX_NAMED_BASE, AUX_NAMED_MAX, aux_total_n_aux
-from pops.physics.facade import Model
-from pops.physics.model import HyperbolicModel
+from pops.physics._facade import Model
+from pops.physics._model import HyperbolicModel
 
 from tests.python.support.requirements import repo_include
 from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam

@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from .aux import AUX_BASE_COMPS, aux_n_aux, roles_for
-from .model import HyperbolicModel
+from ._model import HyperbolicModel
 from ._scalars import (
     canonical_scalar_data,
     codegen_physics_scalar,

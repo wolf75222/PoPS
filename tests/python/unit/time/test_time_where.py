@@ -17,7 +17,7 @@ scalar runtime branch ``P.branch``. The 0/1 mask is built per cell with ``P.cell
     SOME take b (non-vacuous). Self-skips without numpy / _pops / a compiler / Kokkos / install_program
     (never faking the engine).
 """
-from pops.codegen import compile_drivers
+from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
@@ -191,7 +191,7 @@ def _run_section_b(t):
         print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
 
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
 
     # A minimal 1-variable model with NO Poisson coupling: solve_fields is inert and the select needs
     # no fields. A complete compilable block (flux + primitive + eigenvalue).

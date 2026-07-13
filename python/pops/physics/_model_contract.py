@@ -1,7 +1,7 @@
 """Type-only contracts for the authoring mixins (ADC-628, static analysis only).
 
-The concrete authoring classes (:class:`pops.physics.model.HyperbolicModel`,
-:class:`pops.physics.board.Model`, :class:`pops.physics.facade.Model`) assemble their
+The concrete authoring classes (:class:`pops.physics._model.HyperbolicModel`,
+:class:`pops.physics.board.Model`, :class:`pops.physics._facade.Model`) assemble their
 behaviour from topical mixins (``_authoring_*`` / ``_board_*`` / ``_facade_*``). Each mixin
 reads instance attributes and sibling methods that live on the composed class, not on the
 mixin itself, so a static checker cannot resolve them from the mixin in isolation.
@@ -90,7 +90,7 @@ class _BoardModel:
 
 
 class _FacadeModel:
-    """The :class:`pops.physics.facade.Model` instance surface the ``_facade_*`` mixins share."""
+    """The :class:`pops.physics._facade.Model` instance surface the ``_facade_*`` mixins share."""
 
     name: str
     module: Any

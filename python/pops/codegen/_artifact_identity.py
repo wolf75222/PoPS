@@ -13,7 +13,7 @@ def model_artifact_spec(
     from pops.codegen.cache import (
         _dsl_optflags, _platform_cache_key, _precision_cache_key, _registry_cache_key,
     )
-    from pops.codegen.compile_emit import model_hash
+    from pops.codegen._compile_emit import model_hash
     from pops.codegen.toolchain import _native_feature_key
     from pops.identity import artifact_spec_identity, make_identity
 

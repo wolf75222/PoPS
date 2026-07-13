@@ -21,7 +21,7 @@ MUST be added in the SAME order the Program declares them via ``P.state``.
     _pops) and locally once _pops is rebuilt; skips if _pops lacks install_program, numpy/_pops is absent,
     no compiler/Kokkos is visible, or the .so compile fails -- never faking the engine.
 """
-from pops.codegen import compile_drivers
+from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
@@ -67,7 +67,7 @@ def passive_model(name):
     """A 1-variable PASSIVE-transport scalar (rho) with a constant advection velocity baked into the
     flux and a NAMED source ``decay`` = -k*rho (a linear sink), EMPTY default source. A complete,
     compilable production block (flux + primitives + eigenvalues + named source_term)."""
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     (rho,) = m.conservative_vars("rho")
     a = 0.7  # constant advection speed (x and y)

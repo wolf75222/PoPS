@@ -20,7 +20,7 @@ cell by cell via a dense per-cell inverse) -- reusing ProgramContext + for_each_
     once _pops is rebuilt; skips if _pops lacks install_program, numpy/_pops is absent, no compiler/Kokkos
     is visible, or the .so compile fails -- never faking the engine.
 """
-from pops.codegen import compile_drivers
+from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
 from pops.params import ConstParam
@@ -40,7 +40,7 @@ try:
 
     import pops
     from pops.ir.ops import sqrt
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001  -- numpy or _pops unavailable in this interpreter
     _skip("pops/numpy unavailable: %s" % exc)

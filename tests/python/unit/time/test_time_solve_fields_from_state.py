@@ -27,7 +27,7 @@ per-stage FieldContext buffer is needed.
 Skips cleanly (exit 0) without the install_program binding / numpy / a compiler / a visible Kokkos --
 never fakes the engine.
 """
-from pops.codegen import compile_drivers
+from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
 from pops.params import ConstParam
@@ -47,7 +47,7 @@ try:
 
     import pops
     from pops.ir.ops import sqrt
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001  -- numpy or _pops unavailable in this interpreter
     _skip("pops/numpy unavailable: %s" % exc)

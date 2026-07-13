@@ -296,7 +296,7 @@ def test_str_is_short_and_deterministic():
 def test_metadata_redaction_helper():
     """_redact_compile_command masks secret-looking tokens and the ephemeral temp source."""
     print("== compile_command redaction ==")
-    from pops.codegen.compile_drivers import _redact_compile_command
+    from pops.codegen._compile_drivers import _redact_compile_command
     cmd = ["c++", "-shared", "/tmp/abc/problem.cpp", "-DAPI_TOKEN=supersecret",
            "-I", "/include", "-o", "/cache/x.so"]
     red = _redact_compile_command(cmd, tmp_cpp="/tmp/abc/problem.cpp", gen_src="<generated>")

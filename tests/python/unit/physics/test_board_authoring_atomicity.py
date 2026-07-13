@@ -18,7 +18,7 @@ def _expr_lists(mapping):
 
 def _snapshot(model):
     """JSON-like authoring state; no symbolic ``==`` is invoked by comparisons."""
-    hyp = model.dsl._m
+    hyp = model._dsl._m
     module = model._multi_module
     return {
         "states": tuple(sorted((key, value.qualified_id) for key, value in model._states.items())),
@@ -90,7 +90,7 @@ def test_invalid_state_is_observationally_atomic(name, components, error):
         model.state(name, components=components)
 
     assert _snapshot(model) == before
-    assert model.dsl._m.cons_names == [] and model.dsl._m.n_vars == 0
+    assert model._dsl._m.cons_names == [] and model._dsl._m.n_vars == 0
 
 
 def test_foreign_flux_state_is_rejected_before_any_flux_mutation():
@@ -109,10 +109,10 @@ def test_flux_builder_failure_restores_flux_and_wave_registries(monkeypatch):
     before = _snapshot(model)
 
     def fail_after_mutation(x, y):
-        model.dsl._m._eig = {"x": list(x), "y": list(y)}
+        model._dsl._m._eig = {"x": list(x), "y": list(y)}
         raise RuntimeError("injected eigenvalue builder failure")
 
-    monkeypatch.setattr(model.dsl, "eigenvalues", fail_after_mutation)
+    monkeypatch.setattr(model._dsl, "eigenvalues", fail_after_mutation)
     with pytest.raises(RuntimeError, match="injected"):
         model.flux("F", on=state, x=[u], y=[u], waves={"x": [1], "y": [1]})
 
@@ -124,10 +124,10 @@ def test_source_builder_failure_restores_source_registries(monkeypatch):
     before = _snapshot(model)
 
     def fail_after_mutation(name, expressions):
-        model.dsl._m._source_terms[name] = list(expressions)
+        model._dsl._m._source_terms[name] = list(expressions)
         raise RuntimeError("injected source builder failure")
 
-    monkeypatch.setattr(model.dsl, "source_term", fail_after_mutation)
+    monkeypatch.setattr(model._dsl, "source_term", fail_after_mutation)
     with pytest.raises(RuntimeError, match="injected"):
         model.source("forcing", on=state, value=[u])
 
@@ -140,10 +140,10 @@ def test_elliptic_builder_failure_leaves_no_field_problem_or_operator(monkeypatc
     before = _snapshot(model)
 
     def fail_after_mutation(rhs):
-        model.dsl._m._elliptic = rhs
+        model._dsl._m._elliptic = rhs
         raise RuntimeError("injected elliptic builder failure")
 
-    monkeypatch.setattr(model.dsl, "elliptic_rhs", fail_after_mutation)
+    monkeypatch.setattr(model._dsl, "elliptic_rhs", fail_after_mutation)
     with pytest.raises(RuntimeError, match="injected"):
         model.solve_field(
             "poisson", equation=(-laplacian(phi) == u), outputs={"phi": phi}, solver=None)
@@ -184,10 +184,10 @@ def test_failed_finite_volume_rate_never_publishes_reconstruction(monkeypatch):
     before = _snapshot(model)
 
     def fail_after_mutation(name, **kwargs):
-        model.dsl._m._rate_operators[name] = dict(kwargs)
+        model._dsl._m._rate_operators[name] = dict(kwargs)
         raise RuntimeError("injected rate builder failure")
 
-    monkeypatch.setattr(model.dsl, "rate_operator", fail_after_mutation)
+    monkeypatch.setattr(model._dsl, "rate_operator", fail_after_mutation)
     with pytest.raises(RuntimeError, match="injected"):
         model.finite_volume_rate("A", flux=flux, reconstruction=marker)
 

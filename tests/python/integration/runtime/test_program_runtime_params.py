@@ -34,7 +34,7 @@ try:
     import pops
     from pops import time as adctime
     from pops.params import RuntimeParam, ConstParam
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
 except Exception as exc:  # noqa: BLE001  -- numpy or _pops unavailable in this interpreter
     _skip("pops/numpy unavailable: %s" % exc)
 

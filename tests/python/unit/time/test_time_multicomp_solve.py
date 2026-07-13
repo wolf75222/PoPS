@@ -24,7 +24,7 @@ component 0 alone and leave the rest unsolved.
     same offline CG bit-for-bit. Self-skips (exit 0) without numpy / _pops / install_program / a compiler
     / a visible Kokkos -- never fakes the engine.
 """
-from pops.codegen import compile_drivers
+from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
 from pops.model import StateSpace
@@ -241,7 +241,7 @@ def _passive_model(name, cons):
     """An n-variable block with NO flux and NO Poisson coupling: the Program never runs a rhs or
     solve_fields; the block's conservative variables double as the multi-component field the matrix-free
     solve writes. @p cons is the tuple of conservative-variable names."""
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     vars_ = m.conservative_vars(*cons)
     if not isinstance(vars_, tuple):

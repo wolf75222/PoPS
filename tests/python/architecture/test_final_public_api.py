@@ -100,6 +100,8 @@ def test_public_bind_accepts_value_families_without_an_internal_inputs_record() 
     )
     from pops import codegen, external
 
+    assert codegen.__all__ == ["Production"]
+
     for retired in (
         "BindInputs", "InstallPlan", "ResolvedSimulationPlan", "CompiledSimulationArtifact",
         "LibraryManifest", "compile_library", "read_library_manifest", "emit_library_cpp",
@@ -149,3 +151,16 @@ def test_physics_has_no_competing_model_facade() -> None:
     assert physics.Model is pops.Model
     for removed in ("PdeModel", "HyperbolicModel", "PhysicsModel", "HybridModel"):
         assert not hasattr(physics, removed)
+    model = pops.Model("single_public_model")
+    assert not hasattr(model, "dsl")
+    assert not hasattr(model, "compile")
+    for retired_module in (
+        "pops.physics.facade",
+        "pops.physics.model",
+        "pops.codegen.compile",
+        "pops.codegen.compile_drivers",
+        "pops.codegen.compile_emit",
+        "pops.codegen.backends",
+    ):
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(retired_module)

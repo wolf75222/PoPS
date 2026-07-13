@@ -8,7 +8,7 @@ import pytest
 
 pops = pytest.importorskip("pops")
 
-from pops.codegen.backends import lower_backend  # noqa: E402
+from pops.codegen._backends import lower_backend  # noqa: E402
 from pops.math import Bool, Integer, Real  # noqa: E402
 from pops.mesh import CartesianMesh, PolarMesh  # noqa: E402
 from pops.mesh.amr import Refine, RegridEvery  # noqa: E402

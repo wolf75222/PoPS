@@ -31,7 +31,7 @@ The test is pure Python: it only reads pops.capabilities() and pops.dsl._BACKEND
 needs the _pops extension to import but does not build or run any model.
 """
 import pops
-from pops.codegen.compile import _BACKEND_CAPS
+from pops.codegen._compile import _BACKEND_CAPS
 from pops.physics.aux import AUX_BASE_COMPS, AUX_CANONICAL, AUX_NAMED_BASE, AUX_NAMED_MAX
 
 EXPECTED_TOP_KEYS = {

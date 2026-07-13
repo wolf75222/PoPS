@@ -36,7 +36,7 @@ from types import SimpleNamespace
 
 from pops.ir.expr import Const, Var
 from pops.ir.ops import abs_, eig_lmax, eig_lmin, eig_max_im, sign
-from pops.physics.model import HyperbolicModel
+from pops.physics._model import HyperbolicModel
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 dsl = SimpleNamespace(Const=Const, Var=Var, abs_=abs_, sign=sign, eig_lmax=eig_lmax,
@@ -214,7 +214,7 @@ def test_system_end_to_end():
         import pops
         from pops.ir.expr import Const
         from pops.ir.ops import eig_max_im, sign
-        from pops.physics.model import HyperbolicModel
+        from pops.physics._model import HyperbolicModel
     except Exception as ex:  # noqa: BLE001
         print("  skip  extension _pops absente (%s) -- (3) couvre deja la numerique compilee"
               % type(ex).__name__)

@@ -121,4 +121,4 @@ def test_field_problem_does_not_perturb_the_dsl_elliptic_rhs():
     m, U, phi = _model_with_state()
     rho, mx, my = U
     m.field_problem("poisson", equation=(-laplacian(phi) == rho), solver="geometric_mg")
-    assert m.dsl._m._elliptic is None
+    assert m._dsl._m._elliptic is None

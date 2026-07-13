@@ -15,7 +15,7 @@ try:
     from pops import model
     from pops.ir.expr import Const, Var
     from pops.ir.ops import sqrt
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     from pops.params import RuntimeParam
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_module_hash (pops unavailable: %s)" % exc)

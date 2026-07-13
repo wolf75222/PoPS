@@ -27,7 +27,7 @@ import numpy as np
 
 import pops
 from pops.ir.ops import sqrt
-from pops.physics.facade import Model
+from pops.physics._facade import Model
 from pops.physics.multispecies import CoupledSource
 from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 

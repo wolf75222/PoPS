@@ -40,7 +40,7 @@ import pops
 from tests.python.support.initial_states import euler_bubble_state
 from pops.codegen.cache import _backend_distinct_so_path, _process_so_backend, _record_so_backend
 from pops.ir.ops import sqrt
-from pops.physics.facade import Model
+from pops.physics._facade import Model
 from tests.python.support.requirements import repo_include
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 

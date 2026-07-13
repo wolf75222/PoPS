@@ -21,7 +21,7 @@ import subprocess
 import tempfile
 
 from pops.ir.ops import sqrt
-from pops.physics.model import HyperbolicModel
+from pops.physics._model import HyperbolicModel
 from tests.python.support.models import build_euler_brick
 from tests.python.support.requirements import repo_include
 

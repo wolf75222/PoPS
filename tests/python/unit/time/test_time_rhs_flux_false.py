@@ -28,7 +28,7 @@ flux=False stage WRONGLY re-added -div F. ADC-430 adds the source-only runtime p
 
 Run with python3 (PYTHONPATH = built pops package).
 """
-from pops.codegen import compile_drivers
+from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
@@ -46,7 +46,7 @@ try:
     import numpy as np
 
     import pops
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001  -- numpy or _pops unavailable in this interpreter
     _skip("pops/numpy unavailable: %s" % exc)

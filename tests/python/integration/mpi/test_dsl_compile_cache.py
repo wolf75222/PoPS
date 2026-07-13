@@ -35,7 +35,7 @@ from pops.codegen.loader import CompiledModel
 from pops.codegen.toolchain import pops_include
 from pops.ir.expr import Var
 from pops.ir.ops import sqrt
-from pops.physics.facade import Model
+from pops.physics._facade import Model
 
 from tests.python.support.requirements import repo_include
 from pops.runtime.system import System  # ADC-545 advanced runtime seam

@@ -18,8 +18,8 @@ else:
 
 
 def _cg_compile() -> Any:
-    """The :mod:`pops.codegen.compile` module (lazy import; keeps physics codegen-free)."""
-    from pops.codegen import compile as _cg
+    """The :mod:`pops.codegen._compile` module (lazy import; keeps physics codegen-free)."""
+    from pops.codegen import _compile as _cg
     return _cg
 
 
@@ -122,42 +122,42 @@ class _CodegenMixin(_HyperbolicModel):
         return _cg._emit_metadata(self, model_alias)
 
     def emit_cpp_so_source(self, name: Any = None, hoist_reciprocals: bool = False) -> Any:
-        """Thin wrapper: delegates to pops.codegen.compile.emit_cpp_so_source."""
+        """Thin wrapper: delegates to pops.codegen._compile.emit_cpp_so_source."""
         return _cg_compile().emit_cpp_so_source(self, name=name, hoist_reciprocals=hoist_reciprocals)
 
     def compile_so(self, so_path: Any, include: Any = None, name: Any = None, cxx: Any = None,
                    std: str = "c++20", hoist_reciprocals: bool = False) -> Any:
-        """Thin wrapper: delegates to pops.codegen.compile.compile_so."""
+        """Thin wrapper: delegates to pops.codegen._compile.compile_so."""
         return _cg_compile().compile_so(self, so_path, include=include, name=name, cxx=cxx, std=std,
                               hoist_reciprocals=hoist_reciprocals)
 
     def emit_cpp_aot_source(self, name: Any = None, hoist_reciprocals: bool = False) -> Any:
-        """Thin wrapper: delegates to pops.codegen.compile.emit_cpp_aot_source."""
+        """Thin wrapper: delegates to pops.codegen._compile.emit_cpp_aot_source."""
         return _cg_compile().emit_cpp_aot_source(self, name=name, hoist_reciprocals=hoist_reciprocals)
 
     def compile_aot(self, so_path: Any, include: Any = None, name: Any = None, cxx: Any = None,
                     std: str = "c++20", hoist_reciprocals: bool = False) -> Any:
-        """Thin wrapper: delegates to pops.codegen.compile.compile_aot."""
+        """Thin wrapper: delegates to pops.codegen._compile.compile_aot."""
         return _cg_compile().compile_aot(self, so_path, include=include, name=name, cxx=cxx, std=std,
                                hoist_reciprocals=hoist_reciprocals)
 
     def emit_cpp_native_loader(self, name: Any = None, target: str = "system",
                                hoist_reciprocals: bool = False) -> Any:
-        """Thin wrapper: delegates to pops.codegen.compile.emit_cpp_native_loader."""
+        """Thin wrapper: delegates to pops.codegen._compile.emit_cpp_native_loader."""
         return _cg_compile().emit_cpp_native_loader(self, name=name, target=target,
                                           hoist_reciprocals=hoist_reciprocals)
 
     def compile_native(self, so_path: Any, include: Any = None, name: Any = None, cxx: Any = None,
                        std: str = "c++23", target: str = "system",
                        hoist_reciprocals: bool = False) -> Any:
-        """Thin wrapper: delegates to pops.codegen.compile.compile_native."""
+        """Thin wrapper: delegates to pops.codegen._compile.compile_native."""
         return _cg_compile().compile_native(self, so_path, include=include, name=name, cxx=cxx, std=std,
                                   target=target, hoist_reciprocals=hoist_reciprocals)
 
     def compile_or_jit(self, so_path: Any, include: Any = None, mode: str = "jit", name: Any = None,
                        cxx: Any = None, std: str = "c++20", target: str = "system",
                        hoist_reciprocals: bool = False) -> Any:
-        """Thin wrapper: delegates to pops.codegen.compile.compile_or_jit."""
+        """Thin wrapper: delegates to pops.codegen._compile.compile_or_jit."""
         return _cg_compile().compile_or_jit(self, so_path, include=include, mode=mode, name=name, cxx=cxx,
                                   std=std, target=target, hoist_reciprocals=hoist_reciprocals)
 
@@ -179,7 +179,7 @@ class _CodegenMixin(_HyperbolicModel):
     #                   prepared for a real production backend (Kokkos/CUDA codegen = later PR).
 
     def _model_hash(self, params: Any = None) -> Any:
-        """Stable hash of the model; delegates to pops.codegen.compile.model_hash."""
+        """Stable hash of the model; delegates to pops.codegen._compile.model_hash."""
         return _cg_compile().model_hash(self, params=params)
 
     def _check_require_metadata(self, require_metadata: Any, backend: Any) -> None:
@@ -210,7 +210,7 @@ class _CodegenMixin(_HyperbolicModel):
     def compile(self, so_path: Any = None, include: Any = None, backend: str = "auto", name: Any = None,
                 cxx: Any = None, std: Any = None, require_metadata: bool = False, target: str = "system",
                 hoist_reciprocals: bool = False) -> Any:
-        """Thin wrapper: delegates to pops.codegen.compile.compile_model."""
+        """Thin wrapper: delegates to pops.codegen._compile.compile_model."""
         return _cg_compile().compile_model(self, so_path=so_path, include=include, backend=backend,
                                  name=name, cxx=cxx, std=std,
                                  require_metadata=require_metadata, target=target,
@@ -220,7 +220,7 @@ class _CodegenMixin(_HyperbolicModel):
     def adder_for(cls, backend: Any) -> Any:
         """Name of the System method to use to wire the .so produced by compile(backend=...):
         'add_dynamic_block' (prototype/JIT), 'add_compiled_block' (aot) or 'add_native_block'
-        (production/native). Delegates to pops.codegen.compile.adder_for."""
+        (production/native). Delegates to pops.codegen._compile.adder_for."""
         return _cg_compile().adder_for(backend)
 
     def emit_cpp_elliptic(self, name: Any = None, namespace: str = "pops_generated", cse: bool = True,

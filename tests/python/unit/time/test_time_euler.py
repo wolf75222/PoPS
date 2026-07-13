@@ -35,7 +35,7 @@ import numpy as np
 
 import pops
 from pops.codegen.toolchain import _default_cxx
-from pops.physics.facade import Model
+from pops.physics._facade import Model
 from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 fails = 0

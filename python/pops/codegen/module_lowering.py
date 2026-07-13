@@ -40,7 +40,7 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
     """
     # Import the model facade + aux constants lazily here (called only at
     # compile_problem time, not at import time).
-    from pops.physics.facade import Model  # noqa: PLC0415
+    from pops.physics._facade import Model  # noqa: PLC0415
     from pops.physics.aux import AUX_CANONICAL  # noqa: PLC0415
     from pops.model.operators import OPERATOR_KINDS  # noqa: PLC0415
     coverage_rows = [LoweringCoverageRow(
@@ -382,7 +382,7 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None) 
             source_module = model
             emit_model = _module_to_model(model, state_space=state_space)
             return emit_model, source_module
-        from pops.codegen.compiler_lowering import CompilerLowerable, require_compiler_lowering
+        from pops.codegen._compiler_lowering import CompilerLowerable, require_compiler_lowering
 
         if isinstance(model, CompilerLowerable):
             lowering = require_compiler_lowering(model)

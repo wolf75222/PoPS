@@ -33,7 +33,7 @@ from pops.params import ConstParam, RuntimeParam  # noqa: E402
 from pops.codegen.cache import _identity_cache_so_path, _registry_cache_key  # noqa: E402
 from pops.identity import artifact_spec_identity, make_identity  # noqa: E402
 from pops.codegen._inspect_compiled_report import _route_registry_components  # noqa: E402
-from pops.physics.facade import Model  # noqa: E402
+from pops.physics._facade import Model  # noqa: E402
 from pops.runtime import routes  # noqa: E402
 
 # The 12 route families in registry order with their acceptance-locked cardinalities (mirror of

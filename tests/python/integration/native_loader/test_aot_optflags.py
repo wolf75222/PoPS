@@ -28,7 +28,7 @@ import pops  # noqa: E402  (the .so paths require the native module, like the ne
 from pops.codegen.cache import _identity_cache_so_path
 from pops.identity import artifact_spec_identity, make_identity
 from pops.codegen.toolchain import _native_kokkos_root
-from pops.codegen import compile_drivers as _cg_compile  # noqa: E402  (compile_aot + its toolchain helpers live here, after the Spec-4 codegen split)
+from pops.codegen import _compile_drivers as _cg_compile  # noqa: E402  (compile_aot + its toolchain helpers live here, after the Spec-4 codegen split)
 from test_dsl_phase_a import INCLUDE, build_euler, initial_state  # noqa: E402
 
 
@@ -45,7 +45,7 @@ def _capture_compile_aot_cmd(optflags_env):
     We neutralize the toolchain probes (Kokkos / std / compiler) and replace _run_compile with a
     capture: the test stays valid even without a compiler or Kokkos installed."""
     saved_env = os.environ.get("POPS_DSL_OPTFLAGS")
-    # compile_aot is now pops.codegen.compile.compile_aot and calls these helpers as its own
+    # compile_aot is now pops.codegen._compile.compile_aot and calls these helpers as its own
     # module globals (imported there from codegen.toolchain). Patching dsl no longer intercepts;
     # patch the names where compile_aot actually resolves them.
     saved = {nm: getattr(_cg_compile, nm) for nm in (

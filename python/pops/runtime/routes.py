@@ -5,7 +5,7 @@ field solver, Poisson boundary condition, layout, model bricks) is identified by
 typed :class:`Route`, not by a free string. The typed descriptors (``pops.numerics`` /
 ``pops.solvers`` / the time presets) lower to these Routes; the ONLY places that emit the
 wire token toward the C++ ABI are the bounded adapters (``pops.runtime._system_install`` and
-``pops.codegen.compile_emit``), and they emit ``str(route)`` -- a :class:`Route` IS its wire
+``pops.codegen._compile_emit``), and they emit ``str(route)`` -- a :class:`Route` IS its wire
 token (``str`` subclass), so the crossing stays byte-identical while the identity, requirements,
 limitations and native entry point become typed and inspectable.
 

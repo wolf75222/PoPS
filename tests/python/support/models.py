@@ -13,7 +13,7 @@ what each test builds. Those copies stay local, each with a comment pointing her
 from __future__ import annotations
 
 from pops.ir.ops import sqrt
-from pops.physics.model import HyperbolicModel
+from pops.physics._model import HyperbolicModel
 
 #: The adiabatic index the brick fixtures below are written against.
 GAMMA = 1.4

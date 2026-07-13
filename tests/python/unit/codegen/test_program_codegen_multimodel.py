@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pops.codegen._plans import ResolvedBlock
 from pops.codegen.program_models import ProgramModelGraph
-from pops.physics.facade import Model
+from pops.physics._facade import Model
 from pops.problem import Case
 from pops.time import Program
 

@@ -25,7 +25,7 @@ compiled solve is verified against an OFFLINE numpy CG on that SAME wide-stencil
     periodic 5-point system. Asserts max|compiled - offline| <= 1e-6. Self-skips (exit 0) without numpy
     / _pops / install_program / a compiler / a visible Kokkos -- never fakes the engine.
 """
-from pops.codegen import compile_drivers
+from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import state_refs, typed_state
 
 from pops.params import ConstParam
@@ -155,7 +155,7 @@ def _lorentz_model(name):
     route (ADC-637) resolves at emit time."""
     from pops.ir.ops import sqrt
     from pops.lib.models import author_electrostatic_lorentz
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
     cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
@@ -307,7 +307,7 @@ def _run_section_b(t):
         print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
 
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
 
     def passive_model(name):  # 1-variable block, no flux, no Poisson coupling
         m = Model(name)

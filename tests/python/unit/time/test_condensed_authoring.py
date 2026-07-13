@@ -20,7 +20,7 @@ import sys
 
 try:
     import pytest
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     from pops import time as adctime
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_condensed_authoring (pops unavailable: %s)" % exc)

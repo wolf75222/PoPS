@@ -15,7 +15,7 @@ from typing import Any
 
 from .aux import roles_for
 from .bricks import CompiledBrick, NativeBrick
-from .model import HyperbolicModel
+from ._model import HyperbolicModel
 from ._scalars import physics_scalar_cpp
 
 
@@ -148,7 +148,7 @@ class HybridModel:
         regular DSL artifacts, so every backend must carry exactly the same
         route identity evidence.
         """
-        from pops.codegen.compile_emit import _emit_route_manifest
+        from pops.codegen._compile_emit import _emit_route_manifest
 
         return _emit_route_manifest("pops_compiled_route_manifest")
 
@@ -273,7 +273,7 @@ class HybridModel:
             verify_cached_artifact, write_artifact_sidecar,
         )
         from pops.codegen.abi import _abi_key_python
-        from pops.codegen.backends import lower_backend
+        from pops.codegen._backends import lower_backend
         # ADDITIVE (Spec 5 sec.8.15): accept a typed backend descriptor (Production()/AOT()/JIT()) as
         # well as the legacy string; lower it before the backend guard so both selectors behave the
         # same. A plain string / None passes through unchanged (transparent coercion).
@@ -397,7 +397,7 @@ class HybridModel:
                         cxx: Any, std: Any, identities: Any = None) -> Any:
         from pops.codegen.loader import CompiledModel  # lazy: physics stays codegen-free
         from pops.codegen._compiled_model_identity import model_compile_identity
-        from pops.codegen.compile import _BACKEND_CAPS
+        from pops.codegen._compile import _BACKEND_CAPS
         compiled = CompiledModel(
             so_path=so_path, backend=backend, adder=HyperbolicModel.adder_for(backend),
             target=target, cons_names=self.cons_names, cons_roles=self.cons_roles,

@@ -15,7 +15,7 @@ try:
     from pops.model import (
         OPERATOR_FAMILIES, OPERATOR_KINDS, OperatorHandle, operator_family,
     )
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     from pops.problem import Case
     from pops import time as adctime
 except Exception as exc:  # pops not importable here -> skip, never fake

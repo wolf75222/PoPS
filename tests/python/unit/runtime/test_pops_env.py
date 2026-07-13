@@ -198,7 +198,7 @@ def test_compile_problem_records_env_and_honors_dirs(monkeypatch):
     POINT is the env wiring (record on the handle, codegen-dir redirect, keep-generated, dump-on-
     compile), not the compile itself.
     """
-    from pops.codegen import compile_drivers as cd
+    from pops.codegen import _compile_drivers as cd
 
     def _fake_build_flags(cxx=None):
         return ("c++", [], [])
@@ -248,7 +248,7 @@ def test_compile_problem_records_env_and_honors_dirs(monkeypatch):
 
 def test_explicit_debug_keeps_generated_over_env(monkeypatch):
     """compile_problem(debug=True) forces keep-generated even with POPS_KEEP_GENERATED unset."""
-    from pops.codegen import compile_drivers as cd
+    from pops.codegen import _compile_drivers as cd
 
     monkeypatch.setattr(cd, "pops_loader_build_flags", lambda cxx=None: ("c++", [], []))
     monkeypatch.setattr(cd, "pops_header_signature", lambda include: "MOCKSIG")

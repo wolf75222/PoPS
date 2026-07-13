@@ -11,7 +11,7 @@ import sys
 try:
     from pops.ir.expr import Const
     from pops.model import OperatorHandle
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     from pops import time as adctime
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
     from typed_program_support import state_refs, typed_state

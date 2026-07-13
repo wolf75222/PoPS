@@ -1,4 +1,4 @@
-"""pops.codegen.backends -- typed compile-backend descriptors (Spec 5 sec.8.15 / criterion 22).
+"""pops.codegen._backends -- typed compile-backend descriptors (Spec 5 sec.8.15 / criterion 22).
 
 Spec 5 stabilises "every object that chooses a route is a typed descriptor", and the compile
 backend is one such route. Today the compile drivers select the engine by a bare string
@@ -6,7 +6,7 @@ backend is one such route. Today the compile drivers select the engine by a bare
 :class:`Production` / :class:`AOT` / :class:`JIT` so a caller can pass an object instead of a
 string. Each descriptor is INERT: it carries the chosen options + an optional :class:`platform`
 and :meth:`lower`\\ s to the existing backend string the drivers already understand. Nothing here
-compiles or runs -- :mod:`pops.codegen.compile_drivers` consumes the lowered string.
+compiles or runs -- :mod:`pops.codegen._compile_drivers` consumes the lowered string.
 
 The three descriptors map onto the existing ``_BACKENDS`` table (``compile_emit``):
 
@@ -93,7 +93,7 @@ class _Backend(Descriptor):
         """The honest backend characteristics (cpu / mpi / amr / gpu) from the native table."""
         # Imported lazily to keep this module dependency-light and avoid an import cycle with the
         # compile pipeline (which imports the backend descriptors back).
-        from pops.codegen.compile_emit import _BACKEND_CAPS
+        from pops.codegen._compile_emit import _BACKEND_CAPS
         from pops.descriptors_report import CapabilitySet
         return CapabilitySet(dict(_BACKEND_CAPS.get(self._string, {})))
 

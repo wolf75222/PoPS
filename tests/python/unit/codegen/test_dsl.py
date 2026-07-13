@@ -9,7 +9,7 @@ import numpy as np
 
 from pops.ir.expr import Var
 from pops.ir.ops import sqrt
-from pops.physics.model import HyperbolicModel
+from pops.physics._model import HyperbolicModel
 
 GAMMA = 1.4
 

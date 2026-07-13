@@ -55,7 +55,7 @@ _C = 0.75  # AB linear-source coefficient: S(rho) = _C*rho
 # ---------- shared DSL models (compiled only in section B) ----------
 def _passive_source_model(name):
     """1-variable rho, ZERO flux, default LINEAR source S = _C*rho (R changes every step) -- for AB."""
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     (rho,) = m.conservative_vars("rho")
     u = m.primitive("u", 0.0 * rho)
@@ -74,7 +74,7 @@ def _reaction_term_model(name):
     "reaction". (A default m.source would be wrongly included by sources=[] on the flux-only path; that
     flux-only-excludes-default-source gap is tracked separately and does not affect this named-source
     model.)"""
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     (rho,) = m.conservative_vars("rho")
     u = m.primitive("u", 0.0 * rho)
@@ -91,7 +91,7 @@ def _lorentz_model(name):
 
     ZERO flux so the explicit RHS is the default source only (here: none), isolating the implicit
     Lorentz solve; B_z is read off the System aux. A complete compilable production block."""
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
     cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
@@ -258,7 +258,7 @@ def _run_ab3(t):
     lt.adams_bashforth(
         P, *state_refs(P, "blk", model=model.module), order=3)
     try:
-        from pops.codegen.compile_drivers import compile_problem
+        from pops.codegen._compile_drivers import compile_problem
         compiled = compile_problem(model=model, time=P)
         cm = _passive_source_model("ab3_block").compile(backend="production")
     except RuntimeError as exc:
@@ -303,7 +303,7 @@ def _run_imex(t):
         P, *state_refs(P, "plasma"), linear_source=_linear_handle(model),
         flux=True, sources=(DefaultSource(),), theta=1.0)
     try:
-        from pops.codegen.compile_drivers import compile_problem
+        from pops.codegen._compile_drivers import compile_problem
         compiled = compile_problem(model=model, time=P)
         cm = _lorentz_model("imex_block").compile(backend="production")
     except RuntimeError as exc:
@@ -369,7 +369,7 @@ def _run_lie(t):
         P, *state_refs(P, "blk", model=model.module),
         half_flow=half_flow, source=source)
     try:
-        from pops.codegen.compile_drivers import compile_problem
+        from pops.codegen._compile_drivers import compile_problem
         compiled = compile_problem(model=model, time=P)
         cm = _reaction_term_model("lie_block").compile(backend="production")
     except RuntimeError as exc:

@@ -48,7 +48,7 @@ The carry is GATED to theta != 1, so theta == 1 keeps the fresh-zero phi path by
 Self-skips (exit 0) without numpy / _pops / install_program / a compiler / a visible Kokkos -- never
 fakes the engine (project policy: no fake pops in tests).
 """
-from pops.codegen import compile_drivers
+from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import state_refs, typed_state
 
 from pops.params import ConstParam
@@ -87,7 +87,7 @@ def _lorentz_model(name):
     route (ADC-637) resolves at emit time."""
     from pops.ir.ops import sqrt
     from pops.lib.models import author_electrostatic_lorentz
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
     cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
@@ -113,7 +113,7 @@ def _lorentz_energy_model(name):
     _lorentz_model. The compiling model carries J (author_electrostatic_lorentz)."""
     from pops.ir.ops import sqrt
     from pops.lib.models import author_electrostatic_lorentz
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     rho, mx, my, E = m.conservative_vars("rho", "mx", "my", "E")
     cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
@@ -618,7 +618,7 @@ def _run_section_b(t):
         import pops
         from pops.ir.ops import sqrt
         from pops.lib.models import author_electrostatic_lorentz
-        from pops.physics.facade import Model
+        from pops.physics._facade import Model
     except Exception as exc:  # noqa: BLE001  -- numpy / _pops unavailable here
         print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return None

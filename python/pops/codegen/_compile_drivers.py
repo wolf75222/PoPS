@@ -1,4 +1,4 @@
-"""Compiler invocation and facade layer extracted from :mod:`pops.codegen.compile`.
+"""Compiler invocation and facade layer extracted from :mod:`pops.codegen._compile`.
 Physics and facade helpers stay lazy to preserve the import graph."""
 
 from __future__ import annotations
@@ -36,17 +36,17 @@ from pops.codegen.compile_provenance import (
     write_artifact_sidecar,
 )
 from pops.codegen.abi import _abi_key_python
-from pops.codegen.compile_emit import (
+from pops.codegen._compile_emit import (
     _BACKENDS,
     emit_cpp_so_source,
     emit_cpp_aot_source,
     emit_cpp_native_loader,
 )
-from pops.codegen.backends import lower_backend
+from pops.codegen._backends import lower_backend
 from pops.codegen._compile_command_redact import _redact_compile_command  # noqa: F401
 from pops.codegen.compile_link_flags import deterministic_program_link_flags
 # _module_to_model moved to module_lowering.py (500-line budget); re-exported here so
-# ``from pops.codegen.compile_drivers import _module_to_model`` (and pops.codegen.compile) is unchanged.
+# ``from pops.codegen._compile_drivers import _module_to_model`` (and pops.codegen._compile) is unchanged.
 from pops.codegen.module_lowering import _module_to_model  # noqa: F401
 
 

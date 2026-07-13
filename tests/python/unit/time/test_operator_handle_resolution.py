@@ -9,7 +9,7 @@ from pops.model import (
     RateSpace, Signature,
 )
 from pops.numerics.terms import Flux, SourceTerm
-from pops.physics.facade import Model
+from pops.physics._facade import Model
 from pops.problem import Case
 
 

@@ -94,9 +94,9 @@ def test_target_surface_does_not_reference_host_prototype_routes():
 
 
 def test_compile_drivers_keeps_the_production_only_refusal():
-    text = _read(POPS / "codegen" / "compile_drivers.py")
+    text = _read(POPS / "codegen" / "_compile_drivers.py")
     assert PRODUCTION_ONLY_RE.search(text), (
-        "compile_drivers.py must keep the production-only refusal string "
+        "_compile_drivers.py must keep the production-only refusal string "
         "\"require backend='production'\" (ADC-600): a compiled time program refuses a non-production "
         "backend early, it never falls back to a prototype/host route. A silent removal of this "
         "guard opens a fallback hole -- restore the refusal.")
@@ -118,11 +118,11 @@ def test_pops_root_does_not_import_experimental():
 def test_backend_caps_rows_carry_a_legal_tier():
     """Source-only: every _BACKEND_CAPS row declares a tier in {production, prototype, internal}.
 
-    Parse the assignment in compile_emit.py (no import) and assert each row dict has a ``tier`` key
+    Parse the assignment in _compile_emit.py (no import) and assert each row dict has a ``tier`` key
     whose value is one of the legal tokens, so a report can always name a route's class honestly.
     """
-    src = _read(POPS / "codegen" / "compile_emit.py")
-    tree = ast.parse(src, filename="compile_emit.py")
+    src = _read(POPS / "codegen" / "_compile_emit.py")
+    tree = ast.parse(src, filename="_compile_emit.py")
     caps_node = None
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):

@@ -24,7 +24,7 @@ captured into the step closure), reused across every step and every Krylov itera
     1e-6, the solve changed the state, and the offline solve took > 1 iteration. Self-skips (exit 0)
     without numpy / _pops / install_program / a compiler / a visible Kokkos -- never fakes the engine.
 """
-from pops.codegen import compile_drivers
+from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
@@ -328,7 +328,7 @@ def _run_section_b(t):
         print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
 
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
 
     # A minimal 1-variable model with NO flux and NO Poisson coupling: the Program never runs a rhs or
     # solve_fields; the block's single conservative variable (rho) doubles as the scalar field the
@@ -409,7 +409,7 @@ def _run_section_b_gmg_precond(t):
         print("-- (B') skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
 
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     from pops.solvers import preconditioners
 
     def passive_model(name):

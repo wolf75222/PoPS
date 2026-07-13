@@ -183,7 +183,7 @@ def _lorentz_energy_model(name):
     condensed_energy kernel; the c_E=None variant simply omits it."""
     from pops.ir.ops import sqrt
     from pops.lib.models import author_electrostatic_lorentz
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     rho, mx, my, E = m.conservative_vars("rho", "mx", "my", "E")
     cs2 = m.value(m.param(ConstParam("cs2", 0.5)))

@@ -97,7 +97,7 @@ from pops.codegen.program_emit_params import (  # noqa: F401
 )
 from pops.codegen.program_emit_amr import _emit_amr_install  # noqa: F401
 from pops.codegen.program_metadata import emit_module_metadata as _emit_module_metadata
-from pops.codegen.compile_emit import _emit_route_manifest  # noqa: F401 (ADC-599 embedded manifest)
+from pops.codegen._compile_emit import _emit_route_manifest  # noqa: F401 (ADC-599 embedded manifest)
 from pops.codegen.program_lowerability import (
     check_model_owner_dispatch as _check_model_owner_dispatch,
     check_schedules_lowerable as _check_schedules_lowerable,

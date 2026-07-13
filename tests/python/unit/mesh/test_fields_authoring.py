@@ -19,7 +19,7 @@ from pops.fields import (  # noqa: E402
 from pops.fields import bcs, rhs, coefficients, nullspace, aux  # noqa: E402
 from pops.model import Handle, Module, OwnerPath  # noqa: E402
 from pops.numerics.terms import DefaultSource, Flux, SourceTerm, LocalTerm  # noqa: E402
-from pops.physics.facade import Model as PhysicsModel  # noqa: E402
+from pops.physics._facade import Model as PhysicsModel  # noqa: E402
 from pops.problem import Case  # noqa: E402
 
 

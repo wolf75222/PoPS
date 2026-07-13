@@ -8,7 +8,7 @@ import pytest
 import pops
 from pops.math import ddt, div
 from pops.physics import Model as BoardModel
-from pops.physics.facade import Model as DslModel
+from pops.physics._facade import Model as DslModel
 from pops.problem._snapshot import build_problem_snapshot
 
 
@@ -80,13 +80,13 @@ def test_case_freezes_external_board_reference_and_keeps_snapshot_stable():
 
     snapshot = case.freeze()
 
-    assert model.frozen and model.dsl.frozen and model.dsl._m.frozen
+    assert model.frozen and model._dsl.frozen and model._dsl._m.frozen
     with pytest.raises(RuntimeError, match="frozen"):
         model.field("late")
     with pytest.raises(RuntimeError, match="frozen"):
-        model.dsl.primitive("late", 1)
+        model._dsl.primitive("late", 1)
     with pytest.raises(RuntimeError, match="frozen"):
-        model.dsl._m.set_flux([1], [1])
+        model._dsl._m.set_flux([1], [1])
     with pytest.raises(TypeError):
         model._states["late"] = object()
     with pytest.raises(RuntimeError, match="frozen"):
@@ -98,7 +98,7 @@ def test_case_freezes_external_board_reference_and_keeps_snapshot_stable():
     assert build_problem_snapshot(case).hash == snapshot.hash
     assert "U" in model.inspect()["states"]
     assert "A" in model.module.list_operators()
-    assert "void" in model.dsl._m.emit_cpp()
+    assert "void" in model._dsl._m.emit_cpp()
 
 
 def test_multispecies_owned_module_and_registry_are_sealed():
@@ -154,7 +154,7 @@ def test_failed_standalone_freeze_rolls_back_the_whole_cascade():
     with pytest.raises(RuntimeError, match="injected"):
         model.freeze()
 
-    assert not model.frozen and not model.dsl.frozen and not model.dsl._m.frozen
+    assert not model.frozen and not model._dsl.frozen and not model._dsl._m.frozen
     assert not failing.frozen
     assert isinstance(model._test_descriptors, dict)
     model._test_descriptors.pop("bad")
@@ -192,7 +192,7 @@ def test_failed_descriptor_freeze_restores_nested_mutables_in_place():
     with pytest.raises(RuntimeError, match="injected nested"):
         model.freeze()
 
-    assert not model.frozen and not model.dsl.frozen and not model.dsl._m.frozen
+    assert not model.frozen and not model._dsl.frozen and not model._dsl._m.frozen
     assert not failing.frozen
     assert failing.payload is box
     assert box.items is items and items == ["original"]

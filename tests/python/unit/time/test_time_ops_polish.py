@@ -20,7 +20,7 @@ validation errors #18/#19.
     Self-skips (exit 0) without numpy / _pops / a compiler / a visible Kokkos -- never fakes the engine.
 (C) Validation #18 (pure Python, mocked System) + #19 (skips without the engine).
 """
-from pops.codegen import compile_drivers
+from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
@@ -297,7 +297,7 @@ def test_ir_hash_distinguishes_new_ops(t):
 def _const_source_model(name, c):
     """A 1-variable model (rho), ZERO flux, default source S(rho) = c (a CONSTANT source, so R = c is
     spatially uniform and analytic). A complete compilable block (flux + primitive + eigenvalue + src)."""
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     (rho,) = m.conservative_vars("rho")
     u = m.primitive("u", 0.0 * rho)

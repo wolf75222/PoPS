@@ -3,21 +3,19 @@
 ``pops.physics.Model`` lets a user write a model the way it appears on a
 blackboard -- a state, primitives, a flux, an elliptic field solve, sources and
 local linear operators, tied together by equations such as ``ddt(U) == -div(F) + S``
-and ``-laplacian(phi) == rho`` -- and lowers it to the Spec 2 operator-first IR
-(:class:`pops.model.Module`) and the :mod:`pops.dsl` codegen engine. It is a thin
-TRANSLATION layer: it owns no numerics and no codegen of its own. ``pops.dsl.Model``
-(the PDE facade) remains valid; the board API is sugar that produces the same typed
-operators.
+and ``-laplacian(phi) == rho`` -- and lowers it to the operator-first IR
+(:class:`pops.model.Module`). It is a thin translation layer: it owns no numerics and exposes no
+compiler engine.
 
 The board notation lives in :mod:`pops.math` (``ddt`` / ``div`` / ``grad`` /
 ``laplacian`` / ``sqrt`` / ``rate`` / ``unknown`` / ``integral``). The typed view
-is reachable through :pyattr:`Model.module`; the codegen model through
-:pyattr:`Model.dsl`.
+is reachable through :pyattr:`Model.module`. Native lowering is entered only through
+``pops.compile(resolved_plan)``.
 
 The handle classes and the multi-species / inspection half live in
 ``board_handles`` and ``_board_multispecies`` so no file exceeds the Spec-4
-500-line bound. Import-graph rule: only :mod:`pops.math` / :mod:`pops.model` /
-:mod:`pops.dsl` (the last two LAZILY inside methods); codegen-free, ``_pops``-free.
+500-line bound. The internal formula engine is loaded lazily; import remains codegen-free and
+``_pops``-free.
 """
 from __future__ import annotations
 
@@ -60,7 +58,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                 or not hasattr(frame, "axes")):
             raise TypeError(
                 "Model frame must expose typed axes, canonical_id and to_dict()")
-        from .facade import Model as _PdeModel  # lazy: the facade pulls numpy
+        from ._facade import Model as _PdeModel  # lazy: the facade pulls numpy
         self._dsl = _PdeModel(name)
         self.name = self._dsl.name
         self._frame = frame
@@ -149,12 +147,6 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             if isinstance(handle, OperatorHandle)
         }
         return MappingProxyType(handles)
-
-    # --- escape hatches ---
-    @property
-    def dsl(self) -> Any:
-        """The underlying :class:`pops.dsl.Model` (the codegen engine)."""
-        return self._dsl
 
     @property
     def module(self) -> Any:

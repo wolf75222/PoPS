@@ -8,7 +8,7 @@ from fractions import Fraction
 import numpy as np
 import pytest
 
-from pops.codegen.compile_emit import model_hash
+from pops.codegen._compile_emit import model_hash
 from pops.ir import ScalarLiteral, scalar_literal
 from pops.model.manifest import coupling_operator_manifest
 from pops.physics.bricks import NativeBrick
@@ -17,7 +17,7 @@ from pops.physics.coupling_presets import (
     coupling_operator_args,
     thermal_exchange_preset,
 )
-from pops.physics.facade import Model
+from pops.physics._facade import Model
 from pops.physics.multispecies import CoupledSource
 
 

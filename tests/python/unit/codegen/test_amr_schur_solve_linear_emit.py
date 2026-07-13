@@ -18,7 +18,7 @@ def _lorentz_model(name):
     electrostatic-Lorentz linearization J the generic condensed route (ADC-637) resolves."""
     from pops.ir.ops import sqrt
     from pops.lib.models import author_electrostatic_lorentz
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
     cs2 = m.value(m.param(ConstParam("cs2", 0.5)))

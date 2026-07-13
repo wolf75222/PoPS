@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ADC-529: the physics facade lowers into the ONE operator-first core, not a parallel surface.
 
-A model authored through the PDE facade (``pops.physics.facade.Model``: flux / source_term /
+A model authored through the PDE facade (``pops.physics._facade.Model``: flux / source_term /
 linear_source / rate_operator) exposes the SAME typed operator-first ``pops.model.Module`` a
 hand-built Module would -- same state / field spaces, same typed operators (name, kind, signature
 inputs / output). This is the ADC-529 acceptance criterion: there is no facade-specific registry;
@@ -19,7 +19,7 @@ import sys
 try:
     from pops import model
     from pops.ir.expr import Const
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_facade_lowering_parity (pops unavailable: %s)" % exc)
     sys.exit(0)

@@ -25,7 +25,7 @@ whether ``"default"`` is among the requested sources.
 
 Run with python3 (PYTHONPATH = built pops package).
 """
-from pops.codegen import compile_drivers
+from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import state_refs, typed_state
 
 from pops.numerics.reconstruction import FirstOrder
@@ -44,7 +44,7 @@ try:
     import numpy as np
 
     import pops
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     from pops import time as adctime
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
 except Exception as exc:  # noqa: BLE001  -- numpy or _pops unavailable in this interpreter

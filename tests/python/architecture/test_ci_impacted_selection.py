@@ -51,12 +51,12 @@ def test_relative_import_edge_is_resolved():
     """A relative ``from ._facade_compile import ...`` must become a real edge.
 
     Regression guard: the relative-import anchor for a plain module drops the module's
-    own leaf before applying the level, so ``pops.physics.facade`` importing
+    own leaf before applying the level, so ``pops.physics._facade`` importing
     ``._facade_compile`` resolves to ``pops.physics._facade_compile`` (not
-    ``pops.physics.facade._facade_compile``).
+    ``pops.physics._facade._facade_compile``).
     """
     graph = cic.build_module_graph(REPO_ROOT)
-    assert "pops.physics._facade_compile" in graph.get("pops.physics.facade", set())
+    assert "pops.physics._facade_compile" in graph.get("pops.physics._facade", set())
 
 
 def test_lazy_function_scope_edge_is_captured():

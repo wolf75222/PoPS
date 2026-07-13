@@ -26,7 +26,7 @@ one, GMRES minimises the residual over the Krylov subspace and converges.
 The non-symmetric C++ guard (CG stagnates while gmres recovers phi_exact) is also pinned directly in
 tests/cpp/unit/elliptic/test_generic_krylov.cpp, which is fully validatable on every backend without the Python toolchain.
 """
-from pops.codegen import compile_drivers
+from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
@@ -260,7 +260,7 @@ def _discrete_nonsym(n, alpha, beta):
 def _passive_model(name):
     """A minimal 1-variable block with NO flux and NO Poisson coupling: the block's single conservative
     variable doubles as the scalar field the matrix-free solve writes."""
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     (rho,) = m.conservative_vars("rho")
     u = m.primitive("u", 0.0 * rho)

@@ -32,7 +32,7 @@ def resolve(
 
     if type(problem) is not Case or not problem.frozen:
         raise TypeError("pops.resolve requires the frozen Case returned by pops.validate")
-    from pops.codegen.backends import Production, _Backend, lower_backend
+    from pops.codegen._backends import Production, _Backend, lower_backend
 
     selected_backend = Production() if backend is None else backend
     if not isinstance(selected_backend, _Backend):
@@ -209,7 +209,7 @@ def compile(plan: Any) -> Any:
     models = compile_install_models(plan, plan.compile_options)
     program = None
     if plan.time is not None:
-        from pops.codegen.compile_drivers import compile_problem
+        from pops.codegen._compile_drivers import compile_problem
 
         options = dict(plan.compile_options)
         options["libraries"] = plan.libraries

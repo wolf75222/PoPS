@@ -375,7 +375,7 @@ class CoupledSource:
         # well as the legacy string; lower it to the canonical token so the compiled handle's .backend
         # stays string-typed (introspection / API parity). Imported LAZILY to keep this module
         # codegen-free at import (Spec-4 import-graph rule). A plain string / None passes through.
-        from pops.codegen.backends import lower_backend
+        from pops.codegen._backends import lower_backend
         backend = lower_backend(backend)
         if not self._terms:
             raise ValueError("CoupledSource.compile: no term (.add(...) required)")

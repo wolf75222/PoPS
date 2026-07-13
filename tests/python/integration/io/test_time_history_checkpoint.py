@@ -284,7 +284,7 @@ def test_history_persistence_key_scheme(_t):
 def _passive_source_model(name):
     """A 1-variable model (rho), ZERO flux, default LINEAR source S(rho) = _C*rho (R = c*rho changes
     every step). A complete compilable block (flux + primitive + eigenvalue + source)."""
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     (rho,) = m.conservative_vars("rho")
     u = m.primitive("u", 0.0 * rho)
@@ -329,7 +329,7 @@ def _compile_program(pops, t, builder, prog_name, model_name):
     builder(P, states["blk"])
     P.step_strategy(t.FixedDt(_DT))
     try:
-        from pops.codegen.compile_drivers import compile_problem
+        from pops.codegen._compile_drivers import compile_problem
         return compile_problem(model=_passive_source_model(model_name), time=P)
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- skipped: compile_problem could not build the .so: %s --" % str(exc)[:160])

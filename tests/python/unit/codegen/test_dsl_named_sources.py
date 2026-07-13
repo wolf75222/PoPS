@@ -17,7 +17,7 @@ Run with python3 (PYTHONPATH = built pops package).
 import numpy as np
 
 from pops.ir.expr import Var
-from pops.physics.facade import Model
+from pops.physics._facade import Model
 
 # Golden hashes for the ADC-652 exact-literal model-hash schema. Named-source declarations must
 # not perturb the corresponding default-source/no-source identities inside this schema.

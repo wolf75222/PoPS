@@ -41,7 +41,7 @@ from pops.ir.expr import Const, Var
 from pops.ir.lowering import diff
 from pops.ir.ops import abs_, sign
 from pops.physics.aux import AUX_NAMED_BASE
-from pops.physics.model import HyperbolicModel
+from pops.physics._model import HyperbolicModel
 
 from tests.python.support.requirements import repo_include
 from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam

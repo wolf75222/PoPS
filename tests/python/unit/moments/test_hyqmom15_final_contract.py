@@ -73,6 +73,6 @@ def test_final_example_resolves_and_declares_complete_rollback_surface() -> None
     assert set(transaction.staged_effects) == {
         "state", "fields", "flux_ledgers", "histories", "schedules", "consumers"}
     assert len(case._consumers.inspect()["nodes"]) == 2
-    emitted = case._time.emit_cpp_program(model=physics.dsl)
+    emitted = case._time.emit_cpp_program(model=physics._dsl)
     assert "pops::detail::mat_inverse<15>(" in emitted
     assert "pops::Real M_[15][15];" in emitted

@@ -19,7 +19,7 @@ faking. Runs under pytest and as a script.
 import sys
 
 try:
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     from pops.solvers.krylov import BiCGStab
     from pops import time as adctime
     from pops.time import FailRun

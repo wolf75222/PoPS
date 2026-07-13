@@ -108,7 +108,7 @@ def test_solve_linear_string_preconditioner_rejected():
 def test_facade_param_returns_handle_and_value_builds_a_distinct_expr():
     from pops.model import ParamHandle
     from pops.params import ConstParam, RuntimeParam
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
 
     m = Model("iso")
     m.conservative_vars("rho", "rho_u", "rho_v")
@@ -125,7 +125,7 @@ def test_facade_param_returns_handle_and_value_builds_a_distinct_expr():
 
 
 def test_facade_param_shorthand_and_kind_keyword_are_rejected():
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
 
     m = Model("iso")
     for call in (

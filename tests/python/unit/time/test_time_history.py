@@ -32,7 +32,7 @@ mirrors this exactly (FE step 0, AB2 thereafter), so the comparison is to machin
     stepped WITHOUT ever storing it -> sim.step surfaces a RuntimeError containing
     "history 'missing.R' with lag=1 was requested but not initialized".
 """
-from pops.codegen import compile_drivers
+from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import state_refs, typed_state
 
 from pops.numerics.reconstruction import FirstOrder
@@ -172,7 +172,7 @@ def test_absent_history_program_lowers(t):
 def _passive_source_model(name):
     """A 1-variable model (rho), ZERO flux, default LINEAR source S(rho) = _C*rho (so R = c*rho changes
     every step). A complete compilable block (flux + primitive + eigenvalue + source)."""
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     (rho,) = m.conservative_vars("rho")
     u = m.primitive("u", 0.0 * rho)

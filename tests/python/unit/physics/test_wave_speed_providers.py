@@ -22,7 +22,7 @@ from pops.numerics.riemann import HLL, Rusanov  # noqa: E402
 from pops.numerics.riemann.waves import (  # noqa: E402
     WaveSpeedProvider, ExplicitPair, FromJacobian, FromPressure, Einfeldt, Davis,
     MaxWaveSpeed, provider_of)
-from pops.physics.facade import Model  # noqa: E402
+from pops.physics._facade import Model  # noqa: E402
 from pops.numerics.riemann.waves import check_hll_waves  # noqa: E402
 from pops.runtime.routes import check_wave_speed_provider  # noqa: E402
 

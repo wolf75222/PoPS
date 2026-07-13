@@ -17,7 +17,7 @@ Pure Python; no compilation, no ``_pops``. Run with python3 (PYTHONPATH = built 
 import pytest
 
 from pops.numerics.terms import Flux, LocalTerm, SourceTerm
-from pops.physics.facade import Model
+from pops.physics._facade import Model
 from tests.python.unit.runtime._typed_program import typed_program_state
 
 

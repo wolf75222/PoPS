@@ -9,7 +9,7 @@ The 1500-line ``HyperbolicModel`` is assembled here from topical authoring mixin
 so no file exceeds the Spec-4 500-line bound (see ``physics/_authoring_*``):
 variables, flux, sources, Riemann, the operator-first view, the numpy evaluators,
 the runtime parameters, and the codegen wrappers. The stable user facade
-:class:`pops.physics.facade.Model` COMPOSES a private ``HyperbolicModel``.
+:class:`pops.physics._facade.Model` COMPOSES a private ``HyperbolicModel``.
 
 Import-graph rule (Spec 4): this module imports only :mod:`pops.ir`; any
 :mod:`pops.codegen` / ``_pops`` use is LAZY, inside method bodies (the codegen
@@ -35,7 +35,7 @@ from ._freeze import PhysicsFreezable
 class _BackendLazyMeta(type):
     """Metaclass exposing ``HyperbolicModel._BACKENDS`` / ``._BACKEND_CAPS`` lazily.
 
-    The single source of truth is :mod:`pops.codegen.compile`; resolving it at class
+    The single source of truth is :mod:`pops.codegen._compile`; resolving it at class
     body time would make ``import pops.physics`` pull in codegen, breaking the Spec-4
     import-graph rule. The metaclass resolves the tables on first CLASS-level access
     instead, so ``HyperbolicModel._BACKENDS[backend]`` keeps working unchanged.
@@ -43,7 +43,7 @@ class _BackendLazyMeta(type):
 
     def __getattr__(cls, name: Any) -> Any:
         if name in ("_BACKENDS", "_BACKEND_CAPS"):
-            from pops.codegen import compile as _cg
+            from pops.codegen import _compile as _cg
             return getattr(_cg, name)
         raise AttributeError(name)
 

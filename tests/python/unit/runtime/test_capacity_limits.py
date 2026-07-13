@@ -21,7 +21,7 @@ Missing native exports fail this release gate instead of being treated as compat
 import pytest
 
 import pops  # noqa: F401 -- ensures the package import path is set up like the sibling suites
-from pops.physics.facade import Model
+from pops.physics._facade import Model
 from pops.params import RuntimeParam
 
 
@@ -47,7 +47,7 @@ def _model_with_runtime_params(n):
 
 def _impl(model):
     """The authoring HyperbolicModel implementation behind a facade Model (where assign_runtime_indices
-    lives). The facade stores it on ``_m`` (pops.physics.facade.Model)."""
+    lives). The facade stores it on ``_m`` (pops.physics._facade.Model)."""
     for attr in ("_m", "_impl", "impl", "_model"):
         obj = getattr(model, attr, None)
         if obj is not None and hasattr(obj, "assign_runtime_indices"):

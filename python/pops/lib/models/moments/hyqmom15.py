@@ -101,9 +101,9 @@ class HyQMOM15:
         if exact_speeds:
             # The blackboard Model owns this PdeModel implementation detail.  The factory
             # merely requests the generic Jacobian provider; no model-specific lowering exists.
-            model.dsl.wave_speeds_from_jacobian()
+            model._dsl.wave_speeds_from_jacobian()
         if roe:
-            model.dsl.roe_from_jacobian()
+            model._dsl.roe_from_jacobian()
 
         q_handle = model.param(q_decl)
         omega_handle = model.param(omega_decl)

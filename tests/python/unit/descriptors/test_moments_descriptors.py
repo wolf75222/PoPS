@@ -204,7 +204,7 @@ def test_hyqmom15_model_is_inspectable_and_runtime_free():
     op_names = module.operator_registry().names()
     assert {"flux_default", "electric", "magnetic_rotation", "transport"} <= set(op_names)
     # 15 conservative components (the order-4 hierarchy), canonical names.
-    components = model.dsl._m.state_space().components
+    components = model._dsl._m.state_space().components
     assert len(components) == 15 and components[0] == "M00"
     # No compiled / runtime leakage on the authoring object.
     for runtime_attr in ("so_path", "abi_key"):

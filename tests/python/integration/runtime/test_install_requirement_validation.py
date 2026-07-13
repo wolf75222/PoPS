@@ -17,7 +17,7 @@ try:
 
     import pops
     from pops.ir.ops import sqrt
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     from pops import time as adctime
     from pops.runtime.system import System  # ADC-545 advanced runtime seam
     from tests.python.support.typed_program import program_states, synthetic_module

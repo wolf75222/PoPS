@@ -23,7 +23,7 @@ def _skip(msg):
 try:
     import pops
     from pops import time as adctime
-    from pops.physics.facade import Model as PhysicsModel
+    from pops.physics._facade import Model as PhysicsModel
     from tests.python.support.typed_program import program_states, synthetic_module
 except Exception as exc:  # noqa: BLE001
     _skip("pops unavailable: %s" % exc)

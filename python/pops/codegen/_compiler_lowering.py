@@ -18,7 +18,7 @@ class CompilerLowering:
 class CompilerLowerable(Protocol):
     """Physics authoring values implement this one method to enter compilation."""
 
-    def compiler_lowering(self) -> CompilerLowering: ...
+    def __pops_compiler_lowering__(self) -> CompilerLowering: ...
 
 
 def require_compiler_lowering(value: Any) -> CompilerLowering:
@@ -28,9 +28,9 @@ def require_compiler_lowering(value: Any) -> CompilerLowering:
             "%s does not implement the CompilerLowerable protocol"
             % type(value).__name__
         )
-    lowering = value.compiler_lowering()
+    lowering = value.__pops_compiler_lowering__()
     if type(lowering) is not CompilerLowering:
-        raise TypeError("compiler_lowering() must return an exact CompilerLowering")
+        raise TypeError("__pops_compiler_lowering__() must return an exact CompilerLowering")
     if lowering.emit_model is None or lowering.source_module is None:
         raise ValueError("CompilerLowering requires an emitter and a source Module")
     return lowering

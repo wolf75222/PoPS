@@ -29,7 +29,7 @@ matrix-free apply sub-block, perturbing the frozen Newton iterate).
     runs (> 1 iteration). BDF2 is checked the same way (a cold-start history). Self-skips (exit 0)
     without numpy / _pops / install_program / a compiler / a visible Kokkos -- never fakes the engine.
 """
-from pops.codegen import compile_drivers
+from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import state_refs, typed_state
 
 import pytest
@@ -54,7 +54,7 @@ def _pops_time():
 
 def _bound_local_program(t, name):
     """A Program plus the exact local-linear handle of its bound model."""
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
 
     model = Model(name + "_model")
     (u,) = model.conservative_vars("u")

@@ -24,7 +24,7 @@ try:
     from pops.ir.ops import sqrt
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     from pops.runtime.system import AmrSystem
     from tests.python.support.typed_program import program_states, synthetic_module
 except Exception as exc:  # noqa: BLE001

@@ -24,7 +24,7 @@ import numpy as np
 
 from pops.ir.ops import sqrt
 from pops.params import ConstParam, RuntimeParam
-from pops.physics.facade import Model
+from pops.physics._facade import Model
 
 from tests.python.support.requirements import repo_include
 from pops.runtime.system import System  # ADC-545 advanced runtime seam

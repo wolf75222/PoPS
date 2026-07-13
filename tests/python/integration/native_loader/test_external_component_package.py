@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pops
 from pops import interfaces
-from pops.codegen import compile_component, pops_include
+from pops.codegen.component_packages import compile_component
+from pops.codegen.toolchain import pops_include
 from pops.external import (
     CompiledArtifactRegistry,
     CompiledComponentArtifact,

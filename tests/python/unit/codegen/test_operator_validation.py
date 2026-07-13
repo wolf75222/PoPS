@@ -11,7 +11,7 @@ import sys
 try:
     from pops import model
     from pops.ir.expr import Const
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     from pops import time as adctime
     from typed_program_support import typed_state
 except Exception as exc:  # pops not importable here -> skip, never fake

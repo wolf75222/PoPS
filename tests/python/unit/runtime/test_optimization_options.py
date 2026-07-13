@@ -8,9 +8,10 @@ explicitly. These are inert; the codegen consumes them.
 import pytest
 
 pytest.importorskip("pops")
-from pops.codegen import (  # noqa: E402
-    Optimization, ConservativeFusion, Disabled,
-    StrictMath, FastMath, DebugMath, GpuRegisterAware)
+from pops.codegen.math_options import (  # noqa: E402
+    DebugMath, FastMath, GpuRegisterAware, StrictMath)
+from pops.codegen.optimization import (  # noqa: E402
+    ConservativeFusion, Disabled, Optimization)
 
 
 def test_default_optimization_is_strict():

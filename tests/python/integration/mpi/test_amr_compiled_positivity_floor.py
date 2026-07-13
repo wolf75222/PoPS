@@ -43,7 +43,7 @@ import numpy as np
 import pops
 from pops.codegen.loader import CompiledModel
 from pops.ir.ops import sqrt
-from pops.physics.facade import Model
+from pops.physics._facade import Model
 from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 
 CS2 = 0.25       # isothermal sound speed^2 (p = cs2 rho): flooring rho floors the pressure

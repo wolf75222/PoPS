@@ -22,7 +22,7 @@ uses -- iterating to ``max_c |r_c| < tol`` or the budget. No heap / std::functio
 offline Newton taking > 1 iteration and its residual dropping by many orders. Skips (exit 0) without
     numpy / _pops / a compiler / a visible Kokkos, or if the .so compile fails -- never faking the engine.
 """
-from pops.codegen import compile_drivers
+from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
@@ -60,7 +60,7 @@ def reaction_model(name, k):
     """rho only, ZERO flux, a NAMED non-linear source ``react`` = -k*rho^2 (the implicit step rotates
     no transport: the Program drives only the LOCAL non-linear solve). A complete compilable block
     (flux + primitive + eigenvalue + named source_term)."""
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     (rho,) = m.conservative_vars("rho")
     u = m.primitive("u", 0.0 * rho)
@@ -110,7 +110,7 @@ def section_a(t):
     from pops.time import LocalResidual
     print("== (A) solve_local_nonlinear validation + codegen ==")
     try:
-        from pops.physics.facade import Model
+        from pops.physics._facade import Model
     except Exception as exc:  # noqa: BLE001 -- dsl needs _pops; A still skips cleanly, never fakes
         print("-- (A) skipped: pops.dsl unavailable (%s) --" % exc)
         return

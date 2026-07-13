@@ -5,9 +5,9 @@ from typing import Any
 
 
 class _BoardCompileMixin:
-    def compiler_lowering(self) -> Any:
+    def __pops_compiler_lowering__(self) -> Any:
         """Pair the executable formula emitter with its operator-first authority."""
-        from pops.codegen.compiler_lowering import CompilerLowering
+        from pops.codegen._compiler_lowering import CompilerLowering
 
         return CompilerLowering(
             emit_model=self._dsl,

@@ -8,7 +8,7 @@ import pytest
 
 import pops.lib.time as libtime
 from pops.identity.semantic import program_semantic_data, semantic_identity_of
-from pops.physics.facade import Model
+from pops.physics._facade import Model
 from pops.problem import Case
 from pops.solvers import DenseLU
 from pops.time import FailRun, LocalLinear, Program, StagePoint, TimePoint

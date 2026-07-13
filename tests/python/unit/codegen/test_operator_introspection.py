@@ -13,7 +13,7 @@ try:
     from pops import model
     from pops.codegen.loader import CompiledProblem
     from pops.ir.expr import Const
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     from pops.problem import Case
     from pops import time as adctime
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)

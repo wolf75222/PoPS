@@ -14,7 +14,7 @@ import tempfile
 
 import numpy as np
 
-from pops.physics.model import HyperbolicModel
+from pops.physics._model import HyperbolicModel
 
 GAMMA = 1.4
 

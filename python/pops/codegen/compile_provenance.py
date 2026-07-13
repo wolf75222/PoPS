@@ -37,7 +37,7 @@ def lowering_provenance_data(program: Any) -> list[dict[str, Any]]:
             "node_id": value.id,
             "provenance": ProvenanceRecord.derive(
                 (value.provenance,), transformation="lower",
-                owner=program.owner_path, authoring_api="pops.codegen.compile",
+                owner=program.owner_path, authoring_api="pops.codegen._compile",
             ).to_data(),
         })
     return rows

@@ -27,7 +27,7 @@ import numpy as np
 import pops
 from pops.codegen.loader import CompiledModel
 from pops.ir.ops import sqrt
-from pops.physics.facade import Model
+from pops.physics._facade import Model
 from pops.params import ConstParam, RuntimeParam
 
 from tests.python.support.initial_states import euler_bubble_state

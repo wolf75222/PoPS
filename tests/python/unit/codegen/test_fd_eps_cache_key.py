@@ -11,8 +11,8 @@ Emit-level + hash-level only (no _pops runtime needed); self-skips without the D
 import pytest
 
 pops = pytest.importorskip("pops")
-Model = pytest.importorskip("pops.physics.facade").Model
-from pops.codegen.compile_emit import model_hash  # noqa: E402
+Model = pytest.importorskip("pops.physics._facade").Model
+from pops.codegen._compile_emit import model_hash  # noqa: E402
 from typed_program_support import typed_state  # noqa: E402
 
 

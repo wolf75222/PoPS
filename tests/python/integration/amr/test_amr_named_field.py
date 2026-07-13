@@ -42,7 +42,7 @@ try:
     from pops.model.bind_schema import BindSchema
     from pops.params import ConstParam
     from pops.ir.ops import sqrt
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     from pops.problem._snapshot import AuthoringSnapshot
     from pops.runtime.amr_system import AmrSystem
 except Exception as exc:  # noqa: BLE001  -- pops not importable -> skip, never fake

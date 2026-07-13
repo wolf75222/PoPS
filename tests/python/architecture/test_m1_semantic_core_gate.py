@@ -179,7 +179,7 @@ def test_public_phase_functions_do_not_probe_or_swallow_unknown_shapes():
 
 
 def test_runtime_does_not_import_superseded_whole_problem_loaders():
-    forbidden_modules = {"pops.codegen.compile_drivers", "pops.codegen._loader_dump"}
+    forbidden_modules = {"pops.codegen._compile_drivers", "pops.codegen._loader_dump"}
     forbidden_names = {"CompiledProblem", "compile_problem", "CompiledProblemDumpMixin"}
     violations = []
     for path in _python_files(POPS / "runtime"):
@@ -197,14 +197,14 @@ def test_runtime_does_not_import_superseded_whole_problem_loaders():
     assert not violations, (
         "runtime imports superseded whole-problem loaders:\n  " + "\n  ".join(violations))
 
-    compile_facade = _parse(POPS / "codegen/compile.py")
+    compile_facade = _parse(POPS / "codegen/_compile.py")
     retired_exports = []
     for node in ast.walk(compile_facade):
         if isinstance(node, ast.ImportFrom):
             names = {alias.name for alias in node.names}
             retired_exports.extend(sorted(names & {"compile_problem", "_module_to_model"}))
     assert not retired_exports, (
-        "pops.codegen.compile re-exports superseded whole-problem compiler paths: %s"
+        "pops.codegen._compile re-exports superseded whole-problem compiler paths: %s"
         % sorted(set(retired_exports)))
 
     legacy_tokens = {

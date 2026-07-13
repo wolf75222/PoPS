@@ -11,7 +11,7 @@ from pops.ir.ops import left, right  # noqa: F401  -- Model.left / Model.right s
 
 from ._modelpkg import model as _model
 from .aux import aux_total_n_aux, roles_for  # noqa: F401  -- used in Model.compile
-from .model import HyperbolicModel
+from ._model import HyperbolicModel
 from ._facade_compile import _FacadeCompileMixin
 from ._freeze import PhysicsFreezable
 

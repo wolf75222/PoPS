@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 
 from pops.physics.aux import aux_n_aux
-from pops.physics.model import HyperbolicModel
+from pops.physics._model import HyperbolicModel
 
 from tests.python.support.requirements import repo_include
 INCLUDE = repo_include()

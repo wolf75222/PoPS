@@ -39,7 +39,7 @@ try:
     import pops
     from pops import time as adctime
     from pops.time.points import TimePoint
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     from pops.ir.ops import sqrt
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov

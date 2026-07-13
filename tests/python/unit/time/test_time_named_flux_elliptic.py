@@ -22,7 +22,7 @@ to ~1e-14 (the named fluxes sum to the same -div F).
 
 Skips cleanly (exit 0) without numpy / _pops / a compiler / a visible Kokkos -- never fakes the engine.
 """
-from pops.codegen import compile_drivers
+from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_field, typed_state
 
 from pops.params import ConstParam
@@ -35,7 +35,7 @@ from pops.runtime.system import System  # ADC-545 advanced runtime seam
 def _pops_mods():
     try:
         from pops.ir.ops import sqrt
-        from pops.physics.facade import Model
+        from pops.physics._facade import Model
         from pops import time as adctime
     except Exception as exc:  # pops not importable here -> skip, never fake
         print("skip test_time_named_flux_elliptic (pops unavailable: %s)" % exc)

@@ -1,10 +1,10 @@
 """Authoring mixin: variable / primitive / aux declarations.
 
-Split out of the monolithic :class:`~pops.physics.model.HyperbolicModel` so no
+Split out of the monolithic :class:`~pops.physics._model.HyperbolicModel` so no
 single file exceeds the Spec-4 500-line bound. The mixin holds only methods; the
 instance attributes they touch (``cons_names`` / ``prim_defs`` / ``aux_names``
 / ``aux_extra_names`` / ``prim_state`` / ``cons_from`` / ``prim_roles``) are
-created by ``HyperbolicModel.__init__`` (see :mod:`pops.physics.model`).
+created by ``HyperbolicModel.__init__`` (see :mod:`pops.physics._model`).
 
 Imports only :mod:`pops.ir` and the package-level aux constants: this layer is
 codegen-free and ``_pops``-free (Spec-4 import-graph rule).

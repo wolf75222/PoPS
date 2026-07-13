@@ -33,7 +33,7 @@ try:
 
     import pops
     from pops import time as adctime
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     from pops.ir.ops import sqrt
     from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
     from tests.python.support.typed_program import program_states

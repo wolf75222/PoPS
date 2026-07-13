@@ -6,7 +6,7 @@ import json
 import tempfile
 from pathlib import Path
 
-from pops.codegen import compile_component
+from pops.codegen.component_packages import compile_component
 from pops.external import build_source_package_manifest, load
 from pops.interfaces import ComponentInterface
 from pops.mesh.cartesian import CartesianMesh

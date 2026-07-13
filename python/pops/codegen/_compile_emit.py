@@ -1,15 +1,15 @@
-"""pops.codegen.compile_emit : the C++ source-emission layer of the compile pipeline.
+"""pops.codegen._compile_emit : the C++ source-emission layer of the compile pipeline.
 
-Extracted verbatim from ``pops.codegen.compile`` so the model compile pipeline fits the
+Extracted verbatim from ``pops.codegen._compile`` so the model compile pipeline fits the
 Spec-4 file-size budget.  This is the LEAF module: the per-backend capability / adder
 tables, ``model_hash`` (the stable cache key over a model's formulas), ``adder_for`` (the
 System adder name for a backend), and the three ``emit_cpp_*`` source emitters
 (JIT / AOT / native-loader).  The brick / metadata emitters in ``module_codegen`` are
-imported LAZILY inside each ``emit_cpp_*`` function.  ``pops.codegen.compile`` re-imports
+imported LAZILY inside each ``emit_cpp_*`` function.  ``pops.codegen._compile`` re-imports
 every name so its public surface is unchanged.
 
 The compiler-invocation drivers + the ``compile_problem`` facade live in
-``pops.codegen.compile_drivers`` (they consume ``_BACKENDS`` / ``model_hash`` /
+``pops.codegen._compile_drivers`` (they consume ``_BACKENDS`` / ``model_hash`` /
 ``emit_cpp_*`` from here).
 """
 

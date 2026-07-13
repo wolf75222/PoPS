@@ -1,4 +1,4 @@
-"""Compile mixin for the PDE-model facade (:class:`pops.physics.facade.Model`).
+"""Compile mixin for the PDE-model facade (:class:`pops.physics._facade.Model`).
 
 Splits ``Model._model_hash`` + ``Model.compile`` out of ``facade.py`` so neither
 file exceeds the Spec-4 500-line bound. The mixin operates on ``self._m`` (the
@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from .aux import aux_total_n_aux, roles_for
-from .model import HyperbolicModel
+from ._model import HyperbolicModel
 
 if TYPE_CHECKING:
     from ._model_contract import _FacadeModel
@@ -76,10 +76,10 @@ class _FacadeCompileMixin(_FacadeModel):
             verify_cached_artifact, write_artifact_sidecar,
         )
         from pops.codegen.abi import _abi_key_python
-        from pops.codegen.compile import _BACKEND_CAPS
+        from pops.codegen._compile import _BACKEND_CAPS
         from pops.codegen.loader import CompiledModel
         from pops.codegen._compiled_model_identity import model_compile_identity
-        from pops.codegen.backends import lower_backend
+        from pops.codegen._backends import lower_backend
         # ADDITIVE (Spec 5 sec.8.15): accept a typed backend descriptor (Production()/AOT()/JIT()) as
         # well as the legacy string; lower it BEFORE the 'auto'/_BACKENDS checks so both selectors
         # behave identically. A plain string / None passes through unchanged (transparent coercion).

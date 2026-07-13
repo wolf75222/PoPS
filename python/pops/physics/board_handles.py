@@ -4,15 +4,12 @@
 blackboard -- a state, primitives, a flux, an elliptic field solve, sources and
 local linear operators, tied together by equations such as
 ``ddt(U) == -div(F) + S`` and ``-laplacian(phi) == rho`` -- and lowers it to the
-Spec 2 operator-first IR (:class:`pops.model.Module`) and the :mod:`pops.dsl`
-codegen engine. It is a thin TRANSLATION layer: it owns no numerics and no
-codegen of its own. ``pops.dsl.Model`` (the PDE facade) remains valid; the board
-API is sugar that produces the same typed operators.
+operator-first IR (:class:`pops.model.Module`). It owns no numerics and exposes no alternate
+compiler facade.
 
 The board notation lives in :mod:`pops.math` (``ddt`` / ``div`` / ``grad`` /
 ``laplacian`` / ``sqrt`` / ``rate`` / ``unknown`` / ``integral``). The typed view
-is reachable through :pyattr:`Model.module`; the codegen model through
-:pyattr:`Model.dsl`.
+is reachable through :pyattr:`Model.module`; compilation remains the root lifecycle transition.
 
 Multi-species board authoring (``m.species`` for N >= 2, ``m.coupled_rate``,
 ``m.solve_fields_from_species``) LOWERS to the existing operator-first multi-block

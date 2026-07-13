@@ -21,7 +21,7 @@ Runs as a plain script (``python3 test_name_binding_runtime.py``, the CI invocat
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
-from pops.codegen import compile_drivers
+from pops.codegen import _compile_drivers as compile_drivers
 import sys
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 from tests.python.support.typed_program import program_states, synthetic_module
@@ -54,7 +54,7 @@ def raises_with(fn, needle):
 def passive_model(name):
     """A 1-variable PASSIVE-transport scalar (rho): linear advection flux + a named linear sink, EMPTY
     default source (mirrors test_time_multiblock; avoids the default-source path so the step is exact)."""
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     (rho,) = m.conservative_vars("rho")
     a = 0.7

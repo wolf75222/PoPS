@@ -14,8 +14,8 @@ import sys
 
 try:
     import pops
-    from pops.codegen.backends import JIT, AOT, Production
-    from pops.codegen.compile_drivers import compile_problem
+    from pops.codegen._backends import JIT, AOT, Production
+    from pops.codegen._compile_drivers import compile_problem
     from pops.model import OperatorHandle
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_prototype_quarantine (pops unavailable: %s)" % exc)
@@ -73,7 +73,7 @@ def test_experimental_is_off_the_root():
 def _program_source():
     """A tiny compiled time-Program C++ source, built the way test_module_codegen does."""
     from pops.ir.expr import Const
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     import pops.lib.time as libtime
     from tests.python.unit.runtime._typed_program import typed_program_state
 

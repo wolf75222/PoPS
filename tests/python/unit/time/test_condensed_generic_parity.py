@@ -70,7 +70,7 @@ def _imports():
         from pops.lib.models import author_electrostatic_lorentz
         from pops.numerics.reconstruction import FirstOrder
         from pops.numerics.riemann import Rusanov
-        from pops.physics.facade import Model
+        from pops.physics._facade import Model
         from pops.runtime.system import System
     except Exception as exc:  # noqa: BLE001 -- pops / numpy unavailable here
         print("skip test_condensed_generic_parity (stack unavailable: %s)" % exc)
@@ -162,7 +162,7 @@ def _compile_generic(env, theta, tag, n):
         tol=_TOL, max_iter=400,
         linear_operator=linear)
     try:
-        from pops.codegen.compile_drivers import compile_problem
+        from pops.codegen._compile_drivers import compile_problem
         compiled = compile_problem(model=model, time=P)
     except RuntimeError as exc:
         print("skip: compile_problem failed: %s" % str(exc)[:160])

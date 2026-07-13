@@ -6,7 +6,7 @@ import pytest
 
 import pops.lib.time as libtime
 from pops import time as adctime
-from pops.physics.facade import Model
+from pops.physics._facade import Model
 from typed_program_support import state_refs
 
 

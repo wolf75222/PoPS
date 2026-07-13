@@ -173,7 +173,7 @@ def test_tableau_rejects_non_scalar_boolean_and_non_finite_coefficients(t):
 # ---- (B) compiled trajectory parity: skips cleanly without the full toolchain ----
 def _passive_model(name):
     """A 1-variable model (rho), ZERO flux, default LINEAR source S = c*rho (R changes every stage)."""
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     (rho,) = m.conservative_vars("rho")
     u = m.primitive("u", 0.0 * rho)
@@ -201,7 +201,7 @@ def _run_section_b(t):
         P = t.Program(name)
         build(P)
         try:
-            from pops.codegen.compile_drivers import compile_problem
+            from pops.codegen._compile_drivers import compile_problem
             return compile_problem(model=_passive_model(name + "_m"), time=P)
         except RuntimeError as exc:
             print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:160])

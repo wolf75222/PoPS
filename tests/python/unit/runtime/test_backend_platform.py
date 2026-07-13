@@ -30,8 +30,8 @@ import pytest
 
 pops = pytest.importorskip("pops")
 
-from pops.codegen import AOT, JIT, Production, lower_backend  # noqa: E402
-from pops.codegen.backends import BACKEND_DESCRIPTORS, _Backend  # noqa: E402
+from pops.codegen._backends import AOT, JIT, Production, lower_backend  # noqa: E402
+from pops.codegen._backends import BACKEND_DESCRIPTORS, _Backend  # noqa: E402
 from pops.descriptors import Availability, Descriptor  # noqa: E402
 from pops.runtime.platforms import (  # noqa: E402
     KokkosCuda, KokkosHIP, KokkosOpenMP, KokkosSerial, MPI)
@@ -101,7 +101,7 @@ def test_lower_backend_passes_non_descriptor_through():
 # --- the consumer accepts BOTH a string and a typed backend -----------------------------------
 def _guard_error(backend):
     """Run compile_problem far enough to hit the backend guard; return the ValueError text."""
-    from pops.codegen.compile_drivers import compile_problem
+    from pops.codegen._compile_drivers import compile_problem
     try:
         compile_problem(model=None, time=None, backend=backend)
     except ValueError as err:
@@ -135,7 +135,7 @@ def test_compile_problem_accepts_typed_backend_with_platform():
 def test_compile_model_lowers_typed_backend_past_unknown_guard():
     # compile_model's unknown-backend guard sees the LOWERED string, so a typed JIT() is not
     # rejected as unknown; it proceeds and trips later on the fake model (no .name attribute).
-    from pops.codegen.compile_drivers import compile_model
+    from pops.codegen._compile_drivers import compile_model
 
     class _FakeModel:
         def _check_require_metadata(self, *a, **k):
@@ -156,11 +156,11 @@ def test_compile_model_lowers_typed_backend_past_unknown_guard():
 # (or stores the lowered token) BEFORE any toolchain/compiler is invoked.
 
 def test_facade_model_compile_lowers_typed_backend():
-    # pops.physics.facade.Model.compile validated `backend not in _BACKENDS` itself; a typed
+    # pops.physics._facade.Model.compile validated `backend not in _BACKENDS` itself; a typed
     # Production() must lower so it is NOT rejected as unknown. A deliberately bogus target pushes
     # PAST the (now-passing) backend guard and trips the target guard -- proving the coercion ran
     # without reaching any heavy Kokkos compile.
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     with pytest.raises(ValueError) as excinfo:
         Model("t").compile(backend=Production(), target="__bogus__")
     msg = str(excinfo.value)
@@ -199,7 +199,7 @@ def test_hyperbolic_model_compile_already_lowers_typed_backend():
     # The thin authoring delegator HyperbolicModel.compile forwards to compile_model, which already
     # lowers (additive) -- pin that a typed backend reaches PAST the backend guard, so the delegation
     # path stays coercing (regression guard; no change was needed in the delegator itself).
-    from pops.physics.model import HyperbolicModel
+    from pops.physics._model import HyperbolicModel
     with pytest.raises(ValueError) as excinfo:
         HyperbolicModel("z").compile(backend=Production(), target="__bogus__")
     msg = str(excinfo.value)
@@ -338,7 +338,7 @@ def test_backend_string_is_refused_on_the_typed_platform_slot():
 def test_optimization_is_separate_from_backend_and_platform():
     # ADC-540: the codegen Optimization policy is a FOURTH axis (which transforms + math mode); it is
     # neither the backend nor the platform, and its category is distinct.
-    from pops.codegen import Optimization
+    from pops.codegen.optimization import Optimization
     opt = Optimization()
     assert opt.category == "optimization"
     assert opt.category != Production().category
