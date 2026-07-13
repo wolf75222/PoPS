@@ -12,8 +12,10 @@
 // and ModelSpec, which the System / AmrSystem signatures reference).
 
 #include "bindings_detail.hpp"
+#include <pops/runtime/program/step_transaction.hpp>
 
 PYBIND11_MODULE(_pops, m) {
+  py::exception<pops::runtime::program::StepAttemptRejected>(m, "StepAttemptRejected", PyExc_RuntimeError);
   init_core(m);
   init_identity(m);
   init_system(m);

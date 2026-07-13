@@ -23,9 +23,11 @@ def _explain_missing_extension(exc: ImportError) -> ImportError:
     different python, the import fails without saying why). We list the .so files present next to the package
     and compare their tag to the current interpreter."""
     import glob
-    here = _os.path.dirname(__file__)
-    sos = sorted(_os.path.basename(p) for p in glob.glob(_os.path.join(here, "_pops.*")))
-    cur = "cpython-%d%d" % (_sys.version_info[0], _sys.version_info[1])
+    import os as _local_os
+    import sys as _local_sys
+    here = _local_os.path.dirname(__file__)
+    sos = sorted(_local_os.path.basename(p) for p in glob.glob(_local_os.path.join(here, "_pops.*")))
+    cur = "cpython-%d%d" % (_local_sys.version_info[0], _local_sys.version_info[1])
     if not sos:
         hint = ("no _pops.*.so extension in %s : the module is not built. Build with "
                 "`cmake --preset python && cmake --build --preset python`, then PYTHONPATH=<build>/python."
@@ -33,7 +35,8 @@ def _explain_missing_extension(exc: ImportError) -> ImportError:
     elif not any(cur in s for s in sos):
         hint = ("extension(s) present : %s, but the current interpreter is %s (%s). Use the "
                 "python that built the module (conda env `pops`), or rebuild with this interpreter "
-                "(-DPython_EXECUTABLE=%s)." % (", ".join(sos), cur, _sys.executable, _sys.executable))
+                "(-DPython_EXECUTABLE=%s)."
+                % (", ".join(sos), cur, _local_sys.executable, _local_sys.executable))
     else:
         hint = ("the extension %s matches the interpreter (%s) but its import fails : missing "
                 "dependency or corrupt .so ; rerun the module build." % (", ".join(sos), cur))
@@ -51,6 +54,7 @@ if hasattr(_sys, "setdlopenflags") and hasattr(_sys, "getdlopenflags"):
     try:
         from ._pops import (SystemConfig, ModelSpec, System as _System,
                            AmrSystemConfig, AmrSystem as _AmrSystem,
+                           StepAttemptRejected,
                            abi_key)  # module ABI key ("production" DSL path / diagnostic)
     except ImportError as _e:
         raise _explain_missing_extension(_e) from _e
@@ -59,8 +63,10 @@ if hasattr(_sys, "setdlopenflags") and hasattr(_sys, "getdlopenflags"):
     del _pops_old_dlopenflags, _pops_global_dlopenflags
 else:
     try:
-        from ._pops import (SystemConfig, ModelSpec, System as _System,
+        from ._pops import (  # noqa: F401
+                           SystemConfig, ModelSpec, System as _System,
                            AmrSystemConfig, AmrSystem as _AmrSystem,
+                           StepAttemptRejected,
                            abi_key)  # module ABI key ("production" DSL path / diagnostic)
     except ImportError as _e:
         raise _explain_missing_extension(_e) from _e
