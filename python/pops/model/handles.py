@@ -459,31 +459,50 @@ class OperatorHandle(Handle):
                      "registered_operator_name": self.registered_operator_name})
         return view
 
-    def __call__(self, *args: Any, name: Any = None, schedule: Any = None) -> Any:
+    def __call__(
+        self,
+        *args: Any,
+        name: Any = None,
+        schedule: Any = None,
+        program: Any = None,
+    ) -> Any:
         """Call the operator inside a time Program (ADC-560).
 
-        Locates the Program from the first ProgramValue argument that carries a ``.prog`` back-reference and
-        delegates to its private typed lowering. ``R(U, f)`` builds IR with zero numerics and runs
-        the complete signature and ownership checks. A call outside a Program
-        (no ProgramValue argument to find the Program from) is refused with a clear error; the operator name
-        stays an internal selector, never re-exposed as a public string.
+        ``R(U, f)`` locates its Program from the first ProgramValue argument. A genuinely nullary
+        operator has no such value, so its sole form is ``L(program=T)``. ``program=`` is refused
+        when positional arguments exist: there is always one Program authority, never a redundant
+        selector. Both forms delegate to the same typed lowering and retain this exact handle.
         """
-        prog = self._program_from_args(args)
+        if program is None:
+            prog = self._program_from_args(args)
+        else:
+            if args:
+                raise TypeError(
+                    "operator %r accepts program= only for a nullary call; ProgramValue "
+                    "arguments already select their Program" % self.name)
+            from pops.time.program import Program
+
+            if not isinstance(program, Program):
+                raise TypeError(
+                    "operator %r program= must be a pops.Program, got %r"
+                    % (self.name, program))
+            prog = program
         return prog._call(self, *args, name=name, schedule=schedule)
 
     def _program_from_args(self, args: Any) -> Any:
         """Find the time-Program to build IR into from the call arguments (ADC-560).
 
         The Program is the ``.prog`` back-reference on the first :class:`pops.time.values.ProgramValue`
-        argument. A call with no such argument (outside a Program) is refused with a clear error
-        naming the missing Program value. Shared by the base handle and its callable
-        subtypes so the Program-location rule is defined once.
+        argument. A call with no such argument is refused and directs nullary operators to the
+        explicit ``operator(program=T)`` form. Shared by the base handle and its callable subtypes
+        so the Program-location rule is defined once.
         """
         prog = next((a.prog for a in args if hasattr(a, "prog")), None)
         if prog is None:
             raise ValueError(
                 "operator %r must be called with time-Program values (inside a Program) so it can "
-                "find the Program to build IR into; got %r." % (self.name, args))
+                "find the Program to build IR into; a nullary operator uses "
+                "operator(program=T); got %r." % (self.name, args))
         return prog
 
     def __repr__(self) -> str:

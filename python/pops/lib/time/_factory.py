@@ -69,7 +69,7 @@ def call_at(
     arity = _op_space_arity(program, handle)
     # A nullary operator has no ProgramValue from which the callable handle could recover the
     # authoring Program. Presets own that internal lowering boundary explicitly.
-    value = program._call(handle) if arity == 0 else handle(*candidate_args[:arity])
+    value = handle(program=program) if arity == 0 else handle(*candidate_args[:arity])
     if isinstance(value, FieldSolveOutcome):
         if not isinstance(solve_action, SolveAction):
             raise TypeError(

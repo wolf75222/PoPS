@@ -67,3 +67,12 @@ def test_tracked_source_and_tests_never_use_retired_program_tokens():
     assert not sorted(set(offenders)), (
         "retired/free-name Program authoring remains in: %s" % sorted(set(offenders))
     )
+
+
+def test_normative_examples_never_call_private_program_builders():
+    offenders = [
+        str(path.relative_to(ROOT))
+        for path in _tracked_python_files("examples/final")
+        if "._call(" in path.read_text(encoding="utf-8")
+    ]
+    assert not offenders

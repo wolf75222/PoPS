@@ -146,7 +146,7 @@ def _manual_imex_program(core: IMEXAMRAuthoring, *, solve_action: Any) -> Progra
 
         linear = program.value(
             "%sL_%d" % (tag, index),
-            program._call(core.implicit_operator),
+            core.implicit_operator(program=program),
             at=point,
         )
         stage = predictor

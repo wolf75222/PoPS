@@ -419,6 +419,10 @@ de stepper ; un nom de factory ne sélectionne aucune branche runtime.
 Un appel explicite évalue un opérateur à un `TimePoint` ou `StagePoint` exact. Un solve implicite
 sépare le problème mathématique du solveur :
 
+Un handle callable trouve normalement son `Program` dans ses arguments (`A(q.n)`). Un opérateur
+réellement nul utilise la même route operator-first avec l'autorité explicite `L(program=T)` ;
+`program=` est refusé si des arguments `ProgramValue` rendent cette autorité redondante.
+
 ```python
 result = T.solve(
     LocalLinear(operator=L, rhs=b, fields=field_context),
