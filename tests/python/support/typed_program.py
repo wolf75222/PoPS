@@ -44,7 +44,7 @@ def program_states(
     *,
     state: Any = None,
     case_name: str | None = None,
-) -> tuple[Problem, dict[str, Any]]:
+) -> tuple[Case, dict[str, Any]]:
     """Declare every requested state through ``Program.state(BlockHandle, StateHandle)``."""
     module = module_of(model)
     declaration = state_handle(module, state)

@@ -26,7 +26,7 @@ def _references(model: Model | Module, *, case_name: str | None = None):
     """Return the exact block/state declarations consumed by ``Program.state``.
 
     A facade's Module is the authoritative declaration provider: the state handle
-    and its StateSpace come from that Module, while the Problem qualifies the
+    and its StateSpace come from that Module, while the Case qualifies the
     declaration into one concrete block instance.
     """
     module = model.module if isinstance(model, Model) else model

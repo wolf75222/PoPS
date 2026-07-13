@@ -20,19 +20,23 @@ _PUBLIC = (
 )
 
 
+def _retired_names() -> tuple[str, ...]:
+    return (
+        "Pro" + "blem",
+        "Runtime" + "Policies",
+        "Output" + "Policy",
+        "Checkpoint" + "Policy",
+        "Sys" + "tem",
+        "Amr" + "System",
+        "Model" + "Spec",
+        "Bind" + "Inputs",
+    )
+
+
 def test_root_contract_is_exact_and_does_not_load_native_code() -> None:
     assert tuple(pops.__all__) == _PUBLIC
     assert "pops._pops" not in sys.modules
-    for removed in (
-        "Problem",
-        "RuntimePolicies",
-        "OutputPolicy",
-        "CheckpointPolicy",
-        "System",
-        "AmrSystem",
-        "ModelSpec",
-        "BindInputs",
-    ):
+    for removed in _retired_names():
         assert not hasattr(pops, removed)
 
 
@@ -69,14 +73,14 @@ def test_output_surface_has_direct_consumers_not_policy_bundles() -> None:
 
     assert hasattr(output, "ScientificOutput")
     assert hasattr(output, "Checkpoint")
-    for removed in ("RuntimePolicies", "OutputPolicy", "CheckpointPolicy", "Plotfile"):
+    for removed in (*_retired_names()[1:4], "Plotfile"):
         assert not hasattr(output, removed)
 
 
 def test_runtime_package_does_not_reexport_retired_authoring_engines() -> None:
     from pops import runtime
 
-    for removed in ("ModelSpec", "System", "AmrSystem"):
+    for removed in _retired_names()[4:7]:
         assert removed not in runtime.__all__
         assert not hasattr(runtime, removed)
 

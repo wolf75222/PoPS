@@ -61,7 +61,7 @@ def test_amr_handle_is_an_inert_runtime_view():
 def test_system_has_no_amr_handle_with_a_clear_error():
     sim = System(n=16, L=1.0, periodic=True)
     assert not hasattr(sim, "amr")
-    # ADC-583: the remedy speaks the bind vocabulary (layout=AMR on the Problem), not AmrSystem.
+    # The remedy speaks the bind vocabulary (layout=AMR on the Case), not the native engine.
     with pytest.raises(AttributeError, match=r"layout=AMR\(.*inspect_amr"):
         operator.attrgetter("amr")(sim)
 
@@ -125,7 +125,7 @@ def test_explain_regrid_dynamic_vs_frozen():
     assert dyn.frozen is False and dyn.regrid_every == 4
     # The union-of-tags criteria are named (config-sourced shape, not a fabricated threshold).
     blob = " ".join(dyn.criteria)
-    # ADC-583: the criteria are described in the Problem vocabulary (AMR(refine=Refine.on(...))).
+    # The criteria are described in the Case vocabulary (AMR(refine=Refine.on(...))).
     assert "AMR(refine=Refine.on" in blob and "grad phi" in blob
 
     frozen = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0).amr.explain_regrid()

@@ -3,7 +3,7 @@
 
 The clean AMR Program route (ADC-634) must be MPI-correct: the DISTRIBUTED run (np > 1) must produce
 the BIT-IDENTICAL globally-gathered coarse density as the direct AmrSystem.install_program route on
-the same ranks -- the clean route only adds the Problem authoring + config derivation, so the
+the same ranks -- the clean route only adds the Case authoring + config derivation, so the
 distributed arithmetic is identical. Under MPI the AMR density() accessor is COLLECTIVE (every rank
 calls it and it returns the global coarse array), so the comparison is a whole-domain bit-identity.
 

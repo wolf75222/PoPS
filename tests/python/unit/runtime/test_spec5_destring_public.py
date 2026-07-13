@@ -11,7 +11,7 @@ Surfaces covered:
      descriptors (CG / GMRES / BiCGStab / Richardson, Identity); a bare string is rejected.
   2. ``pops.codegen.compile_library(backend=)`` -- a typed pops.codegen backend (Production / AOT / JIT);
      a bare string is rejected (mirrors pops.compile).
-  3. ``Model.param`` / board ``param`` / ``Problem.param`` -- a canonical declaration from
+  3. ``Model.param`` / board ``param`` / ``Case.param`` -- a canonical declaration from
      ``pops.params``; every registry returns a stable ``ParamHandle`` and formulas read it only
      through ``value(handle)``. The old shorthand and ``kind=`` routes are rejected.
 

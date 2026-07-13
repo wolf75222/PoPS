@@ -73,7 +73,7 @@ def build_case() -> tuple[pops.Case, object]:
         block=plasma, role="M00", cadence=output_schedule)
     realizability_bounds = MinMax(
         block=plasma, role="M00", cadence=output_schedule)
-    case.consumers(ConsumerGraph.from_policies((
+    case.consumers(ConsumerGraph.from_consumers((
         ScientificOutput(
             format=HDF5(),
             schedule=output_schedule,
