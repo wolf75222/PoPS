@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from pops import model as typed_model
+from pops.fields import FieldOutput
 from pops.math import ddt, div, laplacian
 from pops.model import OwnerPath
 from pops.physics import Model
@@ -28,9 +29,7 @@ def _snapshot(model):
         "fluxes": tuple(sorted((key, value.qualified_id) for key, value in model._fluxes.items())),
         "sources": tuple(sorted((key, value.qualified_id) for key, value in model._sources.items())),
         "operators": tuple(sorted(model._operators)),
-        "field_problems": tuple(sorted(model._field_problems)),
-        "field_solvers": tuple(sorted((key, repr(value))
-                                      for key, value in model._field_solvers.items())),
+        "field_operators": tuple(sorted(model._field_operators)),
         "cons_names": tuple(hyp.cons_names),
         "cons_roles": None if hyp.cons_roles is None else tuple(hyp.cons_roles),
         "n_vars": hyp.n_vars,
@@ -42,6 +41,8 @@ def _snapshot(model):
         "linear_sources": tuple(sorted((key, repr(value))
                                        for key, value in hyp._linear_sources.items())),
         "elliptic": None if hyp._elliptic is None else repr(hyp._elliptic),
+        "elliptic_fields": tuple(sorted((key, repr(value))
+                                         for key, value in hyp._elliptic_fields.items())),
         "rates": tuple(sorted((key, repr(value)) for key, value in hyp._rate_operators.items())),
         "riemann": repr(model._riemann),
         "reconstruction": repr(model._reconstruction),
@@ -134,46 +135,44 @@ def test_source_builder_failure_restores_source_registries(monkeypatch):
     assert _snapshot(model) == before
 
 
-def test_elliptic_builder_failure_leaves_no_field_problem_or_operator(monkeypatch):
+def test_field_operator_builder_failure_is_observationally_atomic(monkeypatch):
     model, _state, u = _scalar("elliptic_builder")
     phi = model.field("phi")
     before = _snapshot(model)
 
-    def fail_after_mutation(rhs):
-        model._dsl._m._elliptic = rhs
+    def fail_after_mutation(name, rhs, operator="poisson", aux=None):
+        model._dsl._m._elliptic_fields[name] = {
+            "rhs": rhs, "operator": operator, "aux": aux,
+        }
         raise RuntimeError("injected elliptic builder failure")
 
-    monkeypatch.setattr(model._dsl, "elliptic_rhs", fail_after_mutation)
+    monkeypatch.setattr(model._dsl, "elliptic_field", fail_after_mutation)
     with pytest.raises(RuntimeError, match="injected"):
-        model.solve_field(
-            "poisson", equation=(-laplacian(phi) == u), outputs={"phi": phi}, solver=None)
+        model.field_operator(
+            "poisson", unknown=phi, equation=(-laplacian(phi) == u),
+            outputs=(FieldOutput("potential", phi),))
 
     assert _snapshot(model) == before
 
 
-def test_invalid_field_output_and_foreign_field_are_atomic():
+def test_invalid_field_operator_output_and_foreign_unknown_are_atomic():
     model, _state, u = _scalar("field_local")
     phi = model.field("phi")
     foreign, _foreign_state, foreign_u = _scalar("field_foreign")
     foreign_phi = foreign.field("phi")
     before = _snapshot(model)
 
-    with pytest.raises(TypeError, match="field outputs key"):
-        model.solve_field(
-            "bad_outputs", equation=(-laplacian(phi) == u),
-            outputs={object(): phi}, solver=None)
+    with pytest.raises(ValueError, match="outputs must start with FieldOutput"):
+        model.field_operator(
+            "bad_outputs", unknown=phi, equation=(-laplacian(phi) == u),
+            outputs=(object(),))
     assert _snapshot(model) == before
 
-    with pytest.raises(ValueError, match="another physics model"):
-        model.solve_field(
-            "foreign", equation=(-laplacian(foreign_phi) == foreign_u),
-            outputs={"phi": foreign_phi}, solver=None)
-    assert _snapshot(model) == before
-
-    with pytest.raises(ValueError, match="another physics model"):
-        model.solve_field(
-            "foreign_output", equation=(-laplacian(phi) == u),
-            outputs={"phi": foreign_phi}, solver=None)
+    with pytest.raises(ValueError, match="not declared by this physics model"):
+        model.field_operator(
+            "foreign", unknown=foreign_phi,
+            equation=(-laplacian(foreign_phi) == foreign_u),
+            outputs=(FieldOutput("phi", foreign_phi),))
     assert _snapshot(model) == before
 
 
@@ -210,25 +209,6 @@ def test_failed_second_species_promotion_keeps_single_species_state(monkeypatch)
 
     assert _snapshot(model) == before
     assert model._multi_module is None and model._species["electrons"] is first
-
-
-def test_multispecies_field_builder_failure_restores_spaces_and_registry(monkeypatch):
-    model = Model("multi_fields")
-    electrons = model.species("electrons", state=["ne"])
-    ions = model.species("ions", state=["ni"])
-    before = _snapshot(model)
-    original = model._multi_module.operator
-
-    def fail_after_registration(*args, **kwargs):
-        original(*args, **kwargs)
-        raise RuntimeError("injected operator builder failure")
-
-    monkeypatch.setattr(model._multi_module, "operator", fail_after_registration)
-    with pytest.raises(RuntimeError, match="injected"):
-        model.solve_fields_from_species(
-            "fields", inputs=[electrons, ions], outputs={"phi": None}, solver=None)
-
-    assert _snapshot(model) == before
 
 
 def test_later_species_space_builder_failure_restores_existing_module(monkeypatch):

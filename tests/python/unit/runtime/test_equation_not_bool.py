@@ -3,9 +3,8 @@
 
 ``lhs == rhs`` on a board node builds an inspectable :class:`pops.ir.expr.Equation`, NOT a truth
 value. Using it as a Python condition (``if ddt(U) == R:`` / ``bool(ddt(U) == R)``) is almost always
-a mistaken comparison, so both the Equation and the bare board node refuse ``__bool__`` with a clear
-error naming the lowering APIs (m.rate / m.solve_field / T.value / T.solve). ``==`` itself still
-builds an Equation (the authoring surface is unchanged).
+a mistaken comparison, so both the Equation and the bare board node refuse ``__bool__`` with a
+sourced symbolic-truth diagnostic. ``==`` itself still builds an Equation.
 
 Pure Python (pops.ir only, no numerics / no _pops); skips if pops is not importable.
 """
