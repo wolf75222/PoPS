@@ -19,7 +19,7 @@ import numpy as np
 
 import pops
 from pops.runtime.bricks import Dirichlet
-from pops.runtime.system import System, SystemConfig  # ADC-545 advanced runtime seam
+from pops.runtime._system import System, SystemConfig  # ADC-545 advanced runtime seam
 
 
 def _annular_density(nr, nth, rmin, rmax):

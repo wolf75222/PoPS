@@ -23,7 +23,7 @@ import pops
 from pops.runtime.bricks import Periodic
 from pops.ir.expr import Var
 from pops.physics.multispecies import CoupledSource
-from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
+from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 fails = 0
 

@@ -1,6 +1,6 @@
 """AmrSystem install/bind mixin (ADC-619 split).
 
-The low-level ``pops.bind`` install seam of :class:`pops.runtime.amr_system.AmrSystem`:
+The low-level ``pops.bind`` install seam of :class:`pops.runtime._amr_system.AmrSystem`:
 ``_install_compiled`` (the native / compiled install orchestration) plus its field-solver,
 named-elliptic-field and aux helpers (``_install_solver`` / ``_declared_elliptic_fields`` /
 ``_install_aux``). Split out of ``amr_system`` for the 500-line cap; mixed into ``AmrSystem``

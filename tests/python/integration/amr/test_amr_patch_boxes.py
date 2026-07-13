@@ -17,7 +17,7 @@ import sys
 import numpy as np
 
 import pops
-from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
+from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
 
 
 def _band(n, L=1.0, width=0.06, floor=1.0, amp=1.0):

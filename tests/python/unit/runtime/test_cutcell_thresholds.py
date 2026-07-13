@@ -58,7 +58,7 @@ pops = pytest.importorskip("pops")
 from pops.runtime.bricks import (
     ChargeDensity, FluidState, IsothermalFlux, Model, NoSource, Spatial,
 )
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def _sim():

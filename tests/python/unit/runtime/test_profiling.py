@@ -10,7 +10,7 @@ unavailable, and otherwise fails loudly (a setup bug must not masquerade as a sk
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):

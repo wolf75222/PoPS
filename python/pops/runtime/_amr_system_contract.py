@@ -1,7 +1,7 @@
 """Type-only contract for the AMR runtime coupler mixins (ADC-628, static analysis only).
 
 Companion to :mod:`pops.runtime._system_contract`. The concrete
-:class:`pops.runtime.amr_system.AmrSystem` composes the ``_amr_system_*`` mixins; each reads the
+:class:`pops.runtime._amr_system.AmrSystem` composes the ``_amr_system_*`` mixins; each reads the
 native facade ``self._s``, a few instance attributes (``self._L`` / ``self._regrid_every`` /
 ``self._aux_field_index`` / typed step-transaction state) and sibling methods defined across the
 other AMR mixins and the concrete ``AmrSystem`` body. Declared once here as a ``TYPE_CHECKING``-only

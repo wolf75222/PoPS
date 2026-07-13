@@ -26,7 +26,7 @@ import numpy as np
 import pops
 from pops.ir.ops import sqrt
 from pops.physics.bricks import HyperbolicBrick, SourceBrick
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 CS2 = 1.0     # vitesse du son au carre (isotherme)
 QOM = -1.0    # q/m de la force du potentiel (non trivial : exerce le cuisson du parametre natif)

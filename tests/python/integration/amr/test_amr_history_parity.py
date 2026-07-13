@@ -21,7 +21,7 @@ try:
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
     from pops.physics._facade import Model
-    from pops.runtime.system import AmrSystem, System
+    from pops.runtime._system import AmrSystem, System
     from tests.python.support.typed_program import program_states, synthetic_module
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
     print("skip test_amr_history_parity (pops/numpy unavailable: %s)" % exc)

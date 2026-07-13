@@ -9,7 +9,7 @@ from pops.runtime._system_install import _lower_bc
 
 try:
     import pops._pops  # noqa: F401
-    from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
+    from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
     _HAVE_ENGINE = True
 except Exception:  # pragma: no cover - exercised only without a built extension
     _HAVE_ENGINE = False

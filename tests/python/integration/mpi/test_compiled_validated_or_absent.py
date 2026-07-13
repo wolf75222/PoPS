@@ -13,7 +13,7 @@ Two claims (skips cleanly unless the full toolchain is present, like the sibling
 Runs in CI; skips locally when no compiler / Kokkos is visible or the .so compile fails.
 """
 import sys
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):

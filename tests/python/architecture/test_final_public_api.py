@@ -140,8 +140,13 @@ def test_runtime_package_does_not_reexport_retired_authoring_engines() -> None:
     for removed in _retired_names()[4:7]:
         assert removed not in runtime.__all__
         assert not hasattr(runtime, removed)
-    with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("pops.runtime.mesh")
+    for retired_module in (
+        "pops.runtime.mesh",
+        "pops.runtime.system",
+        "pops.runtime.amr_system",
+    ):
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(retired_module)
 
 
 def test_physics_has_no_competing_model_facade() -> None:

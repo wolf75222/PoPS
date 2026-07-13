@@ -376,7 +376,7 @@ def test_amr_config_lives_in_the_layout_descriptor_only():
 
     # sim.amr is a runtime VIEW: no config mutator, and inspect() is the fixed four-key view.
     # ADC-545: the engine left the top-level surface -- reach it via the advanced runtime seam.
-    from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
+    from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
     sim = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=4)
 
     view = sim.amr

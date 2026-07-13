@@ -59,7 +59,7 @@ import sys
 # ADC-427: section B compiles several .so variants (golden, theta sweep, dt-refinement order
 # study); a cold CI compile cache blows the default 300 s process budget (ADC-627 idiom).
 POPS_PROCESS_TIMEOUT = 1200
-from pops.runtime.system import System  # noqa: E402  -- ADC-545 advanced runtime seam
+from pops.runtime._system import System  # noqa: E402  -- ADC-545 advanced runtime seam
 
 
 def _pops_time():

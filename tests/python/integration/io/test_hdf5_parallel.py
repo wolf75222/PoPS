@@ -30,7 +30,7 @@ import numpy as np
 
 import pops
 from pops.runtime.bricks import Periodic
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 class _Skip(Exception):

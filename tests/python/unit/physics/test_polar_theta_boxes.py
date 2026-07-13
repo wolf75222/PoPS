@@ -31,7 +31,7 @@ import numpy as np
 try:
     import pops
     from pops.runtime.bricks import Dirichlet
-    from pops.runtime.system import System, SystemConfig  # ADC-545 advanced runtime seam
+    from pops.runtime._system import System, SystemConfig  # ADC-545 advanced runtime seam
 except ImportError as e:  # PYTHONPATH non pose : skip CI-safe (comme les autres tests Python)
     print("skip  module pops absent (PYTHONPATH ?) : %s" % e)
     sys.exit(0)

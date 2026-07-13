@@ -26,7 +26,7 @@ import pytest
 
 from pops.runtime.profile import (PerformanceSummary, Profile, _parse_report,
                                    _Unavailable)
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 # A literal sample of the native report (profiler.hpp report()): two coarse phases, a per-node scope,

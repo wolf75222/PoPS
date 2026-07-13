@@ -20,7 +20,7 @@ import pytest
 pops = pytest.importorskip("pops", exc_type=ImportError)
 from pops.runtime.bricks import Periodic
 
-from pops.runtime.system import AmrSystem  # noqa: E402  (ADC-545 advanced runtime seam)
+from pops.runtime._system import AmrSystem  # noqa: E402  (ADC-545 advanced runtime seam)
 
 
 def _scalar_charge(q, B0=1.0):

@@ -12,7 +12,7 @@ test_no_fallback_compliance_matrix.py) enforces the ADC-590 acceptance matrix on
 CompiledModel objects.
 """
 import pytest
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
 from pops.codegen.loader import CompiledModel  # noqa: E402

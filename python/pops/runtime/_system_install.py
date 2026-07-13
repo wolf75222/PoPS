@@ -1,6 +1,6 @@
 """System install mixin (Spec-4 PR-F): block/equation/coupling installation.
 
-Holds the densest part of :class:`pops.runtime.system.System`: ``add_block`` /
+Holds the densest part of :class:`pops.runtime._system.System`: ``add_block`` /
 ``add_equation`` (the backend-adder dispatch + explicit-rejection guards),
 ``add_background``, ``add_elliptic_model`` and ``add_coupling``. Mixed into ``System`` via
 inheritance; methods operate on ``self._s`` (the compiled facade) and ``self._aux_field_index``.

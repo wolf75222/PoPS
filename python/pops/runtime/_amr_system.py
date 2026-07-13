@@ -44,11 +44,11 @@ def _profile_payload(system: Any) -> Any:
 class _AmrProfileSession:
     """The typed profiling context manager AmrSystem.profile() returns (Spec 5 sec.12.5).
 
-    Mirror of :class:`pops.runtime.system._ProfileSession` for the AMR runtime: ``__enter__``
+    Mirror of :class:`pops.runtime._system._ProfileSession` for the AMR runtime: ``__enter__``
     resets + enables the native profiler ; ``__exit__`` snapshots the report into a
     :class:`PerformanceSummary` and disables the profiler. ``summary().by_amr_mpi()`` surfaces the
     AMR / MPI phase timings (regrid / fill_boundary / average_down) + counters (criterion 43). Lives
-    here rather than importing from system.py to avoid a circular import (system imports amr_system).
+    here rather than importing from ``_system.py`` to avoid a circular import.
     """
 
     def __init__(self, system: Any, profile: Any) -> None:

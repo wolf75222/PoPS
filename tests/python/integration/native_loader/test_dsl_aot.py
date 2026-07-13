@@ -15,7 +15,7 @@ import numpy as np
 
 import pops
 from test_dsl_coupled import build_euler_poisson, GAMMA, INCLUDE
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def main():

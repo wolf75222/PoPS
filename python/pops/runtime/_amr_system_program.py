@@ -1,6 +1,6 @@
 """AmrSystem compiled-Program install mixin (Spec 6 sec.11, epic ADC-511 / ADC-508).
 
-Extracted from :mod:`pops.runtime.amr_system` to keep that module under the Spec-4 36.3
+Extracted from :mod:`pops.runtime._amr_system` to keep that module under the Spec-4 36.3
 500-line budget. Holds the COMPILED time-Program tail of ``_install_compiled``: the
 ``install_program`` step on the AMR hierarchy plus its runtime params (``set_program_params``)
 and typed step-transaction contract. Mixed in via inheritance; operates on ``self._s``

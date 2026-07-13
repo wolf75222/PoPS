@@ -23,7 +23,7 @@ from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 from pops.codegen import _compile_drivers as compile_drivers
 import sys
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 from tests.python.support.typed_program import program_states, synthetic_module
 
 

@@ -23,7 +23,7 @@ pre-rebuild module emits no ``mg_cycles``): the test is written to run POST-rebu
 (engine present, counters expected) fails loudly rather than masquerading as a skip.
 """
 import sys
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):

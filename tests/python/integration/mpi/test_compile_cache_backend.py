@@ -42,7 +42,7 @@ from pops.codegen.cache import _backend_distinct_so_path, _process_so_backend, _
 from pops.ir.ops import sqrt
 from pops.physics._facade import Model
 from tests.python.support.requirements import repo_include
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 INCLUDE = os.environ.get("POPS_INCLUDE") or repo_include()
 

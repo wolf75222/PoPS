@@ -11,7 +11,7 @@ authoring model carried on a REAL CompiledModel (the accepted pattern of test_eu
 never a fake/mock pops object). Runs under pytest and as ``python tests/...``.
 """
 import pytest
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 pytest.importorskip("pops")
 from pops.params import ConstParam

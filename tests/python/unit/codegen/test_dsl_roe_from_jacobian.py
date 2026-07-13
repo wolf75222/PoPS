@@ -27,7 +27,7 @@ import numpy as np
 import pops
 from pops.codegen.toolchain import _default_cxx
 from pops.moments import build_moment_model, gaussian_closure
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 fails = 0
 from tests.python.support.requirements import repo_include

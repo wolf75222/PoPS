@@ -44,7 +44,7 @@ from pops.physics.aux import AUX_NAMED_BASE
 from pops.physics._model import HyperbolicModel
 
 from tests.python.support.requirements import repo_include
-from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
+from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 INCLUDE = repo_include()
 A_X, A_Y = 1.0, 0.5  # vitesses d'advection constantes du transport jouet
 N, L, DT, NSTEPS = 32, 1.0, 1e-3, 3

@@ -21,7 +21,7 @@ import pops
 from pops.physics.bricks import SourceBrick
 
 from tests.python.support.requirements import repo_include
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 INCLUDE = repo_include()
 
 

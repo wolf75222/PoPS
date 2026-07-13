@@ -17,7 +17,7 @@ import numpy as np
 
 import pops
 from pops.runtime.bricks import Dirichlet
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def build(n=64, abs_tol=None):

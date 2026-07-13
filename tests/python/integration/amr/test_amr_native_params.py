@@ -29,7 +29,7 @@ try:
     from pops.params import RuntimeParam
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
-    from pops.runtime.system import AmrSystem
+    from pops.runtime._system import AmrSystem
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
     print("skip test_amr_native_params (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)

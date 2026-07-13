@@ -31,7 +31,7 @@ import numpy as np
 import pops
 from pops.physics._facade import Model
 from pops.runtime.bricks import Periodic
-from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
+from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 fails = 0
 from tests.python.support.requirements import (

@@ -89,7 +89,7 @@ def test_out_of_domain_cycles_and_tolerance_refuse():
 # --- runtime tier (needs _pops) ----------------------------------------------
 
 pops = pytest.importorskip("pops")
-from pops.runtime.system import System  # noqa: E402  (ADC-545 advanced runtime seam)
+from pops.runtime._system import System  # noqa: E402  (ADC-545 advanced runtime seam)
 
 
 def _sim(**poisson):

@@ -1,7 +1,7 @@
 """System aux/state mixin (Spec-4 PR-F): named aux fields, disc domain, primitive state.
 
 Named-aux resolution + set/get, the disc transport-domain controls, and the primitive-variable
-state helpers of :class:`pops.runtime.system.System`. Mixed in via inheritance; methods operate
+state helpers of :class:`pops.runtime._system.System`. Mixed in via inheritance; methods operate
 on ``self._s`` and ``self._aux_field_index``.
 """
 from __future__ import annotations

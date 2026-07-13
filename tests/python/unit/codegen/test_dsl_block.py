@@ -15,7 +15,7 @@ import pops.experimental  # noqa: F401  (ADC-600: no longer eagerly bound on the
 from test_dsl_brick import build_euler_brick, GAMMA
 
 from tests.python.support.requirements import repo_include
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 INCLUDE = repo_include()
 
 

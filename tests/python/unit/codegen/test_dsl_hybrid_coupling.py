@@ -22,7 +22,7 @@ import numpy as np
 
 import pops
 from test_dsl_hybrid import build_iso_transport, CS2
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 RATE = 3.0
 from tests.python.support.requirements import repo_include

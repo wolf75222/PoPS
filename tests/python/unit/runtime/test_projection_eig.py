@@ -37,7 +37,7 @@ from types import SimpleNamespace
 from pops.ir.expr import Const, Var
 from pops.ir.ops import abs_, eig_lmax, eig_lmin, eig_max_im, sign
 from pops.physics._model import HyperbolicModel
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 dsl = SimpleNamespace(Const=Const, Var=Var, abs_=abs_, sign=sign, eig_lmax=eig_lmax,
                       eig_lmin=eig_lmin, eig_max_im=eig_max_im, HyperbolicModel=HyperbolicModel)

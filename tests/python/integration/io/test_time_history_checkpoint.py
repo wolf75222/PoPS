@@ -31,7 +31,7 @@ import json
 import os
 import sys
 import tempfile
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def _pops_time():

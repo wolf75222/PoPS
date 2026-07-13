@@ -20,7 +20,7 @@ kernel reads the CURRENT value via ``ctx.program_params(block).get(index)``.
     skips if numpy/_pops/compiler/Kokkos is absent or the .so compile fails -- never faking the engine.
 """
 import sys
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):

@@ -35,7 +35,7 @@ import sys
 import numpy as np
 
 import pops
-from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
+from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
 
 CS2 = 0.25       # isothermal sound speed^2 (p = cs2 rho): flooring rho floors the pressure
 n = 48

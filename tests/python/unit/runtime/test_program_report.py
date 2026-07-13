@@ -33,7 +33,7 @@ except Exception as exc:  # noqa: BLE001
 
 
 from tests.python.support.assertions import _check
-from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
+from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 
 def _isothermal_model():

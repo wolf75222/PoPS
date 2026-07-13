@@ -35,7 +35,7 @@ try:
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
     from pops.physics._facade import Model
-    from pops.runtime.system import AmrSystem
+    from pops.runtime._system import AmrSystem
     from tests.python.support.typed_program import program_states, synthetic_module
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
     print("skip test_amr_program_reflux (pops/numpy unavailable: %s)" % exc)

@@ -15,8 +15,8 @@ from pops.runtime._checkpoint_manifest import (
 )
 from pops.runtime._run_manifest import RunManifest
 from pops.runtime._step_strategy import run_control_payload
-from pops.runtime.amr_system import AmrSystem
-from pops.runtime.system import System
+from pops.runtime._amr_system import AmrSystem
+from pops.runtime._system import System
 from pops.time import AdaptiveCFL, FixedDt, StepTransactionPlan
 
 

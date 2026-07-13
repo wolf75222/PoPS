@@ -43,7 +43,7 @@ from pops.mesh.layouts import AMR, Uniform  # noqa: E402
 from pops.model import Handle, Module, OwnerPath  # noqa: E402
 from pops.params import RuntimeParam  # noqa: E402
 from pops.problem import Case  # noqa: E402
-from pops.runtime.system import AmrSystem  # noqa: E402  (ADC-545 advanced runtime seam)
+from pops.runtime._system import AmrSystem  # noqa: E402  (ADC-545 advanced runtime seam)
 from pops.problem._snapshot import AuthoringSnapshot  # noqa: E402
 from tests.python.support.layout_plan import resolved_layout_contract  # noqa: E402
 

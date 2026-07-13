@@ -21,7 +21,7 @@ per step is possible; the tolerance below is bit-exact for the tested states, wi
 """
 import numpy as np
 import pytest
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 # The _bootstrap of a mismatched-interpreter extension raises ImportError (a subclass), so gate on it.
 pops = pytest.importorskip("pops", exc_type=ImportError)

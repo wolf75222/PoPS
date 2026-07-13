@@ -4,22 +4,21 @@
 are split into cohesive mixins (``_system_install`` / ``_system_unified_install`` /
 ``_system_aux_state`` / ``_system_diagnostics`` / ``_system_io``) to satisfy the per-file
 <=500-line cap ; this module composes them and keeps the constructor + the delegation glue.
-``AmrSystem`` lives in :mod:`pops.runtime.amr_system` and is re-exported here for the
-``from pops.runtime.system import System, AmrSystem`` import in the slim ``pops`` hub.
+``AmrSystem`` lives in :mod:`pops.runtime._amr_system` and is re-exported only through this private
+engine module so compiler/runtime internals share one import seam. Neither engine is a public
+authoring API; users obtain the installed runtime exclusively through ``pops.bind``.
 """
 from __future__ import annotations
 
 from typing import Any
 
 from pops._bootstrap import SystemConfig, _System  # noqa: F401  (SystemConfig re-exported below)
-# ADC-545: SystemConfig / AmrSystemConfig left the pops root; this module is their advanced home
-# alongside System / AmrSystem, so `from pops.runtime.system import SystemConfig, AmrSystemConfig`
-# resolves for the native/advanced tests that build the config POD directly.
+# The config PODs remain private implementation details alongside their native engines.
 from pops._bootstrap import AmrSystemConfig  # noqa: F401  (re-exported via this module)
 from pops.runtime import threading as _threading
 from pops.runtime._lifecycle import (
     FROZEN_STRUCTURAL as _FROZEN_STRUCTURAL, freeze_error as _freeze_error, _LifecycleMixin)
-from pops.runtime.amr_system import AmrSystem  # noqa: F401  (re-exported via this module)
+from pops.runtime._amr_system import AmrSystem  # noqa: F401  (re-exported via this module)
 from pops.runtime._system_aux_state import _SystemAuxState
 from pops.runtime._system_diagnostics import _SystemDiagnostics
 from pops.runtime._system_install import _SystemInstall

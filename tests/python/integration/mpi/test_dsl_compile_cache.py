@@ -38,7 +38,7 @@ from pops.ir.ops import sqrt
 from pops.physics._facade import Model
 
 from tests.python.support.requirements import repo_include
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
 # global 300 s process-isolation budget (ADC-627, same class as test_compile_cache_backend).
 POPS_PROCESS_TIMEOUT = 900

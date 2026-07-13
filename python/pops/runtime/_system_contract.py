@@ -1,7 +1,7 @@
 """Type-only contracts for the runtime coupler mixins (ADC-628, static analysis only).
 
-The concrete runtime couplers (:class:`pops.runtime.system.System` and
-:class:`pops.runtime.amr_system.AmrSystem`) assemble their behaviour from topical mixins
+The concrete runtime couplers (:class:`pops.runtime._system.System` and
+:class:`pops.runtime._amr_system.AmrSystem`) assemble their behaviour from topical mixins
 (``_system_*`` / ``_amr_system_*``). Each mixin reads instance attributes (chiefly the native
 facade ``self._s``) and sibling methods that live on the composed class, not on the mixin itself,
 so a static checker cannot resolve them from the mixin in isolation.

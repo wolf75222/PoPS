@@ -26,7 +26,7 @@ import sys
 import numpy as np
 
 import pops
-from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
+from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
 
 GAMMA = 1.4
 fails = 0

@@ -33,7 +33,7 @@ visible Kokkos can build the .so -- never asserting a fake pass.
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):

@@ -1,7 +1,7 @@
 """AmrSystem equation/aux mixin (Spec-4 PR-F).
 
 ``add_equation`` (the AMR backend dispatcher) + the named-aux resolution / set of
-:class:`pops.runtime.amr_system.AmrSystem`, plus the module-level guard
+:class:`pops.runtime._amr_system.AmrSystem`, plus the module-level guard
 ``_reject_newton_amr_compiled`` used only by this path. Mixed in via inheritance; operates on
 ``self._s`` and ``self._aux_field_index``.
 """

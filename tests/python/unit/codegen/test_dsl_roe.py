@@ -27,7 +27,7 @@ import numpy as np
 import pops
 from pops.ir.ops import sqrt
 from pops.physics._facade import Model
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 fails = 0
 from tests.python.support.requirements import (

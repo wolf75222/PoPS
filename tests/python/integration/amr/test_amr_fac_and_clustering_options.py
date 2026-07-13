@@ -5,7 +5,7 @@ values structurally. Kokkos-gated (self-skips without _pops); a small Serial Amr
 """
 import numpy as np
 import pytest
-from pops.runtime.system import AmrSystem
+from pops.runtime._system import AmrSystem
 
 pops = pytest.importorskip("pops")
 

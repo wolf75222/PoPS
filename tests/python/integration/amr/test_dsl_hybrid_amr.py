@@ -20,7 +20,7 @@ import numpy as np
 
 import pops
 from pops.physics.bricks import SourceBrick
-from pops.runtime.system import AmrSystem, AmrSystemConfig  # ADC-545 advanced runtime seam
+from pops.runtime._system import AmrSystem, AmrSystemConfig  # ADC-545 advanced runtime seam
 
 GAMMA = 1.4
 from tests.python.support.requirements import repo_include

@@ -39,7 +39,7 @@ def _imports():
         from pops.numerics.reconstruction import FirstOrder
         from pops.numerics.riemann import Rusanov
         from pops.physics._facade import Model
-        from pops.runtime.system import System
+        from pops.runtime._system import System
     except Exception as exc:  # noqa: BLE001
         print("capture aborted (stack unavailable: %s)" % exc)
         return None

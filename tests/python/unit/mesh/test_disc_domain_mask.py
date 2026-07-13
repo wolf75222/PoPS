@@ -35,7 +35,7 @@ try:
     from pops.runtime.bricks import (
         BackgroundDensity, Explicit, FluidState, IsothermalFlux, Model, NoSource, Periodic, Spatial,
     )
-    from pops.runtime.system import System  # ADC-545 advanced runtime seam
+    from pops.runtime._system import System  # ADC-545 advanced runtime seam
 except ImportError as e:  # pragma: no cover - environnement sans build
     print("skip  module pops absent (PYTHONPATH ? build ?) : %s" % e)
     sys.exit(0)

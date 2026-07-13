@@ -21,7 +21,7 @@ import sys
 
 from tests.python.support.assertions import _check
 from tests.python.support.layout_plan import resolved_layout_contract
-from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
+from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
 
 
 def _raises(exc_types, fn):
@@ -44,7 +44,7 @@ try:
     from pops.ir.ops import sqrt
     from pops.physics._facade import Model
     from pops.problem._snapshot import AuthoringSnapshot
-    from pops.runtime.amr_system import AmrSystem
+    from pops.runtime._amr_system import AmrSystem
 except Exception as exc:  # noqa: BLE001  -- pops not importable -> skip, never fake
     print("skip test_amr_named_field (pops unavailable: %s)" % exc)
     sys.exit(0)

@@ -30,7 +30,7 @@ from pops.runtime.bricks import Periodic
 from pops.ir.ops import sqrt
 from pops.physics._facade import Model
 from pops.physics.multispecies import CoupledSource
-from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
+from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 fails = 0
 from tests.python.support.requirements import (

@@ -42,7 +42,7 @@ import pops
 from pops.codegen.loader import CompiledModel
 from pops.ir.ops import sqrt
 from pops.physics._facade import Model
-from pops.runtime.system import AmrSystem, AmrSystemConfig  # ADC-545 advanced runtime seam
+from pops.runtime._system import AmrSystem, AmrSystemConfig  # ADC-545 advanced runtime seam
 
 GAMMA = 1.4
 from tests.python.support.requirements import repo_include

@@ -19,7 +19,7 @@ try:
     import pops
     from pops.numerics.riemann import HLL, HLLC, Roe, Rusanov
     from pops.numerics.reconstruction.limiters import Minmod
-    from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
+    from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 except Exception as exc:  # noqa: BLE001
     print("skip test_seam_combinations (pops unavailable: %s)" % exc)
     sys.exit(0)

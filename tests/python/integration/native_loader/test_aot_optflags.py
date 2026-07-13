@@ -20,7 +20,7 @@ import sys
 import tempfile
 
 import numpy as np
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 sys.path.insert(0, os.path.dirname(__file__))
 

@@ -44,7 +44,7 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
     def install(self, install_plan: Any) -> Any:
         plan = require_install_plan(install_plan)
         _require_native_geometry(plan)
-        from pops.runtime.system import System
+        from pops.runtime._system import System
         from pops.runtime._runtime_mesh_lowering import system_config_from_layout
 
         engine = System(system_config_from_layout(plan.layout))
@@ -71,7 +71,7 @@ class _AdaptiveNativeProvider(RuntimeExecutorProvider):
     def install(self, install_plan: Any) -> Any:
         plan = require_install_plan(install_plan)
         _require_native_geometry(plan)
-        from pops.runtime.system import AmrSystem
+        from pops.runtime._system import AmrSystem
         from pops.runtime._amr_bind_lowering import amr_config_from_layout
         from pops.runtime._runtime_mesh_lowering import flow_amr_layout
 

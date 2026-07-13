@@ -24,7 +24,7 @@ import pops
 import pops.experimental  # noqa: F401  (ADC-600: no longer eagerly bound on the pops root)
 from pops.ir.ops import sqrt
 from pops.physics._model import HyperbolicModel
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 GAMMA = 1.4
 from tests.python.support.requirements import repo_include

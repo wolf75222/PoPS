@@ -19,7 +19,7 @@ try:
     from pops.ir.ops import sqrt
     from pops.physics._facade import Model
     from pops import time as adctime
-    from pops.runtime.system import System  # ADC-545 advanced runtime seam
+    from pops.runtime._system import System  # ADC-545 advanced runtime seam
     from tests.python.support.typed_program import program_states, synthetic_module
 except Exception as exc:  # noqa: BLE001
     print("skip test_install_requirement_validation (pops/numpy unavailable: %s)" % exc)

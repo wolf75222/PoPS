@@ -2,7 +2,7 @@
 
 The CHOICE of geometry lives in a MESH object, not in the scheme: pops.FiniteVolume
 stays reconstruction + Riemann flux + variables (no geometry argument). The mesh is
-passed to the system via ``pops.runtime.system.System(mesh=...) (advanced seam)``. ``CartesianMesh`` is the implicit
+passed to the system via ``pops.runtime._system.System(mesh=...) (advanced seam)``. ``CartesianMesh`` is the implicit
 default (square domain, numerics STRICTLY unchanged, bit-identical).
 """
 from __future__ import annotations

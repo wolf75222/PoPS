@@ -3,7 +3,7 @@
 The runtime-bound counterpart of the inert layout report returned by ``pops.inspect(layout)``.
 Where authoring inspection reports a *layout descriptor* (the declared level / ratio / regrid /
 refine envelope, before any runtime), this package reports a *live*
-:class:`pops.runtime.amr_system.AmrSystem`: the patches that actually exist on the built
+:class:`pops.runtime._amr_system.AmrSystem`: the patches that actually exist on the built
 hierarchy, the regrid cadence in force, and the ghost / reflux / checkpoint route limitations.
 
 The surface is INERT: every method READS the already-built runtime (the box accessors

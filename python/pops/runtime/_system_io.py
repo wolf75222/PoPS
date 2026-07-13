@@ -1,7 +1,7 @@
 """System IO mixin (Spec-4 PR-F): outputs, checkpoint, restart.
 
 VISUALIZATION OUTPUT (vtk/npz/hdf5, serial + parallel-hyperslab), strict restartable checkpoint and
-restart of :class:`pops.runtime.system.System`. Pure Python (zero change to the C++ hot path),
+restart of :class:`pops.runtime._system.System`. Pure Python (zero change to the C++ hot path),
 single-rank / rank-0 gather. ATOMIC write (.tmp + os.replace). Mixed into ``System`` via
 inheritance; operates on ``self._s``. ``abi_key`` is the module ABI key, baked into the .so
 metadata, re-exported through ``pops.runtime.bricks``.

@@ -24,7 +24,7 @@ import pytest
 
 import pops
 from pops.physics.multispecies import CoupledSource
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 # ---------------------------------------------------------------------------

@@ -34,7 +34,7 @@ from pops.numerics.riemann import Rusanov
 from pops.solvers import krylov
 from pops.time import FailRun
 import sys
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def _pops_time():

@@ -23,7 +23,7 @@ CacheManager serialize/restore round-trip + both verbatim messages are unit-test
 import os
 import sys
 import tempfile
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 # ---- (A) NPZ facade keys + the missing-cache guard: pure numpy, always runs when numpy is present ----

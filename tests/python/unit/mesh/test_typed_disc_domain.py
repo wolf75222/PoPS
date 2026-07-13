@@ -5,7 +5,7 @@ import pytest
 
 from pops.mesh.geometry import Disc, NoWall, DiscDomain, HalfPlane
 from pops.mesh.masks import TransportMask, NoMask, Staircase, CutCell, lower_disc_mode
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 # --------------------------------------------------------------------------------------------

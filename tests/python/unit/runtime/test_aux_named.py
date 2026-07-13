@@ -29,7 +29,7 @@ from pops.physics._facade import Model
 from pops.physics._model import HyperbolicModel
 
 from tests.python.support.requirements import repo_include
-from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
+from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 INCLUDE = repo_include()
 
 

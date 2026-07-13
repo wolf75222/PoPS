@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 
 pops = pytest.importorskip("pops")
-from pops.runtime.system import AmrSystem  # noqa: E402
+from pops.runtime._system import AmrSystem  # noqa: E402
 
 
 def _model():

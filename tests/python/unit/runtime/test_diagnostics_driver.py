@@ -29,7 +29,7 @@ try:
     from pops.time.schedule import every, always, on_start, on_end
     from pops.runtime._diagnostics_driver import (diagnostic_due, measure_reduction,
                                                   fire_diagnostics)
-    from pops.runtime.system import System
+    from pops.runtime._system import System
 except Exception as exc:  # noqa: BLE001
     print("skip test_diagnostics_driver (pops unavailable: %s)" % exc)
     sys.exit(0)

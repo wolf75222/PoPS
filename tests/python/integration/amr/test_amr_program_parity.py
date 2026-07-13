@@ -43,7 +43,7 @@ try:
     from pops.ir.ops import sqrt
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
-    from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
+    from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
     from tests.python.support.typed_program import program_states
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
     print("skip test_amr_program_parity (pops/numpy unavailable: %s)" % exc)

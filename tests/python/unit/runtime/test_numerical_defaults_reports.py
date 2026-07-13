@@ -3,7 +3,7 @@
 import math
 
 import pytest
-from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
+from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
 

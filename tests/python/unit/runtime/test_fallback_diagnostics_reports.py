@@ -1,7 +1,7 @@
 """ADC-604 structured fallback/degraded-route diagnostics."""
 
 import pytest
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
 
