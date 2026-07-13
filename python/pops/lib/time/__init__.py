@@ -19,7 +19,7 @@ Splitting:
     strang, lie, CondensedSchur
 
 IMEX:
-    imex_local, imex_local_linear
+    IMEX
 
 Multi-step:
     adams_bashforth, adams_bashforth2, bdf
@@ -35,7 +35,7 @@ from .euler import forward_euler
 from .ssprk import SSPRK2, SSPRK3_TABLEAU, ssprk3
 from .rk import rk4, rk, explicit_rk, ButcherTableau, RK4_TABLEAU, SSPRK2_TABLEAU
 from .strang import strang, lie, CondensedSchur
-from .imex import IMEX_EULER_TABLEAU, ark_local_linear, imex_local, imex_local_linear
+from .imex import IMEX, IMEX_EULER_TABLEAU
 from .multistep import adams_bashforth, adams_bashforth2, bdf
 from .predictor_corrector import predictor_corrector_local_linear
 
@@ -58,9 +58,7 @@ __all__ = [
     "lie",
     "CondensedSchur",
     # IMEX
-    "imex_local",
-    "imex_local_linear",
-    "ark_local_linear",
+    "IMEX",
     "IMEX_EULER_TABLEAU",
     # Multi-step
     "adams_bashforth",

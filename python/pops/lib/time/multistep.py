@@ -258,7 +258,7 @@ def bdf(P: Any, block: Any, state: Any = None, order: Any = None, *,
         handle of a model ``m.linear_source`` ``L``, the BDF system is block-diagonal and
         ``(c0*I - dt*L) U^{n+1} = rhs``
         is solved per cell by `P.solve_local_linear` (no Newton / Krylov). @p flux / @p sources then add
-        an EXPLICIT flux/source RHS lagged at U^n (like `imex_local`).
+        an EXPLICIT flux/source RHS lagged at U^n (as in an IMEX explicit partition).
 
     @p order is 1 (backward Euler) or 2 (BDF2, over the System history ring with a BDF1 cold start).
     @p ncomp is the block component count for the implicit-flux path (1 for a scalar model such as

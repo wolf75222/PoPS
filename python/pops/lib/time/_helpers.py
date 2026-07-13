@@ -3,8 +3,8 @@
 The single-stage RHS assembler ``_stage_rhs`` is the canonical home for the
 explicit / split schemes (Spec 4 s6 / s14: the ready schemes live in
 ``pops.lib.time``). The operator-registry helpers ``_op_space_arity`` / ``_opcall``
-introspect the Program-bound registry for the operator-first macros
-(predictor_corrector_local_linear, explicit_rk, imex_local_linear) and dispatch
+introspect the Program-bound registry for the operator-first factories
+(predictor_corrector_local_linear, explicit_rk, IMEX) and dispatch
 calls with the correct arity.
 
 The ``@program_macro`` decorator (ADC-554) makes a scheme builder ONE IR route with
