@@ -168,12 +168,18 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         if initial_guess is not None and not _is_field_value(initial_guess):
             raise ValueError("solve_linear: initial_guess must be a scalar_field or State value")
         if initial_guess is not None:
-            unqualified_scratch = (
+            unqualified_initial = (
                 initial_guess.vtype == "scalar_field" and initial_guess.block is None
                 and initial_guess.space is None)
-            if initial_guess.block != rhs.block and not unqualified_scratch:
+            unqualified_rhs = (
+                rhs.vtype == "scalar_field" and rhs.block is None and rhs.space is None)
+            # A fresh scalar scratch has no independent owner/layout identity: the qualified
+            # operand supplies it.  This is the generic condensed-solve case (an owner-qualified
+            # persistent warm start against a freshly allocated RHS).  Two explicit owners must
+            # still agree; no owner is guessed when both operands are qualified.
+            if initial_guess.block != rhs.block and not (unqualified_initial or unqualified_rhs):
                 raise ValueError("solve_linear: rhs and initial_guess must belong to the same block")
-            if not unqualified_scratch:
+            if not (unqualified_initial or unqualified_rhs):
                 require_compatible_spaces(
                     rhs.space, initial_guess.space, "solve_linear initial_guess", typed_pair=True)
         op_ncomp = int(operator.attrs["ncomp"])

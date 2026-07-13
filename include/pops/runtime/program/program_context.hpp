@@ -210,7 +210,8 @@ class ProgramContext {
     sys_->set_field_boundary_kernel(field, kernel);
   }
   MultiFab& state(int b) const { return sys_->block_state(sys_block(b)); }
-  void rhs_into(int b, MultiFab& u, MultiFab& r) const {
+  void rhs_into(int b, MultiFab& u, MultiFab& r, int rate_id = -1) const {
+    (void)rate_id;
     count_kernel();
     sys_->block_rhs_into(sys_block(b), u, r);
   }
@@ -222,7 +223,8 @@ class ProgramContext {
   /// incl. the empty list) to this, so a Lie/Strang split assembles "flux but no source" without the
   /// default source leaking in (epic ADC-399 / ADC-425, spec criterion 17). Header-inline forwarder,
   /// like @ref rhs_into.
-  void neg_div_flux_default_into(int b, MultiFab& u, MultiFab& r) const {
+  void neg_div_flux_default_into(int b, MultiFab& u, MultiFab& r, int rate_id = -1) const {
+    (void)rate_id;
     count_kernel();
     sys_->block_neg_div_flux_into(sys_block(b), u, r);
   }

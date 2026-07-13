@@ -11,14 +11,26 @@
 
 #include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // CoarseFineInterface / FluxRegister
 #include <pops/runtime/amr/amr_program_reflux.hpp>          // EdgeFlux / EdgeStrip / detail::edge_flux_axpy
+#include <pops/runtime/program/amr_program_context.hpp>     // recursive clock/ledger driver compiles
+#include <pops/numerics/time/amr/levels/amr_clock.hpp>
+#include <pops/numerics/time/amr/reflux/amr_flux_ledger.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 
+#include <set>
 #include <vector>
 
 using namespace pops;
 
 namespace {
+// Compile-time acceptance for the generated driver's template surface.  It is deliberately not
+// executed here because construction needs a materialized AmrSystem hierarchy.
+[[maybe_unused]] void instantiate_recursive_driver(runtime::program::AmrProgramContext& context) {
+  context.advance_hierarchy(0.1, [](double) {});
+  context.register_history("qualified", 2, -1, 0, "fluid.U", "state[rho]");
+  (void)context.history_zero_start("qualified", 2, -1, 0);
+}
+
 // One fine patch [4..11]^2 -> coarse footprint [2..5]^2 (PatchRange). One component.
 EdgeStrip make_strip(int I0, int I1, int J0, int J1, int nc) {
   EdgeStrip s;
@@ -141,4 +153,86 @@ TEST(test_program_reflux_ledger, ab2_effective_flux_uses_lagged_flux) {
   const Real expected = Real(1.5) * dt * Fn + (Real(-0.5) * dt) * Fnm1;
   ASSERT_FALSE(commit.fine.empty());
   EXPECT_EQ(commit.fine[0].fL[0], expected) << "ab2_Feff_uses_lagged";
+}
+
+TEST(test_program_reflux_ledger, ratio_two_clocks_and_interpolation_are_exact) {
+  const amr::ClockWindow parent{{0, 7, amr::Rational(0, 1), 2.0},
+                                {0, 7, amr::Rational(1, 1), 2.4}};
+  const amr::ParentChildClockRelation relation(
+      0, 1, amr::Rational(2, 1), amr::RemainderPolicy::IntegralOnly);
+  const auto children = relation.partition(parent);
+  ASSERT_EQ(children.size(), 2u);
+  EXPECT_EQ(children[0].window.begin.phase, amr::Rational(0, 1));
+  EXPECT_EQ(children[0].window.end.phase, amr::Rational(1, 2));
+  EXPECT_EQ(children[1].window.begin.phase, amr::Rational(1, 2));
+  EXPECT_EQ(children[1].window.end.phase, amr::Rational(1, 1));
+  EXPECT_EQ(parent.alpha({0, 7, amr::Rational(1, 2), 2.2}), amr::Rational(1, 2));
+}
+
+TEST(test_program_reflux_ledger, history_identity_includes_owner_state_space_and_clock) {
+  const amr::ClockStamp clock{1, 3, amr::Rational(1, 2), 0.15};
+  const amr::HistoryIdentity base{"fluid", "U", "cell-conservative", 1, clock};
+  std::set<amr::HistoryIdentity> identities;
+  identities.insert(base);
+  identities.insert({"other", "U", "cell-conservative", 1, clock});
+  identities.insert({"fluid", "V", "cell-conservative", 1, clock});
+  identities.insert({"fluid", "U", "face-flux", 1, clock});
+  identities.insert({"fluid", "U", "cell-conservative", 1,
+                     {1, 3, amr::Rational(3, 4), 0.2}});
+  EXPECT_EQ(identities.size(), 5u);
+}
+
+TEST(test_program_reflux_ledger, non_integral_relation_requires_declared_remainder) {
+  const amr::ClockWindow parent{{0, 0, amr::Rational(0, 1), 0.0},
+                                {0, 0, amr::Rational(1, 1), 1.0}};
+  const amr::ParentChildClockRelation rejected(
+      0, 1, amr::Rational(3, 2), amr::RemainderPolicy::IntegralOnly);
+  EXPECT_THROW(rejected.partition(parent), std::runtime_error);
+
+  const amr::ParentChildClockRelation declared(
+      0, 1, amr::Rational(3, 2), amr::RemainderPolicy::ExplicitFinalSubstep);
+  const auto children = declared.partition(parent);
+  ASSERT_EQ(children.size(), 2u);
+  EXPECT_EQ(children[0].window.end.phase, amr::Rational(2, 3));
+  EXPECT_TRUE(children[1].is_declared_remainder);
+  EXPECT_EQ(children[1].window.begin.phase, amr::Rational(2, 3));
+  EXPECT_EQ(children[1].window.end.phase, amr::Rational(1, 1));
+}
+
+namespace {
+amr::FluxLedgerKey scalar_key() {
+  return {"fluid", "U", "transport", "physical_flux", 1,
+          {1, 3, amr::Rational(1, 2), 0.15}};
+}
+void scalar_axpy(double& dst, double a, const double& src) { dst += a * src; }
+}  // namespace
+
+TEST(test_program_reflux_ledger, exact_rk_weights_are_distinct_and_transactional) {
+  amr::TransactionalFluxLedger<double> rk2;
+  rk2.begin();
+  rk2.accumulate(scalar_key(),
+                 {amr::Rational(1, 2), amr::FluxOrientation::XPlus, 2.0, 0.1}, 3.0);
+  rk2.accumulate(scalar_key(),
+                 {amr::Rational(1, 2), amr::FluxOrientation::XPlus, 2.0, 0.1}, 9.0);
+  const double rk2_value = rk2.aggregate(scalar_axpy).begin()->second;
+  rk2.commit();
+
+  amr::TransactionalFluxLedger<double> rk3;
+  rk3.begin();
+  rk3.accumulate(scalar_key(),
+                 {amr::Rational(1, 6), amr::FluxOrientation::XPlus, 2.0, 0.1}, 3.0);
+  rk3.accumulate(scalar_key(),
+                 {amr::Rational(1, 6), amr::FluxOrientation::XPlus, 2.0, 0.1}, 9.0);
+  rk3.accumulate(scalar_key(),
+                 {amr::Rational(2, 3), amr::FluxOrientation::XPlus, 2.0, 0.1}, 15.0);
+  const double rk3_value = rk3.aggregate(scalar_axpy).begin()->second;
+  EXPECT_NE(rk2_value, rk3_value);
+
+  rk3.begin();
+  rk3.accumulate(scalar_key(),
+                 {amr::Rational(1, 1), amr::FluxOrientation::YMinus, 2.0, 0.05}, 100.0);
+  rk3.rollback();
+  EXPECT_EQ(rk3.size(), 3u) << "inner rejection leaves no contribution";
+  rk3.rollback();
+  EXPECT_TRUE(rk3.empty()) << "outer rejection leaves zero residual";
 }

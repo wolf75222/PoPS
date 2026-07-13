@@ -146,7 +146,8 @@ def CondensedSchur(P: Any, block: Any, state: Any = None, *,
     # Program history carries it across steps; the cold-start fill seeds phi^n = 0 at step 0.
     carry = theta != 1
     if carry:
-        phi_n = P.history(label + ".schur_phi", lag=1, ncomp=1)  # scalar read; cold-start = 0
+        phi_n = P.history(
+            label + ".schur_phi", lag=1, ncomp=1, block=block)  # owner-qualified scalar carry
     else:
         phi_n = P.scalar_field(label + ".schur_phi_n")           # UNCHANGED: fresh zero each step
     theta_alpha = _exact_product(theta, alpha, where="CondensedSchur: theta * alpha")

@@ -13,19 +13,17 @@
 /// @file
 /// @brief ADC-639 conservative reflux for a whole-system compiled Program on AMR: the flux-materialising
 /// per-level residual seams, the effective-flux interface-strip samplers, and the route_reflux driver
-/// the synchronous per-level Program driver (AmrProgramContext::couple_levels) runs at level sync.
+/// the recursively subcycled Program driver runs at level sync.
 ///
 /// Included at the END of amr_runtime.hpp (so the full AmrRuntime class AND the reflux types from
 /// amr_reflux_mf.hpp -- PatchRange / FluxRegister / CoverageMask / CoarseFineInterface / RegMP -- are
 /// visible). It defines AmrRuntime members out-of-line; it is NOT a standalone header.
 ///
-/// The apparatus REUSES the native Berger-Oliger reflux wholesale. The v1 synchronous Program driver
-/// advances every level with the SAME dt and couples fine->coarse by average_down ONLY, so the total
-/// conserved quantity drifts by the un-refluxed C/F face-flux mismatch. ADC-639 restores round-off C/F
-/// conservation by capturing the per-level EFFECTIVE flux at the interface (through the Program's own
+/// The apparatus reuses the native Berger-Oliger reflux. Round-off C/F conservation comes from capturing
+/// every substep's per-level effective flux at the interface (through the Program's own
 /// linear-combination weights, the flux ledger in amr_program_context.hpp) and routing it through the
-/// native coverage-aware correction at level sync -- average_down THEN reflux, finest first, the native
-/// order. The coarse-only / flat Program (nlev==1) never reaches any of this: the trajectory stays
+/// native coverage-aware correction at level sync -- reflux THEN average-down, finest first. The
+/// coarse-only / flat Program (nlev==1) never reaches any of this: the trajectory stays
 /// bit-identical (the load-bearing parity gate).
 
 namespace pops {
@@ -283,6 +281,27 @@ inline void AmrRuntime::level_neg_div_flux_capture_into(std::size_t b, int k, Mu
     throw std::runtime_error("AmrRuntime::level_neg_div_flux_capture_into: block '" + blocks_[b].name +
                              "' has no flux-only flux-materialising per-level residual closure");
   fill_level_state_cf_ghosts(b, k, U);
+  blocks_[b].level_flux_capture_neg_div(U, aux_[k], level_geom(k), Fx, Fy, R);
+}
+
+inline void AmrRuntime::level_rhs_capture_into_temporal(
+    std::size_t b, int k, MultiFab& U, MultiFab& R, MultiFab& Fx, MultiFab& Fy,
+    const MultiFab& parent_old, const MultiFab& parent_new,
+    const runtime::amr::TemporalTransferContext& target_time) {
+  if (!blocks_[b].level_flux_capture)
+    throw std::runtime_error("AmrRuntime::level_rhs_capture_into_temporal: block has no capture");
+  fill_level_state_cf_ghosts_temporal(b, k, U, parent_old, parent_new, target_time);
+  blocks_[b].level_flux_capture(U, aux_[k], level_geom(k), Fx, Fy, R);
+}
+
+inline void AmrRuntime::level_neg_div_flux_capture_into_temporal(
+    std::size_t b, int k, MultiFab& U, MultiFab& R, MultiFab& Fx, MultiFab& Fy,
+    const MultiFab& parent_old, const MultiFab& parent_new,
+    const runtime::amr::TemporalTransferContext& target_time) {
+  if (!blocks_[b].level_flux_capture_neg_div)
+    throw std::runtime_error(
+        "AmrRuntime::level_neg_div_flux_capture_into_temporal: block has no capture");
+  fill_level_state_cf_ghosts_temporal(b, k, U, parent_old, parent_new, target_time);
   blocks_[b].level_flux_capture_neg_div(U, aux_[k], level_geom(k), Fx, Fy, R);
 }
 

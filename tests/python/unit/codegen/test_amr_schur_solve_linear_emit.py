@@ -73,7 +73,7 @@ def test_refined_driver_orders_gather_solve_publish():
     solve = src.index("ctx.solve_linear_matfree(", gather)
     publish = src.index("The composite solution is complete", solve)
     assert gather < solve < publish
-    refined = src[gather:src.index("ctx.couple_levels()", gather)]
+    refined = src[gather:src.index("ctx.advance_synchronized_hierarchy", gather)]
     assert refined.count("ctx.solve_linear_matfree(") == 1
     assert refined[:solve - gather].count("condensed") > 0, "gather region lost assembly kernels"
     assert "ctx.stage_linear_initial_guess();" in refined[:solve - gather], \

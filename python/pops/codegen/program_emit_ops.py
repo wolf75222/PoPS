@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from fractions import Fraction
 from typing import Any
 
 from pops.ir.literals import scalar_cpp
@@ -173,19 +174,33 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # ctx.history byte-identical (a store-first scheme reading before its store is a config error).
         var[v.id] = "h%d" % v.id
         if "ncomp" in v.attrs:
-            lines.append("pops::MultiFab& %s = ctx.history_zero_start(%s, %d, %d);"
-                         % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"]),
-                            int(v.attrs["ncomp"])))
+            if target == "amr_system" and bidx is not None:
+                lines.append("pops::MultiFab& %s = ctx.history_zero_start(%s, %d, %d, %d);"
+                             % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"]),
+                                int(v.attrs["ncomp"]), bidx))
+            else:
+                lines.append("pops::MultiFab& %s = ctx.history_zero_start(%s, %d, %d);"
+                             % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"]),
+                                int(v.attrs["ncomp"])))
         else:
-            lines.append("pops::MultiFab& %s = ctx.history(%s, %d);"
-                         % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"])))
+            if target == "amr_system":
+                lines.append("pops::MultiFab& %s = ctx.history(%s, %d, %d);"
+                             % (var[v.id], json.dumps(v.attrs["history"]),
+                                int(v.attrs["lag"]), bidx))
+            else:
+                lines.append("pops::MultiFab& %s = ctx.history(%s, %d);"
+                             % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"])))
     elif v.op == "store_history":
         # Side-effect: copy the value into the current slot of the history (the cold-start fill on
         # the first store happens System-side). store_history is a State-typed node but carries no
         # readable value -- nothing combines it. Its var maps to the stored value (a harmless alias).
         (value_in,) = v.inputs
-        lines.append("ctx.store_history(%s, %s);"
-                     % (json.dumps(v.attrs["history"]), var[value_in.id]))
+        if target == "amr_system" and bidx is not None:
+            lines.append("ctx.store_history(%s, %s, %d);"
+                         % (json.dumps(v.attrs["history"]), var[value_in.id], bidx))
+        else:
+            lines.append("ctx.store_history(%s, %s);"
+                         % (json.dumps(v.attrs["history"]), var[value_in.id]))
         var[v.id] = var[value_in.id]
     elif v.op == "fill_boundary":
         # Side effect on the field's ghosts (the valid cells are untouched). The result aliases the
@@ -239,6 +254,18 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # the explicit list. An EMPTY list [] (or a list of only named sources) excludes it -> flux
         # only. None and [] are recorded distinctly in the IR, so this is unambiguous.
         want_default_source = requested is None or "default" in requested
+        if target == "amr_system":
+            if hasattr(v.point, "offset"):
+                stage_point = v.point
+            else:
+                try:
+                    stage_point = v.point.time
+                except ValueError:
+                    # A conservative flux belongs to the explicit partition of an ARK stage.  Its
+                    # implicit coordinate may differ and must never be silently substituted here.
+                    stage_point = v.point.time_for("explicit")
+            stage = Fraction(stage_point.offset.to_python())
+            lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
         if not want_flux:
             # SOURCE-ONLY (ADC-430): flux=False -- NO -div F base (the rhs_scratch starts at zero).
             # The default/composite source is added iff requested (the same want_default_source
@@ -256,14 +283,15 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             if want_default_source:
                 # R <- -div F + default/composite source (ctx.rhs_into) for THIS op's block (ADC-426
                 # bidx), the historical path: sources is None (legacy) or "default" is requested.
-                lines.append("ctx.rhs_into(%d, %s, %s);" % (bidx, var[state_in.id], var[v.id]))
+                lines.append("ctx.rhs_into(%d, %s, %s, %d);"
+                             % (bidx, var[state_in.id], var[v.id], int(v.id)))
             else:
                 # FLUX-ONLY (ADC-425): "default" is NOT among the requested sources (the empty list
                 # [] or a named-only list) -> R <- -div F(U) WITHOUT the model's default source
                 # (ctx.neg_div_flux_default_into), for THIS op's block (bidx). The named source_terms
                 # below are then axpy'd on top -- sources=[] is flux only, ["a","b"] is flux + a + b.
-                lines.append("ctx.neg_div_flux_default_into(%d, %s, %s);"
-                             % (bidx, var[state_in.id], var[v.id]))
+                lines.append("ctx.neg_div_flux_default_into(%d, %s, %s, %d);"
+                             % (bidx, var[state_in.id], var[v.id], int(v.id)))
         else:
             # NAMED fluxes (ADC-419): R <- -div(sum of selected named fluxes). Evaluate the SUM of
             # the flux expressions per direction into two n_cons scratch fields (fx / fy) by a

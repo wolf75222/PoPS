@@ -134,13 +134,29 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     # (already-allocated) slot -- step 0 reads the same value at every lag and the scheme degenerates
     # to a one-step method. register_history is idempotent (no-op once registered).
     # A NARROW ring (ADC-427: the 1-component condensed-Schur phi^n carry) declares its slot ncomp here
-    # via the 3-arg register_history so the width is locked BEFORE any read; a full-state multistep ring
-    # (ncomp absent) emits the historical 2-arg form -- byte-identical IR and compatible with the AMR
-    # ProgramContext (which added the ncomp param defaulted, ADC-631 rings unchanged).
+    # before any read. AMR always emits the six-argument identity-qualified form; owner-less rings are
+    # rejected during lowering instead of silently binding block zero.  AMR registration also
+    # carries the logical state and field-space identities used by clock-qualified history slots.
     histories_ncomp = getattr(program, "_histories_ncomp", {})
     for name, lag in sorted(program._histories.items()):
         ncomp = histories_ncomp.get(name)
-        if ncomp is None:
+        owner = getattr(program, "_history_blocks", {}).get(name)
+        owner_index = block_idx.get(owner) if owner is not None else None
+        if target == "amr_system" and owner_index is None:
+            raise ValueError(
+                "AMR history %r requires explicit block owner provenance" % name)
+        if target == "amr_system":
+            state_ref = getattr(program, "_history_state_refs", {}).get(name)
+            state_identity = (state_ref.qualified_id if state_ref is not None
+                              else "scalar-history:" + name)
+            space = getattr(program, "_history_spaces", {}).get(name)
+            space_identity = (json.dumps(space.to_data(), sort_keys=True, separators=(",", ":"))
+                              if space is not None else "scalar-field")
+            lines.append("ctx.register_history(%s, %d, %d, %d, %s, %s);"
+                         % (json.dumps(name), int(lag), -1 if ncomp is None else int(ncomp),
+                            int(owner_index), json.dumps(state_identity),
+                            json.dumps(space_identity)))
+        elif ncomp is None:
             lines.append("ctx.register_history(%s, %d);" % (json.dumps(name), int(lag)))
         else:
             lines.append("ctx.register_history(%s, %d, %d);"

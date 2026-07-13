@@ -566,6 +566,11 @@ class AmrRuntime {
       refinement *= hierarchy_.refinement_ratios[static_cast<std::size_t>(transition)];
     return refinement;
   }
+  int parent_child_temporal_ratio(int child_level) const {
+    if (child_level < 1 || child_level >= nlev_)
+      throw std::runtime_error("AmrRuntime::parent_child_temporal_ratio level out of bounds");
+    return hierarchy_.refinement_ratios[static_cast<std::size_t>(child_level - 1)];
+  }
   static runtime::amr::SpatialTransferContext bootstrap_transfer_context(
       const MultiFab& coarse, const MultiFab& fine, int coarse_level, int fine_level,
       int refinement_ratio, bool replicated_parent = false) {
@@ -1096,15 +1101,13 @@ class AmrRuntime {
   }
   /// COARSE-FINE GHOST FILL for a per-level Program residual (ADC-634). A fine level (@p k >= 1) has a
   /// C/F interface whose ghosts sit UNDER the coarse level; the native Berger-Oliger step fills them by
-  /// time-interpolation between the coarse old/new states (mf_fill_fine_ghosts_mb). The SYNCHRONOUS
-  /// Program driver (program_emit_amr) advances every level with the SAME dt and has no coarse sub-time,
-  /// so it fills @p U's fine ghosts from the CURRENT coarse state (old == new -> the frac drops out ->
-  /// piecewise-constant spatial injection of the coarse mean). Without it the fine flux reads
+  /// time-interpolation between the coarse old/new states (mf_fill_fine_ghosts_mb). The recursive
+  /// Program driver normally calls fill_level_state_cf_ghosts_temporal with an explicit parent clock
+  /// window; this spatial-only primitive remains the low-level injection used by that provider. Without
+  /// a coarse-fine fill the fine flux reads
   /// UNINITIALIZED C/F ghosts -> a zero/negative density -> a NaN pressure at the very first stage. The
   /// coarse level (@p k == 0) has base-domain physical ghosts only; the block's own level_rhs closure
-  /// fills those (fill_boundary), so this is a fine-level-only pre-pass. Frozen-coupling approximation:
-  /// exact for a OncePerStep Program (the coupling is constant across the stage), the documented v1
-  /// synchronous-driver semantics (parity with the head-of-step aux injection).
+  /// fills those (fill_boundary), so this is a fine-level-only pre-pass.
   void fill_level_state_cf_ghosts(std::size_t b, int k, MultiFab& U) {
     if (k < 1 || U.n_grow() == 0)
       return;
@@ -1116,6 +1119,25 @@ class AmrRuntime {
         Uc, U, bootstrap_transfer_context(
                    Uc, U, k - 1, k, authority.refinement_ratio,
                    (k == 1) && replicated_coarse_));
+  }
+  /// Coarse/fine fill at an explicitly qualified child time.  The temporal provider first builds the
+  /// parent state at target_time from two distinct parent snapshots; the spatial provider then fills
+  /// the child's interface ghosts.  There is no current-parent fallback on this path.
+  void fill_level_state_cf_ghosts_temporal(
+      std::size_t b, int k, MultiFab& U, const MultiFab& parent_old,
+      const MultiFab& parent_new, const runtime::amr::TemporalTransferContext& target_time) {
+    if (k < 1 || U.n_grow() == 0)
+      return;
+    const auto& authority = block_transfer_authorities_.at(b);
+    if (!authority.prepared || !authority.coarse_fine.coarse_fine || !authority.temporal.temporal)
+      throw std::runtime_error("AmrRuntime: no prepared spatial/temporal transfer authority");
+    MultiFab parent_at(parent_old.box_array(), parent_old.dmap(), parent_old.ncomp(),
+                       parent_old.n_grow());
+    authority.temporal.temporal(parent_old, parent_new, parent_at, target_time);
+    authority.coarse_fine.coarse_fine(
+        parent_at, U, bootstrap_transfer_context(
+                          parent_at, U, k - 1, k, authority.refinement_ratio,
+                          (k == 1) && replicated_coarse_));
   }
   /// R <- -div F(U) + S(U, aux_[k]) for block @p b on level @p k (the per-level analogue of
   /// System::block_rhs_into). Forwards to the block's level_rhs closure with the level metric + shared
@@ -1155,9 +1177,17 @@ class AmrRuntime {
   /// nlev>1); the native step and the coarse-only / flat Program never call it.
   void level_rhs_capture_into(std::size_t b, int k, MultiFab& U, MultiFab& R, MultiFab& Fx,
                               MultiFab& Fy);
+  void level_rhs_capture_into_temporal(
+      std::size_t b, int k, MultiFab& U, MultiFab& R, MultiFab& Fx, MultiFab& Fy,
+      const MultiFab& parent_old, const MultiFab& parent_new,
+      const runtime::amr::TemporalTransferContext& target_time);
   /// FLUX-ONLY (SourceFreeModel) counterpart of level_rhs_capture_into (the neg_div_flux capture path).
   void level_neg_div_flux_capture_into(std::size_t b, int k, MultiFab& U, MultiFab& R, MultiFab& Fx,
                                        MultiFab& Fy);
+  void level_neg_div_flux_capture_into_temporal(
+      std::size_t b, int k, MultiFab& U, MultiFab& R, MultiFab& Fx, MultiFab& Fy,
+      const MultiFab& parent_old, const MultiFab& parent_new,
+      const runtime::amr::TemporalTransferContext& target_time);
   /// Max |wave speed| of block @p b on @p U (the SAME closure step_cfl reads). Evaluated on the aux of
   /// level @p k. A Program dt bound reads it as cfl*hmin/max_wave_speed.
   Real level_max_speed(std::size_t b, int k, const MultiFab& U) const {

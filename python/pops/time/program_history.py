@@ -39,16 +39,17 @@ class _ProgramHistory(_ProgramBase):
                 "state", "history", (),
                 {"history": name, "lag": int(lag), "state": state_ref}, name, block,
                 space=space, state_ref=state_ref)
-        if space is not None or block is not None or state_ref is not None:
-            raise ValueError("history: a narrow scalar ring has no StateSpace/block provenance")
+        if space is not None or state_ref is not None:
+            raise ValueError("history: a narrow scalar ring has no StateSpace/state provenance")
         if isinstance(ncomp, bool) or not isinstance(ncomp, int) or ncomp != 1:
             raise ValueError(
                 "history: explicit ncomp must be 1; omit it for a full-state history")
         self._histories[name] = max(self._histories.get(name, 0), lag)
         self._histories_ncomp[name] = 1
+        self._declare_history_block(name, block)
         return self._new(
             "scalar_field", "history", (), {"history": name, "lag": int(lag), "ncomp": 1},
-            name, None)
+            name, block)
 
     def _declare_history_block(self, name: str, block: Any) -> None:
         missing = object()
@@ -87,8 +88,10 @@ class _ProgramHistory(_ProgramBase):
             require_history_space(self, name, value.space)
             self._declare_history_block(name, value.block)
             self._declare_history_state(name, value.state_ref, value.block)
-        elif name in self._history_spaces or name in self._history_blocks:
+        elif name in self._history_spaces:
             raise ValueError("store_history: cannot store a scalar field in a full-state ring")
+        elif name in self._history_blocks and self._history_blocks[name] != value.block:
+            raise ValueError("store_history: scalar history block provenance mismatch")
         self._histories.setdefault(name, 1)
         return self._new(
             "state", "store_history", (value,),

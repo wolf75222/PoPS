@@ -9,12 +9,12 @@ from the .so metadata, then installs the macro-step body. ``pops.bind`` routes a
 ``params=`` + ``cadence=`` onto these AMR seams (the three former ``_install_compiled`` rejects are
 now real routes).
 
-The per-level macro-step DRIVER (``AmrProgramContext``) has LANDED (ADC-508): the generated
-``pops_install_program_amr`` constructs an ``AmrProgramContext`` and installs the SYNCHRONOUS per-level
-macro-step (the identical lowered body wrapped in a per-level loop). This test asserts:
+The hierarchy DRIVER (``AmrProgramContext``) has LANDED: the generated
+``pops_install_program_amr`` constructs an ``AmrProgramContext`` and installs the recursive,
+clock-qualified parent/child advance. This test asserts:
 
   1) the codegen emits ``pops_install_program_amr`` for ``target='amr_system'`` (building an
-     AmrProgramContext + a per-level loop) and NOT for the System default (host-side string check);
+     AmrProgramContext + recursive hierarchy driver) and NOT for the System default (host-side check);
   2) the AMR install SEAM (``set_program_cadence`` / ``set_program_params``) is reachable on a built
      ``_pops`` and validates its arguments (cadence >= 1; an unseeded program block rejects a set);
   3) (Kokkos-gated) ``compile_problem(..., target='amr_system')`` builds the .so and
@@ -81,7 +81,8 @@ def _lie_program(model, name="adc508_amr_prog"):
     u = temporal.n
     fields = P.solve_fields(u)
     r = P._rhs_legacy(state=u, fields=fields)
-    P.commit(temporal.next, P.linear_combine("u1", u + P.dt * r))
+    P.commit(temporal.next,
+             P.linear_combine("u1", u + P.dt * r, at=temporal.next.point))
     return P
 
 
@@ -95,7 +96,9 @@ def _two_block_program(model, name="adc508_amr_2block"):
         u = temporal.n
         fields = P.solve_fields(u)
         r = P._rhs_legacy(state=u, fields=fields)
-        P.commit(temporal.next, P.linear_combine("u1_%s" % blk, u + P.dt * r))
+        P.commit(temporal.next,
+                 P.linear_combine("u1_%s" % blk, u + P.dt * r,
+                                  at=temporal.next.point))
     return P
 
 
@@ -112,8 +115,9 @@ def test_codegen_emits_amr_install_export():
     chk("pops_install_program_amr" not in src_sys, "the System .so does NOT export the AMR entry")
     chk("pops_install_program_amr" in src_amr, "the AMR .so exports pops_install_program_amr")
     amr_entry = src_amr.split("pops_install_program_amr", 1)[1]
-    chk("AmrProgramContext ctx(sys)" in amr_entry and "ctx.set_level(" in amr_entry,
-        "the AMR install entry builds an AmrProgramContext and runs the body per level (ADC-508)")
+    chk("AmrProgramContext ctx(sys)" in amr_entry
+        and "ctx.advance_hierarchy(dt, _advance_level)" in amr_entry,
+        "the AMR install entry builds the recursive clock-qualified hierarchy driver")
     # bad target rejected
     try:
         prog.emit_cpp_program(model=model, target="bogus")

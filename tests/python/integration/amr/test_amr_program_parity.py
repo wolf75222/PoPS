@@ -3,14 +3,14 @@
 
 A compiled time Program lowers its macro-step body referencing ONLY the variable ``ctx`` (never the
 type ``ProgramContext``). The SAME generated body therefore compiles against ``AmrProgramContext``, a
-duck-typed structural mirror that drives the body PER LEVEL over the AMR hierarchy. The ``{amr_install}``
-codegen slot wraps the identical body in a per-level loop and constructs an ``AmrProgramContext``.
+duck-typed structural mirror that drives the body recursively over the AMR hierarchy. The
+``{amr_install}`` codegen slot passes the identical body to ``advance_hierarchy``.
 
 This test asserts:
 
-  1) (host-side, no compiler) the codegen emits a per-level install wrapper for ``target='amr_system'``
+  1) (host-side, no compiler) the codegen emits a recursive install wrapper for ``target='amr_system'``
      (the fail-loud is gone): ``pops_install_program_amr`` builds an ``AmrProgramContext`` and runs the
-     body inside a ``for (_k ...) { ctx.set_level(_k); ... }`` loop;
+     body through ``ctx.advance_hierarchy(dt, body)``;
 
   2) (Kokkos-gated, the must-pass GATE 4.1a) BIT-IDENTICAL parity -- the SAME SSPRK2 Program installed
      on a single-level ``System`` (``ProgramContext``) and on a single-level ``AmrSystem``
@@ -38,6 +38,7 @@ try:
 
     import pops
     from pops import time as adctime
+    from pops.time.points import TimePoint
     from pops.physics.facade import Model
     from pops.ir.ops import sqrt
     from pops.numerics.reconstruction import FirstOrder
@@ -95,10 +96,11 @@ def _ssprk2_program(model, name="adc508_ssprk2"):
     U0 = temporal.n
     f0 = P.solve_fields("f0", U0)
     k0 = P._rhs_legacy("k0", state=U0, fields=f0, flux=True, sources=["default"])
-    U1 = P.linear_combine("U1", U0 + dt * k0)
+    U1 = P.linear_combine("U1", U0 + dt * k0, at=TimePoint(P.clock, 1))
     f1 = P.solve_fields("f1", U1)
     k1 = P._rhs_legacy("k1", state=U1, fields=f1, flux=True, sources=["default"])
-    U2 = P.linear_combine("U2", 0.5 * U0 + 0.5 * (U1 + dt * k1))
+    U2 = P.linear_combine(
+        "U2", 0.5 * U0 + 0.5 * (U1 + dt * k1), at=temporal.next.point)
     P.commit(temporal.next, U2)
     return P
 
@@ -131,9 +133,8 @@ def _init_density():
 
 
 def test_codegen_emits_amr_install_wrapper():
-    """(1) host-side: target='amr_system' emits a per-level install wrapper (NOT a fail-loud throw):
-    pops_install_program_amr builds an AmrProgramContext and runs the body in a per-level loop."""
-    print("== codegen emits the per-level AmrProgramContext install wrapper ==")
+    """The AMR export installs the recursive, clock-qualified hierarchy driver."""
+    print("== codegen emits the recursive AmrProgramContext install wrapper ==")
     model = _euler_model()
     prog = _ssprk2_program(model)
     src = prog.emit_cpp_program(model=model, target="amr_system")
@@ -141,8 +142,12 @@ def test_codegen_emits_amr_install_wrapper():
     body = src.split("pops_install_program_amr", 1)[1]
     chk("AmrProgramContext ctx(sys)" in body,
         "the AMR install constructs an AmrProgramContext over the AmrSystem")
-    chk("ctx.set_level(" in body, "the wrapper drives the body per level (ctx.set_level)")
-    chk("ctx.couple_levels(" in body, "the wrapper couples the levels (average_down)")
+    chk("ctx.advance_hierarchy(dt, _advance_level)" in body,
+        "the wrapper delegates to the explicit parent/child clock driver")
+    chk("ctx.set_stage_time(0, 1)" in body and "ctx.set_stage_time(1, 1)" in body,
+        "exact SSPRK2 stage abscissae are emitted")
+    chk("ctx.set_level(" not in body and "ctx.couple_levels(" not in body,
+        "level traversal and synchronization are not duplicated in generated code")
     chk("the per-level AMR macro-step driver" not in body
         and "is not yet available" not in body,
         "the fail-loud throw is gone (the real driver is emitted)")

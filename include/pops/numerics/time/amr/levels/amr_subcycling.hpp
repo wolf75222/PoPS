@@ -20,7 +20,7 @@
 ///
 /// Invariants:
 /// - distributed (MPI) with COARSE REPLICATION: the single-box coarse level is replicated on each
-///   rank (local periodic fill), the fine patches distributed; average_down and reflux gather up
+///   rank (local periodic fill), the fine patches distributed; reflux and average_down gather up
 ///   through GLOBAL-indexed coarse buffers + all_reduce_sum_inplace, then each rank applies to
 ///   its copy -> all stay identical. In serial this is bit-for-bit identical to the direct path;
 /// - validation: test_mpi_amr_multipatch (np=1/2/4 bit-identical);
@@ -44,7 +44,7 @@ static_assert(kAmrRefRatio == 2, "ratio-2-structural kernels below assume kAmrRe
 // Distributed (MPI) with COARSE REPLICATION. The single-box coarse level is replicated: each
 // rank holds an identical copy (per-rank DistributionMapping, or deterministic init). The coarse
 // advance (self-periodic fill_boundary, flux, advance) runs identically on each copy; the fine
-// patches are distributed. average_down (overwrite of covered cells) and reflux (addition to
+// patches are distributed. reflux (addition to bordering cells) and average_down (overwrite of covered
 // bordering cells) gather up through two global-indexed coarse buffers + all_reduce_sum_inplace,
 // then each rank applies to its copy -> all stay identical. In serial this is bit-for-bit
 // identical to the direct path (see the final block). Validation: test_mpi_amr_multipatch
@@ -54,7 +54,8 @@ static_assert(kAmrRefRatio == 2, "ratio-2-structural kernels below assume kAmrRe
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, Real dxc, Real dyc,
                                 MultiFab& Uf, const MultiFab& auxc, const MultiFab& auxf, Real dt) {
-  const SubcyclingSchedule sched(2);
+  const SubcyclingSchedule sched(
+      0, 1, amr::Rational(kAmrRefRatio, 1), amr::RemainderPolicy::IntegralOnly);
   const int nc = Uc.ncomp();
   const Real dxf = dxc / kAmrRefRatio, dyf = dyc / kAmrRefRatio, dtf = sched.dt_sub(dt);
   const int NX = dom.nx(), NY = dom.ny();
@@ -151,14 +152,14 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
     mf_apply_source(m, Uf, auxf, dtf);  // source S(U,aux) at the substep
   }
 
-  // DISTRIBUTED average_down + reflux, the coarse level being REPLICATED (each rank holds an
+  // DISTRIBUTED reflux THEN average_down, the coarse level being REPLICATED (each rank holds an
   // identical copy after the deterministic coarse advance). Each rank deposits, for its LOCAL
   // fine patches, into two global-indexed coarse buffers:
   //   avg: the average-down over the COVERED cells (overwrite semantics; a single contribution
   //        per cell since the patches are disjoint);
   //   ref: the reflux correction on the uncovered BORDERING cells (addition).
-  // all_reduce_sum -> each rank has the total, then applies to ITS copy: covered = avg,
-  // bordering += ref. All copies stay identical. In serial (np=1) the all-reduce is the identity
+  // all_reduce_sum -> each rank has the total, then applies to ITS copy: bordering += ref,
+  // then covered = avg. All copies stay identical. In serial (np=1) the all-reduce is the identity
   // and it is bit-for-bit identical to the direct path (0 + average = average exactly; advance +
   // correction). Cost: two NX*NY*nc buffers per rank (coarse replication).
   device_fence();
@@ -192,9 +193,9 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
         if (!ref.in(I, J))
           continue;  // outside interface: neither average nor reflux (was 0)
         for (int k = 0; k < nc; ++k) {
+          c(I, J, k) += ref.at(I, J, k);   // sync phase 1: reflux (0 if no face)
           if (covered(I, J))
-            c(I, J, k) = avg.at(I, J, k);  // average-down
-          c(I, J, k) += ref.at(I, J, k);   // reflux (0 if no face)
+            c(I, J, k) = avg.at(I, J, k);  // sync phase 2: average-down
         }
       }
   }
@@ -555,7 +556,8 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
         "subcycle_level_mp: SSPRK3 + IMEX unsupported (combination not validated); use "
         "time='ssprk3' (explicit source per stage) or time='imex' (forward Euler + implicit "
         "source)");
-  const SubcyclingSchedule sched(2);
+  const SubcyclingSchedule sched(
+      lev, lev + 1, amr::Rational(kAmrRefRatio, 1), amr::RemainderPolicy::IntegralOnly);
   const int nc = L[lev].U.ncomp();
   // Density-role component for the C/F ghost floor (ADC-259), resolved ONCE on the host. pos_floor<=0
   // -> 0 without model introspection (positivity_comp short-circuit) -> bit-identical historical path.
@@ -754,8 +756,6 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
     subcycle_level_mp<Limiter, NumericalFlux>(
         m, L, lev + 1, sched.dt_sub(dt), base_dom, base_per, &U_old, &lv.U, sched.frac(s), &regs,
         coarse_replicated, recon_prim, imex, nopts, tmethod, pos_floor);
-  mf_average_down_mb(L[lev + 1].U, lv.U);  // distributed point 3 (parallel_copy)
-
   // Distributed point 4: coverage-aware reflux. The bordering coarse cell may belong to a REMOTE
   // parent box. For each LOCAL child, we deposit the correction (cL/fL already local after
   // parallel_copy) into a GLOBAL-indexed coarse buffer, all_reduce -> each rank has the full
@@ -783,6 +783,10 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
           c(I, J, k) += ref.at(I, J, k);
       }
   }
+  // The synchronization contract is explicit and ordered: first route/apply the conservative
+  // interface correction to uncovered parent cells, then replace covered cells by the child average.
+  // The two regions are disjoint, but preserving this order makes the phase observable and extensible.
+  mf_average_down_mb(L[lev + 1].U, lv.U);  // sync phase 2: average-down
 }
 
 // Driver: one dt step of the N-level multi-patch hierarchy (level 0 = coarse).
