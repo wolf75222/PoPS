@@ -29,7 +29,8 @@ class FieldLayoutContract:
     mesh: Any
     embedded_boundary: Any
     levels: int
-    ratio: int
+    transition_ratios: tuple[int, ...]
+    level_refinements: tuple[int, ...]
 
 
 def _exact_positive_int(value: Any, *, where: str, minimum: int = 1) -> int:
@@ -63,8 +64,25 @@ def field_layout_contract(layout: Any) -> FieldLayoutContract:
     if kind == "amr":
         levels = _exact_positive_int(
             data.get("max_levels"), where="AMR field layout max_levels", minimum=2)
-        ratio = _exact_positive_int(
-            data.get("ratio"), where="AMR field layout ratio", minimum=2)
+        raw_ratios = data.get("transition_ratios")
+        if not isinstance(raw_ratios, (list, tuple)):
+            raise TypeError(
+                "AMR field layout transition_ratios must be an ordered integer sequence")
+        ratios = tuple(
+            _exact_positive_int(
+                value,
+                where="AMR field layout transition_ratios[%d]" % index,
+                minimum=2,
+            )
+            for index, value in enumerate(raw_ratios)
+        )
+        if len(ratios) != levels - 1:
+            raise ValueError(
+                "AMR field layout transition_ratios must contain exactly one ratio per "
+                "coarse/fine transition")
+        refinements = [1]
+        for ratio in ratios:
+            refinements.append(refinements[-1] * ratio)
         candidates = [
             value for value in (getattr(layout, "grid", None), getattr(layout, "base", None))
             if value is not None
@@ -77,7 +95,8 @@ def field_layout_contract(layout: Any) -> FieldLayoutContract:
             raise TypeError(
                 "AMR field layout advertises an embedded boundary without a typed field "
                 "topology provider")
-        return FieldLayoutContract(kind, candidates[0], None, levels, ratio)
+        return FieldLayoutContract(
+            kind, candidates[0], None, levels, ratios, tuple(refinements))
     if kind == "uniform":
         levels = _exact_positive_int(
             data.get("levels"), where="uniform field layout levels")
@@ -87,7 +106,7 @@ def field_layout_contract(layout: Any) -> FieldLayoutContract:
         if mesh is None:
             raise TypeError("uniform field layout must expose its mesh provider")
         return FieldLayoutContract(
-            kind, mesh, getattr(layout, "embedded_boundary", None), levels, 1)
+            kind, mesh, getattr(layout, "embedded_boundary", None), levels, (), (1,))
     raise ValueError(
         "field layout capabilities require layout='uniform' or layout='amr'; got %r" % kind)
 
@@ -290,8 +309,15 @@ def topology_recipe(layout: Any) -> dict[str, Any]:
         "stencil": "axis-neighbor",
         "periodic_identifications": "all-axes" if periodic else "none",
         "coarse_fine_identifications": (
-            "ratio-%d-valid-cell-covering" % contract.ratio
-            if contract.kind == "amr" else "none"),
+            [
+                {
+                    "coarse_level": index,
+                    "fine_level": index + 1,
+                    "transition_ratio": ratio,
+                }
+                for index, ratio in enumerate(contract.transition_ratios)
+            ]
+            if contract.kind == "amr" else []),
         "material_predicate": "all-cells" if embedded is None else "embedded-boundary",
     }
     return {
@@ -305,7 +331,8 @@ def topology_recipe(layout: Any) -> dict[str, Any]:
             }
         ),
         "levels": contract.levels,
-        "ratio": contract.ratio,
+        "transition_ratios": list(contract.transition_ratios),
+        "level_refinements": list(contract.level_refinements),
         "connectivity": connectivity,
         "component_derivation": "connected-components-of-resolved-cell-graph",
         "basis_derivation": "one-constant-mode-per-connected-material-component",

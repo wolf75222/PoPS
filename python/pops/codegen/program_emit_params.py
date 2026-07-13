@@ -117,7 +117,9 @@ def program_param_entries(program: Any, model: Any) -> list:
     model-coefficient op that READS a runtime parameter, record one entry (program block index,
     parameter name, stable WITHIN-block index, declaration default). The within-block index is the
     model's STABLE runtime index (sorted-name order, assigned by assign_runtime_indices, matching the
-    lowered ``params.get(idx)`` and the per-block RuntimeParams the System seeds / sets). Deduplicated by
+    lowered ``params.get(idx)`` and the per-block RuntimeParams the System seeds / sets). Once one
+    kernel reads a parameter, the complete stable table for that block is emitted: omitting an unused
+    lower index would create an ABI hole before a later ``params.get(idx)``. Deduplicated by
     (block, name); sorted by (block, index) so the metadata table and Python routing agree on order.
     Empty when no model kernel reads a runtime param. @p model the physical model the Program lowers
     (None -> no entries)."""
@@ -187,6 +189,28 @@ def program_param_entries(program: Any, model: Any) -> list:
             # The metadata ABI is explicitly double-valued; this is the target-precision
             # lowering boundary, not a mutation/coercion of the authoring literal.
             entries.append((blk, name, index, float(node.value)))
+        # RuntimeParams is indexed by the model's complete stable declaration table.  If the only
+        # read is at index N, indices 0..N-1 still have to be materialised from BindSchema; compacting
+        # the vector here would silently redirect the generated ``params.get(N)`` read.
+        for index, node in enumerate(nodes):
+            handle = getattr(node, "handle", None)
+            if graph_aware and handle is None:
+                raise ValueError(
+                    "runtime parameter %r in block %r has no owner-qualified ParamHandle"
+                    % (node.name, v.block.local_id))
+            qualified_id = getattr(handle, "qualified_id", None) or node.name
+            route = (blk, v.block.model_owner_path.canonical(), qualified_id)
+            collision_key = (blk, node.name)
+            prior = emitted_names.get(collision_key)
+            if prior is not None and prior != route:
+                raise ValueError(
+                    "runtime parameter name collision for block %r: %r maps to both %s and %s"
+                    % (v.block.local_id, node.name, prior[2], qualified_id))
+            emitted_names[collision_key] = route
+            if route in seen:
+                continue
+            seen.add(route)
+            entries.append((blk, node.name, index, float(node.value)))
     entries.sort(key=lambda e: (e[0], e[2]))
     return entries
 

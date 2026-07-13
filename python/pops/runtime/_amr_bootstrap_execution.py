@@ -84,13 +84,22 @@ def execute_bootstrap(plan: Any, consumer: Any) -> BootstrapExecution:
 class NativeAMRBootstrapConsumer:
     """Consumer for the native coarse-only AmrSystem bootstrap seam."""
 
-    def __init__(self, engine: Any, plan: Any, initial_values: Any) -> None:
+    def __init__(
+        self, engine: Any, plan: Any, initial_values: Any, field_routes: Any = None,
+    ) -> None:
         self._engine = engine
         self._plan = plan
         self._initial = {
             subject_id: (block, value, space, centering, method, source)
             for subject_id, block, value, space, centering, method, source in initial_values
         }
+        self._field_routes = dict(field_routes or {})
+        if any(
+            not isinstance(name, str) or not name
+            or not isinstance(route, str) or not route
+            for name, route in self._field_routes.items()
+        ):
+            raise TypeError("native bootstrap field routes must map names to provider slots")
         self._tagged_level = None
         self._clustered = False
         self._pending_level: int | None = None
@@ -126,14 +135,17 @@ class NativeAMRBootstrapConsumer:
             if action.subject_id not in self._initial:
                 raise ValueError("native bootstrap is missing an authenticated level-zero value")
             _, value, _, _, method, source = self._initial[action.subject_id]
-            expected_source = "constant_field" if method == "analytic" else "bound_level_zero"
+            expected_source = source.get("native_route") \
+                if method == "analytic" else "bound_level_zero"
+            if not isinstance(expected_source, str) or not expected_source:
+                raise ValueError(
+                    "native analytic level-zero materialization has no provider route"
+                )
             if self._route(action) != expected_source:
                 raise ValueError(
                     "native level-zero initialization requires %s" % expected_source
                 )
             if method == "analytic":
-                if source.get("native_route") != "constant_field":
-                    raise ValueError("native analytic level-zero materialization is missing")
                 materialized = self._engine._s._bootstrap_analytic_reproject(
                     action.subject_id, 0
                 )
@@ -225,8 +237,15 @@ class NativeAMRBootstrapConsumer:
         elif operation == "recompute":
             if self._route(action) != "elliptic_solve":
                 raise ValueError("native field recompute requires elliptic_solve")
+            field_name = action.evidence["field_name"]
+            provider_slot = self._field_routes.get(field_name)
+            if provider_slot is None:
+                raise ValueError(
+                    "native field recompute has no authenticated provider slot for %r"
+                    % field_name
+                )
             materialized = self._engine._s._recompute_bootstrap_field(
-                action.subject_id, action.evidence["field_name"]
+                action.subject_id, provider_slot
             )
             return self._receipt(
                 action,
@@ -298,9 +317,11 @@ class NativeAMRBootstrapConsumer:
 
 
 def execute_native_bootstrap(
-    engine: Any, plan: Any, initial_values: Any
+    engine: Any, plan: Any, initial_values: Any, field_routes: Any = None,
 ) -> BootstrapExecution:
-    return execute_bootstrap(plan, NativeAMRBootstrapConsumer(engine, plan, initial_values))
+    return execute_bootstrap(
+        plan, NativeAMRBootstrapConsumer(engine, plan, initial_values, field_routes)
+    )
 
 
 __all__ = [

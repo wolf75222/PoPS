@@ -1054,6 +1054,7 @@ class System {
   /// nr*ntheta values, NOT nx()^2: it is this dimension that correctly sizes the numpy
   /// array on the bindings side (without it, a (nx, nx) reshape overflows the buffer when nr != ntheta).
   int ny() const;
+  /// Generated Program shared libraries read the accepted clock through the flat loader ABI.
   POPS_EXPORT double time() const;
   int n_species() const;
   /// Block names, in the order of addition. SINGLE SOURCE: the internal block registry, populated by

@@ -81,22 +81,37 @@ def normalize_layout(handle: LayoutHandle, descriptor: Any, *, handle_resolver: 
     requirements = _descriptor_map(descriptor, "requirements")
     snapshot = _descriptor_snapshot(descriptor, handle_resolver=handle_resolver)
     count = capabilities.get("max_levels", capabilities.get("levels", 1))
-    ratio = capabilities.get("ratio", 1)
     adaptive = capabilities.get("supports_amr", False)
     if isinstance(count, bool) or not isinstance(count, int) or count < 1:
         raise ValueError("layout capabilities require levels/max_levels >= 1")
-    if isinstance(ratio, bool) or not isinstance(ratio, int) or ratio < 1:
-        raise ValueError("layout capabilities require ratio >= 1")
     if not isinstance(adaptive, bool):
         raise TypeError("layout capability supports_amr must be bool")
-    if count == 1:
-        ratio = 1
-    levels = tuple(LayoutLevel(index, ratio ** index) for index in range(count))
+    raw_ratios = capabilities.get("transition_ratios", ())
+    if isinstance(raw_ratios, (str, bytes)):
+        raise TypeError("layout transition_ratios must be an ordered integer sequence")
+    try:
+        ratios = tuple(raw_ratios)
+    except TypeError as exc:
+        raise TypeError("layout transition_ratios must be an ordered integer sequence") from exc
+    if not adaptive and count == 1:
+        ratios = ()
+    if len(ratios) != max(0, count - 1) or any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 2
+            for value in ratios):
+        raise ValueError(
+            "adaptive layout capabilities require one transition ratio >= 2 per level transition"
+        )
+    refinements = [1]
+    for ratio in ratios:
+        refinements.append(refinements[-1] * ratio)
+    levels = tuple(LayoutLevel(index, refinement)
+                   for index, refinement in enumerate(refinements))
     descriptor_name = getattr(descriptor, "name", type(descriptor).__name__)
     return NormalizedLayout(
         handle=handle,
         descriptor_type="%s.%s" % (type(descriptor).__module__, type(descriptor).__qualname__),
-        descriptor_name=str(descriptor_name), adaptive=adaptive, ratio=ratio, levels=levels,
+        descriptor_name=str(descriptor_name), adaptive=adaptive,
+        transition_ratios=ratios, levels=levels,
         options=options, capabilities=capabilities, requirements=requirements,
         descriptor_snapshot=snapshot)
 

@@ -147,7 +147,7 @@ class NormalizedLayout:
     descriptor_type: str
     descriptor_name: str
     adaptive: bool
-    ratio: int
+    transition_ratios: tuple[int, ...]
     levels: tuple[LayoutLevel, ...]
     options: Mapping[str, Any]
     capabilities: Mapping[str, Any]
@@ -158,6 +158,22 @@ class NormalizedLayout:
         if not isinstance(self.handle, LayoutHandle):
             raise TypeError("NormalizedLayout.handle must be a LayoutHandle")
         handle_identity(self.handle, where="NormalizedLayout.handle", kind="layout")
+        ratios = tuple(self.transition_ratios)
+        if len(ratios) != max(0, len(self.levels) - 1) or any(
+                isinstance(value, bool) or not isinstance(value, int) or value < 2
+                for value in ratios):
+            raise ValueError(
+                "NormalizedLayout.transition_ratios must contain one integer >= 2 per transition"
+            )
+        refinement = 1
+        for index, level in enumerate(self.levels):
+            if level.index != index or level.refinement != refinement:
+                raise ValueError(
+                    "NormalizedLayout.levels must preserve exact cumulative transition refinement"
+                )
+            if index < len(ratios):
+                refinement *= ratios[index]
+        object.__setattr__(self, "transition_ratios", ratios)
         for key in ("options", "capabilities", "requirements", "descriptor_snapshot"):
             data = json_data(getattr(self, key), where="NormalizedLayout.%s" % key)
             if not isinstance(data, dict):
@@ -170,7 +186,7 @@ class NormalizedLayout:
             "descriptor_type": self.descriptor_type,
             "descriptor_name": self.descriptor_name,
             "adaptive": self.adaptive,
-            "ratio": self.ratio,
+            "transition_ratios": list(self.transition_ratios),
             "levels": [level.to_data() for level in self.levels],
             "options": thaw(self.options),
             "capabilities": thaw(self.capabilities),

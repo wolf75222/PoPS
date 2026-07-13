@@ -63,6 +63,22 @@ def _reject_newton_amr_compiled(label: Any, time: Any) -> Any:
 class _AmrSystemEquation(_AmrSystem):
     """add_equation + named-aux methods of AmrSystem."""
 
+    def _lower_spatial(self, spatial: Any) -> Spatial:
+        """Return the exact runtime Spatial consumed by AMR install and bound snapshots."""
+        if spatial is None:
+            return Spatial()
+        if isinstance(spatial, Spatial):
+            return spatial
+        runtime_spatial = getattr(spatial, "runtime_spatial", None)
+        if not callable(runtime_spatial):
+            raise TypeError(
+                "AMR spatial selection must implement runtime_spatial() or be an exact "
+                "runtime Spatial value")
+        lowered = runtime_spatial()
+        if not isinstance(lowered, Spatial):
+            raise TypeError("AMR spatial runtime_spatial() did not return Spatial")
+        return lowered
+
     def add_equation(self, name: Any, model: Any, spatial: Any = None, time: Any = None,
                      substeps: Any = None) -> Any:
         """Add the SINGLE AMR equation/block by dispatching on the TYPE of @p model (DSL Phase D).
@@ -106,7 +122,7 @@ class _AmrSystemEquation(_AmrSystem):
         from pops.codegen.loader import CompiledModel
         from pops.physics.aux import AUX_NAMED_BASE
 
-        spatial = spatial if spatial is not None else Spatial()
+        spatial = self._lower_spatial(spatial)
         time = time if time is not None else Explicit()
 
         # positivity_floor (ADC-259) IS wired on the NATIVE AMR transport (Density-role face states +

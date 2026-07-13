@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from pops.ir import Compare, Expr
+from pops.ir import Expr
 from pops.ir.visitors import _key
 from pops.mesh.amr.tagging_graph import ConflictPolicy, Hysteresis
 from pops.time import Schedule
@@ -128,13 +128,14 @@ class AMRExecution:
 
 @dataclass(frozen=True, slots=True)
 class Tag:
-    predicate: Compare
+    predicate: Expr
     action: ClassVar[str] = "refine"
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
-        if type(self.predicate) is not Compare:
-            raise TypeError("Tag requires one symbolic comparison Expr")
+        if not isinstance(self.predicate, Expr) or not callable(
+                getattr(self.predicate, "resolve_for_amr_predicate", None)):
+            raise TypeError("Tag requires a typed symbolic Boolean expression")
 
     def resolve_references(self, resolver: Any) -> Tag:
         return type(self)(self.predicate.resolve_references(resolver))
@@ -145,13 +146,14 @@ class Tag:
 
 @dataclass(frozen=True, slots=True)
 class Coarsen:
-    predicate: Compare
+    predicate: Expr
     action: ClassVar[str] = "coarsen"
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
-        if type(self.predicate) is not Compare:
-            raise TypeError("Coarsen requires one symbolic comparison Expr")
+        if not isinstance(self.predicate, Expr) or not callable(
+                getattr(self.predicate, "resolve_for_amr_predicate", None)):
+            raise TypeError("Coarsen requires a typed symbolic Boolean expression")
 
     def resolve_references(self, resolver: Any) -> Coarsen:
         return type(self)(self.predicate.resolve_references(resolver))
@@ -235,7 +237,7 @@ class ResolvedAMRAuthorities:
     tagging: Any
     initial_conditions: Any
     bootstrap: Any
-    execution: AMRExecution
+    execution: Any
 
     def canonical_identity(self) -> dict[str, Any]:
         return {

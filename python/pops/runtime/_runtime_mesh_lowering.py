@@ -79,7 +79,7 @@ def flow_bootstrap_tagging(sim: Any, bootstrap: Any, params: Any) -> None:
             block = indicator.get("block_ref")
             if type(block) is not dict or not isinstance(block.get("local_id"), str):
                 raise ValueError("pops.bind: native tag leaves must be block-qualified")
-            variable = indicator.get("local_id")
+            variable = node.get("variable", indicator.get("local_id"))
             threshold = node.get("threshold")
             if not isinstance(variable, str) or not variable \
                     or isinstance(threshold, bool) or not isinstance(threshold, (int, float)):

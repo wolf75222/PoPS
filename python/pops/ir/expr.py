@@ -52,6 +52,11 @@ class Expr(ImmutableSymbolic):
     def __le__(self, o: Any) -> Any: return Compare("le", self, _wrap(o))
     def __gt__(self, o: Any) -> Any: return Compare("gt", self, _wrap(o))
     def __ge__(self, o: Any) -> Any: return Compare("ge", self, _wrap(o))
+    def __and__(self, o: Any) -> Any: return BooleanAnd(self, o)
+    def __rand__(self, o: Any) -> Any: return BooleanAnd(o, self)
+    def __or__(self, o: Any) -> Any: return BooleanOr(self, o)
+    def __ror__(self, o: Any) -> Any: return BooleanOr(o, self)
+    def __invert__(self) -> Any: return BooleanNot(self)
 
     def eval(self, env: Any) -> Any: raise NotImplementedError
     def deps(self) -> Any: return set()
@@ -175,6 +180,80 @@ class Compare(_Bin):
             "gt": lambda: a > b,
             "ge": lambda: a >= b,
         }[self.comparison]()
+
+    def resolve_for_amr_predicate(self, context: Any, *, action: str) -> Any:
+        protocol = getattr(context, "resolve_comparison", None)
+        if not callable(protocol):
+            raise TypeError("AMR predicate context must implement resolve_comparison(...)")
+        return protocol(self, action=action)
+
+
+def _boolean_operand(value: Any, *, where: str) -> Expr:
+    if not isinstance(value, Expr) or not callable(
+            getattr(value, "resolve_for_amr_predicate", None)):
+        raise TypeError("%s requires a typed symbolic Boolean expression" % where)
+    return value
+
+
+class BooleanAnd(_Bin):
+    op = "&"
+
+    def __init__(self, a: Any, b: Any) -> None:
+        super().__init__(
+            _boolean_operand(a, where="BooleanAnd"),
+            _boolean_operand(b, where="BooleanAnd"),
+        )
+
+    def eval(self, env: Any) -> Any:
+        return self.a.eval(env) & self.b.eval(env)
+
+    def resolve_for_amr_predicate(self, context: Any, *, action: str) -> Any:
+        from pops.mesh.amr import AllOf
+        return AllOf(
+            self.a.resolve_for_amr_predicate(context, action=action),
+            self.b.resolve_for_amr_predicate(context, action=action),
+        )
+
+
+class BooleanOr(_Bin):
+    op = "|"
+
+    def __init__(self, a: Any, b: Any) -> None:
+        super().__init__(
+            _boolean_operand(a, where="BooleanOr"),
+            _boolean_operand(b, where="BooleanOr"),
+        )
+
+    def eval(self, env: Any) -> Any:
+        return self.a.eval(env) | self.b.eval(env)
+
+    def resolve_for_amr_predicate(self, context: Any, *, action: str) -> Any:
+        from pops.mesh.amr import AnyOf
+        return AnyOf(
+            self.a.resolve_for_amr_predicate(context, action=action),
+            self.b.resolve_for_amr_predicate(context, action=action),
+        )
+
+
+class BooleanNot(Expr):
+    def __init__(self, value: Any) -> None:
+        self.a = _boolean_operand(value, where="BooleanNot")
+
+    def __pops_ir_children__(self) -> tuple[Expr, ...]:
+        return (self.a,)
+
+    def __pops_ir_key__(self, recurse: Any) -> Any:
+        return ("boolean_not", recurse(self.a))
+
+    def eval(self, env: Any) -> Any:
+        return ~self.a.eval(env)
+
+    def resolve_for_amr_predicate(self, context: Any, *, action: str) -> Any:
+        from pops.mesh.amr import Not
+        return Not(self.a.resolve_for_amr_predicate(context, action=action))
+
+    def _str(self) -> str:
+        return "~(%s)" % self.a
 
 
 class Neg(Expr):

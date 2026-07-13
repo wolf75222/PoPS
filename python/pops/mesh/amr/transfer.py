@@ -2,6 +2,7 @@
 # ruff: noqa: F405
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from pops.identity import make_identity
@@ -17,6 +18,44 @@ def _authoring_handle(value: Any, *, where: str, kind: str) -> Handle:
     if not isinstance(value, Handle) or value.kind != kind:
         raise TypeError("%s requires a typed Handle(kind=%r), never a name" % (where, kind))
     return value
+
+
+def _policy_data(policy: Any, *, expected_kind: str, where: str) -> dict[str, Any]:
+    """Authenticate an open transfer-policy implementation by value, never by class name."""
+    protocol = getattr(policy, "amr_transfer_policy_data", None)
+    if not callable(protocol):
+        raise TypeError("%s policy must implement amr_transfer_policy_data()" % where)
+    data = protocol()
+    if not isinstance(data, dict) or data.get("authority_type") != "amr_transfer_policy" \
+            or data.get("policy_kind") != expected_kind:
+        raise TypeError("%s policy does not authenticate kind %r" % (where, expected_kind))
+    try:
+        json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise TypeError("%s policy identity must be strict JSON data" % where) from exc
+    return data
+
+
+def _kernel_data(kernel: Any, *, where: str) -> dict[str, Any]:
+    protocol = getattr(kernel, "amr_transfer_kernel_data", None)
+    if not callable(protocol):
+        raise TypeError("%s must implement amr_transfer_kernel_data()" % where)
+    data = protocol()
+    required = {
+        "schema_version", "kernel_type", "native_route", "order", "ghost_depth",
+        "dimensions", "refinement_ratios", "conservative", "temporal",
+    }
+    if not isinstance(data, dict) or set(data) != required \
+            or data.get("kernel_type") != "amr_transfer_kernel":
+        raise TypeError("%s returned an unsupported kernel identity" % where)
+    for name in required - {"schema_version", "kernel_type"}:
+        value = getattr(kernel, name, object())
+        projected = data[name]
+        if isinstance(value, tuple):
+            projected = tuple(projected)
+        if value != projected:
+            raise ValueError("%s kernel identity disagrees with attribute %s" % (where, name))
+    return data
 
 
 class AMRTransfer:
@@ -35,12 +74,14 @@ class AMRTransfer:
         self._caches: list[tuple[Any, Any, LayoutHandle]] = []
 
     def state(self, subject: Any, policy: Any, *, layout: LayoutHandle | None = None) -> None:
-        from pops.lib.amr import StateTransfer
-
         if self._frozen:
             raise RuntimeError("AMRTransfer is frozen")
-        if type(policy) is not StateTransfer:
-            raise TypeError("AMRTransfer.state requires pops.lib.amr.StateTransfer")
+        data = _policy_data(policy, expected_kind="state", where="AMRTransfer.state")
+        for route in ("prolongation", "restriction", "coarse_fine", "time_interpolation"):
+            kernel = _kernel_data(
+                getattr(policy, route, None), where="AMRTransfer.state.%s" % route)
+            if data.get("routes", {}).get(route) != kernel:
+                raise ValueError("AMRTransfer.state identity does not authenticate %s" % route)
         self._states.append((
             _authoring_handle(subject, where="AMRTransfer.state", kind="state"), policy, layout
         ))
@@ -51,12 +92,13 @@ class AMRTransfer:
         self, subjects: Any, policy: Any, *, layout: LayoutHandle | None = None
     ) -> None:
         """Declare one coupled normal-face vector (one owner-qualified subject per axis)."""
-        from pops.lib.amr import FaceTransfer
-
         if self._frozen:
             raise RuntimeError("AMRTransfer is frozen")
-        if type(policy) is not FaceTransfer:
-            raise TypeError("AMRTransfer.face requires pops.lib.amr.FaceTransfer")
+        data = _policy_data(policy, expected_kind="face", where="AMRTransfer.face")
+        kernel = _kernel_data(
+            getattr(policy, "prolongation", None), where="AMRTransfer.face.prolongation")
+        if data.get("routes", {}).get("prolongation") != kernel:
+            raise ValueError("AMRTransfer.face identity does not authenticate prolongation")
         if isinstance(subjects, (str, bytes)):
             raise TypeError("AMRTransfer.face requires an ordered vector of face subjects")
         try:
@@ -72,35 +114,38 @@ class AMRTransfer:
         ), policy, layout))
 
     def node(self, subject: Any, policy: Any, *, layout: LayoutHandle | None = None) -> None:
-        from pops.lib.amr import NodeTransfer
-
         if self._frozen:
             raise RuntimeError("AMRTransfer is frozen")
-        if type(policy) is not NodeTransfer:
-            raise TypeError("AMRTransfer.node requires pops.lib.amr.NodeTransfer")
+        data = _policy_data(policy, expected_kind="node", where="AMRTransfer.node")
+        kernel = _kernel_data(
+            getattr(policy, "prolongation", None), where="AMRTransfer.node.prolongation")
+        if data.get("routes", {}).get("prolongation") != kernel:
+            raise ValueError("AMRTransfer.node identity does not authenticate prolongation")
         self._nodes.append((
             _authoring_handle(subject, where="AMRTransfer.node", kind="state"), policy, layout
         ))
 
     def field(self, subject: Any, policy: Any, *, layout: LayoutHandle | None = None) -> None:
-        from pops.lib.amr import EllipticRecompute
-
         if self._frozen:
             raise RuntimeError("AMRTransfer is frozen")
-        if type(policy) is not EllipticRecompute:
-            raise TypeError("AMRTransfer.field requires pops.lib.amr.EllipticRecompute")
+        data = _policy_data(policy, expected_kind="field", where="AMRTransfer.field")
+        if not isinstance(data.get("native_route"), str) or not data["native_route"]:
+            raise ValueError("AMRTransfer.field policy must authenticate native_route")
+        if data["native_route"] != getattr(policy, "native_route", None):
+            raise ValueError("AMRTransfer.field identity disagrees with native_route")
         self._fields.append((
             _authoring_handle(subject, where="AMRTransfer.field", kind="field"), policy, layout
         ))
 
     def cache(self, subject: Any, policy: Any, *, layout: LayoutHandle) -> None:
-        from pops.lib.amr import PatchTopologyRebuild
-
         if self._frozen:
             raise RuntimeError("AMRTransfer is frozen")
-        if type(policy) is not PatchTopologyRebuild or not isinstance(layout, LayoutHandle):
+        data = _policy_data(policy, expected_kind="cache", where="AMRTransfer.cache")
+        if data.get("native_route") != getattr(policy, "native_route", None):
+            raise ValueError("AMRTransfer.cache identity disagrees with native_route")
+        if not isinstance(layout, LayoutHandle):
             raise TypeError(
-                "AMRTransfer.cache requires PatchTopologyRebuild and an explicit LayoutHandle"
+                "AMRTransfer.cache requires an explicit LayoutHandle"
             )
         self._caches.append((
             _authoring_handle(subject, where="AMRTransfer.cache", kind="cache"), policy, layout
@@ -129,16 +174,21 @@ class AMRTransfer:
 
         return {
             "authority_type": "amr_transfer_authoring",
-            "states": [{"subject": handle(subject), "policy": type(policy).__name__}
+            "states": [{"subject": handle(subject), "policy": _policy_data(
+                policy, expected_kind="state", where="AMRTransfer.state")}
                        for subject, policy, _ in self._states],
             "faces": [{"subjects": [handle(subject) for subject in subjects],
-                       "policy": type(policy).__name__}
+                       "policy": _policy_data(
+                           policy, expected_kind="face", where="AMRTransfer.face")}
                       for subjects, policy, _ in self._faces],
-            "nodes": [{"subject": handle(subject), "policy": type(policy).__name__}
+            "nodes": [{"subject": handle(subject), "policy": _policy_data(
+                policy, expected_kind="node", where="AMRTransfer.node")}
                       for subject, policy, _ in self._nodes],
-            "fields": [{"subject": handle(subject), "policy": type(policy).__name__}
+            "fields": [{"subject": handle(subject), "policy": _policy_data(
+                policy, expected_kind="field", where="AMRTransfer.field")}
                        for subject, policy, _ in self._fields],
-            "caches": [{"subject": handle(subject), "policy": type(policy).__name__}
+            "caches": [{"subject": handle(subject), "policy": _policy_data(
+                policy, expected_kind="cache", where="AMRTransfer.cache")}
                        for subject, policy, _ in self._caches],
         }
 
@@ -169,7 +219,7 @@ class AMRTransfer:
     @staticmethod
     def _layout_contract(
         layout_plan: LayoutPlan, subject: Any, layout: LayoutHandle | None
-    ) -> tuple[LayoutHandle, int, int]:
+    ) -> tuple[LayoutHandle, int, tuple[int, ...]]:
         if layout is None:
             try:
                 layout = layout_plan.layout_for(subject)
@@ -181,9 +231,9 @@ class AMRTransfer:
         dimension = normalized.capabilities.get("dim")
         if isinstance(dimension, bool) or dimension not in (1, 2, 3):
             raise ValueError("AMR layout manifest must authenticate dimension 1, 2, or 3")
-        if not normalized.adaptive or normalized.ratio < 2:
-            raise ValueError("AMRTransfer requires an adaptive layout with refinement ratio >= 2")
-        return layout, dimension, normalized.ratio
+        if not normalized.adaptive or not normalized.transition_ratios:
+            raise ValueError("AMRTransfer requires an adaptive layout with level transitions")
+        return layout, dimension, normalized.transition_ratios
 
     @staticmethod
     def _accuracy(
@@ -200,6 +250,7 @@ class AMRTransfer:
 
     @staticmethod
     def _capabilities(policy: Any) -> TransferCapabilities:
+        _kernel_data(policy, where="AMR transfer kernel")
         return TransferCapabilities(
             order=policy.order,
             ghost_depth=policy.ghost_depth,
@@ -232,7 +283,13 @@ class AMRTransfer:
             ("time_interpolation", TEMPORAL_INTERPOLATION),
         )
         for subject, policy, layout in self._states:
-            layout, dimension, ratio = self._layout_contract(layout_plan, subject, layout)
+            layout, dimension, ratios = self._layout_contract(layout_plan, subject, layout)
+            if len(set(ratios)) != 1:
+                raise NotImplementedError(
+                    "the selected transfer requirement schema cannot collapse heterogeneous "
+                    "transition ratios; select a per-transition transfer provider"
+                )
+            ratio = ratios[0]
             for attribute, operation in operations:
                 kernel = getattr(policy, attribute)
                 key = TransferKey(
@@ -267,9 +324,14 @@ class AMRTransfer:
                 )
         face_centerings = (FACE_X_CENTERED, FACE_Y_CENTERED)
         for subjects, policy, layout in self._faces:
-            resolved_layout, dimension, ratio = self._layout_contract(
+            resolved_layout, dimension, ratios = self._layout_contract(
                 layout_plan, subjects[0], layout
             )
+            if len(set(ratios)) != 1:
+                raise NotImplementedError(
+                    "the selected face transfer provider requires homogeneous transitions"
+                )
+            ratio = ratios[0]
             for subject in subjects[1:]:
                 try:
                     subject_layout = layout_plan.layout_for(subject)
@@ -326,9 +388,14 @@ class AMRTransfer:
                     provider=provider,
                 )
         for subject, policy, layout in self._nodes:
-            resolved_layout, dimension, ratio = self._layout_contract(
+            resolved_layout, dimension, ratios = self._layout_contract(
                 layout_plan, subject, layout
             )
+            if len(set(ratios)) != 1:
+                raise NotImplementedError(
+                    "the selected node transfer provider requires homogeneous transitions"
+                )
+            ratio = ratios[0]
             kernel = policy.prolongation
             key = TransferKey(
                 NODE_SPACE,
@@ -354,9 +421,14 @@ class AMRTransfer:
                 provider=provider,
             )
         for subject, policy, layout in self._fields:
-            resolved_layout, dimension, ratio = self._layout_contract(
+            resolved_layout, dimension, ratios = self._layout_contract(
                 layout_plan, subject, layout
             )
+            if len(set(ratios)) != 1:
+                raise NotImplementedError(
+                    "the selected field materializer requires homogeneous transitions"
+                )
+            ratio = ratios[0]
             resolver.require(
                 subject,
                 TransferKey(
@@ -376,9 +448,14 @@ class AMRTransfer:
                 ),
             )
         for subject, policy, layout in self._caches:
-            resolved_layout, dimension, ratio = self._layout_contract(
+            resolved_layout, dimension, ratios = self._layout_contract(
                 layout_plan, subject, layout
             )
+            if len(set(ratios)) != 1:
+                raise NotImplementedError(
+                    "the selected cache materializer requires homogeneous transitions"
+                )
+            ratio = ratios[0]
             resolver.require(
                 subject,
                 TransferKey(

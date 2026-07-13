@@ -74,7 +74,8 @@ class _AmrSystemInstall(_AmrSystem):
         # (0) EARLY VALIDATION (shared with System._install_compiled): reject a compiled install missing a
         # required declared argument BEFORE any native mutation. Inert (reads arguments() metadata).
         validate_install_arguments(
-            self, compiled, instances, params, aux, solvers or field_plans)
+            self, compiled, instances, params, aux, solvers or field_plans,
+            field_plans=field_plans)
         if amr_transfer is not None:
             self._install_bootstrap_routes(amr_transfer)
 
@@ -212,7 +213,13 @@ class _AmrSystemInstall(_AmrSystem):
             from pops.runtime._amr_bootstrap_execution import execute_native_bootstrap
 
             self._bootstrap_execution = execute_native_bootstrap(
-                self, bootstrap_plan, initial_rows
+                self,
+                bootstrap_plan,
+                initial_rows,
+                {
+                    name: field_plan.native_options["provider_slot"]
+                    for name, field_plan in field_plans.items()
+                },
             )
 
         # (5/5b/6) COMPILED time Program: install_program on the AMR hierarchy, route the remaining

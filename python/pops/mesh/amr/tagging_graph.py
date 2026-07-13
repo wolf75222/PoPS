@@ -164,6 +164,9 @@ class _ThresholdPredicate(TagExpr):
             "indicator": self.indicator.canonical_identity(),
             "threshold": threshold,
         }
+        components = tuple(getattr(getattr(self.indicator, "space", None), "components", ()))
+        if len(components) == 1:
+            data["variable"] = components[0]
         context = getattr(self, "context", None)
         if context is not None:
             data["discrete_context"] = context.canonical_identity()

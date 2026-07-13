@@ -888,9 +888,8 @@ struct AmrSystem::Impl {
       leaves.reserve(tagging_spec->leaf_ops.size());
       for (std::size_t index = 0; index < tagging_spec->leaf_ops.size(); ++index) {
         const int block = block_index(tagging_spec->leaf_blocks[index]);
-        if (block < 0 || blocks[static_cast<std::size_t>(block)].is_compiled)
-          throw std::runtime_error(
-              "resolved AMR tagging names an unknown or compiled block");
+        if (block < 0)
+          throw std::runtime_error("resolved AMR tagging names an unknown block");
         const int component = detail::resolve_selected_component(
             "AmrSystem::resolved tagging", tagging_spec->leaf_blocks[index],
             runtime->block_cons_vars(static_cast<std::size_t>(block)),
@@ -910,9 +909,9 @@ struct AmrSystem::Impl {
         // The resolved data-only graph was installed above and is shared by bootstrap and regrid.
       } else if (bootstrap_tag_spec) {
         const int b = block_index(bootstrap_tag_spec->block);
-        if (b < 0 || blocks[static_cast<std::size_t>(b)].is_compiled)
+        if (b < 0)
           throw std::runtime_error(
-              "explicit AMR bootstrap tag provider names an unknown or compiled block");
+              "explicit AMR bootstrap tag provider names an unknown block");
         const int component = detail::resolve_selected_component(
             "AmrSystem::bootstrap tagging", bootstrap_tag_spec->block,
             runtime->block_cons_vars(static_cast<std::size_t>(b)),
@@ -926,9 +925,6 @@ struct AmrSystem::Impl {
         for (std::size_t b = 0; b < blocks.size(); ++b) {
           int component = 0;
           if (selected) {
-            if (blocks[b].is_compiled)
-              throw std::runtime_error(
-                  "explicit AMR bootstrap tag selector requires a native block");
             component = detail::resolve_selected_component(
                 "AmrSystem::bootstrap tagging", blocks[b].name,
                 runtime->block_cons_vars(b), refine_var_name, refine_var_role);

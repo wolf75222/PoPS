@@ -177,6 +177,12 @@ class AMRTaggingResolutionContext:
                 "AMR value indicator %s belongs to a different Case owner"
                 % handle.qualified_id)
         self.layout_plan.layout_for(handle)
+        components = tuple(getattr(getattr(handle, "space", None), "components", ()))
+        if len(components) != 1:
+            raise ValueError(
+                "AMR direct state indicators require a scalar state; state %s has components %s. "
+                "Select a typed component indicator explicitly."
+                % (handle.qualified_id, components))
         if action == "refine" and comparison == "gt":
             return Above(handle, threshold)
         if action == "coarsen" and comparison == "lt":
@@ -210,12 +216,42 @@ class AMRTaggingResolutionContext:
                 "compound indicators need their own resolve_for_amr_tagging protocol"
             )
         context = self._discrete_context(state)
+        components = tuple(getattr(getattr(state, "space", None), "components", ()))
+        if len(components) != 1:
+            raise ValueError(
+                "AMR gradient indicators require a scalar state; state %s has components %s. "
+                "Select a typed component indicator explicitly."
+                % (state.qualified_id, components))
         if action == "refine" and comparison == "gt":
             return GradientAbove(state, threshold, context)
         if action == "coarsen" and comparison == "lt":
             return GradientBelow(state, threshold, context)
         expected = "strict >" if action == "refine" else "strict <"
         raise ValueError("AMR %s gradient rule requires %s threshold" % (action, expected))
+
+    def resolve_comparison(self, predicate: Any, *, action: str) -> Any:
+        """Lower one comparison leaf; Boolean composition remains owned by Expr node protocols."""
+        comparison = getattr(predicate, "comparison", None)
+        left = getattr(predicate, "a", None)
+        right = getattr(predicate, "b", None)
+        if comparison not in {"lt", "gt"}:
+            raise ValueError("AMR tagging supports only strict < or > comparison leaves")
+        left_threshold = _threshold_candidate(left)
+        right_threshold = _threshold_candidate(right)
+        if (left_threshold is None) == (right_threshold is None):
+            raise TypeError(
+                "AMR comparison must contain exactly one runtime parameter threshold"
+            )
+        if left_threshold is not None:
+            comparison = {"lt": "gt", "gt": "lt"}[comparison]
+            indicator, threshold = right, left_threshold
+        else:
+            indicator, threshold = left, right_threshold
+        protocol = getattr(indicator, "resolve_for_amr_tagging", None)
+        if not callable(protocol):
+            raise TypeError("AMR indicator must implement resolve_for_amr_tagging(...)")
+        return protocol(
+            self, action=action, comparison=comparison, threshold=threshold)
 
 
 def _threshold(value: Any) -> ParamHandle:
@@ -241,32 +277,10 @@ def _threshold_candidate(value: Any) -> ParamHandle | None:
 
 
 def _resolve_predicate(predicate: Any, *, action: str, context: Any) -> Any:
-    comparison = getattr(predicate, "comparison", None)
-    left = getattr(predicate, "a", None)
-    right = getattr(predicate, "b", None)
-    if comparison not in {"lt", "gt"}:
-        raise ValueError("AMR tagging supports only strict < or > comparisons")
-    left_threshold = _threshold_candidate(left)
-    right_threshold = _threshold_candidate(right)
-    if (left_threshold is None) == (right_threshold is None):
-        raise TypeError(
-            "AMR comparison must contain exactly one runtime parameter threshold"
-        )
-    if left_threshold is not None:
-        comparison = {"lt": "gt", "gt": "lt"}[comparison]
-        indicator, threshold = right, left_threshold
-    else:
-        indicator, threshold = left, right_threshold
-    protocol = getattr(indicator, "resolve_for_amr_tagging", None)
+    protocol = getattr(predicate, "resolve_for_amr_predicate", None)
     if not callable(protocol):
-        raise TypeError(
-            "AMR indicator must implement resolve_for_amr_tagging(...)")
-    return protocol(
-        context,
-        action=action,
-        comparison=comparison,
-        threshold=threshold,
-    )
+        raise TypeError("AMR predicate must implement resolve_for_amr_predicate(...)")
+    return protocol(context, action=action)
 
 
 def _union(values: list[Any]) -> Any:
@@ -278,14 +292,15 @@ def _union(values: list[Any]) -> Any:
 
 
 def resolve_tagging(
-    authoring: AMRTagging,
+    authoring: Any,
     context: AMRTaggingResolutionContext,
 ) -> ResolvedTaggingAuthority:
     """Resolve an object-level priority list into one authenticated inert tag graph."""
     from pops.mesh.amr import TaggingGraph
 
-    if type(authoring) is not AMRTagging:
-        raise TypeError("resolve_tagging requires an exact AMRTagging value")
+    for method in ("resolve_references", "inspect"):
+        if not callable(getattr(authoring, method, None)):
+            raise TypeError("resolve_tagging authoring must implement %s()" % method)
     if type(context) is not AMRTaggingResolutionContext:
         raise TypeError("resolve_tagging requires an AMRTaggingResolutionContext")
     resolved = authoring.resolve_references(context.resolve)
@@ -519,21 +534,25 @@ def _hierarchy(
 
 def resolve_amr_authorities(
     *,
-    hierarchy: AMRHierarchy,
-    tagging: AMRTagging,
-    regrid: AMRRegrid,
+    hierarchy: Any,
+    tagging: Any,
+    regrid: Any,
     transfer: Any,
-    execution: AMRExecution,
+    execution: Any,
     context: AMRResolutionContext,
 ) -> ResolvedAMRAuthorities:
     """Resolve every adaptive-layout concern exactly once from its owning declaration."""
-    from pops.mesh.amr import AMRTransfer
-
-    if type(hierarchy) is not AMRHierarchy or type(tagging) is not AMRTagging \
-            or type(regrid) is not AMRRegrid or type(execution) is not AMRExecution:
-        raise TypeError("AMR layout carries an unsupported object-level authority")
-    if type(transfer) is not AMRTransfer:
-        raise TypeError("AMR layout transfer must be an exact AMRTransfer")
+    protocols = {
+        "hierarchy": (hierarchy, ("to_data",)),
+        "tagging": (tagging, ("resolve_references", "resolve", "inspect")),
+        "regrid": (regrid, ("to_data",)),
+        "transfer": (transfer, ("resolve_references", "resolve", "inspect")),
+        "execution": (execution, ("to_data", "runtime_execution_data")),
+    }
+    for slot, (authority, methods) in protocols.items():
+        for method in methods:
+            if not callable(getattr(authority, method, None)):
+                raise TypeError("AMR %s authority must implement %s()" % (slot, method))
     if type(context) is not AMRResolutionContext:
         raise TypeError("AMR resolution requires an AMRResolutionContext")
     resolved_transfer = transfer.resolve_references(context.resolve).resolve(context.layout_plan)

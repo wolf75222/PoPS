@@ -332,6 +332,30 @@ def validate_operator_aux(manifest: Any, aux: Any, provided_named_aux: Any = ())
     return lines
 
 
+def field_plan_produced_aux(field_plans: Any) -> tuple[str, ...]:
+    """Return aux channels materialised by total resolved field install plans."""
+    produced = set()
+    for registration in (field_plans or {}).values():
+        operator = getattr(registration, "operator", None)
+        for output in getattr(operator, "outputs", ()):
+            name = getattr(output, "name", None)
+            if isinstance(name, str) and name:
+                produced.add(name)
+    return tuple(sorted(produced))
+
+
+def field_produced_aux(compiled: Any) -> tuple[str, ...]:
+    """Return aux channels materialised by resolved field providers in this artifact.
+
+    These channels are outputs, not bind inputs: requiring users to seed them via ``aux=`` creates a
+    second authority and can expose a stale value before the first field solve.  Read only the total
+    resolved install plans carried by the authenticated compiled artifact.
+    """
+    plan = getattr(compiled, "plan", None)
+    field_plans = getattr(plan, "field_plans", None) or {}
+    return field_plan_produced_aux(field_plans)
+
+
 def loaded_runtime_facts() -> Any:
     """Return exact live ABI/capability facts or fail before loading an artifact."""
     from collections.abc import Mapping
@@ -425,7 +449,7 @@ def collect_missing_arguments(args: Any, provided_blocks: Any, provided_params: 
 
 
 def validate_install_arguments(sim: Any, compiled: Any, instances: Any, params: Any, aux: Any,
-                               solvers: Any) -> Any:
+                               solvers: Any, *, field_plans: Any = None) -> Any:
     """Reject missing declared inputs and unreadable metadata before native mutation."""
     if compiled is None:
         return
@@ -449,7 +473,7 @@ def validate_install_arguments(sim: Any, compiled: Any, instances: Any, params: 
     }
     missing = collect_missing_arguments(
         args, provided_blocks, provided_param_ids,
-        set(aux) | provided_named_aux, set(solvers))
+        set(aux) | provided_named_aux | set(field_plan_produced_aux(field_plans)), set(solvers))
     if missing:
         raise ValueError("pops.bind: the compiled artifact is missing required argument(s):\n  "
                          + "\n  ".join(missing))
@@ -483,7 +507,8 @@ def run_bind_gates(compiled: Any, layout: Any, initial: Any, params: Any, aux: A
         groups.append(("platform-execution-field-view", validate_platform_bind(
             platform_manifest, execution_context, initial, layout)))
     groups += [
-        ("aux-required-by-operator", validate_operator_aux(manifest, aux)),
+        ("aux-required-by-operator", validate_operator_aux(
+            manifest, aux, provided_named_aux=field_produced_aux(compiled))),
         ("manifest-abi", validate_bind_manifest(manifest, runtime_facts)),
         ("layout-runtime", validate_layout_runtime_requirements(arguments, runtime_facts)),
         ("initial-state", validate_initial_state(manifest, arguments, layout, initial)),
@@ -494,6 +519,8 @@ def run_bind_gates(compiled: Any, layout: Any, initial: Any, params: Any, aux: A
 
 
 __all__ = ["validate_initial_state", "validate_runtime_param_domains", "validate_bind_manifest",
-           "validate_operator_aux", "operator_required_aux", "loaded_runtime_facts",
+           "validate_operator_aux", "operator_required_aux", "field_plan_produced_aux",
+           "field_produced_aux",
+           "loaded_runtime_facts",
            "aggregate_bind_refusals", "run_bind_gates",
            "collect_missing_arguments", "validate_install_arguments"]

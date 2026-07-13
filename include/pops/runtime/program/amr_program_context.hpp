@@ -309,17 +309,17 @@ class AmrProgramContext {
     (void)eng_->provider_potential(field);  // authenticate the exact resolved field route
     MultiFab& live = state(b);
     MultiFab published = live;
+    SolveReport report;
     try {
       live = u_stage;
-      eng_->solve_named_fields();
+      report = eng_->solve_named_fields(&field);
       live = std::move(published);
     } catch (...) {
       live = std::move(published);
       throw;
     }
-    solved_this_step_ = true;
-    SolveReport report;
-    report.mark_solved();
+    if (report.solved())
+      solved_this_step_ = true;
     return report;
   }
   /// Coupled multi-block field solve: deferred on AMR (the per-block summed-RHS at fine levels needs the
@@ -359,16 +359,16 @@ class AmrProgramContext {
       for (std::size_t i = 0; i < live.size(); ++i)
         *live[i] = std::move(published[i]);
     };
+    SolveReport report;
     try {
-      eng_->solve_named_fields();
+      report = eng_->solve_named_fields(&field);
       restore();
     } catch (...) {
       restore();
       throw;
     }
-    solved_this_step_ = true;
-    SolveReport report;
-    report.mark_solved();
+    if (report.solved())
+      solved_this_step_ = true;
     return report;
   }
 
@@ -884,6 +884,11 @@ class AmrProgramContext {
   void advance_attempt_(double dt, const char* operation, Advance&& advance) const {
     if (!(dt > 0.0))
       throw std::invalid_argument(std::string(operation) + " requires dt > 0");
+    // The Program writes directly into the live hierarchy while evaluating stages.  The flux ledger
+    // is transactional too, but it cannot restore state, topology, elliptic warm starts, histories,
+    // counters or field materialisations.  Snapshot the complete accepted engine state before even
+    // importing Program-owned rings so a typed rejected attempt is observationally atomic.
+    const auto saved_engine = eng_->step_snapshot();
     import_program_accepted_state_();
     const auto saved_flux = flux_ledger_;
     const auto saved_sync = synchronized_flux_;
@@ -928,6 +933,7 @@ class AmrProgramContext {
       publish_program_accepted_state_();
     } catch (...) {
       conservative_ledger_.rollback();
+      eng_->restore_step_snapshot(saved_engine);
       flux_ledger_ = saved_flux;
       synchronized_flux_ = saved_sync;
       rate_provenance_ = saved_rate_provenance;

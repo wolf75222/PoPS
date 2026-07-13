@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import heapq
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
@@ -420,9 +420,27 @@ class ConsumerGraph:
         if layout_plan.owner != case_owner:
             raise ValueError("ConsumerGraph and LayoutPlan belong to different Case authorities")
         if self._authoring:
-            return type(self)(
+            resolved = tuple(
                 node.resolve(resolver, layout_plan, owner=case_owner)
                 for node in self._authoring)
+            # A checkpoint authenticates the post-publication cursor set, so it is necessarily the
+            # final effect for its clock. Derive that ordering from semantics instead of asking users
+            # to repeat dependency handles that do not exist until after resolution.
+            ordered = []
+            for manifest in resolved:
+                if manifest.kind is not ConsumerKind.CHECKPOINT:
+                    ordered.append(manifest)
+                    continue
+                predecessors = tuple(
+                    row.handle for row in resolved
+                    if row.kind is not ConsumerKind.CHECKPOINT
+                    and row.schedule.domain.clock == manifest.schedule.domain.clock
+                )
+                ordered.append(replace(
+                    manifest,
+                    dependencies=tuple({*manifest.dependencies, *predecessors}),
+                ))
+            return type(self)(ordered)
         self.validate_references(resolver)
         expected_owner = case_owner.child(OwnerKind.CONSUMER, "graph")
         if any(manifest.handle.owner_path != expected_owner for manifest in self.nodes):

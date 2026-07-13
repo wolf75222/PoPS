@@ -7,6 +7,7 @@
 #include <pops/amr/hierarchy/amr_hierarchy.hpp>
 #include <pops/amr/tagging/cluster.hpp>
 #include <pops/amr/regridding/regrid.hpp>
+#include <pops/coupling/amr/amr_regrid_coupler.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/storage/fab2d.hpp>
 #include <pops/mesh/execution/for_each.hpp>
@@ -98,4 +99,36 @@ TEST(test_regrid, Runs) {
     regrid_level(h, 0, threshold_crit(), RegridParams{});
     EXPECT_EQ(h.num_levels(), 1) << "fine_removed";
   }
+}
+
+TEST(test_regrid, RejectsAProviderLayoutThatBreaksProperNesting) {
+  const BoxArray parents(std::vector<Box2D>{
+      Box2D{{4, 4}, {15, 27}}, Box2D{{16, 4}, {27, 27}}});
+  // Coarse footprint [14..17] crosses the parent-patch join. No single parent can supply the
+  // resolved one-cell stencil halo, even though the two parent patches are adjacent.
+  const BoxArray invalid(std::vector<Box2D>{Box2D{{28, 16}, {35, 31}}});
+  EXPECT_THROW(
+      validate_fine_layout_proper_nesting(invalid, parents, /*refinement_ratio=*/2, /*margin=*/1),
+      std::runtime_error);
+}
+
+TEST(test_regrid, ThirdLevelClusteringStaysInsideOneParentPatch) {
+  const Box2D parent_domain = Box2D::from_extents(32, 32);
+  const BoxArray parents(std::vector<Box2D>{
+      Box2D{{4, 4}, {15, 27}}, Box2D{{16, 4}, {27, 27}}});
+  TagBox tags(parent_domain);
+  // Tags touch both sides of the join. A domain-wide cluster would bridge the patches; the
+  // provider must instead return independently nested children.
+  for (int j = 10; j <= 18; ++j)
+    for (int i = 13; i <= 18; ++i)
+      tags(i, j) = 1;
+
+  auto [children, mapping] = regrid_compute_fine_layout(
+      std::move(tags), parent_domain, /*parent_level=*/1, /*margin=*/1,
+      /*coarse_replicated=*/true, ClusterParams{}, /*refinement_ratio=*/2, &parents);
+
+  ASSERT_GT(children.size(), 0);
+  EXPECT_EQ(mapping.size(), children.size());
+  EXPECT_NO_THROW(validate_fine_layout_proper_nesting(
+      children, parents, /*refinement_ratio=*/2, /*margin=*/1));
 }

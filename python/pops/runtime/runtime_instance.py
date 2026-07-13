@@ -23,7 +23,7 @@ from ._consumer_contracts import (
 from ._consumer_planning import plan_accepted_side_effects
 from ._consumer_transaction import ConsumerTransaction
 from ._runtime_component_manifests import component_manifests_for_install
-from ._runtime_consumers import RuntimeConsumerPublisher, RuntimeOutputSnapshot
+from ._runtime_consumers import RuntimeConsumerPublisher, RuntimeOutputSnapshot, _layout_identity
 from ._runtime_executor import install_runtime_executor
 from ._runtime_planning import build_runtime_plans
 from ._runtime_plan_io import thaw_data
@@ -111,7 +111,7 @@ class RuntimeInstance:
                 if row.handle.qualified_id == layout_id]
         if len(rows) != 1:
             raise KeyError("unknown RuntimeInstance layout %s" % layout_id)
-        return make_identity("layout", rows[0].to_data())
+        return _layout_identity(rows[0])
 
     def output_snapshot(self, manifest: Any, diagnostics: Any = ()) -> Any:
         return self._snapshot_builder.build(manifest, tuple(diagnostics))

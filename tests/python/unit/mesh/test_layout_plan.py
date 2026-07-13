@@ -66,7 +66,8 @@ def test_uniform_and_amr_share_one_level_plan_representation():
     plan = builder.resolve(states=[state], fields=[field], blocks=[block], providers=[forward])
     by_id = {row.handle.qualified_id: row for row in plan.layouts}
     assert [level.refinement for level in by_id[uniform.qualified_id].levels] == [1]
-    assert by_id[uniform.qualified_id].ratio == 1
+    assert by_id[uniform.qualified_id].transition_ratios == ()
+    assert by_id[adaptive.qualified_id].transition_ratios == (2,)
     assert [level.refinement for level in by_id[adaptive.qualified_id].levels] == [1, 2]
     assert type(by_id[uniform.qualified_id]) is type(by_id[adaptive.qualified_id])
 

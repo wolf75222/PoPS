@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import math
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -43,8 +44,40 @@ def _block_name(reference: Any, names: tuple[str, ...]) -> str:
     raise ValueError("consumer reference has no exact installed block owner")
 
 
+def _conservative_names(owner: Any, block: str) -> tuple[str, ...]:
+    """Read component order from the authenticated compiled artifact authority."""
+    from pops.codegen._artifact_models import artifact_model_metadata
+
+    rows = [
+        row for row in artifact_model_metadata(owner.install_plan.artifact)
+        if row.block_name == block
+    ]
+    if len(rows) != 1 or not rows[0].cons_names:
+        raise ValueError("installed block %r has no exact conservative component order" % block)
+    return rows[0].cons_names
+
+
+def _identity_payload(value: Any, *, path: str = "layout") -> Any:
+    """Project strict layout JSON into the float-free identity value language."""
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("%s contains a non-finite binary64 value" % path)
+        return {"binary64": value.hex()}
+    if isinstance(value, Mapping):
+        return {
+            key: _identity_payload(item, path="%s.%s" % (path, key))
+            for key, item in value.items()
+        }
+    if isinstance(value, (tuple, list)):
+        return [
+            _identity_payload(item, path="%s[%d]" % (path, index))
+            for index, item in enumerate(value)
+        ]
+    return value
+
+
 def _layout_identity(layout: Any) -> Identity:
-    return make_identity("layout", layout.to_data())
+    return make_identity("layout", _identity_payload(layout.to_data()))
 
 
 def _scalar(value: Any) -> float | None:
@@ -233,7 +266,7 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         values = []
         for quantity in manifest.quantities:
             block = _block_name(quantity.reference, names)
-            variables = tuple(engine.variable_names(block, "conservative"))
+            variables = _conservative_names(self._owner, block)
             if quantity.reference.local_id in variables:
                 component = variables.index(quantity.reference.local_id)
             elif len(variables) == 1:
@@ -342,8 +375,12 @@ class RuntimeOutputSnapshot:
         import numpy as np
 
         engine = self._owner.native_executor
-        nx, ny = int(engine.nx()), int(engine.ny())
-        scale = layout.ratio ** level
+        nx = int(engine.nx())
+        # The current native AMR provider is an exact square-grid authority and
+        # deliberately exposes one base extent.  Uniform systems expose both
+        # extents independently.
+        ny = nx if layout.adaptive else int(engine.ny())
+        scale = layout.levels[level].refinement
         nx, ny = nx * scale, ny * scale
         length = _layout_length(layout, engine)
         boxes = ((0, 0, ny, nx),)
@@ -358,7 +395,10 @@ class RuntimeOutputSnapshot:
             for level_index, ilo, jlo, ihi, jhi in engine.patch_boxes():
                 if int(level_index) != level + 1:
                     continue
-                ratio = layout.ratio
+                ratio = (
+                    layout.levels[level + 1].refinement
+                    // layout.levels[level].refinement
+                )
                 coverage[int(jlo) // ratio:(int(jhi) + 1 + ratio - 1) // ratio,
                          int(ilo) // ratio:(int(ihi) + 1 + ratio - 1) // ratio] = True
         spacing = (length / nx, length / ny)
@@ -373,7 +413,7 @@ class RuntimeOutputSnapshot:
         import numpy as np
 
         engine = self._owner.native_executor
-        names = tuple(engine.variable_names(block, "conservative"))
+        names = _conservative_names(self._owner, block)
         if layout.adaptive:
             communicator = self._owner.execution_context.communicator.handle
             size = 1 if communicator is None else int(communicator.Get_size())
@@ -382,10 +422,12 @@ class RuntimeOutputSnapshot:
                     "collective adaptive output requires native rank-owned patch state; "
                     "the current AMR facade exposes only full-grid local/global buffers"
                 )
-            multi = int(engine.n_blocks()) != 1
+            # A compiled Program can force the shared AmrRuntime engine for one
+            # block, so block count is not a valid state-access discriminator.
+            multi = bool(engine.uses_runtime_engine())
             getter = engine.block_level_state if multi else engine.level_state
             raw = getter(block, level) if multi else getter(level)
-            n = int(engine.nx()) * (layout.ratio ** level)
+            n = int(engine.nx()) * layout.levels[level].refinement
             values = np.asarray(raw, dtype=np.float64).reshape(len(names), n, n)
             return (ArrayPiece((0, 0), (n, n), values),), names
         if collective:
@@ -400,10 +442,47 @@ class RuntimeOutputSnapshot:
             len(names), int(engine.ny()), int(engine.nx()))
         return (ArrayPiece((0, 0), (int(engine.ny()), int(engine.nx())), values),), names
 
+    def _field(
+        self, reference: Any, layout: Any, level: int, *, collective: bool,
+    ) -> tuple[tuple[ArrayPiece, ...], tuple[str, ...]]:
+        """Read one resolved field by its authenticated native provider slot."""
+        import numpy as np
+
+        plans = self._owner.install_plan.artifact.plan.field_plans
+        plan = plans.get(reference.local_id)
+        if plan is None:
+            raise ValueError(
+                "scientific output field %r has no resolved install plan"
+                % reference.local_id
+            )
+        engine = self._owner.native_executor
+        if collective:
+            communicator = self._owner.execution_context.communicator.handle
+            size = 1 if communicator is None else int(communicator.Get_size())
+            if size > 1:
+                raise NotImplementedError(
+                    "collective field output requires native rank-owned field patches"
+                )
+        slot = plan.native_options["provider_slot"]
+        if layout.adaptive:
+            raw = engine._s.field_potential_level_global(slot, level)
+            n = int(engine.nx()) * layout.levels[level].refinement
+        else:
+            if level != 0:
+                raise ValueError("uniform field output has only level zero")
+            raw = engine._s.field_potential_global(slot)
+            n = int(engine.nx())
+        values = np.asarray(raw, dtype=np.float64).reshape(1, n, n)
+        return (
+            (ArrayPiece((0, 0), (n, n), values),),
+            (plan.operator.unknown.local_id,),
+        )
+
     def build(self, manifest: Any, diagnostics: tuple[DiagnosticPayload, ...]) \
             -> tuple[OutputSnapshot, OutputRequest]:
         geometries, fields, keys = {}, [], []
         names = tuple(self._owner.native_executor.block_names())
+        from pops.problem.handles import FieldHandle
         for quantity in manifest.quantities:
             layout = self._layout(quantity.layout_id)
             levels = quantity.levels or tuple(row.index for row in layout.levels)
@@ -411,12 +490,20 @@ class RuntimeOutputSnapshot:
             for level in levels:
                 geometry = self._geometry(layout, level)
                 geometries[geometry.key] = geometry
-                pieces, components = self._state(
-                    block,
-                    layout,
-                    level,
-                    collective=manifest.parallel_mode is ParallelMode.COLLECTIVE,
-                )
+                if isinstance(quantity.reference, FieldHandle):
+                    pieces, components = self._field(
+                        quantity.reference,
+                        layout,
+                        level,
+                        collective=manifest.parallel_mode is ParallelMode.COLLECTIVE,
+                    )
+                else:
+                    pieces, components = self._state(
+                        block,
+                        layout,
+                        level,
+                        collective=manifest.parallel_mode is ParallelMode.COLLECTIVE,
+                    )
                 key = FieldKey(
                     quantity.reference,
                     self._owner.component_manifests[block].manifest_digest,

@@ -164,7 +164,8 @@ def test_runtime_tagging_compiles_refine_and_coarsen_to_data_only_vm():
     (blocks, variables, leaf_ops, thresholds, refine_ops, refine_args,
      coarsen_ops, coarsen_args, min_cycles, equality, conflict, provider) = native.call
     assert blocks == ["tracer", "tracer"]
-    assert variables == ["U", "U"]
+    # The runtime VM consumes the scalar component token, not the aggregate state handle.
+    assert variables == ["u", "u"]
     assert leaf_ops == [4, 5]
     assert thresholds == [0.10, 0.04]
     assert (refine_ops, refine_args) == ([4], [0])
@@ -173,9 +174,11 @@ def test_runtime_tagging_compiles_refine_and_coarsen_to_data_only_vm():
     assert provider == authorities.tagging.graph.qualified_id
 
 
-def test_layout_refuses_unrepresentable_transition_ratios_without_substitution():
+def test_layout_preserves_heterogeneous_transitions_before_provider_refusal():
     from pops.amr import AMRHierarchy
     from pops.layouts import AMR
+    from pops.mesh.layout_plan import LayoutHandle, normalize_layout
+    from pops.model import OwnerPath
 
     target = _example().build_final_case()
     authored = target.layout
@@ -188,8 +191,16 @@ def test_layout_refuses_unrepresentable_transition_ratios_without_substitution()
         execution=authored.execution,
     )
     status = heterogeneous.available()
-    assert not status.ok
-    assert "heterogeneous transition ratios" in status.reason
+    assert status.ok
+    normalized = normalize_layout(
+        LayoutHandle("heterogeneous", owner=OwnerPath.case("ratio-proof")),
+        heterogeneous,
+        handle_resolver=pops.validate(target.authoring.case).resolve,
+    )
+    assert normalized.transition_ratios == (2, 4)
+    assert tuple(level.refinement for level in normalized.levels) == (1, 2, 8)
+    with pytest.raises((ValueError, NotImplementedError), match="transition|provider|ratio"):
+        pops.resolve(pops.validate(target.authoring.case), layout=heterogeneous)
 
 
 def test_symbolic_gradient_indicator_cannot_escape_discrete_resolution():

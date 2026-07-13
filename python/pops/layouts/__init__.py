@@ -5,11 +5,40 @@ controls remain separate authorities.
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from pops.descriptors_report import CapabilitySet, RequirementSet
 from pops.mesh._descriptor import Availability, MeshDescriptor
 from pops.mesh.layouts import Uniform
+
+
+_AMR_AUTHORITY_PROTOCOLS = {
+    "hierarchy": ("to_data",),
+    "tagging": ("inspect", "resolve_references", "resolve"),
+    "regrid": ("to_data",),
+    "transfer": ("inspect", "resolve_references", "resolve"),
+    "execution": ("to_data", "runtime_execution_data"),
+}
+
+
+def _authority_data(value: Any, slot: str) -> dict[str, Any]:
+    """Authenticate one small AMR authority protocol without naming an implementation class."""
+    for method in _AMR_AUTHORITY_PROTOCOLS[slot]:
+        if not callable(getattr(value, method, None)):
+            raise TypeError("AMR.%s must implement %s()" % (slot, method))
+    projection = value.inspect if slot in {"tagging", "transfer"} else value.to_data
+    data = projection()
+    if not isinstance(data, dict):
+        raise TypeError("AMR.%s identity projection must be a mapping" % slot)
+    authority_type = data.get("authority_type")
+    if not isinstance(authority_type, str) or not authority_type:
+        raise ValueError("AMR.%s identity must authenticate authority_type" % slot)
+    try:
+        json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise TypeError("AMR.%s identity must be strict JSON data" % slot) from exc
+    return data
 
 
 class AMR(MeshDescriptor):
@@ -66,29 +95,24 @@ class AMR(MeshDescriptor):
         return self._execution
 
     def _validate_authorities(self) -> None:
-        from pops.amr import (
-            AMRExecution,
-            AMRHierarchy,
-            AMRRegrid,
-            AMRTagging,
-            AMRTransfer,
-        )
-
-        expected = (
-            (self.hierarchy, AMRHierarchy, "hierarchy"),
-            (self.tagging, AMRTagging, "tagging"),
-            (self.regrid, AMRRegrid, "regrid"),
-            (self.transfer, AMRTransfer, "transfer"),
-            (self.execution, AMRExecution, "execution"),
-        )
-        for value, kind, name in expected:
-            if type(value) is not kind:
-                raise TypeError("AMR.%s must be an exact %s" % (name, kind.__name__))
+        authorities = {
+            "hierarchy": self.hierarchy, "tagging": self.tagging,
+            "regrid": self.regrid, "transfer": self.transfer,
+            "execution": self.execution,
+        }
+        data = {slot: _authority_data(value, slot) for slot, value in authorities.items()}
         for method in ("validate", "capabilities", "requirements", "options", "to_dict"):
             if not callable(getattr(self.grid, method, None)):
                 raise TypeError("AMR.grid must implement %s()" % method)
-        if self.hierarchy.max_levels < 2:
+        hierarchy = data["hierarchy"]
+        levels = hierarchy.get("max_levels")
+        ratios = hierarchy.get("ratios")
+        if isinstance(levels, bool) or not isinstance(levels, int) or levels < 2:
             raise ValueError("AMR hierarchy requires at least one coarse/fine transition")
+        if not isinstance(ratios, list) or len(ratios) != levels - 1 or any(
+                isinstance(ratio, bool) or not isinstance(ratio, int) or ratio < 2
+                for ratio in ratios):
+            raise ValueError("AMR hierarchy identity must preserve every transition ratio")
 
     def requirements(self) -> RequirementSet:
         return RequirementSet({
@@ -101,15 +125,15 @@ class AMR(MeshDescriptor):
     def capabilities(self) -> CapabilitySet:
         self._validate_authorities()
         grid = self.grid.capabilities().to_dict()
-        ratio = self.hierarchy.uniform_ratio
+        hierarchy = _authority_data(self.hierarchy, "hierarchy")
+        execution = _authority_data(self.execution, "execution")
         return CapabilitySet({
             "layout": "amr",
             "supports_amr": True,
             "dim": grid.get("dim"),
-            "max_levels": self.hierarchy.max_levels,
-            "ratio": ratio if ratio is not None else 1,
-            "transition_ratios": list(self.hierarchy.ratios),
-            "execution": self.execution.mode,
+            "max_levels": hierarchy["max_levels"],
+            "transition_ratios": list(hierarchy["ratios"]),
+            "execution": execution["mode"],
         })
 
     def options(self) -> dict[str, Any]:
@@ -130,24 +154,8 @@ class AMR(MeshDescriptor):
     def available(self, context: Any = None) -> Availability:
         del context
         self._validate_authorities()
-        dimension = self.grid.capabilities().get("dim")
-        if dimension != 2:
-            return Availability.no(
-                "the installed native AMR provider supports exactly two spatial dimensions",
-                alternatives=["select a registered AMR hierarchy provider for this dimension"],
-            )
-        ratio = self.hierarchy.uniform_ratio
-        if ratio is None:
-            return Availability.no(
-                "the installed native hierarchy provider cannot preserve heterogeneous "
-                "transition ratios",
-                alternatives=["select a provider advertising per-transition ratios"],
-            )
-        if ratio != 2:
-            return Availability.no(
-                "the installed native transfer providers support refinement ratio 2",
-                alternatives=["AMRHierarchy(..., ratios=(2, ...))"],
-            )
+        # Provider availability is resolved later. The algorithm-neutral descriptor preserves the
+        # exact plan even when the installed native provider will fail closed before bind.
         return Availability.yes()
 
     def validate(self, context: Any = None) -> bool:

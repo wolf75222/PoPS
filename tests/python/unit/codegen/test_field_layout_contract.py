@@ -23,7 +23,7 @@ class ExtensionAMR:
         return CapabilitySet({
             "layout": "amr",
             "max_levels": 4,
-            "ratio": 2,
+            "transition_ratios": [2, 4, 2],
         })
 
 
@@ -35,15 +35,20 @@ def test_field_layout_contract_accepts_an_open_amr_extension_protocol() -> None:
     assert contract.kind == "amr"
     assert contract.mesh is layout.grid
     assert contract.levels == 4
-    assert contract.ratio == 2
+    assert contract.transition_ratios == (2, 4, 2)
+    assert contract.level_refinements == (1, 2, 8, 16)
     assert recipe["connectivity"]["graph"] == "amr-composite-cell-graph"
     assert recipe["levels"] == 4
-    assert recipe["ratio"] == 2
+    assert recipe["transition_ratios"] == [2, 4, 2]
+    assert recipe["level_refinements"] == [1, 2, 8, 16]
 
 
 def test_field_layout_contract_refuses_missing_hierarchy_evidence() -> None:
     layout = ExtensionAMR()
-    layout.capabilities = lambda: CapabilitySet({"layout": "amr", "ratio": 2})
+    layout.capabilities = lambda: CapabilitySet({
+        "layout": "amr",
+        "transition_ratios": [2],
+    })
 
     with pytest.raises(TypeError, match="max_levels must be an integer"):
         field_layout_contract(layout)

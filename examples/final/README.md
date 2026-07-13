@@ -1,8 +1,14 @@
-# Final scalar-advection acceptance target
+# Final executable acceptance targets
 
 [`EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py`](EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py)
 is the final public target, not a migration example. It deliberately contains one authority per
 concern and no fallback to an older or lower-level API.
+
+[`EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py`](EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py)
+extends the same public lifecycle with an explicit additive IMEX tableau, typed field solves,
+two-level subcycled AMR, conservative transfers and accepted-state consumers. Its matching
+contract note is
+[`docs/design/final-advection-imex-amr.md`](../../docs/design/final-advection-imex-amr.md).
 
 ## Public contract
 

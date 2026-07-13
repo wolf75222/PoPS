@@ -338,6 +338,22 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         self._fields[h.name] = h
         return h
 
+    def field_spaces(self) -> Any:
+        """Return the exact solved-field declarations owned by this blackboard model.
+
+        The generic field compiler consumes this protocol directly.  A scalar
+        ``model.field(name)`` is therefore a one-component field space instead
+        of being confused with the separate auxiliary ``fields`` context.
+        """
+        if self._multi_module is not None:
+            return self._multi_module.field_spaces()
+        from pops.model import FieldSpace
+
+        return {
+            name: FieldSpace(name=name, components=(name,), layout="cell")
+            for name in self._fields
+        }
+
     def vector(self, name: Any, *, frame: Any, components: Any) -> Any:
         """Define a physical vector by the typed axes of its frame."""
         name = require_name(name, "vector field name")

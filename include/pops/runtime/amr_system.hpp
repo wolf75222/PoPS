@@ -880,6 +880,7 @@ class AmrSystem {
   /// @}
 
   int nx() const;
+  /// Generated Program shared libraries read the accepted clock through the flat loader ABI.
   POPS_EXPORT double time() const;
   /// MACRO-STEP counter (0-indexed; incremented by step / advance / step_cfl), parity with
   /// System::macro_step. Required for checkpoint/restart (the stride / regrid cadence depends on

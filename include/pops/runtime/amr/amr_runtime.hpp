@@ -1137,6 +1137,10 @@ class AmrRuntime {
         (*block.levels)[static_cast<std::size_t>(k)].aux = &aux_[static_cast<std::size_t>(k)];
     mg_.phi() = saved.phi;
     mg_.rhs() = saved.poisson_rhs;
+    // Solver objects own topology-specific BoxArrays.  Always rebuild them against the restored
+    // accepted hierarchy before replaying their warm starts; a rejected regrid/bootstrap may have
+    // replaced a level-local solver with FAC (or changed the number of level-local solvers).
+    invalidate_named_field_topology();
     for (auto it = named_fields_.begin(); it != named_fields_.end();) {
       const auto accepted = saved.named_fields.find(it->first);
       if (accepted == saved.named_fields.end()) {
@@ -1494,12 +1498,14 @@ class AmrRuntime {
     field.plan.boundary_context.point = point;
     if (!field.plan.has_boundary_kernel || !field.plan.boundary_kernel.observes_iteration)
       field.plan.boundary_context.point.iteration = 0;
-    for (auto& solver : field.level_mg)
-      solver->set_boundary_context(field.plan.boundary_context);
-    if (field.mg && field.level_mg.empty())
-      field.mg->set_boundary_context(field.plan.boundary_context);
-    if (field.fac)
-      field.fac->set_boundary_context(field.plan.boundary_context);
+    if (field.plan.has_boundary_kernel) {
+      for (auto& solver : field.level_mg)
+        solver->set_boundary_context(field.plan.boundary_context);
+      if (field.mg && field.level_mg.empty())
+        field.mg->set_boundary_context(field.plan.boundary_context);
+      if (field.fac)
+        field.fac->set_boundary_context(field.plan.boundary_context);
+    }
   }
 
   void set_field_boundary_parameters(const std::string& provider_slot,
@@ -1513,12 +1519,14 @@ class AmrRuntime {
     *plan.boundary_parameters = parameters;
     plan.boundary_context.parameters = plan.boundary_parameters.get();
     plan.boundary_context.parameter_count = static_cast<int>(parameters.size());
-    for (auto& solver : found->second.level_mg)
-      solver->set_boundary_context(plan.boundary_context);
-    if (found->second.mg && found->second.level_mg.empty())
-      found->second.mg->set_boundary_context(plan.boundary_context);
-    if (found->second.fac)
-      found->second.fac->set_boundary_context(plan.boundary_context);
+    if (plan.has_boundary_kernel) {
+      for (auto& solver : found->second.level_mg)
+        solver->set_boundary_context(plan.boundary_context);
+      if (found->second.mg && found->second.level_mg.empty())
+        found->second.mg->set_boundary_context(plan.boundary_context);
+      if (found->second.fac)
+        found->second.fac->set_boundary_context(plan.boundary_context);
+    }
   }
 
   void set_field_boundary_dependencies(const std::string& provider_slot,
@@ -1912,9 +1920,11 @@ class AmrRuntime {
   /// default Poisson block above (steps 2-4) but per named field, reusing a DEDICATED GeometricMG. The
   /// default phi/grad (comps 0..2) are never touched. No-op without a named field (default-only path
   /// stays bit-identical).
-  void solve_named_fields(const std::string* selected = nullptr) {
+  SolveReport solve_named_fields(const std::string* selected = nullptr) {
+    SolveReport completed;
+    completed.mark_solved();
     if (named_fields_.empty())
-      return;
+      return completed;
     const Real dx = geom_.dx(), dy = geom_.dy();
     for (auto& [field, nf] : named_fields_) {
       if (selected != nullptr && field != *selected)
@@ -1984,6 +1994,7 @@ class AmrRuntime {
                   published_phi[static_cast<std::size_t>(k)]);
         }
       };
+      const SolveReport* attempted_report = nullptr;
       try {
         if (nf.fac) {
           std::vector<const MultiFab*> rhs_levels;
@@ -1992,7 +2003,9 @@ class AmrRuntime {
           for (int k = 0; k < nlev_; ++k)
             rhs_levels.push_back(&nf.fac->rhs_level(k));
           require_field_nullspace_compatible(rhs_levels, nf.nullspace);
+          attempted_report = &nf.fac->last_solve_report();
           nf.fac->solve();
+          completed = nf.fac->last_solve_report();
         } else {
           for (int k = 0; k < static_cast<int>(nf.level_mg.size()); ++k) {
             auto& solver = *nf.level_mg[static_cast<std::size_t>(k)];
@@ -2001,19 +2014,28 @@ class AmrRuntime {
               require_field_nullspace_compatible(
                   std::vector<const MultiFab*>{&solver.rhs()},
                   nf.level_nullspace[static_cast<std::size_t>(k)], k);
+            attempted_report = &solver.last_solve_report();
             if (k == 0 && nf.plan.has_boundary_kernel &&
                 nf.plan.boundary_kernel.observes_iteration)
               solver.solve();
             else
               solver.solve(nf.plan.mg_opts.rel_tol, nf.plan.mg_opts.max_cycles,
                            nf.plan.mg_opts.abs_tol);
-            if (!solver.last_solve_report().solved())
-              throw std::runtime_error(std::string("AMR field linear solve failed: ") +
-                                       solver.last_solve_report().status_name());
+            completed = solver.last_solve_report();
+            if (!completed.solved()) {
+              restore_published();
+              return completed;
+            }
           }
         }
       } catch (...) {
         restore_published();
+        // The nonlinear and composite solvers historically throw after recording a typed,
+        // collective rejection.  Preserve that report as data; unrelated capability, boundary,
+        // nullspace, and configuration exceptions still propagate unchanged.
+        if (attempted_report != nullptr && attempted_report->failed() &&
+            attempted_report->action == SolveAction::kRejectAttempt)
+          return *attempted_report;
         throw;
       }
       device_fence();  // CRITICAL: the V-cycle must finish before phi is read (same invariant as mg_)
@@ -2088,6 +2110,7 @@ class AmrRuntime {
         }
       }
     }
+    return completed;
   }
 
   struct TagVmValue {
@@ -2315,9 +2338,10 @@ class AmrRuntime {
       throw std::runtime_error(
           "AmrRuntime::bootstrap_next_level : no resolved tagging predicate");
     TagBox grown = grow_tags(tag_union(parts), regrid_grow_, pdom);
+    const BoxArray* parents = pk > 0 ? &hierarchy_.ba[pk] : nullptr;
     auto [fb, dmap] = regrid_compute_fine_layout(
         std::move(grown), pdom, pk, regrid_margin_, replicated_coarse_, cluster_,
-        refinement_ratio);
+        refinement_ratio, parents);
     if (fb.size() == 0)
       throw std::runtime_error(
           "AmrRuntime::bootstrap_next_level : resolved tagging produced no fine cells");
@@ -2343,6 +2367,8 @@ class AmrRuntime {
     for (auto& block : blocks_)
       for (int level = 0; level < nlev_; ++level)
         (*block.levels)[level].aux = &aux_[level];
+    invalidate_named_field_topology();
+    ++topology_epoch_;
   }
 
   void commit_bootstrap_level() {
@@ -2469,9 +2495,10 @@ class AmrRuntime {
     // (R4)+(R5) cross-rank collective reduction (if coarse distributed) + UNIQUE clustering -> SHARED
     // fine layout. all_reduce_or_inplace is called INSIDE regrid_compute_fine_layout for every
     // distributed parent: all ranks start from the SAME tag grid -> IDENTICAL fb/dmap per rank.
+    const BoxArray* parents = pk > 0 ? &hierarchy_.ba[pk] : nullptr;
     auto [fb, dmap] = regrid_compute_fine_layout(
         std::move(grown), pdom, pk, regrid_margin_, replicated_coarse_, cluster_,
-        refinement_ratio);  // ADC-616 params
+        refinement_ratio, parents);  // ADC-616 params + resolved proper nesting
 #ifdef POPS_HAS_MPI
     // MPI COLLECTIVE COUNT (Spec 5 criterion 43): regrid_compute_fine_layout issues ONE
     // all_reduce_or_inplace over the tag grid when the coarse is distributed (multi-rank) -- every rank
@@ -2521,14 +2548,7 @@ class AmrRuntime {
 
     // A composite field solver owns the fine BoxArrays.  Rebuild it lazily against the new exact
     // hierarchy; the coarse-only solver and its warm start remain valid.
-    for (auto& item : named_fields_) {
-      item.second.mg.reset();
-      item.second.level_mg.clear();
-      item.second.fac.reset();
-      item.second.nullspace = {};
-      item.second.level_nullspace.clear();
-      item.second.nullspace_ready = false;
-    }
+    invalidate_named_field_topology();
     ++topology_epoch_;
 
     // (R8) RESTORATION OF THE COVERAGE INVARIANT: re-solve so that phi / grad phi are consistent with
@@ -3176,6 +3196,17 @@ class AmrRuntime {
     bool nullspace_ready = false;
   };
 
+  void invalidate_named_field_topology() {
+    for (auto& [_, field] : named_fields_) {
+      field.mg.reset();
+      field.level_mg.clear();
+      field.fac.reset();
+      field.nullspace = {};
+      field.level_nullspace.clear();
+      field.nullspace_ready = false;
+    }
+  }
+
   void prepare_named_field_providers(NamedField& field) {
     if (!field.prepared_providers.empty())
       return;
@@ -3211,6 +3242,12 @@ class AmrRuntime {
       for (int k = 1; k < nlev_; ++k)
         fine_boxes.push_back((*blocks_[0].levels)[static_cast<std::size_t>(k)].U.box_array());
       nf.fac = std::make_shared<CompositeFacPoisson>(geom_, hierarchy_.ba[0], boundary, fine_boxes);
+      CompositeFacOptions fac_options;
+      fac_options.max_iters = nf.plan.mg_opts.max_cycles;
+      fac_options.tol = std::max(nf.plan.mg_opts.rel_tol, nf.plan.mg_opts.abs_tol);
+      fac_options.coarse_rel_tol = nf.plan.mg_opts.rel_tol;
+      fac_options.coarse_cycles = nf.plan.mg_opts.max_cycles;
+      nf.fac->set_options(fac_options);
       if (nf.plan.has_boundary_kernel)
         nf.fac->set_boundary_kernel(nf.plan.boundary_kernel, nf.plan.boundary_context);
       if (nf.plan.has_newton)

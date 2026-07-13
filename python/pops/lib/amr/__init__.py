@@ -6,13 +6,43 @@ users select physics-level policies and never author compiler ``AccuracyRequirem
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import Any, ClassVar
 
 
 class _ImmutableTransferPolicy:
     """Marker shared by constructor-only, frozen transfer policy values."""
 
     __pops_ir_immutable__: ClassVar[bool] = True
+
+    def amr_transfer_kernel_data(self) -> dict[str, Any]:
+        required = (
+            "native_route", "order", "ghost_depth", "dimensions",
+            "refinement_ratios", "conservative", "temporal",
+        )
+        return {
+            "schema_version": 1,
+            "kernel_type": "amr_transfer_kernel",
+            **{name: getattr(self, name) for name in required},
+        }
+
+    def amr_transfer_policy_data(self) -> dict[str, Any]:
+        kind = getattr(self, "policy_kind", None)
+        data: dict[str, Any] = {
+            "schema_version": 1,
+            "authority_type": "amr_transfer_policy",
+            "policy_kind": kind,
+        }
+        routes = {}
+        for name in getattr(type(self), "__dataclass_fields__", {}):
+            value = getattr(self, name)
+            protocol = getattr(value, "amr_transfer_kernel_data", None)
+            if callable(protocol):
+                routes[name] = protocol()
+        if routes:
+            data["routes"] = routes
+        if hasattr(self, "native_route"):
+            data["native_route"] = self.native_route
+        return data
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +115,7 @@ class BilinearNode(_ImmutableTransferPolicy):
 
 @dataclass(frozen=True, slots=True)
 class StateTransfer(_ImmutableTransferPolicy):
+    policy_kind: ClassVar[str] = "state"
     prolongation: ConservativeLinear = field(default_factory=ConservativeLinear)
     restriction: VolumeAverage = field(default_factory=VolumeAverage)
     coarse_fine: ConservativeCoarseFine = field(default_factory=ConservativeCoarseFine)
@@ -95,6 +126,7 @@ class StateTransfer(_ImmutableTransferPolicy):
 
 @dataclass(frozen=True, slots=True)
 class FaceTransfer(_ImmutableTransferPolicy):
+    policy_kind: ClassVar[str] = "face"
     prolongation: DivergencePreservingFace = field(
         default_factory=DivergencePreservingFace
     )
@@ -102,16 +134,19 @@ class FaceTransfer(_ImmutableTransferPolicy):
 
 @dataclass(frozen=True, slots=True)
 class NodeTransfer(_ImmutableTransferPolicy):
+    policy_kind: ClassVar[str] = "node"
     prolongation: BilinearNode = field(default_factory=BilinearNode)
 
 
 @dataclass(frozen=True, slots=True)
 class EllipticRecompute(_ImmutableTransferPolicy):
+    policy_kind: ClassVar[str] = "field"
     native_route: ClassVar[str] = "elliptic_solve"
 
 
 @dataclass(frozen=True, slots=True)
 class PatchTopologyRebuild(_ImmutableTransferPolicy):
+    policy_kind: ClassVar[str] = "cache"
     native_route: ClassVar[str] = "patch_topology"
 
 

@@ -30,7 +30,8 @@ Pure-symbolic helpers
 # -- node classes ---------------------------------------------------------
 from .expr import (
     Expr, _wrap,
-    Const, Var, _Bin, Add, Sub, Mul, Div, Pow, Compare, Neg, Sqrt, Abs, Sign,
+    Const, Var, _Bin, Add, Sub, Mul, Div, Pow, Compare,
+    BooleanAnd, BooleanOr, BooleanNot, Neg, Sqrt, Abs, Sign,
     # board nodes
     Equation, _BoardNode,
     Partial, Gradient, GradientMagnitude, Laplacian,
@@ -69,6 +70,7 @@ from .lowering import (
 __all__ = [
     # node classes
     "Expr", "Const", "Var", "ValueExpr", "parameter_value", "_Bin", "Add", "Sub", "Mul", "Div", "Pow", "Compare",
+    "BooleanAnd", "BooleanOr", "BooleanNot",
     "Neg", "Sqrt", "Abs", "Sign",
     # board nodes
     "Equation", "_BoardNode",

@@ -108,7 +108,8 @@ class _SystemUnifiedInstall(_System):
         # inputs (compiled.arguments()) and reject BEFORE any native call an install missing a REQUIRED
         # argument (instance / param / aux / solver). Inert (reads metadata); enforces only 'required',
         # so a valid install is unchanged.
-        self._validate_install_arguments(compiled, instances, params, aux, validation_solvers)
+        self._validate_install_arguments(
+            compiled, instances, params, aux, validation_solvers, field_plans=field_plans)
 
         # (1) FIELD SOLVERS first: set_poisson must run before install_program (the C++ section-24
         # solver requirement reads poisson_solver()). The DECLARED named elliptic fields (from the
@@ -226,12 +227,13 @@ class _SystemUnifiedInstall(_System):
         return build_bind_report(self, compiled)
 
     def _validate_install_arguments(self, compiled: Any, instances: Any, params: Any, aux: Any,
-                                    solvers: Any) -> Any:
+                                    solvers: Any, *, field_plans: Any = None) -> Any:
         """Early bind-input validation (Spec 5 sec.10): reject a COMPILED install missing a REQUIRED
         argument the artifact declares, BEFORE any native mutation. Thin wrapper around the shared
         module-level :func:`validate_install_arguments` (reused by ``AmrSystem._install_compiled``
         for parity)."""
-        validate_install_arguments(self, compiled, instances, params, aux, solvers)
+        validate_install_arguments(
+            self, compiled, instances, params, aux, solvers, field_plans=field_plans)
 
     # Host-testable alias of the pure core (mirrors _route_block_params: callable as
     # System._collect_missing_arguments without building a System).

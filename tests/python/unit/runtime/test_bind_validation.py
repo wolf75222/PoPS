@@ -330,6 +330,17 @@ def test_supplied_operator_aux_passes():
     assert bv.validate_operator_aux(manifest, aux={}, provided_named_aux={"B_z"}) == []
 
 
+def test_resolved_field_outputs_are_producers_not_bind_inputs():
+    output = SimpleNamespace(name="relaxation_potential")
+    registration = SimpleNamespace(operator=SimpleNamespace(outputs=(output,)))
+    artifact = SimpleNamespace(plan=SimpleNamespace(field_plans={"fields": registration}))
+
+    produced = bv.field_produced_aux(artifact)
+    assert produced == ("relaxation_potential",)
+    manifest = _Manifest(aux_required=["relaxation_potential"])
+    assert bv.validate_operator_aux(manifest, aux={}, provided_named_aux=produced) == []
+
+
 # ---------------------------------------------------------------------------
 # Aggregation
 # ---------------------------------------------------------------------------

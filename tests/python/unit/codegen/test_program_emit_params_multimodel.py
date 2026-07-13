@@ -30,6 +30,20 @@ class _Impl:
         return [self.parameter]
 
 
+class _SparseReadImpl(_Impl):
+    def __init__(self, owner):
+        super().__init__(owner, "alpha", 1.0)
+        self.unused = self.parameter
+        self.parameter = RuntimeParamRef(
+            "omega", 3.0,
+            handle=ParamHandle("omega", owner=owner, param_kind="runtime"),
+        )
+        self._source_terms = {"term": [self.parameter]}
+
+    def assign_runtime_indices(self):
+        return [self.unused, self.parameter]
+
+
 class _Program:
     def __init__(self, blocks, nodes):
         self._blocks = tuple(blocks)
@@ -102,6 +116,19 @@ def test_graph_collection_never_uses_the_first_models_parameter_table():
 
     assert program_param_entries(program, models) == [
         (1, "second_only", 0, 3.0),
+    ]
+
+
+def test_sparse_parameter_read_materialises_the_complete_stable_abi_vector():
+    owner = OwnerPath.model("sparse")
+    impl = _SparseReadImpl(owner)
+    block = _block("fluid", owner)
+    program = _Program((block,), (_node("source", block),))
+    models = _graph((("fluid", owner, impl),))
+
+    assert program_param_entries(program, models) == [
+        (0, "alpha", 0, 1.0),
+        (0, "omega", 1, 3.0),
     ]
 
 

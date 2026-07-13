@@ -122,7 +122,10 @@ class Uniform(MeshDescriptor):
         }
 
     def capabilities(self) -> Any:
-        return CapabilitySet({"layout": "uniform", "levels": 1, "supports_amr": False})
+        return CapabilitySet({
+            "layout": "uniform", "levels": 1, "supports_amr": False,
+            "transition_ratios": [],
+        })
 
     def resolve_for_case(self, resolver: Any) -> Uniform:
         """Authenticate optional declaration leaves through the common layout protocol."""
@@ -226,6 +229,7 @@ class AMR(MeshDescriptor):
         base_capabilities = self.base.capabilities().to_dict()
         return CapabilitySet({"layout": "amr", "max_levels": self.max_levels,
                               "ratio": self.ratio, "dim": base_capabilities.get("dim"),
+                              "transition_ratios": [self.ratio] * (self.max_levels - 1),
                               "supports_amr": True})
 
     def requirements(self) -> Any:

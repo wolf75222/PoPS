@@ -551,7 +551,7 @@ class ParaViewWriter:
             valid = snapshot.geometry(field.key).valid_cells.ravel()
             components = len(field.component_names) or 1
             start, end, ordinal = offsets[snapshot.geometry(field.key).key]
-            if field.component_names:
+            if field.component_names and components > 1:
                 combined = np.zeros((n_cells, components), dtype=dense.dtype)
                 values = dense.reshape((components, -1)).T[valid]
                 combined[start:end, :] = values
