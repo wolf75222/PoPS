@@ -302,6 +302,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_dense_eig
   test_route_ids
   test_brick_catalog
+  test_component_interfaces
   test_fill_boundary
   test_fill_boundary_cache
   test_copy_schedule_cache

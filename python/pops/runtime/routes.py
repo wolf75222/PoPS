@@ -25,6 +25,7 @@ from ._generated_component_routes import (
     COMPONENT_MANIFEST_SCHEMA_VERSION,
     ROUTE_ALIASES as _GENERATED_ROUTE_ALIASES,
     ROUTE_COMPONENT_DEFAULTS as _GENERATED_COMPONENT_DEFAULTS,
+    ROUTE_FAMILY_INTERFACES as _GENERATED_FAMILY_INTERFACES,
     ROUTE_METADATA as _GENERATED_ROUTE_METADATA,
     ROUTE_REGISTRY_SIGNATURE,
     ROUTE_REGISTRY_VERSION,
@@ -111,6 +112,7 @@ class Route(str):
     def component_contract(self) -> dict:
         """Complete schema-v2 contract input for registration as a component."""
         defaults = _COMPONENT_DEFAULTS
+        interfaces = _thaw_catalog_value(_FAMILY_INTERFACES[self.family])
         metadata = _thaw_catalog_value(self.metadata)
         summary = metadata.pop("summary", "")
         parameters = list(defaults["parameters"])
@@ -120,12 +122,12 @@ class Route(str):
             "uri": "pops://builtin/routes/%s/%s" % (self.family, self.token),
             "component_type": "route.%s" % self.family,
             "version": dict(defaults["version"]),
-            "facets": list(defaults["facets"]),
+            "facets": list(defaults["facets"]) + [row["name"] for row in interfaces],
             "signature": dict(defaults["signature"]),
             "reads": list(defaults["reads"]),
             "writes": list(defaults["writes"]),
             "parameters": parameters,
-            "interfaces": list(defaults["interfaces"]),
+            "interfaces": list(defaults["interfaces"]) + interfaces,
             "requirements": list(self.requirements),
             "capabilities": [{"name": key, "value": value}
                              for key, value in sorted(metadata.items())],
@@ -168,6 +170,7 @@ class Route(str):
 _TABLES = _freeze_catalog_value(_GENERATED_ROUTE_TABLES)
 _ALIASES = _freeze_catalog_value(_GENERATED_ROUTE_ALIASES)
 _COMPONENT_DEFAULTS = _freeze_catalog_value(_GENERATED_COMPONENT_DEFAULTS)
+_FAMILY_INTERFACES = _freeze_catalog_value(_GENERATED_FAMILY_INTERFACES)
 
 
 _REGISTRY = {
@@ -211,6 +214,27 @@ def component_manifests() -> tuple:
     """Canonical schema-v2 manifests for all builtin route components."""
     return tuple(route.component_manifest()
                  for family in _TABLES for route in _REGISTRY[family].values())
+
+
+def component_routes() -> tuple:
+    """Builtin route objects in the same deterministic order as their manifests."""
+    return tuple(route for family in _TABLES for route in _REGISTRY[family].values())
+
+
+def component_registry_snapshot(platform: Any = None):
+    """Register every builtin through the public manifest-adapter path and freeze it.
+
+    This is intentionally rebuilt from generated immutable data: there is no mutable process-global
+    builtin registry and external registries use the exact same ``ComponentRegistry.register`` call.
+    """
+    from pops.model import ComponentRegistry
+
+    registry = ComponentRegistry()
+    for route in component_routes():
+        registry.register(
+            route, route.component_manifest(), origin="builtin",
+            source_uri="pops://builtin/component-catalog", platform=platform)
+    return registry.freeze().snapshot()
 
 
 def route_registry_signature() -> str:
@@ -376,5 +400,6 @@ def _provider_factory(kind: Any) -> str:
 
 
 __all__ = ["Route", "resolve", "routes_of", "route_manifest", "component_manifests",
+           "component_routes", "component_registry_snapshot",
            "check_riemann_capability",
            "check_wave_speed_provider", "euler_layout_ok", "riemann_missing_capabilities"]

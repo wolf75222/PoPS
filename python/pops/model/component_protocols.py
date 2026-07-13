@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
 
+from ._generated_component_schema import COMPONENT_INTERFACE_SPECS
+
 
 @runtime_checkable
 class Requirement(Protocol):
@@ -54,6 +56,11 @@ class FallibleEvaluation(Protocol):
     def evaluate(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
+@runtime_checkable
+class Format(Protocol):
+    def format(self, value: Any) -> Any: ...
+
+
 FACET_PROTOCOLS = {
     "requirement": Requirement,
     "lowering": Lowering,
@@ -64,10 +71,19 @@ FACET_PROTOCOLS = {
     "restart": Restart,
     "report": Report,
     "fallible_evaluation": FallibleEvaluation,
+    "format": Format,
 }
+
+_generated_names = {row["name"] for row in COMPONENT_INTERFACE_SPECS}
+if set(FACET_PROTOCOLS) != _generated_names:
+    raise RuntimeError(
+        "component protocol declarations drifted from generated interface vocabulary: "
+        "missing=%r unknown=%r"
+        % (sorted(_generated_names - set(FACET_PROTOCOLS)),
+           sorted(set(FACET_PROTOCOLS) - _generated_names)))
 
 
 __all__ = [
     "Requirement", "Lowering", "Stencil", "Stability", "Provider", "Effects",
-    "Restart", "Report", "FallibleEvaluation", "FACET_PROTOCOLS",
+    "Restart", "Report", "FallibleEvaluation", "Format", "FACET_PROTOCOLS",
 ]

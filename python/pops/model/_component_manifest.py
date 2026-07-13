@@ -13,10 +13,15 @@ from pops.identity import Identity, canonical_bytes, make_identity
 from ._generated_component_schema import (
     COMPONENT_DIGEST_FIELDS,
     COMPONENT_EXTENSION_KINDS,
+    COMPONENT_INTERFACE_SPECS,
     COMPONENT_MANIFEST_SCHEMA_VERSION,
     COMPONENT_MANIFEST_TOP_LEVEL_FIELDS,
     COMPONENT_TARGET_FIELDS,
 )
+
+
+_INTERFACE_SPECS = MappingProxyType({row["name"]: MappingProxyType(dict(row))
+                                    for row in COMPONENT_INTERFACE_SPECS})
 
 
 class ComponentManifestError(ValueError):
@@ -298,6 +303,54 @@ def _entry_points(value: Any) -> Mapping[str, str]:
     return MappingProxyType(result)
 
 
+def _interfaces(value: Any, facets: tuple[str, ...],
+                entry_points: Mapping[str, str]) -> tuple[Any, ...]:
+    """Normalize exact small-interface bindings and enforce facet closure.
+
+    A component never relies on method-name guessing.  Every advertised facet has one binding:
+    ``method`` and ``value`` bind a named member on a source component, while ``entry_point`` binds
+    a declared native/AOT entry point.  The same declaration drives Python and native adapters.
+    """
+    rows = _semantic_set(value, path="interfaces")
+    normalized: list[Mapping[str, str]] = []
+    names: set[str] = set()
+    for index, item in enumerate(rows):
+        path = f"interfaces[{index}]"
+        row = _exact_mapping(item, {"name", "mode", "binding"}, path=path)
+        name = _canonical_string(row["name"], path=f"{path}.name",
+                                 pattern=r"[a-z][a-z0-9_]*")
+        if name not in _INTERFACE_SPECS:
+            _refuse("unknown_component_interface", f"{path}.name",
+                    f"unknown component interface {name!r}", evidence=name)
+        if name in names:
+            _refuse("duplicate_component_interface", f"{path}.name",
+                    f"component interface {name!r} is declared more than once")
+        names.add(name)
+        mode = _canonical_string(row["mode"], path=f"{path}.mode")
+        if mode not in {"method", "value", "entry_point"}:
+            _refuse("invalid_interface_mode", f"{path}.mode",
+                    "interface mode must be method, value, or entry_point", evidence=mode)
+        binding = _canonical_string(row["binding"], path=f"{path}.binding",
+                                    pattern=r"[A-Za-z_][A-Za-z0-9_]*")
+        if mode == "entry_point" and binding not in entry_points:
+            _refuse("missing_interface_entry_point", f"{path}.binding",
+                    f"interface {name!r} binds undeclared entry point {binding!r}",
+                    evidence={"declared": sorted(entry_points)})
+        normalized.append(MappingProxyType({
+            "name": name, "mode": mode, "binding": binding,
+        }))
+    facet_names = set(facets)
+    if names != facet_names:
+        _refuse(
+            "interface_facet_mismatch", "interfaces",
+            "facets and interface declarations must name the same exact set",
+            evidence={"missing": sorted(facet_names - names),
+                      "undeclared_facets": sorted(names - facet_names)},
+        )
+    normalized.sort(key=lambda row: (len(canonical_bytes(row)), canonical_bytes(row)))
+    return tuple(normalized)
+
+
 def _extension_registry(value: Any) -> dict[tuple[str, int], ComponentExtensionSchema]:
     if value is None:
         return {}
@@ -417,7 +470,7 @@ class ComponentManifest:
         object.__setattr__(self, "facets", _string_set(self.facets, path="facets"))
         object.__setattr__(self, "signature", _freeze(self.signature, path="signature"))
         for name in (
-            "reads", "writes", "parameters", "interfaces", "requirements", "capabilities",
+            "reads", "writes", "parameters", "requirements", "capabilities",
             "effects", "layouts", "clocks", "conservation",
         ):
             object.__setattr__(self, name, _semantic_set(getattr(self, name), path=name))
@@ -426,6 +479,8 @@ class ComponentManifest:
         object.__setattr__(self, "restart", _restart(self.restart))
         object.__setattr__(self, "precision", _precision(self.precision))
         object.__setattr__(self, "entry_points", _entry_points(self.entry_points))
+        object.__setattr__(self, "interfaces", _interfaces(
+            self.interfaces, self.facets, self.entry_points))
         object.__setattr__(self, "extensions", _extensions(self.extensions, extension_schemas))
 
         semantic = self._semantic_data()

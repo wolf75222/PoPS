@@ -25,6 +25,10 @@ def _manifest(**changes):
         "component_type": "reconstruction",
         "version": "1.0.0",
         "facets": ("lowering", "stencil"),
+        "interfaces": (
+            {"name": "lowering", "mode": "method", "binding": "lower"},
+            {"name": "stencil", "mode": "method", "binding": "stencil"},
+        ),
         "signature": {"kind": "reconstruction", "order": 2},
         "target": {
             "variants": [{

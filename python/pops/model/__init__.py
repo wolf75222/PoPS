@@ -57,6 +57,7 @@ from .registry import DeclarationIndex, OperatorRegistry
 from .component_protocols import (
     Effects,
     FallibleEvaluation,
+    Format,
     Lowering,
     Provider,
     Report,
@@ -64,6 +65,15 @@ from .component_protocols import (
     Restart,
     Stability,
     Stencil,
+)
+from .component_adapters import (
+    ComponentAdapter,
+    ComponentInterfaceError,
+    ComponentProvenance,
+    EvaluationOutcome,
+    InterfaceBinding,
+    InterfaceSpec,
+    adapt_component,
 )
 from .component_registry import (
     ComponentRecord,
@@ -128,7 +138,9 @@ __all__ = [
     "OperatorRegistryManifest",
     "build_module_manifest",
     "Requirement", "Lowering", "Stencil", "Stability", "Provider", "Effects",
-    "Restart", "Report", "FallibleEvaluation",
+    "Restart", "Report", "FallibleEvaluation", "Format",
+    "ComponentAdapter", "ComponentInterfaceError", "ComponentProvenance",
+    "EvaluationOutcome", "InterfaceBinding", "InterfaceSpec", "adapt_component",
     "COMPONENT_MANIFEST_SCHEMA_VERSION", "ComponentExtensionSchema", "ComponentManifest",
     "ComponentManifestError", "ComponentVersion", "ComponentRecord",
     "ComponentRegistry", "ComponentRegistrySnapshot",

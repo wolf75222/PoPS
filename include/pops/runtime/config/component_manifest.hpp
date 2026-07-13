@@ -112,6 +112,16 @@ inline bool identifier_spelling(const std::string& text) {
   });
 }
 
+inline bool member_identifier_spelling(const std::string& text) {
+  if (text.empty() || !((text.front() >= 'A' && text.front() <= 'Z') ||
+                        (text.front() >= 'a' && text.front() <= 'z') || text.front() == '_'))
+    return false;
+  return std::all_of(text.begin() + 1, text.end(), [](unsigned char ch) {
+    return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+           (ch >= '0' && ch <= '9') || ch == '_';
+  });
+}
+
 inline bool absolute_namespaced_uri(const std::string& uri) {
   if (uri.empty() || uri.find_first_of("?#") != std::string::npos)
     return false;
@@ -264,6 +274,62 @@ inline CanonicalValue normalize_entry_points(const CanonicalValue& value) {
   return value;
 }
 
+inline bool has_field(const CanonicalValue::Map& mapping, const std::string& name) {
+  return std::any_of(mapping.begin(), mapping.end(), [&](const auto& row) {
+    return row.first == name;
+  });
+}
+
+inline CanonicalValue normalize_interfaces(const CanonicalValue& value,
+                                           const CanonicalValue& facets,
+                                           const CanonicalValue& entry_points) {
+  static constexpr const char* fields[] = {"name", "mode", "binding"};
+  const auto& rows = require_array(value, "interfaces");
+  const auto& entries = require_map(entry_points, "entry_points");
+  CanonicalValue::Array normalized;
+  std::vector<std::string> names;
+  normalized.reserve(rows.size());
+  names.reserve(rows.size());
+  for (std::size_t index = 0; index < rows.size(); ++index) {
+    const std::string path = "interfaces[" + std::to_string(index) + "]";
+    const auto& row = exact_map(rows[index], fields, path);
+    const std::string& name = require_canonical_text(field(row, "name", path), path + ".name");
+    if (find_component_interface(name) == nullptr)
+      refuse("unknown_component_interface", path + ".name",
+             "unknown component interface '" + name + "'");
+    if (std::find(names.begin(), names.end(), name) != names.end())
+      refuse("duplicate_component_interface", path + ".name",
+             "component interface '" + name + "' is declared more than once");
+    names.push_back(name);
+    const std::string& mode = require_canonical_text(field(row, "mode", path), path + ".mode");
+    if (mode != "method" && mode != "value" && mode != "entry_point")
+      refuse("invalid_interface_mode", path + ".mode",
+             "interface mode must be method, value, or entry_point");
+    const std::string& binding =
+        require_canonical_text(field(row, "binding", path), path + ".binding");
+    if (!member_identifier_spelling(binding))
+      refuse("invalid_string", path + ".binding",
+             path + ".binding has a non-canonical spelling");
+    if (mode == "entry_point" && !has_field(entries, binding))
+      refuse("missing_interface_entry_point", path + ".binding",
+             "interface '" + name + "' binds undeclared entry point '" + binding + "'");
+    normalized.push_back(CanonicalValue::map({
+        {"name", field(row, "name", path)},
+        {"mode", field(row, "mode", path)},
+        {"binding", field(row, "binding", path)},
+    }));
+  }
+  std::sort(names.begin(), names.end());
+  std::vector<std::string> facet_names;
+  for (const auto& facet : require_array(facets, "facets"))
+    facet_names.push_back(require_canonical_text(facet, "facets[]"));
+  std::sort(facet_names.begin(), facet_names.end());
+  if (names != facet_names)
+    refuse("interface_facet_mismatch", "interfaces",
+           "facets and interface declarations must name the same exact set");
+  return normalize_set_array(CanonicalValue::array(std::move(normalized)), "interfaces");
+}
+
 inline CanonicalValue normalize_extensions(const CanonicalValue& value) {
   const auto& extensions = require_map(value, "extensions");
   CanonicalValue::Map normalized;
@@ -332,13 +398,27 @@ inline Normalized normalize(const CanonicalValue& value) {
   if (!identifier_spelling(component_type))
     refuse("invalid_component_type", "component_type", "component_type is not canonical");
 
+  const CanonicalValue normalized_facets = normalize_set_array(
+      field(input, "facets", "ComponentManifest"), "facets", true);
+  const CanonicalValue normalized_entry_points = normalize_entry_points(
+      field(input, "entry_points", "ComponentManifest"));
+  const CanonicalValue normalized_interfaces = normalize_interfaces(
+      field(input, "interfaces", "ComponentManifest"), normalized_facets,
+      normalized_entry_points);
+
   CanonicalValue::Map full;
   CanonicalValue::Map manifest_payload;
   CanonicalValue::Map semantic_payload;
   CanonicalValue normalized_extensions;
   for (const auto& [name, item] : input) {
     CanonicalValue normalized = item;
-    if (set_field(name))
+    if (name == "facets")
+      normalized = normalized_facets;
+    else if (name == "interfaces")
+      normalized = normalized_interfaces;
+    else if (name == "entry_points")
+      normalized = normalized_entry_points;
+    else if (set_field(name))
       normalized = normalize_set_array(item, name, name == "facets");
     else if (name == "version")
       normalized = normalize_version(item);
@@ -352,8 +432,6 @@ inline Normalized normalize(const CanonicalValue& value) {
       normalized = normalize_restart(item);
     else if (name == "precision")
       normalized = normalize_precision(item);
-    else if (name == "entry_points")
-      normalized = normalize_entry_points(item);
     else if (name == "extensions") {
       normalized = normalize_extensions(item);
       normalized_extensions = normalized;

@@ -84,7 +84,8 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
     _exact(data, {
         "catalog_schema_version", "component_manifest_schema_version",
         "route_registry_version", "capability_vocabulary_version", "manifest_schema",
-        "route_component_defaults", "route_families",
+        "interface_vocabulary", "route_family_interfaces", "route_component_defaults",
+        "route_families",
     }, "component catalog")
     if data["catalog_schema_version"] != 1:
         raise CatalogError("unsupported component catalog schema_version")
@@ -112,6 +113,55 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
         raise CatalogError("manifest_schema.digest_fields does not match implemented schema v2")
     if schema["extension_kinds"] != ["documentary", "semantic"]:
         raise CatalogError("extension_kinds must be documentary, semantic")
+
+    vocabulary = data["interface_vocabulary"]
+    if not isinstance(vocabulary, list) or not vocabulary:
+        raise CatalogError("interface_vocabulary must be a non-empty list")
+    interface_names: set[str] = set()
+    for index, interface in enumerate(vocabulary):
+        interface = _exact(interface, {"name", "method", "required_args"},
+                           f"interface_vocabulary[{index}]")
+        name = interface["name"]
+        if not isinstance(name, str) or re.fullmatch(r"[a-z][a-z0-9_]*", name) is None:
+            raise CatalogError(f"interface_vocabulary[{index}].name is not canonical")
+        if name in interface_names:
+            raise CatalogError(f"duplicate component interface {name!r}")
+        interface_names.add(name)
+        _identifier(interface["method"], f"interface_vocabulary[{index}].method")
+        required_args = interface["required_args"]
+        if isinstance(required_args, bool) or not isinstance(required_args, int) \
+                or required_args < 0:
+            raise CatalogError(
+                f"interface_vocabulary[{index}].required_args must be an integer >= 0")
+
+    family_interfaces = data["route_family_interfaces"]
+    if not isinstance(family_interfaces, dict):
+        raise CatalogError("route_family_interfaces must be an object")
+    for family, declarations in family_interfaces.items():
+        if not isinstance(family, str) or re.fullmatch(r"[a-z][a-z0-9_]*", family) is None:
+            raise CatalogError(f"route_family_interfaces key {family!r} is not canonical")
+        if not isinstance(declarations, list) or not declarations:
+            raise CatalogError(f"route_family_interfaces.{family} must be a non-empty list")
+        declared: set[str] = set()
+        for index, declaration in enumerate(declarations):
+            declaration = _exact(declaration, {"name", "mode", "binding"},
+                                 f"route_family_interfaces.{family}[{index}]")
+            name = declaration["name"]
+            if name not in interface_names:
+                raise CatalogError(
+                    f"route_family_interfaces.{family}[{index}] names unknown interface {name!r}")
+            if name in declared:
+                raise CatalogError(
+                    f"route_family_interfaces.{family} declares {name!r} more than once")
+            declared.add(name)
+            if declaration["mode"] not in {"method", "value", "entry_point"}:
+                raise CatalogError(
+                    f"route_family_interfaces.{family}[{index}].mode is invalid")
+            binding = declaration["binding"]
+            if not isinstance(binding, str) or re.fullmatch(
+                    r"[A-Za-z_][A-Za-z0-9_]*", binding) is None:
+                raise CatalogError(
+                    f"route_family_interfaces.{family}[{index}].binding is invalid")
 
     defaults = _exact(data["route_component_defaults"], {
         "version", "facets", "signature", "reads", "writes", "parameters", "interfaces",
@@ -257,6 +307,11 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
     missing_specializations = sorted(required_specializations - seen_families)
     if missing_specializations:
         raise CatalogError(f"component catalog misses generated typed views {missing_specializations}")
+    if set(family_interfaces) != seen_families:
+        raise CatalogError(
+            "route_family_interfaces must cover every route family exactly: missing=%s, unknown=%s"
+            % (sorted(seen_families - set(family_interfaces)),
+               sorted(set(family_interfaces) - seen_families)))
 
     full_digest, semantic_digest = _catalog_digests(data)
     return data, full_digest, semantic_digest
@@ -277,6 +332,7 @@ def _render_schema(catalog: dict[str, Any], digest: str, semantic_digest: str | 
         f"COMPONENT_MANIFEST_SCHEMA_VERSION = {catalog['component_manifest_schema_version']}",
         f"COMPONENT_CATALOG_SHA256 = {digest!r}",
         f"COMPONENT_CATALOG_SEMANTIC_SHA256 = {semantic_digest!r}",
+        f"COMPONENT_INTERFACE_SPECS = {_py_literal(tuple(catalog['interface_vocabulary']))}",
     ]
     for name, source_name in (
         ("COMPONENT_MANIFEST_SEMANTIC_FIELDS", "semantic_fields"),
@@ -341,6 +397,8 @@ def _render_routes(catalog: dict[str, Any], digest: str,
         "ROUTE_METADATA": metadata,
         "ROUTE_CPP_BINDINGS": cpp,
         "ROUTE_COMPONENT_DEFAULTS": catalog["route_component_defaults"],
+        "ROUTE_FAMILY_INTERFACES": catalog["route_family_interfaces"],
+        "COMPONENT_INTERFACE_SPECS": tuple(catalog["interface_vocabulary"]),
         "BRICK_CATALOG_ROWS": tuple(brick_rows),
     }
     lines = [
@@ -375,6 +433,7 @@ def _render_cpp(catalog: dict[str, Any], digest: str,
         "// Generated by scripts/generate_component_catalog.py; DO NOT EDIT.",
         "#include <cstddef>",
         "#include <cstdint>",
+        "#include <string_view>",
         "",
         "namespace pops {",
         "",
@@ -386,8 +445,33 @@ def _render_cpp(catalog: dict[str, Any], digest: str,
         "  const char* limitations;",
         "};",
         "",
-        "enum class RouteFamily : std::uint8_t {",
+        "enum class ComponentInterfaceId : std::uint8_t {",
     ]
+    for index, interface in enumerate(catalog["interface_vocabulary"]):
+        out.append(f"  k{_camel(interface['name'])} = {index},")
+    out.extend((
+        "};",
+        "struct ComponentInterfaceInfo {",
+        "  ComponentInterfaceId id; const char* name; const char* method; int required_args;",
+        "};",
+        "inline constexpr ComponentInterfaceInfo kComponentInterfaces[] = {",
+    ))
+    for interface in catalog["interface_vocabulary"]:
+        out.append(
+            f"  {{ComponentInterfaceId::k{_camel(interface['name'])}, "
+            f"{_cpp_string(interface['name'])}, {_cpp_string(interface['method'])}, "
+            f"{interface['required_args']}}},")
+    out.extend((
+        "};",
+        "constexpr const ComponentInterfaceInfo* find_component_interface(std::string_view name) {",
+        "  for (const auto& interface : kComponentInterfaces)",
+        "    if (name == interface.name)",
+        "      return &interface;",
+        "  return nullptr;",
+        "}",
+        "",
+        "enum class RouteFamily : std::uint8_t {",
+    ))
     for index, family in enumerate(families):
         out.append(f"  k{_camel(family['name'])} = {index},")
     out.extend(("};", "", "constexpr const char* route_family_name(RouteFamily family) {", "  switch (family) {"))

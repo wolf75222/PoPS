@@ -23,7 +23,10 @@ def _values():
         "reads": ({"resource": "state:u"},),
         "writes": ({"resource": "rate:u"},),
         "parameters": ({"name": "theta", "kind": "runtime"},),
-        "interfaces": ({"uri": "pops://interfaces/spatial-operator", "version": 1},),
+        "interfaces": (
+            {"name": "lowering", "mode": "entry_point", "binding": "native"},
+            {"name": "stencil", "mode": "entry_point", "binding": "native"},
+        ),
         "requirements": ({"capability": "halo", "depth": 2},),
         "capabilities": ({"capability": "formal_order", "value": 2},),
         "effects": ({"kind": "state_read", "resource": "state:u"},),
@@ -57,6 +60,33 @@ def test_complete_manifest_round_trips_in_canonical_form():
     assert reopened.component_id.endswith("@1.2.3")
 
 
+def test_interface_bindings_are_exact_closed_and_entry_point_checked():
+    missing = _values()
+    missing["interfaces"] = missing["interfaces"][:1]
+    with pytest.raises(ComponentManifestError) as mismatch:
+        ComponentManifest(**missing)
+    assert mismatch.value.code == "interface_facet_mismatch"
+
+    undeclared = _values()
+    undeclared["interfaces"] = (
+        {"name": "lowering", "mode": "entry_point", "binding": "absent"},
+        undeclared["interfaces"][1],
+    )
+    with pytest.raises(ComponentManifestError) as entry_point:
+        ComponentManifest(**undeclared)
+    assert entry_point.value.code == "missing_interface_entry_point"
+
+    unknown = _values()
+    unknown["facets"] = ("lowering", "not_an_interface")
+    unknown["interfaces"] = (
+        unknown["interfaces"][0],
+        {"name": "not_an_interface", "mode": "method", "binding": "probe"},
+    )
+    with pytest.raises(ComponentManifestError) as interface:
+        ComponentManifest(**unknown)
+    assert interface.value.code == "unknown_component_interface"
+
+
 @pytest.mark.parametrize("field,replacement", [
     ("uri", "pops://external.test/components/other"),
     ("component_type", "numerical_flux"),
@@ -66,7 +96,10 @@ def test_complete_manifest_round_trips_in_canonical_form():
     ("reads", ({"resource": "state:v"},)),
     ("writes", ({"resource": "rate:v"},)),
     ("parameters", ({"name": "epsilon", "kind": "runtime"},)),
-    ("interfaces", ({"uri": "pops://interfaces/flux", "version": 1},)),
+    ("interfaces", (
+        {"name": "lowering", "mode": "entry_point", "binding": "native"},
+        {"name": "stencil", "mode": "method", "binding": "stencil"},
+    )),
     ("requirements", ({"capability": "halo", "depth": 3},)),
     ("capabilities", ({"capability": "formal_order", "value": 3},)),
     ("effects", ({"kind": "state_write", "resource": "state:u"},)),
@@ -86,6 +119,10 @@ def test_every_semantic_field_changes_the_semantic_fingerprint(field, replacemen
     baseline = _values()
     changed = deepcopy(baseline)
     changed[field] = replacement
+    if field == "facets":
+        changed["interfaces"] = (
+            {"name": "lowering", "mode": "entry_point", "binding": "native"},
+        )
     assert ComponentManifest(**baseline).semantic_digest != ComponentManifest(**changed).semantic_digest
 
 

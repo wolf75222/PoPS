@@ -621,6 +621,28 @@ The runtime facades `System` ([`include/pops/runtime/system.hpp`](../include/pop
 `AmrSystem` ([`include/pops/runtime/amr_system.hpp`](../include/pops/runtime/amr_system.hpp)) wrap these
 couplers for the multi-block composition; it is they that the Python bindings expose.
 
+## Component interfaces and registration
+
+Source components, generated components, builtins and external AOT components cross one manifest
+trust boundary. `schemas/component_catalog.v2.json` owns the interface vocabulary and the builtin
+route bindings; its generator emits the identical Python and C++ tables. A
+`ComponentManifest.interfaces` row has exactly `name`, `mode` and `binding`. `mode` is one of
+`method`, `value` or `entry_point`; every facet has exactly one row and an entry-point binding must
+name a declared `ComponentManifest.entry_points` key. Missing or extra bindings are errors, never
+method-name guesses.
+
+The interfaces are deliberately small: Requirement, Lowering, Stencil, Stability, Provider,
+Effects, Restart, Report, FallibleEvaluation and Format. Python uses an immutable
+`ComponentAdapter`; C++ exposes independent concepts in
+`include/pops/runtime/config/component_interfaces.hpp`. There is no component base class,
+scientific concrete-class switch, `provides(any)` capability escape hatch or process-global
+registry. Registration is atomic, content-addressed and explicitly frozen. Builtins and extensions
+emit the same provenance/report shape.
+
+A fallible evaluation returns an explicit `EvaluationOutcome` (`ok`, `retry`, `reject` or
+`failed`). It has no implicit Python truth value. Native and Python callers therefore propagate the
+declared transaction action instead of converting a missing/error outcome into a neutral value.
+
 ## Limitations
 
 The following limits are guarded in the code (they raise a clear error rather than drift

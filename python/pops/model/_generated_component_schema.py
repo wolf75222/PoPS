@@ -3,8 +3,18 @@ from __future__ import annotations
 
 COMPONENT_CATALOG_SCHEMA_VERSION = 1
 COMPONENT_MANIFEST_SCHEMA_VERSION = 2
-COMPONENT_CATALOG_SHA256 = 'f56c8cf4f7db9e0b8ddc4e30d03dbeff16616f2e1512ca4a3fe5a9b66c247d0a'
-COMPONENT_CATALOG_SEMANTIC_SHA256 = 'fb78539facfe8dc0a54e2f4c033d0037d817bddd9d9d365259088a02b51f169e'
+COMPONENT_CATALOG_SHA256 = 'f9c68322652bcec31b71875d9c4bcbadb774c39ace0f1bf9efcc97094388c9bd'
+COMPONENT_CATALOG_SEMANTIC_SHA256 = '5495e704069ee2a74808c5c1c12c626e9453cd729c23b2dde0291884ec538f90'
+COMPONENT_INTERFACE_SPECS = ({'name': 'requirement', 'method': 'requirements', 'required_args': 0},
+ {'name': 'lowering', 'method': 'lower', 'required_args': 1},
+ {'name': 'stencil', 'method': 'stencil', 'required_args': 0},
+ {'name': 'stability', 'method': 'stability', 'required_args': 0},
+ {'name': 'provider', 'method': 'providers', 'required_args': 0},
+ {'name': 'effects', 'method': 'effects', 'required_args': 0},
+ {'name': 'restart', 'method': 'restart', 'required_args': 0},
+ {'name': 'report', 'method': 'report', 'required_args': 0},
+ {'name': 'fallible_evaluation', 'method': 'evaluate', 'required_args': 1},
+ {'name': 'format', 'method': 'format', 'required_args': 1})
 COMPONENT_MANIFEST_SEMANTIC_FIELDS = ('schema_version', 'uri', 'component_type', 'version', 'facets', 'signature', 'reads', 'writes', 'parameters', 'interfaces', 'requirements', 'capabilities', 'effects', 'layouts', 'clocks', 'target', 'determinism', 'restart', 'precision', 'conservation', 'entry_points')
 COMPONENT_MANIFEST_TOP_LEVEL_FIELDS = ('schema_version', 'uri', 'component_type', 'version', 'facets', 'signature', 'reads', 'writes', 'parameters', 'interfaces', 'requirements', 'capabilities', 'effects', 'layouts', 'clocks', 'target', 'determinism', 'restart', 'precision', 'conservation', 'entry_points', 'extensions', 'digests')
 COMPONENT_TARGET_FIELDS = ('variants',)
