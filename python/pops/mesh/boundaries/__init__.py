@@ -13,6 +13,16 @@ from typing import Any
 
 from .._descriptor import MeshDescriptor
 from ...descriptors_report import RequirementSet, CapabilitySet
+from .ports import (
+    BoundaryDependencies, BoundaryPort, CharacteristicClosure, ClosureMode,
+    ConstraintResidual, ExteriorTrace, GhostState, IncomingMultiplicity, NumericalFlux,
+    RepresentationFlow, SignDependence, SonicPolicy)
+from .providers import (
+    BoundaryProvider, BoundaryProviderRegistry, DirectionalTransport, Dirichlet, GhostFormula,
+    Inflow, Mixed, Neumann, NoFlux, Outflow, ResolvedBoundaryBinding, ResolvedBoundaryPlan)
+from .topology import (
+    BoundaryHandle, BoundaryOrientation, BoundarySide, BoundaryTopology,
+    PeriodicIdentification, PeriodicOrientation)
 
 
 class _Face(MeshDescriptor):
@@ -94,4 +104,13 @@ class FaceBC(MeshDescriptor):
                                                               repr(self.condition))}
 
 
-__all__ = ["Periodic", "Physical", "FaceBC", "XMin", "XMax", "YMin", "YMax"]
+__all__ = [
+    "Periodic", "Physical", "FaceBC", "XMin", "XMax", "YMin", "YMax",
+    "BoundaryHandle", "BoundaryOrientation", "BoundarySide", "BoundaryTopology",
+    "PeriodicIdentification", "PeriodicOrientation", "BoundaryDependencies", "BoundaryPort",
+    "CharacteristicClosure", "ClosureMode", "ConstraintResidual", "ExteriorTrace", "GhostState",
+    "IncomingMultiplicity", "NumericalFlux", "RepresentationFlow", "SignDependence",
+    "SonicPolicy", "BoundaryProvider", "BoundaryProviderRegistry", "DirectionalTransport",
+    "Dirichlet", "GhostFormula", "Inflow", "Mixed", "Neumann", "NoFlux", "Outflow",
+    "ResolvedBoundaryBinding", "ResolvedBoundaryPlan",
+]
