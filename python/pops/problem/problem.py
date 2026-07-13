@@ -396,6 +396,12 @@ class Case:
         report = report.extend(self._param_registry.validate(context))
         report = report.extend(self._initial_registry.validate(context))
         report = report.extend(self._constraint_registry.validate(context))
+        if self._consumer_graph is not None:
+            try:
+                self._consumer_graph.validate_references(self.resolve)
+            except Exception as exc:  # noqa: BLE001 -- aggregate exact consumer refusal
+                report = report.error(
+                    "consumer", "invalid_consumer_graph", str(exc))
         for block_name, plan in sorted(self._numerics_assignments.items()):
             try:
                 plan.validate_for(self._block_registry.spec(block_name)["model"])

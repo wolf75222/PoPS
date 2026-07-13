@@ -43,7 +43,7 @@ from ._runtime_plan_contracts import RuntimePlanBundle, refuse
 
 
 def _schedule_coordinate(manifest: ConsumerManifest, moment: ConsumerMoment) -> int | None:
-    schedule, domain = manifest.schedule, manifest.schedule.domain
+    domain = manifest.schedule.domain
     if domain.clock != moment.point.clock:
         refuse(
             "consumer_clock_mismatch",
@@ -265,6 +265,9 @@ def plan_accepted_side_effects(
         raise TypeError("consumer planning requires an exact RuntimePlanBundle")
     if type(graph) is not ConsumerGraph:
         raise TypeError("consumer planning requires an exact ConsumerGraph")
+    if not graph.is_resolved:
+        raise TypeError(
+            "consumer planning requires the resolved ConsumerGraph from pops.resolve")
     if type(moment) is not ConsumerMoment:
         raise TypeError("consumer planning requires an exact ConsumerMoment")
     if cursors is None:

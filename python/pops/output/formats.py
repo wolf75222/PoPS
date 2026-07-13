@@ -21,6 +21,18 @@ class FormatInterface(Descriptor):
     def writer(self) -> Any:
         raise NotImplementedError("output format does not provide a writer")
 
+    def consumer_data(self) -> dict[str, Any]:
+        """Exact inert writer selection consumed by policy-to-graph authoring."""
+        if not isinstance(self.format_name, str) or not self.format_name:
+            raise ValueError("output format must declare a non-empty format_name")
+        return {
+            "descriptor": "%s.%s" % (type(self).__module__, type(self).__qualname__),
+            "format_name": self.format_name,
+            "extension": self.extension,
+            "options": self.options(),
+            "requirements": self.requirements().to_dict(),
+        }
+
 
 class HDF5(FormatInterface):
     """HDF5 output. ``parallel=True`` requests the parallel-HDF5 path (build-dependent)."""

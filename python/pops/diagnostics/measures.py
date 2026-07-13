@@ -85,6 +85,25 @@ class _Measure(Descriptor):
             resolved.block = block
         return resolved
 
+    def declaration_references(self) -> tuple[Any, ...]:
+        """Return the complete typed ownership surface consumed by this measure.
+
+        Consumer authoring deliberately depends on this small protocol instead of inspecting
+        concrete diagnostic classes or guessing from ``options()`` display strings.
+        """
+        return () if self.block is None else (self.block,)
+
+    def consumer_data(self) -> dict[str, Any]:
+        """Return callback-free diagnostic semantics for ``ConsumerGraph`` identity."""
+        return {
+            "category": self.category,
+            "scheme": self.scheme,
+            "reduction": self.reduction,
+            "options": self.options(),
+            "requirements": self.requirements().to_dict(),
+            "capabilities": self.capabilities().to_dict(),
+        }
+
     def requirements(self) -> Any:
         from pops.descriptors_report import RequirementSet
         # A scalar reduction over a distributed mesh needs an MPI all-reduce to be correct.
@@ -204,6 +223,29 @@ class ConservationCheck(Descriptor):
         resolved = copy(self)
         resolved.quantity = resolve_quantity(resolver)
         return resolved
+
+    def declaration_references(self) -> tuple[Any, ...]:
+        references = getattr(self.quantity, "declaration_references", None)
+        if not callable(references):
+            raise TypeError(
+                "ConservationCheck quantity must implement declaration_references()")
+        values = references()
+        if not isinstance(values, tuple):
+            raise TypeError("diagnostic declaration_references() must return a tuple")
+        return values
+
+    def consumer_data(self) -> dict[str, Any]:
+        projection = getattr(self.quantity, "consumer_data", None)
+        if not callable(projection):
+            raise TypeError("ConservationCheck quantity must implement consumer_data()")
+        return {
+            "category": self.category,
+            "scheme": self.scheme,
+            "quantity": projection(),
+            "tolerance": self.tolerance,
+            "requirements": self.requirements().to_dict(),
+            "capabilities": self.capabilities().to_dict(),
+        }
 
     def requirements(self) -> Any:
         from pops.descriptors_report import RequirementSet

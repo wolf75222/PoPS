@@ -262,6 +262,9 @@ class ResolvedSimulationPlan:
             if type(self.consumer_graph) is not ConsumerGraph:
                 raise TypeError(
                     "ResolvedSimulationPlan.consumer_graph must be an exact ConsumerGraph or None")
+            if not self.consumer_graph.is_resolved:
+                raise TypeError(
+                    "ResolvedSimulationPlan.consumer_graph must be layout-resolved")
         object.__setattr__(self, "requirements", _string_mapping(
             self.requirements, where="ResolvedSimulationPlan.requirements"))
         object.__setattr__(self, "capabilities", _string_mapping(

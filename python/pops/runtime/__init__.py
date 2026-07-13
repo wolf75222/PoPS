@@ -33,6 +33,7 @@ _EXPORTS = {
     "PlatformContractError": ("pops.runtime.platform_manifest", "PlatformContractError"),
     "validate_launch": ("pops.runtime.platform_manifest", "validate_launch"),
     "launch_checked": ("pops.runtime.platform_manifest", "launch_checked"),
+    "ConsumerGraph": ("pops.runtime.consumer", "ConsumerGraph"),
 }
 
 __all__ = sorted(_EXPORTS)

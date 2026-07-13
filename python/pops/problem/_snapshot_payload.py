@@ -110,7 +110,8 @@ def _problem_snapshot_payload(problem: Any, *, artifact: bool) -> dict[str, Any]
         "params": params,
         "initials": tuple(problem._initial_registry),
         "consumers": (
-            None if problem._consumer_graph is None else problem._consumer_graph.to_data()
+            None if problem._consumer_graph is None
+            else problem._consumer_graph.authoring_data(problem.resolve)
         ),
         "constraints": problem._constraint_registry.refinement,
         "numerics": {

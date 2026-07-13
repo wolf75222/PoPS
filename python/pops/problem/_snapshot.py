@@ -21,11 +21,11 @@ from pops.problem._snapshot_canonical import _canonical
 
 #: Bumped when the full snapshot's canonical shape changes. The compile-only projection has its own
 #: version below, so artifact-identity evolution does not rewrite the reproducibility schema.
-SNAPSHOT_SCHEMA_VERSION = 10
+SNAPSHOT_SCHEMA_VERSION = 11
 
 #: Independent namespace for the compile-identity projection. Changing which declaration facts
 #: affect generated artifacts bumps this version without rewriting the full snapshot schema.
-ARTIFACT_SCHEMA_VERSION = 5
+ARTIFACT_SCHEMA_VERSION = 6
 
 
 class AuthoringSnapshot:

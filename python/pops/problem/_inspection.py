@@ -20,7 +20,7 @@ def inspect_payload(problem: Any) -> dict[str, Any]:
     info["params"] = problem._param_registry.inspect()
     info["initials"] = problem._initial_registry.inspect()
     info["consumers"] = (
-        None if problem._consumer_graph is None else problem._consumer_graph.to_data()
+        None if problem._consumer_graph is None else problem._consumer_graph.inspect()
     )
     info["constraints"] = problem._constraint_registry.inspect()
     info["numerics"] = {

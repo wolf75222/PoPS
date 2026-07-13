@@ -154,12 +154,17 @@ def resolve(
             "bootstrap": bootstrap_plan.identity.to_data(),
         }
         amr_capabilities = bootstrap_plan.inspect()
+    consumer_graph = (
+        None if problem._consumers is None
+        else problem._consumers.resolve(
+            problem.resolve, layout_plan, owner=problem.owner_path.canonical())
+    )
     return ResolvedSimulationPlan(
         snapshot=snapshot, target=target, backend=backend_token, layout=detached_layout,
         layout_plan=layout_plan,
         time=resolved_time, blocks=blocks, bind_schema=bind_schema,
         compile_values=compile_values, field_plans=field_plans, outputs=outputs,
-        diagnostics=diagnostics, consumer_graph=problem._consumers,
+        diagnostics=diagnostics, consumer_graph=consumer_graph,
         libraries=resolved_libraries,
         requirements={"tokens": tuple(evidence["requirements"]),
                       "layout_resources": layout_plan.resource_requirements(),

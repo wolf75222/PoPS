@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import heapq
-from collections.abc import Iterable
+import math
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
@@ -30,10 +31,39 @@ def _index(value: Any, where: str) -> int:
 
 
 def _exact_handle(value: Any, kind: str | None, where: str) -> Handle:
-    if type(value) is not Handle or not value.is_resolved:
-        raise TypeError("%s must be an exact canonical Handle" % where)
+    if not isinstance(value, Handle) or not value.is_resolved:
+        raise TypeError("%s must be a canonical Handle" % where)
     if kind is not None and value.kind != kind:
         raise TypeError("%s Handle kind must be %r" % (where, kind))
+    return value
+
+
+def _freeze_consumer_data(value: Any, *, where: str) -> Any:
+    """Project extension data to the strict cross-language identity vocabulary."""
+    if value is None or isinstance(value, (bool, int, str, bytes)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("%s cannot contain a non-finite float" % where)
+        return MappingProxyType({"binary64": value.hex()})
+    if isinstance(value, Mapping):
+        result = {}
+        for key, item in value.items():
+            if not isinstance(key, str) or not key:
+                raise TypeError("%s mapping keys must be non-empty strings" % where)
+            result[key] = _freeze_consumer_data(item, where="%s.%s" % (where, key))
+        return MappingProxyType(result)
+    if isinstance(value, (list, tuple)):
+        return tuple(
+            _freeze_consumer_data(item, where="%s[]" % where) for item in value)
+    raise TypeError("%s contains unsupported value %s" % (where, type(value).__name__))
+
+
+def _thaw_consumer_data(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw_consumer_data(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_consumer_data(item) for item in value]
     return value
 
 
@@ -48,6 +78,28 @@ class ParallelMode(Enum):
     SERIAL = "serial"
     COLLECTIVE = "collective"
     PER_RANK = "per_rank"
+
+
+@dataclass(frozen=True, slots=True)
+class ConsumerOperation:
+    """Resolved semantic operation performed by one consumer node.
+
+    The open extension point is a small data protocol: policy families choose a canonical operation
+    name and strict callback-free data. Runtime planning never branches on the Python policy class.
+    """
+
+    name: str
+    data: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "name", _text(self.name, "ConsumerOperation.name"))
+        frozen = _freeze_consumer_data(self.data, where="ConsumerOperation.data")
+        if not isinstance(frozen, Mapping):
+            raise TypeError("ConsumerOperation.data must be a mapping")
+        object.__setattr__(self, "data", frozen)
+
+    def to_data(self) -> dict[str, Any]:
+        return {"name": self.name, "data": _thaw_consumer_data(self.data)}
 
 
 class ConsumerFailureAction:
@@ -153,6 +205,7 @@ class ConsumerManifest:
     parallel_mode: ParallelMode
     dependencies: tuple[Handle, ...] = ()
     failure_action: ConsumerFailureAction = field(default_factory=FailRun)
+    operation: ConsumerOperation | None = None
     identity: Identity = field(init=False)
 
     def __post_init__(self) -> None:
@@ -184,6 +237,9 @@ class ConsumerManifest:
         object.__setattr__(self, "dependencies", dependencies)
         if type(self.failure_action) not in _FAILURE_ACTIONS:
             raise TypeError("ConsumerManifest.failure_action must be FailRun, Retry, or SkipSampleReported")
+        if self.operation is not None and type(self.operation) is not ConsumerOperation:
+            raise TypeError(
+                "ConsumerManifest.operation must be an exact ConsumerOperation or None")
         object.__setattr__(self, "identity", make_identity("consumer-manifest", self._payload()))
 
     @property
@@ -192,7 +248,7 @@ class ConsumerManifest:
 
     def _payload(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "handle": self.handle.canonical_identity(),
             "kind": self.kind.value,
             "quantities": [value.to_data() for value in self.quantities],
@@ -202,6 +258,7 @@ class ConsumerManifest:
             "parallel_mode": self.parallel_mode.value,
             "dependencies": [value.canonical_identity() for value in self.dependencies],
             "failure_action": self.failure_action.to_data(),
+            "operation": None if self.operation is None else self.operation.to_data(),
         }
 
     def to_data(self) -> dict[str, Any]:
@@ -209,9 +266,14 @@ class ConsumerManifest:
 
 
 class ConsumerGraph:
-    """Canonical DAG; ready-node ties are broken by qualified consumer identity."""
+    """Immutable authoring or resolved DAG with an explicit phase boundary.
 
-    __slots__ = ("nodes", "topology", "identity", "_by_id", "_sealed")
+    ``from_policies`` captures callback-free authoring nodes. ``resolve`` is the only route that
+    combines them with Case ownership and a LayoutPlan. The ordinary constructor remains the
+    low-level resolved form used by runtime planning.
+    """
+
+    __slots__ = ("nodes", "topology", "identity", "_by_id", "_authoring", "_sealed")
 
     def __init__(self, manifests: Iterable[ConsumerManifest]) -> None:
         supplied = tuple(manifests)
@@ -245,8 +307,100 @@ class ConsumerGraph:
         object.__setattr__(self, "nodes", nodes)
         object.__setattr__(self, "topology", tuple(topology))
         object.__setattr__(self, "_by_id", MappingProxyType(by_id))
+        object.__setattr__(self, "_authoring", ())
         object.__setattr__(self, "identity", make_identity("consumer-graph", self._payload()))
         object.__setattr__(self, "_sealed", True)
+
+    @classmethod
+    def from_policies(cls, policies: Iterable[Any]) -> ConsumerGraph:
+        """Capture typed policies through their universal ``consumer_authoring()`` protocol."""
+        try:
+            supplied = tuple(policies)
+        except TypeError as exc:
+            raise TypeError("ConsumerGraph.from_policies requires an iterable of policies") from exc
+        if not supplied:
+            raise ValueError("ConsumerGraph.from_policies requires at least one policy")
+        from ._consumer_authoring import ConsumerAuthoringNode
+
+        nodes = []
+        for index, policy in enumerate(supplied):
+            protocol = getattr(policy, "consumer_authoring", None)
+            if not callable(protocol):
+                raise TypeError(
+                    "consumer policy %d (%s) must implement consumer_authoring()"
+                    % (index, type(policy).__name__))
+            authored = protocol()
+            if not isinstance(authored, tuple) or any(
+                    type(value) is not ConsumerAuthoringNode for value in authored):
+                raise TypeError(
+                    "%s.consumer_authoring() must return a tuple of exact "
+                    "ConsumerAuthoringNode values" % type(policy).__name__)
+            nodes.extend(authored)
+        if not nodes:
+            raise ValueError("consumer policies produced no ConsumerGraph nodes")
+        result = object.__new__(cls)
+        object.__setattr__(result, "nodes", ())
+        object.__setattr__(result, "topology", ())
+        object.__setattr__(result, "identity", None)
+        object.__setattr__(result, "_by_id", MappingProxyType({}))
+        object.__setattr__(result, "_authoring", tuple(nodes))
+        object.__setattr__(result, "_sealed", True)
+        return result
+
+    @property
+    def is_resolved(self) -> bool:
+        return not self._authoring
+
+    def validate_references(self, resolver: Any) -> bool:
+        """Authenticate every declared reference without choosing a layout or runtime route."""
+        if not callable(resolver):
+            raise TypeError("ConsumerGraph reference resolver must be callable")
+        references = (
+            (reference for node in self._authoring for reference in node.declaration_references())
+            if self._authoring else
+            (quantity.reference for manifest in self.nodes for quantity in manifest.quantities)
+        )
+        for reference in references:
+            resolved = resolver(reference)
+            if not isinstance(resolved, Handle) or not resolved.is_resolved:
+                raise TypeError("consumer reference resolver must return canonical Handles")
+        return True
+
+    def authoring_data(self, resolver: Any) -> dict[str, Any]:
+        """Canonical Case-snapshot projection before layout resolution."""
+        if not self._authoring:
+            return self.to_data()
+        rows = [node.canonical_data(resolver) for node in self._authoring]
+        rows.sort(key=lambda row: make_identity("consumer-authoring-node", row).token)
+        identities = [make_identity("consumer-authoring-node", row).token for row in rows]
+        if len(identities) != len(set(identities)):
+            raise ValueError("ConsumerGraph.from_policies contains a duplicate policy declaration")
+        return {"schema_version": 1, "phase": "authoring", "nodes": rows}
+
+    def resolve(self, resolver: Any, layout_plan: Any, *, owner: Any) -> ConsumerGraph:
+        """Return the canonical runtime graph for one Case and exact LayoutPlan."""
+        from pops.mesh import LayoutPlan
+        from pops.model import OwnerKind, OwnerPath
+
+        if not callable(resolver):
+            raise TypeError("ConsumerGraph resolver must be callable")
+        if type(layout_plan) is not LayoutPlan:
+            raise TypeError("ConsumerGraph.resolve requires an exact LayoutPlan")
+        case_owner = OwnerPath.coerce(owner)
+        if not case_owner.is_canonical or case_owner.kind is not OwnerKind.CASE:
+            raise TypeError("ConsumerGraph.resolve owner must be a canonical Case OwnerPath")
+        if layout_plan.owner != case_owner:
+            raise ValueError("ConsumerGraph and LayoutPlan belong to different Case authorities")
+        if self._authoring:
+            return type(self)(
+                node.resolve(resolver, layout_plan, owner=case_owner)
+                for node in self._authoring)
+        self.validate_references(resolver)
+        expected_owner = case_owner.child(OwnerKind.CONSUMER, "graph")
+        if any(manifest.handle.owner_path != expected_owner for manifest in self.nodes):
+            raise ValueError(
+                "a resolved ConsumerGraph attached to a Case must use that Case consumer owner")
+        return self
 
     def __setattr__(self, name: str, value: Any) -> None:
         if getattr(self, "_sealed", False):
@@ -254,14 +408,27 @@ class ConsumerGraph:
         object.__setattr__(self, name, value)
 
     def _payload(self) -> dict[str, Any]:
+        if self._authoring:
+            raise TypeError("an authoring ConsumerGraph has no resolved runtime payload")
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "nodes": [value.to_data() for value in self.nodes],
             "topology": [value.qualified_id for value in self.topology],
         }
 
     def to_data(self) -> dict[str, Any]:
+        if self._authoring:
+            return self.inspect()
         return {**self._payload(), "identity": self.identity.to_data()}
+
+    def inspect(self) -> dict[str, Any]:
+        if self._authoring:
+            return {
+                "schema_version": 1,
+                "phase": "authoring",
+                "nodes": [node.inspect() for node in self._authoring],
+            }
+        return {**self.to_data(), "phase": "resolved"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -378,6 +545,6 @@ class ConsumerCursorSet:
 
 __all__ = [
     "ConsumerCursorSet", "ConsumerFailureAction", "ConsumerGraph", "ConsumerKind",
-    "ConsumerManifest", "ConsumerMoment", "ConsumerQuantity", "FailRun", "ParallelMode",
+    "ConsumerManifest", "ConsumerMoment", "ConsumerOperation", "ConsumerQuantity", "FailRun", "ParallelMode",
     "Retry", "ScheduleCursor", "SkipSampleReported",
 ]

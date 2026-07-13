@@ -6,8 +6,9 @@ Typed replacements for ``output(format="hdf5", every=20)`` / ``checkpoint(mode=.
 (``AllLevels`` / ``CoarseOnly`` / ``SelectedLevels``). Inert descriptors; the runtime does
 the I/O. The level policies are the canonical home shared with :mod:`pops.mesh.amr`.
 """
-from .policies import (OutputPolicy, CheckpointPolicy,
-                       AllLevels, CoarseOnly, SelectedLevels)
+from .consumers import Checkpoint, ScientificOutput
+from .levels import AllLevels, CoarseOnly, LevelSelection, SelectedLevels
+from .policies import OutputPolicy, CheckpointPolicy
 from .formats import FormatInterface, HDF5, NPZ, ParaView, Plotfile
 from .data import (
     ArrayPiece, DiagnosticKey, DiagnosticPayload, FieldKey, FieldPayload, LevelGeometry, OutputClock,
@@ -22,7 +23,9 @@ from .runtime_policies import RuntimePolicies, RuntimePoliciesReport
 from . import policies, formats, runtime_policies
 
 __all__ = [
+    "Checkpoint", "ScientificOutput",
     "OutputPolicy", "CheckpointPolicy", "AllLevels", "CoarseOnly", "SelectedLevels",
+    "LevelSelection",
     "FormatInterface", "HDF5", "NPZ", "ParaView", "Plotfile",
     "ArrayPiece", "DiagnosticKey", "DiagnosticPayload", "FieldKey", "FieldPayload",
     "LevelGeometry", "OutputClock",
