@@ -25,7 +25,7 @@ def _manifest(*, uri="pops://external.test/fluxes/average", generic=True, entry_
         facets=("lowering", "stability"),
         signature={"generic": generic, "state_components": 2,
                    "inputs": ["left", "right", "face", "providers"]},
-        interfaces=(interfaces.NumericalFlux.manifest_ref(),),
+        interfaces=interfaces.NumericalFlux.manifest_declarations(),
         target={"variants": [{
             "dimension": 2, "scalar": "float64", "device": "cpu", "features": [],
         }]},

@@ -57,7 +57,7 @@ def manifest(*, generic=True, entry_points=None, requirements=()):
         uri="pops://external.test/fluxes/average", component_type="numerical_flux",
         version="1.0.0", facets=("lowering", "stability"),
         signature={"generic": generic, "state_components": 2},
-        interfaces=(interfaces.NumericalFlux.manifest_ref(),),
+        interfaces=interfaces.NumericalFlux.manifest_declarations(),
         requirements=requirements,
         target={"variants": [{
             "dimension": 2, "scalar": "float64", "device": "cpu", "features": [],
