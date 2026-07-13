@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sys
+from inspect import signature
 
 import pops
 
@@ -72,6 +73,27 @@ def test_case_has_one_registration_spelling_per_family() -> None:
     assert hasattr(case, "block") and not hasattr(case, "add_block")
     assert hasattr(case, "field") and not hasattr(case, "add_field")
     assert hasattr(case, "program") and not hasattr(case, "time")
+
+
+def test_public_bind_accepts_value_families_without_an_internal_inputs_record() -> None:
+    parameters = tuple(signature(pops.bind).parameters)
+    assert parameters == (
+        "artifact", "initial_state", "params", "aux", "resources", "initial_values",
+    )
+    from pops import codegen, external
+
+    for retired in (
+        "BindInputs", "InstallPlan", "ResolvedSimulationPlan", "CompiledSimulationArtifact",
+        "LibraryManifest", "compile_library", "read_library_manifest", "emit_library_cpp",
+    ):
+        assert retired not in codegen.__all__
+        assert not hasattr(codegen, retired)
+    for retired in (
+        "CompiledBrickRef", "ExternalBrick", "register", "register_manifest_file",
+        "read_manifest", "CompiledManifest", "load_cpp_library", "load_compiled_manifest",
+    ):
+        assert retired not in external.__all__
+        assert not hasattr(external, retired)
 
 
 def test_output_surface_has_direct_consumers_not_policy_bundles() -> None:

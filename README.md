@@ -135,74 +135,24 @@ target_link_libraries(my_app PRIVATE pops::pops)
 ```
 
 Define a type that satisfies the `PhysicalModel` concept and compose it with the C++ coupling and
-time machinery. This is the low-level engine path. Most users should author a typed Python `Problem`
+time machinery. This is the low-level engine path. Most users should author a typed Python `Case`
 and let PoPS generate and bind the corresponding C++ artifact.
 
 ### From Python
 
-The public Python path is typed and compiled. Strings name user objects such as blocks, fields, and
-program nodes; typed objects choose algorithms and routes. The reduced example below couples a
-scalar density to a Poisson field and advances it through a generated C++ program:
+The public Python path is typed and compiled. Physics, numerics, boundaries, the explicit time
+`Program`, layout, consumers, and execution controls each have one authority. The complete scalar
+advection reference is executable directly:
 
-```python
-import numpy as np
-import pops
-from pops.time import Program
-from pops.lib.time import ssprk3
-from pops.physics import Model
-from pops.math import laplacian, grad, div, ddt
-from pops.mesh.cartesian import CartesianMesh
-from pops.mesh.layouts import Uniform
-from pops.fields import PoissonProblem
-from pops.fields.bcs import Periodic
-from pops.fields.rhs import ChargeDensity
-from pops.solvers.elliptic import GeometricMG
-from pops.numerics.riemann import Rusanov
-from pops.numerics.reconstruction.limiters import Minmod
-from pops.codegen import Production
-
-m = Model("diocotron")
-U = m.state("U", components=["ne"], roles={"ne": "density"})
-(ne,) = U
-phi = m.field("phi")
-m.solve_field("fields_from_state",
-              equation=(-laplacian(phi) == ne),
-              outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
-              solver=GeometricMG())
-E = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
-flux = m.flux("F", on=U, x=[ne * E.y], y=[ne * (-E.x)], waves={"x": [E.y], "y": [-E.x]})
-m.rate("explicit_rate", ddt(U) == -div(flux))
-m.check()
-
-poisson = PoissonProblem(name="phi", unknown="phi",
-                         equation=(-laplacian("phi") == ChargeDensity.from_blocks("ne")),
-                         bcs=(Periodic(),), solver=GeometricMG())
-
-time = Program("advance")
-ssprk3(time, "ne")
-
-problem = (pops.Problem(name="diocotron")
-           .block("ne", physics=m,
-                  spatial=pops.FiniteVolume(reconstruction=Minmod(), riemann=Rusanov()))
-           .field(poisson)
-           .time(time))
-
-validated = pops.validate(problem)
-resolved = pops.resolve(
-    validated,
-    layout=Uniform(CartesianMesh(n=96, L=1.0, periodic=True)),
-    backend=Production(),
-)
-compiled = pops.compile(resolved)
-sim = pops.bind(compiled, pops.BindInputs(initial_state={"ne": ne0}))
-sim.run(t_end=0.1, cfl=0.4)
-sim.write("ne.npz", format="npz")                   # save the block states (npz; "vtk" also available)
+```bash
+python examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py
 ```
 
-For an adaptive run, swap the layout to `pops.mesh.layouts.AMR(mesh, max_levels=2, ratio=2)` and
-author the refinement with typed `pops.mesh.amr` policies. `pops.bind` builds the AMR runtime from
-that layout. Users do not pass a public target string and do not instantiate the AMR runtime as the
-front door.
+Its final lifecycle is exactly `Case -> validate -> resolve -> compile -> bind -> run`.
+`pops.bind` receives concrete value families directly (`params=`, `initial_state=`, `aux=`,
+`resources=`, `initial_values=`); users never construct an install plan or runtime engine. See the
+[complete source](examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py) for explicit
+SSPRK2 construction, qualified handles, AMR policies, outputs, diagnostics, and checkpointing.
 
 ## Documentation
 

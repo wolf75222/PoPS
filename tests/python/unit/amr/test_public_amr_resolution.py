@@ -150,7 +150,7 @@ def test_runtime_tagging_compiles_refine_and_coarsen_to_data_only_vm():
     from pops.runtime._runtime_mesh_lowering import flow_bootstrap_tagging
 
     target, _, _, authorities = _resolved_target()
-    inputs = _example().build_bind_inputs(target.authoring)
+    params = _example().build_bind_params(target.authoring)
 
     class NativeProbe:
         call = None
@@ -159,7 +159,7 @@ def test_runtime_tagging_compiles_refine_and_coarsen_to_data_only_vm():
             self.call = args
 
     native = NativeProbe()
-    flow_bootstrap_tagging(native, authorities.bootstrap, inputs.params)
+    flow_bootstrap_tagging(native, authorities.bootstrap, params)
     assert native.call is not None
     (blocks, variables, leaf_ops, thresholds, refine_ops, refine_args,
      coarsen_ops, coarsen_args, min_cycles, equality, conflict, provider) = native.call

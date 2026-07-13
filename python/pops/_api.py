@@ -26,11 +26,32 @@ def compile(plan: Any) -> Any:
     return phase(plan)
 
 
-def bind(artifact: Any, inputs: Any) -> Any:
-    """Authenticate bind inputs, create an InstallPlan and materialize one RuntimeInstance."""
+def bind(
+    artifact: Any,
+    *,
+    initial_state: Any = None,
+    params: Any = None,
+    aux: Any = None,
+    resources: Any = None,
+    initial_values: Any = None,
+) -> Any:
+    """Bind concrete values and materialize one runtime instance.
+
+    The public boundary accepts the five value/resource families directly. The immutable
+    ``BindInputs`` evidence record is an orchestration detail built exactly once here; users never
+    import a phase-internal codegen type or choose between two bind spellings.
+    """
     from pops import _bootstrap  # noqa: F401  # intentional native cut line
+    from pops.codegen._plans import BindInputs
     from pops.codegen._phases import bind as phase
 
+    inputs = BindInputs(
+        initial_state={} if initial_state is None else initial_state,
+        params={} if params is None else params,
+        aux={} if aux is None else aux,
+        resources={} if resources is None else resources,
+        initial_values={} if initial_values is None else initial_values,
+    )
     return phase(artifact, inputs)
 
 

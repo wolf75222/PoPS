@@ -40,9 +40,8 @@ class _FacadeCompileMixin(_FacadeModel):
         ``pops.compile(problem, backend=pops.codegen.Production())``; the authoring facade
         ``pops.physics.Model`` is added directly (``case.block(model=m)``) and ``pops.compile``
         captures its operator-first Module internally (ADC-557: no manual ``.lower()`` in the standard
-        flow). ``pops.compile`` and ``pops.compile_library`` take a TYPED backend descriptor. This engine ``backend`` argument
-        is the internal lowering vocabulary: it accepts a typed descriptor (lowered via lower_backend)
-        AND the legacy token, kept for the codegen path / internal callers / tests.
+        flow). The public ``pops.resolve`` phase takes a typed backend descriptor. This engine
+        ``backend`` argument is private lowering vocabulary retained only inside code generation.
 
         - ``backend``: a typed ``pops.codegen.Production()`` / ``AOT()`` / ``JIT()`` descriptor, or the
           internal token "prototype" | "aot" | "production" (cf. HyperbolicModel.compile).

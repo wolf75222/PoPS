@@ -353,34 +353,28 @@ def build_final_case() -> FinalScalarAdvectionCase:
     return FinalScalarAdvectionCase(core, layout)
 
 
-def build_bind_inputs(core: ScalarAdvectionAuthoring) -> Any:
+def build_bind_params(core: ScalarAdvectionAuthoring) -> dict[Any, float]:
     """Build bind values only after validation has made every Handle canonical."""
 
-    from pops.codegen import BindInputs
-
     resolve = core.case.resolve
-    return BindInputs(
-        params={
-            resolve(core.velocity_x_param): 1.0,
-            resolve(core.velocity_y_param): 0.25,
-            resolve(core.inlet_x_param): 0.0,
-            resolve(core.inlet_y_param): 0.0,
-            resolve(core.refine_threshold): 0.10,
-            resolve(core.coarsen_threshold): 0.04,
-        }
-    )
+    return {
+        resolve(core.velocity_x_param): 1.0,
+        resolve(core.velocity_y_param): 0.25,
+        resolve(core.inlet_x_param): 0.0,
+        resolve(core.inlet_y_param): 0.0,
+        resolve(core.refine_threshold): 0.10,
+        resolve(core.coarsen_threshold): 0.04,
+    }
 
 
 def main() -> None:
     """Run the one final lifecycle: Case -> validate -> resolve -> compile -> bind -> run."""
 
-    from pops.codegen import Production
-
     target = build_final_case()
     validated = pops.validate(target.authoring.case)
-    resolved = pops.resolve(validated, layout=target.layout, backend=Production())
+    resolved = pops.resolve(validated, layout=target.layout)
     artifact = pops.compile(resolved)
-    simulation = pops.bind(artifact, inputs=build_bind_inputs(target.authoring))
+    simulation = pops.bind(artifact, params=build_bind_params(target.authoring))
     simulation.run(**target.authoring.run_controls)
 
 

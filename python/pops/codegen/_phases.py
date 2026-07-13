@@ -239,7 +239,7 @@ def bind(artifact: Any, inputs: Any) -> Any:
     if type(artifact) is not CompiledSimulationArtifact:
         raise TypeError("pops.bind requires an exact CompiledSimulationArtifact")
     if type(inputs) is not BindInputs:
-        raise TypeError("pops.bind requires an exact pops.BindInputs value")
+        raise TypeError("internal bind phase requires an exact authenticated BindInputs record")
     artifact.verify()
     inputs.verify()
     plan = artifact.plan

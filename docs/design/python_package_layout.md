@@ -69,10 +69,11 @@ is a leaf that composes descriptors: a preset in `lib.presets` pairs a `lib.mode
 
 ## Public front door
 
-`pops.compile` / `pops.bind` are the only public compile/bind entry points (ADC-523). The low-level
-`compile_problem` driver and the concrete `CompiledProblem` loader class are advanced/internal,
-reachable as `pops.codegen.compile_problem` / `pops.codegen.CompiledProblem`; annotate the compiled
-handle against the `pops.CompiledArtifact` protocol.
+`pops.compile` / `pops.bind` are the only public compile/bind entry points. Resolved plans, compiled
+artifact records, bind-input evidence and install plans are phase-internal values: users receive
+them from the lifecycle but never import or construct their concrete codegen classes. External AOT
+components use the independent `pops.external.load(...).require(...)` and
+`pops.codegen.compile_component(...)` package contract.
 
 ## Rules
 
