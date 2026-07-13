@@ -53,9 +53,11 @@ Cette version ne promet pas :
 - un backend natif pour toute dimension, tout ratio AMR ou toute géométrie concevable ;
 - qu'un protocole générique implique automatiquement qu'un provider installé sait l'exécuter.
 
-Les unités opaques ne sont pas une extension tolérée : `Model.state(..., units=...)` refuse toute
-valeur non nulle. Un futur système d'unités devra être typé et participer à la validation, à l'identité,
-à la conversion, au lowering et aux rapports de bout en bout.
+Les unités opaques ne sont pas une extension tolérée. Il n'existe ni module `pops.units`, ni
+descripteur public d'unité. `Model.state(..., units=...)` refuse toute valeur autre que `None` ;
+`Module.state_space(..., units=...)` et `Module.field_space(..., units=...)` n'acceptent que `None` par
+composante. Le refus précède l'identité et le lowering. Les espaces livrés sont explicitement sans
+unité ; aucune string telle que `"kg/m3"` ou `"V/m"` n'est conservée comme métadonnée décorative.
 
 ## 2. Principes non négociables
 
@@ -118,6 +120,29 @@ fait de la même manière : il délègue son IR à un `Module` et son émission 
 Les phases centrales ne sélectionnent jamais un fournisseur par `isinstance` sur sa classe ; une
 méthode absente, un retour non exact, un émetteur incomplet ou une autre autorité IR sont refusés
 avant la compilation. Il n'existe pas de fallback par attributs `check` ou `module`.
+
+La surface publique de `pops.codegen` est exactement `Production`, `CompilerLowerable` et
+`CompilerLowering`. Les plans résolus, artefacts compilés, enregistrements d'installation et helpers
+de validation restent internes ; ils ne constituent pas un second cycle de vie public.
+
+### 3.2 Métadonnées exactes du modèle compilé
+
+Après compilation, chaque modèle attaché à un bloc fournit ses faits d'artefact par l'unique protocole
+structurel interne `ArtifactModelMetadataProvider`, c'est-à-dire la méthode
+`__pops_artifact_model_metadata__()`. Elle retourne un dictionnaire exact de schéma v1 avec les seules
+clés suivantes :
+
+```text
+schema_version, state_spaces, cons_names, n_vars,
+params, aux_names, n_aux, capabilities
+```
+
+Cette projection est fail-closed : aucune lecture opportuniste d'attribut, aucun compte fabriqué et
+aucun fallback vers le premier modèle ne sont admis. `n_vars` égale exactement la taille de
+`cons_names`, `n_aux` couvre au moins tous les `aux_names`, les capacités associent des noms non vides
+à des booléens exacts, et la route `state_spaces` doit être identique à celle du bloc résolu. Le runtime
+natif livré exige ici exactement un espace d'état nommé par bloc. Cette interface sert aux rapports,
+au calcul mémoire et aux contrôles de bind ; elle ne réintroduit pas une autorité d'authoring.
 
 ## 4. Modèle de données Python
 
@@ -202,8 +227,12 @@ a_x = model.value(a_x_h)
 ```
 
 `Model.state` déclare un espace d'état complet. `Model.species` est la variante multi-espèces et
-produit des espaces distincts de taille arbitraire. Les rôles (`Density`, `Momentum(axis=...)`, etc.)
-sont des objets typés ; ils ne sont ni inférés par position ni confondus avec des unités.
+produit des espaces distincts de taille arbitraire. La famille publique de rôles est exactement
+`ComponentRole`, `Density`, `Momentum`, `Energy`, `Velocity`, `Pressure`, `Temperature` et `Scalar`.
+`Momentum(axis=...)` et `Velocity(axis=...)` exigent un axe cartésien typé `x`, `y` ou `z`. Une string
+de rôle est refusée ; un token natif inconnu ou réservé et deux rôles qui entrent en collision sur le
+même token ABI sont également refusés. Les rôles décrivent la physique d'une composante : ils ne sont
+ni inférés par position, ni confondus avec des unités, ni consultés par un `Program` générique.
 
 Les paramètres ont des kinds fermés (`RuntimeParam`, `ConstParam`, `DerivedParam`), des domaines
 typés et une phase d'utilisation vérifiée. Une valeur structurelle ne peut pas être transformée en
@@ -239,13 +268,28 @@ pas répétés dans l'API de haut niveau ; ils sont dérivés de leurs manifests
 Les champs couplés séparent pareillement :
 
 - `FieldOperator` : équation, inconnue, providers physiques et outputs dérivés ;
-- `FieldDiscretization` : stencil, BC, solver, nullspace et gauge ;
+- `FieldDiscretizationProtocol` : stencil, BC, solver, nullspace et gauge ;
 - appel dans `Program` : instant logique et politique d'échec.
+
+`FieldDiscretization` est l'implémentation builtin de ce protocole, pas une classe centrale à laquelle
+les extensions doivent être ajoutées. Tout provider porte un `provider_id` non vide et projette un
+schéma canonique v2 exact par `to_data()` ; le `provider_id` de l'objet et celui de cette projection
+doivent coïncider. Enregistrement, gel, résolution des références, validation, inspection et lowering
+consomment le protocole sans dispatch sur la classe concrète du plan.
 
 Un solve périodique singulier exige un contrat de nullspace et, lorsqu'une valeur unique est consommée,
 une gauge. Le runtime ne corrige jamais silencieusement un second membre incompatible.
 
 ## 6. Domaine, maillage et layouts
+
+Les layouts publics vivent uniquement dans `pops.layouts` :
+
+```python
+from pops.layouts import AMR, Uniform
+```
+
+Il n'existe pas de surface `pops.mesh.layouts`. `pops.mesh` conserve les grilles, géométries, politiques
+AMR et builders de `LayoutPlan`, mais ne réexporte ni `AMR` ni `Uniform`.
 
 ### 6.1 Domaine et frame
 
@@ -267,8 +311,10 @@ Les frontières sont des handles topologiques issus du frame (`frame.boundaries.
 noms personnalisés sont des labels ; orientation, côté, périodicité et connexions restent typés.
 
 Un `Case` ne possède pas son layout. Après validation, `case.layout_subjects()` expose l'ensemble
-immuable des blocs, états et champs à assigner. Un `LayoutPlan` associe explicitement ces sujets à un
-ou plusieurs layouts et porte les mappings/synchronisations nécessaires.
+immuable des blocs, états et champs à assigner. Un `LayoutPlan` associe explicitement ces sujets aux
+layouts et porte les mappings/synchronisations nécessaires. Le plan sait représenter plusieurs
+affectations, mais le provider d'exécution livré matérialise exactement un layout par artefact : un
+`LayoutPlan` hétérogène est refusé avant la création de l'artefact, sans choix d'un représentant.
 
 ### 6.2 Autorité AMR
 
@@ -297,9 +343,10 @@ valeur. Une expression telle que `norm(grad(ValueExpr(block[U]))) > case.value(t
 résolue dans un contexte discret explicite ; elle n'invente pas un gradient continu exécutable.
 
 Le plan normalisé conserve chaque ratio de transition et le raffinement cumulé de chaque niveau.
-Un provider natif peut annoncer un sous-ensemble, par exemple Cartesian2D et transitions isotropes
-2:1. Il doit alors refuser toute autre demande pendant la résolution ou le bind, avec ses capacités
-exactes. Le coeur de planification ne remplace pas la demande par ce sous-ensemble.
+Le provider natif livré matérialise le coeur maillage/stockage en 2D et ses kernels de transfert,
+reflux et sous-cyclage AMR exigent un ratio de transition égal à 2. Une autre dimension ou un autre
+ratio est refusé pendant la résolution ou le bind avec les capacités observées. Le coeur de
+planification ne normalise jamais la demande vers ce sous-ensemble.
 
 Les critères booléens et les politiques de transfert sont des protocoles authentifiés ouverts. Une
 nouvelle implémentation fournit données canoniques, requirements/capabilities et lowering ; elle ne
@@ -330,25 +377,42 @@ des choix explicites. Le bind refuse deux autorités concurrentes (`initial_stat
 - `commit` et `commit_many` ;
 - `step_strategy` pour le contrôleur et le contrat transactionnel.
 
-Écriture SSPRK2 normative :
+Écriture SSPRK2 normative, uniquement avec les opérations génériques de `Program` :
 
 ```python
-T = pops.Program("SSPRK2")
-q = T.state(block[U])
-k0 = T.value("ssprk2_k_0", A(q.n), at=stage_0)
-q_stage = T.value("ssprk2_U1", q.n + T.dt * k0, at=stage_1)
-k1 = T.value("ssprk2_k_1", A(q_stage), at=stage_1)
-q_next = T.value(
-    "ssprk2_step",
-    q.n + T.dt * Fraction(1, 2) * k0 + T.dt * Fraction(1, 2) * k1,
-    at=q.next.point,
-)
-T.commit(q.next, q_next)
-T.step_strategy(AdaptiveCFL(cfl=0.45, max_dt=1.0e-2))
+from fractions import Fraction
+from pops.time import StagePoint, TimePoint
+
+def explicit_ssprk2(state, rate):
+    program = pops.Program("SSPRK2")
+    q = program.state(state)
+    stage_0 = StagePoint(
+        "ssprk2_stage_0", {"main": TimePoint(program.clock, 0)}
+    )
+    stage_1 = StagePoint(
+        "ssprk2_stage_1", {"main": TimePoint(program.clock, 1)}
+    )
+    k0 = program.value("ssprk2_k_0", rate(q.n), at=stage_0)
+    q_stage = program.value(
+        "ssprk2_U1", q.n + program.dt * k0, at=stage_1
+    )
+    k1 = program.value("ssprk2_k_1", rate(q_stage), at=stage_1)
+    half = Fraction(1, 2)
+    q_next = program.value(
+        "ssprk2_step",
+        q.n + program.dt * half * k0 + program.dt * half * k1,
+        at=q.next.point,
+    )
+    program.commit(q.next, q_next)
+    return program
 ```
 
-`pops.lib.time.SSPRK2(block[U], rate=A)` existe comme factory, mais son graphe canonique doit être
-identique à cette écriture. Le nom du preset ne sélectionne aucune branche runtime.
+`pops.lib.time.SSPRK2(block[U], rate=A)` retourne un `pops.Program` dont le graphe canonique est
+identique à cette écriture. Les factories publiques de programme portent toutes un nom capitalisé :
+`ForwardEuler`, `RungeKutta`, `RK4`, `SSPRK2`, `SSPRK3`, `IMEX`, `AdamsBashforth`, `BDF`,
+`PredictorCorrector`, `Lie` et `Strang`. `ButcherTableau` et les constantes `*_TABLEAU` sont des
+données. Il n'existe ni callable public minuscule concurrent, ni namespace `std`, ni seconde classe
+de stepper ; un nom de factory ne sélectionne aucune branche runtime.
 
 ### 7.2 Explicite, implicite et IMEX
 
@@ -365,9 +429,12 @@ result = T.solve(
 
 Pour un résidu non linéaire local, `LocalResidual` est résolu avec `LocalNewton`. Pour un couplage
 multi-états à l'étape suivante, `CoupledImplicitEuler` reçoit le taux couplé, les prédicteurs et les
-points qualifiés, puis un `LocalNewton`. Les problèmes linéaires de champ utilisent
-`pops.linalg.LinearProblem` et un solveur typé (`GMRES`, `CG`, etc.). Tolérance, budget, stratégie et
-préconditionneur appartiennent au solveur, jamais au résidu.
+points qualifiés, puis un `LocalNewton`. La route globale livrée construit un opérateur matrix-free,
+l'encapsule dans `pops.linalg.LinearProblem`, puis le résout avec `GMRES` ou `BiCGStab`. Pour
+`scope=Hierarchy()`, le provider natif explicite est `CompositeTensorFAC()` ; un scope hiérarchique
+sans ce provider est refusé. Tolérance, budget, stratégie et préconditionneur appartiennent au solveur,
+jamais au résidu. Il n'existe aucune route publique `Schur` ou `CondensedSchur`, ni dans
+`pops.solvers`, ni dans `pops.lib.time`.
 
 Un outcome fallible doit être consommé par une action adaptée à sa phase (`RejectAttempt`, `FailRun`,
 etc.) avant que sa valeur puisse contribuer à un commit ou un effet.
@@ -385,8 +452,9 @@ explicite. Les schedules ciblent leur horloge ; ils ne lisent jamais impliciteme
 `Program.subcycle(state, clock=child, within=parent, count=N, body_fn=...)` est un contrôle structuré :
 `child` et `parent` sont distinctes, `N` est strictement positif, le corps conserve le state qualifié et
 voit exactement `parent_dt / N`. Les sous-cycles imbriqués composent leurs ratios. L'entrée et la sortie
-du domaine enfant restent deux appels explicites à `synchronize`. `SampleAndHold()` est le premier
-provider natif ; tout autre provider sans lowering déclaré est refusé avant publication de l'artefact.
+du domaine enfant restent deux appels explicites à `synchronize`. La route native livrée abaisse
+`SampleAndHold()` ; toute autre relation sans lowering déclaré est refusée avant publication de
+l'artefact.
 
 `Program.temporal_manifest()` authentifie la clock primaire, les ratios et parents, les points de
 synchronisation, les schedules/caches et, pour chaque historique, owner, state, espace, clock, lag,
@@ -402,7 +470,28 @@ qu'à un point accepté et entièrement synchronisé. Une clock attendue mais ab
 restart et les consommateurs ; elle n'est jamais reconstruite depuis `macro_step`. Les anciens schemas
 sont des entrées de migration offline, pas des branches du runtime.
 
-### 7.4 Transaction d'un pas
+### 7.4 Algèbre et extension des schedules
+
+Un schedule est le produit typé `Schedule(trigger, off=...)` de quatre petites interfaces ouvertes :
+
+- `Domain.native_schedule_domain()` retourne un exact `ScheduleDomainIR` ;
+- `Trigger.native_schedule_due()` retourne un exact `ScheduleDueIR` ;
+- `OffPolicy.native_schedule_off()` retourne un exact `ScheduleOffIR` ;
+- `Schedule.native_schedule_ir()` compose les trois en un exact `ScheduleLoweringIR`.
+
+Une extension est un dataclass immuable et slotté, déclare un `manifest_tag`, projette toutes ses
+données comportementales, conserve son type exact pendant le rebuild et participe à l'identité du
+graphe. Un dictionnaire ressemblant à l'IR, un retour partiel ou un type transformé pendant le mapping
+sont refusés ; aucune classe d'extension n'est enregistrée dans une liste centrale.
+
+Le vocabulaire livré comprend les domaines `AcceptedStep`, `Attempt`, `Stage`, `ClockTick`,
+`AMRLevel`, `Event` et `WallOutput`, les triggers `Always`, `Every`, `AtStart`, `AtEnd` et `When`, et les
+politiques `Hold`, `Skip`, `Zero`, `AccumulateDt` et `Error`. Ces objets restent typés dans les manifests
+et le `ConsumerGraph`. Pour un opérateur du `Program`, le lowering natif courant accepte la timeline
+`AcceptedStep` et refuse explicitement un domaine ou une combinaison sans primitive backend ; le fait
+qu'une valeur soit représentable dans l'IR n'annonce pas son exécution native.
+
+### 7.5 Transaction d'un pas
 
 La transaction couvre au minimum : états, champs provisoires, histories, clocks, caches, solve outcomes,
 flux ledgers, regrid planifié et effets consommateurs. Le protocole est :
@@ -429,9 +518,19 @@ case.program(T)
 case.consumers(consumer_graph)
 ```
 
-`states=` sur `case.block` est uniquement une sélection explicite d'un sous-ensemble déclaré ; il est
-omis lorsque tout l'espace du modèle est instancié. Les sorties, diagnostics et AMR utilisent ensuite
-`block[U]`, pas `U` non qualifié.
+`states=` sur `case.block` sélectionne des `StateHandle` déclarés par le modèle. Pour un bloc
+exécutable, il peut être omis uniquement si le modèle déclare exactement un état ; un modèle
+multi-états exige une sélection typée, non vide et sans doublon. Le label du bloc reste un nom
+d'instance et ne choisit jamais l'espace
+d'état : la route du compilateur est le `local_id` du handle sélectionné, conservé séparément dans
+`ResolvedBlock.state_spaces`, le `ProgramModelGraph` et les métadonnées de l'artefact.
+
+Le moteur natif livré accepte exactement un `StateSpace` par bloc. Une sélection de plusieurs espaces
+est donc refusée à `resolve`; deux espèces évoluées indépendamment s'expriment par deux blocs qualifiés,
+par exemple `case.block("electron_fluid", model, states=(electrons,))` et
+`case.block("ion_fluid", model, states=(ions,))`. Les labels `electron_fluid` et `ion_fluid` peuvent
+différer des noms d'espaces `electrons` et `ions` sans changer cette route. Sorties, diagnostics et AMR
+utilisent ensuite `block[U]`, jamais `U` non qualifié.
 
 ### 8.2 Phases exactes
 
@@ -487,15 +586,29 @@ Une ambiguïté entre plusieurs choix valides est une erreur. Une heuristique n'
 omission. Tous les défauts et dérivations entrent dans les rapports et, s'ils changent le comportement,
 dans l'identité sémantique.
 
+### 8.4 Moteurs d'exécution privés
+
+`pops.bind` retourne l'unique `RuntimeInstance` authentifiée et seul `pops.run(instance, **controls)`
+la fait avancer. `RuntimeInstance` n'expose pas de méthode `run`. Les moteurs `System` et `AmrSystem`
+existent uniquement derrière les modules privés d'installation ; `pops.runtime` ne les réexporte pas
+et les chemins `pops.runtime.system`, `pops.runtime.amr_system` et `pops.runtime.mesh` n'existent pas.
+Une application ne construit donc ni moteur, ni config native, ni plan d'installation pour contourner
+`validate -> resolve -> compile -> bind -> run`.
+
 ## 9. Consommateurs, sorties et restart
 
 `ConsumerGraph` est l'unique autorité des effets acceptés : `ScientificOutput`, `Checkpoint` et
 diagnostics planifiés. Chaque consommateur déclare schedule, handles qualifiés, sélection de niveaux,
 format, cible déterministe et comportement d'échec.
 
+Le graphe est résolu avec le layout, authentifié dans le plan et l'artefact, puis détenu par
+`RuntimeInstance`. Le snapshot de bind ne possède aucun registre parallèle `outputs` ou `diagnostics` :
+les recréer à ce niveau constituerait une seconde autorité et est interdit.
+
 Les formats livrés sont des descripteurs (`HDF5`, `NPZ`, `ParaView`) abaissés vers des writers réels.
-Les tests de release rouvrent leurs fichiers indépendamment avec les readers publics ; l'existence du
-fichier seule n'est pas une preuve.
+La gate finale rouvre indépendamment chaque HDF5 et ParaView émis et vérifie leur contenu structurel ;
+l'existence du fichier seule n'est pas une preuve. La route NPZ est exercée par l'exemple IMEX-AMR et
+ses tests de format, sans être présentée comme une réouverture supplémentaire de la gate groupée.
 
 Un checkpoint strict conserve au minimum : identités du plan/programme/composants/consumer graph,
 états, champs matériels requis, histories, clocks/schedules, contrôleur, hiérarchie AMR, cursors des
@@ -577,80 +690,99 @@ La release est conforme uniquement pour les lignes prouvées par la matrice nati
 
 - layouts Uniform et AMR structuré sur les routes annoncées ;
 - physique conservative hyperbolique, sources locales/couplées et champs elliptiques couplés ;
-- programmes explicites, solves locaux/linéaires, IMEX et sous-cycles/synchronisations abaissables ;
+- programmes explicites, solves locaux, IMEX et solve global matrix-free par `LinearProblem` avec
+  `GMRES`/`BiCGStab`, plus `CompositeTensorFAC` pour la portée hiérarchique ;
 - HDF5, NPZ, ParaView et checkpoint/restart transactionnels ;
 - Kokkos comme backend on-node, MPI lorsque compilé et authentifié ;
 - packages C++ externes conformes au manifest et à l'ABI courants.
 
 Les dimensions, ratios, nombres de niveaux, géométries, solveurs et combinaisons device réellement
-exécutables sont lus dans les manifests/capability reports. Le provider AMR livré peut être plus étroit
-que l'IR (notamment Cartesian2D et ratio isotrope 2:1) ; cette restriction est un refus pré-run, pas une
-normalisation du plan.
+exécutables sont lus dans les manifests/capability reports. Le provider livré matérialise un seul
+layout, un seul `StateSpace` par bloc, le coeur de stockage 2D et les transitions AMR de ratio 2 ; toute
+demande hors de cette enveloppe est un refus pré-run, pas une normalisation du plan.
 
 Les maillages non structurés, mobiles/déformables ou changeant de topologie, de nouvelles familles de
-stockage, la complétion 3D de toutes les routes et une algèbre d'unités demandent de futurs contrats du
-coeur. Ils ne sont pas simulés par des placeholders publics.
+stockage, la 3D sur ces routes et une algèbre d'unités ne font pas partie de la release. Ils sont refusés,
+pas simulés par des placeholders publics.
 
 ## 13. Exemples exécutables normatifs
 
 Quatre scripts sont des tests d'acceptation, pas des esquisses :
 
-1. `examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py` : flux conservatif, SSPRK2
-   manuel/preset, AMR, sorties, checkpoint et continuation bit-identique ;
-2. `examples/final/EXEMPLE_SPEC_FINALE_MULTIPHYSIQUE_CORE.py` : deux fluides, champ elliptique,
-   couplage implicite, layouts qualifiés et restart ;
-3. `examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py` : partitions explicite/implicite,
-   points de stage exacts, sous-cycles AMR et synchronisation ;
-4. `examples/final/EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py` : modèle 15 moments, closures et
-   opérateurs génériques sans branche de scénario dans le coeur.
+1. `examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py` : flux conservatif, parité du
+   `Program` SSPRK2 explicite avec `pops.lib.time.SSPRK2`, layout AMR, HDF5/ParaView, checkpoint et
+   continuation bit-identique ;
+2. `examples/final/EXEMPLE_SPEC_FINALE_MULTIPHYSIQUE_CORE.py` : deux `StateSpace` d'un même modèle
+   sélectionnés dans deux blocs qualifiés, layout Uniform, champ elliptique, couplage, HDF5/ParaView et
+   restart bit-identique ;
+3. `examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py` : parité du `Program` IMEX explicite
+   avec `pops.lib.time.IMEX`, coefficients/stages exacts, `AMRExecution.subcycled()`, regrid/reflux,
+   HDF5/NPZ/ParaView et restart strict ;
+4. `examples/final/EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py` : état 15 moments, layout Uniform,
+   `pops.lib.time.IMEX`, champ de Poisson, HDF5/ParaView et continuation bit-identique, sans branche de
+   scénario dans le compilateur.
 
-Chaque script doit :
+`scripts/final_release_contract.py` fixe cet ensemble exact : aucun cinquième script `.py` n'est admis
+dans `examples/final/`. Chaque script doit :
 
 - utiliser exclusivement le cycle de vie public ;
 - sortir avec un code nul depuis le package installé ;
-- produire et rouvrir ses artefacts réels ;
+- accepter `--output-dir` et rester directement exécutable ;
+- produire des artefacts réels ensuite rouverts par la gate ;
+- imprimer les preuves `HDF5:`, `ParaView:`, `checkpoint:` et `bit-identical restart:` ;
 - exercer le restart strict lorsqu'il le déclare ;
 - échouer sans fallback si une capacité nécessaire manque ;
 - ne pas importer une classe interne pour remplacer un trou d'API.
 
 ## 14. Gate de conformance finale
 
-Une release ne peut être déclarée conforme que si une seule gate groupée produit une evidence JSON
-liée au commit, à la version du package et au digest du release contract. L'evidence est générée depuis
-les retours de commandes et ne contient pas de booléens fournis à la main.
+Une release ne peut être déclarée conforme que par
+`scripts/run_final_gate.py --evidence <chemin-hors-checkout>`. La commande exige un checkout propre,
+refuse d'écraser une evidence existante et produit une evidence JSON liée au commit, à la version du
+package, au digest du release contract et au SHA-256 de l'extension native installée. L'evidence est
+générée depuis les retours de commandes et ne contient pas de booléens fournis à la main.
 
-La gate couvre :
+La séquence groupée couvre exactement les onze lignes authentifiées suivantes :
 
-1. `scripts/setup_env.sh` puis `scripts/build_python.sh` ;
-2. `pops.runtime.doctor.doctor()` sur le package installé ;
-3. signature/code-signing des extensions lorsque la plateforme l'exige ;
-4. suite Python complète et tests C++ via CTest ;
-5. les quatre exemples exacts ;
-6. réouverture HDF5/NPZ/ParaView et restart strict indépendant ;
-7. génération/catalogue/schémas sans dérive ;
-8. `docs/check_docs.py` ;
-9. `git diff --check` et worktree de release propre.
+1. `official_build` : `scripts/setup_env.sh`, `scripts/build_python.sh`, puis configure/build du preset
+   CMake `serial` avec les headers `POPS_INCLUDE` du checkout validé ;
+2. `doctor` : `pops.runtime.doctor.doctor()` sur le package installé, sans échec ;
+3. `codesign` : `scripts/codesign_pops_extensions.py` sur les extensions installées ;
+4. `native_conformance` : CTest complet avec JUnit non vide, sans skip, xfail, failure ni error ;
+5. `python_conformance` : suite Python complète, puis lane obligatoire
+   `not mpi and not hdf5` avec JUnit all-pass et sans skip caché ;
+6. `examples` : les quatre scripts exacts depuis le package installé et leurs quatre marqueurs de preuve ;
+7. `artifact_reopen` : parsing indépendant de chaque HDF5/ParaView, puis réouverture HDF5 par `h5py` ;
+8. `strict_restart` : checkpoint réel et digest complet de son arbre pour chaque exemple ;
+9. `documentation` : `docs/check_docs.py` ;
+10. `generated_products` : release contract et component catalog régénérés avec `--check` ;
+11. `diff` : `git diff --check`, `git diff --cached --check` et checkout encore propre.
 
-`scripts/release_preflight.py --release` refuse une evidence incomplète, issue d'un autre commit ou
-d'un autre digest. Les tests conditionnellement ignorés ne peuvent couvrir une exigence finale ; seuls
-les lanes de toolchain explicitement non disponibles peuvent être conditionnels.
+`scripts/release_preflight.py --release --tag <tag> --installed --evidence <json>` refuse une
+evidence incomplète, issue d'un autre commit, d'un autre digest, d'un autre script de gate ou d'une autre
+extension installée. Une exigence de la lane obligatoire ne peut pas être couverte par un test ignoré.
 
 ## 15. Décisions finales
 
 - L'interface est objet, operator-first, proche des équations et organisée par responsabilités.
 - `Handle` et `Expr` restent séparés pour respecter le data model Python.
 - Le flux physique explicite et `DiscretizationPlan` organisé par familles sont conservés.
-- Le programme temporel explicite est la norme ; `pops.lib.time` apporte des factories équivalentes.
+- Le programme temporel explicite est la norme ; `pops.lib.time` apporte des factories capitalisées
+  qui retournent les mêmes `Program`.
 - Le domaine produit des handles de frontières typés ; les labels ne portent pas la sémantique.
 - Les BC appartiennent au plan numérique ; les transferts appartiennent au layout AMR.
+- `pops.layouts` est l'unique surface de layout ; `pops.mesh.layouts` n'existe pas.
 - Le `Case` instancie et qualifie, tandis que le `LayoutPlan` matérialise séparément.
-- L'implicite utilise un problème/résidu complet et un solveur séparé.
+- La route globale implicite est matrix-free : `LinearProblem`, `GMRES`/`BiCGStab`, et
+  `CompositeTensorFAC` pour `Hierarchy`; aucune façade Schur n'est publique.
 - L'AMR conserve ses ratios et raffinements sans les compresser dans une constante globale.
 - Le multirate est fondé sur des clocks qualifiées et des synchronisations explicites.
+- Les schedules étendent séparément domain, trigger, off-policy et IR sans registre de classes.
 - Tous les pas et effets sont transactionnels.
+- `ConsumerGraph` est l'unique autorité des sorties, diagnostics et checkpoints.
 - La généricité vient de petites interfaces et de manifests, pas de branches par classes.
 - Les limites natives sont exposées comme capacités et refus propres.
-- `pops.units` reste hors périmètre jusqu'à l'existence d'un vrai système typé.
+- `pops.units` n'existe pas ; les espaces sont unitless et refusent les unités opaques.
 - Aucun alias historique, fallback silencieux ou promesse non exécutable ne fait partie de la cible.
 
 ## 16. Sources de vérité associées
@@ -664,6 +796,8 @@ les lanes de toolchain explicitement non disponibles peuvent être conditionnels
 - `docs/design/external-component-packages.md` : extension C++ externe ;
 - `schemas/release_contract.v1.json` : versions de schémas, ABI et matrice supportée ;
 - `schemas/component_catalog.v2.json` : composants builtin et routes natives ;
+- `scripts/final_release_contract.py` : spécification et ensemble exact des quatre exemples ;
+- `scripts/run_final_gate.py` : producteur unique de l'evidence groupée ;
 - les quatre scripts de `examples/final/` : conformance utilisateur exécutable.
 
 Toute divergence entre ce document et une gate exécutable est un défaut à corriger. Une fonctionnalité
