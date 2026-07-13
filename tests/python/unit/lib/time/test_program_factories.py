@@ -32,10 +32,10 @@ def _manual_ssprk2(state, rate):
     temporal = program.state(state)
     u0 = temporal.n
     point0 = StagePoint("ssprk2_stage_0", {"main": TimePoint(program.clock, 0)})
-    k0 = program.value("ssprk2_k_0", program.call(rate, u0), at=point0)
+    k0 = program.value("ssprk2_k_0", rate(u0), at=point0)
     point1 = StagePoint("ssprk2_stage_1", {"main": TimePoint(program.clock, 1)})
     u1 = program.value("ssprk2_U1", u0 + program.dt * k0, at=point1)
-    k1 = program.value("ssprk2_k_1", program.call(rate, u1), at=point1)
+    k1 = program.value("ssprk2_k_1", rate(u1), at=point1)
     half = Fraction(1, 2)
     out = program.value(
         "ssprk2_step",
@@ -55,7 +55,7 @@ def _manual_imex_euler(state, explicit, implicit):
         "implicit": TimePoint(program.clock, 1),
     })
     predictor = program.value("imex-euler_predictor_0", 1 * u0, at=point)
-    linear = program.value("imex-euler_L_0", program.call(implicit), at=point)
+    linear = program.value("imex-euler_L_0", program._call(implicit), at=point)
     stage = program.solve_local_linear(
         "imex-euler_stage_solve_0",
         operator=program.I - program.dt * linear,
@@ -64,7 +64,7 @@ def _manual_imex_euler(state, explicit, implicit):
     )
     stage = program.value("imex-euler_stage_0", stage, at=point)
     explicit_rate = program.value(
-        "imex-euler_k_exp_0", program.call(explicit, stage), at=point)
+        "imex-euler_k_exp_0", explicit(stage), at=point)
     implicit_rate = program.value(
         "imex-euler_k_imp_0", program.apply(linear, stage, fields=None), at=point)
     out = program.value(

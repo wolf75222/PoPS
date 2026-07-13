@@ -41,7 +41,7 @@ def resolve_capability_evidence(
     required: set[str] = set()
 
     _collect_problem_evidence(problem, provider_sources, required)
-    library_rows, external_refs = _library_rows(libraries)
+    library_rows, _ = _library_rows(libraries)
     for source, row in library_rows:
         _add_tokens(provider_sources, source, _tokens(row.get("capabilities")))
         required.update(_tokens(row.get("requirements")))
@@ -58,10 +58,6 @@ def resolve_capability_evidence(
             }
             external_evidence.append(
                 _resolve_external_row(source, row, layout_name, external_providers))
-    for ref in external_refs:
-        external_evidence.append(_resolve_external_ref(
-            ref, layout_name=layout_name, provided=provided, module_abi_key=module_abi_key))
-
     amr_evidence = _resolve_amr_program(layout_name, time)
     evidence = {
         "schema_version": CAPABILITY_EVIDENCE_SCHEMA_VERSION,
@@ -131,58 +127,11 @@ def _library_rows(libraries: Any) -> tuple[list[tuple[str, Mapping]], list[Any]]
         values = tuple(libraries or ())
     except TypeError:
         raise TypeError("resolved libraries must be an iterable") from None
-    rows: list[tuple[str, Mapping]] = []
-    refs = []
-    for index, library in enumerate(values):
-        from pops.external.bricks import CompiledBrickRef
-
-        if isinstance(library, CompiledBrickRef):
-            refs.append(library)
-            continue
-        bricks = getattr(library, "bricks", None)
-        if bricks is None and isinstance(library, Mapping):
-            bricks = library.get("bricks")
-        if bricks is None:
-            raise TypeError(
-                "resolved libraries[%d] must be a LibraryManifest or CompiledBrickRef" % index)
-        for row in bricks:
-            if not isinstance(row, Mapping):
-                raise TypeError("resolved library brick evidence must be a mapping")
-            brick_id = row.get("id")
-            if not isinstance(brick_id, str) or not brick_id:
-                raise CapabilityResolutionError("resolved library brick has no canonical id")
-            if row.get("available") is not True:
-                raise CapabilityResolutionError(
-                    "library brick %r is not proven available during resolution" % brick_id)
-            rows.append(("library:%d/brick:%s" % (index, brick_id), row))
-    return rows, refs
-
-
-def _resolve_external_ref(ref: Any, *, layout_name: str, provided: set[str],
-                          module_abi_key: Any) -> dict[str, Any]:
-    from pops.external._brick_gates import validate_ref
-
-    record = ref.manifest_record()
-    if record is None:
-        raise CapabilityResolutionError(
-            "external brick %r is absent from its manifest" % getattr(ref, "native_id", "<unknown>"))
-    context = {
-        "canonical_resolution": True,
-        "capabilities": sorted(provided),
-        "layout": layout_name,
-        "module_abi_key": module_abi_key,
-    }
-    try:
-        validate_ref(
-            record,
-            manifest_abi_key=getattr(ref, "_manifest_abi_key", None),
-            context=context,
-            handle=getattr(ref, "_handle", None),
-            module_abi_key=module_abi_key,
-        )
-    except (RuntimeError, ValueError) as exc:
-        raise CapabilityResolutionError(str(exc)) from exc
-    return _external_evidence(record, layout_name, provided)
+    if values:
+        raise TypeError(
+            "resolved libraries are retired; external components enter through authenticated "
+            "source packages and canonical component descriptors")
+    return [], []
 
 
 def _resolve_external_row(

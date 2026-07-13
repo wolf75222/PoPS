@@ -73,6 +73,8 @@ def reaction_model(name, k):
 
 
 def reaction_program(t, name="implicit_reaction", model=None):
+    from pops.solvers.nonlinear import LocalNewton
+    from pops.time import LocalResidual
     """W = the per-cell solution of r(rho) = rho - rho0 - dt*S(rho) = 0 (an implicit Euler reaction
     step). The residual is built from the named source ``react`` + the iterate / frozen guess."""
     P = t.Program(name)
@@ -86,8 +88,8 @@ def reaction_program(t, name="implicit_reaction", model=None):
         return P.value(
             "r", Uit - U0 - dt * S, at=Uit.point)  # r = U - U0 - dt*S(U)
 
-    W = P.solve_local_nonlinear(name="W", residual=residual, initial_guess=guess,
-                                tol=1e-12, max_iter=50)
+    W = P.solve(LocalResidual(residual, guess), name="W", solver=LocalNewton(
+        tolerance=1e-12, max_iterations=50)).consume(action=t.FailRun())
     P.commit(endpoint, W)
     return P
 
@@ -104,6 +106,8 @@ def chk(cond, label):
 
 # ============================ (A) validation + codegen (pure Python) ============================
 def section_a(t):
+    from pops.solvers.nonlinear import LocalNewton
+    from pops.time import LocalResidual
     print("== (A) solve_local_nonlinear validation + codegen ==")
     try:
         from pops.physics.facade import Model
@@ -114,24 +118,24 @@ def section_a(t):
     # --- builder validation ---
     P = t.Program("v")
     U = typed_state(P, "blk")
-    chk(raises(ValueError, lambda: P.solve_local_nonlinear(residual=U, initial_guess=U)),
+    chk(raises(TypeError, lambda: LocalResidual(U, U)),
         "a non-callable residual is rejected")
 
     def resid(P, Uit, U0):
         return P.value(Uit - U0)
-    chk(raises(ValueError, lambda: P.solve_local_nonlinear(residual=resid, initial_guess="x")),
+    chk(raises(ValueError, lambda: P.solve(LocalResidual(resid, "x"), solver=LocalNewton())),
         "a non-State initial_guess is rejected")
-    chk(raises(ValueError, lambda: P.solve_local_nonlinear(residual=resid, initial_guess=U, max_iter=0)),
+    chk(raises(ValueError, lambda: LocalNewton(max_iterations=0)),
         "max_iter <= 0 is rejected")
-    chk(raises((ValueError, NotImplementedError),
-               lambda: P.solve_local_nonlinear(residual=resid, initial_guess=U, method="broyden")),
-        "an unsupported method is rejected")
+    chk(raises(TypeError, lambda: P.solve(LocalResidual(resid, U), solver="broyden")),
+        "a string solver selector is rejected")
 
     # A non-local residual op (P.rhs carries a divergence / halo) cannot live in a per-cell kernel.
     def bad_resid(P, Uit, U0):
         R = P._rhs_legacy(state=Uit, sources=["default"])
         return P.value(Uit - U0 - P.dt * R, at=Uit.point)
-    chk(raises(ValueError, lambda: P.solve_local_nonlinear(residual=bad_resid, initial_guess=U)),
+    chk(raises(ValueError, lambda: P.solve(
+        LocalResidual(bad_resid, U), solver=LocalNewton())),
         "a non-local residual op (P.rhs) is rejected")
 
     # --- a valid Newton IR validates + hashes; the residual sub-block is recorded ---
@@ -155,8 +159,9 @@ def section_a(t):
         def r(Q, Uit, U0):
             return Q.value(
                 Uit - U0 - dt * Q._source("react", state=Uit), at=Uit.point)
-        Q.commit(endpoint, Q.solve_local_nonlinear(
-            name="W", residual=r, initial_guess=guess, tol=tol, max_iter=mi))
+        Q.commit(endpoint, Q.solve(
+            LocalResidual(r, guess), name="W", solver=LocalNewton(
+                tolerance=tol, max_iterations=mi)).consume(action=t.FailRun()))
         return Q._ir_hash()
     chk(_h(1e-10, 20) != _h(1e-8, 20), "a different tol rehashes the IR")
     chk(_h(1e-10, 20) != _h(1e-10, 30), "a different max_iter rehashes the IR")
@@ -194,8 +199,9 @@ def section_a(t):
         return P.value(
             Uit - U0 - P.dt * P._source("react", state=Uit), at=Uit.point)
     Pbig.commit(endpoint,
-                Pbig.solve_local_nonlinear(
-                    name="W", residual=big_resid, initial_guess=guess))
+                Pbig.solve(
+                    LocalResidual(big_resid, guess), name="W", solver=LocalNewton()
+                ).consume(action=t.FailRun()))
     big_src = Pbig.emit_cpp_program(model=big)
     chk("pops::detail::mat_inverse<9>(" in big_src and "pops::Real J_[9][9];" in big_src,
         "n_cons=9 emits exact manifest-sized Newton storage")

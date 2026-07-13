@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
 
-from pops.descriptors import Availability, Descriptor, _planned
+from pops.descriptors import Availability, Descriptor
 from pops.descriptors_report import CapabilitySet
 from pops.identity import Identity, make_identity
 from pops.ir.literals import scalar_data
@@ -71,6 +71,35 @@ class PreparedFieldNonlinear:
         setter(provider_slot, _runtime_number(o["tolerance"]), o["max_iterations"],
                _runtime_number(o["linear_tolerance"]), o["linear_max_iterations"], o["restart"],
                _runtime_number(o["armijo"]), _runtime_number(o["minimum_step"]))
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedLocalNewton:
+    """Private immutable provider for either form of cell-local Newton solve."""
+
+    tolerance: float
+    max_iterations: int
+    finite_difference_step: float
+    identity: Identity
+
+    def __post_init__(self) -> None:
+        payload = {
+            "schema_version": 1,
+            "tolerance": scalar_data(self.tolerance),
+            "max_iterations": self.max_iterations,
+            "finite_difference_step": scalar_data(self.finite_difference_step),
+        }
+        if self.identity != make_identity("prepared-local-newton", payload):
+            raise ValueError("prepared LocalNewton identity is not canonical")
+
+    def build_program_solve(
+        self, *, program: Any, problem: Any, name: Any = None,
+    ) -> Any:
+        """Join two explicit small protocols without inspecting a problem class."""
+        build = getattr(problem, "build_with", None)
+        if not callable(build):
+            raise TypeError("LocalNewton requires a typed Program solve problem")
+        return build(program=program, prepared_solver=self, name=name)
 
 
 def _positive_int(value: Any, name: str) -> int:
@@ -177,9 +206,48 @@ class Newton(Descriptor):
             make_identity("prepared-field-nonlinear", payload))
 
 
-def FixedPoint(**options: Any) -> Any:
-    """Catalogued fixed-point descriptor; no native field provider claims it yet."""
-    return _planned("fixed_point", "fixed_point", category="solver", **options)
+class LocalNewton(Descriptor):
+    """Typed cell-local Newton solve with no unused global Krylov/line-search knobs."""
 
+    category = "nonlinear_solver"
+    native_id = "pops::LocalNewton"
+    scheme = "newton"
 
-__all__ = ["FixedPoint", "Newton", "PreparedFieldNonlinear"]
+    def __init__(
+        self,
+        *,
+        tolerance: Any = 1.0e-12,
+        max_iterations: Any = 20,
+        finite_difference_step: Any = 1.0e-7,
+    ) -> None:
+        self.tolerance = _positive_float(tolerance, "tolerance")
+        self.max_iterations = _positive_int(max_iterations, "max_iterations")
+        self.finite_difference_step = _positive_float(
+            finite_difference_step, "finite_difference_step")
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "scheme": self.scheme,
+            "tolerance": self.tolerance,
+            "max_iterations": self.max_iterations,
+            "finite_difference_step": self.finite_difference_step,
+        }
+
+    def prepare_program_solve(self) -> _PreparedLocalNewton:
+        """Prepare the generic Program solve provider."""
+        payload = {
+            "schema_version": 1,
+            "tolerance": scalar_data(self.tolerance),
+            "max_iterations": self.max_iterations,
+            "finite_difference_step": scalar_data(self.finite_difference_step),
+        }
+        return _PreparedLocalNewton(
+            tolerance=self.tolerance,
+            max_iterations=self.max_iterations,
+            finite_difference_step=self.finite_difference_step,
+            identity=make_identity("prepared-local-newton", payload),
+        )
+
+__all__ = [
+    "LocalNewton", "Newton", "PreparedFieldNonlinear",
+]

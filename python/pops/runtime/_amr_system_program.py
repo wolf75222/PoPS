@@ -36,9 +36,7 @@ class _AmrSystemProgram(_AmrSystem):
           - (5b) COMPILED-PROGRAM RUNTIME PARAMS (parity ADC-510): route the remaining params to the
             per-PROGRAM-block set_program_params, AFTER install_program seeded each block's declaration
             defaults. A name declared by no Program kernel raises (no silent drop).
-          - (6) PROGRAM CADENCE (substeps / stride): a compiled Program is ONE whole-system closure, so
-            its macro-step cadence is GLOBAL. Apply it AFTER install_program. A native AMR install has no
-            Program -- set substeps / stride on the native time policy instead.
+          - cadence is authored by Program schedules and step strategies, never by a bind-time policy.
         """
         if so_path is not None:
             self.install_program(so_path)
@@ -56,12 +54,9 @@ class _AmrSystemProgram(_AmrSystem):
             self._install_program_params(compiled, schema, params)
 
         if cadence is not None:
-            if so_path is None:
-                raise ValueError(
-                    "pops.bind(cadence=): a cadence applies to a compiled time Program; a native AMR "
-                    "install (compiled=None) has no Program -- set substeps / stride on the native time "
-                    "policy (pops.Explicit(substeps=, stride=)) instead.")
-            self._install_cadence(cadence)
+            raise TypeError(
+                "pops.bind(cadence=) was removed; declare cadence in the Program schedule and "
+                "time-step control in Program.step_strategy()")
 
     def _install_program_params(self, compiled: Any, schema: Any, params: Any) -> None:
         """Install complete owner-qualified Program vectors from BindSchema."""
@@ -69,18 +64,3 @@ class _AmrSystemProgram(_AmrSystem):
         per_block = route_program_params(compiled, schema, params)
         for blk, values in per_block.items():
             self.set_program_params(blk, values)
-
-    def _install_cadence(self, cadence: Any) -> Any:
-        """Apply a CompiledTime macro-step cadence to the installed AMR program (set_program_cadence,
-        AMR mirror of System._install_cadence). substeps=n re-runs the whole program over eff_dt/n;
-        stride=M runs it once per M macro-steps. A NUMERIC cadence.cfl is pinned so a bare run() with no
-        explicit cfl= uses it (step_cfl routes the per-block CFL dt through the installed program)."""
-        from pops.time.program import CompiledTime
-        if not isinstance(cadence, CompiledTime):
-            raise TypeError("pops.bind(cadence=): expected a pops.time.CompiledTime(substeps=, stride=), "
-                            "got %r" % type(cadence).__name__)
-        if cadence.cfl != "default":
-            from pops.solvers._numeric import native_float
-            self._program_cadence_cfl = native_float(
-                cadence.cfl, where="CompiledTime cfl")
-        self.set_program_cadence(cadence.substeps, cadence.stride)

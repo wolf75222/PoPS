@@ -164,7 +164,7 @@ class _SourceMixin(_HyperbolicModel):
                       fluxes: Any = None) -> Any:
         """Declare a NAMED composite rate operator ``R_name = -div F + sum(sources)`` (Spec 2,
         operator-first). It is a Program-side ALIAS for ``ctx.rhs(flux=, sources=, fluxes=)``: a typed
-        ``P.call(name, U[, fields])`` lowers to the SAME rhs IR as the explicit ``P.rhs(...)`` shortcut,
+        calling the returned handle lowers to the same internal rhs IR,
         so a model-free Program can address the RHS by one operator name instead of spelling out
         flux/sources. The alias carries no new numerics (its flux/sources are already in the model and
         the hash) -- it never enters the model hash nor the codegen. ``flux`` / ``sources`` / ``fluxes``
@@ -172,8 +172,8 @@ class _SourceMixin(_HyperbolicModel):
         rate operators, and must not collide with a source_term / linear_source.
 
         Returns the declared operator's :class:`pops.model.OperatorHandle` (Spec 5 sec.14.2.3): an
-        inert typed reference (``.name`` / ``.kind == "local_rate"``) a Program can pass to ``P.call``
-        in place of the string name, lowering to the byte-identical IR."""
+        inert typed reference (``.name`` / ``.kind == "local_rate"``) callable with Program values;
+        string operator selection is absent."""
         if self.n_vars == 0:
             raise ValueError("rate_operator(%r): declare conservative_vars(...) first" % (name,))
         if not (isinstance(name, str) and name.isidentifier()):

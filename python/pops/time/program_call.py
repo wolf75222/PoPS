@@ -1,10 +1,10 @@
 """pops.time Program authoring mixin -- typed operator-call lowering.
 
-Split out of :mod:`pops.time.program_core` for the 500-line cap (ADC-550): the operator-first
-``P.call`` front door plus the internal ``_call`` lowering and its helpers
+Split out of :mod:`pops.time.program_core` for the 500-line cap (ADC-550): the private
+``_call`` lowering used by callable operator handles plus its helpers
 (``_operator_call_name`` / ``_validate_schedule`` / ``_lower_call`` / ``_lower_coupled_rate`` /
-``_check_call_args``). ``_ProgramCore`` mixes :class:`_ProgramCall` in, so ``Program`` exposes the
-same methods and the IR built by ``P.call`` is byte-identical.
+``_check_call_args``). ``_ProgramCore`` mixes :class:`_ProgramCall` in while the public surface
+stays operator-first (``rate(state)``).
 
 Like ``program_core``, this stays free of any ``pops.codegen`` / ``_pops`` module-scope edge: the
 ``pops.model`` import is function-local.
@@ -27,52 +27,16 @@ else:
 
 
 class _ProgramCall(_ProgramBase):
-    """Typed operator-call lowering (``P.call`` and its internal ``_call`` path)."""
-
-    def call(self, operator: Any, *args: Any, name: Any = None, schedule: Any = None) -> Any:
-        """Call a typed operator by HANDLE (the operator-first level, Spec 5 sec.14.2.3).
-
-        ``operator`` MUST be the :class:`pops.model.OperatorHandle` a declarer (``m.rate`` /
-        ``m.field_operator`` / ``m.source_term`` / ``m.rate_operator`` / ``m.linear_source``)
-        returned -- the one public path. A bare string operator NAME is REFUSED with a clear
-        ``TypeError`` naming the handle path: a Program references an operator only by the typed
-        handle, never by a free string (Spec 5 "one clean API", ADC-479 criterion 23).
-
-        The handle retains its owner, kind and optional structural signature through exact registry
-        resolution; only then does lowering use the registered operator name. Thus
-        ``P.call(handle, ...)`` builds the byte-identical IR as the
-        INTERNAL ``P._call(registered_name, ...)`` path (used by lowerers after validation and the
-        operator-first lowering). Resolves the handle against the bound operator registry (see
-        :meth:`bind_operators`), type-checks the arguments against the operator's ``Signature``, then
-        lowers to the equivalent primitive op so the result is IDENTICAL to the matching PDE shortcut:
-        a ``field_operator`` to ``solve_fields``, a ``local_source`` to ``source``, a
-        ``grid_operator`` / ``local_rate`` to ``rhs``, a ``local_linear_operator`` to
-        ``linear_source``, a ``projection`` to ``project``. A Program composes operators by signature,
-        never by a hardcoded PDE category.
-        """
-        from pops.model import OperatorHandle
-        if not isinstance(operator, OperatorHandle):
-            if isinstance(operator, str):
-                raise TypeError(
-                    "P.call requires a typed operator handle, not the string %r; build it with "
-                    "m.rate(...) / m.field_operator(...) / m.source_term(...) (any m.*_operator "
-                    "declarer returns an pops.model.OperatorHandle)" % (operator,))
-            raise TypeError(
-                "P.call: operator must be an pops.model.OperatorHandle (from m.rate / "
-                "m.field_operator / m.source_term / m.rate_operator / m.linear_source), got %r"
-                % (operator,))
-        return self._call(operator, *args, name=name, schedule=schedule)
+    """Private typed operator-call lowering used by callable operator handles."""
 
     def _call(self, operator: Any, *args: Any, name: Any = None, schedule: Any = None) -> Any:
         """Internal operator-first call: resolve, type-check and lower an operator (str name OR
-        handle). NOT a public surface -- it is the byte-identical lowering the public typed
-        :meth:`call` delegates to, and the path the ``pops.lib.time`` macros, the board/operator
-        handles and the re-entrant typed lowering use directly (a string token survives here only as
-        an internal selector, undocumented in the public API)."""
+        handle). NOT a public surface: callable operator handles delegate here after locating their
+        Program from typed arguments. A string token survives only for internal lowerers."""
         from pops.model import OperatorHandle
         operator_handle = None
         if isinstance(operator, OperatorHandle):
-            op = resolve_operator_handle(self, operator, where="P.call", values=args)
+            op = resolve_operator_handle(self, operator, where="operator call", values=args)
             operator_name = op.name
             operator_handle = operator
         else:
@@ -81,7 +45,7 @@ class _ProgramCall(_ProgramBase):
             op = resolve_registered_operator(
                 self, operator_name, where="P._call", values=args)
         self._check_call_args(op, args)
-        self._validate_scheduled_reads(args, consumer="P.call(%r)" % op.name)
+        self._validate_scheduled_reads(args, consumer="operator %r" % op.name)
         if schedule is not None:
             self._validate_schedule(op, schedule, args)
         result = self._lower_call(op, operator_name, args, name)
@@ -138,7 +102,7 @@ class _ProgramCall(_ProgramBase):
 
         Accepts only a plain ``str`` internal selector token. Handles are resolved by
         :func:`resolve_operator_handle` before this private seam is reached, so no typed identity can
-        be reduced to a name here. The public string reject lives in :meth:`call`."""
+        be reduced to a name here."""
         if isinstance(operator, str) and operator:
             return operator
         raise TypeError(

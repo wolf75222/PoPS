@@ -90,11 +90,7 @@ class _SystemUnifiedInstall(_System):
             set_poisson(solver=...). The default Poisson field ("phi"/"charge_density"/"poisson") and
             any NAMED elliptic field a block's model DECLARES (m.elliptic_field) are accepted and route
             through the shared system elliptic solver; a field name no model declares raises (typo).
-        @param cadence optional pops.CompiledTime(substeps=, stride=): the compiled Program's macro-step
-            cadence, applied with set_program_cadence AFTER install_program. A compiled Program is ONE
-            whole-system closure, so its cadence is GLOBAL (one program-level value). A numeric
-            cadence.cfl is applied at runtime by sim.run(cfl=) (the cadence pins it on the System so a
-            bare sim.run(t_end) uses it), not by the install.
+        @param cadence retired; Program schedules and step strategies are the sole time authorities.
         @param outputs must be empty; exact publications are compiled ConsumerGraph nodes owned by
             RuntimeInstance after an accepted step.
         @throws the verbatim Spec section-24 errors at install (missing aux / solver / block instance /
@@ -204,16 +200,10 @@ class _SystemUnifiedInstall(_System):
             # BindSchema projection after loading, including declaration defaults.
             self._install_program_params(compiled, bind_schema, params)
 
-        # (6) PROGRAM CADENCE (substeps / stride): a compiled Program is ONE whole-system closure, so
-        # its macro-step cadence is GLOBAL. Apply it AFTER install_program (the cadence wraps the
-        # installed closure); a native sim sets substeps / stride on its time policy instead.
         if cadence is not None:
-            if so_path is None:
-                raise ValueError(
-                    "install(cadence=): a cadence applies to a compiled time Program; a native sim "
-                    "(compiled=None) has no Program -- set substeps / stride on the native time policy "
-                    "(pops.Explicit(substeps=, stride=)) instead.")
-            self._install_cadence(cadence)
+            raise TypeError(
+                "install(cadence=) was removed; declare cadence in the Program schedule and "
+                "time-step control in Program.step_strategy()")
 
         if outputs or diagnostics:
             raise ValueError(
@@ -252,25 +242,6 @@ class _SystemUnifiedInstall(_System):
     # Host-testable alias of the pure core (mirrors _route_block_params: callable as
     # System._collect_missing_arguments without building a System).
     _collect_missing_arguments = staticmethod(collect_missing_arguments)
-
-    def _install_cadence(self, cadence: Any) -> Any:
-        """Apply a CompiledTime macro-step cadence to the installed program (set_program_cadence).
-
-        set_program_cadence is a SYSTEM-level orchestration around the opaque program closure:
-        substeps=n re-runs the whole program over eff_dt/n; stride=M runs it once per M macro-steps. A
-        NUMERIC cadence.cfl is NOT consumed here; it is stored on the System so a bare sim.run(t_end)
-        defaults sim.run(cfl=) to it. A self-computed cfl sub-program (cfl='program') is rejected
-        upstream by CompiledTime, so it never reaches here."""
-        from pops.time.program import CompiledTime
-        if not isinstance(cadence, CompiledTime):
-            raise TypeError("install(cadence=): expected a pops.CompiledTime(substeps=, stride=), "
-                            "got %r" % type(cadence).__name__)
-        if cadence.cfl != "default":
-            # Pin the numeric cfl so run() with no explicit cfl= uses it (not a silent no-op).
-            from pops.solvers._numeric import native_float
-            self._program_cadence_cfl = native_float(
-                cadence.cfl, where="CompiledTime cfl")
-        self.set_program_cadence(cadence.substeps, cadence.stride)
 
     def _lower_spatial(self, spatial: Any) -> Any:
         """Lower a spatial selection to an pops.Spatial consumed by add_equation. Accepts an

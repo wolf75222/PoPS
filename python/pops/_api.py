@@ -66,7 +66,11 @@ def run(instance: Any, **controls: Any) -> Any:
 
     if type(instance) is not RuntimeInstance:
         raise TypeError("pops.run expects the exact RuntimeInstance returned by pops.bind")
-    return instance.run(**controls)
+    if "strategy" in controls or "cfl" in controls:
+        raise TypeError(
+            "pops.run does not accept strategy= or cfl=; declare the controller with "
+            "Program.step_strategy(...)")
+    return instance._run(**controls)
 
 
 __all__ = ["bind", "compile", "resolve", "run", "validate"]

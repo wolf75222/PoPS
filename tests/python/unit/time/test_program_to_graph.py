@@ -35,7 +35,7 @@ def _program(*, with_operator=False):
     if rate is None:
         result = program.value("u_next", state.n, at=state.next.point)
     else:
-        called = program.call(rate, state.n, name="decay_rate")
+        called = rate(state.n, name="decay_rate")
         result = program.value(
             "u_next", state.n + program.dt * called, at=state.next.point)
     program.commit(state.next, result)

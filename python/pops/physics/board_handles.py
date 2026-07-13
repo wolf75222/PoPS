@@ -65,13 +65,13 @@ def _canon_role(role: Any) -> Any:
     """Translate one typed public role at the private Module boundary."""
     if role is None:
         return None
-    from .roles import ComponentRole
+    from .roles import ComponentRole, native_role_token
 
     if isinstance(role, str):
         raise TypeError("state roles require typed ComponentRole descriptors, not strings")
     if not isinstance(role, ComponentRole):
         raise TypeError("state role must implement ComponentRole")
-    return role.native_name
+    return native_role_token(role)
 
 
 def _roles_for(hyp: Any) -> Any:
@@ -336,9 +336,9 @@ class FieldsHandle(OperatorHandle):
     fields (ADC-556).
 
     A ``FieldsHandle`` IS an :class:`pops.model.OperatorHandle` of kind ``"field_operator"`` (so it
-    resolves through the one public ``P.call`` path like any operator), enriched with the field
+    resolves through the same callable-operator path as any operator), enriched with the field
     solve's structured :class:`FieldOutputs` and the required elliptic ``solver``. Calling it with a
-    Program State value lowers through the same owner-checked ``P.call`` path as every operator and
+    Program State value lowers through the same owner-checked private seam as every operator and
     returns the FieldContext-tagged value. The Program must first bind the declaring model/module;
     a bare call without a Program value is refused.
     """
@@ -364,7 +364,7 @@ class FieldsHandle(OperatorHandle):
             raise ValueError(
                 "field operator %r must be called with a time-Program State value "
                 "(inside a Program); got %r" % (self.name, state))
-        return prog.call(self, state, name=self.name if name is None else name)
+        return prog._call(self, state, name=self.name if name is None else name)
 
     def __repr__(self) -> str:
         return "FieldsHandle(%r)" % (self.name,)

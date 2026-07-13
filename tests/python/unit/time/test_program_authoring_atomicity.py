@@ -143,6 +143,8 @@ def test_step_builder_failure_is_atomic():
 
 
 def test_local_nonlinear_callback_failure_rolls_back_and_retry_reuses_ids():
+    from pops.solvers.nonlinear import LocalNewton
+    from pops.time import FailRun, LocalResidual
     program = Program("atomic_local_nonlinear")
     initial = typed_state(program, "plasma")
     leaked = []
@@ -155,8 +157,7 @@ def test_local_nonlinear_callback_failure_rolls_back_and_retry_reuses_ids():
         raise _BuilderFailure("local residual failed")
 
     with pytest.raises(_BuilderFailure, match="local residual failed"):
-        program.solve_local_nonlinear(
-            residual=fail_after_nodes, initial_guess=initial)
+        program.solve(LocalResidual(fail_after_nodes, initial), solver=LocalNewton())
 
     failed_ids = tuple(value.id for value in leaked)
     assert _authoring_identity(program) == before
@@ -170,11 +171,11 @@ def test_local_nonlinear_callback_failure_rolls_back_and_retry_reuses_ids():
         retried.extend((iterate, guess, first, second))
         return second
 
-    result = program.solve_local_nonlinear(
-        residual=succeed, initial_guess=initial)
+    result = program.solve(LocalResidual(succeed, initial), solver=LocalNewton()).consume(
+        action=FailRun())
 
     assert tuple(value.id for value in retried) == failed_ids
-    assert result.id == before[1] + len(failed_ids)
+    assert result.inputs[0].inputs[0].id == before[1] + len(failed_ids)
 
 
 def test_set_apply_callback_failure_rolls_back_and_retry_reuses_ids():

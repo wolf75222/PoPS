@@ -32,9 +32,11 @@ from pops.frames import Cartesian2D
 from pops.ir import ValueExpr
 from pops.ir.expr import Const, Var
 from pops.math import ddt, div, laplacian
+from pops.numerics import DiscretizationPlan, FiniteVolume, reconstruction, riemann, variables
 from pops.physics import Density, Momentum
 from pops.solvers.elliptic import GeometricMG
-from pops.time import Dense, FailRun, FixedDt, RejectAttempt
+from pops.solvers.nonlinear import LocalNewton
+from pops.time import CoupledImplicitEuler, Dense, FailRun, FixedDt, RejectAttempt
 
 
 DEFAULT_CELLS = 8
@@ -59,6 +61,8 @@ class MultiphysicsAuthoring:
     explicit_electrons: Any
     explicit_ions: Any
     collision: Any
+    electron_numerics: Any
+    ion_numerics: Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +186,27 @@ def build_authoring() -> MultiphysicsAuthoring:
         equation=ddt(ions) == -div(ion_flux) + ion_force,
     )
 
+    electron_numerics = DiscretizationPlan()
+    electron_numerics.rates.add(
+        explicit_electrons,
+        FiniteVolume(
+            flux=electron_flux,
+            variables=variables.Conservative(electrons),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov(),
+        ),
+    )
+    ion_numerics = DiscretizationPlan()
+    ion_numerics.rates.add(
+        explicit_ions,
+        FiniteVolume(
+            flux=ion_flux,
+            variables=variables.Conservative(ions),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov(),
+        ),
+    )
+
     # Each model-owned provider contributes one signed source-density term to the same Poisson RHS.
     electron_charge = model.field_provider(
         "electron_charge", on=electrons, into=fields, value=-ne,
@@ -202,8 +227,10 @@ def build_authoring() -> MultiphysicsAuthoring:
     )
 
     case = pops.Case("two_fluid_transport_field_collision")
-    electron_block = case.block("electrons", model)
-    ion_block = case.block("ions", model)
+    electron_block = case.block("electrons", model, states=(electrons,))
+    ion_block = case.block("ions", model, states=(ions,))
+    case.numerics(electron_numerics, block=electron_block)
+    case.numerics(ion_numerics, block=ion_block)
     electron_state = electron_block[electrons]
     ion_state = ion_block[ions]
 
@@ -240,15 +267,12 @@ def build_authoring() -> MultiphysicsAuthoring:
     program.keep_history(electron_time, depth=1, checkpoint_policy=Dense())
     program.keep_history(ion_time, depth=1, checkpoint_policy=Dense())
 
-    exact_fields = program.solve_fields_from_blocks(
-        (electron_time.n, ion_time.n), field=field, name="electrostatic_at_n"
+    exact_fields = field(
+        electron_time.n, ion_time.n, name="electrostatic_at_n"
     ).consume(action=FailRun())
-    electron_rate = program.call(
-        explicit_electrons, electron_time.n, exact_fields, name="electron_explicit_rate"
-    )
-    ion_rate = program.call(
-        explicit_ions, ion_time.n, exact_fields, name="ion_explicit_rate"
-    )
+    electron_rate = explicit_electrons(
+        electron_time.n, exact_fields, name="electron_explicit_rate")
+    ion_rate = explicit_ions(ion_time.n, exact_fields, name="ion_explicit_rate")
     electron_predictor = program.value(
         "electron_predictor",
         electron_time.n + program.dt * electron_rate,
@@ -260,17 +284,20 @@ def build_authoring() -> MultiphysicsAuthoring:
         at=ion_time.next.point,
     )
 
-    collided = program.solve_implicit(
-        collision,
-        (electron_predictor, ion_predictor),
-        method="newton",
-        tol=1.0e-11,
-        max_iter=12,
-        fd_eps=1.0e-7,
-        at={
-            electron_block: electron_time.next.point,
-            ion_block: ion_time.next.point,
-        },
+    collided = program.solve(
+        CoupledImplicitEuler(
+            collision,
+            (electron_predictor, ion_predictor),
+            at={
+                electron_block: electron_time.next.point,
+                ion_block: ion_time.next.point,
+            },
+        ),
+        solver=LocalNewton(
+            tolerance=1.0e-11,
+            max_iterations=12,
+            finite_difference_step=1.0e-7,
+        ),
         name="collision_at_next",
     ).consume(action=RejectAttempt())
     program.commit_many(
@@ -321,6 +348,8 @@ def build_authoring() -> MultiphysicsAuthoring:
         explicit_electrons=explicit_electrons,
         explicit_ions=explicit_ions,
         collision=collision,
+        electron_numerics=electron_numerics,
+        ion_numerics=ion_numerics,
     )
 
 
@@ -463,9 +492,9 @@ def run_and_restart(
         initial_state=build_initial_state(cells=cells),
         aux=build_initial_fields(cells=cells),
     )
-    if simulation.run(
-            t_end=DEFAULT_DT, max_steps=1, output_dir=root / "accepted",
-            strategy=FixedDt(DEFAULT_DT)) != 1:
+    if pops.run(
+            simulation,
+            t_end=DEFAULT_DT, max_steps=1, output_dir=root / "accepted") != 1:
         raise RuntimeError("the accepted segment did not execute exactly one macro-step")
 
     hdf5_path = root / "accepted" / "two_fluid.h5"
@@ -489,12 +518,12 @@ def run_and_restart(
         raise RuntimeError("restart did not publish an authenticated checkpoint identity")
 
     final_time = 2.0 * DEFAULT_DT
-    simulation.run(
-        t_end=final_time, max_steps=1, output_dir=root / "continuous",
-        strategy=FixedDt(DEFAULT_DT))
-    resumed.run(
-        t_end=final_time, max_steps=1, output_dir=root / "restarted",
-        strategy=FixedDt(DEFAULT_DT))
+    pops.run(
+        simulation,
+        t_end=final_time, max_steps=1, output_dir=root / "continuous")
+    pops.run(
+        resumed,
+        t_end=final_time, max_steps=1, output_dir=root / "restarted")
     continuous, restarted = _snapshot(simulation), _snapshot(resumed)
     _require_same_snapshot(continuous, restarted, where="bit-identical continuation")
 

@@ -105,28 +105,19 @@ def test_krylov_declare_amr_route_capabilities():
         assert d.inspect()["capabilities"]["supports_amr"] is True
 
 
-# --- nonlinear solvers (planned: no native type yet) -------------------------------------
+# --- executable nonlinear solvers ---------------------------------------------------------
 
-def test_nonlinear_are_planned():
-    for d in (nonlinear.Newton(), nonlinear.FixedPoint()):
-        assert d.available().ok is False
-        assert d.native_id == ""
-        assert d.category == "solver"
-    assert nonlinear.Newton().scheme == "newton"
-    assert nonlinear.FixedPoint().scheme == "fixed_point"
-
-
-def test_nonlinear_refuse_cleanly_with_no_native_backing():
-    # ADC-535: Newton / FixedPoint have NO native solver TYPE (Newton is the implicit-stepper
-    # kernel; a fixed point is authored over Krylov). They must REFUSE cleanly -- validate()
-    # raises a clear "no native C++ symbol yet" message, never fabricating a symbol.
-    for d in (nonlinear.Newton(), nonlinear.FixedPoint()):
-        with pytest.raises(ValueError, match=r"no native C\+\+ symbol"):
-            d.validate()
-        # the refusal is surfaced structurally too (the ADC-549 capability-matrix row).
-        row = d.capability_matrix().rows[0]
-        assert row.status == "unavailable"
-        assert row.error_message  # names the unsupported route
+def test_nonlinear_surface_contains_only_executable_descriptors():
+    assert not hasattr(nonlinear, "FixedPoint")
+    local = nonlinear.LocalNewton(
+        tolerance=1e-10, max_iterations=12, finite_difference_step=1e-6)
+    assert local.to_data() == {
+        "scheme": "newton",
+        "tolerance": 1e-10,
+        "max_iterations": 12,
+        "finite_difference_step": 1e-6,
+    }
+    assert nonlinear.Newton().available().ok is True
 
 
 # --- Schur-condensation solver -----------------------------------------------------------
@@ -330,7 +321,8 @@ def test_lib_solvers_shim_is_removed():
     assert ns.GMRES(max_iter=200).scheme == "gmres"
     assert ns.CG(max_iter=200).native_id == "pops::cg_solve"
     assert ns.Schur().native_id == "pops::SchurCondensationOperator"
-    assert ns.Newton().available().ok is False
+    assert ns.Newton().available().ok is True
+    assert ns.LocalNewton().scheme == "newton"
     assert solvers.preconditioners.GeometricMG().native_id == "pops::GeometricMG"
 
     # The custom-solver authoring / generation DSL is internal / experimental under

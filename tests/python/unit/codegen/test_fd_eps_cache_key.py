@@ -61,6 +61,8 @@ def test_wave_speeds_fd_eps_rejected_on_numeric_path():
 # --- solve_local_nonlinear (program IR) --------------------------------------
 
 def _solve_program(adctime, fd_eps=None):
+    from pops.solvers.nonlinear import LocalNewton
+    from pops.time import FailRun, LocalResidual
     """A minimal Program with a solve_local_nonlinear node carrying fd_eps (trivial residual so no
     compiled model is needed): r(U) = U - U0. The node stores tol / max_iter / fd_eps."""
     P = adctime.Program("p_default" if fd_eps is None else "p_eps")
@@ -71,8 +73,10 @@ def _solve_program(adctime, fd_eps=None):
 
     endpoint = typed_state(P, "blk", state_name="U").next
     guess = P.value("guess", U, at=endpoint.point)
-    W = P.solve_local_nonlinear(name="W", residual=residual, initial_guess=guess, tol=1e-12,
-                                max_iter=20, fd_eps=fd_eps)
+    step = 1e-7 if fd_eps is None else fd_eps
+    W = P.solve(LocalResidual(residual, guess), name="W", solver=LocalNewton(
+        tolerance=1e-12, max_iterations=20,
+        finite_difference_step=step)).consume(action=FailRun())
     P.commit(endpoint, W)
     return P
 
@@ -88,15 +92,10 @@ def test_solve_local_nonlinear_fd_eps_changes_program_ir_hash():
 
 
 def test_solve_local_nonlinear_fd_eps_rejected_out_of_domain():
-    adctime = pytest.importorskip("pops.time")
-    P = adctime.Program("bad")
-    U = typed_state(P, "blk")
+    from pops.solvers.nonlinear import LocalNewton
 
-    def residual(P, Uit, U0):
-        return P.value("r", Uit - U0)
-
-    with pytest.raises(ValueError, match="fd_eps"):
-        P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U, fd_eps=0.0)
+    with pytest.raises(ValueError, match="finite_difference_step"):
+        LocalNewton(finite_difference_step=0.0)
 
 
 # --- ADC-645: eig_max_iter / im_tol cache-key parity (the fd_eps rule) ------------------------

@@ -8,9 +8,10 @@ from typed_program_support import typed_state
 time = pytest.importorskip("pops.time")
 from pops import model  # noqa: E402
 from pops.ir.expr import Const  # noqa: E402
+from pops.solvers.nonlinear import LocalNewton  # noqa: E402
 
 
-def _program(*, consume=True):
+def _program(*, consume=True, coefficient=1):
     module = model.Module("implicit_exchange")
     electrons = module.state_space("electron_state", ("ne", "pex", "pey"))
     ions = module.state_space("ion_state", ("ni", "pix", "piy"))
@@ -35,8 +36,11 @@ def _program(*, consume=True):
     electron_n = typed_state(
         program, "electrons", space=electrons, model=module, state=electron_handle)
     ion_n = typed_state(program, "ions", space=ions, model=module, state=ion_handle)
-    outcome = program.solve_implicit(
-        collision, (electron_n, ion_n), tol=1.0e-11, max_iter=12, fd_eps=1.0e-6,
+    outcome = program.solve(
+        time.CoupledImplicitEuler(
+            collision, (electron_n, ion_n), coefficient=coefficient),
+        solver=LocalNewton(
+            tolerance=1.0e-11, max_iterations=12, finite_difference_step=1.0e-6),
         name="collision_step")
     electron_next = typed_state(
         program, "electrons", state_name=electrons.name, space=electrons,
@@ -65,11 +69,24 @@ def test_coupled_implicit_is_one_native_newton_kernel_with_explicit_action():
     assert len(solved) == 2
     assert source.count("pops::for_each_cell") == 1
     assert "pops::detail::mat_inverse<6>" in source
-    assert "Ueval[0] - G_[0] - dt *" in source
+    assert "Ueval[0] - G_[0] - static_cast<pops::Real>(pops::Real(1)) * dt *" in source
     assert "pops::reduce_max(ci_status_" in source
     assert "SolveStatus::kSingular" in source
     assert "StepAttemptRejected" in source
     assert source.count("ctx.lincomb(") >= 2
+
+
+def test_coupled_implicit_euler_carries_exact_stage_coefficient_and_problem_identity():
+    _module, program, _solved = _program(coefficient=0.5)
+    token = next(value for value in program._values
+                 if value.op == "solve_coupled_implicit")
+    source = program.emit_cpp_program(model=None)
+
+    assert token.attrs["problem_kind"] == "coupled_implicit_euler"
+    assert token.attrs["problem_identity"].startswith(
+        "pops.program-solve-problem.v1:sha256:")
+    assert token.attrs["coefficient"] == 0.5
+    assert "static_cast<pops::Real>(0.5) * dt *" in source
 
 
 def test_unconsumed_coupled_implicit_is_rejected_by_graph_validation_and_codegen():
@@ -118,7 +135,9 @@ def test_same_component_names_are_qualified_by_state_space():
         state=module.state_handle(electrons))
     ion_n = typed_state(
         program, "ions", space=ions, model=module, state=module.state_handle(ions))
-    solved = program.solve_implicit(exchange, (electron_n, ion_n)).consume(
+    solved = program.solve(
+        time.CoupledImplicitEuler(exchange, (electron_n, ion_n)),
+        solver=LocalNewton()).consume(
         action=time.RejectAttempt())
     electron_next = typed_state(
         program, "electrons", state_name=electrons.name, space=electrons,
@@ -156,7 +175,9 @@ def test_dense_newton_dimension_follows_the_typed_rate_bundle():
         program, "left", space=left, model=module, state=module.state_handle(left))
     right_n = typed_state(
         program, "right", space=right, model=module, state=module.state_handle(right))
-    solved = program.solve_implicit(operator, (left_n, right_n)).consume(
+    solved = program.solve(
+        time.CoupledImplicitEuler(operator, (left_n, right_n)),
+        solver=LocalNewton()).consume(
         action=time.RejectAttempt())
     left_next = typed_state(
         program, "left", state_name=left.name, space=left,

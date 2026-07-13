@@ -118,8 +118,10 @@ def test_callback_results_cannot_cross_program_or_region_boundaries():
     with pytest.raises(ValueError, match="different Program"):
         first.set_apply(operator, lambda _builder, _out, _in: foreign_field)
     with pytest.raises(ValueError, match="different Program"):
-        first.solve_local_nonlinear(
-            residual=lambda _builder, _iterate: right, initial_guess=left)
+        from pops.solvers.nonlinear import LocalNewton
+        from pops.time import LocalResidual
+        first.solve(
+            LocalResidual(lambda _builder, _iterate: right, left), solver=LocalNewton())
     foreign_scalar = second.hmin()
     with pytest.raises(ValueError, match="different Program"):
         first.set_dt_bound(lambda _builder, _cfl: foreign_scalar)

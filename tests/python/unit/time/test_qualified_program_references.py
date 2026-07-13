@@ -183,7 +183,7 @@ def test_public_call_keeps_the_operator_handle_separate_from_its_lowering_name()
     program = Program("operator")._bind_operators(model)
     state = program.state(block, model.u)
 
-    rate = program.call(model.rate, state.n)
+    rate = model.rate(state.n)
 
     assert rate.attrs["operator_handle"] is model.rate
     assert rate.attrs["sources"] == ("default",)
@@ -288,14 +288,14 @@ def test_homonymous_operators_from_two_models_resolve_by_owner_and_block_provena
     assert len(first_state.space.components) == 1
     assert len(second_state.space.components) == 2
 
-    first_rate = program.call(first.rate, first_state.n)
-    second_rate = program.call(second.rate, second_state.n)
+    first_rate = first.rate(first_state.n)
+    second_rate = second.rate(second_state.n)
 
     assert first_rate.attrs["operator_handle"] is first.rate
     assert second_rate.attrs["operator_handle"] is second.rate
     assert first_rate.attrs["operator_handle"] != second_rate.attrs["operator_handle"]
     with pytest.raises(ValueError, match="block-qualified arguments instantiate model owner"):
-        program.call(first.rate, second_state.n)
+        first.rate(second_state.n)
     with pytest.raises(ValueError, match="ambiguous across 2 bound model registries"):
         program._call("decay")
     from pops.codegen.program_codegen import _check_lowerable

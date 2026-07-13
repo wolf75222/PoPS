@@ -78,6 +78,12 @@ def test_case_has_one_registration_spelling_per_family() -> None:
     assert hasattr(case, "block") and not hasattr(case, "add_block")
     assert hasattr(case, "field") and not hasattr(case, "add_field")
     assert hasattr(case, "program") and not hasattr(case, "time")
+    program = pops.Program("canonical")
+    assert not hasattr(program, "call")
+    assert not hasattr(program, "solve_fields")
+    assert not hasattr(program, "solve_fields_from_blocks")
+    assert not hasattr(program, "solve_implicit")
+    assert hasattr(program, "solve")
 
 
 def test_public_state_rejects_opaque_units_until_a_typed_unit_protocol_exists() -> None:
@@ -111,6 +117,9 @@ def test_public_run_accepts_only_the_bound_runtime_instance() -> None:
     assert tuple(signature(pops.run).parameters) == ("instance", "controls")
     with pytest.raises(TypeError, match="exact RuntimeInstance"):
         pops.run(object(), t_end=1.0)
+    from pops.runtime.runtime_instance import RuntimeInstance
+
+    assert not hasattr(RuntimeInstance, "run")
 
 
 def test_output_surface_has_direct_consumers_not_policy_bundles() -> None:
@@ -133,7 +142,7 @@ def test_runtime_package_does_not_reexport_retired_authoring_engines() -> None:
 def test_physics_has_no_competing_model_facade() -> None:
     from pops import physics
 
-    assert physics.__all__ == ["Model"]
+    assert physics.__all__ == ["Model", "ComponentRole", "Density", "Momentum"]
     assert physics.Model is pops.Model
     for removed in ("PdeModel", "HyperbolicModel", "PhysicsModel", "HybridModel"):
         assert not hasattr(physics, removed)

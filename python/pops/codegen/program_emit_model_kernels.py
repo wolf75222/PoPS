@@ -142,7 +142,7 @@ def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch:
 
 def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any,
                                         scratch: Any, status: str, *, tol: Any,
-                                        max_iter: int, fd_eps: Any) -> list:
+                                        max_iter: int, fd_eps: Any, coefficient: Any) -> list:
     """Emit one fail-closed backward-Euler Newton kernel over a coupled ``RateBundle``.
 
     Every output block is an unknown; additional signed inputs are frozen catalysts.  Results land
@@ -166,6 +166,7 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
     driver = scratch[blocks[0]]
     tol_cpp = scalar_cpp(tol)
     eps_cpp = scalar_cpp(fd_eps)
+    coefficient_cpp = scalar_cpp(coefficient)
     lines = ["for (int li = 0; li < %s.local_size(); ++li) {" % driver]
     for block in blocks:
         lines.append("  const pops::Array4 %sA = %s.fab(li).array();"
@@ -198,8 +199,10 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
     for block in blocks:
         for index, expr in enumerate(components[block]):
             slot = offsets[block] + index
-            lines.append("      rout[%d] = Ueval[%d] - G_[%d] - dt * (%s);"
-                         % (slot, slot, slot, expr.to_cpp()))
+            lines.append(
+                "      rout[%d] = Ueval[%d] - G_[%d] - "
+                "static_cast<pops::Real>(%s) * dt * (%s);"
+                % (slot, slot, slot, coefficient_cpp, expr.to_cpp()))
     lines.append("    };")
     lines.append("    pops::Real U_[%d];" % total)
     lines.append("    for (int c_ = 0; c_ < %d; ++c_) U_[c_] = G_[c_];" % total)

@@ -65,6 +65,9 @@ class BlockRegistry(_FreezableRegistry):
         for block in self._handles.values():
             index = self._index_for(block)
             for declaration in index.records():
+                if (declaration.kind == "state"
+                        and declaration not in self._blocks[block.local_id]["states"]):
+                    continue
                 self._qualify_new(declaration, block)
 
     def add(
@@ -72,6 +75,7 @@ class BlockRegistry(_FreezableRegistry):
         name: Any,
         model: Any,
         *,
+        states: Any = None,
         spatial: Any = None,
         time: Any = None,
         diagnostics: Any = None,
@@ -102,6 +106,32 @@ class BlockRegistry(_FreezableRegistry):
         # content fingerprint (Module hash, operator-registry hash, or declaration fallback) before
         # the owner is ever projected into canonical data.
         declaration_index = self._provided_index(model, model_owner)
+        declared_states = tuple(
+            handle for handle in declaration_index.records() if handle.kind == "state")
+        if states is None:
+            if len(declared_states) > 1:
+                raise ValueError(
+                    "block %r uses a multi-state Model; pass states=(state_handle, ...) explicitly"
+                    % key)
+            selected_states = declared_states
+        else:
+            if isinstance(states, (str, bytes, Handle)):
+                raise TypeError("block states= must be a non-empty sequence of typed StateHandles")
+            try:
+                selected_states = tuple(states)
+            except TypeError:
+                raise TypeError(
+                    "block states= must be a non-empty sequence of typed StateHandles") from None
+            if not selected_states:
+                raise ValueError("block states= must select at least one declared state")
+            authenticated = []
+            for state in selected_states:
+                if not isinstance(state, Handle) or state.kind != "state":
+                    raise TypeError("block states= entries must be typed StateHandles")
+                authenticated.append(declaration_index.authenticate(state))
+            selected_states = tuple(authenticated)
+            if len(set(selected_states)) != len(selected_states):
+                raise ValueError("block states= contains a duplicate StateHandle")
         canonical_model_owner = model_owner.canonical()
         existing = self._model_owners.get(canonical_model_owner)
         if existing is not None and existing is not model:
@@ -119,6 +149,7 @@ class BlockRegistry(_FreezableRegistry):
         )
         self._blocks[key] = {
             "model": model,
+            "states": selected_states,
             "spatial": spatial,
             "time": time,
             "diagnostics": diagnostics,
@@ -254,6 +285,12 @@ class BlockRegistry(_FreezableRegistry):
 
     def _qualify_new(self, declaration: Handle, block: BlockHandle) -> Handle:
         registered = self._index_for(block).authenticate(declaration)
+        if (registered.kind == "state"
+                and registered not in self._blocks[block.local_id]["states"]):
+            raise MissingOwnershipError(
+                "state %s is not selected by block %r; selected states are %s"
+                % (registered.qualified_id, block.local_id,
+                   tuple(state.local_id for state in self._blocks[block.local_id]["states"])))
         key = (block.local_id, registered)
         cached = self._instances.get(key)
         if cached is not None:
@@ -309,9 +346,16 @@ class BlockRegistry(_FreezableRegistry):
         owner_candidates = [
             handle for handle in self._handles.values() if handle.accepts(declaration)
         ]
-        candidates = [
-            handle for handle in owner_candidates if self._index_for(handle).contains(declaration)
-        ]
+        candidates = []
+        for handle in owner_candidates:
+            index = self._index_for(handle)
+            if not index.contains(declaration):
+                continue
+            authenticated = index.authenticate(declaration)
+            if (authenticated.kind == "state"
+                    and authenticated not in self._blocks[handle.local_id]["states"]):
+                continue
+            candidates.append(handle)
         if len(candidates) == 1:
             return self._qualify_new(declaration, candidates[0])
         if len(candidates) > 1:
@@ -388,6 +432,7 @@ class BlockRegistry(_FreezableRegistry):
         return {
             name: {
                 "model": getattr(spec["model"], "name", repr(spec["model"])),
+                "states": tuple(state.local_id for state in spec["states"]),
                 "spatial": getattr(spec["spatial"], "name", spec["spatial"]),
                 "time": getattr(spec["time"], "name", None),
                 "diagnostics": getattr(spec["diagnostics"], "name", None),

@@ -47,8 +47,8 @@ class _AmrSystemInstall(_AmrSystem):
             ADC-634): the same wiring, then ``install_program(so_path)`` installs the compiled Program
             on the AMR hierarchy (the .so must export ``pops_install_program_amr``: compile it with
             ``target='amr_system'``). The runtime params (``params=``) route to ``set_program_params``
-            and the cadence (``cadence=``) to ``set_program_cadence`` -- the AMR counterparts of the
-            System routes. The per-level macro-step driver is the AmrProgramContext seam (ADC-508); a
+            through the same Program schedule -- the AMR counterpart of the System route. The
+            per-level macro-step driver is the AmrProgramContext seam (ADC-508); a
             Program using a deferred op (Schur / history / named-flux) compiles against it and throws
             the honest AmrProgramContext backstop only when that op is reached at run.
 
@@ -62,10 +62,7 @@ class _AmrSystemInstall(_AmrSystem):
         @param aux dict {field_name: array}: "B_z" -> set_magnetic_field, "T_e" rejected (derived),
             any other -> set_aux_field on the declaring block.
         @param solvers dict {field: <solver>}: lowered to set_poisson (default Poisson field only).
-        @param cadence optional pops.time.CompiledTime(substeps=, stride=): the compiled Program's GLOBAL
-            macro-step cadence, applied with ``set_program_cadence`` AFTER install_program. A native
-            AMR install has no Program, so a non-None cadence there raises (set substeps / stride on
-            the native time policy instead).
+        @param cadence retired; non-None values are rejected.
         """
         # RUNTIME FREEZE (ADC-592): a second install on an already-bound AMR engine is a re-composition
         # and is refused explicitly -- the compiled artifact is bound exactly once.

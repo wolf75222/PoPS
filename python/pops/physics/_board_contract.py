@@ -63,6 +63,7 @@ def normalize_roles(roles: Any, components: tuple[str, ...], where: str) -> dict
     unknown = [key for key in result if key not in components]
     if unknown:
         raise ValueError("%s roles reference unknown component(s) %r" % (where, unknown))
+    tokens: dict[str, str] = {}
     for component, role in result.items():
         require_name(component, "%s role component" % where)
         if role is not None:
@@ -76,6 +77,13 @@ def normalize_roles(roles: Any, components: tuple[str, ...], where: str) -> dict
                 raise TypeError(
                     "%s role for %s must implement ComponentRole"
                     % (where, component))
+            from .roles import native_role_token
+            token = native_role_token(role)
+            if token in tokens:
+                raise ValueError(
+                    "%s roles %s and %s collide on native token %r"
+                    % (where, tokens[token], component, token))
+            tokens[token] = component
     return result
 
 

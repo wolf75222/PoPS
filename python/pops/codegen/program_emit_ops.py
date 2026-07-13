@@ -205,7 +205,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines += _emit_solve_coupled_implicit_kernel(
             components, by_block, var, scratch, status,
             tol=v.attrs["tol"], max_iter=int(v.attrs["max_iter"]),
-            fd_eps=v.attrs["fd_eps"])
+            fd_eps=v.attrs["fd_eps"], coefficient=v.attrs["coefficient"])
         code = "ci_code_%d" % v.id
         report = "ci_report_%d" % v.id
         lines.append("const int %s = static_cast<int>(pops::reduce_max(%s, 0));" % (code, status))

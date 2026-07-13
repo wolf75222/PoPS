@@ -386,17 +386,21 @@ class DiscretizationPlan(Descriptor):
         object.__setattr__(self, "_frozen", True)
         return self
 
-    def validate_for(self, model: Any) -> bool:
+    def validate_for(self, model: Any, *, states: Any = None) -> bool:
         contracts = getattr(model, "_rate_contracts", None)
         if not isinstance(contracts, Mapping):
             raise TypeError("DiscretizationPlan requires a Model exposing typed rate contracts")
-        selected = {rate: method for rate, method in self.rates.items()
-                    if rate.owner_path == model.owner_path}
-        expected = set(contracts)
+        selected = dict(self.rates.items())
+        state_set = None if states is None else set(states)
+        expected = {
+            rate for rate, contract in contracts.items()
+            if state_set is None or contract["state"] in state_set
+        }
         missing, extra = expected - set(selected), set(selected) - expected
         if missing or extra:
             raise ValueError(
-                "DiscretizationPlan rate coverage mismatch for Model %r: missing=%s extra=%s"
+                "DiscretizationPlan rate coverage mismatch for Model %r block states: "
+                "missing=%s extra=%s"
                 % (model.name, sorted(row.local_id for row in missing),
                    sorted(row.local_id for row in extra)))
         if not selected:
@@ -409,7 +413,8 @@ class DiscretizationPlan(Descriptor):
 
     def resolve_for(self, case: Any, block: Any) -> ResolvedDiscretizationPlan:
         model = case._block_registry.spec(block.local_id)["model"]
-        self.validate_for(model)
+        states = case._block_registry.spec(block.local_id)["states"]
+        self.validate_for(model, states=states)
 
         def resolve_handle(value: Handle) -> Handle:
             if not isinstance(value, Handle):
@@ -422,6 +427,8 @@ class DiscretizationPlan(Descriptor):
         rates = []
         for rate, method in self.rates.items():
             if rate.owner_path != model.owner_path:
+                continue
+            if model.rate_contract(rate)["state"] not in states:
                 continue
             rates.append(ResolvedRateMethod(
                 case.resolve(rate, block=block), method.resolve_references(resolve_handle)))

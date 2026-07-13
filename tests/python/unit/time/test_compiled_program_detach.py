@@ -62,7 +62,7 @@ def _authored_program():
     program.keep_history(state, depth=1)
     previous = state.prev.value
     solved = program.solve_fields("solve-psi", state.n, field=field)
-    rate = program.call(model.rate, state.n)
+    rate = model.rate(state.n)
     predictor_point = StagePoint(
         "predictor", {"main": TimePoint(state.clock, 1)})
     stage = state.stage("predictor", point=predictor_point)

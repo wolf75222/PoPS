@@ -42,6 +42,10 @@ def problem_semantic_payload(problem: Any, *, layout: Any, time: Any) -> dict[st
         row = {
             "handle": block.canonical_identity(),
             "model": model_semantic_data(spec["model"]),
+            "states": [
+                problem._block_registry.canonicalize(state, block=block).canonical_identity()
+                for state in spec["states"]
+            ],
             "spatial": _spatial_semantic_data(spec["spatial"]),
             "numerics": (
                 None if name not in problem._numerics_assignments
@@ -87,6 +91,10 @@ def _problem_snapshot_payload(problem: Any, *, artifact: bool) -> dict[str, Any]
                 problem._block_registry.handle(name)),
             "model_owner_path": spec["model"].owner_path.canonical(),
             "model": _model_snapshot_value(spec["model"], artifact=artifact),
+            "states": tuple(
+                problem._block_registry.canonicalize(
+                    state, block=problem._block_registry.handle(name))
+                for state in spec["states"]),
             "spatial": spec["spatial"],
             "time": _time_snapshot_value(spec["time"], artifact=artifact),
             "diagnostics": spec["diagnostics"],

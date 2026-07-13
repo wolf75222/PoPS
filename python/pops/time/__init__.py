@@ -6,7 +6,7 @@ only BUILDS a typed IR; it never executes a numerical stage. The C++ lowering li
 delegator), so this package imports only ``pops.ir`` / ``pops.model`` -- never ``pops.codegen``,
 ``_pops``, or ``pops.lib`` at module scope (Spec 4 acyclic graph: time -> {ir, model}).
 
-This package is the time LANGUAGE only: ``Program``, ``CompiledTime``, the ``ProgramValue`` /
+This package is the time LANGUAGE only: ``Program``, the ``ProgramValue`` /
 ``StageStateSet`` values, the ``Schedule`` scheduler (``always`` / ``every`` / ``when`` /
 ``on_start`` / ``on_end`` / ``subcycle``) and the IR-optimizer wrappers (``eliminate_*`` /
 ``optimize``). The READY time-stepping schemes live in ``pops.lib.time`` (Spec 4 s6 / s14),
@@ -40,7 +40,7 @@ from pops.time.passes_facade import (  # noqa: F401
     eliminate_redundant_field_solves,
     optimize,
 )
-from pops.time.program import CompiledTime, Program
+from pops.time.program import Program
 from pops.time.solve_outcome import (  # noqa: F401
     FailRun, FieldSolveOutcome, RejectAttempt, ResidualSolution, SOLVE_STATUSES, SolveAction,
     SolveOutcome,
@@ -48,6 +48,7 @@ from pops.time.solve_outcome import (  # noqa: F401
 from pops.time.step_strategy import (  # noqa: F401
     AdaptiveCFL, ErrorControlledDt, ExternalTimeGrid, FixedDt, StepStrategy,
 )
+from pops.time.solve_problem import CoupledImplicitEuler, LocalResidual  # noqa: F401
 from pops.time.step_transaction import (  # noqa: F401
     StepTransactionPlan, StepTransactionReport,
 )
@@ -72,7 +73,8 @@ from pops.time.synchronization import (  # noqa: F401
 )
 from pops.time.values import StageStateSet, ProgramValue  # noqa: F401
 
-__all__ = ["Program", "CompiledTime", "ProgramValue", "StageStateSet", "ResidualSolution",
+__all__ = ["Program", "ProgramValue", "StageStateSet", "ResidualSolution",
+           "CoupledImplicitEuler", "LocalResidual",
            "SolveOutcome", "FieldSolveOutcome", "SolveAction", "FailRun", "RejectAttempt",
            "SOLVE_STATUSES", "Schedule",
            "StepStrategy", "FixedDt", "AdaptiveCFL", "ErrorControlledDt", "ExternalTimeGrid",

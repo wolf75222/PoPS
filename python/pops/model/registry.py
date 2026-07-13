@@ -358,7 +358,7 @@ class OperatorRegistry:
         Picks the operator flagged ``capabilities["default"]`` if there is exactly
         one; otherwise the sole operator of that kind. Raises a clear error when none
         exists, or when several are compatible and none is privileged -- the caller
-        must then disambiguate with an explicit ``P.call(name, ...)``.
+        must then disambiguate by retaining and calling the exact declared handle.
 
         This is a BUILD-TIME resolution (kind -> operator), used only while lowering a Program; it is
         never on a hot kernel path. In a generated kernel operators are addressed by their integer
@@ -375,7 +375,7 @@ class OperatorRegistry:
             raise KeyError("no %s operator registered" % kind)
         names = ", ".join(op.name for op in candidates)
         raise ValueError(
-            "multiple %s operators are compatible (%s); call P.call(name, ...) "
+            "multiple %s operators are compatible (%s); call the exact declared handle "
             "explicitly" % (kind, names))
 
     def id_of(self, name: Any) -> int:

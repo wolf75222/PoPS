@@ -201,13 +201,19 @@ class RuntimeInstance:
         self.consumer_reports = self.consumer_reports + tuple(reports)
         return tuple(reports)
 
-    def run(self, t_end: Any, cfl: Any = None, max_steps: int = 1_000_000,
-            output_dir: Any = None, strategy: Any = None) -> int:
+    def _run(self, t_end: Any, max_steps: int = 1_000_000,
+             output_dir: Any = None, **controller_controls: Any) -> int:
         from pops.runtime._step_strategy import (
-            AdaptiveCFL, resolve_run_strategy, run_control_payload, run_step_attempt)
+            AdaptiveCFL, run_control_payload, run_step_attempt)
 
         native = self.native_executor
-        selected = resolve_run_strategy(native, strategy, cfl)
+        program = self.install_plan.artifact.plan.time
+        selected = getattr(program, "_step_strategy", None)
+        if selected is None:
+            raise ValueError(
+                "pops.run requires the Program to declare step_strategy(...); runtime kwargs "
+                "cannot select a numerical controller")
+        program.validate_runtime_controls(controller_controls)
         control = run_control_payload(selected)
         temporal = getattr(native, "_temporal_restart_state", None)
         if temporal is not None:

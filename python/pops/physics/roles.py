@@ -2,7 +2,27 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any
+
+
+_ROLE_TOKEN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_RESERVED_ROLE_TOKENS = frozenset({"Custom"})
+
+
+def native_role_token(role: Any) -> str:
+    """Validate the exact lowering/identity token of a role descriptor."""
+    if not isinstance(role, ComponentRole):
+        raise TypeError("state role must implement ComponentRole")
+    token = role.native_name
+    if not isinstance(token, str) or not token:
+        raise TypeError("ComponentRole.native_name must be a non-empty string")
+    if _ROLE_TOKEN.fullmatch(token) is None:
+        raise ValueError(
+            "ComponentRole.native_name must be one canonical C++ role token; got %r" % token)
+    if token in _RESERVED_ROLE_TOKENS:
+        raise ValueError("ComponentRole.native_name %r is reserved by the native ABI" % token)
+    return token
 
 
 class ComponentRole:
@@ -36,4 +56,4 @@ class Momentum(ComponentRole):
         return "Momentum" + str(self.axis.name).upper()
 
 
-__all__ = ["ComponentRole", "Density", "Momentum"]
+__all__ = ["ComponentRole", "Density", "Momentum", "native_role_token"]

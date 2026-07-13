@@ -70,9 +70,8 @@ def materialized_layout_subjects(problem: Any) -> dict[str, tuple[Any, ...]]:
     blocks, states = [], []
     for _name, block in sorted(problem.blocks().items()):
         blocks.append(problem.resolve(block))
-        for declaration in problem._block_registry._index_for(block).records():
-            if declaration.kind == "state":
-                states.append(problem.resolve(declaration, block=block))
+        for declaration in problem._block_registry.spec(block.local_id)["states"]:
+            states.append(problem.resolve(declaration, block=block))
     fields = [problem.resolve(field) for _name, field in sorted(problem.fields().items())]
     def key(value: Any) -> str:
         return value.qualified_id

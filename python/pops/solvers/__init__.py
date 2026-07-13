@@ -10,7 +10,7 @@ execute).
 Sub-packages:
 
 * :mod:`pops.solvers.krylov` -- matrix-free Krylov solvers (CG / BiCGStab / GMRES / Richardson);
-* :mod:`pops.solvers.nonlinear` -- Newton / FixedPoint (planned: no native solver type yet);
+* :mod:`pops.solvers.nonlinear` -- executable global ``Newton`` and cell-local ``LocalNewton``;
 * :mod:`pops.solvers.schur` -- the Schur-condensation solver (``pops::SchurCondensationOperator``);
 * :mod:`pops.solvers.elliptic` -- the RICH GeometricMG (typed smoother / coarse / tolerance /
   max_cycles + capabilities) and the planned FFT spectral Poisson solver;
@@ -33,7 +33,7 @@ from types import SimpleNamespace
 from . import elliptic, krylov, nonlinear, options, requirements, schur, tolerances
 from .elliptic import FFT, GeometricMG
 from .krylov import CG, BiCGStab, GMRES, Richardson
-from .nonlinear import FixedPoint, Newton
+from .nonlinear import LocalNewton, Newton
 from .preconditioners import preconditioners
 from .schur import CondensedSchur, Schur
 from .scopes import Hierarchy, Level, SolveScope
@@ -47,7 +47,7 @@ from .providers import CompositeTensorFAC, HierarchySolveProvider
 # any DSL / codegen import (no cycle: pops.solvers imports nothing).
 solvers = SimpleNamespace(
     CG=CG, BiCGStab=BiCGStab, GMRES=GMRES, Richardson=Richardson,
-    Newton=Newton, FixedPoint=FixedPoint, Schur=Schur,
+    Newton=Newton, LocalNewton=LocalNewton, Schur=Schur,
 )
 
 __all__ = [
@@ -55,7 +55,7 @@ __all__ = [
     "preconditioners", "requirements",
     "GeometricMG", "FFT",
     "CG", "BiCGStab", "GMRES", "Richardson",
-    "Newton", "FixedPoint", "Schur", "CondensedSchur",
+    "Newton", "LocalNewton", "Schur", "CondensedSchur",
     "SolveScope", "Level", "Hierarchy", "HierarchySolveProvider", "CompositeTensorFAC",
     "solvers",
 ]

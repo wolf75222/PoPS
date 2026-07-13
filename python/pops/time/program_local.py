@@ -71,9 +71,35 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             field_context=field_context)
 
     @atomic_authoring
-    def solve_implicit(self, operator: Any, states: Any, *, method: Any = "newton",
-                       tol: Any = 1e-12, max_iter: Any = 20, fd_eps: Any = 1e-7,
-                       name: Any = None, at: Any = None) -> Any:
+    def solve(self, problem: Any, *, solver: Any, name: Any = None) -> Any:
+        """Build one typed solve through the solver's small Program provider interface.
+
+        The Program does not select a PDE family or algorithm.  A solver descriptor prepares an
+        immutable provider and that provider builds the normalized IR through private primitives.
+        Strings, option bags and parallel ``solve_*`` public verbs are deliberately absent.
+        """
+        if isinstance(solver, str):
+            raise TypeError("solve: solver must be a typed descriptor, not %r" % solver)
+        prepare = getattr(solver, "prepare_program_solve", None)
+        if not callable(prepare):
+            raise TypeError(
+                "solve: solver must implement prepare_program_solve(); got %r"
+                % type(solver).__name__)
+        if not callable(getattr(problem, "build_with", None)):
+            raise TypeError(
+                "solve: problem must implement build_with(program=, prepared_solver=); got %r"
+                % type(problem).__name__)
+        prepared = prepare()
+        build = getattr(prepared, "build_program_solve", None)
+        if not callable(build):
+            raise TypeError(
+                "solve: prepared solver must implement build_program_solve(); got %r"
+                % type(prepared).__name__)
+        return build(program=self, problem=problem, name=name)
+
+    def _solve_coupled_implicit(self, operator: Any, states: Any, *, prepared: Any,
+                                name: Any = None, at: Any = None, coefficient: Any,
+                                problem_identity: Any) -> Any:
         """Solve ``U - U0 - dt * operator(U) = 0`` over owner-qualified blocks.
 
         The typed ``coupled_rate`` signature is the join contract for every input and output.  The
@@ -85,40 +111,42 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         from pops.time.value_collections import _CoupledResult
 
         if not isinstance(operator, OperatorHandle):
-            raise TypeError("solve_implicit requires a typed coupled_rate OperatorHandle")
+            raise TypeError("solve requires a typed coupled_rate OperatorHandle")
         if isinstance(states, Mapping):
             raw = tuple(states.values())
             for block, value in states.items():
                 if getattr(_resolve_handle(value), "block", None) != block:
                     raise ValueError(
-                        "solve_implicit state mapping keys must match each State value's BlockHandle")
+                        "solve state mapping keys must match each State value's BlockHandle")
         elif isinstance(states, Sequence) and not isinstance(states, (str, bytes)):
             raw = tuple(states)
         else:
-            raise TypeError("solve_implicit states must be a non-empty sequence or block mapping")
+            raise TypeError("solve inputs must be a non-empty sequence or block mapping")
         values = tuple(_resolve_handle(value) for value in raw)
         if not values or any(not isinstance(value, ProgramValue) or value.vtype != "state"
                              for value in values):
-            raise ValueError("solve_implicit states must contain one or more State values")
+            raise ValueError("solve inputs must contain one or more State values")
         for value in values:
-            require_top_level(self, value, "solve_implicit")
+            require_top_level(self, value, "solve")
         if len({value.point for value in values}) != 1:
-            raise ValueError("solve_implicit inputs must share one exact evaluation point")
+            raise ValueError("solve inputs must share one exact evaluation point")
         op = resolve_operator_handle(
-            self, operator, where="solve_implicit", expected_kinds="coupled_rate", values=values)
+            self, operator, where="solve", expected_kinds="coupled_rate", values=values)
         self._check_call_args(op, values)
-        if method != "newton":
-            raise NotImplementedError("solve_implicit currently supports method='newton' only")
-        tol_literal = positive_scalar_literal(tol, where="solve_implicit: tol")
-        fd_eps_literal = positive_scalar_literal(fd_eps, where="solve_implicit: fd_eps")
+        tol_literal = positive_scalar_literal(
+            getattr(prepared, "tolerance", None), where="solve: solver tolerance")
+        fd_eps_literal = positive_scalar_literal(
+            getattr(prepared, "finite_difference_step", None),
+            where="solve: solver finite_difference_step")
+        max_iter = getattr(prepared, "max_iterations", None)
         if isinstance(max_iter, bool) or not isinstance(max_iter, int) or max_iter <= 0:
-            raise ValueError("solve_implicit: max_iter must be a positive int")
+            raise ValueError("solve solver max_iterations must be a positive int")
         bundle = op.signature.output
         by_name = {block_name(value.block): value for value in values}
         missing = tuple(output for output in bundle.keys() if output not in by_name)
         if missing:
             raise ValueError(
-                "solve_implicit operator outputs %s without matching input block names"
+                "solve operator outputs %s without matching input block names"
                 % (missing,))
         blocks = tuple(by_name[output].block for output in bundle.keys())
         token_name = name or operator.name
@@ -127,18 +155,21 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             result_points = (TimePoint(self.clock, step=1),) * len(blocks)
         elif isinstance(at, Mapping):
             if set(at) != set(blocks):
-                raise ValueError("solve_implicit at mapping must name every output BlockHandle")
+                raise ValueError("solve at mapping must name every output BlockHandle")
             result_points = tuple(at[block] for block in blocks)
         elif isinstance(at, Sequence) and not isinstance(at, (str, bytes)):
             result_points = tuple(at)
             if len(result_points) != len(blocks):
-                raise ValueError("solve_implicit at sequence must match output arity")
+                raise ValueError("solve at sequence must match output arity")
         else:
             result_points = (at,) * len(blocks)
         token = self._new(
             "coupled_solution", "solve_coupled_implicit", values,
             {"operator": op.name, "operator_handle": operator, "blocks": blocks,
-             "method": method, "tol": tol_literal, "max_iter": int(max_iter),
+             "method": "newton", "solver_identity": prepared.identity.token,
+             "problem_kind": "coupled_implicit_euler",
+             "problem_identity": problem_identity.token, "coefficient": coefficient,
+             "tol": tol_literal, "max_iter": int(max_iter),
              "fd_eps": fd_eps_literal, "output_count": len(blocks)},
             token_name, blocks[0], point=result_points[0])
 
@@ -162,10 +193,8 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
     # non-local op (rhs / divergence / solve_fields / a nested solve) is allowed (it would need a halo
     # / global solve, which a per-cell Newton kernel cannot evaluate at a perturbed stack state).
 
-    @atomic_authoring
-    def solve_local_nonlinear(self, name: Any = None, residual: Any = None,
-                              initial_guess: Any = None, method: Any = "newton",
-                              tol: Any = 1e-12, max_iter: Any = 20, fd_eps: Any = None) -> Any:
+    def _solve_local_nonlinear(self, *, residual: Any, initial_guess: Any, prepared: Any,
+                               name: Any = None, problem_identity: Any) -> Any:
         """Solve a LOCAL non-linear system ``residual(U) = 0`` cell by cell with a per-cell Newton
         iteration (spec op 10). Returns the converged solution State.
 
@@ -205,15 +234,15 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             raise ValueError(
                 "solve_local_nonlinear: initial_guess must be a State value (initial_guess=...)")
         require_top_level(self, initial_guess, "solve_local_nonlinear")
-        if method != "newton":
-            raise NotImplementedError(
-                "solve_local_nonlinear: only method='newton' is supported (got %r)" % (method,))
-        tol_literal = positive_scalar_literal(tol, where="solve_local_nonlinear: tol")
+        tol_literal = positive_scalar_literal(
+            getattr(prepared, "tolerance", None), where="LocalNewton tolerance")
+        max_iter = getattr(prepared, "max_iterations", None)
         if isinstance(max_iter, bool) or not isinstance(max_iter, int) or max_iter <= 0:
             raise ValueError(
-                "solve_local_nonlinear: max_iter must be a positive int (got %r)" % (max_iter,))
-        fd_eps_literal = (None if fd_eps is None else positive_scalar_literal(
-            fd_eps, where="solve_local_nonlinear: fd_eps"))
+                "LocalNewton max_iterations must be a positive int (got %r)" % (max_iter,))
+        fd_eps_literal = positive_scalar_literal(
+            getattr(prepared, "finite_difference_step", None),
+            where="LocalNewton finite_difference_step")
         if self._recording:
             raise NotImplementedError(
                 "solve_local_nonlinear: recording a residual inside another sub-block (apply / while "
@@ -250,15 +279,28 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
                     "may use only %s (the iterate / guess State, P.source, P.apply, affine combines). "
                     "Use a non-local op (P.rhs / P.divergence / P.solve_fields) outside the residual."
                     % (w.op, sorted(self._RESIDUAL_LOCAL_OPS)))
-        return self._new(
+        token = self._new(
             "state", "solve_local_nonlinear", (initial_guess,),
             {"residual_block": sub, "residual_region": residual_region,
              "residual": r, "iterate": iterate, "guess": guess_ph,
-             "tol": tol_literal, "max_iter": int(max_iter), "method": method,
+             "tol": tol_literal, "max_iter": int(max_iter), "method": "newton",
+             "problem_kind": "local_residual",
+             "problem_identity": problem_identity.token,
              # ADC-617: the FD Jacobian relative step. None -> the historical 1e-7 literal. Stored on
              # the node so the generic attrs hash (_ir_hash) busts the compile cache when it changes.
-             "fd_eps": fd_eps_literal}, name, block,
+            "fd_eps": fd_eps_literal}, name, block,
             space=initial_guess.space)
+        from pops.time.solve_outcome import SolveOutcome
+
+        outcome_name = name or "local_residual"
+
+        def project(outcome: Any) -> Any:
+            return self._new(
+                "state", "solve_outcome_component", (outcome,), {"index": 0},
+                outcome_name + "_value", block, space=initial_guess.space,
+                point=initial_guess.point)
+
+        return SolveOutcome(self, token, project, outcome_name)
 
     def _linear_source_name(self, operator: Any, where: Any, values: Any = ()) -> Any:
         """Resolve `operator` to the linear-source name.

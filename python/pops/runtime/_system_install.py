@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Any
 
 from pops._bootstrap import ModelSpec
 from pops.runtime._lifecycle import guard_assembling as _guard_assembling
-from pops.runtime._lifecycle import reject_compiled_time_route as _reject_compiled_time_route
 from pops.runtime._numeric import native_block_scalars, native_real, positive_int
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
@@ -75,7 +74,6 @@ class _SystemInstall(_System):
             contributes to the right-hand side of the system Poisson.
         """
         _guard_assembling(self, "add_block")  # frozen once pops.bind completes (ADC-592)
-        _reject_compiled_time_route(time, "System.add_block")  # ADC-554: no CompiledTime time= bypass
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
         # Native ABI conversion happens here; descriptors above this seam stay exact.

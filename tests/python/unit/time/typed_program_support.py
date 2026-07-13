@@ -162,7 +162,7 @@ def state_refs(
     existing = context.blocks.get(block_key)
     if existing is not None:
         return existing
-    block = context.case.block(block_name, selected_model)
+    block = context.case.block(block_name, selected_model, states=(selected_state,))
     result = (block, selected_state)
     context.blocks[block_key] = result
     return result

@@ -21,7 +21,7 @@ split = pops.lib.time.Strang(U, first=transport_flow, second=collision_flow)
 The public catalog is `ForwardEuler`, `SSPRK2`, `SSPRK3`, `RK4`, `RungeKutta`, `IMEX`,
 `AdamsBashforth`, `BDF`, `PredictorCorrector`, `Lie`, and `Strang`. Every call returns an ordinary
 `pops.Program`. Factories expand only through public Program operations:
-`T.state(U)`, `T.call(...)`, `T.value(...)`, local solves, applications and `T.commit(...)`. The
+`T.state(U)`, callable operator handles, `T.value(...)`, generic solves and `T.commit(...)`. The
 equivalent manual operations normalize to the same `ProgramGraph` and semantic identity. Order and
 SSP evidence are reconstructed from that graph; factory names never select a runtime route.
 

@@ -54,7 +54,7 @@ def call_at(
     from ._helpers import _op_space_arity
 
     arity = _op_space_arity(program, handle)
-    value = program.call(handle, *candidate_args[:arity])
+    value = handle(*candidate_args[:arity])
     return program.value(name, value, at=point)
 
 

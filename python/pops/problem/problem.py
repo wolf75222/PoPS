@@ -153,6 +153,8 @@ class Case:
         self,
         name: Any,
         model: Any,
+        *,
+        states: Any = None,
     ) -> Any:
         """Declare one model instance and return its stable owner-qualified block handle.
 
@@ -161,7 +163,7 @@ class Case:
         temporal and consumer authorities are attached through their dedicated Case families.
         """
         self._guard_mutable("add a block")
-        return self._block_registry.add(name, model)
+        return self._block_registry.add(name, model, states=states)
 
     def field(self, operator: Any, discretization: Any) -> Any:
         """Register one field operator/discretization pair and return its case-owned handle."""
@@ -194,7 +196,8 @@ class Case:
             raise ValueError(
                 "block %r already carries a spatial method; select numerics only through "
                 "DiscretizationPlan" % live.local_id)
-        plan.validate_for(self._block_registry.spec(live.local_id)["model"])
+        spec = self._block_registry.spec(live.local_id)
+        plan.validate_for(spec["model"], states=spec["states"])
         self._numerics_assignments[live.local_id] = plan
         return self
 
@@ -395,9 +398,23 @@ class Case:
             except Exception as exc:  # noqa: BLE001 -- aggregate exact consumer refusal
                 report = report.error(
                     "consumer", "invalid_consumer_graph", str(exc))
+        for block_name in sorted(self._block_registry.names()):
+            spec = self._block_registry.spec(block_name)
+            model = spec["model"]
+            rate_contracts = getattr(model, "_rate_contracts", {})
+            selected_rates = tuple(
+                rate for rate, contract in rate_contracts.items()
+                if contract["state"] in spec["states"])
+            if selected_rates and block_name not in self._numerics_assignments:
+                report = report.error(
+                    "numerics", "missing_discretization_plan",
+                    "block %r has no DiscretizationPlan; evolved rates never receive a "
+                    "scientific fallback" % block_name,
+                    context={"block": block_name})
         for block_name, plan in sorted(self._numerics_assignments.items()):
             try:
-                plan.validate_for(self._block_registry.spec(block_name)["model"])
+                spec = self._block_registry.spec(block_name)
+                plan.validate_for(spec["model"], states=spec["states"])
                 self._resolved_numerics_for(block_name)
             except Exception as exc:  # noqa: BLE001 -- aggregate exact numerical refusal
                 report = report.error(

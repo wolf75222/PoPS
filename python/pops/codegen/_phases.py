@@ -25,7 +25,6 @@ def resolve(
     backend: Any = None,
     platform: Any = None,
     time: Any = None,
-    libraries: Any = (),
     compile_options: Mapping[str, Any] | None = None,
 ) -> Any:
     """Resolve a frozen Case into the only value accepted by :func:`compile`."""
@@ -66,13 +65,12 @@ def resolve(
     if unknown_options:
         raise TypeError("pops.resolve received unsupported compile option(s) %s" % unknown_options)
     if "libraries" in options or "backend" in options:
-        raise TypeError("libraries/backend have dedicated resolve-time authorities")
+        raise TypeError("libraries are retired and backend has a dedicated resolve-time authority")
 
     from pops.codegen._orchestration_compile import (
         capture_field_plans,
         capture_runtime_declarations,
         prepare_problem_snapshot,
-        resolve_compile_libraries,
     )
     from pops.problem._detached import detached_frozen
     from pops.model.bind_schema import BindSchema
@@ -144,9 +142,8 @@ def resolve(
     field_plans = capture_field_plans(
         problem, detached_frozen, target=target, layout=detached_layout)
     outputs, diagnostics = capture_runtime_declarations(problem, detached_frozen)
-    resolved_libraries, snapshot_libraries = resolve_compile_libraries(tuple(libraries or ()))
     snapshot = prepare_problem_snapshot(
-        problem, resolved_time, layout=layout_plan, libraries=snapshot_libraries)
+        problem, resolved_time, layout=layout_plan, libraries=())
     from pops.codegen._resolution import resolve_capability_evidence
 
     module_abi_key = None
@@ -160,7 +157,7 @@ def resolve(
         platform_evidence = platform.to_data()
 
     evidence = resolve_capability_evidence(
-        problem, layout=layout_plan, libraries=resolved_libraries, time=resolved_time,
+        problem, layout=layout_plan, libraries=(), time=resolved_time,
         module_abi_key=module_abi_key)
     amr_requirements = None
     amr_capabilities = None
@@ -183,7 +180,7 @@ def resolve(
         time=resolved_time, blocks=blocks, bind_schema=bind_schema,
         compile_values=compile_values, field_plans=field_plans, outputs=outputs,
         diagnostics=diagnostics, consumer_graph=consumer_graph,
-        libraries=resolved_libraries,
+        libraries=(),
         requirements={"tokens": tuple(evidence["requirements"]),
                       "layout_resources": layout_plan.resource_requirements(),
                       "amr_resources": amr_requirements},

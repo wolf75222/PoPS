@@ -10,14 +10,11 @@ returns one so a named operator is referenced as a typed, INSPECTABLE object, NO
     R = m.rate("explicit_rhs", flux=True, sources=["electric"])
     R.category        # "rate"
     R.signature       # Signature((U, Fields) -> Rate(U))
-    rate = P.call(R, U, fields)      # the handle is the one public P.call selector
-    rate = R(U, fields)              # ADC-560: the callable facade -> the same IR
+    rate = R(U, fields)              # the handle is the sole public selector
 
-The handle is the public :meth:`pops.time.Program.call` selector: the public ``P.call`` REQUIRES an
-``OperatorHandle`` (a bare string operator name is refused). ``OperatorHandle.__call__`` (ADC-560) is
-a thin FACADE over that same path: it locates the Program from its ProgramValue arguments and delegates
-to ``P.call(self, ...)``, so ``R(U, f)`` builds the BYTE-IDENTICAL IR (same ``_ir_hash``) as
-``P.call(R, U, f)`` -- same exact owner/kind/signature checks, same registry lookup, ZERO numerics.
+``OperatorHandle.__call__`` locates the Program from its typed values and delegates to the one
+private lowering seam. ``R(U, f)`` therefore runs exact owner/kind/signature checks and builds IR
+with zero numerics; a bare operator-name string is never a public selector.
 The handle holds no Program reference, but it works only in a Program bound to its exact declaring
 owner; a homonymous registry from another model is rejected.
 
@@ -376,9 +373,9 @@ class OperatorHandle(Handle):
     (``rate`` / ``field_solve`` / ``local_linear_map`` / ``matrix_free_map`` / ``projection`` /
     ``coupled_rate`` / ...). It is value-like: two handles compare equal iff their owner-qualified
     declaration identities match (the signature/category are DERIVED metadata), so a handle stays
-    usable as a dict key or in tests. It carries no Program, no registry and no IR; the public
-    ``P.call`` (and ADC-560's ``handle(...)`` facade) resolve the complete handle against the Program's
-    bound registry. A same-named handle from another model is rejected.
+    usable as a dict key or in tests. It carries no Program, no registry and no IR; calling the
+    handle resolves it against the Program's bound registry. A same-named handle from another model
+    is rejected.
     """
 
     __slots__ = ("signature", "category", "_registered_operator_name")
@@ -462,34 +459,31 @@ class OperatorHandle(Handle):
                      "registered_operator_name": self.registered_operator_name})
         return view
 
-    def __call__(self, *args: Any, name: Any = None) -> Any:
-        """Call the operator inside a time Program (ADC-560): the tableau-style facade over ``P.call``.
+    def __call__(self, *args: Any, name: Any = None, schedule: Any = None) -> Any:
+        """Call the operator inside a time Program (ADC-560).
 
         Locates the Program from the first ProgramValue argument that carries a ``.prog`` back-reference and
-        delegates to ``P.call(self, *args, name=name)`` -- the byte-identical
-        lowering the public ``P.call(handle, ...)`` uses. So ``R(U, f)`` builds the SAME IR (same
-        ``_ir_hash``), runs the SAME signature type-checks and raises the SAME signature errors as
-        ``P.call(R, U, f)``, with ZERO numerics: ``__call__`` only builds IR. A call outside a Program
+        delegates to its private typed lowering. ``R(U, f)`` builds IR with zero numerics and runs
+        the complete signature and ownership checks. A call outside a Program
         (no ProgramValue argument to find the Program from) is refused with a clear error; the operator name
         stays an internal selector, never re-exposed as a public string.
         """
         prog = self._program_from_args(args)
-        return prog.call(self, *args, name=name)
+        return prog._call(self, *args, name=name, schedule=schedule)
 
     def _program_from_args(self, args: Any) -> Any:
         """Find the time-Program to build IR into from the call arguments (ADC-560).
 
         The Program is the ``.prog`` back-reference on the first :class:`pops.time.values.ProgramValue`
         argument. A call with no such argument (outside a Program) is refused with a clear error
-        naming the explicit ``P.call`` alternative. Shared by the base handle and its callable
+        naming the missing Program value. Shared by the base handle and its callable
         subtypes so the Program-location rule is defined once.
         """
         prog = next((a.prog for a in args if hasattr(a, "prog")), None)
         if prog is None:
             raise ValueError(
                 "operator %r must be called with time-Program values (inside a Program) so it can "
-                "find the Program to build IR into; got %r. Use P.call(%r, ...) if you hold the "
-                "Program explicitly." % (self.name, args, self.name))
+                "find the Program to build IR into; got %r." % (self.name, args))
         return prog
 
     def __repr__(self) -> str:

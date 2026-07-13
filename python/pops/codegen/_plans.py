@@ -257,6 +257,10 @@ class ResolvedSimulationPlan:
         for name in ("outputs", "diagnostics", "libraries"):
             object.__setattr__(
                 self, name, tuple(_deep_freeze(item) for item in getattr(self, name)))
+        if self.libraries:
+            raise ValueError(
+                "ResolvedSimulationPlan libraries are retired; use authenticated external "
+                "component packages through compile_component")
         if self.consumer_graph is not None:
             from pops.runtime.consumer import ConsumerGraph
 

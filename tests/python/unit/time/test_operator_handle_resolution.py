@@ -101,7 +101,7 @@ def test_forged_kind_and_signature_are_rejected_before_lowering():
         linear.name, kind=declared.kind, owner=registry.owner_path,
         signature=registry.get(source.name).signature)
     for build in (
-        lambda: program.call(wrong_signature),
+        lambda: program._call(wrong_signature),
         lambda: program.apply(wrong_signature, state=state),
         lambda: program.condensed_coeffs(
             state=state, linear_operator=wrong_signature, subset=(0, 1), c=1, th_dt=1),
@@ -133,9 +133,9 @@ def test_forged_alias_target_cannot_route_to_another_compatible_operator():
     _, block, state_declaration = _references(module)
     program = adctime.Program("alias-forgery")._bind_operators(module)
     state = program.state(block, state_declaration).n
-    assert program.call(legitimate, state).attrs["source"] == "first"
+    assert legitimate(state).attrs["source"] == "first"
     with pytest.raises(ValueError, match="authenticates target.*first"):
-        program.call(forged, state)
+        forged(state)
 
 
 def test_registry_aliases_are_collision_safe_and_cannot_be_retargeted():
@@ -271,7 +271,7 @@ def test_state_space_is_derived_from_the_model_declaration_not_the_call_site():
     program = adctime.Program("spaces")._bind_operators(module)
     temporal = program.state(block, state_declaration)
     state = temporal.n
-    linear = program.call(handle)
+    linear = program._call(handle)
 
     assert temporal.space is operator_space
     assert state.space is operator_space

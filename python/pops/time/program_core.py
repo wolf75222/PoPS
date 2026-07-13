@@ -38,7 +38,7 @@ class _ProgramCore(
 ):
     """State / field / RHS / source / apply construction (the operator-first builder core).
 
-    The typed operator-call lowering (``P.call`` / ``_call`` and helpers) is mixed in from
+    The typed callable-operator lowering (private ``_call`` and helpers) is mixed in from
     :class:`pops.time.program_call._ProgramCall` (split for the 500-line cap, ADC-550).
     """
 
@@ -172,26 +172,29 @@ class _ProgramCore(
         require_declared_state_space(self, qualified_state, space)
         return self._time_state(block, qualified_state, space, clock)
 
-    def solve_fields(self, name: Any = None, state: Any = None, field: Any = None) -> Any:
-        """Author an elliptic solve from ``state`` and return a non-readable outcome. Accepts
-        ``solve_fields(state)`` or ``solve_fields(name, state)``. Each call is a DISTINCT
-        FieldContext after ``outcome.consume(action=...)`` (a stage's RHS must read the fields
-        solved from its own state, never a stale global). ``field`` is the case-owned ``FieldHandle``
-        returned by ``Case.field``; a string is never promoted into a field identity.  An
-        unconsumed solve cannot feed a rate, commit, output, or diagnostic."""
-        # A readable temporal handle (U.stage(name, point=...) / U.prev(lag)) resolves through Program-owned tables
-        # here so it composes wherever a State does; a plain ProgramValue / None / str is unchanged.
-        name, state = _resolve_handle(name), _resolve_handle(state)
-        if isinstance(name, ProgramValue) and state is None:
-            name, state = None, name
-        if field is None:
+    def _solve_field_operator(self, field: Any, states: Any, *, name: Any = None) -> Any:
+        """Authenticate a callable field handle and build its normalized solve outcome."""
+        values = tuple(_resolve_handle(state) for state in states)
+        if not values:
+            raise ValueError("field operator requires one or more State values")
+        if any(not isinstance(state, ProgramValue) or state.vtype != "state"
+               for state in values):
+            raise ValueError("field operator arguments must all be State values")
+        for state in values:
+            require_owned(self, state, "field operator")
+        if len({state.block for state in values}) != len(values):
+            raise ValueError("field operator received the same block more than once")
+        if any(state.point != values[0].point for state in values[1:]):
             raise ValueError(
-                "solve_fields: field= must be the FieldHandle returned by Problem.add_field")
-        if not (isinstance(state, ProgramValue) and state.vtype == "state"):
-            raise ValueError("solve_fields: a State value is required")
-        field = bind_field_reference(self, state.block, field)
-        return self._field_solve_outcome(
-            self._solve_fields(name=name, state=state, field=field))
+                "field operator arguments must share one exact TimePoint; synchronize or "
+                "evaluate every coupled block at the same stage first")
+        field = bind_field_reference(self, values[0].block, field)
+        token = (
+            self._solve_fields(name=name, state=values[0], field=field)
+            if len(values) == 1 else
+            self._solve_fields_from_blocks(values, field=field, name=name)
+        )
+        return self._field_solve_outcome(token)
 
     def _solve_fields(self, name: Any, state: Any, field: Any = None) -> Any:
         """Internal typed field-solve builder used after handle authentication."""
@@ -230,36 +233,6 @@ class _ProgramCore(
                 space=token.space, field_context=token.field_context, point=token.point)
 
         return FieldSolveOutcome(self, token, project, outcome_name)
-
-    def solve_fields_from_blocks(self, states: Any, field: Any, name: Any = None) -> Any:
-        """Solve the elliptic fields from the SIMULTANEOUS stage states of MULTIPLE blocks (spec
-        \"Multi-blocs\"): a coupled Poisson where each listed block reads its own @p states[k] override
-        at once, returning a FieldContext.
-
-        RUNTIME (Spec 3 criterion 24, ADC-457): this is the multi-target coupled solve. It lowers to
-        ``ctx.solve_fields_from_blocks(u_stages)``, a per-block pointer vector the native field solver
-        (``System::solve_fields_from_blocks`` ->
-        ``SystemFieldSolver::assemble_poisson_rhs_from_blocks``) assembles the system Poisson RHS from as
-        ``Sum_s elliptic_rhs_s(U_s)`` reading EVERY listed block's stage state AT ONCE (a true
-        simultaneous override, not a sequence of single-target solves). A block NOT listed contributes
-        its live state. The listed states slot at their block index (the T.state declaration order), so
-        the runtime sees each coupled block at its stage state into the one shared phi/aux.
-
-        A per-block ``P.solve_fields(state=Ub)`` remains the right choice when the blocks advance in
-        sequence (block b at its stage state, every other block at its live state); this op is for the
-        SIMULTANEOUS case where multiple coupled blocks must each contribute their stage state at once."""
-        if not (isinstance(states, (list, tuple)) and states):
-            raise ValueError("solve_fields_from_blocks: a non-empty list of State values is required")
-        seen = set()
-        for s in states:
-            if not (isinstance(s, ProgramValue) and s.vtype == "state"):
-                raise ValueError("solve_fields_from_blocks: every entry must be a State value")
-            if s.block in seen:
-                raise ValueError("solve_fields_from_blocks: block '%s' listed twice" % s.block)
-            seen.add(s.block)
-        field = bind_field_reference(self, states[0].block, field)
-        return self._field_solve_outcome(
-            self._solve_fields_from_blocks(states, field=field, name=name))
 
     def _solve_fields_from_blocks(self, states: Any, *, field: Any, name: Any = None) -> Any:
         """Build a coupled field solve after its field identity was authenticated."""

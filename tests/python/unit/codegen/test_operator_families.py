@@ -121,8 +121,8 @@ def test_declarers_funnel_into_one_registry():
     def prog(handle):
         P, state = _program_state(m, "p")
         U = state.n
-        f = P.call(fields_h, U)
-        R = P.call(handle, U, f)
+        f = fields_h(U)
+        R = handle(U, f)
         P.commit(state.next, P.value("u1", U + P.dt * R, at=state.next.point))
         return P
 

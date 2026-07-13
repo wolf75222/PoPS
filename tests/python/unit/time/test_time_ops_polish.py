@@ -40,26 +40,28 @@ def _pops_time():
 
 # ---- (A.1) solve_local_nonlinear (op 10): the per-cell Newton builder (ADC-422) ----
 def test_solve_local_nonlinear_validates_inputs(t):
+    from pops.solvers.nonlinear import LocalNewton
+    from pops.time import LocalResidual
     # The residual must be an IR-building callable and the guess a State; the bad-input messages are loud.
     P = t.Program("p")
     U = typed_state(P, "blk")
     try:  # a State (not a callable) is no longer accepted -- the residual builds r(U)
-        P.solve_local_nonlinear(name="u", residual=U, initial_guess=U)
-    except ValueError as exc:
-        assert "residual must be" in str(exc) and "callable" in str(exc), str(exc)
+        LocalResidual(U, U)
+    except TypeError as exc:
+        assert "operator must be" in str(exc), str(exc)
     else:
         raise AssertionError("solve_local_nonlinear must reject a non-callable residual")
 
     def good_residual(P, Uit, U0):
         return P.value(Uit - U0)
     try:  # the initial_guess must be a State value
-        P.solve_local_nonlinear(name="u", residual=good_residual, initial_guess="nope")
+        P.solve(LocalResidual(good_residual, "nope"), name="u", solver=LocalNewton())
     except ValueError as exc:
         assert "initial_guess" in str(exc), str(exc)
     else:
         raise AssertionError("solve_local_nonlinear must reject a non-State initial_guess")
     try:  # max_iter must be a positive int
-        P.solve_local_nonlinear(name="u", residual=good_residual, initial_guess=U, max_iter=0)
+        LocalNewton(max_iterations=0)
     except ValueError as exc:
         assert "max_iter" in str(exc), str(exc)
     else:
@@ -67,6 +69,8 @@ def test_solve_local_nonlinear_validates_inputs(t):
 
 
 def test_solve_local_nonlinear_builds_newton_ir(t):
+    from pops.solvers.nonlinear import LocalNewton
+    from pops.time import FailRun, LocalResidual
     # A valid implicit reaction r(U) = U - U0 - dt*S(U) builds a typed Newton IR op with a residual
     # sub-block; the IR validates and hashes.
     P = t.Program("react")
@@ -76,10 +80,12 @@ def test_solve_local_nonlinear_builds_newton_ir(t):
     def residual(P, Uit, U0):
         S = P._source("react", state=Uit)
         return P.value("r", Uit - U0 - dt * S, at=Uit.point)
-    W = P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U, tol=1e-10, max_iter=25)
-    assert W.op == "solve_local_nonlinear" and W.vtype == "state", (W.op, W.vtype)
-    assert W.attrs["max_iter"] == 25 and W.attrs["tol"].to_python() == 1e-10
-    assert len(W.attrs["residual_block"]) >= 3, "the residual sub-block holds the iterate/guess + ops"
+    W = P.solve(LocalResidual(residual, U), name="W", solver=LocalNewton(
+        tolerance=1e-10, max_iterations=25)).consume(action=FailRun())
+    token = W.inputs[0].inputs[0]
+    assert token.op == "solve_local_nonlinear" and W.vtype == "state", (token.op, W.vtype)
+    assert token.attrs["max_iter"] == 25 and token.attrs["tol"].to_python() == 1e-10
+    assert len(token.attrs["residual_block"]) >= 3, "the residual sub-block holds the iterate/guess + ops"
     endpoint = typed_state(P, "blk", state_name="U").next
     P.commit(endpoint, P.value("W_next", 1 * W, at=endpoint.point))
     assert P.validate() is True, "the Newton IR must validate"
@@ -87,6 +93,8 @@ def test_solve_local_nonlinear_builds_newton_ir(t):
 
 
 def test_solve_local_nonlinear_rejects_non_local_residual(t):
+    from pops.solvers.nonlinear import LocalNewton
+    from pops.time import LocalResidual
     # A non-local op (P.rhs / P.solve_fields) inside the residual is rejected: the per-cell kernel cannot
     # re-evaluate a halo / global solve at a perturbed stack state.
     P = t.Program("bad")
@@ -96,7 +104,7 @@ def test_solve_local_nonlinear_rejects_non_local_residual(t):
         R = P._rhs_legacy(state=Uit, sources=["default"])  # a non-local divergence-bearing rhs
         return P.value(Uit - U0 - P.dt * R, at=Uit.point)
     try:
-        P.solve_local_nonlinear(name="W", residual=bad_residual, initial_guess=U)
+        P.solve(LocalResidual(bad_residual, U), name="W", solver=LocalNewton())
     except ValueError as exc:
         assert "not LOCAL" in str(exc) or "rhs" in str(exc), str(exc)
     else:
@@ -104,6 +112,8 @@ def test_solve_local_nonlinear_rejects_non_local_residual(t):
 
 
 def test_solve_local_nonlinear_refused_without_model(t):
+    from pops.solvers.nonlinear import LocalNewton
+    from pops.time import FailRun, LocalResidual
     # The Newton codegen reads the residual's named source / linear source coefficients -> needs a model.
     P = t.Program("react")
     dt = P.dt
@@ -112,7 +122,8 @@ def test_solve_local_nonlinear_refused_without_model(t):
     def residual(P, Uit, U0):
         S = P._source("react", state=Uit)
         return P.value("r", Uit - U0 - dt * S, at=Uit.point)
-    W = P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U)
+    W = P.solve(LocalResidual(residual, U), name="W", solver=LocalNewton()).consume(
+        action=FailRun())
     endpoint = typed_state(P, "blk", state_name="U").next
     P.commit(endpoint, P.value("W_next", 1 * W, at=endpoint.point))
     try:

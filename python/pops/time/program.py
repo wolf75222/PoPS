@@ -68,7 +68,7 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         self._case_owner_path = None
         self._init_time_handle_tables()
         # De-stringing is the ONE public path (Spec 5 sec.15, ADC-479 criteria 23 + 27): the public
-        # P.call requires a typed operator handle and the public P.rhs requires the typed terms= list
+        # Callable operator handles and the public P.rhs require typed declarations
         # (the legacy string operator name / flux=/sources= form is REFUSED). The byte-identical
         # builders survive ONLY as the internal _call / _rhs_legacy, which the typed front doors and
         # the pops.lib.time macros lower through -- no opt-in flag, no second public path.
@@ -294,56 +294,3 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         """
         from pops.codegen import program_codegen as _pcg
         return _pcg._emit_body(self, model)
-
-
-class CompiledTime:
-    """Record of a compiled `Program`'s macro-step cadence (`substeps` / `stride`).
-
-    A compiled Program OWNS the whole step body: it is installed via `sim.install_program` and driven
-    by `sim.step(dt)`. Its cadence is applied to the System with `sim.set_program_cadence(substeps,
-    stride)` (call it after `install_program`); a `CompiledTime` just records those values. The
-    compiled program is NOT attached via `sim.add_equation(time=CompiledTime(...))` -- that path is
-    rejected with an explicit error (the transport policy passed to `add_equation` is a native
-    `pops.Explicit`/etc.; the compiled program is installed separately). `substeps` and
-    `stride` are wired (ADC-411) as a SYSTEM-level orchestration AROUND the opaque program closure
-    (`System.set_program_cadence`, mirroring the native per-block advance loop): `substeps=n` runs the
-    program n times over `eff_dt/n`; `stride=M` runs the whole program once per M macro-steps with
-    `eff_dt = M*dt` (GLOBAL hold-then-catch-up, the clock still ticks every macro-step).
-
-    Two semantic limits to keep in mind (cf. system_stepper.hpp):
-      - `substeps > 1` is bit-exact vs native `pops.Explicit(substeps=n)` ONLY for an UNCOUPLED /
-        transport-only program: `program_step_(h)` re-runs the WHOLE program (its `solve_fields`
-        included), whereas native substeps subdivides ONLY the transport (solve_fields runs once).
-      - `stride` here is GLOBAL (a compiled program is one whole-system closure), so it equals native
-        per-block stride only for a single-block system (or all blocks sharing the stride).
-
-    A NUMERIC `cfl` (e.g. `cfl=0.5`) is wired: it is applied at RUNTIME by `sim.run(cfl=...)`, whose
-    `cfl` defaults to the installed cadence's `cfl` when the caller passes none, so a bare
-    `sim.run(t_end)` after `bind(..., cadence=CompiledTime(cfl=0.5))` advances at `cfl=0.5` (the
-    per-block CFL `dt` is computed in PoPS and drives the installed Program). A self-computed `cfl`
-    SUB-PROGRAM (`cfl="program"`) is still deferred (the Program would export its own dt bound); it
-    fails loud rather than being silently ignored."""
-
-    def __init__(self, substeps: Any = 1, stride: Any = 1, cfl: Any = "default") -> None:
-        if isinstance(substeps, bool) or not isinstance(substeps, int) or substeps < 1:
-            raise ValueError("CompiledTime: substeps must be a positive int (got %r)" % (substeps,))
-        if isinstance(stride, bool) or not isinstance(stride, int) or stride < 1:
-            raise ValueError("CompiledTime: stride must be a positive int (got %r)" % (stride,))
-        # A numeric cfl is wired (applied at runtime via sim.run(cfl=)); only a non-numeric,
-        # non-"default" cfl (e.g. cfl="program", a self-computed dt sub-program) is still deferred.
-        if cfl != "default":
-            if isinstance(cfl, str):
-                raise NotImplementedError(
-                    "CompiledTime: a self-computed cfl sub-program (cfl=%r) is deferred (ADC-401 "
-                    "Phase 2c); pass a positive numeric cfl=<value> or an explicit dt to sim.step(dt)"
-                    % (cfl,))
-            cfl = exact_numeric_scalar(cfl, where="CompiledTime cfl")
-            if cfl <= 0:
-                raise ValueError("CompiledTime: cfl must be > 0 (got %r)" % (cfl,))
-        self.substeps = substeps
-        self.stride = stride
-        self.cfl = cfl
-        self.kind = "compiled"
-
-    def __repr__(self) -> str:
-        return "CompiledTime(substeps=%d, stride=%d, cfl=%r)" % (self.substeps, self.stride, self.cfl)

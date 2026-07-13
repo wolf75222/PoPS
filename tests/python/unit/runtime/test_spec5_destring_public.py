@@ -9,9 +9,7 @@ Surfaces covered:
 
   1. ``P.solve_linear(method=, preconditioner=)`` -- typed pops.solvers.krylov / preconditioners
      descriptors (CG / GMRES / BiCGStab / Richardson, Identity); a bare string is rejected.
-  2. ``pops.codegen.compile_library(backend=)`` -- a typed pops.codegen backend (Production / AOT / JIT);
-     a bare string is rejected (mirrors pops.compile).
-  3. ``Model.param`` / board ``param`` / ``Case.param`` -- a canonical declaration from
+  2. ``Model.param`` / board ``param`` / ``Case.param`` -- a canonical declaration from
      ``pops.params``; every registry returns a stable ``ParamHandle`` and formulas read it only
      through ``value(handle)``. The old shorthand and ``kind=`` routes are rejected.
 
@@ -106,38 +104,7 @@ def test_solve_linear_string_preconditioner_rejected():
     assert "preconditioner" in msg and "preconditioners" in msg, msg
 
 
-# --- 2. compile_library(backend=) ------------------------------------------------------------
-def _lib_objects():
-    import pops.solvers as solvers
-    return [solvers.GMRES(max_iter=200)]
-
-
-def test_compile_library_typed_backend_byte_identical():
-    import pops
-    from pops.codegen import Production
-    default = pops.codegen.compile_library("lib.so", objects=_lib_objects())            # None -> Production()
-    typed = pops.codegen.compile_library("lib.so", objects=_lib_objects(), backend=Production())
-    assert default.backend == "production" == typed.backend
-    assert default.content_hash == typed.content_hash
-    assert default == typed
-
-
-def test_compile_library_string_backend_rejected():
-    import pops
-    with pytest.raises(TypeError) as exc:
-        pops.codegen.compile_library("lib.so", objects=_lib_objects(), backend="production")
-    assert "Production" in str(exc.value), str(exc.value)
-
-
-def test_compile_library_non_production_typed_backend_rejected():
-    import pops
-    from pops.codegen import AOT, JIT
-    for backend in (AOT(), JIT()):
-        with pytest.raises(ValueError):
-            pops.codegen.compile_library("lib.so", objects=_lib_objects(), backend=backend)
-
-
-# --- 3. canonical declarations + Handle/Expr separation -------------------------------------
+# --- 2. canonical declarations + Handle/Expr separation -------------------------------------
 def test_facade_param_returns_handle_and_value_builds_a_distinct_expr():
     from pops.model import ParamHandle
     from pops.params import ConstParam, RuntimeParam

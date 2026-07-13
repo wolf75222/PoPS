@@ -17,6 +17,7 @@ from pops.numerics.reconstruction import MUSCL
 from pops.numerics.reconstruction.limiters import VanLeer
 from pops.numerics.riemann import ScalarUpwind
 from pops.numerics.variables import Conservative
+from pops.model.ownership import MissingOwnershipError
 
 
 def _declarations():
@@ -41,6 +42,35 @@ def _declarations():
         riemann=ScalarUpwind(velocity=velocity),
     )
     return frame, model, state, flux, rate, method
+
+
+def _multistate_declarations():
+    frame = Rectangle(
+        "unit-square-multi", lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
+    model = pops.Model("multi-transport", frame=frame)
+    first = model.species("first", state=("u",))
+    second = model.species("second", state=("v",))
+    result = []
+    for state, flux_name, rate_name in (
+            (first, "F", "A"), (second, "G", "B")):
+        (component,) = state
+        flux = model.flux(
+            flux_name, frame=frame, state=state,
+            components={frame.x: (component,), frame.y: (0 * component,)},
+            waves={frame.x: (1,), frame.y: (0,)},
+        )
+        rate = model.rate(rate_name, equation=ddt(state) == -div(flux))
+        velocity = model.vector(
+            "velocity_" + rate_name, frame=frame,
+            components={frame.x: 1, frame.y: 0})
+        method = FiniteVolume(
+            flux=flux, variables=Conservative(state),
+            reconstruction=MUSCL(VanLeer()),
+            riemann=ScalarUpwind(velocity=velocity),
+        )
+        result.append((state, rate, method))
+    return model, result[0], result[1]
 
 
 def test_method_infers_order_ghosts_and_validates_physical_flux() -> None:
@@ -103,6 +133,51 @@ def test_double_or_inconsistent_authorities_are_rejected() -> None:
     case.numerics(plan)
     with pytest.raises(ValueError, match="already has a DiscretizationPlan"):
         case.numerics(plan)
+
+
+def test_multistate_blocks_select_typed_states_and_require_exact_rate_coverage() -> None:
+    model, (first, first_rate, first_method), (
+        second, second_rate, second_method) = _multistate_declarations()
+
+    case = pops.Case("selected-state")
+    with pytest.raises(ValueError, match="multi-state Model"):
+        case.block("ambiguous", model)
+    block = case.block("first", model, states=(first,))
+    assert block[first].declaration_ref == first
+    with pytest.raises(MissingOwnershipError, match="not selected"):
+        block[second]
+    assert case.resolve(first).canonical_identity() == case.resolve(
+        block[first]).canonical_identity()
+    with pytest.raises(MissingOwnershipError):
+        case.resolve(second)
+
+    exact = DiscretizationPlan()
+    exact.rates.add(first_rate, first_method)
+    case.numerics(exact, block=block)
+    assert exact.validate_for(model, states=(first,))
+
+    overbroad = DiscretizationPlan()
+    overbroad.rates.add(first_rate, first_method)
+    overbroad.rates.add(second_rate, second_method)
+    with pytest.raises(ValueError, match="extra=.*B"):
+        overbroad.validate_for(model, states=(first,))
+
+
+def test_selected_state_without_rates_needs_no_spatial_fallback() -> None:
+    model = pops.Model("mixed-rate")
+    evolved = model.species("evolved", state=("u",))
+    passive = model.species("diagnostic", state=("marker",))
+    (u,) = evolved
+    zero = model.source("zero", on=evolved, value=(0 * u,))
+    model.rate("source", equation=ddt(evolved) == zero)
+    case = pops.Case("diagnostic-only")
+    block = case.block("diagnostic", model, states=(passive,))
+
+    assert case.resolve(passive).canonical_identity() == case.resolve(
+        block[passive]).canonical_identity()
+    assert pops.validate(case) is case
+    with pytest.raises(MissingOwnershipError):
+        case.resolve(evolved)
 
 
 @dataclass(frozen=True)

@@ -67,7 +67,7 @@ def _resolved_plan():
         field_solvers={"phi": {"algorithm": "mg", "levels": [2, 4]}},
         outputs=({"format": "hdf5"},),
         diagnostics=({"name": "mass"},),
-        libraries=({"name": "kernels", "symbols": ["flux"]},),
+        libraries=(),
         requirements={"mpi": False},
         capabilities={"cpu": True, "gpu": False},
         lowering_coverage=layout_lowering_coverage(layout_plan),
