@@ -65,6 +65,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         self._frame = frame
         self._states = {}
         self._fields = {}
+        self._field_operators = {}
         self._fluxes = {}
         self._sources = {}
         self._operators = {}
@@ -116,6 +117,11 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
     def fields(self) -> Mapping[str, Any]:
         """Immutable, live view of declared scalar/vector field handles."""
         return MappingProxyType(self._fields)
+
+    @property
+    def field_operators(self) -> Mapping[str, Any]:
+        """Immutable, live view of physics-only field-operator descriptors."""
+        return MappingProxyType(self._field_operators)
 
     @property
     def fluxes(self) -> Mapping[str, FluxHandle]:
@@ -432,6 +438,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             "fields": sorted(self._fields),
             "fluxes": sorted(self._fluxes),
             "sources": sorted(self._sources),
+            "field_operators": sorted(self._field_operators),
             "operators": sorted(self._operators),
         }
 

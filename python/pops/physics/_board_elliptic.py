@@ -33,6 +33,8 @@ class _EllipticAuthoringMixin(_BoardModel):
         hierarchy policy or discretization.
         """
         name = require_name(name, "field_operator name")
+        if name in self._field_operators:
+            raise ValueError("field operator %r is already declared" % name)
         if not isinstance(unknown, Handle):
             raise TypeError("field_operator unknown must be a declared field Handle")
         if unknown.owner_path != self.owner_path or self._fields.get(unknown.local_id) != unknown:
@@ -62,7 +64,7 @@ class _EllipticAuthoringMixin(_BoardModel):
                     "FieldOutput + GradientOutput")
             with atomic_attrs(
                     (model, "_elliptic_fields"), (model, "aux_extra_names"),
-                    (self, "_module_cache")):
+                    (self, "_module_cache"), (self, "_field_operators")):
                 for aux_name in aux_names:
                     if aux_name not in model.aux_extra_names:
                         self._dsl.aux_field(aux_name)
@@ -76,6 +78,7 @@ class _EllipticAuthoringMixin(_BoardModel):
                     name, unknown=unknown, equation=equation, providers=provider,
                     outputs=output_tuple)
                 operator.validate()
+                self._field_operators[name] = operator
                 return operator
         raise ValueError(
             "field_operator %r has no formula-backend lowering for principal operator %s"
