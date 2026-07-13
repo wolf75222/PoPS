@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import copy
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from pops.descriptors import BrickDescriptor, Descriptor, reject_string_selector
 from pops.descriptors_report import CapabilitySet, RequirementSet
@@ -13,6 +13,74 @@ from ._identity import field_identity, strict_field_data
 from .bcs import BoundaryCondition
 from .gauges import FieldGauge
 from ._references import collect_references, resolve_value
+
+
+FIELD_DISCRETIZATION_SCHEMA_VERSION = 2
+_FIELD_DISCRETIZATION_DATA_KEYS = frozenset({
+    "schema_version",
+    "provider_id",
+    "method",
+    "boundaries",
+    "solver",
+    "nonlinear",
+    "preconditioner",
+    "nullspace",
+    "gauge",
+    "hierarchy_policy",
+})
+
+
+@runtime_checkable
+class FieldDiscretizationProtocol(Protocol):
+    """Small structural interface consumed by field registration and lowering.
+
+    A third-party plan owns its Python type and provider identity.  It does not register that
+    type in PoPS: implementing this exact surface is sufficient.  The numerical method, solver
+    and policies remain independently extensible descriptors.
+    """
+
+    provider_id: str
+    method: Any
+    boundaries: tuple[Any, ...]
+    solver: Any
+    nonlinear: Any
+    preconditioner: Any
+    nullspace: Any
+    gauge: Any
+    hierarchy_policy: Any
+
+    def to_data(self) -> dict[str, Any]: ...
+    def available(self, context: Any = None) -> Any: ...
+    def validate(self, context: Any = None) -> Any: ...
+    def declaration_references(self) -> tuple[Any, ...]: ...
+    def resolve_references(self, resolver: Any) -> Any: ...
+    def inspect(self) -> dict[str, Any]: ...
+    def freeze(self) -> Any: ...
+
+
+def require_field_discretization(value: Any, *, where: str) -> FieldDiscretizationProtocol:
+    """Authenticate one field plan through the structural protocol, without class dispatch."""
+    if not isinstance(value, FieldDiscretizationProtocol):
+        raise TypeError("%s must implement FieldDiscretizationProtocol" % where)
+    if not isinstance(value.provider_id, str) or not value.provider_id.strip():
+        raise TypeError("%s provider_id must be a non-empty string" % where)
+    return value
+
+
+def field_discretization_data(value: Any, *, where: str) -> dict[str, Any]:
+    """Return exact versioned identity data for a protocol-conforming field plan."""
+    plan = require_field_discretization(value, where=where)
+    data = plan.to_data()
+    if not isinstance(data, dict) or set(data) != _FIELD_DISCRETIZATION_DATA_KEYS:
+        raise TypeError(
+            "%s to_data() must return exactly the FieldDiscretization v%d keys"
+            % (where, FIELD_DISCRETIZATION_SCHEMA_VERSION)
+        )
+    if data["schema_version"] != FIELD_DISCRETIZATION_SCHEMA_VERSION:
+        raise ValueError("%s uses an unsupported field discretization schema" % where)
+    if data["provider_id"] != plan.provider_id:
+        raise ValueError("%s provider_id disagrees with its canonical data" % where)
+    return data
 
 
 class FieldHierarchyPolicy(Descriptor):
@@ -72,6 +140,7 @@ class FieldDiscretization(Descriptor):
     """
 
     category = "field_discretization"
+    provider_id = "pops.fields.discretization.v2"
 
     def __init__(
         self,
@@ -116,7 +185,8 @@ class FieldDiscretization(Descriptor):
 
     def to_data(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": FIELD_DISCRETIZATION_SCHEMA_VERSION,
+            "provider_id": self.provider_id,
             "method": strict_field_data(self.method),
             "boundaries": strict_field_data(self.boundaries),
             "solver": strict_field_data(self.solver),
@@ -247,7 +317,10 @@ class FieldDiscretization(Descriptor):
 __all__ = [
     "CompositeHierarchySolve",
     "FieldDiscretization",
+    "FieldDiscretizationProtocol",
     "FieldHierarchyPolicy",
     "InferHierarchyFromLayout",
     "LevelByLevelSolve",
+    "field_discretization_data",
+    "require_field_discretization",
 ]

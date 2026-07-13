@@ -17,6 +17,7 @@ from .context import (
 from .discretization import (
     CompositeHierarchySolve,
     FieldDiscretization,
+    FieldDiscretizationProtocol,
     FieldHierarchyPolicy,
     InferHierarchyFromLayout,
     LevelByLevelSolve,
@@ -107,6 +108,7 @@ __all__ = [
     "FieldConsumer",
     "FieldContext",
     "FieldDiscretization",
+    "FieldDiscretizationProtocol",
     "FieldDependencyCoverage",
     "FieldFailureAction",
     "FieldGauge",

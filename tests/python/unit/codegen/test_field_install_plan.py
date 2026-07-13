@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from pops.codegen._orchestration_compile import capture_field_plans
+from pops.descriptors import Descriptor
 from pops.fields import (
     CellCenteredSecondOrder,
     ConstantNullspace,
@@ -29,6 +30,70 @@ from pops.solvers.elliptic import GeometricMG
 
 
 _LAYOUT = Uniform(CartesianMesh(n=16, periodic=False))
+
+
+class ExternalFieldPlan(Descriptor):
+    """Test-owned plan provider; no PoPS registry knows this concrete class."""
+
+    category = "external_field_discretization"
+    provider_id = "pops.test.external-field-plan.v1"
+
+    def __init__(self, inner: FieldDiscretization) -> None:
+        self._inner = inner
+
+    @property
+    def method(self):
+        return self._inner.method
+
+    @property
+    def boundaries(self):
+        return self._inner.boundaries
+
+    @property
+    def solver(self):
+        return self._inner.solver
+
+    @property
+    def nonlinear(self):
+        return self._inner.nonlinear
+
+    @property
+    def preconditioner(self):
+        return self._inner.preconditioner
+
+    @property
+    def nullspace(self):
+        return self._inner.nullspace
+
+    @property
+    def gauge(self):
+        return self._inner.gauge
+
+    @property
+    def hierarchy_policy(self):
+        return self._inner.hierarchy_policy
+
+    def to_data(self):
+        data = self._inner.to_data()
+        data["provider_id"] = self.provider_id
+        return data
+
+    def available(self, context=None):
+        return self._inner.available(context)
+
+    def validate(self, context=None):
+        return self._inner.validate(context)
+
+    def declaration_references(self):
+        return self._inner.declaration_references()
+
+    def resolve_references(self, resolver):
+        return type(self)(self._inner.resolve_references(resolver))
+
+    def inspect(self):
+        data = self._inner.inspect()
+        data["provider_id"] = self.provider_id
+        return data
 
 
 def _field(model: Model, name: str, rhs: object):
@@ -98,6 +163,21 @@ def test_two_fields_keep_distinct_qualified_provider_slots_and_solver_plans() ->
     assert set(plans) == {"potential_0", "potential_1"}
     assert len({plan.native_options["provider_slot"] for plan in plans.values()}) == 2
     assert len({plan.identity.token for plan in plans.values()}) == 2
+
+
+def test_external_field_plan_crosses_registration_resolution_and_lowering_structurally() -> None:
+    model = Model("external-field-plan-model")
+    (rho,) = model.state("U", components=["rho"])
+    operator = _field(model, "potential", rho)
+    problem = Case(name="external-field-plan-case")
+    problem.block("material", model)
+    problem.field(operator, ExternalFieldPlan(_disc(Dirichlet(0.0))))
+
+    plan = capture_field_plans(
+        problem, lambda value: value, target="system", layout=_LAYOUT)["potential"]
+
+    assert plan.discretization.provider_id == ExternalFieldPlan.provider_id
+    assert plan.to_data()["discretization"]["provider_id"] == ExternalFieldPlan.provider_id
 
 
 def test_dynamic_boundary_lowers_to_generated_parameter_launcher() -> None:

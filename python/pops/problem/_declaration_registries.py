@@ -41,20 +41,18 @@ class FieldRegistry(_FreezableRegistry):
         return list(self._fields.values())
 
     def add(self, operator: Any, discretization: Any) -> Any:
-        """Register exactly one ``FieldOperator + FieldDiscretization`` pair."""
+        """Register one physical operator and one protocol-conforming numerical plan."""
         self._guard_frozen("add a field")
-        from pops.fields import FieldDiscretization, FieldOperator
+        from pops.fields import FieldOperator
+        from pops.fields.discretization import require_field_discretization
 
         if not isinstance(operator, FieldOperator):
             raise TypeError(
                 "field: operator must be a pops.fields.FieldOperator; got %r"
                 % type(operator).__name__
             )
-        if not isinstance(discretization, FieldDiscretization):
-            raise TypeError(
-                "field: discretization must be a pops.fields.FieldDiscretization; got %r"
-                % type(discretization).__name__
-            )
+        discretization = require_field_discretization(
+            discretization, where="field discretization")
         key = strict_name(operator.name, "field operator name")
         if key in self._fields:
             raise ValueError("field: a field operator named %r already exists" % key)
@@ -165,10 +163,13 @@ class _RegisteredField(Descriptor):
         return {"operator": self.operator, "discretization": self.discretization}
 
     def to_data(self) -> dict[str, Any]:
+        from pops.fields.discretization import field_discretization_data
+
         return {
             "schema_version": 1,
             "operator": self.operator.to_data(),
-            "discretization": self.discretization.to_data(),
+            "discretization": field_discretization_data(
+                self.discretization, where="registered field discretization"),
         }
 
     def available(self, context: Any = None) -> Availability:
@@ -184,9 +185,13 @@ class _RegisteredField(Descriptor):
         return True
 
     def resolve_references(self, resolver: Any) -> Any:
+        from pops.fields.discretization import require_field_discretization
+
+        discretization = self.discretization.resolve_references(resolver)
         return type(self)(
             self.operator.resolve_references(resolver),
-            self.discretization.resolve_references(resolver),
+            require_field_discretization(
+                discretization, where="resolved field discretization"),
         )
 
     def inspect(self) -> dict[str, Any]:

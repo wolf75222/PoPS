@@ -20,7 +20,11 @@ from pops.identity import Identity
 from pops.math import principal_kinds
 
 from pops.fields._identity import field_identity, strict_field_data
-from pops.fields.discretization import FieldDiscretization
+from pops.fields.discretization import (
+    FieldDiscretizationProtocol,
+    field_discretization_data,
+    require_field_discretization,
+)
 from pops.fields.gauges import MeanValueGauge
 from pops.fields.nullspace import ConstantNullspace
 from pops.fields.operator import FieldOperator
@@ -43,7 +47,7 @@ class ResolvedFieldInstallPlan:
 
     name: str
     operator: FieldOperator
-    discretization: FieldDiscretization
+    discretization: FieldDiscretizationProtocol
     target: str
     rhs_providers: tuple[Any, ...]
     native_options: Any
@@ -56,8 +60,8 @@ class ResolvedFieldInstallPlan:
             raise TypeError("ResolvedFieldInstallPlan name must be non-empty")
         if self.operator.name != self.name:
             raise ValueError("field install name disagrees with FieldOperator")
-        if not isinstance(self.discretization, FieldDiscretization):
-            raise TypeError("field install requires FieldDiscretization")
+        require_field_discretization(
+            self.discretization, where="resolved field install discretization")
         if self.target not in ("system", "amr_system"):
             raise ValueError("field install target is unsupported")
         from pops.model import Handle
@@ -90,7 +94,8 @@ class ResolvedFieldInstallPlan:
             "schema_version": 1,
             "name": self.name,
             "operator": self.operator.to_data(),
-            "discretization": self.discretization.to_data(),
+            "discretization": field_discretization_data(
+                self.discretization, where="resolved field install discretization"),
             "target": self.target,
             "rhs_providers": [provider.canonical_identity()
                               for provider in self.rhs_providers],
@@ -124,8 +129,9 @@ def resolve_field_install_plan(
 ) -> ResolvedFieldInstallPlan:
     operator = getattr(registration, "operator", None)
     plan = getattr(registration, "discretization", None)
-    if not isinstance(operator, FieldOperator) or not isinstance(plan, FieldDiscretization):
-        raise TypeError("field registration lost FieldOperator + FieldDiscretization")
+    if not isinstance(operator, FieldOperator):
+        raise TypeError("field registration lost its FieldOperator")
+    plan = require_field_discretization(plan, where="field registration discretization")
     output_components = tuple(output_components)
     if len(output_components) not in (1, 3) or any(
             not isinstance(component, str) or not component
@@ -401,7 +407,8 @@ def resolve_field_install_plan(
         "schema_version": 1,
         "name": name,
         "operator": operator.to_data(),
-        "discretization": plan.to_data(),
+        "discretization": field_discretization_data(
+            plan, where="resolved field install discretization"),
         "target": target,
         "rhs_providers": [provider.canonical_identity() for provider in rhs_providers],
         "native_options": options,
