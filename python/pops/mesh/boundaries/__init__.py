@@ -13,6 +13,14 @@ from typing import Any
 
 from .._descriptor import MeshDescriptor
 from ...descriptors_report import RequirementSet, CapabilitySet
+from .ghost_plan import (
+    CoarseFineInterpolation, GhostProducer, GhostProducerPlan, GhostProducerRegistry,
+    GhostProduction, InterfaceGhost, NumericalClosure, PeriodicGhost, PhysicalGhost,
+    SameLevelHaloMPI)
+from .ghost_plan_types import (
+    BoundaryLinearizationContribution, BoundaryResidualContribution, CornerCondition,
+    CornerConstraint, CornerMode, CornerPolicy, GhostCoverageManifest, GhostDepthCapability,
+    GhostDepthRequirement, GhostRegion, GhostStencilManifest, InterfaceSide, MultiBlockInterface)
 from .ports import (
     BoundaryDependencies, BoundaryPort, CharacteristicClosure, ClosureMode,
     ConstraintResidual, ExteriorTrace, GhostState, IncomingMultiplicity, NumericalFlux,
@@ -113,4 +121,11 @@ __all__ = [
     "SonicPolicy", "BoundaryProvider", "BoundaryProviderRegistry", "DirectionalTransport",
     "Dirichlet", "GhostFormula", "Inflow", "Mixed", "Neumann", "NoFlux", "Outflow",
     "ResolvedBoundaryBinding", "ResolvedBoundaryPlan",
+    "BoundaryLinearizationContribution", "BoundaryResidualContribution",
+    "CoarseFineInterpolation", "CornerCondition", "CornerConstraint", "CornerMode",
+    "CornerPolicy", "GhostCoverageManifest", "GhostDepthCapability", "GhostDepthRequirement",
+    "GhostProducer", "GhostProducerPlan", "GhostProducerRegistry", "GhostProduction",
+    "GhostRegion", "GhostStencilManifest", "InterfaceGhost", "InterfaceSide",
+    "MultiBlockInterface", "NumericalClosure", "PeriodicGhost", "PhysicalGhost",
+    "SameLevelHaloMPI",
 ]
