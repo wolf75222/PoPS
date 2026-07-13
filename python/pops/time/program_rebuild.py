@@ -110,9 +110,6 @@ def rebuild_program(
     out._operator_registries = (
         dict(self._operator_registries) if retain_operator_registries else {}
     )
-    out._default_state_spaces = (
-        dict(self._default_state_spaces) if retain_operator_registries else {}
-    )
     out._default_field_spaces = (
         dict(self._default_field_spaces) if retain_operator_registries else {}
     )

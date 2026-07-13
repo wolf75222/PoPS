@@ -58,7 +58,6 @@ class _ProgramBase:
     _time_endpoint_handles: dict
     _dt_bound: Any
     _operator_registries: dict
-    _default_state_spaces: dict
     _default_field_spaces: dict
     _capture_source: bool
     _frozen: bool

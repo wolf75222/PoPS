@@ -37,23 +37,26 @@ def state_space_key(space: Any) -> Any:
 
 
 def rate_space_for(space: Any) -> Any:
-    """Return Rate(StateSpace) for a typed state, or None for a legacy untyped state."""
+    """Return ``Rate(StateSpace)`` for one structurally typed state."""
     state = structural_state_space(space)
     if state is None:
-        return None
+        raise ValueError("rate construction requires a complete StateSpace")
     from pops.model.spaces import Rate
     return Rate(state)
 
 
 def require_state_space(space: Any, where: str) -> None:
-    if space is not None and getattr(space, "kind", None) != "state":
-        raise TypeError("%s: space must be a StateSpace or None" % where)
+    from pops.model.spaces import StateSpace
+
+    if not isinstance(space, StateSpace):
+        raise TypeError("%s: space must be a complete StateSpace" % where)
 
 
 def require_compatible_spaces(left: Any, right: Any, where: str, *, typed_pair: bool = False) -> None:
     """Reject incompatible State/Rate provenance, including same-name structural mismatches."""
     if typed_pair and (left is None) != (right is None):
-        raise ValueError("%s: cannot mix typed and untyped state declarations" % where)
+        raise ValueError(
+            "%s: both state declarations must carry complete StateSpace provenance" % where)
     if left is None or right is None:
         return
     left_name, right_name = state_space_name(left), state_space_name(right)
@@ -70,10 +73,10 @@ def require_compatible_spaces(left: Any, right: Any, where: str, *, typed_pair: 
 def merge_state_spaces(values: Any, where: str) -> Any:
     """Validate State/Rate tags and return the strongest known StateSpace provenance."""
     state_like = [value for value in values if value.vtype in ("state", "rhs")]
-    if not state_like or all(value.space is None for value in state_like):
+    if not state_like:
         return None
     if any(value.space is None for value in state_like):
-        raise ValueError("%s: cannot mix typed and untyped State/Rate values" % where)
+        raise ValueError("%s: every State/Rate value must carry a complete StateSpace" % where)
     tags = [value.space for value in state_like]
     first = tags[0]
     for tag in tags[1:]:

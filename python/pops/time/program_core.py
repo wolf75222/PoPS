@@ -165,10 +165,14 @@ class _ProgramCore(
         by a free string and no redundant ``bind_operators`` call is required.
         """
         self._guard_mutable("declare a state")
+        from pops.model import StateHandle
+
+        if not isinstance(state, StateHandle):
+            raise TypeError(
+                "Program.state: block[state] must retain the registry-issued StateHandle and its "
+                "complete StateSpace; an untyped state Handle is not a final authoring route")
         block, qualified_state = bind_state_reference(self, state)
-        space = getattr(qualified_state, "space", None)
-        if space is None:
-            space = self._default_state_spaces.get(block.model_owner_path)
+        space = qualified_state.space
         require_declared_state_space(self, qualified_state, space)
         return self._time_state(block, qualified_state, space, clock)
 
@@ -285,19 +289,13 @@ class _ProgramCore(
                 "distinct authoring registries claim canonical Program owner %s"
                 % canonical_owner)
         self._operator_registries[owner] = reg
-        inferred = []
         inferred_fields = []
         for operator_name in reg.names():
             signature = reg.get(operator_name).signature
-            for candidate in signature.inputs:
-                if getattr(candidate, "kind", None) == "state" and candidate not in inferred:
-                    inferred.append(candidate)
             output = signature.output
             if getattr(output, "kind", None) == "field" and output not in inferred_fields:
                 inferred_fields.append(output)
-        state_space = inferred[0] if len(inferred) == 1 else None
         field_space = inferred_fields[0] if len(inferred_fields) == 1 else None
-        self._default_state_spaces[owner] = state_space
         self._default_field_spaces[owner] = field_space
         # A model may finish declaring imposed aux fields after an early Program binding. Rebinding
         # before freeze widens already-authored FieldContext values to the registry's now-authoritative
