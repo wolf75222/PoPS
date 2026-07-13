@@ -1,5 +1,5 @@
 // PARITE / CONVERGENCE MPI MULTI-RANG du solveur elliptique POLAIRE TENSORIEL (PolarTensorKrylovSolver)
-// et, par extension, de l'etage Schur polaire (PolarCondensedSchurSourceStepper) dont c'est le verrou.
+// et, par extension, du solveur tensoriel utilise par le Program polaire genere.
 //
 // CONTEXTE. Le solveur polaire etait MONO-RANG (garde-fou dur si n_ranks()>1). Ce PR le rend MULTI-RANG
 // MPI par decoupage AZIMUTAL (theta seul) : chaque box couvre la plage RADIALE complete (le sweep Thomas

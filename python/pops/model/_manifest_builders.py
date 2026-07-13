@@ -197,15 +197,14 @@ def condensed_route_manifest(program: Any) -> Any:
         "ops": seen,
         "operator_module": "pops::detail (block_inverse)",
         "operator_header": "pops/numerics/linalg/block_inverse.hpp",
-        "native_reference": "pops.CondensedSchur",
+        "preset": "pops.lib.time.CondensedSchur",
         "limitations": {
             "bit_exact_theta": 1.0,
             "bit_exact_scope": "first_step",
             "theta_range": "(0, 1]",
             "note": (
-                "near-match to the native CondensedSchur stepper; matrix-free BiCGStab without "
-                "the native GeometricMG preconditioner, and the cross-step phi^n warm-start "
-                "carry is deferred, so bit-exactness holds only for the first step at theta == 1"
+                "matrix-free BiCGStab on a uniform layout and a composite tensor provider on a "
+                "refined hierarchy; theta < 1 carries phi through Program history"
             ),
         },
     }

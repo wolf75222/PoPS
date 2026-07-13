@@ -184,7 +184,7 @@ def test_multicomp_codegen(t):
     src = _mc_program(t, 2).emit_cpp_program()
     n = src.count("ctx.alloc_scalar_field(2, 1)")  # lap scratch + accumulator + solution
     assert n >= 3, "the 2-component solve allocates 2-component scratch/acc/solution\n%s" % src
-    assert "pops::cg_solve" in src and "ctx.laplacian" in src, src
+    assert "ctx.solve_linear_matfree" in src and "ctx.laplacian" in src, src
     # the scalar path still allocates 1-component fields only
     src1 = _mc_program(t, 1).emit_cpp_program()
     assert "ctx.alloc_scalar_field(1, 1)" in src1 and "alloc_scalar_field(2, 1)" not in src1, src1

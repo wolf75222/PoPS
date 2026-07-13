@@ -52,7 +52,7 @@ from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime se
 
 # Noms d'assemblage que la vue DOIT cacher (ceux qui existent sur au moins un moteur + le seam).
 _BLOCKED_SAMPLE = ("add_block", "add_equation", "add_background", "add_coupling",
-                   "add_elliptic_model", "set_poisson", "set_source_stage", "install_program",
+                   "add_elliptic_model", "set_poisson", "install_program",
                    "set_refinement", "set_phi_refinement", "_install_compiled")
 # Vocabulaire hérité que le message d'un nom bloqué ne doit JAMAIS recommander comme le REMEDE.
 _FORBIDDEN_IN_MESSAGE = ("System.", "AmrSystem", "set_poisson", "install_program", "set_refinement")

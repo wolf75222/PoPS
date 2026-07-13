@@ -239,23 +239,6 @@ struct AmrSystem::Impl {
     // build_amr_compiled). SINGLE-BLOCK only (build_multi throws if has_state).
     bool has_state = false;
     std::vector<double> state;
-    // SOURCE STAGE condensed by Schur (amr-schur path, set by set_source_stage). schur==false ->
-    // explicit/imex path unchanged. theta/alpha frozen at the call. The splitting (lie/strang) and the
-    // B_z field are CARRIED BY THE SYSTEM (Impl), not the block: a single condensed stage in single-block.
-    bool schur = false;
-    double schur_theta = 0.5, schur_alpha = 1.0;
-    double schur_krylov_tol = 0.0;   // <= 0 = historical default (1e-10)
-    int schur_krylov_max_iters = 0;  // <= 0 = historical default (400)
-    // ADC-614: composite-FAC knobs of the multi-level condensed Schur solve (<= 0 = kFAC* default).
-    int schur_fac_max_iters = 0;
-    int schur_fac_fine_sweeps = 0;
-    double schur_fac_tol = 0.0;
-    double schur_fac_coarse_rel_tol = 0.0;
-    int schur_fac_coarse_cycles = 0;
-    bool schur_fac_verbose = false;
-    // ADC-645: MG V-cycles per BiCGStab-preconditioner application (0 = the historical ONE).
-    int schur_n_precond_vcycles = 0;
-    std::string schur_density, schur_momentum_x, schur_momentum_y, schur_energy;  // "" = canonical
     NewtonOptions newton{};  // IMEX source Newton options (wave 3; single-block AND multi-block)
     bool newton_non_default = false;  // true -> non-default options (.so loader REJECTED: flat ABI)
     bool newton_diagnostics = false;  // newton_report: native MULTI-BLOCK (single/.so REJECTED)
@@ -329,10 +312,6 @@ struct AmrSystem::Impl {
   // (set_phi_tag_predicate): refines where |grad phi| (components 1,2 of the shared aux) exceeds this threshold.
   double phi_grad_threshold = 0.0;
 
-  // SOURCE STAGE condensed by Schur (amr-schur path): splitting policy (Lie/Strang) + B_z field,
-  // CARRIED BY THE SYSTEM (single-block: a single condensed stage, shared B_z). bz_field is required
-  // as soon as a block carries schur==true (checked at build: amr_write_coarse_bz throws if size != n*n).
-  bool schur_strang = false;     // false: Lie (H(dt) S(dt)); true: Strang (H(dt/2) S(dt) H(dt/2))
   std::vector<double> bz_field;  // coarse B_z(x,y), n*n row-major (set_magnetic_field)
   // Model-NAMED aux fields (ADC-291): component (>= kAuxNamedBase) -> coarse field (n*n row-major).
   // Pending until build: seeded into the single-block coupler (make_build_params -> bp.named_aux) AND
@@ -654,25 +633,6 @@ struct AmrSystem::Impl {
     bp.initial.density = b.density;
     bp.initial.has_state = b.has_state;
     bp.initial.state = b.state;
-    // SCHUR STAGE group (amr-schur): block theta/alpha/descriptors + system splitting/B_z.
-    bp.schur.enabled = b.schur;
-    bp.schur.theta = b.schur_theta;
-    bp.schur.alpha = b.schur_alpha;
-    bp.schur.krylov_tol = b.schur_krylov_tol;
-    bp.schur.krylov_max_iters = b.schur_krylov_max_iters;
-    bp.schur.fac_max_iters = b.schur_fac_max_iters;  // ADC-614 composite-FAC knobs
-    bp.schur.fac_fine_sweeps = b.schur_fac_fine_sweeps;
-    bp.schur.fac_tol = b.schur_fac_tol;
-    bp.schur.fac_coarse_rel_tol = b.schur_fac_coarse_rel_tol;
-    bp.schur.fac_coarse_cycles = b.schur_fac_coarse_cycles;
-    bp.schur.fac_verbose = b.schur_fac_verbose;
-    bp.schur.n_precond_vcycles = b.schur_n_precond_vcycles;  // ADC-645 (0 = historical ONE)
-    bp.schur.density = b.schur_density;
-    bp.schur.momentum_x = b.schur_momentum_x;
-    bp.schur.momentum_y = b.schur_momentum_y;
-    bp.schur.energy = b.schur_energy;
-    bp.schur.strang = schur_strang;
-    bp.schur.bz_field = bz_field;
     // NAMED AUX group: model-named aux fields (ADC-291) + per-field halo policies (ADC-369).
     bp.named_aux.fields = named_aux_;
     bp.named_aux.halo_policies = named_aux_bc_;
@@ -1692,8 +1652,8 @@ void AmrSystem::set_poisson(const std::string& rhs, const std::string& solver,
     throw std::runtime_error("AmrSystem::set_poisson : solver '" + solver +
                              "' unsupported on AMR (only 'geometric_mg' is wired on the "
                              "hierarchy ; 'fft' only exists on a single-level grid, cf. System)");
-  // ADC-645: composite-FAC knobs (inert when composite is false; validated like set_source_stage's
-  // fac_* -- a knob is either the <= 0/0 default sentinel or in its domain, never silently clamped).
+  // ADC-645: composite-FAC knobs (inert when composite is false): a knob is either the <= 0/0
+  // default sentinel or in its domain, never silently clamped.
   if (fac_max_iters < 0 || fac_fine_sweeps < 0 || fac_coarse_cycles < 0)
     throw std::runtime_error(
         "AmrSystem::set_poisson : fac_max_iters/fac_fine_sweeps/fac_coarse_cycles >= 0 required "
@@ -2384,111 +2344,6 @@ void AmrSystem::set_aux_field_halo_component(int comp, int bc_type, double value
   p_->named_aux_bc_[comp] = AuxHaloPolicy{static_cast<BCType>(bc_type), static_cast<Real>(value)};
 }
 
-void AmrSystem::set_source_stage(const std::string& name, const std::string& kind, double theta,
-                                 double alpha, const SourceStageOptions& opts) {
-  require_assembling_amr(p_->bound_,
-                         "set_source_stage");  // frozen once pops.bind completes (ADC-592)
-  // Settings grouped into a POD (ADC-214): local aliases to keep the body readable (same names /
-  // semantics as the old flat parameters). bz_aux_component of the POD is ignored here (the single-block
-  // AMR stage reads the canonical B_z channel, cf. set_source_stage in amr_system.hpp).
-  const double krylov_tol = opts.krylov_tol;
-  const int krylov_max_iters = opts.krylov_max_iters;
-  const std::string& density = opts.density;
-  const std::string& momentum_x = opts.momentum_x;
-  const std::string& momentum_y = opts.momentum_y;
-  const std::string& energy = opts.energy;
-  if (p_->built)
-    throw std::runtime_error(
-        "AmrSystem::set_source_stage : the system is already built "
-        "(configure the source stage before any step)");
-  // ONLY wired kind: ElectrostaticLorentzCondensation (cf. CondensedSchurSourceStepper), like System.
-  if (kind != "electrostatic_lorentz")
-    throw std::runtime_error("AmrSystem::set_source_stage : unknown kind '" + kind +
-                             "' (only 'electrostatic_lorentz' is wired)");
-  if (!(theta > 0.0 && theta <= 1.0))
-    throw std::runtime_error("AmrSystem::set_source_stage : theta must be in (0, 1] (got " +
-                             std::to_string(theta) + ")");
-  // SINGLE-BLOCK only: the AMR condensed stage is wired on the single-block coupler (AmrCouplerMP). The
-  // multi-block path (AmrRuntime) does not carry it yet -> clear error rather than a silent no-op.
-  if (p_->multi_block())
-    throw std::runtime_error(
-        "AmrSystem::set_source_stage : the Schur-condensed source stage is "
-        "only wired in SINGLE-BLOCK (1 add_block) ; this system has >= 2 blocks.");
-  const int idx = p_->block_index(name);
-  if (idx < 0)
-    throw std::runtime_error("AmrSystem::set_source_stage : no block named '" + name + "'");
-  Impl::BlockSpec& b = p_->blocks[static_cast<std::size_t>(idx)];
-  // The condensed stage REPLACES the source: it requires SOURCE-FREE transport (explicit, NoSource model),
-  // not the local IMEX. Requesting it on an imex block is an ERROR (both sources would stack).
-  if (b.imex)
-    throw std::runtime_error(
-        "AmrSystem::set_source_stage : the condensed source stage requires "
-        "EXPLICIT source-free transport (the block '" +
-        name +
-        "' is time='imex' ; the "
-        "local IMEX source and the condensed stage would stack). Add the block in "
-        "time='explicit' (model with NoSource source brick).");
-  // The Density/MomentumX/MomentumY roles and the presence of B_z are validated AT BUILD (where the
-  // concrete Model type -- thus cons_vars -- is known): the ctor of AmrCondensedSchurSourceStepper throws if a
-  // role is missing, amr_write_coarse_bz throws if B_z is absent. Clear errors, like System.
-  b.schur = true;
-  b.schur_theta = theta;
-  b.schur_alpha = alpha;
-  // Transported settings (wave 3): Krylov tolerances + field descriptors ("" = canonical).
-  // Resolution/validation of the descriptors AT BUILD against Model::conservative_vars() (where the
-  // concrete type is known), like the canonical roles. krylov_tol validated here (form).
-  if (krylov_tol > 0.0 && !(krylov_tol < 1.0))
-    throw std::runtime_error("AmrSystem::set_source_stage : krylov_tol must be in (0, 1)");
-  b.schur_krylov_tol = krylov_tol;
-  b.schur_krylov_max_iters = krylov_max_iters;
-  // ADC-614: composite-FAC knobs (multi-level Schur). Validate the FORM here (positive when set);
-  // <= 0 keeps the kFAC* default (bit-identical). Values reach the FAC solver via SchurStage at build.
-  if (opts.fac_tol > 0.0 && !(opts.fac_tol < 1.0))
-    throw std::runtime_error("AmrSystem::set_source_stage : fac_tol must be in (0, 1)");
-  if (opts.fac_coarse_rel_tol > 0.0 && !(opts.fac_coarse_rel_tol < 1.0))
-    throw std::runtime_error("AmrSystem::set_source_stage : fac_coarse_rel_tol must be in (0, 1)");
-  if (opts.fac_max_iters < 0 || opts.fac_fine_sweeps < 0 || opts.fac_coarse_cycles < 0)
-    throw std::runtime_error(
-        "AmrSystem::set_source_stage : fac_max_iters / fac_fine_sweeps / "
-        "fac_coarse_cycles must be >= 0");
-  b.schur_fac_max_iters = opts.fac_max_iters;
-  b.schur_fac_fine_sweeps = opts.fac_fine_sweeps;
-  b.schur_fac_tol = opts.fac_tol;
-  b.schur_fac_coarse_rel_tol = opts.fac_coarse_rel_tol;
-  b.schur_fac_coarse_cycles = opts.fac_coarse_cycles;
-  b.schur_fac_verbose = opts.fac_verbose;
-  // ADC-645: preconditioner knobs. The AMR stage is CARTESIAN (coarse-level condensed solve), so
-  // polar_precond has no consumer here -> refuse loud rather than silently ignore it.
-  if (opts.n_precond_vcycles < 0 || opts.n_precond_vcycles > 2)
-    throw std::runtime_error(
-        "AmrSystem::set_source_stage : n_precond_vcycles must be 1 or 2 (0 = default)");
-  if (!opts.polar_precond.empty())
-    throw std::runtime_error(
-        "AmrSystem::set_source_stage : polar_precond does not apply to the (cartesian) AMR "
-        "condensed stage ; use n_precond_vcycles");
-  b.schur_n_precond_vcycles = opts.n_precond_vcycles;
-  b.schur_density = density;
-  b.schur_momentum_x = momentum_x;
-  b.schur_momentum_y = momentum_y;
-  b.schur_energy = energy;
-}
-
-void AmrSystem::set_time_scheme(const std::string& scheme) {
-  require_assembling_amr(p_->bound_,
-                         "set_time_scheme");  // frozen once pops.bind completes (ADC-592)
-  if (p_->built)
-    throw std::runtime_error(
-        "AmrSystem::set_time_scheme : the system is already built "
-        "(choose the splitting before any step)");
-  if (scheme == "lie")
-    p_->schur_strang = false;
-  else if (scheme == "strang")
-    p_->schur_strang = true;
-  else
-    throw std::runtime_error("AmrSystem::set_time_scheme : unknown scheme '" + scheme +
-                             "' (expected 'lie' or 'strang')");
-}
-
 void AmrSystem::add_coupled_source(const CoupledSourceProgram& prog, double frequency,
                                    const std::string& label) {
   require_assembling_amr(p_->bound_,
@@ -3167,8 +3022,6 @@ EffectiveOptionsReport AmrSystem::effective_options_report() const {
   EffectiveOptionsReport report;
   report.runtime = "amr_system";
   report.has_amr = true;
-  report.time_scheme = p_->schur_strang ? "strang" : "lie";
-  report.gauss_policy = "restart";
   report.poisson.rhs = p_->p_rhs;
   report.poisson.solver = p_->p_solver;
   report.poisson.bc = p_->p_bc;
@@ -3233,45 +3086,6 @@ EffectiveOptionsReport AmrSystem::effective_options_report() const {
     }
     report.blocks.push_back(std::move(row));
 
-    if (b.schur) {
-      EffectiveSourceStageOptions stage;
-      stage.block = b.name;
-      stage.kind = "electrostatic_lorentz";
-      stage.geometry = "amr";
-      stage.theta = b.schur_theta;
-      stage.alpha = b.schur_alpha;
-      stage.requested_krylov_tol = b.schur_krylov_tol;
-      stage.requested_krylov_max_iters = b.schur_krylov_max_iters;
-      stage.effective_krylov_tol =
-          b.schur_krylov_tol > 0.0 ? b.schur_krylov_tol : static_cast<double>(kKrylovDefaultRelTol);
-      stage.effective_krylov_max_iters =
-          b.schur_krylov_max_iters > 0 ? b.schur_krylov_max_iters : kSchurKrylovCartesianMaxIters;
-      stage.density = b.schur_density;
-      stage.momentum_x = b.schur_momentum_x;
-      stage.momentum_y = b.schur_momentum_y;
-      stage.energy = b.schur_energy;
-      stage.bz_aux_component = kAuxBaseComps;
-      // ADC-614: effective composite-FAC knobs (default kFAC* unless overridden by set_source_stage).
-      stage.requested_fac_tol = b.schur_fac_tol;
-      stage.requested_fac_max_iters = b.schur_fac_max_iters;
-      stage.effective_fac_max_iters =
-          b.schur_fac_max_iters > 0 ? b.schur_fac_max_iters : kFACDefaultMaxIters;
-      stage.effective_fac_fine_sweeps =
-          b.schur_fac_fine_sweeps > 0 ? b.schur_fac_fine_sweeps : kFACDefaultFineSweeps;
-      stage.effective_fac_tol =
-          b.schur_fac_tol > 0.0 ? b.schur_fac_tol : static_cast<double>(kFACDefaultTol);
-      stage.effective_fac_coarse_rel_tol = b.schur_fac_coarse_rel_tol > 0.0
-                                               ? b.schur_fac_coarse_rel_tol
-                                               : static_cast<double>(kFACInitialCoarseRelTol);
-      stage.effective_fac_coarse_cycles =
-          b.schur_fac_coarse_cycles > 0 ? b.schur_fac_coarse_cycles : kFACInitialCoarseMaxCycles;
-      stage.fac_verbose = b.schur_fac_verbose;
-      // ADC-645: preconditioner V-cycle knob (requested vs effective; the AMR stage is cartesian).
-      stage.requested_n_precond_vcycles = b.schur_n_precond_vcycles;
-      stage.effective_n_precond_vcycles =
-          b.schur_n_precond_vcycles > 0 ? b.schur_n_precond_vcycles : 1;
-      report.source_stages.push_back(std::move(stage));
-    }
   }
   return report;
 }

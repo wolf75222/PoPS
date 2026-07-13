@@ -197,7 +197,7 @@ def test_cse_condensed_buffer_writers_untouched():
     model = _lorentz_model("cs_opt")
     P = adctime.Program("cs").bind_operators(model)
     block, state = state_refs(P, "blk")
-    libtime.condensed_schur(
+    libtime.CondensedSchur(
         P, block, state, alpha=1.0, theta=1.0,
         linear_operator=_linear_handle(model))
     before = P.emit_cpp_program(model=model)

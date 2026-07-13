@@ -238,52 +238,13 @@ void bind_system_checkpoint(py::class_<System>& cls) {
           py::arg("accumulated_dt"), py::arg("name"), py::arg("values"));
 }
 
-// Physics wiring: inter-species couplings, source stages, time-splitting policy, Poisson/field config,
-// geometry (disc), epsilon/reaction/magnetic/aux fields, and state initialization.
+// Physics wiring: inter-species couplings, Poisson/field config, geometry (disc),
+// epsilon/reaction/magnetic/aux fields, and state initialization.
 void bind_system_physics(py::class_<System>& cls) {
   // The named inter-species couplings (add_ionization / add_collision / add_thermal_exchange) are no
   // longer bound (ADC-595): they are Python presets lowering to add_coupling_operator. A new coupling
   // needs no new pybind def.
   cls
-      // Schur-condensed source stage (OPT-IN, pops.Split(source=pops.CondensedSchur(...))): replaces
-      // the block's explicit / IMEX source with the C++ condensed stage (CondensedSchurSourceStepper, #126)
-      // after the hyperbolic transport. kind='electrostatic_lorentz'. Default (without the call) unchanged.
-      // ADC-214: Python surface UNCHANGED (same flat krylov_* kwargs / descriptors, same
-      // defaults). The lambda receives them flat and BUILDS the SourceStageOptions POD before the C++ call.
-      .def(
-          "set_source_stage",
-          [](System& s, const std::string& name, const std::string& kind, double theta,
-             double alpha, double krylov_tol, int krylov_max_iters, const std::string& density,
-             const std::string& momentum_x, const std::string& momentum_y,
-             const std::string& energy, int bz_aux_component, int n_precond_vcycles,
-             const std::string& polar_precond) {
-            SourceStageOptions opts;
-            opts.krylov_tol = krylov_tol;
-            opts.krylov_max_iters = krylov_max_iters;
-            opts.density = density;
-            opts.momentum_x = momentum_x;
-            opts.momentum_y = momentum_y;
-            opts.energy = energy;
-            opts.bz_aux_component = bz_aux_component;
-            opts.n_precond_vcycles = n_precond_vcycles;  // ADC-645 (0 = default: ONE V-cycle)
-            opts.polar_precond = polar_precond;          // ADC-645 ("" = default: RadialLine)
-            s.set_source_stage(name, kind, theta, alpha, opts);
-          },
-          py::arg("name"), py::arg("kind"), py::arg("theta"), py::arg("alpha"),
-          // Tolerance / budget of the stage's Krylov solve (audit 2026-06): <= 0 = historical
-          // stepper defaults (1e-10; 400 Cartesian / 600 polar).
-          py::arg("krylov_tol") = 0.0, py::arg("krylov_max_iters") = 0,
-          // Field descriptors (wave 2 audit: roles carried in the ABI): "" = canonical
-          // role (bit-identical); otherwise a stable role name or a block variable name.
-          // bz_aux_component < 0 = canonical B_z channel. Honored in Cartesian as in polar.
-          py::arg("density") = "", py::arg("momentum_x") = "", py::arg("momentum_y") = "",
-          py::arg("energy") = "", py::arg("bz_aux_component") = -1,
-          // ADC-645: Krylov-preconditioner knobs. n_precond_vcycles (cartesian, 1|2; 0 = the
-          // historical ONE V-cycle) ; polar_precond 'radial_line'|'jacobi' (polar; '' = RadialLine).
-          py::arg("n_precond_vcycles") = 0, py::arg("polar_precond") = "")
-      // Time splitting policy: "lie" (default, bit-identical) or "strang" (H(dt/2) S(dt)
-      // H(dt/2), 2nd order). Cf. System::set_time_scheme / SystemStepper::step_strang.
-      .def("set_time_scheme", &System::set_time_scheme, py::arg("scheme"))
       // (System) -- see also AmrSystem.add_coupled_source below for the AMR counterpart.
       // GLOBAL time-step bound (step_cfl audit): fn() evaluated ONCE per step (host) by
       // step_cfl / step_adaptive; dt <= fn() when fn() > 0 and finite. Hook for non
@@ -301,10 +262,6 @@ void bind_system_physics(py::class_<System>& cls) {
       .def("field_provider_slots", &System::field_provider_slots)
       .def("set_field_potential", &System::set_field_potential,
            py::arg("provider_slot"), py::arg("phi"))
-      // Gauss law policy (R0, Hoffart repro): "restart" (default, re-solves Poisson every
-      // step, bit-identical) or "evolve" (after phi^0, no more re-solve; the Schur stage evolves phi
-      // without restart, like the paper). Cf. System::set_gauss_policy.
-      .def("set_gauss_policy", &System::set_gauss_policy, py::arg("policy"))
       // INTERNAL raw coupled-source ABI (ADC-595): the flat 12-kwarg bytecode form is now an INTERNAL
       // escape hatch (leading underscore), called only by the typed lowering (add_coupling ->
       // add_coupling_operator) and by the low-level ABI-validation tests. End users register a coupling
@@ -454,7 +411,7 @@ void bind_system_physics(py::class_<System>& cls) {
       // active if its center is in hypot(x-cx, y-cy) - R < 0) and WIRES the transport according to
       // mode=: 'none' (default, full Cartesian transport, bit-identical even with the disc set),
       // 'staircase' (assemble_rhs_masked, 0/1 face gate), 'cutcell' (assemble_rhs_eb, cut-cell EB,
-      // apertures + kappa). Honored under Lie AND Strang (set_time_scheme). cf. System::set_disc_domain.
+      // apertures + kappa). cf. System::set_disc_domain.
       .def("set_disc_domain", &System::set_disc_domain, py::arg("cx"), py::arg("cy"), py::arg("R"),
            py::arg("mode") = "none", py::arg("kappa_min") = 0.0, py::arg("face_open_eps") = 0.0,
            py::arg("cut_theta_min") = 0.0)

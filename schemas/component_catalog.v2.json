@@ -81,13 +81,6 @@
       {"name": "restart", "mode": "entry_point", "binding": "native"},
       {"name": "report", "mode": "method", "binding": "manifest"}
     ],
-    "splitting": [
-      {"name": "requirement", "mode": "value", "binding": "requirements"},
-      {"name": "lowering", "mode": "entry_point", "binding": "native"},
-      {"name": "effects", "mode": "entry_point", "binding": "native"},
-      {"name": "restart", "mode": "entry_point", "binding": "native"},
-      {"name": "report", "mode": "method", "binding": "manifest"}
-    ],
     "field_solver": [
       {"name": "requirement", "mode": "value", "binding": "requirements"},
       {"name": "lowering", "mode": "entry_point", "binding": "native"},
@@ -129,14 +122,6 @@
       {"name": "provider", "mode": "entry_point", "binding": "native"},
       {"name": "lowering", "mode": "entry_point", "binding": "native"},
       {"name": "fallible_evaluation", "mode": "entry_point", "binding": "native"},
-      {"name": "report", "mode": "method", "binding": "manifest"}
-    ],
-    "source_stage": [
-      {"name": "requirement", "mode": "value", "binding": "requirements"},
-      {"name": "stability", "mode": "entry_point", "binding": "native"},
-      {"name": "lowering", "mode": "entry_point", "binding": "native"},
-      {"name": "fallible_evaluation", "mode": "entry_point", "binding": "native"},
-      {"name": "restart", "mode": "entry_point", "binding": "native"},
       {"name": "report", "mode": "method", "binding": "manifest"}
     ],
     "poisson_rhs": [
@@ -547,35 +532,6 @@
       ]
     },
     {
-      "name": "splitting",
-      "cpp_enum": "SplittingRouteId",
-      "cpp_table": "kSplittingRoutes",
-      "routes": [
-        {
-          "token": "lie",
-          "wire_id": 0,
-          "cpp_id": "kLie",
-          "native_entry": "pops::SystemStepper(lie)",
-          "requirements": [],
-          "limitations": [],
-          "aliases": [],
-          "metadata": {}
-        },
-        {
-          "token": "strang",
-          "wire_id": 1,
-          "cpp_id": "kStrang",
-          "native_entry": "pops::SystemStepper(strang)",
-          "requirements": [],
-          "limitations": [
-            "H(dt/2) S(dt) H(dt/2); requires a condensed source stage"
-          ],
-          "aliases": [],
-          "metadata": {}
-        }
-      ]
-    },
-    {
       "name": "field_solver",
       "cpp_enum": "FieldSolverRouteId",
       "cpp_table": "kFieldSolverRoutes",
@@ -926,28 +882,6 @@
             ],
             "summary": "sign * 4 pi G (rho - rho0) : gravitational coupling"
           }
-        }
-      ]
-    },
-    {
-      "name": "source_stage",
-      "cpp_enum": "SourceStageRouteId",
-      "cpp_table": "kSourceStageRoutes",
-      "routes": [
-        {
-          "token": "electrostatic_lorentz",
-          "wire_id": 0,
-          "cpp_id": "kElectrostaticLorentz",
-          "native_entry": "pops::ElectrostaticLorentzCondensedSchur",
-          "requirements": [
-            "magnetic field B_z",
-            "system potential phi"
-          ],
-          "limitations": [
-            "theta in (0, 1]"
-          ],
-          "aliases": [],
-          "metadata": {}
         }
       ]
     },

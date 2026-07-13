@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bit-parity of the retired condensed-Schur brick vs the surviving generic route (ADC-637 PR-3).
 
-The condensed-Schur Program brick is RETIRED: ``pops.lib.time.condensed_schur`` now lowers ONLY the
+The condensed-Schur Program preset is ``pops.lib.time.CondensedSchur`` and lowers only the
 generic ``P.condensed_*`` ops (the electrostatic-Lorentz linearization ``J = [[0, B_z], [-B_z, 0]]``,
 authored via ``pops.lib.models.author_electrostatic_lorentz`` and emitted INLINE through the closed-form
 ``block_inverse`` intrinsic with no Schur vocabulary). The brick reference it must match is FROZEN to a
@@ -157,7 +157,7 @@ def _compile_generic(env, theta, tag, n):
         operator.name, kind=operator.kind, owner=registry.owner_path,
         signature=operator.signature)
     P = adctime.Program("cs_%s" % tag).bind_operators(model)
-    lt.condensed_schur(
+    lt.CondensedSchur(
         P, *state_refs(P, "blk"), alpha=_ALPHA, theta=theta,
         tol=_TOL, max_iter=400,
         linear_operator=linear)

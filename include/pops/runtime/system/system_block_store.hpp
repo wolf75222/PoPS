@@ -44,15 +44,6 @@
 
 namespace pops {
 
-/// Forward-declaration: BlockState carries a shared_ptr<CondensedSchurSourceStepper> (condensed source
-/// stage, OPT-IN). The pointer alone is enough here; the definition lives in the coupling header, included
-/// where the stage is actually built (python/system.cpp::set_source_stage).
-class CondensedSchurSourceStepper;
-/// Forward-declaration: POLAR counterpart of the condensed source stage (ring (r, theta)). A BlockState
-/// carries AT MOST ONE of the two steppers (Cartesian OR polar), depending on the System geometry, chosen by
-/// set_source_stage. The pointer alone is enough here (cf. PolarCondensedSchurSourceStepper, Voie A step 2c).
-class PolarCondensedSchurSourceStepper;
-
 /// ORDERED registry of the System blocks + state marshaling helpers. See contract above (OWNS
 /// BlockState + the vector; EXPOSES index/find + copy/write_state; DOES NOT OWN the domain/aux/Poisson).
 class SystemBlockStore {
@@ -75,13 +66,12 @@ class SystemBlockStore {
   ///   (1) it is a POSITIONAL AGGREGATE (the frozen brace-init above): grouping members into sub-structs
   ///       would break every {..} construction site (install_block, native_loader push_dynamic /
   ///       add_compiled_model) with no ordering safety gained;
-  ///   (2) the SystemStepper templates read these members by name on the hot path, and
-  ///       tests/test_strang_splitting.cpp's MockImpl MIRRORS this exact member contract (Species =
-  ///       SystemBlockStore::BlockState) -- a regroup churns the stepper AND the mock;
+  ///   (2) the SystemStepper templates read these members by name on the hot path, so a regroup churns
+  ///       the stepper without changing ownership;
   ///   (3) unlike AmrBuildParams, BlockState does NOT cross the dlopen `.so` boundary by value, so there is
   ///       no ABI-versioning payoff.
   /// The members below are therefore left flat but ANNOTATED with named-group comments (IDENTITY / SCHEME /
-  /// SCHUR STAGE / MASKED TRANSPORT ...) so the ownership is legible without paying the regroup cost. This
+  /// MASKED TRANSPORT ...) so the ownership is legible without paying the regroup cost. This
   /// is the honest per-target decision the audit calls for, not an omission.
   struct BlockState {
     // --- IDENTITY + SCHEME (positional-aggregate head; order frozen) ---
@@ -105,30 +95,6 @@ class SystemBlockStore {
     // model exposes no conversion, e.g. pure scalar or .so generated before this work).
     // Consumed by set_primitive_state / get_primitive_state (init/diagnostic in primitive).
     CellConvert prim_to_cons, cons_to_prim;
-    // --- SCHUR / GENERIC SOURCE STAGE (opt-in; all default-inert -> bit-identical) ---
-    // Schur-CONDENSED SOURCE STAGE (OPT-IN, pops.Split(source=CondensedSchur), cf. set_source_stage).
-    // nullptr (default) = no condensed source stage: the block advances EXACTLY as before
-    // (bit-identical). Non null = after the hyperbolic transport, the step runs the standalone source stage
-    // (CondensedSchurSourceStepper, #126) in place of the explicit / IMEX source. shared_ptr:
-    // keeps BlockState MOVABLE (the stepper carries a GeometricMG, neither copyable nor trivially movable).
-    std::shared_ptr<CondensedSchurSourceStepper> schur;
-    // POLAR counterpart of the condensed source stage (ring (r, theta), Voie A step 2c). Exclusive with
-    // schur above: set_source_stage builds ONE or the OTHER depending on the System geometry (polar
-    // -> schur_polar, Cartesian -> schur). run_source_stage dispatches on whichever is non null. The
-    // Cartesian path stays BIT-IDENTICAL (schur_polar == nullptr when the System is Cartesian).
-    std::shared_ptr<PolarCondensedSchurSourceStepper> schur_polar;
-    double schur_theta = 0.5;  // theta-scheme of the source stage (0.5 = Crank-Nicolson)
-    // Component of the aux channel read as magnetic field Omega = B_z by the Schur stage (audit
-    // wave 2: field TRANSPORTED in the ABI instead of the frozen literal kAuxBaseComps). Default =
-    // kAuxBaseComps (canonical B_z channel), bit-identical; set_source_stage may redirect it.
-    int schur_bz_comp = kAuxBaseComps;
-    // GENERIC SOURCE STAGE (optional): a callable (U, dt) that advances IN PLACE the source stage of the
-    // block. nullptr (default) = no generic source stage (BIT-IDENTICAL path). run_source_stage runs it
-    // ONLY if no condensed Schur stage (schur / schur_polar) is wired, so it changes
-    // NOTHING in the production Schur path. Used for generic splitting (pops.Strang on an arbitrary
-    // source stage) and for the stepper time-order tests (non-commuting toy operators). Trailing
-    // + nullptr default: the positional aggregate init of the other members stays unchanged.
-    std::function<void(MultiFab&, Real)> source_step;
     // --- MASKED / DISK TRANSPORT (opt-in; empty default -> Cartesian path, bit-identical) ---
     // DISK TRANSPORT ADVANCES (work T5-PR3, OPT-IN). Empty (default) -> no disk routing:
     // the stepper advances via `advance` (full Cartesian path, BIT-IDENTICAL). Non empty, they MIMIC

@@ -1,8 +1,11 @@
 #pragma once
 
 #include <chrono>
+#include <array>
+#include <cmath>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -19,6 +22,7 @@
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess (centered gradient)
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>  // ApplyFn / cg / bicgstab / gmres / richardson (solve_linear_matfree seam)
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian (shared 5-point matvec)
+#include <pops/numerics/elliptic/polar/polar_tensor_operator.hpp>  // metric-aware generated tensor solve
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params, ADC-510)
 #include <pops/runtime/context/grid_context.hpp>   // GridContext (System aux seam)
 #include <pops/runtime/program/cache_manager.hpp>  // CacheManager (held-node value cache, ADC-458)
@@ -270,6 +274,8 @@ class ProgramContext {
   /// to a per-level composite buffer instead. Kept trivial + inline so the uniform .so is unchanged.
   MultiFab& assembly_target(MultiFab& field, int role) const {
     validate_assembly_write_role(role, "ProgramContext::assembly_target");
+    if (sys_->program_is_polar() && role >= 0 && role < 4)
+      polar_coeffs_[static_cast<std::size_t>(role)] = &field;
     return field;
   }
 
@@ -295,15 +301,55 @@ class ProgramContext {
   /// publishing @p sol as a solved value.
   SolveReport solve_linear_matfree(MultiFab& sol, const MultiFab& rhs, const ApplyFn& apply,
                                    const ApplyFn& precond, int method, Real tol, int max_iter,
-                                   int restart) const {
+                                   int restart, Real omega) const {
     validate_linear_solve_method(method, "ProgramContext::solve_linear_matfree");
+    if (sys_->program_is_polar()) {
+      // The generated coefficient assembly registered the four tensor fields through
+      // assembly_target.  Solve the same authored mathematical operator with the generic polar metric
+      // backend; no source-stage/physics vocabulary enters this dispatch.
+      for (std::size_t c = 0; c < polar_coeffs_.size(); ++c)
+        if (!polar_coeffs_[c]) {
+          SolveReport report;
+          report.mark_failed(SolveStatus::kInvalidInput, SolveAction::kRejectAttempt);
+          return report;
+        }
+      if (method != kLinearSolveBicgstab) {
+        SolveReport report;
+        report.mark_failed(SolveStatus::kCapabilityFailure);
+        return report;
+      }
+      if (!polar_tensor_)
+        polar_tensor_ = std::make_shared<PolarTensorKrylovSolver>(
+            sys_->program_polar_geometry(), sol.box_array(), sys_->grid_context().bc,
+            PolarPrecond::RadialLine);
+      polar_tensor_->set_coefficients(polar_coeffs_[0], polar_coeffs_[1], polar_coeffs_[2],
+                                      polar_coeffs_[3]);
+      // The Program authors -div(A grad phi)=rhs. PolarTensorKrylovSolver owns the equivalent
+      // +div(A grad phi) operator, hence its RHS is the exact negation.  Keep the authored initial
+      // guess and do not publish a failed partial iterate.
+      pops::lincomb(polar_tensor_->phi(), Real(1), sol, Real(0), sol);
+      pops::lincomb(polar_tensor_->rhs(), Real(-1), rhs, Real(0), rhs);
+      const PolarKrylovResult polar = polar_tensor_->solve(tol, max_iter);
+      SolveReport report;
+      report.iters = polar.iters;
+      report.rel_residual = polar.rel_residual;
+      if (polar.converged) {
+        pops::lincomb(sol, Real(1), polar_tensor_->phi(), Real(0), polar_tensor_->phi());
+        report.mark_solved();
+      } else if (std::isfinite(static_cast<double>(polar.rel_residual))) {
+        report.mark_failed(SolveStatus::kIterationLimit);
+      } else {
+        report.mark_failed(SolveStatus::kInvalidEvaluation);
+      }
+      return report;
+    }
     switch (method) {
       case kLinearSolveCg:
         return pops::cg_solve(apply, sol, rhs, tol, max_iter);
       case kLinearSolveGmres:
         return pops::gmres_solve(apply, precond, sol, rhs, tol, max_iter, restart);
       case kLinearSolveRichardson:
-        return pops::richardson_solve(apply, sol, rhs, static_cast<Real>(1), tol, max_iter);
+        return pops::richardson_solve(apply, sol, rhs, omega, tol, max_iter);
       case kLinearSolveBicgstab:
         return pops::bicgstab_solve(apply, precond, sol, rhs, tol, max_iter);
       default:
@@ -326,6 +372,15 @@ class ProgramContext {
   /// returns a temporary, so a reference to its @c geom member would dangle. The metric the matrix-free
   /// Laplacian / gradient read.
   Geometry geom() const { return sys_->grid_context().geom; }
+  /// Metric facts captured by generated kernels before entering device lambdas.  Cartesian and polar
+  /// Programs share one emitted body; only these geometry-level values select the coordinate metric.
+  bool is_polar_geometry() const { return sys_->program_is_polar(); }
+  Real radial_origin() const {
+    return sys_->program_is_polar() ? sys_->program_polar_geometry().r_min : Real(0);
+  }
+  Real radial_spacing() const {
+    return sys_->program_is_polar() ? sys_->program_polar_geometry().dr() : geom().dx();
+  }
 
   /// out = Lap(in): fill @p in's ghosts (transport BC, periodic by default) then apply the SHARED
   /// discrete 5-point Laplacian (pops::apply_laplacian, all optional coefficients null -> the bare
@@ -337,7 +392,20 @@ class ProgramContext {
     count_kernel();
     const GridContext gc = sys_->grid_context();
     fill_ghosts(in, gc.geom.domain, gc.bc);
-    apply_laplacian(in, gc.geom, out);  // all optional pointers null -> bare 5-point Laplacian
+    if (sys_->program_is_polar()) {
+      if (!polar_unit_rr_) {
+        polar_unit_rr_ = std::make_shared<MultiFab>(
+            in.box_array(), in.dmap(), 1, 1);
+        polar_unit_tt_ = std::make_shared<MultiFab>(
+            in.box_array(), in.dmap(), 1, 1);
+        polar_unit_rr_->set_val(Real(1));
+        polar_unit_tt_->set_val(Real(1));
+      }
+      apply_polar_tensor(in, sys_->program_polar_geometry(), out, polar_unit_rr_.get(),
+                         polar_unit_tt_.get(), nullptr, nullptr);
+    } else {
+      apply_laplacian(in, gc.geom, out);  // all optional pointers null -> bare 5-point Laplacian
+    }
   }
 
   /// out = grad(@p phi) by centered differences: out(.,0) = d phi/dx, out(.,1) = d phi/dy (@p out
@@ -669,6 +737,10 @@ class ProgramContext {
     return std::runtime_error(std::move(message));
   }
 
+  mutable std::array<MultiFab*, 4> polar_coeffs_{{nullptr, nullptr, nullptr, nullptr}};
+  mutable std::shared_ptr<PolarTensorKrylovSolver> polar_tensor_;
+  mutable std::shared_ptr<MultiFab> polar_unit_rr_;
+  mutable std::shared_ptr<MultiFab> polar_unit_tt_;
   System* sys_;
 };
 

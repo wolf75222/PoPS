@@ -54,16 +54,14 @@ enum class RouteFamily : std::uint8_t {
   kLimiter = 1,
   kRecon = 2,
   kTime = 3,
-  kSplitting = 4,
-  kFieldSolver = 5,
-  kPoissonBc = 6,
-  kLayout = 7,
-  kTransport = 8,
-  kSource = 9,
-  kElliptic = 10,
-  kSourceStage = 11,
-  kPoissonRhs = 12,
-  kWall = 13,
+  kFieldSolver = 4,
+  kPoissonBc = 5,
+  kLayout = 6,
+  kTransport = 7,
+  kSource = 8,
+  kElliptic = 9,
+  kPoissonRhs = 10,
+  kWall = 11,
 };
 
 constexpr const char* route_family_name(RouteFamily family) {
@@ -72,14 +70,12 @@ constexpr const char* route_family_name(RouteFamily family) {
     case RouteFamily::kLimiter: return "limiter";
     case RouteFamily::kRecon: return "recon";
     case RouteFamily::kTime: return "time";
-    case RouteFamily::kSplitting: return "splitting";
     case RouteFamily::kFieldSolver: return "field_solver";
     case RouteFamily::kPoissonBc: return "poisson_bc";
     case RouteFamily::kLayout: return "layout";
     case RouteFamily::kTransport: return "transport";
     case RouteFamily::kSource: return "source";
     case RouteFamily::kElliptic: return "elliptic";
-    case RouteFamily::kSourceStage: return "source_stage";
     case RouteFamily::kPoissonRhs: return "poisson_rhs";
     case RouteFamily::kWall: return "wall";
   }
@@ -143,16 +139,6 @@ inline constexpr RouteInfo kTimeRoutes[] = {
   {4, "imexrk_ars222", "pops::ImexRkArs222", "implicit source term", "composed native add_block only (.so ABIs do not carry the RK tableau)"},
 };
 inline constexpr const char* kTimeRouteTokensCsv = "explicit|ssprk3|euler|imex|imexrk_ars222";
-
-enum class SplittingRouteId : int {
-  kLie = 0,
-  kStrang = 1,
-};
-inline constexpr RouteInfo kSplittingRoutes[] = {
-  {0, "lie", "pops::SystemStepper(lie)", "", ""},
-  {1, "strang", "pops::SystemStepper(strang)", "", "H(dt/2) S(dt) H(dt/2); requires a condensed source stage"},
-};
-inline constexpr const char* kSplittingRouteTokensCsv = "lie|strang";
 
 enum class FieldSolverRouteId : int {
   kGeometricMg = 0,
@@ -231,14 +217,6 @@ inline constexpr RouteInfo kEllipticRoutes[] = {
   {2, "gravity", "pops::GravityCoupling", "", ""},
 };
 inline constexpr const char* kEllipticRouteTokensCsv = "charge|background|gravity";
-
-enum class SourceStageRouteId : int {
-  kElectrostaticLorentz = 0,
-};
-inline constexpr RouteInfo kSourceStageRoutes[] = {
-  {0, "electrostatic_lorentz", "pops::ElectrostaticLorentzCondensedSchur", "magnetic field B_z,system potential phi", "theta in (0, 1]"},
-};
-inline constexpr const char* kSourceStageRouteTokensCsv = "electrostatic_lorentz";
 
 enum class PoissonRhsRouteId : int {
   kChargeDensity = 0,
@@ -341,9 +319,9 @@ inline constexpr int kComponentCatalogSchemaVersion = 1;
 inline constexpr int kComponentManifestSchemaVersion = 2;
 inline constexpr int kRouteRegistryVersion = 2;
 inline constexpr int kCapabilityVocabularyVersion = 1;
-inline constexpr const char* kComponentCatalogSha256 = "f9c68322652bcec31b71875d9c4bcbadb774c39ace0f1bf9efcc97094388c9bd";
-inline constexpr const char* kComponentCatalogSemanticSha256 = "5495e704069ee2a74808c5c1c12c626e9453cd729c23b2dde0291884ec538f90";
-inline constexpr const char* kRouteRegistrySignature = "v2:5495e704069ee2a74808c5c1c12c626e9453cd729c23b2dde0291884ec538f90";
+inline constexpr const char* kComponentCatalogSha256 = "aaecc31fd6ab48d995c7d92f9cb6c02368007a7ae8fa8f6d70730bb93b55f77a";
+inline constexpr const char* kComponentCatalogSemanticSha256 = "a4cf0ca6b1c5c47ce1e8dbf76fd35533264e5e2ec19bfc8234aa957a0f976f45";
+inline constexpr const char* kRouteRegistrySignature = "v2:a4cf0ca6b1c5c47ce1e8dbf76fd35533264e5e2ec19bfc8234aa957a0f976f45";
 inline constexpr const char* kComponentManifestSemanticFields[] = {
   "schema_version",
   "uri",

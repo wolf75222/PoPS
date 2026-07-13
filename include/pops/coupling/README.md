@@ -2,7 +2,7 @@
 
 The coupling layer wires the finite-volume transport (`numerics/`) to the elliptic
 solve (`numerics/elliptic/`): it fills the auxiliary channel from the field, builds the
-elliptic right-hand side from the state, and steps the coupled source. The headers are
+elliptic right-hand side from the state, and applies coupled sources. The headers are
 grouped by **abstraction family** so the API surface is legible at a glance; every
 historical flat path `<pops/coupling/<name>.hpp>` still resolves through a forwarding
 stub (ADC-326), so the move is source-compatible.
@@ -16,7 +16,6 @@ stub (ADC-326), so the move is source-compatible.
 | single | `single/` | Single-block `Coupler`. | Stable. |
 | static_system | `static_system/` | Compile-time `SystemCoupler` / `AmrSystemCoupler`. | Stable reference / static-typed C++ entry; used by tests and the numerical reference. |
 | amr | `amr/` | Multipatch AMR coupler (`AmrCouplerMp`) and its storage, regrid, and diagnostics. | AMR production path. |
-| schur | `schur/` | Schur condensation, the shared geometry-independent source kernels, and the condensed-source steppers (cartesian, polar, AMR). | Schur path. |
 
 ## Layout
 
@@ -27,8 +26,6 @@ pops/coupling/
   single/          coupler.hpp
   static_system/   system_coupler.hpp  amr_system_coupler.hpp
   amr/             amr_coupler_mp.hpp  amr_level_storage.hpp  amr_regrid_coupler.hpp  amr_diagnostics.hpp
-  schur/           schur_condensation.hpp  schur_source_kernels.hpp  condensed_schur_source_stepper.hpp
-                   polar_condensed_schur_source_stepper.hpp  amr_condensed_schur_source_stepper.hpp
 ```
 
 New code should include the canonical family path (for example

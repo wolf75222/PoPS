@@ -179,27 +179,6 @@ def _explicit_family(brick, multi):
     return lambda: _run_explicit_family(brick, multi=multi)
 
 
-def _run_condensed_schur(splitting, n=24, L=1.0):
-    sim = AmrSystem(n=n, L=L, periodic=False, regrid_every=0)
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="dirichlet")
-    sim.set_refinement(1e30)
-    sim.set_magnetic_field(4.0 * np.ones((n, n)))
-    cls = pops.Strang if splitting == "strang" else pops.Split
-    sim.add_equation("electrons", model=_iso_model(cs2=1.0, alpha=3.0),
-                     spatial=pops.Spatial(minmod=True),
-                     time=cls(hyperbolic=pops.Explicit(),
-                              source=pops.CondensedSchur(kind="electrostatic_lorentz",
-                                                         theta=1.0, alpha=3.0)))
-    sim.set_conservative_state("electrons", _iso_state(n, L))
-    m0 = sim.mass()
-    for _ in range(5):
-        sim.step(5.0e-4)
-    assert np.isfinite(np.asarray(sim.density())).all(), "%s: density not finite" % splitting
-    assert np.isfinite(np.asarray(sim.potential())).all(), "%s: potential not finite" % splitting
-    assert abs(sim.mass() - m0) <= 1e-9 * max(abs(m0), 1e-30), "%s: mass drift" % splitting
-    return "green_live:schur_%s" % splitting
-
-
 def _run_profile_cfl(n=32):
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=2, coarse_max_grid=16)
     sim.add_block("ne", _scalar_charge(+1.0), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
@@ -325,7 +304,7 @@ def _run_clean_schur_program(n=16, nsteps=4, dt=5.0e-4):
         signature=operator.signature)
     program = pops.time.Program("condensed_schur").bind_operators(model)
     _case, states = program_states(program, model, ("plasma",))
-    lib_time.condensed_schur(
+    lib_time.CondensedSchur(
         program, states["plasma"], alpha=1.0, theta=1.0, linear_operator=linear)
     u0 = _clean_density(n)
     bz0 = 4.0 * np.ones((n, n))
@@ -409,27 +388,6 @@ def _exists_native_runtime_params():
     return "exists:test_amr_native_params"
 
 
-def _refuse_multiblock_source_stage():
-    def call():
-        n = 16
-        sim = AmrSystem(n=n, L=1.0, periodic=False, regrid_every=0)
-        sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="dirichlet")
-        sim.set_refinement(1e30)
-        sim.set_magnetic_field(4.0 * np.ones((n, n)))
-        schur = pops.Strang(hyperbolic=pops.Explicit(),
-                            source=pops.CondensedSchur(kind="electrostatic_lorentz",
-                                                       theta=1.0, alpha=3.0))
-        sim.add_equation("e1", model=_iso_model(alpha=3.0), spatial=pops.Spatial(minmod=True),
-                         time=schur)
-        sim.add_equation("e2", model=_iso_model(alpha=3.0), spatial=pops.Spatial(minmod=True),
-                         time=schur)
-    return _expect_refusal(RuntimeError,
-                           ("set_source_stage", "SINGLE-BLOCK", ">= 2 blocks"), call)
-
-
-# --------------------------------------------------------------------------------------------------
-# exists: cite the already-covered cells (a thin route-fact / descriptor check, no duplication).
-# --------------------------------------------------------------------------------------------------
 def _exists_fft_on_amr_refused():
     # Cited: unit/compliance/_cells.neg.fft_on_amr_or_bc (descriptor + route). Assert the route fact
     # still holds here so the sec.20 matrix agrees with the compliance matrix (no re-test of the run).
@@ -502,13 +460,6 @@ MATRIX = {
     "ssprk3.amr.multi": Cell("ssprk3", "amr", "multi", "exists", _exists_ssprk3_exclusivity),
     "imex.amr.mono": Cell("imex", "amr", "mono", "green_live",
                           _explicit_family(pops.IMEX(), False)),
-    # condensed-Schur source stage -- AMR green live mono, refuse multi
-    "strang_schur.amr.mono": Cell("strang_schur", "amr", "mono", "green_live",
-                                  lambda: _run_condensed_schur("strang")),
-    "lie_schur.amr.mono": Cell("lie_schur", "amr", "mono", "green_live",
-                               lambda: _run_condensed_schur("lie")),
-    "strang_schur.amr.multi": Cell("strang_schur", "amr", "multi", "refuse",
-                                   _refuse_multiblock_source_stage),
     # compiled whole-system Program (ADC-508) -- cite the parity suite
     "program_ssprk2.amr.mono": Cell("program_ssprk2", "amr", "mono", "exists",
                                     _exists_ssprk2_program_parity),
@@ -552,7 +503,6 @@ EXPECTED_KEYS = frozenset({
     "explicit.amr.mono", "explicit.amr.multi",
     "ssprk3.amr.mono", "ssprk3.amr.multi",
     "imex.amr.mono",
-    "strang_schur.amr.mono", "lie_schur.amr.mono", "strang_schur.amr.multi",
     "program_ssprk2.amr.mono",
     "runtime_params.amr.mono",
     "cfl_profile.amr.mono",

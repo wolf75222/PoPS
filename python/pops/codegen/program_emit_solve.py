@@ -321,21 +321,17 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
                        lines: Any, target: Any = "system") -> None:
     """Lower solve_linear to a call into the runtime's matrix-free Krylov loop. The solution field
     ``sf_sol{id}`` is a PERSISTENT shared_ptr (prelude, captured by the step closure); the step body
-    seeds the initial guess (zero, or a copy of the supplied guess), then calls
-    ``pops::cg_solve`` / ``bicgstab_solve`` / ``richardson_solve`` with the operator's apply lambda.
+    seeds the initial guess (zero, or a copy of the supplied guess), then calls the runtime context's
+    generic ``solve_linear_matfree`` seam with the operator's apply lambda.
     The SolveReport/KrylovResult is checked before the token is published: solved writes may continue,
     while non-converged / singular / breakdown / invalid-evaluation reports fail the run instead of
     letting a partial iterate masquerade as a solved value. The trip count is still decided C++-side,
     inside the loop -- invisible to the IR. The result token is the solution field, dereferenced for the
     final copy back into the block state at commit.
 
-    TARGET SEAM (ADC-633). ``target='system'`` emits the verbatim ``pops::<method>_solve(...)`` call
-    (the uniform trajectory + the golden emitted-C++ text are byte-untouched). ``target='amr_system'``
-    routes it through ``ctx.solve_linear_matfree(sol, rhs, apply, precond, method_id, tol, max_iter,
-    restart)``: a FLAT hierarchy dispatches to the SAME Krylov call (identical numerics), a REFINED
-    hierarchy to the composite FAC. The seam exists on BOTH ProgramContext (uniform) and
-    AmrProgramContext (hierarchy) with byte-identical uniform numerics, so the AMR .so's shared body
-    compiles against both install entries."""
+    Both uniform and AMR targets use the same context seam. ProgramContext selects the geometry-aware
+    uniform provider; AmrProgramContext selects the flat or composite hierarchy provider. The emitted
+    Program therefore never branches on a concrete solver/runtime class."""
     op_value = v.inputs[0]
     rhs_in = v.inputs[1]
     guess_in = v.inputs[2] if v.attrs["has_guess"] else None
@@ -384,37 +380,15 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     # the Python layer rejects a non-identity precond for them, so they never reach this branch.)
     precond_arg = _precond_applyfn(v, prelude)
     restart = int(v.attrs["restart"]) if method == "gmres" else 0
-    if target == "amr_system":
-        # AMR target: route through the ctx seam so a refined hierarchy solves compositely (a flat
-        # hierarchy dispatches to the SAME Krylov call, identical numerics). CG / Richardson carry no
-        # preconditioner parameter, so pass the empty ApplyFn{} for them (the seam ignores it). The
-        # method id (SchurSolveMethod) is 0 = cg, 1 = bicgstab, 2 = gmres, 3 = richardson.
-        method_id = {"cg": 0, "bicgstab": 1, "gmres": 2, "richardson": 3}[method]
-        precond_expr = precond_arg if method in ("bicgstab", "gmres") else "pops::ApplyFn{}"
-        lines.append("pops::SolveReport %s = ctx.solve_linear_matfree(*%s, %s, %s, %s, %d, %s, "
-                     "%d, %d);"
-                     % (kr, sol_sp, rhs_tok, lam, precond_expr, method_id, tol, max_iter, restart))
-        _append_report_guard()
-    elif method == "cg":
-        lines.append("pops::KrylovResult %s = pops::cg_solve(%s, *%s, %s, %s, %d);"
-                     % (kr, lam, sol_sp, rhs_tok, tol, max_iter))
-        _append_report_guard()
-    elif method == "bicgstab":
-        lines.append("pops::KrylovResult %s = pops::bicgstab_solve(%s, %s, *%s, %s, %s, "
-                     "%d);" % (kr, lam, precond_arg, sol_sp, rhs_tok, tol, max_iter))
-        _append_report_guard()
-    elif method == "gmres":
-        # Restarted GMRES(m): restart = the basis size; precond_arg = identity (empty) or the real M^{-1}.
-        lines.append("pops::KrylovResult %s = pops::gmres_solve(%s, %s, *%s, %s, %s, "
-                     "%d, %d);" % (kr, lam, precond_arg, sol_sp, rhs_tok, tol, max_iter, restart))
-        _append_report_guard()
-    else:  # richardson: omega defaults to 1 (pre-scaled / well-conditioned operator)
-        # ADC-645: an omega set on the Richardson() descriptor is baked as the literal; absent
-        # (the default) emits the EXACT historical "static_cast<pops::Real>(1)" text, byte-identical.
-        omega = v.attrs.get("omega")
-        omega_tok = ("static_cast<pops::Real>(1)" if omega is None
-                     else "static_cast<pops::Real>(%s)" % scalar_cpp(omega))
-        lines.append("pops::KrylovResult %s = pops::richardson_solve(%s, *%s, %s, "
-                     "%s, %s, %d);"
-                     % (kr, lam, sol_sp, rhs_tok, omega_tok, tol, max_iter))
-        _append_report_guard()
+    # CG / Richardson carry no preconditioner parameter, so pass the empty ApplyFn{}; the context
+    # ignores it. Method id: 0 = cg, 1 = bicgstab, 2 = gmres, 3 = richardson.
+    method_id = {"cg": 0, "bicgstab": 1, "gmres": 2, "richardson": 3}[method]
+    precond_expr = precond_arg if method in ("bicgstab", "gmres") else "pops::ApplyFn{}"
+    omega = v.attrs.get("omega")
+    omega_tok = ("static_cast<pops::Real>(1)" if omega is None
+                 else "static_cast<pops::Real>(%s)" % scalar_cpp(omega))
+    lines.append("pops::SolveReport %s = ctx.solve_linear_matfree(*%s, %s, %s, %s, %d, %s, "
+                 "%d, %d, %s);"
+                 % (kr, sol_sp, rhs_tok, lam, precond_expr, method_id, tol, max_iter, restart,
+                    omega_tok))
+    _append_report_guard()

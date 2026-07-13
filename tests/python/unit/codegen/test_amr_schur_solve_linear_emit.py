@@ -1,10 +1,8 @@
 """ADC-633: the compiled condensed-Schur Program routes solve_linear through the ctx on the AMR target.
 
 Source-only codegen check (host-side, no compiler / no _pops run): a condensed-Schur Program lowered
-for ``target='amr_system'`` emits ``ctx.solve_linear_matfree(...)`` for its elliptic solve, while the
-same Program lowered for ``target='system'`` keeps emitting the verbatim ``pops::bicgstab_solve(...)``.
-This pins the target-conditional seam (the System body -- and hence the uniform trajectory + IR hash --
-is byte-untouched; only the AMR body gains the hierarchy-aware solve).
+for both targets emits ``ctx.solve_linear_matfree(...)``. The uniform context selects a metric-aware
+provider, while the AMR context selects flat or composite hierarchy execution.
 """
 from pops.params import ConstParam
 import pytest
@@ -49,12 +47,12 @@ def _linear_handle(model):
         signature=operator.signature)
 
 
-def _emit(target):
+def _emit(target, *, theta=1.0):
     model = _lorentz_model("adc633_emit_model")
     P = pops_time.Program("adc633_schur_emit").bind_operators(model)
     block, state = state_refs(P, "blk", model=model)
-    pops_lib_time.condensed_schur(
-        P, block, state, alpha=1.0, theta=1.0,
+    pops_lib_time.CondensedSchur(
+        P, block, state, alpha=1.0, theta=theta,
         linear_operator=_linear_handle(model))
     return P.emit_cpp_program(model=model, target=target)
 
@@ -78,22 +76,39 @@ def test_refined_driver_orders_gather_solve_publish():
     refined = src[gather:src.index("ctx.couple_levels()", gather)]
     assert refined.count("ctx.solve_linear_matfree(") == 1
     assert refined[:solve - gather].count("condensed") > 0, "gather region lost assembly kernels"
+    assert "ctx.stage_linear_initial_guess();" in refined[:solve - gather], \
+        "the zero initial guess must be gathered for every refined level before the solve"
     assert "assembly_source(" in refined[publish - gather:], \
         "publish region lost per-level reconstruction"
 
 
-def test_condensed_operator_derives_hierarchy_scope_without_preset_branching():
-    """Scope is generic operator metadata propagated from captured storage, not a preset dispatch."""
+def test_condensed_preset_declares_hierarchy_scope_on_the_operator():
+    """The preset authors generic operator metadata; no condensed op or emitter infers the scope."""
     model = _lorentz_model("adc648_scope_model")
     P = pops_time.Program("adc648_scope").bind_operators(model)
     block, state = state_refs(P, "gas", model=model)
-    pops_lib_time.condensed_schur(
+    pops_lib_time.CondensedSchur(
         P, block, state, alpha=1.0, theta=1.0,
         linear_operator=_linear_handle(model))
     solve = next(value for value in P._values if value.op == "solve_linear")
     operator = solve.inputs[0]
     assert operator.attrs["scope"] == "hierarchy"
+    assert operator.attrs["hierarchy_provider"] == "composite_tensor_fac"
     assert solve.attrs["scope"] == "hierarchy"
+    coeffs = next(value for value in P._values if value.op == "condensed_coeffs")
+    assert "scope" not in coeffs.attrs
+    assert "hierarchy_provider" not in coeffs.attrs
+
+
+def test_refined_theta_half_gathers_each_levels_phi_history_as_initial_guess():
+    """ADC-427 composition: refined theta<1 must not drop the persistent per-level phi^n carry."""
+    src = _emit("amr_system", theta=0.5)
+    gather = src.index("Gather every level before the unique hierarchy-scoped solve")
+    solve = src.index("ctx.solve_linear_matfree(", gather)
+    gathered = src[gather:solve]
+    assert 'ctx.history_zero_start("blk.schur_phi", 1, 1)' in gathered
+    assert "ctx.stage_linear_initial_guess(" in gathered
+    assert "ctx.stage_linear_initial_guess();" not in gathered
 
 
 def test_hierarchy_scope_rejects_control_flow_crossing_barrier():
@@ -139,16 +154,11 @@ def test_provider_extension_uses_interface_not_type_dispatch():
     assert operator.attrs["hierarchy_provider"] == "external_composite"
 
 
-def test_system_target_keeps_verbatim_bicgstab():
-    """The System .so is byte-untouched: it still emits pops::bicgstab_solve, never the AMR seam."""
+def test_system_target_uses_generic_context_seam():
+    """The System target uses the same seam so geometry/provider dispatch remains runtime-owned."""
     src = _emit("system")
-    assert "pops::bicgstab_solve(" in src, (
-        "the System target must keep emitting the verbatim matrix-free Krylov call -- the uniform "
-        "trajectory (and the IR hash) are unchanged by ADC-633"
-    )
-    assert "ctx.solve_linear_matfree(" not in src, (
-        "the System target must NOT emit the AMR hierarchy seam"
-    )
+    assert "ctx.solve_linear_matfree(" in src
+    assert "pops::bicgstab_solve(" not in src
 
 
 def test_ir_hash_is_target_independent():
@@ -157,7 +167,7 @@ def test_ir_hash_is_target_independent():
     model = _lorentz_model("adc633_hash_model")
     P = pops_time.Program("adc633_schur_hash").bind_operators(model)
     block, state = state_refs(P, "gas", model=model)
-    pops_lib_time.condensed_schur(
+    pops_lib_time.CondensedSchur(
         P, block, state, alpha=1.0, theta=1.0,
         linear_operator=_linear_handle(model))
     h_sys = P._ir_hash()

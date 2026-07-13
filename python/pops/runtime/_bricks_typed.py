@@ -4,9 +4,7 @@ The native bricks are NAMED by typed constructors instead of magic ``kind=`` / `
 ADDITIVELY (the string path keeps working). This module homes the sec.14.2.5 typed ctors that do
 not belong to a state/source/time module :
 
-* the typed native ELLIPTIC boundary bricks ``Dirichlet`` / ``Neumann`` / ``Periodic`` ;
-* ``ElectrostaticLorentzSchur`` -- the typed constructor for the (currently unique)
-  ``CondensedSchur`` kind, kept here (not in ``_bricks_time``) to stay under the 500-line cap.
+* the typed native ELLIPTIC boundary bricks ``Dirichlet`` / ``Neumann`` / ``Periodic``.
 
 The native elliptic (Poisson) boundary is selected today by a magic ``bc=`` string token on
 ``System.set_poisson`` / ``System.add_elliptic_model`` : ``"auto" | "periodic" | "dirichlet" |
@@ -23,15 +21,13 @@ Poisson solve), and are DISTINCT from two other typed boundary surfaces already 
 * ``pops.mesh.boundaries`` (Spec 5 sec.5.9) -- domain-TOPOLOGY descriptors (periodic vs physical
   faces of the mesh).
 
-All objects here are inert (no ``_pops`` / numpy / runtime / codegen compute) : they record /
-lower their token (boundary) or pin a kind (Schur). ``pops.runtime.bricks`` re-exports them.
+All objects here are inert (no ``_pops`` / numpy / runtime / codegen compute) and record/lower their
+boundary token. ``pops.runtime.bricks`` re-exports them.
 """
 from __future__ import annotations
 
 from typing import Any
 
-from pops.runtime._bricks_time import CondensedSchur, Role
-from pops.runtime.defaults import PHYSICAL_DEFAULT_ALPHA
 
 
 # The native elliptic boundary tokens accepted by System::set_poisson (C++ binding). "auto" lets the
@@ -97,28 +93,4 @@ class Neumann(_Boundary):
     bc = _BC_NEUMANN
 
 
-class ElectrostaticLorentzSchur(CondensedSchur):
-    """Typed constructor for the electrostatic-Lorentz condensed-Schur source stage (Spec 5
-    sec.14.2.5). ``pops.ElectrostaticLorentzSchur(theta=0.5, alpha=1.0, ...)`` is the typed
-    equivalent of ``pops.CondensedSchur(kind="electrostatic_lorentz", theta=0.5, alpha=1.0, ...)``:
-    it pins the (currently unique) ``kind`` so the algorithm is named by a type instead of a magic
-    string. It is a ``CondensedSchur`` subclass, so every consumer that accepts a CondensedSchur
-    (``pops.Split`` / ``pops.Strang`` source stage, ``System.add_equation``) accepts it unchanged.
-
-    All other arguments (theta / alpha / density / momentum / energy / magnetic_field / potential /
-    krylov_tol / krylov_max_iters) carry through to CondensedSchur with identical validation and
-    lowering; see that class for the field-role descriptors and the assembled operator. Passing
-    ``kind`` is not allowed (it is fixed to "electrostatic_lorentz").
-    """
-
-    def __init__(self, theta: Any = 0.5, alpha: Any = PHYSICAL_DEFAULT_ALPHA, density: Any = Role.Density,
-                 momentum: Any = (Role.MomentumX, Role.MomentumY), energy: Any = None,
-                 magnetic_field: str = "B_z", potential: str = "phi",
-                 krylov_tol: Any = None, krylov_max_iters: Any = None) -> None:
-        super().__init__(kind="electrostatic_lorentz", theta=theta, alpha=alpha,
-                         density=density, momentum=momentum, energy=energy,
-                         magnetic_field=magnetic_field, potential=potential,
-                         krylov_tol=krylov_tol, krylov_max_iters=krylov_max_iters)
-
-
-__all__ = ["Periodic", "Dirichlet", "Neumann", "ElectrostaticLorentzSchur"]
+__all__ = ["Periodic", "Dirichlet", "Neumann"]

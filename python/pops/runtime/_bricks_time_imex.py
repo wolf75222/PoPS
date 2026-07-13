@@ -161,13 +161,13 @@ class SourceImplicit:
     future effort. SourceImplicit = source-only IMEX (strictly equivalent to IMEX/pops.Implicit,
     bit-identical numerics).
 
-    WHEN TO USE IT (SourceImplicit LOCAL vs pops.CondensedSchur GLOBAL) -- both mechanisms
+    WHEN TO USE IT (SourceImplicit LOCAL vs pops.lib.time.CondensedSchur GLOBAL) -- both mechanisms
     treat a stiff source implicitly, but at different scales:
 
     - SourceImplicit is LOCAL: the implicit part couples only the components of A SINGLE CELL
       (backward-Euler solved by per-cell Newton), there is NO spatial coupling between
       cells. Suited to purely local stiff terms (relaxation, reactions, friction).
-    - pops.CondensedSchur (via pops.Split) is GLOBAL: it assembles and solves a tensor
+    - pops.lib.time.CondensedSchur is GLOBAL: it assembles and solves a tensor
       elliptic operator by Schur (Krylov BiCGStab) that COUPLES the whole domain. Suited to
       non-local stiff Lorentz / electrostatic coupling (e.g. magnetized Euler-Poisson from the
       Hoffart paper, arXiv:2510.11808). A local stiff source does NOT need Schur.

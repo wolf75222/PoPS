@@ -127,8 +127,6 @@ def test_python_freeze_uniform():
         "add_block": lambda: engine.add_block("x", _isothermal_model()),
         "add_equation": lambda: engine.add_equation("x", _isothermal_model()),
         "set_poisson": lambda: engine.set_poisson(bc="periodic"),
-        "set_source_stage": lambda: engine.set_source_stage("ions", "electrostatic_lorentz", 1.0,
-                                                            1.0),
         "add_coupling": lambda: engine.add_coupling(object()),
         "set_disc_domain": lambda: engine.set_disc_domain(0.5, 0.5, 0.4),
         "set_geometry_mode": lambda: engine.set_geometry_mode("none"),

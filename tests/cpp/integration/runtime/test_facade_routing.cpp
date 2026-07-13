@@ -13,8 +13,6 @@
 //       conservee a la machine (aucun flux ne franchit la frontiere du masque) -> propre au schema masque.
 //   (c) CUTCELL : mode='cutcell' tourne, etat FINI partout (aucun NaN/Inf), DIFFERENT du carre ; et sur
 //       un disque ENGLOBANT (rayon > diagonale, aucune cellule coupee) un pas est BIT-IDENTIQUE au carre.
-//   (d) MODE HONORE SOUS LIE ET STRANG : le mode disque change l'etat dans les DEUX schemas de splitting
-//       (set_time_scheme 'lie' / 'strang') -> les deux chemins (step / step_strang) consultent le mode.
 //
 // Modele : transport scalaire ExB (add_block transport='exb', source='none', elliptic='charge') -- le
 // transport DIOCOTRON de production. La vitesse derive de grad phi (Poisson sur la densite) : champ a
@@ -228,43 +226,5 @@ TEST(FacadeRouting, DiscModeRoutingBehavesAcrossNoneStaircaseCutcellAndSplitting
     EXPECT_TRUE(d_enclosing == 0.0)
         << "(c2) cutcell sans coupe BIT-IDENTIQUE au carre (kappa=1, alpha=1 partout) : max|diff| = "
         << d_enclosing << " (attendu 0)";
-  }
-
-  // ----------------------------------------------------------------------
-  // (d) MODE HONORE SOUS LIE ET STRANG : le mode disque change l'etat dans les deux splittings.
-  // ----------------------------------------------------------------------
-  {
-    auto run = [&](const char* scheme, const char* mode) {
-      System s(SystemConfig{n, L, false});
-      build_exb(s, R_wall);
-      s.set_density("n", rho0);
-      s.set_time_scheme(scheme);
-      if (std::string(mode) != "none")
-        s.set_disc_domain(cx, cy, R_disc, mode);
-      for (int k = 0; k < n_steps; ++k)
-        s.step(dt);
-      return s.get_state("n");
-    };
-
-    // LIE : staircase != none. (Couvert aussi par (b), mais on l'asserte sous le tag 'lie' explicite.)
-    const std::vector<double> lie_none = run("lie", "none");
-    const std::vector<double> lie_sc = run("lie", "staircase");
-    const double d_lie = max_abs_diff(lie_none, lie_sc);
-    EXPECT_TRUE(d_lie > 1e-10)
-        << "(d) sous LIE, le mode disque change l'etat (step consulte le mode) : diff = " << d_lie;
-
-    // STRANG : meme exigence sur le chemin step_strang (H(dt/2) S(dt) H(dt/2)).
-    const std::vector<double> str_none = run("strang", "none");
-    const std::vector<double> str_sc = run("strang", "staircase");
-    const double d_str = max_abs_diff(str_none, str_sc);
-    EXPECT_TRUE(all_finite(str_none) && all_finite(str_sc))
-        << "(d) etats Strang finis (les deux modes)";
-    EXPECT_TRUE(d_str > 1e-10)
-        << "(d) sous STRANG, le mode disque change l'etat (step_strang consulte le mode) : diff = "
-        << d_str;
-    // Et la cutcell aussi est honoree sous Strang (chemin step_strang -> advance_transport_half EB).
-    const std::vector<double> str_cc = run("strang", "cutcell");
-    EXPECT_TRUE(all_finite(str_cc) && max_abs_diff(str_none, str_cc) > 1e-10)
-        << "(d) sous STRANG, le mode cutcell est aussi cable (fini + different de none)";
   }
 }

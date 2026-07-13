@@ -20,7 +20,7 @@
 /// stride=1), so the facts are queried per @p target.
 ///
 /// This is a pure free-function / POD header: no System state, no out-of-line definition (kept out of
-/// System::Impl on purpose, so the C++ MockImpl in tests/test_strang_splitting.cpp is untouched).
+/// System::Impl on purpose, so lightweight C++ runtime mocks can share it).
 
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/config/generated_component_catalog.hpp>
@@ -309,10 +309,10 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
       capability_route("krylov:cg_bicgstab_gmres_richardson", "available",
                        "matrix-free Krylov over native MultiFab primitives", kLayoutRouteTokensCsv,
                        "production", "host", mpi, gpu),
-      capability_route("schur:condensed_source", "partial",
-                       "Schur condensation/source kernels are specialised to 2D plus Bz/Lorentz "
-                       "coupling; no generic 3D route",
-                       kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
+      capability_route("program:condensed_implicit_preset", "partial",
+                       "CondensedSchur is a 2D two-component electrostatic-Lorentz preset; the "
+                       "Program solve/provider protocol itself is physics-independent",
+                       "uniform|amr", "production", "host", mpi, gpu),
       capability_route("program_context:system", "available",
                        "compiled ProgramContext install on System", "uniform", "production", "host",
                        mpi, gpu),

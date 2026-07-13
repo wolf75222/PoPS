@@ -70,17 +70,7 @@ def native_block_scalars(time: Any, spatial: Any, *, where: str) -> tuple[float,
     return tuple(native_real(value, where=where + "." + name) for name, value in values)
 
 
-def native_schur_scalars(
-    theta: Any, alpha: Any, krylov_tol: Any, *, where: str,
-) -> tuple[float, float, float]:
-    return (
-        native_real(theta, where=where + ".theta"),
-        native_real(alpha, where=where + ".alpha"),
-        native_real(krylov_tol, where=where + ".krylov_tol"),
-    )
-
-
 __all__ = [
-    "exact_real", "native_block_scalars", "native_real", "native_schur_scalars",
+    "exact_real", "native_block_scalars", "native_real",
     "optional_positive_int", "positive_int", "strict_bool",
 ]

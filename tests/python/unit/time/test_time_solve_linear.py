@@ -4,15 +4,15 @@
 `emit_cpp_program` now lowers a DYNAMIC matrix-free linear solve: a ``matrix_free_operator`` whose
 apply ``out <- A(in)`` is an IR sub-block (``P.set_apply``, built from ``P.laplacian`` + the affine
 algebra) lowered to a C++ ``pops::ApplyFn`` lambda, and ``P.solve_linear(operator=A, rhs=, method=...)``
-lowered to a call into the runtime's Krylov loop (``pops::cg_solve`` / ``bicgstab_solve`` /
-``richardson_solve``). The iteration is DYNAMIC and lives C++-side, inside the loop -- the IR carries
+lowered to the runtime context's generic ``solve_linear_matfree`` seam. The iteration is DYNAMIC and
+lives C++-side, inside the loop -- the IR carries
 only the apply, the rhs, the method / tolerance / iteration budget. The persistent scratch (the
 Laplacian output, the solution field) is allocated ONCE at install time (a ``std::shared_ptr``
 captured into the step closure), reused across every step and every Krylov iteration.
 
 (A) Codegen (pure Python, always runs): a Helmholtz operator ``A(in) = in - alpha*Lap(in)`` solved by
-    cg / bicgstab / richardson lowers to the apply lambda + ``ctx.laplacian`` + ``pops::cg_solve`` /
-    ``bicgstab_solve`` / ``richardson_solve``; the spec validation errors fire (max_iter absent /
+    cg / bicgstab / richardson lowers to the apply lambda + ``ctx.laplacian`` +
+    ``ctx.solve_linear_matfree``; the spec validation errors fire (max_iter absent /
     <= 0 -> ValueError "dynamic solver loops require max_iter"; tol <= 0 -> error; unknown method ->
     error; operator not a matrix_free_operator -> error).
 
@@ -93,7 +93,7 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
 # ---- (A) codegen: pure Python, always runs ----
 def test_apply_lambda_and_cg_codegen(t):
     src = _solve_program(t, method="cg").emit_cpp_program()
-    for frag in ("pops::ApplyFn apply_A", "ctx.laplacian", "pops::cg_solve",
+    for frag in ("pops::ApplyFn apply_A", "ctx.laplacian", "ctx.solve_linear_matfree",
                  "std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field"):
         assert frag in src, "the generated cg solve must contain %r\n%s" % (frag, src)
 
@@ -107,23 +107,19 @@ def test_reject_attempt_solve_codegen_throws_step_attempt_signal(t):
 
 def test_bicgstab_codegen(t):
     src = _solve_program(t, method="bicgstab").emit_cpp_program()
-    assert "pops::bicgstab_solve" in src, src
+    assert "ctx.solve_linear_matfree" in src, src
     assert "pops::ApplyFn{}" in src, "bicgstab uses the identity (empty) preconditioner\n%s" % src
 
 
 def test_richardson_codegen(t):
     src = _solve_program(t, method="richardson").emit_cpp_program()
-    assert "pops::richardson_solve" in src, src
+    assert "ctx.solve_linear_matfree" in src, src
 
 
 # ---- (A') GeometricMG preconditioner (ADC-516): the complete non-identity route ----
-def _gmres_call(src):
-    """The single ``pops::gmres_solve(...)`` line of @p src."""
-    return [ln for ln in src.splitlines() if "pops::gmres_solve(" in ln][0]
-
-
-def _bicgstab_call(src):
-    return [ln for ln in src.splitlines() if "pops::bicgstab_solve(" in ln][0]
+def _solve_call(src):
+    """The single generic context solve line of @p src."""
+    return [ln for ln in src.splitlines() if "ctx.solve_linear_matfree(" in ln][0]
 
 
 def test_gmres_gmg_precond_codegen(t):
@@ -136,7 +132,7 @@ def test_gmres_gmg_precond_codegen(t):
         "the MG V-cycle preconditioner state must be emitted\n%s" % src)
     assert "->apply(ctx," in src, "the MG V-cycle apply must be emitted\n%s" % src
     assert "pops::ApplyFn precond_mg" in src, "a named real precond ApplyFn must be emitted\n%s" % src
-    call = _gmres_call(src)
+    call = _solve_call(src)
     assert "precond_mg" in call, "gmres_solve must take the real precond, got: %s" % call
     assert "pops::ApplyFn{}" not in call, "gmres+gmg must NOT pass the empty ApplyFn: %s" % call
 
@@ -146,7 +142,7 @@ def test_bicgstab_gmg_precond_codegen(t):
                          preconditioner=_precond("geometric_mg")).emit_cpp_program()
     assert "pops::runtime::program::GeometricMgPreconditioner" in src, src
     assert "->apply(ctx," in src, src
-    call = _bicgstab_call(src)
+    call = _solve_call(src)
     assert "precond_mg" in call and "pops::ApplyFn{}" not in call, call
 
 
@@ -157,7 +153,7 @@ def test_identity_precond_byte_identical(t):
     src_identity = _solve_program(t, method="gmres",
                                   preconditioner=_precond("identity")).emit_cpp_program()
     assert src_default == src_identity, "explicit Identity() must match the None default byte-for-byte"
-    assert "pops::ApplyFn{}" in _gmres_call(src_default), "identity gmres keeps the empty ApplyFn"
+    assert "pops::ApplyFn{}" in _solve_call(src_default), "identity gmres keeps the empty ApplyFn"
     assert "geometric_mg_precond_apply" not in src_default, "identity emits no MG apply"
 
 

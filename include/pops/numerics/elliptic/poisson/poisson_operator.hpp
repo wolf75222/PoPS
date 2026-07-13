@@ -388,9 +388,7 @@ struct DivergenceKernel {
 // fed back as a SINGLE field passed for both arguments (apply_divergence(g, g, geom, out, 0, 1)) to
 // recover the 5-point Laplacian, or two distinct single-component fluxes with cx = cy = 0. Ghosts (1
 // layer) assumed filled by the caller. Mirrors apply_laplacian's structure (one local-fab loop, named
-// functor). The Schur condensation builder uses the same stencil inline (coupling/schur/core/
-// schur_condensation.hpp SchurRhsAssembleKernel, which fuses it with -Lap phi^n -- not refactored to
-// call this so the native source path stays bit-identical).
+// functor). Generated condensed Programs emit the metric-aware equivalent for their fused RHS.
 inline void apply_divergence(const MultiFab& fx, const MultiFab& fy, const Geometry& geom,
                              MultiFab& div_out, int cx = 0, int cy = 0) {
   const Real half_idx = Real(1) / (Real(2) * geom.dx());

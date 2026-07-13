@@ -7,9 +7,8 @@ naming the SAME native operator under the condensed-Schur name. Both are inert -
 runtime applies the operator. This is the ONE public home of the ``solvers.Schur`` entry
 formerly parked under ``pops.lib.solvers`` (that shim is removed; no second public path).
 
-NOTE: this :func:`CondensedSchur` SOLVER descriptor is DISTINCT from
-:class:`pops.CondensedSchur` (``pops.time``), which is the time-integration SPLITTING POLICY
-for an implicit source. They share no namespace and are not the same object.
+NOTE: this :func:`CondensedSchur` SOLVER descriptor is distinct from the
+``pops.lib.time.CondensedSchur`` Program preset. They share no namespace and are not the same object.
 """
 from __future__ import annotations
 
@@ -37,7 +36,7 @@ def Schur(**options: Any) -> Any:
 def CondensedSchur(**options: Any) -> Any:
     """Alias of :func:`Schur` naming the same ``pops::SchurCondensationOperator`` (inert).
 
-    Distinct from the ``pops.time`` ``CondensedSchur`` time-splitting policy -- this is the
+    Distinct from the ``pops.lib.time`` ``CondensedSchur`` Program preset -- this is the
     LINEAR-SOLVER descriptor, not the time-integration role.
     """
     return Schur(**options)

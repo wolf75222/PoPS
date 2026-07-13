@@ -17,7 +17,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>
-#include <pops/runtime/amr/amr_condensed_elliptic.hpp>
+#include <pops/runtime/amr/amr_tensor_elliptic.hpp>
 
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
@@ -34,10 +34,10 @@
 using namespace pops;
 
 TEST(test_composite_fac_poisson, relative_tolerance_scale_preserves_small_nonzero_rhs) {
-  using pops::runtime::program::detail::condensed_fac_relative_scale;
-  EXPECT_DOUBLE_EQ(condensed_fac_relative_scale(Real(0)), Real(1));
-  EXPECT_DOUBLE_EQ(condensed_fac_relative_scale(Real(0.25)), Real(0.25));
-  EXPECT_DOUBLE_EQ(condensed_fac_relative_scale(Real(4)), Real(4));
+  using pops::runtime::program::detail::tensor_fac_relative_scale;
+  EXPECT_DOUBLE_EQ(tensor_fac_relative_scale(Real(0)), Real(1));
+  EXPECT_DOUBLE_EQ(tensor_fac_relative_scale(Real(0.25)), Real(0.25));
+  EXPECT_DOUBLE_EQ(tensor_fac_relative_scale(Real(4)), Real(4));
 }
 static constexpr double kPi = 3.14159265358979323846;
 

@@ -1,7 +1,7 @@
 """System install mixin (Spec-4 PR-F): block/equation/coupling installation.
 
 Holds the densest part of :class:`pops.runtime.system.System`: ``add_block`` /
-``add_equation`` (the backend-adder dispatch + explicit-rejection guards), ``set_source_stage``,
+``add_equation`` (the backend-adder dispatch + explicit-rejection guards),
 ``add_background``, ``add_elliptic_model`` and ``add_coupling``. Mixed into ``System`` via
 inheritance; methods operate on ``self._s`` (the compiled facade) and ``self._aux_field_index``.
 """
@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 from pops._bootstrap import ModelSpec
 from pops.runtime._lifecycle import guard_assembling as _guard_assembling
 from pops.runtime._lifecycle import reject_compiled_time_route as _reject_compiled_time_route
-from pops.runtime._numeric import native_block_scalars, native_real, native_schur_scalars, positive_int
+from pops.runtime._numeric import native_block_scalars, native_real, positive_int
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
     NEWTON_DEFAULT_DAMPING,
@@ -24,7 +24,7 @@ from pops.runtime.defaults import (
     PHYSICAL_DEFAULT_GAMMA,
 )
 from pops.runtime.bricks import (
-    Spatial, Explicit, Split, DivEpsGrad, CompositeRhs, ChargeDensitySource,
+    Spatial, Explicit, DivEpsGrad, CompositeRhs, ChargeDensitySource,
 )
 from pops.runtime.routes import (
     RIEMANN_HLL, check_riemann_capability as _check_riemann_capability,
@@ -73,19 +73,11 @@ class _SystemInstall(_System):
             these parameters are forwarded as-is to the C++.
         @param evolve True (default) = block advances; False = frozen field (background) which still
             contributes to the right-hand side of the system Poisson.
-        @throws TypeError if time is an pops.Split / pops.Strang (Schur-condensed source stage),
-            not wired here: go through add_equation(..., time=pops.Split(...)).
         """
         _guard_assembling(self, "add_block")  # frozen once pops.bind completes (ADC-592)
         _reject_compiled_time_route(time, "System.add_block")  # ADC-554: no CompiledTime time= bypass
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
-        # Split is wired only by add_equation; never drop its source stage silently.
-        if isinstance(time, Split):
-            raise TypeError(
-                "System.add_block: pops.Split (Schur-condensed source stage) is not wired on this "
-                "native seam. Declare the splitting on the pops.Problem time scheme "
-                "(time=pops.Split(...)) and lower it with pops.compile(...) + pops.bind(...).")
         # Native ABI conversion happens here; descriptors above this seam stay exact.
         rel_tol, abs_tol, fd_eps, damping, positivity_floor = native_block_scalars(
             time, spatial, where="System.add_block")
@@ -136,30 +128,6 @@ class _SystemInstall(_System):
 
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
-        # --- pops.Split (Lie) / pops.Strang (2nd order): EXPLICIT / IMPLICIT splitting, Schur OPT-IN --
-        # The block is added with the explicit HYPERBOLIC stage (existing production path, no dispatch
-        # duplication), THEN the condensed SOURCE stage is plugged (set_source_stage, C++), run AFTER
-        # transport each step; the default (without Split) is unchanged. The splitting POLICY is WIRED
-        # to the stepper via set_time_scheme: pops.Split -> "lie" (bit-identical), pops.Strang -> "strang".
-        if isinstance(time, Split):
-            self.add_equation(name, model, spatial=spatial, time=time.hyperbolic,
-                              substeps=substeps, names=names, evolve=evolve, stride=stride)
-            src = time.source
-            self._s.set_source_stage(name, src.kind, *native_schur_scalars(
-                                     src.theta, src.alpha, getattr(src, "krylov_tol", 0.0),
-                                     where="System.add_equation"),
-                                     getattr(src, "krylov_max_iters", 0),
-                                     getattr(src, "density_spec", ""),
-                                     getattr(src, "momentum_x_spec", ""),
-                                     getattr(src, "momentum_y_spec", ""),
-                                     getattr(src, "energy_spec", ""),
-                                     getattr(src, "bz_aux_component", -1),
-                                     # ADC-645: preconditioner knobs (0/"" = historical defaults).
-                                     getattr(src, "n_precond_vcycles", 0),
-                                     getattr(src, "polar_precond", ""))
-            self._s.set_time_scheme(time.scheme)  # "lie" (Split) or "strang" (Strang)
-            return
-
         nsub = positive_int(substeps if substeps is not None else getattr(time, "substeps", 1), where="System.add_equation.substeps")
         nstride = positive_int(stride if stride is not None else getattr(time, "stride", 1), where="System.add_equation.stride")
 
@@ -351,31 +319,6 @@ class _SystemInstall(_System):
                                                  where="System.add_equation.positivity_floor"))
             return
         raise ValueError("add_equation: adder %r unknown (backend %r)" % (adder, backend))
-
-    def set_source_stage(self, name: Any, kind: Any, theta: Any, alpha: Any,
-                         krylov_tol: float = 0.0, krylov_max_iters: int = 0,
-                         density: str = "", momentum_x: str = "", momentum_y: str = "",
-                         energy: str = "", bz_aux_component: int = -1,
-                         n_precond_vcycles: int = 0, polar_precond: str = "") -> Any:
-        """Attach a Schur-condensed source stage to an already-added block (ADC-308).
-
-        Thin public pass-through to the C++ binding (_pops.System.set_source_stage): same flat
-        signature and defaults. add_equation(time=pops.Split(source=pops.CondensedSchur(...))) wires
-        this internally; this method exposes the same control for a block added with a plain
-        transport time scheme, so cases configure the stage without reaching into the private _s.
-        @p name: block; @p kind: 'electrostatic_lorentz'; @p theta in (0, 1]; @p alpha: stage
-        coupling. The krylov_* / field descriptors / bz_aux_component defaults reproduce the historical
-        bit-identical behavior. ADC-645 adds @p n_precond_vcycles (cartesian stage, 1|2; 0 = the
-        historical ONE MG V-cycle per preconditioner application) and @p polar_precond (polar stage,
-        'radial_line'|'jacobi'; '' = the historical RadialLine); cross-geometry misuse refuses at the
-        native seam. Prerequisite: B_z set via set_magnetic_field beforehand.
-        """
-        _guard_assembling(self, "set_source_stage")  # frozen once pops.bind completes (ADC-592)
-        self._s.set_source_stage(name, kind, *native_schur_scalars(
-                                 theta, alpha, krylov_tol, where="System.set_source_stage"),
-                                 krylov_max_iters,
-                                 density, momentum_x, momentum_y, energy, bz_aux_component,
-                                 n_precond_vcycles, polar_precond)
 
     def add_background(self, name: Any, model: Any, density: Any, spatial: Any = None) -> Any:
         """FROZEN species (not advanced): a fixed background that contributes to the system Poisson (and,

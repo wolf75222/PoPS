@@ -78,10 +78,11 @@ def test_polar_stability_bounds_advertised_wired():
         assert bound in polar, "polar stability bound %r missing from capabilities()" % bound
 
 
-def test_amr_schur_advertised_implemented():
+def test_amr_condensed_program_advertised_implemented():
     amr_schur = pops.capabilities()["schur"]["amr"]
-    assert amr_schur and "Phase 4a" in amr_schur, \
-        "schur.amr should advertise the implemented Phase 4a composite stage, got: %r" % amr_schur
+    assert amr_schur and "gather-all-levels" in amr_schur, \
+        "schur.amr should advertise the Program-owned composite hierarchy solve, got: %r" % amr_schur
+    assert "no native source-stage route" in amr_schur
     assert "the implementation does not" not in amr_schur
 
 

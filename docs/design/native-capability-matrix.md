@@ -99,8 +99,9 @@ future validators:
   initialize Kokkos, has initialized it, or is attached to an externally initialized runtime.
 - `runtime:allocator_lifetime`: Kokkos builds use a process-lifetime managed arena whose blocks are
   returned by a Kokkos finalize hook.
-- `schur:condensed_source`: Schur condensation/source kernels are specialised to 2D plus Bz/Lorentz
-  coupling.
+- `program:condensed_implicit_preset`: `pops.lib.time.CondensedSchur` currently authors a 2D,
+  two-component electrostatic-Lorentz reduction. The Program solve/provider protocol is independent
+  of that preset and can host other operators, dimensions and hierarchy providers.
 - `runtime:native_loader_legacy_metadata`: old native modules without metadata still fall back to
   `u0..` names, empty roles, `gamma=1.4` and host prototype copies.
 

@@ -305,8 +305,7 @@ class _SystemIO(_System):
             out["ncomp_" + b] = nv
             out["state_" + b] = np.asarray(self._s.state_global(b), dtype=np.float64)
             out["names_" + b] = np.array(list(self._s.variable_names(b, "conservative")))
-        # phi : multigrid warm start (BIT-IDENTICAL restart) ; physical STATE if
-        # gauss_policy="evolve" (phi is no longer re-derived from rho there).
+        # phi: multigrid warm start required for a bit-identical restart.
         out["phi"] = np.asarray(self._s.potential_global(), dtype=np.float64)
         field_slots = list(self._s.field_provider_slots())
         out["field_provider_slots"] = np.array(field_slots)
@@ -406,8 +405,7 @@ class _SystemIO(_System):
                 raise ValueError("restart : block '%s' has %d components in the checkpoint, %d here"
                                  % (b, int(d["ncomp_" + b]), self._s.n_vars(b)))
             self._s.set_state(b, np.asarray(d["state_" + b], dtype=np.float64))
-        # phi BEFORE the clock : warm start of the restored solver (bit-identical restart ; physical
-        # state in gauss_policy="evolve").
+        # phi BEFORE the clock: warm start of the restored solver (bit-identical restart).
         self._s.set_potential(np.asarray(d["phi"], dtype=np.float64).ravel())
         checkpoint_slots = [str(slot) for slot in d["field_provider_slots"]]
         current_slots = list(self._s.field_provider_slots())

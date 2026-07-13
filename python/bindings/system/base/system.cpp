@@ -103,8 +103,6 @@ std::vector<std::string> System::block_names() const {
 EffectiveOptionsReport System::effective_options_report() const {
   EffectiveOptionsReport report;
   report.runtime = "system";
-  report.time_scheme = p_->time_scheme_;
-  report.gauss_policy = p_->gauss_policy_;
   report.poisson.rhs = p_->fields_.p_rhs;
   report.poisson.solver = p_->fields_.p_solver;
   report.poisson.bc = p_->fields_.p_bc;
@@ -150,9 +148,6 @@ EffectiveOptionsReport System::effective_options_report() const {
     row.primitive_vars = s.prim_vars.names;
     report.blocks.push_back(std::move(row));
   }
-
-  for (const auto& kv : p_->diagnostics_.source_stage_options)
-    report.source_stages.push_back(kv.second);
   return report;
 }
 

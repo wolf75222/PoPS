@@ -2,7 +2,7 @@
 """pops.time condensed-Schur implicit source stage as a compiled Program (epic ADC-399 / ADC-637).
 
 ADC-637 lowers the condensed source stage through the GENERIC condensed route: the
-``pops.lib.time.condensed_schur`` macro emits ``P.condensed_coeffs`` (the per-cell tensor
+``pops.lib.time.CondensedSchur`` preset emits ``P.condensed_coeffs`` (the per-cell tensor
 ``A = I + c*rho*B^{-1}``), ``P.condensed_rhs`` (the fused RHS ``-Lap(phi^n) - theta*dt*alpha*div(F)``)
 and ``P.condensed_reconstruct`` (``v = B^{-1}(v^n - theta*dt*grad phi)``), all lowered INLINE via
 ``pops::detail::block_inverse<2>`` / ``block_apply_inverse<2>`` -- there is NO ``coupling/schur``
@@ -10,18 +10,17 @@ operator module in the generated C++. The block 2x2 inverse the coefficients / f
 is the electrostatic-Lorentz linearization ``J`` the COMPILING MODEL carries: it is authored with
 ``pops.lib.models.author_electrostatic_lorentz(m)`` on a rho/mx/my block with a ``B_z`` aux, and the
 generic route resolves it at emit time (``P.emit_cpp_program(model=...)`` reads the model's linear
-source). The macro composes the three ops with ``P.solve_linear`` (matrix-free BiCGStab) into the same
-assemble / solve / reconstruct sequence as the native CondensedSchurSourceStepper. The native
-``pops.CondensedSchur`` source stepper is untouched.
+source). The macro composes the three ops with ``P.solve_linear`` into a generated metric-aware
+assemble / solve / reconstruct sequence; no native condensed-source dispatcher remains.
 
 The macro also supports theta != 1: the n+1 extrapolation by factor 1/theta is lowered with the
 EXISTING affine algebra (no component-restricted IR op) because the reconstruction freezes rho, so the
-plain state affine ``U^n + (1/theta)(U^{n+theta} - U^n)`` leaves rho untouched and equals the native
-momentum-only extrapolation; an OPTIONAL energy component (c_E) adds the native kinetic-energy increment
+plain state affine ``U^n + (1/theta)(U^{n+theta} - U^n)`` leaves rho untouched and equals the
+momentum-only extrapolation; an OPTIONAL energy component (c_E) adds the kinetic-energy increment
 via the generic ``condensed_energy`` op. The cross-step persistent phi^n carry is IMPLEMENTED for
 theta < 1: phi is carried across steps through a lag-1, 1-component System history ring (the ncomp-aware
 register_history), fed into the -Lap(phi^n) RHS anchor and the Krylov warm start, and extrapolated to
-phi^{n+1} by the same 1/theta factor before it is stored -- exactly as the native stepper carries it.
+phi^{n+1} by the same 1/theta factor before it is stored.
 The carry is GATED to theta != 1, so theta == 1 keeps the fresh-zero phi path byte-identical.
 
 (A) Pure Python, always runs:
@@ -31,7 +30,7 @@ The carry is GATED to theta != 1, so theta == 1 keeps the fresh-zero phi path by
     - theta < 1 emits the persistent phi^n carry (register_history(name, 1, 1) / ctx.history /
       store_history / rotate_histories + the warm-start lincomb), and theta == 1 emits NONE of it;
     - an energy component lowers the generic condensed_energy op; theta out of (0, 1] raises ValueError
-      at the macro AND the native brick.
+      at the macro boundary.
 
 (B) End-to-end parity (skips unless the full toolchain is present): the macro is compiled + installed +
     MULTIPLE steps are taken on a field-coupled rho/mx/my block with a constant B_z, for theta == 1 AND
@@ -43,13 +42,8 @@ The carry is GATED to theta != 1, so theta == 1 keeps the fresh-zero phi path by
     theta = 0.5 is second order (Crank-Nicolson, the carry is what lifts it) while theta = 1 is first
     order; an energy-increment check compares c_E against the offline kinetic-energy update.
 
-    DOCUMENTED GAP vs the native pops.CondensedSchur: the native solve is BiCGStab + a GeometricMG
-    preconditioner while the Program solve is matrix-free BiCGStab WITHOUT a preconditioner -- the same
-    operator and RHS, a different Krylov path. Both converge to the same phi at tolerance, so the firm
-    parity is checked against the matrix-free-equivalent offline reference (not bit-against-native); a
-    native pops.CondensedSchur(theta=0.5) step is also REPORTED as a diagnostic (it is confounded by the
-    explicit transport half-flow of pops.Split, so it is not asserted). The compiling model carries the
-    electrostatic-Lorentz J (via author_electrostatic_lorentz) the generic route resolves at emit time.
+    The compiling model carries the electrostatic-Lorentz J (via
+    author_electrostatic_lorentz), which the generic route resolves at emit time.
 
 Self-skips (exit 0) without numpy / _pops / install_program / a compiler / a visible Kokkos -- never
 fakes the engine (project policy: no fake pops in tests).
@@ -180,7 +174,7 @@ def test_apply_laplacian_coeff_operand_types(t):
 
 def test_condensed_schur_macro_lowers(t):
     P, model, linear = _bound_program(t, "cs")
-    lt.condensed_schur(
+    lt.CondensedSchur(
         P, *state_refs(P, "blk"), alpha=_ALPHA, theta=1.0,
         linear_operator=linear)
     assert P.validate() is True, "the condensed-Schur macro must validate"
@@ -188,12 +182,12 @@ def test_condensed_schur_macro_lowers(t):
     src = P.emit_cpp_program(model=model)
     # ADC-637: the generic condensed route lowers coeffs / flux / reconstruct INLINE via
     # pops::detail::block_inverse<2> / block_apply_inverse<2> -- NO coupling/schur operator module.
-    # solve_fields stays a ctx seam and the Krylov solve is still pops::bicgstab_solve.
+# solve_fields and the Krylov solve stay generic context seams.
     for frag in ("ctx.solve_fields_from_state",
                  "pops::detail::block_inverse<2>(M_, Mi_);",
                  "pops::detail::block_apply_inverse<2>",
                  "rhsA(i, j, 0) = nlA(i, j, 0)",
-                 "pops::bicgstab_solve",
+    "ctx.solve_linear_matfree",
                  "#include <pops/numerics/linalg/block_inverse.hpp>"):
         assert frag in src, "the condensed-Schur macro must contain %r\n%s" % (frag, src)
     assert "coupling/schur" not in src, "the generic route must not pull the coupling/schur module\n%s" % src
@@ -204,14 +198,14 @@ def test_condensed_schur_theta_half_lowers(t):
     no component-restricted IR op). The macro reconstructs on a COPY of U^n so the extrapolation can
     read mom^n, then commits U^n + (1/theta)(U^{n+theta} - U^n)."""
     P, model, linear = _bound_program(t, "cs")
-    lt.condensed_schur(
+    lt.CondensedSchur(
         P, *state_refs(P, "blk"), alpha=_ALPHA, theta=0.5,
         linear_operator=linear)
     assert P.validate() is True, "the theta=0.5 condensed-Schur macro must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
     src = P.emit_cpp_program(model=model)
     for frag in ("pops::detail::block_inverse<2>(M_, Mi_);",
-                 "pops::detail::block_apply_inverse<2>", "pops::bicgstab_solve",
+        "pops::detail::block_apply_inverse<2>", "ctx.solve_linear_matfree",
                  "rhsA(i, j, 0) = nlA(i, j, 0)"):
         assert frag in src, "the theta=0.5 macro must contain %r\n%s" % (frag, src)
     # th_dt = theta*dt is lowered into the reconstruction; the extrapolation is an axpy(2.0, ...) (1/0.5).
@@ -227,7 +221,7 @@ def test_condensed_schur_theta_half_emits_phi_carry(t):
     the step body registers a 1-COMPONENT ring (register_history(name, 1, 1)) and rotates it. theta == 1
     emits NONE of this (a separate no-regression test)."""
     P, model, linear = _bound_program(t, "cs")
-    lt.condensed_schur(
+    lt.CondensedSchur(
         P, *state_refs(P, "blk"), alpha=_ALPHA, theta=0.5,
         linear_operator=linear)
     src = P.emit_cpp_program(model=model)
@@ -250,7 +244,7 @@ def test_condensed_schur_theta_one_emits_no_phi_carry(t):
     """ADC-427 no-regression: theta == 1 keeps a fresh-zero phi each step -- NO history ring, NO warm
     start, NO store/rotate -- so an existing theta==1 program's IR / .so cache key is byte-identical."""
     P, model, linear = _bound_program(t, "cs")
-    lt.condensed_schur(
+    lt.CondensedSchur(
         P, *state_refs(P, "blk"), alpha=_ALPHA, theta=1.0,
         linear_operator=linear)
     src = P.emit_cpp_program(model=model)
@@ -268,12 +262,12 @@ def test_condensed_schur_theta_one_ir_byte_identical_with_carry_present(t):
     for kwargs in (dict(theta=1.0), dict(theta=1.0, c_E=3)):
         energy = "c_E" in kwargs
         P, model, linear = _bound_program(t, "cs", energy=energy)
-        lt.condensed_schur(
+        lt.CondensedSchur(
             P, *state_refs(P, "blk"), alpha=_ALPHA,
             linear_operator=linear, **kwargs)
         h1 = P._ir_hash()
         Q = t.Program("cs").bind_operators(model)
-        lt.condensed_schur(
+        lt.CondensedSchur(
             Q, *state_refs(Q, "blk"), alpha=_ALPHA,
             linear_operator=linear, **kwargs)
         assert P._ir_hash() == h1 == Q._ir_hash(), "theta==1 IR hash must be deterministic"
@@ -284,7 +278,7 @@ def test_condensed_schur_theta_out_of_range_raises(t):
     for bad in (0.0, -0.5, 1.5):
         P, _, linear = _bound_program(t, "p_%s" % str(bad).replace(".", "_"))
         try:
-            lt.condensed_schur(
+            lt.CondensedSchur(
                 P, *state_refs(P, "blk"), alpha=1.0, theta=bad,
                 linear_operator=linear)
         except ValueError as exc:
@@ -293,21 +287,6 @@ def test_condensed_schur_theta_out_of_range_raises(t):
             raise AssertionError("condensed_schur(theta=%r) must raise ValueError" % bad)
 
 
-def test_condensed_schur_theta_out_of_range_raises_at_brick(t):
-    """ADC-427 (acceptance e): the native CondensedSchur brick pins the SAME theta domain (0, 1] as the
-    macro -- the refusal to KEEP, not invert. Skips if the brick descriptor is unavailable here."""
-    try:
-        from pops.runtime._bricks_time import CondensedSchur
-    except Exception as exc:  # noqa: BLE001 -- the brick lives behind the runtime package (needs _pops)
-        print("-- brick domain check skipped: CondensedSchur import unavailable: %s --" % exc)
-        return
-    for bad in (0.0, -0.5, 1.5):
-        try:
-            CondensedSchur(theta=bad, alpha=1.0)
-        except (ValueError, TypeError) as exc:
-            assert "theta" in str(exc), str(exc)
-        else:
-            raise AssertionError("pops.time.CondensedSchur(theta=%r) must raise" % bad)
 
 
 def test_condensed_schur_energy_lowers(t):
@@ -316,7 +295,7 @@ def test_condensed_schur_energy_lowers(t):
     ADC-637: the op lowers to the generic condensed_energy inline kernel (not a coupling/schur free
     function), ending in the kinetic-increment write stateA(i, j, 3) += ke_new - ke_old."""
     P, model, linear = _bound_program(t, "cs", energy=True)
-    lt.condensed_schur(
+    lt.CondensedSchur(
         P, *state_refs(P, "blk"), alpha=_ALPHA, theta=0.5,
         c_E=3, linear_operator=linear)
     assert P.validate() is True
@@ -329,7 +308,7 @@ def test_condensed_schur_theta_one_ir_unchanged(t):
     """ADC-427 no-regression: theta == 1 keeps its historical IR (reconstruct IN PLACE on U^n, no copy /
     extrapolation / energy op), so an existing theta==1 program's .so cache key is byte-identical."""
     P, model, linear = _bound_program(t, "cs")
-    lt.condensed_schur(
+    lt.CondensedSchur(
         P, *state_refs(P, "blk"), alpha=_ALPHA, theta=1.0,
         linear_operator=linear)
     src = P.emit_cpp_program(model=model)
@@ -456,8 +435,8 @@ def _offline_run(U0, alpha, theta, bz, h, dt, tol, nsteps):
 
 
 def _np_bicgstab(apply, b, *, tol=1e-10, max_iter=1000, x0=None):
-    """Plain numpy unpreconditioned BiCGStab solving A x = b (matches pops::bicgstab_solve with an
-    identity preconditioner -- the Program's solve path). @p x0 is the warm start (defaults to zero);
+    """Plain numpy unpreconditioned BiCGStab solving A x = b, matching the uniform context provider
+    with an identity preconditioner. @p x0 is the warm start (defaults to zero);
     the fixed point is x0-independent, so a converged solve matches the macro's warm-started solve to
     tolerance (the warm start only changes the trip count)."""
     import numpy as np
@@ -602,7 +581,7 @@ def _run_energy_check(t, pops, np, sqrt, Model, h):
     sim.set_state("blk", U0)
     model = _energy_model("cs_energy_prog", sqrt, Model)
     P = t.Program("cs_energy_step").bind_operators(model)
-    lt.condensed_schur(
+    lt.CondensedSchur(
         P, *state_refs(P, "blk"), alpha=_ALPHA, theta=theta,
         c_E=3, tol=_TOL, max_iter=400,
         linear_operator=_linear_handle(model))
@@ -700,7 +679,7 @@ def _run_section_b(t):
         """Compile std.condensed_schur(theta) into a problem.so; None if the toolchain is unavailable."""
         model = schur_model("cs_prog_%s" % tag)
         P = t.Program("cs_step_%s" % tag).bind_operators(model)
-        lt.condensed_schur(
+        lt.CondensedSchur(
             P, *state_refs(P, "blk"), alpha=_ALPHA, theta=theta,
             tol=_TOL, max_iter=400,
             linear_operator=_linear_handle(model))
@@ -751,51 +730,6 @@ def _run_section_b(t):
     _run_order_and_energy_checks(t, make_sim, schur_model, _compile_macro, h)
     # (d) energy: a c_E component matches the offline kinetic-energy increment.
     _run_energy_check(t, pops, np, sqrt, Model, h)
-    # a SINGLE compiled theta=0.5 step for the native diagnostic below (cold start, phi^n = 0).
-    half = compiled_vs_offline(0.5, 1)
-
-    # NATIVE diagnostic (ADC-427): std.condensed_schur(theta=0.5) compiled vs pops.CondensedSchur(
-    # theta=0.5) through pops.Split, taken as a SINGLE step (both start from phi^n = 0 -- the System
-    # initializes phi to zero and the macro's ring cold-starts at zero, so step 0 carries nothing yet).
-    # This is REPORTED, not asserted:
-    # the native pops.Split also runs the EXPLICIT transport half-flow that the source-only Program omits,
-    # so the two states differ by the transport advection (plus the MG-preconditioned vs unpreconditioned
-    # BiCGStab path -- the documented ADC-421 Krylov gap). The FIRM parity is compiled-vs-offline above,
-    # where the offline reference IS the source stage exactly (same matrix-free BiCGStab). Faking a tight
-    # native bound here would mean asserting against a transport-confounded step -- we do not.
-    if half is not None:
-        out_c, U0, _ = half
-        sim_n = System(n=_N, L=_L, periodic=True)
-        try:
-            native_model = schur_model("cs_native").compile(backend="production")
-        except RuntimeError as exc:
-            print("-- (B) native diagnostic skipped: model compile failed: %s --" % str(exc)[:160])
-            native_model = None
-        if native_model is not None:
-            try:
-                # B_z must exist BEFORE add_equation: the CondensedSchur source stage is wired during
-                # add_equation (set_source_stage), which reads the B_z aux. set_poisson + the magnetic
-                # field first, then the block.
-                sim_n.set_poisson("charge_density", "geometric_mg")
-                sim_n.set_magnetic_field(_BZ * np.ones(_N * _N))
-                sim_n.add_equation(
-                    "blk", native_model,
-                    spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                    time=pops.Split(hyperbolic=pops.Explicit(method="euler"),
-                                   source=pops.CondensedSchur(theta=0.5, alpha=_ALPHA)))
-            except Exception as exc:  # noqa: BLE001 -- Split/CondensedSchur wiring unavailable here
-                print("-- (B) native diagnostic skipped: pops.Split/CondensedSchur unavailable: %s --"
-                      % str(exc)[:160])
-            else:
-                sim_n.set_state("blk", U0)
-                sim_n.step(_DT)
-                out_n = np.array(sim_n.get_state("blk"))
-                d_native = float(np.abs(out_c - out_n).max())
-                print("  [diagnostic] compiled(theta=0.5) source-only vs native pops.CondensedSchur("
-                      "theta=0.5) Split(transport+source): max|d| = %.2e  (native includes the explicit "
-                      "transport half-flow + the MG-preconditioned BiCGStab path; firm parity is the "
-                      "compiled-vs-offline assertion above)" % d_native)
-    return half
 
 
 def _run():

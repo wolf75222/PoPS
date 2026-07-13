@@ -136,7 +136,7 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           "composite (ADC-645): True opts the FIELD solve into the composite FAC path (the fine "
           "patch refines the elliptic); scope = single block, 2 levels, one mono-box fine patch, "
           "replicated coarse -- out of scope REFUSES at build (never a silent fallback). The fac_* "
-          "knobs (<= 0 = the kFAC* defaults, same convention as set_source_stage) tune that solve; "
+          "knobs (<= 0 = the kFAC* defaults) tune that solve; "
           "inert when composite is False (the historical Option A solve, bit-identical).",
           py::arg("rhs") = "charge_density", py::arg("solver") = "geometric_mg",
           py::arg("bc") = "auto", py::arg("wall") = "none", py::arg("wall_radius") = 0.0,
@@ -172,15 +172,13 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            py::arg("mean_zero_gauge"));
 }
 
-// Physics wiring: dt bounds, GLOBAL Schur/coupled source stages, and time-splitting policy.
+// Physics wiring: dt bounds, fields, and coupled source stages.
 void bind_amr_physics(py::class_<AmrSystem>& cls) {
   cls
       // GLOBAL step bound + ACTIVE bound (AMR StabilityPolicy, System.add_dt_bound parity).
       .def("add_dt_bound", &AmrSystem::add_dt_bound, py::arg("label"), py::arg("fn"))
       .def("last_dt_bound", &AmrSystem::last_dt_bound)
-      // amr-schur PATH (AMR counterpart of System.set_magnetic_field / set_source_stage / set_time_scheme).
-      // GLOBAL Schur-condensed source stage (electrostatic/Lorentz) on the mono-block hierarchy,
-      // instead of the local IMEX source. B_z (Lorentz term) accepts a flattened numpy (n, n).
+      // B_z accepts a flattened numpy (n, n) and populates the Program-visible aux channel.
       .def(
           "set_magnetic_field",
           [](AmrSystem& s, py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
@@ -203,45 +201,6 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
             s.set_aux_field_halo_component(comp, bc_type, value);
           },
           py::arg("comp"), py::arg("bc_type"), py::arg("value"))
-      // ADC-214: Python surface UNCHANGED (same flat krylov_* kwargs / descriptors, same
-      // defaults; no bz_aux_component on the AMR side). The lambda assembles the SourceStageOptions POD.
-      .def(
-          "set_source_stage",
-          [](AmrSystem& s, const std::string& name, const std::string& kind, double theta,
-             double alpha, double krylov_tol, int krylov_max_iters, const std::string& density,
-             const std::string& momentum_x, const std::string& momentum_y, const std::string& energy,
-             int fac_max_iters, int fac_fine_sweeps, double fac_tol, double fac_coarse_rel_tol,
-             int fac_coarse_cycles, bool fac_verbose, int n_precond_vcycles,
-             const std::string& polar_precond) {
-            SourceStageOptions opts;
-            opts.krylov_tol = krylov_tol;
-            opts.krylov_max_iters = krylov_max_iters;
-            opts.density = density;
-            opts.momentum_x = momentum_x;
-            opts.momentum_y = momentum_y;
-            opts.energy = energy;
-            opts.fac_max_iters = fac_max_iters;  // ADC-614 composite-FAC knobs
-            opts.fac_fine_sweeps = fac_fine_sweeps;
-            opts.fac_tol = fac_tol;
-            opts.fac_coarse_rel_tol = fac_coarse_rel_tol;
-            opts.fac_coarse_cycles = fac_coarse_cycles;
-            opts.fac_verbose = fac_verbose;
-            opts.n_precond_vcycles = n_precond_vcycles;  // ADC-645 (0 = historical ONE V-cycle)
-            opts.polar_precond = polar_precond;          // ADC-645 (refused: AMR is cartesian)
-            s.set_source_stage(name, kind, theta, alpha, opts);
-          },
-          py::arg("name"), py::arg("kind"), py::arg("theta"), py::arg("alpha"),
-          // Carried settings (wave 3, System parity): Krylov tolerances of the coarse solve
-          // (<= 0 = defaults 1e-10/400) + field descriptors ("" = canonical role) + composite-FAC
-          // knobs of the multi-level Schur solve (ADC-614; <= 0 = the kFAC* defaults) +
-          // n_precond_vcycles (ADC-645; 0 = the historical ONE MG V-cycle per precond application).
-          py::arg("krylov_tol") = 0.0, py::arg("krylov_max_iters") = 0, py::arg("density") = "",
-          py::arg("momentum_x") = "", py::arg("momentum_y") = "", py::arg("energy") = "",
-          py::arg("fac_max_iters") = 0, py::arg("fac_fine_sweeps") = 0, py::arg("fac_tol") = 0.0,
-          py::arg("fac_coarse_rel_tol") = 0.0, py::arg("fac_coarse_cycles") = 0,
-          py::arg("fac_verbose") = false, py::arg("n_precond_vcycles") = 0,
-          py::arg("polar_precond") = "")
-      .def("set_time_scheme", &AmrSystem::set_time_scheme, py::arg("scheme"))
       .def(
           "set_density",
           [](AmrSystem& s, const std::string& name,

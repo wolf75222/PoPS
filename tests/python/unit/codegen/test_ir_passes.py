@@ -213,7 +213,7 @@ def _linear_handle(model):
 
 
 def test_condensed_buffer_writers_never_removed():
-    """REGRESSION (the safe-by-default whitelist). ``pops.lib.time.condensed_schur`` assembles its RHS
+    """REGRESSION (the safe-by-default whitelist). ``pops.lib.time.CondensedSchur`` assembles its RHS
     with ``P.condensed_rhs(rhs, phi_n, U, ...)`` (ADC-637) -- a top-level op whose RESULT is DISCARDED.
     Its real effect is filling the caller-allocated ``rhs`` scalar_field buffer, which
     ``P.solve_linear(rhs=rhs)`` then reads BY BUFFER IDENTITY, not via a dataflow input edge. A blacklist
@@ -227,7 +227,7 @@ def test_condensed_buffer_writers_never_removed():
         model = _lorentz_energy_model("cs_ir_%d_%s" % (int(round(theta * 100)), c_E))
         P = adctime.Program("cs").bind_operators(model)
         block, state = state_refs(P, "blk")
-        libtime.condensed_schur(
+        libtime.CondensedSchur(
             P, block, state, alpha=_ALPHA, theta=theta, c_E=c_E,
             linear_operator=_linear_handle(model))
         before = P.emit_cpp_program(model=model)

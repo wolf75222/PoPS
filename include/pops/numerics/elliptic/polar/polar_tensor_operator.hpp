@@ -21,11 +21,10 @@
 
 /// @file
 /// @brief Iterative POLAR elliptic operator with anisotropic TENSOR coefficient (cross terms).
-///        Path A stage 2a (foundational brick toward the polar Schur).
+///        Generic polar matrix-free operator used by generated Programs.
 ///
 /// CONTEXT. To build the FULL STIFF Euler-Poisson system in POLAR geometry (a strongly magnetized
-/// regime, high omega_c), the condensed Schur stage (CondensedSchurSourceStepper, level 4 of
-/// docs/SCHUR_CONDENSATION_DESIGN.md) is needed on the polar side. The lock is the elliptic OPERATOR:
+/// regime, high omega_c), a condensed Program needs this elliptic OPERATOR:
 /// the Schur condenses a FULL TENSOR operator A = I + c rho B^{-1} where B^{-1} is the Lorentz
 /// rotation, which injects CROSS terms a_rt / a_tr (and a theta-dependent coefficient as soon as
 /// rho or B_z varies in theta). The existing DIRECT PolarPoissonSolver (FFT-in-theta + tridiag-in-r,
@@ -372,9 +371,9 @@ class PolarTensorKrylovSolver {
 
   // RULE OF FIVE (C.21): the current pointers a_rr_/a_tt_ alias the internal stores
   // a_rr_store_/a_tt_store_ or external fields. A DEFAULT copy/move would leave these pointers aiming
-  // at the SOURCE object's stores (dangling/UB). The solver is ALWAYS used as a LOCAL scope variable
-  // (never copied, moved, stored in a container, nor returned by value): we DELETE the four
-  // operations rather than write a move re-pointing the stores (useless here).
+  // at the SOURCE object's stores (dangling/UB). The solver may be owned persistently through a
+  // unique/shared pointer, but the object itself is never copied or moved, so delete all four
+  // operations instead of implementing a fragile pointer-rebinding move.
   PolarTensorKrylovSolver(const PolarTensorKrylovSolver&) = delete;
   PolarTensorKrylovSolver& operator=(const PolarTensorKrylovSolver&) = delete;
   PolarTensorKrylovSolver(PolarTensorKrylovSolver&&) = delete;

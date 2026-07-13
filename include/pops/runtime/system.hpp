@@ -6,7 +6,7 @@
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions (options of the IMEX source Newton)
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/runtime/export.hpp>  // POPS_EXPORT (methods resolved by the native loader through dlopen)
-#include <pops/runtime/facade_options.hpp>  // SourceStageOptions / CoupledSourceProgram (facade PODs, ADC-214)
+#include <pops/runtime/facade_options.hpp>  // CoupledSourceProgram (facade POD, ADC-214)
 #include <pops/runtime/context/grid_context.hpp>  // GridContext + BlockClosures (AOT-compiled block seam)
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params, ADC-510)
@@ -386,7 +386,7 @@ class System {
   /// ignores it while the mode is "none"). "staircase" -> conservative masked transport (assemble_rhs_
   /// masked, 0/1 face gate, jagged boundary). "cutcell" -> cut-cell / embedded-boundary transport
   /// (assemble_rhs_eb, alpha_f apertures + kappa volume fraction, smooth boundary, order 2 interior).
-  /// The mode is honored under Lie AND Strang (cf. set_time_scheme). A mode != "none" without a transportable
+  /// The mode is honored by the native transport step. A mode != "none" without a transportable
   /// cartesian block raises an EXPLICIT error at the step (never a silent full transport). Unknown mode
   /// -> error. R > 0 required; cartesian only (polar already bounds the ring by its radial
   /// walls -> explicit error).
@@ -532,51 +532,6 @@ class System {
   // methods (ADC-595): they are Python presets (python/pops/physics/coupling_presets.py) that lower to
   // the generic coupled source and register through add_coupling_operator with a declared conservation
   // contract. A new coupling needs no new public C++ method.
-
-  /// Enables a Schur-condensed SOURCE STAGE on block @p name (EXPLICIT / IMPLICIT splitting,
-  /// cf. docs/SCHUR_CONDENSATION_DESIGN.md sections 5-6). It is the OPT-IN of the pops.Split(
-  /// hyperbolic=Explicit, source=CondensedSchur) policy: at each step, the block does its EXPLICIT
-  /// hyperbolic transport as today, THEN this source stage replaces the explicit /
-  /// IMEX source by the condensed stage (CondensedSchurSourceStepper, #126), AUTONOMOUS and solved in C++ (no
-  /// per-cell Python callback). The default path (without this call) stays BIT-IDENTICAL.
-  ///
-  /// CONTRACT (validated HERE, before any step): the block MUST expose the Density / MomentumX /
-  /// MomentumY roles (Energy optional) in its conservative descriptor; a missing role raises an
-  /// EXPLICIT error. The B_z field must be available (set_magnetic_field called): the aux is widened to
-  /// the B_z channel and an absent B_z raises an error. The block reuses the phi potential of the system
-  /// Poisson as a warm start (solve_fields runs at the head of step), but the source stage solves its
-  /// OWN condensed elliptic operator (it does not duplicate solve_fields).
-  /// @param kind  only "electrostatic_lorentz" for now (ElectrostaticLorentzCondensation).
-  /// @param theta theta-scheme in (0,1] (0.5 = Crank-Nicolson, 1 = backward Euler).
-  /// @param alpha electrostatic coupling constant of the source sub-system (d_t(-Lap phi) =
-  ///              -alpha div(rho v)).
-  /// @param opts  settings grouped in a POD (ADC-214; cf. SourceStageOptions): tolerance / budget of the
-  ///              Krylov solve (krylov_tol / krylov_max_iters, <= 0 = historical defaults 1e-10;
-  ///              400 cartesian, 600 polar), field DESCRIPTORS (density / momentum_x /
-  ///              momentum_y / energy; "" = canonical role, otherwise stable role name or variable
-  ///              name of the block; energy == "none" disables the energy; CARTESIAN only for an
-  ///              override, the polar stepper rejects it), and bz_aux_component (< 0 = canonical
-  ///              B_z channel). Default {} = historical bit-identical behavior. These fields were a
-  ///              long list of four adjacent `std::string` interchangeable at the call site.
-  void set_source_stage(const std::string& name, const std::string& kind, double theta,
-                        double alpha, const SourceStageOptions& opts = {});
-
-  /// Time SPLITTING POLICY of the macro-step (hyperbolic transport H + source stage S):
-  ///  - "lie"    (default): H(dt); S(dt) once (Godunov, 1st order). BIT-IDENTICAL to history.
-  ///  - "strang": H(dt/2); S(dt); H(dt/2) (symmetric, 2nd order as soon as H and S are).
-  /// The Strang scheme RE-SOLVES solve_fields between the stages so that each half-advance reads a phi
-  /// consistent with the current density (the SINGLE head solve_fields, sufficient for Lie, does not suffice
-  /// for the 2nd Strang half-advance); cf. docs/HOFFART_STEP_SEQUENCE.md and SystemStepper::step_strang.
-  /// Reuses the SAME bricks (s.advance, source stage): no new stepper. An unknown scheme
-  /// raises an EXPLICIT error. Without a call, the path stays BIT-IDENTICAL (Lie).
-  void set_time_scheme(const std::string& scheme);
-
-  /// Gauss-law policy. "restart" (default): solve_fields
-  /// re-solves -Delta phi = f at each step (BIT-IDENTICAL to history). "evolve": after the first
-  /// solve (phi^0), solve_fields no longer re-solves the Poisson and derives the aux from the CURRENT phi
-  /// that the Schur source stage evolves in-place -> -Delta phi evolution without restart (Gauss
-  /// imposed only at t=0). Has effect only with a condensed source stage. Unknown scheme -> explicit error.
-  void set_gauss_policy(const std::string& policy);
 
   /// Adds a GENERIC inter-species COUPLED SOURCE described by a BYTECODE (pops.dsl.CoupledSource,
   /// P5 phase 1, EXPLICIT forward-Euler splitting after transport). Unlike the named couplings
@@ -819,6 +774,10 @@ class System {
   /// (ProgramContext::hmin) to express its own dt bound (epic ADC-399 / ADC-417, spec s18). POPS_EXPORT:
   /// resolved by the generated problem.so across the dlopen boundary.
   POPS_EXPORT Real cfl_min_dx() const;
+  /// Geometry facts consumed by generated metric-aware Program kernels.  These expose mathematical
+  /// mesh data only; the Program never reaches System::Impl or selects a hand-written time scheme.
+  POPS_EXPORT bool program_is_polar() const;
+  POPS_EXPORT PolarGeometry program_polar_geometry() const;
   /// A collective scalar reduction over a NAMED block's state -- the native seam the Python diagnostics
   /// driver drives to fire a declared typed measure (Norm / Integral / MinMax) each cadence tick
   /// (ADC-542). @p kind selects the reduction over the block's U: per-component
@@ -953,7 +912,7 @@ class System {
   /// until mark_bound() runs, so the historical setters keep working.
   /// @{
   /// Mark the composition as bound (frozen): every structural setter (add_block / set_poisson /
-  /// set_source_stage / install_program / set_disc_domain / ...) then rejects with a precise error.
+  /// install_program / set_disc_domain / ...) then rejects with a precise error.
   /// The runtime-data setters (set_state / set_density / set_block_params / set_program_params /
   /// set_magnetic_field / set_aux_field_component / set_clock / set_potential) stay allowed. A second
   /// mark_bound() throws (a composition binds exactly once).
@@ -1091,9 +1050,8 @@ class System {
   std::vector<double> density(const std::string& name) const;  ///< ny*nx row-major (j slow, i fast)
   std::vector<double> potential();  ///< phi, ny*nx row-major (j slow, i fast)
   /// RESTORES the potential phi (IO v1, reserved for restart): without it the multigrid would restart
-  /// from a blank phi and the resume would not be bit-identical (warm start lost); in
-  /// gauss_policy="evolve", phi IS the physical state and its restoration is indispensable. Field
-  /// ny*nx row-major (same layout as potential()).
+  /// from a blank phi and the resume would not be bit-identical (warm start lost). Field ny*nx
+  /// row-major (same layout as potential()).
   void set_potential(const std::vector<double>& phi);
   std::vector<std::string> field_provider_slots() const;
   void set_field_potential(const std::string& provider_slot,

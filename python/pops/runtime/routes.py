@@ -275,15 +275,10 @@ TIME_EULER = _REGISTRY["time"]["euler"]
 TIME_IMEX = _REGISTRY["time"]["imex"]
 TIME_IMEXRK_ARS222 = _REGISTRY["time"]["imexrk_ars222"]
 
-SPLITTING_LIE = _REGISTRY["splitting"]["lie"]
-SPLITTING_STRANG = _REGISTRY["splitting"]["strang"]
-
 # Named route-id constants exist ONLY for identifiers with a live consumer (ADC-630: the
 # symmetric-per-family constant surface was dead code and was deleted; read _REGISTRY["<family>"]
 # ["<name>"] directly where a one-off id is needed).
 SOURCE_MAGNETIC = _REGISTRY["source"]["magnetic"]
-
-SOURCE_STAGE_ELECTROSTATIC_LORENTZ = _REGISTRY["source_stage"]["electrostatic_lorentz"]
 
 def euler_layout_ok(compiled: Any, flux: Any) -> bool:
     """True when @p compiled is a canonical 4-variable Euler transport (n_vars == 4 + primitive 'p')

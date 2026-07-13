@@ -348,7 +348,6 @@ set(POPS_CPP_STANDARD_TESTS
   test_polar_poisson_mms
   test_polar_tensor_elliptic_mms
   test_polar_schur_multibox
-  test_polar_condensed_schur_source_stepper
   test_krylov_solver
   test_numerical_defaults
   test_fallback_diagnostics
@@ -357,10 +356,6 @@ set(POPS_CPP_STANDARD_TESTS
   test_program_context_schur_free
   test_generic_krylov
   test_solver_codegen_generated
-  test_schur_condensation
-  test_condensed_schur_source_stepper
-  test_amr_condensed_schur_source_stepper
-  test_amr_condensed_schur_composite
   test_dispatch_tags
   test_scheme_dispatch
   test_model_registry
@@ -404,10 +399,8 @@ set(POPS_CPP_STANDARD_TESTS
   test_aux_single_source
   test_weno_convergence
   test_splitting
-  test_strang_splitting
   test_imex_ap
   test_ap_limit
-  test_lorentz_eliminator
   test_polar_transport_mms
   test_polar_system_step
   test_polar_mms_vr
@@ -677,12 +670,6 @@ if(POPS_HAS_MPI)
 
   foreach(_np 1 2 4)
     pops_add_mpi_rank_test(test_krylov_solver ${_np})
-  endforeach()
-  foreach(_np 1 2 4)
-    pops_add_mpi_rank_test(test_schur_condensation ${_np})
-  endforeach()
-  foreach(_np 1 2 4)
-    pops_add_mpi_rank_test(test_condensed_schur_source_stepper ${_np})
   endforeach()
   foreach(_np 1 2 4)
     pops_add_mpi_rank_test(test_fill_boundary_cache ${_np})

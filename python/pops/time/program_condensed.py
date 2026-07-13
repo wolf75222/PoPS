@@ -106,8 +106,7 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         th_d = self._coeff_dict(th_dt, "th_dt", "condensed_coeffs")
         return self._new("condensed_coeffs", "condensed_coeffs", (state,),
                          {"linear_operator": opname, "subset": sub, "c": c_d, "th_dt": th_d,
-                          "c_rho": self._comp_index(c_rho, "c_rho", "condensed_coeffs"),
-                          "scope": "hierarchy", "hierarchy_provider": "composite_tensor_fac"}, name,
+                          "c_rho": self._comp_index(c_rho, "c_rho", "condensed_coeffs")}, name,
                          state.block)
 
     def condensed_rhs(self, out: Any = None, phi_n: Any = None, state: Any = None,

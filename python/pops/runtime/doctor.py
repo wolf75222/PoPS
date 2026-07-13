@@ -305,11 +305,12 @@ def capabilities() -> Any:
             "system": ["explicit (ssprk2|ssprk3)", "imex (= SourceImplicitBE)",
                        "imexrk_ars222 (IMEX-RK family, ARS(2,2,2) scheme, order 2 ; cartesian only ; "
                        "fully implicit source)",
-                       "split lie|strang + CondensedSchur"],
+                       "Program macros lie|strang + pops.lib.time.CondensedSchur"],
             "amr": ["explicit (forward Euler per substep)", "ssprk3 (order 3 + reflux per stage)",
                     "imex (= SourceImplicitBE)",
-                    "split lie|strang + CondensedSchur (mono-block, coarse)"],
-            "system_polar": ["explicit (ssprk2|ssprk3)", "split + polar CondensedSchur"],
+                    "Program macros lie|strang + pops.lib.time.CondensedSchur (composite hierarchy)"],
+            "system_polar": ["explicit (ssprk2|ssprk3)",
+                             "metric-aware pops.lib.time.CondensedSchur Program"],
             "newton_options": "options (max_iters/tol/fd_eps/damping/fail_policy) : System + AMR "
                               "mono-block AND native multi-block (.so loaders : explicit rejection) ; "
                               "analytic jacobian via m.source_jacobian ; newton_diagnostics/"
@@ -349,14 +350,12 @@ def capabilities() -> Any:
                    "hierarchy construction, not silently mis-coarsened)",
         },
         "schur": {
-            "system_cartesian": "complete ; configurable roles/fields (density=/momentum=/energy=/"
-                                "magnetic_field=), configurable krylov_tol/max_iters",
-            "system_polar": "configurable roles (density=/momentum=/energy=, wave 3) ; "
-                            "magnetic_field freezes B_z ; multi-box C++ solver, facade one global box",
-            "amr": "mono-block ; roles + configurable krylov_tol/max_iters (wave 3, "
-                   "magnetic_field freezes coarse B_z) ; complete mono-level + composite Phase 4a "
-                   "(2 levels, 1..N disjoint non-adjacent fine patches, mono-rank) ; Phase 4b "
-                   "(adjacent patches/>2 levels/MPI/multi-block) to be done",
+            "system_cartesian": "pops.lib.time.CondensedSchur Program preset ; authored roles/fields ; "
+                                "generic matrix-free solve provider",
+            "system_polar": "same Program preset and IR ; metric-aware divergence/gradient plus "
+                            "PolarTensorKrylovSolver provider",
+            "amr": "same Program preset and IR ; gather-all-levels, one composite tensor solve, then "
+                   "reconstruct-all-levels ; no native source-stage route",
         },
         "backends_dsl": {
             "default": "auto (ADC-63) : production if toolchain parity established (module loaded + "

@@ -7,7 +7,7 @@
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperator / CouplingOperatorView (typed contract, ADC-595)
 #include <pops/runtime/export.hpp>  // POPS_EXPORT: set_compiled_block resolved by the native AMR loader
-#include <pops/runtime/facade_options.hpp>  // SourceStageOptions / CoupledSourceProgram (facade PODs, ADC-214)
+#include <pops/runtime/facade_options.hpp>  // CoupledSourceProgram (facade POD, ADC-214)
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params on AMR, ADC-508)
 #include <pops/runtime/numerical_defaults.hpp>
@@ -171,33 +171,6 @@ struct AmrBuildParams {
     std::vector<double>
         state;  ///< ncomp*n*n, component-major c*n*n + j*n + i; ncomp == Model::n_vars
   } initial;
-  /// Schur-CONDENSED SOURCE STAGE (amr-schur path, counterpart of System::set_source_stage).
-  /// enabled==false -> the explicit/imex path is unchanged, bit-identical. The field descriptors ("" =
-  /// canonical role) mirror SourceStageOptions and are resolved at build against Model::conservative_vars().
-  struct SchurStage {
-    bool enabled = false;  ///< true: GLOBAL condensed source stage (instead of local explicit/imex)
-    double theta = 0.5;    ///< theta-scheme of the condensed stage (0.5 = Crank-Nicolson)
-    double alpha = 1.0;    ///< electrostatic coupling constant of the condensed stage
-    bool strang = false;  ///< true: Strang H(dt/2) S(dt) H(dt/2); false: Lie H(dt) S(dt)
-    std::vector<double>
-        bz_field;              ///< coarse B_z(x,y) field, n*n row-major (required by the stage)
-    double krylov_tol = 0.0;   ///< tolerance of the coarse Krylov solve (<= 0 = default 1e-10)
-    int krylov_max_iters = 0;  ///< iteration budget (<= 0 = default 400)
-    // ADC-614: composite-FAC knobs of the MULTI-LEVEL condensed Schur solve (<= 0 = the kFAC* default,
-    // bit-identical). Threaded to AmrCondensedSchurSourceStepper::set_fac_options -> the FAC solver.
-    int fac_max_iters = 0;       ///< FAC outer iterations (<= 0 = default kFACDefaultMaxIters=30)
-    int fac_fine_sweeps = 0;     ///< SOR sweeps per fine solve (<= 0 = default kFACDefaultFineSweeps=400)
-    double fac_tol = 0.0;        ///< composite-residual stop (<= 0 = default kFACDefaultTol=1e-9)
-    double fac_coarse_rel_tol = 0.0;  ///< internal coarse rel_tol (<= 0 = default 1e-12)
-    int fac_coarse_cycles = 0;   ///< internal coarse cycles (<= 0 = default 100)
-    bool fac_verbose = false;    ///< record the FAC per-iteration residual trace
-    // ADC-645: MG V-cycles per BiCGStab-preconditioner application (0 = the historical ONE; the
-    // stepper accepts 1 or 2). Threaded to the AmrCondensedSchurSourceStepper ctor at build.
-    int n_precond_vcycles = 0;
-    // Field descriptors ("" = canonical role, bit-identical; otherwise stable role name OR block
-    // variable name).
-    std::string density, momentum_x, momentum_y, energy;
-  } schur;
   /// Model-NAMED aux fields (ADC-291) + their per-field HALO policies (ADC-369). Seeded onto the coupler's
   /// shared aux at build (build_amr_compiled), like bz_field; re-applied each update (persist across
   /// regrid). Both empty -> bit-identical.
@@ -527,8 +500,7 @@ class AmrSystem {
   ///                  coarse -- an out-of-scope hierarchy REFUSES at build (never a silent fallback).
   ///                  false (default) = the historical Option A solve, bit-identical.
   /// @param fac_max_iters / fac_fine_sweeps / fac_tol / fac_coarse_rel_tol / fac_coarse_cycles /
-  ///        fac_verbose the composite-FAC knobs (<= 0 = the kFAC* default, same convention as
-  ///        set_source_stage); inert when composite is false.
+  ///        fac_verbose the composite-FAC knobs (<= 0 = the kFAC* default); inert when composite is false.
   /// @throws std::runtime_error if rhs, solver, bc, wall or a FAC knob is outside the supported domain.
   void set_poisson(const std::string& rhs = "charge_density",
                    const std::string& solver = "geometric_mg", const std::string& bc = "auto",
@@ -688,33 +660,6 @@ class AmrSystem {
   void commit_restart_transaction();
   void rollback_restart_transaction();
   /// @}
-
-  /// Enables the Schur-CONDENSED SOURCE STAGE (amr-schur path) on block @p name. AMR counterpart of
-  /// System::set_source_stage: assembles and solves the GLOBAL electrostatic/Lorentz condensed operator
-  /// (on the coarse, by composing the uniform stage #126), instead of the LOCAL cell-by-cell IMEX
-  /// source. This is the OPT-IN of the amr-schur path, the refined equivalent of the
-  /// uniform time=Strang(Explicit(ssprk3), CondensedSchur(theta, alpha)). The block transport must
-  /// be SOURCE-FREE (model with NoSource source brick): the source is played separately by the stage.
-  /// @param kind  only "electrostatic_lorentz" wired (cf. CondensedSchurSourceStepper).
-  /// @param theta theta-scheme in (0, 1] (0.5 = Crank-Nicolson).
-  /// @param alpha electrostatic coupling constant.
-  /// @throws std::runtime_error if the system is already built, in MULTI-BLOCK, if kind/theta are
-  ///         out of domain, or (at build) if the block does not expose Density/MomentumX/MomentumY or if
-  ///         set_magnetic_field was not called.
-  /// @param opts  settings grouped in a POD (ADC-214; cf. SourceStageOptions; parity with
-  ///        System::set_source_stage): krylov_tol / krylov_max_iters (COARSE Krylov solve; <= 0 =
-  ///        historical defaults 1e-10 / 400; the FAC composite solve keeps its own tolerances,
-  ///        Phase 4) and descriptors density / momentum_x / momentum_y / energy ("" = canonical role,
-  ///        bit-identical; otherwise stable role name or block variable name, resolved at build). The
-  ///        POD's bz_aux_component field is IGNORED here (the mono-block AMR stage reads the canonical
-  ///        B_z channel). Default {} = historical behavior.
-  void set_source_stage(const std::string& name, const std::string& kind, double theta,
-                        double alpha, const SourceStageOptions& opts = {});
-
-  /// Chooses the time-splitting policy of the condensed source stage: "lie" (default, H(dt) S(dt))
-  /// or "strang" (H(dt/2) S(dt) H(dt/2), 2nd order). AMR counterpart of System::set_time_scheme. Without a condensed
-  /// source stage (set_source_stage not called), no effect. @throws if scheme unknown / already built.
-  void set_time_scheme(const std::string& scheme);
 
   /// Registers an inter-species COUPLED SOURCE (compiled pops.dsl.CoupledSource, flat bytecode ABI
   /// P5), refined counterpart of System::add_coupled_source but on the SHARED AMR hierarchy. The source

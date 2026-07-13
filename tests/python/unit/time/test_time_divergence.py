@@ -12,12 +12,12 @@ compiled solve is verified against an OFFLINE numpy CG on that SAME wide-stencil
 (A) Pure Python, always runs:
     - ``P.divergence`` records a 3-input scalar_field op, validates its operands, and serializes;
     - the div(grad) Helmholtz apply (gradient -> divergence) lowers to ``ctx.gradient`` + a
-      ``ctx.divergence`` + ``pops::bicgstab_solve``, with the gradient buffer allocated 2-component
+      ``ctx.divergence`` + ``ctx.solve_linear_matfree``, with the gradient buffer allocated 2-component
       (``ctx.alloc_scalar_field(2, 1)``);
     - a standalone divergence-of-a-known-field check: the offline centered FV divergence of
       f = (cos 2pi x, sin 2pi y) matches the analytic div f = -2pi sin 2pi x + 2pi cos 2pi y to the
       discretization error -- the reference the compiled ctx.divergence reproduces;
-    - ``pops.lib.time.condensed_schur`` (now implemented, ADC-421) lowers at theta == 1 and raises for
+    - ``pops.lib.time.CondensedSchur`` lowers at theta == 1 and raises for
       the deferred theta != 1 extrapolation (the full end-to-end parity is test_time_condensed_schur.py).
 
 (B) End-to-end parity (skips unless the full toolchain is present): the div(grad) Helmholtz Program is
@@ -145,7 +145,7 @@ def test_scalar_field_ncomp_validates(t):
 
 def test_divgrad_codegen(t):
     src = _divgrad_program(t, method=krylov.BiCGStab(max_iter=200)).emit_cpp_program()
-    for frag in ("ctx.gradient", "ctx.divergence", "pops::bicgstab_solve",
+    for frag in ("ctx.gradient", "ctx.divergence", "ctx.solve_linear_matfree",
                  "ctx.alloc_scalar_field(2, 1)"):  # the 2-component gradient buffer
         assert frag in src, "the div(grad) solve must contain %r\n%s" % (frag, src)
 
@@ -191,7 +191,7 @@ def test_condensed_schur_macro_lowers(t):
     # The end-to-end parity lives in test_time_condensed_schur.py.
     model1 = _lorentz_model("div_m1")
     P = t.Program("p").bind_operators(model1)
-    lt.condensed_schur(
+    lt.CondensedSchur(
         P, *state_refs(P, "blk"), alpha=1.0, theta=1.0,
         linear_operator=_linear_handle(model1))
     assert P.validate() is True, "the condensed macro must validate"
@@ -203,7 +203,7 @@ def test_condensed_schur_macro_lowers(t):
     # ADC-427: theta != 1 now lowers (the extrapolation is plain affine algebra), no longer raises.
     model2 = _lorentz_model("div_m2")
     P2 = t.Program("p2").bind_operators(model2)
-    lt.condensed_schur(
+    lt.CondensedSchur(
         P2, *state_refs(P2, "blk"), alpha=1.0, theta=0.5,
         linear_operator=_linear_handle(model2))
     assert P2.validate() is True, "condensed_schur(theta != 1) must validate (ADC-427)"
@@ -213,7 +213,7 @@ def test_condensed_schur_macro_lowers(t):
     invalid_model = _lorentz_model("div_invalid")
     invalid = t.Program("p3").bind_operators(invalid_model)
     try:
-        lt.condensed_schur(
+        lt.CondensedSchur(
             invalid, *state_refs(invalid, "blk"), alpha=1.0, theta=1.5,
             linear_operator=_linear_handle(invalid_model))
     except ValueError as exc:

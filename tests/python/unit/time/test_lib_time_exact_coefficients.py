@@ -73,7 +73,7 @@ def test_imex_rejects_values_that_cannot_be_exact_coefficients():
 
 def test_condensed_schur_composes_rational_coefficients_exactly():
     program, linear = _bound_program("schur_exact")
-    libtime.condensed_schur(
+    libtime.CondensedSchur(
         program,
         *state_refs(program, "block"),
         theta=Fraction(1, 2),
@@ -104,7 +104,7 @@ def test_condensed_schur_composes_rational_coefficients_exactly():
 
 def test_condensed_schur_composes_decimal_coefficients_without_binary64():
     program, linear = _bound_program("schur_decimal")
-    libtime.condensed_schur(
+    libtime.CondensedSchur(
         program,
         *state_refs(program, "block"),
         theta=Decimal("0.5"),
@@ -128,7 +128,7 @@ def test_decimal_affine_and_lib_time_products_ignore_the_ambient_context():
         affine_sum = (_Coeff({0: left}) + right).as_dict()[0]
         affine_product = (_Coeff({0: left}) * right).as_dict()[0]
         program, linear = _bound_program("schur_decimal_context")
-        libtime.condensed_schur(
+        libtime.CondensedSchur(
             program, *state_refs(program, "block"),
             theta=Decimal("0.1250000000000000000000000000000000000000"),
             alpha=right, linear_operator=linear)
@@ -155,7 +155,7 @@ def test_repeating_decimal_division_is_never_silently_rounded():
         with pytest.raises(TypeError, match="must terminate"):
             _ = _Coeff({0: Decimal(1)}) / Decimal(3)
         with pytest.raises(TypeError, match="non-terminating Decimal reciprocal"):
-            libtime.condensed_schur(
+            libtime.CondensedSchur(
                 program,
                 *state_refs(program, "block"),
                 theta=Decimal("0.3"),
@@ -167,7 +167,7 @@ def test_repeating_decimal_division_is_never_silently_rounded():
 def test_condensed_schur_refuses_implicit_numeric_domain_mixing():
     program, linear = _bound_program("mixed_domains")
     with pytest.raises(TypeError, match="cannot mix Decimal and Fraction"):
-        libtime.condensed_schur(
+        libtime.CondensedSchur(
             program,
             *state_refs(program, "block"),
             theta=Decimal("0.5"),

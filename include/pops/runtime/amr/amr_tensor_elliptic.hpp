@@ -17,7 +17,7 @@
 #include <pops/runtime/amr/amr_runtime.hpp>          // AmrRuntime (the engine this helper reads)
 
 /// @file
-/// @brief AmrCondensedElliptic -- the composite tensor-coefficient elliptic driver a compiled
+/// @brief AmrTensorElliptic -- the composite tensor-coefficient elliptic driver a compiled
 ///        condensed-implicit time Program routes to on a REFINED AMR hierarchy (ADC-633 / ADC-637).
 ///
 /// The compiled condensed-implicit Program lowers, per AMR level, to inline block-inverse assembly
@@ -41,7 +41,12 @@
 /// 1..N disjoint fine patches (nested, ratio 2), replicated mono-box coarse. MPI multilevel is refused
 /// precisely (mono-rank only) -- the composite path is a mono-rank driver here. Beyond that the FAC
 /// ctor refuses (non-nested / misaligned patches) with a precise message; no silent partial solve.
-/// Single block (the AMR Program v1 block scope). theta == 1 (the macro's theta gate is upstream).
+/// CompositeFacPoisson currently owns one diagonal coefficient, so this provider accepts only
+/// eps_x == eps_y and returns a typed capability failure for a genuinely anisotropic diagonal rather
+/// than silently dropping eps_y. Cross terms a_xy/a_yx remain supported.
+/// Unsupported MPI multilevel execution returns a typed capability-failure report, so the authored
+/// SolveOutcome action decides whether to reject the attempt or fail the run. Single block (the AMR
+/// Program v1 block scope); theta<1 composes through the gathered per-level phi^n history guess.
 
 namespace pops {
 namespace runtime {
@@ -51,7 +56,7 @@ namespace detail {
 /// FAC reports a composite infinity norm while solve_linear exposes a relative tolerance.  Match the
 /// established Krylov zero-RHS convention exactly: every non-zero RHS, including ||rhs|| < 1, keeps
 /// its own scale; only the homogeneous RHS substitutes one to avoid division by zero.
-inline Real condensed_fac_relative_scale(Real rhs_norm) {
+inline Real tensor_fac_relative_scale(Real rhs_norm) {
   return rhs_norm > Real(0) ? rhs_norm : Real(1);
 }
 }  // namespace detail
@@ -59,12 +64,12 @@ inline Real condensed_fac_relative_scale(Real rhs_norm) {
 /// Per-level tensor-coefficient buffers + a cached composite FAC solve, for one AMR block's condensed
 /// tensor elliptic on a refined hierarchy. Owned by AmrProgramContext (one per installed Program on the
 /// refined path); rebuilt lazily when the fine tiling changes. Indexed by AMR level (0 = coarse).
-class AmrCondensedElliptic {
+class AmrTensorElliptic {
  public:
   /// @p eng: the AMR engine (levels / geom / bc); @p block: the AMR block index (sys_block-resolved by
   /// the caller). Buffers are allocated lazily on ensure_level_buffers() so a flat hierarchy (never
   /// refined) allocates nothing.
-  AmrCondensedElliptic(AmrRuntime* eng, int block) : eng_(eng), block_(block) {}
+  AmrTensorElliptic(AmrRuntime* eng, int block) : eng_(eng), block_(block) {}
 
   /// True iff there is >= one populated fine level (level 1 carries >= one patch for this block). The
   /// AmrProgramContext gates the flat (matrix-free BiCGStab) vs composite (FAC) branch on this.
@@ -89,7 +94,7 @@ class AmrCondensedElliptic {
       case 4: return lb.rhs;     // kRhs
       case 5: return lb.flux;    // kFlux (transient explicit-flux scratch)
       default:
-        throw std::runtime_error("AmrCondensedElliptic::target: unknown AssemblyFieldRole wire id " +
+        throw std::runtime_error("AmrTensorElliptic::target: unknown AssemblyFieldRole wire id " +
                                  std::to_string(role));
     }
   }
@@ -101,24 +106,46 @@ class AmrCondensedElliptic {
     return levels_[static_cast<std::size_t>(k)].phi;
   }
 
+  /// Stage the current level's explicit solve initial guess.  Gathering this separately from the
+  /// published solution is load-bearing: a rejected/non-converged FAC attempt must not publish its
+  /// partial iterate, and a retry must start from the authored guess rather than leaked solver state.
+  /// @p guess == nullptr is the declared zero initial guess.
+  void stage_initial_guess(int k, const MultiFab* guess) {
+    ensure_level_buffers(k);
+    MultiFab& staged = levels_[static_cast<std::size_t>(k)].initial_guess;
+    if (guess)
+      copy0(staged, *guess);
+    else
+      staged.set_val(Real(0));
+  }
+
   /// Solve the composite tensor elliptic across the whole nested tower: build/reuse the FAC on the fine
   /// tilings, copy the per-level coefficient / RHS buffers into the FAC's level fields, enable variable
   /// coefficient + cross terms + two-way, solve, then publish each level's potential into phi(k). REUSES
-  /// pops::CompositeFacPoisson wholesale (the SAME composite solver the native source-stage AMR route
-  /// drives, ADC-636), so a refined Program matches that route where the coefficient / RHS feed
-  /// coincides. The FAC's own operator / iteration decide the solve; the emitted matrix-free apply /
-  /// precond are UNUSED on this branch (documented). MPI multilevel is refused precisely (mono-rank).
+  /// pops::CompositeFacPoisson wholesale. The FAC's own operator / iteration decide the solve; the emitted matrix-free apply /
+  /// precond are UNUSED on this branch (documented). MPI multilevel and unequal diagonal tensor
+  /// coefficients report capability failure
+  /// precisely (mono-rank) rather than publishing a partial value.
   SolveReport solve_composite(Real tol, int max_iter) {
     const int L = eng_->nlev();
     if (L < 2)
       return SolveReport::capability_failure();
     if (pops::n_ranks() != 1)
-      throw std::runtime_error(
-          "AmrCondensedElliptic::solve_composite: the composite condensed-implicit elliptic on a "
-          "refined hierarchy is mono-rank (the inherited CompositeFacPoisson envelope); MPI multilevel "
-          "is deferred pending ADC-648 (use System, or the native AMR source-stage route).");
+      return SolveReport::capability_failure();
     for (int k = 0; k < L; ++k)
       ensure_level_buffers(k);
+
+    // CompositeFacPoisson exposes one diagonal coefficient. The currently shipped condensed preset
+    // authors equal diagonal entries, but the generic Program protocol can author a full tensor.
+    // Reject that unsupported provider/operator pair explicitly instead of solving a different
+    // operator by ignoring eps_y.
+    for (int k = 0; k < L; ++k) {
+      const LevelBuffers& lb = levels_[static_cast<std::size_t>(k)];
+      MultiFab diagonal_delta(lb.eps_x.box_array(), lb.eps_x.dmap(), 1, 0);
+      pops::lincomb(diagonal_delta, Real(1), lb.eps_x, Real(-1), lb.eps_y);
+      if (pops::norm_inf(diagonal_delta) != Real(0))
+        return SolveReport::capability_failure();
+    }
 
     // The fine tilings (levels 1..L-1) key the FAC build; rebuild only when a tiling changes.
     std::vector<BoxArray> level_boxes;
@@ -131,14 +158,17 @@ class AmrCondensedElliptic {
     fac_->set_two_way(true);
     for (int k = 0; k < L; ++k) {
       LevelBuffers& lb = levels_[static_cast<std::size_t>(k)];
-      // The tensor coefficient A = [[eps_x, a_xy], [a_yx, eps_y]] per level (the FAC diagonal block uses
-      // eps_x; eps_y is symmetric for the condensed operator and folded into the diagonal by the FAC).
+      // The tensor coefficient A = [[eps_x, a_xy], [a_yx, eps_y]] per level. Equality of the two
+      // diagonal entries was checked above because this FAC provider currently stores one diagonal.
       copy0(fac_->eps_level(k), lb.eps_x);
       copy0(fac_->a_xy_level(k), lb.a_xy);
       copy0(fac_->a_yx_level(k), lb.a_yx);
       // the emitted condensed_rhs builds -Lap phi^n - g div(F): the matrix-free operator sign is
       // -div(A grad); the FAC solves div(eps grad phi) = f, so f = -rhs (the sign convention #126).
       negate_into(fac_->rhs_level(k), lb.rhs);
+      // Do not inherit a partial FAC iterate from a rejected attempt.  Every attempt starts from the
+      // per-level guess gathered from the Program (zero, or the carried phi^n history).
+      copy0(fac_->phi_level(k), lb.initial_guess);
     }
 
     // solve_linear's public tolerance is relative, whereas FAC consumes
@@ -150,14 +180,12 @@ class AmrCondensedElliptic {
     Real rhs_norm = 0;
     for (int k = 0; k < L; ++k)
       rhs_norm = std::max(rhs_norm, pops::norm_inf(fac_->rhs_level(k)));
-    const Real scale = detail::condensed_fac_relative_scale(rhs_norm);
+    const Real scale = detail::tensor_fac_relative_scale(rhs_norm);
     const Real absolute_tol = tol * scale;
 
     const CompositeFacOptions options = fac_->options();
     const Real residual = fac_->solve(max_iter, options.fine_sweeps, absolute_tol);
 
-    for (int k = 0; k < L; ++k)
-      copy0(levels_[static_cast<std::size_t>(k)].phi, fac_->phi_level(k));
     SolveReport report;
     report.rel_residual = residual / scale;
     if (std::isfinite(static_cast<double>(report.rel_residual)) && report.rel_residual <= tol)
@@ -166,6 +194,13 @@ class AmrCondensedElliptic {
       report.mark_failed(std::isfinite(static_cast<double>(report.rel_residual))
                              ? SolveStatus::kIterationLimit
                              : SolveStatus::kInvalidEvaluation);
+    if (!report.solved_value_available())
+      return report;
+    // Publication is atomic with respect to solve success: reconstruction cannot observe a partial
+    // iterate, and the final SolveOutcome/StepTransaction contract can roll back later phases without
+    // a failed solve having exposed a value.
+    for (int k = 0; k < L; ++k)
+      copy0(levels_[static_cast<std::size_t>(k)].phi, fac_->phi_level(k));
     return report;
   }
 
@@ -174,6 +209,7 @@ class AmrCondensedElliptic {
     MultiFab eps_x, eps_y, a_xy, a_yx;  ///< tensor coefficient A = [[eps_x, a_xy], [a_yx, eps_y]]
     MultiFab rhs;                        ///< condensed right-hand side (-Lap phi^n - g div F)
     MultiFab flux;                       ///< transient explicit-flux scratch (2-comp, if the body uses it)
+    MultiFab initial_guess;              ///< gathered per-level initial guess for the next solve attempt
     MultiFab phi;                        ///< published composite potential of this level
     bool built = false;
   };
@@ -183,18 +219,23 @@ class AmrCondensedElliptic {
   void ensure_level_buffers(int k) {
     if (k >= static_cast<int>(levels_.size()))
       levels_.resize(static_cast<std::size_t>(k) + 1);
-    LevelBuffers& lb = levels_[static_cast<std::size_t>(k)];
-    if (lb.built)
-      return;
     const MultiFab& U = eng_->level_state(static_cast<std::size_t>(block_), k);
     const BoxArray ba = U.box_array();
     const DistributionMapping dm = U.dmap();
+    LevelBuffers& lb = levels_[static_cast<std::size_t>(k)];
+    // Regrid may replace a level with a different patch tiling while retaining the level index.  The
+    // old built flag alone would then route assembly into stale storage.  Multi-level execution is
+    // mono-rank here, so the BoxArray is the complete distribution identity that can change.
+    if (lb.built && lb.phi.box_array().boxes() == ba.boxes())
+      return;
+    lb = LevelBuffers{};
     lb.eps_x = MultiFab(ba, dm, 1, 1);
     lb.eps_y = MultiFab(ba, dm, 1, 1);
     lb.a_xy = MultiFab(ba, dm, 1, 1);
     lb.a_yx = MultiFab(ba, dm, 1, 1);
     lb.rhs = MultiFab(ba, dm, 1, 0);
     lb.flux = MultiFab(ba, dm, 2, 1);
+    lb.initial_guess = MultiFab(ba, dm, 1, 1);
     lb.phi = MultiFab(ba, dm, 1, 1);
     lb.eps_x.set_val(Real(0));
     lb.eps_y.set_val(Real(0));
@@ -202,6 +243,7 @@ class AmrCondensedElliptic {
     lb.a_yx.set_val(Real(0));
     lb.rhs.set_val(Real(0));
     lb.flux.set_val(Real(0));
+    lb.initial_guess.set_val(Real(0));
     lb.phi.set_val(Real(0));
     lb.built = true;
   }

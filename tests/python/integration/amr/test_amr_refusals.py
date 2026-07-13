@@ -9,9 +9,9 @@ The cells here:
   * ownerless runtime values on AMR -- the native carrier is fed only by a resolved, block-qualified
     ``BindSchema`` mapping; a flat name is never broadcast or accepted as a fallback.
 
-Cells covered elsewhere are CITED, not duplicated: the multi-block condensed-Schur source-stage
-refusal is in ``test_amr_strang_condensed_schur.test_amr_condensed_schur_multiblock_is_refused``;
-the FFT-on-AMR precise reject (descriptor + native-route facts) is in
+Cells covered elsewhere are CITED, not duplicated: generated hierarchy-solve scope/refusal cases live
+in ``test_amr_clean_route_program`` and the source-only hierarchy codegen tests; the FFT-on-AMR precise
+reject (descriptor + native-route facts) is in
 ``tests/python/unit/compliance/_cells.py`` (``neg.fft_on_amr_or_bc``, run by ``test_spec_matrix``);
 the SSPRK3-vs-IMEXRK exclusivity is in ``test_amr_ssprk3``. The clean-``compile(layout=AMR)``
 whole-system time Program is a SEPARATE route being implemented under ADC-634 (a pending row in the

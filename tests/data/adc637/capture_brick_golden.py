@@ -107,7 +107,7 @@ def _compile_route(env, route, theta, tag, n):
         operator.name, kind=operator.kind, owner=registry.owner_path,
         signature=operator.signature)
     P = adctime.Program("cs_%s" % tag).bind_operators(model)
-    lt.condensed_schur(
+    lt.CondensedSchur(
         P, "blk", alpha=_ALPHA, theta=theta, tol=_TOL, max_iter=400,
         linear_operator=linear)
     compiled = pops.codegen.compile_problem(model=model, time=P)

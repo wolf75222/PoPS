@@ -639,12 +639,9 @@ class AmrCouplerMP {
 
   /// TRANSPORT-ONLY ADVANCE (hyperbolic), WITHOUT update() or source. Counterpart of step() stripped
   /// of its field solve and with imex==false: this is the PURE HYPERBOLIC advance (-div F) of the
-  /// amr-schur path, where the field is solved separately (update()) and the source is played by the
-  /// global condensed stage (AmrCondensedSchurSourceStepper), exactly like the uniform path interleaving
-  /// solve_fields / transport (s.advance) / source stage (run_source_stage). The model must be
+  /// generated-Program path, where the field solve and source update are authored explicitly. The model must be
   /// SOURCE-FREE (NoSource source brick) so that the source is not counted twice (once
-  /// here in forward Euler, once by the Schur stage): this is the contract of the amr-schur path, mirror of
-  /// the uniform time=Strang(Explicit, CondensedSchur) where the block is added with its transport only.
+  /// here in forward Euler, once by the Program): this is the transport-only contract.
   template <class Disc = FirstOrder>
   void advance_transport(Real dt, bool recon_prim = false, Real pos_floor = Real(0)) {
     advance_amr<typename Disc::Limiter, typename Disc::NumericalFlux>(

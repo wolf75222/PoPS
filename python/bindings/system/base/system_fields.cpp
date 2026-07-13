@@ -192,7 +192,7 @@ POPS_EXPORT void System::set_block_elliptic_field(
 }
 
 // Potential phi restoration (IO v1, restart): writes the VALID cells of component 0 of the
-// solver phi (multigrid warm start; physical state in gauss_policy="evolve"). Mono-box
+// solver phi (multigrid warm start). Mono-box
 // (same marshaling convention as potential / set_density).
 void System::set_potential(const std::vector<double>& phi) {
   Impl* P = p_.get();

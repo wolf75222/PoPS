@@ -52,18 +52,11 @@ def test_hybrid_native_brick_codegen_keeps_exact_payload_until_cpp():
 
 
 def test_root_time_and_spatial_descriptors_retain_exact_real_controls():
-    schur = pops.CondensedSchur(
-        theta=Fraction(1, 2), alpha=Decimal("0.3333333333333333333333333333"),
-        krylov_tol=Decimal("1e-30"), fac_tol=Fraction(1, 10**9))
     imex = pops.IMEX(
         newton_rel_tol=Fraction(1, 10**12), newton_abs_tol=Decimal("1e-40"),
         newton_fd_eps=Fraction(1, 10**7), newton_damping=Decimal("0.875"))
     spatial = pops.Spatial(positivity_floor=Fraction(1, 10**20))
 
-    assert schur.theta == Fraction(1, 2)
-    assert schur.alpha == Decimal("0.3333333333333333333333333333")
-    assert schur.krylov_tol == Decimal("1e-30")
-    assert schur.fac_tol == Fraction(1, 10**9)
     assert imex.newton_rel_tol == Fraction(1, 10**12)
     assert imex.newton_abs_tol == Decimal("1e-40")
     assert imex.newton_fd_eps == Fraction(1, 10**7)
@@ -84,8 +77,6 @@ def test_root_time_and_spatial_descriptors_retain_exact_real_controls():
         lambda: pops.IMEX(substeps=True),
         lambda: pops.IMEX(newton_max_iters=True),
         lambda: pops.IMEX(newton_diagnostics=1),
-        lambda: pops.CondensedSchur(krylov_max_iters=True),
-        lambda: pops.CondensedSchur(fac_verbose=1),
     ],
 )
 def test_public_numeric_descriptors_refuse_bool_and_lossful_integer_coercions(factory):
@@ -99,7 +90,6 @@ def test_public_runtime_real_controls_refuse_non_finite_values(bad):
         lambda: pops.ExB(B0=bad),
         lambda: pops.FluidState(cs2=bad),
         lambda: pops.IMEX(newton_rel_tol=bad),
-        lambda: pops.CondensedSchur(alpha=bad),
         lambda: pops.Spatial(positivity_floor=bad),
     ):
         with pytest.raises((TypeError, ValueError)):

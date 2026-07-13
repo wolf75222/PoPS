@@ -16,16 +16,6 @@ sources = ["tests/cpp/integration/amr/test_amr_composite_source_conservation.cpp
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
-name = "test_amr_condensed_schur_composite"
-sources = ["tests/cpp/integration/amr/test_amr_condensed_schur_composite.cpp"]
-labels = ["integration", "amr", "medium"]
-
-[[cpp.suite]]
-name = "test_amr_condensed_schur_source_stepper"
-sources = ["tests/cpp/integration/amr/test_amr_condensed_schur_source_stepper.cpp"]
-labels = ["integration", "amr", "medium"]
-
-[[cpp.suite]]
 name = "test_amr_coupled_source_role_strict"
 sources = ["tests/cpp/integration/amr/test_amr_coupled_source_role_strict.cpp"]
 labels = ["integration", "amr", "medium"]
@@ -547,11 +537,6 @@ sources = ["tests/cpp/unit/elliptic/test_composite_fac_tensor.cpp"]
 labels = ["unit", "elliptic", "fast"]
 
 [[cpp.suite]]
-name = "test_condensed_schur_source_stepper"
-sources = ["tests/cpp/unit/elliptic/test_condensed_schur_source_stepper.cpp"]
-labels = ["unit", "elliptic", "fast"]
-
-[[cpp.suite]]
 name = "test_coupled_fieldsolve"
 sources = ["tests/cpp/unit/elliptic/test_coupled_fieldsolve.cpp"]
 labels = ["unit", "elliptic", "fast"]
@@ -652,11 +637,6 @@ sources = ["tests/cpp/unit/elliptic/test_poisson_smoother_cache.cpp"]
 labels = ["unit", "elliptic", "fast"]
 
 [[cpp.suite]]
-name = "test_polar_condensed_schur_source_stepper"
-sources = ["tests/cpp/unit/elliptic/test_polar_condensed_schur_source_stepper.cpp"]
-labels = ["unit", "elliptic", "fast"]
-
-[[cpp.suite]]
 name = "test_polar_poisson_mms"
 sources = ["tests/cpp/unit/elliptic/test_polar_poisson_mms.cpp"]
 labels = ["unit", "elliptic", "fast"]
@@ -669,11 +649,6 @@ labels = ["unit", "elliptic", "fast"]
 [[cpp.suite]]
 name = "test_polar_tensor_elliptic_mms"
 sources = ["tests/cpp/unit/elliptic/test_polar_tensor_elliptic_mms.cpp"]
-labels = ["unit", "elliptic", "fast"]
-
-[[cpp.suite]]
-name = "test_schur_condensation"
-sources = ["tests/cpp/unit/elliptic/test_schur_condensation.cpp"]
 labels = ["unit", "elliptic", "fast"]
 
 [[cpp.suite]]
@@ -852,11 +827,6 @@ sources = ["tests/cpp/unit/numerics/test_splitting.cpp"]
 labels = ["unit", "numerics", "fast"]
 
 [[cpp.suite]]
-name = "test_strang_splitting"
-sources = ["tests/cpp/unit/numerics/test_strang_splitting.cpp"]
-labels = ["unit", "numerics", "fast"]
-
-[[cpp.suite]]
 name = "test_weno5_ssprk3"
 sources = ["tests/cpp/unit/numerics/test_weno5_ssprk3.cpp"]
 labels = ["unit", "numerics", "fast"]
@@ -929,11 +899,6 @@ labels = ["unit", "physics", "fast"]
 [[cpp.suite]]
 name = "test_isothermal_vacuum_floor"
 sources = ["tests/cpp/unit/physics/test_isothermal_vacuum_floor.cpp"]
-labels = ["unit", "physics", "fast"]
-
-[[cpp.suite]]
-name = "test_lorentz_eliminator"
-sources = ["tests/cpp/unit/physics/test_lorentz_eliminator.cpp"]
 labels = ["unit", "physics", "fast"]
 
 [[cpp.suite]]

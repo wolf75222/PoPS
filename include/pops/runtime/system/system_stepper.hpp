@@ -1,6 +1,5 @@
 #pragma once
 
-#include <pops/core/state/state.hpp>  // kAuxBaseComps (B_z channel read by the condensed source stage)
 #include <pops/core/foundation/types.hpp>                   // Real
 #include <pops/coupling/source/coupled_source_program.hpp>  // CoupledFreqKernel (per-cell coupled frequency)
 #include <pops/mesh/execution/for_each.hpp>  // reduce_max_cell (max mu over the cells, device-clean functor)
@@ -21,17 +20,15 @@
 ///        (audit Lot B, continuation of SystemFieldSolver #176). Extracted VERBATIM from python/system.cpp:
 ///        no change to numerics, to the CFL formula, to the stride/substeps cadence, to the
 ///        semantics of the macro-step counter, to the fences, nor to the order (solve_fields; advance;
-///        source stage; couplings). STRICTLY bit-identical -- the code is moved as-is, only
+///        couplings). STRICTLY bit-identical -- the code is moved as-is, only
 ///        access to the SHARED members of Impl (sp, fields_, aux, couplings, t, macro_step_, geom,
 ///        pgeom_, polar_) goes through the back-pointer owner_->.
 ///
 /// CONTRACT / INVARIANTS
 /// - ORCHESTRATES the time advance: step(dt), advance(dt, nsteps), step_cfl(cfl), step_adaptive(cfl),
-///   plus the cadence helpers (stride_due), the Schur-condensed source stage (run_source_stage) and the
-///   inter-species couplings (apply_couplings) that the steps invoke AFTER transport.
+///   plus the cadence helpers (stride_due) and inter-species couplings (apply_couplings).
 /// - READS (without owning) via owner_->: the block list (sp) and each advance closure (s.advance),
-///   the elliptic solver (fields_, for solve_fields() at the head of the step and fields_.ell_phi() read by
-///   the source stage), the SHARED aux and its B_z component (kAuxBaseComps), the coupling list, the
+///   the elliptic solver (fields_, for solve_fields() at the head of the step), the coupling list, the
 ///   time t and the macro_step_ counter (which it advances), the geometry (Cartesian geom / polar pgeom_)
 ///   and the polar_ flag for the CFL physical step h.
 /// - CFL PHYSICAL STEP h: Cartesian = min(dx, dy); POLAR = min(dr, r_min * dtheta) (the azimuthal step
@@ -39,8 +36,8 @@
 /// - MULTIRATE CADENCE INVARIANT (hold-then-catch-up): a block of cadence M is HELD as long as
 ///   (macro_step + 1) % M != 0, then advances by an effective step M*dt at the macro-step where
 ///   (macro_step + 1) % M == 0 (END of window). macro_step_ is incremented ONCE per macro-step, AFTER the
-///   advance of the blocks and the couplings. DO NOT reorder solve_fields; advance; run_source_stage;
-///   apply_couplings; t += dt; ++macro_step_.
+///   advance of the blocks and the couplings. DO NOT reorder solve_fields; advance; apply_couplings;
+///   t += dt; ++macro_step_.
 /// - PER-BLOCK CFL FORMULA (substeps-aware, post-#121): dt <= cfl * h * substeps_b / (stride_b * w_b);
 ///   the global dt is the min over the evolving blocks. PRESERVED as is.
 ///
@@ -52,16 +49,6 @@
 namespace pops {
 namespace stepper {
 
-/// Time SPLITTING policy of the macro-step (hyperbolic transport H + source stage S).
-///  - Lie: H(dt); S(dt) once (Godunov, 1st order). THIS IS THE DEFAULT, bit-identical to
-///              history: a single solve_fields at the head of the step, advance then run_source_stage
-///              interleaved in the same block loop (cf. step()).
-///  - Strang: H(dt/2); S(dt); H(dt/2) (symmetric, 2nd order as soon as H and S are). Requires
-///              RE-SOLVING solve_fields BETWEEN the stages (cf. step()): see the comment of the
-///              Strang branch and docs/HOFFART_STEP_SEQUENCE.md (the SINGLE head solve_fields does not
-///              suffice for the 2nd half-advance, which would otherwise read a stale phi).
-enum class SplitScheme { Lie, Strang };
-
 /// SystemStepper<Impl>: see the contract above. All methods are MEMBERS because they
 /// share the step orchestration; accesses to the SHARED state of Impl go through owner_-> verbatim.
 /// Templated on Impl to stay free of any dependency on the (private) definition of System::Impl.
@@ -70,10 +57,6 @@ class SystemStepper {
  public:
   /// @param owner back-pointer to System::Impl (lifetime subordinate to that of Impl).
   explicit SystemStepper(Impl* owner) : owner_(owner) {}
-
-  /// Chooses the time splitting policy (default Lie = bit-identical). See SplitScheme.
-  void set_scheme(SplitScheme scheme) { scheme_ = scheme; }
-  SplitScheme scheme() const { return scheme_; }
 
   /// True if a block of cadence @p stride CATCHES UP at this macro-step (END of window).
   /// STRIDE SEMANTICS = HOLD-THEN-CATCH-UP (catch-up at the END of the window). A block of cadence M is
@@ -191,7 +174,7 @@ class SystemStepper {
   }
 
   /// PROJECTION PONCTUELLE post-pas (ADC-177) : U <- project(U, aux) par bloc, appliquee UNE fois a
-  /// la FIN de chaque macro-pas ENTIER (apres transport + etage source + couplages ; jamais par etage
+  /// la FIN de chaque macro-pas ENTIER (apres transport + couplages ; jamais par etage
   /// RK), sur les cellules VALIDES seulement. Les GHOSTS ne sont pas projetes : chaque consommateur
   /// de ghosts (residu de transport) refait fill_ghosts en tete d'evaluation (cf. BlockRhsEval), donc
   /// l'etat fantome est reconstruit du valide projete au pas suivant -- aucun fill_boundary ici.
@@ -199,7 +182,7 @@ class SystemStepper {
   /// cadence stride : leur etat peut avoir change via les couplages, et une projection etant
   /// IDEMPOTENTE par contrat (cf. HasPointwiseProjection), la re-application sur un etat deja projete
   /// est neutre. Bloc sans projection (s.project vide) : jamais interroge -- cout nul, les 4 pas
-  /// (step / step_strang / step_cfl / step_adaptive) restent bit-identiques a l'historique.
+  /// (step / step_cfl / step_adaptive) restent bit-identiques a l'historique.
   void apply_projections() {
     for (auto& s : owner_->sp) {
       if (!s.evolve)
@@ -209,42 +192,9 @@ class SystemStepper {
     }
   }
 
-  /// Schur-CONDENSED SOURCE STAGE (OPT-IN, cf. set_source_stage). No-op if the block has no source
-  /// stage (s.schur == nullptr): the default path stays BIT-IDENTICAL. Otherwise, AFTER the hyperbolic
-  /// transport of the block (already played by s.advance), we play the AUTONOMOUS source stage
-  /// (CondensedSchurSourceStepper, #126) on the post-transport state:
-  ///   - state = s.U (rho frozen in the source, mom/E updated);
-  ///   - phi    = the system Poisson potential (ell_phi(), warm start phi^n from solve_fields
-  ///              at the head of step) -- the stage solves its OWN condensed operator and WRITES phi^{n+1}
-  ///              into it, it does NOT call solve_fields again (no duplication);
-  ///   - B_z    = aux channel at index kAuxBaseComps (populated + ghosts filled by solve_fields).
-  /// theta/dt of the theta-scheme; dt = eff_dt (stride factor already included by the caller, like s.advance).
-  void run_source_stage(typename Impl::Species& s, Real eff_dt) {
-    // GEOMETRY DISPATCH (Path A step 2c): a block carries AT MOST ONE condensed source stage (set_source_stage
-    // builds the Cartesian OR the polar one depending on the System geometry). The POLAR one
-    // (PolarCondensedSchurSourceStepper, #212) has the SAME step(state, phi, bz, c_bz, theta, dt) signature as
-    // the Cartesian one (#126): only the pointer changes. The Cartesian path stays BIT-IDENTICAL (schur_polar
-    // == nullptr in Cartesian -> we take the original schur branch, unchanged).
-    if (s.schur_polar) {
-      s.schur_polar->step(s.U, owner_->fields_.ell_phi(), owner_->aux, s.schur_bz_comp,
-                          static_cast<Real>(s.schur_theta), eff_dt);
-      return;
-    }
-    if (s.schur) {
-      s.schur->step(s.U, owner_->fields_.ell_phi(), owner_->aux, s.schur_bz_comp,
-                    static_cast<Real>(s.schur_theta), eff_dt);
-      return;
-    }
-    // GENERIC SOURCE STAGE (fallback): plays ONLY if NO condensed Schur stage (production path
-    // UNTOUCHED, bit-identical). Advances the block source stage IN PLACE on eff_dt. nullptr
-    // (default) -> no-op, as before. Used by generic splitting (pops.Strang) and order tests.
-    if (s.source_step)
-      s.source_step(s.U, eff_dt);
-  }
-
   /// TRANSPORT ADVANCE of block @p s over @p dt in @p n substeps, DISPATCHED by the System geometry
-  /// mode (worksite T5-PR3). This is the SOLE wiring point of the disk in the step (the 4 steps -- step,
-  /// step_strang, step_cfl, step_adaptive -- go through here):
+  /// mode (worksite T5-PR3). This is the SOLE wiring point of the disk in step, step_cfl and
+  /// step_adaptive:
   ///   - None (default): s.advance (assemble_rhs, full Cartesian). BIT-IDENTICAL.
   ///   - Staircase, fixed disk: s.advance_masked (assemble_rhs_masked, 0/1 mask).
   ///   - CutCell, fixed disk: s.advance_eb (assemble_rhs_eb, cut-cell EB).
@@ -285,22 +235,10 @@ class SystemStepper {
     advance_transport_n(s, eff_dt, s.substeps);
   }
 
-  /// HALF transport advance (Strang): dispatch of advance_transport over @p half_dt = eff_dt/2 --
-  /// the disk mode ALSO honors the Strang path (H(dt/2) S(dt) H(dt/2)).
-  void advance_transport_half(typename Impl::Species& s, Real eff_dt) {
-    advance_transport_n(s, Real(0.5) * eff_dt, s.substeps);
-  }
-
   /// FULL-STEP advance of every DUE block over @p dt: effective step eff_dt = stride * dt (cadence
-  /// catch-up), then transport (dispatched by the geometry mode, cf. advance_transport) and the OPT-IN
-  /// Schur source stage (no-op otherwise, cf. run_source_stage). Frozen blocks (!evolve) and HELD blocks
-  /// (outside their stride window, cf. stride_due) are skipped. This is the verbatim per-block loop
-  /// shared by step (Lie) and step_cfl. The two OTHER macro-steps cannot reuse it: step_strang splits
-  /// transport into two HALF advances around a re-solved source stage (3 interleaved sub-loops), and
-  /// step_adaptive subcycles each block n_b times (advance_transport_n). It introduces NO NEW collective:
-  /// the underlying transport (halo exchanges) and Schur source stage (fill_ghosts + all_reduce in the
-  /// condensed solve) DO communicate, but this helper iterates the same blocks in the same order, so each
-  /// rank issues the SAME sequence of collectives as the inlined loops did -- no MPI desync, bit-identical.
+  /// catch-up), then transport (dispatched by the geometry mode, cf. advance_transport). Frozen blocks
+  /// (!evolve) and HELD blocks (outside their stride window, cf. stride_due) are skipped. This is shared
+  /// by step and step_cfl; step_adaptive subcycles each block via advance_transport_n.
   void advance_due_blocks(double dt) {
     Impl* P = owner_;
     for (auto& s : P->sp) {
@@ -311,7 +249,6 @@ class SystemStepper {
       const Real eff_dt = Real(dt) * Real(s.stride);  // catch-up: effective step s.stride * dt
       advance_transport(s,
                         eff_dt);  // transport DISPATCHED by the geometry mode (None: assemble_rhs)
-      run_source_stage(s, eff_dt);  // OPT-IN: Schur-condensed source stage (no-op otherwise)
     }
   }
 
@@ -353,16 +290,9 @@ class SystemStepper {
     P->macro_step_++;
   }
 
-  /// One macro-step of length @p dt. ORDER INVARIANT per scheme (cf. SplitScheme):
-  ///  - Lie (default, bit-identical): solve_fields; for each DUE block (stride cadence honored)
-  ///    advance(dt) then run_source_stage(dt) interleaved; couplings; t += dt; ++macro_step.
-  ///  - Strang: H(dt/2); S(dt); H(dt/2), with a solve_fields RE-SOLVED between each stage
-  ///    (cf. step_strang() and docs/HOFFART_STEP_SEQUENCE.md).
+  /// One native macro-step of length @p dt: solve fields, advance each due block, apply couplings,
+  /// project, then advance the clock. Authored multi-stage composition uses an installed Program.
   void step(double dt) {
-    if (scheme_ == SplitScheme::Strang) {
-      step_strang(dt);
-      return;
-    }
     Impl* P = owner_;
     // Compiled time Program (epic ADC-399): when a problem.so has installed a macro-step body, IT owns
     // the whole step (solve_fields, RHS, combine, commit -- all via ProgramContext). The runtime only
@@ -378,79 +308,9 @@ class SystemStepper {
     // last advance, thus frozen until its next catch-up): stale density / charge in the Poisson sum as
     // long as it has not caught up. Assumed stride choice (loose coupling of the slow block).
     P->solve_fields();
-    advance_due_blocks(
-        dt);  // DUE blocks: catch-up transport + opt-in source stage (shared with step_cfl)
+    advance_due_blocks(dt);
     apply_couplings(Real(dt));  // inter-species coupled sources (splitting), after transport
     apply_projections();  // projection ponctuelle POST-PAS ENTIER (ADC-177) ; no-op sans projection
-    P->t += dt;
-    P->macro_step_++;
-  }
-
-  /// One STRANG macro-step (symmetric, 2nd order): H(dt/2); S(dt); H(dt/2). Reuses s.advance for
-  /// the HALF transport advances and run_source_stage for the FULL source stage (no new stepper).
-  ///
-  /// phi CONSISTENCY (critical point, cf. docs/HOFFART_STEP_SEQUENCE.md): the potential phi / the aux
-  /// fields (grad phi) that the transport READS are populated by solve_fields from the CURRENT density.
-  /// The SINGLE solve_fields at the head of the step (sufficient for Lie splitting, where a single
-  /// transport advance follows) DOES NOT SUFFICE here: between the 1st half-advance and the 2nd, the
-  /// density has changed (1st half-advance + source stage), so the 2nd half-advance would read a STALE
-  /// phi. We thus RE-SOLVE solve_fields BEFORE each stage that consumes phi:
-  ///   1. solve_fields()  -> phi consistent with rho^n            (for H(dt/2))
-  ///   2. H(dt/2)         (s.advance over eff_dt/2)
-  ///   3. solve_fields()  -> phi consistent with rho after H(dt/2) (for S(dt): warm start / aux field)
-  ///   4. S(dt)           (run_source_stage over eff_dt; the Schur stage WRITES phi^{n+1})
-  ///   5. solve_fields()  -> phi consistent with rho after S(dt)   (for the 2nd H(dt/2))
-  ///   6. H(dt/2)         (s.advance over eff_dt/2)
-  /// Without step 5, the 2nd half-advance would read either the Schur phi (overwritten at the next step
-  /// anyway) or a phi of stale rho: the Strang symmetry (thus the 2nd order) would be broken. Steps
-  /// 1/3/5 are SYSTEM solve_fields (sum over all blocks), outside the block loop.
-  ///
-  /// stride CADENCE: evaluated ONCE per macro-step (stride_due at the START), so that the two
-  /// half-advances and the source stage of one macro-step concern the SAME set of DUE blocks. The
-  /// effective step eff_dt = dt * stride (catch-up) is identical to Lie; only the transport is split
-  /// into two halves eff_dt/2.
-  void step_strang(double dt) {
-    Impl* P = owner_;
-    // (1) phi consistent with rho^n, for the 1st transport half-advance.
-    P->solve_fields();
-    // (2) H(dt/2): 1st transport half-advance of each DUE block. s.substeps substeps (unchanged).
-    // Dispatched by the geometry mode (None: assemble_rhs; Staircase/CutCell: disk operator).
-    for (auto& s : P->sp) {
-      if (!s.evolve)
-        continue;
-      if (!stride_due(P->macro_step_, s.stride))
-        continue;
-      const Real eff_dt = Real(dt) * Real(s.stride);
-      advance_transport_half(s, eff_dt);
-    }
-    // (3) phi RE-SOLVED on the post-H(dt/2) density, for the source stage.
-    P->solve_fields();
-    // (4) S(dt): FULL source stage of each DUE block (no-op if no Schur stage, like Lie).
-    for (auto& s : P->sp) {
-      if (!s.evolve)
-        continue;
-      if (!stride_due(P->macro_step_, s.stride))
-        continue;
-      const Real eff_dt = Real(dt) * Real(s.stride);
-      run_source_stage(s, eff_dt);
-    }
-    // (5) phi RE-SOLVED on the post-source density: WITHOUT this solve the 2nd half-advance would read a
-    //     stale phi (cf. docs/HOFFART_STEP_SEQUENCE.md, the single head solve_fields is insufficient).
-    P->solve_fields();
-    // (6) H(dt/2): 2nd transport half-advance, closing the symmetric Strang step. SAME dispatch.
-    for (auto& s : P->sp) {
-      if (!s.evolve)
-        continue;
-      if (!stride_due(P->macro_step_, s.stride))
-        continue;
-      const Real eff_dt = Real(dt) * Real(s.stride);
-      advance_transport_half(s, eff_dt);
-    }
-    apply_couplings(
-        Real(dt));  // inter-species coupled sources (splitting), after the symmetric step
-    // Projection ponctuelle POST-PAS ENTIER (ADC-177) : UNE application apres le pas Strang complet
-    // H(dt/2) S(dt) H(dt/2), jamais entre les etages (semantique post-pas, pas post-etage).
-    apply_projections();
     P->t += dt;
     P->macro_step_++;
   }
@@ -597,8 +457,7 @@ class SystemStepper {
       run_program_cadence(dt);
       return dt;
     }
-    advance_due_blocks(
-        dt);  // DUE blocks: catch-up transport + opt-in source stage (shared with step Lie)
+    advance_due_blocks(dt);
     apply_couplings(Real(dt));
     apply_projections();  // projection ponctuelle POST-PAS ENTIER (ADC-177) ; no-op sans projection
     P->t += dt;
@@ -689,7 +548,6 @@ class SystemStepper {
       const Real eff_dt = Real(macro_dt) * Real(s.stride);  // catch-up: effective step M*macro_dt
       advance_transport_n(s, eff_dt,
                           n);  // transport DISPATCHED by the geometry mode (n adaptive substeps)
-      run_source_stage(s, eff_dt);  // OPT-IN: Schur-condensed source stage (no-op otherwise)
     }
     apply_couplings(Real(macro_dt));
     apply_projections();  // projection ponctuelle POST-MACRO-PAS (ADC-177), pas par sous-cycle
@@ -705,7 +563,6 @@ class SystemStepper {
 
  private:
   Impl* owner_;
-  SplitScheme scheme_ = SplitScheme::Lie;  // default Lie (Godunov): bit-identical to history
   std::string last_dt_reason_;             // active bound of the last step_cfl (diagnostic)
 };
 

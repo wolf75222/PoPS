@@ -103,7 +103,7 @@ def _condensed_program(model, *, block="plasma", theta=1.0, tol=1.0e-10, max_ite
         signature=operator.signature)
     program = Program("condensed_schur").bind_operators(model)
     _case, states = program_states(program, model, (block,))
-    lib_time.condensed_schur(
+    lib_time.CondensedSchur(
         program, states[block], alpha=1.0, theta=theta, tol=tol, max_iter=max_iter,
         linear_operator=handle)
     return program
@@ -308,7 +308,7 @@ def _decay_program(model, name="adc634_decay_prog", *, problem=None, block=None)
     endpoint = P.state(block, state)
     U = endpoint.n
     S = P._source("decay", state=U)
-    P.commit(endpoint.next, P.linear_combine("U1", U + P.dt * S))
+    P.commit(endpoint.next, P.linear_combine("U1", U + P.dt * S, at=endpoint.next.point))
     return P
 
 
@@ -434,7 +434,7 @@ def test_composition_query_condensed_green_633():
         "the condensed Program reports condensed=green (support = %r)" % support)
 
 
-def _schur_model(name="adc633_schur"):
+def _schur_model(name="adc633_schur", *, zero_transport=False):
     """Isothermal 2D fluid block (rho, mx, my) with a Poisson coupling + a B_z aux: the canonical
     condensed block (Density / MomentumX / MomentumY roles + B_z at the c_bz=3 aux slot). The generic
     condensed route (ADC-637) requires the electrostatic-Lorentz linearization J on the momentum subset,
@@ -450,9 +450,14 @@ def _schur_model(name="adc633_schur"):
     p = m.primitive("p", cs2 * rho)
     m.primitive_vars(rho=rho, u=u, v=v, p=p)
     m.conservative_from([rho, rho * u, rho * v])
-    m.flux(x=[mx, mx * u + p, my * u], y=[my, mx * v, my * v + p])
-    cs = sqrt(cs2)
-    m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
+    if zero_transport:
+        z = 0.0 * rho
+        m.flux(x=[z, z, z], y=[z, z, z])
+        m.eigenvalues(x=[z, z, z], y=[z, z, z])
+    else:
+        m.flux(x=[mx, mx * u + p, my * u], y=[my, mx * v, my * v + p])
+        cs = sqrt(cs2)
+        m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
     m.elliptic_rhs(rho)
     m.aux("grad_x")
     m.aux("grad_y")
@@ -521,34 +526,48 @@ def test_refined_amr_schur_program_solves_hierarchy_once_with_relative_tolerance
     xx, yy = np.meshgrid(x, x, indexing="ij")
     u0 = 1.0 + 0.3 * np.sin(2 * np.pi * xx) * np.cos(2 * np.pi * yy)
     bz0 = 4.0 * np.ones((n, n))
-    model = _schur_model("adc648_refined_schur")
-    program = _condensed_program(model, tol=1.0e-8, max_iter=400)
+    mx0 = 0.15 * u0 * np.sin(2 * np.pi * xx)
+    my0 = -0.1 * u0 * np.cos(2 * np.pi * yy)
+    state0 = np.stack([u0, mx0, my0])
+    # Zero transport isolates exactly one generated condensed source stage.
+    model = _schur_model("adc648_refined_schur", zero_transport=True)
+    program = _condensed_program(model, tol=1.0e-10, max_iter=100)
     try:
         from pops.codegen.compile_drivers import compile_problem
         compiled = compile_problem(model=model, time=program, target="amr_system")
-        block_cm = model.compile(backend="production", target="amr_system")
     except RuntimeError as exc:
         print("skip (compile refined condensed Program: %s)" % str(exc)[:200])
         return
 
-    sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
-    sim.set_refinement(1.25)
-    sim.set_magnetic_field(bz0)
-    sim.add_equation("plasma", block_cm, spatial=_spatial(),
-                     time=pops.Explicit(method="ssprk2"))
-    sim.set_density("plasma", u0)
-    sim.install_program(compiled.so_path)
-    boxes = sim.patch_boxes()
-    chk(any(int(box[0]) == 1 for box in boxes),
-        "the acceptance run owns a populated fine level (boxes = %r)" % (boxes,))
-    if not boxes:
+    # Use the native isothermal block for the runtime state so the acceptance can seed all three
+    # conservative components. The production loader currently transports only density during AMR
+    # block construction; that loader limitation is unrelated to the Program/provider contract.
+    runtime_model = pops.Model(
+        state=pops.FluidState(kind="isothermal", cs2=0.5),
+        transport=pops.IsothermalFlux(cs2=0.5), source=pops.NoSource(),
+        elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
+
+    program_sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
+    program_sim.set_refinement(1.25)
+    program_sim.set_magnetic_field(bz0)
+    program_sim.add_equation("plasma", runtime_model, spatial=_spatial(),
+                             time=pops.Explicit(method="ssprk2"))
+    program_sim.set_conservative_state("plasma", state0)
+    program_sim.install_program(compiled.so_path)
+
+    program_boxes = program_sim.patch_boxes()
+    chk(any(int(box[0]) == 1 for box in program_boxes),
+        "the acceptance run owns a populated fine level (boxes = %r)" % (program_boxes,))
+    if not program_boxes:
         return
 
-    mass0 = float(sim.mass("plasma"))
-    sim.step(1.0e-3)
-    coarse = np.asarray(sim.density("plasma"))
+    mass0 = float(program_sim.mass("plasma"))
+    program_sim.step(1.0e-3)
+    coarse = np.asarray(program_sim.get_state("plasma"))
+    fine = np.asarray(program_sim.block_level_state("plasma", 1))
     chk(np.isfinite(coarse).all(), "the coarse state remains finite after the hierarchy solve")
-    chk(abs(float(sim.mass("plasma")) - mass0) <= 1.0e-9 * max(abs(mass0), 1.0),
+    chk(np.isfinite(fine).all(), "the fine state remains finite after the hierarchy solve")
+    chk(abs(float(program_sim.mass("plasma")) - mass0) <= 1.0e-9 * max(abs(mass0), 1.0),
         "the hierarchy-scoped source reconstruction preserves composite mass")
 
 

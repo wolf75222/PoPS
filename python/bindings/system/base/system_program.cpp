@@ -78,6 +78,15 @@ Real System::cfl_min_dx() const {
   return p_->polar_ ? std::min(p_->pgeom_.dr(), p_->pgeom_.r_min * p_->pgeom_.dtheta())
                     : std::min(p_->geom.dx(), p_->geom.dy());
 }
+bool System::program_is_polar() const {
+  return p_->polar_;
+}
+PolarGeometry System::program_polar_geometry() const {
+  if (!p_->polar_)
+    throw std::runtime_error(
+        "System::program_polar_geometry: the installed Program is not bound to a polar mesh");
+  return p_->pgeom_;
+}
 std::string System::installed_program_hash() const {
   return p_->program_.installed_hash_;
 }

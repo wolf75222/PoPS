@@ -20,7 +20,7 @@
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>             // GeometricMG (Krylov precond)
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>    // apply_laplacian
 #include <pops/runtime/amr/amr_runtime.hpp>     // AmrRuntime (the engine the driver wraps)
-#include <pops/runtime/amr/amr_condensed_elliptic.hpp>       // AmrCondensedElliptic (the composite tensor elliptic, ADC-633)
+#include <pops/runtime/amr/amr_tensor_elliptic.hpp>  // AmrTensorElliptic composite provider
 #include <pops/runtime/context/grid_context.hpp>  // GridContext (per-level Schur assembly seam, ADC-633)
 #include <pops/runtime/amr_system.hpp>          // AmrSystem (the facade: params / block map / engine)
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams
@@ -68,7 +68,7 @@ class AmrProgramContext {
   void set_level(int k) const { level_ = k; }
   int level() const { return level_; }
   int nlev() const { return eng_->nlev(); }
-  bool has_refined_hierarchy() const { return condensed_elliptic().has_fine_patches(); }
+  bool has_refined_hierarchy() const { return tensor_elliptic().has_fine_patches(); }
   /// Reset the per-macro-step flags (called by the install wrapper at the top of each macro-step). Also
   /// clears the per-step effective-flux ledger + the live-state-ring record (ADC-639); the PERSISTENT
   /// per-ring flux strips (ring_flux_) survive across steps, as the multistep ring itself does.
@@ -299,6 +299,11 @@ class AmrProgramContext {
   MultiFab& aux() const { return const_cast<MultiFab&>(eng_->aux(level_)); }
   /// The current level's metric (dx/dy >> level, domain << level).
   Geometry geom() const { return eng_->level_geom(level_); }
+  /// AMR v1 is Cartesian.  The metric queries still exist on this context so one generated Program
+  /// body instantiates against both runtime contexts without geometry-specific source-stage classes.
+  bool is_polar_geometry() const { return false; }
+  Real radial_origin() const { return Real(0); }
+  Real radial_spacing() const { return geom().dx(); }
 
   /// The grid context of the CURRENT level (ADC-633): the AMR counterpart of System::grid_context(),
   /// per level. It bundles the transport BC + the level geometry + the live level aux pointer, exactly
@@ -490,17 +495,17 @@ class AmrProgramContext {
   // grid_context() (per level) + assembly_target / assembly_source (write/read redirect), those kernels
   // run the SAME assembly PER LEVEL as direct body calls (they read the level_ cursor live). On a FLAT
   // hierarchy the emitted matrix-free BiCGStab runs on level 0, bit-identical to the uniform Program; on a
-  // REFINED hierarchy the tensor elliptic is solved compositely (AmrCondensedElliptic + CompositeFacPoisson).
+  // REFINED hierarchy the tensor elliptic is solved compositely (AmrTensorElliptic + CompositeFacPoisson).
   // No coupling/schur call remains on any path -- the generated .so carries all scheme kernels.
 
   /// Assembly WRITE redirection (ADC-633). On a REFINED hierarchy each assembled coefficient / RHS / flux
   /// field must live on the CURRENT level, not the level-0-bound emitted scratch: the kernel writes
-  /// THROUGH here into AmrCondensedElliptic's per-level buffer. On a FLAT hierarchy (no fine patch) the
+  /// THROUGH here into AmrTensorElliptic's per-level buffer. On a FLAT hierarchy (no fine patch) the
   /// emitted level-0 field IS the whole system, so this is the identity (byte-for-byte the uniform path --
   /// the flat bit-parity gate). @p role is an AssemblyFieldRole (eps_x / eps_y / a_xy / a_yx / rhs / flux).
   MultiFab& assembly_target(MultiFab& field, int role) const {
     validate_assembly_write_role(role, "AmrProgramContext::assembly_target");
-    AmrCondensedElliptic& s = condensed_elliptic();
+    AmrTensorElliptic& s = tensor_elliptic();
     if (!s.has_fine_patches())
       return field;  // flat / no fine patch: the emitted level-0 field is correct as-is.
     return s.target(role, level_);
@@ -510,7 +515,7 @@ class AmrProgramContext {
   /// patch: identity (returns the emitted solution). @p role is kPhi.
   MultiFab& assembly_source(MultiFab& field, int role) const {
     validate_assembly_read_role(role, "AmrProgramContext::assembly_source");
-    AmrCondensedElliptic& s = condensed_elliptic();
+    AmrTensorElliptic& s = tensor_elliptic();
     if (!s.has_fine_patches())
       return field;
     return s.phi(level_);
@@ -518,29 +523,33 @@ class AmrProgramContext {
   /// Resolve a hierarchy-scoped solve value for the current publish/reconstruct pass.  Flat AMR is
   /// the identity; a refined hierarchy returns the level solution published by the one composite solve.
   MultiFab& linear_solution(MultiFab& field) const {
-    AmrCondensedElliptic& s = condensed_elliptic();
+    AmrTensorElliptic& s = tensor_elliptic();
     return s.has_fine_patches() ? s.phi(level_) : field;
+  }
+  /// Gather the authored initial guess for the current hierarchy level.  The no-argument overload is
+  /// the explicit zero-guess contract; the field overload carries a per-level scalar history such as
+  /// condensed-Schur phi^n.  Emitted only inside the refined gather loop.
+  void stage_linear_initial_guess() const { tensor_elliptic().stage_initial_guess(level_, nullptr); }
+  void stage_linear_initial_guess(const MultiFab& guess) const {
+    tensor_elliptic().stage_initial_guess(level_, &guess);
   }
   /// Solve the matrix-free condensed-implicit linear system A(phi) = rhs on the hierarchy (ADC-633).
   /// FLAT (no fine patch): the SAME matrix-free Krylov call as the uniform Program (identical numerics,
   /// the flat bit-parity path -- the load-bearing acceptance). REFINED (>= one fine patch): drive
-  /// AmrCondensedElliptic::solve_composite (the composite FAC over the tower), which reads the per-level
+  /// AmrTensorElliptic::solve_composite (the composite FAC over the tower), which reads the per-level
   /// coefficients / RHS the emitted assembly already wrote through assembly_target and publishes each
   /// level's potential for assembly_source to read; the emitted @p apply / @p precond are UNUSED on this
   /// branch (the FAC has its own operator). @p method is a LinearSolveMethod id (program_context.hpp).
   ///
-  /// REFINED-HIERARCHY ORDER-EXACTNESS is ADC-648 (documented limitation). The emitted per-level loop
-  /// interleaves assemble / solve / reconstruct per level, while a composite solve wants every level's
-  /// coefficients assembled BEFORE it solves. The composite path is therefore correct for the coarse-only
-  /// / flat layout the Program driver ships (the tested acceptance); a genuinely refined condensed Program
-  /// (a real fine patch under a Program) needs the ADC-648 gather-then-solve (on these same generic ops)
-  /// -- or the native AMR source-stage route -- for a conservative, order-exact result. This branch is
-  /// the composite-solve scaffold, not a bit-exact multilevel driver.
+  /// On a refined hierarchy the generated driver gathers coefficients, RHS and the authored initial
+  /// guess for every level before calling this function once; only a successful SolveReport publishes
+  /// the per-level potentials, after which reconstruction runs over every level and coupling/reflux
+  /// closes the macro-step.
   SolveReport solve_linear_matfree(MultiFab& sol, const MultiFab& rhs, const ApplyFn& apply,
                                    const ApplyFn& precond, int method, Real tol, int max_iter,
-                                   int restart) const {
+                                   int restart, Real omega) const {
     validate_linear_solve_method(method, "AmrProgramContext::solve_linear_matfree");
-    AmrCondensedElliptic& s = condensed_elliptic();
+    AmrTensorElliptic& s = tensor_elliptic();
     if (!s.has_fine_patches()) {
       switch (method) {
         case kLinearSolveCg:
@@ -548,7 +557,7 @@ class AmrProgramContext {
         case kLinearSolveGmres:
           return pops::gmres_solve(apply, precond, sol, rhs, tol, max_iter, restart);
         case kLinearSolveRichardson:
-          return pops::richardson_solve(apply, sol, rhs, static_cast<Real>(1), tol, max_iter);
+          return pops::richardson_solve(apply, sol, rhs, omega, tol, max_iter);
         case kLinearSolveBicgstab:
           return pops::bicgstab_solve(apply, precond, sol, rhs, tol, max_iter);
         default:
@@ -639,12 +648,12 @@ class AmrProgramContext {
   /// The block-0 composite tensor-elliptic driver a condensed-implicit Program routes to on a REFINED
   /// hierarchy (ADC-633). Lazily created (a flat Program never touches it beyond has_fine_patches()).
   /// Held via shared_ptr so a copy of the context (the install closure captures ctx BY VALUE) SHARES
-  /// the same per-Program elliptic driver -- AmrCondensedElliptic owns a unique_ptr (move-only), so a bare
+  /// the same per-Program elliptic driver -- AmrTensorElliptic owns a unique_ptr (move-only), so a bare
   /// value member would delete the context copy constructor the [=] install lambda needs.
-  AmrCondensedElliptic& condensed_elliptic() const {
-    if (!condensed_elliptic_)
-      condensed_elliptic_ = std::make_shared<AmrCondensedElliptic>(eng_, sys_block(0));
-    return *condensed_elliptic_;
+  AmrTensorElliptic& tensor_elliptic() const {
+    if (!tensor_elliptic_)
+      tensor_elliptic_ = std::make_shared<AmrTensorElliptic>(eng_, sys_block(0));
+    return *tensor_elliptic_;
   }
 
   // --- ADC-639 conservative-reflux helpers ---------------------------------------------------------
@@ -803,7 +812,7 @@ class AmrProgramContext {
   mutable int level_ = 0;
   mutable bool solved_this_step_ = false;
   mutable std::optional<GeometricMG> mg_precond_;
-  mutable std::shared_ptr<AmrCondensedElliptic> condensed_elliptic_;
+  mutable std::shared_ptr<AmrTensorElliptic> tensor_elliptic_;
 
   // --- ADC-639 conservative-reflux state -----------------------------------------------------------
   // The effective-flux LEDGER: for each tracked MultiFab (keyed by (level, address)) the interface-strip

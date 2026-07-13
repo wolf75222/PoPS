@@ -17,7 +17,7 @@ from pops.runtime._lifecycle import (
     FROZEN_STRUCTURAL as _FROZEN_STRUCTURAL, freeze_error as _freeze_error,
     guard_assembling as _guard_assembling, _LifecycleMixin)
 from pops.runtime._numeric import native_real
-from pops.runtime.bricks import Spatial, Explicit, Split
+from pops.runtime.bricks import Spatial, Explicit
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
     NEWTON_DEFAULT_DAMPING,
@@ -263,8 +263,6 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
             / implicit_roles) and the Newton options, threaded to the C++. newton_diagnostics is
             wired in native multi-block and rejected at the C++ build in single-block (the coupler does not
             aggregate a report).
-        @throws TypeError if time is an pops.Split / pops.Strang (Schur-condensed source stage) :
-            go through add_equation(..., time=pops.Strang(...)) (amr-schur path).
         spatial.positivity_floor > 0 (ADC-259) floors the Density-role face states AND the
         coarse-fine fine ghost means to >= floor on the AMR transport (Zhang-Shu, parity with the
         uniform System). Guarantee = face / ghost-state Density positivity only (order-1 fallback),
@@ -275,15 +273,6 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         _guard_assembling(self, "add_block")  # frozen once pops.bind completes (ADC-592)
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
-        # pops.Split / pops.Strang (Schur-condensed source stage) is only wired by add_equation (which
-        # connects set_source_stage + set_time_scheme AFTER adding the block) : we reject it HERE rather
-        # than playing only the transport and SILENTLY LOSING the source (same guard as System.add_block).
-        if isinstance(time, Split):
-            raise TypeError(
-                "AmrSystem.add_block : pops.Split / pops.Strang (Schur-condensed source stage) is "
-                "not wired on this native seam. Declare the splitting on the pops.Problem time scheme "
-                "(time=pops.Strang(hyperbolic=pops.Explicit(...), source=pops.CondensedSchur(...))) "
-                "and lower it with pops.compile(...) + pops.bind(...).")
         # positivity_floor (ADC-259) IS now wired on the AMR transport (Density-role face states +
         # C/F fine ghost means). Threaded to AmrSystem::add_block below; the compiled .so path carries
         # it too (ADC-322, regenerated loader). The C++ side rejects it on a model without a Density role.

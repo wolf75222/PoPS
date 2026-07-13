@@ -433,10 +433,10 @@ def _inventory_rows(flags: Any, source: Any) -> list:
         _row("krylov:cg_bicgstab_gmres_richardson", layout="uniform|amr", backend="production",
              platform="host", mpi=mpi, gpu=gpu,
              limitation="matrix-free Krylov over native MultiFab primitives", source=source),
-        _row("schur:condensed_source", layout="uniform|amr", backend="production",
+        _row("program:condensed_implicit_preset", layout="uniform|amr", backend="production",
              platform="host", mpi=mpi, gpu=gpu, status="partial",
-             limitation=("Schur condensation/source kernels are specialised to 2D plus Bz/Lorentz "
-                         "coupling; no generic 3D route"),
+             limitation=("CondensedSchur is a 2D two-component electrostatic-Lorentz preset; the "
+                         "Program solve/provider protocol itself is physics-independent"),
              source=source),
         _row("program_context:system", layout="uniform", backend="production", platform="host",
              mpi=mpi, gpu=gpu, limitation="compiled ProgramContext install on System",

@@ -30,7 +30,7 @@ namespace program {
 
 // The AssemblyFieldRole enum (kEpsX..kPhi, the write/read-redirection wire ids) lives on the always-
 // included facade program_context.hpp so every generated .so sees it, whether or not it pulls THIS header
-// (a condensed-only Program includes block_inverse.hpp, not this). AmrCondensedElliptic::target switches
+// (a condensed-only Program includes block_inverse.hpp, not this). AmrTensorElliptic::target switches
 // on the same ints.
 
 /// out = div(A grad in), A = [[eps_x, a_xy], [a_yx, eps_y]] -- the coefficiented matrix-free matvec of a

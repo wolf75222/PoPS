@@ -16,7 +16,7 @@ Classic Runge-Kutta:
     rk4, rk, explicit_rk, ButcherTableau, RK4_TABLEAU, SSPRK2_TABLEAU
 
 Splitting:
-    strang, lie, condensed_schur
+    strang, lie, CondensedSchur
 
 IMEX:
     imex_local, imex_local_linear
@@ -34,7 +34,7 @@ catch-all bundle). Call e.g. ``pops.lib.time.ssprk3`` / ``pops.lib.time.strang``
 from .euler import forward_euler
 from .ssprk import SSPRK2, SSPRK3_TABLEAU, ssprk3
 from .rk import rk4, rk, explicit_rk, ButcherTableau, RK4_TABLEAU, SSPRK2_TABLEAU
-from .strang import strang, lie, condensed_schur
+from .strang import strang, lie, CondensedSchur
 from .imex import IMEX_EULER_TABLEAU, ark_local_linear, imex_local, imex_local_linear
 from .multistep import adams_bashforth, adams_bashforth2, bdf
 from .predictor_corrector import predictor_corrector_local_linear
@@ -56,7 +56,7 @@ __all__ = [
     # Splitting
     "strang",
     "lie",
-    "condensed_schur",
+    "CondensedSchur",
     # IMEX
     "imex_local",
     "imex_local_linear",

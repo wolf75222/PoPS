@@ -48,8 +48,7 @@ def chk(cond, label):
 
 
 def iso_model(cs2=1.0, alpha=3.0, n0=1.0):
-    """Fluide isotherme NATIF (briques natives, aucun compilateur C++ : CI-safe, meme chemin que
-    test_schur_conservation.py). Roles Density / MomentumX / MomentumY (3 var)."""
+    """Fluide isotherme natif, sans compilation C++; roles Density/MomentumX/MomentumY."""
     return pops.Model(
         state=pops.FluidState(kind="isothermal", cs2=cs2),
         transport=pops.IsothermalFlux(),

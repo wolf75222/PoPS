@@ -138,7 +138,7 @@ class MagneticLorentzForce:
     unchanged). Reads B_z from the aux channel (canonical component 3): call
     ``sim.set_magnetic_field(Bz)`` to populate it. Requires a fluid transport >= 3 variables (momentum
     on 2 axes); rejected on a scalar. The STIFF regime (large omega_c) goes through the condensed stage
-    pops.CondensedSchur (Schur), NOT through this explicit brick.
+    pops.lib.time.CondensedSchur, NOT through this explicit brick.
 
     ``charge`` = q/m, sign included (same convention as PotentialForce)."""
 

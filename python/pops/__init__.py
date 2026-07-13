@@ -43,8 +43,7 @@ from pops.runtime.bricks import (  # noqa: F401
     ChargeDensitySource, ElectricFieldFromPotential, EllipticModel, div_eps_grad, charge_density,
     composite_rhs, electric_field_from_potential, elliptic, EllipticSolver, Ionization, Collision,
     ThermalExchange, Spatial, FiniteVolume, Explicit, _role_to_stable, _norm_implicit, IMEX,
-    SourceImplicit, SourceImplicitBE, IMEXRK, Role, CondensedSchur, ElectrostaticLorentzSchur,
-    Split, Strang, Dirichlet, Neumann, Periodic,
+    SourceImplicit, SourceImplicitBE, IMEXRK, Role, Dirichlet, Neumann, Periodic,
 )
 __all__ = [
     "Model", "CompositeModel", "CartesianMesh", "PolarMesh", "AuxHalo",
@@ -52,7 +51,7 @@ __all__ = [
     "NoSource", "PotentialForce", "GravityForce", "MagneticLorentzForce", "PotentialMagneticForce",
     "ChargeDensity", "BackgroundDensity", "GravityCoupling",
     "Spatial", "FiniteVolume", "Explicit", "IMEX", "IMEXRK", "SourceImplicit", "SourceImplicitBE",
-    "Split", "Strang", "CondensedSchur", "ElectrostaticLorentzSchur", "Role", "integrate",
+    "Role", "integrate",
     "Dirichlet", "Neumann", "Periodic",
     "elliptic", "div_eps_grad", "charge_density", "composite_rhs",
     "electric_field_from_potential", "EllipticSolver", "EllipticModel",

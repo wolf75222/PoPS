@@ -77,7 +77,7 @@ def test_condensed_program_includes_block_inverse_and_no_schur():
     model = _lorentz_model("cs_model")
     P = pops_time.Program("cs").bind_operators(model)
     block, state = state_refs(P, "blk", model=model)
-    pops_lib_time.condensed_schur(
+    pops_lib_time.CondensedSchur(
         P, block, state, alpha=1.0, theta=1.0,
         linear_operator=_linear_handle(model))
     src = P.emit_cpp_program(model=model)

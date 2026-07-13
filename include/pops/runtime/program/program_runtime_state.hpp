@@ -122,7 +122,7 @@ struct ProgramRuntimeState {
   /// program_.step_(h) call (run_program_cadence, shared by step() and step_cfl()), so the runtime's
   /// store_history can tag the slot it produces with the dt that produced it (HistoryManager::slot_dt).
   /// A plain data field only assigned by the template (never a new method it instantiates) -> the mock
-  /// System (test_strang_splitting) compiles unchanged. Default 0 -> no program stepped yet.
+  /// System. Default 0 -> no program stepped yet.
   Real last_dt_ = Real(0);
 
   // --- checkpoint / binding identity ---------------------------------------------------------------

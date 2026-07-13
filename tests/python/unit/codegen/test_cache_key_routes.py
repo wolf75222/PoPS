@@ -36,15 +36,15 @@ from pops.codegen._inspect_compiled_report import _route_registry_components  # 
 from pops.physics.facade import Model  # noqa: E402
 from pops.runtime import routes  # noqa: E402
 
-# The 14 route families in registry order with their acceptance-locked cardinalities (mirror of
+# The 12 route families in registry order with their acceptance-locked cardinalities (mirror of
 # route_ids.hpp; the sibling C++ test locks the two). A new route is an additive change, but the
 # per-family COUNT is the shape the compact signature advertises to a stale artifact.
 _FAMILY_COUNTS = (
     # riemann grew to 6 with the explicit euler_hllc / euler_roe routes (ADC-590); the registry
     # hash changing is the expected artifact-cache re-key (ADC-599).
-    ("riemann", 6), ("limiter", 4), ("recon", 2), ("time", 5), ("splitting", 2),
+    ("riemann", 6), ("limiter", 4), ("recon", 2), ("time", 5),
     ("field_solver", 4), ("poisson_bc", 4), ("layout", 2), ("transport", 3), ("source", 5),
-    ("elliptic", 3), ("source_stage", 1), ("poisson_rhs", 2), ("wall", 2),
+    ("elliptic", 3), ("poisson_rhs", 2), ("wall", 2),
 )
 
 

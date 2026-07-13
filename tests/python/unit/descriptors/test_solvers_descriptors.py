@@ -504,18 +504,6 @@ def test_krylov_descriptor_controls_preserve_exact_number_domains():
         krylov.Richardson(max_iter=10, omega=annotated)
 
 
-def test_condensed_schur_precond_knobs():
-    # ADC-645: n_precond_vcycles in {1, 2}; polar_precond in {radial_line, jacobi}; defaults 0/"".
-    cs = pops.CondensedSchur()
-    assert cs.n_precond_vcycles == 0 and cs.polar_precond == ""
-    cs2 = pops.CondensedSchur(n_precond_vcycles=2, polar_precond="jacobi")
-    assert cs2.n_precond_vcycles == 2 and cs2.polar_precond == "jacobi"
-    with pytest.raises(ValueError, match="n_precond_vcycles"):
-        pops.CondensedSchur(n_precond_vcycles=3)
-    with pytest.raises(ValueError, match="polar_precond"):
-        pops.CondensedSchur(polar_precond="bogus")
-
-
 def test_weno5_epsilon_descriptor():
     from pops.numerics.reconstruction import reconstruction
     # Default: no epsilon option (omit-when-default; the native kWenoEpsilon literal governs).

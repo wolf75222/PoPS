@@ -617,10 +617,10 @@ function strang_step(U, dt, T, S):
 `strang_step(...)`. Both are templated on `TransportStep` / `SourceStep`: $T$ and $S$ are
 callables `(MultiFab&, Real) -> void` that advance their subsystem in place, so the integrator is
 agnostic of the physical content (in-house counterpart of `StrangSplitting` / `FractionalTime2OSplitting` of
-muffin). The production orchestrator exposes them via `SplitScheme::Lie` / `Strang`
-(`runtime/system_stepper.hpp`: `SystemStepper::step` for Lie, `step_strang` for Strang, #217), where
-the transport phase and the source phase (explicit, IMEX, or Schur-condensed stage, sections 5 and 13)
-are symmetrized at $\Delta t/2$ around the central transport.
+muffin). The public production path authors the same composition explicitly through
+`pops.lib.time.lie(...)` or `pops.lib.time.strang(...)` inside a `pops.Program`. `SystemStepper` does
+not select a native split scheme: each subflow, field solve and endpoint is visible in the Program IR,
+and presets are ordinary IR-building functions rather than privileged runtime branches.
 
 **Constraints / remarks.** Strang gives order 2 only if each sub-step is itself at least
 order 2: an order-1 $S$ or $T$ caps the splitting at order 1, whatever the symmetrization. In a
@@ -629,11 +629,9 @@ otherwise the second half-step $S(\Delta t/2)$ reads a stale $\phi$ (the field o
 order 2 falls (see the solve call count in the validation). The step $\Delta t$ stays subject to
 the CFL of the transport $T$; the splitting does not relax this constraint, it only decouples the
 stiffnesses so a stiff source can be treated implicitly (IMEX / Schur) without imposing its own
-tiny $\Delta t$ on the transport. Validation: `test_splitting` measures the order of the bricks
-`lie_step` / `strang_step` on a non-commuting linear 2x2 system whose exact flow is known (Lie
-order 1, Strang order 2 read off the slope). `test_strang_splitting` redoes the same order measurement on the
-real orchestrator (`SystemStepper::step` vs `step_strang`), plus a count of the calls to the elliptic
-solve that locks the $\phi$ consistency. On the Python side: `test_strang_split`.
+tiny $\Delta t$ on the transport. Validation: `test_splitting` measures the order of the C++
+composition bricks on a non-commuting linear system, while the Program macro tests verify the authored
+Lie/Strang endpoints and explicit field-solve placement.
 
 
 ---
@@ -709,7 +707,6 @@ function step_cfl(cfl):                           # SystemDriver, choix du macro
         if (macro_step+1) mod stride_b != 0: continue   # hold ; sinon rattrapage
         eff_dt = dt * stride_b
         advance_transport(b, eff_dt)              # substeps_b sous-pas internes
-        run_source_stage(b, eff_dt)               # etage source Schur opt-in (no-op sinon)
     apply_couplings(dt); t += dt; macro_step += 1
     return dt
 
@@ -724,7 +721,6 @@ function step_adaptive(cfl):                       # macro-pas = pas du bloc le 
         n      = max(1, ceil(stride_b * w_b / w_min))   # sous-cycles pour rester stable
         eff_dt = macro_dt * stride_b
         advance_transport_n(b, eff_dt, n)
-        run_source_stage(b, eff_dt)
     apply_couplings(macro_dt); t += macro_dt; macro_step += 1
     return macro_dt
 ```
@@ -1119,7 +1115,7 @@ function apply_precond(in):                   # M^{-1} a CL homogenes
 
 Validation: `test_krylov_solver`. Case (A) on the canonical Laplacian ($A_{xy} = A_{yx} = 0$, $A = I$, $\kappa = 0$), BiCGStab converges to the same solution as `GeometricMG` at the tolerance. Case (B) on an operator with non-trivial cross terms, BiCGStab converges where the MG V-cycle alone stagnates ($c = 0.1$ to $0.4$) or diverges ($c = 0.7$). Under MPI, the iteration count and the convergence are invariant to the number of ranks (stopping criterion reduced by `all_reduce`).
 
-## 13. Condensed implicit source: Schur condensation
+## 13. Condensed implicit Program preset
 
 **Intuition.** A stiff source that couples potential, velocity and Lorentz force (diocotron at high $\omega_c$) cannot be treated component by component: the cyclotron rotation couples the two velocity components, and the potential reacts to the charge displacement. We theta-discretize the implicit source, eliminate the velocity algebraically via the closed inverse $B^{-1}$ of the 2x2 rotation, which leaves only an elliptic on the potential $\phi^{n+\theta}$ alone (Schur complement), then reconstruct the velocity.
 
@@ -1145,44 +1141,44 @@ $$\mathrm{div} F(i,j) = \frac{F_x(i{+}1,j) - F_x(i{-}1,j)}{2\,dx} + \frac{F_y(i,
 
 The condensed operator is in general full-tensor (hence the Krylov solver, section 12). Sign convention of the solve: `TensorKrylovSolver` solves $L_{\mathrm{int}} = +\mathrm{div}(A\nabla\phi)$, so $L_{\mathrm{schur}} = -L_{\mathrm{int}}$ and the stage passes $\mathrm{rhs}_{\mathrm{kry}} = -\mathrm{rhs}_{\mathrm{schur}}$ to the solver. After resolution, the velocity is reconstructed by $v^{n+\theta} = B^{-1}(v^n - \theta\, dt\,\nabla\phi^{n+\theta})$ (centered gradient, consistent with the RHS divergence), then extrapolated from the theta-stage to the full step by $U^{n+1} = U^n + \tfrac{1}{\theta}(U^{n+\theta} - U^n)$. The energy, if the Energy role is present, is updated only by the kinetic energy increment $E^{n+1} = E^n + \tfrac{1}{2}\rho^n(|v^{n+1}|^2 - |v^n|^2)$, the Lorentz rotation doing no work and $\rho$ being frozen.
 
-```
-function CondensedSchurSourceStepper.step(state, phi, bz_field, c_bz, theta, dt):
-    # -1) figer phi^n pour l'extrapolation finale
-    phi_n <- copy(phi)
-    # 0) extraire v^n = (mx, my)/rho ; copier B_z dans le tampon interne (1 ghost)
-    for each cell: vx_n, vy_n <- ExtractVelocity(state) ; bz <- CopyBz(bz_field, c_bz)
-    fill_ghosts(bz, foextrap)
-    # 1) assembler (builder #124) :  A_op = I + c rho B^{-1},  rhs_schur = -Lap phi^n - theta dt alpha div(rho B^{-1} v^n)
-    builder <- ElectrostaticLorentzCondensation(vars, alpha, theta, dt)   # c = theta^2 dt^2 alpha
-    builder.assemble_operator(state, bz -> eps_x, eps_y, a_xy, a_yx)
-    builder.assemble_rhs(phi, state, bz -> rhs_schur)
-    # 2) resoudre par BiCGStab :  L_int(phi) = -rhs_schur  (convention de signe)
-    op.set_epsilon_anisotropic(eps_x, eps_y) ; op.set_cross_terms(a_xy, a_yx)     # operateur plein
-    precond.set_epsilon_anisotropic(eps_x, eps_y)                                  # partie symetrique
-    op.phi <- phi (warm start)  ;  op.rhs <- -rhs_schur
-    last_result <- TensorKrylovSolver(op, precond, N).solve(1e-10, 400)
-    phi <- op.phi                                                                  # phi^{n+theta}
-    # 3) reconstruire la vitesse
-    fill_ghosts(phi, bcPhi)
-    for each cell:
-        g <- grad_centre(phi)                                  # (d_x phi, d_y phi)
-        rhs_v <- v_n - theta*dt * g
-        v_theta <- B^{-1}(rhs_v)  with  w = theta*dt*bz        # LorentzEliminator.apply_Binv
-        state.mom <- rho^n * v_theta                           # rho gelee
-    # 5) extrapoler theta-stage -> pas plein :  f^{n+1} = f^n + (1/theta)(f^{n+theta} - f^n)
-    phi <- phi_n + (1/theta)(phi - phi_n)
-    v   <- v_n   + (1/theta)(v_theta - v_n) ;  state.mom <- rho^n * v
-    # 4) energie (si role Energy present)
-    if has_energy: state.E <- state.E + 0.5 * rho^n * (|v^{n+1}|^2 - |v^n|^2)
-    # 6) publier : ghosts de l'etat et du potentiel (halos MPI / CL physiques)
-    device_fence() ; fill_ghosts(state, foextrap) ; fill_ghosts(phi, bcPhi)
+```python
+T = pops.Program("condensed_source").bind_operators(model)
+q = T.state(block, state)
+
+pops.lib.time.CondensedSchur(
+    T,
+    block,
+    state,
+    alpha=alpha,
+    theta=theta,
+    linear_operator=lorentz_linearization,
+    method=pops.solvers.krylov.BiCGStab(max_iter=400),
+    tol=1e-10,
+)
 ```
 
-**Code.** [`numerics/lorentz_eliminator.hpp`](../include/pops/numerics/linalg/lorentz_eliminator.hpp): POD struct `LorentzEliminator(theta, dt, B_z)`, methods `apply_B`/`apply_Binv`, accessors `binv_11..binv_22`; trivially copyable (static_assert), capturable by value in a kernel. [`coupling/schur_condensation.hpp`](../include/pops/coupling/schur/core/schur_condensation.hpp) builds the operator and the RHS without solving nor reconstructing: class `ElectrostaticLorentzCondensation`, methods `assemble_operator` (functor `SchurOperatorCoeffKernel`), `assemble_rhs` (functors `SchurExplicitFluxKernel`, `SchurRhsAssembleKernel`, `NegateKernel`), `assemble` (into a `SchurCondensationOperator`), accessor `c_coeff()`; the Density/MomentumX/MomentumY roles contract is validated on the host (exception otherwise). [`coupling/condensed_schur_source_stepper.hpp`](../include/pops/coupling/schur/source/condensed_schur_source_stepper.hpp): class `CondensedSchurSourceStepper`, method `step` which composes the three bricks (assembler #124, `TensorKrylovSolver` #122, `LorentzEliminator` #118), functors `SchurReconstructKernel`, `SchurExtrapolateScalarKernel`, `SchurExtrapolateVelocityKernel`, `SchurEnergyKernel`, `ExtractVelocityKernel`, `CopyBzKernel`, diagnostic `last_solve()`. This is the production source stage (#126), opt-in via `pops.Split(source=CondensedSchur)`.
+The preset authors ordinary Program IR: tensor-coefficient assembly, metric-aware right-hand side,
+one typed matrix-free solve, reconstruction, optional theta extrapolation and optional energy update.
+The generated C++ always calls `ctx.solve_linear_matfree`; `ProgramContext` selects the uniform
+Cartesian or polar provider, while `AmrProgramContext` selects the flat or composite hierarchy
+provider. The authored local-linear operator supplies $B^{-1}$; no physics-specific source-stage
+stepper, descriptor or System setter exists.
 
-**Constraints / remarks.** Stability: the theta-scheme is unconditionally stable for $\theta \geq 1/2$ ($\theta = 1$ pure implicit, the extrapolation is the identity; $\theta = 1/2$ Crank-Nicolson, extrapolation factor 2). The centered order-2 discretization (5-point Laplacian, centered divergence and gradient) fixes the spatial order. This is the source stage alone (transport frozen): $\rho$ is constant in the stage, $\rho^{n+1} = \rho^n$, and all the transport dynamics stays in the hyperbolic stage of the splitting. Safeguard: $c = 0$ and $B_z = 0$ give $A = I$, the solve becomes $\Delta\phi^{n+\theta} = \Delta\phi^n$ so $\phi^{n+\theta} = \phi^n$ (up to a constant), and the reconstruction degenerates into the explicit electrostatic push $v^{n+\theta} = v^n - \theta\, dt\,\nabla\phi^n$. The tolerance of the internal solve ($10^{-10}$, 400 iterations max) bounds the precision of the implicit relation $B v = v^n - \theta\, dt\,\nabla\phi$ (verified term by term). Device/MPI: all kernels are device-clean named functors (no extended cross-TU lambda, nvcc limit #64/#97); the MultiFab buffers are allocated once at construction and reused at each `step`; the loops iterate over `local_size()` (a rank without a box -> no kernel) and the Krylov solve is collective, so MPI-clean.
+**Code.** The preset is
+[`python/pops/lib/time/strang.py`](../python/pops/lib/time/strang.py) (`CondensedSchur`). Its generic
+assembly/reconstruction lowering is in
+[`python/pops/codegen/program_emit_condensed.py`](../python/pops/codegen/program_emit_condensed.py),
+the linear-solve protocol in
+[`python/pops/codegen/program_emit_solve.py`](../python/pops/codegen/program_emit_solve.py), and the
+runtime providers in
+[`include/pops/runtime/program/program_context.hpp`](../include/pops/runtime/program/program_context.hpp),
+[`include/pops/runtime/program/amr_program_context.hpp`](../include/pops/runtime/program/amr_program_context.hpp),
+and [`include/pops/runtime/amr/amr_tensor_elliptic.hpp`](../include/pops/runtime/amr/amr_tensor_elliptic.hpp).
 
-Validation: `test_schur_condensation` (condensed operator and RHS correct, including the C2 safeguard of the degenerate case) and `test_condensed_schur_source_stepper` (the source stage advances correctly). On the Python side: `test_schur_split`, `test_schur_via_system`, `test_schur_conservation`.
+**Constraints / remarks.** Stability: the theta-scheme is unconditionally stable for $\theta \geq 1/2$ ($\theta = 1$ pure implicit, the extrapolation is the identity; $\theta = 1/2$ Crank-Nicolson, extrapolation factor 2). The centered order-2 discretization fixes the Cartesian spatial order; polar emission uses the corresponding $1/r$ metric factors. The condensed sub-flow freezes $\rho$ and is composed explicitly with transport by `pops.lib.time.strang` or `lie`. Safeguard: $c = 0$ and $B_z = 0$ give $A = I$. The solver tolerance and iteration budget are authored controls, never hidden defaults in a native stage.
+
+Validation: `test_time_condensed_schur`, `test_condensed_generic_parity`,
+`test_amr_schur_solve_linear_emit`, `test_amr_clean_route_program`, and the polar tensor MPI suite.
 
 
 ---
@@ -1445,7 +1441,7 @@ concept `PolarEllipticSolver` `rhs()/phi()/solve()/residual()/geom()`). The aux 
 basis $(e_r, e_\theta)$: `aux[1] = d phi/dr`, `aux[2] = (1/r) d phi/d theta`
 (`block_builder_polar.hpp`, `System::solve_fields_polar`).
 
-**Polar tensor operator + polar Schur.** When the coupled implicit source goes polar (diocotron at
+**Polar tensor operator + generated condensed Program.** When the coupled implicit source goes polar (diocotron at
 high $\omega_c$), the Schur condenses a full tensor operator
 $A = I + c\,\rho\, B^{-1}$ with cross terms $a_{rt}, a_{tr}$ and a theta-dependent coefficient: the
 FFT-in-theta of `PolarPoissonSolver` no longer applies (it requires a constant theta coefficient
@@ -1456,10 +1452,10 @@ then solves by matrix-free BiCGStab (handles the non-symmetric of the cross term
 $1/r^2$). Singular operator (pure radial Neumann + periodic theta): gauge fixed by projection onto
 the subspace of zero FV mean (`project_mean`, the iterative counterpart of the mode-0 pinning). The
 9-point stencil reads the diagonal corners filled by `fill_ghosts` (without which the cross term would be wrong at the
-box boundary). `coupling/polar_condensed_schur_source_stepper.hpp::PolarCondensedSchurSourceStepper` is
-the polar counterpart of `CondensedSchurSourceStepper` (#212). Multi-rank MPI / multi-box by azimuthal
-splitting only under `RadialLine` (the Thomas sweep in r must stay local to a box, safeguard
-`check_radial_columns`), free 2D tiling under `Jacobi`; polar Schur raised under MPI (#227).
+box boundary). The same `pops.lib.time.CondensedSchur` IR is emitted with polar divergence and gradient
+metrics, then `ProgramContext::solve_linear_matfree` selects `PolarTensorKrylovSolver`. Multi-rank MPI /
+multi-box is supported by azimuthal splitting under `RadialLine` (the Thomas sweep in r must stay local
+to a box, safeguard `check_radial_columns`) and free 2D tiling under `Jacobi`.
 
 **Constraints / remarks.** PolarPoissonSolver: single-rank scope, single box covering the ring
 (the FFT-in-theta + tridiag-in-r requires the complete theta line AND the radial column on one rank; the
@@ -1477,7 +1473,7 @@ Validation: `test_polar_transport_mms` / `test_polar_mms_vr` (polar transport MM
 `test_polar_ring_advection`, `test_polar_fluid_transport`, `test_polar_lorentz_source`,
 `test_polar_conservation_radial_flux` (radial wall, mass conserved), `test_polar_poisson_mms`
 (PolarPoissonSolver, radial order 2), `test_polar_tensor_elliptic_mms` (polar tensor operator),
-`test_polar_condensed_schur_source_stepper`, `test_mpi_polar_schur` (polar Schur multi-rank).
+`test_time_condensed_schur` (preset Program) and `test_mpi_polar_schur` (polar tensor solve multi-rank).
 `test_polar_system_step` validates the full polar `System::step` path (field-solve + aux in the local
 basis + SSPRK3 transport + wall). On the Python side: `test_polar_system`, `test_polar_diocotron`,
 `test_polar_rejections`, `test_polar_schur_via_system`, `test_polar_conservation_radial_flux`,
@@ -2131,12 +2127,12 @@ of this page. The goal is not to present a partial capability as complete.
 - GaussPolicy restart/evolve. An experimental policy (re-imposing Gauss at each step, or keeping the
   `phi` evolved by Schur) on a branch (PR #237); the associated experiment is discarded. Not on
   `master`.
-- Global Schur on AMR. The Schur-condensed source step (section 13) IS implemented on AMR: a
-  mono-block coarse stage plus a composite multi-level path (FAC on coarse + fine, velocity
-  reconstruction per level, then the average_down cascade) for 2 levels + 1..N disjoint, NON-adjacent
-  fine patches + a replicated mono-block coarse (mono-rank); this is Phase 4a. The remaining gap
-  (Phase 4b) is adjacent patches / fine-fine join, > 2 levels, MPI, or multi-block, which `step()`
-  refuses explicitly. Cf. `pops.capabilities()['schur']['amr']`.
+- Condensed implicit Program on AMR. `pops.lib.time.CondensedSchur` gathers coefficients, RHS and the
+  authored initial guess on every level, performs one composite solve, then reconstructs every level.
+  The current `AmrTensorElliptic` provider accepts nested ratio-2 hierarchies with a replicated
+  mono-box coarse level on one MPI rank. Its FAC backend supports equal tensor diagonals plus cross
+  terms; unequal `eps_x`/`eps_y`, multilevel MPI and multi-block Program scope return an explicit
+  capability failure. The Program solve/provider protocol itself is not tied to these limitations.
 - Distributed FFT under System. `DistributedFFTSolver` (section 10) exists and is tested separately, but
   `System` under MPI np > 1 refuses the FFT cleanly (no automatic routing); use the
   geometric multigrid.
@@ -2144,7 +2140,7 @@ of this page. The goal is not to present a partial capability as complete.
   mono-box. The polar tensor/Krylov path (polar Schur) lifts this limit on its perimeter.
 - Cut-cell and Hoffart fidelity. The cut-cell (sections 14, 15) is a numerical capability of the core; it
   is not presented as a proven correction of the growth rates of the Hoffart benchmark.
-- Energy under Schur. The Schur step (section 13) adjusts the kinetic energy if an `Energy` role is
+- Energy under condensed implicit integration. The preset in section 13 adjusts kinetic energy if an `Energy` role is
   declared; the isothermal case does not use the energy equation.
 
 ---

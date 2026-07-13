@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from pops._bootstrap import ModelSpec
 from pops.runtime._numeric import native_real, positive_int
-from pops.runtime.bricks import Spatial, Explicit, Split
+from pops.runtime.bricks import Spatial, Explicit
 from pops.runtime.routes import check_riemann_capability as _check_riemann_capability
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
@@ -114,52 +114,6 @@ class _AmrSystemEquation(_AmrSystem):
         # amr-schur transport (the recursive add_equation on time.hyperbolic). The COMPILED .so path
         # carries it too now (ADC-322): the regenerated loader marshals it (pops_install_native_amr),
         # so the CompiledModel branch below forwards it to add_native_block instead of rejecting it.
-
-        # --- pops.Split (Lie) / pops.Strang (2nd order): amr-schur PATH (GLOBAL condensed source stage) --
-        # During AMR of System.add_equation (cf. ~line 925): we first add the block with its single
-        # explicit HYPERBOLIC stage (SOURCE-FREE transport; the model must carry a NoSource source
-        # brick), THEN we attach the condensed SOURCE stage (set_source_stage, C++) and the splitting
-        # policy (set_time_scheme: "lie" for Split, "strang" for Strang). The condensed stage is
-        # GLOBAL (assembles/solves the electrostatic/Lorentz operator on the coarse grid, composing
-        # the uniform stage), as opposed to the LOCAL cell-by-cell IMEX source of time=pops.IMEX.
-        # PREREQUISITE: call sim.set_magnetic_field(B_z) BEFORE the 1st step (the Lorentz term reads
-        # Omega = B_z); otherwise a clear error at build. MONO-BLOCK only (set_source_stage raises otherwise).
-        if isinstance(time, Split):
-            self.add_equation(name, model, spatial=spatial, time=time.hyperbolic, substeps=substeps)
-            src = time.source
-            # Settings TRANSPORTED by the amr-schur path since wave 3 (System parity):
-            # coarse-solve Krylov tolerances + field descriptors (stable role or variable name,
-            # resolved at build against the concrete Model). magnetic_field stays pinned to
-            # the dedicated coarse B_z buffer (amr_write_coarse_bz): another aux field has no
-            # AMR counterpart -> explicit rejection (no silent ignore).
-            if getattr(src, "bz_aux_component", -1) >= 0:
-                raise ValueError(
-                    "AmrSystem.add_equation: magnetic_field != 'B_z' is not transported by the "
-                    "amr-schur path (the AMR stage reads the dedicated coarse B_z buffer). Keep "
-                    "magnetic_field='B_z', or declare layout=Uniform(...) on the pops.Problem "
-                    "(the mono-level route carries a general magnetic aux field).")
-            self._s.set_source_stage(
-                name, src.kind,
-                native_real(src.theta, where="AmrSystem.add_equation.theta"),
-                native_real(src.alpha, where="AmrSystem.add_equation.alpha"),
-                native_real(getattr(src, "krylov_tol", 0.0),
-                            where="AmrSystem.add_equation.krylov_tol"),
-                                     getattr(src, "krylov_max_iters", 0),
-                                     getattr(src, "density_spec", ""),
-                                     getattr(src, "momentum_x_spec", ""),
-                                     getattr(src, "momentum_y_spec", ""),
-                                     getattr(src, "energy_spec", ""),
-                                     # ADC-614: composite-FAC knobs of the multi-level Schur solve.
-                                     getattr(src, "fac_max_iters", 0),
-                                     getattr(src, "fac_fine_sweeps", 0),
-                                     native_real(getattr(src, "fac_tol", 0.0),
-                                                 where="AmrSystem.add_equation.fac_tol"),
-                                     native_real(getattr(src, "fac_coarse_rel_tol", 0.0),
-                                                 where="AmrSystem.add_equation.fac_coarse_rel_tol"),
-                                     getattr(src, "fac_coarse_cycles", 0),
-                                     getattr(src, "fac_verbose", False))
-            self._s.set_time_scheme(time.scheme)  # "lie" (Split) or "strang" (Strang)
-            return
 
         nsub = positive_int(
             substeps if substeps is not None else getattr(time, "substeps", 1),

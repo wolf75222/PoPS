@@ -1,6 +1,5 @@
 #pragma once
 
-#include <pops/coupling/schur/amr/amr_condensed_schur_source_stepper.hpp>  // GLOBAL condensed source stage (amr-schur)
 #include <pops/coupling/amr/amr_coupler_mp.hpp>                      // AmrCouplerMP, AmrLevelMP
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
@@ -82,39 +81,6 @@ void apply_pointwise_project_amr(const Model& m, std::vector<AmrLevelMP>& levels
   }
 }
 
-/// Fills the COARSE B_z field (component 0, n*n row-major in GLOBAL indices) from @p field.
-/// Scalar counterpart of coupler_write_coarse (identical box traversal, replicated mono-box AND
-/// distributed multi-box): B_z is required by the Schur-condensed source stage (Lorentz term).
-inline void amr_write_coarse_bz(MultiFab& bz, const std::vector<double>& field, int n) {
-  if (static_cast<int>(field.size()) != n * n)
-    throw std::runtime_error(
-        "AMR amr-schur: B_z field of size != n*n (call set_magnetic_field before the first step)");
-  device_fence();
-  for (int li = 0; li < bz.local_size(); ++li) {
-    Array4 b = bz.fab(li).array();
-    const Box2D v = bz.box(li);
-    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-      for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-        b(i, j, 0) = field[static_cast<std::size_t>(j) * n + i];
-  }
-}
-
-/// A GLOBAL condensed source STAGE on the mono-block coupler hierarchy. Seeds the warm-start phi^n
-/// (= aux0 component 0, i.e. the coarse Poisson solve of the last update()), then runs the
-/// condensed stage (AmrCondensedSchurSourceStepper) which assembles/solves its OWN condensed operator on
-/// the coarse grid and reconstructs the velocity (rho frozen, mom/E updated). In mono-level (no fine patch)
-/// this is bit-for-bit the uniform stage #126.
-template <class Coupler>
-void amr_schur_source(Coupler& cpl, AmrCondensedSchurSourceStepper& schur, MultiFab& bz_coarse,
-                      MultiFab& phi_coarse, double theta, double dt) {
-  device_fence();
-  for (int li = 0; li < phi_coarse.local_size(); ++li)
-    for_each_cell(phi_coarse.box(li),
-                  CopyComp0Kernel{phi_coarse.fab(li).array(), cpl.aux0().fab(li).const_array()});
-  schur.step(cpl.levels(), phi_coarse, bz_coarse, /*c_bz=*/0, static_cast<Real>(theta),
-             static_cast<Real>(dt));
-}
-
 /// Builds the AMR coupler for a composite Model + concrete (Limiter, Flux) and fills the type-erased
 /// hooks. Two levels: coarse + one central seed fine patch, reshaped by the regrid. This is the header
 /// counterpart of AmrSystem::Impl::build, instantiated from the calling TU on the Model type. The
@@ -140,21 +106,15 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
   Uc.set_val(Real(0));
   std::vector<AmrLevelMP> levels;
   levels.push_back({std::move(Uc), nullptr, dxc, dxc});
-  // Level 1 (central seed fine patch, reshaped by the regrid): allocated ONLY on the explicit/imex path
-  // AND when refinement is actually configured (set_refinement was called -> refine_threshold below its
-  // 1e30 "no refinement" sentinel). Two reasons to gate it:
-  //   - amr-schur (Step 2/3) runs MONO-LEVEL: the condensed source stage does not yet carry the multi-level
-  //     case (cf. AmrCondensedSchurSourceStepper, guard on the number of fine patches), so a seed would trip
-  //     that guard at the first step. Multi-level amr-schur (fine reconstruction + cascade + composite
-  //     Schur/Poisson) is Step 4.
-  //   - NO refinement (ADC-324): with the 1e30 sentinel the build-time regrid below (cpl->regrid(crit)) tags
+  // Level 1 (central seed fine patch, reshaped by the regrid) is allocated when refinement is configured.
+  // With the 1e30 sentinel the build-time regrid below (cpl->regrid(crit)) tags
   //     nothing and amr_regrid_finest is a deliberate no-op on zero tags, so the seed would NEVER be reshaped
   //     or removed -- it would persist as a SINGLE un-chopped fine box on the coarse dmap (box 0 -> rank 0),
   //     dead weight that starves MPI strong-scaling (rank 0 carries its coarse boxes PLUS the whole fine
-  //     patch). Gating on refine_threshold keeps the no-refinement hierarchy MONO-LEVEL (n_patches()==0, like
-  //     the amr-schur path), so the coarse distributes cleanly. When refinement IS configured the seed is
+  //     patch). Gating on refine_threshold keeps the no-refinement hierarchy MONO-LEVEL, so the coarse
+  //     distributes cleanly. When refinement IS configured the seed is
   //     allocated and the first build regrid chops + distributes it round-robin exactly as before (UNCHANGED).
-  if (!bp.schur.enabled && bp.regrid.threshold < kAmrRefinementDisabledThreshold) {
+  if (bp.regrid.threshold < kAmrRefinementDisabledThreshold) {
     const int I0 = bp.mesh.n / 4, I1 = 3 * bp.mesh.n / 4 - 1, J0 = bp.mesh.n / 4,
               J1 = 3 * bp.mesh.n / 4 - 1;
     Box2D fb{{2 * I0, 2 * J0}, {2 * I1 + 1, 2 * J1 + 1}};
@@ -268,129 +228,6 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
     return rp;
   };
   auto step_state = std::make_shared<int>(0);  // step counter shared by the closure
-  if (bp.schur.enabled) {
-    // amr-schur PATH: GLOBAL condensed source stage (electrostatic/Lorentz) instead of the LOCAL
-    // explicit/imex source. The stage is built on the COARSE grid by COMPOSING the uniform stage #126
-    // (Density/MomentumX/MomentumY roles of the Model -> clear error HERE if missing). Coarse B_z required
-    // (set_magnetic_field). The model must be SOURCE-FREE (NoSource source brick): advance_transport
-    // then runs NO source (the source is the condensed stage alone), mirror of the uniform path where the
-    // block is added with its transport only (time.hyperbolic) + the separate condensed source stage.
-    //
-    // WARNING: OPTION A = INTERMEDIATE. The condensed stage solves the elliptic on the COARSE grid (like the
-    // AMR Poisson compute_aux/solve_fields), then grad phi is injected (piecewise constant) to the fines: the
-    // fine patches refine the TRANSPORT but NOT the elliptic coupling. For a FAITHFUL paper/AMR reproduction
-    // a multi-level COMPOSITE Schur/Poisson will be needed (condensed elliptic solved at the patch
-    // resolution, composite MG crossing the levels) -- infrastructure absent today (GeometricMG
-    // coarsens ONE grid, != AMR hierarchy). This is the fidelity lock, to do AFTER the mono-level parity.
-    // RESOLUTION of the field descriptors (wave 3 audit, parity with System::set_source_stage):
-    // "" = canonical role (historical, bit-identical); otherwise stable ROLE name then block VARIABLE name.
-    // Failure = explicit error at build (never a silent ignore).
-    const VariableSet schur_vs = Model::conservative_vars();
-    auto resolve_schur = [&schur_vs](const std::string& spec, VariableRole canonical,
-                                     const char* label) -> int {
-      if (spec.empty()) {
-        const int idx = schur_vs.index_of(canonical);
-        if (idx < 0)
-          throw std::runtime_error(
-              std::string("AmrSystem::set_source_stage: the block does not expose "
-                          "the role ") +
-              label + " (declare the roles, or pass an explicit descriptor)");
-        return idx;
-      }
-      const VariableRole r = role_from_name(spec);
-      if (r != VariableRole::Custom) {
-        const int idx = schur_vs.index_of(r);
-        if (idx < 0)
-          throw std::runtime_error("AmrSystem::set_source_stage: role '" + spec + "' missing (" +
-                                   label + ")");
-        return idx;
-      }
-      for (std::size_t i = 0; i < schur_vs.names.size(); ++i)
-        if (schur_vs.names[i] == spec)
-          return static_cast<int>(i);
-      throw std::runtime_error("AmrSystem::set_source_stage: '" + spec +
-                               "' is neither a stable role nor a block variable (" + label + ")");
-    };
-    const int sc_rho = resolve_schur(bp.schur.density, VariableRole::Density, "Density");
-    const int sc_mx = resolve_schur(bp.schur.momentum_x, VariableRole::MomentumX, "MomentumX");
-    const int sc_my = resolve_schur(bp.schur.momentum_y, VariableRole::MomentumY, "MomentumY");
-    const int sc_E = (bp.schur.energy == "none")
-                         ? -1
-                         : (bp.schur.energy.empty()
-                                ? schur_vs.index_of(VariableRole::Energy)
-                                : resolve_schur(bp.schur.energy, VariableRole::Energy, "Energy"));
-    auto schur = std::make_shared<AmrCondensedSchurSourceStepper>(
-        schur_vs, sc_rho, sc_mx, sc_my, sc_E, g, bac, bp.poisson.bc,
-        static_cast<Real>(bp.schur.alpha),
-        // ADC-645: MG V-cycles per preconditioner application (0 = the historical ctor default 1).
-        bp.schur.n_precond_vcycles > 0 ? bp.schur.n_precond_vcycles : 1);
-    if (bp.schur.krylov_tol > 0.0 || bp.schur.krylov_max_iters > 0)
-      schur->set_krylov(
-          bp.schur.krylov_tol > 0.0 ? static_cast<Real>(bp.schur.krylov_tol)
-                                    : kKrylovDefaultRelTol,
-          bp.schur.krylov_max_iters > 0 ? bp.schur.krylov_max_iters
-                                        : kSchurKrylovCartesianMaxIters);
-    // ADC-614: composite-FAC knobs of the multi-level condensed Schur solve. Each <= 0 field falls
-    // back to its kFAC* constant, so an unconfigured stage drives the historical composite solve.
-    {
-      CompositeFacOptions fo;
-      if (bp.schur.fac_max_iters > 0)
-        fo.max_iters = bp.schur.fac_max_iters;
-      if (bp.schur.fac_fine_sweeps > 0)
-        fo.fine_sweeps = bp.schur.fac_fine_sweeps;
-      if (bp.schur.fac_tol > 0.0)
-        fo.tol = static_cast<Real>(bp.schur.fac_tol);
-      if (bp.schur.fac_coarse_rel_tol > 0.0)
-        fo.coarse_rel_tol = static_cast<Real>(bp.schur.fac_coarse_rel_tol);
-      if (bp.schur.fac_coarse_cycles > 0)
-        fo.coarse_cycles = bp.schur.fac_coarse_cycles;
-      fo.verbose = bp.schur.fac_verbose;
-      schur->set_fac_options(fo);
-    }
-    auto bz_coarse = std::make_shared<MultiFab>(bac, dm, 1, 1);
-    amr_write_coarse_bz(*bz_coarse, bp.schur.bz_field, bp.mesh.n);
-    auto phi_coarse = std::make_shared<MultiFab>(bac, dm, 1, 1);
-    phi_coarse->set_val(Real(0));
-    const double theta = bp.schur.theta;
-    const bool strang = bp.schur.strang;
-    h.base.step = [cpl, crit, sub, rprim, regrid_every, step_state, schur, bz_coarse, phi_coarse, theta,
-              strang, model, pf, rt_values, make_runtime_params](double dt) {
-      // NATIVE runtime params (ADC-514): re-inject the CURRENT values into the model bricks before the
-      // stage reads them. nullptr (param-free model) -> no-op, byte-identical.
-      if (rt_values)
-        cpl->set_params(make_runtime_params(*rt_values));
-      // amr-schur Step 2/3: MONO-LEVEL hierarchy (the condensed stage does not carry the multi-level case).
-      // So we do NOT regrid (a regrid would create a fine patch -> multi-level guard of the stage). The
-      // amr-schur regrid will come with the composite Schur/Poisson (Step 4). cf. levels().size() > 1.
-      if (regrid_every > 0 && *step_state > 0 && *step_state % regrid_every == 0 &&
-          cpl->levels().size() > 1)
-        cpl->regrid(crit);
-      const double h2 = dt / sub;
-      for (int s = 0; s < sub; ++s) {
-        if (strang) {
-          // STRANG (2nd order): H(dt/2); S(dt); H(dt/2), with update() (= sync_down + coarse Poisson
-          // + grad inject, the AMR counterpart of solve_fields) RE-SOLVED BEFORE each stage that
-          // consumes phi -- exactly SystemStepper::step_strang (3 solves: head, pre-source, post-source).
-          cpl->update();
-          cpl->template advance_transport<AmrDiscLF<Limiter, Flux>>(Real(0.5) * h2, rprim, pf);
-          cpl->update();
-          amr_schur_source(*cpl, *schur, *bz_coarse, *phi_coarse, theta, h2);
-          cpl->update();
-          cpl->template advance_transport<AmrDiscLF<Limiter, Flux>>(Real(0.5) * h2, rprim, pf);
-        } else {
-          // LIE (Godunov, 1st order): H(dt); S(dt). A single update() at the head (the source stage reads
-          // the head phi), mirror of SystemStepper::step Lie (a single solve_fields, transport, source).
-          cpl->update();
-          cpl->template advance_transport<AmrDiscLF<Limiter, Flux>>(h2, rprim, pf);
-          amr_schur_source(*cpl, *schur, *bz_coarse, *phi_coarse, theta, h2);
-        }
-      }
-      // PROJECTION PONCTUELLE post-pas (ADC-177) PAR NIVEAU, APRES transport + source condensee de
-      // tous les substeps. No-op si le modele ne declare pas m.project (HasPointwiseProjection false).
-      detail::apply_pointwise_project_amr(model, cpl->levels());
-      ++*step_state;
-    };
-  } else {
     h.base.step = [cpl, crit, sub, rprim, imex, regrid_every, step_state, nopts, tmethod, model,
               pf, rt_values, make_runtime_params](double dt) {
       // NATIVE runtime params (ADC-514): re-inject the CURRENT values into the model bricks (transport /
@@ -410,7 +247,6 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
       detail::apply_pointwise_project_amr(model, cpl->levels());
       ++*step_state;
     };
-  }
   // RESTORATION of the CADENCE PHASE (IO v1, parity with System::set_clock): AmrSystem::set_clock sets
   // the macro-step counter of the mono-block (the regrid cadence reads *step_state) on restart. Shares the
   // SAME step_state as the step closure above -> the regrid phase resumes exactly. Without the call,

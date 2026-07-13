@@ -266,6 +266,17 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
                 keep = index > split or (index < split and value.op in binding_ops)
             if keep:
                 lines.extend(emitted)
+            if phase == "gather" and index == split:
+                # The ordinary solve emitter seeds one level-local iterate immediately before the
+                # solve.  A hierarchy solve instead needs one initial guess per level, gathered at the
+                # same barrier as its coefficients/RHS.  Stage it in context-owned hierarchy storage;
+                # the solve pass later consumes the complete tower exactly once.  This is also what
+                # makes the ADC-427 scalar phi^n history carry compose on refined AMR.
+                if value.attrs.get("has_guess"):
+                    guess = value.inputs[2]
+                    lines.append("ctx.stage_linear_initial_guess(%s);" % var[guess.id])
+                else:
+                    lines.append("ctx.stage_linear_initial_guess();")
         if phase == "publish":
             for state_ref, committed in program._commits.items():
                 base = bases[state_ref.block_ref]

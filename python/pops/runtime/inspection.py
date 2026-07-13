@@ -103,8 +103,7 @@ class RuntimeInspectionReport(Report):
         lines.append("  diagnostics : %d scalar(s), fallbacks=%s"
                      % (len(self.diagnostics), fallbacks.get("total_count", 0)))
         opts = self.options
-        lines.append("  options     : blocks=%d source_stages=%d"
-                     % (len(opts.get("blocks", [])), len(opts.get("source_stages", []))))
+        lines.append("  options     : blocks=%d" % len(opts.get("blocks", [])))
         if self.routes:
             lines.append("  routes      : %d block(s), poisson=%s"
                          % (len(self.routes.get("blocks", [])),
@@ -265,8 +264,6 @@ def _options(sim: Any, runtime: Any) -> Any:
         "defaults": numerical_defaults_report(),
         "blocks": [],
         "poisson": {},
-        "source_stages": [],
-        "time": {"scheme": None, "gauss_policy": None},
         "amr": None,
     }
 

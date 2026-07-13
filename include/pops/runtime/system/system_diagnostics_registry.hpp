@@ -1,7 +1,7 @@
 #pragma once
 
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonReport (IMEX per-block report)
-#include <pops/runtime/numerical_defaults.hpp>  // EffectiveBlockOptions / EffectiveSourceStageOptions
+#include <pops/runtime/numerical_defaults.hpp>  // EffectiveBlockOptions
 
 #include <map>
 #include <memory>
@@ -13,13 +13,12 @@
 ///
 /// Extracted from three inline `std::map`s that lived on `System::Impl`. It groups the metadata a
 /// runtime report reads back: the effective numerical/physical block options captured at
-/// configuration time, the effective source-stage options, and the OPT-IN Newton (IMEX) per-block
-/// reports. None of these are read by SystemStepper -> MockImpl-invisible.
+/// configuration time and the OPT-IN Newton (IMEX) per-block reports. None of these are read by
+/// SystemStepper -> MockImpl-invisible.
 ///
 /// OWNERSHIP CONTRACT
-///  - block_options / source_stage_options: FROZEN AT BIND. Populated only by the structural setters
-///    (add_block / install_block / add_*_block / set_source_stage), refused once bound. Read-only
-///    afterwards (effective_options_report).
+///  - block_options: FROZEN AT BIND. Populated only by structural block installation, refused once
+///    bound, and read-only afterwards (effective_options_report).
 ///  - newton_reports: the map ENTRIES are frozen at bind (allocated by add_block for a block that
 ///    opted into diagnostics or a fail policy); the report CONTENTS are MUTABLE DURING RUN (the
 ///    block IMEX advance closures write into them by raw pointer each step). The shared_ptr gives a
@@ -38,8 +37,6 @@ struct SystemDiagnosticsRegistry {
   /// Effective numerical/physical block options captured when the block/stage is added. The closures
   /// are opaque, so inspection stores the user-facing route decisions here.
   std::map<std::string, EffectiveBlockOptions> block_options;
-  /// Effective source-stage options (theta / alpha / Krylov / role mapping) captured at set_source_stage.
-  std::map<std::string, EffectiveSourceStageOptions> source_stage_options;
   /// OPT-IN IMEX Newton reports, in shared_ptr for a STABLE address (the block AdvanceImex* closures
   /// write into it by raw pointer). Absent (missing key) for a block without newton_diagnostics ->
   /// newton_report raises a clear error rather than returning a silently empty report.

@@ -153,7 +153,7 @@ def test_explain_routes_exposes_adc601_native_audit_limitations():
         "mesh:2d_storage_arithmetic": "Dim!=2",
         "amr:refinement_ratio": "ratio=2",
         "parallel:mpi_world_communicator": "MPI_COMM_WORLD",
-        "schur:condensed_source": "2D plus Bz",
+        "program:condensed_implicit_preset": "2D two-component",
         "runtime:kokkos_lifecycle": "lazily initialized",
         "runtime:allocator_lifetime": "process-lifetime ManagedArena",
     }

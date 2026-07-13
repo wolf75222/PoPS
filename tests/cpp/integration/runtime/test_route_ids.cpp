@@ -81,9 +81,6 @@ TEST(RouteIds, RoundTripEveryRowOfEveryTable) {
   EXPECT_TRUE(table_round_trip<TimeRouteId>(
       kTimeRoutes, [](const std::string& t) { return parse_time_route(t); }))
       << "time round-trip";
-  EXPECT_TRUE(table_round_trip<SplittingRouteId>(
-      kSplittingRoutes, [](const std::string& t) { return parse_splitting_route(t); }))
-      << "splitting round-trip";
   EXPECT_TRUE(table_round_trip<FieldSolverRouteId>(
       kFieldSolverRoutes, [](const std::string& t) { return parse_field_solver_route(t); }))
       << "field_solver round-trip";
@@ -102,9 +99,6 @@ TEST(RouteIds, RoundTripEveryRowOfEveryTable) {
   EXPECT_TRUE(table_round_trip<EllipticRouteId>(
       kEllipticRoutes, [](const std::string& t) { return parse_elliptic_route(t); }))
       << "elliptic round-trip";
-  EXPECT_TRUE(table_round_trip<SourceStageRouteId>(
-      kSourceStageRoutes, [](const std::string& t) { return parse_source_stage_route(t); }))
-      << "source_stage round-trip";
   EXPECT_TRUE(table_round_trip<PoissonRhsRouteId>(
       kPoissonRhsRoutes, [](const std::string& t) { return parse_poisson_rhs_route(t); }))
       << "poisson_rhs round-trip";
@@ -221,9 +215,9 @@ TEST(RouteIds, RouteTokensMirrorRegistryTagNamesInOrder) {
 TEST(RouteIds, EveryRouteFamilyEnumeratorNamesItself) {
   const RouteFamily fams[] = {
       RouteFamily::kLimiter,    RouteFamily::kRiemann,   RouteFamily::kRecon,
-      RouteFamily::kTime,       RouteFamily::kSplitting, RouteFamily::kFieldSolver,
+      RouteFamily::kTime,       RouteFamily::kFieldSolver,
       RouteFamily::kPoissonBc,  RouteFamily::kLayout,    RouteFamily::kTransport,
-      RouteFamily::kSource,     RouteFamily::kElliptic,  RouteFamily::kSourceStage,
+      RouteFamily::kSource,     RouteFamily::kElliptic,
       RouteFamily::kPoissonRhs, RouteFamily::kWall,
   };
   bool ok = true;

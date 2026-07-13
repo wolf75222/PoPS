@@ -20,6 +20,14 @@ import pathlib
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 PROGRAM_CONTEXT = (REPO_ROOT / "include" / "pops" / "runtime" / "program"
                    / "program_context.hpp")
+RETIRED_NATIVE_HEADERS = (
+    "include/pops/coupling/schur/core/schur_condensation.hpp",
+    "include/pops/coupling/schur/core/schur_source_kernels.hpp",
+    "include/pops/coupling/schur/source/condensed_schur_source_stepper.hpp",
+    "include/pops/coupling/schur/source/polar_condensed_schur_source_stepper.hpp",
+    "include/pops/coupling/schur/amr/amr_condensed_schur_source_stepper.hpp",
+    "include/pops/numerics/linalg/lorentz_eliminator.hpp",
+)
 
 # Tokens that must never appear in the generic runtime facade after the split (case-insensitive,
 # whole-word where it matters). ``electrostatic`` and ``CondensedSchur`` catch the operator names;
@@ -59,8 +67,28 @@ def test_program_context_drops_schur_includes():
     )
 
 
+def test_native_source_stage_headers_are_retired():
+    """The generated Program route is the only condensed time-integration path."""
+    leaked = [path for path in RETIRED_NATIVE_HEADERS if (REPO_ROOT / path).exists()]
+    assert not leaked, "retired native condensed-source headers still exist: %s" % leaked
+
+
+def test_native_bindings_do_not_reintroduce_source_stage_controls():
+    """The System and AMR pybind surfaces expose no inert compatibility setters."""
+    binding_files = (
+        REPO_ROOT / "python" / "bindings" / "core" / "init" / "init_system.cpp",
+        REPO_ROOT / "python" / "bindings" / "core" / "init" / "init_amr.cpp",
+    )
+    text = "\n".join(path.read_text(encoding="utf-8") for path in binding_files)
+    for retired in ('def("set_source_stage"', 'def("set_time_scheme"',
+                    'def("set_gauss_policy"'):
+        assert retired not in text, "retired native binding leaked: %s" % retired
+
+
 if __name__ == "__main__":
     # Runnable directly (the source-only architecture gate also collects it).
     test_program_context_has_no_schur_tokens()
     test_program_context_drops_schur_includes()
+    test_native_source_stage_headers_are_retired()
+    test_native_bindings_do_not_reintroduce_source_stage_controls()
     print("OK test_no_schur_header_leak")

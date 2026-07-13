@@ -143,15 +143,14 @@ class SystemFieldSolver {
   }
 
   /// Mutable elliptic state that belongs to one step attempt. The solver objects themselves are
-  /// structural and stay installed; only their warm-start potential, the polar source buffer and
-  /// the evolve-policy latch may be provisionally changed by a failed attempt.
+  /// structural and stay installed; only their warm-start potential and polar source buffer may be
+  /// provisionally changed by a failed attempt.
   struct StepSnapshot {
     std::optional<MultiFab> potential;
     std::optional<MultiFab> polar_potential;
     std::optional<MultiFab> polar_source;
     bool had_elliptic = false;
     bool had_polar_solver = false;
-    bool gauss_solved_once = false;
     RuntimeDiagnosticsReport diagnostics;
     std::map<std::string, MultiFab> named_potentials;
     std::vector<std::string> named_unbuilt;
@@ -175,7 +174,6 @@ class SystemFieldSolver {
       out.named_potentials.emplace(
           item.first, std::visit([](auto& e) { return MultiFab(e.phi()); }, *item.second.ell));
     }
-    out.gauss_solved_once = gauss_solved_once_;
     out.diagnostics = diagnostics_;
     return out;
   }
@@ -200,7 +198,6 @@ class SystemFieldSolver {
       if (saved != snapshot.named_potentials.end() && item.second.ell)
         std::visit([&](auto& e) { e.phi() = saved->second; }, *item.second.ell);
     }
-    gauss_solved_once_ = snapshot.gauss_solved_once;
     diagnostics_ = snapshot.diagnostics;
   }
 
@@ -238,28 +235,14 @@ class SystemFieldSolver {
       p_eps_y_field_;  // field eps_y(x), n*n row-major (faces normal to y; if has_eps_xy_field_)
   bool has_kappa_field_ = false;  // REACTION term kappa(x) provided: div(eps grad phi) - kappa phi
   std::vector<double> p_kappa_field_;  // field kappa(x), n*n row-major (if has_kappa_field_)
-  // GAUSS POLICY (restart-free Gauss-evolution option). Default "restart":
-  // solve_fields re-solves -Delta phi = f (Gauss) on EVERY call -- historical behavior,
-  // BIT-IDENTICAL. "evolve": after the FIRST solve (phi^0), solve_fields NO LONGER re-solves the
-  // Poisson; it only DERIVES the aux (phi, grad phi) from the CURRENT phi -- the one that the condensed
-  // source stage (Schur) evolves IN-PLACE in ell_phi() (cf. run_source_stage). Thus it gives a
-  // restart-free evolution of -Delta phi (the Gauss constraint is only imposed at t=0).
-  // INERT without a Schur stage (phi would stay frozen after t=0). The lock gauss_solved_once_ guarantees that
-  // the first solve (the init of phi^0) always solves, whatever the policy.
-  bool gauss_evolve_ = false;
-  bool gauss_solved_once_ = false;
   std::optional<std::variant<GeometricMG, PoissonFFTSolver, RemappedFFTSolver>> ell_;
   // Direct POLAR Poisson solver (FFT-in-theta + tridiag-in-r), built lazily when
   // polar_ (cf. ensure_elliptic_polar). SEPARATE from ell_ (geom() returns a PolarGeometry, not a
   // Geometry): the cartesian path is never touched. INERT (nullopt) in cartesian.
   std::optional<PolarPoissonSolver> pell_;
-  // phi buffer of the POLAR condensed SOURCE STAGE (Path A step 2c). The direct PolarPoissonSolver
-  // (pell_->phi()) is WITHOUT ghost (valid box = allocation); but the PolarCondensedSchurSourceStepper
-  // needs a phi WITH 1 ghost (fill_ghosts + apply_polar_tensor + centered grad + write of
-  // phi^{n+1}). So we pass it this dedicated buffer (1 ghost), fed with phi^n (= aux[0] after
-  // solve_fields_polar) before the source stage, which carries phi^{n+1} on output (warm start of the next
-  // step). In CARTESIAN this buffer is INERT (nullopt): ell_phi() routes to ell_->phi() as
-  // before, BIT-IDENTICAL.
+  // Ghosted polar potential buffer consumed by generated tensor Programs. The direct
+  // PolarPoissonSolver stores only valid cells, whereas centered tensor/gradient operators need one
+  // ghost layer. In Cartesian geometry this buffer is inert.
   std::optional<MultiFab> phi_src_polar_;
   std::vector<Real> bz_field_;  // field B_z(x) n*n row-major (empty if not provided)
   int te_src_ = -1;             // index of the fluid block source of T_e (-1 = none)
@@ -723,12 +706,9 @@ class SystemFieldSolver {
   MultiFab& ell_rhs() {
     return std::visit([](auto& e) -> MultiFab& { return e.rhs(); }, *ell_);
   }
-  /// Potential phi read (and rewritten) by the condensed source stage. CARTESIAN: the phi of the active
-  /// elliptic solver (GeometricMG/FFT, WITH ghosts), BIT-IDENTICAL. POLAR: a dedicated 1-ghost buffer
-  /// (phi_src_polar_), fed with phi^n (= aux[0], set by solve_fields_polar) at call time
-  /// -- the direct PolarPoissonSolver has no ghosts, so we cannot expose pell_->phi()
-  /// directly to a stepper that does fill_ghosts/apply_polar_tensor. The stepper writes phi^{n+1} into it
-  /// (warm start of the next step; aux[0] will be rewritten anyway by the next solve_fields).
+  /// Ghosted potential used by field post-processing and generated Programs. Cartesian returns the
+  /// active elliptic solver's field. Polar materializes a dedicated one-ghost copy because the direct
+  /// PolarPoissonSolver stores valid cells only.
   MultiFab& ell_phi() {
     if (owner_->polar_) {
       // Allocate lazily (1 ghost) on the System layout, then copy phi^n from aux[0].
@@ -893,7 +873,7 @@ class SystemFieldSolver {
           std::to_string(owner_->ba.size()) +
           " boxes); it requires a single-box grid (theta_boxes=1). For a multi-box theta "
           "splitting, "
-          "use the polar tensor Schur stage (pops.Split + pops.CondensedSchur), multi-box, or "
+          "use pops.lib.time.CondensedSchur in a generated Program, or "
           "go back to theta_boxes=1.");
     // Radial BC: Dirichlet/Neumann from poisson_bc() (xlo/xhi). theta always periodic.
     const BCRec pbc = poisson_bc();
@@ -990,7 +970,7 @@ class SystemFieldSolver {
   /// solve_fields_from_state uses so a field-coupled multi-stage scheme re-solves phi from each STAGE
   /// state (the compiled Program runs stages sequentially: stage k's solve overwrites the shared aux
   /// before stage k's RHS reads it). The default (-1 / nullptr) keeps every block at s.U: the
-  /// historical solve_fields(), BIT-IDENTICAL. Inert under the gauss_evolve_ skip (no RHS assembled).
+  /// historical solve_fields(), BIT-IDENTICAL.
   void solve_fields(int target_block = -1, const MultiFab* U_stage = nullptr) {
     if (owner_->polar_)
       // ring: polar Poisson + aux in local basis (e_r, e_theta)
@@ -998,13 +978,7 @@ class SystemFieldSolver {
     trace_mark("solve_fields: start");
     ensure_elliptic();
     trace_mark("solve_fields: after ensure_elliptic");
-    // GAUSS POLICY: "restart" (default, gauss_evolve_==false) re-solves -Delta phi = f on
-    // EVERY call (bit-identical to history). "evolve": after the FIRST solve (phi^0), we SKIP
-    // the RHS assembly + the elliptic solve -> ell_phi() keeps the current phi (the one that the
-    // Schur source stage evolves in-place), giving a restart-free -Delta phi evolution (Gauss imposed only at t=0).
-    // The derivation of the aux (phi, grad phi) below ALWAYS runs, on the current phi.
-    if (!(gauss_evolve_ && gauss_solved_once_)) {
-      MultiFab& rhs = ell_rhs();
+    MultiFab& rhs = ell_rhs();
       // f = Sum_s elliptic_rhs_s(U_s). By default the CURRENT state of each block; with a
       // target_block / U_stage override the target block reads U_stage (per-stage field solve, ADC-409).
       assemble_poisson_rhs(rhs, target_block, U_stage);
@@ -1026,9 +1000,7 @@ class SystemFieldSolver {
       }
       trace_mark("solve_fields: before ell_solve");
       ell_solve();
-      gauss_solved_once_ = true;
-      trace_mark("solve_fields: after ell_solve, before device_fence");
-    }
+    trace_mark("solve_fields: after ell_solve, before device_fence");
     device_fence();
     trace_mark("solve_fields: after device_fence (aux derivation)");
     const Real dx = owner_->geom.dx(), dy = owner_->geom.dy();
@@ -1122,9 +1094,7 @@ class SystemFieldSolver {
     if (owner_->polar_)
       return solve_fields_polar_from_blocks(U_stages);
     ensure_elliptic();
-    // Coupled multi-block solve always re-solves the Poisson (it is requested explicitly with the
-    // stage states); it is NOT subject to the gauss_evolve_ skip (that policy is for the single
-    // default head solve). The aux derivation below runs on the freshly solved phi.
+    // Coupled multi-block solve always re-solves the Poisson from the requested stage states.
     {
       MultiFab& rhs = ell_rhs();
       assemble_poisson_rhs_from_blocks(rhs, U_stages);
@@ -1139,7 +1109,6 @@ class SystemFieldSolver {
         }
       }
       ell_solve();
-      gauss_solved_once_ = true;
     }
     device_fence();
     const Real dx = owner_->geom.dx(), dy = owner_->geom.dy();

@@ -17,8 +17,6 @@
 #include <pops/runtime/builders/block/block_seam.hpp>  // ADC-335: per-transport build seam (build_block_exb/.../polar)
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model + compiled bricks
 #include <pops/runtime/dynamic/model_registry.hpp>  // validate_transport: single-source transport rejection (ADC-331)
-#include <pops/coupling/schur/source/condensed_schur_source_stepper.hpp>  // Schur-condensed source stage (pops.Split / CondensedSchur, #126)
-#include <pops/coupling/schur/source/polar_condensed_schur_source_stepper.hpp>  // POLAR counterpart of the condensed source stage (Path A step 2c, #212)
 #include <pops/coupling/source/coupled_source_program.hpp>  // CoupledSourceKernel: generic coupled source (DSL P5, bytecode)
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_fft_solver.hpp>
@@ -223,8 +221,6 @@ struct System::Impl {
   // SystemDiagnosticsRegistry (ADC-578, include/pops/runtime/system/system_diagnostics_registry.hpp).
   // Stepper-invisible: accessed only here via diagnostics_.* (no alias needed, no MockImpl impact).
   pops::runtime::system::SystemDiagnosticsRegistry diagnostics_;
-  std::string time_scheme_ = "lie";
-  std::string gauss_policy_ = "restart";
   double t = 0;
   int macro_step_ = 0;  // macro-step counter (0-indexed): feeds the per-block stride filter
   // COMPILED TIME-PROGRAM RUNTIME STATE (ADC-594): the whole compiled-Program subsystem -- installed
@@ -232,8 +228,7 @@ struct System::Impl {
   // diagnostics, the profiler, the scheduler cache and the multistep history rings -- extracted out of
   // this god-object into ONE inspectable struct (include/pops/runtime/program/program_runtime_state.hpp),
   // SHARED verbatim with AmrSystem::Impl (the documented common contract). The stepper reads only
-  // program_.step_ / substeps_ / stride_ / dt_bound_ (so the
-  // tests/cpp/unit/numerics/test_strang_splitting.cpp MockImpl embeds the SAME struct); the diagnostics /
+  // program_.step_ / substeps_ / stride_ / dt_bound_; the diagnostics /
   // params / cache / history / profiler are System-owned and NOT stepper-visible. Program invariants live
   // here, block/field/layout invariants stay on Impl.
   pops::runtime::program::ProgramRuntimeState program_;
@@ -307,8 +302,8 @@ struct System::Impl {
   field_solver::SystemFieldSolver<Impl> fields_;
 
   // Time advance (Batch B). ORCHESTRATES step / advance / step_cfl / step_adaptive, the cadence filter
-  // (stride_due), the condensed source stage (run_source_stage) and the couplings (apply_couplings). owner_
-  // = this: the stepper reads the SHARED sp / fields_ / aux / couplings / t / macro_step_ / geom / pgeom_ / polar_
+  // (stride_due) and the couplings (apply_couplings). owner_ = this: the stepper reads the SHARED sp /
+  // fields_ / aux / couplings / t / macro_step_ / geom / pgeom_ / polar_
   // of Impl via its back-pointer. Pure back-pointer at construction (no dereferencing) ->
   // init at end of list without ordering dependency. See include/pops/runtime/system_stepper.hpp.
   stepper::SystemStepper<Impl> stepper_;
@@ -375,10 +370,9 @@ struct System::Impl {
   const Species& find(const std::string& name) const { return blocks_.find(name); }
   int index(const std::string& name) const { return blocks_.index(name); }
 
-  // apply_couplings (inter-species coupling sources by splitting, AFTER transport) and
-  // run_source_stage (Schur-condensed source stage, OPT-IN) EXTRACTED into stepper_ (SystemStepper,
-  // Batch B): these are time-advance steps, invoked by step / step_cfl / step_adaptive.
-  // They read the SHARED state via owner_-> (couplings, fields_.ell_phi(), aux, kAuxBaseComps). The
+  // apply_couplings (inter-species coupling sources by splitting, AFTER transport) is extracted into
+  // stepper_ (SystemStepper, Batch B) and invoked by step / step_cfl / step_adaptive. It reads the
+  // SHARED state via owner_->. The
   // couplings list (above) stays a member of Impl (populated by add_ionization / add_collision / ...).
 
   // --- elliptic solver (system Poisson) -----------------------------

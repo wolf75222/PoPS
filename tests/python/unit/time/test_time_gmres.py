@@ -7,7 +7,7 @@ robust choice for a NON-symmetric operator: where CG needs an SPD A and stagnate
 one, GMRES minimises the residual over the Krylov subspace and converges.
 
 (A) Codegen + validation (pure Python, always runs): a Helmholtz operator ``A(in) = in - alpha*Lap(in)``
-    solved by gmres lowers to the apply lambda + ``ctx.laplacian`` + ``pops::gmres_solve`` with the
+    solved by gmres lowers to the apply lambda + ``ctx.laplacian`` + ``ctx.solve_linear_matfree`` with the
     restart length; the restart default (30) and an override both appear in the generated C++; the
     validation errors fire (max_iter absent/<=0; restart<=0 or non-int for gmres; restart passed to a
     non-gmres method).
@@ -125,20 +125,21 @@ def _helmholtz(P, x):
 # ---- (A) codegen + validation: pure Python, always runs ----
 def test_gmres_codegen(t):
     src = _spd_program(t, method="gmres").emit_cpp_program()
-    for frag in ("pops::ApplyFn apply_A", "ctx.laplacian", "pops::gmres_solve",
+    for frag in ("pops::ApplyFn apply_A", "ctx.laplacian", "ctx.solve_linear_matfree",
                  "pops::ApplyFn{}"):  # identity (empty) preconditioner
         assert frag in src, "the generated gmres solve must contain %r\n%s" % (frag, src)
 
 
 def test_gmres_restart_default_in_codegen(t):
     src = _spd_program(t, restart=30).emit_cpp_program()
-    # The trailing gmres_solve argument is the restart length (default 30).
-    assert ", 30);" in src and "pops::gmres_solve" in src, "the default restart 30 must lower\n%s" % src
+    assert ", 30," in src and "ctx.solve_linear_matfree" in src, \
+        "the default restart 30 must lower\n%s" % src
 
 
 def test_gmres_restart_override_in_codegen(t):
     src = _spd_program(t, restart=12).emit_cpp_program()
-    assert ", 12);" in src and "pops::gmres_solve" in src, "an overridden restart must lower\n%s" % src
+    assert ", 12," in src and "ctx.solve_linear_matfree" in src, \
+        "an overridden restart must lower\n%s" % src
 
 
 def test_gmres_now_valid_method(t):

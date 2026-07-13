@@ -246,4 +246,4 @@ def test_manifest_cpp_suites_exclude_mpi_only_targets():
     assert names, "no serial C++ suites resolved from tests/test_manifest.toml"
     offenders = [n for n in names if "mpi" in n.split("_")]
     assert not offenders, f"MPI-only suites leaked into the serial selection: {offenders}"
-    assert "test_strang_splitting" in names
+    assert "test_splitting" in names

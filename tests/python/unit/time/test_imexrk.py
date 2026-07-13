@@ -141,15 +141,7 @@ try:
 except (RuntimeError, ValueError, TypeError) as e:
     chk("imex" in str(e).lower(), f"polaire rejet explicite : {e}")
 
-# (d3) Strang / Schur : l'etage hyperbolique doit etre un pops.Explicit (pas IMEXRK)
-try:
-    pops.Strang(hyperbolic=pops.IMEXRK(),
-               source=pops.CondensedSchur(kind="electrostatic_lorentz", theta=0.5, alpha=1.0))
-    chk(False, "Strang(hyperbolic=IMEXRK) aurait du lever")
-except TypeError as e:
-    chk("Explicit" in str(e), f"Strang rejet (hyperbolique doit etre Explicit) : {e}")
-
-# (d4) masque IMEX partiel : la source IMEXRK est pleinement implicite -> rejet a l'ajout du bloc
+# (d3) masque IMEX partiel : la source IMEXRK est pleinement implicite -> rejet a l'ajout du bloc
 sim_mask = System(n=8, L=1.0, periodic=True)
 try:
     # pops.IMEXRK n'expose pas implicit_vars ; on force l'attribut pour exercer la garde C++.

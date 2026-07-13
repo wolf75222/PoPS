@@ -387,38 +387,6 @@ inline py::dict effective_poisson_options_to_dict(const EffectivePoissonOptions&
   return d;
 }
 
-inline py::dict effective_source_stage_options_to_dict(const EffectiveSourceStageOptions& s) {
-  py::dict d;
-  d["block"] = s.block;
-  d["kind"] = s.kind;
-  d["geometry"] = s.geometry;
-  d["theta"] = s.theta;
-  d["alpha"] = s.alpha;
-  d["requested_krylov_tol"] = s.requested_krylov_tol;
-  d["requested_krylov_max_iters"] = s.requested_krylov_max_iters;
-  d["effective_krylov_tol"] = s.effective_krylov_tol;
-  d["effective_krylov_max_iters"] = s.effective_krylov_max_iters;
-  d["density"] = s.density;
-  d["momentum_x"] = s.momentum_x;
-  d["momentum_y"] = s.momentum_y;
-  d["energy"] = s.energy;
-  d["bz_aux_component"] = s.bz_aux_component;
-  // ADC-614: effective composite-FAC knobs of the multi-level condensed Schur solve.
-  d["requested_fac_tol"] = s.requested_fac_tol;
-  d["requested_fac_max_iters"] = s.requested_fac_max_iters;
-  d["effective_fac_max_iters"] = s.effective_fac_max_iters;
-  d["effective_fac_fine_sweeps"] = s.effective_fac_fine_sweeps;
-  d["effective_fac_tol"] = s.effective_fac_tol;
-  d["effective_fac_coarse_rel_tol"] = s.effective_fac_coarse_rel_tol;
-  d["effective_fac_coarse_cycles"] = s.effective_fac_coarse_cycles;
-  d["fac_verbose"] = s.fac_verbose;
-  // ADC-645: the stage's Krylov-preconditioner knobs (requested vs effective).
-  d["requested_n_precond_vcycles"] = s.requested_n_precond_vcycles;
-  d["effective_n_precond_vcycles"] = s.effective_n_precond_vcycles;
-  d["polar_precond"] = s.polar_precond;
-  return d;
-}
-
 inline py::dict effective_eb_options_to_dict(const EffectiveEbOptions& e) {
   py::dict d;
   d["enabled"] = e.enabled;
@@ -449,21 +417,13 @@ inline py::dict effective_options_report_to_dict(const EffectiveOptionsReport& r
   py::list blocks;
   for (const auto& b : report.blocks)
     blocks.append(effective_block_options_to_dict(b));
-  py::list source_stages;
-  for (const auto& s : report.source_stages)
-    source_stages.append(effective_source_stage_options_to_dict(s));
-  py::dict time;
-  time["scheme"] = report.time_scheme;
-  time["gauss_policy"] = report.gauss_policy;
   py::dict d;
   d["schema_version"] = report.schema_version;
   d["runtime"] = report.runtime;
   d["defaults"] = numerical_defaults_report_to_dict();
   d["blocks"] = blocks;
   d["poisson"] = effective_poisson_options_to_dict(report.poisson);
-  d["source_stages"] = source_stages;
   d["eb"] = effective_eb_options_to_dict(report.eb);  // ADC-615
-  d["time"] = time;
   if (report.has_amr)
     d["amr"] = effective_refinement_options_to_dict(report.amr_refinement);
   else
