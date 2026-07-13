@@ -53,24 +53,102 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
         return self._new(
             x.vtype, "fill_boundary", (x,), {}, x.name, x.block, space=x.space)
 
-    def project(self, name: Any = None, state: Any = None, projection: Any = "block") -> Any:
+    def project(self, name: Any = None, state: Any = None, projection: Any = None) -> Any:
         """Apply the block's post-step positivity projection to @p state in place (spec op 21):
         ``U <- project(U, aux)`` over the valid cells, the SAME Zhang-Shu / floor projection the native
         per-step path runs (ADC-177). Returns a State value (the projected state). @p projection selects
-        the projection primitive; only ``"block"`` (the block's own, set at add_block time) is supported
-        -- a custom projection is a later phase. Lowered to ``ctx.apply_projection(idx, state)`` for the
-        state's own block (ADC-426)."""
+        the projection primitive.  The final surface accepts only the typed ``BlockProjection``
+        descriptor; omitting it selects that exact descriptor, never a string token. Lowered to
+        ``ctx.apply_projection(idx, state)`` for the state's own block."""
+        from pops.time.step_transaction import BlockProjection
         name, state = _resolve_handle(name), _resolve_handle(state)
         if isinstance(name, ProgramValue) and state is None:
             name, state = None, name
         if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("project: a State value is required (state=...)")
-        if projection != "block":
-            raise NotImplementedError(
-                "project: only projection='block' (the block's own positivity projection) is "
-                "supported; a custom projection is a later phase (got %r)" % (projection,))
+        projection = BlockProjection() if projection is None else projection
+        if type(projection) is not BlockProjection:
+            raise TypeError("project: projection must be BlockProjection()")
         return self._new("state", "project", (state,), {"projection": projection}, name,
                          state.block, space=state.space)
+
+    def _acceptance_guard_value(
+        self, name: str, value: ProgramValue, condition: ProgramValue, action: Any,
+    ) -> ProgramValue:
+        from pops.time.solve_outcome import FailRun, RejectAttempt
+        if not isinstance(action, (RejectAttempt, FailRun)):
+            raise TypeError("acceptance guard terminal action must be RejectAttempt() or FailRun()")
+        return self._new(
+            value.vtype, "acceptance_guard", (value, condition),
+            {"guard": name, "action": action}, value.name, value.block,
+            space=value.space, point=value.point,
+        )
+
+    @atomic_authoring
+    def guard(
+        self,
+        name: Any,
+        value: Any,
+        condition: Any,
+        *,
+        action: Any,
+        role: Any = None,
+        recheck: Any = None,
+    ) -> Any:
+        """Gate one provisional value before commit.
+
+        ``condition`` is a compiled scalar Bool.  ``RejectAttempt`` and ``FailRun`` lower directly.
+        ``ProjectAndRecheck`` authors a lazy failure arm: the native block projection runs only after
+        the first failure, then ``recheck(P, projected)`` builds the second Bool and the configured
+        terminal action is applied if it still fails.  The callable is authoring-only; numerical
+        evaluation remains entirely in generated C++.
+        """
+        from pops.time.solve_outcome import FailRun, RejectAttempt
+        from pops.time.step_transaction import (
+            AcceptanceGuard, GuardRole, ProjectAndRecheck,
+        )
+        if not isinstance(name, str) or not name:
+            raise ValueError("guard: name must be a non-empty string")
+        if not isinstance(value, ProgramValue) or not value.is_field():
+            raise TypeError("guard: value must be a State/RHS/scalar_field ProgramValue")
+        if not isinstance(condition, ProgramValue) or condition.vtype != "bool":
+            raise TypeError("guard: condition must be a scalar Bool ProgramValue")
+        role = GuardRole.INVARIANT if role is None else role
+        if type(role) is not GuardRole:
+            raise TypeError("guard: role must be a GuardRole")
+        validate_input_regions(
+            self, (value, condition), self._current_region(), "acceptance guard")
+
+        if isinstance(action, (RejectAttempt, FailRun)):
+            if recheck is not None:
+                raise ValueError("guard: recheck is valid only with ProjectAndRecheck")
+            guarded = self._acceptance_guard_value(name, value, condition, action)
+        elif type(action) is ProjectAndRecheck:
+            if not callable(recheck):
+                raise TypeError(
+                    "guard: ProjectAndRecheck requires an authoring recheck(P, projected) callable")
+
+            def project_and_recheck(program: Any) -> ProgramValue:
+                projected = program.project(
+                    name="%s_projection" % name, state=value,
+                    projection=action.projection)
+                predicate = recheck(program, projected)
+                if not isinstance(predicate, ProgramValue) or predicate.vtype != "bool":
+                    raise TypeError("guard: recheck must return a scalar Bool ProgramValue")
+                return program._acceptance_guard_value(
+                    name, projected, predicate, action.on_failure)
+
+            guarded = self.branch(
+                condition,
+                when_true=lambda _program: value,
+                when_false=project_and_recheck,
+                name="%s_guarded" % name,
+            )
+        else:
+            raise TypeError(
+                "guard: action must be RejectAttempt(), FailRun(), or ProjectAndRecheck()")
+        self._register_acceptance_guard(AcceptanceGuard(name, role, action))
+        return guarded
 
     # --- per-cell conditional select (spec op 17, ADC-418) ---
     def cell_compare(self, field: Any, value: Any, cmp: Any, name: Any = None) -> Any:

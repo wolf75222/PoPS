@@ -52,7 +52,7 @@ class _SystemUnifiedInstall(_System):
     """The internal ``_install_compiled`` lowering seam of System (driven by ``pops.bind``)."""
 
     def _install_compiled(self, compiled=None, *, instances=None, params=None, aux=None,
-                          solvers=None, field_plans=None, cadence=None, outputs=None,
+                          solvers=None, field_plans=None, outputs=None,
                           diagnostics=None):
         """INTERNAL low-level install seam (Spec 5 sec.11): wire a compiled handle + per-instance
         state/spatial + params + aux + field solvers in ONE call, then install the compiled time
@@ -90,7 +90,6 @@ class _SystemUnifiedInstall(_System):
             set_poisson(solver=...). The default Poisson field ("phi"/"charge_density"/"poisson") and
             any NAMED elliptic field a block's model DECLARES (m.elliptic_field) are accepted and route
             through the shared system elliptic solver; a field name no model declares raises (typo).
-        @param cadence retired; Program schedules and step strategies are the sole time authorities.
         @param outputs must be empty; exact publications are compiled ConsumerGraph nodes owned by
             RuntimeInstance after an accepted step.
         @throws the verbatim Spec section-24 errors at install (missing aux / solver / block instance /
@@ -199,11 +198,11 @@ class _SystemUnifiedInstall(_System):
             # (5b) Program carriers were emitted with neutral values. Always install the complete
             # BindSchema projection after loading, including declaration defaults.
             self._install_program_params(compiled, bind_schema, params)
-
-        if cadence is not None:
-            raise TypeError(
-                "install(cadence=) was removed; declare cadence in the Program schedule and "
-                "time-step control in Program.step_strategy()")
+            component = getattr(compiled, "program", None)
+            authored = getattr(component, "program", component)
+            self._step_strategy = getattr(authored, "_step_strategy", None)
+            self._step_transaction_plan = (
+                authored.transaction_plan() if authored is not None else None)
 
         if outputs or diagnostics:
             raise ValueError(
@@ -217,7 +216,7 @@ class _SystemUnifiedInstall(_System):
         from pops.runtime._bound_snapshot import build_uniform_snapshot
         snapshot = build_uniform_snapshot(
             self, compiled, resolved_models, instances, validation_solvers,
-                                          cadence, aux, params)
+            aux, params)
         self._finalize_bind(snapshot)  # _finalize_bind lives on _LifecycleMixin
 
     def explain_bind(self, compiled: Any) -> Any:

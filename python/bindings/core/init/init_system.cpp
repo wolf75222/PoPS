@@ -1,5 +1,7 @@
 #include "../bindings_detail.hpp"
 
+#include <limits>
+
 // ADC-365: the System runtime-composition facade bindings.
 //
 // ADC-593: these .def registrations are INTERNAL seams of the bind flow (pops.bind reaches them through
@@ -135,7 +137,7 @@ void bind_system_assembly(py::class_<System>& cls) {
       .def("install_program", &System::install_program, py::arg("so_path"))
       // Compiled-Program macro-step cadence (ADC-411): SYSTEM-level substeps + stride around the
       // installed program closure (cf. SystemStepper::step). Separate from install_program so the .so
-      // ABI is untouched; CompiledTime(substeps=, stride=) threads through here. Both must be >= 1.
+      // Internal compiled-kernel cadence seam; the public controller is Program.step_strategy().
       .def("set_program_cadence", &System::set_program_cadence, py::arg("substeps"),
            py::arg("stride"));
 }
@@ -504,13 +506,19 @@ void bind_system_stepping(py::class_<System>& cls) {
   cls.def("solve_fields", &System::solve_fields)
       .def("step", &System::step, py::arg("dt"))
       .def("advance", &System::advance, py::arg("dt"), py::arg("nsteps"))
+      .def("_begin_step_transaction", &System::begin_step_transaction)
+      .def("_commit_step_transaction", &System::commit_step_transaction)
+      .def("_finalize_step_transaction", &System::finalize_step_transaction)
+      .def("_rollback_step_transaction", &System::rollback_step_transaction)
       .def("step_cfl", &System::step_cfl,
            "Advances by ONE step at dt = cfl * h / max wave speed of the system (also honors the "
            "optional bounds: substeps, stride, source_frequency, couplings, add_dt_bound). Returns "
            "the dt used. speed_floor (ADC-645): the floor applied to the reduced max wave speed "
            "(w = max(w, speed_floor), so a quiescent system cannot divide by zero); defaults to "
            "the historical kCflSpeedFloor (1e-30), bit-identical.",
-           py::arg("cfl"), py::arg("speed_floor") = static_cast<double>(kCflSpeedFloor))
+           py::arg("cfl"), py::arg("speed_floor") = static_cast<double>(kCflSpeedFloor),
+           py::arg("max_dt") = std::numeric_limits<double>::infinity(),
+           py::arg("min_dt") = 0.0)
       .def("enable_profiling", &System::enable_profiling,
            "Spec 3 profiling (ADC-459): start timing the step phases (step, field_solve). Disabled "
            "by default; off the hot path when off.")

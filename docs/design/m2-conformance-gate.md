@@ -5,18 +5,19 @@ temporal core. It validates the manifest before executing an exact list of
 mandatory pytest nodeids and CTest cases. Renaming, skipping or deleting a proof
 therefore fails source-only CI instead of silently reducing coverage.
 
-The current executable scope is intentionally limited to the landed contracts:
+The final executable scope covers the landed contracts without a waiver:
 
 - typed phase pipeline and immutable canonical `ProgramGraph`;
 - typed schedules and exact residual operators;
 - explicit `SolveOutcome`, including `RejectAttempt` lowering;
-- uniform step rollback with no state, history, cache, diagnostic or clock publication;
+- uniform and AMR step transactions, including topology/state/history/cache/diagnostic/clock rollback;
+- accepted AMR transaction commit across topology, state, history and clock;
+- strict shared `TemporalRestartState` round-trip and rejected-attempt checkpoint refusal;
 - history restart round-trip and mismatched-program refusal.
 
-ADC-648 (atomic AMR/regrid transaction) and ADC-667 (multirate history and
-restart) remain explicit `[[deferred]]` rows with close conditions. They are not
-counted as executable coverage, and the manifest validator rejects any attempt
-to list them as completed checks.
+`deferred = []` is normative. The validator rejects any deferred row and requires
+positive plus refusal/rollback coverage for ADC-648 and ADC-667 using exact pytest
+nodeids or built CTest selectors.
 
 Use `--check-only` for the source-only CI integrity proof, `--python-only` when
 no native build is available, and `--build-dir` to select the CTest tree. The

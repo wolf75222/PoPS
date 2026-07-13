@@ -21,7 +21,7 @@ from pops.runtime.consumer import (
 )
 from pops.runtime.runtime_instance import RuntimeInstance
 from pops.runtime.restart_provider import RestartV3
-from pops.time import AcceptedStep, Clock, Every, Schedule
+from pops.time import AcceptedStep, Clock, Every, FixedDt, Schedule
 from tests.python.unit.runtime.test_runtime_planning import _install
 
 
@@ -33,6 +33,12 @@ class _Executor:
         self._step = 0
         self._last_run_identity = None
         self._last_restart_identity = None
+        self._step_snapshot = None
+        self._step_committed = False
+        self._step_strategy = FixedDt(1.0)
+        self._step_controller = None
+        self._step_transaction_plan = None
+        self._last_step_transaction_report = None
         self.bound_snapshot = SimpleNamespace(
             semantic_identity=plan.artifact.semantic_identity,
             artifact_identity=plan.artifact.artifact_identity,
@@ -54,13 +60,29 @@ class _Executor:
     def macro_step(self):
         return self._step
 
-    def step_cfl(self, _cfl):
-        self._time += 1.0
-        self._step += 1
-
     def step(self, dt):
         self._time += float(dt)
         self._step += 1
+
+    def _begin_step_transaction(self):
+        self._step_snapshot = (self._time, self._step)
+        self._step_committed = False
+
+    def _commit_step_transaction(self):
+        if self._step_snapshot is None:
+            raise RuntimeError("missing transaction")
+        self._step_committed = True
+
+    def _finalize_step_transaction(self):
+        if self._step_snapshot is None or not self._step_committed:
+            raise RuntimeError("missing committed transaction")
+        self._step_snapshot = None
+        self._step_committed = False
+
+    def _rollback_step_transaction(self):
+        self._time, self._step = self._step_snapshot
+        self._step_snapshot = None
+        self._step_committed = False
 
     def nx(self):
         return 2
@@ -195,11 +217,22 @@ def test_runtime_instance_inspection_exposes_install_and_consumer_evidence():
     assert pops.inspect(runtime) == payload
 
 
+def test_runtime_instance_has_one_authored_execution_route():
+    plan = _install()
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+
+    assert not hasattr(runtime, "step")
+    assert not hasattr(runtime, "step_cfl")
+    assert not hasattr(runtime, "run")
+    with pytest.raises(TypeError, match="does not accept strategy= or cfl="):
+        pops.run(runtime, t_end=1.0, max_steps=1, strategy=FixedDt(1.0))
+
+
 def test_run_publishes_exact_npz_only_after_accepted_step_and_commits_cursor(tmp_path):
     plan, graph, manifest = _with_graph(tmp_path)
     runtime = RuntimeInstance(plan, executor=_Executor(plan))
 
-    assert runtime.run(1.0, cfl=0.4) == 1
+    assert pops.run(runtime, t_end=1.0, max_steps=1) == 1
 
     cursor = runtime.consumer_cursors.for_consumer(manifest.qualified_id)
     assert cursor.committed_samples == 1
@@ -217,7 +250,7 @@ def test_scientific_format_is_a_structural_provider_without_name_dispatch(tmp_pa
     plan, _, _ = _with_graph(tmp_path, output_format=_CustomNPZ())
     runtime = RuntimeInstance(plan, executor=_Executor(plan))
 
-    runtime.run(1.0, cfl=0.4)
+    pops.run(runtime, t_end=1.0, max_steps=1)
 
     assert len(tuple(tmp_path.glob("*.npz"))) == 1
 
@@ -239,7 +272,7 @@ def test_malformed_format_provider_is_refused_before_an_effect_exists(tmp_path):
 def test_checkpoint_restart_authenticates_and_restores_consumer_cursors(tmp_path):
     plan, _, manifest = _with_graph(tmp_path / "outputs")
     runtime = RuntimeInstance(plan, executor=_Executor(plan))
-    runtime.run(1.0, cfl=0.4)
+    pops.run(runtime, t_end=1.0, max_steps=1)
     checkpoint = runtime.checkpoint(tmp_path / "restart")
 
     restored = RuntimeInstance(plan, executor=_Executor(plan))
@@ -264,7 +297,7 @@ def test_checkpoint_consumer_serializes_its_post_accept_cursor(tmp_path):
     )
     runtime = RuntimeInstance(plan, executor=_Executor(plan))
 
-    runtime.run(1.0, cfl=0.4)
+    pops.run(runtime, t_end=1.0, max_steps=1)
 
     with np.load(target, allow_pickle=False) as payload:
         cursors = payload["runtime_consumer_cursors"].item()
@@ -277,7 +310,7 @@ def test_checkpoint_consumer_serializes_its_post_accept_cursor(tmp_path):
 def test_checkpoint_refuses_a_different_consumer_graph_before_native_restore(tmp_path):
     plan, _, _ = _with_graph(tmp_path / "outputs")
     runtime = RuntimeInstance(plan, executor=_Executor(plan))
-    runtime.run(1.0, cfl=0.4)
+    pops.run(runtime, t_end=1.0, max_steps=1)
     checkpoint = runtime.checkpoint(tmp_path / "restart")
 
     empty_record = replace(plan.artifact.plan, consumer_graph=ConsumerGraph(()))

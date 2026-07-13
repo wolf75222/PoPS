@@ -81,6 +81,9 @@ class PreparedConsumerOutput(PreparedPublication):
     def discard(self) -> None:
         self._prepared.discard()
 
+    def rollback(self) -> None:
+        self._prepared.rollback()
+
 
 class ConsumerOutputPublisher(ConsumerPublisher):
     """Dispatch only accepted scientific-output effects to their exact writer."""

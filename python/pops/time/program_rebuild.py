@@ -63,6 +63,9 @@ def rebuild_program(
         )
         object.__setattr__(out, "clock", Clock("macro", owner=out.owner_path))
     out.dt = self.dt
+    out._step_strategy = getattr(self, "_step_strategy", None)
+    out._transaction_stores = tuple(getattr(self, "_transaction_stores", ()))
+    out._acceptance_guards = tuple(getattr(self, "_acceptance_guards", ()))
     clock_map = {self.clock: out.clock}
 
     def remap_clock(clock: Clock) -> Clock:

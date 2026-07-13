@@ -1,14 +1,17 @@
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <array>
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <pops/core/foundation/types.hpp>      // Real, POPS_HD
 #include <pops/runtime/program/profiler.hpp>   // Profiler / ProfileScope (per-node timing, ADC-459)
@@ -507,6 +510,28 @@ class ProgramContext {
     pops::lincomb(z, a, x, b, y);
   }
 
+  /// Publish a complete multi-state commit group only after every target/source pair validates.
+  /// The enclosing System step snapshot is the exception-safety boundary: an allocation/copy failure
+  /// in this final phase restores the entire accepted group before the exception escapes.
+  void commit_many(
+      std::initializer_list<std::pair<MultiFab*, const MultiFab*>> commits) const {
+    std::vector<MultiFab*> targets;
+    targets.reserve(commits.size());
+    for (const auto& [target, source] : commits) {
+      if (target == nullptr || source == nullptr)
+        throw std::invalid_argument("ProgramContext::commit_many received a null state");
+      if (std::find(targets.begin(), targets.end(), target) != targets.end())
+        throw std::invalid_argument("ProgramContext::commit_many received a duplicate target");
+      if (target->ncomp() != source->ncomp() ||
+          target->box_array().boxes() != source->box_array().boxes())
+        throw std::invalid_argument("ProgramContext::commit_many state layout mismatch");
+      targets.push_back(target);
+    }
+    for (const auto& [target, source] : commits)
+      if (target != source)
+        lincomb(*target, Real(0), *target, Real(1), *source);
+  }
+
   /// Register (idempotent) the history @p name with maximum lag @p lag, allocating the ring buffer
   /// WITHOUT reading it. The codegen emits this ONCE at the top of the step body for each declared
   /// history, so the ring depth is locked before the first store (the cold-start fill then broadcasts
@@ -587,7 +612,7 @@ class ProgramContext {
   /// Apply block @p b's post-step positivity projection to @p u in place: U <- project(U, aux) over the
   /// valid cells, the SAME Zhang-Shu / floor projection the native per-step path runs (ADC-177, spec
   /// op 21). REUSES the block's own projection closure (set at add_block time); a block WITHOUT a
-  /// projection is a no-op. Forwards to System::block_project -- it reimplements no positivity.
+  /// projection is rejected. Forwards to System::block_project -- it reimplements no positivity.
   void apply_projection(int b, MultiFab& u) const { sys_->block_project(sys_block(b), u); }
 
   /// Store a runtime Scalar @p value into the System diagnostics map under @p name (spec op 23),

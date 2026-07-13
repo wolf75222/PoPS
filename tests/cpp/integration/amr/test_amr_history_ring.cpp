@@ -241,6 +241,60 @@ TEST(test_amr_history_ring, RegridRemapKeepsSlotsConsistent) {
   EXPECT_EQ(global0.size() - ncoarse, nfine) << "fine_slice_matches_fine_extent";
 }
 
+TEST(test_amr_history_ring, AcceptedFacadeTransactionCommitsTopologyStateHistoryAndClock) {
+  constexpr int n = 32;
+  AmrSystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodic = true;
+  cfg.regrid_every = 1;
+
+  AmrSystem sim(cfg);
+  sim.add_block("a", exb_charge(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
+  sim.add_block("b", exb_charge(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
+  sim.set_poisson("charge_density", "geometric_mg", "periodic");
+  sim.set_refinement(1.2);
+  sim.set_density("a", blob(n, 0.25, 0.5, 1.0, 1.0, 0.06));
+  sim.set_density("b", blob(n, 0.75, 0.5, 1.0, 1.0, 0.06));
+  ASSERT_TRUE(sim.uses_runtime_engine());
+  AmrRuntime* rt = sim.engine();
+  ASSERT_NE(rt, nullptr);
+  rt->set_block_tag_predicate(0, TagDensityAbove{Real(1.2)});
+  rt->set_block_tag_predicate(1, TagDensityAbove{Real(1.2)});
+  detail::AmrHistoryOps::register_history(*rt, 0, "R", 1);
+  sim.set_clock(0.25, 1);  // the accepted attempt performs a real due regrid
+
+  const std::vector<PatchBox> patches_before = rt->patch_boxes();
+  const std::vector<double> state_before = rt->block_level_state(0, 0);
+  const int regrids_before = rt->regrid_count();
+
+  sim.install_program_step([&](double dt) {
+    rt->step(static_cast<Real>(dt));
+    for (int k = 0; k < rt->nlev(); ++k)
+      detail::AmrHistoryOps::store_history(*rt, "R", k, rt->level_state(0, k), Real(dt));
+    detail::AmrHistoryOps::rotate_histories(*rt);
+    sim.record_program_diagnostic("accepted", 7.0);
+  });
+
+  sim.begin_step_transaction();
+  sim.step(0.01);
+  ASSERT_FALSE(same_patches(rt->patch_boxes(), patches_before));
+  ASSERT_GT(rt->regrid_count(), regrids_before);
+  sim.commit_step_transaction();
+
+  EXPECT_DOUBLE_EQ(sim.time(), 0.26);
+  EXPECT_EQ(sim.macro_step(), 2);
+  EXPECT_EQ(rt->macro_step(), 2);
+  EXPECT_NE(rt->block_level_state(0, 0), state_before);
+  EXPECT_TRUE(detail::AmrHistoryOps::initialized(*rt, "R"));
+  ASSERT_EQ(sim.program_diagnostics().count("accepted"), 1u);
+  EXPECT_DOUBLE_EQ(sim.program_diagnostics().at("accepted"), 7.0);
+  // Commit makes the accepted state externally publishable but deliberately retains the rollback
+  // snapshot. Finalize is the irreversible boundary after those publications succeed.
+  sim.finalize_step_transaction();
+  EXPECT_THROW(sim.rollback_step_transaction(), std::runtime_error);
+}
+
 TEST(test_amr_history_ring, RejectedFacadeAttemptRestoresTopologyStateHistoryAndClock) {
   constexpr int n = 32;
   AmrSystemConfig cfg;

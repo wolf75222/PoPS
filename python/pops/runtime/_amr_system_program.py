@@ -3,7 +3,7 @@
 Extracted from :mod:`pops.runtime.amr_system` to keep that module under the Spec-4 36.3
 500-line budget. Holds the COMPILED time-Program tail of ``_install_compiled``: the
 ``install_program`` step on the AMR hierarchy plus its runtime params (``set_program_params``)
-and global cadence (``set_program_cadence``). Mixed in via inheritance; operates on ``self._s``
+and typed step-transaction contract. Mixed in via inheritance; operates on ``self._s``
 through the native binding and on the ``_install_*`` helpers of the host class. Mirror of the
 System routes in :mod:`pops.runtime._system_unified_install`.
 """
@@ -18,10 +18,10 @@ else:
 
 
 class _AmrSystemProgram(_AmrSystem):
-    """COMPILED time-Program install / params / cadence methods of AmrSystem (ADC-508)."""
+    """COMPILED time-Program install and typed transaction methods of AmrSystem."""
 
     def _finish_program_install(self, compiled: Any, so_path: Any, schema: Any,
-                                params: Any, cadence: Any) -> Any:
+                                params: Any) -> Any:
         """Steps 5/5b/6 of ``_install_compiled`` for a COMPILED time Program (ADC-508).
 
         Runs AFTER the field solvers, blocks, aux inputs and initial state are wired:
@@ -36,7 +36,7 @@ class _AmrSystemProgram(_AmrSystem):
           - (5b) COMPILED-PROGRAM RUNTIME PARAMS (parity ADC-510): route the remaining params to the
             per-PROGRAM-block set_program_params, AFTER install_program seeded each block's declaration
             defaults. A name declared by no Program kernel raises (no silent drop).
-          - cadence is authored by Program schedules and step strategies, never by a bind-time policy.
+          - (6) attach the exact typed StepTransactionPlan authored by the installed Program.
         """
         if so_path is not None:
             self.install_program(so_path)
@@ -52,11 +52,11 @@ class _AmrSystemProgram(_AmrSystem):
                 set_persistence(
                     {name: policy for name, (_depth, policy) in persistence.items()})
             self._install_program_params(compiled, schema, params)
-
-        if cadence is not None:
-            raise TypeError(
-                "pops.bind(cadence=) was removed; declare cadence in the Program schedule and "
-                "time-step control in Program.step_strategy()")
+            component = getattr(compiled, "program", None)
+            authored = getattr(component, "program", component)
+            self._step_strategy = getattr(authored, "_step_strategy", None)
+            self._step_transaction_plan = (
+                authored.transaction_plan() if authored is not None else None)
 
     def _install_program_params(self, compiled: Any, schema: Any, params: Any) -> None:
         """Install complete owner-qualified Program vectors from BindSchema."""

@@ -27,7 +27,6 @@ class _AmrSystemInstall(_AmrSystem):
 
     def _install_compiled(self, compiled: Any = None, *, instances: Any = None, params: Any = None,
                           aux: Any = None, solvers: Any = None, field_plans: Any = None,
-                          cadence: Any = None,
                           outputs: Any = None, diagnostics: Any = None,
                           bind_schema: Any = None, initial_values: Any = (),
                           bootstrap_plan: Any = None, amr_transfer: Any = None) -> Any:
@@ -47,8 +46,8 @@ class _AmrSystemInstall(_AmrSystem):
             ADC-634): the same wiring, then ``install_program(so_path)`` installs the compiled Program
             on the AMR hierarchy (the .so must export ``pops_install_program_amr``: compile it with
             ``target='amr_system'``). The runtime params (``params=``) route to ``set_program_params``
-            through the same Program schedule -- the AMR counterpart of the System route. The
-            per-level macro-step driver is the AmrProgramContext seam (ADC-508); a
+            through the same Program transaction contract as Uniform. The per-level macro-step driver
+            is the AmrProgramContext seam (ADC-508); a
             Program using a deferred op (Schur / history / named-flux) compiles against it and throws
             the honest AmrProgramContext backstop only when that op is reached at run.
 
@@ -62,7 +61,6 @@ class _AmrSystemInstall(_AmrSystem):
         @param aux dict {field_name: array}: "B_z" -> set_magnetic_field, "T_e" rejected (derived),
             any other -> set_aux_field on the declaring block.
         @param solvers dict {field: <solver>}: lowered to set_poisson (default Poisson field only).
-        @param cadence retired; non-None values are rejected.
         """
         # RUNTIME FREEZE (ADC-592): a second install on an already-bound AMR engine is a re-composition
         # and is refused explicitly -- the compiled artifact is bound exactly once.
@@ -224,18 +222,18 @@ class _AmrSystemInstall(_AmrSystem):
                 self, bootstrap_plan, initial_rows
             )
 
-        # (5/5b/6) COMPILED time Program: install_program on the AMR hierarchy, route the REMAINING runtime
-        # params and apply the global cadence (or reject a leftover params= / cadence= on a NATIVE install).
+        # (5/5b/6) COMPILED time Program: install_program on the AMR hierarchy, route the remaining
+        # runtime params and attach the typed step-transaction contract.
         # Extracted into the _AmrSystemProgram mixin (_finish_program_install) to keep this module small.
-        self._finish_program_install(compiled, so_path, bind_schema, params, cadence)
+        self._finish_program_install(compiled, so_path, bind_schema, params)
 
         # (7) FREEZE (ADC-592): the AMR composition is fully lowered -- build the BoundSnapshot manifest
         # of WHAT was bound (build_amr_snapshot, in _bound_snapshot), then _finalize_bind marks the
         # runtime 'bound' as the LAST act. If this route installed a whole-system Program, its
-        # program/cache/ABI identity and cadence are retained alongside each block-model hash.
+        # program/cache/ABI identity and transaction plan are retained alongside each block-model hash.
         from pops.runtime._bound_snapshot import build_amr_snapshot
         snapshot = build_amr_snapshot(
-            self, compiled, instances, solvers or field_plans, cadence, aux, params
+            self, compiled, instances, solvers or field_plans, aux, params
         )
         self._finalize_bind(snapshot)  # freeze (ADC-592): _finalize_bind lives on _LifecycleMixin
 

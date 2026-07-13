@@ -124,7 +124,7 @@ class _Prepared(PreparedPublication):
 
     def publish(self):
         self.publisher.publish_calls += 1
-        if self.publisher.publish_calls <= self.publisher.fail_publications:
+        if self.publisher.publish_calls in self.publisher.fail_on:
             raise OSError("injected publication failure")
         self.publisher.temporaries.remove(self.temp_id)
         artifact = "artifact-%s" % self.effect.payload.identity.hexdigest[:12]
@@ -139,10 +139,15 @@ class _Prepared(PreparedPublication):
     def discard(self):
         self.publisher.temporaries.discard(self.temp_id)
 
+    def rollback(self):
+        self.publisher.temporaries.discard(self.temp_id)
+        artifact = "artifact-%s" % self.effect.payload.identity.hexdigest[:12]
+        self.publisher.artifacts.discard(artifact)
+
 
 class _Publisher(ConsumerPublisher):
-    def __init__(self, *, fail_publications=0):
-        self.fail_publications = fail_publications
+    def __init__(self, *, fail_publications=0, fail_on=()):
+        self.fail_on = set(fail_on) or set(range(1, fail_publications + 1))
         self.prepare_calls = 0
         self.publish_calls = 0
         self.temporaries = set()
@@ -325,3 +330,44 @@ def test_success_receipt_is_the_only_cursor_commit_and_deduplicates_occurrence()
     assert report.cursors.for_consumer(manifest.qualified_id) == plan.effects[0].cursor_after
     duplicate = plan_accepted_side_effects(runtime, graph, moment, report.cursors)
     assert duplicate.effects == ()
+
+
+def test_accepted_publications_remain_compensatable_until_the_outer_transaction_seals():
+    _, runtime = _runtime()
+    clock = Clock("solution", owner=OwnerPath.consumer("adc-685-compensate"))
+    manifest = _manifest_for(runtime, "compensate", clock)
+    cursors = ConsumerCursorSet()
+    plan = plan_accepted_side_effects(
+        runtime, ConsumerGraph((manifest,)), _moment(clock), cursors)
+    publisher = _Publisher()
+    transaction = ConsumerTransaction(plan, cursors, publisher)
+
+    accepted = transaction.accept()
+    assert accepted.published
+    assert publisher.artifacts
+
+    compensated = transaction.rollback_accepted()
+    assert compensated.status == "rejected"
+    assert compensated.published == ()
+    assert compensated.cursors.to_data() == cursors.to_data()
+    assert publisher.temporaries == set()
+    assert publisher.artifacts == set()
+
+
+def test_later_publication_failure_compensates_every_earlier_artifact():
+    _, runtime = _runtime()
+    clock = Clock("solution", owner=OwnerPath.consumer("adc-685-partial"))
+    first = _manifest_for(runtime, "first", clock, n=1)
+    second = _manifest_for(runtime, "second", clock, n=1, dependency=first.handle)
+    cursors = ConsumerCursorSet()
+    plan = plan_accepted_side_effects(
+        runtime, ConsumerGraph((first, second)), _moment(clock, step=1), cursors)
+    publisher = _Publisher(fail_on=(2,))
+
+    with pytest.raises(ConsumerPublicationError) as failure:
+        ConsumerTransaction(plan, cursors, publisher).accept()
+
+    assert failure.value.report.published == ()
+    assert failure.value.report.cursors.to_data() == cursors.to_data()
+    assert publisher.temporaries == set()
+    assert publisher.artifacts == set()

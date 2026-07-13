@@ -76,6 +76,8 @@ def test_target_has_one_authority_per_concern_and_no_legacy_path():
         "RejectOldManifest",
         "add_block(",
         "pops." + "Pro" + "blem",
+        "Bind" + "Inputs",
+        "simulation." + "run(",
     )
     for spelling in forbidden:
         assert spelling not in source
@@ -98,6 +100,7 @@ def test_target_has_one_authority_per_concern_and_no_legacy_path():
     ) == 2
     assert "StagePoint(" in source
     assert "StateTransfer()" in source
+    assert "pops.run(simulation, **target.authoring.run_controls)" in source
     assert "AMRTransfer.conservative(order=" not in source
     assert "ScientificOutput(" in source
     assert "Checkpoint(" in source

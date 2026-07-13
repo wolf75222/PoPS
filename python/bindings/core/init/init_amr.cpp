@@ -1,5 +1,7 @@
 #include "../bindings_detail.hpp"
 
+#include <limits>
+
 // ADC-365: the AMR (AmrSystemConfig + AmrSystem) bindings.
 //
 // ADC-593: like init_system, the AmrSystem .def registrations are INTERNAL seams of the bind flow (the
@@ -377,13 +379,19 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
 void bind_amr_stepping(py::class_<AmrSystem>& cls) {
   cls.def("step", &AmrSystem::step, py::arg("dt"))
       .def("advance", &AmrSystem::advance, py::arg("dt"), py::arg("nsteps"))
+      .def("_begin_step_transaction", &AmrSystem::begin_step_transaction)
+      .def("_commit_step_transaction", &AmrSystem::commit_step_transaction)
+      .def("_finalize_step_transaction", &AmrSystem::finalize_step_transaction)
+      .def("_rollback_step_transaction", &AmrSystem::rollback_step_transaction)
       .def("step_cfl", &AmrSystem::step_cfl,
            "Advances by one AMR macro-step at dt = cfl * dx_coarse / max wave speed (also honors "
            "the substeps/stride cadence in multi-block and the optional bounds). Returns the dt "
            "used. speed_floor (ADC-645): the floor applied to the reduced max wave speed on the "
            "multi-block runtime engine (default = the historical kCflSpeedFloor, bit-identical); "
            "refused non-default on the single-block coupler (no historical floor site there).",
-           py::arg("cfl"), py::arg("speed_floor") = static_cast<double>(kCflSpeedFloor))
+           py::arg("cfl"), py::arg("speed_floor") = static_cast<double>(kCflSpeedFloor),
+           py::arg("max_dt") = std::numeric_limits<double>::infinity(),
+           py::arg("min_dt") = 0.0)
       // AMR / MPI profiling (Spec 5 criterion 43, ADC-479): the multi-block engine times its
       // non-numeric phases (regrid / fill_boundary / average_down) + MPI counters into the
       // facade-owned Profiler. PerformanceSummary.by_amr_mpi() surfaces them. Off by default.
@@ -426,7 +434,7 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       .def("install_program", &AmrSystem::install_program, py::arg("so_path"))
       // Compiled-Program macro-step cadence (parity System::set_program_cadence, ADC-411): GLOBAL
       // substeps + stride around the installed program closure. Both must be >= 1. Separate from
-      // install_program so the .so ABI is untouched; CompiledTime(substeps=, stride=) threads here.
+      // Internal compiled-kernel cadence seam; the public controller is Program.step_strategy().
       .def("set_program_cadence", &AmrSystem::set_program_cadence, py::arg("substeps"),
            py::arg("stride"))
       // ADC-594: read the installed GLOBAL cadence (substeps / stride) for the ProgramRuntimeReport.

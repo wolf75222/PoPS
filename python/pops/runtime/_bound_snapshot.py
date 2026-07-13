@@ -17,7 +17,7 @@ from typing import Any
 from pops.identity import Identity, canonical_bytes, make_identity
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def _identity(value: Any, domain: str, *, where: str) -> Identity:
@@ -139,12 +139,12 @@ class BoundSnapshot:
 
     __slots__ = (
         "schema_version", "semantic_identity", "artifact_identity", "layout", "blocks",
-        "solvers", "cadence", "params", "aux_evidence", "initial_evidence", "outputs",
+        "solvers", "step_transaction", "params", "aux_evidence", "initial_evidence", "outputs",
         "diagnostics", "bind_schema_identity", "execution_context", "bind_identity",
     )
 
     def __init__(self, *, semantic_identity: Any, artifact_identity: Any, layout: Any,
-                 blocks: Any, solvers: Any, cadence: Any, params: Any, aux_evidence: Any,
+                 blocks: Any, solvers: Any, step_transaction: Any, params: Any, aux_evidence: Any,
                  initial_evidence: Any, outputs: Any, diagnostics: Any,
                  bind_schema_identity: Any, execution_context: Any = None) -> None:
         semantic = _identity(semantic_identity, "semantic", where="semantic_identity")
@@ -155,7 +155,8 @@ class BoundSnapshot:
         object.__setattr__(self, "artifact_identity", artifact)
         for name, value in (
             ("layout", layout), ("blocks", list(blocks)), ("solvers", solvers),
-            ("cadence", cadence), ("params", list(params)), ("aux_evidence", aux_evidence),
+            ("step_transaction", step_transaction), ("params", list(params)),
+            ("aux_evidence", aux_evidence),
             ("initial_evidence", initial_evidence), ("outputs", list(outputs)),
             ("diagnostics", list(diagnostics)),
             ("execution_context", execution_context),
@@ -173,7 +174,7 @@ class BoundSnapshot:
             "layout": _thaw(self.layout),
             "blocks": _thaw(self.blocks),
             "solvers": _thaw(self.solvers),
-            "cadence": _thaw(self.cadence),
+            "step_transaction": _thaw(self.step_transaction),
             "params": _thaw(self.params),
             "aux_evidence": _thaw(self.aux_evidence),
             "initial_evidence": _thaw(self.initial_evidence),
@@ -255,16 +256,14 @@ def _block_rows(engine: Any, instances: Any) -> list[dict[str, Any]]:
     return rows
 
 
-def _cadence_data(cadence: Any) -> dict[str, Any]:
-    if cadence is None:
-        return {"kind": "engine-default", "substeps": 1, "stride": 1, "cfl": "default"}
-    return {
-        "kind": "compiled-time", "substeps": int(cadence.substeps),
-        "stride": int(cadence.stride), "cfl": cadence.cfl,
-    }
+def _transaction_data(compiled: Any) -> Any:
+    component = getattr(compiled, "program", None)
+    program = getattr(component, "program", component)
+    plan = program.transaction_plan() if program is not None else None
+    return None if plan is None else plan.to_data()
 
 
-def _build_snapshot(engine: Any, compiled: Any, instances: Any, solvers: Any, cadence: Any,
+def _build_snapshot(engine: Any, compiled: Any, instances: Any, solvers: Any,
                     aux: Any, params: Any, *, layout: str) -> BoundSnapshot:
     semantic, artifact = _require_compiled_identities(compiled)
     rows = params.rows()
@@ -275,7 +274,7 @@ def _build_snapshot(engine: Any, compiled: Any, instances: Any, solvers: Any, ca
         blocks=_block_rows(engine, instances),
         solvers={name: _data(value, where="solver[%r]" % name)
                  for name, value in sorted((solvers or {}).items())},
-        cadence=_cadence_data(cadence),
+        step_transaction=_transaction_data(compiled),
         params=rows,
         aux_evidence=_input_evidence(aux or {}, where="aux"),
         initial_evidence=_input_evidence(
@@ -291,18 +290,18 @@ def _build_snapshot(engine: Any, compiled: Any, instances: Any, solvers: Any, ca
 
 
 def build_uniform_snapshot(engine: Any, compiled: Any, resolved_models: Any, instances: Any,
-                           solvers: Any, cadence: Any, aux: Any, params: Any) -> BoundSnapshot:
+                           solvers: Any, aux: Any, params: Any) -> BoundSnapshot:
     effective = {
         name: dict(spec, model=resolved_models.get(name, spec["model"]))
         for name, spec in (instances or {}).items()
     }
     return _build_snapshot(
-        engine, compiled, effective, solvers, cadence, aux, params, layout="uniform")
+        engine, compiled, effective, solvers, aux, params, layout="uniform")
 
 
 def build_amr_snapshot(engine: Any, compiled: Any, instances: Any, solvers: Any,
-                       cadence: Any, aux: Any, params: Any) -> BoundSnapshot:
-    return _build_snapshot(engine, compiled, instances, solvers, cadence, aux, params, layout="amr")
+                       aux: Any, params: Any) -> BoundSnapshot:
+    return _build_snapshot(engine, compiled, instances, solvers, aux, params, layout="amr")
 
 
 __all__ = ["BoundSnapshot", "SCHEMA_VERSION", "build_uniform_snapshot", "build_amr_snapshot"]

@@ -103,7 +103,8 @@ class _SystemIO(_System):
                 nv = self._s.n_vars(b)
                 st = np.asarray(self._s.state_global(b), dtype=np.float64).reshape(nv, nyv, nxv)
                 for c, nm in enumerate(self._s.variable_names(b, "conservative")):
-                    arrays.append(st[c]); names.append("%s_%s" % (b, nm))
+                    arrays.append(st[c])
+                    names.append("%s_%s" % (b, nm))
             arrays.append(np.asarray(self._s.potential_global(), dtype=np.float64).reshape(nyv, nxv))
             names.append("phi")
             if not rank0:
@@ -114,7 +115,7 @@ class _SystemIO(_System):
                      'Spacing="%.17g %.17g 1">' % (nxv, nyv, 1.0 / nxv, 1.0 / nyv),
                      '    <Piece Extent="0 %d 0 %d 0 0">' % (nxv, nyv),
                      '      <CellData>']
-            for nm, arr in zip(names, arrays):
+            for nm, arr in zip(names, arrays, strict=True):
                 lines.append('        <DataArray type="Float64" Name="%s" format="ascii">' % nm)
                 lines.append("          " + " ".join("%.17g" % v for v in arr.ravel()))
                 lines.append('        </DataArray>')
@@ -146,7 +147,7 @@ class _SystemIO(_System):
             except ImportError:
                 raise RuntimeError(
                     "write(format='hdf5'): h5py missing (pip/conda install h5py); "
-                    "use format='npz' (equivalent, no dependency) in the meantime.")
+                    "use format='npz' (equivalent, no dependency) in the meantime.") from None
             tmp = target + ".tmp"
             with h5py.File(tmp, "w") as f:
                 f.attrs["t"] = self._s.time()
@@ -199,7 +200,7 @@ class _SystemIO(_System):
         except ImportError:
             raise RuntimeError(
                 "write(format='hdf5', parallel=True) : h5py absent. Remedy : install h5py built with "
-                "MPI (parallel HDF5), or parallel=False (global gather + rank-0 write).")
+                "MPI (parallel HDF5), or parallel=False (global gather + rank-0 write).") from None
         if not h5py.get_config().mpi:
             raise RuntimeError(
                 "write(format='hdf5', parallel=True) : h5py present but WITHOUT MPI support "
@@ -210,7 +211,7 @@ class _SystemIO(_System):
         except ImportError:
             raise RuntimeError(
                 "write(format='hdf5', parallel=True) : mpi4py absent (required to open in mpio). "
-                "Remedy : install mpi4py, or parallel=False (global gather + rank-0 write).")
+                "Remedy : install mpi4py, or parallel=False (global gather + rank-0 write).") from None
         # Guard : _pops module built BEFORE the local accessors (build prior to ADC-66).
         if not hasattr(self._s, "local_boxes"):
             raise RuntimeError(
@@ -487,3 +488,4 @@ class _SystemIO(_System):
                     np.asarray(d[value_key], dtype=np.float64))
         self._s.set_clock(float(d["t"]), int(d["macro_step"]))
         self._temporal_restart_state = restored_temporal
+        self._step_controller = None

@@ -345,7 +345,9 @@ class SystemStepper {
   /// sum. In unsplit 2D the effective Courant number thus reaches 2*cfl when wx ~ wy:
   /// cfl = 0.4 (case default) stays < 1 (safe), this is also the convention of the sweep
   /// references (HLL step); cfl >= 0.5 in unsplit 2D is MARGINAL -- to avoid without study.
-  double step_cfl(double cfl, double speed_floor = static_cast<double>(kCflSpeedFloor)) {
+  double step_cfl(double cfl, double speed_floor = static_cast<double>(kCflSpeedFloor),
+                  double max_dt = std::numeric_limits<double>::infinity(),
+                  double min_dt = 0.0) {
     Impl* P = owner_;
     P->solve_fields();
     // MIN physical step of the grid (Cartesian min(dx,dy) / polar min(dr, r_min*dtheta), cf.
@@ -444,6 +446,18 @@ class SystemStepper {
            static_cast<double>(kCflSpeedFloor);  // all frozen: degenerate step
       reason = "degenerate";
     }
+    if (std::isnan(max_dt) || max_dt <= 0.0)
+      throw std::invalid_argument("System::step_cfl max_dt must be positive or +infinity");
+    if (std::isfinite(max_dt)) {
+      if (max_dt < dt) {
+        dt = max_dt;
+        reason = "strategy:max_dt";
+      }
+    }
+    if (std::isnan(min_dt) || min_dt < 0.0)
+      throw std::invalid_argument("System::step_cfl min_dt must be finite and >= 0");
+    if (dt < min_dt)
+      throw std::runtime_error("System::step_cfl stability bound is below declared min_dt");
     last_dt_reason_ = std::move(reason);
     // Compiled time Program (epic ADC-399, criterion 7): the CFL dt above is computed in PoPS ON
     // THE NATIVE STATE (per-block bounds + global bounds, UNCHANGED -- the CFL logic stays here), then
@@ -560,6 +574,7 @@ class SystemStepper {
   /// "source_frequency:<block>", "stability_dt:<block>", "global:<label>", "degenerate", or "" if
   /// no step_cfl has run yet. Diagnostic (System::last_dt_bound).
   const std::string& last_dt_reason() const { return last_dt_reason_; }
+  void restore_last_dt_reason(std::string reason) { last_dt_reason_ = std::move(reason); }
 
  private:
   Impl* owner_;

@@ -24,41 +24,101 @@ def _clock(time: Any, macro_step: Any) -> tuple[str, int]:
     return value.hex(), step
 
 
-def _positive_finite(value: Any, *, where: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise TypeError("%s must be a numeric scalar" % where)
-    result = float(value)
-    if not math.isfinite(result) or result <= 0.0:
-        raise ValueError("%s must be finite and > 0" % where)
+def _finite_literal(value: Any, *, where: str, positive: bool = False) -> float:
+    if not isinstance(value, dict) or set(value) != {"kind", "value"} \
+            or value["kind"] != "binary64" or not isinstance(value["value"], str):
+        raise TypeError("%s must be a canonical binary64 scalar literal" % where)
+    try:
+        result = float.fromhex(value["value"])
+    except ValueError:
+        raise ValueError("%s binary64 value is invalid" % where) from None
+    if not math.isfinite(result) or result.hex() != value["value"]:
+        raise ValueError("%s must be canonical and finite" % where)
+    if positive and result <= 0.0:
+        raise ValueError("%s must be > 0" % where)
     return result
 
 
+def _positive_literal(value: Any, *, where: str) -> float:
+    return _finite_literal(value, where=where, positive=True)
+
+
 def _validate_strategy(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict) or not isinstance(value.get("strategy"), str):
-        raise TypeError("Uniform temporal restart strategy must be a run-control mapping")
-    kind = value["strategy"]
+    if not isinstance(value, dict) or set(value) != {"strategy", "controls"}:
+        raise TypeError(
+            "Uniform temporal restart strategy must contain exact strategy/controls mappings")
+    strategy, controls = value["strategy"], value["controls"]
+    if not isinstance(strategy, dict) or not isinstance(strategy.get("kind"), str):
+        raise TypeError("Uniform temporal restart strategy descriptor is invalid")
+    if not isinstance(controls, dict):
+        raise TypeError("Uniform temporal restart controls must be a mapping")
+    kind = strategy["kind"]
     expected = {
-        "adaptive_cfl": {"strategy", "cfl", "max_dt"},
-        "fixed_dt": {"strategy", "dt"},
-        "error_controlled_dt": {"strategy", "rtol", "atol"},
-        "external_time_grid": {"strategy", "grid_id"},
+        "fixed_dt": {"kind", "dt"},
+        "error_controlled_dt": {
+            "kind", "dt_init", "rtol", "atol", "dt_min", "dt_max", "max_rejections",
+            "shrink", "growth",
+        },
+        "external_time_grid": {"kind", "grid_id"},
     }
-    if kind not in expected or set(value) != expected[kind]:
+    if kind == "adaptive_cfl":
+        if set(strategy) not in ({"kind", "cfl"}, {"kind", "cfl", "max_dt"}):
+            raise ValueError("Uniform temporal restart AdaptiveCFL descriptor has invalid keys")
+    elif kind not in expected or set(strategy) != expected[kind]:
         raise ValueError("Uniform temporal restart strategy has unknown or incomplete keys")
     if kind == "adaptive_cfl":
-        _positive_finite(value["cfl"], where="AdaptiveCFL.cfl")
-        if value["max_dt"] is not None:
-            _positive_finite(value["max_dt"], where="AdaptiveCFL.max_dt")
+        _positive_literal(strategy["cfl"], where="AdaptiveCFL.cfl")
+        if "max_dt" in strategy:
+            _positive_literal(strategy["max_dt"], where="AdaptiveCFL.max_dt")
+        if not set(controls) <= {"dt_min", "dt_max"}:
+            raise ValueError("AdaptiveCFL restart controls are dt_min/dt_max only")
+        bounds = {
+            name: _positive_literal(item, where="AdaptiveCFL.controls.%s" % name)
+            for name, item in controls.items()
+        }
+        if bounds.get("dt_min", 0.0) > bounds.get("dt_max", float("inf")):
+            raise ValueError("AdaptiveCFL restart dt_min must be <= dt_max")
     elif kind == "fixed_dt":
-        if value["dt"] is None:
-            raise ValueError("checkpointed FixedDt requires an authored dt")
-        _positive_finite(value["dt"], where="FixedDt.dt")
+        _positive_literal(strategy["dt"], where="FixedDt.dt")
+        if controls:
+            raise ValueError("FixedDt restart controls must be empty")
     elif kind == "error_controlled_dt":
-        _positive_finite(value["rtol"], where="ErrorControlledDt.rtol")
-        _positive_finite(value["atol"], where="ErrorControlledDt.atol")
-    elif not isinstance(value["grid_id"], str) or not value["grid_id"]:
-        raise ValueError("ExternalTimeGrid.grid_id must be a non-empty string")
-    return dict(value)
+        scalars = {
+            name: _positive_literal(strategy[name], where="ErrorControlledDt.%s" % name)
+            for name in ("dt_init", "rtol", "atol", "dt_min", "dt_max", "shrink", "growth")
+        }
+        rejections = strategy["max_rejections"]
+        if isinstance(rejections, bool) or not isinstance(rejections, int) or rejections <= 0:
+            raise ValueError("ErrorControlledDt.max_rejections must be a positive integer")
+        if not scalars["dt_min"] <= scalars["dt_init"] <= scalars["dt_max"]:
+            raise ValueError("ErrorControlledDt restart bounds are inconsistent")
+        if not scalars["shrink"] < 1.0 or scalars["growth"] < 1.0:
+            raise ValueError("ErrorControlledDt restart shrink/growth are inconsistent")
+        if controls:
+            raise ValueError("ErrorControlledDt restart controls must be empty")
+    else:
+        grid_id = strategy["grid_id"]
+        if not isinstance(grid_id, str) or not grid_id:
+            raise ValueError("ExternalTimeGrid.grid_id must be a non-empty string")
+        if set(controls) != {grid_id}:
+            raise ValueError("ExternalTimeGrid restart controls must contain its exact grid_id")
+        grid = controls[grid_id]
+        if not isinstance(grid, list) or len(grid) < 2:
+            raise ValueError("ExternalTimeGrid restart grid must contain at least two times")
+        points = [
+            _finite_literal(item, where="ExternalTimeGrid.controls.%s" % grid_id)
+            for item in grid
+        ]
+        if any(right <= left for left, right in zip(points, points[1:], strict=False)):
+            raise ValueError("ExternalTimeGrid restart grid must be strictly increasing")
+    return {
+        "strategy": {name: item for name, item in strategy.items()},
+        "controls": {
+            name: [dict(item) for item in item_value]
+            if isinstance(item_value, list) else dict(item_value)
+            for name, item_value in controls.items()
+        },
+    }
 
 
 def _validate_controller_state(value: Any) -> dict[str, Any]:

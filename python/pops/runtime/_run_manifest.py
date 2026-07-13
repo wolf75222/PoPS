@@ -8,6 +8,7 @@ import math
 
 from pops._manifest_protocol import manifest_envelope, parse_manifest_envelope
 from pops.identity import Identity, make_identity
+from pops.runtime._runtime_plan_io import freeze_data, thaw_data
 
 
 RUN_MANIFEST_SCHEMA_VERSION = 2
@@ -46,7 +47,7 @@ class RunManifest:
         if not isinstance(controls, Mapping):
             raise TypeError("RunManifest controls must be a mapping")
         exact = dict(controls)
-        expected = {"t_end", "cfl", "max_steps", "output_mode"}
+        expected = {"t_end", "step_transaction", "max_steps", "output_mode"}
         if set(exact) != expected:
             raise ValueError("RunManifest controls keys must be exactly %s" % sorted(expected))
         object.__setattr__(self, "schema_version", RUN_MANIFEST_SCHEMA_VERSION)
@@ -57,9 +58,12 @@ class RunManifest:
         output_mode = exact["output_mode"]
         if not isinstance(output_mode, str) or not output_mode:
             raise TypeError("RunManifest output_mode must be a non-empty string")
+        if not isinstance(exact["step_transaction"], Mapping):
+            raise TypeError("RunManifest step_transaction must be a mapping")
         object.__setattr__(self, "controls", MappingProxyType({
             "t_end": _finite_float(exact["t_end"], where="controls.t_end"),
-            "cfl": _finite_float(exact["cfl"], where="controls.cfl"),
+            "step_transaction": freeze_data(
+                exact["step_transaction"], "controls.step_transaction"),
             "max_steps": _strict_int(exact["max_steps"], where="controls.max_steps"),
             "output_mode": output_mode,
         }))
@@ -73,7 +77,7 @@ class RunManifest:
             "start_macro_step": self.start_macro_step,
             "controls": {
                 "t_end": self.controls["t_end"].hex(),
-                "cfl": self.controls["cfl"].hex(),
+                "step_transaction": thaw_data(self.controls["step_transaction"]),
                 "max_steps": self.controls["max_steps"],
                 "output_mode": self.controls["output_mode"],
             },
@@ -84,7 +88,10 @@ class RunManifest:
             "bind_identity": self.bind_identity.token,
             "start_time": self.start_time,
             "start_macro_step": self.start_macro_step,
-            "controls": dict(self.controls),
+            "controls": {
+                **dict(self.controls),
+                "step_transaction": thaw_data(self.controls["step_transaction"]),
+            },
         }
         payload["run_identity"] = self.run_identity.token
         return manifest_envelope(
@@ -123,7 +130,7 @@ class RunManifest:
         raise AttributeError("RunManifest is immutable")
 
 
-def begin_run(engine: Any, *, t_end: Any, cfl: Any, max_steps: Any,
+def begin_run(engine: Any, *, t_end: Any, step_transaction: Any, max_steps: Any,
               output_dir: Any) -> RunManifest:
     snapshot = getattr(engine, "bound_snapshot", None)
     if snapshot is None:
@@ -136,7 +143,7 @@ def begin_run(engine: Any, *, t_end: Any, cfl: Any, max_steps: Any,
         start_time=engine.time(),
         start_macro_step=engine.macro_step(),
         controls={
-            "t_end": t_end, "cfl": cfl, "max_steps": max_steps,
+            "t_end": t_end, "step_transaction": step_transaction, "max_steps": max_steps,
             # A path is placement/provenance, not semantic execution identity.
             "output_mode": "explicit-root" if output_dir is not None else "current-directory",
         },

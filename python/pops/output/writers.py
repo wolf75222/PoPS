@@ -99,7 +99,7 @@ class PreparedOutputFile:
     """Verified temporary scientific file, not yet attached to a consumer effect."""
 
     __slots__ = ("temporary", "target", "format", "output_identity", "selection_identity",
-                 "_verify", "_published", "_discarded", "_communicator")
+                 "_verify", "_published", "_discarded", "_created_target", "_communicator")
 
     def __init__(self, temporary: Any, target: Any, *, format: str,
                  output_identity: Identity, selection_identity: Identity,
@@ -109,6 +109,7 @@ class PreparedOutputFile:
         self.output_identity, self.selection_identity = output_identity, selection_identity
         self._verify, self._communicator = verify, communicator
         self._published = self._discarded = False
+        self._created_target = False
 
     def _rank(self) -> int:
         return 0 if self._communicator is None else int(self._communicator.Get_rank())
@@ -131,6 +132,7 @@ class PreparedOutputFile:
                 self.target.parent.mkdir(parents=True, exist_ok=True)
                 try:
                     os.link(self.temporary, self.target)
+                    self._created_target = True
                 except FileExistsError:
                     if hashlib.sha256(self.temporary.read_bytes()).digest() != hashlib.sha256(
                             self.target.read_bytes()).digest():
@@ -158,6 +160,19 @@ class PreparedOutputFile:
         if self._rank() == 0:
             self.temporary.unlink(missing_ok=True)
         self._barrier()
+        self._discarded = True
+
+    def rollback(self) -> None:
+        """Compensate a staged or published output without deleting a pre-existing artifact."""
+        if self._discarded:
+            return
+        self._barrier()
+        if self._rank() == 0:
+            self.temporary.unlink(missing_ok=True)
+            if self._created_target:
+                self.target.unlink(missing_ok=True)
+        self._barrier()
+        self._published = False
         self._discarded = True
 
 

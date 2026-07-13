@@ -160,6 +160,9 @@ class _ProgramSerialization:
             ],
             "block_order": [handle_data(block) for block in sorted(order, key=order.get)],
         }
+        transaction = self.transaction_plan()
+        if transaction is not None:
+            result["step_transaction"] = transaction.to_data()
         if self._histories:
             result["histories"] = [
                 {

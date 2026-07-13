@@ -3,7 +3,7 @@
 ``System.program_report()`` and ``AmrSystem.program_report()`` return a :class:`ProgramRuntimeReport`
 value object built from this module. It aggregates the ALREADY-bound C++ accessors of the extracted
 Program subsystem (``pops::runtime::program::ProgramRuntimeState``) into ONE inspectable, JSON-ready
-structure: the installed step / hash, the global cadence, the name-based block map, the per-block
+structure: the installed step / hash, typed step transaction, name-based block map, the per-block
 runtime-param counts, the recorded diagnostics, the multistep histories, the scheduler cache slots and
 the profiler state.
 
@@ -12,10 +12,8 @@ arrays, never recompiles, never installs a program. It is the SINGLE SOURCE the
 :class:`~pops.runtime.inspection.RuntimeInspectionReport` ``program`` section is now built from, so the
 two reports never drift.
 
-The builder is graceful against an older prebuilt ``.so`` (the ADC-592 hasattr-gating pattern): an
-engine that predates a given accessor -- notably the ADC-594 ``program_substeps`` / ``program_stride``
-getters -- yields ``None`` for that field rather than raising, so the report stays describable on a
-stale extension (CI proves the fresh accessors).
+The native report remains metadata-only; transaction identity is read from the authenticated Python
+Program contract installed alongside the native closure.
 """
 
 from __future__ import annotations
@@ -44,15 +42,15 @@ class ProgramRuntimeReport:
     sections); a bound program fills the sections from the C++ Program subsystem accessors.
     """
 
-    schema_version = 1
+    schema_version = 2
     report_type = "program_runtime"
 
-    def __init__(self, *, installed: Any, program_hash: Any, cadence: Any, block_map: Any,
+    def __init__(self, *, installed: Any, program_hash: Any, step_transaction: Any, block_map: Any,
                  params: Any, diagnostics: Any, histories: Any, cache: Any,
                  profiler: Any) -> None:
         self.installed = bool(installed)
         self.program_hash = program_hash or ""
-        self.cadence = dict(cadence)
+        self.step_transaction = dict(step_transaction)
         self.block_map = list(block_map)
         self.params = [dict(row) for row in params]
         self.diagnostics = dict(diagnostics)
@@ -66,7 +64,7 @@ class ProgramRuntimeReport:
             "report_type": self.report_type,
             "installed": self.installed,
             "program_hash": self.program_hash,
-            "cadence": dict(self.cadence),
+            "step_transaction": dict(self.step_transaction),
             "block_map": list(self.block_map),
             "params": [dict(row) for row in self.params],
             "diagnostics": dict(self.diagnostics),
@@ -89,12 +87,11 @@ class ProgramRuntimeReport:
                    len(self.cache)))
 
     def __str__(self) -> Any:
-        cad = self.cadence
+        strategy = self.step_transaction.get("strategy", {})
         lines = ["program runtime report (schema=%d)" % self.schema_version]
         lines.append("  installed   : %s" % self.installed)
         lines.append("  hash        : %s" % (self.program_hash or "(none)"))
-        lines.append("  cadence     : substeps=%s stride=%s"
-                     % (cad.get("substeps"), cad.get("stride")))
+        lines.append("  strategy    : %s" % (strategy.get("kind") or "(none)"))
         lines.append("  block_map   : %s" % (self.block_map or "(identity)"))
         lines.append("  params      : %d block(s)" % len(self.params))
         lines.append("  diagnostics : %d scalar(s)" % len(self.diagnostics))
@@ -102,15 +99,6 @@ class ProgramRuntimeReport:
         lines.append("  cache       : %d slot(s)" % len(self.cache))
         lines.append("  profiler    : enabled=%s" % self.profiler.get("enabled"))
         return "\n".join(lines)
-
-
-def _cadence(sim: Any) -> Any:
-    """The GLOBAL macro-step cadence (ADC-594). ``program_substeps`` / ``program_stride`` are the
-    ADC-594 getters; an older ``.so`` lacks them -> None (graceful, CI proves the fresh accessors)."""
-    return {
-        "substeps": _call(sim, "program_substeps", None),
-        "stride": _call(sim, "program_stride", None),
-    }
 
 
 def _params(sim: Any) -> Any:
@@ -165,7 +153,10 @@ def build_program_report(sim: Any) -> Any:
     return ProgramRuntimeReport(
         installed=bool(program_hash),
         program_hash=program_hash,
-        cadence=_cadence(sim),
+        step_transaction=(
+            sim._step_transaction_plan.to_data()
+            if getattr(sim, "_step_transaction_plan", None) is not None else {}
+        ),
         block_map=list(_call(sim, "program_block_map", []) or []),
         params=_params(sim),
         diagnostics=dict(_call(sim, "program_diagnostics", {}) or {}),

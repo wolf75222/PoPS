@@ -391,8 +391,7 @@ def test_bound_snapshot_records_effective_values_sources_and_schema_identity():
             semantic_identity=make_identity("semantic", {"problem": "bind-schema"}),
             artifact_identity=make_identity("artifact", {"binary": "bind-schema"}),
             layout={"kind": "uniform"}, blocks=[], solvers={},
-            cadence={"kind": "engine-default", "substeps": 1, "stride": 1,
-                     "cfl": "default"},
+            step_transaction=None,
             params=resolved.rows(),
             aux_evidence={}, initial_evidence={}, outputs=[], diagnostics=[],
             bind_schema_identity=make_identity("bind-schema", schema.to_dict()),
@@ -418,15 +417,13 @@ def test_amr_bound_snapshot_retains_installed_program_identity_and_bindings():
         semantic_identity=make_identity("semantic", {"problem": "amr-bind"}),
         artifact_identity=make_identity("artifact", {"binary": "amr-bind"}),
     )
-    cadence = SimpleNamespace(substeps=2, stride=3, cfl="default")
     engine = SimpleNamespace(_output_policies=[], _diagnostic_measures=[])
 
     snapshot = build_amr_snapshot(
-        engine, compiled, {}, {}, cadence, {}, resolved
+        engine, compiled, {}, {}, {}, resolved
     ).to_dict()
     assert snapshot["semantic_identity"]["domain"] == "semantic"
     assert snapshot["artifact_identity"]["domain"] == "artifact"
-    assert snapshot["cadence"] == {
-        "kind": "compiled-time", "substeps": 2, "stride": 3, "cfl": "default"}
+    assert snapshot["step_transaction"] is None
     assert snapshot["bind_schema_identity"]["domain"] == "bind-schema"
     assert len(snapshot["params"]) == len(schema.slots)

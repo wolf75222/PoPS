@@ -37,6 +37,7 @@ import tempfile
 import numpy as np
 
 import pops
+from tests.python.support.initial_states import euler_bubble_state
 from pops.codegen.cache import _backend_distinct_so_path, _process_so_backend, _record_so_backend
 from pops.ir.ops import sqrt
 from pops.physics.facade import Model
@@ -78,9 +79,6 @@ def build_euler(name="euler_cacheb", gamma=1.6667):
     m.conservative_from([prho, prho * pu, prho * pv,
                          pp / (g - 1.0) + 0.5 * prho * (pu * pu + pv * pv)])
     return m
-
-
-from tests.python.support.initial_states import euler_bubble_state
 
 
 def initial_state(n):
@@ -245,7 +243,8 @@ def native_load_checks():
                                                                     variables=Primitive()))
         s_prod.set_poisson(rhs="charge_density", solver="geometric_mg")
         s_prod.set_state("gas", initial_state(n))
-        steps = s_prod.run(t_end=0.01, cfl=0.4)
+        steps = s_prod.run(
+            t_end=0.01, max_steps=100000, strategy=pops.time.AdaptiveCFL(0.4))
         ok = steps > 0 and np.all(np.isfinite(np.array(s_prod.get_state("gas"))))
         chk(ok, "(3a) add_native_block reussit apres un aot charge au meme chemin (run %d pas)" % steps)
     except Exception as exc:  # noqa: BLE001

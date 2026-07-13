@@ -354,7 +354,7 @@ def build_final_case() -> FinalScalarAdvectionCase:
 
 
 def build_bind_params(core: ScalarAdvectionAuthoring) -> dict[Any, float]:
-    """Build bind values only after validation has made every Handle canonical."""
+    """Build parameter values only after validation has made every Handle canonical."""
 
     resolve = core.case.resolve
     return {
@@ -375,7 +375,7 @@ def main() -> None:
     resolved = pops.resolve(validated, layout=target.layout)
     artifact = pops.compile(resolved)
     simulation = pops.bind(artifact, params=build_bind_params(target.authoring))
-    simulation.run(**target.authoring.run_controls)
+    pops.run(simulation, **target.authoring.run_controls)
 
 
 if __name__ == "__main__":

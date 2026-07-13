@@ -51,6 +51,11 @@ def write_v3(owner, sim, path, L, regrid_every, persistence=None):
            "n_ranks": int(_pops.n_ranks()),
            "patch_boxes": (np.asarray(pb, dtype=np.int64) if pb
                            else np.zeros((0, 5), dtype=np.int64))}
+    temporal = getattr(owner, "_temporal_restart_state", None)
+    if temporal is None:
+        raise RuntimeError("checkpoint requires the AMR temporal restart state")
+    out["temporal_restart_state"] = np.array(temporal.checkpoint_json(
+        time=sim.time(), macro_step=sim.macro_step()))
     from pops.runtime._amr_checkpoint_contract import encode_contract
     out["regrid_count"] = int(sim.checkpoint_regrid_count())
     out["topology_epoch"] = int(sim.checkpoint_topology_epoch())
@@ -118,7 +123,7 @@ def write_v3(owner, sim, path, L, regrid_every, persistence=None):
     return target
 
 
-def restart_v3(sim, d, L):
+def restart_v3(owner, sim, d, L):
     """Restore a v3 AMR checkpoint into @p sim (the C++ AmrSystem engine). @p d is the loaded npz.
 
     The restore order (addendum B.6, the realized subset): guards (grid / blocks / components / regrid
@@ -130,8 +135,13 @@ def restart_v3(sim, d, L):
     import numpy as np
     from pops import _pops
     from pops.runtime._amr_checkpoint_contract import preflight_contract
+    from pops.runtime._temporal_restart import TemporalRestartState
 
     program_state, regrid_count, topology_epoch = preflight_contract(sim, d)
+    if "temporal_restart_state" not in d:
+        raise ValueError("restart: AMR checkpoint lacks its strict temporal state")
+    restored_temporal = TemporalRestartState.from_json(
+        d["temporal_restart_state"], time=d["t"], macro_step=d["macro_step"])
 
     # (2) GUARDS.
     if int(d["n"]) != sim.nx():
@@ -345,6 +355,8 @@ def restart_v3(sim, d, L):
         raise
     else:
         sim.commit_restart_transaction()
+    owner._temporal_restart_state = restored_temporal
+    owner._step_controller = None
     return report
 
 

@@ -1,31 +1,33 @@
 schema_version = 1
 gate = "m2-temporal-execution"
-issues = ["ADC-661", "ADC-662", "ADC-663", "ADC-664", "ADC-665", "ADC-666"]
-
-# These are M2 dependencies, but they are not implemented by this branch.  Keeping
-# them in a typed deferred section prevents this gate from being mistaken for the
-# final multirate/AMR acceptance proof.
-[[deferred]]
-issue = "ADC-648"
-requirement = "amr_step_transaction"
-reason = "AMR hierarchy, regrid and distributed publication still need one atomic transaction."
-close_condition = "Fault injection proves rollback of hierarchy, state, histories, caches, diagnostics and clocks on every rank."
-
-[[deferred]]
-issue = "ADC-667"
-requirement = "multirate_history"
-reason = "Cross-clock multirate history and restart ownership are not yet implemented."
-close_condition = "A multirate run and restart preserve every clock, history edge and synchronization relation exactly."
+issues = ["ADC-648", "ADC-661", "ADC-662", "ADC-663", "ADC-664", "ADC-665", "ADC-666", "ADC-667"]
+deferred = []
 
 # Every requirement has one success proof and one refusal/rollback proof. Exact
 # nodeids make deletion or renaming a reviewed gate change rather than silent loss.
+[[check]]
+issue = "ADC-648"
+requirement = "amr_step_transaction"
+polarity = "positive"
+kind = "ctest"
+target = "test_amr_history_ring"
+test_regex = "^test_amr_history_ring\\.AcceptedFacadeTransactionCommitsTopologyStateHistoryAndClock$"
+
+[[check]]
+issue = "ADC-648"
+requirement = "amr_step_transaction"
+polarity = "refusal"
+kind = "ctest"
+target = "test_amr_history_ring"
+test_regex = "^test_amr_history_ring\\.RejectedFacadeAttemptRestoresTopologyStateHistoryAndClock$"
+
 [[check]]
 issue = "ADC-661"
 requirement = "phase_pipeline"
 polarity = "positive"
 kind = "pytest"
 target = "pipeline"
-nodeid = "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py::test_scalar_advection_completes_typed_phase_pipeline"
+nodeid = "tests/python/unit/codegen/test_typed_phase_records.py::test_install_plan_is_bind_created_and_authenticates_all_inputs"
 
 [[check]]
 issue = "ADC-661"
@@ -130,3 +132,19 @@ polarity = "refusal"
 kind = "ctest"
 target = "test_checkpoint_history"
 test_regex = "^CheckpointHistory\\.RestartRejectsMismatchedProgramHashVerbatim$"
+
+[[check]]
+issue = "ADC-667"
+requirement = "temporal_restart"
+polarity = "positive"
+kind = "pytest"
+target = "transaction"
+nodeid = "tests/python/unit/runtime/test_temporal_restart_state.py::test_accepted_attempt_advances_cursor_and_round_trips_exact_controller_state"
+
+[[check]]
+issue = "ADC-667"
+requirement = "temporal_restart"
+polarity = "refusal"
+kind = "pytest"
+target = "transaction"
+nodeid = "tests/python/unit/runtime/test_temporal_restart_state.py::test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible"

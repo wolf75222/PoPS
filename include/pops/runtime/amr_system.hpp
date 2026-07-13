@@ -1,5 +1,7 @@
 #pragma once
 
+#include <limits>
+
 #include <pops/diagnostics/runtime_diagnostics.hpp>
 #include <pops/mesh/layout/patch_box.hpp>  // PatchBox: index-space signature of a fine patch (patch_boxes())
 #include <pops/mesh/boundary/physical_bc.hpp>                // BCRec
@@ -725,8 +727,13 @@ class AmrSystem {
 
   void step(double dt);  ///< one AMR macro-step (periodic regrid included)
   void advance(double dt, int nsteps);
+  void begin_step_transaction();
+  void commit_step_transaction();
+  void finalize_step_transaction();
+  void rollback_step_transaction();
   /// Advances at dt = cfl * coarse_dx / max wave speed. @return the dt used.
-  double step_cfl(double cfl, double speed_floor = static_cast<double>(kCflSpeedFloor));
+  double step_cfl(double cfl, double speed_floor = static_cast<double>(kCflSpeedFloor),
+                  double max_dt = std::numeric_limits<double>::infinity(), double min_dt = 0.0);
 
   /// @name Compiled time-program install seam on the AMR hierarchy (epic ADC-511 / ADC-508, Spec 6)
   /// AMR counterpart of System::install_program: load a generated problem.so and install its compiled

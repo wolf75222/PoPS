@@ -200,14 +200,15 @@ def _profile_payload(sim: Any) -> Any:
 def _program(sim: Any) -> Any:
     """The compiled-Program section, built FROM the structured ProgramRuntimeReport (ADC-594) so the
     two reports share a SINGLE source. Kept back-compatible: the historical inspection keys
-    ("installed"/"hash") are preserved, with the richer cadence/block_map/param/history/cache summary
+    ("installed"/"hash") are preserved, with the richer transaction/block-map/parameter/history/cache
+    summary
     folded in from the same report."""
     from pops.runtime.program_report import build_program_report
     report = build_program_report(sim)
     return {
         "installed": report.installed,
         "hash": report.program_hash,
-        "cadence": dict(report.cadence),
+        "step_transaction": dict(report.step_transaction),
         "block_map": list(report.block_map),
         "params": [dict(row) for row in report.params],
         "histories": [dict(row) for row in report.histories],

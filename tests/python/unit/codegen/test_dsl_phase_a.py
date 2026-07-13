@@ -104,7 +104,8 @@ def advance_low_level(system, *, t_end, cfl):
     """Advance an explicitly assembled low-level engine after pinning the public run guard."""
     expect_raises(
         RuntimeError,
-        lambda: system.run(t_end=t_end, cfl=cfl),
+        lambda: system.run(
+            t_end=t_end, max_steps=100000, strategy=pops.time.AdaptiveCFL(cfl)),
         "run bas niveau hors transaction pops.bind refuse",
     )
     nsteps = 0

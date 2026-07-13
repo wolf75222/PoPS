@@ -97,7 +97,7 @@ class _AmrSystemIO(_AmrSystem):
                 "restart: AMR checkpoint version %r unsupported; expected exactly 3" % version)
         from pops.runtime._amr_checkpoint_v3 import restart_v3
 
-        self._last_restart_report = restart_v3(self._s, data, self._L)
+        self._last_restart_report = restart_v3(self, self._s, data, self._L)
 
 
 __all__ = ["_AmrSystemIO"]

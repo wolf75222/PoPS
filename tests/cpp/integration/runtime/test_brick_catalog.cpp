@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/runtime/builders/factory/brick_catalog.hpp>
+#include <pops/runtime/dynamic/model_registry.hpp>
 
 #include <cstddef>
 #include <string>

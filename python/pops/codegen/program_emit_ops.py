@@ -528,6 +528,23 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             rhs_tok = scalar_cpp(v.attrs["rhs"])
         var[v.id] = "(%s %s %s)" % (var[lhs.id], v.attrs["cmp"], rhs_tok)
         var[("when_predicate", v.id)] = var[v.id]  # emission-local schedule predicate token
+    elif v.op == "acceptance_guard":
+        value, condition = v.inputs
+        action = v.attrs["action"]
+        from pops.time.solve_outcome import FailRun, RejectAttempt
+        message = "acceptance guard %r failed" % v.attrs["guard"]
+        lines.append("if (!(%s)) {" % var[condition.id])
+        if type(action) is RejectAttempt:
+            lines.append(
+                "  throw pops::runtime::program::StepAttemptRejected("
+                "pops::SolveStatus::kInvalidEvaluation, \"guard\", %s);"
+                % json.dumps(message))
+        elif type(action) is FailRun:
+            lines.append("  throw std::runtime_error(%s);" % json.dumps(message))
+        else:  # guarded by Program.guard; defense in depth for a forged IR
+            raise TypeError("acceptance_guard has an unsupported terminal action")
+        lines.append("}")
+        var[v.id] = var[value.id]
     elif v.op == "while":
         _emit_while(program, v, base, var, model, lines, block_idx, field_plans)
     elif v.op == "range":

@@ -140,6 +140,23 @@ def test_npz_collision_and_discard_never_publish_partial_content(tmp_path):
     assert np.all(first.arrays[fine_name] == 2.0)
 
 
+def test_npz_publication_rollback_removes_only_the_artifact_it_created(tmp_path):
+    snapshot, request, _ = _snapshot()
+    target = deterministic_target(tmp_path, "fields", request, snapshot, ".npz")
+    created = NPZWriter().prepare(snapshot, request, target)
+    created.publish()
+    created.rollback()
+    created.rollback()
+    assert not target.exists()
+
+    NPZWriter().prepare(snapshot, request, target).publish()
+    idempotent = NPZWriter().prepare(snapshot, request, target)
+    idempotent.publish()
+    idempotent.rollback()
+    assert target.is_file()
+    read_npz(target).require_selection(request)
+
+
 def test_missing_exact_level_state_selection_fails_before_a_writer(tmp_path):
     snapshot, request, _ = _snapshot()
     missing_values = (

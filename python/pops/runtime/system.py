@@ -76,8 +76,8 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
     """The system/coupler: composes blocks, shares a Poisson, advances the whole.
 
     Low-level runtime. The documented PUBLIC path is the typed ``pops.Case`` assembly lowered by
-    ``pops.compile`` and wired by ``pops.bind`` -> ``sim.run(...)``; the per-step ``step_cfl`` /
-    ``step`` / ``step_adaptive`` methods (and ``add_block`` / ``add_equation`` / ``set_poisson``)
+    ``pops.compile`` and wired by ``pops.bind`` -> ``pops.run(sim, ...)``; the per-step native methods
+    (and ``add_block`` / ``add_equation`` / ``set_poisson``)
     are the low-level seam ``pops.bind`` builds on and the tests use, not the recommended front
     door.
 
@@ -113,11 +113,10 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         # indices (set_aux_field_component / aux_field_component). Empty for a block without a
         # named aux field. cf. set_aux_field / aux_field.
         self._aux_field_index = {}
-        # CFL carried by an installed compiled-time cadence (CompiledTime(cfl=X)), or None when the
-        # cadence pins no numeric cfl. run() with no explicit cfl= defaults to it, so a bare
-        # sim.run(t_end) after bind(..., cadence=CompiledTime(cfl=X)) advances at X (not silently
-        # ignored). Set by _install_cadence; None until a numeric-cfl cadence is installed.
-        self._program_cadence_cfl = None
+        self._step_strategy = None
+        self._step_transaction_plan = None
+        self._step_controller = None
+        self._last_step_transaction_report = None
         # RUNTIME FREEZE LIFECYCLE (ADC-592): "assembling" while the composition is mutable, "bound"
         # once _finalize_bind runs (the LAST act of _install_compiled). The Python flag enforces the
         # freeze even under a prebuilt .so with no native mark_bound; the native lifecycle is defence
@@ -128,29 +127,24 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         from pops.runtime._temporal_restart import TemporalRestartState
         self._temporal_restart_state = TemporalRestartState()
 
-    def run(self, t_end: Any, cfl: Any = None, max_steps: int = 1_000_000,
-            output_dir: Any = None, strategy: Any = None) -> Any:
-        """Advance up to t_end by CFL steps (sugar: `while time() < t_end: step_cfl(cfl)`).
-
-        @p cfl: Courant number passed to step_cfl. When omitted (None) it defaults to the CFL pinned
-        by an installed ``CompiledTime(cfl=X)`` cadence, else 0.4 -- so a numeric cadence cfl actually
-        takes effect on a bare ``sim.run(t_end)`` rather than being silently ignored. @p max_steps:
-        guard (avoids an infinite loop if dt -> 0). ``output_dir`` is recorded in run provenance;
-        publication is owned exclusively by ``RuntimeInstance`` and its exact ``ConsumerGraph``.
-        Returns the number of steps taken.
-        cf. DSL_MODEL_DESIGN.md section 6."""
+    def run(self, t_end: Any, *, max_steps: int, output_dir: Any = None,
+            controls: Any = None) -> Any:
+        """Advance with the Program-authenticated typed strategy and exact runtime controls."""
         from pops.runtime._step_strategy import (
-            AdaptiveCFL, resolve_run_strategy, run_control_payload, run_step_attempt)
-        strategy = resolve_run_strategy(self, strategy, cfl)
-        control_payload = run_control_payload(strategy)
-        manifest_cfl = control_payload["cfl"] if isinstance(strategy, AdaptiveCFL) else 0.0
+            prepare_step_controller, resolve_run_strategy, run_control_payload, run_step_attempt)
+        strategy = resolve_run_strategy(self)
+        control_payload = run_control_payload(strategy, controls)
+        prepare_step_controller(self, strategy, controls)
         self._temporal_restart_state.begin_run(
             control_payload, time=self.time(), macro_step=self.macro_step())
         from pops.runtime._run_manifest import begin_run
-        begin_run(self, t_end=t_end, cfl=manifest_cfl, max_steps=max_steps, output_dir=output_dir)
+        begin_run(
+            self, t_end=t_end, step_transaction=control_payload,
+            max_steps=max_steps, output_dir=output_dir)
         steps = 0
         while self.time() < t_end and steps < max_steps:
-            run_step_attempt(self, self, strategy, t_end=float(t_end))
+            run_step_attempt(
+                self, self, strategy, t_end=float(t_end), controls=controls)
             steps += 1
         return steps
 
@@ -193,7 +187,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
     def program_report(self) -> Any:
         """Structured report of the compiled-Program runtime subsystem (ADC-594).
 
-        Aggregates the bound Program accessors (installed step / hash, cadence, block map, param
+        Aggregates the bound Program accessors (installed step / hash, transaction, block map, param
         counts, diagnostics, histories, cache, profiler) into one inspectable value object. Metadata
         only; installed=False with empty sections on a runtime with no program installed."""
         from pops.runtime.program_report import build_program_report

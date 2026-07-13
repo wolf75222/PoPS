@@ -105,10 +105,10 @@ def _target(uri: str, format_data: Mapping[str, Any], snapshot: OutputSnapshot,
 
 class _PreparedDiagnostic(PreparedPublication):
     def __init__(self, effect: AcceptedSideEffect, values: tuple[DiagnosticPayload, ...],
-                 publish: Any, discard: Any) -> None:
+                 publish: Any, discard: Any, rollback: Any) -> None:
         self._effect, self._values = effect, values
-        self._publish, self._discard = publish, discard
-        self._resolved = False
+        self._publish, self._discard, self._rollback = publish, discard, rollback
+        self._published = self._discarded = False
 
     @property
     def effect_identity(self) -> Identity:
@@ -119,9 +119,11 @@ class _PreparedDiagnostic(PreparedPublication):
         return self._effect.payload.identity
 
     def publish(self) -> PublicationReceipt:
-        if not self._resolved:
+        if self._discarded:
+            raise RuntimeError("discarded diagnostic cannot be published")
+        if not self._published:
             self._publish(self._effect, self._values)
-            self._resolved = True
+            self._published = True
         artifact = make_identity("runtime-diagnostic-publication", {
             "effect": self.effect_identity.token,
             "values": [value.to_data() for value in self._values],
@@ -131,9 +133,19 @@ class _PreparedDiagnostic(PreparedPublication):
             "pops.runtime-diagnostic.v1", artifact.token)
 
     def discard(self) -> None:
-        if not self._resolved:
+        if not self._published and not self._discarded:
             self._discard(self._effect)
-            self._resolved = True
+            self._discarded = True
+
+    def rollback(self) -> None:
+        if self._discarded:
+            return
+        if self._published:
+            self._rollback(self._effect, self._values)
+        else:
+            self._discard(self._effect)
+        self._published = False
+        self._discarded = True
 
 
 class _PreparedCheckpoint(PreparedPublication):
@@ -151,7 +163,7 @@ class _PreparedCheckpoint(PreparedPublication):
         if produced != Path(temporary) or not produced.is_file():
             produced.unlink(missing_ok=True)
             raise RuntimeError("checkpoint codec did not produce the exact staged target")
-        self._temporary, self._published = produced, False
+        self._temporary, self._published, self._discarded = produced, False, False
 
     @property
     def effect_identity(self) -> Identity:
@@ -162,6 +174,8 @@ class _PreparedCheckpoint(PreparedPublication):
         return self._effect.payload.identity
 
     def publish(self) -> PublicationReceipt:
+        if self._discarded:
+            raise RuntimeError("discarded checkpoint cannot be published")
         if not self._published:
             if self._target.exists():
                 raise FileExistsError("checkpoint target collision: %s" % self._target)
@@ -174,8 +188,18 @@ class _PreparedCheckpoint(PreparedPublication):
             "pops.restart-checkpoint.v3", artifact.token)
 
     def discard(self) -> None:
-        if not self._published:
+        if not self._published and not self._discarded:
             self._temporary.unlink(missing_ok=True)
+            self._discarded = True
+
+    def rollback(self) -> None:
+        if self._discarded:
+            return
+        if self._published:
+            self._target.unlink(missing_ok=True)
+        self._temporary.unlink(missing_ok=True)
+        self._published = False
+        self._discarded = True
 
 
 class RuntimeConsumerPublisher(ConsumerPublisher):
@@ -247,9 +271,28 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
 
     def _prepare_diagnostic(self, effect: AcceptedSideEffect, manifest: Any) -> Any:
         values = self._diagnostic_values(manifest)
+        previous = {
+            value.key.identity.token: self._diagnostics.get(value.key.identity.token)
+            for value in values
+        }
+        existed = {
+            value.key.identity.token: value.key.identity.token in self._diagnostics
+            for value in values
+        }
+
+        def rollback(_effect: AcceptedSideEffect,
+                     published: tuple[DiagnosticPayload, ...]) -> None:
+            for value in published:
+                token = value.key.identity.token
+                if existed[token]:
+                    self._diagnostics[token] = previous[token]
+                else:
+                    self._diagnostics.pop(token, None)
+            self._pending.pop(_effect.identity.token, None)
+
         self._pending[effect.identity.token] = values
         return _PreparedDiagnostic(
-            effect, values, self._publish_diagnostics, self._discard_diagnostics)
+            effect, values, self._publish_diagnostics, self._discard_diagnostics, rollback)
 
     def _resolve_output(self, effect: AcceptedSideEffect) -> OutputPreparation:
         manifest = self._manifest(effect)

@@ -80,6 +80,11 @@ class PreparedPublication(ABC):
         """Idempotently remove every temporary artifact owned by this preparation."""
         raise NotImplementedError
 
+    @abstractmethod
+    def rollback(self) -> None:
+        """Idempotently remove this preparation, including an artifact it published."""
+        raise NotImplementedError
+
 
 class ConsumerPublisher(ABC):
     """ADC-686 writer dispatch: format-specific work begins only behind this seam."""
@@ -161,7 +166,8 @@ class ConsumerTransaction:
     """Own temporaries until a step controller explicitly accepts or rejects the attempt."""
 
     __slots__ = (
-        "_plan", "_publisher", "_initial_cursors", "_prepared", "_skipped", "_state",
+        "_plan", "_publisher", "_initial_cursors", "_prepared", "_accepted",
+        "_cursor_updates", "_skipped", "_state",
     )
 
     def __init__(
@@ -183,6 +189,10 @@ class ConsumerTransaction:
         self._publisher = publisher
         self._initial_cursors = cursors
         self._prepared: list[tuple[AcceptedSideEffect, PreparedPublication, int]] = []
+        self._accepted: list[
+            tuple[AcceptedSideEffect, PreparedPublication, PublicationReceipt]
+        ] = []
+        self._cursor_updates = ()
         self._skipped: list[SkippedSampleReport] = []
         self._state = "preparing"
         self._prepare_all()
@@ -227,9 +237,16 @@ class ConsumerTransaction:
             return "discard failed: %s" % self._reason(exc)
         return None
 
+    def _rollback(self, prepared: PreparedPublication) -> str | None:
+        try:
+            prepared.rollback()
+        except Exception as exc:
+            return "publication rollback failed: %s" % self._reason(exc)
+        return None
+
     def _discard_staged(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
         rolled_back, diagnostics = [], []
-        for effect, prepared, _ in self._prepared:
+        for effect, prepared, _ in reversed(self._prepared):
             failure = self._discard(prepared)
             if failure is None:
                 rolled_back.append(effect.identity.token)
@@ -238,13 +255,24 @@ class ConsumerTransaction:
         self._prepared.clear()
         return tuple(rolled_back), tuple(diagnostics)
 
+    def _rollback_accepted(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        rolled_back, diagnostics = [], []
+        for effect, prepared, _ in reversed(self._accepted):
+            failure = self._rollback(prepared)
+            if failure is None:
+                rolled_back.append(effect.identity.token)
+            else:
+                diagnostics.append("%s: %s" % (effect.consumer_id, failure))
+        self._accepted.clear()
+        self._cursor_updates = ()
+        return tuple(rolled_back), tuple(diagnostics)
+
     def _failed(
         self,
         effect: AcceptedSideEffect,
         error: Exception | None,
         *,
         cursors: ConsumerCursorSet,
-        published: tuple[PublicationReceipt, ...] = (),
         diagnostics: tuple[str, ...] = (),
         rolled_back: tuple[str, ...] = (),
     ) -> ConsumerPublicationError:
@@ -253,7 +281,7 @@ class ConsumerTransaction:
             "failed",
             cursors,
             tuple(value.identity.token for value in self._plan.effects),
-            published,
+            (),
             tuple(self._skipped),
             rolled_back + staged_rollback,
             diagnostics + cleanup + (self._reason(error),),
@@ -312,7 +340,8 @@ class ConsumerTransaction:
                         or receipt.payload_identity != effect.payload.identity:
                     raise ValueError("PublicationReceipt does not authenticate its exact effect payload")
             except Exception as error:
-                cleanup = self._discard(prepared)
+                cleanup = self._rollback(prepared)
+                rolled_back = (effect.identity.token,) if cleanup is None else ()
                 if cleanup is None and type(effect.failure_action) is Retry \
                         and attempts < self._attempt_limit(effect):
                     replacement, attempts, prepare_error = self._prepare_one(effect, attempts)
@@ -327,21 +356,26 @@ class ConsumerTransaction:
                     ))
                     if cleanup is not None:
                         self._prepared.extend(pending)
+                        accepted_rollback, accepted_cleanup = self._rollback_accepted()
                         raise self._failed(
-                            effect, error, cursors=cursors, published=tuple(published),
-                            diagnostics=(cleanup,),
+                            effect, error, cursors=self._initial_cursors,
+                            diagnostics=(cleanup,) + accepted_cleanup,
+                            rolled_back=accepted_rollback,
                         )
                     continue
                 self._prepared.extend(pending)
-                diagnostics = (cleanup,) if cleanup is not None else ()
+                accepted_rollback, accepted_cleanup = self._rollback_accepted()
+                diagnostics = ((cleanup,) if cleanup is not None else ()) + accepted_cleanup
                 raise self._failed(
-                    effect, error, cursors=cursors, published=tuple(published),
+                    effect, error, cursors=self._initial_cursors,
                     diagnostics=diagnostics,
-                    rolled_back=(effect.identity.token,) if cleanup is None else (),
+                    rolled_back=rolled_back + accepted_rollback,
                 )
             published.append(receipt)
+            self._accepted.append((effect, prepared, receipt))
             cursors = cursors.replace(effect.cursor_after)
         self._state = "accepted"
+        self._cursor_updates = tuple(effect.cursor_after for effect, _, _ in self._accepted)
         return ConsumerTransactionReport(
             "accepted",
             cursors,
@@ -349,6 +383,45 @@ class ConsumerTransaction:
             tuple(published),
             tuple(self._skipped),
         )
+
+    @property
+    def cursor_updates(self) -> tuple[Any, ...]:
+        if self._state not in ("accepted", "sealed"):
+            raise RuntimeError("consumer cursor updates exist only after acceptance")
+        return self._cursor_updates
+
+    def rollback_accepted(self) -> ConsumerTransactionReport:
+        if self._state != "accepted":
+            raise RuntimeError("ConsumerTransaction has no accepted publication to roll back")
+        rolled_back, diagnostics = self._rollback_accepted()
+        self._state = "rejected" if not diagnostics else "failed"
+        report = ConsumerTransactionReport(
+            self._state,
+            self._initial_cursors,
+            tuple(value.identity.token for value in self._plan.effects),
+            skipped=tuple(self._skipped),
+            rolled_back_effects=rolled_back,
+            diagnostics=diagnostics,
+        )
+        if diagnostics:
+            raise ConsumerPublicationError(
+                "accepted consumer publication could not be compensated", report=report)
+        return report
+
+    def seal(self) -> None:
+        """Drop rollback ownership after the enclosing native transaction is finalized."""
+        if self._state != "accepted":
+            raise RuntimeError("only an accepted ConsumerTransaction can be sealed")
+        self._accepted.clear()
+        self._state = "sealed"
+
+    def abort(self) -> ConsumerTransactionReport | None:
+        """Reject staged work or compensate accepted work; resolved failures are already clean."""
+        if self._state == "staged":
+            return self.reject()
+        if self._state == "accepted":
+            return self.rollback_accepted()
+        return None
 
 
 __all__ = [

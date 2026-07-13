@@ -21,13 +21,14 @@ def _load_runner():
 def test_m2_manifest_references_only_real_mandatory_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors, "M2 gate matrix is incomplete:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 14
+    assert len(data["check"]) == 18
 
 
-def test_m2_open_dependencies_are_deferred_not_claimed():
+def test_m2_final_gate_has_no_deferred_requirement():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors
-    deferred = {row["issue"]: row for row in data["deferred"]}
-    assert set(deferred) == {"ADC-648", "ADC-667"}
-    assert all(row["reason"] and row["close_condition"] for row in deferred.values())
-    assert not ({row["issue"] for row in data["check"]} & set(deferred))
+    assert data["deferred"] == []
+    assert {row["issue"] for row in data["check"]} == {
+        "ADC-648", "ADC-661", "ADC-662", "ADC-663", "ADC-664", "ADC-665", "ADC-666",
+        "ADC-667",
+    }

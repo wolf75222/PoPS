@@ -55,11 +55,15 @@ def _authorize_identity_runtime(sim, compiled):
     from pops.identity import make_identity
     from pops.runtime._bound_snapshot import BoundSnapshot
 
+    component = compiled.program
+    authored = getattr(component, "program", component)
+    sim._step_strategy = authored._step_strategy
+    sim._step_transaction_plan = authored.transaction_plan()
     snapshot = BoundSnapshot(
         semantic_identity=compiled.semantic_identity,
         artifact_identity=compiled.artifact_identity,
         layout={"kind": "uniform"}, blocks=[{"name": "blk"}], solvers={},
-        cadence={"kind": "compiled-program", "substeps": 1, "stride": 1, "cfl": "default"},
+        step_transaction=sim._step_transaction_plan.to_data(),
         params=[], aux_evidence={}, initial_evidence={}, outputs=[], diagnostics=[],
         bind_schema_identity=make_identity("bind-schema", {"slots": []}),
     )
@@ -80,24 +84,27 @@ def test_current_checkpoint_envelope_roundtrips(_t):
     from pops.runtime._checkpoint_manifest import (
         authenticate_checkpoint_payload, seal_checkpoint_payload)
     from pops.runtime._run_manifest import RunManifest
+    from pops.runtime._step_strategy import run_control_payload
     from pops.runtime.bricks import abi_key
+    from pops.time import FixedDt
 
     snapshot = BoundSnapshot(
         semantic_identity=make_identity("semantic", {"test": "npz-envelope"}),
         artifact_identity=make_identity("artifact", {"binary": "npz-envelope"}),
         layout={"kind": "uniform"}, blocks=[{"name": "blk"}], solvers={},
-        cadence={"kind": "compiled-program", "substeps": 1, "stride": 1, "cfl": "default"},
+        step_transaction={},
         params=[], aux_evidence={}, initial_evidence={}, outputs=[], diagnostics=[],
         bind_schema_identity=make_identity("bind-schema", {"slots": []}),
     )
     run = RunManifest(
         bind_identity=snapshot.bind_identity, start_time=0.0, start_macro_step=0,
-        controls={"t_end": 0.1, "cfl": 0.4, "max_steps": 10,
+        controls={"t_end": 0.1, "step_transaction": run_control_payload(FixedDt(0.05)),
+                  "max_steps": 10,
                   "output_mode": "current-directory"})
     owner = SimpleNamespace(bound_snapshot=snapshot, last_run_identity=run.run_identity)
     temporal = {
         "schema_version": 1,
-        "strategy": {"strategy": "fixed_dt", "dt": 0.05},
+        "strategy": run_control_payload(FixedDt(0.05)),
         "clock": {"time": (0.1).hex(), "macro_step": 2},
         "schedule_cursors": {"macro_step": 2},
         "controller_state": {"last_accepted_dt": (0.05).hex()},
@@ -320,6 +327,7 @@ def _compile_program(pops, t, builder, prog_name, model_name):
     module = synthetic_module("%s_state" % prog_name, components=("rho",))
     _case, states = program_states(P, module, ("blk",))
     builder(P, states["blk"])
+    P.step_strategy(t.FixedDt(_DT))
     try:
         from pops.codegen.compile_drivers import compile_problem
         return compile_problem(model=_passive_source_model(model_name), time=P)
@@ -363,7 +371,7 @@ def _run_section_b(t):
     sim1.set_state("blk", np.stack([rho0]))
     sim1.install_program(compiled.so_path)
     _authorize_identity_runtime(sim1, compiled)
-    sim1.run(t_end=half * _DT, strategy=t.FixedDt(_DT), max_steps=half)
+    sim1.run(t_end=half * _DT, max_steps=half)
     from pops.time.history_persistence import Dense
     sim1.set_history_persistence({name: Dense() for name in sim1._s.history_names()})
     with tempfile.TemporaryDirectory() as tmp:
@@ -376,7 +384,7 @@ def _run_section_b(t):
         sim2.restart(ckpt)
         assert sim2.macro_step() == half, \
             "restart restores macro_step (%d != %d)" % (sim2.macro_step(), half)
-        sim2.run(t_end=_NSTEPS * _DT, strategy=t.FixedDt(_DT), max_steps=_NSTEPS - half)
+        sim2.run(t_end=_NSTEPS * _DT, max_steps=_NSTEPS - half)
     state_b = np.array(sim2.get_state("blk"))[0]
 
     err = float(np.abs(state_a - state_b).max())
@@ -442,7 +450,7 @@ def _run_section_c(t):
     sim.set_state("blk", np.stack([np.ones((n, n))]))
     sim.install_program(ab2.so_path)
     _authorize_identity_runtime(sim, ab2)
-    sim.run(t_end=2 * _DT, strategy=t.FixedDt(_DT), max_steps=2)
+    sim.run(t_end=2 * _DT, max_steps=2)
     from pops.time.history_persistence import Dense
     sim.set_history_persistence({name: Dense() for name in sim._s.history_names()})
     with tempfile.TemporaryDirectory() as tmp:

@@ -43,8 +43,36 @@ void System::advance(double dt, int nsteps) {
   for (int i = 0; i < nsteps; ++i)
     step(dt);
 }
-double System::step_cfl(double cfl, double speed_floor) {
-  return p_->execute_step_transaction([&] { return p_->stepper_.step_cfl(cfl, speed_floor); });
+void System::begin_step_transaction() {
+  if (p_->external_step_transaction_)
+    throw std::runtime_error("System::begin_step_transaction: transaction already active");
+  p_->external_step_transaction_ = std::make_unique<Impl::AcceptedSnapshot>(*p_);
+  p_->external_step_transaction_committed_ = false;
+}
+void System::commit_step_transaction() {
+  if (!p_->external_step_transaction_)
+    throw std::runtime_error("System::commit_step_transaction: no active transaction");
+  if (p_->external_step_transaction_committed_)
+    throw std::runtime_error("System::commit_step_transaction: transaction already committed");
+  p_->external_step_transaction_committed_ = true;
+}
+void System::finalize_step_transaction() {
+  if (!p_->external_step_transaction_ || !p_->external_step_transaction_committed_)
+    throw std::runtime_error(
+        "System::finalize_step_transaction: no committed transaction");
+  p_->external_step_transaction_.reset();
+  p_->external_step_transaction_committed_ = false;
+}
+void System::rollback_step_transaction() {
+  if (!p_->external_step_transaction_)
+    throw std::runtime_error("System::rollback_step_transaction: no active transaction");
+  p_->external_step_transaction_->restore(*p_);
+  p_->external_step_transaction_.reset();
+  p_->external_step_transaction_committed_ = false;
+}
+double System::step_cfl(double cfl, double speed_floor, double max_dt, double min_dt) {
+  return p_->execute_step_transaction(
+      [&] { return p_->stepper_.step_cfl(cfl, speed_floor, max_dt, min_dt); });
 }
 double System::step_adaptive(double cfl) {
   return p_->execute_step_transaction([&] { return p_->stepper_.step_adaptive(cfl); });

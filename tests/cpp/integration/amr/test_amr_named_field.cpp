@@ -133,7 +133,17 @@ TEST(test_amr_named_field, Runs) {
 
   // (1) PARITY: named field "psi" with RHS = q*rho (the SAME as the default Poisson). gradient comps
   // declared. The closure mirrors make_poisson_rhs of a charge brick: rhs += q * U[0].
-  rt.register_named_field("psi", kPhiPsi, kGxPsi, kGyPsi);
+  AmrFieldSolveConfig psi_plan;
+  psi_plan.provider_identity = "test:plasma/psi";
+  psi_plan.output_owner_identity = "test:plasma";
+  psi_plan.output_block = "plasma";
+  psi_plan.output_key = "psi";
+  psi_plan.nullspace_assertion = "constant";
+  psi_plan.gauge = "mean_zero";
+  psi_plan.providers.push_back(
+      FieldProviderBinding{"test:plasma/psi/rhs", "plasma", "psi", Real(1)});
+  rt.install_field_plan("psi", psi_plan);
+  rt.register_named_field("plasma", "psi", kPhiPsi, kGxPsi, kGyPsi);
   rt.set_block_named_elliptic_rhs(0, "psi", [q](const MultiFab& U, MultiFab& rhs) {
     add_scaled_component(U, Real(q), 0, rhs);  // f_psi = q * rho == default Poisson RHS
   });
@@ -161,7 +171,17 @@ TEST(test_amr_named_field, Runs) {
 
   // (2) DISTINCT RHS (linearity): named field "chi" with RHS = 2*q*rho -> chi = 2*psi (Poisson linear).
   // A genuinely different, correctly scaled second field (not an alias of the default phi).
-  rt.register_named_field("chi", kPhiChi, /*gx=*/-1,
+  AmrFieldSolveConfig chi_plan;
+  chi_plan.provider_identity = "test:plasma/chi";
+  chi_plan.output_owner_identity = "test:plasma";
+  chi_plan.output_block = "plasma";
+  chi_plan.output_key = "chi";
+  chi_plan.nullspace_assertion = "constant";
+  chi_plan.gauge = "mean_zero";
+  chi_plan.providers.push_back(
+      FieldProviderBinding{"test:plasma/chi/rhs", "plasma", "chi", Real(1)});
+  rt.install_field_plan("chi", chi_plan);
+  rt.register_named_field("plasma", "chi", kPhiChi, /*gx=*/-1,
                           /*gy=*/-1);  // phi only (fewer than 3 aux slots)
   rt.set_block_named_elliptic_rhs(0, "chi", [q](const MultiFab& U, MultiFab& rhs) {
     add_scaled_component(U, Real(2.0 * q), 0, rhs);  // f_chi = 2 * (q * rho)

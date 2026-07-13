@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from pops.ir.literals import exact_numeric_scalar
 from pops.model.ownership import OwnerKind, OwnerPath
 from pops.time.program_authoring import _ProgramAuthoring
 from pops.time.program_condensed import _ProgramCondensed
@@ -26,7 +25,14 @@ from pops.time.program_residual import _ProgramResidual
 from pops.time.program_solve import _ProgramSolve
 from pops.time.program_time_handles import _ProgramTimeHandles
 from pops.time.references import bind_program_block, block_name
-from pops.time.step_transaction import StepTransactionPlan, ensure_step_strategy
+from pops.time.step_transaction import (
+    ALL_PROVISIONAL_STORES,
+    AcceptanceGuard,
+    GuardRole,
+    ProvisionalStore,
+    StepTransactionPlan,
+    ensure_step_strategy,
+)
 from pops.time.values import _Coeff, ProgramValue  # noqa: F401  (ProgramValue used by mixins via prog ref)
 
 
@@ -115,9 +121,8 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         # ADC-666: explicit attempt controller. Runtime kwargs are validated against this descriptor;
         # a run-time CFL/dt/error-control option never silently selects a strategy.
         self._step_strategy = None
-        self._transaction_staged_effects = ()
-        self._transaction_guards = ()
-        self._transaction_projections = ()
+        self._transaction_stores = ALL_PROVISIONAL_STORES
+        self._acceptance_guards = ()
         # ADC-563 freeze: a Program is MUTABLE while authored and FROZEN by pops.compile. After
         # freeze, adding an IR node (via _new) RAISES -- a compiled artifact is frozen to exactly the
         # program it was compiled from. Emission / hashing are pure reads and stay allowed.
@@ -197,9 +202,7 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         self,
         strategy: Any,
         *,
-        staged_effects: Any = (),
-        guards: Any = (),
-        projections: Any = (),
+        stores: Any = ALL_PROVISIONAL_STORES,
     ) -> Any:
         """Attach the explicit StepStrategy/transaction contract to this Program.
 
@@ -209,22 +212,32 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         """
         self._guard_mutable("set step strategy")
         strategy = ensure_step_strategy(strategy)
+        stores = tuple(stores)
+        if not stores or any(type(store) is not ProvisionalStore for store in stores):
+            raise TypeError("Program.step_strategy stores must contain ProvisionalStore values")
+        if len(set(stores)) != len(stores):
+            raise ValueError("Program.step_strategy stores cannot contain duplicates")
         self._step_strategy = strategy
-        self._transaction_staged_effects = tuple(str(item) for item in staged_effects)
-        self._transaction_guards = tuple(str(item) for item in guards)
-        self._transaction_projections = tuple(str(item) for item in projections)
+        self._transaction_stores = stores
         return self
+
+    def _register_acceptance_guard(self, guard: AcceptanceGuard) -> None:
+        self._guard_mutable("register acceptance guard %r" % guard.name)
+        if any(existing.name == guard.name for existing in self._acceptance_guards):
+            raise ValueError("acceptance guard %r is already declared" % guard.name)
+        self._acceptance_guards = self._acceptance_guards + (guard,)
 
     def transaction_plan(self) -> Any:
         """Return the frozen transaction plan, or None when the Program has no controller contract."""
         if self._step_strategy is None:
             return None
+        from pops.time.step_strategy import ErrorControlledDt
+        if type(self._step_strategy) is ErrorControlledDt and not any(
+                guard.role is GuardRole.ERROR_ESTIMATE for guard in self._acceptance_guards):
+            raise ValueError(
+                "ErrorControlledDt requires a lowered AcceptanceGuard with role=GuardRole.ERROR_ESTIMATE")
         return StepTransactionPlan(
-            self._step_strategy,
-            self._transaction_staged_effects,
-            self._transaction_guards,
-            self._transaction_projections,
-        )
+            self._step_strategy, self._transaction_stores, self._acceptance_guards)
 
     def validate_runtime_controls(self, controls: Any = None) -> bool:
         """Validate run controls against the explicit StepStrategy selected by this Program."""

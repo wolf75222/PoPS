@@ -1,5 +1,7 @@
 #pragma once
 
+#include <limits>
+
 #include <pops/core/state/variables.hpp>  // VariableSet (role-bearing descriptor carried by each block)
 #include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperator / CouplingOperatorView (typed contract, ADC-595)
 #include <pops/diagnostics/runtime_diagnostics.hpp>
@@ -632,9 +634,18 @@ class System {
   /// @}
   void step(double dt);  ///< solve_fields, then advances each block according to its scheme
   void advance(double dt, int nsteps);
+  /// RuntimeInstance-only outer transaction spanning native advancement and prepared consumers.
+  void begin_step_transaction();
+  /// Seal the native state while retaining its accepted snapshot until external effects publish.
+  void commit_step_transaction();
+  /// Release the accepted snapshot after every external effect has published successfully.
+  void finalize_step_transaction();
+  /// Restore the accepted snapshot, including after commit but before finalize.
+  void rollback_step_transaction();
 
   /// Advances one step at dt = cfl * h / max wave speed of the system. @return the dt used.
-  double step_cfl(double cfl, double speed_floor = static_cast<double>(kCflSpeedFloor));
+  double step_cfl(double cfl, double speed_floor = static_cast<double>(kCflSpeedFloor),
+                  double max_dt = std::numeric_limits<double>::infinity(), double min_dt = 0.0);
   /// Diagnostic (ADC-182): {w, i, j} of the GLOBAL cell that dominates the transport
   /// CFL bound of the block -- to locate a realizability erosion / a collapsing dt.
   /// On demand, off the hot path (step/step_cfl unchanged).

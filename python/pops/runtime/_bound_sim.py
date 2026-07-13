@@ -20,7 +20,7 @@ from typing import Any
 
 # Advance the clock (the whole point of binding a compiled Case).
 _STEPPING = frozenset({
-    "run", "step", "step_cfl", "step_adaptive", "solve_fields",
+    "run", "step", "solve_fields",
 })
 
 # Mutate runtime DATA (state / fields / clock) -- never parameter carriers or composition.
@@ -111,7 +111,7 @@ class BoundSimulation:
         # whole surface.
         raise AttributeError(
             "pops.bind: a bound simulation has no %r; its surface is the run / data / diagnostic / "
-            "io methods (run / step / step_cfl / set_state / density / mass / inspect / checkpoint / "
+            "io methods (run / step / set_state / density / mass / inspect / checkpoint / "
             "...). Author the composition on the pops.Case and lower it with pops.compile(...) + "
             "pops.bind(...)." % attr)
 

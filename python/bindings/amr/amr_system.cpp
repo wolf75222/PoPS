@@ -555,6 +555,8 @@ struct AmrSystem::Impl {
   };
 
   std::unique_ptr<AcceptedSnapshot> restart_transaction_;
+  std::unique_ptr<AcceptedSnapshot> external_step_transaction_;
+  bool external_step_transaction_committed_ = false;
 
   /// Execute one public AMR macro-step against an accepted snapshot.  The AmrRuntime snapshot owns
   /// topology + multi-block/per-level data; this facade layer adds its authoritative clock and the
@@ -562,6 +564,17 @@ struct AmrSystem::Impl {
   /// before propagating (RejectAttempt remains observable to the Python retry policy).
   template <class Body>
   decltype(auto) execute_step_transaction(Body&& body) {
+    if (external_step_transaction_) {
+      if (external_step_transaction_committed_)
+        throw std::runtime_error(
+            "AmrSystem: committed external step transaction must be finalized before another step");
+      try {
+        return std::forward<Body>(body)();
+      } catch (...) {
+        external_step_transaction_->restore(*this);
+        throw;
+      }
+    }
     AcceptedSnapshot accepted(*this);
     try {
       return std::forward<Body>(body)();
@@ -2547,9 +2560,41 @@ void AmrSystem::advance(double dt, int nsteps) {
   for (int s = 0; s < nsteps; ++s)
     step(dt);
 }
-double AmrSystem::step_cfl(double cfl, double speed_floor) {
+void AmrSystem::begin_step_transaction() {
+  p_->ensure_built();
+  if (p_->external_step_transaction_)
+    throw std::runtime_error("AmrSystem::begin_step_transaction: transaction already active");
+  p_->external_step_transaction_ = std::make_unique<Impl::AcceptedSnapshot>(*p_);
+  p_->external_step_transaction_committed_ = false;
+}
+void AmrSystem::commit_step_transaction() {
+  if (!p_->external_step_transaction_)
+    throw std::runtime_error("AmrSystem::commit_step_transaction: no active transaction");
+  if (p_->external_step_transaction_committed_)
+    throw std::runtime_error("AmrSystem::commit_step_transaction: transaction already committed");
+  p_->external_step_transaction_committed_ = true;
+}
+void AmrSystem::finalize_step_transaction() {
+  if (!p_->external_step_transaction_ || !p_->external_step_transaction_committed_)
+    throw std::runtime_error(
+        "AmrSystem::finalize_step_transaction: no committed transaction");
+  p_->external_step_transaction_.reset();
+  p_->external_step_transaction_committed_ = false;
+}
+void AmrSystem::rollback_step_transaction() {
+  if (!p_->external_step_transaction_)
+    throw std::runtime_error("AmrSystem::rollback_step_transaction: no active transaction");
+  p_->external_step_transaction_->restore(*p_);
+  p_->external_step_transaction_.reset();
+  p_->external_step_transaction_committed_ = false;
+}
+double AmrSystem::step_cfl(double cfl, double speed_floor, double max_dt, double min_dt) {
   p_->ensure_built();
   return p_->execute_step_transaction([&]() -> double {
+    if (std::isnan(max_dt) || max_dt <= 0.0)
+      throw std::invalid_argument("AmrSystem::step_cfl max_dt must be positive or +infinity");
+    if (std::isnan(min_dt) || min_dt < 0.0)
+      throw std::invalid_argument("AmrSystem::step_cfl min_dt must be finite and >= 0");
     if (p_->clock_restore_pending_) {  // pending phase restoration (cf. step)
       p_->push_macro_step_to_engine();
       p_->clock_restore_pending_ = false;
@@ -2557,16 +2602,29 @@ double AmrSystem::step_cfl(double cfl, double speed_floor) {
     const double hx = p_->cfg.L / p_->cfg.n;  // coarse grid spacing (dx_coarse)
     // A Program is always on the runtime engine: compute its CFL bound there, then run the Program.
     if (p_->program_.step_) {
-      const double dt = static_cast<double>(p_->runtime->cfl_dt(
+      double dt = static_cast<double>(p_->runtime->cfl_dt(
           static_cast<Real>(cfl), static_cast<Real>(hx), static_cast<Real>(speed_floor)));
+      if (std::isfinite(max_dt) && max_dt < dt) {
+        dt = std::min(dt, max_dt);
+        p_->runtime->override_last_dt_bound("strategy:max_dt");
+      }
+      if (dt < min_dt)
+        throw std::runtime_error("AmrSystem::step_cfl stability bound is below declared min_dt");
       p_->run_program_cadence_(dt);
       p_->t += dt;
       ++p_->macro_step_;
       return dt;
     }
     if (p_->runtime) {
-      const double dt = static_cast<double>(p_->runtime->step_cfl(
+      double dt = static_cast<double>(p_->runtime->cfl_dt(
           static_cast<Real>(cfl), static_cast<Real>(hx), static_cast<Real>(speed_floor)));
+      if (std::isfinite(max_dt) && max_dt < dt) {
+        dt = std::min(dt, max_dt);
+        p_->runtime->override_last_dt_bound("strategy:max_dt");
+      }
+      if (dt < min_dt)
+        throw std::runtime_error("AmrSystem::step_cfl stability bound is below declared min_dt");
+      p_->runtime->step(static_cast<Real>(dt));
       p_->t += dt;
       ++p_->macro_step_;
       return dt;
@@ -2615,6 +2673,12 @@ double AmrSystem::step_cfl(double cfl, double speed_floor) {
         p_->last_dt_reason = "global:" + g.label;
       }
     }
+    if (std::isfinite(max_dt) && max_dt < h) {
+      h = max_dt;
+      p_->last_dt_reason = "strategy:max_dt";
+    }
+    if (h < min_dt)
+      throw std::runtime_error("AmrSystem::step_cfl stability bound is below declared min_dt");
     p_->step_fn(h);
     p_->t += h;
     ++p_->macro_step_;

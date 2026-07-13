@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <initializer_list>
 #include <map>
 #include <optional>
 #include <set>
@@ -247,14 +248,7 @@ class AmrProgramContext {
     eng_->level_source_into(static_cast<std::size_t>(sys_block(b)), level_, u, r);
   }
   void apply_projection(int b, MultiFab& u) const {
-    // v1: per-level positivity projection is wired through the native block path (project_per_level),
-    // not the per-stage Program seam. A Program that requests it on AMR is a documented deferral.
-    (void)b;
-    (void)u;
-    throw std::runtime_error(
-        "AmrProgramContext::apply_projection: a per-stage positivity projection under a compiled "
-        "Program on AMR is deferred (v1); the native AMR block applies it per level at end-of-step. "
-        "Drop P.project from the AMR Program or use System.");
+    eng_->project_level_state(static_cast<std::size_t>(sys_block(b)), level_, u);
   }
 
   // --- dt bound primitives (evaluated at the COARSE level, where the AMR CFL lives) -----------------
@@ -423,6 +417,24 @@ class AmrProgramContext {
       ledger_lincomb_(z, a, x, b, y);  // ledger[z] = a*ledger[x] + b*ledger[y]
       note_live_write_(&z);
     }
+  }
+  void commit_many(
+      std::initializer_list<std::pair<MultiFab*, const MultiFab*>> commits) const {
+    std::vector<MultiFab*> targets;
+    targets.reserve(commits.size());
+    for (const auto& [target, source] : commits) {
+      if (target == nullptr || source == nullptr)
+        throw std::invalid_argument("AmrProgramContext::commit_many received a null state");
+      if (std::find(targets.begin(), targets.end(), target) != targets.end())
+        throw std::invalid_argument("AmrProgramContext::commit_many received a duplicate target");
+      if (target->ncomp() != source->ncomp() ||
+          target->box_array().boxes() != source->box_array().boxes())
+        throw std::invalid_argument("AmrProgramContext::commit_many state layout mismatch");
+      targets.push_back(target);
+    }
+    for (const auto& [target, source] : commits)
+      if (target != source)
+        lincomb(*target, Real(0), *target, Real(1), *source);
   }
 
   // --- matrix-free elliptic primitives over the CURRENT level (parity with ProgramContext) ----------

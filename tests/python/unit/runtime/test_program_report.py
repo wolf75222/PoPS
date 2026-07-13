@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ADC-594 : report structure du sous-systeme Program compile (ProgramRuntimeReport).
 
-L'etat runtime du Program compile (step installe / hash, cadence, block map, params runtime,
+L'etat runtime du Program compile (step installe / hash, transaction, block map, params runtime,
 diagnostics, histories, cache, profiler) est EXTRAIT de System::Impl / AmrSystem::Impl dans une
 struct partagee (pops::runtime::program::ProgramRuntimeState). Cote Python, System.program_report()
 et AmrSystem.program_report() AGREGENT les accessors deja exposes en UN report inspectable, JSON-ready
@@ -9,8 +9,7 @@ et AmrSystem.program_report() AGREGENT les accessors deja exposes en UN report i
 
 Ce test prouve LOCALEMENT (sous un _pops prebuilt, sans codegen / Kokkos obligatoire) :
 
-  1. System frais : report installed=False, sections vides, cadence 1/1 (ou None si le .so prebuilt
-     precede les getters ADC-594 program_substeps/program_stride -> skip gracieux, message CI).
+  1. System frais : report installed=False, sections vides et aucune StepTransaction.
   2. Apres avoir peuple une ring d'history (via restore_history, la route bas-niveau bindee), le
      report liste la ring (name / depth / ncomp / initialized).
   3. Le report passe par la vue BoundSimulation (surface DIAGNOSTIC allowlistee, ADC-583).
@@ -80,12 +79,7 @@ def test_fresh_report_is_empty():
     _check(isinstance(rep.profiler, dict) and "enabled" in rep.profiler,
            "profiler est un dict portant la cle 'enabled'")
     _check(rep.profiler["enabled"] in (False, None), "profiler eteint sur un System frais")
-    # Cadence : 1/1 si le .so expose les getters ADC-594, sinon None (skip gracieux, CI couvre).
-    cad = rep.cadence
-    if cad.get("substeps") is None:
-        print("  (skip cadence sub-assert: _pops lacks program_substeps/stride (rebuild pops; CI covers))")
-    else:
-        _check(cad["substeps"] == 1 and cad["stride"] == 1, "cadence par defaut 1/1")
+    _check(rep.step_transaction == {}, "aucune StepTransaction sans Program installe")
     # JSON-ready : to_dict serialisable, to_json round-trip.
     d = rep.to_dict()
     _check(d["report_type"] == "program_runtime", "report_type nomme le sous-systeme")
@@ -144,8 +138,8 @@ def test_inspection_program_section_from_report():
     _check(section["hash"] == rep.program_hash, "section hash == report hash (source unique)")
     _check(section["histories"] == [dict(r) for r in rep.histories],
            "section histories == report histories")
-    _check("cadence" in section and "block_map" in section,
-           "la section porte la cadence + block_map (plus seulement les maps string-only)")
+    _check("step_transaction" in section and "block_map" in section,
+           "la section porte la transaction + block_map")
     print("ok test_inspection_program_section_from_report")
 
 

@@ -50,7 +50,8 @@ from pops.time.step_strategy import (  # noqa: F401
 )
 from pops.time.solve_problem import CoupledImplicitEuler, LocalResidual  # noqa: F401
 from pops.time.step_transaction import (  # noqa: F401
-    StepTransactionPlan, StepTransactionReport,
+    ALL_PROVISIONAL_STORES, AcceptanceGuard, BlockProjection, GuardRole,
+    ProjectAndRecheck, ProvisionalStore, StepTransactionPlan, StepTransactionReport,
 )
 from pops.time.points import Clock, StagePoint, TimePoint  # noqa: F401
 from pops.time.residual import (  # noqa: F401
@@ -78,7 +79,8 @@ __all__ = ["Program", "ProgramValue", "StageStateSet", "ResidualSolution",
            "SolveOutcome", "FieldSolveOutcome", "SolveAction", "FailRun", "RejectAttempt",
            "SOLVE_STATUSES", "Schedule",
            "StepStrategy", "FixedDt", "AdaptiveCFL", "ErrorControlledDt", "ExternalTimeGrid",
-           "StepTransactionPlan", "StepTransactionReport",
+           "ALL_PROVISIONAL_STORES", "AcceptanceGuard", "BlockProjection", "GuardRole",
+           "ProjectAndRecheck", "ProvisionalStore", "StepTransactionPlan", "StepTransactionReport",
            "ProgramGraph", "GraphProgramValue", "StateRead", "Unknown", "OperatorCall",
            "ResidualEvaluation", "ResidualSolve", "Solve", "Branch", "Loop", "Region", "RegionCapture",
            "Synchronize", "Commit", "ValueRef",

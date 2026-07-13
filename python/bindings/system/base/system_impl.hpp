@@ -495,12 +495,7 @@ struct System::Impl {
   // pops::native_loader::push_dynamic (include/pops/runtime/native_loader.hpp, template over Impl);
   // add_dynamic_block below instantiates it with System::Impl. See SYSTEM_CPP_EXTRACTION_PLAN.md.
 
-  /// Execute one public macro-step against an accepted snapshot. Any exception restores every
-  /// runtime-owned value a Program/native step may have published before failing; the typed
-  /// StepAttemptRejected signal therefore leaves no partial state and no consumed clock tick.
-  template <class Body>
-  decltype(auto) execute_step_transaction(Body&& body) {
-    struct Snapshot {
+  struct AcceptedSnapshot {
       std::vector<MultiFab> states;
       MultiFab aux;
       typename pops::field_solver::SystemFieldSolver<Impl>::StepSnapshot fields;
@@ -510,8 +505,11 @@ struct System::Impl {
       std::map<std::string, Real> program_diagnostics;
       pops::runtime::program::CacheManager cache;
       pops::runtime::program::HistoryManager history;
+      pops::runtime::program::Profiler profiler;
+      std::map<std::string, NewtonReport> newton_reports;
+      std::string last_dt_reason;
 
-      explicit Snapshot(Impl& impl)
+      explicit AcceptedSnapshot(Impl& impl)
           : aux(impl.aux),
             fields(impl.fields_.step_snapshot()),
             time(impl.t),
@@ -519,10 +517,15 @@ struct System::Impl {
             last_program_dt(impl.program_.last_dt_),
             program_diagnostics(impl.program_.diagnostics_),
             cache(impl.program_.cache_),
-            history(impl.program_.hist_) {
+            history(impl.program_.hist_),
+            profiler(impl.program_.profiler_),
+            last_dt_reason(impl.stepper_.last_dt_reason()) {
         states.reserve(impl.sp.size());
         for (const auto& block : impl.sp)
           states.emplace_back(block.U);
+        for (const auto& [name, report] : impl.diagnostics_.newton_reports)
+          if (report)
+            newton_reports.emplace(name, *report);
       }
 
       void restore(Impl& impl) const {
@@ -536,10 +539,36 @@ struct System::Impl {
         impl.program_.diagnostics_ = program_diagnostics;
         impl.program_.cache_ = cache;
         impl.program_.hist_ = history;
+        impl.program_.profiler_ = profiler;
+        for (auto& [name, report] : impl.diagnostics_.newton_reports) {
+          const auto saved = newton_reports.find(name);
+          if (report && saved != newton_reports.end())
+            *report = saved->second;
+        }
+        impl.stepper_.restore_last_dt_reason(last_dt_reason);
       }
-    };
+  };
 
-    Snapshot accepted(*this);
+  std::unique_ptr<AcceptedSnapshot> external_step_transaction_;
+  bool external_step_transaction_committed_ = false;
+
+  /// Execute one public macro-step against an accepted snapshot. Any exception restores every
+  /// runtime-owned value a Program/native step may have published before failing; the typed
+  /// StepAttemptRejected signal therefore leaves no partial state and no consumed clock tick.
+  template <class Body>
+  decltype(auto) execute_step_transaction(Body&& body) {
+    if (external_step_transaction_) {
+      if (external_step_transaction_committed_)
+        throw std::runtime_error(
+            "System: committed external step transaction must be finalized before another step");
+      try {
+        return std::forward<Body>(body)();
+      } catch (...) {
+        external_step_transaction_->restore(*this);
+        throw;
+      }
+    }
+    AcceptedSnapshot accepted(*this);
     try {
       return std::forward<Body>(body)();
     } catch (...) {

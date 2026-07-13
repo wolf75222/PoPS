@@ -65,16 +65,24 @@ namespace detail {
 // (multi-bloc natif), tous deux situes plus bas (la recherche qualifiee detail:: exige la
 // declaration AVANT le point d'usage). No-op (else) si le modele ne declare pas m.project.
 template <class Model>
+void apply_pointwise_project_amr_state(const Model& m, MultiFab& U, const MultiFab& a) {
+  if constexpr (HasPointwiseProjection<Model>) {
+    for (int li = 0; li < U.local_size(); ++li)
+      for_each_cell(U.box(li),
+                    ProjectCellKernel<Model>{m, U.fab(li).array(), U.fab(li).const_array(),
+                                             a.fab(li).const_array()});
+  } else {
+    (void)m;
+    (void)U;
+    (void)a;
+  }
+}
+
+template <class Model>
 void apply_pointwise_project_amr(const Model& m, std::vector<AmrLevelMP>& levels) {
   if constexpr (HasPointwiseProjection<Model>) {
-    for (auto& lev : levels) {
-      MultiFab& U = lev.U;
-      const MultiFab& a = *lev.aux;
-      for (int li = 0; li < U.local_size(); ++li)
-        for_each_cell(U.box(li),
-                      ProjectCellKernel<Model>{m, U.fab(li).array(), U.fab(li).const_array(),
-                                               a.fab(li).const_array()});
-    }
+    for (auto& lev : levels)
+      apply_pointwise_project_amr_state(m, lev.U, *lev.aux);
   } else {
     (void)m;
     (void)levels;
@@ -609,6 +617,10 @@ AmrRuntimeBlock build_amr_block(
   if constexpr (HasPointwiseProjection<Model>)
     b.project_per_level = [model](std::vector<AmrLevelMP>& L) {
       detail::apply_pointwise_project_amr(model, L);
+    };
+  if constexpr (HasPointwiseProjection<Model>)
+    b.project_level_state = [model](MultiFab& U, const MultiFab& aux) {
+      detail::apply_pointwise_project_amr_state(model, U, aux);
     };
   // Contribution of the block to the SUMMED Poisson RHS: rhs += elliptic_rhs(U) on the coarse grid (pure
   // host loop). SAME functor as the flat System (make_poisson_rhs -> detail::PoissonRhs) -> each

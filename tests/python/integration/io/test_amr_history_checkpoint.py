@@ -49,6 +49,13 @@ _C = 0.6  # linear source S(rho) = _C*rho: R changes every step, the ring is loa
 _fails = 0
 
 
+def _advance(sim, nsteps):
+    return sim.run(
+        t_end=float(sim.time()) + nsteps * DT,
+        max_steps=nsteps,
+    )
+
+
 def chk(cond, label):
     global _fails
     print("  [%s] %s" % ("OK " if cond else "XX ", label))
@@ -79,6 +86,7 @@ def _ab2_program(name="adc631_ckpt_ab2"):
     module = synthetic_module("%s_state" % name, components=("rho",))
     _case, states = program_states(P, module, ("blk",))
     lt.adams_bashforth2(P, states["blk"], flux=False)
+    P.step_strategy(pops.time.FixedDt(DT))
     return P
 
 
@@ -101,6 +109,7 @@ def _state3_program(name="adc631_ckpt_state3"):
     # declares the depth-3 ring without breaking the single-step reconstructability of the replay.
     nxt = P.value("Un", U.n + P.dt * (_C * U.n) + 0.0 * U.prev(2))
     P.commit(U.next, nxt)
+    P.step_strategy(pops.time.FixedDt(DT))
     return P
 
 
@@ -128,6 +137,9 @@ def _build(program, regrid_every=2):
         amr.set_refinement(1.2)  # tags the blob -> a real 2-level hierarchy, regrids at steps 2,4,...
         amr.set_density("blk", _blob())
         amr.install_program(compiled.so_path)
+        authored = compiled.program
+        amr._step_strategy = authored._step_strategy
+        amr._step_transaction_plan = authored.transaction_plan()
         # Attach the per-ring persistence policy (what pops.bind's step-5a does): the low-level
         # install_program(so_path) seam does not see the compiled Program object, so the v3 checkpoint
         # would otherwise persist Dense. name -> policy from the compiled Program's _history_persistence.
@@ -150,16 +162,13 @@ def _run_case(program_factory, nsteps, half, label, regrid_every=2):
     cont, err = _build(program_factory(), regrid_every)
     if cont is None:
         return None, err or "no engine"
-    for _ in range(half):
-        cont.step(DT)
+    _advance(cont, half)
     cont_rings_at_half = _rings(cont)
-    for _ in range(nsteps - half):
-        cont.step(DT)
+    _advance(cont, nsteps - half)
     ref = np.asarray(cont.density("blk"))
 
     run, _ = _build(program_factory(), regrid_every)
-    for _ in range(half):
-        run.step(DT)
+    _advance(run, half)
     with tempfile.TemporaryDirectory() as tmp:
         ckpt = run.checkpoint(os.path.join(tmp, label))
         d = np.load(ckpt, allow_pickle=False)
@@ -173,8 +182,7 @@ def _run_case(program_factory, nsteps, half, label, regrid_every=2):
         fresh.restart(ckpt)
         rings_after_restart = _rings(fresh)
         report = fresh.last_restart_report()
-        for _ in range(nsteps - half):
-            fresh.step(DT)
+        _advance(fresh, nsteps - half)
     got = np.asarray(fresh.density("blk"))
     return (ref, got, cont_rings_at_half, rings_after_restart, stored_info, report), None
 

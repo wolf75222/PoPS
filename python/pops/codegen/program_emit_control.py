@@ -166,7 +166,10 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     lines = []
     # ``var`` also carries emission-local schedule/coupled scratch tokens under tuple keys. Nothing
     # is written back into Program authoring state, so codegen remains pure after deep freeze.
-    committed_ids = {s.id for s in program._commits.values()}
+    # Every final value remains provisional scratch until the single tail commit group.  In
+    # particular a committed linear_combine must never overwrite live state while later operators
+    # are still executing.
+    committed_ids = frozenset()
     # Multistep histories (ADC-406a): register each declared history at its MAX lag FIRST (a
     # registration-only call, NOT a read -- a read before the first store fails loud), so the ring
     # depth is locked before any store. The first ctx.store_history then cold-start-fills every
@@ -207,13 +210,12 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     # Each committed block: a scratch commit (solve_local_linear / solve_linear / a non-base
     # linear_combine wrote a scratch) is copied into the block state; a linear_combine commit already
     # wrote ctx.state(idx) in place (var == base), so its copy is a no-op (skipped).
+    commit_pairs = []
     for state_ref, committed in program._commits.items():
-        block = state_ref.block_ref
-        base = bases[block]
-        if var[committed.id] != var[base.id]:
-            lines.append(
-                "ctx.lincomb(%s, static_cast<pops::Real>(0), %s, static_cast<pops::Real>(1), %s);"
-                % (var[base.id], var[base.id], var[committed.id]))
+        base = bases[state_ref.block_ref]
+        commit_pairs.append("{&%s, &%s}" % (var[base.id], var[committed.id]))
+    if commit_pairs:
+        lines.append("ctx.commit_many({%s});" % ", ".join(commit_pairs))
     # Rotate the history rings ONCE at the very end of the step (after the commit), so the next step
     # reads lag k as the value k stores ago. Only emitted when the Program uses histories.
     if program._histories:
@@ -289,7 +291,7 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
     for value in program._values:
         if value.op == "state" and value.block not in bases:
             bases[value.block] = value
-    committed_ids = {state.id for state in program._commits.values()}
+    committed_ids = frozenset()
     binding_ops = frozenset({"state", "history", "scalar_field", "matrix_free_operator"})
 
     def registrations() -> list[str]:
@@ -333,13 +335,12 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
                 else:
                     lines.append("ctx.stage_linear_initial_guess();")
         if phase == "publish":
+            commit_pairs = []
             for state_ref, committed in program._commits.items():
                 base = bases[state_ref.block_ref]
-                if var[committed.id] != var[base.id]:
-                    lines.append(
-                        "ctx.lincomb(%s, static_cast<pops::Real>(0), %s, "
-                        "static_cast<pops::Real>(1), %s);"
-                        % (var[base.id], var[base.id], var[committed.id]))
+                commit_pairs.append("{&%s, &%s}" % (var[base.id], var[committed.id]))
+            if commit_pairs:
+                lines.append("ctx.commit_many({%s});" % ", ".join(commit_pairs))
             if program._histories:
                 lines.append("ctx.rotate_histories();")
         return "\n".join("    " + line for line in lines)

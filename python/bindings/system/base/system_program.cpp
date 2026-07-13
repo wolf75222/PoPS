@@ -106,11 +106,12 @@ const std::vector<int>& System::program_block_map() const {
   return p_->program_.block_map_;
 }
 // Block positivity projection (ADC-177) reached by a compiled Program (ProgramContext::apply_projection,
-// spec op 21). REUSES the block's own projection closure; a block without one is a no-op.
+// spec op 21). REUSES the block's own projection closure and rejects an absent capability.
 void System::block_project(int b, MultiFab& u) {
   std::function<void(MultiFab&)>& proj = p_->sp[static_cast<std::size_t>(b)].project;
-  if (proj)
-    proj(u);
+  if (!proj)
+    throw std::runtime_error("System::block_project: owning block declares no pointwise projection");
+  proj(u);
 }
 // Compiled-Program scalar diagnostics (ADC-414, spec op 23): the installed program writes named scalars
 // via P.record_scalar (ProgramContext::record_scalar); Python reads them after the step. Delegated to

@@ -2,7 +2,7 @@
 
 ``AmrSystem`` carries one or several blocks on an AMR hierarchy. Its lines are split into the
 ``_amr_system_equation`` (add_equation + named-aux), ``_amr_system_io`` (write / checkpoint /
-restart), ``_amr_system_program`` (compiled time-Program install / params / cadence, ADC-508)
+restart), ``_amr_system_program`` (compiled time-Program install / params / transaction)
 and ``_amr_system_install`` (the ``pops.bind`` install seam + field-solver / aux helpers)
 mixins to satisfy the <=500-line cap ; this module composes them and keeps the constructor + the
 native-add_block / coupling / diagnostics glue.
@@ -126,19 +126,30 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         self._last_run_manifest = None
         self._last_run_identity = None
         self._last_restart_identity = None
-        self._program_cadence_cfl = None
+        self._step_strategy = None
+        self._step_transaction_plan = None
+        self._step_controller = None
+        self._last_step_transaction_report = None
+        from pops.runtime._temporal_restart import TemporalRestartState
+        self._temporal_restart_state = TemporalRestartState()
 
-    def run(self, t_end, cfl=None, max_steps=1_000_000, output_dir=None, strategy=None):
+    def run(self, t_end, *, max_steps, output_dir=None, controls=None):
         """Advance up to ``t_end``; RuntimeInstance alone publishes ConsumerGraph effects."""
         from pops.runtime._step_strategy import (
-            AdaptiveCFL, resolve_run_strategy, run_step_attempt)
-        strategy = resolve_run_strategy(self, strategy, cfl)
-        manifest_cfl = strategy.cfl if isinstance(strategy, AdaptiveCFL) else 0.0
+            prepare_step_controller, resolve_run_strategy, run_control_payload, run_step_attempt)
+        strategy = resolve_run_strategy(self)
+        control_payload = run_control_payload(strategy, controls)
+        prepare_step_controller(self, strategy, controls)
+        self._temporal_restart_state.begin_run(
+            control_payload, time=self._s.time(), macro_step=self._s.macro_step())
         from pops.runtime._run_manifest import begin_run
-        begin_run(self, t_end=t_end, cfl=manifest_cfl, max_steps=max_steps, output_dir=output_dir)
+        begin_run(
+            self, t_end=t_end, step_transaction=control_payload,
+            max_steps=max_steps, output_dir=output_dir)
         steps = 0
         while self._s.time() < t_end and steps < max_steps:
-            run_step_attempt(self, self._s, strategy, t_end=float(t_end))
+            run_step_attempt(
+                self, self._s, strategy, t_end=float(t_end), controls=controls)
             steps += 1
         return steps
 

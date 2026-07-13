@@ -14,8 +14,14 @@ from pops.runtime._checkpoint_manifest import (
     seal_checkpoint_payload,
 )
 from pops.runtime._run_manifest import RunManifest
+from pops.runtime._step_strategy import run_control_payload
 from pops.runtime.amr_system import AmrSystem
 from pops.runtime.system import System
+from pops.time import AdaptiveCFL, FixedDt, StepTransactionPlan
+
+
+def _run_control(cfl=0.4):
+    return run_control_payload(AdaptiveCFL(cfl))
 
 
 def _bound_snapshot():
@@ -26,7 +32,7 @@ def _bound_snapshot():
         blocks=[{"name": "tracer", "definition_identity": {"model": "m"},
                  "spatial": {"flux": "hll"}, "evolve": True}],
         solvers={},
-        cadence={"kind": "compiled-time", "substeps": 1, "stride": 1, "cfl": "default"},
+        step_transaction=StepTransactionPlan(FixedDt(0.1)).to_data(),
         params=[], aux_evidence={}, initial_evidence={}, outputs=[], diagnostics=[],
         bind_schema_identity=make_identity("bind-schema", {"slots": []}),
     )
@@ -44,7 +50,7 @@ def test_bound_snapshot_projects_execution_context_identity_digest_without_loss(
     snapshot = BoundSnapshot(
         semantic_identity=make_identity("semantic", {}),
         artifact_identity=make_identity("artifact", {}),
-        layout={"kind": "uniform"}, blocks=[], solvers={}, cadence=None, params=[],
+        layout={"kind": "uniform"}, blocks=[], solvers={}, step_transaction={}, params=[],
         aux_evidence={}, initial_evidence={}, outputs=[], diagnostics=[],
         bind_schema_identity=make_identity("bind-schema", {}),
         execution_context={"backend_identity": identity.to_data()},
@@ -60,7 +66,7 @@ def test_bound_snapshot_refuses_repr_based_extension():
             semantic_identity=make_identity("semantic", {}),
             artifact_identity=make_identity("artifact", {}),
             layout={"kind": "uniform"}, blocks=[], solvers={"phi": object()},
-            cadence={"kind": "default"}, params=[], aux_evidence={}, initial_evidence={},
+            step_transaction={}, params=[], aux_evidence={}, initial_evidence={},
             outputs=[], diagnostics=[],
             bind_schema_identity=make_identity("bind-schema", {}),
         )
@@ -70,13 +76,16 @@ def test_run_identity_changes_only_with_effective_controls():
     bind = _bound_snapshot().bind_identity
     first = RunManifest(
         bind_identity=bind, start_time=0.0, start_macro_step=0,
-        controls={"t_end": 1.0, "cfl": 0.4, "max_steps": 10, "output_mode": "current-directory"})
+        controls={"t_end": 1.0, "step_transaction": _run_control(0.4), "max_steps": 10,
+                  "output_mode": "current-directory"})
     same = RunManifest(
         bind_identity=bind, start_time=0.0, start_macro_step=0,
-        controls={"t_end": 1.0, "cfl": 0.4, "max_steps": 10, "output_mode": "current-directory"})
+        controls={"t_end": 1.0, "step_transaction": _run_control(0.4), "max_steps": 10,
+                  "output_mode": "current-directory"})
     changed = RunManifest(
         bind_identity=bind, start_time=0.0, start_macro_step=0,
-        controls={"t_end": 1.0, "cfl": 0.2, "max_steps": 10, "output_mode": "current-directory"})
+        controls={"t_end": 1.0, "step_transaction": _run_control(0.2), "max_steps": 10,
+                  "output_mode": "current-directory"})
     assert first.run_identity == same.run_identity
     assert first.run_identity != changed.run_identity
 
@@ -85,31 +94,36 @@ def test_run_manifest_strict_round_trip_and_no_numeric_coercion():
     bind = _bound_snapshot().bind_identity
     manifest = RunManifest(
         bind_identity=bind, start_time=0.0, start_macro_step=0,
-        controls={"t_end": 1.0, "cfl": 0.4, "max_steps": 10,
+        controls={"t_end": 1.0, "step_transaction": _run_control(), "max_steps": 10,
                   "output_mode": "current-directory"})
     assert RunManifest.from_dict(manifest.to_dict()).to_dict() == manifest.to_dict()
     with pytest.raises(TypeError, match="max_steps"):
         RunManifest(
             bind_identity=bind, start_time=0.0, start_macro_step=0,
-            controls={"t_end": 1.0, "cfl": 0.4, "max_steps": True,
+            controls={"t_end": 1.0, "step_transaction": _run_control(), "max_steps": True,
                       "output_mode": "current-directory"})
     with pytest.raises(ValueError, match="finite"):
         RunManifest(
             bind_identity=bind, start_time=0.0, start_macro_step=0,
-            controls={"t_end": float("nan"), "cfl": 0.4, "max_steps": 10,
+            controls={"t_end": float("nan"), "step_transaction": _run_control(), "max_steps": 10,
                       "output_mode": "current-directory"})
 
 
-def test_uniform_and_amr_run_share_the_cfl_resolution_contract():
-    assert inspect.signature(System.run).parameters["cfl"].default is None
-    assert inspect.signature(AmrSystem.run).parameters["cfl"].default is None
+def test_uniform_and_amr_run_share_the_typed_strategy_contract():
+    for runtime in (System, AmrSystem):
+        signature = inspect.signature(runtime.run)
+        assert signature.parameters["strategy"].default is None
+        assert signature.parameters["controls"].default is None
+        assert signature.parameters["max_steps"].default is inspect.Parameter.empty
+        assert "cfl" not in signature.parameters
 
 
 def test_checkpoint_manifest_authenticates_exact_payload_and_runtime_identities(monkeypatch):
     snapshot = _bound_snapshot()
     run = RunManifest(
         bind_identity=snapshot.bind_identity, start_time=0.0, start_macro_step=0,
-        controls={"t_end": 1.0, "cfl": 0.4, "max_steps": 10, "output_mode": "current-directory"})
+        controls={"t_end": 1.0, "step_transaction": _run_control(), "max_steps": 10,
+                  "output_mode": "current-directory"})
     owner = SimpleNamespace(
         bound_snapshot=snapshot, last_run_identity=run.run_identity)
     payload = {

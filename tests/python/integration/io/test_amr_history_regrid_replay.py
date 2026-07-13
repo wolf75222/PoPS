@@ -54,6 +54,13 @@ _C = 0.6  # linear source S(rho) = _C*rho: the ring is load-bearing (R changes e
 _fails = 0
 
 
+def _advance(sim, nsteps):
+    return sim.run(
+        t_end=float(sim.time()) + nsteps * DT,
+        max_steps=nsteps,
+    )
+
+
 def chk(cond, label):
     global _fails
     print("  [%s] %s" % ("OK " if cond else "XX ", label))
@@ -91,6 +98,7 @@ def _state_ring_program(depth, k, name):
     P.keep_history(U, depth=depth, checkpoint_policy=Interval(k))
     nxt = P.value("Un", U.n + P.dt * (_C * U.n) + 0.0 * U.prev(depth - 1))
     P.commit(U.next, nxt)
+    P.step_strategy(pops.time.FixedDt(DT))
     return P
 
 
@@ -127,6 +135,9 @@ def _build(program, regrid_every):
         amr.set_density("blk", _blob())
         amr.set_density("bg", np.full((N, N), 0.5))  # flat, below threshold: tags nothing, ever
         amr.install_program(compiled.so_path)
+        authored = compiled.program
+        amr._step_strategy = authored._step_strategy
+        amr._step_transaction_plan = authored.transaction_plan()
         persistence = getattr(getattr(compiled, "program", None), "_history_persistence", None)
         if persistence:
             amr.set_history_persistence(
@@ -148,16 +159,13 @@ def _run_case(program_factory, nsteps, half, label, regrid_every):
         return None, err
     if int(cont.n_levels()) < 2:
         return None, "hierarchy is single-level (regrid is a structural no-op); 2 levels required"
-    for _ in range(half):
-        cont.step(DT)
+    _advance(cont, half)
     cont_rings_at_half = _rings(cont)
-    for _ in range(nsteps - half):
-        cont.step(DT)
+    _advance(cont, nsteps - half)
     ref = np.asarray(cont.density("blk"))
 
     run, _ = _build(program_factory(), regrid_every)
-    for _ in range(half):
-        run.step(DT)
+    _advance(run, half)
     with tempfile.TemporaryDirectory() as tmp:
         ckpt = run.checkpoint(os.path.join(tmp, label))
         d = np.load(ckpt, allow_pickle=False)
@@ -177,8 +185,7 @@ def _run_case(program_factory, nsteps, half, label, regrid_every):
                  if hasattr(fresh._s, "last_replay_regrid_steps") else None)
         rings_after_restart = _rings(fresh)
         report = fresh.last_restart_report()
-        for _ in range(nsteps - half):
-            fresh.step(DT)
+        _advance(fresh, nsteps - half)
     got = np.asarray(fresh.density("blk"))
     return (ref, got, cont_rings_at_half, rings_after_restart, stored_info, report, fired), None
 
@@ -251,8 +258,7 @@ def test_d_corrupted_fingerprint_refused():
     if run is None:
         print("skip (%s)" % err)
         return
-    for _ in range(6):  # ckpt at m=6: one in-window regrid at cursor 4
-        run.step(DT)
+    _advance(run, 6)  # ckpt at m=6: one in-window regrid at cursor 4
     with tempfile.TemporaryDirectory() as tmp:
         ckpt = run.checkpoint(os.path.join(tmp, "d"))
         d = dict(np.load(ckpt, allow_pickle=False))

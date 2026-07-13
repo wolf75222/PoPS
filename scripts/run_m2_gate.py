@@ -15,12 +15,12 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "tests/gates/m2_temporal_execution.toml"
 TEST_MANIFEST = ROOT / "tests/test_manifest.toml"
-EXPECTED_ISSUES = tuple("ADC-%d" % number for number in range(661, 667))
+EXPECTED_ISSUES = ("ADC-648",) + tuple("ADC-%d" % number for number in range(661, 668))
 EXPECTED_REQUIREMENTS = {
+    "amr_step_transaction",
     "phase_pipeline", "program_graph", "schedules", "residual_operator",
-    "solve_outcome", "step_transaction", "restart",
+    "solve_outcome", "step_transaction", "restart", "temporal_restart",
 }
-EXPECTED_DEFERRED = {"ADC-648", "ADC-667"}
 ALLOWED_PYTEST_TARGETS = {
     "architecture", "pipeline", "program_graph", "residual", "schedule",
     "solve", "transaction",
@@ -72,24 +72,11 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
     if set(data) != {"schema_version", "gate", "issues", "deferred", "check"}:
         errors.append("manifest fields must be schema_version/gate/issues/deferred/check")
     if data.get("issues") != list(EXPECTED_ISSUES):
-        errors.append("issues must list ADC-661..ADC-666 exactly once in ascending order")
+        errors.append("issues must list ADC-648 and ADC-661..ADC-667 exactly once")
 
     deferred = data.get("deferred")
-    deferred_ids = []
-    if not isinstance(deferred, list):
-        errors.append("manifest must contain [[deferred]] rows")
-        deferred = []
-    for index, row in enumerate(deferred, 1):
-        where = "deferred[%d]" % index
-        if set(row) != {"issue", "requirement", "reason", "close_condition"}:
-            errors.append("%s has unknown or missing fields: %s" % (where, sorted(row)))
-            continue
-        deferred_ids.append(row["issue"])
-        for field in ("requirement", "reason", "close_condition"):
-            if not isinstance(row[field], str) or not row[field].strip():
-                errors.append("%s.%s must be a non-empty string" % (where, field))
-    if set(deferred_ids) != EXPECTED_DEFERRED or len(deferred_ids) != len(EXPECTED_DEFERRED):
-        errors.append("deferred issues must be exactly ADC-648 and ADC-667")
+    if deferred != []:
+        errors.append("final M2 gate requires deferred = []")
 
     checks = data.get("check")
     if not isinstance(checks, list) or not checks:
@@ -217,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
             print(" -", error, file=sys.stderr)
         return 2
     checks = data["check"]
-    print("M2 gate source matrix: OK (%d executable, %d explicitly deferred)"
+    print("M2 gate source matrix: OK (%d executable, %d deferred)"
           % (len(checks), len(data["deferred"])))
     if args.check_only:
         return 0

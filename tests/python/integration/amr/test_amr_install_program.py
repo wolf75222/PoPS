@@ -5,9 +5,8 @@
 dlopens a generated ``problem.so`` (compiled with ``target='amr_system'`` -> the .so exports
 ``pops_install_program_amr``), checks its ABI key, runs the section-24 requirement validation (block
 instance / solver), binds the Program blocks BY NAME, seeds the per-PROGRAM-block ``RuntimeParams``
-from the .so metadata, then installs the macro-step body. ``pops.bind`` routes a compiled Program +
-``params=`` + ``cadence=`` onto these AMR seams (the three former ``_install_compiled`` rejects are
-now real routes).
+from the .so metadata, then installs the macro-step body. ``pops.bind`` routes a compiled Program and
+its qualified ``params=`` onto these AMR seams; its typed StepStrategy is carried by the Program.
 
 The hierarchy DRIVER (``AmrProgramContext``) has LANDED: the generated
 ``pops_install_program_amr`` constructs an ``AmrProgramContext`` and installs the recursive,

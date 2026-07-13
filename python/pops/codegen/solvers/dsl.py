@@ -318,22 +318,14 @@ def build_solver_ir(solver_brick: Any) -> SolverIR:
     from pops import time as _time
     desc = _as_descriptor(solver_brick)
     program = _time.Program("solver_" + desc.name)
-    from pops.model import DeclarationIndex, Handle, OwnerKind, OwnerPath
+    from pops.model import Module
     from pops.problem import Case
 
-    class _SolverStateModel:
-        def __init__(self) -> None:
-            self.name = "solver_state:" + desc.name
-            self.owner_path = OwnerPath.fresh(
-                OwnerKind.MODEL_DEFINITION, self.name)
-            self.state = Handle("x", kind="state", owner=self.owner_path)
-
-        def declaration_index(self) -> Any:
-            return DeclarationIndex(owner=self.owner_path, handles=(self.state,))
-
-    state_model = _SolverStateModel()
+    state_model = Module("solver_state:" + desc.name)
+    state_space = state_model.state_space("x", ("value",))
+    state = state_model.state_handle(state_space)
     block = Case(name="solver_case:" + desc.name).block("solve", state_model)
-    temporal = program.state(block, state_model.state)
+    temporal = program.state(block[state])
     ctx = SolverContext(program, temporal)
     a_op = program._linear_source("A")   # the matrix-free operator A, an IR operator value
     b_rhs = ctx.unknown("b")             # the right-hand side b, an IR State value

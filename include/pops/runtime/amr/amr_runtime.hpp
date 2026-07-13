@@ -340,6 +340,9 @@ struct AmrRuntimeBlock {
   /// (modele sans HasPointwiseProjection : trajectoire bit-identique). Locale par niveau (aucun
   /// collectif MPI). Cf. detail::apply_pointwise_project_amr, cable par build_amr_block.
   std::function<void(std::vector<AmrLevelMP>&)> project_per_level;
+  /// Same concrete projection applied to a provisional Program scratch on one level.  This is the
+  /// typed ProjectAndRecheck seam; it never mutates the live block unless that scratch is committed.
+  std::function<void(MultiFab&, const MultiFab&)> project_level_state;
 
   /// NEWTON DIAGNOSTICS (AMR counterpart of System::newton_report). false (default) -> imex_advance
   /// passes report=nullptr to backward_euler_source: FAST bit-identical path, no extra allocation or
@@ -1202,6 +1205,15 @@ class AmrRuntime {
   /// reads each macro-step). @c b is the AMR block index (sys_block-resolved by the caller).
   MultiFab& level_state(std::size_t b, int k) { return (*blocks_[b].levels)[k].U; }
   const MultiFab& level_state(std::size_t b, int k) const { return (*blocks_[b].levels)[k].U; }
+  void project_level_state(std::size_t b, int k, MultiFab& state) {
+    if (b >= blocks_.size() || k < 0 || k >= nlev_)
+      throw std::out_of_range("AmrRuntime::project_level_state owner is out of range");
+    auto& projection = blocks_[b].project_level_state;
+    if (!projection)
+      throw std::runtime_error(
+          "AmrRuntime::project_level_state: owning block declares no pointwise projection");
+    projection(state, aux_[static_cast<std::size_t>(k)]);
+  }
   /// Geometry of level @p k: the coarse metric refined k times (dx/dy >> k, domain << k). The metric
   /// the per-level Laplacian / gradient / RHS read (parity with System's grid_context().geom).
   Geometry level_geom(int k) const { return geom_.refine(level_refinement(k)); }
@@ -2885,6 +2897,7 @@ class AmrRuntime {
   /// ACTIVE bound of the last step_cfl ("transport:<block>" / "source_frequency:<block>" /
   /// "stability_dt:<block>" / "global:<label>" / "degenerate" / "" before the first step).
   const std::string& last_dt_bound() const { return last_dt_reason_; }
+  void override_last_dt_bound(std::string reason) { last_dt_reason_ = std::move(reason); }
 
   /// NEWTON REPORT (OPT-IN IMEX diagnostics) of block @p name, AGGREGATED over the levels and substeps
   /// of its LAST advance (cf. AmrRuntimeBlock::newton_report). AMR counterpart of System::newton_report.

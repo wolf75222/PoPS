@@ -1,6 +1,7 @@
 """One installed runtime for Uniform, AMR, multiblock and multi-layout plans."""
 from __future__ import annotations
 
+import copy
 import json
 import os
 from collections.abc import Mapping
@@ -31,9 +32,10 @@ from ._runtime_plan_io import thaw_data
 _STRUCTURAL = frozenset({
     "add_block", "add_equation", "add_background", "add_coupling",
     "add_elliptic_model", "add_dynamic_block", "add_compiled_block", "add_native_block",
-    "set_poisson", "install_program", "set_program_cadence", "set_refinement",
+    "set_poisson", "install_program", "set_refinement",
     "set_phi_refinement", "set_block_params", "set_program_params", "_install_compiled",
 })
+_RETIRED_EXECUTION_BYPASSES = frozenset({"run", "step", "step_cfl"})
 
 
 def _identity_data(value: Any) -> Any:
@@ -164,92 +166,233 @@ class RuntimeInstance:
             for clock in sorted(clocks, key=lambda value: value.qualified_id)
         )
 
-    def _fire_consumers(self, *, at_start: bool = False, at_end: bool = False) -> tuple[Any, ...]:
-        reports = []
-        for moment in self._moments(at_start=at_start, at_end=at_end):
-            effects = plan_accepted_side_effects(
+    def _stage_consumers(
+        self, *, at_start: bool = False, at_end: bool = False,
+    ) -> tuple[ConsumerTransaction, ...]:
+        plans = tuple(
+            plan_accepted_side_effects(
                 self.runtime_plan, self.consumer_graph, moment, self.consumer_cursors)
-            checkpoint_ids = {
-                row.qualified_id for row in self.consumer_graph.nodes
-                if row.kind is ConsumerKind.CHECKPOINT
-            }
-            checkpoint_effects = tuple(
-                row for row in effects.effects if row.consumer_id in checkpoint_ids)
-            if checkpoint_effects:
-                if len(checkpoint_effects) != 1 or effects.effects[-1] is not checkpoint_effects[0]:
-                    raise ValueError(
-                        "an accepted moment may publish exactly one checkpoint and it must be "
-                        "the final ConsumerGraph effect"
-                    )
-                if any(type(row.failure_action) is SkipSampleReported for row in effects.effects):
-                    raise ValueError(
-                        "a checkpoint transaction cannot predict restart cursors when another "
-                        "effect may skip its sample"
-                    )
-                predicted = self.consumer_cursors
-                for row in effects.effects:
-                    predicted = predicted.replace(row.cursor_after)
-                self._checkpoint_cursor_override = predicted
-            try:
-                transaction = ConsumerTransaction(
-                    effects, self.consumer_cursors, self._publisher)
-                report = transaction.accept()
-            finally:
-                self._checkpoint_cursor_override = None
-            self.consumer_cursors = report.cursors
-            reports.append(report)
-        self.consumer_reports = self.consumer_reports + tuple(reports)
-        return tuple(reports)
+            for moment in self._moments(at_start=at_start, at_end=at_end)
+        )
+        plans = tuple(plan for plan in plans if plan.effects)
+        all_effects = tuple(effect for plan in plans for effect in plan.effects)
+        checkpoint_ids = {
+            row.qualified_id for row in self.consumer_graph.nodes
+            if row.kind is ConsumerKind.CHECKPOINT
+        }
+        checkpoint_effects = tuple(
+            effect for effect in all_effects if effect.consumer_id in checkpoint_ids)
+        if checkpoint_effects:
+            if len(checkpoint_effects) != 1 or all_effects[-1] is not checkpoint_effects[0]:
+                raise ValueError(
+                    "an accepted transaction may publish exactly one checkpoint and it must be "
+                    "the final ConsumerGraph effect"
+                )
+            if any(type(effect.failure_action) is SkipSampleReported for effect in all_effects):
+                raise ValueError(
+                    "a checkpoint transaction cannot predict restart cursors when another "
+                    "effect may skip its sample"
+                )
+            predicted = self.consumer_cursors
+            for effect in all_effects:
+                predicted = predicted.replace(effect.cursor_after)
+            self._checkpoint_cursor_override = predicted
 
-    def _run(self, t_end: Any, max_steps: int = 1_000_000,
-             output_dir: Any = None, **controller_controls: Any) -> int:
-        from pops.runtime._step_strategy import (
-            AdaptiveCFL, run_control_payload, run_step_attempt)
+        staged = []
+        try:
+            for plan in plans:
+                staged.append(ConsumerTransaction(
+                    plan, self.consumer_cursors, self._publisher))
+        except BaseException as error:
+            cleanup_error = self._abort_consumers(tuple(staged))
+            if cleanup_error is not None:
+                raise cleanup_error from error
+            raise
+        finally:
+            self._checkpoint_cursor_override = None
+        return tuple(staged)
+
+    @staticmethod
+    def _abort_consumers(transactions: tuple[ConsumerTransaction, ...]) -> BaseException | None:
+        failure = None
+        for transaction in reversed(transactions):
+            try:
+                transaction.abort()
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+        return failure
+
+    def _accept_consumers(
+        self, transactions: tuple[ConsumerTransaction, ...],
+    ) -> tuple[tuple[Any, ...], ConsumerCursorSet, tuple[Any, ...]]:
+        reports = tuple(transaction.accept() for transaction in transactions)
+        cursors = self.consumer_cursors
+        for transaction in transactions:
+            for cursor in transaction.cursor_updates:
+                cursors = cursors.replace(cursor)
+        return reports, cursors, self.consumer_reports + reports
+
+    def _fire_consumers(self, *, at_start: bool = False, at_end: bool = False) -> tuple[Any, ...]:
+        transactions = self._stage_consumers(at_start=at_start, at_end=at_end)
+        try:
+            reports, cursors, all_reports = self._accept_consumers(transactions)
+        except BaseException as error:
+            cleanup_error = self._abort_consumers(transactions)
+            if cleanup_error is not None:
+                raise cleanup_error from error
+            raise
+        self.consumer_cursors = cursors
+        self.consumer_reports = all_reports
+        for transaction in transactions:
+            transaction.seal()
+        return reports
+
+    def _step_transaction_methods(self) -> tuple[Any, Any, Any, Any]:
+        native = self.native_executor
+        methods = tuple(getattr(native, name, None) for name in (
+            "_begin_step_transaction", "_commit_step_transaction",
+            "_finalize_step_transaction", "_rollback_step_transaction",
+        ))
+        if any(not callable(method) for method in methods):
+            raise TypeError(
+                "RuntimeInstance executor must implement the native step-transaction protocol"
+            )
+        return methods
+
+    def _step_envelope_snapshot(self) -> dict[str, Any]:
+        native = self.native_executor
+        return {
+            "attempt": self._attempt,
+            "consumer_cursors": self.consumer_cursors,
+            "consumer_reports": self.consumer_reports,
+            "checkpoint_cursor_override": self._checkpoint_cursor_override,
+            "temporal_restart_state": copy.deepcopy(
+                getattr(native, "_temporal_restart_state", None)),
+            "step_controller": copy.deepcopy(getattr(native, "_step_controller", None)),
+            "last_step_transaction_report": getattr(
+                native, "_last_step_transaction_report", None),
+        }
+
+    def _restore_step_envelope(self, snapshot: dict[str, Any]) -> None:
+        native = self.native_executor
+        self._attempt = snapshot["attempt"]
+        self.consumer_cursors = snapshot["consumer_cursors"]
+        self.consumer_reports = snapshot["consumer_reports"]
+        self._checkpoint_cursor_override = snapshot["checkpoint_cursor_override"]
+        if hasattr(native, "_temporal_restart_state"):
+            native._temporal_restart_state = snapshot["temporal_restart_state"]
+        if hasattr(native, "_step_controller"):
+            native._step_controller = snapshot["step_controller"]
+        if hasattr(native, "_last_step_transaction_report"):
+            native._last_step_transaction_report = snapshot["last_step_transaction_report"]
+
+    def _accepted_step_transaction(
+        self,
+        advance: Any,
+        *,
+        at_end: Any = False,
+    ) -> Any:
+        """Advance once and publish its due effects as one rollback boundary."""
+        from pops.time import StepTransactionReport
 
         native = self.native_executor
-        program = self.install_plan.artifact.plan.time
-        selected = getattr(program, "_step_strategy", None)
-        if selected is None:
-            raise ValueError(
-                "pops.run requires the Program to declare step_strategy(...); runtime kwargs "
-                "cannot select a numerical controller")
-        program.validate_runtime_controls(controller_controls)
-        control = run_control_payload(selected)
+        begin, commit, finalize, rollback = self._step_transaction_methods()
+        snapshot = self._step_envelope_snapshot()
+        begin()
+        phase = "solve"
+        attempts = 1
+        failure_report = None
+        transactions = ()
+        native_active = True
+        try:
+            result, attempts = advance()
+            if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts <= 0:
+                raise RuntimeError("step controller returned an invalid native-attempt count")
+            phase = "effect"
+            self._attempt += attempts
+            transactions = self._stage_consumers(
+                at_end=bool(at_end() if callable(at_end) else at_end))
+            phase = "commit"
+            commit()
+            phase = "effect"
+            reports, cursors, all_reports = self._accept_consumers(transactions)
+            phase = "commit"
+            finalize()
+            native_active = False
+            self.consumer_cursors = cursors
+            self.consumer_reports = all_reports
+            for transaction in transactions:
+                transaction.seal()
+            return result
+        except BaseException as error:
+            failure_report = getattr(native, "_last_step_transaction_report", None)
+            cleanup_error = self._abort_consumers(transactions)
+            try:
+                if native_active:
+                    rollback()
+            finally:
+                self._restore_step_envelope(snapshot)
+            if phase in {"effect", "commit"}:
+                stores = tuple(
+                    store.value for store in getattr(
+                        native, "_step_transaction_plan", ()).stores
+                ) if getattr(native, "_step_transaction_plan", None) is not None else ()
+                failure_report = StepTransactionReport(
+                    status="failed",
+                    phase=phase,
+                    action="fail_run",
+                    attempts=attempts,
+                    staged_effects=stores,
+                    rolled_back_effects=stores,
+                    diagnostics=(str(error),),
+                )
+            if failure_report is not None and hasattr(native, "_last_step_transaction_report"):
+                native._last_step_transaction_report = failure_report
+            if cleanup_error is not None:
+                raise cleanup_error from error
+            raise
+
+    def _run(self, t_end: Any, *, max_steps: int = 1_000_000,
+             output_dir: Any = None, **controller_controls: Any) -> int:
+        from pops.runtime._step_strategy import (
+            prepare_step_controller, resolve_run_strategy, run_control_payload, run_step_attempt)
+
+        native = self.native_executor
+        selected = resolve_run_strategy(native)
+        control = run_control_payload(selected, controller_controls)
+        prepare_step_controller(native, selected, controller_controls)
+        self._step_transaction_methods()
         temporal = getattr(native, "_temporal_restart_state", None)
         if temporal is not None:
             temporal.begin_run(control, time=native.time(), macro_step=native.macro_step())
         from pops.runtime._run_manifest import begin_run
 
-        manifest_cfl = control["cfl"] if isinstance(selected, AdaptiveCFL) else 0.0
-        begin_run(native, t_end=t_end, cfl=manifest_cfl,
+        begin_run(native, t_end=t_end, step_transaction=control,
                   max_steps=max_steps, output_dir=output_dir)
         previous_root, self.output_root = self.output_root, output_dir
         steps = 0
         try:
             self._fire_consumers(at_start=True)
             while native.time() < t_end and steps < max_steps:
-                self._attempt += 1
-                run_step_attempt(native, native, selected, t_end=float(t_end))
+                final_slot = steps + 1 >= max_steps
+
+                def advance() -> tuple[Any, int]:
+                    report = run_step_attempt(
+                        native, native, selected, t_end=float(t_end),
+                        controls=controller_controls)
+                    return report, report.attempts
+
+                self._accepted_step_transaction(
+                    advance,
+                    at_end=lambda final_slot=final_slot: final_slot or not (native.time() < t_end),
+                )
                 steps += 1
-                at_end = not (native.time() < t_end) or steps >= max_steps
-                self._fire_consumers(at_end=at_end)
             if steps == 0:
                 self._fire_consumers(at_end=True)
         finally:
             self.output_root = previous_root
         return steps
-
-    def step(self, dt: Any) -> Any:
-        self._attempt += 1
-        result = self.native_executor.step(dt)
-        self._fire_consumers()
-        return result
-
-    def step_cfl(self, cfl: Any) -> Any:
-        self._attempt += 1
-        result = self.native_executor.step_cfl(cfl)
-        self._fire_consumers()
-        return result
 
     def _checkpoint_payload(self, path: Any) -> str:
         target = self.native_executor.checkpoint(str(path))
@@ -326,6 +469,10 @@ class RuntimeInstance:
         return operation.restore(self, reopened)
 
     def __getattr__(self, name: str) -> Any:
+        if name in _RETIRED_EXECUTION_BYPASSES:
+            raise AttributeError(
+                "%r is not a RuntimeInstance operation; execute the installed "
+                "Program.step_strategy(...) contract through pops.run(...)" % name)
         if name in _STRUCTURAL:
             raise AttributeError(
                 "%r is compile/install vocabulary and is unavailable on RuntimeInstance" % name)

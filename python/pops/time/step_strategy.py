@@ -1,23 +1,52 @@
-"""Explicit runtime step-strategy descriptors."""
+"""Typed, executable macro-step strategies.
+
+Strategies are immutable authoring descriptors.  They validate their complete runtime-control
+schema and construct a small runtime controller through a lazy protocol; the numerical work stays
+in the native executor.  No ``run`` keyword is allowed to infer or replace a strategy.
+"""
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from pops.ir.literals import scalar_data
 
 
-def _positive_number(value: Any, *, where: str) -> Any:
+_STRATEGY_TYPES: dict[str, type[StepStrategy]] = {}
+
+
+def _positive_float(value: Any, *, where: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise TypeError("%s must be a positive numeric scalar" % where)
-    if not value > 0:
+        raise TypeError("%s must be a positive finite numeric scalar" % where)
+    result = float(value)
+    if not math.isfinite(result) or result <= 0.0:
+        raise ValueError("%s must be finite and > 0" % where)
+    return result
+
+
+def _positive_int(value: Any, *, where: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("%s must be a positive integer" % where)
+    if value <= 0:
         raise ValueError("%s must be > 0" % where)
-    return scalar_data(value)
+    return value
 
 
-@dataclass(frozen=True)
+def _controls(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise TypeError("runtime controls must be a mapping")
+    if any(not isinstance(name, str) or not name for name in value):
+        raise TypeError("runtime control names must be non-empty strings")
+    return dict(value)
+
+
+@dataclass(frozen=True, slots=True)
 class StepStrategy:
-    """Closed base for explicit attempt controllers."""
+    """Registered strategy-provider protocol for macro-step attempt controllers."""
 
     kind: ClassVar[str] = "strategy"
     __pops_ir_immutable__ = True
@@ -25,89 +54,155 @@ class StepStrategy:
     def __new__(cls, *args: Any, **kwargs: Any) -> StepStrategy:
         if cls is StepStrategy:
             raise TypeError(
-                "StepStrategy is closed; use FixedDt/AdaptiveCFL/ErrorControlledDt/ExternalTimeGrid")
-        return super().__new__(cls)
+                "StepStrategy is closed to direct construction; use a registered provider")
+        # ``slots=True`` replaces the class object during dataclass decoration; zero-argument
+        # ``super()`` in ``__new__`` would retain the pre-decoration class cell and reject every
+        # concrete strategy. Object allocation is the complete intended protocol here.
+        return object.__new__(cls)
 
     def to_data(self) -> dict[str, Any]:
         return {"kind": self.kind}
 
-    def validate_runtime_controls(self, controls: dict[str, Any] | None = None) -> None:
-        controls = {} if controls is None else dict(controls)
-        if controls:
+    def validate_runtime_controls(self, controls: Mapping[str, Any] | None = None) -> None:
+        values = _controls(controls)
+        if values:
             raise ValueError(
                 "%s does not accept runtime control(s): %s"
-                % (self.kind, ", ".join(sorted(controls))))
+                % (self.kind, ", ".join(sorted(values))))
+
+    def runtime_controller(self, controls: Mapping[str, Any] | None = None) -> Any:
+        raise NotImplementedError
 
 
-@dataclass(frozen=True)
+def register_step_strategy_type(cls: type[StepStrategy]) -> type[StepStrategy]:
+    """Register one immutable strategy provider, rejecting kind collisions deterministically."""
+    if not isinstance(cls, type) or not issubclass(cls, StepStrategy) or cls is StepStrategy:
+        raise TypeError("registered step strategy must subclass StepStrategy")
+    kind = getattr(cls, "kind", None)
+    if not isinstance(kind, str) or not kind or kind.strip() != kind:
+        raise TypeError("registered step strategy kind must be canonical non-empty text")
+    existing = _STRATEGY_TYPES.get(kind)
+    if existing is not None and existing is not cls:
+        raise ValueError("step strategy kind %r is already registered" % kind)
+    _STRATEGY_TYPES[kind] = cls
+    return cls
+
+
+def registered_step_strategy_type(kind: str) -> type[StepStrategy] | None:
+    """Return the exact provider authorized for ``kind``; never infer from a class name."""
+    return _STRATEGY_TYPES.get(kind)
+
+
+@register_step_strategy_type
+@dataclass(frozen=True, slots=True)
 class FixedDt(StepStrategy):
-    """Use an authored fixed dt; runtime CFL/error kwargs cannot select another controller."""
+    """Advance with one authored fixed step, clipped only by the declared final time."""
 
-    dt: Any | None = None
+    dt: float
     kind: ClassVar[str] = "fixed_dt"
 
     def __post_init__(self) -> None:
-        if self.dt is not None:
-            object.__setattr__(self, "dt", _positive_number(self.dt, where="FixedDt.dt"))
+        object.__setattr__(self, "dt", _positive_float(self.dt, where="FixedDt.dt"))
 
     def to_data(self) -> dict[str, Any]:
-        data = super().to_data()
-        if self.dt is not None:
-            data["dt"] = self.dt
-        return data
+        return {"kind": self.kind, "dt": scalar_data(self.dt)}
+
+    def runtime_controller(self, controls: Mapping[str, Any] | None = None) -> Any:
+        self.validate_runtime_controls(controls)
+        from pops.runtime._step_strategy import FixedDtController
+        return FixedDtController(self)
 
 
-@dataclass(frozen=True)
+@register_step_strategy_type
+@dataclass(frozen=True, slots=True)
 class AdaptiveCFL(StepStrategy):
-    """Controller selected explicitly by the Program, not inferred from run kwargs."""
+    """Use the native stability reduction with explicit optional runtime clamps."""
 
-    cfl: Any
-    max_dt: Any | None = None
+    cfl: float
+    max_dt: float | None = None
     kind: ClassVar[str] = "adaptive_cfl"
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "cfl", _positive_number(self.cfl, where="AdaptiveCFL.cfl"))
+        object.__setattr__(self, "cfl", _positive_float(self.cfl, where="AdaptiveCFL.cfl"))
         if self.max_dt is not None:
             object.__setattr__(
-                self, "max_dt", _positive_number(self.max_dt, where="AdaptiveCFL.max_dt"))
+                self, "max_dt", _positive_float(self.max_dt, where="AdaptiveCFL.max_dt"))
 
     def to_data(self) -> dict[str, Any]:
-        data = {"kind": self.kind, "cfl": self.cfl}
+        data = {"kind": self.kind, "cfl": scalar_data(self.cfl)}
         if self.max_dt is not None:
-            data["max_dt"] = self.max_dt
+            data["max_dt"] = scalar_data(self.max_dt)
         return data
 
-    def validate_runtime_controls(self, controls: dict[str, Any] | None = None) -> None:
-        controls = {} if controls is None else dict(controls)
-        allowed = {"dt_min", "dt_max"}
-        unknown = sorted(set(controls) - allowed)
+    def validate_runtime_controls(self, controls: Mapping[str, Any] | None = None) -> None:
+        values = _controls(controls)
+        unknown = sorted(set(values) - {"dt_min", "dt_max"})
         if unknown:
             raise ValueError(
-                "AdaptiveCFL runtime controls must be dt_min/dt_max only; got %s"
+                "AdaptiveCFL runtime controls are dt_min/dt_max only; got %s"
                 % ", ".join(unknown))
-        for name, value in controls.items():
-            _positive_number(value, where="AdaptiveCFL runtime %s" % name)
+        for name, value in values.items():
+            _positive_float(value, where="AdaptiveCFL runtime %s" % name)
+        if "dt_min" in values and "dt_max" in values \
+                and float(values["dt_min"]) > float(values["dt_max"]):
+            raise ValueError("AdaptiveCFL runtime dt_min must be <= dt_max")
+
+    def runtime_controller(self, controls: Mapping[str, Any] | None = None) -> Any:
+        self.validate_runtime_controls(controls)
+        from pops.runtime._step_strategy import AdaptiveCFLController
+        return AdaptiveCFLController(self, _controls(controls))
 
 
-@dataclass(frozen=True)
+@register_step_strategy_type
+@dataclass(frozen=True, slots=True)
 class ErrorControlledDt(StepStrategy):
-    """Attempt controller driven by a declared local/global error estimator."""
+    """Retry rejected error-guarded attempts and adapt the next proposal explicitly.
 
-    rtol: Any
-    atol: Any
+    The compiled Program must contain an error-estimate acceptance guard.  ``shrink`` is applied to a
+    rejected attempt and ``growth`` after an accepted attempt; both are inspectable policy values.
+    """
+
+    dt_init: float
+    rtol: float
+    atol: float
+    dt_min: float
+    dt_max: float
+    max_rejections: int
+    shrink: float = 0.5
+    growth: float = 1.25
     kind: ClassVar[str] = "error_controlled_dt"
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "rtol", _positive_number(self.rtol, where="ErrorControlledDt.rtol"))
-        object.__setattr__(self, "atol", _positive_number(self.atol, where="ErrorControlledDt.atol"))
+        for name in ("dt_init", "rtol", "atol", "dt_min", "dt_max", "shrink", "growth"):
+            object.__setattr__(self, name, _positive_float(
+                getattr(self, name), where="ErrorControlledDt.%s" % name))
+        object.__setattr__(self, "max_rejections", _positive_int(
+            self.max_rejections, where="ErrorControlledDt.max_rejections"))
+        if self.dt_min > self.dt_init or self.dt_init > self.dt_max:
+            raise ValueError("ErrorControlledDt requires dt_min <= dt_init <= dt_max")
+        if not self.shrink < 1.0:
+            raise ValueError("ErrorControlledDt.shrink must be < 1")
+        if not self.growth >= 1.0:
+            raise ValueError("ErrorControlledDt.growth must be >= 1")
 
     def to_data(self) -> dict[str, Any]:
-        return {"kind": self.kind, "rtol": self.rtol, "atol": self.atol}
+        return {
+            "kind": self.kind,
+            **{name: scalar_data(getattr(self, name)) for name in (
+                "dt_init", "rtol", "atol", "dt_min", "dt_max", "shrink", "growth")},
+            "max_rejections": self.max_rejections,
+        }
+
+    def runtime_controller(self, controls: Mapping[str, Any] | None = None) -> Any:
+        self.validate_runtime_controls(controls)
+        from pops.runtime._step_strategy import ErrorControlledDtController
+        return ErrorControlledDtController(self)
 
 
-@dataclass(frozen=True)
+@register_step_strategy_type
+@dataclass(frozen=True, slots=True)
 class ExternalTimeGrid(StepStrategy):
-    """Controller following a runtime-supplied monotonically increasing grid."""
+    """Follow the strictly increasing grid supplied under ``grid_id`` at run time."""
 
     grid_id: str
     kind: ClassVar[str] = "external_time_grid"
@@ -119,19 +214,28 @@ class ExternalTimeGrid(StepStrategy):
     def to_data(self) -> dict[str, Any]:
         return {"kind": self.kind, "grid_id": self.grid_id}
 
-    def validate_runtime_controls(self, controls: dict[str, Any] | None = None) -> None:
-        controls = {} if controls is None else dict(controls)
-        if set(controls) != {"grid"}:
-            raise ValueError("ExternalTimeGrid requires exactly one runtime control: grid")
-        grid = controls["grid"]
+    def validate_runtime_controls(self, controls: Mapping[str, Any] | None = None) -> None:
+        values = _controls(controls)
+        if set(values) != {self.grid_id}:
+            raise ValueError(
+                "ExternalTimeGrid(%r) requires exactly that named runtime grid" % self.grid_id)
+        grid = values[self.grid_id]
         if not isinstance(grid, (tuple, list)) or len(grid) < 2:
             raise ValueError("ExternalTimeGrid runtime grid must contain at least two times")
         if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in grid):
             raise TypeError("ExternalTimeGrid runtime grid values must be numeric")
+        if any(not math.isfinite(float(value)) for value in grid):
+            raise ValueError("ExternalTimeGrid runtime grid values must be finite")
         if any(float(b) <= float(a) for a, b in zip(grid, grid[1:], strict=False)):
             raise ValueError("ExternalTimeGrid runtime grid must be strictly increasing")
+
+    def runtime_controller(self, controls: Mapping[str, Any] | None = None) -> Any:
+        self.validate_runtime_controls(controls)
+        from pops.runtime._step_strategy import ExternalTimeGridController
+        return ExternalTimeGridController(self, tuple(float(value) for value in controls[self.grid_id]))
 
 
 __all__ = [
     "AdaptiveCFL", "ErrorControlledDt", "ExternalTimeGrid", "FixedDt", "StepStrategy",
+    "register_step_strategy_type", "registered_step_strategy_type",
 ]

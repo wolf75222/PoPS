@@ -11,12 +11,13 @@ from pops._platform_contracts import (
     ExecutionResource,
     FieldViewDescriptor,
     PlatformContractError,
-    PrecisionPolicy,
     launch_checked,
     proven_serial_manifest,
 )
 from pops.identity import make_identity
 from pops.runtime._run_manifest import RunManifest
+from pops.runtime._step_strategy import run_control_payload
+from pops.time import AdaptiveCFL
 
 
 def _platform(**overrides):
@@ -97,7 +98,12 @@ def test_execution_context_changes_bind_and_run_identity():
     bind_a = make_identity("bind", {"execution_context": serial.to_data()})
     bind_b = make_identity("bind", {"execution_context": other.to_data()})
     assert bind_a != bind_b
-    controls = {"t_end": 1.0, "cfl": 0.4, "max_steps": 8, "output_mode": "memory"}
+    controls = {
+        "t_end": 1.0,
+        "step_transaction": run_control_payload(AdaptiveCFL(0.4)),
+        "max_steps": 8,
+        "output_mode": "memory",
+    }
     assert RunManifest(bind_identity=bind_a, start_time=0.0, start_macro_step=0,
                        controls=controls).run_identity != RunManifest(
                            bind_identity=bind_b, start_time=0.0, start_macro_step=0,

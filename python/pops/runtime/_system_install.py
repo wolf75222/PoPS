@@ -118,7 +118,6 @@ class _SystemInstall(_System):
         evolve) an evolve=False is REJECTED explicitly -> use a native block (add_background).
         """
         _guard_assembling(self, "add_equation")  # frozen once pops.bind completes (ADC-592)
-        _reject_compiled_time_route(time, "System.add_equation")  # ADC-554 (see add_block)
         # Late imports (the codegen/physics modules import this package: avoid the cycle).
         from pops.codegen.abi import check_compiled_matches_module
         from pops.codegen.loader import CompiledModel

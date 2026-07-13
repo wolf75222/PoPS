@@ -34,6 +34,7 @@ Lancement : PYTHONPATH=<build>/python python3 tests/python/integration/io/test_a
 """
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import Rusanov
+import json
 import os
 import tempfile
 
@@ -41,6 +42,19 @@ import numpy as np
 
 import pops
 from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
+
+
+def _advance(sim, nsteps, dt):
+    strategy = pops.time.FixedDt(dt)
+    if sim._step_strategy is None:
+        sim._step_strategy = strategy
+        sim._step_transaction_plan = pops.time.StepTransactionPlan(strategy)
+    elif sim._step_strategy != strategy:
+        raise ValueError("test runtime already owns a different installed StepStrategy")
+    return sim.run(
+        t_end=float(sim.time()) + nsteps * dt,
+        max_steps=nsteps,
+    )
 
 
 def _bump(n, L=1.0, amp=1.0, w=0.10):
@@ -76,13 +90,11 @@ def test_amr_checkpoint_bit_identical():
 
         # --- RUN A : 10 pas, checkpoint a mi-course (5 pas) ---
         simA = _build()
-        for _ in range(5):
-            simA.step(dt)
+        _advance(simA, 5, dt)
         simA.checkpoint(path)
         boxes_chk = simA.patch_boxes()
         assert any(b[0] == 1 for b in boxes_chk), "patchs fins inactifs : test sans interet"
-        for _ in range(5):
-            simA.step(dt)
+        _advance(simA, 5, dt)
         finalA = [np.asarray(simA.level_state(k), dtype=np.float64)
                   for k in range(simA.n_levels())]
 
@@ -93,8 +105,7 @@ def test_amr_checkpoint_bit_identical():
         # T2 : la hierarchie imposee == celle du checkpoint
         assert boxes_rst == boxes_chk, "patch_boxes() apres restart != checkpoint"
         assert simB.n_levels() == simA.n_levels(), "nombre de niveaux divergent"
-        for _ in range(5):
-            simB.step(dt)
+        _advance(simB, 5, dt)
         finalB = [np.asarray(simB.level_state(k), dtype=np.float64)
                   for k in range(simB.n_levels())]
 
@@ -111,11 +122,14 @@ def test_amr_checkpoint_restores_clock():
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "ckpt")
         simA = _build()
-        for _ in range(5):
-            simA.step(dt)
+        _advance(simA, 5, dt)
         simA.checkpoint(path)
         t_chk, ms_chk = simA.time(), simA.macro_step()
         assert ms_chk == 5, "macro_step() = %d apres 5 pas (attendu 5)" % ms_chk
+        with np.load(path + ".npz", allow_pickle=False) as payload:
+            temporal = json.loads(str(payload["temporal_restart_state"]))
+        assert temporal["strategy"]["strategy"]["kind"] == "fixed_dt"
+        assert temporal["transaction_stats"]["accepted"] == 5
 
         simB = _build()
         simB.restart(path)
@@ -123,6 +137,15 @@ def test_amr_checkpoint_restores_clock():
             simB.macro_step(), ms_chk)
         assert abs(simB.time() - t_chk) < 1e-15, "time() = %r apres restart (attendu %r)" % (
             simB.time(), t_chk)
+        replacement = pops.time.FixedDt(2 * dt)
+        simB._step_strategy = replacement
+        simB._step_transaction_plan = pops.time.StepTransactionPlan(replacement)
+        _expect(
+            RuntimeError,
+            lambda: simB.run(t_end=t_chk + 2 * dt, max_steps=1),
+            "le premier pas AMR post-restart doit conserver la strategie authentifiee",
+        )
+        assert simB.macro_step() == ms_chk and simB.time() == t_chk
 
 
 def _expect(exc_types, fn, label):
@@ -140,8 +163,7 @@ def test_amr_checkpoint_rejects():
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "ckpt")
         simA = _build()
-        for _ in range(3):
-            simA.step(dt)
+        _advance(simA, 3, dt)
         simA.checkpoint(path)
 
         # composition differente : nom de bloc != celui du checkpoint
@@ -191,13 +213,11 @@ def test_amr_checkpoint_multiblock_bit_identical():
         path = os.path.join(tmp, "ckpt_mb")
 
         simA = _build_multiblock()
-        for _ in range(5):
-            simA.step(dt)
+        _advance(simA, 5, dt)
         simA.checkpoint(path)
         boxes_chk = simA.patch_boxes()
         assert any(b[0] == 1 for b in boxes_chk), "patchs fins inactifs : test sans interet"
-        for _ in range(5):
-            simA.step(dt)
+        _advance(simA, 5, dt)
         names = list(simA.block_names())
         finalA = {b: [np.asarray(simA.block_level_state(b, k), dtype=np.float64)
                       for k in range(simA.n_levels())] for b in names}
@@ -206,8 +226,7 @@ def test_amr_checkpoint_multiblock_bit_identical():
         simB.restart(path)
         assert simB.patch_boxes() == boxes_chk, "patch_boxes() multi-blocs apres restart != checkpoint"
         assert list(simB.block_names()) == names, "blocs divergents apres restart"
-        for _ in range(5):
-            simB.step(dt)
+        _advance(simB, 5, dt)
         finalB = {b: [np.asarray(simB.block_level_state(b, k), dtype=np.float64)
                       for k in range(simB.n_levels())] for b in names}
 

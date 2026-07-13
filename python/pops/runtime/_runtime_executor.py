@@ -60,7 +60,6 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
             params=plan.params,
             aux=plan.aux,
             field_plans=artifact.plan.field_plans,
-            cadence=None,
             outputs=(),
             diagnostics=(),
         )
@@ -134,7 +133,6 @@ class _AdaptiveNativeProvider(RuntimeExecutorProvider):
             params=plan.params,
             aux=plan.aux,
             field_plans=artifact.plan.field_plans,
-            cadence=None,
             outputs=(),
             diagnostics=(),
             bind_schema=schema,
