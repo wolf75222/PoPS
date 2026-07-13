@@ -24,7 +24,7 @@
 # docs/sphinx/getting-started/installation.md): it bootstraps conda guidance, configures conda-forge to
 # survive HTTP 429, forces a CPU Kokkos by default (the bare `kokkos` resolves to the CUDA variant on a
 # host with an NVIDIA driver -> `pip install .` then fails "Could not find nvcc"), persists the DSL
-# runtime variables in the env, and ends on `pops.doctor()`.
+# runtime variables in the env, and ends on the runtime-layer doctor.
 set -euo pipefail
 
 ENV_NAME="${POPS_ENV_NAME:-pops}"
@@ -156,7 +156,7 @@ echo "env vars pinned: POPS_INCLUDE, POPS_KOKKOS_ROOT, Kokkos_ROOT, CMAKE_PREFIX
 # --- final diagnostic --------------------------------------------------------------------------------
 echo ""
 echo "Env ready. Next, in one command (sizes the heavy-TU pool, exports the discovery vars + ccache,"
-echo "installs, then runs pops.doctor()):"
+echo "installs, then runs pops.runtime.doctor.doctor()):"
 echo "    bash scripts/build_python.sh"
 echo ""
 echo "Or by hand:"
@@ -179,12 +179,12 @@ conda run -n "$ENV_NAME" env PYTHONPATH= PYTHONNOUSERSITE=1 \
   python "$HERE/scripts/codesign_pops_extensions.py" --if-present
 if conda run -n "$ENV_NAME" env PYTHONPATH= PYTHONNOUSERSITE=1 \
     python -c "import pops" >/dev/null 2>&1; then
-  echo "--- pops.doctor() ---"
+echo "--- pops.runtime.doctor.doctor() ---"
   conda run -n "$ENV_NAME" env PYTHONPATH= PYTHONNOUSERSITE=1 \
-    python -c "import pops; pops.doctor()" || true
+python -c "from pops.runtime.doctor import doctor; doctor()" || true
 else
   echo "pops is not installed in '$ENV_NAME' yet. Install it, then check the environment:"
   echo "    conda activate $ENV_NAME"
   echo "    pip install . -v"
-  echo "    python -c 'import pops; pops.doctor()'"
+echo "    python -c 'from pops.runtime.doctor import doctor; doctor()'"
 fi

@@ -12,7 +12,7 @@
 #     worktree is reused instead of recompiled);
 #   - runs `pip install . --no-build-isolation` so the build reuses the env's pinned
 #     scikit-build-core / pybind11 (the SAME stack as the toolchain) instead of a fresh pip build env;
-#   - ends on `import pops; pops.doctor()`.
+#   - ends on the runtime-layer environment doctor.
 #
 #   bash scripts/build_python.sh            # build + install into the active env
 #   bash scripts/build_python.sh --clean    # drop the scikit-build wheel cache first
@@ -128,6 +128,6 @@ python -m pip "${pip_args[@]}" "${EXTRA_PIP[@]}"
 # verify both the signature and its ad-hoc identity. Any failure stops before import/doctor.
 PYTHONPATH= PYTHONNOUSERSITE=1 python "$HERE/scripts/codesign_pops_extensions.py"
 echo ""
-echo "--- import pops; pops.doctor() ---"
+echo "--- pops.runtime.doctor.doctor() ---"
 PYTHONPATH= PYTHONNOUSERSITE=1 \
-  python -c "import pops; print('pops', pops.__version__); pops.doctor()"
+  python -c "import pops; from pops.runtime.doctor import doctor; print('pops', pops.__version__); doctor()"

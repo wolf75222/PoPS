@@ -89,7 +89,7 @@ def _descriptor_tokens() -> Any:
 
 
 def doctor(verbose: bool = True) -> Any:
-    """Diagnose the pops environment in ONE command : python -c "import pops; pops.doctor()".
+    """Diagnose the installed runtime environment and native toolchain.
 
     Checks each link on which the module AND the runtime compilation of the DSL depend (the class of
     bugs "build environment != execution environment", e.g. the `which c++` of a conda env
