@@ -89,3 +89,8 @@ def test_consumer_policy_protocol_is_required_and_schedule_authority_is_unique()
             diagnostics=(Integral(block=block, cadence=every(5, clock=clock)),),
             target="state/tracer",
         )
+
+
+def test_output_format_options_refuse_python_truthiness_coercion() -> None:
+    with pytest.raises(TypeError, match="exact bool"):
+        HDF5(parallel="false")

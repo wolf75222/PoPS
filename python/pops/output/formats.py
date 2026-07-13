@@ -38,7 +38,9 @@ class HDF5(FormatInterface):
     extension = ".h5"
 
     def __init__(self, parallel: bool = False) -> None:
-        self.parallel = bool(parallel)
+        if type(parallel) is not bool:
+            raise TypeError("HDF5.parallel must be an exact bool")
+        self.parallel = parallel
 
     def options(self) -> dict:
         return {"parallel": self.parallel}
