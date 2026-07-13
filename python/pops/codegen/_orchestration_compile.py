@@ -72,17 +72,14 @@ def compile_install_model(name: str, model: Any, backend: str, target: str,
 
 
 def capture_runtime_declarations(problem: Any, detach: Any) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
-    def resolved(value: Any, family: str) -> Any:
-        protocol = getattr(value, "resolve_references", None)
-        if not callable(protocol):
-            raise TypeError("%s must implement resolve_references" % family)
-        return detach(protocol(problem.resolve))
+    """Return the retired legacy declaration families as empty tuples.
 
-    return (
-        tuple(resolved(value, "runtime output") for value in (problem._outputs or [])),
-        tuple(resolved(value, "runtime diagnostic")
-              for value in (problem._diagnostics or [])),
-    )
+    Accepted diagnostics, outputs and checkpoints are represented only by ``ConsumerGraph``.  The
+    two tuple slots remain in the compiled-plan record until ADC-687 removes that storage shape; no
+    Case registry or hidden compatibility path can populate them.
+    """
+    del problem, detach
+    return (), ()
 
 
 def capture_field_plans(

@@ -95,21 +95,18 @@ def _problem_snapshot_payload(problem: Any, *, artifact: bool) -> dict[str, Any]
     }
     fields = dict(problem._field_registry.resolved_items(problem.resolve))
     params = _problem_param_rows(problem, artifact=artifact)
-    runtime = problem._runtime_registry
     return {
         "name": problem.name,
         "category": problem.category,
         "native_id": problem.native_id,
         "owner_path": problem.owner_path.canonical(),
         "options": problem.options(),
-        "layout": problem.layout,
         "blocks": blocks,
         "fields": fields,
         "params": params,
-        "aux": runtime.aux,
-        "outputs": runtime.outputs,
-        "diagnostics": runtime.diagnostics,
-        "schedules": runtime.schedules,
+        "consumers": (
+            None if problem._consumer_graph is None else problem._consumer_graph.to_data()
+        ),
         "constraints": problem._constraint_registry.refinement,
         "numerics": {
             name: problem._resolved_numerics_for(name).to_data()

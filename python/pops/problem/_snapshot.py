@@ -21,11 +21,11 @@ from pops.problem._snapshot_canonical import _canonical
 
 #: Bumped when the full snapshot's canonical shape changes. The compile-only projection has its own
 #: version below, so artifact-identity evolution does not rewrite the reproducibility schema.
-SNAPSHOT_SCHEMA_VERSION = 8
+SNAPSHOT_SCHEMA_VERSION = 9
 
 #: Independent namespace for the compile-identity projection. Changing which declaration facts
 #: affect generated artifacts bumps this version without rewriting the full snapshot schema.
-ARTIFACT_SCHEMA_VERSION = 3
+ARTIFACT_SCHEMA_VERSION = 4
 
 
 class AuthoringSnapshot:
@@ -179,7 +179,7 @@ def build_problem_snapshot(problem: Any) -> Any:
     payload = problem_snapshot_payload(problem)
     artifact_payload = problem_snapshot_artifact_payload(problem)
     semantic_payload = problem_semantic_payload(
-        problem, layout=problem._layout, time=problem._time_registry.program)
+        problem, layout=None, time=problem._time_registry.program)
     return AuthoringSnapshot(
         payload,
         handle_resolver=problem.resolve,

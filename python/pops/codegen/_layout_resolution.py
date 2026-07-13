@@ -144,15 +144,9 @@ def resolve_layout(problem: Any, layout: Any, *, providers: Any = None) \
     from pops.mesh import LayoutPlan, normalize_layout_plan
     from pops.problem._detached import detached_frozen
 
-    authored = problem.layout
     if layout is None:
-        if authored is None:
-            raise ValueError("pops.resolve requires a layout descriptor or LayoutPlan")
-        selected = authored
-    else:
-        if authored is not None and layout is not authored and layout != authored:
-            raise ValueError("pops.resolve received two competing layout authorities")
-        selected = layout
+        raise ValueError("pops.resolve requires one layout descriptor or LayoutPlan")
+    selected = layout
 
     subjects = materialized_layout_subjects(problem)
     if isinstance(selected, LayoutPlan):

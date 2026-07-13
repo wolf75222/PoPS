@@ -128,23 +128,18 @@ def freeze_problem_graph(problem: Any) -> None:
     """Freeze every registry/member/layout in one transaction."""
     registries = (
         problem._block_registry, problem._field_registry, problem._time_registry,
-        problem._param_registry, problem._runtime_registry, problem._constraint_registry,
+        problem._param_registry, problem._constraint_registry,
     )
     participants = []
     for registry in registries:
         participants.extend(registry._freezable_members())
         participants.append(registry)
-    if problem._layout is not None:
-        participants.append(problem._layout)
     numerical_plans = tuple(dict.fromkeys(problem._numerics_assignments.values()))
     participants.extend(numerical_plans)
 
     def commit() -> None:
         for registry in registries:
             registry.freeze()
-        layout_freeze = getattr(problem._layout, "freeze", None)
-        if callable(layout_freeze):
-            layout_freeze()
         for plan in numerical_plans:
             plan.freeze()
 

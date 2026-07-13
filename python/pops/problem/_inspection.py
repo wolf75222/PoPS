@@ -15,15 +15,12 @@ def inspect_payload(problem: Any) -> dict[str, Any]:
         "requirements": problem.requirements().to_dict(),
         "capabilities": problem.capabilities().to_dict(),
     }
-    info["layout"] = problem._layout.inspect() if problem._layout is not None else None
     info["blocks"] = problem._block_registry.inspect()
     info["fields"] = problem._field_registry.inspect(problem.resolve)
     info["params"] = problem._param_registry.inspect()
-    runtime = problem._runtime_registry.inspect()
-    info["aux"] = runtime["aux"]
-    info["outputs"] = runtime["outputs"]
-    info["diagnostics"] = runtime["diagnostics"]
-    info["schedules"] = runtime["schedules"]
+    info["consumers"] = (
+        None if problem._consumer_graph is None else problem._consumer_graph.to_data()
+    )
     info["constraints"] = problem._constraint_registry.inspect()
     info["numerics"] = {
         block: plan.inspect() for block, plan in sorted(problem._numerics_assignments.items())

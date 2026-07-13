@@ -73,7 +73,7 @@ def resolve(
         raise ValueError("a resolved whole-system Program requires backend=Production()")
     validate_layout_consumers(
         problem, layout_plan, time=resolved_time,
-        outputs=problem._outputs, diagnostics=problem._diagnostics)
+        outputs=(), diagnostics=())
     resolved_layout = layout_authority.require_runtime()
 
     options = dict(compile_options or {})
@@ -159,7 +159,8 @@ def resolve(
         layout_plan=layout_plan,
         time=resolved_time, blocks=blocks, bind_schema=bind_schema,
         compile_values=compile_values, field_plans=field_plans, outputs=outputs,
-        diagnostics=diagnostics, libraries=resolved_libraries,
+        diagnostics=diagnostics, consumer_graph=problem._consumers,
+        libraries=resolved_libraries,
         requirements={"tokens": tuple(evidence["requirements"]),
                       "layout_resources": layout_plan.resource_requirements(),
                       "amr_resources": amr_requirements},

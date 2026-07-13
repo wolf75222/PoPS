@@ -8,11 +8,9 @@ from __future__ import annotations
 from typing import Any
 
 from pops.descriptors import Availability
-from pops.mesh.layouts import AMR
-from pops.problem.amr_handle import CaseAmrHandle
 from pops.problem.registries import (
     BlockRegistry, ConstraintRegistry, FieldRegistry, ParamRegistry,
-    RuntimePolicyRegistry, TimeRegistry)
+    TimeRegistry)
 from pops.problem._inspection import inspect_payload, serialization_payload
 from pops.problem._validation import account_block_plan_fields
 from pops._report import ReportTree
@@ -20,14 +18,16 @@ from pops.model import OwnerKind, OwnerPath
 
 
 class Case:
-    """A typed, inert top-level assembly: blocks + fields + params + aux + outputs + time.
+    """A typed, inert top-level assembly with one authority per declaration family.
 
     ``Case("plasma")`` then assembled explicitly::
 
         case = pops.Case("plasma")
-        electron = case.block("ne", model=model, spatial=finite_volume)
+        electron = case.block("ne", model)
+        case.numerics(discretization, block=electron)
         potential = case.field(field_operator, field_discretization)
         case.program(time_program)
+        case.consumers(consumer_graph)
         validated = pops.validate(case)
         resolved = pops.resolve(validated, layout=Uniform(CartesianMesh()))
         compiled = pops.compile(resolved)
@@ -60,7 +60,7 @@ class Case:
             raise RuntimeError("pops.Case is frozen: cannot delete %s" % name)
         object.__delattr__(self, name)
 
-    def __init__(self, name: Any = "Case", *, layout: Any = None) -> None:
+    def __init__(self, name: Any = "Case") -> None:
         if not isinstance(name, str) or not name:
             raise TypeError("Case: name must be a non-empty string")
         self._name = name
@@ -68,15 +68,13 @@ class Case:
         # Validation freezes the assembly and commits the snapshot used by compile identity.
         self._frozen = False
         self._snapshot = None
-        # Layout normally enters at resolve; a constructor authority is cross-checked there.
-        self._layout = layout
         self._block_registry = BlockRegistry(self.owner_path)
         self._field_registry = FieldRegistry(self.owner_path)
         self._time_registry = TimeRegistry()
         self._param_registry = ParamRegistry(self.owner_path)
-        self._runtime_registry = RuntimePolicyRegistry()
         self._constraint_registry = ConstraintRegistry()
         self._numerics_assignments = {}
+        self._consumer_graph = None
 
     @property
     def name(self) -> Any:
@@ -155,21 +153,15 @@ class Case:
         self,
         name: Any,
         model: Any,
-        *,
-        spatial: Any = None,
-        time: Any = None,
-        diagnostics: Any = None,
     ) -> Any:
         """Declare one model instance and return its stable owner-qualified block handle.
 
         ``block`` is the sole block-registration path. A model-local state or operator becomes
-        unambiguous for consumers only after qualification through this returned handle. Per-block
-        ``time`` and ``diagnostics`` remain fail-closed inputs until their resolved-plan consumers
-        exist; validation never drops them.
+        unambiguous for consumers only after qualification through this returned handle. Numerical,
+        temporal and consumer authorities are attached through their dedicated Case families.
         """
         self._guard_mutable("add a block")
-        return self._block_registry.add(name, model, spatial=spatial, time=time,
-                                        diagnostics=diagnostics)
+        return self._block_registry.add(name, model)
 
     def field(self, operator: Any, discretization: Any) -> Any:
         """Register one field operator/discretization pair and return its case-owned handle."""
@@ -229,31 +221,16 @@ class Case:
 
         return ValueExpr(self._param_registry.handle(parameter))
 
-    def aux(self, name: Any, value: Any = None) -> Any:
-        """Declare a static aux input ``name`` (e.g. a background field). Chains."""
-        self._guard_mutable("declare an aux input")
-        self._runtime_registry.add_aux(name, value)
-        return self
+    def consumers(self, graph: Any) -> Any:
+        """Attach the sole transactional :class:`ConsumerGraph` authority."""
+        from pops.runtime.consumer import ConsumerGraph
 
-    def output(self, policy: Any) -> Any:
-        """Attach an output / checkpoint policy. Chains."""
-        self._guard_mutable("attach an output policy")
-        self._runtime_registry.add_output(policy)
-        return self
-
-    def runtime(self, policies: Any) -> Any:
-        """Attach a typed :class:`pops.output.RuntimePolicies` bundle (ADC-562). Chains.
-
-        Groups the runtime concerns (output / checkpoint / diagnostics / schedules) out of the
-        physics script: ``problem.runtime(pops.RuntimePolicies(output=..., checkpoint=...))``. The
-        bundle's typed members are unpacked exactly once into the runtime registry (its output /
-        checkpoint policies feed ``run(output_dir=...)`` exactly like :meth:`output`). The input
-        bundle is not retained as a second declaration authority: validation, inspection and the
-        compile snapshot consume only those flattened members. ``output()`` / ``aux()`` stay the
-        granular primitives the bundle composes.
-        """
-        self._guard_mutable("attach runtime policies")
-        self._runtime_registry.set_policies(policies)
+        self._guard_mutable("attach the consumer graph")
+        if type(graph) is not ConsumerGraph:
+            raise TypeError("Case.consumers requires an exact ConsumerGraph")
+        if self._consumer_graph is not None:
+            raise ValueError("the Case already has a ConsumerGraph authority")
+        self._consumer_graph = graph
         return self
 
     def program(self, program: Any) -> Any:
@@ -277,46 +254,12 @@ class Case:
         return self._param_registry.declarations()
 
     @property
-    def _aux(self) -> Any:
-        return self._runtime_registry.aux
-
-    @property
-    def _outputs(self) -> Any:
-        return self._runtime_registry.outputs
-
-    @property
-    def _diagnostics(self):
-        return self._runtime_registry.diagnostics
+    def _consumers(self) -> Any:
+        return self._consumer_graph
 
     @property
     def _numerics(self) -> Any:
         return dict(self._numerics_assignments)
-
-    # --- layout / amr access -------------------------------------------------
-    @property
-    def layout(self) -> Any:
-        return self._layout
-
-    @property
-    def amr(self) -> Any:
-        """The AMR refinement-policy handle (records criteria on the constraint registry; ADC-526).
-
-        A layout-free Case always exposes ``.amr`` -- the criteria are applied to the layout at
-        ``pops.compile(problem, layout=AMR(...))``. When a layout WAS given to the constructor it
-        must be AMR (a Uniform layout has no level to refine onto), so a back-compat
-        ``Case(layout=Uniform(...)).amr`` is still refused loudly.
-        """
-        if self._layout is not None and callable(
-                getattr(self._layout, "validate_subjects", None)):
-            raise ValueError(
-                "problem.amr cannot mutate policies after a LayoutPlan authority is resolved; "
-                "author refinement policies in its layout descriptors")
-        if self._layout is not None and not isinstance(self._layout, AMR):
-            raise ValueError(
-                "problem.amr: only available with no constructor layout (supply layout=AMR(...) at "
-                "compile) or layout=AMR(...); this problem has layout %r"
-                % type(self._layout).__name__)
-        return CaseAmrHandle(self)
 
     def blocks(self) -> Any:
         """The declared blocks as ``{name: BlockHandle}`` (ADC-526 stable-handle accessor)."""
@@ -368,25 +311,19 @@ class Case:
         return self._block_registry.canonicalize(declaration, block=block)
 
     # --- DescriptorProtocol surface (pure Python; no runtime, no codegen) ----
-    def _layout_name(self) -> Any:
-        from pops.problem._layout_protocol import layout_name
-        return layout_name(self._layout)
-
     def options(self) -> Any:
-        """The authoring summary: name, layout and the per-registry counts (a plain dict)."""
-        return {"name": self._name, "layout": self._layout_name(),
+        """The authoring summary and per-family counts; layout is resolved later."""
+        return {"name": self._name,
                 "n_blocks": len(self._block_registry), "n_fields": len(self._field_registry),
-                "n_params": len(self._param_registry), "n_aux": len(self._runtime_registry.aux),
-                "n_outputs": len(self._runtime_registry.outputs),
+                "n_params": len(self._param_registry),
                 "n_numerical_plans": len(self._numerics_assignments),
+                "has_consumers": self._consumer_graph is not None,
                 "has_time": self._time_registry.program is not None}
 
     def requirements(self) -> Any:
         """The route's requirements as a typed :class:`~pops.descriptors_report.RequirementSet`."""
         from pops.descriptors_report import RequirementSet
-        from pops.problem._layout_protocol import layout_requirements
-        base = layout_requirements(self._layout)
-        req = RequirementSet(base)
+        req = RequirementSet()
         if len(self._field_registry):
             req.add("elliptic_solve")
         req.add("time_scheme")
@@ -395,20 +332,14 @@ class Case:
     def capabilities(self) -> Any:
         """The route's capabilities as a typed :class:`~pops.descriptors_report.CapabilitySet`."""
         from pops.descriptors_report import CapabilitySet
-        from pops.problem._layout_protocol import layout_capabilities
-        caps = layout_capabilities(self._layout)
-        caps["blocks"] = sorted(self._block_registry.names())
+        caps = {"blocks": sorted(self._block_registry.names())}
         caps["fields"] = sorted(self._field_registry.names())
         return CapabilitySet(caps)
 
     def available(self, context: Any = None) -> Any:
         """An EXPLAINABLE availability status, computed from the parts (no runtime)."""
-        from pops.problem._layout_protocol import layout_available
-        layout_status = layout_available(self, self._layout, context)
-        if layout_status is not None:
-            return layout_status
         if not len(self._block_registry):
-            return Availability.no("problem has no block; add one with .block(name, physics)",
+            return Availability.no("case has no block; add one with .block(name, model)",
                                    missing=["block"])
         for name in self._block_registry.names():
             if self._block_registry.spec(name).get("model") is None:
@@ -422,7 +353,7 @@ class Case:
     def validate(self, context: Any = None) -> Any:
         """Validate and atomically freeze the complete authoring graph.
 
-        Runs the layout check plus each registry's own ``validate``, folds them into ONE
+        Runs each authoring family's own ``validate``, folds them into ONE
         :class:`~pops.ReportTree`, and raises (via ``raise_if_error``)
         when any error accumulated.  Success seals the Case before returning, making this the
         sole transition from mutable authoring into the validated phase; resolution refuses an
@@ -445,8 +376,6 @@ class Case:
         report = ReportTree(
             phase="validation", severity="info", code="validation.problem.root",
             source="problem", owner=self.owner_path)
-        from pops.problem._layout_protocol import validate_layout_report
-        report = validate_layout_report(self, report, self._layout, context)
         report = report.extend(self._block_registry.validate(context))
         report = account_block_plan_fields(report, self._block_registry)
         # Carry the mesh layout into each field problem's validation so its solver can refuse a
@@ -454,9 +383,6 @@ class Case:
         report = report.extend(
             self._field_registry.validate(self._field_validation_context(context)))
         report = report.extend(self._param_registry.validate(context))
-        runtime_context: dict[str, Any] = dict(context) if isinstance(context, dict) else {}
-        runtime_context["declaration_resolver"] = self.resolve
-        report = report.extend(self._runtime_registry.validate(runtime_context))
         report = report.extend(self._constraint_registry.validate(context))
         for block_name, plan in sorted(self._numerics_assignments.items()):
             try:
@@ -471,8 +397,7 @@ class Case:
     def _field_validation_context(self, context: Any) -> Any:
         """The validation context handed to each field problem, carrying the mesh layout."""
         merged: dict[str, Any] = dict(context) if isinstance(context, dict) else {}
-        from pops.problem._layout_protocol import field_validation_layout
-        merged["layout"] = field_validation_layout(self._layout)
+        merged["layout"] = None
         merged["declaration_resolver"] = self.resolve
         return merged
 
@@ -484,7 +409,7 @@ class Case:
     def explain_routes(self) -> Any:
         """Return a printable route matrix sourced from the C++ authoritative facts (sec.13.12.1)."""
         from pops._capabilities import native_capability_matrix
-        return native_capability_matrix(owner=self.name, layout=self._layout_name() or "context",
+        return native_capability_matrix(owner=self.name, layout="resolve-time",
                                         target="module")
 
     def lower(self, context: Any = None) -> Any:
@@ -520,15 +445,15 @@ class Case:
         return serialization_payload(self)
 
     def __str__(self) -> str:
-        return ("%s [%s] layout=%s | blocks=%d | fields=%d | params=%d | aux=%d | time=%s"
-                % (self._name, self.category, self._layout_name() or "none",
+        return ("%s [%s] | blocks=%d | fields=%d | params=%d | consumers=%s | time=%s"
+                % (self._name, self.category,
                    len(self._block_registry), len(self._field_registry),
-                   len(self._param_registry), len(self._runtime_registry.aux),
+                   len(self._param_registry), "set" if self._consumer_graph is not None else "none",
                    "set" if self._time_registry.program is not None else "none"))
 
     def __repr__(self) -> str:
-        return ("Case(name=%r, layout=%s, blocks=%s, fields=%s)"
-                % (self._name, self._layout_name() or "none",
+        return ("Case(name=%r, blocks=%s, fields=%s)"
+                % (self._name,
                    sorted(self._block_registry.names()), sorted(self._field_registry.names())))
 
 

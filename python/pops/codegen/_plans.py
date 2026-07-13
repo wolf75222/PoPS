@@ -196,6 +196,7 @@ class ResolvedSimulationPlan:
     field_plans: Mapping[str, Any]
     outputs: tuple[Any, ...]
     diagnostics: tuple[Any, ...]
+    consumer_graph: Any
     libraries: tuple[Any, ...]
     requirements: Mapping[str, Any]
     capabilities: Mapping[str, Any]
@@ -255,6 +256,12 @@ class ResolvedSimulationPlan:
         for name in ("outputs", "diagnostics", "libraries"):
             object.__setattr__(
                 self, name, tuple(_deep_freeze(item) for item in getattr(self, name)))
+        if self.consumer_graph is not None:
+            from pops.runtime.consumer import ConsumerGraph
+
+            if type(self.consumer_graph) is not ConsumerGraph:
+                raise TypeError(
+                    "ResolvedSimulationPlan.consumer_graph must be an exact ConsumerGraph or None")
         object.__setattr__(self, "requirements", _string_mapping(
             self.requirements, where="ResolvedSimulationPlan.requirements"))
         object.__setattr__(self, "capabilities", _string_mapping(
@@ -289,6 +296,9 @@ class ResolvedSimulationPlan:
             "field_plans": _evidence(self.field_plans, where="plan.field_plans"),
             "outputs": _evidence(self.outputs, where="plan.outputs"),
             "diagnostics": _evidence(self.diagnostics, where="plan.diagnostics"),
+            "consumer_graph": (
+                None if self.consumer_graph is None else self.consumer_graph.to_data()
+            ),
             "libraries": _evidence(self.libraries, where="plan.libraries"),
             "requirements": _evidence(self.requirements, where="plan.requirements"),
             "capabilities": _evidence(self.capabilities, where="plan.capabilities"),
