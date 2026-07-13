@@ -5,6 +5,7 @@ import sys
 from inspect import signature
 
 import pops
+import pytest
 
 
 _PUBLIC = (
@@ -17,6 +18,7 @@ _PUBLIC = (
     "resolve",
     "compile",
     "bind",
+    "run",
     "__version__",
 )
 
@@ -94,6 +96,12 @@ def test_public_bind_accepts_value_families_without_an_internal_inputs_record() 
     ):
         assert retired not in external.__all__
         assert not hasattr(external, retired)
+
+
+def test_public_run_accepts_only_the_bound_runtime_instance() -> None:
+    assert tuple(signature(pops.run).parameters) == ("instance", "controls")
+    with pytest.raises(TypeError, match="exact RuntimeInstance"):
+        pops.run(object(), t_end=1.0)
 
 
 def test_output_surface_has_direct_consumers_not_policy_bundles() -> None:

@@ -9,7 +9,7 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any
 
-from ._api import bind, compile, resolve, validate
+from ._api import bind, compile, resolve, run, validate
 from ._inspect import explain, inspect
 from ._version import __version__
 from .physics.board import Model
@@ -27,6 +27,7 @@ __all__ = [
     "resolve",
     "compile",
     "bind",
+    "run",
     "__version__",
 ]
 

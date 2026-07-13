@@ -55,4 +55,18 @@ def bind(
     return phase(artifact, inputs)
 
 
-__all__ = ["bind", "compile", "resolve", "validate"]
+def run(instance: Any, **controls: Any) -> Any:
+    """Execute a bound runtime instance with explicit run controls.
+
+    ``run`` is the final lifecycle transition, not an authoring shortcut. It accepts only the
+    concrete object returned by :func:`bind`; all numerical values remain call-site controls and
+    are recorded by the runtime's run identity.
+    """
+    from pops.runtime.runtime_instance import RuntimeInstance
+
+    if type(instance) is not RuntimeInstance:
+        raise TypeError("pops.run expects the exact RuntimeInstance returned by pops.bind")
+    return instance.run(**controls)
+
+
+__all__ = ["bind", "compile", "resolve", "run", "validate"]
