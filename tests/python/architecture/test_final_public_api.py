@@ -30,6 +30,12 @@ def _retired_names() -> tuple[str, ...]:
         "Amr" + "System",
         "Model" + "Spec",
         "Bind" + "Inputs",
+        "Sys" + "temConfig",
+        "Amr" + "SystemConfig",
+        "Compiled" + "Time",
+        "compile" + "_library",
+        "read" + "_library_manifest",
+        "Library" + "Manifest",
     )
 
 
