@@ -180,6 +180,28 @@ class GradientAbove(_ThresholdPredicate):
         return result
 
 
+@dataclass(frozen=True, slots=True)
+class GradientBelow(_ThresholdPredicate):
+    """Strict coarsening predicate on the same authenticated discrete gradient."""
+
+    context: DiscreteIndicatorContext
+
+    node_type = "gradient_below"
+    comparison = "strict_less_than"
+    transform = "discrete_gradient_magnitude"
+    polarity = "low"
+
+    def __post_init__(self) -> None:
+        _ThresholdPredicate.__post_init__(self)
+        if not isinstance(self.context, DiscreteIndicatorContext):
+            raise TypeError("GradientBelow requires a DiscreteIndicatorContext")
+
+    def canonical_identity(self) -> dict[str, Any]:
+        result = _ThresholdPredicate.canonical_identity(self)
+        result["discrete_context"] = self.context.canonical_identity()
+        return result
+
+
 def _children(values: Any, *, where: str, minimum: int) -> tuple[TagExpr, ...]:
     rows = tuple(values)
     if len(rows) < minimum:
@@ -309,6 +331,6 @@ class TaggingGraph:
 
 __all__ = [
     "Above", "AllOf", "AnyOf", "Below", "ConflictPolicy", "DiscreteIndicatorContext",
-    "EqualityPolicy", "GradientAbove", "Hysteresis", "MagnitudeAbove", "Not", "TagExpr",
+    "EqualityPolicy", "GradientAbove", "GradientBelow", "Hysteresis", "MagnitudeAbove", "Not", "TagExpr",
     "TaggingGraph",
 ]

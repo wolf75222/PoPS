@@ -10,14 +10,16 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from .tagging_graph import (
-    Above, AllOf, AnyOf, Below, GradientAbove, MagnitudeAbove, Not, TagExpr, TaggingGraph)
+    Above, AllOf, AnyOf, Below, GradientAbove, GradientBelow, MagnitudeAbove, Not, TagExpr,
+    TaggingGraph)
 
 if TYPE_CHECKING:
     from pops.model import Handle
 
 
 _SCHEMA_VERSION = 1
-_BUILTIN_NODES = (Above, Below, MagnitudeAbove, GradientAbove, AnyOf, AllOf, Not)
+_BUILTIN_NODES = (
+    Above, Below, MagnitudeAbove, GradientAbove, GradientBelow, AnyOf, AllOf, Not)
 
 
 def _handle(value: Any, *, where: str, kind: str | None = None) -> Handle:

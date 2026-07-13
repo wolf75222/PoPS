@@ -7,7 +7,7 @@ import json
 from typing import Any
 
 from pops.descriptors import Descriptor
-from pops.identity import Identity, semantic_identity
+from pops.identity import Identity, make_identity, semantic_identity
 from pops.model import Handle, OperatorHandle, OwnerKind
 
 
@@ -312,6 +312,49 @@ class ResolvedDiscretizationPlan:
                 "distinct methods and cannot be lowered without a per-operator native ABI"
             )
         return methods[0]
+
+    def amr_stencil_requirement(self, *, owner: Any, dimension: int) -> Any:
+        """Project the exact spatial methods onto the open AMR nesting protocol."""
+        from pops.mesh.amr import NestingRequirementSource
+
+        if isinstance(dimension, bool) or dimension not in (1, 2, 3):
+            raise ValueError("AMR stencil dimension must be 1, 2, or 3")
+        ghost_depth = max(row.method.ghost_depth for row in self.rates)
+        lookahead = max(row.method.formal_order - 1 for row in self.rates)
+        evidence = {
+            "plan": self.identity.to_data(),
+            "dimension": dimension,
+            "ghost_depth": ghost_depth,
+            "lookahead": lookahead,
+        }
+        provider = Handle(
+            "stencil_%s" % make_identity("amr-stencil-requirement", evidence).token,
+            kind="amr_stencil_requirement",
+            owner=owner,
+        )
+        return NestingRequirementSource(
+            provider,
+            (ghost_depth,) * dimension,
+            lookahead,
+        )
+
+    def amr_reflux_requirement(self, *, owner: Any, dimension: int) -> Any:
+        """Project conservative flux correction needs without inspecting a layout class."""
+        from pops.mesh.amr import NestingRequirementSource
+
+        if isinstance(dimension, bool) or dimension not in (1, 2, 3):
+            raise ValueError("AMR reflux dimension must be 1, 2, or 3")
+        evidence = {
+            "plan": self.identity.to_data(),
+            "dimension": dimension,
+            "rates": [row.rate.canonical_identity() for row in self.rates],
+        }
+        provider = Handle(
+            "reflux_%s" % make_identity("amr-reflux-requirement", evidence).token,
+            kind="amr_reflux_requirement",
+            owner=owner,
+        )
+        return NestingRequirementSource(provider, (1,) * dimension, 0)
 
 
 class DiscretizationPlan(Descriptor):

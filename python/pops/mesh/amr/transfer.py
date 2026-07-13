@@ -13,6 +13,12 @@ from ._transfer_contracts import *  # noqa: F403
 from ._transfer_contracts import _generic_handle
 
 
+def _authoring_handle(value: Any, *, where: str, kind: str) -> Handle:
+    if not isinstance(value, Handle) or value.kind != kind:
+        raise TypeError("%s requires a typed Handle(kind=%r), never a name" % (where, kind))
+    return value
+
+
 class AMRTransfer:
     """Object-level public declaration of how AMR values are materialized.
 
@@ -21,6 +27,7 @@ class AMRTransfer:
     """
 
     def __init__(self) -> None:
+        self._frozen = False
         self._states: list[tuple[Any, Any, LayoutHandle | None]] = []
         self._faces: list[tuple[tuple[Any, ...], Any, LayoutHandle | None]] = []
         self._nodes: list[tuple[Any, Any, LayoutHandle | None]] = []
@@ -30,10 +37,12 @@ class AMRTransfer:
     def state(self, subject: Any, policy: Any, *, layout: LayoutHandle | None = None) -> None:
         from pops.lib.amr import StateTransfer
 
+        if self._frozen:
+            raise RuntimeError("AMRTransfer is frozen")
         if type(policy) is not StateTransfer:
             raise TypeError("AMRTransfer.state requires pops.lib.amr.StateTransfer")
         self._states.append((
-            _generic_handle(subject, where="AMRTransfer.state", kind="state"), policy, layout
+            _authoring_handle(subject, where="AMRTransfer.state", kind="state"), policy, layout
         ))
 
     cell = state
@@ -44,6 +53,8 @@ class AMRTransfer:
         """Declare one coupled normal-face vector (one owner-qualified subject per axis)."""
         from pops.lib.amr import FaceTransfer
 
+        if self._frozen:
+            raise RuntimeError("AMRTransfer is frozen")
         if type(policy) is not FaceTransfer:
             raise TypeError("AMRTransfer.face requires pops.lib.amr.FaceTransfer")
         if isinstance(subjects, (str, bytes)):
@@ -57,37 +68,103 @@ class AMRTransfer:
         if not values:
             raise ValueError("AMRTransfer.face requires at least one face subject")
         self._faces.append((tuple(
-            _generic_handle(value, where="AMRTransfer.face", kind="state") for value in values
+            _authoring_handle(value, where="AMRTransfer.face", kind="state") for value in values
         ), policy, layout))
 
     def node(self, subject: Any, policy: Any, *, layout: LayoutHandle | None = None) -> None:
         from pops.lib.amr import NodeTransfer
 
+        if self._frozen:
+            raise RuntimeError("AMRTransfer is frozen")
         if type(policy) is not NodeTransfer:
             raise TypeError("AMRTransfer.node requires pops.lib.amr.NodeTransfer")
         self._nodes.append((
-            _generic_handle(subject, where="AMRTransfer.node", kind="state"), policy, layout
+            _authoring_handle(subject, where="AMRTransfer.node", kind="state"), policy, layout
         ))
 
     def field(self, subject: Any, policy: Any, *, layout: LayoutHandle | None = None) -> None:
         from pops.lib.amr import EllipticRecompute
 
+        if self._frozen:
+            raise RuntimeError("AMRTransfer is frozen")
         if type(policy) is not EllipticRecompute:
             raise TypeError("AMRTransfer.field requires pops.lib.amr.EllipticRecompute")
         self._fields.append((
-            _generic_handle(subject, where="AMRTransfer.field", kind="field"), policy, layout
+            _authoring_handle(subject, where="AMRTransfer.field", kind="field"), policy, layout
         ))
 
     def cache(self, subject: Any, policy: Any, *, layout: LayoutHandle) -> None:
         from pops.lib.amr import PatchTopologyRebuild
 
+        if self._frozen:
+            raise RuntimeError("AMRTransfer is frozen")
         if type(policy) is not PatchTopologyRebuild or not isinstance(layout, LayoutHandle):
             raise TypeError(
                 "AMRTransfer.cache requires PatchTopologyRebuild and an explicit LayoutHandle"
             )
         self._caches.append((
-            _generic_handle(subject, where="AMRTransfer.cache", kind="cache"), policy, layout
+            _authoring_handle(subject, where="AMRTransfer.cache", kind="cache"), policy, layout
         ))
+
+    def freeze(self) -> AMRTransfer:
+        if self._frozen:
+            return self
+        self._states = tuple(self._states)
+        self._faces = tuple(self._faces)
+        self._nodes = tuple(self._nodes)
+        self._fields = tuple(self._fields)
+        self._caches = tuple(self._caches)
+        self._frozen = True
+        return self
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if getattr(self, "_frozen", False):
+            raise RuntimeError("AMRTransfer is frozen")
+        object.__setattr__(self, name, value)
+
+    def inspect(self) -> dict[str, Any]:
+        def handle(value: Any) -> Any:
+            projection = value.canonical_identity if value.is_resolved else value.inspect
+            return projection()
+
+        return {
+            "authority_type": "amr_transfer_authoring",
+            "states": [{"subject": handle(subject), "policy": type(policy).__name__}
+                       for subject, policy, _ in self._states],
+            "faces": [{"subjects": [handle(subject) for subject in subjects],
+                       "policy": type(policy).__name__}
+                      for subjects, policy, _ in self._faces],
+            "nodes": [{"subject": handle(subject), "policy": type(policy).__name__}
+                      for subject, policy, _ in self._nodes],
+            "fields": [{"subject": handle(subject), "policy": type(policy).__name__}
+                       for subject, policy, _ in self._fields],
+            "caches": [{"subject": handle(subject), "policy": type(policy).__name__}
+                       for subject, policy, _ in self._caches],
+        }
+
+    def resolve_references(self, resolver: Any) -> AMRTransfer:
+        """Detach the registry while canonicalizing every declaration reference exactly once."""
+        if not callable(resolver):
+            raise TypeError("AMRTransfer.resolve_references requires a callable resolver")
+        result = type(self)()
+        result._states = [(resolver(subject), policy, layout)
+                          for subject, policy, layout in self._states]
+        result._faces = [(tuple(resolver(subject) for subject in subjects), policy, layout)
+                         for subjects, policy, layout in self._faces]
+        result._nodes = [(resolver(subject), policy, layout)
+                         for subject, policy, layout in self._nodes]
+        result._fields = [(resolver(subject), policy, layout)
+                          for subject, policy, layout in self._fields]
+        result._caches = [(resolver(subject), policy, layout)
+                          for subject, policy, layout in self._caches]
+        for family in (
+                result._states, result._faces, result._nodes, result._fields, result._caches):
+            subjects = [row[0] for row in family]
+            flattened = [item for subject in subjects
+                         for item in (subject if isinstance(subject, tuple) else (subject,))]
+            if any(not isinstance(item, Handle) or not item.is_resolved for item in flattened):
+                raise TypeError("AMRTransfer resolver must return canonical Handle values")
+        return result
 
     @staticmethod
     def _layout_contract(

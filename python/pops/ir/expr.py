@@ -349,6 +349,63 @@ class Gradient(_BoardNode):
         return "Gradient(%r)" % (self.field,)
 
 
+class GradientMagnitude(Expr):
+    """Semantic ``|grad(field)|`` resolved by a discrete consumer context.
+
+    The node deliberately has no context-free evaluator or C++ spelling.  AMR tagging resolves it
+    against the selected layout, discretization and stencil before a backend may lower it.
+    """
+
+    def __init__(self, gradient: Any) -> None:
+        if not isinstance(gradient, Gradient) or not isinstance(gradient.field, Expr):
+            raise TypeError("norm(grad(...)) requires a gradient of a PoPS Expr")
+        self.field = gradient.field
+        self.scale = gradient.scale
+
+    def __pops_ir_children__(self) -> tuple[Expr, ...]:
+        return (self.field,)
+
+    def __pops_ir_key__(self, recurse: Any) -> Any:
+        return ("gradient_magnitude", scalar_literal(self.scale).to_data(), recurse(self.field))
+
+    def resolve_for_amr_tagging(
+        self,
+        context: Any,
+        *,
+        action: str,
+        comparison: str,
+        threshold: Any,
+    ) -> Any:
+        """Resolve through the consumer-owned discrete-indicator protocol.
+
+        The expression package does not know an AMR node class or a numerical stencil.  It only
+        exposes its semantic operands to a context implementing the small open protocol.  A custom
+        indicator can implement this same method without being added to a central class switch.
+        """
+        resolve = getattr(context, "resolve_gradient_magnitude", None)
+        if not callable(resolve):
+            raise TypeError(
+                "AMR tagging context must implement resolve_gradient_magnitude(...)"
+            )
+        return resolve(
+            field=self.field,
+            scale=self.scale,
+            action=action,
+            comparison=comparison,
+            threshold=threshold,
+        )
+
+    def eval(self, env: Any) -> Any:
+        del env
+        raise TypeError("GradientMagnitude requires a resolved discrete context")
+
+    def to_cpp(self) -> str:
+        raise TypeError("GradientMagnitude lowers only through a discrete consumer context")
+
+    def _str(self) -> str:
+        return "norm(grad(%s))" % self.field
+
+
 class Laplacian(_EllipticTerm):
     """``scale * Laplacian(field)`` -- the elliptic operator of a field solve."""
 

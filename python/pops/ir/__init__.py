@@ -33,7 +33,7 @@ from .expr import (
     Const, Var, _Bin, Add, Sub, Mul, Div, Pow, Compare, Neg, Sqrt, Abs, Sign,
     # board nodes
     Equation, _BoardNode,
-    Partial, Gradient, Laplacian,
+    Partial, Gradient, GradientMagnitude, Laplacian,
     RateTerm, _as_rate, RateExpr, Divergence,
     TimeDerivative, Unknown, OpApply, Integral,
 )
@@ -55,7 +55,7 @@ from .ops import (
     eig_max_im, eig_lmin, eig_lmax, eig_all_real,
     left, right,
     # board
-    grad, dx, dy, laplacian, div, ddt, rate, unknown, integral,
+    grad, norm, dx, dy, laplacian, div, ddt, rate, unknown, integral,
     board_sqrt,
 )
 
@@ -72,7 +72,7 @@ __all__ = [
     "Neg", "Sqrt", "Abs", "Sign",
     # board nodes
     "Equation", "_BoardNode",
-    "Partial", "Gradient", "Laplacian",
+    "Partial", "Gradient", "GradientMagnitude", "Laplacian",
     "RateTerm", "RateExpr", "Divergence",
     "TimeDerivative", "Unknown", "OpApply", "Integral",
     # values
@@ -81,7 +81,7 @@ __all__ = [
     "sqrt", "abs_", "sign",
     "eig_max_im", "eig_lmin", "eig_lmax", "eig_all_real",
     "left", "right",
-    "grad", "dx", "dy", "laplacian", "div", "ddt", "rate", "unknown", "integral",
+    "grad", "norm", "dx", "dy", "laplacian", "div", "ddt", "rate", "unknown", "integral",
     "board_sqrt",
     # helpers
     "diff",

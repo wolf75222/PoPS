@@ -8,7 +8,7 @@ accepts a kind or policy string.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 
 from pops.model.ownership import OwnerPath
@@ -259,7 +259,7 @@ class Schedule:
     def map_values(self, mapper: Callable[[Any], Any]) -> Schedule:
         trigger = self.trigger
         if type(trigger) is When:
-            trigger = replace(trigger, condition=mapper(trigger.condition))
+            trigger = When(trigger.domain, mapper(trigger.condition))
         return Schedule(trigger, off=self.off)
 
     def to_data(self) -> dict[str, Any]:

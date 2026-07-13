@@ -11,7 +11,9 @@ from pops.domain import DomainBoundary
 from pops.ir import Expr
 from pops.ir.expr import Const
 from pops.ir.visitors import _key
-from pops.model import Handle, ParamHandle
+from pops.identity import make_identity
+from pops.identity.semantic import semantic_value
+from pops.model import Handle, OwnerPath, ParamHandle
 from pops.representations import Representation
 
 
@@ -434,6 +436,32 @@ class ResolvedTransportBoundarySet:
         }
 
     inspect = canonical_identity
+
+    def amr_boundary_requirement(self, *, owner: Any, dimension: int) -> Any:
+        """Project exact ghost-fill needs through the AMR nesting extension protocol."""
+        from pops.mesh.amr import NestingRequirementSource
+
+        if isinstance(dimension, bool) or dimension not in (1, 2, 3):
+            raise ValueError("AMR boundary dimension must be 1, 2, or 3")
+        depth = max(row.requirement.ghost_depth for row in self.conditions)
+        lookahead = max(
+            max(row.requirement.formal_orders) - 1 for row in self.conditions
+        )
+        evidence = {
+            "boundary": self.canonical_identity(),
+            "dimension": dimension,
+            "ghost_depth": depth,
+            "lookahead": lookahead,
+        }
+        provider = Handle(
+            "boundary_%s" % make_identity(
+                "amr-boundary-requirement",
+                semantic_value(evidence, where="AMR boundary requirement"),
+            ).token,
+            kind="amr_boundary_requirement",
+            owner=OwnerPath.coerce(owner).canonical(),
+        )
+        return NestingRequirementSource(provider, (depth,) * dimension, lookahead)
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)

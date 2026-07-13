@@ -107,6 +107,17 @@ def grad(field: Any) -> Any:
     return Gradient(field)
 
 
+def norm(value: Any) -> Any:
+    """The Euclidean norm of a semantic gradient.
+
+    This spelling remains continuous-looking in authoring and gains its exact stencil only when a
+    consumer such as AMR tagging resolves it against a numerical plan.
+    """
+    from .expr import GradientMagnitude
+
+    return GradientMagnitude(value)
+
+
 def dx(field: Any) -> Any:
     """The x partial derivative of a field (``grad(field).x``)."""
     return Partial(field, 0)

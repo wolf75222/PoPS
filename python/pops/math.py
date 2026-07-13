@@ -7,10 +7,10 @@ Thin facade: all node classes and constructors now live in :mod:`pops.ir`
 from __future__ import annotations
 
 __all__ = [
-    "sqrt", "grad", "div", "laplacian", "dx", "dy", "ddt", "rate", "unknown",
+    "sqrt", "grad", "norm", "div", "laplacian", "dx", "dy", "ddt", "rate", "unknown",
     "integral",
     # IR node types (advanced / introspection)
-    "Equation", "Gradient", "Partial", "Laplacian", "Divergence",
+    "Equation", "Gradient", "GradientMagnitude", "Partial", "Laplacian", "Divergence",
     "TimeDerivative", "Unknown", "OpApply", "Integral", "RateTerm", "RateExpr",
     # elliptic field-operator algebra (Spec 5 sec.9.2)
     "Reaction", "CoeffGradient", "DivCoeffGrad", "EllipticSum", "principal_kinds",
@@ -21,6 +21,7 @@ from pops.ir.expr import (  # noqa: F401
     _BoardNode,
     Partial,
     Gradient,
+    GradientMagnitude,
     Laplacian,
     RateTerm,
     RateExpr,
@@ -40,6 +41,7 @@ from pops.ir.elliptic import (  # noqa: F401  (Spec 5 sec.9.2 elliptic field-ope
 from pops.ir.expr import _as_rate  # noqa: F401  (used internally by RateTerm)
 from pops.ir.ops import (  # noqa: F401
     grad,
+    norm,
     dx,
     dy,
     laplacian,
