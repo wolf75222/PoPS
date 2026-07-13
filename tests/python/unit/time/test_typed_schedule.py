@@ -1,4 +1,4 @@
-"""ADC-663 closed schedule algebra and honest native lowering boundary."""
+"""ADC-663 typed schedule algebra and honest native lowering boundary."""
 from __future__ import annotations
 
 import pytest
@@ -14,16 +14,16 @@ from pops.time.schedule import (
 )
 
 
-def test_schedule_is_a_closed_typed_product_without_string_selectors():
+def test_schedule_is_a_typed_product_without_string_selectors():
     clock = Clock("macro")
     schedule = Schedule(Every(AcceptedStep(clock), 4), off=Hold())
 
     assert schedule.clock == clock
     assert schedule.trigger.n == 4
     assert isinstance(schedule.off, Hold)
-    with pytest.raises(TypeError, match="closed Trigger"):
+    with pytest.raises(TypeError, match="Trigger"):
         Schedule("every")
-    with pytest.raises(TypeError, match="closed OffPolicy"):
+    with pytest.raises(TypeError, match="OffPolicy"):
         Schedule(Every(AcceptedStep(clock), 4), off="hold")
     with pytest.raises(ValueError, match="no off-cadence"):
         Schedule(Always(AcceptedStep(clock)), off=Skip())
@@ -76,9 +76,12 @@ def test_typed_schedule_serialization_and_rebuild_are_exact():
     program, rate = _scheduled_rate(off=Zero())
     encoded = program._serialize()["nodes"][rate.id]["attrs"]["schedule"]
 
-    assert encoded["domain"]["type"] == "AcceptedStep"
-    assert encoded["trigger"] == {"type": "Every", "n": 2}
-    assert encoded["off"] == "Zero"
+    assert encoded["schema_version"] == 2
+    assert encoded["domain"]["type"]["qualname"] == "AcceptedStep"
+    assert encoded["trigger"]["type"]["qualname"] == "Every"
+    assert encoded["trigger"]["payload"] == {"n": 2}
+    assert encoded["off"]["type"]["qualname"] == "Zero"
+    assert encoded["off"]["payload"] == {}
     rebuilt = program._rebuild(lambda value: True)
     assert rebuilt._serialize(include_provenance=False) == \
         program._serialize(include_provenance=False)

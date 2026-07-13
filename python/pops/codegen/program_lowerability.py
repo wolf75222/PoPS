@@ -88,13 +88,18 @@ def check_model_owner_dispatch(program: Any, model: Any) -> None:
 
 def check_schedules_lowerable(program: Any) -> None:
     """Reject schedule policies without a semantically valid native lowering."""
-    from pops.time.schedule import (
-        AcceptedStep, Always, AtEnd, AtStart, Every, When,
-    )
+    from pops.codegen.program_emit_schedule import _lower_schedule_ir
+    from pops.time.schedule import Schedule
     scheduled = {
         value.id: value for value in all_ops(program)
         if value.attrs.get("schedule") is not None
     }
+    for value in scheduled.values():
+        schedule = value.attrs["schedule"]
+        if not isinstance(schedule, Schedule):
+            raise TypeError(
+                "schedule on node %r must implement the Schedule interface; got %s"
+                % (value.name, type(schedule).__name__))
     for consumer in all_ops(program):
         sources = list(consumer.inputs)
         for key in ("true_result", "false_result", "body", "residual", "apply_result"):
@@ -138,33 +143,9 @@ def check_schedules_lowerable(program: Any) -> None:
                 "schedule on child-clock node %r requires a clock-tick scheduler provider; "
                 "the native cache cadence is macro-clock only"
                 % value.name)
-        if type(schedule.domain) is not AcceptedStep:
-            raise NotImplementedError(
-                "schedule domain %s on node %r is typed and preserved, but this runtime only "
-                "supports AcceptedStep; Attempt needs StepTransaction, Stage/ClockTick/AMRLevel "
-                "need ADC-677, and Event/WallOutput need ConsumerGraph"
-                % (type(schedule.domain).__name__, value.name))
         schedule.validate_site(clock=value.clock, point=value.point,
                                where="schedule on node %r" % value.name)
-        if type(schedule.trigger) is Always:
-            continue
-        if type(schedule.trigger) is AtEnd:
-            raise NotImplementedError(
-                "schedule AtEnd on node %r (op '%s') is not lowerable: a compiled sim.step(dt) "
-                "loop never sees an end-of-run signal, so the .so cannot know the last step. Use "
-                "AtStart/Every/When on AcceptedStep, or an AtEnd ConsumerGraph hook."
-                % (value.name, value.op)
-            )
-        if type(schedule.trigger) is When:
-            condition = schedule.trigger.condition
-            if not isinstance(condition, ProgramValue) or condition.vtype != "bool":
-                raise NotImplementedError(
-                    "schedule when(cond) on node %r lowers only a Program Bool predicate (e.g. "
-                    "P.norm2(r) < tol), not a Python callable (ADC-458)." % value.name
-                )
-        if type(schedule.trigger) not in (Every, AtStart, When):
-            raise NotImplementedError("schedule trigger %s is not supported by the native protocol"
-                                      % type(schedule.trigger).__name__)
+        _lower_schedule_ir(value, schedule)
 
 
 __all__ = ["all_ops", "check_model_owner_dispatch", "check_schedules_lowerable"]

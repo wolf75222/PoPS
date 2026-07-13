@@ -24,6 +24,7 @@ ADC-458. The cache RUNTIME cadence in a stepping .so is exercised on ROMEO; the 
 unit-tested by tests/cpp/integration/runtime/test_cache_manager.cpp. Pure Python: only pops.time / pops.model / pops.dsl.
 """
 import sys
+from types import SimpleNamespace
 
 
 def _skip(msg):
@@ -32,9 +33,8 @@ def _skip(msg):
 
 
 try:
-    from pops import model
-    from pops.ir.expr import Var
     from pops import time as adctime
+    from pops.codegen.program_emit_schedule import _emit_schedule_wrap
     from typed_program_support import typed_state
 except Exception as exc:  # noqa: BLE001  -- _pops unavailable in this interpreter
     _skip("pops unavailable: %s" % exc)
@@ -57,34 +57,6 @@ def _when(clock, condition, off=None):
 
 
 # --- builders ---------------------------------------------------------------
-def _field_program(schedule):
-    """A program whose held node is a field SOLVE (output = the System aux)."""
-    mod = model.Module("sched_fields")
-    u = mod.state_space("U", ("rho", "mx", "my"))
-    fields = mod.field_space("fields", ("phi",))
-    rho = Var("rho", "cons")
-    mod.operator(name="fields_from_state", signature=(u,) >> fields, kind="field_operator", expr=rho)
-    mod.operator_capabilities("fields_from_state", cacheable=True)
-    P = adctime.Program("sched")._bind_operators(mod)
-    schedule = schedule(P.clock) if callable(schedule) else schedule
-    U = typed_state(P, "plasma", space=u)
-    if schedule is None:
-        P._call("fields_from_state", U)
-    else:
-        P._call("fields_from_state", U, schedule=schedule)
-    endpoint = typed_state(P, "plasma", state_name="U", space=u).next
-    P.commit(endpoint, P.value("U1", U, at=endpoint.point))
-    return P
-
-
-def _transport_model():
-    import pops
-
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                     transport=pops.IsothermalFlux(), source=pops.NoSource(),
-                     elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
-
-
 def _scratch_program(schedule):
     """A program whose scheduled node is an RHS (output = a named scratch MultiFab). The schedule is
     attached directly to the IR node (the cacheable-capability check is exercised by
@@ -93,8 +65,7 @@ def _scratch_program(schedule):
     schedule = schedule(P.clock) if callable(schedule) else schedule
     dt = P.dt
     U = typed_state(P, "ions")
-    f = P.solve_fields(U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
+    R = P._rhs_legacy(state=U, flux=True, sources=["default"])
     R = P._replace_value(R, attrs={**R.attrs, "schedule": schedule})
     endpoint = typed_state(P, "ions", state_name="U").next
     P.commit(endpoint, P.value("U1", U + dt * R, at=endpoint.point))
@@ -102,20 +73,30 @@ def _scratch_program(schedule):
 
 
 def _emit_field(schedule):
-    return _field_program(schedule).emit_cpp_program()
+    clock = adctime.Clock("macro")
+    schedule = schedule(clock) if callable(schedule) else schedule
+    value = SimpleNamespace(
+        id=17,
+        name="fields_from_state",
+        op="solve_fields",
+        attrs={} if schedule is None else {"schedule": schedule},
+    )
+    lines = ["ctx.solve_fields_from_state();"]
+    _emit_schedule_wrap(None, value, {}, lines, 0)
+    return "\n".join(lines)
 
 
 def _emit_scratch(schedule):
-    return _scratch_program(schedule).emit_cpp_program(model=_transport_model())
+    return _scratch_program(schedule).emit_cpp_program(model=None)
 
 
 # --- always / default byte-identity -----------------------------------------
 def test_always_body_identical_to_unscheduled():
     # the LOWERED body of always() equals the unscheduled body (no guard). The whole-file emit differs
     # only by the IR hash, which legitimately tracks the schedule attr (cache invalidation by design).
-    _, plain = _field_program(None)._emit_body()
-    _, always = _field_program(lambda clock: adctime.Schedule(
-        adctime.Always(adctime.AcceptedStep(clock))))._emit_body()
+    plain = _emit_field(None)
+    always = _emit_field(lambda clock: adctime.Schedule(
+        adctime.Always(adctime.AcceptedStep(clock))))
     assert plain == always
     assert "cache_should_update" not in _emit_field(
         lambda clock: adctime.Schedule(adctime.Always(adctime.AcceptedStep(clock))))
@@ -144,16 +125,15 @@ def test_when_reuses_program_predicate_token():
     P = adctime.Program("when_sched")
     dt = P.dt
     U = typed_state(P, "ions")
-    f = P.solve_fields(U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
+    R = P._rhs_legacy(state=U, flux=True, sources=["default"])
     cond = P.norm2(R) < 1e-6  # a Program Bool predicate emitted before the scheduled node
-    R2 = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
+    R2 = P._rhs_legacy(state=U, flux=True, sources=["default"])
     R2 = P._replace_value(
         R2, attrs={**R2.attrs, "schedule": _when(P.clock, cond, adctime.Hold())})
     endpoint = typed_state(P, "ions", state_name="U").next
     P.commit(endpoint, P.value("U1", U + dt * R2, at=endpoint.point))
     P._check_schedules_lowerable()  # a Program Bool when() lowers
-    cpp = P.emit_cpp_program(model=_transport_model())
+    cpp = P.emit_cpp_program(model=None)
     assert "< 1e-06" in cpp                           # exact predicate threshold
     assert "ctx.cache_should_update" not in cpp       # when() is a predicate, not a period
 
@@ -161,11 +141,10 @@ def test_when_reuses_program_predicate_token():
 def test_frozen_when_codegen_is_repeatable_and_keeps_tokens_emission_local():
     P = adctime.Program("frozen_when_sched")
     U = typed_state(P, "ions")
-    fields = P.solve_fields(U)
-    rate = P._rhs_legacy(state=U, fields=fields, flux=True, sources=["default"])
+    rate = P._rhs_legacy(state=U, flux=True, sources=["default"])
     condition = P.norm2(rate) < 1e-6
     scheduled = P._rhs_legacy(
-        state=U, fields=fields, flux=True, sources=["default"])
+        state=U, flux=True, sources=["default"])
     scheduled = P._replace_value(
         scheduled, attrs={
             **scheduled.attrs,
@@ -179,8 +158,8 @@ def test_frozen_when_codegen_is_repeatable_and_keeps_tokens_emission_local():
     P.freeze()
     before = P._ir_hash()
 
-    first = P.emit_cpp_program(model=_transport_model())
-    second = P.emit_cpp_program(model=_transport_model())
+    first = P.emit_cpp_program(model=None)
+    second = P.emit_cpp_program(model=None)
 
     assert first == second
     assert P._ir_hash() == before
@@ -200,7 +179,7 @@ def test_when_over_python_callable_refuses():
 
 # --- subcycle (kind) --------------------------------------------------------
 def test_clock_tick_domain_refuses_until_multirate_runtime_exists():
-    program = _field_program(lambda clock: adctime.Schedule(
+    program = _scratch_program(lambda clock: adctime.Schedule(
         adctime.Always(adctime.ClockTick(clock))))
     try:
         program._check_schedules_lowerable()
@@ -211,7 +190,7 @@ def test_clock_tick_domain_refuses_until_multirate_runtime_exists():
 
 
 def test_amr_level_domain_refuses_until_amr_clock_runtime_exists():
-    program = _field_program(lambda clock: adctime.Schedule(
+    program = _scratch_program(lambda clock: adctime.Schedule(
         adctime.Always(adctime.AMRLevel(clock, level=1))))
     try:
         program._check_schedules_lowerable()
@@ -309,7 +288,7 @@ def test_scratch_decl_hoisted_for_skip():
 
 # --- genuinely unlowerable: on_end (no end-of-run signal) -------------------
 def test_on_end_refuses_to_lower():
-    P = _field_program(lambda clock: _at_end(clock, adctime.Hold()))
+    P = _scratch_program(lambda clock: _at_end(clock, adctime.Hold()))
     try:
         P._check_schedules_lowerable()
     except NotImplementedError as exc:

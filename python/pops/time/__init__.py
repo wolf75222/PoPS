@@ -59,7 +59,9 @@ from pops.time.points import Clock, StagePoint, TimePoint  # noqa: F401
 from pops.time.schedule import (  # noqa: F401
     AMRLevel, AcceptedStep, AccumulateDt, Always, AtEnd, AtStart, Attempt,
     ClockTick, Domain, Error, Event, EventHandle, Every, Hold, OffPolicy,
-    Schedule, Skip, Stage, Trigger, WallOutput, When, Zero,
+    Schedule, ScheduleAction, ScheduleComment, ScheduleDomainIR, ScheduleDueIR,
+    ScheduleDueKind, ScheduleLoweringIR, ScheduleOffIR, ScheduleTimeline,
+    Skip, Stage, Trigger, WallOutput, When, Zero,
     always, every, on_end, on_start, when,
 )
 from pops.time.synchronization import (  # noqa: F401
@@ -89,6 +91,8 @@ __all__ = ["Program", "ProgramValue", "StageStateSet", "ResidualSolution",
            "EventHandle", "Event", "WallOutput", "Trigger", "Always", "Every",
            "AtStart", "AtEnd", "When", "OffPolicy", "Hold", "Skip", "Zero",
            "AccumulateDt", "Error",
+           "ScheduleTimeline", "ScheduleDueKind", "ScheduleAction", "ScheduleComment",
+           "ScheduleDomainIR", "ScheduleDueIR", "ScheduleOffIR", "ScheduleLoweringIR",
            "always", "every", "when", "on_start", "on_end",
            "eliminate_dead_nodes", "eliminate_common_subexpressions",
            "eliminate_redundant_field_solves", "optimize"]

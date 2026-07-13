@@ -1,146 +1,128 @@
-"""Closed, typed schedule algebra for temporal Program nodes.
+"""Typed, extensible schedule algebra for temporal Program nodes.
 
 Schedules are values, not mini configuration dictionaries: a :class:`Domain` says which
 runtime timeline owns a cadence, a :class:`Trigger` says when it is due, and an
 :class:`OffPolicy` says what a consumer observes between due instants.  No public constructor
 accepts a kind or policy string.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
-from pops.model.ownership import OwnerPath
 from pops.params.use_sites import ParamUse, resolve_param_use
-from pops.time.points import Clock, StagePoint, TimePoint, point_clock
-
-
-def _clock(value: Any, where: str) -> Clock:
-    if type(value) is not Clock:
-        raise TypeError("%s must be an exact Clock" % where)
-    return value
-
-
-def _point(value: Any, clock: Clock, where: str) -> TimePoint | StagePoint | None:
-    if value is None:
-        return None
-    if type(value) not in (TimePoint, StagePoint):
-        raise TypeError("%s must be an exact TimePoint or StagePoint" % where)
-    if point_clock(value, where) != clock:
-        raise ValueError("%s belongs to a different clock" % where)
-    return value
-
-
-@dataclass(frozen=True, slots=True)
-class Domain:
-    """Closed base class for schedule domains; instantiate one of its concrete subclasses."""
-
-    clock: Clock
-    at: TimePoint | StagePoint | None = None
-    __pops_ir_immutable__ = True
-
-    def __post_init__(self) -> None:
-        if type(self) is Domain:
-            raise TypeError("Domain is closed; use AcceptedStep/Attempt/Stage/... instead")
-        clock = _clock(self.clock, "%s clock" % type(self).__name__)
-        object.__setattr__(self, "at", _point(self.at, clock, "%s at" % type(self).__name__))
-
-
-@dataclass(frozen=True, slots=True)
-class AcceptedStep(Domain):
-    """Cadence indexed only by committed, accepted macro steps."""
-
-
-@dataclass(frozen=True, slots=True)
-class Attempt(Domain):
-    """Cadence indexed by step attempts, including rejected attempts."""
-
-
-@dataclass(frozen=True, slots=True)
-class Stage(Domain):
-    """Cadence at one exact named stage point."""
-
-    at: StagePoint
-
-    def __post_init__(self) -> None:
-        super(Stage, self).__post_init__()
-        if type(self.at) is not StagePoint:
-            raise TypeError("Stage at must be an exact StagePoint")
-
-
-@dataclass(frozen=True, slots=True)
-class ClockTick(Domain):
-    """Cadence on a distinct logical clock tick (multirate runtime domain)."""
-
-
-@dataclass(frozen=True, slots=True)
-class AMRLevel(Domain):
-    """Cadence for one AMR hierarchy level."""
-
-    level: int = 0
-
-    def __post_init__(self) -> None:
-        super(AMRLevel, self).__post_init__()
-        if isinstance(self.level, bool) or not isinstance(self.level, int) or self.level < 0:
-            raise ValueError("AMRLevel level must be a non-negative int")
-
-
-@dataclass(frozen=True, slots=True)
-class EventHandle:
-    """Immutable owner-qualified identity of one runtime event channel."""
-
-    owner: OwnerPath
-    local_id: str
-    __pops_ir_immutable__ = True
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "owner", OwnerPath.coerce(self.owner).canonical())
-        if not isinstance(self.local_id, str) or not self.local_id:
-            raise ValueError("EventHandle local_id must be a non-empty string")
-
-    def to_data(self) -> dict[str, Any]:
-        return {"schema_version": 1, "owner": self.owner.to_data(), "local_id": self.local_id}
-
-
-@dataclass(frozen=True, slots=True)
-class Event(Domain):
-    """Cadence driven by an owner-qualified typed runtime event channel."""
-
-    event: EventHandle | None = None
-
-    def __post_init__(self) -> None:
-        super(Event, self).__post_init__()
-        if type(self.event) is not EventHandle:
-            raise TypeError("Event event must be an exact EventHandle")
-
-
-@dataclass(frozen=True, slots=True)
-class WallOutput(Domain):
-    """Host wall/output cadence, owned by the later ConsumerGraph runtime."""
+from pops.time.points import Clock
+from pops.time.schedule_domains import (
+    AMRLevel,
+    AcceptedStep,
+    Attempt,
+    ClockTick,
+    Domain,
+    Event,
+    EventHandle,
+    Stage,
+    WallOutput,
+)
+from pops.time.schedule_lowering import (
+    ScheduleAction,
+    ScheduleComment,
+    ScheduleDomainIR,
+    ScheduleDueIR,
+    ScheduleDueKind,
+    ScheduleLoweringIR,
+    ScheduleOffIR,
+    ScheduleTimeline,
+)
+from pops.time.schedule_protocol import (
+    UnresolvedScheduleCondition,
+    component_payload as _component_payload,
+    manifest_value as _manifest_value,
+    map_component as _map_component,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class Trigger:
+    """Extension interface for typed triggers.
+
+    A third-party trigger must implement :meth:`native_schedule_due` and return the exact
+    :class:`ScheduleDueIR` contract.  Mapping onto the closed native due primitives keeps
+    backend lowering deterministic and fail-closed.
+    """
+
     domain: Domain
+    manifest_tag: ClassVar[str | None] = None
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
         if type(self) is Trigger:
-            raise TypeError("Trigger is closed; use Always/Every/AtStart/AtEnd/When")
-        if type(self.domain) not in (
-                AcceptedStep, Attempt, Stage, ClockTick, AMRLevel, Event, WallOutput):
-            raise TypeError("%s domain must be an exact closed Domain" % type(self).__name__)
+            raise TypeError("Trigger is abstract; use or subclass a concrete Trigger")
+        _component_payload(self, frozenset({"domain"}))
+        if not isinstance(self.domain, Domain):
+            raise TypeError("%s domain must implement the Domain interface" % type(self).__name__)
+
+    def native_schedule_due(self, *, where: str) -> ScheduleDueIR:
+        raise NotImplementedError(
+            "schedule trigger %s at %s does not implement native_schedule_due()"
+            % (type(self).__name__, where)
+        )
+
+    def schedule_params(self) -> dict[str, Any]:
+        return self.schedule_payload()
+
+    def is_always(self) -> bool:
+        due = self.native_schedule_due(where="Trigger.is_always()")
+        if type(due) is not ScheduleDueIR:
+            raise TypeError("Trigger.native_schedule_due() must return an exact ScheduleDueIR")
+        return due.kind is ScheduleDueKind.ALWAYS
+
+    def map_values(self, mapper: Callable[[Any], Any]) -> Trigger:
+        mapped = _map_component(self, mapper, frozenset({"domain"}), domain=self.domain)
+        if type(mapped) is not type(self):
+            raise TypeError("Trigger.map_values() must preserve the exact extension type")
+        return mapped
+
+    def schedule_payload(self) -> dict[str, Any]:
+        return _component_payload(self, frozenset({"domain"}))
+
+    def to_schedule_data(self) -> dict[str, Any]:
+        tag = type(self).manifest_tag
+        if not isinstance(tag, str) or not tag:
+            raise TypeError(
+                "schedule trigger %s must declare a non-empty manifest_tag" % type(self).__name__
+            )
+        payload = self.schedule_payload()
+        if type(payload) is not dict:
+            raise TypeError("Trigger.schedule_payload() must return an exact dict")
+        if "type" in payload:
+            raise ValueError("Trigger.schedule_payload() uses reserved key 'type'")
+        return {"type": tag, **{key: _manifest_value(item) for key, item in payload.items()}}
+
+    def consumer_due(self, coordinate: int, moment: Any) -> bool:
+        raise NotImplementedError(
+            "schedule trigger %s does not implement consumer_due()" % type(self).__name__
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class Always(Trigger):
-    pass
+    manifest_tag: ClassVar[str | None] = "always"
+
+    def native_schedule_due(self, *, where: str) -> ScheduleDueIR:
+        del where
+        return ScheduleDueIR(ScheduleDueKind.ALWAYS)
+
+    def consumer_due(self, coordinate: int, moment: Any) -> bool:
+        del coordinate
+        return not moment.at_start
 
 
 @dataclass(frozen=True, slots=True)
 class Every(Trigger):
     n: int
+    manifest_tag: ClassVar[str | None] = "every"
 
     def __post_init__(self) -> None:
         super(Every, self).__post_init__()
@@ -149,65 +131,171 @@ class Every(Trigger):
             raise ValueError("Every n must be a positive int")
         object.__setattr__(self, "n", n)
 
+    def native_schedule_due(self, *, where: str) -> ScheduleDueIR:
+        del where
+        return ScheduleDueIR(ScheduleDueKind.CACHE_PERIOD, period=self.n)
+
+    def schedule_params(self) -> dict[str, Any]:
+        return {"n": self.n}
+
+    def consumer_due(self, coordinate: int, moment: Any) -> bool:
+        return not moment.at_start and coordinate % self.n == 0
+
 
 @dataclass(frozen=True, slots=True)
 class AtStart(Trigger):
-    pass
+    manifest_tag: ClassVar[str | None] = "at_start"
+
+    def native_schedule_due(self, *, where: str) -> ScheduleDueIR:
+        del where
+        return ScheduleDueIR(ScheduleDueKind.MACRO_STEP_ZERO)
+
+    def consumer_due(self, coordinate: int, moment: Any) -> bool:
+        del coordinate
+        return moment.at_start
 
 
 @dataclass(frozen=True, slots=True)
 class AtEnd(Trigger):
-    pass
+    manifest_tag: ClassVar[str | None] = "at_end"
+
+    def native_schedule_due(self, *, where: str) -> ScheduleDueIR:
+        del where
+        return ScheduleDueIR(ScheduleDueKind.AT_END)
+
+    def consumer_due(self, coordinate: int, moment: Any) -> bool:
+        del coordinate
+        return not moment.at_start and moment.at_end
 
 
 @dataclass(frozen=True, slots=True)
 class When(Trigger):
     condition: Any
+    manifest_tag: ClassVar[str | None] = "when"
+
+    def native_schedule_due(self, *, where: str) -> ScheduleDueIR:
+        del where
+        return ScheduleDueIR(ScheduleDueKind.PROGRAM_PREDICATE, predicate=self.condition)
+
+    def schedule_params(self) -> dict[str, Any]:
+        return {"cond": self.condition}
+
+    def consumer_due(self, coordinate: int, moment: Any) -> bool:
+        del coordinate
+        if moment.at_start:
+            return False
+        if type(self.condition) is not bool:
+            raise UnresolvedScheduleCondition(self.condition)
+        return self.condition
 
 
 @dataclass(frozen=True, slots=True)
 class OffPolicy:
-    """Closed base class for the meaning of an off-cadence read."""
+    """Extension interface for the meaning of an off-cadence read."""
 
+    manifest_tag: ClassVar[str | None] = None
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
         if type(self) is OffPolicy:
-            raise TypeError("OffPolicy is closed; use Hold/Skip/Zero/AccumulateDt/Error")
+            raise TypeError("OffPolicy is abstract; use or subclass a concrete OffPolicy")
+        _component_payload(self, frozenset())
+
+    def native_schedule_off(self, *, where: str) -> ScheduleOffIR:
+        raise NotImplementedError(
+            "schedule off-policy %s at %s does not implement native_schedule_off()"
+            % (type(self).__name__, where)
+        )
+
+    def needs_cache(self) -> bool:
+        plan = self.native_schedule_off(where="cache capability check")
+        if type(plan) is not ScheduleOffIR:
+            raise TypeError("OffPolicy.native_schedule_off() must return an exact ScheduleOffIR")
+        actions = plan.before_due + plan.after_due + plan.off_cadence
+        cache_actions = frozenset(
+            {
+                ScheduleAction.EFFECTIVE_DT,
+                ScheduleAction.STORE,
+                ScheduleAction.ACCUMULATE_DT,
+                ScheduleAction.RESTORE,
+            }
+        )
+        return any(action in cache_actions for action in actions)
+
+    def schedule_payload(self) -> dict[str, Any]:
+        return _component_payload(self, frozenset())
+
+    def map_values(self, mapper: Callable[[Any], Any]) -> OffPolicy:
+        mapped = _map_component(self, mapper, frozenset())
+        if type(mapped) is not type(self):
+            raise TypeError("OffPolicy.map_values() must preserve the exact extension type")
+        return mapped
+
+    def to_schedule_data(self) -> str | dict[str, Any]:
+        tag = type(self).manifest_tag
+        if not isinstance(tag, str) or not tag:
+            raise TypeError(
+                "schedule off-policy %s must declare a non-empty manifest_tag" % type(self).__name__
+            )
+        payload = self.schedule_payload()
+        if type(payload) is not dict:
+            raise TypeError("OffPolicy.schedule_payload() must return an exact dict")
+        if "type" in payload:
+            raise ValueError("OffPolicy.schedule_payload() uses reserved key 'type'")
+        if not payload:
+            return tag
+        return {"type": tag, **{key: _manifest_value(item) for key, item in payload.items()}}
 
 
 @dataclass(frozen=True, slots=True)
 class Hold(OffPolicy):
-    pass
+    manifest_tag: ClassVar[str | None] = "hold"
+
+    def native_schedule_off(self, *, where: str) -> ScheduleOffIR:
+        del where
+        return ScheduleOffIR(
+            after_due=(ScheduleAction.STORE,), off_cadence=(ScheduleAction.RESTORE,)
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class Skip(OffPolicy):
-    pass
+    manifest_tag: ClassVar[str | None] = "skip"
+
+    def native_schedule_off(self, *, where: str) -> ScheduleOffIR:
+        del where
+        return ScheduleOffIR(comment=ScheduleComment.SKIP)
 
 
 @dataclass(frozen=True, slots=True)
 class Zero(OffPolicy):
-    pass
+    manifest_tag: ClassVar[str | None] = "zero"
+
+    def native_schedule_off(self, *, where: str) -> ScheduleOffIR:
+        del where
+        return ScheduleOffIR(off_cadence=(ScheduleAction.ZERO,))
 
 
 @dataclass(frozen=True, slots=True)
 class AccumulateDt(OffPolicy):
-    pass
+    manifest_tag: ClassVar[str | None] = "accumulate_dt"
+
+    def native_schedule_off(self, *, where: str) -> ScheduleOffIR:
+        del where
+        return ScheduleOffIR(
+            before_due=(ScheduleAction.EFFECTIVE_DT,),
+            after_due=(ScheduleAction.STORE,),
+            off_cadence=(ScheduleAction.ACCUMULATE_DT, ScheduleAction.RESTORE),
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class Error(OffPolicy):
-    pass
+    manifest_tag: ClassVar[str | None] = "error"
 
-
-_DOMAIN_TAGS = {AcceptedStep: "accepted_step", Attempt: "attempt", Stage: "stage",
-                ClockTick: "clock_tick", AMRLevel: "amr_level", Event: "event",
-                WallOutput: "wall_output"}
-_TRIGGER_TAGS = {Always: "always", Every: "every", AtStart: "at_start",
-                 AtEnd: "at_end", When: "when"}
-_OFF_TAGS = {Hold: "hold", Skip: "skip", Zero: "zero",
-             AccumulateDt: "accumulate_dt", Error: "error"}
+    def native_schedule_off(self, *, where: str) -> ScheduleOffIR:
+        del where
+        return ScheduleOffIR(off_cadence=(ScheduleAction.ERROR,))
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,11 +307,14 @@ class Schedule:
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
-        if type(self.trigger) not in _TRIGGER_TAGS:
-            raise TypeError("Schedule trigger must be an exact closed Trigger")
-        if self.off is not None and type(self.off) not in _OFF_TAGS:
-            raise TypeError("Schedule off must be an exact closed OffPolicy or None")
-        if type(self.trigger) is Always and self.off is not None:
+        _component_payload(self, frozenset({"trigger", "off"}))
+        if not isinstance(self.trigger, Trigger):
+            raise TypeError("Schedule trigger must implement the Trigger interface")
+        if self.off is not None and not isinstance(self.off, OffPolicy):
+            raise TypeError(
+                "Schedule off must implement the OffPolicy interface or be None"
+            )
+        if self.is_always() and self.off is not None:
             raise ValueError("Always has no off-cadence instant; off must be omitted")
 
     @property
@@ -237,45 +328,89 @@ class Schedule:
     @property
     def params(self) -> dict[str, Any]:
         """Internal generic-IR projection used by graph walkers; not an authoring surface."""
-        if type(self.trigger) is Every:
-            return {"n": self.trigger.n}
-        if type(self.trigger) is When:
-            return {"cond": self.trigger.condition}
-        return {}
+        params = self.trigger.schedule_params()
+        if type(params) is not dict:
+            raise TypeError("Trigger.schedule_params() must return an exact dict")
+        return params
 
     def is_always(self) -> bool:
-        return type(self.trigger) is Always
+        result = self.trigger.is_always()
+        if type(result) is not bool:
+            raise TypeError("Trigger.is_always() must return an exact bool")
+        return result
 
     def needs_cache(self) -> bool:
-        return type(self.off) in (Hold, AccumulateDt)
+        if self.off is None:
+            return False
+        result = self.off.needs_cache()
+        if type(result) is not bool:
+            raise TypeError("OffPolicy.needs_cache() must return an exact bool")
+        return result
+
+    def native_schedule_ir(self, *, where: str) -> ScheduleLoweringIR:
+        """Return the exact native lowering contract implemented by this schedule."""
+        domain = self.domain.native_schedule_domain(where=where)
+        due = self.trigger.native_schedule_due(where=where)
+        off = ScheduleOffIR() if self.off is None else self.off.native_schedule_off(where=where)
+        return ScheduleLoweringIR(domain=domain, due=due, off=off)
 
     def validate_site(self, *, clock: Clock, point: Any = None, where: str = "schedule") -> None:
         if self.clock != clock:
-            raise ValueError("%s clock %r does not match evaluation clock %r"
-                             % (where, self.clock.name, clock.name))
+            raise ValueError(
+                "%s clock %r does not match evaluation clock %r"
+                % (where, self.clock.name, clock.name)
+            )
         if self.domain.at is not None and point is not None and self.domain.at != point:
             raise ValueError("%s point does not match its typed domain point" % where)
 
     def map_values(self, mapper: Callable[[Any], Any]) -> Schedule:
-        trigger = self.trigger
-        if type(trigger) is When:
-            trigger = When(trigger.domain, mapper(trigger.condition))
-        return Schedule(trigger, off=self.off)
+        trigger = self.trigger.map_values(mapper)
+        if type(trigger) is not type(self.trigger):
+            raise TypeError("Trigger.map_values() must preserve the exact extension type")
+        off = None if self.off is None else self.off.map_values(mapper)
+        if self.off is not None and type(off) is not type(self.off):
+            raise TypeError("OffPolicy.map_values() must preserve the exact extension type")
+        mapped = _map_component(
+            self, mapper, frozenset({"trigger", "off"}), trigger=trigger, off=off
+        )
+        if type(mapped) is not type(self):
+            raise TypeError("Schedule.map_values() must preserve the exact extension type")
+        return mapped
+
+    def schedule_payload(self) -> dict[str, Any]:
+        return _component_payload(self, frozenset({"trigger", "off"}))
 
     def to_data(self) -> dict[str, Any]:
-        domain = {"type": _DOMAIN_TAGS[type(self.domain)], "clock": self.clock.to_data(),
-                  "at": self.domain.at.to_data() if self.domain.at is not None else None}
-        if type(self.domain) is AMRLevel:
-            domain["level"] = self.domain.level
-        elif type(self.domain) is Event:
-            domain["event"] = self.domain.event.to_data()
-        trigger = {"type": _TRIGGER_TAGS[type(self.trigger)]}
-        if type(self.trigger) is Every:
-            trigger["n"] = self.trigger.n
-        elif type(self.trigger) is When:
-            trigger["condition"] = self.trigger.condition
-        return {"schema_version": 1, "domain": domain, "trigger": trigger,
-                "off": _OFF_TAGS[type(self.off)] if self.off is not None else None}
+        domain = self.domain.to_schedule_data()
+        if type(domain) is not dict or not isinstance(domain.get("type"), str):
+            raise TypeError(
+                "Domain.to_schedule_data() must return an exact dict with a type string"
+            )
+        trigger = self.trigger.to_schedule_data()
+        if type(trigger) is not dict or not isinstance(trigger.get("type"), str):
+            raise TypeError(
+                "Trigger.to_schedule_data() must return an exact dict with a type string"
+            )
+        off = None if self.off is None else self.off.to_schedule_data()
+        if off is not None and not (
+            (isinstance(off, str) and off)
+            or (type(off) is dict and isinstance(off.get("type"), str))
+        ):
+            raise TypeError(
+                "OffPolicy.to_schedule_data() must return a non-empty string or typed dict"
+            )
+        payload = self.schedule_payload()
+        if type(payload) is not dict:
+            raise TypeError("Schedule.schedule_payload() must return an exact dict")
+        if frozenset({"schema_version", "domain", "trigger", "off"}).intersection(payload):
+            raise ValueError("Schedule.schedule_payload() uses a reserved manifest key")
+        return {
+            "schema_version": 1,
+            "domain": domain,
+            "trigger": trigger,
+            "off": off,
+            **{key: _manifest_value(item) for key, item in payload.items()},
+        }
 
     def __repr__(self) -> str:
         return "Schedule(%r%s)" % (self.trigger, ", off=%r" % self.off if self.off else "")
@@ -302,8 +437,40 @@ def on_end(*, clock: Clock) -> Schedule:
     return Schedule(AtEnd(AcceptedStep(clock)))
 
 
-__all__ = ["Domain", "AcceptedStep", "Attempt", "Stage", "ClockTick", "AMRLevel",
-           "EventHandle", "Event",
-           "WallOutput", "Trigger", "Always", "Every", "AtStart", "AtEnd", "When",
-           "OffPolicy", "Hold", "Skip", "Zero", "AccumulateDt", "Error", "Schedule",
-           "always", "every", "when", "on_start", "on_end"]
+__all__ = [
+    "ScheduleTimeline",
+    "ScheduleDueKind",
+    "ScheduleAction",
+    "ScheduleComment",
+    "ScheduleDomainIR",
+    "ScheduleDueIR",
+    "ScheduleOffIR",
+    "ScheduleLoweringIR",
+    "Domain",
+    "AcceptedStep",
+    "Attempt",
+    "Stage",
+    "ClockTick",
+    "AMRLevel",
+    "EventHandle",
+    "Event",
+    "WallOutput",
+    "Trigger",
+    "Always",
+    "Every",
+    "AtStart",
+    "AtEnd",
+    "When",
+    "OffPolicy",
+    "Hold",
+    "Skip",
+    "Zero",
+    "AccumulateDt",
+    "Error",
+    "Schedule",
+    "always",
+    "every",
+    "when",
+    "on_start",
+    "on_end",
+]

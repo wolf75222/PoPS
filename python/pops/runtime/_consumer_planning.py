@@ -6,20 +6,7 @@ from typing import Any
 
 from pops.codegen.lowering_coverage import LoweringCoverageReport, LoweringCoverageRow
 from pops.identity import Identity, make_identity
-from pops.time import (
-    AMRLevel,
-    AcceptedStep,
-    Always,
-    AtEnd,
-    AtStart,
-    Attempt,
-    ClockTick,
-    Event,
-    Every,
-    Stage,
-    WallOutput,
-    When,
-)
+from pops.time.schedule_protocol import UnresolvedScheduleCondition
 
 from ._consumer_contracts import (
     ConsumerCursorSet,
@@ -46,48 +33,33 @@ def _schedule_coordinate(manifest: ConsumerManifest, moment: ConsumerMoment) -> 
     domain = manifest.schedule.domain
     if domain.clock != moment.point.clock:
         return None
-    if type(domain) is AcceptedStep:
-        return moment.accepted_step
-    if type(domain) is Attempt:
-        return moment.attempt
-    if type(domain) is Stage:
-        return moment.accepted_step if moment.stage == domain.at else None
-    if type(domain) is ClockTick:
-        return moment.clock_tick
-    if type(domain) is AMRLevel:
-        return moment.accepted_step if moment.level == domain.level else None
-    if type(domain) is Event:
-        return moment.accepted_step if domain.event in moment.events else None
-    if type(domain) is WallOutput:
-        return moment.wall_tick
-    raise TypeError("unsupported closed schedule domain %s" % type(domain).__name__)
+    coordinate = domain.consumer_coordinate(moment)
+    if coordinate is not None and (isinstance(coordinate, bool) or type(coordinate) is not int):
+        raise TypeError(
+            "Domain.consumer_coordinate() must return an exact int or None, got %s"
+            % type(coordinate).__name__)
+    return coordinate
 
 
 def _is_due(manifest: ConsumerManifest, moment: ConsumerMoment) -> bool:
     trigger = manifest.schedule.trigger
-    if moment.at_start and type(trigger) is not AtStart:
-        return False
     coordinate = _schedule_coordinate(manifest, moment)
     if coordinate is None:
         return False
-    if type(trigger) is Always:
-        return True
-    if type(trigger) is Every:
-        return coordinate % trigger.n == 0
-    if type(trigger) is AtStart:
-        return moment.at_start
-    if type(trigger) is AtEnd:
-        return moment.at_end
-    if type(trigger) is When:
-        if type(trigger.condition) is not bool:
-            refuse(
-                "unresolved_consumer_condition",
-                "consumer[%s].schedule.condition" % manifest.qualified_id,
-                "When conditions must be resolved explicitly before ConsumerGraph planning",
-                evidence=type(trigger.condition).__name__,
-            )
-        return trigger.condition
-    raise TypeError("unsupported closed schedule trigger %s" % type(trigger).__name__)
+    try:
+        due = trigger.consumer_due(coordinate, moment)
+    except UnresolvedScheduleCondition as exc:
+        refuse(
+            "unresolved_consumer_condition",
+            "consumer[%s].schedule.condition" % manifest.qualified_id,
+            "schedule conditions must be resolved explicitly before ConsumerGraph planning",
+            evidence=exc.condition_type,
+        )
+    if type(due) is not bool:
+        raise TypeError(
+            "Trigger.consumer_due() must return an exact bool, got %s"
+            % type(due).__name__)
+    return due
 
 
 def _occurrence(manifest: ConsumerManifest, moment: ConsumerMoment) -> Identity:
@@ -96,12 +68,11 @@ def _occurrence(manifest: ConsumerManifest, moment: ConsumerMoment) -> Identity:
         "coordinate": _schedule_coordinate(manifest, moment),
         "point": moment.point.to_data(),
     }
-    if type(domain) is Stage:
-        evidence["stage"] = moment.stage.to_data() if moment.stage else None
-    elif type(domain) is AMRLevel:
-        evidence["level"] = moment.level
-    elif type(domain) is Event:
-        evidence["event"] = domain.event.to_data()
+    domain_evidence = domain.consumer_occurrence_evidence(moment)
+    if type(domain_evidence) is not dict:
+        raise TypeError(
+            "Domain.consumer_occurrence_evidence() must return an exact dict")
+    evidence.update(domain_evidence)
     return make_identity(
         "consumer-occurrence",
         {

@@ -104,7 +104,7 @@ def test_call_records_schedule_on_value():
     mod, u, _ = _module()
     P, U, _ = _program_state(mod, u)
     f = P._call("fields_from_state", U, schedule=_every(P.clock, 10, adctime.Hold()))
-    assert isinstance(f.attrs["schedule"].off, adctime.Hold)
+    assert isinstance(f._token.attrs["schedule"].off, adctime.Hold)
     assert "schedule" in P.dump_operator_ir()       # inspectable: recorded, not dropped
 
 
@@ -112,7 +112,7 @@ def test_call_without_schedule_is_unchanged():
     mod, u, _ = _module()
     P, U, _ = _program_state(mod, u)
     f = P._call("fields_from_state", U)
-    assert "schedule" not in f.attrs
+    assert "schedule" not in f._token.attrs
 
 
 # --- cacheable validation (criterion 27) -------------------------------------
@@ -160,7 +160,8 @@ def test_when_python_callable_refuses_to_lower():
     # a when() over a bare Python callable is not a Program value -> cannot lower
     P._call("fields_from_state", U, schedule=_when(P.clock, lambda: True, adctime.Hold()))
     serialized = P._serialize()
-    callable_token = serialized["nodes"][-1]["attrs"]["schedule"]["trigger"]["condition"]
+    callable_token = serialized["nodes"][-1]["attrs"]["schedule"]["trigger"]["payload"][
+        "condition"]
     assert "unsupported_python_callable" in callable_token
     assert isinstance(P._ir_hash(), str)
     with pytest.raises(NotImplementedError, match="ADC-458"):

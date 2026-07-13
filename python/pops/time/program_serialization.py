@@ -4,6 +4,8 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
+from enum import Enum
+from types import FunctionType
 from typing import Any
 
 from pops.ir.literals import scalar_data
@@ -12,30 +14,73 @@ from pops.time.references import handle_data
 from pops.time.values import ProgramValue, _Affine, _affine_ids
 
 
+def _schedule_json_ready(value: Any) -> Any:
+    """Strict canonical projection for extension-owned schedule payloads."""
+    if isinstance(value, ProgramValue):
+        return {"program_value_id": value.id}
+    if type(value) is FunctionType:
+        return {"unsupported_python_callable": {
+            "module": value.__module__, "qualname": value.__qualname__,
+        }}
+    if callable(value):
+        value_type = type(value)
+        return {"unsupported_python_callable": {
+            "module": value_type.__module__, "qualname": value_type.__qualname__,
+        }}
+    if isinstance(value, Handle):
+        return {"handle": handle_data(value)}
+    from pops.time.schedule_domains import EventHandle
+    if isinstance(value, EventHandle):
+        return value.to_data()
+    from pops.time.points import Clock, StagePoint, TimePoint
+    if type(value) in (Clock, StagePoint, TimePoint):
+        return value.to_data()
+    if isinstance(value, Mapping):
+        if not all(isinstance(key, str) and key for key in value):
+            raise TypeError("schedule payload mappings require non-empty string keys")
+        return {key: _schedule_json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_schedule_json_ready(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        items = [_schedule_json_ready(item) for item in value]
+        return sorted(items, key=lambda item: json.dumps(
+            item, sort_keys=True, separators=(",", ":")))
+    if isinstance(value, Enum):
+        return _schedule_json_ready(value.value)
+    if value is None or type(value) in (bool, int, float, str):
+        return value
+    raise TypeError(
+        "schedule payload contains unsupported value %s.%s; use immutable scalar/container/"
+        "Handle data or map the value explicitly"
+        % (type(value).__module__, type(value).__qualname__))
+
+
+def _schedule_component(component: Any, expected: type, where: str) -> dict[str, Any]:
+    from pops.time.schedule_protocol import component_identity
+    if not isinstance(component, expected):
+        raise TypeError("%s must implement %s" % (where, expected.__name__))
+    payload = component.schedule_payload()
+    if type(payload) is not dict:
+        raise TypeError("%s.schedule_payload() must return an exact dict" % expected.__name__)
+    return {"type": component_identity(component), "payload": _schedule_json_ready(payload)}
+
+
 def _serialize_schedule(schedule: Any) -> dict[str, Any]:
-    from pops.time.schedule import AMRLevel, Event, Every, When
-    domain = {"type": type(schedule.domain).__name__, "clock": schedule.clock.to_data(),
-              "at": _json_ready(schedule.domain.at)}
-    if type(schedule.domain) is AMRLevel:
-        domain["level"] = schedule.domain.level
-    elif type(schedule.domain) is Event:
-        domain["event"] = schedule.domain.event.to_data()
-    trigger = {"type": type(schedule.trigger).__name__}
-    if type(schedule.trigger) is Every:
-        trigger["n"] = schedule.trigger.n
-    elif type(schedule.trigger) is When:
-        condition = schedule.trigger.condition
-        if isinstance(condition, ProgramValue):
-            trigger["condition"] = {"program_value_id": condition.id}
-        elif callable(condition):
-            trigger["condition"] = {"unsupported_python_callable": {
-                "module": getattr(condition, "__module__", type(condition).__module__),
-                "qualname": getattr(condition, "__qualname__", type(condition).__qualname__),
-            }}
-        else:
-            trigger["condition"] = _json_ready(condition)
-    return {"schema_version": 1, "domain": domain, "trigger": trigger,
-            "off": type(schedule.off).__name__ if schedule.off is not None else None}
+    from pops.time.schedule import OffPolicy, Schedule, Trigger
+    from pops.time.schedule_domains import Domain
+    if not isinstance(schedule, Schedule):
+        raise TypeError("Program node schedule must implement Schedule")
+    domain = _schedule_component(schedule.domain, Domain, "schedule domain")
+    domain.update({"clock": schedule.clock.to_data(),
+                   "at": _schedule_json_ready(schedule.domain.at)})
+    return {
+        "schema_version": 2,
+        **_schedule_component(schedule, Schedule, "schedule"),
+        "domain": domain,
+        "trigger": _schedule_component(schedule.trigger, Trigger, "schedule trigger"),
+        "off": (None if schedule.off is None
+                else _schedule_component(schedule.off, OffPolicy, "schedule off-policy")),
+    }
 
 
 def _json_ready(value: Any) -> Any:

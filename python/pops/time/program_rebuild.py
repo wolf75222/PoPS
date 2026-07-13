@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from decimal import Decimal
 from enum import Enum
 from fractions import Fraction
@@ -205,17 +206,17 @@ def rebuild_program(
         if isinstance(value, (FieldContext, FieldReadProvenance)):
             return remap_provenance(value)
         if isinstance(value, Schedule):
-            from dataclasses import replace
-            domain = replace(
-                value.domain,
+            mapped_schedule = value.map_values(remap_metadata)
+            domain = mapped_schedule.domain.map_values(
+                remap_metadata,
                 clock=remap_clock(value.clock),
                 at=remap_point(value.domain.at) if value.domain.at is not None else None,
             )
-            trigger = replace(value.trigger, domain=domain)
-            from pops.time.schedule import When
-            if type(trigger) is When:
-                trigger = replace(trigger, condition=remap_metadata(trigger.condition))
-            return Schedule(trigger, off=value.off)
+            trigger = replace(mapped_schedule.trigger, domain=domain)
+            rebuilt_schedule = replace(mapped_schedule, trigger=trigger)
+            if type(rebuilt_schedule) is not type(value):
+                raise TypeError("Schedule rebuild must preserve the exact extension type")
+            return rebuilt_schedule
         if getattr(value, "__pops_ir_immutable__", False) is True:
             return value
         if isinstance(value, Mapping):

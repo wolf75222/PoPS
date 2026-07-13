@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from pops.model.operators import OPERATOR_KINDS
 from pops.time.operator_resolution import resolve_operator_handle
 from pops.time.schedule import Schedule
+from pops.time.schedule_lowering import ScheduleDueIR, ScheduleDueKind
 from pops.time.references import block_name
 from pops.time.program_value_validation import require_owned, require_top_level
 from pops.time.values import ProgramValue, _CoupledResult
@@ -127,9 +128,13 @@ class _ProgramCall(_ProgramBase):
             raise ValueError(
                 "schedule clock %r does not match operator evaluation clock %r"
                 % (schedule.clock.name, expected_clock.name))
-        from pops.time.schedule import When
-        if type(schedule.trigger) is When:
-            cond = schedule.trigger.condition
+        due = schedule.trigger.native_schedule_due(
+            where="schedule on operator %r" % op.name)
+        if type(due) is not ScheduleDueIR:
+            raise TypeError(
+                "Trigger.native_schedule_due() must return an exact ScheduleDueIR")
+        if due.kind is ScheduleDueKind.PROGRAM_PREDICATE:
+            cond = due.predicate
             if isinstance(cond, ProgramValue):
                 require_top_level(self, cond, "schedule when(cond)")
                 if cond.vtype != "bool" or not any(v.id == cond.id for v in self._values):
